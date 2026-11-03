@@ -14,106 +14,19 @@ pub(crate) use policy::ScrollGoal;
 use crate::buffer::{AccessibleCharRange, BufferId, LispCharPos1};
 use crate::emacs_core::Context;
 use crate::emacs_core::Value;
+use crate::emacs_core::display_metrics::{LineWrap, MeasuredMotion, MotionEngine};
 use crate::emacs_core::error::{Flow, LispCondition, signal};
-use crate::emacs_core::xdisp::LineWrap;
 use crate::window::{DisplayRowSnapshot, FrameId, WindowDisplaySnapshot, WindowId};
 
-/// Which of GNU's TWO screen-line engines answers a motion question.
+/// GNU's own branch, `if (noninteractive)` (`src/indent.c:2280`).
 ///
-/// `Fvertical_motion` is not one algorithm with a display switch inside it:
-/// its body is an `if` over `noninteractive` choosing between two
-/// implementations that share no code (`src/indent.c:2280-2287`):
-///
-/// ```c
-///   if (noninteractive)
-///     {
-///       struct position pos;
-///       pos = *vmotion (PT, PT_BYTE, XFIXNUM (lines), w);
-///       SET_PT_BOTH (pos.bufpos, pos.bytepos);
-///       it.vpos = pos.vpos;
-///     }
-///   else
-///     { ... start_display / move_it_by_lines / move_it_in_display_line ... }
-/// ```
-///
-/// The batch arm is `vmotion` -> `compute_motion` (`src/indent.c:1963-1964`,
-/// `:1253-1254`).  Two things follow from that being a different program rather
-/// than a different setting:
-///
-/// * `compute_motion` has **no word-wrap concept at all**.  Its only line-end
-///   decision is truncate-or-continue at `width` (`src/indent.c:1474-1527`);
-///   the identifier `word_wrap` does not occur anywhere in `src/indent.c`.
-///   So `LineWrap::WordWrap` is not reachable from the batch engine.
-/// * The `(COLS . LINES)` goal column is never applied: the `lcols` walk lives
-///   inside the `else` (`src/indent.c:2528-2558`), so a batch
-///   `vertical-motion` answers a cons argument using only its cdr.
-///
-/// Measured under GNU Emacs 31.0.90 over one 201-character line carrying a
-/// single space at column 100, in an 80-column terminal:
-///
-/// ```text
-///   emacs --batch        word-wrap nil -> rows 1 80 159      count-screen-lines 3
-///                        word-wrap t   -> rows 1 80 159      count-screen-lines 3
-///   emacs -nw in a pty   word-wrap nil -> rows 1 80 159      count-screen-lines 3
-///                        word-wrap t   -> rows 1 80 102 181  count-screen-lines 4
-/// ```
-///
-/// and, for the goal column, `(vertical-motion '(40 . 0))` from the start of a
-/// long line answers point 1 under `--batch` and point 41 in a terminal.
-///
-/// This is a type rather than a condition spelled at each site because the two
-/// engines are not interchangeable and their difference is invisible in a
-/// value: ledger 191 gated the goal column on `noninteractive` correctly and
-/// missed that the very same branch also decides whether `word-wrap` exists at
-/// all, which made every batch `count-screen-lines` over a wrapped word answer
-/// one screen line too many.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum MotionEngine {
-    /// GNU `vmotion` -> `compute_motion` (`src/indent.c:1963-1964`): the engine
-    /// `Fvertical_motion` uses under `noninteractive`.
-    ComputeMotion,
-    /// GNU's display iterator (`start_display` / `move_it_by_lines` /
-    /// `move_it_in_display_line`): the engine `Fvertical_motion` uses when a
-    /// terminal or window system is live.
-    DisplayIterator,
-}
-
-impl MotionEngine {
-    /// GNU's own branch, `if (noninteractive)` (`src/indent.c:2280`).
-    pub(crate) fn for_context(eval: &Context) -> Self {
-        if eval.noninteractive() {
-            Self::ComputeMotion
-        } else {
-            Self::DisplayIterator
-        }
-    }
-
-    /// The wrap method a NON-truncating display line uses under this engine.
-    ///
-    /// This is the ONLY producer of [`LineWrap::WordWrap`] in the port.
-    /// `init_iterator` reaches `WORD_WRAP` from the buffer's `word-wrap`
-    /// (`src/xdisp.c:3425-3426`), and `init_iterator` runs only in the
-    /// interactive arm; `compute_motion` continues at `width` whatever the
-    /// buffer asks for.
-    pub(crate) fn continuation_wrap(self, word_wrap: bool) -> LineWrap {
-        match self {
-            Self::ComputeMotion => LineWrap::WindowWrap,
-            Self::DisplayIterator if word_wrap => LineWrap::WordWrap,
-            Self::DisplayIterator => LineWrap::WindowWrap,
-        }
-    }
-
-    /// Whether `(COLS . LINES)`'s COLS is applied at all
-    /// (`src/indent.c:2528-2558`, inside the interactive arm).
-    pub(crate) fn honors_goal_column(self) -> bool {
-        matches!(self, Self::DisplayIterator)
-    }
-
-    /// Whether realized display rows may answer the question.  GNU's batch
-    /// engine walks buffer text and never consults a glyph matrix, so a
-    /// retained redisplay snapshot is not an input to it.
-    pub(crate) fn uses_display_rows(self) -> bool {
-        matches!(self, Self::DisplayIterator)
+/// The batch engine is the only producer of `ComputeMotion`; see the
+/// `MotionEngine` type documentation in the edit layer's display metrics.
+pub(crate) fn engine_for_context(eval: &Context) -> MotionEngine {
+    if eval.noninteractive() {
+        MotionEngine::ComputeMotion
+    } else {
+        MotionEngine::DisplayIterator
     }
 }
 
@@ -126,12 +39,6 @@ pub(crate) struct MotionRequest {
     pub(crate) origin: LispCharPos1,
     pub(crate) rows: i64,
     pub(crate) goal_column: Option<i64>,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct MeasuredMotion {
-    pub(crate) target: LispCharPos1,
-    pub(crate) moved: i64,
 }
 
 /// Exhausting measured coverage is not proof of reaching a buffer boundary.
@@ -403,7 +310,7 @@ pub(crate) fn resolve(
     eval: &mut Context,
     request: MotionRequest,
 ) -> Result<Option<MeasuredMotion>, Flow> {
-    if !MotionEngine::for_context(eval).uses_display_rows() {
+    if !engine_for_context(eval).uses_display_rows() {
         return Ok(None);
     }
     let Some((frame_id, window_id)) = motion_window(eval, request.window, request.buffer) else {

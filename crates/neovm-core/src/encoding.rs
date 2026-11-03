@@ -14,6 +14,7 @@ use crate::emacs_core::eval::Context;
 use crate::emacs_core::intern::{SymId, intern, resolve_sym};
 // encoding.rs: sentinel imports removed; using emacs_char + LispString directly
 use crate::buffer::{EmacsBytePos, EmacsByteRange, LispCharPos1, TextPositionAnchor};
+use crate::emacs_core::display_metrics::display_glyph_character;
 pub use crate::emacs_core::emacs_char::char_width;
 use crate::emacs_core::emacs_char::{GNU_DEFAULT_WIDE_RANGES, ZERO_WIDTH_RANGES};
 use crate::emacs_core::value::{StringTextPropertyRun, Value, ValueKind};
@@ -41,78 +42,6 @@ fn char_width_for_code_without_display_table(code: i64) -> usize {
         return 1;
     }
     char::from_u32(code as u32).map(char_width).unwrap_or(1)
-}
-
-/// A validated GNU packed display glyph (dispextern.h:389,1973,2040-2050).
-///
-/// The low 22 bits contain a character and the next 20 bits a face ID. This
-/// immutable scalar owns no Lisp state and may be copied between mutators.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(transparent)]
-struct PackedDisplayGlyph(i64);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-enum PackedDisplayGlyphError {
-    #[error("packed display glyph exceeds the character and face domains")]
-    OutOfRange,
-}
-
-impl PackedDisplayGlyph {
-    const CHARACTER_BITS: u32 = 22;
-    const CHARACTER_MASK: i64 = crate::emacs_core::emacs_char::EmacsChar::MAX as i64;
-    const FACE_ID_MAX: i64 = (1 << 20) - 1;
-    const FACE_MASK: i64 = Self::FACE_ID_MAX << Self::CHARACTER_BITS;
-    const MAX: i64 = Self::FACE_MASK | Self::CHARACTER_MASK;
-
-    #[inline]
-    fn character(self) -> Option<crate::emacs_core::emacs_char::EmacsChar> {
-        crate::emacs_core::emacs_char::EmacsChar::from_code((self.0 & Self::CHARACTER_MASK) as u32)
-    }
-}
-
-const _: () = {
-    assert!(PackedDisplayGlyph::CHARACTER_MASK == (1 << PackedDisplayGlyph::CHARACTER_BITS) - 1);
-    assert!(PackedDisplayGlyph::CHARACTER_MASK & PackedDisplayGlyph::FACE_MASK == 0);
-    assert!(PackedDisplayGlyph::MAX <= Value::MOST_POSITIVE_FIXNUM);
-    assert!(std::mem::size_of::<PackedDisplayGlyph>() == std::mem::size_of::<i64>());
-};
-static_assertions::assert_impl_all!(PackedDisplayGlyph: Send, Sync);
-
-impl TryFrom<i64> for PackedDisplayGlyph {
-    type Error = PackedDisplayGlyphError;
-
-    #[inline]
-    fn try_from(code: i64) -> Result<Self, Self::Error> {
-        if (0..=Self::MAX).contains(&code) {
-            Ok(Self(code))
-        } else {
-            Err(PackedDisplayGlyphError::OutOfRange)
-        }
-    }
-}
-
-/// Decode one valid GNU display glyph (dispextern.h:389,2040-2050).
-/// Face IDs occupy 20 bits; packed characters occupy the low 22 bits.
-/// Cons glyphs carry the same validated character and face domains separately.
-#[inline]
-pub(crate) fn display_glyph_character(
-    value: Value,
-) -> Option<crate::emacs_core::emacs_char::EmacsChar> {
-    use crate::emacs_core::emacs_char::EmacsChar;
-    match value.kind() {
-        ValueKind::Fixnum(code) => PackedDisplayGlyph::try_from(code).ok()?.character(),
-        ValueKind::Cons => {
-            let code = value.cons_car().as_fixnum()?;
-            let face = value.cons_cdr().as_fixnum()?;
-            if !(0..=MAX_CHAR_CODE).contains(&code)
-                || !(0..=PackedDisplayGlyph::FACE_ID_MAX).contains(&face)
-            {
-                return None;
-            }
-            EmacsChar::from_code(code as u32)
-        }
-        _ => None,
-    }
 }
 
 fn display_table_replacement_width(disp: Value) -> Option<usize> {
@@ -256,31 +185,44 @@ pub(crate) struct CharacterWidthTable {
 
 impl CharacterWidthTable {
     pub(crate) fn from_context(ctx: &Context) -> Self {
-        // Only the process-global symbol identity is shared among mutators.
-        static SYMBOL: std::sync::OnceLock<SymId> = std::sync::OnceLock::new();
-        let symbol = *SYMBOL.get_or_init(|| intern("char-width-table"));
         Self {
-            table: ctx
-                .eval_symbol_by_id(symbol)
-                .ok()
-                .filter(crate::emacs_core::chartable::is_char_table),
+            table: char_width_table_value(ctx),
         }
     }
 
     #[inline(always)]
     pub(crate) fn width(&self, code: u32) -> usize {
-        self.table
-            .and_then(|table| crate::emacs_core::chartable::ct_lookup(&table, i64::from(code)).ok())
-            .and_then(|width| width.as_fixnum())
-            .map(|width| {
-                if (0..=1000).contains(&width) {
-                    width as usize
-                } else {
-                    1000
-                }
-            })
-            .unwrap_or_else(|| char_width_for_code_without_display_table(i64::from(code)))
+        char_width_in_table(self.table, code)
     }
+}
+
+/// The live `char-width-table` value for one mutator (GNU `Vchar_width_table`).
+///
+/// Only the process-global symbol identity is shared among mutators; the table
+/// itself stays a mutator-owned object.
+pub(crate) fn char_width_table_value(ctx: &Context) -> Option<Value> {
+    static SYMBOL: std::sync::OnceLock<SymId> = std::sync::OnceLock::new();
+    let symbol = *SYMBOL.get_or_init(|| intern("char-width-table"));
+    ctx.eval_symbol_by_id(symbol)
+        .ok()
+        .filter(crate::emacs_core::chartable::is_char_table)
+}
+
+/// GNU `CHARACTER_WIDTH` under `TABLE`: the live char-width-table entry when
+/// it carries a sane fixnum, else the built-in width for CODE.
+#[inline(always)]
+pub(crate) fn char_width_in_table(table: Option<Value>, code: u32) -> usize {
+    table
+        .and_then(|table| crate::emacs_core::chartable::ct_lookup(&table, i64::from(code)).ok())
+        .and_then(|width| width.as_fixnum())
+        .map(|width| {
+            if (0..=1000).contains(&width) {
+                width as usize
+            } else {
+                1000
+            }
+        })
+        .unwrap_or_else(|| char_width_for_code_without_display_table(i64::from(code)))
 }
 
 /// GNU's initial char-width-table (character.c:1112-1119), including

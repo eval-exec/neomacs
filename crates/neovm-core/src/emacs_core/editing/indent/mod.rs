@@ -15,22 +15,24 @@ pub(crate) use subrs::register_subrs;
 use super::buffer::{extract_cons_fixnums, point_char_pos};
 use super::error::{EvalResult, Flow, signal};
 use super::value::*;
-use super::xdisp::LineWrap;
-use super::xdisp::line_number_digit_width;
 use crate::buffer::{
     Buffer, CharLen, CharPos0, DisplayColumn, EmacsByteLen, EmacsBytePos, EmacsByteRange,
     TextExtent,
 };
 use crate::buffer::{BufferId, LispCharPos1};
+use crate::emacs_core::display_metrics::{
+    InvisibleRunContext, LineWrap, MotionEngine, WindowGeometry, line_number_digit_width,
+};
+use crate::emacs_core::edit_host::EditHost;
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{
     expect_args, expect_args_range, expect_fixnum, expect_max_args, expect_min_args,
 };
 use crate::emacs_core::eval::VariableView;
 use crate::emacs_core::value::ValueKind;
-use crate::emacs_core::xdisp::motion::{self, MotionEngine, MotionRequest};
+use crate::emacs_core::word_wrap::{WordWrapDirection, WordWrapOpportunity, WordWrapPolicy};
 use crate::heap_types::LispString;
-use crate::window::{Window, WindowId};
+use crate::window::Window;
 use std::cell::Cell;
 use std::collections::VecDeque;
 use std::sync::OnceLock;
@@ -271,13 +273,13 @@ fn previous_screen_line_target(
         // beginning is a valid anchor: measure forward from it to retain
         // the actual row count and position reached by backward motion.
         if anchor > point_min
-            && crate::emacs_core::xdisp::invisible_source_run_end_byte(
-                eval,
-                buffer_id,
-                anchor.get(),
-                crate::emacs_core::xdisp::InvisibleRunContext::DisplayMotion,
-            )?
-            .is_some_and(|next_visible| next_visible > anchor.get())
+            && eval
+                .invisible_source_run_end(
+                    buffer_id,
+                    anchor.get(),
+                    InvisibleRunContext::DisplayMotion,
+                )?
+                .is_some_and(|next_visible| next_visible > anchor.get())
         {
             logical_lines_to_back = logical_lines_to_back.saturating_mul(2);
             continue;
@@ -403,19 +405,13 @@ fn vertical_motion_screen_extent(
     eval: &mut super::eval::Context,
     window: Option<Value>,
 ) -> ScreenLineExtent {
-    let window_arg = window.unwrap_or(Value::NIL);
-    let body_width = super::window_cmds::builtin_window_body_width(eval, &[window_arg, Value::NIL])
-        .ok()
-        .and_then(|v| v.as_fixnum())
-        .filter(|n| *n > 1)
-        .map(|n| (n as usize).saturating_sub(1))
+    let geometry: WindowGeometry = eval.window_geometry(window);
+    let body_width = (geometry.body_width > 1)
+        .then(|| (geometry.body_width as usize).saturating_sub(1))
         .unwrap_or(79)
         .max(1);
-    let hscroll = super::window_cmds::builtin_window_hscroll(eval, &[window_arg])
-        .ok()
-        .and_then(|v| v.as_fixnum())
-        .filter(|n| *n > 0)
-        .map(|n| n as usize)
+    let hscroll = (geometry.hscroll > 0)
+        .then(|| geometry.hscroll as usize)
         .unwrap_or(0);
     ScreenLineExtent {
         first_visible_col: hscroll,
@@ -462,12 +458,7 @@ fn current_screen_line_start_with_truncation(
             .get(buffer_id)
             .map(|buf| buf.emacs_byte_pos_to_lisp_char_pos(preceding).as_i64())
             .unwrap_or(1);
-        if !crate::emacs_core::xdisp::invisible_status_for_value(
-            eval,
-            Value::fixnum(preceding_lisp_pos),
-        )?
-        .hides_source()
-        {
+        if !eval.invisible_value_hides_source(Value::fixnum(preceding_lisp_pos))? {
             break;
         }
         let Some(previous) = eval
@@ -526,7 +517,7 @@ impl WordWrapPoint {
         &mut self,
         pos: EmacsBytePos,
         row_start: EmacsBytePos,
-        opportunity: crate::window::WordWrapOpportunity,
+        opportunity: WordWrapOpportunity,
     ) {
         if self.may_wrap && opportunity.before() && pos > row_start {
             self.saved = Some(pos);
@@ -696,7 +687,7 @@ impl ScreenLineScanPolicy for WordWrapScan {
     fn initial() -> WordWrapScanState {
         WordWrapScanState {
             point: WordWrapPoint::new(),
-            policy: crate::window::WordWrapPolicy::default(),
+            policy: WordWrapPolicy::default(),
         }
     }
 
@@ -705,22 +696,11 @@ impl ScreenLineScanPolicy for WordWrapScan {
         eval: &super::eval::Context,
         buffer_id: BufferId,
     ) {
-        use crate::window::{WindowLayoutVariable, WordWrapMode, WordWrapPolicy};
         let Some(buffer) = eval.edit.buffers.get(buffer_id) else {
             return;
         };
-        let mode = if eval
-            .variable_value_in_buffer(
-                Some(buffer),
-                WindowLayoutVariable::WordWrapByCategory.sym_id(),
-            )
-            .is_some_and(|value| value.is_truthy())
-        {
-            WordWrapMode::Category
-        } else {
-            WordWrapMode::Whitespace
-        };
-        state.policy = WordWrapPolicy::for_buffer(buffer, mode);
+        let mode = eval.word_wrap_mode(buffer);
+        state.policy = eval.word_wrap_policy(buffer, mode);
     }
 
     #[inline(always)]
@@ -741,9 +721,7 @@ impl ScreenLineScanPolicy for WordWrapScan {
             state.point.observe(
                 scan,
                 start,
-                state
-                    .policy
-                    .opportunity(code, crate::window::WordWrapDirection::Forward),
+                state.policy.opportunity(code, WordWrapDirection::Forward),
             );
         }
     }
@@ -765,7 +743,7 @@ impl ScreenLineScanPolicy for WordWrapScan {
 /// Display stops refresh it before the next character is observed.
 struct WordWrapScanState {
     point: WordWrapPoint,
-    policy: crate::window::WordWrapPolicy,
+    policy: WordWrapPolicy,
 }
 
 /// Choose the mode once, retaining the original post-callback buffer reads.
@@ -1042,19 +1020,9 @@ pub(crate) fn vertical_motion(eval: &mut super::eval::Context, args: &[Value]) -
         return Ok(Value::fixnum(moved));
     }
 
-    if let Some(snapshot_motion) = motion::resolve(
-        eval,
-        MotionRequest {
-            buffer: current_id,
-            window: args
-                .get(1)
-                .and_then(|value| value.as_window_id())
-                .map(WindowId),
-            origin: pt_lisp,
-            rows: lines,
-            goal_column: cols,
-        },
-    )? {
+    if let Some(snapshot_motion) =
+        eval.resolve_motion(current_id, args.get(1).copied(), pt_lisp, lines, cols)?
+    {
         let target = eval
             .edit
             .buffers
@@ -1070,8 +1038,8 @@ pub(crate) fn vertical_motion(eval: &mut super::eval::Context, args: &[Value]) -
 
     let extent = vertical_motion_screen_extent(eval, args.get(1).copied());
     let screen_width = extent.last_visible_col;
-    let engine = MotionEngine::for_context(eval);
-    let wrap = super::window_cmds::window_line_wrap(eval, args.get(1).copied(), current_id, engine);
+    let engine = eval.motion_engine();
+    let wrap = eval.window_line_wrap(current_id, args.get(1).copied(), engine);
 
     if lines == 0 && cols.is_none() {
         // Move to beginning of current screen line.
@@ -1289,16 +1257,9 @@ pub(crate) fn screen_line_motion_target(
     let point = accessible.clamp(point);
     let point_lisp = buf.emacs_byte_pos_to_lisp_char_pos(point);
 
-    if let Some(snapshot_motion) = motion::resolve(
-        eval,
-        MotionRequest {
-            buffer: current_buffer,
-            window: window.and_then(|value| value.as_window_id()).map(WindowId),
-            origin: point_lisp,
-            rows: lines,
-            goal_column: None,
-        },
-    )? {
+    if let Some(snapshot_motion) =
+        eval.resolve_motion(current_buffer, window, point_lisp, lines, None)?
+    {
         let target = eval
             .edit
             .buffers
@@ -1335,8 +1296,8 @@ pub(crate) fn scan_screen_line_motion_target(
     let point = buf.accessible_emacs_byte_region().clamp(point);
 
     let screen_width = vertical_motion_screen_extent(eval, window).last_visible_col;
-    let engine = MotionEngine::for_context(eval);
-    let wrap = super::window_cmds::window_line_wrap(eval, window, current_buffer, engine);
+    let engine = eval.motion_engine();
+    let wrap = eval.window_line_wrap(current_buffer, window, engine);
     let mut target =
         current_screen_line_start_with_truncation(eval, current_buffer, point, screen_width, wrap)?
             .unwrap_or(point);
@@ -1696,7 +1657,7 @@ fn next_column(column: usize, ch: char, tab_width: usize) -> usize {
         let tab = tab_width.max(1);
         column + (tab - (column % tab))
     } else {
-        column + crate::encoding::char_width(ch)
+        column + crate::emacs_core::emacs_char::char_width(ch)
     }
 }
 
@@ -1823,14 +1784,10 @@ impl DisplayStopProp {
     ) -> Result<Option<(usize, usize)>, Flow> {
         let hit =
             match self {
-                Self::Invisible => super::xdisp::invisible_source_run_end_byte(
-                    ctx,
-                    buffer_id,
-                    byte,
-                    super::xdisp::InvisibleRunContext::DisplayMotion,
-                )?
-                .filter(|&next_visible| next_visible > byte)
-                .map(|next_visible| (0usize, next_visible)),
+                Self::Invisible => ctx
+                    .invisible_source_run_end(buffer_id, byte, InvisibleRunContext::DisplayMotion)?
+                    .filter(|&next_visible| next_visible > byte)
+                    .map(|next_visible| (0usize, next_visible)),
                 Self::Display => display_run_at(ctx, buffer_id, byte, column)
                     .filter(|&(_, run_end)| run_end > byte),
                 Self::Composition => composition_run_at(ctx, buffer_id, byte)
@@ -2278,7 +2235,7 @@ fn display_table_glyph_width(dt: &Value, code: u32) -> Option<usize> {
         let w = match glyph.kind() {
             // A glyph code packs the character in the low 22 bits (face above).
             ValueKind::Fixnum(n) => char::from_u32((n & 0x3F_FFFF) as u32)
-                .map(crate::encoding::char_width)
+                .map(crate::emacs_core::emacs_char::char_width)
                 .unwrap_or(1),
             _ => 1,
         };
@@ -2315,7 +2272,7 @@ fn lisp_string_display_columns(text: &LispString) -> usize {
         while pos < bytes.len() {
             let (code, len) = crate::emacs_core::emacs_char::string_char(&bytes[pos..]);
             total += char::from_u32(code.code())
-                .map(crate::encoding::char_width)
+                .map(crate::emacs_core::emacs_char::char_width)
                 .unwrap_or(1);
             pos += len;
         }
@@ -2337,7 +2294,7 @@ fn buffer_char_display_width(buf: &Buffer, byte_pos: EmacsBytePos, code: u32) ->
     if crate::emacs_core::emacs_char::char_byte8_p(code) {
         4
     } else if let Some(ch) = char::from_u32(code) {
-        crate::encoding::char_width(ch)
+        crate::emacs_core::emacs_char::char_width(ch)
     } else {
         1
     }
@@ -2461,7 +2418,7 @@ fn advance_column_glyphs(
     let glyphs = entry.as_vector_data()?;
     let mut column = column.get();
     for glyph in glyphs.iter() {
-        let code = crate::encoding::display_glyph_character(*glyph)
+        let code = super::display_metrics::display_glyph_character(*glyph)
             .map(|character| character.code())
             .unwrap_or(u32::from(b' '));
         if line_end.is_line_end(code) {
@@ -2502,7 +2459,7 @@ fn simple_backward_column(
         let count = glyphs.as_ref().map_or(1, |glyphs| glyphs.len());
         for index in (0..count).rev() {
             let code = match glyphs.as_ref() {
-                Some(glyphs) => crate::encoding::display_glyph_character(glyphs[index])
+                Some(glyphs) => super::display_metrics::display_glyph_character(glyphs[index])
                     .map(|character| character.code())
                     .unwrap_or(u32::from(b' ')),
                 None => u32::from(byte),
@@ -2584,25 +2541,25 @@ fn scan_for_column(
     }
     #[derive(Debug)]
     struct ColumnWidthMemo {
-        table: crate::encoding::CharacterWidthTable,
+        table: Option<Value>,
         entries: [Option<CachedCharacterWidth>; 8],
     }
     impl ColumnWidthMemo {
         fn from_context(ctx: &super::eval::Context) -> Self {
             Self {
-                table: crate::encoding::CharacterWidthTable::from_context(ctx),
+                table: ctx.char_width_table(),
                 entries: [None; 8],
             }
         }
         #[inline(always)]
-        fn width(&mut self, code: u32) -> usize {
+        fn width(&mut self, host: &super::eval::Context, code: u32) -> usize {
             let slot = ((code ^ (code >> 8)) as usize) % self.entries.len();
             if let Some(entry) = self.entries[slot]
                 && entry.code == code
             {
                 return entry.width;
             }
-            let width = self.table.width(code);
+            let width = host.character_width(self.table, code);
             self.entries[slot] = Some(CachedCharacterWidth { code, width });
             width
         }
@@ -2741,12 +2698,9 @@ fn scan_for_column(
 
     while scan < end {
         if scan >= next_invisible_probe {
-            if let Some(next_visible) = super::xdisp::invisible_source_run_end_byte(
-                ctx,
-                buffer_id,
-                scan,
-                super::xdisp::InvisibleRunContext::ColumnScan,
-            )? && next_visible > scan
+            if let Some(next_visible) =
+                ctx.invisible_source_run_end(buffer_id, scan, InvisibleRunContext::ColumnScan)?
+                && next_visible > scan
             {
                 scan = next_visible.min(end);
                 if scan >= end {
@@ -2834,7 +2788,7 @@ fn scan_for_column(
                 match encoding {
                     super::case_encoding::CaseEncoding::Multibyte => character_widths
                         .get_or_insert_with(|| ColumnWidthMemo::from_context(ctx))
-                        .width(code),
+                        .width(ctx, code),
                     super::case_encoding::CaseEncoding::Unibyte => 4,
                 }
             };
@@ -2968,12 +2922,9 @@ pub(crate) fn current_indentation(
     let mut next_invisible_probe = if invisible_possible { scan } else { end };
     while scan < end {
         if scan >= next_invisible_probe {
-            if let Some(next_visible) = super::xdisp::invisible_source_run_end_byte(
-                ctx,
-                current_id,
-                scan,
-                super::xdisp::InvisibleRunContext::ColumnScan,
-            )? && next_visible > scan
+            if let Some(next_visible) =
+                ctx.invisible_source_run_end(current_id, scan, InvisibleRunContext::ColumnScan)?
+                && next_visible > scan
             {
                 scan = next_visible.min(end);
                 next_invisible_probe = scan;
@@ -3483,7 +3434,7 @@ pub(crate) fn compute_motion(eval: &mut super::eval::Context, args: Vec<Value>) 
                 hpos += tw - (hpos % tw);
             }
             _ => {
-                hpos += crate::encoding::char_width(ch) as i64;
+                hpos += crate::emacs_core::emacs_char::char_width(ch) as i64;
             }
         }
 

@@ -617,11 +617,11 @@ fn contextual_gui_resume_requires_its_native_font_authority() {
 #[test]
 fn category_word_wrap_worker_uses_frozen_rules_after_lisp_table_changes() {
     use neovm_core::buffer::{BufferId, CharPos0, EmacsBytePos};
-    use neovm_core::window::{WordWrapMode, WordWrapPolicy};
+    use neovm_core::window::{WordWrapMode, word_wrap_policy_for_buffer};
     let mut eval = neovm_core::emacs_core::Context::new();
     eval.eval_str("(progn (define-category ?| \"line breakable\") (modify-category-entry ?x ?|))")
         .unwrap();
-    let policy = WordWrapPolicy::for_buffer(
+    let policy = word_wrap_policy_for_buffer(
         eval.buffer_manager().current_buffer().unwrap(),
         WordWrapMode::Category,
     );

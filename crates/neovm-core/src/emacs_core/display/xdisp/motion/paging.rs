@@ -389,7 +389,7 @@ fn plan_scroll(
     argument: Option<Value>,
     direction: i64,
 ) -> Result<Option<ScrollPlan>, Flow> {
-    if !MotionEngine::for_context(eval).uses_display_rows() {
+    if !engine_for_context(eval).uses_display_rows() {
         return Ok(None);
     }
     let Some(frame) = eval.frames.selected_frame() else {

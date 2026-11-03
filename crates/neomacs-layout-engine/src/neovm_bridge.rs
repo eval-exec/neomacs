@@ -1699,7 +1699,7 @@ pub fn window_params_from_neovm_with_font_sizing(
     // Read buffer-local variables.
     let wrap_mode = effective_wrap_mode(window, buffer, frame, vars, hscroll);
     let word_wrap = effective_buffer_bool(buffer, vars, LayoutVar::WordWrap);
-    let word_wrap_policy = neovm_core::window::WordWrapPolicy::for_buffer(
+    let word_wrap_policy = neovm_core::window::word_wrap_policy_for_buffer(
         buffer,
         if word_wrap && effective_buffer_bool(buffer, vars, LayoutVar::WordWrapByCategory) {
             neovm_core::window::WordWrapMode::Category

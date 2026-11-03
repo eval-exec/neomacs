@@ -19,11 +19,16 @@
 //! correct only where no host is in scope (C7 substrate sites, C4b from
 //! host-free code) — never here.
 
-use crate::buffer::Buffer;
+use crate::buffer::{Buffer, BufferId, LispCharPos1};
 use crate::emacs_core::bookmark::BookmarkManager;
+use crate::emacs_core::display_metrics::{
+    InvisibleRunContext, LineWrap, MeasuredMotion, MotionEngine, WindowGeometry,
+};
 use crate::emacs_core::error::{EvalResult, Flow};
 use crate::emacs_core::intern::SymId;
 use crate::emacs_core::value::Value;
+use crate::emacs_core::word_wrap::{WordWrapMode, WordWrapPolicy};
+use crate::heap_types::LispString;
 use crate::tagged::SymbolMode;
 
 pub trait EditHost {
@@ -170,6 +175,83 @@ pub trait EditHost {
     // -------------------------------------------------------------------------
     // display/system queries (stage-3 display-seam lane: C4b, C5, C15)
     // -------------------------------------------------------------------------
-    // Empty until that series lands; nothing here may name display or
-    // system types that edit does not already own.
+    // Every type here is value- or edit-owned; no display or system type
+    // crosses the trait.
+
+    /// Resolve FILENAME against the host's default directory
+    /// (GNU `expand-file-name`'s default-directory walk). C15.
+    fn resolve_filename(&self, filename: &LispString) -> LispString;
+
+    /// Take the file lock for FILENAME through file-name handler
+    /// dispatch and prompting (GNU `Flock_file`). C15.
+    fn lock_file(&mut self, filename: &LispString) -> Result<(), Flow>;
+
+    /// Release the file lock for FILENAME through file-name handler
+    /// dispatch (GNU `Funlock_file`). C15.
+    fn unlock_file(&mut self, filename: &LispString) -> Result<(), Flow>;
+
+    /// Publish GNU `bset_redisplay` for BUFFER at mutation time: mark the
+    /// shared text root and raise the windows scope when a second window
+    /// shows it or it is not the selected buffer. C4b.
+    fn mark_buffer_redisplay(&mut self, buffer: BufferId);
+
+    /// The first visible byte of the invisible run at BYTE_POS, or `None`
+    /// when the position is visible (GNU `skip_invisible`). C5.
+    fn invisible_source_run_end(
+        &mut self,
+        buffer: BufferId,
+        byte_pos: usize,
+        context: InvisibleRunContext,
+    ) -> Result<Option<usize>, Flow>;
+
+    /// Whether a Lisp `invisible` property value hides its text under the
+    /// display walk's ellipsis rules. C5.
+    fn invisible_value_hides_source(&mut self, value: Value) -> Result<bool, Flow>;
+
+    /// The motion engine this session's `vertical-motion` uses
+    /// (GNU `if (noninteractive)`, src/indent.c:2280). C5.
+    fn motion_engine(&self) -> MotionEngine;
+
+    /// Resolve motion from retained display rows or the canonical row
+    /// producer; `None` when the batch engine answers without display rows.
+    /// C5.
+    fn resolve_motion(
+        &mut self,
+        buffer: BufferId,
+        window: Option<Value>,
+        origin: LispCharPos1,
+        rows: i64,
+        goal_column: Option<i64>,
+    ) -> Result<Option<MeasuredMotion>, Flow>;
+
+    /// The line-wrap method of BUFFER in WINDOW under ENGINE (GNU
+    /// `init_iterator`'s TRUNCATE/WINDOW_WRAP/WORD_WRAP choice). C5.
+    fn window_line_wrap(
+        &mut self,
+        buffer: BufferId,
+        window: Option<Value>,
+        engine: MotionEngine,
+    ) -> LineWrap;
+
+    /// Body width and horizontal scroll of WINDOW (the selected window when
+    /// `None`), as raw fixnums; a failed lookup yields the pre-metric
+    /// defaults the edit callers already apply. C5.
+    fn window_geometry(&mut self, window: Option<Value>) -> WindowGeometry;
+
+    /// The live `char-width-table` value (GNU `Vchar_width_table`), `None`
+    /// when the current table is not a char table. C5.
+    fn char_width_table(&self) -> Option<Value>;
+
+    /// Display width of character CODE under the char-width TABLE, falling
+    /// back to GNU's built-in width for the code. C5.
+    fn character_width(&self, table: Option<Value>, code: u32) -> usize;
+
+    /// Project BUFFER's word-wrap policy for MODE (GNU's category
+    /// `char_can_wrap_*` ranges), observing the per-epoch cache. C5.
+    fn word_wrap_policy(&self, buffer: &Buffer, mode: WordWrapMode) -> WordWrapPolicy;
+
+    /// The wrap mode of the edit layer's screen-line scan for BUFFER: GNU
+    /// `init_iterator` consults the buffer's `word-wrap-by-category` flag
+    /// before it can produce `WORD_WRAP` rows. C5.
+    fn word_wrap_mode(&self, buffer: &Buffer) -> WordWrapMode;
 }

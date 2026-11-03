@@ -63,10 +63,10 @@ pub(crate) use size::{
 pub mod split;
 mod string_property_input;
 mod word_wrap;
-pub(crate) use word_wrap::CachedWordWrapPolicy;
-pub use word_wrap::{
+pub use crate::emacs_core::word_wrap::{
     WordWrapCategories, WordWrapDirection, WordWrapMode, WordWrapOpportunity, WordWrapPolicy,
 };
+pub use word_wrap::word_wrap_policy_for_buffer;
 pub mod window_markers;
 
 pub use part::{

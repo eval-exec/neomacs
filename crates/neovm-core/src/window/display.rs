@@ -992,7 +992,7 @@ impl crate::emacs_core::eval::Context {
         } else {
             super::WordWrapMode::Whitespace
         };
-        Some(super::WordWrapPolicy::for_buffer(buffer, mode))
+        Some(super::word_wrap_policy_for_buffer(buffer, mode))
     }
 
     /// Capture glyph-vector inputs for the effective buffer/standard table.

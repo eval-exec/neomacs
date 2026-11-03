@@ -12,8 +12,8 @@ use crate::buffer::{
     Buffer, BufferId, BufferManager, CharLen, CharPos0, CharRange, EmacsByteLen, EmacsBytePos,
     EmacsByteRange, LispBytePos1, LispCharPos1, TextChange, TextEditRange, TextExtent,
 };
+use crate::emacs_core::edit_host::EditHost;
 use crate::emacs_core::emacs_char::EmacsChar;
-use crate::emacs_core::filelock;
 use crate::emacs_core::misc;
 use crate::emacs_core::value::{
     ValueKind, VecLikeType, equal_value, get_string_text_properties_table_for_value,
@@ -398,12 +398,7 @@ pub(crate) fn builtin_get_file_buffer(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("get-file-buffer", &args, 1)?;
-    let resolved = super::fileio::resolve_filename_lisp_in_state(
-        eval.variables(),
-        &[],
-        &eval.edit.buffers,
-        expect_lisp_string(&args[0])?,
-    );
+    let resolved = eval.resolve_filename(expect_lisp_string(&args[0])?);
     let resolved_path = super::file_name::lisp_file_name_to_path_buf(&resolved);
     let resolved_true = canonicalize_or_self(&resolved_path);
 
@@ -415,12 +410,7 @@ pub(crate) fn builtin_get_file_buffer(
             continue;
         };
 
-        let candidate = super::fileio::resolve_filename_lisp_in_state(
-            eval.variables(),
-            &[],
-            &eval.edit.buffers,
-            file_name,
-        );
+        let candidate = eval.resolve_filename(file_name);
         if candidate == resolved {
             return Ok(Value::make_buffer(id));
         }
@@ -3854,7 +3844,17 @@ pub(crate) fn builtin_set_buffer_modified_p(
         .modified_state_root_id(current_id)
         .and_then(|root_id| eval.edit.buffers.get(root_id))
         .is_some_and(|buffer| buffer.modified_state_value().is_truthy());
-    filelock::sync_modified_buffer_file_lock(eval, current_id, was_modified, args[0])?;
+    if let Some(filename) =
+        super::file_name::buffer_file_lock_target(&eval.edit.buffers, current_id)
+    {
+        // No expansion here: GNU's restore_buffer_modified_p hands
+        // BVAR (b, file_truename) to Flock_file / Funlock_file untouched.
+        if !was_modified && !args[0].is_nil() {
+            eval.lock_file(&filename)?;
+        } else if was_modified && args[0].is_nil() {
+            eval.unlock_file(&filename)?;
+        }
+    }
     let _ = eval
         .edit
         .buffers
@@ -3878,7 +3878,17 @@ pub(crate) fn builtin_restore_buffer_modified_p(
         .modified_state_root_id(current_id)
         .and_then(|root_id| eval.edit.buffers.get(root_id))
         .is_some_and(|buffer| buffer.modified_state_value().is_truthy());
-    filelock::sync_modified_buffer_file_lock(eval, current_id, was_modified, args[0])?;
+    if let Some(filename) =
+        super::file_name::buffer_file_lock_target(&eval.edit.buffers, current_id)
+    {
+        // No expansion here: GNU's restore_buffer_modified_p hands
+        // BVAR (b, file_truename) to Flock_file / Funlock_file untouched.
+        if !was_modified && !args[0].is_nil() {
+            eval.lock_file(&filename)?;
+        } else if was_modified && args[0].is_nil() {
+            eval.unlock_file(&filename)?;
+        }
+    }
     eval.edit
         .buffers
         .restore_buffer_modified_state(current_id, args[0])
@@ -4734,7 +4744,7 @@ pub(crate) fn builtin_delete_overlay(
     let buffer = resolve_overlay_buffer_id(overlay);
     let result = builtin_delete_overlay_in_buffers(&mut eval.edit.buffers, args)?;
     if let Some(buffer) = buffer {
-        eval.gnu_mark_buffer_redisplay(buffer);
+        eval.mark_buffer_redisplay(buffer);
     }
     Ok(result)
 }
@@ -4773,7 +4783,7 @@ pub(crate) fn builtin_overlay_put(eval: &mut super::eval::Context, args: Vec<Val
             .get(buffer)
             .is_some_and(|value| value.overlay_modified_tick() != tick)
     {
-        eval.gnu_mark_buffer_redisplay(buffer);
+        eval.mark_buffer_redisplay(buffer);
     }
     Ok(result)
 }
@@ -4989,11 +4999,11 @@ pub(crate) fn builtin_move_overlay(
     };
     let result = builtin_move_overlay_in_buffers(&mut eval.edit.buffers, args)?;
     if let Some(buffer) = old_buffer.filter(|buffer| *buffer != new_buffer) {
-        eval.gnu_mark_buffer_redisplay(buffer);
+        eval.mark_buffer_redisplay(buffer);
     }
     // GNU modify_overlay runs even when endpoints are unchanged; also retain
     // the destination publication if the empty overlay evaporated there.
-    eval.gnu_mark_buffer_redisplay(new_buffer);
+    eval.mark_buffer_redisplay(new_buffer);
     Ok(result)
 }
 

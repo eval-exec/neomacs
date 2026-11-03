@@ -35,6 +35,7 @@ mod mode_line_point;
 mod mode_line_string;
 mod mode_line_target;
 mod mode_line_walk;
+use crate::emacs_core::display_metrics::{InvisibleRunContext, LineWrap, line_number_digit_width};
 use crate::emacs_core::emacs_char::EmacsChar;
 use mode_line_append::{
     AppendAdmission, DecimalDigit, PercentAppendDriver, PercentWidth, TrailingPercent,
@@ -60,7 +61,6 @@ mod mode_line_symbols;
 use fontification_boundary::{FontificationBoundaryAdmission, FontificationBoundaryMode};
 pub(crate) mod motion;
 
-use self::motion::MotionEngine;
 use super::buffer::resolve_buffer_designator_allow_nil_current_in_manager;
 use super::chartable::{make_char_table_value, make_char_table_with_extra_slots};
 use super::display_spec;
@@ -74,6 +74,7 @@ use crate::buffer::{
     AccessibleEmacsByteRange, Buffer, BufferId, CharLen, CharPos0, CharRange, DisplayColumn,
     EmacsBytePos, EmacsByteRange, LispCharPos1, TextPropertyTable,
 };
+use crate::emacs_core::display_metrics::MotionEngine;
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_args_range};
 use crate::emacs_core::intern::WellKnown;
@@ -656,53 +657,6 @@ fn fallback_space_element(
         }
     }
     None
-}
-
-/// How a display line ends in one window -- GNU `enum line_wrap_method`
-/// (src/dispextern.h), the `it->line_wrap` that `init_iterator` resolves once
-/// per window+buffer pair (src/xdisp.c:3413-3426):
-///
-/// ```c
-///   if (TRUNCATE != 0)
-///     it->line_wrap = TRUNCATE;
-///   if (base_face_id == DEFAULT_FACE_ID
-///       && !it->w->hscroll
-///       && (WINDOW_FULL_WIDTH_P (it->w)
-///           || NILP (Vtruncate_partial_width_windows)
-///           || (FIXNUMP (Vtruncate_partial_width_windows)
-///               && (XFIXNUM (Vtruncate_partial_width_windows)
-///                   <= WINDOW_TOTAL_COLS (it->w))))
-///       && NILP (BVAR (current_buffer, truncate_lines)))
-///     it->line_wrap = NILP (BVAR (current_buffer, word_wrap))
-///       ? WINDOW_WRAP : WORD_WRAP;
-/// ```
-///
-/// Every screen-line question downstream -- `vertical-motion`,
-/// `beginning-of-visual-line`, `end-of-visual-line`, `next-line` /
-/// `previous-line` under `line-move-visual`, `move-to-window-line`,
-/// `count-screen-lines` -- is answered against this one value.
-///
-/// It is an enum rather than a `truncate: bool` on purpose.  A boolean can
-/// spell only two of GNU's three methods, so a scanner taking one had no way
-/// to represent "break at the last word boundary" and silently answered
-/// `WindowWrap` instead; and "not truncated" read as a single bit made it easy
-/// for the truncation half of the decision to be computed from the GLOBAL
-/// `truncate-partial-width-windows` while its sibling `truncate-lines` was
-/// read buffer-locally.  With the three methods in the type, a new consumer
-/// must say what it does for `WordWrap`, and the value can only be produced by
-/// the one function that reads every input the way GNU does.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum LineWrap {
-    /// GNU `TRUNCATE`: the display line is the whole logical line; text past
-    /// the right edge is not shown and never starts a new screen line.
-    Truncate,
-    /// GNU `WINDOW_WRAP`: continuation at the right edge, mid-word.
-    WindowWrap,
-    /// GNU `WORD_WRAP`: continuation at the last position on the row where a
-    /// wrap is allowed (`char_can_wrap_before` after `char_can_wrap_after`,
-    /// src/xdisp.c:577-617), falling back to `WindowWrap` when the row offers
-    /// no such position.
-    WordWrap,
 }
 
 /// Where a measured region's pixel x-axis is anchored.
@@ -5551,16 +5505,6 @@ impl Invisibility {
     }
 }
 
-/// GNU's `skip_invisible` gives ellipsis-bearing invisibility different
-/// semantics depending on its WINDOW argument: display motion elides the
-/// source and realizes an ellipsis, while `current-column`/`move-to-column`
-/// pass nil and count the underlying source text.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum InvisibleRunContext {
-    DisplayMotion,
-    ColumnScan,
-}
-
 /// Port of GNU `xdisp.c:display_prop_intangible_p`: does this `display` property
 /// value *replace* the underlying text (a string, image, space, fringe, …),
 /// making the covered buffer positions intangible? Mirrors `handle_display_spec`'s
@@ -7336,25 +7280,6 @@ pub(crate) fn builtin_tab_bar_height_ctx(
     }
 }
 
-/// Number of digit columns a line-number gutter shows, before the two
-/// padding columns (one leading, one trailing).  Mirrors GNU
-/// `maybe_produce_line_number`'s `it->lnum_width` (`max(width, log10(max)+1)`,
-/// src/xdisp.c).  `visible_lines` is the floor of the window's visible row
-/// count; GNU widens to whichever is larger so the gutter never shrinks below
-/// what the visible rows need.
-pub(crate) fn line_number_digit_width(buffer: &Buffer, visible_lines: i64) -> i64 {
-    let total_lines = display_line_number_total_lines(buffer)
-        .max(visible_lines)
-        .max(1);
-    let digit_count = total_lines.to_string().len() as i64;
-    let min_width = buffer
-        .buffer_local_value("display-line-numbers-width")
-        .and_then(|value| value.as_fixnum())
-        .filter(|width| *width > 0)
-        .unwrap_or(1);
-    digit_count.max(min_width)
-}
-
 /// Width in display columns of this window's line-number gutter, or 0 when
 /// `display-line-numbers` is off for the buffer.
 ///
@@ -7377,11 +7302,6 @@ pub(crate) fn line_number_gutter_cols(
     let char_height = char_height.max(1.0);
     let visible_lines = ((window_bounds_height / char_height).floor() as i64).max(1);
     line_number_digit_width(buffer, visible_lines) + 2
-}
-
-fn display_line_number_total_lines(buffer: &Buffer) -> i64 {
-    let end = buffer.total_emacs_byte_end_pos();
-    buffer.count_newlines_emacs_byte(EmacsBytePos::ZERO, end) as i64 + 1
 }
 
 /// (long-line-optimizations-p) -> boolean

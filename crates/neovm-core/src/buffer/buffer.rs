@@ -2442,7 +2442,7 @@ pub struct Buffer {
     /// Derived native wrap rules with mutator-local collection dependencies.
     /// No Lisp objects are retained; dumps start with an empty cache.
     pub(crate) word_wrap_policy_cache:
-        std::cell::RefCell<Option<std::rc::Rc<crate::window::CachedWordWrapPolicy>>>,
+        std::cell::RefCell<Option<std::rc::Rc<crate::emacs_core::word_wrap::CachedWordWrapPolicy>>>,
     /// Memo for [`Self::automatic_composition_spans`], keyed on everything
     /// the scan reads. Derived state: clones and dumps may leave it empty and
     /// it recomputes on demand.
@@ -2505,6 +2505,23 @@ pub struct AutomaticCompositionVisibleKey {
     char_table_tick: u64,
     start: usize,
     end: usize,
+}
+
+impl Buffer {
+    /// The cached category projection for this buffer, if one is present.
+    pub(crate) fn cached_word_wrap_policy(
+        &self,
+    ) -> Option<std::rc::Rc<crate::emacs_core::word_wrap::CachedWordWrapPolicy>> {
+        self.word_wrap_policy_cache.borrow().clone()
+    }
+
+    /// Replace the cached category projection (dump restores start empty).
+    pub(crate) fn store_word_wrap_policy_cache(
+        &self,
+        cache: Option<std::rc::Rc<crate::emacs_core::word_wrap::CachedWordWrapPolicy>>,
+    ) {
+        *self.word_wrap_policy_cache.borrow_mut() = cache;
+    }
 }
 
 impl Buffer {

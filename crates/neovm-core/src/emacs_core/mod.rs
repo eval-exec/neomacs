@@ -109,6 +109,8 @@ pub mod buffer_vars;
 pub mod case_encoding;
 #[path = "editing/dired/mod.rs"]
 pub mod dired;
+#[path = "editing/display_metrics.rs"]
+pub mod display_metrics;
 #[path = "editing/editfns/mod.rs"]
 pub mod editfns;
 #[path = "editing/file_name.rs"]
@@ -127,6 +129,8 @@ pub mod rect;
 pub(crate) mod redisplay_policy;
 #[path = "editing/undo/mod.rs"]
 pub mod undo;
+#[path = "editing/word_wrap.rs"]
+pub mod word_wrap;
 
 // Lisp loading, documentation, and language-level facilities.
 #[path = "lisp/advice/mod.rs"]

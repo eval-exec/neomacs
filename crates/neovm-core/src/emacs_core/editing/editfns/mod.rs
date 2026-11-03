@@ -524,7 +524,7 @@ fn prepare_buffer_change(
     // GNU insdel.c:2145 publishes after undoable-change and before any
     // interval callback, including the inhibited-modification-hooks arm.
     if gnu_hooks {
-        ctx.gnu_mark_buffer_redisplay(current_id);
+        ctx.mark_buffer_redisplay(current_id);
         verify_change_text_read_only(ctx, range.byte_range())?;
     }
 
@@ -544,9 +544,14 @@ fn prepare_buffer_change(
     // at this exact chokepoint, before first-change-hook and
     // before-change-functions.  Text edits already converge here, so the lock
     // transition remains complete without being duplicated across producers.
-    super::filelock::lock_current_buffer_before_change(ctx, |ctx| {
+    // The clean/file-target selection is native edit state; publishing the
+    // range roots and taking the lock (which can run Lisp) keep GNU's order.
+    if let Some(filename) =
+        super::file_name::clean_current_buffer_file_lock_target(&ctx.edit.buffers)
+    {
         live.capture_for_callbacks(ctx);
-    })?;
+        ctx.lock_file(&filename)?;
+    }
     let range = live.refresh(ctx);
     let Some(current_id) = ctx.edit.buffers.current_buffer_id() else {
         return Ok(start);

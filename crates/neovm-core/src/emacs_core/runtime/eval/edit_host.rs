@@ -16,14 +16,18 @@
 //! (`pub struct`, private fields, no public constructor).
 
 use super::{Context, LispArgVec, SpecpdlCount, SpecpdlRootScopeState, SpecpdlRootSlot};
-use crate::buffer::Buffer;
+use crate::buffer::{Buffer, BufferId, LispCharPos1};
 use crate::emacs_core::bookmark::BookmarkManager;
 use crate::emacs_core::builtins::symbols::builtin_set_2;
+use crate::emacs_core::display_metrics::{
+    InvisibleRunContext, LineWrap, MeasuredMotion, MotionEngine, WindowGeometry,
+};
 use crate::emacs_core::edit_host::EditHost;
 use crate::emacs_core::error::{EvalResult, Flow};
 use crate::emacs_core::hook_runtime;
 use crate::emacs_core::intern::SymId;
 use crate::emacs_core::value::Value;
+use crate::heap_types::LispString;
 
 impl EditHost for Context {
     fn hook_symbol_by_id(&self, hook_sym: SymId) -> SymId {
@@ -218,5 +222,124 @@ impl EditHost for Context {
 
     fn restore_specpdl_roots(&mut self, mark: Self::RootMark) {
         Context::restore_specpdl_roots(self, mark)
+    }
+
+    // --- display/system queries (C4b, C5, C15) ---
+
+    fn resolve_filename(&self, filename: &LispString) -> LispString {
+        crate::emacs_core::fileio::resolve_filename_lisp_for_eval(self, filename)
+    }
+
+    fn lock_file(&mut self, filename: &LispString) -> Result<(), Flow> {
+        let _ = crate::emacs_core::filelock::lock_file(self, filename)?;
+        Ok(())
+    }
+
+    fn unlock_file(&mut self, filename: &LispString) -> Result<(), Flow> {
+        let _ = crate::emacs_core::filelock::unlock_file(self, filename)?;
+        Ok(())
+    }
+
+    fn mark_buffer_redisplay(&mut self, buffer: BufferId) {
+        Context::gnu_mark_buffer_redisplay(self, buffer)
+    }
+
+    fn invisible_source_run_end(
+        &mut self,
+        buffer: BufferId,
+        byte_pos: usize,
+        context: InvisibleRunContext,
+    ) -> Result<Option<usize>, Flow> {
+        crate::emacs_core::xdisp::invisible_source_run_end_byte(self, buffer, byte_pos, context)
+    }
+
+    fn invisible_value_hides_source(&mut self, value: Value) -> Result<bool, Flow> {
+        crate::emacs_core::xdisp::invisible_status_for_value(self, value)
+            .map(|status| status.hides_source())
+    }
+
+    fn motion_engine(&self) -> MotionEngine {
+        crate::emacs_core::xdisp::motion::engine_for_context(self)
+    }
+
+    fn resolve_motion(
+        &mut self,
+        buffer: BufferId,
+        window: Option<Value>,
+        origin: LispCharPos1,
+        rows: i64,
+        goal_column: Option<i64>,
+    ) -> Result<Option<MeasuredMotion>, Flow> {
+        crate::emacs_core::xdisp::motion::resolve(
+            self,
+            crate::emacs_core::xdisp::motion::MotionRequest {
+                buffer,
+                window: window
+                    .and_then(|value| value.as_window_id())
+                    .map(crate::window::WindowId),
+                origin,
+                rows,
+                goal_column,
+            },
+        )
+    }
+
+    fn window_line_wrap(
+        &mut self,
+        buffer: BufferId,
+        window: Option<Value>,
+        engine: MotionEngine,
+    ) -> LineWrap {
+        crate::emacs_core::window_cmds::window_line_wrap(self, window, buffer, engine)
+    }
+
+    fn window_geometry(&mut self, window: Option<Value>) -> WindowGeometry {
+        let window = window.unwrap_or(Value::NIL);
+        let body_width =
+            crate::emacs_core::window_cmds::builtin_window_body_width(self, &[window, Value::NIL])
+                .ok()
+                .and_then(|value| value.as_fixnum())
+                .unwrap_or(0);
+        let hscroll = crate::emacs_core::window_cmds::builtin_window_hscroll(self, &[window])
+            .ok()
+            .and_then(|value| value.as_fixnum())
+            .unwrap_or(0);
+        WindowGeometry {
+            body_width,
+            hscroll,
+        }
+    }
+
+    fn char_width_table(&self) -> Option<Value> {
+        crate::encoding::char_width_table_value(self)
+    }
+
+    fn character_width(&self, table: Option<Value>, code: u32) -> usize {
+        crate::encoding::char_width_in_table(table, code)
+    }
+
+    fn word_wrap_policy(
+        &self,
+        buffer: &Buffer,
+        mode: crate::emacs_core::word_wrap::WordWrapMode,
+    ) -> crate::emacs_core::word_wrap::WordWrapPolicy {
+        crate::window::word_wrap_policy_for_buffer(buffer, mode)
+    }
+
+    fn word_wrap_mode(&self, buffer: &Buffer) -> crate::emacs_core::word_wrap::WordWrapMode {
+        // GNU `init_iterator` reaches WORD_WRAP from the buffer's `word-wrap`
+        // only when `word-wrap-by-category` is also non-nil
+        // (src/xdisp.c:3425-3426); the scan's fallback reads that flag.
+        let categories = self
+            .variable_value_in_buffer(
+                Some(buffer),
+                crate::window::WindowLayoutVariable::WordWrapByCategory.sym_id(),
+            )
+            .is_some_and(|value| value.is_truthy());
+        if categories {
+            crate::emacs_core::word_wrap::WordWrapMode::Category
+        } else {
+            crate::emacs_core::word_wrap::WordWrapMode::Whitespace
+        }
     }
 }
