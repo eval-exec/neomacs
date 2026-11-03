@@ -1726,7 +1726,7 @@ fn frame_parameter_color_or_tty_default(
         .unwrap_or_else(|| Value::string(tty_default))
 }
 
-fn default_face_has_explicit_font_attr(attr: LFaceAttr) -> bool {
+pub(crate) fn default_face_has_explicit_font_attr(attr: LFaceAttr) -> bool {
     get_face_override("default", attr, false).is_some()
         || get_face_override("default", attr, true).is_some()
 }

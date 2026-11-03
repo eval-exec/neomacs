@@ -1180,6 +1180,12 @@ pub fn seed_live_frame_default_face_from_font_parameter(
     // that request marker cannot own the realized face font.
     set_lisp_face_vector_attr(vector, LFaceAttr::Font, font_value);
     for (attr_name, attr_value) in derived_face_attrs_from_font_value(&font_value) {
+        // GNU `set_lface_from_font` sets a derived attribute only when the
+        // face slot is unspecified. An explicit `set-face-attribute` on the
+        // frame-local default face must survive a font change.
+        if super::xfaces::default_face_has_explicit_font_attr(attr_name) {
+            continue;
+        }
         set_lisp_face_vector_attr(vector, attr_name, attr_value);
     }
     super::xfaces::realization::record_face_change_for(

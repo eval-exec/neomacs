@@ -9124,6 +9124,83 @@ fn modify_frame_parameters_font_reopens_the_initial_frame_font() {
 }
 
 #[test]
+fn modify_frame_parameters_font_keeps_explicit_default_face_attributes() {
+    // GNU `set_lface_from_font` only fills unspecified slots. A family set
+    // explicitly on the frame-local default face must survive a frame font
+    // change, while the Font slot still follows the opened font.
+    crate::test_utils::init_test_tracing();
+    let mut ev = Context::new();
+    let host = RecordingDisplayHost::with_resolved_frame_font(resolved_frame_font(
+        "Noto Sans Mono",
+        "NotoSansMono-Regular",
+        160,
+        FontPxProbeResult {
+            pixel_size: 22,
+            height: 31,
+            ascent: 23,
+            descent: 8,
+            max_width: 13,
+            space_width: 13,
+            average_width: 13,
+        },
+    ));
+    ev.set_display_host(Box::new(host));
+    let buf = ev.buffers.create_buffer("*scratch*");
+    ev.buffers.set_current(buf);
+    let fid = ev.frames.create_frame("F1", 800, 600, buf);
+    {
+        let frame = ev.frames.get_mut(fid).expect("frame");
+        frame.set_window_system(Some(Value::symbol("neo")));
+        frame.char_width = 8.0;
+        frame.char_height = 16.0;
+    }
+    crate::emacs_core::xfaces::builtin_internal_set_lisp_face_attribute(
+        &mut ev,
+        vec![
+            Value::symbol("default"),
+            Value::keyword("family"),
+            Value::string("Explicit Family"),
+            Value::make_frame(fid.0),
+        ],
+    )
+    .expect("set an explicit default-face family");
+
+    let out = ev.eval_str_each(
+        r#"(modify-frame-parameters (selected-frame) '((font . "Noto Sans Mono-16")))"#,
+    );
+    assert!(out[0].is_ok(), "font update failed: {:?}", out[0]);
+
+    let table =
+        crate::emacs_core::xfaces::runtime_face_table_from_frame_lisp_faces(&ev, fid, false);
+    let default_face = table.merge_faces(&["default"]);
+    assert_eq!(
+        default_face.family,
+        Some(Value::string("Explicit Family")),
+        "an explicit default-face family must survive the font change"
+    );
+
+    let opened = ev
+        .frames
+        .get(fid)
+        .expect("frame")
+        .parameter("font-parameter")
+        .expect("opened font object");
+    let font_attr = crate::emacs_core::xfaces::builtin_internal_get_lisp_face_attribute(
+        &mut ev,
+        vec![
+            Value::symbol("default"),
+            Value::keyword("font"),
+            Value::make_frame(fid.0),
+        ],
+    )
+    .expect("default face font");
+    assert_eq!(
+        font_attr, opened,
+        "the Font slot must still follow the opened font"
+    );
+}
+
+#[test]
 fn modify_frame_parameters_font_refreshes_geometry_when_the_host_rejects_resize() {
     // A rejected implied resize leaves no acknowledgement to recompute the
     // window tree; the new character metrics must still be adopted locally
