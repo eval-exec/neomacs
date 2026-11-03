@@ -322,7 +322,14 @@ flow_from_eval_error	fn	pub(crate)	crates/neovm-value/src/error/mod.rs:137	emacs
 format_symbol_name_for_diagnostic	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:162	emacs_core::intern	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/lisp/load/mod.rs:5:21
 fresh_bytecode_source_id	fn	pub(crate)	crates/neovm-value/src/tagged/bytecode/chunk.rs:241	tagged::bytecode::chunk	pc1-d: DATA ledger-supplement:202; caller runtime/bytecode/chunk.rs:20
 function_cell_lookup_count	fn	pub(crate)	crates/neovm-value/src/symbol/mod.rs:183	emacs_core::symbol	bulk
-function_write_hooks	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:50	tagged::gc	module-facade: privacy module row FACADE REQUIRED; 8 named re-exports (all pre-move pub, vis unchanged); core paths updated callback.rs:3 world/function_write_hooks.rs:10 parallel/hof.rs:4
+CanonicalHofSeed	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:50	tagged::gc	module-facade: privacy module row FACADE REQUIRED; 8 named re-exports (all pre-move pub, vis unchanged); core paths updated callback.rs:3 world/function_write_hooks.rs:10 parallel/hof.rs:4
+CompilerActivity	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:50	tagged::gc	module-facade: privacy module row FACADE REQUIRED; 8 named re-exports (all pre-move pub, vis unchanged); core paths updated callback.rs:3 world/function_write_hooks.rs:10 parallel/hof.rs:4
+FunctionWriteHooks	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:50	tagged::gc	module-facade: privacy module row FACADE REQUIRED; 8 named re-exports (all pre-move pub, vis unchanged); core paths updated callback.rs:3 world/function_write_hooks.rs:10 parallel/hof.rs:4
+HofOperation	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:50	tagged::gc	module-facade: privacy module row FACADE REQUIRED; 8 named re-exports (all pre-move pub, vis unchanged); core paths updated callback.rs:3 world/function_write_hooks.rs:10 parallel/hof.rs:4
+HofPreparationError	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:50	tagged::gc	module-facade: privacy module row FACADE REQUIRED; 8 named re-exports (all pre-move pub, vis unchanged); core paths updated callback.rs:3 world/function_write_hooks.rs:10 parallel/hof.rs:4
+HofRegistrationClock	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:50	tagged::gc	module-facade: privacy module row FACADE REQUIRED; 8 named re-exports (all pre-move pub, vis unchanged); core paths updated callback.rs:3 world/function_write_hooks.rs:10 parallel/hof.rs:4
+HofRegistrationEpoch	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:50	tagged::gc	module-facade: privacy module row FACADE REQUIRED; 8 named re-exports (all pre-move pub, vis unchanged); core paths updated callback.rs:3 world/function_write_hooks.rs:10 parallel/hof.rs:4
+InitialDefinition	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:50	tagged::gc	module-facade: privacy module row FACADE REQUIRED; 8 named re-exports (all pre-move pub, vis unchanged); core paths updated callback.rs:3 world/function_write_hooks.rs:10 parallel/hof.rs:4
 has_collection_observations	fn	pub(crate)	crates/neovm-value/src/tagged/gc/collection_observed.rs:80	tagged::gc	bulk
 hash_key_to_visible_value	fn	pub(crate)	crates/neovm-value/src/hashtab/mod.rs:101	emacs_core::hashtab	bulk
 hash_test_parity_enabled	fn	pub(crate)	crates/neovm-value/src/hashtab/mod.rs:50	emacs_core::hashtab	bulk
@@ -411,7 +418,8 @@ signal_error_with_arg	fn	pub(crate)	crates/neovm-value/src/error/mod.rs:1047	ema
 signal_suppressed	fn	pub(crate)	crates/neovm-value/src/error/mod.rs:1009	emacs_core::error	bulk
 signal_with_data	fn	pub(crate)	crates/neovm-value/src/error/mod.rs:1037	emacs_core::error	bulk
 snapshot_static_subr_objects	fn	pub(crate)	crates/neovm-value/src/tagged/value.rs:335	tagged::value	bulk
-sqlite_finalizer::root_reexport	reexport	(new)	crates/neovm-value/src/lib.rs:40	crate root	pc2 root pub use line; SqliteObjFinalizer decl already pub+doc(hidden) (no promotion)
+SqliteObjFinalizer	reexport	(new)	crates/neovm-value/src/lib.rs:40	crate root	pc2 root pub use line; SqliteObjFinalizer decl already pub+doc(hidden) (no promotion)
+install_sqlite_obj_finalizer	reexport	(new)	crates/neovm-value/src/lib.rs:40	crate root	pc2 root pub use line; SqliteObjFinalizer decl already pub+doc(hidden) (no promotion)
 sqlite_obj_finalizer_installed	fn	pub(crate)	crates/neovm-value/src/tagged/header/sqlite_finalizer.rs:27	tagged::header::sqlite_finalizer	bulk
 string_bytes_changed_hook_installed	fn	pub(crate)	crates/neovm-value/src/heap_types.rs:66	heap_types	bulk
 swap_property_revision_world_state	use	pub(crate)	crates/neovm-value/src/symbol/mod.rs:43	emacs_core::symbol	n13 carried DATA: signed N13/PC10; sole upper crates/neovm-core/src/emacs_core/runtime/eval/green/carried.rs:73; unchanged paired TLS swap/placeholder body; guard=CARRIERS-derived carried.rs-only
