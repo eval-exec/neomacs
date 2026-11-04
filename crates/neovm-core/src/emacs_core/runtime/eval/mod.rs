@@ -7617,8 +7617,12 @@ mod keyboard_forwarding;
 mod owner_bindings;
 mod owner_mirrors;
 mod variable_access;
+pub(crate) use command_error::builtin_command_error_default_function;
 pub(crate) use variable_access::RawVariableView;
 pub use variable_access::{VariableStore, VariableView};
+pub(crate) use variable_access::{
+    buffer_local_value_in, builtin_buffer_local_value, builtin_buffer_local_value_2,
+};
 mod specpdl;
 mod thread_projection;
 pub(crate) use specpdl::{CurrentBufferScope, ExcursionScope, RestrictionScope};

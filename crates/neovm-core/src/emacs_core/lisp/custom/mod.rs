@@ -538,7 +538,7 @@ pub(crate) fn builtin_buffer_local_toplevel_value(
         return Ok(value);
     }
 
-    super::builtins::builtin_buffer_local_value(ctx, vec![args[0], buffer_value])
+    crate::emacs_core::eval::builtin_buffer_local_value(ctx, vec![args[0], buffer_value])
 }
 
 /// `(set-buffer-local-toplevel-value SYMBOL VALUE &optional BUFFER)`.

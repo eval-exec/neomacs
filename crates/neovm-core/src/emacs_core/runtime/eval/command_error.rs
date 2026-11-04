@@ -7,7 +7,7 @@
 //! therefore live with the evaluator; the bottom `error` module keeps only
 //! the typed payloads.
 
-use crate::emacs_core::error::{Flow, SignalData};
+use crate::emacs_core::error::{EvalResult, Flow, SignalData, expect_args};
 use crate::emacs_core::intern::intern;
 use crate::emacs_core::value::Value;
 
@@ -119,4 +119,19 @@ impl super::Context {
             Err(_) => "peculiar error".to_string(),
         }
     }
+}
+
+/// `(command-error-default-function DATA CONTEXT CALLER)` -> nil
+///
+/// GNU keyboard.c:1049-1101. Batch and pre-display sessions print the
+/// diagnostic to stderr and exit with status 255; a live session messages it.
+/// help.el's `help-command-error-confusable-suggestions` delegates here, so
+/// this is what every unhandled command/filter/sentinel error is reported by.
+pub(crate) fn builtin_command_error_default_function(
+    eval: &mut super::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args("command-error-default-function", &args, 3)?;
+    eval.command_error_default_report(args[0], args[1])?;
+    Ok(Value::NIL)
 }

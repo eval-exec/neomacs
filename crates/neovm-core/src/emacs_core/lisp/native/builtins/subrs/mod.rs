@@ -865,7 +865,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         const {
             crate::emacs_core::subr::world_subr!(SubrSpec::fixed2(
                 "buffer-local-value",
-                builtin_buffer_local_value_2,
+                crate::emacs_core::eval::builtin_buffer_local_value_2,
                 FixedMin2::Two,
             ))
             .leaf(&leaves::BUFFER_LOCAL_VALUE)
@@ -7497,7 +7497,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "command-error-default-function",
-        NativeFn::ContextVec(builtin_command_error_default_function),
+        NativeFn::ContextVec(crate::emacs_core::eval::builtin_command_error_default_function),
         SubrArity::new(3, Some(3)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(

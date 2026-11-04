@@ -151,7 +151,7 @@ pub(crate) fn buffer_local_value(ctx: &Context, variable: Value, buffer: Value) 
     {
         return Ok(value);
     }
-    Ok(crate::emacs_core::buffer::buffer_local_value_in(
+    Ok(crate::emacs_core::eval::buffer_local_value_in(
         ctx, variable, buffer,
     )?)
 }
