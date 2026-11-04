@@ -943,7 +943,7 @@ impl Context {
 
     pub(super) fn sync_current_buffer_runtime_state(&mut self) -> Result<(), Flow> {
         self.sync_current_thread_buffer_state();
-        crate::emacs_core::casetab_entries::sync_current_buffer_case_table_state(self)?;
+        crate::emacs_core::eval::case_tables::sync_current_buffer_case_table_state(self)?;
         super::super::syntax::sync_current_buffer_syntax_table_state(self)?;
         Ok(())
     }

@@ -279,7 +279,7 @@ impl Context {
             return;
         }
         self.setup_thread_locals();
-        let _ = crate::emacs_core::casetab_entries::builtin_standard_case_table(self, Vec::new());
+        let _ = crate::emacs_core::eval::case_tables::standard_case_table(self);
         self.obarray
             .set_constant_id(crate::emacs_core::casetab::standard_case_table_object_symbol_id());
     }

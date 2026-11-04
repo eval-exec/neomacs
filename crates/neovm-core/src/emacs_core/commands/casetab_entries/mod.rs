@@ -173,3 +173,33 @@ pub(crate) fn case_table_override_for_current_buffer(
         mode,
     ))
 }
+
+/// The one canonical case-table table (peer-ruled PC2 shape). The authority
+/// stays here because it binds the raw obarray legacy write, the green
+/// standard-table setter, the cached standard table and the tagged-heap
+/// identity (stage-3b R0/T5); eval reaches it through
+/// `eval::case_tables`, installed at the two construction seams.
+static CANONICAL_CASE_TABLE_HOOKS: crate::emacs_core::eval::case_tables::CaseTableHooks =
+    crate::emacs_core::eval::case_tables::CaseTableHooks::new(
+        current_case_canon_table,
+        current_case_upcase_table,
+        sync_current_buffer_case_table_state,
+        standard_case_table_for_admission,
+    );
+
+/// Admission needs the standard table installed; the Lisp entry's error is
+/// ignored exactly as before (this runs at admission, after construction).
+fn standard_case_table_for_admission(
+    ctx: &mut crate::emacs_core::eval::Context,
+) -> Result<Value, Flow> {
+    builtin_standard_case_table(ctx, Vec::new())
+}
+
+pub(crate) fn install_case_table_hooks() {
+    let installed =
+        crate::emacs_core::eval::case_tables::install_case_table_hooks(&CANONICAL_CASE_TABLE_HOOKS);
+    debug_assert!(
+        installed.is_ok(),
+        "a different case-table hook table is already installed"
+    );
+}

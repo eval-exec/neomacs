@@ -810,3 +810,30 @@ pub(crate) fn other_buffer_impl_in_state(
         .unwrap_or_else(|| buffers.create_buffer("*scratch*"));
     Ok(Value::make_buffer(scratch))
 }
+
+/// GNU `(other-buffer BUFFER)` for a dying buffer, behind the one cold PC2
+/// table the evaluator's green buffer-kill notification uses. The frame and
+/// window authority stays here; the killed buffer arrives as the exact Lisp
+/// object `kill-buffer` received.
+fn other_buffer_for_killed_buffer(
+    ctx: &mut crate::emacs_core::eval::Context,
+    _killed: crate::buffer::BufferId,
+    killed_value: Value,
+) -> Result<Option<crate::buffer::BufferId>, crate::emacs_core::error::Flow> {
+    let other =
+        other_buffer_impl_in_state(&mut ctx.frames, &mut ctx.edit.buffers, vec![killed_value])?;
+    Ok(other.as_buffer_id())
+}
+
+static CANONICAL_BUFFER_KILL_HOOKS: crate::emacs_core::eval::buffer_kill::BufferKillHooks =
+    crate::emacs_core::eval::buffer_kill::BufferKillHooks::new(other_buffer_for_killed_buffer);
+
+pub(crate) fn install_buffer_kill_hook() {
+    let installed = crate::emacs_core::eval::buffer_kill::install_buffer_kill_hooks(
+        &CANONICAL_BUFFER_KILL_HOOKS,
+    );
+    debug_assert!(
+        installed.is_ok(),
+        "a different buffer-kill hook table is already installed"
+    );
+}

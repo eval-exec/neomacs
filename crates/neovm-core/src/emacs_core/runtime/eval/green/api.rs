@@ -214,12 +214,11 @@ impl Context {
         if !self.green_threads_running() || !self.threads.buffer_current_in_other_thread(buffer) {
             return Ok(());
         }
-        let other = crate::emacs_core::buffer_ops::other_buffer_impl_in_state(
-            &mut self.frames,
-            &mut self.edit.buffers,
-            vec![Value::make_buffer(buffer)],
-        )?
-        .as_buffer_id();
+        let other = crate::emacs_core::eval::buffer_kill::other_buffer_for_killed(
+            self,
+            buffer,
+            Value::make_buffer(buffer),
+        )?;
         // GNU's `other-buffer` always finds one, making `*scratch*` if
         // need be; without one the threads keep their buffer.
         if let Some(other) = other {

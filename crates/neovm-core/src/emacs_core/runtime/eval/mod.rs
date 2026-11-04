@@ -7603,7 +7603,9 @@ fn value_list_to_values(list: &Value) -> LispArgVec {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+pub mod buffer_kill;
 pub mod call_interactively;
+pub mod case_tables;
 mod gc_pacing;
 pub mod interactive_registry;
 pub mod keymap_lookup;
