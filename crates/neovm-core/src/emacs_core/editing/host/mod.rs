@@ -309,4 +309,16 @@ pub trait EditHost {
     /// GNU `force-mode-line-update` with a nil argument: mark the current
     /// buffer's mode line for the next redisplay. C4b.
     fn force_mode_line_update(&mut self) -> EvalResult;
+
+    /// GNU `wset_update_mode_line` broadcast: mark every window's chrome
+    /// (mode line, header line, menu bar) for redisplay. C4b.
+    fn mark_chrome_dirty_all(&mut self);
+
+    /// Raise GNU's global `update_mode_lines`: mark every window's chrome
+    /// and request the menu-bar rebuild. C4b.
+    fn request_global_mode_line_update(&mut self);
+
+    /// GNU `bset_update_mode_line` for BUFFER: mark shared text and the
+    /// windows showing it, and request the menu rebuild. C4b.
+    fn gnu_mark_buffer_mode_line(&mut self, buffer: BufferId);
 }

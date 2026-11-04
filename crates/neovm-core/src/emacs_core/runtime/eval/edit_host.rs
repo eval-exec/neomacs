@@ -382,4 +382,15 @@ impl EditHost for Context {
             vec![Value::NIL],
         )
     }
+    fn mark_chrome_dirty_all(&mut self) {
+        Context::mark_chrome_dirty_all(self)
+    }
+
+    fn request_global_mode_line_update(&mut self) {
+        Context::request_global_mode_line_update(self)
+    }
+
+    fn gnu_mark_buffer_mode_line(&mut self, buffer: BufferId) {
+        Context::gnu_mark_buffer_mode_line(self, buffer)
+    }
 }
