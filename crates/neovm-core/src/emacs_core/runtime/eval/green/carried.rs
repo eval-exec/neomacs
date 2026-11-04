@@ -24,8 +24,8 @@ const CARRIERS: &[(Placeholder, Swap)] = &[
     ),
     // process.c process names (`Vprocess_alist`).
     (
-        crate::emacs_core::process::world_state_placeholder,
-        crate::emacs_core::process::swap_world_state,
+        crate::emacs_core::eval::data::process_state::world_state_placeholder,
+        crate::emacs_core::eval::data::process_state::swap_world_state,
     ),
     // sqlite.c connections and statements (Lisp objects, global).
     (

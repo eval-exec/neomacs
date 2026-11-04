@@ -6,8 +6,8 @@
 
 use super::keyboard::InputEvent;
 use crate::emacs_core::Context;
+use crate::emacs_core::eval::data::process_state::WaitNotifier;
 use crate::emacs_core::process::SystemProcessExt;
-use crate::emacs_core::process::WaitNotifier;
 use crate::host_effect::wake::{
     ControlDestination, ControlNudge, ControlNudgeOutcome, HostSessionControl,
 };

@@ -9,7 +9,7 @@ use super::super::super::WatchActivity;
 use super::super::super::delivery::{
     self, DeliveryBatch, DeliveryReceiver, DeliverySender, PublishOutcome,
 };
-use crate::emacs_core::process::WaitNotifier;
+use crate::emacs_core::eval::data::process_state::WaitNotifier;
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use inotify::{EventMask, Inotify, WatchDescriptor, WatchMask};
 use neovm_value::system_vocab::errno::Errno;

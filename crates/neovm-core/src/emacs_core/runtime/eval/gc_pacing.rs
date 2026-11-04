@@ -1046,7 +1046,9 @@ impl Context {
     /// publishing work (see [`WaitNotifier`]). Returns `None` only if the
     /// platform poller could not be created. Frontend input, diagnostics, and
     /// asynchronous process work share this mechanism.
-    pub fn wait_notifier(&self) -> Option<crate::emacs_core::process::WaitNotifier> {
+    pub fn wait_notifier(
+        &self,
+    ) -> Option<crate::emacs_core::eval::data::process_state::WaitNotifier> {
         self.processes.wait_notifier()
     }
 

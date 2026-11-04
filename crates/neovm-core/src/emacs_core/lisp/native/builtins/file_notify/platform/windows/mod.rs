@@ -142,7 +142,7 @@ mod native {
         self, DeliveryReceiver, DeliveryRecord, DeliverySender, EVENT_CAPACITY,
     };
     use super::*;
-    use crate::emacs_core::process::WaitNotifier;
+    use crate::emacs_core::eval::data::process_state::WaitNotifier;
     use worker::{Worker, WorkerMessage, WorkerTermination};
 
     struct W32Watch {

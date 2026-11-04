@@ -8,7 +8,7 @@ use super::super::model::{
     Backend, BackendEvent, DrainBatch, RemoveWatchOutcome, WatchId, WatchRegistration,
 };
 use crate::emacs_core::error::Flow;
-use crate::emacs_core::process::WaitNotifier;
+use crate::emacs_core::eval::data::process_state::WaitNotifier;
 use crate::emacs_core::value::Value;
 use std::path::Path;
 

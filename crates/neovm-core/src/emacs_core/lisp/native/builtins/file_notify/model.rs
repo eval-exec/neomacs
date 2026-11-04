@@ -5,7 +5,7 @@
 //! machine and makes cross-platform request mismatches a compile-time error.
 
 use crate::emacs_core::error::Flow;
-use crate::emacs_core::process::WaitNotifier;
+use crate::emacs_core::eval::data::process_state::WaitNotifier;
 use crate::emacs_core::value::Value;
 use neovm_value::system_vocab::errno::Errno;
 use std::path::Path;

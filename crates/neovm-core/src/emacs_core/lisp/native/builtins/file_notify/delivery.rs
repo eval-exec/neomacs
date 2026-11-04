@@ -7,7 +7,7 @@
 //! unbounded control channel, so correctness never competes with discardable
 //! data-plane events for capacity.
 
-use crate::emacs_core::process::WaitNotifier;
+use crate::emacs_core::eval::data::process_state::WaitNotifier;
 use crossbeam_channel::{Receiver, Sender, TrySendError};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};

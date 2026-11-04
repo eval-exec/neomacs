@@ -3448,7 +3448,7 @@ fn append_print_value_bytes(value: &Value, out: &mut Vec<u8>, options: PrintOpti
         }
         ValueKind::Veclike(VecLikeType::Process) => {
             out.extend_from_slice(
-                super::process::print_process_handle(value)
+                crate::emacs_core::eval::process_hooks::print_process_handle(value)
                     .unwrap_or_else(|| "#<process>".to_string())
                     .as_bytes(),
             );

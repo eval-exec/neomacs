@@ -388,7 +388,7 @@ impl Context {
 
         ev.provide_value(
             Value::symbol("make-network-process"),
-            Some(super::super::process::make_network_process_subfeatures()),
+            Some(crate::emacs_core::eval::data::process_state::make_network_process_subfeatures()),
         )
         .expect("startup make-network-process provide should succeed");
 
