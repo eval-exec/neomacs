@@ -2996,7 +2996,7 @@ fn input_pending_services_presentation_retirement_without_redisplay() {
         *redisplays_in_callback.borrow_mut() += 1;
     }));
 
-    let pending = crate::emacs_core::reader::builtin_input_pending_p(&mut ev, vec![])
+    let pending = crate::emacs_core::keyboard::builtin_input_pending_p(&mut ev, vec![])
         .expect("input-pending-p should service internal events");
 
     assert_eq!(pending, Value::NIL);
@@ -14861,13 +14861,13 @@ fn input_pending_p_filters_default_ignored_events_like_gnu() {
         .pending_input_events
         .push_back(crate::keyboard::InputEvent::SelectWindow { window_id });
 
-    let filtered = crate::emacs_core::reader::builtin_input_pending_p(&mut ev, vec![])
+    let filtered = crate::emacs_core::keyboard::builtin_input_pending_p(&mut ev, vec![])
         .expect("default input-pending-p should succeed");
     assert_eq!(filtered, Value::NIL);
 
     ev.obarray
         .set_symbol_value("input-pending-p-filter-events", Value::NIL);
-    let unfiltered = crate::emacs_core::reader::builtin_input_pending_p(&mut ev, vec![])
+    let unfiltered = crate::emacs_core::keyboard::builtin_input_pending_p(&mut ev, vec![])
         .expect("unfiltered input-pending-p should succeed");
     assert_eq!(unfiltered, Value::T);
 }

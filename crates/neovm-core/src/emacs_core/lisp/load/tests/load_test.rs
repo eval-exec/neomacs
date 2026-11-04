@@ -5171,8 +5171,9 @@ fn bootstrap_builtin_read_key_sequence_follows_unread_help_map_prefix() {
         Value::list(vec![Value::fixnum(8), Value::fixnum('i' as i64)]),
     );
 
-    let result = crate::emacs_core::reader::builtin_read_key_sequence(&mut eval, vec![Value::NIL])
-        .expect("read C-h i key sequence");
+    let result =
+        crate::emacs_core::keyboard::builtin_read_key_sequence(&mut eval, vec![Value::NIL])
+            .expect("read C-h i key sequence");
 
     assert_eq!(result, Value::string("\u{8}i"));
     assert_eq!(

@@ -1060,7 +1060,7 @@ fn pointer_before_retirement_resolves_before_snapshot_is_released() {
     );
 
     assert_eq!(
-        crate::emacs_core::reader::builtin_input_pending_p(&mut eval, vec![])
+        crate::emacs_core::keyboard::builtin_input_pending_p(&mut eval, vec![])
             .expect("retirement service"),
         Value::NIL
     );

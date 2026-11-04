@@ -2943,27 +2943,27 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "input-pending-p",
-        NativeFn::ContextVec(crate::emacs_core::reader::builtin_input_pending_p),
+        NativeFn::ContextVec(crate::emacs_core::keyboard::builtin_input_pending_p),
         SubrArity::new(0, Some(1)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "discard-input",
-        NativeFn::ContextVec(crate::emacs_core::reader::builtin_discard_input),
+        NativeFn::ContextVec(crate::emacs_core::keyboard::builtin_discard_input),
         SubrArity::new(0, Some(0)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "current-input-mode",
-        NativeFn::ContextVec(crate::emacs_core::reader::builtin_current_input_mode),
+        NativeFn::ContextVec(crate::emacs_core::keyboard::builtin_current_input_mode),
         SubrArity::new(0, Some(0)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "set-input-mode",
-        NativeFn::ContextVec(crate::emacs_core::reader::builtin_set_input_mode),
+        NativeFn::ContextVec(crate::emacs_core::keyboard::builtin_set_input_mode),
         SubrArity::new(3, Some(4)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "set-input-interrupt-mode",
-        NativeFn::ContextVec(crate::emacs_core::reader::builtin_set_input_interrupt_mode),
+        NativeFn::ContextVec(crate::emacs_core::keyboard::builtin_set_input_interrupt_mode),
         SubrArity::new(1, Some(1)),
     )));
     // Keyboard audit Finding 16: register insert-special-event
@@ -2973,17 +2973,17 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     // every Lisp-side event push the same way.
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "insert-special-event",
-        NativeFn::ContextVec(crate::emacs_core::reader::builtin_insert_special_event),
+        NativeFn::ContextVec(crate::emacs_core::keyboard::builtin_insert_special_event),
         SubrArity::new(1, Some(1)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "read-key-sequence",
-        NativeFn::ContextVec(crate::emacs_core::reader::builtin_read_key_sequence),
+        NativeFn::ContextVec(crate::emacs_core::keyboard::builtin_read_key_sequence),
         SubrArity::new(1, Some(6)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "read-key-sequence-vector",
-        NativeFn::ContextVec(crate::emacs_core::reader::builtin_read_key_sequence_vector),
+        NativeFn::ContextVec(crate::emacs_core::keyboard::builtin_read_key_sequence_vector),
         SubrArity::new(1, Some(6)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -3417,7 +3417,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     );
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "read-char-exclusive",
-        NativeFn::ContextVec(crate::emacs_core::lread::builtin_read_char_exclusive),
+        NativeFn::ContextVec(crate::emacs_core::keyboard::builtin_read_char_exclusive),
         SubrArity::new(0, Some(3)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -3736,7 +3736,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "read-char",
-        NativeFn::ContextVec(crate::emacs_core::reader::builtin_read_char),
+        NativeFn::ContextVec(crate::emacs_core::keyboard::builtin_read_char),
         SubrArity::new(0, Some(3)),
     )));
     ctx.register_subr(
@@ -3793,7 +3793,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     );
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "read-event",
-        NativeFn::ContextVec(crate::emacs_core::lread::builtin_read_event),
+        NativeFn::ContextVec(crate::emacs_core::keyboard::builtin_read_event),
         SubrArity::new(0, Some(3)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -6175,20 +6175,20 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "set-input-meta-mode",
         NativeFn::ContextVec(|_ctx, args| {
-            crate::emacs_core::reader::builtin_set_input_meta_mode(args)
+            crate::emacs_core::keyboard::builtin_set_input_meta_mode(args)
         }),
         SubrArity::new(1, Some(2)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "set-output-flow-control",
         NativeFn::ContextVec(|_ctx, args| {
-            crate::emacs_core::reader::builtin_set_output_flow_control(args)
+            crate::emacs_core::keyboard::builtin_set_output_flow_control(args)
         }),
         SubrArity::new(1, Some(2)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "set-quit-char",
-        NativeFn::ContextVec(crate::emacs_core::reader::builtin_set_quit_char),
+        NativeFn::ContextVec(crate::emacs_core::keyboard::builtin_set_quit_char),
         SubrArity::new(1, Some(1)),
     )));
     ctx.register_subr(
@@ -6572,7 +6572,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "waiting-for-user-input-p",
-        NativeFn::ContextVec(crate::emacs_core::reader::builtin_waiting_for_user_input_p_ctx),
+        NativeFn::ContextVec(crate::emacs_core::keyboard::builtin_waiting_for_user_input_p_ctx),
         SubrArity::new(0, Some(0)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(

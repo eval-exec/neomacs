@@ -1573,7 +1573,7 @@ fn interactive_capture_up_event_in_eval(
     if interactive_last_key_sequence_event(sequence)
         .is_some_and(|event| interactive_event_is_down_event(&event, symbol_mode))
     {
-        let up_event = super::lread::builtin_read_event(eval, vec![])?;
+        let up_event = super::keyboard::builtin_read_event(eval, vec![])?;
         if !up_event.is_nil() {
             context.pending_up_event = Some(up_event);
         }
@@ -1590,7 +1590,7 @@ fn interactive_capture_up_event_in_vm_batch_runtime(
     context.pending_up_event = None;
     if interactive_last_key_sequence_event(sequence)
         .is_some_and(|event| interactive_event_is_down_event(&event, symbol_mode))
-        && let Some(up_event) = super::lread::builtin_read_event_in_runtime(shared, &[])?
+        && let Some(up_event) = super::keyboard::builtin_read_event_in_runtime(shared, &[])?
         && !up_event.is_nil()
     {
         context.pending_up_event = Some(up_event);
@@ -1959,11 +1959,11 @@ fn interactive_args_from_string_code_in_vm_runtime(
                 InteractiveControlLetter::Character => {
                     let letter_args = [Value::heap_string(prompt.clone())];
                     let arg = if let Some(arg) =
-                        super::reader::builtin_read_char_in_runtime(shared, &letter_args)?
+                        super::keyboard::builtin_read_char_in_runtime(shared, &letter_args)?
                     {
                         arg
                     } else {
-                        super::reader::finish_read_char_interactive_in_runtime(
+                        super::keyboard::finish_read_char_interactive_in_runtime(
                             shared,
                             &letter_args,
                         )?
@@ -2001,13 +2001,13 @@ fn interactive_args_from_string_code_in_vm_runtime(
                 InteractiveControlLetter::KeySequence => {
                     let letter_args = [Value::heap_string(prompt.clone())];
                     let arg = if let Some(arg) =
-                        super::reader::builtin_read_key_sequence_in_runtime(shared, &letter_args)?
+                        super::keyboard::builtin_read_key_sequence_in_runtime(shared, &letter_args)?
                     {
                         arg
                     } else {
-                        super::reader::finish_read_key_sequence_interactive_in_runtime(
+                        super::keyboard::finish_read_key_sequence_interactive_in_runtime(
                             shared,
-                            super::reader::read_key_sequence_options_from_args(&letter_args),
+                            super::keyboard::read_key_sequence_options_from_args(&letter_args),
                         )?
                     };
                     interactive_capture_up_event_in_vm_batch_runtime(shared, &arg, context)?;
@@ -2016,15 +2016,15 @@ fn interactive_args_from_string_code_in_vm_runtime(
                 InteractiveControlLetter::KeySequenceVector => {
                     let letter_args = [Value::heap_string(prompt.clone())];
                     let arg = if let Some(arg) =
-                        super::reader::builtin_read_key_sequence_vector_in_runtime(
+                        super::keyboard::builtin_read_key_sequence_vector_in_runtime(
                             shared,
                             &letter_args,
                         )? {
                         arg
                     } else {
-                        super::reader::finish_read_key_sequence_vector_interactive_in_runtime(
+                        super::keyboard::finish_read_key_sequence_vector_interactive_in_runtime(
                             shared,
-                            super::reader::read_key_sequence_options_from_args(&letter_args),
+                            super::keyboard::read_key_sequence_options_from_args(&letter_args),
                         )?
                     };
                     interactive_capture_up_event_in_vm_batch_runtime(shared, &arg, context)?;
@@ -2689,10 +2689,9 @@ fn interactive_args_from_string_code(
                         vec![Value::heap_string(prompt), default, Value::NIL],
                     )?)
                 }
-                InteractiveControlLetter::Character => args.push(super::reader::builtin_read_char(
-                    eval,
-                    vec![Value::heap_string(prompt)],
-                )?),
+                InteractiveControlLetter::Character => args.push(
+                    super::keyboard::builtin_read_char(eval, vec![Value::heap_string(prompt)])?,
+                ),
                 InteractiveControlLetter::Command => {
                     args.push(super::minibuffer::builtin_read_command(
                         eval,
@@ -2722,7 +2721,7 @@ fn interactive_args_from_string_code(
                 }
                 InteractiveControlLetter::Ignore => args.push(Value::NIL),
                 InteractiveControlLetter::KeySequence => {
-                    let arg = super::reader::builtin_read_key_sequence(
+                    let arg = super::keyboard::builtin_read_key_sequence(
                         eval,
                         vec![Value::heap_string(prompt)],
                     )?;
@@ -2730,7 +2729,7 @@ fn interactive_args_from_string_code(
                     args.push(arg);
                 }
                 InteractiveControlLetter::KeySequenceVector => {
-                    let arg = super::reader::builtin_read_key_sequence_vector(
+                    let arg = super::keyboard::builtin_read_key_sequence_vector(
                         eval,
                         vec![Value::heap_string(prompt)],
                     )?;
