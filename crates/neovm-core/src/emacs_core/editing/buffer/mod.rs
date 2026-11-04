@@ -1309,47 +1309,58 @@ pub(crate) fn builtin_buffer_swap_text(
         })
 }
 
-pub(crate) fn builtin_insert_buffer_substring(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_insert_buffer_substring<H: EditHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args_range("insert-buffer-substring", &args, 1, 3)?;
     // GNU editfns.c:1728 resolves a required BUFFER through get-buffer.
-    let buffer_id = Some(resolve_buffer_designator_in_manager(
-        &eval.edit.buffers,
-        &args[0],
-        BufferDesignatorDefault::Required,
-    )?);
-    let (default_start, default_end) = buffer_id
-        .and_then(|id| {
-            eval.edit.buffers.get(id).map(|buf| {
-                (
-                    buf.point_min_lisp_char_pos().as_i64(),
-                    buf.point_max_lisp_char_pos().as_i64(),
-                )
+    let (buffer_id, default_start, default_end) = {
+        let (edit, _) = host.edit_and_vars();
+        let buffer_id = Some(resolve_buffer_designator_in_manager(
+            &edit.buffers,
+            &args[0],
+            BufferDesignatorDefault::Required,
+        )?);
+        let (default_start, default_end) = buffer_id
+            .and_then(|id| {
+                edit.buffers.get(id).map(|buf| {
+                    (
+                        buf.point_min_lisp_char_pos().as_i64(),
+                        buf.point_max_lisp_char_pos().as_i64(),
+                    )
+                })
             })
-        })
-        .unwrap_or((1, 1));
-    let start = if args.len() > 1 && !args[1].is_nil() {
-        expect_integer_or_marker_in_buffers(&eval.edit.buffers, &args[1])?
-    } else {
-        default_start
+            .unwrap_or((1, 1));
+        (buffer_id, default_start, default_end)
     };
-    let end = if args.len() > 2 && !args[2].is_nil() {
-        expect_integer_or_marker_in_buffers(&eval.edit.buffers, &args[2])?
-    } else {
-        default_end
+    let (start, end) = {
+        let (edit, _) = host.edit_and_vars();
+        let start = if args.len() > 1 && !args[1].is_nil() {
+            expect_integer_or_marker_in_buffers(&edit.buffers, &args[1])?
+        } else {
+            default_start
+        };
+        let end = if args.len() > 2 && !args[2].is_nil() {
+            expect_integer_or_marker_in_buffers(&edit.buffers, &args[2])?
+        } else {
+            default_end
+        };
+        (start, end)
     };
 
-    let text = checked_buffer_substring_for_char_region_in_manager(
-        &eval.edit.buffers,
-        buffer_id,
-        LispCharPos1::new(start),
-        LispCharPos1::new(end),
-        Value::fixnum(start),
-        Value::fixnum(end),
-    )?;
-    builtin_insert(eval, vec![text])
+    let text = {
+        let (edit, _) = host.edit_and_vars();
+        checked_buffer_substring_for_char_region_in_manager(
+            &edit.buffers,
+            buffer_id,
+            LispCharPos1::new(start),
+            LispCharPos1::new(end),
+            Value::fixnum(start),
+            Value::fixnum(end),
+        )?
+    };
+    builtin_insert(host, vec![text])
 }
 
 pub(crate) fn builtin_kill_all_local_variables(
@@ -2849,19 +2860,22 @@ pub(crate) enum InsertPiecePropertyMode {
 /// The two behavioral axes GNU passes as separate parameters stay separate
 /// here, so no call site can conflate marker placement with property
 /// inheritance.
-fn general_insert_function(
-    eval: &mut super::eval::Context,
+fn general_insert_function<H: EditHost>(
+    host: &mut H,
     args: &[Value],
     marker_placement: InsertPieceMarkerPlacement,
     property_mode: InsertPiecePropertyMode,
 ) -> EvalResult {
     for arg in args {
-        let target_multibyte = current_buffer_multibyte(&eval.edit.buffers)?;
+        let target_multibyte = {
+            let (edit, _) = host.edit_and_vars();
+            current_buffer_multibyte(&edit.buffers)?
+        };
         let Some(pending) = PendingInsert::classify(*arg, target_multibyte)? else {
             continue;
         };
         insert_one_pending(
-            eval,
+            host,
             pending,
             target_multibyte,
             marker_placement,
@@ -2971,24 +2985,26 @@ impl PendingInsert {
 ///
 /// The ordering here is GNU's and is load-bearing: signal first, read the
 /// source second.  See `PendingInsert` for why reading second is safe.
-fn insert_one_pending(
-    eval: &mut super::eval::Context,
+fn insert_one_pending<H: EditHost>(
+    host: &mut H,
     pending: PendingInsert,
     target_multibyte: bool,
     marker_placement: InsertPieceMarkerPlacement,
     property_mode: InsertPiecePropertyMode,
 ) -> EvalResult {
-    let current_id = eval
-        .edit
-        .buffers
-        .current_buffer_id()
-        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    let insert_pos = eval
-        .edit
-        .buffers
-        .get(current_id)
-        .map(Buffer::point_emacs_byte_pos)
-        .unwrap_or(EmacsBytePos::ZERO);
+    let (current_id, insert_pos) = {
+        let (edit, _) = host.edit_and_vars();
+        let current_id = edit
+            .buffers
+            .current_buffer_id()
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        let insert_pos = edit
+            .buffers
+            .get(current_id)
+            .map(Buffer::point_emacs_byte_pos)
+            .unwrap_or(EmacsBytePos::ZERO);
+        (current_id, insert_pos)
+    };
 
     // Root the SOURCE, which is the only thing that has to survive the hook,
     // and which subsumes everything derived from it.
@@ -3005,12 +3021,12 @@ fn insert_one_pending(
     // `set-text-properties` on the source could unlink a spine the clone still
     // pointed at.  Materializing after the hook closes that window, so one
     // root replaces a per-property cons chain on every propertized insert.
-    let piece_root_scope = eval.save_specpdl_roots();
+    let piece_root_scope = host.save_specpdl_roots();
     let source_root = pending.source_root();
     if source_root.is_heap_object() {
-        eval.push_specpdl_root(source_root);
+        host.push_specpdl_root(source_root);
     }
-    super::editfns::signal_before_insertion_at_emacs_byte_pos(eval, insert_pos)?;
+    super::editfns::signal_before_insertion_at_emacs_byte_pos(host, insert_pos)?;
 
     // Past the safepoint: now read the bytes and the intervals.
     let pieces = vec![pending.materialize(target_multibyte)?];
@@ -3019,73 +3035,78 @@ fn insert_one_pending(
         // GNU cannot reach this -- `Faset` cannot empty a string -- but a
         // conversion that produced no bytes must not be handed to the after
         // signal as a zero-width insertion that already ran a before signal.
-        eval.restore_specpdl_roots(piece_root_scope);
+        host.restore_specpdl_roots(piece_root_scope);
         return Ok(Value::NIL);
     }
-    let change = current_empty_text_change_at_emacs_byte_pos(
-        &eval.edit.buffers,
-        current_id,
-        insert_pos,
-        insert_extent,
-    )?;
-    let mode = eval.symbol_mode();
+    let change = {
+        let (edit, _) = host.edit_and_vars();
+        current_empty_text_change_at_emacs_byte_pos(
+            &edit.buffers,
+            current_id,
+            insert_pos,
+            insert_extent,
+        )?
+    };
+    let mode = host.symbol_mode();
     // Edit phase: `mode` (Copy, captured above as before) and the moved
     // `pieces` cross the boundary; the rooted source stays rooted by the
     // specpdl mark restored below.
-    let (edit, vars) = eval.edit_and_vars();
-    insert_pieces_in_state(
-        vars,
-        &[],
-        &mut edit.buffers,
-        pieces,
-        marker_placement,
-        property_mode,
-        mode,
-    )?;
-    super::editfns::signal_after_text_change(eval, change)?;
-    eval.restore_specpdl_roots(piece_root_scope);
+    {
+        let (edit, vars) = host.edit_and_vars();
+        insert_pieces_in_state(
+            vars,
+            &[],
+            &mut edit.buffers,
+            pieces,
+            marker_placement,
+            property_mode,
+            mode,
+        )?;
+    }
+    super::editfns::signal_after_text_change(host, change)?;
+    host.restore_specpdl_roots(piece_root_scope);
     Ok(Value::NIL)
 }
 
-pub(crate) fn builtin_insert(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_insert<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     general_insert_function(
-        eval,
+        host,
         &args,
         InsertPieceMarkerPlacement::AfterMarkers,
         InsertPiecePropertyMode::SourceOnly,
     )
 }
 
-pub(crate) fn builtin_insert_before_markers(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_insert_before_markers<H: EditHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     general_insert_function(
-        eval,
+        host,
         &args,
         InsertPieceMarkerPlacement::BeforeMarkers,
         InsertPiecePropertyMode::SourceOnly,
     )
 }
 
-pub(crate) fn builtin_insert_and_inherit(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_insert_and_inherit<H: EditHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     general_insert_function(
-        eval,
+        host,
         &args,
         InsertPieceMarkerPlacement::AfterMarkers,
         InsertPiecePropertyMode::InheritAdjoining,
     )
 }
 
-pub(crate) fn builtin_insert_before_markers_and_inherit(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_insert_before_markers_and_inherit<H: EditHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     general_insert_function(
-        eval,
+        host,
         &args,
         InsertPieceMarkerPlacement::BeforeMarkers,
         InsertPiecePropertyMode::InheritAdjoining,
@@ -3206,7 +3227,7 @@ pub(crate) fn insert_char_code_from_value(value: &Value) -> Result<i64, Flow> {
     }
 }
 
-pub(crate) fn builtin_insert_char(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_insert_char<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_args_range("insert-char", &args, 1, 3)?;
     let char_code = insert_char_code_from_value(&args[0])?;
     let count = match args.get(1) {
@@ -3219,7 +3240,10 @@ pub(crate) fn builtin_insert_char(eval: &mut super::eval::Context, args: Vec<Val
         return Ok(Value::NIL);
     }
 
-    let multibyte = current_buffer_multibyte(&eval.edit.buffers)?;
+    let multibyte = {
+        let (edit, _) = host.edit_and_vars();
+        current_buffer_multibyte(&edit.buffers)?
+    };
     let unit = if let Some(bytes) = encode_char_code_for_buffer_bytes(char_code as u32, multibyte) {
         bytes
     } else {
@@ -3228,11 +3252,12 @@ pub(crate) fn builtin_insert_char(eval: &mut super::eval::Context, args: Vec<Val
             vec![Value::symbol("characterp"), args[0]],
         ));
     };
-    let existing = eval
-        .edit
-        .buffers
-        .current_buffer()
-        .map_or(0, |buffer| buffer.total_emacs_byte_len().get());
+    let existing = {
+        let (edit, _) = host.edit_and_vars();
+        edit.buffers
+            .current_buffer()
+            .map_or(0, |buffer| buffer.total_emacs_byte_len().get())
+    };
     let length = crate::emacs_core::alloc::BufferByteLen::repeated(
         unit.len(),
         crate::emacs_core::alloc::RepeatCount::try_from(count).map_err(
@@ -3247,43 +3272,54 @@ pub(crate) fn builtin_insert_char(eval: &mut super::eval::Context, args: Vec<Val
         bytes.extend_from_slice(&unit);
     }
     let to_insert = lisp_string_from_buffer_bytes(bytes, multibyte);
-    let current_id = eval
-        .edit
-        .buffers
-        .current_buffer_id()
-        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    if eval.edit.buffers.get(current_id).is_some_and(|buf| {
-        super::editfns::buffer_read_only_active_in_state(eval.variables(), &[], buf)
-    }) {
+    let (current_id, read_only) = {
+        let (edit, vars) = host.edit_and_vars();
+        let current_id = edit
+            .buffers
+            .current_buffer_id()
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        let read_only = edit
+            .buffers
+            .get(current_id)
+            .is_some_and(|buf| super::editfns::buffer_read_only_active_in_state(vars, &[], buf));
+        (current_id, read_only)
+    };
+    if read_only {
         return Err(signal(
             LispCondition::BufferReadOnly,
             vec![Value::make_buffer(current_id)],
         ));
     }
 
-    let insert_pos = eval
-        .edit
-        .buffers
-        .get(current_id)
-        .map(Buffer::point_emacs_byte_pos)
-        .unwrap_or(EmacsBytePos::ZERO);
+    let (insert_pos, change) = {
+        let (edit, _) = host.edit_and_vars();
+        let insert_pos = edit
+            .buffers
+            .get(current_id)
+            .map(Buffer::point_emacs_byte_pos)
+            .unwrap_or(EmacsBytePos::ZERO);
+        let text_extent = super::editfns::lisp_string_text_extent(&to_insert);
+        let change = current_empty_text_change_at_emacs_byte_pos(
+            &edit.buffers,
+            current_id,
+            insert_pos,
+            text_extent,
+        )?;
+        (insert_pos, change)
+    };
     let text_extent = super::editfns::lisp_string_text_extent(&to_insert);
     let text_len = text_extent.emacs_bytes();
-    let change = current_empty_text_change_at_emacs_byte_pos(
-        &eval.edit.buffers,
-        current_id,
-        insert_pos,
-        text_extent,
-    )?;
-    super::editfns::signal_before_text_change(eval, change)?;
-    let _ = eval
-        .edit
-        .buffers
-        .insert_lisp_string_into_buffer(current_id, &to_insert);
+    super::editfns::signal_before_text_change(host, change)?;
+    {
+        let (edit, _) = host.edit_and_vars();
+        let _ = edit
+            .buffers
+            .insert_lisp_string_into_buffer(current_id, &to_insert);
+    }
     if args.get(2).is_some_and(|value| value.is_truthy()) {
-        let mode = eval.symbol_mode();
+        let mode = host.symbol_mode();
         // Edit phase: only Copy values captured above cross it.
-        let (edit, vars) = eval.edit_and_vars();
+        let (edit, vars) = host.edit_and_vars();
         apply_inherited_text_properties(
             vars,
             &[],
@@ -3293,19 +3329,16 @@ pub(crate) fn builtin_insert_char(eval: &mut super::eval::Context, args: Vec<Val
             text_len.get(),
             mode,
         );
-        let _ = eval
-            .edit
-            .buffers
-            .merge_adjacent_equal_buffer_text_properties(
-                current_id,
-                EmacsByteRange::from_start_len(insert_pos, text_len),
-            );
+        let _ = edit.buffers.merge_adjacent_equal_buffer_text_properties(
+            current_id,
+            EmacsByteRange::from_start_len(insert_pos, text_len),
+        );
     }
-    super::editfns::signal_after_text_change(eval, change)?;
+    super::editfns::signal_after_text_change(host, change)?;
     Ok(Value::NIL)
 }
 
-pub(crate) fn builtin_insert_byte(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_insert_byte<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_args_range("insert-byte", &args, 2, 3)?;
     let byte = expect_fixnum(&args[0])?;
     if !(0..=255).contains(&byte) {
@@ -3319,20 +3352,24 @@ pub(crate) fn builtin_insert_byte(eval: &mut super::eval::Context, args: Vec<Val
         return Ok(Value::NIL);
     }
 
-    let current_id = eval
-        .edit
-        .buffers
-        .current_buffer_id()
-        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    let multibyte = eval
-        .edit
-        .buffers
-        .get(current_id)
-        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?
-        .get_multibyte();
-    if eval.edit.buffers.get(current_id).is_some_and(|buf| {
-        super::editfns::buffer_read_only_active_in_state(eval.variables(), &[], buf)
-    }) {
+    let (current_id, multibyte, read_only) = {
+        let (edit, vars) = host.edit_and_vars();
+        let current_id = edit
+            .buffers
+            .current_buffer_id()
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        let multibyte = edit
+            .buffers
+            .get(current_id)
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?
+            .get_multibyte();
+        let read_only = edit
+            .buffers
+            .get(current_id)
+            .is_some_and(|buf| super::editfns::buffer_read_only_active_in_state(vars, &[], buf));
+        (current_id, multibyte, read_only)
+    };
+    if read_only {
         return Err(signal(
             LispCondition::BufferReadOnly,
             vec![Value::make_buffer(current_id)],
@@ -3348,11 +3385,12 @@ pub(crate) fn builtin_insert_byte(eval: &mut super::eval::Context, args: Vec<Val
         multibyte,
     )
     .expect("insert-byte must produce a valid buffer encoding");
-    let existing = eval
-        .edit
-        .buffers
-        .current_buffer()
-        .map_or(0, |buffer| buffer.total_emacs_byte_len().get());
+    let existing = {
+        let (edit, _) = host.edit_and_vars();
+        edit.buffers
+            .current_buffer()
+            .map_or(0, |buffer| buffer.total_emacs_byte_len().get())
+    };
     let length = crate::emacs_core::alloc::BufferByteLen::repeated(
         unit.len(),
         crate::emacs_core::alloc::RepeatCount::try_from(count).map_err(
@@ -3367,29 +3405,35 @@ pub(crate) fn builtin_insert_byte(eval: &mut super::eval::Context, args: Vec<Val
         bytes.extend_from_slice(&unit);
     }
     let to_insert = lisp_string_from_buffer_bytes(bytes, multibyte);
-    let insert_pos = eval
-        .edit
-        .buffers
-        .get(current_id)
-        .map(Buffer::point_emacs_byte_pos)
-        .unwrap_or(EmacsBytePos::ZERO);
+    let (insert_pos, change) = {
+        let (edit, _) = host.edit_and_vars();
+        let insert_pos = edit
+            .buffers
+            .get(current_id)
+            .map(Buffer::point_emacs_byte_pos)
+            .unwrap_or(EmacsBytePos::ZERO);
+        let text_extent = super::editfns::lisp_string_text_extent(&to_insert);
+        let change = current_empty_text_change_at_emacs_byte_pos(
+            &edit.buffers,
+            current_id,
+            insert_pos,
+            text_extent,
+        )?;
+        (insert_pos, change)
+    };
     let text_extent = super::editfns::lisp_string_text_extent(&to_insert);
     let text_len = text_extent.emacs_bytes();
-    let change = current_empty_text_change_at_emacs_byte_pos(
-        &eval.edit.buffers,
-        current_id,
-        insert_pos,
-        text_extent,
-    )?;
-    super::editfns::signal_before_text_change(eval, change)?;
-    let _ = eval
-        .edit
-        .buffers
-        .insert_lisp_string_into_buffer(current_id, &to_insert);
+    super::editfns::signal_before_text_change(host, change)?;
+    {
+        let (edit, _) = host.edit_and_vars();
+        let _ = edit
+            .buffers
+            .insert_lisp_string_into_buffer(current_id, &to_insert);
+    }
     if args.get(2).is_some_and(|value| value.is_truthy()) {
-        let mode = eval.symbol_mode();
+        let mode = host.symbol_mode();
         // Edit phase: only Copy values captured above cross it.
-        let (edit, vars) = eval.edit_and_vars();
+        let (edit, vars) = host.edit_and_vars();
         apply_inherited_text_properties(
             vars,
             &[],
@@ -3399,15 +3443,12 @@ pub(crate) fn builtin_insert_byte(eval: &mut super::eval::Context, args: Vec<Val
             text_len.get(),
             mode,
         );
-        let _ = eval
-            .edit
-            .buffers
-            .merge_adjacent_equal_buffer_text_properties(
-                current_id,
-                EmacsByteRange::from_start_len(insert_pos, text_len),
-            );
+        let _ = edit.buffers.merge_adjacent_equal_buffer_text_properties(
+            current_id,
+            EmacsByteRange::from_start_len(insert_pos, text_len),
+        );
     }
-    super::editfns::signal_after_text_change(eval, change)?;
+    super::editfns::signal_after_text_change(host, change)?;
     Ok(Value::NIL)
 }
 

@@ -647,13 +647,13 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "insert",
-        NativeFn::ContextVec(builtin_insert),
+        NativeFn::ContextVec(|ctx, args| builtin_insert(ctx, args)),
         SubrArity::new(0, None),
     )));
     ctx.register_subr(
         crate::emacs_core::subr::world_subr!(SubrSpec::new(
             "insert-and-inherit",
-            NativeFn::ContextVec(builtin_insert_and_inherit),
+            NativeFn::ContextVec(|ctx, args| builtin_insert_and_inherit(ctx, args)),
             SubrArity::new(0, None),
         ))
         .requires_eval_state(),
@@ -661,7 +661,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ctx.register_subr(
         crate::emacs_core::subr::world_subr!(SubrSpec::new(
             "insert-before-markers-and-inherit",
-            NativeFn::ContextVec(builtin_insert_before_markers_and_inherit),
+            NativeFn::ContextVec(|ctx, args| builtin_insert_before_markers_and_inherit(ctx, args)),
             SubrArity::new(0, None),
         ))
         .requires_eval_state(),
@@ -669,7 +669,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ctx.register_subr(
         crate::emacs_core::subr::world_subr!(SubrSpec::new(
             "insert-buffer-substring",
-            NativeFn::ContextVec(builtin_insert_buffer_substring),
+            NativeFn::ContextVec(|ctx, args| builtin_insert_buffer_substring(ctx, args)),
             SubrArity::new(1, Some(3)),
         ))
         .requires_eval_state(),
@@ -677,7 +677,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ctx.register_subr(
         crate::emacs_core::subr::world_subr!(SubrSpec::new(
             "insert-char",
-            NativeFn::ContextVec(builtin_insert_char),
+            NativeFn::ContextVec(|ctx, args| builtin_insert_char(ctx, args)),
             SubrArity::new(1, Some(3)),
         ))
         .interactive(
@@ -688,7 +688,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     );
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "insert-byte",
-        NativeFn::ContextVec(builtin_insert_byte),
+        NativeFn::ContextVec(|ctx, args| builtin_insert_byte(ctx, args)),
         SubrArity::new(2, Some(3)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -3422,7 +3422,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "insert-before-markers",
-        NativeFn::ContextVec(builtin_insert_before_markers),
+        NativeFn::ContextVec(|ctx, args| builtin_insert_before_markers(ctx, args)),
         SubrArity::new(0, None),
     )));
     ctx.register_subr(
