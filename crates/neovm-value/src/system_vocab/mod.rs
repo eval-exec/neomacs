@@ -8,6 +8,7 @@
 
 pub mod c_features;
 pub mod errno;
+pub mod file_names;
 pub mod input;
 pub mod path_exec;
 pub mod platform;

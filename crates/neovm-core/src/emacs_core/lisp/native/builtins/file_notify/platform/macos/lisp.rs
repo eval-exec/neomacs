@@ -34,8 +34,9 @@ pub(crate) fn kqueue_add_watch(
             ],
         ));
     }
-    let path =
-        crate::emacs_core::fileio::lisp_file_name_to_path_buf(ctx.expect_lisp_string(normalized)?);
+    let path = neovm_edit::emacs_core::file_name::lisp_file_name_to_path_buf(
+        ctx.expect_lisp_string(normalized)?,
+    );
     let flags = list_to_vec(&args[1]).ok_or_else(|| {
         crate::emacs_core::error::signal(
             LispCondition::WrongTypeArgument,

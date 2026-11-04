@@ -115,7 +115,7 @@ pub(crate) fn inotify_add_watch(
 ) -> EvalResult {
     expect_args("inotify-add-watch", &args, 3)?;
     let registered_file_name = args[0];
-    let path = crate::emacs_core::fileio::lisp_file_name_to_path_buf(
+    let path = neovm_edit::emacs_core::file_name::lisp_file_name_to_path_buf(
         ctx.expect_lisp_string(registered_file_name)?,
     );
     let aspects = parse_aspects(args[1], ctx.symbol_mode())?;

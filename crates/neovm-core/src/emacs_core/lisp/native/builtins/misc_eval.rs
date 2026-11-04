@@ -499,7 +499,7 @@ pub(crate) fn builtin_load(eval: &mut super::eval::Context, args: Vec<Value>) ->
     )? {
         super::load::LoadPlan::Return(value) => Ok(value),
         super::load::LoadPlan::Load { requested, found } => {
-            let path = super::fileio::lisp_file_name_to_path_buf(&found);
+            let path = neovm_edit::emacs_core::file_name::lisp_file_name_to_path_buf(&found);
             let options = super::load::LoadOptions::from_lisp_flags(
                 args.get(1).is_some_and(|v| v.is_truthy()),
                 args.get(2).is_some_and(|v| v.is_truthy()),

@@ -27,8 +27,9 @@ pub(crate) fn w32notify_add_watch(
     let expanded =
         crate::emacs_core::fileio::builtin_expand_file_name(ctx, vec![args[0], Value::NIL])?;
     let normalized = crate::emacs_core::fileio::builtin_directory_file_name(ctx, vec![expanded])?;
-    let path =
-        crate::emacs_core::fileio::lisp_file_name_to_path_buf(ctx.expect_lisp_string(normalized)?);
+    let path = neovm_edit::emacs_core::file_name::lisp_file_name_to_path_buf(
+        ctx.expect_lisp_string(normalized)?,
+    );
     let filters = filters
         .iter()
         .filter_map(|filter| filter.as_symbol_name(symbol_mode))

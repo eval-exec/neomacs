@@ -1338,7 +1338,7 @@ fn candidate_matches_openp(
 }
 
 fn readable_non_directory_candidate(candidate: &LispString) -> bool {
-    let path = crate::emacs_core::fileio::lisp_file_name_to_path_buf(candidate);
+    let path = neovm_edit::emacs_core::file_name::lisp_file_name_to_path_buf(candidate);
     match std::fs::File::open(&path).and_then(|file| file.metadata()) {
         Ok(meta) => !meta.is_dir(),
         Err(_) => false,
@@ -1346,12 +1346,12 @@ fn readable_non_directory_candidate(candidate: &LispString) -> bool {
 }
 
 fn candidate_is_directory(candidate: &LispString) -> bool {
-    let path = crate::emacs_core::fileio::lisp_file_name_to_path_buf(candidate);
+    let path = neovm_edit::emacs_core::file_name::lisp_file_name_to_path_buf(candidate);
     std::fs::metadata(path).is_ok_and(|meta| meta.is_dir())
 }
 
 fn integer_access_predicate_matches(candidate: &LispString, mask: i64) -> bool {
-    let path = crate::emacs_core::fileio::lisp_file_name_to_path_buf(candidate);
+    let path = neovm_edit::emacs_core::file_name::lisp_file_name_to_path_buf(candidate);
     if std::fs::metadata(&path).is_ok_and(|meta| meta.is_dir()) {
         return false;
     }

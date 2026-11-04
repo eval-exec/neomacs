@@ -102,11 +102,11 @@ fn load_runtime_string(value: &LispString) -> String {
 }
 
 fn load_path_lisp_string(path: &Path) -> LispString {
-    super::fileio::path_to_lisp_file_name(path)
+    neovm_value::system_vocab::file_names::path_to_lisp_file_name(path)
 }
 
 pub(crate) fn load_path_buf(value: &LispString) -> PathBuf {
-    super::fileio::lisp_file_name_to_path_buf(value)
+    neovm_edit::emacs_core::file_name::lisp_file_name_to_path_buf(value)
 }
 
 fn load_found_effective(found: &LispString) -> LispString {
@@ -140,7 +140,7 @@ fn load_hist_file_name(
 
     match directory {
         Some(dir) => load_path_lisp_string(&dir.join(file_name)),
-        None => super::fileio::path_to_lisp_file_name(Path::new(file_name)),
+        None => neovm_value::system_vocab::file_names::path_to_lisp_file_name(Path::new(file_name)),
     }
 }
 
@@ -1146,7 +1146,7 @@ pub(crate) fn plan_load_in_state(
             ));
         }
     };
-    let file = super::fileio::substitute_in_file_name_lisp(&file);
+    let file = neovm_value::system_vocab::file_names::substitute_in_file_name_lisp(&file);
     let noerror = noerror.is_some_and(|v| v.is_truthy());
     let requirement = if nosuffix.is_some_and(|value| value.is_truthy()) {
         LoadSuffixRequirement::ExactNameOnly
@@ -5465,7 +5465,7 @@ pub(crate) fn exec_path_dirs_from_os(path: Option<std::ffi::OsString>) -> Vec<St
             if dir.as_os_str().is_empty() {
                 ".".to_string()
             } else {
-                super::fileio::host_path_to_lisp_file_name_string(&dir)
+                neovm_value::system_vocab::file_names::host_path_to_lisp_file_name_string(&dir)
             }
         })
         .collect()
@@ -5658,7 +5658,7 @@ pub(crate) fn bootstrap_load_path_entries(lisp_dir: &Path) -> Vec<Value> {
         };
         if dir.is_dir() {
             load_path_entries.push(Value::string(
-                crate::emacs_core::fileio::host_path_to_lisp_file_name_string(&dir),
+                neovm_value::system_vocab::file_names::host_path_to_lisp_file_name_string(&dir),
             ));
         }
     }
@@ -5672,7 +5672,9 @@ fn default_load_path_entries(lisp_dir: &Path, site_lisp: &[PathBuf]) -> Vec<Valu
     let mut entries: Vec<Value> = site_lisp
         .iter()
         .map(|dir| {
-            Value::string(crate::emacs_core::fileio::host_path_to_lisp_file_name_string(dir))
+            Value::string(
+                neovm_value::system_vocab::file_names::host_path_to_lisp_file_name_string(dir),
+            )
         })
         .collect();
     entries.extend(bootstrap_load_path_entries(lisp_dir));
@@ -5793,7 +5795,7 @@ pub(crate) fn runtime_load_path_entries_from_os(
             included_defaults = true;
         } else {
             load_path.push(Value::string(
-                crate::emacs_core::fileio::host_path_to_lisp_file_name_string(&dir),
+                neovm_value::system_vocab::file_names::host_path_to_lisp_file_name_string(&dir),
             ));
         }
     }
@@ -5804,7 +5806,7 @@ pub(crate) fn runtime_load_path_entries_from_os(
 }
 
 fn lisp_directory_name_from_host_path(path: &Path) -> String {
-    let mut name = crate::emacs_core::fileio::host_path_to_lisp_file_name_string(path);
+    let mut name = neovm_value::system_vocab::file_names::host_path_to_lisp_file_name_string(path);
     if !name.ends_with('/') {
         name.push('/');
     }
