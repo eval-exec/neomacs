@@ -3599,3 +3599,683 @@ pub fn lookup_keymap_with_partial(
     }
     list_keymap_lookup_seq(keymap, emacs_events, symbol_mode)
 }
+
+/// Create a full list keymap: `(keymap CHAR-TABLE)`
+pub fn make_list_keymap() -> Value {
+    let char_table = make_char_table_value(Value::NIL, Value::NIL);
+    Value::list(vec![KeymapMarker::Keymap.symbol_value(), char_table])
+}
+
+pub fn get_keymap_in_runtime(
+    eval: &mut Context,
+    value: &Value,
+    error_if_not_keymap: bool,
+    autoload: bool,
+) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
+    let original = *value;
+    let mut current = original;
+
+    loop {
+        if current.is_nil() {
+            break;
+        }
+        if is_list_keymap(&current, symbol_mode) {
+            return Ok(current);
+        }
+
+        let Some(symbol) = keymap_symbol_id(&current, symbol_mode) else {
+            break;
+        };
+        let Some((_, function)) =
+            resolve_indirect_function_by_id_in_obarray(eval.obarray(), symbol, symbol_mode)
+        else {
+            break;
+        };
+
+        if is_list_keymap(&function, symbol_mode) {
+            return Ok(function);
+        }
+
+        if is_keymap_autoload_form(&function, symbol_mode) {
+            if autoload {
+                current = crate::emacs_core::autoload::builtin_autoload_do_load(
+                    eval,
+                    vec![function, original, Value::NIL],
+                )?;
+                continue;
+            }
+            if !error_if_not_keymap {
+                return Ok(original);
+            }
+        }
+
+        break;
+    }
+
+    if error_if_not_keymap {
+        Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("keymapp"), original],
+        ))
+    } else {
+        Ok(Value::NIL)
+    }
+}
+
+pub fn maybe_keymap_in_runtime(eval: &mut Context, value: &Value, autoload: bool) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
+    let resolved = get_keymap_in_runtime(eval, value, false, autoload)?;
+    if is_list_keymap(&resolved, symbol_mode) {
+        Ok(resolved)
+    } else {
+        Ok(Value::NIL)
+    }
+}
+
+/// Look up one event for a caller that holds the evaluator, resolving the
+/// definition exactly as GNU `access_keymap` does with `autoload` set: a
+/// menu-item `:filter` runs, and a filter result that is a prefix keymap is
+/// composed with the parent chain's prefix for the same event before the walk
+/// descends.
+/// Get the parent keymap (last CDR that is itself a keymap).
+pub fn list_keymap_parent(keymap: &Value, symbol_mode: SymbolMode) -> Value {
+    let Some(mut cursor) = keymap_binding_spine(keymap, symbol_mode) else {
+        return Value::NIL;
+    };
+    while cursor.is_cons() {
+        // Check if cursor itself is a parent keymap before treating as alist entry
+        if is_list_keymap(&cursor, symbol_mode) {
+            return cursor;
+        }
+        let entry_cdr = cursor.cons_cdr();
+        if entry_cdr.is_nil() {
+            return Value::NIL;
+        }
+        cursor = entry_cdr;
+    }
+    Value::NIL
+}
+
+/// Enumerate the keymaps embedded at a keymap's own level: the inline
+/// sub-keymaps of a composed keymap `(keymap SUBMAP... . PARENT)` (produced by
+/// `make-composed-keymap`, e.g. evil/general active state maps) plus the parent
+/// keymap in the spine tail. All of these share the containing keymap's prefix,
+/// mirroring GNU `map_keymap` / `Faccessible_keymaps`, which descend into
+/// composed submaps and parents alike. Bindings and `(key . binding)` conses at
+/// this level are NOT returned (those are the containing map's own bindings).
+pub fn list_keymap_sibling_keymaps(keymap: &Value, symbol_mode: SymbolMode) -> Vec<Value> {
+    let mut siblings = Vec::new();
+    let Some(mut cursor) = keymap_binding_spine(keymap, symbol_mode) else {
+        return siblings;
+    };
+    while cursor.is_cons() {
+        // The spine tail is a parent keymap `(keymap ...)`.
+        if is_list_keymap(&cursor, symbol_mode) {
+            siblings.push(cursor);
+            break;
+        }
+        let entry_car = cursor.cons_car();
+        // An inline element that is itself a keymap is a composed submap; a
+        // `(KEY . BINDING)` cons is an ordinary binding (its car is the key, not
+        // the `keymap` marker) and is left to the containing map's own scan.
+        if is_list_keymap(&entry_car, symbol_mode) {
+            siblings.push(entry_car);
+        }
+        cursor = cursor.cons_cdr();
+    }
+    siblings
+}
+
+/// Check whether `target` appears in `keymap`'s parent chain.
+pub fn list_keymap_inherits_from(keymap: &Value, target: &Value, symbol_mode: SymbolMode) -> bool {
+    let mut current = *keymap;
+    while is_list_keymap(&current, symbol_mode) {
+        // Use pointer identity (eq), not structural equality (equal),
+        // to detect cycles. Two keymaps with the same content are NOT
+        // the same keymap.
+        if eq_value_swp(&current, target, symbol_mode == SymbolMode::Positioned) {
+            return true;
+        }
+        current = list_keymap_parent(&current, symbol_mode);
+    }
+    false
+}
+
+fn where_is_expect_keymap_in_obarray(
+    obarray: &Obarray,
+    value: &Value,
+    symbol_mode: SymbolMode,
+) -> Result<Value, Flow> {
+    get_keymap_in_obarray(obarray, value, true, symbol_mode)
+}
+
+fn where_is_explicit_keymaps_in_context(ctx: &Context, value: &Value) -> Result<Vec<Value>, Flow> {
+    let symbol_mode = ctx.symbol_mode();
+    if is_list_keymap(value, symbol_mode) {
+        let keymap = where_is_expect_keymap_in_obarray(&ctx.obarray, value, symbol_mode)?;
+        let mut keymaps = vec![keymap];
+        let global_map = ctx.current_global_map();
+        if is_list_keymap(&global_map, symbol_mode) && global_map != keymap {
+            keymaps.push(global_map);
+        }
+        return Ok(keymaps);
+    }
+
+    if value.is_cons()
+        && maybe_keymap_in_obarray(&ctx.obarray, &value.cons_car(), symbol_mode)
+            .is_some_and(|keymap| is_list_keymap(&keymap, symbol_mode))
+        && let Some(items) = list_to_vec(value)
+    {
+        let mut keymaps = Vec::with_capacity(items.len());
+        for item in items {
+            keymaps.push(where_is_expect_keymap_in_obarray(
+                &ctx.obarray,
+                &item,
+                symbol_mode,
+            )?);
+        }
+        return Ok(keymaps);
+    }
+
+    let keymap = if value.is_cons() {
+        *value
+    } else {
+        where_is_expect_keymap_in_obarray(&ctx.obarray, value, symbol_mode)?
+    };
+    let mut keymaps = vec![keymap];
+    let global_map = ctx.current_global_map();
+    if is_list_keymap(&global_map, symbol_mode) && global_map != keymap {
+        keymaps.push(global_map);
+    }
+    Ok(keymaps)
+}
+
+pub fn where_is_keymaps_in_context(
+    ctx: &mut Context,
+    value: Option<&Value>,
+) -> Result<Vec<Value>, Flow> {
+    // GNU `Fwhere_is_internal' with a nil KEYMAP uses
+    // `Fcurrent_active_maps (Qnil, Qnil)' -- olp = nil, so the overriding maps
+    // (`overriding-local-map' / `overriding-terminal-local-map') are EXCLUDED,
+    // unlike `key-binding' which passes olp = t. So `where-is-internal' never
+    // reports a key bound only in an overriding map.
+    match value {
+        Some(keymap_arg) if keymap_arg.is_nil() => {
+            Ok(current_active_maps_for_position(ctx, false, None).unwrap_or_default())
+        }
+        Some(keymap_arg) => where_is_explicit_keymaps_in_context(ctx, keymap_arg),
+        None => Ok(current_active_maps_for_position(ctx, false, None).unwrap_or_default()),
+    }
+}
+
+/// Define a key in a keymap, auto-creating prefix maps for multi-key sequences.
+///
+/// Returns `Err` if an intermediate key is already bound to a non-prefix
+/// command (matching GNU Emacs behavior which signals an error).
+pub fn list_keymap_define_seq(
+    keymap: Value,
+    events: &[Value],
+    def: Value,
+    symbol_mode: SymbolMode,
+) -> Result<(), String> {
+    note_keymap_mutation();
+    if events.is_empty() {
+        return Ok(());
+    }
+    if events.len() == 1 {
+        list_keymap_define(keymap, events[0], def, symbol_mode);
+        return Ok(());
+    }
+
+    let mut current_map = keymap;
+    for (i, event) in events.iter().enumerate() {
+        if i == events.len() - 1 {
+            list_keymap_define(current_map, *event, def, symbol_mode);
+            return Ok(());
+        }
+        // Use noinherit: only look in current keymap level for prefix,
+        // matching GNU Emacs define-key which uses access_keymap(noinherit=1)
+        let binding = list_keymap_lookup_one_noinherit(&current_map, event, symbol_mode);
+        if is_list_keymap(&binding, symbol_mode) {
+            current_map = binding;
+        } else if binding.is_nil() {
+            // No binding at this level, create a new prefix keymap
+            let prefix_map = make_sparse_list_keymap();
+            list_keymap_define(current_map, *event, prefix_map, symbol_mode);
+            current_map = prefix_map;
+        } else {
+            // Non-prefix binding found — error (matching GNU Emacs)
+            let full = describe_event_sequence(events, symbol_mode);
+            let prefix = describe_event_sequence(&events[..=i], symbol_mode);
+            return Err(format!(
+                "Key sequence {full} starts with non-prefix key {prefix}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Extended version of define-seq that supports the REMOVE flag.
+pub fn list_keymap_define_seq_in_obarray_ex(
+    obarray: &Obarray,
+    keymap: Value,
+    events: &[Value],
+    def: Value,
+    remove: bool,
+    symbol_mode: SymbolMode,
+) -> Result<(), String> {
+    note_keymap_mutation();
+    if events.is_empty() {
+        return Ok(());
+    }
+    if events.len() == 1 {
+        if remove {
+            list_keymap_remove(keymap, events[0], symbol_mode);
+        } else {
+            list_keymap_define(keymap, events[0], def, symbol_mode);
+        }
+        return Ok(());
+    }
+
+    let mut current_map = keymap;
+    for (i, event) in events.iter().enumerate() {
+        if i == events.len() - 1 {
+            if remove {
+                list_keymap_remove(current_map, *event, symbol_mode);
+            } else {
+                list_keymap_define(current_map, *event, def, symbol_mode);
+            }
+            return Ok(());
+        }
+        // Use noinherit: only look in current keymap level for prefix,
+        // matching GNU Emacs define-key which uses access_keymap(noinherit=1)
+        let binding = list_keymap_lookup_one_noinherit(&current_map, event, symbol_mode);
+        if let Some(prefix_map) =
+            resolve_prefix_keymap_binding_in_obarray(obarray, &binding, symbol_mode)
+        {
+            current_map = prefix_map;
+        } else if binding.is_nil() {
+            // No binding, create a new prefix keymap.
+            // Matches GNU `define_as_prefix` (keymap.c:1446-1452).
+            let prefix_map = make_sparse_list_keymap();
+            list_keymap_define(current_map, *event, prefix_map, symbol_mode);
+            current_map = prefix_map;
+        } else {
+            // GNU `Fdefine_key` only calls `define_as_prefix` after
+            // `access_keymap` returns nil.  Existing non-prefix bindings are
+            // errors, even though a fresh undefined key is promoted to a new
+            // prefix keymap.
+            let full = describe_event_sequence(events, symbol_mode);
+            let prefix = describe_event_sequence(&events[..=i], symbol_mode);
+            return Err(format!(
+                "Key sequence {full} starts with non-prefix key {prefix}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Define a sequence with runtime prefix resolution and the REMOVE flag.
+/// Menu-item filters must run before deciding whether a binding is a prefix,
+/// just as in GNU `access_keymap(..., noinherit=true, autoload=true)`.
+pub fn list_keymap_define_seq_runtime_ex(
+    ctx: &mut Context,
+    keymap: Value,
+    events: &[Value],
+    def: Value,
+    remove: bool,
+) -> Result<(), Flow> {
+    let symbol_mode = ctx.symbol_mode();
+    note_keymap_mutation();
+    if events.is_empty() {
+        return Ok(());
+    }
+    if events.len() == 1 {
+        if remove {
+            list_keymap_remove(keymap, events[0], symbol_mode);
+        } else {
+            list_keymap_define(keymap, events[0], def, symbol_mode);
+        }
+        return Ok(());
+    }
+
+    // Filters can run arbitrary Lisp, including GC and replacing the original
+    // bindings. Keep resolved maps, the definition and heap events alive for
+    // the entire walk, including maps returned only by a filter.
+    let root_scope = ctx.save_specpdl_roots();
+    ctx.push_specpdl_root(keymap);
+    ctx.push_specpdl_root(def);
+    for event in events {
+        ctx.push_specpdl_root(*event);
+    }
+    let result = (|| {
+        let mut current_map = keymap;
+        for (i, event) in events.iter().enumerate() {
+            if i == events.len() - 1 {
+                if remove {
+                    list_keymap_remove(current_map, *event, symbol_mode);
+                } else {
+                    list_keymap_define(current_map, *event, def, symbol_mode);
+                }
+                return Ok(());
+            }
+            // Use noinherit: only look in current keymap level for prefix,
+            // matching GNU Emacs define-key which uses access_keymap(noinherit=1)
+            let binding = list_keymap_access_with_event(
+                &current_map,
+                KeymapLookupEvent::from_event(*event, symbol_mode),
+                true,
+                false,
+                true,
+                &mut &mut *ctx,
+                symbol_mode,
+            )?;
+            if let Some(prefix_map) =
+                resolve_prefix_keymap_binding_in_obarray(ctx.obarray(), &binding, symbol_mode)
+            {
+                current_map = prefix_map;
+            } else if binding.is_nil() {
+                // No binding, create a new prefix keymap.
+                // Matches GNU `define_as_prefix` (keymap.c:1446-1452).
+                let prefix_map = make_sparse_list_keymap();
+                list_keymap_define(current_map, *event, prefix_map, symbol_mode);
+                current_map = prefix_map;
+            } else {
+                // GNU `Fdefine_key` only calls `define_as_prefix` after
+                // `access_keymap` returns nil.  Existing non-prefix bindings are
+                // errors, even though a fresh undefined key is promoted to a new
+                // prefix keymap.
+                let full = describe_event_sequence(events, symbol_mode);
+                let prefix = describe_event_sequence(&events[..=i], symbol_mode);
+                return Err(signal(
+                    "error",
+                    vec![Value::string(format!(
+                        "Key sequence {full} starts with non-prefix key {prefix}"
+                    ))],
+                ));
+            }
+            ctx.push_specpdl_root(current_map);
+        }
+        Ok(())
+    })();
+    ctx.restore_specpdl_roots(root_scope);
+    result
+}
+
+/// Generate a human-readable description of an event sequence for error messages.
+/// Uses the same format as GNU Emacs `key-description`: function keys use
+/// angle brackets (e.g., `<f1>`), characters use their standard description.
+fn describe_event_sequence(events: &[Value], symbol_mode: SymbolMode) -> String {
+    use neovm_value::keyboard_pure::describe_single_key_value;
+    events
+        .iter()
+        .map(|e| {
+            // An error message is Rust text, so decode here, where the loss is
+            // visible and harmless; the Lisp-facing builders keep the bytes.
+            describe_single_key_value(e, false, symbol_mode)
+                .map(|bytes| crate::emacs_core::emacs_char::to_utf8_lossy(&bytes))
+                .unwrap_or_else(|_| {
+                    if let Some(name) = e.as_symbol_name(symbol_mode) {
+                        format!("<{}>", name)
+                    } else {
+                        format!("{:?}", e)
+                    }
+                })
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Deep-copy a keymap cons-list structure.
+///
+/// Mirrors GNU Emacs `copy_keymap_1`:
+/// - Copies the cons-list structure
+/// - Deep-copies char-tables (via vector clone + recursive entry copy)
+/// - Recursively copies sub-keymaps (prefix key maps)
+/// - Copies alist bindings whose values are keymaps
+/// - Preserves parent keymap as shared (not recursively copied)
+pub fn list_keymap_copy(keymap: &Value, symbol_mode: SymbolMode) -> Value {
+    list_keymap_copy_impl(keymap, 0, symbol_mode)
+}
+
+fn list_keymap_copy_impl(keymap: &Value, depth: usize, symbol_mode: SymbolMode) -> Value {
+    if depth > 100 {
+        tracing::warn!("list_keymap_copy: recursion depth limit, possible infinite loop");
+        return *keymap;
+    }
+
+    if !keymap.is_cons() {
+        return *keymap;
+    };
+    let pair_car = keymap.cons_car();
+    let pair_cdr = keymap.cons_cdr();
+    if !KeymapMarker::Keymap.is_value(pair_car, symbol_mode) {
+        return *keymap;
+    }
+
+    let mut elements = vec![KeymapMarker::Keymap.symbol_value()];
+    let mut cursor = pair_cdr;
+    let mut tail_parent = Value::NIL;
+
+    while cursor.is_cons() {
+        if is_list_keymap(&cursor, symbol_mode) {
+            // Parent keymap: keep shared (don't recursively copy parent chain)
+            tail_parent = cursor;
+            break;
+        }
+        let entry_car = cursor.cons_car();
+        let entry_cdr = cursor.cons_cdr();
+
+        if is_char_table(&entry_car) {
+            // Deep-copy char-table: clone the vector, then recursively copy
+            // any keymap entries within it.
+            elements.push(copy_char_table_for_keymap(&entry_car, depth, symbol_mode));
+        } else if is_list_keymap(&entry_car, symbol_mode) {
+            // Nested keymap element — recursively copy
+            elements.push(list_keymap_copy_impl(&entry_car, depth + 1, symbol_mode));
+        } else if entry_car.is_cons() {
+            // Alist entry (EVENT . DEF) — copy the cons, recurse if DEF is a keymap
+            let binding_car = entry_car.cons_car();
+            let binding_cdr = entry_car.cons_cdr();
+            let copied_def = copy_keymap_item(&binding_cdr, depth, symbol_mode);
+            elements.push(Value::cons(binding_car, copied_def));
+        } else {
+            elements.push(entry_car);
+        }
+
+        cursor = entry_cdr;
+    }
+
+    // Build the new list
+    let mut result = tail_parent;
+    for elem in elements.into_iter().rev() {
+        result = Value::cons(elem, result);
+    }
+    result
+}
+
+/// Copy a keymap item (the DEF part of an alist entry).
+/// If it's a keymap, recursively copy it. Otherwise return as-is.
+/// Mirrors GNU `copy_keymap_item`.
+fn copy_keymap_item(item: &Value, depth: usize, symbol_mode: SymbolMode) -> Value {
+    if is_list_keymap(item, symbol_mode) {
+        return list_keymap_copy_impl(item, depth + 1, symbol_mode);
+    }
+    // Handle menu items etc. — for now, just return as-is for non-keymaps
+    *item
+}
+
+/// Deep-copy a char-table used in a keymap.
+///
+/// GNU `copy_keymap_1` first calls `copy-sequence` on the char-table, then
+/// walks the copied table with `map_char_table` and replaces each binding with
+/// `copy_keymap_item`.
+fn copy_char_table_for_keymap(ct: &Value, depth: usize, symbol_mode: SymbolMode) -> Value {
+    let Some(copied) = crate::emacs_core::chartable::copy_char_table_with_symbols(*ct, symbol_mode)
+    else {
+        return *ct;
+    };
+
+    let Ok(entries) =
+        crate::emacs_core::chartable::char_table_local_entries_with_symbols(&copied, symbol_mode)
+    else {
+        return copied;
+    };
+    for (range, value) in entries {
+        let copied_value = copy_keymap_item(&value, depth + 1, symbol_mode);
+        let _ = crate::emacs_core::chartable::builtin_set_char_table_range_with_style(
+            vec![copied, range, copied_value],
+            None,
+            symbol_mode,
+        );
+    }
+
+    copied
+}
+
+/// GNU's initial `meta-prefix-char` (ESC), used when no obarray is available to
+/// read the variable from -- a purely structural walk still has to know which
+/// event metizes the one after it.
+const KEY_META_PREFIX_CHAR_DEFAULT: i64 = 27;
+
+/// Collect all accessible sub-keymaps with their key sequences, mirroring GNU
+/// `Faccessible_keymaps` / `accessible_keymaps_1` (keymap.c).
+///
+/// Breadth-first over a growing queue of `(sequence, map)` pairs: each queued map
+/// is scanned with GNU `map_keymap` semantics (embedded submaps and the parent
+/// chain share the map's own sequence) and every binding that names a keymap is
+/// enqueued. Three GNU rules this walk must not drop:
+///
+/// * A binding is a prefix iff `get_keymap (get_keyelt (cmd, 0), 0, 0)` yields a
+///   keymap, so a SYMBOL whose function cell is a keymap counts. That is what
+///   `define-prefix-command` builds and how the global map stores every one of
+///   its own prefixes -- `C-x` as `Control-X-prefix`, `C-c` as
+///   `mode-specific-command-prefix`, `ESC` as `ESC-prefix`. Testing the raw
+///   binding for keymap-ness instead made the entire global keymap tree
+///   invisible, which is what emptied `describe-bindings`' global section.
+/// * When the sequence so far ends in `meta-prefix-char`, a character key
+///   REPLACES that ESC and gains the meta bit instead of extending the sequence,
+///   so `ESC s` is reported as `[M-s]`. The metized entry keeps its parent's
+///   length, so GNU splices it in directly after the map being scanned rather
+///   than appending it, and successive metized finds land in reverse discovery
+///   order.
+/// * A map already reached by a sequence that is a prefix of the current one is
+///   a cycle and is not re-enqueued; reaching it by an unrelated sequence is a
+///   legitimate second listing.
+///
+/// `prefix` restricts the walk the way GNU's PREFIX argument does -- the walk
+/// STARTS at the map that sequence reaches, rather than enumerating everything
+/// and filtering, because the metization rule makes those two differ: GNU
+/// deliberately does not metize the key after a PREFIX that itself ends in ESC.
+/// An empty `prefix` walks from KEYMAP itself. Yields nothing when PREFIX reaches
+/// no keymap, as GNU returns nil.
+pub fn list_keymap_accessible(
+    keymap: Value,
+    prefix: &[Value],
+    obarray: Option<VariableView<'_>>,
+    out: &mut Vec<Value>,
+    symbol_mode: SymbolMode,
+) {
+    let meta_prefix_char = obarray
+        .and_then(|o| KeymapStateVariable::MetaPrefixChar.global_value(o))
+        .and_then(|v| v.as_fixnum())
+        .unwrap_or(KEY_META_PREFIX_CHAR_DEFAULT);
+
+    let start = if prefix.is_empty() {
+        KeymapResolution::Loaded(keymap)
+    } else {
+        let reached = match obarray {
+            Some(vars) => lookup_key_in_obarray(vars.obarray(), &keymap, prefix, true, symbol_mode),
+            None => Value::NIL,
+        };
+        // GNU keeps an autoload symbol the prefix reaches: "If the keymap is
+        // autoloaded `tem' is not a cons-cell, but we still want to return it."
+        match resolve_keymap_or_autoload(reached, obarray.map(|vars| vars.obarray()), symbol_mode) {
+            Some(resolution) => resolution,
+            None => return,
+        }
+    };
+
+    let prefixlen = prefix.len();
+    let mut maps: Vec<(Vec<Value>, KeymapResolution)> = vec![(prefix.to_vec(), start)];
+    let mut i = 0;
+    while i < maps.len() {
+        let thisseq = maps[i].0.clone();
+        // GNU scans only loaded maps: "Since we can't run lisp code, we can't
+        // scan autoloaded maps." (`if (CONSP (thismap))`).  An unloaded
+        // autoload symbol stays LISTED but contributes no descent.
+        let KeymapResolution::Loaded(thismap) = maps[i].1 else {
+            i += 1;
+            continue;
+        };
+        // GNU's insertion point for a metized find: directly after the map being
+        // scanned, so the new same-length sequence stays in breadth order.
+        let splice_at = i + 1;
+        i += 1;
+
+        // "Does the current sequence end in the meta-prefix-char?", minus the
+        // last character of PREFIX itself, which GNU refuses to metize.
+        let seq_ends_in_meta_prefix = thisseq.len() > prefixlen
+            && thisseq.last().and_then(|event| event.as_fixnum()) == Some(meta_prefix_char);
+
+        let mut found: Vec<(Vec<Value>, KeymapResolution, bool)> = Vec::new();
+        list_keymap_for_each_binding_recursive(
+            &thismap,
+            obarray.map(|vars| vars.obarray()),
+            |key, def| {
+                let Some(submap) = resolve_keymap_or_autoload(
+                    get_keyelt(def, symbol_mode),
+                    obarray.map(|vars| vars.obarray()),
+                    symbol_mode,
+                ) else {
+                    return;
+                };
+                let mut newseq = thisseq.clone();
+                let metized = match (seq_ends_in_meta_prefix, key.as_fixnum()) {
+                    (true, Some(code)) => {
+                        *newseq
+                            .last_mut()
+                            .expect("non-empty by seq_ends_in_meta_prefix") =
+                            Value::fixnum(code | KEY_CHAR_META);
+                        true
+                    }
+                    _ => {
+                        newseq.push(key);
+                        false
+                    }
+                };
+                found.push((newseq, submap, metized));
+            },
+            symbol_mode,
+        );
+
+        for (newseq, submap, metized) in found {
+            let is_cycle = maps.iter().any(|(seen_seq, seen_map)| {
+                // GNU's cycle test is Frassq, i.e. EQ on the reached map --
+                // which may be a cons OR an autoload symbol.
+                eq_value_swp(
+                    &seen_map.as_value(),
+                    &submap.as_value(),
+                    symbol_mode == SymbolMode::Positioned,
+                ) && seen_seq.len() <= thisseq.len()
+                    && seen_seq
+                        .iter()
+                        .zip(thisseq.iter())
+                        .all(|(a, b)| eq_value_swp(a, b, symbol_mode == SymbolMode::Positioned))
+            });
+            if is_cycle {
+                continue;
+            }
+            if metized {
+                maps.insert(splice_at, (newseq, submap));
+            } else {
+                maps.push((newseq, submap));
+            }
+        }
+    }
+
+    for (sequence, map) in &maps {
+        out.push(Value::cons(Value::vector(sequence.clone()), map.as_value()));
+    }
+}

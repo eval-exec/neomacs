@@ -376,7 +376,6 @@ pub(super) use super::chartable;
 pub(super) use super::editfns;
 pub(super) use super::error;
 pub(super) use super::eval;
-pub(super) use super::keymap;
 pub(super) use super::load;
 pub(super) use super::marker;
 pub(super) use super::navigation;
@@ -386,6 +385,7 @@ pub(super) use super::subr_info;
 pub(super) use super::textprop;
 pub(super) use super::value;
 pub(super) use crate::emacs_core::eval::kbd;
+pub(super) use crate::emacs_core::eval::keymap_lookup as keymap;
 
 // --- Submodules ---
 mod arithmetic;
