@@ -177,9 +177,7 @@ pub(crate) enum SourcePreloadWindowRetirementRefusal {
     LiveFramesRemain,
 }
 
-/// Opaque frame identifier.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct FrameId(pub u64);
+pub use neovm_value::display_vocab::FrameId;
 
 /// Presentation of the frame's requested menu/tool bars. Compact presentation
 /// replaces their pixel bands without changing their Lisp frame parameters.
@@ -205,45 +203,7 @@ pub(crate) enum FrameFocusTracking {
 /// public states are valid.  Keeping the sum type here prevents callers from
 /// manufacturing the impossible `visible && iconified` combination and makes
 /// every projection choose its intended semantics explicitly.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum FrameVisibility {
-    #[default]
-    Visible,
-    Iconified,
-    Invisible,
-}
-
-impl FrameVisibility {
-    pub const fn is_visible(self) -> bool {
-        matches!(self, Self::Visible)
-    }
-
-    pub const fn is_visible_or_iconified(self) -> bool {
-        matches!(self, Self::Visible | Self::Iconified)
-    }
-
-    pub const fn is_invisible(self) -> bool {
-        matches!(self, Self::Invisible)
-    }
-
-    pub fn from_lisp_value(value: Value) -> Self {
-        if value.is_nil() {
-            Self::Invisible
-        } else if value == Value::symbol("icon") {
-            Self::Iconified
-        } else {
-            Self::Visible
-        }
-    }
-
-    pub fn lisp_value(self) -> Value {
-        match self {
-            Self::Visible => Value::T,
-            Self::Iconified => Value::symbol("icon"),
-            Self::Invisible => Value::NIL,
-        }
-    }
-}
+pub use neovm_value::display_vocab::FrameVisibility;
 
 /// Stable route to one leaf within a particular window-tree generation.
 ///
@@ -293,21 +253,9 @@ pub enum RenderFrameScope {
 }
 
 /// Whether hidden frames participate in a frame-tree query.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RenderFrameVisibility {
-    VisibleOnly,
-    IncludeInvisible,
-}
+pub use neovm_value::display_vocab::RenderFrameVisibility;
 
-impl RenderFrameVisibility {
-    const fn includes_invisible(self) -> bool {
-        matches!(self, Self::IncludeInvisible)
-    }
-}
-
-/// Keep frame and window numeric domains disjoint while both are represented
-/// as Lisp integers.
-pub(crate) const FRAME_ID_BASE: u64 = 1 << 32;
+pub use neovm_value::display_vocab::FRAME_ID_BASE;
 
 /// GNU `DEFAULT_TOOL_BAR_LABEL_SIZE` in `src/dispextern.h`.
 pub const DEFAULT_TOOL_BAR_LABEL_SIZE: f32 = 14.0;
@@ -373,11 +321,7 @@ impl Rect {
 // Split direction
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SplitDirection {
-    Horizontal, // side by side
-    Vertical,   // stacked
-}
+pub use neovm_value::display_vocab::SplitDirection;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SplitPlacement {
@@ -1483,19 +1427,7 @@ impl WindowOldPointMarker {
 /// `NonZeroU32` makes the reserved value unrepresentable instead, so
 /// `Option<ChangeStamp>` IS GNU's "0 or a stamp" in one word and the guard
 /// cannot be dropped by accident.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ChangeStamp(std::num::NonZeroU32);
-
-impl ChangeStamp {
-    /// The first epoch.
-    pub const FIRST: Self = Self(std::num::NonZeroU32::new(1).unwrap());
-
-    /// The next epoch, wrapping past zero exactly as GNU's guard does.
-    #[must_use]
-    pub fn next(self) -> Self {
-        Self(std::num::NonZeroU32::new(self.0.get().wrapping_add(1)).unwrap_or(Self::FIRST.0))
-    }
-}
+pub use neovm_value::display_vocab::ChangeStamp;
 
 /// GNU's three possible answers for `window-old-buffer`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

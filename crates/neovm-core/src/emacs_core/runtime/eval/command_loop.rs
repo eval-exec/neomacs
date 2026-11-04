@@ -2222,7 +2222,10 @@ impl Context {
         &self,
         frame_id: u64,
     ) -> Vec<neomacs_display_protocol::input_latency::ScrollViewport> {
-        let Some(frame) = self.frames.get(crate::window::FrameId(frame_id)) else {
+        let Some(frame) = self
+            .frames
+            .get(neovm_value::display_vocab::FrameId(frame_id))
+        else {
             return Vec::new();
         };
         frame

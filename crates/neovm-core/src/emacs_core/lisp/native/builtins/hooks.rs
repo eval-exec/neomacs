@@ -78,7 +78,9 @@ fn expect_optional_live_frame_designator_in_state(
     }
     if value.is_frame()
         && let Some(fid) = value.as_frame_id()
-        && frames.get(crate::window::FrameId(fid)).is_some()
+        && frames
+            .get(neovm_value::display_vocab::FrameId(fid))
+            .is_some()
     {
         return Ok(());
     }
@@ -90,7 +92,7 @@ fn expect_optional_live_frame_designator_in_state(
 
 #[derive(Clone, Copy)]
 struct HookCallerContextState {
-    selected_frame_id: Option<crate::window::FrameId>,
+    selected_frame_id: Option<neovm_value::display_vocab::FrameId>,
     selected_window_id: Option<neovm_edit::emacs_core::display_metrics::WindowId>,
     current_buffer_id: Option<crate::buffer::BufferId>,
 }
@@ -108,7 +110,7 @@ fn save_hook_caller_context(eval: &super::eval::Context) -> HookCallerContextSta
 
 fn window_buffer_id_in_state(
     eval: &super::eval::Context,
-    frame_id: crate::window::FrameId,
+    frame_id: neovm_value::display_vocab::FrameId,
     window_id: neovm_edit::emacs_core::display_metrics::WindowId,
 ) -> Option<crate::buffer::BufferId> {
     eval.frames
@@ -119,7 +121,7 @@ fn window_buffer_id_in_state(
 
 fn select_frame_window_for_hook_context(
     eval: &mut super::eval::Context,
-    frame_id: crate::window::FrameId,
+    frame_id: neovm_value::display_vocab::FrameId,
     window_id: neovm_edit::emacs_core::display_metrics::WindowId,
 ) -> EvalResult {
     let _ = eval.frames.select_frame(frame_id);
@@ -164,7 +166,7 @@ struct LiveWindowHookState {
 
 #[derive(Clone)]
 struct FrameWindowHookPlan {
-    frame_id: crate::window::FrameId,
+    frame_id: neovm_value::display_vocab::FrameId,
     frame_buffer_change: bool,
     frame_size_change: bool,
     frame_selected_window_change: bool,
@@ -242,7 +244,7 @@ fn frame_window_hook_record_from_live_state(
 
 fn run_window_local_hook_values(
     eval: &mut super::eval::Context,
-    frame_id: crate::window::FrameId,
+    frame_id: neovm_value::display_vocab::FrameId,
     window_ids: &[neovm_edit::emacs_core::display_metrics::WindowId],
     hook_name: &str,
     hook_sym: crate::emacs_core::intern::SymId,
@@ -292,7 +294,7 @@ fn run_window_local_hook_values(
 
 fn run_window_default_hook_value(
     eval: &mut super::eval::Context,
-    frame_id: crate::window::FrameId,
+    frame_id: neovm_value::display_vocab::FrameId,
     run_hook: bool,
     hook_sym: crate::emacs_core::intern::SymId,
 ) -> EvalResult {
@@ -658,10 +660,10 @@ impl WindowConfigurationRestoreOptions {
 }
 
 pub(crate) struct WindowConfigurationSnapshot {
-    frame_id: crate::window::FrameId,
+    frame_id: neovm_value::display_vocab::FrameId,
     /// Numeric GNU frame epoch at capture. The heap-owned configuration and
     /// its restore are accessed only under the owning Context mutator borrow.
-    change_stamp: crate::window::ChangeStamp,
+    change_stamp: neovm_value::display_vocab::ChangeStamp,
     /// This configuration's window tree.
     ///
     /// A DETACHED copy: `current-window-configuration` clones the frame's tree
@@ -1018,7 +1020,10 @@ fn disconnected_window_point(
 /// Disconnect every current root leaf from its buffer before restoring a
 /// saved window tree.  This is the neomacs counterpart of GNU
 /// `delete_all_child_windows` calling `unshow_buffer` for each outgoing leaf.
-fn unshow_frame_root_buffers(eval: &mut super::eval::Context, frame_id: crate::window::FrameId) {
+fn unshow_frame_root_buffers(
+    eval: &mut super::eval::Context,
+    frame_id: neovm_value::display_vocab::FrameId,
+) {
     // GNU first swaps the globally selected window's live buffer point into
     // its window marker.  The frame being restored need not be selected.
     if let Some(selected_frame_id) = eval.frames.selected_frame().map(|frame| frame.id) {
@@ -1562,7 +1567,7 @@ pub(crate) fn builtin_current_window_configuration(
             Value::vector(Vec::new()),
         ));
     };
-    let frame_id = crate::window::FrameId(fid);
+    let frame_id = neovm_value::display_vocab::FrameId(fid);
     if let Some(frame_state) = eval.frames.get(frame_id) {
         let mut snapshot = WindowConfigurationSnapshot {
             frame_id,
@@ -1730,7 +1735,7 @@ impl LiveCurrentBufferPoint {
     /// does show the buffer that was current at save time -- GNU's
     /// `EQ (XWINDOW (data->current_window)->contents, new_current_buffer)`
     /// guard, evaluated against the freshly restored tree.
-    fn apply(self, eval: &mut super::eval::Context, frame_id: crate::window::FrameId) {
+    fn apply(self, eval: &mut super::eval::Context, frame_id: neovm_value::display_vocab::FrameId) {
         let buffers = &mut eval.edit.buffers;
         let Some(frame) = eval.frames.get_mut(frame_id) else {
             return;
@@ -1754,11 +1759,11 @@ impl LiveCurrentBufferPoint {
 }
 
 trait OptionalLiveCurrentBufferPoint {
-    fn apply(self, eval: &mut super::eval::Context, frame_id: crate::window::FrameId);
+    fn apply(self, eval: &mut super::eval::Context, frame_id: neovm_value::display_vocab::FrameId);
 }
 
 impl OptionalLiveCurrentBufferPoint for Option<LiveCurrentBufferPoint> {
-    fn apply(self, eval: &mut super::eval::Context, frame_id: crate::window::FrameId) {
+    fn apply(self, eval: &mut super::eval::Context, frame_id: neovm_value::display_vocab::FrameId) {
         if let Some(live) = self {
             live.apply(eval, frame_id);
         }
@@ -2017,7 +2022,7 @@ pub(crate) fn builtin_run_window_configuration_change_hook(
     let Some(fid) = frame.as_frame_id() else {
         return Ok(Value::NIL);
     };
-    let frame_id = crate::window::FrameId(fid);
+    let frame_id = neovm_value::display_vocab::FrameId(fid);
     if crate::emacs_core::eval::gnu_redisplay_hooks_enabled() {
         return redisplay_gnu::run_configuration(eval, frame_id);
     }

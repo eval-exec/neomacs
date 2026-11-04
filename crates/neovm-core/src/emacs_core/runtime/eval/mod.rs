@@ -2301,12 +2301,12 @@ pub fn restore_scratch_gc_roots(saved_len: usize) {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GuiFrameHostRequest {
-    pub frame_id: crate::window::FrameId,
+    pub frame_id: neovm_value::display_vocab::FrameId,
     pub width: u32,
     pub height: u32,
     pub title: crate::heap_types::LispString,
     pub geometry_hints: crate::window::GuiFrameGeometryHints,
-    pub visibility: crate::window::FrameVisibility,
+    pub visibility: neovm_value::display_vocab::FrameVisibility,
     pub decorated: bool,
     pub fullscreen: Option<FrameFullscreen>,
 }
@@ -2341,7 +2341,7 @@ pub struct GuiFrameHostSize {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FontSpecResolveRequest {
     pub selection: FontSpecSelection,
-    pub frame_id: crate::window::FrameId,
+    pub frame_id: neovm_value::display_vocab::FrameId,
     pub family: Option<crate::heap_types::LispString>,
     pub registry: Option<crate::heap_types::LispString>,
     pub lang: Option<crate::heap_types::LispString>,
@@ -2536,7 +2536,7 @@ impl ResolvedFrameFont {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedFontSpecMatch {
     /// Exact host selection, retained independently of public font properties.
-    pub coverage_handle: Option<crate::emacs_core::display_host::FontEntityHandle>,
+    pub coverage_handle: Option<neovm_value::display_vocab::FontEntityHandle>,
     pub family: crate::heap_types::LispString,
     pub foundry: Option<crate::heap_types::LispString>,
     pub registry: Option<crate::heap_types::LispString>,
@@ -2571,7 +2571,7 @@ pub struct FontPxProbeResult {
 /// path that a portable parser can reopen.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FontEntityMetricsRequest {
-    pub frame_id: crate::window::FrameId,
+    pub frame_id: neovm_value::display_vocab::FrameId,
     pub family: Option<crate::heap_types::LispString>,
     pub registry: Option<crate::heap_types::LispString>,
     pub file: Option<crate::heap_types::LispString>,
@@ -2730,7 +2730,7 @@ pub struct PopupMenuRequest {
     pub tooltips: Option<neomacs_display_protocol::tooltip::MenuTooltips>,
     pub request_id: Option<neomacs_display_protocol::menu::MenuBarRequestId>,
     pub token: neomacs_display_protocol::menu::MenuToken,
-    pub frame_id: crate::window::FrameId,
+    pub frame_id: neovm_value::display_vocab::FrameId,
     pub placement: neomacs_display_protocol::PopupPlacement,
     pub title: Option<String>,
     pub entries: Vec<PopupMenuEntry>,
@@ -2987,7 +2987,7 @@ pub struct Context {
     /// Source identity for the display-facing `face_table` derived from a
     /// frame's authoritative Lisp face specifications.  Equal identity means
     /// redisplay can reuse the table without scanning every face again.
-    materialized_face_table_source: WorldSlot<Option<(crate::window::FrameId, u64)>>,
+    materialized_face_table_source: WorldSlot<Option<(neovm_value::display_vocab::FrameId, u64)>>,
     /// Pending GNU display ownership and private transaction state. Each
     /// exclusively borrowed Context owns it; never a process/TLS Lisp cache.
     pub(crate) gnu_redisplay_hooks: redisplay_hooks::RedisplayHookOwnership,
@@ -3202,7 +3202,7 @@ pub struct Context {
     /// by the gstring header's font family + pixel size + characters, valued
     /// by the shaped gstring with its ID slot assigned.
     pub(crate) gstring_shape_cache:
-        WorldSlot<HashMap<crate::emacs_core::font::GstringShapeCacheKey, Value>>,
+        WorldSlot<HashMap<neovm_value::display_vocab::GstringShapeCacheKey, Value>>,
     /// Coding system manager — encoding/decoding registry.
     pub(crate) coding_systems: WorldView<CodingSystemManager>,
     /// Face table — global registry of named face definitions.
@@ -3331,7 +3331,7 @@ pub struct Context {
         Box<
             dyn FnMut(
                 &Self,
-                crate::window::FrameId,
+                neovm_value::display_vocab::FrameId,
                 neovm_edit::emacs_core::display_metrics::WindowId,
                 Vec<neomacs_display_protocol::input_progress::InputReceipt>,
             ),
@@ -5560,7 +5560,7 @@ impl Context {
         let frame_id = if emacs_frame_id == 0 {
             self.frames.selected_frame().map(|frame| frame.id)
         } else {
-            Some(crate::window::FrameId(emacs_frame_id))
+            Some(neovm_value::display_vocab::FrameId(emacs_frame_id))
         };
         if let Some(frame_id) = frame_id {
             self.observe_keyboard_input_frame(frame_id);
@@ -5598,7 +5598,10 @@ impl Context {
     /// different frame must yield `switch-frame' first; otherwise a secondary
     /// TTY can execute its keystroke in whichever GUI/TTY frame was globally
     /// selected most recently.
-    pub(crate) fn observe_keyboard_input_frame(&mut self, frame_id: crate::window::FrameId) {
+    pub(crate) fn observe_keyboard_input_frame(
+        &mut self,
+        frame_id: neovm_value::display_vocab::FrameId,
+    ) {
         if let Some(frame) = self.frames.get(frame_id) {
             self.command_loop
                 .keyboard
@@ -5645,7 +5648,10 @@ impl Context {
 
     /// Refresh the render-facing face table from this frame's Lisp face
     /// vectors before redisplay.
-    pub fn sync_runtime_faces_for_frame(&mut self, frame_id: crate::window::FrameId) -> bool {
+    pub fn sync_runtime_faces_for_frame(
+        &mut self,
+        frame_id: neovm_value::display_vocab::FrameId,
+    ) -> bool {
         if crate::face::realization::enabled() {
             return super::xfaces::realization::prepare_runtime_faces(self, frame_id);
         }

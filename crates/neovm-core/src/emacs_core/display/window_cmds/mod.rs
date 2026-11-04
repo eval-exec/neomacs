@@ -1097,22 +1097,7 @@ fn window_value(wid: WindowId) -> Value {
 ///
 /// The frame decoders differ only in whether a dead frame is admitted, and --
 /// like the window ones -- each fixes the predicate its rejection reports.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, IntoStaticStr)]
-pub(crate) enum FrameDomain {
-    /// `decode_live_frame` / `CHECK_LIVE_FRAME`.
-    #[strum(serialize = "frame-live-p")]
-    Live,
-    /// `decode_any_frame` / `CHECK_FRAME`: any frame object.
-    #[strum(serialize = "framep")]
-    Any,
-}
-
-impl FrameDomain {
-    /// The symbol a rejection reports, derived from the variant.
-    pub(crate) fn predicate(self) -> &'static str {
-        self.into()
-    }
-}
+pub(crate) use neovm_value::display_vocab::FrameDomain;
 
 /// GNU's three window-argument domains, as a closed set.
 ///

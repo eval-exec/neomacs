@@ -47,7 +47,7 @@ impl Context {
                     .frames
                     .frames_in_reverse_z_order(
                         request.frame,
-                        crate::window::RenderFrameVisibility::VisibleOnly,
+                        neovm_value::display_vocab::RenderFrameVisibility::VisibleOnly,
                     )
                     .contains(&request.frame))
         {

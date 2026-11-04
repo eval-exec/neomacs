@@ -102,7 +102,7 @@ global_state! {
     /// xfaces.c `face_alist` / frame face caches.
     face_table: FaceTable,
     /// The face table's materialized source (xfaces.c frame caches).
-    materialized_face_table_source: Option<(crate::window::FrameId, u64)>,
+    materialized_face_table_source: Option<(neovm_value::display_vocab::FrameId, u64)>,
     /// xmenu.c menu-bar rebuild generation.
     menu_bar_rebuild_generation: u64,
     /// xdisp.c last redisplay's inputs.
@@ -112,7 +112,7 @@ global_state! {
     /// fringe.c `fringe_bitmaps[]`.
     fringe_bitmaps: super::super::builtins::fringe_bitmap::FringeBitmapRegistry,
     /// composite.c `gstring_hash_table`.
-    gstring_shape_cache: HashMap<crate::emacs_core::font::GstringShapeCacheKey, Value>,
+    gstring_shape_cache: HashMap<neovm_value::display_vocab::GstringShapeCacheKey, Value>,
 }
 
 impl GlobalState {

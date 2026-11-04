@@ -3083,8 +3083,8 @@ fn print_special_handle(
 }
 
 fn format_frame_handle(id: u64) -> String {
-    if id >= crate::window::FRAME_ID_BASE {
-        let ordinal = id - crate::window::FRAME_ID_BASE + 1;
+    if id >= neovm_value::display_vocab::FRAME_ID_BASE {
+        let ordinal = id - neovm_value::display_vocab::FRAME_ID_BASE + 1;
         format!("#<frame F{} 0x{:x}>", ordinal, id)
     } else {
         format!("#<frame {}>", id)

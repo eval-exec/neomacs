@@ -7,7 +7,7 @@ use crate::tagged::{
     collection_reads::CollectionReads,
     gc::{self, HeapIdentity, RowsOwnedDomain},
 };
-use crate::window::FrameId;
+use neovm_value::display_vocab::FrameId;
 use std::any::TypeId;
 use std::{marker::PhantomData, ops::Range};
 

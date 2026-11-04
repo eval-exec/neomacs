@@ -6,8 +6,10 @@
 
 use super::*;
 use crate::window::body::WindowBodyCellSize;
-use crate::window::{Frame, FrameId, Rect, SplitDirection};
+use crate::window::{Frame, Rect};
 use neomacs_display_protocol::types::Px;
+use neovm_value::display_vocab::FrameId;
+use neovm_value::display_vocab::SplitDirection;
 
 #[derive(Clone, Copy, Debug)]
 enum ResizeDimension {

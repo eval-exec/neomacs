@@ -4171,12 +4171,7 @@ pub enum GstringShapeOutcome {
 /// The cache key for shaped gstrings: the header's font family, pixel size
 /// (bit-exact), and the run's characters. Two gstrings with the same key
 /// shape identically, so one cache entry serves both.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct GstringShapeCacheKey {
-    pub family: String,
-    pub pixel_size_bits: u64,
-    pub chars: Vec<i64>,
-}
+pub use neovm_value::display_vocab::GstringShapeCacheKey;
 
 /// The shaped-gstring cache owns its values strongly, like GNU's staticpro'd
 /// gstring_hash_table (src/composite.c:2201-2202). Keys contain no Lisp edges.

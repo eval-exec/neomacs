@@ -4,9 +4,9 @@ use crate::emacs_core::display;
 use crate::emacs_core::error::{expect_args, expect_args_range, expect_fixnum};
 use crate::emacs_core::fontset;
 use crate::emacs_core::value::{ValueKind, VecLikeType};
-use crate::emacs_core::window_cmds::FrameDomain;
 use crate::tagged::SymbolMode;
 use neomacs_display_protocol::SelectionOwner;
+use neovm_value::display_vocab::FrameDomain;
 
 // =========================================================================
 // fontset.c gap-fill stubs
@@ -57,7 +57,7 @@ fn tty_display_dimension(
 
     let frame_id = match args.first().map(|value| value.kind()) {
         Some(ValueKind::Veclike(VecLikeType::Frame)) => {
-            crate::window::FrameId(args[0].as_frame_id().unwrap())
+            neovm_value::display_vocab::FrameId(args[0].as_frame_id().unwrap())
         }
         _ => crate::emacs_core::window_cmds::ensure_selected_frame_id(ctx),
     };
@@ -707,7 +707,7 @@ pub(crate) fn builtin_display_update_for_mouse_movement(
         &mut eval.frames,
         &mut eval.edit.buffers,
         Some(&args[0]),
-        crate::emacs_core::window_cmds::FrameDomain::Live,
+        neovm_value::display_vocab::FrameDomain::Live,
     )?;
     let x = expect_fixnum(&args[1])?;
     let y = expect_fixnum(&args[2])?;
@@ -1182,7 +1182,7 @@ pub(crate) fn builtin_frame_root_frame(
         &mut eval.frames,
         &mut eval.edit.buffers,
         args.first(),
-        crate::emacs_core::window_cmds::FrameDomain::Live,
+        neovm_value::display_vocab::FrameDomain::Live,
     )?;
     let root = eval.frames.root_frame_id(fid).unwrap_or(fid);
     Ok(Value::make_frame(root.0))

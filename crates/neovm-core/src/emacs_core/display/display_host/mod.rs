@@ -150,18 +150,7 @@ pub struct FontResolveRequest {
 
 /// Host-local reference to an exact selected font entity. Handles are never
 /// reused during a host's lifetime; the host validates every lookup.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct FontEntityHandle(NonZeroU32);
-
-impl FontEntityHandle {
-    pub fn new(value: u32) -> Option<Self> {
-        NonZeroU32::new(value).map(Self)
-    }
-
-    pub const fn get(self) -> u32 {
-        self.0.get()
-    }
-}
+pub use neovm_value::display_vocab::FontEntityHandle;
 
 /// Coverage queries inspect one font, never a fontset or fallback chain.
 #[derive(Clone, Debug)]

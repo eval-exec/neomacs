@@ -55,7 +55,7 @@ pub(super) fn activate(
 #[inline(never)]
 pub(super) fn publish_frame_switch(
     eval: &mut super::super::eval::Context,
-    frame: crate::window::FrameId,
+    frame: neovm_value::display_vocab::FrameId,
 ) {
     if !super::super::eval::gnu_redisplay_hooks_enabled()
         || eval
@@ -81,7 +81,10 @@ pub(super) fn publish_frame_switch(
 /// and each ancestor (GNU frame.c:1985-2010); no topology/global ALL event.
 #[cold]
 #[inline(never)]
-fn publish_tty_top_change(eval: &mut super::super::eval::Context, frame: crate::window::FrameId) {
+fn publish_tty_top_change(
+    eval: &mut super::super::eval::Context,
+    frame: neovm_value::display_vocab::FrameId,
+) {
     let Some(target) = eval.frames.get(frame) else {
         return;
     };
@@ -96,7 +99,7 @@ fn publish_tty_top_change(eval: &mut super::super::eval::Context, frame: crate::
         return;
     }
     if let Some(root) = eval.frames.get_mut(root) {
-        root.visibility = crate::window::FrameVisibility::Visible;
+        root.visibility = neovm_value::display_vocab::FrameVisibility::Visible;
     }
     let mut current = Some(frame);
     let mut seen = std::collections::HashSet::new();

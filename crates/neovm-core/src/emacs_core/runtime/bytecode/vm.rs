@@ -34,7 +34,7 @@ use crate::emacs_core::eval::subr_abi::{SubrFn, SubrObj};
 use crate::emacs_core::value::*;
 use crate::tagged::header::SubrDispatchKind;
 use crate::tagged::value::{FIXNUM_CHECK_MASK, FIXNUM_CHECK_VALUE, FIXNUM_SHIFT};
-use crate::window::FrameId;
+use neovm_value::display_vocab::FrameId;
 
 /// Dynamic, execution-weighted opcode histogram for the Tier-0 interpreter
 /// dispatch loop. Compiled in ONLY under the `vm-profile` feature, so the

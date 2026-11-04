@@ -11,8 +11,9 @@ mod echo_message;
 use super::*;
 use crate::buffer::{BufferId, LispCharPos1};
 use crate::emacs_core::intern::WellKnown;
-use crate::window::{FrameId, PreparedMiniResizeOutcome, Window};
+use crate::window::{PreparedMiniResizeOutcome, Window};
 use neovm_edit::emacs_core::display_metrics::WindowId;
+use neovm_value::display_vocab::FrameId;
 
 // Fixed redisplay spellings with GNU DEFSYM ids. GNU holds these as statics
 // (`Qpre_redisplay_function`, `Qinhibit_redisplay`, `Qinhibit_quit`, ...); the
@@ -345,7 +346,7 @@ impl Context {
         if !crate::window::window_resize_check(
             state.tree(),
             state.tree().root_id(),
-            crate::window::SplitDirection::Vertical,
+            neovm_value::display_vocab::SplitDirection::Vertical,
             crate::window::body::WindowBodyCellSize::new(state.char_width, state.char_height),
         ) {
             return Ok(PreparedMiniResizeOutcome::Unchanged);

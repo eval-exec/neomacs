@@ -399,11 +399,11 @@ fn expect_completing_read_initial_input(value: &Value) -> Result<(), Flow> {
 /// Frame that invoked the minibuffer.  Kept distinct from the frame that owns
 /// its minibuffer window so those roles cannot be swapped at a call site.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct CallingFrame(crate::window::FrameId);
+struct CallingFrame(neovm_value::display_vocab::FrameId);
 
 /// Frame whose window tree physically contains the active minibuffer window.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct MinibufferOwnerFrame(crate::window::FrameId);
+struct MinibufferOwnerFrame(neovm_value::display_vocab::FrameId);
 
 #[derive(Clone, Copy, Debug)]
 struct ActiveMinibufferWindowState {

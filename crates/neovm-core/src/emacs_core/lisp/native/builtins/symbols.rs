@@ -2985,7 +2985,7 @@ pub(crate) fn builtin_reconsider_frame_fonts(
         &mut eval.frames,
         &mut eval.edit.buffers,
         Some(&args[0]),
-        crate::emacs_core::window_cmds::FrameDomain::Live,
+        neovm_value::display_vocab::FrameDomain::Live,
     )?;
     if eval
         .frames
@@ -3084,7 +3084,7 @@ pub(crate) fn builtin_resize_mini_window_internal(
     if !crate::window::window_resize_check(
         frame.tree(),
         frame.tree().root_id(),
-        crate::window::SplitDirection::Vertical,
+        neovm_value::display_vocab::SplitDirection::Vertical,
         crate::window::body::WindowBodyCellSize::new(frame.char_width, frame.char_height),
     ) || mini_new <= 0
         || old_total != new_total
@@ -3320,7 +3320,7 @@ pub(crate) fn builtin_set_mouse_pixel_position(
         &mut eval.frames,
         &mut eval.edit.buffers,
         Some(&args[0]),
-        crate::emacs_core::window_cmds::FrameDomain::Live,
+        neovm_value::display_vocab::FrameDomain::Live,
     )?;
     let x = expect_int(&args[1])?;
     let y = expect_int(&args[2])?;
@@ -3339,7 +3339,7 @@ pub(crate) fn builtin_set_mouse_position(
         &mut eval.frames,
         &mut eval.edit.buffers,
         Some(&args[0]),
-        crate::emacs_core::window_cmds::FrameDomain::Live,
+        neovm_value::display_vocab::FrameDomain::Live,
     )?;
     let x = expect_int(&args[1])?;
     let y = expect_int(&args[2])?;
@@ -3476,7 +3476,7 @@ pub(crate) fn builtin_tool_bar_pixel_width(
                 &mut eval.frames,
                 &mut eval.edit.buffers,
                 Some(frame),
-                crate::emacs_core::window_cmds::FrameDomain::Any,
+                neovm_value::display_vocab::FrameDomain::Any,
             )?;
         }
         None => {
@@ -5279,7 +5279,7 @@ pub(crate) fn builtin_internal_handle_focus_in(
         ));
     };
 
-    let frame_id = crate::window::FrameId(frame_value.as_frame_id().unwrap());
+    let frame_id = neovm_value::display_vocab::FrameId(frame_value.as_frame_id().unwrap());
     // GNU `kbd_buffer_get_event` (`src/keyboard.c:4206-4210, 4364-4371`)
     // routes every framed keyboard event through the frame's kboard, records
     // Vlast_event_frame, and synthesizes `switch-frame' when necessary.
