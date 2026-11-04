@@ -602,30 +602,30 @@ pub(crate) fn pos_eol_compute(
     ))
 }
 
-pub(crate) fn builtin_line_beginning_position(
-    ctx: &mut super::eval::Context,
+pub(crate) fn builtin_line_beginning_position<H: EditHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     crate::emacs_core::error::expect_args_range("line-beginning-position", &args, 0, 1)?;
     let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
-    builtin_line_beginning_position_1(ctx, arg(0))
+    builtin_line_beginning_position_1(host, arg(0))
 }
 /// `line-beginning-position` as registered: fixed arity 1, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_line_beginning_position_1(
-    ctx: &mut super::eval::Context,
-    n: Value,
-) -> EvalResult {
+pub(crate) fn builtin_line_beginning_position_1<H: EditHost>(host: &mut H, n: Value) -> EvalResult {
     let args: [Value; 1] = [n];
     expect_max_args("line-beginning-position", &args, 1)?;
     let scan_count = line_beginning_scan_count_arg(&args)?;
-    let (bol_charpos, orig_charpos, count) = pos_bol_compute(&ctx.edit.buffers, scan_count)?;
+    let (bol_charpos, orig_charpos, count) = {
+        let (edit, _vars) = host.edit_and_vars();
+        pos_bol_compute(&edit.buffers, scan_count)?
+    };
     // GNU `Fline_beginning_position` (editfns.c:700) constrains the result to
     // the current input field. ESCAPE-FROM-EDGE is t when any lines were
     // scanned (count != 0), nil otherwise; ONLY-IN-LINE is always t.
-    crate::emacs_core::builtins::builtin_constrain_to_field_5(
-        ctx,
+    super::buffer::builtin_constrain_to_field_5(
+        host,
         &[
             Value::from_fixnum(bol_charpos.into()),
             Value::from_fixnum(orig_charpos.into()),
@@ -637,26 +637,26 @@ pub(crate) fn builtin_line_beginning_position_1(
 }
 
 /// (line-end-position &optional N)
-pub(crate) fn builtin_line_end_position(
-    ctx: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
+pub(crate) fn builtin_line_end_position<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     crate::emacs_core::error::expect_args_range("line-end-position", &args, 0, 1)?;
     let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
-    builtin_line_end_position_1(ctx, arg(0))
+    builtin_line_end_position_1(host, arg(0))
 }
 /// `line-end-position` as registered: fixed arity 1, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_line_end_position_1(ctx: &mut super::eval::Context, n: Value) -> EvalResult {
+pub(crate) fn builtin_line_end_position_1<H: EditHost>(host: &mut H, n: Value) -> EvalResult {
     let args: [Value; 1] = [n];
     expect_max_args("line-end-position", &args, 1)?;
     let scan_count = line_end_scan_count_arg(&args)?;
-    let (eol_charpos, orig_charpos) = pos_eol_compute(&ctx.edit.buffers, scan_count)?;
+    let (eol_charpos, orig_charpos) = {
+        let (edit, _vars) = host.edit_and_vars();
+        pos_eol_compute(&edit.buffers, scan_count)?
+    };
     // GNU `Fline_end_position` (editfns.c:755): constrain to current input
     // field with ESCAPE-FROM-EDGE = nil and ONLY-IN-LINE = t.
-    crate::emacs_core::builtins::builtin_constrain_to_field_5(
-        ctx,
+    super::buffer::builtin_constrain_to_field_5(
+        host,
         &[
             Value::from_fixnum(eol_charpos.into()),
             Value::from_fixnum(orig_charpos.into()),
@@ -831,7 +831,7 @@ pub(crate) fn builtin_forward_line_1<H: EditHost>(host: &mut H, n: Value) -> Eva
 ///
 /// `beginning-of-line` as registered: fixed arity 1, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
-pub(crate) fn builtin_beginning_of_line_1(eval: &mut super::eval::Context, n: Value) -> EvalResult {
+pub(crate) fn builtin_beginning_of_line_1<H: EditHost>(host: &mut H, n: Value) -> EvalResult {
     let args: [Value; 1] = [n];
     let n = if args.is_empty() || args[0].is_nil() {
         1
@@ -842,33 +842,35 @@ pub(crate) fn builtin_beginning_of_line_1(eval: &mut super::eval::Context, n: Va
     // `SET_PT (XFIXNUM (Fline_beginning_position (n)))`. Delegate to our
     // line-beginning-position builtin so field constraints
     // (`Fconstrain_to_field`) apply uniformly.
-    let constrained = builtin_line_beginning_position(eval, vec![Value::fixnum(n)])?;
+    let constrained = builtin_line_beginning_position(host, vec![Value::fixnum(n)])?;
     let target_char = match constrained.kind() {
         ValueKind::Fixnum(v) => v,
         _ => return Ok(Value::NIL),
     };
-    let current_id = eval
-        .edit
-        .buffers
-        .current_buffer_id()
-        .ok_or_else(no_buffer)?;
-    let target_byte = {
-        let buf = eval.edit.buffers.get(current_id).ok_or_else(no_buffer)?;
-        buf.char_pos_to_emacs_byte_pos_clamped(LispCharPos1::new(target_char).to_char_pos())
-    };
-    let old_byte = {
-        let buf = eval.edit.buffers.get(current_id).ok_or_else(no_buffer)?;
-        buf.point_emacs_byte_pos()
+    let (current_id, target_byte, old_byte) = {
+        let (edit, _vars) = host.edit_and_vars();
+        let current_id = edit.buffers.current_buffer_id().ok_or_else(no_buffer)?;
+        let target_byte = {
+            let buf = edit.buffers.get(current_id).ok_or_else(no_buffer)?;
+            buf.char_pos_to_emacs_byte_pos_clamped(LispCharPos1::new(target_char).to_char_pos())
+        };
+        let old_byte = {
+            let buf = edit.buffers.get(current_id).ok_or_else(no_buffer)?;
+            buf.point_emacs_byte_pos()
+        };
+        (current_id, target_byte, old_byte)
     };
     let adjusted = {
-        let (edit, vars) = eval.edit_and_vars();
+        let (edit, vars) = host.edit_and_vars();
         adjust_for_intangible(vars, &edit.buffers, target_byte, -1)
     };
-    let _ = eval
-        .edit
-        .buffers
-        .goto_buffer_emacs_byte_pos(current_id, adjusted);
-    check_point_motion_hooks(eval, old_byte, adjusted)?;
+    {
+        let (edit, _vars) = host.edit_and_vars();
+        let _ = edit
+            .buffers
+            .goto_buffer_emacs_byte_pos(current_id, adjusted);
+    }
+    check_point_motion_hooks(host, old_byte, adjusted)?;
     Ok(Value::NIL)
 }
 
@@ -876,7 +878,7 @@ pub(crate) fn builtin_beginning_of_line_1(eval: &mut super::eval::Context, n: Va
 ///
 /// `end-of-line` as registered: fixed arity 1, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
-pub(crate) fn builtin_end_of_line_1(eval: &mut super::eval::Context, n: Value) -> EvalResult {
+pub(crate) fn builtin_end_of_line_1<H: EditHost>(host: &mut H, n: Value) -> EvalResult {
     let args: [Value; 1] = [n];
     let n = if args.is_empty() || args[0].is_nil() {
         1
@@ -886,33 +888,36 @@ pub(crate) fn builtin_end_of_line_1(eval: &mut super::eval::Context, n: Value) -
     // GNU `Fend_of_line` (cmds.c:172) calls `Fline_end_position` (which
     // applies field constraints) then SET_PTs to that, looping over
     // intangible-then-newline corner cases. Mirror that pattern.
-    let current_id = eval
-        .edit
-        .buffers
-        .current_buffer_id()
-        .ok_or_else(no_buffer)?;
-    let old_byte = {
-        let buf = eval.edit.buffers.get(current_id).ok_or_else(no_buffer)?;
-        buf.point_emacs_byte_pos()
+    let (current_id, old_byte) = {
+        let (edit, _vars) = host.edit_and_vars();
+        let current_id = edit.buffers.current_buffer_id().ok_or_else(no_buffer)?;
+        let old_byte = {
+            let buf = edit.buffers.get(current_id).ok_or_else(no_buffer)?;
+            buf.point_emacs_byte_pos()
+        };
+        (current_id, old_byte)
     };
-    let constrained = builtin_line_end_position(eval, vec![Value::fixnum(n)])?;
+    let constrained = builtin_line_end_position(host, vec![Value::fixnum(n)])?;
     let target_char = match constrained.kind() {
         ValueKind::Fixnum(v) => v,
         _ => return Ok(Value::NIL),
     };
     let target_byte = {
-        let buf = eval.edit.buffers.get(current_id).ok_or_else(no_buffer)?;
+        let (edit, _vars) = host.edit_and_vars();
+        let buf = edit.buffers.get(current_id).ok_or_else(no_buffer)?;
         buf.char_pos_to_emacs_byte_pos_clamped(LispCharPos1::new(target_char).to_char_pos())
     };
     let adjusted = {
-        let (edit, vars) = eval.edit_and_vars();
+        let (edit, vars) = host.edit_and_vars();
         adjust_for_intangible(vars, &edit.buffers, target_byte, 1)
     };
-    let _ = eval
-        .edit
-        .buffers
-        .goto_buffer_emacs_byte_pos(current_id, adjusted);
-    check_point_motion_hooks(eval, old_byte, adjusted)?;
+    {
+        let (edit, _vars) = host.edit_and_vars();
+        let _ = edit
+            .buffers
+            .goto_buffer_emacs_byte_pos(current_id, adjusted);
+    }
+    check_point_motion_hooks(host, old_byte, adjusted)?;
     Ok(Value::NIL)
 }
 
