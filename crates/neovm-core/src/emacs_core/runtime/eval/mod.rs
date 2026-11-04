@@ -13,6 +13,7 @@ use strum::{EnumString, IntoStaticStr};
 
 use self::data::xwidget;
 use self::interactive_registry::InteractiveRegistry;
+pub use self::protocol::{DisplayHost, FrameFontRequest};
 pub use self::protocol::{
     FontOpeningSize, FrameFontSize, TerminalCreateRequest, TerminalDisplayTarget,
     TerminalFloatPlacement, TerminalGridSize, TerminalId,
@@ -29,7 +30,6 @@ use super::command_observation::{
 };
 use super::custom::CustomManager;
 use super::debug_on_call::DebugOnCallCode;
-pub use super::display_host::{DisplayHost, FrameFontRequest};
 use super::error::*;
 use super::intern::{
     SymId, WellKnown, format_symbol_name_for_diagnostic, intern, intern_uninterned,

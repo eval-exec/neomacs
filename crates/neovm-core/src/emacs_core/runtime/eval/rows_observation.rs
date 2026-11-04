@@ -1,7 +1,7 @@
 //! Partial physical-owner observations for the private numeric Rows producer.
 //! No public API here grants geometry, coverage or cached-query authority.
 use super::Context;
-use crate::emacs_core::display_host::{InertRowsHostAuthority, actual_rows_host_type};
+use crate::emacs_core::eval::protocol::{InertRowsHostAuthority, actual_rows_host_type};
 use crate::face::{FaceTableIdentity, realization::RealizationEpoch};
 use crate::tagged::{
     collection_reads::CollectionReads,
