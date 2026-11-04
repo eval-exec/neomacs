@@ -328,7 +328,7 @@ impl RetainedWindowKey {
                 neovm_core::window::WindowId(p.window_id as u64),
                 neovm_core::buffer::BufferId(p.buffer_id),
             ),
-            char_table_revision: neovm_core::window::CharTableLayoutRevision::current(),
+            char_table_revision: neovm_core::window::current_char_table_layout_revision(),
             symbol_property_revision:
                 neovm_core::emacs_core::symbol::SymbolPropertyRevision::current(),
             display_table: evaluator

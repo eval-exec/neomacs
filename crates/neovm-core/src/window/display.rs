@@ -130,12 +130,10 @@ thread_local! {
     static WINDOW_PARAMETERS_LAYOUT_GENERATION: Cell<u64> = const { Cell::new(0) };
 }
 
-impl super::CharTableLayoutRevision {
-    /// Existing evaluator-thread char-table invalidation shared by freshness
-    /// validation and retained-row reuse. This is not a per-table revision.
-    pub fn current() -> Self {
-        Self(CHAR_TABLE_LAYOUT_MUTATION_EPOCH.with(Cell::get))
-    }
+/// Existing evaluator-thread char-table invalidation shared by freshness
+/// validation and retained-row reuse. This is not a per-table revision.
+pub fn current_char_table_layout_revision() -> super::CharTableLayoutRevision {
+    super::CharTableLayoutRevision::from_counter(CHAR_TABLE_LAYOUT_MUTATION_EPOCH.with(Cell::get))
 }
 
 pub(crate) fn note_char_table_layout_mutation() {
@@ -507,7 +505,7 @@ impl Frame {
             preserve_vscroll_p: state.preserve_vscroll_p,
             margins: *margins,
             display_table_identity: display.display_table.bits(),
-            char_table_mutation_epoch: super::CharTableLayoutRevision::current(),
+            char_table_mutation_epoch: current_char_table_layout_revision(),
             window_parameters_generation: window.parameters_generation(),
             left_fringe_width,
             right_fringe_width,
@@ -688,7 +686,7 @@ impl crate::emacs_core::eval::Context {
         if admission == super::WindowLayoutLispAdmission::NativeOnly
             && *context_instance_id == self.context_instance_id()
             && *fontset_generation == crate::emacs_core::fontset::fontset_generation()
-            && window.char_table_mutation_epoch == super::CharTableLayoutRevision::current()
+            && window.char_table_mutation_epoch == current_char_table_layout_revision()
             && *function_epoch == self.obarray.function_epoch()
         {
             Some(Cow::Borrowed(before))

@@ -539,7 +539,7 @@ impl RedisplaySignature {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct RedisplayFrameSignature {
-    layout: crate::window::FrameLayoutInputState,
+    layout: crate::emacs_core::eval::data::window_state::FrameLayoutInputState,
     selected_window: u64,
     window_state_change: bool,
     windows: Vec<RedisplayWindowSignature>,
@@ -547,7 +547,7 @@ struct RedisplayFrameSignature {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct RedisplayWindowSignature {
-    layout: crate::window::WindowLayoutInputState,
+    layout: crate::emacs_core::eval::data::window_state::WindowLayoutInputState,
     window_end: crate::window::WindowEndState,
     old_point: LispCharPos1,
     buffer: Option<RedisplayBufferSignature>,

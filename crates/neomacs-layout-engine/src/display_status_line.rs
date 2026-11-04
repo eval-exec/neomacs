@@ -1552,7 +1552,7 @@ impl<'state, 'services, 'face> WindowChromeRowsRenderState<'state, 'services, 'f
                 glyphless_table_bits: request.tty_glyphless_char_display.table_bits(),
                 automatic_composition,
                 face_change_count: self.evaluator.face_change_count(),
-                char_table_revision: neovm_core::window::CharTableLayoutRevision::current(),
+                char_table_revision: neovm_core::window::current_char_table_layout_revision(),
                 media_generation: self.evaluator.media_generation(),
                 symbol_values,
             },

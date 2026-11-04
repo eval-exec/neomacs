@@ -11,7 +11,6 @@ use crate::buffer::{
     BufferId, BufferManager, CharLen, CharPos0, CharRange, EmacsByteLen, EmacsBytePos,
     EmacsByteRange, LispCharPos1, TextPositionAnchor,
 };
-use crate::emacs_core::intern::SymId;
 use crate::emacs_core::value::{HashTableTest, Value};
 use crate::gc_trace::GcTrace;
 use neomacs_display_protocol::TransitionDirection;
@@ -24,6 +23,7 @@ pub(crate) mod body;
 mod chrome;
 pub use chrome::WindowChromePresence;
 mod display;
+pub use display::current_char_table_layout_revision;
 pub(crate) use display::{
     frame_line_height, swap_world_state as swap_display_world_state,
     world_state_placeholder as display_world_state_placeholder,
@@ -564,48 +564,9 @@ pub struct WindowRedisplayState {
     pub preserve_vscroll_p: bool,
 }
 
-/// Frame inputs that can change display-row geometry.
-///
-/// Redisplay skipping and retained-row freshness both consume this projection,
-/// so a new frame layout input cannot be added to one cache policy while being
-/// forgotten by the other.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct FrameLayoutInputState {
-    pub(crate) id: FrameId,
-    pub(crate) geometry: (u32, u32, u32, u32, u32, u32),
-    pub(crate) device_scale_bits: u64,
-    pub(crate) visible: bool,
-    pub(crate) displays_chrome: bool,
-    pub(crate) has_window_system: bool,
-    pub(crate) window_system_symbol: Option<SymId>,
-}
-
-/// Existing evaluator-thread revision for direct character-table writes.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct CharTableLayoutRevision(u64);
-
-/// Window inputs that can change display-row geometry.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct WindowLayoutInputState {
-    pub(crate) id: WindowId,
-    pub(crate) buffer_id: BufferId,
-    pub(crate) bounds: (u32, u32, u32, u32),
-    pub(crate) window_start: LispCharPos1,
-    pub(crate) point: LispCharPos1,
-    pub(crate) hscroll: usize,
-    pub(crate) vscroll: i32,
-    pub(crate) preserve_vscroll_p: bool,
-    pub(crate) margins: WindowMargins,
-    pub(crate) display_table_identity: usize,
-    pub(crate) char_table_mutation_epoch: CharTableLayoutRevision,
-    pub(crate) window_parameters_generation: u64,
-    pub(crate) left_fringe_width: i32,
-    pub(crate) right_fringe_width: i32,
-    pub(crate) fringes_outside_margins: bool,
-    pub(crate) left_scroll_bar_width: i64,
-    pub(crate) right_scroll_bar_width: i64,
-    pub(crate) horizontal_scroll_bar_height: i64,
-}
+pub use crate::emacs_core::eval::data::window_state::{
+    CharTableLayoutRevision, FrameLayoutInputState, WindowLayoutInputState,
+};
 
 /// Buffer inputs that can change display-row positions or geometry.
 ///

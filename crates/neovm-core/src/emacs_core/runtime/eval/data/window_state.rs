@@ -1,8 +1,9 @@
 //! Window state records owned by the evaluator layer (stage-4 W1 E2).
 
 use neovm_edit::buffer::{BufferId, LispCharPos1, MarkerRef};
-use neovm_edit::emacs_core::display_metrics::{Rect, WindowId};
+use neovm_edit::emacs_core::display_metrics::{Rect, WindowId, WindowMargins};
 use neovm_value::display_vocab::FrameId;
+use neovm_value::intern::SymId;
 use neovm_value::value::Value;
 use rustc_hash::FxHashMap as HashMap;
 
@@ -302,4 +303,54 @@ impl AttachedWindowPositionMarkers {
     pub const fn old_point(self) -> WindowOldPointMarker {
         self.old_point
     }
+}
+
+/// Frame inputs that can change display-row geometry.
+///
+/// Redisplay skipping and retained-row freshness both consume this projection,
+/// so a new frame layout input cannot be added to one cache policy while being
+/// forgotten by the other.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FrameLayoutInputState {
+    pub id: FrameId,
+    pub geometry: (u32, u32, u32, u32, u32, u32),
+    pub device_scale_bits: u64,
+    pub visible: bool,
+    pub displays_chrome: bool,
+    pub has_window_system: bool,
+    pub window_system_symbol: Option<SymId>,
+}
+
+/// Existing evaluator-thread revision for direct character-table writes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CharTableLayoutRevision(u64);
+
+impl CharTableLayoutRevision {
+    /// Wrap one evaluator-thread char-table mutation counter value.
+    pub const fn from_counter(counter: u64) -> Self {
+        Self(counter)
+    }
+}
+
+/// Window inputs that can change display-row geometry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WindowLayoutInputState {
+    pub id: WindowId,
+    pub buffer_id: BufferId,
+    pub bounds: (u32, u32, u32, u32),
+    pub window_start: LispCharPos1,
+    pub point: LispCharPos1,
+    pub hscroll: usize,
+    pub vscroll: i32,
+    pub preserve_vscroll_p: bool,
+    pub margins: WindowMargins,
+    pub display_table_identity: usize,
+    pub char_table_mutation_epoch: CharTableLayoutRevision,
+    pub window_parameters_generation: u64,
+    pub left_fringe_width: i32,
+    pub right_fringe_width: i32,
+    pub fringes_outside_margins: bool,
+    pub left_scroll_bar_width: i64,
+    pub right_scroll_bar_width: i64,
+    pub horizontal_scroll_bar_height: i64,
 }
