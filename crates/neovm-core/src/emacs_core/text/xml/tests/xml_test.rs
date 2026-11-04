@@ -570,6 +570,24 @@ fn libxml_parse_html_region_protects_raw_text_from_markup_like_content() {
 }
 
 #[test]
+fn libxml_parse_html_region_handles_apostrophes_in_unquoted_attributes() {
+    crate::test_utils::init_test_tracing();
+
+    // An apostrophe in an unquoted value is not a quote opener.
+    // GNU 31.1 oracle: (script ((data-x . "don't")) "hello")
+    let doc = br#"<html><body><script data-x=don't>hello</script></body></html>"#;
+    let expected = html(vec![body(vec![Value::list(vec![
+        Value::symbol("script"),
+        Value::list(vec![Value::cons(
+            Value::symbol("data-x"),
+            Value::string("don't"),
+        )]),
+        Value::string("hello"),
+    ])])]);
+    assert_eq!(parse_html_region(doc, false).unwrap(), expected);
+}
+
+#[test]
 fn libxml_parse_html_region_strips_comment_delimiters() {
     crate::test_utils::init_test_tracing();
 

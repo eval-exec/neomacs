@@ -898,17 +898,27 @@ fn raw_text_content(element: &tl::HTMLTag<'_>, tag: &str) -> String {
 }
 
 /// Index of the `>` closing a start tag, skipping quoted attribute values.
+///
+/// A quote starts a value only when it follows `=`, as in the HTML
+/// attribute-value state. An apostrophe inside an unquoted value, such as
+/// `data-x=don't`, is not a delimiter.
 fn opening_tag_end(raw: &str) -> Option<usize> {
     let mut quote = None;
+    let mut value_expected = false;
     for (index, byte) in raw.bytes().enumerate() {
         match quote {
             Some(q) if byte == q => quote = None,
             Some(_) => {}
-            None => match byte {
-                b'\'' | b'"' => quote = Some(byte),
-                b'>' => return Some(index),
-                _ => {}
-            },
+            None => {
+                if (byte == b'\'' || byte == b'"') && value_expected {
+                    quote = Some(byte);
+                } else if byte == b'>' {
+                    return Some(index);
+                }
+                if !byte.is_ascii_whitespace() {
+                    value_expected = byte == b'=';
+                }
+            }
         }
     }
     None
