@@ -11,10 +11,9 @@
 //! - Prefix argument handling
 
 use crate::emacs_core::error::LispCondition;
+use crate::emacs_core::eval::input_hooks::CommandInputWaitOutcome;
 use crate::emacs_core::intern::{WellKnown, intern, resolve_sym};
-use crate::emacs_core::keyboard::CommandLoopHost;
 use crate::emacs_core::keymap::KeymapMarker;
-use crate::emacs_core::wait::CommandInputWaitOutcome;
 use crate::tagged::value::SymbolMode;
 use crate::window::geometry::DisplayGeometryExt;
 use crate::window::{DisplayFrameExt, DisplayFrameManagerExt};
@@ -2953,7 +2952,10 @@ impl crate::emacs_core::eval::Context {
             self.take_next_wait_request_special_input_event(&mut internal_effects, idle_policy)?
         {
             if super::frontend_events::interrupts(&event)
-                && self.interrupt_for_input_event_if_requested(event.clone())?
+                && crate::emacs_core::eval::input_hooks::interrupt_for_input_event_if_requested(
+                    self,
+                    event.clone(),
+                )?
             {
                 continue;
             }
@@ -4045,7 +4047,10 @@ impl crate::emacs_core::eval::Context {
         idle_policy: IdleTransitionPolicy,
     ) -> Result<Option<Value>, crate::emacs_core::error::Flow> {
         if super::frontend_events::interrupts(&event)
-            && self.interrupt_for_input_event_if_requested(event.clone())?
+            && crate::emacs_core::eval::input_hooks::interrupt_for_input_event_if_requested(
+                self,
+                event.clone(),
+            )?
         {
             return Ok(None);
         }

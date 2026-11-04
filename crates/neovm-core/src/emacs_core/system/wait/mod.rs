@@ -746,24 +746,17 @@ enum WaitCompletion {
     TargetProcessTerminated,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CommandInputWaitOutcome {
-    InputPending,
-    Interrupted,
-    DeadlineElapsed,
-}
+pub(crate) use crate::emacs_core::eval::input_hooks::CommandInputWaitOutcome;
 
-impl CommandInputWaitOutcome {
-    fn from_completion(completion: WaitCompletion) -> Self {
-        match completion {
-            WaitCompletion::CommandInputPending => Self::InputPending,
-            WaitCompletion::DeadlineElapsed | WaitCompletion::TargetProcessTerminated => {
-                Self::DeadlineElapsed
-            }
-            WaitCompletion::DisplayActivity
-            | WaitCompletion::ProcessActivity
-            | WaitCompletion::SpecialInputActivity => Self::Interrupted,
+fn command_input_outcome_from_completion(completion: WaitCompletion) -> CommandInputWaitOutcome {
+    match completion {
+        WaitCompletion::CommandInputPending => CommandInputWaitOutcome::InputPending,
+        WaitCompletion::DeadlineElapsed | WaitCompletion::TargetProcessTerminated => {
+            CommandInputWaitOutcome::DeadlineElapsed
         }
+        WaitCompletion::DisplayActivity
+        | WaitCompletion::ProcessActivity
+        | WaitCompletion::SpecialInputActivity => CommandInputWaitOutcome::Interrupted,
     }
 }
 
@@ -1575,7 +1568,7 @@ impl super::eval::Context {
         };
         request.idle_policy = idle_policy;
         self.wait_reading_process_output(request)
-            .map(CommandInputWaitOutcome::from_completion)
+            .map(command_input_outcome_from_completion)
     }
 
     fn block_for_wait_request(

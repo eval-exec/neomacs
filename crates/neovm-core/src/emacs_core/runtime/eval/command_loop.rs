@@ -2207,7 +2207,7 @@ impl Context {
         // GNU fatal_error_signal calls Fkill_emacs(signal-number, nil), even
         // with inhibit-quit bound. Hooks run on the Lisp owner, and Shutdown
         // unwinds to the ordinary host terminal/process cleanup boundary.
-        if let Some(sig) = crate::emacs_core::os_signal::take_termination_signal()
+        if let Some(sig) = crate::emacs_core::eval::input_hooks::take_termination_signal()
             && self.shutdown_request.is_none()
             && !self.shutdown_in_progress
         {
@@ -2250,8 +2250,8 @@ impl Context {
             //
             // -- an `else if`, so a pending quit wins and a pending OS signal
             // is handled only when there is none.
-            if crate::emacs_core::os_signal::pending() {
-                crate::emacs_core::os_signal::drain_pending_os_signals(self)?;
+            if crate::emacs_core::eval::input_hooks::os_signal_pending() {
+                crate::emacs_core::eval::input_hooks::drain_pending_os_signals(self)?;
             }
             return Ok(());
         }

@@ -33,6 +33,7 @@ pub mod format_time_entries;
 pub(crate) mod gnutls_entries;
 #[path = "commands/identity_commands/mod.rs"]
 pub mod identity_commands;
+pub(crate) mod input_hooks;
 #[path = "commands/interactive/mod.rs"]
 pub mod interactive;
 #[path = "commands/kbd/mod.rs"]

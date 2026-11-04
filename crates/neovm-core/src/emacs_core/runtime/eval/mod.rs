@@ -7619,6 +7619,7 @@ pub mod call_interactively;
 pub mod case_tables;
 pub mod display_query_hooks;
 mod gc_pacing;
+pub mod input_hooks;
 pub mod interactive_registry;
 pub mod keymap_lookup;
 pub mod lifecycle;
