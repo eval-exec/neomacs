@@ -1858,3 +1858,768 @@ pub(crate) struct TtyPosnCurrentOwner {
     pub(crate) dimensions: (i64, i64),
     pub(crate) authority: HashMap<WindowId, TtyCurrentMatrixAuthority>,
 }
+
+// --- E5-FM-5a Window data accessors (stage-4 W2/E5) ---
+
+impl Window {
+    /// Create a new leaf window.
+    pub fn new_leaf(id: WindowId, buffer_id: BufferId, bounds: Rect) -> Self {
+        Window::Leaf {
+            id,
+            buffer_id,
+            mode_line_base: None,
+            // GNU gives a new window change_stamp 0 and a nil old_buffer, so the
+            // next record can tell it did not exist before.
+            old_buffer: None,
+            change_stamp: None,
+            bounds,
+            window_start: LispCharPos1::ONE,
+            position_markers: WindowPositionMarkerState::Detached,
+            window_end: WindowEndState::Unrecorded,
+            point: LispCharPos1::ONE,
+            old_point: LispCharPos1::ONE,
+            dedicated: Value::NIL,
+            parameters: Vec::new(),
+            parameters_generation: 0,
+            history: WindowHistoryState::default(),
+            fixed_height: 0,
+            fixed_width: 0,
+            hscroll: 0,
+            min_hscroll: 0,
+            suspend_auto_hscroll: false,
+            vscroll: 0,
+            preserve_vscroll_p: false,
+            force_start: false,
+            margins: WindowMargins::ZERO,
+            display: WindowDisplayState::default(),
+            // GNU `make_window` initializes all five of these together
+            // (`src/window.c:4607-4611`) -- `normal_lines`/`normal_cols` to
+            // 1.0 and the three pending-size slots to 0, explicitly because
+            // `allocate_window` has already nil'd everything and these are the
+            // slots "which should not be nil".  `new_pixel`/`new_total` are
+            // `Option<i64>` here and read as 0 via `unwrap_or(0)`, but
+            // `new_normal` is a raw `Value` and leaked that nil to
+            // `window-new-normal`.
+            new_pixel: None,
+            new_total: None,
+            cell_dimensions: WindowCellDimensions::default(),
+            new_normal: Value::fixnum(0),
+            normal_lines: Value::make_float(1.0),
+            normal_cols: Value::make_float(1.0),
+            // GNU `make_window` leaves top_line/left_col zero; the resize passes
+            // assign them (root window gets `FRAME_TOP_MARGIN`).
+            top_line: 0,
+            left_col: 0,
+        }
+    }
+
+    /// The ids of this window's children, in layout order; empty for a leaf.
+    ///
+    /// A window NAMES its children rather than owning them, so this answers
+    /// only who they are.  To reach one, ask the [`WindowTree`] that holds
+    /// them -- `tree.find(id)` -- which is also the only handle that can hand
+    /// out a node at all.
+    pub fn children(&self) -> &[WindowId] {
+        match self {
+            Window::Leaf { .. } => &[],
+            Window::Internal { children, .. } => children,
+        }
+    }
+
+    /// Mutable counterpart of [`Window::children`], for the structural edits
+    /// -- push, remove, reorder -- that [`WindowTree`] performs on behalf of
+    /// split and delete.  `None` for a leaf, which has no child list to edit.
+    pub fn children_mut(&mut self) -> Option<&mut Vec<WindowId>> {
+        match self {
+            Window::Leaf { .. } => None,
+            Window::Internal { children, .. } => Some(children),
+        }
+    }
+
+    /// Character-line top edge. GNU `w->top_line` (`WINDOW_TOP_EDGE_LINE`).
+    pub fn top_line(&self) -> i64 {
+        match self {
+            Window::Leaf { top_line, .. } | Window::Internal { top_line, .. } => *top_line,
+        }
+    }
+
+    /// Set the character-line top edge. GNU assigns `w->top_line` in the resize
+    /// passes / config restore.
+    pub fn set_top_line(&mut self, value: i64) {
+        match self {
+            Window::Leaf { top_line, .. } | Window::Internal { top_line, .. } => *top_line = value,
+        }
+    }
+
+    /// Character-column left edge. GNU `w->left_col` (`WINDOW_LEFT_EDGE_COL`).
+    pub fn left_col(&self) -> i64 {
+        match self {
+            Window::Leaf { left_col, .. } | Window::Internal { left_col, .. } => *left_col,
+        }
+    }
+
+    /// Set the character-column left edge. GNU `w->left_col`.
+    pub fn set_left_col(&mut self, value: i64) {
+        match self {
+            Window::Leaf { left_col, .. } | Window::Internal { left_col, .. } => *left_col = value,
+        }
+    }
+
+    /// Read the pending `new_pixel` slot. GNU `w->new_pixel`.
+    pub fn new_pixel(&self) -> Option<i64> {
+        match self {
+            Window::Leaf { new_pixel, .. } | Window::Internal { new_pixel, .. } => *new_pixel,
+        }
+    }
+
+    /// Write the pending `new_pixel` slot. GNU `wset_new_pixel`.
+    pub fn set_new_pixel(&mut self, value: Option<i64>) {
+        match self {
+            Window::Leaf { new_pixel, .. } | Window::Internal { new_pixel, .. } => {
+                *new_pixel = value;
+            }
+        }
+    }
+
+    /// Read the pending `new_total` slot. GNU `w->new_total`.
+    pub fn new_total(&self) -> Option<i64> {
+        match self {
+            Window::Leaf { new_total, .. } | Window::Internal { new_total, .. } => *new_total,
+        }
+    }
+
+    pub fn total_lines(&self, char_height: f32) -> i64 {
+        match self {
+            Self::Leaf {
+                cell_dimensions,
+                bounds,
+                ..
+            }
+            | Self::Internal {
+                cell_dimensions,
+                bounds,
+                ..
+            } => cell_dimensions
+                .lines
+                .unwrap_or((bounds.height / char_height.max(1.0)) as i64),
+        }
+    }
+
+    pub fn total_columns(&self, char_width: f32) -> i64 {
+        match self {
+            Self::Leaf {
+                cell_dimensions,
+                bounds,
+                ..
+            }
+            | Self::Internal {
+                cell_dimensions,
+                bounds,
+                ..
+            } => cell_dimensions
+                .columns
+                .unwrap_or((bounds.width / char_width.max(1.0)) as i64),
+        }
+    }
+
+    pub(crate) fn commit_cell_total(&mut self, horizontal: bool, total: i64) {
+        match self {
+            Self::Leaf {
+                cell_dimensions, ..
+            }
+            | Self::Internal {
+                cell_dimensions, ..
+            } => {
+                if horizontal {
+                    cell_dimensions.columns = Some(total);
+                } else {
+                    cell_dimensions.lines = Some(total);
+                }
+            }
+        }
+    }
+
+    /// Write the pending `new_total` slot. GNU `wset_new_total`.
+    pub fn set_new_total(&mut self, value: Option<i64>) {
+        match self {
+            Window::Leaf { new_total, .. } | Window::Internal { new_total, .. } => {
+                *new_total = value;
+            }
+        }
+    }
+
+    /// Read the pending `new_normal` Lisp slot. GNU `w->new_normal`.
+    pub fn new_normal(&self) -> Value {
+        match self {
+            Window::Leaf { new_normal, .. } | Window::Internal { new_normal, .. } => *new_normal,
+        }
+    }
+
+    /// Write the pending `new_normal` Lisp slot.
+    pub fn set_new_normal(&mut self, value: Value) {
+        match self {
+            Window::Leaf { new_normal, .. } | Window::Internal { new_normal, .. } => {
+                *new_normal = value;
+            }
+        }
+    }
+
+    /// Read the persistent `normal_lines` Lisp slot. GNU
+    /// `w->normal_lines`.
+    pub fn normal_lines(&self) -> Value {
+        match self {
+            Window::Leaf { normal_lines, .. } | Window::Internal { normal_lines, .. } => {
+                *normal_lines
+            }
+        }
+    }
+
+    /// Write the persistent `normal_lines` Lisp slot. GNU
+    /// `wset_normal_lines`.
+    pub fn set_normal_lines(&mut self, value: Value) {
+        match self {
+            Window::Leaf { normal_lines, .. } | Window::Internal { normal_lines, .. } => {
+                *normal_lines = value;
+            }
+        }
+    }
+
+    /// Read the persistent `normal_cols` Lisp slot. GNU
+    /// `w->normal_cols`.
+    pub fn normal_cols(&self) -> Value {
+        match self {
+            Window::Leaf { normal_cols, .. } | Window::Internal { normal_cols, .. } => *normal_cols,
+        }
+    }
+
+    /// Write the persistent `normal_cols` Lisp slot. GNU
+    /// `wset_normal_cols`.
+    pub fn set_normal_cols(&mut self, value: Value) {
+        match self {
+            Window::Leaf { normal_cols, .. } | Window::Internal { normal_cols, .. } => {
+                *normal_cols = value;
+            }
+        }
+    }
+
+    /// Record this leaf as width-fixed at COLS columns.  A value of 0 clears
+    /// the fixed-width constraint.
+    pub fn set_fixed_width_cols(&mut self, cols: usize) {
+        if let Window::Leaf { fixed_width, .. } = self {
+            *fixed_width = cols;
+        }
+    }
+
+    /// Record this leaf as height-fixed at LINES rows.  A value of 0 clears
+    /// the fixed-height constraint.
+    pub fn set_fixed_height_lines(&mut self, lines: usize) {
+        if let Window::Leaf { fixed_height, .. } = self {
+            *fixed_height = lines;
+        }
+    }
+
+    pub fn fixed_width_cols(&self) -> usize {
+        match self {
+            Window::Leaf { fixed_width, .. } => *fixed_width,
+            Window::Internal { .. } => 0,
+        }
+    }
+
+    pub fn fixed_height_lines(&self) -> usize {
+        match self {
+            Window::Leaf { fixed_height, .. } => *fixed_height,
+            Window::Internal { .. } => 0,
+        }
+    }
+
+    /// Set the window's point from a buffer position.
+    /// GNU Emacs xdisp.c:20616 syncs w->pointm from buffer PT before redisplay.
+    pub fn set_point(&mut self, pos: LispCharPos1) {
+        if let Window::Leaf { point, .. } = self {
+            *point = pos.max(LispCharPos1::ONE);
+        }
+    }
+
+    /// Horizontal scroll offset in columns (`w->hscroll`). 0 for internal
+    /// nodes.
+    pub fn hscroll(&self) -> usize {
+        match self {
+            Window::Leaf { hscroll, .. } => *hscroll,
+            Window::Internal { .. } => 0,
+        }
+    }
+
+    /// Lower bound for automatic horizontal scrolling (`w->min_hscroll`).
+    pub fn min_hscroll(&self) -> usize {
+        match self {
+            Window::Leaf { min_hscroll, .. } => *min_hscroll,
+            Window::Internal { .. } => 0,
+        }
+    }
+
+    /// Set the lower bound for automatic horizontal scrolling
+    /// (`w->min_hscroll`). No-op for internal nodes.
+    pub fn set_min_hscroll(&mut self, value: usize) {
+        if let Window::Leaf { min_hscroll, .. } = self {
+            *min_hscroll = value;
+        }
+    }
+
+    /// Whether automatic horizontal scrolling is currently suspended
+    /// (`w->suspend_auto_hscroll`).
+    pub fn suspend_auto_hscroll(&self) -> bool {
+        match self {
+            Window::Leaf {
+                suspend_auto_hscroll,
+                ..
+            } => *suspend_auto_hscroll,
+            Window::Internal { .. } => false,
+        }
+    }
+
+    /// Set the auto-hscroll suspend flag (`w->suspend_auto_hscroll`). No-op
+    /// for internal nodes.
+    pub fn set_suspend_auto_hscroll(&mut self, value: bool) {
+        if let Window::Leaf {
+            suspend_auto_hscroll,
+            ..
+        } = self
+        {
+            *suspend_auto_hscroll = value;
+        }
+    }
+
+    pub fn redisplay_state(&self) -> Option<WindowRedisplayState> {
+        match self {
+            Window::Leaf {
+                id,
+                buffer_id,
+                bounds,
+                window_start,
+                window_end,
+                point,
+                old_point,
+                hscroll,
+                vscroll,
+                preserve_vscroll_p,
+                ..
+            } => Some(WindowRedisplayState {
+                id: *id,
+                buffer_id: *buffer_id,
+                bounds: (
+                    redisplay_f32_bits(bounds.x),
+                    redisplay_f32_bits(bounds.y),
+                    redisplay_f32_bits(bounds.width),
+                    redisplay_f32_bits(bounds.height),
+                ),
+                window_start: *window_start,
+                window_end: *window_end,
+                point: *point,
+                old_point: *old_point,
+                hscroll: *hscroll,
+                vscroll: *vscroll,
+                preserve_vscroll_p: *preserve_vscroll_p,
+            }),
+            Window::Internal { .. } => None,
+        }
+    }
+
+    /// Window ID.
+    pub fn id(&self) -> WindowId {
+        match self {
+            Window::Leaf { id, .. } | Window::Internal { id, .. } => *id,
+        }
+    }
+
+    /// Pixel bounds.
+    pub fn bounds(&self) -> &Rect {
+        match self {
+            Window::Leaf { bounds, .. } | Window::Internal { bounds, .. } => bounds,
+        }
+    }
+
+    /// Mutable reference to bounds.
+    pub fn bounds_mut(&mut self) -> &mut Rect {
+        match self {
+            Window::Leaf {
+                bounds,
+                cell_dimensions,
+                ..
+            }
+            | Window::Internal {
+                bounds,
+                cell_dimensions,
+                ..
+            } => {
+                *cell_dimensions = WindowCellDimensions::default();
+                bounds
+            }
+        }
+    }
+
+    /// Set bounds.
+    pub fn set_bounds(&mut self, new_bounds: Rect) {
+        match self {
+            Window::Leaf {
+                bounds,
+                cell_dimensions,
+                ..
+            }
+            | Window::Internal {
+                bounds,
+                cell_dimensions,
+                ..
+            } => {
+                if bounds.width != new_bounds.width {
+                    cell_dimensions.columns = None;
+                }
+                if bounds.height != new_bounds.height {
+                    cell_dimensions.lines = None;
+                }
+                *bounds = new_bounds;
+            }
+        }
+    }
+
+    /// Whether this is a leaf window.
+    pub fn is_leaf(&self) -> bool {
+        matches!(self, Window::Leaf { .. })
+    }
+
+    /// Return this leaf window's display state.
+    pub fn display(&self) -> Option<&WindowDisplayState> {
+        match self {
+            Window::Leaf { display, .. } => Some(display),
+            Window::Internal { .. } => None,
+        }
+    }
+
+    pub fn redisplay_output(&self) -> Option<&WindowRedisplayOutput> {
+        self.display()?.redisplay_output()
+    }
+
+    /// Accept every query-visible fact produced by one redisplay generation.
+    ///
+    /// Synchronous layout queries deliberately do not use this path: they may
+    /// refresh `window-end`, but cannot masquerade as a presented redisplay.
+    pub(crate) fn accept_redisplay_output(&mut self, output: WindowRedisplayOutput) {
+        if let Self::Leaf {
+            window_end,
+            display,
+            ..
+        } = self
+        {
+            *window_end = WindowEndState::Current(output.window_end());
+            display.redisplay_output = Some(output);
+        }
+    }
+
+    /// Return a mutable reference to this leaf window's display state.
+    pub fn display_mut(&mut self) -> Option<&mut WindowDisplayState> {
+        match self {
+            Window::Leaf { display, .. } => Some(display),
+            Window::Internal { .. } => None,
+        }
+    }
+
+    /// Return this window's Lisp-visible parameter alist.
+    pub fn parameters(&self) -> &WindowParameters {
+        match self {
+            Window::Leaf { parameters, .. } | Window::Internal { parameters, .. } => parameters,
+        }
+    }
+
+    pub const fn parameters_generation(&self) -> u64 {
+        match self {
+            Window::Leaf {
+                parameters_generation,
+                ..
+            }
+            | Window::Internal {
+                parameters_generation,
+                ..
+            } => *parameters_generation,
+        }
+    }
+
+    /// Return this live window's history state.
+    pub fn history(&self) -> Option<&WindowHistoryState> {
+        match self {
+            Window::Leaf { history, .. } => Some(history),
+            Window::Internal { .. } => None,
+        }
+    }
+
+    /// Return a mutable reference to this live window's history state.
+    pub fn history_mut(&mut self) -> Option<&mut WindowHistoryState> {
+        match self {
+            Window::Leaf { history, .. } => Some(history),
+            Window::Internal { .. } => None,
+        }
+    }
+
+    /// Get the combination limit for an internal window.
+    pub fn combination_limit(&self) -> Option<bool> {
+        match self {
+            Window::Internal {
+                combination_limit, ..
+            } => Some(*combination_limit),
+            Window::Leaf { .. } => None,
+        }
+    }
+
+    /// Set the combination limit for an internal window.
+    pub fn set_combination_limit(&mut self, limit: bool) {
+        if let Window::Internal {
+            combination_limit, ..
+        } = self
+        {
+            *combination_limit = limit;
+        }
+    }
+
+    /// Start position of this window (leaf only).
+    pub fn window_start(&self) -> Option<LispCharPos1> {
+        match self {
+            Window::Leaf { window_start, .. } => Some(*window_start),
+            Window::Internal { .. } => None,
+        }
+    }
+
+    /// Buffer displayed in this window (leaf only).
+    /// This window's window-change epoch, or `None` when it has never been
+    /// recorded -- GNU's `w->change_stamp == 0`, which marks a window created
+    /// since the last run of the window change functions.
+    ///
+    /// Internal windows are never stamped: GNU's
+    /// `window_change_record_windows` recurses past them and records only
+    /// live leaves (`src/window.c`).
+    pub fn old_buffer(&self) -> Option<BufferId> {
+        match self {
+            Window::Leaf { old_buffer, .. } => *old_buffer,
+            Window::Internal { .. } => None,
+        }
+    }
+
+    /// Record the buffer and epoch, as `window_change_record_windows` does.
+    pub fn record_change_epoch(&mut self, stamp: ChangeStamp) {
+        if let Window::Leaf {
+            buffer_id,
+            old_buffer,
+            change_stamp,
+            ..
+        } = self
+        {
+            *old_buffer = Some(*buffer_id);
+            *change_stamp = Some(stamp);
+        }
+    }
+
+    pub fn change_stamp(&self) -> Option<ChangeStamp> {
+        match self {
+            Window::Leaf { change_stamp, .. } => *change_stamp,
+            Window::Internal { .. } => None,
+        }
+    }
+
+    /// Stamp this window with the epoch that has just been recorded.
+    pub fn set_change_stamp(&mut self, stamp: ChangeStamp) {
+        if let Window::Leaf { change_stamp, .. } = self {
+            *change_stamp = Some(stamp);
+        }
+    }
+
+    pub fn buffer_id(&self) -> Option<BufferId> {
+        match self {
+            Window::Leaf { buffer_id, .. } => Some(*buffer_id),
+            Window::Internal { .. } => None,
+        }
+    }
+
+    pub(crate) fn mode_line_base(&self) -> Option<ModeLineBase> {
+        match self {
+            Self::Leaf { mode_line_base, .. } => *mode_line_base,
+            Self::Internal { .. } => None,
+        }
+    }
+
+    pub(crate) fn set_mode_line_base(&mut self, value: Option<ModeLineBase>) {
+        if let Self::Leaf { mode_line_base, .. } = self {
+            *mode_line_base = value;
+        }
+    }
+
+    /// Invalidate GNU's numeric base when replacing a displayed buffer without
+    /// resetting the other window fields (temporary echo/startup transitions).
+    pub fn reset_mode_line_base(&mut self) {
+        self.set_mode_line_base(None);
+    }
+
+    /// Set the buffer displayed in this window (leaf only).
+    pub fn set_buffer(&mut self, new_id: BufferId) {
+        if let Window::Leaf {
+            buffer_id,
+            window_start,
+            position_markers,
+            window_end,
+            point,
+            min_hscroll,
+            suspend_auto_hscroll,
+            mode_line_base,
+            ..
+        } = self
+        {
+            // GNU wset_buffer invalidates base_line_pos even for a numeric
+            // identity round trip; do not preserve pre-switch history.
+            *mode_line_base = None;
+            *buffer_id = new_id;
+            *window_start = LispCharPos1::ONE;
+            *position_markers = WindowPositionMarkerState::Detached;
+            *window_end = WindowEndState::Unrecorded;
+            *point = LispCharPos1::ONE;
+            // GNU resets the auto-hscroll lower bound and the suspend flag on
+            // every buffer switch (`unshow_buffer`, src/window.c:4368). The
+            // `hscroll` reset itself is handled by the caller's normal
+            // window-start/point reinitialization path.
+            *min_hscroll = 0;
+            *suspend_auto_hscroll = false;
+        }
+    }
+
+    /// Stored Lisp-visible `window-end` for this leaf window.
+    pub fn window_end_charpos(&self, buffer_z: LispCharPos1) -> Option<LispCharPos1> {
+        match self {
+            Window::Leaf { window_end, .. } => Some(window_end.charpos_from_z(buffer_z)),
+            Window::Internal { .. } => None,
+        }
+    }
+
+    /// Stored byte-position `window-end` for this leaf window.
+    pub fn window_end_bytepos(&self, buffer_z_byte: EmacsBytePos) -> Option<EmacsBytePos> {
+        match self {
+            Window::Leaf { window_end, .. } => Some(window_end.bytepos_from_z(buffer_z_byte)),
+            Window::Internal { .. } => None,
+        }
+    }
+
+    /// Typed presentation lifecycle for this leaf window.
+    pub fn window_end_state(&self) -> Option<WindowEndState> {
+        match self {
+            Window::Leaf { window_end, .. } => Some(*window_end),
+            Window::Internal { .. } => None,
+        }
+    }
+
+    /// Whether the stored window-end came from a completed redisplay.
+    pub fn window_end_valid(&self) -> Option<bool> {
+        self.window_end_state().map(WindowEndState::is_current)
+    }
+
+    /// Mark the last complete window-end record stale without discarding it.
+    ///
+    /// GNU keeps the offsets available for `window-end` with `UPDATE=nil`
+    /// after invalidation, while `UPDATE=t` must recompute.
+    pub fn invalidate_window_end(&mut self) {
+        if let Window::Leaf { window_end, .. } = self {
+            window_end.invalidate();
+        }
+    }
+
+    /// Publish the last redisplay's window-end state for this leaf window.
+    pub fn set_window_end_from_positions(
+        &mut self,
+        buffer_z_char: LispCharPos1,
+        buffer_z_byte: EmacsBytePos,
+        end_charpos: LispCharPos1,
+        end_bytepos: EmacsBytePos,
+        vpos: usize,
+    ) {
+        self.set_window_end_record(WindowEndRecord::from_positions(
+            buffer_z_char,
+            buffer_z_byte,
+            end_charpos,
+            end_bytepos,
+            MatrixRow0::new(vpos),
+        ));
+    }
+
+    /// Publish a complete char/byte/row record without reopening its tuple.
+    pub fn set_window_end_record(&mut self, record: WindowEndRecord) {
+        if let Window::Leaf { window_end, .. } = self {
+            *window_end = WindowEndState::Current(record);
+        }
+    }
+
+    pub(crate) fn restore_window_end_state(&mut self, state: WindowEndState) {
+        if let Window::Leaf { window_end, .. } = self {
+            *window_end = state;
+        }
+    }
+
+    /// Replace a displayed buffer id in all leaf windows under this node.
+    ///
+    /// This is used when a buffer is killed; any window still attached to the
+    /// dead buffer is moved back to a replacement buffer (typically `*scratch*`).
+    pub fn replace_buffer_id(&mut self, old_id: BufferId, new_id: BufferId) {
+        if let Window::Leaf { buffer_id, .. } = self
+            && *buffer_id == old_id
+        {
+            self.set_buffer(new_id);
+        }
+    }
+
+    /// Invalidate redisplay-derived window-end state for this window.
+    pub fn invalidate_display_state(&mut self) {
+        let Window::Leaf {
+            window_end,
+            display,
+            ..
+        } = self
+        else {
+            return;
+        };
+        window_end.invalidate();
+        display.clear_physical_cursor_state();
+    }
+
+    /// Drop only horizontal scroll derived from the previous geometry.
+    ///
+    /// GNU distinguishes auto-hscroll state from an explicit
+    /// `set-window-hscroll` with `suspend_auto_hscroll`. Geometry changes
+    /// invalidate the former, while the latter remains user-owned.
+    pub(crate) fn invalidate_automatic_hscroll_for_geometry_change(&mut self) {
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        enum HorizontalScrollOwnership {
+            Automatic,
+            Explicit,
+        }
+
+        match self {
+            Window::Leaf {
+                hscroll,
+                min_hscroll,
+                suspend_auto_hscroll,
+                ..
+            } => {
+                let ownership = if *suspend_auto_hscroll {
+                    HorizontalScrollOwnership::Explicit
+                } else {
+                    HorizontalScrollOwnership::Automatic
+                };
+                match ownership {
+                    HorizontalScrollOwnership::Automatic => *hscroll = *min_hscroll,
+                    HorizontalScrollOwnership::Explicit => {}
+                }
+            }
+            Window::Internal { .. } => {}
+        }
+    }
+}
+
+pub(crate) fn redisplay_f32_bits(value: f32) -> u32 {
+    if value == 0.0 {
+        0.0f32.to_bits()
+    } else {
+        value.to_bits()
+    }
+}
