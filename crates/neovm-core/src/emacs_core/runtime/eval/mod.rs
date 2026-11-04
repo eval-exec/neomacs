@@ -7648,7 +7648,9 @@ mod macroexpand;
 mod admission;
 mod global_state;
 mod green;
+
 pub(crate) use admission::ThreadingMode;
+pub(crate) use green::switch::MainNativeHandoff;
 pub(crate) use green::{SelectTurn, green_make_thread, green_world};
 mod keyboard_forwarding;
 mod owner_bindings;

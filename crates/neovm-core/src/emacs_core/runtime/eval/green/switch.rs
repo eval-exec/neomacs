@@ -19,11 +19,8 @@ use super::scheduler::{
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::signal;
 use crate::emacs_core::intern::SymId;
-use crate::emacs_core::process::SystemProcessExt;
 use crate::host_effect::contracts::OwnedNativeData;
-use crate::host_effect::wake::native_wait::{
-    NativeWaitHandoff, PreparedNativeWait, RealWaitPermit,
-};
+use crate::host_effect::wake::native_wait::{NativeWaitHandoff, RealWaitPermit};
 use crate::tagged::gc::MarkPhase;
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
@@ -59,7 +56,7 @@ enum BindingResumeError {
 enum ParkRequest {
     Ordinary(Wait),
     MainNative {
-        wait: PreparedNativeWait,
+        wait: crate::emacs_core::eval::process_hooks::NativeWaitGuard,
         wait_end: Instant,
     },
     Host {
@@ -135,7 +132,7 @@ enum MainWaitAuthority {
     Transition,
 }
 
-struct MainNativeHandoff<'native> {
+pub(crate) struct MainNativeHandoff<'native> {
     control: &'native Control,
     receiver: &'native mut OwnerReceive,
     wait_end: Instant,
@@ -941,9 +938,9 @@ impl Context {
                 super::scheduler::Peers::Sleeping(end) => end.min(wait_end),
                 super::scheduler::Peers::Ready | super::scheduler::Peers::Blocked => wait_end,
             };
-            match self.processes.prepare_green_main_wait(physical_end) {
-                crate::emacs_core::process::MainNativePreparation::Ready => {}
-                crate::emacs_core::process::MainNativePreparation::Prepared(wait) => {
+            match crate::emacs_core::eval::process_hooks::prepare_main_wait(self, physical_end) {
+                crate::emacs_core::eval::process_hooks::MainWaitPreparation::Ready => {}
+                crate::emacs_core::eval::process_hooks::MainWaitPreparation::Native(wait) => {
                     #[cfg(test)]
                     prepare_park(self)?;
                     self.green_park_impl(
@@ -963,7 +960,7 @@ impl Context {
                         },
                     )?;
                 }
-                crate::emacs_core::process::MainNativePreparation::Scheduler => {
+                crate::emacs_core::eval::process_hooks::MainWaitPreparation::Scheduler => {
                     #[cfg(test)]
                     prepare_park(self)?;
                     self.green_wait(Wait::Select { wait_end })?;
@@ -1267,7 +1264,7 @@ impl Context {
         // SymId/NameId caches as worker owners do on creation.
         crate::emacs_core::intern::prepare_thread_symbol_caches();
         let control = self.with_green_runtime(|runtime| Arc::clone(&runtime.control));
-        control.install_select(self.processes.green_select_handle());
+        control.install_select(crate::emacs_core::eval::process_hooks::select_handle(self));
         let receiver = control.register_main();
         self.take_green_seat(ThreadKey::Main, control, receiver, baton);
         Ok(())

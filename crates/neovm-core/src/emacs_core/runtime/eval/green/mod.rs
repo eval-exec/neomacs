@@ -26,7 +26,7 @@ mod host_service;
 mod owner_carried;
 mod root_registry;
 mod scheduler;
-mod switch;
+pub(super) mod switch;
 
 pub(crate) use api::{green_make_thread, green_world};
 pub(crate) use bootstrap::GreenBootstrap;

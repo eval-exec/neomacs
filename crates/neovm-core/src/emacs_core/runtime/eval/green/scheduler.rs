@@ -10,8 +10,6 @@
 
 use super::super::world::Baton;
 use super::host_service::{HostParkRegistration, HostRequestKey, RealWaitPermit, SettledHostCall};
-use crate::emacs_core::process::GreenSelectHandle;
-use crate::emacs_core::process::SystemProcessExt;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::marker::PhantomData;
 use std::num::NonZeroU64;
@@ -1247,7 +1245,7 @@ pub(crate) struct Control {
     #[cfg(test)]
     after_next_select_park: Mutex<Option<SelectParkGate>>,
     /// An owned I/O handle: the idle scheduler never reads World storage.
-    select: OnceLock<Option<GreenSelectHandle>>,
+    select: OnceLock<Option<crate::emacs_core::eval::process_hooks::SelectHandleToken>>,
 }
 
 impl std::fmt::Debug for Control {
@@ -1266,7 +1264,10 @@ impl Control {
         self.main_native_events.lock().unwrap().clone()
     }
 
-    pub(crate) fn install_select(&self, select: Option<GreenSelectHandle>) {
+    pub(crate) fn install_select(
+        &self,
+        select: Option<crate::emacs_core::eval::process_hooks::SelectHandleToken>,
+    ) {
         assert!(
             self.select.set(select).is_ok(),
             "select handle installed twice"
@@ -1276,7 +1277,8 @@ impl Control {
     fn notify_select(&self) {
         self.metadata_changed.notify_all();
         if let Some(Some(select)) = self.select.get() {
-            select.notify();
+            let select = *select;
+            crate::emacs_core::eval::process_hooks::select_notify(select);
             // A released native main owns a distinct registration. Its
             // durable scheduler state may become ready before or during the
             // OS wait; the idle-selector epoch alone cannot wake that role.
@@ -1284,7 +1286,8 @@ impl Control {
             let main_native =
                 self.state().physical.get(&ThreadKey::Main) == Some(&OwnerLocation::NativeReleased);
             if main_native {
-                select.nudge(
+                crate::emacs_core::eval::process_hooks::select_nudge(
+                    select,
                     crate::host_effect::wake::ControlDestination::NativeMain,
                     crate::host_effect::wake::ControlNudge::SchedulerReady,
                 );
@@ -1299,7 +1302,8 @@ impl Control {
     fn nudge_main(&self, reason: crate::host_effect::wake::ControlNudge) {
         self.metadata_changed.notify_all();
         if let Some(Some(select)) = self.select.get() {
-            select.nudge(
+            crate::emacs_core::eval::process_hooks::select_nudge(
+                *select,
                 crate::host_effect::wake::ControlDestination::NativeMain,
                 reason,
             );
@@ -2583,7 +2587,9 @@ impl Control {
         self.select
             .get()
             .and_then(Option::as_ref)
-            .map(GreenSelectHandle::control_source)
+            .and_then(|select| {
+                crate::emacs_core::eval::process_hooks::select_control_source(*select)
+            })
             .ok_or(ServiceRefusal::MainUnavailable)
     }
 
@@ -3161,7 +3167,7 @@ impl Control {
         Self::expire_deadlines(&mut state, now);
         if state.waits.select_len() > 0
             && let Some(Some(select)) = self.select.get()
-            && select.wait_until(now)
+            && crate::emacs_core::eval::process_hooks::select_wait_until(*select, now)
         {
             Self::wake_selects_at(&mut state, now);
         }
@@ -3621,16 +3627,17 @@ impl Control {
             // Register BEFORE checking scheduler predicates. A transition
             // between this check and the OS block advances the same snapshot;
             // arming after dropping state would discard that durable nudge.
-            let registration = self
-                .select
-                .get()
-                .and_then(Option::as_ref)
-                .map(GreenSelectHandle::arm);
+            let select = self.select.get().and_then(Option::as_ref).copied();
+            let mut registration =
+                select.map(crate::emacs_core::eval::process_hooks::SelectArmGuard::arm);
             let deadline = {
                 let mut state = self.state();
                 if state.waits.select_len() > 0
                     && let Some(Some(select)) = self.select.get()
-                    && select.wait_until(Instant::now())
+                    && crate::emacs_core::eval::process_hooks::select_wait_until(
+                        *select,
+                        Instant::now(),
+                    )
                 {
                     Self::wake_selects(&mut state);
                 }
@@ -3661,10 +3668,9 @@ impl Control {
                     }
                 }
             };
-            let activity = if let Some(Some(select)) = self.select.get() {
-                match &registration {
-                    Some(Ok(registration)) => select.wait_registered(registration, deadline),
-                    Some(Err(_)) => true,
+            let activity = if let Some(select) = select {
+                match &mut registration {
+                    Some(guard) => guard.wait(select, deadline),
                     None => false,
                 }
             } else {
@@ -4443,7 +4449,9 @@ mod tests {
         let control = Control::default();
         let _main = control.register_main();
         let _worker = control.register_worker(worker);
-        control.install_select(manager.green_select_handle());
+        control.install_select(crate::emacs_core::process_hooks::select_handle_for_manager(
+            &manager,
+        ));
         let key = host_key();
         let phase = ServicePhase::Continuing(ContinuationEligibility::Released);
         {
@@ -5190,7 +5198,9 @@ mod tests {
             let control = Control::default();
             let _main = control.register_main();
             let _worker = control.register_worker(worker);
-            control.install_select(manager.green_select_handle());
+            control.install_select(crate::emacs_core::process_hooks::select_handle_for_manager(
+                &manager,
+            ));
             {
                 let mut state = control.state();
                 Control::set_wait(&mut state, ThreadKey::Main, original);

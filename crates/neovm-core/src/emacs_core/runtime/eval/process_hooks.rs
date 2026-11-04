@@ -15,10 +15,15 @@
 //! they cannot appear in an eval-declared signature yet; their call sites
 //! stay direct until then.
 
+#![allow(private_interfaces)] // host_effect vocabulary becomes eval-owned at W5/E13
 use super::*;
 use crate::heap_types::ProcessId;
+use crate::host_effect::wake::{ControlDestination, ControlNudge, ControlWake};
 use neovm_value::{HookInstallError, HookInstallStatus};
+use std::num::NonZeroU64;
+use std::sync::Arc;
 use std::sync::OnceLock;
+use std::time::Instant;
 
 /// Close an owned Unix listener after kill-emacs hooks (Unix only; no-op elsewhere).
 pub type UnlinkOwnedUnixListener = fn(&mut Context, ProcessId);
@@ -29,13 +34,221 @@ pub type OpenChannelForModule = fn(&mut Context, Value) -> Result<std::ffi::c_in
 /// The printed representation of a process object, if it is still known.
 pub type PrintProcessHandle = fn(&Value) -> Option<String>;
 
-/// The four cold process-IO bodies eval calls.
+/// Opaque process-select handle. The system side keeps `GreenSelectHandle`
+/// behind the token; eval never names the handle type.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SelectHandleToken(NonZeroU64);
+
+impl SelectHandleToken {
+    /// Wrap a system-issued id (core's registry keys tokens by it).
+    pub fn from_raw(raw: NonZeroU64) -> Self {
+        Self(raw)
+    }
+
+    /// The registry id.
+    pub fn raw(self) -> NonZeroU64 {
+        self.0
+    }
+}
+
+/// One armed native-select registration, kept behind the token by the system.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SelectArmToken(NonZeroU64);
+
+impl SelectArmToken {
+    /// Wrap a system-issued registration id.
+    pub fn from_raw(raw: NonZeroU64) -> Self {
+        Self(raw)
+    }
+
+    /// The registry id.
+    pub fn raw(self) -> NonZeroU64 {
+        self.0
+    }
+}
+
+/// The result of arming the idle scheduler's select source.
+#[derive(Clone, Copy, Debug)]
+pub enum SelectArm {
+    /// The registration is armed; use `select_wait_registered`.
+    Armed(SelectArmToken),
+    /// Arming failed (the lower source remembers backend loss).
+    Failed,
+    /// The token no longer names a live handle.
+    Unavailable,
+}
+
+/// An armed select registration whose drop cancels the arm, preserving the
+/// original local-registration lifetime (early returns must not leak an armed
+/// wake registration).
+#[derive(Debug)]
+pub struct SelectArmGuard {
+    arm: Option<SelectArmToken>,
+}
+
+impl SelectArmGuard {
+    /// Arm TOKEN; a failed or unavailable arm yields a guard whose wait reports
+    /// activity, matching the original `Some(Err(_)) => true`.
+    pub fn arm(token: SelectHandleToken) -> Self {
+        match (process_hooks().select.arm)(token) {
+            SelectArm::Armed(arm) => Self { arm: Some(arm) },
+            SelectArm::Failed | SelectArm::Unavailable => Self { arm: None },
+        }
+    }
+
+    /// Wait for the armed registration (consumes the arm so Drop cancels nothing).
+    pub fn wait(&mut self, token: SelectHandleToken, deadline: Instant) -> bool {
+        match self.arm.take() {
+            Some(arm) => (process_hooks().select.wait_registered)(token, arm, deadline),
+            None => true,
+        }
+    }
+}
+
+impl Drop for SelectArmGuard {
+    fn drop(&mut self) {
+        if let Some(arm) = self.arm.take() {
+            (process_hooks().select.cancel_arm)(arm);
+        }
+    }
+}
+
+/// Opaque prepared native-wait handle. The system side keeps
+/// `PreparedNativeWait` behind the token.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct NativeWaitToken(NonZeroU64);
+
+impl NativeWaitToken {
+    /// Wrap a system-issued wait id.
+    pub fn from_raw(raw: NonZeroU64) -> Self {
+        Self(raw)
+    }
+
+    /// The registry id.
+    pub fn raw(self) -> NonZeroU64 {
+        self.0
+    }
+}
+
+/// GNU's main-owner wait preparation, with the native wait behind a guard.
+#[derive(Debug)]
+pub enum MainWaitPreparation {
+    Ready,
+    Scheduler,
+    Native(NativeWaitGuard),
+}
+
+/// One prepared native wait whose drop cancels the preparation, preserving
+/// the original `PreparedNativeWait` lifetime on abandoned park requests.
+#[derive(Debug)]
+pub struct NativeWaitGuard {
+    token: Option<NativeWaitToken>,
+}
+
+impl NativeWaitGuard {
+    /// Wrap a system-issued token (core's prepare slot).
+    pub fn from_raw(token: NativeWaitToken) -> Self {
+        Self { token: Some(token) }
+    }
+
+    /// Run the prepared wait; the guard no longer cancels on drop.
+    pub fn wait_with(
+        &mut self,
+        handoff: &mut super::MainNativeHandoff<'_>,
+    ) -> std::io::Result<crate::host_effect::wake::ControlWakeOutcome> {
+        match self.token.take() {
+            Some(token) => (process_hooks().main_wait.wait)(token, handoff),
+            None => Err(std::io::Error::other("native wait token already consumed")),
+        }
+    }
+}
+
+impl Drop for NativeWaitGuard {
+    fn drop(&mut self) {
+        if let Some(token) = self.token.take() {
+            (process_hooks().main_wait.cancel)(token);
+        }
+    }
+}
+
+/// The cold main-owner wait bodies.
+#[derive(Clone, Copy)]
+pub struct MainWaitHooks {
+    prepare: fn(&mut Context, Instant) -> MainWaitPreparation,
+    wait: fn(
+        NativeWaitToken,
+        &mut super::MainNativeHandoff<'_>,
+    ) -> std::io::Result<crate::host_effect::wake::ControlWakeOutcome>,
+    cancel: fn(NativeWaitToken),
+}
+
+impl MainWaitHooks {
+    /// Build the main-wait group.
+    pub const fn new(
+        prepare: fn(&mut Context, Instant) -> MainWaitPreparation,
+        wait: fn(
+            NativeWaitToken,
+            &mut super::MainNativeHandoff<'_>,
+        ) -> std::io::Result<crate::host_effect::wake::ControlWakeOutcome>,
+        cancel: fn(NativeWaitToken),
+    ) -> Self {
+        Self {
+            prepare,
+            wait,
+            cancel,
+        }
+    }
+}
+
+/// The cold select-source bodies the green scheduler calls.
+#[allow(private_interfaces)] // host_effect vocabulary becomes eval-owned at W5/E13
+#[derive(Clone, Copy)]
+pub struct SelectHooks {
+    handle: fn(&mut Context) -> Option<SelectHandleToken>,
+    notify: fn(SelectHandleToken),
+    nudge: fn(SelectHandleToken, ControlDestination, ControlNudge),
+    control_source: fn(SelectHandleToken) -> Option<Arc<ControlWake>>,
+    wait_until: fn(SelectHandleToken, Instant) -> bool,
+    arm: fn(SelectHandleToken) -> SelectArm,
+    wait_registered: fn(SelectHandleToken, SelectArmToken, Instant) -> bool,
+    cancel_arm: fn(SelectArmToken),
+}
+
+impl SelectHooks {
+    /// Build the select-source group.
+    #[allow(clippy::too_many_arguments)] // one cold descriptor, one call site
+    pub const fn new(
+        handle: fn(&mut Context) -> Option<SelectHandleToken>,
+        notify: fn(SelectHandleToken),
+        nudge: fn(SelectHandleToken, ControlDestination, ControlNudge),
+        control_source: fn(SelectHandleToken) -> Option<Arc<ControlWake>>,
+        wait_until: fn(SelectHandleToken, Instant) -> bool,
+        arm: fn(SelectHandleToken) -> SelectArm,
+        wait_registered: fn(SelectHandleToken, SelectArmToken, Instant) -> bool,
+        cancel_arm: fn(SelectArmToken),
+    ) -> Self {
+        Self {
+            handle,
+            notify,
+            nudge,
+            control_source,
+            wait_until,
+            arm,
+            wait_registered,
+            cancel_arm,
+        }
+    }
+}
+
+/// The cold process-IO bodies eval calls.
 #[derive(Clone, Copy)]
 pub struct ProcessHooks {
     unlink: UnlinkOwnedUnixListener,
     delete: DeleteProcess,
     open_channel: OpenChannelForModule,
     print_handle: PrintProcessHandle,
+    select: SelectHooks,
+    main_wait: MainWaitHooks,
 }
 
 impl ProcessHooks {
@@ -45,12 +258,16 @@ impl ProcessHooks {
         delete: DeleteProcess,
         open_channel: OpenChannelForModule,
         print_handle: PrintProcessHandle,
+        select: SelectHooks,
+        main_wait: MainWaitHooks,
     ) -> Self {
         Self {
             unlink,
             delete,
             open_channel,
             print_handle,
+            select,
+            main_wait,
         }
     }
 }
@@ -108,4 +325,38 @@ pub fn open_channel_for_module(ctx: &mut Context, process: Value) -> Result<std:
 /// The printed representation of a process object.
 pub fn print_process_handle(value: &Value) -> Option<String> {
     (process_hooks().print_handle)(value)
+}
+
+/// Capture the world's process-select handle as an eval token.
+pub fn select_handle(ctx: &mut Context) -> Option<SelectHandleToken> {
+    (process_hooks().select.handle)(ctx)
+}
+
+/// Wake the idle scheduler's select source.
+pub fn select_notify(token: SelectHandleToken) {
+    (process_hooks().select.notify)(token)
+}
+
+/// Nudge one native destination of the select source.
+pub fn select_nudge(
+    token: SelectHandleToken,
+    destination: ControlDestination,
+    reason: ControlNudge,
+) {
+    (process_hooks().select.nudge)(token, destination, reason)
+}
+
+/// The backend's existing readiness owner, when the token is live.
+pub fn select_control_source(token: SelectHandleToken) -> Option<Arc<ControlWake>> {
+    (process_hooks().select.control_source)(token)
+}
+
+/// Recheck select readiness without arming (a registered wait is live).
+pub fn select_wait_until(token: SelectHandleToken, deadline: Instant) -> bool {
+    (process_hooks().select.wait_until)(token, deadline)
+}
+
+/// Prepare the main owner's native wait (the handle stays behind a token).
+pub fn prepare_main_wait(ctx: &mut Context, deadline: Instant) -> MainWaitPreparation {
+    (process_hooks().main_wait.prepare)(ctx, deadline)
 }
