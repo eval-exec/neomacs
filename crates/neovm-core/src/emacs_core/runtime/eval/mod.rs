@@ -14,6 +14,7 @@ use strum::{EnumString, IntoStaticStr};
 use self::data::minibuffer::MinibufferManager;
 use self::data::xwidget;
 use self::interactive_registry::InteractiveRegistry;
+use self::keymap_lookup::{list_keymap_define, list_keymap_set_parent, make_sparse_list_keymap};
 use self::protocol::tty_host::TtyFrameHostFactory;
 pub use self::protocol::{DisplayHost, FrameFontRequest};
 pub use self::protocol::{
@@ -37,7 +38,6 @@ use super::intern::{
     SymId, WellKnown, format_symbol_name_for_diagnostic, intern, intern_uninterned,
     is_canonical_id, is_keyword_id, resolve_sym, symbol_name_id,
 };
-use super::keymap::{list_keymap_define, list_keymap_set_parent, make_sparse_list_keymap};
 use super::mode::ModeRegistry;
 use super::print::map_flow;
 use super::rect::RectangleState;

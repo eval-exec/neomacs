@@ -8,7 +8,10 @@
 //! (`&mut LocalType` is a fundamental-type local impl).
 
 use super::*;
-use crate::emacs_core::chartable::{builtin_char_table_range_with_style, is_char_table};
+use crate::emacs_core::chartable::{
+    builtin_char_table_range_with_style, builtin_set_char_table_range_with_style, is_char_table,
+    make_char_table_value,
+};
 use crate::tagged::value::SymbolMode;
 use neovm_value::keyboard_pure::{
     KEY_CHAR_ALT, KEY_CHAR_CODE_MASK, KEY_CHAR_CTRL, KEY_CHAR_HYPER, KEY_CHAR_META,
@@ -2130,4 +2133,300 @@ fn list_keymap_lookup_composed_seq(
         }
     }
     None
+}
+
+/// Create a sparse list keymap: `(keymap)` — a single-element list.
+pub fn make_sparse_list_keymap() -> Value {
+    Value::list(vec![KeymapMarker::Keymap.symbol_value()])
+}
+
+pub fn list_keymap_define(keymap: Value, event: Value, def: Value, symbol_mode: SymbolMode) {
+    note_keymap_mutation();
+    store_in_keymap(keymap, event, def, false, symbol_mode);
+}
+
+/// Remove a binding from a keymap, matching GNU `define-key` with REMOVE arg.
+pub fn list_keymap_remove(keymap: Value, event: Value, symbol_mode: SymbolMode) {
+    // GNU `store_in_keymap` flushes the reverse keymap cache on every store,
+    // including REMOVE (src/keymap.c:733-736). Filters can run arbitrary Lisp
+    // (and rebuild that cache) between the caller's epoch bump and this
+    // store, so the removal must invalidate it just like a definition does.
+    note_keymap_mutation();
+    store_in_keymap(keymap, event, Value::NIL, true, symbol_mode);
+}
+
+fn keymap_character_range(event: &Value) -> Option<(i64, i64)> {
+    if !event.is_cons() {
+        return None;
+    }
+    let from = event.cons_car().as_fixnum()?;
+    let to = event.cons_cdr().as_fixnum()?;
+    (0..=KEY_CHAR_CODE_MASK).contains(&from).then_some(())?;
+    (0..=KEY_CHAR_CODE_MASK).contains(&to).then_some(())?;
+    (from <= to).then_some((from, to))
+}
+
+fn keymap_storage_event(event: Value, symbol_mode: SymbolMode) -> Value {
+    if event.is_cons() && keymap_character_range(&event).is_none() {
+        reorder_event_symbol_modifiers(symbol_mode.unwrap(event.cons_car()), SymbolMode::Bare)
+    } else {
+        reorder_event_symbol_modifiers(symbol_mode.unwrap(event), SymbolMode::Bare)
+    }
+}
+
+fn keymap_char_table_store_value(def: Value, remove: bool) -> Value {
+    if remove {
+        Value::NIL
+    } else if def.is_nil() {
+        // nil has special meaning for char-tables (unbound), so use Qt for an
+        // explicitly nil key binding.
+        Value::T
+    } else {
+        def
+    }
+}
+
+fn keymap_delq_after(insertion_point: Value, elt: Value, symbol_mode: SymbolMode) {
+    let mut previous = insertion_point;
+    let mut cursor = insertion_point.cons_cdr();
+    while cursor.is_cons() {
+        let entry = cursor.cons_car();
+        let next = cursor.cons_cdr();
+        if eq_value_swp(&entry, &elt, symbol_mode == SymbolMode::Positioned) {
+            previous.set_cdr(next);
+            return;
+        }
+        previous = cursor;
+        cursor = next;
+    }
+}
+
+/// Core store/remove implementation matching GNU `store_in_keymap`.
+fn store_in_keymap(keymap: Value, event: Value, def: Value, remove: bool, symbol_mode: SymbolMode) {
+    if !keymap.is_cons() {
+        return;
+    };
+    let root_car = keymap.cons_car();
+    let root_cdr = keymap.cons_cdr();
+    if !KeymapMarker::Keymap.is_value(root_car, symbol_mode) {
+        return;
+    }
+    let event = keymap_storage_event(event, symbol_mode);
+
+    // Scan the keymap for existing bindings, tracking insertion point.
+    //
+    // GNU `keymap.c:779-880`: `insertion_point` starts at `keymap`
+    // (the head cons holding the `keymap` symbol). It is **only**
+    // advanced when a vector or char-table element is encountered, so
+    // that those high-density elements stay at the front of the alist
+    // and character lookups stay fast. For ordinary alist bindings
+    // `insertion_point` stays at the head, which means the final
+    // `XSETCDR (insertion_point, Fcons (elt, XCDR (insertion_point)))`
+    // **prepends** the new entry right after the `keymap` symbol —
+    // i.e. newest binding first.
+    //
+    // The previous neomacs implementation advanced `insertion_point`
+    // on every iteration (including alist entries), so new bindings
+    // were appended at the **tail** instead. That divergence is
+    // observable: it inverts the order produced by `map_keymap_canonical`
+    // / `list_keymap_for_each_binding`, which surfaces e.g. as a
+    // backwards menu bar (`menu-bar.el` calls `define-key global-map
+    // [menu-bar tools]` then `[menu-bar buffer]` etc., and walking
+    // the resulting keymap should yield them in reverse insertion
+    // order — newest first — to match GNU's `display_menu_bar`).
+    let mut insertion_point = keymap;
+    let mut cursor = root_cdr;
+    while cursor.is_cons() {
+        if is_list_keymap(&cursor, symbol_mode) {
+            // Hit a parent keymap boundary — stop scanning
+            break;
+        }
+        let entry_car = cursor.cons_car();
+        let entry_cdr = cursor.cons_cdr();
+
+        // Char-table: handle plain character events and character ranges.
+        // GNU keymap.c:805-829
+        if is_char_table(&entry_car) {
+            if let Some(code) = event.as_fixnum() {
+                let mods = code & KEY_CHAR_MOD_MASK;
+                if mods == 0 {
+                    let base = code & KEY_CHAR_CODE_MASK;
+                    if (0..=0x3FFFFF).contains(&base) {
+                        let store_val = keymap_char_table_store_value(def, remove);
+                        let _ = builtin_set_char_table_range_with_style(
+                            vec![entry_car, event, store_val],
+                            None,
+                            symbol_mode,
+                        );
+                        return;
+                    }
+                }
+            } else if event.is_cons() && keymap_character_range(&event).is_some() {
+                let store_val = keymap_char_table_store_value(def, remove);
+                let _ = builtin_set_char_table_range_with_style(
+                    vec![entry_car, event, store_val],
+                    None,
+                    symbol_mode,
+                );
+                return;
+            }
+            // GNU keymap.c:829: char-table found, advance insertion_point
+            // so a future prepend lands AFTER the char-table.
+            insertion_point = cursor;
+            cursor = entry_cdr;
+            continue;
+        }
+
+        // Vector element: check for matching index or update the covered
+        // prefix of a character range.
+        // GNU keymap.c:783-803
+        if entry_car.is_vector() {
+            if let Some(code) = event.as_fixnum() {
+                let idx = code as usize;
+                let updated = entry_car
+                    .as_vector_data()
+                    .is_some_and(|vec_data| idx < vec_data.len())
+                    && entry_car.set_vector_slot(idx, def);
+                if updated {
+                    return;
+                }
+            } else if let Some((from, to)) = keymap_character_range(&event)
+                && let Some(vec_data) = entry_car.as_vector_data()
+                && from < vec_data.len() as i64
+            {
+                let last = to.min(vec_data.len() as i64 - 1);
+                for code in from..=last {
+                    entry_car.set_vector_slot(code as usize, def);
+                }
+                if to == last {
+                    return;
+                }
+            }
+            // GNU keymap.c:803: vector found, advance insertion_point
+            // so a future prepend lands AFTER the vector.
+            insertion_point = cursor;
+            cursor = entry_cdr;
+            continue;
+        }
+
+        // Embedded sub-keymap in a composed keymap.  GNU retargets the write
+        // into this real component map because the containing map may be a
+        // temporary keymap produced by access_keymap/make-composed-keymap.
+        if entry_car.is_cons() && is_list_keymap(&entry_car, symbol_mode) {
+            insertion_point = entry_car;
+            cursor = entry_car.cons_cdr();
+            continue;
+        }
+
+        // Alist entry: (EVENT . DEF) — check for existing binding to update in-place.
+        // GNU keymap.c:842-849
+        if entry_car.is_cons() {
+            let binding_car = entry_car.cons_car();
+            if let Some((from, to)) = keymap_character_range(&event) {
+                if let Some(code) = binding_car.as_fixnum()
+                    && (from..=to).contains(&code)
+                {
+                    if remove {
+                        keymap_delq_after(insertion_point, entry_car, symbol_mode);
+                    } else {
+                        entry_car.set_cdr(def);
+                    }
+                    if from == to {
+                        return;
+                    }
+                }
+            } else if eq_value_swp(&binding_car, &event, symbol_mode == SymbolMode::Positioned) {
+                if remove {
+                    // GNU uses `Fdelq (elt, insertion_point)`: remove exactly
+                    // this binding cons while preserving earlier alist entries
+                    // that insertion_point intentionally skips over.
+                    keymap_delq_after(insertion_point, entry_car, symbol_mode);
+                } else {
+                    // Update in-place: set the cdr of the binding cons.
+                    entry_car.set_cdr(def);
+                }
+                return;
+            }
+        }
+
+        // Check for 'keymap symbol in spine (start of inherited keymap)
+        // GNU keymap.c:871-876
+        if KeymapMarker::Keymap.is_value(entry_car, symbol_mode) {
+            break;
+        }
+
+        // NOTE: deliberately do NOT advance `insertion_point` here.
+        // GNU keeps it pointing at the keymap head (or the last
+        // vector/char-table) for ordinary alist entries and prompt
+        // strings, so
+        // that the prepend at the end of the function inserts the
+        // new binding at the front of the alist (but after any header
+        // elements).
+        cursor = entry_cdr;
+    }
+
+    // No existing binding found. Prepend the new entry right after
+    // `insertion_point`, matching GNU `keymap.c:898`:
+    //   XSETCDR (insertion_point, Fcons (elt, XCDR (insertion_point)));
+    if !remove {
+        let binding = if event.is_cons() && keymap_character_range(&event).is_some() {
+            let char_table = make_char_table_value(KeymapMarker::Keymap.symbol_value(), Value::NIL);
+            let store_val = keymap_char_table_store_value(def, false);
+            let _ = builtin_set_char_table_range_with_style(
+                vec![char_table, event, store_val],
+                None,
+                symbol_mode,
+            );
+            char_table
+        } else {
+            Value::cons(event, def)
+        };
+        let old_cdr = match insertion_point.kind() {
+            ValueKind::Cons => insertion_point.cons_cdr(),
+            _ => Value::NIL,
+        };
+        let new_cdr = Value::cons(binding, old_cdr);
+        insertion_point.set_cdr(new_cdr);
+    }
+}
+
+/// Set the parent keymap: walk to the last alist cons cell, set its CDR.
+pub fn list_keymap_set_parent(keymap: Value, parent: Value, symbol_mode: SymbolMode) {
+    note_keymap_mutation();
+    if !keymap.is_cons() {
+        return;
+    };
+    let root_car = keymap.cons_car();
+    let root_cdr = keymap.cons_cdr();
+    if !KeymapMarker::Keymap.is_value(root_car, symbol_mode) {
+        return;
+    }
+
+    // Find the last cons cell in the keymap list
+    let mut prev_cell_value = keymap;
+    let mut cursor = root_cdr;
+    loop {
+        if is_list_keymap(&cursor, symbol_mode) || cursor.is_nil() {
+            prev_cell_value.set_cdr(parent);
+            return;
+        }
+        match cursor.kind() {
+            ValueKind::Cons => {
+                let entry_cdr = cursor.cons_cdr();
+                // If cdr is a keymap (existing parent) or nil, we replace it
+                if is_list_keymap(&entry_cdr, symbol_mode) || entry_cdr.is_nil() {
+                    cursor.set_cdr(parent);
+                    return;
+                }
+                prev_cell_value = cursor;
+                cursor = entry_cdr;
+            }
+            _ => {
+                // cursor is either nil or an existing parent keymap
+                // Set previous cell's cdr to the new parent
+                prev_cell_value.set_cdr(parent);
+                return;
+            }
+        }
+    }
 }
