@@ -228,7 +228,7 @@ fn snapshot_row_index_for_pos_or_truncated_line(
 /// `move_it_by_lines (&it, 0)` (src/xdisp.c), so the answer does not depend
 /// on POS lying inside the window's current rows.  Lay out rows from POS's
 /// source line, as vertical motion does, and grow the row budget until a row
-/// holds POS.  `None` means no frontend can lay the window out.
+/// holds POS.  `None` means no frontend can lay the window out now.
 pub(crate) fn screen_line_height_at(
     eval: &mut Context,
     frame: FrameId,
@@ -236,6 +236,13 @@ pub(crate) fn screen_line_height_at(
     buffer: BufferId,
     pos: LispCharPos1,
 ) -> Result<Option<i64>, Flow> {
+    // Lisp run by a layout query (a mode-line `:eval`, a fontification
+    // function) cannot start another one.  GNU measures there; falling back
+    // is closer to that than signaling, as nested chrome Position queries
+    // already do in `query_window_layout_scope`.
+    if eval.window_layout_query_running() {
+        return Ok(None);
+    }
     let Some(source) = eval.buffers.get(buffer) else {
         return Ok(None);
     };
