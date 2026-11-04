@@ -125,7 +125,7 @@ pub(super) struct ExecutionSeed {
 pub(super) struct RegistryHandles {
     pub(super) ccl: super::super::ccl::CclRegistryHandle,
     pub(super) charset: super::super::charset::CharsetRegistryHandle,
-    pub(super) font: super::super::xfaces::FontRegistryHandle,
+    pub(super) font: crate::emacs_core::eval::data::face_registry::FontRegistryHandle,
     pub(super) terminal: crate::emacs_core::eval::data::terminal_state::TerminalRegistryHandle,
     pub(super) hash_table_test: super::super::builtins::HashTableTestRegistryHandle,
     pub(super) file_notify: super::super::builtins::FileNotifyRegistryHandle,
@@ -140,7 +140,7 @@ impl RegistryHandles {
         Self {
             ccl: super::super::ccl::current_ccl_registry_handle(),
             charset: super::super::charset::current_charset_registry_handle(),
-            font: super::super::xfaces::current_font_registry_handle(),
+            font: crate::emacs_core::eval::lifecycle::current_font_registry_handle(),
             terminal: crate::emacs_core::eval::lifecycle::current_terminal_registry_handle(),
             hash_table_test: super::super::builtins::current_hash_table_test_registry_handle(),
             file_notify: super::super::builtins::current_file_notify_registry_handle(),

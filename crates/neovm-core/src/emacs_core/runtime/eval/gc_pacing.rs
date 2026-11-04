@@ -451,7 +451,7 @@ impl Context {
                 visit(root);
             }
             group("font_registry");
-            super::super::xfaces::collect_font_registry_gc_roots(
+            crate::emacs_core::eval::data::face_registry::collect_font_registry_gc_roots(
                 &self.font_registry,
                 &mut registry_roots,
             );
@@ -841,7 +841,7 @@ impl Context {
         self.tagged_heap.install_tagged_heap();
         super::super::ccl::install_ccl_registry_handle(&self.ccl_registry);
         super::super::charset::install_charset_registry_handle(&self.charset_registry);
-        super::super::xfaces::install_font_registry_handle(&self.font_registry);
+        crate::emacs_core::eval::lifecycle::install_font_registry_handle(&self.font_registry);
         if SNAPSHOT_TERMINAL_IDS {
             crate::emacs_core::eval::lifecycle::install_terminal_registry_handle(
                 &self.terminal_registry,

@@ -355,7 +355,7 @@ impl Context {
             fringe_bitmaps: world.global.fringe_bitmaps,
             ccl_registry: super::super::ccl::current_ccl_registry_handle(),
             charset_registry: super::super::charset::current_charset_registry_handle(),
-            font_registry: super::super::xfaces::current_font_registry_handle(),
+            font_registry: crate::emacs_core::eval::lifecycle::current_font_registry_handle(),
             terminal_registry: crate::emacs_core::eval::lifecycle::current_terminal_registry_handle(
             ),
             hash_table_test_registry:

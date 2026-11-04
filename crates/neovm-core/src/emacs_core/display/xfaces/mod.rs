@@ -14,6 +14,9 @@ pub(crate) mod realization;
 
 use crate::emacs_core::error::EvalResult;
 use crate::emacs_core::error::{expect_args, expect_max_args, expect_min_args};
+pub(crate) use crate::emacs_core::eval::data::face_registry::{
+    FaceAttrState, FontRegistryHandle, collect_font_registry_gc_roots,
+};
 use crate::emacs_core::heap_registry::{HeapRegistryHandle, HeapRegistrySlot};
 use crate::emacs_core::intern::resolve_sym;
 use crate::emacs_core::symbol::CanonicalAccess;
@@ -770,8 +773,6 @@ const GNU_BOOTSTRAP_LISP_FACES: &[GnuBootstrapLispFaceId] = &[
     GnuBootstrapLispFaceId::Tooltip,
 ];
 
-const FIRST_DYNAMIC_FACE_ID: i64 = 186;
-
 impl GnuBootstrapLispFaceId {
     fn from_name(name: &str) -> Option<Self> {
         // `name.parse()` (strum `FromStr`) is a linear scan over all ~183
@@ -967,33 +968,6 @@ fn valid_face_box_value(value: Value) -> bool {
     true
 }
 
-pub(crate) struct FaceAttrState {
-    selected_created: HashSet<SymId>,
-    selected_overrides: HashMap<SymId, HashMap<LFaceAttr, Value>>,
-    defaults_overrides: HashMap<SymId, HashMap<LFaceAttr, Value>>,
-    created_lisp_faces: HashSet<SymId>,
-    created_face_ids: HashMap<SymId, i64>,
-    next_created_face_id: i64,
-    face_set_generation: u64,
-    // The sorted name cache follows the same Context as its face definitions.
-    face_name_list_cache: Option<(u64, Arc<[String]>)>,
-}
-
-impl Default for FaceAttrState {
-    fn default() -> Self {
-        Self {
-            selected_created: HashSet::default(),
-            selected_overrides: HashMap::default(),
-            defaults_overrides: HashMap::default(),
-            created_lisp_faces: HashSet::default(),
-            created_face_ids: HashMap::default(),
-            next_created_face_id: FIRST_DYNAMIC_FACE_ID,
-            face_set_generation: 0,
-            face_name_list_cache: None,
-        }
-    }
-}
-
 thread_local! {
     // Context owns the handle; this slot selects its state at activation.
     static FACE_ATTR_STATE: HeapRegistrySlot<FaceAttrState> =
@@ -1020,28 +994,12 @@ pub(crate) fn clear_font_cache_state() {
     FACE_ATTR_STATE.with(|slot| slot.reset(FaceAttrState::default()));
 }
 
-pub(crate) type FontRegistryHandle = HeapRegistryHandle<FaceAttrState>;
-
 pub(crate) fn current_font_registry_handle() -> FontRegistryHandle {
     FACE_ATTR_STATE.with(HeapRegistrySlot::current)
 }
 
 pub(crate) fn install_font_registry_handle(handle: &FontRegistryHandle) {
     FACE_ATTR_STATE.with(|slot| slot.install(handle));
-}
-
-/// Collect GC roots from the collecting Context's face attribute overrides.
-pub(crate) fn collect_font_registry_gc_roots(
-    registry: &FontRegistryHandle,
-    roots: &mut Vec<Value>,
-) {
-    let state = registry.borrow();
-    for attrs in state.selected_overrides.values() {
-        roots.extend(attrs.values().copied());
-    }
-    for attrs in state.defaults_overrides.values() {
-        roots.extend(attrs.values().copied());
-    }
 }
 
 fn is_created_lisp_face(name: &str) -> bool {

@@ -9,6 +9,7 @@ pub mod command_loop;
 pub mod display_spec;
 pub mod dynamic_module_registry;
 pub mod face;
+pub mod face_registry;
 pub mod file_coding;
 pub mod file_name_expand;
 pub(crate) mod fontset_state;

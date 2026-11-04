@@ -3237,7 +3237,7 @@ pub struct Context {
     // Semantic registries belong to this heap; TLS only selects an active view.
     pub(crate) ccl_registry: super::ccl::CclRegistryHandle,
     pub(crate) charset_registry: super::charset::CharsetRegistryHandle,
-    pub(crate) font_registry: super::xfaces::FontRegistryHandle,
+    pub(crate) font_registry: self::data::face_registry::FontRegistryHandle,
     pub(crate) terminal_registry: self::data::terminal_state::TerminalRegistryHandle,
     pub(crate) hash_table_test_registry: super::builtins::HashTableTestRegistryHandle,
     pub(crate) file_notify_registry: super::builtins::FileNotifyRegistryHandle,

@@ -102,7 +102,10 @@ impl Context {
             &self.terminal_registry,
             &mut words,
         );
-        crate::emacs_core::xfaces::collect_font_registry_gc_roots(&self.font_registry, &mut words);
+        crate::emacs_core::eval::data::face_registry::collect_font_registry_gc_roots(
+            &self.font_registry,
+            &mut words,
+        );
         crate::emacs_core::builtins::collect_hash_table_test_registry_gc_roots(
             &self.hash_table_test_registry,
             &mut words,

@@ -205,7 +205,12 @@ static CANONICAL_LIFECYCLE_HOOKS: LifecycleHooks = LifecycleHooks::new(
         apply_mini_window_resize,
         crate::window::resize_pixelwise_with_buffer_constraints,
     ),
-    XfacesHooks::new(xfaces_park_carrier_tls, XFACES_TLS_FINGERPRINT),
+    XfacesHooks::new(
+        xfaces_park_carrier_tls,
+        XFACES_TLS_FINGERPRINT,
+        crate::emacs_core::xfaces::current_font_registry_handle,
+        crate::emacs_core::xfaces::install_font_registry_handle,
+    ),
     crate::emacs_core::timefns::reset_timefns_thread_locals,
     crate::emacs_core::sqlite::reset_sqlite_thread_locals,
 );

@@ -22,6 +22,7 @@
 //! assertion: every call site runs only after construction/dump, so a missing
 //! descriptor means the construction seam itself is broken.
 
+use super::data::face_registry::FontRegistryHandle;
 use super::data::fontset_state::FontsetRegistrySnapshot;
 use super::data::terminal_state::TerminalRegistryHandle;
 use super::data::window_state::{Frame, FrameManager, MiniWindowResize, WindowTree};
@@ -691,6 +692,8 @@ impl TerminalHooks {
 pub struct XfacesHooks {
     park_carrier_tls: fn(),
     carrier_tls_fingerprint: Option<fn(&mut u64)>,
+    current_registry_handle: fn() -> FontRegistryHandle,
+    install_registry_handle: fn(&FontRegistryHandle),
 }
 
 impl XfacesHooks {
@@ -698,10 +701,14 @@ impl XfacesHooks {
     pub const fn new(
         park_carrier_tls: fn(),
         carrier_tls_fingerprint: Option<fn(&mut u64)>,
+        current_registry_handle: fn() -> FontRegistryHandle,
+        install_registry_handle: fn(&FontRegistryHandle),
     ) -> Self {
         Self {
             park_carrier_tls,
             carrier_tls_fingerprint,
+            current_registry_handle,
+            install_registry_handle,
         }
     }
 
@@ -711,6 +718,14 @@ impl XfacesHooks {
 
     fn carrier_tls_fingerprint(&self) -> Option<fn(&mut u64)> {
         self.carrier_tls_fingerprint
+    }
+
+    fn current_registry_handle(&self) -> fn() -> FontRegistryHandle {
+        self.current_registry_handle
+    }
+
+    fn install_registry_handle(&self) -> fn(&FontRegistryHandle) {
+        self.install_registry_handle
     }
 }
 
@@ -1257,4 +1272,14 @@ pub fn xfaces_carrier_tls_fingerprint(h: &mut u64) {
     if let Some(fingerprint) = lifecycle_hooks().xfaces().carrier_tls_fingerprint() {
         fingerprint(h);
     }
+}
+
+/// The collecting Context's face-attribute registry handle.
+pub fn current_font_registry_handle() -> FontRegistryHandle {
+    (lifecycle_hooks().xfaces().current_registry_handle())()
+}
+
+/// Install HANDLE as the current face-attribute registry.
+pub fn install_font_registry_handle(handle: &FontRegistryHandle) {
+    (lifecycle_hooks().xfaces().install_registry_handle())(handle)
 }
