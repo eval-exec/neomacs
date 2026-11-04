@@ -9,13 +9,9 @@ use crate::emacs_core::value::Value;
 use rustc_hash::FxHashMap;
 use std::sync::Arc;
 
-/// The supported geometry operands of one stretch-space display spec.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct SpaceInput {
-    identity: usize,
-    operands: [Option<PixelInput>;
-        <crate::emacs_core::display_spec::DisplaySpaceKey as strum::EnumCount>::COUNT],
-}
+pub(crate) use crate::emacs_core::eval::data::layout_input::pixel_input::{
+    PixelInput, Role, SpaceInput, Token,
+};
 
 impl SpaceInput {
     pub(super) fn capture(value: Value) -> Option<Self> {
@@ -36,33 +32,6 @@ impl SpaceInput {
             operands,
         })
     }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum PixelInput {
-    Atom(usize),
-    Expression(Arc<[Token]>),
-}
-
-/// Prefix encoding, with explicit ends for variadic arithmetic. Back references
-/// make shared subexpressions and cycles finite without recursive Rust stacks.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum Token {
-    Atom(usize),
-    Sum,
-    Difference,
-    AbsolutePixels(usize),
-    Scale(usize),
-    Image(ImageSpecIdentity),
-    End,
-    Reference(usize),
-    Opaque(usize),
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-enum Role {
-    Expression,
-    Arguments,
 }
 
 impl PixelInput {

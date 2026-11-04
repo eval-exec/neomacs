@@ -1,25 +1,11 @@
 //! Owned inputs to GNU invisible_prop's ordered membership checks.
 use crate::emacs_core::value::Value;
 use rustc_hash::FxHashSet;
-use std::sync::Arc;
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct LayoutInvisibilityInput(Selection);
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-enum Selection {
-    #[default]
-    None,
-    All,
-    Entries(Arc<[Entry]>),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct Entry {
-    // GNU first compares the property to the whole entry, including conses.
-    identity: usize,
-    category: Option<(usize, bool)>,
-}
+pub use crate::emacs_core::eval::data::layout_input::invisibility_input::LayoutInvisibilityInput;
+pub(crate) use crate::emacs_core::eval::data::layout_input::invisibility_input::{
+    Entry, Selection,
+};
 
 impl LayoutInvisibilityInput {
     pub(super) fn capture(value: Value) -> Self {

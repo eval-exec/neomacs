@@ -7,9 +7,7 @@
 //! - The **selected window** is the one receiving input.
 //! - The **minibuffer window** is a special single-line window at the bottom.
 
-use crate::buffer::{
-    BufferId, BufferManager, CharLen, CharRange, EmacsByteLen, EmacsByteRange, LispCharPos1,
-};
+use crate::buffer::{BufferId, BufferManager, LispCharPos1};
 use crate::emacs_core::value::{HashTableTest, Value};
 use crate::gc_trace::GcTrace;
 use neomacs_display_protocol::TransitionDirection;
@@ -390,61 +388,12 @@ pub use crate::emacs_core::eval::data::window_state::{
     CharTableLayoutRevision, FrameLayoutInputState, WindowLayoutInputState,
 };
 
-/// Buffer inputs that can change display-row positions or geometry.
-///
-/// The shared projection is used by redisplay skipping. Retained rows and
-/// speculative attempts require the additional typed fontification identity.
-/// All other fields are captured by one monomorphized collector.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct BufferLayoutInputState<Fontification = ()> {
-    pub(crate) id: BufferId,
-    pub(crate) modified_tick: i64,
-    pub(crate) chars_modified_tick: i64,
-    pub(crate) props_modified_tick: i64,
-    pub(crate) overlay_modified_tick: i64,
-    pub(crate) accessible_chars: CharRange,
-    pub(crate) accessible_bytes: EmacsByteRange,
-    pub(crate) total_chars: CharLen,
-    pub(crate) total_emacs_bytes: EmacsByteLen,
-    fontification_functions: Fontification,
-    pub(crate) prefixes: LayoutPrefixInputs,
-    pub(crate) invisibility: LayoutInvisibilityInput,
-    pub(crate) display_table: LayoutDisplayTableInput,
-    pub(crate) word_wrap_policy: WordWrapPolicy,
-}
-
-/// Effective callback identity, captured on this Context's mutator. The
-/// numeric word owns no Lisp object and is never dereferenced from here.
-/// Hook replacement must invalidate retained rows and speculative attempts;
-/// mutable contents and callback visitation retain their existing conservative
-/// redisplay-generation boundary. A unit-valued redisplay projection cannot be
-/// substituted for this typed identity at either freshness boundary.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct FontificationHookIdentity(Option<WindowLayoutValueIdentity>);
-
-pub(crate) type WindowBufferLayoutInputState = BufferLayoutInputState<FontificationHookIdentity>;
-
-/// Owned prefix inputs shared by redisplay skipping, geometry freshness and
-/// row reuse. String contents can change without a buffer modification tick.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct LayoutPrefixInputs {
-    line: LayoutPrefixInput,
-    wrap: LayoutPrefixInput,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-enum LayoutPrefixInput {
-    #[default]
-    Missing,
-    String {
-        content: string_property_input::StringContentInput,
-        display_properties: string_property_input::StringDisplayInputs,
-    },
-    Space(pixel_input::SpaceInput),
-    // Unsupported display specs retain the existing identity contract. This
-    // snapshot does not claim to detect mutations inside arbitrary Lisp graphs.
-    Other(usize),
-}
+pub use crate::emacs_core::eval::data::layout_input::{
+    BufferLayoutInputState, LayoutPrefixInputs, WindowDisplaySnapshotFreshness,
+};
+pub(crate) use crate::emacs_core::eval::data::layout_input::{
+    FontificationHookIdentity, LayoutPrefixInput, WindowBufferLayoutInputState,
+};
 
 impl LayoutPrefixInput {
     fn capture(value: Option<Value>) -> Self {
@@ -1001,79 +950,7 @@ impl PartialEq for PresentedWindowChromeStrings {
 
 impl Eq for PresentedWindowChromeStrings {}
 
-/// Last authoritative redisplay geometry for a live leaf window.
-#[derive(Clone, Debug)]
-pub struct WindowDisplaySnapshot {
-    /// Window identifier this snapshot belongs to.
-    pub window_id: WindowId,
-    /// Character-grid origin stored independently from pixel geometry.
-    pub cell_origin: geometry::CellOrigin,
-    /// Immutable regions produced by the same completed redisplay.
-    pub regions: PresentedWindowRegions,
-    /// Whether redisplay materialized the window body and chrome in this snapshot.
-    pub regions_materialized: bool,
-    /// Body-local row mapping published by the producer, independent of chrome
-    /// row counts retained for compatibility.
-    pub body_rows: Vec<PresentedBodyRowSnapshot>,
-    /// Text-area offset from the window's left edge, in pixels.
-    pub text_area_left_offset: i64,
-    /// Last redisplay mode-line height in pixels.
-    pub mode_line_height: i64,
-    /// Last redisplay header-line height in pixels.
-    pub header_line_height: i64,
-    /// Last redisplay tab-line height in pixels.
-    pub tab_line_height: i64,
-    /// Rooted displayed string objects used by window-chrome glyph rows.
-    pub chrome_strings: PresentedWindowChromeStrings,
-    /// Intended cursor position in the redisplay result, even when no physical
-    /// cursor was emitted.
-    pub logical_cursor: Option<WindowCursorPos>,
-    /// Extent from the same selected glyph as the logical position. Legacy
-    /// snapshots may omit it and retain canonical source-point lookup.
-    pub logical_cursor_dimensions: Option<LogicalCursorDimensions>,
-    /// Last redisplay physical cursor geometry for this window, if the cursor
-    /// was shown.
-    pub phys_cursor: Option<WindowCursorSnapshot>,
-    /// Visible source-position geometry, sorted by `buffer_pos`.
-    pub points: Vec<DisplayPointSnapshot>,
-    /// Shared immutable per-row storage. When present this is authoritative;
-    /// The flat vector is empty under `on` and `verify`; `verify` checks each
-    /// frozen row's encoding roundtrip before publication.
-    pub point_rows: Option<DisplayPointRows>,
-    /// Visible row metrics, sorted by `row`.
-    pub rows: Vec<DisplayRowSnapshot>,
-    /// Completion evidence for the virtual display tail at accessible EOB.
-    pub eob_overlay_motion: EobOverlayMotionCoverage,
-    /// The displayed buffer's `modified_tick` when this snapshot was produced.
-    /// The snapshot is a redisplay cache; a display primitive that reads it
-    /// (e.g. `vertical-motion` with a column target) must treat it as valid
-    /// only while the buffer is unchanged since that redisplay — GNU always
-    /// recomputes from current buffer state. `None` disables the staleness
-    /// gate (used by test fixtures that install a synthetic snapshot).
-    pub buffer_modiff: Option<i64>,
-    /// Complete identity of the layout inputs that produced this snapshot.
-    ///
-    /// Production redisplay records this token. Display primitives compare it
-    /// with the evaluator's current token before consuming rows, so overlay
-    /// edits, narrowing, face changes, display variables and window geometry
-    /// cannot leave query-visible layout stale. `None` is reserved for
-    /// synthetic test fixtures that intentionally install trusted rows.
-    pub layout_freshness: Option<WindowDisplaySnapshotFreshness>,
-    /// Numeric matrix facts produced with this snapshot. Only the retained
-    /// accepted output is current-matrix state; a query snapshot has no
-    /// publication authority. Immutable Arc data is safe for concurrent readers.
-    pub posn_matrix:
-        Option<std::sync::Arc<neomacs_display_protocol::posn_object_extent::PosnMatrixSnapshot>>,
-    /// Test-only numeric policy captured by the snapshot's exclusive producer.
-    /// Published snapshots retain immutable copies; independent mutators share
-    /// no selector, Lisp value, or TLS state. Absent from shipping layouts.
-    #[cfg(any(test, feature = "redisplay-test-policy"))]
-    #[doc(hidden)]
-    pub test_posn_object_extent_mode: Option<PosnObjectExtentMode>,
-    /// Exact end record produced by the same row walk as this snapshot.
-    pub window_end_record: Option<WindowEndRecord>,
-}
-
+pub use crate::emacs_core::eval::data::window_state::WindowDisplaySnapshot;
 static_assertions::assert_impl_all!(WindowDisplaySnapshot: Send, Sync, Clone, std::fmt::Debug);
 static_assertions::assert_not_impl_any!(WindowDisplaySnapshot: Copy);
 
@@ -1099,68 +976,7 @@ pub enum ForcedBodyRedisplay {
     Buffer(BufferId),
 }
 
-/// Monotonic body-redisplay revisions consulted when a window may reuse
-/// retained body rows.
-///
-/// This is deliberately separate from `Context::redisplay_generation`: that
-/// counter also moves for presentation-only work (mode-line/chrome/menu
-/// updates) which must NOT relayout body text. Only an explicit body
-/// invalidation — today GNU `force-window-update` — moves these counters, and
-/// the three scopes below keep a targeted request from escalating unrelated
-/// windows:
-///
-/// - `all`    — every window (nil OBJECT),
-/// - `window` — one live window (and, through `buffer`, its displayed buffer),
-/// - `buffer` — every window displaying that buffer.
-///
-/// Equality is the reuse predicate: any move for this window/buffer pair makes
-/// the retained key differ, which escalates to a full rebuild.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct BodyRedisplayRevision {
-    all: u64,
-    window: u64,
-    buffer: u64,
-}
-
-impl BodyRedisplayRevision {
-    pub(crate) const fn new(all: u64, window: u64, buffer: u64) -> Self {
-        Self {
-            all,
-            window,
-            buffer,
-        }
-    }
-}
-
-/// Opaque identity of every mutable input used to lay out one live window.
-///
-/// Construction and comparison live on `Context`; keeping these fields opaque
-/// prevents individual snapshot consumers from inventing partial freshness
-/// checks that drift apart.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct WindowDisplaySnapshotFreshness {
-    pub(crate) fontset_generation: u64,
-    pub(crate) context_instance_id: u64,
-    pub(crate) window_topology_generation: u64,
-    pub(crate) frame: FrameLayoutInputState,
-    pub(crate) window: WindowLayoutInputState,
-    pub(crate) buffer: WindowBufferLayoutInputState,
-    pub(crate) face_change_count: u64,
-    pub(crate) display_var_change_count: u64,
-    pub(crate) redisplay_generation: u64,
-    /// Body-only invalidation; see [`BodyRedisplayRevision`]. Unlike
-    /// `redisplay_generation` this is NOT aligned away by scroll-surface
-    /// compatibility, so a forced body redisplay also refuses scroll reuse.
-    pub(crate) body_redisplay: BodyRedisplayRevision,
-    pub(crate) media_generation: u64,
-    pub(crate) function_epoch: u64,
-    pub(crate) symbol_property_revision: crate::emacs_core::symbol::SymbolPropertyRevision,
-    /// Every overlay in the buffer could only change faces when this token was
-    /// captured. This excludes structural overlays from point-only query reuse;
-    /// it does not prove that overlay modifications preserve row geometry.
-    pub(crate) overlays_face_only: bool,
-}
-
+pub use crate::emacs_core::eval::data::window_state::BodyRedisplayRevision;
 impl WindowDisplaySnapshotFreshness {
     /// Exact pixel-placement change for a query over the same source rows.
     /// Unlike scroll-surface compatibility, this preserves point, start and

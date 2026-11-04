@@ -9,39 +9,9 @@ use crate::face::{DecorationProperty, LFaceAttr};
 use rustc_hash::FxHashMap;
 use std::sync::Arc;
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(super) struct StringFaceInputs(Arc<[FaceRun]>);
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct FaceRun {
-    start: CharPos0,
-    end: CharPos0,
-    property: FaceProperty,
-    input: Arc<[Token]>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum FaceProperty {
-    Face,
-    FontLockFace,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum Token {
-    Atom(usize),
-    String { bytes: Arc<[u8]>, multibyte: bool },
-    List,
-    Attributes,
-    Filtered,
-    Filter(Option<Arc<[usize]>>),
-    Attribute(LFaceAttr),
-    Decoration,
-    DecorationProperty(DecorationProperty),
-    WidthPair,
-    InlineBitmap,
-    End,
-    Reference(usize),
-}
+pub(crate) use crate::emacs_core::eval::data::layout_input::face_input::{
+    FaceProperty, FaceRun, StringFaceInputs, Token,
+};
 
 enum Work {
     Face(Value),

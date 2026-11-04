@@ -7,6 +7,7 @@
 pub mod command_loop;
 pub mod dynamic_module_registry;
 pub mod face;
+pub mod layout_input;
 pub mod minibuffer;
 pub mod process_spawn;
 pub mod process_tls;

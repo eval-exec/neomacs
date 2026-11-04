@@ -10,18 +10,9 @@ use crate::emacs_core::{
 };
 use std::{ops::ControlFlow, sync::Arc};
 
-/// String storage inputs shared by prefix strings and replacement strings.
-/// Deliberately does not follow display properties recursively: GNU suppresses
-/// recursive string-display replacement. Face inputs are captured separately
-/// from display properties because replacement strings can still carry faces.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct StringContentInput {
-    identity: usize,
-    bytes: Arc<[u8]>,
-    multibyte: bool,
-    properties_tick: u64,
-    faces: super::face_input::StringFaceInputs,
-}
+pub(crate) use crate::emacs_core::eval::data::layout_input::string_property_input::{
+    DisplayRun, SpecInput, SpecPayload, StringContentInput, StringDisplayInputs,
+};
 
 impl StringContentInput {
     pub(super) fn capture(identity: usize, string: &crate::heap_types::LispString) -> Self {
@@ -33,33 +24,6 @@ impl StringContentInput {
             faces: super::face_input::StringFaceInputs::capture(string.intervals()),
         }
     }
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(super) struct StringDisplayInputs(Arc<[DisplayRun]>);
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct DisplayRun {
-    start: CharPos0,
-    end: CharPos0,
-    eval: DisplayEval,
-    specs: Box<[SpecInput]>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct SpecInput {
-    condition: Option<usize>,
-    payload: SpecPayload,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum SpecPayload {
-    Space(SpaceInput),
-    Text(StringContentInput),
-    Image(ImageSpecIdentity),
-    // Preserve order and identity of surrounding specs. Their nested payloads
-    // (modifiers and other resource types) need separate capture.
-    Other(usize),
 }
 
 impl StringDisplayInputs {

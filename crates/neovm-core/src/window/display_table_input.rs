@@ -1,25 +1,11 @@
 //! Owned glyph dependencies beneath an active display table.
 use crate::emacs_core::{chartable, value::Value};
 use rustc_hash::FxHashSet;
-use std::sync::Arc;
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct LayoutDisplayTableInput {
-    table: usize,
-    vectors: Arc<[GlyphVectorInput]>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct GlyphVectorInput {
-    identity: usize,
-    glyphs: Box<[GlyphInput]>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum GlyphInput {
-    Packed(usize),
-    CharacterAndFace { character: usize, face: usize },
-}
+pub use crate::emacs_core::eval::data::layout_input::display_table_input::LayoutDisplayTableInput;
+pub(crate) use crate::emacs_core::eval::data::layout_input::display_table_input::{
+    GlyphInput, GlyphVectorInput,
+};
 
 impl LayoutDisplayTableInput {
     /// Whether this immutable snapshot has no effective display table.

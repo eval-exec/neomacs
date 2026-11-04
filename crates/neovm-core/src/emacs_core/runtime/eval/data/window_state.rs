@@ -1,6 +1,8 @@
 //! Window state records owned by the evaluator layer (stage-4 W1 E2).
 
+use super::layout_input::WindowDisplaySnapshotFreshness;
 use neomacs_display_protocol::PresentedWindowChromeArea;
+use neomacs_display_protocol::frame_glyphs::PresentedWindowRegions;
 use neomacs_display_protocol::posn_frame_pool::PosnFramePool;
 use neomacs_display_protocol::posn_object_extent::PosnPointRole as DisplayPointRole;
 use neovm_edit::buffer::{
@@ -2860,4 +2862,114 @@ impl WindowTree {
             }
         }
     }
+}
+
+// --- E5-FM-3a body redisplay revision (stage-4 W2/E5) ---
+
+/// Monotonic body-redisplay revisions consulted when a window may reuse
+/// retained body rows.
+///
+/// This is deliberately separate from `Context::redisplay_generation`: that
+/// counter also moves for presentation-only work (mode-line/chrome/menu
+/// updates) which must NOT relayout body text. Only an explicit body
+/// invalidation — today GNU `force-window-update` — moves these counters, and
+/// the three scopes below keep a targeted request from escalating unrelated
+/// windows:
+///
+/// - `all`    — every window (nil OBJECT),
+/// - `window` — one live window (and, through `buffer`, its displayed buffer),
+/// - `buffer` — every window displaying that buffer.
+///
+/// Equality is the reuse predicate: any move for this window/buffer pair makes
+/// the retained key differ, which escalates to a full rebuild.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BodyRedisplayRevision {
+    all: u64,
+    window: u64,
+    buffer: u64,
+}
+
+impl BodyRedisplayRevision {
+    pub(crate) const fn new(all: u64, window: u64, buffer: u64) -> Self {
+        Self {
+            all,
+            window,
+            buffer,
+        }
+    }
+}
+
+// --- E5-FM-3a window display snapshot (stage-4 W2/E5) ---
+
+/// Last authoritative redisplay geometry for a live leaf window.
+#[derive(Clone, Debug)]
+pub struct WindowDisplaySnapshot {
+    /// Window identifier this snapshot belongs to.
+    pub window_id: WindowId,
+    /// Character-grid origin stored independently from pixel geometry.
+    pub cell_origin: CellOrigin,
+    /// Immutable regions produced by the same completed redisplay.
+    pub regions: PresentedWindowRegions,
+    /// Whether redisplay materialized the window body and chrome in this snapshot.
+    pub regions_materialized: bool,
+    /// Body-local row mapping published by the producer, independent of chrome
+    /// row counts retained for compatibility.
+    pub body_rows: Vec<PresentedBodyRowSnapshot>,
+    /// Text-area offset from the window's left edge, in pixels.
+    pub text_area_left_offset: i64,
+    /// Last redisplay mode-line height in pixels.
+    pub mode_line_height: i64,
+    /// Last redisplay header-line height in pixels.
+    pub header_line_height: i64,
+    /// Last redisplay tab-line height in pixels.
+    pub tab_line_height: i64,
+    /// Rooted displayed string objects used by window-chrome glyph rows.
+    pub chrome_strings: PresentedWindowChromeStrings,
+    /// Intended cursor position in the redisplay result, even when no physical
+    /// cursor was emitted.
+    pub logical_cursor: Option<WindowCursorPos>,
+    /// Extent from the same selected glyph as the logical position. Legacy
+    /// snapshots may omit it and retain canonical source-point lookup.
+    pub logical_cursor_dimensions: Option<LogicalCursorDimensions>,
+    /// Last redisplay physical cursor geometry for this window, if the cursor
+    /// was shown.
+    pub phys_cursor: Option<WindowCursorSnapshot>,
+    /// Visible source-position geometry, sorted by `buffer_pos`.
+    pub points: Vec<DisplayPointSnapshot>,
+    /// Shared immutable per-row storage. When present this is authoritative;
+    /// The flat vector is empty under `on` and `verify`; `verify` checks each
+    /// frozen row's encoding roundtrip before publication.
+    pub point_rows: Option<DisplayPointRows>,
+    /// Visible row metrics, sorted by `row`.
+    pub rows: Vec<DisplayRowSnapshot>,
+    /// Completion evidence for the virtual display tail at accessible EOB.
+    pub eob_overlay_motion: EobOverlayMotionCoverage,
+    /// The displayed buffer's `modified_tick` when this snapshot was produced.
+    /// The snapshot is a redisplay cache; a display primitive that reads it
+    /// (e.g. `vertical-motion` with a column target) must treat it as valid
+    /// only while the buffer is unchanged since that redisplay — GNU always
+    /// recomputes from current buffer state. `None` disables the staleness
+    /// gate (used by test fixtures that install a synthetic snapshot).
+    pub buffer_modiff: Option<i64>,
+    /// Complete identity of the layout inputs that produced this snapshot.
+    ///
+    /// Production redisplay records this token. Display primitives compare it
+    /// with the evaluator's current token before consuming rows, so overlay
+    /// edits, narrowing, face changes, display variables and window geometry
+    /// cannot leave query-visible layout stale. `None` is reserved for
+    /// synthetic test fixtures that intentionally install trusted rows.
+    pub layout_freshness: Option<WindowDisplaySnapshotFreshness>,
+    /// Numeric matrix facts produced with this snapshot. Only the retained
+    /// accepted output is current-matrix state; a query snapshot has no
+    /// publication authority. Immutable Arc data is safe for concurrent readers.
+    pub posn_matrix:
+        Option<std::sync::Arc<neomacs_display_protocol::posn_object_extent::PosnMatrixSnapshot>>,
+    /// Test-only numeric policy captured by the snapshot's exclusive producer.
+    /// Published snapshots retain immutable copies; independent mutators share
+    /// no selector, Lisp value, or TLS state. Absent from shipping layouts.
+    #[cfg(any(test, feature = "redisplay-test-policy"))]
+    #[doc(hidden)]
+    pub test_posn_object_extent_mode: Option<PosnObjectExtentMode>,
+    /// Exact end record produced by the same row walk as this snapshot.
+    pub window_end_record: Option<WindowEndRecord>,
 }
