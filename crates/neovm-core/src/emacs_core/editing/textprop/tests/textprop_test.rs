@@ -216,7 +216,7 @@ fn put_text_property_outside_range() {
 fn indirect_buffers_share_text_property_updates() {
     crate::test_utils::init_test_tracing();
     let mut eval = eval_with_text("hello");
-    let base = builtin_current_buffer(&mut eval, vec![]).unwrap();
+    let base = builtin_current_buffer(&mut eval.edit.buffers, vec![]).unwrap();
     let indirect =
         builtin_make_indirect_buffer(&mut eval, vec![base, Value::string("*tp-indirect*")])
             .unwrap();

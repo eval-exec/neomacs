@@ -1854,7 +1854,7 @@ fn kill_buffer_optional_arg_and_error_semantics() {
         Value::NIL
     );
     assert!(
-        builtin_current_buffer(&mut eval, vec![])
+        builtin_current_buffer(&mut eval.edit.buffers, vec![])
             .unwrap()
             .is_buffer()
     );
@@ -2148,7 +2148,8 @@ fn buffer_size_and_modified_p_return_defaults_for_deleted_buffer_objects() {
 
     let dead_for_modified = create_unique_test_buffer(&mut eval, "*bm-dead*");
     let _ = builtin_kill_buffer(&mut eval, vec![dead_for_modified]).unwrap();
-    let modified = builtin_buffer_modified_p(&mut eval, vec![dead_for_modified]).unwrap();
+    let modified =
+        builtin_buffer_modified_p(&mut eval.edit.buffers, vec![dead_for_modified]).unwrap();
     assert_eq!(modified, Value::NIL);
 }
 
@@ -2716,7 +2717,7 @@ fn subst_char_in_region_noundo_marks_buffer_modified_like_gnu() {
         Some("a b ")
     );
     assert_eq!(
-        builtin_buffer_modified_p(&mut eval, vec![]).unwrap(),
+        builtin_buffer_modified_p(&mut eval.edit.buffers, vec![]).unwrap(),
         Value::T
     );
 }
@@ -4652,11 +4653,11 @@ fn byte_position_and_clear_bitmap_semantics() {
     let mut eval = super::super::eval::Context::new();
 
     assert_eq!(
-        builtin_byte_to_position(&mut eval, vec![Value::fixnum(1)]).unwrap(),
+        builtin_byte_to_position(&mut eval.edit.buffers, vec![Value::fixnum(1)]).unwrap(),
         Value::fixnum(1)
     );
     assert_eq!(
-        builtin_byte_to_position(&mut eval, vec![Value::fixnum(2)]).unwrap(),
+        builtin_byte_to_position(&mut eval.edit.buffers, vec![Value::fixnum(2)]).unwrap(),
         Value::NIL
     );
 
@@ -4664,19 +4665,19 @@ fn byte_position_and_clear_bitmap_semantics() {
     builtin_insert(&mut eval, vec![Value::string("a\u{00E9}")]).unwrap();
 
     assert_eq!(
-        builtin_byte_to_position(&mut eval, vec![Value::fixnum(1)]).unwrap(),
+        builtin_byte_to_position(&mut eval.edit.buffers, vec![Value::fixnum(1)]).unwrap(),
         Value::fixnum(1)
     );
     assert_eq!(
-        builtin_byte_to_position(&mut eval, vec![Value::fixnum(2)]).unwrap(),
+        builtin_byte_to_position(&mut eval.edit.buffers, vec![Value::fixnum(2)]).unwrap(),
         Value::fixnum(2)
     );
     assert_eq!(
-        builtin_byte_to_position(&mut eval, vec![Value::fixnum(3)]).unwrap(),
+        builtin_byte_to_position(&mut eval.edit.buffers, vec![Value::fixnum(3)]).unwrap(),
         Value::fixnum(2)
     );
     assert_eq!(
-        builtin_byte_to_position(&mut eval, vec![Value::fixnum(4)]).unwrap(),
+        builtin_byte_to_position(&mut eval.edit.buffers, vec![Value::fixnum(4)]).unwrap(),
         Value::fixnum(3)
     );
     assert_eq!(
@@ -4703,20 +4704,21 @@ fn byte_position_and_clear_bitmap_semantics() {
         Value::fixnum(2)
     );
     assert_eq!(
-        builtin_byte_to_position(&mut eval, vec![Value::fixnum(5)]).unwrap(),
+        builtin_byte_to_position(&mut eval.edit.buffers, vec![Value::fixnum(5)]).unwrap(),
         Value::NIL
     );
     assert_eq!(
-        builtin_byte_to_position(&mut eval, vec![Value::fixnum(0)]).unwrap(),
+        builtin_byte_to_position(&mut eval.edit.buffers, vec![Value::fixnum(0)]).unwrap(),
         Value::NIL
     );
     assert_eq!(
-        builtin_byte_to_position(&mut eval, vec![Value::fixnum(-1)]).unwrap(),
+        builtin_byte_to_position(&mut eval.edit.buffers, vec![Value::fixnum(-1)]).unwrap(),
         Value::NIL
     );
 
-    let byte_to_position_type = builtin_byte_to_position(&mut eval, vec![Value::string("x")])
-        .expect_err("byte-to-position should enforce fixnum input");
+    let byte_to_position_type =
+        builtin_byte_to_position(&mut eval.edit.buffers, vec![Value::string("x")])
+            .expect_err("byte-to-position should enforce fixnum input");
     match byte_to_position_type.into_kind() {
         FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
@@ -4725,9 +4727,11 @@ fn byte_position_and_clear_bitmap_semantics() {
         other => panic!("unexpected flow: {other:?}"),
     }
 
-    let byte_to_position_arity =
-        builtin_byte_to_position(&mut eval, vec![Value::fixnum(1), Value::fixnum(2)])
-            .expect_err("byte-to-position should reject wrong arity");
+    let byte_to_position_arity = builtin_byte_to_position(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(1), Value::fixnum(2)],
+    )
+    .expect_err("byte-to-position should reject wrong arity");
     match byte_to_position_arity.into_kind() {
         FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
@@ -9218,7 +9222,8 @@ fn buffer_region_negative_bounds_signal_without_panicking() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval::Context::new();
     builtin_insert(&mut eval, vec![Value::string("abc")]).expect("insert should succeed");
-    let current = builtin_current_buffer(&mut eval, vec![]).expect("current-buffer should work");
+    let current =
+        builtin_current_buffer(&mut eval.edit.buffers, vec![]).expect("current-buffer should work");
 
     let substring_err =
         builtin_buffer_substring(&mut eval, vec![Value::fixnum(-1), Value::fixnum(2)])
@@ -9252,11 +9257,13 @@ fn buffer_region_negative_bounds_signal_without_panicking() {
     }
 
     assert_eq!(
-        builtin_char_after(&mut eval, vec![Value::fixnum(-1)]).expect("char-after should succeed"),
+        builtin_char_after(&mut eval.edit.buffers, vec![Value::fixnum(-1)])
+            .expect("char-after should succeed"),
         Value::NIL
     );
     assert_eq!(
-        builtin_char_before(&mut eval, vec![Value::fixnum(0)]).expect("char-before should succeed"),
+        builtin_char_before(&mut eval.edit.buffers, vec![Value::fixnum(0)])
+            .expect("char-before should succeed"),
         Value::NIL
     );
 }
@@ -9284,11 +9291,13 @@ fn goto_char_rejects_bignum_but_fix_position_builtins_clamp_it() {
     }
 
     assert_eq!(
-        builtin_char_after(&mut eval, vec![positive_big]).expect("char-after should succeed"),
+        builtin_char_after(&mut eval.edit.buffers, vec![positive_big])
+            .expect("char-after should succeed"),
         Value::NIL
     );
     assert_eq!(
-        builtin_char_after(&mut eval, vec![negative_big]).expect("char-after should succeed"),
+        builtin_char_after(&mut eval.edit.buffers, vec![negative_big])
+            .expect("char-after should succeed"),
         Value::NIL
     );
     assert_eq!(
@@ -15115,20 +15124,23 @@ fn set_buffer_multibyte_t_preserves_positions_for_consecutive_eight_bit() {
 
     // 3 eight-bit characters, point preserved at character 2.
     assert_eq!(
-        builtin_point_max(&mut eval, vec![]).unwrap(),
+        builtin_point_max(&mut eval.edit.buffers, vec![]).unwrap(),
         Value::fixnum(4)
     );
-    assert_eq!(builtin_point(&mut eval, vec![]).unwrap(), Value::fixnum(2));
     assert_eq!(
-        builtin_char_after(&mut eval, vec![Value::fixnum(1)]).unwrap(),
+        builtin_point(&mut eval.edit.buffers, vec![]).unwrap(),
+        Value::fixnum(2)
+    );
+    assert_eq!(
+        builtin_char_after(&mut eval.edit.buffers, vec![Value::fixnum(1)]).unwrap(),
         Value::fixnum(0x3FFF00 + 255)
     );
     assert_eq!(
-        builtin_char_after(&mut eval, vec![Value::fixnum(2)]).unwrap(),
+        builtin_char_after(&mut eval.edit.buffers, vec![Value::fixnum(2)]).unwrap(),
         Value::fixnum(0x3FFF00 + 254)
     );
     assert_eq!(
-        builtin_char_after(&mut eval, vec![Value::fixnum(3)]).unwrap(),
+        builtin_char_after(&mut eval.edit.buffers, vec![Value::fixnum(3)]).unwrap(),
         Value::fixnum(0x3FFF00 + 255)
     );
     // position-bytes mirrors the eight-bit byte layout (char N -> byte 2N-1).
@@ -15158,7 +15170,7 @@ fn set_buffer_multibyte_reinterprets_bytes_like_gnu() {
     assert!(!unibyte_ls.is_multibyte());
     assert_eq!(unibyte_ls.as_bytes(), &[0xC3, 0xA9]);
     assert_eq!(
-        builtin_point_max(&mut eval, vec![]).unwrap(),
+        builtin_point_max(&mut eval.edit.buffers, vec![]).unwrap(),
         Value::fixnum(3)
     );
     assert_eq!(
@@ -15182,7 +15194,7 @@ fn set_buffer_multibyte_reinterprets_bytes_like_gnu() {
     assert!(multibyte_ls.is_multibyte());
     assert_eq!(multibyte_ls.as_utf8_str(), Some("é"));
     assert_eq!(
-        builtin_point_max(&mut eval, vec![]).unwrap(),
+        builtin_point_max(&mut eval.edit.buffers, vec![]).unwrap(),
         Value::fixnum(2)
     );
     assert_eq!(
@@ -15200,7 +15212,7 @@ fn set_buffer_multibyte_reinterprets_bytes_like_gnu() {
     let raw = builtin_buffer_string(&mut eval, vec![]).unwrap();
     assert_eq!(decode_value_char_codes(&raw), vec![0x3FFF00 + 200]);
     assert_eq!(
-        builtin_point_max(&mut eval, vec![]).unwrap(),
+        builtin_point_max(&mut eval.edit.buffers, vec![]).unwrap(),
         Value::fixnum(2)
     );
     assert_eq!(
@@ -15393,15 +15405,15 @@ fn byte_position_helpers_count_multibyte_raw_bytes() {
         Value::fixnum(3)
     );
     assert_eq!(
-        builtin_byte_to_position(&mut eval, vec![Value::fixnum(1)]).unwrap(),
+        builtin_byte_to_position(&mut eval.edit.buffers, vec![Value::fixnum(1)]).unwrap(),
         Value::fixnum(1)
     );
     assert_eq!(
-        builtin_byte_to_position(&mut eval, vec![Value::fixnum(2)]).unwrap(),
+        builtin_byte_to_position(&mut eval.edit.buffers, vec![Value::fixnum(2)]).unwrap(),
         Value::fixnum(1)
     );
     assert_eq!(
-        builtin_byte_to_position(&mut eval, vec![Value::fixnum(3)]).unwrap(),
+        builtin_byte_to_position(&mut eval.edit.buffers, vec![Value::fixnum(3)]).unwrap(),
         Value::fixnum(2)
     );
 }
@@ -15429,7 +15441,10 @@ fn set_buffer_multibyte_preserves_marker_and_text_properties() {
 
     builtin_set_buffer_multibyte(&mut eval, vec![Value::NIL]).unwrap();
 
-    assert_eq!(builtin_point(&mut eval, vec![]).unwrap(), Value::fixnum(3));
+    assert_eq!(
+        builtin_point(&mut eval.edit.buffers, vec![]).unwrap(),
+        Value::fixnum(3)
+    );
     assert_eq!(
         crate::emacs_core::marker::marker_position_as_int_with_buffers(&eval.buffers, &marker)
             .expect("marker position"),
@@ -15510,7 +15525,7 @@ fn char_queries_return_nonunicode_emacs_character_codes() {
     builtin_insert_char(&mut eval, vec![Value::fixnum(0x20_0000), Value::fixnum(1)]).unwrap();
 
     assert_eq!(
-        builtin_char_after(&mut eval, vec![Value::fixnum(1)]).unwrap(),
+        builtin_char_after(&mut eval.edit.buffers, vec![Value::fixnum(1)]).unwrap(),
         Value::fixnum(0x20_0000)
     );
     assert_eq!(

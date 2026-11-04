@@ -230,29 +230,29 @@ pub(crate) fn run_buffer_change_major_mode_hook<H: EditHost>(host: &mut H) -> Ev
     run_named_hook_via_host(host, "change-major-mode-hook", &[])
 }
 
-pub(crate) fn builtin_get_buffer_create(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
+pub(crate) fn builtin_get_buffer_create<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_min_args("get-buffer-create", &args, 1)?;
     expect_max_args("get-buffer-create", &args, 2)?;
     match args[0].kind() {
         ValueKind::Veclike(VecLikeType::Buffer) => Ok(args[0]),
         _ => {
             let name = expect_string_lossy(&args[0])?;
-            if let Some(id) = eval.edit.buffers.find_buffer_by_name(&name) {
-                Ok(Value::make_buffer(id))
-            } else {
-                let inhibit_buffer_hooks = args.get(1).is_some_and(|value| !value.is_nil());
-                let id = eval
-                    .edit
-                    .buffers
-                    .create_buffer_with_hook_inhibition(&name, inhibit_buffer_hooks);
-                if !inhibit_buffer_hooks {
-                    run_buffer_list_update_hook(eval)?;
+            let inhibit_buffer_hooks = args.get(1).is_some_and(|value| !value.is_nil());
+            let (id, created) = {
+                let (edit, _) = host.edit_and_vars();
+                if let Some(id) = edit.buffers.find_buffer_by_name(&name) {
+                    (id, false)
+                } else {
+                    let id = edit
+                        .buffers
+                        .create_buffer_with_hook_inhibition(&name, inhibit_buffer_hooks);
+                    (id, true)
                 }
-                Ok(Value::make_buffer(id))
+            };
+            if created && !inhibit_buffer_hooks {
+                run_buffer_list_update_hook(host)?;
             }
+            Ok(Value::make_buffer(id))
         }
     }
 }
@@ -596,11 +596,11 @@ pub(crate) fn builtin_set_buffer_1(
 
 #[cfg(test)]
 pub(crate) fn builtin_current_buffer(
-    eval: &mut super::eval::Context,
+    edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("current-buffer", &args, 0)?;
-    builtin_current_buffer_0(&mut eval.edit.buffers)
+    builtin_current_buffer_0(edit_buffers)
 }
 /// `current-buffer` as registered: fixed arity 0, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a0` case (absent optionals arrive as nil).
@@ -2236,9 +2236,12 @@ pub(crate) fn builtin_command_error_default_function(
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub(crate) fn builtin_point(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_point(
+    edit_buffers: &mut crate::buffer::BufferManager,
+    args: Vec<Value>,
+) -> EvalResult {
     expect_args("point", &args, 0)?;
-    builtin_point_0(&mut eval.edit.buffers)
+    builtin_point_0(edit_buffers)
 }
 
 pub(crate) fn builtin_point_0(edit_buffers: &mut crate::buffer::BufferManager) -> EvalResult {
@@ -2256,9 +2259,12 @@ pub(crate) fn builtin_point_min_0(edit_buffers: &mut crate::buffer::BufferManage
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub(crate) fn builtin_point_max(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_point_max(
+    edit_buffers: &mut crate::buffer::BufferManager,
+    args: Vec<Value>,
+) -> EvalResult {
     expect_args("point-max", &args, 0)?;
-    builtin_point_max_0(&mut eval.edit.buffers)
+    builtin_point_max_0(edit_buffers)
 }
 
 pub(crate) fn builtin_point_max_0(edit_buffers: &mut crate::buffer::BufferManager) -> EvalResult {
@@ -3769,12 +3775,12 @@ pub(crate) fn builtin_widen_0(eval: &mut super::eval::Context) -> EvalResult {
 
 #[cfg(test)]
 pub(crate) fn builtin_buffer_modified_p(
-    eval: &mut super::eval::Context,
+    edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
     crate::emacs_core::error::expect_args_range("buffer-modified-p", &args, 0, 1)?;
     let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
-    builtin_buffer_modified_p_1(&mut eval.edit.buffers, arg(0))
+    builtin_buffer_modified_p_1(edit_buffers, arg(0))
 }
 /// `buffer-modified-p` as registered: fixed arity 1, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
@@ -4083,10 +4089,13 @@ pub(crate) fn builtin_bufferp(args: Vec<Value>) -> EvalResult {
 }
 
 #[cfg(test)]
-pub(crate) fn builtin_char_after(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_char_after(
+    edit_buffers: &mut crate::buffer::BufferManager,
+    args: Vec<Value>,
+) -> EvalResult {
     crate::emacs_core::error::expect_args_range("char-after", &args, 0, 1)?;
     let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
-    builtin_char_after_1(&mut eval.edit.buffers, arg(0))
+    builtin_char_after_1(edit_buffers, arg(0))
 }
 /// `char-after` as registered: fixed arity 1, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
@@ -4140,10 +4149,13 @@ pub(crate) fn builtin_char_after_1(
 }
 
 #[cfg(test)]
-pub(crate) fn builtin_char_before(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_char_before(
+    edit_buffers: &mut crate::buffer::BufferManager,
+    args: Vec<Value>,
+) -> EvalResult {
     crate::emacs_core::error::expect_args_range("char-before", &args, 0, 1)?;
     let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
-    builtin_char_before_1(&mut eval.edit.buffers, arg(0))
+    builtin_char_before_1(edit_buffers, arg(0))
 }
 /// `char-before` as registered: fixed arity 1, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
@@ -4208,11 +4220,11 @@ fn get_byte_from_multibyte_char_code(code: u32) -> EvalResult {
 
 #[cfg(test)]
 pub(crate) fn builtin_byte_to_position(
-    eval: &mut super::eval::Context,
+    edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("byte-to-position", &args, 1)?;
-    builtin_byte_to_position_1(&mut eval.edit.buffers, args[0])
+    builtin_byte_to_position_1(edit_buffers, args[0])
 }
 
 pub(crate) fn builtin_byte_to_position_1(
