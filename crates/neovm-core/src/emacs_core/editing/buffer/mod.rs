@@ -1622,7 +1622,7 @@ pub(crate) fn compare_buffer_substrings_with_canon(
 ) -> EvalResult {
     compare_buffer_substrings_with_translation(buffers, args, |code| {
         canon
-            .and_then(|table| super::chartable::ct_lookup(&table, code as i64).ok())
+            .and_then(|table| neovm_value::chartab::ct_lookup(&table, code as i64).ok())
             .and_then(|value| value.as_fixnum())
             .filter(|&mapped| {
                 (0..=crate::emacs_core::emacs_char::MAX_CHAR as i64).contains(&mapped)
