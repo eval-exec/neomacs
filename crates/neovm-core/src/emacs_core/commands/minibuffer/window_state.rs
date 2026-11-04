@@ -8,6 +8,7 @@
 //! this module names them downward through `crate::emacs_core::reader`.
 
 use crate::buffer::LispCharPos1;
+use crate::emacs_core::minibuffer::MinibufferManagerExt;
 use crate::emacs_core::reader::{
     ActiveMinibufferWindowState, CallingFrame, MinibufferBufferUnwind, MinibufferExitDisposition,
     MinibufferOwnerFrame, MinibufferSessionUnwind,

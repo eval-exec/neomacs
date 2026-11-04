@@ -7,6 +7,7 @@
 //! through the narrow methods below.
 
 use super::*;
+use crate::emacs_core::minibuffer::MinibufferManagerExt;
 use std::ptr::NonNull;
 
 macro_rules! global_state {

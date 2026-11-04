@@ -203,7 +203,11 @@ pub use crate::emacs_core::eval::data::minibuffer::{
 static_assertions::assert_eq_size!(CompletionDirectory, LispString);
 static_assertions::assert_not_impl_any!(CompletionDirectory: Send, Sync);
 
-impl CompletionTable {
+pub trait CompletionTableExt {
+    fn candidates(&self, input: &LispString) -> Vec<LispString>;
+}
+
+impl CompletionTableExt for CompletionTable {
     /// Extract the raw string candidates from the table.
     ///
     /// For `Function` tables the `input` is passed through; for static tables it
@@ -288,7 +292,16 @@ impl MinibufferInitialContents {
     }
 }
 
-impl MinibufferState {
+pub trait MinibufferStateExt {
+    fn new(
+        buffer_id: BufferId,
+        prompt: LispString,
+        initial: Option<&MinibufferInitialContents>,
+        depth: usize,
+    ) -> Self;
+}
+
+impl MinibufferStateExt for MinibufferState {
     fn new(
         buffer_id: BufferId,
         prompt: LispString,
@@ -506,8 +519,80 @@ impl MinibufferEntryPermit {
     }
 }
 
-impl MinibufferManager {
-    pub fn new() -> Self {
+pub trait MinibufferManagerExt {
+    fn new() -> Self;
+
+    fn prepare_entry(
+        &self,
+        policy: RecursiveMinibufferPolicy,
+    ) -> Result<MinibufferEntryPermit, MinibufferEntryRejection>;
+
+    fn enter_with_permit(
+        &mut self,
+        permit: MinibufferEntryPermit,
+        buffer_id: BufferId,
+        prompt: &LispString,
+        initial: Option<&MinibufferInitialContents>,
+        history_name: Option<SymId>,
+    ) -> &mut MinibufferState;
+
+    fn read_from_minibuffer_lisp(
+        &mut self,
+        buffer_id: BufferId,
+        prompt: &LispString,
+        initial: Option<&LispString>,
+        history_name: Option<SymId>,
+    ) -> Result<&mut MinibufferState, Flow>;
+
+    fn read_from_minibuffer(
+        &mut self,
+        buffer_id: BufferId,
+        prompt: &str,
+        initial: Option<&str>,
+        history_name: Option<SymId>,
+    ) -> Result<&mut MinibufferState, Flow>;
+
+    fn try_complete(&self, state: &MinibufferState) -> CompletionResult;
+
+    fn all_completions(&self, prefix: &LispString, table: &CompletionTable) -> Vec<LispString>;
+
+    fn try_completion_string(
+        &self,
+        prefix: &LispString,
+        table: &CompletionTable,
+    ) -> Option<LispString>;
+
+    fn test_completion(&self, string: &LispString, table: &CompletionTable) -> bool;
+
+    fn exit_minibuffer(&mut self) -> Option<LispString>;
+
+    fn abort_minibuffer(&mut self);
+
+    fn history_previous(&mut self) -> Option<LispString>;
+
+    fn history_next(&mut self) -> Option<LispString>;
+
+    fn add_to_history(&mut self, name: SymId, value: &str, max_length: usize);
+
+    fn add_to_history_lisp(&mut self, name: SymId, value: LispString, max_length: usize);
+
+    fn history_length_from_obarray(vars: VariableView<'_>) -> usize;
+
+    fn current(&self) -> Option<&MinibufferState>;
+
+    fn current_mut(&mut self) -> Option<&mut MinibufferState>;
+
+    fn depth(&self) -> usize;
+
+    fn is_active(&self) -> bool;
+
+    fn has_buffer(&self, buffer_id: BufferId) -> bool;
+
+    fn set_completion_style(&mut self, style: CompletionStyle);
+}
+
+impl MinibufferManagerExt for MinibufferManager {
+    fn new() -> Self {
         Self {
             state_stack: Vec::new(),
             history: MinibufferHistory::new(),
@@ -522,7 +607,7 @@ impl MinibufferManager {
     /// This is deliberately side-effect free. GNU `read_minibuf` rejects a
     /// prohibited recursive read before selecting or clearing a minibuffer
     /// window; callers must obtain this permit before doing either.
-    pub(crate) fn prepare_entry(
+    fn prepare_entry(
         &self,
         policy: RecursiveMinibufferPolicy,
     ) -> Result<MinibufferEntryPermit, MinibufferEntryRejection> {
@@ -546,7 +631,7 @@ impl MinibufferManager {
         })
     }
 
-    pub(crate) fn enter_with_permit(
+    fn enter_with_permit(
         &mut self,
         permit: MinibufferEntryPermit,
         buffer_id: BufferId,
@@ -576,7 +661,7 @@ impl MinibufferManager {
     ///
     /// Returns a fresh `MinibufferState` that has been pushed onto the stack.
     /// The caller can further configure it (completion table, require-match, default).
-    pub(crate) fn read_from_minibuffer_lisp(
+    fn read_from_minibuffer_lisp(
         &mut self,
         buffer_id: BufferId,
         prompt: &LispString,
@@ -591,7 +676,7 @@ impl MinibufferManager {
     }
 
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    pub(crate) fn read_from_minibuffer(
+    fn read_from_minibuffer(
         &mut self,
         buffer_id: BufferId,
         prompt: &str,
@@ -604,7 +689,7 @@ impl MinibufferManager {
     }
 
     /// Attempt to complete the current minibuffer content.
-    pub fn try_complete(&self, state: &MinibufferState) -> CompletionResult {
+    fn try_complete(&self, state: &MinibufferState) -> CompletionResult {
         match &state.completion_table {
             Some(table) => {
                 let matches = self.all_completions(&state.content, table);
@@ -625,7 +710,7 @@ impl MinibufferManager {
     }
 
     /// Return all completions of `prefix` against `table`.
-    pub fn all_completions(&self, prefix: &LispString, table: &CompletionTable) -> Vec<LispString> {
+    fn all_completions(&self, prefix: &LispString, table: &CompletionTable) -> Vec<LispString> {
         let candidates = table.candidates(prefix);
         match self.completion_style {
             CompletionStyle::Prefix => prefix_match(prefix, &candidates),
@@ -637,7 +722,7 @@ impl MinibufferManager {
 
     /// Try to complete `prefix` to the longest common prefix of all matches.
     /// Returns `None` if there are no matches.
-    pub fn try_completion_string(
+    fn try_completion_string(
         &self,
         prefix: &LispString,
         table: &CompletionTable,
@@ -647,13 +732,13 @@ impl MinibufferManager {
     }
 
     /// Test whether `string` is an exact match in `table`.
-    pub fn test_completion(&self, string: &LispString, table: &CompletionTable) -> bool {
+    fn test_completion(&self, string: &LispString, table: &CompletionTable) -> bool {
         let candidates = table.candidates(string);
         candidates.iter().any(|candidate| candidate == string)
     }
 
     /// Exit the current minibuffer, returning its content (or the default if empty).
-    pub fn exit_minibuffer(&mut self) -> Option<LispString> {
+    fn exit_minibuffer(&mut self) -> Option<LispString> {
         if let Some(mut state) = self.state_stack.pop() {
             state.active = false;
             let result = if state.content.is_empty() {
@@ -671,14 +756,14 @@ impl MinibufferManager {
     }
 
     /// Abort the current minibuffer (like C-g).
-    pub fn abort_minibuffer(&mut self) {
+    fn abort_minibuffer(&mut self) {
         if let Some(mut state) = self.state_stack.pop() {
             state.active = false;
         }
     }
 
     /// Navigate to the previous (older) history entry.
-    pub fn history_previous(&mut self) -> Option<LispString> {
+    fn history_previous(&mut self) -> Option<LispString> {
         let state = self.state_stack.last_mut()?;
         let history = &state.history;
         if history.is_empty() {
@@ -702,7 +787,7 @@ impl MinibufferManager {
     }
 
     /// Navigate to the next (newer) history entry.
-    pub fn history_next(&mut self) -> Option<LispString> {
+    fn history_next(&mut self) -> Option<LispString> {
         let state = self.state_stack.last_mut()?;
         match state.history_position {
             None => None,
@@ -727,16 +812,16 @@ impl MinibufferManager {
     ///
     /// `max_length` controls how many entries to keep.  Callers should read
     /// the `history-length` symbol from the obarray (default 100).
-    pub fn add_to_history(&mut self, name: SymId, value: &str, max_length: usize) {
+    fn add_to_history(&mut self, name: SymId, value: &str, max_length: usize) {
         self.add_to_history_lisp(name, LispString::from_utf8(value), max_length);
     }
 
-    pub fn add_to_history_lisp(&mut self, name: SymId, value: LispString, max_length: usize) {
+    fn add_to_history_lisp(&mut self, name: SymId, value: LispString, max_length: usize) {
         self.history.add(name, value, max_length);
     }
 
     /// Read the effective `history-length` from the obarray, defaulting to 100.
-    pub fn history_length_from_obarray(vars: VariableView<'_>) -> usize {
+    fn history_length_from_obarray(vars: VariableView<'_>) -> usize {
         match vars.value_by_name("history-length") {
             Some(v) if v.is_fixnum() && v.xfixnum() > 0 => v.xfixnum() as usize,
             _ => 100,
@@ -744,33 +829,33 @@ impl MinibufferManager {
     }
 
     /// Reference to the current (innermost) minibuffer state, if any.
-    pub fn current(&self) -> Option<&MinibufferState> {
+    fn current(&self) -> Option<&MinibufferState> {
         self.state_stack.last()
     }
 
     /// Mutable reference to the current (innermost) minibuffer state.
-    pub fn current_mut(&mut self) -> Option<&mut MinibufferState> {
+    fn current_mut(&mut self) -> Option<&mut MinibufferState> {
         self.state_stack.last_mut()
     }
 
     /// Current recursive minibuffer depth (0 = not in minibuffer).
-    pub fn depth(&self) -> usize {
+    fn depth(&self) -> usize {
         self.state_stack.len()
     }
 
     /// Whether any minibuffer is currently active.
-    pub fn is_active(&self) -> bool {
+    fn is_active(&self) -> bool {
         self.state_stack.last().is_some_and(|s| s.active)
     }
 
-    pub fn has_buffer(&self, buffer_id: BufferId) -> bool {
+    fn has_buffer(&self, buffer_id: BufferId) -> bool {
         self.state_stack
             .iter()
             .any(|state| state.buffer_id == buffer_id)
     }
 
     /// Set the completion style.
-    pub fn set_completion_style(&mut self, style: CompletionStyle) {
+    fn set_completion_style(&mut self, style: CompletionStyle) {
         self.completion_style = style;
     }
 }

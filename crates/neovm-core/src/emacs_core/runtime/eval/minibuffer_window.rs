@@ -9,6 +9,7 @@
 //! (`use super::*` keeps the parent's view of `Context` and its imports).
 
 use super::*;
+use crate::emacs_core::minibuffer::MinibufferManagerExt;
 use crate::window::DisplayFrameExt;
 use crate::window::DisplayFrameManagerExt;
 

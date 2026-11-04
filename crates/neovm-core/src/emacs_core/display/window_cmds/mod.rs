@@ -21,6 +21,7 @@ pub(crate) use crate::emacs_core::error::{
     expect_args, expect_args_range, expect_fixnum, expect_max_args, expect_min_args,
 };
 use crate::emacs_core::eval::VariableView;
+use crate::emacs_core::minibuffer::MinibufferManagerExt;
 use crate::window::DisplayFrameExt;
 use crate::window::DisplayFrameManagerExt;
 use crate::window::WindowChromeLine;
