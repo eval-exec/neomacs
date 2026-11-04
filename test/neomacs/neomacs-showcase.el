@@ -4,6 +4,7 @@
 (require 'neomacs-webkit nil t)
 (require 'neomacs-video nil t)
 (require 'neomacs-image nil t)
+(require 'neomacs-effects nil t)
 
 (defvar showcase--log-file "/tmp/neomacs-showcase.log"
   "Path to the log file.")
@@ -304,6 +305,19 @@ The future of text editing is here.  It's called Neomacs.
     (push frame showcase--child-frames)
     frame))
 
+(defun showcase--effect-option (effect)
+  "Return the option `neomacs-effects' generates for gallery EFFECT."
+  (intern (format "neomacs-effect-%s" effect)))
+
+(defun showcase--effect-enable (effect)
+  "Turn on gallery EFFECT, for the callers that only know it at run time.
+`setopt' needs a literal variable name; the rest of this file uses it."
+  (customize-set-variable (showcase--effect-option effect) '(:enabled t)))
+
+(defun showcase--effect-reset (effect)
+  "Restore gallery EFFECT's standard value, which also reaches the renderer."
+  (custom-reevaluate-setting (showcase--effect-option effect)))
+
 (defun showcase--reset-all-effects ()
   "Disable every visual effect for a clean slate."
   (showcase--log "RESET-ALL-EFFECTS called (step=%d)" showcase--step)
@@ -319,7 +333,7 @@ The future of text editing is here.  It's called Neomacs.
       (ignore-errors (neomacs-webkit-close-all))))
   ;; Restore every renderer-defined default, then turn off the one shader
   ;; whose Rust default is intentionally enabled.
-  (neomacs-effects-apply '((cursor-color-cycle :enabled nil))))
+  (neomacs--effects-apply '((cursor-color-cycle :enabled nil))))
 
 (defun showcase--title-card (title &optional subtitle)
   "Show a title card with TITLE and optional SUBTITLE."
@@ -504,9 +518,9 @@ The future of text editing is here.  It's called Neomacs.
                   (goto-char (+ (match-beginning 0) 1)))
                 (redisplay t))))))))
   ;; Breathing border (purple, slow)
-  (neomacs-effect-set 'breathing-border
-                      :enabled t :color "#9966FF"
-                      :min-opacity 0.05 :max-opacity 0.4 :cycle-ms 4000))
+  (setopt neomacs-effect-breathing-border
+          '(:enabled t :color "#9966FF"
+            :min-opacity 0.05 :max-opacity 0.4 :cycle-ms 4000)))
 
 (defun showcase--section-cursor-anim ()
   "Demonstrate smooth cursor with spring physics and glow."
@@ -520,8 +534,10 @@ The future of text editing is here.  It's called Neomacs.
     (recenter)
     (redisplay t)
     ;; Enable smooth cursor + glow + line highlight
-    (neomacs-effect-set 'cursor-glow :enabled t :color "#4D99FF" :radius 40)
-    (neomacs-effect-set 'line-highlight :enabled t)
+    (setopt neomacs-effect-cursor-glow
+            '(:enabled t :color "#4D99FF" :radius 40))
+    (setopt neomacs-effect-line-highlight
+            '(:enabled t))
     ;; Animate cursor through positions
     (let ((delay 0.3))
       (showcase--schedule delay
@@ -596,8 +612,8 @@ The future of text editing is here.  It's called Neomacs.
         (showcase--schedule delay
           (lambda ()
             (showcase--log "  scroll effect: %s" effect)
-            (neomacs-effect-set 'scroll-transition
-                                :enabled t :effect effect)
+            (setopt neomacs-scroll-transition-enabled t
+                    neomacs-scroll-transition-effect effect)
             (message "Scroll Effect: %s" effect)))
         (showcase--schedule (+ delay 0.2)
           (lambda ()
@@ -640,10 +656,11 @@ The future of text editing is here.  It's called Neomacs.
           (showcase--schedule delay
             (lambda ()
               (when old
-                (neomacs-effect-reset old))
-              (neomacs-effect-set effect :enabled t)
+                (showcase--effect-reset old))
+              (showcase--effect-enable effect)
               (when (eq effect 'cursor-color-cycle)
-                (neomacs-effect-set 'cursor-glow :enabled t :radius 35))
+                (setopt neomacs-effect-cursor-glow
+                        '(:enabled t :radius 35)))
               (showcase--log "  cursor effect: %s" name)
               (message "Cursor Effect: %s" name))))
         (setq previous (cdr entry))
@@ -685,7 +702,7 @@ The future of text editing is here.  It's called Neomacs.
             (profile (cadr entry)))
         (showcase--schedule delay
           (lambda ()
-            (neomacs-effects-apply profile)
+            (neomacs--effects-apply profile)
             (showcase--log "  atmosphere: %s" name)
             (message "Atmosphere: %s" name))))
       (setq delay (+ delay 1.0)))))
@@ -702,37 +719,40 @@ The future of text editing is here.  It's called Neomacs.
     (let ((features '((0.2 "Line Numbers"
                        (display-line-numbers-mode 1))
                       (0.8 "Rainbow Indent Guides"
-                       (neomacs-effect-set 'indent-guides
-                                           :enabled t :rainbow-enabled t))
+                       (setopt neomacs-effect-indent-guides
+                               '(:enabled t :rainbow-enabled t)))
                       (1.4 "Line Highlight"
-                       (neomacs-effect-set 'line-highlight :enabled t))
+                       (setopt neomacs-effect-line-highlight
+                               '(:enabled t)))
                       (2.0 "Visible Whitespace"
-                       (neomacs-effect-set 'show-whitespace
-                                           :enabled t :color "#33FF66"))
+                       (setopt neomacs-effect-show-whitespace
+                               '(:enabled t :color "#33FF66")))
                       (2.6 "Minimap"
-                       (neomacs-effect-set 'minimap :enabled t))
+                       (setopt neomacs-effect-minimap
+                               '(:enabled t)))
                       (3.2 "Focus Mode"
-                       (neomacs-effect-set 'focus-mode
-                                           :enabled t :opacity 0.3))
+                       (setopt neomacs-effect-focus-mode
+                               '(:enabled t :opacity 0.3)))
                       (3.8 "Scroll Progress"
-                       (neomacs-effect-set 'scroll-progress :enabled t))
+                       (setopt neomacs-effect-scroll-progress
+                               '(:enabled t)))
                       (4.5 "Split + Inactive Dimming"
                        (progn
                          (split-window-right)
                          (other-window 1)
                          (switch-to-buffer (showcase--insert-prose-buffer))
                          (other-window 1)
-                         (neomacs-effect-set 'inactive-dim
-                                             :enabled t :opacity 0.2)))
+                         (setopt neomacs-effect-inactive-dim
+                                 '(:enabled t :opacity 0.2))))
                       (5.5 "Zen Mode"
                        (progn
                          (delete-other-windows)
-                         (neomacs-effect-reset 'focus-mode)
-                         (neomacs-effect-reset 'minimap)
+                         (showcase--effect-reset 'focus-mode)
+                         (showcase--effect-reset 'minimap)
                          (switch-to-buffer (showcase--insert-prose-buffer))
-                         (neomacs-effect-set 'zen-mode :enabled t
-                                             :content-width-pct 60
-                                             :margin-opacity 0.3))))))
+                         (setopt neomacs-effect-zen-mode
+                                 '(:enabled t :content-width-pct 60
+                                   :margin-opacity 0.3)))))))
       (dolist (feat features)
         (let ((d (nth 0 feat))
               (name (nth 1 feat))
@@ -991,9 +1011,9 @@ The future of text editing is here.  It's called Neomacs.
       (lambda ()
         (showcase--log "  window-trans: focus border")
         (message "Transition: Focus Gradient Border")
-        (neomacs-effect-set 'focus-gradient-border
-                            :enabled t :top-color "#4D99FF"
-                            :bot-color "#FF4DFF" :width 3 :opacity 0.8)))
+        (setopt neomacs-effect-focus-gradient-border
+                '(:enabled t :top-color "#4D99FF"
+                  :bot-color "#FF4DFF" :width 3 :opacity 0.8))))
     (showcase--schedule 4.3
       (lambda ()
         (other-window 1)))
@@ -1240,7 +1260,7 @@ The future of text editing is here.  It's called Neomacs.
       (insert (propertize "RETRO MODE ACTIVATED\n" 'face '(:height 2.0 :foreground "#4DFF4D" :weight bold)))
       (insert "\n")))
   ;; Stack retro effects in one renderer update.
-  (neomacs-effects-apply
+  (neomacs--effects-apply
    '((scanlines :enabled t :spacing 3 :opacity 0.12 :color "#000000")
      (dot-matrix :enabled t)
      (bg-pattern :style 1 :spacing 16 :color "#003300" :opacity 0.08)
@@ -1347,7 +1367,7 @@ The future of text editing is here.  It's called Neomacs.
                 (redisplay t))))))))
 
   ;; Stack the prettiest effects.
-  (neomacs-effects-apply
+  (neomacs--effects-apply
    '((aurora :enabled t :color1 "#33CC66" :color2 "#9966FF"
              :height 100 :opacity 0.2)
      (neon-border :enabled t)
