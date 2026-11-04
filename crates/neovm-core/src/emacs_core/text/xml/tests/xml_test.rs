@@ -713,6 +713,25 @@ fn libxml_parse_html_region_places_non_leading_pis_as_comments() {
 }
 
 #[test]
+fn libxml_parse_html_region_does_not_rewrite_source_placeholder_comments() {
+    crate::test_utils::init_test_tracing();
+
+    // A real comment matching the internal PI marker's shape must keep its
+    // text; only the generated PI comment is restored.
+    // GNU 31.1: (html nil (body nil (p nil "x")
+    //                   (comment nil "neomacs-internal-pi-0")
+    //                   (comment nil "?foo?")))
+    assert_eq!(
+        parse_html_region(br#"<p>x</p><!--neomacs-internal-pi-0--><?foo?>"#, false).unwrap(),
+        html(vec![body(vec![
+            Value::list(vec![Value::symbol("p"), Value::NIL, Value::string("x")]),
+            comment("neomacs-internal-pi-0"),
+            comment("?foo?"),
+        ])])
+    );
+}
+
+#[test]
 fn libxml_parse_html_region_preserves_non_ascii_whitespace_before_prolog() {
     crate::test_utils::init_test_tracing();
 

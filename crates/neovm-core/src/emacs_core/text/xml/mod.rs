@@ -788,6 +788,15 @@ fn convert_tl_node(node: &tl::Node, parser: &tl::Parser, shielded: &ShieldedHtml
     }
 }
 
+/// Build a placeholder that cannot collide with text already in `input`.
+fn unique_placeholder(input: &str, prefix: &str, index: usize) -> String {
+    let mut token = format!("{prefix}{index}");
+    while input.contains(&token) {
+        token.push('_');
+    }
+    token
+}
+
 /// Text elements and processing instructions hidden from `tl`.
 #[derive(Default)]
 struct ShieldedHtml {
@@ -859,7 +868,8 @@ fn shield_html(input: &str) -> (Cow<'_, str>, ShieldedHtml) {
                 Some(end) => (&rest[1..end], end + 1),
                 None => (&rest[1..], rest.len()),
             };
-            let token = format!("neomacs-internal-pi-{}", shielded.pi_comments.len());
+            let token =
+                unique_placeholder(input, "neomacs-internal-pi-", shielded.pi_comments.len());
             protected.push_str("<!--");
             protected.push_str(&token);
             protected.push_str("-->");
@@ -897,10 +907,8 @@ fn shield_html(input: &str) -> (Cow<'_, str>, ShieldedHtml) {
             protected.push_str(&input[index..=open_end]);
             let inner = &after_open[..inner_len];
             if !inner.is_empty() {
-                let token = format!(
-                    "neomacs-rawtext-{}-placeholder",
-                    shielded.text_elements.len()
-                );
+                let token =
+                    unique_placeholder(input, "neomacs-rawtext-", shielded.text_elements.len());
                 protected.push_str(&token);
                 shielded.text_elements.insert(token, inner.to_string());
             }
