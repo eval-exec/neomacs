@@ -8,6 +8,8 @@
 //! and adding a w32 backend means giving this type fields -- at which point the
 //! compiler asks for real bodies.
 
+use crate::emacs_core::eval::data::process_state::Device;
+
 use std::ffi::OsStr;
 use std::io;
 
@@ -16,8 +18,7 @@ use super::{
 };
 use crate::emacs_core::process::ProcessId;
 
-#[derive(Debug)]
-pub enum Device {}
+
 
 #[derive(Debug)]
 pub enum Attributes {}

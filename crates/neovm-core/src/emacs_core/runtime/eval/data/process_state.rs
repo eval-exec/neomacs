@@ -12,6 +12,8 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
 #[cfg(unix)]
+use std::os::fd::OwnedFd;
+#[cfg(unix)]
 use std::os::unix::net::{UnixDatagram, UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -28,7 +30,6 @@ use strum::{EnumString, IntoStaticStr};
 
 use crate::emacs_core::eval::data::process_spawn::SpawnedChild;
 use crate::emacs_core::eval::data::process_tls::TlsStream;
-use crate::emacs_core::process::sys::{ChildStatusSource, SerialPort};
 #[cfg(test)]
 use crate::emacs_core::process::types::NativeConnectObservationSlot;
 use crate::host_effect::wake::{
@@ -651,3 +652,27 @@ pub struct StatusChangeTicks {
     /// GNU `p->update_tick`.
     pub notified: u64,
 }
+
+// Platform process-state leaves (A3 part 3c): the per-backend Source/Device
+// definitions are cfg-congruent with the backend module selection in
+// sys/mod.rs (linux vs fallback) and sys/serial.rs (unix vs unsupported).
+
+#[cfg(target_os = "linux")]
+pub struct Source {
+    pub pidfd: OwnedFd,
+}
+
+#[cfg(not(target_os = "linux"))]
+pub enum Source {}
+
+#[cfg(unix)]
+pub struct Device {
+    pub fd: OwnedFd,
+}
+
+#[cfg(not(unix))]
+pub enum Device {}
+
+pub struct SerialPort(pub Device);
+
+pub struct ChildStatusSource(pub Source);

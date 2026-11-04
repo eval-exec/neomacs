@@ -6,6 +6,8 @@
 //! from the periodic `waitpid(WUNTRACED | WCONTINUED)` scan. `open` returns
 //! `None` on older kernels, where every transition uses that periodic scan.
 
+use crate::emacs_core::eval::data::process_state::Source;
+
 use std::os::fd::{FromRawFd, OwnedFd, RawFd};
 use crate::emacs_core::process::SystemProcessExt;
 
@@ -18,9 +20,7 @@ use crate::emacs_core::process::{
 };
 use crate::emacs_core::value::Value;
 
-pub struct Source {
-    pidfd: OwnedFd,
-}
+
 
 pub fn open(pid: u32) -> Option<Source> {
     let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid as libc::pid_t, 0) };

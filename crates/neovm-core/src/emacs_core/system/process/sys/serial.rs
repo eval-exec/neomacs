@@ -17,6 +17,8 @@
 //! but see [`SerialPort::configure`], which keeps GNU's *ordering* even though
 //! it moved GNU's *code*.
 
+pub use crate::emacs_core::eval::data::process_state::SerialPort;
+
 use std::io;
 
 /// Bits per byte. GNU accepts only 7 or 8 (`serial_configure`,
@@ -99,16 +101,6 @@ std::cfg_select! {
         use unsupported_backend as backend;
     }
 }
-
-/// One open serial device.
-///
-/// There is no constructor but [`SerialPort::open`], no `Default` and no
-/// `Clone`: a value of this type is proof that GNU's `serial_open`
-/// (src/process.c:3212) has run and succeeded. `make-serial-process` cannot
-/// build a process record without one, which is the whole of DIVERGENCES.md
-/// entry 147.
-#[derive(Debug)]
-pub struct SerialPort(backend::Device);
 
 /// A local, modifiable copy of a device's line settings.
 ///

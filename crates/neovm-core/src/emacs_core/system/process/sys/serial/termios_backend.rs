@@ -4,6 +4,8 @@
 //! it narrowed enums and gets back errnos; nothing above it knows that a serial
 //! port is a tty.
 
+use crate::emacs_core::eval::data::process_state::Device;
+
 use std::ffi::{CString, OsStr};
 use crate::emacs_core::process::SystemProcessExt;
 use std::io;
@@ -15,10 +17,7 @@ use super::{
 };
 use crate::emacs_core::process::{ProcessId, ProcessManager};
 
-#[derive(Debug)]
-pub struct Device {
-    fd: OwnedFd,
-}
+
 
 #[derive(Debug)]
 pub struct Attributes(libc::termios);

@@ -7,6 +7,8 @@
 //! dedicated `macos` / `windows` backend selected from `sys::mod`'s
 //! `cfg_select!`, mirroring GNU's per-platform `w32proc.c` implementation.
 
+use crate::emacs_core::eval::data::process_state::Source;
+
 use crate::emacs_core::process::ProcessId;
 use crate::emacs_core::process::{
     HostInterfaceEntry, NetworkAddressFamily, derive_network_interface_info_broadcast,
@@ -14,9 +16,7 @@ use crate::emacs_core::process::{
 };
 use crate::emacs_core::value::Value;
 
-/// Uninhabited: this backend never has a source, which is enforced by the type
-/// system (`open` only ever returns `None`).
-pub enum Source {}
+
 
 pub fn open(_pid: u32) -> Option<Source> {
     None
