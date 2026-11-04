@@ -22,6 +22,7 @@ use crate::emacs_core::builtins::hooks::{
     WindowConfigurationSnapshot, make_window_configuration_value, next_window_configuration_serial,
     window_configuration_frame_from_value, window_configuration_parts_from_value,
 };
+use crate::emacs_core::eval::redisplay_hooks::window_buffer_id_in_state;
 use crate::emacs_core::hook_runtime;
 use crate::emacs_core::intern::WellKnown;
 use crate::emacs_core::value::equal_value;
@@ -72,17 +73,6 @@ fn save_hook_caller_context(eval: &crate::emacs_core::eval::Context) -> HookCall
         selected_window_id,
         current_buffer_id: eval.edit.buffers.current_buffer_id(),
     }
-}
-
-fn window_buffer_id_in_state(
-    eval: &crate::emacs_core::eval::Context,
-    frame_id: neovm_value::display_vocab::FrameId,
-    window_id: neovm_edit::emacs_core::display_metrics::WindowId,
-) -> Option<crate::buffer::BufferId> {
-    eval.frames
-        .get(frame_id)
-        .and_then(|frame| frame.find_window(window_id))
-        .and_then(|window| window.buffer_id())
 }
 
 fn select_frame_window_for_hook_context(
@@ -610,13 +600,9 @@ pub(crate) fn builtin_run_window_configuration_change_hook(
     restore_result
 }
 
-pub(crate) fn run_gnu_committed_scroll_functions(
-    eval: &mut crate::emacs_core::eval::Context,
-    window: neovm_edit::emacs_core::display_metrics::WindowId,
-) -> EvalResult {
-    redisplay_gnu::run_committed_scroll(eval, window)
-}
-
+/// Lisp entry (`run-window-scroll-functions`).  Argument validation stays in
+/// the commands layer; the hook body is redisplay behavior and lives in
+/// display/xdisp with the other GNU `run_window_scroll_functions` callers.
 pub(crate) fn builtin_run_window_scroll_functions(
     eval: &mut crate::emacs_core::eval::Context,
     args: Vec<Value>,
@@ -625,46 +611,8 @@ pub(crate) fn builtin_run_window_scroll_functions(
     if let Some(window) = args.first() {
         expect_optional_live_window_designator(window, eval)?;
     }
-
-    let window_arg = match args.first().copied().unwrap_or(Value::NIL).kind() {
-        ValueKind::Nil => crate::emacs_core::window_cmds::builtin_selected_window(eval, &[])?,
-        _value => args.first().copied().unwrap_or(Value::NIL),
-    };
-    let Some(wid) = window_arg.as_window_id() else {
-        return Ok(Value::NIL);
-    };
-    let window_id = neovm_edit::emacs_core::display_metrics::WindowId(wid);
-    if crate::emacs_core::eval::gnu_redisplay_hooks_enabled() {
-        return redisplay_gnu::run_eager_scroll(eval, window_id);
-    }
-    let frame_id = eval.frames.find_window_frame_id(window_id).ok_or_else(|| {
-        signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("window-live-p"), window_arg],
-        )
-    })?;
-    let window_start = crate::emacs_core::window_cmds::builtin_window_start(eval, &[window_arg])?;
-    let hook_sym = hook_runtime::hook_symbol_by_id(eval, WINDOW_SCROLL_FUNCTIONS.id());
-    let saved_buffer_id = eval.edit.buffers.current_buffer_id();
-    if let Some(buffer_id) = window_buffer_id_in_state(eval, frame_id, window_id) {
-        // GNU `set_window_buffer` temporarily enters the displayed buffer
-        // with `Fset_buffer` before running `window-scroll-functions`
-        // (window.c), which does not call `record_buffer` or change
-        // `buffer-list` recency.
-        let _ = eval.set_current_buffer_unrecorded(buffer_id);
-    }
-    let hook_value = hook_runtime::hook_value_by_id(eval, hook_sym).unwrap_or(Value::NIL);
-    let result = hook_runtime::run_hook_value(
-        eval,
-        hook_sym,
-        hook_value,
-        &[window_arg, window_start],
-        true,
-    );
-    if let Some(buffer_id) = saved_buffer_id {
-        eval.restore_current_buffer_if_live(buffer_id);
-    }
-    result
+    let window_arg = args.first().copied().unwrap_or(Value::NIL);
+    crate::emacs_core::xdisp::run_window_scroll_functions_for_window(eval, window_arg)
 }
 
 #[derive(Clone, Copy)]
@@ -710,8 +658,6 @@ static WINDOW_STATE_CHANGE_FUNCTIONS: WellKnown = WellKnown::WindowStateChangeFu
 static WINDOW_STATE_CHANGE_HOOK: WellKnown = WellKnown::WindowStateChangeHook;
 
 static WINDOW_CONFIGURATION_CHANGE_HOOK: WellKnown = WellKnown::WindowConfigurationChangeHook;
-
-static WINDOW_SCROLL_FUNCTIONS: WellKnown = WellKnown::WindowScrollFunctions;
 
 static INHIBIT_REDISPLAY: WellKnown = WellKnown::InhibitRedisplay;
 

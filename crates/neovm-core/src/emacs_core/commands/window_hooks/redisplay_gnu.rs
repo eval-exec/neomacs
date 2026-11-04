@@ -4,15 +4,16 @@
 
 use super::*;
 use crate::buffer::BufferId;
-use crate::emacs_core::eval::redisplay_hooks::HookWindowDimensions;
+use crate::emacs_core::eval::redisplay_hooks::{
+    BufferContext, HookWindowDimensions, default_hook_value, safe_named_hook,
+    window_buffer_id_in_state,
+};
 use crate::emacs_core::intern::WellKnown;
 use crate::window::DisplayFrameExt;
-use crate::window::DisplayFrameManagerExt;
 use neovm_edit::emacs_core::display_metrics::WindowId;
 use neovm_value::display_vocab::FrameId;
 
 // Fixed GNU hook spellings run on every redisplay; see `hooks.rs`.
-static WINDOW_SCROLL_FUNCTIONS: WellKnown = WellKnown::WindowScrollFunctions;
 static WINDOW_STATE_CHANGE_HOOK: WellKnown = WellKnown::WindowStateChangeHook;
 static INHIBIT_REDISPLAY: WellKnown = WellKnown::InhibitRedisplay;
 
@@ -34,20 +35,6 @@ impl Drop for ChangePass<'_> {
             finish_record(self.eval, self.record);
             // Panic recovery only. Normal Lisp exits use unbind_to_with_result.
             self.eval.unbind_to(self.binding_count);
-        }
-    }
-}
-
-/// Restores a buffer ID through an exclusive Context borrow. Each mutator owns
-/// its saved ID and guard; no Lisp state or mutable cache is shared between them.
-struct BufferContext<'a> {
-    eval: &'a mut crate::emacs_core::eval::Context,
-    saved: Option<BufferId>,
-}
-impl Drop for BufferContext<'_> {
-    fn drop(&mut self) {
-        if let Some(saved) = self.saved {
-            self.eval.restore_current_buffer_if_live(saved);
         }
     }
 }
@@ -166,15 +153,6 @@ fn local(
     walk(eval, record, functions, Value::make_window(window.0))
 }
 
-/// GNU Fdefault_value reads outside safe per-function callbacks. Preserve its
-/// void-variable/alias errors and live forwarded default storage.
-fn default_hook_value(
-    eval: &mut crate::emacs_core::eval::Context,
-    symbol: crate::emacs_core::intern::SymId,
-) -> EvalResult {
-    crate::emacs_core::data::default_value(eval, vec![Value::from_sym_id(symbol)])
-}
-
 fn global(
     eval: &mut crate::emacs_core::eval::Context,
     record: &mut bool,
@@ -201,138 +179,6 @@ fn selection_changed(
             || eval.gnu_selected_window() == Some(window)))
         || (frame_selected_window_change
             && (frame.old_selected_window == Some(window) || frame.selected_window == window))
-}
-
-/// Immutable numeric call policy copied into one exclusive Context hook walk.
-/// Independent mutators may use their own copies; it retains no Lisp state.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum NamedHookCall {
-    Ordinary,
-    Safe,
-}
-
-/// GNU run_hook_with_args traverses the live cons chain and samples defaults
-/// at each local t marker. This adds no Lisp cache: the current tail is rooted
-/// in the exclusively borrowed evaluator's explicit specpdl root slot.
-fn named_hook_value(
-    eval: &mut crate::emacs_core::eval::Context,
-    symbol: crate::emacs_core::intern::SymId,
-    mut value: Value,
-    args: &[Value],
-    inherit: bool,
-    mode: NamedHookCall,
-) -> EvalResult {
-    let roots = eval.save_specpdl_roots();
-    let tail = eval.push_specpdl_root_slot(value);
-    for arg in args {
-        eval.push_specpdl_root(*arg);
-    }
-    let result = (|| {
-        if value.is_nil() {
-            return Ok(Value::NIL);
-        }
-        let single = !value.is_cons()
-            || if inherit {
-                crate::emacs_core::builtins::value_is_function(eval, value)
-            } else {
-                value.cons_car() == Value::symbol("lambda")
-            };
-        if single {
-            return named_hook_call(eval, symbol, value, args, mode);
-        }
-        while value.is_cons() {
-            eval.set_specpdl_root_slot(&tail, value);
-            let function = value.cons_car();
-            if function == Value::T {
-                if inherit {
-                    let defaults = default_hook_value(eval, symbol)?;
-                    named_hook_value(eval, symbol, defaults, args, false, mode)?;
-                }
-            } else {
-                named_hook_call(eval, symbol, function, args, mode)?;
-            }
-            value = value.cons_cdr();
-        }
-        Ok(Value::NIL)
-    })();
-    eval.restore_specpdl_roots(roots);
-    result
-}
-
-fn named_hook_call(
-    eval: &mut crate::emacs_core::eval::Context,
-    symbol: crate::emacs_core::intern::SymId,
-    function: Value,
-    args: &[Value],
-    mode: NamedHookCall,
-) -> EvalResult {
-    use crate::emacs_core::hook_runtime::HookRuntime;
-    match eval.call_hook_callable(function, args) {
-        Err(flow) => {
-            if mode == NamedHookCall::Safe
-                && let Some(signal) = flow.as_signal()
-            {
-                // The owned carrier keeps the signal's in-flight roots live
-                // while error reporting can call arbitrary Lisp and collect.
-                eval.report_safe_hook_error(symbol, function, signal)?;
-                eval.remove_hook_function_after_error(symbol, function);
-                Ok(Value::NIL)
-            } else {
-                Err(flow)
-            }
-        }
-        Ok(_) => Ok(Value::NIL),
-    }
-}
-
-fn safe_named_hook(
-    eval: &mut crate::emacs_core::eval::Context,
-    symbol: crate::emacs_core::intern::SymId,
-    args: &[Value],
-) -> EvalResult {
-    let count = eval.specpdl.len();
-    let result = (|| {
-        eval.try_specbind_or_unwind_to(
-            count,
-            crate::emacs_core::intern::intern("inhibit-quit"),
-            Value::T,
-        )?;
-        let value = hook_runtime::hook_value_by_id(eval, symbol).unwrap_or(Value::NIL);
-        named_hook_value(eval, symbol, value, args, true, NamedHookCall::Safe)
-    })();
-    eval.unbind_to_with_result(count, result)
-}
-
-/// Explicit/eager run-window-scroll-functions has ordinary hook error and
-/// reentry semantics. Only the redisplay committed-start seam is safe-called
-/// under the private redisplay guard.
-pub(super) fn run_eager_scroll(
-    eval: &mut crate::emacs_core::eval::Context,
-    window: WindowId,
-) -> EvalResult {
-    let frame = eval.frames.find_window_frame_id(window).ok_or_else(|| {
-        signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("window-live-p"), Value::make_window(window.0)],
-        )
-    })?;
-    let argument = Value::make_window(window.0);
-    let start = super::super::window_cmds::builtin_window_start(eval, &[argument])?;
-    let saved = eval.edit.buffers.current_buffer_id();
-    let mut scope = BufferContext { eval, saved };
-    if let Some(buffer) = super::window_buffer_id_in_state(scope.eval, frame, window) {
-        scope.eval.set_current_buffer_unrecorded(buffer)?;
-    }
-    let symbol = hook_runtime::hook_symbol_by_id(scope.eval, WINDOW_SCROLL_FUNCTIONS.id());
-    let value = hook_runtime::hook_value_by_id(scope.eval, symbol).unwrap_or(Value::NIL);
-    named_hook_value(
-        scope.eval,
-        symbol,
-        value,
-        &[argument, start],
-        true,
-        NamedHookCall::Ordinary,
-    )
 }
 
 pub(super) fn run(eval: &mut crate::emacs_core::eval::Context) -> EvalResult {
@@ -562,31 +408,6 @@ fn run_inner(pass: &mut ChangePass<'_>) -> EvalResult {
     Ok(Value::NIL)
 }
 
-/// safe_run_hooks_2 at the committed-start seam, without a Lisp-visible
-/// inhibit-redisplay binding. The enclosing private transaction owns reentry.
-pub(super) fn run_committed_scroll(
-    eval: &mut crate::emacs_core::eval::Context,
-    window: WindowId,
-) -> EvalResult {
-    let mut guard = eval.gnu_guard_committed_scroll();
-    let eval = &mut *guard.eval;
-    let frame = eval.frames.find_window_frame_id(window).ok_or_else(|| {
-        signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("window-live-p"), Value::make_window(window.0)],
-        )
-    })?;
-    let window_arg = Value::make_window(window.0);
-    let start = super::super::window_cmds::builtin_window_start(eval, &[window_arg])?;
-    let saved = eval.edit.buffers.current_buffer_id();
-    let mut scope = BufferContext { eval, saved };
-    if let Some(buffer) = super::window_buffer_id_in_state(scope.eval, frame, window) {
-        scope.eval.set_current_buffer_unrecorded(buffer)?;
-    }
-    let symbol = hook_runtime::hook_symbol_by_id(scope.eval, WINDOW_SCROLL_FUNCTIONS.id());
-    safe_named_hook(scope.eval, symbol, &[window_arg, start])
-}
-
 /// Exclusively borrows the owning Context while restoring configuration-hook state.
 /// Saved IDs and the root-stack boundary belong to that Context; independent
 /// mutators never share this guard or its mutable restore state.
@@ -729,7 +550,7 @@ pub(super) fn run_configuration(
             windows.rotate_left(index);
         }
         for window in windows {
-            let Some(buffer) = super::window_buffer_id_in_state(scope.eval, frame, window) else {
+            let Some(buffer) = window_buffer_id_in_state(scope.eval, frame, window) else {
                 continue;
             };
             if !scope

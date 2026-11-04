@@ -11,6 +11,7 @@ mod echo_message;
 use super::*;
 use crate::buffer::{BufferId, LispCharPos1};
 use crate::emacs_core::eval::data::window_state::{PreparedMiniResizeOutcome, Window};
+use crate::emacs_core::hook_runtime;
 use crate::emacs_core::intern::WellKnown;
 use neovm_edit::emacs_core::display_metrics::WindowId;
 use neovm_value::display_vocab::FrameId;
@@ -1326,4 +1327,147 @@ pub(crate) fn restore_gnu_configuration_hook_default(obarray: &mut Obarray) {
         return;
     }
     obarray.define_special_variable("window-configuration-change-hook", Value::NIL);
+}
+
+// ---------------------------------------------------------------------------
+// Shared named-hook and buffer-context helpers.
+//
+// These were private to commands/window_hooks/redisplay_gnu.rs while only the
+// commands layer ran window hooks.  Stage 5 moves the redisplay-owned scroll
+// hook bodies back down to display/xdisp, so the generic helpers live here in
+// eval and both layers call them; no display or command path is referenced.
+// ---------------------------------------------------------------------------
+
+/// Restores a buffer ID through an exclusive Context borrow. Each mutator owns
+/// its saved ID and guard; no Lisp state or mutable cache is shared between them.
+pub(crate) struct BufferContext<'a> {
+    pub(crate) eval: &'a mut crate::emacs_core::eval::Context,
+    pub(crate) saved: Option<BufferId>,
+}
+impl Drop for BufferContext<'_> {
+    fn drop(&mut self) {
+        if let Some(saved) = self.saved {
+            self.eval.restore_current_buffer_if_live(saved);
+        }
+    }
+}
+
+pub(crate) fn window_buffer_id_in_state(
+    eval: &crate::emacs_core::eval::Context,
+    frame_id: neovm_value::display_vocab::FrameId,
+    window_id: neovm_edit::emacs_core::display_metrics::WindowId,
+) -> Option<crate::buffer::BufferId> {
+    eval.frames
+        .get(frame_id)
+        .and_then(|frame| frame.find_window(window_id))
+        .and_then(|window| window.buffer_id())
+}
+
+/// GNU Fdefault_value reads outside safe per-function callbacks. Preserve its
+/// void-variable/alias errors and live forwarded default storage.
+pub(crate) fn default_hook_value(
+    eval: &mut crate::emacs_core::eval::Context,
+    symbol: crate::emacs_core::intern::SymId,
+) -> EvalResult {
+    crate::emacs_core::data::default_value(eval, vec![Value::from_sym_id(symbol)])
+}
+
+/// Immutable numeric call policy copied into one exclusive Context hook walk.
+/// Independent mutators may use their own copies; it retains no Lisp state.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NamedHookCall {
+    Ordinary,
+    Safe,
+}
+
+/// GNU run_hook_with_args traverses the live cons chain and samples defaults
+/// at each local t marker. This adds no Lisp cache: the current tail is rooted
+/// in the exclusively borrowed evaluator's explicit specpdl root slot.
+pub(crate) fn named_hook_value(
+    eval: &mut crate::emacs_core::eval::Context,
+    symbol: crate::emacs_core::intern::SymId,
+    mut value: Value,
+    args: &[Value],
+    inherit: bool,
+    mode: NamedHookCall,
+) -> EvalResult {
+    let roots = eval.save_specpdl_roots();
+    let tail = eval.push_specpdl_root_slot(value);
+    for arg in args {
+        eval.push_specpdl_root(*arg);
+    }
+    let result = (|| {
+        if value.is_nil() {
+            return Ok(Value::NIL);
+        }
+        let single = !value.is_cons()
+            || if inherit {
+                crate::emacs_core::builtins::value_is_function(eval, value)
+            } else {
+                value.cons_car() == Value::symbol("lambda")
+            };
+        if single {
+            return named_hook_call(eval, symbol, value, args, mode);
+        }
+        while value.is_cons() {
+            eval.set_specpdl_root_slot(&tail, value);
+            let function = value.cons_car();
+            if function == Value::T {
+                if inherit {
+                    let defaults = default_hook_value(eval, symbol)?;
+                    named_hook_value(eval, symbol, defaults, args, false, mode)?;
+                }
+            } else {
+                named_hook_call(eval, symbol, function, args, mode)?;
+            }
+            value = value.cons_cdr();
+        }
+        Ok(Value::NIL)
+    })();
+    eval.restore_specpdl_roots(roots);
+    result
+}
+
+fn named_hook_call(
+    eval: &mut crate::emacs_core::eval::Context,
+    symbol: crate::emacs_core::intern::SymId,
+    function: Value,
+    args: &[Value],
+    mode: NamedHookCall,
+) -> EvalResult {
+    use crate::emacs_core::hook_runtime::HookRuntime;
+    match eval.call_hook_callable(function, args) {
+        Err(flow) => {
+            if mode == NamedHookCall::Safe
+                && let Some(signal) = flow.as_signal()
+            {
+                // The owned carrier keeps the signal's in-flight roots live
+                // while error reporting can call arbitrary Lisp and collect.
+                eval.report_safe_hook_error(symbol, function, signal)?;
+                eval.remove_hook_function_after_error(symbol, function);
+                Ok(Value::NIL)
+            } else {
+                Err(flow)
+            }
+        }
+        Ok(_) => Ok(Value::NIL),
+    }
+}
+
+pub(crate) fn safe_named_hook(
+    eval: &mut crate::emacs_core::eval::Context,
+    symbol: crate::emacs_core::intern::SymId,
+    args: &[Value],
+) -> EvalResult {
+    let count = eval.specpdl.len();
+    let result = (|| {
+        eval.try_specbind_or_unwind_to(
+            count,
+            crate::emacs_core::intern::intern("inhibit-quit"),
+            Value::T,
+        )?;
+        let value = hook_runtime::hook_value_by_id(eval, symbol).unwrap_or(Value::NIL);
+        named_hook_value(eval, symbol, value, args, true, NamedHookCall::Safe)
+    })();
+    eval.unbind_to_with_result(count, result)
 }

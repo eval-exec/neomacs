@@ -418,7 +418,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     crate::emacs_core::composite::register_subrs(ctx);
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "run-window-scroll-functions",
-        NativeFn::ContextVec(crate::emacs_core::window_cmds::builtin_run_window_scroll_functions),
+        NativeFn::ContextVec(crate::emacs_core::window_hooks::builtin_run_window_scroll_functions),
         SubrArity::new(0, Some(1)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -2477,12 +2477,12 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "current-window-configuration",
-        NativeFn::ContextVec(crate::emacs_core::window_cmds::builtin_current_window_configuration),
+        NativeFn::ContextVec(crate::emacs_core::window_hooks::builtin_current_window_configuration),
         SubrArity::new(0, Some(1)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "set-window-configuration",
-        NativeFn::ContextVec(crate::emacs_core::window_cmds::builtin_set_window_configuration),
+        NativeFn::ContextVec(crate::emacs_core::window_hooks::builtin_set_window_configuration),
         SubrArity::new(1, Some(3)),
     )));
     ctx.register_subr(
@@ -6173,21 +6173,21 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "window-configuration-p",
         NativeFn::ContextVec(|_ctx, args| {
-            crate::emacs_core::window_cmds::builtin_window_configuration_p(args)
+            crate::emacs_core::window_hooks::builtin_window_configuration_p(args)
         }),
         SubrArity::new(1, Some(1)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "window-configuration-frame",
         NativeFn::ContextVec(|_ctx, args| {
-            crate::emacs_core::window_cmds::builtin_window_configuration_frame(args)
+            crate::emacs_core::window_hooks::builtin_window_configuration_frame(args)
         }),
         SubrArity::new(1, Some(1)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "window-configuration-equal-p",
         NativeFn::ContextVec(|_ctx, args| {
-            crate::emacs_core::window_cmds::builtin_window_configuration_equal_p(args)
+            crate::emacs_core::window_hooks::builtin_window_configuration_equal_p(args)
         }),
         SubrArity::new(2, Some(2)),
     )));

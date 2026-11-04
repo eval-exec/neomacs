@@ -86,6 +86,9 @@ use crate::emacs_core::eval::data::xdisp_column_spec::note_column_spec_consumed;
 pub use crate::emacs_core::eval::data::xdisp_column_spec::{
     column_spec_consumed, reset_column_spec_consumed,
 };
+use crate::emacs_core::eval::redisplay_hooks::{
+    BufferContext, NamedHookCall, named_hook_value, safe_named_hook, window_buffer_id_in_state,
+};
 use crate::emacs_core::intern::WellKnown;
 use crate::window::{
     DisplayRowSnapshot, FrameId, FrameManager, Window, WindowChromeLine, WindowChromePresence,
@@ -99,6 +102,117 @@ use strum::{EnumString, IntoStaticStr};
 // GNU's `Qfontification_functions`: the redisplay fontification demand probes
 // this hook on every pass and previously re-interned the spelling per probe.
 static FONTIFICATION_FUNCTIONS: WellKnown = WellKnown::FontificationFunctions;
+
+// GNU's `Qwindow_scroll_functions` (window.c), read by the eager entry and the
+// committed-start redisplay seam below.
+static WINDOW_SCROLL_FUNCTIONS: WellKnown = WellKnown::WindowScrollFunctions;
+
+/// GNU `run_window_scroll_functions`' body for an already-decoded window Value
+/// (src/window.c).  Argument validation belongs to the Lisp entry in commands;
+/// the internal resize/set-window-buffer call sites reach this directly with a
+/// window they just produced.
+///
+/// Under the GNU redisplay-hooks policy the hook runs with the eager contract
+/// (`run_eager_scroll`); otherwise the legacy body runs with
+/// `hook_runtime::run_hook_value` exactly as the Lisp entry did before.
+pub(crate) fn run_window_scroll_functions_for_window(
+    eval: &mut crate::emacs_core::eval::Context,
+    window_arg: Value,
+) -> EvalResult {
+    let window_arg = match window_arg.kind() {
+        ValueKind::Nil => super::window_cmds::builtin_selected_window(eval, &[])?,
+        _ => window_arg,
+    };
+    let Some(wid) = window_arg.as_window_id() else {
+        return Ok(Value::NIL);
+    };
+    let window_id = WindowId(wid);
+    if crate::emacs_core::eval::gnu_redisplay_hooks_enabled() {
+        return run_eager_scroll(eval, window_id);
+    }
+    let frame_id = eval.frames.find_window_frame_id(window_id).ok_or_else(|| {
+        signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("window-live-p"), window_arg],
+        )
+    })?;
+    let window_start = super::window_cmds::builtin_window_start(eval, &[window_arg])?;
+    let hook_sym = hook_runtime::hook_symbol_by_id(eval, WINDOW_SCROLL_FUNCTIONS.id());
+    let saved_buffer_id = eval.edit.buffers.current_buffer_id();
+    if let Some(buffer_id) = window_buffer_id_in_state(eval, frame_id, window_id) {
+        // GNU `set_window_buffer` temporarily enters the displayed buffer
+        // with `Fset_buffer` before running `window-scroll-functions`
+        // (window.c), which does not call `record_buffer` or change
+        // `buffer-list` recency.
+        let _ = eval.set_current_buffer_unrecorded(buffer_id);
+    }
+    let hook_value = hook_runtime::hook_value_by_id(eval, hook_sym).unwrap_or(Value::NIL);
+    let result = hook_runtime::run_hook_value(
+        eval,
+        hook_sym,
+        hook_value,
+        &[window_arg, window_start],
+        true,
+    );
+    if let Some(buffer_id) = saved_buffer_id {
+        eval.restore_current_buffer_if_live(buffer_id);
+    }
+    result
+}
+
+/// Explicit/eager run-window-scroll-functions has ordinary hook error and
+/// reentry semantics. Only the redisplay committed-start seam is safe-called
+/// under the private redisplay guard.
+fn run_eager_scroll(eval: &mut crate::emacs_core::eval::Context, window: WindowId) -> EvalResult {
+    let frame = eval.frames.find_window_frame_id(window).ok_or_else(|| {
+        signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("window-live-p"), Value::make_window(window.0)],
+        )
+    })?;
+    let argument = Value::make_window(window.0);
+    let start = super::window_cmds::builtin_window_start(eval, &[argument])?;
+    let saved = eval.edit.buffers.current_buffer_id();
+    let scope = BufferContext { eval, saved };
+    if let Some(buffer) = window_buffer_id_in_state(scope.eval, frame, window) {
+        scope.eval.set_current_buffer_unrecorded(buffer)?;
+    }
+    let symbol = hook_runtime::hook_symbol_by_id(scope.eval, WINDOW_SCROLL_FUNCTIONS.id());
+    let value = hook_runtime::hook_value_by_id(scope.eval, symbol).unwrap_or(Value::NIL);
+    named_hook_value(
+        scope.eval,
+        symbol,
+        value,
+        &[argument, start],
+        true,
+        NamedHookCall::Ordinary,
+    )
+}
+
+/// safe_run_hooks_2 at the committed-start seam, without a Lisp-visible
+/// inhibit-redisplay binding. The enclosing private transaction owns reentry.
+pub(crate) fn run_committed_scroll_functions(
+    eval: &mut crate::emacs_core::eval::Context,
+    window: WindowId,
+) -> EvalResult {
+    let guard = eval.gnu_guard_committed_scroll();
+    let eval = &mut *guard.eval;
+    let frame = eval.frames.find_window_frame_id(window).ok_or_else(|| {
+        signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("window-live-p"), Value::make_window(window.0)],
+        )
+    })?;
+    let window_arg = Value::make_window(window.0);
+    let start = super::window_cmds::builtin_window_start(eval, &[window_arg])?;
+    let saved = eval.edit.buffers.current_buffer_id();
+    let scope = BufferContext { eval, saved };
+    if let Some(buffer) = window_buffer_id_in_state(scope.eval, frame, window) {
+        scope.eval.set_current_buffer_unrecorded(buffer)?;
+    }
+    let symbol = hook_runtime::hook_symbol_by_id(scope.eval, WINDOW_SCROLL_FUNCTIONS.id());
+    safe_named_hook(scope.eval, symbol, &[window_arg, start])
+}
 
 impl super::eval::Context {
     /// Choose a redisplay start by moving backward from point in display rows.
@@ -208,9 +322,7 @@ impl super::eval::Context {
         window_id: WindowId,
     ) -> EvalResult {
         if crate::emacs_core::eval::gnu_redisplay_hooks_enabled() {
-            return crate::emacs_core::window_hooks::run_gnu_committed_scroll_functions(
-                self, window_id,
-            );
+            return run_committed_scroll_functions(self, window_id);
         }
         self.run_window_scroll_functions_for_committed_start_legacy(window_id);
         Ok(Value::NIL)
@@ -231,7 +343,7 @@ impl super::eval::Context {
             tracing::debug!("window-scroll binding signalled (ignored): {flow:?}");
             return;
         }
-        let result = super::window_cmds::builtin_run_window_scroll_functions(self, vec![window]);
+        let result = run_window_scroll_functions_for_window(self, window);
         let result = self.unbind_to_with_result(specpdl_count, result);
         if let Err(flow) = result {
             tracing::debug!("window-scroll-functions signalled (ignored): {flow:?}");

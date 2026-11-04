@@ -163,12 +163,6 @@ pub(crate) fn builtin_resize_mini_window_internal(
     eval.gnu_publish_mini_geometry_changed(fid);
     Ok(Value::T)
 }
-pub(crate) use crate::emacs_core::window_hooks::{
-    builtin_current_window_configuration, builtin_run_window_scroll_functions,
-    builtin_set_window_configuration, builtin_window_configuration_equal_p,
-    builtin_window_configuration_frame, builtin_window_configuration_p,
-};
-
 // ---------------------------------------------------------------------------
 // The new-size slots (GNU `src/window.c`)
 //
@@ -298,7 +292,7 @@ pub(crate) fn builtin_split_window_internal(
         eval.gnu_mark_frame_redisplay(frame);
         eval.gnu_mark_frame_window_change(frame);
         eval.gnu_mark_window_mode_line(window);
-        builtin_run_window_scroll_functions(eval, vec![result])?;
+        super::xdisp::run_window_scroll_functions_for_window(eval, result)?;
     }
     // GNU does NOT run `window-configuration-change-hook' eagerly from
     // `split-window-internal'.  It is deferred to `run_window_change_functions'
@@ -5700,7 +5694,7 @@ pub(crate) fn builtin_set_window_buffer(
         }
     }
     display_effect.apply(eval);
-    builtin_run_window_scroll_functions(eval, vec![window_value(wid)])?;
+    super::xdisp::run_window_scroll_functions_for_window(eval, window_value(wid))?;
     // GNU sets this after the eager scroll callbacks (window.c:4427).
     if matches!(
         display_effect,
