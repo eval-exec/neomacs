@@ -47,7 +47,7 @@ use super::terminal::pure::TtyFrameHostFactory;
 use super::threads::ThreadManager;
 use super::value::*;
 use crate::buffer::{BufferId, BufferManager, CharPos0, EmacsBytePos, LispCharPos1};
-use crate::face::{FaceTable, FontSlant, FontWeight, FontWidth};
+use crate::face::FaceTable;
 use crate::gc_trace::GcTrace;
 use crate::tagged::header::{CLOSURE_ARGLIST, SubrDispatchKind, SubrInteractivity};
 use crate::window::{
@@ -55,8 +55,7 @@ use crate::window::{
     WindowLayoutQueryAdapter,
 };
 use neovm_edit::emacs_core::display_metrics::WindowId;
-use neovm_value::kmacro::KmacroManager;
-
+use neovm_value::kmacro::KmacroManager;use neovm_value::display_vocab::{FontSlant, FontWeight, FontWidth};
 pub(crate) mod world;
 pub use world::{ContextShutdownError, ObarrayWriteAccess, OutstandingWorldViews, WorldEra};
 pub(crate) use world::{ObarrayView, OwnedRootRegistryView, WorldSlot, WorldView};
@@ -5669,7 +5668,7 @@ impl Context {
     pub fn set_face_attribute(
         &mut self,
         face_name: &str,
-        attr: crate::face::LFaceAttr,
+        attr: neovm_value::display_vocab::LFaceAttr,
         value: crate::face::FaceAttrValue,
     ) -> bool {
         // GNU Emacs stores the internal face ID as the symbol's `face`
