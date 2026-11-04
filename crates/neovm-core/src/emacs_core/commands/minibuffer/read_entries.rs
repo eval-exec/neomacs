@@ -37,6 +37,7 @@ use crate::emacs_core::value::{Value, ValueKind, VecLikeType};
 use crate::emacs_core::value_reader::SymbolPositionMode;
 
 use super::{MinibufferEntryRejection, RecursiveMinibufferPolicy};
+use neovm_edit::emacs_core::edit_host::EditHost;
 
 fn reader_initial_contents(
     value: Option<&Value>,

@@ -4,6 +4,7 @@
 use super::*;
 use neovm_core::window::DisplayFrameExt;
 use neovm_core::window::DisplayFrameManagerExt;
+use neovm_core::window::display::WindowDisplayContextExt;
 use neovm_core::{
     buffer::LispCharPos1,
     window::{

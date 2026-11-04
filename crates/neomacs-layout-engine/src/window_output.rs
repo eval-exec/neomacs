@@ -5,6 +5,7 @@
 //! prepares a snapshot. Production recording is speculative; focused lifecycle
 //! tests can also mirror output-cursor moves into a live window.
 
+use neovm_core::window::display::WindowDisplayContextExt;
 pub(crate) mod prepared_body;
 mod restart_sync;
 mod row_geometry;

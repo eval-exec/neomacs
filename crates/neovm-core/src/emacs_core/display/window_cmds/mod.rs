@@ -43,6 +43,9 @@ use strum::{EnumString, IntoStaticStr};
 mod body_geometry;
 mod redisplay_core_defaults;
 
+use crate::emacs_core::xfaces::realization::XfacesRealizationContextExt;
+use crate::window::display::WindowDisplayContextExt;
+use neovm_edit::emacs_core::edit_host::EditHost;
 pub(crate) use redisplay_core_defaults::restore_gnu_configuration_hook_default;
 
 fn navigation_transition_direction(value: Value) -> Result<TransitionDirection, Flow> {

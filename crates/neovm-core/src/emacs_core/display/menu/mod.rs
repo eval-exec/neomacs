@@ -4,6 +4,7 @@ use super::error::{Flow, LispCondition};
 use super::keymap;
 use super::value::Value;
 use super::{Context, PopupMenuEntry};
+use neovm_edit::emacs_core::edit_host::EditHost;
 use resolve::parse;
 
 mod resolve;

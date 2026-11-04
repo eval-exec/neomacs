@@ -246,6 +246,8 @@ fn clean_path_bytes(bytes: &[u8]) -> Vec<u8> {
 /// string type this conversion binds; the system layer re-exports it.
 pub(crate) use crate::emacs_core::file_name::lisp_file_name_to_path_buf;
 
+use neovm_edit::emacs_core::edit_host::EditHost;
+use neovm_text::emacs_core::text_host::TextHost;
 pub use neovm_value::system_vocab::file_names::substitute_in_file_name;
 use neovm_value::system_vocab::file_names::{
     embedded_absfilename_start, trim_embedded_absfilename_bytes,

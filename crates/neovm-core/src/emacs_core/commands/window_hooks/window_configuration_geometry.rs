@@ -11,6 +11,7 @@ use crate::window::Frame;
 use neomacs_display_protocol::types::Px;
 use neovm_edit::emacs_core::display_metrics::Rect;
 use neovm_edit::emacs_core::display_metrics::WindowBodyCellSize;
+use neovm_edit::emacs_core::edit_host::EditHost;
 use neovm_value::display_vocab::FrameId;
 use neovm_value::display_vocab::SplitDirection;
 

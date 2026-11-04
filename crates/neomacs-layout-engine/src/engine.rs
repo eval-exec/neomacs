@@ -4,6 +4,10 @@
 //! character position, computes line breaks, positions glyphs on a fixed-width
 //! grid, and publishes `FrameDisplayState` snapshots for render backends.
 
+use neovm_core::emacs_core::image::ImageContextExt;
+use neovm_core::emacs_core::neo::scroll::ScrollContextExt;
+use neovm_core::emacs_core::xdisp::XdispContextExt;
+use neovm_core::window::display::WindowDisplayContextExt;
 mod diagnostic_knobs;
 mod window_input_ownership;
 use neovm_core::window::DisplayFrameExt;

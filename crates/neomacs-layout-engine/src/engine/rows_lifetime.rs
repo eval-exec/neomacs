@@ -2,6 +2,7 @@
 use super::{LayoutEngine, QueryRowCoverage, rows_face_services::DiagnosticEffects};
 use neovm_core::window::DisplayFrameExt;
 use neovm_core::window::DisplayFrameManagerExt;
+use neovm_core::window::display::WindowDisplayContextExt;
 use neovm_core::{
     buffer::{BufferId, BufferSourceAuthority, BufferSourceReadLease, LispCharPos1},
     emacs_core::{

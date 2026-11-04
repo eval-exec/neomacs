@@ -24,6 +24,7 @@ use strum::{EnumString, IntoStaticStr};
 mod desktop;
 pub(crate) use desktop::monitor_rect_in_display_pixels;
 mod tooltip;
+use neovm_edit::emacs_core::edit_host::EditHost;
 pub(crate) use tooltip::{builtin_x_hide_tip_eval, builtin_x_show_tip_eval};
 
 /// Clear cached thread-local display values (must be called when heap changes).

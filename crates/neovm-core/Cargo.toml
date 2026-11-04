@@ -11,6 +11,7 @@ description = "Core runtime structures for NeoVM"
 autotests = false
 
 [dependencies]
+neovm-eval = { path = "../neovm-eval", default-features = false }
 neovm-text = { path = "../neovm-text" }
 neovm-edit = { path = "../neovm-edit" }
 neovm-display-identity.workspace = true
@@ -124,8 +125,8 @@ dbus = { version = "0.9", default-features = false }
 [features]
 default = ["jit", "sqlite"]
 # Diagnostic inventory walks and JSONL records; absent from ordinary builds.
-gc-memory-telemetry = ["dep:serde_json", "neovm-value/gc-memory-telemetry"]
-sqlite = ["dep:rusqlite", "neovm-value/sqlite"]
+gc-memory-telemetry = ["dep:serde_json", "neovm-value/gc-memory-telemetry", "neovm-eval/gc-memory-telemetry"]
+sqlite = ["dep:rusqlite", "neovm-value/sqlite", "neovm-eval/sqlite"]
 # Static-link the crate's bundled libdbus instead of pkg-config `dbus-1`.
 # Production/Nix builds leave this off and use the system library.
 dbus-vendored = ["dbus/vendored"]
@@ -138,7 +139,7 @@ sound = ["rodio"]
 webview = []
 # The Linux display runtime enables this when it links its native GSettings
 # adapter. Bare evaluator builds must not advertise a native subscription.
-desktop-font-settings = []
+desktop-font-settings = ["neovm-eval/desktop-font-settings"]
 # Opt-in per-char validator for the display-motion stop cache (indent.rs
 # DisplayStopCache): re-runs every DisplayStopProp probe on each fast-path char
 # and asserts the cached stop skipped nothing. OFF by default (like GNU's
@@ -148,7 +149,7 @@ desktop-font-settings = []
 display-stop-validate = ["neovm-edit/display-stop-validate"]
 # Numeric redisplay policy injection for dependent crate fixtures only.
 # Dev-dependencies opt in; shipping builds retain process-once selectors.
-redisplay-test-policy = []
+redisplay-test-policy = ["neovm-eval/redisplay-test-policy"]
 # Tiered JIT execution subsystem (src/emacs_core/runtime/jit/ +
 # runtime/bytecode/ELISP_VM_MODERNIZATION.md). DEFAULT-ON (see `default` above): the
 # baseline JIT ships enabled. Toggle it at runtime with `NEOVM_JIT=0` (no
@@ -162,6 +163,7 @@ jit = [
     "dep:object",
     "dep:cranelift-native",
     "neovm-value/jit",
+    "neovm-eval/jit",
     "neovm-text/jit",
     "neovm-edit/jit",
 ]
@@ -170,7 +172,7 @@ jit = [
 # this feature so the production dispatch loop pays nothing (the bump site
 # vanishes). Distinct from the STATIC per-compiled-function op-mix behind
 # NEOVM_JIT_PROFILE. Run a profiling build with `--features vm-profile`.
-vm-profile = []
+vm-profile = ["neovm-eval/vm-profile"]
 # Typed differential-fuzzing seam used by the independent cargo-fuzz package.
 # Kept out of production and ordinary dependency builds.
 fuzzing = []
@@ -179,12 +181,12 @@ fuzzing = []
 # not correctness tests, so the default suite compiles them out; run them
 # explicitly with `--features perf-probes` (release for timings).  Keep them
 # from rotting with `cargo check -p neovm-core --features perf-probes --tests`.
-perf-probes = ["neovm-value/perf-probes"]
+perf-probes = ["neovm-value/perf-probes", "neovm-eval/perf-probes"]
 # Opt-in compiler-contract suites (trybuild): their fixtures compile with the
 # source-free gate toolchain, so they stay out of the ordinary suite.
 # The postgate compiles them with
 # `cargo check -p neovm-core --features contract-fixtures --tests`.
-contract-fixtures = []
+contract-fixtures = ["neovm-eval/contract-fixtures"]
 
 [dev-dependencies]
 # Peer ruling A2: the test-only value surface is enabled only for core's test

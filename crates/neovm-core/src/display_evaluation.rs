@@ -10,8 +10,19 @@ use crate::emacs_core::Context;
 use crate::window::DisplayFrameExt;
 use crate::window::DisplayFrameManagerExt;
 use crate::window::{FrameId, WindowId};
+use neovm_edit::emacs_core::edit_host::EditHost;
 
-impl Context {
+/// Stage-4 W5/E13 upper extension trait over the eval-owned type.
+#[doc(hidden)]
+pub trait DisplayEvaluationContextExt {
+    fn with_frame_display_context<R>(
+        &mut self,
+        frame_id: FrameId,
+        operation: impl FnOnce(&mut Self) -> R,
+    ) -> Option<R>;
+}
+
+impl DisplayEvaluationContextExt for Context {
     /// Evaluate `operation` as the selected window of `frame_id`, then restore
     /// the caller's selected frame/window and current buffer.
     ///
@@ -19,7 +30,7 @@ impl Context {
     /// selected leaf, or its buffer is no longer live. Lisp nonlocal exits are
     /// values in the callback's return type, so they cross this scope only
     /// after restoration.
-    pub fn with_frame_display_context<R>(
+    fn with_frame_display_context<R>(
         &mut self,
         frame_id: FrameId,
         operation: impl FnOnce(&mut Self) -> R,
@@ -56,6 +67,9 @@ impl Context {
         Some(guard.finish(result))
     }
 }
+
+// The default bodies above are the implementation; this binds them to the
+// upper-layer type that owns the state.
 
 /// Owns the frame-display dynamic context: the caller's buffer, the mode-line
 /// window selection, and the specpdl suffix `operation` pushes. Neither Send

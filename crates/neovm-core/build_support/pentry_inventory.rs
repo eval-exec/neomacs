@@ -13,9 +13,9 @@ use syn::punctuated::Punctuated;
 use syn::visit::{self, Visit};
 use syn::{Expr, Fields, Item, Token};
 
-#[path = "../src/emacs_core/lisp/native/subr/effect_parallel.rs"]
+#[path = "../../neovm-eval/src/emacs_core/lisp/native/subr/effect_parallel.rs"]
 mod effect_parallel;
-#[path = "../src/emacs_core/lisp/native/subr/effect_schema.rs"]
+#[path = "../../neovm-eval/src/emacs_core/lisp/native/subr/effect_schema.rs"]
 mod effect_schema;
 
 use effect_parallel::{ADMITTED, CatalogRow, canonical_parallel_error};

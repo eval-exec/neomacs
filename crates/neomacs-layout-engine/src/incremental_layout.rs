@@ -29,6 +29,7 @@ use neomacs_display_protocol::types::FaceId;
 #[cfg(test)]
 use neomacs_display_protocol::types::Rect;
 use neovm_core::buffer::position::LispCharPos1;
+use neovm_core::window::display::WindowDisplayContextExt;
 use neovm_core::window::{DisplayPointSnapshot, DisplayRowSnapshot};
 
 pub(crate) mod chrome_memo;

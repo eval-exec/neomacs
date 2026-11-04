@@ -1,0 +1,602 @@
+//! Inotify ownership and blocking I/O.
+//!
+//! The worker is the only owner of the inotify instance and its native watch
+//! descriptors.  The evaluator sends typed commands and receives owned event
+//! records; neither side shares kernel handles or Lisp values.
+
+use super::super::super::ErrorDetail;
+use super::super::super::WatchActivity;
+use super::super::super::delivery::{
+    self, DeliveryBatch, DeliveryReceiver, DeliverySender, PublishOutcome,
+};
+use crate::emacs_core::eval::data::process_state::WaitNotifier;
+use crossbeam_channel::{Receiver, Sender, TryRecvError};
+use inotify::{EventMask, Inotify, WatchDescriptor, WatchMask};
+use neovm_value::system_vocab::errno::Errno;
+use polling::{Event, Events, PollMode, Poller};
+use std::collections::HashMap;
+use std::ffi::OsString;
+use std::io;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::thread::JoinHandle;
+
+const INOTIFY_KEY: usize = 1;
+
+#[cfg(test)]
+#[path = "tests/worker_test.rs"]
+mod worker_test;
+
+#[cfg(test)]
+use super::super::super::delivery::DeliveryRecord;
+
+#[derive(Clone, Debug)]
+pub(super) struct NativeEvent {
+    pub(super) descriptor: i32,
+    pub(super) activity: Option<WatchActivity>,
+    pub(super) mask: EventMask,
+    pub(super) cookie: u32,
+    pub(super) name: Option<OsString>,
+}
+
+#[derive(Clone)]
+struct NativeWatch {
+    descriptor: WatchDescriptor,
+    activity: WatchActivity,
+    phase: NativeWatchPhase,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NativeWatchPhase {
+    Provisional,
+    Active,
+}
+
+impl NativeWatch {
+    #[doc(hidden)]
+    pub fn provisional(descriptor: WatchDescriptor, activity: WatchActivity) -> Self {
+        Self {
+            descriptor,
+            activity,
+            phase: NativeWatchPhase::Provisional,
+        }
+    }
+
+    #[cfg(test)]
+    #[doc(hidden)]
+    pub fn active(descriptor: WatchDescriptor, activity: WatchActivity) -> Self {
+        Self {
+            descriptor,
+            activity,
+            phase: NativeWatchPhase::Active,
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn is_registration(&self, activity: &WatchActivity) -> bool {
+        self.activity.same_registration(activity)
+    }
+}
+
+pub(super) enum WorkerControl {
+    Terminal(NativeEvent),
+    Failed(ErrorDetail),
+}
+
+/// A lost kernel event queue is a state, not a rendering: GNU reports it as a
+/// plain detail string with no errno behind it.
+const QUEUE_EPOCH_LOST: ErrorDetail =
+    ErrorDetail::Message("inotify queue overflowed; native watch ownership epoch was lost");
+
+enum Command {
+    Add {
+        path: PathBuf,
+        mask: WatchMask,
+        reply: Sender<Result<(i32, WatchActivity), ErrorDetail>>,
+    },
+    Remove {
+        descriptor: i32,
+        reply: Sender<Result<bool, ErrorDetail>>,
+    },
+    Shutdown,
+}
+
+pub(super) struct Worker {
+    commands: Sender<Command>,
+    poller: Arc<Poller>,
+    events: DeliveryReceiver<NativeEvent, WorkerControl>,
+    join: Option<JoinHandle<()>>,
+}
+
+impl Worker {
+    #[doc(hidden)]
+    pub fn start(notifier: Option<WaitNotifier>) -> Result<Self, ErrorDetail> {
+        let inotify = Inotify::init().map_err(|error| ErrorDetail::os(&error))?;
+        let poller = Arc::new(Poller::new().map_err(|error| ErrorDetail::os(&error))?);
+        // SAFETY: the worker owns `inotify` until it deletes the registration
+        // after its wait loop.  No command can drop or replace that value.
+        unsafe { poller.add_with_mode(&inotify, Event::readable(INOTIFY_KEY), PollMode::Level) }
+            .map_err(|error| ErrorDetail::os(&error))?;
+
+        let (command_tx, command_rx) = crossbeam_channel::bounded(64);
+        let (event_tx, event_rx) = delivery::channel(notifier);
+        let worker_poller = Arc::clone(&poller);
+        let join = std::thread::Builder::new()
+            .name("neomacs-inotify".to_owned())
+            .spawn(move || worker_loop(inotify, worker_poller, command_rx, event_tx))
+            .map_err(|error| ErrorDetail::os(&error))?;
+
+        Ok(Self {
+            commands: command_tx,
+            poller,
+            events: event_rx,
+            join: Some(join),
+        })
+    }
+
+    #[doc(hidden)]
+    pub fn send_command(&self, command: Command) -> Result<(), ErrorDetail> {
+        self.commands
+            .send(command)
+            .map_err(|_| ErrorDetail::Message("inotify worker exited"))?;
+        self.poller
+            .notify()
+            .map_err(|error| ErrorDetail::os(&error))
+    }
+
+    #[doc(hidden)]
+    pub fn add(&self, path: PathBuf, mask: WatchMask) -> Result<(i32, WatchActivity), ErrorDetail> {
+        let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
+        self.send_command(Command::Add {
+            path,
+            mask,
+            reply: reply_tx,
+        })?;
+        reply_rx
+            .recv()
+            .map_err(|_| ErrorDetail::Message("inotify worker exited while adding a watch"))?
+    }
+
+    #[doc(hidden)]
+    pub fn remove(&self, descriptor: i32) -> Result<bool, ErrorDetail> {
+        let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
+        self.send_command(Command::Remove {
+            descriptor,
+            reply: reply_tx,
+        })?;
+        reply_rx
+            .recv()
+            .map_err(|_| ErrorDetail::Message("inotify worker exited while removing a watch"))?
+    }
+
+    #[doc(hidden)]
+    pub fn drain(&self) -> DeliveryBatch<NativeEvent, WorkerControl> {
+        self.events.drain_consistent()
+    }
+}
+
+impl Drop for Worker {
+    fn drop(&mut self) {
+        let _ = self.send_command(Command::Shutdown);
+        if let Some(join) = self.join.take() {
+            let _ = join.join();
+        }
+    }
+}
+
+fn worker_loop(
+    mut inotify: Inotify,
+    poller: Arc<Poller>,
+    commands: Receiver<Command>,
+    events: DeliverySender<NativeEvent, WorkerControl>,
+) {
+    let mut descriptors = HashMap::<i32, NativeWatch>::new();
+    let mut poll_events = Events::new();
+    let mut buffer = vec![0; 64 * 1024];
+    loop {
+        match drain_native_events(&mut inotify, &mut descriptors, &mut buffer, &events)
+            .and_then(NativeDrain::require_intact_epoch)
+        {
+            Ok(true) => {}
+            Ok(false) => break,
+            Err(error) => {
+                let _ = poller.delete(&inotify);
+                events.finish_with(WorkerControl::Failed(error), || terminate_all(&descriptors));
+                return;
+            }
+        }
+
+        match apply_next_command(&mut inotify, &commands, &mut descriptors, &events) {
+            CommandOutcome::Applied => continue,
+            CommandOutcome::Stop => break,
+            CommandOutcome::Failed(error) => {
+                let _ = poller.delete(&inotify);
+                events.finish_with(WorkerControl::Failed(error), || terminate_all(&descriptors));
+                return;
+            }
+            CommandOutcome::Idle => {}
+        }
+
+        poll_events.clear();
+        if let Err(error) = poller.wait(&mut poll_events, None) {
+            let _ = poller.delete(&inotify);
+            events.finish_with(WorkerControl::Failed(ErrorDetail::os(&error)), || {
+                terminate_all(&descriptors)
+            });
+            return;
+        }
+    }
+
+    let _ = poller.delete(&inotify);
+}
+
+struct NativeDrain {
+    receiver_open: bool,
+    epoch: NativeQueueEpoch,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NativeQueueEpoch {
+    Intact,
+    Lost,
+}
+
+impl NativeQueueEpoch {
+    #[doc(hidden)]
+    pub fn observe(&mut self, mask: EventMask) {
+        if mask.contains(EventMask::Q_OVERFLOW) {
+            *self = Self::Lost;
+        }
+    }
+}
+
+impl NativeDrain {
+    #[doc(hidden)]
+    pub fn require_intact_epoch(self) -> Result<bool, ErrorDetail> {
+        match (self.receiver_open, self.epoch) {
+            (false, _) => Ok(false),
+            (true, NativeQueueEpoch::Intact) => Ok(true),
+            (true, NativeQueueEpoch::Lost) => Err(QUEUE_EPOCH_LOST),
+        }
+    }
+}
+
+fn drain_native_events(
+    inotify: &mut Inotify,
+    descriptors: &mut HashMap<i32, NativeWatch>,
+    buffer: &mut [u8],
+    events: &DeliverySender<NativeEvent, WorkerControl>,
+) -> Result<NativeDrain, ErrorDetail> {
+    match inotify.read_events(buffer) {
+        Ok(raw_events) => {
+            let mut epoch = NativeQueueEpoch::Intact;
+            for event in raw_events {
+                epoch.observe(event.mask);
+                let descriptor = event.wd.get_watch_descriptor_id();
+                let terminal = event.mask.contains(EventMask::IGNORED);
+                let activity = if terminal {
+                    descriptors.remove(&descriptor).map(|watch| watch.activity)
+                } else {
+                    descriptors
+                        .get(&descriptor)
+                        .map(|watch| watch.activity.clone())
+                };
+                let native_event = NativeEvent {
+                    descriptor,
+                    activity: activity.clone(),
+                    mask: event.mask,
+                    cookie: event.cookie,
+                    name: event.name.map(ToOwned::to_owned),
+                };
+                let outcome = match (terminal, activity) {
+                    (true, Some(activity)) => events
+                        .publish_control(WorkerControl::Terminal(native_event), move || {
+                            activity.terminate()
+                        }),
+                    _ => events.publish(native_event),
+                };
+                if outcome == PublishOutcome::Closed {
+                    return Ok(NativeDrain {
+                        receiver_open: false,
+                        epoch,
+                    });
+                }
+            }
+            Ok(NativeDrain {
+                receiver_open: true,
+                epoch,
+            })
+        }
+        Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(NativeDrain {
+            receiver_open: true,
+            epoch: NativeQueueEpoch::Intact,
+        }),
+        Err(error) => Err(ErrorDetail::os(&error)),
+    }
+}
+
+/// Drain the exact kernel-queue prefix that exists after a native mutation.
+/// Linux queues IN_IGNORED before releasing a descriptor, but it can replace
+/// that record with IN_Q_OVERFLOW. FIONREAD gives us a finite byte boundary:
+/// later records cannot overtake this prefix, and the typed epoch result keeps
+/// either condition from being mistaken for a reusable live descriptor.
+fn drain_native_boundary(
+    inotify: &mut Inotify,
+    descriptors: &mut HashMap<i32, NativeWatch>,
+    events: &DeliverySender<NativeEvent, WorkerControl>,
+) -> Result<NativeDrain, ErrorDetail> {
+    let bytes = rustix::io::ioctl_fionread(&*inotify).map_err(ErrorDetail::rustix)?;
+    // `u32 -> usize` cannot fail on any supported target, and there is no errno
+    // behind it; the detail is authored rather than derived.
+    let length = usize::try_from(bytes)
+        .map_err(|_| ErrorDetail::Message("inotify removal boundary is unrepresentable"))?;
+    if length == 0 {
+        return Ok(NativeDrain {
+            receiver_open: true,
+            epoch: NativeQueueEpoch::Intact,
+        });
+    }
+    let mut buffer = Vec::new();
+    buffer
+        .try_reserve_exact(length)
+        .map_err(|_| ErrorDetail::Message("could not allocate inotify removal boundary"))?;
+    buffer.resize(length, 0);
+    drain_native_events(inotify, descriptors, &mut buffer, events)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum CommandOutcome {
+    Applied,
+    Idle,
+    Stop,
+    Failed(ErrorDetail),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PendingAddKind {
+    ExistingEpoch,
+    NewEpoch,
+}
+
+struct PendingAdd {
+    descriptor: WatchDescriptor,
+    activity: WatchActivity,
+    kind: PendingAddKind,
+}
+
+enum PendingAddOutcome {
+    Ready {
+        activity: WatchActivity,
+        created_native_watch: bool,
+    },
+    Invalidated,
+    ReceiverClosed,
+    Failed(ErrorDetail),
+}
+
+impl PendingAdd {
+    /// Establish ownership immediately after `inotify_add_watch` returns.
+    ///
+    /// A vacant numeric descriptor is provisional until the finite native
+    /// boundary has been consumed.  An occupied descriptor may be the same
+    /// physical watch or a just-recycled number; completion treats a terminal
+    /// record in that ambiguous interval conservatively instead of aliasing
+    /// two kernel ownership epochs.
+    #[doc(hidden)]
+    pub fn begin(descriptor: WatchDescriptor, descriptors: &mut HashMap<i32, NativeWatch>) -> Self {
+        let id = descriptor.get_watch_descriptor_id();
+        match descriptors.entry(id) {
+            std::collections::hash_map::Entry::Occupied(entry) => Self {
+                descriptor,
+                activity: entry.get().activity.clone(),
+                kind: PendingAddKind::ExistingEpoch,
+            },
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                let activity = WatchActivity::active();
+                entry.insert(NativeWatch::provisional(
+                    descriptor.clone(),
+                    activity.clone(),
+                ));
+                Self {
+                    descriptor,
+                    activity,
+                    kind: PendingAddKind::NewEpoch,
+                }
+            }
+        }
+    }
+
+    #[cfg(test)]
+    #[doc(hidden)]
+    pub fn activity(&self) -> &WatchActivity {
+        &self.activity
+    }
+
+    #[doc(hidden)]
+    pub fn complete(
+        self,
+        inotify: &mut Inotify,
+        descriptors: &mut HashMap<i32, NativeWatch>,
+        events: &DeliverySender<NativeEvent, WorkerControl>,
+    ) -> PendingAddOutcome {
+        match drain_native_boundary(inotify, descriptors, events)
+            .and_then(NativeDrain::require_intact_epoch)
+        {
+            Ok(true) => {}
+            Ok(false) => return PendingAddOutcome::ReceiverClosed,
+            Err(error) => return PendingAddOutcome::Failed(error),
+        }
+
+        let id = self.descriptor.get_watch_descriptor_id();
+        match self.kind {
+            PendingAddKind::NewEpoch => match descriptors.get_mut(&id) {
+                Some(watch)
+                    if watch.phase == NativeWatchPhase::Provisional
+                        && watch.is_registration(&self.activity) =>
+                {
+                    watch.phase = NativeWatchPhase::Active;
+                    PendingAddOutcome::Ready {
+                        activity: self.activity,
+                        created_native_watch: true,
+                    }
+                }
+                None => PendingAddOutcome::Invalidated,
+                Some(_) => PendingAddOutcome::Failed(ErrorDetail::Message(
+                    "inotify provisional watch ownership changed unexpectedly",
+                )),
+            },
+            PendingAddKind::ExistingEpoch => match descriptors.get(&id) {
+                Some(watch)
+                    if watch.phase == NativeWatchPhase::Active
+                        && watch.is_registration(&self.activity) =>
+                {
+                    PendingAddOutcome::Ready {
+                        activity: self.activity,
+                        created_native_watch: false,
+                    }
+                }
+                None => {
+                    // One terminal record is ambiguous here: it can retire the
+                    // existing watch or precede reuse of the same numeric id.
+                    // Remove the syscall's returned descriptor in either case;
+                    // EINVAL means the former, success cleans up the latter.
+                    let remove_result = inotify.watches().remove(self.descriptor);
+                    if let Err(error) = &remove_result
+                        && error.kind() != io::ErrorKind::InvalidInput
+                    {
+                        return PendingAddOutcome::Failed(ErrorDetail::Context {
+                            message: "could not resolve an inotify add race",
+                            errno: Errno::from_io(error),
+                        });
+                    }
+                    match drain_native_boundary(inotify, descriptors, events)
+                        .and_then(NativeDrain::require_intact_epoch)
+                    {
+                        Ok(true) => PendingAddOutcome::Invalidated,
+                        Ok(false) => PendingAddOutcome::ReceiverClosed,
+                        Err(error) => PendingAddOutcome::Failed(error),
+                    }
+                }
+                Some(_) => PendingAddOutcome::Failed(ErrorDetail::Message(
+                    "inotify existing watch ownership changed unexpectedly",
+                )),
+            },
+        }
+    }
+}
+
+fn apply_next_command(
+    inotify: &mut Inotify,
+    commands: &Receiver<Command>,
+    descriptors: &mut HashMap<i32, NativeWatch>,
+    events: &DeliverySender<NativeEvent, WorkerControl>,
+) -> CommandOutcome {
+    match commands.try_recv() {
+        Ok(Command::Add { path, mask, reply }) => {
+            match inotify.watches().add(path, mask) {
+                Ok(watch_descriptor) => {
+                    let id = watch_descriptor.get_watch_descriptor_id();
+                    match PendingAdd::begin(watch_descriptor, descriptors).complete(
+                        inotify,
+                        descriptors,
+                        events,
+                    ) {
+                        PendingAddOutcome::Ready {
+                            activity,
+                            created_native_watch,
+                        } => {
+                            if reply.send(Ok((id, activity.clone()))).is_err()
+                                && created_native_watch
+                            {
+                                let Some(watch) = descriptors.remove(&id) else {
+                                    return CommandOutcome::Failed(ErrorDetail::Message(
+                                        "new inotify watch disappeared before rollback",
+                                    ));
+                                };
+                                if !watch.is_registration(&activity) {
+                                    return CommandOutcome::Failed(ErrorDetail::Message(
+                                        "new inotify watch changed ownership before rollback",
+                                    ));
+                                }
+                                activity.terminate();
+                                let native_result = inotify.watches().remove(watch.descriptor);
+                                match drain_native_boundary(inotify, descriptors, events)
+                                    .and_then(NativeDrain::require_intact_epoch)
+                                {
+                                    Ok(true) => {}
+                                    Ok(false) => return CommandOutcome::Stop,
+                                    Err(error) => return CommandOutcome::Failed(error),
+                                }
+                                if let Err(error) = native_result
+                                    && error.kind() != io::ErrorKind::InvalidInput
+                                {
+                                    return CommandOutcome::Failed(ErrorDetail::Context {
+                                        message: "could not roll back unclaimed inotify watch",
+                                        errno: Errno::from_io(&error),
+                                    });
+                                }
+                            }
+                        }
+                        PendingAddOutcome::Invalidated => {
+                            let _ = reply.send(Err(ErrorDetail::Message(
+                                "inotify watch was invalidated while it was being registered",
+                            )));
+                        }
+                        PendingAddOutcome::ReceiverClosed => return CommandOutcome::Stop,
+                        PendingAddOutcome::Failed(error) => {
+                            let _ = reply.send(Err(error.clone()));
+                            return CommandOutcome::Failed(error);
+                        }
+                    }
+                }
+                Err(error) => {
+                    let _ = reply.send(Err(ErrorDetail::os(&error)));
+                }
+            }
+            CommandOutcome::Applied
+        }
+        Ok(Command::Remove { descriptor, reply }) => {
+            match descriptors.remove(&descriptor) {
+                Some(watch) => {
+                    // GNU retires the public descriptor even if the native
+                    // removal reports an error.
+                    watch.activity.terminate();
+                    let native_result = inotify
+                        .watches()
+                        .remove(watch.descriptor)
+                        .map(|()| true)
+                        .map_err(|error| ErrorDetail::os(&error));
+                    match drain_native_boundary(inotify, descriptors, events)
+                        .and_then(NativeDrain::require_intact_epoch)
+                    {
+                        Ok(true) => {
+                            let _ = reply.send(native_result);
+                            CommandOutcome::Applied
+                        }
+                        Ok(false) => {
+                            let _ = reply
+                                .send(Err(ErrorDetail::Message("inotify event receiver closed")));
+                            CommandOutcome::Stop
+                        }
+                        Err(error) => {
+                            let _ = reply.send(Err(error.clone()));
+                            CommandOutcome::Failed(error)
+                        }
+                    }
+                }
+                None => {
+                    let _ = reply.send(Ok(false));
+                    CommandOutcome::Applied
+                }
+            }
+        }
+        Ok(Command::Shutdown) | Err(TryRecvError::Disconnected) => CommandOutcome::Stop,
+        Err(TryRecvError::Empty) => CommandOutcome::Idle,
+    }
+}
+
+fn terminate_all(descriptors: &HashMap<i32, NativeWatch>) {
+    for watch in descriptors.values() {
+        watch.activity.terminate();
+    }
+}

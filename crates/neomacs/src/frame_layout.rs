@@ -26,6 +26,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::StartupOptions;
 use super::tty_init;
+use neovm_core::window::display::WindowDisplayContextExt;
 
 thread_local! {
     /// Start without font metrics to avoid the ~500ms cosmic-text font

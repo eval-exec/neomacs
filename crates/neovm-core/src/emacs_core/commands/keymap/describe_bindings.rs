@@ -15,6 +15,7 @@ use crate::emacs_core::intern::resolve_sym;
 use crate::emacs_core::value::{Value, equal_value};
 
 use super::collect_minor_mode_map_entries_in_state;
+use neovm_edit::emacs_core::edit_host::EditHost;
 
 #[allow(clippy::too_many_arguments)] // mirrors the Lisp helper's positional argument contract
 fn call_help_describe_map_tree(

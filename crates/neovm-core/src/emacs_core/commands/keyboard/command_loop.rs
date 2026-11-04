@@ -21,6 +21,8 @@ use crate::emacs_core::intern::{SymId, WellKnown, format_symbol_name_for_diagnos
 use crate::emacs_core::value::{Value, ValueKind, eq_value_swp, equal_value};
 use crate::window::DisplayFrameExt;
 use crate::window::DisplayFrameManagerExt;
+use neovm_edit::emacs_core::edit_host::EditHost;
+use neovm_eval::emacs_core::reader::KeyboardInputRuntime;
 
 static TOP_LEVEL_SYMBOL: WellKnown = WellKnown::TopLevel;
 static EXIT_TAG: WellKnown = WellKnown::Exit;

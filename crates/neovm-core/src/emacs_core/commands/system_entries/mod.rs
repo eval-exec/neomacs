@@ -11,6 +11,7 @@ use crate::emacs_core::error::{EvalResult, LispCondition, expect_args, expect_ar
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::symbol::CanonicalAccess;
 use crate::emacs_core::value::Value;
+use neovm_edit::emacs_core::edit_host::EditHost;
 
 pub(crate) fn builtin_make_temp_file_internal(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     crate::emacs_core::fileio::builtin_make_temp_file_internal(eval, args)

@@ -9,6 +9,7 @@ use crate::emacs_core::error::{FlowKind, FlowResultExt};
 use crate::emacs_core::eval::{ConditionFrame, ResumeTarget};
 use crate::window::DisplayFrameExt;
 use crate::window::DisplayFrameManagerExt;
+use neovm_edit::emacs_core::edit_host::EditHost;
 
 /// Immutable process configuration; shared by mutators, contains no Lisp state.
 #[inline]

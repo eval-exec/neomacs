@@ -143,19 +143,7 @@ pub const GNU_FRAME_PARAMS: [FrameParam; GNU_FRAME_PARAM_COUNT] = [
 
 pub(crate) use neovm_value::display_vocab::FrameQueryParam;
 
-impl From<FrameQueryParam> for FrameParamKey {
-    fn from(value: FrameQueryParam) -> Self {
-        Self::Unknown(value.well_known().id())
-    }
-}
-
 pub use crate::emacs_core::eval::data::window_state::FrameParamKey;
-
-impl From<FrameParam> for FrameParamKey {
-    fn from(value: FrameParam) -> Self {
-        Self::Known(value)
-    }
-}
 
 #[cfg(test)]
 #[path = "frame_params/tests/frame_params_test.rs"]

@@ -7,6 +7,7 @@ use super::*;
 #[path = "mode_line_walk_stored.rs"]
 mod stored_walk_policy;
 use crate::emacs_core::Context;
+use neovm_edit::emacs_core::edit_host::EditHost;
 
 /// GNU's numeric field budget; its unit is selected by the output target.
 #[derive(Clone, Copy, Debug)]

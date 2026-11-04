@@ -10,9 +10,7 @@ mod subrs;
 pub(crate) use subrs::SUBRS;
 pub(crate) use subrs::register_subrs;
 
-use super::builtins::{
-    builtin_get_buffer, builtin_get_buffer_create, collect_proper_list_items, expect_wholenump,
-};
+use super::builtins::{builtin_get_buffer, builtin_get_buffer_create, expect_wholenump};
 use super::error::{EvalResult, Flow, signal};
 use super::eval::Context;
 use super::eval::VariableStore;
@@ -24,6 +22,7 @@ use crate::emacs_core::error::expect_args_range;
 use crate::heap_types::LispString;
 use crate::keyboard::{FrontendLoadPhase, FrontendWebValue, FrontendWebViewEvent};
 use neomacs_display_protocol::WebViewId;
+use neovm_value::list_scan::collect_proper_list_items;
 use strum::IntoStaticStr;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, IntoStaticStr)]
@@ -74,6 +73,7 @@ impl XwidgetFrontendEffect {
 }
 
 pub(crate) use crate::emacs_core::eval::data::xwidget::XwidgetState;
+use neovm_edit::emacs_core::edit_host::EditHost;
 
 /// Display-side xwidget behaviour: interpreting frontend events binds the
 /// keyboard's `FrontendWebViewEvent`/`FrontendLoadPhase` vocabulary, so it
@@ -255,11 +255,14 @@ fn frontend_web_value_to_lisp(value: &FrontendWebValue) -> Value {
     }
 }
 
-impl Context {
-    pub(crate) fn apply_xwidget_frontend_event(
-        &mut self,
-        event: &FrontendWebViewEvent,
-    ) -> Result<bool, Flow> {
+/// Stage-4 W5/E13 upper extension trait over the eval-owned type.
+#[doc(hidden)]
+pub trait XwidgetContextExt {
+    fn apply_xwidget_frontend_event(&mut self, event: &FrontendWebViewEvent) -> Result<bool, Flow>;
+}
+
+impl XwidgetContextExt for Context {
+    fn apply_xwidget_frontend_event(&mut self, event: &FrontendWebViewEvent) -> Result<bool, Flow> {
         let effect = self.xwidgets.apply_frontend_event(event);
         let redisplay = effect.redisplay_needed();
         match effect {
@@ -274,6 +277,9 @@ impl Context {
         Ok(redisplay)
     }
 }
+
+// The default bodies above are the implementation; this binds them to the
+// upper-layer type that owns the state.
 
 fn delq_from_list(list: Value, target: Value) -> Value {
     let items = collect_proper_list_items(list).expect("xwidget internal list must be proper");

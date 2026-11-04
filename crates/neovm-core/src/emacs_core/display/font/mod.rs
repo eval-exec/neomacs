@@ -40,6 +40,9 @@ use super::intern::{intern, resolve_sym};
 use super::value::*;
 use crate::buffer::{Buffer, CharPos0, EmacsBytePos, LispCharPos1};
 use crate::emacs_core::SymId;
+use crate::emacs_core::xfaces::realization::XfacesRealizationContextExt;
+use crate::face::realization::FrameFaceRealizationCacheExt;
+use crate::face::remapping::FaceTableRemappingExt;
 use crate::face::{
     Face as RuntimeFace, FaceHeight, FaceRemapping, FontSlant, FontWeight, FontWidth, LFaceAttr,
 };
@@ -47,6 +50,7 @@ use crate::heap_types::{LispString, LispStringStorageKind};
 use crate::tagged::header::{FontObjectData, FontObjectMetrics};
 use crate::window::{FRAME_ID_BASE, FrameId, FrameManager, FrameParam, WindowId};
 use neomacs_display_protocol::font::ResolvedFontIdentity;
+use neovm_edit::emacs_core::edit_host::EditHost;
 use neovm_value::display_vocab::{
     FONT_SLANT_STYLE_TABLE, FONT_WEIGHT_STYLE_TABLE, FONT_WIDTH_STYLE_TABLE,
 };

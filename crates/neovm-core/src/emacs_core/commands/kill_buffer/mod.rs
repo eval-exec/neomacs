@@ -16,6 +16,7 @@ use crate::emacs_core::value::{Value, ValueKind, VecLikeType, eq_value};
 use crate::window::DisplayFrameExt;
 use crate::window::DisplayFrameManagerExt;
 use crate::window::FrameManager;
+use neovm_edit::emacs_core::edit_host::EditHost;
 
 fn delete_quit_restore_popup_windows_showing_buffer(
     frames: &mut FrameManager,

@@ -1,0 +1,76 @@
+[package]
+name = "neovm-eval"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Evaluator and Lisp runtime extracted from neovm-core"
+
+[features]
+default = ["jit"]
+contract-fixtures = []
+desktop-font-settings = []
+gc-memory-telemetry = []
+jit = ["neovm-value/jit", "neovm-edit/jit", "neovm-text/jit"]
+perf-probes = []
+redisplay-test-policy = ["neovm-edit/redisplay-test-policy"]
+sqlite = []
+vm-profile = []
+
+[dependencies]
+neovm-value = { path = "../neovm-value" }
+neovm-edit = { path = "../neovm-edit" }
+neovm-text = { path = "../neovm-text" }
+bitflags.workspace = true
+bytemuck.workspace = true
+cranelift-codegen.workspace = true
+cranelift-frontend.workspace = true
+cranelift-jit.workspace = true
+cranelift-module.workspace = true
+cranelift-native.workspace = true
+cranelift-object.workspace = true
+crossbeam-channel.workspace = true
+encoding_rs.workspace = true
+enum-map.workspace = true
+enumflags2.workspace = true
+errno.workspace = true
+fs4.workspace = true
+hashbrown.workspace = true
+hostname.workspace = true
+inotify.workspace = true
+keysymdefs.workspace = true
+libc.workspace = true
+libloading.workspace = true
+malachite.workspace = true
+memchr.workspace = true
+memmap2.workspace = true
+native-regex.workspace = true
+neomacs-display-protocol.workspace = true
+num_enum.workspace = true
+object = { version = "0.39", default-features = false, features = ["read", "std"] }
+polling.workspace = true
+rustc-hash.workspace = true
+rustix.workspace = true
+serde.workspace = true
+sha1.workspace = true
+sha2.workspace = true
+smallvec.workspace = true
+stacker.workspace = true
+static_assertions.workspace = true
+strum.workspace = true
+sysinfo.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tree-sitter.workspace = true
+tree-sitter-language.workspace = true
+unicode_names2.workspace = true
+whoami = "2.1.2"
+md-5.workspace = true
+os_pipe.workspace = true
+portable-pty.workspace = true
+rustls.workspace = true
+socket2.workspace = true
+neomacs-video-model.workspace = true
+windows-sys.workspace = true

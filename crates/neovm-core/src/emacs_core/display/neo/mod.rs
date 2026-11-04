@@ -5,4 +5,4 @@ pub(crate) mod effects;
 pub(crate) mod modifiers;
 pub(crate) mod terminal;
 
-mod scroll;
+pub mod scroll;

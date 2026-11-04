@@ -1,5 +1,6 @@
 //! Keyboard equivalents are resolved in the evaluator's active keymaps.
 use super::{Context, Flow, MenuRoots, Value};
+use neovm_edit::emacs_core::edit_host::EditHost;
 
 #[derive(Default)]
 pub(super) struct Hints {

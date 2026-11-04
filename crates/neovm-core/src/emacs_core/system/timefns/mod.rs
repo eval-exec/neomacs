@@ -53,6 +53,7 @@ mod mktime;
 mod time_zone_spec;
 use time_zone_spec::TimeZoneSpec;
 mod unix_timestamp;
+use neovm_edit::emacs_core::edit_host::EditHost;
 pub(crate) use unix_timestamp::{TimestampError, UnixTimestamp};
 #[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::IntoStaticStr)]
 enum TimeConvertSymbolForm {

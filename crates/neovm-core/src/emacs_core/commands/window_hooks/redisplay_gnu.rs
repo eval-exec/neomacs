@@ -11,6 +11,7 @@ use crate::emacs_core::eval::redisplay_hooks::{
 use crate::emacs_core::intern::WellKnown;
 use crate::window::DisplayFrameExt;
 use neovm_edit::emacs_core::display_metrics::WindowId;
+use neovm_edit::emacs_core::edit_host::EditHost;
 use neovm_value::display_vocab::FrameId;
 
 // Fixed GNU hook spellings run on every redisplay; see `hooks.rs`.

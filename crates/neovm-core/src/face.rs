@@ -7,7 +7,7 @@
 
 mod dump_codes;
 pub mod realization;
-mod remapping;
+pub(crate) mod remapping;
 use neovm_value::value::{Value, ValueKind};
 pub use remapping::{FaceRemapEntry, FaceRemapping};
 

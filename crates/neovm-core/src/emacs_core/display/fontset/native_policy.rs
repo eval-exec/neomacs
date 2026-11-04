@@ -4,6 +4,7 @@
 //! character clones two shared slices; it neither copies nor limits the chain.
 
 use super::{DEFAULT_FONTSET_NAME, FontSpecEntry, FontsetData, fontset_name_spelling, registry};
+use crate::emacs_core::fontset::StoredFontSpecExt;
 use crate::emacs_core::intern::{SymId, resolve_sym_lisp_string};
 use crate::face::{FontSlant, FontWeight, FontWidth};
 use std::borrow::Cow;

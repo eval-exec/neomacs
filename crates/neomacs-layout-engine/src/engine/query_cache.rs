@@ -5,6 +5,7 @@ use super::rows_lifetime::{CertifiedRowsHit, PublicationCandidate, StoredRows};
 use crate::buffer_source::render_attempt::QueryRowCoverage;
 use neovm_core::window::DisplayFrameExt;
 use neovm_core::window::DisplayFrameManagerExt;
+use neovm_core::window::display::WindowDisplayContextExt;
 use neovm_core::{
     emacs_core::Context,
     window::{FrameId, WindowDisplaySnapshot, WindowId, WindowLayoutQuery, WindowLayoutQueryScope},

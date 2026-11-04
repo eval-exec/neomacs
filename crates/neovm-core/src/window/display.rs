@@ -8,9 +8,11 @@ use super::{
 use crate::buffer::{BufferId, LispCharPos1};
 use crate::emacs_core::eval::data::window_layout_query::WindowLayoutQueryAdapter;
 use crate::emacs_core::intern::WellKnown;
+use crate::emacs_core::neo::scroll::ScrollContextExt;
 use crate::emacs_core::value::Value;
 use crate::window::DisplayFrameExt;
 use crate::window::DisplayFrameManagerExt;
+use crate::window::LayoutPrefixInputExt;
 
 /// One complete marker-backed viewport transition chosen by a scroll engine.
 /// Row-based terminal and pixel-based graphical scrolling share its commit;
@@ -191,11 +193,137 @@ pub(crate) fn vertical_scroll_bar_cols(frame: &Frame, display: &WindowDisplaySta
     }
 }
 
-impl crate::emacs_core::eval::Context {
+/// Stage-4 W5/E13 upper extension trait over the eval-owned type.
+#[doc(hidden)]
+pub trait WindowDisplayContextExt {
+    fn set_window_point_for_redisplay(
+        &mut self,
+        frame_id: FrameId,
+        window_id: WindowId,
+        point_lisp: LispCharPos1,
+    );
+
+    fn create_window_markers_for_root(&mut self, frame_id: FrameId, buffer_id: BufferId);
+
+    fn create_window_markers_for_minibuffer(&mut self, frame_id: FrameId, buffer_id: BufferId);
+
+    fn sync_window_positions(&mut self, buffer_id: BufferId);
+
+    fn window_layout_attempt_freshness(
+        &self,
+        frame_id: FrameId,
+        window_id: WindowId,
+        source_buffer_id: BufferId,
+    ) -> Option<crate::window::WindowLayoutAttemptFreshness>;
+
+    fn window_layout_attempt_freshness_with_capture(
+        &self,
+        frame_id: FrameId,
+        window_id: WindowId,
+        source_buffer_id: BufferId,
+        capture: impl FnMut(&Self, BufferId) -> Option<super::WindowBufferLayoutInputState>,
+    ) -> Option<crate::window::WindowLayoutAttemptFreshness>;
+
+    fn window_layout_attempt_freshness_after_span<'a>(
+        &self,
+        before: &'a crate::window::WindowLayoutAttemptFreshness,
+        admission: super::WindowLayoutLispAdmission,
+    ) -> Option<std::borrow::Cow<'a, crate::window::WindowLayoutAttemptFreshness>>;
+
+    fn install_window_layout_query<F>(&mut self, query: F)
+    where
+        F: FnMut(
+                &mut Self,
+                FrameId,
+                WindowId,
+                crate::window::WindowLayoutQueryScope,
+            ) -> crate::window::WindowLayoutQueryOutcome
+            + 'static;
+
+    fn query_window_layout(
+        &mut self,
+        frame_id: FrameId,
+        window_id: WindowId,
+    ) -> crate::window::WindowLayoutQueryOutcome;
+
+    fn query_window_layout_scope(
+        &mut self,
+        frame_id: FrameId,
+        window_id: WindowId,
+        scope: crate::window::WindowLayoutQueryScope,
+    ) -> crate::window::WindowLayoutQueryOutcome;
+
+    fn publish_redisplay_window_start(
+        &mut self,
+        frame_id: FrameId,
+        window_id: WindowId,
+        window_start_lisp: LispCharPos1,
+    ) -> crate::window::WindowStartCommit;
+
+    fn publish_redisplay_window_end(
+        &mut self,
+        frame_id: FrameId,
+        window_id: WindowId,
+        window_end: crate::window::WindowEndRecord,
+    );
+
+    fn begin_redisplay_window_end_attempt(
+        &self,
+        frame_id: FrameId,
+        window_id: WindowId,
+        buffer_id: BufferId,
+    ) -> Option<crate::window::WindowEndAttempt>;
+
+    fn reject_redisplay_window_end_attempt(&mut self, attempt: crate::window::WindowEndAttempt);
+
+    fn buffer_layout_inputs(
+        &self,
+        buffer_id: BufferId,
+    ) -> Option<super::WindowBufferLayoutInputState>;
+
+    fn redisplay_buffer_layout_inputs(&self, buffer_id: BufferId)
+    -> Option<BufferLayoutInputState>;
+
+    fn capture_buffer_layout_inputs<Fontification>(
+        &self,
+        buffer_id: BufferId,
+        capture_fontification: impl FnOnce(&crate::buffer::Buffer) -> Fontification,
+    ) -> Option<BufferLayoutInputState<Fontification>>;
+
+    fn layout_word_wrap_policy(&self, buffer_id: BufferId) -> Option<super::WordWrapPolicy>;
+
+    fn layout_display_table_input(
+        &self,
+        buffer_id: BufferId,
+    ) -> Option<super::LayoutDisplayTableInput>;
+
+    fn layout_invisibility_input(
+        &self,
+        buffer_id: BufferId,
+    ) -> Option<super::LayoutInvisibilityInput>;
+
+    fn layout_prefix_inputs(&self, buffer_id: BufferId) -> Option<super::LayoutPrefixInputs>;
+
+    fn window_display_snapshot_freshness(
+        &self,
+        frame_id: FrameId,
+        window_id: WindowId,
+        buffer_id: BufferId,
+    ) -> Option<WindowDisplaySnapshotFreshness>;
+
+    fn fresh_window_display_snapshot(
+        &self,
+        frame_id: FrameId,
+        window_id: WindowId,
+        buffer_id: BufferId,
+    ) -> Option<&WindowDisplaySnapshot>;
+}
+
+impl WindowDisplayContextExt for crate::emacs_core::eval::Context {
     /// Move a window's point marker during redisplay (GNU force_start branch
     /// moving point into the window). The buffer point for the selected
     /// window is the caller's responsibility.
-    pub fn set_window_point_for_redisplay(
+    fn set_window_point_for_redisplay(
         &mut self,
         frame_id: FrameId,
         window_id: WindowId,
@@ -211,13 +339,13 @@ impl crate::emacs_core::eval::Context {
         }
     }
 
-    pub fn create_window_markers_for_root(&mut self, frame_id: FrameId, buffer_id: BufferId) {
+    fn create_window_markers_for_root(&mut self, frame_id: FrameId, buffer_id: BufferId) {
         let root = &mut self.frames.get_mut(frame_id).unwrap().root_window_mut();
         debug_assert_eq!(root.buffer_id(), Some(buffer_id));
         super::window_markers::attach_window_position_markers(&mut self.edit.buffers, root);
     }
 
-    pub fn create_window_markers_for_minibuffer(&mut self, frame_id: FrameId, buffer_id: BufferId) {
+    fn create_window_markers_for_minibuffer(&mut self, frame_id: FrameId, buffer_id: BufferId) {
         let mini = self
             .frames
             .get_mut(frame_id)
@@ -230,7 +358,7 @@ impl crate::emacs_core::eval::Context {
         }
     }
 
-    pub fn sync_window_positions(&mut self, buffer_id: BufferId) {
+    fn sync_window_positions(&mut self, buffer_id: BufferId) {
         for frame in self.frames.frames_mut() {
             super::window_markers::sync_window_positions_from_markers(frame, buffer_id);
         }
@@ -238,7 +366,7 @@ impl crate::emacs_core::eval::Context {
 
     /// Capture both the live window and semantic source-buffer identity used by
     /// one speculative leaf layout.
-    pub fn window_layout_attempt_freshness(
+    fn window_layout_attempt_freshness(
         &self,
         frame_id: FrameId,
         window_id: WindowId,
@@ -334,7 +462,7 @@ impl crate::emacs_core::eval::Context {
     /// retained state or a key-based cache. Each evaluator exclusively owns its
     /// inputs; independently published fontsets/dispatch and lazy native
     /// character-table initialization still require the checks below.
-    pub fn window_layout_attempt_freshness_after_span<'a>(
+    fn window_layout_attempt_freshness_after_span<'a>(
         &self,
         before: &'a crate::window::WindowLayoutAttemptFreshness,
         admission: super::WindowLayoutLispAdmission,
@@ -371,7 +499,7 @@ impl crate::emacs_core::eval::Context {
     }
 
     /// Install the frontend half of the synchronous layout-query boundary.
-    pub fn install_window_layout_query<F>(&mut self, query: F)
+    fn install_window_layout_query<F>(&mut self, query: F)
     where
         F: FnMut(
                 &mut Self,
@@ -400,7 +528,7 @@ impl crate::emacs_core::eval::Context {
     /// Like GNU `Fwindow_end`, this is an observation, not redisplay
     /// publication: retained window positions remain owned by an accepted
     /// presentation.
-    pub(crate) fn query_window_layout(
+    fn query_window_layout(
         &mut self,
         frame_id: FrameId,
         window_id: WindowId,
@@ -412,7 +540,7 @@ impl crate::emacs_core::eval::Context {
         )
     }
 
-    pub(crate) fn query_window_layout_scope(
+    fn query_window_layout_scope(
         &mut self,
         frame_id: FrameId,
         window_id: WindowId,
@@ -484,7 +612,7 @@ impl crate::emacs_core::eval::Context {
     }
 
     #[must_use = "a committed window start owes window-scroll-functions a run"]
-    pub fn publish_redisplay_window_start(
+    fn publish_redisplay_window_start(
         &mut self,
         frame_id: FrameId,
         window_id: WindowId,
@@ -541,7 +669,7 @@ impl crate::emacs_core::eval::Context {
     /// `run_window_scroll_functions` and marks the new end valid only after
     /// `try_window` succeeds. Keeping this separate from start publication
     /// prevents Lisp callbacks from observing a discarded attempt's end.
-    pub fn publish_redisplay_window_end(
+    fn publish_redisplay_window_end(
         &mut self,
         frame_id: FrameId,
         window_id: WindowId,
@@ -558,7 +686,7 @@ impl crate::emacs_core::eval::Context {
     }
 
     /// Start one speculative body/chrome publication scope.
-    pub fn begin_redisplay_window_end_attempt(
+    fn begin_redisplay_window_end_attempt(
         &self,
         frame_id: FrameId,
         window_id: WindowId,
@@ -578,10 +706,7 @@ impl crate::emacs_core::eval::Context {
 
     /// Reject a speculative end while preserving any explicit buffer switch
     /// performed by Lisp during chrome evaluation.
-    pub fn reject_redisplay_window_end_attempt(
-        &mut self,
-        attempt: crate::window::WindowEndAttempt,
-    ) {
+    fn reject_redisplay_window_end_attempt(&mut self, attempt: crate::window::WindowEndAttempt) {
         let Some(window) = self
             .frames
             .get_mut(attempt.frame_id)
@@ -598,7 +723,7 @@ impl crate::emacs_core::eval::Context {
     /// Installing a hook can change canonical motion without changing text
     /// ticks or the generic redisplay generation. Keep this effective identity
     /// read and the attempt's namespace guard at their existing boundaries.
-    pub(crate) fn buffer_layout_inputs(
+    fn buffer_layout_inputs(
         &self,
         buffer_id: BufferId,
     ) -> Option<super::WindowBufferLayoutInputState> {
@@ -619,7 +744,7 @@ impl crate::emacs_core::eval::Context {
     /// still participate through the shared text/property/overlay revisions.
     /// Unit erases only that callback identity; full freshness consumers cannot
     /// accept this type in place of their required fontification payload.
-    pub(crate) fn redisplay_buffer_layout_inputs(
+    fn redisplay_buffer_layout_inputs(
         &self,
         buffer_id: BufferId,
     ) -> Option<BufferLayoutInputState> {
@@ -651,7 +776,7 @@ impl crate::emacs_core::eval::Context {
         })
     }
 
-    pub fn layout_word_wrap_policy(&self, buffer_id: BufferId) -> Option<super::WordWrapPolicy> {
+    fn layout_word_wrap_policy(&self, buffer_id: BufferId) -> Option<super::WordWrapPolicy> {
         let buffer = self.edit.buffers.get(buffer_id)?;
         let enabled = |variable: super::WindowLayoutVariable| {
             self.variable_value_in_buffer(Some(buffer), variable.sym_id())
@@ -668,7 +793,7 @@ impl crate::emacs_core::eval::Context {
     }
 
     /// Capture glyph-vector inputs for the effective buffer/standard table.
-    pub fn layout_display_table_input(
+    fn layout_display_table_input(
         &self,
         buffer_id: BufferId,
     ) -> Option<super::LayoutDisplayTableInput> {
@@ -684,7 +809,7 @@ impl crate::emacs_core::eval::Context {
     }
 
     /// Capture ordered invisibility membership and ellipsis selection by value.
-    pub fn layout_invisibility_input(
+    fn layout_invisibility_input(
         &self,
         buffer_id: BufferId,
     ) -> Option<super::LayoutInvisibilityInput> {
@@ -700,7 +825,7 @@ impl crate::emacs_core::eval::Context {
 
     /// Capture effective buffer-local prefix values, never references to mutable
     /// Lisp strings. Every geometry consumer uses this same projection.
-    pub fn layout_prefix_inputs(&self, buffer_id: BufferId) -> Option<super::LayoutPrefixInputs> {
+    fn layout_prefix_inputs(&self, buffer_id: BufferId) -> Option<super::LayoutPrefixInputs> {
         let buffer = self.edit.buffers.get(buffer_id)?;
         let capture = |variable: super::WindowLayoutVariable| {
             super::LayoutPrefixInput::capture(
@@ -719,7 +844,7 @@ impl crate::emacs_core::eval::Context {
     /// Its frame/window/buffer projections share every geometry input with
     /// redisplay scheduling. This full token additionally owns the effective
     /// fontification callback identity, which is not a repaint request.
-    pub fn window_display_snapshot_freshness(
+    fn window_display_snapshot_freshness(
         &self,
         frame_id: FrameId,
         window_id: WindowId,
@@ -757,7 +882,7 @@ impl crate::emacs_core::eval::Context {
     /// Older snapshots without a full token retain the legacy `buffer_modiff`
     /// gate. Fixtures with neither value explicitly opt into trusted synthetic
     /// geometry.
-    pub fn fresh_window_display_snapshot(
+    fn fresh_window_display_snapshot(
         &self,
         frame_id: FrameId,
         window_id: WindowId,
@@ -798,6 +923,9 @@ impl crate::emacs_core::eval::Context {
         Some(snapshot)
     }
 }
+
+// The default bodies above are the implementation; this binds them to the
+// upper-layer type that owns the state.
 
 #[cfg(test)]
 #[path = "tests/attempt_freshness_reuse_test.rs"]

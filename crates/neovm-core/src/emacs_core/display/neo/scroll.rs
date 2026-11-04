@@ -88,8 +88,28 @@ const SPECIAL_EVENT_MAP: ScrollSymbol = ScrollSymbol::new(WellKnown::SpecialEven
 const WHEEL_UP: ScrollSymbol = ScrollSymbol::new(WellKnown::WheelUp);
 const WHEEL_DOWN: ScrollSymbol = ScrollSymbol::new(WellKnown::WheelDown);
 
-impl Context {
-    pub(crate) fn publish_committed_scroll_preview(
+/// Stage-4 W5/E13 upper extension trait over the eval-owned type.
+#[doc(hidden)]
+pub trait ScrollContextExt {
+    fn publish_committed_scroll_preview(
+        &mut self,
+        frame: crate::window::FrameId,
+        window: crate::window::WindowId,
+    );
+
+    fn scroll_variable(
+        &self,
+        window: crate::window::WindowId,
+        variable: &ScrollSymbol,
+    ) -> Option<Value>;
+
+    fn compositor_scrolling_enabled(&self, window: crate::window::WindowId) -> bool;
+
+    fn permits_compositor_pixel_scroll(&self, window: crate::window::WindowId) -> bool;
+}
+
+impl ScrollContextExt for Context {
+    fn publish_committed_scroll_preview(
         &mut self,
         frame: crate::window::FrameId,
         window: crate::window::WindowId,
@@ -133,12 +153,12 @@ impl Context {
         (!value.is_unbound()).then_some(value)
     }
 
-    pub fn compositor_scrolling_enabled(&self, window: crate::window::WindowId) -> bool {
+    fn compositor_scrolling_enabled(&self, window: crate::window::WindowId) -> bool {
         self.scroll_variable(window, &NEOMACS_COMPOSITOR_SCROLLING)
             .is_some_and(|value| !value.is_nil())
     }
 
-    pub fn permits_compositor_pixel_scroll(&self, window: crate::window::WindowId) -> bool {
+    fn permits_compositor_pixel_scroll(&self, window: crate::window::WindowId) -> bool {
         let symbol_mode = self.symbol_mode();
         // Raw input prediction relies on the selected window's keymaps and
         // command context. A resolved preview already has its destination
@@ -315,6 +335,9 @@ impl Context {
         })
     }
 }
+
+// The default bodies above are the implementation; this binds them to the
+// upper-layer type that owns the state.
 
 #[cfg(test)]
 #[path = "tests/scroll_test.rs"]

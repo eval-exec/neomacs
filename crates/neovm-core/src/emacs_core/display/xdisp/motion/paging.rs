@@ -5,6 +5,7 @@ use super::policy::{PreservePoint, ScrollPolicy};
 use super::*;
 use crate::window::DisplayFrameExt;
 use crate::window::DisplayFrameManagerExt;
+use crate::window::display::WindowDisplayContextExt;
 use crate::window::{Window, WindowScrollUpdate};
 use std::num::NonZeroUsize;
 

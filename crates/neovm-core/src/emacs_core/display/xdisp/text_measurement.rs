@@ -1,5 +1,6 @@
 //! Displayed text extents through the canonical offscreen row producer.
 use super::*;
+use crate::window::display::WindowDisplayContextExt;
 use crate::window::{WindowDisplaySnapshot, WindowLayoutQueryOutcome, WindowLayoutQueryScope};
 
 /// Named measurement inputs prevent mixing source bounds and fallback units.

@@ -264,19 +264,3 @@ impl SerialAttributes {
         self.0.set_flow_control(flow);
     }
 }
-
-impl io::Read for SerialPort {
-    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        self.0.read(buffer)
-    }
-}
-
-impl io::Write for SerialPort {
-    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-        self.0.write(buffer)
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}

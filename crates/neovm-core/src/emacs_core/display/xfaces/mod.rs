@@ -10,7 +10,7 @@
 //! `crate::face`; font.c matching stays in `super::font`.
 
 pub(crate) mod height;
-pub(crate) mod realization;
+pub mod realization;
 
 use crate::emacs_core::error::EvalResult;
 use crate::emacs_core::error::{expect_args, expect_max_args, expect_min_args};
@@ -22,9 +22,12 @@ use crate::emacs_core::intern::resolve_sym;
 use crate::emacs_core::symbol::CanonicalAccess;
 use crate::emacs_core::symbol::Obarray;
 use crate::emacs_core::value::{HashKey, HashTableTest, Value, ValueKind, list_to_vec};
+use crate::emacs_core::xfaces::realization::XfacesRealizationContextExt;
+use crate::face::remapping::FaceTableRemappingExt;
 use crate::face::{LFACE_VECTOR_SIZE, LFaceAttr};
 use crate::window::DisplayFrameExt;
 use crate::window::DisplayFrameManagerExt;
+use neovm_edit::emacs_core::edit_host::EditHost;
 
 /// Register bootstrap variables owned by the face subsystem.
 pub fn register_bootstrap_vars(obarray: &mut Obarray) {

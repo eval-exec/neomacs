@@ -17,8 +17,8 @@ pub use neovm_value::heap_types;
 #[cfg(test)]
 #[path = "../core_test_facades/heap_types.rs"]
 pub mod heap_types;
-pub mod host_effect;
 pub use crate::emacs_core::host_input;
+pub use neovm_eval::host_effect;
 #[cfg(test)]
 mod image_identity;
 pub use crate::emacs_core::eval::keyboard;
@@ -81,22 +81,12 @@ pub(crate) use emacs_core::{error, intern, value};
 pub const CORE_BACKEND: &str = "rust";
 
 // GNU seeds emacs-version from configure.ac's PACKAGE_VERSION; version.el
-// derives its numeric components from that same value. Keep the bare evaluator
-// and loaded Lisp equally consistent, including for GNU's MAJOR.MINOR.MICRO
-// development versions. Integer constants make invalid components a compile
-// error, and concat! keeps the public string allocation-free.
-macro_rules! gnu_emacs_version {
-    ($major:literal, $minor:literal $(, $micro:literal)?) => {
-        /// The GNU Emacs version whose Lisp tree and compatibility surface we track.
-        pub const GNU_EMACS_VERSION: &str =
-            concat!(stringify!($major), ".", stringify!($minor) $(, ".", stringify!($micro))?);
-        pub(crate) const GNU_EMACS_MAJOR_VERSION: u32 = $major;
-        pub(crate) const GNU_EMACS_MINOR_VERSION: u32 = $minor;
-        $(const _: u32 = $micro;)?
-    };
-}
-
-gnu_emacs_version!(31, 1);
+// derives its numeric components from that same value. The constants moved
+// with the evaluator (stage-4 W5/E13); the historical crate-root paths stay
+// as re-exports.
+pub use neovm_eval::GNU_EMACS_VERSION;
+#[doc(hidden)]
+pub(crate) use neovm_eval::{GNU_EMACS_MAJOR_VERSION, GNU_EMACS_MINOR_VERSION};
 
 use neovm_host_abi::{LispValue, SelectOp, SelectResult, Signal, TaskError, TaskOptions};
 use std::time::Duration;

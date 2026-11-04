@@ -90,6 +90,7 @@ use crate::emacs_core::eval::redisplay_hooks::{
     BufferContext, NamedHookCall, named_hook_value, safe_named_hook, window_buffer_id_in_state,
 };
 use crate::emacs_core::intern::WellKnown;
+use crate::window::display::WindowDisplayContextExt;
 use crate::window::{
     DisplayRowSnapshot, FrameId, FrameManager, Window, WindowChromeLine, WindowChromePresence,
     WindowDisplaySnapshot, WindowId,
@@ -97,6 +98,7 @@ use crate::window::{
 pub(crate) use eval_display_queries::{
     canonical_display_query_hooks, install_eval_display_query_hooks,
 };
+use neovm_edit::emacs_core::edit_host::EditHost;
 use std::num::NonZeroUsize;
 use std::ops::ControlFlow;
 use strum::{EnumString, IntoStaticStr};
@@ -216,7 +218,28 @@ pub(crate) fn run_committed_scroll_functions(
     safe_named_hook(scope.eval, symbol, &[window_arg, start])
 }
 
-impl super::eval::Context {
+/// Stage-4 W5/E13 upper extension trait over the eval-owned type.
+#[doc(hidden)]
+pub trait XdispContextExt {
+    fn redisplay_start_before_point_by_display_rows(
+        &mut self,
+        buffer_id: BufferId,
+        window_id: WindowId,
+        point: CharPos0,
+        rows: i64,
+    ) -> Option<CharPos0>;
+
+    fn window_scroll_functions_may_run(&self, window_id: WindowId) -> bool;
+
+    fn run_window_scroll_functions_for_committed_start(
+        &mut self,
+        window_id: WindowId,
+    ) -> EvalResult;
+
+    fn run_window_scroll_functions_for_committed_start_legacy(&mut self, window_id: WindowId);
+}
+
+impl XdispContextExt for super::eval::Context {
     /// Choose a redisplay start by moving backward from point in display rows.
     ///
     /// GNU's `recenter:` branch initializes its display iterator at point and
@@ -235,7 +258,7 @@ impl super::eval::Context {
     /// UI is up -- so this helper selects `buffer_id` for the scan and hands
     /// the caller's buffer back afterwards, as `with_frame_display_context`
     /// does for mode-line Lisp.
-    pub fn redisplay_start_before_point_by_display_rows(
+    fn redisplay_start_before_point_by_display_rows(
         &mut self,
         buffer_id: BufferId,
         window_id: WindowId,
@@ -288,7 +311,7 @@ impl super::eval::Context {
     /// The hook can be buffer-local. Inspect the displayed buffer directly so
     /// layout can distinguish a real suspension point from GNU's nil-hook
     /// fast path without changing the selected window or current buffer.
-    pub fn window_scroll_functions_may_run(&self, window_id: WindowId) -> bool {
+    fn window_scroll_functions_may_run(&self, window_id: WindowId) -> bool {
         let Some(buffer_id) = self
             .frames
             .find_window_frame_id(window_id)
@@ -319,7 +342,7 @@ impl super::eval::Context {
     /// because this remains part of the same logical redisplay even though the
     /// physical layout attempt has released its borrow. Errors are demoted,
     /// mirroring GNU's `safe_run_hooks_2`.
-    pub fn run_window_scroll_functions_for_committed_start(
+    fn run_window_scroll_functions_for_committed_start(
         &mut self,
         window_id: WindowId,
     ) -> EvalResult {
@@ -352,6 +375,9 @@ impl super::eval::Context {
         }
     }
 }
+
+// The default bodies above are the implementation; this binds them to the
+// upper-layer type that owns the state.
 
 // ---------------------------------------------------------------------------
 // Argument helpers

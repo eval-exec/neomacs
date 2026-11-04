@@ -17,6 +17,7 @@ use crate::emacs_core::syntax::{
     parse_sexp_lookup_properties_enabled, syntax_propertize_frontier_for_scan,
     word_boundary_table_active, word_motion_with_table,
 };
+use neovm_edit::emacs_core::edit_host::EditHost;
 use neovm_value::error::{EvalResult, LispCondition, signal};
 use neovm_value::value::{Value, ValueKind};
 

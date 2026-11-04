@@ -26,6 +26,7 @@ use crate::emacs_core::error::{
     EvalResult, LispCondition, expect_args, expect_args_range, expect_max_args, signal,
 };
 use crate::emacs_core::value::{Value, ValueKind, VecLikeType};
+use neovm_edit::emacs_core::edit_host::EditHost;
 
 pub(crate) fn builtin_replace_region_contents(
     eval: &mut crate::emacs_core::eval::Context,

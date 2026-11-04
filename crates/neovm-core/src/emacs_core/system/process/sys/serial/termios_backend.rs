@@ -182,11 +182,6 @@ impl DeviceIo for Device {
     }
 }
 
-impl AsRawFd for Device {
-    fn as_raw_fd(&self) -> RawFd {
-        self.fd.as_raw_fd()
-    }
-}
 
 impl Attributes {
     pub fn set_speed(&mut self, speed: i64) -> Result<(), SerialSpeedError> {

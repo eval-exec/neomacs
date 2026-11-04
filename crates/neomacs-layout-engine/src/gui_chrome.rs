@@ -27,6 +27,8 @@ use strum::{EnumString, IntoStaticStr};
 use crate::tty_menu_bar::{
     MenuBarCacheKey, collect_tty_menu_bar_items, collect_tty_menu_bar_items_for_frame,
 };
+use neovm_core::display_evaluation::DisplayEvaluationContextExt;
+use neovm_core::emacs_core::keymap::MenuButtonKindExt;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, EnumString, IntoStaticStr)]
 #[strum(serialize_all = "kebab-case")]

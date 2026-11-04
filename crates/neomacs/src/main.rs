@@ -12,6 +12,8 @@
 // Several CLI/redisplay entry points here take many positional parameters;
 // folding them into structs is a separate refactor, out of scope for the gate.
 #![allow(clippy::too_many_arguments)]
+use neovm_core::emacs_core::xfaces::realization::XfacesRealizationContextExt;
+use neovm_core::window::display::WindowDisplayContextExt;
 
 // Global allocator: TiKV jemalloc is the Linux production default; mimalloc
 // remains the default elsewhere and is available for Linux throughput

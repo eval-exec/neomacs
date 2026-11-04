@@ -45,6 +45,7 @@
 
 use super::eval::Context;
 use crate::Value;
+use neovm_edit::emacs_core::edit_host::EditHost;
 
 /// A compile-time constant GNU assigns to a Lisp variable in an `init_*`
 /// body.

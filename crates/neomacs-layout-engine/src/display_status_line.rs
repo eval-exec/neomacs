@@ -66,6 +66,7 @@ use neomacs_display_protocol::{
     FrameRect, PointerAppearanceId, PointerDrawMode, PointerImageRelief, PresentedPrimitiveKind,
 };
 use neovm_core::buffer::BufferId;
+use neovm_core::display_evaluation::DisplayEvaluationContextExt;
 use neovm_core::emacs_core::Context;
 use neovm_core::emacs_core::Value;
 use neovm_core::emacs_core::eval::DisplayHost;

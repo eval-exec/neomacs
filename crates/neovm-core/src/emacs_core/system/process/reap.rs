@@ -1003,17 +1003,6 @@ impl ReapableChildIo for ReapableChild {
     }
 }
 
-impl std::fmt::Debug for ChildOwnership {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NotAChild => f.write_str("NotAChild"),
-            Self::Unreaped(child) => write!(f, "Unreaped({})", child.pid),
-            Self::Reaped => f.write_str("Reaped"),
-            Self::Deferred => f.write_str("Deferred"),
-        }
-    }
-}
-
 #[cfg(test)]
 #[path = "tests/deferred_reap.rs"]
 mod deferred_reap_tests;

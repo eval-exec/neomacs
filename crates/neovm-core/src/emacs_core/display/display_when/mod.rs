@@ -20,6 +20,7 @@ use crate::emacs_core::value::Value;
 use crate::window::DisplayFrameExt;
 use crate::window::DisplayFrameManagerExt;
 use crate::window::{Window, WindowId};
+use neovm_edit::emacs_core::edit_host::EditHost;
 use rustc_hash::FxHashMap;
 use std::ops::ControlFlow;
 
@@ -66,7 +67,33 @@ impl DisplayWhenSiteKey {
     }
 }
 
-impl Context {
+/// Stage-4 W5/E13 upper extension trait over the eval-owned type.
+#[doc(hidden)]
+pub trait DisplayWhenContextExt {
+    fn with_display_buffer_current<T>(
+        &mut self,
+        buf_id: BufferId,
+        f: impl FnOnce(&mut Self) -> T,
+    ) -> Result<T, Flow>;
+
+    fn evaluate_display_when_sites(
+        &mut self,
+        buf_id: BufferId,
+        window_id: Option<WindowId>,
+        sites: &[DisplayWhenSite],
+        replaces_text: impl FnMut(Value) -> bool,
+    ) -> Result<FxHashMap<DisplayWhenSiteKey, bool>, Flow>;
+
+    fn display_when_form_holds(
+        &mut self,
+        form: Value,
+        object: Value,
+        position: i64,
+        buffer_position: i64,
+    ) -> Result<bool, Flow>;
+}
+
+impl DisplayWhenContextExt for Context {
     /// Run `f` with `buf_id` current, the way GNU's display iterator runs
     /// with the window's buffer selected ("Really select the buffer, for the
     /// sake of buffer-local variables", src/xdisp.c:20533-20535), and put the
@@ -74,7 +101,7 @@ impl Context {
     /// If `f` killed the caller's buffer, the window's buffer stays current
     /// (there is nothing to restore), which is what `Fkill_buffer` leaves
     /// behind in GNU too.
-    pub fn with_display_buffer_current<T>(
+    fn with_display_buffer_current<T>(
         &mut self,
         buf_id: BufferId,
         f: impl FnOnce(&mut Self) -> T,
@@ -100,7 +127,7 @@ impl Context {
     /// FORM can mutate the list/vector or remove a later site's property and
     /// collect; neither may invalidate our iteration or its saved elements.
     /// `Err` carries non-signal flows, which GNU lets unwind through redisplay.
-    pub fn evaluate_display_when_sites(
+    fn evaluate_display_when_sites(
         &mut self,
         buf_id: BufferId,
         window_id: Option<WindowId>,
@@ -237,7 +264,7 @@ impl Context {
     /// the abort of a nested redisplay through `Ftop_level`
     /// (src/xdisp.c:3127-3136; `inhibit-redisplay` is bound, so none can
     /// start), and `backtrace-on-redisplay-error` (src/xdisp.c:3159-3160).
-    pub fn display_when_form_holds(
+    fn display_when_form_holds(
         &mut self,
         form: Value,
         object: Value,
@@ -287,6 +314,9 @@ impl Context {
         }
     }
 }
+
+// The default bodies above are the implementation; this binds them to the
+// upper-layer type that owns the state.
 
 #[cfg(test)]
 #[path = "tests/display_when_test.rs"]

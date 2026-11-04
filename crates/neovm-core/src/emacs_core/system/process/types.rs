@@ -15,8 +15,11 @@ use super::NetworkSocketIo;
 use super::reap::{ChildOwnershipIo, ReapableChildIo};
 use super::sys::ChildStatusSourceIo;
 use super::sys::serial::SerialPortIo;
+use crate::emacs_core::wait::WaitContextExt;
 /// Unique identifier for a process.
 pub use crate::heap_types::ProcessId;
+use neovm_edit::emacs_core::edit_host::EditHost;
+use neovm_text::emacs_core::text_host::TextHost;
 
 /// Look up a process name for printing `#<process NAME>`.
 ///
@@ -540,19 +543,6 @@ static_assertions::const_assert_eq!(std::mem::size_of::<ProcessManager>(), 264);
 static_assertions::assert_impl_all!(BackendWaitEntry: Send, Sync, Copy, std::fmt::Debug);
 
 static_assertions::assert_impl_all!(ProcessWaitDeadline: Send, Sync);
-
-impl From<Duration> for ProcessWaitDeadline {
-    #[inline]
-    fn from(timeout: Duration) -> Self {
-        if timeout.is_zero() {
-            Self::Poll
-        } else {
-            Instant::now()
-                .checked_add(timeout)
-                .map_or(Self::Forever, Self::Until)
-        }
-    }
-}
 
 // The process backend is the control source's lifetime authority. A notifier
 // or temporary Green selector may outlive it, but cannot reopen its session.
@@ -2473,7 +2463,16 @@ impl ProcessCodingHalf {
     }
 }
 
-impl ProcessCodingSystems {
+/// Stage-4 W5/E13 upper extension trait over the eval-owned type.
+#[doc(hidden)]
+pub trait ProcessCodingSystemsExt {
+    #[cfg(test)]
+    fn gnu_make_process_initial() -> Self;
+
+    fn inherited_from_server(decode: Value, encode: Value) -> Self;
+}
+
+impl ProcessCodingSystemsExt for ProcessCodingSystems {
     /// The pair GNU's `make_process` leaves behind before any of the five
     /// resolvers has run: both slots nil, which `setup_coding_system` reads as
     /// `undecided` -- DETECT (src/coding.c:5675-5676).
@@ -2487,7 +2486,7 @@ impl ProcessCodingSystems {
     /// test fixtures make that claim, and the `cfg` keeps it that way until
     /// something in the runtime has a reason to.
     #[cfg(test)]
-    pub(crate) fn gnu_make_process_initial() -> Self {
+    fn gnu_make_process_initial() -> Self {
         Self {
             decode: Value::NIL,
             encode: Value::NIL,
@@ -2500,10 +2499,13 @@ impl ProcessCodingSystems {
     /// copies the listening process's slots, "as the coding system of the new
     /// process should reflect the settings at the time the server socket was
     /// opened; not the current settings" (src/process.c:5152-5158).
-    pub(crate) fn inherited_from_server(decode: Value, encode: Value) -> Self {
+    fn inherited_from_server(decode: Value, encode: Value) -> Self {
         Self { decode, encode }
     }
 }
+
+// The default bodies above are the implementation; this binds them to the
+// upper-layer type that owns the state.
 
 /// The ambient inputs GNU's `Fmake_process` coding resolver reads
 /// (src/process.c:1950-2008).
@@ -4237,22 +4239,6 @@ pub(crate) trait SystemProcessExt {
 
     // Methods declared beside their state files (A3b-3).
     fn prepare_green_main_wait(&self, deadline: Instant) -> MainNativePreparation;
-    fn attach_host_control_session(&self) -> crate::host_effect::wake::HostSessionControl;
-    fn revoke_host_control_session(&self);
-    /// Capture under the Baton. The shared source is privately attached once
-    /// to this backend. Missing native readiness is a cold admission refusal;
-    /// condition-only control owners never qualify this process selector.
-    fn observe_green_admission_refusal(
-        &self,
-        observe: impl FnOnce(crate::host_effect::wake::NativeReadinessCause),
-    );
-    fn green_native_readiness(&self) -> Result<(), crate::host_effect::wake::NativeReadinessCause>;
-    #[cfg(test)]
-    #[cfg(test)]
-    fn refuse_green_native_readiness_for_test(
-        &mut self,
-        cause: crate::host_effect::wake::NativeReadinessCause,
-    );
     fn green_select_handle(&self) -> Option<GreenSelectHandle>;
     /// GNU `handle_child_signal`'s `FOR_EACH_PROCESS` arm (src/process.c:
     /// 7734-7763), run at a safe point instead of in the handler.
@@ -7177,61 +7163,6 @@ impl SystemProcessExt for ProcessManager {
             Some(select) => select.prepare_main_wait(deadline),
             None => MainNativePreparation::Scheduler,
         }
-    }
-
-    fn attach_host_control_session(&self) -> crate::host_effect::wake::HostSessionControl {
-        self.wait_backend
-            .notification_pending
-            .attach_native(self.wait_backend.poller.as_ref().map(Arc::clone))
-            .control()
-            .attach_host_session()
-    }
-
-    fn revoke_host_control_session(&self) {
-        if let Some(wake) = self.wait_backend.notification_pending.control() {
-            wake.revoke_host_session();
-        }
-    }
-
-    /// Capture under the Baton. The shared source is privately attached once
-    /// to this backend. Missing native readiness is a cold admission refusal;
-    /// condition-only control owners never qualify this process selector.
-    fn observe_green_admission_refusal(
-        &self,
-        observe: impl FnOnce(crate::host_effect::wake::NativeReadinessCause),
-    ) {
-        self.wait_backend
-            .notification_pending
-            .attach_native(self.wait_backend.poller.as_ref().map(Arc::clone))
-            .observe_admission_refusal(observe);
-    }
-
-    fn green_native_readiness(&self) -> Result<(), crate::host_effect::wake::NativeReadinessCause> {
-        self.wait_backend
-            .notification_pending
-            .attach_native(self.wait_backend.poller.as_ref().map(Arc::clone))
-            .require_native()
-            .map(|_| ())
-    }
-
-    #[cfg(test)]
-    fn refuse_green_native_readiness_for_test(
-        &mut self,
-        cause: crate::host_effect::wake::NativeReadinessCause,
-    ) {
-        if matches!(
-            cause,
-            crate::host_effect::wake::NativeReadinessCause::AbsentPoller
-        ) {
-            self.wait_backend.poller = None;
-            #[cfg(unix)]
-            {
-                self.wait_backend.signal_fd = None;
-            }
-        }
-        self.wait_backend
-            .notification_pending
-            .refuse_native_for_test(cause);
     }
 
     fn green_select_handle(&self) -> Option<GreenSelectHandle> {

@@ -25,7 +25,7 @@ mod generated_lisp;
 // Single source of truth (R2-C2): the `neovm_jit_*` shim names, shared with
 // runtime/jit/aot.rs (MIR_SHIM_NAMES) + crates/neomacs/build.rs via `include!` so the
 // emit/salt set and both export sets can never drift.
-include!("src/emacs_core/runtime/jit/shim_names.rs");
+include!("../neovm-eval/src/emacs_core/runtime/jit/shim_names.rs");
 
 fn main() {
     let manifest_dir = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("manifest dir"));

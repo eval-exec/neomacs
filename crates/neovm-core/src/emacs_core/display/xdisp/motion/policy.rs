@@ -4,6 +4,7 @@ use super::{BufferId, Context, Value};
 use crate::window::ScrollMargin;
 
 pub(crate) use crate::emacs_core::eval::data::window_state::ScrollGoal;
+use neovm_edit::emacs_core::edit_host::EditHost;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum PreservePoint {

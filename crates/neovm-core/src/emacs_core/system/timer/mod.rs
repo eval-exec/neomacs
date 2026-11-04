@@ -30,6 +30,8 @@ use crate::emacs_core::intern::WellKnown;
 use malachite::base::num::conversion::traits::RoundingFrom;
 use malachite::base::rounding_modes::RoundingMode;
 
+use crate::emacs_core::wait::WaitContextExt;
+use neovm_edit::emacs_core::edit_host::EditHost;
 pub(crate) use neovm_value::system_vocab::time::WaitTimeout;
 
 #[derive(Clone, Copy, Debug)]
@@ -120,7 +122,39 @@ impl GnuTimerBatch {
 static TIMER_LIST: WellKnown = WellKnown::TimerList;
 static TIMER_IDLE_LIST: WellKnown = WellKnown::TimerIdleList;
 
-impl super::eval::Context {
+/// Stage-4 W5/E13 upper extension trait over the eval-owned type.
+#[doc(hidden)]
+pub trait TimerContextExt {
+    fn capture_gnu_timer_batch(&self) -> GnuTimerBatch;
+
+    fn current_idle_timer_timestamp(&self) -> Option<GnuTimerTimestamp>;
+
+    #[allow(dead_code)] // test/debug entry point around the shared timeout logic
+    fn next_ordinary_gnu_timer_timeout(&self) -> Option<Duration>;
+
+    fn next_ordinary_gnu_timer_timeout_before(
+        &self,
+        deadline: Option<GnuTimerTimestamp>,
+    ) -> Option<Duration>;
+
+    fn next_idle_gnu_timer_timeout(&self) -> Option<Duration>;
+
+    #[allow(dead_code)] // test/debug entry point around the shared timeout logic
+    fn next_input_wait_timeout(&self) -> Option<Duration>;
+
+    #[allow(dead_code)] // test entry point
+    fn fire_pending_timers(&mut self);
+
+    fn service_pending_timers_with_wait_policy(&mut self, redisplay: bool) -> Result<bool, Flow>;
+
+    fn run_timer_callback_preserving_state(
+        &mut self,
+        callback: Value,
+        args: Vec<Value>,
+    ) -> Result<(), Flow>;
+}
+
+impl TimerContextExt for super::eval::Context {
     fn capture_gnu_timer_batch(&self) -> GnuTimerBatch {
         let ordinary = self
             .variable_value(TIMER_LIST.id())
@@ -144,11 +178,11 @@ impl super::eval::Context {
     }
 
     #[allow(dead_code)] // test/debug entry point around the shared timeout logic
-    pub(crate) fn next_ordinary_gnu_timer_timeout(&self) -> Option<Duration> {
+    fn next_ordinary_gnu_timer_timeout(&self) -> Option<Duration> {
         self.next_ordinary_gnu_timer_timeout_before(None)
     }
 
-    pub(crate) fn next_ordinary_gnu_timer_timeout_before(
+    fn next_ordinary_gnu_timer_timeout_before(
         &self,
         deadline: Option<GnuTimerTimestamp>,
     ) -> Option<Duration> {
@@ -166,7 +200,7 @@ impl super::eval::Context {
             .map(|timer| timer.when.duration_until(now))
     }
 
-    pub(crate) fn next_idle_gnu_timer_timeout(&self) -> Option<Duration> {
+    fn next_idle_gnu_timer_timeout(&self) -> Option<Duration> {
         let idle_now = self.current_idle_timer_timestamp()?;
         self.variable_value(TIMER_IDLE_LIST.id())
             .and_then(|value| super::value::list_to_vec(&value))
@@ -178,7 +212,7 @@ impl super::eval::Context {
     }
 
     #[allow(dead_code)] // test/debug entry point around the shared timeout logic
-    pub(crate) fn next_input_wait_timeout(&self) -> Option<Duration> {
+    fn next_input_wait_timeout(&self) -> Option<Duration> {
         let mut timeout: Option<Duration> = None;
 
         if let Some(ordinary) = self.next_ordinary_gnu_timer_timeout() {
@@ -196,14 +230,11 @@ impl super::eval::Context {
     }
 
     #[allow(dead_code)] // test entry point
-    pub(crate) fn fire_pending_timers(&mut self) {
+    fn fire_pending_timers(&mut self) {
         let _ = self.service_timers_with_redisplay();
     }
 
-    pub(crate) fn service_pending_timers_with_wait_policy(
-        &mut self,
-        redisplay: bool,
-    ) -> Result<bool, Flow> {
+    fn service_pending_timers_with_wait_policy(&mut self, redisplay: bool) -> Result<bool, Flow> {
         self.flush_pending_safe_funcalls();
         let mut fired_any = false;
         let mut batch = self.capture_gnu_timer_batch();
@@ -278,6 +309,9 @@ impl super::eval::Context {
         self.finish_callback_flow(result, crate::emacs_core::process::AsyncCallbackKind::Timer)
     }
 }
+
+// The default bodies above are the implementation; this binds them to the
+// upper-layer type that owns the state.
 
 fn expect_number(value: &Value) -> Result<f64, Flow> {
     match value.kind() {

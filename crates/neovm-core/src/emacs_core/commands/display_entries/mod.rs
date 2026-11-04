@@ -14,6 +14,7 @@ use crate::emacs_core::intern::resolve_sym;
 use crate::tagged::SymbolMode;
 use crate::window::DisplayFrameExt;
 use crate::window::DisplayFrameManagerExt;
+use neovm_edit::emacs_core::edit_host::EditHost;
 use neovm_value::display_vocab::FrameDomain;
 use neovm_value::error::{
     EvalResult, Flow, LispCondition, expect_args, expect_args_range, expect_fixnum,

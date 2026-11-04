@@ -17,7 +17,7 @@ use build_support::{CargoProfileName, OwnedGitWorktree, tracked_top_level_entrie
 // NOT promote these address-only-referenced fns — each must be named with
 // `--export-dynamic-symbol` (the R1c carry-forward; without it the preload `.so`
 // aborts on first shim call).
-include!("../neovm-core/src/emacs_core/runtime/jit/shim_names.rs");
+include!("../neovm-eval/src/emacs_core/runtime/jit/shim_names.rs");
 
 /// R2-B5: export the `neovm_jit_*` shims into the `neomacs` binary's dynamic
 /// symbol table (Linux + `jit` only) so the AOT preload `.so` resolves them at

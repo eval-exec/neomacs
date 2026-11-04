@@ -666,58 +666,6 @@ impl GeometryQuery for WindowCoordinateQuery {
     }
 }
 
-impl<Space> PixelPoint<Space> {
-    pub(crate) fn new(x: f32, y: f32) -> Result<Self, GeometryError> {
-        if !x.is_finite() || !y.is_finite() {
-            return Err(GeometryError::NonFiniteCoordinate);
-        }
-        Ok(Self {
-            x: LogicalPx(x),
-            y: LogicalPx(y),
-            space: PhantomData,
-        })
-    }
-
-    pub const fn x(self) -> LogicalPx {
-        self.x
-    }
-
-    pub const fn y(self) -> LogicalPx {
-        self.y
-    }
-}
-
-impl<Space> PixelRect<Space> {
-    pub(crate) fn from_transport(rect: &TransportRect) -> Result<Self, GeometryError> {
-        if rect.x < 0.0
-            || rect.y < 0.0
-            || !rect.width.is_finite()
-            || !rect.height.is_finite()
-            || rect.width < 0.0
-            || rect.height < 0.0
-        {
-            return Err(GeometryError::InvalidExtent);
-        }
-        Ok(Self {
-            origin: PixelPoint::new(rect.x, rect.y)?,
-            width: LogicalPx(rect.width),
-            height: LogicalPx(rect.height),
-        })
-    }
-
-    pub const fn origin(self) -> PixelPoint<Space> {
-        self.origin
-    }
-
-    pub const fn width(self) -> LogicalPx {
-        self.width
-    }
-
-    pub const fn height(self) -> LogicalPx {
-        self.height
-    }
-}
-
 /// A frame-owned point.  The owner prevents points from different frames from
 /// being treated as interchangeable merely because both are frame-relative.
 #[derive(Clone, Copy, Debug, PartialEq)]

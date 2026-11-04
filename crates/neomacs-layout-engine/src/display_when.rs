@@ -38,6 +38,7 @@ use neovm_core::emacs_core::value::{Value, get_string_text_properties_table_for_
 use rustc_hash::FxHashMap;
 
 use crate::neovm_bridge::{LayoutBufferView, RustTextPropAccess};
+use neovm_core::emacs_core::display_when::DisplayWhenContextExt;
 
 /// The evaluated conditions a walk consults.
 ///

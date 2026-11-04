@@ -4,6 +4,7 @@
 use super::*;
 use crate::buffer::{Buffer, EmacsByteLen, EmacsBytePos};
 use crate::emacs_core::intern::WellKnown;
+use crate::window::display::WindowDisplayContextExt;
 use crate::window::{WindowLayoutQueryOutcome, WindowLayoutQueryScope};
 use std::num::NonZeroUsize;
 

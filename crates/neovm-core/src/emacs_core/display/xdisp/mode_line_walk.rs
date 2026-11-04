@@ -4,6 +4,7 @@ use super::mode_line_string::{ElementDepth, Risk};
 use super::mode_line_target::{DisplayTarget, TargetPolicy};
 use super::*;
 use crate::emacs_core::Context;
+use neovm_edit::emacs_core::edit_host::EditHost;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Transfer {

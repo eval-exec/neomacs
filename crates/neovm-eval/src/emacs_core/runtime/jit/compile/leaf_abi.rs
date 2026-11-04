@@ -1,0 +1,770 @@
+//! Leaf builtin trampolines: the register-ABI entry points compiled code
+//! calls for a leaf builtin (design `p1-2-builtin-intrinsics` §2.4, §2.5).
+//!
+//! A *bare* trampoline, `extern "C" fn(ctx, a0 [, a1 [, a2]]) -> u64`, serves
+//! an opcode site (GNU's inline opcodes: no frame, depth count or poll). It
+//! answers the result's own bits, or a tag-`001` sentinel: [`LEAF_SIGNAL`]
+//! with the `Flow` stashed ([`stash_pending_flow`]), or [`LEAF_NEED_GENERIC`]
+//! when the leaf declined the shape. The site tells them apart with one
+//! `band`/`icmp`/`brif`, exactly as it does for the value shims.
+//!
+//! Compiled code calls a trampoline by its baked address (`iconst` +
+//! `call_indirect`): trampolines are not registered with the JIT module, so
+//! they add nothing to the per-compile symbol registration, and they are
+//! JIT-only (an AOT object would need an imported table, design §2.9).
+//!
+//! Each trampoline passes its leaf body as a function ITEM, not through the
+//! `LeafSpec`'s pointer, so the body inlines into it
+//! (`trampolines_call_their_spec_bodies` holds the two to each other). The
+//! body runs under `catch_unwind` (`jit_shim_contain!`), except the audited
+//! fast half of a `Containment::FastOutside` leaf, whose declines take the
+//! contained body in a cold helper.
+
+use super::*;
+use crate::emacs_core::builtins::leaves;
+#[cfg(debug_assertions)]
+use crate::emacs_core::subr::leaf::LeafOutcome;
+use crate::emacs_core::subr::leaf::{
+    LeafActive, LeafExit, LeafId, LeafResult, LeafShape, LeafSpec,
+};
+use neovm_value::error::InlineErrorOp;
+
+/// A leaf trampoline's signal word: the flow is stashed.
+pub(crate) const LEAF_SIGNAL: i64 = VALUE_SHIM_SIGNAL;
+/// A leaf trampoline's decline word: run the reference for this shape.
+pub(crate) const LEAF_NEED_GENERIC: i64 = 0b1001;
+
+const _: () = {
+    assert!(LEAF_SIGNAL & TAG_MASK as i64 == LEAF_NEED_GENERIC & TAG_MASK as i64);
+    assert!(LEAF_SIGNAL != LEAF_NEED_GENERIC);
+};
+
+// ---------------------------------------------------------------------------
+// Counters.
+// ---------------------------------------------------------------------------
+
+/// Per-leaf engagement counters: how many sites each compile lowered to the
+/// leaf (compile time), and how often a call declined or signalled (cold
+/// paths only; the hot path counts nothing in release builds). Reported in
+/// the `[neovm-jit-final-builtin-leaves]` line.
+pub(crate) struct LeafSiteStats {
+    pub(crate) opcode_sites: AtomicU64,
+    pub(crate) bcall_sites: AtomicU64,
+    pub(crate) generic: AtomicU64,
+    pub(crate) signal: AtomicU64,
+    /// Bcall calls the guard sent to the reference protocol (a pending
+    /// quit, `debug-on-next-call`, the depth limit, a changed binding,
+    /// compiler overrides or `NEOVM_JIT_FORCE_SLOW_SPEC`).
+    pub(crate) guard_miss: AtomicU64,
+}
+
+impl LeafSiteStats {
+    #[doc(hidden)]
+    pub const fn new() -> Self {
+        Self {
+            opcode_sites: AtomicU64::new(0),
+            bcall_sites: AtomicU64::new(0),
+            generic: AtomicU64::new(0),
+            signal: AtomicU64::new(0),
+            guard_miss: AtomicU64::new(0),
+        }
+    }
+}
+
+pub(crate) static LEAF_STATS: [LeafSiteStats; LeafId::COUNT] =
+    [const { LeafSiteStats::new() }; LeafId::COUNT];
+
+/// The string intrinsics (I1/I2, `NEOVM_JIT_LEAF=string`), for the census.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StringInline {
+    Aref,
+    Aset,
+}
+
+/// Inline string `aref`/`aset` sites emitted, indexed by [`StringInline`].
+pub(crate) static STRING_INLINE_SITES: [AtomicU64; 2] = [AtomicU64::new(0), AtomicU64::new(0)];
+
+/// Count an emitted string intrinsic site.
+pub(crate) fn note_string_inline_site(which: StringInline) {
+    STRING_INLINE_SITES[which as usize].fetch_add(1, Ordering::Relaxed);
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test hook: trampoline entries per leaf on this thread (any outcome).
+    pub(crate) static LEAF_TRAMPOLINE_CALLS: [std::cell::Cell<u64>; LeafId::COUNT] =
+        const { [const { std::cell::Cell::new(0) }; LeafId::COUNT] };
+}
+
+/// Test hook: trampoline entries of `id` on this thread so far.
+#[cfg(test)]
+pub(crate) fn leaf_trampoline_calls(id: LeafId) -> u64 {
+    LEAF_TRAMPOLINE_CALLS.with(|c| c[id.index()].get())
+}
+
+/// The census line of the exit report: every leaf with a nonzero counter.
+pub(crate) fn render_leaf_stats() -> String {
+    let mut out = Vec::new();
+    for spec in crate::emacs_core::subr::leaf::LEAVES {
+        let s = &LEAF_STATS[spec.id.index()];
+        let (o, b, g, x, m) = (
+            s.opcode_sites.load(Ordering::Relaxed),
+            s.bcall_sites.load(Ordering::Relaxed),
+            s.generic.load(Ordering::Relaxed),
+            s.signal.load(Ordering::Relaxed),
+            s.guard_miss.load(Ordering::Relaxed),
+        );
+        if o + b + g + x + m > 0 {
+            out.push(format!(
+                "{}:opcode_sites={o},bcall_sites={b},generic={g},signal={x},guard_miss={m}",
+                spec.name
+            ));
+        }
+    }
+    for (which, name) in [
+        (StringInline::Aref, "string-aref"),
+        (StringInline::Aset, "string-aset"),
+    ] {
+        let sites = STRING_INLINE_SITES[which as usize].load(Ordering::Relaxed);
+        if sites > 0 {
+            out.push(format!("{name}:inline_sites={sites}"));
+        }
+    }
+    // Direct calls between compiled leaves (`direct_call`) and the CLIF
+    // intrinsics' sites (`intrinsics`) share the line.
+    out.extend(super::direct_call::render_direct_call_stats());
+    out.extend(super::direct_call::render_direct_profile_stats());
+    out.extend(super::call_census::render_call_census());
+    out.extend(super::intrinsics::render_intrinsic_stats());
+    // The interpreter's leaf calls (`NEOVM_VM_LEAF`) too.
+    out.extend(crate::emacs_core::bytecode::vm::render_vm_leaf_stats());
+    out.join(" ")
+}
+
+// ---------------------------------------------------------------------------
+// The trampoline body.
+// ---------------------------------------------------------------------------
+
+/// Map a leaf's answer to the trampoline's return word. The two cold arms
+/// count; the value arm is the whole hot path.
+#[inline(always)]
+fn leaf_word(id: LeafId, result: LeafResult) -> i64 {
+    match result {
+        Ok(value) => value.bits() as i64,
+        Err(LeafExit::Signal(flow)) => {
+            stash_pending_flow(flow);
+            LEAF_STATS[id.index()]
+                .signal
+                .fetch_add(1, Ordering::Relaxed);
+            LEAF_SIGNAL
+        }
+        Err(LeafExit::Generic) => {
+            LEAF_STATS[id.index()]
+                .generic
+                .fetch_add(1, Ordering::Relaxed);
+            LEAF_NEED_GENERIC
+        }
+    }
+}
+
+/// The contained body: `catch_unwind` around the call, one word out (a
+/// 16-byte `Result` through the unwind data union would be P0.2's
+/// store-forwarding pattern again).
+#[inline(always)]
+fn leaf_contained(
+    ctx: *const Context,
+    spec: &'static LeafSpec,
+    body: impl FnOnce(&Context) -> LeafResult,
+) -> i64 {
+    jit_shim_contain!(ctx as *mut u8, LEAF_SIGNAL, {
+        // SAFETY: the seam's dormant Context (the vmctx contract of
+        // `neovm_jit_call`); a leaf takes only a shared borrow.
+        let c = unsafe { &*ctx };
+        leaf_word(spec.id, body(c))
+    })
+}
+
+/// Enter a trampoline: the test counter and, in debug builds, the leaf
+/// marker (a zero-sized no-op in release builds).
+#[inline(always)]
+fn leaf_enter<'a>(ctx: *const Context, spec: &'static LeafSpec) -> (&'a Context, LeafActive) {
+    #[cfg(test)]
+    LEAF_TRAMPOLINE_CALLS.with(|c| {
+        let cell = &c[spec.id.index()];
+        cell.set(cell.get() + 1);
+    });
+    // SAFETY: the seam's dormant Context (the vmctx contract of
+    // `neovm_jit_call`), alive for the whole call; shared read only.
+    let c: &'a Context = unsafe { &*ctx };
+    (c, LeafActive::enter(spec, c))
+}
+
+/// Leave a trampoline with its word: debug builds check the witnesses
+/// (unless a contained panic left its residue for the caller to heal).
+#[inline(always)]
+fn leaf_finish(active: LeafActive, c: &Context, word: i64) -> i64 {
+    #[cfg(debug_assertions)]
+    if !shim_panic_pending() {
+        active.exit(c, word_outcome(word));
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = (active, c);
+    word
+}
+
+/// What a return word says about the call, for the debug witnesses.
+#[cfg(debug_assertions)]
+#[inline(always)]
+fn word_outcome(word: i64) -> LeafOutcome {
+    match word {
+        LEAF_SIGNAL => LeafOutcome::Signal,
+        LEAF_NEED_GENERIC => LeafOutcome::Generic,
+        _ => LeafOutcome::Value,
+    }
+}
+
+/// Generate a leaf's bare trampoline, `$bare(ctx, a0..) -> word`.
+///
+/// With `fast = F, rest = R`, the audited fast half `F` runs first outside
+/// containment, and `R` -- a cold function generated here -- runs the
+/// contained body for whatever `F` declines.
+macro_rules! bare_trampoline {
+    ($bare:ident, $spec:path, $body:path, 1) => {
+        /// # Safety
+        /// `ctx` is the live owner `Context` the JIT frame was entered with and stays
+        /// valid for the whole call.
+        /// The call comes from generated code holding the frame, or from a Rust
+        /// caller that upholds this contract.
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn $bare(ctx: *const Context, a: i64) -> i64 {
+            let a = unsafe {
+                /* SAFETY: JIT constant-pool word */
+                Value::from_bits(a as usize)
+            };
+            let (c, active) = leaf_enter(ctx, &$spec);
+            let word = leaf_contained(ctx, &$spec, |c| $body(c, a));
+            leaf_finish(active, c, word)
+        }
+    };
+    ($bare:ident, $spec:path, $body:path, 2) => {
+        /// # Safety
+        /// `ctx` is the live owner `Context` the JIT frame was entered with and stays
+        /// valid for the whole call.
+        /// The call comes from generated code holding the frame, or from a Rust
+        /// caller that upholds this contract.
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn $bare(ctx: *const Context, a: i64, b: i64) -> i64 {
+            let (a, b) = (
+                unsafe {
+                    /* SAFETY: JIT constant-pool word */
+                    Value::from_bits(a as usize)
+                },
+                unsafe {
+                    /* SAFETY: JIT constant-pool word */
+                    Value::from_bits(b as usize)
+                },
+            );
+            let (c, active) = leaf_enter(ctx, &$spec);
+            let word = leaf_contained(ctx, &$spec, |c| $body(c, a, b));
+            leaf_finish(active, c, word)
+        }
+    };
+    ($bare:ident, $spec:path, $body:path, 2, fast = $fast:path, rest = $rest:ident) => {
+        /// # Safety
+        /// `ctx` is the live owner `Context` the JIT frame was entered with and stays
+        /// valid for the whole call.
+        /// The call comes from generated code holding the frame, or from a Rust
+        /// caller that upholds this contract.
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn $bare(ctx: *const Context, a: i64, b: i64) -> i64 {
+            let (a, b) = (
+                unsafe {
+                    /* SAFETY: JIT constant-pool word */
+                    Value::from_bits(a as usize)
+                },
+                unsafe {
+                    /* SAFETY: JIT constant-pool word */
+                    Value::from_bits(b as usize)
+                },
+            );
+            let (c, active) = leaf_enter(ctx, &$spec);
+            let word = match $fast(c, &[a, b, Value::NIL, Value::NIL]) {
+                Some(value) => value.bits() as i64,
+                None => $rest(ctx, a, b),
+            };
+            leaf_finish(active, c, word)
+        }
+
+        #[cold]
+        #[inline(never)]
+        fn $rest(ctx: *const Context, a: Value, b: Value) -> i64 {
+            leaf_contained(ctx, &$spec, |c| $body(c, a, b))
+        }
+    };
+}
+
+// Opcode leaves retain GNU's inlined primitive frame only for the error
+// shapes where bytecode.c records one. The owned signal carries the request
+// until dispatch, after LeafActive has finished its read-only witness check.
+// Threading: the request belongs to this mutator's Flow; no state is shared.
+#[inline(always)]
+fn opcode_nth(ctx: &Context, n: Value, list: Value) -> LeafResult {
+    leaves::nth(ctx, n, list)
+        .map_err(|exit| opcode_error_backtrace(exit, InlineErrorOp::Nth, n, list))
+}
+
+#[inline(always)]
+fn opcode_elt(ctx: &Context, sequence: Value, n: Value) -> LeafResult {
+    leaves::elt(ctx, sequence, n)
+        .map_err(|exit| opcode_error_backtrace(exit, InlineErrorOp::Elt, sequence, n))
+}
+
+// Materialize the argument slice in this cold frame so opcode trampolines
+// do not reserve an error-only array in their successful call frames.
+#[cold]
+#[inline(never)]
+fn opcode_error_backtrace(exit: LeafExit, op: InlineErrorOp, arg0: Value, arg1: Value) -> LeafExit {
+    match exit {
+        LeafExit::Signal(flow) => {
+            LeafExit::Signal(flow.with_bytecode_error_backtrace(op, &[arg0, arg1]))
+        }
+        LeafExit::Generic => LeafExit::Generic,
+    }
+}
+
+bare_trampoline!(neovm_leaf_bare_get, leaves::GET, leaves::get, 2);
+bare_trampoline!(neovm_leaf_bare_length, leaves::LENGTH, leaves::length, 1);
+bare_trampoline!(
+    neovm_leaf_bare_nth,
+    leaves::NTH,
+    opcode_nth,
+    2,
+    fast = leaves::fast::nth_fast,
+    rest = nth_rest
+);
+bare_trampoline!(neovm_leaf_bare_nthcdr, leaves::NTHCDR, leaves::nthcdr, 2);
+bare_trampoline!(neovm_leaf_bare_elt, leaves::ELT, opcode_elt, 2);
+bare_trampoline!(neovm_leaf_bare_member, leaves::MEMBER, leaves::member, 2);
+bare_trampoline!(neovm_leaf_bare_equal, leaves::EQUAL, leaves::equal, 2);
+bare_trampoline!(
+    neovm_leaf_bare_string_equal,
+    leaves::STRING_EQUAL,
+    leaves::string_equal,
+    2
+);
+bare_trampoline!(
+    neovm_leaf_bare_string_lessp,
+    leaves::STRING_LESSP,
+    leaves::string_lessp,
+    2
+);
+bare_trampoline!(
+    neovm_leaf_bare_symbol_value,
+    leaves::SYMBOL_VALUE,
+    leaves::symbol_value,
+    1
+);
+
+// ---------------------------------------------------------------------------
+// Bcall trampolines (design §2.4, the pre-P0 guard; §2.5 (a)).
+// ---------------------------------------------------------------------------
+
+/// GNU `Bcall`'s observable steps, decided up front: when this holds, the
+/// frame, the depth count and the quit poll of the protocol call cannot be
+/// observed -- a leaf runs no Lisp -- so the trampoline may skip them. It is
+/// the reference protocol's own fast conditions (`neovm_jit_call_subr_spec`,
+/// `subr_spec_armed`): no pending quit, OS signal, profiler tick or
+/// `throw-on-input` (the poll would do nothing), no compiler function
+/// overrides, not the `NEOVM_JIT_FORCE_SLOW_SPEC` harness, no
+/// `debug-on-next-call`, one level of depth to spare (GNU's
+/// `++lisp_eval_depth > max_lisp_eval_depth` would pass), and the function
+/// cell still the subr the site was compiled against (the epoch, else a
+/// re-validation). Any miss runs the reference protocol unchanged.
+///
+/// This is the fallback form for before P0q's attention words land
+/// (p1-0-integration §2 P1.2 correction 5); with them it shrinks to one
+/// masked word test.
+#[inline(always)]
+fn bcall_guard(ctx: &Context, slot: &SpecSlot) -> bool {
+    ctx.maybe_quit_hot_ok()
+        && !ctx.compiler_function_overrides_active()
+        && !jit_force_slow_spec()
+        && !ctx.debug_on_next_call_is_armed()
+        && ctx.depth < ctx.max_depth
+        && (slot.epoch.load(Ordering::Relaxed) == ctx.obarray.function_epoch()
+            || bcall_rearm(ctx, slot))
+}
+
+/// The re-validate half of [`bcall_guard`] (`subr_spec_armed`'s): the
+/// function cell still holds the expected subr, so store the new epoch.
+#[cold]
+#[inline(never)]
+fn bcall_rearm(ctx: &Context, slot: &SpecSlot) -> bool {
+    debug_assert!(
+        slot.holds_subr_binding(),
+        "a Bcall leaf site's slot carries its binding words"
+    );
+    let slot_epoch = slot.epoch.load(Ordering::Relaxed);
+    if slot_epoch == SPEC_EPOCH_DISARMED {
+        return false;
+    }
+    let (sym, expected) = slot.subr_binding();
+    let epoch = ctx.obarray.function_epoch();
+    if ctx
+        .obarray
+        .symbol_function_id(sym)
+        .is_some_and(|v| v.bits() as u64 == expected)
+    {
+        slot.epoch.store(epoch, Ordering::Relaxed);
+        true
+    } else {
+        false
+    }
+}
+
+/// A guard miss: the site runs the reference protocol.
+#[cold]
+#[inline(never)]
+fn bcall_declined(id: LeafId) -> i64 {
+    LEAF_STATS[id.index()]
+        .guard_miss
+        .fetch_add(1, Ordering::Relaxed);
+    LEAF_NEED_GENERIC
+}
+
+/// Generate a leaf's Bcall trampoline,
+/// `$bcall(ctx, slot, a0, a1, a2) -> word`: [`bcall_guard`], then the body
+/// as a bare trampoline runs it. A call with fewer arguments than the body
+/// has slots passes nil for the rest, as the fixed-arity dispatcher does.
+macro_rules! bcall_trampoline {
+    ($bcall:ident, $spec:path, $body:path, 1) => {
+        /// # Safety
+        /// `ctx` is the live owner `Context` the JIT frame was entered with and stays
+        /// valid for the whole call.
+        /// `slot` points into the executing leaf's spec slots, alive while its code runs.
+        /// The call comes from generated code holding the frame, or from a Rust
+        /// caller that upholds this contract.
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn $bcall(ctx: *const Context, slot: *const SpecSlot, a: i64) -> i64 {
+            // SAFETY: the seam's dormant Context; `slot` points into the
+            // executing leaf's spec slots (alive while its code runs).
+            let (cx, slot) = unsafe { (&*ctx, &*slot) };
+            if !bcall_guard(cx, slot) {
+                return bcall_declined($spec.id);
+            }
+            let a = unsafe {
+                /* SAFETY: JIT constant-pool word */
+                Value::from_bits(a as usize)
+            };
+            let (cx, active) = leaf_enter(ctx, &$spec);
+            let word = leaf_contained(ctx, &$spec, |cx| $body(cx, a));
+            leaf_finish(active, cx, word)
+        }
+    };
+    ($bcall:ident, $spec:path, $body:path, 2) => {
+        /// # Safety
+        /// `ctx` is the live owner `Context` the JIT frame was entered with and stays
+        /// valid for the whole call.
+        /// `slot` points into the executing leaf's spec slots, alive while its code runs.
+        /// The call comes from generated code holding the frame, or from a Rust
+        /// caller that upholds this contract.
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn $bcall(
+            ctx: *const Context,
+            slot: *const SpecSlot,
+            a: i64,
+            b: i64,
+        ) -> i64 {
+            // SAFETY: the seam's dormant Context; `slot` points into the
+            // executing leaf's spec slots (alive while its code runs).
+            let (cx, slot) = unsafe { (&*ctx, &*slot) };
+            if !bcall_guard(cx, slot) {
+                return bcall_declined($spec.id);
+            }
+            let (a, b) = (
+                unsafe {
+                    /* SAFETY: JIT constant-pool word */
+                    Value::from_bits(a as usize)
+                },
+                unsafe {
+                    /* SAFETY: JIT constant-pool word */
+                    Value::from_bits(b as usize)
+                },
+            );
+            let (cx, active) = leaf_enter(ctx, &$spec);
+            let word = leaf_contained(ctx, &$spec, |cx| $body(cx, a, b));
+            leaf_finish(active, cx, word)
+        }
+    };
+    ($bcall:ident, $spec:path, $body:path, 3) => {
+        /// # Safety
+        /// `ctx` is the live owner `Context` the JIT frame was entered with and stays
+        /// valid for the whole call.
+        /// `slot` points into the executing leaf's spec slots, alive while its code runs.
+        /// The call comes from generated code holding the frame, or from a Rust
+        /// caller that upholds this contract.
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn $bcall(
+            ctx: *const Context,
+            slot: *const SpecSlot,
+            a: i64,
+            b: i64,
+            c: i64,
+        ) -> i64 {
+            // SAFETY: the seam's dormant Context; `slot` points into the
+            // executing leaf's spec slots (alive while its code runs).
+            let (cx, slot) = unsafe { (&*ctx, &*slot) };
+            if !bcall_guard(cx, slot) {
+                return bcall_declined($spec.id);
+            }
+            let (a, b, c) = (
+                unsafe {
+                    /* SAFETY: JIT constant-pool word */
+                    Value::from_bits(a as usize)
+                },
+                unsafe {
+                    /* SAFETY: JIT constant-pool word */
+                    Value::from_bits(b as usize)
+                },
+                unsafe {
+                    /* SAFETY: JIT constant-pool word */
+                    Value::from_bits(c as usize)
+                },
+            );
+            let (cx, active) = leaf_enter(ctx, &$spec);
+            let word = leaf_contained(ctx, &$spec, |cx| $body(cx, a, b, c));
+            leaf_finish(active, cx, word)
+        }
+    };
+}
+
+bcall_trampoline!(
+    neovm_leaf_bcall_gethash,
+    leaves::GETHASH,
+    leaves::gethash,
+    3
+);
+bcall_trampoline!(
+    neovm_leaf_bcall_plist_get,
+    leaves::PLIST_GET,
+    leaves::plist_get,
+    3
+);
+bcall_trampoline!(
+    neovm_leaf_bcall_get_char_property,
+    leaves::GET_CHAR_PROPERTY,
+    leaves::get_char_property,
+    3
+);
+bcall_trampoline!(
+    neovm_leaf_bcall_buffer_local_value,
+    leaves::BUFFER_LOCAL_VALUE,
+    leaves::buffer_local_value,
+    2
+);
+bcall_trampoline!(neovm_leaf_bcall_assoc, leaves::ASSOC, leaves::assoc, 3);
+bcall_trampoline!(neovm_leaf_bcall_rassq, leaves::RASSQ, leaves::rassq, 2);
+bcall_trampoline!(neovm_leaf_bcall_delq, leaves::DELQ, leaves::delq, 2);
+bcall_trampoline!(
+    neovm_leaf_bcall_copy_sequence,
+    leaves::COPY_SEQUENCE,
+    leaves::copy_sequence,
+    1
+);
+bcall_trampoline!(
+    neovm_leaf_bcall_symbol_name,
+    leaves::SYMBOL_NAME,
+    leaves::symbol_name,
+    1
+);
+bcall_trampoline!(neovm_leaf_bcall_boundp, leaves::BOUNDP, leaves::boundp, 1);
+bcall_trampoline!(
+    neovm_leaf_bcall_keywordp,
+    leaves::KEYWORDP,
+    leaves::keywordp,
+    1
+);
+
+/// A Bcall leaf's trampoline address.
+pub(crate) fn bcall_trampoline(id: LeafId) -> Option<*const u8> {
+    let f: *const u8 = match id {
+        LeafId::Gethash => neovm_leaf_bcall_gethash as *const u8,
+        LeafId::PlistGet => neovm_leaf_bcall_plist_get as *const u8,
+        LeafId::GetCharProperty => neovm_leaf_bcall_get_char_property as *const u8,
+        LeafId::BufferLocalValue => neovm_leaf_bcall_buffer_local_value as *const u8,
+        LeafId::Assoc => neovm_leaf_bcall_assoc as *const u8,
+        LeafId::Rassq => neovm_leaf_bcall_rassq as *const u8,
+        LeafId::Delq => neovm_leaf_bcall_delq as *const u8,
+        LeafId::CopySequence => neovm_leaf_bcall_copy_sequence as *const u8,
+        LeafId::SymbolName => neovm_leaf_bcall_symbol_name as *const u8,
+        LeafId::Boundp => neovm_leaf_bcall_boundp as *const u8,
+        LeafId::Keywordp => neovm_leaf_bcall_keywordp as *const u8,
+        LeafId::Get
+        | LeafId::Length
+        | LeafId::Nth
+        | LeafId::Nthcdr
+        | LeafId::Elt
+        | LeafId::Memq
+        | LeafId::Assq
+        | LeafId::Member
+        | LeafId::Equal
+        | LeafId::StringEqual
+        | LeafId::StringLessp
+        | LeafId::SymbolValue => return None,
+    };
+    Some(f)
+}
+
+/// Whether `knob` turns on the sites of `spec`: the variable leaves and the
+/// first leaf batch have parts of their own (`vars`, `batch`, default off);
+/// every other leaf its shape's.
+pub(crate) fn leaf_part_on(knob: super::LeafKnob, spec: &LeafSpec) -> bool {
+    match spec.id {
+        LeafId::SymbolValue | LeafId::BufferLocalValue => knob.vars,
+        LeafId::Assoc
+        | LeafId::Rassq
+        | LeafId::Delq
+        | LeafId::CopySequence
+        | LeafId::SymbolName
+        | LeafId::Boundp
+        | LeafId::Keywordp => knob.batch,
+        _ => match spec.shape {
+            LeafShape::Opcode => knob.opcode,
+            LeafShape::Bcall => knob.bcall,
+        },
+    }
+}
+
+/// The leaf an `Op::Call` site of `nargs` arguments speculated on the
+/// builtin `expected` lowers to, if any: JIT only, `NEOVM_JIT_LEAF` with
+/// `bcall`, the leaf attached to that builtin (found through the SUBR, so an
+/// alias of `gethash` gets it too), past the `NEOVM_JIT_LEAF_ONLY` filter,
+/// taking the call's arguments in its slots.
+pub(crate) fn bcall_leaf_site(expected: u64, nargs: usize, aot: bool) -> Option<&'static LeafSpec> {
+    let knob = super::jit_leaf_knob();
+    if aot || !(knob.bcall || knob.vars || knob.batch) {
+        return None;
+    }
+    let (subr_sym, entry) = subr_entry_from_value(unsafe {
+        /* SAFETY: JIT constant-pool word */
+        Value::from_bits(expected as usize)
+    })?;
+    let leaf = crate::emacs_core::subr::leaf::subr_leaf(subr_sym)?;
+    if leaf.shape != LeafShape::Bcall
+        || !leaf_part_on(knob, leaf)
+        || nargs > leaf.entry_slots()
+        || nargs < usize::from(entry.min_args)
+        || !super::jit_leaf_selected(leaf.name)
+    {
+        return None;
+    }
+    bcall_trampoline(leaf.id)?;
+    Some(leaf)
+}
+
+/// Count a lowered Bcall leaf site.
+pub(crate) fn note_bcall_site(id: LeafId) {
+    LEAF_STATS[id.index()]
+        .bcall_sites
+        .fetch_add(1, Ordering::Relaxed);
+}
+
+/// The opcode leaf an opcode site calls, if the opcode has one wired to a
+/// bare trampoline. `memq`/`assq` stay on their value shims (whose fast
+/// halves already run outside containment), `aref`/`aset` on theirs plus the
+/// inline paths.
+pub(crate) fn opcode_leaf(op: &Op) -> Option<LeafId> {
+    Some(match op {
+        Op::Get => LeafId::Get,
+        Op::Length => LeafId::Length,
+        Op::Nth => LeafId::Nth,
+        Op::Nthcdr => LeafId::Nthcdr,
+        Op::Elt => LeafId::Elt,
+        Op::Member => LeafId::Member,
+        Op::Equal => LeafId::Equal,
+        Op::StringEqual => LeafId::StringEqual,
+        Op::StringLessp => LeafId::StringLessp,
+        Op::SymbolValue => LeafId::SymbolValue,
+        _ => return None,
+    })
+}
+
+/// A leaf's bare trampoline address, for the leaves [`opcode_leaf`] maps.
+pub(crate) fn bare_trampoline(id: LeafId) -> Option<*const u8> {
+    let f: *const u8 = match id {
+        LeafId::Get => neovm_leaf_bare_get as *const u8,
+        LeafId::Length => neovm_leaf_bare_length as *const u8,
+        LeafId::Nth => neovm_leaf_bare_nth as *const u8,
+        LeafId::Nthcdr => neovm_leaf_bare_nthcdr as *const u8,
+        LeafId::Elt => neovm_leaf_bare_elt as *const u8,
+        LeafId::Member => neovm_leaf_bare_member as *const u8,
+        LeafId::Equal => neovm_leaf_bare_equal as *const u8,
+        LeafId::StringEqual => neovm_leaf_bare_string_equal as *const u8,
+        LeafId::StringLessp => neovm_leaf_bare_string_lessp as *const u8,
+        LeafId::SymbolValue => neovm_leaf_bare_symbol_value as *const u8,
+        LeafId::Gethash
+        | LeafId::PlistGet
+        | LeafId::GetCharProperty
+        | LeafId::BufferLocalValue
+        | LeafId::Assoc
+        | LeafId::Rassq
+        | LeafId::Delq
+        | LeafId::CopySequence
+        | LeafId::SymbolName
+        | LeafId::Boundp
+        | LeafId::Keywordp
+        | LeafId::Memq
+        | LeafId::Assq => return None,
+    };
+    Some(f)
+}
+
+/// Whether an opcode site lowers `op` to its leaf in this compile: JIT only,
+/// `NEOVM_JIT_LEAF` with `opcode`, the leaf past the `NEOVM_JIT_LEAF_ONLY`
+/// filter, and a leaf that never bounces (an opcode site has no reference
+/// call to bounce to; none of today's opcode leaves declares a shape).
+pub(crate) fn opcode_leaf_site(op: &Op, aot: bool) -> Option<LeafId> {
+    let knob = super::jit_leaf_knob();
+    if aot || !(knob.opcode || knob.vars) {
+        return None;
+    }
+    let id = opcode_leaf(op)?;
+    let spec = id.spec();
+    if spec.shape != LeafShape::Opcode
+        || !leaf_part_on(knob, spec)
+        || !spec.generic_when.is_empty()
+        || !super::jit_leaf_selected(spec.name)
+    {
+        return None;
+    }
+    bare_trampoline(id)?;
+    Some(id)
+}
+
+/// Emit the call of `id`'s bare trampoline with `vmctx` and `operands` and
+/// return its word. Counts the site.
+pub(crate) fn emit_bare_leaf_call(
+    fb: &mut FunctionBuilder,
+    rt: &RtCtx,
+    id: LeafId,
+    operands: &[ClifValue],
+) -> ClifValue {
+    let tramp = bare_trampoline(id).expect("an opcode leaf site has a bare trampoline");
+    let mut sig = Signature::new(rt.refs.call_conv);
+    sig.params.push(AbiParam::new(rt.ptr_ty));
+    for _ in operands {
+        sig.params.push(AbiParam::new(types::I64));
+    }
+    sig.returns.push(AbiParam::new(types::I64));
+    let sig = fb.import_signature(sig);
+    let callee = fb.ins().iconst(rt.ptr_ty, tramp as i64);
+    let vmctx = fb.use_var(rt.vmctx_var);
+    let mut args: SmallVec<[ClifValue; 4]> = SmallVec::new();
+    args.push(vmctx);
+    args.extend_from_slice(operands);
+    let call = fb.ins().call_indirect(sig, callee, &args);
+    LEAF_STATS[id.index()]
+        .opcode_sites
+        .fetch_add(1, Ordering::Relaxed);
+    fb.inst_results(call)[0]
+}

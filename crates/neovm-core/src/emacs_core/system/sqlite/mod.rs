@@ -1076,6 +1076,7 @@ pub(super) fn reset_sqlite_thread_locals() {
 use crate::emacs_core::error::LispCondition;
 #[cfg(all(test, feature = "sqlite"))]
 use enabled::{SqliteBindSymbol, SqliteOperation, SqliteReturnType, value_is_false_symbol};
+use neovm_edit::emacs_core::edit_host::EditHost;
 #[cfg(all(test, feature = "sqlite"))]
 use rusqlite::ffi;
 

@@ -11,6 +11,9 @@ description = "Editor and buffer storage extracted from neovm-core"
 default = ["jit"]
 display-stop-validate = []
 jit = ["neovm-value/jit"]
+# Numeric redisplay policy injection for dependent fixtures (stage-4 W5/E13:
+# the evaluator re-exports the guard, so the feature must reach this crate).
+redisplay-test-policy = []
 
 [dependencies]
 neovm-value = { path = "../neovm-value" }

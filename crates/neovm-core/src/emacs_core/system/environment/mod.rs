@@ -11,6 +11,7 @@ use super::eval::Context;
 use super::value::Value;
 use crate::emacs_core::eval::data::window_state::{Frame, FrameDisplayIdentity};
 use crate::heap_types::LispString;
+use neovm_edit::emacs_core::edit_host::EditHost;
 use neovm_value::display_vocab::{FrameId, FrameQueryParam};
 use std::ffi::{OsStr, OsString};
 #[cfg(unix)]

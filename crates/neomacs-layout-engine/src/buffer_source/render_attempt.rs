@@ -26,6 +26,8 @@ use crate::window_output::{
 };
 use neovm_core::buffer::TextPositionAnchor;
 use neovm_core::emacs_core::Context;
+use neovm_core::emacs_core::xdisp::XdispContextExt;
+use neovm_core::window::display::WindowDisplayContextExt;
 use neovm_core::window::{FrameId, WindowId, WindowPresentationSnapshot};
 
 pub(crate) struct BufferSourceOutputState<'emit> {

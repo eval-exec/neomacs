@@ -76,16 +76,6 @@ pub(crate) use crate::emacs_core::eval::data::face::{
     DefaultLookupPosition, FrameFaceRealizationCache, RealizationEpoch,
 };
 
-impl RealizationEpoch {
-    fn new() -> Self {
-        Self(std::rc::Rc::new(()))
-    }
-
-    fn same_as(&self, other: &Self) -> bool {
-        std::rc::Rc::ptr_eq(&self.0, &other.0)
-    }
-}
-
 static_assertions::assert_not_impl_any!(RealizationEpoch: Send, Sync, Copy);
 
 static_assertions::assert_impl_all!(CachedFaceSlot: Copy, Send, Sync);
@@ -108,33 +98,63 @@ fn route_hash(face: &Face) -> u64 {
 // Face derives equality through Value's structural `equal` comparison, as
 // required by GNU face_attr_equal_p (xfaces.c:4481-4507).
 
-impl std::fmt::Debug for FrameFaceRealizationCache {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("FrameFaceRealizationCache")
-            .field("generation", &self.generation)
-            .field("faces", &self.table.as_ref().map(FaceTable::len))
-            .field("attribute_buckets", &self.entries.len())
-            .finish()
-    }
-}
-
 static_assertions::assert_not_impl_any!(FrameFaceRealizationCache: Send, Sync);
 
-impl FrameFaceRealizationCache {
-    pub(crate) fn generation_matches(&self, generation: u64) -> bool {
+/// Stage-4 W5/E13 upper extension trait over the eval-owned type.
+#[doc(hidden)]
+pub trait FrameFaceRealizationCacheExt {
+    fn generation_matches(&self, generation: u64) -> bool;
+
+    fn prepare(&mut self, generation: u64, table: FaceTable);
+
+    fn replace_recorded_definitions(
+        &mut self,
+        table: FaceTable,
+        _refresh: crate::emacs_core::xfaces::realization::RecordedDefinitionsRefresh,
+    );
+
+    #[cfg(test)]
+    fn replace_definitions(&mut self, table: FaceTable);
+
+    fn reusable_definitions(&self) -> Option<(&FaceTable, &rustc_hash::FxHashSet<Box<str>>)>;
+
+    fn mark_definition_dirty(&mut self, name: &str);
+
+    fn mark_all_definitions_dirty(&mut self);
+
+    fn definitions_all_dirty(&self) -> bool;
+
+    fn root_lease(&self) -> Option<std::sync::Arc<[SharedRoot]>>;
+
+    fn set_root_lease(&mut self, lease: std::sync::Arc<[SharedRoot]>);
+
+    fn definitions_changed(&mut self, previous: u64, current: u64, face: Option<&str>);
+
+    fn insert_basic(&mut self, role: BasicFace, source: Face, realized: Face);
+
+    fn retire_default(&mut self);
+
+    fn default_lface(&self) -> Option<Value>;
+
+    fn retain_default_lface(&mut self, source: Value);
+
+    fn invalidate(&mut self);
+
+    fn preserve_across_change(&mut self, previous: u64, current: u64);
+
+    fn lookup(&self, attributes: &Face) -> Option<&Face>;
+
+    fn lookup_slot(&self, attributes: &Face) -> CachedFaceSlot;
+
+    fn insert(&mut self, attributes: Face, realized: Face);
+}
+
+impl FrameFaceRealizationCacheExt for FrameFaceRealizationCache {
+    fn generation_matches(&self, generation: u64) -> bool {
         self.generation == Some(generation)
     }
 
-    pub(crate) fn table(&self, generation: u64) -> Option<&FaceTable> {
-        (self.generation == Some(generation)
-            && self.dirty_definitions.is_empty()
-            && !self.definitions_all_dirty)
-            .then_some(self.table.as_ref())
-            .flatten()
-    }
-
-    pub(crate) fn prepare(&mut self, generation: u64, table: FaceTable) {
+    fn prepare(&mut self, generation: u64, table: FaceTable) {
         self.generation = Some(generation);
         self.epoch = Some(RealizationEpoch::new());
         self.table = Some(table);
@@ -152,7 +172,7 @@ impl FrameFaceRealizationCache {
     /// The opaque consumed permit is minted inline only in xfaces realization;
     /// it adds no state, checks, counter writes or allocation. This cannot
     /// revive an invalid generation: only prepare publishes one.
-    pub(crate) fn replace_recorded_definitions(
+    fn replace_recorded_definitions(
         &mut self,
         table: FaceTable,
         _refresh: crate::emacs_core::xfaces::realization::RecordedDefinitionsRefresh,
@@ -170,38 +190,36 @@ impl FrameFaceRealizationCache {
     /// equal count/epoch. This seam does NOT promise detection of an unrecorded
     /// faces-only replacement that preserves the palette and realization epoch.
     #[cfg(test)]
-    pub(crate) fn replace_definitions(&mut self, table: FaceTable) {
+    fn replace_definitions(&mut self, table: FaceTable) {
         crate::emacs_core::xfaces::realization::replace_definitions_for_test_fault(self, table);
     }
 
     /// The last derived table plus the names that drifted from it. Callers
     /// rebuild only those entries; the returned table shares copy-on-write
     /// storage, so untouched entries keep their identity and content.
-    pub(crate) fn reusable_definitions(
-        &self,
-    ) -> Option<(&FaceTable, &rustc_hash::FxHashSet<Box<str>>)> {
+    fn reusable_definitions(&self) -> Option<(&FaceTable, &rustc_hash::FxHashSet<Box<str>>)> {
         self.table
             .as_ref()
             .map(|table| (table, &self.dirty_definitions))
     }
 
-    pub(crate) fn mark_definition_dirty(&mut self, name: &str) {
+    fn mark_definition_dirty(&mut self, name: &str) {
         self.dirty_definitions.insert(Box::from(name));
     }
 
-    pub(crate) fn mark_all_definitions_dirty(&mut self) {
+    fn mark_all_definitions_dirty(&mut self) {
         self.definitions_all_dirty = true;
     }
 
-    pub(crate) fn definitions_all_dirty(&self) -> bool {
+    fn definitions_all_dirty(&self) -> bool {
         self.definitions_all_dirty
     }
 
-    pub(crate) fn root_lease(&self) -> Option<std::sync::Arc<[SharedRoot]>> {
+    fn root_lease(&self) -> Option<std::sync::Arc<[SharedRoot]>> {
         self.root_lease.clone()
     }
 
-    pub(crate) fn set_root_lease(&mut self, lease: std::sync::Arc<[SharedRoot]>) {
+    fn set_root_lease(&mut self, lease: std::sync::Arc<[SharedRoot]>) {
         self.root_lease = Some(lease);
     }
 
@@ -210,7 +228,7 @@ impl FrameFaceRealizationCache {
     /// roles. The retired table stays available for incremental reuse; the
     /// dirty mark keeps `table` from serving stale entries. Passing no face
     /// name retires the whole snapshot: an unknown writer cannot be scoped.
-    pub(crate) fn definitions_changed(&mut self, previous: u64, current: u64, face: Option<&str>) {
+    fn definitions_changed(&mut self, previous: u64, current: u64, face: Option<&str>) {
         match face {
             Some(name) => self.mark_definition_dirty(name),
             None => self.definitions_all_dirty = true,
@@ -221,11 +239,7 @@ impl FrameFaceRealizationCache {
         }
     }
 
-    pub(crate) fn basic(&self, role: BasicFace) -> Option<&(Face, Face)> {
-        self.basics.as_ref()?[role].as_ref()
-    }
-
-    pub(crate) fn insert_basic(&mut self, role: BasicFace, source: Face, realized: Face) {
+    fn insert_basic(&mut self, role: BasicFace, source: Face, realized: Face) {
         if role == BasicFace::Default {
             self.retire_default();
             self.default_predecessor = self
@@ -246,7 +260,7 @@ impl FrameFaceRealizationCache {
     /// GNU removes only the former default node (xfaces.c:6189-6198).
     /// Preserve its prior generic winner, whether ordinary or another basic,
     /// because ASCII entries form a newest-first list (xfaces.c:4962-5000).
-    pub(crate) fn retire_default(&mut self) {
+    fn retire_default(&mut self) {
         self.default_lface = None;
         let predecessor = self.default_predecessor.take();
         let was_winner = self.default_lookup_position == DefaultLookupPosition::Winner;
@@ -273,15 +287,15 @@ impl FrameFaceRealizationCache {
         }
     }
 
-    pub(crate) fn default_lface(&self) -> Option<Value> {
+    fn default_lface(&self) -> Option<Value> {
         self.default_lface
     }
 
-    pub(crate) fn retain_default_lface(&mut self, source: Value) {
+    fn retain_default_lface(&mut self, source: Value) {
         self.default_lface = Some(source);
     }
 
-    pub(crate) fn invalidate(&mut self) {
+    fn invalidate(&mut self) {
         self.generation = None;
         self.epoch = None;
         self.default_predecessor = None;
@@ -291,25 +305,15 @@ impl FrameFaceRealizationCache {
         self.definitions_all_dirty = true;
     }
 
-    pub(crate) fn realization_epoch(&self) -> Option<RealizationEpoch> {
-        self.epoch.clone()
-    }
-
-    pub(crate) fn retains_epoch(&self, epoch: &RealizationEpoch) -> bool {
-        self.epoch
-            .as_ref()
-            .is_some_and(|current| current.same_as(epoch))
-    }
-
     /// Carry an unchanged source through a frame-local global-counter bump.
     /// An older or invalid cache must stay stale rather than being resurrected.
-    pub(crate) fn preserve_across_change(&mut self, previous: u64, current: u64) {
+    fn preserve_across_change(&mut self, previous: u64, current: u64) {
         if self.generation == Some(previous) {
             self.generation = Some(current);
         }
     }
 
-    pub(crate) fn lookup(&self, attributes: &Face) -> Option<&Face> {
+    fn lookup(&self, attributes: &Face) -> Option<&Face> {
         self.entries
             .get(&route_hash(attributes))?
             .iter()
@@ -318,7 +322,7 @@ impl FrameFaceRealizationCache {
 
     /// Project the existing generic cache winner, not its equivalent paint.
     /// Forced basic faces can shadow default with an identical attribute key.
-    pub(crate) fn lookup_slot(&self, attributes: &Face) -> CachedFaceSlot {
+    fn lookup_slot(&self, attributes: &Face) -> CachedFaceSlot {
         if self.lookup(attributes).is_none() {
             return CachedFaceSlot::Unavailable;
         }
@@ -333,7 +337,7 @@ impl FrameFaceRealizationCache {
         }
     }
 
-    pub(crate) fn insert(&mut self, attributes: Face, realized: Face) {
+    fn insert(&mut self, attributes: Face, realized: Face) {
         if self
             .basic(BasicFace::Default)
             .is_some_and(|(source, _)| *source == attributes)
@@ -349,30 +353,8 @@ impl FrameFaceRealizationCache {
     }
 }
 
-impl GcTrace for FrameFaceRealizationCache {
-    fn trace_roots(&self, roots: &mut Vec<Value>) {
-        roots.extend(self.default_lface);
-        if let Some((source, realized)) = &self.default_predecessor {
-            source.trace_roots(roots);
-            realized.trace_roots(roots);
-        }
-        if let Some(table) = &self.table {
-            table.trace_roots(roots);
-        }
-        if let Some(basics) = &self.basics {
-            for (source, realized) in basics.values().flatten() {
-                source.trace_roots(roots);
-                realized.trace_roots(roots);
-            }
-        }
-        for entries in self.entries.values() {
-            for (source, realized) in entries {
-                source.trace_roots(roots);
-                realized.trace_roots(roots);
-            }
-        }
-    }
-}
+// The default bodies above are the implementation; this binds them to the
+// upper-layer type that owns the state.
 
 #[cfg(test)]
 #[path = "realization/tests/cache_test.rs"]

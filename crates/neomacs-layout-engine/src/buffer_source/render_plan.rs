@@ -52,6 +52,7 @@ use neomacs_display_protocol::frame_glyphs::{
 use neomacs_display_protocol::glyph_matrix::{FaceFillItem, GlyphRow, GlyphType};
 use neomacs_display_protocol::types::{Color, DisplayWindowId, Rect};
 use neovm_core::buffer::BufferId;
+use neovm_core::window::display::WindowDisplayContextExt;
 use neovm_core::window::{FrameId, WindowId};
 
 /// Selects the one authoritative source for a window's chrome rows.

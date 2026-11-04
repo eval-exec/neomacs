@@ -43,6 +43,8 @@ fn prefix_numeric_value(value: &Value) -> i64 {
 // KmacroManager (plain data, defined in neovm-value)
 // ---------------------------------------------------------------------------
 
+use crate::emacs_core::interactive::CommandKeyRuntime;
+use neovm_eval::emacs_core::reader::KeyboardInputRuntime;
 pub use neovm_value::kmacro::KmacroManager;
 
 // ===========================================================================

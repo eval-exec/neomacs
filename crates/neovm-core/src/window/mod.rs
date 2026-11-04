@@ -17,7 +17,7 @@ use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 pub(crate) mod body;
 mod chrome;
 pub use chrome::WindowChromePresence;
-mod display;
+pub mod display;
 pub use crate::emacs_core::eval::data::window_state::GUI_SCROLL_BAR_DEFAULT_WIDTH_PX;
 pub use crate::emacs_core::eval::data::window_state::{
     current_char_table_layout_revision, resolve_window_scroll_bar_geometry,
@@ -337,7 +337,13 @@ pub(crate) use crate::emacs_core::eval::data::layout_input::{
     FontificationHookIdentity, LayoutPrefixInput, WindowBufferLayoutInputState,
 };
 
-impl LayoutPrefixInput {
+/// Stage-4 W5/E13 upper extension trait over the eval-owned type.
+#[doc(hidden)]
+pub trait LayoutPrefixInputExt {
+    fn capture(value: Option<Value>) -> Self;
+}
+
+impl LayoutPrefixInputExt for LayoutPrefixInput {
     fn capture(value: Option<Value>) -> Self {
         let Some(value) = value else {
             return Self::Missing;
@@ -356,6 +362,9 @@ impl LayoutPrefixInput {
         }
     }
 }
+
+// The default bodies above are the implementation; this binds them to the
+// upper-layer type that owns the state.
 
 pub use neovm_value::display_vocab::WindowLayoutVariable;
 

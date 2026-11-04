@@ -158,9 +158,26 @@ enum RemappingBase {
     SpecifiedOnly,
 }
 
-impl FaceTable {
+/// Stage-4 W5/E13 upper extension trait over the eval-owned type.
+#[doc(hidden)]
+pub trait FaceTableRemappingExt {
+    fn resolve_with_remapping(&self, name: &str, remapping: &FaceRemapping) -> Face;
+
+    fn merge_faces_with_remapping(&self, face_names: &[&str], remapping: &FaceRemapping) -> Face;
+
+    fn resolve_remapped(
+        &self,
+        name: &str,
+        remapping: &FaceRemapping,
+        seen: &mut HashSet<Value>,
+        depth: usize,
+        base: RemappingBase,
+    ) -> Face;
+}
+
+impl FaceTableRemappingExt for FaceTable {
     /// Resolve a named face with GNU's highest-priority-first remapping list.
-    pub fn resolve_with_remapping(&self, name: &str, remapping: &FaceRemapping) -> Face {
+    fn resolve_with_remapping(&self, name: &str, remapping: &FaceRemapping) -> Face {
         self.resolve_remapped(
             name,
             remapping,
@@ -173,11 +190,7 @@ impl FaceTable {
     /// Overlay named text faces on the remapped default face. The caller's
     /// text-face order is preserved; each individual remapping uses GNU's
     /// highest-priority-first order.
-    pub fn merge_faces_with_remapping(
-        &self,
-        face_names: &[&str],
-        remapping: &FaceRemapping,
-    ) -> Face {
+    fn merge_faces_with_remapping(&self, face_names: &[&str], remapping: &FaceRemapping) -> Face {
         let mut result = self.resolve_with_remapping("default", remapping);
         for name in face_names {
             let resolved = self.resolve_remapped(
@@ -240,3 +253,6 @@ impl FaceTable {
         }
     }
 }
+
+// The default bodies above are the implementation; this binds them to the
+// upper-layer type that owns the state.

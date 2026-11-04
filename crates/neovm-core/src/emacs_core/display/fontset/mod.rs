@@ -399,7 +399,15 @@ impl FontsetData {
     }
 }
 
-impl StoredFontSpec {
+/// Stage-4 W5/E13 upper extension trait over the eval-owned type.
+#[doc(hidden)]
+pub trait StoredFontSpecExt {
+    fn for_rendering(&self) -> Self;
+
+    fn matches_char(&self, code: u32) -> bool;
+}
+
+impl StoredFontSpecExt for StoredFontSpec {
     /// Rendering owns native glyph coverage; informational definition metadata
     /// is never copied into a rendering request.
     fn for_rendering(&self) -> Self {
@@ -423,6 +431,9 @@ impl StoredFontSpec {
     }
 }
 
+// The default bodies above are the implementation; this binds them to the
+// upper-layer type that owns the state.
+
 pub fn repertory_target_ranges(repertory: &FontRepertory) -> Option<Vec<(u32, u32)>> {
     match repertory {
         FontRepertory::Charset(name) => charset_target_ranges(resolve_sym(*name)),
@@ -430,7 +441,13 @@ pub fn repertory_target_ranges(repertory: &FontRepertory) -> Option<Vec<(u32, u3
     }
 }
 
-impl FontSpecEntry {
+/// Stage-4 W5/E13 upper extension trait over the eval-owned type.
+#[doc(hidden)]
+pub trait FontSpecEntryExt: Sized {
+    fn for_lookup(&self, code: u32, purpose: FontsetLookupPurpose) -> Option<Self>;
+}
+
+impl FontSpecEntryExt for FontSpecEntry {
     fn for_lookup(&self, code: u32, purpose: FontsetLookupPurpose) -> Option<Self> {
         match (self, purpose) {
             (Self::ExplicitNone, _) => Some(Self::ExplicitNone),
@@ -446,6 +463,9 @@ impl FontSpecEntry {
         }
     }
 }
+
+// The default bodies above are the implementation; this binds them to the
+// upper-layer type that owns the state.
 
 fn apply_fontset_add(
     existing: Option<&[StoredFontsetEntry]>,

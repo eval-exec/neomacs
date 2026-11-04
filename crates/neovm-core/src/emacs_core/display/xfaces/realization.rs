@@ -9,7 +9,9 @@ use crate::window::DisplayFrameExt;
 use crate::window::DisplayFrameManagerExt;
 use strum::IntoEnumIterator;
 
+use crate::face::realization::FrameFaceRealizationCacheExt;
 pub(crate) use crate::face::realization::{BasicFace, FaceChangeScope};
+use neovm_edit::emacs_core::edit_host::EditHost;
 
 /// Consumed authority for the two recorded same-epoch definition installers.
 ///
@@ -389,10 +391,58 @@ enum RealizationLookup {
     Basic(BasicFace),
 }
 
-impl super::super::eval::Context {
+/// Stage-4 W5/E13 upper extension trait over the eval-owned type.
+#[doc(hidden)]
+pub trait XfacesRealizationContextExt {
+    fn frame_is_tty_face_target(&self, frame: FrameId) -> bool;
+
+    fn frame_face_class(&self, frame: FrameId) -> Option<crate::face::realization::FrameFaceClass>;
+
+    fn initialize_display_faces_for_frame(&mut self, frame: FrameId);
+
+    fn display_face_source_table_is_current(
+        &self,
+        frame: FrameId,
+        source: &crate::face::FaceTable,
+    ) -> bool;
+
+    fn display_face_table_root_lease(
+        &mut self,
+        frame: FrameId,
+        source: &crate::face::FaceTable,
+    ) -> Result<
+        std::sync::Arc<[crate::tagged::transport::SharedRoot]>,
+        crate::tagged::transport::SharedRootError,
+    >;
+
+    fn cached_display_face_for_frame(&self, frame: FrameId, attributes: &Face) -> Option<Face>;
+
+    fn cached_display_face_slot_for_frame(
+        &self,
+        frame: FrameId,
+        attributes: &Face,
+    ) -> crate::face::realization::CachedFaceSlot;
+
+    fn cached_basic_display_face_for_frame(
+        &self,
+        frame: FrameId,
+        name: &str,
+    ) -> Option<(Face, Face)>;
+
+    fn realize_display_face_for_frame(&mut self, frame: FrameId, attributes: &Face) -> Face;
+
+    fn realize_display_face_with_lookup(
+        &mut self,
+        frame: FrameId,
+        attributes: &Face,
+        lookup: RealizationLookup,
+    ) -> Result<Face, Flow>;
+}
+
+impl XfacesRealizationContextExt for super::super::eval::Context {
     /// Frame face classification shared with pure layout adapters. GNU's
     /// initial terminal is not a termcap face target (xfaces.c:6201-6209).
-    pub fn frame_is_tty_face_target(&self, frame: FrameId) -> bool {
+    fn frame_is_tty_face_target(&self, frame: FrameId) -> bool {
         self.frames
             .get(frame)
             .is_some_and(crate::face::realization::frame_is_tty_target)
@@ -404,24 +454,21 @@ impl super::super::eval::Context {
     /// frames refresh their realized cache, window-system frames publish the
     /// global string colors to the frame parameters, and initial/batch frames
     /// do neither.
-    pub(crate) fn frame_face_class(
-        &self,
-        frame: FrameId,
-    ) -> Option<crate::face::realization::FrameFaceClass> {
+    fn frame_face_class(&self, frame: FrameId) -> Option<crate::face::realization::FrameFaceClass> {
         self.frames
             .get(frame)
             .and_then(crate::face::realization::frame_face_class)
     }
 
     /// Initialize the frame cache and basic faces at the creation boundary.
-    pub fn initialize_display_faces_for_frame(&mut self, frame: FrameId) {
+    fn initialize_display_faces_for_frame(&mut self, frame: FrameId) {
         initialize_frame_faces(self, frame);
     }
 
     /// Whether a layout resolver still holds this frame's current source
     /// definitions. A callback that changes the same frame makes the old
     /// resolver ineligible for further callbacks until layout retries.
-    pub fn display_face_source_table_is_current(
+    fn display_face_source_table_is_current(
         &self,
         frame: FrameId,
         source: &crate::face::FaceTable,
@@ -436,7 +483,7 @@ impl super::super::eval::Context {
     /// frame snapshot shares its cached lease; a retained older snapshot gets
     /// an uncached lease while its caller still owns the existing source roots.
     /// Admission belongs to this heap's current mutator and runs no Lisp.
-    pub fn display_face_table_root_lease(
+    fn display_face_table_root_lease(
         &mut self,
         frame: FrameId,
         source: &crate::face::FaceTable,
@@ -474,7 +521,7 @@ impl super::super::eval::Context {
     }
 
     /// Read a complete cached realization without evaluating Lisp.
-    pub fn cached_display_face_for_frame(&self, frame: FrameId, attributes: &Face) -> Option<Face> {
+    fn cached_display_face_for_frame(&self, frame: FrameId, attributes: &Face) -> Option<Face> {
         let cache = &self.frames.get(frame)?.face_realization;
         cache
             .generation_matches(self.face_change_count)
@@ -486,7 +533,7 @@ impl super::super::eval::Context {
     /// Classify the current generic lookup as unavailable, default or non-default.
     /// This is read independently of paint memos: equal-attribute insertions
     /// can change the winning basic slot without a face-change counter bump.
-    pub fn cached_display_face_slot_for_frame(
+    fn cached_display_face_slot_for_frame(
         &self,
         frame: FrameId,
         attributes: &Face,
@@ -505,7 +552,7 @@ impl super::super::eval::Context {
 
     /// Import one fixed GNU basic role without evaluating Lisp. Equal source
     /// attributes do not make separate role results interchangeable.
-    pub fn cached_basic_display_face_for_frame(
+    fn cached_basic_display_face_for_frame(
         &self,
         frame: FrameId,
         name: &str,
@@ -523,7 +570,7 @@ impl super::super::eval::Context {
     /// attribute combination exactly like GNU lookup_face. The owning frame's
     /// exclusive mutator performs Lisp callbacks; no cross-mutator state exists.
     /// Initial placeholder frames use dummy faces (GNU xfaces.c:6205-6209).
-    pub fn realize_display_face_for_frame(&mut self, frame: FrameId, attributes: &Face) -> Face {
+    fn realize_display_face_for_frame(&mut self, frame: FrameId, attributes: &Face) -> Face {
         if self.redisplay_hook_flow_pending() {
             return attributes.clone();
         }
@@ -626,6 +673,9 @@ impl super::super::eval::Context {
         Ok(realized)
     }
 }
+
+// The default bodies above are the implementation; this binds them to the
+// upper-layer type that owns the state.
 
 pub(crate) fn prepare_runtime_faces(
     eval: &mut super::super::eval::Context,

@@ -23,6 +23,8 @@ mod spawn;
 pub(crate) use crate::emacs_core::eval::data::process_spawn::{ChildStdio, SpawnedChild};
 pub(crate) use spawn::{ChildCommand, SpawnedChildIo};
 
+use neovm_edit::emacs_core::edit_host::EditHost;
+use neovm_text::emacs_core::text_host::TextHost;
 pub use neovm_value::system_vocab::platform::command_line_max_length;
 
 /// Retain child exit status until its owning waiter reaps it.

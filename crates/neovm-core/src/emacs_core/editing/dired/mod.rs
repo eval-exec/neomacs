@@ -14,6 +14,7 @@ use super::value::*;
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::expect_args_range;
 use crate::heap_types::LispString;
+use neovm_edit::emacs_core::edit_host::EditHost;
 use std::collections::VecDeque;
 #[cfg(unix)]
 use std::ffi::CStr;

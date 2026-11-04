@@ -7,6 +7,7 @@ use super::super::mode_line_walk::{
 };
 use super::super::mode_line_walk::{FrameAdmission, SequenceAction};
 use super::*;
+use neovm_edit::emacs_core::edit_host::EditHost;
 
 pub(in super::super) struct StoredEnvelope {
     controls: StringEmissionControls,

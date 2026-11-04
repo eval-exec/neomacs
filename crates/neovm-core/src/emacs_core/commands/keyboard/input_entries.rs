@@ -16,6 +16,8 @@ use crate::emacs_core::eval::Context;
 use crate::emacs_core::intern::intern;
 use crate::emacs_core::reader::KeyboardInputRuntime;
 use crate::emacs_core::value::{Value, ValueKind};
+use crate::emacs_core::wait::WaitContextExt;
+use neovm_edit::emacs_core::edit_host::EditHost;
 
 pub(crate) fn parse_optional_read_seconds_arg(
     value: Option<&Value>,

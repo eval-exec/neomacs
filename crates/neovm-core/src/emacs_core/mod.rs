@@ -101,7 +101,7 @@ pub mod invisibility;
 #[path = "display/menu/mod.rs"]
 pub(crate) mod menu;
 #[path = "display/neo/mod.rs"]
-pub(crate) mod neo;
+pub mod neo;
 #[path = "display/shader_surface/mod.rs"]
 pub mod shader_surface;
 #[path = "display/sound/mod.rs"]
@@ -146,42 +146,35 @@ pub use neovm_edit::emacs_core::undo;
 pub use neovm_edit::emacs_core::word_wrap;
 
 // Lisp loading, documentation, and language-level facilities.
-#[path = "lisp/advice/mod.rs"]
-pub mod advice;
-#[path = "lisp/autoload/mod.rs"]
-pub mod autoload;
-#[path = "lisp/cl_lib/mod.rs"]
-pub mod cl_lib;
-#[path = "lisp/custom/mod.rs"]
-pub mod custom;
-#[path = "lisp/doc/mod.rs"]
-pub mod doc;
-#[path = "lisp/hook_runtime/mod.rs"]
-pub(crate) mod hook_runtime;
-#[path = "lisp/load/mod.rs"]
-pub mod load;
-#[path = "lisp/lread/mod.rs"]
-pub mod lread;
-#[path = "lisp/print/mod.rs"]
-pub mod print;
-#[path = "lisp/provide_coupled_vars/mod.rs"]
-pub mod provide_coupled_vars;
-#[path = "lisp/reader/mod.rs"]
-pub mod reader;
+pub use neovm_eval::emacs_core::advice;
+pub use neovm_eval::emacs_core::autoload;
+pub use neovm_eval::emacs_core::cl_lib;
+pub use neovm_eval::emacs_core::custom;
+pub use neovm_eval::emacs_core::doc;
+pub(crate) use neovm_eval::emacs_core::hook_runtime;
+pub use neovm_eval::emacs_core::load;
+pub use neovm_eval::emacs_core::lread;
+pub use neovm_eval::emacs_core::print;
+pub use neovm_eval::emacs_core::provide_coupled_vars;
+pub use neovm_eval::emacs_core::reader;
 
 // Native Lisp subroutines and their metadata.
-#[path = "lisp/native/builtins/mod.rs"]
-pub mod builtins;
-#[path = "lisp/native/builtins_extra/mod.rs"]
-pub mod builtins_extra;
-#[path = "lisp/native/floatfns/mod.rs"]
-pub mod floatfns;
-#[path = "lisp/native/fns/mod.rs"]
-pub mod fns;
-#[path = "lisp/native/misc/mod.rs"]
-pub mod misc;
-#[path = "lisp/native/subr/mod.rs"]
-pub(crate) mod subr;
+pub mod builtins {
+    pub use neovm_eval::emacs_core::builtins::*;
+    #[path = "subrs.rs"]
+    mod subrs;
+    #[cfg(test)]
+    pub(crate) use subrs::SUBRS;
+    #[cfg(test)]
+    pub(crate) use subrs::localized_subr_catalog;
+    pub(crate) use subrs::register_subrs as init_builtins;
+    pub(crate) use subrs::register_subrs;
+}
+pub use neovm_eval::emacs_core::builtins_extra;
+pub use neovm_eval::emacs_core::floatfns;
+pub use neovm_eval::emacs_core::fns;
+pub use neovm_eval::emacs_core::misc;
+pub(crate) use neovm_eval::emacs_core::subr;
 #[cfg(doctest)]
 /// Compile-time contracts for native subroutine declarations.
 ///
@@ -240,14 +233,11 @@ pub mod subr_compile_contract {
         FixedMin1, FixedMin2, FixedMin3, FixedMin4, FixedMin5, FixedMin6, SubrBatch, SubrSpec,
     };
 }
-#[path = "lisp/native/subr/info.rs"]
-pub mod subr_info;
+pub use neovm_eval::emacs_core::subr_info;
 
 // Generated Lisp-facing documentation tables.
-#[path = "lisp/docs/subr_docs/mod.rs"]
-pub mod subr_docs;
-#[path = "lisp/docs/var_docs/mod.rs"]
-pub mod var_docs;
+pub use neovm_eval::emacs_core::subr_docs;
+pub use neovm_eval::emacs_core::var_docs;
 
 // Evaluator runtime, object model, VM, and persistence.
 #[cfg(not(test))]
@@ -255,33 +245,32 @@ pub use neovm_value::alloc;
 #[cfg(test)]
 #[path = "../../core_test_facades/emacs_core/alloc.rs"]
 pub mod alloc;
-#[path = "runtime/bytecode/mod.rs"]
-pub mod bytecode;
-#[path = "runtime/data/mod.rs"]
-pub mod data;
-#[path = "runtime/debug/mod.rs"]
-pub mod debug;
-#[path = "runtime/debug_on_call/mod.rs"]
-pub mod debug_on_call;
-#[path = "runtime/defvar_bool/mod.rs"]
-pub mod defvar_bool;
-#[path = "runtime/defvar_object/mod.rs"]
-pub mod defvar_object;
+pub use neovm_eval::emacs_core::bytecode;
+pub mod data {
+    pub use neovm_eval::emacs_core::data::*;
+    #[path = "subrs.rs"]
+    mod subrs;
+    #[cfg(test)]
+    pub(crate) use subrs::SUBRS;
+    pub(crate) use subrs::register_subrs;
+}
+pub use neovm_eval::emacs_core::debug;
+pub use neovm_eval::emacs_core::debug_on_call;
+pub use neovm_eval::emacs_core::defvar_bool;
+pub use neovm_eval::emacs_core::defvar_object;
 #[cfg(not(test))]
 pub use neovm_value::error;
 #[cfg(test)]
 #[path = "../../core_test_facades/emacs_core/error.rs"]
 pub mod error;
+pub use neovm_eval::emacs_core::eval;
 pub use neovm_value::errors;
-#[path = "runtime/eval/mod.rs"]
-pub mod eval;
 #[cfg(not(test))]
 pub use neovm_value::forward;
 #[cfg(test)]
 #[path = "../../core_test_facades/emacs_core/forward.rs"]
 pub mod forward;
-#[path = "runtime/gc_stats/mod.rs"]
-pub mod gc_stats;
+pub use neovm_eval::emacs_core::gc_stats;
 #[cfg(not(test))]
 pub use neovm_value::hashtab;
 #[cfg(test)]
@@ -292,30 +281,24 @@ pub use neovm_value::intern;
 #[cfg(test)]
 #[path = "../../core_test_facades/emacs_core/intern.rs"]
 pub mod intern;
-#[path = "runtime/jit/mod.rs"]
-pub mod jit;
-#[path = "runtime/owned_roots/mod.rs"]
-pub mod owned_roots;
-#[path = "runtime/pdump/mod.rs"]
-pub mod pdump;
 pub(crate) use neovm_edit::emacs_core::position;
+pub use neovm_eval::emacs_core::jit;
+pub use neovm_eval::emacs_core::owned_roots;
+pub use neovm_eval::emacs_core::pdump;
+pub(crate) use neovm_eval::emacs_core::runtime_identity;
 pub use neovm_value::plist;
-#[path = "runtime/runtime_identity/mod.rs"]
-pub(crate) mod runtime_identity;
 #[cfg(not(test))]
 pub use neovm_value::symbol;
 #[cfg(test)]
 #[path = "../../core_test_facades/emacs_core/symbol.rs"]
 pub mod symbol;
-#[path = "runtime/threads/mod.rs"]
-pub mod threads;
+pub use neovm_eval::emacs_core::threads;
 #[cfg(not(test))]
 pub use neovm_value::value;
 #[cfg(test)]
 #[path = "../../core_test_facades/emacs_core/value.rs"]
 pub mod value;
-#[path = "runtime/value_reader/mod.rs"]
-pub mod value_reader;
+pub use neovm_eval::emacs_core::value_reader;
 
 // Host integration, files, processes, networking, and platform support.
 #[path = "system/platform/c_features/mod.rs"]
@@ -441,12 +424,6 @@ mod gnu_subr_surface_test;
 #[path = "tests/architecture/layout_test.rs"]
 mod layout_test;
 #[cfg(test)]
-#[path = "lisp/provide_coupled_vars/tests/runtime_surface_test.rs"]
-mod provide_coupled_vars_test;
-#[cfg(test)]
-#[path = "runtime/eval/tests/quit_regression_test.rs"]
-mod quit_regression_test;
-#[cfg(test)]
 #[path = "tests/architecture/runtime_string_guard_test.rs"]
 mod runtime_string_guard_test;
 
@@ -462,9 +439,6 @@ mod split_shared_guards;
 #[cfg(test)]
 #[path = "tests/architecture/split_test_support_manifest_test.rs"]
 mod split_test_support_manifest_test;
-#[cfg(test)]
-#[path = "lisp/load/tests/stale_bytecode_test.rs"]
-mod stale_bytecode_test;
 #[cfg(test)]
 #[path = "../../core_tests/emacs_core/runtime/symbol/tests/function_regression_test.rs"]
 mod symbol_function_regression_test;
@@ -491,17 +465,9 @@ mod window_system_preload_test;
 #[path = "display/xwidget/tests/runtime_test.rs"]
 mod xwidget_test;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct MenuBarPopupAnchor {
-    pub(crate) request_id: Option<neomacs_display_protocol::menu::MenuBarRequestId>,
-    pub(crate) frame_id: crate::window::FrameId,
-    pub(crate) menu_key: Option<String>,
-    pub(crate) menu_x: i64,
-    pub(crate) x: i64,
-    pub(crate) y: i64,
-    pub(crate) width: i64,
-    pub(crate) height: i64,
-}
+// Moved down with the evaluator (stage-4 W5/E13); the historical
+// `crate::emacs_core::MenuBarPopupAnchor` path stays as a re-export.
+pub(crate) use neovm_eval::emacs_core::MenuBarPopupAnchor;
 
 // Re-export the main public API
 pub use bytecode::{ByteCodeFunction, Vm as ByteVm};

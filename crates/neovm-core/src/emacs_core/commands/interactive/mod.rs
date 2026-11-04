@@ -43,6 +43,7 @@ use super::value::*;
 use crate::buffer::EmacsBytePos;
 use crate::emacs_core::SymId;
 use crate::emacs_core::intern::WellKnown;
+use neovm_edit::emacs_core::edit_host::EditHost;
 
 // Interactive command registry/spec substrate moved to the eval manifest (stage-4 W1/E4).
 // Core command modules keep the historical paths through this re-export.

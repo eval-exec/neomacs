@@ -11,6 +11,7 @@ use crate::emacs_core::error::{Flow, LispCondition, signal};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::value::{Value, ValueKind, list_to_vec};
 use crate::heap_types::LispString;
+use neovm_edit::emacs_core::edit_host::EditHost;
 #[cfg(unix)]
 use std::ffi::OsStr;
 #[cfg(unix)]

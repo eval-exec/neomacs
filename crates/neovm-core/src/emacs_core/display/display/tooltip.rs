@@ -3,6 +3,7 @@ use super::*;
 use crate::window::DisplayFrameExt;
 use crate::window::DisplayFrameManagerExt;
 use neomacs_display_protocol::tooltip::TooltipRequest;
+use neovm_edit::emacs_core::edit_host::EditHost;
 use strum::EnumString;
 
 #[derive(Clone, Copy, Debug, EnumString)]

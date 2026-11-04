@@ -18,6 +18,7 @@ use super::fileio::{
 use super::value::{Value, ValueKind};
 use crate::buffer::BufferId;
 use crate::heap_types::LispString;
+use neovm_edit::emacs_core::edit_host::EditHost;
 
 /// GNU reports a lock failure with `report_file_errno` (filelock.c:648, 776),
 /// so the DATA must be exactly what `get_file_errno_data` (fileio.c) builds:

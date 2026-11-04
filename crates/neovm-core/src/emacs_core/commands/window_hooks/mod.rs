@@ -27,6 +27,7 @@ use crate::emacs_core::hook_runtime;
 use crate::emacs_core::intern::WellKnown;
 use crate::emacs_core::value::equal_value;
 use crate::tagged::SymbolMode;
+use neovm_edit::emacs_core::edit_host::EditHost;
 use neovm_value::error::{
     EvalResult, Flow, LispCondition, expect_args, expect_args_range, expect_max_args, signal,
 };

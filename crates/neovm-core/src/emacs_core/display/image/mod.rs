@@ -1740,7 +1740,13 @@ pub(crate) fn builtin_image_transforms_p(
 #[path = "tests/image_test.rs"]
 mod tests;
 
-impl Context {
+/// Stage-4 W5/E13 upper extension trait over the eval-owned type.
+#[doc(hidden)]
+pub trait ImageContextExt {
+    fn log_pending_image_diagnostics(&mut self);
+}
+
+impl ImageContextExt for Context {
     /// Report every image failure a display path has observed since the last
     /// call, in GNU's words.
     ///
@@ -1756,7 +1762,7 @@ impl Context {
     /// runs each diagnostic through `Fformat_message` before logging it.
     /// Without that step `*Messages*` would hold the grave accents of
     /// `src/image.c`'s string literals, where GNU shows `‘…’`.
-    pub fn log_pending_image_diagnostics(&mut self) {
+    fn log_pending_image_diagnostics(&mut self) {
         // Collect first so the immutable borrow of the display host has ended
         // by the time `add_to_log` appends to *Messages*.
         let diagnostics = self
@@ -1778,3 +1784,6 @@ impl Context {
         }
     }
 }
+
+// The default bodies above are the implementation; this binds them to the
+// upper-layer type that owns the state.

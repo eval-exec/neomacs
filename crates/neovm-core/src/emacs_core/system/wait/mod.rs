@@ -18,6 +18,8 @@ use super::process::{
     ProcessId, ProcessOutputServiceOutcome, ProcessOutputServiceRequest, ProcessOutputWaitRequest,
     ProcessOutputWaitTiming, ProcessWaitBackendInterest, ProcessWaitEvents,
 };
+use crate::emacs_core::timer::TimerContextExt;
+use neovm_eval::emacs_core::reader::KeyboardInputRuntime;
 
 /// Upper bound on the zero-time MINIMUM drain that follows a live read.
 ///
@@ -1027,17 +1029,147 @@ enum WaitBlock {
     Sleep,
 }
 
-impl super::eval::Context {
+/// Stage-4 W5/E13 upper extension trait over the eval-owned type.
+#[doc(hidden)]
+pub trait WaitContextExt {
+    fn service_wait_request_once(&mut self, request: &WaitRequest) -> Result<(), Flow>;
+
+    fn service_input_pending_without_timers(&mut self) -> Result<(), Flow>;
+
+    fn service_input_pending_with_timers(&mut self) -> Result<(), Flow>;
+
+    fn service_read_char_preliminary_redisplay(
+        &mut self,
+        idle_policy: crate::keyboard::IdleTransitionPolicy,
+    ) -> Result<(), Flow>;
+
+    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    fn service_timers_with_redisplay(&mut self) -> Result<(), Flow>;
+
+    fn service_timers_without_redisplay(&mut self) -> Result<(), Flow>;
+
+    fn service_wait_request_once_outcome(
+        &mut self,
+        request: &WaitRequest,
+    ) -> Result<WaitServiceOutcome, Flow>;
+
+    fn service_wait_request_first_pass(
+        &mut self,
+        request: &WaitRequest,
+    ) -> Result<WaitServiceOutcome, Flow>;
+
+    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    fn service_wait_request_source_events_outcome(
+        &mut self,
+        request: &WaitRequest,
+        events: ProcessWaitEvents,
+    ) -> Result<WaitServiceOutcome, Flow>;
+
+    fn service_wait_request_block_activity(
+        &mut self,
+        request: &WaitRequest,
+        activity: WaitBlockActivity,
+        run_timers: bool,
+    ) -> Result<WaitServiceOutcome, Flow>;
+
+    fn service_wait_request_processes(
+        &mut self,
+        request: &WaitRequest,
+        process_service: WaitProcessService,
+        run_timers: bool,
+        notify_status_after_timers: Option<WaitStatusNotifySite>,
+    ) -> Result<WaitServiceOutcome, Flow>;
+
+    fn wait_request_target_terminated(&self, request: &WaitRequest) -> bool;
+
+    fn service_minimum_process_drain(
+        &mut self,
+        request: &WaitRequest,
+    ) -> Result<WaitServiceOutcome, Flow>;
+
+    fn complete_wait_after_required_minimum_drain(
+        &mut self,
+        request: &WaitRequest,
+        outcome: WaitServiceOutcome,
+    ) -> Result<Option<WaitCompletion>, Flow>;
+
+    fn requeued_command_input_for_wait_request(&self, request: &WaitRequest) -> WaitCommandInput;
+
+    fn record_and_notify_status_changes(
+        &mut self,
+        request: &WaitRequest,
+        site: WaitStatusNotifySite,
+    ) -> Result<ProcessOutputServiceOutcome, Flow>;
+
+    fn wait_for_tls_handshake(&mut self, id: ProcessId) -> Result<(), Flow>;
+
+    fn wait_reading_process_output(&mut self, request: WaitRequest)
+    -> Result<WaitCompletion, Flow>;
+
+    fn wait_reading_process_output_inner(
+        &mut self,
+        request: WaitRequest,
+    ) -> Result<WaitCompletion, Flow>;
+
+    fn wait_for_process_output(
+        &mut self,
+        request: ProcessOutputWaitRequest,
+    ) -> Result<ProcessOutputWaitOutcome, Flow>;
+
+    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    fn wait_until(&mut self, deadline: Instant) -> Result<(), Flow>;
+
+    fn wait_for_duration_until_timer_deadline(
+        &mut self,
+        duration: Duration,
+        timer_deadline: GnuTimerTimestamp,
+    ) -> Result<(), Flow>;
+
+    fn wait_for_resize_ack_until(&mut self, deadline: Instant) -> Result<bool, Flow>;
+
+    #[cfg(test)]
+    fn wait_for_command_input(
+        &mut self,
+        deadline: Option<Instant>,
+    ) -> Result<CommandInputWaitOutcome, Flow>;
+
+    fn wait_for_command_input_with_idle_policy(
+        &mut self,
+        deadline: Option<Instant>,
+        idle_policy: crate::keyboard::IdleTransitionPolicy,
+    ) -> Result<CommandInputWaitOutcome, Flow>;
+
+    fn block_for_wait_request(
+        &mut self,
+        request: &WaitRequest,
+        wait_time: Duration,
+    ) -> Result<WaitBlockActivity, Flow>;
+
+    fn green_resumed_select_activity(&self) -> WaitBlockActivity;
+
+    fn begin_waiting_for_user_input_if_requested(&mut self, request: &WaitRequest) -> Option<bool>;
+
+    fn end_waiting_for_user_input(&mut self, restore: Option<bool>);
+
+    fn next_gnu_timer_timeout(&self, timer_deadline: Option<GnuTimerTimestamp>)
+    -> Option<Duration>;
+
+    fn next_wait_request_timeout(&self, request: &WaitRequest, now: Instant) -> WaitTimeoutChoice;
+
+    fn wait_block(&self, request: &WaitRequest, wait_time: Duration) -> WaitBlock;
+}
+
+impl WaitContextExt for super::eval::Context {
     fn service_wait_request_once(&mut self, request: &WaitRequest) -> Result<(), Flow> {
         let _ = self.service_wait_request_once_outcome(request)?;
         Ok(())
     }
 
-    pub(crate) fn service_input_pending_without_timers(&mut self) -> Result<(), Flow> {
+    fn service_input_pending_without_timers(&mut self) -> Result<(), Flow> {
         self.service_wait_request_once(&WaitRequest::input_pending_without_timers())
     }
 
-    pub(crate) fn service_input_pending_with_timers(&mut self) -> Result<(), Flow> {
+    fn service_input_pending_with_timers(&mut self) -> Result<(), Flow> {
         self.service_wait_request_once(&WaitRequest::input_pending_with_timers())
     }
 
@@ -1045,7 +1177,7 @@ impl super::eval::Context {
     /// preliminary redisplay (keyboard.c:2693-2721, 12042-12052). Keep the
     /// phases together so display hooks see timer changes and timer-created
     /// unread events, while process and special-input service stays afterward.
-    pub(crate) fn service_read_char_preliminary_redisplay(
+    fn service_read_char_preliminary_redisplay(
         &mut self,
         idle_policy: crate::keyboard::IdleTransitionPolicy,
     ) -> Result<(), Flow> {
@@ -1067,11 +1199,11 @@ impl super::eval::Context {
     }
 
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    pub(crate) fn service_timers_with_redisplay(&mut self) -> Result<(), Flow> {
+    fn service_timers_with_redisplay(&mut self) -> Result<(), Flow> {
         self.service_wait_request_once(&WaitRequest::timer_service(true))
     }
 
-    pub(crate) fn service_timers_without_redisplay(&mut self) -> Result<(), Flow> {
+    fn service_timers_without_redisplay(&mut self) -> Result<(), Flow> {
         self.service_wait_request_once(&WaitRequest::timer_service(false))
     }
 
@@ -1398,7 +1530,7 @@ impl super::eval::Context {
         self.notify_processes_with_unnotified_status_change(target)
     }
 
-    pub(crate) fn wait_for_tls_handshake(&mut self, id: ProcessId) -> Result<(), Flow> {
+    fn wait_for_tls_handshake(&mut self, id: ProcessId) -> Result<(), Flow> {
         let mut request = WaitRequest::accept_target_process_output_with_timers(
             ProcessOutputWaitTiming::Forever,
             id,
@@ -1512,7 +1644,7 @@ impl super::eval::Context {
         }
     }
 
-    pub(crate) fn wait_for_process_output(
+    fn wait_for_process_output(
         &mut self,
         request: ProcessOutputWaitRequest,
     ) -> Result<ProcessOutputWaitOutcome, Flow> {
@@ -1521,12 +1653,12 @@ impl super::eval::Context {
     }
 
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    pub(crate) fn wait_until(&mut self, deadline: Instant) -> Result<(), Flow> {
+    fn wait_until(&mut self, deadline: Instant) -> Result<(), Flow> {
         let _ = self.wait_reading_process_output(WaitRequest::sleep_until(deadline))?;
         Ok(())
     }
 
-    pub(crate) fn wait_for_duration_until_timer_deadline(
+    fn wait_for_duration_until_timer_deadline(
         &mut self,
         duration: Duration,
         timer_deadline: GnuTimerTimestamp,
@@ -1537,13 +1669,13 @@ impl super::eval::Context {
         Ok(())
     }
 
-    pub(crate) fn wait_for_resize_ack_until(&mut self, deadline: Instant) -> Result<bool, Flow> {
+    fn wait_for_resize_ack_until(&mut self, deadline: Instant) -> Result<bool, Flow> {
         let completion = self.wait_reading_process_output(WaitRequest::resize_ack(deadline))?;
         Ok(completion == WaitCompletion::SpecialInputActivity)
     }
 
     #[cfg(test)]
-    pub(crate) fn wait_for_command_input(
+    fn wait_for_command_input(
         &mut self,
         deadline: Option<Instant>,
     ) -> Result<CommandInputWaitOutcome, Flow> {
@@ -1553,7 +1685,7 @@ impl super::eval::Context {
         )
     }
 
-    pub(crate) fn wait_for_command_input_with_idle_policy(
+    fn wait_for_command_input_with_idle_policy(
         &mut self,
         deadline: Option<Instant>,
         idle_policy: crate::keyboard::IdleTransitionPolicy,
@@ -1755,6 +1887,9 @@ impl super::eval::Context {
         }
     }
 }
+
+// The default bodies above are the implementation; this binds them to the
+// upper-layer type that owns the state.
 
 #[cfg(test)]
 #[path = "tests/wait_test.rs"]

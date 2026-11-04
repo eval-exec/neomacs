@@ -28,6 +28,7 @@ use super::reader::KeyboardInputRuntime;
 use super::symbol::Obarray;
 use super::textprop::StickinessProperty;
 use super::value::{Value, ValueKind, VecLikeType};
+use neovm_edit::emacs_core::edit_host::EditHost;
 
 /// GNU completion state held in predeclared C variables/symbols rather than
 /// rediscovered by name at every completion operation.
