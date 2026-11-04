@@ -17,6 +17,7 @@ use crate::emacs_core::value::{
     HashTableTest, LambdaData, LambdaParams, StringTextPropertyRun, Value, ValueKind,
     get_string_text_properties_for_value,
 };
+use crate::emacs_core::window_cmds::builtin_split_window_internal;
 use crate::emacs_core::{Context, format_eval_result};
 use crate::test_utils::{load_minimal_gnu_backquote_runtime, runtime_startup_context};
 use malachite::integer::Integer;

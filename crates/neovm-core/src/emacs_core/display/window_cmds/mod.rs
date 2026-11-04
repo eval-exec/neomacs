@@ -61,9 +61,8 @@ fn lisp_char_pos_from_one_based_usize(pos: usize) -> LispCharPos1 {
 pub(crate) use super::builtins::symbols::builtin_resize_mini_window_internal;
 pub(crate) use super::builtins::{
     builtin_current_window_configuration, builtin_run_window_scroll_functions,
-    builtin_set_window_configuration, builtin_split_window_internal,
-    builtin_window_configuration_equal_p, builtin_window_configuration_frame,
-    builtin_window_configuration_p,
+    builtin_set_window_configuration, builtin_window_configuration_equal_p,
+    builtin_window_configuration_frame, builtin_window_configuration_p,
 };
 
 // ---------------------------------------------------------------------------
@@ -99,6 +98,110 @@ pub(crate) fn validate_split_window_target(
 ) -> Result<(), Flow> {
     resolve_window_id_with_pred_in_state(frames, buffers, Some(window), WindowDomain::Valid)
         .map(|_| ())
+}
+
+/// `(split-window-internal OLD PIXEL-SIZE SIDE NORMAL-SIZE &optional REFER)`
+///
+/// GNU `src/window.c::Fsplit_window_internal` honors all five
+/// arguments. The fourth argument NORMAL-SIZE seeds the new
+/// window's `normal_lines`/`normal_cols` slot so future
+/// proportional resizes preserve the requested ratio. The fifth
+/// argument REFER lets `set-window-configuration` revive a
+/// previously-deleted window by id, restoring its parameters,
+/// dedication, and history alists.
+///
+/// Window audit Critical 5 in `drafts/window-system-audit.md`:
+/// neomacs accepts both arguments for arity compatibility but
+/// drops them on the floor. NORMAL-SIZE is observable as soon as
+/// audit Critical 7 lands the per-window normal-size fields; REFER
+/// is observable when window.el's `display-buffer` falls back to
+/// reviving a deleted window inside `set-window-configuration`.
+///
+/// Both fixes are deferred until the structural prereqs land
+/// (per-window normal_lines/cols storage and a deleted-window
+/// revival registry).
+pub(crate) fn builtin_split_window_internal(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args_range("split-window-internal", &args, 4, 5)?;
+    // GNU checks OLD before PIXEL-SIZE (`src/window.c`):
+    //
+    //     struct window *o = decode_valid_window (old);
+    //     ...
+    //     CHECK_FIXNUM (pixel_size);
+    //
+    // so when both are wrong it names the window.  Validate OLD through the
+    // same resolver the split itself uses, then require the size.
+    //
+    // PIXEL-SIZE is `CHECK_FIXNUM`ed unconditionally: it is a required
+    // argument and `lisp/window.el`'s `split-window` computes a real
+    // `new-pixel-size` before calling in.  Exempting nil accepted a call GNU
+    // rejects, and let every in-tree caller omit a size without noticing.
+    validate_split_window_target(&mut eval.frames, &mut eval.edit.buffers, &args[0])?;
+    let _ = expect_fixnum(&args[1])?;
+    // SIDE is deliberately NOT type-checked.  GNU never validates it: it
+    // reduces it to `horflag' and a before/after test, both plain `EQ'
+    // comparisons against a closed set of symbols (`src/window.c'), so a
+    // fixnum or a string SIDE is not an error -- it just means "below".
+    // A `symbolp' check here rejected calls GNU accepts.
+
+    // REFER is accepted for arity compatibility and ignored.  NORMAL-SIZE is
+    // NOT ignored: GNU stages it as the new window's `new_normal'
+    // (`src/window.c:5650') for `window_resize_apply' to commit, and
+    // `lisp/window.el' relies on that to give the new window its proportional
+    // share -- especially under `window-combination-resize', where every
+    // sibling's fraction is restaged too.
+    if let Some(refer) = args.get(4) {
+        let _ = refer;
+    }
+    // GNU `Fsplit_window_internal` reads the dynamic variable
+    // `window-combination-limit' to decide whether to interpose a new parent
+    // window (`src/window.c:5426').  Only the symbol `t' forces one; `lisp/window.el'
+    // binds it to t for, among others, a split whose target has a side-window
+    // sibling, which is what keeps a frame's main area in its own combination.
+    let combination_limit = crate::window::CombinationLimit::from_is_t(
+        super::builtins::misc_eval::dynamic_or_global_symbol_value(
+            eval,
+            "window-combination-limit",
+        )
+        .is_some_and(|value| value.is_t()),
+    );
+    let sibling_resize = SiblingResize::from(
+        super::builtins::misc_eval::dynamic_or_global_symbol_value(
+            eval,
+            "window-combination-resize",
+        )
+        .unwrap_or(Value::NIL),
+    );
+    let result = split_window_internal_impl_in_state_with_normal(
+        &mut eval.frames,
+        &mut eval.edit.buffers,
+        args[0],
+        args[1],
+        args[2],
+        args[3],
+        combination_limit,
+        sibling_resize,
+    )?;
+    if super::redisplay_policy::gnu_redisplay_hooks_enabled()
+        && let Some(window) = result.as_window_id().map(crate::window::WindowId)
+        && let Some(frame) = eval.frames.find_window_frame_id(window)
+    {
+        // No arbitrary Lisp occurs between the structural commit above and
+        // these publications. GNU has FRAME_WINDOW_CHANGE already set by
+        // window_resize_apply before set_window_buffer's eager scroll hook.
+        eval.gnu_mark_frame_redisplay(frame);
+        eval.gnu_mark_frame_window_change(frame);
+        eval.gnu_mark_window_mode_line(window);
+        builtin_run_window_scroll_functions(eval, vec![result])?;
+    }
+    // GNU does NOT run `window-configuration-change-hook' eagerly from
+    // `split-window-internal'.  It is deferred to `run_window_change_functions'
+    // during redisplay (window.c:4308-4312); neomacs mirrors this in
+    // `run_redisplay_window_change_hooks'.  Firing it here diverged from GNU in
+    // batch (no redisplay), where the hook must not run.
+    Ok(result)
 }
 
 /// GNU's `decode_live_window` (`src/window.c`): nil is the SELECTED window and
