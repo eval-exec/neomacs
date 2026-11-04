@@ -1,7 +1,7 @@
-use super::builtins::*;
 use crate::emacs_core::edit_host::{EditHost, EditVariableRead};
 use crate::emacs_core::error::{
-    expect_args, expect_args_range, expect_fixnum, expect_max_args, expect_min_args,
+    EvalResult, Flow, LispCondition, TakeCount, expect_args, expect_args_range, expect_fixnum,
+    expect_max_args, expect_min_args, signal,
 };
 
 // ===========================================================================
@@ -13,10 +13,9 @@ use crate::buffer::{
     EmacsByteRange, LispBytePos1, LispCharPos1, TextChange, TextEditRange, TextExtent,
 };
 use crate::emacs_core::emacs_char::EmacsChar;
-use crate::emacs_core::misc;
 use crate::emacs_core::value::{
-    ValueKind, VecLikeType, equal_value, get_string_text_properties_table_for_value,
-    set_string_text_properties_table_for_value,
+    OrderedRuntimeBindingMap, Value, ValueKind, VecLikeType, eq_value, equal_value,
+    get_string_text_properties_table_for_value, set_string_text_properties_table_for_value,
 };
 use crate::tagged::value::SymbolMode;
 
@@ -47,6 +46,83 @@ pub(crate) fn expect_buffer_name_string(value: &Value) -> Result<String, Flow> {
                 vec![Value::symbol("stringp"), *value],
             )
         })
+}
+
+// Local copies of the lisp builtins layer's argument extractors: the
+// bodies are pure `Value`-layer checks, and the per-module copy keeps this
+// file free of the lisp builtins layer below the split (established
+// practice: strings_core, casefiddle, chartable, network, and search each
+// carry one).
+fn expect_int(value: &Value) -> Result<i64, Flow> {
+    match value.kind() {
+        ValueKind::Fixnum(n) => Ok(n),
+        _other => Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("integerp"), *value],
+        )),
+    }
+}
+
+fn maybe_trace_characterp_nil(value: &Value, source: &str) {
+    if !value.is_nil() {
+        return;
+    }
+    if std::env::var("NEOVM_TRACE_CHARACTERP_NIL").unwrap_or_default() != "1" {
+        return;
+    }
+    eprintln!(
+        "NEOVM_TRACE_CHARACTERP_NIL source={source}\n{}",
+        std::backtrace::Backtrace::force_capture()
+    );
+}
+
+fn expect_character_code(value: &Value) -> Result<i64, Flow> {
+    match value.kind() {
+        ValueKind::Fixnum(c) if (0..=0x3F_FFFF).contains(&c) => Ok(c),
+        _other => {
+            maybe_trace_characterp_nil(value, "expect_character_code");
+            Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("characterp"), *value],
+            ))
+        }
+    }
+}
+
+fn expect_wholenump(value: &Value) -> Result<i64, Flow> {
+    let n = match value.kind() {
+        ValueKind::Fixnum(n) => n,
+        _ => {
+            return Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("wholenump"), *value],
+            ));
+        }
+    };
+    if n < 0 {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("wholenump"), *value],
+        ));
+    }
+    Ok(n)
+}
+
+fn expect_lisp_string(value: &Value) -> Result<&crate::heap_types::LispString, Flow> {
+    value.as_lisp_string().ok_or_else(|| {
+        signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("stringp"), *value],
+        )
+    })
+}
+
+/// Validate a string argument and decode it to a Rust `String` for text-only
+/// processing (display strings, names, identifiers). Valid Unicode (including
+/// real Private-Use glyphs) is preserved exactly; raw eight-bit bytes become
+/// U+FFFD. Callers that must preserve raw bytes use `expect_lisp_string`.
+fn expect_string_lossy(value: &Value) -> Result<String, Flow> {
+    expect_lisp_string(value).map(|ls| crate::emacs_core::emacs_char::to_utf8_lossy(ls.as_bytes()))
 }
 
 fn find_buffer_by_name_arg(
@@ -117,19 +193,54 @@ pub(crate) fn expect_integer_or_marker_in_buffers(
     crate::emacs_core::position::fix_position_with_buffers(buffers, value)
 }
 
+/// Local copy of the lisp builtins layer's `integer-or-marker-p` extractor
+/// (per-module copies are established practice below the split). Strictly
+/// fixnum-or-marker with the live-buffer marker read — NOT
+/// `position::fix_position_eval`, which additionally clamps bignums and so
+/// is not behavior-equivalent here.
+fn expect_integer_or_marker_eval(eval: &super::eval::Context, value: &Value) -> Result<i64, Flow> {
+    match value.kind() {
+        ValueKind::Fixnum(n) => Ok(n),
+        _ if super::marker::is_marker(value) => {
+            super::marker::marker_position_as_int_eval(eval, value)
+        }
+        _ => Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("integer-or-marker-p"), *value],
+        )),
+    }
+}
+
 fn canonicalize_or_self(path: &std::path::Path) -> std::path::PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
-pub(crate) fn run_buffer_list_update_hook(eval: &mut super::eval::Context) -> EvalResult {
-    builtin_run_hooks(eval, vec![Value::symbol("buffer-list-update-hook")])
+/// Run a named hook through the host seam — the C13 editfns idiom: resolve
+/// the symbol by name (alias-resolving), read the buffer-local-aware hook
+/// value, run with `inherit_global` as `Frun_hooks`/`run-hook-with-args`
+/// do. A nil hook value is `run_hook_value`'s own empty-collection no-op
+/// arm, and a cyclic alias that `resolve_hook_symbol` would signal on
+/// falls back to the unresolved symbol, matching the host methods the
+/// peer approved for editfns' before/after-change signals.
+fn run_named_hook_via_host<H: EditHost>(
+    host: &mut H,
+    hook_name: &str,
+    hook_args: &[Value],
+) -> EvalResult {
+    let hook_sym = host.hook_symbol_by_name(hook_name);
+    let hook_value = host.hook_value_by_id(hook_sym).unwrap_or(Value::NIL);
+    host.run_hook_value(hook_sym, hook_value, hook_args, true)
+}
+
+pub(crate) fn run_buffer_list_update_hook<H: EditHost>(host: &mut H) -> EvalResult {
+    run_named_hook_via_host(host, "buffer-list-update-hook", &[])
 }
 
 /// GNU `Fkill_all_local_variables` runs the normal hook
 /// `change-major-mode-hook` via `run_hook` as its first action.  This is the
 /// shared entry point used by every major-mode switch.
-pub(crate) fn run_buffer_change_major_mode_hook(eval: &mut super::eval::Context) -> EvalResult {
-    builtin_run_hooks(eval, vec![Value::symbol("change-major-mode-hook")])
+pub(crate) fn run_buffer_change_major_mode_hook<H: EditHost>(host: &mut H) -> EvalResult {
+    run_named_hook_via_host(host, "change-major-mode-hook", &[])
 }
 
 pub(crate) fn builtin_get_buffer_create(
@@ -240,8 +351,7 @@ pub(crate) fn finish_make_indirect_buffer_hooks(
 ) -> EvalResult {
     if plan.run_clone_hook {
         eval.switch_current_buffer(plan.id)?;
-        let clone_result =
-            builtin_run_hooks(eval, vec![Value::symbol("clone-indirect-buffer-hook")]);
+        let clone_result = run_named_hook_via_host(eval, "clone-indirect-buffer-hook", &[]);
         if let Some(saved_id) = plan.saved_current {
             eval.restore_current_buffer_if_live(saved_id);
         }
@@ -281,7 +391,7 @@ pub(crate) fn builtin_find_buffer(eval: &mut super::eval::Context, args: Vec<Val
     })?;
     let target_value = args[1];
 
-    let name_id = intern(name);
+    let name_id = crate::emacs_core::intern::intern(name);
     let fallback_value = dynamic
         .iter()
         .rev()
@@ -633,13 +743,10 @@ fn update_buffer_properties_for_access(
         }
     }
 
-    builtin_run_hook_with_args(
+    run_named_hook_via_host(
         eval,
-        &[
-            Value::symbol("buffer-access-fontify-functions"),
-            Value::fixnum(start.as_i64()),
-            Value::fixnum(end.as_i64()),
-        ],
+        "buffer-access-fontify-functions",
+        &[Value::fixnum(start.as_i64()), Value::fixnum(end.as_i64())],
     )?;
     Ok(())
 }
@@ -722,7 +829,7 @@ pub(crate) fn builtin_buffer_string(
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-fn resolve_buffer_designator_allow_nil_current(
+pub(crate) fn resolve_buffer_designator_allow_nil_current(
     eval: &mut super::eval::Context,
     arg: &Value,
 ) -> Result<Option<BufferId>, Flow> {
@@ -1327,7 +1434,6 @@ fn reset_buffer_local_variables(
 /// `(ntake N LIST)` -> LIST
 pub(crate) fn builtin_ntake(args: Vec<Value>) -> EvalResult {
     expect_args("ntake", &args, 2)?;
-    use crate::emacs_core::builtins_extra::TakeCount;
     let TakeCount::Positive(n) = TakeCount::try_from(args[0])? else {
         return Ok(Value::NIL);
     };
@@ -1444,53 +1550,10 @@ pub(crate) fn replace_region_max_costs(value: Option<&Value>) -> Result<usize, F
     }
 }
 
-/// `(replace-buffer-contents SOURCE &optional MAX-SECS MAX-COSTS)` -> t
-#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub(crate) fn builtin_replace_buffer_contents(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    expect_args_range("replace-buffer-contents", &args, 1, 3)?;
-    // GNU 31's `replace-buffer-contents` (subr.el) is a thin wrapper:
-    //   (replace-region-contents (point-min) (point-max) (get-buffer source)
-    //                            max-secs max-costs)
-    // Delegating keeps the minimal (Myers-diff) non-destructive replacement,
-    // so markers, point, properties and overlays in the accessible portion
-    // outside the changed runs are preserved exactly as in GNU.
-    let source_id = resolve_buffer_designator_allow_nil_current(eval, &args[0])?;
-    let source_buffer = match source_id {
-        Some(id) => Value::make_buffer(id),
-        None => Value::NIL,
-    };
-
-    let (point_min, point_max) = {
-        let buf = eval
-            .edit
-            .buffers
-            .current_buffer()
-            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-        (
-            buf.point_min_lisp_char_pos().as_i64(),
-            buf.point_max_lisp_char_pos().as_i64(),
-        )
-    };
-
-    let mut region_args = vec![
-        Value::fixnum(point_min),
-        Value::fixnum(point_max),
-        source_buffer,
-    ];
-    // Forward MAX-SECS / MAX-COSTS positionally so the optional behavior
-    // (immediate delete/insert fallback) matches GNU.
-    if let Some(max_secs) = args.get(1) {
-        region_args.push(*max_secs);
-        if let Some(max_costs) = args.get(2) {
-            region_args.push(*max_costs);
-        }
-    }
-
-    builtin_replace_region_contents(eval, region_args)
-}
+// `builtin_replace_buffer_contents` (the GNU subr.el `replace-buffer-contents`
+// thin wrapper over `replace-region-contents`) moved up to
+// `commands/buffer_ops` with the stage-3 C12 seam work: the edit layer must
+// not call the lisp builtins layer, and the wrapper is evaluator-bound.
 
 /// True when `value` is the fixnum 0 (used for GNU's MAX-SECS/MAX-COSTS == 0
 /// "disable comparison" fallback).
@@ -2328,7 +2391,7 @@ pub(crate) fn builtin_goto_char(eval: &mut super::eval::Context, args: Vec<Value
 pub(crate) fn builtin_goto_char_1(eval: &mut super::eval::Context, arg: Value) -> EvalResult {
     // GNU returns POSITION itself (a marker stays a marker), so the raw
     // arg survives extraction; the typed position carries the coordinate.
-    let pos = LispCharPos1::from_value(eval, arg)?;
+    let pos = expect_integer_or_marker_eval(eval, &arg).map(LispCharPos1::new)?;
     let current_id = eval
         .edit
         .buffers
@@ -2659,17 +2722,17 @@ pub(crate) fn convert_buffer_string_for_multibyte(
     // caller, matching `NILP (flag) == NILP (enable-multibyte-characters)`.
     let (converted, mode) = if flag.is_nil() {
         (
-            misc::builtin_string_as_unibyte(vec![source])?,
+            crate::strings_core::builtin_string_as_unibyte(vec![source])?,
             BufferMultibyteConversionMode::AsUnibyte,
         )
     } else if flag.is_t() {
         (
-            misc::builtin_string_as_multibyte(vec![source])?,
+            crate::strings_core::builtin_string_as_multibyte(vec![source])?,
             BufferMultibyteConversionMode::AsMultibyte,
         )
     } else {
         (
-            misc::builtin_string_to_multibyte(vec![source])?,
+            crate::strings_core::builtin_string_to_multibyte(vec![source])?,
             BufferMultibyteConversionMode::ToMultibyte,
         )
     };
@@ -5177,9 +5240,10 @@ pub(crate) fn builtin_overlay_properties_in_buffers(
 ) -> EvalResult {
     expect_args("overlay-properties", &args, 1)?;
     let overlay = expect_overlay(&args[0])?;
-    builtin_copy_sequence(vec![
+    crate::sequence_copy::copy_sequence_with_symbols(
         overlay.as_overlay_data().map_or(Value::NIL, |d| d.plist),
-    ])
+        SymbolMode::Bare,
+    )
 }
 
 #[cfg(test)]

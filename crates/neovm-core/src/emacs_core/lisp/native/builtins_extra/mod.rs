@@ -9,7 +9,7 @@
 //! - Format enhancements
 //! - Variable operations
 
-use super::error::{EvalResult, Flow, signal};
+use super::error::{EvalResult, Flow, TakeCount, signal};
 use super::intern::resolve_sym;
 #[cfg(test)]
 use super::runtime_identity::{
@@ -203,55 +203,11 @@ pub(crate) fn remove_list_equal(args: Vec<Value>) -> EvalResult {
     Ok(Value::list(result))
 }
 
-/// Validated GNU `take`/`ntake` iteration limit (fns.c:1675-1687).
-/// Positive bignums denote all representable list elements; nonpositive
-/// integers denote an empty prefix. This scalar type has no mutator state
-/// or heap references and can be sent/shared between independent mutators.
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum TakeCount {
-    Empty,
-    Positive(std::num::NonZeroUsize),
-}
-
-static_assertions::assert_impl_all!(TakeCount: Send, Sync);
-
-impl TryFrom<Value> for TakeCount {
-    type Error = Flow;
-
-    #[inline(always)]
-    fn try_from(value: Value) -> Result<Self, Self::Error> {
-        let Some(count) = value.as_fixnum() else {
-            return Self::try_from_non_fixnum(value);
-        };
-        Ok(match std::num::NonZeroUsize::new(count.max(0) as usize) {
-            Some(count) => Self::Positive(count),
-            None => Self::Empty,
-        })
-    }
-}
-
-impl TakeCount {
-    /// Keep heap inspection and condition construction off the fixnum path.
-    #[cold]
-    #[inline(never)]
-    fn try_from_non_fixnum(value: Value) -> Result<Self, Flow> {
-        let integer = value.as_bignum().ok_or_else(|| {
-            signal(
-                LispCondition::WrongTypeArgument,
-                vec![Value::symbol("integerp"), value],
-            )
-        })?;
-        let count = if integer < &0 {
-            0
-        } else {
-            Value::MOST_POSITIVE_FIXNUM as usize
-        };
-        Ok(match std::num::NonZeroUsize::new(count) {
-            Some(count) => Self::Positive(count),
-            None => Self::Empty,
-        })
-    }
-}
+// `TakeCount` (the validated GNU `take`/`ntake` iteration limit,
+// fns.c:1675-1687) moved below the evaluator with the stage-3 split
+// (C12): `take`/`ntake` and the edit layer share the scalar without the
+// lisp builtins layer; it is imported above from the error module's
+// expect-family.
 
 /// `(take N LIST)` — first N elements.
 pub(crate) fn builtin_take(args: Vec<Value>) -> EvalResult {

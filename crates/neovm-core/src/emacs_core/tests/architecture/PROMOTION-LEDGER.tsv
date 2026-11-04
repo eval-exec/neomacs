@@ -1184,3 +1184,11 @@ time_cmp	fn	private	crates/neovm-value/src/time_core.rs:841	time_core	stage-3 C1
 time_convert_default_hz	fn	private	crates/neovm-value/src/time_core.rs:849	time_core	stage-3 C16: default-hz conversion; the staying subr keeps driving it
 current_time_value	fn	private	crates/neovm-value/src/time_core.rs:872	time_core	stage-3 C16: current-time core; the subr wrapper stays above
 make_lisp_time	fn	pub(crate)	crates/neovm-value/src/time_core.rs:878	time_core	stage-3 C16: output encoder; dired file-attribute timestamps call it
+convert_unibyte_to_multibyte_bytes	fn	private	crates/neovm-value/src/strings_core.rs:592	strings_core	stage-3 C12: byte-conversion alias moved with the string conversion subrs; misc re-exports the trio
+reinterpret_unibyte_as_multibyte_bytes	fn	private	crates/neovm-value/src/strings_core.rs:601	strings_core	stage-3 C12: str_as_multibyte alias moved with the conversion subrs (GNU character.c:586 semantics)
+builtin_string_to_multibyte	fn	pub(crate)	crates/neovm-value/src/strings_core.rs:607	strings_core	stage-3 C12: pure Value-in/Value-out conversion subr; buffer multibyte switching reaches it below the lisp layer
+builtin_string_as_unibyte	fn	pub(crate)	crates/neovm-value/src/strings_core.rs:626	strings_core	stage-3 C12: reinterpretation subr; edit buffer substrate and misc callers share the one body
+builtin_string_as_multibyte	fn	pub(crate)	crates/neovm-value/src/strings_core.rs:659	strings_core	stage-3 C12: reinterpretation subr; the GNU oracle string test drives it through the misc re-export
+TakeCount	enum	pub(crate)	crates/neovm-value/src/error/mod.rs:1242	error	stage-3 C12: validated take/ntake iteration scalar (fns.c:1675-1687) shared by builtins_extra and the edit layer
+TakeCount::try_from	method	pub(crate)	crates/neovm-value/src/error/mod.rs:1253	error	stage-3 C12: fixnum-path validation moved with the scalar; keeps heap inspection off the hot path
+TakeCount::try_from_non_fixnum	method	private	crates/neovm-value/src/error/mod.rs:1268	error	stage-3 C12: bignum/integerp arm moved with the scalar (cold, inline-never)

@@ -1233,6 +1233,57 @@ pub fn expect_args_range(name: &str, args: &[Value], min: usize, max: usize) -> 
     }
 }
 
+/// Validated GNU `take`/`ntake` iteration limit (fns.c:1675-1687).
+/// Positive bignums denote all representable list elements; nonpositive
+/// integers denote an empty prefix. This scalar type has no mutator state
+/// or heap references and can be sent/shared between independent mutators.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug)]
+pub enum TakeCount {
+    Empty,
+    Positive(std::num::NonZeroUsize),
+}
+
+static_assertions::assert_impl_all!(TakeCount: Send, Sync);
+
+impl TryFrom<Value> for TakeCount {
+    type Error = Flow;
+
+    #[inline(always)]
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        let Some(count) = value.as_fixnum() else {
+            return Self::try_from_non_fixnum(value);
+        };
+        Ok(match std::num::NonZeroUsize::new(count.max(0) as usize) {
+            Some(count) => Self::Positive(count),
+            None => Self::Empty,
+        })
+    }
+}
+
+impl TakeCount {
+    /// Keep heap inspection and condition construction off the fixnum path.
+    #[cold]
+    #[inline(never)]
+    fn try_from_non_fixnum(value: Value) -> Result<Self, Flow> {
+        let integer = value.as_bignum().ok_or_else(|| {
+            signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("integerp"), value],
+            )
+        })?;
+        let count = if integer < &0 {
+            0
+        } else {
+            Value::MOST_POSITIVE_FIXNUM as usize
+        };
+        Ok(match std::num::NonZeroUsize::new(count) {
+            Some(count) => Self::Positive(count),
+            None => Self::Empty,
+        })
+    }
+}
+
 /// Extract a fixnum or signal wrong-type-argument (fixnump).
 ///
 /// The success arm is a tag test, but building the signal (a `vec!` plus an

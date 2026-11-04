@@ -10,6 +10,11 @@ use super::error::{EvalResult, Flow, signal};
 use super::value::*;
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_max_args, expect_min_args};
+// The unibyte/multibyte conversion subrs moved below the evaluator with
+// the stage-3 split (C12); `crate::emacs_core::misc::<name>` keeps working.
+pub(crate) use crate::strings_core::{
+    builtin_string_as_multibyte, builtin_string_as_unibyte, builtin_string_to_multibyte,
+};
 use strum::{EnumString, IntoStaticStr};
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
@@ -76,20 +81,6 @@ fn expect_character_code(val: &Value) -> Result<i64, Flow> {
             vec![Value::symbol("characterp"), *val],
         )),
     }
-}
-
-/// Convert unibyte LispString bytes to multibyte Emacs encoding.
-fn convert_unibyte_to_multibyte_bytes(src: &[u8]) -> Vec<u8> {
-    crate::emacs_core::emacs_char::str_to_multibyte(src)
-}
-
-/// Reinterpret unibyte bytes as an Emacs multibyte sequence.
-///
-/// Valid non-eight-bit sequences are preserved. Each byte of a rejected
-/// sequence, including a `C0`/`C1` raw-byte pair, becomes an eight-bit
-/// character (`str_as_multibyte`, GNU `character.c:586`).
-fn reinterpret_unibyte_as_multibyte_bytes(src: &[u8]) -> Vec<u8> {
-    crate::emacs_core::emacs_char::str_as_multibyte(src)
 }
 
 // ===========================================================================
@@ -512,24 +503,6 @@ pub(crate) fn builtin_subst_char_in_string(args: Vec<Value>) -> EvalResult {
     ))
 }
 
-/// `(string-to-multibyte STRING)` -- convert unibyte storage bytes to multibyte chars.
-pub(crate) fn builtin_string_to_multibyte(args: Vec<Value>) -> EvalResult {
-    expect_args("string-to-multibyte", &args, 1)?;
-    let ls = args[0].as_lisp_string().ok_or_else(|| {
-        signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("stringp"), args[0]],
-        )
-    })?;
-    if ls.is_multibyte() {
-        return Ok(args[0]);
-    }
-    let out = convert_unibyte_to_multibyte_bytes(ls.as_bytes());
-    Ok(Value::heap_string(
-        crate::heap_types::LispString::from_emacs_bytes(out),
-    ))
-}
-
 /// `(string-to-unibyte STRING)` -- convert to unibyte storage.
 pub(crate) fn builtin_string_to_unibyte(args: Vec<Value>) -> EvalResult {
     use crate::emacs_core::emacs_char;
@@ -566,57 +539,6 @@ pub(crate) fn builtin_string_to_unibyte(args: Vec<Value>) -> EvalResult {
     }
     Ok(Value::heap_string(
         crate::heap_types::LispString::from_unibyte(bytes),
-    ))
-}
-
-/// `(string-as-unibyte STRING)` -- reinterpret as unibyte byte sequence.
-pub(crate) fn builtin_string_as_unibyte(args: Vec<Value>) -> EvalResult {
-    use crate::emacs_core::emacs_char;
-    expect_args("string-as-unibyte", &args, 1)?;
-    let ls = args[0].as_lisp_string().ok_or_else(|| {
-        signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("stringp"), args[0]],
-        )
-    })?;
-    if !ls.is_multibyte() {
-        return Ok(args[0]);
-    }
-    // Reinterpret: raw-byte chars become their byte value, other chars keep
-    // their UTF-8 encoding as raw bytes.
-    let src = ls.as_bytes();
-    let mut bytes = Vec::with_capacity(src.len());
-    let mut pos = 0;
-    while pos < src.len() {
-        let (cp, len) = emacs_char::string_char(&src[pos..]);
-        if emacs_char::char_byte8_p(cp.code()) {
-            bytes.push(emacs_char::char_to_byte8(cp.code()));
-        } else {
-            // Keep the raw encoding bytes
-            bytes.extend_from_slice(&src[pos..pos + len]);
-        }
-        pos += len;
-    }
-    Ok(Value::heap_string(
-        crate::heap_types::LispString::from_unibyte(bytes),
-    ))
-}
-
-/// `(string-as-multibyte STRING)` -- reinterpret unibyte storage as multibyte.
-pub(crate) fn builtin_string_as_multibyte(args: Vec<Value>) -> EvalResult {
-    expect_args("string-as-multibyte", &args, 1)?;
-    let ls = args[0].as_lisp_string().ok_or_else(|| {
-        signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("stringp"), args[0]],
-        )
-    })?;
-    if ls.is_multibyte() {
-        return Ok(args[0]);
-    }
-    let out = reinterpret_unibyte_as_multibyte_bytes(ls.as_bytes());
-    Ok(Value::heap_string(
-        crate::heap_types::LispString::from_emacs_bytes(out),
     ))
 }
 

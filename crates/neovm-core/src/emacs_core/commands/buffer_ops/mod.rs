@@ -18,6 +18,7 @@ use crate::emacs_core::buffer::{
     lisp_string_byte_to_char, lisp_string_from_buffer_bytes, other_buffer_impl_in_state,
     remap_old_byte_to_new_boundary, remap_text_property_table, replace_diff,
     replace_region_max_costs, replace_region_source_value_in_state,
+    resolve_buffer_designator_allow_nil_current,
 };
 use crate::emacs_core::error::{
     EvalResult, LispCondition, expect_args, expect_args_range, expect_max_args, signal,
@@ -288,6 +289,54 @@ pub(crate) fn builtin_replace_region_contents(
 
     eval.restore_specpdl_roots(source_root_scope);
     Ok(Value::T)
+}
+
+/// `(replace-buffer-contents SOURCE &optional MAX-SECS MAX-COSTS)` -> t
+#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+pub(crate) fn builtin_replace_buffer_contents(
+    eval: &mut crate::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args_range("replace-buffer-contents", &args, 1, 3)?;
+    // GNU 31's `replace-buffer-contents` (subr.el) is a thin wrapper:
+    //   (replace-region-contents (point-min) (point-max) (get-buffer source)
+    //                            max-secs max-costs)
+    // Delegating keeps the minimal (Myers-diff) non-destructive replacement,
+    // so markers, point, properties and overlays in the accessible portion
+    // outside the changed runs are preserved exactly as in GNU.
+    let source_id = resolve_buffer_designator_allow_nil_current(eval, &args[0])?;
+    let source_buffer = match source_id {
+        Some(id) => Value::make_buffer(id),
+        None => Value::NIL,
+    };
+
+    let (point_min, point_max) = {
+        let buf = eval
+            .edit
+            .buffers
+            .current_buffer()
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        (
+            buf.point_min_lisp_char_pos().as_i64(),
+            buf.point_max_lisp_char_pos().as_i64(),
+        )
+    };
+
+    let mut region_args = vec![
+        Value::fixnum(point_min),
+        Value::fixnum(point_max),
+        source_buffer,
+    ];
+    // Forward MAX-SECS / MAX-COSTS positionally so the optional behavior
+    // (immediate delete/insert fallback) matches GNU.
+    if let Some(max_secs) = args.get(1) {
+        region_args.push(*max_secs);
+        if let Some(max_costs) = args.get(2) {
+            region_args.push(*max_costs);
+        }
+    }
+
+    builtin_replace_region_contents(eval, region_args)
 }
 
 pub(crate) fn builtin_set_buffer_multibyte(

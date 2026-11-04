@@ -7,6 +7,7 @@ fn test_ob() -> crate::emacs_core::symbol::Obarray {
     crate::emacs_core::symbol::Obarray::new()
 }
 use crate::emacs_core::buffer::builtin_make_overlay;
+use crate::emacs_core::buffer_ops::builtin_replace_buffer_contents;
 use crate::emacs_core::editfns::{
     builtin_delete_and_extract_region, builtin_delete_region, builtin_erase_buffer,
 };

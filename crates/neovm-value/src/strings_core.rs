@@ -14,9 +14,17 @@
 //! builtins layer's argument extractors, keeping this module free of the
 //! evaluator (the per-module copy is established practice: casefiddle,
 //! chartable, network, and search each carry one).
+//!
+//! The unibyte/multibyte conversion subrs (`string-to-multibyte`,
+//! `string-as-unibyte`, `string-as-multibyte`) also live here (C12): their
+//! bodies are pure `Value` in / `Value` out over `emacs_char` byte
+//! conversion, and `lisp/native/misc` re-exports them for its historical
+//! callers while the buffer substrate calls them below the lisp layer.
 
 use crate::emacs_char;
-use crate::error::{EvalResult, Flow, LispCondition, expect_max_args, expect_min_args, signal};
+use crate::error::{
+    EvalResult, Flow, LispCondition, expect_args, expect_max_args, expect_min_args, signal,
+};
 use crate::list_scan::proper_list_length_or_signal;
 use crate::value::positions::{CharLen, CharPos0, CharRange};
 use crate::value::text_props::{
@@ -574,4 +582,93 @@ pub fn concat_impl(args: &[Value]) -> EvalResult {
     }
 
     Ok(new_val)
+}
+
+// ---------------------------------------------------------------------------
+// Unibyte/multibyte conversion subrs (C12, moved from lisp/native/misc)
+// ---------------------------------------------------------------------------
+
+/// Convert unibyte LispString bytes to multibyte Emacs encoding.
+fn convert_unibyte_to_multibyte_bytes(src: &[u8]) -> Vec<u8> {
+    emacs_char::str_to_multibyte(src)
+}
+
+/// Reinterpret unibyte bytes as an Emacs multibyte sequence.
+///
+/// Valid non-eight-bit sequences are preserved. Each byte of a rejected
+/// sequence, including a `C0`/`C1` raw-byte pair, becomes an eight-bit
+/// character (`str_as_multibyte`, GNU `character.c:586`).
+fn reinterpret_unibyte_as_multibyte_bytes(src: &[u8]) -> Vec<u8> {
+    emacs_char::str_as_multibyte(src)
+}
+
+/// `(string-to-multibyte STRING)` -- convert unibyte storage bytes to multibyte chars.
+#[doc(hidden)]
+pub fn builtin_string_to_multibyte(args: Vec<Value>) -> EvalResult {
+    expect_args("string-to-multibyte", &args, 1)?;
+    let ls = args[0].as_lisp_string().ok_or_else(|| {
+        signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("stringp"), args[0]],
+        )
+    })?;
+    if ls.is_multibyte() {
+        return Ok(args[0]);
+    }
+    let out = convert_unibyte_to_multibyte_bytes(ls.as_bytes());
+    Ok(Value::heap_string(
+        crate::heap_types::LispString::from_emacs_bytes(out),
+    ))
+}
+
+/// `(string-as-unibyte STRING)` -- reinterpret as unibyte byte sequence.
+#[doc(hidden)]
+pub fn builtin_string_as_unibyte(args: Vec<Value>) -> EvalResult {
+    expect_args("string-as-unibyte", &args, 1)?;
+    let ls = args[0].as_lisp_string().ok_or_else(|| {
+        signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("stringp"), args[0]],
+        )
+    })?;
+    if !ls.is_multibyte() {
+        return Ok(args[0]);
+    }
+    // Reinterpret: raw-byte chars become their byte value, other chars keep
+    // their UTF-8 encoding as raw bytes.
+    let src = ls.as_bytes();
+    let mut bytes = Vec::with_capacity(src.len());
+    let mut pos = 0;
+    while pos < src.len() {
+        let (cp, len) = emacs_char::string_char(&src[pos..]);
+        if emacs_char::char_byte8_p(cp.code()) {
+            bytes.push(emacs_char::char_to_byte8(cp.code()));
+        } else {
+            // Keep the raw encoding bytes
+            bytes.extend_from_slice(&src[pos..pos + len]);
+        }
+        pos += len;
+    }
+    Ok(Value::heap_string(
+        crate::heap_types::LispString::from_unibyte(bytes),
+    ))
+}
+
+/// `(string-as-multibyte STRING)` -- reinterpret unibyte storage as multibyte.
+#[doc(hidden)]
+pub fn builtin_string_as_multibyte(args: Vec<Value>) -> EvalResult {
+    expect_args("string-as-multibyte", &args, 1)?;
+    let ls = args[0].as_lisp_string().ok_or_else(|| {
+        signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("stringp"), args[0]],
+        )
+    })?;
+    if ls.is_multibyte() {
+        return Ok(args[0]);
+    }
+    let out = reinterpret_unibyte_as_multibyte_bytes(ls.as_bytes());
+    Ok(Value::heap_string(
+        crate::heap_types::LispString::from_emacs_bytes(out),
+    ))
 }
