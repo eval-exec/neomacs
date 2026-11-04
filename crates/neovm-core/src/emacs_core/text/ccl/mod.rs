@@ -20,6 +20,7 @@ mod extension;
 use self::command::CclCommand;
 use self::expr::{eval_expr_self, eval_set_expr};
 use self::extension::{ExtensionStep, MapMultipleState, execute_extension};
+use super::text_host::RawTextVariableView;
 use crate::tagged::value::SymbolMode;
 
 use neovm_value::error::LispCondition;
@@ -134,23 +135,54 @@ impl CclRegistry {
 }
 
 thread_local! {
-    /// The view [`with_ccl_obarray`] holds on its stack for its body; a
-    /// pointer, so the thread-local block keeps its layout.
-    static CCL_VARIABLES: Cell<*const crate::emacs_core::eval::RawVariableView> =
-        const { Cell::new(std::ptr::null()) };
+    /// The read-hook record [`with_ccl_obarray`] holds on its stack for its
+    /// body; a pointer, so the thread-local block keeps its layout.
+    static CCL_VARIABLES: Cell<*const ()> = const { Cell::new(std::ptr::null()) };
+}
+
+/// The type-erased read hooks published for one CCL body.
+///
+/// `raw` points at the `V::Raw` value kept alive on `with_ccl_obarray`'s
+/// stack; the two function pointers are monomorphized for the publishing
+/// view type and reconstruct it through the signed
+/// [`RawTextVariableView`] row only inside the body. Text stores no view
+/// type and names no evaluator type (PEER-RULING-STAGE3B T2).
+struct CclVariableHooks {
+    raw: *const (),
+    value_by_name: unsafe fn(*const (), &str) -> Option<Value>,
+    symbol_plist: unsafe fn(*const (), SymId) -> Value,
 }
 
 /// Run `body` while CCL symbol resolution can see these variables' obarray
 /// plists and the translation vectors `define-translation-hash-table` fills.
-pub(crate) fn with_ccl_obarray<R>(
-    vars: crate::emacs_core::eval::VariableView<'_>,
+pub(crate) fn with_ccl_obarray<'a, V: RawTextVariableView<'a>, R>(
+    vars: V,
     body: impl FnOnce() -> R,
 ) -> R {
     let raw = vars.into_raw();
+    // The closures capture nothing; each is monomorphized for this
+    // publication's V and 'a, and `raw` names the local below, which
+    // outlives the body.
+    let hooks = CclVariableHooks {
+        raw: &raw as *const V::Raw as *const (),
+        value_by_name: |raw_ptr, name| {
+            // SAFETY: `raw_ptr` was published by this frame from a live
+            // V::Raw; the body runs before the frame and its borrows end.
+            let raw = unsafe { *(raw_ptr as *const V::Raw) };
+            let view = unsafe { V::view_from_raw(raw) };
+            view.value_by_name(name)
+        },
+        symbol_plist: |raw_ptr, symbol| {
+            // SAFETY: as above.
+            let raw = unsafe { *(raw_ptr as *const V::Raw) };
+            let view = unsafe { V::view_from_raw(raw) };
+            view.obarray().symbol_plist_id(symbol)
+        },
+    };
     CCL_VARIABLES.with(|cell| {
         struct RestoreVariables<'a> {
-            cell: &'a Cell<*const crate::emacs_core::eval::RawVariableView>,
-            previous: *const crate::emacs_core::eval::RawVariableView,
+            cell: &'a Cell<*const ()>,
+            previous: *const (),
         }
         impl Drop for RestoreVariables<'_> {
             fn drop(&mut self) {
@@ -159,20 +191,32 @@ pub(crate) fn with_ccl_obarray<R>(
         }
         let _restore = RestoreVariables {
             cell,
-            previous: cell.replace(&raw),
+            previous: cell.replace(&hooks as *const CclVariableHooks as *const ()),
         };
         body()
     })
 }
 
-/// The variables [`with_ccl_obarray`] published, for the body it runs.
-fn ccl_variables<'a>() -> Option<crate::emacs_core::eval::VariableView<'a>> {
-    let raw = CCL_VARIABLES.with(Cell::get);
-    // SAFETY: a non-null pointer names the view with_ccl_obarray holds on
-    // its stack while its body runs, on this thread; it restores the prior
-    // pointer before that frame and the view's borrows end, and callers only
-    // copy Values out.
-    (!raw.is_null()).then(|| unsafe { (*raw).view() })
+/// The hooks published for the body [`with_ccl_obarray`] is running.
+fn published_vars() -> Option<*const CclVariableHooks> {
+    let hooks = CCL_VARIABLES.with(Cell::get);
+    (!hooks.is_null()).then_some(hooks as *const CclVariableHooks)
+}
+
+fn ccl_value_by_name(name: &str) -> Option<Value> {
+    let hooks = published_vars()?;
+    // SAFETY: a non-null hook record names the stack record with_ccl_obarray
+    // holds while its body runs, on this thread; it restores the prior
+    // pointer before that frame ends, and callers only copy Values out.
+    let hooks = unsafe { &*hooks };
+    unsafe { (hooks.value_by_name)(hooks.raw, name) }
+}
+
+fn ccl_symbol_plist(symbol: SymId) -> Option<Value> {
+    let hooks = published_vars()?;
+    // SAFETY: as above.
+    let hooks = unsafe { &*hooks };
+    Some(unsafe { (hooks.symbol_plist)(hooks.raw, symbol) })
 }
 
 thread_local! {
@@ -249,12 +293,9 @@ fn ccl_quit_pending() -> bool {
     if !neovm_value::quit::quit_pending() {
         return false;
     }
-    let Some(vars) = ccl_variables() else {
+    let Some(inhibited) = ccl_value_by_name("inhibit-quit").map(|value| !value.is_nil()) else {
         return true;
     };
-    let inhibited = vars
-        .value_by_name("inhibit-quit")
-        .is_some_and(|value| !value.is_nil());
     !inhibited
 }
 
@@ -317,8 +358,7 @@ fn property_symbol(name: &str) -> Option<SymId> {
 }
 
 fn symbol_property_integer(symbol: SymId, property: SymId, mode: SymbolMode) -> Option<i64> {
-    let vars = ccl_variables()?;
-    let plist = vars.obarray().symbol_plist_id(symbol);
+    let plist = ccl_symbol_plist(symbol)?;
     neovm_value::plist::plist_get_swp(
         plist,
         &Value::from_sym_id(property),
@@ -455,8 +495,7 @@ pub(super) fn translation_hash_lookup(id: i64, key: i64) -> TranslationHashLooku
 /// when the variable is unbound or no obarray is attached. A bound vector
 /// outside `[0, len)` yields `Invalid` for the lookup, matching `GET_CCL_RANGE`.
 fn checked_lisp_translation_hash_lookup(id: i64, key: i64) -> Option<TranslationHashLookup> {
-    let vars = ccl_variables()?;
-    let slot_of_vector = vars.value_by_name("translation-hash-table-vector")?;
+    let slot_of_vector = ccl_value_by_name("translation-hash-table-vector")?;
     if !slot_of_vector.is_vector() {
         return Some(TranslationHashLookup::Invalid);
     }
@@ -497,8 +536,7 @@ pub(super) fn translation_table(id: i64) -> Option<Value> {
 }
 
 fn lisp_vector_slot(name: &str, id: i64) -> Option<Value> {
-    let vars = ccl_variables()?;
-    let vector = vars.value_by_name(name)?;
+    let vector = ccl_value_by_name(name)?;
     let data = vector.as_vector_data()?;
     let index = usize::try_from(id).ok()?;
     data.get(index).copied()
