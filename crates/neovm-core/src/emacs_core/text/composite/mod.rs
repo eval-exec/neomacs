@@ -37,6 +37,8 @@ pub(crate) fn install_substrate_seams() {
     crate::buffer::composition::install(crate::buffer::composition::CompositionSeams {
         spans: automatic_composition_spans_in_with_symbols,
         ascii_no_rules: ascii_has_no_composition_rules_with_symbols,
+        composition_symbol: composition_prop_symbol,
+        width: composition_width_for_property,
     });
     INSTALLED.store(true, std::sync::atomic::Ordering::Release);
 }
@@ -456,7 +458,7 @@ fn composition_register_prop(
 
 /// The `composition` property symbol, interned once.
 ///
-/// GNU keeps this as the staticpro'd `Qcomposition`. `composition_width_at`
+/// GNU keeps this as the staticpro'd `Qcomposition`. `composition_width_for_property`
 /// runs once per display stop of every column/screen-line scan (via
 /// `indent::composition_run_at`), so `Value::symbol("composition")` re-hashed
 /// the name on each probe -- one of the two ~2M-per-ELB-`scroll` intern
@@ -479,17 +481,12 @@ fn composition_prop_symbol() -> Value {
 /// from `current_column_1`: it returns the composed glyphs' width over the
 /// covered characters AND, the first time the composition is seen, registers it
 /// — rewriting the property from Form-A to Form-B in place.
-pub(crate) fn composition_width_at(
-    ctx: &super::eval::Context,
+pub(crate) fn composition_width_for_property(
+    prop: Value,
+    buffers: &crate::buffer::BufferManager,
     charpos1: i64,
 ) -> Option<(i64, i64)> {
     install_substrate_seams();
-    let prop = super::textprop::builtin_get_text_property_in_state(
-        ctx.variables(),
-        &ctx.edit.buffers,
-        &[Value::fixnum(charpos1), composition_prop_symbol()],
-    )
-    .ok()?;
     let (length, components, mod_func, registered) = composition_parts_any(prop)?;
     if length <= 0 {
         return None;
@@ -506,7 +503,7 @@ pub(crate) fn composition_width_at(
     // Form-A: compute the width via `get_composition_id`, then register
     // (rewrite in place to Form-B). An invalid composition yields id=-1 and is
     // not treated as a composition here.
-    let key = composition_components_key(ctx, components, Value::NIL, charpos1, length);
+    let key = composition_components_key(buffers, components, Value::NIL, charpos1, length);
     let width = composition_get_id_width(components, &key)?;
     let relative_p = composition_relative_p(components);
     composition_register_prop(prop, key, length, mod_func, relative_p);
@@ -546,7 +543,7 @@ fn composition_relative_p(components: Value) -> bool {
 /// `vconcat`-ed into a char vector; a vector is used as-is; nil takes the chars
 /// of the composed range from the buffer (or STRING).
 fn composition_components_key(
-    ctx: &super::eval::Context,
+    buffers: &crate::buffer::BufferManager,
     components: Value,
     string: Value,
     start: i64,
@@ -569,7 +566,7 @@ fn composition_components_key(
                 let from = start.max(0) as usize;
                 let to = ((start + nchars).max(0) as usize).min(all.len());
                 all.get(from..to).map(|s| s.to_vec()).unwrap_or_default()
-            } else if let Some(buf) = ctx.edit.buffers.current_buffer() {
+            } else if let Some(buf) = buffers.current_buffer() {
                 let byte_start = buf
                     .char_pos_to_emacs_byte_pos_clamped(CharPos0::new((start - 1).max(0) as usize));
                 let byte_end = buf.char_pos_to_emacs_byte_pos_clamped(CharPos0::new(
@@ -1453,7 +1450,8 @@ pub(crate) fn find_composition_internal(
         (components, relative_p, width)
     } else {
         let relative_p = composition_relative_p(components);
-        let key = composition_components_key(ctx, components, args[2], start, end - start);
+        let key =
+            composition_components_key(&ctx.edit.buffers, components, args[2], start, end - start);
         // GNU `get_composition_id` validates the components and returns -1 for an
         // invalid composition (e.g. an even-length rule vector). On -1 the detail
         // `tail` is nil, so only `(FROM TO)` is returned and PROP is not

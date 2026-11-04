@@ -12,6 +12,7 @@ use crate::buffer::{
     AccessibleEmacsByteRange, BufferLispPos, BufferManager, CharPos0, EmacsByteLen, EmacsBytePos,
     EmacsByteRange, LispCharPos1,
 };
+use crate::emacs_core::edit_host::{EditHost, EditVariableRead};
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_fixnum, expect_max_args, expect_min_args};
 use malachite::integer::Integer;
@@ -123,25 +124,6 @@ fn current_buffer_in_manager(buffers: &BufferManager) -> Result<&crate::buffer::
     buffers.current_buffer().ok_or_else(no_buffer)
 }
 
-#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-fn dynamic_or_global_symbol_value(eval: &super::eval::Context, name: &str) -> Option<Value> {
-    let name_id = intern(name);
-    if eval.lexical_binding()
-        && !eval.obarray.is_special(name)
-        && let Some(v) = eval.lexenv_lookup_cached_in(eval.lexenv, name_id)
-    {
-        return Some(v);
-    }
-
-    if let Some(buf) = eval.edit.buffers.current_buffer()
-        && let Some(v) = buf.get_buffer_local(name)
-    {
-        return Some(v);
-    }
-
-    eval.variable_value_by_name(name)
-}
-
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
@@ -251,95 +233,72 @@ fn line_end_byte_narrowed(buf: &crate::buffer::Buffer, byte_pos: usize, zv: usiz
 // Point motion hooks and intangible support
 // ===========================================================================
 
-pub(crate) fn check_point_motion_hooks(
-    eval: &mut super::eval::Context,
+pub(crate) fn check_point_motion_hooks<H: EditHost>(
+    host: &mut H,
     old_byte: EmacsBytePos,
     new_byte: EmacsBytePos,
 ) -> Result<(), Flow> {
     if old_byte == new_byte {
         return Ok(());
     }
-    let inhibit = eval
+    let inhibit = host
         .variable_value(inhibit_point_motion_hooks_sym())
         .unwrap_or(Value::NIL);
     if inhibit.is_truthy() {
         return Ok(());
     }
-    let current_id = match eval.edit.buffers.current_buffer_id() {
-        Some(id) => id,
-        None => return Ok(()),
-    };
     let (old_lisp, new_lisp, leave_before, leave_after, enter_before, enter_after) = {
-        let buf = match eval.edit.buffers.get(current_id) {
+        let (edit, vars) = host.edit_and_vars();
+        let current_id = match edit.buffers.current_buffer_id() {
+            Some(id) => id,
+            None => return Ok(()),
+        };
+        let buf = match edit.buffers.get(current_id) {
             Some(b) => b,
             None => return Ok(()),
         };
         let ol = byte_to_char_pos(buf, old_byte);
         let nl = byte_to_char_pos(buf, new_byte);
-        let leave_before = point_motion_property(
-            eval.variables(),
-            &eval.edit.buffers,
-            buf,
-            old_byte,
-            false,
-            "point-left",
-        );
-        let leave_after = point_motion_property(
-            eval.variables(),
-            &eval.edit.buffers,
-            buf,
-            old_byte,
-            true,
-            "point-left",
-        );
-        let enter_before = point_motion_property(
-            eval.variables(),
-            &eval.edit.buffers,
-            buf,
-            new_byte,
-            false,
-            "point-entered",
-        );
-        let enter_after = point_motion_property(
-            eval.variables(),
-            &eval.edit.buffers,
-            buf,
-            new_byte,
-            true,
-            "point-entered",
-        );
+        let leave_before =
+            point_motion_property(vars, &edit.buffers, buf, old_byte, false, "point-left");
+        let leave_after =
+            point_motion_property(vars, &edit.buffers, buf, old_byte, true, "point-left");
+        let enter_before =
+            point_motion_property(vars, &edit.buffers, buf, new_byte, false, "point-entered");
+        let enter_after =
+            point_motion_property(vars, &edit.buffers, buf, new_byte, true, "point-entered");
         (ol, nl, leave_before, leave_after, enter_before, enter_after)
     };
 
     if leave_before != enter_before && leave_before.is_truthy() {
-        eval.apply(
+        host.apply(
             leave_before,
-            vec![Value::fixnum(old_lisp), Value::fixnum(new_lisp)],
+            &[Value::fixnum(old_lisp), Value::fixnum(new_lisp)],
         )?;
     }
     if leave_after != enter_after && leave_after.is_truthy() {
-        eval.apply(
+        host.apply(
             leave_after,
-            vec![Value::fixnum(old_lisp), Value::fixnum(new_lisp)],
+            &[Value::fixnum(old_lisp), Value::fixnum(new_lisp)],
         )?;
     }
     if enter_before != leave_before && enter_before.is_truthy() {
-        eval.apply(
+        host.apply(
             enter_before,
-            vec![Value::fixnum(old_lisp), Value::fixnum(new_lisp)],
+            &[Value::fixnum(old_lisp), Value::fixnum(new_lisp)],
         )?;
     }
     if enter_after != leave_after && enter_after.is_truthy() {
-        eval.apply(
+        host.apply(
             enter_after,
-            vec![Value::fixnum(old_lisp), Value::fixnum(new_lisp)],
+            &[Value::fixnum(old_lisp), Value::fixnum(new_lisp)],
         )?;
     }
     Ok(())
 }
 
-fn point_motion_property(
-    vars: crate::emacs_core::eval::VariableView<'_>,
+fn point_motion_property<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     buffers: &BufferManager,
     buf: &crate::buffer::Buffer,
     point_byte: EmacsBytePos,
@@ -372,8 +331,8 @@ fn point_motion_property(
     }
 }
 
-fn lookup_buffer_char_property(
-    vars: crate::emacs_core::eval::VariableView<'_>,
+fn lookup_buffer_char_property<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     buffers: &BufferManager,
     buf: &crate::buffer::Buffer,
     byte_pos: usize,
@@ -428,29 +387,30 @@ fn previous_char_property_change(
     }
 }
 
-pub(crate) fn adjust_for_intangible(
-    eval: &super::eval::Context,
+pub(crate) fn adjust_for_intangible<H: EditHost>(
+    host: &mut H,
     pos: EmacsBytePos,
     direction: i32,
 ) -> EmacsBytePos {
-    let inhibit = eval
+    let inhibit = host
         .variable_value(inhibit_point_motion_hooks_sym())
         .unwrap_or(Value::NIL);
     if inhibit.is_truthy() {
         return pos;
     }
-    let current_id = match eval.edit.buffers.current_buffer_id() {
+    let (edit, vars) = host.edit_and_vars();
+    let current_id = match edit.buffers.current_buffer_id() {
         Some(id) => id,
         None => return pos,
     };
-    let buf = match eval.edit.buffers.get(current_id) {
+    let buf = match edit.buffers.get(current_id) {
         Some(b) => b,
         None => return pos,
     };
     let accessible = buf.accessible_emacs_byte_region();
     let intangible = lookup_buffer_char_property(
-        eval.variables(),
-        &eval.edit.buffers,
+        vars,
+        &edit.buffers,
         buf,
         pos.get(),
         Value::symbol("intangible"),
@@ -464,8 +424,8 @@ pub(crate) fn adjust_for_intangible(
             match next_char_property_change(buf, cursor) {
                 Some(next) => {
                     let prop = lookup_buffer_char_property(
-                        eval.variables(),
-                        &eval.edit.buffers,
+                        vars,
+                        &edit.buffers,
                         buf,
                         next.get(),
                         Value::symbol("intangible"),
@@ -487,8 +447,8 @@ pub(crate) fn adjust_for_intangible(
                 Some(prev) => {
                     let check = prev.saturating_sub_len(EmacsByteLen::new(1));
                     let prop = lookup_buffer_char_property(
-                        eval.variables(),
-                        &eval.edit.buffers,
+                        vars,
+                        &edit.buffers,
                         buf,
                         check.get(),
                         Value::symbol("intangible"),
@@ -516,10 +476,10 @@ pub(crate) fn adjust_for_intangible(
 ///
 /// `bobp` as registered: fixed arity 0, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a0` case (absent optionals arrive as nil).
-pub(crate) fn builtin_bobp_0(ctx: &mut super::eval::Context) -> EvalResult {
+pub(crate) fn builtin_bobp_0(buffers: &BufferManager) -> EvalResult {
     let args: [Value; 0] = [];
     expect_args("bobp", &args, 0)?;
-    let buf = current_buffer_in_manager(&ctx.edit.buffers)?;
+    let buf = current_buffer_in_manager(buffers)?;
     Ok(Value::bool_val(
         buf.point_emacs_byte_pos() == buf.accessible_emacs_byte_region().start(),
     ))
@@ -529,10 +489,10 @@ pub(crate) fn builtin_bobp_0(ctx: &mut super::eval::Context) -> EvalResult {
 ///
 /// `eobp` as registered: fixed arity 0, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a0` case (absent optionals arrive as nil).
-pub(crate) fn builtin_eobp_0(ctx: &mut super::eval::Context) -> EvalResult {
+pub(crate) fn builtin_eobp_0(buffers: &BufferManager) -> EvalResult {
     let args: [Value; 0] = [];
     expect_args("eobp", &args, 0)?;
-    let buf = current_buffer_in_manager(&ctx.edit.buffers)?;
+    let buf = current_buffer_in_manager(buffers)?;
     Ok(Value::bool_val(
         buf.point_emacs_byte_pos() == buf.accessible_emacs_byte_region().end(),
     ))
@@ -542,10 +502,10 @@ pub(crate) fn builtin_eobp_0(ctx: &mut super::eval::Context) -> EvalResult {
 ///
 /// `bolp` as registered: fixed arity 0, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a0` case (absent optionals arrive as nil).
-pub(crate) fn builtin_bolp_0(ctx: &mut super::eval::Context) -> EvalResult {
+pub(crate) fn builtin_bolp_0(buffers: &BufferManager) -> EvalResult {
     let args: [Value; 0] = [];
     expect_args("bolp", &args, 0)?;
-    let buf = current_buffer_in_manager(&ctx.edit.buffers)?;
+    let buf = current_buffer_in_manager(buffers)?;
     let point = buf.point_emacs_byte_pos();
     if point == buf.accessible_emacs_byte_region().start() {
         return Ok(Value::T);
@@ -560,10 +520,10 @@ pub(crate) fn builtin_bolp_0(ctx: &mut super::eval::Context) -> EvalResult {
 ///
 /// `eolp` as registered: fixed arity 0, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a0` case (absent optionals arrive as nil).
-pub(crate) fn builtin_eolp_0(ctx: &mut super::eval::Context) -> EvalResult {
+pub(crate) fn builtin_eolp_0(buffers: &BufferManager) -> EvalResult {
     let args: [Value; 0] = [];
     expect_args("eolp", &args, 0)?;
-    let buf = current_buffer_in_manager(&ctx.edit.buffers)?;
+    let buf = current_buffer_in_manager(buffers)?;
     let point = buf.point_emacs_byte_pos();
     if point == buf.accessible_emacs_byte_region().end() {
         return Ok(Value::T);
@@ -584,10 +544,10 @@ pub(crate) fn builtin_eolp_0(ctx: &mut super::eval::Context) -> EvalResult {
 /// orig_charpos, lines_moved)` mirroring GNU's static `bol` helper
 /// (editfns.c) plus the original PT used as anchor for field constraint.
 pub(crate) fn pos_bol_compute(
-    ctx: &super::eval::Context,
+    buffers: &BufferManager,
     scan_count: i64,
 ) -> Result<(BufferLispPos, BufferLispPos, i64), Flow> {
-    let buf = current_buffer_in_manager(&ctx.edit.buffers)?;
+    let buf = current_buffer_in_manager(buffers)?;
     let accessible = buf.accessible_emacs_byte_region();
     let begv = accessible.start().get();
     let zv = accessible.end().get();
@@ -620,10 +580,10 @@ pub(crate) fn pos_bol_compute(
 /// point after moving `n - 1` lines. Returns `(eol_charpos, orig_charpos)`,
 /// mirroring GNU's static `eol` helper (editfns.c).
 pub(crate) fn pos_eol_compute(
-    ctx: &super::eval::Context,
+    buffers: &BufferManager,
     scan_count: i64,
 ) -> Result<(BufferLispPos, BufferLispPos), Flow> {
-    let buf = current_buffer_in_manager(&ctx.edit.buffers)?;
+    let buf = current_buffer_in_manager(buffers)?;
     let accessible = buf.accessible_emacs_byte_region();
     let begv = accessible.start().get();
     let zv = accessible.end().get();
@@ -665,7 +625,7 @@ pub(crate) fn builtin_line_beginning_position_1(
     let args: [Value; 1] = [n];
     expect_max_args("line-beginning-position", &args, 1)?;
     let scan_count = line_beginning_scan_count_arg(&args)?;
-    let (bol_charpos, orig_charpos, count) = pos_bol_compute(ctx, scan_count)?;
+    let (bol_charpos, orig_charpos, count) = pos_bol_compute(&ctx.edit.buffers, scan_count)?;
     // GNU `Fline_beginning_position` (editfns.c:700) constrains the result to
     // the current input field. ESCAPE-FROM-EDGE is t when any lines were
     // scanned (count != 0), nil otherwise; ONLY-IN-LINE is always t.
@@ -697,7 +657,7 @@ pub(crate) fn builtin_line_end_position_1(ctx: &mut super::eval::Context, n: Val
     let args: [Value; 1] = [n];
     expect_max_args("line-end-position", &args, 1)?;
     let scan_count = line_end_scan_count_arg(&args)?;
-    let (eol_charpos, orig_charpos) = pos_eol_compute(ctx, scan_count)?;
+    let (eol_charpos, orig_charpos) = pos_eol_compute(&ctx.edit.buffers, scan_count)?;
     // GNU `Fline_end_position` (editfns.c:755): constrain to current input
     // field with ESCAPE-FROM-EDGE = nil and ONLY-IN-LINE = t.
     crate::emacs_core::builtins::builtin_constrain_to_field_5(
@@ -735,11 +695,8 @@ impl LineNumberScope {
 }
 
 /// (line-number-at-pos &optional POS ABSOLUTE)
-pub(crate) fn builtin_line_number_at_pos(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    let buf = eval.edit.buffers.current_buffer().ok_or_else(no_buffer)?;
+pub(crate) fn builtin_line_number_at_pos(buffers: &BufferManager, args: Vec<Value>) -> EvalResult {
+    let buf = buffers.current_buffer().ok_or_else(no_buffer)?;
     let current_buffer_id = buf.id;
     let byte_pos = if args.is_empty() || args[0].is_nil() {
         buf.point_emacs_byte_pos()
@@ -790,25 +747,21 @@ pub(crate) fn builtin_line_number_at_pos(
 
 /// (count-lines BEG END)
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub(crate) fn builtin_count_lines(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_count_lines(buffers: &BufferManager, args: Vec<Value>) -> EvalResult {
     expect_min_args("count-lines", &args, 2)?;
     expect_max_args("count-lines", &args, 3)?;
-    let current_id = eval
-        .edit
-        .buffers
-        .current_buffer_id()
-        .ok_or_else(no_buffer)?;
-    let beg = crate::emacs_core::position::fix_position_with_buffers(&eval.edit.buffers, &args[0])?;
-    let end = crate::emacs_core::position::fix_position_with_buffers(&eval.edit.buffers, &args[1])?;
-    let range = crate::emacs_core::builtins::normalize_narrow_region_in_buffers(
-        &eval.edit.buffers,
+    let current_id = buffers.current_buffer_id().ok_or_else(no_buffer)?;
+    let beg = crate::emacs_core::position::fix_position_with_buffers(buffers, &args[0])?;
+    let end = crate::emacs_core::position::fix_position_with_buffers(buffers, &args[1])?;
+    let range = super::buffer::normalize_narrow_region_in_buffers(
+        buffers,
         current_id,
         LispCharPos1::new(beg),
         LispCharPos1::new(end),
         args[0],
         args[1],
     )?;
-    let buf = eval.edit.buffers.current_buffer().ok_or_else(no_buffer)?;
+    let buf = buffers.current_buffer().ok_or_else(no_buffer)?;
     let s = range.start();
     let e = range.end();
     let mut n = count_newlines(buf, s, e);
@@ -825,17 +778,14 @@ pub(crate) fn builtin_count_lines(eval: &mut super::eval::Context, args: Vec<Val
 ///
 /// `forward-line` as registered: fixed arity 1, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
-pub(crate) fn builtin_forward_line_1(eval: &mut super::eval::Context, n: Value) -> EvalResult {
+pub(crate) fn builtin_forward_line_1<H: EditHost>(host: &mut H, n: Value) -> EvalResult {
     let args: [Value; 1] = [n];
     let line_arg = optional_line_count_arg(&args, 1)?;
     let n = line_arg.count;
-    let current_id = eval
-        .edit
-        .buffers
-        .current_buffer_id()
-        .ok_or_else(no_buffer)?;
-    let (accessible, pt, new_pos, moved) = {
-        let buf = eval.edit.buffers.get(current_id).ok_or_else(no_buffer)?;
+    let (current_id, accessible, pt, new_pos, moved) = {
+        let (edit, _vars) = host.edit_and_vars();
+        let current_id = edit.buffers.current_buffer_id().ok_or_else(no_buffer)?;
+        let buf = edit.buffers.get(current_id).ok_or_else(no_buffer)?;
         let accessible = buf.accessible_emacs_byte_region();
         let pt = buf.point_emacs_byte_pos();
         let (new_pos, moved) = move_by_lines_narrowed(
@@ -845,16 +795,18 @@ pub(crate) fn builtin_forward_line_1(eval: &mut super::eval::Context, n: Value) 
             accessible.start().get(),
             accessible.end().get(),
         );
-        (accessible, pt, new_pos, moved)
+        (current_id, accessible, pt, new_pos, moved)
     };
     let old_byte = pt;
     let new_pos = EmacsBytePos::new(new_pos);
     let direction = if n >= 0 { 1 } else { -1 };
-    let adjusted = adjust_for_intangible(eval, new_pos, direction);
-    let _ = eval
-        .edit
-        .buffers
-        .goto_buffer_emacs_byte_pos(current_id, adjusted);
+    let adjusted = adjust_for_intangible(host, new_pos, direction);
+    {
+        let (edit, _vars) = host.edit_and_vars();
+        let _ = edit
+            .buffers
+            .goto_buffer_emacs_byte_pos(current_id, adjusted);
+    }
 
     let mut shortage = n - moved;
     if shortage != 0
@@ -863,15 +815,17 @@ pub(crate) fn builtin_forward_line_1(eval: &mut super::eval::Context, n: Value) 
         && new_pos != pt
         && new_pos.get() > 0
     {
-        let at_line_start =
-            eval.edit.buffers.get(current_id).is_some_and(|buf| {
+        let at_line_start = {
+            let (edit, _vars) = host.edit_and_vars();
+            edit.buffers.get(current_id).is_some_and(|buf| {
                 buf.char_code_before_emacs_byte_pos(new_pos) == Some('\n' as u32)
-            });
+            })
+        };
         if !at_line_start {
             shortage -= 1;
         }
     }
-    check_point_motion_hooks(eval, old_byte, adjusted)?;
+    check_point_motion_hooks(host, old_byte, adjusted)?;
     Ok(line_count_result(line_arg, shortage))
 }
 
@@ -972,8 +926,8 @@ pub(crate) fn builtin_end_of_line_1(eval: &mut super::eval::Context, n: Value) -
 ///
 /// Registered with fixed arity 1, called straight off the bytecode stack like
 /// GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
-pub(crate) fn builtin_forward_char_1(eval: &mut super::eval::Context, n: Value) -> EvalResult {
-    move_characters(eval, n, CharacterMotion::Forward)
+pub(crate) fn builtin_forward_char_1<H: EditHost>(host: &mut H, n: Value) -> EvalResult {
+    move_characters(host, n, CharacterMotion::Forward)
 }
 
 /// Direction of a character-count request. Counts remain integers through
@@ -987,11 +941,7 @@ enum CharacterMotion {
 
 static_assertions::assert_impl_all!(CharacterMotion: Send, Sync);
 
-fn move_characters(
-    eval: &mut super::eval::Context,
-    count: Value,
-    motion: CharacterMotion,
-) -> EvalResult {
+fn move_characters<H: EditHost>(host: &mut H, count: Value, motion: CharacterMotion) -> EvalResult {
     let count = crate::tagged::value::Fixnum::try_from(if count.is_nil() {
         1
     } else {
@@ -1006,13 +956,10 @@ fn move_characters(
         CharacterMotion::Forward => i64::from(count),
         CharacterMotion::Backward => -i64::from(count),
     };
-    let current_id = eval
-        .edit
-        .buffers
-        .current_buffer_id()
-        .ok_or_else(no_buffer)?;
-    let (old_byte, cur_char, begv_char, zv_char, new_byte) = {
-        let buf = eval.edit.buffers.get(current_id).ok_or_else(no_buffer)?;
+    let (current_id, old_byte, cur_char, begv_char, zv_char, new_byte) = {
+        let (edit, _vars) = host.edit_and_vars();
+        let current_id = edit.buffers.current_buffer_id().ok_or_else(no_buffer)?;
+        let buf = edit.buffers.get(current_id).ok_or_else(no_buffer)?;
         let old_byte = buf.point_emacs_byte_pos();
         let cur_char = buf.point_char_pos().get();
         let begv_char = buf.point_min_char_pos().get();
@@ -1020,6 +967,7 @@ fn move_characters(
         let desired = cur_char as i64 + displacement;
         let clamped_char = desired.clamp(begv_char as i64, zv_char as i64) as usize;
         (
+            current_id,
             old_byte,
             cur_char,
             begv_char,
@@ -1028,11 +976,13 @@ fn move_characters(
         )
     };
     let direction = if displacement >= 0 { 1 } else { -1 };
-    let adjusted = adjust_for_intangible(eval, new_byte, direction);
-    let _ = eval
-        .edit
-        .buffers
-        .goto_buffer_emacs_byte_pos(current_id, adjusted);
+    let adjusted = adjust_for_intangible(host, new_byte, direction);
+    {
+        let (edit, _vars) = host.edit_and_vars();
+        let _ = edit
+            .buffers
+            .goto_buffer_emacs_byte_pos(current_id, adjusted);
+    }
     // GNU `move_point`: signal beginning-of-buffer / end-of-buffer when
     // the requested position falls outside the accessible portion.
     let desired = cur_char as i64 + displacement;
@@ -1042,18 +992,15 @@ fn move_characters(
     if desired > zv_char as i64 {
         return Err(signal(LispCondition::EndOfBuffer, vec![]));
     }
-    check_point_motion_hooks(eval, old_byte, adjusted)?;
+    check_point_motion_hooks(host, old_byte, adjusted)?;
     Ok(Value::NIL)
 }
 
 /// (backward-char &optional N)
-pub(crate) fn builtin_backward_char(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
+pub(crate) fn builtin_backward_char<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     crate::emacs_core::error::expect_args_range("backward-char", &args, 0, 1)?;
     move_characters(
-        eval,
+        host,
         args.first().copied().unwrap_or(Value::NIL),
         CharacterMotion::Backward,
     )
@@ -1275,22 +1222,20 @@ fn non_ascii_blank(code: u32) -> bool {
 /// bytes first and mapped afterwards -- a range running from ASCII into the
 /// high bytes (`a-\377') keeps its ASCII part and gains the eight-bit range,
 /// rather than spanning every character in between.
-fn skip_chars_set(ctx: &super::eval::Context, string: Value) -> Result<SkipCharsSet, Flow> {
-    let Some(lisp_string) = ctx.lisp_string(string) else {
+fn skip_chars_set(buffers: &BufferManager, string: Value) -> Result<SkipCharsSet, Flow> {
+    let Some(lisp_string) = string.as_lisp_string() else {
         return Err(signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("stringp"), string],
         ));
     };
-    let codes = super::builtins::lisp_string_char_codes(lisp_string);
+    let codes = neovm_value::strings_core::lisp_string_char_codes(lisp_string);
     let mut set = parse_skip_chars_set(&codes)?;
-    let buffer_multibyte = ctx
-        .edit
-        .buffers
+    let buffer_multibyte = buffers
         .current_buffer()
         .is_some_and(|buf| buf.get_multibyte());
     if !lisp_string.is_multibyte() && buffer_multibyte {
-        let byte8 = |code: u32| crate::emacs_core::emacs_char::byte8_to_char(code.min(0xFF) as u8);
+        let byte8 = |code: u32| neovm_value::emacs_char::byte8_to_char(code.min(0xFF) as u8);
         let mut ranges = Vec::with_capacity(set.ranges.len());
         for &(lo, hi) in &set.ranges {
             if hi < 0x80 {
@@ -1308,20 +1253,19 @@ fn skip_chars_set(ctx: &super::eval::Context, string: Value) -> Result<SkipChars
 }
 
 pub(crate) fn builtin_skip_chars_forward_2(
-    ctx: &mut super::eval::Context,
+    buffers: &mut BufferManager,
     string: Value,
     lim: Value,
 ) -> EvalResult {
     let args: [Value; 2] = [string, lim];
     expect_min_args("skip-chars-forward", &args, 1)?;
-    let char_set = skip_chars_set(ctx, args[0])?;
-    let current_id = ctx.edit.buffers.current_buffer_id().ok_or_else(no_buffer)?;
+    let char_set = skip_chars_set(buffers, args[0])?;
+    let current_id = buffers.current_buffer_id().ok_or_else(no_buffer)?;
     let (start_pos, pos, limit, moved_chars) = {
-        let buf = ctx.edit.buffers.get(current_id).ok_or_else(no_buffer)?;
+        let buf = buffers.get(current_id).ok_or_else(no_buffer)?;
         let syntax_table = SyntaxTableView::for_buffer(buf);
         let accessible = buf.accessible_emacs_byte_region();
-        let lim_byte =
-            skip_chars_limit_byte(&ctx.edit.buffers, buf, args.get(1), accessible.end())?;
+        let lim_byte = skip_chars_limit_byte(buffers, buf, args.get(1), accessible.end())?;
         let start_pos = buf.point_emacs_byte_pos();
         let mut pos = start_pos;
         let mut moved_chars = 0_i64;
@@ -1359,7 +1303,7 @@ pub(crate) fn builtin_skip_chars_forward_2(
                 let (code, len) = if !multibyte || window[off] < 0x80 {
                     (window[off] as u32, 1)
                 } else {
-                    let (c, n) = crate::emacs_core::emacs_char::string_char(&window[off..]);
+                    let (c, n) = neovm_value::emacs_char::string_char(&window[off..]);
                     (c.code(), n)
                 };
                 if !skip_char_matches(&char_set, code, syntax_table) {
@@ -1379,7 +1323,7 @@ pub(crate) fn builtin_skip_chars_forward_2(
     };
 
     debug_assert!(pos >= start_pos || limit <= start_pos);
-    let _ = ctx.edit.buffers.goto_buffer_emacs_byte_pos(current_id, pos);
+    let _ = buffers.goto_buffer_emacs_byte_pos(current_id, pos);
     Ok(Value::fixnum(moved_chars))
 }
 
@@ -1388,19 +1332,19 @@ pub(crate) fn builtin_skip_chars_forward_2(
 /// `skip-chars-backward` as registered: fixed arity 2, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a2` case (absent optionals arrive as nil).
 pub(crate) fn builtin_skip_chars_backward_2(
-    ctx: &mut super::eval::Context,
+    buffers: &mut BufferManager,
     string: Value,
     lim: Value,
 ) -> EvalResult {
     let args: [Value; 2] = [string, lim];
     expect_min_args("skip-chars-backward", &args, 1)?;
-    let char_set = skip_chars_set(ctx, args[0])?;
-    let current_id = ctx.edit.buffers.current_buffer_id().ok_or_else(no_buffer)?;
+    let char_set = skip_chars_set(buffers, args[0])?;
+    let current_id = buffers.current_buffer_id().ok_or_else(no_buffer)?;
     let (pos, moved_chars) = {
-        let buf = ctx.edit.buffers.get(current_id).ok_or_else(no_buffer)?;
+        let buf = buffers.get(current_id).ok_or_else(no_buffer)?;
         let syntax_table = SyntaxTableView::for_buffer(buf);
         let accessible = buf.accessible_emacs_byte_region();
-        let limit = skip_chars_limit_byte(&ctx.edit.buffers, buf, args.get(1), accessible.start())?;
+        let limit = skip_chars_limit_byte(buffers, buf, args.get(1), accessible.start())?;
         let start_pos = buf.point_emacs_byte_pos();
         let mut pos = start_pos;
         let mut moved_chars = 0_i64;
@@ -1439,7 +1383,7 @@ pub(crate) fn builtin_skip_chars_backward_2(
                 let code = if !multibyte || window[start] < 0x80 {
                     window[start] as u32
                 } else {
-                    crate::emacs_core::emacs_char::string_char(&window[start..off])
+                    neovm_value::emacs_char::string_char(&window[start..off])
                         .0
                         .code()
                 };
@@ -1459,7 +1403,7 @@ pub(crate) fn builtin_skip_chars_backward_2(
         debug_assert!(pos <= start_pos);
         (pos, moved_chars)
     };
-    let _ = ctx.edit.buffers.goto_buffer_emacs_byte_pos(current_id, pos);
+    let _ = buffers.goto_buffer_emacs_byte_pos(current_id, pos);
     Ok(Value::fixnum(moved_chars))
 }
 
@@ -1468,12 +1412,9 @@ pub(crate) fn builtin_skip_chars_backward_2(
 // ===========================================================================
 
 /// (region-beginning) -> integer
-pub(crate) fn builtin_region_beginning(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
+pub(crate) fn builtin_region_beginning(buffers: &BufferManager, args: Vec<Value>) -> EvalResult {
     expect_args("region-beginning", &args, 0)?;
-    let buf = eval.edit.buffers.current_buffer().ok_or_else(no_buffer)?;
+    let buf = buffers.current_buffer().ok_or_else(no_buffer)?;
     let mark = buf.mark_emacs_byte_pos().ok_or_else(|| {
         signal(
             "error",
@@ -1489,9 +1430,9 @@ pub(crate) fn builtin_region_beginning(
 }
 
 /// (region-end) -> integer
-pub(crate) fn builtin_region_end(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_region_end(buffers: &BufferManager, args: Vec<Value>) -> EvalResult {
     expect_args("region-end", &args, 0)?;
-    let buf = eval.edit.buffers.current_buffer().ok_or_else(no_buffer)?;
+    let buf = buffers.current_buffer().ok_or_else(no_buffer)?;
     let mark = buf.mark_emacs_byte_pos().ok_or_else(|| {
         signal(
             "error",

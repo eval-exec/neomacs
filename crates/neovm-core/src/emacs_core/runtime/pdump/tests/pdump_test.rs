@@ -967,8 +967,8 @@ fn file_pdump_round_trips_marker_positions_insertion_types_and_mark() {
     eval.buffers
         .set_buffer_mark_emacs_byte_pos(buffer_id, crate::buffer::EmacsBytePos::new(4))
         .expect("set mark");
-    let mark =
-        crate::emacs_core::marker::builtin_mark_marker(&mut eval, vec![]).expect("mark-marker");
+    let mark = crate::emacs_core::marker::builtin_mark_marker(&mut eval.edit.buffers, vec![])
+        .expect("mark-marker");
     eval.obarray.set_symbol_value("test-pdump-mark", mark);
 
     let dir = tempfile::tempdir().unwrap();

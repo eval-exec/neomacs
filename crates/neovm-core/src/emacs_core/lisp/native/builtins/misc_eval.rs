@@ -121,7 +121,8 @@ pub(crate) fn builtin_pos_bol_1(eval: &mut super::eval::Context, n: Value) -> Ev
     // GNU `Fpos_bol` (editfns.c:684) returns the unconstrained line-beginning
     // position; only `Fline_beginning_position` adds field constraints.
     let scan_count = super::navigation::line_beginning_scan_count_arg(&args)?;
-    let (bol_charpos, _orig, _count) = super::navigation::pos_bol_compute(eval, scan_count)?;
+    let (bol_charpos, _orig, _count) =
+        super::navigation::pos_bol_compute(&eval.edit.buffers, scan_count)?;
     Ok(Value::from_fixnum(bol_charpos.into()))
 }
 
@@ -133,7 +134,7 @@ pub(crate) fn builtin_pos_eol_1(eval: &mut super::eval::Context, n: Value) -> Ev
     // GNU `Fpos_eol` (editfns.c:740) returns the unconstrained line-end
     // position; only `Fline_end_position` adds field constraints.
     let scan_count = super::navigation::line_end_scan_count_arg(&args)?;
-    let (eol_charpos, _orig) = super::navigation::pos_eol_compute(eval, scan_count)?;
+    let (eol_charpos, _orig) = super::navigation::pos_eol_compute(&eval.edit.buffers, scan_count)?;
     Ok(Value::from_fixnum(eol_charpos.into()))
 }
 

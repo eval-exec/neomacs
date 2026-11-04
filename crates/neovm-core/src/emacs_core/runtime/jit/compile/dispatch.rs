@@ -3543,10 +3543,10 @@ pub unsafe extern "C" fn neovm_jit_cbsym_read(
                 None => return STATUS_NEED_GENERIC,
             }
         }
-        CBSYM_A_BOLP => navigation::builtin_bolp_0(ctx_ref).ok(),
-        CBSYM_A_EOLP => navigation::builtin_eolp_0(ctx_ref).ok(),
-        CBSYM_A_BOBP => navigation::builtin_bobp_0(ctx_ref).ok(),
-        CBSYM_A_EOBP => navigation::builtin_eobp_0(ctx_ref).ok(),
+        CBSYM_A_BOLP => navigation::builtin_bolp_0(&ctx_ref.edit.buffers).ok(),
+        CBSYM_A_EOLP => navigation::builtin_eolp_0(&ctx_ref.edit.buffers).ok(),
+        CBSYM_A_BOBP => navigation::builtin_bobp_0(&ctx_ref.edit.buffers).ok(),
+        CBSYM_A_EOBP => navigation::builtin_eobp_0(&ctx_ref.edit.buffers).ok(),
         _ => None,
     };
     if let Some(value) = answered {
@@ -3612,10 +3612,10 @@ unsafe fn cbsym_read_contained(
         // frame.
         use crate::emacs_core::{editfns, navigation};
         let res = match which {
-            CBSYM_A_BOLP => navigation::builtin_bolp_0(ctx),
-            CBSYM_A_EOLP => navigation::builtin_eolp_0(ctx),
-            CBSYM_A_BOBP => navigation::builtin_bobp_0(ctx),
-            CBSYM_A_EOBP => navigation::builtin_eobp_0(ctx),
+            CBSYM_A_BOLP => navigation::builtin_bolp_0(&ctx.edit.buffers),
+            CBSYM_A_EOLP => navigation::builtin_eolp_0(&ctx.edit.buffers),
+            CBSYM_A_BOBP => navigation::builtin_bobp_0(&ctx.edit.buffers),
+            CBSYM_A_EOBP => navigation::builtin_eobp_0(&ctx.edit.buffers),
             CBSYM_A_FOLLOWING_CHAR => editfns::builtin_following_char_0(ctx),
             CBSYM_A_PRECEDING_CHAR => editfns::builtin_preceding_char(ctx, Vec::new()),
             CBSYM_A_CHAR_AFTER => crate::emacs_core::buffer::builtin_char_after_1(ctx, Value::NIL),

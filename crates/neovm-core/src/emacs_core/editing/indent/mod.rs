@@ -2245,15 +2245,25 @@ fn display_table_glyph_width(dt: &Value, code: u32) -> Option<usize> {
 /// If a `composition` property begins at buffer byte `byte`, return
 /// `(composed_width, run_end_byte)` — the composed glyphs' display width and the
 /// byte position just past the composed characters. Returns None otherwise.
-fn composition_run_at(
-    ctx: &super::eval::Context,
+fn composition_run_at<H: EditHost>(
+    host: &mut H,
     buffer_id: crate::buffer::BufferId,
     byte: usize,
 ) -> Option<(usize, usize)> {
-    let buf = ctx.edit.buffers.get(buffer_id)?;
+    let (edit, vars) = host.edit_and_vars();
+    let buf = edit.buffers.get(buffer_id)?;
     let charpos0 = buf.emacs_byte_pos_to_char_pos_clamped(EmacsBytePos::new(byte));
     let charpos1 = charpos0.get() as i64 + 1;
-    let (width, length) = super::composite::composition_width_at(ctx, charpos1)?;
+    // Resolve the property here (the edit layer owns textprop); the width
+    // itself comes from the substrate's host-free C7 table.
+    let seams = crate::buffer::composition::seams();
+    let prop = super::textprop::builtin_get_text_property_in_state(
+        vars,
+        &edit.buffers,
+        &[Value::fixnum(charpos1), seams.property_symbol()],
+    )
+    .ok()?;
+    let (width, length) = seams.width_of(prop, &edit.buffers, charpos1)?;
     let end_charpos0 = charpos0.get() + length.max(0) as usize;
     let end_byte = buf
         .char_pos_to_emacs_byte_pos_clamped(CharPos0::new(end_charpos0))

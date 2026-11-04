@@ -303,13 +303,6 @@ pub(crate) fn marker_position_as_int_with_buffers(
     }
 }
 
-pub(crate) fn marker_position_as_int_eval(
-    eval: &super::eval::Context,
-    v: &Value,
-) -> Result<i64, Flow> {
-    marker_position_as_int_with_buffers(&eval.edit.buffers, v)
-}
-
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 fn marker_buffer_value(v: &Value) -> Value {
     if !v.is_marker() {
@@ -350,25 +343,12 @@ pub(crate) fn builtin_markerp(args: Vec<Value>) -> EvalResult {
     Ok(Value::bool_val(is_marker(&args[0])))
 }
 
-/// Eval-dependent marker-position that reads adjusted positions from the buffer.
-#[cfg(test)]
-pub(crate) fn builtin_marker_position(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    crate::emacs_core::error::expect_args("marker-position", &args, 1)?;
-    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
-    builtin_marker_position_1(eval, arg(0))
-}
 /// `marker-position` as registered: fixed arity 1, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves the unit tests.
-pub(crate) fn builtin_marker_position_1(
-    eval: &mut super::eval::Context,
-    marker: Value,
-) -> EvalResult {
+pub(crate) fn builtin_marker_position_1(buffers: &BufferManager, marker: Value) -> EvalResult {
     let args: [Value; 1] = [marker];
-    builtin_marker_position_in_buffers(&eval.edit.buffers, &args)
+    builtin_marker_position_in_buffers(buffers, &args)
 }
 
 pub(crate) fn builtin_marker_position_in_buffers(
@@ -380,25 +360,11 @@ pub(crate) fn builtin_marker_position_in_buffers(
     Ok(marker_position_value(&args[0]))
 }
 
-/// Context-aware marker-buffer that returns nil for killed buffers.
-/// GNU returns nil when the marker's buffer has been killed.
-pub(crate) fn builtin_marker_buffer(eval: &mut super::eval::Context, args: &[Value]) -> EvalResult {
-    expect_args("marker-buffer", &args, 1)?;
-    expect_marker("marker-buffer", &args[0])?;
-    if let Some(buffer_id) = marker_buffer_id(&args[0])
-        && eval.edit.buffers.get(buffer_id).is_some()
-    {
-        return Ok(Value::make_buffer(buffer_id));
-    }
-    Ok(Value::NIL)
-}
-
 /// Buffer-aware marker-buffer for the VM fast dispatch path.
-/// Returns nil for killed buffers (same as the eval-aware version).
-#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+/// Returns nil for killed buffers.
 pub(crate) fn builtin_marker_buffer_in_buffers(
     buffers: &BufferManager,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     expect_args("marker-buffer", &args, 1)?;
     expect_marker("marker-buffer", &args[0])?;
@@ -415,15 +381,6 @@ pub(crate) fn builtin_marker_insertion_type(args: Vec<Value>) -> EvalResult {
     expect_args("marker-insertion-type", &args, 1)?;
     expect_marker("marker-insertion-type", &args[0])?;
     Ok(marker_insertion_type_value(&args[0]))
-}
-
-/// Eval-dependent set-marker-insertion-type that also updates the buffer's
-/// marker entry so insertion behavior changes immediately.
-pub(crate) fn builtin_set_marker_insertion_type(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    builtin_set_marker_insertion_type_in_buffers(&mut eval.edit.buffers, args)
 }
 
 pub(crate) fn builtin_set_marker_insertion_type_in_buffers(
@@ -455,11 +412,6 @@ pub(crate) fn builtin_set_marker_insertion_type_in_buffers(
 pub(crate) fn builtin_make_marker(args: &[Value]) -> EvalResult {
     expect_args("make-marker", &args, 0)?;
     Ok(make_marker_value(None, None, false))
-}
-
-/// Eval-dependent copy-marker that registers the new marker in the buffer.
-pub(crate) fn builtin_copy_marker(eval: &mut super::eval::Context, args: &[Value]) -> EvalResult {
-    builtin_copy_marker_in_buffers(&mut eval.edit.buffers, args)
 }
 
 pub(crate) fn builtin_copy_marker_in_buffers(
@@ -517,16 +469,6 @@ pub(crate) fn builtin_copy_marker_in_buffers(
 ///
 /// Registered with fixed arity 3 and called straight off the bytecode stack
 /// like GNU `funcall_subr`'s `a3` case (absent optionals arrive as nil).
-pub(crate) fn builtin_set_marker_3(
-    eval: &mut super::eval::Context,
-    marker: Value,
-    position: Value,
-    buffer: Value,
-) -> EvalResult {
-    let args: [Value; 3] = [marker, position, buffer];
-    builtin_set_marker_in_buffers(&mut eval.edit.buffers, &args)
-}
-
 pub(crate) fn builtin_set_marker_in_buffers(
     buffers: &mut BufferManager,
     args: &[Value],
@@ -699,13 +641,6 @@ fn register_marker_in_buffers(
 }
 
 /// (point-marker) -> marker at current point
-pub(crate) fn builtin_point_marker(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    builtin_point_marker_in_buffers(&mut eval.edit.buffers, args)
-}
-
 pub(crate) fn builtin_point_marker_in_buffers(
     buffers: &mut BufferManager,
     args: Vec<Value>,
@@ -722,13 +657,6 @@ pub(crate) fn builtin_point_marker_in_buffers(
 }
 
 /// (point-min-marker) -> marker at point-min
-pub(crate) fn builtin_point_min_marker(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    builtin_point_min_marker_in_buffers(&mut eval.edit.buffers, args)
-}
-
 pub(crate) fn builtin_point_min_marker_in_buffers(
     buffers: &mut BufferManager,
     args: Vec<Value>,
@@ -745,13 +673,6 @@ pub(crate) fn builtin_point_min_marker_in_buffers(
 }
 
 /// (point-max-marker) -> marker at point-max
-pub(crate) fn builtin_point_max_marker(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    builtin_point_max_marker_in_buffers(&mut eval.edit.buffers, args)
-}
-
 pub(crate) fn builtin_point_max_marker_in_buffers(
     buffers: &mut BufferManager,
     args: Vec<Value>,
@@ -776,18 +697,14 @@ pub(crate) fn builtin_point_max_marker_in_buffers(
 /// a detached marker, which `set-mark` or `set-marker` then attaches to this
 /// buffer's chain. `Buffer::mark_marker` roots it, so it survives GC with no
 /// other reference.
-pub(crate) fn builtin_mark_marker(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_mark_marker(buffers: &mut BufferManager, args: Vec<Value>) -> EvalResult {
     expect_args("mark-marker", &args, 0)?;
-    let buffer_id = eval
-        .edit
-        .buffers
+    let buffer_id = buffers
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?
         .id;
 
-    let buf = eval
-        .edit
-        .buffers
+    let buf = buffers
         .get_mut(buffer_id)
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     if buf.mark_marker.is_null() {

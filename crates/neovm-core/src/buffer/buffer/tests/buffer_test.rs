@@ -3759,7 +3759,7 @@ fn buffer_mark_marker_survives_gc_without_lisp_reference() {
 
     eval.gc_collect_exact();
 
-    let mark = crate::emacs_core::marker::builtin_mark_marker(&mut eval, vec![])
+    let mark = crate::emacs_core::marker::builtin_mark_marker(&mut eval.edit.buffers, vec![])
         .expect("mark-marker should return a live marker after GC");
     assert!(mark.is_marker(), "mark-marker remains a marker after GC");
     let position =
@@ -3776,7 +3776,7 @@ fn buffer_mark_marker_survives_gc_without_lisp_reference() {
     }
     // The typed reference kept by the buffer is the SAME object GC kept
     // alive: `mark-marker` returns it by pointer identity.
-    let same = crate::emacs_core::marker::builtin_mark_marker(&mut eval, vec![])
+    let same = crate::emacs_core::marker::builtin_mark_marker(&mut eval.edit.buffers, vec![])
         .expect("mark-marker after GC");
     assert_eq!(
         same.as_veclike_ptr().map(|p| p as *const u8),
@@ -3794,8 +3794,8 @@ fn mark_marker_object_survives_gc_before_any_mark_is_set() {
     // object so `(mark-marker)` identity is stable across GC.
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval::Context::new();
-    let first =
-        crate::emacs_core::marker::builtin_mark_marker(&mut eval, vec![]).expect("mark-marker");
+    let first = crate::emacs_core::marker::builtin_mark_marker(&mut eval.edit.buffers, vec![])
+        .expect("mark-marker");
     assert!(first.is_marker());
     assert_eq!(
         first.as_marker_data().unwrap().buffer_id(),
@@ -3806,7 +3806,7 @@ fn mark_marker_object_survives_gc_before_any_mark_is_set() {
 
     eval.gc_collect_exact();
 
-    let again = crate::emacs_core::marker::builtin_mark_marker(&mut eval, vec![])
+    let again = crate::emacs_core::marker::builtin_mark_marker(&mut eval.edit.buffers, vec![])
         .expect("mark-marker after GC");
     assert_eq!(
         again.as_veclike_ptr(),

@@ -15399,8 +15399,9 @@ fn set_buffer_multibyte_preserves_marker_and_text_properties() {
     )
     .unwrap();
     builtin_goto_char(&mut eval, vec![Value::fixnum(2)]).unwrap();
-    let marker = crate::emacs_core::marker::builtin_point_marker(&mut eval, vec![])
-        .expect("point-marker should succeed");
+    let marker =
+        crate::emacs_core::marker::builtin_point_marker_in_buffers(&mut eval.edit.buffers, vec![])
+            .expect("point-marker should succeed");
 
     builtin_set_buffer_multibyte(&mut eval, vec![Value::NIL]).unwrap();
 

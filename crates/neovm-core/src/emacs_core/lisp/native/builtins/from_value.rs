@@ -8,7 +8,7 @@
 //!
 //! Extraction is evaluator-aware because GNU coerces marker designators
 //! wherever `integer-or-marker-p` applies, and a marker's position is read
-//! from its live buffer (`marker_position_as_int_eval`). Purely structural
+//! from its live buffer (`marker_position_as_int_with_buffers`). Purely structural
 //! extractions simply ignore the evaluator.
 //!
 //! `typed_subr!` generates the fixed-arity `SubrFn`-shaped wrapper

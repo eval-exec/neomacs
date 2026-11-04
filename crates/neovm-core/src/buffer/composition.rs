@@ -14,7 +14,7 @@ use std::sync::OnceLock;
 use crate::tagged::SymbolMode;
 use neovm_value::value::Value;
 
-use super::{Buffer, CharPos0, CharRange};
+use super::{Buffer, BufferManager, CharPos0, CharRange};
 
 /// A half-open character range selected by GNU's automatic-composition rule
 /// table.
@@ -102,6 +102,12 @@ pub mod fast_path {
 pub(crate) struct CompositionSeams {
     pub(crate) spans: fn(&Buffer, Value, &str, usize, SymbolMode) -> Vec<AutomaticCompositionSpan>,
     pub(crate) ascii_no_rules: fn(Value, SymbolMode) -> bool,
+    /// The interned `composition` property symbol (GNU `Qcomposition`).
+    pub(crate) composition_symbol: fn() -> Value,
+    /// Width and character length of the composition whose property value is
+    /// PROP at 1-based position CHARPOS1 (GNU `get_composition_id`); the
+    /// caller resolves the property itself.
+    pub(crate) width: fn(Value, &BufferManager, i64) -> Option<(i64, i64)>,
 }
 
 impl CompositionSeams {
@@ -123,6 +129,25 @@ impl CompositionSeams {
     #[inline]
     pub(crate) fn ascii_no_rules(&self, table: Value, mode: SymbolMode) -> bool {
         (self.ascii_no_rules)(table, mode)
+    }
+
+    /// The `composition` property symbol.
+    #[inline]
+    pub(crate) fn property_symbol(&self) -> Value {
+        (self.composition_symbol)()
+    }
+
+    /// GNU `get_composition_id`: width and length of the composition at
+    /// CHARPOS1 whose property value is PROP, registering it when this is the
+    /// first sighting.
+    #[inline]
+    pub(crate) fn width_of(
+        &self,
+        prop: Value,
+        buffers: &BufferManager,
+        charpos1: i64,
+    ) -> Option<(i64, i64)> {
+        (self.width)(prop, buffers, charpos1)
     }
 }
 

@@ -1585,7 +1585,7 @@ fn process_mark_storage_uses_marker_objects() {
         .expect("process-mark should succeed");
     assert!(mark.is_marker());
     assert!(
-        super::super::marker::builtin_marker_buffer_in_buffers(&buffers, vec![mark])
+        super::super::marker::builtin_marker_buffer_in_buffers(&buffers, &[mark])
             .expect("marker-buffer")
             .is_nil()
     );
@@ -1599,7 +1599,7 @@ fn process_mark_storage_uses_marker_objects() {
     let mark = builtin_process_mark_impl(&pm, &buffers, vec![Value::make_process(id)])
         .expect("process-mark should succeed");
     assert_eq!(
-        super::super::marker::builtin_marker_buffer_in_buffers(&buffers, vec![mark])
+        super::super::marker::builtin_marker_buffer_in_buffers(&buffers, &[mark])
             .expect("marker-buffer"),
         Value::make_buffer(first)
     );
@@ -1618,7 +1618,7 @@ fn process_mark_storage_uses_marker_objects() {
     let mark = builtin_process_mark_impl(&pm, &buffers, vec![Value::make_process(id)])
         .expect("process-mark should succeed");
     assert_eq!(
-        super::super::marker::builtin_marker_buffer_in_buffers(&buffers, vec![mark])
+        super::super::marker::builtin_marker_buffer_in_buffers(&buffers, &[mark])
             .expect("marker-buffer"),
         Value::make_buffer(second)
     );

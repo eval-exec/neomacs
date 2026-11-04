@@ -200,7 +200,7 @@ fn expect_int_eval(eval: &super::eval::Context, value: &Value) -> Result<i64, Fl
     match value.kind() {
         ValueKind::Fixnum(n) => Ok(n),
         _ if super::marker::is_marker(value) => {
-            super::marker::marker_position_as_int_eval(eval, value)
+            super::marker::marker_position_as_int_with_buffers(&eval.edit.buffers, value)
         }
         _ => Err(signal(
             LispCondition::WrongTypeArgument,

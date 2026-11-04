@@ -1786,19 +1786,27 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::fixed0(
         "bobp",
-        crate::emacs_core::navigation::builtin_bobp_0,
+        |ctx: &mut crate::emacs_core::eval::Context| {
+            crate::emacs_core::navigation::builtin_bobp_0(&ctx.edit.buffers)
+        },
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::fixed0(
         "eobp",
-        crate::emacs_core::navigation::builtin_eobp_0,
+        |ctx: &mut crate::emacs_core::eval::Context| {
+            crate::emacs_core::navigation::builtin_eobp_0(&ctx.edit.buffers)
+        },
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::fixed0(
         "bolp",
-        crate::emacs_core::navigation::builtin_bolp_0,
+        |ctx: &mut crate::emacs_core::eval::Context| {
+            crate::emacs_core::navigation::builtin_bolp_0(&ctx.edit.buffers)
+        },
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::fixed0(
         "eolp",
-        crate::emacs_core::navigation::builtin_eolp_0,
+        |ctx: &mut crate::emacs_core::eval::Context| {
+            crate::emacs_core::navigation::builtin_eolp_0(&ctx.edit.buffers)
+        },
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::fixed1(
         "pos-bol",
@@ -1817,7 +1825,9 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "line-number-at-pos",
-        NativeFn::ContextVec(crate::emacs_core::navigation::builtin_line_number_at_pos),
+        NativeFn::ContextVec(|ctx: &mut crate::emacs_core::eval::Context, args| {
+            crate::emacs_core::navigation::builtin_line_number_at_pos(&ctx.edit.buffers, args)
+        }),
         SubrArity::new(0, Some(2)),
     )));
     ctx.register_subr(
@@ -1862,27 +1872,45 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     );
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::fixed2(
         "skip-chars-forward",
-        crate::emacs_core::navigation::builtin_skip_chars_forward_2,
+        |ctx: &mut crate::emacs_core::eval::Context, string, lim| {
+            crate::emacs_core::navigation::builtin_skip_chars_forward_2(
+                &mut ctx.edit.buffers,
+                string,
+                lim,
+            )
+        },
         FixedMin2::One,
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::fixed2(
         "skip-chars-backward",
-        crate::emacs_core::navigation::builtin_skip_chars_backward_2,
+        |ctx: &mut crate::emacs_core::eval::Context, string, lim| {
+            crate::emacs_core::navigation::builtin_skip_chars_backward_2(
+                &mut ctx.edit.buffers,
+                string,
+                lim,
+            )
+        },
         FixedMin2::One,
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "mark-marker",
-        NativeFn::ContextVec(crate::emacs_core::marker::builtin_mark_marker),
+        NativeFn::ContextVec(|ctx: &mut crate::emacs_core::eval::Context, args| {
+            crate::emacs_core::marker::builtin_mark_marker(&mut ctx.edit.buffers, args)
+        }),
         SubrArity::new(0, Some(0)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "region-beginning",
-        NativeFn::ContextVec(crate::emacs_core::navigation::builtin_region_beginning),
+        NativeFn::ContextVec(|ctx: &mut crate::emacs_core::eval::Context, args| {
+            crate::emacs_core::navigation::builtin_region_beginning(&ctx.edit.buffers, args)
+        }),
         SubrArity::new(0, Some(0)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "region-end",
-        NativeFn::ContextVec(crate::emacs_core::navigation::builtin_region_end),
+        NativeFn::ContextVec(|ctx: &mut crate::emacs_core::eval::Context, args| {
+            crate::emacs_core::navigation::builtin_region_end(&ctx.edit.buffers, args)
+        }),
         SubrArity::new(0, Some(0)),
     )));
     // `transient-mark-mode' the FUNCTION is not here: it is a
@@ -3179,7 +3207,12 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::fixed3(
         "set-marker",
-        crate::emacs_core::marker::builtin_set_marker_3,
+        |ctx: &mut crate::emacs_core::eval::Context, marker, position, buffer| {
+            crate::emacs_core::marker::builtin_set_marker_in_buffers(
+                &mut ctx.edit.buffers,
+                &[marker, position, buffer],
+            )
+        },
         FixedMin3::Two,
     )));
     // No `move-marker' here: GNU has no DEFUN of that name.  It is
@@ -3187,32 +3220,50 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     // function cell holds the SYMBOL `set-marker' (DIVERGENCES.md 148).
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::fixed1(
         "marker-position",
-        crate::emacs_core::marker::builtin_marker_position_1,
+        |ctx: &mut crate::emacs_core::eval::Context, marker| {
+            crate::emacs_core::marker::builtin_marker_position_1(&ctx.edit.buffers, marker)
+        },
         FixedMin1::One,
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "marker-buffer",
-        NativeFn::ContextSlice(crate::emacs_core::marker::builtin_marker_buffer),
+        NativeFn::ContextSlice(|ctx: &mut crate::emacs_core::eval::Context, args| {
+            crate::emacs_core::marker::builtin_marker_buffer_in_buffers(&ctx.edit.buffers, args)
+        }),
         SubrArity::new(1, Some(1)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "copy-marker",
-        NativeFn::ContextSlice(crate::emacs_core::marker::builtin_copy_marker),
+        NativeFn::ContextSlice(|ctx: &mut crate::emacs_core::eval::Context, args| {
+            crate::emacs_core::marker::builtin_copy_marker_in_buffers(&mut ctx.edit.buffers, args)
+        }),
         SubrArity::new(0, Some(2)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "point-marker",
-        NativeFn::ContextVec(crate::emacs_core::marker::builtin_point_marker),
+        NativeFn::ContextVec(|ctx: &mut crate::emacs_core::eval::Context, args| {
+            crate::emacs_core::marker::builtin_point_marker_in_buffers(&mut ctx.edit.buffers, args)
+        }),
         SubrArity::new(0, Some(0)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "point-min-marker",
-        NativeFn::ContextVec(crate::emacs_core::marker::builtin_point_min_marker),
+        NativeFn::ContextVec(|ctx: &mut crate::emacs_core::eval::Context, args| {
+            crate::emacs_core::marker::builtin_point_min_marker_in_buffers(
+                &mut ctx.edit.buffers,
+                args,
+            )
+        }),
         SubrArity::new(0, Some(0)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "point-max-marker",
-        NativeFn::ContextVec(crate::emacs_core::marker::builtin_point_max_marker),
+        NativeFn::ContextVec(|ctx: &mut crate::emacs_core::eval::Context, args| {
+            crate::emacs_core::marker::builtin_point_max_marker_in_buffers(
+                &mut ctx.edit.buffers,
+                args,
+            )
+        }),
         SubrArity::new(0, Some(0)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -6481,7 +6532,12 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     );
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "set-marker-insertion-type",
-        NativeFn::ContextVec(crate::emacs_core::marker::builtin_set_marker_insertion_type),
+        NativeFn::ContextVec(|ctx: &mut crate::emacs_core::eval::Context, args| {
+            crate::emacs_core::marker::builtin_set_marker_insertion_type_in_buffers(
+                &mut ctx.edit.buffers,
+                args,
+            )
+        }),
         SubrArity::new(2, Some(2)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(

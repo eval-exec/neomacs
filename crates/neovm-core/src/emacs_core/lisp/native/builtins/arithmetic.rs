@@ -37,7 +37,7 @@ fn try_i64_from_value(eval: &super::eval::Context, value: &Value) -> Result<Opti
         ValueKind::Fixnum(n) => Ok(Some(n)),
         ValueKind::Veclike(VecLikeType::Bignum) => Ok(None),
         _ if super::marker::is_marker(value) => Ok(Some(
-            super::marker::marker_position_as_int_eval(eval, value)?,
+            super::marker::marker_position_as_int_with_buffers(&eval.edit.buffers, value)?,
         )),
         _ => Err(signal(
             LispCondition::WrongTypeArgument,
@@ -796,7 +796,7 @@ fn integer_from_value(eval: &super::eval::Context, value: &Value) -> Result<Inte
         ValueKind::Fixnum(n) => Ok(Integer::from(n)),
         ValueKind::Veclike(VecLikeType::Bignum) => Ok(value.as_bignum().unwrap().clone()),
         _ if super::marker::is_marker(value) => Ok(Integer::from(
-            super::marker::marker_position_as_int_eval(eval, value)?,
+            super::marker::marker_position_as_int_with_buffers(&eval.edit.buffers, value)?,
         )),
         _ => Err(wrong_number_or_marker(value)),
     }
@@ -825,9 +825,9 @@ pub(crate) fn builtin_add_slice(
                 return Ok(*arg);
             }
             if super::marker::is_marker(arg) {
-                return Ok(Value::make_int(super::marker::marker_position_as_int_eval(
-                    eval, arg,
-                )?));
+                return Ok(Value::make_int(
+                    super::marker::marker_position_as_int_with_buffers(&eval.edit.buffers, arg)?,
+                ));
             }
             return Err(wrong_number_or_marker(arg));
         }
@@ -893,7 +893,7 @@ pub(crate) fn builtin_add_slice(
             return continue_bignum_add(eval, rest, acc);
         }
         if super::marker::is_marker(a) {
-            let n = super::marker::marker_position_as_int_eval(eval, a)?;
+            let n = super::marker::marker_position_as_int_with_buffers(&eval.edit.buffers, a)?;
             match sum.checked_add(n) {
                 Some(s) => {
                     sum = s;
@@ -1011,7 +1011,7 @@ pub(crate) fn builtin_sub_slice(
             _ => return continue_bignum_sub(eval, rest, big.clone()),
         }
     } else if super::marker::is_marker(first) {
-        super::marker::marker_position_as_int_eval(eval, first)?
+        super::marker::marker_position_as_int_with_buffers(&eval.edit.buffers, first)?
     } else {
         return Err(wrong_number_or_marker(first));
     };
@@ -1038,7 +1038,7 @@ pub(crate) fn builtin_sub_slice(
             return continue_bignum_sub(eval, &args[i + 2..], bacc);
         }
         if super::marker::is_marker(a) {
-            let n = super::marker::marker_position_as_int_eval(eval, a)?;
+            let n = super::marker::marker_position_as_int_with_buffers(&eval.edit.buffers, a)?;
             match acc.checked_sub(n) {
                 Some(s) => {
                     acc = s;
@@ -1537,9 +1537,9 @@ pub(crate) fn builtin_min_slice(eval: &mut super::eval::Context, args: &[Value])
 fn minmax_driver(eval: &super::eval::Context, args: &[Value], cmp: NumCmp) -> EvalResult {
     let coerce = |v: &Value| -> Result<Value, Flow> {
         if super::marker::is_marker(v) {
-            Ok(Value::fixnum(super::marker::marker_position_as_int_eval(
-                eval, v,
-            )?))
+            Ok(Value::fixnum(
+                super::marker::marker_position_as_int_with_buffers(&eval.edit.buffers, v)?,
+            ))
         } else {
             // Validate it is a number (signals otherwise).
             expect_number_or_marker_eval(eval, v)?;
@@ -2002,7 +2002,7 @@ fn integer_or_marker_to_big(
         ValueKind::Fixnum(n) => Ok(Integer::from(n)),
         ValueKind::Veclike(VecLikeType::Bignum) => Ok(v.as_bignum().unwrap().clone()),
         _ if super::marker::is_marker(v) => Ok(Integer::from(
-            super::marker::marker_position_as_int_eval(eval, v)?,
+            super::marker::marker_position_as_int_with_buffers(&eval.edit.buffers, v)?,
         )),
         _ => Err(signal(
             LispCondition::WrongTypeArgument,

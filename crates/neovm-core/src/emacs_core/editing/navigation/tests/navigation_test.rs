@@ -402,7 +402,7 @@ fn count_lines_accepts_marker_bounds_like_gnu() {
         false,
     );
     assert_eq!(
-        super::builtin_count_lines(&mut ev, vec![Value::fixnum(1), marker]).unwrap(),
+        super::builtin_count_lines(&ev.edit.buffers, vec![Value::fixnum(1), marker]).unwrap(),
         Value::fixnum(1)
     );
 }
@@ -412,8 +412,9 @@ fn count_lines_reports_narrow_to_region_range_errors_like_gnu() {
     crate::test_utils::init_test_tracing();
     let mut ev = eval_with_text("abc");
 
-    let err = super::builtin_count_lines(&mut ev, vec![Value::fixnum(0), Value::fixnum(2)])
-        .expect_err("out-of-range start should signal");
+    let err =
+        super::builtin_count_lines(&ev.edit.buffers, vec![Value::fixnum(0), Value::fixnum(2)])
+            .expect_err("out-of-range start should signal");
     match err.into_kind() {
         FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "args-out-of-range");
@@ -423,7 +424,7 @@ fn count_lines_reports_narrow_to_region_range_errors_like_gnu() {
     }
 
     let big = Value::make_integer(Integer::from(1u64) << 100u32);
-    let err = super::builtin_count_lines(&mut ev, vec![Value::fixnum(1), big])
+    let err = super::builtin_count_lines(&ev.edit.buffers, vec![Value::fixnum(1), big])
         .expect_err("out-of-range bignum end should signal");
     match err.into_kind() {
         FlowKind::Signal(sig) => {

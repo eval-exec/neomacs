@@ -16,7 +16,7 @@ thread_local! {
 fn call_marker_position(args: Vec<Value>) -> EvalResult {
     MARKER_TEST_CTX.with(|slot| {
         let mut ctx = Box::new(super::super::eval::Context::new());
-        let result = builtin_marker_position(&mut ctx, args);
+        let result = builtin_marker_position_in_buffers(&ctx.edit.buffers, &args);
         *slot.borrow_mut() = Some(ctx);
         result
     })
@@ -25,7 +25,7 @@ fn call_marker_position(args: Vec<Value>) -> EvalResult {
 fn call_marker_buffer(args: Vec<Value>) -> EvalResult {
     MARKER_TEST_CTX.with(|slot| {
         let mut ctx = Box::new(super::super::eval::Context::new());
-        let result = builtin_marker_buffer(&mut ctx, &args);
+        let result = builtin_marker_buffer_in_buffers(&ctx.edit.buffers, &args);
         *slot.borrow_mut() = Some(ctx);
         result
     })
@@ -34,7 +34,7 @@ fn call_marker_buffer(args: Vec<Value>) -> EvalResult {
 fn call_set_marker_insertion_type(args: Vec<Value>) -> EvalResult {
     MARKER_TEST_CTX.with(|slot| {
         let mut ctx = Box::new(super::super::eval::Context::new());
-        let result = builtin_set_marker_insertion_type(&mut ctx, args);
+        let result = builtin_set_marker_insertion_type_in_buffers(&mut ctx.edit.buffers, args);
         *slot.borrow_mut() = Some(ctx);
         result
     })
@@ -43,7 +43,7 @@ fn call_set_marker_insertion_type(args: Vec<Value>) -> EvalResult {
 fn call_copy_marker(args: Vec<Value>) -> EvalResult {
     MARKER_TEST_CTX.with(|slot| {
         let mut ctx = Box::new(super::super::eval::Context::new());
-        let result = builtin_copy_marker(&mut ctx, &args);
+        let result = builtin_copy_marker_in_buffers(&mut ctx.edit.buffers, &args);
         *slot.borrow_mut() = Some(ctx);
         result
     })
@@ -106,7 +106,7 @@ fn builtin_marker_buffer_returns_live_buffer() {
     let mut eval = super::super::eval::Context::new();
     let buffer_id = eval.buffers.current_buffer_id().expect("current buffer");
     let marker = make_marker_value(Some(buffer_id), Some(LispCharPos1::new(1)), false);
-    let buf = builtin_marker_buffer(&mut eval, &vec![marker]).unwrap();
+    let buf = builtin_marker_buffer_in_buffers(&eval.edit.buffers, &[marker]).unwrap();
     assert_eq!(buf, Value::make_buffer(buffer_id));
 }
 
@@ -126,7 +126,7 @@ fn builtin_copy_marker_from_marker() {
     let mut eval = super::super::eval::Context::new();
     let buffer_id = eval.buffers.current_buffer_id().expect("current buffer");
     let m = make_registered_buffer_marker(&mut eval.buffers, buffer_id, LispCharPos1::new(5), true);
-    let copy = builtin_copy_marker(&mut eval, &vec![m]).unwrap();
+    let copy = builtin_copy_marker_in_buffers(&mut eval.edit.buffers, &vec![m]).unwrap();
     assert!(is_marker(&copy));
     assert!(marker_position_value(&copy).is_fixnum());
 }
@@ -155,12 +155,14 @@ fn builtin_copy_marker_from_integer_clips_like_set_marker() {
         .expect("current buffer")
         .insert("abc");
 
-    let before_min = builtin_copy_marker(&mut eval, &vec![Value::fixnum(-10)])
-        .expect("copy marker before point-min");
+    let before_min =
+        builtin_copy_marker_in_buffers(&mut eval.edit.buffers, &vec![Value::fixnum(-10)])
+            .expect("copy marker before point-min");
     assert_eq!(marker_position_value(&before_min), Value::fixnum(1));
 
-    let after_max = builtin_copy_marker(&mut eval, &vec![Value::fixnum(99)])
-        .expect("copy marker after point-max");
+    let after_max =
+        builtin_copy_marker_in_buffers(&mut eval.edit.buffers, &vec![Value::fixnum(99)])
+            .expect("copy marker after point-max");
     assert_eq!(marker_position_value(&after_max), Value::fixnum(4));
 }
 
@@ -192,10 +194,10 @@ fn marker_accessors_require_zero_arguments() {
     crate::test_utils::init_test_tracing();
     let mut eval = super::super::eval::Context::new();
 
-    assert!(builtin_point_marker(&mut eval, vec![Value::NIL]).is_err());
-    assert!(builtin_point_min_marker(&mut eval, vec![Value::NIL]).is_err());
-    assert!(builtin_point_max_marker(&mut eval, vec![Value::NIL]).is_err());
-    assert!(builtin_mark_marker(&mut eval, vec![Value::NIL]).is_err());
+    assert!(builtin_point_marker_in_buffers(&mut eval.edit.buffers, vec![Value::NIL]).is_err());
+    assert!(builtin_point_min_marker_in_buffers(&mut eval.edit.buffers, vec![Value::NIL]).is_err());
+    assert!(builtin_point_max_marker_in_buffers(&mut eval.edit.buffers, vec![Value::NIL]).is_err());
+    assert!(builtin_mark_marker(&mut eval.edit.buffers, vec![Value::NIL]).is_err());
 }
 
 #[test]
@@ -231,8 +233,10 @@ fn point_min_and_max_markers_follow_narrowing() {
         EmacsByteRange::from_usize('é'.len_utf8(), "ééz".len()),
     );
 
-    let min_marker = builtin_point_min_marker(&mut eval, vec![]).expect("point-min-marker");
-    let max_marker = builtin_point_max_marker(&mut eval, vec![]).expect("point-max-marker");
+    let min_marker = builtin_point_min_marker_in_buffers(&mut eval.edit.buffers, vec![])
+        .expect("point-min-marker");
+    let max_marker = builtin_point_max_marker_in_buffers(&mut eval.edit.buffers, vec![])
+        .expect("point-max-marker");
 
     assert_eq!(
         call_marker_position(vec![min_marker]).unwrap(),
@@ -254,7 +258,7 @@ fn mark_marker_follows_cached_mark_char_position() {
         .buffers
         .set_buffer_mark_emacs_byte_pos(buf_id, crate::buffer::EmacsBytePos::new('é'.len_utf8()));
 
-    let marker = builtin_mark_marker(&mut eval, vec![]).expect("mark-marker");
+    let marker = builtin_mark_marker(&mut eval.edit.buffers, vec![]).expect("mark-marker");
     assert_eq!(
         call_marker_position(vec![marker]).unwrap(),
         Value::fixnum(2)
@@ -272,7 +276,7 @@ fn mark_marker_with_no_mark_returns_detached() {
     crate::test_utils::init_test_tracing();
     let mut eval = super::super::eval::Context::new();
     // Don't set a mark; default buffer has no mark.
-    let marker = builtin_mark_marker(&mut eval, vec![]).expect("mark-marker");
+    let marker = builtin_mark_marker(&mut eval.edit.buffers, vec![]).expect("mark-marker");
     assert!(
         call_marker_buffer(vec![marker]).unwrap().is_nil(),
         "(marker-buffer (mark-marker)) should be nil when mark is unset"
