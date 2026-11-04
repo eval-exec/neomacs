@@ -7234,7 +7234,7 @@ impl<'a> Vm<'a> {
 
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
     fn ensure_selected_frame_id(&mut self) -> FrameId {
-        crate::emacs_core::window_cmds::ensure_selected_frame_id_in_state(
+        crate::emacs_core::eval::display_query_hooks::ensure_selected_frame_id(
             &mut self.ctx.frames,
             &mut self.ctx.edit.buffers,
         )
