@@ -2322,10 +2322,10 @@ impl GuiFrameHostRequest {
             geometry_hints: frame.gui_geometry_hints(),
             visibility: frame.visibility,
             decorated: frame
-                .known_parameter(crate::window::FrameParam::Undecorated)
+                .known_parameter(neovm_value::display_vocab::FrameParam::Undecorated)
                 .is_none_or(|value| value.is_nil()),
             fullscreen: frame
-                .known_parameter(crate::window::FrameParam::Fullscreen)
+                .known_parameter(neovm_value::display_vocab::FrameParam::Fullscreen)
                 .and_then(|value| FrameFullscreen::from_symbol_value(&value)),
         }
     }

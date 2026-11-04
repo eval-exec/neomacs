@@ -12,9 +12,10 @@ pub struct FrameId(pub u64);
 /// as Lisp integers.
 pub const FRAME_ID_BASE: u64 = 1 << 32;
 
+use crate::intern::{self, SymId, WellKnown, resolve_sym};
 use crate::value::Value;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
-use strum::{EnumString, IntoStaticStr};
+use strum::{EnumCount, EnumString, IntoStaticStr, VariantArray};
 
 /// GNU's two frame-argument domains, as a closed set.
 ///
@@ -632,4 +633,371 @@ impl From<FontWeight> for FontWeightDumpCode {
             FontWeight::Ultraheavy => Self::Ultraheavy,
         }
     }
+}
+
+/// GNU-shaped frame parameter keys that both display and the evaluator name.
+
+/// Fixed Core query keys outside GNU's indexed frame-parameter handler table.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, EnumCount, IntoPrimitive, IntoStaticStr, VariantArray)]
+#[strum(serialize_all = "kebab-case")]
+pub enum FrameQueryParam {
+    Width,
+    Height,
+    WindowSystem,
+    FontParameter,
+    Fontsize,
+    Tooltip,
+    Display,
+    MinWidth,
+    MinHeight,
+    #[strum(serialize = "neovm--frame-text-lines")]
+    TextLines,
+    #[strum(serialize = "neovm--frame-total-cols")]
+    TotalCols,
+    #[strum(serialize = "neovm--frame-total-lines")]
+    TotalLines,
+}
+
+const _: [(); FrameQueryParam::COUNT] = [(); FrameQueryParam::VARIANTS.len()];
+
+impl FrameQueryParam {
+    /// The fixed DEFSYM identity this query key is spelled as.
+    pub const fn well_known(self) -> WellKnown {
+        match self {
+            FrameQueryParam::Width => WellKnown::Width,
+            FrameQueryParam::Height => WellKnown::Height,
+            FrameQueryParam::WindowSystem => WellKnown::WindowSystem,
+            FrameQueryParam::FontParameter => WellKnown::FontParameter,
+            FrameQueryParam::Fontsize => WellKnown::Fontsize,
+            FrameQueryParam::Tooltip => WellKnown::Tooltip,
+            FrameQueryParam::Display => WellKnown::Display,
+            FrameQueryParam::MinWidth => WellKnown::MinWidth,
+            FrameQueryParam::MinHeight => WellKnown::MinHeight,
+            FrameQueryParam::TextLines => WellKnown::NeovmFrameTextLines,
+            FrameQueryParam::TotalCols => WellKnown::NeovmFrameTotalCols,
+            FrameQueryParam::TotalLines => WellKnown::NeovmFrameTotalLines,
+        }
+    }
+}
+
+impl FrameQueryParam {
+    /// Interned symbol this query key names in the frame parameter map.
+    pub fn symbol_id(self) -> SymId {
+        self.well_known().id()
+    }
+
+    /// Lisp-visible symbol value of this query key.
+    pub fn symbol(self) -> Value {
+        Value::from_sym_id(self.symbol_id())
+    }
+}
+
+#[repr(u8)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    EnumString,
+    EnumCount,
+    IntoStaticStr,
+    IntoPrimitive,
+    TryFromPrimitive,
+)]
+#[strum(serialize_all = "kebab-case")]
+pub enum FrameParam {
+    AutoRaise = 0,
+    AutoLower,
+    BackgroundColor,
+    BorderColor,
+    BorderWidth,
+    CursorColor,
+    CursorType,
+    Font,
+    ForegroundColor,
+    IconName,
+    IconType,
+    ChildFrameBorderWidth,
+    InternalBorderWidth,
+    RightDividerWidth,
+    BottomDividerWidth,
+    MenuBarLines,
+    MouseColor,
+    Name,
+    ScrollBarWidth,
+    ScrollBarHeight,
+    Title,
+    Unsplittable,
+    VerticalScrollBars,
+    HorizontalScrollBars,
+    Visibility,
+    TabBarLines,
+    ToolBarLines,
+    ScrollBarForeground,
+    ScrollBarBackground,
+    ScreenGamma,
+    LineSpacing,
+    LeftFringe,
+    RightFringe,
+    WaitForWm,
+    Fullscreen,
+    FontBackend,
+    Alpha,
+    Sticky,
+    ToolBarPosition,
+    InhibitDoubleBuffering,
+    Undecorated,
+    ParentFrame,
+    SkipTaskbar,
+    NoFocusOnMap,
+    NoAcceptFocus,
+    ZGroup,
+    OverrideRedirect,
+    NoSpecialGlyphs,
+    AlphaBackground,
+    BordersRespectAlphaBackground,
+    UseFrameSynchronization,
+    Shaded,
+    NsAppearance,
+    NsTransparentTitlebar,
+}
+
+impl FrameParam {
+    /// The fixed DEFSYM identity GNU's `frame_parms[]` entry is spelled as.
+    pub const fn well_known(self) -> WellKnown {
+        match self {
+            FrameParam::AutoRaise => WellKnown::AutoRaise,
+            FrameParam::AutoLower => WellKnown::AutoLower,
+            FrameParam::BackgroundColor => WellKnown::BackgroundColor,
+            FrameParam::BorderColor => WellKnown::BorderColor,
+            FrameParam::BorderWidth => WellKnown::BorderWidth,
+            FrameParam::CursorColor => WellKnown::CursorColor,
+            FrameParam::CursorType => WellKnown::CursorType,
+            FrameParam::Font => WellKnown::Font,
+            FrameParam::ForegroundColor => WellKnown::ForegroundColor,
+            FrameParam::IconName => WellKnown::IconName,
+            FrameParam::IconType => WellKnown::IconType,
+            FrameParam::ChildFrameBorderWidth => WellKnown::ChildFrameBorderWidth,
+            FrameParam::InternalBorderWidth => WellKnown::InternalBorderWidth,
+            FrameParam::RightDividerWidth => WellKnown::RightDividerWidth,
+            FrameParam::BottomDividerWidth => WellKnown::BottomDividerWidth,
+            FrameParam::MenuBarLines => WellKnown::MenuBarLines,
+            FrameParam::MouseColor => WellKnown::MouseColor,
+            FrameParam::Name => WellKnown::Name,
+            FrameParam::ScrollBarWidth => WellKnown::ScrollBarWidth,
+            FrameParam::ScrollBarHeight => WellKnown::ScrollBarHeight,
+            FrameParam::Title => WellKnown::Title,
+            FrameParam::Unsplittable => WellKnown::Unsplittable,
+            FrameParam::VerticalScrollBars => WellKnown::VerticalScrollBars,
+            FrameParam::HorizontalScrollBars => WellKnown::HorizontalScrollBars,
+            FrameParam::Visibility => WellKnown::Visibility,
+            FrameParam::TabBarLines => WellKnown::TabBarLines,
+            FrameParam::ToolBarLines => WellKnown::ToolBarLines,
+            FrameParam::ScrollBarForeground => WellKnown::ScrollBarForeground,
+            FrameParam::ScrollBarBackground => WellKnown::ScrollBarBackground,
+            FrameParam::ScreenGamma => WellKnown::ScreenGamma,
+            FrameParam::LineSpacing => WellKnown::LineSpacing,
+            FrameParam::LeftFringe => WellKnown::LeftFringe,
+            FrameParam::RightFringe => WellKnown::RightFringe,
+            FrameParam::WaitForWm => WellKnown::WaitForWm,
+            FrameParam::Fullscreen => WellKnown::Fullscreen,
+            FrameParam::FontBackend => WellKnown::FontBackend,
+            FrameParam::Alpha => WellKnown::Alpha,
+            FrameParam::Sticky => WellKnown::Sticky,
+            FrameParam::ToolBarPosition => WellKnown::ToolBarPosition,
+            FrameParam::InhibitDoubleBuffering => WellKnown::InhibitDoubleBuffering,
+            FrameParam::Undecorated => WellKnown::Undecorated,
+            FrameParam::ParentFrame => WellKnown::ParentFrame,
+            FrameParam::SkipTaskbar => WellKnown::SkipTaskbar,
+            FrameParam::NoFocusOnMap => WellKnown::NoFocusOnMap,
+            FrameParam::NoAcceptFocus => WellKnown::NoAcceptFocus,
+            FrameParam::ZGroup => WellKnown::ZGroup,
+            FrameParam::OverrideRedirect => WellKnown::OverrideRedirect,
+            FrameParam::NoSpecialGlyphs => WellKnown::NoSpecialGlyphs,
+            FrameParam::AlphaBackground => WellKnown::AlphaBackground,
+            FrameParam::BordersRespectAlphaBackground => WellKnown::BordersRespectAlphaBackground,
+            FrameParam::UseFrameSynchronization => WellKnown::UseFrameSynchronization,
+            FrameParam::Shaded => WellKnown::Shaded,
+            FrameParam::NsAppearance => WellKnown::NsAppearance,
+            FrameParam::NsTransparentTitlebar => WellKnown::NsTransparentTitlebar,
+        }
+    }
+
+    pub fn gnu_index(self) -> usize {
+        usize::from(u8::from(self))
+    }
+
+    pub fn from_gnu_index(index: usize) -> Option<Self> {
+        let index = u8::try_from(index).ok()?;
+        Self::try_from(index).ok()
+    }
+
+    pub fn name(self) -> &'static str {
+        self.into()
+    }
+
+    pub fn symbol(self) -> Value {
+        Value::from_sym_id(self.well_known().id())
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        name.parse().ok()
+    }
+
+    pub fn from_symbol_id(symbol: SymId) -> Option<Self> {
+        Self::from_name(resolve_sym(symbol))
+    }
+}
+
+/// Every Lisp variable whose effective value is read by window layout.
+///
+/// This is deliberately a closed set. In-flight layout validation snapshots
+/// the effective values by variant, so adding a new display-variable read to
+/// layout requires extending this enum and cannot silently leave the
+/// validation boundary incomplete.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    strum::EnumString,
+    strum::IntoStaticStr,
+    strum::EnumCount,
+    strum::VariantArray,
+)]
+#[repr(usize)]
+#[strum(serialize_all = "kebab-case")]
+pub enum WindowLayoutVariable {
+    AutoCompositionFunction,
+    AutoCompositionMode,
+    BidiDisplayReordering,
+    BidiParagraphDirection,
+    BidiParagraphSeparateRe,
+    BidiParagraphStartRe,
+    BufferDisplayTable,
+    BufferInvisibilitySpec,
+    CharPropertyAliasAlist,
+    CompactBarMode,
+    CtlArrow,
+    CursorInNonSelectedWindows,
+    CursorType,
+    DefaultTextProperties,
+    DisplayFillColumnIndicator,
+    DisplayFillColumnIndicatorCharacter,
+    DisplayFillColumnIndicatorColumn,
+    DisplayLineNumbers,
+    DisplayLineNumbersCurrentAbsolute,
+    DisplayLineNumbersMajorTick,
+    DisplayLineNumbersMinorTick,
+    DisplayLineNumbersOffset,
+    DisplayLineNumbersWiden,
+    DisplayLineNumbersWidth,
+    FaceRemappingAlist,
+    FillColumn,
+    FringeCursorAlist,
+    FringeIndicatorAlist,
+    FringesOutsideMargins,
+    GlyphlessCharDisplay,
+    HeaderLineFormat,
+    HeaderLineIndentWidth,
+    HorizontalScrollBar,
+    ImageScalingFactor,
+    IndicateEmptyLines,
+    IndicateBufferBoundaries,
+    LeftFringeWidth,
+    LeftMargin,
+    LeftMarginWidth,
+    LinePrefix,
+    LineSpacing,
+    MaxMiniWindowHeight,
+    MaximumScrollMargin,
+    MenuBarFinalItems,
+    ModeLineFormat,
+    NeomacsCursorEffect,
+    NeomacsToolbarIconDirectory,
+    NeomacsToolbarIconTheme,
+    NeomacsVisualCursors,
+    NobreakCharDisplay,
+    OverlayArrowPosition,
+    OverlayArrowString,
+    OverlayArrowVariableList,
+    RedisplayAdhocScrollInResizeMiniWindows,
+    ResizeMiniWindows,
+    RightFringeWidth,
+    RightMarginWidth,
+    ScrollBarHeight,
+    ScrollBarWidth,
+    ScrollConservatively,
+    ScrollDownAggressively,
+    ScrollMargin,
+    ScrollMinibufferConservatively,
+    ScrollStep,
+    ScrollUpAggressively,
+    SelectiveDisplay,
+    SelectiveDisplayEllipses,
+    ShowTrailingWhitespace,
+    StandardDisplayTable,
+    TabBarButtonMargin,
+    TabBarButtonRelief,
+    TabLineFormat,
+    TabStopList,
+    TabWidth,
+    ToolBarMap,
+    TruncateLines,
+    TruncatePartialWidthWindows,
+    VerticalScrollBar,
+    WordWrap,
+    WordWrapByCategory,
+    WrapPrefix,
+    XCursorForePixel,
+    XStretchCursor,
+}
+
+impl WindowLayoutVariable {
+    pub fn name(self) -> &'static str {
+        self.into()
+    }
+
+    pub fn sym_id(self) -> SymId {
+        use std::sync::OnceLock;
+        use strum::VariantArray;
+
+        static SYMBOLS: OnceLock<[SymId; <WindowLayoutVariable as strum::EnumCount>::COUNT]> =
+            OnceLock::new();
+        SYMBOLS.get_or_init(|| {
+            let mut symbols =
+                [intern::NIL_SYM_ID; <WindowLayoutVariable as strum::EnumCount>::COUNT];
+            for variable in WindowLayoutVariable::VARIANTS {
+                symbols[*variable as usize] = intern::intern(variable.name());
+            }
+            symbols
+        })[self as usize]
+    }
+}
+
+/// Live-window history state that GNU Emacs stores directly on `struct window`.
+#[derive(Clone, Debug)]
+pub struct WindowHistoryState {
+    pub prev_buffers: Value,
+    pub next_buffers: Value,
+    pub use_time: i64,
+}
+
+impl Default for WindowHistoryState {
+    fn default() -> Self {
+        Self {
+            prev_buffers: Value::NIL,
+            next_buffers: Value::NIL,
+            use_time: 0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SourcePreloadWindowRetirementRefusal {
+    LiveFramesRemain,
 }

@@ -501,7 +501,7 @@ impl EditHost for Context {
         let categories = self
             .variable_value_in_buffer(
                 Some(buffer),
-                crate::window::WindowLayoutVariable::WordWrapByCategory.sym_id(),
+                neovm_value::display_vocab::WindowLayoutVariable::WordWrapByCategory.sym_id(),
             )
             .is_some_and(|value| value.is_truthy());
         if categories {

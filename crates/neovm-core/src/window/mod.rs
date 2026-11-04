@@ -11,7 +11,7 @@ use crate::buffer::{
     BufferId, BufferManager, CharLen, CharPos0, CharRange, EmacsByteLen, EmacsBytePos,
     EmacsByteRange, LispCharPos1, TextPositionAnchor,
 };
-use crate::emacs_core::intern::{self, SymId};
+use crate::emacs_core::intern::SymId;
 use crate::emacs_core::value::{HashTableTest, Value};
 use crate::gc_trace::GcTrace;
 use neomacs_display_protocol::TransitionDirection;
@@ -172,10 +172,7 @@ impl WindowSequenceOrigin {
 
 static_assertions::assert_eq_size!(WindowSequenceOrigin, WindowId);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SourcePreloadWindowRetirementRefusal {
-    LiveFramesRemain,
-}
+pub(crate) use neovm_value::display_vocab::SourcePreloadWindowRetirementRefusal;
 
 pub use neovm_value::display_vocab::FrameId;
 
@@ -285,37 +282,7 @@ pub fn default_gui_tool_bar_line_height(font_pixel_size: f32) -> u32 {
 // Window geometry
 // ---------------------------------------------------------------------------
 
-/// Pixel-based rectangle for window placement.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct Rect {
-    pub x: f32,
-    pub y: f32,
-    pub width: f32,
-    pub height: f32,
-}
-
-impl Rect {
-    pub fn new(x: f32, y: f32, width: f32, height: f32) -> Self {
-        Self {
-            x,
-            y,
-            width,
-            height,
-        }
-    }
-
-    pub fn right(&self) -> f32 {
-        self.x + self.width
-    }
-
-    pub fn bottom(&self) -> f32 {
-        self.y + self.height
-    }
-
-    pub fn contains(&self, px: f32, py: f32) -> bool {
-        px >= self.x && px < self.right() && py >= self.y && py < self.bottom()
-    }
-}
+pub use neovm_edit::emacs_core::display_metrics::Rect;
 
 // ---------------------------------------------------------------------------
 // Split direction
@@ -577,23 +544,7 @@ impl<'a> WindowOutputUpdate<'a> {
     }
 }
 
-/// Live-window history state that GNU Emacs stores directly on `struct window`.
-#[derive(Clone, Debug)]
-pub struct WindowHistoryState {
-    pub prev_buffers: Value,
-    pub next_buffers: Value,
-    pub use_time: i64,
-}
-
-impl Default for WindowHistoryState {
-    fn default() -> Self {
-        Self {
-            prev_buffers: Value::NIL,
-            next_buffers: Value::NIL,
-            use_time: 0,
-        }
-    }
-}
+pub use neovm_value::display_vocab::WindowHistoryState;
 
 pub(crate) type WindowParameters = Vec<(Value, Value)>;
 
@@ -752,132 +703,7 @@ impl LayoutPrefixInput {
     }
 }
 
-/// Every Lisp variable whose effective value is read by window layout.
-///
-/// This is deliberately a closed set. In-flight layout validation snapshots
-/// the effective values by variant, so adding a new display-variable read to
-/// layout requires extending this enum and cannot silently leave the
-/// validation boundary incomplete.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    strum::EnumString,
-    strum::IntoStaticStr,
-    strum::EnumCount,
-    strum::VariantArray,
-)]
-#[repr(usize)]
-#[strum(serialize_all = "kebab-case")]
-pub enum WindowLayoutVariable {
-    AutoCompositionFunction,
-    AutoCompositionMode,
-    BidiDisplayReordering,
-    BidiParagraphDirection,
-    BidiParagraphSeparateRe,
-    BidiParagraphStartRe,
-    BufferDisplayTable,
-    BufferInvisibilitySpec,
-    CharPropertyAliasAlist,
-    CompactBarMode,
-    CtlArrow,
-    CursorInNonSelectedWindows,
-    CursorType,
-    DefaultTextProperties,
-    DisplayFillColumnIndicator,
-    DisplayFillColumnIndicatorCharacter,
-    DisplayFillColumnIndicatorColumn,
-    DisplayLineNumbers,
-    DisplayLineNumbersCurrentAbsolute,
-    DisplayLineNumbersMajorTick,
-    DisplayLineNumbersMinorTick,
-    DisplayLineNumbersOffset,
-    DisplayLineNumbersWiden,
-    DisplayLineNumbersWidth,
-    FaceRemappingAlist,
-    FillColumn,
-    FringeCursorAlist,
-    FringeIndicatorAlist,
-    FringesOutsideMargins,
-    GlyphlessCharDisplay,
-    HeaderLineFormat,
-    HeaderLineIndentWidth,
-    HorizontalScrollBar,
-    ImageScalingFactor,
-    IndicateEmptyLines,
-    IndicateBufferBoundaries,
-    LeftFringeWidth,
-    LeftMargin,
-    LeftMarginWidth,
-    LinePrefix,
-    LineSpacing,
-    MaxMiniWindowHeight,
-    MaximumScrollMargin,
-    MenuBarFinalItems,
-    ModeLineFormat,
-    NeomacsCursorEffect,
-    NeomacsToolbarIconDirectory,
-    NeomacsToolbarIconTheme,
-    NeomacsVisualCursors,
-    NobreakCharDisplay,
-    OverlayArrowPosition,
-    OverlayArrowString,
-    OverlayArrowVariableList,
-    RedisplayAdhocScrollInResizeMiniWindows,
-    ResizeMiniWindows,
-    RightFringeWidth,
-    RightMarginWidth,
-    ScrollBarHeight,
-    ScrollBarWidth,
-    ScrollConservatively,
-    ScrollDownAggressively,
-    ScrollMargin,
-    ScrollMinibufferConservatively,
-    ScrollStep,
-    ScrollUpAggressively,
-    SelectiveDisplay,
-    SelectiveDisplayEllipses,
-    ShowTrailingWhitespace,
-    StandardDisplayTable,
-    TabBarButtonMargin,
-    TabBarButtonRelief,
-    TabLineFormat,
-    TabStopList,
-    TabWidth,
-    ToolBarMap,
-    TruncateLines,
-    TruncatePartialWidthWindows,
-    VerticalScrollBar,
-    WordWrap,
-    WordWrapByCategory,
-    WrapPrefix,
-    XCursorForePixel,
-    XStretchCursor,
-}
-
-impl WindowLayoutVariable {
-    pub fn name(self) -> &'static str {
-        self.into()
-    }
-
-    pub fn sym_id(self) -> SymId {
-        use std::sync::OnceLock;
-        use strum::VariantArray;
-
-        static SYMBOLS: OnceLock<[SymId; <WindowLayoutVariable as strum::EnumCount>::COUNT]> =
-            OnceLock::new();
-        SYMBOLS.get_or_init(|| {
-            let mut symbols =
-                [intern::NIL_SYM_ID; <WindowLayoutVariable as strum::EnumCount>::COUNT];
-            for variable in WindowLayoutVariable::VARIANTS {
-                symbols[*variable as usize] = intern::intern(variable.name());
-            }
-            symbols
-        })[self as usize]
-    }
-}
+pub use neovm_value::display_vocab::WindowLayoutVariable;
 
 /// Canonical effective values of the closed window-layout variable set.
 ///

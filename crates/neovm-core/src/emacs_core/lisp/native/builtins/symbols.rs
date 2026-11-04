@@ -3106,7 +3106,7 @@ pub(crate) fn builtin_resize_mini_window_internal(
         .as_mut()
         .expect("minibuffer leaf validated before resize mutation");
     let bounds = *mini.bounds();
-    mini.set_bounds(crate::window::Rect::new(
+    mini.set_bounds(neovm_edit::emacs_core::display_metrics::Rect::new(
         bounds.x,
         bounds.y,
         bounds.width,

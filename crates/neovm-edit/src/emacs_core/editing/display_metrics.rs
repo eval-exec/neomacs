@@ -24,6 +24,42 @@ use neovm_value::value::{Value, ValueKind};
 pub struct WindowId(pub u64);
 
 // ---------------------------------------------------------------------------
+// Window geometry
+// ---------------------------------------------------------------------------
+
+/// Pixel-based rectangle for window placement.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Rect {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+impl Rect {
+    pub fn new(x: f32, y: f32, width: f32, height: f32) -> Self {
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    pub fn right(&self) -> f32 {
+        self.x + self.width
+    }
+
+    pub fn bottom(&self) -> f32 {
+        self.y + self.height
+    }
+
+    pub fn contains(&self, px: f32, py: f32) -> bool {
+        px >= self.x && px < self.right() && py >= self.y && py < self.bottom()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Line layout vocabulary
 // ---------------------------------------------------------------------------
 

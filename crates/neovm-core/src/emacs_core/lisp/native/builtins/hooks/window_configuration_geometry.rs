@@ -5,9 +5,10 @@
 //! created, and the live root is checked again before committing staged sizes.
 
 use super::*;
+use crate::window::Frame;
 use crate::window::body::WindowBodyCellSize;
-use crate::window::{Frame, Rect};
 use neomacs_display_protocol::types::Px;
+use neovm_edit::emacs_core::display_metrics::Rect;
 use neovm_value::display_vocab::FrameId;
 use neovm_value::display_vocab::SplitDirection;
 

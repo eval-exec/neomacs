@@ -161,7 +161,7 @@ fn restore_hook_caller_context(
 struct LiveWindowHookState {
     window_id: neovm_edit::emacs_core::display_metrics::WindowId,
     buffer_id: crate::buffer::BufferId,
-    bounds: crate::window::Rect,
+    bounds: neovm_edit::emacs_core::display_metrics::Rect,
 }
 
 #[derive(Clone)]
@@ -851,7 +851,7 @@ fn merge_live_window_histories(
     tree: &mut crate::window::WindowTree,
     live_histories: &HashMap<
         neovm_edit::emacs_core::display_metrics::WindowId,
-        crate::window::WindowHistoryState,
+        neovm_value::display_vocab::WindowHistoryState,
     >,
 ) {
     tree.for_each_leaf_mut(|window| {

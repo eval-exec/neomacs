@@ -6385,7 +6385,7 @@ pub fn create_bootstrap_evaluator_for_loadup(
             LoadupInvocation::PreloadOnly => {
                 if let Err(refusal) = eval.frames.retire_source_preload_window_sequences() {
                     let err = match refusal {
-                        crate::window::SourcePreloadWindowRetirementRefusal::LiveFramesRemain => {
+                        neovm_value::display_vocab::SourcePreloadWindowRetirementRefusal::LiveFramesRemain => {
                             EvalError::signal(
                                 intern("error"),
                                 vec![Value::string(

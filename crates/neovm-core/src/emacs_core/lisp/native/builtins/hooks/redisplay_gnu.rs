@@ -361,7 +361,7 @@ fn run_inner(pass: &mut ChangePass<'_>) -> EvalResult {
         // frames retain GNU's explicit exclusion. Frame creation/size mutation
         // publishers are responsible for FRAME_WINDOW_CHANGE.
         if frame
-            .fixed_parameter(crate::window::FrameQueryParam::Tooltip)
+            .fixed_parameter(neovm_value::display_vocab::FrameQueryParam::Tooltip)
             .is_some_and(|value| value.is_truthy())
         {
             continue;
