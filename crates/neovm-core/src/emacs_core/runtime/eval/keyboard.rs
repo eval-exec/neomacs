@@ -434,8 +434,8 @@ impl KeyEvent {
     /// Convert this host key event into the Lisp-visible Emacs event
     /// representation used by the command loop and keymap lookup.
     pub fn to_emacs_event_value(&self) -> Value {
-        let event = crate::emacs_core::keymap::KeyEvent::from(self.clone());
-        crate::emacs_core::keymap::key_event_to_emacs_event(&event)
+        let event = crate::emacs_core::eval::keymap_lookup::KeyEvent::from(self.clone());
+        crate::emacs_core::eval::keymap_lookup::key_event_to_emacs_event(&event)
     }
 
     /// True if this event is GNU Emacs's default `quit-char`: `C-g`.
@@ -474,9 +474,11 @@ impl KeyEvent {
         Self::from_emacs_key_event(event.clone())
     }
 
-    fn from_emacs_key_event(event: crate::emacs_core::keymap::KeyEvent) -> Option<Self> {
+    fn from_emacs_key_event(
+        event: crate::emacs_core::eval::keymap_lookup::KeyEvent,
+    ) -> Option<Self> {
         match event {
-            crate::emacs_core::keymap::KeyEvent::Char {
+            crate::emacs_core::eval::keymap_lookup::KeyEvent::Char {
                 code,
                 ctrl,
                 meta,
@@ -529,7 +531,7 @@ impl KeyEvent {
                     },
                 })
             }
-            crate::emacs_core::keymap::KeyEvent::Function {
+            crate::emacs_core::eval::keymap_lookup::KeyEvent::Function {
                 name,
                 ctrl,
                 meta,
@@ -2487,10 +2489,10 @@ impl crate::emacs_core::eval::Context {
     }
 
     fn shift_translated_key_sequence_event(event: Value) -> Option<Value> {
-        let key_event = crate::emacs_core::keymap::emacs_event_to_key_event(&event)?;
+        let key_event = crate::emacs_core::eval::keymap_lookup::emacs_event_to_key_event(&event)?;
 
         match key_event {
-            crate::emacs_core::keymap::KeyEvent::Char {
+            crate::emacs_core::eval::keymap_lookup::KeyEvent::Char {
                 code,
                 ctrl,
                 meta,
@@ -2500,17 +2502,19 @@ impl crate::emacs_core::eval::Context {
                 alt,
             } => {
                 if shift {
-                    return Some(crate::emacs_core::keymap::key_event_to_emacs_event(
-                        &crate::emacs_core::keymap::KeyEvent::Char {
-                            code,
-                            ctrl,
-                            meta,
-                            shift: false,
-                            super_,
-                            hyper,
-                            alt,
-                        },
-                    ));
+                    return Some(
+                        crate::emacs_core::eval::keymap_lookup::key_event_to_emacs_event(
+                            &crate::emacs_core::eval::keymap_lookup::KeyEvent::Char {
+                                code,
+                                ctrl,
+                                meta,
+                                shift: false,
+                                super_,
+                                hyper,
+                                alt,
+                            },
+                        ),
+                    );
                 }
 
                 if !code.is_uppercase() {
@@ -2522,19 +2526,21 @@ impl crate::emacs_core::eval::Context {
                     return None;
                 }
 
-                Some(crate::emacs_core::keymap::key_event_to_emacs_event(
-                    &crate::emacs_core::keymap::KeyEvent::Char {
-                        code: lowered,
-                        ctrl,
-                        meta,
-                        shift,
-                        super_,
-                        hyper,
-                        alt,
-                    },
-                ))
+                Some(
+                    crate::emacs_core::eval::keymap_lookup::key_event_to_emacs_event(
+                        &crate::emacs_core::eval::keymap_lookup::KeyEvent::Char {
+                            code: lowered,
+                            ctrl,
+                            meta,
+                            shift,
+                            super_,
+                            hyper,
+                            alt,
+                        },
+                    ),
+                )
             }
-            crate::emacs_core::keymap::KeyEvent::Function {
+            crate::emacs_core::eval::keymap_lookup::KeyEvent::Function {
                 name,
                 ctrl,
                 meta,
@@ -2547,17 +2553,19 @@ impl crate::emacs_core::eval::Context {
                     return None;
                 }
 
-                Some(crate::emacs_core::keymap::key_event_to_emacs_event(
-                    &crate::emacs_core::keymap::KeyEvent::Function {
-                        name,
-                        ctrl,
-                        meta,
-                        shift: false,
-                        super_,
-                        hyper,
-                        alt,
-                    },
-                ))
+                Some(
+                    crate::emacs_core::eval::keymap_lookup::key_event_to_emacs_event(
+                        &crate::emacs_core::eval::keymap_lookup::KeyEvent::Function {
+                            name,
+                            ctrl,
+                            meta,
+                            shift: false,
+                            super_,
+                            hyper,
+                            alt,
+                        },
+                    ),
+                )
             }
         }
     }
