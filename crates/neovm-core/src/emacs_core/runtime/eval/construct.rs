@@ -30,15 +30,19 @@ pub(super) fn install_scratch_root_hooks() {
     }
 }
 
-/// Install the text layer's host-free hooks (stage-3b C7).
+/// Install the text layer's host-free hooks (stage-3b C7/C8a).
 ///
-/// The text-side seam is a bool plus a plain `fn` pointer.  The enable answer
-/// is `perf_trace`'s existing env test and the recorder delegates to the same
-/// `HotpathOp` counters, so timing behavior is unchanged.
+/// The text-side seam is a bool plus plain `fn` pointers.  The enable answer
+/// is `perf_trace`'s existing env test, the recorder delegates to the same
+/// `HotpathOp` counters, and the layout hook is the display layer's exact
+/// mutation note, so behavior is unchanged on both paths.
 pub(super) fn install_text_substrate_hooks() {
     crate::emacs_core::substrate_hooks::install_perf(
         crate::emacs_core::perf_trace::hotpath_timing_enabled(),
         text_perf_record,
+    );
+    crate::emacs_core::substrate_hooks::install_layout_mutation(
+        crate::window::note_char_table_layout_mutation,
     );
 }
 
@@ -2441,8 +2445,9 @@ impl Context {
         // The buffer substrate also asks the text layer for syntax-class
         // queries through a host-free fn-pointer table (stage-3 C7).
         crate::emacs_core::syntax::install_substrate_seams();
-        // The text layer's host-free engines receive their hot-path timing
-        // hooks here as a bool plus a static fn pointer (stage-3b C7).
+        // The text layer's host-free leaves receive their hot-path timing
+        // hooks (a bool plus a static fn pointer) and the display layout note
+        // here (stage-3b C7/C8a).
         install_text_substrate_hooks();
         // Create the heap and set thread-locals so tagged constructors work
         // during evaluator initialization. The owner carries the allocation's

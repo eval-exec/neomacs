@@ -173,7 +173,7 @@ pub(crate) fn fill_char_table_from_fillarray(table: &Value, item: Value) -> Resu
         obj.set_default(item);
         obj.fill_contents(item);
     });
-    crate::window::note_char_table_layout_mutation();
+    crate::emacs_core::substrate_hooks::note_char_table_layout_mutation();
     Ok(())
 }
 /// `(char-table-p OBJ)` -- return t if OBJ is a char-table.
@@ -248,7 +248,7 @@ pub(crate) fn builtin_set_char_table_range_with_symbols(
         _ => return Err(invalid_range_error("set-char-table-range", obarray, mode)),
     }
 
-    crate::window::note_char_table_layout_mutation();
+    crate::emacs_core::substrate_hooks::note_char_table_layout_mutation();
     Ok(*value)
 }
 /// `(char-table-range CHAR-TABLE RANGE)` -- look up a value.
@@ -373,7 +373,7 @@ pub(crate) fn builtin_set_char_table_parent(args: Vec<Value>) -> EvalResult {
     }
 
     let _ = table.with_char_table_mut(|obj| obj.set_parent(*parent));
-    crate::window::note_char_table_layout_mutation();
+    crate::emacs_core::substrate_hooks::note_char_table_layout_mutation();
     Ok(*parent)
 }
 /// `(map-char-table FUNCTION CHAR-TABLE)` -- call FUNCTION for each
@@ -447,7 +447,7 @@ pub(crate) fn builtin_set_char_table_extra_slot(args: Vec<Value>) -> EvalResult 
         ));
     }
     let _ = table.with_char_table_mut(|obj| obj.set_extra(n as usize, *value));
-    crate::window::note_char_table_layout_mutation();
+    crate::emacs_core::substrate_hooks::note_char_table_layout_mutation();
     Ok(*value)
 }
 fn expect_character(value: &Value) -> Result<i64, Flow> {
