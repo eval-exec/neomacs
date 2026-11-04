@@ -799,6 +799,29 @@ fn convert_tl_node(node: &tl::Node, parser: &tl::Parser, shielded: &ShieldedHtml
             let tag = raw_tag.strip_suffix('/').unwrap_or(raw_tag.as_ref());
             let attrs = convert_tl_attributes(element.attributes());
 
+            // libxml2 routes content directly under <html> into an implicit
+            // <body>. Rebuild the html element's children through the fragment
+            // wrapper so inline content and its whitespace match GNU.
+            if tag.eq_ignore_ascii_case("html") {
+                let children = element.children();
+                let mut inner: Vec<TopNode> = Vec::new();
+                for handle in children.top().iter() {
+                    let child = handle.get(parser)?;
+                    if let Some(top) = convert_tl_top_node(child, parser, shielded) {
+                        inner.push(top);
+                    }
+                }
+                if !inner.iter().any(|node| !is_blank_text_node(node)) {
+                    return Some(make_element_node(tag, attrs, Vec::new()));
+                }
+                let built = wrap_html_fragment(inner)?;
+                let mut child_values = element_children(&built);
+                while child_values.last().is_some_and(is_blank_string) {
+                    child_values.pop();
+                }
+                return Some(make_element_node(tag, attrs, child_values));
+            }
+
             let is_rcdata_tag =
                 tag.eq_ignore_ascii_case("title") || tag.eq_ignore_ascii_case("textarea");
             let is_text_element = is_rcdata_tag
@@ -835,16 +858,15 @@ fn convert_tl_node(node: &tl::Node, parser: &tl::Parser, shielded: &ShieldedHtml
                 }
                 vals.finish()
             };
-            // libxml2 drops whitespace-only direct children of html and head.
-            let child_values =
-                if tag.eq_ignore_ascii_case("html") || tag.eq_ignore_ascii_case("head") {
-                    child_values
-                        .into_iter()
-                        .filter(|value| !is_blank_string(value))
-                        .collect()
-                } else {
-                    child_values
-                };
+            // libxml2 drops whitespace-only direct children of head.
+            let child_values = if tag.eq_ignore_ascii_case("head") {
+                child_values
+                    .into_iter()
+                    .filter(|value| !is_blank_string(value))
+                    .collect()
+            } else {
+                child_values
+            };
             Some(make_element_node(tag, attrs, child_values))
         }
     }

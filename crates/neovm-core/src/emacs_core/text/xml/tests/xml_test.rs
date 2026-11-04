@@ -1094,6 +1094,46 @@ fn libxml_parse_html_region_drops_whitespace_in_head_context() {
 }
 
 #[test]
+fn libxml_parse_html_region_routes_html_children_into_body() {
+    crate::test_utils::init_test_tracing();
+
+    // GNU 31.1: (html nil (body nil (b nil "a") " " (i nil "b")))
+    assert_eq!(
+        parse_html_region(br#"<html><b>a</b> <i>b</i></html>"#, false).unwrap(),
+        html(vec![body(vec![
+            Value::list(vec![Value::symbol("b"), Value::NIL, Value::string("a")]),
+            Value::string(" "),
+            Value::list(vec![Value::symbol("i"), Value::NIL, Value::string("b")]),
+        ])])
+    );
+
+    // GNU 31.1: (html nil (body nil (p nil "x")))
+    assert_eq!(
+        parse_html_region(br#"<html><p>x</p></html>"#, false).unwrap(),
+        html(vec![body(vec![Value::list(vec![
+            Value::symbol("p"),
+            Value::NIL,
+            Value::string("x"),
+        ])])])
+    );
+
+    // GNU 31.1: (html nil)
+    assert_eq!(
+        parse_html_region(br#"<html></html>"#, false).unwrap(),
+        Value::list(vec![Value::symbol("html"), Value::NIL])
+    );
+
+    // GNU 31.1: (html nil (body nil (b nil "a") " "))
+    assert_eq!(
+        parse_html_region(br#"<html> <b>a</b> </html>"#, false).unwrap(),
+        html(vec![body(vec![
+            Value::list(vec![Value::symbol("b"), Value::NIL, Value::string("a")]),
+            Value::string(" "),
+        ])])
+    );
+}
+
+#[test]
 fn libxml_parse_html_region_strips_a_leading_utf8_bom_like_libxml2() {
     crate::test_utils::init_test_tracing();
 
