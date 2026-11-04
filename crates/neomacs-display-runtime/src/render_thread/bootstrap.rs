@@ -81,7 +81,7 @@ impl RenderApp {
         let backend_profile =
             super::render_quality::RenderBackendProfile::from_device_type(adapter_info.device_type);
         tracing::info!(
-            "wgpu adapter: {} (vendor={:04x}, device={:04x}, type={:?}, backend={:?}, driver={:?}, driver_info={:?})",
+            "wgpu adapter: {} (vendor={:04x}, device={:04x}, type={:?}, backend={:?}, driver={}, driver_info={})",
             adapter_info.name,
             adapter_info.vendor,
             adapter_info.device,
