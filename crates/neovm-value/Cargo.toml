@@ -31,6 +31,12 @@ tracing-subscriber.workspace = true
 typed-index-collections.workspace = true
 unicode-general-category.workspace = true
 
+# Windows process/file identity (moved from core w32/security.rs, stage-4
+# W1/E3e): Foundation handles, the SID/security descriptor queries, and the
+# process-token calls.
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true
+
 # The lower layer carries the same cfg vocabulary as `neovm-core`: the moved
 # modules gate code on these names, so the features must exist here even when
 # their only effect is to select already-moved code.  No Cranelift, SQLite or

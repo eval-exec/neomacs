@@ -170,7 +170,7 @@ std::cfg_select! {
         const SECONDARY_LOGIN_ENV: &str = "USERNAME";
 
         fn windows_account() -> (PasswdEntry, i64, i64) {
-            let (login, uid, gid) = crate::emacs_core::w32::security::current_process_ownership()
+            let (login, uid, gid) = neovm_value::system_vocab::w32_security::current_process_ownership()
                 .map(|identity| {
                     (
                         identity.user.name.unwrap_or_else(|| "unknown".to_string()),

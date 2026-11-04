@@ -9,7 +9,7 @@
 #[cfg(windows)]
 pub(crate) mod filesystem;
 #[cfg(windows)]
-pub(crate) mod security;
+pub(crate) use neovm_value::system_vocab::w32_security as security;
 mod shell;
 #[cfg(windows)]
 pub(crate) use shell::w32_shell_execute;

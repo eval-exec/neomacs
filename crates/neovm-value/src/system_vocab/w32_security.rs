@@ -17,15 +17,15 @@ use windows_sys::Win32::Security::{
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct Principal {
-    pub(crate) id: i64,
-    pub(crate) name: Option<String>,
+pub struct Principal {
+    pub id: i64,
+    pub name: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct Ownership {
-    pub(crate) user: Principal,
-    pub(crate) group: Principal,
+pub struct Ownership {
+    pub user: Principal,
+    pub group: Principal,
 }
 
 struct OwnedHandle(HANDLE);
@@ -145,7 +145,7 @@ fn principal(sid: PSID) -> Option<Principal> {
 }
 
 /// Return the current process token's user and primary-group principals.
-pub(crate) fn current_process_ownership() -> Option<Ownership> {
+pub fn current_process_ownership() -> Option<Ownership> {
     let mut raw_token: HANDLE = std::ptr::null_mut();
     // SAFETY: `raw_token` is a valid out-pointer. A successful handle is
     // immediately transferred to the RAII owner below.
@@ -179,7 +179,7 @@ pub(crate) fn current_process_ownership() -> Option<Ownership> {
 /// Return the owner and primary-group principals from a file security
 /// descriptor. Failure is intentionally optional: GNU falls back to the
 /// current process identity when accurate security information is unavailable.
-pub(crate) fn file_ownership(path: &Path) -> Option<Ownership> {
+pub fn file_ownership(path: &Path) -> Option<Ownership> {
     let wide_path: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
     let requested = OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION;
     let mut required = 0u32;
