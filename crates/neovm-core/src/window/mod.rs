@@ -2077,242 +2077,6 @@ impl FrameDivider {
     }
 }
 
-impl WindowTree {
-    /// A tree whose only node is `root`.
-    ///
-    /// A childless node is the only thing a tree can be seeded with: under ids
-    /// a detached `Window` carries no subtree, so a tree is grown through
-    /// [`WindowTree::insert`] and [`WindowTree::set_children`] rather than
-    /// handed one already built.
-    pub fn new(root: Window) -> Self {
-        debug_assert!(
-            root.children().is_empty(),
-            "a tree is seeded with a childless root; its children's nodes would have nowhere to live"
-        );
-        let root_id = root.id();
-        let mut nodes = HashMap::default();
-        nodes.insert(root_id, root);
-        Self {
-            nodes,
-            root: root_id,
-        }
-    }
-
-    /// The id of this tree's root.
-    pub fn root_id(&self) -> WindowId {
-        self.root
-    }
-
-    /// The root window of this tree.
-    pub fn root(&self) -> &Window {
-        self.find(self.root)
-            .expect("a tree always holds the node its root id names")
-    }
-
-    pub fn root_mut(&mut self) -> &mut Window {
-        let root = self.root;
-        self.find_mut(root)
-            .expect("a tree always holds the node its root id names")
-    }
-
-    /// Make `id` this tree's root.  The node must already be in the tree.
-    pub fn set_root(&mut self, id: WindowId) {
-        debug_assert!(self.nodes.contains_key(&id), "root must name a held node");
-        self.root = id;
-    }
-
-    /// Find a window anywhere in this tree, by a single probe.
-    pub fn find(&self, id: WindowId) -> Option<&Window> {
-        self.nodes.get(&id)
-    }
-
-    pub fn find_mut(&mut self, id: WindowId) -> Option<&mut Window> {
-        self.nodes.get_mut(&id)
-    }
-
-    /// Take ownership of `window`, which may then be named as someone's child.
-    pub fn insert(&mut self, window: Window) {
-        self.nodes.insert(window.id(), window);
-    }
-
-    /// Drop `id`'s node from the tree entirely.
-    ///
-    /// Unlinking a window from its parent is NOT this: GNU keeps a deleted
-    /// window's struct so `windowp` still answers for it.  This is for a node
-    /// that is genuinely going away, such as one absorbed into another tree.
-    pub fn remove(&mut self, id: WindowId) -> Option<Window> {
-        self.nodes.remove(&id)
-    }
-
-    /// Whether this tree holds a node called `id` at all, linked or not.
-    pub fn contains(&self, id: WindowId) -> bool {
-        self.nodes.contains_key(&id)
-    }
-
-    /// Every node this tree holds, in no particular order, including any that
-    /// no longer hang off the root.
-    pub fn nodes(&self) -> impl Iterator<Item = &Window> {
-        self.nodes.values()
-    }
-
-    pub fn nodes_mut(&mut self) -> impl Iterator<Item = &mut Window> {
-        self.nodes.values_mut()
-    }
-
-    /// `id`'s children, in layout order.
-    pub fn child_ids(&self, id: WindowId) -> &[WindowId] {
-        self.find(id).map_or(&[], Window::children)
-    }
-
-    /// Replace `id`'s children wholesale.
-    pub fn set_children(&mut self, id: WindowId, children: Vec<WindowId>) {
-        if let Some(Window::Internal { children: slot, .. }) = self.find_mut(id) {
-            *slot = children;
-        }
-    }
-
-    /// The parent of `id`, or `None` for the root and for any node not linked
-    /// into it.
-    pub fn parent_of(&self, id: WindowId) -> Option<WindowId> {
-        self.parent_of_in(self.root, id)
-    }
-
-    fn parent_of_in(&self, node: WindowId, target: WindowId) -> Option<WindowId> {
-        let children = self.child_ids(node);
-        if children.contains(&target) {
-            return Some(node);
-        }
-        children
-            .iter()
-            .find_map(|child| self.parent_of_in(*child, target))
-    }
-
-    /// The ids of the subtree rooted at `id`, parents before children.
-    pub fn subtree_ids(&self, id: WindowId) -> Vec<WindowId> {
-        let mut out = Vec::new();
-        self.collect_subtree(id, &mut out);
-        out
-    }
-
-    fn collect_subtree(&self, id: WindowId, out: &mut Vec<WindowId>) {
-        if !self.nodes.contains_key(&id) {
-            return;
-        }
-        out.push(id);
-        for child in self.child_ids(id) {
-            self.collect_subtree(*child, out);
-        }
-    }
-
-    /// The leaf windows of this tree.
-    pub fn leaf_ids(&self) -> Vec<WindowId> {
-        self.leaf_ids_of(self.root)
-    }
-
-    /// The leaf windows of the subtree rooted at `id`.
-    pub fn leaf_ids_of(&self, id: WindowId) -> Vec<WindowId> {
-        let mut out = self.subtree_ids(id);
-        out.retain(|candidate| self.find(*candidate).is_some_and(Window::is_leaf));
-        out
-    }
-
-    pub fn leaf_count(&self) -> usize {
-        self.leaf_ids().len()
-    }
-
-    /// Apply `visit` to every node linked under the root, parents first.
-    ///
-    /// The counterpart of [`WindowTree::for_each_leaf_mut`] for the walks that
-    /// touch internal windows too, such as window parameters.
-    pub fn for_each_node_mut(&mut self, mut visit: impl FnMut(&mut Window)) {
-        for id in self.subtree_ids(self.root) {
-            if let Some(node) = self.find_mut(id) {
-                visit(node);
-            }
-        }
-    }
-
-    /// The leaf window whose rectangle covers `(px, py)`.
-    ///
-    /// Descends only into internal windows whose own rectangle contains the
-    /// point, as the inline walk did: a child never sticks out of its parent,
-    /// so a parent that misses rules out its whole subtree.
-    pub fn window_at(&self, px: f32, py: f32) -> Option<WindowId> {
-        self.window_at_in(self.root, px, py)
-    }
-
-    fn window_at_in(&self, id: WindowId, px: f32, py: f32) -> Option<WindowId> {
-        let window = self.find(id)?;
-        if !window.bounds().contains(px, py) {
-            return None;
-        }
-        if window.is_leaf() {
-            return Some(id);
-        }
-        window
-            .children()
-            .iter()
-            .find_map(|child| self.window_at_in(*child, px, py))
-    }
-
-    /// How many leaves of this tree show text sharing `root_buffer`.
-    pub fn buffer_window_count(&self, buffers: &BufferManager, root_buffer: BufferId) -> usize {
-        self.leaf_ids()
-            .into_iter()
-            .filter(|id| {
-                self.find(*id)
-                    .and_then(Window::buffer_id)
-                    .and_then(|buffer| buffers.shared_text_root_id(buffer))
-                    == Some(root_buffer)
-            })
-            .count()
-    }
-
-    /// Point every leaf showing `old_id` at `new_id` instead.
-    pub fn replace_buffer_id(&mut self, old_id: BufferId, new_id: BufferId) {
-        self.for_each_leaf_mut(|leaf| leaf.replace_buffer_id(old_id, new_id));
-    }
-
-    /// Invalidate redisplay-derived window-end state across this tree.
-    pub fn invalidate_display_state(&mut self) {
-        self.for_each_leaf_mut(Window::invalidate_display_state);
-    }
-
-    /// Drop hscroll derived from the previous geometry across this tree.
-    pub fn invalidate_automatic_hscroll_for_geometry_change(&mut self) {
-        self.for_each_leaf_mut(Window::invalidate_automatic_hscroll_for_geometry_change);
-    }
-
-    /// Apply `visit` to every leaf of this tree, one leaf at a time.
-    ///
-    /// The leaves are enumerated before any of them is handed out, so no two
-    /// nodes are borrowed at once.  That is what lets a walk over the tree
-    /// stay flat rather than recursing through `&mut Window`, and it is the
-    /// shape that survives children becoming ids: a node is then reached by a
-    /// lookup, and a lookup cannot be taken while a sibling is still borrowed.
-    pub fn for_each_leaf_mut(&mut self, mut visit: impl FnMut(&mut Window)) {
-        // Walk the tree once. `leaf_ids` built a vector of every id in the
-        // subtree, looked each one up to drop the internal ones, and then this
-        // looked every survivor up again -- three passes and an allocation for
-        // what is usually one window, on a path every buffer edit runs
-        // (`sync_window_positions_from_markers`).
-        let mut pending: smallvec::SmallVec<[WindowId; 8]> = smallvec::SmallVec::new();
-        pending.push(self.root);
-        while let Some(id) = pending.pop() {
-            let Some(node) = self.nodes.get_mut(&id) else {
-                continue;
-            };
-            match node {
-                Window::Leaf { .. } => visit(node),
-                // Reversed, so popping yields the children left to right and
-                // the leaves arrive in the same preorder `leaf_ids` produced
-                // -- the order in which a clone attaches its markers.
-                Window::Internal { children, .. } => pending.extend(children.iter().rev().copied()),
-            }
-        }
-    }
-}
-
 /// A frame (top-level window/screen).
 pub struct Frame {
     /// GNU `f->change_stamp`: the epoch bumped each time the window change
@@ -7227,41 +6991,6 @@ pub fn window_resize_apply_total(
     }
 }
 
-impl WindowTree {
-    /// The rectangles `parent`'s children should occupy inside `bounds`, in
-    /// child order.
-    ///
-    /// Reading each child's extent finishes before any of them is written, so
-    /// no two nodes are borrowed at once.  The arithmetic itself lives in
-    /// [`sibling_layout`], where it is testable without a window tree.
-    fn sibling_bounds_of(&self, parent: WindowId, bounds: Rect) -> Vec<Rect> {
-        let extents: Vec<ChildExtent> = self
-            .child_ids(parent)
-            .iter()
-            .filter_map(|child| self.find(*child))
-            .map(|child| ChildExtent {
-                bounds: *child.bounds(),
-                fixed_width_cols: child.fixed_width_cols(),
-                fixed_height_lines: child.fixed_height_lines(),
-            })
-            .collect();
-        sibling_bounds(bounds, &extents)
-    }
-
-    /// Give `parent`'s children their share of `bounds`, without descending.
-    fn redistribute_bounds(&mut self, parent: WindowId, bounds: Rect) {
-        let children = self.child_ids(parent).to_vec();
-        for (child, rect) in children
-            .into_iter()
-            .zip(self.sibling_bounds_of(parent, bounds))
-        {
-            if let Some(node) = self.find_mut(child) {
-                node.set_bounds(rect);
-            }
-        }
-    }
-}
-
 fn resize_window_subtree(tree: &mut WindowTree, window: WindowId, bounds: Rect) {
     let Some(node) = tree.find_mut(window) else {
         return;
@@ -7466,3 +7195,38 @@ mod eob_overlay_motion_tests;
 #[cfg(test)]
 #[path = "tests/resize_commit_test.rs"]
 mod resize_commit_tests;
+
+impl WindowTree {
+    /// The rectangles `parent`'s children should occupy inside `bounds`, in
+    /// child order.
+    ///
+    /// Reading each child's extent finishes before any of them is written, so
+    /// no two nodes are borrowed at once.  The arithmetic itself lives in
+    /// [`sibling_layout`], where it is testable without a window tree.
+    fn sibling_bounds_of(&self, parent: WindowId, bounds: Rect) -> Vec<Rect> {
+        let extents: Vec<ChildExtent> = self
+            .child_ids(parent)
+            .iter()
+            .filter_map(|child| self.find(*child))
+            .map(|child| ChildExtent {
+                bounds: *child.bounds(),
+                fixed_width_cols: child.fixed_width_cols(),
+                fixed_height_lines: child.fixed_height_lines(),
+            })
+            .collect();
+        sibling_bounds(bounds, &extents)
+    }
+
+    /// Give `parent`'s children their share of `bounds`, without descending.
+    fn redistribute_bounds(&mut self, parent: WindowId, bounds: Rect) {
+        let children = self.child_ids(parent).to_vec();
+        for (child, rect) in children
+            .into_iter()
+            .zip(self.sibling_bounds_of(parent, bounds))
+        {
+            if let Some(node) = self.find_mut(child) {
+                node.set_bounds(rect);
+            }
+        }
+    }
+}
