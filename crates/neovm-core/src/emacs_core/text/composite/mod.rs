@@ -16,6 +16,9 @@ use neovm_value::error::LispCondition;
 use neovm_value::error::{EvalResult, Flow, signal};
 use neovm_value::error::{expect_args, expect_args_range, expect_max_args};
 use neovm_value::value::ValueKind;
+use neovm_value::value::scratch_bridge::{
+    push_scratch_gc_root, restore_scratch_gc_roots, save_scratch_gc_roots,
+};
 use neovm_value::value::*;
 use unicode_general_category::GeneralCategory;
 
@@ -450,13 +453,13 @@ fn composition_register_prop(
     relative_p: bool,
 ) -> i64 {
     let id = composition_assign_id(&key, relative_p);
-    let saved = super::eval::save_scratch_gc_roots();
-    super::eval::push_scratch_gc_root(key);
-    super::eval::push_scratch_gc_root(mod_func);
+    let saved = save_scratch_gc_roots();
+    push_scratch_gc_root(key);
+    push_scratch_gc_root(mod_func);
     let new_cdr = Value::cons(Value::fixnum(length), Value::cons(key, mod_func));
     prop.set_car(Value::fixnum(id));
     prop.set_cdr(new_cdr);
-    super::eval::restore_scratch_gc_roots(saved);
+    restore_scratch_gc_roots(saved);
     id
 }
 
