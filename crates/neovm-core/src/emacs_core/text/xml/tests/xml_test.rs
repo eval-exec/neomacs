@@ -452,6 +452,110 @@ fn libxml_parse_html_region_routes_head_elements_and_transitions_to_body() {
 }
 
 #[test]
+fn libxml_parse_html_region_handles_xml_prolog_and_doctype() {
+    crate::test_utils::init_test_tracing();
+
+    // GNU libxml2 skips XML declaration and <!DOCTYPE ...> in html mode,
+    // or records <?xml ...?> as a comment when comments are preserved.
+    // In `tl`, an unhandled <?xml ...?> produces a corrupted tag named `##`.
+    let html_with_prolog = br#"<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE html>
+<html><body><p>Hello</p></body></html>"#;
+
+    // Discard comments: prolog and DOCTYPE are stripped, clean html tree returned.
+    let parsed_discard = parse_html_region(html_with_prolog, true).unwrap();
+    assert_eq!(
+        parsed_discard,
+        html(vec![body(vec![Value::list(vec![
+            Value::symbol("p"),
+            Value::NIL,
+            Value::string("Hello"),
+        ])])])
+    );
+
+    // Keep comments: prolog is preserved as a comment node.
+    let parsed_keep = parse_html_region(html_with_prolog, false).unwrap();
+    let expected_keep = Value::list(vec![
+        Value::symbol("top"),
+        Value::NIL,
+        Value::list(vec![
+            Value::symbol("comment"),
+            Value::NIL,
+            Value::string(r#"?xml version="1.0" encoding="utf-8"?"#),
+        ]),
+        html(vec![body(vec![Value::list(vec![
+            Value::symbol("p"),
+            Value::NIL,
+            Value::string("Hello"),
+        ])])]),
+    ]);
+    assert_eq!(parsed_keep, expected_keep);
+}
+
+#[test]
+fn libxml_parse_html_region_preserves_raw_content_in_style_and_script() {
+    crate::test_utils::init_test_tracing();
+
+    let doc = br#"<html><head><style>body { color: red; margin: 0; }</style><script>var x = 1; window.alert(x);</script></head><body><p>Text</p></body></html>"#;
+    let parsed = parse_html_region(doc, false).unwrap();
+
+    let expected = html(vec![
+        Value::list(vec![
+            Value::symbol("head"),
+            Value::NIL,
+            Value::list(vec![
+                Value::symbol("style"),
+                Value::NIL,
+                Value::string("body { color: red; margin: 0; }"),
+            ]),
+            Value::list(vec![
+                Value::symbol("script"),
+                Value::NIL,
+                Value::string("var x = 1; window.alert(x);"),
+            ]),
+        ]),
+        body(vec![Value::list(vec![
+            Value::symbol("p"),
+            Value::NIL,
+            Value::string("Text"),
+        ])]),
+    ]);
+    assert_eq!(parsed, expected);
+}
+
+#[test]
+fn libxml_parse_html_region_strips_comment_delimiters() {
+    crate::test_utils::init_test_tracing();
+
+    let doc = br#"<div><!-- simple comment --></div>"#;
+
+    // Discard comments: comment is ignored.
+    let parsed_discard = parse_html_region(doc, true).unwrap();
+    assert_eq!(
+        parsed_discard,
+        html(vec![body(vec![Value::list(vec![
+            Value::symbol("div"),
+            Value::NIL,
+        ])])])
+    );
+
+    // Keep comments: <!-- and --> are stripped from the comment text.
+    let parsed_keep = parse_html_region(doc, false).unwrap();
+    assert_eq!(
+        parsed_keep,
+        html(vec![body(vec![Value::list(vec![
+            Value::symbol("div"),
+            Value::NIL,
+            Value::list(vec![
+                Value::symbol("comment"),
+                Value::NIL,
+                Value::string(" simple comment "),
+            ]),
+        ])])])
+    );
+}
+
+#[test]
 fn zlib_available_p_returns_true() {
     crate::test_utils::init_test_tracing();
     assert_eq!(
