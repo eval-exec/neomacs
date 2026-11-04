@@ -1653,7 +1653,7 @@ impl Context {
         }
 
         super::super::textprop::init_textprop_vars(obarray);
-        super::super::syntax::init_syntax_vars(obarray, custom);
+        super::super::syntax::init_syntax_vars(obarray);
         // Register all DEFVAR_PER_BUFFER variables from GNU Emacs buffer.c.
         // These are C-level buffer-local variables that must exist before
         // any .el file loads.  Default values match init_buffer_once().

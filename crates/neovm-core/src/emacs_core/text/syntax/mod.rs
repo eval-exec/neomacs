@@ -338,10 +338,7 @@ impl SexpScanPolicy {
 // `syntax-table` continues to signal void-variable as in GNU.
 
 /// Pre-populate GNU Emacs syntax variables that are defined from C.
-pub fn init_syntax_vars(
-    obarray: &mut neovm_value::symbol::Obarray,
-    _custom: &mut super::custom::CustomManager,
-) {
+pub fn init_syntax_vars(obarray: &mut neovm_value::symbol::Obarray) {
     obarray.define_int_variable("syntax-propertize--done", -1);
     obarray.seed_value(
         "find-word-boundary-function-table",
@@ -1558,7 +1555,7 @@ fn word_motion_with_table<H: TextHost>(
         let mut handled = false;
         let callable = match func.as_symbol_id(symbol_mode) {
             Some(id) => eval.variables().obarray().fboundp_id(id),
-            None => super::subr_info::subr_is_callable_function_value(&func),
+            None => eval.subr_is_callable_function_value(&func),
         };
         if callable
             && let Ok(result) =

@@ -296,6 +296,10 @@ impl EditHost for Context {
         Context::safe_funcall(self, function, LispArgVec::from_slice(args))
     }
 
+    fn subr_is_callable_function_value(&self, value: &Value) -> bool {
+        crate::emacs_core::subr_info::subr_is_callable_function_value(value)
+    }
+
     fn lisp_backtrace(&mut self, max_frames: usize) -> String {
         Context::render_lisp_backtrace(self, max_frames)
     }

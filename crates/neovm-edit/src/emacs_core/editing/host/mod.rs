@@ -278,6 +278,11 @@ pub trait EditHost {
     /// syntax-propertize hook (stage-3b T6.0 thin addition).
     fn safe_funcall(&mut self, function: Value, args: &[Value]) -> EvalResult;
 
+    /// Whether VALUE is a callable non-special-form function (GNU
+    /// `SUBRP`/`Ffuncall` dispatch class): the subr registry decides, so
+    /// this is an eval service. Stage-3b C5 row, homed here per T6.0.
+    fn subr_is_callable_function_value(&self, value: &Value) -> bool;
+
     /// Render the live Lisp backtrace for diagnostics (GNU `backtrace`
     /// shape, bounded to MAX_FRAMES). Added for the text layer's
     /// parse-partial-sexp observability hook (stage-3b T6.0 thin addition).
