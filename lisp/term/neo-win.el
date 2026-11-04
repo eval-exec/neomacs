@@ -730,7 +730,7 @@ Applied at the render level."
 
 (defvar-local neomacs-cursor-effect nil
   "Per-buffer cursor effect profile.
-The value is one entry or a list of entries in `neomacs-effects' format.
+The value is one (EFFECT :PROPERTY VALUE ...) entry or a list of them.
 Only cursor effects are used when rendering this buffer's cursor.")
 
 ;; Provide the feature
