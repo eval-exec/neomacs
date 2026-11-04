@@ -5,17 +5,15 @@
 //! - `string-clean-whitespace` — collapse whitespace and trim
 //! - `string-pixel-width` — batch-compatible display-column width
 
-use super::timefns::zone_offset_name_for_time;
 use neovm_value::error::LispCondition;
-use neovm_value::error::expect_min_args;
-use neovm_value::error::{EvalResult, Flow, signal};
+use neovm_value::error::{Flow, signal};
 use neovm_value::value::*;
 
 // ---------------------------------------------------------------------------
 // Argument helpers
 // ---------------------------------------------------------------------------
 
-fn require_string(_name: &str, val: &Value) -> Result<String, Flow> {
+pub(crate) fn require_string(_name: &str, val: &Value) -> Result<String, Flow> {
     val.as_lisp_string()
         .map(|ls| crate::emacs_core::emacs_char::to_utf8_lossy(ls.as_bytes()))
         .ok_or_else(|| {
@@ -31,7 +29,7 @@ fn require_string(_name: &str, val: &Value) -> Result<String, Flow> {
 // ---------------------------------------------------------------------------
 
 /// Broken-down time fields computed from a Unix timestamp.
-struct BrokenDownTime {
+pub(crate) struct BrokenDownTime {
     year: i64,
     month: u32,   // 1..=12
     day: u32,     // 1..=31
@@ -109,7 +107,7 @@ fn iso_week_year_and_number(tm: &BrokenDownTime) -> (i64, i32) {
 
 /// Convert a Unix timestamp (seconds since 1970-01-01 00:00:00 UTC) into
 /// broken-down UTC time fields.  No external crate needed.
-fn unix_to_broken_down(timestamp: i64) -> BrokenDownTime {
+pub(crate) fn unix_to_broken_down(timestamp: i64) -> BrokenDownTime {
     // Handle negative timestamps (before epoch).
     let remaining = timestamp;
     let second_of_day;
@@ -246,53 +244,8 @@ fn modifier_accepted_by(modifier: char, conversion: char) -> bool {
     }
 }
 
-/// `(format-time-string FORMAT-STRING &optional TIME ZONE)` -- format time
-/// like C `strftime`.
-///
-/// Supported directives:
-/// `%Y` year, `%m` month (01-12), `%d` day (01-31), `%H` hour (00-23),
-/// `%M` minute (00-59), `%S` second (00-60), `%A` full day name,
-/// `%a` abbreviated day name, `%B` full month name, `%b`/`%h` abbreviated
-/// month name, `%Z` timezone name, `%z` numeric timezone offset,
-/// `%j` day of year (001-366), `%e` day space-padded, `%k` hour space-padded,
-/// `%l` 12-hour space-padded, `%I` 12-hour zero-padded, `%p` AM/PM,
-/// `%P` am/pm, `%n` newline, `%t` tab, `%%` literal `%`.
-///
-/// If TIME is nil, uses current system time.  ZONE follows GNU Emacs
-/// `format-time-string`.
-pub(crate) fn builtin_format_time_string(args: Vec<Value>) -> EvalResult {
-    expect_min_args("format-time-string", &args, 1)?;
-    if args.len() > 3 {
-        return Err(signal(
-            LispCondition::WrongNumberOfArguments,
-            vec![
-                Value::symbol("format-time-string"),
-                Value::fixnum(args.len() as i64),
-            ],
-        ));
-    }
-
-    let format_str = require_string("format-time-string", &args[0])?;
-
-    // Determine timestamp. Use the shared time-value parser so every Lisp time
-    // form ((TICKS . HZ), (HIGH LOW USEC PSEC), integer, float, nil) decodes
-    // identically to the other time functions, and so the subsecond fraction
-    // is available for the `%N' directive (GNU passes `t.tv_nsec' to nstrftime,
-    // src/timefns.c:1391).
-    let (timestamp, nanos): (i64, i64) = if args.len() >= 2 && !args[1].is_nil() {
-        neovm_value::time_core::time_value_seconds_and_nanos(&args[1])?
-    } else {
-        (current_unix_timestamp(), 0)
-    };
-
-    let (offset_secs, zone_name) = zone_offset_name_for_time(args.get(2), timestamp)?;
-    let tm = unix_to_broken_down(timestamp.saturating_add(offset_secs));
-    let formatted = format_time(&format_str, &tm, timestamp, offset_secs, &zone_name, nanos);
-    Ok(Value::string(formatted))
-}
-
 /// Get current Unix timestamp using `std::time::SystemTime`.
-fn current_unix_timestamp() -> i64 {
+pub(crate) fn current_unix_timestamp() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -432,7 +385,7 @@ fn do_text(result: &mut String, flags: &DirectiveFlags, to_lowcase: bool, s: &st
 
 /// Format a broken-down time according to a strftime-like format string,
 /// mirroring GNU's `__strftime_internal` (`lib/strftime.c`).
-fn format_time(
+pub(crate) fn format_time(
     fmt: &str,
     tm: &BrokenDownTime,
     timestamp: i64,

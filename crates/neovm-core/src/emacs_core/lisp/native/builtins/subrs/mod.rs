@@ -7677,7 +7677,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "format-time-string",
         NativeFn::ContextVec(|_ctx, args| {
-            crate::emacs_core::format::builtin_format_time_string(args)
+            crate::emacs_core::format_time_entries::builtin_format_time_string(args)
         }),
         SubrArity::new(1, Some(3)),
     )));

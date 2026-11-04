@@ -1,5 +1,5 @@
 use super::*;
-use crate::emacs_core::format::builtin_format_time_string;
+use crate::emacs_core::format_time_entries::builtin_format_time_string;
 /// GNU 31.1's answer to FORM, saved as `tsb-NAME.expect` beside this file.
 ///
 /// `UPDATE_EXPECT=1` refreshes the fixture from the GNU binary in `EMACS`

@@ -21,6 +21,8 @@ pub mod buffer_ops;
 pub mod chartable_entries;
 #[path = "commands/command_observation/mod.rs"]
 pub(crate) mod command_observation;
+#[path = "commands/format_time_entries/mod.rs"]
+pub mod format_time_entries;
 #[path = "commands/identity_commands/mod.rs"]
 pub mod identity_commands;
 #[path = "commands/interactive/mod.rs"]
