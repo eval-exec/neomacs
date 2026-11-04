@@ -39,16 +39,20 @@ pub(crate) use menu_bar_items::{builtin_menu_bar_menu_at_x_y, menu_bar_top_level
 // Keymap lookup substrate moved to the eval manifest (stage-4 W1/E4).
 // Core command modules keep the historical paths through this re-export.
 pub use crate::emacs_core::eval::keymap_lookup::{
-    KeyEvent, KeymapElement, KeymapLookupEvent, KeymapMarker, KeymapMutationEpoch,
-    KeymapResolution, MenuItemProperty, emacs_event_to_key_event, for_each_keymap_element,
-    get_keyelt, get_keyelt_runtime, get_keymap_in_obarray, is_keymap_autoload_form, is_list_keymap,
+    ActiveKeyBindingResolution, DefaultBindingMode, KeyEvent, KeymapElement, KeymapLookupEvent,
+    KeymapMarker, KeymapMutationEpoch, KeymapResolution, KeymapStateVariable, MenuItemProperty,
+    dynamic_buffer_or_global_symbol_value_by_sym_id_in_state, emacs_event_to_key_event,
+    expand_meta_prefix_char_events_in_obarray, for_each_keymap_element, get_keyelt,
+    get_keyelt_runtime, get_keymap_in_obarray, is_keymap_autoload_form, is_list_keymap,
     key_event_to_emacs_event, keymap_binding_spine, keymap_mutation_epoch, keymap_symbol_id,
     list_keymap_access_with_event, list_keymap_for_each_binding,
     list_keymap_for_each_binding_recursive, list_keymap_lookup_one,
     list_keymap_lookup_one_in_obarray, list_keymap_lookup_one_noinherit,
-    list_keymap_lookup_one_t_ok_in_obarray, list_keymap_lookup_one_unresolved,
+    list_keymap_lookup_one_runtime, list_keymap_lookup_one_t_ok_in_obarray,
+    list_keymap_lookup_one_unresolved, list_keymap_lookup_seq, lookup_key_in_keymaps_in_obarray,
+    lookup_key_in_keymaps_in_obarray_runtime, lookup_key_in_obarray, lookup_key_in_obarray_runtime,
     maybe_keymap_in_obarray, note_keymap_mutation, resolve_indirect_function_by_id_in_obarray,
-    resolve_keymap_or_autoload,
+    resolve_keymap_or_autoload, resolve_prefix_keymap_binding_in_obarray,
 };
 
 /// Lisp variables whose values are native inputs to GNU's active-keymap
@@ -59,69 +63,6 @@ pub use crate::emacs_core::eval::keymap_lookup::{
 /// Neomacs identities behind a closed enum prevents hot callers from falling
 /// back to string-based lookup and makes every newly modeled variable choose a
 /// cache slot at compile time.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, IntoStaticStr)]
-#[strum(serialize_all = "kebab-case")]
-enum KeymapStateVariable {
-    EmulationModeMapAlists,
-    MetaPrefixChar,
-    MinorModeMapAlist,
-    MinorModeOverridingMapAlist,
-    OverridingLocalMap,
-    OverridingLocalMapMenuFlag,
-    OverridingTerminalLocalMap,
-}
-
-impl KeymapStateVariable {
-    fn symbol_id(self) -> SymId {
-        use std::sync::OnceLock;
-
-        static EMULATION_MODE_MAP_ALISTS: OnceLock<SymId> = OnceLock::new();
-        static META_PREFIX_CHAR: OnceLock<SymId> = OnceLock::new();
-        static MINOR_MODE_MAP_ALIST: OnceLock<SymId> = OnceLock::new();
-        static MINOR_MODE_OVERRIDING_MAP_ALIST: OnceLock<SymId> = OnceLock::new();
-        static OVERRIDING_LOCAL_MAP: OnceLock<SymId> = OnceLock::new();
-        static OVERRIDING_LOCAL_MAP_MENU_FLAG: OnceLock<SymId> = OnceLock::new();
-        static OVERRIDING_TERMINAL_LOCAL_MAP: OnceLock<SymId> = OnceLock::new();
-
-        match self {
-            Self::EmulationModeMapAlists => {
-                *EMULATION_MODE_MAP_ALISTS.get_or_init(|| intern(self.into()))
-            }
-            Self::MetaPrefixChar => *META_PREFIX_CHAR.get_or_init(|| intern(self.into())),
-            Self::MinorModeMapAlist => *MINOR_MODE_MAP_ALIST.get_or_init(|| intern(self.into())),
-            Self::MinorModeOverridingMapAlist => {
-                *MINOR_MODE_OVERRIDING_MAP_ALIST.get_or_init(|| intern(self.into()))
-            }
-            Self::OverridingLocalMap => *OVERRIDING_LOCAL_MAP.get_or_init(|| intern(self.into())),
-            Self::OverridingLocalMapMenuFlag => {
-                *OVERRIDING_LOCAL_MAP_MENU_FLAG.get_or_init(|| intern(self.into()))
-            }
-            Self::OverridingTerminalLocalMap => {
-                *OVERRIDING_TERMINAL_LOCAL_MAP.get_or_init(|| intern(self.into()))
-            }
-        }
-    }
-
-    fn global_value(self, vars: VariableView<'_>) -> Option<Value> {
-        vars.value(self.symbol_id())
-    }
-
-    fn buffer_or_global_value(
-        self,
-        vars: VariableView<'_>,
-        buffers: &crate::buffer::BufferManager,
-        buffer_id: Option<crate::buffer::BufferId>,
-    ) -> Option<Value> {
-        dynamic_buffer_or_global_symbol_value_by_sym_id_in_state(
-            vars,
-            &[],
-            buffers,
-            buffer_id,
-            self.symbol_id(),
-        )
-    }
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq, EnumString, IntoStaticStr)]
 #[strum(prefix = ":", serialize_all = "kebab-case")]
 pub enum MenuButtonKind {
@@ -496,224 +437,6 @@ pub(crate) fn builtin_keymap_get_keyelt(eval: &mut Context, args: Vec<Value>) ->
 /// menu-item `:filter` runs, and a filter result that is a prefix keymap is
 /// composed with the parent chain's prefix for the same event before the walk
 /// descends.
-pub(crate) fn list_keymap_lookup_one_runtime(
-    ctx: &mut Context,
-    keymap: &Value,
-    event: &Value,
-    t_ok: bool,
-) -> Result<Value, Flow> {
-    let symbol_mode = ctx.symbol_mode();
-    let mut resolution: &mut Context = ctx;
-    list_keymap_access_with_event(
-        keymap,
-        KeymapLookupEvent::from_event(*event, symbol_mode),
-        false,
-        t_ok,
-        true,
-        &mut resolution,
-        symbol_mode,
-    )
-}
-
-pub(crate) fn expand_meta_prefix_char_events_in_obarray(
-    vars: VariableView<'_>,
-    events: &[Value],
-    symbol_mode: SymbolMode,
-) -> Option<Vec<Value>> {
-    let meta_prefix = KeymapStateVariable::MetaPrefixChar
-        .global_value(vars)
-        .and_then(|v| v.as_fixnum())?;
-
-    let mut changed = false;
-    let mut expanded = Vec::with_capacity(events.len() + 1);
-    for event in events {
-        match symbol_mode.unwrap(*event).kind() {
-            ValueKind::Fixnum(code) if (code & KEY_CHAR_META) != 0 => {
-                changed = true;
-                expanded.push(Value::fixnum(meta_prefix));
-                expanded.push(Value::fixnum(code & !KEY_CHAR_META));
-            }
-            _ => expanded.push(*event),
-        }
-    }
-
-    changed.then_some(expanded)
-}
-
-pub(crate) fn resolve_prefix_keymap_binding_in_obarray(
-    obarray: &Obarray,
-    binding: &Value,
-    symbol_mode: SymbolMode,
-) -> Option<Value> {
-    if is_list_keymap(binding, symbol_mode) {
-        return Some(*binding);
-    }
-    maybe_keymap_in_obarray(obarray, binding, symbol_mode)
-}
-
-pub(crate) fn lookup_key_in_obarray(
-    obarray: &Obarray,
-    keymap: &Value,
-    events: &[Value],
-    t_ok: bool,
-    symbol_mode: SymbolMode,
-) -> Value {
-    if events.is_empty() {
-        return *keymap;
-    }
-
-    let mut current_map = *keymap;
-    for (i, event) in events.iter().enumerate() {
-        let binding = if t_ok {
-            list_keymap_lookup_one_t_ok_in_obarray(&current_map, event, obarray, symbol_mode)
-        } else {
-            list_keymap_lookup_one_in_obarray(&current_map, event, obarray, symbol_mode)
-        };
-        let is_last = i == events.len() - 1;
-
-        if is_last {
-            return binding;
-        }
-
-        if binding.is_nil() {
-            return Value::fixnum((i + 1) as i64);
-        }
-
-        if let Some(prefix_keymap) =
-            resolve_prefix_keymap_binding_in_obarray(obarray, &binding, symbol_mode)
-        {
-            current_map = prefix_keymap;
-            continue;
-        }
-
-        return Value::fixnum((i + 1) as i64);
-    }
-
-    Value::NIL
-}
-
-pub(crate) fn lookup_key_in_keymaps_in_obarray(
-    vars: VariableView<'_>,
-    keymaps: &[Value],
-    events: &[Value],
-    t_ok: bool,
-    symbol_mode: SymbolMode,
-) -> Value {
-    let obarray = vars.obarray();
-    if events.is_empty() {
-        return keymaps.first().copied().unwrap_or(Value::NIL);
-    }
-
-    let mut best = Value::NIL;
-    for keymap in keymaps {
-        let direct = lookup_key_in_obarray(obarray, keymap, events, t_ok, symbol_mode);
-        if !direct.is_nil() && !direct.is_fixnum() {
-            return direct;
-        }
-
-        if let Some(expanded) = expand_meta_prefix_char_events_in_obarray(vars, events, symbol_mode)
-        {
-            let expanded_result =
-                lookup_key_in_obarray(obarray, keymap, &expanded, t_ok, symbol_mode);
-            if !expanded_result.is_nil() && !expanded_result.is_fixnum() {
-                return expanded_result;
-            }
-        }
-
-        if best.is_nil() {
-            best = direct;
-        }
-    }
-
-    best
-}
-
-pub(crate) fn lookup_key_in_obarray_runtime(
-    ctx: &mut Context,
-    keymap: Value,
-    events: &[Value],
-    t_ok: bool,
-) -> EvalResult {
-    let symbol_mode = ctx.symbol_mode();
-    if events.is_empty() {
-        return Ok(keymap);
-    }
-
-    let mut current_map = keymap;
-    for (i, event) in events.iter().enumerate() {
-        // GNU access_keymap resolves `get_keyelt (def, autoload)` inside the
-        // walk, so a menu-item's filter result is what the prefix decision
-        // sees, and a filter that returns a prefix keymap still composes with
-        // the parent chain's prefix for the same event.  The runtime step does
-        // both; the old order (compose raw, resolve after) dropped the parent
-        // branch every time a package rebinds a prefix through a filter.
-        let is_last = i == events.len() - 1;
-        let binding = list_keymap_lookup_one_runtime(ctx, &current_map, event, t_ok)?;
-
-        if is_last {
-            return Ok(binding);
-        }
-
-        if binding.is_nil() {
-            return Ok(Value::fixnum((i + 1) as i64));
-        }
-
-        if let Some(prefix_keymap) =
-            resolve_prefix_keymap_binding_in_obarray(&ctx.obarray, &binding, symbol_mode)
-        {
-            current_map = prefix_keymap;
-            continue;
-        }
-
-        return Ok(Value::fixnum((i + 1) as i64));
-    }
-
-    Ok(Value::NIL)
-}
-
-pub(crate) fn lookup_key_in_keymaps_in_obarray_runtime(
-    ctx: &mut Context,
-    keymaps: &[Value],
-    events: &[Value],
-    t_ok: bool,
-) -> EvalResult {
-    let symbol_mode = ctx.symbol_mode();
-    if events.is_empty() {
-        return Ok(keymaps.first().copied().unwrap_or(Value::NIL));
-    }
-
-    let mut best = Value::NIL;
-    for keymap in keymaps {
-        let direct = lookup_key_in_obarray_runtime(ctx, *keymap, events, t_ok)?;
-        if !direct.is_nil() && !direct.is_fixnum() {
-            return Ok(direct);
-        }
-
-        if let Some(expanded) =
-            expand_meta_prefix_char_events_in_obarray(ctx.variables(), events, symbol_mode)
-        {
-            let expanded_result = lookup_key_in_obarray_runtime(ctx, *keymap, &expanded, t_ok)?;
-            if !expanded_result.is_nil() && !expanded_result.is_fixnum() {
-                return Ok(expanded_result);
-            }
-        }
-
-        if best.is_nil() {
-            best = direct;
-        }
-    }
-
-    Ok(best)
-}
-
-/// Define a binding in a keymap.
-///
-/// For integer events without modifier bits in full keymaps: stores in char-table.
-/// Otherwise: updates existing alist entry in-place or prepends `(event . def)`.
-///
-/// When `remove` is true, removes the binding entry from the alist (or
-/// stores nil in char-table), matching GNU keymap.c `store_in_keymap` with
-/// `remove=true`.
 pub fn list_keymap_define(keymap: Value, event: Value, def: Value, symbol_mode: SymbolMode) {
     note_keymap_mutation();
     store_in_keymap(keymap, event, def, false, symbol_mode);
@@ -1067,22 +790,6 @@ pub fn list_keymap_inherits_from(keymap: &Value, target: &Value, symbol_mode: Sy
         current = list_keymap_parent(&current, symbol_mode);
     }
     false
-}
-
-fn dynamic_buffer_or_global_symbol_value_by_sym_id_in_state(
-    vars: VariableView<'_>,
-    _dynamic: &[OrderedRuntimeBindingMap],
-    buffers: &crate::buffer::BufferManager,
-    buffer_id: Option<crate::buffer::BufferId>,
-    sym_id: SymId,
-) -> Option<Value> {
-    if let Some(buffer_id) = buffer_id
-        && let Some(buf) = buffers.get(buffer_id)
-        && let Some(value) = buf.get_buffer_local_by_sym_id(sym_id)
-    {
-        return Some(value);
-    }
-    vars.value(sym_id)
 }
 
 pub(crate) fn minor_mode_map_entry(
@@ -1934,40 +1641,6 @@ pub(crate) fn current_active_maps_for_position_read_only(
     )
 }
 
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct ActiveKeyBindingResolution {
-    pub lookup: Value,
-    pub binding: Value,
-}
-
-/// Whether `(t . BINDING)` entries participate in active keymap lookup.
-///
-/// GNU's command reader always accepts these catch-all bindings, while Lisp
-/// inspection APIs such as `key-binding` expose an `ACCEPT-DEFAULT` argument.
-/// Keeping those two modes distinct in the type system prevents command
-/// dispatch from accidentally inheriting the inspection API's default.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum DefaultBindingMode {
-    Ignore,
-    Accept,
-}
-
-impl DefaultBindingMode {
-    fn accepts_default(self) -> bool {
-        matches!(self, Self::Accept)
-    }
-}
-
-impl From<bool> for DefaultBindingMode {
-    fn from(accept_default: bool) -> Self {
-        if accept_default {
-            Self::Accept
-        } else {
-            Self::Ignore
-        }
-    }
-}
-
 pub(crate) fn is_plain_printable_emacs_event(event: &Value) -> bool {
     let Some(ch) = (match event.kind() {
         ValueKind::Fixnum(code) if (code & KEY_CHAR_MOD_MASK) == 0 => char::from_u32(code as u32),
@@ -2459,118 +2132,6 @@ pub(crate) fn key_binding_apply_remap_in_active_maps(
 /// Look up a key sequence in a keymap, following prefix keymaps and parent chains.
 /// Returns the binding Value, or the number of keys matched (as `Value::Int`)
 /// when the sequence resolves through a non-keymap binding.
-pub fn list_keymap_lookup_seq(keymap: &Value, events: &[Value], symbol_mode: SymbolMode) -> Value {
-    list_keymap_lookup_seq_impl(keymap, events, true, symbol_mode)
-}
-
-fn list_keymap_lookup_seq_impl(
-    keymap: &Value,
-    events: &[Value],
-    resolve_keyelt: bool,
-    symbol_mode: SymbolMode,
-) -> Value {
-    if events.is_empty() {
-        return *keymap;
-    }
-
-    if let Some(binding) =
-        list_keymap_lookup_composed_seq(keymap, events, resolve_keyelt, symbol_mode)
-    {
-        return binding;
-    }
-
-    let mut current_map = *keymap;
-    for (i, event) in events.iter().enumerate() {
-        let binding = if resolve_keyelt {
-            list_keymap_lookup_one(&current_map, event, symbol_mode)
-        } else {
-            list_keymap_lookup_one_unresolved(&current_map, event, symbol_mode)
-        };
-        let is_last = i == events.len() - 1;
-        if is_last {
-            // GNU: for the last key, return binding directly (even nil)
-            return binding;
-        }
-        if binding.is_nil() {
-            // No binding for a non-last event → return the number of keys
-            // consumed (matching GNU which returns make_fixnum(idx) where
-            // idx is already post-incremented).
-            return Value::fixnum((i + 1) as i64);
-        }
-        // Must be a prefix keymap to continue
-        if is_list_keymap(&binding, symbol_mode) {
-            current_map = binding;
-        } else {
-            // Check if it's a symbol whose function cell is a keymap
-            if let Some(sym_name) = binding.as_symbol_name(symbol_mode) {
-                // We can't resolve symbol function cells from keymap.rs —
-                // caller must handle this case. For now treat as non-prefix.
-                let _ = sym_name;
-            }
-            return Value::fixnum((i + 1) as i64);
-        }
-    }
-    Value::NIL
-}
-
-fn list_keymap_lookup_composed_seq(
-    keymap: &Value,
-    events: &[Value],
-    resolve_keyelt: bool,
-    symbol_mode: SymbolMode,
-) -> Option<Value> {
-    let Some(mut cursor) = keymap_binding_spine(keymap, symbol_mode) else {
-        return None;
-    };
-    let mut saw_embedded_keymap = false;
-    let mut parent = Value::NIL;
-
-    while cursor.is_cons() {
-        if is_list_keymap(&cursor, symbol_mode) {
-            parent = cursor;
-            break;
-        }
-
-        let entry_car = cursor.cons_car();
-        let entry_cdr = cursor.cons_cdr();
-        if is_list_keymap(&entry_car, symbol_mode) {
-            saw_embedded_keymap = true;
-            let binding =
-                list_keymap_lookup_seq_impl(&entry_car, events, resolve_keyelt, symbol_mode);
-            if !binding.is_nil() && !binding.is_fixnum() {
-                return Some(binding);
-            }
-        } else if saw_embedded_keymap {
-            break;
-        } else {
-            return None;
-        }
-
-        if is_list_keymap(&entry_cdr, symbol_mode) {
-            parent = entry_cdr;
-            break;
-        }
-        cursor = entry_cdr;
-    }
-
-    if !saw_embedded_keymap {
-        if !parent.is_nil() {
-            let binding = list_keymap_lookup_seq_impl(&parent, events, resolve_keyelt, symbol_mode);
-            if !binding.is_nil() && !binding.is_fixnum() {
-                return Some(binding);
-            }
-        }
-        return None;
-    }
-    if !parent.is_nil() {
-        let binding = list_keymap_lookup_seq_impl(&parent, events, resolve_keyelt, symbol_mode);
-        if !binding.is_nil() && !binding.is_fixnum() {
-            return Some(binding);
-        }
-    }
-    None
-}
-
 pub(crate) fn lookup_keymap_with_partial(
     keymap: &Value,
     emacs_events: &[Value],

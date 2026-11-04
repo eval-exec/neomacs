@@ -812,7 +812,9 @@ impl ReadCommandBinding {
 
     /// Pair the keymaps' answer with the answer of the one remapping lookup
     /// `resolve_active_key_binding` already performed.
-    fn from_resolution(resolution: crate::emacs_core::keymap::ActiveKeyBindingResolution) -> Self {
+    fn from_resolution(
+        resolution: crate::emacs_core::eval::keymap_lookup::ActiveKeyBindingResolution,
+    ) -> Self {
         // `lookup` is what the keymaps bound; `binding` is its one-level
         // remap, or the printable-character self-insert fallback when the
         // keymaps bound nothing at all.
@@ -874,7 +876,7 @@ enum KeySequenceTranslationApplication {
 
 #[derive(Clone, Copy, Debug)]
 enum CommandBindingResolution {
-    Current(crate::emacs_core::keymap::ActiveKeyBindingResolution),
+    Current(crate::emacs_core::eval::keymap_lookup::ActiveKeyBindingResolution),
     Stale,
 }
 
@@ -900,7 +902,7 @@ struct KeySequenceShiftTranslation {
 enum UndefinedMouseSequenceFallback {
     Rewrite {
         events: Vec<Value>,
-        resolved: crate::emacs_core::keymap::ActiveKeyBindingResolution,
+        resolved: crate::emacs_core::eval::keymap_lookup::ActiveKeyBindingResolution,
     },
     Drop {
         retained_events: Vec<Value>,
@@ -2026,7 +2028,7 @@ impl crate::emacs_core::eval::Context {
             ValueKind::Cons => event.cons_car(),
             _ => *event,
         };
-        let binding = crate::emacs_core::keymap::lookup_key_in_keymaps_in_obarray(
+        let binding = crate::emacs_core::eval::keymap_lookup::lookup_key_in_keymaps_in_obarray(
             self.variables(),
             &[special_event_map],
             &[lookup_event],
@@ -2088,12 +2090,13 @@ impl crate::emacs_core::eval::Context {
             let mut current_map = map;
             let suffix = &events[start..];
             for (index, event) in suffix.iter().enumerate() {
-                let binding = crate::emacs_core::keymap::list_keymap_lookup_one_runtime(
-                    self,
-                    &current_map,
-                    event,
-                    true,
-                )?;
+                let binding =
+                    crate::emacs_core::eval::keymap_lookup::list_keymap_lookup_one_runtime(
+                        self,
+                        &current_map,
+                        event,
+                        true,
+                    )?;
                 if is_list_keymap(&binding, self.symbol_mode()) {
                     current_map = binding;
                     continue;
@@ -2139,7 +2142,7 @@ impl crate::emacs_core::eval::Context {
 
     fn translation_map_has_pending_suffix_prefix(&self, map: Value, events: &[Value]) -> bool {
         use crate::emacs_core::eval::keymap_lookup::is_list_keymap;
-        use crate::emacs_core::keymap::list_keymap_lookup_seq;
+        use crate::emacs_core::eval::keymap_lookup::list_keymap_lookup_seq;
 
         if map.is_nil() || !is_list_keymap(&map, self.symbol_mode()) {
             return false;
@@ -3327,10 +3330,10 @@ impl crate::emacs_core::eval::Context {
         &mut self,
         options: ReadKeySequenceOptions,
     ) -> Result<(Vec<Value>, ReadCommandBinding), crate::emacs_core::error::Flow> {
-        use crate::emacs_core::keymap::{
-            DefaultBindingMode, resolve_active_key_binding,
-            resolve_prefix_keymap_binding_in_obarray,
+        use crate::emacs_core::eval::keymap_lookup::{
+            DefaultBindingMode, resolve_prefix_keymap_binding_in_obarray,
         };
+        use crate::emacs_core::keymap::resolve_active_key_binding;
 
         self.sync_keyboard_terminal_owner();
         self.begin_key_sequence_read(options.continue_echo);
@@ -5680,7 +5683,8 @@ impl crate::emacs_core::eval::Context {
         events: &[Value],
         lookup_position: Option<&Value>,
     ) -> Result<Option<UndefinedMouseSequenceFallback>, crate::emacs_core::error::Flow> {
-        use crate::emacs_core::keymap::{DefaultBindingMode, resolve_active_key_binding};
+        use crate::emacs_core::eval::keymap_lookup::DefaultBindingMode;
+        use crate::emacs_core::keymap::resolve_active_key_binding;
 
         let Some(last_index) = events.len().checked_sub(1) else {
             return Ok(None);
