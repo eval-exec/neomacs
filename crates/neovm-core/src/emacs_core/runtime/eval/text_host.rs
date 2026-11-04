@@ -81,6 +81,12 @@ impl TextHost for Context {
             })
     }
 
+    fn process_encoding_bypasses(&mut self, process: ProcessId) -> bool {
+        self.processes
+            .get_any(process)
+            .is_some_and(|proc| !proc.encoding_state.requires_encoding())
+    }
+
     fn current_buffer_is_displayed(&self) -> bool {
         let Some(buffer_id) = self.edit.buffers.current_buffer_id() else {
             return false;

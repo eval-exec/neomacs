@@ -95,6 +95,11 @@ pub trait TextHost: EditHost {
     /// TEXT-HOST row.
     fn process_encoding_coding(&mut self, process: ProcessId) -> Result<RuntimeCodingSystem, Flow>;
 
+    /// Whether PROCESS's encoding path is bypassed: the descriptor does not
+    /// require encoding (GNU's raw/unibyte sink). `true` when no process is
+    /// found, mirroring the existing `is_some_and` read. TEXT-HOST row.
+    fn process_encoding_bypasses(&mut self, process: ProcessId) -> bool;
+
     /// Whether the current buffer is shown in the selected frame's window
     /// tree. Scalar only; no FrameManager/WindowId crosses. TEXT-HOST row;
     /// pure read (T5.3).
