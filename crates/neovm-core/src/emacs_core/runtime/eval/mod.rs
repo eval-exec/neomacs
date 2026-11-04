@@ -7602,6 +7602,7 @@ fn value_list_to_values(list: &Value) -> LispArgVec {
 // Tests
 // ---------------------------------------------------------------------------
 mod gc_pacing;
+pub mod keymap_lookup;
 mod thread_local_roots;
 use thread_local_roots::{collect_thread_local_gc_roots, for_each_thread_local_root_source};
 mod hash_test_gc_inhibit;

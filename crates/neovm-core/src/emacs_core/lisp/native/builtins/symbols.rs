@@ -5697,7 +5697,7 @@ pub(crate) fn builtin_keymap_prompt(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("keymap-prompt", &args, 1)?;
-    let map = crate::emacs_core::keymap::get_keymap_in_obarray(
+    let map = crate::emacs_core::eval::keymap_lookup::get_keymap_in_obarray(
         eval.obarray(),
         &args[0],
         false,
@@ -5720,12 +5720,12 @@ fn keymap_prompt_scan_at_depth(
     depth: usize,
     symbol_mode: SymbolMode,
 ) -> Value {
-    use crate::emacs_core::keymap::KeymapElement;
+    use crate::emacs_core::eval::keymap_lookup::KeymapElement;
     if depth > 64 {
         return Value::NIL;
     }
     let mut found = Value::NIL;
-    crate::emacs_core::keymap::for_each_keymap_element(
+    crate::emacs_core::eval::keymap_lookup::for_each_keymap_element(
         &map,
         Some(obarray),
         |element| {
