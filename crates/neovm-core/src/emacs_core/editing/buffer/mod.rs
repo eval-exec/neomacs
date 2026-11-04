@@ -1868,7 +1868,7 @@ pub(crate) fn builtin_constrain_to_field_5<H: EditHost>(
             let old_capture = super::textprop::builtin_get_pos_property_impl(
                 vars,
                 &[],
-                None,
+                |_| super::textprop::WindowBufferLookup::NotAvailable,
                 &edit.buffers,
                 &[Value::fixnum(old_pos), *capture_prop],
             )?;
@@ -2034,7 +2034,7 @@ fn field_property_at_position_in_state<'a, Vars: EditVariableRead<'a>>(
     super::textprop::builtin_get_pos_property_impl(
         vars,
         dynamic,
-        None,
+        |_| super::textprop::WindowBufferLookup::NotAvailable,
         buffers,
         &[Value::fixnum(pos), Value::symbol("field")],
     )
@@ -2053,7 +2053,10 @@ fn previous_field_change_in_buffers<'a, Vars: EditVariableRead<'a>>(
     }
     expect_int(
         &super::textprop::builtin_previous_single_char_property_change_in_buffers(
-            vars, None, buffers, args,
+            vars,
+            |_| super::textprop::WindowBufferLookup::NotAvailable,
+            buffers,
+            args,
         )?,
     )
 }
@@ -2071,7 +2074,10 @@ fn next_field_change_in_buffers<'a, Vars: EditVariableRead<'a>>(
     }
     expect_int(
         &super::textprop::builtin_next_single_char_property_change_in_buffers(
-            vars, None, buffers, &args,
+            vars,
+            |_| super::textprop::WindowBufferLookup::NotAvailable,
+            buffers,
+            &args,
         )?,
     )
 }
