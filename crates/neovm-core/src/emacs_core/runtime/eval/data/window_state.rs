@@ -5,7 +5,7 @@ use neovm_edit::buffer::{
     TextPositionAnchor,
 };
 use neovm_edit::emacs_core::display_metrics::{Rect, WindowId, WindowMargins};
-use neovm_value::display_vocab::FrameId;
+use neovm_value::display_vocab::{FrameId, WindowLayoutVariable};
 use neovm_value::intern::SymId;
 use neovm_value::value::Value;
 use rustc_hash::FxHashMap as HashMap;
@@ -495,5 +495,152 @@ impl WindowEndState {
         if let Self::Current(record) = *self {
             *self = Self::Stale(record);
         }
+    }
+}
+
+// --- E5-FM data records (stage-4 W2/E5) ---
+
+/// Stable route to one leaf within a particular window-tree generation.
+///
+/// Redisplay builds these routes once per frame attempt and then resolves each
+/// leaf in O(tree depth). The target ID is checked at lookup, so a stale route
+/// cannot alias a different window after a structural edit.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WindowTreePath {
+    pub(crate) generation: u64,
+    pub(crate) target: WindowId,
+    pub(crate) route: WindowTreeRoute,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum WindowTreeRoute {
+    Root(Vec<usize>),
+    Minibuffer,
+}
+
+pub(crate) type WindowParameters = Vec<(Value, Value)>;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WindowRedisplayState {
+    pub id: WindowId,
+    pub buffer_id: BufferId,
+    pub bounds: (u32, u32, u32, u32),
+    pub window_start: LispCharPos1,
+    pub window_end: WindowEndState,
+    pub point: LispCharPos1,
+    pub old_point: LispCharPos1,
+    pub hscroll: usize,
+    pub vscroll: i32,
+    pub preserve_vscroll_p: bool,
+}
+
+/// Canonical effective values of the closed window-layout variable set.
+///
+/// Unlike redisplay mutation counters, this projection is unchanged when Lisp
+/// temporarily binds a display variable and restores it before returning.
+/// Persistent changes remain visible as exact tagged-value identities.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(transparent)]
+pub(crate) struct WindowLayoutValueIdentity(usize);
+
+impl WindowLayoutValueIdentity {
+    pub(crate) fn of(value: Value) -> Self {
+        Self(value.bits())
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct WindowLayoutVariableState {
+    pub(crate) values:
+        [Option<WindowLayoutValueIdentity>; <WindowLayoutVariable as strum::EnumCount>::COUNT],
+}
+
+/// Selection inputs that affect active/inactive chrome and cursor layout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct WindowLayoutSelectionState {
+    pub(crate) selected_frame: Option<FrameId>,
+    pub(crate) frame_selected_window: WindowId,
+    pub(crate) minibuffer_selected_window: Option<WindowId>,
+    pub(crate) active_minibuffer_window: Option<WindowId>,
+}
+
+/// How a redisplay pass arrived at the window start it published.
+///
+/// GNU `redisplay_window` calls `run_window_scroll_functions`
+/// (src/xdisp.c:19222) exactly at the sites where it commits a start rather
+/// than reusing the one it was handed: the `w->force_start` branch
+/// (src/xdisp.c:20728), the `try_scrolling` result (src/xdisp.c:19645), and
+/// the recenter fallback (src/xdisp.c:21227). Everything else — the
+/// optimizations and a `try_window` that simply worked from the existing start
+/// — reaches none of them. Making that an enum keeps the hook from becoming an
+/// opt-in each publication site has to remember.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[must_use]
+pub enum WindowStartCommit {
+    /// Redisplay reused the start it was handed; GNU runs no scroll hook.
+    Inherited,
+    /// Redisplay committed a start (forced, scrolled, or recentered);
+    /// GNU runs `window-scroll-functions` for it.
+    Committed,
+}
+
+impl WindowStartCommit {
+    /// `forced` is GNU `w->force_start` — its branch runs the hook even when
+    /// the forced start equals the previous one. `moved` covers the
+    /// `try_scrolling` and recenter sites, which are only reached because the
+    /// start changed.
+    pub const fn of(forced: bool, moved: bool) -> Self {
+        if forced || moved {
+            Self::Committed
+        } else {
+            Self::Inherited
+        }
+    }
+
+    pub const fn runs_window_scroll_functions(self) -> bool {
+        matches!(self, Self::Committed)
+    }
+}
+
+/// Character-grid dimensions assigned by GNU's pixel-to-total pass.
+/// Pixel mutations invalidate only the affected axis; until the next grid
+/// assignment, callers derive its initial extent from the frame's metrics.
+#[derive(Debug, Clone, Default)]
+pub struct WindowCellDimensions {
+    pub(crate) columns: Option<i64>,
+    pub(crate) lines: Option<i64>,
+}
+
+/// GNU's positive numeric line base. This is live semantic window state:
+/// nested format-mode-line calls update the same value. No Lisp roots.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[doc(hidden)]
+pub struct ModeLineBase {
+    position: CharPos0,
+    line: std::num::NonZeroUsize,
+}
+
+static_assertions::assert_impl_all!(ModeLineBase: Send, Sync, Copy, std::fmt::Debug);
+static_assertions::assert_eq_size!(ModeLineBase, Option<ModeLineBase>);
+
+impl ModeLineBase {
+    pub(crate) const fn first(position: CharPos0) -> Self {
+        Self {
+            position,
+            line: std::num::NonZeroUsize::MIN,
+        }
+    }
+
+    /// A nonpositive GNU numeric base is unusable on the next decode.
+    pub(crate) fn new(position: CharPos0, line: usize) -> Option<Self> {
+        std::num::NonZeroUsize::new(line).map(|line| Self { position, line })
+    }
+
+    pub(crate) const fn position(self) -> CharPos0 {
+        self.position
+    }
+
+    pub(crate) const fn line_number(self) -> usize {
+        self.line.get()
     }
 }
