@@ -1,6 +1,5 @@
 use super::*;
 use crate::buffer::{BufferManager, LispCharPos1};
-use crate::emacs_core::display;
 use crate::emacs_core::error::{expect_args, expect_args_range, expect_fixnum};
 use crate::emacs_core::value::{ValueKind, VecLikeType};
 use crate::tagged::SymbolMode;
@@ -91,66 +90,6 @@ fn cached_primary_selection_text() -> Option<String> {
 
 /// GNU NS reports monitor geometry in points, the unit frame sizes use;
 /// the frontend snapshot holds device pixels.
-fn monitor_geometry_value(monitor: &NeomacsMonitorInfo) -> Value {
-    // A broken scale factor keeps the old device-pixel values rather than
-    // signaling, so init files that read monitor attributes keep loading.
-    let rect = display::monitor_rect_in_display_pixels(monitor).unwrap_or([
-        monitor.x as i64,
-        monitor.y as i64,
-        monitor.width as i64,
-        monitor.height as i64,
-    ]);
-    Value::list(rect.map(Value::fixnum).to_vec())
-}
-
-fn monitor_mm_size_value(monitor: &NeomacsMonitorInfo) -> Value {
-    Value::list(vec![
-        Value::fixnum(monitor.width_mm as i64),
-        Value::fixnum(monitor.height_mm as i64),
-    ])
-}
-
-/// Whether monitor alists carry `scale-factor`. GNU adds it only on PGTK,
-/// whose geometry is in device pixels (frame.c, `#ifdef HAVE_PGTK`); NS and
-/// X builds omit it. Callers such as `org--get-display-dpi` divide the
-/// geometry by it when present.
-#[derive(Clone, Copy)]
-enum MonitorScaleFactor {
-    Omit,
-    Report,
-}
-
-fn monitor_alist_value(
-    monitor: &NeomacsMonitorInfo,
-    frames: Value,
-    scale_factor: MonitorScaleFactor,
-) -> Value {
-    let mut attributes = vec![
-        Value::cons(Value::symbol("geometry"), monitor_geometry_value(monitor)),
-        Value::cons(Value::symbol("workarea"), monitor_geometry_value(monitor)),
-        Value::cons(Value::symbol("mm-size"), monitor_mm_size_value(monitor)),
-    ];
-    // GNU's order: mm-size, scale-factor, frames.
-    if let MonitorScaleFactor::Report = scale_factor {
-        attributes.push(Value::cons(
-            Value::symbol("scale-factor"),
-            Value::make_float(monitor.scale),
-        ));
-    }
-    attributes.extend([
-        Value::cons(Value::symbol("frames"), frames),
-        Value::cons(
-            Value::symbol("name"),
-            monitor
-                .name
-                .as_deref()
-                .map(Value::string)
-                .unwrap_or(Value::NIL),
-        ),
-        Value::cons(Value::symbol("source"), Value::string("Neomacs")),
-    ]);
-    Value::list(attributes)
-}
 
 pub(crate) fn builtin_neomacs_frame_geometry(args: Vec<Value>) -> EvalResult {
     expect_args_range("neomacs-frame-geometry", &args, 0, 1)?;
@@ -171,51 +110,6 @@ pub(crate) fn builtin_neomacs_mouse_absolute_pixel_position(args: Vec<Value>) ->
 pub(crate) fn builtin_neomacs_set_mouse_absolute_pixel_position(args: Vec<Value>) -> EvalResult {
     expect_args("neomacs-set-mouse-absolute-pixel-position", &args, 2)?;
     Ok(Value::NIL)
-}
-
-pub(crate) fn builtin_neomacs_display_monitor_attributes_list(
-    eval: &mut crate::emacs_core::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    expect_args_range("neomacs-display-monitor-attributes-list", &args, 0, 1)?;
-    let frames = eval
-        .frames
-        .frame_list()
-        .into_iter()
-        .map(|fid| Value::make_frame(fid.0))
-        .collect::<Vec<_>>();
-    let monitor_values = neomacs_monitor_info_snapshot();
-    if monitor_values.is_empty() {
-        return Ok(Value::NIL);
-    }
-
-    // The monitor snapshot comes from the one graphical frontend, so its
-    // backend decides, whichever frame is selected. Wayland is the PGTK case:
-    // device-pixel geometry plus a scale factor.
-    let on_wayland = eval.frames.frame_list().into_iter().any(|fid| {
-        eval.frames.get(fid).is_some_and(|frame| {
-            matches!(
-                frame.display_identity(),
-                crate::window::FrameDisplayIdentity::Graphical(identity)
-                    if identity.backend() == neomacs_display_protocol::GraphicalBackend::Wayland
-            )
-        })
-    });
-    let scale_factor = if on_wayland {
-        MonitorScaleFactor::Report
-    } else {
-        MonitorScaleFactor::Omit
-    };
-    let mut alists = Vec::with_capacity(monitor_values.len());
-    for (index, monitor) in monitor_values.iter().enumerate() {
-        let frame_list = if index == 0 {
-            Value::list(frames.clone())
-        } else {
-            Value::NIL
-        };
-        alists.push(monitor_alist_value(monitor, frame_list, scale_factor));
-    }
-    Ok(Value::list(alists))
 }
 
 pub(crate) fn builtin_neomacs_clipboard_set(
@@ -1420,30 +1314,6 @@ pub(crate) fn builtin_frame_windows_min_size(args: Vec<Value>) -> EvalResult {
 // =========================================================================
 // xdisp.c gap-fill stubs
 // =========================================================================
-
-pub(crate) fn builtin_remember_mouse_glyph(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    expect_args("remember-mouse-glyph", &args, 3)?;
-    if !args[0].is_nil() && !display::live_frame_designator_p(eval, &args[0]) {
-        return Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("frame-live-p"), args[0]],
-        ));
-    }
-    if !display::display_window_system_symbol_eval(eval, Some(&args[0]))?
-        .is_some_and(display::gui_window_system_active_value)
-    {
-        return Err(signal(
-            "error",
-            vec![Value::string("Window system frame should be used")],
-        ));
-    }
-    let _x = expect_fixnum(&args[1])?;
-    let _y = expect_fixnum(&args[2])?;
-    Ok(Value::NIL)
-}
 
 // =========================================================================
 // image.c gap-fill stubs

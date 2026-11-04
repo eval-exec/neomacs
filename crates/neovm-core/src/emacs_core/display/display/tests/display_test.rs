@@ -3398,7 +3398,7 @@ fn monitor_attributes_geometry_uses_frame_pixel_units() {
         height_mm: 0,
         name: Some("Retina".into()),
     }]);
-    let list = crate::emacs_core::builtins::builtin_neomacs_display_monitor_attributes_list(
+    let list = crate::emacs_core::display_entries::builtin_neomacs_display_monitor_attributes_list(
         &mut eval,
         vec![],
     )

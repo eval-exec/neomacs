@@ -6017,7 +6017,9 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     crate::emacs_core::neo::chrome::register_subrs(ctx);
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "neomacs-display-monitor-attributes-list",
-        NativeFn::ContextVec(builtin_neomacs_display_monitor_attributes_list),
+        NativeFn::ContextVec(
+            crate::emacs_core::display_entries::builtin_neomacs_display_monitor_attributes_list
+        ),
         SubrArity::new(0, None),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -6129,7 +6131,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "remember-mouse-glyph",
-        NativeFn::ContextVec(builtin_remember_mouse_glyph),
+        NativeFn::ContextVec(crate::emacs_core::display_entries::builtin_remember_mouse_glyph),
         SubrArity::new(3, Some(3)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
