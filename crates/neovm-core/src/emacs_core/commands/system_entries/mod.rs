@@ -35,8 +35,9 @@ pub(crate) fn builtin_open_dribble_file(eval: &mut Context, args: Vec<Value>) ->
         eval.command_loop.keyboard.kboard.close_dribble_file();
         return Ok(Value::NIL);
     }
-    let path =
-        crate::emacs_core::fileio::lisp_file_name_to_path_buf(eval.expect_lisp_string(args[0])?);
+    let path = neovm_edit::emacs_core::file_name::lisp_file_name_to_path_buf(
+        eval.expect_lisp_string(args[0])?,
+    );
     if let Err(err) = eval.command_loop.keyboard.kboard.open_dribble_file(&path) {
         return Err(signal(
             LispCondition::FileError,
@@ -60,8 +61,9 @@ pub(crate) fn builtin_redirect_debugging_output(
     }
     let expanded =
         crate::emacs_core::fileio::builtin_expand_file_name(eval, vec![args[0], Value::NIL])?;
-    let path =
-        crate::emacs_core::fileio::lisp_file_name_to_path_buf(eval.expect_lisp_string(expanded)?);
+    let path = neovm_edit::emacs_core::file_name::lisp_file_name_to_path_buf(
+        eval.expect_lisp_string(expanded)?,
+    );
     let append = args.get(1).is_some_and(|value| value.is_truthy());
     let file = std::fs::OpenOptions::new()
         .write(true)
@@ -81,8 +83,9 @@ pub(crate) fn builtin_redirect_debugging_output(
 
 pub(crate) fn builtin_module_load(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_args("module-load", &args, 1)?;
-    let path =
-        crate::emacs_core::fileio::lisp_file_name_to_path_buf(ctx.expect_lisp_string(args[0])?);
+    let path = neovm_edit::emacs_core::file_name::lisp_file_name_to_path_buf(
+        ctx.expect_lisp_string(args[0])?,
+    );
     crate::emacs_core::dynamic_module::load_module(ctx, path)
 }
 
@@ -126,7 +129,8 @@ pub(crate) fn builtin_dump_emacs_portable(
         )
         .as_ref(),
     );
-    let dump_path_buf = crate::emacs_core::fileio::lisp_file_name_to_path_buf(&expanded_lisp);
+    let dump_path_buf =
+        neovm_edit::emacs_core::file_name::lisp_file_name_to_path_buf(&expanded_lisp);
     let dump_path = dump_path_buf.as_path();
     let expanded_path = dump_path.display().to_string();
     let is_final_dump = dump_path
