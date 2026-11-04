@@ -2052,7 +2052,7 @@ fn previous_field_change_in_buffers<'a, Vars: EditVariableRead<'a>>(
         args.push(Value::fixnum(limit));
     }
     expect_int(
-        &crate::emacs_core::builtins::misc_eval::builtin_previous_single_char_property_change_in_buffers(
+        &super::textprop::builtin_previous_single_char_property_change_in_buffers(
             vars, None, buffers, args,
         )?,
     )
@@ -2070,8 +2070,9 @@ fn next_field_change_in_buffers<'a, Vars: EditVariableRead<'a>>(
         args.push(Value::fixnum(limit));
     }
     expect_int(
-        &crate::emacs_core::builtins::misc_eval::builtin_next_single_char_property_change_in_buffers(
-            vars, None, buffers, &args)?,
+        &super::textprop::builtin_next_single_char_property_change_in_buffers(
+            vars, None, buffers, &args,
+        )?,
     )
 }
 

@@ -4560,6 +4560,297 @@ fn value_list_contains(list: &Value, prop: Value, mode: SymbolMode) -> bool {
     false
 }
 
+/// GNU `CHECK_FIXNUM`: strict integer check signaling `integerp`, used by the
+/// string-object LIMIT arms of the single-char-property scans below (GNU
+/// textprop.c takes LIMIT with CHECK_FIXNUM on the string path but
+/// CHECK_FIXNUM_COERCE_MARKER on the buffer path). Distinct from the
+/// marker-coercing `expect_integer_or_marker_in_buffers` used on buffer paths.
+fn expect_int_strict(value: &Value) -> Result<i64, Flow> {
+    match value.kind() {
+        ValueKind::Fixnum(n) => Ok(n),
+        _other => Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("integerp"), *value],
+        )),
+    }
+}
+
+fn char_property_buffer_id_for_object(
+    frames: Option<&crate::window::FrameManager>,
+    buffers: &crate::buffer::BufferManager,
+    object: Option<&Value>,
+) -> Result<crate::buffer::BufferId, Flow> {
+    // GNU textprop.c `next/previous-single-char-property-change` defer object
+    // resolution to `Fget_char_property`, which resolves a WINDOW object to its
+    // buffer. Mirror that here so a window OBJECT works.
+    resolve_char_property_buffer_id_with_window_lookup(
+        crate::window::char_property_window_lookup(frames),
+        buffers,
+        object,
+    )
+}
+
+fn next_char_property_change_for_buffer(
+    buf: &crate::buffer::buffer::Buffer,
+    position: i64,
+    limit: i64,
+) -> Result<i64, Flow> {
+    let byte_pos = validate_buffer_point(buf, position)?;
+    let overlay_next = buf
+        .overlays
+        .next_boundary_after_emacs_byte_pos(EmacsBytePos::new(byte_pos));
+    let accessible = buf.accessible_emacs_byte_region();
+    let point_max = byte_to_elisp_pos(buf, accessible.end());
+    let mut temp = overlay_next.map_or(point_max, |next| byte_to_elisp_pos(buf, next));
+    if limit < temp {
+        temp = limit;
+    }
+
+    if let Some(next) = buf.text_props_next_change_after_emacs_byte_pos(EmacsBytePos::new(byte_pos))
+    {
+        let next_pos = byte_to_elisp_pos(buf, next);
+        if next < accessible.end() && next_pos < temp {
+            return Ok(next_pos);
+        }
+    }
+    Ok(temp)
+}
+
+fn previous_char_property_change_for_buffer(
+    buf: &crate::buffer::buffer::Buffer,
+    position: i64,
+    limit: i64,
+) -> Result<i64, Flow> {
+    let byte_pos = validate_buffer_point(buf, position)?;
+    let overlay_prev = buf
+        .overlays
+        .previous_boundary_before_emacs_byte_pos(EmacsBytePos::new(byte_pos));
+    let accessible = buf.accessible_emacs_byte_region();
+    let point_min = byte_to_elisp_pos(buf, accessible.start());
+    let mut temp = overlay_prev.map_or(point_min, |prev| byte_to_elisp_pos(buf, prev));
+    if limit > temp {
+        temp = limit;
+    }
+
+    if let Some(prev) =
+        buf.text_props_previous_change_before_emacs_byte_pos(EmacsBytePos::new(byte_pos))
+    {
+        let prev_pos = byte_to_elisp_pos(buf, prev);
+        if prev > accessible.start() && prev_pos > temp {
+            return Ok(prev_pos);
+        }
+    }
+    Ok(temp)
+}
+
+pub(crate) fn builtin_next_single_char_property_change_in_buffers<
+    'a,
+    Vars: EditVariableRead<'a>,
+>(
+    vars: Vars,
+    frames: Option<&crate::window::FrameManager>,
+    buffers: &crate::buffer::BufferManager,
+    args: &[Value],
+) -> EvalResult {
+    builtin_next_single_char_property_change_in_buffers_with_symbols(
+        vars,
+        frames,
+        buffers,
+        args,
+        SymbolMode::Bare,
+    )
+}
+
+pub(crate) fn builtin_next_single_char_property_change_in_buffers_with_symbols<
+    'a,
+    Vars: EditVariableRead<'a>,
+>(
+    vars: Vars,
+    frames: Option<&crate::window::FrameManager>,
+    buffers: &crate::buffer::BufferManager,
+    args: &[Value],
+    mode: SymbolMode,
+) -> EvalResult {
+    expect_min_args("next-single-char-property-change", args, 2)?;
+    expect_max_args("next-single-char-property-change", args, 4)?;
+
+    if let Some(str_val) = args.get(2).filter(|v| v.is_string()) {
+        let result = builtin_next_single_property_change_in_state(vars, buffers, args)?;
+        if !result.is_nil() {
+            return Ok(result);
+        }
+        let s = str_val
+            .as_lisp_string()
+            .expect("string object must carry LispString payload");
+        if let Some(limit) = args.get(3)
+            && !limit.is_nil()
+        {
+            return Ok(Value::fixnum(expect_int_strict(limit)?));
+        }
+        return Ok(Value::fixnum(s.schars() as i64));
+    }
+
+    let position = expect_integer_or_marker_in_buffers(buffers, &args[0])?;
+    let prop = expect_property_key(&args[1])?;
+    let object = args.get(2);
+    let buf_id = char_property_buffer_id_for_object(frames, buffers, object)?;
+    let buf = buffers
+        .get(buf_id)
+        .ok_or_else(|| signal("error", vec![Value::string("Buffer does not exist")]))?;
+    let accessible = buf.accessible_emacs_byte_region();
+    let point_max = byte_to_elisp_pos(buf, accessible.end());
+    let mut get_args = vec![Value::fixnum(position), prop];
+    if let Some(object) = object {
+        get_args.push(*object);
+    }
+    let initial_value = builtin_get_char_property_with_window_lookup(
+        vars,
+        buffers,
+        crate::window::char_property_window_lookup(frames),
+        &get_args,
+    )?;
+    let limit = match args.get(3) {
+        Some(v) if !v.is_nil() => expect_integer_or_marker_in_buffers(buffers, v)?,
+        _ => point_max,
+    };
+
+    if position >= limit {
+        return Ok(Value::fixnum(limit.min(point_max)));
+    }
+
+    let mut cursor = position;
+    loop {
+        cursor = next_char_property_change_for_buffer(buf, cursor, limit)?;
+        if cursor >= limit {
+            return Ok(Value::fixnum(limit));
+        }
+
+        let mut value_args = vec![Value::fixnum(cursor), prop];
+        if let Some(object) = object {
+            value_args.push(*object);
+        }
+        let value = builtin_get_char_property_with_window_lookup(
+            vars,
+            buffers,
+            crate::window::char_property_window_lookup(frames),
+            &value_args,
+        )?;
+        if !eq_value_swp(
+            &value,
+            &initial_value,
+            matches!(mode, SymbolMode::Positioned),
+        ) || cursor >= point_max
+        {
+            return Ok(Value::fixnum(cursor));
+        }
+    }
+}
+
+pub(crate) fn builtin_previous_single_char_property_change_in_buffers<
+    'a,
+    Vars: EditVariableRead<'a>,
+>(
+    vars: Vars,
+    frames: Option<&crate::window::FrameManager>,
+    buffers: &crate::buffer::BufferManager,
+    args: Vec<Value>,
+) -> EvalResult {
+    builtin_previous_single_char_property_change_in_buffers_with_symbols(
+        vars,
+        frames,
+        buffers,
+        args,
+        SymbolMode::Bare,
+    )
+}
+
+pub(crate) fn builtin_previous_single_char_property_change_in_buffers_with_symbols<
+    'a,
+    Vars: EditVariableRead<'a>,
+>(
+    vars: Vars,
+    frames: Option<&crate::window::FrameManager>,
+    buffers: &crate::buffer::BufferManager,
+    args: Vec<Value>,
+    mode: SymbolMode,
+) -> EvalResult {
+    expect_min_args("previous-single-char-property-change", &args, 2)?;
+    expect_max_args("previous-single-char-property-change", &args, 4)?;
+
+    if args.get(2).is_some_and(|v| v.is_string()) {
+        let result =
+            builtin_previous_single_property_change_in_state(vars, buffers, &args.clone())?;
+        if !result.is_nil() {
+            return Ok(result);
+        }
+        if let Some(limit) = args.get(3)
+            && !limit.is_nil()
+        {
+            return Ok(Value::fixnum(expect_int_strict(limit)?));
+        }
+        return Ok(Value::fixnum(0));
+    }
+
+    let position = expect_integer_or_marker_in_buffers(buffers, &args[0])?;
+    let prop = expect_property_key(&args[1])?;
+    let object = args.get(2);
+    let buf_id = char_property_buffer_id_for_object(frames, buffers, object)?;
+    let buf = buffers
+        .get(buf_id)
+        .ok_or_else(|| signal("error", vec![Value::string("Buffer does not exist")]))?;
+    let accessible = buf.accessible_emacs_byte_region();
+    let point_min = byte_to_elisp_pos(buf, accessible.start());
+    let limit = match args.get(3) {
+        Some(v) if !v.is_nil() => expect_integer_or_marker_in_buffers(buffers, v)?,
+        _ => point_min,
+    };
+
+    if position <= limit {
+        return Ok(Value::fixnum(limit.max(point_min)));
+    }
+
+    let initial_position = position - i64::from(position >= 0);
+    let mut get_args = vec![Value::fixnum(initial_position), prop];
+    if let Some(object) = object {
+        get_args.push(*object);
+    }
+    let initial_value = builtin_get_char_property_with_window_lookup(
+        vars,
+        buffers,
+        crate::window::char_property_window_lookup(frames),
+        &get_args,
+    )?;
+
+    let mut cursor = position;
+    loop {
+        cursor = previous_char_property_change_for_buffer(buf, cursor, limit)?;
+        if cursor <= limit {
+            return Ok(Value::fixnum(limit));
+        }
+        if cursor <= point_min {
+            return Ok(Value::fixnum(cursor));
+        }
+
+        let mut value_args = vec![Value::fixnum(cursor - 1), prop];
+        if let Some(object) = object {
+            value_args.push(*object);
+        }
+        let value = builtin_get_char_property_with_window_lookup(
+            vars,
+            buffers,
+            crate::window::char_property_window_lookup(frames),
+            &value_args,
+        )?;
+        if !eq_value_swp(
+            &value,
+            &initial_value,
+            matches!(mode, SymbolMode::Positioned),
+        ) {
+            return Ok(Value::fixnum(cursor));
+        }
+    }
+}
+
 // ===========================================================================
 // Tests
 // ===========================================================================
