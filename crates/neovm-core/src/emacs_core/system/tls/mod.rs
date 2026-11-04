@@ -10,6 +10,7 @@ use super::value::Value;
 use super::value::list_to_vec;
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::expect_args;
+pub(crate) use crate::emacs_core::eval::data::process_tls::{RustlsTlsStream, TlsStream};
 use crate::tagged::value::SymbolMode;
 use base64::Engine;
 use rustls_pki_types::{CertificateDer, pem::PemObject};
@@ -389,18 +390,6 @@ fn signature_algorithm_name(cert: &X509Certificate<'_>) -> String {
     }
 }
 
-type RustlsClientStream = rustls::StreamOwned<rustls::ClientConnection, TcpStream>;
-
-pub(crate) struct RustlsTlsStream {
-    inner: RustlsClientStream,
-    peer_certificates_pem: Vec<String>,
-}
-
-/// Backend-neutral TLS stream owned by a Neomacs process.
-pub(crate) enum TlsStream {
-    Rustls(RustlsTlsStream),
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TlsHandshakeInterest {
     Readable,
@@ -413,22 +402,28 @@ pub(crate) enum TlsHandshakeProgress {
     Ready,
 }
 
-impl TlsStream {
-    fn rustls(inner: RustlsClientStream, peer_certificates_pem: Vec<String>) -> Self {
-        Self::Rustls(RustlsTlsStream {
-            inner,
-            peer_certificates_pem,
-        })
-    }
+/// TLS handshake and stream IO for the evaluator-owned stream state (peer
+/// ruling 16:2xZ).  Declared and implemented in the system layer; the state
+/// type lives in eval data and only its fields are read here.
+pub(crate) trait TlsStreamIo {
+    fn handshake_interest(&self) -> TlsHandshakeInterest;
+    fn advance_handshake(&mut self) -> Result<TlsHandshakeProgress, TlsBackendError>;
+    fn set_nonblocking(&self, nonblocking: bool) -> std::io::Result<()>;
+    fn write_process_input_once(&mut self, bytes: &[u8]) -> std::io::Result<usize>;
+    fn read_process_output(&mut self, buf: &mut [u8]) -> std::io::Result<usize>;
+    fn peer_status(&self) -> TlsPeerStatus;
+    fn send_close_notify(&mut self, wait_for_peer: bool) -> std::io::Result<TlsCloseNotifyResult>;
+}
 
-    pub(crate) fn handshake_interest(&self) -> TlsHandshakeInterest {
+impl TlsStreamIo for TlsStream {
+    fn handshake_interest(&self) -> TlsHandshakeInterest {
         match self {
             Self::Rustls(stream) => rustls_handshake_interest(&stream.inner.conn),
         }
     }
 
     /// A bounded nonblocking turn; process ownership persists across waits.
-    pub(crate) fn advance_handshake(&mut self) -> Result<TlsHandshakeProgress, TlsBackendError> {
+    fn advance_handshake(&mut self) -> Result<TlsHandshakeProgress, TlsBackendError> {
         match self {
             Self::Rustls(stream) => {
                 let progress =
@@ -451,19 +446,13 @@ impl TlsStream {
         }
     }
 
-    pub(crate) fn set_nonblocking(&self, nonblocking: bool) -> std::io::Result<()> {
+    fn set_nonblocking(&self, nonblocking: bool) -> std::io::Result<()> {
         match self {
             Self::Rustls(stream) => stream.inner.sock.set_nonblocking(nonblocking),
         }
     }
 
-    pub(crate) fn tcp_stream(&self) -> &TcpStream {
-        match self {
-            Self::Rustls(stream) => &stream.inner.sock,
-        }
-    }
-
-    pub(crate) fn write_process_input_once(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+    fn write_process_input_once(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         self.set_nonblocking(true)?;
         match self {
             Self::Rustls(stream) => match stream.inner.write(bytes) {
@@ -480,7 +469,7 @@ impl TlsStream {
         }
     }
 
-    pub(crate) fn read_process_output(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+    fn read_process_output(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         match self {
             Self::Rustls(stream) => {
                 read_rustls_process_output(&mut stream.inner.conn, &mut stream.inner.sock, buf)
@@ -488,23 +477,13 @@ impl TlsStream {
         }
     }
 
-    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    pub(crate) fn peer_certificates_pem(&self) -> &[String] {
-        match self {
-            Self::Rustls(stream) => &stream.peer_certificates_pem,
-        }
-    }
-
-    pub(crate) fn peer_status(&self) -> TlsPeerStatus {
+    fn peer_status(&self) -> TlsPeerStatus {
         match self {
             Self::Rustls(stream) => rustls_peer_status(stream),
         }
     }
 
-    pub(crate) fn send_close_notify(
-        &mut self,
-        _wait_for_peer: bool,
-    ) -> std::io::Result<TlsCloseNotifyResult> {
+    fn send_close_notify(&mut self, _wait_for_peer: bool) -> std::io::Result<TlsCloseNotifyResult> {
         match self {
             Self::Rustls(stream) => {
                 stream.inner.conn.send_close_notify();
@@ -723,28 +702,6 @@ fn rustls_mac_name(cipher_suite: rustls::CipherSuite) -> String {
         rustls::CipherSuite::TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA384
         | rustls::CipherSuite::TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384 => "SHA384".to_owned(),
         other => format!("{other:?}"),
-    }
-}
-
-impl Read for TlsStream {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        match self {
-            Self::Rustls(stream) => stream.inner.read(buf),
-        }
-    }
-}
-
-impl Write for TlsStream {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        match self {
-            Self::Rustls(stream) => stream.inner.write(buf),
-        }
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        match self {
-            Self::Rustls(stream) => stream.inner.flush(),
-        }
     }
 }
 
