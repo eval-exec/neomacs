@@ -4184,6 +4184,12 @@ pub(super) fn unbound_unix_datagram_socket(
     Ok(socket.into())
 }
 
+use super::GreenSelectHandle;
+use super::child_status::{
+    ObservedProcess, Recording, STATUS_NOTIFY_STAMPED, STATUS_NOTIFY_WALKS, SweepableChild,
+    UnrecordedStatusRead, UpdateStatusSite, record_status_notify_visits,
+};
+use crate::emacs_core::eval::data::process_state::StatusChangeSite;
 pub(crate) trait SystemProcessExt {
     fn register_readable_source(
         poller: &polling::Poller,
@@ -4487,6 +4493,91 @@ pub(crate) trait SystemProcessExt {
         carryover: Vec<u8>,
         decoder: crate::encoding::CodingDecoderState,
     );
+
+    // Methods declared beside their state files (A3b-3).
+    fn prepare_green_main_wait(&self, deadline: Instant) -> MainNativePreparation;
+    fn attach_host_control_session(&self) -> crate::host_effect::wake::HostSessionControl;
+    fn revoke_host_control_session(&self);
+    /// Capture under the Baton. The shared source is privately attached once
+    /// to this backend. Missing native readiness is a cold admission refusal;
+    /// condition-only control owners never qualify this process selector.
+    fn observe_green_admission_refusal(
+        &self,
+        observe: impl FnOnce(crate::host_effect::wake::NativeReadinessCause),
+    );
+    fn green_native_readiness(&self) -> Result<(), crate::host_effect::wake::NativeReadinessCause>;
+    #[cfg(test)]
+    #[cfg(test)]
+    fn refuse_green_native_readiness_for_test(
+        &mut self,
+        cause: crate::host_effect::wake::NativeReadinessCause,
+    );
+    fn green_select_handle(&self) -> Option<GreenSelectHandle>;
+    /// GNU `handle_child_signal`'s `FOR_EACH_PROCESS` arm (src/process.c:
+    /// 7734-7763), run at a safe point instead of in the handler.
+    ///
+    /// The walk order is GNU's: `FOR_EACH_PROCESS` is
+    /// `FOR_EACH_ALIST_VALUE (Vprocess_alist, ...)` (:343) and `make_process`
+    /// conses onto the front (:953), so the alist is newest-first and a
+    /// descending `ProcessId` reproduces it -- the same identity
+    /// `list_processes` and `live_process_ids` already use (ledger 175 §3).
+    /// Order does not change what is recorded, since each child is harvested
+    /// independently; it is matched so that a future reader does not have to
+    /// wonder.
+    ///
+    /// `check_child_status_change` is GNU's per-process body: the
+    /// `child_status_changed` probe (:7742), the `delete_read_fd` on a
+    /// terminal status (:7760, spelled here as unregistering the child's
+    /// status source from the poller), and the `raw_status`/`raw_status_new`
+    /// stamp (:7746-7747, spelled `pending_status`/`status_notify_pending`).
+    /// The `site` argument is the whole point, and it is not used at run time.
+    /// See [`WaitStatusNotifySite`](crate::emacs_core::wait::WaitStatusNotifySite):
+    /// it has no public constructor, so this walk is reachable only from
+    /// `wait.rs` -- `Context::maybe_quit` cannot spell the call.
+    ///
+    /// Returns only a COUNT, for the engagement counters.  **Which processes
+    /// `status_notify` then visits is not this walk's answer to give**: it is
+    /// GNU's per-process tick pair, read by
+    /// [`ProcessManager::processes_with_unnotified_status_change`], because
+    /// seven of GNU's eight `p->tick = ++process_tick;` sites are not this walk
+    /// (see [`StatusChangeSite`]).  Returning the stamped ids is what made the
+    /// visit set the SIGCHLD record's, which is the defect this shape closes.
+    fn record_child_status_changes(
+        &mut self,
+        site: crate::emacs_core::wait::WaitStatusNotifySite,
+    ) -> usize;
+    /// GNU's `update_status` at `site`, then the read.
+    ///
+    /// Returns `None` for an id that names no process at all, live or
+    /// retired -- the analogue of `get_process` having answered `nil` before
+    /// any of these sites was reached.
+    fn observe(&mut self, site: UpdateStatusSite, id: ProcessId) -> Option<ObservedProcess<'_>>;
+    /// Read a Lisp-visible status at one of the enumerated holes, WITHOUT
+    /// GNU's recording having been made here.
+    ///
+    /// The `site` argument is not used at run time; it exists so the call
+    /// cannot be written without naming which hole it is.
+    fn read_status_without_recording(
+        &self,
+        site: UnrecordedStatusRead,
+        id: ProcessId,
+    ) -> Option<ObservedProcess<'_>>;
+    /// GNU `p->tick = ++process_tick;` at `site`.
+    ///
+    /// The `site` argument is not used at run time; it exists so the call
+    /// cannot be written without naming which of GNU's eight lines it is.
+    /// GNU `p->update_tick = p->tick;` (src/process.c:7894 and :7935).
+    fn mark_status_change_notified(&mut self, id: ProcessId);
+    /// GNU `status_notify`'s visit set: `FOR_EACH_PROCESS` filtered by
+    /// `p->tick != p->update_tick` (src/process.c:7887-7892).
+    ///
+    /// The order is GNU's alist order -- `FOR_EACH_PROCESS` is
+    /// `FOR_EACH_ALIST_VALUE (Vprocess_alist, ...)` (:343) and `make_process`
+    /// conses onto the front (:953), so the list is newest-first and a
+    /// descending [`ProcessId`] reproduces it.  That order is Lisp-visible for
+    /// a split `:stderr` pipe, which is created BEFORE the process that owns
+    /// it and therefore notified AFTER it (ledger 54).
+    fn processes_with_unnotified_status_change(&self) -> Vec<ProcessId>;
 }
 
 impl SystemProcessExt for ProcessManager {
@@ -7337,6 +7428,204 @@ impl SystemProcessExt for ProcessManager {
         };
         proc.coding_state.store_carryover(carryover);
         proc.coding_state.store_decoder(decoder);
+    }
+
+    // Methods whose state files are green_select.rs / child_status.rs (A3b-3).
+    fn prepare_green_main_wait(&self, deadline: Instant) -> MainNativePreparation {
+        match self.green_select_handle() {
+            Some(select) => select.prepare_main_wait(deadline),
+            None => MainNativePreparation::Scheduler,
+        }
+    }
+
+    fn attach_host_control_session(&self) -> crate::host_effect::wake::HostSessionControl {
+        self.wait_backend
+            .notification_pending
+            .attach_native(self.wait_backend.poller.as_ref().map(Arc::clone))
+            .control()
+            .attach_host_session()
+    }
+
+    fn revoke_host_control_session(&self) {
+        if let Some(wake) = self.wait_backend.notification_pending.control() {
+            wake.revoke_host_session();
+        }
+    }
+
+    /// Capture under the Baton. The shared source is privately attached once
+    /// to this backend. Missing native readiness is a cold admission refusal;
+    /// condition-only control owners never qualify this process selector.
+    fn observe_green_admission_refusal(
+        &self,
+        observe: impl FnOnce(crate::host_effect::wake::NativeReadinessCause),
+    ) {
+        self.wait_backend
+            .notification_pending
+            .attach_native(self.wait_backend.poller.as_ref().map(Arc::clone))
+            .observe_admission_refusal(observe);
+    }
+
+    fn green_native_readiness(&self) -> Result<(), crate::host_effect::wake::NativeReadinessCause> {
+        self.wait_backend
+            .notification_pending
+            .attach_native(self.wait_backend.poller.as_ref().map(Arc::clone))
+            .require_native()
+            .map(|_| ())
+    }
+
+    #[cfg(test)]
+    fn refuse_green_native_readiness_for_test(
+        &mut self,
+        cause: crate::host_effect::wake::NativeReadinessCause,
+    ) {
+        if matches!(
+            cause,
+            crate::host_effect::wake::NativeReadinessCause::AbsentPoller
+        ) {
+            self.wait_backend.poller = None;
+            #[cfg(unix)]
+            {
+                self.wait_backend.signal_fd = None;
+            }
+        }
+        self.wait_backend
+            .notification_pending
+            .refuse_native_for_test(cause);
+    }
+
+    fn green_select_handle(&self) -> Option<GreenSelectHandle> {
+        let latch = &self.wait_backend.notification_pending;
+        let wake = latch
+            .attach_native(self.wait_backend.poller.as_ref().map(Arc::clone))
+            .require_native()
+            .ok()?;
+        Some(GreenSelectHandle {
+            wake: Arc::clone(wake),
+            notification_pending: Arc::clone(latch),
+            #[cfg(unix)]
+            signal_source: self.wait_backend.poller.as_ref().and_then(|poller| {
+                self.wait_backend
+                    .signal_fd
+                    .map(|fd| (Arc::clone(poller), fd))
+            }),
+        })
+    }
+    /// GNU `handle_child_signal`'s `FOR_EACH_PROCESS` arm (src/process.c:
+    /// 7734-7763), run at a safe point instead of in the handler.
+    ///
+    /// The walk order is GNU's: `FOR_EACH_PROCESS` is
+    /// `FOR_EACH_ALIST_VALUE (Vprocess_alist, ...)` (:343) and `make_process`
+    /// conses onto the front (:953), so the alist is newest-first and a
+    /// descending `ProcessId` reproduces it -- the same identity
+    /// `list_processes` and `live_process_ids` already use (ledger 175 §3).
+    /// Order does not change what is recorded, since each child is harvested
+    /// independently; it is matched so that a future reader does not have to
+    /// wonder.
+    ///
+    /// `check_child_status_change` is GNU's per-process body: the
+    /// `child_status_changed` probe (:7742), the `delete_read_fd` on a
+    /// terminal status (:7760, spelled here as unregistering the child's
+    /// status source from the poller), and the `raw_status`/`raw_status_new`
+    /// stamp (:7746-7747, spelled `pending_status`/`status_notify_pending`).
+    /// The `site` argument is the whole point, and it is not used at run time.
+    /// See [`WaitStatusNotifySite`](crate::emacs_core::wait::WaitStatusNotifySite):
+    /// it has no public constructor, so this walk is reachable only from
+    /// `wait.rs` -- `Context::maybe_quit` cannot spell the call.
+    ///
+    /// Returns only a COUNT, for the engagement counters.  **Which processes
+    /// `status_notify` then visits is not this walk's answer to give**: it is
+    /// GNU's per-process tick pair, read by
+    /// [`ProcessManager::processes_with_unnotified_status_change`], because
+    /// seven of GNU's eight `p->tick = ++process_tick;` sites are not this walk
+    /// (see [`StatusChangeSite`]).  Returning the stamped ids is what made the
+    /// visit set the SIGCHLD record's, which is the defect this shape closes.
+    fn record_child_status_changes(
+        &mut self,
+        site: crate::emacs_core::wait::WaitStatusNotifySite,
+    ) -> usize {
+        let _ = site;
+        super::reap::collect_deferred_child_status_changes();
+        STATUS_NOTIFY_WALKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let mut population: Vec<SweepableChild> = self
+            .processes
+            .iter()
+            .filter_map(|(id, proc)| SweepableChild::of(*id, proc))
+            .collect();
+        if population.is_empty() {
+            return 0;
+        }
+        population.sort_unstable_by_key(|child| std::cmp::Reverse(child.id()));
+        let mut stamped = 0;
+        for child in population {
+            if self.check_child_status_change(child.id()) {
+                stamped += 1;
+            }
+        }
+        STATUS_NOTIFY_STAMPED.fetch_add(stamped as u64, std::sync::atomic::Ordering::Relaxed);
+        stamped
+    }
+
+    /// GNU's `update_status` at `site`, then the read.
+    ///
+    /// Returns `None` for an id that names no process at all, live or
+    /// retired -- the analogue of `get_process` having answered `nil` before
+    /// any of these sites was reached.
+    fn observe(&mut self, site: UpdateStatusSite, id: ProcessId) -> Option<ObservedProcess<'_>> {
+        match site.recording() {
+            // NO ARM SWEEPS, and both variants say why rather than leaving it
+            // to be inferred.  `AlreadyRecorded` needs nothing because the
+            // machinery around the site has just made the record;
+            // `AsynchronouslyRecorded` needs nothing because the SIGCHLD
+            // trigger made it at a safe point -- and must not sweep here,
+            // because a sweep AT the observation is what ledger 180 measured
+            // and withdrew.  This `match` exists to make that a decision the
+            // type forces rather than an omission.
+            Recording::AlreadyRecorded { .. } | Recording::AsynchronouslyRecorded { .. } => {}
+        }
+        self.get_any(id).map(ObservedProcess::new)
+    }
+    /// Read a Lisp-visible status at one of the enumerated holes, WITHOUT
+    /// GNU's recording having been made here.
+    ///
+    /// The `site` argument is not used at run time; it exists so the call
+    /// cannot be written without naming which hole it is.
+    fn read_status_without_recording(
+        &self,
+        site: UnrecordedStatusRead,
+        id: ProcessId,
+    ) -> Option<ObservedProcess<'_>> {
+        let _ = site;
+        self.get_any(id).map(ObservedProcess::new)
+    }
+    /// GNU `p->tick = ++process_tick;` at `site`.
+    ///
+    /// The `site` argument is not used at run time; it exists so the call
+    /// cannot be written without naming which of GNU's eight lines it is.
+
+    /// GNU `p->update_tick = p->tick;` (src/process.c:7894 and :7935).
+    fn mark_status_change_notified(&mut self, id: ProcessId) {
+        if let Some(proc) = self.processes.get_mut(&id) {
+            proc.status_ticks.mark_notified();
+        }
+    }
+
+    /// GNU `status_notify`'s visit set: `FOR_EACH_PROCESS` filtered by
+    /// `p->tick != p->update_tick` (src/process.c:7887-7892).
+    ///
+    /// The order is GNU's alist order -- `FOR_EACH_PROCESS` is
+    /// `FOR_EACH_ALIST_VALUE (Vprocess_alist, ...)` (:343) and `make_process`
+    /// conses onto the front (:953), so the list is newest-first and a
+    /// descending [`ProcessId`] reproduces it.  That order is Lisp-visible for
+    /// a split `:stderr` pipe, which is created BEFORE the process that owns
+    /// it and therefore notified AFTER it (ledger 54).
+    fn processes_with_unnotified_status_change(&self) -> Vec<ProcessId> {
+        let mut ids: Vec<ProcessId> = self
+            .processes
+            .iter()
+            .filter_map(|(id, proc)| proc.status_ticks.is_unnotified().then_some(*id))
+            .collect();
+        ids.sort_unstable_by(|a, b| b.cmp(a));
+        ids
     }
 }
 

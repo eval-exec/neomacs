@@ -188,7 +188,7 @@ use crate::emacs_core::process::SystemProcessExt;
 /// with no child is not a member of the population rather than an early
 /// `continue` inside it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct SweepableChild {
+pub(crate) struct SweepableChild {
     id: ProcessId,
 }
 
@@ -200,7 +200,7 @@ impl SweepableChild {
     /// `poll_child_status_change` already keeps polling so a later
     /// `WCONTINUED` stays observable -- and spells `p->pid` as any of the
     /// three child handles a spawn may have left behind.
-    pub(super) fn of(id: ProcessId, proc: &Process) -> Option<Self> {
+    pub(crate) fn of(id: ProcessId, proc: &Process) -> Option<Self> {
         let status_can_change = matches!(
             ProcessStatusSymbol::from_status_value(proc.status),
             Some(ProcessStatusSymbol::Run | ProcessStatusSymbol::Stop)
@@ -211,7 +211,7 @@ impl SweepableChild {
         (status_can_change && alive).then_some(Self { id })
     }
 
-    pub(super) fn id(self) -> ProcessId {
+    pub(crate) fn id(self) -> ProcessId {
         self.id
     }
 }
@@ -419,7 +419,7 @@ pub(crate) struct ObservedProcess<'a> {
 impl<'a> ObservedProcess<'a> {
     /// Private: the only caller is [`ProcessManager::observe`], in this
     /// module, after the sweep.
-    fn new(proc: &'a Process) -> Self {
+    pub(crate) fn new(proc: &'a Process) -> Self {
         Self { proc }
     }
 
@@ -447,87 +447,6 @@ impl<'a> ObservedProcess<'a> {
     /// The process itself, for the fields that are not its status.
     pub(crate) fn process(&self) -> &'a Process {
         self.proc
-    }
-}
-
-impl ProcessManager {
-    /// GNU `handle_child_signal`'s `FOR_EACH_PROCESS` arm (src/process.c:
-    /// 7734-7763), run at a safe point instead of in the handler.
-    ///
-    /// The walk order is GNU's: `FOR_EACH_PROCESS` is
-    /// `FOR_EACH_ALIST_VALUE (Vprocess_alist, ...)` (:343) and `make_process`
-    /// conses onto the front (:953), so the alist is newest-first and a
-    /// descending `ProcessId` reproduces it -- the same identity
-    /// `list_processes` and `live_process_ids` already use (ledger 175 §3).
-    /// Order does not change what is recorded, since each child is harvested
-    /// independently; it is matched so that a future reader does not have to
-    /// wonder.
-    ///
-    /// `check_child_status_change` is GNU's per-process body: the
-    /// `child_status_changed` probe (:7742), the `delete_read_fd` on a
-    /// terminal status (:7760, spelled here as unregistering the child's
-    /// status source from the poller), and the `raw_status`/`raw_status_new`
-    /// stamp (:7746-7747, spelled `pending_status`/`status_notify_pending`).
-    /// The `site` argument is the whole point, and it is not used at run time.
-    /// See [`WaitStatusNotifySite`](crate::emacs_core::wait::WaitStatusNotifySite):
-    /// it has no public constructor, so this walk is reachable only from
-    /// `wait.rs` -- `Context::maybe_quit` cannot spell the call.
-    ///
-    /// Returns only a COUNT, for the engagement counters.  **Which processes
-    /// `status_notify` then visits is not this walk's answer to give**: it is
-    /// GNU's per-process tick pair, read by
-    /// [`ProcessManager::processes_with_unnotified_status_change`], because
-    /// seven of GNU's eight `p->tick = ++process_tick;` sites are not this walk
-    /// (see [`StatusChangeSite`]).  Returning the stamped ids is what made the
-    /// visit set the SIGCHLD record's, which is the defect this shape closes.
-    pub(crate) fn record_child_status_changes(
-        &mut self,
-        site: crate::emacs_core::wait::WaitStatusNotifySite,
-    ) -> usize {
-        let _ = site;
-        super::reap::collect_deferred_child_status_changes();
-        STATUS_NOTIFY_WALKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let mut population: Vec<SweepableChild> = self
-            .processes
-            .iter()
-            .filter_map(|(id, proc)| SweepableChild::of(*id, proc))
-            .collect();
-        if population.is_empty() {
-            return 0;
-        }
-        population.sort_unstable_by_key(|child| std::cmp::Reverse(child.id()));
-        let mut stamped = 0;
-        for child in population {
-            if self.check_child_status_change(child.id()) {
-                stamped += 1;
-            }
-        }
-        STATUS_NOTIFY_STAMPED.fetch_add(stamped as u64, std::sync::atomic::Ordering::Relaxed);
-        stamped
-    }
-
-    /// GNU's `update_status` at `site`, then the read.
-    ///
-    /// Returns `None` for an id that names no process at all, live or
-    /// retired -- the analogue of `get_process` having answered `nil` before
-    /// any of these sites was reached.
-    pub(crate) fn observe(
-        &mut self,
-        site: UpdateStatusSite,
-        id: ProcessId,
-    ) -> Option<ObservedProcess<'_>> {
-        match site.recording() {
-            // NO ARM SWEEPS, and both variants say why rather than leaving it
-            // to be inferred.  `AlreadyRecorded` needs nothing because the
-            // machinery around the site has just made the record;
-            // `AsynchronouslyRecorded` needs nothing because the SIGCHLD
-            // trigger made it at a safe point -- and must not sweep here,
-            // because a sweep AT the observation is what ledger 180 measured
-            // and withdrew.  This `match` exists to make that a decision the
-            // type forces rather than an omission.
-            Recording::AlreadyRecorded { .. } | Recording::AsynchronouslyRecorded { .. } => {}
-        }
-        self.get_any(id).map(ObservedProcess::new)
     }
 }
 
@@ -576,22 +495,6 @@ impl UnrecordedStatusRead {
                 "the recursive mode-line renderer holds &ProcessManager, not &mut"
             }
         }
-    }
-}
-
-impl ProcessManager {
-    /// Read a Lisp-visible status at one of the enumerated holes, WITHOUT
-    /// GNU's recording having been made here.
-    ///
-    /// The `site` argument is not used at run time; it exists so the call
-    /// cannot be written without naming which hole it is.
-    pub(crate) fn read_status_without_recording(
-        &self,
-        site: UnrecordedStatusRead,
-        id: ProcessId,
-    ) -> Option<ObservedProcess<'_>> {
-        let _ = site;
-        self.get_any(id).map(ObservedProcess::new)
     }
 }
 
@@ -646,12 +549,12 @@ pub(crate) enum StatusChangeRecorder {
 
 impl StatusChangeTicks {
     /// GNU `p->tick = ++process_tick;`
-    fn record(&mut self, tick: u64) {
+    pub(crate) fn record(&mut self, tick: u64) {
         self.changed = tick;
     }
 
     /// GNU `p->update_tick = p->tick;` (:7894, and again at :7935).
-    fn mark_notified(&mut self) {
+    pub(crate) fn mark_notified(&mut self) {
         self.notified = self.changed;
     }
 
@@ -659,57 +562,6 @@ impl StatusChangeTicks {
     /// test, and the only question this type answers.
     pub(crate) fn is_unnotified(self) -> bool {
         self.changed != self.notified
-    }
-}
-
-impl ProcessManager {
-    /// GNU `p->tick = ++process_tick;` at `site`.
-    ///
-    /// The `site` argument is not used at run time; it exists so the call
-    /// cannot be written without naming which of GNU's eight lines it is.
-    pub(crate) fn record_status_change(&mut self, site: StatusChangeSite, id: ProcessId) {
-        // GNU's `++process_tick` is a plain `EMACS_INT` increment.  `u64`
-        // saturates rather than wraps so that a wrap could never make a
-        // recorded change compare equal to a notified one; at one tick per
-        // status change the bound is not reachable, and saying so is cheaper
-        // than reasoning about it later.
-        self.process_tick = self.process_tick.saturating_add(1);
-        let tick = self.process_tick;
-        if let Some(proc) = self.processes.get_mut(&id) {
-            proc.status_ticks.record(tick);
-        }
-        tracing::trace!(
-            gnu = site.gnu(),
-            what = site.what(),
-            tick,
-            "p->tick = ++process_tick"
-        );
-    }
-
-    /// GNU `p->update_tick = p->tick;` (src/process.c:7894 and :7935).
-    pub(crate) fn mark_status_change_notified(&mut self, id: ProcessId) {
-        if let Some(proc) = self.processes.get_mut(&id) {
-            proc.status_ticks.mark_notified();
-        }
-    }
-
-    /// GNU `status_notify`'s visit set: `FOR_EACH_PROCESS` filtered by
-    /// `p->tick != p->update_tick` (src/process.c:7887-7892).
-    ///
-    /// The order is GNU's alist order -- `FOR_EACH_PROCESS` is
-    /// `FOR_EACH_ALIST_VALUE (Vprocess_alist, ...)` (:343) and `make_process`
-    /// conses onto the front (:953), so the list is newest-first and a
-    /// descending [`ProcessId`] reproduces it.  That order is Lisp-visible for
-    /// a split `:stderr` pipe, which is created BEFORE the process that owns
-    /// it and therefore notified AFTER it (ledger 54).
-    pub(crate) fn processes_with_unnotified_status_change(&self) -> Vec<ProcessId> {
-        let mut ids: Vec<ProcessId> = self
-            .processes
-            .iter()
-            .filter_map(|(id, proc)| proc.status_ticks.is_unnotified().then_some(*id))
-            .collect();
-        ids.sort_unstable_by(|a, b| b.cmp(a));
-        ids
     }
 }
 
@@ -729,8 +581,10 @@ impl ProcessManager {
 /// next door -- [`STATUS_NOTIFY_VISITED`] -- and the difference `visited -
 /// stamped` is exactly the work the old visit set (the walk's own return
 /// value) could not have done.
-static STATUS_NOTIFY_WALKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-static STATUS_NOTIFY_STAMPED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub(crate) static STATUS_NOTIFY_WALKS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+pub(crate) static STATUS_NOTIFY_STAMPED: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
 /// Processes GNU's `p->tick != p->update_tick` (src/process.c:7892) put in a
 /// `status_notify` visit set.  See [`STATUS_NOTIFY_WALKS`].
 static STATUS_NOTIFY_VISITED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);

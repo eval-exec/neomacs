@@ -28,6 +28,7 @@
 mod eval_display_queries;
 mod mode_line_append;
 mod mode_line_coding;
+use crate::emacs_core::process::SystemProcessExt;
 use crate::window::DisplayFrameExt;
 use crate::window::DisplayFrameManagerExt;
 use mode_line_coding::CodingAccess;

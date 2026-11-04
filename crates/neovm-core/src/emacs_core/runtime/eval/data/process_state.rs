@@ -1767,6 +1767,25 @@ impl ProcessManager {
     pub fn setenv(&mut self, name: LispString, value: Option<LispString>) {
         self.env_overrides.insert(name, value);
     }
+
+    pub fn record_status_change(&mut self, site: StatusChangeSite, id: ProcessId) {
+        // GNU's `++process_tick` is a plain `EMACS_INT` increment.  `u64`
+        // saturates rather than wraps so that a wrap could never make a
+        // recorded change compare equal to a notified one; at one tick per
+        // status change the bound is not reachable, and saying so is cheaper
+        // than reasoning about it later.
+        self.process_tick = self.process_tick.saturating_add(1);
+        let tick = self.process_tick;
+        if let Some(proc) = self.processes.get_mut(&id) {
+            proc.status_ticks.record(tick);
+        }
+        tracing::trace!(
+            gnu = site.gnu(),
+            what = site.what(),
+            tick,
+            "p->tick = ++process_tick"
+        );
+    }
 }
 
 // Wait-queue/coding/status vocabulary (A3b-7).

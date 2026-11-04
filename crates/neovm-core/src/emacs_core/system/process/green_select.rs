@@ -20,10 +20,10 @@ pub(crate) enum MainNativePreparation {
 /// An observer of the backend lifetime, not its session-retirement authority.
 /// Dropping a temporary capture must not retire the backend's shared source.
 pub(crate) struct GreenSelectHandle {
-    wake: Arc<ControlWake>,
-    notification_pending: Arc<NotificationLatch>,
+    pub(crate) wake: Arc<ControlWake>,
+    pub(crate) notification_pending: Arc<NotificationLatch>,
     #[cfg(unix)]
-    signal_source: Option<(Arc<polling::Poller>, std::os::fd::RawFd)>,
+    pub(crate) signal_source: Option<(Arc<polling::Poller>, std::os::fd::RawFd)>,
 }
 
 static_assertions::assert_impl_all!(GreenSelectHandle: Send, Sync);
@@ -56,7 +56,7 @@ impl GreenSelectHandle {
         }
     }
 
-    fn prepare_signal_source(&self) -> std::io::Result<()> {
+    pub(crate) fn prepare_signal_source(&self) -> std::io::Result<()> {
         #[cfg(unix)]
         if let Some((poller, fd)) = &self.signal_source {
             // SAFETY: the process signal installation owns this source longer
@@ -72,7 +72,7 @@ impl GreenSelectHandle {
         Ok(())
     }
 
-    fn prepare_main_wait(&self, deadline: Instant) -> MainNativePreparation {
+    pub(crate) fn prepare_main_wait(&self, deadline: Instant) -> MainNativePreparation {
         // Claim/arm first; recheck the ordinary durable input bit afterwards.
         let wait = match PreparedNativeWait::new(
             &self.wake,
@@ -147,91 +147,5 @@ impl GreenSelectHandle {
             | ControlWakeOutcome::NativeReady
             | ControlWakeOutcome::HostClosed(_) => true,
         }
-    }
-}
-
-impl ProcessManager {
-    pub(crate) fn prepare_green_main_wait(&self, deadline: Instant) -> MainNativePreparation {
-        match self.green_select_handle() {
-            Some(select) => select.prepare_main_wait(deadline),
-            None => MainNativePreparation::Scheduler,
-        }
-    }
-
-    pub(crate) fn attach_host_control_session(
-        &self,
-    ) -> crate::host_effect::wake::HostSessionControl {
-        self.wait_backend
-            .notification_pending
-            .attach_native(self.wait_backend.poller.as_ref().map(Arc::clone))
-            .control()
-            .attach_host_session()
-    }
-
-    pub(crate) fn revoke_host_control_session(&self) {
-        if let Some(wake) = self.wait_backend.notification_pending.control() {
-            wake.revoke_host_session();
-        }
-    }
-
-    /// Capture under the Baton. The shared source is privately attached once
-    /// to this backend. Missing native readiness is a cold admission refusal;
-    /// condition-only control owners never qualify this process selector.
-    pub(crate) fn observe_green_admission_refusal(
-        &self,
-        observe: impl FnOnce(crate::host_effect::wake::NativeReadinessCause),
-    ) {
-        self.wait_backend
-            .notification_pending
-            .attach_native(self.wait_backend.poller.as_ref().map(Arc::clone))
-            .observe_admission_refusal(observe);
-    }
-
-    pub(crate) fn green_native_readiness(
-        &self,
-    ) -> Result<(), crate::host_effect::wake::NativeReadinessCause> {
-        self.wait_backend
-            .notification_pending
-            .attach_native(self.wait_backend.poller.as_ref().map(Arc::clone))
-            .require_native()
-            .map(|_| ())
-    }
-
-    #[cfg(test)]
-    pub(crate) fn refuse_green_native_readiness_for_test(
-        &mut self,
-        cause: crate::host_effect::wake::NativeReadinessCause,
-    ) {
-        if matches!(
-            cause,
-            crate::host_effect::wake::NativeReadinessCause::AbsentPoller
-        ) {
-            self.wait_backend.poller = None;
-            #[cfg(unix)]
-            {
-                self.wait_backend.signal_fd = None;
-            }
-        }
-        self.wait_backend
-            .notification_pending
-            .refuse_native_for_test(cause);
-    }
-
-    pub(crate) fn green_select_handle(&self) -> Option<GreenSelectHandle> {
-        let latch = &self.wait_backend.notification_pending;
-        let wake = latch
-            .attach_native(self.wait_backend.poller.as_ref().map(Arc::clone))
-            .require_native()
-            .ok()?;
-        Some(GreenSelectHandle {
-            wake: Arc::clone(wake),
-            notification_pending: Arc::clone(latch),
-            #[cfg(unix)]
-            signal_source: self.wait_backend.poller.as_ref().and_then(|poller| {
-                self.wait_backend
-                    .signal_fd
-                    .map(|fd| (Arc::clone(poller), fd))
-            }),
-        })
     }
 }
