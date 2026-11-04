@@ -187,7 +187,7 @@ impl Context {
             .ok_or(RowsObservationRefusal::ColdFaces)?;
         if owner
             .face_realization
-            .basic(crate::face::realization::BasicFace::Default)
+            .basic(crate::emacs_core::eval::data::face::BasicFace::Default)
             .is_none()
         {
             return Err(RowsObservationRefusal::ColdFaces);
@@ -299,7 +299,7 @@ impl Context {
                     || !table.matches(current_table)
                     || owner
                         .face_realization
-                        .basic(crate::face::realization::BasicFace::Default)
+                        .basic(crate::emacs_core::eval::data::face::BasicFace::Default)
                         .is_none()
                 {
                     return Err(RowsObservationRefusal::FaceRealizationChanged);

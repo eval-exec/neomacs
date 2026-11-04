@@ -1731,10 +1731,10 @@ impl Context {
     }
 
     /// The chrome dirty set — which windows must re-generate their mode /
-    /// header / tab line. See [`crate::emacs_core::chrome_dirty::ChromeDirty`]
+    /// header / tab line. See [`crate::emacs_core::eval::data::window_state::ChromeDirty`]
     /// for the GNU flags this ports and for why nothing consults it as a skip
     /// yet.
-    pub fn chrome_dirty(&self) -> &crate::emacs_core::chrome_dirty::ChromeDirty {
+    pub fn chrome_dirty(&self) -> &crate::emacs_core::eval::data::window_state::ChromeDirty {
         &self.chrome_dirty
     }
 
@@ -1765,7 +1765,7 @@ impl Context {
     /// Called by redisplay for each window whose chrome it actually generated.
     /// GNU's analogue is `mark_window_display_accurate_1`. A window that
     /// SKIPPED its chrome must not be acknowledged here — see
-    /// [`crate::emacs_core::chrome_dirty::ChromeDirty`] for why the
+    /// [`crate::emacs_core::eval::data::window_state::ChromeDirty`] for why the
     /// acknowledgement is per window rather than a blanket clear.
     pub fn note_chrome_generated(&mut self, window: WindowId) {
         self.chrome_dirty.note_chrome_generated(window);

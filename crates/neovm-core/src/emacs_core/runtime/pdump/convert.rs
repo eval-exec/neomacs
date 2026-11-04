@@ -78,7 +78,8 @@ use crate::tagged::header::{
     RecordObj, StringObj, SubCharTableObj, VecLikeHeader, VectorObj,
 };
 use crate::tagged::value::TaggedValue;
-use neovm_value::kmacro::KmacroManager;use neovm_value::display_vocab::{FontSlant, FontWeight, FontWidth};
+use neovm_value::kmacro::KmacroManager;
+use neovm_value::display_vocab::{FontSlant, FontWeight, FontWidth};
 thread_local! {
     static PDUMP_LOAD_NAME_REMAP: RefCell<Option<Vec<NameId>>> = const { RefCell::new(None) };
     static PDUMP_LOAD_SYM_REMAP: RefCell<Option<Vec<SymId>>> = const { RefCell::new(None) };

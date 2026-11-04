@@ -1,18 +1,9 @@
 //! GNU window_scroll_pixel_based's viewport policy, independent of row production.
 
-use super::{BufferId, Context, FrameId, Value, WindowId};
+use super::{BufferId, Context, Value};
 use crate::window::ScrollMargin;
 
-/// Transient VM-owned goal, retained across consecutive scroll commands.
-/// Not a Lisp object or persisted window configuration.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct ScrollGoal {
-    pub frame: FrameId,
-    pub window: WindowId,
-    pub buffer: BufferId,
-    pub x: i64,
-    pub y: i64,
-}
+pub(crate) use crate::emacs_core::eval::data::window_state::ScrollGoal;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum PreservePoint {

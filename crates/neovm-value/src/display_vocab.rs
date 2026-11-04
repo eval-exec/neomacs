@@ -1001,3 +1001,35 @@ impl Default for WindowHistoryState {
 pub enum SourcePreloadWindowRetirementRefusal {
     LiveFramesRemain,
 }
+
+/// Which frames a snapshot request covers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SnapshotTarget {
+    /// The selected frame only.
+    Selected,
+    /// Every visible frame in bottom-to-top z order — the full composited
+    /// screen, including child frames (posframe/corfu popups, tooltips).
+    All,
+    /// One specific frame (core `FrameId.0`).
+    Frame(u64),
+}
+
+/// Serialization format of a snapshot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SnapshotFormat {
+    /// Greppable logical text grid (`FrameDisplayState::render_text`).
+    Text,
+    /// Text plus per-row face runs with names and resolved hex colors.
+    TextFaces,
+    /// Full-fidelity JSON: serde on the real protocol structs.
+    Json,
+    /// Frame and window geometry without replay assets or glyph matrices.
+    JsonGeometry,
+}
+
+/// One `neomacs--frame-snapshot` request, handed to the frontend hook.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SnapshotRequest {
+    pub target: SnapshotTarget,
+    pub format: SnapshotFormat,
+}

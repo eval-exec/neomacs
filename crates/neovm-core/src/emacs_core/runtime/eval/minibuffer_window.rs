@@ -80,7 +80,11 @@ impl Context {
             return None;
         }
         let caller = (*self.minibuffer_selected_window)?;
-        crate::emacs_core::window_cmds::WindowDomain::Live.frame_of(&self.frames, caller)?;
+        crate::emacs_core::window_cmds::WindowDomainFrameOf::frame_of(
+            crate::emacs_core::eval::data::window_state::WindowDomain::Live,
+            &self.frames,
+            caller,
+        )?;
         Some(caller)
     }
 

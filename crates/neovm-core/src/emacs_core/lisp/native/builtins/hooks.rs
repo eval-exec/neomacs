@@ -222,20 +222,20 @@ fn live_windows_for_hook_plan(frame: &crate::window::Frame) -> Vec<LiveWindowHoo
 fn frame_window_hook_record_from_live_state(
     frame: &crate::window::Frame,
     was_selected_frame: bool,
-) -> crate::window::FrameWindowHookRecord {
+) -> crate::emacs_core::eval::data::window_state::FrameWindowHookRecord {
     let windows = live_windows_for_hook_plan(frame)
         .into_iter()
         .map(|window| {
             (
                 window.window_id,
-                crate::window::WindowHookSnapshot {
+                crate::emacs_core::eval::data::window_state::WindowHookSnapshot {
                     buffer_id: window.buffer_id,
                     bounds: window.bounds,
                 },
             )
         })
         .collect();
-    crate::window::FrameWindowHookRecord {
+    crate::emacs_core::eval::data::window_state::FrameWindowHookRecord {
         windows,
         selected_window: Some(frame.selected_window),
         was_selected_frame,
@@ -942,7 +942,7 @@ fn prepare_reused_window_histories(
                         buffers,
                         snapshot.frame_id,
                         outgoing.window_id,
-                        super::window_cmds::WindowBufferHistoryChange {
+                        crate::emacs_core::eval::data::window_state::WindowBufferHistoryChange {
                             outgoing_buffer_id: outgoing.buffer_id,
                             incoming_buffer_id,
                             outgoing_window_start: outgoing.window_start,

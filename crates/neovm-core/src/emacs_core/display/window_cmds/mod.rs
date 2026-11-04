@@ -1099,45 +1099,20 @@ fn window_value(wid: WindowId) -> Value {
 /// like the window ones -- each fixes the predicate its rejection reports.
 pub(crate) use neovm_value::display_vocab::FrameDomain;
 
-/// GNU's three window-argument domains, as a closed set.
-///
-/// Every subr that takes a WINDOW names one of GNU's decoders, and the decoder
-/// fixes BOTH which windows are admitted and which predicate a rejection
-/// reports.  Keeping them together is the point: the predicate used to be a
-/// `&str` passed alongside a hard-coded lookup, so
-/// `validate_optional_window_designator_in_state(.., WindowDomain::Live)` reported
-/// `window-live-p` while still admitting internal windows -- a decoder that
-/// lied about its own contract.  Here the predicate is derived from the variant
-/// and the lookup is a method on it, so the two cannot drift, and adding a
-/// domain is a compile error at every site rather than a silent default.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, IntoStaticStr)]
-pub(crate) enum WindowDomain {
-    /// `decode_live_window` / `CHECK_LIVE_WINDOW`: a live leaf window only.
-    #[strum(serialize = "window-live-p")]
-    Live,
-    /// `decode_valid_window` / `CHECK_VALID_WINDOW`: live OR internal.
-    #[strum(serialize = "window-valid-p")]
-    Valid,
-    /// `decode_any_window` / `CHECK_WINDOW`: any window object, deleted included.
-    #[strum(serialize = "windowp")]
-    Any,
+pub(crate) use crate::emacs_core::eval::data::window_state::WindowDomain;
+
+/// Frame lookup stays with the window tree; the domain itself is plain data.
+pub(crate) trait WindowDomainFrameOf {
+    fn frame_of(self, frames: &FrameManager, window: WindowId) -> Option<FrameId>;
 }
 
-impl WindowDomain {
-    /// The frame owning WINDOW in this domain, or `None` when WINDOW is outside
-    /// it.  Exhaustive by construction.
-    pub(crate) fn frame_of(self, frames: &FrameManager, window: WindowId) -> Option<FrameId> {
+impl WindowDomainFrameOf for WindowDomain {
+    fn frame_of(self, frames: &FrameManager, window: WindowId) -> Option<FrameId> {
         match self {
             Self::Live => frames.find_window_frame_id(window),
             Self::Valid => frames.find_valid_window_frame_id(window),
             Self::Any => frames.any_window_frame_id(window),
         }
-    }
-
-    /// The symbol a rejection reports, derived from the variant rather than
-    /// carried beside it.
-    pub(crate) fn predicate(self) -> &'static str {
-        self.into()
     }
 }
 
@@ -1880,13 +1855,7 @@ fn should_record_window_history_buffer(
         .is_some_and(|buffer| !buffer.name_starts_with_space())
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct WindowBufferHistoryChange {
-    pub(crate) outgoing_buffer_id: BufferId,
-    pub(crate) incoming_buffer_id: BufferId,
-    pub(crate) outgoing_window_start: LispCharPos1,
-    pub(crate) outgoing_window_point: LispCharPos1,
-}
+pub(crate) use crate::emacs_core::eval::data::window_state::WindowBufferHistoryChange;
 
 /// Apply the history part of GNU `record-window-buffer` for a window that is
 /// about to change buffers.  Both ordinary `set-window-buffer` and window

@@ -11,7 +11,7 @@
 use super::super::Context;
 use super::super::redisplay_hooks::RedisplayHookOwnership;
 use crate::buffer::BufferId;
-use crate::emacs_core::chrome_dirty::ChromeDirty;
+use crate::emacs_core::eval::data::window_state::ChromeDirty;
 use crate::emacs_core::profiler::ProfilerState;
 use crate::emacs_core::value::Value;
 use neovm_edit::emacs_core::display_metrics::WindowId;

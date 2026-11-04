@@ -3047,7 +3047,7 @@ pub(crate) fn builtin_resize_mini_window_internal(
         &mut eval.frames,
         &mut eval.edit.buffers,
         &args[0],
-        crate::emacs_core::window_cmds::WindowDomain::Live,
+        crate::emacs_core::eval::data::window_state::WindowDomain::Live,
     )?;
     let frame = eval
         .frames

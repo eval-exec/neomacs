@@ -3780,25 +3780,7 @@ impl Default for WindowDisplaySnapshot {
     }
 }
 
-/// Redisplay-owned runtime state used to decide which GNU window hooks fire.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct WindowHookSnapshot {
-    /// Buffer currently shown in the window.
-    pub buffer_id: BufferId,
-    /// Last known live bounds of the window.
-    pub bounds: Rect,
-}
-
-/// Per-frame redisplay record for GNU window change hook ownership.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct FrameWindowHookRecord {
-    /// Last known live windows on the frame.
-    pub windows: HashMap<WindowId, WindowHookSnapshot>,
-    /// Selected window the last time window change hooks were recorded.
-    pub selected_window: Option<WindowId>,
-    /// Whether this frame was the selected frame at last record time.
-    pub was_selected_frame: bool,
-}
+pub use crate::emacs_core::eval::data::window_state::{FrameWindowHookRecord, WindowHookSnapshot};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PendingGuiResize {

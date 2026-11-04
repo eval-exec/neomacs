@@ -7281,7 +7281,8 @@ fn validate_optional_window_designator_in_state(
             .map(|id| WindowId(id as u64))
     };
     if let Some(wid) = wid
-        && predicate.frame_of(frames, wid).is_some()
+        && crate::emacs_core::window_cmds::WindowDomainFrameOf::frame_of(predicate, frames, wid)
+            .is_some()
     {
         return Ok(());
     }
@@ -10367,37 +10368,7 @@ pub fn register_bootstrap_vars(obarray: &mut crate::emacs_core::symbol::Obarray)
 // actual layout+serialize step is a frontend-installed callback on the
 // evaluator (`Context::frame_snapshot_fn`), exactly like `redisplay_fn`.
 
-/// Which frames a snapshot request covers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SnapshotTarget {
-    /// The selected frame only.
-    Selected,
-    /// Every visible frame in bottom-to-top z order — the full composited
-    /// screen, including child frames (posframe/corfu popups, tooltips).
-    All,
-    /// One specific frame (core `FrameId.0`).
-    Frame(u64),
-}
-
-/// Serialization format of a snapshot.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SnapshotFormat {
-    /// Greppable logical text grid (`FrameDisplayState::render_text`).
-    Text,
-    /// Text plus per-row face runs with names and resolved hex colors.
-    TextFaces,
-    /// Full-fidelity JSON: serde on the real protocol structs.
-    Json,
-    /// Frame and window geometry without replay assets or glyph matrices.
-    JsonGeometry,
-}
-
-/// One `neomacs--frame-snapshot` request, handed to the frontend hook.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SnapshotRequest {
-    pub target: SnapshotTarget,
-    pub format: SnapshotFormat,
-}
+pub use neovm_value::display_vocab::{SnapshotFormat, SnapshotRequest, SnapshotTarget};
 
 /// Decode the optional FRAME / FORMAT subr arguments (`rest` starts at the
 /// FRAME argument). FRAME: nil = selected frame, t = all visible frames, or

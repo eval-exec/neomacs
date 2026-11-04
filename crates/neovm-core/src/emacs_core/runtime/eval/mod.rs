@@ -55,7 +55,10 @@ use crate::window::{
     WindowLayoutQueryAdapter,
 };
 use neovm_edit::emacs_core::display_metrics::WindowId;
-use neovm_value::kmacro::KmacroManager;use neovm_value::display_vocab::{FontSlant, FontWeight, FontWidth};
+use neovm_value::kmacro::KmacroManager;
+use neovm_value::display_vocab::{FontSlant, FontWeight, FontWidth};
+
+pub mod data;
 pub(crate) mod world;
 pub use world::{ContextShutdownError, ObarrayWriteAccess, OutstandingWorldViews, WorldEra};
 pub(crate) use world::{ObarrayView, OwnedRootRegistryView, WorldSlot, WorldView};
@@ -2982,7 +2985,7 @@ pub struct Context {
     pub(crate) command_loop: WorldSlot<crate::keyboard::CommandLoop>,
     /// Consecutive graphical scroll commands retain a pixel goal, not a
     /// possibly clipped buffer column. Owned exclusively by this VM.
-    pub(crate) scroll_goal: Option<crate::emacs_core::xdisp::motion::ScrollGoal>,
+    pub(crate) scroll_goal: Option<crate::emacs_core::eval::data::window_state::ScrollGoal>,
     /// Source identity for the display-facing `face_table` derived from a
     /// frame's authoritative Lisp face specifications.  Equal identity means
     /// redisplay can reuse the table without scanning every face again.
@@ -3211,7 +3214,7 @@ pub struct Context {
     body_redisplay_by_buffer: FxHashMap<BufferId, u64>,
     /// Which windows' chrome (mode/header/tab line) must be re-generated on
     /// the next redisplay. See [`ChromeDirty`].
-    chrome_dirty: crate::emacs_core::chrome_dirty::ChromeDirty,
+    chrome_dirty: crate::emacs_core::eval::data::window_state::ChromeDirty,
     /// See `SymbolByteCodeCallCache`: what each symbol's function cell resolves
     /// to for a bytecode stack call, epoch-tagged.
     pub(crate) symbol_bytecode_call_cache: crate::emacs_core::bytecode::vm::SymbolByteCodeCallCache,
@@ -3352,7 +3355,7 @@ pub struct Context {
         Box<
             dyn FnMut(
                 &mut Self,
-                &crate::emacs_core::xdisp::SnapshotRequest,
+                &neovm_value::display_vocab::SnapshotRequest,
             ) -> Result<String, String>,
         >,
     >,
