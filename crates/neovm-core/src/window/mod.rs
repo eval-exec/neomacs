@@ -121,50 +121,18 @@ pub(crate) fn char_property_window_lookup(
     }
 }
 
-const FIRST_WINDOW_ID: WindowId = WindowId(1);
+pub(crate) use crate::emacs_core::eval::data::window_state::{
+    FIRST_WINDOW_ID, WindowSequenceNumber,
+};
 
-/// GNU's observable `window.sequence_number`, separate from native identity.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum WindowSequenceNumber {
-    RetiredPreload,
-    Runtime(std::num::NonZeroU64),
-    /// Contextual diagnostics can be asked to print an unminted test handle.
-    /// It has no owner-issued sequence; preserve its native diagnostic ID.
-    Unminted(WindowId),
-}
-
-impl std::fmt::Display for WindowSequenceNumber {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::RetiredPreload => 0_u64.fmt(formatter),
-            Self::Runtime(sequence) => sequence.fmt(formatter),
-            Self::Unminted(window) => window.0.fmt(formatter),
-        }
-    }
-}
-
-/// Native IDs stay monotone across source preload; only this printable origin
-/// advances at the closed, no-live-frames construction boundary.
-#[derive(Clone, Copy, Debug)]
-struct WindowSequenceOrigin(WindowId);
-
-impl WindowSequenceOrigin {
-    fn sequence_number(self, window: WindowId, next: WindowId) -> WindowSequenceNumber {
-        if window.0 < FIRST_WINDOW_ID.0 || window.0 >= next.0 {
-            return WindowSequenceNumber::Unminted(window);
-        }
-        match window.0.checked_sub(self.0.0) {
-            None => WindowSequenceNumber::RetiredPreload,
-            Some(offset) => offset
-                .checked_add(1)
-                .and_then(std::num::NonZeroU64::new)
-                .map_or(
-                    WindowSequenceNumber::Unminted(window),
-                    WindowSequenceNumber::Runtime,
-                ),
-        }
-    }
-}
+pub use crate::emacs_core::eval::data::window_state::{
+    DeletedWindowRecord, FrameDeletion, FrameDeletionSelectionPolicy, NavigationIntentToken,
+    SelectedFrameAfterDeletion, WindowPresentationSnapshot,
+};
+pub(crate) use crate::emacs_core::eval::data::window_state::{
+    FramePresentationState, PendingContentTransitionIntents, PendingIntentLedger,
+    PreparedDisplayPresentation, TtyFrameNameOrdinal, WindowSequenceOrigin,
+};
 
 static_assertions::assert_eq_size!(WindowSequenceOrigin, WindowId);
 
@@ -605,19 +573,6 @@ pub enum WindowOldBuffer {
     StaleEpoch,
     /// The buffer the window showed when the epoch was recorded.
     Recorded(BufferId),
-}
-
-/// What a deleted window remembers on the window object GNU keeps alive.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DeletedWindowRecord {
-    /// The window's owning frame, retained even after window deletion.
-    /// `None` means ownership was not recorded; it does not name another frame.
-    pub owner: Option<FrameId>,
-    /// The buffer the window was showing when it was deleted.
-    pub old_buffer: Option<BufferId>,
-    /// The window's epoch at deletion, or `None` if it was never recorded --
-    /// i.e. it was created after the last time window change functions ran.
-    pub change_stamp: Option<ChangeStamp>,
 }
 
 pub use crate::emacs_core::eval::data::window_state::{Window, WindowTree};
@@ -1769,102 +1724,6 @@ impl PendingGuiResize {
 
 pub use neovm_edit::emacs_core::display_metrics::GuiFrameGeometryHints;
 
-#[derive(Clone, Debug, PartialEq)]
-struct PreparedDisplayPresentation {
-    geometry: Arc<geometry::PresentationGeometry>,
-    publications: Vec<WindowPresentationSnapshot>,
-}
-
-#[derive(Default)]
-struct FramePresentationState {
-    prepared: HashMap<geometry::PresentationId, PreparedDisplayPresentation>,
-    active: Option<PreparedDisplayPresentation>,
-    /// Accepted Lisp redisplay geometry outlives an unsubmitted renderer ticket.
-    /// Share its allocation with the pending/active presentation, retaining only
-    /// the latest completed geometry when those renderer owners release it.
-    completed_geometry: Option<Arc<geometry::PresentationGeometry>>,
-    /// Allocation high-water mark also rejects identities of discarded tickets.
-    last_identity: Option<geometry::PresentationId>,
-}
-
-/// Publication domain for one snapshot in a renderer presentation.
-///
-/// Most snapshots describe the live buffer owned by their window and may
-/// therefore update GNU-shaped window output and retained redisplay caches.
-/// Inactive echo-area redisplay is different: GNU temporarily displays an
-/// echo buffer through the minibuffer window, then restores the live
-/// minibuffer state. Its geometry must remain available to rendering and hit
-/// testing, but it must never become evidence about the live minibuffer.
-///
-/// The snapshot is shared (`Arc`): a frame's publication, its presentation
-/// geometry, the frame's redisplay cache and the layout engine's retained
-/// matrix all hold the same one, where each used to copy every visible
-/// position and row of every window on every frame.
-#[derive(Clone, Debug, PartialEq)]
-pub enum WindowPresentationSnapshot {
-    LiveWindow(std::sync::Arc<WindowDisplaySnapshot>),
-    GeometryOnly(std::sync::Arc<WindowDisplaySnapshot>),
-}
-
-impl WindowPresentationSnapshot {
-    /// A snapshot of a window's live buffer.
-    pub fn live(snapshot: WindowDisplaySnapshot) -> Self {
-        Self::LiveWindow(std::sync::Arc::new(snapshot))
-    }
-
-    /// A snapshot kept only as renderer and interaction geometry.
-    pub fn geometry_only(snapshot: WindowDisplaySnapshot) -> Self {
-        Self::GeometryOnly(std::sync::Arc::new(snapshot))
-    }
-
-    pub fn window_id(&self) -> WindowId {
-        self.display_snapshot().window_id
-    }
-
-    pub fn display_snapshot(&self) -> &WindowDisplaySnapshot {
-        self.shared_display_snapshot()
-    }
-
-    /// The snapshot itself, to share rather than copy.
-    pub fn shared_display_snapshot(&self) -> &std::sync::Arc<WindowDisplaySnapshot> {
-        match self {
-            Self::LiveWindow(snapshot) | Self::GeometryOnly(snapshot) => snapshot,
-        }
-    }
-
-    /// Mutable access; copies the snapshot first if another holder shares it.
-    pub fn display_snapshot_mut(&mut self) -> &mut WindowDisplaySnapshot {
-        match self {
-            Self::LiveWindow(snapshot) | Self::GeometryOnly(snapshot) => {
-                std::sync::Arc::make_mut(snapshot)
-            }
-        }
-    }
-
-    /// Prevent this snapshot from becoming live redisplay evidence while
-    /// retaining it as renderer and interaction geometry.
-    pub fn retain_as_geometry_only(&mut self) {
-        if let Self::LiveWindow(snapshot) = self {
-            *self = Self::GeometryOnly(std::mem::take(snapshot));
-        }
-    }
-
-    /// Snapshot evidence that is valid for the window's live buffer.
-    /// Geometry-only publications deliberately cannot produce this value.
-    pub fn live_window_snapshot(&self) -> Option<&WindowDisplaySnapshot> {
-        self.shared_live_window_snapshot()
-            .map(|snapshot| &**snapshot)
-    }
-
-    /// [`Self::live_window_snapshot`], to share rather than copy.
-    pub fn shared_live_window_snapshot(&self) -> Option<&std::sync::Arc<WindowDisplaySnapshot>> {
-        match self {
-            Self::LiveWindow(snapshot) => Some(snapshot),
-            Self::GeometryOnly(_) => None,
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Frame
 // ---------------------------------------------------------------------------
@@ -1893,211 +1752,7 @@ impl FrameDivider {
     }
 }
 
-/// A frame (top-level window/screen).
-pub struct Frame {
-    /// GNU `f->change_stamp`: the epoch bumped each time the window change
-    /// functions run.  Starts at `FIRST` rather than "unset" because GNU's is
-    /// already non-zero by the time any Lisp can observe it, which is what
-    /// makes a window created afterwards (stamp 0) compare unequal.
-    pub change_stamp: ChangeStamp,
-    pub id: FrameId,
-    /// GNU `struct frame.name`: a Lisp string used for resources and default
-    /// title fallback.
-    pub name: Value,
-    /// GNU `struct frame.explicit_name`: whether the frame name came from an
-    /// explicit Lisp-side parameter rather than an auto-generated `F<num>`
-    /// fallback.
-    pub explicit_name: bool,
-    /// GNU `struct frame.icon_name`: explicit icon name, or nil.
-    pub icon_name: Value,
-    /// GNU `struct frame.focus_frame`: frame receiving this frame's keystrokes,
-    /// or nil when focus is not redirected.
-    pub focus_frame: Value,
-    /// GNU `struct frame.parent_frame`: parent frame for child frames, or nil.
-    pub parent_frame: Value,
-    /// Terminal owner id for GNU `frame-terminal` / terminal lifecycle.
-    pub terminal_id: u64,
-    /// GNU `FRAME_INITIAL_P`: bootstrap placeholder frame that exists before
-    /// a real terminal or window-system frame is installed.
-    pub initial: bool,
-    /// This frame's window tree.
-    ///
-    /// Private: reach the root through [`Frame::root_window`] and windows
-    /// through [`Frame::find_window`], so that how the tree is stored stays
-    /// inside [`WindowTree`].
-    tree: WindowTree,
-    /// The selected (active) window.
-    pub selected_window: WindowId,
-    /// The previously-selected window. GNU stores this as
-    /// `frame->old_selected_window` and returns it from
-    /// `frame-old-selected-window` (`src/frame.c`). Window audit
-    /// Critical 8 in `drafts/window-system-audit.md` flagged the
-    /// builtin as a stub returning nil because this field did not
-    /// exist; the builtin now reads it.
-    ///
-    /// Initialized to `None` (nil) on a fresh frame to match GNU
-    /// `make_frame_without_minibuffer`, then set to whichever
-    /// window was previously selected on every `select-window`,
-    /// `set-frame-selected-window`, and `set-window-configuration`
-    /// transition.
-    pub old_selected_window: Option<WindowId>,
-    /// Minibuffer window (always a leaf).
-    pub minibuffer_window: Option<WindowId>,
-    /// Storage for the minibuffer leaf, which is not part of the split tree.
-    pub minibuffer_leaf: Option<Window>,
-    /// Frame pixel dimensions.
-    pub width: u32,
-    pub height: u32,
-    /// Physical device pixels per logical Emacs pixel for this native frame.
-    /// TTY and X11 frames use 1.0; Wayland can publish fractional values.
-    pub device_scale_factor: f64,
-    /// Pixel/cell position of the frame on its display, or relative to its
-    /// parent for child frames.
-    pub left_pos: i64,
-    pub top_pos: i64,
-    /// Internal window-system kind, mirroring GNU Emacs frame state rather
-    /// than the mutable Lisp-visible frame parameter alist.
-    pub window_system: Option<Value>,
-    /// The Lisp-visible `window-system` parameter, cached beside the map entry.
-    ///
-    /// `effective_window_system` falls back to this parameter when no internal
-    /// kind is installed, and geometry/layout code calls it dozens of times
-    /// per command.  Reading the entry out of `parameters` on every call cost
-    /// 171 instructions (hash + symbol comparison) in the C-n profile; this
-    /// copy makes the accessor two field reads.  The parameter map is private
-    /// to this module and only [`Frame::set_parameter`] and
-    /// [`Frame::remove_parameter`] write it, so those two methods are the
-    /// complete set of writers that keep this copy current.
-    window_system_parameter: Option<Value>,
-    /// Native display connection plus the X display inherited by child
-    /// processes. These differ for a Wayland frame running alongside
-    /// Xwayland, just as GNU's PGTK backend distinguishes its GDK display from
-    /// the `DISPLAY` exported to subprocesses.
-    display_identity: FrameDisplayIdentity,
-    /// Frame parameters.
-    ///
-    /// Window audit Medium 12 in
-    /// `drafts/window-system-audit.md`: GNU's
-    /// `Fset_frame_parameter` calls into the per-toolkit
-    /// backend (`x_set_*`, `pgtk_set_*`, etc.) for each parameter
-    /// class (position, size, fonts, fullscreen, scroll bars).
-    /// neomacs writes to this HashMap unconditionally, so a
-    /// `(modify-frame-parameters f '((width . 100)))` call
-    /// updates the parameter alist but does not always reach the
-    /// active display backend. Wiring the dispatch is tracked as
-    /// audit Phase 6.
-    pub parameters: HashMap<Value, Value>,
-    /// Accepted GUI opacity, independent of the raw Lisp parameter alist.
-    /// GNU stores a new raw value before its handler can signal an error.
-    pub background_alpha: f32,
-    pub frame_alpha: [f32; 2],
-    /// Whether the frame is visible, iconified, or invisible.
-    pub visibility: FrameVisibility,
-    /// Whether the menu / tab / tool bars are actually displayed and therefore
-    /// occupy rows of the window text area (mirrors GNU realizing
-    /// `FRAME_MENU_BAR_LINES` into `FRAME_TOP_MARGIN` only on a shown frame).
-    /// Set on interactively displayed frames; left false for non-displayed
-    /// frames (e.g. `--batch`), so window-edge coordinates match GNU there.
-    pub displays_chrome: bool,
-    /// GNU `struct frame.title`: explicit title override, or nil.
-    pub title: Value,
-    /// Retained projection policy, including while this frame is unselected.
-    gui_bar_presentation: GuiBarPresentation,
-    /// Menu bar height in pixels.
-    pub menu_bar_height: u32,
-    /// Tool bar height in pixels.
-    pub tool_bar_height: u32,
-    /// Compact bar height in pixels.
-    pub compact_bar_height: u32,
-    /// Tab bar height in pixels.
-    pub tab_bar_height: u32,
-    /// Default font size in pixels.
-    pub font_pixel_size: f32,
-    /// Default character width.
-    pub char_width: f32,
-    /// Default character height.
-    pub char_height: f32,
-    /// The default font's ascent in pixels: how far the text baseline sits
-    /// below the top of a character cell.
-    ///
-    /// GNU's `FONT_BASE` for the frame's default face font (`FRAME_BASELINE` is
-    /// `char_height`-relative, not a pixel count).  A row's height is
-    /// `max (ascent) + max (descent)` over the elements on it
-    /// (`move_it_in_display_line_to`, src/xdisp.c:11203-11207; the image branch
-    /// is `produce_image_glyph`, src/xdisp.c:32447-32463), so a display element
-    /// that rises above the baseline -- an image with `:ascent 100` -- needs
-    /// this number to be measurable at all.  Without it the frame carried only
-    /// the cell's *total* height and every consumer had to guess the split.
-    ///
-    /// Terminal frames keep the cell convention `descent = 0` that
-    /// `neovm_bridge` uses for them (`font_ascent = char_height`); they display
-    /// no images, so the split is unobservable there.
-    pub font_ascent: f32,
-    /// One-shot guard used when a live default-font change updates the frame's
-    /// character metrics before GNU would commit the follow-up width/height
-    /// window-system resize.
-    pub defer_next_gui_parameter_resize: bool,
-    /// Logical GUI resize requested via frame parameters but not yet committed
-    /// to the live host window.
-    pub pending_gui_resize: Option<PendingGuiResize>,
-    /// Authoritative last-redisplay geometry keyed by live leaf window.
-    ///
-    /// Window audit Medium 10 / Medium 11 in
-    /// `drafts/window-system-audit.md`: GNU keeps `change_stamp`,
-    /// `use_time`, `sequence_number`, `old_pixel_width`,
-    /// `old_pixel_height`, `old_body_pixel_width`,
-    /// `old_body_pixel_height`, and `old_buffer` directly on
-    /// `struct window`. neomacs centralizes the redisplay-time
-    /// geometry inside `presentation_state` and the change-detection
-    /// state inside `window_hook_record`. The fields below are the
-    /// neomacs-side equivalents — adding the GNU names verbatim is
-    /// tracked as future work in the audit's Phase 4 plan.
-    presentation_state: FramePresentationState,
-    /// Latest completed layout output used for incremental redisplay and GNU
-    /// output bookkeeping. This cache is not renderer-active geometry.
-    redisplay_cache: HashMap<WindowId, std::sync::Arc<WindowDisplaySnapshot>>,
-    /// Exact accepted TTY frame-pool numeric cells, independent of a leaf's
-    /// surviving redisplay cache. One frame mutator replaces a fully initialized
-    /// Arc only at validated presentation prepare; concurrent readers retain
-    /// immutable numeric views through the existing publication transport.
-    /// Query-only layouts never publish new pool observations. Typed allocation
-    /// adjustments update only TEXT current-row admission, preserving physical cells.
-    tty_posn_pool: Option<Arc<tty_posn_current::TtyPosnCurrentOwner>>,
-    /// GNU preserves pool-backed topology only when the accepted tree has no margins.
-    tty_posn_pool_can_repartition: bool,
-    /// Test-only numeric policy owned by this Frame's exclusive mutator.
-    /// Independent contexts and frames never share mutable selectors; readers
-    /// borrow immutable state. No Lisp values, TLS, or shipping fields exist.
-    #[cfg(any(test, feature = "redisplay-test-policy"))]
-    test_posn_object_extent_mode: Option<PosnObjectExtentMode>,
-    /// Last recorded redisplay state for GNU window change hooks.
-    pub(crate) window_hook_record: FrameWindowHookRecord,
-    /// GNU `frame-window-state-change` flag.
-    pub(crate) window_state_change: bool,
-    /// Real frame-local Lisp face hash table, mirroring GNU `frame->face_hash_table`.
-    pub face_hash_table: Value,
-    /// Derived realization state, owned by this frame's exclusive mutator.
-    pub(crate) face_realization: crate::face::realization::FrameFaceRealizationCache,
-    /// Per-frame realized Lisp faces, mirroring GNU's `frame->face_hash_table`
-    /// runtime surface for renderer-facing consumers.
-    /// GNU `struct frame.z_order`: stacking order among sibling child frames.
-    pub z_order: i32,
-    /// Whether a child frame suppresses the TTY decoration border.
-    pub undecorated: bool,
-    /// Non-focusable frame hint.  The TTY path stores it for Lisp-visible
-    /// parameter parity; input focus policy is handled elsewhere.
-    pub no_accept_focus: bool,
-    /// Unsplittable frame hint.
-    pub no_split: bool,
-    /// GNU `struct frame.buffer_list`: buffers most-recently shown in this
-    /// frame, in most-recently-shown-first order.  Updated by
-    /// `bury-buffer-internal` and cleaned up on buffer kill.
-    pub buffer_list: Vec<BufferId>,
-    /// GNU `struct frame.buried_buffer_list`: buffers buried in this frame,
-    /// in most-recently-buried-first order.  Updated by
-    /// `bury-buffer-internal` and cleaned up on buffer kill.
-    pub buried_buffer_list: Vec<BufferId>,
-}
+pub use crate::emacs_core::eval::data::window_state::{Frame, FrameManager};
 
 /// The window and part a frame-relative coordinate resolved to.
 ///
@@ -4097,13 +3752,6 @@ fn mini_window_rows(height: f32, unit: f32) -> usize {
 // FrameManager
 // ---------------------------------------------------------------------------
 
-/// Sequence position for GNU's generated terminal-frame names (`F1`, `F2`,
-/// ...).  This is intentionally independent of `FrameId`: GNU keeps a
-/// dedicated `tty_frame_count`, and pdump/internal object allocation must not
-/// leak into the user-visible frame name.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct TtyFrameNameOrdinal(std::num::NonZeroU64);
-
 impl TtyFrameNameOrdinal {
     const INITIAL: Self = Self(std::num::NonZeroU64::MIN);
 
@@ -4130,24 +3778,6 @@ fn is_generated_tty_frame_name(value: Value) -> bool {
                 !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
             })
         })
-}
-
-/// Manages all frames and tracks the selected frame.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct NavigationIntentToken {
-    generation: std::num::NonZeroU64,
-    direction: TransitionDirection,
-}
-
-impl NavigationIntentToken {
-    pub const fn direction(self) -> TransitionDirection {
-        self.direction
-    }
-}
-
-#[derive(Debug)]
-struct PendingIntentLedger<Scope> {
-    by_scope: HashMap<Scope, NavigationIntentToken>,
 }
 
 impl<Scope> Default for PendingIntentLedger<Scope> {
@@ -4178,84 +3808,6 @@ where
 
     fn remove(&mut self, scope: Scope) {
         self.by_scope.remove(&scope);
-    }
-}
-
-#[derive(Debug, Default)]
-struct PendingContentTransitionIntents {
-    windows: PendingIntentLedger<WindowId>,
-    frames: PendingIntentLedger<FrameId>,
-}
-
-pub struct FrameManager {
-    frames: HashMap<FrameId, Frame>,
-    /// Called on each newly built Frame before it is inserted. The Lisp
-    /// layer injects xfaces::init_frame_lisp_faces here (GNU calls
-    /// init_frame_faces from the frame.c creation paths, not make_frame);
-    /// display-side FrameManagers leave it unset.
-    frame_init_hook: Option<fn(&mut Frame)>,
-    selected: Option<FrameId>,
-    /// GNU's `tty_display_info::top_frame`, indexed by terminal identity.
-    /// A process has one globally selected frame, but every text terminal must
-    /// remember which root frame owns its display while another terminal is
-    /// selected.
-    terminal_top_frames: HashMap<u64, FrameId>,
-    next_frame_id: u64,
-    last_tty_frame_name: Option<TtyFrameNameOrdinal>,
-    next_window_id: u64,
-    window_sequence_origin: WindowSequenceOrigin,
-    old_selected_window: Option<WindowId>,
-    /// Windows that were live and have been deleted, with the buffer each was
-    /// showing when it went.
-    ///
-    /// GNU keeps the deleted window object itself and sets `w->old_buffer` from
-    /// `w->contents` in `Fdelete_window_internal` (`src/window.c`), which is
-    /// what lets `window-old-buffer` still answer for it.  neomacs drops the
-    /// window from the tree, so the buffer has to be recorded here instead --
-    /// a set of ids alone cannot answer the question.
-    deleted_windows: HashMap<WindowId, DeletedWindowRecord>,
-    deleted_window_parameters: HashMap<WindowId, WindowParameters>,
-    window_select_count: i64,
-    next_navigation_intent_generation: std::num::NonZeroU64,
-    pending_content_transition_intents: PendingContentTransitionIntents,
-    /// Monotonic identity of the live window-tree topology. Structural edits
-    /// are rare and pay the increment; redisplay can then reject a stale leaf
-    /// plan in O(1) after arbitrary Lisp callbacks.
-    window_topology_generation: u64,
-}
-
-/// GNU's policy for choosing the frame selected after deleting the currently
-/// selected frame (`src/frame.c:2750-2821`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FrameDeletionSelectionPolicy {
-    MostRecentlyUsed,
-    FrameListOrder,
-}
-
-/// Process-wide selection change caused by removing a frame.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SelectedFrameAfterDeletion {
-    Unchanged,
-    Replaced(FrameId),
-    Cleared,
-}
-
-/// Result of a low-level frame removal.  Callers that also own buffer state
-/// must handle `selected` and realign the current buffer with the surviving
-/// frame's selected window, as GNU's `do_switch_frame` does before freeing the
-/// deleted frame.
-#[must_use]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FrameDeletion {
-    NotFound,
-    Deleted {
-        selected: SelectedFrameAfterDeletion,
-    },
-}
-
-impl FrameDeletion {
-    pub const fn was_deleted(self) -> bool {
-        matches!(self, Self::Deleted { .. })
     }
 }
 
