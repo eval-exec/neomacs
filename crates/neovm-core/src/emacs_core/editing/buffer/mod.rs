@@ -465,25 +465,49 @@ pub(crate) fn builtin_buffer_live_p(
 /// GNU compares with `Fstring_equal`, which never expands or canonicalizes
 /// either side — `find-file` has already stored the truename — so this is a
 /// plain byte comparison, unlike `get-file-buffer`'s resolving search.
-pub(crate) fn builtin_get_truename_buffer(
-    eval: &mut super::eval::Context,
+/// `Context::expect_lisp_string` semantics over the host's GC-safe string
+/// view: CHECK_STRING's `wrong-type-argument stringp` on failure. The ruled
+/// `EditHost::expect_lisp_string` method has not landed yet; this helper is
+/// its exact local form and goes away when the method does.
+fn host_expect_lisp_string<'a, H: EditHost>(
+    host: &'a H,
+    value: Value,
+) -> Result<&'a crate::heap_types::LispString, Flow> {
+    host.lisp_string(value).ok_or_else(|| {
+        signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("stringp"), value],
+        )
+    })
+}
+
+pub(crate) fn builtin_get_truename_buffer<H: EditHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("get-truename-buffer", &args, 1)?;
-    for id in eval.edit.buffers.buffer_list() {
-        let Some(buf) = eval.edit.buffers.get(id) else {
+    let buffer_ids = {
+        let (edit, _) = host.edit_and_vars();
+        edit.buffers.buffer_list()
+    };
+    for id in buffer_ids {
+        let truename_value = {
+            let (edit, _) = host.edit_and_vars();
+            let Some(buf) = edit.buffers.get(id) else {
+                continue;
+            };
+            // GNU skips buffers whose file_truename is not a string BEFORE
+            // calling Fstring_equal, so a non-string FILENAME only signals once
+            // some live buffer visits a file.
+            let Some(truename_value) = buf.buffer_local_value("buffer-file-truename") else {
+                continue;
+            };
+            truename_value
+        };
+        let Some(truename) = host.lisp_string(truename_value) else {
             continue;
         };
-        // GNU skips buffers whose file_truename is not a string BEFORE
-        // calling Fstring_equal, so a non-string FILENAME only signals once
-        // some live buffer visits a file.
-        let Some(truename_value) = buf.buffer_local_value("buffer-file-truename") else {
-            continue;
-        };
-        let Some(truename) = eval.lisp_string(truename_value) else {
-            continue;
-        };
-        let filename = eval.expect_lisp_string(args[0])?;
+        let filename = host_expect_lisp_string(host, args[0])?;
         if truename.schars() == filename.schars()
             && truename.sbytes() == filename.sbytes()
             && truename.as_bytes() == filename.as_bytes()
@@ -552,45 +576,45 @@ pub(crate) fn other_buffer_safely_in_state(
 }
 
 #[cfg(test)]
-pub(crate) fn builtin_set_buffer(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
-    crate::emacs_core::error::expect_args("set-buffer", &args, 1)?;
+pub(crate) fn builtin_set_buffer<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
+    neovm_value::error::expect_args("set-buffer", &args, 1)?;
     let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
-    builtin_set_buffer_1(eval, arg(0))
+    builtin_set_buffer_1(host, arg(0))
 }
 /// `set-buffer` as registered: fixed arity 1, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_set_buffer_1(
-    eval: &mut super::eval::Context,
-    buffer_or_name: Value,
-) -> EvalResult {
+pub(crate) fn builtin_set_buffer_1<H: EditHost>(host: &mut H, buffer_or_name: Value) -> EvalResult {
     let args: [Value; 1] = [buffer_or_name];
     expect_args("set-buffer", &args, 1)?;
-    let id = match args[0].kind() {
-        ValueKind::Veclike(VecLikeType::Buffer) => {
-            let bid = args[0].as_buffer_id().unwrap();
-            if eval.edit.buffers.get(bid).is_none() {
+    let id = {
+        let (edit, _) = host.edit_and_vars();
+        match args[0].kind() {
+            ValueKind::Veclike(VecLikeType::Buffer) => {
+                let bid = args[0].as_buffer_id().unwrap();
+                if edit.buffers.get(bid).is_none() {
+                    return Err(signal(
+                        "error",
+                        vec![Value::string("Selecting deleted buffer")],
+                    ));
+                }
+                bid
+            }
+            ValueKind::String => {
+                let s = expect_buffer_name_string(&args[0])?;
+                edit.buffers.find_buffer_by_name(&s).ok_or_else(|| {
+                    signal("error", vec![Value::string(format!("No buffer named {s}"))])
+                })?
+            }
+            _other => {
                 return Err(signal(
-                    "error",
-                    vec![Value::string("Selecting deleted buffer")],
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("stringp"), args[0]],
                 ));
             }
-            bid
-        }
-        ValueKind::String => {
-            let s = expect_buffer_name_string(&args[0])?;
-            eval.edit.buffers.find_buffer_by_name(&s).ok_or_else(|| {
-                signal("error", vec![Value::string(format!("No buffer named {s}"))])
-            })?
-        }
-        _other => {
-            return Err(signal(
-                LispCondition::WrongTypeArgument,
-                vec![Value::symbol("stringp"), args[0]],
-            ));
         }
     };
-    eval.set_current_buffer_unrecorded(id)?;
+    host.set_current_buffer_unrecorded(id)?;
     Ok(Value::make_buffer(id))
 }
 
@@ -2206,41 +2230,28 @@ pub(crate) fn builtin_field_string(
     builtin_buffer_substring(eval, vec![Value::fixnum(beg), Value::fixnum(end)])
 }
 
-pub(crate) fn builtin_field_string_no_properties(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_field_string_no_properties<H: EditHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("field-string-no-properties", &args, 1)?;
-    let (beg, end) = find_field_bounds_in_state(
-        eval.variables(),
-        &[],
-        &eval.edit.buffers,
-        args.first(),
-        false,
-        None,
-        None,
-    )?;
+    let (beg, end) = {
+        let (edit, vars) = host.edit_and_vars();
+        find_field_bounds_in_state(vars, &[], &edit.buffers, args.first(), false, None, None)?
+    };
     super::editfns::builtin_buffer_substring_no_properties(
-        eval,
+        host,
         vec![Value::fixnum(beg), Value::fixnum(end)],
     )
 }
 
-pub(crate) fn builtin_delete_field(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
+pub(crate) fn builtin_delete_field<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_max_args("delete-field", &args, 1)?;
-    let (beg, end) = find_field_bounds_in_state(
-        eval.variables(),
-        &[],
-        &eval.edit.buffers,
-        args.first(),
-        false,
-        None,
-        None,
-    )?;
-    super::editfns::builtin_delete_region(eval, vec![Value::fixnum(beg), Value::fixnum(end)])
+    let (beg, end) = {
+        let (edit, vars) = host.edit_and_vars();
+        find_field_bounds_in_state(vars, &[], &edit.buffers, args.first(), false, None, None)?
+    };
+    super::editfns::builtin_delete_region(host, vec![Value::fixnum(beg), Value::fixnum(end)])
 }
 
 /// `(clear-string STRING)` -> nil
@@ -2454,7 +2465,7 @@ fn buffer_insert_char_codes(
     string: &crate::heap_types::LispString,
     target_multibyte: bool,
 ) -> Vec<u32> {
-    let mut codes = super::builtins::lisp_string_char_codes(string);
+    let mut codes = neovm_value::strings_core::lisp_string_char_codes(string);
     if target_multibyte {
         if !string.is_multibyte() {
             for code in &mut codes {
@@ -4345,7 +4356,7 @@ pub(crate) fn builtin_position_bytes_1(
     Ok(Value::fixnum(byte_pos.to_lisp_byte_pos().as_i64()))
 }
 
-pub(crate) fn builtin_get_byte(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_get_byte<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_max_args("get-byte", &args, 2)?;
 
     // STRING path: POSITION is a zero-based character index.
@@ -4365,7 +4376,7 @@ pub(crate) fn builtin_get_byte(eval: &mut super::eval::Context, args: Vec<Value>
             expect_wholenump(&args[0])? as usize
         };
 
-        let string = eval.lisp_string(args[1]).expect("string");
+        let string = host.lisp_string(args[1]).expect("string");
         let char_len = string.schars();
         if pos >= char_len && !args[0].is_nil() {
             return Err(signal(
@@ -4386,14 +4397,14 @@ pub(crate) fn builtin_get_byte(eval: &mut super::eval::Context, args: Vec<Value>
         }
         // One character, not the whole string decoded (GNU `Fget_byte':
         // `string_char_to_byte' then `STRING_CHAR').
-        let code = super::builtins::lisp_string_char_at(string, pos)
+        let code = neovm_value::strings_core::lisp_string_char_at(string, pos)
             .expect("POSITION was range-checked against SCHARS");
         return get_byte_from_multibyte_char_code(code);
     }
 
     // Buffer path: POSITION is a 1-based character position.
-    let buf = eval
-        .edit
+    let (edit, _) = host.edit_and_vars();
+    let buf = edit
         .buffers
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -4401,7 +4412,7 @@ pub(crate) fn builtin_get_byte(eval: &mut super::eval::Context, args: Vec<Value>
     let byte_pos = if args.is_empty() || args[0].is_nil() {
         buf.point_emacs_byte_pos()
     } else {
-        let pos = expect_integer_or_marker_in_buffers(&eval.edit.buffers, &args[0])?;
+        let pos = expect_integer_or_marker_in_buffers(&edit.buffers, &args[0])?;
         let point_min = buf.point_min_lisp_char_pos().as_i64();
         let point_max = buf.point_max_lisp_char_pos().as_i64();
         if pos < point_min || pos >= point_max {

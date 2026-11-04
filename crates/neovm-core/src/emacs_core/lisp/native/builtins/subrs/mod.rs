@@ -490,7 +490,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     );
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::fixed1(
         "set-buffer",
-        builtin_set_buffer_1,
+        |ctx, arg| builtin_set_buffer_1(ctx, arg),
         FixedMin1::One,
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::fixed0(
@@ -637,7 +637,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "field-string-no-properties",
-        NativeFn::ContextVec(builtin_field_string_no_properties),
+        NativeFn::ContextVec(|ctx, args| builtin_field_string_no_properties(ctx, args)),
         SubrArity::new(0, Some(1)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -737,7 +737,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "delete-field",
-        NativeFn::ContextVec(builtin_delete_field),
+        NativeFn::ContextVec(|ctx, args| builtin_delete_field(ctx, args)),
         SubrArity::new(0, Some(1)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -858,7 +858,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "get-byte",
-        NativeFn::ContextVec(builtin_get_byte),
+        NativeFn::ContextVec(|ctx, args| builtin_get_byte(ctx, args)),
         SubrArity::new(0, Some(2)),
     )));
     ctx.register_subr(
@@ -4311,7 +4311,9 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "get-truename-buffer",
-        NativeFn::ContextVec(crate::emacs_core::buffer::builtin_get_truename_buffer),
+        NativeFn::ContextVec(
+            |ctx, args| crate::emacs_core::buffer::builtin_get_truename_buffer(ctx, args)
+        ),
         SubrArity::new(1, Some(1)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
