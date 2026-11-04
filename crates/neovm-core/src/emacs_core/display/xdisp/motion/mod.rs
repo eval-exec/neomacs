@@ -222,6 +222,54 @@ fn snapshot_row_index_for_pos_or_truncated_line(
     })
 }
 
+/// The pixel height of the screen line holding POS.
+///
+/// GNU's `Fline_pixel_height` runs `start_display` at point and then
+/// `move_it_by_lines (&it, 0)` (src/xdisp.c), so the answer does not depend
+/// on POS lying inside the window's current rows.  Lay out rows from POS's
+/// source line, as vertical motion does, and grow the row budget until a row
+/// holds POS.  `None` means no frontend can lay the window out.
+pub(crate) fn screen_line_height_at(
+    eval: &mut Context,
+    frame: FrameId,
+    window: WindowId,
+    buffer: BufferId,
+    pos: LispCharPos1,
+) -> Result<Option<i64>, Flow> {
+    let Some(source) = eval.buffers.get(buffer) else {
+        return Ok(None);
+    };
+    let start = measurement::backtrack(source, pos, 0);
+    let end = source.accessible_char_region().end_lisp();
+    let mut count = std::num::NonZeroUsize::new(4).expect("nonzero row budget");
+    loop {
+        let Some(snapshot) = measurement::query(eval, frame, window, buffer, start, count)? else {
+            return Ok(None);
+        };
+        let rows = snapshot_text_rows(&snapshot);
+        if let Some(index) = snapshot_row_index_for_pos_or_truncated_line(&rows, pos, end) {
+            return Ok(Some(rows[index].height));
+        }
+        // Rows already past POS, or fewer rows than asked for, mean more rows
+        // cannot place it.
+        let covered_pos = rows
+            .last()
+            .and_then(|row| row.end_buffer_pos)
+            .is_some_and(|row_end| row_end >= pos.min(end));
+        if rows.len() < count.get() || covered_pos {
+            return Ok(None);
+        }
+        let Some(next) = count
+            .get()
+            .checked_mul(2)
+            .and_then(std::num::NonZeroUsize::new)
+        else {
+            return Ok(None);
+        };
+        count = next;
+    }
+}
+
 /// Leave pushed replacement text without discarding the physical rows crossed.
 /// GNU's move_it_by_lines advances out of a replacing string before returning
 /// a buffer point. Its vpos still counts those rows.
