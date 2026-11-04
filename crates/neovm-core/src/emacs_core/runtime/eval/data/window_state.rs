@@ -1190,3 +1190,64 @@ pub struct WindowTree {
     /// The id of the node every walk starts from.
     pub(crate) root: WindowId,
 }
+
+// --- E5-FM-3a frame records (stage-4 W2/E5) ---
+
+use neomacs_display_protocol::GraphicalDisplayIdentity;
+
+/// Non-graphical frames have no graphical connection. GUI frames share the
+/// validated identity used to initialize their terminal.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum FrameDisplayIdentity {
+    #[default]
+    None,
+    Graphical(GraphicalDisplayIdentity),
+}
+
+impl FrameDisplayIdentity {
+    #[cfg(test)]
+    pub fn wayland(display: impl Into<String>) -> Self {
+        Self::Graphical(
+            GraphicalDisplayIdentity::named(
+                neomacs_display_protocol::GraphicalBackend::Wayland,
+                display,
+            )
+            .expect("valid Wayland display name"),
+        )
+    }
+
+    pub fn native_display(&self) -> Option<&str> {
+        match self {
+            Self::None => None,
+            Self::Graphical(identity) => Some(identity.terminal_name()),
+        }
+    }
+
+    pub fn x_display(&self) -> Option<&str> {
+        match self {
+            Self::None => None,
+            Self::Graphical(identity) => identity.x_display(),
+        }
+    }
+}
+
+/// Presentation of the frame's requested menu/tool bars. Compact presentation
+/// replaces their pixel bands without changing their Lisp frame parameters.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GuiBarPresentation {
+    Separate,
+    Compact,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PendingGuiResize {
+    pub width_cols: i64,
+    pub total_lines: i64,
+    pub(crate) delivery: GuiResizeDelivery,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GuiResizeDelivery {
+    Queued,
+    Requested { width: u32, height: u32, wait: bool },
+}

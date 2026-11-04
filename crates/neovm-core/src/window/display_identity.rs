@@ -1,37 +1,6 @@
-use neomacs_display_protocol::GraphicalDisplayIdentity;
+//! Frame display identity (stage-4 W2/E5 FM-3a).
+//!
+//! Re-exported from eval data; the enum and its protocol-backed payload
+//! moved verbatim with the Frame field-closure records.
 
-/// Non-graphical frames have no graphical connection. GUI frames share the
-/// validated identity used to initialize their terminal.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub enum FrameDisplayIdentity {
-    #[default]
-    None,
-    Graphical(GraphicalDisplayIdentity),
-}
-
-impl FrameDisplayIdentity {
-    #[cfg(test)]
-    pub fn wayland(display: impl Into<String>) -> Self {
-        Self::Graphical(
-            GraphicalDisplayIdentity::named(
-                neomacs_display_protocol::GraphicalBackend::Wayland,
-                display,
-            )
-            .expect("valid Wayland display name"),
-        )
-    }
-
-    pub fn native_display(&self) -> Option<&str> {
-        match self {
-            Self::None => None,
-            Self::Graphical(identity) => Some(identity.terminal_name()),
-        }
-    }
-
-    pub fn x_display(&self) -> Option<&str> {
-        match self {
-            Self::None => None,
-            Self::Graphical(identity) => identity.x_display(),
-        }
-    }
-}
+pub use crate::emacs_core::eval::data::window_state::FrameDisplayIdentity;

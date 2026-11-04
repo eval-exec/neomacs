@@ -175,13 +175,8 @@ pub(crate) use neovm_value::display_vocab::SourcePreloadWindowRetirementRefusal;
 
 pub use neovm_value::display_vocab::FrameId;
 
-/// Presentation of the frame's requested menu/tool bars. Compact presentation
-/// replaces their pixel bands without changing their Lisp frame parameters.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum GuiBarPresentation {
-    Separate,
-    Compact,
-}
+pub(crate) use crate::emacs_core::eval::data::window_state::GuiResizeDelivery;
+pub use crate::emacs_core::eval::data::window_state::{GuiBarPresentation, PendingGuiResize};
 
 pub mod frame_alpha;
 
@@ -2853,19 +2848,6 @@ impl Default for WindowDisplaySnapshot {
 }
 
 pub use crate::emacs_core::eval::data::window_state::{FrameWindowHookRecord, WindowHookSnapshot};
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PendingGuiResize {
-    pub width_cols: i64,
-    pub total_lines: i64,
-    delivery: GuiResizeDelivery,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum GuiResizeDelivery {
-    Queued,
-    Requested { width: u32, height: u32, wait: bool },
-}
 
 impl PendingGuiResize {
     pub fn is_queued(&self) -> bool {
