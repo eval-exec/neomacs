@@ -1042,7 +1042,7 @@ impl KeyboardRuntime {
     ) -> bool {
         self.has_pending_low_level_input_for_query(filter, &ignored_while_no_input, mode)
             || self.pending_input_events.has_input(
-                crate::frontend_events::FrontendInputQuery::Pending(filter),
+                crate::emacs_core::eval::frontend_events::FrontendInputQuery::Pending(filter),
                 track_mouse,
                 &ignored_while_no_input,
             )
