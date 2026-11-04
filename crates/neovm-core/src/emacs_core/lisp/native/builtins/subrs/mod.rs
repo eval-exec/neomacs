@@ -1553,18 +1553,18 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "forward-comment",
-        NativeFn::ContextVec(crate::emacs_core::syntax::builtin_forward_comment),
+        NativeFn::ContextVec(crate::emacs_core::syntax_entries::builtin_forward_comment),
         SubrArity::new(1, Some(1)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "backward-prefix-chars",
-        NativeFn::ContextSlice(crate::emacs_core::syntax::builtin_backward_prefix_chars),
+        NativeFn::ContextSlice(crate::emacs_core::syntax_entries::builtin_backward_prefix_chars),
         SubrArity::new(0, Some(0)),
     )));
     ctx.register_subr(
         crate::emacs_core::subr::world_subr!(SubrSpec::new(
             "forward-word",
-            NativeFn::ContextVec(crate::emacs_core::syntax::builtin_forward_word),
+            NativeFn::ContextVec(crate::emacs_core::syntax_entries::builtin_forward_word),
             SubrArity::new(0, Some(1)),
         ))
         .interactive(crate::emacs_core::interactive::BuiltinInteractiveSpec::String("^p")),

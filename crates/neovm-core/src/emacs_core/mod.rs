@@ -43,6 +43,8 @@ pub mod minibuffer;
 pub(crate) mod prefix;
 #[path = "commands/register/mod.rs"]
 pub mod register;
+#[path = "commands/syntax_entries/mod.rs"]
+pub mod syntax_entries;
 #[path = "commands/textprop_entries/mod.rs"]
 pub mod textprop_entries;
 
