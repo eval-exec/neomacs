@@ -25,12 +25,12 @@ use crate::buffer::LispCharPos1;
 
 use super::{DisplayPointRole, DisplayPointSnapshot};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DisplayPointRowsMode {
-    Off,
-    On,
-    Verify,
-}
+pub(crate) use crate::emacs_core::eval::data::window_state::{
+    Cells, PointCellRole, PointOrder, PointRowData, PointRowIterMode,
+};
+pub use crate::emacs_core::eval::data::window_state::{
+    DisplayPointRow, DisplayPointRowIter, DisplayPointRows, DisplayPointRowsMode, PointCell,
+};
 
 impl DisplayPointRowsMode {
     #[inline]
@@ -54,13 +54,6 @@ pub fn display_point_rows_mode() -> DisplayPointRowsMode {
     })
 }
 
-/// Process-wide numeric policy published by OnceLock; readers share no cursor or Lisp state.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PointRowIterMode {
-    Off,
-    On,
-}
-
 impl PointRowIterMode {
     #[inline]
     fn from_setting(setting: Option<&str>) -> Self {
@@ -81,28 +74,6 @@ fn point_row_iter_mode() -> PointRowIterMode {
     *MODE.get_or_init(|| {
         PointRowIterMode::from_setting(std::env::var("NEOMACS_POINT_ROW_ITER").ok().as_deref())
     })
-}
-
-#[repr(u8)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PointCellRole {
-    Glyph,
-    OverlaidMarker,
-    InsertionBoundary,
-    SyntheticBoundary,
-}
-
-/// The usual glyph/insertion slot: exactly sixteen bytes, with checked bounds.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PointCell {
-    position_delta: u32,
-    x: i32,
-    col: u16,
-    width: u16,
-    height: u16,
-    y_offset: i8,
-    role: PointCellRole,
 }
 
 const _: [(); 16] = [(); std::mem::size_of::<PointCell>()];
@@ -129,23 +100,6 @@ impl PointCell {
             },
         })
     }
-}
-
-#[derive(Clone)]
-enum Cells {
-    Compact(Arc<[PointCell]>),
-    Wide(Arc<[DisplayPointSnapshot]>),
-}
-
-#[derive(Clone)]
-enum PointOrder {
-    /// Emission order already satisfies the exact stable index key. This proof
-    /// belongs to immutable row data and needs no allocated permutation.
-    Identity {
-        len: usize,
-    },
-    Compact(Arc<[u32]>),
-    Wide(Arc<[usize]>),
 }
 
 impl PointOrder {
@@ -193,30 +147,6 @@ impl PointOrder {
             Self::Wide(indices) => indices[index],
         }
     }
-}
-
-struct PointRowData {
-    cells: Cells,
-    source_order: PointOrder,
-    x_order: PointOrder,
-    original_y: i64,
-    original_base: i64,
-    source_min: i64,
-    source_max: i64,
-    y_min: i64,
-    y_max: i64,
-    max_height: i64,
-    min_x: Option<i64>,
-    max_x: Option<i64>,
-}
-
-/// Placement changes clone this descriptor and share its immutable cell arrays.
-#[derive(Clone)]
-pub struct DisplayPointRow {
-    row: i64,
-    y: i64,
-    buffer_base: i64,
-    data: Arc<PointRowData>,
 }
 
 #[inline]
@@ -552,13 +482,6 @@ impl PartialEq for DisplayPointRow {
 }
 impl Eq for DisplayPointRow {}
 
-pub struct DisplayPointRowIter<'a> {
-    row: &'a DisplayPointRow,
-    order: &'a PointOrder,
-    front: usize,
-    back: usize,
-}
-
 impl Iterator for DisplayPointRowIter<'_> {
     type Item = DisplayPointSnapshot;
     #[inline]
@@ -587,13 +510,6 @@ impl DoubleEndedIterator for DisplayPointRowIter<'_> {
     }
 }
 impl ExactSizeIterator for DisplayPointRowIter<'_> {}
-
-/// Per-window row index. Clone copies only descriptors, never the point arrays.
-#[derive(Clone, Default)]
-pub struct DisplayPointRows {
-    /// Sorted by visual row, with at most one descriptor per row.
-    pub rows: Vec<DisplayPointRow>,
-}
 
 impl DisplayPointRows {
     pub fn from_points(points: Vec<DisplayPointSnapshot>) -> Self {

@@ -1,5 +1,7 @@
 //! Window state records owned by the evaluator layer (stage-4 W1 E2).
 
+use neomacs_display_protocol::PresentedWindowChromeArea;
+use neomacs_display_protocol::posn_object_extent::PosnPointRole as DisplayPointRole;
 use neovm_edit::buffer::{
     BufferId, CharLen, CharPos0, EmacsByteLen, EmacsBytePos, LispCharPos1, MarkerRef,
     TextPositionAnchor,
@@ -13,6 +15,7 @@ use neovm_value::value::Value;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use rustc_hash::FxHashMap as HashMap;
 use std::num::NonZeroU64;
+use std::sync::Arc;
 
 /// Redisplay-owned runtime state used to decide which GNU window hooks fire.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1250,4 +1253,274 @@ pub struct PendingGuiResize {
 pub(crate) enum GuiResizeDelivery {
     Queued,
     Requested { width: u32, height: u32, wait: bool },
+}
+
+// --- E5-FM-3a snapshot/row records (stage-4 W2/E5) ---
+
+/// Authoritative display geometry for a single visible buffer position.
+///
+/// These records are published by redisplay after layout so editor-side
+/// queries like `posn-at-point` can answer from the actual rendered result.
+/// A position can describe either a source glyph or a visible insertion
+/// boundary such as end-of-buffer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DisplayPointSnapshot {
+    /// 1-based visible buffer position.
+    pub buffer_pos: LispCharPos1,
+    /// Whether this point is a drawn glyph or a marker column standing in for
+    /// the position the walk reached there. See [`DisplayPointRole`].
+    pub role: DisplayPointRole,
+    /// X relative to the text area's left edge, in pixels.
+    pub x: i64,
+    /// Y relative to the window's top edge, in pixels.
+    pub y: i64,
+    /// Rendered glyph or insertion-slot width in pixels.
+    pub width: i64,
+    /// Rendered glyph or insertion-slot height in pixels.
+    pub height: i64,
+    /// Visual row number in the window (0-based).
+    pub row: i64,
+    /// Visual column start for this position.
+    pub col: i64,
+}
+
+/// Per-row metrics from the last redisplay of a window.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DisplayRowSnapshot {
+    /// Visual row number in the window (0-based).
+    pub row: i64,
+    /// Y relative to the window's top edge, in pixels.
+    pub y: i64,
+    /// Vertical row advance in pixels, including `extra_line_spacing`.
+    pub height: i64,
+    /// Extra spacing after this row, included in `height`. GNU recentering
+    /// excludes the last requested row's trailing spacing when fitting bottom.
+    pub extra_line_spacing: i64,
+    /// X position where redisplay started emitting this row, relative to the
+    /// text area's left edge.
+    pub start_x: i64,
+    /// Visual column where redisplay started emitting this row.
+    pub start_col: i64,
+    /// X position where redisplay finished emitting this row, relative to the
+    /// text area's left edge.
+    pub end_x: i64,
+    /// Visual column where redisplay finished emitting this row.
+    pub end_col: i64,
+    /// First buffer position represented on this row, if any.
+    pub start_buffer_pos: Option<LispCharPos1>,
+    /// Last visible/source position associated with this row, if any.
+    pub end_buffer_pos: Option<LispCharPos1>,
+    /// Last source position skipped by right truncation, including the line
+    /// terminator but never the following line. None means no truncated tail.
+    /// A bounded query's final row must not implicitly own the rest of a buffer.
+    pub truncated_end_buffer_pos: Option<LispCharPos1>,
+    /// Whether the row ended in buffer text or in pushed display text. A
+    /// newline or wrap in a display string does not consume its buffer anchor.
+    pub end_source: DisplayRowEndSource,
+    /// Fringe bitmaps redisplay laid out on this row.
+    pub fringe: RowFringeBitmaps,
+}
+
+/// Body-local row facts emitted directly by redisplay for semantic queries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PresentedBodyRowSnapshot {
+    pub output_row: i64,
+    pub body_row: i64,
+    pub body_y: i64,
+}
+
+/// An EOB source position does not prove that its virtual overlay tail ended.
+/// Only the producer that drains all strings can publish `Complete`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum EobOverlayMotionCoverage {
+    #[default]
+    NotObserved,
+    Incomplete {
+        anchor: LispCharPos1,
+    },
+    Complete(CompletedEobOverlayMotionExtent),
+}
+
+/// Physical distance to the end of a completely measured EOB overlay stream.
+///
+/// The distance is relative to the row where the first string at this anchor
+/// started. It survives query-row translation and includes an empty final row
+/// that the renderer need not publish. Source anchors and display-row distance
+/// therefore remain separate facts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CompletedEobOverlayMotionExtent {
+    pub(crate) anchor: LispCharPos1,
+    pub(crate) following_rows: usize,
+}
+
+/// Source consumed at a row end, independent of its visible buffer anchor.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DisplayRowEndSource {
+    #[default]
+    Buffer,
+    DisplayStringNewline,
+    DisplayStringWrap,
+    OverlayBeforeString,
+    OverlayAfterString,
+}
+
+/// The fringe bitmaps one display row carried out of the last redisplay.
+///
+/// Mirrors exactly the three `struct glyph_row` slots that
+/// `fringe-bitmaps-at-pos` reports: `left_fringe_bitmap`,
+/// `right_fringe_bitmap` and `overlay_arrow_bitmap`. The arrow is a slot of
+/// its own because GNU draws it *in addition to* the left bitmap.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RowFringeBitmaps {
+    /// Bitmap in the row's left fringe.
+    pub left: Option<FringeBitmapIndex>,
+    /// Bitmap in the row's right fringe.
+    pub right: Option<FringeBitmapIndex>,
+    /// Overlay arrow, drawn in the left fringe beside `left`.
+    pub overlay_arrow: RowOverlayArrowBitmap,
+}
+
+/// Registry index of a fringe bitmap, as handed out by `define-fringe-bitmap`
+/// and stored in a bitmap symbol's `fringe` property.
+///
+/// GNU uses a bare `int` with `0` meaning `NO_FRINGE_BITMAP`; the absent case
+/// is `Option`/`RowOverlayArrowBitmap::Absent` here, so every value of this
+/// type names a bitmap that really is registered.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct FringeBitmapIndex(pub u16);
+
+/// The overlay-arrow fringe slot of a display row.
+///
+/// GNU packs three states into the signed `struct glyph_row::overlay_arrow_bitmap`
+/// and `Ffringe_bitmaps_at_pos` decodes them as `0 => nil`, `< 0 => t`,
+/// `> 0 => the bitmap's symbol` (src/fringe.c). Naming the three states makes
+/// that decode an exhaustive match instead of a sign test.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RowOverlayArrowBitmap {
+    /// No overlay arrow on this row (GNU `NO_FRINGE_BITMAP`).
+    #[default]
+    Absent,
+    /// An overlay arrow is present but its bitmap was never resolved to a
+    /// registry index (GNU's negative encoding, reported as `t`).
+    Unresolved,
+    /// An overlay arrow drawn with this bitmap.
+    Bitmap(FringeBitmapIndex),
+}
+
+/// Evaluator-owned half of GNU's `(glyph->object, glyph->charpos)` pair.
+///
+/// The renderer-safe presentation carries the string identity and character
+/// index. The string object stays in the window snapshot so input can join the
+/// two halves without re-evaluating a mode/tab/header-line format. Snapshots
+/// are shared with render and input threads and retained by the layout engine
+/// across frames, so the object travels as a [`SharedRoot`]: its own lease
+/// keeps it alive in every copy, and only the evaluator materializes it.
+///
+/// [`SharedRoot`]: neovm_value::tagged::transport::SharedRoot
+#[derive(Clone, Debug)]
+pub struct PresentedWindowChromeString {
+    pub(crate) area: PresentedWindowChromeArea,
+    pub(crate) string_id: neomacs_display_protocol::glyph_matrix::GlyphStringId,
+    pub(crate) object: neovm_value::tagged::transport::SharedRoot,
+}
+
+/// Immutable rooted chrome sources shared across redisplay snapshots.
+///
+/// Cloning shares one allocation and its existing heap-identified root leases.
+/// The empty collection has no allocation, and no mutable slice is exposed.
+/// Formatting builds an owned vector; publication freezes it after root
+/// coalescing, while unchanged windows retain this collection directly.
+#[repr(transparent)]
+#[derive(Clone, Debug, Default)]
+pub struct PresentedWindowChromeStrings(pub(crate) Option<Arc<[PresentedWindowChromeString]>>);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DisplayPointRowsMode {
+    Off,
+    On,
+    Verify,
+}
+
+/// Process-wide numeric policy published by OnceLock; readers share no cursor or Lisp state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PointRowIterMode {
+    Off,
+    On,
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PointCellRole {
+    Glyph,
+    OverlaidMarker,
+    InsertionBoundary,
+    SyntheticBoundary,
+}
+
+/// The usual glyph/insertion slot: exactly sixteen bytes, with checked bounds.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PointCell {
+    pub(crate) position_delta: u32,
+    pub(crate) x: i32,
+    pub(crate) col: u16,
+    pub(crate) width: u16,
+    pub(crate) height: u16,
+    pub(crate) y_offset: i8,
+    pub(crate) role: PointCellRole,
+}
+
+#[derive(Clone)]
+pub(crate) enum Cells {
+    Compact(Arc<[PointCell]>),
+    Wide(Arc<[DisplayPointSnapshot]>),
+}
+
+#[derive(Clone)]
+pub(crate) enum PointOrder {
+    /// Emission order already satisfies the exact stable index key. This proof
+    /// belongs to immutable row data and needs no allocated permutation.
+    Identity {
+        len: usize,
+    },
+    Compact(Arc<[u32]>),
+    Wide(Arc<[usize]>),
+}
+
+pub(crate) struct PointRowData {
+    pub(crate) cells: Cells,
+    pub(crate) source_order: PointOrder,
+    pub(crate) x_order: PointOrder,
+    pub(crate) original_y: i64,
+    pub(crate) original_base: i64,
+    pub(crate) source_min: i64,
+    pub(crate) source_max: i64,
+    pub(crate) y_min: i64,
+    pub(crate) y_max: i64,
+    pub(crate) max_height: i64,
+    pub(crate) min_x: Option<i64>,
+    pub(crate) max_x: Option<i64>,
+}
+
+/// Placement changes clone this descriptor and share its immutable cell arrays.
+#[derive(Clone)]
+pub struct DisplayPointRow {
+    pub(crate) row: i64,
+    pub(crate) y: i64,
+    pub(crate) buffer_base: i64,
+    pub(crate) data: Arc<PointRowData>,
+}
+
+pub struct DisplayPointRowIter<'a> {
+    pub(crate) row: &'a DisplayPointRow,
+    pub(crate) order: &'a PointOrder,
+    pub(crate) front: usize,
+    pub(crate) back: usize,
+}
+
+/// Per-window row index. Clone copies only descriptors, never the point arrays.
+#[derive(Clone, Default)]
+pub struct DisplayPointRows {
+    /// Sorted by visual row, with at most one descriptor per row.
+    pub rows: Vec<DisplayPointRow>,
 }
