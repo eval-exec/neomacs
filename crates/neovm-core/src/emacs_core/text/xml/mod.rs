@@ -548,71 +548,89 @@ fn is_top_comment(node: &TopNode) -> bool {
     node.tag.is_none() && is_comment_node(&node.value)
 }
 
+/// Where a top-level node lands while reconstructing libxml2's document.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FragmentMode {
+    /// Before any body content: head elements and comments go to `<head>`.
+    Head,
+    /// After an explicit `</head>`: head elements and comments are direct
+    /// `<html>` children until body content starts.
+    AfterHead,
+    /// Body content is open; later nodes stay in `<body>`.
+    Body,
+    /// After an explicit `<body>` start: later nodes are direct `<html>`
+    /// children.
+    AfterBody,
+}
+
 /// Wrap the fragment part of a document in libxml2's implicit html/head/body
-/// structure. Comments after implicit head content stay in `<head>`; after an
-/// explicit `</head>` they (and head-type elements) are direct `<html>`
-/// children until body content starts; once body content has appeared they
-/// stay in `<body>`.
+/// structure.
 fn wrap_html_fragment(nodes: Vec<TopNode>) -> Option<Value> {
     let mut head: Vec<Value> = Vec::new();
     let mut between: Vec<Value> = Vec::new();
     let mut body: Vec<Value> = Vec::new();
     let mut after_body: Vec<Value> = Vec::new();
-    let mut seen_body_content = false;
-    let mut explicit_head = false;
-    let mut explicit_body = false;
+    // Independent fact needed for the result: an explicit head is emitted even
+    // when it has no children.
+    let mut explicit_head_seen = false;
+    let mut mode = FragmentMode::Head;
 
     for node in nodes {
-        // libxml2's "after body" mode makes every later top-level node a
-        // sibling of <body> under <html>, until another body start merges.
-        if explicit_body {
-            after_body.push(node.value);
-            continue;
-        }
         if is_top_comment(&node) {
-            if seen_body_content {
-                body.push(node.value);
-            } else if explicit_head {
-                between.push(node.value);
-            } else {
-                head.push(node.value);
+            match mode {
+                FragmentMode::Head => head.push(node.value),
+                FragmentMode::AfterHead => between.push(node.value),
+                FragmentMode::Body => body.push(node.value),
+                FragmentMode::AfterBody => after_body.push(node.value),
             }
             continue;
         }
         match node.tag.as_deref() {
-            Some("head") => {
-                // Unwrap an explicit <head>, merging its children into head.
-                head.extend(element_children(&node.value));
-                explicit_head = true;
-            }
-            Some("body") => {
-                // An explicit <body> starts the body only when no body content
-                // has appeared yet. Otherwise it merges into the implicit body
-                // and its closing tag does not switch to after-body mode.
-                if !seen_body_content {
-                    explicit_body = true;
+            Some("head") => match mode {
+                FragmentMode::AfterBody => after_body.push(node.value),
+                _ => {
+                    // Unwrap an explicit <head>, merging its children into head.
+                    head.extend(element_children(&node.value));
+                    explicit_head_seen = true;
+                    if mode == FragmentMode::Head {
+                        mode = FragmentMode::AfterHead;
+                    }
                 }
-                seen_body_content = true;
-                body.extend(element_children(&node.value));
-            }
-            Some(tag) if !seen_body_content && !explicit_head && is_head_element(tag) => {
-                head.push(node.value);
-            }
-            Some(tag) if !seen_body_content && explicit_head && is_head_element(tag) => {
-                // libxml2's "after head" mode makes these direct <html>
-                // children, e.g. <head></head><title>T</title>.
-                between.push(node.value);
-            }
-            _ => {
-                seen_body_content = true;
-                body.push(node.value);
-            }
+            },
+            Some("body") => match mode {
+                FragmentMode::AfterBody => after_body.push(node.value),
+                FragmentMode::Head | FragmentMode::AfterHead => {
+                    // An explicit body starts the body only when no body
+                    // content has appeared yet.
+                    mode = FragmentMode::AfterBody;
+                    body.extend(element_children(&node.value));
+                }
+                FragmentMode::Body => {
+                    // A body tag after content has started merges into the
+                    // implicit body and does not switch modes.
+                    body.extend(element_children(&node.value));
+                }
+            },
+            Some(tag) if is_head_element(tag) => match mode {
+                FragmentMode::Head => head.push(node.value),
+                FragmentMode::AfterHead => between.push(node.value),
+                FragmentMode::Body => body.push(node.value),
+                FragmentMode::AfterBody => after_body.push(node.value),
+            },
+            _ => match mode {
+                FragmentMode::Head | FragmentMode::AfterHead => {
+                    body.push(node.value);
+                    mode = FragmentMode::Body;
+                }
+                FragmentMode::Body => body.push(node.value),
+                FragmentMode::AfterBody => after_body.push(node.value),
+            },
         }
     }
 
     // (html nil [head nil HEAD...] [BETWEEN...] (body nil BODY...) [AFTER...])
-    let has_head = !head.is_empty() || explicit_head;
-    let has_body = !body.is_empty() || explicit_body;
+    let has_head = !head.is_empty() || explicit_head_seen;
+    let has_body = !body.is_empty() || mode == FragmentMode::AfterBody;
     let mut html_children: Vec<Value> = vec![Value::symbol("html"), Value::NIL];
     if has_head {
         let mut head_node = vec![Value::symbol("head"), Value::NIL];
