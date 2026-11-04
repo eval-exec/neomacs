@@ -259,6 +259,18 @@ pub trait EditHost {
     /// walker's entry. C3.
     fn funcall_general(&mut self, function: Value, args: &[Value]) -> EvalResult;
 
+    /// GNU `safe_funcall` (`eval.c`): call FUNCTION while suppressing
+    /// signaled conditions, so a broken callback cannot recursively replace
+    /// the operation already handling an error. `throw` and suspended-thread
+    /// flow remain nonlocal exits, as in GNU. Added for the text layer's
+    /// syntax-propertize hook (stage-3b T6.0 thin addition).
+    fn safe_funcall(&mut self, function: Value, args: &[Value]) -> EvalResult;
+
+    /// Render the live Lisp backtrace for diagnostics (GNU `backtrace`
+    /// shape, bounded to MAX_FRAMES). Added for the text layer's
+    /// parse-partial-sexp observability hook (stage-3b T6.0 thin addition).
+    fn lisp_backtrace(&mut self, max_frames: usize) -> String;
+
     /// Symbol interpretation for this mutator's current dynamic binding
     /// (`symbols-with-pos-enabled`). C3.
     fn symbol_mode(&self) -> SymbolMode;

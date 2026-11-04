@@ -518,7 +518,7 @@ pub use print::{
     print_value_with_eval,
 };
 pub use symbol::Obarray;
-pub use text_host::{TextHost, TextVariableRead};
+pub use text_host::TextHost;
 pub use value::{LambdaData, LambdaParams, Value, ValueKind, VecLikeType};
 
 /// Convenience: parse and evaluate source code, returning the last form's value.

@@ -282,6 +282,14 @@ impl EditHost for Context {
         Context::funcall_general(self, function, LispArgVec::from_slice(args))
     }
 
+    fn safe_funcall(&mut self, function: Value, args: &[Value]) -> EvalResult {
+        Context::safe_funcall(self, function, LispArgVec::from_slice(args))
+    }
+
+    fn lisp_backtrace(&mut self, max_frames: usize) -> String {
+        Context::render_lisp_backtrace(self, max_frames)
+    }
+
     fn symbol_mode(&self) -> crate::tagged::SymbolMode {
         Context::symbol_mode(self)
     }
