@@ -4797,7 +4797,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     );
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "dump-emacs-portable",
-        NativeFn::ContextVec(builtin_dump_emacs_portable),
+        NativeFn::ContextVec(crate::emacs_core::system_entries::builtin_dump_emacs_portable),
         SubrArity::new(1, Some(2)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -4913,7 +4913,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "make-temp-file-internal",
-        NativeFn::ContextVec(builtin_make_temp_file_internal),
+        NativeFn::ContextVec(crate::emacs_core::system_entries::builtin_make_temp_file_internal),
         SubrArity::new(4, Some(4)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -4958,7 +4958,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "module-load",
-        NativeFn::ContextVec(builtin_module_load),
+        NativeFn::ContextVec(crate::emacs_core::system_entries::builtin_module_load),
         SubrArity::new(1, Some(1)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -4989,7 +4989,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ctx.register_subr(
         crate::emacs_core::subr::world_subr!(SubrSpec::new(
             "open-dribble-file",
-            NativeFn::ContextVec(builtin_open_dribble_file),
+            NativeFn::ContextVec(crate::emacs_core::system_entries::builtin_open_dribble_file),
             SubrArity::new(1, Some(1)),
         ))
         .interactive(
@@ -5164,7 +5164,9 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ctx.register_subr(
         crate::emacs_core::subr::world_subr!(SubrSpec::new(
             "redirect-debugging-output",
-            NativeFn::ContextVec(builtin_redirect_debugging_output),
+            NativeFn::ContextVec(
+                crate::emacs_core::system_entries::builtin_redirect_debugging_output
+            ),
             SubrArity::new(1, Some(2)),
         ))
         .interactive(

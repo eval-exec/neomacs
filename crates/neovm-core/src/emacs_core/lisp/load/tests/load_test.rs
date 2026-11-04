@@ -664,7 +664,7 @@ fn dump_emacs_portable_writes_reloadable_snapshot() {
 
     let dir = tempdir().expect("dump tempdir");
     let dump_path = dir.path().join("portable-test.pdump");
-    crate::emacs_core::builtins::builtin_dump_emacs_portable(
+    crate::emacs_core::system_entries::builtin_dump_emacs_portable(
         &mut eval,
         vec![Value::string(dump_path.to_string_lossy().into_owned())],
     )
@@ -688,14 +688,14 @@ fn dump_emacs_portable_overwrites_existing_target() {
     let dump_path = dir.path().join("portable-overwrite-test.pdump");
 
     eval.set_variable("dump-portable-test-var", Value::fixnum(1));
-    crate::emacs_core::builtins::builtin_dump_emacs_portable(
+    crate::emacs_core::system_entries::builtin_dump_emacs_portable(
         &mut eval,
         vec![Value::string(dump_path.to_string_lossy().into_owned())],
     )
     .expect("first dump-emacs-portable should succeed");
 
     eval.set_variable("dump-portable-test-var", Value::fixnum(2));
-    crate::emacs_core::builtins::builtin_dump_emacs_portable(
+    crate::emacs_core::system_entries::builtin_dump_emacs_portable(
         &mut eval,
         vec![Value::string(dump_path.to_string_lossy().into_owned())],
     )
@@ -724,7 +724,7 @@ fn dump_emacs_portable_expands_relative_target_against_default_directory() {
     );
     eval.set_variable("dump-portable-test-var", Value::fixnum(7));
 
-    crate::emacs_core::builtins::builtin_dump_emacs_portable(
+    crate::emacs_core::system_entries::builtin_dump_emacs_portable(
         &mut eval,
         vec![Value::string("relative-portable-test.pdump")],
     )
@@ -752,7 +752,7 @@ fn dump_emacs_portable_requires_batch_mode() {
     let mut eval = Context::new();
     eval.set_variable("noninteractive", Value::NIL);
 
-    let err = crate::emacs_core::builtins::builtin_dump_emacs_portable(
+    let err = crate::emacs_core::system_entries::builtin_dump_emacs_portable(
         &mut eval,
         vec![Value::string("/tmp/portable-batch-mode-test.pdump")],
     )
@@ -784,7 +784,7 @@ fn dump_emacs_portable_rejects_other_live_lisp_threads() {
             .expect("a string is a valid NAME"),
     );
 
-    let err = crate::emacs_core::builtins::builtin_dump_emacs_portable(
+    let err = crate::emacs_core::system_entries::builtin_dump_emacs_portable(
         &mut eval,
         vec![Value::string("/tmp/portable-thread-test.pdump")],
     )
@@ -817,7 +817,7 @@ fn dump_emacs_portable_signals_error_for_live_finalizer() {
     // collections and stays in the live registry.
     eval.eval_str_each("(setq dump-finalizer-keeper (make-finalizer (lambda () nil)))");
 
-    let err = crate::emacs_core::builtins::builtin_dump_emacs_portable(
+    let err = crate::emacs_core::system_entries::builtin_dump_emacs_portable(
         &mut eval,
         vec![Value::string(dump_path.to_string_lossy().into_owned())],
     )
@@ -864,7 +864,7 @@ fn dump_emacs_portable_succeeds_after_finalizer_is_collected() {
         "the doomed finalizer's function must run before the dump"
     );
 
-    crate::emacs_core::builtins::builtin_dump_emacs_portable(
+    crate::emacs_core::system_entries::builtin_dump_emacs_portable(
         &mut eval,
         vec![Value::string(dump_path.to_string_lossy().into_owned())],
     )
@@ -891,7 +891,7 @@ fn dump_emacs_portable_runs_pending_finalizers_before_dumping() {
     // GNU likewise runs pending finalizers before dumping.
     eval.eval_str_each("(progn (make-finalizer (lambda () (setq dump-finalizer-ran t))) nil)");
 
-    crate::emacs_core::builtins::builtin_dump_emacs_portable(
+    crate::emacs_core::system_entries::builtin_dump_emacs_portable(
         &mut eval,
         vec![Value::string(dump_path.to_string_lossy().into_owned())],
     )

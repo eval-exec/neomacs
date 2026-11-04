@@ -49,6 +49,8 @@ pub(crate) mod prefix;
 pub mod register;
 #[path = "commands/syntax_entries/mod.rs"]
 pub mod syntax_entries;
+#[path = "commands/system_entries/mod.rs"]
+pub(crate) mod system_entries;
 #[path = "commands/textprop_entries/mod.rs"]
 pub mod textprop_entries;
 

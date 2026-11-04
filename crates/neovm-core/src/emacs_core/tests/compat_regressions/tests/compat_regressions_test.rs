@@ -341,8 +341,11 @@ fn redirect_debugging_output_captures_external_debugging_output() {
     let path = output.path();
     let path_value = Value::string(path.to_string_lossy().as_ref());
 
-    crate::emacs_core::builtins::builtin_redirect_debugging_output(&mut eval, vec![path_value])
-        .expect("redirect debug output to temp file");
+    crate::emacs_core::system_entries::builtin_redirect_debugging_output(
+        &mut eval,
+        vec![path_value],
+    )
+    .expect("redirect debug output to temp file");
     crate::emacs_core::builtins::builtin_external_debugging_output(
         &mut eval,
         vec![Value::fixnum('A' as i64)],
@@ -353,8 +356,11 @@ fn redirect_debugging_output_captures_external_debugging_output() {
         vec![Value::fixnum('B' as i64)],
     )
     .expect("write B");
-    crate::emacs_core::builtins::builtin_redirect_debugging_output(&mut eval, vec![Value::NIL])
-        .expect("reset debug output");
+    crate::emacs_core::system_entries::builtin_redirect_debugging_output(
+        &mut eval,
+        vec![Value::NIL],
+    )
+    .expect("reset debug output");
 
     let contents = std::fs::read_to_string(path).expect("debug output file contents");
     assert_eq!(contents, "AB");
@@ -371,8 +377,11 @@ fn prin1_external_debugging_output_preserves_nested_unibyte_bytes_with_print_cir
     let path = output.path();
     let path_value = Value::string(path.to_string_lossy().as_ref());
 
-    crate::emacs_core::builtins::builtin_redirect_debugging_output(&mut eval, vec![path_value])
-        .expect("redirect debug output to workspace-local file");
+    crate::emacs_core::system_entries::builtin_redirect_debugging_output(
+        &mut eval,
+        vec![path_value],
+    )
+    .expect("redirect debug output to workspace-local file");
     let payload = Value::heap_string(crate::heap_types::LispString::from_unibyte(vec![
         0xCE, 0xBB,
     ]));
@@ -384,8 +393,11 @@ fn prin1_external_debugging_output_preserves_nested_unibyte_bytes_with_print_cir
         ],
     )
     .expect("print unibyte payload through external-debugging-output");
-    crate::emacs_core::builtins::builtin_redirect_debugging_output(&mut eval, vec![Value::NIL])
-        .expect("reset debug output");
+    crate::emacs_core::system_entries::builtin_redirect_debugging_output(
+        &mut eval,
+        vec![Value::NIL],
+    )
+    .expect("reset debug output");
 
     assert_eq!(
         std::fs::read(path).expect("debug output bytes"),
