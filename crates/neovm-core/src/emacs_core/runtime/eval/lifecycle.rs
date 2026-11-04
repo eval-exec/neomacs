@@ -15,6 +15,7 @@
 //! descriptor means the construction seam itself is broken.
 
 use super::*;
+use neovm_value::display_vocab::FrameId;
 use neovm_value::error::EvalResult;
 use neovm_value::{HookInstallError, HookInstallStatus};
 use std::any::Any;
@@ -66,6 +67,54 @@ impl WorldStateHooks {
     }
 }
 
+/// The load startup-restore boot entries (W4 boot closure).
+#[derive(Clone, Copy)]
+pub struct BootHooks {
+    ensure_startup_compat_variables: fn(&mut Context),
+    clear_created_lisp_face: fn(&str),
+    remove_face_new_frame_defaults_entry: fn(&Context, &str),
+    restore_created_faces_from_table: fn(&[String]),
+    gui_window_system_symbol: fn() -> &'static str,
+    apply_post_image_init: fn(&mut Context),
+    apply_lread_constants: fn(&mut Context),
+    install_host_environment_snapshot: fn(&mut Context),
+    shell_file_name_install: fn(&mut Context),
+    shell_file_name_install_dump_default: fn(&mut Context),
+    seed_batch_startup_frame: fn(&mut Context) -> FrameId,
+}
+
+impl BootHooks {
+    /// Build the load startup-restore group.
+    #[allow(clippy::too_many_arguments)] // one cold descriptor, one call site
+    pub const fn new(
+        ensure_startup_compat_variables: fn(&mut Context),
+        clear_created_lisp_face: fn(&str),
+        remove_face_new_frame_defaults_entry: fn(&Context, &str),
+        restore_created_faces_from_table: fn(&[String]),
+        gui_window_system_symbol: fn() -> &'static str,
+        apply_post_image_init: fn(&mut Context),
+        apply_lread_constants: fn(&mut Context),
+        install_host_environment_snapshot: fn(&mut Context),
+        shell_file_name_install: fn(&mut Context),
+        shell_file_name_install_dump_default: fn(&mut Context),
+        seed_batch_startup_frame: fn(&mut Context) -> FrameId,
+    ) -> Self {
+        Self {
+            ensure_startup_compat_variables,
+            clear_created_lisp_face,
+            remove_face_new_frame_defaults_entry,
+            restore_created_faces_from_table,
+            gui_window_system_symbol,
+            apply_post_image_init,
+            apply_lread_constants,
+            install_host_environment_snapshot,
+            shell_file_name_install,
+            shell_file_name_install_dump_default,
+            seed_batch_startup_frame,
+        }
+    }
+}
+
 /// The cold lifecycle descriptor core publishes at the construction seams.
 #[derive(Clone, Copy)]
 pub struct LifecycleHooks {
@@ -73,6 +122,7 @@ pub struct LifecycleHooks {
     sqlite: WorldStateHooks,
     dbusbind: WorldStateHooks,
     timefns: WorldStateHooks,
+    boot: BootHooks,
     timefns_reset: fn(),
 }
 
@@ -83,6 +133,7 @@ impl LifecycleHooks {
         sqlite: WorldStateHooks,
         dbusbind: WorldStateHooks,
         timefns: WorldStateHooks,
+        boot: BootHooks,
         timefns_reset: fn(),
     ) -> Self {
         Self {
@@ -90,6 +141,7 @@ impl LifecycleHooks {
             sqlite,
             dbusbind,
             timefns,
+            boot,
             timefns_reset,
         }
     }
@@ -112,6 +164,11 @@ impl LifecycleHooks {
     /// Time functions carried World state.
     pub fn timefns(&self) -> WorldStateHooks {
         self.timefns
+    }
+
+    /// The load startup-restore boot group.
+    pub fn boot(&self) -> BootHooks {
+        self.boot
     }
 
     /// The pdump-reconstruct time-zone reset.
@@ -241,4 +298,59 @@ pub fn timefns_swap_world_state(slot: &mut dyn Any) {
 /// Reset the time-zone thread-local rule at pdump reconstruct.
 pub fn reset_timefns_thread_locals() {
     (lifecycle_hooks().timefns_reset())()
+}
+
+/// Re-apply the startup compatibility variables (xfaces).
+pub fn ensure_startup_compat_variables(ctx: &mut Context) {
+    (lifecycle_hooks().boot.ensure_startup_compat_variables)(ctx)
+}
+
+/// Clear one created Lisp face from the xfaces created-set.
+pub fn clear_created_lisp_face(name: &str) {
+    (lifecycle_hooks().boot.clear_created_lisp_face)(name)
+}
+
+/// Remove one face from the canonical new-frame-defaults store.
+pub fn remove_face_new_frame_defaults_entry(ctx: &Context, face_name: &str) {
+    (lifecycle_hooks().boot.remove_face_new_frame_defaults_entry)(ctx, face_name)
+}
+
+/// Restore the created-face set from a dumped face table.
+pub fn restore_created_faces_from_table(face_names: &[String]) {
+    (lifecycle_hooks().boot.restore_created_faces_from_table)(face_names)
+}
+
+/// The GUI window-system symbol used during startup restore.
+pub fn gui_window_system_symbol() -> &'static str {
+    (lifecycle_hooks().boot.gui_window_system_symbol)()
+}
+
+/// Apply the post-image-init table (startup reset rows).
+pub fn apply_post_image_init(ctx: &mut Context) {
+    (lifecycle_hooks().boot.apply_post_image_init)(ctx)
+}
+
+/// Re-apply the `Lread` constant rows after image load.
+pub fn apply_lread_constants(ctx: &mut Context) {
+    (lifecycle_hooks().boot.apply_lread_constants)(ctx)
+}
+
+/// Install the host environment snapshot into the evaluator.
+pub fn install_host_environment_snapshot(ctx: &mut Context) {
+    (lifecycle_hooks().boot.install_host_environment_snapshot)(ctx)
+}
+
+/// Install `shell-file-name` from the host.
+pub fn shell_file_name_install(ctx: &mut Context) {
+    (lifecycle_hooks().boot.shell_file_name_install)(ctx)
+}
+
+/// Install the dump-time `shell-file-name` default.
+pub fn shell_file_name_install_dump_default(ctx: &mut Context) {
+    (lifecycle_hooks().boot.shell_file_name_install_dump_default)(ctx)
+}
+
+/// Seed the initial startup frame before the display is initialized.
+pub fn seed_batch_startup_frame(ctx: &mut Context) -> FrameId {
+    (lifecycle_hooks().boot.seed_batch_startup_frame)(ctx)
 }

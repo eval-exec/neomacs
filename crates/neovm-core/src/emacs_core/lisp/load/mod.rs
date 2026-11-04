@@ -4048,7 +4048,7 @@ fn ensure_startup_compat_variables(eval: &mut super::eval::Context, project_root
         obarray.make_special("most-negative-fixnum");
         obarray.set_constant("most-negative-fixnum");
     }
-    crate::emacs_core::xfaces::ensure_startup_compat_variables(eval);
+    crate::emacs_core::eval::lifecycle::ensure_startup_compat_variables(eval);
 }
 
 fn value_symbol_name(value: Value) -> Option<String> {
@@ -5093,11 +5093,11 @@ fn normalize_bootstrap_runtime_surface(
         );
     }
     for name in &runtime_source_state.face_names {
-        super::xfaces::clear_created_lisp_face(name);
+        crate::emacs_core::eval::lifecycle::clear_created_lisp_face(name);
         // Keep the canonical existence store (face--new-frame-defaults) in sync
         // with the created-face set so internal-lisp-face-p stops reporting the
         // unloaded face (its fast path reads the table, not the created-set).
-        super::xfaces::remove_face_new_frame_defaults_entry(eval, name);
+        crate::emacs_core::eval::lifecycle::remove_face_new_frame_defaults_entry(eval, name);
     }
     let referenced_symbol_names = collect_runtime_referenced_symbol_names(eval);
     for name in &runtime_source_state.symbol_names {
@@ -5319,11 +5319,11 @@ pub(crate) fn normalize_final_dump_runtime_surface(
         );
     }
     for name in &runtime_source_state.face_names {
-        super::xfaces::clear_created_lisp_face(name);
+        crate::emacs_core::eval::lifecycle::clear_created_lisp_face(name);
         // Keep the canonical existence store (face--new-frame-defaults) in sync
         // with the created-face set so internal-lisp-face-p stops reporting the
         // unloaded face (its fast path reads the table, not the created-set).
-        super::xfaces::remove_face_new_frame_defaults_entry(eval, name);
+        crate::emacs_core::eval::lifecycle::remove_face_new_frame_defaults_entry(eval, name);
     }
 
     let autoload_entries = eval.autoloads.entries_snapshot();
@@ -5402,9 +5402,11 @@ pub(crate) fn normalize_final_dump_runtime_surface(
 
 fn bootstrap_runtime_window_system_symbol(eval: &mut super::eval::Context) -> Option<Value> {
     if eval.feature_present("neomacs")
-        || eval.feature_present(super::display::gui_window_system_symbol())
+        || eval.feature_present(crate::emacs_core::eval::lifecycle::gui_window_system_symbol())
     {
-        Some(Value::symbol(super::display::gui_window_system_symbol()))
+        Some(Value::symbol(
+            crate::emacs_core::eval::lifecycle::gui_window_system_symbol(),
+        ))
     } else if eval.feature_present("x") {
         Some(Value::symbol("x"))
     } else {
@@ -5500,9 +5502,7 @@ fn clear_runtime_loader_state(eval: &mut super::eval::Context) {
     // packages read: `f.el`'s `f-this-file' answers `load-file-name' whenever
     // `load-in-progress' is non-nil, so at top level it returned nil here
     // where GNU returns `(buffer-file-name)'.
-    for row in super::post_image_init::PostImageInit::Lread.constants() {
-        eval.set_variable(row.name, row.value.value());
-    }
+    crate::emacs_core::eval::lifecycle::apply_lread_constants(eval);
 }
 
 fn finalize_cached_bootstrap_eval(
@@ -5551,10 +5551,12 @@ fn finalize_cached_bootstrap_eval(
             obarray.install_buffer_objfwd(id, fwd);
         }
     }
-    super::xfaces::restore_created_faces_from_table(&eval.face_table.face_list());
+    crate::emacs_core::eval::lifecycle::restore_created_faces_from_table(
+        &eval.face_table.face_list(),
+    );
     clear_runtime_loader_state(eval);
     clear_transient_runtime_features(eval);
-    super::environment::install_host_environment_snapshot(eval);
+    crate::emacs_core::eval::lifecycle::install_host_environment_snapshot(eval);
     ensure_startup_compat_variables(eval, project_root);
     restore_cached_runtime_window_system_surface(eval);
     // GNU subr.el defines this as 0 in the dumped image.  Bootstrap/loading
@@ -5628,7 +5630,7 @@ fn finalize_cached_bootstrap_eval(
     // (`load-in-progress', `gcs-done', `quit-flag', the kboard block, ...)
     // are re-applied.  See emacs_core::post_image_init for the table and the
     // GNU citation behind every row.
-    super::post_image_init::apply_post_image_init(eval);
+    crate::emacs_core::eval::lifecycle::apply_post_image_init(eval);
 
     restore_gnu_stale_preloaded_face_doc_refs(eval);
     // Some GNU C-level variables, notably `data-directory`, become bound only
@@ -5903,7 +5905,7 @@ pub fn apply_runtime_startup_state(eval: &mut super::eval::Context) -> Result<()
         .unwrap_or_else(|| eval.edit.buffers.create_buffer("*scratch*"));
     eval.set_current_buffer_unrecorded(scratch_id)
         .map_err(map_flow)?;
-    super::window_cmds::seed_batch_startup_frame_in_state(&mut eval.frames, &mut eval.edit.buffers);
+    crate::emacs_core::eval::lifecycle::seed_batch_startup_frame(eval);
     // GNU's `init_display' (src/dispnew.c:7413-7422) is the first thing after
     // the pdump is loaded that touches the initial frame's faces:
     //
@@ -6194,13 +6196,13 @@ pub fn create_bootstrap_evaluator_for_loadup(
         // GNU 31.1 emacs.c skips set_initial_environment when will_dump_p().
         match invocation {
             LoadupInvocation::PreloadOnly => {
-                super::environment::install_host_environment_snapshot(&mut eval);
-                super::shell_file_name::install(&mut eval);
+                crate::emacs_core::eval::lifecycle::install_host_environment_snapshot(&mut eval);
+                crate::emacs_core::eval::lifecycle::shell_file_name_install(&mut eval);
             }
             LoadupInvocation::Dump(dump) => {
                 eval.loadup_dump_mode = Some(dump.mode());
                 // cus-start records this initial value in standard-value.
-                super::shell_file_name::install_dump_default(&mut eval);
+                crate::emacs_core::eval::lifecycle::shell_file_name_install_dump_default(&mut eval);
             }
         }
         let bootstrap_features = normalized_bootstrap_features(extra_features);
@@ -6224,10 +6226,8 @@ pub fn create_bootstrap_evaluator_for_loadup(
             "load-path",
             Value::list(bootstrap_load_path_entries(&lisp_dir)),
         );
-        let bootstrap_frame_id = super::window_cmds::seed_batch_startup_frame_in_state(
-            &mut eval.frames,
-            &mut eval.edit.buffers,
-        );
+        let bootstrap_frame_id =
+            crate::emacs_core::eval::lifecycle::seed_batch_startup_frame(&mut eval);
         maybe_trace_bootstrap_step(format!(
             "create_bootstrap_evaluator_with_features: seeded-batch-bootstrap-frame={bootstrap_frame_id:?}"
         ));
