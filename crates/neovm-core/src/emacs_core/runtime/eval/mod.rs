@@ -68,6 +68,7 @@ mod command_error;
 mod edit_host;
 mod lexenv_cache;
 mod lexical_symbols;
+mod text_host;
 pub(crate) use self::lexenv_cache::LexenvAssqCache;
 pub(crate) use callback::{CheckedNativeCallback, native_callback_cache_enabled};
 pub(crate) mod parallel_entry;

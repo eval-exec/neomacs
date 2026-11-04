@@ -80,6 +80,13 @@ impl<'a> crate::emacs_core::edit_host::EditVariableRead<'a> for VariableView<'a>
     }
 }
 
+/// The text layer's variable-read surface (stage-3b T3): a marker subtrait
+/// of the edit surface. Text is above edit and hands this view to
+/// edit-owned scan snapshots (`CharPropertyResolver::snapshot`,
+/// `buffer_read_only_active_in_state`, …), which take `EditVariableRead`;
+/// the reads are the same pure `#[inline(always)]` delegation above.
+impl<'a> crate::emacs_core::text_host::TextVariableRead<'a> for VariableView<'a> {}
+
 impl std::fmt::Debug for VariableView<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("VariableView")

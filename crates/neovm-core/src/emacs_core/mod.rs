@@ -399,6 +399,8 @@ pub(crate) mod substrate_hooks;
 pub(crate) use neovm_value::string_pos_cache;
 #[path = "text/syntax/mod.rs"]
 pub mod syntax;
+#[path = "text/host/mod.rs"]
+pub mod text_host;
 pub use neovm_edit::emacs_core::textprop;
 #[path = "text/treesit/mod.rs"]
 pub mod treesit;
@@ -516,6 +518,7 @@ pub use print::{
     print_value_with_eval,
 };
 pub use symbol::Obarray;
+pub use text_host::{TextHost, TextVariableRead};
 pub use value::{LambdaData, LambdaParams, Value, ValueKind, VecLikeType};
 
 /// Convenience: parse and evaluate source code, returning the last form's value.
