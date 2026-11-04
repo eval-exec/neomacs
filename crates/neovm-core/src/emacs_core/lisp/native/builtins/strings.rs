@@ -449,7 +449,8 @@ pub(crate) fn builtin_upcase_in_state_1(
     obj: Value,
 ) -> EvalResult {
     let args: [Value; 1] = [obj];
-    let casetab = super::super::casetab_entries::case_table_override_for_current_buffer(eval)?;
+    let casetab =
+        crate::emacs_core::eval::case_tables::case_table_override_for_current_buffer(eval)?;
     upcase_with_override(
         &args,
         casetab,
@@ -621,7 +622,8 @@ pub(crate) fn builtin_downcase_in_state_1(
 ) -> EvalResult {
     let args: [Value; 1] = [obj];
     let is_word = casing_word_predicate(eval);
-    let casetab = super::super::casetab_entries::case_table_override_for_current_buffer(eval)?;
+    let casetab =
+        crate::emacs_core::eval::case_tables::case_table_override_for_current_buffer(eval)?;
     downcase_with_word_pred(
         &args,
         is_word,

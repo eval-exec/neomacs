@@ -185,6 +185,7 @@ static CANONICAL_CASE_TABLE_HOOKS: crate::emacs_core::eval::case_tables::CaseTab
         current_case_upcase_table,
         sync_current_buffer_case_table_state,
         standard_case_table_for_admission,
+        case_table_override_for_current_buffer,
     );
 
 /// Admission needs the standard table installed; the Lisp entry's error is

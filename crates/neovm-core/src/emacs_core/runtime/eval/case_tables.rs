@@ -42,6 +42,8 @@ pub struct CaseTableHooks {
     upcase: CaseTableRead,
     sync: CaseTableSync,
     standard: CaseTableRead,
+    override_for_current_buffer:
+        fn(&mut Context) -> Result<crate::emacs_core::casetab::CaseTableOverride, Flow>,
 }
 
 impl CaseTableHooks {
@@ -51,12 +53,19 @@ impl CaseTableHooks {
         upcase: CaseTableRead,
         sync: CaseTableSync,
         standard: CaseTableRead,
+        override_for_current_buffer: fn(
+            &mut Context,
+        ) -> Result<
+            crate::emacs_core::casetab::CaseTableOverride,
+            Flow,
+        >,
     ) -> Self {
         Self {
             canon,
             upcase,
             sync,
             standard,
+            override_for_current_buffer,
         }
     }
 
@@ -78,6 +87,13 @@ impl CaseTableHooks {
     /// Install/return the standard case table (admission).
     pub fn standard(&self) -> CaseTableRead {
         self.standard
+    }
+
+    /// The current buffer's case-table override, for casefiddle/string ops.
+    pub fn override_for_current_buffer(
+        &self,
+    ) -> fn(&mut Context) -> Result<crate::emacs_core::casetab::CaseTableOverride, Flow> {
+        self.override_for_current_buffer
     }
 }
 
@@ -139,4 +155,11 @@ pub fn sync_current_buffer_case_table_state(ctx: &mut Context) -> Result<(), Flo
 /// Install/return the standard case table for admission.
 pub fn standard_case_table(ctx: &mut Context) -> Result<Value, Flow> {
     (hooks_or_refusal()?.standard())(ctx)
+}
+
+/// The current buffer's case-table override (GNU's per-buffer case tables).
+pub fn case_table_override_for_current_buffer(
+    ctx: &mut Context,
+) -> Result<crate::emacs_core::casetab::CaseTableOverride, Flow> {
+    (hooks_or_refusal()?.override_for_current_buffer())(ctx)
 }
