@@ -531,7 +531,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     );
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "buffer-string",
-        NativeFn::ContextVec(builtin_buffer_string),
+        NativeFn::ContextVec(|ctx, args| builtin_buffer_string(ctx, args)),
         SubrArity::new(0, Some(0)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -588,7 +588,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::fixed2(
         "buffer-substring",
-        builtin_buffer_substring_2,
+        |ctx, start, end| builtin_buffer_substring_2(ctx, start, end),
         FixedMin2::Two,
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -632,7 +632,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "field-string",
-        NativeFn::ContextVec(builtin_field_string),
+        NativeFn::ContextVec(|ctx, args| builtin_field_string(ctx, args)),
         SubrArity::new(0, Some(1)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(

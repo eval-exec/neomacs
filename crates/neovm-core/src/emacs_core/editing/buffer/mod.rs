@@ -774,47 +774,44 @@ fn update_buffer_properties_for_access<H: EditHost>(
     Ok(())
 }
 
-pub(crate) fn builtin_buffer_substring(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
+pub(crate) fn builtin_buffer_substring<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_args("buffer-substring", &args, 2)?;
     let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
-    builtin_buffer_substring_2(eval, arg(0), arg(1))
+    builtin_buffer_substring_2(host, arg(0), arg(1))
 }
 /// `buffer-substring` as registered: fixed arity 2, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a2` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_buffer_substring_2(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_buffer_substring_2<H: EditHost>(
+    host: &mut H,
     start: Value,
     end: Value,
 ) -> EvalResult {
     let args: [Value; 2] = [start, end];
     expect_args("buffer-substring", &args, 2)?;
-    let start = expect_integer_or_marker_in_buffers(&eval.edit.buffers, &args[0])?;
-    let end = expect_integer_or_marker_in_buffers(&eval.edit.buffers, &args[1])?;
-    let current_id = eval
-        .edit
-        .buffers
-        .current_buffer_id()
-        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    let (start, end) = {
-        let buf = eval
-            .edit
+    let (current_id, start, end) = {
+        let (edit, _) = host.edit_and_vars();
+        let start = expect_integer_or_marker_in_buffers(&edit.buffers, &args[0])?;
+        let end = expect_integer_or_marker_in_buffers(&edit.buffers, &args[1])?;
+        let current_id = edit
+            .buffers
+            .current_buffer_id()
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        let buf = edit
             .buffers
             .get(current_id)
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-        checked_accessible_lisp_range_from_raw(
+        let (start, end) = checked_accessible_lisp_range_from_raw(
             buf,
             start,
             end,
             vec![Value::make_buffer(buf.id), args[0], args[1]],
-        )?
+        )?;
+        (current_id, start, end)
     };
-    update_buffer_properties_for_access(eval, start, end)?;
-    let buf = eval
-        .edit
+    update_buffer_properties_for_access(host, start, end)?;
+    let (edit, _) = host.edit_and_vars();
+    let buf = edit
         .buffers
         .get(current_id)
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -822,14 +819,11 @@ pub(crate) fn builtin_buffer_substring_2(
     Ok(buffer_slice_value_range(buf, byte_range))
 }
 
-pub(crate) fn builtin_buffer_string(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
+pub(crate) fn builtin_buffer_string<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_args("buffer-string", &args, 0)?;
     let (current_id, start, end) = {
-        let buf = eval
-            .edit
+        let (edit, _) = host.edit_and_vars();
+        let buf = edit
             .buffers
             .current_buffer()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -839,9 +833,9 @@ pub(crate) fn builtin_buffer_string(
             buf.point_max_lisp_char_pos(),
         )
     };
-    update_buffer_properties_for_access(eval, start, end)?;
-    let buf = eval
-        .edit
+    update_buffer_properties_for_access(host, start, end)?;
+    let (edit, _) = host.edit_and_vars();
+    let buf = edit
         .buffers
         .get(current_id)
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -2188,21 +2182,13 @@ pub(crate) fn builtin_field_end<H: EditHost>(host: &mut H, args: Vec<Value>) -> 
     Ok(Value::fixnum(end))
 }
 
-pub(crate) fn builtin_field_string(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
+pub(crate) fn builtin_field_string<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_max_args("field-string", &args, 1)?;
-    let (beg, end) = find_field_bounds_in_state(
-        eval.variables(),
-        &[],
-        &eval.edit.buffers,
-        args.first(),
-        false,
-        None,
-        None,
-    )?;
-    builtin_buffer_substring(eval, vec![Value::fixnum(beg), Value::fixnum(end)])
+    let (beg, end) = {
+        let (edit, vars) = host.edit_and_vars();
+        find_field_bounds_in_state(vars, &[], &edit.buffers, args.first(), false, None, None)?
+    };
+    builtin_buffer_substring(host, vec![Value::fixnum(beg), Value::fixnum(end)])
 }
 
 pub(crate) fn builtin_field_string_no_properties<H: EditHost>(
@@ -4329,11 +4315,11 @@ pub(crate) fn builtin_byte_to_position_1(
 
 #[cfg(test)]
 pub(crate) fn builtin_position_bytes(
-    eval: &mut super::eval::Context,
+    edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("position-bytes", &args, 1)?;
-    builtin_position_bytes_1(&mut eval.edit.buffers, args[0])
+    builtin_position_bytes_1(edit_buffers, args[0])
 }
 
 pub(crate) fn builtin_position_bytes_1(
