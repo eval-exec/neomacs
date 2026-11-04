@@ -2102,14 +2102,12 @@ pub(crate) fn find_field_bounds_in_state<'a, Vars: EditVariableRead<'a>>(
     Ok((beg, end))
 }
 
-pub(crate) fn builtin_field_beginning(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
+pub(crate) fn builtin_field_beginning<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_max_args("field-beginning", &args, 3)?;
+    let (edit, vars) = host.edit_and_vars();
     let limit = match args.get(2) {
         Some(limit_value) if !limit_value.is_nil() => {
-            let limit = expect_integer_or_marker_in_buffers(&eval.edit.buffers, limit_value)?;
+            let limit = expect_integer_or_marker_in_buffers(&edit.buffers, limit_value)?;
             if limit <= 0 {
                 return Err(signal(
                     LispCondition::ArgsOutOfRange,
@@ -2121,9 +2119,9 @@ pub(crate) fn builtin_field_beginning(
         _ => None,
     };
     let (beg, _) = find_field_bounds_in_state(
-        eval.variables(),
+        vars,
         &[],
-        &eval.edit.buffers,
+        &edit.buffers,
         args.first(),
         args.get(1).is_some_and(|value| value.is_truthy()),
         limit,
@@ -2132,19 +2130,20 @@ pub(crate) fn builtin_field_beginning(
     Ok(Value::fixnum(beg))
 }
 
-pub(crate) fn builtin_field_end(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_field_end<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_max_args("field-end", &args, 3)?;
+    let (edit, vars) = host.edit_and_vars();
     let limit = match args.get(2) {
         Some(limit_value) if !limit_value.is_nil() => Some(expect_integer_or_marker_in_buffers(
-            &eval.edit.buffers,
+            &edit.buffers,
             limit_value,
         )?),
         _ => None,
     };
     let (_, end) = find_field_bounds_in_state(
-        eval.variables(),
+        vars,
         &[],
-        &eval.edit.buffers,
+        &edit.buffers,
         args.first(),
         args.get(1).is_some_and(|value| value.is_truthy()),
         None,
@@ -2275,9 +2274,9 @@ pub(crate) fn builtin_point_max_0(edit_buffers: &mut crate::buffer::BufferManage
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub(crate) fn builtin_goto_char(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_goto_char<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_args("goto-char", &args, 1)?;
-    builtin_goto_char_1(eval, args[0])
+    builtin_goto_char_1(host, args[0])
 }
 
 pub(crate) fn builtin_goto_char_1<H: EditHost>(host: &mut H, arg: Value) -> EvalResult {
@@ -4743,19 +4742,20 @@ pub(crate) fn builtin_overlay_put_in_buffers(
 }
 
 /// (overlay-get OVERLAY PROP)
-pub(crate) fn builtin_overlay_get(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_overlay_get<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_args("overlay-get", &args, 2)?;
     let overlay = expect_overlay(&args[0])?;
+    let (edit, vars) = host.edit_and_vars();
     Ok(lookup_overlay_property(
-        eval.variables(),
-        &eval.edit.buffers,
+        vars,
+        &edit.buffers,
         overlay,
         args[1],
     ))
 }
 
 /// (overlayp OBJ)
-pub(crate) fn builtin_overlayp(_eval: &mut super::eval::Context, args: &[Value]) -> EvalResult {
+pub(crate) fn builtin_overlayp<H: EditHost>(_host: &mut H, args: &[Value]) -> EvalResult {
     builtin_overlayp_pure(args)
 }
 
@@ -4768,10 +4768,11 @@ pub(crate) fn builtin_overlayp_pure(args: &[Value]) -> EvalResult {
 }
 
 /// (overlays-at POS &optional SORTED)
-pub(crate) fn builtin_overlays_at(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
-    let buffers = &eval.edit.buffers;
+pub(crate) fn builtin_overlays_at<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_min_args("overlays-at", &args, 1)?;
     expect_max_args("overlays-at", &args, 2)?;
+    let (edit, vars) = host.edit_and_vars();
+    let buffers = &edit.buffers;
     let pos = expect_integer_or_marker_in_buffers(buffers, &args[0])?;
     let buf_id = current_buffer_id_in_buffers(buffers)?;
     let buf = buffers
@@ -4789,7 +4790,7 @@ pub(crate) fn builtin_overlays_at(eval: &mut super::eval::Context, args: Vec<Val
         if let Some(target_window_id) = sorted.as_window_id() {
             let window_sym = Value::symbol("window");
             ids.retain(|ov| {
-                super::textprop::lookup_overlay_property(eval.variables(), buffers, *ov, window_sym)
+                lookup_overlay_property(vars, buffers, *ov, window_sym)
                     .as_window_id()
                     .is_none_or(|wid| wid == target_window_id)
             });
@@ -4799,12 +4800,7 @@ pub(crate) fn builtin_overlays_at(eval: &mut super::eval::Context, args: Vec<Val
         let priority = Value::symbol("priority");
         buf.overlays
             .sort_overlay_ids_by_priority_desc_with(&mut ids, &|overlay| {
-                Some(super::textprop::lookup_overlay_property(
-                    eval.variables(),
-                    buffers,
-                    overlay,
-                    priority,
-                ))
+                Some(lookup_overlay_property(vars, buffers, overlay, priority))
             });
     }
     Ok(Value::list(ids))

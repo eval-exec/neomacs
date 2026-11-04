@@ -622,12 +622,12 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     );
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "field-beginning",
-        NativeFn::ContextVec(builtin_field_beginning),
+        NativeFn::ContextVec(|ctx, args| builtin_field_beginning(ctx, args)),
         SubrArity::new(0, Some(3)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "field-end",
-        NativeFn::ContextVec(builtin_field_end),
+        NativeFn::ContextVec(|ctx, args| builtin_field_end(ctx, args)),
         SubrArity::new(0, Some(3)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -1762,12 +1762,12 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "overlay-get",
-        NativeFn::ContextVec(crate::emacs_core::buffer::builtin_overlay_get),
+        NativeFn::ContextVec(|ctx, args| crate::emacs_core::buffer::builtin_overlay_get(ctx, args)),
         SubrArity::new(2, Some(2)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "overlays-at",
-        NativeFn::ContextVec(crate::emacs_core::buffer::builtin_overlays_at),
+        NativeFn::ContextVec(|ctx, args| crate::emacs_core::buffer::builtin_overlays_at(ctx, args)),
         SubrArity::new(1, Some(2)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -1825,7 +1825,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "overlayp",
-        NativeFn::ContextSlice(crate::emacs_core::buffer::builtin_overlayp),
+        NativeFn::ContextSlice(|ctx, args| crate::emacs_core::buffer::builtin_overlayp(ctx, args)),
         SubrArity::new(1, Some(1)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::fixed0(
