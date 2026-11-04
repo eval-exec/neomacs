@@ -5666,7 +5666,7 @@ impl Context {
         &mut self,
         frame_id: neovm_value::display_vocab::FrameId,
     ) -> bool {
-        if crate::face::realization::enabled() {
+        if crate::emacs_core::eval::data::face::enabled() {
             return super::xfaces::realization::prepare_runtime_faces(self, frame_id);
         }
         let source = (frame_id, self.face_change_count);

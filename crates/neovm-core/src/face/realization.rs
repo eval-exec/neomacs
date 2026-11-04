@@ -14,18 +14,8 @@ use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::OnceLock;
 
-/// Process-wide immutable campaign selector. No mutable Lisp state is shared.
-pub fn enabled() -> bool {
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    // Unset is on. An explicit value other than "1", including "0", stays off
-    // so a measurement can still select the previous path.
-    *ENABLED.get_or_init(|| match std::env::var("NEOVM_FACE_REALIZATION_LIFECYCLE") {
-        Ok(value) => value == "1",
-        Err(_) => true,
-    })
-}
-
 pub use crate::emacs_core::eval::data::face::BasicFace;
+pub use crate::emacs_core::eval::data::face::enabled;
 
 /// GNU classifies faces by frame output method (frame.h:932-933), and
 /// is_tty_frame accepts termcap/MSDOS rather than the initial output kind

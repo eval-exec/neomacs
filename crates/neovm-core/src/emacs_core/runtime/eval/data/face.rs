@@ -9,6 +9,7 @@ use neovm_value::value::Value;
 use neovm_value::value::{ProducerSymbolName, ValueKind};
 use rustc_hash::FxHashMap;
 use std::collections::HashMap;
+use std::sync::OnceLock;
 use strum::EnumString;
 
 /// GNU's forced basic face roles, in realization order. A role retains its
@@ -2326,4 +2327,17 @@ pub(crate) struct FrameFaceRealizationCache {
     /// An unknown writer (no face name) sets `definitions_all_dirty` instead.
     pub(crate) dirty_definitions: rustc_hash::FxHashSet<Box<str>>,
     pub(crate) definitions_all_dirty: bool,
+}
+
+// --- K2: face realization lifecycle flag (stage-4) ---
+
+/// Process-wide immutable campaign selector. No mutable Lisp state is shared.
+pub fn enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    // Unset is on. An explicit value other than "1", including "0", stays off
+    // so a measurement can still select the previous path.
+    *ENABLED.get_or_init(|| match std::env::var("NEOVM_FACE_REALIZATION_LIFECYCLE") {
+        Ok(value) => value == "1",
+        Err(_) => true,
+    })
 }

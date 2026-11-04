@@ -1639,19 +1639,6 @@ fn read_colon_file_names(path: &str) -> Vec<String> {
 // ---------------------------------------------------------------------------
 
 /// Register the variables GNU's `syms_of_dired` (src/dired.c) installs in C.
-pub fn register_bootstrap_vars(obarray: &mut crate::emacs_core::symbol::Obarray) {
-    // dired.c:1206 — DEFVAR_LISP (Vcompletion_ignored_extensions), then
-    // dired.c:1212 initializes it to nil. `lisp/bindings.el' supplies the real
-    // list at load time, so do not seed one here.
-    //
-    // DEFVAR_LISP is what makes the symbol special. Without it a `let' around
-    // `completion-ignored-extensions' in a lexical-binding file binds
-    // lexically, and callees like `completion-pcm--filename-try-filter' keep
-    // reading the global list — file-name completion then quietly ignores the
-    // caller's rebinding.
-    obarray.seed_value("completion-ignored-extensions", Value::NIL);
-    obarray.make_special("completion-ignored-extensions");
-}
 
 // ---------------------------------------------------------------------------
 // Tests

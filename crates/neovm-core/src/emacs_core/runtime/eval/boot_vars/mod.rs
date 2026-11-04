@@ -1,5 +1,6 @@
 //! Evaluator bootstrap DEFVAR seeding that used to call display modules.
 
+pub(crate) mod dired;
 pub(crate) mod font;
 pub(crate) mod fontset;
 pub(crate) mod frame;

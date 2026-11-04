@@ -1507,7 +1507,7 @@ impl Context {
         // TextVariableStore surface. Bootstrap has no owner yet.
         let mut coding_store = crate::emacs_core::eval::VariableStore::new(obarray, None);
         super::super::coding::register_bootstrap_vars(&mut coding_store);
-        super::super::dired::register_bootstrap_vars(obarray);
+        super::boot_vars::dired::register_bootstrap_vars(obarray);
         super::boot_vars::xdisp::register_bootstrap_vars(obarray);
         super::super::textprop::register_bootstrap_vars(obarray);
         super::boot_vars::frame::register_bootstrap_vars(obarray);
