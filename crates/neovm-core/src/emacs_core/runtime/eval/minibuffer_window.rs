@@ -148,7 +148,7 @@ impl Context {
                     }
                     window.set_suspend_auto_hscroll(false);
                 }
-                crate::window::window_markers::attach_window_position_markers(
+                crate::emacs_core::eval::data::window_markers::attach_window_position_markers(
                     &mut self.edit.buffers,
                     window,
                 );

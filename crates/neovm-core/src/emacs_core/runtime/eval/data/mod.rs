@@ -24,6 +24,7 @@ pub mod process_tls;
 pub mod redisplay;
 pub mod register;
 pub mod window_edge_drag;
+pub mod window_layout_query;
 pub mod window_markers;
 pub mod window_state;
 pub mod word_wrap;

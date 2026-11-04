@@ -46,12 +46,12 @@ use super::value::*;
 use crate::buffer::{BufferId, BufferManager, CharPos0, EmacsBytePos, LispCharPos1};
 use crate::emacs_core::eval::data::face::FaceTable;
 use crate::emacs_core::eval::data::process_state::ProcessManager;
+use crate::emacs_core::eval::data::window_layout_query::WindowLayoutQueryAdapter;
 use crate::emacs_core::eval::data::window_state::{
     BodyRedisplayRevision, ForcedBodyRedisplay, FrameManager,
 };
 use crate::gc_trace::GcTrace;
 use crate::tagged::header::{CLOSURE_ARGLIST, SubrDispatchKind, SubrInteractivity};
-use crate::window::WindowLayoutQueryAdapter;
 pub use neomacs_display_protocol::GraphicalFaceAttribute;
 use neovm_edit::emacs_core::display_metrics::WindowId;
 pub use neovm_value::display_vocab::XwidgetScriptRequestId;
@@ -4586,7 +4586,7 @@ impl Context {
         } else if sym_id == self.print_symbols_bare_symbol {
             self.print_symbols_bare = value.is_truthy();
         } else if sym_id == frame_alpha_lower_limit_symbol() {
-            let limit = crate::window::frame_alpha::lower_limit(value);
+            let limit = self::data::frame_alpha::lower_limit(value);
             if let Some(host) = self.display_host.as_mut() {
                 host.set_gui_frame_alpha_lower_limit(limit);
             }

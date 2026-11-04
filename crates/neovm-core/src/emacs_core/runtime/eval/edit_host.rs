@@ -523,10 +523,10 @@ impl EditHost for Context {
         let char_width = frame.char_width.max(1.0).round() as i64;
         let char_height = frame.char_height.max(1.0).round() as i64;
         let visible_lines = match window {
-            crate::window::Window::Leaf { bounds, .. } => {
+            crate::emacs_core::eval::data::window_state::Window::Leaf { bounds, .. } => {
                 ((bounds.height / char_height.max(1) as f32).floor() as i64).max(1)
             }
-            crate::window::Window::Internal { .. } => 1,
+            crate::emacs_core::eval::data::window_state::Window::Internal { .. } => 1,
         };
         Some(LineNumberDisplayTarget {
             buffer,

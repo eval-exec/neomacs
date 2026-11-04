@@ -6,6 +6,7 @@ use super::{
     WindowDisplayState, WindowId, WindowMargins,
 };
 use crate::buffer::{BufferId, LispCharPos1};
+use crate::emacs_core::eval::data::window_layout_query::WindowLayoutQueryAdapter;
 use crate::emacs_core::intern::WellKnown;
 use crate::emacs_core::value::Value;
 use crate::window::DisplayFrameExt;
@@ -94,29 +95,6 @@ impl WindowScrollUpdate {
         Ok(())
     }
 }
-
-/// Frontend-owned synchronous layout-query callback state.
-///
-/// Keeping the active call as an enum makes reentrant entry explicit and
-/// prevents a temporarily removed callback from being mistaken for an
-/// unavailable display. This is Neomacs dependency-boundary machinery, not a
-/// GNU `eval.c` primitive, so it belongs beside the window display adapter.
-pub(crate) enum WindowLayoutQueryAdapter {
-    Unavailable,
-    Ready(WindowLayoutQueryCallback),
-    Running,
-}
-
-/// The frontend's synchronous layout-query callback held by
-/// [`WindowLayoutQueryAdapter::Ready`].
-pub(crate) type WindowLayoutQueryCallback = Box<
-    dyn FnMut(
-        &mut crate::emacs_core::eval::Context,
-        FrameId,
-        WindowId,
-        crate::window::WindowLayoutQueryScope,
-    ) -> crate::window::WindowLayoutQueryOutcome,
->;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct WindowBufferDisplayDefaults {
