@@ -1134,6 +1134,92 @@ fn libxml_parse_html_region_routes_html_children_into_body() {
 }
 
 #[test]
+fn libxml_parse_html_region_places_comments_before_head_under_html() {
+    crate::test_utils::init_test_tracing();
+
+    // GNU 31.1: (html nil (comment nil "c") (head nil (title nil "T")))
+    let expected = Value::list(vec![
+        Value::symbol("html"),
+        Value::NIL,
+        comment("c"),
+        Value::list(vec![
+            Value::symbol("head"),
+            Value::NIL,
+            Value::list(vec![Value::symbol("title"), Value::NIL, Value::string("T")]),
+        ]),
+    ]);
+    assert_eq!(
+        parse_html_region(b"<html><!--c--><head><title>T</title></head></html>", false).unwrap(),
+        expected
+    );
+    assert_eq!(
+        parse_html_region(b"<html><!--c--><head><title>T</title></head></html>", true).unwrap(),
+        expected
+    );
+
+    // GNU 31.1: (html nil (comment nil "c"))
+    assert_eq!(
+        parse_html_region(b"<html><!--c--></html>", false).unwrap(),
+        Value::list(vec![Value::symbol("html"), Value::NIL, comment("c"),])
+    );
+
+    // GNU 31.1: (html nil (comment nil "c") (body nil (p nil "x")))
+    assert_eq!(
+        parse_html_region(b"<html><!--c--><p>x</p></html>", false).unwrap(),
+        html(vec![
+            comment("c"),
+            body(vec![Value::list(vec![
+                Value::symbol("p"),
+                Value::NIL,
+                Value::string("x"),
+            ])]),
+        ])
+    );
+
+    // A comment after implicit head content stays in head.
+    // GNU 31.1: (html nil (head nil (title nil "T") (comment nil "c")))
+    assert_eq!(
+        parse_html_region(b"<title>T</title><!--c-->", false).unwrap(),
+        Value::list(vec![
+            Value::symbol("html"),
+            Value::NIL,
+            Value::list(vec![
+                Value::symbol("head"),
+                Value::NIL,
+                Value::list(vec![Value::symbol("title"), Value::NIL, Value::string("T")]),
+                comment("c"),
+            ]),
+        ])
+    );
+
+    // A document-level comment before an explicit head is toplevel when kept
+    // and dropped with discard-comments.
+    // GNU 31.1 keep: (top nil (comment nil "c") (html nil (head nil (title nil "T"))))
+    let head_only = Value::list(vec![
+        Value::symbol("html"),
+        Value::NIL,
+        Value::list(vec![
+            Value::symbol("head"),
+            Value::NIL,
+            Value::list(vec![Value::symbol("title"), Value::NIL, Value::string("T")]),
+        ]),
+    ]);
+    assert_eq!(
+        parse_html_region(b"<!--c--><head><title>T</title></head>", false).unwrap(),
+        Value::list(vec![
+            Value::symbol("top"),
+            Value::NIL,
+            comment("c"),
+            head_only.clone(),
+        ])
+    );
+    assert_eq!(
+        parse_html_region(b"<!--c--><head><title>T</title></head>", true).unwrap(),
+        head_only
+    );
+}
+
+#[test]
 fn libxml_parse_html_region_strips_a_leading_utf8_bom_like_libxml2() {
     crate::test_utils::init_test_tracing();
 
