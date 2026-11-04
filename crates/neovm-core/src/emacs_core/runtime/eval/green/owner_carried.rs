@@ -14,7 +14,7 @@ use crate::buffer::BufferId;
 use crate::emacs_core::chrome_dirty::ChromeDirty;
 use crate::emacs_core::profiler::ProfilerState;
 use crate::emacs_core::value::Value;
-use crate::window::WindowId;
+use neovm_edit::emacs_core::display_metrics::WindowId;
 use rustc_hash::FxHashMap;
 
 /// The warm GNU-global state while its holder is parked.

@@ -84,9 +84,9 @@ global_state! {
     /// xdisp.c `echo_area_buffer[]`.
     echo_area_buffers: EchoAreaBuffers,
     /// minibuf.c `minibuf_selected_window`.
-    minibuffer_selected_window: Option<crate::window::WindowId>,
+    minibuffer_selected_window: Option<neovm_edit::emacs_core::display_metrics::WindowId>,
     /// minibuf.c `minibuf_window` in use.
-    active_minibuffer_window: Option<crate::window::WindowId>,
+    active_minibuffer_window: Option<neovm_edit::emacs_core::display_metrics::WindowId>,
     /// emacs.c daemon state (process-global).
     daemon: Option<DaemonState>,
     /// keyboard.c `quit_char`.

@@ -20,7 +20,7 @@ use crate::emacs_core::errors::signal_matches_condition_value_sym;
 use crate::emacs_core::intern::format_symbol_name_for_diagnostic;
 use crate::emacs_core::intern::intern;
 use crate::emacs_core::value::{Value, ValueKind, VecLikeType};
-use crate::window::WindowId;
+use neovm_edit::emacs_core::display_metrics::WindowId;
 use std::fmt::{self, Formatter};
 
 thread_local! {

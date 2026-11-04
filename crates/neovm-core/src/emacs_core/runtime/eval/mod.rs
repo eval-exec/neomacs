@@ -52,9 +52,10 @@ use crate::face::{FaceTable, FontSlant, FontWeight, FontWidth};
 use crate::gc_trace::GcTrace;
 use crate::tagged::header::{CLOSURE_ARGLIST, SubrDispatchKind, SubrInteractivity};
 use crate::window::{
-    BodyRedisplayRevision, ForcedBodyRedisplay, FrameFullscreen, FrameManager, WindowId,
+    BodyRedisplayRevision, ForcedBodyRedisplay, FrameFullscreen, FrameManager,
     WindowLayoutQueryAdapter,
 };
+use neovm_edit::emacs_core::display_metrics::WindowId;
 
 pub(crate) mod world;
 pub use world::{ContextShutdownError, ObarrayWriteAccess, OutstandingWorldViews, WorldEra};
@@ -2970,9 +2971,11 @@ pub struct Context {
     /// GNU `echo_buffer[2]`, held by identity rather than by name.
     pub(crate) echo_area_buffers: WorldSlot<EchoAreaBuffers>,
     /// Window that was selected when the active minibuffer session began.
-    pub(crate) minibuffer_selected_window: WorldSlot<Option<crate::window::WindowId>>,
+    pub(crate) minibuffer_selected_window:
+        WorldSlot<Option<neovm_edit::emacs_core::display_metrics::WindowId>>,
     /// Currently active minibuffer window, if any.
-    pub(crate) active_minibuffer_window: WorldSlot<Option<crate::window::WindowId>>,
+    pub(crate) active_minibuffer_window:
+        WorldSlot<Option<neovm_edit::emacs_core::display_metrics::WindowId>>,
     /// Thread manager — cooperative threading primitives.
     pub(crate) threads: WorldSlot<ThreadManager>,
     /// Command loop state — event queue, prefix args, kbd macros, quit flag.
@@ -3329,7 +3332,7 @@ pub struct Context {
             dyn FnMut(
                 &Self,
                 crate::window::FrameId,
-                crate::window::WindowId,
+                neovm_edit::emacs_core::display_metrics::WindowId,
                 Vec<neomacs_display_protocol::input_progress::InputReceipt>,
             ),
         >,

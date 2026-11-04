@@ -11,7 +11,8 @@ mod echo_message;
 use super::*;
 use crate::buffer::{BufferId, LispCharPos1};
 use crate::emacs_core::intern::WellKnown;
-use crate::window::{FrameId, PreparedMiniResizeOutcome, Window, WindowId};
+use crate::window::{FrameId, PreparedMiniResizeOutcome, Window};
+use neovm_edit::emacs_core::display_metrics::WindowId;
 
 // Fixed redisplay spellings with GNU DEFSYM ids. GNU holds these as statics
 // (`Qpre_redisplay_function`, `Qinhibit_redisplay`, `Qinhibit_quit`, ...); the

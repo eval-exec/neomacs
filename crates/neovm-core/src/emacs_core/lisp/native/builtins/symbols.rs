@@ -3560,9 +3560,9 @@ pub(crate) fn builtin_set_minibuffer_window(
     expect_args("set-minibuffer-window", &args, 1)?;
     match args[0].kind() {
         ValueKind::Veclike(VecLikeType::Window)
-            if eval.frames.is_minibuffer_window_id(crate::window::WindowId(
-                args[0].as_window_id().unwrap(),
-            )) =>
+            if eval.frames.is_minibuffer_window_id(
+                neovm_edit::emacs_core::display_metrics::WindowId(args[0].as_window_id().unwrap()),
+            ) =>
         {
             // GNU ends `Fset_minibuffer_window' with `return window;'
             // (`src/minibuf.c'), not nil.

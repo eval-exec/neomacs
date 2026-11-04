@@ -91,7 +91,7 @@ fn expect_optional_live_frame_designator_in_state(
 #[derive(Clone, Copy)]
 struct HookCallerContextState {
     selected_frame_id: Option<crate::window::FrameId>,
-    selected_window_id: Option<crate::window::WindowId>,
+    selected_window_id: Option<neovm_edit::emacs_core::display_metrics::WindowId>,
     current_buffer_id: Option<crate::buffer::BufferId>,
 }
 
@@ -109,7 +109,7 @@ fn save_hook_caller_context(eval: &super::eval::Context) -> HookCallerContextSta
 fn window_buffer_id_in_state(
     eval: &super::eval::Context,
     frame_id: crate::window::FrameId,
-    window_id: crate::window::WindowId,
+    window_id: neovm_edit::emacs_core::display_metrics::WindowId,
 ) -> Option<crate::buffer::BufferId> {
     eval.frames
         .get(frame_id)
@@ -120,7 +120,7 @@ fn window_buffer_id_in_state(
 fn select_frame_window_for_hook_context(
     eval: &mut super::eval::Context,
     frame_id: crate::window::FrameId,
-    window_id: crate::window::WindowId,
+    window_id: neovm_edit::emacs_core::display_metrics::WindowId,
 ) -> EvalResult {
     let _ = eval.frames.select_frame(frame_id);
     eval.sync_keyboard_terminal_owner();
@@ -157,7 +157,7 @@ fn restore_hook_caller_context(
 
 #[derive(Clone, Copy)]
 struct LiveWindowHookState {
-    window_id: crate::window::WindowId,
+    window_id: neovm_edit::emacs_core::display_metrics::WindowId,
     buffer_id: crate::buffer::BufferId,
     bounds: crate::window::Rect,
 }
@@ -174,15 +174,15 @@ struct FrameWindowHookPlan {
     /// changed, i.e. `frame_size_change || window_deleted'
     /// (`src/window.c:4308-4312`).
     frame_configuration_change: bool,
-    local_buffer_windows: Vec<crate::window::WindowId>,
-    local_size_windows: Vec<crate::window::WindowId>,
-    local_selection_windows: Vec<crate::window::WindowId>,
-    local_state_windows: Vec<crate::window::WindowId>,
+    local_buffer_windows: Vec<neovm_edit::emacs_core::display_metrics::WindowId>,
+    local_size_windows: Vec<neovm_edit::emacs_core::display_metrics::WindowId>,
+    local_selection_windows: Vec<neovm_edit::emacs_core::display_metrics::WindowId>,
+    local_state_windows: Vec<neovm_edit::emacs_core::display_metrics::WindowId>,
 }
 
 fn push_unique_window(
-    windows: &mut Vec<crate::window::WindowId>,
-    window_id: crate::window::WindowId,
+    windows: &mut Vec<neovm_edit::emacs_core::display_metrics::WindowId>,
+    window_id: neovm_edit::emacs_core::display_metrics::WindowId,
 ) {
     if !windows.contains(&window_id) {
         windows.push(window_id);
@@ -243,7 +243,7 @@ fn frame_window_hook_record_from_live_state(
 fn run_window_local_hook_values(
     eval: &mut super::eval::Context,
     frame_id: crate::window::FrameId,
-    window_ids: &[crate::window::WindowId],
+    window_ids: &[neovm_edit::emacs_core::display_metrics::WindowId],
     hook_name: &str,
     hook_sym: crate::emacs_core::intern::SymId,
 ) -> EvalResult {
@@ -559,7 +559,9 @@ pub(super) fn expect_optional_live_window_designator(
     }
     if value.is_window()
         && let Some(wid) = value.as_window_id()
-        && eval.frames.is_live_window_id(crate::window::WindowId(wid))
+        && eval
+            .frames
+            .is_live_window_id(neovm_edit::emacs_core::display_metrics::WindowId(wid))
     {
         return Ok(());
     }
@@ -668,22 +670,22 @@ pub(crate) struct WindowConfigurationSnapshot {
     /// when the tree stores its nodes in an arena, a snapshot has to carry its
     /// own nodes or its child ids refer to windows that are not there.
     tree: crate::window::WindowTree,
-    selected_window: crate::window::WindowId,
+    selected_window: neovm_edit::emacs_core::display_metrics::WindowId,
     current_buffer: Option<crate::buffer::BufferId>,
-    minibuffer_window: Option<crate::window::WindowId>,
+    minibuffer_window: Option<neovm_edit::emacs_core::display_metrics::WindowId>,
     minibuffer_leaf: Option<crate::window::Window>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DisconnectedWindowPoint {
     PreserveSelectedBuffer,
-    PreserveLastSelectedWindow(crate::window::WindowId),
+    PreserveLastSelectedWindow(neovm_edit::emacs_core::display_metrics::WindowId),
     CommitWindowPoint(LispCharPos1),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct OutgoingWindowBuffer {
-    window_id: crate::window::WindowId,
+    window_id: neovm_edit::emacs_core::display_metrics::WindowId,
     buffer_id: crate::buffer::BufferId,
     window_start: LispCharPos1,
     window_point: LispCharPos1,
@@ -716,7 +718,10 @@ struct CurrentWindowBuffer {
 
 fn apply_saved_window_buffer_restoration(
     tree: &mut crate::window::WindowTree,
-    current_buffers: &HashMap<crate::window::WindowId, CurrentWindowBuffer>,
+    current_buffers: &HashMap<
+        neovm_edit::emacs_core::display_metrics::WindowId,
+        CurrentWindowBuffer,
+    >,
     buffers: &mut crate::buffer::BufferManager,
 ) {
     tree.for_each_leaf_mut(|window| {
@@ -726,7 +731,10 @@ fn apply_saved_window_buffer_restoration(
 
 fn apply_saved_leaf_buffer_restoration(
     window: &mut crate::window::Window,
-    current_buffers: &HashMap<crate::window::WindowId, CurrentWindowBuffer>,
+    current_buffers: &HashMap<
+        neovm_edit::emacs_core::display_metrics::WindowId,
+        CurrentWindowBuffer,
+    >,
     buffers: &mut crate::buffer::BufferManager,
 ) {
     match window {
@@ -825,7 +833,10 @@ fn prepare_saved_window_buffer_restoration(
 
 fn collect_leaf_buffer_ids(
     tree: &crate::window::WindowTree,
-    buffers: &mut HashMap<crate::window::WindowId, crate::buffer::BufferId>,
+    buffers: &mut HashMap<
+        neovm_edit::emacs_core::display_metrics::WindowId,
+        crate::buffer::BufferId,
+    >,
 ) {
     for id in tree.leaf_ids() {
         if let Some(crate::window::Window::Leaf { buffer_id, .. }) = tree.find(id) {
@@ -836,7 +847,10 @@ fn collect_leaf_buffer_ids(
 
 fn merge_live_window_histories(
     tree: &mut crate::window::WindowTree,
-    live_histories: &HashMap<crate::window::WindowId, crate::window::WindowHistoryState>,
+    live_histories: &HashMap<
+        neovm_edit::emacs_core::display_metrics::WindowId,
+        crate::window::WindowHistoryState,
+    >,
 ) {
     tree.for_each_leaf_mut(|window| {
         if let crate::window::Window::Leaf { id, history, .. } = window
@@ -964,7 +978,7 @@ fn prepare_reused_window_histories(
 
 fn live_window_displays_buffer(
     frames: &crate::window::FrameManager,
-    window_id: crate::window::WindowId,
+    window_id: neovm_edit::emacs_core::display_metrics::WindowId,
     buffer_id: crate::buffer::BufferId,
 ) -> bool {
     frames
@@ -1229,7 +1243,7 @@ fn save_snapshot_persistent_window_parameters(
 
 fn collect_window_parameters(
     tree: &crate::window::WindowTree,
-    out: &mut HashMap<crate::window::WindowId, Vec<(Value, Value)>>,
+    out: &mut HashMap<neovm_edit::emacs_core::display_metrics::WindowId, Vec<(Value, Value)>>,
 ) {
     for id in tree.subtree_ids(tree.root_id()) {
         if let Some(window) = tree.find(id) {
@@ -1240,7 +1254,7 @@ fn collect_window_parameters(
 
 fn collect_frame_window_parameters(
     frame: &crate::window::Frame,
-) -> HashMap<crate::window::WindowId, Vec<(Value, Value)>> {
+) -> HashMap<neovm_edit::emacs_core::display_metrics::WindowId, Vec<(Value, Value)>> {
     let mut parameters = HashMap::new();
     collect_window_parameters(frame.tree(), &mut parameters);
     if let Some(minibuffer) = &frame.minibuffer_leaf {
@@ -1251,7 +1265,10 @@ fn collect_frame_window_parameters(
 
 fn merge_restored_window_parameters(
     window: &mut crate::window::Window,
-    live_parameters: &HashMap<crate::window::WindowId, Vec<(Value, Value)>>,
+    live_parameters: &HashMap<
+        neovm_edit::emacs_core::display_metrics::WindowId,
+        Vec<(Value, Value)>,
+    >,
     symbol_mode: SymbolMode,
 ) {
     let saved_parameters = window.parameters().clone();
@@ -1289,7 +1306,10 @@ fn merge_restored_window_parameters(
 
 fn merge_snapshot_window_parameters(
     snapshot: &mut WindowConfigurationSnapshot,
-    live_parameters: &HashMap<crate::window::WindowId, Vec<(Value, Value)>>,
+    live_parameters: &HashMap<
+        neovm_edit::emacs_core::display_metrics::WindowId,
+        Vec<(Value, Value)>,
+    >,
     symbol_mode: SymbolMode,
 ) {
     snapshot.tree.for_each_node_mut(|window| {
@@ -1396,9 +1416,9 @@ pub(crate) fn builtin_window_configuration_frame(args: Vec<Value>) -> EvalResult
 /// snapshots structurally instead.
 fn window_tree_layout_equal(
     tree_a: &crate::window::WindowTree,
-    a: crate::window::WindowId,
+    a: neovm_edit::emacs_core::display_metrics::WindowId,
     tree_b: &crate::window::WindowTree,
-    b: crate::window::WindowId,
+    b: neovm_edit::emacs_core::display_metrics::WindowId,
 ) -> bool {
     let (Some(a), Some(b)) = (tree_a.find(a), tree_b.find(b)) else {
         return false;
@@ -1629,7 +1649,7 @@ pub(crate) fn builtin_set_window_configuration(
 /// apply half of it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct LiveCurrentBufferPoint {
-    window: crate::window::WindowId,
+    window: neovm_edit::emacs_core::display_metrics::WindowId,
     buffer: crate::buffer::BufferId,
     point: LispCharPos1,
 }
@@ -1826,7 +1846,7 @@ pub(crate) fn set_window_configuration_with_options(
         // `other_buffer_safely` for any restored window whose saved buffer was
         // killed, instead of leaving a dead buffer in the window (which would
         // signal "Selecting deleted buffer" on the next redisplay).
-        let dead_leaf_windows: Vec<crate::window::WindowId> = eval
+        let dead_leaf_windows: Vec<neovm_edit::emacs_core::display_metrics::WindowId> = eval
             .frames
             .get(snapshot.frame_id)
             .map(|frame| {
@@ -2063,7 +2083,7 @@ pub(crate) fn builtin_run_window_configuration_change_hook(
 
 pub(crate) fn run_gnu_committed_scroll_functions(
     eval: &mut super::eval::Context,
-    window: crate::window::WindowId,
+    window: neovm_edit::emacs_core::display_metrics::WindowId,
 ) -> EvalResult {
     redisplay_gnu::run_committed_scroll(eval, window)
 }
@@ -2084,7 +2104,7 @@ pub(crate) fn builtin_run_window_scroll_functions(
     let Some(wid) = window_arg.as_window_id() else {
         return Ok(Value::NIL);
     };
-    let window_id = crate::window::WindowId(wid);
+    let window_id = neovm_edit::emacs_core::display_metrics::WindowId(wid);
     if crate::emacs_core::eval::gnu_redisplay_hooks_enabled() {
         return redisplay_gnu::run_eager_scroll(eval, window_id);
     }

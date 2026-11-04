@@ -439,7 +439,7 @@ impl EditHost for Context {
                 buffer,
                 window: window
                     .and_then(|value| value.as_window_id())
-                    .map(crate::window::WindowId),
+                    .map(neovm_edit::emacs_core::display_metrics::WindowId),
                 origin,
                 rows,
                 goal_column,

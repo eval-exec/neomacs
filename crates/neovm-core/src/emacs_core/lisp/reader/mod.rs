@@ -431,15 +431,15 @@ struct MinibufferOwnerFrame(crate::window::FrameId);
 #[derive(Clone, Copy, Debug)]
 struct ActiveMinibufferWindowState {
     minibuffer_frame: MinibufferOwnerFrame,
-    minibuffer_window_id: crate::window::WindowId,
+    minibuffer_window_id: neovm_edit::emacs_core::display_metrics::WindowId,
     calling_frame: CallingFrame,
-    calling_selected_window: crate::window::WindowId,
-    previous_minibuffer_frame_selected_window: crate::window::WindowId,
+    calling_selected_window: neovm_edit::emacs_core::display_metrics::WindowId,
+    previous_minibuffer_frame_selected_window: neovm_edit::emacs_core::display_metrics::WindowId,
     previous_minibuffer_buffer: Option<crate::buffer::BufferId>,
     previous_minibuffer_window_start: LispCharPos1,
     previous_minibuffer_point: LispCharPos1,
-    previous_minibuffer_selected_window: Option<crate::window::WindowId>,
-    previous_active_minibuffer_window: Option<crate::window::WindowId>,
+    previous_minibuffer_selected_window: Option<neovm_edit::emacs_core::display_metrics::WindowId>,
+    previous_active_minibuffer_window: Option<neovm_edit::emacs_core::display_metrics::WindowId>,
 }
 
 /// Display-side effect produced when GNU's `minibuffer_unwind` restores the
@@ -454,7 +454,7 @@ struct ActiveMinibufferWindowState {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum MinibufferWindowRestoreEffect {
     NoBufferRestored,
-    BufferRestored(crate::window::WindowId),
+    BufferRestored(neovm_edit::emacs_core::display_metrics::WindowId),
 }
 
 impl MinibufferWindowRestoreEffect {
@@ -488,14 +488,14 @@ struct MinibufferTeardownOutcome {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum MinibufferSelectedWindowUpdate {
     Preserve,
-    Replace(crate::window::WindowId),
+    Replace(neovm_edit::emacs_core::display_metrics::WindowId),
 }
 
 impl MinibufferSelectedWindowUpdate {
     pub(crate) fn for_entry(
         level: super::minibuffer::MinibufferEntryLevel,
-        selected_window: crate::window::WindowId,
-        minibuffer_window: crate::window::WindowId,
+        selected_window: neovm_edit::emacs_core::display_metrics::WindowId,
+        minibuffer_window: neovm_edit::emacs_core::display_metrics::WindowId,
     ) -> Self {
         match level {
             super::minibuffer::MinibufferEntryLevel::Outermost => Self::Replace(selected_window),
@@ -508,7 +508,10 @@ impl MinibufferSelectedWindowUpdate {
         }
     }
 
-    pub(crate) fn apply(self, target: &mut Option<crate::window::WindowId>) {
+    pub(crate) fn apply(
+        self,
+        target: &mut Option<neovm_edit::emacs_core::display_metrics::WindowId>,
+    ) {
         if let Self::Replace(window) = self {
             *target = Some(window);
         }
@@ -591,8 +594,8 @@ impl MinibufferSessionUnwind {
 fn activate_minibuffer_window_in_state(
     frames: &mut crate::window::FrameManager,
     buffers: &mut crate::buffer::BufferManager,
-    minibuffer_selected_window: &mut Option<crate::window::WindowId>,
-    active_minibuffer_window: &mut Option<crate::window::WindowId>,
+    minibuffer_selected_window: &mut Option<neovm_edit::emacs_core::display_metrics::WindowId>,
+    active_minibuffer_window: &mut Option<neovm_edit::emacs_core::display_metrics::WindowId>,
     minibuf_id: crate::buffer::BufferId,
     entry_level: super::minibuffer::MinibufferEntryLevel,
 ) -> Option<ActiveMinibufferWindowState> {
@@ -758,8 +761,8 @@ pub(crate) fn unwind_minibuffer_buffer(
 fn restore_minibuffer_window_in_state(
     frames: &mut crate::window::FrameManager,
     buffers: &mut crate::buffer::BufferManager,
-    minibuffer_selected_window: &mut Option<crate::window::WindowId>,
-    active_minibuffer_window: &mut Option<crate::window::WindowId>,
+    minibuffer_selected_window: &mut Option<neovm_edit::emacs_core::display_metrics::WindowId>,
+    active_minibuffer_window: &mut Option<neovm_edit::emacs_core::display_metrics::WindowId>,
     saved: ActiveMinibufferWindowState,
 ) -> MinibufferWindowRestoreEffect {
     let mut window_restore = MinibufferWindowRestoreEffect::NoBufferRestored;
@@ -795,8 +798,8 @@ fn restore_minibuffer_window_in_state(
 
 fn restore_minibuffer_selection_in_state(
     frames: &mut crate::window::FrameManager,
-    minibuffer_selected_window: &mut Option<crate::window::WindowId>,
-    active_minibuffer_window: &mut Option<crate::window::WindowId>,
+    minibuffer_selected_window: &mut Option<neovm_edit::emacs_core::display_metrics::WindowId>,
+    active_minibuffer_window: &mut Option<neovm_edit::emacs_core::display_metrics::WindowId>,
     saved: ActiveMinibufferWindowState,
 ) {
     if let Some(frame) = frames.get_mut(saved.minibuffer_frame.0) {
@@ -858,8 +861,8 @@ fn erase_expired_minibuffer_buffer_in_state(
 fn teardown_minibuffer_level_in_state(
     frames: &mut crate::window::FrameManager,
     buffers: &mut crate::buffer::BufferManager,
-    minibuffer_selected_window: &mut Option<crate::window::WindowId>,
-    active_minibuffer_window: &mut Option<crate::window::WindowId>,
+    minibuffer_selected_window: &mut Option<neovm_edit::emacs_core::display_metrics::WindowId>,
+    active_minibuffer_window: &mut Option<neovm_edit::emacs_core::display_metrics::WindowId>,
     minibuf_id: crate::buffer::BufferId,
     depth_after_pop: usize,
     saved: ActiveMinibufferWindowState,
