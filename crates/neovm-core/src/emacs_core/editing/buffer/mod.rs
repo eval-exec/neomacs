@@ -1675,16 +1675,17 @@ fn constrain_to_field_syms() -> &'static ConstrainToFieldSyms {
 /// property: no overlays, neither `field` nor a `category` symbol (whose
 /// plist GNU `textget` would consult) ever assigned as a text property, and
 /// no alias alist or `default-text-properties` that could supply one.
-fn current_buffer_cannot_have_fields(eval: &super::eval::Context) -> bool {
+fn current_buffer_cannot_have_fields<'a, V: EditVariableRead<'a>>(
+    vars: V,
+    buffers: &BufferManager,
+) -> bool {
     use crate::buffer::text_props::PropertyNamePresence::DefinitelyAbsent;
     let syms = constrain_to_field_syms();
-    let Some(buf) = eval.edit.buffers.current_buffer() else {
+    let Some(buf) = buffers.current_buffer() else {
         return false;
     };
-    let nil_var = |sym: crate::emacs_core::intern::SymId| {
-        eval.eval_symbol_by_id(sym)
-            .is_ok_and(|value| value.is_nil())
-    };
+    let nil_var =
+        |sym: crate::emacs_core::intern::SymId| vars.value(sym).is_some_and(|value| value.is_nil());
     buf.overlays.is_empty()
         && buf.text_props_property_name_presence(Value::from_sym_id(syms.field)) == DefinitelyAbsent
         && buf.text_props_property_name_presence(Value::from_sym_id(syms.category))
@@ -1693,12 +1694,12 @@ fn current_buffer_cannot_have_fields(eval: &super::eval::Context) -> bool {
         && nil_var(syms.default_text_properties)
 }
 
-pub(crate) fn builtin_constrain_to_field(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_constrain_to_field<H: EditHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args_range("constrain-to-field", &args, 2, 5)?;
-    builtin_constrain_to_field_5(eval, &args)
+    builtin_constrain_to_field_5(host, &args)
 }
 
 /// GNU field motion first coerces markers and saturates bignums to fixnums.
@@ -1774,28 +1775,42 @@ fn field_probe_out_of_range(position: FieldMotionPosition) -> Flow {
 /// arity-checked): the internal callers (`line-beginning-position`,
 /// `line-end-position`, `forward-word`) pass a stack array instead of
 /// consing a `Vec` per call.
-pub(crate) fn builtin_constrain_to_field_5(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_constrain_to_field_5<H: EditHost>(
+    host: &mut H,
     args: &[Value],
 ) -> EvalResult {
-    let current = &mut eval
-        .edit
-        .buffers
-        .current_buffer()
-        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    let bounds = FieldProbeBounds::from(&**current);
-    let point_min = bounds.begv.as_i64();
-    let orig_point = if args[0].is_nil() {
-        Some(FieldMotionPosition::from(current.point_position()))
-    } else {
-        None
+    let syms = constrain_to_field_syms();
+    let (bounds, point_min, orig_point, new_argument, old_argument, inhibit_field_text_motion) = {
+        let (edit, vars) = host.edit_and_vars();
+        let current = edit
+            .buffers
+            .current_buffer()
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        let bounds = FieldProbeBounds::from(&*current);
+        let point_min = bounds.begv.as_i64();
+        let orig_point = if args[0].is_nil() {
+            Some(FieldMotionPosition::from(current.point_position()))
+        } else {
+            None
+        };
+        let new_argument = if let Some(point) = orig_point {
+            point
+        } else {
+            FieldMotionPosition::try_from((&edit.buffers, args[0]))?
+        };
+        let old_argument = FieldMotionPosition::try_from((&edit.buffers, args[1]))?;
+        let inhibit_field_text_motion = vars
+            .value(syms.inhibit_field_text_motion)
+            .is_some_and(|value| !value.is_nil());
+        (
+            bounds,
+            point_min,
+            orig_point,
+            new_argument,
+            old_argument,
+            inhibit_field_text_motion,
+        )
     };
-    let new_argument = if let Some(point) = orig_point {
-        point
-    } else {
-        FieldMotionPosition::try_from((&eval.edit.buffers, args[0]))?
-    };
-    let old_argument = FieldMotionPosition::try_from((&eval.edit.buffers, args[1]))?;
     let mut result = new_argument;
     let new_pos = i64::from(new_argument.0);
     let old_pos = i64::from(old_argument.0);
@@ -1810,68 +1825,76 @@ pub(crate) fn builtin_constrain_to_field_5(
     // Computing them eagerly cost ~5x GNU on `line-beginning-position`, which
     // dired's font-lock calls once per line: 6 property lookups plus 4 `field`
     // symbol interns on every call, all of them thrown away.
-    let inhibit_field_text_motion = eval
-        .eval_symbol_by_id(constrain_to_field_syms().inhibit_field_text_motion)
-        .is_ok_and(|value| !value.is_nil());
-
     let mut constrain = !inhibit_field_text_motion && new_pos != old_pos;
-    if constrain && current_buffer_cannot_have_fields(eval) {
-        // These two probes would both return nil before GNU's OR completes.
-        // Retain their accessible-range checks when skipping the lookups.
-        // Buffers with fields keep the original short-circuit probe ordering.
-        bounds.check_probe(new_argument)?;
-        bounds.check_probe(old_argument)?;
-        // GNU would now run up to four `Fget_char_property` probes; when the
-        // buffer cannot hold a `field` anywhere they all answer nil, and
-        // `line-beginning-position` calls this once per line (~1.8K Ir).
-        constrain = false;
+    if constrain {
+        let cannot_have_fields = {
+            let (edit, vars) = host.edit_and_vars();
+            current_buffer_cannot_have_fields(vars, &edit.buffers)
+        };
+        if cannot_have_fields {
+            // These two probes would both return nil before GNU's OR completes.
+            // Retain their accessible-range checks when skipping the lookups.
+            // Buffers with fields keep the original short-circuit probe ordering.
+            bounds.check_probe(new_argument)?;
+            bounds.check_probe(old_argument)?;
+            // GNU would now run up to four `Fget_char_property` probes; when the
+            // buffer cannot hold a `field` anywhere they all answer nil, and
+            // `line-beginning-position` calls this once per line (~1.8K Ir).
+            constrain = false;
+        }
     }
 
     if constrain {
-        let field = Value::from_sym_id(constrain_to_field_syms().field);
-        let has_field = |eval: &super::eval::Context, pos: i64| -> Result<bool, Flow> {
-            Ok(
-                !char_property_in_current_buffer(eval.variables(), &eval.edit.buffers, pos, field)?
-                    .is_nil(),
-            )
+        let field = Value::from_sym_id(syms.field);
+        constrain = {
+            let (edit, vars) = host.edit_and_vars();
+            let has_field = |pos: i64| -> Result<bool, Flow> {
+                Ok(!char_property_in_current_buffer(vars, &edit.buffers, pos, field)?.is_nil())
+            };
+            has_field(new_pos)?
+                || has_field(old_pos)?
+                || (new_pos > point_min && has_field(new_pos - 1)?)
+                || (old_pos > point_min && has_field(old_pos - 1)?)
         };
-        constrain = has_field(eval, new_pos)?
-            || has_field(eval, old_pos)?
-            || (new_pos > point_min && has_field(eval, new_pos - 1)?)
-            || (old_pos > point_min && has_field(eval, old_pos - 1)?);
     }
 
     if constrain && let Some(capture_prop) = args.get(4).filter(|value| !value.is_nil()) {
-        let old_capture = crate::emacs_core::builtins::misc_eval::builtin_get_pos_property_impl(
-            eval.variables(),
-            &[],
-            None,
-            &eval.edit.buffers,
-            &[Value::fixnum(old_pos), *capture_prop],
-        )?;
-        constrain = old_capture.is_nil()
-            && (old_pos <= point_min
-                || char_property_in_current_buffer(
-                    eval.variables(),
-                    &eval.edit.buffers,
-                    old_pos,
-                    *capture_prop,
-                )?
-                .is_nil()
-                || char_property_in_current_buffer(
-                    eval.variables(),
-                    &eval.edit.buffers,
-                    old_pos - 1,
-                    *capture_prop,
-                )?
-                .is_nil());
+        let capture = {
+            let (edit, vars) = host.edit_and_vars();
+            let old_capture =
+                crate::emacs_core::builtins::misc_eval::builtin_get_pos_property_impl(
+                    vars,
+                    &[],
+                    None,
+                    &edit.buffers,
+                    &[Value::fixnum(old_pos), *capture_prop],
+                )?;
+            let still_constrained = old_capture.is_nil()
+                && (old_pos <= point_min
+                    || char_property_in_current_buffer(
+                        vars,
+                        &edit.buffers,
+                        old_pos,
+                        *capture_prop,
+                    )?
+                    .is_nil()
+                    || char_property_in_current_buffer(
+                        vars,
+                        &edit.buffers,
+                        old_pos - 1,
+                        *capture_prop,
+                    )?
+                    .is_nil());
+            still_constrained
+        };
+        constrain = capture;
     }
 
     if constrain {
         let forward = new_pos > old_pos;
         let field_bound = if forward {
             builtin_field_end(
-                eval,
+                host,
                 vec![
                     Value::from_fixnum(old_argument.0),
                     Value::bool_val(escape_from_edge),
@@ -1880,7 +1903,7 @@ pub(crate) fn builtin_constrain_to_field_5(
             )?
         } else {
             builtin_field_beginning(
-                eval,
+                host,
                 vec![
                     Value::from_fixnum(old_argument.0),
                     Value::bool_val(escape_from_edge),
@@ -1889,13 +1912,16 @@ pub(crate) fn builtin_constrain_to_field_5(
             )?
         };
         expect_int(&field_bound)?;
-        let field_bound = FieldMotionPosition::try_from((&eval.edit.buffers, field_bound))?;
-        let bound = i64::from(field_bound.0);
-
-        let should_constrain = if bound < new_pos { forward } else { !forward };
-        let same_line = !only_in_line
-            || !current_buffer_has_newline_between_positions(&eval.edit.buffers, new_pos, bound)?;
-        if should_constrain && same_line {
+        let (field_bound, same_line) = {
+            let (edit, _) = host.edit_and_vars();
+            let field_bound = FieldMotionPosition::try_from((&edit.buffers, field_bound))?;
+            let bound = i64::from(field_bound.0);
+            let should_constrain = if bound < new_pos { forward } else { !forward };
+            let same_line = !only_in_line
+                || !current_buffer_has_newline_between_positions(&edit.buffers, new_pos, bound)?;
+            (field_bound, should_constrain && same_line)
+        };
+        if same_line {
             result = field_bound;
         }
     }
@@ -1904,19 +1930,19 @@ pub(crate) fn builtin_constrain_to_field_5(
     if let Some(orig_point) = orig_point.map(|point| i64::from(point.0))
         && new_pos != orig_point
     {
-        let current_id = eval
-            .edit
+        let (edit, _) = host.edit_and_vars();
+        let current_id = edit
             .buffers
             .current_buffer_id()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-        let buf = &mut eval
-            .edit
-            .buffers
-            .get(current_id)
-            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-        let byte_pos = buf.lisp_pos_to_emacs_byte_pos(LispCharPos1::new(new_pos));
-        let _ = eval
-            .edit
+        let byte_pos = {
+            let buf = edit
+                .buffers
+                .get(current_id)
+                .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+            buf.lisp_pos_to_emacs_byte_pos(LispCharPos1::new(new_pos))
+        };
+        let _ = edit
             .buffers
             .goto_buffer_emacs_byte_pos(current_id, byte_pos);
     }
