@@ -249,39 +249,6 @@ impl From<ProcessKindWithoutDevice> for ProcessKind {
     }
 }
 
-impl ProcessStatusSymbol {
-    pub(super) fn from_symbol_value(value: Value) -> Option<Self> {
-        value.as_bare_symbol_name()?.parse().ok()
-    }
-
-    pub fn from_status_value(status: Value) -> Option<Self> {
-        Self::from_symbol_value(process_status_symbol_value(status))
-    }
-
-    pub(super) fn value(self) -> Value {
-        Value::symbol(self.name())
-    }
-
-    pub(super) fn name(self) -> &'static str {
-        self.into()
-    }
-
-    #[cfg(test)]
-    pub(super) fn gnu_public_domain() -> [Self; 9] {
-        [
-            Self::Run,
-            Self::Stop,
-            Self::Exit,
-            Self::Signal,
-            Self::Open,
-            Self::Listen,
-            Self::Closed,
-            Self::Connect,
-            Self::Failed,
-        ]
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, EnumString, IntoStaticStr)]
 #[strum(serialize_all = "kebab-case")]
 pub(super) enum ProcessTtyStream {
@@ -2001,12 +1968,6 @@ pub(super) fn process_status_core_dumped_value(status: Value) -> bool {
     list_to_vec(&status)
         .and_then(|items| items.get(2).copied())
         .is_some_and(|value| value.is_truthy())
-}
-
-pub(super) fn process_status_symbol_value(status: Value) -> Value {
-    list_to_vec(&status)
-        .and_then(|items| items.first().copied())
-        .unwrap_or(status)
 }
 
 pub(super) fn process_status_code_value(status: Value) -> i64 {

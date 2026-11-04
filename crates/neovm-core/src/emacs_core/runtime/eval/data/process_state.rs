@@ -2514,3 +2514,46 @@ impl GcTrace for ProcessManager {
         }
     }
 }
+
+// ProcessStatusSymbol impl (A3b-7).
+
+impl ProcessStatusSymbol {
+    pub fn from_symbol_value(value: Value) -> Option<Self> {
+        value.as_bare_symbol_name()?.parse().ok()
+    }
+
+    pub fn from_status_value(status: Value) -> Option<Self> {
+        Self::from_symbol_value(process_status_symbol_value(status))
+    }
+
+    pub fn value(self) -> Value {
+        Value::symbol(self.name())
+    }
+
+    pub fn name(self) -> &'static str {
+        self.into()
+    }
+
+    #[cfg(test)]
+    pub fn gnu_public_domain() -> [Self; 9] {
+        [
+            Self::Run,
+            Self::Stop,
+            Self::Exit,
+            Self::Signal,
+            Self::Open,
+            Self::Listen,
+            Self::Closed,
+            Self::Connect,
+            Self::Failed,
+        ]
+    }
+}
+
+// Status symbol helper (A3b-8).
+
+pub fn process_status_symbol_value(status: Value) -> Value {
+    list_to_vec(&status)
+        .and_then(|items| items.first().copied())
+        .unwrap_or(status)
+}

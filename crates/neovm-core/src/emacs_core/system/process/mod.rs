@@ -65,7 +65,7 @@ pub(crate) mod pty_output;
 /// GNU `status_notify`'s "retire, then run the sentinel" ordering, as a type.
 /// See `process/status_notify.rs`.
 mod status_notify;
-use reap::ChildOwnershipIo;
+pub(crate) use reap::{ChildOwnershipIo, ReapableChildIo};
 use status_notify::ProcessStatusNotification;
 
 /// GNU `handle_child_signal`'s ASYNCHRONOUS child-status recording
