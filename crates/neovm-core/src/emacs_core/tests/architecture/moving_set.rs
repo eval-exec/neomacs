@@ -63,7 +63,17 @@ pub(crate) const MOVING_CRATE: &str = "neovm_value";
 /// moved the display-identity vocabulary into a second leaf, so a moving file
 /// that reaches either crate through a core-root re-export stays internal
 /// (main c1933304ad's two-crate set).
-pub(crate) const MOVING_CRATES: [&str; 2] = ["neovm_value", "neovm_display_identity"];
+/// Stage-4 W5/E13 extends the B3 scope to every crate extracted so far:
+/// the evaluator is now the fourth lower crate of the moving set, and the
+/// edit/text leaves are scanned with it. A moving file that reaches any of
+/// them through a core-root re-export stays internal.
+pub(crate) const MOVING_CRATES: [&str; 5] = [
+    "neovm_value",
+    "neovm_display_identity",
+    "neovm_edit",
+    "neovm_text",
+    "neovm_eval",
+];
 
 pub(crate) fn is_g0_member(name: &str) -> bool {
     G0_MEMBERS.contains(&name)
