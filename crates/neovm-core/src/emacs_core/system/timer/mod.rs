@@ -19,6 +19,7 @@
 
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::expect_min_args;
+use crate::emacs_core::process::ProcessContextExt;
 use std::time::Duration;
 
 use super::error::{EvalResult, Flow, signal};

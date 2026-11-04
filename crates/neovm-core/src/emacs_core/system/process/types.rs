@@ -4575,79 +4575,6 @@ pub(super) fn process_is_harness_record_without_write_source(proc: &Process) -> 
         && proc.live_io.serial_port.is_none()
 }
 
-impl super::super::eval::Context {
-    pub(super) fn wait_while_network_process_connecting(
-        &mut self,
-        id: ProcessId,
-    ) -> Result<(), Flow> {
-        while self.processes.get(id).is_some_and(|proc| {
-            proc.kind == ProcessKind::Network && process_status_is_connect(&proc.status)
-        }) {
-            let _ = self.wait_for_process_output(ProcessOutputWaitRequest::new(
-                ProcessOutputWaitTiming::For(Duration::from_millis(20)),
-                Some(id),
-                false,
-                true,
-            ))?;
-        }
-        Ok(())
-    }
-
-    pub(super) fn send_process_input_reentrant(
-        &mut self,
-        id: ProcessId,
-        input: &LispString,
-    ) -> Result<(), Flow> {
-        if !self.processes.queue_input(id, input)? {
-            return Err(signal("error", vec![Value::string("Process not found")]));
-        }
-
-        // A reentrant timer/filter cannot drive the suspended TLS handshake.
-        // Retain application data until verification succeeds, then flush it.
-        if self
-            .processes
-            .get(id)
-            .is_some_and(|process| process.gnutls_initstage == GnutlsInitStage::HandshakeTried)
-        {
-            return Ok(());
-        }
-
-        loop {
-            match self.processes.flush_process_write_queue(id)? {
-                ProcessWriteFlush::Drained => return Ok(()),
-                ProcessWriteFlush::NoSource => {
-                    if self
-                        .processes
-                        .get_any(id)
-                        .is_some_and(process_is_harness_record_without_write_source)
-                    {
-                        return Ok(());
-                    }
-                    let name = self
-                        .processes
-                        .get_any(id)
-                        .map(|proc| process_name_runtime(proc.name))
-                        .unwrap_or_else(|| id.to_string());
-                    return Err(signal(
-                        "error",
-                        vec![Value::string(format!(
-                            "Output file descriptor of {name} is closed"
-                        ))],
-                    ));
-                }
-                ProcessWriteFlush::Blocked => {
-                    let _ = self.wait_for_process_output(ProcessOutputWaitRequest::new(
-                        ProcessOutputWaitTiming::For(Duration::from_millis(20)),
-                        None,
-                        false,
-                        true,
-                    ))?;
-                }
-            }
-        }
-    }
-}
-
 pub(super) fn pending_network_connect_id(
     processes: &ProcessManager,
     process: Value,
@@ -9235,8 +9162,217 @@ impl AsyncCallbackKind {
     }
 }
 
-impl super::super::eval::Context {
-    pub(super) fn setup_process_output_descriptor(&mut self, id: ProcessId) -> Result<(), Flow> {
+/// Process service methods on the evaluator's Context (stage-4 W2/E6c A3).
+///
+/// These bodies bind the system process service (output polling, status
+/// notification, sentinels, TLS handshake completion), so they cannot live
+/// as inherent `impl Context` in the upper crate after the split.  Declared
+/// and implemented here; orphan-legal because the trait is core-local.
+pub(crate) trait ProcessContextExt {
+    fn wait_while_network_process_connecting(&mut self, id: ProcessId) -> Result<(), Flow>;
+    fn send_process_input_reentrant(
+        &mut self,
+        id: ProcessId,
+        input: &LispString,
+    ) -> Result<(), Flow>;
+    fn setup_process_output_descriptor(&mut self, id: ProcessId) -> Result<(), Flow>;
+    fn visible_process_read_config(&self) -> ProcessReadConfig;
+    fn sync_process_read_config_from_visible_variables(&mut self);
+    fn exited_process_disposition(&self) -> ExitedProcessDisposition;
+    fn kill_buffer_processes(&mut self, buffer_id: BufferId) -> Result<(), Flow>;
+    fn run_async_process_callback_preserving_state(
+        &mut self,
+        callback: Value,
+        args: Vec<Value>,
+        kind: AsyncCallbackKind,
+    ) -> Result<(), Flow>;
+    fn finish_callback_flow(
+        &mut self,
+        result: EvalResult,
+        kind: AsyncCallbackKind,
+    ) -> Result<(), Flow>;
+    fn run_process_filter_callback(
+        &mut self,
+        pid: ProcessId,
+        filter: Value,
+        data: &LispString,
+    ) -> Result<(), Flow>;
+    fn notify_stderr_pipe_owner_first(
+        &mut self,
+        pid: ProcessId,
+        target_process: Option<ProcessId>,
+        outcome: &mut ProcessOutputServiceOutcome,
+    ) -> Result<bool, Flow>;
+    fn process_output_sink(&self, id: ProcessId) -> ProcessOutputDestination;
+    fn fast_read_process_output_enabled(&self) -> bool;
+    fn read_process_output_recording_coding(
+        &mut self,
+        id: ProcessId,
+        destination: ProcessOutputDestination,
+    ) -> Result<ProcessOutputRead, Flow>;
+    fn decode_pending_process_run(
+        &mut self,
+        run: PendingProcessRun,
+    ) -> Result<DecodedPendingProcessRun, Flow>;
+    fn record_process_run_coding(&mut self, id: ProcessId, coding: ProcessRunCoding);
+    fn drain_associated_stderr_output_without_notifying(
+        &mut self,
+        stderr_id: ProcessId,
+        target_process: Option<ProcessId>,
+        policy: ProcessOutputReadPolicy,
+    ) -> Result<ProcessOutputServiceOutcome, Flow>;
+    fn poll_process_stdout_output_without_status_detailed(
+        &mut self,
+        pid: ProcessId,
+        target_process: Option<ProcessId>,
+    ) -> Result<(ProcessOutputServiceOutcome, ProcessOutputDrainDisposition), Flow>;
+    fn poll_process_stdout_output_without_status(
+        &mut self,
+        pid: ProcessId,
+        target_process: Option<ProcessId>,
+    ) -> Result<(ProcessOutputServiceOutcome, bool), Flow>;
+    fn run_process_sentinel_callback(
+        &mut self,
+        pid: ProcessId,
+        sentinel: Value,
+        message: &str,
+    ) -> Result<(), Flow>;
+    fn run_status_notification_sentinel(
+        &mut self,
+        notification: ProcessStatusNotification,
+    ) -> Result<(), Flow>;
+    fn notify_process_status_sentinel(&mut self, pid: ProcessId) -> Result<(), Flow>;
+    fn delete_process_running_its_sentinel(
+        &mut self,
+        id: ProcessId,
+        run_sentinel: bool,
+    ) -> Result<(), Flow>;
+    fn run_process_log_callback(
+        &mut self,
+        log: Value,
+        server_id: ProcessId,
+        client_id: ProcessId,
+        message: &str,
+    ) -> Result<(), Flow>;
+    fn poll_process_output_for_service_request(
+        &mut self,
+        request: &ProcessOutputServiceRequest,
+    ) -> Result<ProcessOutputServiceOutcome, Flow>;
+    fn notify_processes_with_unnotified_status_change(
+        &mut self,
+        target_process: Option<ProcessId>,
+    ) -> Result<ProcessOutputServiceOutcome, Flow>;
+    fn finish_process_tls_handshake(
+        &mut self,
+        id: ProcessId,
+        map_error: fn(TlsBackendError) -> Flow,
+    ) -> Result<(), Flow>;
+    fn finish_connected_tls_before_sentinel(
+        &mut self,
+        id: ProcessId,
+        sentinel: Value,
+    ) -> Result<(), Flow>;
+    fn poll_ready_process_output_for_service_request(
+        &mut self,
+        events: ProcessWaitEvents,
+        request: &ProcessOutputServiceRequest,
+    ) -> Result<ProcessOutputServiceOutcome, Flow>;
+    fn poll_process_output_for_status_notification(
+        &mut self,
+        proc_ids: Vec<ProcessId>,
+        target_process: Option<ProcessId>,
+        publish_status_before_readable_output: bool,
+    ) -> Result<ProcessOutputServiceOutcome, Flow>;
+    #[cfg(test)]
+    fn poll_process_output_for_readiness(
+        &mut self,
+        proc_ids: Vec<ProcessId>,
+        target_process: Option<ProcessId>,
+        publish_status_before_readable_output: bool,
+    ) -> Result<ProcessOutputServiceOutcome, Flow>;
+    fn service_process_output_for_ids(
+        &mut self,
+        proc_ids: Vec<ProcessId>,
+        target_process: Option<ProcessId>,
+        publish_status_before_readable_output: bool,
+        pass: ProcessOutputServicePass,
+    ) -> Result<ProcessOutputServiceOutcome, Flow>;
+    fn run_process_status_notification(
+        &mut self,
+        pid: ProcessId,
+        target_process: Option<ProcessId>,
+    ) -> Result<ProcessOutputServiceOutcome, Flow>;
+}
+
+impl ProcessContextExt for super::super::eval::Context {
+    fn wait_while_network_process_connecting(&mut self, id: ProcessId) -> Result<(), Flow> {
+        while self.processes.get(id).is_some_and(|proc| {
+            proc.kind == ProcessKind::Network && process_status_is_connect(&proc.status)
+        }) {
+            let _ = self.wait_for_process_output(ProcessOutputWaitRequest::new(
+                ProcessOutputWaitTiming::For(Duration::from_millis(20)),
+                Some(id),
+                false,
+                true,
+            ))?;
+        }
+        Ok(())
+    }
+
+    fn send_process_input_reentrant(
+        &mut self,
+        id: ProcessId,
+        input: &LispString,
+    ) -> Result<(), Flow> {
+        if !self.processes.queue_input(id, input)? {
+            return Err(signal("error", vec![Value::string("Process not found")]));
+        }
+
+        // A reentrant timer/filter cannot drive the suspended TLS handshake.
+        // Retain application data until verification succeeds, then flush it.
+        if self
+            .processes
+            .get(id)
+            .is_some_and(|process| process.gnutls_initstage == GnutlsInitStage::HandshakeTried)
+        {
+            return Ok(());
+        }
+
+        loop {
+            match self.processes.flush_process_write_queue(id)? {
+                ProcessWriteFlush::Drained => return Ok(()),
+                ProcessWriteFlush::NoSource => {
+                    if self
+                        .processes
+                        .get_any(id)
+                        .is_some_and(process_is_harness_record_without_write_source)
+                    {
+                        return Ok(());
+                    }
+                    let name = self
+                        .processes
+                        .get_any(id)
+                        .map(|proc| process_name_runtime(proc.name))
+                        .unwrap_or_else(|| id.to_string());
+                    return Err(signal(
+                        "error",
+                        vec![Value::string(format!(
+                            "Output file descriptor of {name} is closed"
+                        ))],
+                    ));
+                }
+                ProcessWriteFlush::Blocked => {
+                    let _ = self.wait_for_process_output(ProcessOutputWaitRequest::new(
+                        ProcessOutputWaitTiming::For(Duration::from_millis(20)),
+                        None,
+                        false,
+                        true,
+                    ))?;
+                }
+            }
+        }
+    }
+    fn setup_process_output_descriptor(&mut self, id: ProcessId) -> Result<(), Flow> {
         let coding = self
             .processes
             .get_any(id)
@@ -9257,7 +9393,7 @@ impl super::super::eval::Context {
         Ok(())
     }
 
-    pub(super) fn visible_process_read_config(&self) -> ProcessReadConfig {
+    fn visible_process_read_config(&self) -> ProcessReadConfig {
         let readmax = self
             .visible_variable_value_or_nil("read-process-output-max")
             .as_fixnum()
@@ -9278,7 +9414,7 @@ impl super::super::eval::Context {
         }
     }
 
-    pub(super) fn sync_process_read_config_from_visible_variables(&mut self) {
+    fn sync_process_read_config_from_visible_variables(&mut self) {
         let config = self.visible_process_read_config();
         self.processes.set_default_read_config(config);
     }
@@ -9288,14 +9424,14 @@ impl super::super::eval::Context {
     /// default 1.  Read once per notification, as GNU reads the C variable, so
     /// a sentinel that rebinds it cannot change the decision already taken for
     /// its own process.
-    pub(super) fn exited_process_disposition(&self) -> ExitedProcessDisposition {
+    fn exited_process_disposition(&self) -> ExitedProcessDisposition {
         ExitedProcessDisposition::from_delete_exited_processes(
             self.visible_variable_value_or_nil("delete-exited-processes")
                 .is_truthy(),
         )
     }
 
-    pub(crate) fn kill_buffer_processes(&mut self, buffer_id: BufferId) -> Result<(), Flow> {
+    fn kill_buffer_processes(&mut self, buffer_id: BufferId) -> Result<(), Flow> {
         for id in self.processes.process_ids_for_buffer(buffer_id) {
             let Some(kind) = self.processes.get(id).map(|proc| proc.kind) else {
                 continue;
@@ -9324,7 +9460,7 @@ impl super::super::eval::Context {
         Ok(())
     }
 
-    pub(super) fn run_async_process_callback_preserving_state(
+    fn run_async_process_callback_preserving_state(
         &mut self,
         callback: Value,
         args: Vec<Value>,
@@ -9396,7 +9532,7 @@ impl super::super::eval::Context {
     /// `Flow::Shutdown` propagates for the same reason: GNU's `Fkill_emacs`
     /// never returns, so a callback that kills cannot be resumed and its exit
     /// code must not be swallowed here.
-    pub(crate) fn finish_callback_flow(
+    fn finish_callback_flow(
         &mut self,
         result: EvalResult,
         kind: AsyncCallbackKind,
@@ -9427,7 +9563,7 @@ impl super::super::eval::Context {
         }
     }
 
-    pub(super) fn run_process_filter_callback(
+    fn run_process_filter_callback(
         &mut self,
         pid: ProcessId,
         filter: Value,
@@ -9468,7 +9604,7 @@ impl super::super::eval::Context {
     /// The return value says whether the pipe may notify in this pass.  A
     /// running owner with no pending status work does not block its pipe's
     /// sentinel.
-    pub(super) fn notify_stderr_pipe_owner_first(
+    fn notify_stderr_pipe_owner_first(
         &mut self,
         pid: ProcessId,
         target_process: Option<ProcessId>,
@@ -9577,7 +9713,7 @@ impl super::super::eval::Context {
     /// GNU's `setup_process_coding_systems` (src/process.c:8380-8409) re-reads
     /// the process's buffer and filter every time either changes, so this is
     /// evaluated per read rather than cached on the process.
-    pub(super) fn process_output_sink(&self, id: ProcessId) -> ProcessOutputDestination {
+    fn process_output_sink(&self, id: ProcessId) -> ProcessOutputDestination {
         let fast_read = self.fast_read_process_output_enabled();
         let Some(proc) = self.processes.get(id) else {
             return ProcessOutputDestination::to_filter();
@@ -9587,7 +9723,7 @@ impl super::super::eval::Context {
 
     /// GNU's `fast_read_process_output` (src/process.c:8980), the Lisp variable
     /// `fast-read-process-output'.
-    pub(super) fn fast_read_process_output_enabled(&self) -> bool {
+    fn fast_read_process_output_enabled(&self) -> bool {
         !self
             .visible_variable_value_or_nil("fast-read-process-output")
             .is_nil()
@@ -9623,7 +9759,7 @@ impl super::super::eval::Context {
     /// This is the only way to turn a [`ProcessBytesRead`] into a
     /// [`ProcessOutputRead`], so no driver on this side can consume process
     /// output without the write-back having happened.
-    pub(super) fn read_process_output_recording_coding(
+    fn read_process_output_recording_coding(
         &mut self,
         id: ProcessId,
         destination: ProcessOutputDestination,
@@ -9716,7 +9852,7 @@ impl super::super::eval::Context {
     /// filter branch, `dst_object` `Qt` (src/coding.c:8133-8137) -- and the
     /// process buffer is written afterwards by the insertion path, with the
     /// change hooks GNU's `signal_after_change` (:6510) runs.
-    pub(super) fn decode_pending_process_run(
+    fn decode_pending_process_run(
         &mut self,
         run: PendingProcessRun,
     ) -> Result<DecodedPendingProcessRun, Flow> {
@@ -9756,7 +9892,7 @@ impl super::super::eval::Context {
     }
 
     /// The write-back itself.
-    pub(super) fn record_process_run_coding(&mut self, id: ProcessId, coding: ProcessRunCoding) {
+    fn record_process_run_coding(&mut self, id: ProcessId, coding: ProcessRunCoding) {
         let used = coding.used;
         let used_symbol = Value::symbol(used);
         self.set_variable("last-coding-system-used", used_symbol);
@@ -9788,7 +9924,7 @@ impl super::super::eval::Context {
         }
     }
 
-    pub(super) fn drain_associated_stderr_output_without_notifying(
+    fn drain_associated_stderr_output_without_notifying(
         &mut self,
         stderr_id: ProcessId,
         target_process: Option<ProcessId>,
@@ -9829,7 +9965,7 @@ impl super::super::eval::Context {
         }
     }
 
-    pub(super) fn poll_process_stdout_output_without_status_detailed(
+    fn poll_process_stdout_output_without_status_detailed(
         &mut self,
         pid: ProcessId,
         target_process: Option<ProcessId>,
@@ -9870,7 +10006,7 @@ impl super::super::eval::Context {
         Ok((outcome, disposition))
     }
 
-    pub(super) fn poll_process_stdout_output_without_status(
+    fn poll_process_stdout_output_without_status(
         &mut self,
         pid: ProcessId,
         target_process: Option<ProcessId>,
@@ -9883,7 +10019,7 @@ impl super::super::eval::Context {
         ))
     }
 
-    pub(super) fn run_process_sentinel_callback(
+    fn run_process_sentinel_callback(
         &mut self,
         pid: ProcessId,
         sentinel: Value,
@@ -9913,7 +10049,7 @@ impl super::super::eval::Context {
     /// [`ProcessStatusNotification`] -- i.e. from arguments captured before the
     /// process was retired, never from a lookup that the retirement has
     /// invalidated.
-    pub(super) fn run_status_notification_sentinel(
+    fn run_status_notification_sentinel(
         &mut self,
         notification: ProcessStatusNotification,
     ) -> Result<(), Flow> {
@@ -9927,7 +10063,7 @@ impl super::super::eval::Context {
     /// The sentinel for a process this port has already taken out of the live
     /// table.  Only `continue-process` reaches it now, and its `"continued"`
     /// notification retires nothing.
-    pub(super) fn notify_process_status_sentinel(&mut self, pid: ProcessId) -> Result<(), Flow> {
+    fn notify_process_status_sentinel(&mut self, pid: ProcessId) -> Result<(), Flow> {
         let Some(notification) =
             ProcessStatusNotification::for_retired_process(&self.processes, pid)
         else {
@@ -9965,7 +10101,7 @@ impl super::super::eval::Context {
     /// right for the default flag and wrong for the other setting -- the same
     /// class as the exit-path inversion this entry fixes, in the opposite
     /// direction.
-    pub(super) fn delete_process_running_its_sentinel(
+    fn delete_process_running_its_sentinel(
         &mut self,
         id: ProcessId,
         run_sentinel: bool,
@@ -9998,7 +10134,7 @@ impl super::super::eval::Context {
         result
     }
 
-    pub(super) fn run_process_log_callback(
+    fn run_process_log_callback(
         &mut self,
         log: Value,
         server_id: ProcessId,
@@ -10020,7 +10156,7 @@ impl super::super::eval::Context {
         )
     }
 
-    pub(crate) fn poll_process_output_for_service_request(
+    fn poll_process_output_for_service_request(
         &mut self,
         request: &ProcessOutputServiceRequest,
     ) -> Result<ProcessOutputServiceOutcome, Flow> {
@@ -10056,7 +10192,7 @@ impl super::super::eval::Context {
     /// process this port declines to notify on this pass (a deferral GNU does
     /// not have) keeps its `status_notify_pending` and is serviced by the ready
     /// set, rather than being revisited by every later walk forever.
-    pub(crate) fn notify_processes_with_unnotified_status_change(
+    fn notify_processes_with_unnotified_status_change(
         &mut self,
         target_process: Option<ProcessId>,
     ) -> Result<ProcessOutputServiceOutcome, Flow> {
@@ -10077,7 +10213,7 @@ impl super::super::eval::Context {
         self.poll_process_output_for_status_notification(visit, target_process, true)
     }
 
-    pub(super) fn finish_process_tls_handshake(
+    fn finish_process_tls_handshake(
         &mut self,
         id: ProcessId,
         map_error: fn(TlsBackendError) -> Flow,
@@ -10138,7 +10274,7 @@ impl super::super::eval::Context {
         result
     }
 
-    pub(crate) fn poll_ready_process_output_for_service_request(
+    fn poll_ready_process_output_for_service_request(
         &mut self,
         events: ProcessWaitEvents,
         request: &ProcessOutputServiceRequest,
@@ -10202,7 +10338,7 @@ impl super::super::eval::Context {
     /// Service every visited source, including the full final output drain
     /// before a terminal sentinel. Unlike a readiness pass, this walk never
     /// yields between sources or advances the round-robin cursor.
-    pub(super) fn poll_process_output_for_status_notification(
+    fn poll_process_output_for_status_notification(
         &mut self,
         proc_ids: Vec<ProcessId>,
         target_process: Option<ProcessId>,
@@ -10219,7 +10355,7 @@ impl super::super::eval::Context {
     /// Test-only entry point for the readiness pass. Production enters it via
     /// `poll_process_output_for_service_request` / the wait events.
     #[cfg(test)]
-    pub(super) fn poll_process_output_for_readiness(
+    fn poll_process_output_for_readiness(
         &mut self,
         proc_ids: Vec<ProcessId>,
         target_process: Option<ProcessId>,
@@ -10719,7 +10855,7 @@ impl super::super::eval::Context {
     /// topology before publishing its status and running its sentinel.  Return
     /// the resulting wait activity so output completes only a wait whose
     /// target admits that stream; running the sentinel merely services it.
-    pub(super) fn run_process_status_notification(
+    fn run_process_status_notification(
         &mut self,
         pid: ProcessId,
         target_process: Option<ProcessId>,
