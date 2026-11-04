@@ -15,9 +15,9 @@ use crate::emacs_core::buffer::{
     buffer_insert_piece_from_string, buffer_slice_value_range, build_multibyte_conversion_byte_map,
     builtin_narrow_to_region, convert_buffer_string_for_multibyte, current_buffer_multibyte,
     decode_chars_with_byte_offsets, eq_fixnum_zero, expect_integer_or_marker_in_buffers,
-    lisp_string_byte_to_char, lisp_string_from_buffer_bytes, other_buffer_impl_in_state,
-    remap_old_byte_to_new_boundary, remap_text_property_table, replace_diff,
-    replace_region_max_costs, replace_region_source_value_in_state,
+    is_hidden_buffer, lisp_string_byte_to_char, lisp_string_from_buffer_bytes,
+    other_buffer_designator, remap_old_byte_to_new_boundary, remap_text_property_table,
+    replace_diff, replace_region_max_costs, replace_region_source_value_in_state,
     resolve_buffer_designator_allow_nil_current,
 };
 use crate::emacs_core::error::{
@@ -723,4 +723,90 @@ pub(crate) fn builtin_other_buffer(
     args: Vec<Value>,
 ) -> EvalResult {
     other_buffer_impl_in_state(&mut eval.frames, &mut eval.edit.buffers, args)
+}
+
+fn buffer_visible_in_visible_frame(
+    frames: &crate::window::FrameManager,
+    buffer_id: crate::buffer::BufferId,
+) -> bool {
+    frames.frame_list().into_iter().any(|fid| {
+        let Some(frame) = frames.get(fid) else {
+            return false;
+        };
+        frame.visibility.is_visible()
+            && frame.window_list().into_iter().any(|wid| {
+                frame
+                    .find_window(wid)
+                    .and_then(crate::window::Window::buffer_id)
+                    == Some(buffer_id)
+            })
+    })
+}
+
+fn other_buffer_candidate(
+    frames: &crate::window::FrameManager,
+    buffers: &crate::buffer::BufferManager,
+    buffer_id: crate::buffer::BufferId,
+    avoid_id: Option<crate::buffer::BufferId>,
+    visible_ok: bool,
+    notsogood: &mut Option<crate::buffer::BufferId>,
+) -> Option<crate::buffer::BufferId> {
+    if Some(buffer_id) == avoid_id || is_hidden_buffer(buffers, buffer_id) {
+        return None;
+    }
+    if visible_ok || !buffer_visible_in_visible_frame(frames, buffer_id) {
+        Some(buffer_id)
+    } else {
+        if notsogood.is_none() {
+            *notsogood = Some(buffer_id);
+        }
+        None
+    }
+}
+
+pub(crate) fn other_buffer_impl_in_state(
+    frames: &mut crate::window::FrameManager,
+    buffers: &mut crate::buffer::BufferManager,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_max_args("other-buffer", &args, 3)?;
+
+    let frame_id = crate::emacs_core::window_cmds::resolve_frame_id_in_state(
+        frames,
+        buffers,
+        args.get(2),
+        crate::emacs_core::window_cmds::FrameDomain::Live,
+    )?;
+    let frame_buffer_list = frames
+        .get(frame_id)
+        .map(|frame| frame.buffer_list.clone())
+        .unwrap_or_default();
+    let avoid_id = other_buffer_designator(buffers, args.first());
+    let visible_ok = args.get(1).is_some_and(|arg| !arg.is_nil());
+    let mut notsogood = None;
+
+    for id in frame_buffer_list {
+        if let Some(candidate) =
+            other_buffer_candidate(frames, buffers, id, avoid_id, visible_ok, &mut notsogood)
+        {
+            return Ok(Value::make_buffer(candidate));
+        }
+    }
+
+    for id in buffers.buffer_list() {
+        if let Some(candidate) =
+            other_buffer_candidate(frames, buffers, id, avoid_id, visible_ok, &mut notsogood)
+        {
+            return Ok(Value::make_buffer(candidate));
+        }
+    }
+
+    if let Some(id) = notsogood {
+        return Ok(Value::make_buffer(id));
+    }
+
+    let scratch = buffers
+        .find_buffer_by_name("*scratch*")
+        .unwrap_or_else(|| buffers.create_buffer("*scratch*"));
+    Ok(Value::make_buffer(scratch))
 }

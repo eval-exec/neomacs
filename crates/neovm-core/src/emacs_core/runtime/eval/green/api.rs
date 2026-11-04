@@ -214,7 +214,7 @@ impl Context {
         if !self.green_threads_running() || !self.threads.buffer_current_in_other_thread(buffer) {
             return Ok(());
         }
-        let other = crate::emacs_core::buffer::other_buffer_impl_in_state(
+        let other = crate::emacs_core::buffer_ops::other_buffer_impl_in_state(
             &mut self.frames,
             &mut self.edit.buffers,
             vec![Value::make_buffer(buffer)],

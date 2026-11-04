@@ -3959,7 +3959,7 @@ pub(crate) fn builtin_set_buffer_auto_saved(
     Ok(Value::NIL)
 }
 
-fn other_buffer_designator(
+pub(crate) fn other_buffer_designator(
     buffers: &crate::buffer::BufferManager,
     value: Option<&Value>,
 ) -> Option<crate::buffer::BufferId> {
@@ -3984,7 +3984,10 @@ fn other_buffer_designator(
     }
 }
 
-fn is_hidden_buffer(buffers: &crate::buffer::BufferManager, id: crate::buffer::BufferId) -> bool {
+pub(crate) fn is_hidden_buffer(
+    buffers: &crate::buffer::BufferManager,
+    id: crate::buffer::BufferId,
+) -> bool {
     buffers
         .get(id)
         .map(|buf| buf.name_starts_with_space())
@@ -4011,92 +4014,6 @@ pub(crate) fn other_buffer_impl(
         }
         if notsogood.is_none() {
             notsogood = Some(id);
-        }
-    }
-
-    if let Some(id) = notsogood {
-        return Ok(Value::make_buffer(id));
-    }
-
-    let scratch = buffers
-        .find_buffer_by_name("*scratch*")
-        .unwrap_or_else(|| buffers.create_buffer("*scratch*"));
-    Ok(Value::make_buffer(scratch))
-}
-
-fn buffer_visible_in_visible_frame(
-    frames: &crate::window::FrameManager,
-    buffer_id: crate::buffer::BufferId,
-) -> bool {
-    frames.frame_list().into_iter().any(|fid| {
-        let Some(frame) = frames.get(fid) else {
-            return false;
-        };
-        frame.visibility.is_visible()
-            && frame.window_list().into_iter().any(|wid| {
-                frame
-                    .find_window(wid)
-                    .and_then(crate::window::Window::buffer_id)
-                    == Some(buffer_id)
-            })
-    })
-}
-
-fn other_buffer_candidate(
-    frames: &crate::window::FrameManager,
-    buffers: &crate::buffer::BufferManager,
-    buffer_id: crate::buffer::BufferId,
-    avoid_id: Option<crate::buffer::BufferId>,
-    visible_ok: bool,
-    notsogood: &mut Option<crate::buffer::BufferId>,
-) -> Option<crate::buffer::BufferId> {
-    if Some(buffer_id) == avoid_id || is_hidden_buffer(buffers, buffer_id) {
-        return None;
-    }
-    if visible_ok || !buffer_visible_in_visible_frame(frames, buffer_id) {
-        Some(buffer_id)
-    } else {
-        if notsogood.is_none() {
-            *notsogood = Some(buffer_id);
-        }
-        None
-    }
-}
-
-pub(crate) fn other_buffer_impl_in_state(
-    frames: &mut crate::window::FrameManager,
-    buffers: &mut crate::buffer::BufferManager,
-    args: Vec<Value>,
-) -> EvalResult {
-    expect_max_args("other-buffer", &args, 3)?;
-
-    let frame_id = super::window_cmds::resolve_frame_id_in_state(
-        frames,
-        buffers,
-        args.get(2),
-        crate::emacs_core::window_cmds::FrameDomain::Live,
-    )?;
-    let frame_buffer_list = frames
-        .get(frame_id)
-        .map(|frame| frame.buffer_list.clone())
-        .unwrap_or_default();
-    let avoid_id = other_buffer_designator(buffers, args.first());
-    let visible_ok = args.get(1).is_some_and(|arg| !arg.is_nil());
-    let mut notsogood = None;
-
-    for id in frame_buffer_list {
-        if let Some(candidate) =
-            other_buffer_candidate(frames, buffers, id, avoid_id, visible_ok, &mut notsogood)
-        {
-            return Ok(Value::make_buffer(candidate));
-        }
-    }
-
-    for id in buffers.buffer_list() {
-        if let Some(candidate) =
-            other_buffer_candidate(frames, buffers, id, avoid_id, visible_ok, &mut notsogood)
-        {
-            return Ok(Value::make_buffer(candidate));
         }
     }
 

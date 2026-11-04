@@ -7,9 +7,9 @@
 
 use crate::buffer::BufferId;
 use crate::emacs_core::buffer::{
-    expect_buffer_name_string, other_buffer_impl_in_state, other_buffer_safely_in_state,
-    run_buffer_list_update_hook,
+    expect_buffer_name_string, other_buffer_safely_in_state, run_buffer_list_update_hook,
 };
+use crate::emacs_core::buffer_ops::other_buffer_impl_in_state;
 use crate::emacs_core::error::{EvalResult, Flow, LispCondition, expect_max_args, signal};
 use crate::emacs_core::value::{Value, ValueKind, VecLikeType, eq_value};
 use crate::window::FrameManager;
