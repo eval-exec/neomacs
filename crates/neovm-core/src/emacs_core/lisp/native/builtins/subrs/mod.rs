@@ -455,7 +455,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     );
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "find-buffer",
-        NativeFn::ContextVec(builtin_find_buffer),
+        NativeFn::ContextVec(|ctx, args| builtin_find_buffer(ctx, args)),
         SubrArity::new(2, Some(2)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -475,7 +475,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "get-file-buffer",
-        NativeFn::ContextVec(builtin_get_file_buffer),
+        NativeFn::ContextVec(|ctx, args| builtin_get_file_buffer(ctx, args)),
         SubrArity::new(1, Some(1)),
     )));
     ctx.register_subr(
@@ -611,7 +611,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ctx.register_subr(
         crate::emacs_core::subr::world_subr!(SubrSpec::fixed1(
             "goto-char",
-            builtin_goto_char_1,
+            |ctx, arg| builtin_goto_char_1(ctx, arg),
             FixedMin1::One
         ))
         .interactive(
@@ -833,7 +833,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "generate-new-buffer-name",
-        NativeFn::ContextVec(builtin_generate_new_buffer_name),
+        NativeFn::ContextVec(|ctx, args| builtin_generate_new_buffer_name(ctx, args)),
         SubrArity::new(1, Some(2)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::fixed1(
@@ -1750,12 +1750,14 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "delete-overlay",
-        NativeFn::ContextVec(crate::emacs_core::buffer::builtin_delete_overlay),
+        NativeFn::ContextVec(
+            |ctx, args| crate::emacs_core::buffer::builtin_delete_overlay(ctx, args)
+        ),
         SubrArity::new(1, Some(1)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "overlay-put",
-        NativeFn::ContextVec(crate::emacs_core::buffer::builtin_overlay_put),
+        NativeFn::ContextVec(|ctx, args| crate::emacs_core::buffer::builtin_overlay_put(ctx, args)),
         SubrArity::new(3, Some(3)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -1778,7 +1780,9 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "move-overlay",
-        NativeFn::ContextVec(crate::emacs_core::buffer::builtin_move_overlay),
+        NativeFn::ContextVec(|ctx, args| crate::emacs_core::buffer::builtin_move_overlay(
+            ctx, args
+        )),
         SubrArity::new(3, Some(4)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -5184,7 +5188,9 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "restore-buffer-modified-p",
-        NativeFn::ContextVec(crate::emacs_core::buffer::builtin_restore_buffer_modified_p),
+        NativeFn::ContextVec(|ctx, args| {
+            crate::emacs_core::buffer::builtin_restore_buffer_modified_p(ctx, args)
+        }),
         SubrArity::new(1, Some(1)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(

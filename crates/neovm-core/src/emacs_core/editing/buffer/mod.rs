@@ -198,19 +198,6 @@ pub(crate) fn expect_integer_or_marker_in_buffers(
 /// fixnum-or-marker with the live-buffer marker read — NOT
 /// `position::fix_position_eval`, which additionally clamps bignums and so
 /// is not behavior-equivalent here.
-fn expect_integer_or_marker_eval(eval: &super::eval::Context, value: &Value) -> Result<i64, Flow> {
-    match value.kind() {
-        ValueKind::Fixnum(n) => Ok(n),
-        _ if super::marker::is_marker(value) => {
-            super::marker::marker_position_as_int_with_buffers(&eval.edit.buffers, value)
-        }
-        _ => Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("integer-or-marker-p"), *value],
-        )),
-    }
-}
-
 fn canonicalize_or_self(path: &std::path::Path) -> std::path::PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
@@ -381,10 +368,9 @@ pub(crate) fn builtin_get_buffer(
     }
 }
 
-pub(crate) fn builtin_find_buffer(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
-    let symbol_mode = eval.symbol_mode();
+pub(crate) fn builtin_find_buffer<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
+    let symbol_mode = host.symbol_mode();
     let dynamic: &[OrderedRuntimeBindingMap] = &[];
-    let buffers = &eval.edit.buffers;
     expect_args("find-buffer", &args, 2)?;
     let name = args[0].as_symbol_name(symbol_mode).ok_or_else(|| {
         signal(
@@ -399,15 +385,16 @@ pub(crate) fn builtin_find_buffer(eval: &mut super::eval::Context, args: Vec<Val
         .iter()
         .rev()
         .find_map(|frame| frame.get(&name_id).cloned())
-        .or_else(|| eval.variable_value_by_name(name))
+        .or_else(|| host.variable_value_by_name(name))
         .ok_or_else(|| signal(LispCondition::VoidVariable, vec![Value::symbol(name)]))?;
 
+    let (edit, _) = host.edit_and_vars();
     let mut scan_order = Vec::new();
-    let current_id = buffers.current_buffer().map(|buf| buf.id);
+    let current_id = edit.buffers.current_buffer().map(|buf| buf.id);
     if let Some(id) = current_id {
         scan_order.push(id);
     }
-    for id in buffers.buffer_list() {
+    for id in edit.buffers.buffer_list() {
         if Some(id) != current_id {
             scan_order.push(id);
         }
@@ -415,7 +402,7 @@ pub(crate) fn builtin_find_buffer(eval: &mut super::eval::Context, args: Vec<Val
 
     let key = Value::from_sym_id(name_id);
     for id in scan_order {
-        let Some(buf) = buffers.get(id) else {
+        let Some(buf) = edit.buffers.get(id) else {
             continue;
         };
         // Phase 10E: prefer the buffer's local_var_alist (LOCALIZED
@@ -431,7 +418,6 @@ pub(crate) fn builtin_find_buffer(eval: &mut super::eval::Context, args: Vec<Val
             return Ok(Value::make_buffer(id));
         }
     }
-
     Ok(Value::NIL)
 }
 
@@ -508,24 +494,30 @@ pub(crate) fn builtin_get_truename_buffer(
     Ok(Value::NIL)
 }
 
-pub(crate) fn builtin_get_file_buffer(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
+pub(crate) fn builtin_get_file_buffer<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_args("get-file-buffer", &args, 1)?;
-    let resolved = eval.resolve_filename(expect_lisp_string(&args[0])?);
+    let resolved = host.resolve_filename(expect_lisp_string(&args[0])?);
     let resolved_path = super::file_name::lisp_file_name_to_path_buf(&resolved);
     let resolved_true = canonicalize_or_self(&resolved_path);
 
-    for id in eval.edit.buffers.buffer_list() {
-        let Some(buf) = eval.edit.buffers.get(id) else {
-            continue;
-        };
-        let Some(file_name) = buf.file_name_lisp_string() else {
-            continue;
+    let buffer_ids = {
+        let (edit, _) = host.edit_and_vars();
+        edit.buffers.buffer_list()
+    };
+    for id in buffer_ids {
+        let file_name = {
+            let (edit, _) = host.edit_and_vars();
+            match edit
+                .buffers
+                .get(id)
+                .and_then(|buf| buf.file_name_lisp_string())
+            {
+                Some(name) => name.clone(),
+                None => continue,
+            }
         };
 
-        let candidate = eval.resolve_filename(file_name);
+        let candidate = host.resolve_filename(&file_name);
         if candidate == resolved {
             return Ok(Value::make_buffer(id));
         }
@@ -2282,22 +2274,25 @@ pub(crate) fn builtin_goto_char(eval: &mut super::eval::Context, args: Vec<Value
     builtin_goto_char_1(eval, args[0])
 }
 
-pub(crate) fn builtin_goto_char_1(eval: &mut super::eval::Context, arg: Value) -> EvalResult {
+pub(crate) fn builtin_goto_char_1<H: EditHost>(host: &mut H, arg: Value) -> EvalResult {
     // GNU returns POSITION itself (a marker stays a marker), so the raw
     // arg survives extraction; the typed position carries the coordinate.
-    let pos = expect_integer_or_marker_eval(eval, &arg).map(LispCharPos1::new)?;
-    let current_id = eval
-        .edit
-        .buffers
-        .current_buffer_id()
-        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    let (old_byte, byte_pos) = {
-        let buf = eval
-            .edit
+    let pos = {
+        let (edit, _) = host.edit_and_vars();
+        expect_integer_or_marker_in_buffers(&edit.buffers, &arg).map(LispCharPos1::new)?
+    };
+    let (current_id, old_byte, byte_pos) = {
+        let (edit, _) = host.edit_and_vars();
+        let current_id = edit
+            .buffers
+            .current_buffer_id()
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        let buf = edit
             .buffers
             .get(current_id)
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
         (
+            current_id,
             buf.point_emacs_byte_pos(),
             buf.lisp_pos_to_accessible_emacs_byte_pos(pos),
         )
@@ -2305,15 +2300,17 @@ pub(crate) fn builtin_goto_char_1(eval: &mut super::eval::Context, arg: Value) -
     // Adjust for intangible text property
     let direction = if byte_pos >= old_byte { 1 } else { -1 };
     let adjusted = {
-        let (edit, vars) = eval.edit_and_vars();
+        let (edit, vars) = host.edit_and_vars();
         super::navigation::adjust_for_intangible(vars, &edit.buffers, byte_pos, direction)
     };
-    let _ = eval
-        .edit
-        .buffers
-        .goto_buffer_emacs_byte_pos(current_id, adjusted);
+    {
+        let (edit, _) = host.edit_and_vars();
+        let _ = edit
+            .buffers
+            .goto_buffer_emacs_byte_pos(current_id, adjusted);
+    }
     // Run point motion hooks
-    super::navigation::check_point_motion_hooks(eval, old_byte, adjusted)?;
+    super::navigation::check_point_motion_hooks(host, old_byte, adjusted)?;
     Ok(arg)
 }
 
@@ -3840,35 +3837,36 @@ pub(crate) fn builtin_set_buffer_modified_p<H: EditHost>(
     host.force_mode_line_update()
 }
 
-pub(crate) fn builtin_restore_buffer_modified_p(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_restore_buffer_modified_p<H: EditHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("restore-buffer-modified-p", &args, 1)?;
-    let current_id = eval
-        .edit
-        .buffers
-        .current_buffer_id()
-        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    let was_modified = eval
-        .edit
-        .buffers
-        .modified_state_root_id(current_id)
-        .and_then(|root_id| eval.edit.buffers.get(root_id))
-        .is_some_and(|buffer| buffer.modified_state_value().is_truthy());
-    if let Some(filename) =
-        super::file_name::buffer_file_lock_target(&eval.edit.buffers, current_id)
-    {
+    let (current_id, was_modified, lock_target) = {
+        let (edit, _) = host.edit_and_vars();
+        let current_id = edit
+            .buffers
+            .current_buffer_id()
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        let was_modified = edit
+            .buffers
+            .modified_state_root_id(current_id)
+            .and_then(|root_id| edit.buffers.get(root_id))
+            .is_some_and(|buffer| buffer.modified_state_value().is_truthy());
+        let lock_target = super::file_name::buffer_file_lock_target(&edit.buffers, current_id);
+        (current_id, was_modified, lock_target)
+    };
+    if let Some(filename) = lock_target {
         // No expansion here: GNU's restore_buffer_modified_p hands
         // BVAR (b, file_truename) to Flock_file / Funlock_file untouched.
         if !was_modified && !args[0].is_nil() {
-            eval.lock_file(&filename)?;
+            host.lock_file(&filename)?;
         } else if was_modified && args[0].is_nil() {
-            eval.unlock_file(&filename)?;
+            host.unlock_file(&filename)?;
         }
     }
-    eval.edit
-        .buffers
+    let (edit, _) = host.edit_and_vars();
+    edit.buffers
         .restore_buffer_modified_state(current_id, args[0])
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))
 }
@@ -4030,11 +4028,11 @@ pub(crate) fn other_buffer_impl(
     Ok(Value::make_buffer(scratch))
 }
 
-pub(crate) fn builtin_generate_new_buffer_name(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_generate_new_buffer_name<H: EditHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
-    let symbol_mode = eval.symbol_mode();
+    let symbol_mode = host.symbol_mode();
     expect_min_args("generate-new-buffer-name", &args, 1)?;
     expect_max_args("generate-new-buffer-name", &args, 2)?;
     if args.len() == 2
@@ -4050,7 +4048,8 @@ pub(crate) fn builtin_generate_new_buffer_name(
         ));
     }
     let ignore = args.get(1).and_then(|v| v.as_utf8_str());
-    generate_new_buffer_name_value_in_state(&eval.edit.buffers, args[0], ignore)
+    let (edit, _) = host.edit_and_vars();
+    generate_new_buffer_name_value_in_state(&edit.buffers, args[0], ignore)
 }
 
 /// Return GNU `generate-new-buffer-name`'s Lisp string result.
@@ -4622,19 +4621,20 @@ pub(crate) fn builtin_make_overlay_in_buffers(
 }
 
 /// (delete-overlay OVERLAY)
-pub(crate) fn builtin_delete_overlay(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
+pub(crate) fn builtin_delete_overlay<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     if !super::redisplay_policy::gnu_redisplay_hooks_enabled() {
-        return builtin_delete_overlay_in_buffers(&mut eval.edit.buffers, args);
+        let (edit, _) = host.edit_and_vars();
+        return builtin_delete_overlay_in_buffers(&mut edit.buffers, args);
     }
     expect_args("delete-overlay", &args, 1)?;
     let overlay = expect_overlay(&args[0])?;
     let buffer = resolve_overlay_buffer_id(overlay);
-    let result = builtin_delete_overlay_in_buffers(&mut eval.edit.buffers, args)?;
+    let result = {
+        let (edit, _) = host.edit_and_vars();
+        builtin_delete_overlay_in_buffers(&mut edit.buffers, args)?
+    };
     if let Some(buffer) = buffer {
-        eval.mark_buffer_redisplay(buffer);
+        host.mark_buffer_redisplay(buffer);
     }
     Ok(result)
 }
@@ -4653,27 +4653,36 @@ pub(crate) fn builtin_delete_overlay_in_buffers(
 }
 
 /// (overlay-put OVERLAY PROP VAL)
-pub(crate) fn builtin_overlay_put(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_overlay_put<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     if !super::redisplay_policy::gnu_redisplay_hooks_enabled() {
-        return builtin_overlay_put_in_buffers(&mut eval.edit.buffers, args);
+        let (edit, _) = host.edit_and_vars();
+        return builtin_overlay_put_in_buffers(&mut edit.buffers, args);
     }
     expect_args("overlay-put", &args, 3)?;
     let overlay = expect_overlay(&args[0])?;
-    let before = resolve_overlay_buffer_id(overlay).and_then(|buffer| {
-        eval.edit
-            .buffers
-            .get(buffer)
-            .map(|value| (buffer, value.overlay_modified_tick()))
-    });
-    let result = builtin_overlay_put_in_buffers(&mut eval.edit.buffers, args)?;
-    if let Some((buffer, tick)) = before
-        && eval
-            .edit
-            .buffers
-            .get(buffer)
-            .is_some_and(|value| value.overlay_modified_tick() != tick)
-    {
-        eval.mark_buffer_redisplay(buffer);
+    let (result, redisplay) = {
+        let (edit, _) = host.edit_and_vars();
+        let before = resolve_overlay_buffer_id(overlay).and_then(|buffer| {
+            edit.buffers
+                .get(buffer)
+                .map(|value| (buffer, value.overlay_modified_tick()))
+        });
+        let result = builtin_overlay_put_in_buffers(&mut edit.buffers, args)?;
+        let redisplay = match before {
+            Some((buffer, tick))
+                if edit
+                    .buffers
+                    .get(buffer)
+                    .is_some_and(|value| value.overlay_modified_tick() != tick) =>
+            {
+                Some(buffer)
+            }
+            _ => None,
+        };
+        (result, redisplay)
+    };
+    if let Some(buffer) = redisplay {
+        host.mark_buffer_redisplay(buffer);
     }
     Ok(result)
 }
@@ -4872,31 +4881,33 @@ pub(crate) fn builtin_overlay_recenter(
 }
 
 /// (move-overlay OVERLAY BEG END &optional BUFFER)
-pub(crate) fn builtin_move_overlay(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
+pub(crate) fn builtin_move_overlay<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     if !super::redisplay_policy::gnu_redisplay_hooks_enabled() {
-        return builtin_move_overlay_in_buffers(&mut eval.edit.buffers, args);
+        let (edit, _) = host.edit_and_vars();
+        return builtin_move_overlay_in_buffers(&mut edit.buffers, args);
     }
     expect_min_args("move-overlay", &args, 3)?;
     expect_max_args("move-overlay", &args, 4)?;
     let overlay = expect_overlay(&args[0])?;
-    let old_buffer = resolve_overlay_buffer_id(overlay);
-    let new_buffer = if args.get(3).is_some_and(|value| value.is_truthy()) {
-        resolve_buffer_id_in_buffers(&eval.edit.buffers, args.get(3))?
-    } else {
-        old_buffer
-            .or_else(|| eval.edit.buffers.current_buffer_id())
-            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?
+    let (old_buffer, new_buffer, result) = {
+        let (edit, _) = host.edit_and_vars();
+        let old_buffer = resolve_overlay_buffer_id(overlay);
+        let new_buffer = if args.get(3).is_some_and(|value| value.is_truthy()) {
+            resolve_buffer_id_in_buffers(&edit.buffers, args.get(3))?
+        } else {
+            old_buffer
+                .or_else(|| edit.buffers.current_buffer_id())
+                .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?
+        };
+        let result = builtin_move_overlay_in_buffers(&mut edit.buffers, args)?;
+        (old_buffer, new_buffer, result)
     };
-    let result = builtin_move_overlay_in_buffers(&mut eval.edit.buffers, args)?;
     if let Some(buffer) = old_buffer.filter(|buffer| *buffer != new_buffer) {
-        eval.mark_buffer_redisplay(buffer);
+        host.mark_buffer_redisplay(buffer);
     }
     // GNU modify_overlay runs even when endpoints are unchanged; also retain
     // the destination publication if the empty overlay evaporated there.
-    eval.mark_buffer_redisplay(new_buffer);
+    host.mark_buffer_redisplay(new_buffer);
     Ok(result)
 }
 
