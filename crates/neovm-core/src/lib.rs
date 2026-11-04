@@ -4,7 +4,10 @@ pub mod display_evaluation;
 pub mod emacs_core;
 pub use neovm_text::encoding;
 pub mod face;
-mod frontend_events;
+// Frontend input vocabulary and state moved into the eval manifest (stage-4
+// W2/E6b); the historical crate-root paths stay as re-exports for every
+// in-crate and frontend-crate user.
+pub(crate) use crate::emacs_core::eval::frontend_events;
 #[cfg(any(test, feature = "fuzzing"))]
 #[doc(hidden)]
 pub mod fuzz_support;
@@ -15,11 +18,11 @@ pub use neovm_value::heap_types;
 #[path = "../core_test_facades/heap_types.rs"]
 pub mod heap_types;
 pub mod host_effect;
-pub mod host_input;
+pub use crate::emacs_core::eval::host_input;
 #[cfg(test)]
 mod image_identity;
-pub mod keyboard;
-mod keyboard_input;
+pub use crate::emacs_core::eval::keyboard;
+pub(crate) use crate::emacs_core::eval::keyboard_input;
 pub use neovm_value::logging;
 #[cfg(not(test))]
 pub use neovm_value::tagged;

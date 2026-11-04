@@ -1481,7 +1481,7 @@ pub enum InputEvent {
     },
     /// Native desktop preferences, distinct from installed-font catalog changes.
     SystemFontsChanged {
-        fonts: crate::emacs_core::display_host::SystemFonts,
+        fonts: crate::emacs_core::eval::protocol::SystemFonts,
         display: neomacs_display_protocol::GraphicalDisplayIdentity,
     },
     /// Window-selection change.
@@ -1517,16 +1517,16 @@ pub enum InputEvent {
     FrameShaderFailed { error: String },
     /// A compositor-owned neo-term failed to create after reserving its ID.
     TerminalCreateFailed {
-        id: crate::emacs_core::display_host::TerminalId,
+        id: crate::emacs_core::eval::protocol::TerminalId,
         error: String,
     },
     /// A compositor-owned neo-term child process exited.
     TerminalExited {
-        id: crate::emacs_core::display_host::TerminalId,
+        id: crate::emacs_core::eval::protocol::TerminalId,
     },
     /// A compositor-owned neo-term published a new title.
     TerminalTitleChanged {
-        id: crate::emacs_core::display_host::TerminalId,
+        id: crate::emacs_core::eval::protocol::TerminalId,
         title: String,
     },
 }
@@ -4464,10 +4464,10 @@ impl crate::emacs_core::eval::Context {
 
     fn handle_system_fonts_input_event(
         &mut self,
-        fonts: crate::emacs_core::display_host::SystemFonts,
+        fonts: crate::emacs_core::eval::protocol::SystemFonts,
         display: neomacs_display_protocol::GraphicalDisplayIdentity,
     ) -> Result<bool, crate::emacs_core::error::Flow> {
-        use crate::emacs_core::display_host::SystemFontRole;
+        use crate::emacs_core::eval::protocol::SystemFontRole;
 
         let Some(host) = self.display_host.as_mut() else {
             return Ok(false);
@@ -4542,7 +4542,7 @@ impl crate::emacs_core::eval::Context {
 
     fn handle_terminal_exited_input_event(
         &mut self,
-        id: crate::emacs_core::display_host::TerminalId,
+        id: crate::emacs_core::eval::protocol::TerminalId,
     ) -> crate::emacs_core::error::EvalResult {
         let args = [
             Value::symbol("neo-term-exit-functions"),
@@ -4553,7 +4553,7 @@ impl crate::emacs_core::eval::Context {
 
     fn handle_terminal_create_failed_input_event(
         &mut self,
-        id: crate::emacs_core::display_host::TerminalId,
+        id: crate::emacs_core::eval::protocol::TerminalId,
         error: &str,
     ) -> crate::emacs_core::error::EvalResult {
         let args = [
@@ -4566,7 +4566,7 @@ impl crate::emacs_core::eval::Context {
 
     fn handle_terminal_title_changed_input_event(
         &mut self,
-        id: crate::emacs_core::display_host::TerminalId,
+        id: crate::emacs_core::eval::protocol::TerminalId,
         title: &str,
     ) -> crate::emacs_core::error::EvalResult {
         let args = [

@@ -62,6 +62,12 @@ use neovm_value::kmacro::KmacroManager;
 
 pub mod data;
 pub mod protocol;
+// Frontend input protocol and state re-homed under the eval manifest
+// (stage-4 W2/E6b). Keyboard behaviour is split out over W4/E10/E13.
+pub(crate) mod frontend_events;
+pub mod host_input;
+pub mod keyboard;
+pub(crate) mod keyboard_input;
 pub(crate) mod world;
 pub use world::{ContextShutdownError, ObarrayWriteAccess, OutstandingWorldViews, WorldEra};
 pub(crate) use world::{ObarrayView, OwnedRootRegistryView, WorldSlot, WorldView};

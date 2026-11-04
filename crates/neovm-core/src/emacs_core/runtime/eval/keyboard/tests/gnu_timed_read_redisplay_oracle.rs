@@ -92,7 +92,7 @@ fn gnu_timed_read_zero_timeout_preliminary_redisplay_matches_oracle() {
     let actual_gnu = String::from_utf8(output.stdout.clone()).expect("GNU oracle UTF-8 stdout");
     let expected = if std::env::var("UPDATE_EXPECT").as_deref() == Ok("1") {
         let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("src/keyboard/tests/gnu_timed_read_redisplay.expected");
+            .join("src/emacs_core/runtime/eval/keyboard/tests/gnu_timed_read_redisplay.expected");
         // The fixture can only receive GNU's result, never NeoVM's result.
         std::fs::write(&fixture, &output.stdout).expect("refresh fixture exclusively from GNU");
         std::fs::read_to_string(fixture).expect("read freshly written GNU fixture")
