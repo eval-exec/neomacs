@@ -6,6 +6,7 @@ use crate::emacs_core::error::Flow;
 use crate::face::{Color, Face, FaceDecoration, SpecifiedColor, UnderlineColorOperation};
 use crate::gc_trace::GcTrace;
 use crate::window::DisplayFrameExt;
+use crate::window::DisplayFrameManagerExt;
 use strum::IntoEnumIterator;
 
 pub(crate) use crate::face::realization::{BasicFace, FaceChangeScope};

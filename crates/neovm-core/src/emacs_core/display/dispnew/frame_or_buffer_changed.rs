@@ -19,6 +19,7 @@ use crate::emacs_core::eval::{
 };
 use crate::emacs_core::{Context, Value};
 use crate::window::DisplayFrameExt;
+use crate::window::DisplayFrameManagerExt;
 use crate::window::FrameId;
 
 /// One recorded piece of GNU's state vector.

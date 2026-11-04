@@ -20,6 +20,7 @@ use crate::emacs_core::eval::{
 use crate::emacs_core::intern::{SymId, WellKnown, format_symbol_name_for_diagnostic};
 use crate::emacs_core::value::{Value, ValueKind, eq_value_swp, equal_value};
 use crate::window::DisplayFrameExt;
+use crate::window::DisplayFrameManagerExt;
 
 static TOP_LEVEL_SYMBOL: WellKnown = WellKnown::TopLevel;
 static EXIT_TAG: WellKnown = WellKnown::Exit;

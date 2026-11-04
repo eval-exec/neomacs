@@ -28,6 +28,7 @@
 
 use crate::emacs_core::value::Value;
 use crate::window::DisplayFrameExt;
+use crate::window::DisplayFrameManagerExt;
 
 /// Decoded form of the `hscroll-step` variable (GNU STEP 0 in the spec).
 ///

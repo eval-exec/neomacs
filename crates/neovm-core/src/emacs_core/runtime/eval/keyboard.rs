@@ -19,6 +19,7 @@ use crate::emacs_core::keymap::KeymapMarker;
 use crate::emacs_core::wait::CommandInputWaitOutcome;
 use crate::tagged::value::SymbolMode;
 use crate::window::DisplayFrameExt;
+use crate::window::DisplayFrameManagerExt;
 // decode_storage_char_codes import removed — now using emacs_char directly
 use crate::emacs_core::value::{Value, ValueKind, VecLikeType};
 use crate::heap_types::LispString;

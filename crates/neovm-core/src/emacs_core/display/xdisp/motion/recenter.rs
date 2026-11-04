@@ -4,6 +4,7 @@
 use super::*;
 use crate::buffer::EmacsBytePos;
 use crate::window::DisplayFrameExt;
+use crate::window::DisplayFrameManagerExt;
 use std::num::{NonZeroU64, NonZeroUsize};
 
 #[derive(Clone, Copy, Debug)]

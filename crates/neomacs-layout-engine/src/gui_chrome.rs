@@ -4,6 +4,7 @@
 //! payloads for the render thread from the active Lisp keymaps.
 
 use neovm_core::window::DisplayFrameExt;
+use neovm_core::window::DisplayFrameManagerExt;
 use std::cell::RefCell;
 use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;

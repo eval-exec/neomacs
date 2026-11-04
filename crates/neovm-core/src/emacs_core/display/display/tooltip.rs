@@ -1,6 +1,7 @@
 //! Lisp tooltip validation. Native windows and timers belong to DisplayHost.
 use super::*;
 use crate::window::DisplayFrameExt;
+use crate::window::DisplayFrameManagerExt;
 use neomacs_display_protocol::tooltip::TooltipRequest;
 use strum::EnumString;
 

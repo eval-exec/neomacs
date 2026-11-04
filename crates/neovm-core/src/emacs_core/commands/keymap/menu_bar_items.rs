@@ -9,6 +9,7 @@ use crate::emacs_core::error::{EvalResult, expect_args_range};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::value::{Value, eq_value_swp};
 use crate::tagged::SymbolMode;
+use crate::window::DisplayFrameManagerExt;
 
 pub(crate) fn builtin_menu_bar_menu_at_x_y(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_args_range("menu-bar-menu-at-x-y", &args, 2, 3)?;

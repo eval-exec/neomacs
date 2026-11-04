@@ -6,6 +6,7 @@ use crate::emacs_core::fontset;
 use crate::emacs_core::value::{ValueKind, VecLikeType};
 use crate::tagged::SymbolMode;
 use crate::window::DisplayFrameExt;
+use crate::window::DisplayFrameManagerExt;
 use neomacs_display_protocol::SelectionOwner;
 use neovm_value::display_vocab::FrameDomain;
 

@@ -8,6 +8,7 @@ use crate::emacs_core::error::{
 };
 use crate::emacs_core::hook_runtime::{hook_symbol_by_name, run_named_hook};
 use crate::emacs_core::{Context, Value};
+use crate::window::DisplayFrameManagerExt;
 use crate::window::{FrameFocusTracking, FrameId};
 
 /// `(select-frame FRAME &optional NORECORD)` -> frame.

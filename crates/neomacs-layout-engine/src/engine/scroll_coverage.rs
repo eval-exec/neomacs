@@ -20,6 +20,7 @@ use crate::window_output::prepared_body::position_buffer_rows;
 use neovm_core::buffer::CharPos0;
 use neovm_core::tagged::collection_reads::{self, CollectionReads};
 use neovm_core::window::DisplayFrameExt;
+use neovm_core::window::DisplayFrameManagerExt;
 use neovm_core::window::{FrameId, WindowId};
 
 /// Keep speculative work bounded, including cyclic user lists. Recheck at

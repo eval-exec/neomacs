@@ -12,6 +12,7 @@
 //! `eval::data::window_state` modules, exactly as the live hooks bodies do.
 
 use crate::window::DisplayFrameExt;
+use crate::window::DisplayFrameManagerExt;
 use crate::window::DisplayWindowExt;
 use std::collections::HashMap;
 

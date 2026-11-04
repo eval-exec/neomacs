@@ -16,6 +16,7 @@ use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_max_args, expect_min_args};
 use crate::emacs_core::eval::VariableView;
 use crate::tagged::SymbolMode;
+use crate::window::DisplayFrameManagerExt;
 use std::collections::HashMap;
 
 use super::error::{EvalResult, Flow, FlowKind, FlowResultExt, signal};

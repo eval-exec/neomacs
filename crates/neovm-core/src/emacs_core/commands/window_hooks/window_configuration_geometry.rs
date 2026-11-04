@@ -6,6 +6,7 @@
 
 use super::*;
 use crate::window::DisplayFrameExt;
+use crate::window::DisplayFrameManagerExt;
 use crate::window::Frame;
 use neomacs_display_protocol::types::Px;
 use neovm_edit::emacs_core::display_metrics::Rect;

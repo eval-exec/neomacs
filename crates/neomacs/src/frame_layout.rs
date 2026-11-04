@@ -19,6 +19,7 @@ use neomacs_display_runtime::tty_input::{
     TerminalCellSize, TerminalColumns, TerminalRows, TerminalSizeQuery,
 };
 use neovm_core::emacs_core::eval::Context;
+use neovm_core::window::DisplayFrameManagerExt;
 use neovm_core::window::{FrameId, RenderFrameScope, RenderFrameVisibility};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};

@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::window::DisplayFrameExt;
+use crate::window::DisplayFrameManagerExt;
 
 pub(super) fn prepare(
     eval: &super::super::eval::Context,

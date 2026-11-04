@@ -13,6 +13,7 @@ use crate::emacs_core::terminal::pure::expect_terminal_designator_eval;
 use crate::emacs_core::value::ValueKind;
 use crate::emacs_core::value::*;
 use crate::window::DisplayFrameExt;
+use crate::window::DisplayFrameManagerExt;
 use crate::window::WindowId;
 
 /// Reset cursor visibility state (called from `reset_display_thread_locals`).

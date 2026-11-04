@@ -17,6 +17,7 @@ mod cycling_test;
 #[path = "tests/selection_test.rs"]
 mod selection_test;
 use crate::window::DisplayFrameExt;
+use crate::window::DisplayFrameManagerExt;
 use position::{
     FrameCoordinateOrigin, FramePositionSpec, absolute_window_position, apply_frame_position,
 };

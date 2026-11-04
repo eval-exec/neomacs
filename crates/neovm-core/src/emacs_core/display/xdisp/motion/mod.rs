@@ -17,6 +17,7 @@ use crate::emacs_core::Value;
 use crate::emacs_core::display_metrics::{LineWrap, MeasuredMotion, MotionEngine};
 use crate::emacs_core::error::{Flow, LispCondition, signal};
 use crate::window::DisplayFrameExt;
+use crate::window::DisplayFrameManagerExt;
 use crate::window::{DisplayRowSnapshot, FrameId, WindowDisplaySnapshot, WindowId};
 
 /// GNU's own branch, `if (noninteractive)` (`src/indent.c:2280`).

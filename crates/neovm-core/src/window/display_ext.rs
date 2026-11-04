@@ -5,13 +5,20 @@
 //! N17 shape the split requires (core cannot add inherent impls to eval
 //! types once eval is a crate).
 
+use super::display::{
+    canon_y_from_pixel_y, frame_line_height, horizontal_scroll_bar_area_height,
+    horizontal_scroll_bar_lines, left_scroll_bar_area_width, right_scroll_bar_area_width,
+    vertical_scroll_bar_area_width, vertical_scroll_bar_cols,
+};
 use super::display::{frame_default_left_fringe_width, frame_default_right_fringe_width};
+use super::parameters::alist_from_parameters;
 use super::tty_posn_current::{
     TtyCurrentMatrixAuthority, TtyMatrixAllocation, TtyPosnCurrentOwner,
 };
 use super::*;
 use crate::emacs_core::value::Value;
 use neomacs_display_protocol::posn_frame_pool::PosnFramePool;
+use neovm_value::value::eq_value;
 use std::sync::Arc;
 
 use super::{
@@ -2689,5 +2696,2644 @@ impl DisplayFrameExt for Frame {
         window: WindowId,
     ) -> Option<TtyCurrentMatrixAuthority> {
         self.tty_posn_pool.as_ref()?.authority.get(&window).copied()
+    }
+}
+
+/// FrameManager behaviour that binds frame creation, selection, layout,
+/// parameters, history and redisplay (stage-4 W2/E5 FM-5e).
+pub trait DisplayFrameManagerExt {
+    fn new() -> Self;
+
+    fn navigation_intent_token(&mut self, direction: TransitionDirection) -> NavigationIntentToken;
+
+    fn record_window_navigation_intent(
+        &mut self,
+        window_id: WindowId,
+        direction: TransitionDirection,
+    ) -> NavigationIntentToken;
+
+    fn pending_window_navigation_intent(
+        &self,
+        window_id: WindowId,
+    ) -> Option<NavigationIntentToken>;
+
+    fn acknowledge_window_navigation_intent(
+        &mut self,
+        window_id: WindowId,
+        observed: NavigationIntentToken,
+    );
+
+    fn record_frame_navigation_intent(
+        &mut self,
+        frame_id: FrameId,
+        direction: TransitionDirection,
+    ) -> NavigationIntentToken;
+
+    fn pending_frame_navigation_intent(&self, frame_id: FrameId) -> Option<NavigationIntentToken>;
+
+    fn acknowledge_frame_navigation_intent(
+        &mut self,
+        frame_id: FrameId,
+        observed: NavigationIntentToken,
+    );
+
+    fn window_topology_generation(&self) -> u64;
+
+    fn leaf_window_paths(&self, frame_id: FrameId) -> Option<Vec<(WindowId, WindowTreePath)>>;
+
+    fn frame_and_window_at_path(
+        &self,
+        frame_id: FrameId,
+        path: &WindowTreePath,
+    ) -> Option<(&Frame, &Window)>;
+
+    fn mark_window_topology_changed(&mut self);
+
+    fn set_frame_init_hook(&mut self, hook: fn(&mut Frame));
+
+    fn assign_initial_tty_frame_name(&mut self, frame_id: FrameId) -> bool;
+
+    fn next_generated_tty_frame_name(&mut self) -> Value;
+
+    fn set_tty_frame_name_parameter(&mut self, frame_id: FrameId, name: Value) -> bool;
+
+    fn retire_source_preload_window_sequences(
+        &mut self,
+    ) -> Result<(), SourcePreloadWindowRetirementRefusal>;
+
+    fn window_sequence_number(&self, window: WindowId) -> WindowSequenceNumber;
+
+    fn next_window_id(&mut self) -> WindowId;
+
+    fn create_frame(&mut self, name: &str, width: u32, height: u32, buffer_id: BufferId)
+    -> FrameId;
+
+    fn create_frame_value(
+        &mut self,
+        name: Value,
+        width: u32,
+        height: u32,
+        buffer_id: BufferId,
+    ) -> FrameId;
+
+    fn create_frame_on_terminal(
+        &mut self,
+        name: &str,
+        terminal_id: u64,
+        width: u32,
+        height: u32,
+        buffer_id: BufferId,
+    ) -> FrameId;
+
+    fn create_frame_value_on_terminal(
+        &mut self,
+        name: Value,
+        terminal_id: u64,
+        width: u32,
+        height: u32,
+        buffer_id: BufferId,
+    ) -> FrameId;
+
+    fn get(&self, id: FrameId) -> Option<&Frame>;
+
+    fn get_mut(&mut self, id: FrameId) -> Option<&mut Frame>;
+
+    fn force_resize_mini_window_to_one_line(&mut self, id: FrameId);
+
+    fn frames_mut(&mut self) -> impl Iterator<Item = &mut Frame>;
+
+    fn buffer_window_count(&self, buffers: &BufferManager, buffer: BufferId) -> usize;
+
+    fn window_count_showing_buffer(&self, buffer: BufferId) -> usize;
+
+    fn other_window_buffer_changed(&self, buffers: &BufferManager) -> bool;
+
+    fn selected_frame(&self) -> Option<&Frame>;
+
+    fn selected_window(&self) -> Option<&Window>;
+
+    fn selected_frame_mut(&mut self) -> Option<&mut Frame>;
+
+    fn top_frame_on_terminal(&self, terminal_id: u64) -> Option<FrameId>;
+
+    fn select_frame(&mut self, id: FrameId) -> bool;
+
+    fn select_frame_with_focus_tracking(
+        &mut self,
+        id: FrameId,
+        tracking: FrameFocusTracking,
+    ) -> bool;
+
+    fn select_window_for_mode_line(
+        &mut self,
+        window_id: WindowId,
+    ) -> (Option<FrameId>, Option<(FrameId, WindowId)>);
+
+    fn restore_selected_window_for_mode_line(
+        &mut self,
+        saved: (Option<FrameId>, Option<(FrameId, WindowId)>),
+    );
+
+    fn replacement_frame_for_deletion(
+        &self,
+        id: FrameId,
+        policy: FrameDeletionSelectionPolicy,
+    ) -> Option<FrameId>;
+
+    fn delete_frame(&mut self, id: FrameId) -> FrameDeletion;
+
+    fn frame_list(&self) -> Vec<FrameId>;
+
+    fn has_frame_outside(&self, affected: &[FrameId]) -> bool;
+
+    fn frame_parent_id(&self, id: FrameId) -> Option<FrameId>;
+
+    fn root_frame_id(&self, id: FrameId) -> Option<FrameId>;
+
+    fn frame_ancestor_p(&self, ancestor: FrameId, descendant: FrameId) -> bool;
+
+    fn max_child_z_order(&self, parent: FrameId) -> i32;
+
+    fn set_child_z_order_above_siblings(&mut self, child: FrameId, parent: FrameId);
+
+    fn raise_or_lower_child_frame(&mut self, id: FrameId, raise: bool);
+
+    fn frame_ancestors_visible_p(&self, id: FrameId) -> bool;
+
+    fn frame_z_order_cmp(&self, a: FrameId, b: FrameId) -> std::cmp::Ordering;
+
+    fn frames_in_reverse_z_order(
+        &self,
+        frame: FrameId,
+        visibility: RenderFrameVisibility,
+    ) -> Vec<FrameId>;
+
+    fn frame_origin_in_root(&self, id: FrameId) -> Option<(f32, f32)>;
+
+    fn place_active_frame(
+        &self,
+        frame: FrameId,
+        presentation: geometry::PresentationId,
+    ) -> Result<neomacs_display_protocol::PlacedFrame, neomacs_display_protocol::PlaceChildError>;
+
+    fn render_frame_tree(
+        &self,
+        selected_or_root: FrameId,
+        visibility: RenderFrameVisibility,
+    ) -> Option<RenderFrameTree>;
+
+    fn render_frame_forest(
+        &self,
+        scope: RenderFrameScope,
+        visibility: RenderFrameVisibility,
+    ) -> Vec<RenderFrameTree>;
+
+    fn split_window(
+        &mut self,
+        frame_id: FrameId,
+        window_id: WindowId,
+        direction: SplitDirection,
+        new_buffer_id: BufferId,
+        size: Option<i64>,
+        placement: SplitPlacement,
+    ) -> Option<WindowId>;
+
+    fn split_window_with_combination_limit(
+        &mut self,
+        frame_id: FrameId,
+        window_id: WindowId,
+        direction: SplitDirection,
+        new_buffer_id: BufferId,
+        size: Option<i64>,
+        placement: SplitPlacement,
+        combination_limit: CombinationLimit,
+    ) -> Option<WindowId>;
+
+    fn apply_staged_split_sizes(
+        &mut self,
+        frame_id: FrameId,
+        new_window_id: WindowId,
+        new_size: Option<i64>,
+        new_normal: Value,
+        direction: SplitDirection,
+    ) -> Option<()>;
+
+    fn delete_window(&mut self, frame_id: FrameId, window_id: WindowId) -> bool;
+
+    fn delete_window_with_resize(
+        &mut self,
+        frame_id: FrameId,
+        window_id: WindowId,
+        resize: DeleteResize,
+    ) -> bool;
+
+    fn keep_only_window_in_subtree(
+        &mut self,
+        frame_id: FrameId,
+        window_id: WindowId,
+        root_id: WindowId,
+    ) -> bool;
+
+    fn alloc_window_id(&mut self) -> WindowId;
+
+    fn replace_buffer_in_windows(&mut self, old_id: BufferId, new_id: BufferId);
+
+    fn find_window_frame_id(&self, window_id: WindowId) -> Option<FrameId>;
+
+    fn window_buffer_id(&self, window_id: WindowId) -> Option<BufferId>;
+
+    fn is_minibuffer_window_id(&self, window_id: WindowId) -> bool;
+
+    fn find_valid_window_frame_id(&self, window_id: WindowId) -> Option<FrameId>;
+
+    fn window_owner_frame_id(&self, window_id: WindowId) -> Option<FrameId>;
+
+    fn is_live_window_id(&self, window_id: WindowId) -> bool;
+
+    fn is_valid_window_id(&self, window_id: WindowId) -> bool;
+
+    fn window_old_buffer(&self, window_id: WindowId) -> WindowOldBuffer;
+
+    fn window_restore_change_record(&self, window_id: WindowId) -> Option<DeletedWindowRecord>;
+
+    fn deletion_record(owner: Option<FrameId>, window: Option<&Window>) -> DeletedWindowRecord;
+
+    fn any_window_frame_id(&self, window_id: WindowId) -> Option<FrameId>;
+
+    fn is_window_object_id(&self, window_id: WindowId) -> bool;
+
+    fn lookup_window(&self, window_id: WindowId) -> Option<&Window>;
+
+    fn lookup_window_mut(&mut self, window_id: WindowId) -> Option<&mut Window>;
+
+    fn window_new_pixel(&self, window_id: WindowId) -> Option<i64>;
+
+    fn window_new_total(&self, window_id: WindowId) -> Option<i64>;
+
+    fn window_new_normal(&self, window_id: WindowId) -> Value;
+
+    fn set_window_new_pixel(
+        &mut self,
+        window_id: WindowId,
+        size: WindowPixelStage,
+    ) -> WindowPixelStage;
+
+    fn set_window_new_total(
+        &mut self,
+        window_id: WindowId,
+        size: WindowTotal,
+        update: NewTotalUpdate,
+    ) -> Result<WindowTotal, crate::tagged::value::FixnumRangeError>;
+
+    fn set_window_new_normal(&mut self, window_id: WindowId, value: Value);
+
+    fn window_display_state(
+        &self,
+        window_id: WindowId,
+    ) -> Option<(&Frame, &WindowDisplayState, bool)>;
+
+    fn window_display_location(&self, window_id: WindowId) -> Option<(super::FrameId, bool)>;
+
+    fn window_vscroll(&self, window_id: WindowId, pixelwise: bool) -> Option<Value>;
+
+    fn set_window_vscroll(
+        &mut self,
+        window_id: WindowId,
+        vscroll: f64,
+        pixelwise: bool,
+        preserve_vscroll_p: bool,
+    ) -> Option<Value>;
+
+    fn window_display_table(&self, window_id: WindowId) -> Value;
+
+    fn set_window_display_table(&mut self, window_id: WindowId, table: Value);
+
+    fn window_cursor_type(&self, window_id: WindowId) -> Value;
+
+    fn set_window_cursor_type(&mut self, window_id: WindowId, cursor_type: Value);
+
+    fn window_cursor_visible(&self, window_id: WindowId) -> bool;
+
+    fn set_window_cursor_visible(&mut self, window_id: WindowId, visible: bool);
+
+    fn window_fringes(&self, window_id: WindowId) -> Option<(i64, i64, bool, bool)>;
+
+    fn set_window_fringes(
+        &mut self,
+        window_id: WindowId,
+        left_width: Option<i32>,
+        right_width: Option<i32>,
+        outside_margins: bool,
+        persistent: bool,
+    ) -> bool;
+
+    fn window_scroll_bars(
+        &self,
+        window_id: WindowId,
+    ) -> Option<(Value, i64, Value, Value, i64, Value, bool)>;
+
+    fn window_scroll_bar_area_width(&self, window_id: WindowId) -> i64;
+
+    fn window_left_scroll_bar_area_width(&self, window_id: WindowId) -> i64;
+
+    fn window_right_scroll_bar_area_width(&self, window_id: WindowId) -> i64;
+
+    fn window_scroll_bar_area_height(&self, window_id: WindowId) -> i64;
+
+    fn set_window_scroll_bars(
+        &mut self,
+        window_id: WindowId,
+        width: Option<i32>,
+        vertical_type: Value,
+        height: Option<i32>,
+        horizontal_type: Value,
+        persistent: bool,
+    ) -> bool;
+
+    fn apply_set_window_buffer_state(
+        &mut self,
+        window_id: WindowId,
+        buffer_id: BufferId,
+        window_start: LispCharPos1,
+        point: LispCharPos1,
+        preserve_display_state: bool,
+        defaults: WindowBufferDisplayDefaults,
+    );
+
+    fn live_window_parameters(&self, window_id: WindowId) -> Option<&[(Value, Value)]>;
+
+    fn live_window_parameters_mut(
+        &mut self,
+        window_id: WindowId,
+    ) -> Option<&mut Vec<(Value, Value)>>;
+
+    fn window_parameter(&self, window_id: WindowId, key: &Value) -> Option<Value>;
+
+    fn set_window_parameter(&mut self, window_id: WindowId, key: Value, value: Value);
+
+    fn window_parameters_alist(&self, window_id: WindowId) -> Value;
+
+    fn window_parameters_pairs(&self, window_id: WindowId) -> Vec<(Value, Value)>;
+
+    fn live_window_history(&self, window_id: WindowId) -> Option<&super::WindowHistoryState>;
+
+    fn live_window_history_mut(
+        &mut self,
+        window_id: WindowId,
+    ) -> Option<&mut super::WindowHistoryState>;
+
+    fn window_prev_buffers(&self, window_id: WindowId) -> Value;
+
+    fn set_window_prev_buffers(&mut self, window_id: WindowId, prev_buffers: Value);
+
+    fn window_next_buffers(&self, window_id: WindowId) -> Value;
+
+    fn set_window_next_buffers(&mut self, window_id: WindowId, next_buffers: Value);
+
+    fn window_use_time(&self, window_id: WindowId) -> i64;
+
+    fn note_window_selected(&mut self, window_id: WindowId) -> i64;
+
+    fn bump_window_use_time(
+        &mut self,
+        selected_window_id: WindowId,
+        window_id: WindowId,
+    ) -> Option<i64>;
+
+    fn record_selected_window_after_redisplay(&mut self) -> Option<WindowId>;
+
+    fn old_selected_window(&self) -> Option<WindowId>;
+}
+
+impl DisplayFrameManagerExt for FrameManager {
+    fn new() -> Self {
+        Self {
+            frames: HashMap::default(),
+            frame_init_hook: None,
+            selected: None,
+            terminal_top_frames: HashMap::default(),
+            next_frame_id: FRAME_ID_BASE,
+            last_tty_frame_name: None,
+            next_window_id: FIRST_WINDOW_ID.0,
+            window_sequence_origin: WindowSequenceOrigin(FIRST_WINDOW_ID),
+            old_selected_window: None,
+            deleted_windows: HashMap::default(),
+            deleted_window_parameters: HashMap::default(),
+            window_select_count: 0,
+            next_navigation_intent_generation: std::num::NonZeroU64::MIN,
+            pending_content_transition_intents: PendingContentTransitionIntents::default(),
+            window_topology_generation: 1,
+        }
+    }
+
+    fn navigation_intent_token(&mut self, direction: TransitionDirection) -> NavigationIntentToken {
+        let generation = self.next_navigation_intent_generation;
+        self.next_navigation_intent_generation = std::num::NonZeroU64::new(
+            generation
+                .get()
+                .checked_add(1)
+                .expect("navigation intent generation overflow"),
+        )
+        .expect("incremented navigation intent generation stays nonzero");
+        NavigationIntentToken {
+            generation,
+            direction,
+        }
+    }
+
+    /// Record semantic navigation for the next accepted presentation that
+    /// replaces this window's content.
+    fn record_window_navigation_intent(
+        &mut self,
+        window_id: WindowId,
+        direction: TransitionDirection,
+    ) -> NavigationIntentToken {
+        let intent = self.navigation_intent_token(direction);
+        self.pending_content_transition_intents
+            .windows
+            .record(window_id, intent);
+        intent
+    }
+
+    fn pending_window_navigation_intent(
+        &self,
+        window_id: WindowId,
+    ) -> Option<NavigationIntentToken> {
+        self.pending_content_transition_intents
+            .windows
+            .pending(window_id)
+    }
+
+    /// Acknowledge only the intent observed by the accepted presentation.
+    /// This comparison prevents an older layout from consuming newer input.
+    fn acknowledge_window_navigation_intent(
+        &mut self,
+        window_id: WindowId,
+        observed: NavigationIntentToken,
+    ) {
+        self.pending_content_transition_intents
+            .windows
+            .acknowledge(window_id, observed);
+    }
+
+    /// Record semantic navigation for one whole-frame content replacement.
+    fn record_frame_navigation_intent(
+        &mut self,
+        frame_id: FrameId,
+        direction: TransitionDirection,
+    ) -> NavigationIntentToken {
+        let intent = self.navigation_intent_token(direction);
+        self.pending_content_transition_intents
+            .frames
+            .record(frame_id, intent);
+        intent
+    }
+
+    fn pending_frame_navigation_intent(&self, frame_id: FrameId) -> Option<NavigationIntentToken> {
+        self.pending_content_transition_intents
+            .frames
+            .pending(frame_id)
+    }
+
+    fn acknowledge_frame_navigation_intent(
+        &mut self,
+        frame_id: FrameId,
+        observed: NavigationIntentToken,
+    ) {
+        self.pending_content_transition_intents
+            .frames
+            .acknowledge(frame_id, observed);
+    }
+
+    fn window_topology_generation(&self) -> u64 {
+        self.window_topology_generation
+    }
+
+    /// Capture generation-bound leaf routes for one frame.
+    fn leaf_window_paths(&self, frame_id: FrameId) -> Option<Vec<(WindowId, WindowTreePath)>> {
+        Some(
+            self.frames
+                .get(&frame_id)?
+                .leaf_window_paths(self.window_topology_generation),
+        )
+    }
+
+    /// Resolve one route only in the exact topology generation that produced
+    /// it. A stale route is rejected before callers can publish live state or
+    /// execute Lisp for the wrong frame attempt.
+    fn frame_and_window_at_path(
+        &self,
+        frame_id: FrameId,
+        path: &WindowTreePath,
+    ) -> Option<(&Frame, &Window)> {
+        if path.generation != self.window_topology_generation {
+            return None;
+        }
+        let frame = self.frames.get(&frame_id)?;
+        Some((frame, frame.window_at_path(path)?))
+    }
+
+    /// Notify retained layout that window identities/parentage changed.
+    fn mark_window_topology_changed(&mut self) {
+        self.window_topology_generation = self
+            .window_topology_generation
+            .checked_add(1)
+            .expect("window topology generation overflow");
+    }
+
+    /// Install the hook run on every newly created frame.
+    fn set_frame_init_hook(&mut self, hook: fn(&mut Frame)) {
+        self.frame_init_hook = Some(hook);
+    }
+
+    /// Assign GNU's special initial terminal-frame name and reset the
+    /// independent TTY name sequence to one (`make_initial_frame`, frame.c).
+    fn assign_initial_tty_frame_name(&mut self, frame_id: FrameId) -> bool {
+        self.last_tty_frame_name = Some(TtyFrameNameOrdinal::INITIAL);
+        let Some(frame) = self.frames.get_mut(&frame_id) else {
+            return false;
+        };
+        frame.set_generated_name_value(TtyFrameNameOrdinal::INITIAL.value());
+        true
+    }
+
+    /// Allocate GNU's next collision-free generated terminal-frame name.
+    fn next_generated_tty_frame_name(&mut self) -> Value {
+        loop {
+            let ordinal = self
+                .last_tty_frame_name
+                .map(TtyFrameNameOrdinal::next)
+                .unwrap_or(TtyFrameNameOrdinal::INITIAL);
+            self.last_tty_frame_name = Some(ordinal);
+            let candidate = ordinal.value();
+            let collision = self.frames.values().any(|frame| {
+                frame
+                    .name_value()
+                    .as_lisp_string()
+                    .zip(candidate.as_lisp_string())
+                    .is_some_and(|(left, right)| left == right)
+            });
+            if !collision {
+                return candidate;
+            }
+        }
+    }
+
+    /// Apply GNU `set_term_frame_name`: nil preserves an existing `F<num>`
+    /// name, otherwise it allocates from the TTY name sequence.
+    fn set_tty_frame_name_parameter(&mut self, frame_id: FrameId, name: Value) -> bool {
+        if !name.is_nil() {
+            let Some(frame) = self.frames.get_mut(&frame_id) else {
+                return false;
+            };
+            frame.set_name_value(name);
+            return true;
+        }
+
+        if let Some(frame) = self.frames.get_mut(&frame_id)
+            && is_generated_tty_frame_name(frame.name_value())
+        {
+            let current = frame.name_value();
+            frame.set_generated_name_value(current);
+            return true;
+        }
+
+        let generated = self.next_generated_tty_frame_name();
+        let Some(frame) = self.frames.get_mut(&frame_id) else {
+            return false;
+        };
+        frame.set_generated_name_value(generated);
+        true
+    }
+
+    /// Retire source-preload sequence numbers after its last frame is gone.
+    ///
+    /// GNU dumps old windows as distinct dead objects with zero sequence numbers
+    /// (`pdumper.c:2996-3002`) and recreates the initial root at sequence one
+    /// (`window.c:9143-9178`). Keep native IDs and deleted-window records intact:
+    /// an escaped preload handle must never alias the runtime's new root.
+    fn retire_source_preload_window_sequences(
+        &mut self,
+    ) -> Result<(), SourcePreloadWindowRetirementRefusal> {
+        if !self.frames.is_empty() {
+            return Err(SourcePreloadWindowRetirementRefusal::LiveFramesRemain);
+        }
+        self.window_sequence_origin = WindowSequenceOrigin(WindowId(self.next_window_id));
+        Ok(())
+    }
+
+    /// The only conversion from native identity to GNU's printable sequence.
+    fn window_sequence_number(&self, window: WindowId) -> WindowSequenceNumber {
+        self.window_sequence_origin
+            .sequence_number(window, WindowId(self.next_window_id))
+    }
+
+    /// Allocate a new window ID.
+    fn next_window_id(&mut self) -> WindowId {
+        let id = WindowId(self.next_window_id);
+        self.next_window_id += 1;
+        self.deleted_windows.remove(&id);
+        self.deleted_window_parameters.remove(&id);
+        id
+    }
+
+    /// Create a new frame with a single window displaying `buffer_id`.
+    fn create_frame(
+        &mut self,
+        name: &str,
+        width: u32,
+        height: u32,
+        buffer_id: BufferId,
+    ) -> FrameId {
+        self.create_frame_value(Value::string(name), width, height, buffer_id)
+    }
+
+    fn create_frame_value(
+        &mut self,
+        name: Value,
+        width: u32,
+        height: u32,
+        buffer_id: BufferId,
+    ) -> FrameId {
+        self.create_frame_value_on_terminal(name, 0, width, height, buffer_id)
+    }
+
+    fn create_frame_on_terminal(
+        &mut self,
+        name: &str,
+        terminal_id: u64,
+        width: u32,
+        height: u32,
+        buffer_id: BufferId,
+    ) -> FrameId {
+        self.create_frame_value_on_terminal(
+            Value::string(name),
+            terminal_id,
+            width,
+            height,
+            buffer_id,
+        )
+    }
+
+    fn create_frame_value_on_terminal(
+        &mut self,
+        name: Value,
+        terminal_id: u64,
+        width: u32,
+        height: u32,
+        buffer_id: BufferId,
+    ) -> FrameId {
+        let frame_id = FrameId(self.next_frame_id);
+        self.next_frame_id += 1;
+
+        let window_id = self.next_window_id();
+        let bounds = Rect::new(0.0, 0.0, width as f32, height as f32);
+        let root = Window::new_leaf(window_id, buffer_id, bounds);
+
+        // GNU `make_frame' creates the root window first, then the minibuffer
+        // window, both drawing from the same global window sequence counter
+        // (frame.c:1228/1232) -> root gets #1, minibuffer #2. Allocate the
+        // minibuffer id from the counter here (immediately after the root) so
+        // neomacs's window numbering matches GNU exactly.
+        let minibuffer_window_id = self.next_window_id();
+
+        let mut frame = Frame::new(
+            frame_id,
+            name,
+            terminal_id,
+            width,
+            height,
+            root,
+            minibuffer_window_id,
+        );
+        if let Some(init) = self.frame_init_hook {
+            init(&mut frame);
+        }
+        let selected_wid = frame.selected_window;
+        self.frames.insert(frame_id, frame);
+        self.terminal_top_frames
+            .entry(terminal_id)
+            .or_insert(frame_id);
+        self.mark_window_topology_changed();
+        self.note_window_selected(selected_wid);
+
+        if self.selected.is_none() {
+            self.selected = Some(frame_id);
+            self.old_selected_window = Some(selected_wid);
+        }
+
+        frame_id
+    }
+
+    /// Get a frame by ID.
+    fn get(&self, id: FrameId) -> Option<&Frame> {
+        self.frames.get(&id)
+    }
+
+    /// Get a mutable frame by ID.
+    fn get_mut(&mut self, id: FrameId) -> Option<&mut Frame> {
+        self.frames.get_mut(&id)
+    }
+
+    /// Force the frame's minibuffer window back to exactly one line, content
+    /// independent.
+    ///
+    /// This is neomacs's analogue of GNU's unconditional
+    /// `resize_mini_window (XWINDOW (minibuf_window), 0)` at the outermost
+    /// minibuffer unwind (`minibuf.c:1188-1190`). Unlike the layout-engine
+    /// auto-resize heuristic (which only *reacts* to measured content and is
+    /// the steady-state mechanism), this asserts the end state imperatively at
+    /// teardown so the mini-window cannot stay grown after the active
+    /// minibuffer is gone.
+    ///
+    /// It reuses the existing minibuffer split / shrink machinery
+    /// (`reposition_minibuffer_below_root` via `sync_window_area_bounds`) to
+    /// set the mini-window height to one line and return the freed space to the
+    /// root. The next redisplay re-measures the inactive mini-window from its
+    /// displayed echo buffer's *content* (see the layout engine's
+    /// `echo_content_rows`), so it correctly stays one line for an empty echo
+    /// or "Quit", and re-grows for a genuine multi-line message — without any
+    /// stale-matrix override that would suppress such a message.
+    fn force_resize_mini_window_to_one_line(&mut self, id: FrameId) {
+        let Some(frame) = self.frames.get_mut(&id) else {
+            return;
+        };
+        let unit = frame.char_height.max(1.0);
+        if let Some(mini) = frame.minibuffer_leaf.as_mut() {
+            let mut bounds = *mini.bounds();
+            bounds.height = unit;
+            mini.set_bounds(bounds);
+            // Reset any stale vscroll left on the mini-window by
+            // vertico-posframe (which scrolls the real minibuffer out of view
+            // while its child frame shows the candidates). A nonzero vscroll on
+            // a one-line mini-window drives `visible_max_rows` to 0 (the
+            // posframe-hiding guard in the layout engine), which silently drops
+            // the echo row — so after a C-g abort the "Quit"/message text is
+            // laid out but produces no glyphs. GNU's `resize_mini_window`
+            // resets the window's scroll on unwind; mirror that here, matching
+            // the split-reset path elsewhere in this file.
+            if let Window::Leaf {
+                vscroll,
+                preserve_vscroll_p,
+                ..
+            } = mini
+            {
+                *vscroll = 0;
+                *preserve_vscroll_p = false;
+            }
+        }
+        // Hand the freed rows back to the root window and reposition the
+        // mini-window below it, exactly like `shrink_mini_window`.
+        frame.sync_window_area_bounds();
+    }
+
+    fn frames_mut(&mut self) -> impl Iterator<Item = &mut Frame> {
+        self.frames.values_mut()
+    }
+
+    /// Number of live windows displaying BUFFER or one of its indirect
+    /// buffers, matching GNU's `buffer_window_count` (`buffer.h`).
+    fn buffer_window_count(&self, buffers: &BufferManager, buffer: BufferId) -> usize {
+        let Some(root_buffer) = buffers.shared_text_root_id(buffer) else {
+            return 0;
+        };
+
+        self.frames
+            .values()
+            .map(|frame| {
+                frame.tree().buffer_window_count(buffers, root_buffer)
+                    + frame.minibuffer_leaf.as_ref().map_or(0, |window| {
+                        usize::from(
+                            window
+                                .buffer_id()
+                                .and_then(|buffer| buffers.shared_text_root_id(buffer))
+                                == Some(root_buffer),
+                        )
+                    })
+            })
+            .sum()
+    }
+
+    /// Number of live windows whose `buffer_id` is exactly `buffer`,
+    /// including minibuffer windows' leaf windows.
+    ///
+    /// [`Self::buffer_window_count`] resolves indirect buffers through the
+    /// live buffer table, so it reports zero for a buffer that has just been
+    /// removed from that table even while windows still reference its id.
+    /// GNU `replace_buffer_in_windows_safely` (window.c) gates its repair on
+    /// the incoming buffer's window count, which survives the buffer being
+    /// removed from `Vbuffer_alist`; this is the equivalent exact-id count.
+    fn window_count_showing_buffer(&self, buffer: BufferId) -> usize {
+        self.frames
+            .values()
+            .map(|frame| {
+                frame
+                    .tree()
+                    .leaf_ids()
+                    .into_iter()
+                    .filter(|id| frame.tree().find(*id).and_then(Window::buffer_id) == Some(buffer))
+                    .count()
+                    + usize::from(
+                        frame.minibuffer_leaf.as_ref().and_then(Window::buffer_id) == Some(buffer),
+                    )
+            })
+            .sum()
+    }
+
+    /// GNU's `bset_redisplay` observes ordinary windows on every frame.
+    /// Read only the live tree and completed display identities; detached
+    /// windows and the inactive minibuffer cannot raise this predicate.
+    /// The owning Context's mutator borrows these inputs; no state is cached
+    /// or shared between mutators, and the walk allocates no window list.
+    fn other_window_buffer_changed(&self, buffers: &BufferManager) -> bool {
+        fn changed(
+            frame: &Frame,
+            id: WindowId,
+            selected: Option<WindowId>,
+            buffers: &BufferManager,
+        ) -> bool {
+            let Some(window) = frame.tree.find(id) else {
+                return false;
+            };
+            if !window.children().is_empty() {
+                return window
+                    .children()
+                    .iter()
+                    .any(|id| changed(frame, *id, selected, buffers));
+            }
+            if Some(id) == selected {
+                return false;
+            }
+            let Some(buffer) = window.buffer_id().and_then(|id| buffers.get(id)) else {
+                return false;
+            };
+            if buffer.changed_char_range().is_some() {
+                return true;
+            }
+            frame.redisplay_snapshot(id).is_some_and(|snapshot| {
+                snapshot
+                    .buffer_modiff
+                    .is_some_and(|tick| tick != buffer.modified_tick())
+                    || snapshot.layout_freshness.as_ref().is_some_and(|freshness| {
+                        freshness.buffer.id != buffer.id()
+                            || freshness.buffer.overlay_modified_tick
+                                != buffer.overlay_modified_tick()
+                    })
+            })
+        }
+        let selected = self.selected_frame().map(|frame| frame.selected_window);
+        self.frames
+            .values()
+            .any(|frame| changed(frame, frame.tree.root_id(), selected, buffers))
+    }
+
+    /// Get the selected frame.
+    fn selected_frame(&self) -> Option<&Frame> {
+        self.selected.and_then(|id| self.frames.get(&id))
+    }
+
+    /// Borrow the selected window from the current frame/window storage.
+    ///
+    /// A fresh one-frame, one-window context needs no hashed ID probes. Only
+    /// small singleton tables use iteration: a table reduced after frame or
+    /// window churn can retain a large allocation and must use keyed lookup.
+    /// Exact keys are still checked, including the separate minibuffer leaf.
+    /// Nothing is cached across mutations; the owning mutator's borrow keeps
+    /// the selection and displayed buffer stable for this read.
+    #[inline(always)]
+    fn selected_window(&self) -> Option<&Window> {
+        let selected = self.selected?;
+        let frame = if self.frames.len() == 1 && self.frames.capacity() <= 7 {
+            self.frames
+                .iter()
+                .next()
+                .filter(|(id, _)| **id == selected)
+                .map(|(_, frame)| frame)?
+        } else {
+            self.frames.get(&selected)?
+        };
+        if frame.tree.nodes.len() == 1 && frame.tree.nodes.capacity() <= 7 {
+            frame
+                .tree
+                .nodes
+                .iter()
+                .next()
+                .filter(|(id, _)| **id == frame.selected_window)
+                .map(|(_, window)| window)
+                .or_else(|| {
+                    frame
+                        .minibuffer_leaf
+                        .as_ref()
+                        .filter(|window| window.id() == frame.selected_window)
+                })
+        } else {
+            frame.selected_window()
+        }
+    }
+
+    /// Get a mutable reference to the selected frame.
+    fn selected_frame_mut(&mut self) -> Option<&mut Frame> {
+        self.selected.and_then(|id| self.frames.get_mut(&id))
+    }
+
+    /// The root frame currently displayed on TERMINAL, independently of the
+    /// process-wide selected frame (GNU `tty_display_info::top_frame`).
+    fn top_frame_on_terminal(&self, terminal_id: u64) -> Option<FrameId> {
+        self.terminal_top_frames
+            .get(&terminal_id)
+            .copied()
+            .filter(|frame_id| {
+                self.frames
+                    .get(frame_id)
+                    .is_some_and(|frame| frame.terminal_id == terminal_id)
+            })
+    }
+
+    /// Select a frame.
+    fn select_frame(&mut self, id: FrameId) -> bool {
+        self.select_frame_with_focus_tracking(id, FrameFocusTracking::FollowSelection)
+    }
+
+    fn select_frame_with_focus_tracking(
+        &mut self,
+        id: FrameId,
+        tracking: FrameFocusTracking,
+    ) -> bool {
+        if let Some(terminal_id) = self.frames.get(&id).map(|frame| frame.terminal_id) {
+            let terminal_top = self.root_frame_id(id).unwrap_or(id);
+            let previous = self.selected;
+            self.selected = Some(id);
+            self.terminal_top_frames.insert(terminal_id, terminal_top);
+            match tracking {
+                FrameFocusTracking::Preserve => {}
+                FrameFocusTracking::FollowSelection => {
+                    if let Some(previous) = previous {
+                        let previous_value = Value::make_frame(previous.0);
+                        let redirected_value = Value::make_frame(id.0);
+                        for frame in self.frames.values_mut() {
+                            if frame.focus_frame == previous_value {
+                                frame.focus_frame = redirected_value;
+                            }
+                        }
+                    }
+                }
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Temporarily make `window_id` the selected window (and its frame the
+    /// selected frame) for the duration of mode/tab/header-line evaluation.
+    ///
+    /// Mirrors GNU `display_mode_lines` (`src/xdisp.c`), which assigns
+    /// `selected_window = w` and `XFRAME (new_frame)->selected_window` before
+    /// walking the format and restores them via `unwind_protect`.  Without
+    /// this, `:eval` forms that read `(selected-window)` — e.g.
+    /// `tab-line-tabs-window-buffers`, the default `tab-line-tabs-function`
+    /// (`lisp/tab-line.el`) — see the globally selected window instead of the
+    /// window being redisplayed, so every window's tab line shows the
+    /// selected window's buffer.  This is a lightweight assignment (no focus
+    /// redirection, no hooks), matching GNU's note that full `select_window`
+    /// is only needed if the format mutates point.  Pass the returned token to
+    /// [`Self::restore_selected_window_for_mode_line`].
+    #[must_use]
+    fn select_window_for_mode_line(
+        &mut self,
+        window_id: WindowId,
+    ) -> (Option<FrameId>, Option<(FrameId, WindowId)>) {
+        let prev_selected_frame = self.selected;
+        let frame_id = self.find_window_frame_id(window_id);
+        let prev_frame_window = frame_id.and_then(|fid| {
+            let frame = self.frames.get_mut(&fid)?;
+            let prev = frame.selected_window;
+            frame.selected_window = window_id;
+            Some((fid, prev))
+        });
+        if let Some(fid) = frame_id {
+            self.selected = Some(fid);
+        }
+        (prev_selected_frame, prev_frame_window)
+    }
+
+    /// Undo [`Self::select_window_for_mode_line`].
+    fn restore_selected_window_for_mode_line(
+        &mut self,
+        saved: (Option<FrameId>, Option<(FrameId, WindowId)>),
+    ) {
+        let (prev_selected_frame, prev_frame_window) = saved;
+        if let Some((fid, prev)) = prev_frame_window
+            && let Some(frame) = self.frames.get_mut(&fid)
+        {
+            if frame.find_window(prev).is_some() {
+                frame.selected_window = prev;
+            } else if frame.find_window(frame.selected_window).is_none()
+                && let Some(first_live_leaf) = frame.window_list().first().copied()
+            {
+                frame.selected_window = first_live_leaf;
+            }
+        }
+        self.selected = match prev_selected_frame {
+            None => None,
+            Some(previous) if self.frames.contains_key(&previous) => Some(previous),
+            Some(_) => self
+                .selected
+                .filter(|current| {
+                    self.frames
+                        .get(current)
+                        .is_some_and(|frame| frame.parent_frame.as_frame_id().is_none())
+                })
+                .or_else(|| {
+                    self.frames.iter().find_map(|(frame_id, frame)| {
+                        frame
+                            .parent_frame
+                            .as_frame_id()
+                            .is_none()
+                            .then_some(*frame_id)
+                    })
+                }),
+        };
+    }
+
+    /// Select GNU's successor for a selected frame that is about to be
+    /// deleted.  Same-terminal visible frames win; only when there is no such
+    /// frame do we fall back to another live frame.
+    fn replacement_frame_for_deletion(
+        &self,
+        id: FrameId,
+        policy: FrameDeletionSelectionPolicy,
+    ) -> Option<FrameId> {
+        let deleting = self.frames.get(&id)?;
+        let terminal_id = deleting.terminal_id;
+        let same_terminal = self
+            .frames
+            .values()
+            .filter(|candidate| {
+                candidate.id != id
+                    && candidate.terminal_id == terminal_id
+                    && candidate.visibility.is_visible()
+            })
+            .max_by_key(|candidate| {
+                let frame_list_order = candidate.id.0;
+                match policy {
+                    FrameDeletionSelectionPolicy::MostRecentlyUsed => {
+                        let use_time = candidate
+                            .window_list()
+                            .into_iter()
+                            .map(|window| self.window_use_time(window))
+                            .max()
+                            .unwrap_or(0);
+                        (use_time, frame_list_order)
+                    }
+                    FrameDeletionSelectionPolicy::FrameListOrder => (0, frame_list_order),
+                }
+            })
+            .map(|frame| frame.id);
+        same_terminal.or_else(|| {
+            self.frames
+                .values()
+                .filter(|candidate| candidate.id != id)
+                .max_by_key(|candidate| candidate.id.0)
+                .map(
+                    |candidate| match self.top_frame_on_terminal(candidate.terminal_id) {
+                        Some(top_frame) if top_frame != id => top_frame,
+                        _ => candidate.id,
+                    },
+                )
+        })
+    }
+
+    /// Delete a frame and report whether process-wide frame selection changed.
+    fn delete_frame(&mut self, id: FrameId) -> FrameDeletion {
+        let selected_replacement = (self.selected == Some(id))
+            .then(|| {
+                self.replacement_frame_for_deletion(
+                    id,
+                    FrameDeletionSelectionPolicy::FrameListOrder,
+                )
+            })
+            .flatten();
+        if let Some(frame) = self.frames.remove(&id) {
+            let terminal_id = frame.terminal_id;
+            self.pending_content_transition_intents.frames.remove(id);
+            for wid in frame.window_list() {
+                self.pending_content_transition_intents.windows.remove(wid);
+                // GNU `Fdelete_window_internal` stores the window's buffer in
+                // `old_buffer` before clearing its contents (`src/window.c`),
+                // which is what lets `window-old-buffer` still answer for a
+                // window that no longer exists.
+                self.deleted_windows
+                    .insert(wid, Self::deletion_record(Some(id), frame.find_window(wid)));
+                if let Some(window) = frame.find_window(wid) {
+                    self.deleted_window_parameters
+                        .insert(wid, window.parameters().clone());
+                }
+            }
+            if let Some(minibuffer_leaf) = frame.minibuffer_leaf.as_ref() {
+                let minibuffer_wid = minibuffer_leaf.id();
+                self.deleted_windows.insert(
+                    minibuffer_wid,
+                    Self::deletion_record(Some(id), Some(minibuffer_leaf)),
+                );
+                self.deleted_window_parameters
+                    .insert(minibuffer_wid, minibuffer_leaf.parameters().clone());
+            }
+            let selected = if self.selected == Some(id) {
+                self.selected = selected_replacement;
+                self.selected.map_or(
+                    SelectedFrameAfterDeletion::Cleared,
+                    SelectedFrameAfterDeletion::Replaced,
+                )
+            } else {
+                SelectedFrameAfterDeletion::Unchanged
+            };
+            if self.terminal_top_frames.get(&terminal_id).copied() == Some(id) {
+                let replacement = self
+                    .frames
+                    .values()
+                    .filter(|candidate| {
+                        candidate.terminal_id == terminal_id
+                            && candidate.parent_frame.as_frame_id().is_none()
+                    })
+                    .max_by_key(|candidate| candidate.id.0)
+                    .or_else(|| {
+                        self.frames
+                            .values()
+                            .filter(|candidate| candidate.terminal_id == terminal_id)
+                            .max_by_key(|candidate| candidate.id.0)
+                    })
+                    .map(|candidate| candidate.id);
+                if let Some(replacement) = replacement {
+                    self.terminal_top_frames.insert(terminal_id, replacement);
+                } else {
+                    self.terminal_top_frames.remove(&terminal_id);
+                }
+            }
+            self.mark_window_topology_changed();
+            FrameDeletion::Deleted { selected }
+        } else {
+            FrameDeletion::NotFound
+        }
+    }
+
+    /// List live frames newest first, matching GNU's prepend-only frame list.
+    fn frame_list(&self) -> Vec<FrameId> {
+        // IDs are assigned monotonically and never reused, so their reverse
+        // order is creation order without a parallel mutable order ledger.
+        let mut frames: Vec<_> = self.frames.keys().copied().collect();
+        frames.sort_unstable_by_key(|id| std::cmp::Reverse(id.0));
+        frames
+    }
+
+    /// True when a live frame is absent from `affected`.
+    fn has_frame_outside(&self, affected: &[FrameId]) -> bool {
+        self.frames
+            .keys()
+            .any(|frame_id| !affected.contains(frame_id))
+    }
+
+    /// Return FRAME's parent frame id, when FRAME is a child frame.
+    fn frame_parent_id(&self, id: FrameId) -> Option<FrameId> {
+        self.frames
+            .get(&id)
+            .and_then(|frame| frame.parent_frame.as_frame_id())
+            .map(FrameId)
+            .filter(|parent| self.frames.contains_key(parent))
+    }
+
+    /// Return the root frame reached by following parent-frame links.
+    fn root_frame_id(&self, id: FrameId) -> Option<FrameId> {
+        if !self.frames.contains_key(&id) {
+            return None;
+        }
+        let mut current = id;
+        // Frame parent chains are a handful of links; keep the cycle guard
+        // inline so the common case does not allocate a hash set per call.
+        let mut seen: smallvec::SmallVec<[FrameId; 8]> = smallvec::SmallVec::new();
+        while !seen.contains(&current) {
+            seen.push(current);
+            let Some(parent) = self.frame_parent_id(current) else {
+                return Some(current);
+            };
+            current = parent;
+        }
+        Some(current)
+    }
+
+    /// Return true when ANCESTOR is in DESCENDANT's parent-frame chain.
+    fn frame_ancestor_p(&self, ancestor: FrameId, descendant: FrameId) -> bool {
+        let mut current = descendant;
+        let mut seen: smallvec::SmallVec<[FrameId; 8]> = smallvec::SmallVec::new();
+        while !seen.contains(&current) {
+            seen.push(current);
+            let Some(parent) = self.frame_parent_id(current) else {
+                return false;
+            };
+            if parent == ancestor {
+                return true;
+            }
+            current = parent;
+        }
+        false
+    }
+
+    fn max_child_z_order(&self, parent: FrameId) -> i32 {
+        self.frames
+            .values()
+            .filter(|frame| frame.parent_frame.as_frame_id() == Some(parent.0))
+            .map(|frame| frame.z_order)
+            .max()
+            .unwrap_or(0)
+    }
+
+    fn set_child_z_order_above_siblings(&mut self, child: FrameId, parent: FrameId) {
+        let z_order = 1 + self.max_child_z_order(parent);
+        if let Some(frame) = self.frames.get_mut(&child) {
+            frame.z_order = z_order;
+        }
+    }
+
+    fn raise_or_lower_child_frame(&mut self, id: FrameId, raise: bool) {
+        let Some(parent) = self.frame_parent_id(id) else {
+            return;
+        };
+        let mut siblings: Vec<FrameId> = self
+            .frames
+            .iter()
+            .filter_map(|(frame_id, frame)| {
+                (frame.parent_frame.as_frame_id() == Some(parent.0)).then_some(*frame_id)
+            })
+            .collect();
+        siblings.sort_by(|a, b| self.frame_z_order_cmp(*a, *b));
+
+        let mut next_z = 0;
+        for sibling in siblings {
+            if sibling == id {
+                continue;
+            }
+            if let Some(frame) = self.frames.get_mut(&sibling) {
+                frame.z_order = next_z;
+            }
+            next_z += 1;
+        }
+
+        if let Some(frame) = self.frames.get_mut(&id) {
+            frame.z_order = if raise { next_z } else { 0 };
+        }
+    }
+
+    fn frame_ancestors_visible_p(&self, id: FrameId) -> bool {
+        let mut current = Some(id);
+        let mut seen = HashSet::default();
+        while let Some(frame_id) = current {
+            if !seen.insert(frame_id) {
+                return false;
+            }
+            let Some(frame) = self.frames.get(&frame_id) else {
+                return false;
+            };
+            if !frame.visibility.is_visible() {
+                return false;
+            }
+            current = self.frame_parent_id(frame_id);
+        }
+        true
+    }
+
+    fn frame_z_order_cmp(&self, a: FrameId, b: FrameId) -> std::cmp::Ordering {
+        if a == b {
+            return std::cmp::Ordering::Equal;
+        }
+        if self.frame_ancestor_p(a, b) {
+            return std::cmp::Ordering::Less;
+        }
+        if self.frame_ancestor_p(b, a) {
+            return std::cmp::Ordering::Greater;
+        }
+
+        let a_z = self.frames.get(&a).map(|frame| frame.z_order).unwrap_or(0);
+        let b_z = self.frames.get(&b).map(|frame| frame.z_order).unwrap_or(0);
+        a_z.cmp(&b_z).then_with(|| a.0.cmp(&b.0))
+    }
+
+    /// Return frames with the same root as FRAME, sorted bottom-to-top.
+    ///
+    /// The root frame is first.  Children and descendants follow according to
+    /// GNU's TTY z-order rules, where ancestors sort below descendants.
+    fn frames_in_reverse_z_order(
+        &self,
+        frame: FrameId,
+        visibility: RenderFrameVisibility,
+    ) -> Vec<FrameId> {
+        let Some(root) = self.root_frame_id(frame) else {
+            return Vec::new();
+        };
+        let mut frames: Vec<FrameId> = self
+            .frames
+            .keys()
+            .copied()
+            .filter(|frame_id| self.root_frame_id(*frame_id) == Some(root))
+            .filter(|frame_id| {
+                visibility.includes_invisible() || self.frame_ancestors_visible_p(*frame_id)
+            })
+            .collect();
+        frames.sort_by(|a, b| self.frame_z_order_cmp(*a, *b));
+        frames
+    }
+
+    fn frame_origin_in_root(&self, id: FrameId) -> Option<(f32, f32)> {
+        if !self.frames.contains_key(&id) {
+            return None;
+        }
+
+        let mut x = 0_i64;
+        let mut y = 0_i64;
+        let mut viewport_x = 0.0_f32;
+        let mut viewport_y = 0.0_f32;
+        let mut current = Some(id);
+        let mut seen = HashSet::default();
+        while let Some(frame_id) = current {
+            if !seen.insert(frame_id) {
+                return None;
+            }
+            let frame = self.frames.get(&frame_id)?;
+            x += frame.left_pos;
+            y += frame.top_pos;
+            current = self.frame_parent_id(frame_id);
+            if let Some(parent_id) = current {
+                let parent = self.frames.get(&parent_id)?;
+                let (dx, dy) = parent.child_frame_viewport_origin();
+                viewport_x += dx;
+                viewport_y += dy;
+            }
+        }
+        Some((x as f32 + viewport_x, y as f32 + viewport_y))
+    }
+
+    /// Resolve immutable parent-relative child placement through only accepted
+    /// frame presentations. Parent chrome and root desktop offsets never enter
+    /// this composition.
+    fn place_active_frame(
+        &self,
+        frame: FrameId,
+        presentation: geometry::PresentationId,
+    ) -> Result<neomacs_display_protocol::PlacedFrame, neomacs_display_protocol::PlaceChildError>
+    {
+        let scene = neomacs_display_protocol::PresentedFrameScene::from_placements(
+            self.frames.values().filter_map(|frame| {
+                frame
+                    .active_presentation_geometry()
+                    .map(|geometry| geometry.frame_placement())
+            }),
+        )?;
+        scene.place(neomacs_display_protocol::PlaceChildQuery::new(
+            neomacs_display_protocol::DisplayFrameId::new(frame.0),
+            neomacs_display_protocol::PresentationId::new(presentation.get()),
+        ))
+    }
+
+    fn render_frame_tree(
+        &self,
+        selected_or_root: FrameId,
+        visibility: RenderFrameVisibility,
+    ) -> Option<RenderFrameTree> {
+        let root_id = self.root_frame_id(selected_or_root)?;
+        let frames_bottom_to_top = self
+            .frames_in_reverse_z_order(root_id, visibility)
+            .into_iter()
+            .filter_map(|frame_id| {
+                let frame = self.frames.get(&frame_id)?;
+                let (origin_in_root_x, origin_in_root_y) = self.frame_origin_in_root(frame_id)?;
+                Some(RenderFrameNode {
+                    frame_id,
+                    parent_id: self.frame_parent_id(frame_id),
+                    origin_in_root_x,
+                    origin_in_root_y,
+                    z_order: frame.z_order,
+                })
+            })
+            .collect();
+
+        Some(RenderFrameTree {
+            root_id,
+            frames_bottom_to_top,
+        })
+    }
+
+    /// Return owned render trees for the requested backend scope.
+    ///
+    /// Each root appears once and owns all of its visible descendants.  Native
+    /// window roots are sorted by stable frame id so HashMap iteration order
+    /// cannot perturb presentation submission order.
+    fn render_frame_forest(
+        &self,
+        scope: RenderFrameScope,
+        visibility: RenderFrameVisibility,
+    ) -> Vec<RenderFrameTree> {
+        let mut roots: Vec<FrameId> = match scope {
+            RenderFrameScope::TreeContaining(frame_id) => {
+                self.root_frame_id(frame_id).into_iter().collect()
+            }
+            RenderFrameScope::AllNativeWindowTrees => self
+                .frames
+                .iter()
+                .filter_map(|(frame_id, frame)| {
+                    (self.frame_parent_id(*frame_id).is_none()
+                        && frame.effective_window_system().is_some())
+                    .then_some(*frame_id)
+                })
+                .collect(),
+        };
+        roots.sort_by_key(|frame_id| frame_id.0);
+        roots.dedup();
+        roots
+            .into_iter()
+            .filter_map(|root| self.render_frame_tree(root, visibility))
+            .filter(|tree| !tree.frames_bottom_to_top.is_empty())
+            .collect()
+    }
+
+    /// Split a window horizontally or vertically.
+    /// Returns the new window's ID, or None if the window wasn't found.
+    ///
+    /// `size` controls how space is divided:
+    /// - `None` or `Some(0)`: split 50/50
+    /// - `Some(n)` where n > 0: the **new** window gets `n` units (lines or
+    ///   columns), the old window gets the remainder.
+    /// - `Some(n)` where n < 0: the **old** window gets `|n|` units, the new
+    ///   window gets the remainder.
+    ///
+    /// `placement` controls whether the new window is inserted before or after
+    /// the split target in the parent child list. This mirrors GNU
+    /// `split-window-internal` side ordering: `above`/`left` insert before the
+    /// target, while `below`/`right` insert after it.
+    fn split_window(
+        &mut self,
+        frame_id: FrameId,
+        window_id: WindowId,
+        direction: SplitDirection,
+        new_buffer_id: BufferId,
+        size: Option<i64>,
+        placement: SplitPlacement,
+    ) -> Option<WindowId> {
+        self.split_window_with_combination_limit(
+            frame_id,
+            window_id,
+            direction,
+            new_buffer_id,
+            size,
+            placement,
+            CombinationLimit::TreeDecides,
+        )
+    }
+
+    /// Split a window, honoring the caller's `window-combination-limit`.
+    ///
+    /// [`Self::split_window`] is the same operation with the variable's
+    /// default (`nil`) policy. Only the Lisp entry point
+    /// (`split-window-internal`) has a dynamic binding to pass here; GNU reads
+    /// it as `Vwindow_combination_limit` in `Fsplit_window_internal`
+    /// (`src/window.c:5426`).
+    #[allow(clippy::too_many_arguments)] // mirrors GNU's split parameter set
+    fn split_window_with_combination_limit(
+        &mut self,
+        frame_id: FrameId,
+        window_id: WindowId,
+        direction: SplitDirection,
+        new_buffer_id: BufferId,
+        size: Option<i64>,
+        placement: SplitPlacement,
+        combination_limit: CombinationLimit,
+    ) -> Option<WindowId> {
+        let internal_id = self.alloc_window_id();
+        let new_id = self.alloc_window_id();
+        let frame = self.frames.get_mut(&frame_id)?;
+
+        // GNU decides "interpose a new parent" vs "splice into the existing
+        // combination" *before* touching the tree, from the dynamic variable
+        // plus the target's position in it (`src/window.c:5423-5431`).
+        let parent = parent_combination_of(frame.tree(), window_id)?;
+        let attachment = SplitAttachment::decide(combination_limit, parent, direction);
+
+        split_window_in_tree(
+            frame.tree_mut(),
+            window_id,
+            direction,
+            internal_id,
+            new_id,
+            new_buffer_id,
+            size,
+            placement,
+            attachment,
+        )?;
+
+        // Character edges are NOT re-derived here, and that is deliberate.
+        //
+        // GNU assigns them at resize-apply points -- `Fwindow_resize_apply_total`
+        // sets `r->top_line = FRAME_TOP_MARGIN (f)` and the recursive pass flows
+        // rows to children (`src/window.c:5020`) -- rather than maintaining them
+        // as an invariant over the pixel bounds.  They are therefore legitimately
+        // path-dependent in GNU: with two side windows GNU reports the ROOT at
+        // character row 1 and its CHILD at row 0, both with pixel top 0.
+        //
+        // Syncing here looks more coherent and is measurably wrong: it pulls
+        // side-window leaves down a line, which is what the earlier warning
+        // about `sync_window_area_bounds` was describing, and a
+        // character-edge-only sync does it just the same.
+        frame.recalculate_minibuffer_bounds();
+        frame.tty_posn_adjust_current_matrices();
+        self.mark_window_topology_changed();
+        Some(new_id)
+    }
+
+    /// Commit the sizes `window.el` staged for the combination that just
+    /// gained `new_window_id`.
+    ///
+    /// Mirrors the tail of GNU `Fsplit_window_internal`
+    /// (`src/window.c:5636-5672`): the new window's own size is staged from the
+    /// SIZE argument,
+    ///
+    /// ```c
+    /// wset_new_pixel (n, pixel_size);
+    /// ...
+    /// window_resize_apply (p, horflag);
+    /// ```
+    ///
+    /// and then the whole parent combination is applied, so the siblings that
+    /// `window.el` shrank actually shrink. Without this the primitive would be
+    /// re-deriving a layout the Lisp layer already computed — which is how
+    /// `window-combination-resize` came to have no effect at all, since under
+    /// that policy the new window's space comes from *every* sibling rather
+    /// than only from the split target.
+    fn apply_staged_split_sizes(
+        &mut self,
+        frame_id: FrameId,
+        new_window_id: WindowId,
+        new_size: Option<i64>,
+        new_normal: Value,
+        direction: SplitDirection,
+    ) -> Option<()> {
+        let frame = self.frames.get_mut(&frame_id)?;
+        if let Some(window) = frame.find_window_mut(new_window_id) {
+            if let Some(size) = new_size {
+                window.set_new_pixel(Some(size));
+            }
+            // GNU `wset_new_normal (n, normal_size)`, unconditionally: a nil
+            // NORMAL-SIZE leaves the new window at `make_window`'s 1.0 rather
+            // than committing a value cloned from the split target.  The
+            // *other* children's fractions were staged by `window.el`, so they
+            // are not touched here -- `window_resize_apply` commits them all
+            // together.
+            window.set_new_normal(new_normal);
+        }
+        let parent_id = frame.tree().parent_of(new_window_id)?;
+        let horflag = matches!(direction, SplitDirection::Horizontal);
+        let (char_width, char_height) = (frame.char_width, frame.char_height);
+        window_resize_apply(
+            frame.tree_mut(),
+            parent_id,
+            horflag,
+            char_width,
+            char_height,
+        );
+        frame.tty_posn_adjust_current_matrices();
+        Some(())
+    }
+
+    /// Delete a window from a frame. Cannot delete the last window.
+    ///
+    /// The freed space is spread over the remaining siblings. Callers coming
+    /// from Lisp must use [`Self::delete_window_with_resize`] with
+    /// [`DeleteResize::ApplyStaged`] instead, so that the sizes `window.el`
+    /// already staged are honored.
+    fn delete_window(&mut self, frame_id: FrameId, window_id: WindowId) -> bool {
+        self.delete_window_with_resize(frame_id, window_id, DeleteResize::Redistribute)
+    }
+
+    /// Delete a window, reclaiming its space per `resize`.
+    ///
+    /// Mirrors GNU `Fdelete_window_internal`, which unlinks the window and then
+    /// commits the staged sizes with `window_resize_apply`.
+    fn delete_window_with_resize(
+        &mut self,
+        frame_id: FrameId,
+        window_id: WindowId,
+        resize: DeleteResize,
+    ) -> bool {
+        let Some(frame) = self.frames.get_mut(&frame_id) else {
+            return false;
+        };
+        if frame.tree().leaf_count() <= 1 {
+            return false; // Can't delete last window
+        }
+
+        let deleted_windows = &mut self.deleted_windows;
+        let deleted_parameters = &mut self.deleted_window_parameters;
+        // A promotion at the very top has no grandparent to merge into, so the
+        // outcome collapses to "was it removed" here.
+        let cells = body::WindowBodyCellSize::new(frame.char_width, frame.char_height);
+        let removed = delete_window_in_tree(frame.tree_mut(), window_id, resize, cells, |window| {
+            let id = window.id();
+            let record = Self::deletion_record(Some(frame_id), Some(&window));
+            let parameters = match window {
+                Window::Leaf { parameters, .. } | Window::Internal { parameters, .. } => parameters,
+            };
+            deleted_windows.insert(id, record);
+            deleted_parameters.insert(id, parameters);
+        })
+        .removed();
+        if removed {
+            // No character-edge resync here either; see the note in
+            // `split_window_with_combination_limit`.  GNU assigns those rows at
+            // resize-apply points, so a survivor keeps its old row until
+            // `window-resize-apply-total` runs -- which is what `window.el`
+            // does on the paths GNU allows into this code at all.
+            frame.recalculate_minibuffer_bounds();
+            frame.tty_posn_adjust_current_matrices();
+        }
+
+        // Deleting an INTERNAL window takes its whole subtree with it, so the
+        // selected window can die without being the one named -- `delete-window`
+        // on a member of an atomic window deletes the atom's ROOT, killing every
+        // leaf beneath it.  Testing `selected_window == window_id` missed that
+        // and left the frame pointing at a dead window, which the next
+        // `window-normalize-window ... t` reported as
+        // "#<window N> is not a live window".  Ask the tree instead.
+        if removed && frame.find_window(frame.selected_window).is_none() {
+            // Select the first remaining leaf. We do NOT touch
+            // `old_selected_window` here — that field is recorded
+            // by `window_change_record` (GNU
+            // `src/window.c:3954-3990`) at redisplay time, not
+            // immediately on deletion.
+            if let Some(first) = frame.tree().leaf_ids().first() {
+                frame.selected_window = *first;
+            }
+        }
+
+        if removed {
+            self.mark_window_topology_changed();
+        }
+
+        removed
+    }
+
+    /// Replace ROOT with its descendant WINDOW, deleting the other windows in
+    /// ROOT's subtree.
+    ///
+    /// This mirrors GNU Emacs's `delete-other-windows-internal` /
+    /// `replace_window`: WINDOW keeps its identity and window-local state but
+    /// inherits ROOT's geometry and normal sizes.  Keeping this as one tree
+    /// transition avoids the geometry drift caused by deleting sibling leaves
+    /// one at a time.
+    fn keep_only_window_in_subtree(
+        &mut self,
+        frame_id: FrameId,
+        window_id: WindowId,
+        root_id: WindowId,
+    ) -> bool {
+        let Some(frame) = self.frames.get_mut(&frame_id) else {
+            return false;
+        };
+        let Some(root) = frame.tree().find(root_id) else {
+            return false;
+        };
+        if frame.tree().find(window_id).is_none() {
+            return false;
+        }
+
+        if window_id == root_id {
+            return true;
+        }
+
+        let root_bounds = *root.bounds();
+        let root_top_line = root.top_line();
+        let root_left_col = root.left_col();
+        let root_normal_lines = root.normal_lines();
+        let root_normal_cols = root.normal_cols();
+
+        let kept_ids: HashSet<WindowId> = frame.tree().subtree_ids(window_id).into_iter().collect();
+        let removed_windows: Vec<(WindowId, WindowParameters)> = frame
+            .tree()
+            .subtree_ids(root_id)
+            .into_iter()
+            .filter(|id| !kept_ids.contains(id))
+            .filter_map(|id| {
+                frame
+                    .tree()
+                    .find(id)
+                    .map(|window| (id, window.parameters().clone()))
+            })
+            .collect();
+
+        // WINDOW takes ROOT's place in the tree.  GNU's `replace_window` does
+        // exactly this relinking -- the kept window keeps its identity and
+        // window-local state and inherits ROOT's geometry -- which under ids is
+        // repointing one slot rather than copying a subtree over another.
+        let parent = frame.tree().parent_of(root_id);
+        match parent {
+            Some(parent_id) => {
+                let mut siblings = frame.tree().child_ids(parent_id).to_vec();
+                for slot in &mut siblings {
+                    if *slot == root_id {
+                        *slot = window_id;
+                    }
+                }
+                frame.tree_mut().set_children(parent_id, siblings);
+            }
+            None => frame.tree_mut().set_root(window_id),
+        }
+
+        resize_window_subtree(frame.tree_mut(), window_id, root_bounds);
+        let (char_width, char_height) = (frame.char_width, frame.char_height);
+        sync_window_character_edges_from_bounds_at(
+            frame.tree_mut(),
+            window_id,
+            root_left_col,
+            root_top_line,
+            char_width,
+            char_height,
+        );
+        if let Some(replacement) = frame.tree_mut().find_mut(window_id) {
+            replacement.set_normal_lines(root_normal_lines);
+            replacement.set_normal_cols(root_normal_cols);
+            if let Window::Leaf {
+                vscroll,
+                preserve_vscroll_p,
+                ..
+            } = replacement
+            {
+                *vscroll = 0;
+                *preserve_vscroll_p = false;
+            }
+        }
+        // The whole kept subtree's redisplay state is stale, not just the node
+        // that took ROOT's slot.
+        for leaf in frame.tree().leaf_ids_of(window_id) {
+            if let Some(node) = frame.tree_mut().find_mut(leaf) {
+                node.invalidate_display_state();
+            }
+        }
+
+        // The unlinked subtree's nodes go away with the windows they name.
+        for (id, _) in &removed_windows {
+            frame.tree_mut().remove(*id);
+        }
+
+        if !frame
+            .tree()
+            .subtree_ids(window_id)
+            .contains(&frame.selected_window)
+            && let Some(first) = frame.tree().leaf_ids_of(window_id).first()
+        {
+            frame.selected_window = *first;
+        }
+        frame.recalculate_minibuffer_bounds();
+        frame.tty_posn_adjust_current_matrices();
+
+        for (id, parameters) in removed_windows {
+            self.deleted_windows.insert(
+                id,
+                DeletedWindowRecord {
+                    owner: Some(frame_id),
+                    old_buffer: None,
+                    change_stamp: None,
+                },
+            );
+            self.deleted_window_parameters.insert(id, parameters);
+        }
+
+        self.mark_window_topology_changed();
+
+        true
+    }
+
+    fn alloc_window_id(&mut self) -> WindowId {
+        let id = WindowId(self.next_window_id);
+        self.next_window_id += 1;
+        self.deleted_windows.remove(&id);
+        self.deleted_window_parameters.remove(&id);
+        id
+    }
+
+    /// Replace dead-buffer bindings in every live frame.
+    fn replace_buffer_in_windows(&mut self, old_id: BufferId, new_id: BufferId) {
+        for frame in self.frames.values_mut() {
+            frame.replace_buffer_bindings(old_id, new_id);
+        }
+    }
+
+    /// Return the frame containing a live window ID, if any.
+    fn find_window_frame_id(&self, window_id: WindowId) -> Option<FrameId> {
+        self.frames.iter().find_map(|(frame_id, frame)| {
+            frame.find_window(window_id)?.is_leaf().then_some(*frame_id)
+        })
+    }
+
+    /// Buffer displayed by WINDOW_ID, if it is a live leaf window.
+    ///
+    /// Mirrors reading `XWINDOW (w)->contents`: GNU's `Fforce_window_update`
+    /// uses it to mark the displayed buffer (`prevent_redisplay_optimizations_p`)
+    /// in addition to the window itself.
+    fn window_buffer_id(&self, window_id: WindowId) -> Option<BufferId> {
+        self.frames
+            .values()
+            .find_map(|frame| frame.find_window(window_id).and_then(Window::buffer_id))
+    }
+
+    /// Return true if WINDOW_ID is the minibuffer window of any live frame.
+    /// (Structural replacement for the old `id >= MINIBUFFER_WINDOW_ID_BASE`
+    /// magic-range check.)
+    fn is_minibuffer_window_id(&self, window_id: WindowId) -> bool {
+        self.frames
+            .values()
+            .any(|frame| frame.minibuffer_window == Some(window_id))
+    }
+
+    /// Return the frame containing a valid window ID, if any.
+    ///
+    /// Valid windows include live leaf windows, internal windows, and the
+    /// minibuffer window of a live frame.
+    fn find_valid_window_frame_id(&self, window_id: WindowId) -> Option<FrameId> {
+        self.frames
+            .iter()
+            .find_map(|(frame_id, frame)| frame.find_window(window_id).map(|_| *frame_id))
+    }
+
+    /// Return the recorded owner of a live or deleted window object.
+    ///
+    /// A retained owner identity does not imply the frame is still live.
+    /// Missing ownership remains unknown rather than naming an unrelated frame.
+    fn window_owner_frame_id(&self, window_id: WindowId) -> Option<FrameId> {
+        self.find_valid_window_frame_id(window_id).or_else(|| {
+            self.deleted_windows
+                .get(&window_id)
+                .and_then(|record| record.owner)
+        })
+    }
+
+    /// Return true when WINDOW-ID designates a live window in any frame.
+    fn is_live_window_id(&self, window_id: WindowId) -> bool {
+        self.find_window_frame_id(window_id).is_some()
+    }
+
+    /// Return true when WINDOW-ID designates a valid live or internal window.
+    fn is_valid_window_id(&self, window_id: WindowId) -> bool {
+        self.find_valid_window_frame_id(window_id).is_some()
+    }
+
+    /// Return true when WINDOW-ID designates a live or stale window object.
+    /// The frame owning WINDOW_ID for GNU's `decode_any_window` -- `CHECK_WINDOW`,
+    /// which admits a live window, an internal window, and one that has been
+    /// deleted.
+    /// GNU's `window-old-buffer` answer for WINDOW, as a closed set.
+    ///
+    /// ```c
+    ///   return (NILP (w->old_buffer)                                   ? Qnil
+    ///           : (w->change_stamp != WINDOW_XFRAME (w)->change_stamp) ? Qt
+    ///           : w->old_buffer);
+    /// ```
+    ///
+    /// The three arms are a sum type, not two nullable slots compared at every
+    /// call: an old buffer without an epoch, or an epoch without a buffer, are
+    /// states GNU can represent and this cannot.
+    fn window_old_buffer(&self, window_id: WindowId) -> WindowOldBuffer {
+        // A LIVE window answers from what the last window-change record left on
+        // it; only a window that is no longer live falls back to what it
+        // recorded on the way out.
+        //
+        // The order matters and is not GNU's problem: GNU holds a deleted
+        // window as its own object, while neomacs keys the record on an id
+        // that can come back -- `set-window-configuration` deletes and re-adds
+        // windows, so consulting the deletion record first let a stale entry
+        // shadow the live window and answer nil for a window that had just
+        // been recorded.
+        let live = self
+            .find_valid_window_frame_id(window_id)
+            .and_then(|frame_id| self.frames.get(&frame_id));
+        let (old_buffer, stamp, frame_stamp) = if let Some(frame) = live {
+            let window = frame.find_window(window_id);
+            (
+                window.and_then(Window::old_buffer),
+                window.and_then(Window::change_stamp),
+                Some(frame.change_stamp),
+            )
+        } else if let Some(record) = self.deleted_windows.get(&window_id) {
+            let frame_stamp = self
+                .any_window_frame_id(window_id)
+                .and_then(|fid| self.frames.get(&fid))
+                .map(|frame| frame.change_stamp);
+            (record.old_buffer, record.change_stamp, frame_stamp)
+        } else {
+            return WindowOldBuffer::NeverRecorded;
+        };
+
+        match old_buffer {
+            None => WindowOldBuffer::NeverRecorded,
+            Some(buffer) if stamp == frame_stamp => WindowOldBuffer::Recorded(buffer),
+            Some(_) => WindowOldBuffer::StaleEpoch,
+        }
+    }
+
+    /// Numeric object state used by GNU window-configuration restoration.
+    /// A live leaf supplies its outgoing buffer and epoch; a resurrected leaf
+    /// retains its deletion record. Reads require an immutable FrameManager
+    /// borrow within the owning Context and add no shared or thread-local state.
+    fn window_restore_change_record(&self, window_id: WindowId) -> Option<DeletedWindowRecord> {
+        self.lookup_window(window_id)
+            .map(|window| {
+                Self::deletion_record(self.find_valid_window_frame_id(window_id), Some(window))
+            })
+            .or_else(|| self.deleted_windows.get(&window_id).copied())
+    }
+
+    /// What a window should remember once it is deleted.
+    ///
+    /// Mirrors GNU's `wset_old_buffer (w, w->contents)` in
+    /// `Fdelete_window_internal`: a live leaf remembers the buffer it was
+    /// showing, an internal window has none to remember.
+    fn deletion_record(owner: Option<FrameId>, window: Option<&Window>) -> DeletedWindowRecord {
+        DeletedWindowRecord {
+            owner,
+            old_buffer: window.and_then(Window::buffer_id),
+            change_stamp: window.and_then(Window::change_stamp),
+        }
+    }
+
+    fn any_window_frame_id(&self, window_id: WindowId) -> Option<FrameId> {
+        self.find_valid_window_frame_id(window_id).or_else(|| {
+            self.deleted_windows
+                .contains_key(&window_id)
+                .then(|| self.frames.keys().copied().next())
+                .flatten()
+        })
+    }
+
+    fn is_window_object_id(&self, window_id: WindowId) -> bool {
+        self.is_valid_window_id(window_id) || self.deleted_windows.contains_key(&window_id)
+    }
+
+    /// Look up a window by id across every live frame, returning a
+    /// shared reference. Mirrors GNU's `decode_window` plus tree
+    /// walk.
+    fn lookup_window(&self, window_id: WindowId) -> Option<&Window> {
+        for frame in self.frames.values() {
+            if let Some(w) = frame.find_window(window_id) {
+                return Some(w);
+            }
+        }
+        None
+    }
+
+    /// Look up a window by id across every live frame, returning a
+    /// mutable reference.
+    fn lookup_window_mut(&mut self, window_id: WindowId) -> Option<&mut Window> {
+        for frame in self.frames.values_mut() {
+            if let Some(w) = frame.find_window_mut(window_id) {
+                return Some(w);
+            }
+        }
+        None
+    }
+
+    /// Read `w->new_pixel`. Mirrors GNU
+    /// `Fwindow_new_pixel` (`src/window.c`). Returns `None` if the
+    /// window doesn't exist or has no pending pixel size.
+    fn window_new_pixel(&self, window_id: WindowId) -> Option<i64> {
+        self.lookup_window(window_id).and_then(Window::new_pixel)
+    }
+
+    /// Read `w->new_total`. Mirrors GNU `Fwindow_new_total`.
+    fn window_new_total(&self, window_id: WindowId) -> Option<i64> {
+        self.lookup_window(window_id).and_then(Window::new_total)
+    }
+
+    /// Read `w->new_normal`. Mirrors GNU `Fwindow_new_normal`.
+    fn window_new_normal(&self, window_id: WindowId) -> Value {
+        self.lookup_window(window_id)
+            .map(Window::new_normal)
+            .unwrap_or(Value::NIL)
+    }
+
+    /// Store a checked GNU staging result before the window is mutated.
+    /// Live geometry separately requires a validated WindowPixels.
+    fn set_window_new_pixel(
+        &mut self,
+        window_id: WindowId,
+        size: WindowPixelStage,
+    ) -> WindowPixelStage {
+        if let Some(window) = self.lookup_window_mut(window_id) {
+            window.set_new_pixel(Some(i64::from(size)));
+        }
+        size
+    }
+
+    /// Store the canonical GNU fixnum total, replacing the staged value or
+    /// adding to it (`Fset_window_new_total`). Fails only when a staged total
+    /// outside the fixnum range would have to be added to.
+    fn set_window_new_total(
+        &mut self,
+        window_id: WindowId,
+        size: WindowTotal,
+        update: NewTotalUpdate,
+    ) -> Result<WindowTotal, crate::tagged::value::FixnumRangeError> {
+        let Some(window) = self.lookup_window_mut(window_id) else {
+            return Ok(size);
+        };
+        let stored = match update {
+            NewTotalUpdate::Replace => size,
+            NewTotalUpdate::Add => {
+                WindowTotal::try_from(window.new_total().unwrap_or(0))?.gnu_added(size)
+            }
+        };
+        window.set_new_total(Some(i64::from(stored)));
+        Ok(stored)
+    }
+
+    /// Write `w->new_normal`. Mirrors GNU `Fset_window_new_normal`.
+    fn set_window_new_normal(&mut self, window_id: WindowId, value: Value) {
+        if let Some(window) = self.lookup_window_mut(window_id) {
+            window.set_new_normal(value);
+        }
+    }
+
+    fn window_display_state(
+        &self,
+        window_id: WindowId,
+    ) -> Option<(&Frame, &WindowDisplayState, bool)> {
+        self.frames.values().find_map(|frame| {
+            frame.find_window(window_id).and_then(|window| {
+                window
+                    .display()
+                    .map(|display| (frame, display, frame.minibuffer_window == Some(window_id)))
+            })
+        })
+    }
+
+    fn window_display_location(&self, window_id: WindowId) -> Option<(super::FrameId, bool)> {
+        let frame_id = self.find_window_frame_id(window_id)?;
+        let frame = self.get(frame_id)?;
+        Some((frame_id, frame.minibuffer_window == Some(window_id)))
+    }
+
+    /// Return WINDOW-ID's Lisp-visible vertical scroll amount.
+    fn window_vscroll(&self, window_id: WindowId, pixelwise: bool) -> Option<Value> {
+        let frame_id = self.find_window_frame_id(window_id)?;
+        let frame = self.get(frame_id)?;
+        let Window::Leaf { vscroll, .. } = frame.find_window(window_id)? else {
+            return None;
+        };
+        if frame.effective_window_system().is_none() {
+            return Some(Value::fixnum(0));
+        }
+        let pixels = -i64::from(*vscroll);
+        Some(if pixelwise {
+            Value::fixnum(pixels)
+        } else {
+            canon_y_from_pixel_y(frame, pixels)
+        })
+    }
+
+    /// Set WINDOW-ID's vertical scroll amount and return the Lisp-visible value.
+    fn set_window_vscroll(
+        &mut self,
+        window_id: WindowId,
+        vscroll: f64,
+        pixelwise: bool,
+        preserve_vscroll_p: bool,
+    ) -> Option<Value> {
+        let frame_id = self.find_window_frame_id(window_id)?;
+        let line_height = self
+            .get(frame_id)
+            .map(frame_line_height)
+            .unwrap_or(1)
+            .max(1);
+        if self
+            .get(frame_id)
+            .is_none_or(|frame| frame.effective_window_system().is_none())
+        {
+            return Some(Value::fixnum(0));
+        }
+
+        let next_pixels = if pixelwise {
+            vscroll.trunc() as i64
+        } else {
+            (vscroll * line_height as f64).trunc() as i64
+        };
+        let next_raw = std::cmp::min(-next_pixels, 0).clamp(i64::from(i32::MIN), 0) as i32;
+
+        let frame = self.get_mut(frame_id)?;
+        if let Some(Window::Leaf {
+            vscroll,
+            preserve_vscroll_p: preserve,
+            ..
+        }) = frame.find_window_mut(window_id)
+        {
+            let changed = *vscroll != next_raw;
+            *vscroll = next_raw;
+            *preserve = preserve_vscroll_p;
+            if changed {
+                frame.remove_redisplay_snapshot(window_id);
+            }
+        }
+
+        let frame = self.get(frame_id)?;
+        if frame.effective_window_system().is_none() {
+            return Some(Value::fixnum(0));
+        }
+        let Window::Leaf { vscroll, .. } = frame.find_window(window_id)? else {
+            return None;
+        };
+        let pixels = -i64::from(*vscroll);
+        Some(if pixelwise {
+            Value::fixnum(pixels)
+        } else {
+            canon_y_from_pixel_y(frame, pixels)
+        })
+    }
+
+    /// Return window display table object for WINDOW-ID, or nil when unset.
+    fn window_display_table(&self, window_id: WindowId) -> Value {
+        self.window_display_state(window_id)
+            .map(|(_, display, _)| display.display_table)
+            .unwrap_or(Value::NIL)
+    }
+
+    /// Set window display table object for WINDOW-ID.
+    fn set_window_display_table(&mut self, window_id: WindowId, table: Value) {
+        if let Some((frame_id, _)) = self.window_display_location(window_id)
+            && let Some(display) = self
+                .get_mut(frame_id)
+                .and_then(|frame| frame.find_window_mut(window_id))
+                .and_then(Window::display_mut)
+        {
+            display.display_table = table;
+        }
+    }
+
+    /// Return window cursor-type object for WINDOW-ID.
+    ///
+    /// GNU Emacs defaults to `t` when no explicit per-window cursor-type is set.
+    fn window_cursor_type(&self, window_id: WindowId) -> Value {
+        self.window_display_state(window_id)
+            .map(|(_, display, _)| display.cursor_type)
+            .unwrap_or(Value::T)
+    }
+
+    /// Set window cursor-type object for WINDOW-ID.
+    fn set_window_cursor_type(&mut self, window_id: WindowId, cursor_type: Value) {
+        if let Some((frame_id, _)) = self.window_display_location(window_id)
+            && let Some(display) = self
+                .get_mut(frame_id)
+                .and_then(|frame| frame.find_window_mut(window_id))
+                .and_then(Window::display_mut)
+        {
+            display.cursor_type = cursor_type;
+        }
+    }
+
+    /// Return whether WINDOW-ID's cursor is logically visible.
+    fn window_cursor_visible(&self, window_id: WindowId) -> bool {
+        self.window_display_state(window_id)
+            .map(|(_, display, _)| !display.cursor_off_p)
+            .unwrap_or(true)
+    }
+
+    /// Set whether WINDOW-ID's cursor is logically visible.
+    ///
+    /// This mirrors GNU's `w->cursor_off_p`: redisplay may continue to own a
+    /// physical cursor geometry while Lisp has requested that it stay hidden.
+    fn set_window_cursor_visible(&mut self, window_id: WindowId, visible: bool) {
+        if let Some((frame_id, _)) = self.window_display_location(window_id)
+            && let Some(display) = self
+                .get_mut(frame_id)
+                .and_then(|frame| frame.find_window_mut(window_id))
+                .and_then(Window::display_mut)
+        {
+            display.cursor_off_p = !visible;
+        }
+    }
+
+    /// Return the effective fringe widths and raw flags for WINDOW-ID.
+    fn window_fringes(&self, window_id: WindowId) -> Option<(i64, i64, bool, bool)> {
+        let (frame, display, _) = self.window_display_state(window_id)?;
+        if frame.effective_window_system().is_none() {
+            return Some((0, 0, false, false));
+        }
+        Some((
+            i64::from(if display.left_fringe_width >= 0 {
+                display.left_fringe_width
+            } else {
+                frame_default_left_fringe_width(frame)
+            }),
+            i64::from(if display.right_fringe_width >= 0 {
+                display.right_fringe_width
+            } else {
+                frame_default_right_fringe_width(frame)
+            }),
+            display.fringes_outside_margins,
+            display.fringes_persistent,
+        ))
+    }
+
+    /// Set raw window fringe settings. Returns true when the visible fringe state changed.
+    fn set_window_fringes(
+        &mut self,
+        window_id: WindowId,
+        left_width: Option<i32>,
+        right_width: Option<i32>,
+        outside_margins: bool,
+        persistent: bool,
+    ) -> bool {
+        let previous = self.window_fringes(window_id);
+        let Some((frame_id, _)) = self.window_display_location(window_id) else {
+            return false;
+        };
+        if self
+            .get(frame_id)
+            .is_none_or(|frame| frame.effective_window_system().is_none())
+        {
+            return false;
+        }
+        if let Some(display) = self
+            .get_mut(frame_id)
+            .and_then(|frame| frame.find_window_mut(window_id))
+            .and_then(Window::display_mut)
+        {
+            display.left_fringe_width = left_width.unwrap_or(-1);
+            display.right_fringe_width = right_width.unwrap_or(-1);
+            display.fringes_outside_margins = outside_margins;
+            display.fringes_persistent = persistent;
+        }
+        self.window_fringes(window_id) != previous
+    }
+
+    /// Return raw window scroll-bar settings plus effective area metrics.
+    fn window_scroll_bars(
+        &self,
+        window_id: WindowId,
+    ) -> Option<(Value, i64, Value, Value, i64, Value, bool)> {
+        let (frame, display, is_minibuffer) = self.window_display_state(window_id)?;
+        Some((
+            if display.scroll_bar_width >= 0 {
+                Value::fixnum(i64::from(display.scroll_bar_width))
+            } else {
+                Value::NIL
+            },
+            vertical_scroll_bar_cols(frame, display),
+            display.vertical_scroll_bar_type,
+            if display.scroll_bar_height >= 0 {
+                Value::fixnum(i64::from(display.scroll_bar_height))
+            } else {
+                Value::NIL
+            },
+            horizontal_scroll_bar_lines(frame, display, is_minibuffer),
+            display.horizontal_scroll_bar_type,
+            display.scroll_bars_persistent,
+        ))
+    }
+
+    /// Return the effective vertical scroll-bar area width in pixels.
+    fn window_scroll_bar_area_width(&self, window_id: WindowId) -> i64 {
+        self.window_display_state(window_id)
+            .map(|(frame, display, _)| vertical_scroll_bar_area_width(frame, display))
+            .unwrap_or(0)
+    }
+
+    /// Return the effective left vertical scroll-bar area width in pixels.
+    fn window_left_scroll_bar_area_width(&self, window_id: WindowId) -> i64 {
+        self.window_display_state(window_id)
+            .map(|(frame, display, _)| left_scroll_bar_area_width(frame, display))
+            .unwrap_or(0)
+    }
+
+    /// Return the effective right vertical scroll-bar area width in pixels.
+    fn window_right_scroll_bar_area_width(&self, window_id: WindowId) -> i64 {
+        self.window_display_state(window_id)
+            .map(|(frame, display, _)| right_scroll_bar_area_width(frame, display))
+            .unwrap_or(0)
+    }
+
+    /// Return the effective horizontal scroll-bar area height in pixels.
+    fn window_scroll_bar_area_height(&self, window_id: WindowId) -> i64 {
+        self.window_display_state(window_id)
+            .map(|(frame, display, is_minibuffer)| {
+                horizontal_scroll_bar_area_height(frame, display, is_minibuffer)
+            })
+            .unwrap_or(0)
+    }
+
+    /// Set raw window scroll-bar settings. Returns true when the visible scroll-bar state changed.
+    fn set_window_scroll_bars(
+        &mut self,
+        window_id: WindowId,
+        width: Option<i32>,
+        vertical_type: Value,
+        height: Option<i32>,
+        horizontal_type: Value,
+        persistent: bool,
+    ) -> bool {
+        let previous = self.window_scroll_bars(window_id);
+        let Some((frame_id, is_minibuffer)) = self.window_display_location(window_id) else {
+            return false;
+        };
+        if self
+            .get(frame_id)
+            .is_none_or(|frame| frame.effective_window_system().is_none())
+        {
+            return false;
+        }
+        let mut next_vertical_type = vertical_type;
+        if width == Some(0) {
+            next_vertical_type = Value::NIL;
+        }
+        let mut next_horizontal_type = horizontal_type;
+        if height == Some(0)
+            || (is_minibuffer
+                && HorizontalScrollBarType::from_symbol_value(&next_horizontal_type).is_none())
+        {
+            next_horizontal_type = Value::NIL;
+        }
+        if let Some(display) = self
+            .get_mut(frame_id)
+            .and_then(|frame| frame.find_window_mut(window_id))
+            .and_then(Window::display_mut)
+        {
+            display.scroll_bar_width = width.unwrap_or(-1);
+            display.vertical_scroll_bar_type = next_vertical_type;
+            display.scroll_bar_height = height.unwrap_or(-1);
+            display.horizontal_scroll_bar_type = next_horizontal_type;
+            display.scroll_bars_persistent = persistent;
+        }
+        self.window_scroll_bars(window_id) != previous
+    }
+
+    /// Apply the window-owned state changes that GNU performs during
+    /// `set_window_buffer`.
+    fn apply_set_window_buffer_state(
+        &mut self,
+        window_id: WindowId,
+        buffer_id: BufferId,
+        window_start: LispCharPos1,
+        point: LispCharPos1,
+        preserve_display_state: bool,
+        defaults: WindowBufferDisplayDefaults,
+    ) {
+        let Some(frame_id) = self.find_window_frame_id(window_id) else {
+            return;
+        };
+        let (fringes_persistent, scroll_bars_persistent) = self
+            .get(frame_id)
+            .and_then(|frame| frame.find_window(window_id))
+            .and_then(Window::display)
+            .map(|display| (display.fringes_persistent, display.scroll_bars_persistent))
+            .unwrap_or((false, false));
+
+        if let Some(Window::Leaf {
+            buffer_id: leaf_buffer_id,
+            mode_line_base,
+            window_start: leaf_window_start,
+            position_markers,
+            window_end,
+            point: leaf_point,
+            old_point,
+            hscroll,
+            min_hscroll,
+            suspend_auto_hscroll,
+            vscroll,
+            preserve_vscroll_p,
+            margins,
+            ..
+        }) = self
+            .get_mut(frame_id)
+            .and_then(|frame| frame.find_window_mut(window_id))
+        {
+            // GNU wset_buffer invalidates the numeric line base for every
+            // install, including the same buffer and identity round trips.
+            *mode_line_base = None;
+            *leaf_buffer_id = buffer_id;
+            *leaf_window_start = window_start.max(LispCharPos1::ONE);
+            *position_markers = super::WindowPositionMarkerState::Detached;
+            // GNU `set_window_buffer` zeroes `w->window_end_pos` and
+            // `w->window_end_vpos` for every buffer install, same buffer or
+            // not (src/window.c:4360-4361): the recorded end is an offset
+            // from Z and describes rows of the buffer that produced it.  An
+            // unrecorded end reads back as Z, which is GNU's zero offset.
+            // Kept across a buffer switch, the old buffer's end was
+            // reinterpreted in the new one and told the viewport policy
+            // that point lay hundreds of lines below the window, so a
+            // `set-window-start` NOFORCE near EOB was recentered where
+            // GNU's "same window start" branch (src/xdisp.c:20972) keeps it.
+            *window_end = super::WindowEndState::Unrecorded;
+            *leaf_point = point.max(LispCharPos1::ONE);
+            if !preserve_display_state {
+                *old_point = point.max(LispCharPos1::ONE);
+                *hscroll = 0;
+                // GNU resets the auto-hscroll lower bound and clears the
+                // suspend flag on buffer switch (src/window.c:4368).
+                *min_hscroll = 0;
+                *suspend_auto_hscroll = false;
+                *vscroll = 0;
+                *preserve_vscroll_p = false;
+            }
+            if let Some(next_margins) = defaults.margins {
+                *margins = next_margins;
+            }
+        }
+
+        if let Some(next_fringes) = defaults.fringes
+            && !fringes_persistent
+        {
+            let _ = self.set_window_fringes(
+                window_id,
+                next_fringes.left_width,
+                next_fringes.right_width,
+                next_fringes.outside_margins,
+                false,
+            );
+        }
+        if let Some(next_scroll_bars) = defaults.scroll_bars
+            && !scroll_bars_persistent
+        {
+            let _ = self.set_window_scroll_bars(
+                window_id,
+                next_scroll_bars.vertical_width,
+                next_scroll_bars.vertical_type,
+                next_scroll_bars.horizontal_height,
+                next_scroll_bars.horizontal_type,
+                false,
+            );
+        }
+    }
+
+    fn live_window_parameters(&self, window_id: WindowId) -> Option<&[(Value, Value)]> {
+        self.frames
+            .values()
+            .find_map(|frame| frame.find_window(window_id).map(Window::parameters))
+            .map(Vec::as_slice)
+    }
+
+    fn live_window_parameters_mut(
+        &mut self,
+        window_id: WindowId,
+    ) -> Option<&mut Vec<(Value, Value)>> {
+        let frame_id = self.find_valid_window_frame_id(window_id)?;
+        self.get_mut(frame_id)
+            .and_then(|frame| frame.find_window_mut(window_id))
+            .map(Window::parameters_mut)
+    }
+
+    /// Return window parameter KEY for WINDOW-ID, or nil when unset.
+    fn window_parameter(&self, window_id: WindowId, key: &Value) -> Option<Value> {
+        self.live_window_parameters(window_id)
+            .or_else(|| {
+                self.deleted_window_parameters
+                    .get(&window_id)
+                    .map(Vec::as_slice)
+            })
+            .and_then(|pairs| {
+                pairs
+                    .iter()
+                    .find(|(existing_key, _)| eq_value(existing_key, key))
+                    .map(|(_, value)| *value)
+            })
+    }
+
+    /// Set window parameter KEY on WINDOW-ID to VALUE.
+    fn set_window_parameter(&mut self, window_id: WindowId, key: Value, value: Value) {
+        let parameters = if let Some(parameters) = self.live_window_parameters_mut(window_id) {
+            parameters
+        } else {
+            self.deleted_window_parameters.entry(window_id).or_default()
+        };
+
+        if let Some((_, existing_value)) = parameters
+            .iter_mut()
+            .find(|(existing_key, _)| eq_value(existing_key, &key))
+        {
+            *existing_value = value;
+        } else {
+            parameters.insert(0, (key, value));
+        }
+    }
+
+    /// Return window parameters alist for WINDOW-ID.
+    fn window_parameters_alist(&self, window_id: WindowId) -> Value {
+        self.live_window_parameters(window_id)
+            .map(alist_from_parameters)
+            .unwrap_or(Value::NIL)
+    }
+
+    /// Return WINDOW-ID's `(KEY . VALUE)` window-parameter pairs as an owned
+    /// vec (empty when the window is unknown). The layout engine reads these to
+    /// evaluate GNU `(:window PARAMETER VALUE)` `:filtered` face predicates,
+    /// which it cannot express via the Lisp-alist accessor without re-parsing.
+    fn window_parameters_pairs(&self, window_id: WindowId) -> Vec<(Value, Value)> {
+        self.live_window_parameters(window_id)
+            .map(<[(Value, Value)]>::to_vec)
+            .unwrap_or_default()
+    }
+
+    fn live_window_history(&self, window_id: WindowId) -> Option<&super::WindowHistoryState> {
+        self.frames
+            .values()
+            .find_map(|frame| frame.find_window(window_id).and_then(Window::history))
+    }
+
+    fn live_window_history_mut(
+        &mut self,
+        window_id: WindowId,
+    ) -> Option<&mut super::WindowHistoryState> {
+        let frame_id = self.find_window_frame_id(window_id)?;
+        self.get_mut(frame_id)
+            .and_then(|frame| frame.find_window_mut(window_id))
+            .and_then(Window::history_mut)
+    }
+
+    /// Return previous-buffer list object for WINDOW-ID, or nil when unset.
+    fn window_prev_buffers(&self, window_id: WindowId) -> Value {
+        self.live_window_history(window_id)
+            .map(|history| history.prev_buffers)
+            .unwrap_or(Value::NIL)
+    }
+
+    /// Set previous-buffer list object for WINDOW-ID.
+    fn set_window_prev_buffers(&mut self, window_id: WindowId, prev_buffers: Value) {
+        if let Some(history) = self.live_window_history_mut(window_id) {
+            history.prev_buffers = prev_buffers;
+        }
+    }
+
+    /// Return next-buffer list object for WINDOW-ID, or nil when unset.
+    fn window_next_buffers(&self, window_id: WindowId) -> Value {
+        self.live_window_history(window_id)
+            .map(|history| history.next_buffers)
+            .unwrap_or(Value::NIL)
+    }
+
+    /// Set next-buffer list object for WINDOW-ID.
+    fn set_window_next_buffers(&mut self, window_id: WindowId, next_buffers: Value) {
+        if let Some(history) = self.live_window_history_mut(window_id) {
+            history.next_buffers = next_buffers;
+        }
+    }
+
+    /// Return the use-time for WINDOW-ID.
+    fn window_use_time(&self, window_id: WindowId) -> i64 {
+        self.live_window_history(window_id)
+            .map(|history| history.use_time)
+            .unwrap_or(0)
+    }
+
+    /// Mark WINDOW-ID as the most recently selected window.
+    fn note_window_selected(&mut self, window_id: WindowId) -> i64 {
+        self.window_select_count = self.window_select_count.saturating_add(1);
+        let next_use_time = self.window_select_count;
+        if let Some(history) = self.live_window_history_mut(window_id) {
+            history.use_time = next_use_time;
+        }
+        next_use_time
+    }
+
+    /// Mark WINDOW-ID as second-most recently used.
+    ///
+    /// Returns the new use-time of WINDOW-ID when the bump happened, nil-like
+    /// behavior (`None`) otherwise.
+    fn bump_window_use_time(
+        &mut self,
+        selected_window_id: WindowId,
+        window_id: WindowId,
+    ) -> Option<i64> {
+        if window_id == selected_window_id {
+            return None;
+        }
+        if self.window_use_time(selected_window_id) != self.window_select_count {
+            return None;
+        }
+
+        let bumped_use_time = self.window_select_count;
+        if let Some(history) = self.live_window_history_mut(window_id) {
+            history.use_time = bumped_use_time;
+        }
+        self.window_select_count = self.window_select_count.saturating_add(1);
+        let selected_use_time = self.window_select_count;
+        if let Some(history) = self.live_window_history_mut(selected_window_id) {
+            history.use_time = selected_use_time;
+        }
+        Some(bumped_use_time)
+    }
+
+    /// Commit the global selected-window history at GNU's window-change
+    /// recording boundary. Selection itself must not advance this history:
+    /// callers can observe the previous window until the next redisplay.
+    fn record_selected_window_after_redisplay(&mut self) -> Option<WindowId> {
+        let selected = self.selected_frame().map(|frame| frame.selected_window);
+        self.old_selected_window = selected;
+        selected
+    }
+
+    /// Return the old selected window, when tracked.
+    fn old_selected_window(&self) -> Option<WindowId> {
+        self.old_selected_window
     }
 }

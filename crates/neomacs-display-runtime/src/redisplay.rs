@@ -8,6 +8,7 @@
 mod maintenance;
 
 use neovm_core::window::DisplayFrameExt;
+use neovm_core::window::DisplayFrameManagerExt;
 use std::cell::{Cell, RefCell};
 
 use neomacs_display_protocol::SealedFramePresentation;

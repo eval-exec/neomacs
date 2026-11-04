@@ -5,6 +5,7 @@
 
 use super::*;
 use crate::emacs_core::symbol::CanonicalAccess;
+use crate::window::DisplayFrameManagerExt;
 
 /// Push the entry MAKE builds onto SPECPDL, constructed in its final slot.
 ///

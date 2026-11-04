@@ -6,6 +6,7 @@
 //! evaluator context is reached through the core facade.
 
 use crate::tagged::SymbolMode;
+use crate::window::DisplayFrameManagerExt;
 use neovm_value::error::{EvalResult, expect_args, expect_args_range};
 use neovm_value::value::*;
 

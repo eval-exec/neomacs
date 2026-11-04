@@ -21,6 +21,7 @@ use crate::emacs_core::symbol::{FunctionCellSnapshot, Obarray, SymbolPlistSnapsh
 use crate::tagged::SymbolMode;
 use crate::tagged::header::ByteCodeSlotObject;
 use crate::window::DisplayFrameExt;
+use crate::window::DisplayFrameManagerExt;
 use malachite::integer::Integer;
 
 /// GNU `init_obarray_once` creates the initial obarray with size_bits = 15.

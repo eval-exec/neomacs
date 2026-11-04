@@ -3,6 +3,7 @@
 //! must still match. Partial, ambiguous or unsupported coverage falls back.
 use super::*;
 use neovm_core::window::DisplayFrameExt;
+use neovm_core::window::DisplayFrameManagerExt;
 use neovm_core::{
     buffer::LispCharPos1,
     window::{

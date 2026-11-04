@@ -14,6 +14,7 @@ use crate::emacs_core::error::{EvalResult, Flow, LispCondition, expect_max_args,
 use crate::emacs_core::process::ProcessContextExt;
 use crate::emacs_core::value::{Value, ValueKind, VecLikeType, eq_value};
 use crate::window::DisplayFrameExt;
+use crate::window::DisplayFrameManagerExt;
 use crate::window::FrameManager;
 
 fn delete_quit_restore_popup_windows_showing_buffer(

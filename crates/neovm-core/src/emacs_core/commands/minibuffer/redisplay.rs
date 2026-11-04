@@ -6,6 +6,7 @@
 //! window/buffer borrows; no TLS or process-shared Lisp cache is introduced.
 use super::*;
 use crate::window::DisplayFrameExt;
+use crate::window::DisplayFrameManagerExt;
 
 use crate::emacs_core::intern::intern;
 use crate::emacs_core::reader::ActiveMinibufferWindowState;

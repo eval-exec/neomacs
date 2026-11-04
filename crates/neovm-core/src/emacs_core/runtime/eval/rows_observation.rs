@@ -9,6 +9,7 @@ use crate::tagged::{
     gc::{self, HeapIdentity, RowsOwnedDomain},
 };
 use crate::window::DisplayFrameExt;
+use crate::window::DisplayFrameManagerExt;
 use neovm_value::display_vocab::FrameId;
 use std::any::TypeId;
 use std::{marker::PhantomData, ops::Range};

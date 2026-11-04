@@ -24,6 +24,7 @@
 //!   window buffer before calling `menu_bar_items`.
 
 use neovm_core::window::DisplayFrameExt;
+use neovm_core::window::DisplayFrameManagerExt;
 use std::collections::HashSet;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

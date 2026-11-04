@@ -17,6 +17,7 @@ pub(crate) use crate::emacs_core::error::{expect_args, expect_args_range, expect
 use crate::emacs_core::eval::VariableView;
 use crate::emacs_core::intern::WellKnown;
 use crate::window::DisplayFrameExt;
+use crate::window::DisplayFrameManagerExt;
 use crate::window::{FrameId, WindowId};
 use strum::{EnumString, IntoStaticStr};
 

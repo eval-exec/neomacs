@@ -5,6 +5,7 @@
 //! termios state, raw input, terminal-size observation, and one `TtyRif`.
 
 use neovm_core::window::DisplayFrameExt;
+use neovm_core::window::DisplayFrameManagerExt;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};

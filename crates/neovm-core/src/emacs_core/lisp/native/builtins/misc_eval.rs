@@ -7,6 +7,7 @@ use crate::emacs_core::error::{
 };
 use crate::emacs_core::symbol::Obarray;
 use crate::tagged::value::SymbolMode;
+use crate::window::DisplayFrameManagerExt;
 
 pub(crate) fn builtin_get_pos_property(
     eval: &mut super::eval::Context,

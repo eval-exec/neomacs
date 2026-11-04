@@ -5,6 +5,7 @@
 
 use super::*;
 use crate::window::DisplayFrameExt;
+use crate::window::DisplayFrameManagerExt;
 
 impl Context {
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up

@@ -3181,7 +3181,7 @@ pub(crate) const FIRST_WINDOW_ID: WindowId = WindowId(1);
 
 /// GNU's observable `window.sequence_number`, separate from native identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum WindowSequenceNumber {
+pub enum WindowSequenceNumber {
     RetiredPreload,
     Runtime(std::num::NonZeroU64),
     /// Contextual diagnostics can be asked to print an unminted test handle.

@@ -74,6 +74,7 @@ use neovm_core::emacs_core::keymap::{KeymapMarker, MenuItemProperty, is_list_key
 use neovm_core::emacs_core::value::list_to_vec;
 use neovm_core::emacs_core::xdisp::ModeLineDisplayOutput;
 use neovm_core::keyboard::{PresentedMouseArea, PresentedMouseTarget};
+use neovm_core::window::DisplayFrameManagerExt;
 use neovm_core::window::DisplayRowSnapshot;
 use neovm_core::window::{FrameId, WindowId};
 use neovm_core::window::{PresentedWindowChromeArea, PresentedWindowChromeString};

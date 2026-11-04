@@ -21,6 +21,7 @@ pub(crate) use crate::emacs_core::error::{
     expect_args, expect_args_range, expect_max_args, expect_min_args,
 };
 use crate::window::DisplayFrameExt;
+use crate::window::DisplayFrameManagerExt;
 use std::sync::{Arc, OnceLock, RwLock};
 
 use num_enum::{IntoPrimitive, TryFromPrimitive};

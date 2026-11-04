@@ -48,7 +48,7 @@ static_assertions::assert_impl_all!(WindowPixels: Send, Sync);
 /// This immutable scalar contains no heap state and may cross mutators.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(transparent)]
-pub(crate) struct WindowTotal(crate::tagged::value::Fixnum);
+pub struct WindowTotal(crate::tagged::value::Fixnum);
 
 impl TryFrom<i64> for WindowTotal {
     type Error = crate::tagged::value::FixnumRangeError;
@@ -71,7 +71,7 @@ impl WindowTotal {
 /// GNU `set-window-new-total`'s ADD argument: replace the staged total or add
 /// the new size to it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum NewTotalUpdate {
+pub enum NewTotalUpdate {
     Replace,
     Add,
 }
@@ -186,7 +186,7 @@ mod tests;
 /// Distinguishes valid geometry from GNU's signed, temporary staging slots.
 /// Immutable Fixnum/WindowPixels witnesses carry no heap or mutator affinity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct WindowPixelStage(WindowPixelStageKind);
+pub struct WindowPixelStage(WindowPixelStageKind);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum WindowPixelStageKind {

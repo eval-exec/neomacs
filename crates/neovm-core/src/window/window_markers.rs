@@ -17,6 +17,7 @@ use crate::buffer::{
 };
 use crate::emacs_core::value::Value;
 use crate::window::DisplayFrameExt;
+use crate::window::DisplayFrameManagerExt;
 use crate::window::{
     AttachedWindowPositionMarkers, Frame, FrameManager, Window, WindowPositionMarkerState,
     WindowTree,

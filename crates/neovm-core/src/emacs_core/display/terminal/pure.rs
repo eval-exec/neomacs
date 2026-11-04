@@ -10,6 +10,7 @@ use crate::emacs_core::heap_registry::{HeapRegistryHandle, HeapRegistrySlot};
 use crate::emacs_core::value::*;
 use crate::emacs_core::value::{ValueKind, VecLikeType};
 use crate::window::DisplayFrameExt;
+use crate::window::DisplayFrameManagerExt;
 use neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities;
 use std::cell::{OnceCell, RefCell};
 use std::collections::{HashMap, hash_map::Entry};

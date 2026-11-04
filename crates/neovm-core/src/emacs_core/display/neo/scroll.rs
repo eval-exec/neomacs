@@ -9,6 +9,7 @@ use crate::emacs_core::keymap::{
 };
 use crate::emacs_core::{Context, Value};
 use crate::window::DisplayFrameExt;
+use crate::window::DisplayFrameManagerExt;
 
 /// A fixed spelling consumed by the raw-input scroll predictor.
 ///

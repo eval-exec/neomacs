@@ -10,6 +10,7 @@
 
 use super::*;
 use crate::window::DisplayFrameExt;
+use crate::window::DisplayFrameManagerExt;
 
 impl Context {
     pub fn minibuffer_is_active(&self) -> bool {

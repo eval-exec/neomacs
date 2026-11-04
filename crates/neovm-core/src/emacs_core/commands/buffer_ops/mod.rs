@@ -5,6 +5,7 @@
 //! drive stays in `emacs_core::buffer`.
 
 use crate::window::DisplayFrameExt;
+use crate::window::DisplayFrameManagerExt;
 use std::time::{Duration, Instant};
 
 use crate::buffer::{

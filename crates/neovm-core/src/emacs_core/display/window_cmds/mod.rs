@@ -22,6 +22,7 @@ pub(crate) use crate::emacs_core::error::{
 };
 use crate::emacs_core::eval::VariableView;
 use crate::window::DisplayFrameExt;
+use crate::window::DisplayFrameManagerExt;
 use crate::window::WindowChromeLine;
 use crate::window::body::{WindowBodyAxis, WindowBodyCellSize, WindowBodyUnit};
 use crate::window::geometry::PublishedWindowRegions;

@@ -13,6 +13,7 @@ use crate::emacs_core::reader::{
     MinibufferOwnerFrame, MinibufferSessionUnwind,
 };
 use crate::window::DisplayFrameExt;
+use crate::window::DisplayFrameManagerExt;
 use neovm_value::error::{EvalResult, Flow, FlowKind, FlowResultExt};
 use neovm_value::value::*;
 
