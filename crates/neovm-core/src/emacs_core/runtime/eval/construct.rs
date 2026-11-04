@@ -569,7 +569,7 @@ impl Context {
         // thread.c:syms_of_threads provides `threads' when thread builtins
         // are installed.
         obarray.seed_value("features", initial_features_value());
-        super::super::xwidget::init_xwidget_variables(obarray);
+        super::boot_vars::xwidget::init_xwidget_variables(obarray);
         obarray.set_canonical_value(
             CanonicalAccess::BOOTSTRAP,
             lexical_binding_symbol(),
@@ -1500,7 +1500,7 @@ impl Context {
         crate::emacs_core::eval::lifecycle::register_core_bootstrap_vars(obarray);
         super::super::undo::register_bootstrap_vars(obarray);
         super::super::category::register_bootstrap_vars(obarray);
-        super::super::window_cmds::register_bootstrap_vars(obarray);
+        super::boot_vars::window::register_bootstrap_vars(obarray);
         super::super::keyboard::pure::register_bootstrap_vars(obarray);
         super::super::composite::register_bootstrap_vars(obarray);
         // T6.3: core constructs every VariableStore; text only sees the
@@ -1508,13 +1508,13 @@ impl Context {
         let mut coding_store = crate::emacs_core::eval::VariableStore::new(obarray, None);
         super::super::coding::register_bootstrap_vars(&mut coding_store);
         super::super::dired::register_bootstrap_vars(obarray);
-        super::super::xdisp::register_bootstrap_vars(obarray);
+        super::boot_vars::xdisp::register_bootstrap_vars(obarray);
         super::super::textprop::register_bootstrap_vars(obarray);
         super::super::xfaces::register_bootstrap_vars(obarray);
-        super::super::frame_vars::register_bootstrap_vars(obarray);
+        super::boot_vars::frame::register_bootstrap_vars(obarray);
         super::super::buffer_vars::register_bootstrap_vars(obarray);
-        super::super::image::register_bootstrap_vars(obarray);
-        super::super::fontset::register_bootstrap_vars(obarray);
+        super::boot_vars::image::register_bootstrap_vars(obarray);
+        super::boot_vars::fontset::register_bootstrap_vars(obarray);
 
         // ---- end C-level bootstrap variables ----
 
@@ -1625,7 +1625,7 @@ impl Context {
 
         // Initialize indentation variables (tab-width, indent-tabs-mode, etc.)
         super::super::indent::init_indent_vars(obarray);
-        super::super::font::init_font_vars(obarray);
+        super::boot_vars::font::init_font_vars(obarray);
     }
 
     /// C-level DEFVAR registrations mirroring GNU's per-file syms_of_*()

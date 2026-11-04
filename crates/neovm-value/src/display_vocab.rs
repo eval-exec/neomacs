@@ -1227,3 +1227,202 @@ pub fn font_value_type_symbol(val: &Value) -> Option<&'static str> {
         None
     }
 }
+
+// ---------------------------------------------------------------------------
+// Image type vocabulary (stage-4 K2 display boot: values shared with the
+// evaluator bootstrap, which must not name the display image module).
+// ---------------------------------------------------------------------------
+/// GNU image types available in this build.
+///
+/// GNU keeps these in `image_types[]` in `src/image.c`; optional entries are
+/// present only when their backing decoder is built.  Neomacs currently ships
+/// the portable decoder set below and deliberately leaves optional GNU entries
+/// such as `postscript`, `imagemagick`, and `native-image` unavailable until
+/// their loaders are implemented.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, EnumString, IntoStaticStr)]
+#[strum(serialize_all = "kebab-case")]
+pub enum ImageType {
+    Svg,
+    Webp,
+    Png,
+    Gif,
+    Tiff,
+    Jpeg,
+    Xpm,
+    Xbm,
+    Pbm,
+}
+
+impl ImageType {
+    const AVAILABLE_IN_GNU_LIST_ORDER: [Self; 9] = [
+        Self::Svg,
+        Self::Webp,
+        Self::Png,
+        Self::Gif,
+        Self::Tiff,
+        Self::Jpeg,
+        Self::Xpm,
+        Self::Xbm,
+        Self::Pbm,
+    ];
+
+    pub fn from_symbol_name(name: &str) -> Option<Self> {
+        name.parse().ok()
+    }
+
+    pub fn from_file_extension(extension: &str) -> Option<Self> {
+        ImageFilenameType::from_file_extension(extension)?.available_type()
+    }
+
+    pub fn from_file_name(path: &str) -> Option<Self> {
+        ImageFilenameType::from_file_name(path)?.available_type()
+    }
+
+    pub fn name(self) -> &'static str {
+        self.into()
+    }
+
+    pub fn value(self) -> Value {
+        Value::symbol(self.name())
+    }
+}
+
+/// Image types recognized by GNU filename inference.
+///
+/// GNU `lisp/image.el:image-type-file-name-regexps` has a wider domain than
+/// `image-type-available-p`: unavailable loaders such as `bmp`, `postscript`,
+/// and `heic` can still be inferred from file names for diagnostics and later
+/// availability checks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, EnumString, IntoStaticStr)]
+#[strum(serialize_all = "kebab-case")]
+pub enum ImageFilenameType {
+    Png,
+    Gif,
+    Jpeg,
+    Webp,
+    Bmp,
+    Xpm,
+    Pbm,
+    Xbm,
+    Postscript,
+    Tiff,
+    Svg,
+    Heic,
+}
+
+impl ImageFilenameType {
+    pub fn from_file_extension(extension: &str) -> Option<Self> {
+        let extension = extension
+            .strip_prefix('.')
+            .unwrap_or(extension)
+            .to_ascii_lowercase();
+        match extension.as_str() {
+            "jpg" => Some(Self::Jpeg),
+            "tif" => Some(Self::Tiff),
+            "svgz" => Some(Self::Svg),
+            "ps" => Some(Self::Postscript),
+            "heics" | "heif" | "heifs" => Some(Self::Heic),
+            name => name.parse().ok(),
+        }
+    }
+
+    pub fn from_file_name(path: &str) -> Option<Self> {
+        Self::from_file_extension(path.rsplit('.').next()?)
+    }
+
+    pub fn name(self) -> &'static str {
+        self.into()
+    }
+
+    pub fn available_type(self) -> Option<ImageType> {
+        ImageType::from_symbol_name(self.name())
+    }
+}
+
+/// GNU `syms_of_image` initial value of `image-types` for the decoders this
+/// build ships, in GNU list order.
+pub fn supported_image_types_value() -> Value {
+    Value::list(
+        ImageType::AVAILABLE_IN_GNU_LIST_ORDER
+            .iter()
+            .copied()
+            .map(|image_type| Value::symbol(image_type.name()))
+            .collect(),
+    )
+}
+
+/// GNU `decode_env_path (NULL, defalt, false)` restricted to the
+/// no-environment-variable case `syms_of_image` uses.
+/// GNU's `decode_env_path (NULL, defalt, false)` (`src/emacs.c:3262-3300`),
+/// restricted to the no-environment-variable case `syms_of_image` uses.
+///
+/// With `evarname == 0` nothing is read from the environment, so the whole
+/// function is "split `defalt` on `SEPCHAR` and turn each element into a
+/// string, substituting `.` for an empty one" -- the `empty` argument is false
+/// at this call site, which is what selects `.` rather than nil.
+pub fn decode_env_path_default(defalt: &str) -> Value {
+    Value::list(
+        defalt
+            .split(':')
+            .map(|element| Value::string(if element.is_empty() { "." } else { element }))
+            .collect(),
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Font style tables (GNU `syms_of_font` C defaults; the evaluator seeds
+// them without naming the display font module).
+// ---------------------------------------------------------------------------
+pub const FONT_WEIGHT_STYLE_TABLE: &[(i64, &[&str])] = &[
+    (0, &["thin"]),
+    (
+        40,
+        &["ultra-light", "ultralight", "extra-light", "extralight"],
+    ),
+    (50, &["light"]),
+    (55, &["semi-light", "semilight", "demilight"]),
+    (80, &["regular", "normal", "unspecified", "book"]),
+    (100, &["medium"]),
+    (
+        180,
+        &["semi-bold", "semibold", "demibold", "demi-bold", "demi"],
+    ),
+    (200, &["bold"]),
+    (205, &["extra-bold", "extrabold", "ultra-bold", "ultrabold"]),
+    (210, &["black", "heavy"]),
+    (250, &["ultra-heavy", "ultraheavy"]),
+];
+
+pub const FONT_SLANT_STYLE_TABLE: &[(i64, &[&str])] = &[
+    (0, &["reverse-oblique", "ro"]),
+    (10, &["reverse-italic", "ri"]),
+    (100, &["normal", "r", "unspecified"]),
+    (200, &["italic", "i", "ot"]),
+    (210, &["oblique", "o"]),
+];
+
+pub const FONT_WIDTH_STYLE_TABLE: &[(i64, &[&str])] = &[
+    (50, &["ultra-condensed", "ultracondensed"]),
+    (63, &["extra-condensed", "extracondensed"]),
+    (75, &["condensed", "compressed", "narrow"]),
+    (87, &["semi-condensed", "semicondensed", "demicondensed"]),
+    (100, &["normal", "medium", "regular", "unspecified"]),
+    (113, &["semi-expanded", "semiexpanded", "demiexpanded"]),
+    (125, &["expanded"]),
+    (150, &["extra-expanded", "extraexpanded"]),
+    (200, &["ultra-expanded", "ultraexpanded", "wide"]),
+];
+
+pub fn font_style_table(entries: &[(i64, &[&str])]) -> Value {
+    Value::vector(
+        entries
+            .iter()
+            .map(|(numeric, names)| {
+                let mut row = Vec::with_capacity(names.len() + 1);
+                row.push(Value::fixnum(*numeric));
+                row.extend(names.iter().map(|name| Value::symbol(*name)));
+                Value::vector(row)
+            })
+            .collect(),
+    )
+}

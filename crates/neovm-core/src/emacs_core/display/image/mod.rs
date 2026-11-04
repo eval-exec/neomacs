@@ -28,6 +28,8 @@ use crate::window::DisplayFrameExt;
 use crate::window::DisplayFrameManagerExt;
 use crate::window::FRAME_ID_BASE;
 use neomacs_display_protocol::image_diagnostic::{ImageDiagnosticSubject, ImageFormatName};
+use neovm_value::display_vocab::ImageFilenameType;
+pub use neovm_value::display_vocab::ImageType;
 use strum::{EnumString, IntoStaticStr};
 
 // ---------------------------------------------------------------------------
@@ -86,113 +88,6 @@ fn plist_get(plist: &Value, key: &Value) -> Value {
             }
             _ => return Value::NIL,
         }
-    }
-}
-
-/// GNU image types available in this build.
-///
-/// GNU keeps these in `image_types[]` in `src/image.c`; optional entries are
-/// present only when their backing decoder is built.  Neomacs currently ships
-/// the portable decoder set below and deliberately leaves optional GNU entries
-/// such as `postscript`, `imagemagick`, and `native-image` unavailable until
-/// their loaders are implemented.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, EnumString, IntoStaticStr)]
-#[strum(serialize_all = "kebab-case")]
-pub enum ImageType {
-    Svg,
-    Webp,
-    Png,
-    Gif,
-    Tiff,
-    Jpeg,
-    Xpm,
-    Xbm,
-    Pbm,
-}
-
-impl ImageType {
-    const AVAILABLE_IN_GNU_LIST_ORDER: [Self; 9] = [
-        Self::Svg,
-        Self::Webp,
-        Self::Png,
-        Self::Gif,
-        Self::Tiff,
-        Self::Jpeg,
-        Self::Xpm,
-        Self::Xbm,
-        Self::Pbm,
-    ];
-
-    pub fn from_symbol_name(name: &str) -> Option<Self> {
-        name.parse().ok()
-    }
-
-    pub fn from_file_extension(extension: &str) -> Option<Self> {
-        ImageFilenameType::from_file_extension(extension)?.available_type()
-    }
-
-    pub fn from_file_name(path: &str) -> Option<Self> {
-        ImageFilenameType::from_file_name(path)?.available_type()
-    }
-
-    pub fn name(self) -> &'static str {
-        self.into()
-    }
-
-    pub fn value(self) -> Value {
-        Value::symbol(self.name())
-    }
-}
-
-/// Image types recognized by GNU filename inference.
-///
-/// GNU `lisp/image.el:image-type-file-name-regexps` has a wider domain than
-/// `image-type-available-p`: unavailable loaders such as `bmp`, `postscript`,
-/// and `heic` can still be inferred from file names for diagnostics and later
-/// availability checks.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, EnumString, IntoStaticStr)]
-#[strum(serialize_all = "kebab-case")]
-enum ImageFilenameType {
-    Png,
-    Gif,
-    Jpeg,
-    Webp,
-    Bmp,
-    Xpm,
-    Pbm,
-    Xbm,
-    Postscript,
-    Tiff,
-    Svg,
-    Heic,
-}
-
-impl ImageFilenameType {
-    fn from_file_extension(extension: &str) -> Option<Self> {
-        let extension = extension
-            .strip_prefix('.')
-            .unwrap_or(extension)
-            .to_ascii_lowercase();
-        match extension.as_str() {
-            "jpg" => Some(Self::Jpeg),
-            "tif" => Some(Self::Tiff),
-            "svgz" => Some(Self::Svg),
-            "ps" => Some(Self::Postscript),
-            "heics" | "heif" | "heifs" => Some(Self::Heic),
-            name => name.parse().ok(),
-        }
-    }
-
-    fn from_file_name(path: &str) -> Option<Self> {
-        Self::from_file_extension(path.rsplit('.').next()?)
-    }
-
-    fn name(self) -> &'static str {
-        self.into()
-    }
-
-    fn available_type(self) -> Option<ImageType> {
-        ImageType::from_symbol_name(self.name())
     }
 }
 
@@ -334,22 +229,6 @@ impl ImageArea {
     }
 }
 
-/// GNU's `decode_env_path (NULL, defalt, false)` (`src/emacs.c:3262-3300`),
-/// restricted to the no-environment-variable case `syms_of_image` uses.
-///
-/// With `evarname == 0` nothing is read from the environment, so the whole
-/// function is "split `defalt` on `SEPCHAR` and turn each element into a
-/// string, substituting `.` for an empty one" -- the `empty` argument is false
-/// at this call site, which is what selects `.` rather than nil.
-fn decode_env_path_default(defalt: &str) -> Value {
-    Value::list(
-        defalt
-            .split(':')
-            .map(|element| Value::string(if element.is_empty() { "." } else { element }))
-            .collect(),
-    )
-}
-
 /// The Neomacs counterpart of GNU's `syms_of_image` (`src/image.c:13024`).
 ///
 /// GNU compiles `syms_of_image` under `#ifdef HAVE_WINDOW_SYSTEM`
@@ -360,35 +239,6 @@ fn decode_env_path_default(defalt: &str) -> Value {
 /// GNU's initializers: a `DEFVAR_LISP` supplies the value and the
 /// `declared_special` bit in one statement, so a bound-but-not-special
 /// placeholder is a state GNU cannot be in.
-pub fn register_bootstrap_vars(obarray: &mut crate::emacs_core::symbol::Obarray) {
-    // image.c:13265, `Vx_bitmap_file_path = decode_env_path (0, PATH_BITMAPS, 0)`.
-    // PATH_BITMAPS is the configure `bitmapdir` substitution -- a compiled-in
-    // path, not a probe of the running system -- so the value for this
-    // platform's reference build lives with the other platform facts.
-    obarray.define_special_variable(
-        "x-bitmap-file-path",
-        decode_env_path_default(crate::emacs_core::platform_facts::X_BITMAP_FILE_PATH),
-    );
-    // image.c:13034 DEFVAR_LISP, make_float (MAX_IMAGE_SIZE) = 10.0.
-    obarray.define_special_variable("max-image-size", Value::make_float(10.0));
-    // image.c:13269 DEFVAR_LISP, make_fixnum (300).
-    obarray.define_special_variable("image-cache-eviction-delay", Value::fixnum(300));
-    // image.c:13279 DEFVAR_LISP, Qauto.
-    obarray.define_special_variable("image-scaling-factor", Value::symbol("auto"));
-    // image.c:13028 DEFVAR_LISP; GNU's define_image_type fills the list at
-    // C init, our equivalent enumerates the built-in decoders.
-    obarray.define_special_variable("image-types", supported_image_types_value());
-}
-
-pub(crate) fn supported_image_types_value() -> Value {
-    Value::list(
-        ImageType::AVAILABLE_IN_GNU_LIST_ORDER
-            .iter()
-            .copied()
-            .map(|image_type| Value::symbol(image_type.name()))
-            .collect(),
-    )
-}
 
 /// Check whether a symbol name represents a supported image type.
 pub(crate) fn is_supported_image_type(name: &str) -> bool {

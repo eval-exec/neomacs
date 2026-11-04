@@ -1424,22 +1424,6 @@ fn font_vector_get_flexible(items: &[Value], prop: &str) -> Option<Value> {
 /// `2453`) -- so a fontset variable exists in every GUI-capable build, and
 /// `lisp/cus-start.el:942-944` probes exactly that with "any function from
 /// fontset.c will do", `(fboundp 'new-fontset)`.
-pub fn register_bootstrap_vars(obarray: &mut crate::emacs_core::symbol::Obarray) {
-    // fontset.c:2237, `Vvertical_centering_font_regexp = Qnil'.
-    //
-    // The regexp both editors report is NOT this initializer: it comes from
-    // `lisp/international/fontset.el:1266', which `loadup.el' preloads in a
-    // window-system build.  What the C declaration supplies is the
-    // `declared_special' bit, which no `setq' in Lisp can add -- fontset.el's
-    // `(defvar vertical-centering-font-regexp)' on line 1259 is the valueless
-    // form, which marks the variable special only within that file.  So a
-    // Neomacs that seeded the value and skipped the declaration matched GNU on
-    // `symbol-value' and still bound it lexically under `let'.
-    obarray.define_special_variable("vertical-centering-font-regexp", Value::NIL);
-    // fontset.c:2225 DEFVAR_LISP, `Valternate_fontname_alist = Qnil'.  The one
-    // name of `syms_of_fontset''s eight this port did not declare (entry 173).
-    obarray.define_special_variable("alternate-fontname-alist", Value::NIL);
-}
 
 #[cfg(test)]
 #[path = "tests/fontset_test.rs"]

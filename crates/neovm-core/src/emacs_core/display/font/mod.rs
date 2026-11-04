@@ -47,6 +47,9 @@ use crate::heap_types::{LispString, LispStringStorageKind};
 use crate::tagged::header::{FontObjectData, FontObjectMetrics};
 use crate::window::{FRAME_ID_BASE, FrameId, FrameManager, FrameParam, WindowId};
 use neomacs_display_protocol::font::ResolvedFontIdentity;
+use neovm_value::display_vocab::{
+    FONT_SLANT_STYLE_TABLE, FONT_WEIGHT_STYLE_TABLE, FONT_WIDTH_STYLE_TABLE,
+};
 
 type AlternativeFontFamilyAlist = Vec<(SymId, Vec<SymId>)>;
 type AlternativeFontRegistryAlist = Vec<(FontNameSpelling, Vec<FontNameSpelling>)>;
@@ -101,46 +104,6 @@ impl std::hash::Hash for FontNameSpelling {
         });
     }
 }
-
-const FONT_WEIGHT_STYLE_TABLE: &[(i64, &[&str])] = &[
-    (0, &["thin"]),
-    (
-        40,
-        &["ultra-light", "ultralight", "extra-light", "extralight"],
-    ),
-    (50, &["light"]),
-    (55, &["semi-light", "semilight", "demilight"]),
-    (80, &["regular", "normal", "unspecified", "book"]),
-    (100, &["medium"]),
-    (
-        180,
-        &["semi-bold", "semibold", "demibold", "demi-bold", "demi"],
-    ),
-    (200, &["bold"]),
-    (205, &["extra-bold", "extrabold", "ultra-bold", "ultrabold"]),
-    (210, &["black", "heavy"]),
-    (250, &["ultra-heavy", "ultraheavy"]),
-];
-
-const FONT_SLANT_STYLE_TABLE: &[(i64, &[&str])] = &[
-    (0, &["reverse-oblique", "ro"]),
-    (10, &["reverse-italic", "ri"]),
-    (100, &["normal", "r", "unspecified"]),
-    (200, &["italic", "i", "ot"]),
-    (210, &["oblique", "o"]),
-];
-
-const FONT_WIDTH_STYLE_TABLE: &[(i64, &[&str])] = &[
-    (50, &["ultra-condensed", "ultracondensed"]),
-    (63, &["extra-condensed", "extracondensed"]),
-    (75, &["condensed", "compressed", "narrow"]),
-    (87, &["semi-condensed", "semicondensed", "demicondensed"]),
-    (100, &["normal", "medium", "regular", "unspecified"]),
-    (113, &["semi-expanded", "semiexpanded", "demiexpanded"]),
-    (125, &["expanded"]),
-    (150, &["extra-expanded", "extraexpanded"]),
-    (200, &["ultra-expanded", "ultraexpanded", "wide"]),
-];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, EnumString, IntoPrimitive, TryFromPrimitive)]
 #[repr(i32)]
@@ -322,38 +285,6 @@ pub(crate) fn replace_alternative_font_registry_alist(names: Vec<(LispString, Ve
     if let Ok(mut state) = alternative_font_registry_alist().write() {
         *state = spellings;
     }
-}
-
-fn font_style_table(entries: &[(i64, &[&str])]) -> Value {
-    Value::vector(
-        entries
-            .iter()
-            .map(|(numeric, names)| {
-                let mut row = Vec::with_capacity(names.len() + 1);
-                row.push(Value::fixnum(*numeric));
-                row.extend(names.iter().map(|name| Value::symbol(*name)));
-                Value::vector(row)
-            })
-            .collect(),
-    )
-}
-
-pub(crate) fn init_font_vars(obarray: &mut super::symbol::Obarray) {
-    for (name, value) in [
-        (
-            "font-weight-table",
-            font_style_table(FONT_WEIGHT_STYLE_TABLE),
-        ),
-        ("font-slant-table", font_style_table(FONT_SLANT_STYLE_TABLE)),
-        ("font-width-table", font_style_table(FONT_WIDTH_STYLE_TABLE)),
-    ] {
-        obarray.seed_value(name, value);
-        obarray.make_special(name);
-        obarray.set_constant(name);
-    }
-
-    obarray.seed_value("font-log", Value::T);
-    obarray.make_special("font-log");
 }
 
 pub fn alternative_font_families(family: &str) -> Vec<String> {

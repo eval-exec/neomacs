@@ -7614,6 +7614,7 @@ fn value_list_to_values(list: &Value) -> LispArgVec {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+pub(crate) mod boot_vars;
 pub mod buffer_kill;
 pub mod call_interactively;
 pub mod case_tables;

@@ -275,15 +275,6 @@ impl Context {
     }
 }
 
-pub(crate) fn init_xwidget_variables(obarray: &mut Obarray) {
-    obarray.seed_value("xwidget-list", Value::NIL);
-    obarray.make_special("xwidget-list");
-    obarray.seed_value("xwidget-view-list", Value::NIL);
-    obarray.make_special("xwidget-view-list");
-    obarray.seed_value("xwidget-webkit-disable-javascript", Value::NIL);
-    obarray.make_special("xwidget-webkit-disable-javascript");
-}
-
 fn delq_from_list(list: Value, target: Value) -> Value {
     let items = collect_proper_list_items(list).expect("xwidget internal list must be proper");
     Value::list(
