@@ -355,6 +355,7 @@ pub struct WindowTreeHooks {
     window_resize_apply: fn(&mut WindowTree, WindowId, bool, f32, f32),
     apply_mini_window_resize: fn(&mut Frame, MiniWindowResize),
     frame_resize_pixelwise: fn(&mut Frame, &BufferManager, u32, u32),
+    frame_parameter_entry: fn(&mut Context, Value, Value) -> EvalResult,
 }
 
 impl WindowTreeHooks {
@@ -365,6 +366,7 @@ impl WindowTreeHooks {
         window_resize_apply: fn(&mut WindowTree, WindowId, bool, f32, f32),
         apply_mini_window_resize: fn(&mut Frame, MiniWindowResize),
         frame_resize_pixelwise: fn(&mut Frame, &BufferManager, u32, u32),
+        frame_parameter_entry: fn(&mut Context, Value, Value) -> EvalResult,
     ) -> Self {
         Self {
             char_property_window_lookup,
@@ -372,6 +374,7 @@ impl WindowTreeHooks {
             window_resize_apply,
             apply_mini_window_resize,
             frame_resize_pixelwise,
+            frame_parameter_entry,
         }
     }
 }
@@ -814,6 +817,10 @@ impl WindowTreeHooks {
     fn frame_resize_pixelwise(&self) -> fn(&mut Frame, &BufferManager, u32, u32) {
         self.frame_resize_pixelwise
     }
+
+    fn frame_parameter_entry(&self) -> fn(&mut Context, Value, Value) -> EvalResult {
+        self.frame_parameter_entry
+    }
 }
 
 static LIFECYCLE_HOOKS: OnceLock<LifecycleHooks> = OnceLock::new();
@@ -1151,6 +1158,16 @@ pub fn resize_frame_pixelwise_with_buffer_constraints(
     height: u32,
 ) {
     (lifecycle_hooks().window_tree().frame_resize_pixelwise())(frame, buffers, width, height)
+}
+
+/// Read one entry of the `frame-parameter` Lisp entry for a frame designator.
+///
+/// The body (frame resolution including the synthetic batch-frame arm and the
+/// realised scroll-bar/font parameter projection) is display behaviour; the
+/// system environment fallback reaches it through this cold slot instead of
+/// naming the display crate upward.  Called only when no frame value resolved.
+pub fn frame_parameter_entry(eval: &mut Context, frame: Value, key: Value) -> EvalResult {
+    (lifecycle_hooks().window_tree().frame_parameter_entry())(eval, frame, key)
 }
 
 /// Apply a staged pixel resize plan.

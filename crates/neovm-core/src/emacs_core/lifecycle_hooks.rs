@@ -37,6 +37,16 @@ fn apply_lread_constants(ctx: &mut crate::emacs_core::eval::Context) {
     }
 }
 
+/// Invoke the display `frame-parameter` Lisp entry for the environment
+/// fallback (cold; only when no frame value resolves).
+fn frame_parameter_entry(
+    eval: &mut crate::emacs_core::eval::Context,
+    frame: crate::emacs_core::value::Value,
+    key: crate::emacs_core::value::Value,
+) -> crate::emacs_core::error::EvalResult {
+    crate::emacs_core::frame::builtin_frame_parameter(eval, &[frame, key])
+}
+
 /// Seed the initial startup frame before display initialization.
 fn seed_batch_startup_frame(ctx: &mut crate::emacs_core::eval::Context) -> FrameId {
     crate::emacs_core::window_cmds::seed_batch_startup_frame_in_state(
@@ -207,6 +217,7 @@ static CANONICAL_LIFECYCLE_HOOKS: LifecycleHooks = LifecycleHooks::new(
         crate::window::window_resize_apply,
         apply_mini_window_resize,
         crate::window::resize_pixelwise_with_buffer_constraints,
+        frame_parameter_entry,
     ),
     XfacesHooks::new(
         xfaces_park_carrier_tls,

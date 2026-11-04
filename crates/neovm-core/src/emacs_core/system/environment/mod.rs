@@ -345,7 +345,7 @@ fn selected_frame_display(eval: &mut Context, frame: Value) -> EvalResult {
         return Ok(frame_x_display_value(frame).unwrap_or(Value::NIL));
     }
 
-    super::frame::builtin_frame_parameter(eval, &[frame, Value::symbol("display")])
+    crate::emacs_core::eval::lifecycle::frame_parameter_entry(eval, frame, Value::symbol("display"))
 }
 
 /// Resolve `getenv-internal` through GNU's environment policy.
