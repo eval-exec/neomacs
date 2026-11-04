@@ -34,48 +34,17 @@ pub(crate) use describe_bindings::{
 };
 pub(crate) use menu_bar_items::{builtin_menu_bar_menu_at_x_y, menu_bar_top_level_items};
 
-/// Global keymap content-mutation epoch.
-///
-/// Bumped at the `define-key` and `set-keymap-parent` chokepoints so caches
-/// whose contract requires immediate keymap-content freshness (for example
-/// the interactive-spec command cache) can reject an old projection.
-///
-/// Same caveat as `SYNTAX_TABLE_MUTATION_EPOCH`: keymaps are ordinary
-/// conses, so raw `setcdr` surgery bypasses this. Consumers must opt into
-/// this epoch only when their own freshness contract calls for eager mutation
-/// tracking; GNU's frame menu-bar cache intentionally does not.
-static KEYMAP_MUTATION_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-/// Generation of keymap contents observed by a derived-data cache.
-///
-/// Keeping this distinct from unrelated counters prevents a cache from being
-/// accidentally keyed by (for example) a redisplay generation merely because
-/// both happen to be represented by `u64`.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct KeymapMutationEpoch(u64);
-
-/// Current keymap mutation epoch (see [`KEYMAP_MUTATION_EPOCH`]).
-pub fn keymap_mutation_epoch() -> KeymapMutationEpoch {
-    KeymapMutationEpoch(KEYMAP_MUTATION_EPOCH.load(std::sync::atomic::Ordering::Relaxed))
-}
-
-/// Record a keymap content mutation. Over-invalidation is harmless, so
-/// callers may bump before knowing whether the mutation succeeds.
-pub(crate) fn note_keymap_mutation() {
-    KEYMAP_MUTATION_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-}
-
 // Keymap lookup substrate moved to the eval manifest (stage-4 W1/E4).
 // Core command modules keep the historical paths through this re-export.
 pub use crate::emacs_core::eval::keymap_lookup::{
-    KeymapElement, KeymapLookupEvent, KeymapMarker, KeymapResolution, MenuItemProperty,
-    for_each_keymap_element, get_keyelt, get_keyelt_runtime, get_keymap_in_obarray,
-    is_keymap_autoload_form, is_list_keymap, keymap_binding_spine, keymap_symbol_id,
-    list_keymap_access_with_event, list_keymap_for_each_binding,
-    list_keymap_for_each_binding_recursive, list_keymap_lookup_one,
+    KeymapElement, KeymapLookupEvent, KeymapMarker, KeymapMutationEpoch, KeymapResolution,
+    MenuItemProperty, for_each_keymap_element, get_keyelt, get_keyelt_runtime,
+    get_keymap_in_obarray, is_keymap_autoload_form, is_list_keymap, keymap_binding_spine,
+    keymap_mutation_epoch, keymap_symbol_id, list_keymap_access_with_event,
+    list_keymap_for_each_binding, list_keymap_for_each_binding_recursive, list_keymap_lookup_one,
     list_keymap_lookup_one_in_obarray, list_keymap_lookup_one_noinherit,
     list_keymap_lookup_one_t_ok_in_obarray, list_keymap_lookup_one_unresolved,
-    maybe_keymap_in_obarray, resolve_indirect_function_by_id_in_obarray,
+    maybe_keymap_in_obarray, note_keymap_mutation, resolve_indirect_function_by_id_in_obarray,
     resolve_keymap_or_autoload,
 };
 

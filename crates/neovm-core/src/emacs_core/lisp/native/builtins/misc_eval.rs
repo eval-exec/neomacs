@@ -364,7 +364,7 @@ pub(crate) fn builtin_defalias(eval: &mut super::eval::Context, args: Vec<Value>
             .symbol_function_id(symbol)
             .unwrap_or(Value::NIL);
         let mode = eval.symbol_mode();
-        crate::emacs_core::interactive::sync_interactive_registry_for_symbol_definition(
+        crate::emacs_core::eval::interactive_registry::sync_interactive_registry_for_symbol_definition(
             &mut eval.interactive,
             symbol,
             definition,

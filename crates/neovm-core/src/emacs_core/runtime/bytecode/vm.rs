@@ -9746,7 +9746,7 @@ impl<'a> Vm<'a> {
     }
 
     fn builtin_call_interactively_shared(&mut self, args: &[Value]) -> EvalResult {
-        crate::emacs_core::interactive::validate_call_interactively_args(args)?;
+        crate::emacs_core::eval::interactive_registry::validate_call_interactively_args(args)?;
         let command_identity =
             crate::emacs_core::interactive::CallInteractivelyCommandIdentity::capture(self.ctx);
         self.with_vm_root_scope(|vm| {
@@ -9757,7 +9757,7 @@ impl<'a> Vm<'a> {
                 vm.push_dynamic_vm_root(value);
             }
             let interactive_form = vm.call_function_with_roots(
-                crate::emacs_core::interactive::InteractiveFormSymbol::value(),
+                crate::emacs_core::eval::interactive_registry::InteractiveFormSymbol::value(),
                 &[args[0]],
             )?;
             vm.push_dynamic_vm_root(interactive_form);

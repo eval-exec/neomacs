@@ -45,13 +45,13 @@ use crate::emacs_core::eval::Context;
 use crate::emacs_core::eval::data::face::{
     BoxBorder, BoxStyle, Color, FaceHeight, Underline, UnderlinePosition, UnderlineStyle,
 };
+use crate::emacs_core::eval::interactive_registry::{InteractiveRegistry, InteractiveSpec};
 use crate::emacs_core::eval::subr_abi::SubrObj;
 use crate::emacs_core::fontset::{
     FontDefinitionMetadata, FontRepertory, FontSpecEntry, FontsetDataSnapshot,
     FontsetRangeEntrySnapshot, FontsetRegistrySnapshot, StoredFontSpec, restore_fontset_registry,
     snapshot_fontset_registry,
 };
-use crate::emacs_core::interactive::{InteractiveRegistry, InteractiveSpec};
 use crate::emacs_core::intern::{self, NameId, SymId};
 use crate::emacs_core::mode::{
     CustomGroup as ModeCustomGroup, CustomType as ModeCustomType,

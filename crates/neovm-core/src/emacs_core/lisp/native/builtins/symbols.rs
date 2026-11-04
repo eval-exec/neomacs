@@ -790,7 +790,7 @@ pub(crate) fn builtin_fset_2(
         def,
         crate::emacs_core::symbol::FunctionEpochBump::Fset,
     );
-    crate::emacs_core::interactive::sync_interactive_registry_for_symbol_definition(
+    crate::emacs_core::eval::interactive_registry::sync_interactive_registry_for_symbol_definition(
         &mut eval.interactive,
         symbol,
         def,
@@ -4268,7 +4268,7 @@ pub(crate) fn plan_interactive_form_in_state(
             if let Some(property) = obarray
                 .get_property_id(
                     current,
-                    crate::emacs_core::interactive::InteractiveFormSymbol::id(),
+                    crate::emacs_core::eval::interactive_registry::InteractiveFormSymbol::id(),
                 )
                 .filter(|value| !value.is_nil())
             {
@@ -4287,14 +4287,16 @@ pub(crate) fn plan_interactive_form_in_state(
 
     match function.kind() {
         ValueKind::Subr(id) => Ok(InteractiveFormPlan::Return(
-            crate::emacs_core::interactive::registered_builtin_interactive_form(id)
+            crate::emacs_core::eval::interactive_registry::registered_builtin_interactive_form(id)
                 .unwrap_or(Value::NIL),
         )),
         ValueKind::Veclike(VecLikeType::Subr) => {
             let id = function.as_subr_id().unwrap();
             Ok(InteractiveFormPlan::Return(
-                crate::emacs_core::interactive::registered_builtin_interactive_form(id)
-                    .unwrap_or(Value::NIL),
+                crate::emacs_core::eval::interactive_registry::registered_builtin_interactive_form(
+                    id,
+                )
+                .unwrap_or(Value::NIL),
             ))
         }
         ValueKind::Veclike(VecLikeType::Lambda) | ValueKind::Veclike(VecLikeType::Macro) => {
@@ -4358,7 +4360,7 @@ pub(crate) fn builtin_interactive_form(
             .obarray
             .get_property_id(
                 symbol,
-                crate::emacs_core::interactive::InteractiveFormSymbol::id(),
+                crate::emacs_core::eval::interactive_registry::InteractiveFormSymbol::id(),
             )
             .filter(|value| !value.is_nil())
         {
@@ -4371,10 +4373,11 @@ pub(crate) fn builtin_interactive_form(
                 // obtain the real spec, so do not let registry metadata turn
                 // that hint into a no-argument spec.
                 if !super::autoload::is_autoload_value(&next, eval.symbol_mode())
-                    && let Some(form) = crate::emacs_core::interactive::registry_interactive_form(
-                        &eval.interactive,
-                        symbol,
-                    )
+                    && let Some(form) =
+                        crate::emacs_core::eval::interactive_registry::registry_interactive_form(
+                            &eval.interactive,
+                            symbol,
+                        )
                 {
                     return Ok(form);
                 }
@@ -4388,13 +4391,19 @@ pub(crate) fn builtin_interactive_form(
     match fun.kind() {
         // GNU (data.c:1151-1161): SUBRP
         ValueKind::Subr(id) => {
-            let result = crate::emacs_core::interactive::registered_builtin_interactive_form(id)
+            let result =
+                crate::emacs_core::eval::interactive_registry::registered_builtin_interactive_form(
+                    id,
+                )
                 .unwrap_or(Value::NIL);
             Ok(result)
         }
         ValueKind::Veclike(VecLikeType::Subr) => {
             let id = fun.as_subr_id().unwrap();
-            let result = crate::emacs_core::interactive::registered_builtin_interactive_form(id)
+            let result =
+                crate::emacs_core::eval::interactive_registry::registered_builtin_interactive_form(
+                    id,
+                )
                 .unwrap_or(Value::NIL);
             Ok(result)
         }

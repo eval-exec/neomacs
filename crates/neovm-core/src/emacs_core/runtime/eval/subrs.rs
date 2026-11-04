@@ -241,7 +241,9 @@ impl Context {
         function: Option<SubrFn>,
         arity: SubrArity,
         dispatch_kind: SubrDispatchKind,
-        interactive_spec: Option<crate::emacs_core::interactive::BuiltinInteractiveSpec>,
+        interactive_spec: Option<
+            crate::emacs_core::eval::interactive_registry::BuiltinInteractiveSpec,
+        >,
     ) {
         let sym_id = intern(name);
         #[cfg(debug_assertions)]

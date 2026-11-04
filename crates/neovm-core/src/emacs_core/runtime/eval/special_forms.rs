@@ -1427,7 +1427,7 @@ impl Context {
                 .obarray
                 .symbol_function_id(symbol)
                 .unwrap_or(Value::NIL);
-            crate::emacs_core::interactive::sync_interactive_registry_for_symbol_definition(
+            crate::emacs_core::eval::interactive_registry::sync_interactive_registry_for_symbol_definition(
                 &mut self.interactive,
                 symbol,
                 definition,

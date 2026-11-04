@@ -12,6 +12,7 @@ use smallvec::SmallVec;
 use strum::{EnumString, IntoStaticStr};
 
 use self::data::xwidget;
+use self::interactive_registry::InteractiveRegistry;
 use super::abbrev::AbbrevManager;
 use super::advice::VariableWatcherList;
 use super::autoload::AutoloadManager;
@@ -30,7 +31,6 @@ pub use super::display_host::{
     TerminalId, XwidgetScriptRequestId,
 };
 use super::error::*;
-use super::interactive::InteractiveRegistry;
 use super::intern::{
     SymId, WellKnown, format_symbol_name_for_diagnostic, intern, intern_uninterned,
     is_canonical_id, is_keyword_id, resolve_sym, symbol_name_id,
@@ -7602,6 +7602,7 @@ fn value_list_to_values(list: &Value) -> LispArgVec {
 // Tests
 // ---------------------------------------------------------------------------
 mod gc_pacing;
+pub mod interactive_registry;
 pub mod keymap_lookup;
 mod thread_local_roots;
 use thread_local_roots::{collect_thread_local_gc_roots, for_each_thread_local_root_source};
