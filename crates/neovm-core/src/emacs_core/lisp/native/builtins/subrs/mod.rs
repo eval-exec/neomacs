@@ -443,7 +443,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ctx.register_subr(
         crate::emacs_core::subr::world_subr!(SubrSpec::new(
             "make-indirect-buffer",
-            NativeFn::ContextVec(builtin_make_indirect_buffer),
+            NativeFn::ContextVec(|ctx, args| builtin_make_indirect_buffer(ctx, args)),
             SubrArity::new(2, Some(4)),
         ))
         .requires_eval_state()

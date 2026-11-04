@@ -258,12 +258,15 @@ pub(crate) fn builtin_get_buffer_create<H: EditHost>(host: &mut H, args: Vec<Val
 }
 
 /// (make-indirect-buffer BASE-BUFFER NAME &optional CLONE INHIBIT-BUFFER-HOOKS) → buffer
-pub(crate) fn builtin_make_indirect_buffer(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_make_indirect_buffer<H: EditHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
-    let plan = prepare_make_indirect_buffer_in_manager(&mut eval.edit.buffers, args)?;
-    finish_make_indirect_buffer_hooks(eval, plan)
+    let plan = {
+        let (edit, _) = host.edit_and_vars();
+        prepare_make_indirect_buffer_in_manager(&mut edit.buffers, args)?
+    };
+    finish_make_indirect_buffer_hooks(host, plan)
 }
 
 pub(crate) fn prepare_make_indirect_buffer_in_manager(
@@ -332,20 +335,30 @@ pub(crate) fn prepare_make_indirect_buffer_in_manager(
     })
 }
 
-pub(crate) fn finish_make_indirect_buffer_hooks(
-    eval: &mut super::eval::Context,
+pub(crate) fn finish_make_indirect_buffer_hooks<H: EditHost>(
+    host: &mut H,
     plan: MakeIndirectBufferPlan,
 ) -> EvalResult {
     if plan.run_clone_hook {
-        eval.switch_current_buffer(plan.id)?;
-        let clone_result = run_named_hook_via_host(eval, "clone-indirect-buffer-hook", &[]);
+        // GNU make-indirect-buffer (src/buffer.c:950) runs the clone setup
+        // under `record_unwind_current_buffer` + `set_buffer_internal_1 (b)`.
+        // set_buffer_internal_1 does NOT touch buffer-list recency: GNU only
+        // records a buffer when it is displayed (`record_buffer`, window.c:582).
+        // The unrecorded switch is therefore the GNU-faithful one here; the
+        // recorded switch this used to call added a spurious recency bump.
+        host.set_current_buffer_unrecorded(plan.id)?;
+        let clone_result = run_named_hook_via_host(host, "clone-indirect-buffer-hook", &[]);
         if let Some(saved_id) = plan.saved_current {
-            eval.restore_current_buffer_if_live(saved_id);
+            host.restore_current_buffer_if_live(saved_id);
         }
         clone_result?;
     }
-    if !eval.edit.buffers.buffer_hooks_inhibited(plan.id) {
-        run_buffer_list_update_hook(eval)?;
+    let hooks_inhibited = {
+        let (edit, _) = host.edit_and_vars();
+        edit.buffers.buffer_hooks_inhibited(plan.id)
+    };
+    if !hooks_inhibited {
+        run_buffer_list_update_hook(host)?;
     }
     Ok(Value::make_buffer(plan.id))
 }
