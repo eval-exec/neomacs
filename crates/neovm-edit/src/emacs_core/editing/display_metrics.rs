@@ -410,3 +410,83 @@ impl LineWrap {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Character-cell metrics
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WindowBodyAxis {
+    Width,
+    Height,
+}
+
+/// Positive pixel metrics for one character cell.
+///
+/// Construction normalizes invalid backend/frame metrics at the boundary, so
+/// body measurement never divides by zero, a negative value, or NaN.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WindowBodyCellSize {
+    width: f32,
+    height: f32,
+}
+
+impl WindowBodyCellSize {
+    pub fn new(width: f32, height: f32) -> Self {
+        Self {
+            width: positive_or_one(width),
+            height: positive_or_one(height),
+        }
+    }
+
+    pub fn along(self, axis: WindowBodyAxis) -> f32 {
+        match axis {
+            WindowBodyAxis::Width => self.width,
+            WindowBodyAxis::Height => self.height,
+        }
+    }
+}
+
+fn positive_or_one(value: f32) -> f32 {
+    if value.is_finite() && value > 0.0 {
+        value
+    } else {
+        1.0
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Window margins and frame geometry hints
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WindowMargins {
+    left: usize,
+    right: usize,
+}
+
+impl WindowMargins {
+    pub const ZERO: Self = Self { left: 0, right: 0 };
+
+    pub const fn new(left: usize, right: usize) -> Self {
+        Self { left, right }
+    }
+
+    pub const fn left(self) -> usize {
+        self.left
+    }
+
+    pub const fn right(self) -> usize {
+        self.right
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GuiFrameGeometryHints {
+    pub base_width: u32,
+    pub base_height: u32,
+    pub min_width: u32,
+    pub min_height: u32,
+    pub width_inc: u32,
+    pub height_inc: u32,
+}

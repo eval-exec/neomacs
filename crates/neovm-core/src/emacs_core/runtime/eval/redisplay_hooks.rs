@@ -347,7 +347,10 @@ impl Context {
             state.tree(),
             state.tree().root_id(),
             neovm_value::display_vocab::SplitDirection::Vertical,
-            crate::window::body::WindowBodyCellSize::new(state.char_width, state.char_height),
+            neovm_edit::emacs_core::display_metrics::WindowBodyCellSize::new(
+                state.char_width,
+                state.char_height,
+            ),
         ) {
             return Ok(PreparedMiniResizeOutcome::Unchanged);
         }

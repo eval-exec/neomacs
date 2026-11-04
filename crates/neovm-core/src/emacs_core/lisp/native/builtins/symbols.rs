@@ -3085,7 +3085,10 @@ pub(crate) fn builtin_resize_mini_window_internal(
         frame.tree(),
         frame.tree().root_id(),
         neovm_value::display_vocab::SplitDirection::Vertical,
-        crate::window::body::WindowBodyCellSize::new(frame.char_width, frame.char_height),
+        neovm_edit::emacs_core::display_metrics::WindowBodyCellSize::new(
+            frame.char_width,
+            frame.char_height,
+        ),
     ) || mini_new <= 0
         || old_total != new_total
     {

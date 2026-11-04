@@ -548,27 +548,7 @@ pub use neovm_value::display_vocab::WindowHistoryState;
 
 pub(crate) type WindowParameters = Vec<(Value, Value)>;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct WindowMargins {
-    left: usize,
-    right: usize,
-}
-
-impl WindowMargins {
-    pub const ZERO: Self = Self { left: 0, right: 0 };
-
-    pub const fn new(left: usize, right: usize) -> Self {
-        Self { left, right }
-    }
-
-    pub const fn left(self) -> usize {
-        self.left
-    }
-
-    pub const fn right(self) -> usize {
-        self.right
-    }
-}
+pub use neovm_edit::emacs_core::display_metrics::WindowMargins;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WindowRedisplayState {
@@ -3827,15 +3807,7 @@ impl PendingGuiResize {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct GuiFrameGeometryHints {
-    pub base_width: u32,
-    pub base_height: u32,
-    pub min_width: u32,
-    pub min_height: u32,
-    pub width_inc: u32,
-    pub height_inc: u32,
-}
+pub use neovm_edit::emacs_core::display_metrics::GuiFrameGeometryHints;
 
 #[derive(Clone, Debug, PartialEq)]
 struct PreparedDisplayPresentation {

@@ -2307,7 +2307,7 @@ pub struct GuiFrameHostRequest {
     pub width: u32,
     pub height: u32,
     pub title: crate::heap_types::LispString,
-    pub geometry_hints: crate::window::GuiFrameGeometryHints,
+    pub geometry_hints: neovm_edit::emacs_core::display_metrics::GuiFrameGeometryHints,
     pub visibility: neovm_value::display_vocab::FrameVisibility,
     pub decorated: bool,
     pub fullscreen: Option<FrameFullscreen>,
