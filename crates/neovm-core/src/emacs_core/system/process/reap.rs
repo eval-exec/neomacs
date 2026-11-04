@@ -134,6 +134,7 @@
 
 use super::{Value, process_status_exit_value};
 use crate::emacs_core::callproc::{SpawnedChild, SpawnedChildIo};
+use crate::emacs_core::eval::data::process_state::{ChildHandle, ChildOwnership, ReapableChild};
 use crate::emacs_core::process::SystemProcessExt;
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroUsize;
@@ -593,36 +594,6 @@ fn collect_deferred_children(sweep: DeferredReapSweep) {
     registry.refresh_fallback_flag();
 }
 
-/// A child this port spawned and has **not** reaped: GNU's `p->alive == 1`,
-/// carrying the pid that authorises `waitpid` and `kill` on it.
-///
-/// The fields are private and the only constructors are
-/// [`ChildOwnership::of_pipe_child`] and [`ChildOwnership::of_pty_child`], so
-/// the handles whose `try_wait` is a reap are not reachable from outside this
-/// module.
-pub(crate) struct ReapableChild {
-    /// GNU's `p->pid` as a CAPABILITY.
-    ///
-    /// `Process::os_pid` keeps the same number for `Fprocess_id`, which GNU
-    /// also keeps after the reap; this copy is the one that authorises a
-    /// syscall, and it disappears with the reap.
-    pid: u32,
-    handle: ChildHandle,
-}
-
-/// Which kind of child handle a spawn left behind.
-///
-/// Both own a reap of their own -- `std::process::Child::try_wait` and
-/// `portable_pty::Child::try_wait` are each a `waitpid` -- which is exactly
-/// why neither may be reachable from anywhere else.
-enum ChildHandle {
-    /// `std::process::Child`: the pipe spawn, and the pty spawn whose
-    /// `:stderr` split goes through `pre_exec`.
-    Pipe(Box<SpawnedChild>),
-    /// `portable_pty`'s child handle.
-    Pty(Box<dyn portable_pty::Child + Send + Sync>),
-}
-
 static_assertions::assert_impl_all!(ReapableChild: Send);
 
 /// What one probe of a child's status found.
@@ -655,34 +626,6 @@ pub(crate) enum ChildStatusChange {
     /// used to be read as "no change", which left the delete path signalling
     /// a pid this port did not own.
     Gone,
-}
-
-/// GNU's `p->alive`, with the pid attached to the arm that may use it.
-///
-/// [`Default`] is [`Self::NotAChild`], which is what ledger 165's finding
-/// needs: a pipe, network or serial connection has no pid at all, so
-/// `get_child_status`'s `eassert (child > 0)` (src/sysdep.c:462) is a state
-/// this enum cannot enter rather than a check inside a loop.
-#[derive(Default)]
-pub(crate) enum ChildOwnership {
-    /// No child was ever spawned: `make-pipe-process`,
-    /// `make-network-process`, `make-serial-process`, and the harness-only
-    /// records with no OS backing.
-    #[default]
-    NotAChild,
-    /// GNU's `p->alive == 1`.
-    Unreaped(ReapableChild),
-    /// GNU's `p->alive == 0`: the pid has gone back to the OS.
-    ///
-    /// It carries nothing, and that is the point -- there is no pid here for
-    /// `kill(2)` or `waitpid(2)` to be given.  The terminal STATUS is not kept
-    /// here either, because `Process::pending_status`/`Process::status` is
-    /// where this port records it, exactly as GNU records it in
-    /// `p->raw_status` rather than in `p->alive`.
-    Reaped,
-    /// The sole unreaped handle belongs to the deferred registry. This process
-    /// cannot signal or wait for it again; native completion performs the reap.
-    Deferred,
 }
 
 impl ChildOwnership {

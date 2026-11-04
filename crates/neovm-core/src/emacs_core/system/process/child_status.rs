@@ -176,6 +176,7 @@ use super::{
     Process, ProcessId, ProcessManager, ProcessStatusSymbol, Value, process_effective_status,
     process_public_status_symbol,
 };
+use crate::emacs_core::eval::data::process_state::StatusChangeTicks;
 use crate::emacs_core::process::SystemProcessExt;
 
 /// A process that GNU's SIGCHLD sweep may harvest.
@@ -833,32 +834,6 @@ impl StatusChangeSite {
             | Self::HandleChildSignal => StatusChangeNotifier::TheWaitsStatusNotify,
         }
     }
-}
-
-/// GNU's `p->tick` / `p->update_tick` pair (src/process.h:144-147):
-///
-/// ```c
-///     /* Event-count of last event in which this process changed status.  */
-///     EMACS_INT tick;
-///     /* Event-count of last such event reported.  */
-///     EMACS_INT update_tick;
-/// ```
-///
-/// It is one value rather than two fields because the only assignment GNU ever
-/// makes to `update_tick` is `p->update_tick = p->tick;` -- at :7894 and again
-/// at :7935 -- so [`Self::notified`] takes no argument and *"notified a tick
-/// this process never reached"* is not a state that can be written.
-///
-/// This is deliberately NOT the same bit as `status_notify_pending`, which is
-/// GNU's `raw_status_new`: GNU keeps them apart and sets them independently
-/// (`Fdelete_process` at :1123-1128 and `process_send_signal` at :7176-7178
-/// both CLEAR `raw_status_new` and MOVE the tick in the same breath).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct StatusChangeTicks {
-    /// GNU `p->tick`.
-    changed: u64,
-    /// GNU `p->update_tick`.
-    notified: u64,
 }
 
 impl StatusChangeTicks {

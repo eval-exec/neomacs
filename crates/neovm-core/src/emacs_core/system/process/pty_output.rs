@@ -3,19 +3,7 @@
 
 use std::io::{self, Read};
 
-/// Owned by one process manager, with the same Send contract as its reader.
-/// No shared or thread-local state is involved: the owning mutator alone
-/// changes interest, and both states retain the descriptor for status_notify.
-pub(crate) struct PtyOutputReader {
-    reader: Box<dyn Read + Send>,
-    interest: PtyReadInterest,
-}
-
-#[derive(Clone, Copy, Debug)]
-enum PtyReadInterest {
-    Monitored,
-    DrainOnly,
-}
+use crate::emacs_core::eval::data::process_state::{PtyOutputReader, PtyReadInterest};
 
 impl PtyOutputReader {
     pub(super) fn new(reader: Box<dyn Read + Send>) -> Self {

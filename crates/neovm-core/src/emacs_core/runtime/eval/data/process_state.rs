@@ -9,7 +9,10 @@
 //! delivery of A3 re-points them here.
 
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::io::Read;
+use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
+#[cfg(unix)]
+use std::os::unix::net::{UnixDatagram, UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -18,17 +21,16 @@ use std::time::Duration;
 
 use neovm_value::heap_types::{LispString, ProcessId};
 use neovm_value::value::Value;
+use num_enum::IntoPrimitive;
 use polling::Poller;
+use socket2::Socket;
 use strum::{EnumString, IntoStaticStr};
 
+use crate::emacs_core::eval::data::process_spawn::SpawnedChild;
 use crate::emacs_core::eval::data::process_tls::TlsStream;
-use crate::emacs_core::process::child_status::StatusChangeTicks;
-use crate::emacs_core::process::pty_output::PtyOutputReader;
-use crate::emacs_core::process::reap::ChildOwnership;
 use crate::emacs_core::process::sys::{ChildStatusSource, SerialPort};
 #[cfg(test)]
 use crate::emacs_core::process::types::NativeConnectObservationSlot;
-use crate::emacs_core::process::{GnutlsInitStage, NetworkSocket, ProcessInputDisposition};
 use crate::host_effect::wake::{
     ControlDestination, ControlNudge, ControlNudgeOutcome, NotificationLatch,
 };
@@ -487,4 +489,165 @@ pub struct PendingDnsRequest {
     pub receiver: mpsc::Receiver<Result<Vec<SocketAddr>, String>>,
     pub ready: Arc<AtomicBool>,
     pub socket_options: Vec<NetworkSocketOptionSpec>,
+}
+
+// Sibling process-state definitions (A3 part 3b).
+
+/// GNU-compatible GnuTLS process initialization stage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, IntoPrimitive)]
+#[repr(i64)]
+pub enum GnutlsInitStage {
+    Empty = 0,
+    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    CredAlloc = 1,
+    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    Files = 2,
+    Callbacks = 3,
+    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    Init = 4,
+    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    Priority = 5,
+    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    CredSet = 6,
+    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    TransportPointersSet = 7,
+    HandshakeTried = 8,
+    Ready = 9,
+}
+
+/// What a Lisp send should do with bytes after the process's write side has
+/// changed state.
+///
+/// GNU represents this with `p->outfd`: a live descriptor accepts bytes,
+/// `process-send-eof` replaces it with `/dev/null`, and EPIPE sets it to -1.
+/// Neomacs keeps bidirectional sockets, TLS streams, and serial ports in one
+/// Rust owner, so dropping the owner to express a closed write side would also
+/// discard still-readable output. Naming the three states preserves GNU's
+/// half-connection semantics independently of resource ownership.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ProcessInputDisposition {
+    #[default]
+    Connected,
+    Discard,
+    Disconnected,
+}
+
+/// OS socket owned by a network process.
+///
+/// GNU Emacs keeps the concrete socket type in the process record
+/// (`socktype`, `is_server`, and fd slots).  Keep the Rust side explicit as
+/// well, so listener-only operations and stream I/O cannot be confused.
+#[derive(Debug)]
+pub enum NetworkSocket {
+    TcpStream(TcpStream),
+    TcpListener(TcpListener),
+    UdpSocket(UdpSocket),
+    #[cfg(unix)]
+    SeqpacketStream(Socket),
+    #[cfg(unix)]
+    SeqpacketListener(Socket),
+    #[cfg(unix)]
+    UnixStream(UnixStream),
+    #[cfg(unix)]
+    UnixListener(UnixListener),
+    #[cfg(unix)]
+    UnixDatagram(UnixDatagram),
+}
+
+/// GNU's `p->alive`, with the pid attached to the arm that may use it.
+///
+/// [`Default`] is [`Self::NotAChild`], which is what ledger 165's finding
+/// needs: a pipe, network or serial connection has no pid at all, so
+/// `get_child_status`'s `eassert (child > 0)` (src/sysdep.c:462) is a state
+/// this enum cannot enter rather than a check inside a loop.
+#[derive(Default)]
+pub enum ChildOwnership {
+    /// No child was ever spawned: `make-pipe-process`,
+    /// `make-network-process`, `make-serial-process`, and the harness-only
+    /// records with no OS backing.
+    #[default]
+    NotAChild,
+    /// GNU's `p->alive == 1`.
+    Unreaped(ReapableChild),
+    /// GNU's `p->alive == 0`: the pid has gone back to the OS.
+    ///
+    /// It carries nothing, and that is the point -- there is no pid here for
+    /// `kill(2)` or `waitpid(2)` to be given.  The terminal STATUS is not kept
+    /// here either, because `Process::pending_status`/`Process::status` is
+    /// where this port records it, exactly as GNU records it in
+    /// `p->raw_status` rather than in `p->alive`.
+    Reaped,
+    /// The sole unreaped handle belongs to the deferred registry. This process
+    /// cannot signal or wait for it again; native completion performs the reap.
+    Deferred,
+}
+
+/// Which kind of child handle a spawn left behind.
+///
+/// Both own a reap of their own -- `std::process::Child::try_wait` and
+/// `portable_pty::Child::try_wait` are each a `waitpid` -- which is exactly
+/// why neither may be reachable from anywhere else.
+pub enum ChildHandle {
+    /// `std::process::Child`: the pipe spawn, and the pty spawn whose
+    /// `:stderr` split goes through `pre_exec`.
+    Pipe(Box<SpawnedChild>),
+    /// `portable_pty`'s child handle.
+    Pty(Box<dyn portable_pty::Child + Send + Sync>),
+}
+
+/// A child this port spawned and has **not** reaped: GNU's `p->alive == 1`,
+/// carrying the pid that authorises `waitpid` and `kill` on it.
+///
+/// The fields are private and the only constructors are
+/// [`ChildOwnership::of_pipe_child`] and [`ChildOwnership::of_pty_child`], so
+/// the handles whose `try_wait` is a reap are not reachable from outside this
+/// module.
+pub struct ReapableChild {
+    /// GNU's `p->pid` as a CAPABILITY.
+    ///
+    /// `Process::os_pid` keeps the same number for `Fprocess_id`, which GNU
+    /// also keeps after the reap; this copy is the one that authorises a
+    /// syscall, and it disappears with the reap.
+    pub pid: u32,
+    pub handle: ChildHandle,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum PtyReadInterest {
+    Monitored,
+    DrainOnly,
+}
+
+/// Owned by one process manager, with the same Send contract as its reader.
+/// No shared or thread-local state is involved: the owning mutator alone
+/// changes interest, and both states retain the descriptor for status_notify.
+pub struct PtyOutputReader {
+    pub reader: Box<dyn Read + Send>,
+    pub interest: PtyReadInterest,
+}
+
+/// GNU's `p->tick` / `p->update_tick` pair (src/process.h:144-147):
+///
+/// ```c
+///     /* Event-count of last event in which this process changed status.  */
+///     EMACS_INT tick;
+///     /* Event-count of last such event reported.  */
+///     EMACS_INT update_tick;
+/// ```
+///
+/// It is one value rather than two fields because the only assignment GNU ever
+/// makes to `update_tick` is `p->update_tick = p->tick;` -- at :7894 and again
+/// at :7935 -- so [`Self::notified`] takes no argument and *"notified a tick
+/// this process never reached"* is not a state that can be written.
+///
+/// This is deliberately NOT the same bit as `status_notify_pending`, which is
+/// GNU's `raw_status_new`: GNU keeps them apart and sets them independently
+/// (`Fdelete_process` at :1123-1128 and `process_send_signal` at :7176-7178
+/// both CLEAR `raw_status_new` and MOVE the tick in the same breath).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StatusChangeTicks {
+    /// GNU `p->tick`.
+    pub changed: u64,
+    /// GNU `p->update_tick`.
+    pub notified: u64,
 }

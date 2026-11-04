@@ -49,28 +49,6 @@ use super::tls::{
 };
 use super::wait::ProcessOutputWaitOutcome;
 
-/// OS socket owned by a network process.
-///
-/// GNU Emacs keeps the concrete socket type in the process record
-/// (`socktype`, `is_server`, and fd slots).  Keep the Rust side explicit as
-/// well, so listener-only operations and stream I/O cannot be confused.
-#[derive(Debug)]
-pub enum NetworkSocket {
-    TcpStream(TcpStream),
-    TcpListener(TcpListener),
-    UdpSocket(UdpSocket),
-    #[cfg(unix)]
-    SeqpacketStream(Socket),
-    #[cfg(unix)]
-    SeqpacketListener(Socket),
-    #[cfg(unix)]
-    UnixStream(UnixStream),
-    #[cfg(unix)]
-    UnixListener(UnixListener),
-    #[cfg(unix)]
-    UnixDatagram(UnixDatagram),
-}
-
 /// Platform abstraction layer for OS-specific subprocess facilities (currently
 /// the child-status wait source). See `process/sys/mod.rs`.
 pub(crate) mod sys;
@@ -83,7 +61,6 @@ mod executable;
 pub(super) use executable::{ExecutableLookupMode, ExecutableSearch};
 
 pub(crate) mod pty_output;
-use pty_output::PtyOutputReader;
 
 /// GNU `status_notify`'s "retire, then run the sentinel" ordering, as a type.
 /// See `process/status_notify.rs`.
@@ -95,15 +72,13 @@ use status_notify::ProcessStatusNotification;
 /// being read before the recording has been made.  See
 /// `process/child_status.rs`.
 pub(crate) mod child_status;
-pub(crate) use child_status::{
-    StatusChangeSite, StatusChangeTicks, UnrecordedStatusRead, UpdateStatusSite,
-};
+pub(crate) use child_status::{StatusChangeSite, UnrecordedStatusRead, UpdateStatusSite};
 
 /// The single owner of `waitpid`, and GNU's `p->alive` as a type: a child that
 /// has been reaped has no pid to hand to `kill(2)` or to a second `waitpid`.
 /// See `process/reap.rs`.
 pub(crate) mod reap;
-pub(crate) use reap::{ChildOwnership, ChildStatusChange};
+pub(crate) use reap::ChildStatusChange;
 
 /// What GNU's `status_notify` does with a process whose status has just become
 /// terminal, chosen by `delete-exited-processes` (src/process.c:7926-7929, the
@@ -148,23 +123,6 @@ enum ProcessIoTeardown {
     /// stream, keeping the rest of `live_io` as this port's network accessors
     /// expect.
     Network,
-}
-
-/// What a Lisp send should do with bytes after the process's write side has
-/// changed state.
-///
-/// GNU represents this with `p->outfd`: a live descriptor accepts bytes,
-/// `process-send-eof` replaces it with `/dev/null`, and EPIPE sets it to -1.
-/// Neomacs keeps bidirectional sockets, TLS streams, and serial ports in one
-/// Rust owner, so dropping the owner to express a closed write side would also
-/// discard still-readable output. Naming the three states preserves GNU's
-/// half-connection semantics independently of resource ownership.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum ProcessInputDisposition {
-    #[default]
-    Connected,
-    Discard,
-    Disconnected,
 }
 
 /// The concrete endpoint selected by GNU's `send_process` precedence.
@@ -254,28 +212,6 @@ impl ProcessInputEndpoint {
         }
         proc.input_disposition = ProcessInputDisposition::Disconnected;
     }
-}
-
-/// GNU-compatible GnuTLS process initialization stage.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, IntoPrimitive)]
-#[repr(i64)]
-pub(crate) enum GnutlsInitStage {
-    Empty = 0,
-    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    CredAlloc = 1,
-    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    Files = 2,
-    Callbacks = 3,
-    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    Init = 4,
-    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    Priority = 5,
-    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    CredSet = 6,
-    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    TransportPointersSet = 7,
-    HandshakeTried = 8,
-    Ready = 9,
 }
 
 impl NetworkSocket {
