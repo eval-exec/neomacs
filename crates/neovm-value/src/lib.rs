@@ -19,6 +19,7 @@ pub mod heap_registry;
 pub mod heap_types;
 pub mod intern;
 pub mod keyboard_pure;
+pub mod kmacro;
 pub mod list_scan;
 pub mod minibuffer_state;
 pub mod plist;

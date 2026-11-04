@@ -35,7 +35,6 @@ use super::intern::{
     is_canonical_id, is_keyword_id, resolve_sym, symbol_name_id,
 };
 use super::keymap::{list_keymap_define, list_keymap_set_parent, make_sparse_list_keymap};
-use super::kmacro::KmacroManager;
 use super::minibuffer::MinibufferManager;
 use super::mode::ModeRegistry;
 use super::print::map_flow;
@@ -56,6 +55,7 @@ use crate::window::{
     WindowLayoutQueryAdapter,
 };
 use neovm_edit::emacs_core::display_metrics::WindowId;
+use neovm_value::kmacro::KmacroManager;
 
 pub(crate) mod world;
 pub use world::{ContextShutdownError, ObarrayWriteAccess, OutstandingWorldViews, WorldEra};

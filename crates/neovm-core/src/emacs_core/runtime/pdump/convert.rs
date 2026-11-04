@@ -50,7 +50,6 @@ use crate::emacs_core::fontset::{
 };
 use crate::emacs_core::interactive::{InteractiveRegistry, InteractiveSpec};
 use crate::emacs_core::intern::{self, NameId, SymId};
-use crate::emacs_core::kmacro::KmacroManager;
 use crate::emacs_core::mode::{
     CustomGroup as ModeCustomGroup, CustomType as ModeCustomType,
     CustomVariable as ModeCustomVariable, FontLockDefaults, FontLockKeyword, MajorMode, MinorMode,
@@ -79,6 +78,7 @@ use crate::tagged::header::{
     RecordObj, StringObj, SubCharTableObj, VecLikeHeader, VectorObj,
 };
 use crate::tagged::value::TaggedValue;
+use neovm_value::kmacro::KmacroManager;
 
 thread_local! {
     static PDUMP_LOAD_NAME_REMAP: RefCell<Option<Vec<NameId>>> = const { RefCell::new(None) };
