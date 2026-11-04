@@ -5,7 +5,7 @@
 //! - `libxml-parse-xml-region` — XML parsing via `quick-xml` crate
 //! - `libxml-available-p` — feature availability probe
 
-use super::error::{EvalResult, Flow, signal};
+use super::error::{signal, EvalResult, Flow};
 use super::value::*;
 use crate::buffer::EmacsByteRange;
 use crate::emacs_core::error::LispCondition;
@@ -178,8 +178,8 @@ impl PendingText {
 
 /// Parse region using quick-xml and return Elisp parse tree.
 fn parse_xml_region(data: &[u8], discard_comments: bool) -> Option<Value> {
-    use quick_xml::Reader;
     use quick_xml::events::Event;
+    use quick_xml::Reader;
 
     let mut reader = Reader::from_reader(data);
     reader.config_mut().trim_text(false);
@@ -398,11 +398,47 @@ fn is_head_element(tag: &str) -> bool {
 /// Parse region as HTML using tl and return Elisp parse tree.
 fn parse_html_region(data: &[u8], discard_comments: bool) -> Option<Value> {
     let input = String::from_utf8_lossy(data);
-    let dom = tl::parse(&input, tl::ParserOptions::default()).ok()?;
+    let mut remaining = input.as_ref();
+    let mut xml_pi_comment: Option<Value> = None;
+
+    // GNU libxml2 handles XML declarations (<?xml ...?>) as comments and skips <!DOCTYPE ...>.
+    // The `tl` HTML parser mishandles XML prologs, producing corrupted tags (tag name '##')
+    // and embedding subsequent elements inside it.
+    loop {
+        let trimmed = remaining.trim_start();
+        if trimmed.starts_with("<?xml") || trimmed.starts_with("<?XML") {
+            if let Some(end_idx) = trimmed.find("?>") {
+                if !discard_comments && xml_pi_comment.is_none() {
+                    let content = &trimmed[1..end_idx + 1]; // "?xml ...?"
+                    xml_pi_comment = Some(Value::list(vec![
+                        Value::symbol("comment"),
+                        Value::NIL,
+                        Value::string(content),
+                    ]));
+                }
+                remaining = &trimmed[end_idx + 2..];
+                continue;
+            }
+        } else if trimmed.to_ascii_uppercase().starts_with("<!DOCTYPE") {
+            if let Some(end_idx) = trimmed.find('>') {
+                remaining = &trimmed[end_idx + 1..];
+                continue;
+            }
+        }
+        break;
+    }
+
+    let dom = tl::parse(remaining, tl::ParserOptions::default()).ok()?;
     let parser = dom.parser();
     let handles = dom.children();
 
     let mut nodes: Vec<TopNode> = Vec::new();
+    if let Some(comment_val) = xml_pi_comment {
+        nodes.push(TopNode {
+            tag: None,
+            value: comment_val,
+        });
+    }
     for handle in handles {
         let node = handle.get(parser)?;
         if let Some(top) = convert_tl_top_node(node, parser, discard_comments) {
@@ -551,11 +587,18 @@ fn convert_tl_node(node: &tl::Node, parser: &tl::Parser, discard_comments: bool)
             if discard_comments {
                 None
             } else {
-                let text = comment.as_utf8_str();
+                let raw_text = comment.as_utf8_str();
+                let mut text = raw_text.as_ref();
+                if text.starts_with("<!--") {
+                    text = &text[4..];
+                }
+                if text.ends_with("-->") {
+                    text = &text[..text.len() - 3];
+                }
                 Some(Value::list(vec![
                     Value::symbol("comment"),
                     Value::NIL,
-                    Value::string(text.as_ref()),
+                    Value::string(text),
                 ]))
             }
         }
@@ -566,15 +609,28 @@ fn convert_tl_node(node: &tl::Node, parser: &tl::Parser, discard_comments: bool)
             let raw_tag = element.name().as_utf8_str();
             let tag = raw_tag.strip_suffix('/').unwrap_or(raw_tag.as_ref());
             let attrs = convert_tl_attributes(element.attributes());
-            let children = element.children();
-            let children_handles = children.top();
-            let mut child_values = Vec::new();
-            for handle in children_handles.iter() {
-                let child_node = handle.get(parser)?;
-                if let Some(val) = convert_tl_node(child_node, parser, discard_comments) {
-                    child_values.push(val);
+
+            let is_raw_content_tag =
+                tag.eq_ignore_ascii_case("style") || tag.eq_ignore_ascii_case("script");
+            let child_values = if is_raw_content_tag {
+                let inner = element.inner_html(parser);
+                if inner.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![Value::string(inner.as_str())]
                 }
-            }
+            } else {
+                let children = element.children();
+                let children_handles = children.top();
+                let mut vals = Vec::new();
+                for handle in children_handles.iter() {
+                    let child_node = handle.get(parser)?;
+                    if let Some(val) = convert_tl_node(child_node, parser, discard_comments) {
+                        vals.push(val);
+                    }
+                }
+                vals
+            };
             Some(make_element_node(tag, attrs, child_values))
         }
     }
