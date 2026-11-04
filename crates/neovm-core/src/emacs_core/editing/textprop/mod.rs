@@ -117,10 +117,7 @@ impl StickinessProperty {
     }
 }
 
-pub(crate) fn init_textprop_vars(
-    obarray: &mut crate::emacs_core::symbol::Obarray,
-    _custom: &mut crate::emacs_core::custom::CustomManager,
-) {
+pub(crate) fn init_textprop_vars(obarray: &mut crate::emacs_core::symbol::Obarray) {
     let default_properties = TextPropertyControlVariable::DefaultTextProperties;
     obarray.seed_value(default_properties.name(), Value::NIL);
     obarray.make_special(default_properties.name());
@@ -1553,8 +1550,9 @@ pub(crate) fn verify_text_read_only_for_insert_in_state<'a, Vars: EditVariableRe
 /// Resolve OBJECT-arg to a buffer and verify text-read-only over the
 /// `[BEG, END)` byte range.  No-op if OBJECT is a string (text properties
 /// on strings have no read-only enforcement in GNU either).
-fn verify_property_change_read_only(
-    eval: &mut super::eval::Context,
+fn verify_property_change_read_only<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
+    buffers: &BufferManager,
     args: &[Value],
     object_arg_idx: usize,
 ) -> Result<(), Flow> {
@@ -1564,14 +1562,11 @@ fn verify_property_change_read_only(
     if args.len() < 2 {
         return Ok(());
     }
-    let beg = expect_integer_or_marker_in_buffers(&eval.edit.buffers, &args[0])?;
-    let end = expect_integer_or_marker_in_buffers(&eval.edit.buffers, &args[1])?;
-    let buf_id =
-        resolve_text_property_buffer_id_in_buffers(&eval.edit.buffers, args.get(object_arg_idx))?;
+    let beg = expect_integer_or_marker_in_buffers(buffers, &args[0])?;
+    let end = expect_integer_or_marker_in_buffers(buffers, &args[1])?;
+    let buf_id = resolve_text_property_buffer_id_in_buffers(buffers, args.get(object_arg_idx))?;
     let byte_range = {
-        let buf = eval
-            .edit
-            .buffers
+        let buf = buffers
             .get(buf_id)
             .ok_or_else(|| signal("error", vec![Value::string("Buffer does not exist")]))?;
         let Some(range) = validate_buffer_property_range(buf, beg, end, args[0], args[1])? else {
@@ -1579,16 +1574,11 @@ fn verify_property_change_read_only(
         };
         range
     };
-    verify_text_read_only_emacs_byte_range_in_state(
-        eval.variables(),
-        &eval.edit.buffers,
-        buf_id,
-        byte_range,
-    )
+    verify_text_read_only_emacs_byte_range_in_state(vars, buffers, buf_id, byte_range)
 }
 
 fn buffer_property_range_for_args(
-    eval: &super::eval::Context,
+    buffers: &BufferManager,
     args: &[Value],
     object_arg_idx: usize,
 ) -> Result<Option<(BufferId, EmacsByteRange)>, Flow> {
@@ -1598,11 +1588,10 @@ fn buffer_property_range_for_args(
     if args.len() < 2 {
         return Ok(None);
     }
-    let beg = expect_integer_or_marker_in_buffers(&eval.edit.buffers, &args[0])?;
-    let end = expect_integer_or_marker_in_buffers(&eval.edit.buffers, &args[1])?;
-    let buf_id =
-        resolve_text_property_buffer_id_in_buffers(&eval.edit.buffers, args.get(object_arg_idx))?;
-    let Some(buf) = eval.edit.buffers.get(buf_id) else {
+    let beg = expect_integer_or_marker_in_buffers(buffers, &args[0])?;
+    let end = expect_integer_or_marker_in_buffers(buffers, &args[1])?;
+    let buf_id = resolve_text_property_buffer_id_in_buffers(buffers, args.get(object_arg_idx))?;
+    let Some(buf) = buffers.get(buf_id) else {
         return Err(signal(
             "error",
             vec![Value::string("Buffer does not exist")],
@@ -1620,26 +1609,26 @@ fn buffer_property_range_for_args(
 /// bug#36190), so the caller's buffer is current again on every exit,
 /// including a hook, read-only or argument signal. The after-change signal
 /// runs only once the before-change signal and the mutation succeeded.
-fn with_buffer_property_change(
-    eval: &mut super::eval::Context,
+fn with_buffer_property_change<H: EditHost>(
+    host: &mut H,
     buf_id: BufferId,
     byte_range: EmacsByteRange,
     mutate: impl FnOnce(&mut BufferManager) -> EvalResult,
 ) -> EvalResult {
-    let mut scope = super::eval::CurrentBufferScope::for_buffer(eval, buf_id)?;
-    let result = (|| {
-        let ctx = scope.context();
+    host.with_current_buffer_scope(buf_id, |host| {
         let change = super::editfns::text_change_for_unchanged_extent_in_manager(
-            &ctx.edit.buffers,
+            &host.edit_and_vars().0.buffers,
             buf_id,
             byte_range,
         )?;
-        super::editfns::signal_before_property_change(ctx, change)?;
-        let value = mutate(&mut ctx.edit.buffers)?;
-        super::editfns::signal_after_property_change(ctx, change)?;
+        super::editfns::signal_before_property_change(&mut *host, change)?;
+        let value = {
+            let (edit, _vars) = host.edit_and_vars();
+            mutate(&mut edit.buffers)?
+        };
+        super::editfns::signal_after_property_change(&mut *host, change)?;
         Ok(value)
-    })();
-    scope.finish(result)
+    })
 }
 
 fn call_text_property_hook_lists<H: EditHost>(
@@ -1845,19 +1834,16 @@ pub(crate) fn report_interval_modification<H: EditHost>(
 }
 
 /// (put-text-property BEG END PROP VAL &optional OBJECT)
-pub(crate) fn builtin_put_text_property(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
+pub(crate) fn builtin_put_text_property<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     crate::emacs_core::error::expect_args_range("put-text-property", &args, 4, 5)?;
     let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
-    builtin_put_text_property_5(eval, arg(0), arg(1), arg(2), arg(3), arg(4))
+    builtin_put_text_property_5(&mut *host, arg(0), arg(1), arg(2), arg(3), arg(4))
 }
 /// `put-text-property` as registered: fixed arity 5, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a5` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_put_text_property_5(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_put_text_property_5<H: EditHost>(
+    host: &mut H,
     start: Value,
     end: Value,
     property: Value,
@@ -1873,11 +1859,17 @@ pub(crate) fn builtin_put_text_property_5(
     // read-only verification and the modification hooks included. A no-op
     // put returns nil having done ONE early-exiting walk: no text-read-only
     // signal, no hooks, no undo entry, no apply walk.
-    if let Some((buf_id, byte_range)) = buffer_property_range_for_args(eval, &args, 4)? {
-        let unchanged = eval.edit.buffers.get(buf_id).is_some_and(|buf| {
-            let properties = [(args[2], args[3])];
-            buf.text_props_range_has_all_properties_in_emacs_byte_range(byte_range, &properties)
-        });
+    let change = buffer_property_range_for_args(&host.edit_and_vars().0.buffers, &args, 4)?;
+    if let Some((buf_id, byte_range)) = change {
+        let unchanged = host
+            .edit_and_vars()
+            .0
+            .buffers
+            .get(buf_id)
+            .is_some_and(|buf| {
+                let properties = [(args[2], args[3])];
+                buf.text_props_range_has_all_properties_in_emacs_byte_range(byte_range, &properties)
+            });
         if unchanged {
             return Ok(Value::NIL);
         }
@@ -1888,7 +1880,7 @@ pub(crate) fn builtin_put_text_property_5(
         // instead of re-parsing and re-validating the argument list.
         let prop = expect_property_key(&args[2])?;
         let val = args[3];
-        with_buffer_property_change(eval, buf_id, byte_range, |buffers| {
+        with_buffer_property_change(host, buf_id, byte_range, |buffers| {
             Ok(put_text_property_in_buffer_byte_range(
                 buffers, buf_id, byte_range, prop, val,
             ))
@@ -1896,7 +1888,7 @@ pub(crate) fn builtin_put_text_property_5(
     } else {
         // Strings (and degenerate arg shapes): no buffer hooks, no buffer
         // read-only semantics — GNU's modify_text_properties is buffer-only.
-        builtin_put_text_property_in_buffers(&mut eval.edit.buffers, &args)
+        builtin_put_text_property_in_buffers(&mut host.edit_and_vars().0.buffers, &args)
     }
 }
 
@@ -2440,19 +2432,19 @@ pub(crate) fn builtin_get_char_property_with_window_lookup<
 
 /// (add-text-properties BEG END PROPS &optional OBJECT)
 #[cfg(test)]
-pub(crate) fn builtin_add_text_properties(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_add_text_properties<H: EditHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     crate::emacs_core::error::expect_args_range("add-text-properties", &args, 3, 4)?;
     let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
-    builtin_add_text_properties_4(eval, arg(0), arg(1), arg(2), arg(3))
+    builtin_add_text_properties_4(&mut *host, arg(0), arg(1), arg(2), arg(3))
 }
 /// `add-text-properties` as registered: fixed arity 4, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a4` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_add_text_properties_4(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_add_text_properties_4<H: EditHost>(
+    host: &mut H,
     start: Value,
     end: Value,
     properties: Value,
@@ -2465,23 +2457,29 @@ pub(crate) fn builtin_add_text_properties_4(
     // has-all skip runs first, and a no-op add returns nil with no
     // read-only verification, hooks, undo entry, or apply walk.
     let pairs_for_probe = plist_pairs(&args[2])?;
-    if let Some((buf_id, byte_range)) = buffer_property_range_for_args(eval, &args, 3)? {
-        let unchanged = eval.edit.buffers.get(buf_id).is_some_and(|buf| {
-            buf.text_props_range_has_all_properties_in_emacs_byte_range(
-                byte_range,
-                &pairs_for_probe,
-            )
-        });
+    let change = buffer_property_range_for_args(&host.edit_and_vars().0.buffers, &args, 3)?;
+    if let Some((buf_id, byte_range)) = change {
+        let unchanged = host
+            .edit_and_vars()
+            .0
+            .buffers
+            .get(buf_id)
+            .is_some_and(|buf| {
+                buf.text_props_range_has_all_properties_in_emacs_byte_range(
+                    byte_range,
+                    &pairs_for_probe,
+                )
+            });
         if unchanged {
             return Ok(Value::NIL);
         }
         // Read-only text is verified once, inside `with_buffer_property_change`
         // (GNU `prepare_to_modify_buffer_1`).
-        with_buffer_property_change(eval, buf_id, byte_range, |buffers| {
+        with_buffer_property_change(host, buf_id, byte_range, |buffers| {
             builtin_add_text_properties_in_buffers(buffers, &args)
         })
     } else {
-        builtin_add_text_properties_in_buffers(&mut eval.edit.buffers, &args)
+        builtin_add_text_properties_in_buffers(&mut host.edit_and_vars().0.buffers, &args)
     }
 }
 
@@ -2601,8 +2599,8 @@ fn merge_face_property(
 }
 
 /// `(add-face-text-property START END FACE &optional APPENDP OBJECT)`
-pub(crate) fn builtin_add_face_text_property(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_add_face_text_property<H: EditHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_min_args("add-face-text-property", &args, 3)?;
@@ -2611,24 +2609,30 @@ pub(crate) fn builtin_add_face_text_property(
     // the has-all skip precedes `modify_text_properties`, so a no-op add
     // (every interval's `face` already eq the new value) does no read-only
     // verification, hooks, undo entry, or apply walk.
-    if let Some((buf_id, byte_range)) = buffer_property_range_for_args(eval, &args, 4)? {
+    let change = buffer_property_range_for_args(&host.edit_and_vars().0.buffers, &args, 4)?;
+    if let Some((buf_id, byte_range)) = change {
         let new_face = args[2];
-        let unchanged = eval.edit.buffers.get(buf_id).is_some_and(|buf| {
-            buf.text_props_range_has_all_properties_in_emacs_byte_range(
-                byte_range,
-                &[(face_prop(), new_face)],
-            )
-        });
+        let unchanged = host
+            .edit_and_vars()
+            .0
+            .buffers
+            .get(buf_id)
+            .is_some_and(|buf| {
+                buf.text_props_range_has_all_properties_in_emacs_byte_range(
+                    byte_range,
+                    &[(face_prop(), new_face)],
+                )
+            });
         if unchanged {
             return Ok(Value::NIL);
         }
         // Read-only text is verified once, inside `with_buffer_property_change`
         // (GNU `prepare_to_modify_buffer_1`).
-        with_buffer_property_change(eval, buf_id, byte_range, |buffers| {
+        with_buffer_property_change(host, buf_id, byte_range, |buffers| {
             builtin_add_face_text_property_in_buffers(buffers, args)
         })
     } else {
-        builtin_add_face_text_property_in_buffers(&mut eval.edit.buffers, args)
+        builtin_add_face_text_property_in_buffers(&mut host.edit_and_vars().0.buffers, args)
     }
 }
 
@@ -2741,30 +2745,37 @@ pub(crate) fn builtin_add_face_text_property_in_buffers(
 }
 
 /// (remove-text-properties BEG END PROPS &optional OBJECT)
-pub(crate) fn builtin_remove_text_properties(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_remove_text_properties<H: EditHost>(
+    host: &mut H,
     args: &[Value],
 ) -> EvalResult {
     expect_min_args("remove-text-properties", &args, 3)?;
     expect_max_args("remove-text-properties", &args, 4)?;
-    verify_property_change_read_only(eval, &args, 3)?;
+    {
+        let (edit, vars) = host.edit_and_vars();
+        verify_property_change_read_only(vars, &edit.buffers, &args, 3)?;
+    }
     let names_for_probe = plist_names_for_remove(args[2]);
-    let change =
-        buffer_property_range_for_args(eval, &args, 3)?.and_then(|(buf_id, byte_range)| {
-            let buf = eval.edit.buffers.get(buf_id)?;
+    let change = {
+        let (edit, _vars) = host.edit_and_vars();
+        buffer_property_range_for_args(&edit.buffers, &args, 3)?.and_then(|(buf_id, byte_range)| {
+            let buf = edit.buffers.get(buf_id)?;
             buf.text_props_range_has_any_property_named_in_emacs_byte_range(
                 byte_range,
                 &names_for_probe,
             )
             .then_some((buf_id, byte_range))
-        });
+        })
+    };
     match change {
         Some((buf_id, byte_range)) => {
-            with_buffer_property_change(eval, buf_id, byte_range, |buffers| {
+            with_buffer_property_change(host, buf_id, byte_range, |buffers| {
                 builtin_remove_text_properties_in_buffers(buffers, args)
             })
         }
-        None => builtin_remove_text_properties_in_buffers(&mut eval.edit.buffers, args),
+        None => {
+            builtin_remove_text_properties_in_buffers(&mut host.edit_and_vars().0.buffers, args)
+        }
     }
 }
 
@@ -2829,32 +2840,37 @@ pub(crate) fn builtin_remove_text_properties_in_buffers(
 }
 
 /// (set-text-properties BEG END PROPS &optional OBJECT)
-pub(crate) fn builtin_set_text_properties(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_set_text_properties<H: EditHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_min_args("set-text-properties", &args, 3)?;
     expect_max_args("set-text-properties", &args, 4)?;
-    verify_property_change_read_only(eval, &args, 3)?;
+    {
+        let (edit, vars) = host.edit_and_vars();
+        verify_property_change_read_only(vars, &edit.buffers, &args, 3)?;
+    }
     let pairs_for_probe = if args[2].is_nil() {
         Vec::new()
     } else {
         plist_pairs(&args[2])?
     };
-    let change =
-        buffer_property_range_for_args(eval, &args, 3)?.and_then(|(buf_id, byte_range)| {
-            let buf = eval.edit.buffers.get(buf_id)?;
+    let change = {
+        let (edit, _vars) = host.edit_and_vars();
+        buffer_property_range_for_args(&edit.buffers, &args, 3)?.and_then(|(buf_id, byte_range)| {
+            let buf = edit.buffers.get(buf_id)?;
             (!pairs_for_probe.is_empty()
                 || buf.text_props_range_has_any_interval_in_emacs_byte_range(byte_range))
             .then_some((buf_id, byte_range))
-        });
+        })
+    };
     match change {
         Some((buf_id, byte_range)) => {
-            with_buffer_property_change(eval, buf_id, byte_range, |buffers| {
+            with_buffer_property_change(host, buf_id, byte_range, |buffers| {
                 builtin_set_text_properties_in_buffers(buffers, args)
             })
         }
-        None => builtin_set_text_properties_in_buffers(&mut eval.edit.buffers, args),
+        None => builtin_set_text_properties_in_buffers(&mut host.edit_and_vars().0.buffers, args),
     }
 }
 
@@ -2966,19 +2982,19 @@ impl StringTextPropertyTarget {
 
 /// (remove-list-of-text-properties BEG END LIST &optional OBJECT)
 #[cfg(test)]
-pub(crate) fn builtin_remove_list_of_text_properties(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_remove_list_of_text_properties<H: EditHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     crate::emacs_core::error::expect_args_range("remove-list-of-text-properties", &args, 3, 4)?;
     let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
-    builtin_remove_list_of_text_properties_4(eval, arg(0), arg(1), arg(2), arg(3))
+    builtin_remove_list_of_text_properties_4(&mut *host, arg(0), arg(1), arg(2), arg(3))
 }
 /// `remove-list-of-text-properties` as registered: fixed arity 4, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a4` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_remove_list_of_text_properties_4(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_remove_list_of_text_properties_4<H: EditHost>(
+    host: &mut H,
     start: Value,
     end: Value,
     list_of_properties: Value,
@@ -2987,24 +3003,32 @@ pub(crate) fn builtin_remove_list_of_text_properties_4(
     let args: [Value; 4] = [start, end, list_of_properties, object];
     expect_min_args("remove-list-of-text-properties", &args, 3)?;
     expect_max_args("remove-list-of-text-properties", &args, 4)?;
-    verify_property_change_read_only(eval, &args, 3)?;
+    {
+        let (edit, vars) = host.edit_and_vars();
+        verify_property_change_read_only(vars, &edit.buffers, &args, 3)?;
+    }
     let names_for_probe = list_names_for_remove(args[2]);
-    let change =
-        buffer_property_range_for_args(eval, &args, 3)?.and_then(|(buf_id, byte_range)| {
-            let buf = eval.edit.buffers.get(buf_id)?;
+    let change = {
+        let (edit, _vars) = host.edit_and_vars();
+        buffer_property_range_for_args(&edit.buffers, &args, 3)?.and_then(|(buf_id, byte_range)| {
+            let buf = edit.buffers.get(buf_id)?;
             buf.text_props_range_has_any_property_named_in_emacs_byte_range(
                 byte_range,
                 &names_for_probe,
             )
             .then_some((buf_id, byte_range))
-        });
+        })
+    };
     match change {
         Some((buf_id, byte_range)) => {
-            with_buffer_property_change(eval, buf_id, byte_range, |buffers| {
+            with_buffer_property_change(host, buf_id, byte_range, |buffers| {
                 builtin_remove_list_of_text_properties_in_buffers(buffers, &args)
             })
         }
-        None => builtin_remove_list_of_text_properties_in_buffers(&mut eval.edit.buffers, &args),
+        None => builtin_remove_list_of_text_properties_in_buffers(
+            &mut host.edit_and_vars().0.buffers,
+            &args,
+        ),
     }
 }
 

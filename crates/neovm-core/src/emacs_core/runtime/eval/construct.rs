@@ -1617,7 +1617,7 @@ impl Context {
             obarray.set_blv_local_if_set(id, true);
         }
 
-        super::super::textprop::init_textprop_vars(obarray, custom);
+        super::super::textprop::init_textprop_vars(obarray);
         super::super::syntax::init_syntax_vars(obarray, custom);
         // Register all DEFVAR_PER_BUFFER variables from GNU Emacs buffer.c.
         // These are C-level buffer-local variables that must exist before
