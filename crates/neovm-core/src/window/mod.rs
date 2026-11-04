@@ -9,7 +9,7 @@
 
 use crate::buffer::{
     BufferId, BufferManager, CharLen, CharPos0, CharRange, EmacsByteLen, EmacsBytePos,
-    EmacsByteRange, LispCharPos1, TextPositionAnchor,
+    EmacsByteRange, LispCharPos1,
 };
 use crate::emacs_core::value::{HashTableTest, Value};
 use crate::gc_trace::GcTrace;
@@ -675,26 +675,6 @@ struct WindowLayoutSelectionState {
     active_minibuffer_window: Option<WindowId>,
 }
 
-/// Zero-based glyph-matrix row coordinate.
-///
-/// This deliberately does not accept or expose buffer positions, display
-/// columns, or pixel coordinates. Those domains have separate types.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[repr(transparent)]
-pub struct MatrixRow0(usize);
-
-impl MatrixRow0 {
-    pub const ZERO: Self = Self(0);
-
-    pub const fn new(row: usize) -> Self {
-        Self(row)
-    }
-
-    pub const fn get(self) -> usize {
-        self.0
-    }
-}
-
 /// How a redisplay pass arrived at the window start it published.
 ///
 /// GNU `redisplay_window` calls `run_window_scroll_functions`
@@ -730,82 +710,6 @@ impl WindowStartCommit {
 
     pub const fn runs_window_scroll_functions(self) -> bool {
         matches!(self, Self::Committed)
-    }
-}
-
-/// One atomically published GNU-compatible window-end record.
-///
-/// GNU stores both distances from buffer Z plus the matrix row that produced
-/// them. Keeping the tuple together prevents partial char/byte/row updates.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct WindowEndRecord {
-    char_offset_from_z: CharLen,
-    byte_offset_from_z: EmacsByteLen,
-    matrix_row: MatrixRow0,
-}
-
-impl WindowEndRecord {
-    pub fn from_anchors(
-        buffer_z: TextPositionAnchor,
-        end: TextPositionAnchor,
-        matrix_row: MatrixRow0,
-    ) -> Self {
-        Self {
-            char_offset_from_z: buffer_z
-                .char_pos()
-                .saturating_offset_from(end.char_pos().min(buffer_z.char_pos())),
-            byte_offset_from_z: buffer_z
-                .emacs_byte_pos()
-                .saturating_offset_from(end.emacs_byte_pos().min(buffer_z.emacs_byte_pos())),
-            matrix_row,
-        }
-    }
-
-    pub fn from_positions(
-        buffer_z_char: LispCharPos1,
-        buffer_z_byte: EmacsBytePos,
-        end_charpos: LispCharPos1,
-        end_bytepos: EmacsBytePos,
-        matrix_row: MatrixRow0,
-    ) -> Self {
-        Self::from_anchors(
-            TextPositionAnchor::new(CharPos0::from_lisp(buffer_z_char), buffer_z_byte),
-            TextPositionAnchor::new(CharPos0::from_lisp(end_charpos), end_bytepos),
-            matrix_row,
-        )
-    }
-
-    pub const fn char_offset_from_z(self) -> CharLen {
-        self.char_offset_from_z
-    }
-
-    pub const fn byte_offset_from_z(self) -> EmacsByteLen {
-        self.byte_offset_from_z
-    }
-
-    pub const fn matrix_row(self) -> MatrixRow0 {
-        self.matrix_row
-    }
-
-    /// Reindex a complete measured suffix while preserving its exact source end.
-    /// This creates query geometry; it does not publish a retained window end.
-    pub const fn with_matrix_row(self, matrix_row: MatrixRow0) -> Self {
-        Self { matrix_row, ..self }
-    }
-
-    /// Recover GNU's Lisp-visible end position from the current buffer Z.
-    pub fn charpos_from_z(self, buffer_z: LispCharPos1) -> LispCharPos1 {
-        let buffer_z = buffer_z.to_one_based_usize();
-        LispCharPos1::from_one_based_usize(
-            buffer_z
-                .saturating_sub(self.char_offset_from_z.get())
-                .max(1),
-        )
-    }
-
-    /// Recover the byte companion of [`Self::charpos_from_z`].
-    pub const fn bytepos_from_z(self, buffer_z_byte: EmacsBytePos) -> EmacsBytePos {
-        buffer_z_byte.saturating_sub_len(self.byte_offset_from_z)
     }
 }
 
@@ -972,17 +876,9 @@ impl WindowRedisplayOutput {
     }
 }
 
-/// Presentation lifecycle of a leaf window's last complete end record.
-///
-/// `Stale` retains GNU's `UPDATE=nil` behavior while making it impossible to
-/// mark a partially populated record current.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub enum WindowEndState {
-    #[default]
-    Unrecorded,
-    Stale(WindowEndRecord),
-    Current(WindowEndRecord),
-}
+pub use crate::emacs_core::eval::data::window_state::{
+    MatrixRow0, WindowEndRecord, WindowEndState,
+};
 
 /// Affine rollback token for a speculative leaf's live `window_end`.
 ///
@@ -1001,38 +897,6 @@ pub struct WindowEndAttempt {
 impl WindowEndAttempt {
     /// Consume the rollback capability after the leaf is accepted.
     pub fn accept(self) {}
-}
-
-impl WindowEndState {
-    pub const fn record(self) -> Option<WindowEndRecord> {
-        match self {
-            Self::Unrecorded => None,
-            Self::Stale(record) | Self::Current(record) => Some(record),
-        }
-    }
-
-    pub const fn is_current(self) -> bool {
-        matches!(self, Self::Current(_))
-    }
-
-    /// Recover the last recorded end, treating an unrecorded offset as GNU's
-    /// zero-initialized distance from Z.
-    pub fn charpos_from_z(self, buffer_z: LispCharPos1) -> LispCharPos1 {
-        self.record()
-            .map_or(buffer_z, |record| record.charpos_from_z(buffer_z))
-    }
-
-    /// Recover the byte companion of [`Self::charpos_from_z`].
-    pub fn bytepos_from_z(self, buffer_z_byte: EmacsBytePos) -> EmacsBytePos {
-        self.record()
-            .map_or(buffer_z_byte, |record| record.bytepos_from_z(buffer_z_byte))
-    }
-
-    fn invalidate(&mut self) {
-        if let Self::Current(record) = *self {
-            *self = Self::Stale(record);
-        }
-    }
 }
 
 fn redisplay_f32_bits(value: f32) -> u32 {
