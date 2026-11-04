@@ -8,9 +8,9 @@
 //! NeoVM now mirrors that ownership model instead of routing semantics
 //! through a parallel Rust-side manager.
 
-use crate::tagged::SymbolMode;
 use neovm_value::error::LispCondition;
 use neovm_value::error::{expect_args, expect_max_args, expect_min_args};
+use neovm_value::tagged::SymbolMode;
 use std::cell::{Cell, RefCell};
 
 use super::boolvec::{self, BoolVectorView};
@@ -35,14 +35,16 @@ pub fn register_bootstrap_vars(obarray: &mut neovm_value::symbol::Obarray) {
 
 pub fn reset_category_thread_locals() {
     STANDARD_CATEGORY_TABLE_OBJECT.with(|slot| *slot.borrow_mut() = None);
-    STANDARD_CATEGORY_TABLE_HEAP
-        .with(|owner| owner.set(crate::tagged::gc::current_tagged_heap_identity().unwrap_or(0)));
+    STANDARD_CATEGORY_TABLE_HEAP.with(|owner| {
+        owner.set(neovm_value::tagged::gc::current_tagged_heap_identity().unwrap_or(0))
+    });
 }
 
 pub(crate) fn restore_standard_category_table_object(table: Value) {
     STANDARD_CATEGORY_TABLE_OBJECT.with(|slot| *slot.borrow_mut() = Some(table));
-    STANDARD_CATEGORY_TABLE_HEAP
-        .with(|owner| owner.set(crate::tagged::gc::current_tagged_heap_identity().unwrap_or(0)));
+    STANDARD_CATEGORY_TABLE_HEAP.with(|owner| {
+        owner.set(neovm_value::tagged::gc::current_tagged_heap_identity().unwrap_or(0))
+    });
 }
 
 pub fn collect_category_gc_roots(roots: &mut Vec<Value>, heap_identity: usize) {
@@ -286,7 +288,7 @@ pub(crate) fn ensure_standard_category_table_object() -> EvalResult {
         let table = make_category_table_object()?;
         *slot.borrow_mut() = Some(table);
         STANDARD_CATEGORY_TABLE_HEAP.with(|owner| {
-            owner.set(crate::tagged::gc::current_tagged_heap_identity().unwrap_or(0))
+            owner.set(neovm_value::tagged::gc::current_tagged_heap_identity().unwrap_or(0))
         });
         Ok(table)
     })
@@ -393,9 +395,9 @@ fn set_category_docstring_in_table(
 }
 
 fn current_buffer_category_table_in_buffers(
-    buffers: &mut crate::buffer::BufferManager,
+    buffers: &mut neovm_edit::buffer::BufferManager,
 ) -> Result<Value, Flow> {
-    use crate::buffer::buffer::BUFFER_SLOT_CATEGORY_TABLE;
+    use neovm_edit::buffer::buffer::BUFFER_SLOT_CATEGORY_TABLE;
     let current_id = buffers
         .current_buffer_id()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -419,7 +421,7 @@ fn current_buffer_category_table_in_buffers(
 }
 
 fn check_category_table_in_buffers_with_symbols(
-    buffers: &mut crate::buffer::BufferManager,
+    buffers: &mut neovm_edit::buffer::BufferManager,
     table: Option<Value>,
     mode: SymbolMode,
 ) -> Result<Value, Flow> {
@@ -447,10 +449,10 @@ fn check_category_table(
 }
 
 fn set_current_buffer_category_table_in_buffers(
-    buffers: &mut crate::buffer::BufferManager,
+    buffers: &mut neovm_edit::buffer::BufferManager,
     table: Value,
 ) -> Result<(), Flow> {
-    use crate::buffer::buffer::BUFFER_SLOT_CATEGORY_TABLE;
+    use neovm_edit::buffer::buffer::BUFFER_SLOT_CATEGORY_TABLE;
     let current_id = buffers
         .current_buffer_id()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -478,10 +480,10 @@ fn category_set_contains(category_set: &Value, category: char) -> Result<bool, F
 }
 
 pub(crate) fn active_category_table_for_buffer(
-    buffer: Option<&crate::buffer::Buffer>,
+    buffer: Option<&neovm_edit::buffer::Buffer>,
 ) -> Result<Value, Flow> {
     if let Some(buffer) = buffer {
-        let table = buffer.slots()[crate::buffer::buffer::BUFFER_SLOT_CATEGORY_TABLE.index()];
+        let table = buffer.slots()[neovm_edit::buffer::buffer::BUFFER_SLOT_CATEGORY_TABLE.index()];
         if !table.is_nil() {
             return Ok(table);
         }
@@ -646,7 +648,7 @@ pub(crate) fn builtin_modify_category_entry(
         return Ok(Value::NIL);
     }
 
-    if start == end && (0..=crate::emacs_core::emacs_char::MAX_CHAR as i64).contains(&start) {
+    if start == end && (0..=neovm_value::emacs_char::MAX_CHAR as i64).contains(&start) {
         let existing = super::chartable::ct_lookup(&table, start)?;
         let has_category = category_set_contains(&existing, category)?;
         if has_category == reset {
@@ -761,7 +763,7 @@ pub(crate) fn builtin_category_table(
 }
 
 pub(crate) fn builtin_category_table_in_buffers(
-    buffers: &mut crate::buffer::BufferManager,
+    buffers: &mut neovm_edit::buffer::BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("category-table", &args, 0)?;
@@ -785,7 +787,7 @@ pub(crate) fn builtin_set_category_table(
 }
 
 pub(crate) fn builtin_set_category_table_in_buffers_with_symbols(
-    buffers: &mut crate::buffer::BufferManager,
+    buffers: &mut neovm_edit::buffer::BufferManager,
     args: Vec<Value>,
     mode: SymbolMode,
 ) -> EvalResult {
@@ -832,11 +834,11 @@ pub(crate) fn char_has_category_in_table_with_symbols(
 /// Debug-only carrier TLS fingerprint for this module's classified records.
 #[cfg(debug_assertions)]
 pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
-    crate::tls_fingerprint::mix(
+    neovm_value::tls_fingerprint::mix(
         h,
         STANDARD_CATEGORY_TABLE_HEAP.with(|slot| slot.get() as u64),
     );
-    crate::tls_fingerprint::mix(
+    neovm_value::tls_fingerprint::mix(
         h,
         STANDARD_CATEGORY_TABLE_OBJECT.with(|slot| slot.borrow().is_some() as u64),
     );
