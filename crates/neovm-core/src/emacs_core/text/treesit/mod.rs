@@ -3,7 +3,6 @@ use std::mem::MaybeUninit;
 use std::ops::Range;
 use std::ptr::NonNull;
 
-use libloading::Library;
 use tree_sitter::{InputEdit, Language, Parser, Point, Query, QueryError, Tree, ffi};
 
 use crate::buffer::{Buffer, BufferId, EmacsBytePos, EmacsByteRange};
@@ -36,10 +35,42 @@ pub(crate) const QUERY_SLOT_ID: usize = 1;
 pub(crate) const QUERY_SLOT_LANGUAGE: usize = 2;
 pub(crate) const QUERY_SLOT_SOURCE: usize = 3;
 
+/// Marker for an upper-layer owner of a dynamically loaded native library.
+///
+/// `neovm-text` never names `libloading`: a grammar's `tree_sitter::Language`
+/// holds function pointers into the shared object, so the text layer only has
+/// to keep the library alive for as long as the language is in use.  The
+/// concrete owner is a core newtype over `libloading::Library` (the orphan
+/// rule requires the newtype).  No methods, no downcast: retention only.
+#[doc(hidden)]
+pub trait RetainedNativeLibrary: Send + Sync + 'static {}
+
+/// Keeps a caller-provided native library alive until this value is dropped.
+///
+/// Constructed only by the grammar loader in
+/// `lisp/native/builtins/treesit.rs` (signed exact-caller row).
+#[doc(hidden)]
+#[allow(dead_code)] // retention only: the field is never read, only dropped
+pub struct RetainedLibrary(Box<dyn RetainedNativeLibrary>);
+
+impl RetainedLibrary {
+    /// Take ownership of a live native library.
+    ///
+    /// Sole caller: the treesit grammar loader.  Dropping the returned value
+    /// unloads the library, so it must outlive every `Language` created from
+    /// it (see `LoadedLanguage`'s field order).
+    #[doc(hidden)]
+    pub fn from_native_library(library: Box<dyn RetainedNativeLibrary>) -> Self {
+        Self(library)
+    }
+}
+
 pub(crate) struct LoadedLanguage {
     pub(crate) language: Language,
     pub(crate) filename: Option<String>,
-    pub(crate) _library: Option<Library>,
+    // Kept last so the language (whose function pointers live in the loaded
+    // library) drops before the library unloads.
+    pub(crate) _library: Option<RetainedLibrary>,
 }
 
 #[derive(Clone, Copy)]

@@ -493,6 +493,16 @@ enum GrammarLoadError {
     IncompatibleLanguage { abi_version: usize },
 }
 
+/// Core-side owner of a loaded grammar library.  The orphan rule forbids
+/// implementing the text-side retention marker directly on
+/// `libloading::Library`, so the loader wraps it here and the text layer sees
+/// only `RetainedLibrary` (which keeps the shared object alive for as long as
+/// the `Language` created from it is in use).
+#[allow(dead_code)] // retention only: the library is never read, only dropped
+struct LoadedGrammarLibrary(libloading::Library);
+
+impl runtime::RetainedNativeLibrary for LoadedGrammarLibrary {}
+
 fn load_language_from_path(
     path: &str,
     c_symbol: &str,
@@ -519,7 +529,9 @@ fn load_language_from_path(
     Ok(runtime::LoadedLanguage {
         language,
         filename,
-        _library: Some(library),
+        _library: Some(runtime::RetainedLibrary::from_native_library(Box::new(
+            LoadedGrammarLibrary(library),
+        ))),
     })
 }
 
