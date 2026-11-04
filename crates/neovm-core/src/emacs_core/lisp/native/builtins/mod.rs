@@ -429,7 +429,7 @@ pub(crate) mod fringe_bitmap;
 pub(crate) mod fringe_standard_bitmaps;
 pub(crate) mod hash_user_callback;
 pub(crate) mod higher_order;
-mod hooks;
+pub(crate) mod hooks;
 pub(crate) mod keymaps;
 mod lcms;
 pub(crate) mod maphash;

@@ -59,12 +59,11 @@ fn lisp_char_pos_from_one_based_usize(pos: usize) -> LispCharPos1 {
 }
 
 pub(crate) use super::builtins::symbols::builtin_resize_mini_window_internal;
-pub(crate) use super::builtins::{
-    builtin_current_window_configuration, builtin_set_window_configuration,
-    builtin_window_configuration_equal_p, builtin_window_configuration_frame,
-    builtin_window_configuration_p,
+pub(crate) use crate::emacs_core::window_hooks::{
+    builtin_current_window_configuration, builtin_run_window_scroll_functions,
+    builtin_set_window_configuration, builtin_window_configuration_equal_p,
+    builtin_window_configuration_frame, builtin_window_configuration_p,
 };
-pub(crate) use crate::emacs_core::window_hooks::builtin_run_window_scroll_functions;
 
 // ---------------------------------------------------------------------------
 // The new-size slots (GNU `src/window.c`)
