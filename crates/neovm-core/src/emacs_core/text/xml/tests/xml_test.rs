@@ -353,6 +353,15 @@ fn body(children: Vec<Value>) -> Value {
     Value::list(v)
 }
 
+/// Build `(comment nil TEXT)`.
+fn comment(text: &str) -> Value {
+    Value::list(vec![
+        Value::symbol("comment"),
+        Value::NIL,
+        Value::string(text),
+    ])
+}
+
 #[test]
 fn libxml_parse_html_region_wraps_fragment_in_html_body() {
     crate::test_utils::init_test_tracing();
@@ -508,7 +517,7 @@ fn libxml_parse_html_region_handles_xml_prolog_and_doctype() {
 fn libxml_parse_html_region_preserves_raw_content_in_style_and_script() {
     crate::test_utils::init_test_tracing();
 
-    let doc = br#"<html><head><style>body > div { color: red; }</style><script>var x = 1; window.alert(x);</script></head><body><p>Text</p></body></html>"#;
+    let doc = br#"<html><head><style>body > div { color: red; } a < b a&amp;b</style><script data-kind="a>b">var x = 1; if (a < b) { window.alert("&amp;"); }</script></head><body><p>Text</p></body></html>"#;
     let parsed = parse_html_region(doc, false).unwrap();
 
     let expected = html(vec![
@@ -518,12 +527,15 @@ fn libxml_parse_html_region_preserves_raw_content_in_style_and_script() {
             Value::list(vec![
                 Value::symbol("style"),
                 Value::NIL,
-                Value::string("body > div { color: red; }"),
+                Value::string("body > div { color: red; } a < b a&amp;b"),
             ]),
             Value::list(vec![
                 Value::symbol("script"),
-                Value::NIL,
-                Value::string("var x = 1; window.alert(x);"),
+                Value::list(vec![Value::cons(
+                    Value::symbol("data-kind"),
+                    Value::string("a>b"),
+                )]),
+                Value::string("var x = 1; if (a < b) { window.alert(\"&amp;\"); }"),
             ]),
         ]),
         body(vec![Value::list(vec![
@@ -536,35 +548,299 @@ fn libxml_parse_html_region_preserves_raw_content_in_style_and_script() {
 }
 
 #[test]
+fn libxml_parse_html_region_protects_raw_text_from_markup_like_content() {
+    crate::test_utils::init_test_tracing();
+
+    // libxml2 treats a script body as raw text: `</body>` in a string must not
+    // close the document's body. GNU 31.1 oracle:
+    // (html nil (body nil (script nil "document.write(\"</body></html>\");")
+    //                   (p nil "x")))
+    let doc =
+        br#"<html><body><script>document.write("</body></html>");</script><p>x</p></body></html>"#;
+    let expected = html(vec![body(vec![
+        Value::list(vec![
+            Value::symbol("script"),
+            Value::NIL,
+            Value::string("document.write(\"</body></html>\");"),
+        ]),
+        Value::list(vec![Value::symbol("p"), Value::NIL, Value::string("x")]),
+    ])]);
+    assert_eq!(parse_html_region(doc, false).unwrap(), expected);
+    assert_eq!(parse_html_region(doc, true).unwrap(), expected);
+}
+
+#[test]
 fn libxml_parse_html_region_strips_comment_delimiters() {
     crate::test_utils::init_test_tracing();
 
     let doc = br#"<div><!-- simple comment --></div>"#;
 
-    // Discard comments: comment is ignored.
-    let parsed_discard = parse_html_region(doc, true).unwrap();
-    assert_eq!(
-        parsed_discard,
-        html(vec![body(vec![Value::list(vec![
-            Value::symbol("div"),
-            Value::NIL,
-        ])])])
-    );
+    // GNU's `discard-comments' only drops document-level comments; this one is
+    // nested inside <div>, so it remains in both modes. GNU 31.1 oracle:
+    // (html nil (body nil (div nil (comment nil " simple comment "))))
+    let expected = html(vec![body(vec![Value::list(vec![
+        Value::symbol("div"),
+        Value::NIL,
+        comment(" simple comment "),
+    ])])]);
+    assert_eq!(parse_html_region(doc, true).unwrap(), expected);
+    assert_eq!(parse_html_region(doc, false).unwrap(), expected);
+}
 
-    // Keep comments: <!-- and --> are stripped from the comment text.
-    let parsed_keep = parse_html_region(doc, false).unwrap();
+#[test]
+fn libxml_parse_html_region_handles_processing_instructions_like_libxml2() {
+    crate::test_utils::init_test_tracing();
+
+    let xsl =
+        br#"<?xml-stylesheet type="text/css" href="x.css"?><html><body><p>Hello</p></body></html>"#;
+    let document = html(vec![body(vec![Value::list(vec![
+        Value::symbol("p"),
+        Value::NIL,
+        Value::string("Hello"),
+    ])])]);
     assert_eq!(
-        parsed_keep,
-        html(vec![body(vec![Value::list(vec![
-            Value::symbol("div"),
+        parse_html_region(xsl, false).unwrap(),
+        Value::list(vec![
+            Value::symbol("top"),
             Value::NIL,
-            Value::list(vec![
-                Value::symbol("comment"),
-                Value::NIL,
-                Value::string(" simple comment "),
-            ]),
-        ])])])
+            comment(r#"?xml-stylesheet type="text/css" href="x.css"?"#),
+            document.clone(),
+        ])
     );
+    assert_eq!(parse_html_region(xsl, true).unwrap(), document);
+
+    // Every leading PI is a comment, and a PI need not end in `?>`.
+    let multi = br#"<?xml version="1.0"?><?foo bar?><html><body>x</body></html>"#;
+    let document = html(vec![body(vec![Value::string("x")])]);
+    assert_eq!(
+        parse_html_region(multi, false).unwrap(),
+        Value::list(vec![
+            Value::symbol("top"),
+            Value::NIL,
+            comment(r#"?xml version="1.0"?"#),
+            comment("?foo bar?"),
+            document.clone(),
+        ])
+    );
+    assert_eq!(parse_html_region(multi, true).unwrap(), document);
+
+    let no_qmark = br#"<?foo><body>x</body>"#;
+    let document = html(vec![body(vec![Value::string("x")])]);
+    assert_eq!(
+        parse_html_region(no_qmark, false).unwrap(),
+        Value::list(vec![
+            Value::symbol("top"),
+            Value::NIL,
+            comment("?foo"),
+            document.clone(),
+        ])
+    );
+    assert_eq!(parse_html_region(no_qmark, true).unwrap(), document);
+
+    // libxml2 stops a PI at the first `>`, even inside a quoted attribute.
+    let embedded = br#"<?foo href="a>b"?><p>x</p>"#;
+    let document = html(vec![body(vec![
+        Value::string("b\"?>"),
+        Value::list(vec![Value::symbol("p"), Value::NIL, Value::string("x")]),
+    ])]);
+    assert_eq!(
+        parse_html_region(embedded, false).unwrap(),
+        Value::list(vec![
+            Value::symbol("top"),
+            Value::NIL,
+            comment(r#"?foo href="a"#),
+            document.clone(),
+        ])
+    );
+    assert_eq!(parse_html_region(embedded, true).unwrap(), document);
+
+    // Unterminated prolog tokens leave no root element.
+    assert_eq!(parse_html_region(br#"<?foo"#, false).unwrap(), Value::NIL);
+}
+
+#[test]
+fn libxml_parse_html_region_wraps_fragments_around_toplevel_comments() {
+    crate::test_utils::init_test_tracing();
+
+    // A prolog comment must not suppress the implicit html/body wrapper.
+    let prolog_bare = br#"<?xml version="1.0"?><body>x</body>"#;
+    let document = html(vec![body(vec![Value::string("x")])]);
+    assert_eq!(
+        parse_html_region(prolog_bare, false).unwrap(),
+        Value::list(vec![
+            Value::symbol("top"),
+            Value::NIL,
+            comment(r#"?xml version="1.0"?"#),
+            document.clone(),
+        ])
+    );
+    assert_eq!(parse_html_region(prolog_bare, true).unwrap(), document);
+
+    // Leading document-level comment.
+    let before = br#"<!-- before --><p>x</p>"#;
+    let document = html(vec![body(vec![Value::list(vec![
+        Value::symbol("p"),
+        Value::NIL,
+        Value::string("x"),
+    ])])]);
+    assert_eq!(
+        parse_html_region(before, false).unwrap(),
+        Value::list(vec![
+            Value::symbol("top"),
+            Value::NIL,
+            comment(" before "),
+            document.clone(),
+        ])
+    );
+    assert_eq!(parse_html_region(before, true).unwrap(), document);
+
+    // A comment after body content stays in <body>, in both modes.
+    let after = br#"<p>x</p><!-- after -->"#;
+    let expected = html(vec![body(vec![
+        Value::list(vec![Value::symbol("p"), Value::NIL, Value::string("x")]),
+        comment(" after "),
+    ])]);
+    assert_eq!(parse_html_region(after, false).unwrap(), expected);
+    assert_eq!(parse_html_region(after, true).unwrap(), expected);
+
+    // PI comment before the fragment, comment after the body content.
+    let pi_after = br#"<?xml?><p>x</p><!-- after -->"#;
+    let expected_keep = Value::list(vec![
+        Value::symbol("top"),
+        Value::NIL,
+        comment("?xml?"),
+        expected.clone(),
+    ]);
+    assert_eq!(parse_html_region(pi_after, false).unwrap(), expected_keep);
+    assert_eq!(parse_html_region(pi_after, true).unwrap(), expected);
+
+    // An explicit html root keeps document-level comments around it.
+    let html_root = br#"<!-- a --><html><body>x</body></html><!-- b -->"#;
+    let root = html(vec![body(vec![Value::string("x")])]);
+    assert_eq!(
+        parse_html_region(html_root, false).unwrap(),
+        Value::list(vec![
+            Value::symbol("top"),
+            Value::NIL,
+            comment(" a "),
+            root.clone(),
+            comment(" b "),
+        ])
+    );
+    assert_eq!(parse_html_region(html_root, true).unwrap(), root);
+
+    // Comments without a root element produce nil.
+    assert_eq!(
+        parse_html_region(br#"<!-- c -->"#, false).unwrap(),
+        Value::NIL
+    );
+    assert_eq!(parse_html_region(br#"<?xml?>"#, false).unwrap(), Value::NIL);
+}
+
+#[test]
+fn libxml_parse_html_region_places_head_comments_like_libxml2() {
+    crate::test_utils::init_test_tracing();
+
+    // Comments after implicit head content stay in <head>.
+    let title_comment = br#"<title>T</title><!-- c -->"#;
+    let expected = Value::list(vec![
+        Value::symbol("html"),
+        Value::NIL,
+        Value::list(vec![
+            Value::symbol("head"),
+            Value::NIL,
+            Value::list(vec![Value::symbol("title"), Value::NIL, Value::string("T")]),
+            comment(" c "),
+        ]),
+    ]);
+    assert_eq!(parse_html_region(title_comment, false).unwrap(), expected);
+    assert_eq!(parse_html_region(title_comment, true).unwrap(), expected);
+
+    // After an explicit </head>, comments are direct <html> children.
+    let closed_head = br#"<head></head><!-- c -->"#;
+    let expected = Value::list(vec![
+        Value::symbol("html"),
+        Value::NIL,
+        Value::list(vec![Value::symbol("head"), Value::NIL]),
+        comment(" c "),
+    ]);
+    assert_eq!(parse_html_region(closed_head, false).unwrap(), expected);
+    assert_eq!(parse_html_region(closed_head, true).unwrap(), expected);
+
+    let with_body = br#"<head></head><!-- c --><p>x</p>"#;
+    let expected = Value::list(vec![
+        Value::symbol("html"),
+        Value::NIL,
+        Value::list(vec![Value::symbol("head"), Value::NIL]),
+        comment(" c "),
+        body(vec![Value::list(vec![
+            Value::symbol("p"),
+            Value::NIL,
+            Value::string("x"),
+        ])]),
+    ]);
+    assert_eq!(parse_html_region(with_body, false).unwrap(), expected);
+    assert_eq!(parse_html_region(with_body, true).unwrap(), expected);
+}
+
+#[test]
+fn libxml_parse_html_region_keeps_nested_comments_when_discarding() {
+    crate::test_utils::init_test_tracing();
+
+    // src/xml.c parse_region only removes document-level comments; make_dom
+    // still emits comments nested in the root element in both modes.
+    let nested = br#"<html><body><!-- inner --><p>x</p></body></html>"#;
+    let expected = html(vec![body(vec![
+        comment(" inner "),
+        Value::list(vec![Value::symbol("p"), Value::NIL, Value::string("x")]),
+    ])]);
+    assert_eq!(parse_html_region(nested, false).unwrap(), expected);
+    assert_eq!(parse_html_region(nested, true).unwrap(), expected);
+}
+
+#[test]
+fn libxml_parse_html_region_stops_doctype_at_first_gt_like_libxml2() {
+    crate::test_utils::init_test_tracing();
+
+    // libxml2's HTML parser does not honor quotes when terminating a DOCTYPE;
+    // it stops at the first `>`, so the rest becomes body text.
+    let quoted = br#"<!DOCTYPE html PUBLIC "a>b"><p>x</p>"#;
+    let expected = html(vec![body(vec![
+        Value::string("b\">"),
+        Value::list(vec![Value::symbol("p"), Value::NIL, Value::string("x")]),
+    ])]);
+    assert_eq!(parse_html_region(quoted, false).unwrap(), expected);
+    assert_eq!(parse_html_region(quoted, true).unwrap(), expected);
+}
+
+#[test]
+fn libxml_parse_html_region_preserves_rcdata_in_title_and_textarea() {
+    crate::test_utils::init_test_tracing();
+
+    // RCDATA: `<` is text, not markup, and character references are resolved.
+    // GNU 31.1 oracle: (html nil (head nil (title nil "a < b &")))
+    let title = br#"<html><head><title>a < b &amp;</title></head></html>"#;
+    let expected = html(vec![Value::list(vec![
+        Value::symbol("head"),
+        Value::NIL,
+        Value::list(vec![
+            Value::symbol("title"),
+            Value::NIL,
+            Value::string("a < b &"),
+        ]),
+    ])]);
+    assert_eq!(parse_html_region(title, false).unwrap(), expected);
+    assert_eq!(parse_html_region(title, true).unwrap(), expected);
+
+    // GNU 31.1 oracle: (html nil (body nil (textarea nil "a < b &")))
+    let textarea = br#"<html><body><textarea>a < b &amp;</textarea></body></html>"#;
+    let expected = html(vec![body(vec![Value::list(vec![
+        Value::symbol("textarea"),
+        Value::NIL,
+        Value::string("a < b &"),
+    ])])]);
+    assert_eq!(parse_html_region(textarea, false).unwrap(), expected);
+    assert_eq!(parse_html_region(textarea, true).unwrap(), expected);
 }
 
 #[test]
