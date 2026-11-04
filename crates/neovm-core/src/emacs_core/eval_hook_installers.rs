@@ -25,3 +25,9 @@ pub(crate) fn install_case_table_hooks() {
 pub(crate) fn install_kmacro_hooks() {
     crate::emacs_core::kmacro::install_kmacro_hooks()
 }
+
+/// Publish the core hot-path tracing pair (the text C7 bridge reads its
+/// enable answer from the published eval pair).
+pub(crate) fn install_perf_trace_hooks() {
+    crate::emacs_core::perf_trace::install_perf_hooks();
+}

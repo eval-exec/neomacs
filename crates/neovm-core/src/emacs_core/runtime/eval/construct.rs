@@ -40,7 +40,7 @@ pub(super) fn install_text_substrate_hooks() {
     // The evaluator's hot-path pair and carrier hooks (E8) publish here, at
     // the same one-time seam; the text layer's C7 seam below reads its enable
     // answer and records through the same pair.
-    crate::emacs_core::perf_trace::install_perf_hooks();
+    crate::emacs_core::eval_hook_installers::install_perf_trace_hooks();
     crate::emacs_core::substrate_hooks::install_perf(
         crate::emacs_core::eval::perf::enabled(),
         text_perf_record,
