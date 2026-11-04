@@ -41,8 +41,9 @@ use mode_line_append::{
     AppendAdmission, DecimalDigit, PercentAppendDriver, PercentWidth, TrailingPercent,
     ZeroTerminator,
 };
-pub(crate) use mode_line_output::ModeLineOutputOwner;
-use mode_line_output::{ElementAttribution, ModeLineOutputScope, ModeLineStringTarget};
+use mode_line_output::{
+    ElementAttribution, ModeLineDisplayScope, ModeLineOutputScope, ModeLineStringTarget,
+};
 use mode_line_target::{
     DisplayTarget, PointFieldPolicy, PropertyApplication, StoredTarget, TargetPolicy,
 };
@@ -2134,7 +2135,7 @@ pub fn try_format_mode_line_for_display_with_sources(
     buffer: Value,
     target_cols: usize,
 ) -> Result<ModeLineDisplayOutput, Flow> {
-    let _display_scope = eval.mode_line_output_owner().enter_display();
+    let _display_scope = ModeLineDisplayScope::enter(&eval.mode_line_output_owner());
     try_format_mode_line_display(
         eval,
         format_val,

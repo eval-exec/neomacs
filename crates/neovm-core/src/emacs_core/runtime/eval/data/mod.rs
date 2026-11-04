@@ -5,4 +5,5 @@
 //! display-crate type.
 
 pub mod face;
+pub mod redisplay;
 pub mod window_state;

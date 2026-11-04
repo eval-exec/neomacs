@@ -2,90 +2,15 @@
 //!
 //! The World owns the counter. Nested Fformat_mode_line calls reset it even
 //! for NOPROP; GNU's unwind vector restores the target, never the counter.
+//! The owner/state itself lives below the evaluator
+//! (`emacs_core::eval::data::redisplay`); this module keeps the display-side
+//! scopes and the element attribution that runs on them.
 
-use std::cell::Cell;
-use std::rc::Rc;
+use crate::emacs_core::eval::data::redisplay::{ModeLineElementId, OutputKind};
 
-use super::{Flow, LispCondition, Value, signal};
-use crate::tagged::value::Fixnum;
+pub(crate) use crate::emacs_core::eval::data::redisplay::ModeLineOutputOwner;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct ModeLineElementId(Fixnum);
-
-impl Default for ModeLineElementId {
-    fn default() -> Self {
-        Self(Fixnum::saturating(0))
-    }
-}
-
-impl ModeLineElementId {
-    fn next(self) -> Result<Self, Flow> {
-        i64::from(self.0)
-            .checked_add(1)
-            .and_then(|value| Fixnum::try_from(value).ok())
-            .map(Self)
-            .ok_or_else(|| signal(LispCondition::OverflowError, vec![]))
-    }
-
-    pub(super) fn into_value(self) -> Value {
-        Value::from_fixnum(self.0)
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum OutputKind {
-    String,
-    #[default]
-    NoProperties,
-}
-
-#[derive(Debug, Default)]
-struct OutputState {
-    element: Cell<ModeLineElementId>,
-    target: Cell<OutputKind>,
-    display_active: Cell<bool>,
-}
-
-/// Native state of one evaluator World; no Lisp values or retained output.
-/// The existing World/Green Baton grants one owner access at a time. Handles
-/// stay on that owner thread for a formatter extent and cannot be sent/shared.
-#[derive(Clone, Debug, Default)]
-pub(crate) struct ModeLineOutputOwner(Rc<OutputState>);
-
-static_assertions::assert_not_impl_any!(ModeLineOutputOwner: Send, Sync);
-static_assertions::assert_eq_size!(ModeLineOutputOwner, usize);
-
-impl ModeLineOutputOwner {
-    pub(super) fn display_active(&self) -> bool {
-        self.0.display_active.get()
-    }
-
-    pub(super) fn enter_display(&self) -> ModeLineDisplayScope {
-        ModeLineDisplayScope {
-            owner: self.clone(),
-            previous: self.0.display_active.replace(true),
-        }
-    }
-
-    fn advance(&self) -> Result<ModeLineElementId, Flow> {
-        let next = self.0.element.get().next()?;
-        self.0.element.set(next);
-        Ok(next)
-    }
-
-    fn current(&self) -> ModeLineElementId {
-        self.0.element.get()
-    }
-
-    fn enter(&self, target: OutputKind) -> ModeLineOutputScope {
-        let previous_target = self.0.target.replace(target);
-        self.0.element.set(ModeLineElementId::default());
-        ModeLineOutputScope {
-            owner: self.clone(),
-            previous_target,
-        }
-    }
-}
+use super::{Flow, Value};
 
 /// Keep the active display extent across Lisp callbacks without borrowing Context.
 /// Drop restores the enclosing extent on both normal return and unwinding.
@@ -94,9 +19,18 @@ pub(super) struct ModeLineDisplayScope {
     previous: bool,
 }
 
+impl ModeLineDisplayScope {
+    pub(super) fn enter(owner: &ModeLineOutputOwner) -> Self {
+        Self {
+            owner: owner.clone(),
+            previous: owner.replace_display_active(true),
+        }
+    }
+}
+
 impl Drop for ModeLineDisplayScope {
     fn drop(&mut self) {
-        self.owner.0.display_active.set(self.previous);
+        self.owner.replace_display_active(self.previous);
     }
 }
 
@@ -144,11 +78,17 @@ impl ModeLineOutputScope {
         } else {
             OutputKind::String
         };
-        Ok(eval.mode_line_output_owner().enter(kind))
+        let owner = eval.mode_line_output_owner();
+        let previous_target = owner.replace_target(kind);
+        owner.reset_element();
+        Ok(Self {
+            owner,
+            previous_target,
+        })
     }
 
     pub(super) fn target(&self) -> super::StoredTarget<'_> {
-        match self.owner.0.target.get() {
+        match self.owner.target() {
             OutputKind::String => super::StoredTarget::String(ModeLineStringTarget(&self.owner)),
             OutputKind::NoProperties => super::StoredTarget::NoProperties,
         }
@@ -157,7 +97,7 @@ impl ModeLineOutputScope {
 
 impl Drop for ModeLineOutputScope {
     fn drop(&mut self) {
-        self.owner.0.target.set(self.previous_target);
+        self.owner.set_target(self.previous_target);
     }
 }
 

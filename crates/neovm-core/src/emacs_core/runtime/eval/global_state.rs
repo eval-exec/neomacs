@@ -25,7 +25,7 @@ macro_rules! global_state {
             pub(crate) debugging_output_file: Option<std::fs::File>,
             /// xdisp.c `mode_line_elt_no` and its active output scope. Accessor
             /// owned so adding formatter state does not move Context/JIT fields.
-            pub(crate) mode_line_output: crate::emacs_core::xdisp::ModeLineOutputOwner,
+            pub(crate) mode_line_output: crate::emacs_core::eval::data::redisplay::ModeLineOutputOwner,
         }
 
         /// One owner's slots over a World's [`GlobalState`].
@@ -157,7 +157,9 @@ impl GlobalState {
 }
 
 impl Context {
-    pub(crate) fn mode_line_output_owner(&self) -> crate::emacs_core::xdisp::ModeLineOutputOwner {
+    pub(crate) fn mode_line_output_owner(
+        &self,
+    ) -> crate::emacs_core::eval::data::redisplay::ModeLineOutputOwner {
         self.global_state().mode_line_output.clone()
     }
 
