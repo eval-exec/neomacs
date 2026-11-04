@@ -17,7 +17,7 @@ use super::chartable::{
     builtin_set_char_table_range_with_style, builtin_set_char_table_range_with_symbols,
     is_char_table, make_char_table_value,
 };
-use super::error::{EvalResult, Flow, signal};
+use super::error::{EvalResult, Flow, expect_args, signal};
 use super::eval::Context;
 use super::intern::resolve_sym;
 use super::intern::{SymId, intern};
@@ -28,6 +28,14 @@ use super::keyboard::pure::{
 use super::symbol::Obarray;
 use super::value::{OrderedRuntimeBindingMap, Value, ValueKind, eq_value_swp, list_to_vec};
 use strum::{EnumString, IntoStaticStr};
+
+mod describe_bindings;
+mod menu_bar_items;
+
+pub(crate) use describe_bindings::{
+    builtin_describe_buffer_bindings, builtin_help_describe_vector,
+};
+pub(crate) use menu_bar_items::{builtin_menu_bar_menu_at_x_y, menu_bar_top_level_items};
 
 /// Global keymap content-mutation epoch.
 ///
@@ -882,6 +890,22 @@ pub(crate) fn get_keyelt_runtime(eval: &mut Context, binding: Value, autoload: b
 
         return Ok(object);
     }
+}
+
+/// `(keymap--get-keyelt BINDING AUTOLOAD)` -> definition.
+///
+/// GNU `Fkeymap__get_keyelt` (keymap.c) delegates to get_keyelt: strip
+/// `(menu-item NAME DEFN ...)` wrappers and `(STRING . DEFN)` menu labels
+/// down to the definition.  Returning the element unreduced made help.el's
+/// describe-map `(eq definition (lookup-key tail (vector event) t))` guard
+/// fail for every wrapped menu binding, which silently emptied menu keymap
+/// sections such as C-<down-mouse-2> facemenu-menu (ledger entry 61).
+///
+/// The body is a Lisp entry that follows the autoload filter path, so it is
+/// an R0 body of the core command layer (STAGE4 design §5).
+pub(crate) fn builtin_keymap_get_keyelt(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    expect_args("keymap--get-keyelt", &args, 2)?;
+    get_keyelt_runtime(eval, args[0], !args[1].is_nil())
 }
 
 /// Look up a single event in a keymap, following the parent chain.

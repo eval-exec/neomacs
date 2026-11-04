@@ -2675,134 +2675,9 @@ pub(crate) fn builtin_old_selected_frame(
     crate::emacs_core::frame::builtin_selected_frame(eval, Vec::new())
 }
 
-pub(crate) fn builtin_menu_bar_menu_at_x_y(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    expect_args_range("menu-bar-menu-at-x-y", &args, 2, 3)?;
-    let x = args[0].as_fixnum().unwrap_or(0);
-    let mut hpos = 0i64;
-    let frame_id = args
-        .get(2)
-        .and_then(|frame| frame.as_frame_id().map(crate::window::FrameId))
-        .or_else(|| eval.frames.selected_frame().map(|frame| frame.id));
-    if let Some(anchor) = &eval.pending_menu_bar_popup_anchor
-        && frame_id.is_none_or(|id| id == anchor.frame_id)
-        && let Some(menu_key) = &anchor.menu_key
-    {
-        return Ok(Value::symbol(menu_key));
-    }
-    for (key, label) in menu_bar_top_level_items_for_frame(eval, frame_id) {
-        let width = label.chars().count() as i64 + 1;
-        if x >= hpos && x < hpos + width {
-            return Ok(key);
-        }
-        hpos += width;
-    }
-    Ok(Value::NIL)
-}
-
 pub(crate) fn builtin_menu_or_popup_active_p(args: Vec<Value>) -> EvalResult {
     expect_args("menu-or-popup-active-p", &args, 0)?;
     Ok(Value::NIL)
-}
-
-pub(crate) fn menu_bar_top_level_items(eval: &super::eval::Context) -> Vec<(Value, String)> {
-    menu_bar_top_level_items_for_frame(eval, eval.frames.selected_frame().map(|frame| frame.id))
-}
-
-pub(crate) fn menu_bar_top_level_items_for_frame(
-    eval: &super::eval::Context,
-    frame_id: Option<crate::window::FrameId>,
-) -> Vec<(Value, String)> {
-    let mut items = Vec::new();
-    let active_maps = if let Some(frame_id) = frame_id {
-        crate::emacs_core::keymap::menu_bar_active_keymaps_for_frame_read_only(eval, frame_id)
-    } else {
-        let obey_overriding_local_maps = eval
-            .variable_value_by_name("overriding-local-map-menu-flag")
-            .is_some_and(|value| value.is_truthy());
-        let mut maps = crate::emacs_core::keymap::current_active_maps_for_position_read_only(
-            eval,
-            obey_overriding_local_maps,
-            None,
-        )
-        .unwrap_or_default();
-        maps.reverse();
-        maps
-    };
-    for keymap in active_maps {
-        collect_menu_bar_items_from_map(eval, keymap, &mut items);
-    }
-    move_menu_bar_final_items(eval, &mut items);
-    items
-}
-
-fn move_menu_bar_final_items(eval: &super::eval::Context, items: &mut Vec<(Value, String)>) {
-    let Some(mut final_items) = eval.variable_value_by_name("menu-bar-final-items") else {
-        return;
-    };
-    while final_items.is_cons() {
-        let key = final_items.cons_car();
-        if let Some(index) = items
-            .iter()
-            .position(|(item_key, _)| eq_value_swp(item_key, &key, eval.symbols_with_pos_enabled))
-        {
-            let item = items.remove(index);
-            items.push(item);
-        }
-        final_items = final_items.cons_cdr();
-    }
-}
-
-fn collect_menu_bar_items_from_map(
-    eval: &super::eval::Context,
-    keymap: Value,
-    items: &mut Vec<(Value, String)>,
-) {
-    let menu_bar = Value::symbol("menu-bar");
-    let raw =
-        crate::emacs_core::keymap::list_keymap_lookup_one(&keymap, &menu_bar, eval.symbol_mode());
-    let Some(menu_map) = crate::emacs_core::keymap::maybe_keymap_in_obarray(
-        eval.obarray(),
-        &raw,
-        eval.symbol_mode(),
-    ) else {
-        return;
-    };
-    crate::emacs_core::keymap::list_keymap_for_each_binding_recursive(
-        &menu_map,
-        Some(eval.obarray()),
-        |key, def| {
-            if items
-                .iter()
-                .any(|(seen, _)| eq_value_swp(seen, &key, eval.symbols_with_pos_enabled))
-            {
-                return;
-            }
-            if let Some(label) = menu_bar_label(def, eval.symbol_mode()) {
-                items.push((key, label));
-            }
-        },
-        eval.symbol_mode(),
-    );
-}
-
-fn menu_bar_label(def: Value, symbol_mode: SymbolMode) -> Option<String> {
-    if !def.is_cons() {
-        return None;
-    }
-    let car = def.cons_car();
-    let cdr = def.cons_cdr();
-    if crate::emacs_core::keymap::KeymapMarker::MenuItem.is_value(car, symbol_mode) && cdr.is_cons()
-    {
-        return cdr
-            .cons_car()
-            .as_lisp_string()
-            .map(|ls| crate::emacs_core::emacs_char::to_utf8_lossy(ls.as_bytes()));
-    }
-    car.as_lisp_string()
-        .map(|ls| crate::emacs_core::emacs_char::to_utf8_lossy(ls.as_bytes()))
 }
 
 fn selected_frame_value(eval: &mut super::eval::Context) -> Value {
@@ -6127,20 +6002,6 @@ pub(crate) fn builtin_iso_charset(args: Vec<Value>) -> EvalResult {
     Ok(Value::NIL)
 }
 
-pub(crate) fn builtin_keymap_get_keyelt(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    expect_args("keymap--get-keyelt", &args, 2)?;
-    // GNU Fkeymap__get_keyelt (keymap.c) delegates to get_keyelt: strip
-    // `(menu-item NAME DEFN ...)` wrappers and `(STRING . DEFN)` menu labels
-    // down to the definition.  Returning the element unreduced made help.el's
-    // describe-map `(eq definition (lookup-key tail (vector event) t))` guard
-    // fail for every wrapped menu binding, which silently emptied menu keymap
-    // sections such as C-<down-mouse-2> facemenu-menu (ledger entry 61).
-    crate::emacs_core::keymap::get_keyelt_runtime(eval, args[0], !args[1].is_nil())
-}
-
 pub(crate) fn builtin_keymap_prompt(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
@@ -7205,7 +7066,3 @@ pub(crate) fn builtin_unintern(eval: &mut super::eval::Context, args: Vec<Value>
     };
     Ok(if removed { Value::T } else { Value::NIL })
 }
-
-#[cfg(test)]
-#[path = "tests/positioned_menu_item_identity_test.rs"]
-mod positioned_menu_item_identity_tests;

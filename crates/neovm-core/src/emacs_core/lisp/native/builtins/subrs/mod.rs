@@ -4431,7 +4431,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ctx.register_subr(
         crate::emacs_core::subr::world_subr!(SubrSpec::new(
             "describe-buffer-bindings",
-            NativeFn::ContextVec(keymaps::builtin_describe_buffer_bindings),
+            NativeFn::ContextVec(crate::emacs_core::keymap::builtin_describe_buffer_bindings),
             SubrArity::new(1, Some(3)),
         ))
         .requires_eval_state(),
@@ -4716,7 +4716,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     );
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "help--describe-vector",
-        NativeFn::ContextVec(keymaps::builtin_help_describe_vector),
+        NativeFn::ContextVec(crate::emacs_core::keymap::builtin_help_describe_vector),
         SubrArity::new(7, Some(7)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -4839,7 +4839,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "keymap--get-keyelt",
-        NativeFn::ContextVec(builtin_keymap_get_keyelt),
+        NativeFn::ContextVec(crate::emacs_core::keymap::builtin_keymap_get_keyelt),
         SubrArity::new(2, Some(2)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -4948,7 +4948,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     );
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "menu-bar-menu-at-x-y",
-        NativeFn::ContextVec(builtin_menu_bar_menu_at_x_y),
+        NativeFn::ContextVec(crate::emacs_core::keymap::builtin_menu_bar_menu_at_x_y),
         SubrArity::new(2, Some(3)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
