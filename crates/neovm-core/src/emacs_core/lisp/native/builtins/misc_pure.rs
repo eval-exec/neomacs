@@ -615,8 +615,11 @@ pub(crate) fn builtin_force_mode_line_update(
         // GNU gates this on `buffer_window_count (current_buffer)', and its
         // initial frame always exists: in `--batch' the current `*scratch*'
         // is displayed in `#<window 1 on *scratch*>' (GNU 31.0.90). Neomacs
-        // synthesizes that frame lazily, so resolve it before counting.
-        crate::emacs_core::window_cmds::ensure_selected_frame_id(ctx);
+        // synthesizes that frame lazily, so resolve it before counting. The
+        // lifecycle boot closure owns frame synthesis (eval never names the
+        // display module); it is the same in-state ensure, with only the
+        // startup diagnostic suppressed.
+        crate::emacs_core::eval::lifecycle::seed_batch_startup_frame(ctx);
         super::eval::ModeLineUpdateTarget::CurrentBuffer(current_buffer)
     };
     ctx.request_mode_line_update(target);

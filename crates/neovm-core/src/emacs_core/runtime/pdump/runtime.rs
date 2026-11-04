@@ -80,9 +80,9 @@ fn register_core_load_hooks() {
             pdumper_do_now_and_after_load(
                 crate::emacs_core::eval::data::dynamic_module_registry::reset_dynamic_module_registry,
             );
-            pdumper_do_now_and_after_load(
-                crate::emacs_core::dispnew::pure::reset_dispnew_thread_locals,
-            );
+            // dispnew owns no thread-local state; its reset is empty and
+            // stays with the display layer for its own tests. Pdump must not
+            // reach into display for a no-op.
             pdumper_do_now_and_after_load(crate::emacs_core::xfaces::clear_font_cache_state);
             pdumper_do_now_and_after_load(
                 crate::emacs_core::builtins::reset_builtins_thread_locals,

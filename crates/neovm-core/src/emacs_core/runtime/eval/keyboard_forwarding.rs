@@ -41,7 +41,7 @@ impl Context {
             forwarder.forget_keyboard(TERMINAL_ID);
             forwarder.select_keyboard(
                 TERMINAL_ID,
-                Value::symbol(crate::emacs_core::display::gui_window_system_symbol()),
+                Value::symbol(crate::emacs_core::eval::lifecycle::gui_window_system_symbol()),
             );
         }
     }
