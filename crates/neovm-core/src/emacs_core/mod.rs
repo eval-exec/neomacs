@@ -336,6 +336,8 @@ pub(crate) mod environment;
 /// `io::Error` Display.
 #[path = "system/errno/mod.rs"]
 pub mod errno;
+#[path = "eval_hook_installers.rs"]
+pub(crate) mod eval_hook_installers;
 #[path = "system/fileio/mod.rs"]
 pub mod fileio;
 #[path = "system/filelock/mod.rs"]

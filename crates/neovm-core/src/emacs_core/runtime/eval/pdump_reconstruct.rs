@@ -89,16 +89,16 @@ impl Context {
         // `call-interactively` argument acquisition is a core command-layer
         // body (minibuffer/reader Lisp entries stay there). Publish its one
         // cold table before any form can reach the VM path.
-        crate::emacs_core::interactive::install_call_interactively_hook();
+        crate::emacs_core::eval_hook_installers::install_call_interactively_hook();
         // Case-table read/sync and the green buffer-kill notification are
         // core command-layer authority bodies; publish their cold tables at
         // the same one-time seam, before any case-sensitive operation or
         // buffer kill can run.
-        crate::emacs_core::casetab_entries::install_case_table_hooks();
+        crate::emacs_core::eval_hook_installers::install_case_table_hooks();
         crate::emacs_core::xdisp::install_eval_display_query_hooks();
         // Keyboard-macro entries are core command bodies the VM dispatch
         // reaches through eval; publish their cold table at the same seam.
-        crate::emacs_core::kmacro::install_kmacro_hooks();
+        crate::emacs_core::eval_hook_installers::install_kmacro_hooks();
         // The evaluator's observed-run log of function-epoch moves is plain
         // process state too; install it unconditionally so non-JIT builds
         // keep the verify-run mismatch report.
