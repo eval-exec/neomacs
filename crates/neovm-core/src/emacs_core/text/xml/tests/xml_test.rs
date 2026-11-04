@@ -490,13 +490,25 @@ fn libxml_parse_html_region_handles_xml_prolog_and_doctype() {
         ])])]),
     ]);
     assert_eq!(parsed_keep, expected_keep);
+
+    // Case insensitivity: lowercase doctype is also stripped
+    let html_lowercase = br#"<!doctype html><html><body><p>World</p></body></html>"#;
+    let parsed_lower = parse_html_region(html_lowercase, true).unwrap();
+    assert_eq!(
+        parsed_lower,
+        html(vec![body(vec![Value::list(vec![
+            Value::symbol("p"),
+            Value::NIL,
+            Value::string("World"),
+        ])])])
+    );
 }
 
 #[test]
 fn libxml_parse_html_region_preserves_raw_content_in_style_and_script() {
     crate::test_utils::init_test_tracing();
 
-    let doc = br#"<html><head><style>body { color: red; margin: 0; }</style><script>var x = 1; window.alert(x);</script></head><body><p>Text</p></body></html>"#;
+    let doc = br#"<html><head><style>body > div { color: red; }</style><script>var x = 1; window.alert(x);</script></head><body><p>Text</p></body></html>"#;
     let parsed = parse_html_region(doc, false).unwrap();
 
     let expected = html(vec![
@@ -506,7 +518,7 @@ fn libxml_parse_html_region_preserves_raw_content_in_style_and_script() {
             Value::list(vec![
                 Value::symbol("style"),
                 Value::NIL,
-                Value::string("body { color: red; margin: 0; }"),
+                Value::string("body > div { color: red; }"),
             ]),
             Value::list(vec![
                 Value::symbol("script"),
