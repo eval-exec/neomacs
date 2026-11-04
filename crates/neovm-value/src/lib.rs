@@ -21,6 +21,7 @@ pub mod list_scan;
 pub mod plist;
 pub mod quit;
 pub mod random;
+pub mod runtime_root;
 pub mod sequence_copy;
 pub mod string_pos_cache;
 pub mod strings_core;

@@ -62,7 +62,8 @@ fn charset_map_dir() -> PathBuf {
     // (`<runtime_root>/etc/charsets`), the neomacs equivalent of GNU's
     // `charset-map-path`. Memoized: the runtime root does not change mid-process.
     static DIR: OnceLock<PathBuf> = OnceLock::new();
-    DIR.get_or_init(super::load::charset_map_directory).clone()
+    DIR.get_or_init(neovm_value::runtime_root::charset_map_directory)
+        .clone()
 }
 
 fn parse_hex_i64(value: &str) -> Option<i64> {
