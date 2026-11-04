@@ -13,7 +13,7 @@ pub(crate) fn builtin_identity(args: Vec<Value>) -> EvalResult {
 
 pub(crate) fn builtin_prefix_numeric_value(args: Vec<Value>) -> EvalResult {
     expect_args("prefix-numeric-value", &args, 1)?;
-    let numeric = crate::emacs_core::prefix::prefix_numeric_value(&args[0]);
+    let numeric = neovm_value::prefix::prefix_numeric_value(&args[0]);
     Ok(Value::fixnum(numeric))
 }
 

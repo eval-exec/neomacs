@@ -157,7 +157,7 @@ fn convert_lucid_event_type_list(value: &Value, symbol_mode: SymbolMode) -> Opti
         items.push(symbol_mode.unwrap(cursor.cons_car()));
         cursor = cursor.cons_cdr();
     }
-    crate::emacs_core::keyboard::pure::convert_lucid_event_list(&items, SymbolMode::Bare)
+    neovm_value::keyboard_pure::convert_lucid_event_list(&items, SymbolMode::Bare)
 }
 
 /// GNU `Fdefine_key` treats a vector whose first element is a cons as an

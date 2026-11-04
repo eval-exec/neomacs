@@ -1068,6 +1068,7 @@ impl Context {
         })
     }
 
+
     /// Perform a full mark-and-sweep garbage collection.
     #[tracing::instrument(level = "debug", skip(self))]
     pub fn gc_collect(&mut self) {

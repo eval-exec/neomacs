@@ -103,7 +103,7 @@ impl Context {
             )?;
             let depth = std::num::NonZeroUsize::new(state.depth)
                 .expect("an active minibuffer has nonzero depth");
-            crate::emacs_core::minibuffer::MinibufferEntryLevel::from_depth(depth)
+            neovm_value::minibuffer_state::MinibufferEntryLevel::from_depth(depth)
         };
 
         let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id_in_state(
