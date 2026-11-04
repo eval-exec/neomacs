@@ -387,34 +387,29 @@ fn previous_char_property_change(
     }
 }
 
-pub(crate) fn adjust_for_intangible<H: EditHost>(
-    host: &mut H,
+pub(crate) fn adjust_for_intangible<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
+    buffers: &BufferManager,
     pos: EmacsBytePos,
     direction: i32,
 ) -> EmacsBytePos {
-    let inhibit = host
-        .variable_value(inhibit_point_motion_hooks_sym())
+    let inhibit = vars
+        .value(inhibit_point_motion_hooks_sym())
         .unwrap_or(Value::NIL);
     if inhibit.is_truthy() {
         return pos;
     }
-    let (edit, vars) = host.edit_and_vars();
-    let current_id = match edit.buffers.current_buffer_id() {
+    let current_id = match buffers.current_buffer_id() {
         Some(id) => id,
         None => return pos,
     };
-    let buf = match edit.buffers.get(current_id) {
+    let buf = match buffers.get(current_id) {
         Some(b) => b,
         None => return pos,
     };
     let accessible = buf.accessible_emacs_byte_region();
-    let intangible = lookup_buffer_char_property(
-        vars,
-        &edit.buffers,
-        buf,
-        pos.get(),
-        Value::symbol("intangible"),
-    );
+    let intangible =
+        lookup_buffer_char_property(vars, buffers, buf, pos.get(), Value::symbol("intangible"));
     if !intangible.is_truthy() {
         return pos;
     }
@@ -425,7 +420,7 @@ pub(crate) fn adjust_for_intangible<H: EditHost>(
                 Some(next) => {
                     let prop = lookup_buffer_char_property(
                         vars,
-                        &edit.buffers,
+                        buffers,
                         buf,
                         next.get(),
                         Value::symbol("intangible"),
@@ -448,7 +443,7 @@ pub(crate) fn adjust_for_intangible<H: EditHost>(
                     let check = prev.saturating_sub_len(EmacsByteLen::new(1));
                     let prop = lookup_buffer_char_property(
                         vars,
-                        &edit.buffers,
+                        buffers,
                         buf,
                         check.get(),
                         Value::symbol("intangible"),
@@ -800,7 +795,10 @@ pub(crate) fn builtin_forward_line_1<H: EditHost>(host: &mut H, n: Value) -> Eva
     let old_byte = pt;
     let new_pos = EmacsBytePos::new(new_pos);
     let direction = if n >= 0 { 1 } else { -1 };
-    let adjusted = adjust_for_intangible(host, new_pos, direction);
+    let adjusted = {
+        let (edit, vars) = host.edit_and_vars();
+        adjust_for_intangible(vars, &edit.buffers, new_pos, direction)
+    };
     {
         let (edit, _vars) = host.edit_and_vars();
         let _ = edit
@@ -862,7 +860,10 @@ pub(crate) fn builtin_beginning_of_line_1(eval: &mut super::eval::Context, n: Va
         let buf = eval.edit.buffers.get(current_id).ok_or_else(no_buffer)?;
         buf.point_emacs_byte_pos()
     };
-    let adjusted = adjust_for_intangible(eval, target_byte, -1);
+    let adjusted = {
+        let (edit, vars) = eval.edit_and_vars();
+        adjust_for_intangible(vars, &edit.buffers, target_byte, -1)
+    };
     let _ = eval
         .edit
         .buffers
@@ -903,7 +904,10 @@ pub(crate) fn builtin_end_of_line_1(eval: &mut super::eval::Context, n: Value) -
         let buf = eval.edit.buffers.get(current_id).ok_or_else(no_buffer)?;
         buf.char_pos_to_emacs_byte_pos_clamped(LispCharPos1::new(target_char).to_char_pos())
     };
-    let adjusted = adjust_for_intangible(eval, target_byte, 1);
+    let adjusted = {
+        let (edit, vars) = eval.edit_and_vars();
+        adjust_for_intangible(vars, &edit.buffers, target_byte, 1)
+    };
     let _ = eval
         .edit
         .buffers
@@ -976,7 +980,10 @@ fn move_characters<H: EditHost>(host: &mut H, count: Value, motion: CharacterMot
         )
     };
     let direction = if displacement >= 0 { 1 } else { -1 };
-    let adjusted = adjust_for_intangible(host, new_byte, direction);
+    let adjusted = {
+        let (edit, vars) = host.edit_and_vars();
+        adjust_for_intangible(vars, &edit.buffers, new_byte, direction)
+    };
     {
         let (edit, _vars) = host.edit_and_vars();
         let _ = edit

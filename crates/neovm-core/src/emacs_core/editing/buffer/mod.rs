@@ -2304,7 +2304,10 @@ pub(crate) fn builtin_goto_char_1(eval: &mut super::eval::Context, arg: Value) -
     };
     // Adjust for intangible text property
     let direction = if byte_pos >= old_byte { 1 } else { -1 };
-    let adjusted = super::navigation::adjust_for_intangible(eval, byte_pos, direction);
+    let adjusted = {
+        let (edit, vars) = eval.edit_and_vars();
+        super::navigation::adjust_for_intangible(vars, &edit.buffers, byte_pos, direction)
+    };
     let _ = eval
         .edit
         .buffers
