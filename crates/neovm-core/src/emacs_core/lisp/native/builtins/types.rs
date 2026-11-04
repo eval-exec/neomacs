@@ -480,7 +480,7 @@ pub(crate) fn builtin_char_equal_2(
     // GNU compares `downcase (i1) == downcase (i2)` using the current buffer's
     // downcase table (`editfns.c:4440`). Consult a custom case table first, then
     // fall through to the hardwired Unicode case-fold mapping.
-    let casetab = super::super::casetab::CaseTableOverride::for_current_buffer(eval)?;
+    let casetab = super::super::casetab_entries::case_table_override_for_current_buffer(eval)?;
     if casetab.is_custom() {
         let down_left = casetab
             .map(super::super::casetab::CaseMap::Down, left)

@@ -26,6 +26,17 @@ pub fn reset_casetab_thread_locals() {
         .with(|owner| owner.set(crate::tagged::gc::current_tagged_heap_identity().unwrap_or(0)));
 }
 
+/// Install the cached standard-table object (the core-side
+/// `set-standard-case-table` entry); the cache itself stays private to text.
+pub(crate) fn cache_standard_case_table_object(table: Value) {
+    STANDARD_CASE_TABLE_OBJECT.with(|slot| *slot.borrow_mut() = Some(table));
+}
+
+/// Record the tagged-heap identity of the cached standard table.
+pub(crate) fn cache_standard_case_table_heap(heap_identity: usize) {
+    STANDARD_CASE_TABLE_HEAP.with(|owner| owner.set(heap_identity));
+}
+
 /// Collect GC roots from the cached case table.
 pub fn collect_casetab_gc_roots(roots: &mut Vec<Value>, heap_identity: usize) {
     if STANDARD_CASE_TABLE_HEAP.with(Cell::get) != heap_identity {
@@ -358,101 +369,7 @@ pub(crate) fn make_case_table_with_pair(uc: i64, lc: i64) -> Value {
     downcase_ct
 }
 
-/// `(current-case-table)` -- evaluator-backed current buffer case table object.
-pub(crate) fn builtin_current_case_table(
-    ctx: &mut crate::emacs_core::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    let mode = ctx.symbol_mode();
-    expect_args("current-case-table", &args, 0)?;
-    current_case_table_for_context(ctx, mode)
-}
-
-/// `(standard-case-table)` -- evaluator-backed standard case table object.
-pub(crate) fn builtin_standard_case_table(
-    ctx: &mut crate::emacs_core::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    let mode = ctx.symbol_mode();
-    expect_args("standard-case-table", &args, 0)?;
-    ensure_standard_case_table_for_context(ctx, mode)
-}
-
-/// `(set-case-table TABLE)` -- evaluator-backed current buffer case table set.
-pub(crate) fn builtin_set_case_table(
-    ctx: &mut crate::emacs_core::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    let mode = ctx.symbol_mode();
-    expect_args("set-case-table", &args, 1)?;
-    if !is_case_table_with_symbols(&args[0], mode) {
-        return Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("case-table-p"), args[0]],
-        ));
-    }
-    let table = args[0];
-    let _ = ensure_standard_case_table_for_context(ctx, mode)?;
-    ensure_case_table_derived_slots_with_symbols(table, mode)?;
-    set_current_case_table_for_buffer_in_state(&mut ctx.edit.buffers, table)?;
-    Ok(table)
-}
-
-/// `(set-standard-case-table TABLE)` -- evaluator-backed standard table set.
-pub(crate) fn builtin_set_standard_case_table(
-    ctx: &mut crate::emacs_core::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    let mode = ctx.symbol_mode();
-    expect_args("set-standard-case-table", &args, 1)?;
-    if !is_case_table_with_symbols(&args[0], mode) {
-        return Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("case-table-p"), args[0]],
-        ));
-    }
-    STANDARD_CASE_TABLE_OBJECT.with(|slot| {
-        *slot.borrow_mut() = Some(args[0]);
-    });
-    ctx.cached_standard_case_table = Some(args[0]);
-    ctx.green_set_standard_case_table(args[0]);
-    STANDARD_CASE_TABLE_HEAP.with(|owner| owner.set(ctx.tagged_heap.identity()));
-    let table = args[0];
-    ensure_case_table_derived_slots_with_symbols(table, mode)?;
-    ctx.store_variable(standard_case_table_object_symbol_id(), table);
-    Ok(table)
-}
-
-#[inline(always)]
-fn ensure_standard_case_table_for_context(
-    ctx: &mut crate::emacs_core::eval::Context,
-    mode: SymbolMode,
-) -> EvalResult {
-    // SAFETY: lazy standard-table creation only reads/stores a variable value;
-    // it cannot call Lisp or publish canonical dispatch metadata or raw storage.
-    unsafe {
-        ctx.obarray.with_legacy_value_write(|obarray| {
-            ensure_standard_case_table_object_in_state_with_symbols(obarray, mode)
-        })
-    }
-}
-
-#[inline(always)]
-fn current_case_table_for_context(
-    ctx: &mut crate::emacs_core::eval::Context,
-    mode: SymbolMode,
-) -> Result<Value, Flow> {
-    let buffers = &mut ctx.edit.buffers;
-    // SAFETY: this noncalling phase selects/seeds case-table Values and buffer
-    // slots, without changing function/debugger metadata or escaping a loan.
-    unsafe {
-        ctx.obarray.with_legacy_value_write(|obarray| {
-            current_case_table_for_buffer_in_state_with_symbols(obarray, buffers, mode)
-        })
-    }
-}
-
-fn ensure_standard_case_table_object_in_state_with_symbols(
+pub(crate) fn ensure_standard_case_table_object_in_state_with_symbols(
     obarray: &mut neovm_value::symbol::Obarray,
     mode: SymbolMode,
 ) -> EvalResult {
@@ -472,7 +389,7 @@ fn ensure_standard_case_table_object_in_state_with_symbols(
     Ok(table)
 }
 
-fn current_case_table_for_buffer_in_state_with_symbols(
+pub(crate) fn current_case_table_for_buffer_in_state_with_symbols(
     obarray: &mut neovm_value::symbol::Obarray,
     buffers: &mut crate::buffer::BufferManager,
     mode: SymbolMode,
@@ -498,39 +415,6 @@ fn current_case_table_for_buffer_in_state_with_symbols(
     // into a fresh buffer (`buffer.c:1149-1157`).
     buf.slots_mut()[BUFFER_SLOT_CASE_TABLE.index()] = fallback;
     Ok(fallback)
-}
-
-pub(crate) fn sync_current_buffer_case_table_state(
-    ctx: &mut crate::emacs_core::eval::Context,
-) -> Result<(), Flow> {
-    let mode = ctx.symbol_mode();
-    let _ = current_case_table_for_context(ctx, mode)?;
-    Ok(())
-}
-
-pub(crate) fn current_case_canon_table(
-    ctx: &mut crate::emacs_core::eval::Context,
-) -> Result<Value, Flow> {
-    let mode = ctx.symbol_mode();
-    let table = current_case_table_for_context(ctx, mode)?;
-    ensure_case_table_derived_slots_with_symbols(table, mode)?;
-    Ok(case_table_extra(table, 1))
-}
-
-/// Resolve GNU Fupcase's actual upcase table, including explicit changes to
-/// the standard table. The caller keeps a call-local, read-only projection;
-/// this adds no cache or Lisp state shared between independently owned Contexts.
-pub(crate) fn current_case_upcase_table(
-    ctx: &mut crate::emacs_core::eval::Context,
-) -> Result<Value, Flow> {
-    let mode = ctx.symbol_mode();
-    let table = current_case_table_for_context(ctx, mode)?;
-    // GNU prepare_casing_context only rebuilds a modified table when the
-    // canonicalize slot is nil, so ordinary comparisons do not write tables.
-    if case_table_extra(table, 1).is_nil() {
-        ensure_case_table_derived_slots_with_symbols(table, mode)?;
-    }
-    Ok(case_table_extra(table, 0))
 }
 
 /// The case-fold canon char-table to use as the search translate table for a
@@ -600,35 +484,24 @@ pub(crate) struct InstalledCaseTables {
 }
 
 impl CaseTableOverride {
-    /// Resolve the override for the current buffer, mirroring GNU's use of the
-    /// per-buffer downcase/upcase/canon char-tables (`buffer.h:1648-1663`,
-    /// `editfns.c:4440`).
-    pub(crate) fn for_current_buffer(
-        ctx: &mut crate::emacs_core::eval::Context,
-    ) -> Result<Self, Flow> {
-        let mode = ctx.symbol_mode();
-        // Without a current buffer there is no buffer-local case table; behave
-        // like GNU's default (the standard table) and use the hardwired path.
-        if ctx.edit.buffers.current_buffer_id().is_none() {
-            return Ok(Self::none());
-        }
-        let standard = ensure_standard_case_table_for_context(ctx, mode)?;
-        let table = current_case_table_for_context(ctx, mode)?;
-        // The standard table's explicit entries already match the hardwired
-        // ASCII path; skip the override entirely so we stay byte-identical.
-        if table.bits() == standard.bits() {
-            return Ok(Self::Standard);
-        }
-        // A custom table is installed: make sure the up/canon subsidiary tables
-        // exist (GNU `set_case_table` recomputes them lazily via extras[1] nil).
-        ensure_case_table_derived_slots_with_symbols(table, mode)?;
-        Ok(Self::Installed(InstalledCaseTables {
-            down: table,
-            up: case_table_extra(table, 0),
-            canon: case_table_extra(table, 1),
-            symbol_mode: mode,
+    /// Build an installed override from already-resolved subsidiary tables.
+    ///
+    /// Used by the core-side current-buffer override resolver: the evaluator
+    /// phases select the tables, and this constructor keeps the private field
+    /// layout in the text layer.
+    pub(crate) fn from_installed_tables(
+        down: Value,
+        up: Value,
+        canon: Value,
+        symbol_mode: SymbolMode,
+    ) -> Self {
+        Self::Installed(InstalledCaseTables {
+            down,
+            up,
+            canon,
+            symbol_mode,
             mutator: std::marker::PhantomData,
-        }))
+        })
     }
 
     /// An override that never overrides — used by pure/test callers and the
@@ -716,7 +589,7 @@ fn is_case_table_subsidiary(table: &Value) -> bool {
     super::chartable::is_char_table(table)
 }
 
-fn set_current_case_table_for_buffer_in_state(
+pub(crate) fn set_current_case_table_for_buffer_in_state(
     buffers: &mut crate::buffer::BufferManager,
     table: Value,
 ) -> Result<(), Flow> {
@@ -738,7 +611,7 @@ fn set_current_case_table_for_buffer_in_state(
     Ok(())
 }
 
-fn case_table_extra(table: Value, idx: usize) -> Value {
+pub(crate) fn case_table_extra(table: Value, idx: usize) -> Value {
     table
         .as_char_table_obj()
         .and_then(|obj| obj.extras.as_slice().get(idx).copied())
@@ -821,7 +694,7 @@ fn set_canon(case_table: Value, key: Value, elt: Value, mode: SymbolMode) -> Res
     set_char_table_range_value(canon, key, canonical)
 }
 
-fn ensure_case_table_derived_slots_with_symbols(
+pub(crate) fn ensure_case_table_derived_slots_with_symbols(
     table: Value,
     mode: SymbolMode,
 ) -> Result<(), Flow> {

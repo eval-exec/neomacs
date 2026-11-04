@@ -2009,7 +2009,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ctx.register_subr(
         crate::emacs_core::subr::world_subr!(SubrSpec::new(
             "downcase-region",
-            NativeFn::ContextVec(crate::emacs_core::casefiddle::builtin_downcase_region),
+            NativeFn::ContextVec(crate::emacs_core::casefiddle_entries::builtin_downcase_region),
             SubrArity::new(2, Some(3)),
         ))
         .interactive(
@@ -2021,7 +2021,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ctx.register_subr(
         crate::emacs_core::subr::world_subr!(SubrSpec::new(
             "upcase-region",
-            NativeFn::ContextVec(crate::emacs_core::casefiddle::builtin_upcase_region),
+            NativeFn::ContextVec(crate::emacs_core::casefiddle_entries::builtin_upcase_region),
             SubrArity::new(2, Some(3)),
         ))
         .interactive(
@@ -2033,7 +2033,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ctx.register_subr(
         crate::emacs_core::subr::world_subr!(SubrSpec::new(
             "capitalize-region",
-            NativeFn::ContextVec(crate::emacs_core::casefiddle::builtin_capitalize_region),
+            NativeFn::ContextVec(crate::emacs_core::casefiddle_entries::builtin_capitalize_region),
             SubrArity::new(2, Some(3)),
         ))
         .interactive(
@@ -2045,7 +2045,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ctx.register_subr(
         crate::emacs_core::subr::world_subr!(SubrSpec::new(
             "downcase-word",
-            NativeFn::ContextVec(crate::emacs_core::casefiddle::builtin_downcase_word),
+            NativeFn::ContextVec(crate::emacs_core::casefiddle_entries::builtin_downcase_word),
             SubrArity::new(1, Some(1)),
         ))
         .interactive(crate::emacs_core::interactive::BuiltinInteractiveSpec::String("p")),
@@ -2053,7 +2053,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ctx.register_subr(
         crate::emacs_core::subr::world_subr!(SubrSpec::new(
             "upcase-word",
-            NativeFn::ContextVec(crate::emacs_core::casefiddle::builtin_upcase_word),
+            NativeFn::ContextVec(crate::emacs_core::casefiddle_entries::builtin_upcase_word),
             SubrArity::new(1, Some(1)),
         ))
         .interactive(crate::emacs_core::interactive::BuiltinInteractiveSpec::String("p")),
@@ -2061,7 +2061,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ctx.register_subr(
         crate::emacs_core::subr::world_subr!(SubrSpec::new(
             "capitalize-word",
-            NativeFn::ContextVec(crate::emacs_core::casefiddle::builtin_capitalize_word),
+            NativeFn::ContextVec(crate::emacs_core::casefiddle_entries::builtin_capitalize_word),
             SubrArity::new(1, Some(1)),
         ))
         .interactive(crate::emacs_core::interactive::BuiltinInteractiveSpec::String("p")),
@@ -3312,17 +3312,17 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "current-case-table",
-        NativeFn::ContextVec(crate::emacs_core::casetab::builtin_current_case_table),
+        NativeFn::ContextVec(crate::emacs_core::casetab_entries::builtin_current_case_table),
         SubrArity::new(0, Some(0)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "standard-case-table",
-        NativeFn::ContextVec(crate::emacs_core::casetab::builtin_standard_case_table),
+        NativeFn::ContextVec(crate::emacs_core::casetab_entries::builtin_standard_case_table),
         SubrArity::new(0, Some(0)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "set-case-table",
-        NativeFn::ContextVec(crate::emacs_core::casetab::builtin_set_case_table),
+        NativeFn::ContextVec(crate::emacs_core::casetab_entries::builtin_set_case_table),
         SubrArity::new(1, Some(1)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -4082,7 +4082,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "capitalize",
-        NativeFn::ContextVec(crate::emacs_core::casefiddle::builtin_capitalize_in_state),
+        NativeFn::ContextVec(crate::emacs_core::casefiddle_entries::builtin_capitalize_in_state),
         SubrArity::new(1, Some(1)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -6615,7 +6615,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "set-standard-case-table",
-        NativeFn::ContextVec(crate::emacs_core::casetab::builtin_set_standard_case_table),
+        NativeFn::ContextVec(crate::emacs_core::casetab_entries::builtin_set_standard_case_table),
         SubrArity::new(1, Some(1)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -6631,7 +6631,9 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ctx.register_subr(
         crate::emacs_core::subr::world_subr!(SubrSpec::new(
             "upcase-initials-region",
-            NativeFn::ContextVec(crate::emacs_core::casefiddle::builtin_upcase_initials_region),
+            NativeFn::ContextVec(
+                crate::emacs_core::casefiddle_entries::builtin_upcase_initials_region
+            ),
             SubrArity::new(2, Some(3)),
         ))
         .interactive(
@@ -7685,7 +7687,9 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     // -- Case/char --
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "upcase-initials",
-        NativeFn::ContextVec(crate::emacs_core::casefiddle::builtin_upcase_initials_in_state),
+        NativeFn::ContextVec(
+            crate::emacs_core::casefiddle_entries::builtin_upcase_initials_in_state
+        ),
         SubrArity::new(1, Some(1)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(

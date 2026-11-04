@@ -2384,7 +2384,7 @@ pub(crate) fn builtin_string_match_slice(
     // The canon TABLE only: regexp compile builds (and caches) the actual
     // CaseTranslation; constructing its 1KB memo per call was pure waste.
     let case_translation_table = if case_fold {
-        Some(crate::emacs_core::casetab::current_case_canon_table(eval)?)
+        Some(crate::emacs_core::casetab_entries::current_case_canon_table(eval)?)
     } else {
         None
     };
@@ -2442,7 +2442,7 @@ fn string_match_fast(
         return None;
     }
     let case_translation_table = if case_fold {
-        match crate::emacs_core::casetab::current_case_canon_table(eval) {
+        match crate::emacs_core::casetab_entries::current_case_canon_table(eval) {
             Ok(table) => Some(table),
             Err(flow) => return Some(Err(flow)),
         }
@@ -2697,7 +2697,7 @@ pub(crate) fn builtin_posix_string_match(
     // The canon TABLE only: regexp compile builds (and caches) the actual
     // CaseTranslation; constructing its 1KB memo per call was pure waste.
     let case_translation_table = if case_fold {
-        Some(crate::emacs_core::casetab::current_case_canon_table(eval)?)
+        Some(crate::emacs_core::casetab_entries::current_case_canon_table(eval)?)
     } else {
         None
     };

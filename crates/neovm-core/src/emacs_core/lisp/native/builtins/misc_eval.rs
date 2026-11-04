@@ -573,7 +573,7 @@ pub(crate) fn builtin_compare_buffer_substrings(
     // GNU includes the standard equivalence classes (sigma/final sigma,
     // micro sign) through the current buffer's canonical case table.
     let canon = if case_fold {
-        Some(crate::emacs_core::casetab::current_case_canon_table(eval)?)
+        Some(crate::emacs_core::casetab_entries::current_case_canon_table(eval)?)
     } else {
         None
     };
