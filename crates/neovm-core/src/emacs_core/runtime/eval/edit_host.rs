@@ -16,7 +16,8 @@
 //! (`pub struct`, private fields, no public constructor).
 
 use super::{
-    Context, LispArgVec, SpecpdlCount, SpecpdlRootScopeState, SpecpdlRootSlot, VariableView,
+    Context, CurrentBufferScope, LispArgVec, SpecpdlCount, SpecpdlRootScopeState, SpecpdlRootSlot,
+    VariableView,
 };
 use crate::buffer::{Buffer, BufferId, EditRuntime, EmacsBytePos, EmacsByteRange, LispCharPos1};
 use crate::emacs_core::bookmark::BookmarkManager;
@@ -121,6 +122,20 @@ impl EditHost for Context {
         Context::restore_current_buffer_if_live(self, id)
     }
 
+    fn with_current_buffer_scope(
+        &mut self,
+        buffer: BufferId,
+        f: impl FnOnce(&mut Self) -> EvalResult,
+    ) -> EvalResult {
+        // The scope is the existing `record_unwind_current_buffer` guard,
+        // verbatim (PEER-RULING-STAGE3 addendum 00 item 2): `for_buffer`
+        // skips the save entry when no switch happens (bug#36190), and
+        // `finish`/Drop unbind exactly the suffix the scope pushed.
+        let mut scope = CurrentBufferScope::for_buffer(self, buffer)?;
+        let r = f(scope.context());
+        scope.finish(r)
+    }
+
     fn with_gc_inhibited<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
         Context::with_gc_inhibited(self, f)
     }
@@ -150,6 +165,34 @@ impl EditHost for Context {
         if let Some(buffer_data) = self.edit.buffers.get(buffer) {
             self.treesit
                 .finish_buffer_edit(buffer, buffer_data, new_end_byte)
+        }
+    }
+
+    fn visible_variable_value_or_nil(&self, id: SymId) -> Value {
+        Context::visible_variable_value_or_nil_by_id(self, id)
+    }
+
+    fn eval_symbol_by_id(&self, id: SymId) -> EvalResult {
+        Context::eval_symbol_by_id(self, id)
+    }
+
+    fn reset_buffer_locals(&mut self, buffer: BufferId, kill_permanent: bool) {
+        // GNU buffer.c reset_buffer_local_variables:
+        // - preserves most always-local slots
+        // - resets only a small fixed reset-on-kill-all subset
+        // - clears conditional slot locals unless they are permanent-local
+        // - walks local_var_alist for LOCALIZED entries (Phase 10E)
+        if self.owner.is_dormant() {
+            crate::emacs_core::buffer::reset_buffer_local_variables(self, buffer, kill_permanent);
+        } else {
+            // Projected locals reset as the variables they project, and this
+            // owner's bindings of the locals that go capture what they held.
+            let before = self.owner_locals_before_reset(buffer);
+            let projected = self.projected_locals_of(buffer);
+            self.with_revealed_projections(&projected, |ctx| {
+                crate::emacs_core::buffer::reset_buffer_local_variables(ctx, buffer, kill_permanent)
+            });
+            self.owner_locals_reset(buffer, before);
         }
     }
 
@@ -216,6 +259,19 @@ impl EditHost for Context {
 
     fn lisp_string<'a>(&'a self, value: Value) -> Option<&'a LispString> {
         Context::lisp_string(self, value)
+    }
+
+    fn expect_lisp_string<'a>(&'a self, value: Value) -> Result<&'a LispString, Flow> {
+        Context::expect_lisp_string(self, value)
+    }
+
+    #[cold]
+    fn signal_c_error(&self, message: crate::errors::CErrorMessage<'_>) -> Flow {
+        // Inherent `Context` method (text/coding): the path resolves to
+        // it, not to this trait method, because inherent items take
+        // precedence; spelled as an associated call for the same reason
+        // as `sync_window_positions` above.
+        Context::signal_c_error(self, message)
     }
 
     fn apply(&mut self, function: Value, args: &[Value]) -> EvalResult {

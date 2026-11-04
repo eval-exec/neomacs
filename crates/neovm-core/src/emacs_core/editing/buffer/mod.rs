@@ -1462,9 +1462,11 @@ pub(crate) fn builtin_kill_all_local_variables(
     Ok(Value::NIL)
 }
 
-/// `kill-all-local-variables`' reset of BUFFER's locals.
+/// `kill-all-local-variables`' reset of BUFFER's locals. Called downward
+/// from the `EditHost::reset_buffer_locals` implementation, which owns
+/// the dormant/projected-owner dispatch around it.
 #[inline(always)]
-fn reset_buffer_local_variables(
+pub(crate) fn reset_buffer_local_variables(
     eval: &mut super::eval::Context,
     buffer: crate::buffer::BufferId,
     kill_permanent: bool,

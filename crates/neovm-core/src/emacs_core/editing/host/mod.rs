@@ -146,11 +146,46 @@ pub trait EditHost {
     /// the forwarding live on the host, where the symbol table is. C2.
     fn inhibit_modification_hooks(&self) -> bool;
 
+    /// GNU's visible variable read by id in the lexical-then-visible
+    /// order (`find_symbol_value` through the lexenv cache): the read
+    /// the buffer-access property gate uses for its policy variables.
+    /// Pure delegation, semantics unchanged. M3a.
+    fn visible_variable_value_or_nil(&self, id: SymId) -> Value;
+
+    /// The void-signalling visible read of `id` (GNU `symbol-value`
+    /// with its void-variable error path folded into one call). Also
+    /// the policy-symbol read casing, rectangle and field-constraint
+    /// code use. Pure delegation. M3a.
+    fn eval_symbol_by_id(&self, id: SymId) -> EvalResult;
+
+    /// GNU `reset_buffer_local_variables` (buffer.c) for one buffer:
+    /// the dormant branch resets directly; the projected-owner branch
+    /// captures the owner bindings, reveals the projections, resets,
+    /// and clears them. Includes the one audited legacy obarray write.
+    /// The `kill-all-local-variables` Lisp entry drives this through
+    /// the host after `change-major-mode-hook` runs. M3a.
+    fn reset_buffer_locals(&mut self, buffer: BufferId, kill_permanent: bool);
+
     /// The epoch-checked string borrow (the `as_lisp_string` safety
     /// discipline, DIVERGENCES.md 161): `Some(&LispString)` only while the
     /// value is a live string in the current GC epoch. The borrow must not
     /// cross a Lisp call; copy the bytes out when it must survive one. C3.
     fn lisp_string<'a>(&'a self, value: Value) -> Option<&'a LispString>;
+
+    /// [`Self::lisp_string`] with GNU's `CHECK_STRING` signal
+    /// (`wrong-type-argument stringp`): the drop-in replacement for the
+    /// argument-check helper at a site that must not hold the borrow
+    /// across a safepoint. Like [`Self::lisp_string`], holding the
+    /// returned borrow across a `&mut self` host call is a compile
+    /// error — that is the safety property the API exists for. M3b.
+    fn expect_lisp_string<'a>(&'a self, value: Value) -> Result<&'a LispString, Flow>;
+
+    /// GNU's native error template path: doprnt translation with
+    /// `text-quoting-style` applied (eval.c:2285-2287 through
+    /// doprnt.c:493-499), returning the signalled `Flow`. The
+    /// quoting-style resolution stays in the coding layer; edit hands
+    /// over the template only. M3c.
+    fn signal_c_error(&self, message: crate::errors::CErrorMessage<'_>) -> Flow;
 
     /// The session's bookmark set (bookmark.el globals). The state is
     /// `WorldSlot`-owned on the host and does NOT move with the edit
@@ -170,6 +205,21 @@ pub trait EditHost {
     /// GNU `set_buffer_if_live` for an unwind: re-select `id` unless it
     /// was killed meanwhile or is already current.
     fn restore_current_buffer_if_live(&mut self, id: BufferId);
+
+    /// GNU `record_unwind_current_buffer` around `f` with `buffer`
+    /// current (textprop.c:1175-1184): no save entry when `buffer` is
+    /// already current (bug#36190), `SaveCurrentBuffer` as the only
+    /// specpdl entry pushed, the caller's buffer current again on every
+    /// exit, and the scope's Drop discarding the suffix on a Rust
+    /// unwind. The scope lives in the host's frame, so unwinding
+    /// through `f` still drops it there; edit never sees the scope
+    /// type. Inside `f`, edit state is reached through
+    /// [`Self::edit_and_vars`] under the V phasing rules.
+    fn with_current_buffer_scope(
+        &mut self,
+        buffer: BufferId,
+        f: impl FnOnce(&mut Self) -> EvalResult,
+    ) -> EvalResult;
 
     /// Run `f` with garbage collection inhibited (GNU holds
     /// `garbage_collection_inhibited` across `truncate_undo_list`'s

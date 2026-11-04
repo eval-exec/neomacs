@@ -14,7 +14,7 @@
 // Conversion-core facade (stage-3 C16): the moved substrate's public surface
 // ---------------------------------------------------------------------------
 
-pub(crate) use neovm_value::time_core::{
+pub(crate) use crate::time_core::{
     LispTimeOutput, TimeConvertForm, TimeMicros, current_time_value, decode_lisp_time,
     frac_to_double, integer_fdiv_qr, make_lisp_time, parse_time, parse_time_detailed,
     ticks_hz_hz_ticks, ticks_hz_list4, ticks_hz_seconds, time_arith, time_cmp, time_error_overflow,

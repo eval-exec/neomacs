@@ -57,6 +57,10 @@ pub(crate) use neovm_value::chartab;
 // the stage-3 split (C16): format's %N, fileio, buffer idle limits, dired,
 // and the dynamic-module bridge read time values below the lisp layer.
 pub(crate) use neovm_value::time_core;
+// The native C error message template (GNU doprnt's translation surface)
+// lives in the value crate: the edit layer's M3c host method takes it
+// directly, below the coding layer that resolves the quoting style.
+pub(crate) use neovm_value::errors;
 pub mod window;
 
 // Curated facade: the front door for consumers of the Lisp engine. The
