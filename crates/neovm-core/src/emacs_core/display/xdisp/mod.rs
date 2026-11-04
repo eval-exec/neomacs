@@ -5433,15 +5433,16 @@ fn expand_mode_line_percent_in_state<T: TargetPolicy>(
     }
 }
 
-impl Invisibility {
-    const fn elides_source_for(self, context: InvisibleRunContext) -> bool {
-        match (context, self) {
-            (_, Self::Visible) => false,
-            (_, Self::Hidden) | (InvisibleRunContext::DisplayMotion, Self::HiddenWithEllipsis) => {
-                true
-            }
-            (InvisibleRunContext::ColumnScan, Self::HiddenWithEllipsis) => false,
-        }
+/// Whether this invisibility state elides the source in `context`.
+fn invisibility_elides_source_for(
+    context: InvisibleRunContext,
+    invisibility: Invisibility,
+) -> bool {
+    match (context, invisibility) {
+        (_, Invisibility::Visible) => false,
+        (_, Invisibility::Hidden)
+        | (InvisibleRunContext::DisplayMotion, Invisibility::HiddenWithEllipsis) => true,
+        (InvisibleRunContext::ColumnScan, Invisibility::HiddenWithEllipsis) => false,
     }
 }
 
@@ -5575,7 +5576,10 @@ pub(crate) fn invisible_source_run_end_byte(
     // This helper answers only the source boundary, never an estimated
     // ellipsis width. The typed context preserves GNU's deliberate distinction
     // between display motion and column scans.
-    if !invisible_status_for_value(eval, Value::fixnum(lisp_pos))?.elides_source_for(context) {
+    if !invisibility_elides_source_for(
+        context,
+        invisible_status_for_value(eval, Value::fixnum(lisp_pos))?,
+    ) {
         return Ok(None);
     }
 

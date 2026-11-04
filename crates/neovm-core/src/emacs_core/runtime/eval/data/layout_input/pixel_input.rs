@@ -8,7 +8,7 @@ use std::sync::Arc;
 pub(crate) struct SpaceInput {
     pub(crate) identity: usize,
     pub(crate) operands: [Option<PixelInput>;
-        <crate::emacs_core::display_spec::DisplaySpaceKey as strum::EnumCount>::COUNT],
+        <neovm_value::display_vocab::DisplaySpaceKey as strum::EnumCount>::COUNT],
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

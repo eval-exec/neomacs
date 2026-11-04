@@ -13,7 +13,7 @@ impl Context {
             .frames
             .selected_frame()
             .map(|frame| frame.terminal_id)
-            .unwrap_or(crate::emacs_core::terminal::pure::TERMINAL_ID);
+            .unwrap_or(crate::emacs_core::eval::protocol::tty_host::TERMINAL_ID);
         let window_system = self
             .frames
             .selected_frame()
@@ -32,8 +32,9 @@ impl Context {
         &mut self,
         identity: neomacs_display_protocol::GraphicalDisplayIdentity,
     ) {
+        use crate::emacs_core::eval::protocol::tty_host::TERMINAL_ID;
         use crate::emacs_core::terminal::pure::{
-            TERMINAL_ID, TerminalRuntimeConfig, configure_terminal_runtime,
+            TerminalRuntimeConfig, configure_terminal_runtime,
         };
         configure_terminal_runtime(TerminalRuntimeConfig::window_system(identity));
         if let Some(forwarder) = self.window_system_keyboard_forwarder() {

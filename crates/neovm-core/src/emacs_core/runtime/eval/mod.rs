@@ -3337,7 +3337,7 @@ pub struct Context {
     /// this typed seam. `None` means the driver cannot shape (the subr
     /// answers nil — no composition).
     #[allow(clippy::type_complexity)]
-    pub font_shape_fn: Option<crate::emacs_core::font::FontShapeFn>,
+    pub font_shape_fn: Option<font_shape::FontShapeFn>,
     /// Optional GUI observer of a complete marker-backed scroll transition.
     #[allow(clippy::type_complexity)]
     pub scroll_preview_fn: Option<
@@ -5580,7 +5580,7 @@ impl Context {
         } else {
             self.command_loop
                 .keyboard
-                .select_terminal(crate::emacs_core::terminal::pure::TERMINAL_ID);
+                .select_terminal(crate::emacs_core::eval::protocol::tty_host::TERMINAL_ID);
         }
     }
 
@@ -7618,6 +7618,7 @@ pub mod buffer_kill;
 pub mod call_interactively;
 pub mod case_tables;
 pub mod display_query_hooks;
+pub mod font_shape;
 mod gc_pacing;
 pub mod input_hooks;
 pub mod interactive_registry;

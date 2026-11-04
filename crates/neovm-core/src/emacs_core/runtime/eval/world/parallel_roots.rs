@@ -221,7 +221,7 @@ impl Baton {
                     visit(value);
                 }
             }
-            crate::emacs_core::font::trace_gstring_shape_cache(
+            super::super::font_shape::trace_gstring_shape_cache(
                 &global.gstring_shape_cache,
                 &mut visit,
             );

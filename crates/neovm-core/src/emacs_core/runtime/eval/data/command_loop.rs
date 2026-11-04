@@ -889,7 +889,7 @@ impl KeyboardRuntime {
         Self {
             event_queue: VecDeque::new(),
             pending_input_events: FrontendEventQueue::default(),
-            active_terminal_id: crate::emacs_core::terminal::pure::TERMINAL_ID,
+            active_terminal_id: crate::emacs_core::eval::protocol::tty_host::TERMINAL_ID,
             parked_kboards: HashMap::new(),
             kboard: KBoard::new(),
         }

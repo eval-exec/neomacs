@@ -351,7 +351,7 @@ impl Context {
         }
         group("misc");
         if WORLD {
-            crate::emacs_core::font::trace_gstring_shape_cache(&self.gstring_shape_cache, visit);
+            super::font_shape::trace_gstring_shape_cache(&self.gstring_shape_cache, visit);
         }
         visit(self.lexenv);
         visit(self.quit_flag);

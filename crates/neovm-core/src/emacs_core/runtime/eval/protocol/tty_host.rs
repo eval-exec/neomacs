@@ -13,6 +13,9 @@ use std::num::NonZeroU32;
 use neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities;
 use neovm_value::display_vocab::FrameId;
 
+/// GNU's initial terminal id (`initial_terminal`).
+pub const TERMINAL_ID: u64 = 0;
+
 use super::super::Context;
 
 pub trait TerminalHost {

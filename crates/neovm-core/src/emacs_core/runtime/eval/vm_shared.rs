@@ -6,6 +6,7 @@
 use super::*;
 use crate::window::DisplayFrameExt;
 use crate::window::DisplayFrameManagerExt;
+use neovm_value::display_vocab::text_prop_means_invisible;
 
 impl Context {
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
@@ -253,7 +254,7 @@ impl Context {
             // Find boundaries `beg`..`end` of the invisible run around PT.
             while end < zv {
                 let prop = self.apfp_char_property(end, inv)?;
-                let invisibility = super::super::xdisp::text_prop_means_invisible(prop, spec);
+                let invisibility = text_prop_means_invisible(prop, spec);
                 if !invisibility.hides_source() {
                     break;
                 }
@@ -262,7 +263,7 @@ impl Context {
             }
             while beg > begv {
                 let prop = self.apfp_char_property(beg - 1, inv)?;
-                let invisibility = super::super::xdisp::text_prop_means_invisible(prop, spec);
+                let invisibility = text_prop_means_invisible(prop, spec);
                 if !invisibility.hides_source() {
                     break;
                 }
@@ -307,12 +308,10 @@ impl Context {
                     // Already as far as we can go; avoid an infinite loop.
                 } else {
                     let here = self.apfp_pos_property(pt2, inv)?;
-                    if super::super::xdisp::text_prop_means_invisible(here, spec).hides_source() {
+                    if text_prop_means_invisible(here, spec).hides_source() {
                         let other = if pt2 == beg { end } else { beg };
                         let other_val = self.apfp_pos_property(other, inv)?;
-                        if !super::super::xdisp::text_prop_means_invisible(other_val, spec)
-                            .hides_source()
-                        {
+                        if !text_prop_means_invisible(other_val, spec).hides_source() {
                             self.apfp_set_point(id, other);
                             moved = true;
                         }

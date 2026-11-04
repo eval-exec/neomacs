@@ -131,7 +131,7 @@ pub(crate) enum InternalFrontendEvent {
     },
     LayoutInvalidated,
     ImageStateChanged {
-        event: crate::emacs_core::image_catalog::ImageStateEvent,
+        event: neomacs_display_protocol::image::ImageStateEvent,
     },
 }
 

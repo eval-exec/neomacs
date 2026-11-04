@@ -153,7 +153,7 @@ fn with_terminal_manager<R>(f: impl FnOnce(&RefCell<TerminalManager>) -> R) -> R
 }
 
 pub(crate) const TERMINAL_NAME: &str = "initial_terminal";
-pub(crate) const TERMINAL_ID: u64 = 0;
+pub(crate) use crate::emacs_core::eval::protocol::tty_host::TERMINAL_ID;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TerminalRuntime {
