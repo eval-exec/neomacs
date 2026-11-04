@@ -37,83 +37,13 @@ pub enum PresentationActivateError {
     UnknownPresentation(PresentationId),
 }
 
-/// One immutable, presentation-owned publication of all evaluator window geometry.
-#[derive(Clone, Debug, PartialEq)]
-pub struct PresentationGeometry {
-    presentation: PresentationId,
-    frame: PresentationFrame,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct PresentationFrame {
-    id: FrameId,
-    placement: neomacs_display_protocol::PresentedFramePlacement,
-    windows: HashMap<WindowId, PresentationWindow>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct PresentationWindow {
-    id: WindowId,
-    cell_origin: CellOrigin,
-    outer: PixelRect<FrameLogicalSpace>,
-    regions: Option<WindowRegions>,
-    positions: PresentationPositions,
-    cursor: Option<PresentationCursor>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct WindowRegions {
-    outer: PixelRect<FrameLogicalSpace>,
-    text_body: PixelRect<FrameLogicalSpace>,
-    left_margin_columns: i64,
-    right_margin_columns: i64,
-    left_margin: Option<PixelRect<FrameLogicalSpace>>,
-    right_margin: Option<PixelRect<FrameLogicalSpace>>,
-    left_fringe: Option<PixelRect<FrameLogicalSpace>>,
-    right_fringe: Option<PixelRect<FrameLogicalSpace>>,
-    left_scroll_bar: Option<PixelRect<FrameLogicalSpace>>,
-    right_scroll_bar: Option<PixelRect<FrameLogicalSpace>>,
-    horizontal_scroll_bar: Option<PixelRect<FrameLogicalSpace>>,
-    tab_line: Option<PixelRect<FrameLogicalSpace>>,
-    header_line: Option<PixelRect<FrameLogicalSpace>>,
-    mode_line: Option<PixelRect<FrameLogicalSpace>>,
-    right_divider: Option<PixelRect<FrameLogicalSpace>>,
-    bottom_divider: Option<PixelRect<FrameLogicalSpace>>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct PresentationPosition {
-    buffer_pos: LispCharPos1,
-    x: i64,
-    body_y: i64,
-    width: i64,
-    height: i64,
-    /// The line owns coordinate hits even below a shorter glyph. Keep this
-    /// separate from glyph height, which position/cursor queries still need.
-    row_height: i64,
-    body_row: i64,
-    col: i64,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct PresentationCursor {
-    x: i64,
-    body_y: i64,
-    width: i64,
-    height: i64,
-}
-
-/// Result of resolving a buffer position against one immutable presentation.
-///
-/// GNU redisplay can advance past text hidden by invisibility or a replacing
-/// `display` property.  Keep that compatibility case distinct from an exact
-/// glyph match so the row-boundary rule cannot be lost in a generic fallback.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PresentedBufferPositionMatch<'a> {
-    Exact(&'a PresentationPosition),
-    HiddenOnRow { next: &'a PresentationPosition },
-    NotVisible,
-}
+pub use crate::emacs_core::eval::data::window_state::{
+    CellOrigin, FrameLogicalSpace, LogicalPx, PixelPoint, PixelRect, PresentationFrame,
+    PresentationGeometry, PresentationWindow, WindowBodySpace, WindowLocalSpace, WindowRegions,
+};
+pub(crate) use crate::emacs_core::eval::data::window_state::{
+    Column, Line, PresentationCursor, PresentationPosition, PresentedBufferPositionMatch,
+};
 
 impl PresentationGeometry {
     pub(crate) fn new<S: std::borrow::Borrow<WindowDisplaySnapshot>>(
@@ -985,11 +915,6 @@ impl GeometryQuery for WindowCoordinateQuery {
     }
 }
 
-/// A logical-pixel coordinate or extent.
-#[repr(transparent)]
-#[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd)]
-pub struct LogicalPx(f32);
-
 impl LogicalPx {
     pub const fn get(self) -> f32 {
         self.0
@@ -999,11 +924,6 @@ impl LogicalPx {
         Self(value as f32)
     }
 }
-
-/// A stored character-column coordinate, distinct from pixels.
-#[repr(transparent)]
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct Column(i64);
 
 impl Column {
     pub const fn new(value: i64) -> Self {
@@ -1015,11 +935,6 @@ impl Column {
     }
 }
 
-/// A stored character-line coordinate, distinct from pixels.
-#[repr(transparent)]
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct Line(i64);
-
 impl Line {
     pub const fn new(value: i64) -> Self {
         Self(value)
@@ -1028,23 +943,6 @@ impl Line {
     pub const fn get(self) -> i64 {
         self.0
     }
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct FrameLogicalSpace;
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct WindowLocalSpace;
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct WindowBodySpace;
-
-/// A logical-pixel point whose coordinate space is part of its type.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct PixelPoint<Space> {
-    x: LogicalPx,
-    y: LogicalPx,
-    space: PhantomData<Space>,
 }
 
 impl<Space> PixelPoint<Space> {
@@ -1066,14 +964,6 @@ impl<Space> PixelPoint<Space> {
     pub const fn y(self) -> LogicalPx {
         self.y
     }
-}
-
-/// A finite, nonnegative-extent logical-pixel rectangle.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct PixelRect<Space> {
-    origin: PixelPoint<Space>,
-    width: LogicalPx,
-    height: LogicalPx,
 }
 
 impl<Space> PixelRect<Space> {
@@ -1105,13 +995,6 @@ impl<Space> PixelRect<Space> {
     pub const fn height(self) -> LogicalPx {
         self.height
     }
-}
-
-/// Independent stored cell-grid origin for one window.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct CellOrigin {
-    column: Column,
-    line: Line,
 }
 
 impl CellOrigin {

@@ -15,8 +15,7 @@
 
 use super::{GeometryError, PresentationPosition};
 use crate::window::{
-    DisplayPointRows, DisplayPointSnapshot, PresentedBodyRowSnapshot, WindowCursorSnapshot,
-    WindowDisplaySnapshot,
+    DisplayPointSnapshot, PresentedBodyRowSnapshot, WindowCursorSnapshot, WindowDisplaySnapshot,
 };
 use rustc_hash::FxHashMap as HashMap;
 use std::sync::{Arc, OnceLock};
@@ -59,23 +58,9 @@ pub(super) fn geometry_positions_mode() -> GeometryPositionsMode {
     })
 }
 
-/// Owned numeric positions or a shared immutable source. Clones may be read
-/// concurrently; deferred clones share a OnceLock-published complete vector.
-/// Neither representation stores Lisp values, evaluator state, or live windows.
-#[derive(Clone)]
-pub(super) enum PresentationPositions {
-    Eager(Vec<PresentationPosition>),
-    Deferred(Arc<DeferredPositions>),
-}
-
-/// Immutable numeric descriptors and maps with one thread-safe vector cache.
-/// Concurrent readers publish once; no Lisp state or snapshot object is retained.
-pub(super) struct DeferredPositions {
-    rows: DisplayPointRows,
-    body_rows: HashMap<i64, PresentedBodyRowSnapshot>,
-    row_heights: HashMap<i64, i64>,
-    positions: OnceLock<Vec<PresentationPosition>>,
-}
+pub(super) use crate::emacs_core::eval::data::window_state::{
+    DeferredPositions, PresentationPositions,
+};
 
 impl PresentationPositions {
     #[inline]

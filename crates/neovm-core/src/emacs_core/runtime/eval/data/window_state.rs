@@ -14,8 +14,9 @@ use neovm_value::intern::SymId;
 use neovm_value::value::Value;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use rustc_hash::FxHashMap as HashMap;
+use std::marker::PhantomData;
 use std::num::NonZeroU64;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 /// Redisplay-owned runtime state used to decide which GNU window hooks fire.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1523,4 +1524,149 @@ pub struct DisplayPointRowIter<'a> {
 pub struct DisplayPointRows {
     /// Sorted by visual row, with at most one descriptor per row.
     pub rows: Vec<DisplayPointRow>,
+}
+
+// --- E5-FM-3a presentation geometry (stage-4 W2/E5) ---
+
+/// A logical-pixel coordinate or extent.
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd)]
+pub struct LogicalPx(pub(crate) f32);
+
+/// A stored character-column coordinate, distinct from pixels.
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Column(pub(crate) i64);
+
+/// A stored character-line coordinate, distinct from pixels.
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Line(pub(crate) i64);
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct FrameLogicalSpace;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct WindowLocalSpace;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct WindowBodySpace;
+
+/// A logical-pixel point whose coordinate space is part of its type.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PixelPoint<Space> {
+    pub(crate) x: LogicalPx,
+    pub(crate) y: LogicalPx,
+    pub(crate) space: PhantomData<Space>,
+}
+
+/// A finite, nonnegative-extent logical-pixel rectangle.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PixelRect<Space> {
+    pub(crate) origin: PixelPoint<Space>,
+    pub(crate) width: LogicalPx,
+    pub(crate) height: LogicalPx,
+}
+
+/// Independent stored cell-grid origin for one window.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct CellOrigin {
+    pub(crate) column: Column,
+    pub(crate) line: Line,
+}
+
+/// One immutable, presentation-owned publication of all evaluator window geometry.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PresentationGeometry {
+    pub(crate) presentation: PresentationId,
+    pub(crate) frame: PresentationFrame,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PresentationFrame {
+    pub(crate) id: FrameId,
+    pub(crate) placement: neomacs_display_protocol::PresentedFramePlacement,
+    pub(crate) windows: HashMap<WindowId, PresentationWindow>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PresentationWindow {
+    pub(crate) id: WindowId,
+    pub(crate) cell_origin: CellOrigin,
+    pub(crate) outer: PixelRect<FrameLogicalSpace>,
+    pub(crate) regions: Option<WindowRegions>,
+    pub(crate) positions: PresentationPositions,
+    pub(crate) cursor: Option<PresentationCursor>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WindowRegions {
+    pub(crate) outer: PixelRect<FrameLogicalSpace>,
+    pub(crate) text_body: PixelRect<FrameLogicalSpace>,
+    pub(crate) left_margin_columns: i64,
+    pub(crate) right_margin_columns: i64,
+    pub(crate) left_margin: Option<PixelRect<FrameLogicalSpace>>,
+    pub(crate) right_margin: Option<PixelRect<FrameLogicalSpace>>,
+    pub(crate) left_fringe: Option<PixelRect<FrameLogicalSpace>>,
+    pub(crate) right_fringe: Option<PixelRect<FrameLogicalSpace>>,
+    pub(crate) left_scroll_bar: Option<PixelRect<FrameLogicalSpace>>,
+    pub(crate) right_scroll_bar: Option<PixelRect<FrameLogicalSpace>>,
+    pub(crate) horizontal_scroll_bar: Option<PixelRect<FrameLogicalSpace>>,
+    pub(crate) tab_line: Option<PixelRect<FrameLogicalSpace>>,
+    pub(crate) header_line: Option<PixelRect<FrameLogicalSpace>>,
+    pub(crate) mode_line: Option<PixelRect<FrameLogicalSpace>>,
+    pub(crate) right_divider: Option<PixelRect<FrameLogicalSpace>>,
+    pub(crate) bottom_divider: Option<PixelRect<FrameLogicalSpace>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PresentationPosition {
+    pub(crate) buffer_pos: LispCharPos1,
+    pub(crate) x: i64,
+    pub(crate) body_y: i64,
+    pub(crate) width: i64,
+    pub(crate) height: i64,
+    /// The line owns coordinate hits even below a shorter glyph. Keep this
+    /// separate from glyph height, which position/cursor queries still need.
+    pub(crate) row_height: i64,
+    pub(crate) body_row: i64,
+    pub(crate) col: i64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PresentationCursor {
+    pub(crate) x: i64,
+    pub(crate) body_y: i64,
+    pub(crate) width: i64,
+    pub(crate) height: i64,
+}
+
+/// Result of resolving a buffer position against one immutable presentation.
+///
+/// GNU redisplay can advance past text hidden by invisibility or a replacing
+/// `display` property.  Keep that compatibility case distinct from an exact
+/// glyph match so the row-boundary rule cannot be lost in a generic fallback.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PresentedBufferPositionMatch<'a> {
+    Exact(&'a PresentationPosition),
+    HiddenOnRow { next: &'a PresentationPosition },
+    NotVisible,
+}
+
+/// Owned numeric positions or a shared immutable source. Clones may be read
+/// concurrently; deferred clones share a OnceLock-published complete vector.
+/// Neither representation stores Lisp values, evaluator state, or live windows.
+#[derive(Clone)]
+pub(crate) enum PresentationPositions {
+    Eager(Vec<PresentationPosition>),
+    Deferred(Arc<DeferredPositions>),
+}
+
+/// Immutable numeric descriptors and maps with one thread-safe vector cache.
+/// Concurrent readers publish once; no Lisp state or snapshot object is retained.
+pub(crate) struct DeferredPositions {
+    pub(crate) rows: DisplayPointRows,
+    pub(crate) body_rows: HashMap<i64, PresentedBodyRowSnapshot>,
+    pub(crate) row_heights: HashMap<i64, i64>,
+    pub(crate) positions: OnceLock<Vec<PresentationPosition>>,
 }
