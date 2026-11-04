@@ -580,20 +580,20 @@ fn wrap_html_fragment(nodes: Vec<TopNode>) -> Option<Value> {
     for node in nodes {
         if is_top_comment(&node) {
             match mode {
-                FragmentMode::Head => head.push(node.value),
-                FragmentMode::AfterHead => between.push(node.value),
-                FragmentMode::Body => body.push(node.value),
-                FragmentMode::AfterBody => after_body.push(node.value),
+                FragmentMode::Head => push_child(&mut head, node.value),
+                FragmentMode::AfterHead => push_child(&mut between, node.value),
+                FragmentMode::Body => push_child(&mut body, node.value),
+                FragmentMode::AfterBody => push_child(&mut after_body, node.value),
             }
             continue;
         }
         match node.tag.as_deref() {
             Some("head") => match mode {
-                FragmentMode::AfterBody => after_body.push(node.value),
+                FragmentMode::AfterBody => push_child(&mut after_body, node.value),
                 _ => {
                     // Unwrap an explicit <head>, merging its children into head.
                     head_attrs = element_attributes(&node.value);
-                    head.extend(element_children(&node.value));
+                    extend_children(&mut head, &node.value);
                     explicit_head_seen = true;
                     if mode == FragmentMode::Head {
                         mode = FragmentMode::AfterHead;
@@ -601,33 +601,33 @@ fn wrap_html_fragment(nodes: Vec<TopNode>) -> Option<Value> {
                 }
             },
             Some("body") => match mode {
-                FragmentMode::AfterBody => after_body.push(node.value),
+                FragmentMode::AfterBody => push_child(&mut after_body, node.value),
                 FragmentMode::Head | FragmentMode::AfterHead => {
                     // An explicit body starts the body only when no body
                     // content has appeared yet.
                     mode = FragmentMode::AfterBody;
                     body_attrs = element_attributes(&node.value);
-                    body.extend(element_children(&node.value));
+                    extend_children(&mut body, &node.value);
                 }
                 FragmentMode::Body => {
                     // A body tag after content has started merges into the
                     // implicit body and does not switch modes.
-                    body.extend(element_children(&node.value));
+                    extend_children(&mut body, &node.value);
                 }
             },
             Some(tag) if is_head_element(tag) => match mode {
-                FragmentMode::Head => head.push(node.value),
-                FragmentMode::AfterHead => between.push(node.value),
-                FragmentMode::Body => body.push(node.value),
-                FragmentMode::AfterBody => after_body.push(node.value),
+                FragmentMode::Head => push_child(&mut head, node.value),
+                FragmentMode::AfterHead => push_child(&mut between, node.value),
+                FragmentMode::Body => push_child(&mut body, node.value),
+                FragmentMode::AfterBody => push_child(&mut after_body, node.value),
             },
             _ => match mode {
                 FragmentMode::Head | FragmentMode::AfterHead => {
-                    body.push(node.value);
+                    push_child(&mut body, node.value);
                     mode = FragmentMode::Body;
                 }
-                FragmentMode::Body => body.push(node.value),
-                FragmentMode::AfterBody => after_body.push(node.value),
+                FragmentMode::Body => push_child(&mut body, node.value),
+                FragmentMode::AfterBody => push_child(&mut after_body, node.value),
             },
         }
     }
@@ -706,6 +706,30 @@ fn element_attributes(value: &Value) -> Value {
     }
 }
 
+/// Append a child, coalescing adjacent Lisp strings as libxml2 coalesces
+/// adjacent text nodes.
+fn push_child(children: &mut Vec<Value>, value: Value) {
+    if let Some(last) = children.last() {
+        let prev = last.as_lisp_string().and_then(|text| text.as_utf8_str());
+        let next = value.as_lisp_string().and_then(|text| text.as_utf8_str());
+        if let (Some(prev), Some(next)) = (prev, next) {
+            let merged = format!("{prev}{next}");
+            if let Some(slot) = children.last_mut() {
+                *slot = Value::string(merged.as_str());
+                return;
+            }
+        }
+    }
+    children.push(value);
+}
+
+/// Append an element node's children, coalescing adjacent text.
+fn extend_children(children: &mut Vec<Value>, value: &Value) {
+    for child in element_children(value) {
+        push_child(children, child);
+    }
+}
+
 fn convert_tl_node(node: &tl::Node, parser: &tl::Parser, shielded: &ShieldedHtml) -> Option<Value> {
     match node {
         tl::Node::Raw(raw) => {
@@ -731,6 +755,13 @@ fn convert_tl_node(node: &tl::Node, parser: &tl::Parser, shielded: &ShieldedHtml
             }
             if text.ends_with("-->") {
                 text = &text[..text.len() - 3];
+            }
+            if shielded
+                .ignored_comments
+                .iter()
+                .any(|ignored| ignored.as_str() == text)
+            {
+                return None;
             }
             let text = shielded
                 .pi_comments
@@ -778,7 +809,7 @@ fn convert_tl_node(node: &tl::Node, parser: &tl::Parser, shielded: &ShieldedHtml
                 for handle in children_handles.iter() {
                     let child_node = handle.get(parser)?;
                     if let Some(val) = convert_tl_node(child_node, parser, shielded) {
-                        vals.push(val);
+                        push_child(&mut vals, val);
                     }
                 }
                 vals
@@ -788,13 +819,13 @@ fn convert_tl_node(node: &tl::Node, parser: &tl::Parser, shielded: &ShieldedHtml
     }
 }
 
-/// Build a placeholder that cannot collide with text already in `input`.
-fn unique_placeholder(input: &str, prefix: &str, index: usize) -> String {
-    let mut token = format!("{prefix}{index}");
-    while input.contains(&token) {
-        token.push('_');
+/// Choose a prefix once per document that cannot collide with its text.
+fn unique_prefix(input: &str, prefix: &str) -> String {
+    let mut prefix = prefix.to_string();
+    while input.contains(&prefix) {
+        prefix.push('_');
     }
-    token
+    prefix
 }
 
 /// Text elements and processing instructions hidden from `tl`.
@@ -804,6 +835,8 @@ struct ShieldedHtml {
     text_elements: HashMap<String, String>,
     /// Placeholder -> original processing-instruction text.
     pi_comments: HashMap<String, String>,
+    /// Boundary comments standing in for dropped DOCTYPEs.
+    ignored_comments: Vec<String>,
 }
 
 /// Replace text-element bodies and processing instructions with internal
@@ -827,6 +860,7 @@ fn shield_html(input: &str) -> (Cow<'_, str>, ShieldedHtml) {
         return (Cow::Borrowed(input), ShieldedHtml::default());
     }
 
+    let prefix = unique_prefix(input, "neomacs-internal-");
     let mut protected = String::with_capacity(input.len());
     let mut shielded = ShieldedHtml::default();
     let bytes = input.as_bytes();
@@ -859,6 +893,14 @@ fn shield_html(input: &str) -> (Cow<'_, str>, ShieldedHtml) {
             .is_some_and(|p| p.eq_ignore_ascii_case("<!DOCTYPE"))
         {
             // libxml2 drops DOCTYPEs anywhere, including after body content.
+            // Keep a comment boundary so removing the declaration cannot join
+            // the surrounding bytes into markup or an entity reference. The
+            // comment is dropped during conversion.
+            let token = format!("{prefix}doctype-{}", shielded.ignored_comments.len());
+            protected.push_str("<!--");
+            protected.push_str(&token);
+            protected.push_str("-->");
+            shielded.ignored_comments.push(token);
             index += rest.find('>').map_or(rest.len(), |end| end + 1);
             continue;
         }
@@ -868,8 +910,7 @@ fn shield_html(input: &str) -> (Cow<'_, str>, ShieldedHtml) {
                 Some(end) => (&rest[1..end], end + 1),
                 None => (&rest[1..], rest.len()),
             };
-            let token =
-                unique_placeholder(input, "neomacs-internal-pi-", shielded.pi_comments.len());
+            let token = format!("{prefix}pi-{}", shielded.pi_comments.len());
             protected.push_str("<!--");
             protected.push_str(&token);
             protected.push_str("-->");
@@ -883,7 +924,9 @@ fn shield_html(input: &str) -> (Cow<'_, str>, ShieldedHtml) {
             .get(index + 1)
             .is_some_and(|b| b.is_ascii_alphabetic() || *b == b'/' || *b == b'!' || *b == b'?');
         if !starts_tag {
-            protected.push('<');
+            // Encode a literal `<` so tl keeps it as text instead of trying to
+            // parse the following bytes as a tag. Conversion unescapes it.
+            protected.push_str("&lt;");
             index += 1;
             continue;
         }
@@ -907,8 +950,7 @@ fn shield_html(input: &str) -> (Cow<'_, str>, ShieldedHtml) {
             protected.push_str(&input[index..=open_end]);
             let inner = &after_open[..inner_len];
             if !inner.is_empty() {
-                let token =
-                    unique_placeholder(input, "neomacs-rawtext-", shielded.text_elements.len());
+                let token = format!("{prefix}text-{}", shielded.text_elements.len());
                 protected.push_str(&token);
                 shielded.text_elements.insert(token, inner.to_string());
             }
