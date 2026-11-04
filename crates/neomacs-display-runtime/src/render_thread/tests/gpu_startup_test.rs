@@ -115,3 +115,49 @@ fn startup_input_keeps_lifecycle_events_synchronous() {
     assert_eq!(input.pop_front(), Some(commit));
     assert!(input.is_empty());
 }
+
+fn adapter_info(backend: wgpu::Backend, driver: &str, driver_info: &str) -> wgpu::AdapterInfo {
+    let mut info = wgpu::AdapterInfo::new(wgpu::DeviceType::Cpu, backend);
+    info.driver = driver.into();
+    info.driver_info = driver_info.into();
+    info
+}
+
+#[test]
+fn mesa_version_reads_distribution_and_devel_strings() {
+    assert_eq!(
+        mesa_version("Mesa 23.2.1-1ubuntu3.1~22.04.4 (LLVM 15.0.7)"),
+        Some((23, 2, 1))
+    );
+    assert_eq!(
+        mesa_version("Mesa 24.1.0-devel (git-1a2b3c4d)"),
+        Some((24, 1, 0))
+    );
+    assert_eq!(mesa_version("Mesa 24.0"), None);
+    assert_eq!(mesa_version("NVIDIA 550.54.14"), None);
+}
+
+#[test]
+fn lavapipe_drops_x11_frames_before_mesa_24_0_2() {
+    use wgpu::Backend::{Gl, Vulkan};
+    const UBUNTU_22_04: &str = "Mesa 23.2.1-1ubuntu3.1~22.04.4 (LLVM 15.0.7)";
+    for (backend, driver, driver_info, drops) in [
+        (Vulkan, "llvmpipe", UBUNTU_22_04, true),
+        (Vulkan, "llvmpipe", "Mesa 24.0.1", true),
+        (Vulkan, "llvmpipe", "Mesa 24.0.2", false),
+        (Vulkan, "llvmpipe", "Mesa 25.1.4", false),
+        // GL llvmpipe presents through GLX/EGL, the fallback this rule selects.
+        (Gl, "llvmpipe", UBUNTU_22_04, false),
+        // Hardware Mesa drivers present through DRI3, not the software path.
+        (Vulkan, "Intel open-source Mesa driver", UBUNTU_22_04, false),
+        // An unreadable version keeps the adapter.
+        (Vulkan, "llvmpipe", "", false),
+    ] {
+        let info = adapter_info(backend, driver, driver_info);
+        assert_eq!(
+            lavapipe_drops_x11_frames(&info),
+            drops,
+            "{backend:?} {driver} {driver_info:?}"
+        );
+    }
+}
