@@ -8,3 +8,4 @@ pub mod dynamic_module_registry;
 pub mod face;
 pub mod redisplay;
 pub mod window_state;
+pub mod xwidget;

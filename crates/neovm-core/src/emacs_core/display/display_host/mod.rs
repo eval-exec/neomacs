@@ -39,23 +39,7 @@ pub struct InitialGuiFrameDefaults {
     pub size: GuiFrameHostSize,
 }
 
-/// Evaluator-owned correlation ID for one asynchronous xwidget script call.
-///
-/// The display host cannot allocate this ID: only the evaluator knows which
-/// GC-rooted Lisp callback must receive the eventual result.
-#[repr(transparent)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct XwidgetScriptRequestId(u64);
-
-impl XwidgetScriptRequestId {
-    pub(crate) const fn new(raw: u64) -> Self {
-        Self(raw)
-    }
-
-    pub const fn get(self) -> u64 {
-        self.0
-    }
-}
+pub use neovm_value::display_vocab::XwidgetScriptRequestId;
 
 /// A non-empty font-family name crossing from the platform display host into
 /// the evaluator.

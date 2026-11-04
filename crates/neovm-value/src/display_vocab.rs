@@ -12,6 +12,24 @@ pub struct FrameId(pub u64);
 /// as Lisp integers.
 pub const FRAME_ID_BASE: u64 = 1 << 32;
 
+/// Evaluator-owned correlation ID for one asynchronous xwidget script call.
+///
+/// The display host cannot allocate this ID: only the evaluator knows which
+/// GC-rooted Lisp callback must receive the eventual result.
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct XwidgetScriptRequestId(u64);
+
+impl XwidgetScriptRequestId {
+    pub const fn new(raw: u64) -> Self {
+        Self(raw)
+    }
+
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
 use crate::intern::{self, SymId, WellKnown, resolve_sym};
 use crate::value::Value;
 use num_enum::{IntoPrimitive, TryFromPrimitive};

@@ -15,16 +15,15 @@ use super::builtins::{
 };
 use super::error::{EvalResult, Flow, signal};
 use super::eval::Context;
+use super::eval::VariableStore;
 use super::symbol::Obarray;
 use super::value::{Value, eq_value};
 use crate::emacs_core::display_host::XwidgetScriptRequestId;
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::expect_args_range;
-use crate::emacs_core::eval::VariableStore;
 use crate::heap_types::LispString;
 use crate::keyboard::{FrontendLoadPhase, FrontendWebValue, FrontendWebViewEvent};
-use neomacs_display_protocol::{WebViewId, XwidgetId};
-use std::collections::HashMap;
+use neomacs_display_protocol::WebViewId;
 use strum::IntoStaticStr;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, IntoStaticStr)]
@@ -45,28 +44,6 @@ impl XwidgetType {
     fn name(self) -> &'static str {
         self.into()
     }
-}
-
-#[derive(Clone, Debug, Default)]
-struct WebKitRuntimeState {
-    generation: u64,
-    uri: String,
-    title: String,
-    /// Estimated load progress, 0.0..=1.0, as `xwidget-webkit-estimated-load-
-    /// progress' reports it.
-    ///
-    /// GNU reads WebKitGTK's continuous `estimated-load-progress' property.
-    /// Neomacs resets this to 0.0 when dispatching a navigation, then
-    /// applies generation-qualified measurements from backends that expose
-    /// progress (WPEPlatform, and KVO on WKWebView's `estimatedProgress'),
-    /// and pins 1.0 at "load-finished".
-    load_progress: f64,
-}
-
-#[derive(Clone, Debug)]
-struct PendingScriptCallback {
-    view: WebViewId,
-    function: Value,
 }
 
 pub(crate) enum XwidgetFrontendEffect {
@@ -96,142 +73,17 @@ impl XwidgetFrontendEffect {
     }
 }
 
-#[derive(Clone, Debug)]
-pub(crate) struct XwidgetState {
-    internal_xwidget_list: Value,
-    internal_xwidget_view_list: Value,
-    webkit_state: HashMap<WebViewId, WebKitRuntimeState>,
-    script_callbacks: HashMap<XwidgetScriptRequestId, PendingScriptCallback>,
-    xwidget_counter: u32,
-    webview_counter: u32,
-    script_counter: u64,
+pub(crate) use crate::emacs_core::eval::data::xwidget::XwidgetState;
+
+/// Display-side xwidget behaviour: interpreting frontend events binds the
+/// keyboard's `FrontendWebViewEvent`/`FrontendLoadPhase` vocabulary, so it
+/// stays above the evaluator and drives the moved state (N17 extension shape).
+pub(crate) trait XwidgetStateHost {
+    fn apply_frontend_event(&mut self, event: &FrontendWebViewEvent) -> XwidgetFrontendEffect;
 }
 
-impl XwidgetState {
-    pub(crate) fn new() -> Self {
-        Self {
-            internal_xwidget_list: Value::NIL,
-            internal_xwidget_view_list: Value::NIL,
-            webkit_state: HashMap::new(),
-            script_callbacks: HashMap::new(),
-            xwidget_counter: 0,
-            webview_counter: 0,
-            script_counter: 0,
-        }
-    }
-
-    pub(crate) fn trace_roots_with(&self, visit: &mut dyn FnMut(Value)) {
-        visit(self.internal_xwidget_list);
-        visit(self.internal_xwidget_view_list);
-        for callback in self.script_callbacks.values() {
-            visit(callback.function);
-        }
-    }
-
-    fn next_ids(&mut self) -> (XwidgetId, WebViewId) {
-        self.xwidget_counter = self.xwidget_counter.wrapping_add(1);
-        self.webview_counter = self.webview_counter.wrapping_add(1);
-        (
-            XwidgetId::new(self.xwidget_counter),
-            WebViewId::new(self.webview_counter),
-        )
-    }
-
-    fn ensure_webkit_state(&mut self, id: WebViewId) {
-        self.webkit_state.entry(id).or_default();
-    }
-
-    fn remove_webkit_state(&mut self, id: WebViewId) {
-        self.webkit_state.remove(&id);
-        self.script_callbacks
-            .retain(|_, callback| callback.view != id);
-    }
-
-    fn next_script_request(&mut self) -> XwidgetScriptRequestId {
-        self.script_counter = self.script_counter.wrapping_add(1);
-        XwidgetScriptRequestId::new(self.script_counter)
-    }
-
-    fn register_script_callback(
-        &mut self,
-        request: XwidgetScriptRequestId,
-        view: WebViewId,
-        function: Value,
-    ) {
-        let replaced = self
-            .script_callbacks
-            .insert(request, PendingScriptCallback { view, function });
-        debug_assert!(replaced.is_none(), "script request IDs must be unique");
-    }
-
-    fn remove_script_callback(&mut self, request: XwidgetScriptRequestId) {
-        self.script_callbacks.remove(&request);
-    }
-
-    fn webkit_uri(&self, id: WebViewId) -> String {
-        self.webkit_state
-            .get(&id)
-            .map(|state| state.uri.clone())
-            .unwrap_or_default()
-    }
-
-    fn set_webkit_uri(&mut self, id: WebViewId, uri: String) {
-        self.webkit_state.entry(id).or_default().uri = uri;
-    }
-
-    fn webkit_load_progress(&self, id: WebViewId) -> f64 {
-        self.webkit_state
-            .get(&id)
-            .map(|state| state.load_progress)
-            .unwrap_or(0.0)
-    }
-
-    fn set_webkit_load_progress(&mut self, id: WebViewId, progress: f64) {
-        self.webkit_state.entry(id).or_default().load_progress = progress;
-    }
-
-    fn webkit_title(&self, id: WebViewId) -> String {
-        self.webkit_state
-            .get(&id)
-            .map(|state| state.title.clone())
-            .unwrap_or_default()
-    }
-
-    fn set_webkit_title(&mut self, id: WebViewId, title: String) {
-        self.webkit_state.entry(id).or_default().title = title;
-    }
-
-    /// The live xwidget object whose browser instance is `id`, if any.
-    fn xwidget_for_webview(&self, id: WebViewId) -> Option<Value> {
-        let mut rest = self.internal_xwidget_list;
-        while rest.is_cons() {
-            let candidate = rest.cons_car();
-            if candidate
-                .as_xwidget()
-                .is_some_and(|xwidget| xwidget.webview_id == id)
-            {
-                return Some(candidate);
-            }
-            rest = rest.cons_cdr();
-        }
-        None
-    }
-
-    /// GNU's `(xwidget-event load-changed XWIDGET STRING)` for one phase.
-    fn load_changed_event(&self, id: WebViewId, phase: FrontendLoadPhase) -> Option<Value> {
-        let xwidget = self.xwidget_for_webview(id)?;
-        Some(Value::list(vec![
-            Value::symbol("xwidget-event"),
-            Value::symbol("load-changed"),
-            xwidget,
-            Value::string(phase.gnu_name()),
-        ]))
-    }
-
-    pub(crate) fn apply_frontend_event(
-        &mut self,
-        event: &FrontendWebViewEvent,
-    ) -> XwidgetFrontendEffect {
+impl XwidgetStateHost for XwidgetState {
+    fn apply_frontend_event(&mut self, event: &FrontendWebViewEvent) -> XwidgetFrontendEffect {
         match event {
             FrontendWebViewEvent::Ready { id, generation } => {
                 let state = self.webkit_state.entry(*id).or_default();
@@ -301,7 +153,7 @@ impl XwidgetState {
                 if finished {
                     self.set_webkit_load_progress(*id, 1.0);
                 }
-                match self.load_changed_event(*id, *phase) {
+                match load_changed_event(self, *id, *phase) {
                     Some(event) => XwidgetFrontendEffect::QueueXwidgetEvent {
                         event,
                         redisplay: finished,
@@ -364,17 +216,21 @@ impl XwidgetState {
             | FrontendWebViewEvent::FocusChanged { .. } => XwidgetFrontendEffect::None,
         }
     }
+}
 
-    fn publish(&self, vars: &mut VariableStore<'_>) {
-        vars.store_by_name(
-            "xwidget-list",
-            shallow_copy_list(self.internal_xwidget_list),
-        );
-        vars.store_by_name(
-            "xwidget-view-list",
-            shallow_copy_list(self.internal_xwidget_view_list),
-        );
-    }
+/// GNU's `(xwidget-event load-changed XWIDGET STRING)` for one phase.
+fn load_changed_event(
+    state: &XwidgetState,
+    id: WebViewId,
+    phase: FrontendLoadPhase,
+) -> Option<Value> {
+    let xwidget = state.xwidget_for_webview(id)?;
+    Some(Value::list(vec![
+        Value::symbol("xwidget-event"),
+        Value::symbol("load-changed"),
+        xwidget,
+        Value::string(phase.gnu_name()),
+    ]))
 }
 
 fn frontend_web_value_to_lisp(value: &FrontendWebValue) -> Value {
@@ -426,14 +282,6 @@ pub(crate) fn init_xwidget_variables(obarray: &mut Obarray) {
     obarray.make_special("xwidget-view-list");
     obarray.seed_value("xwidget-webkit-disable-javascript", Value::NIL);
     obarray.make_special("xwidget-webkit-disable-javascript");
-}
-
-fn shallow_copy_list(list: Value) -> Value {
-    if list.is_nil() {
-        return Value::NIL;
-    }
-    let items = collect_proper_list_items(list).expect("xwidget internal list must be proper");
-    Value::list(items)
 }
 
 fn delq_from_list(list: Value, target: Value) -> Value {

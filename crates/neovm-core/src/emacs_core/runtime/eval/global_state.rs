@@ -60,7 +60,7 @@ global_state! {
     /// `Vsystem_name` (sysdep.c).
     cached_system_name: Value,
     /// xwidget.c `internal_xwidget_list`.
-    xwidgets: super::super::xwidget::XwidgetState,
+    xwidgets: super::data::xwidget::XwidgetState,
     /// process.c `Vprocess_alist`, `chan_process[]`.
     processes: ProcessManager,
     /// keymap.c `current_global_map`.
@@ -120,7 +120,7 @@ impl GlobalState {
     pub(super) fn fresh(command_loop: crate::keyboard::CommandLoop) -> Self {
         Self {
             cached_system_name: Value::NIL,
-            xwidgets: super::super::xwidget::XwidgetState::new(),
+            xwidgets: super::data::xwidget::XwidgetState::new(),
             processes: ProcessManager::new(),
             selected_global_map: super::super::keymap::SelectedGlobalMap::default(),
             registers: RegisterManager::new(),

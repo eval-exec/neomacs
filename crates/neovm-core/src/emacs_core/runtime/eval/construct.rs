@@ -242,7 +242,7 @@ impl Context {
         ev.load_read_cursors.clear();
         ev.last_uncaught_signal_backtrace = None;
         ev.buffers.reset_for_minimal_runtime();
-        *ev.xwidgets = super::super::xwidget::XwidgetState::new();
+        *ev.xwidgets = super::data::xwidget::XwidgetState::new();
         ev.last_overlay_modification_hooks.clear();
         ev.interval_insert_behind_hooks = Value::NIL;
         ev.interval_insert_in_front_hooks = Value::NIL;

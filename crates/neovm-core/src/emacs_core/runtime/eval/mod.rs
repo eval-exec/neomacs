@@ -11,6 +11,7 @@ use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use strum::{EnumString, IntoStaticStr};
 
+use self::data::xwidget;
 use super::abbrev::AbbrevManager;
 use super::advice::VariableWatcherList;
 use super::autoload::AutoloadManager;
@@ -3169,7 +3170,7 @@ pub struct Context {
     /// Features list (for require/provide).
     pub(crate) features: WorldView<Vec<SymId>>,
     /// GNU xwidget runtime state: internal model/view lists and id counter.
-    pub(crate) xwidgets: WorldSlot<super::xwidget::XwidgetState>,
+    pub(crate) xwidgets: WorldSlot<xwidget::XwidgetState>,
     /// Network manager — owns network connections, filters, and sentinels.
     /// Variable watcher list — callbacks on variable changes.
     pub(crate) watchers: WorldView<VariableWatcherList>,
