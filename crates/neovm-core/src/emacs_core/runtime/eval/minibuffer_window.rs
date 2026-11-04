@@ -139,7 +139,11 @@ impl Context {
             if let Some(window) = frame.find_window_mut(minibuffer_window_id) {
                 window.set_buffer(minibuf_id);
                 if super::gnu_redisplay_hooks_enabled() {
-                    if let crate::window::Window::Leaf { hscroll, .. } = window {
+                    if let crate::emacs_core::eval::data::window_state::Window::Leaf {
+                        hscroll,
+                        ..
+                    } = window
+                    {
                         *hscroll = 0;
                     }
                     window.set_suspend_auto_hscroll(false);
