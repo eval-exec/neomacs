@@ -1642,7 +1642,7 @@ fn context_coding_name(
 /// `prefer-utf-8`), in which case the caller has already rewritten `name` to the
 /// detected concrete coding system before reaching here.  So the precise name is
 /// just `name` verbatim; resolving aliases to their base here was the bug.
-fn canonical_context_coding_name(_ctx: &crate::emacs_core::eval::Context, name: &str) -> String {
+fn canonical_context_coding_name(name: &str) -> String {
     name.to_owned()
 }
 
@@ -5066,7 +5066,7 @@ fn builtin_coding_string_in_context(
         if entry.reports_coding_result() {
             ctx.set_variable(
                 "last-coding-system-used",
-                Value::symbol(canonical_context_coding_name(ctx, &reported_coding)),
+                Value::symbol(canonical_context_coding_name(&reported_coding)),
             );
         }
         let Some(buffer_id) = destination else {
@@ -5374,7 +5374,7 @@ fn builtin_coding_string_in_context(
     if entry.reports_coding_result() {
         ctx.set_variable(
             "last-coding-system-used",
-            Value::symbol(canonical_context_coding_name(ctx, &reported_coding)),
+            Value::symbol(canonical_context_coding_name(&reported_coding)),
         );
     }
 
@@ -5993,7 +5993,10 @@ fn builtin_char_width_with_display_table(
 }
 
 /// `(string-bytes STRING)` -> integer byte length of STRING.
-pub(crate) fn builtin_string_bytes_1(_ctx: &mut Context, arg: Value) -> EvalResult {
+pub(crate) fn builtin_string_bytes_1<H: crate::emacs_core::text_host::TextHost>(
+    _ctx: &mut H,
+    arg: Value,
+) -> EvalResult {
     let string = arg.as_lisp_string().ok_or_else(|| {
         signal(
             LispCondition::WrongTypeArgument,
@@ -6004,7 +6007,10 @@ pub(crate) fn builtin_string_bytes_1(_ctx: &mut Context, arg: Value) -> EvalResu
 }
 
 /// `(multibyte-string-p STRING)` -> t or nil
-pub(crate) fn builtin_multibyte_string_p_1(_ctx: &mut Context, arg: Value) -> EvalResult {
+pub(crate) fn builtin_multibyte_string_p_1<H: crate::emacs_core::text_host::TextHost>(
+    _ctx: &mut H,
+    arg: Value,
+) -> EvalResult {
     match arg.kind() {
         ValueKind::String => Ok(Value::bool_val(arg.string_is_multibyte())),
         _ => Ok(Value::NIL),
@@ -6191,7 +6197,10 @@ pub(crate) fn builtin_decode_coding_string_with_known(
 }
 
 /// `(char-or-string-p OBJ)` -> t or nil
-pub(crate) fn builtin_char_or_string_p_1(_ctx: &mut Context, arg: Value) -> EvalResult {
+pub(crate) fn builtin_char_or_string_p_1<H: crate::emacs_core::text_host::TextHost>(
+    _ctx: &mut H,
+    arg: Value,
+) -> EvalResult {
     // GNU `Fchar_or_string_p` (`src/data.c`) only accepts fixnums in
     // the valid character code range [0, MAX_CHAR_CODE = 0x3FFFFF].
     // Negative or out-of-range integers must return nil.

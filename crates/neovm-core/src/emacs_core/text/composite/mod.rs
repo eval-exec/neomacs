@@ -1654,15 +1654,24 @@ pub(crate) fn composition_sort_rules(args: Vec<Value>) -> EvalResult {
     Ok(args[0])
 }
 
-fn compose_string(_ctx: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+fn compose_string<H: crate::emacs_core::text_host::TextHost>(
+    _ctx: &mut H,
+    args: Vec<Value>,
+) -> EvalResult {
     compose_string_internal(args)
 }
 
-fn clear_cache(_ctx: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+fn clear_cache<H: crate::emacs_core::text_host::TextHost>(
+    _ctx: &mut H,
+    args: Vec<Value>,
+) -> EvalResult {
     clear_composition_cache(args)
 }
 
-fn sort_rules(_ctx: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+fn sort_rules<H: crate::emacs_core::text_host::TextHost>(
+    _ctx: &mut H,
+    args: Vec<Value>,
+) -> EvalResult {
     composition_sort_rules(args)
 }
 
