@@ -28,7 +28,6 @@
 mod eval_display_queries;
 mod mode_line_append;
 mod mode_line_coding;
-use crate::emacs_core::process::SystemProcessExt;
 use crate::window::DisplayFrameExt;
 use crate::window::DisplayFrameManagerExt;
 use crate::window::geometry::DisplayGeometryExt;
@@ -2656,16 +2655,13 @@ fn mode_line_process_status_in_state(
     // every other `Fprocess_status` caller.  This frame holds
     // `&ProcessManager`, so it cannot; the hole is enumerated rather than
     // implicit -- see `process::UnrecordedStatusRead`.
-    let Some(observed) = processes.read_status_without_recording(
-        crate::emacs_core::process::UnrecordedStatusRead::ModeLinePercentS,
+    let Some(status) = processes.read_public_status_without_recording(
+        crate::emacs_core::eval::data::process_state::UnrecordedStatusRead::ModeLinePercentS,
         process_id,
     ) else {
         return "no process";
     };
-    observed
-        .public_status_symbol()
-        .as_bare_symbol_name()
-        .unwrap_or("no process")
+    status.as_bare_symbol_name().unwrap_or("no process")
 }
 
 #[cfg(test)]

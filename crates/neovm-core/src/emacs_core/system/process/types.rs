@@ -3159,10 +3159,6 @@ pub(super) fn process_contact_plist_member(contact: Value, key: Value) -> Value 
     crate::emacs_core::plist::plist_member(contact, &key)
 }
 
-pub(super) fn process_contact_server_p(proc: &Process) -> bool {
-    process_contact_plist_get(proc.childp, ProcessKeyword::Server.value()).is_truthy()
-}
-
 #[derive(Debug)]
 pub(super) struct PendingNetworkConnectStarted {
     pub(super) stream: TcpStream,

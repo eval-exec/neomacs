@@ -1312,6 +1312,89 @@ pub fn process_stopped_for_io(proc: &Process) -> bool {
     proc.command == Value::T
 }
 
+/// GNU `update_status` view of a process: a pending-but-unnotified child
+/// status (`raw_status_new` in GNU, `status_notify_pending` +
+/// `pending_status` here) is DECODED at observation points --
+/// `Fprocess_status` and `Fprocess_exit_status` both run `update_status`
+/// before reading -- while the sentinel notification stays pending for the
+/// wait loop's `status_notify` pass.
+pub fn process_effective_status(process: &Process) -> Value {
+    if process.status_notify_pending && !process.pending_status.is_nil() {
+        process.pending_status
+    } else {
+        process.status
+    }
+}
+
+/// GNU `Fprocess_status`'s connection remapping (src/process.c:1193-1201):
+///
+/// ```c
+///   if (NETCONN1_P (p) || SERIALCONN1_P (p) || PIPECONN1_P (p))
+///     {
+///       if (EQ (status, Qexit))          status = Qclosed;   /* :1195-1196 */
+///       else if (EQ (p->command, Qt))    status = Qstop;     /* :1197-1198 */
+///       else if (EQ (status, Qrun))      status = Qopen;     /* :1199-1200 */
+///     }
+/// ```
+///
+/// The chain is an `else if`, so `exit -> closed` WINS over the
+/// `command == t` stop: a connection that has finished reports `closed`
+/// however many times `stop-process` was called on it.  This port answered
+/// `command == t` first, which reported `stop` for a `:stderr` pipe that had
+/// already closed -- the last divergent row of ledger 169's three-kind
+/// neighbour sweep, and reachable only once `stop-process` started setting
+/// `p->command' on a retired connection the way GNU does.
+pub fn process_public_status_symbol(process: &Process) -> Value {
+    if process_stopped_for_io(process)
+        && !matches!(
+            ProcessStatusSymbol::from_status_value(process_effective_status(process)),
+            Some(
+                ProcessStatusSymbol::Exit
+                    | ProcessStatusSymbol::Signal
+                    | ProcessStatusSymbol::Closed
+            )
+        )
+    {
+        return ProcessStatusSymbol::Stop.value();
+    }
+    match ProcessStatusSymbol::from_status_value(process_effective_status(process)) {
+        Some(ProcessStatusSymbol::Run) => match process.kind {
+            ProcessKind::Network => {
+                if process_contact_server_p(process) {
+                    Value::symbol("listen")
+                } else {
+                    Value::symbol("open")
+                }
+            }
+            ProcessKind::Pipe => Value::symbol("open"),
+            _ => Value::symbol("run"),
+        },
+        Some(ProcessStatusSymbol::Stop) => ProcessStatusSymbol::Stop.value(),
+        Some(ProcessStatusSymbol::Exit) => match process.kind {
+            ProcessKind::Real => ProcessStatusSymbol::Exit.value(),
+            _ => ProcessStatusSymbol::Closed.value(),
+        },
+        Some(ProcessStatusSymbol::Signal) => match process.kind {
+            ProcessKind::Real => Value::symbol("signal"),
+            _ => ProcessStatusSymbol::Closed.value(),
+        },
+        Some(ProcessStatusSymbol::Open) => ProcessStatusSymbol::Open.value(),
+        Some(ProcessStatusSymbol::Listen) => ProcessStatusSymbol::Listen.value(),
+        Some(ProcessStatusSymbol::Closed) => ProcessStatusSymbol::Closed.value(),
+        Some(ProcessStatusSymbol::Connect) => ProcessStatusSymbol::Connect.value(),
+        Some(ProcessStatusSymbol::Failed) => ProcessStatusSymbol::Failed.value(),
+        _ => Value::NIL,
+    }
+}
+
+/// Whether a network process's contact plist names a server, which
+/// `Fprocess_status` projects to `listen` rather than `open`.
+pub fn process_contact_server_p(proc: &Process) -> bool {
+    neovm_value::symbol::plist_core::plist_get(proc.childp, &ProcessKeyword::Server.value())
+        .unwrap_or(Value::NIL)
+        .is_truthy()
+}
+
 pub fn process_filter_accepts_output(proc: &Process) -> bool {
     ProcessFilterDispatch::from_lisp(proc.filter).accepts_output()
 }
@@ -1657,6 +1740,21 @@ impl ProcessManager {
     /// Get a mutable process by id.
     pub fn get_mut(&mut self, id: ProcessId) -> Option<&mut Process> {
         self.processes.get_mut(&id)
+    }
+
+    /// Read the Lisp-visible status at one of the enumerated holes, without
+    /// GNU's recording having been made here, and without exposing the
+    /// process reference.
+    ///
+    /// The `site` argument is not used at run time; it exists so the call
+    /// cannot be written without naming which hole it is.
+    pub(crate) fn read_public_status_without_recording(
+        &self,
+        site: UnrecordedStatusRead,
+        id: ProcessId,
+    ) -> Option<Value> {
+        let _ = site;
+        self.get_any(id).map(process_public_status_symbol)
     }
 
     /// Get a mutable process by id from either live or stale process tables.
@@ -2661,4 +2759,52 @@ pub fn make_network_process_subfeatures() -> Value {
         _ => {}
     }
     Value::list(features)
+}
+
+/// A Lisp-visible status read that this port CANNOT put the sweep in front
+/// of, with the reason.
+///
+/// Every such read is a hole in the guarantee above, so the holes are a
+/// finite type rather than a habit: adding one is adding a variant, which
+/// forces a GNU citation and a written reason through the exhaustive
+/// [`UnrecordedStatusRead::why`] match, and `COUNT` is asserted in
+/// `process_test.rs` so a second hole cannot appear unremarked.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(usize)]
+pub(crate) enum UnrecordedStatusRead {
+    /// The `%s` mode-line construct.  GNU's `decode_mode_spec` spells it
+    /// `obj = Fsymbol_name (Fprocess_status (obj));` (src/xdisp.c:29717-
+    /// 29725), so in GNU it IS one of `Fprocess_status`'s callers and does
+    /// harvest.
+    ///
+    /// Here it cannot: `expand_mode_line_percent_in_state` (xdisp.rs:2644)
+    /// takes `&ProcessManager`, and so does every frame of the recursive
+    /// mode-line renderer above it.  Threading `&mut` through redisplay to
+    /// reach one `%` spec is a change to redisplay, not to process status,
+    /// and it is not measurable from `--batch`: `format-mode-line` answers
+    /// `""` for EVERY spec there, `%b` included, in both editors.
+    ModeLinePercentS = 0,
+}
+
+impl UnrecordedStatusRead {
+    #[cfg(test)]
+    pub(crate) const COUNT: usize = Self::ModeLinePercentS as usize + 1;
+    #[cfg(test)]
+    pub(crate) const ALL: [Self; Self::COUNT] = [Self::ModeLinePercentS];
+
+    #[cfg(test)]
+    pub(crate) fn gnu(self) -> &'static str {
+        match self {
+            Self::ModeLinePercentS => "src/xdisp.c:29723",
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn why(self) -> &'static str {
+        match self {
+            Self::ModeLinePercentS => {
+                "the recursive mode-line renderer holds &ProcessManager, not &mut"
+            }
+        }
+    }
 }

@@ -5,6 +5,8 @@
 
 use super::*;
 
+use crate::emacs_core::eval::data::process_state::process_effective_status;
+
 pub(super) fn check_keyword_arg_pairs(args: &[Value]) -> Result<(), Flow> {
     if args.len().is_multiple_of(2) {
         Ok(())
@@ -699,80 +701,5 @@ pub(super) fn process_live_running_status_value(kind: ProcessKind) -> Value {
             Value::symbol("connect"),
             Value::symbol("stop"),
         ]),
-    }
-}
-
-/// GNU `update_status` view of a process: a pending-but-unnotified child
-/// status (`raw_status_new` in GNU, `status_notify_pending` +
-/// `pending_status` here) is DECODED at observation points --
-/// `Fprocess_status` and `Fprocess_exit_status` both run `update_status`
-/// before reading -- while the sentinel notification stays pending for the
-/// wait loop's `status_notify` pass.
-pub(super) fn process_effective_status(process: &Process) -> Value {
-    if process.status_notify_pending && !process.pending_status.is_nil() {
-        process.pending_status
-    } else {
-        process.status
-    }
-}
-
-/// GNU `Fprocess_status`'s connection remapping (src/process.c:1193-1201):
-///
-/// ```c
-///   if (NETCONN1_P (p) || SERIALCONN1_P (p) || PIPECONN1_P (p))
-///     {
-///       if (EQ (status, Qexit))          status = Qclosed;   /* :1195-1196 */
-///       else if (EQ (p->command, Qt))    status = Qstop;     /* :1197-1198 */
-///       else if (EQ (status, Qrun))      status = Qopen;     /* :1199-1200 */
-///     }
-/// ```
-///
-/// The chain is an `else if`, so `exit -> closed` WINS over the
-/// `command == t` stop: a connection that has finished reports `closed`
-/// however many times `stop-process` was called on it.  This port answered
-/// `command == t` first, which reported `stop` for a `:stderr` pipe that had
-/// already closed -- the last divergent row of ledger 169's three-kind
-/// neighbour sweep, and reachable only once `stop-process` started setting
-/// `p->command' on a retired connection the way GNU does.
-pub(super) fn process_public_status_symbol(process: &Process) -> Value {
-    if process_stopped_for_io(process)
-        && !matches!(
-            ProcessStatusSymbol::from_status_value(process_effective_status(process)),
-            Some(
-                ProcessStatusSymbol::Exit
-                    | ProcessStatusSymbol::Signal
-                    | ProcessStatusSymbol::Closed
-            )
-        )
-    {
-        return ProcessStatusSymbol::Stop.value();
-    }
-    match ProcessStatusSymbol::from_status_value(process_effective_status(process)) {
-        Some(ProcessStatusSymbol::Run) => match process.kind {
-            ProcessKind::Network => {
-                if process_contact_server_p(process) {
-                    Value::symbol("listen")
-                } else {
-                    Value::symbol("open")
-                }
-            }
-            ProcessKind::Pipe => Value::symbol("open"),
-            _ => Value::symbol("run"),
-        },
-        Some(ProcessStatusSymbol::Stop) => ProcessStatusSymbol::Stop.value(),
-        Some(ProcessStatusSymbol::Exit) => match process.kind {
-            ProcessKind::Real => ProcessStatusSymbol::Exit.value(),
-            _ => ProcessStatusSymbol::Closed.value(),
-        },
-        Some(ProcessStatusSymbol::Signal) => match process.kind {
-            ProcessKind::Real => Value::symbol("signal"),
-            _ => Value::symbol("closed"),
-        },
-        Some(ProcessStatusSymbol::Open) => ProcessStatusSymbol::Open.value(),
-        Some(ProcessStatusSymbol::Listen) => ProcessStatusSymbol::Listen.value(),
-        Some(ProcessStatusSymbol::Closed) => ProcessStatusSymbol::Closed.value(),
-        Some(ProcessStatusSymbol::Connect) => ProcessStatusSymbol::Connect.value(),
-        Some(ProcessStatusSymbol::Failed) => ProcessStatusSymbol::Failed.value(),
-        _ => Value::NIL,
     }
 }

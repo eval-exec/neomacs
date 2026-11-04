@@ -450,53 +450,7 @@ impl<'a> ObservedProcess<'a> {
     }
 }
 
-/// A Lisp-visible status read that this port CANNOT put the sweep in front
-/// of, with the reason.
-///
-/// Every such read is a hole in the guarantee above, so the holes are a
-/// finite type rather than a habit: adding one is adding a variant, which
-/// forces a GNU citation and a written reason through the exhaustive
-/// [`UnrecordedStatusRead::why`] match, and `COUNT` is asserted in
-/// `process_test.rs` so a second hole cannot appear unremarked.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(usize)]
-pub(crate) enum UnrecordedStatusRead {
-    /// The `%s` mode-line construct.  GNU's `decode_mode_spec` spells it
-    /// `obj = Fsymbol_name (Fprocess_status (obj));` (src/xdisp.c:29717-
-    /// 29725), so in GNU it IS one of `Fprocess_status`'s callers and does
-    /// harvest.
-    ///
-    /// Here it cannot: `expand_mode_line_percent_in_state` (xdisp.rs:2644)
-    /// takes `&ProcessManager`, and so does every frame of the recursive
-    /// mode-line renderer above it.  Threading `&mut` through redisplay to
-    /// reach one `%` spec is a change to redisplay, not to process status,
-    /// and it is not measurable from `--batch`: `format-mode-line` answers
-    /// `""` for EVERY spec there, `%b` included, in both editors.
-    ModeLinePercentS = 0,
-}
-
-impl UnrecordedStatusRead {
-    #[cfg(test)]
-    pub(crate) const COUNT: usize = Self::ModeLinePercentS as usize + 1;
-    #[cfg(test)]
-    pub(crate) const ALL: [Self; Self::COUNT] = [Self::ModeLinePercentS];
-
-    #[cfg(test)]
-    pub(crate) fn gnu(self) -> &'static str {
-        match self {
-            Self::ModeLinePercentS => "src/xdisp.c:29723",
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn why(self) -> &'static str {
-        match self {
-            Self::ModeLinePercentS => {
-                "the recursive mode-line renderer holds &ProcessManager, not &mut"
-            }
-        }
-    }
-}
+pub(crate) use crate::emacs_core::eval::data::process_state::UnrecordedStatusRead;
 
 // ---------------------------------------------------------------------------
 // GNU's per-process tick pair
