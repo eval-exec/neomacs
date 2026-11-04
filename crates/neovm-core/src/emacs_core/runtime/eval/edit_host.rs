@@ -24,7 +24,7 @@ use crate::emacs_core::bookmark::BookmarkManager;
 use crate::emacs_core::builtins::symbols::builtin_set_2;
 use crate::emacs_core::display_metrics::{
     InvisibleRunContext, LineNumberDisplayTarget, LineWrap, MeasuredMotion, MotionEngine,
-    WindowGeometry,
+    MotionRequest, WindowGeometry,
 };
 use crate::emacs_core::edit_host::EditHost;
 use crate::emacs_core::error::{EvalResult, Flow};
@@ -415,16 +415,20 @@ impl EditHost for Context {
         byte_pos: usize,
         context: InvisibleRunContext,
     ) -> Result<Option<usize>, Flow> {
-        crate::emacs_core::xdisp::invisible_source_run_end_byte(self, buffer, byte_pos, context)
+        super::display_query_hooks::invisible_source_run_end(self, buffer, byte_pos, context)
     }
 
     fn invisible_value_hides_source(&mut self, value: Value) -> Result<bool, Flow> {
-        crate::emacs_core::xdisp::invisible_status_for_value(self, value)
+        super::display_query_hooks::invisible_status(self, value)
             .map(|status| status.hides_source())
     }
 
     fn motion_engine(&self) -> MotionEngine {
-        crate::emacs_core::xdisp::motion::engine_for_context(self)
+        if self.noninteractive() {
+            MotionEngine::ComputeMotion
+        } else {
+            MotionEngine::DisplayIterator
+        }
     }
 
     fn resolve_motion(
@@ -435,9 +439,9 @@ impl EditHost for Context {
         rows: i64,
         goal_column: Option<i64>,
     ) -> Result<Option<MeasuredMotion>, Flow> {
-        crate::emacs_core::xdisp::motion::resolve(
+        super::display_query_hooks::resolve_motion(
             self,
-            crate::emacs_core::xdisp::motion::MotionRequest {
+            MotionRequest {
                 buffer,
                 window: window
                     .and_then(|value| value.as_window_id())
@@ -455,17 +459,16 @@ impl EditHost for Context {
         window: Option<Value>,
         engine: MotionEngine,
     ) -> LineWrap {
-        crate::emacs_core::window_cmds::window_line_wrap(self, window, buffer, engine)
+        super::display_query_hooks::window_line_wrap(self, window, buffer, engine)
     }
 
     fn window_geometry(&mut self, window: Option<Value>) -> WindowGeometry {
         let window = window.unwrap_or(Value::NIL);
-        let body_width =
-            crate::emacs_core::window_cmds::builtin_window_body_width(self, &[window, Value::NIL])
-                .ok()
-                .and_then(|value| value.as_fixnum())
-                .unwrap_or(0);
-        let hscroll = crate::emacs_core::window_cmds::builtin_window_hscroll(self, &[window])
+        let body_width = super::display_query_hooks::window_body_width(self, &[window, Value::NIL])
+            .ok()
+            .and_then(|value| value.as_fixnum())
+            .unwrap_or(0);
+        let hscroll = super::display_query_hooks::window_hscroll(self, &[window])
             .ok()
             .and_then(|value| value.as_fixnum())
             .unwrap_or(0);

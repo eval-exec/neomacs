@@ -15,9 +15,11 @@ use neovm_value::{HookInstallError, HookInstallStatus};
 use std::sync::OnceLock;
 
 use super::data::window_state::{Frame, FrameManager, WindowDomain};
-use crate::buffer::BufferManager;
-use crate::emacs_core::display_metrics::WindowId;
-use neovm_value::display_vocab::FrameId;
+use crate::buffer::{BufferId, BufferManager};
+use crate::emacs_core::display_metrics::{
+    InvisibleRunContext, LineWrap, MeasuredMotion, MotionEngine, MotionRequest, WindowId,
+};
+use neovm_value::display_vocab::{FrameId, Invisibility};
 
 /// A display-policy selector evaluated at a redisplay boundary.
 pub type DisplayFlagQuery = fn() -> bool;
@@ -40,6 +42,19 @@ pub type UpdateAutoHscroll = fn(&mut Context);
 pub type FontsetGeneration = fn() -> u64;
 /// GNU's frame-domain window lookup (live/valid/any).
 pub type WindowDomainFrameOf = fn(WindowDomain, &FrameManager, WindowId) -> Option<FrameId>;
+/// Resolve measured display-row motion.
+pub type MotionResolve = fn(&mut Context, MotionRequest) -> Result<Option<MeasuredMotion>, Flow>;
+/// GNU `init_iterator`'s line-wrap decision for one window/buffer pair.
+pub type WindowLineWrapQuery = fn(&mut Context, Option<Value>, BufferId, MotionEngine) -> LineWrap;
+/// `(window-body-width WINDOW nil)` for the EditHost geometry surface.
+pub type WindowBodyWidthQuery = fn(&mut Context, &[Value]) -> EvalResult;
+/// `(window-hscroll WINDOW)` for the EditHost geometry surface.
+pub type WindowHscrollQuery = fn(&mut Context, &[Value]) -> EvalResult;
+/// Resolve an `invisible` property/position against the buffer spec.
+pub type InvisibleStatusQuery = fn(&mut Context, Value) -> Result<Invisibility, Flow>;
+/// End byte of the source run elided by the current invisibility spec.
+pub type InvisibleSourceRunEndQuery =
+    fn(&mut Context, BufferId, usize, InvisibleRunContext) -> Result<Option<usize>, Flow>;
 
 /// Window/redisplay operations eval invokes at command/redisplay boundaries.
 ///
@@ -56,6 +71,12 @@ pub struct DisplayWindowHooks {
     update_auto_hscroll: UpdateAutoHscroll,
     fontset_generation: FontsetGeneration,
     window_domain_frame_of: WindowDomainFrameOf,
+    motion_resolve: MotionResolve,
+    window_line_wrap: WindowLineWrapQuery,
+    window_body_width: WindowBodyWidthQuery,
+    window_hscroll: WindowHscrollQuery,
+    invisible_status: InvisibleStatusQuery,
+    invisible_source_run_end: InvisibleSourceRunEndQuery,
 }
 
 impl DisplayWindowHooks {
@@ -69,6 +90,12 @@ impl DisplayWindowHooks {
         update_auto_hscroll: UpdateAutoHscroll,
         fontset_generation: FontsetGeneration,
         window_domain_frame_of: WindowDomainFrameOf,
+        motion_resolve: MotionResolve,
+        window_line_wrap: WindowLineWrapQuery,
+        window_body_width: WindowBodyWidthQuery,
+        window_hscroll: WindowHscrollQuery,
+        invisible_status: InvisibleStatusQuery,
+        invisible_source_run_end: InvisibleSourceRunEndQuery,
     ) -> Self {
         Self {
             ensure_selected_frame_id,
@@ -78,6 +105,12 @@ impl DisplayWindowHooks {
             update_auto_hscroll,
             fontset_generation,
             window_domain_frame_of,
+            motion_resolve,
+            window_line_wrap,
+            window_body_width,
+            window_hscroll,
+            invisible_status,
+            invisible_source_run_end,
         }
     }
 
@@ -107,6 +140,30 @@ impl DisplayWindowHooks {
 
     fn window_domain_frame_of(&self) -> WindowDomainFrameOf {
         self.window_domain_frame_of
+    }
+
+    fn motion_resolve(&self) -> MotionResolve {
+        self.motion_resolve
+    }
+
+    fn window_line_wrap(&self) -> WindowLineWrapQuery {
+        self.window_line_wrap
+    }
+
+    fn window_body_width(&self) -> WindowBodyWidthQuery {
+        self.window_body_width
+    }
+
+    fn window_hscroll(&self) -> WindowHscrollQuery {
+        self.window_hscroll
+    }
+
+    fn invisible_status(&self) -> InvisibleStatusQuery {
+        self.invisible_status
+    }
+
+    fn invisible_source_run_end(&self) -> InvisibleSourceRunEndQuery {
+        self.invisible_source_run_end
     }
 }
 
@@ -273,4 +330,47 @@ pub fn window_domain_frame_of(
     window: WindowId,
 ) -> Option<FrameId> {
     (installed_window_hooks().window_domain_frame_of())(domain, frames, window)
+}
+
+/// Resolve measured display-row motion.
+pub fn resolve_motion(
+    eval: &mut Context,
+    request: MotionRequest,
+) -> Result<Option<MeasuredMotion>, Flow> {
+    (installed_window_hooks().motion_resolve())(eval, request)
+}
+
+/// GNU `init_iterator`'s line-wrap decision for one window/buffer pair.
+pub fn window_line_wrap(
+    eval: &mut Context,
+    window: Option<Value>,
+    current_buffer: BufferId,
+    engine: MotionEngine,
+) -> LineWrap {
+    (installed_window_hooks().window_line_wrap())(eval, window, current_buffer, engine)
+}
+
+/// `(window-body-width WINDOW nil)` for the EditHost geometry surface.
+pub fn window_body_width(eval: &mut Context, args: &[Value]) -> EvalResult {
+    (installed_window_hooks().window_body_width())(eval, args)
+}
+
+/// `(window-hscroll WINDOW)` for the EditHost geometry surface.
+pub fn window_hscroll(eval: &mut Context, args: &[Value]) -> EvalResult {
+    (installed_window_hooks().window_hscroll())(eval, args)
+}
+
+/// Resolve an `invisible` property/position against the buffer spec.
+pub fn invisible_status(eval: &mut Context, value: Value) -> Result<Invisibility, Flow> {
+    (installed_window_hooks().invisible_status())(eval, value)
+}
+
+/// End byte of the source run elided by the current invisibility spec.
+pub fn invisible_source_run_end(
+    eval: &mut Context,
+    buffer: BufferId,
+    byte_pos: usize,
+    context: InvisibleRunContext,
+) -> Result<Option<usize>, Flow> {
+    (installed_window_hooks().invisible_source_run_end())(eval, buffer, byte_pos, context)
 }

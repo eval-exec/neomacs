@@ -490,3 +490,15 @@ pub struct GuiFrameGeometryHints {
     pub width_inc: u32,
     pub height_inc: u32,
 }
+
+/// One measured-motion request: all coordinates are in the source buffer,
+/// except the optional GNU window-relative goal column. The display resolver
+/// owns conversion to measured rows; the evaluator/EditHost only fills it.
+#[derive(Clone, Copy)]
+pub struct MotionRequest {
+    pub buffer: BufferId,
+    pub window: Option<WindowId>,
+    pub origin: LispCharPos1,
+    pub rows: i64,
+    pub goal_column: Option<i64>,
+}

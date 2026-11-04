@@ -24,6 +24,12 @@ static CANONICAL_WINDOW_HOOKS: DisplayWindowHooks = DisplayWindowHooks::new(
     crate::emacs_core::hscroll::update_auto_hscroll_before_redisplay,
     crate::emacs_core::fontset::fontset_generation,
     window_domain_frame_of,
+    crate::emacs_core::xdisp::motion::resolve,
+    crate::emacs_core::window_cmds::window_line_wrap,
+    crate::emacs_core::window_cmds::builtin_window_body_width,
+    crate::emacs_core::window_cmds::builtin_window_hscroll,
+    crate::emacs_core::xdisp::invisible_status_for_value,
+    crate::emacs_core::xdisp::invisible_source_run_end_byte,
 );
 
 static CANONICAL_DISPLAY_QUERY_HOOKS: DisplayQueryHooks = DisplayQueryHooks::new(

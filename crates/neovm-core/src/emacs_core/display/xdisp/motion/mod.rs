@@ -14,7 +14,7 @@ pub(crate) use policy::ScrollGoal;
 use crate::buffer::{AccessibleCharRange, BufferId, LispCharPos1};
 use crate::emacs_core::Context;
 use crate::emacs_core::Value;
-use crate::emacs_core::display_metrics::{LineWrap, MeasuredMotion, MotionEngine};
+use crate::emacs_core::display_metrics::{LineWrap, MeasuredMotion, MotionEngine, MotionRequest};
 use crate::emacs_core::error::{Flow, LispCondition, signal};
 use crate::window::DisplayFrameExt;
 use crate::window::DisplayFrameManagerExt;
@@ -30,17 +30,6 @@ pub(crate) fn engine_for_context(eval: &Context) -> MotionEngine {
     } else {
         MotionEngine::DisplayIterator
     }
-}
-
-/// All coordinates are in the source buffer, except the optional GNU
-/// window-relative goal column. The resolver owns conversion to measured rows.
-#[derive(Clone, Copy)]
-pub(crate) struct MotionRequest {
-    pub(crate) buffer: BufferId,
-    pub(crate) window: Option<WindowId>,
-    pub(crate) origin: LispCharPos1,
-    pub(crate) rows: i64,
-    pub(crate) goal_column: Option<i64>,
 }
 
 /// Exhausting measured coverage is not proof of reaching a buffer boundary.
