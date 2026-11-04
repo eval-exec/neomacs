@@ -5,7 +5,7 @@
 
 use super::error::{EvalResult, Flow, signal};
 use super::intern::{NIL_SYM_ID, T_SYM_ID};
-use crate::emacs_core::edit_host::EditVariableRead;
+use crate::emacs_core::edit_host::{EditHost, EditVariableRead};
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_max_args, expect_min_args};
 use crate::emacs_core::symbol::CanonicalAccess;
@@ -1642,8 +1642,8 @@ fn with_buffer_property_change(
     scope.finish(result)
 }
 
-fn call_text_property_hook_lists(
-    eval: &mut super::eval::Context,
+fn call_text_property_hook_lists<H: EditHost>(
+    host: &mut H,
     hook_lists: Vec<Value>,
     lisp_start: i64,
     lisp_end: i64,
@@ -1653,8 +1653,8 @@ fn call_text_property_hook_lists(
     }
     let start_v = Value::fixnum(lisp_start);
     let end_v = Value::fixnum(lisp_end);
-    let specpdl_count = eval.specpdl.len();
-    eval.try_specbind_or_unwind_to(specpdl_count, inhibit_modification_hooks_sym(), Value::T)?;
+    let specpdl_count = host.specpdl_index();
+    host.try_specbind_or_unwind_to(specpdl_count, inhibit_modification_hooks_sym(), Value::T)?;
     // The collected hook chains live only in this Rust Vec, and each hook
     // can unlink its own chain from the interval plist (the one-shot-hook
     // idiom) and trigger GC — freeing the conses the walk still reads. Keep
@@ -1666,27 +1666,27 @@ fn call_text_property_hook_lists(
     for hook_list in hook_lists.iter().rev() {
         hook_holder = Value::cons(*hook_list, hook_holder);
     }
-    let root_scope = eval.save_specpdl_roots();
-    eval.push_specpdl_root(hook_holder);
+    let root_scope = host.save_specpdl_roots();
+    host.push_specpdl_root(hook_holder);
     // Rooting the WALK CURSOR (updated per step) additionally keeps the
     // remaining chain alive even if a hook setcdr's the chain mid-walk —
     // marking is transitive from the cursor, exactly the survival GNU gets
     // from its conservatively-scanned tail local.
-    let cursor_slot = eval.push_specpdl_root_slot(Value::NIL);
+    let cursor_slot = host.push_specpdl_root_slot(Value::NIL);
     let result = (|| -> Result<(), Flow> {
         for hook_list in hook_lists {
             let mut cursor = hook_list;
             while cursor.is_cons() {
-                eval.set_specpdl_root_slot(&cursor_slot, cursor);
+                host.set_specpdl_root_slot(&cursor_slot, cursor);
                 let fn_v = cursor.cons_car();
-                eval.apply(fn_v, vec![start_v, end_v])?;
+                host.apply(fn_v, &[start_v, end_v])?;
                 cursor = cursor.cons_cdr();
             }
         }
         Ok(())
     })();
-    eval.restore_specpdl_roots(root_scope);
-    eval.unbind_to_with_result(specpdl_count, result.map(|()| Value::NIL))
+    host.restore_specpdl_roots(root_scope);
+    host.unbind_to_with_result(specpdl_count, result.map(|()| Value::NIL))
         .map(|_| ())
 }
 
@@ -1696,28 +1696,28 @@ fn call_text_property_hook_lists(
 /// non-empty changes, call `modification-hooks` before the text is changed;
 /// for insertions, record `insert-behind-hooks` and `insert-in-front-hooks`
 /// so `signal_after_change` can replay them after the inserted text exists.
-pub(crate) fn prepare_interval_modification_for_change(
-    eval: &mut super::eval::Context,
+pub(crate) fn prepare_interval_modification_for_change<H: EditHost>(
+    host: &mut H,
     buf_id: BufferId,
     byte_start: EmacsBytePos,
     byte_end: EmacsBytePos,
-    before_hooks: impl FnOnce(&super::eval::Context),
+    before_hooks: impl FnOnce(&mut H),
 ) -> Result<(), Flow> {
-    eval.edit.interval_insert_behind_hooks = Value::NIL;
-    eval.edit.interval_insert_in_front_hooks = Value::NIL;
+    host.edit_and_vars().0.interval_insert_behind_hooks = Value::NIL;
+    host.edit_and_vars().0.interval_insert_in_front_hooks = Value::NIL;
 
     if byte_start == byte_end {
-        record_interval_insert_hooks(eval, buf_id, byte_start);
+        record_interval_insert_hooks(&mut *host, buf_id, byte_start);
         return Ok(());
     }
 
-    if super::editfns::inhibit_modification_hooks(eval) {
+    if super::editfns::inhibit_modification_hooks(host) {
         return Ok(());
     }
 
     let (lisp_start, lisp_end, hook_lists) = {
-        let vars = eval.variables();
-        let buffers = &eval.edit.buffers;
+        let (edit, vars) = host.edit_and_vars();
+        let buffers = &edit.buffers;
         let Some(buf) = buffers.get(buf_id) else {
             return Ok(());
         };
@@ -1756,65 +1756,90 @@ pub(crate) fn prepare_interval_modification_for_change(
     if !hook_lists.is_empty() {
         // Snapshot before the runner's watched specbind as well as hook Lisp.
         // Reuse the collected lists: a face-only interval requires no snapshot.
-        before_hooks(eval);
+        before_hooks(&mut *host);
     }
-    call_text_property_hook_lists(eval, hook_lists, lisp_start, lisp_end)
+    call_text_property_hook_lists(&mut *host, hook_lists, lisp_start, lisp_end)
 }
 
-fn record_interval_insert_hooks(
-    eval: &mut super::eval::Context,
+fn record_interval_insert_hooks<H: EditHost>(
+    host: &mut H,
     buf_id: BufferId,
     byte_pos: EmacsBytePos,
 ) {
-    let Some(buf) = eval.edit.buffers.get(buf_id) else {
-        return;
-    };
     // With no text properties anywhere, no `insert-in-front-hooks' /
     // `insert-behind-hooks' can exist, so skip the per-insert property lookups
     // -- each of which does a byte->char conversion.  This is the hot path for
     // inserts into property-free buffers (byte-compilation output, batch work).
     // The hook fields were already reset to nil by the caller, so leaving them
     // is correct.
-    if buf.text_props_is_empty() {
+    if host
+        .edit_and_vars()
+        .0
+        .buffers
+        .get(buf_id)
+        .is_none_or(|buf| buf.text_props_is_empty())
+    {
         return;
     }
     let behind_sym = insert_behind_hooks_prop();
     let front_sym = insert_in_front_hooks_prop();
-    let accessible = buf.accessible_emacs_byte_region();
 
-    if byte_pos > accessible.start()
-        && let Some(prev_len) = buf.char_before_emacs_byte_len(byte_pos)
-    {
-        let prev_byte = byte_pos.saturating_sub_len(prev_len);
-        if let Some(hooks) = buf.text_props_get_property_at_emacs_byte_pos(prev_byte, behind_sym)
-            && !hooks.is_nil()
+    let behind = {
+        let (edit, _vars) = host.edit_and_vars();
+        let Some(buf) = edit.buffers.get(buf_id) else {
+            return;
+        };
+        let accessible = buf.accessible_emacs_byte_region();
+        if byte_pos > accessible.start()
+            && let Some(prev_len) = buf.char_before_emacs_byte_len(byte_pos)
         {
-            eval.edit.interval_insert_behind_hooks = hooks;
+            let prev_byte = byte_pos.saturating_sub_len(prev_len);
+            buf.text_props_get_property_at_emacs_byte_pos(prev_byte, behind_sym)
+                .filter(|hooks| !hooks.is_nil())
+        } else {
+            None
         }
+    };
+    if let Some(hooks) = behind {
+        host.edit_and_vars().0.interval_insert_behind_hooks = hooks;
     }
 
-    if byte_pos < accessible.end()
-        && let Some(hooks) = buf.text_props_get_property_at_emacs_byte_pos(byte_pos, front_sym)
-        && !hooks.is_nil()
-    {
-        eval.edit.interval_insert_in_front_hooks = hooks;
+    let front = {
+        let (edit, _vars) = host.edit_and_vars();
+        let Some(buf) = edit.buffers.get(buf_id) else {
+            return;
+        };
+        if byte_pos < buf.accessible_emacs_byte_region().end() {
+            buf.text_props_get_property_at_emacs_byte_pos(byte_pos, front_sym)
+                .filter(|hooks| !hooks.is_nil())
+        } else {
+            None
+        }
+    };
+    if let Some(hooks) = front {
+        host.edit_and_vars().0.interval_insert_in_front_hooks = hooks;
     }
 }
 
 /// GNU `report_interval_modification`: run insert text-property hooks after
 /// insertion, passing the inserted character range.
-pub(crate) fn report_interval_modification(
-    eval: &mut super::eval::Context,
+pub(crate) fn report_interval_modification<H: EditHost>(
+    host: &mut H,
     lisp_start: i64,
     lisp_end: i64,
 ) -> Result<(), Flow> {
-    let behind = eval.edit.interval_insert_behind_hooks;
-    let front = eval.edit.interval_insert_in_front_hooks;
+    let (behind, front) = {
+        let (edit, _vars) = host.edit_and_vars();
+        (
+            edit.interval_insert_behind_hooks,
+            edit.interval_insert_in_front_hooks,
+        )
+    };
     if !behind.is_nil() {
-        call_text_property_hook_lists(eval, vec![behind], lisp_start, lisp_end)?;
+        call_text_property_hook_lists(&mut *host, vec![behind], lisp_start, lisp_end)?;
     }
     if !front.is_nil() && !eq_value(&front, &behind) {
-        call_text_property_hook_lists(eval, vec![front], lisp_start, lisp_end)?;
+        call_text_property_hook_lists(&mut *host, vec![front], lisp_start, lisp_end)?;
     }
     Ok(())
 }
@@ -1936,25 +1961,23 @@ fn put_text_property_in_buffer_byte_range(
 
 /// (get-text-property POS PROP &optional OBJECT)
 #[cfg(test)]
-pub(crate) fn builtin_get_text_property(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
+pub(crate) fn builtin_get_text_property<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     crate::emacs_core::error::expect_args_range("get-text-property", &args, 2, 3)?;
     let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
-    builtin_get_text_property_3(eval, arg(0), arg(1), arg(2))
+    builtin_get_text_property_3(&mut *host, arg(0), arg(1), arg(2))
 }
 /// `get-text-property` as registered: fixed arity 3, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a3` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_get_text_property_3(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_get_text_property_3<H: EditHost>(
+    host: &mut H,
     position: Value,
     prop: Value,
     object: Value,
 ) -> EvalResult {
     let args: [Value; 3] = [position, prop, object];
-    builtin_get_text_property_in_state(eval.variables(), &eval.edit.buffers, &args)
+    let (edit, vars) = host.edit_and_vars();
+    builtin_get_text_property_in_state(vars, &edit.buffers, &args)
 }
 
 pub(crate) fn builtin_get_text_property_in_state<'a, Vars: EditVariableRead<'a>>(
@@ -3044,24 +3067,24 @@ pub(crate) fn builtin_remove_list_of_text_properties_in_buffers(
 
 /// (text-properties-at POS &optional OBJECT)
 #[cfg(test)]
-pub(crate) fn builtin_text_properties_at(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_text_properties_at<H: EditHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     crate::emacs_core::error::expect_args_range("text-properties-at", &args, 1, 2)?;
     let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
-    builtin_text_properties_at_2(eval, arg(0), arg(1))
+    builtin_text_properties_at_2(&mut *host, arg(0), arg(1))
 }
 /// `text-properties-at` as registered: fixed arity 2, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a2` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_text_properties_at_2(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_text_properties_at_2<H: EditHost>(
+    host: &mut H,
     position: Value,
     object: Value,
 ) -> EvalResult {
     let args: [Value; 2] = [position, object];
-    builtin_text_properties_at_in_buffers(&eval.edit.buffers, &args)
+    builtin_text_properties_at_in_buffers(&host.edit_and_vars().0.buffers, &args)
 }
 
 pub(crate) fn builtin_text_properties_at_in_buffers(
@@ -3101,26 +3124,27 @@ pub(crate) fn builtin_text_properties_at_in_buffers(
 }
 
 /// (next-single-property-change POS PROP &optional OBJECT LIMIT)
-pub(crate) fn builtin_next_single_property_change(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_next_single_property_change<H: EditHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     crate::emacs_core::error::expect_args_range("next-single-property-change", &args, 2, 4)?;
     let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
-    builtin_next_single_property_change_4(eval, arg(0), arg(1), arg(2), arg(3))
+    builtin_next_single_property_change_4(&mut *host, arg(0), arg(1), arg(2), arg(3))
 }
 /// `next-single-property-change` as registered: fixed arity 4, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a4` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_next_single_property_change_4(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_next_single_property_change_4<H: EditHost>(
+    host: &mut H,
     position: Value,
     prop: Value,
     object: Value,
     limit: Value,
 ) -> EvalResult {
     let args: [Value; 4] = [position, prop, object, limit];
-    builtin_next_single_property_change_in_state(eval.variables(), &eval.edit.buffers, &args)
+    let (edit, vars) = host.edit_and_vars();
+    builtin_next_single_property_change_in_state(vars, &edit.buffers, &args)
 }
 
 pub(crate) fn builtin_next_single_property_change_in_state<'a, Vars: EditVariableRead<'a>>(
@@ -3518,26 +3542,27 @@ pub(crate) fn emacs_byte_pos_of_preceding_char(
 
 /// (previous-single-property-change POS PROP &optional OBJECT LIMIT)
 #[cfg(test)]
-pub(crate) fn builtin_previous_single_property_change(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_previous_single_property_change<H: EditHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     crate::emacs_core::error::expect_args_range("previous-single-property-change", &args, 2, 4)?;
     let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
-    builtin_previous_single_property_change_4(eval, arg(0), arg(1), arg(2), arg(3))
+    builtin_previous_single_property_change_4(&mut *host, arg(0), arg(1), arg(2), arg(3))
 }
 /// `previous-single-property-change` as registered: fixed arity 4, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a4` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_previous_single_property_change_4(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_previous_single_property_change_4<H: EditHost>(
+    host: &mut H,
     position: Value,
     prop: Value,
     object: Value,
     limit: Value,
 ) -> EvalResult {
     let args: [Value; 4] = [position, prop, object, limit];
-    builtin_previous_single_property_change_in_state(eval.variables(), &eval.edit.buffers, &args)
+    let (edit, vars) = host.edit_and_vars();
+    builtin_previous_single_property_change_in_state(vars, &edit.buffers, &args)
 }
 
 pub(crate) fn builtin_previous_single_property_change_in_state<'a, Vars: EditVariableRead<'a>>(
@@ -3654,11 +3679,11 @@ pub(crate) fn builtin_previous_single_property_change_in_state<'a, Vars: EditVar
 }
 
 /// (next-property-change POS &optional OBJECT LIMIT)
-pub(crate) fn builtin_next_property_change(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_next_property_change<H: EditHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_next_property_change_in_buffers(&eval.edit.buffers, args)
+    builtin_next_property_change_in_buffers(&host.edit_and_vars().0.buffers, args)
 }
 
 pub(crate) fn builtin_next_property_change_in_buffers(
@@ -3769,11 +3794,9 @@ pub(crate) fn builtin_next_property_change_in_buffers(
 }
 
 /// (text-property-any BEG END PROP VAL &optional OBJECT)
-pub(crate) fn builtin_text_property_any(
-    eval: &mut super::eval::Context,
-    args: &[Value],
-) -> EvalResult {
-    builtin_text_property_any_in_state(eval.variables(), &eval.edit.buffers, args)
+pub(crate) fn builtin_text_property_any<H: EditHost>(host: &mut H, args: &[Value]) -> EvalResult {
+    let (edit, vars) = host.edit_and_vars();
+    builtin_text_property_any_in_state(vars, &edit.buffers, args)
 }
 
 pub(crate) fn builtin_text_property_any_in_state<'a, Vars: EditVariableRead<'a>>(
@@ -3896,19 +3919,19 @@ pub(crate) fn builtin_text_property_any_in_state<'a, Vars: EditVariableRead<'a>>
 
 /// (text-property-not-all BEG END PROP VAL &optional OBJECT)
 #[cfg(test)]
-pub(crate) fn builtin_text_property_not_all(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_text_property_not_all<H: EditHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     crate::emacs_core::error::expect_args_range("text-property-not-all", &args, 4, 5)?;
     let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
-    builtin_text_property_not_all_5(eval, arg(0), arg(1), arg(2), arg(3), arg(4))
+    builtin_text_property_not_all_5(&mut *host, arg(0), arg(1), arg(2), arg(3), arg(4))
 }
 /// `text-property-not-all` as registered: fixed arity 5, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a5` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_text_property_not_all_5(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_text_property_not_all_5<H: EditHost>(
+    host: &mut H,
     start: Value,
     end: Value,
     property: Value,
@@ -3916,7 +3939,8 @@ pub(crate) fn builtin_text_property_not_all_5(
     object: Value,
 ) -> EvalResult {
     let args: [Value; 5] = [start, end, property, value, object];
-    builtin_text_property_not_all_in_state(eval.variables(), &eval.edit.buffers, &args)
+    let (edit, vars) = host.edit_and_vars();
+    builtin_text_property_not_all_in_state(vars, &edit.buffers, &args)
 }
 
 pub(crate) fn builtin_text_property_not_all_in_state<'a, Vars: EditVariableRead<'a>>(
@@ -4071,11 +4095,12 @@ pub(crate) fn builtin_get_char_property_and_overlay_with_window_lookup<
 }
 
 /// (get-display-property POS PROP &optional OBJECT PROPERTIES)
-pub(crate) fn builtin_get_display_property(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_get_display_property<H: EditHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_get_display_property_in_state(eval.variables(), &eval.edit.buffers, args)
+    let (edit, vars) = host.edit_and_vars();
+    builtin_get_display_property_in_state(vars, &edit.buffers, args)
 }
 
 pub(crate) fn builtin_get_display_property_in_state<'a, Vars: EditVariableRead<'a>>(

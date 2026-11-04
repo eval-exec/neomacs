@@ -283,8 +283,13 @@ impl OverlayList {
                     .as_overlay_data()
                     .expect("overlay index contains a non-overlay value");
                 let range = overlay_data_range(data);
-                let plist = crate::emacs_core::builtins::builtin_copy_sequence(vec![data.plist])
-                    .expect("a live overlay must carry a copyable plist");
+                // `copy-sequence`'s body with its arity check proven by the
+                // single argument: the value-core copy in bare-symbol mode.
+                let plist = crate::sequence_copy::copy_sequence_with_symbols(
+                    data.plist,
+                    crate::tagged::SymbolMode::Bare,
+                )
+                .expect("a live overlay must carry a copyable plist");
                 push_scratch_gc_root(plist);
                 // GNU `copy_overlays` publishes distinct objects; redisplay
                 // observer copies must preserve the source's precedence

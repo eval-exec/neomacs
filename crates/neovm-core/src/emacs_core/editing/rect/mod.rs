@@ -57,9 +57,11 @@ fn expect_string(value: &Value) -> Result<LispString, Flow> {
 /// `builtins/misc_eval.rs` (audit finding #3 in
 /// `drafts/regex-search-audit.md`).
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-fn dynamic_or_global_symbol_value(eval: &super::eval::Context, name: &str) -> Option<Value> {
-    let id = crate::emacs_core::intern::intern(name);
-    eval.eval_symbol_by_id(id).ok()
+fn dynamic_or_global_symbol_value<H: crate::emacs_core::edit_host::EditHost>(
+    host: &H,
+    name: &str,
+) -> Option<Value> {
+    host.variable_value_by_name(name)
 }
 
 // ---------------------------------------------------------------------------
@@ -102,12 +104,12 @@ impl GcTrace for RectangleState {
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 fn empty_lisp_string(multibyte: bool) -> LispString {
-    super::builtins::lisp_string_from_buffer_bytes(Vec::new(), multibyte)
+    super::buffer::lisp_string_from_buffer_bytes(Vec::new(), multibyte)
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 fn space_lisp_string(width: usize, multibyte: bool) -> LispString {
-    super::builtins::lisp_string_from_buffer_bytes(vec![b' '; width], multibyte)
+    super::buffer::lisp_string_from_buffer_bytes(vec![b' '; width], multibyte)
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
@@ -156,7 +158,7 @@ fn join_lisp_string_lines(lines: &[LispString], multibyte: bool) -> LispString {
         }
         out.extend_from_slice(line.as_bytes());
     }
-    super::builtins::lisp_string_from_buffer_bytes(out, multibyte)
+    super::buffer::lisp_string_from_buffer_bytes(out, multibyte)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

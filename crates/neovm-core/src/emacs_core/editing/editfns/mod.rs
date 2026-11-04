@@ -15,7 +15,7 @@ use crate::buffer::{
     Buffer, BufferManager, CharLen, EmacsByteLen, EmacsBytePos, EmacsByteRange, LispCharPos1,
     TextChange, TextEditRange, TextExtent,
 };
-use crate::emacs_core::edit_host::{EditHost, EditVariableRead};
+use crate::emacs_core::edit_host::EditVariableRead;
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_max_args, expect_min_args};
 use crate::emacs_core::value::ValueKind;
@@ -163,6 +163,76 @@ pub(crate) fn lisp_string_text_extent(text: &LispString) -> TextExtent {
     )
 }
 
+// The current-buffer region trio (stage-3 C12, relocated from the lisp
+// layer's `fns`): every edit-side region consumer -- base64/zlib/xml
+// region subrs, translate-region-internal -- resolves, reads, and replaces
+// through the buffer substrate here; `fns` keeps `pub(crate) use`
+// re-exports for its own subr wrappers. The replace member runs the
+// modification callbacks, so it takes the host.
+pub(crate) fn normalize_current_buffer_region_bounds_in_manager(
+    buffers: &BufferManager,
+    start_arg: &Value,
+    end_arg: &Value,
+) -> Result<(crate::buffer::BufferId, EmacsByteRange), Flow> {
+    let region = super::position::LispRegionArgs::from_values(buffers, *start_arg, *end_arg)?;
+    let buffer_id = buffers
+        .current_buffer()
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?
+        .id;
+
+    let buf = buffers
+        .get(buffer_id)
+        .ok_or_else(|| signal("error", vec![Value::string("Selecting deleted buffer")]))?;
+
+    Ok((buffer_id, region.accessible_byte_range(buf)?))
+}
+
+pub(crate) fn read_buffer_region_bytes_in_manager(
+    buffers: &BufferManager,
+    buffer_id: crate::buffer::BufferId,
+    byte_range: EmacsByteRange,
+) -> Result<Vec<u8>, Flow> {
+    let buf = buffers
+        .get(buffer_id)
+        .ok_or_else(|| signal("error", vec![Value::string("Selecting deleted buffer")]))?;
+    Ok(buf.buffer_substring_bytes_range(byte_range))
+}
+
+pub(crate) fn replace_buffer_emacs_byte_range_lisp_string<
+    H: crate::emacs_core::edit_host::EditHost,
+>(
+    host: &mut H,
+    buffer_id: crate::buffer::BufferId,
+    byte_range: EmacsByteRange,
+    replacement: &crate::heap_types::LispString,
+) -> Result<(), Flow> {
+    let range = buffer_edit_range_for_byte_range_in_manager(
+        &host.edit_and_vars().0.buffers,
+        buffer_id,
+        byte_range,
+    )?;
+    // The modification callbacks may edit the buffer: replace the range they
+    // leave, re-measured like GNU `replace_range` (insdel.c:1502-1513).
+    let pending = PendingTextEdit::new(range, RemeasureRule::ReplaceRange);
+    let Some(prepared) = pending.prepare(host)? else {
+        return Ok(());
+    };
+    // Don't inherit text properties from neighbors here.
+    // GNU's replace path (del_range + insert_from_gap in decode_coding)
+    // also skips adjust_intervals_for_insertion.  Property inheritance
+    // belongs to insert-and-inherit (insert_pieces_in_state with
+    // inherit=true), not general-purpose replace operations.
+    let new_extent = prepared
+        .lease(&mut host.edit_and_vars().0.buffers)
+        .and_then(|lease| lease.replace(replacement))
+        .ok_or_else(|| signal("error", vec![Value::string("Selecting deleted buffer")]))?;
+    signal_after_text_change(
+        host,
+        crate::buffer::TextChange::new(prepared.range(), new_extent),
+    )?;
+    Ok(())
+}
+
 pub(crate) fn text_change_for_replacement_in_manager(
     buffers: &BufferManager,
     buffer_id: crate::buffer::BufferId,
@@ -285,6 +355,36 @@ fn run_named_hook_without_reset<H: crate::emacs_core::edit_host::EditHost>(
     Ok(())
 }
 
+// Local argument extractors (stage-3 C12): the builtins copies stay above
+// the split with the subr wrappers; the edit layer keeps its own, exactly
+// as `editing::buffer` already does.
+
+fn maybe_trace_characterp_nil(value: &Value, source: &str) {
+    if !value.is_nil() {
+        return;
+    }
+    if std::env::var("NEOVM_TRACE_CHARACTERP_NIL").unwrap_or_default() != "1" {
+        return;
+    }
+    eprintln!(
+        "NEOVM_TRACE_CHARACTERP_NIL source={source}\n{}",
+        std::backtrace::Backtrace::force_capture()
+    );
+}
+
+fn expect_character_code(value: &Value) -> Result<i64, Flow> {
+    match value.kind() {
+        ValueKind::Fixnum(c) if (0..=0x3F_FFFF).contains(&c) => Ok(c),
+        _other => {
+            maybe_trace_characterp_nil(value, "expect_character_code");
+            Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("characterp"), *value],
+            ))
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BufferChangeKind {
     Characters,
@@ -292,24 +392,25 @@ enum BufferChangeKind {
 }
 
 /// Verify intervals at the preparation seam. This only reads the owning
-/// Context and publishes no process-global or thread-local state.
+/// host's edit state and publishes no process-global or thread-local state.
 #[inline(always)]
-fn verify_change_text_read_only(
-    ctx: &crate::emacs_core::eval::Context,
+fn verify_change_text_read_only<H: crate::emacs_core::edit_host::EditHost>(
+    host: &mut H,
     byte_range: EmacsByteRange,
 ) -> Result<(), Flow> {
-    if let Some(current_id) = ctx.edit.buffers.current_buffer_id() {
+    let (edit, vars) = host.edit_and_vars();
+    if let Some(current_id) = edit.buffers.current_buffer_id() {
         if byte_range.is_empty() {
             crate::emacs_core::textprop::verify_text_read_only_for_insert_in_state(
-                ctx.variables(),
-                &ctx.edit.buffers,
+                vars,
+                &edit.buffers,
                 current_id,
                 byte_range.start(),
             )?;
         } else {
             crate::emacs_core::textprop::verify_text_read_only_emacs_byte_range_in_state(
-                ctx.variables(),
-                &ctx.edit.buffers,
+                vars,
+                &edit.buffers,
                 current_id,
                 byte_range,
             )?;
@@ -359,22 +460,22 @@ impl LiveChangeRange {
     }
 
     #[inline]
-    fn capture_for_callbacks(&mut self, ctx: &crate::emacs_core::eval::Context) {
-        let buffer = ctx.edit.buffers.current_buffer_id();
+    fn capture_for_callbacks(&mut self, buffers: &BufferManager) {
+        let buffer = buffers.current_buffer_id();
         self.before_callbacks = Some(ChangeTextSnapshot {
             buffer,
-            chars_tick: current_chars_tick(ctx, buffer),
+            chars_tick: current_chars_tick(buffers, buffer),
         });
     }
 
     /// Re-measure only when callback Lisp could have invalidated the bytes.
     #[inline(always)]
-    fn refresh(&mut self, ctx: &crate::emacs_core::eval::Context) -> TextEditRange {
+    fn refresh(&mut self, buffers: &BufferManager) -> TextEditRange {
         if let Some(before) = self.before_callbacks.take() {
-            let buffer = ctx.edit.buffers.current_buffer_id();
-            let chars_tick = current_chars_tick(ctx, buffer);
+            let buffer = buffers.current_buffer_id();
+            let chars_tick = current_chars_tick(buffers, buffer);
             if buffer != before.buffer || chars_tick != before.chars_tick {
-                if let Some(buf) = buffer.and_then(|id| ctx.edit.buffers.get(id)) {
+                if let Some(buf) = buffer.and_then(|id| buffers.get(id)) {
                     self.range = live_edit_range_for_chars(buf, self.range.char_range());
                 }
             }
@@ -383,12 +484,9 @@ impl LiveChangeRange {
     }
 }
 
-fn current_chars_tick(
-    ctx: &crate::emacs_core::eval::Context,
-    buffer: Option<crate::buffer::BufferId>,
-) -> i64 {
+fn current_chars_tick(buffers: &BufferManager, buffer: Option<crate::buffer::BufferId>) -> i64 {
     buffer
-        .and_then(|id| ctx.edit.buffers.get(id))
+        .and_then(|id| buffers.get(id))
         .map_or(0, Buffer::chars_modified_tick)
 }
 
@@ -407,11 +505,10 @@ fn live_edit_range_for_chars(buf: &Buffer, chars: crate::buffer::CharRange) -> T
 /// for callers that, like GNU, reuse numeric character positions computed
 /// before Lisp ran. None when there is no current buffer.
 pub(crate) fn current_buffer_live_range(
-    ctx: &crate::emacs_core::eval::Context,
+    buffers: &BufferManager,
     chars: crate::buffer::CharRange,
 ) -> Option<TextEditRange> {
-    ctx.edit
-        .buffers
+    buffers
         .current_buffer()
         .map(|buf| live_edit_range_for_chars(buf, chars))
 }
@@ -424,16 +521,17 @@ pub(crate) fn current_buffer_live_range(
 /// that know Lisp is about to run call this, so the callback-free path does
 /// no marker work. The marker is a GC root of this mutator's specpdl for
 /// exactly the callbacks' extent.
-fn run_preserving_change_start(
-    ctx: &mut crate::emacs_core::eval::Context,
+fn run_preserving_change_start<H: crate::emacs_core::edit_host::EditHost>(
+    host: &mut H,
     policy: ChangeStartPolicy,
     start: crate::buffer::CharPos0,
-    callbacks: impl FnOnce(&mut crate::emacs_core::eval::Context) -> Result<(), Flow>,
+    callbacks: impl FnOnce(&mut H) -> Result<(), Flow>,
 ) -> Result<crate::buffer::CharPos0, Flow> {
-    let marker = match (policy, ctx.edit.buffers.current_buffer_id()) {
+    let current_buffer = host.edit_and_vars().0.buffers.current_buffer_id();
+    let marker = match (policy, current_buffer) {
         (ChangeStartPolicy::Preserved, Some(buffer)) => {
             Some(crate::emacs_core::marker::make_registered_buffer_marker(
-                &mut ctx.edit.buffers,
+                &mut host.edit_and_vars().0.buffers,
                 buffer,
                 start.to_lisp(),
                 false,
@@ -442,23 +540,23 @@ fn run_preserving_change_start(
         (ChangeStartPolicy::Preserved, None) | (ChangeStartPolicy::Fixed, _) => None,
     };
     let Some(marker) = marker else {
-        callbacks(ctx)?;
+        callbacks(host)?;
         return Ok(start);
     };
-    let roots = ctx.save_specpdl_roots();
-    ctx.push_specpdl_root(marker);
-    let result = callbacks(ctx);
+    let roots = host.save_specpdl_roots();
+    host.push_specpdl_root(marker);
+    let result = callbacks(host);
     // GNU `marker_position` signals when the callbacks killed the marker's
     // buffer; a nonlocal exit from the callbacks takes precedence.
     let preserved = crate::emacs_core::marker::marker_logical_fields(&marker).and_then(
         |(buffer, position, _)| {
             buffer
-                .and_then(|buffer| ctx.edit.buffers.get(buffer))
+                .and_then(|buffer| host.edit_and_vars().0.buffers.get(buffer))
                 .and(position)
         },
     );
-    crate::emacs_core::marker::unchain_marker(&mut ctx.edit.buffers, &marker);
-    ctx.restore_specpdl_roots(roots);
+    crate::emacs_core::marker::unchain_marker(&mut host.edit_and_vars().0.buffers, &marker);
+    host.restore_specpdl_roots(roots);
     result?;
     preserved
         .map(crate::buffer::CharPos0::from_lisp)
@@ -475,8 +573,8 @@ fn run_preserving_change_start(
 /// `range` is measured in the current buffer; its 1-based character positions
 /// are what the Lisp hooks receive. Returns the change's start after the
 /// callbacks ran (moved only for `ChangeStartPolicy::Preserved`).
-fn prepare_buffer_change(
-    ctx: &mut crate::emacs_core::eval::Context,
+fn prepare_buffer_change<H: crate::emacs_core::edit_host::EditHost>(
+    host: &mut H,
     range: TextEditRange,
     kind: BufferChangeKind,
     start_policy: ChangeStartPolicy,
@@ -492,49 +590,50 @@ fn prepare_buffer_change(
     // primitive ran this function (and thus `before-change-functions') first
     // and only barfed afterwards, so a rejected insert double-counted the
     // hook.
-    ensure_current_buffer_writable_in_state(ctx.variables(), &[], &ctx.edit.buffers)?;
+    {
+        let (edit, vars) = host.edit_and_vars();
+        ensure_current_buffer_writable_in_state(vars, &[], &edit.buffers)?;
+    }
     let mut start = range.char_start();
     let mut live = LiveChangeRange::new(range);
 
     let gnu_hooks = super::redisplay_policy::gnu_redisplay_hooks_enabled();
     if !gnu_hooks {
-        verify_change_text_read_only(ctx, range.byte_range())?;
+        verify_change_text_read_only(host, range.byte_range())?;
     }
 
     let mut range = range;
-    if let Some(current_id) = ctx.edit.buffers.current_buffer_id() {
-        let undo_enabled = ctx
-            .edit
+    if let Some(current_id) = host.edit_and_vars().0.buffers.current_buffer_id() {
+        let undo_enabled = host
+            .edit_and_vars()
+            .0
             .buffers
             .get(current_id)
             .is_some_and(|buf| !buf.get_undo_list().is_t());
         let undoable_change = undo_auto_undoable_change_symbol();
-        if undo_enabled && ctx.obarray.fboundp_id(undoable_change) {
-            live.capture_for_callbacks(ctx);
-            ctx.apply(Value::from_sym_id(undoable_change), vec![])?;
-            range = live.refresh(ctx);
+        let undoable_hook_bound = host.edit_and_vars().1.obarray().fboundp_id(undoable_change);
+        if undo_enabled && undoable_hook_bound {
+            live.capture_for_callbacks(&host.edit_and_vars().0.buffers);
+            host.apply(Value::from_sym_id(undoable_change), &[])?;
+            range = live.refresh(&host.edit_and_vars().0.buffers);
         }
     }
 
-    let Some(current_id) = ctx.edit.buffers.current_buffer_id() else {
+    let Some(current_id) = host.edit_and_vars().0.buffers.current_buffer_id() else {
         return Ok(start);
     };
     // GNU insdel.c:2145 publishes after undoable-change and before any
     // interval callback, including the inhibited-modification-hooks arm.
     if gnu_hooks {
-        ctx.mark_buffer_redisplay(current_id);
-        verify_change_text_read_only(ctx, range.byte_range())?;
+        host.mark_buffer_redisplay(current_id);
+        verify_change_text_read_only(host, range.byte_range())?;
     }
 
-    if kind == BufferChangeKind::Characters
-        && ctx.treesit.has_editable_tree(current_id)
-        && let Some(buf) = ctx.edit.buffers.get(current_id)
-    {
-        ctx.treesit
-            .begin_buffer_edit(current_id, buf, range.byte_range());
+    if kind == BufferChangeKind::Characters && host.treesit_has_editable_tree(current_id) {
+        host.treesit_begin_buffer_edit(current_id, range.byte_range());
     }
 
-    if inhibit_modification_hooks(ctx) {
+    if inhibit_modification_hooks(host) {
         return Ok(start);
     }
 
@@ -545,13 +644,13 @@ fn prepare_buffer_change(
     // The clean/file-target selection is native edit state; publishing the
     // range roots and taking the lock (which can run Lisp) keep GNU's order.
     if let Some(filename) =
-        super::file_name::clean_current_buffer_file_lock_target(&ctx.edit.buffers)
+        super::file_name::clean_current_buffer_file_lock_target(&host.edit_and_vars().0.buffers)
     {
-        live.capture_for_callbacks(ctx);
-        ctx.lock_file(&filename)?;
+        live.capture_for_callbacks(&host.edit_and_vars().0.buffers);
+        host.lock_file(&filename)?;
     }
-    let range = live.refresh(ctx);
-    let Some(current_id) = ctx.edit.buffers.current_buffer_id() else {
+    let range = live.refresh(&host.edit_and_vars().0.buffers);
+    let Some(current_id) = host.edit_and_vars().0.buffers.current_buffer_id() else {
         return Ok(start);
     };
 
@@ -559,40 +658,41 @@ fn prepare_buffer_change(
     // buffer has intervals; a range with no properties runs no hook Lisp.
     let preserve_interval_start = start_policy == ChangeStartPolicy::Preserved
         && !range.is_empty()
-        && ctx
-            .edit
+        && host
+            .edit_and_vars()
+            .0
             .buffers
             .get(current_id)
             .is_some_and(|buf| !buf.text_props_is_empty());
     let bytes = range.byte_range();
-    let mut prepare_intervals = |ctx: &mut crate::emacs_core::eval::Context| {
+    let mut prepare_intervals = |host: &mut H| {
         crate::emacs_core::textprop::prepare_interval_modification_for_change(
-            ctx,
+            host,
             current_id,
             bytes.start(),
             bytes.end(),
-            |ctx| live.capture_for_callbacks(ctx),
+            |host| live.capture_for_callbacks(&host.edit_and_vars().0.buffers),
         )
     };
     if preserve_interval_start {
-        start = run_preserving_change_start(ctx, start_policy, start, prepare_intervals)?;
+        start = run_preserving_change_start(host, start_policy, start, prepare_intervals)?;
     } else {
-        prepare_intervals(ctx)?;
+        prepare_intervals(host)?;
     }
-    let range = live.refresh(ctx);
-    let Some(current_id) = ctx.edit.buffers.current_buffer_id() else {
+    let range = live.refresh(&host.edit_and_vars().0.buffers);
+    let Some(current_id) = host.edit_and_vars().0.buffers.current_buffer_id() else {
         return Ok(start);
     };
-    if before_change_hooks_quiet(ctx, current_id) {
-        ctx.edit.last_overlay_modification_hooks = Vec::new();
+    if before_change_hooks_quiet(host, current_id) {
+        host.edit_and_vars().0.last_overlay_modification_hooks = Vec::new();
     } else if start_policy == ChangeStartPolicy::Preserved {
-        start = run_preserving_change_start(ctx, start_policy, start, |ctx| {
-            run_before_change_hooks(ctx, current_id, range)
+        start = run_preserving_change_start(host, start_policy, start, |host| {
+            run_before_change_hooks(host, current_id, range)
         })?;
     } else {
-        run_before_change_hooks(ctx, current_id, range)?;
+        run_before_change_hooks(host, current_id, range)?;
     }
-    deactivate_mark_after_preparing_change(ctx)?;
+    deactivate_mark_after_preparing_change(host)?;
     Ok(start)
 }
 
@@ -604,26 +704,28 @@ fn prepare_buffer_change(
 /// of bind+unbind per modification, and with nothing to run under it the
 /// binding is unobservable.
 #[inline(always)]
-fn before_change_hooks_quiet(
-    ctx: &crate::emacs_core::eval::Context,
+fn before_change_hooks_quiet<H: crate::emacs_core::edit_host::EditHost>(
+    host: &mut H,
     current_id: crate::buffer::BufferId,
 ) -> bool {
-    let first_change_due = ctx
-        .edit
+    let first_change_pending = host
+        .edit_and_vars()
+        .0
         .buffers
         .get(current_id)
-        .is_some_and(|buf| buf.modified_state_value().is_nil())
-        && hook_symbol_value_truthy(ctx, first_change_hook_symbol());
+        .is_some_and(|buf| buf.modified_state_value().is_nil());
+    let first_change_due =
+        first_change_pending && hook_symbol_value_truthy(host, first_change_hook_symbol());
     !first_change_due
-        && !hook_symbol_value_truthy(ctx, before_change_functions_symbol())
-        && !buffer_has_overlays(ctx, current_id)
+        && !hook_symbol_value_truthy(host, before_change_functions_symbol())
+        && !buffer_has_overlays(host, current_id)
 }
 
 /// Run callbacks only. Preparation owns mark deactivation so the inhibited
 /// path and the callback-free fast path cannot accidentally have the same
 /// selection side effects (GNU insdel.c: prepare_to_modify_buffer_1).
-fn run_before_change_hooks(
-    ctx: &mut crate::emacs_core::eval::Context,
+fn run_before_change_hooks<H: crate::emacs_core::edit_host::EditHost>(
+    host: &mut H,
     current_id: crate::buffer::BufferId,
     range: TextEditRange,
 ) -> Result<(), Flow> {
@@ -632,45 +734,42 @@ fn run_before_change_hooks(
     let lisp_end = range.char_end().to_lisp().as_i64();
 
     let hook_args = vec![Value::fixnum(lisp_beg), Value::fixnum(lisp_end)];
-    let run_first_change = ctx
-        .edit
+    let run_first_change = host
+        .edit_and_vars()
+        .0
         .buffers
         .get(current_id)
         .is_some_and(|buf| buf.modified_state_value().is_nil());
-    let specpdl_count = EditHost::specpdl_index(ctx);
-    EditHost::try_specbind_or_unwind_to(
-        ctx,
-        specpdl_count,
-        inhibit_modification_hooks_symbol(),
-        Value::T,
-    )?;
+    let specpdl_count = host.specpdl_index();
+    host.try_specbind_or_unwind_to(specpdl_count, inhibit_modification_hooks_symbol(), Value::T)?;
     let result = (|| -> Result<(), Flow> {
         if run_first_change {
-            run_named_hook_without_reset(ctx, first_change_hook_symbol(), &[])?;
+            run_named_hook_without_reset(host, first_change_hook_symbol(), &[])?;
         }
-        run_named_hook_reset_on_error(ctx, before_change_functions_symbol(), &hook_args)?;
+        run_named_hook_reset_on_error(host, before_change_functions_symbol(), &hook_args)?;
 
-        ctx.edit.last_overlay_modification_hooks = collect_overlay_change_hooks(
-            ctx,
+        host.edit_and_vars().0.last_overlay_modification_hooks = collect_overlay_change_hooks(
+            host,
             byte_range.start().get(),
             byte_range.end().get(),
             byte_range.is_empty(),
         );
-        run_recorded_overlay_change_hooks(ctx, Value::NIL, lisp_beg, lisp_end, None)?;
+        run_recorded_overlay_change_hooks(host, Value::NIL, lisp_beg, lisp_end, None)?;
 
         Ok(())
     })();
-    EditHost::unbind_to_with_result(ctx, specpdl_count, result.map(|()| Value::NIL)).map(|_| ())
+    host.unbind_to_with_result(specpdl_count, result.map(|()| Value::NIL))
+        .map(|_| ())
 }
 
 /// Run the before-change protocol for an edit whose range the caller will
 /// not re-measure: an insertion, or a change whose callbacks cannot move it.
-pub(crate) fn signal_before_text_change(
-    ctx: &mut crate::emacs_core::eval::Context,
+pub(crate) fn signal_before_text_change<H: crate::emacs_core::edit_host::EditHost>(
+    host: &mut H,
     change: TextChange,
 ) -> Result<(), Flow> {
     prepare_buffer_change(
-        ctx,
+        host,
         change.old_range(),
         BufferChangeKind::Characters,
         ChangeStartPolicy::Fixed,
@@ -693,21 +792,24 @@ pub(crate) fn signal_before_text_change(
 /// practice fully materialize -- the inserted text before it could signal.
 /// This signature removes that obligation from the type, so the pre-hook
 /// snapshot cannot be reintroduced by accident.  See DIVERGENCES.md 164.
-pub(crate) fn signal_before_insertion_at_emacs_byte_pos(
-    ctx: &mut crate::emacs_core::eval::Context,
+pub(crate) fn signal_before_insertion_at_emacs_byte_pos<
+    H: crate::emacs_core::edit_host::EditHost,
+>(
+    host: &mut H,
     byte_pos: EmacsBytePos,
 ) -> Result<(), Flow> {
     // Insertions happen at point, whose character position the buffer keeps
     // beside its byte position, so this is not a text walk.
-    let char_pos = ctx
-        .edit
+    let char_pos = host
+        .edit_and_vars()
+        .0
         .buffers
         .current_buffer()
         .map_or(crate::buffer::CharPos0::ZERO, |buf| {
             buf.emacs_byte_pos_to_char_pos_clamped(byte_pos)
         });
     prepare_buffer_change(
-        ctx,
+        host,
         TextEditRange::empty_at(byte_pos, char_pos),
         BufferChangeKind::Characters,
         ChangeStartPolicy::Fixed,
@@ -718,12 +820,12 @@ pub(crate) fn signal_before_insertion_at_emacs_byte_pos(
 /// Run GNU's modification-hook protocol for a text-property-only change.
 /// Tree-sitter consumes characters, not properties, so this deliberately does
 /// not create an incremental parser edit.
-pub(crate) fn signal_before_property_change(
-    ctx: &mut crate::emacs_core::eval::Context,
+pub(crate) fn signal_before_property_change<H: crate::emacs_core::edit_host::EditHost>(
+    host: &mut H,
     change: TextChange,
 ) -> Result<(), Flow> {
     prepare_buffer_change(
-        ctx,
+        host,
         change.old_range(),
         BufferChangeKind::PropertiesOnly,
         ChangeStartPolicy::Fixed,
@@ -732,8 +834,8 @@ pub(crate) fn signal_before_property_change(
 }
 
 #[inline(always)]
-fn deactivate_mark_after_preparing_change(
-    ctx: &mut crate::emacs_core::eval::Context,
+fn deactivate_mark_after_preparing_change<H: crate::emacs_core::edit_host::EditHost>(
+    host: &mut H,
 ) -> Result<(), Flow> {
     // GNU `prepare_to_modify_buffer_1` (insdel.c), with hooks enabled, runs
     // `Fset (Qdeactivate_mark, Qt)` after signaling before-change. Because
@@ -746,34 +848,39 @@ fn deactivate_mark_after_preparing_change(
     // general store walks the forwarding / localization / specpdl machinery and
     // was the single most expensive step of a text-property put.
     let sym = deactivate_mark_symbol();
-    if deactivate_mark_set_is_noop(ctx, sym) {
+    if deactivate_mark_set_is_noop(host, sym) {
         return Ok(());
     }
     // `Fset` notifies variable watchers, and a watcher's signal aborts the
     // modification before any text changes (insdel.c:2189 runs before the
     // caller's mutation).
-    super::builtins::symbols::builtin_set_2(ctx, Value::from_sym_id(sym), Value::T).map(|_| ())
+    host.set_variable(Value::from_sym_id(sym), Value::T)
+        .map(|_| ())
 }
 
 /// True when `(set 'deactivate-mark t)` would change no binding and notify no
 /// watcher: the symbol is untrapped and the binding the store would hit — the
 /// current buffer's local one for a localized symbol, the value cell otherwise —
 /// already holds `t`.
-fn deactivate_mark_set_is_noop(
-    ctx: &crate::emacs_core::eval::Context,
+fn deactivate_mark_set_is_noop<H: crate::emacs_core::edit_host::EditHost>(
+    host: &mut H,
     sym: crate::emacs_core::intern::SymId,
 ) -> bool {
     use crate::emacs_core::symbol::{SymbolRedirect, SymbolTrappedWrite};
-    let Some(symbol) = ctx.obarray.get_by_id(sym) else {
-        return false;
+    let (trapped_write, redirect) = {
+        let Some(symbol) = host.edit_and_vars().1.obarray().get_by_id(sym) else {
+            return false;
+        };
+        (symbol.trapped_write(), symbol.redirect())
     };
-    if symbol.trapped_write() != SymbolTrappedWrite::Untrapped {
+    if trapped_write != SymbolTrappedWrite::Untrapped {
         return false;
     }
-    match symbol.redirect() {
-        SymbolRedirect::Plainval => ctx.variable_value(sym) == Some(Value::T),
+    match redirect {
+        SymbolRedirect::Plainval => host.variable_value(sym) == Some(Value::T),
         SymbolRedirect::Localized => {
-            ctx.edit
+            host.edit_and_vars()
+                .0
                 .buffers
                 .current_buffer()
                 .and_then(|buf| buf.get_buffer_local_binding_by_sym_id_gated(sym, true))
@@ -789,21 +896,21 @@ fn deactivate_mark_set_is_noop(
 ///
 /// `byte_range` is a 0-based Emacs-byte range in the new buffer state.
 /// `old_len` is the character length of the old text that was replaced.
-pub(crate) fn signal_after_change(
-    ctx: &mut crate::emacs_core::eval::Context,
+pub(crate) fn signal_after_change<H: crate::emacs_core::edit_host::EditHost>(
+    host: &mut H,
     byte_range: EmacsByteRange,
     old_len: CharLen,
 ) -> Result<(), Flow> {
-    signal_after_change_with_kind(ctx, byte_range, old_len, BufferChangeKind::Characters)
+    signal_after_change_with_kind(host, byte_range, old_len, BufferChangeKind::Characters)
 }
 
-fn signal_after_change_with_kind(
-    ctx: &mut crate::emacs_core::eval::Context,
+fn signal_after_change_with_kind<H: crate::emacs_core::edit_host::EditHost>(
+    host: &mut H,
     byte_range: EmacsByteRange,
     old_len: CharLen,
     kind: BufferChangeKind,
 ) -> Result<(), Flow> {
-    let Some(current_id) = ctx.edit.buffers.current_buffer_id() else {
+    let Some(current_id) = host.edit_and_vars().0.buffers.current_buffer_id() else {
         return Ok(());
     };
 
@@ -816,22 +923,22 @@ fn signal_after_change_with_kind(
     // of thousands per fontification pass) leaves every position where it
     // was, so it has no caches to refresh.
     if kind == BufferChangeKind::Characters {
-        ctx.sync_window_positions(current_id);
+        host.sync_window_positions(current_id);
     }
 
     // GNU `adjust_overlays_for_delete_in_buffer` queries only the deletion
     // boundary after shifting the interval tree.  Do the category-resolving
     // evaporation pass at that same boundary; enumerating the whole buffer
     // here makes every localized deletion O(number of overlays).
-    if old_len.get() > 0 && buffer_has_overlays(ctx, current_id) {
-        evaporate_emptied_overlays_at(ctx, current_id, byte_range.start());
+    if old_len.get() > 0 && buffer_has_overlays(host, current_id) {
+        evaporate_emptied_overlays_at(host, current_id, byte_range.start());
     }
 
     if kind == BufferChangeKind::Characters {
-        finish_treesit_after_buffer_change(ctx, current_id, byte_range.start(), byte_range.end());
+        finish_treesit_after_buffer_change(host, current_id, byte_range.start(), byte_range.end());
     }
 
-    if inhibit_modification_hooks(ctx) {
+    if inhibit_modification_hooks(host) {
         return Ok(());
     }
 
@@ -843,63 +950,76 @@ fn signal_after_change_with_kind(
     //   - the current buffer has no overlays.
     // Mirrored here so wrappers like `combine-after-change-calls` coalesce
     // multiple edits into a single after-change call as in GNU Emacs.
-    if combine_after_change_calls_active(ctx) && !buffer_has_overlays(ctx, current_id) {
+    if combine_after_change_calls_active(host) && !buffer_has_overlays(host, current_id) {
         // If the pending deferred list belongs to a different buffer, GNU
         // flushes it via `Fcombine_after_change_execute` before recording
         // the new change.
-        let needs_flush = !ctx.edit.combine_after_change_list.is_empty()
-            && ctx.edit.combine_after_change_buffer != Some(current_id);
+        let needs_flush = {
+            let (edit, _vars) = host.edit_and_vars();
+            !edit.combine_after_change_list.is_empty()
+                && edit.combine_after_change_buffer != Some(current_id)
+        };
         if needs_flush {
-            execute_combined_after_change(ctx)?;
+            execute_combined_after_change(host)?;
         }
 
-        if let Some(buf) = ctx.edit.buffers.get(current_id) {
-            let beg_char = buf.emacs_byte_pos_to_char_pos_clamped(byte_range.start());
-            let end_char = buf.emacs_byte_pos_to_char_pos_clamped(byte_range.end());
-            let beg_char = beg_char.get() as i64;
-            let end_char = end_char.get() as i64;
-            let charpos = beg_char + 1; // 1-based, like GNU's PT/charpos.
-            let lenins = end_char - beg_char;
-            let lendel = old_len.get() as i64;
-            let z = buf.z_lisp_char_pos().as_i64(); // 1-based Z.
-            let beg_field = charpos - 1; // charpos - BEG
-            let end_field = z - (charpos - lendel + lenins);
-            let change = lenins - lendel;
-            ctx.edit
+        let deferred_fields = {
+            let (edit, _vars) = host.edit_and_vars();
+            edit.buffers.get(current_id).map(|buf| {
+                let beg_char = buf.emacs_byte_pos_to_char_pos_clamped(byte_range.start());
+                let end_char = buf.emacs_byte_pos_to_char_pos_clamped(byte_range.end());
+                let beg_char = beg_char.get() as i64;
+                let end_char = end_char.get() as i64;
+                let charpos = beg_char + 1; // 1-based, like GNU's PT/charpos.
+                let lenins = end_char - beg_char;
+                let lendel = old_len.get() as i64;
+                let z = buf.z_lisp_char_pos().as_i64(); // 1-based Z.
+                let beg_field = charpos - 1; // charpos - BEG
+                let end_field = z - (charpos - lendel + lenins);
+                let change = lenins - lendel;
+                (beg_field, end_field, change)
+            })
+        };
+        if let Some((beg_field, end_field, change)) = deferred_fields {
+            host.edit_and_vars()
+                .0
                 .combine_after_change_list
                 .push((beg_field, end_field, change));
-            ctx.edit.combine_after_change_buffer = Some(current_id);
+            host.edit_and_vars().0.combine_after_change_buffer = Some(current_id);
         }
         return Ok(());
     }
 
     // Not deferring: any pending coalesced changes must run first so their
     // hooks observe the buffer state from before this new edit's after-pass.
-    if !ctx.edit.combine_after_change_list.is_empty() {
-        execute_combined_after_change(ctx)?;
+    if !host.edit_and_vars().0.combine_after_change_list.is_empty() {
+        execute_combined_after_change(host)?;
     }
 
     // Quiet fast path (twin of the one in `signal_before_change_hooks`):
     // with `after-change-functions` nil, no recorded or live overlay hooks,
     // no interval insert hooks, and no text-property intervals to report,
     // nothing can run under the bind.
-    if !hook_symbol_value_truthy(ctx, after_change_functions_symbol())
-        && ctx.edit.last_overlay_modification_hooks.is_empty()
-        && ctx.edit.interval_insert_behind_hooks.is_nil()
-        && ctx.edit.interval_insert_in_front_hooks.is_nil()
-        && !buffer_has_overlays(ctx, current_id)
-        && ctx
-            .edit
-            .buffers
-            .get(current_id)
-            .is_some_and(|buf| buf.text_props_is_empty())
+    let edit_state_quiet = {
+        let (edit, _vars) = host.edit_and_vars();
+        edit.last_overlay_modification_hooks.is_empty()
+            && edit.interval_insert_behind_hooks.is_nil()
+            && edit.interval_insert_in_front_hooks.is_nil()
+            && edit
+                .buffers
+                .get(current_id)
+                .is_some_and(|buf| buf.text_props_is_empty())
+    };
+    if !hook_symbol_value_truthy(host, after_change_functions_symbol())
+        && edit_state_quiet
+        && !buffer_has_overlays(host, current_id)
     {
         return Ok(());
     }
 
     // Convert byte positions to 1-based character positions.
     let (lisp_beg, lisp_end, lisp_old_len) = {
-        let Some(buf) = ctx.edit.buffers.get(current_id) else {
+        let Some(buf) = host.edit_and_vars().0.buffers.get(current_id) else {
             return Ok(());
         };
         let beg_char = buf
@@ -916,10 +1036,11 @@ fn signal_after_change_with_kind(
         Value::fixnum(lisp_end),
         Value::fixnum(lisp_old_len),
     ];
-    let saved_interval_insert_behind_hooks = ctx.edit.interval_insert_behind_hooks;
-    let saved_interval_insert_in_front_hooks = ctx.edit.interval_insert_in_front_hooks;
+    let saved_interval_insert_behind_hooks = host.edit_and_vars().0.interval_insert_behind_hooks;
+    let saved_interval_insert_in_front_hooks =
+        host.edit_and_vars().0.interval_insert_in_front_hooks;
 
-    let specpdl_count = EditHost::specpdl_index(ctx);
+    let specpdl_count = host.specpdl_index();
     // The saved hook lists live only in the Rust locals above while
     // after-change-functions run arbitrary Lisp; if a hook clears the
     // context fields (their previous root), a GC frees the lists before
@@ -927,26 +1048,22 @@ fn signal_after_change_with_kind(
     // so unbind_to(specpdl_count) pops them with the specbind. Roots are
     // pushed BEFORE the specbind at one count — the order
     // PEER-RULING-STAGE3 C3 pins ("that order is kept exactly").
-    EditHost::push_specpdl_root(ctx, saved_interval_insert_behind_hooks);
-    EditHost::push_specpdl_root(ctx, saved_interval_insert_in_front_hooks);
-    EditHost::try_specbind_or_unwind_to(
-        ctx,
-        specpdl_count,
-        inhibit_modification_hooks_symbol(),
-        Value::T,
-    )?;
+    host.push_specpdl_root(saved_interval_insert_behind_hooks);
+    host.push_specpdl_root(saved_interval_insert_in_front_hooks);
+    host.try_specbind_or_unwind_to(specpdl_count, inhibit_modification_hooks_symbol(), Value::T)?;
     let result = (|| -> Result<(), Flow> {
-        run_named_hook_reset_on_error(ctx, after_change_functions_symbol(), &hook_args)?;
+        run_named_hook_reset_on_error(host, after_change_functions_symbol(), &hook_args)?;
 
-        ctx.edit.interval_insert_behind_hooks = saved_interval_insert_behind_hooks;
-        ctx.edit.interval_insert_in_front_hooks = saved_interval_insert_in_front_hooks;
+        host.edit_and_vars().0.interval_insert_behind_hooks = saved_interval_insert_behind_hooks;
+        host.edit_and_vars().0.interval_insert_in_front_hooks =
+            saved_interval_insert_in_front_hooks;
 
         // --- Run overlay hooks ---
         // insert-in-front-hooks: overlays whose start == beg
         // insert-behind-hooks:   overlays whose end == beg (before insertion point)
         // modification-hooks:    overlays covering [beg, end)
         run_overlay_after_change_hooks(
-            ctx,
+            host,
             byte_range.start().get(),
             byte_range.end().get(),
             lisp_beg,
@@ -955,20 +1072,21 @@ fn signal_after_change_with_kind(
         )?;
 
         if lisp_old_len == 0 {
-            crate::emacs_core::textprop::report_interval_modification(ctx, lisp_beg, lisp_end)?;
+            crate::emacs_core::textprop::report_interval_modification(host, lisp_beg, lisp_end)?;
         }
 
         Ok(())
     })();
-    EditHost::unbind_to_with_result(ctx, specpdl_count, result.map(|()| Value::NIL)).map(|_| ())
+    host.unbind_to_with_result(specpdl_count, result.map(|()| Value::NIL))
+        .map(|_| ())
 }
 
-pub(crate) fn signal_after_text_change(
-    ctx: &mut crate::emacs_core::eval::Context,
+pub(crate) fn signal_after_text_change<H: crate::emacs_core::edit_host::EditHost>(
+    host: &mut H,
     change: TextChange,
 ) -> Result<(), Flow> {
     signal_after_change_with_kind(
-        ctx,
+        host,
         change.after_byte_range(),
         change.old_char_len(),
         BufferChangeKind::Characters,
@@ -979,13 +1097,13 @@ pub(crate) fn signal_after_text_change(
 /// for callers whose positions were computed before Lisp ran: the inserted
 /// range is measured in the live text (clamped to its end), so a stale
 /// position can neither reach past the text nor split a character.
-pub(crate) fn signal_after_change_chars(
-    ctx: &mut crate::emacs_core::eval::Context,
+pub(crate) fn signal_after_change_chars<H: crate::emacs_core::edit_host::EditHost>(
+    host: &mut H,
     start: crate::buffer::CharPos0,
     deleted: CharLen,
     inserted: CharLen,
 ) -> Result<(), Flow> {
-    let Some(after) = ctx.edit.buffers.current_buffer().map(|buf| {
+    let Some(after) = host.edit_and_vars().0.buffers.current_buffer().map(|buf| {
         live_edit_range_for_chars(
             buf,
             crate::buffer::CharRange::from_start_len(start, inserted),
@@ -994,19 +1112,19 @@ pub(crate) fn signal_after_change_chars(
         return Ok(());
     };
     signal_after_change_with_kind(
-        ctx,
+        host,
         after.byte_range(),
         deleted,
         BufferChangeKind::Characters,
     )
 }
 
-pub(crate) fn signal_after_property_change(
-    ctx: &mut crate::emacs_core::eval::Context,
+pub(crate) fn signal_after_property_change<H: crate::emacs_core::edit_host::EditHost>(
+    host: &mut H,
     change: TextChange,
 ) -> Result<(), Flow> {
     signal_after_change_with_kind(
-        ctx,
+        host,
         change.after_byte_range(),
         change.old_char_len(),
         BufferChangeKind::PropertiesOnly,
@@ -1029,8 +1147,10 @@ pub(crate) fn signal_after_property_change(
 /// like, at the `insert` door: carry the `Value`, root it, and take the borrow
 /// past the safepoint (`PendingInsert` in `emacs_core/editing/buffer/mod.rs`). Anything
 /// added here that wants to pass a heap borrow must do that instead.
-pub(crate) fn insert_lisp_string_with_change_hooks_in_buffer(
-    ctx: &mut crate::emacs_core::eval::Context,
+pub(crate) fn insert_lisp_string_with_change_hooks_in_buffer<
+    H: crate::emacs_core::edit_host::EditHost,
+>(
+    host: &mut H,
     buffer_id: crate::buffer::BufferId,
     text: &LispString,
 ) -> Result<(), Flow> {
@@ -1038,35 +1158,37 @@ pub(crate) fn insert_lisp_string_with_change_hooks_in_buffer(
         return Ok(());
     }
 
-    let saved_current = ctx.edit.buffers.current_buffer_id();
+    let saved_current = host.edit_and_vars().0.buffers.current_buffer_id();
     let result = (|| {
-        ctx.set_current_buffer_unrecorded(buffer_id)?;
-        let insert_pos = ctx
-            .edit
+        host.set_current_buffer_unrecorded(buffer_id)?;
+        let insert_pos = host
+            .edit_and_vars()
+            .0
             .buffers
             .get(buffer_id)
             .map(|buffer| buffer.point_emacs_byte_pos())
             .ok_or_else(|| signal("error", vec![Value::string("Selecting deleted buffer")]))?;
         let change = text_change_for_empty_insertion_at_emacs_byte_pos(
-            &ctx.edit.buffers,
+            &host.edit_and_vars().0.buffers,
             buffer_id,
             insert_pos,
             lisp_string_text_extent(text),
         )?;
 
-        signal_before_text_change(ctx, change)?;
+        signal_before_text_change(host, change)?;
         // A before-change function may select another buffer. The mutation and
         // after-change notification still belong to the declared edit target.
-        ctx.set_current_buffer_unrecorded(buffer_id)?;
-        ctx.edit
+        host.set_current_buffer_unrecorded(buffer_id)?;
+        host.edit_and_vars()
+            .0
             .buffers
             .insert_lisp_string_into_buffer(buffer_id, text)
             .ok_or_else(|| signal("error", vec![Value::string("Selecting deleted buffer")]))?;
-        signal_after_text_change(ctx, change)
+        signal_after_text_change(host, change)
     })();
 
     if let Some(saved) = saved_current {
-        ctx.restore_current_buffer_if_live(saved);
+        host.restore_current_buffer_if_live(saved);
     }
     result
 }
@@ -1077,13 +1199,13 @@ pub(crate) fn insert_lisp_string_with_change_hooks_in_buffer(
 /// through the overlay's `category` symbol (GNU `overlay-get` semantics), so a
 /// category-inherited evaporate flag is honored. Mirrors GNU deleting empty
 /// evaporate overlays during a buffer deletion.
-fn evaporate_emptied_overlays_at(
-    ctx: &mut crate::emacs_core::eval::Context,
+fn evaporate_emptied_overlays_at<H: crate::emacs_core::edit_host::EditHost>(
+    host: &mut H,
     buffer_id: crate::buffer::BufferId,
     position: EmacsBytePos,
 ) {
     let empty: Vec<Value> = {
-        let Some(buf) = ctx.edit.buffers.get(buffer_id) else {
+        let Some(buf) = host.edit_and_vars().0.buffers.get(buffer_id) else {
             return;
         };
         buf.overlays
@@ -1098,9 +1220,10 @@ fn evaporate_emptied_overlays_at(
     let to_delete: Vec<Value> = empty
         .into_iter()
         .filter(|overlay| {
+            let (edit, vars) = host.edit_and_vars();
             crate::emacs_core::textprop::lookup_overlay_property(
-                ctx.variables(),
-                &ctx.edit.buffers,
+                vars,
+                &edit.buffers,
                 *overlay,
                 Value::from_sym_id(evaporate_symbol()),
             )
@@ -1108,21 +1231,24 @@ fn evaporate_emptied_overlays_at(
         })
         .collect();
     for overlay in to_delete {
-        ctx.edit.buffers.delete_buffer_overlay(buffer_id, overlay);
+        host.edit_and_vars()
+            .0
+            .buffers
+            .delete_buffer_overlay(buffer_id, overlay);
     }
 }
 
-fn finish_treesit_after_buffer_change(
-    ctx: &mut crate::emacs_core::eval::Context,
+fn finish_treesit_after_buffer_change<H: crate::emacs_core::edit_host::EditHost>(
+    host: &mut H,
     buffer_id: crate::buffer::BufferId,
     beg: EmacsBytePos,
     end: EmacsBytePos,
 ) {
-    ctx.treesit.note_buffer_change(buffer_id, beg);
-    if ctx.treesit.has_pending_edit(buffer_id)
-        && let Some(buf) = ctx.edit.buffers.get(buffer_id)
-    {
-        ctx.treesit.finish_buffer_edit(buffer_id, buf, end);
+    host.treesit_note_buffer_change(buffer_id, beg);
+    // The liveness guard lives inside the host method: the pending edit is
+    // dropped exactly when the buffer is gone, as before.
+    if host.treesit_has_pending_edit(buffer_id) {
+        host.treesit_finish_buffer_edit(buffer_id, end);
     }
 }
 
@@ -1180,11 +1306,12 @@ fn combine_after_change_calls_active<H: crate::emacs_core::edit_host::EditHost>(
     false
 }
 
-fn buffer_has_overlays(
-    ctx: &crate::emacs_core::eval::Context,
+fn buffer_has_overlays<H: crate::emacs_core::edit_host::EditHost>(
+    host: &mut H,
     buffer_id: crate::buffer::BufferId,
 ) -> bool {
-    ctx.edit
+    host.edit_and_vars()
+        .0
         .buffers
         .get(buffer_id)
         .is_some_and(|buf| !buf.overlays.is_empty())
@@ -1193,75 +1320,77 @@ fn buffer_has_overlays(
 /// GNU `Fcombine_after_change_execute` (insdel.c:2475). Merges the deferred
 /// per-change records into a single (begpos, lendel, lenins) triple and
 /// dispatches one `signal_after_change` call.
-pub(crate) fn execute_combined_after_change(
-    ctx: &mut crate::emacs_core::eval::Context,
+pub(crate) fn execute_combined_after_change<H: crate::emacs_core::edit_host::EditHost>(
+    host: &mut H,
 ) -> Result<(), Flow> {
-    if ctx.edit.combine_after_change_list.is_empty() {
+    if host.edit_and_vars().0.combine_after_change_list.is_empty() {
         return Ok(());
     }
 
-    let Some(target_id) = ctx.edit.combine_after_change_buffer else {
-        ctx.edit.combine_after_change_list.clear();
+    let Some(target_id) = host.edit_and_vars().0.combine_after_change_buffer else {
+        host.edit_and_vars().0.combine_after_change_list.clear();
         return Ok(());
     };
 
-    if ctx.edit.buffers.get(target_id).is_none() {
-        ctx.edit.combine_after_change_list.clear();
-        ctx.edit.combine_after_change_buffer = None;
+    if host.edit_and_vars().0.buffers.get(target_id).is_none() {
+        host.edit_and_vars().0.combine_after_change_list.clear();
+        host.edit_and_vars().0.combine_after_change_buffer = None;
         return Ok(());
     }
 
     // GNU temporarily switches to the recording buffer.
-    let saved_buffer = ctx.edit.buffers.current_buffer_id();
+    let saved_buffer = host.edit_and_vars().0.buffers.current_buffer_id();
     if saved_buffer != Some(target_id) {
-        let _ = ctx.set_current_buffer_unrecorded(target_id);
+        let _ = host.set_current_buffer_unrecorded(target_id);
     }
 
-    let (begpos, endpos, change_total, list_len) = {
-        let buf = match ctx.edit.buffers.get(target_id) {
-            Some(b) => b,
-            None => {
-                ctx.edit.combine_after_change_list.clear();
-                ctx.edit.combine_after_change_buffer = None;
-                if let Some(prev) = saved_buffer {
-                    let _ = ctx.set_current_buffer_unrecorded(prev);
+    let merged = {
+        let (edit, _vars) = host.edit_and_vars();
+        match edit.buffers.get(target_id) {
+            Some(buf) => {
+                let z = buf.z_lisp_char_pos().as_i64();
+                let init = z - 1;
+                let mut beg = init;
+                let mut end = init;
+                let mut change: i64 = 0;
+                for (thisbeg, thisend, thischange) in &edit.combine_after_change_list {
+                    change += *thischange;
+                    if *thisbeg < beg {
+                        beg = *thisbeg;
+                    }
+                    if *thisend < end {
+                        end = *thisend;
+                    }
                 }
-                return Ok(());
+                Some((
+                    1 + beg,
+                    z - end,
+                    change,
+                    edit.combine_after_change_list.len(),
+                ))
             }
-        };
-        let z = buf.z_lisp_char_pos().as_i64();
-        let init = z - 1;
-        let mut beg = init;
-        let mut end = init;
-        let mut change: i64 = 0;
-        for (thisbeg, thisend, thischange) in &ctx.edit.combine_after_change_list {
-            change += *thischange;
-            if *thisbeg < beg {
-                beg = *thisbeg;
-            }
-            if *thisend < end {
-                end = *thisend;
-            }
+            None => None,
         }
-        let begpos = 1 + beg;
-        let endpos = z - end;
-        (
-            begpos,
-            endpos,
-            change,
-            ctx.edit.combine_after_change_list.len(),
-        )
+    };
+    let Some((begpos, endpos, change_total, list_len)) = merged else {
+        host.edit_and_vars().0.combine_after_change_list.clear();
+        host.edit_and_vars().0.combine_after_change_buffer = None;
+        if let Some(prev) = saved_buffer {
+            let _ = host.set_current_buffer_unrecorded(prev);
+        }
+        return Ok(());
     };
 
-    ctx.edit.combine_after_change_list.clear();
-    ctx.edit.combine_after_change_buffer = None;
+    host.edit_and_vars().0.combine_after_change_list.clear();
+    host.edit_and_vars().0.combine_after_change_buffer = None;
 
     let _ = list_len;
 
     // Convert merged 1-based char range back into byte positions for our
     // signal_after_change typed byte range.
     let byte_range = {
-        let buf = ctx.edit.buffers.get(target_id).expect("target buffer");
+        let (edit, _vars) = host.edit_and_vars();
+        let buf = edit.buffers.get(target_id).expect("target buffer");
         EmacsByteRange::new(
             buf.char_pos_to_emacs_byte_pos_clamped(LispCharPos1::new(begpos).to_char_pos()),
             buf.char_pos_to_emacs_byte_pos_clamped(LispCharPos1::new(endpos).to_char_pos()),
@@ -1269,12 +1398,12 @@ pub(crate) fn execute_combined_after_change(
     };
     let old_len = CharLen::new((endpos - begpos - change_total).max(0) as usize);
 
-    let result = signal_after_change(ctx, byte_range, old_len);
+    let result = signal_after_change(host, byte_range, old_len);
 
     if let Some(prev) = saved_buffer
         && prev != target_id
     {
-        let _ = ctx.set_current_buffer_unrecorded(prev);
+        let _ = host.set_current_buffer_unrecorded(prev);
     }
     result
 }
@@ -1287,16 +1416,13 @@ pub(crate) fn execute_combined_after_change(
 ///
 /// `insertion` mirrors GNU's local: true when this change is a pure
 /// insertion (start == end before, or old_len == 0 after).
-fn collect_overlay_change_hooks(
-    ctx: &crate::emacs_core::eval::Context,
+fn collect_overlay_change_hooks<H: crate::emacs_core::edit_host::EditHost>(
+    host: &mut H,
     beg: usize,
     end: usize,
     insertion: bool,
 ) -> Vec<OverlayModificationHook> {
-    let Some(current_id) = ctx.edit.buffers.current_buffer_id() else {
-        return Vec::new();
-    };
-    let Some(buf) = ctx.edit.buffers.get(current_id) else {
+    let Some(current_id) = host.edit_and_vars().0.buffers.current_buffer_id() else {
         return Vec::new();
     };
 
@@ -1304,36 +1430,41 @@ fn collect_overlay_change_hooks(
     // overlays whose endpoints touch the insertion point are included.
     let search_beg = if insertion && beg > 0 { beg - 1 } else { beg };
     let search_end = if insertion { end + 1 } else { end.max(beg) };
-    let overlay_ids = buf
-        .overlays
-        .overlays_in_emacs_byte_range(EmacsByteRange::new(
-            EmacsBytePos::new(search_beg),
-            EmacsBytePos::new(search_end),
-        ));
+    // Collect the overlay ids and endpoints in one edit phase, so the
+    // category-resolving property reads below can open their own phases.
+    let overlay_ids: Vec<(Value, EmacsBytePos, EmacsBytePos)> = {
+        let Some(buf) = host.edit_and_vars().0.buffers.get(current_id) else {
+            return Vec::new();
+        };
+        buf.overlays
+            .overlays_in_emacs_byte_range(EmacsByteRange::new(
+                EmacsBytePos::new(search_beg),
+                EmacsBytePos::new(search_end),
+            ))
+            .into_iter()
+            .filter_map(|ov_id| {
+                let start = buf.overlays.overlay_start_emacs_byte_pos(ov_id)?;
+                let end = buf.overlays.overlay_end_emacs_byte_pos(ov_id)?;
+                Some((ov_id, start, end))
+            })
+            .collect()
+    };
     let beg_pos = EmacsBytePos::new(beg);
     let end_pos = EmacsBytePos::new(end);
 
     let mut result = Vec::new();
-    for ov_id in overlay_ids {
-        let ov_start = match buf.overlays.overlay_start_emacs_byte_pos(ov_id) {
-            Some(s) => s,
-            None => continue,
-        };
-        let ov_end = match buf.overlays.overlay_end_emacs_byte_pos(ov_id) {
-            Some(e) => e,
-            None => continue,
-        };
-
+    for (ov_id, ov_start, ov_end) in overlay_ids {
         // GNU `report_overlay_modification` reads these hook lists with
         // `Foverlay_get`, which resolves through `lookup_char_property` -- so a
         // `category' overlay property whose value is a symbol contributes the
         // symbol's `insert-in-front-hooks' / `insert-behind-hooks' /
         // `modification-hooks' property.  Use the same category-resolving
         // lookup here instead of a plain plist read.
-        let overlay_hook = |prop: &str| -> Option<Value> {
+        let mut overlay_hook = |prop: &str| -> Option<Value> {
+            let (edit, vars) = host.edit_and_vars();
             let value = crate::emacs_core::textprop::lookup_overlay_property(
-                ctx.variables(),
-                &ctx.edit.buffers,
+                vars,
+                &edit.buffers,
                 ov_id,
                 Value::symbol(prop),
             );
@@ -1376,8 +1507,8 @@ fn collect_overlay_change_hooks(
 /// Run overlay `insert-in-front-hooks`, `insert-behind-hooks`, and
 /// `modification-hooks` after a change.  Mirrors GNU
 /// `report_overlay_modification` (buffer.c:4119) for the AFTER phase.
-fn run_overlay_after_change_hooks(
-    ctx: &mut crate::emacs_core::eval::Context,
+fn run_overlay_after_change_hooks<H: crate::emacs_core::edit_host::EditHost>(
+    host: &mut H,
     beg: usize,
     end: usize,
     lisp_beg: i64,
@@ -1387,32 +1518,36 @@ fn run_overlay_after_change_hooks(
     let _ = (beg, end);
     // GNU passes `t` for AFTER in the after-change phase and replays the
     // hook-list/overlay pairs recorded by the before-change scan.
-    run_recorded_overlay_change_hooks(ctx, Value::T, lisp_beg, lisp_end, Some(lisp_old_len))
+    run_recorded_overlay_change_hooks(host, Value::T, lisp_beg, lisp_end, Some(lisp_old_len))
 }
 
-fn run_recorded_overlay_change_hooks(
-    ctx: &mut crate::emacs_core::eval::Context,
+fn run_recorded_overlay_change_hooks<H: crate::emacs_core::edit_host::EditHost>(
+    host: &mut H,
     after_flag: Value,
     lisp_beg: i64,
     lisp_end: i64,
     lisp_old_len: Option<i64>,
 ) -> Result<(), Flow> {
-    let hooks = ctx.edit.last_overlay_modification_hooks.clone();
+    let hooks = host
+        .edit_and_vars()
+        .0
+        .last_overlay_modification_hooks
+        .clone();
     if hooks.is_empty() {
         return Ok(());
     }
-    let roots = EditHost::save_specpdl_roots(ctx);
+    let roots = host.save_specpdl_roots();
     for hook in &hooks {
-        EditHost::push_specpdl_root(ctx, hook.hook_list);
-        EditHost::push_specpdl_root(ctx, hook.overlay);
+        host.push_specpdl_root(hook.hook_list);
+        host.push_specpdl_root(hook.overlay);
     }
     let apply_result = (|| -> Result<(), Flow> {
         for hook in &hooks {
-            if !overlay_belongs_to_current_buffer(ctx, hook.overlay) {
+            if !overlay_belongs_to_current_buffer(host, hook.overlay) {
                 continue;
             }
             call_overlay_hook_list(
-                ctx,
+                host,
                 hook.hook_list,
                 hook.overlay,
                 after_flag,
@@ -1423,15 +1558,15 @@ fn run_recorded_overlay_change_hooks(
         }
         Ok(())
     })();
-    EditHost::restore_specpdl_roots(ctx, roots);
+    host.restore_specpdl_roots(roots);
     apply_result
 }
 
-fn overlay_belongs_to_current_buffer(
-    ctx: &crate::emacs_core::eval::Context,
+fn overlay_belongs_to_current_buffer<H: crate::emacs_core::edit_host::EditHost>(
+    host: &mut H,
     overlay: Value,
 ) -> bool {
-    let Some(current_id) = ctx.edit.buffers.current_buffer_id() else {
+    let Some(current_id) = host.edit_and_vars().0.buffers.current_buffer_id() else {
         return false;
     };
     overlay
@@ -1612,7 +1747,7 @@ pub(crate) fn collect_insert_text(_name: &str, args: &[Value]) -> Result<Vec<u8>
                 continue;
             }
             ValueKind::Fixnum(_) => {
-                let code = super::builtins::expect_character_code(arg)? as u32;
+                let code = expect_character_code(arg)? as u32;
                 if code > emacs_char::MAX_CHAR {
                     return Err(signal(
                         LispCondition::WrongTypeArgument,
@@ -1635,20 +1770,9 @@ pub(crate) fn collect_insert_text(_name: &str, args: &[Value]) -> Result<Vec<u8>
     Ok(bytes)
 }
 
-/// `(insert-before-markers &rest ARGS)` — insert at point, advancing ALL
-/// markers at that position past the inserted text (regardless of their
-/// InsertionType).
-#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub(crate) fn builtin_insert_before_markers(
-    ctx: &mut crate::emacs_core::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    crate::emacs_core::builtins::builtin_insert_before_markers(ctx, args)
-}
-
 /// `(delete-char N &optional KILLFLAG)` — delete N characters forward.
-pub(crate) fn builtin_delete_char(
-    ctx: &mut crate::emacs_core::eval::Context,
+pub(crate) fn builtin_delete_char<H: crate::emacs_core::edit_host::EditHost>(
+    host: &mut H,
     args: &[Value],
 ) -> EvalResult {
     expect_min_args("delete-char", &args, 1)?;
@@ -1659,19 +1783,16 @@ pub(crate) fn builtin_delete_char(
     if n.unsigned_abs() < 2 {
         // GNU `Fdelete_char' calls this too, but does not intern its name
         // on the way: every single-character deletion runs this line.
-        ctx.apply(Value::from_sym_id(undo_auto_amalgamate_symbol()), vec![])?;
+        host.apply(Value::from_sym_id(undo_auto_amalgamate_symbol()), &[])?;
     }
     // GNU `Fdelete_char` (cmds.c:221) dispatches to `kill-forward-chars`
     // when KILLFLAG is non-nil, saving the deleted text in the kill ring.
     if killflag {
-        return ctx.apply(
-            Value::from_sym_id(kill_forward_chars_symbol()),
-            vec![args[0]],
-        );
+        return host.apply(Value::from_sym_id(kill_forward_chars_symbol()), &[args[0]]);
     }
-    if let Some(current_id) = ctx.edit.buffers.current_buffer_id() {
+    if let Some(current_id) = host.edit_and_vars().0.buffers.current_buffer_id() {
         let Some(byte_range) = ({
-            let Some(buf) = ctx.edit.buffers.get(current_id) else {
+            let Some(buf) = host.edit_and_vars().0.buffers.get(current_id) else {
                 return Ok(Value::NIL);
             };
             let accessible = buf.accessible_emacs_byte_region();
@@ -1714,42 +1835,51 @@ pub(crate) fn builtin_delete_char(
         };
         let start = byte_range.start().get();
         let end = byte_range.end().get();
-        let delete_range =
-            buffer_edit_range_for_byte_range_in_manager(&ctx.edit.buffers, current_id, byte_range)?;
-        crate::emacs_core::textprop::verify_text_read_only_in_state(
-            ctx.variables(),
-            &ctx.edit.buffers,
+        let delete_range = buffer_edit_range_for_byte_range_in_manager(
+            &host.edit_and_vars().0.buffers,
             current_id,
-            start,
-            end,
+            byte_range,
         )?;
+        {
+            let (edit, vars) = host.edit_and_vars();
+            crate::emacs_core::textprop::verify_text_read_only_in_state(
+                vars,
+                &edit.buffers,
+                current_id,
+                start,
+                end,
+            )?;
+        }
         // GNU `Fdelete_char` -> `del_range (PT, pos)` -> `del_range_1`.
-        delete_text_range(ctx, delete_range, DeletedText::Discard)?;
+        delete_text_range(host, delete_range, DeletedText::Discard)?;
     }
     Ok(Value::NIL)
 }
 
 /// `(delete-region START END)` — delete text in the accessible current buffer.
-pub(crate) fn builtin_delete_region(
-    ctx: &mut crate::emacs_core::eval::Context,
+pub(crate) fn builtin_delete_region<H: crate::emacs_core::edit_host::EditHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     crate::emacs_core::error::expect_args("delete-region", &args, 2)?;
     let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
-    builtin_delete_region_2(ctx, arg(0), arg(1))
+    builtin_delete_region_2(host, arg(0), arg(1))
 }
 /// `delete-region` as registered: fixed arity 2, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a2` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_delete_region_2(
-    ctx: &mut crate::emacs_core::eval::Context,
+pub(crate) fn builtin_delete_region_2<H: crate::emacs_core::edit_host::EditHost>(
+    host: &mut H,
     start: Value,
     end: Value,
 ) -> EvalResult {
     let args: [Value; 2] = [start, end];
     expect_args("delete-region", &args, 2)?;
-    let Some(byte_range) =
-        current_buffer_accessible_char_region_in_buffers(&ctx.edit.buffers, &args[0], &args[1])?
+    let Some(byte_range) = current_buffer_accessible_char_region_in_buffers(
+        &host.edit_and_vars().0.buffers,
+        &args[0],
+        &args[1],
+    )?
     else {
         return Ok(Value::NIL);
     };
@@ -1759,43 +1889,53 @@ pub(crate) fn builtin_delete_region_2(
         return Ok(Value::NIL);
     }
 
-    let Some(current_id) = ctx.edit.buffers.current_buffer_id() else {
+    let Some(current_id) = host.edit_and_vars().0.buffers.current_buffer_id() else {
         return Ok(Value::NIL);
     };
-    let read_only = ctx
-        .edit
-        .buffers
-        .get(current_id)
-        .is_some_and(|buf| buffer_read_only_active_in_state(ctx.variables(), &[], buf));
+    let read_only = {
+        let (edit, vars) = host.edit_and_vars();
+        edit.buffers
+            .get(current_id)
+            .is_some_and(|buf| buffer_read_only_active_in_state(vars, &[], buf))
+    };
     if read_only {
         return Err(signal(
             LispCondition::BufferReadOnly,
             vec![Value::make_buffer(current_id)],
         ));
     }
-    crate::emacs_core::textprop::verify_text_read_only_in_state(
-        ctx.variables(),
-        &ctx.edit.buffers,
-        current_id,
-        start_byte,
-        end_byte,
-    )?;
+    {
+        let (edit, vars) = host.edit_and_vars();
+        crate::emacs_core::textprop::verify_text_read_only_in_state(
+            vars,
+            &edit.buffers,
+            current_id,
+            start_byte,
+            end_byte,
+        )?;
+    }
 
-    let delete_range =
-        buffer_edit_range_for_byte_range_in_manager(&ctx.edit.buffers, current_id, byte_range)?;
+    let delete_range = buffer_edit_range_for_byte_range_in_manager(
+        &host.edit_and_vars().0.buffers,
+        current_id,
+        byte_range,
+    )?;
     // GNU `Fdelete_region` -> `del_range` -> `del_range_1`.
-    delete_text_range(ctx, delete_range, DeletedText::Discard)?;
+    delete_text_range(host, delete_range, DeletedText::Discard)?;
     Ok(Value::NIL)
 }
 
 /// `(delete-and-extract-region START END)` — delete text and return it.
-pub(crate) fn builtin_delete_and_extract_region(
-    ctx: &mut crate::emacs_core::eval::Context,
+pub(crate) fn builtin_delete_and_extract_region<H: crate::emacs_core::edit_host::EditHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("delete-and-extract-region", &args, 2)?;
-    let Some(byte_range) =
-        current_buffer_accessible_char_region_in_buffers(&ctx.edit.buffers, &args[0], &args[1])?
+    let Some(byte_range) = current_buffer_accessible_char_region_in_buffers(
+        &host.edit_and_vars().0.buffers,
+        &args[0],
+        &args[1],
+    )?
     else {
         return Ok(Value::string(""));
     };
@@ -1805,65 +1945,76 @@ pub(crate) fn builtin_delete_and_extract_region(
         return Ok(Value::string(""));
     }
 
-    let Some(current_id) = ctx.edit.buffers.current_buffer_id() else {
+    let Some(current_id) = host.edit_and_vars().0.buffers.current_buffer_id() else {
         return Ok(Value::string(""));
     };
     {
-        let Some(buf) = ctx.edit.buffers.get(current_id) else {
+        let (edit, vars) = host.edit_and_vars();
+        let Some(buf) = edit.buffers.get(current_id) else {
             return Ok(Value::string(""));
         };
-        if buffer_read_only_active_in_state(ctx.variables(), &[], buf) {
+        if buffer_read_only_active_in_state(vars, &[], buf) {
             return Err(signal(
                 LispCondition::BufferReadOnly,
                 vec![Value::make_buffer(current_id)],
             ));
         }
     }
-    crate::emacs_core::textprop::verify_text_read_only_in_state(
-        ctx.variables(),
-        &ctx.edit.buffers,
-        current_id,
-        start_byte,
-        end_byte,
-    )?;
+    {
+        let (edit, vars) = host.edit_and_vars();
+        crate::emacs_core::textprop::verify_text_read_only_in_state(
+            vars,
+            &edit.buffers,
+            current_id,
+            start_byte,
+            end_byte,
+        )?;
+    }
 
-    let delete_range =
-        buffer_edit_range_for_byte_range_in_manager(&ctx.edit.buffers, current_id, byte_range)?;
+    let delete_range = buffer_edit_range_for_byte_range_in_manager(
+        &host.edit_and_vars().0.buffers,
+        current_id,
+        byte_range,
+    )?;
     // GNU `del_range_1 (from, to, true, true)`: the string is made by
     // `del_range_2` AFTER `prepare_to_modify_buffer` ran the before-change
     // hooks, and it is the same string `record_delete` gets -- one
     // `make_buffer_string_both`, not a substring plus a second copy for undo.
-    Ok(delete_text_range(ctx, delete_range, DeletedText::Return)?
+    Ok(delete_text_range(host, delete_range, DeletedText::Return)?
         .map_or_else(|| Value::string(""), Value::heap_string))
 }
 
 /// `(erase-buffer)` — delete all text and remove any narrowing restriction.
-pub(crate) fn builtin_erase_buffer(
-    ctx: &mut crate::emacs_core::eval::Context,
+pub(crate) fn builtin_erase_buffer<H: crate::emacs_core::edit_host::EditHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("erase-buffer", &args, 0)?;
-    let Some(current_id) = ctx.edit.buffers.current_buffer_id() else {
+    let Some(current_id) = host.edit_and_vars().0.buffers.current_buffer_id() else {
         return Ok(Value::NIL);
     };
-    let byte_range = ctx
-        .edit
+    let byte_range = host
+        .edit_and_vars()
+        .0
         .buffers
         .get(current_id)
         .map(|buf| buf.full_emacs_byte_range())
         .unwrap_or(EmacsByteRange::EMPTY);
-    let delete_range =
-        buffer_edit_range_for_byte_range_in_manager(&ctx.edit.buffers, current_id, byte_range)?;
+    let delete_range = buffer_edit_range_for_byte_range_in_manager(
+        &host.edit_and_vars().0.buffers,
+        current_id,
+        byte_range,
+    )?;
     let change = TextChange::deletion(delete_range);
     if !byte_range.is_empty() {
-        signal_before_text_change(ctx, change)?;
+        signal_before_text_change(host, change)?;
     }
     // Edit phase: the read view and the edit runtime come from the one
     // disjoint-borrow pair; while `edit`/`vars` live, no host call runs.
-    let (edit, vars) = ctx.edit_and_vars();
+    let (edit, vars) = host.edit_and_vars();
     erase_buffer_impl(vars, &[], &mut edit.buffers, vec![])?;
     if !byte_range.is_empty() {
-        signal_after_text_change(ctx, change)?;
+        signal_after_text_change(host, change)?;
     }
     Ok(Value::NIL)
 }
@@ -1905,22 +2056,26 @@ pub(crate) fn erase_buffer_impl<'a, Vars: EditVariableRead<'a>>(
 
 /// `(buffer-substring-no-properties START END)` — same as buffer-substring
 /// (text properties not yet implemented at the Lisp value level).
-pub(crate) fn builtin_buffer_substring_no_properties(
-    ctx: &crate::emacs_core::eval::Context,
+pub(crate) fn builtin_buffer_substring_no_properties<H: crate::emacs_core::edit_host::EditHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("buffer-substring-no-properties", &args, 2)?;
     // No Lisp runs between resolving the region and copying it (the
     // fontify hook belongs to `buffer-substring`, not this one), so the
     // character count the resolver computed still describes the bytes.
-    let Some((byte_range, chars)) =
-        current_buffer_accessible_char_region_with_chars(&ctx.edit.buffers, &args[0], &args[1])?
+    let Some((byte_range, chars)) = current_buffer_accessible_char_region_with_chars(
+        &host.edit_and_vars().0.buffers,
+        &args[0],
+        &args[1],
+    )?
     else {
         return Ok(Value::heap_string(
             crate::heap_types::LispString::from_emacs_bytes(Vec::new()),
         ));
     };
-    let Some(buf) = ctx.edit.buffers.current_buffer() else {
+    let (edit, _vars) = host.edit_and_vars();
+    let Some(buf) = edit.buffers.current_buffer() else {
         return Ok(Value::heap_string(
             crate::heap_types::LispString::from_emacs_bytes(Vec::new()),
         ));
@@ -1930,26 +2085,28 @@ pub(crate) fn builtin_buffer_substring_no_properties(
     Ok(Value::heap_string(if buf.get_multibyte() {
         crate::heap_types::LispString::from_emacs_bytes_with_chars(bytes, chars)
     } else {
-        crate::emacs_core::builtins::lisp_string_from_buffer_bytes(bytes, false)
+        super::buffer::lisp_string_from_buffer_bytes(bytes, false)
     }))
 }
 
 /// `(following-char)` — return character after point (0 if at end).
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub(crate) fn builtin_following_char(
-    ctx: &crate::emacs_core::eval::Context,
+pub(crate) fn builtin_following_char<H: crate::emacs_core::edit_host::EditHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("following-char", &args, 0)?;
-    following_char_value(ctx)
+    following_char_value(&host.edit_and_vars().0.buffers)
 }
 
-pub(crate) fn builtin_following_char_0(ctx: &mut crate::emacs_core::eval::Context) -> EvalResult {
-    following_char_value(ctx)
+pub(crate) fn builtin_following_char_0<H: crate::emacs_core::edit_host::EditHost>(
+    host: &mut H,
+) -> EvalResult {
+    following_char_value(&host.edit_and_vars().0.buffers)
 }
 
-fn following_char_value(ctx: &crate::emacs_core::eval::Context) -> EvalResult {
-    match ctx.edit.buffers.current_buffer() {
+fn following_char_value(buffers: &BufferManager) -> EvalResult {
+    match buffers.current_buffer() {
         Some(buf) => {
             let accessible = buf.accessible_emacs_byte_region();
             let point = buf.point_emacs_byte_pos();
@@ -1966,12 +2123,12 @@ fn following_char_value(ctx: &crate::emacs_core::eval::Context) -> EvalResult {
 }
 
 /// `(preceding-char)` — return character before point (0 if at beginning).
-pub(crate) fn builtin_preceding_char(
-    ctx: &crate::emacs_core::eval::Context,
+pub(crate) fn builtin_preceding_char<H: crate::emacs_core::edit_host::EditHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("preceding-char", &args, 0)?;
-    match ctx.edit.buffers.current_buffer() {
+    match host.edit_and_vars().0.buffers.current_buffer() {
         Some(buf) => {
             let accessible = buf.accessible_emacs_byte_region();
             let point = buf.point_emacs_byte_pos();
@@ -2238,22 +2395,27 @@ fn encode_translation_to(to: &Value, multibyte: bool) -> Vec<u8> {
 /// char→string/vector mappings matches GNU. The multi-character
 /// `(([FROM-CHAR ...] . TO) ...)` form is currently treated as identity
 /// (no lookahead) — this is a known pragmatic deviation, marked TODO.
-pub(crate) fn builtin_translate_region_internal(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_translate_region_internal<H: crate::emacs_core::edit_host::EditHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
-    use super::chartable::{builtin_char_table_subtype, ct_lookup_with_symbols, is_char_table};
     use super::emacs_char::{
         MAX_CHAR, MAX_MULTIBYTE_LENGTH, byte8_to_char, char_string, chars_in_multibyte,
         string_char_advance,
     };
+    use crate::chartab::{builtin_char_table_subtype, ct_lookup_with_symbols, is_char_table};
 
     expect_args("translate-region-internal", &args, 3)?;
     let table = &args[2];
 
     // ----- Validate TABLE ----------------------------------------------------
-    let table_str = eval.lisp_string(*table);
-    let is_str_table = table_str.is_some();
+    // The epoch-checked borrow is materialized to owned bytes up front: its
+    // validation order is kept (a non-table signals before the region is
+    // resolved), while no string borrow spans the edit phases below.
+    let table_bytes = host
+        .lisp_string(*table)
+        .map(|s| (s.as_bytes().to_vec(), s.is_multibyte()));
+    let is_str_table = table_bytes.is_some();
     let is_ct_table = is_char_table(table);
     if !is_str_table && !is_ct_table {
         return Err(signal(
@@ -2264,7 +2426,11 @@ pub(crate) fn builtin_translate_region_internal(
     if is_ct_table {
         let purpose = builtin_char_table_subtype(vec![*table])?;
         let translation_sym = Value::symbol("translation-table");
-        if !super::value::eq_value_swp(&purpose, &translation_sym, eval.symbols_with_pos_enabled) {
+        if !super::value::eq_value_swp(
+            &purpose,
+            &translation_sym,
+            matches!(host.symbol_mode(), crate::tagged::SymbolMode::Positioned),
+        ) {
             return Err(signal(
                 "error",
                 vec![Value::string("Not a translation table")],
@@ -2273,16 +2439,17 @@ pub(crate) fn builtin_translate_region_internal(
     }
 
     // ----- Resolve region in the current buffer ------------------------------
-    let (buffer_id, byte_range) = super::fns::normalize_current_buffer_region_bounds_in_manager(
-        &eval.edit.buffers,
+    let (buffer_id, byte_range) = normalize_current_buffer_region_bounds_in_manager(
+        &host.edit_and_vars().0.buffers,
         &args[0],
         &args[1],
     )?;
     if byte_range.is_empty() {
         return Ok(Value::fixnum(0));
     }
-    let multibyte = eval
-        .edit
+    let multibyte = host
+        .edit_and_vars()
+        .0
         .buffers
         .get(buffer_id)
         .map(|b| b.get_multibyte())
@@ -2300,8 +2467,9 @@ pub(crate) fn builtin_translate_region_internal(
     // when the byte length grows.  Our whole-region replace strategy would
     // otherwise drag point to the end of the inserted replacement, so we track
     // the delta during the walk and restore point afterwards.
-    let (point_char, region_start_char) = eval
-        .edit
+    let (point_char, region_start_char) = host
+        .edit_and_vars()
+        .0
         .buffers
         .get(buffer_id)
         .map(|b| {
@@ -2314,13 +2482,14 @@ pub(crate) fn builtin_translate_region_internal(
         .unwrap_or((0, 0));
 
     // Read the whole region up front (whole-region replace strategy).
-    let source =
-        super::fns::read_buffer_region_bytes_in_manager(&eval.edit.buffers, buffer_id, byte_range)?;
+    let source = read_buffer_region_bytes_in_manager(
+        &host.edit_and_vars().0.buffers,
+        buffer_id,
+        byte_range,
+    )?;
 
     // ----- String-table prep -------------------------------------------------
-    let table_string_info: Option<(Vec<u8>, bool)> = table_str.map(|s| {
-        let mut bytes = s.as_bytes().to_vec();
-        let mut mb = s.is_multibyte();
+    let table_string_info: Option<(Vec<u8>, bool)> = table_bytes.map(|(mut bytes, mut mb)| {
         // GNU: if buffer is unibyte but table is multibyte, convert table to
         // unibyte (string_make_unibyte). Our mapping below indexes by byte
         // for unibyte tables; flatten by taking the byte view, which already
@@ -2396,7 +2565,7 @@ pub(crate) fn builtin_translate_region_internal(
                 }
             } else {
                 // char-table case.
-                let val = ct_lookup_with_symbols(table, oc, eval.symbol_mode())?;
+                let val = ct_lookup_with_symbols(table, oc, host.symbol_mode())?;
                 if let Some(c) = val.as_fixnum() {
                     if (0..=MAX_CHAR as i64).contains(&c) {
                         nc = c;
@@ -2511,26 +2680,23 @@ pub(crate) fn builtin_translate_region_internal(
         } else {
             crate::heap_types::LispString::from_unibyte(out)
         };
-        super::fns::replace_buffer_emacs_byte_range_lisp_string(
-            eval,
-            buffer_id,
-            byte_range,
-            &replacement,
-        )?;
+        replace_buffer_emacs_byte_range_lisp_string(host, buffer_id, byte_range, &replacement)?;
 
         // Restore point to the GNU-faithful character position.  The
         // whole-region replace dragged point to the end of the inserted
         // replacement; GNU instead leaves point at its original character
         // position shifted only by replacements ending at or before it.
         let target_char = point_char + point_char_delta;
-        if let Some(byte_pos) = eval
-            .edit
+        if let Some(byte_pos) = host
+            .edit_and_vars()
+            .0
             .buffers
             .get(buffer_id)
             .map(|b| b.lisp_pos_to_accessible_emacs_byte_pos(LispCharPos1::new(target_char)))
         {
-            let _ = eval
-                .edit
+            let _ = host
+                .edit_and_vars()
+                .0
                 .buffers
                 .goto_buffer_emacs_byte_pos(buffer_id, byte_pos);
         }

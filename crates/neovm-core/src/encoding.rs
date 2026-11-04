@@ -130,9 +130,18 @@ impl<'ctx> CharacterWidthPolicy<'ctx> {
     pub(crate) fn character_width(&self, code: u32) -> usize {
         match code {
             0x20..=0x7e => 1,
-            0x09 => *self
-                .tab_width
-                .get_or_init(|| crate::emacs_core::indent::current_buffer_tab_width(self.context)),
+            0x09 => *self.tab_width.get_or_init(|| {
+                // GNU SANE_TAB_WIDTH: the current buffer's `tab-width`
+                // slot with the 1..=1000-else-8 validation the edit
+                // layer owns (`indent::sane_tab_width_from_value`).
+                crate::emacs_core::indent::sane_tab_width_from_value(
+                    self.context
+                        .variable_value_in_current_buffer(
+                            crate::emacs_core::indent::tab_width_sym_id(),
+                        )
+                        .unwrap_or(Value::NIL),
+                )
+            }),
             0x0a => 0,
             0x00..=0x1f | 0x7f => match self.control.get_or_init(|| {
                 if self

@@ -51,12 +51,11 @@ pub(crate) struct CasingPropertyControls {
 }
 
 impl CasingPropertyControls {
-    pub(crate) fn for_context(ctx: &crate::emacs_core::eval::Context) -> Self {
-        let read = |variable: TextPropertyControlVariable| {
-            ctx.eval_symbol_by_id(variable.symbol_id()).ok()
-        };
+    pub(crate) fn for_host<H: crate::emacs_core::edit_host::EditHost>(host: &H) -> Self {
+        let read =
+            |variable: TextPropertyControlVariable| host.variable_value(variable.symbol_id());
         Self {
-            equality: if ctx.symbols_with_pos_enabled {
+            equality: if matches!(host.symbol_mode(), crate::tagged::SymbolMode::Positioned) {
                 CasingPropertyEquality::PositionedSymbolsTransparent
             } else {
                 CasingPropertyEquality::Exact

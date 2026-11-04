@@ -43,24 +43,30 @@ pub fn register_bootstrap_vars(obarray: &mut super::symbol::Obarray) {
 // Truncation at garbage collection
 // ---------------------------------------------------------------------------
 
-/// Read the truncation limits out of the bindings visible in the current
-/// buffer, which is what GNU's `set_buffer_internal (b)` at the top of
-/// `truncate_undo_list' (src/undo.c:296-306) arranges for.
-impl crate::buffer::UndoLimitBindings for super::eval::Context {
+/// The truncation limits for one compaction pass, read through the host
+/// so the read stays the evaluator's `undo_truncation_variable` (the
+/// `DEFVAR_INT`-shaped C read, not `find_symbol_value`). Implementing
+/// `UndoLimitBindings` is the only way to construct an `UndoLimits`, and
+/// this adapter is the edit layer's only implementation.
+struct HostUndoLimits<'a, H: crate::emacs_core::edit_host::EditHost>(&'a H);
+
+impl<H: crate::emacs_core::edit_host::EditHost> crate::buffer::UndoLimitBindings
+    for HostUndoLimits<'_, H>
+{
     fn undo_limit(&self) -> Value {
-        self.undo_truncation_variable("undo-limit")
+        self.0.undo_truncation_variable("undo-limit")
     }
 
     fn undo_strong_limit(&self) -> Value {
-        self.undo_truncation_variable("undo-strong-limit")
+        self.0.undo_truncation_variable("undo-strong-limit")
     }
 
     fn undo_outer_limit(&self) -> Value {
-        self.undo_truncation_variable("undo-outer-limit")
+        self.0.undo_truncation_variable("undo-outer-limit")
     }
 
     fn undo_outer_limit_function(&self) -> Value {
-        self.undo_truncation_variable("undo-outer-limit-function")
+        self.0.undo_truncation_variable("undo-outer-limit-function")
     }
 }
 
@@ -113,26 +119,30 @@ impl CompactionLatch {
 /// Errors from `undo-outer-limit-function' are swallowed, as they are for the
 /// finalizers and `post-gc-hook' this collector already runs: a collection
 /// cannot propagate a signal to whatever the mutator was doing.
-pub(crate) fn compact_buffers_for_gc(ctx: &mut super::eval::Context) {
+pub(crate) fn compact_buffers_for_gc<H: crate::emacs_core::edit_host::EditHost>(host: &mut H) {
     let Some(latch) = CompactionLatch::acquire() else {
         return;
     };
-    let restore_to = ctx.edit.buffers.current_buffer_id();
-    for id in ctx.edit.buffers.buffer_list() {
-        compact_one_buffer_for_gc(ctx, id);
+    let restore_to = host.edit_and_vars().0.buffers.current_buffer_id();
+    for id in host.edit_and_vars().0.buffers.buffer_list() {
+        compact_one_buffer_for_gc(host, id);
     }
     if let Some(id) = restore_to {
-        ctx.restore_current_buffer_if_live(id);
+        host.restore_current_buffer_if_live(id);
     }
     drop(latch);
 }
 
 /// GNU `compact_buffer' (src/buffer.c:1854-1885), minus the gap shrinking that
 /// has no counterpart in Neomacs' buffer text.
-fn compact_one_buffer_for_gc(ctx: &mut super::eval::Context, id: crate::buffer::BufferId) {
+fn compact_one_buffer_for_gc<H: crate::emacs_core::edit_host::EditHost>(
+    host: &mut H,
+    id: crate::buffer::BufferId,
+) {
     use crate::buffer::{UndoLimits, UndoRecording};
 
-    let Some(buffer) = ctx.edit.buffers.get(id) else {
+    let (edit, _vars) = host.edit_and_vars();
+    let Some(buffer) = edit.buffers.get(id) else {
         return; // killed while we walked the list
     };
     if buffer.base_buffer.is_some() {
@@ -153,10 +163,10 @@ fn compact_one_buffer_for_gc(ctx: &mut super::eval::Context, id: crate::buffer::
 
     // Everything from here reads the buffer's own variable bindings, so the
     // buffer has to be current -- the reason GNU calls `set_buffer_internal'.
-    if ctx.set_current_buffer_unrecorded(id).is_err() {
+    if host.set_current_buffer_unrecorded(id).is_err() {
         return;
     }
-    let Some(mut limits) = UndoLimits::read(ctx) else {
+    let Some(mut limits) = UndoLimits::read(&HostUndoLimits(host)) else {
         return;
     };
 
@@ -164,8 +174,8 @@ fn compact_one_buffer_for_gc(ctx: &mut super::eval::Context, id: crate::buffer::
     if let Some(function) = limits.outer_limit_function_for(first_group_bytes) {
         let saved_roots = save_scratch_gc_roots();
         push_scratch_gc_root(function);
-        let handled = ctx.with_gc_inhibited(|eval| {
-            eval.funcall_general(function, vec![Value::fixnum(first_group_bytes)])
+        let handled = host.with_gc_inhibited(|host| {
+            host.funcall_general(function, &[Value::fixnum(first_group_bytes)])
         });
         restore_scratch_gc_roots(saved_roots);
         if handled.is_ok_and(|answer| !answer.is_nil()) {
@@ -181,15 +191,16 @@ fn compact_one_buffer_for_gc(ctx: &mut super::eval::Context, id: crate::buffer::
         // buffer's limits and stays truncates 21 entries to 2; the same
         // function ending in `(set-buffer "H")' leaves all 21, because H's
         // values are what the globals then hold.
-        let Some(reread) = UndoLimits::read(ctx) else {
+        let Some(reread) = UndoLimits::read(&HostUndoLimits(host)) else {
             return;
         };
         limits = reread;
     }
 
     // Re-read the list: the function may have replaced it before answering nil.
-    let Some(undo_list) = ctx
-        .edit
+    let Some(undo_list) = host
+        .edit_and_vars()
+        .0
         .buffers
         .get(id)
         .map(|buffer| buffer.get_undo_list())
@@ -200,7 +211,7 @@ fn compact_one_buffer_for_gc(ctx: &mut super::eval::Context, id: crate::buffer::
         return;
     }
     let truncated = crate::buffer::truncate_undo_list(undo_list, &limits);
-    if let Some(buffer) = ctx.edit.buffers.get_mut(id) {
+    if let Some(buffer) = host.edit_and_vars().0.buffers.get_mut(id) {
         buffer.set_undo_list(truncated);
     }
 }
@@ -213,9 +224,12 @@ fn compact_one_buffer_for_gc(ctx: &mut super::eval::Context, id: crate::buffer::
 ///
 /// Context-dependent variant used during normal execution: inserts an
 /// undo boundary into the current buffer's undo list.
-pub(crate) fn builtin_undo_boundary(ctx: &mut super::eval::Context, args: &[Value]) -> EvalResult {
+pub(crate) fn builtin_undo_boundary<H: crate::emacs_core::edit_host::EditHost>(
+    host: &mut H,
+    args: &[Value],
+) -> EvalResult {
     expect_args("undo-boundary", &args, 0)?;
-    let Some(current_id) = ctx.edit.buffers.current_buffer_id() else {
+    let Some(current_id) = host.edit_and_vars().0.buffers.current_buffer_id() else {
         return Err(signal("error", vec![Value::string("No current buffer")]));
     };
     // GNU sets `undo-auto--last-boundary-cause' to `explicit' inside
@@ -223,8 +237,10 @@ pub(crate) fn builtin_undo_boundary(ctx: &mut super::eval::Context, args: &[Valu
     // undo-disabled buffer, so a buffer that records nothing does not claim a
     // boundary either.  The boundary itself runs below the obarray, so the
     // assignment lives here, gated on the outcome it reports.
-    if ctx.edit.buffers.add_undo_boundary(current_id) == Some(UndoBoundaryOutcome::Recorded) {
-        set_last_boundary_cause_explicit(ctx)?;
+    if host.edit_and_vars().0.buffers.add_undo_boundary(current_id)
+        == Some(UndoBoundaryOutcome::Recorded)
+    {
+        set_last_boundary_cause_explicit(host)?;
     }
     Ok(Value::NIL)
 }
@@ -239,13 +255,15 @@ pub(crate) fn builtin_undo_boundary(ctx: &mut super::eval::Context, args: &[Valu
 /// case -- `undo-auto--undoably-changed-buffers' processing localizes it.
 /// Delegating also picks up alias resolution, the constant check and variable
 /// watchers, all of which GNU gets for free from the same call.
-pub(crate) fn set_last_boundary_cause_explicit(ctx: &mut super::eval::Context) -> Result<(), Flow> {
+pub(crate) fn set_last_boundary_cause_explicit<H: crate::emacs_core::edit_host::EditHost>(
+    host: &mut H,
+) -> Result<(), Flow> {
     // GNU's `Fset (Qundo_auto__last_boundary_cause, Qexplicit)` with both
     // names fixed; each recorded command boundary previously interned both.
+    // C2: the `set' subr body IS `EditHost::set_variable`.
     static UNDO_AUTO_LAST_BOUNDARY_CAUSE: WellKnown = WellKnown::UndoAutoLastBoundaryCause;
     static EXPLICIT: WellKnown = WellKnown::Explicit;
-    super::builtins::symbols::builtin_set_2(
-        ctx,
+    host.set_variable(
         Value::symbol(&UNDO_AUTO_LAST_BOUNDARY_CAUSE),
         Value::symbol(&EXPLICIT),
     )?;

@@ -422,9 +422,6 @@ impl EditHost for Context {
             Some(crate::emacs_core::word_wrap::WordWrapMode::Whitespace)
         }
     }
-    fn composition_width_at(&mut self, charpos1: i64) -> Option<(i64, i64)> {
-        crate::emacs_core::composite::composition_width_at(self, charpos1)
-    }
 
     fn line_number_display_target(&self) -> Option<LineNumberDisplayTarget> {
         let frame = self.frames.selected_frame()?;

@@ -59,37 +59,44 @@ impl PendingTextEdit {
     ///
     /// Returns None when no live buffer is current afterwards; there is
     /// nothing left to edit then.
-    pub(crate) fn prepare(
+    pub(crate) fn prepare<H: crate::emacs_core::edit_host::EditHost>(
         self,
-        ctx: &mut crate::emacs_core::eval::Context,
+        host: &mut H,
     ) -> Result<Option<PreparedTextEdit>, Flow> {
-        let before = ctx
-            .edit
-            .buffers
-            .current_buffer_id()
-            .and_then(|buffer| TextMeasurement::of(&ctx.edit.buffers, buffer));
+        let before = {
+            let (edit, _vars) = host.edit_and_vars();
+            edit.buffers
+                .current_buffer_id()
+                .and_then(|buffer| TextMeasurement::of(&edit.buffers, buffer))
+        };
         let from = prepare_buffer_change(
-            ctx,
+            host,
             self.range,
             BufferChangeKind::Characters,
             ChangeStartPolicy::Preserved,
         )?;
-        let Some(buffer) = ctx.edit.buffers.current_buffer_id() else {
+        let Some(buffer) = host.edit_and_vars().0.buffers.current_buffer_id() else {
             return Ok(None);
         };
-        let Some(measured_at) = TextMeasurement::of(&ctx.edit.buffers, buffer) else {
+        let Some(measured_at) = ({
+            let (edit, _vars) = host.edit_and_vars();
+            TextMeasurement::of(&edit.buffers, buffer)
+        }) else {
             return Ok(None);
         };
-        let Some(live) = ctx.edit.buffers.get(buffer) else {
-            return Ok(None);
-        };
-        let chars = self.remeasured_chars(live, from);
-        // The callback-free path: same text, same FROM, same TO. The bytes
-        // measured before preparation are still exact, so no text walk.
-        let range = if before == Some(measured_at) && chars == self.range.char_range() {
-            self.range
-        } else {
-            live.edit_range_for_char_range(chars)
+        let range = {
+            let (edit, _vars) = host.edit_and_vars();
+            let Some(live) = edit.buffers.get(buffer) else {
+                return Ok(None);
+            };
+            let chars = self.remeasured_chars(live, from);
+            // The callback-free path: same text, same FROM, same TO. The bytes
+            // measured before preparation are still exact, so no text walk.
+            if before == Some(measured_at) && chars == self.range.char_range() {
+                self.range
+            } else {
+                live.edit_range_for_char_range(chars)
+            }
         };
         Ok(Some(PreparedTextEdit { range, measured_at }))
     }
@@ -139,45 +146,45 @@ pub(crate) enum DeletedText {
 ///
 /// With `DeletedText::Return` the deleted text is returned (empty when the
 /// callbacks left nothing to delete); with `Discard` the result is None.
-pub(crate) fn delete_text_range(
-    ctx: &mut crate::emacs_core::eval::Context,
+pub(crate) fn delete_text_range<H: crate::emacs_core::edit_host::EditHost>(
+    host: &mut H,
     range: TextEditRange,
     deleted: DeletedText,
 ) -> Result<Option<crate::heap_types::LispString>, Flow> {
-    let Some(prepared) = PendingTextEdit::new(range, RemeasureRule::DeleteRange).prepare(ctx)?
+    let Some(prepared) = PendingTextEdit::new(range, RemeasureRule::DeleteRange).prepare(host)?
     else {
         return Ok(None);
     };
     let mut deleted_range = prepared.range();
-    let text = match prepared.lease(&mut ctx.edit.buffers) {
-        Some(lease) => {
-            deleted_range = lease.range();
-            match deleted {
-                DeletedText::Discard => {
-                    let _ = lease.delete();
-                    None
+    let text = {
+        let (edit, _vars) = host.edit_and_vars();
+        match prepared.lease(&mut edit.buffers) {
+            Some(lease) => {
+                deleted_range = lease.range();
+                match deleted {
+                    DeletedText::Discard => {
+                        let _ = lease.delete();
+                        None
+                    }
+                    DeletedText::Return => lease.delete_and_extract(),
                 }
-                DeletedText::Return => lease.delete_and_extract(),
             }
+            None => None,
         }
-        None => None,
     };
-    super::signal_after_text_change(ctx, crate::buffer::TextChange::deletion(deleted_range))?;
+    super::signal_after_text_change(host, crate::buffer::TextChange::deletion(deleted_range))?;
     Ok(match deleted {
         DeletedText::Discard => None,
-        DeletedText::Return => Some(text.unwrap_or_else(|| empty_buffer_string(ctx))),
+        DeletedText::Return => {
+            Some(text.unwrap_or_else(|| empty_buffer_string(&host.edit_and_vars().0.buffers)))
+        }
     })
 }
 
 /// The empty string `make_buffer_string` returns for an empty range: it
 /// takes the current buffer's multibyteness.
-fn empty_buffer_string(ctx: &crate::emacs_core::eval::Context) -> crate::heap_types::LispString {
-    if ctx
-        .edit
-        .buffers
-        .current_buffer()
-        .is_some_and(Buffer::get_multibyte)
-    {
+fn empty_buffer_string(buffers: &crate::buffer::BufferManager) -> crate::heap_types::LispString {
+    if buffers.current_buffer().is_some_and(Buffer::get_multibyte) {
         crate::heap_types::LispString::from_emacs_bytes(Vec::new())
     } else {
         crate::heap_types::LispString::from_unibyte(Vec::new())

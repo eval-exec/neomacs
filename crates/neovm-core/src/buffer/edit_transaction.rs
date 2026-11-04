@@ -220,7 +220,7 @@ pub(in crate::buffer) fn convert_lisp_string_for_buffer_mode(
         return text.clone();
     }
 
-    let mut codes = crate::emacs_core::builtins::lisp_string_char_codes(text);
+    let mut codes = crate::strings_core::lisp_string_char_codes(text);
     if target_multibyte {
         for code in &mut codes {
             if *code > 0x7F {

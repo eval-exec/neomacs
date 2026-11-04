@@ -378,14 +378,6 @@ pub trait EditHost {
     /// live. C5.
     fn word_wrap_mode(&self, buffer: BufferId) -> Option<WordWrapMode>;
 
-    /// Display width and covered character length of the `composition`
-    /// property at 1-based CHARPOS1 (GNU `get_composition_id` as called from
-    /// `current_column_1`), `None` when no valid composition begins there.
-    /// The measurement lives in the composite layer above the edit crate and
-    /// registers the composition on first sight (rewriting the property in
-    /// place), so it runs on the host. C5.
-    fn composition_width_at(&mut self, charpos1: i64) -> Option<(i64, i64)>;
-
     /// The selected window's line-number measurement: its buffer, the frame's
     /// character cell width, and its visible row count, or `None` when no live
     /// window has a buffer. C5.

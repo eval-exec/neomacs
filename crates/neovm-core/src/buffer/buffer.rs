@@ -4806,7 +4806,7 @@ impl Buffer {
                 table: composition_function_table.bits(),
                 syntax_table: self.slots[BUFFER_SLOT_SYNTAX_TABLE.index()].bits(),
                 category_table: self.slots[BUFFER_SLOT_CATEGORY_TABLE.index()].bits(),
-                char_table_tick: crate::emacs_core::chartable::char_table_write_tick(),
+                char_table_tick: crate::emacs_core::value::char_table_write_tick(),
                 start,
                 end,
             }

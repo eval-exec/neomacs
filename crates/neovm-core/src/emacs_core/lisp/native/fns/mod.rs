@@ -517,23 +517,14 @@ pub(crate) fn builtin_base64url_decode_string(args: Vec<Value>) -> EvalResult {
     }
 }
 
-pub(crate) fn normalize_current_buffer_region_bounds_in_manager(
-    buffers: &BufferManager,
-    start_arg: &Value,
-    end_arg: &Value,
-) -> Result<(crate::buffer::BufferId, EmacsByteRange), Flow> {
-    let region = super::position::LispRegionArgs::from_values(buffers, *start_arg, *end_arg)?;
-    let buffer_id = buffers
-        .current_buffer()
-        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?
-        .id;
-
-    let buf = buffers
-        .get(buffer_id)
-        .ok_or_else(|| signal("error", vec![Value::string("Selecting deleted buffer")]))?;
-
-    Ok((buffer_id, region.accessible_byte_range(buf)?))
-}
+// The current-buffer region trio moved to the edit layer with the stage-3
+// split (C12): editfns owns the substrate helpers; these re-exports keep the
+// historical `fns`/`super::fns` paths of this module's subr wrappers and the
+// encoding/text region consumers.
+pub(crate) use super::editfns::{
+    normalize_current_buffer_region_bounds_in_manager, read_buffer_region_bytes_in_manager,
+    replace_buffer_emacs_byte_range_lisp_string,
+};
 
 #[derive(Clone, Copy, Debug)]
 struct ValidatedBufferLispRegion {
@@ -619,17 +610,6 @@ fn checked_buffer_hash_lisp_region(
     )
 }
 
-pub(crate) fn read_buffer_region_bytes_in_manager(
-    buffers: &BufferManager,
-    buffer_id: crate::buffer::BufferId,
-    byte_range: EmacsByteRange,
-) -> Result<Vec<u8>, Flow> {
-    let buf = buffers
-        .get(buffer_id)
-        .ok_or_else(|| signal("error", vec![Value::string("Selecting deleted buffer")]))?;
-    Ok(buf.buffer_substring_bytes_range(byte_range))
-}
-
 pub(crate) fn replace_buffer_region_lisp_string_in_manager(
     buffers: &mut BufferManager,
     buffer_id: crate::buffer::BufferId,
@@ -639,40 +619,6 @@ pub(crate) fn replace_buffer_region_lisp_string_in_manager(
     buffers
         .replace_buffer_measured_region_lisp_string(buffer_id, range, replacement)
         .ok_or_else(|| signal("error", vec![Value::string("Selecting deleted buffer")]))?;
-    Ok(())
-}
-
-pub(crate) fn replace_buffer_emacs_byte_range_lisp_string(
-    eval: &mut super::eval::Context,
-    buffer_id: crate::buffer::BufferId,
-    byte_range: EmacsByteRange,
-    replacement: &crate::heap_types::LispString,
-) -> Result<(), Flow> {
-    let range = super::editfns::buffer_edit_range_for_byte_range_in_manager(
-        &eval.edit.buffers,
-        buffer_id,
-        byte_range,
-    )?;
-    // The modification callbacks may edit the buffer: replace the range they
-    // leave, re-measured like GNU `replace_range` (insdel.c:1502-1513).
-    let pending =
-        super::editfns::PendingTextEdit::new(range, super::editfns::RemeasureRule::ReplaceRange);
-    let Some(prepared) = pending.prepare(eval)? else {
-        return Ok(());
-    };
-    // Don't inherit text properties from neighbors here.
-    // GNU's replace path (del_range + insert_from_gap in decode_coding)
-    // also skips adjust_intervals_for_insertion.  Property inheritance
-    // belongs to insert-and-inherit (insert_pieces_in_state with
-    // inherit=true), not general-purpose replace operations.
-    let new_extent = prepared
-        .lease(&mut eval.edit.buffers)
-        .and_then(|lease| lease.replace(replacement))
-        .ok_or_else(|| signal("error", vec![Value::string("Selecting deleted buffer")]))?;
-    super::editfns::signal_after_text_change(
-        eval,
-        crate::buffer::TextChange::new(prepared.range(), new_extent),
-    )?;
     Ok(())
 }
 

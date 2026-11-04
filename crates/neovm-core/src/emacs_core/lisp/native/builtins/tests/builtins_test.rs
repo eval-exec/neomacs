@@ -15529,12 +15529,12 @@ fn char_queries_return_nonunicode_emacs_character_codes() {
         Value::fixnum(0x20_0000)
     );
     assert_eq!(
-        crate::emacs_core::editfns::builtin_following_char(&eval, vec![]).unwrap(),
+        crate::emacs_core::editfns::builtin_following_char(&mut eval, vec![]).unwrap(),
         Value::fixnum(0)
     );
     builtin_goto_char(&mut eval, vec![Value::fixnum(2)]).unwrap();
     assert_eq!(
-        crate::emacs_core::editfns::builtin_preceding_char(&eval, vec![]).unwrap(),
+        crate::emacs_core::editfns::builtin_preceding_char(&mut eval, vec![]).unwrap(),
         Value::fixnum(0x20_0000)
     );
 }

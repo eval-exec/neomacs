@@ -1003,7 +1003,7 @@ fn casify_replace_current_buffer_region(
             .buffers
             .get(buffer_id)
             .is_some_and(|buf| !buf.text_props_is_empty()))
-    .then(|| crate::buffer::text_props::CasingPropertyControls::for_context(eval));
+    .then(|| crate::buffer::text_props::CasingPropertyControls::for_host(eval));
     let properties =
         crate::buffer::text_props::CasingPropertyMode::from_controls(&eval.obarray, controls);
     eval.edit

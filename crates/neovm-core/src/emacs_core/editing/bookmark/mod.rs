@@ -13,7 +13,6 @@
 //! - `bookmark-save` -- serialize bookmarks to a string
 //! - `bookmark-load` -- deserialize bookmarks from a string
 
-use crate::emacs_core::edit_host::EditHost;
 use crate::emacs_core::error::LispCondition;
 #[cfg(test)]
 use crate::emacs_core::error::expect_args;
@@ -347,7 +346,7 @@ impl GcTrace for BookmarkManager {
 }
 
 fn runtime_string_to_bookmark_string(text: &str) -> LispString {
-    super::builtins::plain_str_to_lisp_string(text, true)
+    crate::strings_core::plain_str_to_lisp_string(text, true)
 }
 
 /// Property-free, byte-faithful bookmark lookup identity.
@@ -435,8 +434,8 @@ fn expect_int(value: &Value) -> Result<i64, Flow> {
 ///   (error "Buffer not visiting a file or directory")
 /// This implementation mirrors that behavior.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub(crate) fn builtin_bookmark_set(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_bookmark_set<H: crate::emacs_core::edit_host::EditHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_min_args("bookmark-set", &args, 1)?;
@@ -452,12 +451,15 @@ pub(crate) fn builtin_bookmark_set(
     let name = expect_lisp_string(&args[0])?;
     let _no_overwrite = args.get(1);
 
-    let (position, filename) = match eval.edit.buffers.current_buffer() {
-        Some(buffer) => (
-            buffer.point_lisp_char_pos(),
-            buffer.file_name_lisp_string().cloned(),
-        ),
-        None => (LispCharPos1::new(1), None),
+    let (position, filename) = {
+        let (edit, _vars) = host.edit_and_vars();
+        match edit.buffers.current_buffer() {
+            Some(buffer) => (
+                buffer.point_lisp_char_pos(),
+                buffer.file_name_lisp_string().cloned(),
+            ),
+            None => (LispCharPos1::new(1), None),
+        }
     };
 
     let filename = match filename {
@@ -479,7 +481,7 @@ pub(crate) fn builtin_bookmark_set(
         annotation: None,
         handler: None,
     };
-    EditHost::bookmarks(eval).set(name, bm);
+    host.bookmarks().set(name, bm);
     Ok(Value::NIL)
 }
 
@@ -488,8 +490,8 @@ pub(crate) fn builtin_bookmark_set(
 /// Returns an alist: ((filename . F) (position . P) (annotation . A))
 /// or signals an error if the bookmark does not exist.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub(crate) fn builtin_bookmark_jump(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_bookmark_jump<H: crate::emacs_core::edit_host::EditHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     if args.is_empty() || args.len() > 2 {
@@ -516,7 +518,7 @@ pub(crate) fn builtin_bookmark_jump(
         _ => return Ok(Value::NIL),
     };
 
-    match EditHost::bookmarks(eval).get(&name) {
+    match host.bookmarks().get(&name) {
         Some(bm) => {
             let filename_val = match &bm.filename {
                 Some(f) => Value::heap_string(f.clone()),
@@ -546,8 +548,8 @@ pub(crate) fn builtin_bookmark_jump(
 
 /// (bookmark-delete NAME &optional BATCH) -> nil
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub(crate) fn builtin_bookmark_delete(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_bookmark_delete<H: crate::emacs_core::edit_host::EditHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     if args.is_empty() || args.len() > 2 {
@@ -567,15 +569,15 @@ pub(crate) fn builtin_bookmark_delete(
             .as_lisp_string()
             .expect("ValueKind::String must carry LispString payload")
             .clone();
-        let _ = EditHost::bookmarks(eval).delete(&name);
+        let _ = host.bookmarks().delete(&name);
     }
     Ok(Value::NIL)
 }
 
 /// (bookmark-rename OLD NEW) -> nil
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub(crate) fn builtin_bookmark_rename(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_bookmark_rename<H: crate::emacs_core::edit_host::EditHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     if args.is_empty() || args.len() > 2 {
@@ -604,7 +606,7 @@ pub(crate) fn builtin_bookmark_rename(
             .as_lisp_string()
             .expect("ValueKind::String must carry LispString payload")
             .clone();
-        if EditHost::bookmarks(eval).get(&old_name).is_none() {
+        if host.bookmarks().get(&old_name).is_none() {
             return Err(signal(
                 "error",
                 vec![Value::string(format!(
@@ -630,7 +632,7 @@ pub(crate) fn builtin_bookmark_rename(
             }
         };
 
-        if EditHost::bookmarks(eval).rename(&old_name, target) {
+        if host.bookmarks().rename(&old_name, target) {
             return Ok(Value::NIL);
         }
         return Err(signal(
@@ -666,13 +668,13 @@ pub(crate) fn builtin_bookmark_rename(
 
 /// (bookmark-all-names) -> list of bookmark names (sorted)
 #[cfg(test)]
-pub(crate) fn builtin_bookmark_all_names(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_bookmark_all_names<H: crate::emacs_core::edit_host::EditHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("bookmark-all-names", &args, 0)?;
-    let names: Vec<Value> = eval
-        .bookmarks
+    let names: Vec<Value> = host
+        .bookmarks()
         .all_names()
         .into_iter()
         .map(Value::heap_string)
@@ -684,8 +686,8 @@ pub(crate) fn builtin_bookmark_all_names(
 ///
 /// BOOKMARK may be a bookmark name or a bookmark record alist.
 #[cfg(test)]
-pub(crate) fn builtin_bookmark_get_filename(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_bookmark_get_filename<H: crate::emacs_core::edit_host::EditHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("bookmark-get-filename", &args, 1)?;
@@ -695,8 +697,8 @@ pub(crate) fn builtin_bookmark_get_filename(
     }
 
     let name = expect_lisp_string(&args[0])?;
-    let filename = eval
-        .bookmarks
+    let filename = host
+        .bookmarks()
         .get(&name)
         .and_then(|bm| bm.filename.as_ref())
         .map(|s| Value::heap_string(s.clone()))
@@ -708,8 +710,8 @@ pub(crate) fn builtin_bookmark_get_filename(
 ///
 /// BOOKMARK may be a bookmark name or a bookmark record alist.
 #[cfg(test)]
-pub(crate) fn builtin_bookmark_get_position(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_bookmark_get_position<H: crate::emacs_core::edit_host::EditHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("bookmark-get-position", &args, 1)?;
@@ -719,8 +721,8 @@ pub(crate) fn builtin_bookmark_get_position(
     }
 
     let name = expect_lisp_string(&args[0])?;
-    let position = eval
-        .bookmarks
+    let position = host
+        .bookmarks()
         .get(&name)
         .map(|bm| Value::fixnum(bm.position.as_i64()))
         .unwrap_or(Value::NIL);
@@ -731,8 +733,8 @@ pub(crate) fn builtin_bookmark_get_position(
 ///
 /// BOOKMARK may be a bookmark name or a bookmark record alist.
 #[cfg(test)]
-pub(crate) fn builtin_bookmark_get_annotation(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_bookmark_get_annotation<H: crate::emacs_core::edit_host::EditHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("bookmark-get-annotation", &args, 1)?;
@@ -742,8 +744,8 @@ pub(crate) fn builtin_bookmark_get_annotation(
     }
 
     let name = expect_lisp_string(&args[0])?;
-    let annotation = eval
-        .bookmarks
+    let annotation = host
+        .bookmarks()
         .get(&name)
         .and_then(|bm| bm.annotation.as_ref())
         .map(|s| Value::heap_string(s.clone()))
@@ -755,8 +757,8 @@ pub(crate) fn builtin_bookmark_get_annotation(
 ///
 /// BOOKMARK is a bookmark name.  If missing, returns nil.
 #[cfg(test)]
-pub(crate) fn builtin_bookmark_set_annotation(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_bookmark_set_annotation<H: crate::emacs_core::edit_host::EditHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("bookmark-set-annotation", &args, 2)?;
@@ -767,9 +769,9 @@ pub(crate) fn builtin_bookmark_set_annotation(
         Some(expect_lisp_string(&args[1])?)
     };
 
-    if let Some(mut bm) = EditHost::bookmarks(eval).get(&name).cloned() {
+    if let Some(mut bm) = host.bookmarks().get(&name).cloned() {
         bm.annotation = annotation.clone();
-        EditHost::bookmarks(eval).set(name, bm);
+        host.bookmarks().set(name, bm);
         if let Some(value) = annotation {
             Ok(Value::heap_string(value))
         } else {
@@ -789,8 +791,8 @@ fn default_bookmark_file() -> LispString {
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-fn active_bookmark_default_file(eval: &super::eval::Context) -> LispString {
-    if let Some(v) = eval.variable_value_by_name("bookmark-default-file")
+fn active_bookmark_default_file<H: crate::emacs_core::edit_host::EditHost>(host: &H) -> LispString {
+    if let Some(v) = host.variable_value_by_name("bookmark-default-file")
         && let Some(ls) = v.as_lisp_string()
     {
         return ls.clone();
@@ -799,8 +801,10 @@ fn active_bookmark_default_file(eval: &super::eval::Context) -> LispString {
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-fn bookmark_timestamp_file(eval: &super::eval::Context) -> Option<LispString> {
-    let value = eval.variable_value_by_name("bookmark-bookmarks-timestamp")?;
+fn bookmark_timestamp_file<H: crate::emacs_core::edit_host::EditHost>(
+    host: &H,
+) -> Option<LispString> {
+    let value = host.variable_value_by_name("bookmark-bookmarks-timestamp")?;
     if !value.is_cons() {
         return None;
     };
@@ -823,14 +827,17 @@ fn bookmark_save_stamp(path: &LispString) -> Value {
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-fn set_bookmark_timestamp(eval: &mut super::eval::Context, file: &LispString) {
-    eval.store_variable_by_name("bookmark-bookmarks-timestamp", bookmark_save_stamp(file));
+fn set_bookmark_timestamp<H: crate::emacs_core::edit_host::EditHost>(
+    host: &mut H,
+    file: &LispString,
+) {
+    host.store_variable_by_name("bookmark-bookmarks-timestamp", bookmark_save_stamp(file));
 }
 
 /// (bookmark-save &optional PARG FILE BATCH) -> nil or save-stamp list
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub(crate) fn builtin_bookmark_save(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_bookmark_save<H: crate::emacs_core::edit_host::EditHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     if args.len() > 3 {
@@ -859,13 +866,13 @@ pub(crate) fn builtin_bookmark_save(
     // Mirror bookmark-maybe-load-default-file: if we have never tracked a
     // bookmark file in this session, and there are no in-memory bookmarks,
     // eagerly load the default file if it exists.
-    let configured_default = active_bookmark_default_file(eval);
-    if bookmark_timestamp_file(eval).is_none()
-        && EditHost::bookmarks(eval).all_names().is_empty()
+    let configured_default = active_bookmark_default_file(host);
+    if bookmark_timestamp_file(host).is_none()
+        && host.bookmarks().all_names().is_empty()
         && super::file_name::lisp_file_name_to_path_buf(&configured_default).is_file()
     {
         let _ = builtin_bookmark_load(
-            eval,
+            host,
             vec![
                 Value::heap_string(configured_default.clone()),
                 Value::T,
@@ -886,24 +893,24 @@ pub(crate) fn builtin_bookmark_save(
                 vec![Value::string("Error reading from stdin")],
             ));
         }
-        bookmark_timestamp_file(eval).unwrap_or(configured_default)
+        bookmark_timestamp_file(host).unwrap_or(configured_default)
     };
 
-    let data = EditHost::bookmarks(eval).save_to_string();
+    let data = host.bookmarks().save_to_string();
     let os_path = super::file_name::lisp_file_name_to_path_buf(&path);
     if let Some(parent) = os_path.parent() {
         let _ = fs::create_dir_all(parent);
     }
     let _ = fs::write(&os_path, data);
-    EditHost::bookmarks(eval).mark_saved();
+    host.bookmarks().mark_saved();
 
     if make_default {
-        set_bookmark_timestamp(eval, &path);
+        set_bookmark_timestamp(host, &path);
         return Ok(bookmark_save_stamp(&path));
     }
 
-    if bookmark_timestamp_file(eval).is_some_and(|default| default.as_bytes() == path.as_bytes()) {
-        set_bookmark_timestamp(eval, &path);
+    if bookmark_timestamp_file(host).is_some_and(|default| default.as_bytes() == path.as_bytes()) {
+        set_bookmark_timestamp(host, &path);
         return Ok(bookmark_save_stamp(&path));
     }
 
@@ -912,8 +919,8 @@ pub(crate) fn builtin_bookmark_save(
 
 /// (bookmark-load FILE &optional OVERWRITE NO-MSG BATCH) -> message string or nil
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub(crate) fn builtin_bookmark_load(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_bookmark_load<H: crate::emacs_core::edit_host::EditHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     if args.is_empty() || args.len() > 4 {
@@ -952,14 +959,14 @@ pub(crate) fn builtin_bookmark_load(
         }
     };
 
-    EditHost::bookmarks(eval).load_from_string(&data);
+    host.bookmarks().load_from_string(&data);
 
     let current_default =
-        bookmark_timestamp_file(eval).unwrap_or_else(|| active_bookmark_default_file(eval));
+        bookmark_timestamp_file(host).unwrap_or_else(|| active_bookmark_default_file(host));
     let set_default =
         args.get(3).is_some_and(|v| !v.is_nil()) || file.as_bytes() == current_default.as_bytes();
     if set_default {
-        set_bookmark_timestamp(eval, &file);
+        set_bookmark_timestamp(host, &file);
     }
 
     let no_msg = args.get(2).is_some_and(|v| !v.is_nil());
