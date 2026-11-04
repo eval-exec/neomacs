@@ -12,7 +12,6 @@ use crate::emacs_core::eval::{
     push_scratch_gc_root, restore_scratch_gc_roots, save_scratch_gc_roots,
 };
 use crate::emacs_core::fontset;
-pub(crate) use crate::emacs_core::frame::{builtin_next_frame, builtin_previous_frame};
 use crate::emacs_core::intern::WellKnown;
 use crate::emacs_core::intern::{NIL_SYM_ID, T_SYM_ID, intern, is_canonical_id};
 use crate::emacs_core::jit::RuntimeStateTieringExt;
@@ -2661,14 +2660,6 @@ pub(crate) fn builtin_newline_cache_check(args: Vec<Value>) -> EvalResult {
     Ok(Value::NIL)
 }
 
-pub(crate) fn builtin_old_selected_frame(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    expect_args("old-selected-frame", &args, 0)?;
-    crate::emacs_core::frame::builtin_selected_frame(eval, Vec::new())
-}
-
 pub(crate) fn builtin_menu_or_popup_active_p(args: Vec<Value>) -> EvalResult {
     expect_args("menu-or-popup-active-p", &args, 0)?;
     Ok(Value::NIL)
@@ -2953,54 +2944,9 @@ pub(crate) fn builtin_recordp_1(_eval: &mut super::eval::Context, arg: Value) ->
     Ok(Value::bool_val(arg.is_record()))
 }
 
-pub(crate) fn builtin_query_fontset(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    expect_args_range("query-fontset", &args, 1, 2)?;
-    // GNU `Fquery_fontset` calls `check_window_system (NULL)` before touching
-    // the pattern (src/fontset.c:1248), so a headless session signals instead
-    // of resolving the fontset registry.
-    if !crate::emacs_core::display::x_window_system_active(eval) {
-        return Err(crate::emacs_core::display::window_system_not_initialized_error());
-    }
-    let pattern = expect_string_lossy(&args[0])?;
-    if pattern.is_empty() {
-        return Ok(Value::NIL);
-    }
-    let regexpp = args.get(1).is_some_and(|v| v.is_truthy());
-    Ok(fontset::query_fontset_registry(&pattern, regexpp).map_or(Value::NIL, Value::string))
-}
-
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) fn builtin_recent_auto_save_p(args: Vec<Value>) -> EvalResult {
     expect_args("recent-auto-save-p", &args, 0)?;
-    Ok(Value::NIL)
-}
-
-pub(crate) fn builtin_reconsider_frame_fonts(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    expect_args("reconsider-frame-fonts", &args, 1)?;
-    let frame_id = super::window_cmds::resolve_frame_id_in_state(
-        &mut eval.frames,
-        &mut eval.edit.buffers,
-        Some(&args[0]),
-        neovm_value::display_vocab::FrameDomain::Live,
-    )?;
-    if eval
-        .frames
-        .get(frame_id)
-        .and_then(|frame| frame.effective_window_system())
-        .is_none()
-    {
-        return Err(signal(
-            "error",
-            vec![Value::string("Window system frame should be used")],
-        ));
-    }
-    crate::emacs_core::font::seed_live_frame_default_face_from_font_parameter(eval, frame_id);
     Ok(Value::NIL)
 }
 
@@ -3451,47 +3397,6 @@ pub(crate) fn builtin_subr_type(args: Vec<Value>) -> EvalResult {
 pub(crate) fn builtin_tool_bar_get_system_style(args: Vec<Value>) -> EvalResult {
     expect_args("tool-bar-get-system-style", &args, 0)?;
     Ok(Value::NIL)
-}
-
-/// `(tool-bar-pixel-width &optional FRAME)`; GNU `decode_any_frame`.
-///
-/// GNU decodes before it answers (`src/frame.c:4439`):
-///
-///     #ifdef FRAME_TOOLBAR_WIDTH
-///       struct frame *f = decode_any_frame (frame);
-///       if (FRAME_WINDOW_P (f)) return make_fixnum (FRAME_TOOLBAR_WIDTH (f));
-///     #endif
-///       return make_fixnum (0);
-///
-/// so a non-frame signals `framep` and never reaches the constant.  The width
-/// is 0 until a side-mounted tool bar exists to measure, but the DECODE is not
-/// a placeholder -- it is the whole Lisp-visible contract of the argument, and
-/// dropping it is what let `(tool-bar-pixel-width SOME-WINDOW)` answer 0.
-///
-/// `decode_any_frame`, not the live decoder: GNU's is a bare `CHECK_FRAME`, so
-/// a dead frame is accepted here just as `framep` accepts one.
-pub(crate) fn builtin_tool_bar_pixel_width(
-    eval: &mut crate::emacs_core::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    expect_args_range("tool-bar-pixel-width", &args, 0, 1)?;
-    match args.first().filter(|frame| !frame.is_nil()) {
-        Some(frame) => {
-            crate::emacs_core::window_cmds::resolve_frame_id_in_state(
-                &mut eval.frames,
-                &mut eval.edit.buffers,
-                Some(frame),
-                neovm_value::display_vocab::FrameDomain::Any,
-            )?;
-        }
-        None => {
-            crate::emacs_core::window_cmds::ensure_selected_frame_id_in_state(
-                &mut eval.frames,
-                &mut eval.edit.buffers,
-            );
-        }
-    }
-    Ok(Value::fixnum(0))
 }
 
 pub(crate) fn builtin_transpose_regions(
@@ -4102,28 +4007,6 @@ pub(crate) fn builtin_x_double_buffered_p(args: Vec<Value>) -> EvalResult {
 pub(crate) fn builtin_x_menu_bar_open_internal(args: Vec<Value>) -> EvalResult {
     expect_args_range("x-menu-bar-open-internal", &args, 0, 1)?;
     Ok(Value::NIL)
-}
-
-pub(crate) fn builtin_xw_display_color_p_ctx(
-    ctx: &crate::emacs_core::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    expect_args_range("xw-display-color-p", &args, 0, 1)?;
-    if let Some(display) = args.first() {
-        super::super::display::expect_display_designator_in_state(&ctx.frames, display)?;
-    }
-    if super::super::display::display_window_system_symbol_in_state(
-        &ctx.frames,
-        ctx.variables(),
-        &[],
-        args.first(),
-    )?
-    .is_some_and(super::super::display::gui_window_system_active_value)
-    {
-        Ok(Value::T)
-    } else {
-        Ok(Value::NIL)
-    }
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up

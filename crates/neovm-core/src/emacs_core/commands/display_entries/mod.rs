@@ -5,8 +5,10 @@
 //! the window/frame records and the display engine remain core-owned and the
 //! evaluator context is reached through the core facade.
 
+use crate::emacs_core::builtins::expect_string_lossy;
+use crate::emacs_core::error::signal;
 use crate::tagged::SymbolMode;
-use crate::window::DisplayFrameManagerExt;
+use crate::window::{DisplayFrameExt, DisplayFrameManagerExt};
 use neovm_value::error::{EvalResult, expect_args, expect_args_range};
 use neovm_value::value::*;
 
@@ -198,4 +200,123 @@ fn pixel_to_char_mouse_position(
         Value::fixnum((x as f32 / char_width).floor() as i64),
         Value::fixnum((y as f32 / char_height).floor() as i64),
     )
+}
+
+pub(crate) fn builtin_old_selected_frame(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args("old-selected-frame", &args, 0)?;
+    crate::emacs_core::frame::builtin_selected_frame(eval, Vec::new())
+}
+
+pub(crate) fn builtin_query_fontset(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args_range("query-fontset", &args, 1, 2)?;
+    // GNU `Fquery_fontset` calls `check_window_system (NULL)` before touching
+    // the pattern (src/fontset.c:1248), so a headless session signals instead
+    // of resolving the fontset registry.
+    if !crate::emacs_core::display::x_window_system_active(eval) {
+        return Err(crate::emacs_core::display::window_system_not_initialized_error());
+    }
+    let pattern = expect_string_lossy(&args[0])?;
+    if pattern.is_empty() {
+        return Ok(Value::NIL);
+    }
+    let regexpp = args.get(1).is_some_and(|v| v.is_truthy());
+    Ok(
+        crate::emacs_core::fontset::query_fontset_registry(&pattern, regexpp)
+            .map_or(Value::NIL, Value::string),
+    )
+}
+
+pub(crate) fn builtin_reconsider_frame_fonts(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args("reconsider-frame-fonts", &args, 1)?;
+    let frame_id = super::window_cmds::resolve_frame_id_in_state(
+        &mut eval.frames,
+        &mut eval.edit.buffers,
+        Some(&args[0]),
+        neovm_value::display_vocab::FrameDomain::Live,
+    )?;
+    if eval
+        .frames
+        .get(frame_id)
+        .and_then(|frame| frame.effective_window_system())
+        .is_none()
+    {
+        return Err(signal(
+            "error",
+            vec![Value::string("Window system frame should be used")],
+        ));
+    }
+    crate::emacs_core::font::seed_live_frame_default_face_from_font_parameter(eval, frame_id);
+    Ok(Value::NIL)
+}
+
+/// `(tool-bar-pixel-width &optional FRAME)`; GNU `decode_any_frame`.
+///
+/// GNU decodes before it answers (`src/frame.c:4439`):
+///
+///     #ifdef FRAME_TOOLBAR_WIDTH
+///       struct frame *f = decode_any_frame (frame);
+///       if (FRAME_WINDOW_P (f)) return make_fixnum (FRAME_TOOLBAR_WIDTH (f));
+///     #endif
+///       return make_fixnum (0);
+///
+/// so a non-frame signals `framep` and never reaches the constant.  The width
+/// is 0 until a side-mounted tool bar exists to measure, but the DECODE is not
+/// a placeholder -- it is the whole Lisp-visible contract of the argument, and
+/// dropping it is what let `(tool-bar-pixel-width SOME-WINDOW)` answer 0.
+///
+/// `decode_any_frame`, not the live decoder: GNU's is a bare `CHECK_FRAME`, so
+/// a dead frame is accepted here just as `framep` accepts one.
+pub(crate) fn builtin_tool_bar_pixel_width(
+    eval: &mut crate::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args_range("tool-bar-pixel-width", &args, 0, 1)?;
+    match args.first().filter(|frame| !frame.is_nil()) {
+        Some(frame) => {
+            crate::emacs_core::window_cmds::resolve_frame_id_in_state(
+                &mut eval.frames,
+                &mut eval.edit.buffers,
+                Some(frame),
+                neovm_value::display_vocab::FrameDomain::Any,
+            )?;
+        }
+        None => {
+            crate::emacs_core::window_cmds::ensure_selected_frame_id_in_state(
+                &mut eval.frames,
+                &mut eval.edit.buffers,
+            );
+        }
+    }
+    Ok(Value::fixnum(0))
+}
+
+pub(crate) fn builtin_xw_display_color_p_ctx(
+    ctx: &crate::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args_range("xw-display-color-p", &args, 0, 1)?;
+    if let Some(display) = args.first() {
+        crate::emacs_core::display::expect_display_designator_in_state(&ctx.frames, display)?;
+    }
+    if crate::emacs_core::display::display_window_system_symbol_in_state(
+        &ctx.frames,
+        ctx.variables(),
+        &[],
+        args.first(),
+    )?
+    .is_some_and(crate::emacs_core::display::gui_window_system_active_value)
+    {
+        Ok(Value::T)
+    } else {
+        Ok(Value::NIL)
+    }
 }

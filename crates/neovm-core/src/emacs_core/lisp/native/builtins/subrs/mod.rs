@@ -5,6 +5,11 @@
 //! implementation and leave only the sequencing call here.
 
 use super::*;
+use crate::emacs_core::display_entries::{
+    builtin_old_selected_frame, builtin_query_fontset, builtin_reconsider_frame_fonts,
+    builtin_tool_bar_pixel_width, builtin_xw_display_color_p_ctx,
+};
+use crate::emacs_core::frame::{builtin_next_frame, builtin_previous_frame};
 use crate::emacs_core::gnutls_entries as gnutls;
 #[cfg(test)]
 use crate::emacs_core::subr::SubrBatch;
