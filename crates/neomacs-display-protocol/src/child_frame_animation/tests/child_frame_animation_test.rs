@@ -121,7 +121,7 @@ fn a_cubic_bezier_slot_carries_its_control_points_into_the_spec() {
 
 #[test]
 fn the_registry_carries_every_slot_and_the_slide_property() {
-    // `neomacs-effect-set` validates a property key against the value already
+    // `neomacs--effect-set` validates a property key against the value already
     // stored, so a property missing from the serialized shape makes switching
     // it from Lisp unreachable. Walking every name of the config struct and
     // round-tripping one value through the registry proves the opposite.

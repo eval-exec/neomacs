@@ -2648,7 +2648,7 @@ fn every_effect_in_the_registry_can_report_its_values() {
     // The registry is pure serde reflection over `VisualConfig`, and a property
     // that serializes to an object (anything but the `Duration` special case)
     // makes `effect_values` fail for the *whole* effect — which takes
-    // `neomacs-effect-get` down for it and `neomacs-effects-apply`, which walks
+    // `neomacs-effect-get` down for it and `neomacs--effects-apply`, which walks
     // every effect, down entirely. That failure is invisible from the Rust side
     // until someone asks from Lisp, so it is asserted here instead.
     let config = VisualConfig::default();
@@ -2730,7 +2730,7 @@ fn every_window_animation_slot_reaches_the_registry_as_scalars() {
     // break if a slot stored a `MotionSpec` directly: every variant but
     // `Instant` serializes to an object, which the registry cannot represent,
     // so `neomacs-effect-get` would fail for the slot — and
-    // `neomacs-effects-apply`, which walks every effect, with it.
+    // `neomacs--effects-apply`, which walks every effect, with it.
     assert!(sprung.effect_values("window-open").is_ok());
 }
 

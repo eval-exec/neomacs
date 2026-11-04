@@ -92,9 +92,10 @@ impl Default for BufferTransitionConfig {
             // Off by default: switching buffers repaints instantly, matching
             // stock Emacs, the same choice ScrollTransitionConfig makes below.
             // Opt in at runtime with
-            //   (setq neomacs-buffer-transition-enabled t)
-            // or via the `neomacs-effects' profile. The effect/duration/easing
-            // below are the values used once it is enabled.
+            //   (setopt neomacs-buffer-transition-enabled t)
+            // or through Customize; a plain `setq' never reaches the renderer.
+            // The effect/duration/easing below are the values used once it is
+            // enabled.
             enabled: false,
             duration: Duration::from_millis(200),
             effect: TransitionEffect::Slide,
@@ -118,9 +119,10 @@ impl Default for ScrollTransitionConfig {
         Self {
             // Off by default: C-v/M-v (and other scrolls) update instantly,
             // matching stock Emacs. Opt in at runtime with
-            //   (setq neomacs-scroll-transition-enabled t)
-            // or via the `neomacs-effects' profile. The effect/duration/easing
-            // below are the values used once it is enabled.
+            //   (setopt neomacs-scroll-transition-enabled t)
+            // or through Customize; a plain `setq' never reaches the renderer.
+            // The effect/duration/easing below are the values used once it is
+            // enabled.
             enabled: false,
             duration: Duration::from_millis(150),
             effect: TransitionEffect::Slide,

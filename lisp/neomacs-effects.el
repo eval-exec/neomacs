@@ -6,8 +6,11 @@
 
 ;; Every renderer effect is configured through `defcustom', the way
 ;; `blink-cursor-interval' and friends are: one option per property, with a
-;; type, a docstring and a group.  There is no public setter function.  Setting
-;; an option with `setq' or through \\[customize] is the whole interface.
+;; type, a docstring and a group.  There is no public setter function: `setopt'
+;; and \\[customize] are the whole interface, because an option reaches the
+;; renderer through its `:set' function.  As with any GNU option that has one, a
+;; plain `setq' once this file is loaded changes the variable and nothing else;
+;; a value already set when this file loads is picked up by the `defcustom'.
 ;;
 ;; The properties themselves are defined in Rust and published by
 ;; `neomacs-effect-schema', which reports each property's kind, its bounds and,
