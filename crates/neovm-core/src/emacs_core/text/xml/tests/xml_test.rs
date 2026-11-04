@@ -1030,6 +1030,70 @@ fn libxml_parse_html_region_preserves_literal_less_than() {
 }
 
 #[test]
+fn libxml_parse_html_region_drops_whitespace_in_head_context() {
+    crate::test_utils::init_test_tracing();
+
+    // GNU 31.1: (html nil (head nil (title nil "T") (meta nil)))
+    let expected = Value::list(vec![
+        Value::symbol("html"),
+        Value::NIL,
+        Value::list(vec![
+            Value::symbol("head"),
+            Value::NIL,
+            Value::list(vec![Value::symbol("title"), Value::NIL, Value::string("T")]),
+            Value::list(vec![Value::symbol("meta"), Value::NIL]),
+        ]),
+    ]);
+    assert_eq!(
+        parse_html_region(b"<title>T</title>\n<meta>", false).unwrap(),
+        expected
+    );
+    assert_eq!(
+        parse_html_region(b"<title>T</title> <meta>", false).unwrap(),
+        expected
+    );
+
+    // GNU 31.1: (html nil (head nil (meta nil)))
+    assert_eq!(
+        parse_html_region(b"<head>\n<meta></head>", false).unwrap(),
+        Value::list(vec![
+            Value::symbol("html"),
+            Value::NIL,
+            Value::list(vec![
+                Value::symbol("head"),
+                Value::NIL,
+                Value::list(vec![Value::symbol("meta"), Value::NIL]),
+            ]),
+        ])
+    );
+
+    // GNU 31.1: (html nil (head nil (title nil "T")) (body nil "x"))
+    assert_eq!(
+        parse_html_region(
+            b"<html>\n<head><title>T</title></head>\n<body>x</body>\n</html>",
+            false
+        )
+        .unwrap(),
+        Value::list(vec![
+            Value::symbol("html"),
+            Value::NIL,
+            Value::list(vec![
+                Value::symbol("head"),
+                Value::NIL,
+                Value::list(vec![Value::symbol("title"), Value::NIL, Value::string("T")]),
+            ]),
+            body(vec![Value::string("x")]),
+        ])
+    );
+
+    // GNU 31.1: (html nil (body nil "x"))
+    assert_eq!(
+        parse_html_region(b"<html> <body>x</body> </html>", false).unwrap(),
+        html(vec![body(vec![Value::string("x")])])
+    );
+}
+
+#[test]
 fn libxml_parse_html_region_strips_a_leading_utf8_bom_like_libxml2() {
     crate::test_utils::init_test_tracing();
 

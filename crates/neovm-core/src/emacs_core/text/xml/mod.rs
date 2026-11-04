@@ -535,12 +535,14 @@ fn is_top_comment(node: &TopNode) -> bool {
 }
 
 fn is_blank_text_node(node: &TopNode) -> bool {
-    node.tag.is_none()
-        && node
-            .value
-            .as_lisp_string()
-            .and_then(|text| text.as_utf8_str())
-            .is_some_and(|text| text.chars().all(|c| c.is_ascii_whitespace()))
+    node.tag.is_none() && is_blank_string(&node.value)
+}
+
+fn is_blank_string(value: &Value) -> bool {
+    value
+        .as_lisp_string()
+        .and_then(|text| text.as_utf8_str())
+        .is_some_and(|text| text.chars().all(|c| c.is_ascii_whitespace()))
 }
 
 /// Where a top-level node lands while reconstructing libxml2's document.
@@ -580,6 +582,11 @@ fn wrap_html_fragment(nodes: Vec<TopNode>) -> Option<Value> {
                 FragmentMode::Body => body.push(node.value),
                 FragmentMode::AfterBody => after_body.push(node.value),
             }
+            continue;
+        }
+        if is_blank_text_node(&node) && matches!(mode, FragmentMode::Head | FragmentMode::AfterHead)
+        {
+            // Whitespace does not end the head phase or become head content.
             continue;
         }
         match node.tag.as_deref() {
@@ -828,18 +835,37 @@ fn convert_tl_node(node: &tl::Node, parser: &tl::Parser, shielded: &ShieldedHtml
                 }
                 vals.finish()
             };
+            // libxml2 drops whitespace-only direct children of html and head.
+            let child_values =
+                if tag.eq_ignore_ascii_case("html") || tag.eq_ignore_ascii_case("head") {
+                    child_values
+                        .into_iter()
+                        .filter(|value| !is_blank_string(value))
+                        .collect()
+                } else {
+                    child_values
+                };
             Some(make_element_node(tag, attrs, child_values))
         }
     }
 }
 
-/// Choose a prefix once per document that cannot collide with its text.
-fn unique_prefix(input: &str, prefix: &str) -> String {
-    let mut prefix = prefix.to_string();
-    while input.contains(&prefix) {
-        prefix.push('_');
+/// Choose a prefix once per document that is absent from its text.
+///
+/// Retries are bounded so a crafted run of matching bytes cannot make this
+/// quadratic; after the bounded candidates, a randomly seeded hash gives a
+/// collision probability that is negligible.
+fn unique_prefix(input: &str, base: &str) -> String {
+    for counter in 0..32u32 {
+        let prefix = format!("{base}{counter:x}-");
+        if !input.contains(&prefix) {
+            return prefix;
+        }
     }
-    prefix
+    use std::hash::{BuildHasher, Hasher};
+    let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+    hasher.write(input.as_bytes());
+    format!("{base}{:x}-", hasher.finish())
 }
 
 /// Whether the `<` at `index` starts an HTML tag-like token rather than text.
