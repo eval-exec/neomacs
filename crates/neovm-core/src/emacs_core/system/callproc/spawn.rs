@@ -37,55 +37,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Output};
 
-/// One standard descriptor of the child, mirroring `std::process::Stdio`.
-pub(crate) enum ChildStdio {
-    /// Share the editor's descriptor.
-    Inherit,
-    /// Connect to `/dev/null` (or the platform's null device).
-    Null,
-    /// A fresh pipe whose editor end lands on the [`SpawnedChild`].
-    Piped,
-    /// An open file or pipe end the child receives as its descriptor.
-    File(File),
-}
-
-impl From<File> for ChildStdio {
-    fn from(file: File) -> Self {
-        Self::File(file)
-    }
-}
-
-impl From<os_pipe::PipeWriter> for ChildStdio {
-    fn from(writer: os_pipe::PipeWriter) -> Self {
-        Self::File(pipe_writer_into_file(writer))
-    }
-}
-
-impl From<os_pipe::PipeReader> for ChildStdio {
-    fn from(reader: os_pipe::PipeReader) -> Self {
-        Self::File(pipe_reader_into_file(reader))
-    }
-}
-
-#[cfg(unix)]
-fn pipe_writer_into_file(writer: os_pipe::PipeWriter) -> File {
-    File::from(std::os::fd::OwnedFd::from(writer))
-}
-
-#[cfg(unix)]
-fn pipe_reader_into_file(reader: os_pipe::PipeReader) -> File {
-    File::from(std::os::fd::OwnedFd::from(reader))
-}
-
-#[cfg(windows)]
-fn pipe_writer_into_file(writer: os_pipe::PipeWriter) -> File {
-    File::from(std::os::windows::io::OwnedHandle::from(writer))
-}
-
-#[cfg(windows)]
-fn pipe_reader_into_file(reader: os_pipe::PipeReader) -> File {
-    File::from(std::os::windows::io::OwnedHandle::from(reader))
-}
+use crate::emacs_core::eval::data::process_spawn::{ChildBackend, ChildStdio, SpawnedChild};
 
 /// Environment edits with `std::process::Command` semantics: `env_clear`
 /// drops the inherited environment and every earlier edit; later edits win.
@@ -348,50 +300,24 @@ fn std_stdio(stdio: ChildStdio) -> std::process::Stdio {
     }
 }
 
-/// A spawned pipe-stdio child: its pid, the editor's ends of any piped
-/// descriptors, and the handle that waits for or kills it.
-pub(crate) struct SpawnedChild {
-    pid: u32,
-    pub(crate) stdin: Option<File>,
-    pub(crate) stdout: Option<File>,
-    pub(crate) stderr: Option<File>,
-    backend: ChildBackend,
-    // ECHILD revokes numeric signalling; it is not an exit status.
-    signal_authority: bool,
+/// Child wait/kill IO for the evaluator-owned spawn state (peer ruling
+/// 16:2xZ).  Declared and implemented in the system layer; the state type
+/// lives in eval data and only its fields are read here.
+pub(crate) trait SpawnedChildIo {
+    fn wait(&mut self) -> io::Result<ExitStatus>;
+    fn try_wait(&mut self) -> io::Result<Option<ExitStatus>>;
+    fn kill(&mut self) -> io::Result<()>;
+    #[cfg(unix)]
+    fn wait_with_output_interruptible(
+        self,
+        attention: impl FnMut() -> io::Result<()>,
+    ) -> io::Result<Output>;
+    #[cfg(any(test, not(unix)))]
+    fn wait_with_output(self) -> io::Result<Output>;
 }
 
-enum ChildBackend {
-    /// Reaped with `waitpid`; `status` caches the exit once collected so a
-    /// later `kill` can never signal a reused pid.
-    #[cfg(all(target_os = "linux", target_env = "gnu"))]
-    Pid {
-        status: Option<ExitStatus>,
-    },
-    Std(std::process::Child),
-}
-
-impl SpawnedChild {
-    /// Adopt a child spawned through `std::process::Command`, moving its
-    /// piped descriptors onto this handle.
-    pub(crate) fn from_std(mut child: std::process::Child) -> Self {
-        let stdin = child.stdin.take().map(std_pipe_into_file);
-        let stdout = child.stdout.take().map(std_pipe_into_file);
-        let stderr = child.stderr.take().map(std_pipe_into_file);
-        Self {
-            pid: child.id(),
-            stdin,
-            stdout,
-            stderr,
-            backend: ChildBackend::Std(child),
-            signal_authority: true,
-        }
-    }
-
-    pub(crate) fn id(&self) -> u32 {
-        self.pid
-    }
-
-    pub(crate) fn wait(&mut self) -> io::Result<ExitStatus> {
+impl SpawnedChildIo for SpawnedChild {
+    fn wait(&mut self) -> io::Result<ExitStatus> {
         let result = match &mut self.backend {
             #[cfg(all(target_os = "linux", target_env = "gnu"))]
             ChildBackend::Pid { status } => {
@@ -402,14 +328,14 @@ impl SpawnedChild {
             }
             ChildBackend::Std(child) => child.wait(),
         };
-        self.revoke_lost_child(&result);
+        revoke_lost_child(self, &result);
         result
     }
 
     /// Non-blocking status probe. The Unix reaper also probes by PID directly
     /// for stop/continue detail; synchronous ownership stays on this handle.
     #[cfg_attr(unix, allow(dead_code))]
-    pub(crate) fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
+    fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
         let result = match &mut self.backend {
             #[cfg(all(target_os = "linux", target_env = "gnu"))]
             ChildBackend::Pid { status } => {
@@ -424,23 +350,13 @@ impl SpawnedChild {
             }
             ChildBackend::Std(child) => child.try_wait(),
         };
-        self.revoke_lost_child(&result);
+        revoke_lost_child(self, &result);
         result
-    }
-
-    fn revoke_lost_child<T>(&mut self, result: &io::Result<T>) {
-        #[cfg(unix)]
-        if result
-            .as_ref()
-            .is_err_and(|error| error.raw_os_error() == Some(libc::ECHILD))
-        {
-            self.signal_authority = false;
-        }
     }
 
     /// Force the child to exit.  Like `std::process::Child::kill`, a child
     /// that has already been reaped is left alone and `Ok(())` is returned.
-    pub(crate) fn kill(&mut self) -> io::Result<()> {
+    fn kill(&mut self) -> io::Result<()> {
         #[cfg(unix)]
         {
             // Retention was established BEFORE creation; opening a pidfd on
@@ -471,7 +387,7 @@ impl SpawnedChild {
     /// never in the handler or a worker. On interruption/error this exact,
     /// unreaped child is killed and reaped before control unwinds into the host.
     #[cfg(unix)]
-    pub(crate) fn wait_with_output_interruptible(
+    fn wait_with_output_interruptible(
         mut self,
         mut attention: impl FnMut() -> io::Result<()>,
     ) -> io::Result<Output> {
@@ -498,7 +414,7 @@ impl SpawnedChild {
                 if let Some(status) = self.try_wait()? {
                     break status;
                 }
-                let exit = exit.get_or_insert_with(|| self.exit_wake_fd());
+                let exit = exit.get_or_insert_with(|| exit_wake_fd(&self));
                 let timeout = if exit.is_some() {
                     50
                 } else {
@@ -522,31 +438,9 @@ impl SpawnedChild {
         result
     }
 
-    /// A descriptor that becomes readable when this child exits. Opened only
-    /// after a WNOHANG probe found the child unreaped, so the PID still names
-    /// it; `None` (no pidfd support, or ownership already lost) makes the
-    /// caller fall back to short naps.
-    #[cfg(target_os = "linux")]
-    fn exit_wake_fd(&self) -> Option<std::os::fd::OwnedFd> {
-        use std::os::fd::FromRawFd;
-
-        if !self.signal_authority {
-            return None;
-        }
-        // SAFETY: pidfd_open has no pointer arguments.
-        let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, self.pid as libc::pid_t, 0) };
-        // SAFETY: a non-negative return is a fresh descriptor owned here.
-        (fd >= 0).then(|| unsafe { std::os::fd::OwnedFd::from_raw_fd(fd as libc::c_int) })
-    }
-
-    #[cfg(all(unix, not(target_os = "linux")))]
-    fn exit_wake_fd(&self) -> Option<std::os::fd::OwnedFd> {
-        None
-    }
-
     /// Close stdin, drain stdout and stderr to completion, then wait.
     #[cfg(any(test, not(unix)))]
-    pub(crate) fn wait_with_output(mut self) -> io::Result<Output> {
+    fn wait_with_output(mut self) -> io::Result<Output> {
         drop(self.stdin.take());
         let (stdout, stderr) = drain_pipes(self.stdout.take(), self.stderr.take())?;
         let status = self.wait()?;
@@ -558,14 +452,37 @@ impl SpawnedChild {
     }
 }
 
-#[cfg(unix)]
-fn std_pipe_into_file<T: Into<std::os::fd::OwnedFd>>(pipe: T) -> File {
-    File::from(pipe.into())
+/// ECHILD revokes numeric signalling; it is not an exit status.
+fn revoke_lost_child<T>(child: &mut SpawnedChild, result: &io::Result<T>) {
+    #[cfg(unix)]
+    if result
+        .as_ref()
+        .is_err_and(|error| error.raw_os_error() == Some(libc::ECHILD))
+    {
+        child.signal_authority = false;
+    }
 }
 
-#[cfg(windows)]
-fn std_pipe_into_file<T: Into<std::os::windows::io::OwnedHandle>>(pipe: T) -> File {
-    File::from(pipe.into())
+/// A descriptor that becomes readable when this child exits. Opened only
+/// after a WNOHANG probe found the child unreaped, so the PID still names
+/// it; `None` (no pidfd support, or ownership already lost) makes the
+/// caller fall back to short naps.
+#[cfg(target_os = "linux")]
+fn exit_wake_fd(child: &SpawnedChild) -> Option<std::os::fd::OwnedFd> {
+    use std::os::fd::FromRawFd;
+
+    if !child.signal_authority {
+        return None;
+    }
+    // SAFETY: pidfd_open has no pointer arguments.
+    let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, child.pid as libc::pid_t, 0) };
+    // SAFETY: a non-negative return is a fresh descriptor owned here.
+    (fd >= 0).then(|| unsafe { std::os::fd::OwnedFd::from_raw_fd(fd as libc::c_int) })
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn exit_wake_fd(_child: &SpawnedChild) -> Option<std::os::fd::OwnedFd> {
+    None
 }
 
 /// Read both output pipes to EOF without letting either fill and block the

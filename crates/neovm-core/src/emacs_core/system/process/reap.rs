@@ -133,7 +133,7 @@
 //! through the state machine.
 
 use super::{Value, process_status_exit_value};
-use crate::emacs_core::callproc::SpawnedChild;
+use crate::emacs_core::callproc::{SpawnedChild, SpawnedChildIo};
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroUsize;
 use std::sync::{

@@ -20,7 +20,8 @@ use crate::buffer::BufferManager;
 use crate::heap_types::LispString;
 
 mod spawn;
-pub(crate) use spawn::{ChildCommand, ChildStdio, SpawnedChild};
+pub(crate) use crate::emacs_core::eval::data::process_spawn::{ChildStdio, SpawnedChild};
+pub(crate) use spawn::{ChildCommand, SpawnedChildIo};
 
 pub use neovm_value::system_vocab::platform::command_line_max_length;
 
@@ -886,7 +887,7 @@ fn run_process_command_in_state(
 /// boundary, preserving the original Flow after the child has been cleaned up.
 fn wait_for_process_output(
     eval: &mut super::eval::Context,
-    child: spawn::SpawnedChild,
+    child: SpawnedChild,
     error_context: &str,
 ) -> Result<std::process::Output, Flow> {
     #[cfg(unix)]

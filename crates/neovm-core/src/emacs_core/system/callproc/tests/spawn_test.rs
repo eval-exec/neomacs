@@ -2,7 +2,7 @@
 //! wiring, environment and working-directory semantics, output draining,
 //! and the `posix_spawn` engine selection.
 
-use super::{ChildCommand, ChildStdio};
+use super::{ChildCommand, ChildStdio, SpawnedChildIo};
 use std::io::{Read, Write};
 
 fn sh(script: &str) -> ChildCommand {
