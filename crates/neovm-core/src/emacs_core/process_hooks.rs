@@ -2,8 +2,8 @@
 //!
 //! ProcessManager and its IO methods stay in the process module; this module
 //! only assembles the one descriptor eval publishes at `Context::new_inner` /
-//! `Context::from_dump`. `WaitNotifier`/host-effect slots are deferred to
-//! W5/E13 per peer 13:3xZ and are not part of this table.
+//! `Context::from_dump`.  `WaitNotifier` is eval-owned since A3 and has a slot;
+//! the remaining host-effect types are deferred to W5/E13 per peer 13:3xZ.
 
 #![allow(private_interfaces)] // host_effect/switch vocabulary becomes eval-owned at W5/E13
 use crate::emacs_core::eval::process_hooks::{
@@ -44,6 +44,12 @@ fn open_channel_for_module(
 
 fn print_process_handle(value: &crate::emacs_core::value::Value) -> Option<String> {
     crate::emacs_core::process::print_process_handle(value)
+}
+
+fn wait_notifier(
+    ctx: &crate::emacs_core::eval::Context,
+) -> Option<crate::emacs_core::eval::data::process_state::WaitNotifier> {
+    ctx.processes.wait_notifier()
 }
 
 static NEXT_TOKEN: AtomicU64 = AtomicU64::new(1);
@@ -211,6 +217,7 @@ static CANONICAL_PROCESS_HOOKS: ProcessHooks = ProcessHooks::new(
     delete_process,
     open_channel_for_module,
     print_process_handle,
+    wait_notifier,
     SelectHooks::new(
         eval_select_handle,
         select_notify,

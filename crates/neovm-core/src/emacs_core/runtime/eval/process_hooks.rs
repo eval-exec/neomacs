@@ -10,13 +10,14 @@
 //! Frequency: per buffer/process teardown, per module channel open, per
 //! process object print — never in a Lisp loop.
 //!
-//! `WaitNotifier` and the host-effect-typed readiness slots are deliberately
-//! NOT here: peer ruling 13:3xZ moves those types with eval at W5/E13, so
-//! they cannot appear in an eval-declared signature yet; their call sites
-//! stay direct until then.
+//! `WaitNotifier` is eval-owned (eval::data::process_state) and is carried by
+//! this table.  The remaining host-effect-typed readiness slots
+//! (NativeReadinessCause/HostSessionControl) stay direct until host_effect
+//! moves with eval at W5/E13 (peer 13:3xZ).
 
 #![allow(private_interfaces)] // host_effect vocabulary becomes eval-owned at W5/E13
 use super::*;
+use crate::emacs_core::eval::data::process_state::WaitNotifier;
 use crate::heap_types::ProcessId;
 use crate::host_effect::wake::{ControlDestination, ControlNudge, ControlWake};
 use neovm_value::{HookInstallError, HookInstallStatus};
@@ -240,6 +241,9 @@ impl SelectHooks {
     }
 }
 
+/// Host-input/diagnostic wake handle for the current wait loop.
+pub type WaitNotifierHook = fn(&Context) -> Option<WaitNotifier>;
+
 /// The cold process-IO bodies eval calls.
 #[derive(Clone, Copy)]
 pub struct ProcessHooks {
@@ -247,6 +251,7 @@ pub struct ProcessHooks {
     delete: DeleteProcess,
     open_channel: OpenChannelForModule,
     print_handle: PrintProcessHandle,
+    wait_notifier: WaitNotifierHook,
     select: SelectHooks,
     main_wait: MainWaitHooks,
 }
@@ -258,6 +263,7 @@ impl ProcessHooks {
         delete: DeleteProcess,
         open_channel: OpenChannelForModule,
         print_handle: PrintProcessHandle,
+        wait_notifier: WaitNotifierHook,
         select: SelectHooks,
         main_wait: MainWaitHooks,
     ) -> Self {
@@ -266,6 +272,7 @@ impl ProcessHooks {
             delete,
             open_channel,
             print_handle,
+            wait_notifier,
             select,
             main_wait,
         }
@@ -325,6 +332,12 @@ pub fn open_channel_for_module(ctx: &mut Context, process: Value) -> Result<std:
 /// The printed representation of a process object.
 pub fn print_process_handle(value: &Value) -> Option<String> {
     (process_hooks().print_handle)(value)
+}
+
+/// The wake handle for the current wait loop (host input, diagnostics,
+/// asynchronous process work).
+pub fn wait_notifier(ctx: &Context) -> Option<WaitNotifier> {
+    (process_hooks().wait_notifier)(ctx)
 }
 
 /// Capture the world's process-select handle as an eval token.

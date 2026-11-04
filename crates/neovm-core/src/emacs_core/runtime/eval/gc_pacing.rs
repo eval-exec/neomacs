@@ -4,7 +4,6 @@
 //! the same view of `Context` and the parent's private items (`use super::*`).
 
 use super::*;
-use crate::emacs_core::process::SystemProcessExt;
 use crate::tagged::gc::MarkPhase;
 
 impl Context {
@@ -1049,7 +1048,7 @@ impl Context {
     pub fn wait_notifier(
         &self,
     ) -> Option<crate::emacs_core::eval::data::process_state::WaitNotifier> {
-        self.processes.wait_notifier()
+        crate::emacs_core::eval::process_hooks::wait_notifier(self)
     }
 
     pub fn set_display_host(&mut self, mut host: Box<dyn DisplayHost>) {

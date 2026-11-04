@@ -3,7 +3,6 @@
 use super::super::super::*;
 use super::{W32Filter, W32Request};
 use crate::emacs_core::error::expect_args;
-use crate::emacs_core::process::SystemProcessExt;
 
 /// GNU's w32 backend exposes an opaque pointer integer. Neomacs keeps the
 /// platform handle private and uses this fixnum only as a compatibility token.
