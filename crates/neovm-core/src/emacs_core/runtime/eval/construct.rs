@@ -1510,7 +1510,6 @@ impl Context {
         super::super::dired::register_bootstrap_vars(obarray);
         super::boot_vars::xdisp::register_bootstrap_vars(obarray);
         super::super::textprop::register_bootstrap_vars(obarray);
-        super::super::xfaces::register_bootstrap_vars(obarray);
         super::boot_vars::frame::register_bootstrap_vars(obarray);
         super::super::buffer_vars::register_bootstrap_vars(obarray);
         super::boot_vars::image::register_bootstrap_vars(obarray);

@@ -38,6 +38,7 @@ fn register_core_bootstrap_vars(obarray: &mut crate::emacs_core::symbol::Obarray
     crate::emacs_core::fileio::register_bootstrap_vars(obarray);
     crate::emacs_core::process::register_bootstrap_vars(obarray);
     crate::emacs_core::dbusbind::register_bootstrap_vars(obarray);
+    crate::emacs_core::xfaces::register_bootstrap_vars(obarray);
 }
 
 static CANONICAL_LIFECYCLE_HOOKS: LifecycleHooks = LifecycleHooks::new(

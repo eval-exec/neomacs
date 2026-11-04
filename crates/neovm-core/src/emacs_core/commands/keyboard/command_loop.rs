@@ -576,7 +576,7 @@ impl CommandLoopHost for Context {
             let _completed_inputs = self.input_progress.begin_command();
 
             self.flush_pending_safe_funcalls();
-            self.sync_current_buffer_to_selected_window();
+            sync_current_buffer_to_selected_window(self);
 
             // Save the outgoing `current-prefix-arg` into
             // `last-prefix-arg` before reading the next command.
@@ -725,7 +725,7 @@ impl CommandLoopHost for Context {
                 }
             }
 
-            self.sync_current_buffer_to_selected_window();
+            sync_current_buffer_to_selected_window(self);
 
             let Some(binding) = binding else {
                 // The read reached a typed input boundary: GNU's
@@ -882,7 +882,7 @@ impl CommandLoopHost for Context {
 
             // Keep the selected window's point and current buffer/runtime view
             // aligned before post-command work and redisplay observe state.
-            self.sync_current_buffer_to_selected_window();
+            sync_current_buffer_to_selected_window(self);
 
             // GNU does not recover inside `command_loop_1'. Any non-local
             // result unwinds the unfinished command (so post-command hooks and
@@ -954,7 +954,7 @@ impl CommandLoopHost for Context {
                         != apfp_prev_modiff;
                     self.adjust_point_for_property(apfp_last_pt, modified)?;
                     // Re-align the selected window with the adjusted point.
-                    self.sync_current_buffer_to_selected_window();
+                    sync_current_buffer_to_selected_window(self);
                 }
             }
 
@@ -1358,4 +1358,24 @@ pub fn recursive_edit(ctx: &mut Context) -> Result<(), String> {
         Err(flow) if flow.is_shutdown() => Ok(()),
         Err(flow) => Err(crate::emacs_core::print::format_flow_with_eval(ctx, &flow)),
     }
+}
+
+/// Re-align the evaluator's current buffer and the selected window's point
+/// (the GNU `command_loop_1` `set_buffer_internal` step).  The state is
+/// eval-owned; the behaviour stays in the core command layer (stage-4 N17).
+fn sync_current_buffer_to_selected_window(eval: &mut crate::emacs_core::eval::Context) {
+    let Some(frame_id) = eval.frames.selected_frame().map(|frame| frame.id) else {
+        return;
+    };
+    crate::emacs_core::window_cmds::remember_selected_window_point_in_state(
+        &mut eval.frames,
+        &mut eval.edit.buffers,
+        frame_id,
+    );
+    crate::emacs_core::window_cmds::sync_selected_window_buffer_in_state(
+        &eval.frames,
+        &mut eval.edit.buffers,
+        frame_id,
+    );
+    let _ = eval.sync_current_buffer_runtime_state();
 }

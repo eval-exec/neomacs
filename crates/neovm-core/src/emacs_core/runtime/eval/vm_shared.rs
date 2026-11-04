@@ -332,23 +332,4 @@ impl Context {
         *self.interactive_minibuffer_read_count =
             self.interactive_minibuffer_read_count.saturating_add(1);
     }
-
-    /// Remember selected-window point and synchronize its buffer/runtime state.
-    /// With no selected frame, leave the caller's current buffer unchanged.
-    pub(crate) fn sync_current_buffer_to_selected_window(&mut self) {
-        let Some(frame_id) = self.frames.selected_frame().map(|frame| frame.id) else {
-            return;
-        };
-        super::super::window_cmds::remember_selected_window_point_in_state(
-            &mut self.frames,
-            &mut self.edit.buffers,
-            frame_id,
-        );
-        super::super::window_cmds::sync_selected_window_buffer_in_state(
-            &self.frames,
-            &mut self.edit.buffers,
-            frame_id,
-        );
-        let _ = self.sync_current_buffer_runtime_state();
-    }
 }
