@@ -52,13 +52,12 @@ use crate::face::FaceTable;
 use crate::gc_trace::GcTrace;
 use crate::tagged::header::{CLOSURE_ARGLIST, SubrDispatchKind, SubrInteractivity};
 use crate::window::{
-    BodyRedisplayRevision, ForcedBodyRedisplay, FrameFullscreen, FrameManager,
-    WindowLayoutQueryAdapter,
+    BodyRedisplayRevision, ForcedBodyRedisplay, FrameManager, WindowLayoutQueryAdapter,
 };
 pub use neomacs_display_protocol::GraphicalFaceAttribute;
 use neovm_edit::emacs_core::display_metrics::WindowId;
 pub use neovm_value::display_vocab::XwidgetScriptRequestId;
-use neovm_value::display_vocab::{FontSlant, FontWeight, FontWidth};
+use neovm_value::display_vocab::{FontSlant, FontWeight, FontWidth, FrameFullscreen};
 use neovm_value::kmacro::KmacroManager;
 
 pub mod data;

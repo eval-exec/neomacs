@@ -23,10 +23,10 @@ pub use crate::emacs_core::eval::protocol::{
 };
 use crate::face::Face as RuntimeFace;
 use crate::heap_types::LispString;
-use crate::window::FrameFullscreen;
 pub use neomacs_display_protocol::{GraphicalFaceAttribute, SelectionOwner};
 use neomacs_display_protocol::{VideoId, WebViewId};
 use neomacs_video_model::{PlaybackAction, VideoDiagnostics, VideoOpenRequest};
+use neovm_value::display_vocab::FrameFullscreen;
 
 /// Display and exact opened-font facts for the first graphical frame.
 ///

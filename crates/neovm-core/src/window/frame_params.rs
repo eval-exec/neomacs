@@ -14,31 +14,7 @@ pub const GNU_FRAME_PARAM_COUNT: usize = 54;
 
 pub use neovm_value::display_vocab::FrameParam;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, EnumString, IntoStaticStr)]
-#[strum(serialize_all = "kebab-case")]
-pub enum FrameFullscreen {
-    /// Lisp nil explicitly requests restoration; it is not a missing request.
-    #[strum(serialize = "nil")]
-    Windowed,
-    Fullboth,
-    Fullscreen,
-    Fullwidth,
-    Fullheight,
-    Maximized,
-}
-
-impl FrameFullscreen {
-    pub fn from_symbol_value(value: &Value) -> Option<Self> {
-        if value.is_nil() {
-            return Some(Self::Windowed);
-        }
-        value.as_bare_symbol_name()?.parse().ok()
-    }
-
-    pub fn name(self) -> &'static str {
-        self.into()
-    }
-}
+pub use neovm_value::display_vocab::FrameFullscreen;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, EnumString, IntoStaticStr)]
 #[strum(serialize_all = "kebab-case")]

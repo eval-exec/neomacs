@@ -102,6 +102,36 @@ impl FrameVisibility {
     }
 }
 
+/// GNU's frame fullscreen/windowed state, as a closed set.
+///
+/// GNU's symbols are nil/`fullboth`/`fullscreen`/`fullwidth`/`fullheight`/
+/// `maximized`; `Windowed` is the explicit nil request, not a missing value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, strum::EnumString, strum::IntoStaticStr)]
+#[strum(serialize_all = "kebab-case")]
+pub enum FrameFullscreen {
+    /// Lisp nil explicitly requests restoration; it is not a missing request.
+    #[strum(serialize = "nil")]
+    Windowed,
+    Fullboth,
+    Fullscreen,
+    Fullwidth,
+    Fullheight,
+    Maximized,
+}
+
+impl FrameFullscreen {
+    pub fn from_symbol_value(value: &Value) -> Option<Self> {
+        if value.is_nil() {
+            return Some(Self::Windowed);
+        }
+        value.as_bare_symbol_name()?.parse().ok()
+    }
+
+    pub fn name(self) -> &'static str {
+        self.into()
+    }
+}
+
 /// Whether hidden frames participate in a frame-tree query.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RenderFrameVisibility {
