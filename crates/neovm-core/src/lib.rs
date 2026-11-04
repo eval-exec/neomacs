@@ -18,7 +18,7 @@ pub use neovm_value::heap_types;
 #[path = "../core_test_facades/heap_types.rs"]
 pub mod heap_types;
 pub mod host_effect;
-pub use crate::emacs_core::eval::host_input;
+pub use crate::emacs_core::host_input;
 #[cfg(test)]
 mod image_identity;
 pub use crate::emacs_core::eval::keyboard;

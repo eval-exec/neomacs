@@ -342,6 +342,8 @@ pub mod eval_hook_installers;
 pub mod fileio;
 #[path = "system/filelock/mod.rs"]
 pub mod filelock;
+#[path = "system/host_input.rs"]
+pub mod host_input;
 #[path = "system/network/mod.rs"]
 pub mod network;
 #[path = "system/os_signal/mod.rs"]
