@@ -7,8 +7,8 @@
 //! `Context::new_inner` / `Context::from_dump`.
 
 use crate::emacs_core::eval::lifecycle::{
-    BootHooks, DbusbindHooks, DynamicModuleHooks, FileIoHooks, LifecycleHooks, TerminalHooks,
-    WorldStateHooks,
+    BootHooks, CommandSeamHooks, DbusbindHooks, DynamicModuleHooks, FileIoHooks, LifecycleHooks,
+    TerminalHooks, WindowTreeHooks, WorldStateHooks,
 };
 use neovm_value::display_vocab::FrameId;
 
@@ -39,6 +39,20 @@ fn register_core_bootstrap_vars(obarray: &mut crate::emacs_core::symbol::Obarray
     crate::emacs_core::process::register_bootstrap_vars(obarray);
     crate::emacs_core::dbusbind::register_bootstrap_vars(obarray);
     crate::emacs_core::xfaces::register_bootstrap_vars(obarray);
+}
+
+/// Core-side char-property window lookup (the lookup body itself lives with
+/// the window state in eval data; eval receives a plain fn pointer).
+fn char_property_window_lookup(
+    frames: Option<&crate::window::FrameManager>,
+    window: neovm_edit::emacs_core::display_metrics::WindowId,
+) -> crate::emacs_core::textprop::WindowBufferLookup {
+    match frames {
+        Some(frames) => {
+            crate::emacs_core::eval::data::window_state::char_property_window_buffer(frames, window)
+        }
+        None => crate::emacs_core::textprop::WindowBufferLookup::NotAvailable,
+    }
 }
 
 static CANONICAL_LIFECYCLE_HOOKS: LifecycleHooks = LifecycleHooks::new(
@@ -92,6 +106,22 @@ static CANONICAL_LIFECYCLE_HOOKS: LifecycleHooks = LifecycleHooks::new(
     TerminalHooks::new(
         crate::emacs_core::terminal::pure::terminal_handle_value,
         crate::emacs_core::terminal::pure::delete_terminal_noelisp_owned,
+    ),
+    CommandSeamHooks::new(
+        crate::emacs_core::window_hooks::builtin_current_window_configuration,
+        crate::emacs_core::window_hooks::set_window_configuration_with_options,
+        crate::emacs_core::window_hooks::run_redisplay_window_change_hooks,
+        crate::emacs_core::minibuffer::unwind_minibuffer_session,
+        crate::emacs_core::minibuffer::unwind_minibuffer_buffer,
+        crate::emacs_core::textprop_entries::builtin_get_char_property,
+        crate::emacs_core::minibuffer::builtin_try_completion,
+        crate::emacs_core::minibuffer::builtin_all_completions,
+        crate::emacs_core::minibuffer::builtin_test_completion,
+    ),
+    WindowTreeHooks::new(
+        char_property_window_lookup,
+        crate::window::window_resize_check,
+        crate::window::window_resize_apply,
     ),
     crate::emacs_core::timefns::reset_timefns_thread_locals,
     crate::emacs_core::sqlite::reset_sqlite_thread_locals,

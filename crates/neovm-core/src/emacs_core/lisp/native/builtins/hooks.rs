@@ -87,10 +87,8 @@ pub(crate) struct SavedWindowConfiguration(Value);
 
 impl SavedWindowConfiguration {
     pub(crate) fn capture(eval: &mut super::eval::Context, frame: Value) -> Result<Self, Flow> {
-        let configuration = crate::emacs_core::window_hooks::builtin_current_window_configuration(
-            eval,
-            vec![frame],
-        )?;
+        let configuration =
+            crate::emacs_core::eval::lifecycle::window_configuration_capture(eval, vec![frame])?;
         debug_assert!(configuration.is_window_configuration());
         Ok(Self(configuration))
     }
@@ -104,9 +102,7 @@ impl SavedWindowConfiguration {
         eval: &mut super::eval::Context,
         options: WindowConfigurationRestoreOptions,
     ) -> EvalResult {
-        crate::emacs_core::window_hooks::set_window_configuration_with_options(
-            eval, self.0, options,
-        )
+        crate::emacs_core::eval::lifecycle::window_configuration_restore(eval, self.0, options)
     }
 }
 

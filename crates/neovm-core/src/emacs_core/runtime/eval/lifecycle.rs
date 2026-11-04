@@ -22,9 +22,14 @@
 //! assertion: every call site runs only after construction/dump, so a missing
 //! descriptor means the construction seam itself is broken.
 
+use super::data::window_state::{FrameManager, WindowTree};
 use super::*;
+use crate::emacs_core::builtins::WindowConfigurationRestoreOptions;
+use crate::emacs_core::reader::{MinibufferBufferUnwind, MinibufferSessionUnwind};
+use crate::emacs_core::textprop::WindowBufferLookup;
 use crate::heap_types::LispString;
-use neovm_value::display_vocab::FrameId;
+use neovm_edit::emacs_core::display_metrics::{WindowBodyCellSize, WindowId};
+use neovm_value::display_vocab::{FrameId, SplitDirection};
 use neovm_value::error::{EvalResult, Flow};
 use neovm_value::{HookInstallError, HookInstallStatus};
 use std::any::Any;
@@ -226,6 +231,79 @@ impl TerminalHooks {
     }
 }
 
+/// Command-layer Lisp entries whose bodies stay in the core command modules
+/// (design R0).  Eval's unwind, redisplay, minibuffer and completion paths
+/// call them at a command boundary, never per bytecode step.
+#[derive(Clone, Copy)]
+pub struct CommandSeamHooks {
+    window_configuration_capture: fn(&mut Context, Vec<Value>) -> EvalResult,
+    window_configuration_restore:
+        fn(&mut Context, Value, WindowConfigurationRestoreOptions) -> EvalResult,
+    run_redisplay_window_change_hooks: fn(&mut Context) -> EvalResult,
+    unwind_minibuffer_session: fn(&mut Context, MinibufferSessionUnwind) -> EvalResult,
+    unwind_minibuffer_buffer: fn(&mut Context, MinibufferBufferUnwind) -> EvalResult,
+    get_char_property: fn(&mut Context, Vec<Value>) -> EvalResult,
+    try_completion: fn(&mut Context, Vec<Value>) -> EvalResult,
+    all_completions: fn(&mut Context, Vec<Value>) -> EvalResult,
+    test_completion: fn(&mut Context, Vec<Value>) -> EvalResult,
+}
+
+impl CommandSeamHooks {
+    /// Build the command-entry group.
+    #[allow(clippy::too_many_arguments)] // one cold descriptor, one install site
+    pub const fn new(
+        window_configuration_capture: fn(&mut Context, Vec<Value>) -> EvalResult,
+        window_configuration_restore: fn(
+            &mut Context,
+            Value,
+            WindowConfigurationRestoreOptions,
+        ) -> EvalResult,
+        run_redisplay_window_change_hooks: fn(&mut Context) -> EvalResult,
+        unwind_minibuffer_session: fn(&mut Context, MinibufferSessionUnwind) -> EvalResult,
+        unwind_minibuffer_buffer: fn(&mut Context, MinibufferBufferUnwind) -> EvalResult,
+        get_char_property: fn(&mut Context, Vec<Value>) -> EvalResult,
+        try_completion: fn(&mut Context, Vec<Value>) -> EvalResult,
+        all_completions: fn(&mut Context, Vec<Value>) -> EvalResult,
+        test_completion: fn(&mut Context, Vec<Value>) -> EvalResult,
+    ) -> Self {
+        Self {
+            window_configuration_capture,
+            window_configuration_restore,
+            run_redisplay_window_change_hooks,
+            unwind_minibuffer_session,
+            unwind_minibuffer_buffer,
+            get_char_property,
+            try_completion,
+            all_completions,
+            test_completion,
+        }
+    }
+}
+
+/// Window-tree operations that stay in the core display layer (they drive the
+/// core window body-unit rules) but operate on eval-owned window state.
+#[derive(Clone, Copy)]
+pub struct WindowTreeHooks {
+    char_property_window_lookup: fn(Option<&FrameManager>, WindowId) -> WindowBufferLookup,
+    window_resize_check: fn(&WindowTree, WindowId, SplitDirection, WindowBodyCellSize) -> bool,
+    window_resize_apply: fn(&mut WindowTree, WindowId, bool, f32, f32),
+}
+
+impl WindowTreeHooks {
+    /// Build the window-tree operation group.
+    pub const fn new(
+        char_property_window_lookup: fn(Option<&FrameManager>, WindowId) -> WindowBufferLookup,
+        window_resize_check: fn(&WindowTree, WindowId, SplitDirection, WindowBodyCellSize) -> bool,
+        window_resize_apply: fn(&mut WindowTree, WindowId, bool, f32, f32),
+    ) -> Self {
+        Self {
+            char_property_window_lookup,
+            window_resize_check,
+            window_resize_apply,
+        }
+    }
+}
+
 /// The cold lifecycle descriptor core publishes at the construction seams.
 ///
 /// Besides the per-module lifecycle groups this descriptor also carries the
@@ -244,6 +322,8 @@ pub struct LifecycleHooks {
     boot: BootHooks,
     fileio: FileIoHooks,
     terminal: TerminalHooks,
+    command: CommandSeamHooks,
+    window_tree: WindowTreeHooks,
     timefns_reset: fn(),
     sqlite_reset: fn(),
 }
@@ -259,6 +339,8 @@ impl LifecycleHooks {
         boot: BootHooks,
         fileio: FileIoHooks,
         terminal: TerminalHooks,
+        command: CommandSeamHooks,
+        window_tree: WindowTreeHooks,
         timefns_reset: fn(),
         sqlite_reset: fn(),
     ) -> Self {
@@ -270,6 +352,8 @@ impl LifecycleHooks {
             boot,
             fileio,
             terminal,
+            command,
+            window_tree,
             timefns_reset,
             sqlite_reset,
         }
@@ -308,6 +392,16 @@ impl LifecycleHooks {
     /// Terminal-registry handle operations.
     pub fn terminal(&self) -> TerminalHooks {
         self.terminal
+    }
+
+    /// Command-layer entry seams.
+    pub fn command(&self) -> CommandSeamHooks {
+        self.command
+    }
+
+    /// Window-tree operations.
+    pub fn window_tree(&self) -> WindowTreeHooks {
+        self.window_tree
     }
 
     /// The pdump-reconstruct time-zone reset.
@@ -406,6 +500,64 @@ impl TerminalHooks {
 
     fn delete_noelisp(&self) -> fn(&mut Context, u64) -> EvalResult {
         self.delete_noelisp
+    }
+}
+
+impl CommandSeamHooks {
+    fn window_configuration_capture(&self) -> fn(&mut Context, Vec<Value>) -> EvalResult {
+        self.window_configuration_capture
+    }
+
+    fn window_configuration_restore(
+        &self,
+    ) -> fn(&mut Context, Value, WindowConfigurationRestoreOptions) -> EvalResult {
+        self.window_configuration_restore
+    }
+
+    fn run_redisplay_window_change_hooks(&self) -> fn(&mut Context) -> EvalResult {
+        self.run_redisplay_window_change_hooks
+    }
+
+    fn unwind_minibuffer_session(&self) -> fn(&mut Context, MinibufferSessionUnwind) -> EvalResult {
+        self.unwind_minibuffer_session
+    }
+
+    fn unwind_minibuffer_buffer(&self) -> fn(&mut Context, MinibufferBufferUnwind) -> EvalResult {
+        self.unwind_minibuffer_buffer
+    }
+
+    fn get_char_property(&self) -> fn(&mut Context, Vec<Value>) -> EvalResult {
+        self.get_char_property
+    }
+
+    fn try_completion(&self) -> fn(&mut Context, Vec<Value>) -> EvalResult {
+        self.try_completion
+    }
+
+    fn all_completions(&self) -> fn(&mut Context, Vec<Value>) -> EvalResult {
+        self.all_completions
+    }
+
+    fn test_completion(&self) -> fn(&mut Context, Vec<Value>) -> EvalResult {
+        self.test_completion
+    }
+}
+
+impl WindowTreeHooks {
+    fn char_property_window_lookup(
+        &self,
+    ) -> fn(Option<&FrameManager>, WindowId) -> WindowBufferLookup {
+        self.char_property_window_lookup
+    }
+
+    fn window_resize_check(
+        &self,
+    ) -> fn(&WindowTree, WindowId, SplitDirection, WindowBodyCellSize) -> bool {
+        self.window_resize_check
+    }
+
+    fn window_resize_apply(&self) -> fn(&mut WindowTree, WindowId, bool, f32, f32) {
+        self.window_resize_apply
     }
 }
 
@@ -641,4 +793,97 @@ pub fn terminal_handle_value() -> Value {
 /// Delete a terminal without running Lisp hooks (input-reader disconnect).
 pub fn delete_terminal_noelisp_owned(ctx: &mut Context, terminal_id: u64) -> EvalResult {
     (lifecycle_hooks().terminal().delete_noelisp())(ctx, terminal_id)
+}
+
+/// Capture a window configuration through the core `current-window-configuration`
+/// entry.
+pub fn window_configuration_capture(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+    (lifecycle_hooks().command().window_configuration_capture())(ctx, args)
+}
+
+/// Restore a window configuration through the core `set-window-configuration`
+/// entry.
+pub fn window_configuration_restore(
+    ctx: &mut Context,
+    configuration: Value,
+    options: WindowConfigurationRestoreOptions,
+) -> EvalResult {
+    (lifecycle_hooks().command().window_configuration_restore())(ctx, configuration, options)
+}
+
+/// Run GNU's window-change functions at a redisplay boundary.
+pub fn run_redisplay_window_change_hooks(ctx: &mut Context) -> EvalResult {
+    (lifecycle_hooks()
+        .command()
+        .run_redisplay_window_change_hooks())(ctx)
+}
+
+/// Tear down one minibuffer level (core `read_minibuf_unwind` equivalent).
+pub fn unwind_minibuffer_session(ctx: &mut Context, state: MinibufferSessionUnwind) -> EvalResult {
+    (lifecycle_hooks().command().unwind_minibuffer_session())(ctx, state)
+}
+
+/// Restore the pre-minibuffer window/buffer selection.
+pub fn unwind_minibuffer_buffer(ctx: &mut Context, state: MinibufferBufferUnwind) -> EvalResult {
+    (lifecycle_hooks().command().unwind_minibuffer_buffer())(ctx, state)
+}
+
+/// The `get-char-property` entry used by `adjust_point_for_property`.
+pub fn get_char_property(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+    (lifecycle_hooks().command().get_char_property())(ctx, args)
+}
+
+/// The `try-completion` entry.
+pub fn try_completion(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+    (lifecycle_hooks().command().try_completion())(ctx, args)
+}
+
+/// The `all-completions` entry.
+pub fn all_completions(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+    (lifecycle_hooks().command().all_completions())(ctx, args)
+}
+
+/// The `test-completion` entry.
+pub fn test_completion(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+    (lifecycle_hooks().command().test_completion())(ctx, args)
+}
+
+/// The edit layer's char-property WINDOW lookup for a caller that owns frames.
+///
+/// The slot resolves once; the returned closure keeps the original factory
+/// shape so the text-property entry call sites are unchanged.
+pub fn char_property_window_lookup(
+    frames: Option<&FrameManager>,
+) -> impl Fn(WindowId) -> WindowBufferLookup + '_ {
+    let lookup = lifecycle_hooks()
+        .window_tree()
+        .char_property_window_lookup();
+    move |window| lookup(frames, window)
+}
+
+/// Validate a staged pixel resize plan (core window body-unit rules).
+pub fn window_resize_check(
+    tree: &WindowTree,
+    id: WindowId,
+    axis: SplitDirection,
+    cells: WindowBodyCellSize,
+) -> bool {
+    (lifecycle_hooks().window_tree().window_resize_check())(tree, id, axis, cells)
+}
+
+/// Apply a staged pixel resize plan.
+pub fn window_resize_apply(
+    tree: &mut WindowTree,
+    id: WindowId,
+    horflag: bool,
+    char_width: f32,
+    char_height: f32,
+) {
+    (lifecycle_hooks().window_tree().window_resize_apply())(
+        tree,
+        id,
+        horflag,
+        char_width,
+        char_height,
+    )
 }

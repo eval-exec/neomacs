@@ -1371,10 +1371,10 @@ impl NativeUnwindAction {
                 options,
             } => configuration.restore(context, options),
             Self::MinibufferSession { state } => {
-                crate::emacs_core::minibuffer::unwind_minibuffer_session(context, *state)
+                crate::emacs_core::eval::lifecycle::unwind_minibuffer_session(context, *state)
             }
             Self::MinibufferBuffer { state } => {
-                crate::emacs_core::minibuffer::unwind_minibuffer_buffer(context, *state)
+                crate::emacs_core::eval::lifecycle::unwind_minibuffer_buffer(context, *state)
             }
             Self::BacktraceEvalRewind { distance } => context
                 .specpdl_swap_suffix_for_backtrace_eval(distance, false)

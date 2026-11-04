@@ -15,7 +15,6 @@ use crate::emacs_core::fontset;
 use crate::emacs_core::intern::WellKnown;
 use crate::emacs_core::intern::{NIL_SYM_ID, T_SYM_ID, intern, is_canonical_id};
 use crate::emacs_core::jit::RuntimeStateTieringExt;
-use crate::emacs_core::minibuffer;
 use crate::emacs_core::symbol::{FunctionCellSnapshot, Obarray, SymbolPlistSnapshot};
 use crate::tagged::SymbolMode;
 use crate::tagged::header::ByteCodeSlotObject;
@@ -4452,12 +4451,17 @@ pub(crate) fn builtin_internal_complete_buffer(
     let buffer_alist = internal_complete_buffer_alist(ctx);
 
     if flag.is_nil() {
-        return minibuffer::builtin_try_completion(ctx, vec![args[0], buffer_alist, predicate]);
+        return crate::emacs_core::eval::lifecycle::try_completion(
+            ctx,
+            vec![args[0], buffer_alist, predicate],
+        );
     }
 
     if eq_value_swp(&flag, &Value::T, ctx.symbols_with_pos_enabled) {
-        let completions =
-            minibuffer::builtin_all_completions(ctx, vec![args[0], buffer_alist, predicate])?;
+        let completions = crate::emacs_core::eval::lifecycle::all_completions(
+            ctx,
+            vec![args[0], buffer_alist, predicate],
+        )?;
         if string.schars() > 0 {
             return Ok(completions);
         }
@@ -4472,7 +4476,10 @@ pub(crate) fn builtin_internal_complete_buffer(
         &Value::symbol("lambda"),
         ctx.symbols_with_pos_enabled,
     ) {
-        return minibuffer::builtin_test_completion(ctx, vec![args[0], buffer_alist, predicate]);
+        return crate::emacs_core::eval::lifecycle::test_completion(
+            ctx,
+            vec![args[0], buffer_alist, predicate],
+        );
     }
 
     if eq_value_swp(

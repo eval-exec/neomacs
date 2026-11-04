@@ -1001,7 +1001,7 @@ impl RedisplayTransaction<'_> {
                 };
             }
         }
-        crate::emacs_core::window_hooks::run_redisplay_window_change_hooks(self.eval)?;
+        crate::emacs_core::eval::lifecycle::run_redisplay_window_change_hooks(self.eval)?;
         self.eval.gnu_distribute_text_marks();
         let unchanged =
             self.eval.last_redisplay_signature.as_ref() == Some(&self.eval.redisplay_signature());
