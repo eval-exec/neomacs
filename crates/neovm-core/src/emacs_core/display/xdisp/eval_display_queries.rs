@@ -10,6 +10,7 @@ static CANONICAL_DISPLAY_QUERY_HOOKS: DisplayQueryHooks = DisplayQueryHooks::new
     super::redisplay_idle_skip_enabled,
     super::mode_line_flow_enabled,
     crate::face::realization::enabled,
+    crate::face::realization::frame_is_tty_target,
 );
 
 /// Publish the canonical display-policy table at the two construction seams.

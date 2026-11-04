@@ -181,7 +181,9 @@ impl Context {
             .frames
             .get(frame)
             .ok_or(RowsObservationRefusal::TtyOrUnknownFrame)?;
-        if !crate::face::realization::frame_is_tty_target(owner) {
+        if !display_query_hooks::frame_is_tty_target(owner)
+            .map_err(|_| RowsObservationRefusal::DisplayQueryHooksUninstalled)?
+        {
             return Err(RowsObservationRefusal::TtyOrUnknownFrame);
         }
         let table = owner
@@ -294,7 +296,8 @@ impl Context {
                     .get(epoch.frame)
                     .ok_or(RowsObservationRefusal::TerminalChanged)?;
                 if owner.terminal_id != *terminal
-                    || !crate::face::realization::frame_is_tty_target(owner)
+                    || !display_query_hooks::frame_is_tty_target(owner)
+                        .map_err(|_| RowsObservationRefusal::DisplayQueryHooksUninstalled)?
                 {
                     return Err(RowsObservationRefusal::TerminalChanged);
                 }

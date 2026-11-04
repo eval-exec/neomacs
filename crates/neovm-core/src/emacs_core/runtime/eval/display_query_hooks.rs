@@ -14,8 +14,13 @@ use super::*;
 use neovm_value::{HookInstallError, HookInstallStatus};
 use std::sync::OnceLock;
 
+use super::data::window_state::Frame;
+
 /// A display-policy selector evaluated at a redisplay boundary.
 pub type DisplayFlagQuery = fn() -> bool;
+
+/// Whether this frame is an actual termcap face target.
+pub type FrameTTYTargetQuery = fn(&Frame) -> bool;
 
 /// The redisplay-policy queries eval reads through the cold table.
 #[derive(Clone, Copy)]
@@ -23,6 +28,7 @@ pub struct DisplayQueryHooks {
     redisplay_idle_skip: DisplayFlagQuery,
     mode_line_flow: DisplayFlagQuery,
     face_realization: DisplayFlagQuery,
+    frame_tty_target: FrameTTYTargetQuery,
 }
 
 impl DisplayQueryHooks {
@@ -31,11 +37,13 @@ impl DisplayQueryHooks {
         redisplay_idle_skip: DisplayFlagQuery,
         mode_line_flow: DisplayFlagQuery,
         face_realization: DisplayFlagQuery,
+        frame_tty_target: FrameTTYTargetQuery,
     ) -> Self {
         Self {
             redisplay_idle_skip,
             mode_line_flow,
             face_realization,
+            frame_tty_target,
         }
     }
 
@@ -49,6 +57,10 @@ impl DisplayQueryHooks {
 
     pub fn face_realization(&self) -> DisplayFlagQuery {
         self.face_realization
+    }
+
+    pub fn frame_tty_target(&self) -> FrameTTYTargetQuery {
+        self.frame_tty_target
     }
 }
 
@@ -105,4 +117,9 @@ pub fn mode_line_flow_enabled() -> Result<bool, Flow> {
 /// Whether the face-realization lifecycle is enabled.
 pub fn face_realization_enabled() -> Result<bool, Flow> {
     Ok((hooks_or_refusal()?.face_realization())())
+}
+
+/// Whether `frame` is an actual termcap face target.
+pub fn frame_is_tty_target(frame: &Frame) -> Result<bool, Flow> {
+    Ok((hooks_or_refusal()?.frame_tty_target())(frame))
 }
