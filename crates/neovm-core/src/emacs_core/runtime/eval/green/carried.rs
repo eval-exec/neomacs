@@ -29,13 +29,13 @@ const CARRIERS: &[(Placeholder, Swap)] = &[
     ),
     // sqlite.c connections and statements (Lisp objects, global).
     (
-        crate::emacs_core::sqlite::world_state_placeholder,
-        crate::emacs_core::sqlite::swap_world_state,
+        crate::emacs_core::eval::lifecycle::sqlite_world_state_placeholder,
+        crate::emacs_core::eval::lifecycle::sqlite_swap_world_state,
     ),
     // dbusbind.c buses and registered fds.
     (
-        crate::emacs_core::dbusbind::world_state_placeholder,
-        crate::emacs_core::dbusbind::swap_world_state,
+        crate::emacs_core::eval::lifecycle::dbusbind_world_state_placeholder,
+        crate::emacs_core::eval::lifecycle::dbusbind_swap_world_state,
     ),
     // The clipboard, the primary selection and the monitor list.
     (
@@ -79,8 +79,8 @@ const CARRIERS: &[(Placeholder, Swap)] = &[
     ),
     // The time-zone rule (GNU's TZ, process-wide).
     (
-        crate::emacs_core::timefns::world_state_placeholder,
-        crate::emacs_core::timefns::swap_world_state,
+        crate::emacs_core::eval::lifecycle::timefns_world_state_placeholder,
+        crate::emacs_core::eval::lifecycle::timefns_swap_world_state,
     ),
 ];
 

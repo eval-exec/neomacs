@@ -2403,6 +2403,10 @@ impl Context {
         // them before any byte-code value can be compared or hashed. This is
         // the one-time hook, not a per-allocation check: the constructors stay
         // free of it so the allocation fast path is untouched.
+        // Lifecycle hooks (stage-4 W4/E11) publish first, before any
+        // GC-capable allocation: their owners keep the state in core, and no
+        // call site can run before construction/dump.
+        crate::emacs_core::lifecycle_hooks::install_lifecycle_hooks();
         crate::emacs_core::bytecode::semantics::install();
         // The value layer owns the function-cell observer table; the JIT
         // installs its four observations here, before any compiled leaf can

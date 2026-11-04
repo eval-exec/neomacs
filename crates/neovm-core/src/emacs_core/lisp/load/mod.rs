@@ -2814,7 +2814,7 @@ fn load_file_body(
     let hist_file_name = load_hist_file_name(eval, requested, found);
 
     if is_module_path(path) {
-        return crate::emacs_core::dynamic_module::load_module(eval, path.to_path_buf())
+        return crate::emacs_core::eval::lifecycle::load_module(eval, path.to_path_buf())
             .map_err(crate::emacs_core::print::map_flow);
     }
 

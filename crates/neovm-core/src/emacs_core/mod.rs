@@ -45,6 +45,7 @@ pub mod keymap;
 pub mod kill_buffer;
 #[path = "commands/kmacro/mod.rs"]
 pub mod kmacro;
+pub(crate) mod lifecycle_hooks;
 #[path = "commands/minibuffer/mod.rs"]
 pub mod minibuffer;
 #[path = "commands/window_hooks/mod.rs"]

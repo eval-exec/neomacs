@@ -88,7 +88,7 @@ fn register_core_load_hooks() {
                 crate::emacs_core::builtins::reset_builtins_thread_locals,
             );
             pdumper_do_now_and_after_load(crate::emacs_core::charset::reset_charset_registry);
-            pdumper_do_now_and_after_load(crate::emacs_core::timefns::reset_timefns_thread_locals);
+            pdumper_do_now_and_after_load(crate::emacs_core::eval::lifecycle::reset_timefns_thread_locals);
         })
     });
 }

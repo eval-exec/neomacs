@@ -99,8 +99,8 @@ use crate::emacs_core::bytecode::chunk::GnuByteOffsetMapEntry;
 use crate::emacs_core::bytecode::opcode::Op;
 use crate::emacs_core::bytecode::vm::condition_frame_resume;
 use crate::emacs_core::bytecode::{ByteCodeFunction, Vm};
-use crate::emacs_core::dynamic_module::panic_message;
 use crate::emacs_core::error::{Flow, make_signal_binding_value, signal};
+use crate::emacs_core::eval::lifecycle::dynamic_module_panic_message as panic_message;
 use crate::emacs_core::eval::subr_abi::SubrFn;
 use crate::emacs_core::eval::{
     ConditionFrame, Context, LispArgVec, ModuleBoundarySnapshot, ResumeTarget,

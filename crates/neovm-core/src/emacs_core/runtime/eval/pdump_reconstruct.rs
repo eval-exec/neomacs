@@ -41,6 +41,10 @@ impl Context {
         // A restored image can contain byte-code values before any Context
         // constructor ran; install the structural semantics before the first
         // one can be compared or hashed.
+        // Lifecycle hooks (stage-4 W4/E11) publish first, before any
+        // GC-capable allocation: their owners keep the state in core, and no
+        // call site can run before construction/dump.
+        crate::emacs_core::lifecycle_hooks::install_lifecycle_hooks();
         crate::emacs_core::bytecode::semantics::install();
         // The function-cell observer is process state, not image state, and a
         // restored image can hold byte-code functions before any Context

@@ -215,7 +215,7 @@ pub(crate) fn reset_carrier_tls() {
     );
     reset_step!(
         "dynamic_module",
-        crate::emacs_core::dynamic_module::reset_carrier_tls()
+        crate::emacs_core::eval::lifecycle::reset_dynamic_module_carrier_tls()
     );
     reset_step!(
         "error_format",
@@ -315,7 +315,7 @@ pub(crate) fn snapshot_carrier_tls() -> u64 {
     crate::emacs_core::terminal::pure::carrier_tls_fingerprint(&mut h);
     crate::emacs_core::xfaces::carrier_tls_fingerprint(&mut h);
     crate::emacs_core::builtins::carrier_tls_fingerprint(&mut h);
-    crate::emacs_core::dynamic_module::carrier_tls_fingerprint(&mut h);
+    crate::emacs_core::eval::lifecycle::dynamic_module_carrier_tls_fingerprint(&mut h);
     crate::emacs_core::error::carrier_tls_fingerprint(&mut h);
     crate::emacs_core::eval::carrier_tls_fingerprint(&mut h);
     crate::emacs_core::intern::carrier_tls_fingerprint(&mut h);
