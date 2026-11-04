@@ -909,6 +909,33 @@ fn libxml_parse_html_region_preserves_whitespace_like_libxml2() {
             Value::string("\n"),
         ])])
     );
+
+    // Blanks between an explicit root and trailing comments are dropped.
+    // GNU 31.1: (top nil (html nil (body nil "x")) (comment nil "c"))
+    let root = html(vec![body(vec![Value::string("x")])]);
+    assert_eq!(
+        parse_html_region(b"<html><body>x</body></html>\n<!--c-->", false).unwrap(),
+        Value::list(vec![
+            Value::symbol("top"),
+            Value::NIL,
+            root.clone(),
+            comment("c"),
+        ])
+    );
+    assert_eq!(
+        parse_html_region(b"<html><body>x</body></html>\n<!--c-->", true).unwrap(),
+        root
+    );
+    // GNU 31.1: (top nil (comment nil "c") (html nil (body nil "x")))
+    assert_eq!(
+        parse_html_region(b"<!--c-->\n<html><body>x</body></html>", false).unwrap(),
+        Value::list(vec![
+            Value::symbol("top"),
+            Value::NIL,
+            comment("c"),
+            root.clone(),
+        ])
+    );
 }
 
 #[test]
@@ -946,6 +973,47 @@ fn libxml_parse_html_region_routes_head_tags_after_body_to_body() {
         )
         .unwrap(),
         expected
+    );
+}
+
+#[test]
+fn libxml_parse_html_region_preserves_literal_less_than() {
+    crate::test_utils::init_test_tracing();
+
+    // GNU 31.1: (html nil (body nil (p nil "a < b")))
+    assert_eq!(
+        parse_html_region(br#"<p>a < b</p>"#, false).unwrap(),
+        html(vec![body(vec![Value::list(vec![
+            Value::symbol("p"),
+            Value::NIL,
+            Value::string("a < b"),
+        ])])])
+    );
+
+    // GNU 31.1: (html nil (body nil "a < b"))
+    assert_eq!(
+        parse_html_region(br#"a < b"#, false).unwrap(),
+        html(vec![body(vec![Value::string("a < b")])])
+    );
+
+    // GNU 31.1: (html nil (body nil (p nil "<")))
+    assert_eq!(
+        parse_html_region(br#"<p><</p>"#, false).unwrap(),
+        html(vec![body(vec![Value::list(vec![
+            Value::symbol("p"),
+            Value::NIL,
+            Value::string("<"),
+        ])])])
+    );
+
+    // GNU 31.1: (html nil (body nil (p nil "1 <2")))
+    assert_eq!(
+        parse_html_region(br#"<p>1 <2</p>"#, false).unwrap(),
+        html(vec![body(vec![Value::list(vec![
+            Value::symbol("p"),
+            Value::NIL,
+            Value::string("1 <2"),
+        ])])])
     );
 }
 
