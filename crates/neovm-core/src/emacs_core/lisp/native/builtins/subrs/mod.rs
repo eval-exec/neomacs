@@ -5395,7 +5395,9 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "unicode-property-table-internal",
-        NativeFn::ContextVec(crate::emacs_core::chartable::builtin_unicode_property_table_internal),
+        NativeFn::ContextVec(
+            crate::emacs_core::chartable_entries::builtin_unicode_property_table_internal
+        ),
         SubrArity::new(1, Some(1)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(

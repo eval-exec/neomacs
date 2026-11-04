@@ -1,5 +1,6 @@
 use super::*;
 use crate::emacs_core::boolvec::{bool_vector_from_bits, bool_vector_ref_value};
+use crate::emacs_core::chartable_entries::builtin_unicode_property_table_internal;
 use crate::emacs_core::error::{FlowKind, FlowResultExt as _};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::eval::VariableView;

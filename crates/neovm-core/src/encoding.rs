@@ -1818,7 +1818,7 @@ enum EncodingBoundary {
     FileRegion,
     /// GNU `send_process` does not finish its coding stream after a write.
     ProcessChunk {
-        process: crate::emacs_core::process::ProcessId,
+        process: crate::heap_types::ProcessId,
     },
 }
 
@@ -5549,7 +5549,7 @@ pub(crate) fn encode_process_text_in_context(
     ctx: &mut crate::emacs_core::eval::Context,
     text: crate::heap_types::LispString,
     coding: RuntimeCodingSystem,
-    process: crate::emacs_core::process::ProcessId,
+    process: crate::heap_types::ProcessId,
 ) -> Result<Vec<u8>, crate::emacs_core::error::Flow> {
     let encoded = builtin_coding_string_in_context(
         ctx,
@@ -5582,7 +5582,7 @@ pub(crate) fn encode_file_region_in_context(
 /// Borrow a live process continuation only after callback execution ends.
 fn process_encoder_state(
     ctx: &mut crate::emacs_core::eval::Context,
-    process: crate::emacs_core::process::ProcessId,
+    process: crate::heap_types::ProcessId,
 ) -> Result<&mut CodingEncoderState, crate::emacs_core::error::Flow> {
     ctx.processes
         .get_any_mut(process)

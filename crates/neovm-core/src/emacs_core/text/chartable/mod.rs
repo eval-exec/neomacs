@@ -450,53 +450,6 @@ pub(crate) fn builtin_set_char_table_extra_slot(args: Vec<Value>) -> EvalResult 
     crate::window::note_char_table_layout_mutation();
     Ok(*value)
 }
-fn char_code_property_cell(eval: &Context, prop: Value) -> Result<Value, Flow> {
-    let alist = eval
-        .variable_value_by_name("char-code-property-alist")
-        .unwrap_or(Value::NIL);
-    assq_cell_eq(prop, alist, eval.symbol_mode())
-}
-/// `(unicode-property-table-internal PROP)`.
-///
-/// GNU's `chartab.c:uniprop_table` lazily loads `international/<file>` when
-/// `char-code-property-alist` stores a string, then the public primitive returns
-/// the alist cdr even for property tables whose decoder is Lisp rather than the
-/// C fast-path decoder.  That distinction matters for `name`/`old-name`, whose
-/// generated tables use byte-code decoder functions in extra slots.
-pub(crate) fn builtin_unicode_property_table_internal(
-    eval: &mut Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    expect_args("unicode-property-table-internal", &args, 1)?;
-    let prop = args[0];
-    let mut cell = char_code_property_cell(eval, prop)?;
-    if cell.is_nil() {
-        return Ok(Value::NIL);
-    }
-
-    let table = cell.cons_cdr();
-    if table.is_string() {
-        let Some(file_name) = table
-            .as_lisp_string()
-            .map(|ls| crate::emacs_core::emacs_char::to_utf8_lossy(ls.as_bytes()))
-        else {
-            return Ok(table);
-        };
-        let load_name = Value::string(format!("international/{file_name}"));
-        let _ = crate::emacs_core::load::builtin_load_in_vm_runtime(
-            eval,
-            &[load_name, Value::T, Value::T, Value::T, Value::T],
-        )?;
-        cell = char_code_property_cell(eval, prop)?;
-        if cell.is_nil() {
-            return Ok(Value::NIL);
-        }
-    }
-
-    let table = cell.cons_cdr();
-    prepare_uniprop_ascii_cache(&table, eval.symbol_mode());
-    Ok(table)
-}
 fn expect_character(value: &Value) -> Result<i64, Flow> {
     match value.kind() {
         ValueKind::Fixnum(n) if (0..=MAX_CHAR).contains(&n) => Ok(n),
