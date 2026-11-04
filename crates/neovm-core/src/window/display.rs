@@ -207,7 +207,7 @@ pub struct WindowScrollBarGeometry {
     pub horizontal_area_height: i64,
 }
 
-fn frame_line_height(frame: &Frame) -> i64 {
+pub(crate) fn frame_line_height(frame: &Frame) -> i64 {
     frame.char_height.max(1.0).round() as i64
 }
 
