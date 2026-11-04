@@ -838,6 +838,92 @@ fn libxml_parse_html_region_places_head_comments_like_libxml2() {
 }
 
 #[test]
+fn libxml_parse_html_region_keeps_explicit_empty_body_and_after_body_nodes() {
+    crate::test_utils::init_test_tracing();
+
+    // GNU 31.1: (html nil (head nil) (body nil))
+    let expected = Value::list(vec![
+        Value::symbol("html"),
+        Value::NIL,
+        Value::list(vec![Value::symbol("head"), Value::NIL]),
+        body(Vec::new()),
+    ]);
+    assert_eq!(
+        parse_html_region(br#"<head></head><body></body>"#, false).unwrap(),
+        expected
+    );
+
+    // GNU 31.1: (html nil (body nil))
+    assert_eq!(
+        parse_html_region(br#"<body></body>"#, false).unwrap(),
+        html(vec![body(Vec::new())])
+    );
+
+    // Nodes after an explicit body are siblings under html.
+    // GNU 31.1: (html nil (body nil "x") (comment nil " after "))
+    let expected = html(vec![body(vec![Value::string("x")]), comment(" after ")]);
+    assert_eq!(
+        parse_html_region(br#"<body>x</body><!-- after -->"#, false).unwrap(),
+        expected
+    );
+    assert_eq!(
+        parse_html_region(br#"<body>x</body><!-- after -->"#, true).unwrap(),
+        expected
+    );
+
+    // GNU 31.1: (html nil (body nil "x") (p nil "y"))
+    assert_eq!(
+        parse_html_region(br#"<body>x</body><p>y</p>"#, false).unwrap(),
+        html(vec![
+            body(vec![Value::string("x")]),
+            Value::list(vec![Value::symbol("p"), Value::NIL, Value::string("y")]),
+        ])
+    );
+
+    // A comment inside body stays there; one after </body> moves out.
+    // GNU 31.1: (html nil (body nil (comment nil " in ")) (comment nil " out "))
+    assert_eq!(
+        parse_html_region(br#"<body><!-- in --></body><!-- out -->"#, false).unwrap(),
+        html(vec![body(vec![comment(" in ")]), comment(" out ")])
+    );
+
+    // GNU 31.1: (html nil (head nil) (body nil) (comment nil " after "))
+    let expected = Value::list(vec![
+        Value::symbol("html"),
+        Value::NIL,
+        Value::list(vec![Value::symbol("head"), Value::NIL]),
+        body(Vec::new()),
+        comment(" after "),
+    ]);
+    assert_eq!(
+        parse_html_region(br#"<head></head><body></body><!-- after -->"#, false).unwrap(),
+        expected
+    );
+
+    // A second explicit body is a sibling, not merged into the first.
+    // GNU 31.1: (html nil (body nil "x") (body nil "y"))
+    assert_eq!(
+        parse_html_region(br#"<body>x</body><body>y</body>"#, false).unwrap(),
+        html(vec![
+            body(vec![Value::string("x")]),
+            body(vec![Value::string("y")]),
+        ])
+    );
+
+    // When body content precedes the body tag, the tag merges into the
+    // implicit body and after-body mode is not entered.
+    // GNU 31.1: (html nil (body nil (p nil "x") "y" (p nil "z")))
+    assert_eq!(
+        parse_html_region(br#"<p>x</p><body>y</body><p>z</p>"#, false).unwrap(),
+        html(vec![body(vec![
+            Value::list(vec![Value::symbol("p"), Value::NIL, Value::string("x")]),
+            Value::string("y"),
+            Value::list(vec![Value::symbol("p"), Value::NIL, Value::string("z")]),
+        ])])
+    );
+}
+
+#[test]
 fn libxml_parse_html_region_keeps_nested_comments_when_discarding() {
     crate::test_utils::init_test_tracing();
 
