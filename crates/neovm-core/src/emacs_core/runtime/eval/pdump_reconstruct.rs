@@ -91,6 +91,10 @@ impl Context {
         // idempotent.
         crate::emacs_core::composite::install_substrate_seams();
         crate::emacs_core::syntax::install_substrate_seams();
+        // The text layer's host-free engines need the same hot-path timing
+        // hooks from a restored image (stage-3b C7); the install is
+        // idempotent and delegates to perf_trace's existing counters.
+        super::construct::install_text_substrate_hooks();
         let dumped_function_surface = obarray.clone();
         let mut obarray = obarray;
         let core_eval_symbols = install_core_eval_symbols(&mut obarray, false);

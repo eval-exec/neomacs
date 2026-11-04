@@ -123,9 +123,20 @@ pub(crate) fn time_op<R>(op: HotpathOp, f: impl FnOnce() -> R) -> R {
 
     let start = Instant::now();
     let result = f();
+    record_op(op, start.elapsed());
+    result
+}
+
+/// Account one measured operation in this thread's counter table.
+///
+/// The text layer reaches this through its installed seam
+/// (`emacs_core::substrate_hooks`); `time_op` calls it directly.  One shared
+/// body keeps the live-snapshot cadence and the TLS accounting identical on
+/// both paths.
+pub(crate) fn record_op(op: HotpathOp, elapsed: Duration) {
     HOTPATH_STATE.with(|state| {
         let mut state = state.borrow_mut();
-        state.stats.counter_mut(op).record(start.elapsed());
+        state.stats.counter_mut(op).record(elapsed);
         state.op_events += 1;
         if state.op_events % LIVE_LOG_EVERY_OPS == 0
             && state.last_live_log.elapsed() >= LIVE_LOG_EVERY
@@ -135,7 +146,6 @@ pub(crate) fn time_op<R>(op: HotpathOp, f: impl FnOnce() -> R) -> R {
             state.last_live_log = Instant::now();
         }
     });
-    result
 }
 
 pub fn reset_hotpath_stats() {

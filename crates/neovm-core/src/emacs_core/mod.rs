@@ -392,6 +392,8 @@ pub mod regex_emacs;
 pub mod search;
 #[path = "text/string_escape/mod.rs"]
 pub(crate) mod string_escape;
+#[path = "text/substrate_hooks.rs"]
+pub(crate) mod substrate_hooks;
 // The character<->byte position cache (GNU fns.c string_char_to_byte)
 // moved into neovm-value with the stage-3 split (C12); the historical
 // `emacs_core::string_pos_cache` paths keep resolving through this facade.

@@ -226,8 +226,8 @@ fn normalize_lisp_string_start_arg_for(
 /// `(regexp-quote STRING)` -- return a regexp that matches STRING literally,
 /// quoting all special regex characters.
 pub(crate) fn builtin_regexp_quote(args: Vec<Value>) -> EvalResult {
-    crate::emacs_core::perf_trace::time_op(
-        crate::emacs_core::perf_trace::HotpathOp::RegexpQuote,
+    crate::emacs_core::substrate_hooks::time_op(
+        crate::emacs_core::substrate_hooks::TextPerfOp::RegexpQuote,
         || {
             expect_args("regexp-quote", &args, 1)?;
             let string = expect_lisp_string(&args[0])?;

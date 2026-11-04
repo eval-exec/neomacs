@@ -30,6 +30,34 @@ pub(super) fn install_scratch_root_hooks() {
     }
 }
 
+/// Install the text layer's host-free hooks (stage-3b C7).
+///
+/// The text-side seam is a bool plus a plain `fn` pointer.  The enable answer
+/// is `perf_trace`'s existing env test and the recorder delegates to the same
+/// `HotpathOp` counters, so timing behavior is unchanged.
+pub(super) fn install_text_substrate_hooks() {
+    crate::emacs_core::substrate_hooks::install_perf(
+        crate::emacs_core::perf_trace::hotpath_timing_enabled(),
+        text_perf_record,
+    );
+}
+
+fn text_perf_record(
+    op: crate::emacs_core::substrate_hooks::TextPerfOp,
+    elapsed: std::time::Duration,
+) {
+    use crate::emacs_core::perf_trace::HotpathOp;
+    use crate::emacs_core::substrate_hooks::TextPerfOp;
+    let op = match op {
+        TextPerfOp::RegexCompileHit => HotpathOp::RegexCompileHit,
+        TextPerfOp::RegexCompileMiss => HotpathOp::RegexCompileMiss,
+        TextPerfOp::RegexLiteralFind => HotpathOp::RegexLiteralFind,
+        TextPerfOp::RegexMatchDataChars => HotpathOp::RegexMatchDataChars,
+        TextPerfOp::RegexpQuote => HotpathOp::RegexpQuote,
+    };
+    crate::emacs_core::perf_trace::record_op(op, elapsed);
+}
+
 /// Select raw constructor storage BEFORE the World is sealed or callable.
 /// There is no safe replacement of an admitted manager beneath a continuation.
 #[derive(Clone, Copy, Debug)]
@@ -2413,6 +2441,9 @@ impl Context {
         // The buffer substrate also asks the text layer for syntax-class
         // queries through a host-free fn-pointer table (stage-3 C7).
         crate::emacs_core::syntax::install_substrate_seams();
+        // The text layer's host-free engines receive their hot-path timing
+        // hooks here as a bool plus a static fn pointer (stage-3b C7).
+        install_text_substrate_hooks();
         // Create the heap and set thread-locals so tagged constructors work
         // during evaluator initialization. The owner carries the allocation's
         // provenance root; installation and every later access derive from it.

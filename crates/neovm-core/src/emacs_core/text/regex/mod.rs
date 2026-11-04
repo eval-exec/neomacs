@@ -1701,8 +1701,8 @@ impl EngineMatchData {
     }
 
     fn publish_string(self, searched_string: SearchedString) -> MatchData {
-        crate::emacs_core::perf_trace::time_op(
-            crate::emacs_core::perf_trace::HotpathOp::RegexMatchDataChars,
+        crate::emacs_core::substrate_hooks::time_op(
+            crate::emacs_core::substrate_hooks::TextPerfOp::RegexMatchDataChars,
             || {
                 let string = searched_string.as_lisp_string();
                 let identity = string.is_some_and(|string| {
@@ -2411,8 +2411,8 @@ fn compile_search_pattern_with_posix(
     syntax: &dyn SyntaxLookup,
 ) -> Result<CompiledSearchPattern, String> {
     let syntax_key = syntax.cache_key();
-    if let Some(cached) = crate::emacs_core::perf_trace::time_op(
-        crate::emacs_core::perf_trace::HotpathOp::RegexCompileHit,
+    if let Some(cached) = crate::emacs_core::substrate_hooks::time_op(
+        crate::emacs_core::substrate_hooks::TextPerfOp::RegexCompileHit,
         || {
             SEARCH_PATTERN_CACHE.with(|cache| {
                 let mut cache = cache.borrow_mut();
@@ -2441,8 +2441,8 @@ fn compile_search_pattern_with_posix(
         return Ok(cached);
     }
 
-    let compiled = crate::emacs_core::perf_trace::time_op(
-        crate::emacs_core::perf_trace::HotpathOp::RegexCompileMiss,
+    let compiled = crate::emacs_core::substrate_hooks::time_op(
+        crate::emacs_core::substrate_hooks::TextPerfOp::RegexCompileMiss,
         || {
             // Use the GNU-translated engine for all patterns.
             // Only optimize plain literals (no regex metacharacters).
@@ -2545,8 +2545,8 @@ fn compile_lisp_pattern_with_posix_translation(
     let mode = syntax.symbol_mode();
     let target_key = RegexTargetKey::new(target_multibyte, mode);
 
-    if let Some(cached) = crate::emacs_core::perf_trace::time_op(
-        crate::emacs_core::perf_trace::HotpathOp::RegexCompileHit,
+    if let Some(cached) = crate::emacs_core::substrate_hooks::time_op(
+        crate::emacs_core::substrate_hooks::TextPerfOp::RegexCompileHit,
         || {
             LISP_REGEX_PATTERN_CACHE.with(|cache| {
                 let mut cache = cache.borrow_mut();
@@ -2579,8 +2579,8 @@ fn compile_lisp_pattern_with_posix_translation(
     } else {
         None
     };
-    let mut compiled = crate::emacs_core::perf_trace::time_op(
-        crate::emacs_core::perf_trace::HotpathOp::RegexCompileMiss,
+    let mut compiled = crate::emacs_core::substrate_hooks::time_op(
+        crate::emacs_core::substrate_hooks::TextPerfOp::RegexCompileMiss,
         || {
             regex_emacs::regex_compile_lisp_with_translation(pattern, posix, effective_translation)
                 .map_err(|e| e.message)
@@ -2910,8 +2910,8 @@ fn unicode_case_fold_literal_rfind(text: &str, literal: &str) -> Option<MatchGro
 /// flags this as a perf gap, not a correctness gap; the audit's
 /// Phase D Task 4.2 covers porting boyer_moore (~1 day).
 fn literal_find(text: &str, literal: &str, case_fold: bool) -> Option<MatchGroup> {
-    crate::emacs_core::perf_trace::time_op(
-        crate::emacs_core::perf_trace::HotpathOp::RegexLiteralFind,
+    crate::emacs_core::substrate_hooks::time_op(
+        crate::emacs_core::substrate_hooks::TextPerfOp::RegexLiteralFind,
         || {
             let start = if case_fold {
                 if literal.is_ascii() {
@@ -2928,8 +2928,8 @@ fn literal_find(text: &str, literal: &str, case_fold: bool) -> Option<MatchGroup
 }
 
 fn literal_rfind(text: &str, literal: &str, case_fold: bool) -> Option<MatchGroup> {
-    crate::emacs_core::perf_trace::time_op(
-        crate::emacs_core::perf_trace::HotpathOp::RegexLiteralFind,
+    crate::emacs_core::substrate_hooks::time_op(
+        crate::emacs_core::substrate_hooks::TextPerfOp::RegexLiteralFind,
         || {
             let start = if case_fold {
                 if literal.is_ascii() {
@@ -3178,8 +3178,8 @@ fn literal_find_emacs_bytes(
     multibyte: bool,
     case_fold: bool,
 ) -> Option<MatchGroup> {
-    crate::emacs_core::perf_trace::time_op(
-        crate::emacs_core::perf_trace::HotpathOp::RegexLiteralFind,
+    crate::emacs_core::substrate_hooks::time_op(
+        crate::emacs_core::substrate_hooks::TextPerfOp::RegexLiteralFind,
         || {
             if literal.is_empty() {
                 return Some(MatchGroup::new(0, 0));
@@ -3245,8 +3245,8 @@ fn literal_rfind_emacs_bytes(
     multibyte: bool,
     case_fold: bool,
 ) -> Option<MatchGroup> {
-    crate::emacs_core::perf_trace::time_op(
-        crate::emacs_core::perf_trace::HotpathOp::RegexLiteralFind,
+    crate::emacs_core::substrate_hooks::time_op(
+        crate::emacs_core::substrate_hooks::TextPerfOp::RegexLiteralFind,
         || {
             if literal.is_empty() {
                 return Some(MatchGroup::new(text.len(), text.len()));
