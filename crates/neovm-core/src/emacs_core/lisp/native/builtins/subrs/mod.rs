@@ -707,7 +707,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ctx.register_subr(
         crate::emacs_core::subr::world_subr!(SubrSpec::new(
             "kill-all-local-variables",
-            NativeFn::ContextVec(builtin_kill_all_local_variables),
+            NativeFn::ContextVec(|ctx, args| builtin_kill_all_local_variables(ctx, args)),
             SubrArity::new(0, Some(1)),
         ))
         .requires_eval_state(),

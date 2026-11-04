@@ -183,14 +183,14 @@ impl EditHost for Context {
         // - clears conditional slot locals unless they are permanent-local
         // - walks local_var_alist for LOCALIZED entries (Phase 10E)
         if self.owner.is_dormant() {
-            crate::emacs_core::buffer::reset_buffer_local_variables(self, buffer, kill_permanent);
+            reset_buffer_local_variables(self, buffer, kill_permanent);
         } else {
             // Projected locals reset as the variables they project, and this
             // owner's bindings of the locals that go capture what they held.
             let before = self.owner_locals_before_reset(buffer);
             let projected = self.projected_locals_of(buffer);
             self.with_revealed_projections(&projected, |ctx| {
-                crate::emacs_core::buffer::reset_buffer_local_variables(ctx, buffer, kill_permanent)
+                reset_buffer_local_variables(ctx, buffer, kill_permanent)
             });
             self.owner_locals_reset(buffer, before);
         }
@@ -514,4 +514,24 @@ impl EditHost for Context {
     fn gnu_mark_buffer_mode_line(&mut self, buffer: BufferId) {
         Context::gnu_mark_buffer_mode_line(self, buffer)
     }
+}
+
+/// `kill-all-local-variables`' reset of BUFFER's locals. The
+/// `EditHost::reset_buffer_locals` implementation below owns the
+/// dormant/projected-owner dispatch around it; the one audited legacy
+/// obarray write stays here in core.
+#[inline(always)]
+pub(crate) fn reset_buffer_local_variables(
+    eval: &mut Context,
+    buffer: BufferId,
+    kill_permanent: bool,
+) {
+    let buffers = &mut eval.edit.buffers;
+    // SAFETY: the major-mode hook has returned. This local-value/cache reset
+    // invokes no Lisp and preserves canonical dispatch metadata and storage.
+    let _ = unsafe {
+        eval.obarray.with_legacy_value_write(|obarray| {
+            buffers.clear_buffer_local_properties(buffer, obarray, kill_permanent)
+        })
+    };
 }

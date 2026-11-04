@@ -1387,17 +1387,20 @@ pub(crate) fn builtin_insert_buffer_substring<H: EditHost>(
     builtin_insert(host, vec![text])
 }
 
-pub(crate) fn builtin_kill_all_local_variables(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_kill_all_local_variables<H: EditHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args_range("kill-all-local-variables", &args, 0, 1)?;
-    let current_id = eval
-        .edit
-        .buffers
-        .current_buffer_id()
-        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    let kill_permanent = args.first().copied().unwrap_or(Value::NIL).is_truthy();
+    let (initial_id, kill_permanent) = {
+        let (edit, _) = host.edit_and_vars();
+        let current_id = edit
+            .buffers
+            .current_buffer_id()
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        let kill_permanent = args.first().copied().unwrap_or(Value::NIL).is_truthy();
+        (current_id, kill_permanent)
+    };
     // GNU `Fkill_all_local_variables` (buffer.c) runs the normal hook
     // `change-major-mode-hook` as its very first action, *before* any local
     // bindings are eliminated.  Because every command that selects a new major
@@ -1407,14 +1410,14 @@ pub(crate) fn builtin_kill_all_local_variables(
     // `change-major-mode-hook' must fire.  Running it here -- with the current
     // buffer's local variables and local hook value still in effect, and with
     // `major-mode' still naming the *previous* mode -- matches GNU exactly.
-    run_buffer_change_major_mode_hook(eval)?;
+    run_buffer_change_major_mode_hook(host)?;
     let current_id = if super::redisplay_policy::gnu_redisplay_hooks_enabled() {
-        eval.edit
-            .buffers
+        let (edit, _) = host.edit_and_vars();
+        edit.buffers
             .current_buffer_id()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?
     } else {
-        current_id
+        initial_id
     };
 
     // GNU buffer.c reset_buffer_local_variables:
@@ -1422,18 +1425,7 @@ pub(crate) fn builtin_kill_all_local_variables(
     // - resets only a small fixed reset-on-kill-all subset
     // - clears conditional slot locals unless they are permanent-local
     // - walks local_var_alist for LOCALIZED entries (Phase 10E)
-    if eval.owner.is_dormant() {
-        reset_buffer_local_variables(eval, current_id, kill_permanent);
-    } else {
-        // Projected locals reset as the variables they project, and this
-        // owner's bindings of the locals that go capture what they held.
-        let before = eval.owner_locals_before_reset(current_id);
-        let projected = eval.projected_locals_of(current_id);
-        eval.with_revealed_projections(&projected, |eval| {
-            reset_buffer_local_variables(eval, current_id, kill_permanent)
-        });
-        eval.owner_locals_reset(current_id, before);
-    }
+    host.reset_buffer_locals(current_id, kill_permanent);
     // GNU performs this after the hook and local reset. `bset_update_mode_line`
     // raises global `update_mode_lines` even for an offscreen buffer, ensuring
     // the menu and mode line are rebuilt if this major-mode transition is
@@ -1442,30 +1434,11 @@ pub(crate) fn builtin_kill_all_local_variables(
         // GNU bset_update_mode_line is SOME. The typed helper marks only
         // windows sharing this buffer's text and requests the menu rebuild.
         // Broad chrome cache dirtiness would evaluate unrelated :eval forms.
-        eval.gnu_mark_buffer_mode_line(current_id);
+        host.gnu_mark_buffer_mode_line(current_id);
     } else {
-        eval.request_global_mode_line_update();
+        host.request_global_mode_line_update();
     }
     Ok(Value::NIL)
-}
-
-/// `kill-all-local-variables`' reset of BUFFER's locals. Called downward
-/// from the `EditHost::reset_buffer_locals` implementation, which owns
-/// the dormant/projected-owner dispatch around it.
-#[inline(always)]
-pub(crate) fn reset_buffer_local_variables(
-    eval: &mut super::eval::Context,
-    buffer: crate::buffer::BufferId,
-    kill_permanent: bool,
-) {
-    let buffers = &mut eval.edit.buffers;
-    // SAFETY: the major-mode hook has returned. This local-value/cache reset
-    // invokes no Lisp and preserves canonical dispatch metadata and storage.
-    let _ = unsafe {
-        eval.obarray.with_legacy_value_write(|obarray| {
-            buffers.clear_buffer_local_properties(buffer, obarray, kill_permanent)
-        })
-    };
 }
 
 /// `(ntake N LIST)` -> LIST
