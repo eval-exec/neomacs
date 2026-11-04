@@ -936,6 +936,18 @@ fn libxml_parse_html_region_preserves_whitespace_like_libxml2() {
             root.clone(),
         ])
     );
+
+    // Bare fragments keep blanks before comments; only the document tail is
+    // trimmed. GNU 31.1:
+    // (html nil (body nil (p nil "x") " " (comment nil "c")))
+    assert_eq!(
+        parse_html_region(b"<p>x</p> <!--c--> ", false).unwrap(),
+        html(vec![body(vec![
+            Value::list(vec![Value::symbol("p"), Value::NIL, Value::string("x")]),
+            Value::string(" "),
+            comment("c"),
+        ])])
+    );
 }
 
 #[test]
