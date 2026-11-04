@@ -8,10 +8,12 @@ pub(super) fn file_name_to_lisp(ctx: &crate::emacs_core::eval::Context, path: &P
     {
         use std::os::unix::ffi::OsStrExt;
 
-        Value::heap_string(crate::emacs_core::fileio::decode_file_name_lisp(
-            ctx,
-            path.as_os_str().as_bytes(),
-        ))
+        Value::heap_string(
+            crate::emacs_core::eval::data::file_coding::decode_file_name_lisp(
+                ctx,
+                path.as_os_str().as_bytes(),
+            ),
+        )
     }
     #[cfg(windows)]
     {

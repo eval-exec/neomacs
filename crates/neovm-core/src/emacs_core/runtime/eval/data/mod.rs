@@ -7,6 +7,8 @@
 pub mod command_loop;
 pub mod dynamic_module_registry;
 pub mod face;
+pub mod file_coding;
+pub mod file_name_expand;
 pub mod layout_input;
 pub mod minibuffer;
 pub mod point_rows;

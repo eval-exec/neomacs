@@ -9,7 +9,7 @@ use crate::emacs_core::eval::VariableView;
 use crate::emacs_core::timefns::{TimestampError, UnixTimestamp};
 use std::collections::{HashMap, VecDeque};
 #[cfg(unix)]
-use std::ffi::{CStr, CString};
+use std::ffi::CString;
 use std::fs;
 use std::io::{ErrorKind, Seek, SeekFrom, Write};
 #[cfg(unix)]
@@ -33,100 +33,25 @@ use super::value::{
 };
 use crate::emacs_core::intern::WellKnown;
 
+// The pure file-name expansion and file-coding helpers moved to eval data
+// (stage-4 K2 oracleb batch 4); the names the remaining system callers use
+// resolve through these re-exports.
+pub(crate) use crate::emacs_core::eval::data::file_coding::{
+    WriteCodingFallback, coding_system_value_to_name, decode_file_name_lisp,
+    resolve_write_coding_system_symbol,
+};
+pub(crate) use crate::emacs_core::eval::data::file_name_expand::{
+    current_user_home_bytes, expand_file_name_with_home, expand_user_home_prefix_bytes,
+    home_env_bytes,
+};
+pub use crate::emacs_core::eval::data::file_name_expand::{expand_file_name, file_name_absolute_p};
+
 #[cfg(unix)]
 pub(crate) mod directory_stream;
 
 // ===========================================================================
 // Path operations (pure, no evaluator needed)
 // ===========================================================================
-
-/// Expand FILE relative to DEFAULT_DIR (or the current working directory).
-/// Handles `~` expansion and absolute path detection.
-pub fn expand_file_name(name: &str, default_dir: Option<&str>) -> String {
-    expand_file_name_with_home(name, default_dir, None)
-}
-
-pub(crate) fn expand_file_name_with_home(
-    name: &str,
-    default_dir: Option<&str>,
-    home_override: Option<&str>,
-) -> String {
-    expand_file_name_with_home_inner(name, default_dir, home_override, true)
-}
-
-fn expand_file_name_with_home_inner(
-    name: &str,
-    default_dir: Option<&str>,
-    home_override: Option<&str>,
-    expand_default_dir: bool,
-) -> String {
-    #[cfg(windows)]
-    let name_normalized = name.replace('\\', "/");
-    #[cfg(windows)]
-    let name = name_normalized.as_str();
-    #[cfg(windows)]
-    let default_dir_normalized = default_dir.map(|dir| dir.replace('\\', "/"));
-    #[cfg(windows)]
-    let default_dir = default_dir_normalized.as_deref();
-
-    // Handle ~ expansion
-    let expanded = if name.starts_with("~/") {
-        if let Some(home) = home_override {
-            format!("{}{}", home, &name[1..])
-        } else if let Some(home) = home_env_string() {
-            format!("{}{}", home, &name[1..])
-        } else {
-            name.to_string()
-        }
-    } else if name == "~" {
-        if let Some(home) = home_override {
-            home.to_string()
-        } else if let Some(home) = home_env_string() {
-            home
-        } else {
-            name.to_string()
-        }
-    } else if let Some((home, rest)) = expand_user_home_prefix(name) {
-        format!("{home}{rest}")
-    } else {
-        name.to_string()
-    };
-
-    let preserve_trailing_slash = expanded.ends_with('/');
-
-    // If already absolute, just clean it up.
-    if file_name_absolute_p(&expanded) {
-        let mut cleaned = clean_path(&expanded);
-        if preserve_trailing_slash && !cleaned.ends_with('/') {
-            cleaned.push('/');
-        }
-        return cleaned;
-    }
-
-    // Resolve relative to default_dir or cwd
-    let base = if let Some(dir) = default_dir {
-        if expand_default_dir {
-            PathBuf::from(expand_file_name_with_home(dir, None, home_override))
-        } else {
-            PathBuf::from(dir)
-        }
-    } else {
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"))
-    };
-
-    if expanded.is_empty() {
-        let mut cleaned = clean_path(base.to_string_lossy().as_ref());
-        trim_trailing_slashes_except_roots(&mut cleaned);
-        return cleaned;
-    }
-
-    let joined = join_file_name(base.to_string_lossy().as_ref(), &expanded);
-    let mut cleaned = clean_path(&joined);
-    if preserve_trailing_slash && !cleaned.ends_with('/') {
-        cleaned.push('/');
-    }
-    cleaned
-}
 
 /// Byte-native `expand-file-name` core.
 ///
@@ -223,40 +148,6 @@ fn expand_file_name_bytes_with_home(
     cleaned
 }
 
-/// Raw bytes of the home directory used for `~` expansion.
-///
-/// Unix: the `HOME` environment variable (byte-exact), or None if unset.
-///
-/// Windows: GNU `w32.c init_environment` guarantees HOME is set -- it keeps an
-/// existing HOME, else (when `C:/.emacs` is absent) defaults it to the roaming
-/// AppData folder via `SHGetFolderPath(CSIDL_APPDATA)` (the path the `APPDATA`
-/// env var holds), else `"C:/"`. (GNU also consults an Emacs-specific registry
-/// key, which we do not replicate.) Mirror that so `~` expands to a real
-/// directory: a Windows session that sets APPDATA/USERPROFILE but not HOME would
-/// otherwise leave `~` literal and `directory-files "~"` would fail at startup.
-fn home_env_bytes() -> Option<Vec<u8>> {
-    #[cfg(unix)]
-    {
-        if let Some(home) = std::env::var_os("HOME") {
-            return Some(home.as_bytes().to_vec());
-        }
-        current_user_home_bytes()
-    }
-    #[cfg(not(unix))]
-    {
-        if let Some(home) = std::env::var_os("HOME") {
-            return Some(home.to_string_lossy().into_owned().into_bytes());
-        }
-        current_user_home_bytes()
-    }
-}
-
-/// String form of [`home_env_bytes`] for the string-native `~` expansion path,
-/// so it honors the same Windows HOME fallback (APPDATA / USERPROFILE / "C:/").
-fn home_env_string() -> Option<String> {
-    home_env_bytes().map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
-}
-
 /// Raw bytes of the current working directory, byte-exact on Unix.
 fn current_dir_bytes() -> Vec<u8> {
     match std::env::current_dir() {
@@ -271,85 +162,6 @@ fn current_dir_bytes() -> Vec<u8> {
             }
         }
         Err(_) => b"/".to_vec(),
-    }
-}
-
-/// Byte-native twin of `expand_user_home_prefix`.
-fn expand_user_home_prefix_bytes(name: &[u8]) -> Option<(Vec<u8>, &[u8])> {
-    let rest = name.strip_prefix(b"~")?;
-    let sep = rest.iter().position(|&b| b == b'/').unwrap_or(rest.len());
-    if sep == 0 {
-        return None;
-    }
-    let user = &rest[..sep];
-    let home = user_homedir_bytes(user)?;
-    Some((home, &rest[sep..]))
-}
-
-/// Byte-native twin of `user_homedir`, returning the raw passwd `pw_dir` bytes.
-fn user_homedir_bytes(user: &[u8]) -> Option<Vec<u8>> {
-    #[cfg(unix)]
-    {
-        let user = CString::new(user).ok()?;
-        let passwd = unsafe { libc::getpwnam(user.as_ptr()) };
-        if passwd.is_null() {
-            return None;
-        }
-        let pw_dir = unsafe { (*passwd).pw_dir };
-        if pw_dir.is_null() {
-            return None;
-        }
-        let dir = unsafe { CStr::from_ptr(pw_dir) }.to_bytes();
-        if !dir.starts_with(b"/") {
-            return None;
-        }
-        Some(dir.to_vec())
-    }
-
-    #[cfg(not(unix))]
-    {
-        let _ = user;
-        None
-    }
-}
-
-/// Home directory of the *current* user, mirroring GNU `get_homedir`'s fallback
-/// when `HOME` is unset (fileio.c): on Unix, `getpwnam` on $LOGNAME then $USER,
-/// else `getpwuid(getuid())`; on non-Unix, the OS-derived home where GNU
-/// `w32.c init_environment` puts HOME -- the roaming AppData folder
-/// (CSIDL_APPDATA == %APPDATA%), else %USERPROFILE%, else "C:/".
-fn current_user_home_bytes() -> Option<Vec<u8>> {
-    #[cfg(unix)]
-    {
-        for var in ["LOGNAME", "USER"] {
-            if let Some(user) = std::env::var_os(var)
-                && let Some(home) = user_homedir_bytes(user.as_bytes())
-            {
-                return Some(home);
-            }
-        }
-        let passwd = unsafe { libc::getpwuid(libc::getuid()) };
-        if passwd.is_null() {
-            return None;
-        }
-        let pw_dir = unsafe { (*passwd).pw_dir };
-        if pw_dir.is_null() {
-            return None;
-        }
-        let dir = unsafe { CStr::from_ptr(pw_dir) }.to_bytes();
-        if dir.is_empty() {
-            return None;
-        }
-        Some(dir.to_vec())
-    }
-
-    #[cfg(not(unix))]
-    {
-        let home = std::env::var_os("APPDATA")
-            .or_else(|| std::env::var_os("USERPROFILE"))
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "C:/".to_string());
-        Some(home.into_bytes())
     }
 }
 
@@ -426,43 +238,6 @@ fn clean_path_bytes(bytes: &[u8]) -> Vec<u8> {
     }
 
     out
-}
-
-fn expand_user_home_prefix(name: &str) -> Option<(String, &str)> {
-    let rest = name.strip_prefix('~')?;
-    let sep = rest.find('/').unwrap_or(rest.len());
-    if sep == 0 {
-        return None;
-    }
-    let user = &rest[..sep];
-    let home = user_homedir(user)?;
-    Some((home, &rest[sep..]))
-}
-
-fn user_homedir(user: &str) -> Option<String> {
-    #[cfg(unix)]
-    {
-        let user = CString::new(user).ok()?;
-        let passwd = unsafe { libc::getpwnam(user.as_ptr()) };
-        if passwd.is_null() {
-            return None;
-        }
-        let pw_dir = unsafe { (*passwd).pw_dir };
-        if pw_dir.is_null() {
-            return None;
-        }
-        let dir = unsafe { CStr::from_ptr(pw_dir) };
-        if !dir.to_bytes().starts_with(b"/") {
-            return None;
-        }
-        Some(dir.to_string_lossy().into_owned())
-    }
-
-    #[cfg(not(unix))]
-    {
-        let _ = user;
-        None
-    }
 }
 
 /// Convert a Lisp file-name string to an OS path at the real filesystem boundary.
@@ -603,76 +378,6 @@ fn file_truename_lisp(
     file_truename_lisp_inner(filename, &default_dir, &mut remaining_links, &mut prev_dirs)
 }
 
-fn join_file_name(base: &str, name: &str) -> String {
-    if base.ends_with('/') {
-        format!("{base}{name}")
-    } else {
-        format!("{base}/{name}")
-    }
-}
-
-fn trim_trailing_slashes_except_roots(path: &mut String) {
-    while path.len() > 1 && path.ends_with('/') && !(path.len() == 2 && path.starts_with("//")) {
-        path.pop();
-    }
-}
-
-/// Clean up a path by resolving `.` and `..` components without touching the
-/// filesystem (no symlink resolution).  GNU `expand-file-name` does this as a
-/// spelling-preserving byte pass, not via the platform path parser: an initial
-/// `//` is preserved, later repeated slashes are collapsed, and the first
-/// `/../` above root remains visible as the POSIX "superroot" spelling.
-fn clean_path(path: &str) -> String {
-    let bytes = path.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut p = 0;
-
-    while p < bytes.len() {
-        if bytes[p] != b'/' {
-            out.push(bytes[p]);
-            p += 1;
-        } else if p + 1 < bytes.len()
-            && bytes[p + 1] == b'.'
-            && (p + 2 == bytes.len() || bytes[p + 2] == b'/')
-        {
-            if out.is_empty() && p + 2 == bytes.len() {
-                out.push(b'/');
-            }
-            p += 2;
-        } else if p + 2 < bytes.len()
-            && bytes[p + 1] == b'.'
-            && bytes[p + 2] == b'.'
-            && !out.is_empty()
-            && (p + 3 == bytes.len() || bytes[p + 3] == b'/')
-        {
-            let mut previous_sep = out.len();
-            while previous_sep > 0 {
-                previous_sep -= 1;
-                if out[previous_sep] == b'/' {
-                    break;
-                }
-            }
-
-            if previous_sep == 0 && out.first() == Some(&b'/') && p + 3 == bytes.len() {
-                out.truncate(1);
-            } else {
-                out.truncate(previous_sep);
-            }
-            p += 3;
-        } else if p + 1 < bytes.len()
-            && bytes[p + 1] == b'/'
-            && (p != 0 || (p + 2 < bytes.len() && bytes[p + 2] == b'/'))
-        {
-            p += 1;
-        } else {
-            out.push(bytes[p]);
-            p += 1;
-        }
-    }
-
-    String::from_utf8(out).expect("path canonicalization preserves UTF-8")
-}
-
 /// Return the directory part of FILENAME, or None if there is no directory part.
 /// Like Emacs `file-name-directory`: includes the trailing slash.
 pub fn file_name_directory(filename: &str) -> Option<String> {
@@ -765,12 +470,6 @@ pub fn file_name_concat(parts: &[&str]) -> String {
         out.push_str(part);
     }
     out
-}
-
-/// Return true if FILENAME is an absolute file name.
-/// Mirrors GNU Emacs `file_name_absolute_p` for Unix path syntax.
-pub fn file_name_absolute_p(filename: &str) -> bool {
-    file_name_absolute_bytes_p(filename.as_bytes())
 }
 
 /// Return true if NAME is a directory name (ends with a directory separator).
@@ -2162,42 +1861,6 @@ fn create_private_temp_dir(path: &Path) -> std::io::Result<()> {
     #[cfg(not(unix))]
     {
         fs::create_dir(path)
-    }
-}
-
-/// GNU `decode_file_name` (`src/coding.c`): decode FNAME's file-name bytes
-/// back to a multibyte string using `file-name-coding-system`, then
-/// `default-file-name-coding-system`, then (when both are nil) identity.
-/// Returns the decoded multibyte `LispString`.
-pub(crate) fn decode_file_name_lisp(
-    eval: &super::eval::Context,
-    bytes: &[u8],
-) -> crate::heap_types::LispString {
-    let coding =
-        coding_system_value_to_name(&eval.visible_variable_value_or_nil("file-name-coding-system"))
-            .or_else(|| {
-                coding_system_value_to_name(
-                    &eval.visible_variable_value_or_nil("default-file-name-coding-system"),
-                )
-            });
-    let decoded = match coding {
-        Some(name) => {
-            crate::encoding::decode_bytes_to_lisp_string(bytes, &name, eval.eol_conversion())
-        }
-        // Both variables nil: GNU returns the name unchanged (unibyte bytes).
-        None => crate::heap_types::LispString::from_unibyte(bytes.to_vec()),
-    };
-
-    // GNU's `decode_file_name' uses `convert_string_nocopy': when decoding
-    // yields a string equal to the original unibyte filename, it returns the
-    // original object.  In particular, ASCII directory entries remain
-    // unibyte under UTF-8 while a name containing decoded non-ASCII becomes
-    // multibyte.  Preserve that representation distinction, not merely the
-    // bytes, because Lisp observes it through `multibyte-string-p'.
-    if decoded.schars() == bytes.len() && decoded.as_bytes() == bytes {
-        crate::heap_types::LispString::from_unibyte(bytes.to_vec())
-    } else {
-        decoded
     }
 }
 
@@ -6788,56 +6451,6 @@ pub(crate) fn builtin_insert_file_contents(
     Ok(value)
 }
 
-/// Typed fallback for operations that share GNU's write-coding precedence but
-/// differ when neither a dynamic nor a buffer coding system is selected.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WriteCodingFallback {
-    Utf8,
-    RawText,
-}
-
-/// Resolve the coding system to use for writing as an interned protocol value.
-///
-/// Priority:
-/// 1. `coding-system-for-write` (if bound and non-nil)
-/// 2. the buffer's visible `buffer-file-coding-system`
-/// 3. the caller's operation-specific fallback
-pub(crate) fn resolve_write_coding_system(
-    eval: &super::eval::Context,
-    buffer_id: crate::buffer::BufferId,
-    fallback: WriteCodingFallback,
-) -> crate::encoding::RuntimeCodingSystem {
-    crate::encoding::RuntimeCodingSystem::from_symbol(resolve_write_coding_system_symbol(
-        eval, buffer_id, fallback,
-    ))
-}
-
-fn resolve_write_coding_system_symbol(
-    eval: &super::eval::Context,
-    buffer_id: crate::buffer::BufferId,
-    fallback: WriteCodingFallback,
-) -> super::intern::SymId {
-    // 1. Check coding-system-for-write
-    let coding_system_for_write = eval.visible_variable_value_or_nil("coding-system-for-write");
-    if let Some(name) = coding_system_value_to_name(&coding_system_for_write) {
-        return intern(&name);
-    }
-
-    // 2. Read the visible per-buffer slot, not only an explicitly local
-    // override.  GNU's BVAR accessor sees the inherited slot value too.
-    if let Some(buf) = eval.edit.buffers.get(buffer_id)
-        && let Some(val) = buf.buffer_local_value("buffer-file-coding-system")
-        && let Some(name) = coding_system_value_to_name(&val)
-    {
-        return intern(&name);
-    }
-
-    match fallback {
-        WriteCodingFallback::Utf8 => intern("utf-8"),
-        WriteCodingFallback::RawText => intern("raw-text"),
-    }
-}
-
 /// GNU's `coding-system-require-warning` for one write.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum WriteCodingWarning {
@@ -7223,31 +6836,6 @@ fn select_write_region_coding_system(
     }
     let selected_id = inherit_buffer_default_eol(&eval.coding_systems, selected_id, selected_eol);
     Ok(finish(eval, selected_id))
-}
-
-/// Extract a coding system name from a `Value` (symbol or string).
-/// Returns `None` for nil / unrecognized types.
-fn coding_system_value_to_name(val: &Value) -> Option<String> {
-    match val.kind() {
-        ValueKind::Nil => None,
-        ValueKind::Symbol(id) => {
-            let name = resolve_sym(id).to_owned();
-            if name == "nil" { None } else { Some(name) }
-        }
-        ValueKind::String => {
-            // Coding-system names are ASCII protocol identifiers; decode lossily.
-            let name = val
-                .as_lisp_string()
-                .map(|ls| crate::emacs_core::emacs_char::to_utf8_lossy(ls.as_bytes()))
-                .unwrap_or_default();
-            if name.is_empty() || name == "nil" {
-                None
-            } else {
-                Some(name)
-            }
-        }
-        _ => None,
-    }
 }
 
 /// `(write-region START END FILENAME &optional APPEND VISIT LOCKNAME MUSTBENEW)`

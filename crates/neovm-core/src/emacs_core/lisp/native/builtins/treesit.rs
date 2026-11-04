@@ -179,10 +179,12 @@ impl LibraryProbe {
     }
 
     fn under_directory(dir: &str, joined_base: &str) -> Self {
-        Self(crate::emacs_core::fileio::expand_file_name(
-            joined_base,
-            Some(dir),
-        ))
+        Self(
+            crate::emacs_core::eval::data::file_name_expand::expand_file_name(
+                joined_base,
+                Some(dir),
+            ),
+        )
     }
 
     fn versioned_variants(self, suffix: &str) -> impl Iterator<Item = Self> {
