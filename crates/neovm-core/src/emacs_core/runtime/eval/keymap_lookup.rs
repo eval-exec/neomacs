@@ -14,7 +14,6 @@ use crate::emacs_core::chartable::{
     make_char_table_value,
 };
 use crate::tagged::value::SymbolMode;
-use crate::window::DisplayFrameExt;
 use neovm_value::keyboard_pure::{
     KEY_CHAR_ALT, KEY_CHAR_CODE_MASK, KEY_CHAR_CTRL, KEY_CHAR_HYPER, KEY_CHAR_META,
     KEY_CHAR_MOD_MASK, KEY_CHAR_SHIFT, KEY_CHAR_SUPER, reorder_event_symbol_modifiers,
@@ -2723,7 +2722,7 @@ struct PositionMapLayers {
 }
 
 fn active_map_position(
-    frames: &crate::window::FrameManager,
+    frames: &crate::emacs_core::eval::data::window_state::FrameManager,
     buffers: &crate::buffer::BufferManager,
     position: Option<&Value>,
     symbol_mode: SymbolMode,
@@ -2744,7 +2743,8 @@ fn active_map_position(
     };
 
     if position.is_window() {
-        let window_id = crate::window::WindowId(position.as_window_id().unwrap());
+        let window_id =
+            neovm_edit::emacs_core::display_metrics::WindowId(position.as_window_id().unwrap());
         for frame_id in frames.frame_list() {
             let Some(frame) = frames.get(frame_id) else {
                 continue;
@@ -2797,7 +2797,7 @@ fn active_map_position(
     }
 
     let window_id = match slots[0].as_window_id() {
-        Some(id) => crate::window::WindowId(id),
+        Some(id) => neovm_edit::emacs_core::display_metrics::WindowId(id),
         None => return Ok(Some(default_position)),
     };
     let char_pos = slots[5].as_int().or_else(|| slots[1].as_int());
@@ -3036,7 +3036,7 @@ fn position_map_layers(
 #[allow(clippy::too_many_arguments)] // explicit keymap layers preserve GNU precedence ordering
 fn current_active_maps_from_parts(
     vars: VariableView<'_>,
-    frames: &crate::window::FrameManager,
+    frames: &crate::emacs_core::eval::data::window_state::FrameManager,
     buffers: &crate::buffer::BufferManager,
     current_local_map: Value,
     global_map: Value,
