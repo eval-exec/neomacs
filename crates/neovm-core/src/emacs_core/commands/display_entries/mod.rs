@@ -20,10 +20,10 @@ pub(crate) fn builtin_frame_id(
         &mut eval.frames,
         &mut eval.edit.buffers,
         args.first(),
-        crate::emacs_core::window_cmds::FrameDomain::Live,
+        neovm_value::display_vocab::FrameDomain::Live,
     )?;
-    let public_id = if fid.0 >= crate::window::FRAME_ID_BASE {
-        fid.0 - crate::window::FRAME_ID_BASE + 1
+    let public_id = if fid.0 >= neovm_value::display_vocab::FRAME_ID_BASE {
+        fid.0 - neovm_value::display_vocab::FRAME_ID_BASE + 1
     } else {
         fid.0
     };
@@ -70,8 +70,8 @@ pub(crate) fn builtin_mouse_position_in_root_frame(
     ) else {
         return Ok(Value::NIL);
     };
-    let mut current = Some(crate::window::FrameId(frame_id));
-    let mut seen: Vec<crate::window::FrameId> = Vec::new();
+    let mut current = Some(neovm_value::display_vocab::FrameId(frame_id));
+    let mut seen: Vec<neovm_value::display_vocab::FrameId> = Vec::new();
     while let Some(id) = current {
         if seen.contains(&id) {
             break;
@@ -87,7 +87,10 @@ pub(crate) fn builtin_mouse_position_in_root_frame(
         x += frame.left_pos;
         y += frame.top_pos;
         let parent = frame.parent_frame;
-        let Some(parent_id) = parent.as_frame_id().map(crate::window::FrameId) else {
+        let Some(parent_id) = parent
+            .as_frame_id()
+            .map(neovm_value::display_vocab::FrameId)
+        else {
             break;
         };
         if eval.frames.get(parent_id).is_none() {
@@ -179,7 +182,7 @@ fn selected_frame_value(eval: &mut crate::emacs_core::eval::Context) -> Value {
 
 fn pixel_to_char_mouse_position(
     eval: &crate::emacs_core::eval::Context,
-    frame_id: Option<crate::window::FrameId>,
+    frame_id: Option<neovm_value::display_vocab::FrameId>,
     x: i64,
     y: i64,
 ) -> (Value, Value) {
