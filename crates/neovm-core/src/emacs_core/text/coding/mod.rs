@@ -16,7 +16,6 @@
 //!   terminal-coding-system, set-keyboard-coding-system,
 //!   set-terminal-coding-system, coding-system-priority-list
 
-use super::eval::Context;
 use super::text_host::{TextHost, TextVariableStore};
 use crate::buffer::{BufferManager, EmacsByteRange, LispCharPos1};
 use crate::emacs_core::emacs_char::EmacsChar;
@@ -26,7 +25,6 @@ use neovm_edit::emacs_core::edit_host::EditVariableRead;
 use neovm_value::error::LispCondition;
 use neovm_value::error::{EvalResult, Flow, signal};
 use neovm_value::error::{expect_args, expect_max_args, expect_min_args};
-use neovm_value::errors::CErrorMessage;
 use neovm_value::intern::WellKnown;
 use neovm_value::intern::{SymId, intern, lookup_interned, resolve_sym};
 use neovm_value::value::*;
@@ -6297,20 +6295,3 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/positioned_symbol_test.rs"]
 mod positioned_symbol_tests;
-
-impl Context {
-    /// GNU eval.c:2285-2287 routes native error templates through doprnt;
-    /// doprnt.c:493-499 translates quotes according to text-quoting-style.
-    #[cold]
-    #[inline(never)]
-    pub(crate) fn signal_c_error(&self, message: CErrorMessage<'_>) -> Flow {
-        let style = effective_text_quoting_style(self.variables(), self.symbol_mode());
-        signal(
-            LispCondition::Error,
-            vec![Value::string(requote_c_error_message(
-                message.template(),
-                style,
-            ))],
-        )
-    }
-}

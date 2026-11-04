@@ -30,8 +30,6 @@
 //! lands it. An installed `&'static` fn table is correct only where no host
 //! is in scope (the C2/C7/C8a seams) — never here.
 
-use std::path::PathBuf;
-
 use neovm_edit::buffer::BufferManager;
 use neovm_edit::emacs_core::edit_host::{EditHost, EditVariableRead};
 use neovm_value::error::{EvalResult, Flow};
@@ -42,7 +40,7 @@ use neovm_value::value::Value;
 
 use super::coding::{CodingSystemManager, EolConversion};
 use crate::code_conversion_workspace::{CodeConversionBufferLease, ConversionBufferEncoding};
-use crate::encoding::CodingEncoderState;
+use crate::encoding::{CodingEncoderState, RuntimeCodingSystem};
 
 pub trait TextHost: EditHost {
     /// The text phase opener: the owner's variable-read view, from DISJOINT
@@ -70,11 +68,6 @@ pub trait TextHost: EditHost {
     // each, or EDIT-HOST when it is a generic eval service)
     // -------------------------------------------------------------------------
 
-    /// The directory runtime charset maps are loaded from (GNU's
-    /// `charset-map-path` equivalent; the init-once DIR cell stays in text).
-    /// TEXT-HOST row.
-    fn charset_map_directory(&mut self) -> PathBuf;
-
     /// GNU `eval_sub`: evaluate FORM in this evaluator (T6.1; the encoding
     /// pre-write/post-read hook bodies keep it exactly as today).
     /// TEXT-HOST row.
@@ -94,6 +87,13 @@ pub trait TextHost: EditHost {
         &mut self,
         process: ProcessId,
     ) -> Result<&mut CodingEncoderState, Flow>;
+
+    /// The process's current encoding coding system, re-read after a
+    /// pre-write hook callback may have replaced it (GNU
+    /// `send_process`'s recalibration). `None`-coding is an error with
+    /// GNU's "Process output coding is not initialized" message.
+    /// TEXT-HOST row.
+    fn process_encoding_coding(&mut self, process: ProcessId) -> Result<RuntimeCodingSystem, Flow>;
 
     /// Whether the current buffer is shown in the selected frame's window
     /// tree. Scalar only; no FrameManager/WindowId crosses. TEXT-HOST row;

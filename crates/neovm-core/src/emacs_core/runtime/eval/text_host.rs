@@ -10,8 +10,6 @@
 //! and no stale view can outlive it. Static dispatch, never `dyn`, one
 //! production impl. Precedent: `runtime/eval/edit_host.rs`.
 
-use std::path::PathBuf;
-
 use neovm_value::heap_types::{LispString, ProcessId};
 
 use super::{Context, VariableView};
@@ -22,7 +20,7 @@ use crate::emacs_core::edit_host::EditHost;
 use crate::emacs_core::error::{EvalResult, Flow, signal};
 use crate::emacs_core::text_host::TextHost;
 use crate::emacs_core::value::Value;
-use crate::encoding::CodingEncoderState;
+use crate::encoding::{CodingEncoderState, RuntimeCodingSystem};
 
 impl TextHost for Context {
     #[inline(always)]
@@ -38,10 +36,6 @@ impl TextHost for Context {
     #[inline(always)]
     fn buffers_mut(&mut self) -> &mut BufferManager {
         &mut self.edit.buffers
-    }
-
-    fn charset_map_directory(&mut self) -> PathBuf {
-        crate::emacs_core::load::charset_map_directory()
     }
 
     fn eval_sub(&mut self, form: Value) -> EvalResult {
@@ -73,6 +67,20 @@ impl TextHost for Context {
             })
     }
 
+    fn process_encoding_coding(&mut self, process: ProcessId) -> Result<RuntimeCodingSystem, Flow> {
+        // The process's encoding coding, re-read after a pre-write hook may
+        // have replaced the descriptor (GNU send_process recalibration).
+        self.processes
+            .get_any(process)
+            .and_then(|proc| proc.encoding_state.coding())
+            .ok_or_else(|| {
+                signal(
+                    "error",
+                    vec![Value::string("Process output coding is not initialized")],
+                )
+            })
+    }
+
     fn current_buffer_is_displayed(&self) -> bool {
         let Some(buffer_id) = self.edit.buffers.current_buffer_id() else {
             return false;
@@ -91,7 +99,23 @@ impl TextHost for Context {
         &mut self,
         encoding: ConversionBufferEncoding,
     ) -> Result<CodeConversionBufferLease, Flow> {
-        Context::acquire_code_conversion_buffer(self, encoding)
+        // GNU `code_conversion_save` through the evaluator so
+        // `Fmake_local_variable`'s localized forwarding metadata is updated.
+        // Body moved verbatim from code_conversion_workspace's impl Context
+        // (same statement order and rooting); text owns the lifecycle row.
+        let lease = self
+            .code_conversion_workspace
+            .acquire(&mut self.edit.buffers, encoding);
+        if let Err(flow) = self.set_buffer_local_binding_by_id(
+            lease.buffer_id(),
+            neovm_value::intern::intern("inhibit-modification-hooks"),
+            Value::T,
+        ) {
+            self.code_conversion_workspace
+                .release(&mut self.edit.buffers, lease);
+            return Err(flow);
+        }
+        Ok(lease)
     }
 
     fn set_code_conversion_buffer_contents(
@@ -99,10 +123,12 @@ impl TextHost for Context {
         lease: &CodeConversionBufferLease,
         text: &LispString,
     ) {
-        Context::set_code_conversion_buffer_contents(self, lease, text)
+        self.code_conversion_workspace
+            .replace_contents(&mut self.edit.buffers, lease, text);
     }
 
     fn release_code_conversion_buffer(&mut self, lease: CodeConversionBufferLease) {
-        Context::release_code_conversion_buffer(self, lease)
+        self.code_conversion_workspace
+            .release(&mut self.edit.buffers, lease);
     }
 }

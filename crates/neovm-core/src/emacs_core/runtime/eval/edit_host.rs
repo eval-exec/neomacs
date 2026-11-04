@@ -275,13 +275,23 @@ impl EditHost for Context {
         Context::expect_lisp_string(self, value)
     }
 
+    /// GNU eval.c:2285-2287 routes native error templates through doprnt;
+    /// doprnt.c:493-499 translates quotes according to text-quoting-style.
+    /// Body moved verbatim from text/coding's inherent `impl Context`
+    /// (stage-3b: coding then names no Context at all).
     #[cold]
+    #[inline(never)]
     fn signal_c_error(&self, message: crate::errors::CErrorMessage<'_>) -> Flow {
-        // Inherent `Context` method (text/coding): the path resolves to
-        // it, not to this trait method, because inherent items take
-        // precedence; spelled as an associated call for the same reason
-        // as `sync_window_positions` above.
-        Context::signal_c_error(self, message)
+        let style = crate::emacs_core::coding::effective_text_quoting_style(
+            self.variables(),
+            self.symbol_mode(),
+        );
+        crate::emacs_core::error::signal(
+            crate::emacs_core::error::LispCondition::Error,
+            vec![Value::string(
+                crate::emacs_core::coding::requote_c_error_message(message.template(), style),
+            )],
+        )
     }
 
     fn apply(&mut self, function: Value, args: &[Value]) -> EvalResult {

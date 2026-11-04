@@ -5436,7 +5436,7 @@ pub(crate) struct EncodedTextBytes {
 /// accidentally turn a runtime coding protocol back into a name and feed it
 /// to the context-free family encoder.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct RuntimeCodingSystem(neovm_value::intern::SymId);
+pub struct RuntimeCodingSystem(neovm_value::intern::SymId);
 
 impl RuntimeCodingSystem {
     pub(crate) fn from_symbol(symbol: neovm_value::intern::SymId) -> Self {
