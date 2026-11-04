@@ -6,6 +6,7 @@
 //! W5/E13 per peer 13:3xZ and are not part of this table.
 
 use crate::emacs_core::eval::process_hooks::ProcessHooks;
+use crate::emacs_core::process::SystemProcessExt;
 use crate::heap_types::ProcessId;
 
 fn unlink_owned_unix_listener_for_exit(ctx: &mut crate::emacs_core::eval::Context, id: ProcessId) {
