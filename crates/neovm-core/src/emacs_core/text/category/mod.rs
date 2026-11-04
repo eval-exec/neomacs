@@ -13,6 +13,8 @@ use neovm_value::error::{expect_args, expect_max_args, expect_min_args};
 use neovm_value::tagged::SymbolMode;
 use std::cell::{Cell, RefCell};
 
+use crate::emacs_core::text_host::TextHost;
+
 use super::boolvec::{self, BoolVectorView};
 use neovm_value::error::{EvalResult, Flow, signal};
 use neovm_value::value::{HashTableTest, Value, ValueKind, VecLikeType};
@@ -440,12 +442,9 @@ fn check_category_table_in_buffers_with_symbols(
     }
 }
 
-fn check_category_table(
-    eval: &mut super::eval::Context,
-    table: Option<Value>,
-) -> Result<Value, Flow> {
-    let mode = eval.symbol_mode();
-    check_category_table_in_buffers_with_symbols(&mut eval.edit.buffers, table, mode)
+fn check_category_table<H: TextHost>(host: &mut H, table: Option<Value>) -> Result<Value, Flow> {
+    let mode = host.symbol_mode();
+    check_category_table_in_buffers_with_symbols(host.buffers_mut(), table, mode)
 }
 
 fn set_current_buffer_category_table_in_buffers(
@@ -602,8 +601,8 @@ pub(crate) fn builtin_category_set_mnemonics(args: Vec<Value>) -> EvalResult {
     Ok(Value::string(&out))
 }
 
-pub(crate) fn builtin_modify_category_entry(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_modify_category_entry<H: TextHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_min_args("modify-category-entry", &args, 2)?;
@@ -620,7 +619,7 @@ pub(crate) fn builtin_modify_category_entry(
         ));
     }
 
-    let table = check_category_table(eval, args.get(2).copied())?;
+    let table = check_category_table(host, args.get(2).copied())?;
     if category_docstring_in_table(table, category)?.is_nil() {
         return Err(signal(
             "error",
@@ -680,10 +679,7 @@ pub(crate) fn builtin_modify_category_entry(
     Ok(Value::NIL)
 }
 
-pub(crate) fn builtin_define_category(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
+pub(crate) fn builtin_define_category<H: TextHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_min_args("define-category", &args, 2)?;
     expect_max_args("define-category", &args, 3)?;
 
@@ -698,7 +694,7 @@ pub(crate) fn builtin_define_category(
             ));
         }
     };
-    let table = check_category_table(eval, args.get(2).copied())?;
+    let table = check_category_table(host, args.get(2).copied())?;
     if !category_docstring_in_table(table, category)?.is_nil() {
         return Err(signal(
             "error",
@@ -713,25 +709,25 @@ pub(crate) fn builtin_define_category(
     Ok(Value::NIL)
 }
 
-pub(crate) fn builtin_category_docstring(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_category_docstring<H: TextHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_min_args("category-docstring", &args, 1)?;
     expect_max_args("category-docstring", &args, 2)?;
 
     let category = extract_char(&args[0], "category-docstring")?;
-    let table = check_category_table(eval, args.get(1).copied())?;
+    let table = check_category_table(host, args.get(1).copied())?;
     category_docstring_in_table(table, category)
 }
 
-pub(crate) fn builtin_get_unused_category(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_get_unused_category<H: TextHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("get-unused-category", &args, 1)?;
 
-    let table = check_category_table(eval, args.first().copied())?;
+    let table = check_category_table(host, args.first().copied())?;
     for code in CATEGORY_MIN..=CATEGORY_MAX {
         let category = char::from_u32(code as u32).expect("ASCII category code");
         if category_docstring_in_table(table, category)?.is_nil() {
@@ -741,25 +737,19 @@ pub(crate) fn builtin_get_unused_category(
     Ok(Value::NIL)
 }
 
-pub(crate) fn builtin_char_category_set(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
+pub(crate) fn builtin_char_category_set<H: TextHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_args("char-category-set", &args, 1)?;
     let _ = extract_char_code(&args[0], "char-category-set")?;
-    let table = current_buffer_category_table_in_buffers(&mut eval.edit.buffers)?;
+    let table = current_buffer_category_table_in_buffers(host.buffers_mut())?;
     super::chartable::builtin_char_table_range_with_style(
         vec![table, args[0]],
         None,
-        eval.symbol_mode(),
+        host.symbol_mode(),
     )
 }
 
-pub(crate) fn builtin_category_table(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    builtin_category_table_in_buffers(&mut eval.edit.buffers, args)
+pub(crate) fn builtin_category_table<H: TextHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
+    builtin_category_table_in_buffers(host.buffers_mut(), args)
 }
 
 pub(crate) fn builtin_category_table_in_buffers(
@@ -770,20 +760,20 @@ pub(crate) fn builtin_category_table_in_buffers(
     current_buffer_category_table_in_buffers(buffers)
 }
 
-pub(crate) fn builtin_standard_category_table(
-    _eval: &mut super::eval::Context,
+pub(crate) fn builtin_standard_category_table<H: TextHost>(
+    _host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("standard-category-table", &args, 0)?;
     ensure_standard_category_table_object()
 }
 
-pub(crate) fn builtin_set_category_table(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_set_category_table<H: TextHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
-    let mode = eval.symbol_mode();
-    builtin_set_category_table_in_buffers_with_symbols(&mut eval.edit.buffers, args, mode)
+    let mode = host.symbol_mode();
+    builtin_set_category_table_in_buffers_with_symbols(host.buffers_mut(), args, mode)
 }
 
 pub(crate) fn builtin_set_category_table_in_buffers_with_symbols(
@@ -807,18 +797,18 @@ mod tests;
 #[path = "tests/gc_tls_ownership_test.rs"]
 mod gc_tls_ownership_tests;
 
-pub(crate) fn builtin_category_table_p_in_state(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_category_table_p_in_state<H: TextHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_category_table_p_with_symbols(args, eval.symbol_mode())
+    builtin_category_table_p_with_symbols(args, host.symbol_mode())
 }
 
-pub(crate) fn builtin_copy_category_table_in_state(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_copy_category_table_in_state<H: TextHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_copy_category_table_with_symbols(args, eval.symbol_mode())
+    builtin_copy_category_table_with_symbols(args, host.symbol_mode())
 }
 
 pub(crate) fn char_has_category_in_table_with_symbols(
