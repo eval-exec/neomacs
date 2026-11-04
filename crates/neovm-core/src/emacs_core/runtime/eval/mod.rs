@@ -3235,7 +3235,7 @@ pub struct Context {
     pub(crate) hash_table_test_registry: super::builtins::HashTableTestRegistryHandle,
     pub(crate) file_notify_registry: super::builtins::FileNotifyRegistryHandle,
     pub(crate) window_configuration_registry: super::builtins::WindowConfigurationRegistryHandle,
-    pub(crate) dynamic_module_registry: super::dynamic_module::DynamicModuleRegistryHandle,
+    pub(crate) dynamic_module_registry: data::dynamic_module_registry::DynamicModuleRegistryHandle,
     /// Mmap-backed pdump image that owns any mapped heap payloads borrowed by
     /// this evaluator's Lisp objects.
     /// The loaded pdump mapping, LEAKED to 'static at install: process-global

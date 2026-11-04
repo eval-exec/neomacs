@@ -475,7 +475,7 @@ impl Context {
                 visit(root);
             }
             group("dynamic_module_registry");
-            super::super::dynamic_module::collect_dynamic_module_registry_gc_roots(
+            super::data::dynamic_module_registry::collect_dynamic_module_registry_gc_roots(
                 &self.dynamic_module_registry,
                 &mut registry_roots,
             );
@@ -856,7 +856,7 @@ impl Context {
         super::super::builtins::install_window_configuration_registry_handle(
             &self.window_configuration_registry,
         );
-        super::super::dynamic_module::install_dynamic_module_registry_handle(
+        super::data::dynamic_module_registry::install_dynamic_module_registry_handle(
             &self.dynamic_module_registry,
         );
         super::super::error::install_in_flight_registry_handle(&self.in_flight_registry);

@@ -6,7 +6,10 @@
 #![allow(unsafe_op_in_unsafe_fn)]
 
 use crate::emacs_core::error::LispCondition;
-use crate::emacs_core::heap_registry::{HeapRegistryHandle, HeapRegistrySlot, HeapRegistryWeak};
+use crate::emacs_core::eval::data::dynamic_module_registry::{
+    GlobalRefEntry, GlobalRefMetadata, dynamic_module_registry_heap_identity, emacs_value,
+    emacs_value_tag, with_global_refs,
+};
 use malachite::integer::Integer;
 use std::collections::HashMap;
 use std::ffi::{CStr, c_void};
@@ -27,16 +30,6 @@ use crate::tagged::header::{ModuleFunctionObj, UserPtrObj, VecLikeType};
 // ============================================================================
 // C-compatible types matching GNU emacs-module.h
 // ============================================================================
-
-#[repr(C)]
-pub struct emacs_value_tag {
-    pub v: Value,
-    // Null for scoped local arena tags. Native global tags keep their owning
-    // registry weakly and can therefore be released after Context teardown.
-    global_reference: *mut GlobalRefMetadata,
-}
-
-pub type emacs_value = *mut emacs_value_tag;
 
 pub type emacs_function = unsafe extern "C" fn(
     env: *mut emacs_env,
@@ -353,66 +346,8 @@ static_assertions::assert_impl_all!(LoadedModule: Send, Sync);
 static LOADED_MODULES: Mutex<Option<HashMap<String, LoadedModule>>> = Mutex::new(None);
 
 thread_local! {
-    static GLOBAL_REFS: HeapRegistrySlot<Vec<Option<GlobalRefEntry>>> =
-        HeapRegistrySlot::new(Vec::new());
     static ACTIVE_ENVS: std::cell::RefCell<Vec<ActiveModuleEnvEntry>> =
         const { std::cell::RefCell::new(Vec::new()) };
-}
-
-pub(crate) struct GlobalRefEntry {
-    value: Value,
-    heap_identity: usize,
-    tag_ptr: *mut emacs_value_tag,
-}
-
-struct GlobalRefMetadata {
-    owner: HeapRegistryWeak<Vec<Option<GlobalRefEntry>>>,
-    refcount: isize,
-}
-
-impl Drop for GlobalRefEntry {
-    fn drop(&mut self) {
-        // Outstanding native references may be freed after their world ends.
-        // Invalidate the Lisp word without freeing the independently owned tag.
-        unsafe { (*self.tag_ptr).v = Value::NIL };
-    }
-}
-
-pub(crate) type DynamicModuleRegistryHandle = HeapRegistryHandle<Vec<Option<GlobalRefEntry>>>;
-
-pub(crate) fn current_dynamic_module_registry_handle() -> DynamicModuleRegistryHandle {
-    GLOBAL_REFS.with(HeapRegistrySlot::current)
-}
-
-pub(crate) fn install_dynamic_module_registry_handle(handle: &DynamicModuleRegistryHandle) {
-    GLOBAL_REFS.with(|slot| slot.install(handle));
-}
-
-pub(crate) fn reset_dynamic_module_registry() {
-    GLOBAL_REFS.with(|slot| slot.reset(Vec::new()));
-}
-
-/// Carrier park: forget the installed global-ref registry handle (a plain
-/// store). The World's registry stays alive through its Contexts.
-pub(crate) fn park_dynamic_module_registry() {
-    GLOBAL_REFS.with(HeapRegistrySlot::park);
-}
-
-pub(crate) fn retire_dynamic_module_registry(registry: &DynamicModuleRegistryHandle) {
-    registry.borrow_mut().clear();
-}
-
-pub(crate) fn collect_dynamic_module_registry_gc_roots(
-    registry: &DynamicModuleRegistryHandle,
-    roots: &mut Vec<Value>,
-) {
-    for entry in registry.borrow().iter().flatten() {
-        if entry.heap_identity == registry.heap_identity()
-            || (entry.heap_identity == 0 && !entry.value.is_heap_object())
-        {
-            roots.push(entry.value);
-        }
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -457,10 +392,7 @@ fn allocate_emacs_value(storage: &mut emacs_value_storage, lisp_val: Value) -> e
             storage.current = new_frame;
             allocate_emacs_value(storage, lisp_val)
         } else {
-            frame.objects[frame.offset] = emacs_value_tag {
-                v: lisp_val,
-                global_reference: std::ptr::null_mut(),
-            };
+            frame.objects[frame.offset] = emacs_value_tag::new(lisp_val);
             let ptr = &mut frame.objects[frame.offset] as *mut emacs_value_tag;
             frame.offset += 1;
             ptr
@@ -872,28 +804,23 @@ unsafe extern "C" fn module_make_global_ref(
             return std::ptr::null_mut();
         }
         let heap_identity = crate::tagged::gc::current_tagged_heap_identity().unwrap_or(0);
-        GLOBAL_REFS.with(|slot| {
+        with_global_refs(|slot| {
             let owner = slot.current().downgrade();
             let mut refs = slot.borrow_mut();
             for entry_opt in refs.iter_mut() {
                 if let Some(entry) = entry_opt
-                    && entry.heap_identity == heap_identity
-                    && entry.value.bits() == lisp_val.bits()
+                    && entry.heap_identity() == heap_identity
+                    && entry.value().bits() == lisp_val.bits()
                 {
-                    (*(*entry.tag_ptr).global_reference).refcount += 1;
-                    return entry.tag_ptr;
+                    (*(*entry.tag_ptr()).metadata()).refcount_add(1);
+                    return entry.tag_ptr();
                 }
             }
-            let metadata = Box::into_raw(Box::new(GlobalRefMetadata { owner, refcount: 1 }));
-            let tag = Box::into_raw(Box::new(emacs_value_tag {
-                v: lisp_val,
-                global_reference: metadata,
-            }));
-            let entry = GlobalRefEntry {
-                value: lisp_val,
-                heap_identity,
-                tag_ptr: tag,
-            };
+            let metadata = Box::into_raw(Box::new(GlobalRefMetadata::new(owner)));
+            let mut tag_cell = emacs_value_tag::new(lisp_val);
+            tag_cell.set_metadata(metadata);
+            let tag = Box::into_raw(Box::new(tag_cell));
+            let entry = GlobalRefEntry::new(lisp_val, heap_identity, tag);
             if let Some(pos) = refs.iter().position(|e| e.is_none()) {
                 refs[pos] = Some(entry);
             } else {
@@ -909,23 +836,23 @@ unsafe extern "C" fn module_free_global_ref(env: *mut emacs_env, global_value: e
         if global_value.is_null() {
             return;
         }
-        let metadata_ptr = (*global_value).global_reference;
+        let metadata_ptr = (*global_value).metadata();
         if metadata_ptr.is_null() {
             return;
         }
         let metadata = &mut *metadata_ptr;
-        metadata.refcount -= 1;
-        if metadata.refcount > 0 {
+        metadata.refcount_add(-1);
+        if metadata.refcount() > 0 {
             return;
         }
         // Resolve native ownership without reading the Lisp word, which has
         // been invalidated if its Context and heap have already been dropped.
-        if let Some(owner) = metadata.owner.upgrade() {
+        if let Some(owner) = metadata.owner().upgrade() {
             let mut refs = owner.borrow_mut();
             if let Some(entry) = refs.iter_mut().find(|entry| {
                 entry
                     .as_ref()
-                    .is_some_and(|entry| entry.tag_ptr == global_value)
+                    .is_some_and(|entry| entry.tag_ptr() == global_value)
             }) {
                 *entry = None;
             }
@@ -2482,7 +2409,7 @@ pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
     crate::tls_fingerprint::mix(h, ACTIVE_ENVS.with(|slot| slot.borrow().len() as u64));
     crate::tls_fingerprint::mix(
         h,
-        GLOBAL_REFS.with(|slot| slot.installed_heap_identity().unwrap_or(0) as u64),
+        dynamic_module_registry_heap_identity().unwrap_or(0) as u64,
     );
     crate::tls_fingerprint::mix(h, MODULE_CTX.with(|slot| slot.get() as usize as u64));
 }

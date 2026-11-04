@@ -275,7 +275,7 @@ impl Context {
     #[inline(never)]
     pub(crate) fn retire_green_owner(mut self) {
         self.dynamic_module_registry =
-            super::super::dynamic_module::DynamicModuleRegistryHandle::new(Vec::new());
+            super::data::dynamic_module_registry::DynamicModuleRegistryHandle::new(Vec::new());
         drop(self);
     }
 }

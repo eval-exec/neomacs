@@ -126,7 +126,7 @@ pub(super) struct RegistryHandles {
     pub(super) hash_table_test: super::super::builtins::HashTableTestRegistryHandle,
     pub(super) file_notify: super::super::builtins::FileNotifyRegistryHandle,
     pub(super) window_configuration: super::super::builtins::WindowConfigurationRegistryHandle,
-    pub(super) dynamic_module: super::super::dynamic_module::DynamicModuleRegistryHandle,
+    pub(super) dynamic_module: super::data::dynamic_module_registry::DynamicModuleRegistryHandle,
     pub(super) in_flight: super::super::error::InFlightRegistryHandle,
 }
 
@@ -142,7 +142,8 @@ impl RegistryHandles {
             file_notify: super::super::builtins::current_file_notify_registry_handle(),
             window_configuration:
                 super::super::builtins::current_window_configuration_registry_handle(),
-            dynamic_module: super::super::dynamic_module::current_dynamic_module_registry_handle(),
+            dynamic_module:
+                super::data::dynamic_module_registry::current_dynamic_module_registry_handle(),
             in_flight: super::super::error::current_in_flight_registry_handle(),
         }
     }
@@ -2721,7 +2722,9 @@ impl Drop for Context {
         // A Green World's main thread ends its other threads first.
         self.green_teardown();
         self.green_release_seat();
-        super::super::dynamic_module::retire_dynamic_module_registry(&self.dynamic_module_registry);
+        super::data::dynamic_module_registry::retire_dynamic_module_registry(
+            &self.dynamic_module_registry,
+        );
         // Context is !Send, pinned by thread contracts, so Drop stays on its
         // owner thread. Retain upstream policy retirement as defence in depth.
         self.integer_width_context.retire();

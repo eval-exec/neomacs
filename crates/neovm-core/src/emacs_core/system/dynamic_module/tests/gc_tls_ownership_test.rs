@@ -1,4 +1,5 @@
 use super::*;
+use crate::emacs_core::eval::data::dynamic_module_registry::collect_dynamic_module_registry_gc_roots;
 
 struct Environment {
     env: Box<emacs_env>,

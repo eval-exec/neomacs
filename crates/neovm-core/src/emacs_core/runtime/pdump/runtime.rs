@@ -78,7 +78,7 @@ fn register_core_load_hooks() {
             pdumper_do_now_and_after_load(crate::emacs_core::value::reset_string_text_properties);
             pdumper_do_now_and_after_load(crate::emacs_core::ccl::reset_ccl_registry);
             pdumper_do_now_and_after_load(
-                crate::emacs_core::dynamic_module::reset_dynamic_module_registry,
+                crate::emacs_core::eval::data::dynamic_module_registry::reset_dynamic_module_registry,
             );
             pdumper_do_now_and_after_load(
                 crate::emacs_core::dispnew::pure::reset_dispnew_thread_locals,

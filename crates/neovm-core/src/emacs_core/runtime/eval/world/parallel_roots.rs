@@ -111,7 +111,7 @@ impl Context {
             &self.file_notify_registry,
             &mut words,
         );
-        crate::emacs_core::dynamic_module::collect_dynamic_module_registry_gc_roots(
+        crate::emacs_core::eval::data::dynamic_module_registry::collect_dynamic_module_registry_gc_roots(
             &self.dynamic_module_registry,
             &mut words,
         );

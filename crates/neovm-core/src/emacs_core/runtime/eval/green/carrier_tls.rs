@@ -145,7 +145,7 @@ pub(crate) fn park_carrier_tls() {
     );
     reset_step!(
         "dynamic_module_registry",
-        crate::emacs_core::dynamic_module::park_dynamic_module_registry()
+        super::super::data::dynamic_module_registry::park_dynamic_module_registry()
     );
     reset_step!(
         "terminal",
