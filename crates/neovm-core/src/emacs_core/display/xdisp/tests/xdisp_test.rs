@@ -2026,6 +2026,43 @@ fn line_pixel_height_lays_out_the_line_at_point_outside_the_window() {
 }
 
 #[test]
+fn line_pixel_height_inside_a_layout_query_falls_back_instead_of_signaling() {
+    use crate::window::{WindowLayoutQuery, WindowLayoutQueryOutcome};
+    use std::sync::{Arc, Mutex};
+
+    crate::test_utils::init_test_tracing();
+    let (mut ev, _fid, wid, _buf) = line_pixel_height_gui_context("aa\nbb\n", 5);
+    // Lisp that a layout query runs (a mode-line `:eval`, a fontification
+    // function) calls `line-pixel-height` while the outer query is active.
+    let nested = Arc::new(Mutex::new(None));
+    let seen = Arc::clone(&nested);
+    ev.install_window_layout_query(move |ctx, _, _, scope| {
+        *seen.lock().unwrap() = Some(
+            builtin_line_pixel_height(ctx, &[])
+                .map_err(|flow| format!("{flow:?}"))
+                .map(|value| value.as_fixnum()),
+        );
+        let crate::window::WindowLayoutQueryScope::Rows { start, .. } = scope else {
+            panic!("expected a Rows query, got {scope:?}");
+        };
+        let snapshot = crate::window::WindowDisplaySnapshot {
+            window_id: wid,
+            rows: vec![line_pixel_height_row(0, 0, 30, 4, 6)],
+            ..Default::default()
+        };
+        WindowLayoutQueryOutcome::Ready(WindowLayoutQuery::new(start, Some(snapshot)))
+    });
+
+    let result = builtin_line_pixel_height(&mut ev, &[]).unwrap();
+    assert_eq!(result, Value::fixnum(30));
+    assert_eq!(
+        *nested.lock().unwrap(),
+        Some(Ok(Some(14))),
+        "the nested call answers the frame's line height"
+    );
+}
+
+#[test]
 fn test_window_text_pixel_size() {
     crate::test_utils::init_test_tracing();
     let result = builtin_window_text_pixel_size(vec![]).unwrap();

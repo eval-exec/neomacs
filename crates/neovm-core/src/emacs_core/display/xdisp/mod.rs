@@ -5749,7 +5749,8 @@ fn selected_line_pixel_height(eval: &mut super::eval::Context) -> Result<Option<
         return Ok(Some(height));
     }
     let measured = motion::screen_line_height_at(eval, fid, wid, buffer_id, pos)?;
-    // Only a window no frontend can lay out reaches the frame's line height.
+    // The frame's line height answers only when no frontend can lay the
+    // window out, or when this call runs inside another layout query.
     Ok(Some(measured.unwrap_or(line_height)))
 }
 

@@ -703,6 +703,15 @@ impl crate::emacs_core::eval::Context {
         self.window_layout_query_adapter = WindowLayoutQueryAdapter::Ready(Box::new(query));
     }
 
+    /// Whether a layout query is running, so a nested one would be refused
+    /// as `LayoutBusy`.
+    pub(crate) fn window_layout_query_running(&self) -> bool {
+        matches!(
+            self.window_layout_query_adapter,
+            WindowLayoutQueryAdapter::Running
+        )
+    }
+
     /// Refresh one window through the frontend's real layout engine and return
     /// the window-end record and display geometry produced by that one
     /// stack-local row walk.
