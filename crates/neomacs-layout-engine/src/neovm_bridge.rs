@@ -3507,7 +3507,7 @@ impl<'a, B: LayoutBufferView + ?Sized> RustTextPropAccess<'a, B> {
 
         if string.has_intervals()
             && let Some(props) =
-                neovm_core::emacs_core::value::get_string_text_properties_table_for_value(value)
+                neovm_core::emacs_core::value::borrow_string_text_properties_table_for_value(value)
         {
             let spec = self
                 .buffer
