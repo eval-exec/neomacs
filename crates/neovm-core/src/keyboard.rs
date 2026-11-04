@@ -30,6 +30,10 @@ mod keysym;
 mod unread;
 
 pub use keysym::{native_key_android, native_key_macos, native_key_ohos, native_key_windows};
+pub(crate) use neovm_value::system_vocab::input::{
+    ExecutingKbdMacroRuntimeSnapshot, InputPendingFilter, KeySequenceBufferSelection,
+    ReadKeySequenceOptions, TtyInputDecoding,
+};
 pub(crate) use unread::UnreadCommandEvent;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -751,18 +755,6 @@ enum InputHistoryRecording {
     AlreadyRecorded,
 }
 
-/// Whether a TTY read returns the bytes supplied by the terminal or characters
-/// decoded through `keyboard-coding-system`.
-///
-/// GNU represents this distinction with the magic `prev_event == t` sentinel
-/// passed to `read_char`.  Making it an enum keeps raw Lisp `read-event` reads
-/// distinct from command/key-sequence reads at compile time.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum TtyInputDecoding {
-    RawBytes,
-    KeyboardCodingSystem,
-}
-
 /// GNU `read_char` changes the idle epoch only when it has no end time.
 /// A timed read inside an idle callback belongs to the existing idle episode.
 #[derive(Clone, Copy, Debug)]
@@ -882,31 +874,6 @@ enum InputMethodEvent {
     Translated(Value),
 }
 
-/// GNU `read_key_sequence`'s `fix_current_buffer` distinction: the command
-/// loop follows the selected window, while Lisp key readers retain the caller's
-/// current buffer even when another buffer is displayed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum KeySequenceBufferSelection {
-    CurrentBuffer,
-    SelectedWindow,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct ReadKeySequenceOptions {
-    pub buffer_selection: KeySequenceBufferSelection,
-    pub prompt: Value,
-    pub dont_downcase_last: bool,
-    pub can_return_switch_frame: bool,
-    /// GNU `read_key_sequence_vs` CONTINUE-ECHO argument (keyboard.c:11904).
-    /// When false (the common case, and the default for the command loop and
-    /// for `read-key`), the committed `this-command-keys` of the *previous*
-    /// sequence is cleared at entry so the freshly read sequence starts from
-    /// scratch (keyboard.c:11919-11923). When true (e.g.
-    /// `(read-key-sequence-vector PROMPT t ...)`), the new events are appended
-    /// to the existing `this-command-keys` instead.
-    pub continue_echo: bool,
-}
-
 /// The two command values GNU `read_key_sequence` publishes at its `done`
 /// label: the binding the keymaps produced and the command `command_loop_1`
 /// executes after one level of `command-remapping`.
@@ -984,43 +951,6 @@ pub(crate) enum CommandKeySequenceEnd {
     KeyboardMacroIteration,
     /// The evaluator has no command-input source left to read.
     Input,
-}
-
-impl ReadKeySequenceOptions {
-    pub(crate) fn for_command_loop() -> Self {
-        Self {
-            buffer_selection: KeySequenceBufferSelection::SelectedWindow,
-            can_return_switch_frame: true,
-            ..Self::default()
-        }
-    }
-
-    pub(crate) fn new(
-        prompt: Value,
-        continue_echo: bool,
-        dont_downcase_last: bool,
-        can_return_switch_frame: bool,
-    ) -> Self {
-        Self {
-            buffer_selection: KeySequenceBufferSelection::CurrentBuffer,
-            prompt,
-            dont_downcase_last,
-            can_return_switch_frame,
-            continue_echo,
-        }
-    }
-}
-
-impl Default for ReadKeySequenceOptions {
-    fn default() -> Self {
-        Self {
-            buffer_selection: KeySequenceBufferSelection::CurrentBuffer,
-            prompt: Value::NIL,
-            dont_downcase_last: false,
-            can_return_switch_frame: false,
-            continue_echo: false,
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1983,12 +1913,6 @@ pub(crate) enum MouseEventPayload {
     WithClickCount { position: Value, count: u32 },
 }
 
-#[derive(Clone, Debug, Default)]
-pub(crate) struct ExecutingKbdMacroRuntimeSnapshot {
-    pub events: Option<Vec<Value>>,
-    pub index: usize,
-}
-
 impl KBoard {
     pub fn new() -> Self {
         Self {
@@ -2420,37 +2344,6 @@ pub enum NonmacroInputEvent {
     /// The event came from an executing keyboard macro, which GNU excludes
     /// (`src/keyboard.c:3469-3590`).
     SuppressedByMacroPlayback,
-}
-
-/// GNU's two filtering modes for an `input-pending-p` command-input query.
-///
-/// The Lisp variable does not toggle filtering off. Non-nil uses the full
-/// `while-no-input-ignore-events` set; nil still filters focus events.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum InputPendingFilter {
-    ConfiguredIgnoreList,
-    FocusEventsOnly,
-}
-
-impl InputPendingFilter {
-    pub(crate) const fn from_filter_events_variable(enabled: bool) -> Self {
-        if enabled {
-            Self::ConfiguredIgnoreList
-        } else {
-            Self::FocusEventsOnly
-        }
-    }
-
-    pub(crate) fn ignores(
-        self,
-        symbol: &str,
-        ignored_while_no_input: &impl Fn(&str) -> bool,
-    ) -> bool {
-        match self {
-            Self::ConfiguredIgnoreList => ignored_while_no_input(symbol),
-            Self::FocusEventsOnly => matches!(symbol, "focus-in" | "focus-out"),
-        }
-    }
 }
 
 impl KeyboardRuntime {

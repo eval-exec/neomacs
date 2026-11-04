@@ -2659,11 +2659,11 @@ impl CommandEventReadPlan {
 /// `keyboard-coding-system`.
 pub(crate) fn tty_input_decoding_from_read_args(
     args: &[Value],
-) -> crate::keyboard::TtyInputDecoding {
+) -> neovm_value::system_vocab::input::TtyInputDecoding {
     if args.get(1).is_some_and(|value| value.is_truthy()) {
-        crate::keyboard::TtyInputDecoding::KeyboardCodingSystem
+        neovm_value::system_vocab::input::TtyInputDecoding::KeyboardCodingSystem
     } else {
-        crate::keyboard::TtyInputDecoding::RawBytes
+        neovm_value::system_vocab::input::TtyInputDecoding::RawBytes
     }
 }
 
@@ -2692,11 +2692,11 @@ pub(crate) trait KeyboardInputRuntime {
     fn read_char_with_timeout(
         &mut self,
         timeout: Option<Duration>,
-        tty_input_decoding: crate::keyboard::TtyInputDecoding,
+        tty_input_decoding: neovm_value::system_vocab::input::TtyInputDecoding,
     ) -> Result<Option<Value>, Flow>;
     fn read_key_sequence_blocking(
         &mut self,
-        options: crate::keyboard::ReadKeySequenceOptions,
+        options: neovm_value::system_vocab::input::ReadKeySequenceOptions,
     ) -> Result<(Vec<Value>, Value), Flow>;
     fn symbol_value_or_nil(&self, name: &str) -> Value;
 }
@@ -2755,14 +2755,14 @@ impl KeyboardInputRuntime for super::eval::Context {
     fn read_char_with_timeout(
         &mut self,
         timeout: Option<Duration>,
-        tty_input_decoding: crate::keyboard::TtyInputDecoding,
+        tty_input_decoding: neovm_value::system_vocab::input::TtyInputDecoding,
     ) -> Result<Option<Value>, Flow> {
         super::eval::Context::read_char_with_timeout_decoding(self, timeout, tty_input_decoding)
     }
 
     fn read_key_sequence_blocking(
         &mut self,
-        options: crate::keyboard::ReadKeySequenceOptions,
+        options: neovm_value::system_vocab::input::ReadKeySequenceOptions,
     ) -> Result<(Vec<Value>, Value), Flow> {
         let (keys, binding) = super::eval::Context::read_key_sequence_with_options(self, options)?;
         Ok((keys, binding.executed()))
@@ -2775,7 +2775,7 @@ impl KeyboardInputRuntime for super::eval::Context {
 
 pub(crate) fn read_key_sequence_options_from_args(
     args: &[Value],
-) -> crate::keyboard::ReadKeySequenceOptions {
+) -> neovm_value::system_vocab::input::ReadKeySequenceOptions {
     // GNU `Fread_key_sequence`/`Fread_key_sequence_vector` signature
     // (keyboard.c:11935) is
     //   (PROMPT CONTINUE-ECHO DONT-DOWNCASE-LAST CAN-RETURN-SWITCH-FRAME ...).
@@ -2783,7 +2783,7 @@ pub(crate) fn read_key_sequence_options_from_args(
     // `this-command-keys` is preserved (non-nil) or cleared for a fresh
     // sequence (nil); `read-key` (subr.el) passes nil here and relies on the
     // clear so its idle-timer `(this-command-keys-vector)` probe is empty.
-    crate::keyboard::ReadKeySequenceOptions::new(
+    neovm_value::system_vocab::input::ReadKeySequenceOptions::new(
         args.first().copied().unwrap_or(Value::NIL),
         args.get(1).is_some_and(|v| v.is_truthy()),
         args.get(2).is_some_and(|v| v.is_truthy()),
@@ -3408,7 +3408,7 @@ pub(crate) fn finish_read_key_sequence_in_eval(
 
 pub(crate) fn finish_read_key_sequence_interactive_in_runtime(
     runtime: &mut impl KeyboardInputRuntime,
-    options: crate::keyboard::ReadKeySequenceOptions,
+    options: neovm_value::system_vocab::input::ReadKeySequenceOptions,
 ) -> EvalResult {
     let (keys, _binding) = runtime.read_key_sequence_blocking(options)?;
     let mut chars_only = true;
@@ -3446,7 +3446,7 @@ pub(crate) fn builtin_read_key_sequence_vector(
 
 pub(crate) fn finish_read_key_sequence_vector_interactive_in_runtime(
     runtime: &mut impl KeyboardInputRuntime,
-    options: crate::keyboard::ReadKeySequenceOptions,
+    options: neovm_value::system_vocab::input::ReadKeySequenceOptions,
 ) -> EvalResult {
     let (keys, _binding) = runtime.read_key_sequence_blocking(options)?;
     Ok(Value::vector(keys))

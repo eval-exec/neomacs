@@ -859,7 +859,7 @@ impl Context {
                 Value::T,
             )?;
             let read_result = self.read_command_key_sequence_with_options(
-                crate::keyboard::ReadKeySequenceOptions::for_command_loop(),
+                neovm_value::system_vocab::input::ReadKeySequenceOptions::for_command_loop(),
             );
 
             // The read result itself is not an EvalResult, but it can carry
@@ -3653,12 +3653,16 @@ impl Context {
         }
     }
 
-    pub(super) fn input_pending_filter(&self) -> crate::keyboard::InputPendingFilter {
+    pub(super) fn input_pending_filter(
+        &self,
+    ) -> neovm_value::system_vocab::input::InputPendingFilter {
         let configured = self
             .variable_value(INPUT_PENDING_FILTER_EVENTS.id())
             .unwrap_or(Value::T)
             .is_truthy();
-        crate::keyboard::InputPendingFilter::from_filter_events_variable(configured)
+        neovm_value::system_vocab::input::InputPendingFilter::from_filter_events_variable(
+            configured,
+        )
     }
 
     /// GNU's `track_mouse` (`DEFVAR_LISP`, `src/keyboard.c:14134`), which every
@@ -3706,7 +3710,7 @@ impl Context {
 
     pub(crate) fn has_pending_frontend_input_with_configured_filter(&self) -> bool {
         self.has_frontend_input(crate::frontend_events::FrontendInputQuery::Pending(
-            crate::keyboard::InputPendingFilter::ConfiguredIgnoreList,
+            neovm_value::system_vocab::input::InputPendingFilter::ConfiguredIgnoreList,
         ))
     }
 

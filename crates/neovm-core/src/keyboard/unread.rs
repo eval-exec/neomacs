@@ -1,33 +1,7 @@
 //! Decode Lisp's unread-command queue before its metadata can reach keymaps.
+//!
+//! The event record itself is input-path vocabulary and moved to
+//! `neovm_value::system_vocab::input` for the stage-4 eval split (W1/E3);
+//! this module keeps core's historical path.
 
-use crate::emacs_core::value::Value;
-
-/// GNU `read_char` distinguishes forced fresh input, ordinary rereads, and
-/// events already recorded by Quail (keyboard.c, unread-command-events).
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum UnreadCommandEvent {
-    Fresh(Value),
-    Reread(Value),
-    AlreadyRecorded(Value),
-}
-
-impl UnreadCommandEvent {
-    pub(crate) fn decode(value: Value) -> Self {
-        if value.is_cons() {
-            let tag = value.cons_car();
-            if tag.is_t() {
-                return Self::Fresh(value.cons_cdr());
-            }
-            if tag == Value::symbol("no-record") {
-                return Self::AlreadyRecorded(value.cons_cdr());
-            }
-        }
-        Self::Reread(value)
-    }
-
-    pub(crate) fn event(self) -> Value {
-        match self {
-            Self::Fresh(event) | Self::Reread(event) | Self::AlreadyRecorded(event) => event,
-        }
-    }
-}
+pub(crate) use neovm_value::system_vocab::input::UnreadCommandEvent;

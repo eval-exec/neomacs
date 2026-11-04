@@ -983,7 +983,7 @@ pub(crate) fn compiler_function_override_in_obarray(
 
 #[derive(Clone, Debug)]
 struct ExecutingKbdMacroRuntimeScope {
-    snapshot: crate::keyboard::ExecutingKbdMacroRuntimeSnapshot,
+    snapshot: neovm_value::system_vocab::input::ExecutingKbdMacroRuntimeSnapshot,
     real_this_command: Value,
 }
 
@@ -4704,7 +4704,7 @@ impl Context {
     }
 
     pub(crate) fn pop_unread_command_event(&mut self) -> Option<Value> {
-        use crate::keyboard::UnreadCommandEvent;
+        use neovm_value::system_vocab::input::UnreadCommandEvent;
         let unread = self.take_unread_command_event()?;
         match unread {
             UnreadCommandEvent::Fresh(event) | UnreadCommandEvent::Reread(event) => {
@@ -4719,7 +4719,7 @@ impl Context {
 
     pub(crate) fn take_unread_command_event(
         &mut self,
-    ) -> Option<crate::keyboard::UnreadCommandEvent> {
+    ) -> Option<neovm_value::system_vocab::input::UnreadCommandEvent> {
         let current = match self.eval_symbol_by_id(UNREAD_COMMAND_EVENTS.id()) {
             Ok(value) => value,
             Err(_) => Value::NIL,
@@ -4729,7 +4729,7 @@ impl Context {
                 let head = current.cons_car();
                 let tail = current.cons_cdr();
                 self.assign_by_id(UNREAD_COMMAND_EVENTS.id(), tail);
-                Some(crate::keyboard::UnreadCommandEvent::decode(head))
+                Some(neovm_value::system_vocab::input::UnreadCommandEvent::decode(head))
             }
             _ => None,
         }
@@ -4741,9 +4741,10 @@ impl Context {
             Err(_) => Value::NIL,
         };
         match current.kind() {
-            ValueKind::Cons => {
-                Some(crate::keyboard::UnreadCommandEvent::decode(current.cons_car()).event())
-            }
+            ValueKind::Cons => Some(
+                neovm_value::system_vocab::input::UnreadCommandEvent::decode(current.cons_car())
+                    .event(),
+            ),
             _ => None,
         }
     }

@@ -2,11 +2,13 @@
 //!
 //! Pure std data and helpers with no evaluator, display, or host authority:
 //! the errno boundary, platform facts, the C-feature table, path_exec, the
-//! `sleep-for` wait vocabulary and startup constants.  Core keeps every
-//! historical module path as a re-export in `neovm-core`.
+//! `sleep-for` wait vocabulary, the reader/command-loop input vocabulary and
+//! startup constants.  Core keeps every historical module path as a re-export
+//! in `neovm-core`.
 
 pub mod c_features;
 pub mod errno;
+pub mod input;
 pub mod path_exec;
 pub mod platform;
 pub mod platform_facts;

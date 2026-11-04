@@ -244,7 +244,7 @@ impl KeyboardWaitPolicy {
             // still reach read_char, or later presentation/resize work stalls.
             Self::ReadCommandInput => Some(FrontendInputQuery::Readable),
             Self::YieldOnCommandInput => Some(FrontendInputQuery::Pending(
-                crate::keyboard::InputPendingFilter::ConfiguredIgnoreList,
+                neovm_value::system_vocab::input::InputPendingFilter::ConfiguredIgnoreList,
             )),
             Self::ServiceSpecialOnly | Self::WaitForSpecialInput => None,
         }

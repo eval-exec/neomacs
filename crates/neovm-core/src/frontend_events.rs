@@ -3,7 +3,8 @@
 //! `InputEvent` is a transport enum.  Consumers must use this module instead
 //! of inferring command-input semantics from the transport variant directly.
 
-use crate::keyboard::{InputEvent, InputPendingFilter};
+use crate::keyboard::InputEvent;
+use neovm_value::system_vocab::input::InputPendingFilter;
 use std::collections::VecDeque;
 
 /// GNU's readable_events distinguishes a blocked reader from a filtered
