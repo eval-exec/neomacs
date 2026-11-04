@@ -2,7 +2,6 @@ use super::*;
 use crate::buffer::{BufferManager, LispCharPos1};
 use crate::emacs_core::display;
 use crate::emacs_core::error::{expect_args, expect_args_range, expect_fixnum};
-use crate::emacs_core::fontset;
 use crate::emacs_core::value::{ValueKind, VecLikeType};
 use crate::tagged::SymbolMode;
 use crate::window::DisplayFrameExt;
@@ -48,53 +47,6 @@ pub(crate) fn builtin_tty_frame_restack(args: Vec<Value>) -> EvalResult {
         "error",
         vec![Value::string("tty-frame-restack is not implemented")],
     ))
-}
-
-fn tty_display_dimension(
-    ctx: &mut crate::emacs_core::eval::Context,
-    name: &str,
-    args: &[Value],
-) -> Result<(i64, i64), Flow> {
-    expect_args_range(name, args, 0, 1)?;
-
-    let frame_id = match args.first().map(|value| value.kind()) {
-        Some(ValueKind::Veclike(VecLikeType::Frame)) => {
-            neovm_value::display_vocab::FrameId(args[0].as_frame_id().unwrap())
-        }
-        _ => crate::emacs_core::window_cmds::ensure_selected_frame_id(ctx),
-    };
-
-    let Some(frame) = ctx.frames.get(frame_id) else {
-        return Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![
-                Value::symbol("framep"),
-                args.first().copied().unwrap_or(Value::NIL),
-            ],
-        ));
-    };
-
-    if frame.initial {
-        return Ok((80, 25));
-    }
-
-    Ok((i64::from(frame.columns()), i64::from(frame.lines())))
-}
-
-pub(crate) fn builtin_tty_display_pixel_width(
-    ctx: &mut crate::emacs_core::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    let (width, _) = tty_display_dimension(ctx, "tty-display-pixel-width", &args)?;
-    Ok(Value::fixnum(width))
-}
-
-pub(crate) fn builtin_tty_display_pixel_height(
-    ctx: &mut crate::emacs_core::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    let (_, height) = tty_display_dimension(ctx, "tty-display-pixel-height", &args)?;
-    Ok(Value::fixnum(height))
 }
 
 // =========================================================================
@@ -1036,42 +988,6 @@ fn describe_vector_char_name(code: i64) -> String {
     }
 }
 
-pub(crate) fn builtin_frame_set_was_invisible(
-    eval: &mut crate::emacs_core::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    expect_args("frame--set-was-invisible", &args, 2)?;
-    expect_live_frame_or_nil(eval, &args[0])?;
-    Ok(args[1])
-}
-
-pub(crate) fn builtin_frame_after_make_frame(
-    eval: &mut crate::emacs_core::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    expect_args("frame-after-make-frame", &args, 2)?;
-    let frame_id = crate::emacs_core::window_cmds::resolve_frame_id_in_state(
-        &mut eval.frames,
-        &mut eval.edit.buffers,
-        args.first(),
-        FrameDomain::Live,
-    )?;
-    if args[1].is_truthy() {
-        let request = eval.frames.get(frame_id).and_then(|frame| {
-            (frame.effective_window_system().is_some()
-                && frame.parent_frame.as_frame_id().is_none())
-            .then(|| crate::emacs_core::eval::GuiFrameHostRequest::for_frame(frame))
-        });
-        if let Some(request) = request
-            && let Some(host) = eval.display_host.as_mut()
-        {
-            host.finish_gui_frame_creation(request)
-                .map_err(|message| signal("error", vec![Value::string(message)]))?;
-        }
-    }
-    Ok(Value::NIL)
-}
-
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) fn builtin_frame_bottom_divider_width(args: Vec<Value>) -> EvalResult {
     expect_args_range("frame-bottom-divider-width", &args, 0, 1)?;
@@ -1088,17 +1004,6 @@ pub(crate) fn builtin_frame_child_frame_border_width(args: Vec<Value>) -> EvalRe
         expect_frame_in_domain(frame, FrameDomain::Any)?;
     }
     Ok(Value::fixnum(0))
-}
-
-pub(crate) fn builtin_frame_font_cache(
-    eval: &mut crate::emacs_core::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    expect_args_range("frame-font-cache", &args, 0, 1)?;
-    if let Some(frame) = args.first() {
-        expect_live_frame_or_nil(eval, frame)?;
-    }
-    Ok(Value::NIL)
 }
 
 pub(crate) fn builtin_frame_fringe_width(args: Vec<Value>) -> EvalResult {
@@ -1304,21 +1209,6 @@ pub(crate) fn builtin_get_unicode_property_internal(args: Vec<Value>) -> EvalRes
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(super) const FACE_ATTRIBUTES_VECTOR_LEN: usize = 20;
 
-fn expect_characterp_from_int(value: &Value) -> Result<char, Flow> {
-    match value.kind() {
-        ValueKind::Fixnum(n) if n >= 0 => char::from_u32(n as u32).ok_or_else(|| {
-            signal(
-                LispCondition::WrongTypeArgument,
-                vec![Value::symbol("characterp"), *value],
-            )
-        }),
-        _ => Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("characterp"), *value],
-        )),
-    }
-}
-
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 fn unspecified_face_attributes_vector() -> Value {
     Value::vector(vec![
@@ -1331,16 +1221,6 @@ fn unspecified_face_attributes_vector() -> Value {
 pub(crate) fn builtin_face_attributes_as_vector(args: Vec<Value>) -> EvalResult {
     expect_args("face-attributes-as-vector", &args, 1)?;
     Ok(unspecified_face_attributes_vector())
-}
-
-pub(crate) fn builtin_fontset_font(args: Vec<Value>) -> EvalResult {
-    expect_args_range("fontset-font", &args, 2, 3)?;
-    let ch = expect_characterp_from_int(&args[1])?;
-    fontset::fontset_font(
-        &args[0],
-        ch,
-        args.get(2).is_some_and(|value| !value.is_nil()),
-    )
 }
 
 pub(crate) fn builtin_fontset_info(args: Vec<Value>) -> EvalResult {
@@ -1393,18 +1273,6 @@ fn expect_window_live_or_nil(value: &Value) -> Result<(), Flow> {
 /// accepts a deleted frame.  That is fine for `decode_any_frame`, whose
 /// `CHECK_FRAME` really is just a type test, and wrong for every `Live` caller.
 /// Answering it needs the frame table, hence `eval`.
-pub(super) fn expect_live_frame_or_nil(
-    eval: &mut crate::emacs_core::eval::Context,
-    value: &Value,
-) -> Result<(), Flow> {
-    crate::emacs_core::window_cmds::resolve_frame_id_in_state(
-        &mut eval.frames,
-        &mut eval.edit.buffers,
-        Some(value),
-        FrameDomain::Live,
-    )
-    .map(|_| ())
-}
 
 pub(super) fn expect_frame_in_domain(value: &Value, domain: FrameDomain) -> Result<(), Flow> {
     if value.is_nil() || value.is_frame() {

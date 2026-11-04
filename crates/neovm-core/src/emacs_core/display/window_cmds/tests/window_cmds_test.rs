@@ -3603,7 +3603,7 @@ fn live_frame_subrs_reject_a_deleted_frame_like_gnu() {
     // `lower-frame` stands in for the group here.
     for (name, result) in [(
         "lower-frame",
-        crate::emacs_core::builtins::symbols::builtin_lower_frame(&mut ev, vec![dead]),
+        crate::emacs_core::display_entries::builtin_lower_frame(&mut ev, vec![dead]),
     )] {
         match result.kinded() {
             Err(crate::emacs_core::error::FlowKind::Signal(sig)) => {

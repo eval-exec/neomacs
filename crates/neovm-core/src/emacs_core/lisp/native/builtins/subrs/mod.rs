@@ -4470,7 +4470,9 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "fontset-font",
-        NativeFn::ContextVec(|_ctx, args| builtin_fontset_font(args)),
+        NativeFn::ContextVec(
+            |_ctx, args| crate::emacs_core::display_entries::builtin_fontset_font(args)
+        ),
         SubrArity::new(2, Some(3)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -4485,12 +4487,12 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "frame--set-was-invisible",
-        NativeFn::ContextVec(builtin_frame_set_was_invisible),
+        NativeFn::ContextVec(crate::emacs_core::display_entries::builtin_frame_set_was_invisible),
         SubrArity::new(2, Some(2)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "frame-after-make-frame",
-        NativeFn::ContextVec(builtin_frame_after_make_frame),
+        NativeFn::ContextVec(crate::emacs_core::display_entries::builtin_frame_after_make_frame),
         SubrArity::new(2, Some(2)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -4515,7 +4517,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "frame-font-cache",
-        NativeFn::ContextVec(builtin_frame_font_cache),
+        NativeFn::ContextVec(crate::emacs_core::display_entries::builtin_frame_font_cache),
         SubrArity::new(0, Some(1)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -4862,7 +4864,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ctx.register_subr(
         crate::emacs_core::subr::world_subr!(SubrSpec::new(
             "lower-frame",
-            NativeFn::ContextVec(builtin_lower_frame),
+            NativeFn::ContextVec(crate::emacs_core::display_entries::builtin_lower_frame),
             SubrArity::new(0, Some(1)),
         ))
         .interactive(crate::emacs_core::interactive::BuiltinInteractiveSpec::String("")),
@@ -5364,12 +5366,12 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "tty-display-pixel-height",
-        NativeFn::ContextVec(builtin_tty_display_pixel_height),
+        NativeFn::ContextVec(crate::emacs_core::display_entries::builtin_tty_display_pixel_height),
         SubrArity::new(0, Some(1)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "tty-display-pixel-width",
-        NativeFn::ContextVec(builtin_tty_display_pixel_width),
+        NativeFn::ContextVec(crate::emacs_core::display_entries::builtin_tty_display_pixel_width),
         SubrArity::new(0, Some(1)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
