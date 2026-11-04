@@ -708,7 +708,7 @@ impl Context {
         if inhibit_redisplay.as_ref().is_some_and(|v| v.is_truthy())
             && (!force
                 || display_query_hooks::mode_line_flow_enabled()?
-                || crate::face::realization::enabled())
+                || display_query_hooks::face_realization_enabled()?)
         {
             tracing::debug!(
                 "redisplay inhibited by inhibit-redisplay={}",
@@ -847,7 +847,7 @@ impl Context {
             // Face realization also runs with the legacy hook policy. Its
             // callback flow belongs to this restored transaction boundary,
             // otherwise one failed lookup poisons subsequent redisplays.
-            if crate::face::realization::enabled()
+            if display_query_hooks::face_realization_enabled()?
                 && let Some(flow) = self.take_deferred_redisplay_layout_flow()
             {
                 self.edit.buffers.restore_outermost_restrictions(saved);

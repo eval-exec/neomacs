@@ -1,6 +1,7 @@
 //! Partial physical-owner observations for the private numeric Rows producer.
 //! No public API here grants geometry, coverage or cached-query authority.
 use super::Context;
+use super::display_query_hooks;
 use crate::emacs_core::eval::protocol::{InertRowsHostAuthority, actual_rows_host_type};
 use crate::face::{FaceTableIdentity, realization::RealizationEpoch};
 use crate::tagged::{
@@ -13,6 +14,8 @@ use std::{marker::PhantomData, ops::Range};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum RowsObservationRefusal {
+    #[error("the display-query hooks are not installed")]
+    DisplayQueryHooksUninstalled,
     #[error("the Context is not the installed owning mutator")]
     InactiveContext,
     #[error("GEN0 does not provide the required partial/error collector refusal")]
@@ -124,7 +127,9 @@ impl Context {
         if owner.effective_window_system().is_none() {
             return Err(RowsObservationRefusal::TtyOrUnknownFrame);
         }
-        let warm = if crate::face::realization::enabled() {
+        let warm = if display_query_hooks::face_realization_enabled()
+            .map_err(|_| RowsObservationRefusal::DisplayQueryHooksUninstalled)?
+        {
             owner
                 .face_realization
                 .table(self.face_change_count)
@@ -167,7 +172,9 @@ impl Context {
                 return Err(RowsObservationRefusal::DisplayHostInstalled);
             }
         };
-        if !crate::face::realization::enabled() {
+        if !display_query_hooks::face_realization_enabled()
+            .map_err(|_| RowsObservationRefusal::DisplayQueryHooksUninstalled)?
+        {
             return Err(RowsObservationRefusal::TtyLifecycleUnavailable);
         }
         let owner = self

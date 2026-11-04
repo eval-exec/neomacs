@@ -22,6 +22,7 @@ pub type DisplayFlagQuery = fn() -> bool;
 pub struct DisplayQueryHooks {
     redisplay_idle_skip: DisplayFlagQuery,
     mode_line_flow: DisplayFlagQuery,
+    face_realization: DisplayFlagQuery,
 }
 
 impl DisplayQueryHooks {
@@ -29,10 +30,12 @@ impl DisplayQueryHooks {
     pub const fn new(
         redisplay_idle_skip: DisplayFlagQuery,
         mode_line_flow: DisplayFlagQuery,
+        face_realization: DisplayFlagQuery,
     ) -> Self {
         Self {
             redisplay_idle_skip,
             mode_line_flow,
+            face_realization,
         }
     }
 
@@ -42,6 +45,10 @@ impl DisplayQueryHooks {
 
     pub fn mode_line_flow(&self) -> DisplayFlagQuery {
         self.mode_line_flow
+    }
+
+    pub fn face_realization(&self) -> DisplayFlagQuery {
+        self.face_realization
     }
 }
 
@@ -93,4 +100,9 @@ pub fn redisplay_idle_skip_enabled() -> Result<bool, Flow> {
 /// Whether the mode-line flow policy is enabled.
 pub fn mode_line_flow_enabled() -> Result<bool, Flow> {
     Ok((hooks_or_refusal()?.mode_line_flow())())
+}
+
+/// Whether the face-realization lifecycle is enabled.
+pub fn face_realization_enabled() -> Result<bool, Flow> {
+    Ok((hooks_or_refusal()?.face_realization())())
 }
