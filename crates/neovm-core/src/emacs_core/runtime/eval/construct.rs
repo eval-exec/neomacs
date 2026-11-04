@@ -254,7 +254,8 @@ impl Context {
         *ev.processes = ProcessManager::new();
         *ev.watchers = VariableWatcherList::new();
         ev.current_local_map = Value::NIL;
-        *ev.selected_global_map = super::super::keymap::SelectedGlobalMap::default();
+        *ev.selected_global_map =
+            crate::emacs_core::eval::keymap_lookup::SelectedGlobalMap::default();
         *ev.registers = RegisterManager::new();
         *ev.bookmarks = BookmarkManager::new();
         *ev.abbrevs = AbbrevManager::new();

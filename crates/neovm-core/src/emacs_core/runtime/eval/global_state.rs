@@ -65,7 +65,7 @@ global_state! {
     /// process.c `Vprocess_alist`, `chan_process[]`.
     processes: ProcessManager,
     /// keymap.c `current_global_map`.
-    selected_global_map: super::super::keymap::SelectedGlobalMap,
+    selected_global_map: crate::emacs_core::eval::keymap_lookup::SelectedGlobalMap,
     /// `register-alist` (a global variable).
     registers: RegisterManager,
     /// bookmark.el globals.
@@ -125,7 +125,8 @@ impl GlobalState {
             cached_system_name: Value::NIL,
             xwidgets: super::data::xwidget::XwidgetState::new(),
             processes: ProcessManager::new(),
-            selected_global_map: super::super::keymap::SelectedGlobalMap::default(),
+            selected_global_map: crate::emacs_core::eval::keymap_lookup::SelectedGlobalMap::default(
+            ),
             registers: RegisterManager::new(),
             bookmarks: BookmarkManager::new(),
             abbrevs: AbbrevManager::new(),

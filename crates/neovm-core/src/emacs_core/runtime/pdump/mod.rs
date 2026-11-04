@@ -793,13 +793,14 @@ fn reconstruct_evaluator_after_symbol_table_with_decoder_and_value_fixups(
         .iter()
         .map(load_lisp_string)
         .collect();
-    let selected_global_map =
-        super::keymap::SelectedGlobalMap::from_dump(decoder.load_value(&state.current_global_map))
-            .ok_or_else(|| {
-                DumpError::DeserializationError(
-                    "selected global map is neither nil nor a resolved keymap".into(),
-                )
-            })?;
+    let selected_global_map = crate::emacs_core::eval::keymap_lookup::SelectedGlobalMap::from_dump(
+        decoder.load_value(&state.current_global_map),
+    )
+    .ok_or_else(|| {
+        DumpError::DeserializationError(
+            "selected global map is neither nil nor a resolved keymap".into(),
+        )
+    })?;
 
     let mut eval = Context::from_dump(
         tagged_heap,

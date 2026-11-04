@@ -32,7 +32,7 @@ impl Context {
         syntax_code_objects: Value,
         standard_category_table: Value,
         current_local_map: Value,
-        selected_global_map: super::super::keymap::SelectedGlobalMap,
+        selected_global_map: crate::emacs_core::eval::keymap_lookup::SelectedGlobalMap,
         kmacro: KmacroManager,
         registers: RegisterManager,
         bookmarks: BookmarkManager,

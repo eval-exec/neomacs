@@ -1172,52 +1172,6 @@ pub fn list_keymap_inherits_from(keymap: &Value, target: &Value, symbol_mode: Sy
     false
 }
 
-/// Runtime selection installed by GNU's `use-global-map`.
-///
-/// This is intentionally distinct from the Lisp variable `global-map`.
-/// Dynamically binding or assigning that variable does not select a new map;
-/// only `use-global-map` changes the runtime selection.
-#[derive(Clone, Copy, Debug, Default)]
-enum GlobalMapSelection {
-    #[default]
-    Uninitialized,
-    Selected(Value),
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct SelectedGlobalMap {
-    selection: GlobalMapSelection,
-}
-
-impl SelectedGlobalMap {
-    pub(crate) fn from_dump(value: Value) -> Option<Self> {
-        if value.is_nil() {
-            Some(Self::default())
-        } else if is_list_keymap(&value, SymbolMode::Bare) {
-            Some(Self {
-                selection: GlobalMapSelection::Selected(value),
-            })
-        } else {
-            None
-        }
-    }
-
-    pub(crate) fn value(self) -> Value {
-        match self.selection {
-            GlobalMapSelection::Uninitialized => Value::NIL,
-            GlobalMapSelection::Selected(value) => value,
-        }
-    }
-
-    pub(crate) fn select(&mut self, value: Value, symbol_mode: SymbolMode) {
-        assert!(
-            is_list_keymap(&value, symbol_mode),
-            "SelectedGlobalMap requires a resolved keymap"
-        );
-        self.selection = GlobalMapSelection::Selected(value);
-    }
-}
-
 fn dynamic_buffer_or_global_symbol_value_by_sym_id_in_state(
     vars: VariableView<'_>,
     _dynamic: &[OrderedRuntimeBindingMap],

@@ -584,7 +584,7 @@ pub(crate) struct SubrEntry {
     pub(crate) min_args: u16,
     pub(crate) max_args: Option<u16>,
     pub(crate) dispatch_kind: crate::tagged::header::SubrDispatchKind,
-    pub(crate) interactive_spec: Option<super::interactive::BuiltinInteractiveSpec>,
+    pub(crate) interactive_spec: Option<self::interactive_registry::BuiltinInteractiveSpec>,
 }
 
 thread_local! {
@@ -2978,7 +2978,7 @@ pub struct Context {
     /// GNU stores this separately from the dynamically bindable Lisp variable
     /// `global-map`; preserving that distinction is observable through
     /// `current-global-map`, active key lookup, and legacy `global-set-key`.
-    selected_global_map: WorldSlot<super::keymap::SelectedGlobalMap>,
+    selected_global_map: WorldSlot<crate::emacs_core::eval::keymap_lookup::SelectedGlobalMap>,
     /// Current echo-area message text, mirroring GNU `current-message`.
     pub(crate) current_message: WorldSlot<Option<crate::heap_types::LispString>>,
     /// GNU `echo_buffer[2]`, held by identity rather than by name.

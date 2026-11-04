@@ -12,8 +12,8 @@
 
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::eval::input_hooks::CommandInputWaitOutcome;
+use crate::emacs_core::eval::keymap_lookup::KeymapMarker;
 use crate::emacs_core::intern::{WellKnown, intern, resolve_sym};
-use crate::emacs_core::keymap::KeymapMarker;
 use crate::tagged::value::SymbolMode;
 use crate::window::geometry::DisplayGeometryExt;
 use crate::window::{DisplayFrameExt, DisplayFrameManagerExt};
@@ -2069,7 +2069,7 @@ impl crate::emacs_core::eval::Context {
         events: &[Value],
         prompt: Value,
     ) -> Result<Option<KeySequenceSuffixTranslation>, crate::emacs_core::error::Flow> {
-        use crate::emacs_core::keymap::is_list_keymap;
+        use crate::emacs_core::eval::keymap_lookup::is_list_keymap;
 
         if map.is_nil() || !is_list_keymap(&map, self.symbol_mode()) {
             return Ok(None);
@@ -2136,7 +2136,8 @@ impl crate::emacs_core::eval::Context {
     }
 
     fn translation_map_has_pending_suffix_prefix(&self, map: Value, events: &[Value]) -> bool {
-        use crate::emacs_core::keymap::{is_list_keymap, list_keymap_lookup_seq};
+        use crate::emacs_core::eval::keymap_lookup::is_list_keymap;
+        use crate::emacs_core::keymap::list_keymap_lookup_seq;
 
         if map.is_nil() || !is_list_keymap(&map, self.symbol_mode()) {
             return false;
@@ -5825,14 +5826,14 @@ impl crate::emacs_core::eval::Context {
             return None;
         }
         let raw_map = self.tool_bar_map_for_frame(emacs_frame_id);
-        let keymap = crate::emacs_core::keymap::maybe_keymap_in_obarray(
+        let keymap = crate::emacs_core::eval::keymap_lookup::maybe_keymap_in_obarray(
             self.obarray(),
             &raw_map,
             self.symbol_mode(),
         )?;
         let mut remaining = index as usize;
         let mut found = None;
-        crate::emacs_core::keymap::list_keymap_for_each_binding(
+        crate::emacs_core::eval::keymap_lookup::list_keymap_for_each_binding(
             &keymap,
             Some(self.obarray()),
             |key, def| {
@@ -6858,7 +6859,7 @@ fn key_sequence_translation_events(translation: Value, mode: SymbolMode) -> Opti
     if translation.is_nil() || translation.is_fixnum() {
         return None;
     }
-    if crate::emacs_core::keymap::is_list_keymap(&translation, mode) {
+    if crate::emacs_core::eval::keymap_lookup::is_list_keymap(&translation, mode) {
         return None;
     }
 
