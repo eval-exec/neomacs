@@ -537,7 +537,7 @@ decorative."
   "Curve shape for a buffer switch."
   :type '(choice (const linear) (const ease-out-quad) (const ease-out-cubic)
                  (const ease-out-expo) (const ease-in-out-cubic)
-                 (const spring) (const cubic-bezier))
+                 (const spring))
   :group 'neomacs-transitions
   :set (lambda (symbol value)
          (set-default symbol value)
@@ -597,7 +597,7 @@ When nil the viewport jumps to its new position on the next frame."
   "Curve shape for a scroll."
   :type '(choice (const linear) (const ease-out-quad) (const ease-out-cubic)
                  (const ease-out-expo) (const ease-in-out-cubic)
-                 (const spring) (const cubic-bezier))
+                 (const spring))
   :group 'neomacs-transitions
   :set (lambda (symbol value)
          (set-default symbol value)
