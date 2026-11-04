@@ -772,6 +772,67 @@ fn libxml_parse_html_region_preserves_non_ascii_whitespace_before_prolog() {
 }
 
 #[test]
+fn libxml_parse_html_region_preserves_doctype_parse_boundaries() {
+    crate::test_utils::init_test_tracing();
+
+    // Removing the DOCTYPE must not join `<` with `b>` into a tag.
+    // GNU 31.1: (html nil (body nil (p nil "<b>text")))
+    assert_eq!(
+        parse_html_region(br#"<p><<!DOCTYPE html>b>text</p>"#, false).unwrap(),
+        html(vec![body(vec![Value::list(vec![
+            Value::symbol("p"),
+            Value::NIL,
+            Value::string("<b>text"),
+        ])])])
+    );
+
+    // Nor may it join `&am` with `p;` into an entity.
+    // GNU 31.1: (html nil (body nil (p nil "&amp;")))
+    assert_eq!(
+        parse_html_region(br#"<p>&am<!DOCTYPE html>p;</p>"#, false).unwrap(),
+        html(vec![body(vec![Value::list(vec![
+            Value::symbol("p"),
+            Value::NIL,
+            Value::string("&amp;"),
+        ])])])
+    );
+
+    // Plain text on both sides still coalesces.
+    // GNU 31.1: (html nil (body nil (p nil "ab")))
+    assert_eq!(
+        parse_html_region(br#"<p>a<!DOCTYPE html>b</p>"#, false).unwrap(),
+        html(vec![body(vec![Value::list(vec![
+            Value::symbol("p"),
+            Value::NIL,
+            Value::string("ab"),
+        ])])])
+    );
+
+    // A tag after the dropped DOCTYPE is still parsed as a tag.
+    // GNU 31.1: (html nil (body nil (p nil "a" (b nil "c"))))
+    assert_eq!(
+        parse_html_region(br#"<p>a<!DOCTYPE html><b>c</b></p>"#, false).unwrap(),
+        html(vec![body(vec![Value::list(vec![
+            Value::symbol("p"),
+            Value::NIL,
+            Value::string("a"),
+            Value::list(vec![Value::symbol("b"), Value::NIL, Value::string("c")]),
+        ])])])
+    );
+}
+
+#[test]
+fn libxml_parse_html_region_coalesces_adjacent_text_like_libxml2() {
+    crate::test_utils::init_test_tracing();
+
+    // GNU 31.1: (html nil (body nil "hellox"))
+    assert_eq!(
+        parse_html_region(br#"hello<body>x</body>"#, false).unwrap(),
+        html(vec![body(vec![Value::string("hellox")])])
+    );
+}
+
+#[test]
 fn libxml_parse_html_region_strips_a_leading_utf8_bom_like_libxml2() {
     crate::test_utils::init_test_tracing();
 
