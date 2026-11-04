@@ -2,6 +2,7 @@
 //! Lisp value, or World borrow: only poll readiness and its control owner.
 
 use super::{Arc, Instant, Ordering, ProcessManager};
+use crate::emacs_core::process::SystemProcessExt;
 use crate::host_effect::contracts::ReadDeadline;
 use crate::host_effect::wake::native_wait::{NativeWaitPreparationError, PreparedNativeWait};
 use crate::host_effect::wake::{

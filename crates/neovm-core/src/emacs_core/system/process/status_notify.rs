@@ -89,6 +89,7 @@ use super::{
     ExitedProcessDisposition, Process, ProcessId, ProcessIoTeardown, ProcessManager, Value,
     gnu_process_status_message_for_process, process_status_is_terminal_for_notify,
 };
+use crate::emacs_core::process::SystemProcessExt;
 
 /// The `exec_sentinel (proc, msg)` GNU makes at src/process.c:7937, captured
 /// from the process object while it was still in hand.

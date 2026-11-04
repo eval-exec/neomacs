@@ -19,6 +19,7 @@ use super::scheduler::{
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::signal;
 use crate::emacs_core::intern::SymId;
+use crate::emacs_core::process::SystemProcessExt;
 use crate::host_effect::contracts::OwnedNativeData;
 use crate::host_effect::wake::native_wait::{
     NativeWaitHandoff, PreparedNativeWait, RealWaitPermit,

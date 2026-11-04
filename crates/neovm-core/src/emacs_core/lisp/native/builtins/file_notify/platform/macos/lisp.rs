@@ -3,6 +3,7 @@
 use super::super::super::*;
 use super::{KqueueRequest, action_from_lisp_name};
 use crate::emacs_core::error::expect_args;
+use crate::emacs_core::process::SystemProcessExt;
 
 /// GNU kqueue descriptors are opaque bare fixnums, unlike inotify's conses.
 /// GNU happens to expose its open fd; Neomacs uses a monotonic logical slot so

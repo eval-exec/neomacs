@@ -5,6 +5,7 @@
 //! port is a tty.
 
 use std::ffi::{CString, OsStr};
+use crate::emacs_core::process::SystemProcessExt;
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStrExt;

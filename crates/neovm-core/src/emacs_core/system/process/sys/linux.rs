@@ -7,6 +7,7 @@
 //! `None` on older kernels, where every transition uses that periodic scan.
 
 use std::os::fd::{FromRawFd, OwnedFd, RawFd};
+use crate::emacs_core::process::SystemProcessExt;
 
 use crate::emacs_core::process::{ProcessId, ProcessManager};
 use std::ffi::CStr;

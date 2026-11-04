@@ -4,6 +4,7 @@
 //! parent's view of its private items (`use super::*`).
 
 use super::*;
+use crate::emacs_core::process::SystemProcessExt;
 use crate::tagged::value::SymbolMode;
 
 /// GNU's `CURRENT-GROUP` argument for `interrupt-process`, `quit-process`

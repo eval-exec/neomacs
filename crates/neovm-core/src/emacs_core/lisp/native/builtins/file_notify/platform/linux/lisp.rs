@@ -3,6 +3,7 @@
 use super::super::super::*;
 use super::InotifyRequest;
 use crate::emacs_core::error::expect_args;
+use crate::emacs_core::process::SystemProcessExt;
 use crate::tagged::SymbolMode;
 use neovm_value::system_vocab::errno::Errno;
 

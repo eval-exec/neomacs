@@ -11,6 +11,7 @@
 use super::super::world::Baton;
 use super::host_service::{HostParkRegistration, HostRequestKey, RealWaitPermit, SettledHostCall};
 use crate::emacs_core::process::GreenSelectHandle;
+use crate::emacs_core::process::SystemProcessExt;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::marker::PhantomData;
 use std::num::NonZeroU64;

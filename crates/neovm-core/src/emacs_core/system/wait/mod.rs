@@ -6,6 +6,7 @@
 //! and what should complete the wait; lower-level process/input code only
 //! performs the service pass.
 
+use crate::emacs_core::process::SystemProcessExt;
 use std::time::{Duration, Instant};
 
 use crate::keyboard::SpecialInputServiceOutcome;

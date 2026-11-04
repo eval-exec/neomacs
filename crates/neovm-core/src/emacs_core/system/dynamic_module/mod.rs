@@ -10,6 +10,7 @@ use crate::emacs_core::eval::data::dynamic_module_registry::{
     GlobalRefEntry, GlobalRefMetadata, dynamic_module_registry_heap_identity, emacs_value,
     emacs_value_tag, with_global_refs,
 };
+use crate::emacs_core::process::SystemProcessExt;
 use malachite::integer::Integer;
 use std::collections::HashMap;
 use std::ffi::{CStr, c_void};

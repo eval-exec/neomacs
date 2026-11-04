@@ -5528,341 +5528,6 @@ pub(super) fn unbound_unix_datagram_socket(
 }
 
 impl ProcessManager {
-    pub(super) fn register_readable_source(
-        poller: &polling::Poller,
-        source: impl polling::AsRawSource,
-        id: ProcessId,
-    ) -> Result<(), String> {
-        // SAFETY: ProcessManager only registers descriptors owned by the
-        // corresponding Process record.  `unregister_process_poll_sources`
-        // removes every registered descriptor from this poller before the
-        // Process drops or replaces the descriptor.
-        unsafe {
-            poller
-                .add_with_mode(
-                    source,
-                    polling::Event::readable(id as usize),
-                    polling::PollMode::Level,
-                )
-                .map_err(|e| format!("Failed to register socket: {e}"))
-        }
-    }
-
-    pub(super) fn register_writable_source(
-        poller: &polling::Poller,
-        source: impl polling::AsRawSource,
-        id: ProcessId,
-    ) -> Result<(), String> {
-        // SAFETY: ProcessManager only registers descriptors owned by the
-        // corresponding Process record.  `unregister_process_poll_sources`
-        // removes every registered descriptor from this poller before the
-        // Process drops or replaces the descriptor.
-        unsafe {
-            poller
-                .add_with_mode(
-                    source,
-                    polling::Event::writable(id as usize),
-                    polling::PollMode::Level,
-                )
-                .map_err(|e| format!("Failed to register socket: {e}"))
-        }
-    }
-
-    pub(super) fn modify_poll_source(
-        poller: &polling::Poller,
-        source: impl polling::AsSource,
-        event: polling::Event,
-    ) -> Result<(), String> {
-        poller
-            .modify_with_mode(source, event, polling::PollMode::Level)
-            .map_err(|e| format!("Failed to modify process fd interest: {e}"))
-    }
-
-    #[cfg(unix)]
-    pub(super) fn register_readable_raw_fd(
-        poller: &polling::Poller,
-        fd: std::os::unix::io::RawFd,
-        id: ProcessId,
-    ) -> Result<(), String> {
-        // SAFETY: `fd` is borrowed from a process-owned descriptor that
-        // remains alive until `unregister_process_poll_sources` removes it
-        // from the poller.
-        let borrowed = unsafe { std::os::unix::io::BorrowedFd::borrow_raw(fd) };
-        Self::register_readable_source(poller, &borrowed, id)
-    }
-
-    #[cfg(unix)]
-    pub(super) fn register_writable_raw_fd(
-        poller: &polling::Poller,
-        fd: std::os::unix::io::RawFd,
-        id: ProcessId,
-    ) -> Result<(), String> {
-        let borrowed = unsafe { std::os::unix::io::BorrowedFd::borrow_raw(fd) };
-        Self::register_writable_source(poller, &borrowed, id)
-    }
-
-    #[cfg(unix)]
-    pub(super) fn modify_raw_fd_interest(
-        poller: &polling::Poller,
-        fd: std::os::unix::io::RawFd,
-        event: polling::Event,
-    ) -> Result<(), String> {
-        let borrowed = unsafe { std::os::unix::io::BorrowedFd::borrow_raw(fd) };
-        Self::modify_poll_source(poller, borrowed, event)
-    }
-
-    #[cfg(unix)]
-    pub(super) fn register_child_stdout_with_poller(
-        poller: &polling::Poller,
-        stdout: &ChildOutputReader,
-        id: ProcessId,
-    ) {
-        use std::os::unix::io::AsRawFd;
-        let fd = stdout.as_raw_fd();
-        // Set non-blocking before registering.
-        let _ = sys::set_fd_nonblocking(fd);
-        // Use process id as the event key so we know which process is ready.
-        let _ = Self::register_readable_raw_fd(poller, fd, id);
-    }
-
-    #[cfg(not(unix))]
-    pub(super) fn register_child_stdout_with_poller(
-        _poller: &polling::Poller,
-        _stdout: &ChildOutputReader,
-        _id: ProcessId,
-    ) {
-        // GNU Emacs does not pass Windows subprocess pipe handles to Winsock
-        // select.  Its w32 layer uses a reader thread plus event objects.  Until
-        // Neomacs has the same backend, child pipe output is serviced by the
-        // regular non-blocking wait pass instead of the socket poller.
-    }
-
-    #[cfg(unix)]
-    pub(super) fn unregister_child_stdout_from_poller(
-        poller: &polling::Poller,
-        stdout: &ChildOutputReader,
-    ) {
-        use std::os::unix::io::AsRawFd;
-        let fd = stdout.as_raw_fd();
-        let borrowed = unsafe { std::os::unix::io::BorrowedFd::borrow_raw(fd) };
-        let _ = poller.delete(borrowed);
-    }
-
-    #[cfg(not(unix))]
-    pub(super) fn unregister_child_stdout_from_poller(
-        _poller: &polling::Poller,
-        _stdout: &ChildOutputReader,
-    ) {
-        // See `register_child_stdout_with_poller`.
-    }
-
-    /// Mirror GNU `set_process_filter_masks`: Lisp filter `t` removes only the
-    /// process's read interest, leaving child-status and write sources active.
-    /// Resuming the filter restores read interest without consuming bytes that
-    /// accumulated while suspended.
-    pub(super) fn set_process_output_read_interest(&self, id: ProcessId, enabled: bool) {
-        let Some(poller) = self.wait_backend.poller() else {
-            return;
-        };
-        let Some(proc) = self.processes.get(&id) else {
-            return;
-        };
-
-        // EOF/EIO removed this PTY from the read set independently of its
-        // filter. A filter change must not rearm a drain-only descriptor.
-        let enabled = enabled
-            && proc
-                .live_io
-                .pty_reader
-                .as_ref()
-                .is_none_or(PtyOutputReader::is_monitored);
-
-        if self.refresh_pending_tls_interest(id) {
-            return;
-        }
-
-        if let Some(stdout) = proc.live_io.child_stdout.as_ref() {
-            if enabled {
-                Self::register_child_stdout_with_poller(poller, stdout, id);
-            } else {
-                Self::unregister_child_stdout_from_poller(poller, stdout);
-            }
-            return;
-        }
-        let wants_write = proc.input_disposition == ProcessInputDisposition::Connected
-            && (proc.live_io.pending_network_connect.is_some() || !proc.write_queue.is_nil());
-        let event = match (enabled, wants_write) {
-            (true, true) => Some(polling::Event::all(id as usize)),
-            (true, false) => Some(polling::Event::readable(id as usize)),
-            (false, true) => Some(polling::Event::writable(id as usize)),
-            (false, false) => None,
-        };
-
-        if let Some(tls) = proc.live_io.tls_stream.as_ref() {
-            match event {
-                Some(event) => {
-                    if Self::modify_poll_source(poller, tls.tcp_stream(), event).is_err() {
-                        let _ = Self::register_readable_source(poller, tls.tcp_stream(), id);
-                        let _ = Self::modify_poll_source(poller, tls.tcp_stream(), event);
-                    }
-                }
-                None => {
-                    let _ = poller.delete(tls.tcp_stream());
-                }
-            }
-            return;
-        }
-        if let Some(socket) = proc.live_io.network_socket.as_ref() {
-            match event {
-                Some(event) => {
-                    if socket.modify_interest(poller, id, event).is_err() {
-                        let _ = socket.register_readable(poller, id);
-                        let _ = socket.modify_interest(poller, id, event);
-                    }
-                }
-                None => socket.unregister_readable(poller),
-            }
-            return;
-        }
-        if let Some(port) = proc.live_io.serial_port.as_ref() {
-            match event {
-                Some(event) => {
-                    if port.modify_interest(poller, event).is_err() {
-                        let _ = port.register_readable(poller, id);
-                        let _ = port.modify_interest(poller, event);
-                    }
-                }
-                None => port.unregister(poller),
-            }
-            return;
-        }
-        #[cfg(unix)]
-        if let Some(master) = proc
-            .live_io
-            .pty_master
-            .as_ref()
-            .and_then(|master| master.as_raw_fd())
-        {
-            match event {
-                Some(event) => {
-                    if Self::modify_raw_fd_interest(poller, master, event).is_err() {
-                        let _ = Self::register_readable_raw_fd(poller, master, id);
-                        let _ = Self::modify_raw_fd_interest(poller, master, event);
-                    }
-                }
-                None => {
-                    let borrowed = unsafe { std::os::unix::io::BorrowedFd::borrow_raw(master) };
-                    let _ = poller.delete(borrowed);
-                }
-            }
-        }
-    }
-
-    #[cfg(unix)]
-    pub(super) fn register_child_stdin_writable_with_poller(
-        poller: &polling::Poller,
-        stdin: &std::fs::File,
-        id: ProcessId,
-    ) {
-        use std::os::unix::io::AsRawFd;
-        let fd = stdin.as_raw_fd();
-        let _ = sys::set_fd_nonblocking(fd);
-        let _ = Self::register_writable_raw_fd(poller, fd, id);
-    }
-
-    #[cfg(not(unix))]
-    pub(super) fn register_child_stdin_writable_with_poller(
-        _poller: &polling::Poller,
-        _stdin: &std::fs::File,
-        _id: ProcessId,
-    ) {
-        // Windows subprocess stdin is not integrated into the poller yet.
-    }
-
-    #[cfg(unix)]
-    pub(super) fn unregister_child_stdin_writable_from_poller(
-        poller: &polling::Poller,
-        stdin: &std::fs::File,
-    ) {
-        use std::os::unix::io::AsRawFd;
-        let fd = stdin.as_raw_fd();
-        let borrowed = unsafe { std::os::unix::io::BorrowedFd::borrow_raw(fd) };
-        let _ = poller.delete(borrowed);
-    }
-
-    #[cfg(not(unix))]
-    pub(super) fn unregister_child_stdin_writable_from_poller(
-        _poller: &polling::Poller,
-        _stdin: &std::fs::File,
-    ) {
-        // See `register_child_stdin_writable_with_poller`.
-    }
-
-    pub(super) fn unregister_process_poll_sources(
-        poller: Option<&polling::Poller>,
-        proc: &Process,
-    ) {
-        let Some(poller) = poller else {
-            return;
-        };
-
-        if let Some(stdout) = proc.live_io.child_stdout.as_ref() {
-            Self::unregister_child_stdout_from_poller(poller, stdout);
-        }
-        if let Some(stdin) = proc.live_io.child.stdin() {
-            Self::unregister_child_stdin_writable_from_poller(poller, stdin);
-        }
-        if let Some(status_source) = proc.live_io.child_status_source.as_ref() {
-            status_source.unregister_from_poller(poller);
-        }
-        if let Some(tls) = proc.live_io.tls_stream.as_ref() {
-            let _ = poller.delete(tls.tcp_stream());
-        }
-        if let Some(socket) = proc.live_io.network_socket.as_ref() {
-            socket.unregister_readable(poller);
-        }
-        if let Some(port) = proc.live_io.serial_port.as_ref() {
-            port.unregister(poller);
-        }
-        #[cfg(unix)]
-        if let Some(master) = proc
-            .live_io
-            .pty_master
-            .as_ref()
-            .and_then(|master| master.as_raw_fd())
-        {
-            let borrowed = unsafe { std::os::unix::io::BorrowedFd::borrow_raw(master) };
-            let _ = poller.delete(borrowed);
-        }
-    }
-
-    /// GNU `deactivate_process` translated into the Rust ownership model.
-    ///
-    /// Poll registrations borrow native descriptors, so unregister them
-    /// before dropping their single aggregate owner.  Durable Lisp identity,
-    /// status, callbacks, and captured output remain on `Process`.
-    pub(super) fn deactivate_process_io(poller: Option<&polling::Poller>, proc: &mut Process) {
-        Self::unregister_process_poll_sources(poller, proc);
-        drop(std::mem::take(&mut proc.live_io));
-        proc.gnutls_initstage = GnutlsInitStage::Empty;
-        proc.gnutls_boot_parameters = Value::NIL;
-    }
-
-    pub(super) fn deactivate_terminal_process_io(&mut self, id: ProcessId) {
-        if let Some(proc) = self.processes.get_mut(&id) {
-            Self::deactivate_process_io(self.wait_backend.poller(), proc);
-        }
-    }
-
-    /// GNU `deactivate_process` (src/process.c:4812), dispatched on what this
-    /// port's `Process::live_io` actually holds.  See [`ProcessIoTeardown`].
-    pub(super) fn apply_process_io_teardown(&mut self, id: ProcessId, teardown: ProcessIoTeardown) {
-        match teardown {
-            ProcessIoTeardown::Terminal => self.deactivate_terminal_process_io(id),
-            ProcessIoTeardown::Network => self.deactivate_network_process_io(id),
-        }
-    }
-
     pub fn new() -> Self {
         Self {
             processes: HashMap::new(),
@@ -5905,148 +5570,6 @@ impl ProcessManager {
         }
         proc.read_output_skip = false;
         true
-    }
-
-    /// Create a new process record.  Returns the process id.
-    #[cfg(test)]
-    pub(crate) fn create_process(
-        &mut self,
-        name: String,
-        buffer: Value,
-        command: String,
-        args: Vec<String>,
-        coding: ProcessCodingSystems,
-    ) -> ProcessId {
-        self.create_process_lisp(
-            LispString::from_utf8(&name),
-            buffer,
-            LispString::from_utf8(&command),
-            args.into_iter()
-                .map(|arg| LispString::from_utf8(&arg))
-                .collect(),
-            coding,
-        )
-    }
-
-    #[cfg(test)]
-    pub(crate) fn create_process_lisp(
-        &mut self,
-        name: LispString,
-        buffer: Value,
-        command: LispString,
-        args: Vec<LispString>,
-        coding: ProcessCodingSystems,
-    ) -> ProcessId {
-        self.create_process_with_kind_lisp(
-            name,
-            buffer,
-            command,
-            args,
-            ProcessKindWithoutDevice::Real,
-            coding,
-        )
-    }
-
-    pub(crate) fn create_process_lisp_resolved(
-        &mut self,
-        name: LispString,
-        buffer: Value,
-        command: LispString,
-        args: Vec<LispString>,
-        executable: Option<LispString>,
-        coding: ProcessCodingSystems,
-    ) -> ProcessId {
-        self.create_process_with_kind_lisp_resolved(
-            name,
-            buffer,
-            command,
-            args,
-            ProcessKindWithoutDevice::Real,
-            executable,
-            coding,
-        )
-    }
-
-    /// Create a new process record with an explicit process kind.
-    #[cfg(test)]
-    pub(crate) fn create_process_with_kind(
-        &mut self,
-        name: String,
-        buffer: Value,
-        command: String,
-        args: Vec<String>,
-        kind: ProcessKindWithoutDevice,
-        coding: ProcessCodingSystems,
-    ) -> ProcessId {
-        self.create_process_with_kind_lisp(
-            LispString::from_utf8(&name),
-            buffer,
-            LispString::from_utf8(&command),
-            args.into_iter()
-                .map(|arg| LispString::from_utf8(&arg))
-                .collect(),
-            kind,
-            coding,
-        )
-    }
-
-    pub(crate) fn create_process_with_kind_lisp(
-        &mut self,
-        name: LispString,
-        buffer: Value,
-        command: LispString,
-        args: Vec<LispString>,
-        kind: ProcessKindWithoutDevice,
-        coding: ProcessCodingSystems,
-    ) -> ProcessId {
-        self.create_process_with_kind_lisp_resolved(name, buffer, command, args, kind, None, coding)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn create_process_with_kind_lisp_resolved(
-        &mut self,
-        name: LispString,
-        buffer: Value,
-        command: LispString,
-        args: Vec<LispString>,
-        kind: ProcessKindWithoutDevice,
-        executable: Option<LispString>,
-        coding: ProcessCodingSystems,
-    ) -> ProcessId {
-        self.create_process_record(name, buffer, command, args, kind.into(), executable, coding)
-    }
-
-    /// GNU `Fmake_serial_process`'s record, which cannot exist without the
-    /// device `serial_open` returned (src/process.c:3207-3217: `make_process`,
-    /// then `serial_open`, then `p->infd = fd; p->outfd = fd`, with the whole thing
-    /// under `record_unwind_protect (remove_process, proc)`).
-    ///
-    /// Taking the [`sys::SerialPort`] by value is the whole point: there is no
-    /// other way to reach `ProcessKind::Serial`, and there is no other way to
-    /// obtain a `SerialPort` than to have opened one.
-    pub(crate) fn create_serial_process(
-        &mut self,
-        name: LispString,
-        buffer: Value,
-        port: sys::SerialPort,
-        coding: ProcessCodingSystems,
-    ) -> ProcessId {
-        let id = self.create_process_record(
-            name,
-            buffer,
-            LispString::from_utf8("serial"),
-            Vec::new(),
-            ProcessKind::Serial,
-            None,
-            coding,
-        );
-        if let Some(proc) = self.processes.get_mut(&id) {
-            proc.live_io.serial_port = Some(port);
-            // GNU's `Fmake_serial_process` stores `open`, not `run`
-            // (`process-status` on a live serial port is `open`, measured).
-            proc.status = ProcessStatusSymbol::Open.value();
-        }
-        id
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -6185,17 +5708,1058 @@ impl ProcessManager {
         update_process_mark(buffers, proc)
     }
 
+    pub(super) fn set_child_status_pending(&mut self, id: ProcessId, status: Value) {
+        if let Some(proc) = self.processes.get_mut(&id) {
+            proc.pending_status = status;
+            proc.status_notify_pending = true;
+        } else {
+            return;
+        }
+        // GNU stamps the tick and `raw_status_new` together in
+        // `handle_child_signal` (src/process.c:7746-7747).  Recording the tick
+        // here rather than at the callers is what keeps the invariant this
+        // module rests on: every `status_notify_pending` this port sets has an
+        // unnotified tick behind it, so `status_notify`'s visit set can be read
+        // off the tick pair alone.
+        self.record_status_change(StatusChangeSite::HandleChildSignal, id);
+    }
+
+    pub(super) fn stderr_pipe_owner(&self, stderr_id: ProcessId) -> Option<ProcessId> {
+        self.processes
+            .get(&stderr_id)
+            .and_then(|stderr| stderr.live_io.stderr_pipe_owner)
+    }
+
+    pub(super) fn clear_status_notify_pending(&mut self, id: ProcessId) {
+        if let Some(proc) = self.processes.get_mut(&id) {
+            proc.status_notify_pending = false;
+            proc.pending_status = Value::NIL;
+            #[cfg(windows)]
+            {}
+        }
+    }
+
+    pub(crate) fn process_ids_for_buffer(&self, buffer_id: BufferId) -> Vec<ProcessId> {
+        let buffer = Value::make_buffer(buffer_id);
+        self.processes
+            .iter()
+            .filter_map(|(id, proc)| (proc.buffer == buffer).then_some(*id))
+            .collect()
+    }
+
+    /// Get process status.
+    pub fn process_status(&self, id: ProcessId) -> Option<&Value> {
+        self.processes.get(&id).map(|p| &p.status)
+    }
+
+    /// Get process status for both live and stale process handles.
+    pub fn process_status_any(&self, id: ProcessId) -> Option<&Value> {
+        self.processes
+            .get(&id)
+            .map(|p| &p.status)
+            .or_else(|| self.deleted_processes.get(&id).map(|p| &p.status))
+    }
+
+    /// Project only the live owner's actual pending TCP state. This neither
+    /// changes nor claims to inspect the native poller's registration. The
+    /// fixture separately requires the real canonical writable backend event.
+    #[cfg(test)]
+    pub(crate) fn main_connect_pending_for_test(
+        &self,
+        id: ProcessId,
+    ) -> Result<MainConnectPending, PendingConnectObservationError> {
+        let process = self
+            .get(id)
+            .ok_or(PendingConnectObservationError::MissingProcess)?;
+        if ProcessStatusSymbol::from_status_value(process.status)
+            != Some(ProcessStatusSymbol::Connect)
+        {
+            return Err(PendingConnectObservationError::AlreadyDecoded);
+        }
+        match process.live_io.pending_network_connect.as_ref() {
+            Some(PendingNetworkConnect::Tcp { .. }) => {}
+            Some(PendingNetworkConnect::Dns(_)) | None => {
+                return Err(PendingConnectObservationError::NotPendingTcp);
+            }
+            #[cfg(unix)]
+            Some(PendingNetworkConnect::Local) => {
+                return Err(PendingConnectObservationError::NotPendingTcp);
+            }
+        }
+        let socket = process
+            .live_io
+            .network_socket
+            .as_ref()
+            .ok_or(PendingConnectObservationError::MissingSocket)?;
+        match socket {
+            NetworkSocket::TcpStream(_) => {}
+            NetworkSocket::TcpListener(_) | NetworkSocket::UdpSocket(_) => {
+                return Err(PendingConnectObservationError::NotTcpStream);
+            }
+            #[cfg(unix)]
+            NetworkSocket::SeqpacketStream(_)
+            | NetworkSocket::SeqpacketListener(_)
+            | NetworkSocket::UnixStream(_)
+            | NetworkSocket::UnixListener(_)
+            | NetworkSocket::UnixDatagram(_) => {
+                return Err(PendingConnectObservationError::NotTcpStream);
+            }
+        }
+        self.wait_backend
+            .poller()
+            .ok_or(PendingConnectObservationError::MissingBackend)?;
+        Ok(MainConnectPending { process: id })
+    }
+
+    /// Get a process by id.
+    pub fn get(&self, id: ProcessId) -> Option<&Process> {
+        self.processes.get(&id)
+    }
+
+    /// Get a process by id from either live or stale process tables.
+    pub fn get_any(&self, id: ProcessId) -> Option<&Process> {
+        self.processes
+            .get(&id)
+            .or_else(|| self.deleted_processes.get(&id))
+    }
+
+    /// Get a mutable process by id.
+    pub fn get_mut(&mut self, id: ProcessId) -> Option<&mut Process> {
+        self.processes.get_mut(&id)
+    }
+
+    /// Get a mutable process by id from either live or stale process tables.
+    pub fn get_any_mut(&mut self, id: ProcessId) -> Option<&mut Process> {
+        if self.processes.contains_key(&id) {
+            self.processes.get_mut(&id)
+        } else {
+            self.deleted_processes.get_mut(&id)
+        }
+    }
+
+    /// List all process ids.
+    pub fn list_processes(&self) -> Vec<ProcessId> {
+        // GNU `process-list` is `(mapcar #'cdr Vprocess_alist)`, and a new
+        // process is consed to the FRONT of `Vprocess_alist` (process.c:953), so
+        // the list is newest-first. `ProcessId` is a monotonic counter, so
+        // sorting by descending id reproduces GNU's order exactly (a deleted
+        // process is removed from both the alist and the map).
+        let mut ids: Vec<ProcessId> = self.processes.keys().copied().collect();
+        ids.sort_unstable_by(|a, b| b.cmp(a));
+        ids
+    }
+
+    /// Return IDs of processes with output or lifecycle work the wait loop can service.
+    ///
+    /// Child status observation is deliberately independent of readable I/O:
+    /// a stopped child does not admit output, but GNU continues including it
+    /// in `waitpid(WUNTRACED | WCONTINUED)` scans so a later `SIGCONT` can
+    /// publish the `run` transition.
+    ///
+    /// The order is GNU's, and it is Lisp-visible.  This list drives the
+    /// service pass that both drains output and publishes status, which is
+    /// `status_notify`'s `FOR_EACH_PROCESS` walk (src/process.c:7885) -- over
+    /// `Vprocess_alist`, onto whose FRONT `make_process` conses each new
+    /// process (:953).  So the walk is NEWEST-FIRST, and two children that
+    /// exited together run their sentinels in reverse creation order.  A
+    /// `HashMap` iteration order made that a coin flip instead; sorting on
+    /// descending `ProcessId` is the same identity `list_processes` uses to
+    /// reproduce `process-list`.
+    pub fn live_process_ids(&self) -> Vec<ProcessId> {
+        let mut ids: Vec<ProcessId> = self
+            .processes
+            .iter()
+            .filter(|(_, p)| {
+                if p.status_notify_pending {
+                    return true;
+                }
+                if p.live_io.pending_network_connect.is_some() {
+                    return true;
+                }
+                if process_has_observable_child_status(p) {
+                    return true;
+                }
+                if !process_has_readable_process_io(p) {
+                    return false;
+                }
+                if p.live_io.network_socket.is_some() || p.live_io.tls_stream.is_some() {
+                    return true;
+                }
+                // Standalone pipe processes (including a make-process
+                // `:stderr` pipe) have no child of their own.  Their readable
+                // endpoint is `child_stdout`, and they must be serviced so
+                // output is drained and EOF retires them.
+                if is_standalone_pipe_process(p) {
+                    return true;
+                }
+                false
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        ids.sort_unstable_by(|a, b| b.cmp(a));
+        ids
+    }
+
+    /// Returns true if this id has been allocated at least once.
+    pub fn was_issued_id(&self, id: ProcessId) -> bool {
+        id > 0 && id < self.ids.next_id
+    }
+
+    /// Find a process by name.
+    pub fn find_by_name(&self, name: &str) -> Option<ProcessId> {
+        let wanted = process_name_value(name);
+        self.processes
+            .values()
+            .find(|p| equal_value(&p.name, &wanted, 0))
+            .map(|p| p.id)
+    }
+
+    /// Find a process associated with BUFFER-ID.
+    pub fn find_by_buffer_id(&self, buffer_id: crate::buffer::BufferId) -> Option<ProcessId> {
+        self.processes
+            .values()
+            .find(|p| p.buffer.as_buffer_id() == Some(buffer_id))
+            .map(|p| p.id)
+    }
+
+    pub(super) fn queue_input(&mut self, id: ProcessId, input: &LispString) -> Result<bool, Flow> {
+        let Some(proc) = self.processes.get_mut(&id) else {
+            return Ok(false);
+        };
+        proc.write_queue =
+            write_queue_push(proc.write_queue, Value::heap_string(input.clone()), false);
+        Ok(true)
+    }
+
+    pub(super) fn write_queue_is_empty(&self, id: ProcessId) -> bool {
+        self.processes
+            .get(&id)
+            .is_none_or(|proc| proc.write_queue.is_nil())
+    }
+
+    pub(super) fn pop_process_write_queue(
+        &mut self,
+        id: ProcessId,
+    ) -> Option<ProcessWriteQueueEntry> {
+        let proc = self.processes.get_mut(&id)?;
+        let (queue, entry) = write_queue_pop(proc.write_queue);
+        proc.write_queue = queue;
+        entry
+    }
+
+    pub(super) fn push_process_write_queue_entry(
+        &mut self,
+        id: ProcessId,
+        entry: ProcessWriteQueueEntry,
+        front: bool,
+    ) {
+        if let Some(proc) = self.processes.get_mut(&id) {
+            proc.write_queue = write_queue_push_entry(proc.write_queue, entry, front);
+        }
+    }
+
+    /// Get an environment variable (checking overrides first, then OS).
+    pub fn getenv(&self, name: &str) -> Option<LispString> {
+        let key = LispString::from_utf8(name);
+        if let Some(override_val) = self.env_overrides.get(&key) {
+            return override_val.clone();
+        }
+        std::env::var_os(name)
+            .as_ref()
+            .map(|value| os_str_to_lisp_string(value.as_os_str()))
+    }
+
+    /// Set an environment variable override.  If value is None, unset it.
+    pub fn setenv(&mut self, name: LispString, value: Option<LispString>) {
+        self.env_overrides.insert(name, value);
+    }
+}
+
+pub(crate) trait SystemProcessExt {
+    fn register_readable_source(
+        poller: &polling::Poller,
+        source: impl polling::AsRawSource,
+        id: ProcessId,
+    ) -> Result<(), String>;
+    fn register_writable_source(
+        poller: &polling::Poller,
+        source: impl polling::AsRawSource,
+        id: ProcessId,
+    ) -> Result<(), String>;
+    fn modify_poll_source(
+        poller: &polling::Poller,
+        source: impl polling::AsSource,
+        event: polling::Event,
+    ) -> Result<(), String>;
+    #[cfg(unix)]
+    fn register_readable_raw_fd(
+        poller: &polling::Poller,
+        fd: std::os::unix::io::RawFd,
+        id: ProcessId,
+    ) -> Result<(), String>;
+    #[cfg(unix)]
+    fn register_writable_raw_fd(
+        poller: &polling::Poller,
+        fd: std::os::unix::io::RawFd,
+        id: ProcessId,
+    ) -> Result<(), String>;
+    #[cfg(unix)]
+    fn modify_raw_fd_interest(
+        poller: &polling::Poller,
+        fd: std::os::unix::io::RawFd,
+        event: polling::Event,
+    ) -> Result<(), String>;
+    #[cfg(unix)]
+    fn register_child_stdout_with_poller(
+        poller: &polling::Poller,
+        stdout: &ChildOutputReader,
+        id: ProcessId,
+    );
+    #[cfg(not(unix))]
+    fn register_child_stdout_with_poller(
+        _poller: &polling::Poller,
+        _stdout: &ChildOutputReader,
+        _id: ProcessId,
+    );
+    #[cfg(unix)]
+    fn unregister_child_stdout_from_poller(poller: &polling::Poller, stdout: &ChildOutputReader);
+    #[cfg(not(unix))]
+    fn unregister_child_stdout_from_poller(_poller: &polling::Poller, _stdout: &ChildOutputReader);
+    fn set_process_output_read_interest(&self, id: ProcessId, enabled: bool);
+    #[cfg(unix)]
+    fn register_child_stdin_writable_with_poller(
+        poller: &polling::Poller,
+        stdin: &std::fs::File,
+        id: ProcessId,
+    );
+    #[cfg(not(unix))]
+    fn register_child_stdin_writable_with_poller(
+        _poller: &polling::Poller,
+        _stdin: &std::fs::File,
+        _id: ProcessId,
+    );
+    #[cfg(unix)]
+    fn unregister_child_stdin_writable_from_poller(poller: &polling::Poller, stdin: &std::fs::File);
+    #[cfg(not(unix))]
+    fn unregister_child_stdin_writable_from_poller(
+        _poller: &polling::Poller,
+        _stdin: &std::fs::File,
+    );
+    fn unregister_process_poll_sources(poller: Option<&polling::Poller>, proc: &Process);
+    fn deactivate_process_io(poller: Option<&polling::Poller>, proc: &mut Process);
+    fn deactivate_terminal_process_io(&mut self, id: ProcessId);
+    fn apply_process_io_teardown(&mut self, id: ProcessId, teardown: ProcessIoTeardown);
+    #[cfg(test)]
+    fn create_process(
+        &mut self,
+        name: String,
+        buffer: Value,
+        command: String,
+        args: Vec<String>,
+        coding: ProcessCodingSystems,
+    ) -> ProcessId;
+    #[cfg(test)]
+    fn create_process_lisp(
+        &mut self,
+        name: LispString,
+        buffer: Value,
+        command: LispString,
+        args: Vec<LispString>,
+        coding: ProcessCodingSystems,
+    ) -> ProcessId;
+    fn create_process_lisp_resolved(
+        &mut self,
+        name: LispString,
+        buffer: Value,
+        command: LispString,
+        args: Vec<LispString>,
+        executable: Option<LispString>,
+        coding: ProcessCodingSystems,
+    ) -> ProcessId;
+    #[cfg(test)]
+    fn create_process_with_kind(
+        &mut self,
+        name: String,
+        buffer: Value,
+        command: String,
+        args: Vec<String>,
+        kind: ProcessKindWithoutDevice,
+        coding: ProcessCodingSystems,
+    ) -> ProcessId;
+    fn create_process_with_kind_lisp(
+        &mut self,
+        name: LispString,
+        buffer: Value,
+        command: LispString,
+        args: Vec<LispString>,
+        kind: ProcessKindWithoutDevice,
+        coding: ProcessCodingSystems,
+    ) -> ProcessId;
+    #[allow(clippy::too_many_arguments)]
+    fn create_process_with_kind_lisp_resolved(
+        &mut self,
+        name: LispString,
+        buffer: Value,
+        command: LispString,
+        args: Vec<LispString>,
+        kind: ProcessKindWithoutDevice,
+        executable: Option<LispString>,
+        coding: ProcessCodingSystems,
+    ) -> ProcessId;
+    fn create_serial_process(
+        &mut self,
+        name: LispString,
+        buffer: Value,
+        port: sys::SerialPort,
+        coding: ProcessCodingSystems,
+    ) -> ProcessId;
+    fn spawn_child(&mut self, id: ProcessId, use_pty: bool) -> Result<(), String>;
+    fn spawn_child_with_environment(
+        &mut self,
+        id: ProcessId,
+        use_pty: bool,
+        child_environment: Option<super::super::environment::ChildEnvironment>,
+    ) -> Result<ChildSpawnOutcome, String>;
+    fn spawn_child_pipe(
+        &mut self,
+        id: ProcessId,
+        child_environment: Option<&super::super::environment::ChildEnvironment>,
+        env_overrides: &[(LispString, Option<LispString>)],
+    ) -> Result<ChildSpawnOutcome, String>;
+    fn take_stderr_pipe_writer(
+        &mut self,
+        main_id: ProcessId,
+        stderr_pipe_id: Option<ProcessId>,
+    ) -> StderrPipeWriterTransfer<'_>;
+    #[cfg(unix)]
+    fn spawn_child_pty(
+        &mut self,
+        id: ProcessId,
+        child_environment: Option<&super::super::environment::ChildEnvironment>,
+        env_overrides: &[(LispString, Option<LispString>)],
+    ) -> Result<ChildSpawnOutcome, String>;
+    fn check_child_status_change(&mut self, id: ProcessId) -> bool;
+    fn deactivate_child_status_source(&mut self, id: ProcessId);
+    fn poll_child_status_change(&mut self, id: ProcessId) -> Option<Value>;
+    fn read_child_stdout_result(
+        &mut self,
+        id: ProcessId,
+        destination: ProcessOutputDestination,
+        coding_systems: &crate::emacs_core::coding::CodingSystemManager,
+        mode: SymbolMode,
+    ) -> ProcessBytesRead;
+    fn read_serial_output_result(
+        &mut self,
+        id: ProcessId,
+        destination: ProcessOutputDestination,
+        coding_systems: &crate::emacs_core::coding::CodingSystemManager,
+        mode: SymbolMode,
+    ) -> ProcessBytesRead;
+    fn read_pty_output_result(
+        &mut self,
+        id: ProcessId,
+        destination: ProcessOutputDestination,
+        coding_systems: &crate::emacs_core::coding::CodingSystemManager,
+        mode: SymbolMode,
+    ) -> ProcessBytesRead;
+    fn read_network_output_result(
+        &mut self,
+        id: ProcessId,
+        destination: ProcessOutputDestination,
+        coding_systems: &crate::emacs_core::coding::CodingSystemManager,
+        mode: SymbolMode,
+    ) -> ProcessBytesRead;
+    fn wait_for_process_events(&self, timeout: std::time::Duration) -> ProcessWaitEvents;
+    fn has_wait_notification_backend(&self) -> bool;
+    fn wait_notifier(&self) -> Option<WaitNotifier>;
+    fn host_control_latch(&self) -> Arc<NotificationLatch>;
+    #[cfg(test)]
+    fn before_next_backend_wait_for_test(
+        &mut self,
+        hook: impl FnOnce(BackendWaitEntry) + Send + 'static,
+    );
+    fn wait_for_backend_events(
+        &self,
+        timeout: std::time::Duration,
+        interest: ProcessWaitBackendInterest,
+    ) -> Option<ProcessWaitEvents>;
+    #[cfg(unix)]
+    fn unlink_owned_unix_listener_for_exit(&mut self, id: ProcessId);
+    fn deactivate_network_process_io(&mut self, id: ProcessId);
+    fn deactivate_stderr_pipe_process_io(&mut self, id: ProcessId);
+    fn retire_pipe_process_at_read_eof(&mut self, id: ProcessId);
+    fn retire_process_at_read_failure(&mut self, id: ProcessId);
+    fn stop_pty_process_read_monitoring(&mut self, id: ProcessId);
+    fn deactivate_pty_process_read_io(&mut self, id: ProcessId);
+    fn kill_process(&mut self, id: ProcessId) -> bool;
+    fn stamp_process_for_delete(&mut self, id: ProcessId) -> bool;
+    fn delete_process(&mut self, id: ProcessId) -> bool;
+    fn hangup_real_process_for_buffer_kill(&mut self, id: ProcessId) -> bool;
+    fn reap_exited_process(&mut self, id: ProcessId);
+    #[cfg(test)]
+    fn after_next_native_connect_writable_for_test(
+        &mut self,
+        id: ProcessId,
+        callback: impl FnOnce(NativeConnectWritable) + Send + 'static,
+    );
+    #[cfg(test)]
+    fn observe_native_connect_writable_for_test(&self, events: &ProcessWaitEvents);
+    #[cfg(test)]
+    fn wait_for_child_stdout_readable_for_test(
+        &self,
+        id: ProcessId,
+        timeout: Duration,
+    ) -> std::io::Result<()>;
+    fn open_channel_for_module(&self, process: Value) -> Result<std::ffi::c_int, Flow>;
+    fn send_input(&mut self, id: ProcessId, input: &LispString) -> Result<bool, Flow>;
+    fn flush_process_write_queue(&mut self, id: ProcessId) -> Result<ProcessWriteFlush, Flow>;
+    fn write_process_input_once(
+        &mut self,
+        id: ProcessId,
+        bytes: &[u8],
+    ) -> Result<ProcessWriteAttempt, Flow>;
+    fn has_pending_tls_handshake(&self, id: ProcessId) -> bool;
+    fn tls_handshake_process_ids(&self) -> Vec<ProcessId>;
+    fn refresh_pending_tls_interest(&self, id: ProcessId) -> bool;
+    fn suspend_tls_handshake_polling(&mut self, id: ProcessId) -> bool;
+    fn resume_tls_handshake_polling(&mut self, id: ProcessId);
+    fn set_tls_handshake_interest(&self, id: ProcessId, interest: Option<TlsHandshakeInterest>);
+    fn register_socket_fd(&self, id: ProcessId) -> Result<(), String>;
+    fn register_serial_read_fd(&self, id: ProcessId);
+    fn register_socket_writable_fd(&self, id: ProcessId) -> Result<(), String>;
+    fn update_process_write_interest(&self, id: ProcessId, interest: ProcessWriteInterest);
+    fn update_tcp_client_contact(
+        proc: &mut Process,
+        remote_addr: SocketAddr,
+        local_addr: Option<SocketAddr>,
+    ) -> Result<(), Flow>;
+    fn start_next_pending_network_connect(
+        &mut self,
+        id: ProcessId,
+        addrs: Vec<SocketAddr>,
+        options: &[NetworkSocketOptionSpec],
+    ) -> Result<Option<i32>, Flow>;
+    fn complete_pending_network_connect(
+        &mut self,
+        id: ProcessId,
+        mode: SymbolMode,
+    ) -> Result<PendingNetworkConnectCompletion, Flow>;
+    fn complete_pending_dns_network_connect(
+        &mut self,
+        id: ProcessId,
+    ) -> Result<PendingNetworkConnectCompletion, Flow>;
+    fn create_accepted_network_client(
+        &mut self,
+        buffers: &mut BufferManager,
+        spec: AcceptedNetworkClientSpec,
+    ) -> ProcessId;
+    fn accept_network_server_connections(
+        &mut self,
+        buffers: &mut BufferManager,
+        id: ProcessId,
+    ) -> Result<Vec<AcceptedNetworkConnection>, Flow>;
+    fn read_process_output_result(
+        &mut self,
+        id: ProcessId,
+        destination: ProcessOutputDestination,
+        coding_systems: &crate::emacs_core::coding::CodingSystemManager,
+        mode: SymbolMode,
+    ) -> ProcessBytesRead;
+    #[cfg(test)]
+    fn read_process_output_without_decoding(
+        &mut self,
+        id: ProcessId,
+        destination: ProcessOutputDestination,
+        coding_systems: &crate::emacs_core::coding::CodingSystemManager,
+    ) -> Option<PendingProcessRun>;
+    fn finish_process_run(
+        &mut self,
+        id: ProcessId,
+        carryover: Vec<u8>,
+        decoder: crate::encoding::CodingDecoderState,
+    );
+}
+
+impl SystemProcessExt for ProcessManager {
+    fn register_readable_source(
+        poller: &polling::Poller,
+        source: impl polling::AsRawSource,
+        id: ProcessId,
+    ) -> Result<(), String> {
+        // SAFETY: ProcessManager only registers descriptors owned by the
+        // corresponding Process record.  `unregister_process_poll_sources`
+        // removes every registered descriptor from this poller before the
+        // Process drops or replaces the descriptor.
+        unsafe {
+            poller
+                .add_with_mode(
+                    source,
+                    polling::Event::readable(id as usize),
+                    polling::PollMode::Level,
+                )
+                .map_err(|e| format!("Failed to register socket: {e}"))
+        }
+    }
+
+    fn register_writable_source(
+        poller: &polling::Poller,
+        source: impl polling::AsRawSource,
+        id: ProcessId,
+    ) -> Result<(), String> {
+        // SAFETY: ProcessManager only registers descriptors owned by the
+        // corresponding Process record.  `unregister_process_poll_sources`
+        // removes every registered descriptor from this poller before the
+        // Process drops or replaces the descriptor.
+        unsafe {
+            poller
+                .add_with_mode(
+                    source,
+                    polling::Event::writable(id as usize),
+                    polling::PollMode::Level,
+                )
+                .map_err(|e| format!("Failed to register socket: {e}"))
+        }
+    }
+
+    fn modify_poll_source(
+        poller: &polling::Poller,
+        source: impl polling::AsSource,
+        event: polling::Event,
+    ) -> Result<(), String> {
+        poller
+            .modify_with_mode(source, event, polling::PollMode::Level)
+            .map_err(|e| format!("Failed to modify process fd interest: {e}"))
+    }
+
+    #[cfg(unix)]
+    fn register_readable_raw_fd(
+        poller: &polling::Poller,
+        fd: std::os::unix::io::RawFd,
+        id: ProcessId,
+    ) -> Result<(), String> {
+        // SAFETY: `fd` is borrowed from a process-owned descriptor that
+        // remains alive until `unregister_process_poll_sources` removes it
+        // from the poller.
+        let borrowed = unsafe { std::os::unix::io::BorrowedFd::borrow_raw(fd) };
+        Self::register_readable_source(poller, &borrowed, id)
+    }
+
+    #[cfg(unix)]
+    fn register_writable_raw_fd(
+        poller: &polling::Poller,
+        fd: std::os::unix::io::RawFd,
+        id: ProcessId,
+    ) -> Result<(), String> {
+        let borrowed = unsafe { std::os::unix::io::BorrowedFd::borrow_raw(fd) };
+        Self::register_writable_source(poller, &borrowed, id)
+    }
+
+    #[cfg(unix)]
+    fn modify_raw_fd_interest(
+        poller: &polling::Poller,
+        fd: std::os::unix::io::RawFd,
+        event: polling::Event,
+    ) -> Result<(), String> {
+        let borrowed = unsafe { std::os::unix::io::BorrowedFd::borrow_raw(fd) };
+        Self::modify_poll_source(poller, borrowed, event)
+    }
+
+    #[cfg(unix)]
+    fn register_child_stdout_with_poller(
+        poller: &polling::Poller,
+        stdout: &ChildOutputReader,
+        id: ProcessId,
+    ) {
+        use std::os::unix::io::AsRawFd;
+        let fd = stdout.as_raw_fd();
+        // Set non-blocking before registering.
+        let _ = sys::set_fd_nonblocking(fd);
+        // Use process id as the event key so we know which process is ready.
+        let _ = Self::register_readable_raw_fd(poller, fd, id);
+    }
+
+    #[cfg(not(unix))]
+    fn register_child_stdout_with_poller(
+        _poller: &polling::Poller,
+        _stdout: &ChildOutputReader,
+        _id: ProcessId,
+    ) {
+        // GNU Emacs does not pass Windows subprocess pipe handles to Winsock
+        // select.  Its w32 layer uses a reader thread plus event objects.  Until
+        // Neomacs has the same backend, child pipe output is serviced by the
+        // regular non-blocking wait pass instead of the socket poller.
+    }
+
+    #[cfg(unix)]
+    fn unregister_child_stdout_from_poller(poller: &polling::Poller, stdout: &ChildOutputReader) {
+        use std::os::unix::io::AsRawFd;
+        let fd = stdout.as_raw_fd();
+        let borrowed = unsafe { std::os::unix::io::BorrowedFd::borrow_raw(fd) };
+        let _ = poller.delete(borrowed);
+    }
+
+    #[cfg(not(unix))]
+    fn unregister_child_stdout_from_poller(_poller: &polling::Poller, _stdout: &ChildOutputReader) {
+        // See `register_child_stdout_with_poller`.
+    }
+
+    /// Mirror GNU `set_process_filter_masks`: Lisp filter `t` removes only the
+    /// process's read interest, leaving child-status and write sources active.
+    /// Resuming the filter restores read interest without consuming bytes that
+    /// accumulated while suspended.
+    fn set_process_output_read_interest(&self, id: ProcessId, enabled: bool) {
+        let Some(poller) = self.wait_backend.poller() else {
+            return;
+        };
+        let Some(proc) = self.processes.get(&id) else {
+            return;
+        };
+
+        // EOF/EIO removed this PTY from the read set independently of its
+        // filter. A filter change must not rearm a drain-only descriptor.
+        let enabled = enabled
+            && proc
+                .live_io
+                .pty_reader
+                .as_ref()
+                .is_none_or(PtyOutputReader::is_monitored);
+
+        if self.refresh_pending_tls_interest(id) {
+            return;
+        }
+
+        if let Some(stdout) = proc.live_io.child_stdout.as_ref() {
+            if enabled {
+                Self::register_child_stdout_with_poller(poller, stdout, id);
+            } else {
+                Self::unregister_child_stdout_from_poller(poller, stdout);
+            }
+            return;
+        }
+        let wants_write = proc.input_disposition == ProcessInputDisposition::Connected
+            && (proc.live_io.pending_network_connect.is_some() || !proc.write_queue.is_nil());
+        let event = match (enabled, wants_write) {
+            (true, true) => Some(polling::Event::all(id as usize)),
+            (true, false) => Some(polling::Event::readable(id as usize)),
+            (false, true) => Some(polling::Event::writable(id as usize)),
+            (false, false) => None,
+        };
+
+        if let Some(tls) = proc.live_io.tls_stream.as_ref() {
+            match event {
+                Some(event) => {
+                    if Self::modify_poll_source(poller, tls.tcp_stream(), event).is_err() {
+                        let _ = Self::register_readable_source(poller, tls.tcp_stream(), id);
+                        let _ = Self::modify_poll_source(poller, tls.tcp_stream(), event);
+                    }
+                }
+                None => {
+                    let _ = poller.delete(tls.tcp_stream());
+                }
+            }
+            return;
+        }
+        if let Some(socket) = proc.live_io.network_socket.as_ref() {
+            match event {
+                Some(event) => {
+                    if socket.modify_interest(poller, id, event).is_err() {
+                        let _ = socket.register_readable(poller, id);
+                        let _ = socket.modify_interest(poller, id, event);
+                    }
+                }
+                None => socket.unregister_readable(poller),
+            }
+            return;
+        }
+        if let Some(port) = proc.live_io.serial_port.as_ref() {
+            match event {
+                Some(event) => {
+                    if port.modify_interest(poller, event).is_err() {
+                        let _ = port.register_readable(poller, id);
+                        let _ = port.modify_interest(poller, event);
+                    }
+                }
+                None => port.unregister(poller),
+            }
+            return;
+        }
+        #[cfg(unix)]
+        if let Some(master) = proc
+            .live_io
+            .pty_master
+            .as_ref()
+            .and_then(|master| master.as_raw_fd())
+        {
+            match event {
+                Some(event) => {
+                    if Self::modify_raw_fd_interest(poller, master, event).is_err() {
+                        let _ = Self::register_readable_raw_fd(poller, master, id);
+                        let _ = Self::modify_raw_fd_interest(poller, master, event);
+                    }
+                }
+                None => {
+                    let borrowed = unsafe { std::os::unix::io::BorrowedFd::borrow_raw(master) };
+                    let _ = poller.delete(borrowed);
+                }
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    fn register_child_stdin_writable_with_poller(
+        poller: &polling::Poller,
+        stdin: &std::fs::File,
+        id: ProcessId,
+    ) {
+        use std::os::unix::io::AsRawFd;
+        let fd = stdin.as_raw_fd();
+        let _ = sys::set_fd_nonblocking(fd);
+        let _ = Self::register_writable_raw_fd(poller, fd, id);
+    }
+
+    #[cfg(not(unix))]
+    fn register_child_stdin_writable_with_poller(
+        _poller: &polling::Poller,
+        _stdin: &std::fs::File,
+        _id: ProcessId,
+    ) {
+        // Windows subprocess stdin is not integrated into the poller yet.
+    }
+
+    #[cfg(unix)]
+    fn unregister_child_stdin_writable_from_poller(
+        poller: &polling::Poller,
+        stdin: &std::fs::File,
+    ) {
+        use std::os::unix::io::AsRawFd;
+        let fd = stdin.as_raw_fd();
+        let borrowed = unsafe { std::os::unix::io::BorrowedFd::borrow_raw(fd) };
+        let _ = poller.delete(borrowed);
+    }
+
+    #[cfg(not(unix))]
+    fn unregister_child_stdin_writable_from_poller(
+        _poller: &polling::Poller,
+        _stdin: &std::fs::File,
+    ) {
+        // See `register_child_stdin_writable_with_poller`.
+    }
+
+    fn unregister_process_poll_sources(poller: Option<&polling::Poller>, proc: &Process) {
+        let Some(poller) = poller else {
+            return;
+        };
+
+        if let Some(stdout) = proc.live_io.child_stdout.as_ref() {
+            Self::unregister_child_stdout_from_poller(poller, stdout);
+        }
+        if let Some(stdin) = proc.live_io.child.stdin() {
+            Self::unregister_child_stdin_writable_from_poller(poller, stdin);
+        }
+        if let Some(status_source) = proc.live_io.child_status_source.as_ref() {
+            status_source.unregister_from_poller(poller);
+        }
+        if let Some(tls) = proc.live_io.tls_stream.as_ref() {
+            let _ = poller.delete(tls.tcp_stream());
+        }
+        if let Some(socket) = proc.live_io.network_socket.as_ref() {
+            socket.unregister_readable(poller);
+        }
+        if let Some(port) = proc.live_io.serial_port.as_ref() {
+            port.unregister(poller);
+        }
+        #[cfg(unix)]
+        if let Some(master) = proc
+            .live_io
+            .pty_master
+            .as_ref()
+            .and_then(|master| master.as_raw_fd())
+        {
+            let borrowed = unsafe { std::os::unix::io::BorrowedFd::borrow_raw(master) };
+            let _ = poller.delete(borrowed);
+        }
+    }
+
+    /// GNU `deactivate_process` translated into the Rust ownership model.
+    ///
+    /// Poll registrations borrow native descriptors, so unregister them
+    /// before dropping their single aggregate owner.  Durable Lisp identity,
+    /// status, callbacks, and captured output remain on `Process`.
+    fn deactivate_process_io(poller: Option<&polling::Poller>, proc: &mut Process) {
+        Self::unregister_process_poll_sources(poller, proc);
+        drop(std::mem::take(&mut proc.live_io));
+        proc.gnutls_initstage = GnutlsInitStage::Empty;
+        proc.gnutls_boot_parameters = Value::NIL;
+    }
+
+    fn deactivate_terminal_process_io(&mut self, id: ProcessId) {
+        if let Some(proc) = self.processes.get_mut(&id) {
+            Self::deactivate_process_io(self.wait_backend.poller(), proc);
+        }
+    }
+
+    /// GNU `deactivate_process` (src/process.c:4812), dispatched on what this
+    /// port's `Process::live_io` actually holds.  See [`ProcessIoTeardown`].
+    fn apply_process_io_teardown(&mut self, id: ProcessId, teardown: ProcessIoTeardown) {
+        match teardown {
+            ProcessIoTeardown::Terminal => self.deactivate_terminal_process_io(id),
+            ProcessIoTeardown::Network => self.deactivate_network_process_io(id),
+        }
+    }
+
+    /// Create a new process record.  Returns the process id.
+    #[cfg(test)]
+    fn create_process(
+        &mut self,
+        name: String,
+        buffer: Value,
+        command: String,
+        args: Vec<String>,
+        coding: ProcessCodingSystems,
+    ) -> ProcessId {
+        self.create_process_lisp(
+            LispString::from_utf8(&name),
+            buffer,
+            LispString::from_utf8(&command),
+            args.into_iter()
+                .map(|arg| LispString::from_utf8(&arg))
+                .collect(),
+            coding,
+        )
+    }
+
+    #[cfg(test)]
+    fn create_process_lisp(
+        &mut self,
+        name: LispString,
+        buffer: Value,
+        command: LispString,
+        args: Vec<LispString>,
+        coding: ProcessCodingSystems,
+    ) -> ProcessId {
+        self.create_process_with_kind_lisp(
+            name,
+            buffer,
+            command,
+            args,
+            ProcessKindWithoutDevice::Real,
+            coding,
+        )
+    }
+
+    fn create_process_lisp_resolved(
+        &mut self,
+        name: LispString,
+        buffer: Value,
+        command: LispString,
+        args: Vec<LispString>,
+        executable: Option<LispString>,
+        coding: ProcessCodingSystems,
+    ) -> ProcessId {
+        self.create_process_with_kind_lisp_resolved(
+            name,
+            buffer,
+            command,
+            args,
+            ProcessKindWithoutDevice::Real,
+            executable,
+            coding,
+        )
+    }
+
+    /// Create a new process record with an explicit process kind.
+    #[cfg(test)]
+    fn create_process_with_kind(
+        &mut self,
+        name: String,
+        buffer: Value,
+        command: String,
+        args: Vec<String>,
+        kind: ProcessKindWithoutDevice,
+        coding: ProcessCodingSystems,
+    ) -> ProcessId {
+        self.create_process_with_kind_lisp(
+            LispString::from_utf8(&name),
+            buffer,
+            LispString::from_utf8(&command),
+            args.into_iter()
+                .map(|arg| LispString::from_utf8(&arg))
+                .collect(),
+            kind,
+            coding,
+        )
+    }
+
+    fn create_process_with_kind_lisp(
+        &mut self,
+        name: LispString,
+        buffer: Value,
+        command: LispString,
+        args: Vec<LispString>,
+        kind: ProcessKindWithoutDevice,
+        coding: ProcessCodingSystems,
+    ) -> ProcessId {
+        self.create_process_with_kind_lisp_resolved(name, buffer, command, args, kind, None, coding)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn create_process_with_kind_lisp_resolved(
+        &mut self,
+        name: LispString,
+        buffer: Value,
+        command: LispString,
+        args: Vec<LispString>,
+        kind: ProcessKindWithoutDevice,
+        executable: Option<LispString>,
+        coding: ProcessCodingSystems,
+    ) -> ProcessId {
+        self.create_process_record(name, buffer, command, args, kind.into(), executable, coding)
+    }
+
+    /// GNU `Fmake_serial_process`'s record, which cannot exist without the
+    /// device `serial_open` returned (src/process.c:3207-3217: `make_process`,
+    /// then `serial_open`, then `p->infd = fd; p->outfd = fd`, with the whole thing
+    /// under `record_unwind_protect (remove_process, proc)`).
+    ///
+    /// Taking the [`sys::SerialPort`] by value is the whole point: there is no
+    /// other way to reach `ProcessKind::Serial`, and there is no other way to
+    /// obtain a `SerialPort` than to have opened one.
+    fn create_serial_process(
+        &mut self,
+        name: LispString,
+        buffer: Value,
+        port: sys::SerialPort,
+        coding: ProcessCodingSystems,
+    ) -> ProcessId {
+        let id = self.create_process_record(
+            name,
+            buffer,
+            LispString::from_utf8("serial"),
+            Vec::new(),
+            ProcessKind::Serial,
+            None,
+            coding,
+        );
+        if let Some(proc) = self.processes.get_mut(&id) {
+            proc.live_io.serial_port = Some(port);
+            // GNU's `Fmake_serial_process` stores `open`, not `run`
+            // (`process-status` on a live serial port is `open`, measured).
+            proc.status = ProcessStatusSymbol::Open.value();
+        }
+        id
+    }
+
     /// Spawn an OS child process for a tracked process record.
     ///
     /// When `use_pty` is true (and on Unix), the child is spawned on a
     /// pseudo-terminal via `portable-pty`. Otherwise the traditional
     /// pipe-based `std::process::Command` path is used.
-    pub fn spawn_child(&mut self, id: ProcessId, use_pty: bool) -> Result<(), String> {
+    fn spawn_child(&mut self, id: ProcessId, use_pty: bool) -> Result<(), String> {
         self.spawn_child_with_environment(id, use_pty, None)
             .map(|_| ())
     }
 
-    pub(crate) fn spawn_child_with_environment(
+    fn spawn_child_with_environment(
         &mut self,
         id: ProcessId,
         use_pty: bool,
@@ -6244,7 +6808,7 @@ impl ProcessManager {
     }
 
     /// Pipe-based child spawn (traditional stdin/stdout/stderr pipes).
-    pub(super) fn spawn_child_pipe(
+    fn spawn_child_pipe(
         &mut self,
         id: ProcessId,
         child_environment: Option<&super::super::environment::ChildEnvironment>,
@@ -6369,7 +6933,7 @@ impl ProcessManager {
         Ok(ChildSpawnOutcome::Spawned)
     }
 
-    pub(super) fn take_stderr_pipe_writer(
+    fn take_stderr_pipe_writer(
         &mut self,
         main_id: ProcessId,
         stderr_pipe_id: Option<ProcessId>,
@@ -6407,7 +6971,7 @@ impl ProcessManager {
     /// pipe, exactly as GNU's `create_process` wires `forkin`/`forkout` to the
     /// pty and `forkerr` to the stderr pipe-process independently.
     #[cfg(unix)]
-    pub(super) fn spawn_child_pty(
+    fn spawn_child_pty(
         &mut self,
         id: ProcessId,
         child_environment: Option<&super::super::environment::ChildEnvironment>,
@@ -6656,7 +7220,7 @@ impl ProcessManager {
 
     /// Poll one child-status transition and stage it for sentinel delivery.
     /// Returns true when the kernel reported stop, continue, exit, or signal.
-    pub fn check_child_status_change(&mut self, id: ProcessId) -> bool {
+    fn check_child_status_change(&mut self, id: ProcessId) -> bool {
         let Some(status) = self.poll_child_status_change(id) else {
             return false;
         };
@@ -6667,7 +7231,7 @@ impl ProcessManager {
         true
     }
 
-    pub(super) fn deactivate_child_status_source(&mut self, id: ProcessId) {
+    fn deactivate_child_status_source(&mut self, id: ProcessId) {
         if let Some(proc) = self.processes.get_mut(&id)
             && let Some(status_source) = proc.live_io.child_status_source.take()
             && let Some(poller) = self.wait_backend.poller()
@@ -6676,7 +7240,7 @@ impl ProcessManager {
         }
     }
 
-    pub(super) fn poll_child_status_change(&mut self, id: ProcessId) -> Option<Value> {
+    fn poll_child_status_change(&mut self, id: ProcessId) -> Option<Value> {
         let proc = self.processes.get_mut(&id)?;
 
         // GNU keeps waiting on a stopped child so WCONTINUED (or a terminal
@@ -6704,40 +7268,9 @@ impl ProcessManager {
         }
     }
 
-    pub(super) fn set_child_status_pending(&mut self, id: ProcessId, status: Value) {
-        if let Some(proc) = self.processes.get_mut(&id) {
-            proc.pending_status = status;
-            proc.status_notify_pending = true;
-        } else {
-            return;
-        }
-        // GNU stamps the tick and `raw_status_new` together in
-        // `handle_child_signal` (src/process.c:7746-7747).  Recording the tick
-        // here rather than at the callers is what keeps the invariant this
-        // module rests on: every `status_notify_pending` this port sets has an
-        // unnotified tick behind it, so `status_notify`'s visit set can be read
-        // off the tick pair alone.
-        self.record_status_change(StatusChangeSite::HandleChildSignal, id);
-    }
-
-    pub(super) fn stderr_pipe_owner(&self, stderr_id: ProcessId) -> Option<ProcessId> {
-        self.processes
-            .get(&stderr_id)
-            .and_then(|stderr| stderr.live_io.stderr_pipe_owner)
-    }
-
-    pub(super) fn clear_status_notify_pending(&mut self, id: ProcessId) {
-        if let Some(proc) = self.processes.get_mut(&id) {
-            proc.status_notify_pending = false;
-            proc.pending_status = Value::NIL;
-            #[cfg(windows)]
-            {}
-        }
-    }
-
     /// Read available output from a child process's stdout.
     /// Returns the data read (may be empty if nothing available).
-    pub(super) fn read_child_stdout_result(
+    fn read_child_stdout_result(
         &mut self,
         id: ProcessId,
         destination: ProcessOutputDestination,
@@ -6795,7 +7328,7 @@ impl ProcessManager {
     /// `p->infd`, which for a serial process is the descriptor `serial_open`
     /// returned (src/process.c:3212-3217).  The device was opened
     /// `O_NONBLOCK`, so an idle port is `WouldBlock` rather than a stall.
-    pub(super) fn read_serial_output_result(
+    fn read_serial_output_result(
         &mut self,
         id: ProcessId,
         destination: ProcessOutputDestination,
@@ -6827,7 +7360,7 @@ impl ProcessManager {
     /// Read available output from a PTY master reader.
     /// Returns the data read (may be empty if nothing available).
     /// PTY combines stdout and stderr into a single stream.
-    pub(super) fn read_pty_output_result(
+    fn read_pty_output_result(
         &mut self,
         id: ProcessId,
         destination: ProcessOutputDestination,
@@ -6856,7 +7389,7 @@ impl ProcessManager {
         )
     }
 
-    pub(super) fn read_network_output_result(
+    fn read_network_output_result(
         &mut self,
         id: ProcessId,
         destination: ProcessOutputDestination,
@@ -6962,10 +7495,7 @@ impl ProcessManager {
         ProcessBytesRead::NoSource
     }
 
-    pub(crate) fn wait_for_process_events(
-        &self,
-        timeout: std::time::Duration,
-    ) -> ProcessWaitEvents {
+    fn wait_for_process_events(&self, timeout: std::time::Duration) -> ProcessWaitEvents {
         if let Some(events) =
             self.wait_for_backend_events(timeout, ProcessWaitBackendInterest::ProcessesOnly)
         {
@@ -6977,22 +7507,22 @@ impl ProcessManager {
         ProcessWaitEvents::ready_processes(self.live_process_ids())
     }
 
-    pub(crate) fn has_wait_notification_backend(&self) -> bool {
+    fn has_wait_notification_backend(&self) -> bool {
         self.wait_backend.has_notifications()
     }
 
     /// Cross-platform handle for producers to wake a blocked wait after
     /// publishing work. `None` if no poller could be created.
-    pub(crate) fn wait_notifier(&self) -> Option<WaitNotifier> {
+    fn wait_notifier(&self) -> Option<WaitNotifier> {
         self.wait_backend.notify_handle()
     }
 
-    pub(crate) fn host_control_latch(&self) -> Arc<NotificationLatch> {
+    fn host_control_latch(&self) -> Arc<NotificationLatch> {
         Arc::clone(&self.wait_backend.notification_pending)
     }
 
     #[cfg(test)]
-    pub(crate) fn before_next_backend_wait_for_test(
+    fn before_next_backend_wait_for_test(
         &mut self,
         hook: impl FnOnce(BackendWaitEntry) + Send + 'static,
     ) {
@@ -7009,7 +7539,7 @@ impl ProcessManager {
     /// fds, per `interest`) until something is ready or `timeout` elapses. This is
     /// the single GNU-`pselect`-style primitive the wait loop blocks on; see
     /// `Context::block_for_wait_request`.
-    pub(crate) fn wait_for_backend_events(
+    fn wait_for_backend_events(
         &self,
         timeout: std::time::Duration,
         interest: ProcessWaitBackendInterest,
@@ -7027,7 +7557,7 @@ impl ProcessManager {
     /// Remove only the filesystem node captured at bind, not a replacement
     /// left by hooks. Ordinary delete-process semantics remain unchanged.
     #[cfg(unix)]
-    pub(crate) fn unlink_owned_unix_listener_for_exit(&mut self, id: ProcessId) {
+    fn unlink_owned_unix_listener_for_exit(&mut self, id: ProcessId) {
         use std::os::unix::fs::{FileTypeExt, MetadataExt};
         let Some(proc) = self.processes.get_mut(&id) else {
             return;
@@ -7048,7 +7578,7 @@ impl ProcessManager {
         }
     }
 
-    pub(super) fn deactivate_network_process_io(&mut self, id: ProcessId) {
+    fn deactivate_network_process_io(&mut self, id: ProcessId) {
         if let Some(proc) = self.processes.get_mut(&id) {
             Self::unregister_process_poll_sources(self.wait_backend.poller(), proc);
             proc.live_io.tls_stream = None;
@@ -7060,7 +7590,7 @@ impl ProcessManager {
     /// Tear down a stderr pipe-process's readable I/O once its source EOFs.
     /// Removes the stderr fd from the poller and drops it so the descriptor is
     /// closed and the process stops being polled.
-    pub(super) fn deactivate_stderr_pipe_process_io(&mut self, id: ProcessId) {
+    fn deactivate_stderr_pipe_process_io(&mut self, id: ProcessId) {
         if let Some(proc) = self.processes.get_mut(&id) {
             Self::unregister_process_poll_sources(self.wait_backend.poller(), proc);
             proc.live_io.child_stdout = None;
@@ -7091,7 +7621,7 @@ impl ProcessManager {
     /// a sentinel that kills the stderr buffer saw the pipe either still `open`
     /// (EOF discarded) or already gone (sentinel run and reaped inline), never
     /// GNU's `closed`.
-    pub(super) fn retire_pipe_process_at_read_eof(&mut self, id: ProcessId) {
+    fn retire_pipe_process_at_read_eof(&mut self, id: ProcessId) {
         self.deactivate_stderr_pipe_process_io(id);
         let mut changed = false;
         if let Some(proc) = self.processes.get_mut(&id)
@@ -7113,7 +7643,7 @@ impl ProcessManager {
     /// GNU's non-EOF read failure path at `wait_reading_process_output`
     /// (src/process.c:6081-6090): close the failed read side and report exit
     /// status 256 when no already-observed child status supersedes it.
-    pub(super) fn retire_process_at_read_failure(&mut self, id: ProcessId) {
+    fn retire_process_at_read_failure(&mut self, id: ProcessId) {
         let source = self.processes.get(&id).and_then(process_output_source);
         match source {
             Some(ProcessOutputSource::ChildStdout) => {
@@ -7161,7 +7691,7 @@ impl ProcessManager {
 
     /// GNU `delete_read_fd` on PTY EOF/EIO (process.c:6038-6061) stops
     /// monitoring but retains infd for status_notify's final drain (:7896-7911).
-    pub(super) fn stop_pty_process_read_monitoring(&mut self, id: ProcessId) {
+    fn stop_pty_process_read_monitoring(&mut self, id: ProcessId) {
         if let Some(proc) = self.processes.get_mut(&id) {
             let Some(reader) = proc.live_io.pty_reader.as_mut() else {
                 return;
@@ -7188,7 +7718,7 @@ impl ProcessManager {
 
     /// A permanent read failure closes the reader; unlike EOF/EIO it does not
     /// leave a readable descriptor for the later status notification.
-    pub(super) fn deactivate_pty_process_read_io(&mut self, id: ProcessId) {
+    fn deactivate_pty_process_read_io(&mut self, id: ProcessId) {
         self.stop_pty_process_read_monitoring(id);
         if let Some(proc) = self.processes.get_mut(&id) {
             proc.live_io.pty_reader = None;
@@ -7196,7 +7726,7 @@ impl ProcessManager {
     }
 
     /// Kill (remove) a process by id.  Returns true if found.
-    pub fn kill_process(&mut self, id: ProcessId) -> bool {
+    fn kill_process(&mut self, id: ProcessId) -> bool {
         if let Some(proc) = self.processes.get_mut(&id) {
             Self::unregister_process_poll_sources(self.wait_backend.poller(), proc);
             kill_real_process_child(proc, signal_kill_number());
@@ -7221,7 +7751,7 @@ impl ProcessManager {
     /// when the flag is nil.
     ///
     /// Returns whether the id named a live process.
-    pub(super) fn stamp_process_for_delete(&mut self, id: ProcessId) -> bool {
+    fn stamp_process_for_delete(&mut self, id: ProcessId) -> bool {
         let Some(proc) = self.processes.get_mut(&id) else {
             return false;
         };
@@ -7278,7 +7808,7 @@ impl ProcessManager {
     /// Delete a process entirely: GNU `Fdelete_process` for a caller that runs
     /// no sentinel of its own -- the stamping half above plus the
     /// unconditional `remove_process` at src/process.c:1153.
-    pub fn delete_process(&mut self, id: ProcessId) -> bool {
+    fn delete_process(&mut self, id: ProcessId) -> bool {
         if self.stamp_process_for_delete(id) {
             self.reap_exited_process(id);
             true
@@ -7287,15 +7817,7 @@ impl ProcessManager {
         }
     }
 
-    pub(crate) fn process_ids_for_buffer(&self, buffer_id: BufferId) -> Vec<ProcessId> {
-        let buffer = Value::make_buffer(buffer_id);
-        self.processes
-            .iter()
-            .filter_map(|(id, proc)| (proc.buffer == buffer).then_some(*id))
-            .collect()
-    }
-
-    pub(crate) fn hangup_real_process_for_buffer_kill(&mut self, id: ProcessId) -> bool {
+    fn hangup_real_process_for_buffer_kill(&mut self, id: ProcessId) -> bool {
         let Some(proc) = self.processes.get_mut(&id) else {
             return false;
         };
@@ -7322,79 +7844,15 @@ impl ProcessManager {
     /// still hold its value.  Unlike `delete_process`, this does NOT kill or
     /// re-stamp the child — it has already exited and its recorded terminal
     /// status (exit/signal) must be preserved for `process-status' on the value.
-    pub fn reap_exited_process(&mut self, id: ProcessId) {
+    fn reap_exited_process(&mut self, id: ProcessId) {
         if let Some(mut proc) = self.processes.remove(&id) {
             Self::deactivate_process_io(self.wait_backend.poller(), &mut proc);
             self.deleted_processes.insert(id, proc);
         }
     }
 
-    /// Get process status.
-    pub fn process_status(&self, id: ProcessId) -> Option<&Value> {
-        self.processes.get(&id).map(|p| &p.status)
-    }
-
-    /// Get process status for both live and stale process handles.
-    pub fn process_status_any(&self, id: ProcessId) -> Option<&Value> {
-        self.processes
-            .get(&id)
-            .map(|p| &p.status)
-            .or_else(|| self.deleted_processes.get(&id).map(|p| &p.status))
-    }
-
-    /// Project only the live owner's actual pending TCP state. This neither
-    /// changes nor claims to inspect the native poller's registration. The
-    /// fixture separately requires the real canonical writable backend event.
     #[cfg(test)]
-    pub(crate) fn main_connect_pending_for_test(
-        &self,
-        id: ProcessId,
-    ) -> Result<MainConnectPending, PendingConnectObservationError> {
-        let process = self
-            .get(id)
-            .ok_or(PendingConnectObservationError::MissingProcess)?;
-        if ProcessStatusSymbol::from_status_value(process.status)
-            != Some(ProcessStatusSymbol::Connect)
-        {
-            return Err(PendingConnectObservationError::AlreadyDecoded);
-        }
-        match process.live_io.pending_network_connect.as_ref() {
-            Some(PendingNetworkConnect::Tcp { .. }) => {}
-            Some(PendingNetworkConnect::Dns(_)) | None => {
-                return Err(PendingConnectObservationError::NotPendingTcp);
-            }
-            #[cfg(unix)]
-            Some(PendingNetworkConnect::Local) => {
-                return Err(PendingConnectObservationError::NotPendingTcp);
-            }
-        }
-        let socket = process
-            .live_io
-            .network_socket
-            .as_ref()
-            .ok_or(PendingConnectObservationError::MissingSocket)?;
-        match socket {
-            NetworkSocket::TcpStream(_) => {}
-            NetworkSocket::TcpListener(_) | NetworkSocket::UdpSocket(_) => {
-                return Err(PendingConnectObservationError::NotTcpStream);
-            }
-            #[cfg(unix)]
-            NetworkSocket::SeqpacketStream(_)
-            | NetworkSocket::SeqpacketListener(_)
-            | NetworkSocket::UnixStream(_)
-            | NetworkSocket::UnixListener(_)
-            | NetworkSocket::UnixDatagram(_) => {
-                return Err(PendingConnectObservationError::NotTcpStream);
-            }
-        }
-        self.wait_backend
-            .poller()
-            .ok_or(PendingConnectObservationError::MissingBackend)?;
-        Ok(MainConnectPending { process: id })
-    }
-
-    #[cfg(test)]
-    pub(crate) fn after_next_native_connect_writable_for_test(
+    fn after_next_native_connect_writable_for_test(
         &mut self,
         id: ProcessId,
         callback: impl FnOnce(NativeConnectWritable) + Send + 'static,
@@ -7449,7 +7907,7 @@ impl ProcessManager {
     /// Unix waits on the actual pipe. Windows waits on this retained child's
     /// process object, then uses the existing non-consuming PeekNamedPipe owner.
     #[cfg(test)]
-    pub(crate) fn wait_for_child_stdout_readable_for_test(
+    fn wait_for_child_stdout_readable_for_test(
         &self,
         id: ProcessId,
         timeout: Duration,
@@ -7590,33 +8048,7 @@ impl ProcessManager {
         }
     }
 
-    /// Get a process by id.
-    pub fn get(&self, id: ProcessId) -> Option<&Process> {
-        self.processes.get(&id)
-    }
-
-    /// Get a process by id from either live or stale process tables.
-    pub fn get_any(&self, id: ProcessId) -> Option<&Process> {
-        self.processes
-            .get(&id)
-            .or_else(|| self.deleted_processes.get(&id))
-    }
-
-    /// Get a mutable process by id.
-    pub fn get_mut(&mut self, id: ProcessId) -> Option<&mut Process> {
-        self.processes.get_mut(&id)
-    }
-
-    /// Get a mutable process by id from either live or stale process tables.
-    pub fn get_any_mut(&mut self, id: ProcessId) -> Option<&mut Process> {
-        if self.processes.contains_key(&id) {
-            self.processes.get_mut(&id)
-        } else {
-            self.deleted_processes.get_mut(&id)
-        }
-    }
-
-    pub(crate) fn open_channel_for_module(&self, process: Value) -> Result<std::ffi::c_int, Flow> {
+    fn open_channel_for_module(&self, process: Value) -> Result<std::ffi::c_int, Flow> {
         let id = resolve_process_object_or_wrong_type_any_in_manager(self, &process)?;
         let proc = self
             .get_any(id)
@@ -7641,93 +8073,8 @@ impl ProcessManager {
         })
     }
 
-    /// List all process ids.
-    pub fn list_processes(&self) -> Vec<ProcessId> {
-        // GNU `process-list` is `(mapcar #'cdr Vprocess_alist)`, and a new
-        // process is consed to the FRONT of `Vprocess_alist` (process.c:953), so
-        // the list is newest-first. `ProcessId` is a monotonic counter, so
-        // sorting by descending id reproduces GNU's order exactly (a deleted
-        // process is removed from both the alist and the map).
-        let mut ids: Vec<ProcessId> = self.processes.keys().copied().collect();
-        ids.sort_unstable_by(|a, b| b.cmp(a));
-        ids
-    }
-
-    /// Return IDs of processes with output or lifecycle work the wait loop can service.
-    ///
-    /// Child status observation is deliberately independent of readable I/O:
-    /// a stopped child does not admit output, but GNU continues including it
-    /// in `waitpid(WUNTRACED | WCONTINUED)` scans so a later `SIGCONT` can
-    /// publish the `run` transition.
-    ///
-    /// The order is GNU's, and it is Lisp-visible.  This list drives the
-    /// service pass that both drains output and publishes status, which is
-    /// `status_notify`'s `FOR_EACH_PROCESS` walk (src/process.c:7885) -- over
-    /// `Vprocess_alist`, onto whose FRONT `make_process` conses each new
-    /// process (:953).  So the walk is NEWEST-FIRST, and two children that
-    /// exited together run their sentinels in reverse creation order.  A
-    /// `HashMap` iteration order made that a coin flip instead; sorting on
-    /// descending `ProcessId` is the same identity `list_processes` uses to
-    /// reproduce `process-list`.
-    pub fn live_process_ids(&self) -> Vec<ProcessId> {
-        let mut ids: Vec<ProcessId> = self
-            .processes
-            .iter()
-            .filter(|(_, p)| {
-                if p.status_notify_pending {
-                    return true;
-                }
-                if p.live_io.pending_network_connect.is_some() {
-                    return true;
-                }
-                if process_has_observable_child_status(p) {
-                    return true;
-                }
-                if !process_has_readable_process_io(p) {
-                    return false;
-                }
-                if p.live_io.network_socket.is_some() || p.live_io.tls_stream.is_some() {
-                    return true;
-                }
-                // Standalone pipe processes (including a make-process
-                // `:stderr` pipe) have no child of their own.  Their readable
-                // endpoint is `child_stdout`, and they must be serviced so
-                // output is drained and EOF retires them.
-                if is_standalone_pipe_process(p) {
-                    return true;
-                }
-                false
-            })
-            .map(|(id, _)| *id)
-            .collect();
-        ids.sort_unstable_by(|a, b| b.cmp(a));
-        ids
-    }
-
-    /// Returns true if this id has been allocated at least once.
-    pub fn was_issued_id(&self, id: ProcessId) -> bool {
-        id > 0 && id < self.ids.next_id
-    }
-
-    /// Find a process by name.
-    pub fn find_by_name(&self, name: &str) -> Option<ProcessId> {
-        let wanted = process_name_value(name);
-        self.processes
-            .values()
-            .find(|p| equal_value(&p.name, &wanted, 0))
-            .map(|p| p.id)
-    }
-
-    /// Find a process associated with BUFFER-ID.
-    pub fn find_by_buffer_id(&self, buffer_id: crate::buffer::BufferId) -> Option<ProcessId> {
-        self.processes
-            .values()
-            .find(|p| p.buffer.as_buffer_id() == Some(buffer_id))
-            .map(|p| p.id)
-    }
-
     /// Queue input for a process and try to flush it once.
-    pub fn send_input(&mut self, id: ProcessId, input: &LispString) -> Result<bool, Flow> {
+    fn send_input(&mut self, id: ProcessId, input: &LispString) -> Result<bool, Flow> {
         if !self.queue_input(id, input)? {
             return Ok(false);
         }
@@ -7735,25 +8082,7 @@ impl ProcessManager {
         Ok(true)
     }
 
-    pub(super) fn queue_input(&mut self, id: ProcessId, input: &LispString) -> Result<bool, Flow> {
-        let Some(proc) = self.processes.get_mut(&id) else {
-            return Ok(false);
-        };
-        proc.write_queue =
-            write_queue_push(proc.write_queue, Value::heap_string(input.clone()), false);
-        Ok(true)
-    }
-
-    pub(super) fn write_queue_is_empty(&self, id: ProcessId) -> bool {
-        self.processes
-            .get(&id)
-            .is_none_or(|proc| proc.write_queue.is_nil())
-    }
-
-    pub(super) fn flush_process_write_queue(
-        &mut self,
-        id: ProcessId,
-    ) -> Result<ProcessWriteFlush, Flow> {
+    fn flush_process_write_queue(&mut self, id: ProcessId) -> Result<ProcessWriteFlush, Flow> {
         if self
             .get(id)
             .is_some_and(|proc| proc.gnutls_initstage == GnutlsInitStage::HandshakeTried)
@@ -7816,28 +8145,7 @@ impl ProcessManager {
         }
     }
 
-    pub(super) fn pop_process_write_queue(
-        &mut self,
-        id: ProcessId,
-    ) -> Option<ProcessWriteQueueEntry> {
-        let proc = self.processes.get_mut(&id)?;
-        let (queue, entry) = write_queue_pop(proc.write_queue);
-        proc.write_queue = queue;
-        entry
-    }
-
-    pub(super) fn push_process_write_queue_entry(
-        &mut self,
-        id: ProcessId,
-        entry: ProcessWriteQueueEntry,
-        front: bool,
-    ) {
-        if let Some(proc) = self.processes.get_mut(&id) {
-            proc.write_queue = write_queue_push_entry(proc.write_queue, entry, front);
-        }
-    }
-
-    pub(super) fn write_process_input_once(
+    fn write_process_input_once(
         &mut self,
         id: ProcessId,
         bytes: &[u8],
@@ -7932,14 +8240,14 @@ impl ProcessManager {
         }
     }
 
-    pub(crate) fn has_pending_tls_handshake(&self, id: ProcessId) -> bool {
+    fn has_pending_tls_handshake(&self, id: ProcessId) -> bool {
         self.get(id).is_some_and(|process| {
             process.gnutls_initstage == GnutlsInitStage::HandshakeTried
                 && process.live_io.tls_stream.is_some()
         })
     }
 
-    pub(crate) fn tls_handshake_process_ids(&self) -> Vec<ProcessId> {
+    fn tls_handshake_process_ids(&self) -> Vec<ProcessId> {
         self.processes
             .iter()
             .filter_map(|(&id, proc)| {
@@ -7965,7 +8273,7 @@ impl ProcessManager {
         true
     }
 
-    pub(crate) fn suspend_tls_handshake_polling(&mut self, id: ProcessId) -> bool {
+    fn suspend_tls_handshake_polling(&mut self, id: ProcessId) -> bool {
         let Some(process) = self.get_mut(id) else {
             return false;
         };
@@ -7977,7 +8285,7 @@ impl ProcessManager {
         true
     }
 
-    pub(crate) fn resume_tls_handshake_polling(&mut self, id: ProcessId) {
+    fn resume_tls_handshake_polling(&mut self, id: ProcessId) {
         let Some(process) = self.get_mut(id) else {
             return;
         };
@@ -7989,11 +8297,7 @@ impl ProcessManager {
             self.set_tls_handshake_interest(id, Some(interest));
         }
     }
-    pub(crate) fn set_tls_handshake_interest(
-        &self,
-        id: ProcessId,
-        interest: Option<TlsHandshakeInterest>,
-    ) {
+    fn set_tls_handshake_interest(&self, id: ProcessId, interest: Option<TlsHandshakeInterest>) {
         let Some(poller) = self.wait_backend.poller() else {
             return;
         };
@@ -8027,7 +8331,7 @@ impl ProcessManager {
 
     /// Register a network socket with the I/O poller so that
     /// `wait_for_output` wakes up when data arrives.
-    pub fn register_socket_fd(&self, id: ProcessId) -> Result<(), String> {
+    fn register_socket_fd(&self, id: ProcessId) -> Result<(), String> {
         let proc = self.processes.get(&id).ok_or("Process not found")?;
         if self.refresh_pending_tls_interest(id) {
             return Ok(());
@@ -8052,7 +8356,7 @@ impl ProcessManager {
     /// src/process.c:3241-3243, which is guarded exactly as this is:
     /// `if (!EQ (p->command, Qt) && !EQ (p->filter, Qt))` -- a `:stop t` port
     /// and a port whose filter is `t` are opened and configured but not polled.
-    pub(crate) fn register_serial_read_fd(&self, id: ProcessId) {
+    fn register_serial_read_fd(&self, id: ProcessId) {
         let Some(poller) = self.wait_backend.poller() else {
             return;
         };
@@ -8067,7 +8371,7 @@ impl ProcessManager {
         }
     }
 
-    pub fn register_socket_writable_fd(&self, id: ProcessId) -> Result<(), String> {
+    fn register_socket_writable_fd(&self, id: ProcessId) -> Result<(), String> {
         let proc = self.processes.get(&id).ok_or("Process not found")?;
         if let Some(poller) = self.wait_backend.poller() {
             let socket = proc.live_io.network_socket.as_ref().ok_or("No socket")?;
@@ -8076,11 +8380,7 @@ impl ProcessManager {
         Ok(())
     }
 
-    pub(super) fn update_process_write_interest(
-        &self,
-        id: ProcessId,
-        interest: ProcessWriteInterest,
-    ) {
+    fn update_process_write_interest(&self, id: ProcessId, interest: ProcessWriteInterest) {
         let Some(poller) = self.wait_backend.poller() else {
             return;
         };
@@ -8105,7 +8405,7 @@ impl ProcessManager {
         self.set_process_output_read_interest(id, accepts_output);
     }
 
-    pub(super) fn update_tcp_client_contact(
+    fn update_tcp_client_contact(
         proc: &mut Process,
         remote_addr: SocketAddr,
         local_addr: Option<SocketAddr>,
@@ -8125,7 +8425,7 @@ impl ProcessManager {
         Ok(())
     }
 
-    pub(super) fn start_next_pending_network_connect(
+    fn start_next_pending_network_connect(
         &mut self,
         id: ProcessId,
         addrs: Vec<SocketAddr>,
@@ -8150,7 +8450,7 @@ impl ProcessManager {
         Ok(None)
     }
 
-    pub(super) fn complete_pending_network_connect(
+    fn complete_pending_network_connect(
         &mut self,
         id: ProcessId,
         mode: SymbolMode,
@@ -8282,7 +8582,7 @@ impl ProcessManager {
         Ok(PendingNetworkConnectCompletion::Connected { sentinel })
     }
 
-    pub(super) fn complete_pending_dns_network_connect(
+    fn complete_pending_dns_network_connect(
         &mut self,
         id: ProcessId,
     ) -> Result<PendingNetworkConnectCompletion, Flow> {
@@ -8355,7 +8655,7 @@ impl ProcessManager {
         }
     }
 
-    pub(super) fn create_accepted_network_client(
+    fn create_accepted_network_client(
         &mut self,
         buffers: &mut BufferManager,
         spec: AcceptedNetworkClientSpec,
@@ -8398,7 +8698,7 @@ impl ProcessManager {
         client_id
     }
 
-    pub(super) fn accept_network_server_connections(
+    fn accept_network_server_connections(
         &mut self,
         buffers: &mut BufferManager,
         id: ProcessId,
@@ -8735,7 +9035,7 @@ impl ProcessManager {
     /// Read available output from a process — child stdout or network socket.
     /// Returns `Some(data)` with available data (possibly empty on WouldBlock),
     /// or `None` on EOF / connection closed.
-    pub(super) fn read_process_output_result(
+    fn read_process_output_result(
         &mut self,
         id: ProcessId,
         destination: ProcessOutputDestination,
@@ -8790,7 +9090,7 @@ impl ProcessManager {
     /// the honest statement that no coding system is defined and therefore
     /// nothing detects -- not a silent inheritance of one.
     #[cfg(test)]
-    pub(crate) fn read_process_output_without_decoding(
+    fn read_process_output_without_decoding(
         &mut self,
         id: ProcessId,
         destination: ProcessOutputDestination,
@@ -8817,7 +9117,7 @@ impl ProcessManager {
     ///
     /// Both happen AFTER the decode, which is GNU's order and not an
     /// arrangement of convenience -- see [`PendingProcessRun::carryover`].
-    pub(super) fn finish_process_run(
+    fn finish_process_run(
         &mut self,
         id: ProcessId,
         carryover: Vec<u8>,
@@ -8828,22 +9128,6 @@ impl ProcessManager {
         };
         proc.coding_state.store_carryover(carryover);
         proc.coding_state.store_decoder(decoder);
-    }
-
-    /// Get an environment variable (checking overrides first, then OS).
-    pub fn getenv(&self, name: &str) -> Option<LispString> {
-        let key = LispString::from_utf8(name);
-        if let Some(override_val) = self.env_overrides.get(&key) {
-            return override_val.clone();
-        }
-        std::env::var_os(name)
-            .as_ref()
-            .map(|value| os_str_to_lisp_string(value.as_os_str()))
-    }
-
-    /// Set an environment variable override.  If value is None, unset it.
-    pub fn setenv(&mut self, name: LispString, value: Option<LispString>) {
-        self.env_overrides.insert(name, value);
     }
 }
 

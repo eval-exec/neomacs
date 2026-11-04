@@ -37,6 +37,7 @@ pub(crate) use switch::{GreenSeat, SelectTurn};
 
 use super::admission::AdmissionError;
 use super::{Context, ThreadingMode};
+use crate::emacs_core::process::SystemProcessExt;
 use crate::tagged::gc::{CollectorQuiescenceError, FacadeMarkExclusionError};
 
 /// The World's Green runtime, once started: what further owners are built

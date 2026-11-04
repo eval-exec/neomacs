@@ -4,6 +4,7 @@
 //! the same view of `Context` and the parent's private items (`use super::*`).
 
 use super::*;
+use crate::emacs_core::process::SystemProcessExt;
 use crate::tagged::gc::MarkPhase;
 
 impl Context {
