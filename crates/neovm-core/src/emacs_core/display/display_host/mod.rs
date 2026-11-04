@@ -7,9 +7,6 @@ mod rows_authority;
 pub use rows_authority::InertRowsHostAuthority;
 pub(crate) use rows_authority::actual_rows_host_type;
 
-mod system_fonts;
-pub use system_fonts::{SystemFontName, SystemFontRole, SystemFonts};
-
 use super::eval::{
     FontEntityMetricsRequest, FontOtfCapability, FontPxProbeResult, FontSpecResolveRequest,
     GuiFrameHostRequest, GuiFrameHostSize, PopupMenuRequest, ResolvedFontEntityMetrics,
@@ -28,39 +25,11 @@ use neomacs_display_protocol::{VideoId, WebViewId};
 use neomacs_video_model::{PlaybackAction, VideoDiagnostics, VideoOpenRequest};
 use neovm_value::display_vocab::FrameFullscreen;
 
-/// Display and exact opened-font facts for the first graphical frame.
-///
-/// A terminal frame may be selected while early init runs. Its identity and
-/// one-cell metrics cannot supply defaults for the later graphical creation.
-#[derive(Clone, Debug, PartialEq)]
-pub struct InitialGuiFrameDefaults {
-    pub display: neomacs_display_protocol::GraphicalDisplayIdentity,
-    pub font: ResolvedFrameFont,
-    pub size: GuiFrameHostSize,
-}
-
+pub use crate::emacs_core::eval::protocol::{
+    AvailableFontFamilyName, FontCoverage, FontCoverageRequest, FontCoverageTarget,
+    GuiResourceQuery, InitialGuiFrameDefaults, SystemFontName, SystemFontRole, SystemFonts,
+};
 pub use neovm_value::display_vocab::XwidgetScriptRequestId;
-
-/// A non-empty font-family name crossing from the platform display host into
-/// the evaluator.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AvailableFontFamilyName(LispString);
-
-impl AvailableFontFamilyName {
-    pub fn new(name: LispString) -> Option<Self> {
-        name.as_utf8_str()
-            .is_some_and(|name| !name.trim().is_empty())
-            .then_some(Self(name))
-    }
-
-    pub fn from_utf8(name: &str) -> Option<Self> {
-        Self::new(LispString::from_utf8(name))
-    }
-
-    pub fn into_lisp_string(self) -> LispString {
-        self.0
-    }
-}
 
 /// Typed request crossing from GNU-compatible face realization into the
 /// platform font host. Keeping it here makes the host boundary—not the Lisp
@@ -78,28 +47,6 @@ pub struct FontResolveRequest {
 /// Host-local reference to an exact selected font entity. Handles are never
 /// reused during a host's lifetime; the host validates every lookup.
 pub use neovm_value::display_vocab::FontEntityHandle;
-
-/// Coverage queries inspect one font, never a fontset or fallback chain.
-#[derive(Clone, Debug)]
-pub enum FontCoverageTarget {
-    Entity(FontEntityHandle),
-    Opened(neomacs_display_protocol::font::ResolvedFontIdentity),
-}
-
-/// GNU font drivers can defer entity coverage until opening the font.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FontCoverage {
-    Present,
-    Absent,
-    NeedsOpening,
-}
-
-#[derive(Clone, Debug)]
-pub struct FontCoverageRequest {
-    pub frame_id: crate::window::FrameId,
-    pub target: FontCoverageTarget,
-    pub character: crate::emacs_core::emacs_char::EmacsChar,
-}
 
 /// Typed request crossing from frame-local face state into native font
 /// selection. The embedded face carries style; `size` is its sole sizing
@@ -136,30 +83,6 @@ impl FrameFontRequest {
 
     pub const fn size(&self) -> FrameFontSize {
         self.size
-    }
-}
-
-/// Fully qualified GNU resource keys. Native backends own their database
-/// precedence, including whether explicit resources bypass inhibition.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct GuiResourceQuery {
-    pub name: String,
-    pub class: String,
-    pub inhibit_native: bool,
-}
-
-impl GuiResourceQuery {
-    pub fn normalize_instance_name(name: &str) -> String {
-        let valid = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_';
-        if name.bytes().all(valid) {
-            return name.into();
-        }
-        if name.bytes().filter(|byte| valid(*byte)).count() < 2 {
-            return "emacs".into();
-        }
-        name.bytes()
-            .map(|byte| if valid(byte) { char::from(byte) } else { '_' })
-            .collect()
     }
 }
 

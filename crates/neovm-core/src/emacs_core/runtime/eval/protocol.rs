@@ -13,6 +13,15 @@ use std::num::{NonZeroU16, NonZeroU32};
 use neovm_edit::buffer::BufferId;
 
 use super::data::face::FaceHeight;
+use super::{GuiFrameHostSize, ResolvedFrameFont};
+use neomacs_display_protocol::GraphicalDisplayIdentity;
+use neomacs_display_protocol::font::ResolvedFontIdentity;
+use neovm_value::display_vocab::{FontEntityHandle, FrameId};
+use neovm_value::emacs_char::EmacsChar;
+use neovm_value::heap_types::LispString;
+
+mod system_fonts;
+pub use system_fonts::{SystemFontName, SystemFontRole, SystemFonts};
 
 pub mod image_catalog;
 
@@ -174,4 +183,82 @@ pub enum FontOpeningSize {
         size: PositiveFontScalar,
         dpi: Option<NonZeroU32>,
     },
+}
+
+/// Display and exact opened-font facts for the first graphical frame.
+///
+/// A terminal frame may be selected while early init runs. Its identity and
+/// one-cell metrics cannot supply defaults for the later graphical creation.
+#[derive(Clone, Debug, PartialEq)]
+pub struct InitialGuiFrameDefaults {
+    pub display: GraphicalDisplayIdentity,
+    pub font: ResolvedFrameFont,
+    pub size: GuiFrameHostSize,
+}
+
+/// A non-empty font-family name crossing from the platform display host into
+/// the evaluator.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AvailableFontFamilyName(LispString);
+
+impl AvailableFontFamilyName {
+    pub fn new(name: LispString) -> Option<Self> {
+        name.as_utf8_str()
+            .is_some_and(|name| !name.trim().is_empty())
+            .then_some(Self(name))
+    }
+
+    pub fn from_utf8(name: &str) -> Option<Self> {
+        Self::new(LispString::from_utf8(name))
+    }
+
+    pub fn into_lisp_string(self) -> LispString {
+        self.0
+    }
+}
+
+/// Coverage queries inspect one font, never a fontset or fallback chain.
+#[derive(Clone, Debug)]
+pub enum FontCoverageTarget {
+    Entity(FontEntityHandle),
+    Opened(ResolvedFontIdentity),
+}
+
+/// GNU font drivers can defer entity coverage until opening the font.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FontCoverage {
+    Present,
+    Absent,
+    NeedsOpening,
+}
+
+#[derive(Clone, Debug)]
+pub struct FontCoverageRequest {
+    pub frame_id: FrameId,
+    pub target: FontCoverageTarget,
+    pub character: EmacsChar,
+}
+
+/// Fully qualified GNU resource keys. Native backends own their database
+/// precedence, including whether explicit resources bypass inhibition.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GuiResourceQuery {
+    pub name: String,
+    pub class: String,
+    pub inhibit_native: bool,
+}
+
+impl GuiResourceQuery {
+    pub fn normalize_instance_name(name: &str) -> String {
+        let valid = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_';
+        if name.bytes().all(valid) {
+            return name.into();
+        }
+        if name.bytes().filter(|byte| valid(*byte)).count() < 2 {
+            return "emacs".into();
+        }
+        name.bytes()
+            .map(|byte| if valid(byte) { char::from(byte) } else { '_' })
+            .collect()
+    }
 }
