@@ -10,6 +10,7 @@
 
 use std::collections::HashMap;
 use std::ffi::OsStr;
+use std::io;
 use std::io::Read;
 use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
 #[cfg(unix)]
@@ -34,7 +35,7 @@ use socket2::Socket;
 use strum::{EnumString, IntoStaticStr};
 
 use crate::buffer::BufferManager;
-use crate::emacs_core::error::{EvalResult, Flow, signal};
+use crate::emacs_core::error::{EvalResult, Flow, LispCondition, signal};
 use crate::emacs_core::eval::data::process_spawn::SpawnedChild;
 use crate::emacs_core::eval::data::process_tls::TlsStream;
 use crate::emacs_core::intern::resolve_sym;
@@ -2200,4 +2201,280 @@ pub fn print_process_handle(value: &Value) -> Option<String> {
 pub fn default_process_tty_name() -> String {
     // Fallback TTY name when the actual PTY slave path is not available.
     "/dev/pts/0".to_string()
+}
+
+// Pure state impls of moved types (A3b-4).
+
+impl std::fmt::Debug for Process {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Process")
+            .field("id", &self.id)
+            .field("name", &process_name_runtime(self.name))
+            .field("command", &self.command)
+            .field("kind", &self.kind)
+            .field("proc_type", &self.proc_type)
+            .field("status", &self.status)
+            .field("pending_status", &self.pending_status)
+            .field("buffer", &self.buffer)
+            .field("childp", &self.childp)
+            .field(
+                "pty_master",
+                &self.live_io.pty_master.as_ref().map(|_| ".."),
+            )
+            .field("child", &self.live_io.child)
+            .field(
+                "pty_reader",
+                &self.live_io.pty_reader.as_ref().map(|_| ".."),
+            )
+            .field(
+                "pty_writer",
+                &self.live_io.pty_writer.as_ref().map(|_| ".."),
+            )
+            .field(
+                "network_socket",
+                &self
+                    .live_io
+                    .network_socket
+                    .as_ref()
+                    .map(NetworkSocket::kind_name),
+            )
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for ProcessManager {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProcessManager")
+            .field("processes", &self.processes)
+            .field("next_id", &self.ids.next_id)
+            .finish()
+    }
+}
+
+impl Default for ProcessManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ProcessCodingState {
+    /// GNU's `p->decoding_carryover` as the next read sees it.
+    pub fn carryover_len(&self) -> usize {
+        self.carryover.len()
+    }
+
+    /// GNU's `p->decoding_carryover = 0` (src/process.c:6312), which happens
+    /// before the read decides anything: the tail is MOVED into the run that
+    /// is about to be decoded, so a `:post-read-conversion` that re-enters this
+    /// process through `accept-process-output` finds it at zero.
+    pub fn take_carryover(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.carryover)
+    }
+
+    /// `read_process_output_set_last_coding_system`'s half of the write-back
+    /// (src/process.c:6448-6457), which runs AFTER the decode.
+    pub fn store_carryover(&mut self, carryover: Vec<u8>) {
+        self.carryover = carryover;
+    }
+
+    /// GNU `coding->spec` as the next read must find it.
+    ///
+    /// GNU has no write-back here at all, because the decode ran through this
+    /// very struct: an ISO-2022 designation is in `coding->spec.iso_2022` the
+    /// instant the decoder records it.  This port hands a COPY to the decode
+    /// and takes the copy back afterwards, which differs from GNU in exactly
+    /// one case -- a `:post-read-conversion` that calls
+    /// `accept-process-output` on the process it is decoding for would see the
+    /// designations as of before its own run rather than after it.  The
+    /// carryover has the same shape and GNU makes the same choice for it, by
+    /// clearing `p->decoding_carryover` before the decode (:6312) and writing
+    /// the new one after (:6448).
+    pub fn store_decoder(&mut self, decoder: crate::encoding::CodingDecoderState) {
+        self.decoder = decoder;
+    }
+
+    /// The decoder state a run starts from.
+    pub fn decoder(&self) -> crate::encoding::CodingDecoderState {
+        self.decoder.clone()
+    }
+
+    /// The three lines at src/process.c:6315-6321, as one answer.
+    pub fn reach_last_block(&mut self) -> LastBlockArrival {
+        match self.last_block {
+            LastBlock::Reached => LastBlockArrival::AlreadyRaised,
+            LastBlock::NotReached => {
+                self.last_block = LastBlock::Reached;
+                LastBlockArrival::JustRaised
+            }
+        }
+    }
+
+    /// A process whose descriptor is being replaced starts over, the way a
+    /// fresh `setup_coding_system` would.
+    pub fn reset(&mut self) {
+        *self = Self::default();
+    }
+}
+
+impl ProcessEncodingState {
+    pub fn initialized(
+        coding: crate::encoding::RuntimeCodingSystem,
+        systems: &crate::emacs_core::coding::CodingSystemManager,
+        eol_conversion: crate::emacs_core::coding::EolConversion,
+    ) -> Result<Self, Flow> {
+        use crate::emacs_core::coding::{EolConversion, EolType};
+        let metadata = coding.metadata(systems).ok_or_else(|| {
+            signal(
+                LispCondition::CodingSystemError,
+                vec![Value::symbol(coding.symbol())],
+            )
+        })?;
+        let info = metadata.info();
+        // setup_coding_system derives flags from effective EOL, hooks, and
+        // runtime codec type (GNU coding.c:5681-5696, 5719-5870).
+        let character_conversion = !matches!(
+            crate::emacs_core::intern::resolve_sym(info.coding_type),
+            "raw-text" | "undecided"
+        );
+        let eol_conversion_required = eol_conversion == EolConversion::Enabled
+            && matches!(metadata.eol_type(), EolType::Dos | EolType::Mac);
+        let eligibility = if character_conversion
+            || info.pre_write_conversion.is_some()
+            || eol_conversion_required
+        {
+            ProcessEncodingEligibility::Required
+        } else {
+            ProcessEncodingEligibility::Bypass
+        };
+        let raw = match metadata.eol_type() {
+            EolType::Dos => "raw-text-dos",
+            EolType::Mac => "raw-text-mac",
+            EolType::Unix => "raw-text-unix",
+            EolType::Undecided => "raw-text",
+        };
+        Ok(Self::Active(ProcessEncodingDescriptor {
+            coding,
+            raw_coding: crate::encoding::RuntimeCodingSystem::from_symbol(
+                crate::emacs_core::intern::intern(raw),
+            ),
+            eligibility,
+            encoder: crate::encoding::CodingEncoderState::default(),
+        }))
+    }
+
+    pub fn coding(&self) -> Option<crate::encoding::RuntimeCodingSystem> {
+        match self {
+            Self::Uninitialized => None,
+            Self::Active(descriptor) => Some(descriptor.coding),
+        }
+    }
+
+    pub fn requires_encoding(&self) -> bool {
+        matches!(
+            self,
+            Self::Active(ProcessEncodingDescriptor {
+                eligibility: ProcessEncodingEligibility::Required,
+                ..
+            })
+        )
+    }
+
+    /// Only send_process's input-mode transition selects another descriptor.
+    /// Codec continuation access after callbacks must never reselect it.
+    pub fn select_input(
+        &mut self,
+        systems: &crate::emacs_core::coding::CodingSystemManager,
+        configured: crate::encoding::RuntimeCodingSystem,
+        multibyte: bool,
+        eol_conversion: crate::emacs_core::coding::EolConversion,
+    ) -> Result<crate::encoding::RuntimeCodingSystem, Flow> {
+        let Self::Active(descriptor) = self else {
+            return Err(signal(
+                "error",
+                vec![Value::string("Process output coding is not initialized")],
+            ));
+        };
+        let reported = descriptor.coding;
+        if multibyte {
+            if descriptor.coding != configured {
+                *self = Self::initialized(configured, systems, eol_conversion)?;
+            }
+            Ok(configured)
+        } else {
+            if descriptor.eligibility == ProcessEncodingEligibility::Required {
+                *self = Self::initialized(descriptor.raw_coding, systems, eol_conversion)?;
+            }
+            Ok(reported)
+        }
+    }
+
+    pub fn encoder_mut(&mut self) -> Option<&mut crate::encoding::CodingEncoderState> {
+        match self {
+            Self::Uninitialized => None,
+            Self::Active(descriptor) => Some(&mut descriptor.encoder),
+        }
+    }
+}
+
+impl StatusChangeTicks {
+    /// GNU `p->tick = ++process_tick;`
+    pub fn record(&mut self, tick: u64) {
+        self.changed = tick;
+    }
+
+    /// GNU `p->update_tick = p->tick;` (:7894, and again at :7935).
+    pub fn mark_notified(&mut self) {
+        self.notified = self.changed;
+    }
+
+    /// GNU `p->tick != p->update_tick` (:7892) -- `status_notify`'s membership
+    /// test, and the only question this type answers.
+    pub fn is_unnotified(self) -> bool {
+        self.changed != self.notified
+    }
+}
+
+impl PtyOutputReader {
+    pub fn new(reader: Box<dyn Read + Send>) -> Self {
+        Self {
+            reader,
+            interest: PtyReadInterest::Monitored,
+        }
+    }
+
+    pub fn is_monitored(&self) -> bool {
+        match self.interest {
+            PtyReadInterest::Monitored => true,
+            PtyReadInterest::DrainOnly => false,
+        }
+    }
+
+    pub fn stop_monitoring(&mut self) {
+        self.interest = PtyReadInterest::DrainOnly;
+    }
+}
+
+impl Read for PtyOutputReader {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        // portable-pty's reader calls libc::read directly. GNU emacs_read
+        // (sysdep.c:2758-2789) never exposes EINTR as EOF or a permanent read
+        // failure; finish that same interrupted operation before classifying it.
+        loop {
+            match self.reader.read(buffer) {
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                result => return result,
+            }
+        }
+    }
+}
+
+// LastBlockArrival (A3b-5).
+
+/// What a zero-byte read found the latch in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LastBlockArrival {
+    /// This read raised the flag, so it falls THROUGH to the decode.
+    JustRaised,
+    /// The flag was already up: `return nbytes` with nothing decoded.
+    AlreadyRaised,
 }

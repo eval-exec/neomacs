@@ -215,7 +215,7 @@ impl ProcessInputEndpoint {
 }
 
 impl NetworkSocket {
-    fn kind_name(&self) -> &'static str {
+    pub(crate) fn kind_name(&self) -> &'static str {
         match self {
             Self::TcpStream(_) => "tcp-stream",
             Self::TcpListener(_) => "tcp-listener",

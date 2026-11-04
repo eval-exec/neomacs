@@ -547,24 +547,6 @@ pub(crate) enum StatusChangeRecorder {
     NoAnalogue { why: &'static str },
 }
 
-impl StatusChangeTicks {
-    /// GNU `p->tick = ++process_tick;`
-    pub(crate) fn record(&mut self, tick: u64) {
-        self.changed = tick;
-    }
-
-    /// GNU `p->update_tick = p->tick;` (:7894, and again at :7935).
-    pub(crate) fn mark_notified(&mut self) {
-        self.notified = self.changed;
-    }
-
-    /// GNU `p->tick != p->update_tick` (:7892) -- `status_notify`'s membership
-    /// test, and the only question this type answers.
-    pub(crate) fn is_unnotified(self) -> bool {
-        self.changed != self.notified
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Engagement counters
 // ---------------------------------------------------------------------------
