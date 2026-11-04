@@ -8,7 +8,7 @@
 
 use crate::emacs_core::eval::lifecycle::{
     BootHooks, CommandSeamHooks, DbusbindHooks, DynamicModuleHooks, FileIoHooks, FontsetHooks,
-    LifecycleHooks, TerminalHooks, WindowTreeHooks, WorldStateHooks,
+    LifecycleHooks, TerminalHooks, WindowTreeHooks, WorldStateHooks, XfacesHooks,
 };
 use neovm_value::display_vocab::FrameId;
 
@@ -17,6 +17,18 @@ const DYNAMIC_MODULE_FINGERPRINT: Option<fn(&mut u64)> =
     Some(crate::emacs_core::dynamic_module::carrier_tls_fingerprint);
 #[cfg(not(debug_assertions))]
 const DYNAMIC_MODULE_FINGERPRINT: Option<fn(&mut u64)> = None;
+
+#[cfg(debug_assertions)]
+const TERMINAL_TLS_FINGERPRINT: Option<fn(&mut u64)> =
+    Some(crate::emacs_core::terminal::pure::carrier_tls_fingerprint);
+#[cfg(not(debug_assertions))]
+const TERMINAL_TLS_FINGERPRINT: Option<fn(&mut u64)> = None;
+
+#[cfg(debug_assertions)]
+const XFACES_TLS_FINGERPRINT: Option<fn(&mut u64)> =
+    Some(crate::emacs_core::xfaces::carrier_tls_fingerprint);
+#[cfg(not(debug_assertions))]
+const XFACES_TLS_FINGERPRINT: Option<fn(&mut u64)> = None;
 
 /// Apply the post-image `Lread` constant rows (GNU's startup constant reset).
 fn apply_lread_constants(ctx: &mut crate::emacs_core::eval::Context) {
@@ -68,6 +80,34 @@ fn apply_mini_window_resize(
 ) {
     use crate::window::DisplayFrameExt;
     frame.apply_mini_window_resize(resize);
+}
+
+fn terminal_park_carrier_tls() {
+    crate::emacs_core::terminal::pure::park_carrier_tls()
+}
+
+fn terminal_reset_thread_locals() {
+    crate::emacs_core::terminal::pure::reset_terminal_thread_locals()
+}
+
+fn terminal_reset_handle() {
+    crate::emacs_core::terminal::pure::reset_terminal_handle()
+}
+
+fn terminal_world_state_placeholder() -> Box<dyn std::any::Any> {
+    crate::emacs_core::terminal::pure::world_state_placeholder()
+}
+
+fn terminal_swap_world_state(slot: &mut dyn std::any::Any) {
+    crate::emacs_core::terminal::pure::swap_world_state(slot)
+}
+
+fn live_terminal_ids_in_keyboard_poll_order() -> Vec<u64> {
+    crate::emacs_core::terminal::pure::live_terminal_ids_in_keyboard_poll_order()
+}
+
+fn xfaces_park_carrier_tls() {
+    crate::emacs_core::xfaces::park_carrier_tls()
 }
 
 static CANONICAL_LIFECYCLE_HOOKS: LifecycleHooks = LifecycleHooks::new(
@@ -129,6 +169,13 @@ static CANONICAL_LIFECYCLE_HOOKS: LifecycleHooks = LifecycleHooks::new(
         crate::emacs_core::terminal::pure::builtin_frame_terminal,
         crate::emacs_core::terminal::pure::print_terminal_handle,
         configure_window_system_runtime,
+        terminal_park_carrier_tls,
+        TERMINAL_TLS_FINGERPRINT,
+        terminal_reset_thread_locals,
+        terminal_reset_handle,
+        terminal_world_state_placeholder,
+        terminal_swap_world_state,
+        live_terminal_ids_in_keyboard_poll_order,
     ),
     FontsetHooks::new(
         crate::emacs_core::fontset::fontset_alias_alist_startup_value,
@@ -155,6 +202,7 @@ static CANONICAL_LIFECYCLE_HOOKS: LifecycleHooks = LifecycleHooks::new(
         apply_mini_window_resize,
         crate::window::resize_pixelwise_with_buffer_constraints,
     ),
+    XfacesHooks::new(xfaces_park_carrier_tls, XFACES_TLS_FINGERPRINT),
     crate::emacs_core::timefns::reset_timefns_thread_locals,
     crate::emacs_core::sqlite::reset_sqlite_thread_locals,
 );

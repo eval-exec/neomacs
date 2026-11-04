@@ -235,6 +235,13 @@ pub struct TerminalHooks {
     frame_terminal: fn(&mut Context, Vec<Value>) -> EvalResult,
     print_handle: fn(&Value) -> Option<String>,
     configure_window_system_runtime: fn(neomacs_display_protocol::GraphicalDisplayIdentity),
+    park_carrier_tls: fn(),
+    carrier_tls_fingerprint: Option<fn(&mut u64)>,
+    reset_thread_locals: fn(),
+    reset_handle: fn(),
+    world_state_placeholder: fn() -> Box<dyn Any>,
+    swap_world_state: fn(&mut dyn Any),
+    live_terminal_ids: fn() -> Vec<u64>,
 }
 
 impl TerminalHooks {
@@ -245,6 +252,13 @@ impl TerminalHooks {
         frame_terminal: fn(&mut Context, Vec<Value>) -> EvalResult,
         print_handle: fn(&Value) -> Option<String>,
         configure_window_system_runtime: fn(neomacs_display_protocol::GraphicalDisplayIdentity),
+        park_carrier_tls: fn(),
+        carrier_tls_fingerprint: Option<fn(&mut u64)>,
+        reset_thread_locals: fn(),
+        reset_handle: fn(),
+        world_state_placeholder: fn() -> Box<dyn Any>,
+        swap_world_state: fn(&mut dyn Any),
+        live_terminal_ids: fn() -> Vec<u64>,
     ) -> Self {
         Self {
             handle_value,
@@ -252,6 +266,13 @@ impl TerminalHooks {
             frame_terminal,
             print_handle,
             configure_window_system_runtime,
+            park_carrier_tls,
+            carrier_tls_fingerprint,
+            reset_thread_locals,
+            reset_handle,
+            world_state_placeholder,
+            swap_world_state,
+            live_terminal_ids,
         }
     }
 }
@@ -405,6 +426,7 @@ pub struct LifecycleHooks {
     fontset: FontsetHooks,
     command: CommandSeamHooks,
     window_tree: WindowTreeHooks,
+    xfaces: XfacesHooks,
     timefns_reset: fn(),
     sqlite_reset: fn(),
 }
@@ -423,6 +445,7 @@ impl LifecycleHooks {
         fontset: FontsetHooks,
         command: CommandSeamHooks,
         window_tree: WindowTreeHooks,
+        xfaces: XfacesHooks,
         timefns_reset: fn(),
         sqlite_reset: fn(),
     ) -> Self {
@@ -437,6 +460,7 @@ impl LifecycleHooks {
             fontset,
             command,
             window_tree,
+            xfaces,
             timefns_reset,
             sqlite_reset,
         }
@@ -490,6 +514,11 @@ impl LifecycleHooks {
     /// Window-tree operations.
     pub fn window_tree(&self) -> WindowTreeHooks {
         self.window_tree
+    }
+
+    /// Face-attribute registry carrier state.
+    pub fn xfaces(&self) -> XfacesHooks {
+        self.xfaces
     }
 
     /// The pdump-reconstruct time-zone reset.
@@ -602,6 +631,64 @@ impl TerminalHooks {
         &self,
     ) -> fn(neomacs_display_protocol::GraphicalDisplayIdentity) {
         self.configure_window_system_runtime
+    }
+
+    fn park_carrier_tls(&self) -> fn() {
+        self.park_carrier_tls
+    }
+
+    fn carrier_tls_fingerprint(&self) -> Option<fn(&mut u64)> {
+        self.carrier_tls_fingerprint
+    }
+
+    fn reset_thread_locals(&self) -> fn() {
+        self.reset_thread_locals
+    }
+
+    fn reset_handle(&self) -> fn() {
+        self.reset_handle
+    }
+
+    fn world_state_placeholder(&self) -> fn() -> Box<dyn Any> {
+        self.world_state_placeholder
+    }
+
+    fn swap_world_state(&self) -> fn(&mut dyn Any) {
+        self.swap_world_state
+    }
+
+    fn live_terminal_ids(&self) -> fn() -> Vec<u64> {
+        self.live_terminal_ids
+    }
+}
+
+/// Face-attribute registry carrier state (E6 registry handle).  The registry
+/// payload and its replace-on-activation rule stay in the display layer; eval
+/// only parks the handle and fingerprints it for the carrier check.
+#[derive(Clone, Copy)]
+pub struct XfacesHooks {
+    park_carrier_tls: fn(),
+    carrier_tls_fingerprint: Option<fn(&mut u64)>,
+}
+
+impl XfacesHooks {
+    /// Build the face-registry carrier group.
+    pub const fn new(
+        park_carrier_tls: fn(),
+        carrier_tls_fingerprint: Option<fn(&mut u64)>,
+    ) -> Self {
+        Self {
+            park_carrier_tls,
+            carrier_tls_fingerprint,
+        }
+    }
+
+    fn park_carrier_tls(&self) -> fn() {
+        self.park_carrier_tls
+    }
+
+    fn carrier_tls_fingerprint(&self) -> Option<fn(&mut u64)> {
+        self.carrier_tls_fingerprint
     }
 }
 
@@ -1082,4 +1169,55 @@ pub fn restore_fontset_registry(snapshot: FontsetRegistrySnapshot) {
 /// Apply a planned minibuffer resize to one frame.
 pub fn apply_mini_window_resize(frame: &mut Frame, resize: MiniWindowResize) {
     (lifecycle_hooks().window_tree().apply_mini_window_resize())(frame, resize)
+}
+
+/// Park the terminal registry handle on a green carrier park.
+pub fn terminal_park_carrier_tls() {
+    (lifecycle_hooks().terminal().park_carrier_tls())()
+}
+
+/// Debug-only fingerprint of the terminal registry carrier state.
+#[cfg(debug_assertions)]
+pub fn terminal_carrier_tls_fingerprint(h: &mut u64) {
+    if let Some(fingerprint) = lifecycle_hooks().terminal().carrier_tls_fingerprint() {
+        fingerprint(h);
+    }
+}
+
+/// Reset the terminal thread-local state at pdump reconstruct.
+pub fn reset_terminal_thread_locals() {
+    (lifecycle_hooks().terminal().reset_thread_locals())()
+}
+
+/// Reset the terminal handle for a fresh Context.
+pub fn reset_terminal_handle() {
+    (lifecycle_hooks().terminal().reset_handle())()
+}
+
+/// Placeholder for the terminal manager's carried World state.
+pub fn terminal_world_state_placeholder() -> Box<dyn Any> {
+    (lifecycle_hooks().terminal().world_state_placeholder())()
+}
+
+/// Swap the terminal manager's carried World state with a parked slot.
+pub fn terminal_swap_world_state(slot: &mut dyn Any) {
+    (lifecycle_hooks().terminal().swap_world_state())(slot)
+}
+
+/// Live terminal ids in the keyboard poll order.
+pub fn live_terminal_ids_in_keyboard_poll_order() -> Vec<u64> {
+    (lifecycle_hooks().terminal().live_terminal_ids())()
+}
+
+/// Park the face-attribute registry handle on a green carrier park.
+pub fn xfaces_park_carrier_tls() {
+    (lifecycle_hooks().xfaces().park_carrier_tls())()
+}
+
+/// Debug-only fingerprint of the face-attribute registry carrier state.
+#[cfg(debug_assertions)]
+pub fn xfaces_carrier_tls_fingerprint(h: &mut u64) {
+    if let Some(fingerprint) = lifecycle_hooks().xfaces().carrier_tls_fingerprint() {
+        fingerprint(h);
+    }
 }

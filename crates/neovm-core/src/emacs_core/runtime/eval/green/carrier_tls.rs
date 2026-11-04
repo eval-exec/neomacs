@@ -149,9 +149,12 @@ pub(crate) fn park_carrier_tls() {
     );
     reset_step!(
         "terminal",
-        crate::emacs_core::terminal::pure::park_carrier_tls()
+        crate::emacs_core::eval::lifecycle::terminal_park_carrier_tls()
     );
-    reset_step!("xfaces", crate::emacs_core::xfaces::park_carrier_tls());
+    reset_step!(
+        "xfaces",
+        crate::emacs_core::eval::lifecycle::xfaces_park_carrier_tls()
+    );
 
     // Residual owner-carried pointers and the owner's quit request.
     reset_step!(
@@ -315,8 +318,8 @@ pub(crate) fn snapshot_carrier_tls() -> u64 {
     crate::emacs_core::string_pos_cache::carrier_tls_fingerprint(&mut h);
     crate::emacs_core::regex::carrier_tls_fingerprint(&mut h);
     crate::emacs_core::regex_emacs::carrier_tls_fingerprint(&mut h);
-    crate::emacs_core::terminal::pure::carrier_tls_fingerprint(&mut h);
-    crate::emacs_core::xfaces::carrier_tls_fingerprint(&mut h);
+    crate::emacs_core::eval::lifecycle::terminal_carrier_tls_fingerprint(&mut h);
+    crate::emacs_core::eval::lifecycle::xfaces_carrier_tls_fingerprint(&mut h);
     crate::emacs_core::builtins::carrier_tls_fingerprint(&mut h);
     crate::emacs_core::eval::lifecycle::dynamic_module_carrier_tls_fingerprint(&mut h);
     crate::emacs_core::error::carrier_tls_fingerprint(&mut h);

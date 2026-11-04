@@ -54,8 +54,8 @@ const CARRIERS: &[(Placeholder, Swap)] = &[
     ),
     // terminal.c `terminal_list`.
     (
-        crate::emacs_core::terminal::pure::world_state_placeholder,
-        crate::emacs_core::terminal::pure::swap_world_state,
+        crate::emacs_core::eval::lifecycle::terminal_world_state_placeholder,
+        crate::emacs_core::eval::lifecycle::terminal_swap_world_state,
     ),
     // alloc.c consing counters (`memory-use-counts`).
     (

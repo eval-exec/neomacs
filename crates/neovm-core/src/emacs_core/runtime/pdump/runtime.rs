@@ -132,7 +132,7 @@ pub(crate) fn reset_runtime_for_new_heap(mode: HeapResetMode) {
     match mode {
         HeapResetMode::FreshContext => {
             // Tests can preconfigure terminal runtime before Context creation.
-            crate::emacs_core::terminal::pure::reset_terminal_handle();
+            crate::emacs_core::eval::lifecycle::reset_terminal_handle();
         }
         HeapResetMode::PdumpRestore => {
             // Terminal thread-local Values (handle AND params) came from
@@ -143,7 +143,7 @@ pub(crate) fn reset_runtime_for_new_heap(mode: HeapResetMode) {
             // Unlike FreshContext — which tests may pre-populate — a
             // pdump reload has no carried-over terminal state to keep,
             // so a full reset is correct.
-            crate::emacs_core::terminal::pure::reset_terminal_thread_locals();
+            crate::emacs_core::eval::lifecycle::reset_terminal_thread_locals();
         }
     }
 

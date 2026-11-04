@@ -87,7 +87,7 @@ pub(crate) fn format_opaque_handle_in_state(
     threads: &crate::emacs_core::threads::ThreadManager,
     value: &Value,
 ) -> Option<String> {
-    if let Some(handle) = crate::emacs_core::terminal::pure::print_terminal_handle(value) {
+    if let Some(handle) = crate::emacs_core::eval::lifecycle::print_terminal_handle(value) {
         return Some(handle);
     }
     if crate::emacs_core::marker::is_marker(value)

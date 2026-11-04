@@ -680,7 +680,7 @@ pub fn restore_active_runtime(eval: &mut Context, snapshot: &ActiveRuntimeSnapsh
     // state every pdump restore leaves. (A load that failed before its restore
     // step left the live terminal intact; it is reset all the same, to what a
     // successful load would have produced.)
-    crate::emacs_core::terminal::pure::reset_terminal_thread_locals();
+    crate::emacs_core::eval::lifecycle::reset_terminal_thread_locals();
     restore_charset_registry(snapshot.charset_registry.clone());
     crate::emacs_core::eval::lifecycle::restore_fontset_registry(snapshot.fontset_registry.clone());
     eval.sync_thread_runtime_bindings();

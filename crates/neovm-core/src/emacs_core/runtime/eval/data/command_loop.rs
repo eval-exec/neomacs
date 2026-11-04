@@ -926,10 +926,11 @@ impl KeyboardRuntime {
     }
 
     fn parked_terminal_ids(&self) -> Vec<u64> {
-        let mut ids = crate::emacs_core::terminal::pure::live_terminal_ids_in_keyboard_poll_order()
-            .into_iter()
-            .filter(|terminal_id| self.parked_kboards.contains_key(terminal_id))
-            .collect::<Vec<_>>();
+        let mut ids =
+            crate::emacs_core::eval::lifecycle::live_terminal_ids_in_keyboard_poll_order()
+                .into_iter()
+                .filter(|terminal_id| self.parked_kboards.contains_key(terminal_id))
+                .collect::<Vec<_>>();
         let mut unknown_ids = self
             .parked_kboards
             .keys()
