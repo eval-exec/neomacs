@@ -164,9 +164,7 @@ impl RenderApp {
             }
             WindowCommand::SetWindowPosition { frame, x, y } => {
                 let emacs_frame_id = frame.raw_id();
-                if let Some(window_state) = self.frame_windows.get_mut(emacs_frame_id) {
-                    window_state.set_outer_position(x, y);
-                } else {
+                if !self.frame_windows.set_outer_position(emacs_frame_id, x, y) {
                     tracing::warn!(
                         "SetWindowPosition requested for unknown frame_id=0x{:x}",
                         emacs_frame_id

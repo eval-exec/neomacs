@@ -1094,9 +1094,7 @@ pub(crate) fn builtin_set_frame_position(
     if moved {
         mark_frame_geometry_changed(eval, fid);
     }
-    if positioned {
-        move_gui_frame_window(eval, fid, Some(x), Some(y))?;
-    }
+    move_gui_frame_window(eval, fid, Some(x), Some(y))?;
     Ok(Value::T)
 }
 
@@ -1109,13 +1107,18 @@ fn move_gui_frame_window(
     left: Option<FramePositionSpec>,
     top: Option<FramePositionSpec>,
 ) -> Result<(), Flow> {
-    let Some((x, y)) = absolute_window_position(left, top) else {
+    let Some(frame) = eval.frames.get(fid) else {
         return Ok(());
     };
-    let is_top_level_gui = eval.frames.get(fid).is_some_and(|frame| {
-        frame.effective_window_system().is_some() && frame.parent_frame.as_frame_id().is_none()
-    });
-    if is_top_level_gui && let Some(host) = eval.display_host.as_mut() {
+    if frame.effective_window_system().is_none() || frame.parent_frame.as_frame_id().is_some() {
+        return Ok(());
+    }
+    // Called after `apply_frame_position`, so an edge that was not requested
+    // still holds the frame's current position.
+    let Some((x, y)) = absolute_window_position(left, top, (frame.left_pos, frame.top_pos)) else {
+        return Ok(());
+    };
+    if let Some(host) = eval.display_host.as_mut() {
         host.set_gui_frame_position(fid, x, y)
             .map_err(|message| signal("error", vec![Value::string(message)]))?;
     }
