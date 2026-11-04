@@ -8,11 +8,13 @@
 //! (`&mut LocalType` is a fundamental-type local impl).
 
 use super::*;
+use crate::emacs_core::buffer::expect_integer_or_marker_in_buffers;
 use crate::emacs_core::chartable::{
     builtin_char_table_range_with_style, builtin_set_char_table_range_with_style, is_char_table,
     make_char_table_value,
 };
 use crate::tagged::value::SymbolMode;
+use crate::window::DisplayFrameExt;
 use neovm_value::keyboard_pure::{
     KEY_CHAR_ALT, KEY_CHAR_CODE_MASK, KEY_CHAR_CTRL, KEY_CHAR_HYPER, KEY_CHAR_META,
     KEY_CHAR_MOD_MASK, KEY_CHAR_SHIFT, KEY_CHAR_SUPER, reorder_event_symbol_modifiers,
@@ -2429,4 +2431,1171 @@ pub fn list_keymap_set_parent(keymap: Value, parent: Value, symbol_mode: SymbolM
             }
         }
     }
+}
+
+fn collect_maps_from_alist_in_state(
+    vars: VariableView<'_>,
+    dynamic: &[OrderedRuntimeBindingMap],
+    buffers: &crate::buffer::BufferManager,
+    buffer_id: Option<crate::buffer::BufferId>,
+    alist: &Value,
+    skip_if_in: Option<&Value>,
+    maps: &mut Vec<Value>,
+    symbol_mode: SymbolMode,
+) {
+    let obarray = vars.obarray();
+    let Some(entries) = list_to_vec(alist) else {
+        return;
+    };
+    for entry in entries {
+        if !entry.is_cons() {
+            continue;
+        };
+        let (mode_var, keymap_val) = {
+            let pair_car = entry.cons_car();
+            let pair_cdr = entry.cons_cdr();
+            (pair_car, pair_cdr)
+        };
+        let Some(mode_id) = mode_var.as_symbol_id(symbol_mode) else {
+            continue;
+        };
+
+        if let Some(skip_alist) = skip_if_in
+            && assq_in_alist(skip_alist, &mode_var, symbol_mode)
+        {
+            continue;
+        }
+
+        // GNU `current_minor_maps` resolves the exact symbol stored in the
+        // alist.  Do not round-trip through its printed name: minor modes may
+        // deliberately use an uninterned symbol (for example a `cl-gensym`)
+        // whose value cell is distinct from an interned namesake.
+        let mode_active = dynamic_buffer_or_global_symbol_value_by_sym_id_in_state(
+            vars, dynamic, buffers, buffer_id, mode_id,
+        )
+        .map(|value| value.is_truthy())
+        .unwrap_or(false);
+        if !mode_active {
+            continue;
+        }
+
+        if let Some(resolved) = maybe_keymap_in_obarray(obarray, &keymap_val, symbol_mode) {
+            maps.push(resolved);
+        }
+    }
+}
+
+pub fn collect_map_entries_from_alist_in_state(
+    vars: VariableView<'_>,
+    dynamic: &[OrderedRuntimeBindingMap],
+    buffers: &crate::buffer::BufferManager,
+    buffer_id: Option<crate::buffer::BufferId>,
+    alist: &Value,
+    skip_if_in: Option<&Value>,
+    maps: &mut Vec<(SymId, Value)>,
+    symbol_mode: SymbolMode,
+) {
+    let obarray = vars.obarray();
+    let Some(entries) = list_to_vec(alist) else {
+        return;
+    };
+    for entry in entries {
+        if !entry.is_cons() {
+            continue;
+        };
+        let (mode_var, keymap_val) = {
+            let pair_car = entry.cons_car();
+            let pair_cdr = entry.cons_cdr();
+            (pair_car, pair_cdr)
+        };
+        let Some(mode_name) = mode_var.as_symbol_id(symbol_mode) else {
+            continue;
+        };
+
+        if let Some(skip_alist) = skip_if_in
+            && assq_in_alist(skip_alist, &mode_var, symbol_mode)
+        {
+            continue;
+        }
+
+        let mode_active = dynamic_buffer_or_global_symbol_value_by_sym_id_in_state(
+            vars, dynamic, buffers, buffer_id, mode_name,
+        )
+        .map(|value| value.is_truthy())
+        .unwrap_or(false);
+        if !mode_active {
+            continue;
+        }
+
+        if let Some(resolved) = maybe_keymap_in_obarray(obarray, &keymap_val, symbol_mode) {
+            maps.push((mode_name, resolved));
+        }
+    }
+}
+
+fn assq_in_alist(alist: &Value, key: &Value, symbol_mode: SymbolMode) -> bool {
+    let Some(entries) = list_to_vec(alist) else {
+        return false;
+    };
+
+    for entry in entries {
+        if !entry.is_cons() {
+            continue;
+        };
+        let pair_car = entry.cons_car();
+        let _pair_cdr = entry.cons_cdr();
+        if eq_value_swp(&pair_car, key, symbol_mode == SymbolMode::Positioned) {
+            return true;
+        }
+    }
+
+    false
+}
+
+pub fn collect_minor_mode_maps_in_state(
+    vars: VariableView<'_>,
+    dynamic: &[OrderedRuntimeBindingMap],
+    buffers: &crate::buffer::BufferManager,
+    buffer_id: Option<crate::buffer::BufferId>,
+    symbol_mode: SymbolMode,
+) -> Vec<Value> {
+    let mut maps = Vec::new();
+
+    if let Some(emulation_raw) =
+        KeymapStateVariable::EmulationModeMapAlists.buffer_or_global_value(vars, buffers, buffer_id)
+        && let Some(emulation_entries) = list_to_vec(&emulation_raw)
+    {
+        for entry in emulation_entries {
+            let alist_value = match entry.as_symbol_id(symbol_mode) {
+                Some(sym_id) => dynamic_buffer_or_global_symbol_value_by_sym_id_in_state(
+                    vars, dynamic, buffers, buffer_id, sym_id,
+                )
+                .unwrap_or(Value::NIL),
+                None => entry,
+            };
+            collect_maps_from_alist_in_state(
+                vars,
+                dynamic,
+                buffers,
+                buffer_id,
+                &alist_value,
+                None,
+                &mut maps,
+                symbol_mode,
+            );
+        }
+    }
+
+    let overriding = KeymapStateVariable::MinorModeOverridingMapAlist
+        .buffer_or_global_value(vars, buffers, buffer_id);
+    if let Some(ref overriding_maps) = overriding {
+        collect_maps_from_alist_in_state(
+            vars,
+            dynamic,
+            buffers,
+            buffer_id,
+            overriding_maps,
+            None,
+            &mut maps,
+            symbol_mode,
+        );
+    }
+
+    if let Some(regular) =
+        KeymapStateVariable::MinorModeMapAlist.buffer_or_global_value(vars, buffers, buffer_id)
+    {
+        collect_maps_from_alist_in_state(
+            vars,
+            dynamic,
+            buffers,
+            buffer_id,
+            &regular,
+            overriding.as_ref(),
+            &mut maps,
+            symbol_mode,
+        );
+    }
+
+    maps
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ActiveMapPosition {
+    buffer_id: crate::buffer::BufferId,
+    buffer_local_map: Value,
+    char_pos: Option<i64>,
+    displayed_string: Option<DisplayedStringPosition>,
+}
+
+/// The display area containing a string named by `POSN_STRING`.
+///
+/// GNU `current-active-maps` treats absent maps on mode/header-line strings
+/// differently from absent maps on tab-line and ordinary displayed strings.
+/// An enum keeps that semantic distinction out of raw symbol comparisons in
+/// the map-precedence code.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DisplayedStringArea {
+    ModeLine,
+    HeaderLine,
+    TabLine,
+    Other,
+}
+
+impl DisplayedStringArea {
+    fn from_position_area(value: Value, symbol_mode: SymbolMode) -> Self {
+        match value.as_symbol_name(symbol_mode) {
+            Some("mode-line") => Self::ModeLine,
+            Some("header-line") => Self::HeaderLine,
+            Some("tab-line") => Self::TabLine,
+            _ => Self::Other,
+        }
+    }
+
+    fn replaces_position_maps_when_absent(self) -> bool {
+        matches!(self, Self::ModeLine | Self::HeaderLine)
+    }
+}
+
+/// A validated `(STRING . CHARPOS)` from the fourth slot of a mouse position.
+#[derive(Clone, Copy, Debug)]
+struct DisplayedStringPosition {
+    object: Value,
+    char_pos: i64,
+    area: DisplayedStringArea,
+}
+
+impl DisplayedStringPosition {
+    fn from_position_slots(slots: &[Value], symbol_mode: SymbolMode) -> Option<Self> {
+        let string_position = *slots.get(4)?;
+        if !string_position.is_cons() {
+            return None;
+        }
+
+        let object = string_position.cons_car();
+        let string = object.as_lisp_string()?;
+        let char_pos = string_position.cons_cdr().as_int()?;
+        if char_pos < 0 || char_pos as usize >= string.schars() {
+            return None;
+        }
+
+        Some(Self {
+            object,
+            char_pos,
+            area: slots
+                .get(1)
+                .copied()
+                .map(|area| DisplayedStringArea::from_position_area(area, symbol_mode))
+                .unwrap_or(DisplayedStringArea::Other),
+        })
+    }
+}
+
+/// Whether a displayed string participates in one active-map layer.
+///
+/// `ReplaceWith(nil)` is intentionally distinct from `PreservePositionMap`:
+/// GNU clears point-derived maps for mode/header-line strings even when those
+/// strings have no corresponding property.
+#[derive(Clone, Copy, Debug)]
+enum DisplayedStringMapOverride {
+    PreservePositionMap,
+    ReplaceWith(Value),
+}
+
+impl DisplayedStringMapOverride {
+    fn apply(self, position_map: Value) -> Value {
+        match self {
+            Self::PreservePositionMap => position_map,
+            Self::ReplaceWith(string_map) => string_map,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct DisplayedStringMapOverrides {
+    local_map: DisplayedStringMapOverride,
+    keymap: DisplayedStringMapOverride,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PositionMapLayers {
+    local_map: Value,
+    keymap: Value,
+}
+
+fn active_map_position(
+    frames: &crate::window::FrameManager,
+    buffers: &crate::buffer::BufferManager,
+    position: Option<&Value>,
+    symbol_mode: SymbolMode,
+) -> Result<Option<ActiveMapPosition>, Flow> {
+    let Some(buffer) = buffers.current_buffer() else {
+        return Ok(None);
+    };
+
+    let default_position = ActiveMapPosition {
+        buffer_id: buffer.id(),
+        buffer_local_map: buffer.local_map(),
+        char_pos: Some(buffer.point_lisp_char_pos().as_i64()),
+        displayed_string: None,
+    };
+
+    let Some(position) = position else {
+        return Ok(Some(default_position));
+    };
+
+    if position.is_window() {
+        let window_id = crate::window::WindowId(position.as_window_id().unwrap());
+        for frame_id in frames.frame_list() {
+            let Some(frame) = frames.get(frame_id) else {
+                continue;
+            };
+            let Some(window) = frame.find_window(window_id) else {
+                continue;
+            };
+            let Some(buffer_id) = window.buffer_id() else {
+                break;
+            };
+            let Some(target_buffer) = buffers.get(buffer_id) else {
+                break;
+            };
+
+            return Ok(Some(ActiveMapPosition {
+                buffer_id,
+                buffer_local_map: target_buffer.local_map(),
+                char_pos: Some(target_buffer.point_lisp_char_pos().as_i64()),
+                displayed_string: None,
+            }));
+        }
+
+        return Ok(Some(default_position));
+    }
+
+    if position.is_fixnum() || position.is_char() || position.is_marker() {
+        let char_pos = expect_integer_or_marker_in_buffers(buffers, position)?;
+        let point_min = buffer.point_min_lisp_char_pos().as_i64();
+        let point_max = buffer.point_max_lisp_char_pos().as_i64();
+        if char_pos < point_min || char_pos > point_max {
+            return Err(signal(
+                LispCondition::ArgsOutOfRange,
+                vec![Value::make_buffer(buffer.id()), *position],
+            ));
+        }
+
+        return Ok(Some(ActiveMapPosition {
+            buffer_id: buffer.id(),
+            buffer_local_map: buffer.local_map(),
+            char_pos: Some(char_pos),
+            displayed_string: None,
+        }));
+    }
+
+    let Some(slots) = list_to_vec(position) else {
+        return Ok(Some(default_position));
+    };
+    if slots.len() < 6 {
+        return Ok(Some(default_position));
+    }
+
+    let window_id = match slots[0].as_window_id() {
+        Some(id) => crate::window::WindowId(id),
+        None => return Ok(Some(default_position)),
+    };
+    let char_pos = slots[5].as_int().or_else(|| slots[1].as_int());
+    let displayed_string = DisplayedStringPosition::from_position_slots(&slots, symbol_mode);
+
+    for frame_id in frames.frame_list() {
+        let Some(frame) = frames.get(frame_id) else {
+            continue;
+        };
+        let Some(window) = frame.find_window(window_id) else {
+            continue;
+        };
+        let Some(buffer_id) = window.buffer_id() else {
+            continue;
+        };
+        let Some(target_buffer) = buffers.get(buffer_id) else {
+            continue;
+        };
+        // GNU never signals for an event position.  `click_position`
+        // (src/keymap.c:1639-1646) range-checks only a fixnum or a marker;
+        // a cons falls back to `PT`, so its `args_out_of_range` cannot be
+        // reached from a posn.  The posn branch (:1727-1740) instead uses its
+        // range test only to decide whether to consult the `local-map` and
+        // `keymap` text properties at that position:
+        //
+        //   if (FIXNUMP (buffer_posn)
+        //       && XFIXNUM (buffer_posn) >= BEG && XFIXNUM (buffer_posn) <= Z)
+        //     { ... get_local_map ... }
+        //   if (NILP (local_map))
+        //     local_map = BVAR (current_buffer, keymap);
+        //
+        // Dropping the position is that fallback: `position_map_layers` reads
+        // `char_pos: None` as "no property lookup, use the buffer's own local
+        // map".  An inactive mini-window draws the echo area's text while it
+        // stays bound to the empty ` *Minibuf-0*`, so every mouse posn over a
+        // displayed message names a position past that buffer's end; signalling
+        // escaped `read_key_sequence` and reached the command loop once per
+        // mouse event.
+        let char_pos = char_pos.filter(|char_pos| {
+            target_buffer
+                .full_lisp_char_region()
+                .contains(crate::buffer::LispCharPos1::new(*char_pos))
+        });
+
+        return Ok(Some(ActiveMapPosition {
+            buffer_id,
+            buffer_local_map: target_buffer.local_map(),
+            char_pos,
+            displayed_string,
+        }));
+    }
+
+    Ok(Some(default_position))
+}
+
+fn keymap_property_at_position(
+    vars: VariableView<'_>,
+    buffers: &crate::buffer::BufferManager,
+    buffer_id: crate::buffer::BufferId,
+    char_pos: i64,
+    property: LocalMapProperty,
+) -> Result<Value, Flow> {
+    let prop_symbol = Value::from_sym_id(property.symbol_id());
+    let buffer = buffers
+        .get(buffer_id)
+        .ok_or_else(|| signal("error", vec![Value::string("Buffer does not exist")]))?;
+
+    // GNU `get_local_map` clips before temporarily widening
+    // (`src/intervals.c:2176-2208`).  The order matters: the full-buffer
+    // range check in `current-active-maps` admits a renderer event outside a
+    // narrowing, but its property evidence comes from the nearest accessible
+    // boundary, never from inaccessible text and never from a signalling
+    // Lisp property primitive.
+    let position = crate::buffer::LispCharPos1::new(char_pos).clamp(
+        buffer.point_min_lisp_char_pos(),
+        buffer.point_max_lisp_char_pos(),
+    );
+    let char_property = crate::emacs_core::textprop::buffer_char_property_at_full_lisp_pos(
+        vars,
+        buffers,
+        buffer,
+        position,
+        prop_symbol,
+    );
+    if !char_property.is_nil() {
+        return Ok(char_property);
+    }
+
+    crate::emacs_core::textprop::buffer_pos_property_at_full_lisp_pos(
+        vars,
+        buffers,
+        buffer,
+        position,
+        prop_symbol,
+    )
+}
+
+/// The two text properties GNU's `get_local_map` (keymap.c) consults, and the
+/// fallback each one carries when the property is absent or names no keymap.
+///
+/// Naming the property with a string instead let the two fallbacks drift apart:
+/// `keymap` has none, `local-map` falls back to the buffer's own keymap, and a
+/// caller that passes the wrong string gets the wrong fallback silently.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LocalMapProperty {
+    /// `keymap`: consulted ahead of the minor-mode maps, with NO fallback.
+    Keymap,
+    /// `local-map`: consulted in place of the buffer's own keymap, which is its
+    /// fallback.
+    LocalMap,
+}
+
+impl LocalMapProperty {
+    fn symbol_id(self) -> SymId {
+        use std::sync::OnceLock;
+
+        static LOCAL_MAP: OnceLock<SymId> = OnceLock::new();
+
+        match self {
+            Self::Keymap => KeymapMarker::Keymap.symbol_id(),
+            Self::LocalMap => *LOCAL_MAP.get_or_init(|| intern("local-map")),
+        }
+    }
+}
+
+/// GNU `get_local_map (BUF_PT (b), b, PROP)`: the keymap named by PROP at
+/// BUFFER's OWN point -- not the selected window's -- with PROP's fallback.
+///
+/// `describe-buffer-bindings` reports on a buffer that need not be current or
+/// displayed, so the position-based helpers that resolve through the selected
+/// window cannot answer this.
+pub fn local_map_property_at_buffer_point(
+    vars: VariableView<'_>,
+    buffers: &crate::buffer::BufferManager,
+    buffer_object: Value,
+    buffer_point: i64,
+    property: LocalMapProperty,
+    buffer_keymap: Value,
+    symbol_mode: SymbolMode,
+) -> Result<Value, Flow> {
+    let obarray = vars.obarray();
+    let fallback = match property {
+        LocalMapProperty::Keymap => Value::NIL,
+        LocalMapProperty::LocalMap => buffer_keymap,
+    };
+    let buffer_id = buffer_object
+        .as_buffer_id()
+        .ok_or_else(|| signal(LispCondition::WrongTypeArgument, vec![buffer_object]))?;
+    let found = keymap_property_at_position(vars, buffers, buffer_id, buffer_point, property)?;
+    Ok(maybe_keymap_in_obarray(obarray, &found, symbol_mode).unwrap_or(fallback))
+}
+
+fn displayed_string_map_overrides(
+    vars: VariableView<'_>,
+    buffers: &crate::buffer::BufferManager,
+    displayed: DisplayedStringPosition,
+    symbol_mode: SymbolMode,
+) -> Result<DisplayedStringMapOverrides, Flow> {
+    let obarray = vars.obarray();
+    let resolve = |property: LocalMapProperty| -> Result<DisplayedStringMapOverride, Flow> {
+        let found = crate::emacs_core::textprop::builtin_get_text_property_in_state(
+            vars,
+            buffers,
+            &[
+                Value::fixnum(displayed.char_pos),
+                Value::from_sym_id(property.symbol_id()),
+                displayed.object,
+            ],
+        )?;
+        if found.is_nil() && !displayed.area.replaces_position_maps_when_absent() {
+            return Ok(DisplayedStringMapOverride::PreservePositionMap);
+        }
+
+        Ok(DisplayedStringMapOverride::ReplaceWith(
+            maybe_keymap_in_obarray(obarray, &found, symbol_mode).unwrap_or(Value::NIL),
+        ))
+    };
+
+    Ok(DisplayedStringMapOverrides {
+        local_map: resolve(LocalMapProperty::LocalMap)?,
+        keymap: resolve(LocalMapProperty::Keymap)?,
+    })
+}
+
+fn position_map_layers(
+    vars: VariableView<'_>,
+    buffers: &crate::buffer::BufferManager,
+    active_position: Option<ActiveMapPosition>,
+    fallback_local_map: Value,
+    symbol_mode: SymbolMode,
+) -> Result<PositionMapLayers, Flow> {
+    let obarray = vars.obarray();
+    let Some(active_position) = active_position else {
+        return Ok(PositionMapLayers {
+            local_map: fallback_local_map,
+            keymap: Value::NIL,
+        });
+    };
+
+    let (mut local_map, mut keymap) = if let Some(char_pos) = active_position.char_pos {
+        let local_property = keymap_property_at_position(
+            vars,
+            buffers,
+            active_position.buffer_id,
+            char_pos,
+            LocalMapProperty::LocalMap,
+        )?;
+        let keymap_property = keymap_property_at_position(
+            vars,
+            buffers,
+            active_position.buffer_id,
+            char_pos,
+            LocalMapProperty::Keymap,
+        )?;
+        (
+            maybe_keymap_in_obarray(obarray, &local_property, symbol_mode)
+                .unwrap_or(active_position.buffer_local_map),
+            maybe_keymap_in_obarray(obarray, &keymap_property, symbol_mode).unwrap_or(Value::NIL),
+        )
+    } else {
+        (active_position.buffer_local_map, Value::NIL)
+    };
+
+    if let Some(displayed_string) = active_position.displayed_string {
+        // Mirrors GNU keymap.c `current-active-maps`: a displayed string's
+        // maps override the maps derived from the clicked buffer position.
+        let overrides =
+            displayed_string_map_overrides(vars, buffers, displayed_string, symbol_mode)?;
+        local_map = overrides.local_map.apply(local_map);
+        keymap = overrides.keymap.apply(keymap);
+    }
+
+    Ok(PositionMapLayers { local_map, keymap })
+}
+
+#[allow(clippy::too_many_arguments)] // explicit keymap layers preserve GNU precedence ordering
+fn current_active_maps_from_parts(
+    vars: VariableView<'_>,
+    frames: &crate::window::FrameManager,
+    buffers: &crate::buffer::BufferManager,
+    current_local_map: Value,
+    global_map: Value,
+    minor_maps: Vec<Value>,
+    overriding_local_map: Option<Value>,
+    overriding_terminal_local_map: Option<Value>,
+    obey_overriding_local_maps: bool,
+    position: Option<&Value>,
+    symbol_mode: SymbolMode,
+) -> Result<Vec<Value>, Flow> {
+    let active_position = active_map_position(frames, buffers, position, symbol_mode)?;
+    let current_buffer_id = active_position.map(|pos| pos.buffer_id);
+
+    if obey_overriding_local_maps
+        && overriding_terminal_local_map.is_none()
+        && let Some(overriding_local_map) = overriding_local_map
+    {
+        return Ok(vec![overriding_local_map, global_map]);
+    }
+
+    let mut maps = Vec::new();
+
+    if obey_overriding_local_maps
+        && let Some(overriding_terminal_local_map) = overriding_terminal_local_map
+    {
+        maps.push(overriding_terminal_local_map);
+    }
+
+    let position_maps = position_map_layers(
+        vars,
+        buffers,
+        active_position,
+        current_local_map,
+        symbol_mode,
+    )?;
+    if !position_maps.keymap.is_nil() {
+        maps.push(position_maps.keymap);
+    }
+
+    if minor_maps.is_empty() {
+        maps.extend(collect_minor_mode_maps_in_state(
+            vars,
+            &[],
+            buffers,
+            current_buffer_id,
+            symbol_mode,
+        ));
+    } else {
+        maps.extend(minor_maps);
+    }
+
+    if !position_maps.local_map.is_nil() {
+        maps.push(position_maps.local_map);
+    }
+
+    maps.push(global_map);
+    Ok(maps)
+}
+
+pub fn current_active_maps_for_position(
+    ctx: &mut Context,
+    obey_overriding_local_maps: bool,
+    position: Option<&Value>,
+) -> Result<Vec<Value>, Flow> {
+    let symbol_mode = ctx.symbol_mode();
+    let global_map = ctx.current_global_map();
+    let overriding_local_map = KeymapStateVariable::OverridingLocalMap
+        .global_value(ctx.variables())
+        .and_then(|value| maybe_keymap_in_obarray(&ctx.obarray, &value, symbol_mode));
+    let overriding_terminal_local_map = KeymapStateVariable::OverridingTerminalLocalMap
+        .global_value(ctx.variables())
+        .and_then(|value| maybe_keymap_in_obarray(&ctx.obarray, &value, symbol_mode));
+
+    current_active_maps_from_parts(
+        ctx.variables(),
+        &ctx.frames,
+        &ctx.edit.buffers,
+        ctx.edit.buffers.current_local_map(),
+        global_map,
+        Vec::new(),
+        overriding_local_map,
+        overriding_terminal_local_map,
+        obey_overriding_local_maps,
+        position,
+        symbol_mode,
+    )
+}
+
+pub fn current_active_maps_for_position_read_only(
+    ctx: &Context,
+    obey_overriding_local_maps: bool,
+    position: Option<&Value>,
+) -> Result<Vec<Value>, Flow> {
+    let symbol_mode = ctx.symbol_mode();
+    let global_map = ctx.current_global_map();
+    let overriding_local_map = KeymapStateVariable::OverridingLocalMap
+        .global_value(ctx.variables())
+        .and_then(|value| maybe_keymap_in_obarray(&ctx.obarray, &value, symbol_mode));
+    let overriding_terminal_local_map = KeymapStateVariable::OverridingTerminalLocalMap
+        .global_value(ctx.variables())
+        .and_then(|value| maybe_keymap_in_obarray(&ctx.obarray, &value, symbol_mode));
+
+    current_active_maps_from_parts(
+        ctx.variables(),
+        &ctx.frames,
+        &ctx.edit.buffers,
+        ctx.edit.buffers.current_local_map(),
+        global_map,
+        Vec::new(),
+        overriding_local_map,
+        overriding_terminal_local_map,
+        obey_overriding_local_maps,
+        position,
+        symbol_mode,
+    )
+}
+
+pub(crate) fn is_plain_printable_emacs_event(event: &Value) -> bool {
+    let Some(ch) = (match event.kind() {
+        ValueKind::Fixnum(code) if (code & KEY_CHAR_MOD_MASK) == 0 => char::from_u32(code as u32),
+        _ => None,
+    }) else {
+        return false;
+    };
+
+    !ch.is_control() && ch != '\u{7f}'
+}
+
+pub fn resolve_active_key_binding(
+    ctx: &mut Context,
+    events: &[Value],
+    default_binding_mode: DefaultBindingMode,
+    no_remap: bool,
+    position: Option<&Value>,
+) -> Result<ActiveKeyBindingResolution, Flow> {
+    let active_maps = current_active_maps_for_position(ctx, true, position)?;
+    // The collected active maps (and any heap event conses, e.g. mouse
+    // events) live only in Rust storage across the lookup and the remap
+    // pass, both of which can run Lisp; a keymap swapped out of its buffer
+    // or symbol mid-lookup would be freed while later entries are probed.
+    // One rooted holder spans both calls.
+    let mut holder = Value::NIL;
+    for value in active_maps.iter().chain(events.iter()).rev() {
+        if value.is_heap_object() {
+            holder = Value::cons(*value, holder);
+        }
+    }
+    let root_scope = ctx.save_specpdl_roots();
+    ctx.push_specpdl_root(holder);
+    let result = (|| -> Result<ActiveKeyBindingResolution, Flow> {
+        let lookup = lookup_key_in_keymaps_in_obarray_runtime(
+            ctx,
+            &active_maps,
+            events,
+            default_binding_mode.accepts_default(),
+        )?;
+        let binding = if !lookup.is_nil() && !lookup.is_fixnum() {
+            key_binding_apply_remap_in_active_maps(ctx, &active_maps, lookup, no_remap)?
+        } else if events.len() == 1 && is_plain_printable_emacs_event(&events[0]) {
+            Value::symbol("self-insert-command")
+        } else {
+            Value::NIL
+        };
+
+        Ok(ActiveKeyBindingResolution { lookup, binding })
+    })();
+    ctx.restore_specpdl_roots(root_scope);
+    result
+}
+
+fn lookup_minor_mode_binding_in_alist_in_obarray(
+    vars: VariableView<'_>,
+    dynamic: &[OrderedRuntimeBindingMap],
+    buffers: &crate::buffer::BufferManager,
+    buffer_id: Option<crate::buffer::BufferId>,
+    events: &[Value],
+    alist_value: &Value,
+    symbol_mode: SymbolMode,
+) -> Result<Option<(SymId, Value)>, Flow> {
+    let obarray = vars.obarray();
+    let Some(entries) = list_to_vec(alist_value) else {
+        return Ok(None);
+    };
+
+    for entry in entries {
+        let Some((mode_name, map_value)) = minor_mode_map_entry(&entry, symbol_mode) else {
+            continue;
+        };
+        if !dynamic_buffer_or_global_symbol_value_by_sym_id_in_state(
+            vars, dynamic, buffers, buffer_id, mode_name,
+        )
+        .is_some_and(|v| v.is_truthy())
+        {
+            continue;
+        }
+
+        let keymap = if is_list_keymap(&map_value, symbol_mode) {
+            map_value
+        } else if map_value.as_symbol_name(symbol_mode).is_some() {
+            match map_value
+                .as_symbol_name(symbol_mode)
+                .and_then(|name| vars.value_by_name(name))
+            {
+                Some(value) if is_list_keymap(&value, symbol_mode) => value,
+                _ => match obarray.symbol_function_of_value(&map_value) {
+                    Some(value) if is_list_keymap(&value, symbol_mode) => value,
+                    _ => {
+                        return Err(signal(
+                            LispCondition::WrongTypeArgument,
+                            vec![Value::symbol("keymapp"), map_value],
+                        ));
+                    }
+                },
+            }
+        } else {
+            return Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("keymapp"), map_value],
+            ));
+        };
+
+        let binding = lookup_keymap_with_partial(&keymap, events, symbol_mode);
+        if binding.is_nil() {
+            continue;
+        }
+
+        return Ok(Some((mode_name, binding)));
+    }
+
+    Ok(None)
+}
+
+pub fn minor_mode_key_binding_in_context(ctx: &Context, events: &[Value]) -> Result<Value, Flow> {
+    let symbol_mode = ctx.symbol_mode();
+    let current_buffer_id = ctx.edit.buffers.current_buffer_id();
+    if let Some(emulation_raw) = KeymapStateVariable::EmulationModeMapAlists.buffer_or_global_value(
+        ctx.variables(),
+        &ctx.edit.buffers,
+        current_buffer_id,
+    ) && let Some(emulation_entries) = list_to_vec(&emulation_raw)
+    {
+        for emulation_entry in emulation_entries {
+            let alist_value = match emulation_entry.as_symbol_id(symbol_mode) {
+                Some(sym_id) => dynamic_buffer_or_global_symbol_value_by_sym_id_in_state(
+                    ctx.variables(),
+                    &[],
+                    &ctx.edit.buffers,
+                    current_buffer_id,
+                    sym_id,
+                )
+                .unwrap_or(Value::NIL),
+                None => emulation_entry,
+            };
+            if let Some((mode_name, binding)) = lookup_minor_mode_binding_in_alist_in_obarray(
+                ctx.variables(),
+                &[],
+                &ctx.edit.buffers,
+                current_buffer_id,
+                events,
+                &alist_value,
+                symbol_mode,
+            )? {
+                return Ok(Value::list(vec![Value::cons(
+                    Value::from_sym_id(mode_name),
+                    binding,
+                )]));
+            }
+        }
+    }
+
+    for variable in [
+        KeymapStateVariable::MinorModeOverridingMapAlist,
+        KeymapStateVariable::MinorModeMapAlist,
+    ] {
+        let Some(alist_value) =
+            variable.buffer_or_global_value(ctx.variables(), &ctx.edit.buffers, current_buffer_id)
+        else {
+            continue;
+        };
+        if let Some((mode_name, binding)) = lookup_minor_mode_binding_in_alist_in_obarray(
+            ctx.variables(),
+            &[],
+            &ctx.edit.buffers,
+            current_buffer_id,
+            events,
+            &alist_value,
+            symbol_mode,
+        )? {
+            return Ok(Value::list(vec![Value::cons(
+                Value::from_sym_id(mode_name),
+                binding,
+            )]));
+        }
+    }
+
+    Ok(Value::NIL)
+}
+
+pub(crate) fn minor_mode_map_entry(
+    entry: &Value,
+    symbol_mode: SymbolMode,
+) -> Option<(SymId, Value)> {
+    if !entry.is_cons() {
+        return None;
+    };
+
+    let (mode, cdr) = {
+        let pair_car = entry.cons_car();
+        let pair_cdr = entry.cons_cdr();
+        (pair_car, pair_cdr)
+    };
+    let mode_name = mode.as_symbol_id(symbol_mode)?;
+    if cdr == Value::NIL {
+        return None;
+    }
+    Some((mode_name, cdr))
+}
+
+fn command_remapping_list_tail(value: &Value, n: usize) -> Option<Value> {
+    let mut cursor = *value;
+    for _ in 0..n {
+        match cursor.kind() {
+            ValueKind::Cons => {
+                cursor = cursor.cons_cdr();
+            }
+            _ => return None,
+        }
+    }
+    Some(cursor)
+}
+
+fn command_remapping_nth_list_element(value: &Value, index: usize) -> Option<Value> {
+    let tail = command_remapping_list_tail(value, index)?;
+    match tail.kind() {
+        ValueKind::Cons => Some(tail.cons_car()),
+        _ => None,
+    }
+}
+
+fn command_remapping_lookup_in_lisp_remap_entry(
+    entry: &Value,
+    command: SymId,
+    symbol_mode: SymbolMode,
+) -> Option<Value> {
+    if !KeymapMarker::Remap.is_value(command_remapping_nth_list_element(entry, 0)?, symbol_mode) {
+        return None;
+    }
+    if !KeymapMarker::Keymap.is_value(command_remapping_nth_list_element(entry, 1)?, symbol_mode) {
+        return None;
+    }
+
+    let mut bindings = command_remapping_list_tail(entry, 2)?;
+    while bindings.is_cons() {
+        let (binding_entry, rest) = {
+            let pair_car = bindings.cons_car();
+            let pair_cdr = bindings.cons_cdr();
+            (pair_car, pair_cdr)
+        };
+        if binding_entry.is_cons() {
+            let (binding_key, binding_target) = {
+                let pair_car = binding_entry.cons_car();
+                let pair_cdr = binding_entry.cons_cdr();
+                (pair_car, pair_cdr)
+            };
+            if binding_key.as_symbol_id(symbol_mode) == Some(command) {
+                return Some(binding_target);
+            }
+        }
+        bindings = rest;
+    }
+    None
+}
+
+pub fn command_remapping_lookup_in_lisp_keymap(
+    keymap: &Value,
+    command: SymId,
+    symbol_mode: SymbolMode,
+) -> Option<Value> {
+    if !is_list_keymap(keymap, symbol_mode) {
+        return None;
+    }
+
+    let mut cursor = if keymap.is_cons() {
+        keymap.cons_cdr()
+    } else {
+        Value::NIL
+    };
+
+    while cursor.is_cons() {
+        if is_list_keymap(&cursor, symbol_mode) {
+            if let Some(parent) =
+                command_remapping_lookup_in_lisp_keymap(&cursor, command, symbol_mode)
+            {
+                return Some(parent);
+            }
+            break;
+        }
+
+        let car = cursor.cons_car();
+        let cdr = cursor.cons_cdr();
+        if is_list_keymap(&car, symbol_mode) {
+            if let Some(child) = command_remapping_lookup_in_lisp_keymap(&car, command, symbol_mode)
+            {
+                return Some(child);
+            }
+            cursor = cdr;
+            continue;
+        }
+        if let Some(remap) =
+            command_remapping_lookup_in_lisp_remap_entry(&car, command, symbol_mode)
+        {
+            return Some(remap);
+        }
+        cursor = cdr;
+    }
+
+    None
+}
+
+fn command_remapping_menu_item_target(value: &Value, symbol_mode: SymbolMode) -> Option<Value> {
+    if !value.is_cons() {
+        return None;
+    };
+    let pair_car = value.cons_car();
+    let pair_cdr = value.cons_cdr();
+    if !KeymapMarker::MenuItem.is_value(pair_car, symbol_mode) {
+        return None;
+    }
+
+    let tail = pair_cdr;
+    let title = command_remapping_nth_list_element(&tail, 0)?;
+    if title.is_nil() {
+        return None;
+    }
+    command_remapping_nth_list_element(&tail, 1)
+}
+
+pub fn command_remapping_normalize_target(raw: Value, symbol_mode: SymbolMode) -> Value {
+    if let Some(menu_target) = command_remapping_menu_item_target(&raw, symbol_mode) {
+        return if menu_target.is_integer() {
+            Value::NIL
+        } else {
+            menu_target
+        };
+    }
+    if eq_value_swp(&raw, &Value::T, symbol_mode == SymbolMode::Positioned) || raw.is_fixnum() {
+        return Value::NIL;
+    }
+    raw
+}
+
+fn command_remapping_lookup_in_keymap_value(
+    keymap: &Value,
+    command: SymId,
+    symbol_mode: SymbolMode,
+) -> Option<Value> {
+    command_remapping_lookup_in_lisp_keymap(keymap, command, symbol_mode)
+        .map(|value| command_remapping_normalize_target(value, symbol_mode))
+}
+
+pub fn command_remapping_lookup_in_keymaps(
+    keymaps: &[Value],
+    command: SymId,
+    symbol_mode: SymbolMode,
+) -> Option<Value> {
+    for keymap in keymaps {
+        if !is_list_keymap(keymap, symbol_mode) {
+            continue;
+        }
+        if let Some(value) = command_remapping_lookup_in_keymap_value(keymap, command, symbol_mode)
+        {
+            return Some(value);
+        }
+    }
+    None
+}
+
+/// Runtime twin of [`command_remapping_lookup_in_keymaps`] that resolves a
+/// menu-item `:filter` on the remap target via [`get_keyelt_runtime`] (GNU
+/// `get_keyelt` with autoload=true). Without this a `(menu-item "" nil :filter
+/// FN)` remap -- e.g. Doom's `cmds!` -- normalizes to its (nil) DEFN and the
+/// remap is dropped (so `[remap evil-record-macro]` -> `q` never reaches the
+/// real command).
+pub(crate) fn command_remapping_lookup_in_keymaps_runtime(
+    ctx: &mut Context,
+    keymaps: &[Value],
+    command: SymId,
+) -> Result<Option<Value>, Flow> {
+    let symbol_mode = ctx.symbol_mode();
+    for keymap in keymaps {
+        if !is_list_keymap(keymap, symbol_mode) {
+            continue;
+        }
+        let Some(raw) = command_remapping_lookup_in_lisp_keymap(keymap, command, symbol_mode)
+        else {
+            continue;
+        };
+        let resolved = get_keyelt_runtime(ctx, raw, true)?;
+        let normalized = command_remapping_normalize_target(resolved, symbol_mode);
+        if !normalized.is_nil() {
+            return Ok(Some(normalized));
+        }
+    }
+    Ok(None)
+}
+
+pub fn command_remapping_command_name(command: &Value, symbol_mode: SymbolMode) -> Option<SymId> {
+    command.as_symbol_id(symbol_mode)
+}
+
+/// GNU `Fcommand_remapping (COMMAND, Qnil, Qnil)`: the one-level remapping of
+/// COMMAND in the currently active keymaps, or nil.
+///
+/// `read_key_sequence` asks this once for every command it returns
+/// (keyboard.c:11863-11868) and `command_loop_1` reuses the answer
+/// (keyboard.c:1464-1495).  It is the raw active-map answer, without the
+/// menu-item resolution `key-binding` performs, because that is what GNU's
+/// `Fcommand_remapping` returns.
+pub fn command_remapping_in_active_maps(ctx: &Context, command: Value) -> Result<Value, Flow> {
+    let symbol_mode = ctx.symbol_mode();
+    let Some(command_name) = command.as_symbol_id(symbol_mode) else {
+        return Ok(Value::NIL);
+    };
+    let active_maps = current_active_maps_for_position_read_only(ctx, true, None)?;
+    Ok(
+        command_remapping_lookup_in_keymaps(&active_maps, command_name, symbol_mode)
+            .unwrap_or(Value::NIL),
+    )
+}
+
+pub fn key_binding_apply_remap_in_active_maps(
+    ctx: &mut Context,
+    active_maps: &[Value],
+    binding: Value,
+    no_remap: bool,
+) -> EvalResult {
+    let symbol_mode = ctx.symbol_mode();
+    if no_remap {
+        return Ok(binding);
+    }
+    let Some(command_name) = binding.as_symbol_id(symbol_mode) else {
+        return Ok(binding);
+    };
+    match command_remapping_lookup_in_keymaps_runtime(ctx, active_maps, command_name)? {
+        Some(remapped) if !remapped.is_nil() => Ok(remapped),
+        _ => Ok(binding),
+    }
+}
+
+/// Look up a key sequence in a keymap, following prefix keymaps and parent chains.
+/// Returns the binding Value, or the number of keys matched (as `Value::Int`)
+/// when the sequence resolves through a non-keymap binding.
+pub fn lookup_keymap_with_partial(
+    keymap: &Value,
+    emacs_events: &[Value],
+    symbol_mode: SymbolMode,
+) -> Value {
+    if emacs_events.is_empty() {
+        return *keymap;
+    }
+    list_keymap_lookup_seq(keymap, emacs_events, symbol_mode)
 }

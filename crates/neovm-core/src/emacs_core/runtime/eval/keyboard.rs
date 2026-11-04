@@ -3331,10 +3331,10 @@ impl crate::emacs_core::eval::Context {
         &mut self,
         options: ReadKeySequenceOptions,
     ) -> Result<(Vec<Value>, ReadCommandBinding), crate::emacs_core::error::Flow> {
+        use super::keymap_lookup::resolve_active_key_binding;
         use crate::emacs_core::eval::keymap_lookup::{
             DefaultBindingMode, resolve_prefix_keymap_binding_in_obarray,
         };
-        use crate::emacs_core::keymap::resolve_active_key_binding;
 
         self.sync_keyboard_terminal_owner();
         self.begin_key_sequence_read(options.continue_echo);
@@ -3788,11 +3788,10 @@ impl crate::emacs_core::eval::Context {
                         let help_command = self
                             .eval_symbol_by_id(PREFIX_HELP_COMMAND.id())
                             .unwrap_or(Value::NIL);
-                        let help_remap =
-                            crate::emacs_core::keymap::command_remapping_in_active_maps(
-                                &*self,
-                                help_command,
-                            )?;
+                        let help_remap = super::keymap_lookup::command_remapping_in_active_maps(
+                            &*self,
+                            help_command,
+                        )?;
                         binding = ReadCommandBinding::remapped(help_command, help_remap);
                         self.finalize_shift_translated_key_sequence(
                             sequence_is_undefined,
@@ -5684,8 +5683,8 @@ impl crate::emacs_core::eval::Context {
         events: &[Value],
         lookup_position: Option<&Value>,
     ) -> Result<Option<UndefinedMouseSequenceFallback>, crate::emacs_core::error::Flow> {
+        use super::keymap_lookup::resolve_active_key_binding;
         use crate::emacs_core::eval::keymap_lookup::DefaultBindingMode;
-        use crate::emacs_core::keymap::resolve_active_key_binding;
 
         let Some(last_index) = events.len().checked_sub(1) else {
             return Ok(None);
