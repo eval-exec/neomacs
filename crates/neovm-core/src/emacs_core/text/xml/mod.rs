@@ -739,7 +739,7 @@ impl ChildVec {
     fn flush_text(&mut self) {
         if !self.text.is_empty() {
             let text = std::mem::take(&mut self.text);
-            self.values.push(Value::string(text.as_str()));
+            self.values.push(Value::string(text));
         }
     }
 
