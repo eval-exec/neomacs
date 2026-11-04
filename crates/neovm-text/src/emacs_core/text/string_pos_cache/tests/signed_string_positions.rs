@@ -1,5 +1,5 @@
-use neovm_value::string_pos_cache::*;
 use neovm_value::heap_types::GnuDeclaredCharacterCount;
+use neovm_value::string_pos_cache::*;
 
 fn ascii_value(chars: i128) -> Value {
     Value::heap_string(LispString::from_emacs_bytes_with_declared_chars(

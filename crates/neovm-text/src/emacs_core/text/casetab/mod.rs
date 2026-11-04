@@ -4,11 +4,11 @@
 //! mappings, a `CaseTableManager` with standard ASCII case tables pre-initialized,
 //! and pure builtins for case-table predicates and character case conversion.
 
-use neovm_value::tagged::SymbolMode;
 use neovm_value::error::LispCondition;
 use neovm_value::error::expect_args;
 use neovm_value::error::{EvalResult, Flow, signal};
 use neovm_value::intern::{SymId, intern};
+use neovm_value::tagged::SymbolMode;
 use neovm_value::value::*;
 
 use std::cell::{Cell, RefCell};
@@ -22,18 +22,21 @@ thread_local! {
 /// Clear cached thread-local case table (must be called when heap changes).
 pub fn reset_casetab_thread_locals() {
     STANDARD_CASE_TABLE_OBJECT.with(|slot| *slot.borrow_mut() = None);
-    STANDARD_CASE_TABLE_HEAP
-        .with(|owner| owner.set(neovm_value::tagged::gc::current_tagged_heap_identity().unwrap_or(0)));
+    STANDARD_CASE_TABLE_HEAP.with(|owner| {
+        owner.set(neovm_value::tagged::gc::current_tagged_heap_identity().unwrap_or(0))
+    });
 }
 
 /// Install the cached standard-table object (the core-side
 /// `set-standard-case-table` entry); the cache itself stays private to text.
-pub(crate) fn cache_standard_case_table_object(table: Value) {
+#[doc(hidden)]
+pub fn cache_standard_case_table_object(table: Value) {
     STANDARD_CASE_TABLE_OBJECT.with(|slot| *slot.borrow_mut() = Some(table));
 }
 
 /// Record the tagged-heap identity of the cached standard table.
-pub(crate) fn cache_standard_case_table_heap(heap_identity: usize) {
+#[doc(hidden)]
+pub fn cache_standard_case_table_heap(heap_identity: usize) {
     STANDARD_CASE_TABLE_HEAP.with(|owner| owner.set(heap_identity));
 }
 
@@ -50,10 +53,12 @@ pub fn collect_casetab_gc_roots(roots: &mut Vec<Value>, heap_identity: usize) {
 }
 
 /// Restore the explicit standard-table cache without changing hot case lookups.
-pub(crate) fn activate_casetab_thread_locals(table: Option<Value>) {
+#[doc(hidden)]
+pub fn activate_casetab_thread_locals(table: Option<Value>) {
     STANDARD_CASE_TABLE_OBJECT.with(|slot| *slot.borrow_mut() = table);
-    STANDARD_CASE_TABLE_HEAP
-        .with(|owner| owner.set(neovm_value::tagged::gc::current_tagged_heap_identity().unwrap_or(0)));
+    STANDARD_CASE_TABLE_HEAP.with(|owner| {
+        owner.set(neovm_value::tagged::gc::current_tagged_heap_identity().unwrap_or(0))
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -271,7 +276,8 @@ const STANDARD_CASE_TABLE_SYMBOL: &str = "neovm--standard-case-table-object";
 /// keeps in C globals (`Vascii_downcase_table`, casetab.c), so never a
 /// thread projection (admission leaves it as it is).
 #[inline(always)]
-pub(crate) fn standard_case_table_object_symbol_id() -> SymId {
+#[doc(hidden)]
+pub fn standard_case_table_object_symbol_id() -> SymId {
     static SYMBOL: std::sync::OnceLock<SymId> = std::sync::OnceLock::new();
     *SYMBOL.get_or_init(|| intern(STANDARD_CASE_TABLE_SYMBOL))
 }
@@ -369,7 +375,8 @@ pub(crate) fn make_case_table_with_pair(uc: i64, lc: i64) -> Value {
     downcase_ct
 }
 
-pub(crate) fn ensure_standard_case_table_object_in_state_with_symbols(
+#[doc(hidden)]
+pub fn ensure_standard_case_table_object_in_state_with_symbols(
     obarray: &mut neovm_value::symbol::Obarray,
     mode: SymbolMode,
 ) -> EvalResult {
@@ -389,7 +396,8 @@ pub(crate) fn ensure_standard_case_table_object_in_state_with_symbols(
     Ok(table)
 }
 
-pub(crate) fn current_case_table_for_buffer_in_state_with_symbols(
+#[doc(hidden)]
+pub fn current_case_table_for_buffer_in_state_with_symbols(
     obarray: &mut neovm_value::symbol::Obarray,
     buffers: &mut neovm_edit::buffer::BufferManager,
     mode: SymbolMode,
@@ -452,7 +460,8 @@ pub(crate) fn buffer_case_canon_table_with_symbols(
 
 /// Which subsidiary case char-table to consult for a per-buffer override.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CaseMap {
+#[doc(hidden)]
+pub enum CaseMap {
     /// The downcase (main) table — `BVAR (current_buffer, downcase_table)`.
     Down,
     /// The upcase table — extras[0] / `BVAR (current_buffer, upcase_table)`.
@@ -467,7 +476,8 @@ pub(crate) enum CaseMap {
 /// never fallback to Unicode (GNU buffer.h:1649-1663). Installed heap handles
 /// remain on the mutator that resolved them; no shared cache is added.
 #[derive(Clone, Copy, Debug)]
-pub(crate) enum CaseTableOverride {
+#[doc(hidden)]
+pub enum CaseTableOverride {
     Standard,
     Installed(InstalledCaseTables),
 }
@@ -489,7 +499,8 @@ impl CaseTableOverride {
     /// Used by the core-side current-buffer override resolver: the evaluator
     /// phases select the tables, and this constructor keeps the private field
     /// layout in the text layer.
-    pub(crate) fn from_installed_tables(
+    #[doc(hidden)]
+    pub fn from_installed_tables(
         down: Value,
         up: Value,
         canon: Value,
@@ -506,12 +517,14 @@ impl CaseTableOverride {
 
     /// An override that never overrides — used by pure/test callers and the
     /// default path so the hardwired Unicode mapping is used verbatim.
-    pub(crate) fn none() -> Self {
+    #[doc(hidden)]
+    pub fn none() -> Self {
         Self::Standard
     }
 
     /// True when a non-standard case table is installed.
-    pub(crate) fn is_custom(&self) -> bool {
+    #[doc(hidden)]
+    pub fn is_custom(&self) -> bool {
         matches!(self, Self::Installed(_))
     }
 
@@ -564,7 +577,8 @@ impl CaseTableOverride {
 
     /// Standard tables defer to the built-in Unicode mapping; installed tables
     /// return their natnum entry or the original character for every lookup.
-    pub(crate) fn map(&self, which: CaseMap, code: i64) -> Option<i64> {
+    #[doc(hidden)]
+    pub fn map(&self, which: CaseMap, code: i64) -> Option<i64> {
         let Self::Installed(tables) = *self else {
             return None;
         };
@@ -589,7 +603,8 @@ fn is_case_table_subsidiary(table: &Value) -> bool {
     super::chartable::is_char_table(table)
 }
 
-pub(crate) fn set_current_case_table_for_buffer_in_state(
+#[doc(hidden)]
+pub fn set_current_case_table_for_buffer_in_state(
     buffers: &mut neovm_edit::buffer::BufferManager,
     table: Value,
 ) -> Result<(), Flow> {
@@ -611,7 +626,8 @@ pub(crate) fn set_current_case_table_for_buffer_in_state(
     Ok(())
 }
 
-pub(crate) fn case_table_extra(table: Value, idx: usize) -> Value {
+#[doc(hidden)]
+pub fn case_table_extra(table: Value, idx: usize) -> Value {
     table
         .as_char_table_obj()
         .and_then(|obj| obj.extras.as_slice().get(idx).copied())
@@ -630,9 +646,7 @@ fn make_empty_case_table() -> Value {
 
 fn fixnum_char(value: Value) -> Option<i64> {
     match value.kind() {
-        ValueKind::Fixnum(n)
-            if (0..=neovm_value::emacs_char::MAX_CHAR as i64).contains(&n) =>
-        {
+        ValueKind::Fixnum(n) if (0..=neovm_value::emacs_char::MAX_CHAR as i64).contains(&n) => {
             Some(n)
         }
         _ => None,
@@ -694,7 +708,8 @@ fn set_canon(case_table: Value, key: Value, elt: Value, mode: SymbolMode) -> Res
     set_char_table_range_value(canon, key, canonical)
 }
 
-pub(crate) fn ensure_case_table_derived_slots_with_symbols(
+#[doc(hidden)]
+pub fn ensure_case_table_derived_slots_with_symbols(
     table: Value,
     mode: SymbolMode,
 ) -> Result<(), Flow> {
@@ -770,7 +785,8 @@ mod tests;
 #[path = "tests/gc_tls_ownership_test.rs"]
 mod gc_tls_ownership_tests;
 
-pub(crate) fn builtin_case_table_p_in_state<H: super::text_host::TextHost>(
+#[doc(hidden)]
+pub fn builtin_case_table_p_in_state<H: super::text_host::TextHost>(
     eval: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -787,7 +803,8 @@ fn map_case_table_with_symbols(
 
 /// Debug-only carrier TLS fingerprint for this module's classified records.
 #[cfg(debug_assertions)]
-pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+#[doc(hidden)]
+pub fn carrier_tls_fingerprint(h: &mut u64) {
     neovm_value::tls_fingerprint::mix(h, STANDARD_CASE_TABLE_HEAP.with(|slot| slot.get() as u64));
     neovm_value::tls_fingerprint::mix(
         h,

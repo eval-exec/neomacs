@@ -1954,12 +1954,8 @@ pub(crate) fn builtin_looking_at_2(
                 Some(lazy.target_lisp),
             )?;
         let crossed = std::cell::Cell::new(None);
-        let frontier = AnchoredPropertize::frontier_byte(eval, lazy_relevant).map(|byte| {
-            super::regex::PropertizeFrontier {
-                byte,
-                crossed: &crossed,
-            }
-        });
+        let frontier = AnchoredPropertize::frontier_byte(eval, lazy_relevant)
+            .map(|byte| super::regex::PropertizeFrontier::new(byte, &crossed));
         // The word-boundary tables (`char-script-table`,
         // `word-combining-categories`, `word-separating-categories`) are read
         // by the matcher only at syntax-dependent ops (GNU reads
@@ -2119,12 +2115,8 @@ pub(crate) fn builtin_looking_at_p(
             Some(lazy.target_lisp),
         )?;
         let crossed = std::cell::Cell::new(None);
-        let frontier = AnchoredPropertize::frontier_byte(eval, lazy_relevant).map(|byte| {
-            super::regex::PropertizeFrontier {
-                byte,
-                crossed: &crossed,
-            }
-        });
+        let frontier = AnchoredPropertize::frontier_byte(eval, lazy_relevant)
+            .map(|byte| super::regex::PropertizeFrontier::new(byte, &crossed));
         let mut match_context = current_buffer_regexp_match_context(
             eval.variables(),
             &eval.edit.buffers,
@@ -2204,12 +2196,8 @@ pub(crate) fn builtin_posix_looking_at(
             Some(lazy.target_lisp),
         )?;
         let crossed = std::cell::Cell::new(None);
-        let frontier = AnchoredPropertize::frontier_byte(eval, lazy_relevant).map(|byte| {
-            super::regex::PropertizeFrontier {
-                byte,
-                crossed: &crossed,
-            }
-        });
+        let frontier = AnchoredPropertize::frontier_byte(eval, lazy_relevant)
+            .map(|byte| super::regex::PropertizeFrontier::new(byte, &crossed));
         let mut match_context = current_buffer_regexp_match_context(
             VariableView::new(&eval.obarray, &eval.owner),
             &eval.edit.buffers,

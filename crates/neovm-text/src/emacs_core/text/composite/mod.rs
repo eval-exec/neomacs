@@ -4,11 +4,10 @@
 //! The display engine later validates and registers those properties when it
 //! needs glyph data.  The Lisp-visible mutation semantics live here.
 
-
 use super::chartable::make_char_table_value;
-use neovm_edit::buffer::{CharLen, CharPos0, CharRange, EmacsByteRange};
 use crate::emacs_core::text_host::TextHost;
 use neomacs_display_protocol::glyph_matrix::{TerminalComposition, TerminalCompositionCell};
+use neovm_edit::buffer::{CharLen, CharPos0, CharRange, EmacsByteRange};
 use neovm_value::error::LispCondition;
 use neovm_value::error::{EvalResult, Flow, signal};
 use neovm_value::error::{expect_args, expect_args_range, expect_max_args};
@@ -26,7 +25,8 @@ pub use neovm_edit::buffer::composition::{
 /// Install the substrate's static composition seams (stage-3 C7).  Idempotent;
 /// called at evaluator construction and by the text-side entry points so tests
 /// that scan buffers without a live evaluator still get the queries.
-pub(crate) fn install_substrate_seams() {
+#[doc(hidden)]
+pub fn install_substrate_seams() {
     // Fast path: these entry points run once per window scan, so avoid a
     // `OnceLock::set` RMW per call.  The lock contents are still read through
     // `OnceLock::get`, which synchronizes with the setter on its own.
@@ -34,12 +34,14 @@ pub(crate) fn install_substrate_seams() {
     if INSTALLED.load(std::sync::atomic::Ordering::Acquire) {
         return;
     }
-    neovm_edit::buffer::composition::install(neovm_edit::buffer::composition::CompositionSeams::new(
-        automatic_composition_spans_in_with_symbols,
-        ascii_has_no_composition_rules_with_symbols,
-        composition_prop_symbol,
-        composition_width_for_property,
-    ));
+    neovm_edit::buffer::composition::install(
+        neovm_edit::buffer::composition::CompositionSeams::new(
+            automatic_composition_spans_in_with_symbols,
+            ascii_has_no_composition_rules_with_symbols,
+            composition_prop_symbol,
+            composition_width_for_property,
+        ),
+    );
     INSTALLED.store(true, std::sync::atomic::Ordering::Release);
 }
 
@@ -131,7 +133,8 @@ fn validate_subarray_indices(
 // ---------------------------------------------------------------------------
 
 /// Context-backed `(compose-region-internal START END &optional COMPONENTS MODIFICATION-FUNC)`.
-pub(crate) fn compose_region_internal<H: TextHost>(ctx: &mut H, args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn compose_region_internal<H: TextHost>(ctx: &mut H, args: Vec<Value>) -> EvalResult {
     expect_args_range("compose-region-internal", &args, 2, 4)?;
     // GNU `Fcompose_region_internal` runs `validate_region (&start, &end)`
     // (buffer.c), which resolves markers, swaps so the lower bound comes first,
@@ -1262,7 +1265,8 @@ fn find_default_combining_composition_in_string<H: TextHost>(
 /// `(FROM TO COMPONENTS RELATIVE-P MOD-FUNC WIDTH)`.  The default
 /// base-plus-combining-marks automatic rule is implemented here; arbitrary
 /// font-driven rules still require the broader display shaper port.
-pub(crate) fn find_composition_internal<H: TextHost>(ctx: &mut H, args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn find_composition_internal<H: TextHost>(ctx: &mut H, args: Vec<Value>) -> EvalResult {
     expect_args("find-composition-internal", &args, 4)?;
     expect_integer_or_marker_p(&args[0])?;
     if !args[1].is_nil() {
@@ -1459,15 +1463,17 @@ pub(crate) fn find_composition_internal<H: TextHost>(ctx: &mut H, args: Vec<Valu
 /// between FROM and TO with FONT-OBJECT in STRING.
 ///
 /// Stub: return nil (let the display engine handle shaping).
-pub(crate) fn composition_get_gstring<H: TextHost>(ctx: &mut H, args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn composition_get_gstring<H: TextHost>(ctx: &mut H, args: Vec<Value>) -> EvalResult {
     expect_args("composition-get-gstring", &args, 4)?;
 
     let codes = if args[3].is_nil() {
-        let byte_range = neovm_edit::emacs_core::editfns::current_buffer_accessible_char_region_in_buffers(
-            ctx.buffers(),
-            &args[0],
-            &args[1],
-        )?;
+        let byte_range =
+            neovm_edit::emacs_core::editfns::current_buffer_accessible_char_region_in_buffers(
+                ctx.buffers(),
+                &args[0],
+                &args[1],
+            )?;
         let Some(buf) = ctx.buffers().current_buffer() else {
             return Err(signal("error", vec![Value::string("No current buffer")]));
         };
@@ -1543,7 +1549,8 @@ pub(crate) fn composition_get_gstring<H: TextHost>(ctx: &mut H, args: Vec<Value>
 /// GNU `composition_gstring_p`: validate the public glyph-string shape before
 /// a font driver sees it.  A glyph vector after the first nil slot is unused,
 /// exactly as in `src/composite.c`.
-pub(crate) fn composition_gstring_p<H: TextHost>(ctx: &H, value: Value) -> bool {
+#[doc(hidden)]
+pub fn composition_gstring_p<H: TextHost>(ctx: &H, value: Value) -> bool {
     let symbol_mode = ctx.symbol_mode();
     let Some(gstring) = value.as_vector_data() else {
         return false;
@@ -1626,21 +1633,24 @@ pub(crate) fn composition_sort_rules(args: Vec<Value>) -> EvalResult {
     Ok(args[0])
 }
 
-fn compose_string<H: crate::emacs_core::text_host::TextHost>(
+#[doc(hidden)]
+pub fn compose_string<H: crate::emacs_core::text_host::TextHost>(
     _ctx: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     compose_string_internal(args)
 }
 
-fn clear_cache<H: crate::emacs_core::text_host::TextHost>(
+#[doc(hidden)]
+pub fn clear_cache<H: crate::emacs_core::text_host::TextHost>(
     _ctx: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     clear_composition_cache(args)
 }
 
-fn sort_rules<H: crate::emacs_core::text_host::TextHost>(
+#[doc(hidden)]
+pub fn sort_rules<H: crate::emacs_core::text_host::TextHost>(
     _ctx: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -1689,7 +1699,8 @@ pub fn register_bootstrap_vars(obarray: &mut neovm_value::symbol::Obarray) {
 /// next resume, so every Lisp thread sees one value, as in GNU. (N-mutator
 /// mode needs shared storage instead: a recorded obligation.)
 #[cold]
-pub(crate) fn world_state_placeholder() -> Box<dyn std::any::Any> {
+#[doc(hidden)]
+pub fn world_state_placeholder() -> Box<dyn std::any::Any> {
     Box::new(CompositionRegistry {
         next_id: 0,
         dedup: std::collections::HashMap::new(),
@@ -1698,7 +1709,8 @@ pub(crate) fn world_state_placeholder() -> Box<dyn std::any::Any> {
 }
 
 #[cold]
-pub(crate) fn swap_world_state(slot: &mut dyn std::any::Any) {
+#[doc(hidden)]
+pub fn swap_world_state(slot: &mut dyn std::any::Any) {
     let slot = slot
         .downcast_mut::<CompositionRegistry>()
         .expect("carried World state");

@@ -8,13 +8,13 @@
 //! It is initialized with the standard charsets: ascii, unicode,
 //! unicode-bmp, latin-iso8859-1, emacs, and eight-bit.
 
-use neovm_edit::buffer::{EmacsBytePos, LispCharPos1};
 use crate::emacs_core::text_host::TextHost;
-use neovm_value::tagged::value::SymbolMode;
+use neovm_edit::buffer::{EmacsBytePos, LispCharPos1};
 use neovm_value::error::LispCondition;
 use neovm_value::error::{EvalResult, Flow, signal};
 use neovm_value::error::{expect_args, expect_max_args, expect_min_args};
 use neovm_value::intern::{SymId, intern, lookup_interned, resolve_sym};
+use neovm_value::tagged::value::SymbolMode;
 use neovm_value::value::*;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -261,7 +261,8 @@ enum CharsetMethod {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) enum CharsetMethodSnapshot {
+#[doc(hidden)]
+pub enum CharsetMethodSnapshot {
     Offset(i64),
     Map(String),
     Subset(CharsetSubsetSpecSnapshot),
@@ -286,7 +287,8 @@ pub(crate) struct CharsetSubsetSpec {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct CharsetSubsetSpecSnapshot {
+#[doc(hidden)]
+pub struct CharsetSubsetSpecSnapshot {
     pub parent: SymId,
     pub parent_min_code: i64,
     pub parent_max_code: i64,
@@ -294,7 +296,8 @@ pub(crate) struct CharsetSubsetSpecSnapshot {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct CharsetInfoSnapshot {
+#[doc(hidden)]
+pub struct CharsetInfoSnapshot {
     pub id: i64,
     pub name: SymId,
     pub dimension: i64,
@@ -314,7 +317,8 @@ pub(crate) struct CharsetInfoSnapshot {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct CharsetRegistrySnapshot {
+#[doc(hidden)]
+pub struct CharsetRegistrySnapshot {
     pub charsets: Vec<CharsetInfoSnapshot>,
     pub priority: Vec<SymId>,
     pub emacs_mule_order: Vec<SymId>,
@@ -353,7 +357,8 @@ struct CharsetInfo {
 }
 
 /// Registry of known charsets, keyed by name.
-pub(crate) struct CharsetRegistry {
+#[doc(hidden)]
+pub struct CharsetRegistry {
     // Keyed by SymId: small, dense, and probed twice per decoded or
     // encoded character, so the hash is the fast one.
     charsets: rustc_hash::FxHashMap<SymId, CharsetInfo>,
@@ -1235,7 +1240,8 @@ thread_local! {
 /// fingerprint. In test builds the lazy initializer allocates the canonical
 /// charset plists through the fallback heap; doing that first lets the caller
 /// clear the tagged-heap slot before the reset steps or snapshot run.
-pub(crate) fn warm_carrier_charset_registry() {
+#[doc(hidden)]
+pub fn warm_carrier_charset_registry() {
     CHARSET_REGISTRY.with(|_| ());
 }
 
@@ -1252,7 +1258,8 @@ fn publish_charset_preference() {
 }
 
 /// Reset charset registry to default state (called from Context::new).
-pub(crate) fn reset_charset_registry() {
+#[doc(hidden)]
+pub fn reset_charset_registry() {
     // A Context activatable on a different heap needs its own mutable registry
     // bound to the current heap: callers may define charsets through the slot
     // before installing the Context's registry.
@@ -1275,21 +1282,22 @@ pub(crate) fn collect_charset_gc_roots(roots: &mut Vec<Value>, heap_identity: us
     }
 }
 
-pub(crate) type CharsetRegistryHandle = HeapRegistryHandle<CharsetRegistry>;
+#[doc(hidden)]
+pub type CharsetRegistryHandle = HeapRegistryHandle<CharsetRegistry>;
 
-pub(crate) fn current_charset_registry_handle() -> CharsetRegistryHandle {
+#[doc(hidden)]
+pub fn current_charset_registry_handle() -> CharsetRegistryHandle {
     CHARSET_REGISTRY.with(HeapRegistrySlot::current)
 }
 
-pub(crate) fn install_charset_registry_handle(handle: &CharsetRegistryHandle) {
+#[doc(hidden)]
+pub fn install_charset_registry_handle(handle: &CharsetRegistryHandle) {
     CHARSET_REGISTRY.with(|slot| slot.install(handle));
 }
 
 /// Context-owned registries remain roots while another heap is active.
-pub(crate) fn collect_charset_registry_gc_roots(
-    handle: &CharsetRegistryHandle,
-    roots: &mut Vec<Value>,
-) {
+#[doc(hidden)]
+pub fn collect_charset_registry_gc_roots(handle: &CharsetRegistryHandle, roots: &mut Vec<Value>) {
     let registry = handle.borrow();
     for info in registry.charsets.values() {
         if !info.unify_map.is_nil() {
@@ -1299,21 +1307,25 @@ pub(crate) fn collect_charset_registry_gc_roots(
     }
 }
 
-pub(crate) fn snapshot_charset_registry() -> CharsetRegistrySnapshot {
+#[doc(hidden)]
+pub fn snapshot_charset_registry() -> CharsetRegistrySnapshot {
     CHARSET_REGISTRY.with(|slot| slot.borrow().snapshot())
 }
 
-pub(crate) fn restore_charset_registry(snapshot: CharsetRegistrySnapshot) {
+#[doc(hidden)]
+pub fn restore_charset_registry(snapshot: CharsetRegistrySnapshot) {
     CHARSET_REGISTRY.with(|slot| *slot.borrow_mut() = CharsetRegistry::restore(snapshot));
     publish_charset_preference();
 }
 
 /// Set the plist for a charset (used by `set-charset-plist` builtin).
-pub(crate) fn set_charset_plist_registry(name: SymId, plist: Vec<(SymId, Value)>) {
+#[doc(hidden)]
+pub fn set_charset_plist_registry(name: SymId, plist: Vec<(SymId, Value)>) {
     CHARSET_REGISTRY.with(|slot| slot.borrow_mut().set_plist(name, plist));
 }
 
-pub(crate) fn charset_target_ranges(name: &str) -> Option<Vec<(u32, u32)>> {
+#[doc(hidden)]
+pub fn charset_target_ranges(name: &str) -> Option<Vec<(u32, u32)>> {
     CHARSET_REGISTRY.with(|slot| {
         let reg = slot.borrow();
         let name = lookup_interned(name)?;
@@ -1413,7 +1425,8 @@ fn offset_charset_char_ranges(
     }
 }
 
-pub(crate) fn map_charset_char_ranges(
+#[doc(hidden)]
+pub fn map_charset_char_ranges(
     name: &str,
     from_code: Option<i64>,
     to_code: Option<i64>,
@@ -1459,11 +1472,13 @@ pub(crate) fn map_charset_char_ranges(
     })
 }
 
-pub(crate) fn charset_exists(name: &str) -> bool {
+#[doc(hidden)]
+pub fn charset_exists(name: &str) -> bool {
     CHARSET_REGISTRY.with(|slot| slot.borrow().contains(name))
 }
 
-pub(crate) fn charset_contains_char(name: &str, ch: u32) -> Option<bool> {
+#[doc(hidden)]
+pub fn charset_contains_char(name: &str, ch: u32) -> Option<bool> {
     CHARSET_REGISTRY.with(|slot| {
         let reg = slot.borrow();
         let name = lookup_interned(name)?;
@@ -2007,7 +2022,8 @@ pub(crate) fn builtin_charsetp(args: Vec<Value>) -> EvalResult {
     builtin_charsetp_with_symbols(args, SymbolMode::Bare)
 }
 
-pub(crate) fn builtin_charsetp_in_state<H: TextHost>(eval: &mut H, args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_charsetp_in_state<H: TextHost>(eval: &mut H, args: Vec<Value>) -> EvalResult {
     builtin_charsetp_with_symbols(args, eval.symbol_mode())
 }
 
@@ -2044,7 +2060,8 @@ pub(crate) fn builtin_unibyte_charset(args: Vec<Value>) -> EvalResult {
 /// `(charset-priority-list &optional HIGHESTP)` -- return list of charsets
 /// in priority order.  If HIGHESTP is non-nil, return only the highest
 /// priority charset.
-pub(crate) fn builtin_charset_priority_list(args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_charset_priority_list(args: Vec<Value>) -> EvalResult {
     expect_max_args("charset-priority-list", &args, 1)?;
     let highestp = args.first().map(|v| v.is_truthy()).unwrap_or(false);
     CHARSET_REGISTRY.with(|slot| {
@@ -2071,7 +2088,8 @@ pub(crate) fn builtin_set_charset_priority(args: Vec<Value>) -> EvalResult {
     builtin_set_charset_priority_with_symbols(args, SymbolMode::Bare)
 }
 
-pub(crate) fn builtin_set_charset_priority_in_state<H: TextHost>(
+#[doc(hidden)]
+pub fn builtin_set_charset_priority_in_state<H: TextHost>(
     eval: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -2120,7 +2138,8 @@ fn builtin_set_charset_priority_with_symbols(args: Vec<Value>, mode: SymbolMode)
 /// under the default ASCII-only priority they fall through to the `unicode`
 /// parent. The live ordered list and boundary are consulted via
 /// `CharsetRegistry::classify_char` (a faithful port of GNU `char_charset`).
-pub(crate) fn char_charset_name(ch: i64) -> &'static str {
+#[doc(hidden)]
+pub fn char_charset_name(ch: i64) -> &'static str {
     let sym = CHARSET_REGISTRY.with(|slot| slot.borrow().classify_char(ch));
     resolve_sym(sym)
 }
@@ -2143,10 +2162,8 @@ pub(crate) fn builtin_char_charset(args: Vec<Value>) -> EvalResult {
     builtin_char_charset_with_symbols(args, SymbolMode::Bare)
 }
 
-pub(crate) fn builtin_char_charset_in_state<H: TextHost>(
-    eval: &mut H,
-    args: Vec<Value>,
-) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_char_charset_in_state<H: TextHost>(eval: &mut H, args: Vec<Value>) -> EvalResult {
     builtin_char_charset_with_symbols(args, eval.symbol_mode())
 }
 
@@ -2192,7 +2209,8 @@ fn builtin_char_charset_with_symbols(args: Vec<Value>, mode: SymbolMode) -> Eval
 /// dimension-3 `unicode` charset (see `char_charset_name`), non-ASCII chars
 /// yield four-element lists.  Examples (UTF-8 language environment):
 /// `(split-char ?A)` => `(ascii 65)`, `(split-char ?中)` => `(unicode 0 78 45)`.
-pub(crate) fn builtin_split_char(args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_split_char(args: Vec<Value>) -> EvalResult {
     expect_args("split-char", &args, 1)?;
     // CHECK_CHARACTER: reject non-characters like GNU (encode_char_input
     // enforces the 0..=0x3FFFFF character range and signals otherwise).
@@ -2222,10 +2240,8 @@ pub(crate) fn builtin_charset_plist(args: Vec<Value>) -> EvalResult {
     builtin_charset_plist_with_symbols(args, SymbolMode::Bare)
 }
 
-pub(crate) fn builtin_charset_plist_in_state<H: TextHost>(
-    eval: &mut H,
-    args: Vec<Value>,
-) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_charset_plist_in_state<H: TextHost>(eval: &mut H, args: Vec<Value>) -> EvalResult {
     builtin_charset_plist_with_symbols(args, eval.symbol_mode())
 }
 
@@ -2256,7 +2272,8 @@ pub(crate) fn builtin_charset_id_internal(args: Vec<Value>) -> EvalResult {
     builtin_charset_id_internal_with_symbols(args, SymbolMode::Bare)
 }
 
-pub(crate) fn builtin_charset_id_internal_in_state<H: TextHost>(
+#[doc(hidden)]
+pub fn builtin_charset_id_internal_in_state<H: TextHost>(
     eval: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -2481,10 +2498,8 @@ pub(crate) fn builtin_make_char(args: Vec<Value>) -> EvalResult {
     builtin_make_char_with_symbols(args, SymbolMode::Bare)
 }
 
-pub(crate) fn builtin_make_char_in_state<H: TextHost>(
-    eval: &mut H,
-    args: Vec<Value>,
-) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_make_char_in_state<H: TextHost>(eval: &mut H, args: Vec<Value>) -> EvalResult {
     builtin_make_char_with_symbols(args, eval.symbol_mode())
 }
 
@@ -2526,7 +2541,8 @@ pub(crate) fn builtin_define_charset_internal(args: Vec<Value>) -> EvalResult {
     builtin_define_charset_internal_with_symbols(args, SymbolMode::Bare)
 }
 
-pub(crate) fn builtin_define_charset_internal_in_state<H: TextHost>(
+#[doc(hidden)]
+pub fn builtin_define_charset_internal_in_state<H: TextHost>(
     eval: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -2697,10 +2713,15 @@ fn builtin_define_charset_internal_with_symbols(args: Vec<Value>, mode: SymbolMo
 ///
 /// Returns charset symbols present in the region `[BEG, END)` where BEG/END are
 /// Emacs 1-based character positions inside the accessible region.
-pub(crate) fn builtin_find_charset_region<H: TextHost>(h: &mut H, args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_find_charset_region<H: TextHost>(h: &mut H, args: Vec<Value>) -> EvalResult {
     expect_min_args("find-charset-region", &args, 2)?;
     expect_max_args("find-charset-region", &args, 3)?;
-    let region = neovm_edit::emacs_core::position::LispRegionArgs::from_values(h.buffers(), args[0], args[1])?;
+    let region = neovm_edit::emacs_core::position::LispRegionArgs::from_values(
+        h.buffers(),
+        args[0],
+        args[1],
+    )?;
 
     let buf = h
         .buffers()
@@ -2723,28 +2744,32 @@ pub(crate) fn builtin_find_charset_region<H: TextHost>(h: &mut H, args: Vec<Valu
 }
 
 /// `(encode-big5-char CH)` -- encode character CH in BIG5 space.
-pub(crate) fn builtin_encode_big5_char(args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_encode_big5_char(args: Vec<Value>) -> EvalResult {
     expect_args("encode-big5-char", &args, 1)?;
     let ch = encode_char_input(&args[0])?;
     Ok(Value::fixnum(ch))
 }
 
 /// `(decode-big5-char CODE)` -- decode BIG5 code to Emacs character code.
-pub(crate) fn builtin_decode_big5_char(args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_decode_big5_char(args: Vec<Value>) -> EvalResult {
     expect_args("decode-big5-char", &args, 1)?;
     let code = expect_wholenump(&args[0])?;
     Ok(Value::fixnum(code))
 }
 
 /// `(encode-sjis-char CH)` -- encode character CH in Shift-JIS space.
-pub(crate) fn builtin_encode_sjis_char(args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_encode_sjis_char(args: Vec<Value>) -> EvalResult {
     expect_args("encode-sjis-char", &args, 1)?;
     let ch = encode_char_input(&args[0])?;
     Ok(Value::fixnum(ch))
 }
 
 /// `(decode-sjis-char CODE)` -- decode Shift-JIS code to Emacs character code.
-pub(crate) fn builtin_decode_sjis_char(args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_decode_sjis_char(args: Vec<Value>) -> EvalResult {
     expect_args("decode-sjis-char", &args, 1)?;
     let code = expect_wholenump(&args[0])?;
     Ok(Value::fixnum(code))
@@ -2752,7 +2777,8 @@ pub(crate) fn builtin_decode_sjis_char(args: Vec<Value>) -> EvalResult {
 
 /// `(get-unused-iso-final-char DIMENSION CHARS)` -- return an available ISO
 /// final-char code for the requested DIMENSION/CHARS class.
-pub(crate) fn builtin_get_unused_iso_final_char(args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_get_unused_iso_final_char(args: Vec<Value>) -> EvalResult {
     expect_args("get-unused-iso-final-char", &args, 2)?;
     let dimension = expect_fixnump(&args[0])?;
     let chars = expect_fixnump(&args[1])?;
@@ -2789,7 +2815,8 @@ pub(crate) fn builtin_declare_equiv_charset(args: Vec<Value>) -> EvalResult {
     builtin_declare_equiv_charset_with_symbols(args, SymbolMode::Bare)
 }
 
-pub(crate) fn builtin_declare_equiv_charset_in_state<H: TextHost>(
+#[doc(hidden)]
+pub fn builtin_declare_equiv_charset_in_state<H: TextHost>(
     eval: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -2827,7 +2854,8 @@ pub(crate) fn builtin_define_charset_alias(args: Vec<Value>) -> EvalResult {
     builtin_define_charset_alias_with_symbols(args, SymbolMode::Bare)
 }
 
-pub(crate) fn builtin_define_charset_alias_in_state<H: TextHost>(
+#[doc(hidden)]
+pub fn builtin_define_charset_alias_in_state<H: TextHost>(
     eval: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -2845,7 +2873,8 @@ fn builtin_define_charset_alias_with_symbols(args: Vec<Value>, mode: SymbolMode)
 
 /// `(find-charset-string STR &optional TABLE)` -- returns a list of charsets
 /// present in STR.
-pub(crate) fn builtin_find_charset_string(args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_find_charset_string(args: Vec<Value>) -> EvalResult {
     expect_min_args("find-charset-string", &args, 1)?;
     expect_max_args("find-charset-string", &args, 2)?;
     if !args[0].is_string() {
@@ -2880,10 +2909,8 @@ pub(crate) fn builtin_decode_char(args: Vec<Value>) -> EvalResult {
     builtin_decode_char_with_symbols(args, SymbolMode::Bare)
 }
 
-pub(crate) fn builtin_decode_char_in_state<H: TextHost>(
-    eval: &mut H,
-    args: Vec<Value>,
-) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_decode_char_in_state<H: TextHost>(eval: &mut H, args: Vec<Value>) -> EvalResult {
     builtin_decode_char_with_symbols(args, eval.symbol_mode())
 }
 
@@ -2906,10 +2933,8 @@ pub(crate) fn builtin_encode_char(args: Vec<Value>) -> EvalResult {
     builtin_encode_char_with_symbols(args, SymbolMode::Bare)
 }
 
-pub(crate) fn builtin_encode_char_in_state<H: TextHost>(
-    eval: &mut H,
-    args: Vec<Value>,
-) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_encode_char_in_state<H: TextHost>(eval: &mut H, args: Vec<Value>) -> EvalResult {
     builtin_encode_char_with_symbols(args, eval.symbol_mode())
 }
 
@@ -2930,10 +2955,8 @@ pub(crate) fn builtin_unify_charset(args: Vec<Value>) -> EvalResult {
     builtin_unify_charset_with_symbols(args, SymbolMode::Bare)
 }
 
-pub(crate) fn builtin_unify_charset_in_state<H: TextHost>(
-    eval: &mut H,
-    args: Vec<Value>,
-) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_unify_charset_in_state<H: TextHost>(eval: &mut H, args: Vec<Value>) -> EvalResult {
     builtin_unify_charset_with_symbols(args, eval.symbol_mode())
 }
 
@@ -2980,7 +3003,8 @@ fn builtin_unify_charset_with_symbols(args: Vec<Value>, mode: SymbolMode) -> Eva
 }
 
 /// `(clear-charset-maps)` -- clear charset-related caches and return nil.
-pub(crate) fn builtin_clear_charset_maps(args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_clear_charset_maps(args: Vec<Value>) -> EvalResult {
     expect_max_args("clear-charset-maps", &args, 0)?;
     if let Ok(mut cache) = charset_map_cache().write() {
         cache.clear();
@@ -2993,7 +3017,8 @@ pub(crate) fn builtin_clear_charset_maps(args: Vec<Value>) -> EvalResult {
 /// Returns the charset of the character at POS (1-based), or the character
 /// after point when POS is omitted. Returns nil at end-of-buffer or for
 /// out-of-range numeric positions.
-pub(crate) fn builtin_charset_after<H: TextHost>(h: &mut H, args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_charset_after<H: TextHost>(h: &mut H, args: Vec<Value>) -> EvalResult {
     expect_max_args("charset-after", &args, 1)?;
     let buf = h
         .buffers()
@@ -3098,19 +3123,22 @@ mod positioned_dispatch_tests;
 /// Carrier park: forget the installed registry handle (a plain store). The
 /// World's registry stays alive through its Contexts; the idle carrier keeps
 /// no heap-identified handle.
-pub(crate) fn park_carrier_tls() {
+#[doc(hidden)]
+pub fn park_carrier_tls() {
     CHARSET_REGISTRY.with(HeapRegistrySlot::park);
 }
 
 /// Deferred carrier reset: the charset map memo is native data with no heap
 /// pointer, so clearing it may wait for the reused job's reset.
-pub(crate) fn reset_carrier_tls() {
+#[doc(hidden)]
+pub fn reset_carrier_tls() {
     CHARSET_MAP_MEMO.with(|memo| memo.borrow_mut().clear());
 }
 
 /// Debug-only carrier TLS fingerprint for this module's classified records.
 #[cfg(debug_assertions)]
-pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+#[doc(hidden)]
+pub fn carrier_tls_fingerprint(h: &mut u64) {
     neovm_value::tls_fingerprint::mix(h, CHARSET_MAP_MEMO.with(|slot| slot.borrow().len() as u64));
     // The registry slot's own fingerprint is a constant: reading it would run
     // the lazy initializer, which in test builds allocates the canonical

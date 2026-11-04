@@ -12,10 +12,10 @@
 //! T2. These regression tests target stable public entry points
 //! (builtins + buffer-manager helpers) that survive the refactor.
 
-use neovm_edit::buffer::BufferId;
 use crate::emacs_core::eval::Context;
-use neovm_value::value::Value;
+use neovm_edit::buffer::BufferId;
 use neovm_value::tagged::value::ValueKind;
+use neovm_value::value::Value;
 
 fn ctx_with_buffer(text: &str) -> (Context, BufferId) {
     let mut ctx = Context::new();

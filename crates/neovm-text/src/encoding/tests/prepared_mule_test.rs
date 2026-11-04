@@ -2,8 +2,8 @@ use super::*;
 use crate::emacs_core::charset::{
     CharsetMethodSnapshot, restore_charset_registry, snapshot_charset_registry,
 };
-use neovm_value::intern::intern;
 use neovm_value::heap_types::LispString;
+use neovm_value::intern::intern;
 
 // Exercise the enabled body directly, without changing process environment or
 // racing the once-only runtime knob.
@@ -11,10 +11,7 @@ fn encode_prepared(source: &LispString) -> Vec<u8> {
     encode_via_emacs_mule_prepared(source)
 }
 
-fn install_overlapping_charsets() -> (
-    neovm_value::intern::SymId,
-    neovm_value::intern::SymId,
-) {
+fn install_overlapping_charsets() -> (neovm_value::intern::SymId, neovm_value::intern::SymId) {
     let mut snapshot = snapshot_charset_registry();
     let template = snapshot
         .charsets

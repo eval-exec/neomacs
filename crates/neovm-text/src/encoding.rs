@@ -13,11 +13,11 @@ use neovm_value::error::LispCondition;
 use neovm_value::error::{expect_args, expect_args_range, expect_min_args};
 use neovm_value::intern::{SymId, intern, resolve_sym};
 // encoding.rs: sentinel imports removed; using emacs_char + LispString directly
+use encoding_rs::{BIG5, GBK};
 use neovm_edit::buffer::{EmacsBytePos, EmacsByteRange, LispCharPos1, TextPositionAnchor};
 use neovm_edit::emacs_core::display_metrics::display_glyph_character;
 pub use neovm_value::emacs_char::char_width;
 use neovm_value::emacs_char::{GNU_DEFAULT_WIDE_RANGES, ZERO_WIDTH_RANGES};
-use encoding_rs::{BIG5, GBK};
 use neovm_value::value::{StringTextPropertyRun, Value, ValueKind};
 
 const MAX_CHAR_CODE: i64 = 0x3F_FFFF;
@@ -89,7 +89,8 @@ pub(crate) fn char_width_for_code_with_display_table(
 /// mutators. Its borrow prevents Lisp callbacks/GC from invalidating table Values.
 /// GNU's CHARACTER_WIDTH (src/buffer.h:1708-1715) gives printable ASCII its fixed
 /// width, then consults the live char-width-table for non-ASCII characters.
-pub(crate) struct CharacterWidthPolicy<'ctx, H: TextHost> {
+#[doc(hidden)]
+pub struct CharacterWidthPolicy<'ctx, H: TextHost> {
     width_table: std::cell::OnceCell<CharacterWidthTable>,
     display_table: Option<Value>,
     control: std::cell::OnceCell<ControlCharacterDisplay>,
@@ -115,7 +116,8 @@ enum ControlCharacterDisplay {
 }
 
 impl<'ctx, H: TextHost> CharacterWidthPolicy<'ctx, H> {
-    pub(crate) fn from_context(ctx: &'ctx H) -> Self {
+    #[doc(hidden)]
+    pub fn from_context(ctx: &'ctx H) -> Self {
         Self {
             width_table: std::cell::OnceCell::new(),
             display_table: active_display_table(ctx),
@@ -165,7 +167,8 @@ impl<'ctx, H: TextHost> CharacterWidthPolicy<'ctx, H> {
     }
 
     #[inline(always)]
-    pub(crate) fn width(&self, code: u32) -> usize {
+    #[doc(hidden)]
+    pub fn width(&self, code: u32) -> usize {
         if let Some(table) = self.display_table
             && let Ok(value) = crate::emacs_core::chartable::ct_lookup(&table, i64::from(code))
             && let Some(glyphs) = value.as_vector_data()
@@ -208,7 +211,8 @@ impl CharacterWidthTable {
 ///
 /// Only the process-global symbol identity is shared among mutators; the table
 /// itself stays a mutator-owned object.
-pub(crate) fn char_width_table_value<H: TextHost>(ctx: &H) -> Option<Value> {
+#[doc(hidden)]
+pub fn char_width_table_value<H: TextHost>(ctx: &H) -> Option<Value> {
     static SYMBOL: std::sync::OnceLock<SymId> = std::sync::OnceLock::new();
     let symbol = *SYMBOL.get_or_init(|| intern("char-width-table"));
     ctx.eval_symbol_by_id(symbol)
@@ -219,7 +223,8 @@ pub(crate) fn char_width_table_value<H: TextHost>(ctx: &H) -> Option<Value> {
 /// GNU `CHARACTER_WIDTH` under `TABLE`: the live char-width-table entry when
 /// it carries a sane fixnum, else the built-in width for CODE.
 #[inline(always)]
-pub(crate) fn char_width_in_table(table: Option<Value>, code: u32) -> usize {
+#[doc(hidden)]
+pub fn char_width_in_table(table: Option<Value>, code: u32) -> usize {
     table
         .and_then(|table| crate::emacs_core::chartable::ct_lookup(&table, i64::from(code)).ok())
         .and_then(|width| width.as_fixnum())
@@ -236,7 +241,8 @@ pub(crate) fn char_width_in_table(table: Option<Value>, code: u32) -> usize {
 /// GNU's initial char-width-table (character.c:1112-1119), including
 /// characters.el:992-1429's Unicode ranges.
 /// Each context owns its table; construction does not cache mutator Lisp state.
-pub(crate) fn default_char_width_table() -> Value {
+#[doc(hidden)]
+pub fn default_char_width_table() -> Value {
     use crate::emacs_core::chartable::{builtin_set_char_table_range, make_char_table_value};
     let table = make_char_table_value(Value::symbol("char-width-table"), Value::fixnum(1));
     let set = |start: u32, end: u32, width: i64| {
@@ -515,7 +521,8 @@ pub(crate) fn decode_eol_text(
 /// -- and visible in behaviour too: a subprocess whose buffer is unibyte, i.e.
 /// the `raw_text_coding_system` downgrade, reports `raw-text-dos` for
 /// `caf <c3> <a9> CR LF`, never `utf-8-dos`.
-pub(crate) fn coding_name_requires_detection(coding_system: &str) -> bool {
+#[doc(hidden)]
+pub fn coding_name_requires_detection(coding_system: &str) -> bool {
     matches!(
         coding_system_base(coding_system),
         "undecided" | "prefer-utf-8" | "utf-8-auto" | "utf-16"
@@ -540,7 +547,8 @@ pub(crate) fn coding_name_requires_detection(coding_system: &str) -> bool {
 /// whose first chunk is `a CRLF b CRLF` reports `undecided-dos` -- the eol half
 /// moved and the character half did not -- and a later non-ASCII chunk still
 /// moves it on to `utf-8-dos`.
-pub(crate) fn detected_coding_name(
+#[doc(hidden)]
+pub fn detected_coding_name(
     coding_systems: &crate::emacs_core::coding::CodingSystemManager,
     coding_system: &str,
     bytes: &[u8],
@@ -589,7 +597,8 @@ pub(crate) fn detected_coding_name(
 /// each read is a separate call -- is for the call to hand its answer back to
 /// the process record.
 #[derive(Debug)]
-pub(crate) struct DecodedProcessRun {
+#[doc(hidden)]
+pub struct DecodedProcessRun {
     /// The text to insert, after both conversions.
     pub(crate) text: neovm_value::heap_types::LispString,
     /// GNU `CODING_ID_NAME (coding->id)` once both rewrites have had their
@@ -646,7 +655,8 @@ pub(crate) fn adjusted_coding_name(
 /// but DOS/Windows, i.e. `AREF (eol_type, 0)`.  `read_process_output_set_last_coding_system`
 /// uses it to complete a process's ENCODE coding system from the coding its
 /// output was just decoded with (src/process.c:6442-6444).
-pub(crate) fn coding_inherit_unix_eol_type(
+#[doc(hidden)]
+pub fn coding_inherit_unix_eol_type(
     coding_systems: &crate::emacs_core::coding::CodingSystemManager,
     coding_system: &str,
 ) -> String {
@@ -695,7 +705,8 @@ fn decode_eol_bytes(bytes: &[u8], eol: crate::emacs_core::coding::ResolvedEol) -
     }
 }
 
-pub(crate) fn coding_system_family(coding_system: &str) -> &str {
+#[doc(hidden)]
+pub fn coding_system_family(coding_system: &str) -> &str {
     match coding_system_base(coding_system) {
         "utf-8-with-signature" => "utf-8",
         "latin-1" | "iso-8859-1" | "iso-latin-1" => "iso-latin-1",
@@ -1145,7 +1156,8 @@ fn encode_utf8_emacs_text(s: &str) -> Vec<u8> {
     out
 }
 
-pub(crate) fn encode_lisp_string(
+#[doc(hidden)]
+pub fn encode_lisp_string(
     s: &neovm_value::heap_types::LispString,
     coding_system: &str,
     eol_conversion: crate::emacs_core::coding::EolConversion,
@@ -1320,7 +1332,8 @@ pub(crate) fn encode_string(
 
 /// Decode bytes to a string using the specified coding system.
 /// Currently only UTF-8 is supported.
-pub(crate) fn decode_bytes(
+#[doc(hidden)]
+pub fn decode_bytes(
     bytes: &[u8],
     coding_system: &str,
     eol_conversion: crate::emacs_core::coding::EolConversion,
@@ -1401,7 +1414,8 @@ pub(crate) fn decode_bytes_emacs(
     decode_bytes(bytes, coding_system, eol_conversion).into_bytes()
 }
 
-pub(crate) fn decode_bytes_to_lisp_string(
+#[doc(hidden)]
+pub fn decode_bytes_to_lisp_string(
     bytes: &[u8],
     coding_system: &str,
     eol_conversion: crate::emacs_core::coding::EolConversion,
@@ -1980,7 +1994,10 @@ fn general_charset_coding_list<H: TextHost>(
 /// system): each character is emitted as the bytes of the first charset that
 /// can represent it, and characters that no charset can encode are replaced by
 /// a space (0x20), matching GNU `encode-coding-string`.
-fn encode_via_charset_list(s: &neovm_value::heap_types::LispString, charset_list: &[SymId]) -> Vec<u8> {
+fn encode_via_charset_list(
+    s: &neovm_value::heap_types::LispString,
+    charset_list: &[SymId],
+) -> Vec<u8> {
     let mut out = Vec::with_capacity(s.sbytes());
     let emit = |code: u32, out: &mut Vec<u8>| {
         // GNU `encode_coding_charset': a raw 8-bit byte goes out as itself.
@@ -5374,7 +5391,8 @@ fn builtin_coding_string_in_context<H: TextHost>(
     Ok(Value::fixnum(result_text.schars() as i64))
 }
 
-pub(crate) fn builtin_encode_coding_string_in_context<H: TextHost>(
+#[doc(hidden)]
+pub fn builtin_encode_coding_string_in_context<H: TextHost>(
     ctx: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -5388,7 +5406,8 @@ pub(crate) fn builtin_encode_coding_string_in_context<H: TextHost>(
     )
 }
 
-pub(crate) fn builtin_decode_coding_string_in_context<H: TextHost>(
+#[doc(hidden)]
+pub fn builtin_decode_coding_string_in_context<H: TextHost>(
     ctx: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -5404,7 +5423,8 @@ pub(crate) fn builtin_decode_coding_string_in_context<H: TextHost>(
 
 /// An externally encoded byte stream together with the concrete coding system
 /// that produced it.
-pub(crate) struct EncodedTextBytes {
+#[doc(hidden)]
+pub struct EncodedTextBytes {
     pub(crate) bytes: Vec<u8>,
     pub(crate) coding_system: neovm_value::intern::SymId,
 }
@@ -5418,24 +5438,28 @@ pub(crate) struct EncodedTextBytes {
 pub struct RuntimeCodingSystem(neovm_value::intern::SymId);
 
 impl RuntimeCodingSystem {
-    pub(crate) fn from_symbol(symbol: neovm_value::intern::SymId) -> Self {
+    #[doc(hidden)]
+    pub fn from_symbol(symbol: neovm_value::intern::SymId) -> Self {
         Self(symbol)
     }
 
-    pub(crate) fn symbol(self) -> neovm_value::intern::SymId {
+    #[doc(hidden)]
+    pub fn symbol(self) -> neovm_value::intern::SymId {
         self.0
     }
 }
 
 /// Runtime attributes of a coding, including an implicit EOL subsidiary.
 /// The registry stores some subsidiary names through their registered base.
-pub(crate) struct RuntimeCodingMetadata<'a> {
+#[doc(hidden)]
+pub struct RuntimeCodingMetadata<'a> {
     pub(crate) info: &'a crate::emacs_core::coding::CodingSystemInfo,
     pub(crate) eol_type: crate::emacs_core::coding::EolType,
 }
 
 impl RuntimeCodingSystem {
-    pub(crate) fn metadata(
+    #[doc(hidden)]
+    pub fn metadata(
         self,
         systems: &crate::emacs_core::coding::CodingSystemManager,
     ) -> Option<RuntimeCodingMetadata<'_>> {
@@ -5513,7 +5537,8 @@ fn encode_external_text_with_boundary<H: TextHost>(
     })
 }
 
-pub(crate) fn encode_external_text_in_context<H: TextHost>(
+#[doc(hidden)]
+pub fn encode_external_text_in_context<H: TextHost>(
     ctx: &mut H,
     text: neovm_value::heap_types::LispString,
     coding: RuntimeCodingSystem,
@@ -5523,7 +5548,8 @@ pub(crate) fn encode_external_text_in_context<H: TextHost>(
 
 /// Encode one subprocess write through runtime coding definitions and hooks.
 /// A send is a stream chunk, so it must not append an end-of-stream reset.
-pub(crate) fn encode_process_text_in_context<H: TextHost>(
+#[doc(hidden)]
+pub fn encode_process_text_in_context<H: TextHost>(
     ctx: &mut H,
     text: neovm_value::heap_types::LispString,
     coding: RuntimeCodingSystem,
@@ -5549,7 +5575,8 @@ pub(crate) fn encode_process_text_in_context<H: TextHost>(
 /// Unlike complete string or region conversion, this operation does not claim
 /// the final coding block. Stateful encoders therefore preserve their ending
 /// designation instead of appending a synthetic stream terminator.
-pub(crate) fn encode_file_region_in_context<H: TextHost>(
+#[doc(hidden)]
+pub fn encode_file_region_in_context<H: TextHost>(
     ctx: &mut H,
     text: neovm_value::heap_types::LispString,
     coding: RuntimeCodingSystem,
@@ -5559,7 +5586,8 @@ pub(crate) fn encode_file_region_in_context<H: TextHost>(
 
 /// A file decode result whose coding-system selection remains an interned
 /// protocol value until the file-I/O boundary needs its Lisp name.
-pub(crate) struct DecodedFileBytes {
+#[doc(hidden)]
+pub struct DecodedFileBytes {
     pub(crate) text: neovm_value::heap_types::LispString,
     pub(crate) coding_system: neovm_value::intern::SymId,
 }
@@ -5572,12 +5600,15 @@ pub(crate) struct DecodedFileBytes {
 /// Encapsulate GNU's `last-coding-system-used` protocol here and return the
 /// concrete interned coding-system symbol together with the decoded text, so
 /// file-I/O callers cannot accidentally report the unresolved input alias.
-pub(crate) fn decode_file_bytes_in_context<H: TextHost>(
+#[doc(hidden)]
+pub fn decode_file_bytes_in_context<H: TextHost>(
     ctx: &mut H,
     bytes: &[u8],
     coding: &str,
 ) -> Result<DecodedFileBytes, neovm_value::error::Flow> {
-    let source = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(bytes.to_vec()));
+    let source = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(
+        bytes.to_vec(),
+    ));
     let decoded = builtin_coding_string_in_context(
         ctx,
         vec![source, Value::symbol(coding)],
@@ -5628,14 +5659,17 @@ pub(crate) fn decode_file_bytes_in_context<H: TextHost>(
 /// [`crate::emacs_core::process::PendingProcessRun`] hand-off: the evaluator
 /// owns the `ProcessManager`, so the read has to have let go of the process
 /// before this can be called.
-pub(crate) fn decode_process_run_in_context<H: TextHost>(
+#[doc(hidden)]
+pub fn decode_process_run_in_context<H: TextHost>(
     ctx: &mut H,
     bytes: &[u8],
     coding: &'static str,
     state: &mut CodingDecoderState,
     block: crate::emacs_core::coding::SourceBlock,
 ) -> Result<DecodedProcessRun, neovm_value::error::Flow> {
-    let source = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(bytes.to_vec()));
+    let source = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(
+        bytes.to_vec(),
+    ));
     let mut run = CodingRun::process_read(state, block);
     let decoded = builtin_coding_string_in_context(
         ctx,
@@ -5885,17 +5919,13 @@ fn builtin_coding_region<H: TextHost>(
     }
 }
 
-pub(crate) fn builtin_encode_coding_region<H: TextHost>(
-    ctx: &mut H,
-    args: Vec<Value>,
-) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_encode_coding_region<H: TextHost>(ctx: &mut H, args: Vec<Value>) -> EvalResult {
     builtin_coding_region(ctx, args, CodingDirection::Encode)
 }
 
-pub(crate) fn builtin_decode_coding_region<H: TextHost>(
-    ctx: &mut H,
-    args: Vec<Value>,
-) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_decode_coding_region<H: TextHost>(ctx: &mut H, args: Vec<Value>) -> EvalResult {
     builtin_coding_region(ctx, args, CodingDirection::Decode)
 }
 
@@ -5906,7 +5936,8 @@ pub(crate) fn builtin_char_width(args: Vec<Value>) -> EvalResult {
 }
 
 /// `(char-width CHAR)` -> integer in the current buffer.
-pub(crate) fn builtin_char_width_in_context<H: TextHost>(ctx: &H, args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_char_width_in_context<H: TextHost>(ctx: &H, args: Vec<Value>) -> EvalResult {
     expect_args("char-width", &args, 1)?;
     let code = args[0]
         .as_fixnum()
@@ -5946,7 +5977,8 @@ fn builtin_char_width_with_display_table(
 }
 
 /// `(string-bytes STRING)` -> integer byte length of STRING.
-pub(crate) fn builtin_string_bytes_1<H: crate::emacs_core::text_host::TextHost>(
+#[doc(hidden)]
+pub fn builtin_string_bytes_1<H: crate::emacs_core::text_host::TextHost>(
     _ctx: &mut H,
     arg: Value,
 ) -> EvalResult {
@@ -5960,7 +5992,8 @@ pub(crate) fn builtin_string_bytes_1<H: crate::emacs_core::text_host::TextHost>(
 }
 
 /// `(multibyte-string-p STRING)` -> t or nil
-pub(crate) fn builtin_multibyte_string_p_1<H: crate::emacs_core::text_host::TextHost>(
+#[doc(hidden)]
+pub fn builtin_multibyte_string_p_1<H: crate::emacs_core::text_host::TextHost>(
     _ctx: &mut H,
     arg: Value,
 ) -> EvalResult {
@@ -6124,11 +6157,9 @@ pub(crate) fn builtin_decode_coding_string_with_known(
         // 0x3FFF00+ extended form and real Private-Use-Area glyphs keep their
         // code points — never the colliding in-Unicode sentinels (issue #131).
         return Ok(Value::heap_string(
-            neovm_value::heap_types::LispString::from_emacs_bytes(decode_utf8_coding_to_emacs_bytes(
-                &bytes,
-                &coding,
-                eol_conversion,
-            )),
+            neovm_value::heap_types::LispString::from_emacs_bytes(
+                decode_utf8_coding_to_emacs_bytes(&bytes, &coding, eol_conversion),
+            ),
         ));
     }
     let decoded = decode_bytes(&bytes, &coding, eol_conversion);
@@ -6150,7 +6181,8 @@ pub(crate) fn builtin_decode_coding_string_with_known(
 }
 
 /// `(char-or-string-p OBJ)` -> t or nil
-pub(crate) fn builtin_char_or_string_p_1<H: crate::emacs_core::text_host::TextHost>(
+#[doc(hidden)]
+pub fn builtin_char_or_string_p_1<H: crate::emacs_core::text_host::TextHost>(
     _ctx: &mut H,
     arg: Value,
 ) -> EvalResult {
@@ -6194,7 +6226,8 @@ pub(crate) fn builtin_char_displayable_p(args: Vec<Value>) -> EvalResult {
 }
 
 /// `(max-char)` -> integer
-pub(crate) fn builtin_max_char(args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_max_char(args: Vec<Value>) -> EvalResult {
     if args.len() > 1 {
         return Err(signal(
             LispCondition::WrongNumberOfArguments,
@@ -6216,3 +6249,55 @@ pub(crate) fn builtin_max_char(args: Vec<Value>) -> EvalResult {
 #[cfg(test)]
 #[path = "encoding/tests/encoding_test.rs"]
 mod tests;
+
+#[doc(hidden)]
+impl EncodedTextBytes {
+    #[doc(hidden)]
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    #[doc(hidden)]
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.bytes
+    }
+
+    #[doc(hidden)]
+    pub fn coding_system(&self) -> neovm_value::intern::SymId {
+        self.coding_system
+    }
+}
+
+#[doc(hidden)]
+impl DecodedFileBytes {
+    #[doc(hidden)]
+    pub fn into_parts(
+        self,
+    ) -> (
+        neovm_value::heap_types::LispString,
+        neovm_value::intern::SymId,
+    ) {
+        (self.text, self.coding_system)
+    }
+}
+
+#[doc(hidden)]
+impl DecodedProcessRun {
+    #[doc(hidden)]
+    pub fn into_parts(self) -> (neovm_value::heap_types::LispString, &'static str, Vec<u8>) {
+        (self.text, self.used, self.carryover)
+    }
+}
+
+#[doc(hidden)]
+impl<'a> RuntimeCodingMetadata<'a> {
+    #[doc(hidden)]
+    pub fn info(&self) -> &'a crate::emacs_core::coding::CodingSystemInfo {
+        self.info
+    }
+
+    #[doc(hidden)]
+    pub fn eol_type(&self) -> crate::emacs_core::coding::EolType {
+        self.eol_type
+    }
+}

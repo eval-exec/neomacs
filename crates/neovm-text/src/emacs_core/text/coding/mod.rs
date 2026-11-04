@@ -18,15 +18,15 @@
 
 use super::text_host::{TextHost, TextVariableStore};
 use neovm_edit::buffer::{BufferManager, EmacsByteRange, LispCharPos1};
-use neovm_value::emacs_char::EmacsChar;
-use neovm_value::heap_types::LispString;
-use neovm_value::tagged::value::SymbolMode;
 use neovm_edit::emacs_core::edit_host::EditVariableRead;
+use neovm_value::emacs_char::EmacsChar;
 use neovm_value::error::LispCondition;
 use neovm_value::error::{EvalResult, Flow, signal};
 use neovm_value::error::{expect_args, expect_max_args, expect_min_args};
+use neovm_value::heap_types::LispString;
 use neovm_value::intern::WellKnown;
 use neovm_value::intern::{SymId, intern, lookup_interned, resolve_sym};
+use neovm_value::tagged::value::SymbolMode;
 use neovm_value::value::*;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use std::collections::{HashMap, HashSet};
@@ -311,7 +311,8 @@ pub enum EolConversion {
 impl EolConversion {
     /// The variable's Lisp value, read the way GNU's C code sees a
     /// `DEFVAR_BOOL`: any non-nil value inhibits.
-    pub(crate) fn from_lisp(value: Value) -> Self {
+    #[doc(hidden)]
+    pub fn from_lisp(value: Value) -> Self {
         if value.is_nil() {
             EolConversion::Enabled
         } else {
@@ -491,14 +492,16 @@ fn detect_decoded_eol_seen(bytes: &[u8]) -> Option<DecodeEolSeen> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, EnumString, IntoStaticStr)]
 #[strum(serialize_all = "kebab-case")]
-pub(crate) enum TextQuotingStyle {
+#[doc(hidden)]
+pub enum TextQuotingStyle {
     Grave,
     Straight,
     Curve,
 }
 
 impl TextQuotingStyle {
-    pub(crate) fn from_symbol_value(value: Value, mode: SymbolMode) -> Option<Self> {
+    #[doc(hidden)]
+    pub fn from_symbol_value(value: Value, mode: SymbolMode) -> Option<Self> {
         value.as_symbol_name(mode)?.parse().ok()
     }
 
@@ -738,7 +741,8 @@ fn resolve_text_quoting_style(
 /// `grave`, `straight` and `curve` are returned verbatim, any other non-nil
 /// value is `curve`, and nil reads `internal--text-quoting-flag` and the
 /// standard display table's U+2018 entry (`src/doc.c:638-650`).
-pub(crate) fn effective_text_quoting_style<
+#[doc(hidden)]
+pub fn effective_text_quoting_style<
     'a,
     V: neovm_edit::emacs_core::edit_host::EditVariableRead<'a>,
 >(
@@ -801,7 +805,8 @@ pub(crate) fn context_text_quoting_style<H: TextHost>(eval: &H, args: Vec<Value>
 ///   - `curve'    : `` ` `` -> ‘ (U+2018), `'` -> ’ (U+2019)
 ///   - `straight' : `` ` `` -> `'`, `'` unchanged
 ///   - `grave'    : unchanged
-pub(crate) fn requote_c_error_message(msg: &str, style: TextQuotingStyle) -> String {
+#[doc(hidden)]
+pub fn requote_c_error_message(msg: &str, style: TextQuotingStyle) -> String {
     match style {
         TextQuotingStyle::Grave => msg.to_string(),
         TextQuotingStyle::Straight => msg.replace('`', "'"),
@@ -1585,7 +1590,8 @@ impl CodingSystemManager {
         canonical_runtime_name(self, name)
     }
 
-    pub(crate) fn contains_runtime_symbol(&self, symbol: SymId) -> bool {
+    #[doc(hidden)]
+    pub fn contains_runtime_symbol(&self, symbol: SymId) -> bool {
         self.systems.iter().any(|(name, info)| {
             *name == symbol
                 || info.name == symbol
@@ -1678,7 +1684,8 @@ impl CodingSystemManager {
         names
     }
 
-    pub(crate) fn keyboard_coding_sym(&self) -> SymId {
+    #[doc(hidden)]
+    pub fn keyboard_coding_sym(&self) -> SymId {
         self.keyboard_coding
     }
 
@@ -1699,7 +1706,8 @@ impl CodingSystemManager {
             crate::code_conversion_workspace::ConversionBufferEncoding::Multibyte
         }
     }
-    pub(crate) fn terminal_coding_sym(&self) -> SymId {
+    #[doc(hidden)]
+    pub fn terminal_coding_sym(&self) -> SymId {
         self.terminal_coding
     }
 
@@ -1710,7 +1718,8 @@ impl CodingSystemManager {
     /// system's name.  In particular, `prefer-utf-8` has coding type
     /// `undecided` and deliberately declares `-`, even though its name contains
     /// `utf-8`.
-    pub(crate) fn mode_line_mnemonic(&self, coding_system: SymId) -> Option<char> {
+    #[doc(hidden)]
+    pub fn mode_line_mnemonic(&self, coding_system: SymId) -> Option<char> {
         // GNU's mode line renders a nil coding system as undecided: xdisp.c
         // `decode_mode_spec_coding` emits `-` for any spec that is not a
         // vector, and nil is the furthest from a vector.  "nil" must not
@@ -1727,13 +1736,16 @@ impl CodingSystemManager {
         u32::try_from(mnemonic).ok().and_then(char::from_u32)
     }
 
-    pub(crate) fn dump_keyboard_coding_sym(&self) -> SymId {
+    #[doc(hidden)]
+    pub fn dump_keyboard_coding_sym(&self) -> SymId {
         self.keyboard_coding
     }
-    pub(crate) fn dump_terminal_coding_sym(&self) -> SymId {
+    #[doc(hidden)]
+    pub fn dump_terminal_coding_sym(&self) -> SymId {
         self.terminal_coding
     }
-    pub(crate) fn from_dump(
+    #[doc(hidden)]
+    pub fn from_dump(
         systems: HashMap<SymId, CodingSystemInfo>,
         aliases: HashMap<SymId, SymId>,
         alias_order: HashMap<SymId, Vec<SymId>>,
@@ -1754,7 +1766,8 @@ impl CodingSystemManager {
 
     /// Drop every memoized accessor answer: the registry -- or the charset
     /// registry two of the answers are computed from -- is about to change.
-    pub(crate) fn invalidate_lookup_cache(&self) {
+    #[doc(hidden)]
+    pub fn invalidate_lookup_cache(&self) {
         let mut cache = self.lookup_cache.borrow_mut();
         cache.plist.clear();
         cache.base.clear();
@@ -1827,7 +1840,8 @@ fn record_coding_system_name<S: TextVariableStore>(vars: &mut S, name: SymId) {
 /// `Vcoding_system_list` and `Vcoding_system_alist` in `src/coding.c`.
 /// When EOL is unspecified, GNU records the three subsidiary systems first
 /// and then the base coding system, all by consing onto the front.
-pub(crate) fn record_lisp_define_coding_system_internal<S: TextVariableStore>(
+#[doc(hidden)]
+pub fn record_lisp_define_coding_system_internal<S: TextVariableStore>(
     vars: &mut S,
     args: &[Value],
     mode: SymbolMode,
@@ -1850,7 +1864,8 @@ pub(crate) fn record_lisp_define_coding_system_internal<S: TextVariableStore>(
 
 /// Mirror GNU `define-coding-system-alias`: append alias metadata in the
 /// runtime registry, then cons the alias onto the Lisp-visible list and alist.
-pub(crate) fn record_lisp_define_coding_system_alias<S: TextVariableStore>(
+#[doc(hidden)]
+pub fn record_lisp_define_coding_system_alias<S: TextVariableStore>(
     vars: &mut S,
     args: &[Value],
     mode: SymbolMode,
@@ -1984,7 +1999,8 @@ pub(crate) fn builtin_coding_system_list(
 
 /// `(coding-system-aliases CODING-SYSTEM)` -- return a list of aliases for a
 /// coding system (including the name itself as the first element).
-pub(crate) fn builtin_coding_system_aliases(
+#[doc(hidden)]
+pub fn builtin_coding_system_aliases(
     mgr: &CodingSystemManager,
     args: Vec<Value>,
     mode: SymbolMode,
@@ -2440,7 +2456,8 @@ fn c_init_coding_system_plist(name: &str) -> Option<Vec<Value>> {
 
 /// `(coding-system-plist CODING-SYSTEM)` -- return a plist describing
 /// CODING-SYSTEM metadata.
-pub(crate) fn builtin_coding_system_plist(
+#[doc(hidden)]
+pub fn builtin_coding_system_plist(
     mgr: &CodingSystemManager,
     args: Vec<Value>,
     mode: SymbolMode,
@@ -2595,7 +2612,8 @@ fn builtin_coding_system_plist_uncached(
 }
 
 /// `(coding-system-put CODING-SYSTEM PROP VAL)` -- set a property of a coding system.
-pub(crate) fn builtin_coding_system_put(
+#[doc(hidden)]
+pub fn builtin_coding_system_put(
     mgr: &mut CodingSystemManager,
     args: Vec<Value>,
     mode: SymbolMode,
@@ -2695,7 +2713,8 @@ fn record_put_override(info: &mut CodingSystemInfo, prop: Value, val: Value, mod
 
 /// `(coding-system-base CODING-SYSTEM)` -- return the base coding system
 /// (stripping -unix, -dos, -mac suffixes).
-pub(crate) fn builtin_coding_system_base(
+#[doc(hidden)]
+pub fn builtin_coding_system_base(
     mgr: &CodingSystemManager,
     args: Vec<Value>,
     mode: SymbolMode,
@@ -2732,7 +2751,8 @@ fn builtin_coding_system_base_uncached(
 /// `(coding-system-eol-type CODING-SYSTEM)` -- return the EOL type.
 /// Returns 0 (unix), 1 (dos), 2 (mac), or a vector of three sub-coding-systems
 /// if the EOL type is undecided.
-pub(crate) fn builtin_coding_system_eol_type(
+#[doc(hidden)]
+pub fn builtin_coding_system_eol_type(
     mgr: &CodingSystemManager,
     args: &[Value],
     mode: SymbolMode,
@@ -2800,7 +2820,8 @@ fn builtin_coding_system_eol_type_uncached(
 /// instead of a boolean flag, and gives `write-region` and
 /// `unencodable-char-position` one definition to share.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum WriteCodingClass {
+#[doc(hidden)]
+pub enum WriteCodingClass {
     /// GNU `CODING_ATTR_TYPE == Qraw_text`: every byte is written verbatim.
     RawText,
     /// Any other coding type: the text must be checked for safe encoding.
@@ -2818,7 +2839,8 @@ fn coding_name_is_raw_text(mgr: &CodingSystemManager, name: &str) -> bool {
 }
 
 /// Classify NAME by the rule GNU's write path uses.
-pub(crate) fn classify_write_coding(mgr: &CodingSystemManager, name: &str) -> WriteCodingClass {
+#[doc(hidden)]
+pub fn classify_write_coding(mgr: &CodingSystemManager, name: &str) -> WriteCodingClass {
     if coding_name_is_raw_text(mgr, name) {
         WriteCodingClass::RawText
     } else {
@@ -2849,7 +2871,8 @@ fn concrete_eol(mgr: &CodingSystemManager, resolved_name: &str) -> Option<EolTyp
 /// (`no-conversion` stays itself); otherwise the result is `raw-text` with
 /// CODING's concrete end-of-line type, or the plain `raw-text` when its EOL
 /// is undecided.
-pub(crate) fn raw_text_coding_system(mgr: &CodingSystemManager, coding: SymId) -> SymId {
+#[doc(hidden)]
+pub fn raw_text_coding_system(mgr: &CodingSystemManager, coding: SymId) -> SymId {
     let name = resolve_sym(coding);
     if coding_name_is_raw_text(mgr, name) {
         return coding;
@@ -2865,7 +2888,8 @@ pub(crate) fn raw_text_coding_system(mgr: &CodingSystemManager, coding: SymId) -
 
 /// The parent whose end-of-line type an undecided coding system inherits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum EolParent {
+#[doc(hidden)]
+pub enum EolParent {
     /// GNU `parent == nil`: the system's EOL (Unix on this platform).
     System,
     /// GNU `parent == CODING`: its concrete EOL, or the system's when it has
@@ -2879,7 +2903,8 @@ pub(crate) enum EolParent {
 /// concrete end-of-line type (`raw-text` -> `raw-text-unix` with the system
 /// parent, `raw-text` + `utf-8-dos` -> `raw-text-dos`); a coding system that
 /// already fixes its EOL is returned unchanged.
-pub(crate) fn coding_inherit_eol_type(
+#[doc(hidden)]
+pub fn coding_inherit_eol_type(
     mgr: &CodingSystemManager,
     coding: SymId,
     parent: EolParent,
@@ -2914,7 +2939,8 @@ pub(crate) fn coding_inherit_eol_type(
 /// `raw-text` -> `raw-text-unix`).  A coding system that already carries a
 /// concrete EOL is returned unchanged.  Used for the ENCODE side of process
 /// coding systems (`set-process-coding-system`), not the DECODE side.
-pub(crate) fn coding_inherit_eol_type_unix(
+#[doc(hidden)]
+pub fn coding_inherit_eol_type_unix(
     mgr: &CodingSystemManager,
     coding_system: Value,
     mode: SymbolMode,
@@ -3171,7 +3197,8 @@ pub(crate) fn builtin_coding_system_change_text_conversion(
 
 /// `(coding-system-p OBJECT)` -- return t when OBJECT names a known coding
 /// system or alias, nil otherwise.
-pub(crate) fn builtin_coding_system_p(
+#[doc(hidden)]
+pub fn builtin_coding_system_p(
     mgr: &CodingSystemManager,
     args: Vec<Value>,
     mode: SymbolMode,
@@ -3188,7 +3215,8 @@ pub(crate) fn builtin_coding_system_p(
 
 /// `(check-coding-system CODING-SYSTEM)` -- validate CODING-SYSTEM.
 /// Returns CODING-SYSTEM when valid, nil for nil, and signals on invalid input.
-pub(crate) fn builtin_check_coding_system(
+#[doc(hidden)]
+pub fn builtin_check_coding_system(
     mgr: &CodingSystemManager,
     args: Vec<Value>,
     mode: SymbolMode,
@@ -3315,7 +3343,8 @@ fn scan_unencodable_positions(
 /// CODING-SYSTEMS can encode the region.  The ASCII/unibyte fast paths mirror
 /// GNU `Fcheck_coding_systems_region`: they return nil before validating the
 /// coding-system list.
-pub(crate) fn builtin_check_coding_systems_region<H: TextHost>(
+#[doc(hidden)]
+pub fn builtin_check_coding_systems_region<H: TextHost>(
     eval: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -3408,7 +3437,8 @@ pub(crate) fn builtin_check_coding_systems_region<H: TextHost>(
 /// nil if it encodes the whole region.  With COUNT non-nil, return a list of at
 /// most COUNT such positions.  With STRING non-nil, START and END index STRING
 /// (`substring`-style) and the returned positions are 0-based char indices.
-pub(crate) fn builtin_unencodable_char_position<H: TextHost>(
+#[doc(hidden)]
+pub fn builtin_unencodable_char_position<H: TextHost>(
     eval: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -3596,7 +3626,8 @@ pub(crate) fn builtin_find_coding_system(
 ///
 /// Internal entry point for registering a coding system.
 /// Called by the `define-coding-system` macro in mule.el with ≥13 positional args.
-pub(crate) fn builtin_define_coding_system_internal(
+#[doc(hidden)]
+pub fn builtin_define_coding_system_internal(
     mgr: &mut CodingSystemManager,
     args: Vec<Value>,
     mode: SymbolMode,
@@ -3750,7 +3781,8 @@ fn coding_symbol_name_required(val: &Value, mode: SymbolMode) -> Result<String, 
 
 /// `(define-coding-system-alias ALIAS CODING-SYSTEM)` -- register ALIAS for
 /// CODING-SYSTEM and return nil.
-pub(crate) fn builtin_define_coding_system_alias(
+#[doc(hidden)]
+pub fn builtin_define_coding_system_alias(
     mgr: &mut CodingSystemManager,
     args: Vec<Value>,
     mode: SymbolMode,
@@ -3784,7 +3816,8 @@ pub(crate) fn builtin_define_coding_system_alias(
 /// front (the first system seen for a category wins, later ones of the same
 /// category are ignored), and the remaining categories keep their prior order.
 /// A category is also rebound to the named coding system (GNU `setup_coding_system`).
-pub(crate) fn builtin_set_coding_system_priority(
+#[doc(hidden)]
+pub fn builtin_set_coding_system_priority(
     mgr: &mut CodingSystemManager,
     args: Vec<Value>,
     mode: SymbolMode,
@@ -3964,10 +3997,8 @@ fn coding_cat_name(cat: usize) -> Option<&'static str> {
 /// systems; we map each to its category (first occurrence wins) and append any
 /// categories not represented, in enum order, so the result always covers all
 /// `CODING_CAT_MAX` categories like GNU's fixed-size `coding_priorities` array.
-pub(crate) fn coding_category_priority_list(
-    mgr: &CodingSystemManager,
-    mode: SymbolMode,
-) -> Vec<SymId> {
+#[doc(hidden)]
+pub fn coding_category_priority_list(mgr: &CodingSystemManager, mode: SymbolMode) -> Vec<SymId> {
     let mut order: Vec<usize> = Vec::with_capacity(CODING_CAT_MAX);
     for &sym in &mgr.priority {
         if let Some(cat) =
@@ -4132,7 +4163,8 @@ impl<'a> DetectSrc<'a> {
 /// which calls `detect_coding` at :7927-7928 and raises the flag only at :8009.
 /// See DIVERGENCES.md entry 156 and `CodingEntry::detection_block`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SourceBlock {
+#[doc(hidden)]
+pub enum SourceBlock {
     /// More bytes may follow: a subprocess read that is not the EOF read.  A
     /// trailing partial character is CARRYOVER, not evidence.
     More,
@@ -5537,7 +5569,8 @@ fn run_detector(
 
 /// `(detect-coding-string STRING &optional HIGHEST)` -- detect the coding
 /// system(s) of STRING.  See `detect_coding_systems` (port of coding.c).
-pub(crate) fn builtin_detect_coding_string(
+#[doc(hidden)]
+pub fn builtin_detect_coding_string(
     mgr: &CodingSystemManager,
     args: Vec<Value>,
     mode: SymbolMode,
@@ -5586,7 +5619,8 @@ fn validate_detect_coding_region(buffers: &BufferManager, args: &[Value]) -> Res
     Ok(())
 }
 
-pub(crate) fn builtin_detect_coding_region(
+#[doc(hidden)]
+pub fn builtin_detect_coding_region(
     mgr: &CodingSystemManager,
     buffers: &BufferManager,
     args: Vec<Value>,
@@ -5624,20 +5658,16 @@ pub(crate) fn builtin_detect_coding_region(
 
 /// `(keyboard-coding-system &optional TERMINAL)` -- return the current
 /// keyboard coding system. The TERMINAL argument is ignored.
-pub(crate) fn builtin_keyboard_coding_system(
-    mgr: &CodingSystemManager,
-    args: Vec<Value>,
-) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_keyboard_coding_system(mgr: &CodingSystemManager, args: Vec<Value>) -> EvalResult {
     expect_max_args("keyboard-coding-system", &args, 1)?;
     Ok(Value::symbol(mgr.keyboard_coding))
 }
 
 /// `(terminal-coding-system &optional TERMINAL)` -- return the current
 /// terminal coding system. The TERMINAL argument is ignored.
-pub(crate) fn builtin_terminal_coding_system(
-    mgr: &CodingSystemManager,
-    args: Vec<Value>,
-) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_terminal_coding_system(mgr: &CodingSystemManager, args: Vec<Value>) -> EvalResult {
     expect_max_args("terminal-coding-system", &args, 1)?;
     Ok(Value::symbol(mgr.terminal_coding))
 }
@@ -5723,7 +5753,8 @@ pub(crate) fn builtin_set_terminal_coding_system(
 /// `(set-keyboard-coding-system-internal CODING-SYSTEM &optional TERMINAL)` --
 /// internal keyboard coding setter. Mirrors the surface validation but always
 /// returns nil.
-pub(crate) fn builtin_set_keyboard_coding_system_internal(
+#[doc(hidden)]
+pub fn builtin_set_keyboard_coding_system_internal(
     mgr: &mut CodingSystemManager,
     args: Vec<Value>,
     mode: SymbolMode,
@@ -5736,7 +5767,8 @@ pub(crate) fn builtin_set_keyboard_coding_system_internal(
 
 /// `(set-terminal-coding-system-internal CODING-SYSTEM &optional TERMINAL)` --
 /// internal terminal coding setter.
-pub(crate) fn builtin_set_terminal_coding_system_internal(
+#[doc(hidden)]
+pub fn builtin_set_terminal_coding_system_internal(
     mgr: &mut CodingSystemManager,
     args: Vec<Value>,
     mode: SymbolMode,
@@ -5749,7 +5781,8 @@ pub(crate) fn builtin_set_terminal_coding_system_internal(
 
 /// `(set-safe-terminal-coding-system-internal CODING-SYSTEM)` -- internal safe
 /// terminal coding setter.
-pub(crate) fn builtin_set_safe_terminal_coding_system_internal(
+#[doc(hidden)]
+pub fn builtin_set_safe_terminal_coding_system_internal(
     mgr: &mut CodingSystemManager,
     args: Vec<Value>,
     mode: SymbolMode,
@@ -5769,13 +5802,15 @@ pub(crate) fn builtin_set_safe_terminal_coding_system_internal(
 ///     standard display table's U+2018 entry).
 ///   - Any other value is treated as `curve'.
 ///   - Never returns nil.
-pub(crate) fn builtin_text_quoting_style<H: TextHost>(eval: &H, args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_text_quoting_style<H: TextHost>(eval: &H, args: Vec<Value>) -> EvalResult {
     context_text_quoting_style(eval, args)
 }
 
 /// `(set-text-conversion-style STYLE &optional WHERE)` -- set conversion style.
 /// NeoVM currently accepts all values and returns nil.
-pub(crate) fn builtin_set_text_conversion_style(args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_set_text_conversion_style(args: Vec<Value>) -> EvalResult {
     expect_min_args("set-text-conversion-style", &args, 1)?;
     expect_max_args("set-text-conversion-style", &args, 2)?;
     Ok(Value::NIL)
@@ -5784,7 +5819,8 @@ pub(crate) fn builtin_set_text_conversion_style(args: Vec<Value>) -> EvalResult 
 /// `(coding-system-priority-list &optional HIGHESTP)` -- return the current
 /// priority list of coding systems for detection. If HIGHESTP is non-nil,
 /// return only the highest-priority system.
-pub(crate) fn builtin_coding_system_priority_list(
+#[doc(hidden)]
+pub fn builtin_coding_system_priority_list(
     mgr: &CodingSystemManager,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -6137,7 +6173,8 @@ fn marker_or_integer_position(value: &Value) -> Result<i64, Flow> {
     }
 }
 
-pub(crate) fn builtin_find_coding_systems_region_internal<H: TextHost>(
+#[doc(hidden)]
+pub fn builtin_find_coding_systems_region_internal<H: TextHost>(
     eval: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {

@@ -96,7 +96,7 @@ pub(crate) fn builtin_forward_comment(
                     .current_buffer()
                     .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
                 let (ok, final_pos) =
-                    forward_comment_scan_in_buffer(buf, count, props, policy.comment_end_escape);
+                    forward_comment_scan_in_buffer(buf, count, props, policy.comment_end_escape());
                 let final_char = buf.emacs_byte_pos_to_char_pos_clamped(final_pos).get();
                 (ok, final_pos, final_char)
             };
@@ -142,7 +142,7 @@ pub(crate) fn builtin_forward_comment(
         &mut eval.edit.buffers,
         count,
         props,
-        policy.comment_end_escape,
+        policy.comment_end_escape(),
     )
 }
 

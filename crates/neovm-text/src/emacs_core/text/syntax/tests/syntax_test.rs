@@ -1819,7 +1819,9 @@ fn backward_comment_two_char_end_style_uses_first_ender_char() {
     {
         let buf = eval.buffers.current_buffer_mut().expect("current buffer");
         // Position immediately after the two-character comment end.
-        buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(char_pos_to_byte(buf, 24)));
+        buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(char_pos_to_byte(
+            buf, 24,
+        )));
     }
 
     let out = builtin_forward_comment(&mut eval, vec![Value::fixnum(-1)]).unwrap();
@@ -2297,7 +2299,9 @@ fn backward_comment_rejects_comment_start_inside_string() {
     install_hash_line_comment_syntax(&mut eval);
     {
         let buf = eval.buffers.current_buffer_mut().expect("current buffer");
-        buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(char_pos_to_byte(buf, 9)));
+        buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(char_pos_to_byte(
+            buf, 9,
+        )));
     }
 
     let moved = builtin_forward_comment(&mut eval, vec![Value::fixnum(-1)]).unwrap();
@@ -2316,7 +2320,9 @@ fn backward_comment_rejects_comment_start_inside_string_with_escaped_quotes() {
     install_hash_line_comment_syntax(&mut eval);
     {
         let buf = eval.buffers.current_buffer_mut().expect("current buffer");
-        buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(char_pos_to_byte(buf, 15)));
+        buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(char_pos_to_byte(
+            buf, 15,
+        )));
     }
 
     let moved = builtin_forward_comment(&mut eval, vec![Value::fixnum(-1)]).unwrap();
@@ -2335,7 +2341,9 @@ fn backward_comment_finds_comment_start_through_forward_reparse() {
     install_hash_line_comment_syntax(&mut eval);
     {
         let buf = eval.buffers.current_buffer_mut().expect("current buffer");
-        buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(char_pos_to_byte(buf, 10)));
+        buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(char_pos_to_byte(
+            buf, 10,
+        )));
     }
 
     let moved = builtin_forward_comment(&mut eval, vec![Value::fixnum(-1)]).unwrap();
@@ -2580,7 +2588,9 @@ fn backward_prefix_chars_default_is_noop() {
             buf.point_max_emacs_byte_pos().get(),
         ));
         buf.insert("''foo");
-        buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(char_pos_to_byte(buf, 2)));
+        buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(char_pos_to_byte(
+            buf, 2,
+        )));
     }
 
     let out = builtin_backward_prefix_chars(&mut eval, &vec![]).unwrap();
@@ -2611,7 +2621,9 @@ fn backward_prefix_chars_moves_over_prefix_flag_chars() {
         ));
         let entry = string_to_syntax(". p").unwrap();
         super::SyntaxTable::isolate_for_buffer(buf).modify_syntax_entry('\'', entry);
-        buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(char_pos_to_byte(buf, 2)));
+        buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(char_pos_to_byte(
+            buf, 2,
+        )));
     }
 
     builtin_backward_prefix_chars(&mut eval, &vec![]).unwrap();

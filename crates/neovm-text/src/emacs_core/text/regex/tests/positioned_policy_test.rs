@@ -31,9 +31,8 @@ fn positioned_compiled_regex_reuses_its_policy_and_keeps_distinct_match_results(
     );
     // The compressed leaf translates U+0100 to character 2 only when the
     // positioned purpose is honored (GNU chartab.c UNIPROP_TABLE_P).
-    let compressed = neovm_value::value::Value::heap_string(LispString::from_unibyte(vec![
-        2, 2, 0xC2, 0x83, 1,
-    ]));
+    let compressed =
+        neovm_value::value::Value::heap_string(LispString::from_unibyte(vec![2, 2, 0xC2, 0x83, 1]));
     let mut depth2_contents = vec![neovm_value::value::Value::NIL; 32];
     depth2_contents[2] = compressed;
     let depth2 = neovm_value::value::Value::make_sub_char_table(2, 0, depth2_contents);

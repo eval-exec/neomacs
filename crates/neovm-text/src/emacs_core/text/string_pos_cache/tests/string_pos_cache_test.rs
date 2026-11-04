@@ -1,7 +1,7 @@
 use neovm_value::emacs_char;
+use neovm_value::heap_types::LispString;
 use neovm_value::string_pos_cache::*;
 use neovm_value::value::Value;
-use neovm_value::heap_types::LispString;
 
 /// A multibyte string mixing 1- to 4-byte characters and raw bytes.
 fn mixed_bytes(seed: u64, chars: usize) -> Vec<u8> {

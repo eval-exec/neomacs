@@ -1,8 +1,8 @@
 //! The native parser registry owns its tag independently of the Lisp record.
 use super::*;
 use neovm_value::intern::intern_uninterned;
-use neovm_value::value::{HashTableTest, HashTableWeakness, LispHashTable};
 use neovm_value::tagged::gc::{TaggedHeap, set_tagged_heap};
+use neovm_value::value::{HashTableTest, HashTableWeakness, LispHashTable};
 
 #[derive(Clone, Copy)]
 enum FirstCollection {

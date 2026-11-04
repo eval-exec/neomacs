@@ -5,7 +5,8 @@
 // directly; in a library build the remaining names are reached from tests and
 // from the text layer's own callers, so most are unused here.
 #[allow(unused_imports)]
-pub(crate) use neovm_edit::buffer::storage_string::{
+#[doc(hidden)]
+pub use neovm_edit::buffer::storage_string::{
     StorageUnit, bytes_to_unibyte_storage_string, decode_storage_char_codes,
     decode_storage_char_codes_auto, decode_storage_units, encode_nonunicode_char_for_storage,
     scan_storage_units, scan_storage_units_auto, storage_byte_len, storage_byte_to_logical_byte,
@@ -28,7 +29,8 @@ fn push_octal_escape(out: &mut Vec<u8>, byte: u8) {
 /// control bytes pass through verbatim and there are no surrounding quotes.
 /// Used by the princ printer for nested strings (e.g. a byte-code object's
 /// code string), so `(format "%s" (byte-compile …))` matches GNU byte-for-byte.
-pub(crate) fn octal_escape_unibyte_eight_bit(bytes: &[u8]) -> Vec<u8> {
+#[doc(hidden)]
+pub fn octal_escape_unibyte_eight_bit(bytes: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(bytes.len());
     for &b in bytes {
         if b >= 0x80 {

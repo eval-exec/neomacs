@@ -147,7 +147,8 @@ pub(crate) fn normalize_lisp_string_start_arg(
 /// [`normalize_lisp_string_start_arg`] for the string object `value`: START
 /// converts through the position cache, which a `string-match' loop that
 /// resumes at the previous `match-end' (`split-string') hits every time.
-pub(crate) fn normalize_lisp_string_value_start_arg(
+#[doc(hidden)]
+pub fn normalize_lisp_string_value_start_arg(
     value: Value,
     start: Option<&Value>,
 ) -> Result<usize, Flow> {
@@ -225,7 +226,8 @@ fn normalize_lisp_string_start_arg_for(
 
 /// `(regexp-quote STRING)` -- return a regexp that matches STRING literally,
 /// quoting all special regex characters.
-pub(crate) fn builtin_regexp_quote(args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_regexp_quote(args: Vec<Value>) -> EvalResult {
     crate::emacs_core::substrate_hooks::time_op(
         crate::emacs_core::substrate_hooks::TextPerfOp::RegexpQuote,
         || {
@@ -516,7 +518,8 @@ fn lisp_string_slice_for_replace_match(
     }
 }
 
-pub(crate) fn replace_match_lisp_string_with_syntax(
+#[doc(hidden)]
+pub fn replace_match_lisp_string_with_syntax(
     source: &neovm_value::heap_types::LispString,
     newtext: &neovm_value::heap_types::LispString,
     fixedcase: bool,
@@ -610,7 +613,8 @@ fn replace_match_lisp_string_with_syntax_and_properties(
     Ok(concat_lisp_string_pieces(vec![before, replacement, after]))
 }
 
-pub(crate) fn compute_buffer_replacement_lisp_string(
+#[doc(hidden)]
+pub fn compute_buffer_replacement_lisp_string(
     buf: &neovm_edit::buffer::Buffer,
     newtext: &neovm_value::heap_types::LispString,
     fixedcase: bool,

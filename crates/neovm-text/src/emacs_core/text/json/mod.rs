@@ -18,9 +18,8 @@
 //! No external crate (serde_json etc.) is used — the parser and serializer
 //! are implemented from scratch with simple recursive descent.
 
-use neovm_edit::buffer::{EmacsByteLen, EmacsBytePos, EmacsByteRange, TextExtent};
 use crate::emacs_core::text_host::TextHost;
-use neovm_value::tagged::value::SymbolMode;
+use neovm_edit::buffer::{EmacsByteLen, EmacsBytePos, EmacsByteRange, TextExtent};
 use neovm_edit::emacs_core::edit_host::EditHost;
 use neovm_edit::emacs_core::editfns::{
     signal_after_text_change, signal_before_text_change,
@@ -30,6 +29,7 @@ use neovm_value::error::LispCondition;
 use neovm_value::error::expect_min_args;
 use neovm_value::error::{EvalResult, Flow, signal};
 use neovm_value::intern::{SymId, resolve_sym};
+use neovm_value::tagged::value::SymbolMode;
 use neovm_value::value::*;
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
@@ -1437,10 +1437,8 @@ pub(crate) fn builtin_json_serialize(args: Vec<Value>) -> EvalResult {
     json_serialize_with_symbols(args, SymbolMode::Bare)
 }
 
-pub(crate) fn builtin_json_serialize_in_state<H: TextHost>(
-    host: &mut H,
-    args: Vec<Value>,
-) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_json_serialize_in_state<H: TextHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     json_serialize_with_symbols(args, host.symbol_mode())
 }
 
@@ -1470,7 +1468,8 @@ pub(crate) fn builtin_json_parse_string(args: Vec<Value>) -> EvalResult {
     json_parse_string_with_symbols(args, SymbolMode::Bare)
 }
 
-pub(crate) fn builtin_json_parse_string_in_state<H: TextHost>(
+#[doc(hidden)]
+pub fn builtin_json_parse_string_in_state<H: TextHost>(
     host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -1510,7 +1509,8 @@ fn json_parse_string_with_symbols(args: Vec<Value>, mode: SymbolMode) -> EvalRes
 /// Unlike `json-parse-string`, this parses a single JSON value starting at the
 /// current point (after leading whitespace), leaves trailing buffer content
 /// untouched, and advances point to just after the parsed value.
-pub(crate) fn builtin_json_parse_buffer<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_json_parse_buffer<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     let opts = parse_parse_kwargs(&args, 0, host.symbol_mode())?;
     let (input, point_base) = {
         let (edit, _vars) = host.edit_and_vars();
@@ -1540,7 +1540,8 @@ pub(crate) fn builtin_json_parse_buffer<H: EditHost>(host: &mut H, args: Vec<Val
 /// `(json-insert VALUE &rest ARGS)` — insert JSON text at point.
 ///
 /// Keyword arguments mirror `json-serialize` (`:null-object`, `:false-object`).
-pub(crate) fn builtin_json_insert<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_json_insert<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_min_args("json-insert", &args, 1)?;
     let opts = parse_serialize_kwargs(&args, 1, host.symbol_mode())?;
     let json = serialize_to_json(&args[0], &opts, 0)?;

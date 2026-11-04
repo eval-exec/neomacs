@@ -29,7 +29,7 @@ use neovm_value::tagged::SymbolMode;
 use rustc_hash::FxHashMap;
 use std::collections::HashSet;
 
-use crate::emacs_core::{syntax::SyntaxClass};
+use crate::emacs_core::syntax::SyntaxClass;
 use neovm_value::{emacs_char, value::Value};
 use regex_automata::util::prefilter::Prefilter as RaPrefilter;
 use regex_automata::{MatchKind, Span};
@@ -234,7 +234,8 @@ impl RegexOp {
 /// Threading assumption: each evaluator owns its pattern cache; the existing
 /// interior-mutable search caches do not permit concurrent shared mutation.
 #[derive(Clone)]
-pub(crate) struct CompiledPattern {
+#[doc(hidden)]
+pub struct CompiledPattern {
     /// Bytecode buffer.
     buffer: Vec<u8>,
 
@@ -584,7 +585,8 @@ impl CaseTranslation {
         self.symbol_mode
     }
 
-    pub(crate) fn gc_root(&self) -> Option<Value> {
+    #[doc(hidden)]
+    pub fn gc_root(&self) -> Option<Value> {
         self.table
     }
 
@@ -1150,7 +1152,8 @@ thread_local! {
 }
 
 /// GNU `matcher_overflow` message (search.c:80).
-pub(crate) const MATCHER_OVERFLOW_MESSAGE: &str = "Stack overflow in regexp matcher";
+#[doc(hidden)]
+pub const MATCHER_OVERFLOW_MESSAGE: &str = "Stack overflow in regexp matcher";
 
 fn set_matcher_overflow() {
     MATCHER_OVERFLOW.with(|flag| flag.set(true));
@@ -3977,7 +3980,8 @@ pub(crate) enum SyntaxCacheKey {
 /// boundary instead of reducing them to Unicode ranges so dynamic bindings and
 /// user mutations retain their GNU-visible effect.
 #[derive(Clone, Copy)]
-pub(crate) struct WordBoundaryLookup {
+#[doc(hidden)]
+pub struct WordBoundaryLookup {
     char_script_table: Option<Value>,
     word_combining_categories: Value,
     word_separating_categories: Value,
@@ -4018,9 +4022,8 @@ fn word_separating_categories_sym() -> neovm_value::intern::SymId {
 /// (`eval.builtin_var_value` — the same read the pre-T3 core helper used)
 /// plus the caller's symbol mode. Moved down from core
 /// `builtins/search.rs` at stage-3b T3 so text never calls upward.
-pub(crate) fn current_word_boundary_lookup<H: super::text_host::TextHost>(
-    eval: &H,
-) -> WordBoundaryLookup {
+#[doc(hidden)]
+pub fn current_word_boundary_lookup<H: super::text_host::TextHost>(eval: &H) -> WordBoundaryLookup {
     // The variable view is EditHost::Vars; its reads are EditVariableRead's.
     use neovm_edit::emacs_core::edit_host::EditVariableRead as _;
     WordBoundaryLookup::new_with_symbols(
@@ -4052,11 +4055,13 @@ impl WordBoundaryLookup {
         }
     }
 
-    pub(crate) fn symbol_mode(&self) -> SymbolMode {
+    #[doc(hidden)]
+    pub fn symbol_mode(&self) -> SymbolMode {
         self.symbol_mode
     }
 
-    pub(crate) fn with_symbol_mode(mut self, mode: SymbolMode) -> Self {
+    #[doc(hidden)]
+    pub fn with_symbol_mode(mut self, mode: SymbolMode) -> Self {
         self.symbol_mode = mode;
         self
     }
@@ -4438,7 +4443,8 @@ impl<'a> MatchSyntax<'a> {
     }
 }
 
-pub(crate) trait SyntaxLookup {
+#[doc(hidden)]
+pub trait SyntaxLookup {
     fn symbol_mode(&self) -> SymbolMode {
         SymbolMode::Bare
     }
@@ -4568,7 +4574,8 @@ pub(crate) struct DefaultSyntaxLookup;
 /// Syntax lookup backed by a buffer's actual syntax table.
 /// Used when regex searching within a buffer context.
 #[derive(Clone, Copy)]
-pub(crate) struct BufferSyntaxLookup {
+#[doc(hidden)]
+pub struct BufferSyntaxLookup {
     pub syntax_table: crate::emacs_core::syntax::SyntaxTable,
     pub category_table: Option<neovm_value::value::Value>,
     pub word_boundary: WordBoundaryLookup,
@@ -10537,7 +10544,8 @@ mod declared_boundary_positions_tests;
 /// Carrier park: reset the Emacs-regex scratch and abort latches.
 /// `STANDARD_BYTE` is a pure function of the case table (no owner state) and
 /// is deliberately not reset.
-pub(crate) fn reset_carrier_tls() {
+#[doc(hidden)]
+pub fn reset_carrier_tls() {
     CHAR_TABLE_ASCII_FOLD.with(|slot| slot.set(None));
     MATCH_SCRATCH.with(|slot| *slot.borrow_mut() = Some(Box::default()));
     MATCHER_OVERFLOW.with(|slot| slot.set(false));
@@ -10548,7 +10556,8 @@ pub(crate) fn reset_carrier_tls() {
 
 /// Debug-only carrier TLS fingerprint for this module's classified records.
 #[cfg(debug_assertions)]
-pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+#[doc(hidden)]
+pub fn carrier_tls_fingerprint(h: &mut u64) {
     dfa::carrier_tls_fingerprint(h);
     neovm_value::tls_fingerprint::mix(
         h,

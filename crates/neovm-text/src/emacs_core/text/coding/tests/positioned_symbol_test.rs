@@ -65,9 +65,7 @@ fn positioned_coding_metadata_cache_never_bypasses_disabled_symbol_checks() {
         let expected = operation(&ctx.coding_systems, vec![bare], SymbolMode::Bare).unwrap();
         let observed =
             operation(&ctx.coding_systems, vec![coding], SymbolMode::Positioned).unwrap();
-        assert!(neovm_value::value::equal_value(
-            &expected, &observed, 0
-        ));
+        assert!(neovm_value::value::equal_value(&expected, &observed, 0));
         wrong_symbol_operand(
             operation(&ctx.coding_systems, vec![coding], SymbolMode::Bare),
             coding,

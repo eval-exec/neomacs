@@ -4,10 +4,10 @@
 
 use super::casetab::{CaseMap, CaseTableOverride};
 use neovm_edit::emacs_core::case_encoding::CaseEncoding;
-use neovm_value::heap_types::LispString;
 use neovm_value::error::LispCondition;
 use neovm_value::error::expect_args;
 use neovm_value::error::{EvalResult, Flow, signal};
+use neovm_value::heap_types::LispString;
 use neovm_value::value::ValueKind;
 use neovm_value::value::*;
 
@@ -15,12 +15,8 @@ use neovm_value::value::*;
 // Argument helpers
 // ---------------------------------------------------------------------------
 
-pub(crate) fn expect_min_max_args(
-    name: &str,
-    args: &[Value],
-    min: usize,
-    max: usize,
-) -> Result<(), Flow> {
+#[doc(hidden)]
+pub fn expect_min_max_args(name: &str, args: &[Value], min: usize, max: usize) -> Result<(), Flow> {
     if args.len() < min || args.len() > max {
         Err(signal(
             LispCondition::WrongNumberOfArguments,
@@ -31,7 +27,8 @@ pub(crate) fn expect_min_max_args(
     }
 }
 
-pub(crate) fn expect_int(value: &Value) -> Result<i64, Flow> {
+#[doc(hidden)]
+pub fn expect_int(value: &Value) -> Result<i64, Flow> {
     match value.kind() {
         ValueKind::Fixnum(n) => Ok(n),
         _other => Err(signal(
@@ -258,7 +255,8 @@ fn standard_word_predicate(code: u32) -> bool {
 /// GNU's four casing operations. The enum keeps titlecasing and uppercasing
 /// distinct, and prevents callers from combining incompatible mode flags.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CaseAction {
+#[doc(hidden)]
+pub enum CaseAction {
     Up,
     Down,
     Capitalize,
@@ -283,9 +281,8 @@ enum CasingWordState {
 /// The current buffer's encoding projection. This reads buffer state and
 /// therefore stays with the text-side casing operations above the plain
 /// [`CaseEncoding`] data.
-pub(crate) fn case_encoding_for_current_buffer<H: super::text_host::TextHost>(
-    ctx: &H,
-) -> CaseEncoding {
+#[doc(hidden)]
+pub fn case_encoding_for_current_buffer<H: super::text_host::TextHost>(ctx: &H) -> CaseEncoding {
     if ctx
         .buffers()
         .current_buffer()
@@ -299,7 +296,8 @@ pub(crate) fn case_encoding_for_current_buffer<H: super::text_host::TextHost>(
 
 /// Standard upcasing cannot change a capital sigma, so no syntax lookup is
 /// needed. A custom table may change it and requires GNU's word context.
-pub(crate) fn upcase_word_predicate<H: super::text_host::TextHost>(
+#[doc(hidden)]
+pub fn upcase_word_predicate<H: super::text_host::TextHost>(
     ctx: &H,
     casetab: &CaseTableOverride,
 ) -> impl Fn(u32) -> bool + Copy + 'static {
@@ -359,10 +357,12 @@ fn simple_case_character(
 /// event domain; modifiers are restored after casing. Out-of-domain projections
 /// and characters whose case is unchanged retain the original fixnum.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct CaseNatnum(i64);
+#[doc(hidden)]
+pub struct CaseNatnum(i64);
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum CaseNatnumError {
+#[doc(hidden)]
+pub enum CaseNatnumError {
     #[error("Casing input must be a nonnegative fixnum")]
     OutsideFixnumDomain,
 }
@@ -393,7 +393,8 @@ bitflags::bitflags! {
 const _: () = assert!(CaseModifiers::all().bits() as i64 == CHAR_MODIFIER_MASK);
 
 impl CaseNatnum {
-    pub(crate) fn casify(
+    #[doc(hidden)]
+    pub fn casify(
         self,
         action: CaseAction,
         encoding: CaseEncoding,
@@ -739,7 +740,8 @@ pub(crate) fn casify_text_with_extents(
 }
 
 #[inline]
-pub(crate) fn casify_lisp_string(
+#[doc(hidden)]
+pub fn casify_lisp_string(
     text: &LispString,
     action: CaseAction,
     is_word: impl Fn(u32) -> bool,
@@ -800,7 +802,8 @@ fn preserve_upcase_case_string_payload(code: i64) -> bool {
     )
 }
 
-pub(crate) fn noncontiguous_case_regions<H: super::text_host::TextHost>(
+#[doc(hidden)]
+pub fn noncontiguous_case_regions<H: super::text_host::TextHost>(
     eval: &mut H,
 ) -> Result<Vec<neovm_edit::emacs_core::position::LispRegionArgs>, Flow> {
     let extractor = eval
@@ -835,14 +838,16 @@ pub(crate) fn noncontiguous_case_regions<H: super::text_host::TextHost>(
 /// transducer as its text. Call-local typed offsets cannot be mixed with bytes.
 /// Its heap-backed text belongs to this mutator and cannot cross threads.
 #[derive(Debug)]
-pub(crate) struct CasedRegion {
+#[doc(hidden)]
+pub struct CasedRegion {
     pub(crate) text: LispString,
     pub(crate) expansions: Vec<neovm_edit::buffer::CasifyExpansion>,
     pub(crate) storage_shape: neovm_edit::buffer::CasifyStorageShape,
     pub(crate) mutator: std::marker::PhantomData<*const ()>,
 }
 
-pub(crate) fn casify_region_text(
+#[doc(hidden)]
+pub fn casify_region_text(
     text: &LispString,
     action: CaseAction,
     is_word: impl Fn(u32) -> bool,
@@ -878,13 +883,15 @@ pub(crate) fn casify_region_text(
 
 /// Source-aligned notification extents, including multi-character mappings.
 /// These lengths count Emacs characters, independently of byte-width changes.
-pub(crate) struct CasingChangedSpan {
+#[doc(hidden)]
+pub struct CasingChangedSpan {
     pub(crate) offset: neovm_edit::buffer::CharLen,
     pub(crate) old_len: neovm_edit::buffer::CharLen,
     pub(crate) new_len: neovm_edit::buffer::CharLen,
 }
 
-pub(crate) fn changed_char_span(old: &LispString, new: &CasedRegion) -> Option<CasingChangedSpan> {
+#[doc(hidden)]
+pub fn changed_char_span(old: &LispString, new: &CasedRegion) -> Option<CasingChangedSpan> {
     let mut expansions = new.expansions.iter().copied().peekable();
     let mut output = lisp_string_char_codes(&new.text);
     let mut output_end = 0;
@@ -949,7 +956,8 @@ fn lisp_string_char_codes(s: &LispString) -> impl Iterator<Item = u32> + '_ {
 
 /// `(capitalize OBJ)` -- if OBJ is a string, capitalize the first letter
 /// (uppercase first, lowercase rest).  If OBJ is a character, uppercase it.
-pub(crate) fn capitalize_with_word_pred(
+#[doc(hidden)]
+pub fn capitalize_with_word_pred(
     args: Vec<Value>,
     is_word: impl Fn(u32) -> bool,
     casetab: &CaseTableOverride,
@@ -1002,7 +1010,8 @@ pub(crate) fn builtin_capitalize(args: Vec<Value>) -> EvalResult {
 
 /// `(upcase-initials OBJ)` -- uppercase the first letter of each word in
 /// a string, leaving the rest unchanged.  For a char, uppercase it.
-pub(crate) fn upcase_initials_with_word_pred(
+#[doc(hidden)]
+pub fn upcase_initials_with_word_pred(
     args: Vec<Value>,
     is_word: impl Fn(u32) -> bool,
     casetab: &CaseTableOverride,
@@ -1097,7 +1106,8 @@ pub(crate) fn upcase_initials_string(s: &str) -> String {
 /// the old code used Rust's Unicode `is_alphanumeric()` and ignored
 /// `case-symbols-as-words` entirely.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ReplaceMatchCaseAction {
+#[doc(hidden)]
+pub enum ReplaceMatchCaseAction {
     NoChange,
     AllCaps,
     CapInitial,
@@ -1105,9 +1115,8 @@ pub(crate) enum ReplaceMatchCaseAction {
 
 /// Faithful (Emacs-byte) classification of the matched text's casing, read
 /// directly from its `LispString` bytes with no storage-String round-trip.
-pub(crate) fn replace_match_case_action_lisp_default(
-    matched: &LispString,
-) -> ReplaceMatchCaseAction {
+#[doc(hidden)]
+pub fn replace_match_case_action_lisp_default(matched: &LispString) -> ReplaceMatchCaseAction {
     replace_match_case_action_lisp(matched, default_is_word_char)
 }
 
@@ -1188,10 +1197,8 @@ where
 /// primitives, so eight-bit raw bytes and Private-Use-Area glyphs are analyzed
 /// and cased faithfully instead of through the legacy PUA-sentinel storage form
 /// (issue #131).
-pub(crate) fn apply_replace_match_case_lisp(
-    replacement: &LispString,
-    matched: &LispString,
-) -> LispString {
+#[doc(hidden)]
+pub fn apply_replace_match_case_lisp(replacement: &LispString, matched: &LispString) -> LispString {
     apply_replace_match_case_lisp_with(replacement, matched, default_is_word_char)
 }
 
@@ -1357,7 +1364,8 @@ fn default_is_word_char(ch: char) -> bool {
 
 /// `(char-resolve-modifiers CHAR)` -- resolve modifier bits in character.
 /// Resolve shift/control modifiers into the base character where possible.
-pub(crate) fn builtin_char_resolve_modifiers(args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_char_resolve_modifiers(args: Vec<Value>) -> EvalResult {
     expect_args("char-resolve-modifiers", &args, 1)?;
 
     let code = match args[0].kind() {
@@ -1385,3 +1393,39 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/casing_types.rs"]
 mod casing_types;
+
+#[doc(hidden)]
+impl CasedRegion {
+    #[doc(hidden)]
+    pub fn text(&self) -> &LispString {
+        &self.text
+    }
+
+    #[doc(hidden)]
+    pub fn expansions(&self) -> &[neovm_edit::buffer::CasifyExpansion] {
+        &self.expansions
+    }
+
+    #[doc(hidden)]
+    pub fn storage_shape(&self) -> neovm_edit::buffer::CasifyStorageShape {
+        self.storage_shape
+    }
+}
+
+#[doc(hidden)]
+impl CasingChangedSpan {
+    #[doc(hidden)]
+    pub fn offset(&self) -> neovm_edit::buffer::CharLen {
+        self.offset
+    }
+
+    #[doc(hidden)]
+    pub fn old_len(&self) -> neovm_edit::buffer::CharLen {
+        self.old_len
+    }
+
+    #[doc(hidden)]
+    pub fn new_len(&self) -> neovm_edit::buffer::CharLen {
+        self.new_len
+    }
+}

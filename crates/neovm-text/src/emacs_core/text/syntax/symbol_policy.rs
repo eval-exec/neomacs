@@ -297,14 +297,13 @@ pub(crate) fn regexp_syntax_class_at_string_byte_with_symbols(
         .map_or_else(|| table.char_syntax(ch), |entry| entry.class)
 }
 
-pub(crate) fn builtin_syntax_table_p_in_state<H: TextHost>(
-    eval: &mut H,
-    args: Vec<Value>,
-) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_syntax_table_p_in_state<H: TextHost>(eval: &mut H, args: Vec<Value>) -> EvalResult {
     builtin_syntax_table_p_with_symbols(args, eval.symbol_mode())
 }
 
-pub(crate) fn builtin_copy_syntax_table_in_state<H: TextHost>(
+#[doc(hidden)]
+pub fn builtin_copy_syntax_table_in_state<H: TextHost>(
     eval: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -312,7 +311,8 @@ pub(crate) fn builtin_copy_syntax_table_in_state<H: TextHost>(
 }
 
 impl<'a> SyntaxProperties<'a> {
-    pub(crate) fn for_scan_with_symbols<V: EditVariableRead<'a>>(
+    #[doc(hidden)]
+    pub fn for_scan_with_symbols<V: EditVariableRead<'a>>(
         honor: bool,
         vars: V,
         buffers: &BufferManager,

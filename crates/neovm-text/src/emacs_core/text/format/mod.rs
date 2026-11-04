@@ -13,7 +13,8 @@ use neovm_value::value::*;
 // Argument helpers
 // ---------------------------------------------------------------------------
 
-pub(crate) fn require_string(_name: &str, val: &Value) -> Result<String, Flow> {
+#[doc(hidden)]
+pub fn require_string(_name: &str, val: &Value) -> Result<String, Flow> {
     val.as_lisp_string()
         .map(|ls| neovm_value::emacs_char::to_utf8_lossy(ls.as_bytes()))
         .ok_or_else(|| {
@@ -29,7 +30,8 @@ pub(crate) fn require_string(_name: &str, val: &Value) -> Result<String, Flow> {
 // ---------------------------------------------------------------------------
 
 /// Broken-down time fields computed from a Unix timestamp.
-pub(crate) struct BrokenDownTime {
+#[doc(hidden)]
+pub struct BrokenDownTime {
     year: i64,
     month: u32,   // 1..=12
     day: u32,     // 1..=31
@@ -107,7 +109,8 @@ fn iso_week_year_and_number(tm: &BrokenDownTime) -> (i64, i32) {
 
 /// Convert a Unix timestamp (seconds since 1970-01-01 00:00:00 UTC) into
 /// broken-down UTC time fields.  No external crate needed.
-pub(crate) fn unix_to_broken_down(timestamp: i64) -> BrokenDownTime {
+#[doc(hidden)]
+pub fn unix_to_broken_down(timestamp: i64) -> BrokenDownTime {
     // Handle negative timestamps (before epoch).
     let remaining = timestamp;
     let second_of_day;
@@ -245,7 +248,8 @@ fn modifier_accepted_by(modifier: char, conversion: char) -> bool {
 }
 
 /// Get current Unix timestamp using `std::time::SystemTime`.
-pub(crate) fn current_unix_timestamp() -> i64 {
+#[doc(hidden)]
+pub fn current_unix_timestamp() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -385,7 +389,8 @@ fn do_text(result: &mut String, flags: &DirectiveFlags, to_lowcase: bool, s: &st
 
 /// Format a broken-down time according to a strftime-like format string,
 /// mirroring GNU's `__strftime_internal` (`lib/strftime.c`).
-pub(crate) fn format_time(
+#[doc(hidden)]
+pub fn format_time(
     fmt: &str,
     tm: &BrokenDownTime,
     timestamp: i64,

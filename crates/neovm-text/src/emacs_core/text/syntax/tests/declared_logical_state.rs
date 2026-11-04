@@ -121,8 +121,7 @@ fn syntax_heap_source_validates_object_payload_and_rejects_scalars() {
     neovm_value::string_pos_cache::reset_string_pos_cache();
     assert_eq!(binding.byte_to_gnu_char_pos(4).get(), -1);
     assert_eq!(
-        neovm_value::string_pos_cache::string_byte_to_gnu_char(source, binding.string(), 2)
-            .get(),
+        neovm_value::string_pos_cache::string_byte_to_gnu_char(source, binding.string(), 2).get(),
         -3
     );
     neovm_value::string_pos_cache::reset_string_pos_cache();

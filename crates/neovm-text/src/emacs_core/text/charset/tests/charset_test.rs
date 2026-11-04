@@ -1,8 +1,8 @@
 use super::*;
-use neovm_value::error::{FlowKind, FlowRef, FlowResultExt as _};
 use crate::emacs_core::eval::Context;
-use neovm_value::intern::{intern, resolve_sym};
 use crate::emacs_core::pdump::dump_to_file;
+use neovm_value::error::{FlowKind, FlowRef, FlowResultExt as _};
+use neovm_value::intern::{intern, resolve_sym};
 
 // -----------------------------------------------------------------------
 // CharsetRegistry unit tests
@@ -909,9 +909,7 @@ fn find_charset_string_mixed_order_matches_oracle() {
     //   (find-charset-string (string ?a ?😀 ?é (decode-char 'eight-bit 255)))
     //     => (ascii unicode eight-bit)
     let mut bytes = "a😀é".as_bytes().to_vec();
-    bytes.extend_from_slice(
-        &neovm_value::emacs_char::EmacsChar::from_byte8(255).to_emacs_bytes(),
-    );
+    bytes.extend_from_slice(&neovm_value::emacs_char::EmacsChar::from_byte8(255).to_emacs_bytes());
     let s = Value::heap_string(neovm_value::heap_types::LispString::from_emacs_bytes(bytes));
     let r = builtin_find_charset_string(vec![s]).unwrap();
     let items = list_to_vec(&r).unwrap();
@@ -940,7 +938,9 @@ fn find_charset_string_unibyte_ascii_and_eight_bit() {
 #[test]
 fn find_charset_string_raw_unibyte_value_reports_eight_bit() {
     crate::test_utils::init_test_tracing();
-    let raw = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![0xFF]));
+    let raw = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![
+        0xFF,
+    ]));
     let r = builtin_find_charset_string(vec![raw]).unwrap();
     let items = list_to_vec(&r).unwrap();
     assert_eq!(items.len(), 1);

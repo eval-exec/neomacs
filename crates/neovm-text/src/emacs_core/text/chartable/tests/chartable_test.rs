@@ -1,9 +1,9 @@
 use super::*;
-use neovm_value::boolvec::{bool_vector_from_bits, bool_vector_ref_value};
 use crate::emacs_core::chartable_entries::builtin_unicode_property_table_internal;
-use neovm_value::error::{FlowKind, FlowResultExt as _};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::eval::VariableView;
+use neovm_value::boolvec::{bool_vector_from_bits, bool_vector_ref_value};
+use neovm_value::error::{FlowKind, FlowResultExt as _};
 use neovm_value::intern::{intern, intern_uninterned};
 use neovm_value::symbol::CanonicalAccess;
 use neovm_value::value::ValueKind;
@@ -1190,10 +1190,7 @@ fn unicode_property_literal_loaded_from_el_source_preserves_raw_compression_byte
     let forms = crate::emacs_core::value_reader::read_all_with_source_multibyte(
         &decoded,
         true,
-        VariableView::canonical(
-            CanonicalAccess::TEST,
-            &neovm_value::symbol::Obarray::new(),
-        ),
+        VariableView::canonical(CanonicalAccess::TEST, &neovm_value::symbol::Obarray::new()),
     )
     .expect("reader should preserve raw byte strings in .el source");
     assert_eq!(forms.len(), 1);
@@ -1258,10 +1255,7 @@ fn unicode_property_table_read_from_generated_uni_category_decodes_ascii() {
     let forms = crate::emacs_core::value_reader::read_all_with_source_multibyte(
         &decoded,
         true,
-        VariableView::canonical(
-            CanonicalAccess::TEST,
-            &neovm_value::symbol::Obarray::new(),
-        ),
+        VariableView::canonical(CanonicalAccess::TEST, &neovm_value::symbol::Obarray::new()),
     )
     .expect("reader should parse generated Unicode category table");
     let table = forms
@@ -1290,10 +1284,7 @@ fn unicode_property_table_read_from_generated_uni_bidi_maps_decoded_symbols() {
     let forms = crate::emacs_core::value_reader::read_all_with_source_multibyte(
         &decoded,
         true,
-        VariableView::canonical(
-            CanonicalAccess::TEST,
-            &neovm_value::symbol::Obarray::new(),
-        ),
+        VariableView::canonical(CanonicalAccess::TEST, &neovm_value::symbol::Obarray::new()),
     )
     .expect("reader should parse generated Unicode bidi table");
     let table = forms

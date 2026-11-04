@@ -7,7 +7,6 @@
 use neovm_value::error::LispCondition;
 use std::io::Read;
 
-use neovm_value::heap_types::LispString;
 use flate2::{Decompress, FlushDecompress, Status};
 use neovm_edit::emacs_core::edit_host::EditHost;
 use neovm_edit::emacs_core::editfns::{
@@ -16,11 +15,13 @@ use neovm_edit::emacs_core::editfns::{
 };
 use neovm_edit::emacs_core::position::LispRegionArgs;
 use neovm_value::error::{EvalResult, expect_args, expect_max_args, expect_min_args, signal};
+use neovm_value::heap_types::LispString;
 use neovm_value::value::*;
 
 /// (zlib-available-p)
 /// Return t if zlib decompression is available.
-pub(crate) fn builtin_zlib_available_p(args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_zlib_available_p(args: Vec<Value>) -> EvalResult {
     expect_args("zlib-available-p", &args, 0)?;
     Ok(Value::T)
 }
@@ -31,10 +32,8 @@ pub(crate) fn builtin_zlib_available_p(args: Vec<Value>) -> EvalResult {
 /// Must be called in a unibyte buffer.
 /// Returns t on success, the number of unconsumed bytes on partial success
 /// (when ALLOW-PARTIAL is non-nil), or nil on failure.
-pub(crate) fn builtin_zlib_decompress_region<H: EditHost>(
-    host: &mut H,
-    args: Vec<Value>,
-) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_zlib_decompress_region<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_min_args("zlib-decompress-region", &args, 2)?;
     expect_max_args("zlib-decompress-region", &args, 3)?;
     let allow_partial = args.get(2).is_some_and(|v| v.is_truthy());

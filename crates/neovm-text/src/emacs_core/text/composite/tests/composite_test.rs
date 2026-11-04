@@ -280,7 +280,9 @@ fn compose_string_internal_range_checks() {
 #[test]
 fn compose_string_internal_accepts_raw_unibyte_ranges() {
     crate::test_utils::init_test_tracing();
-    let raw = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![0xFF]));
+    let raw = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![
+        0xFF,
+    ]));
     let result = compose_string_internal(vec![raw, Value::fixnum(0), Value::fixnum(1)]);
     assert!(result.is_ok());
     let value = result.unwrap();
@@ -838,7 +840,9 @@ fn composition_get_gstring_nil_bounds_default_like_gnu() {
 fn composition_get_gstring_rejects_non_ascii_unibyte_like_gnu() {
     crate::test_utils::init_test_tracing();
     let mut eval = super::super::eval::Context::new();
-    let raw = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![0xFF]));
+    let raw = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![
+        0xFF,
+    ]));
     let result = composition_get_gstring(
         &mut eval,
         vec![Value::fixnum(0), Value::fixnum(1), Value::NIL, raw],

@@ -2013,10 +2013,11 @@ impl ResolvedProcessDecoding {
             Self::Coding(name) => {
                 let run =
                     crate::encoding::decode_process_run_in_context(ctx, bytes, name, state, block)?;
+                let (text, used, carryover) = run.into_parts();
                 Ok(ProcessDecodedRun {
-                    text: run.text,
-                    coding: ProcessRunCoding { used: run.used },
-                    carryover: run.carryover,
+                    text,
+                    coding: ProcessRunCoding { used },
+                    carryover,
                 })
             }
         }
@@ -2475,7 +2476,7 @@ impl ProcessEncodingState {
                 vec![Value::symbol(coding.symbol())],
             )
         })?;
-        let info = metadata.info;
+        let info = metadata.info();
         // setup_coding_system derives flags from effective EOL, hooks, and
         // runtime codec type (GNU coding.c:5681-5696, 5719-5870).
         let character_conversion = !matches!(
@@ -2483,7 +2484,7 @@ impl ProcessEncodingState {
             "raw-text" | "undecided"
         );
         let eol_conversion_required = eol_conversion == EolConversion::Enabled
-            && matches!(metadata.eol_type, EolType::Dos | EolType::Mac);
+            && matches!(metadata.eol_type(), EolType::Dos | EolType::Mac);
         let eligibility = if character_conversion
             || info.pre_write_conversion.is_some()
             || eol_conversion_required
@@ -2492,7 +2493,7 @@ impl ProcessEncodingState {
         } else {
             ProcessEncodingEligibility::Bypass
         };
-        let raw = match metadata.eol_type {
+        let raw = match metadata.eol_type() {
             EolType::Dos => "raw-text-dos",
             EolType::Mac => "raw-text-mac",
             EolType::Unix => "raw-text-unix",

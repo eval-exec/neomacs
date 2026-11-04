@@ -6451,9 +6451,10 @@ fn decode_insert_file_contents(
         };
 
     let decoded = crate::encoding::decode_file_bytes_in_context(eval, bytes, &coding)?;
+    let (text, coding_system) = decoded.into_parts();
     Ok(DecodedFileContents::from_lisp_string(
-        decoded.text,
-        resolve_sym(decoded.coding_system).to_owned(),
+        text,
+        resolve_sym(coding_system).to_owned(),
     ))
 }
 
@@ -7717,7 +7718,7 @@ fn write_region_without_handler(
     // --- Write encoded bytes and handle fsync ---
     let write_result = (|| {
         let file = write_bytes_to_file_with_mode(
-            &encoded.bytes,
+            encoded.bytes(),
             &resolved_path,
             append_mode,
             DEFAULT_FILE_CREATION_MODE,
@@ -7822,7 +7823,7 @@ fn write_region_without_handler(
 
     eval.set_variable(
         "last-coding-system-used",
-        Value::symbol(encoded.coding_system),
+        Value::symbol(encoded.coding_system()),
     );
     if visit.reports_completion() && !eval.noninteractive() {
         let completion =

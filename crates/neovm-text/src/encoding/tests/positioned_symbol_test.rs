@@ -1,7 +1,7 @@
 //! Coding conversion CHECK_SYMBOL and EQ retain positioned-symbol policy.
 use super::*;
 use crate::emacs_core::{eval::Context, print::print_value};
-use neovm_value::{error::FlowKind};
+use neovm_value::error::FlowKind;
 use neovm_value::tagged::SymbolMode;
 
 #[test]

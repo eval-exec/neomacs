@@ -505,7 +505,9 @@ fn ccl_execute_on_string_resumes_identity_program_from_status_instruction() {
     let first = builtin_ccl_execute_on_string_impl(vec![
         program,
         status,
-        Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![65, 128])),
+        Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![
+            65, 128,
+        ])),
         Value::T,
         Value::T,
     ])
@@ -517,7 +519,9 @@ fn ccl_execute_on_string_resumes_identity_program_from_status_instruction() {
     let second = builtin_ccl_execute_on_string_impl(vec![
         program,
         status,
-        Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![66, 255])),
+        Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![
+            66, 255,
+        ])),
         Value::NIL,
         Value::T,
     ])
@@ -540,7 +544,9 @@ fn execute_ccl_on_string(
     let output = builtin_ccl_execute_on_string_impl(vec![
         program,
         status,
-        Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(input.to_vec())),
+        Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(
+            input.to_vec(),
+        )),
         Value::bool_val(!last_block),
         Value::T,
     ])

@@ -45,17 +45,18 @@ use neovm_value::tagged::SymbolMode;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use neovm_edit::buffer::{
-    Buffer, BufferId, CharPos0, CharRange, EmacsBytePos, EmacsByteRange, LispCharPos1,
-};
 use crate::emacs_core::casefiddle::apply_replace_match_case;
 use crate::emacs_core::regex_emacs::{
     self, BufferSyntaxLookup, CaseTranslation, CompiledPattern, DefaultSyntaxLookup,
     MatchRegisters, SyntaxCacheKey, SyntaxLookup,
 };
+use neovm_edit::buffer::{
+    Buffer, BufferId, CharPos0, CharRange, EmacsBytePos, EmacsByteRange, LispCharPos1,
+};
 use neovm_value::heap_types::{GnuStringCharPos, LispString};
 
-pub(crate) const REPLACE_MATCH_SUBEXP_MISSING: &str = "replace-match subexpression does not exist";
+#[doc(hidden)]
+pub const REPLACE_MATCH_SUBEXP_MISSING: &str = "replace-match subexpression does not exist";
 const GNU_SEARCH_REGS_BASE_CAPACITY: usize = 7;
 // Compiled-pattern LRU caches. GNU's `regexp_cache` (search.c) holds 20 entries
 // and that suffices there because GNU compiles a pattern into a cheap 256-byte
@@ -80,7 +81,8 @@ const STRING_MATCH_AT_DOT_UNREACHABLE: usize = usize::MAX;
 /// Keeping this error at the Emacs-regexp boundary prevents callers from
 /// exposing errors from an implementation-specific native regexp dialect.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum EmacsRegexpError {
+#[doc(hidden)]
+pub enum EmacsRegexpError {
     Compile(String),
     MatcherOverflow,
 }
@@ -146,7 +148,8 @@ struct BufferRegexpSyntaxLookup<'a> {
 /// propertizes — the `\s<\s<\s<` of `lisp-indent-line` reads three chars,
 /// not the buffer tail.
 #[derive(Clone, Copy)]
-pub(crate) struct PropertizeFrontier<'a> {
+#[doc(hidden)]
+pub struct PropertizeFrontier<'a> {
     /// First absolute buffer byte that is NOT yet propertized.
     pub(crate) byte: EmacsBytePos,
     /// Lowest byte at/after `byte` the matcher read syntax for, if any.
@@ -284,7 +287,8 @@ pub(crate) struct StringRegexpSyntaxLookup<'a> {
 /// publish match data before this helper has rejected the first deferred error.
 /// Supplied-count state and property resolution keep their existing ownership.
 #[inline]
-pub(crate) fn with_string_syntax_lookup<'a, R>(
+#[doc(hidden)]
+pub fn with_string_syntax_lookup<'a, R>(
     base: Option<BufferSyntaxLookup>,
     source: crate::emacs_core::syntax::StringSyntaxPositionSource<'a>,
     syntax_properties: crate::emacs_core::syntax::SyntaxProperties<'a>,
@@ -532,7 +536,8 @@ enum CompiledSearchPattern {
 /// immutable buffer borrow; an independent pattern must not trigger that
 /// observable work.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, strum::EnumIs)]
-pub(crate) enum BufferRegexpSyntaxDependency {
+#[doc(hidden)]
+pub enum BufferRegexpSyntaxDependency {
     SyntaxIndependent,
     BufferSyntaxDependent,
 }
@@ -542,7 +547,8 @@ pub(crate) enum BufferRegexpSyntaxDependency {
 /// A semantic enum keeps this evaluator decision distinct from regexp syntax
 /// dependency and prevents boolean argument swaps at the search/matcher seam.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, strum::EnumIs)]
-pub(crate) enum BufferRegexpSyntaxProperties {
+#[doc(hidden)]
+pub enum BufferRegexpSyntaxProperties {
     Ignore,
     Honor,
 }
@@ -559,14 +565,16 @@ pub(crate) enum BufferRegexpSyntaxProperties {
 /// [`prepare_current_buffer_regexp_syntax_to`] has run `syntax-propertize`,
 /// which is the last Lisp to run before the match.
 #[derive(Clone, Copy)]
-pub(crate) struct BufferRegexpMatchContext<'a> {
+#[doc(hidden)]
+pub struct BufferRegexpMatchContext<'a> {
     syntax_properties: crate::emacs_core::syntax::SyntaxProperties<'a>,
     word_boundary: crate::emacs_core::regex_emacs::WordBoundaryLookup,
     frontier: Option<PropertizeFrontier<'a>>,
 }
 
 impl<'a> BufferRegexpMatchContext<'a> {
-    pub(crate) fn new(
+    #[doc(hidden)]
+    pub fn new(
         syntax_properties: crate::emacs_core::syntax::SyntaxProperties<'a>,
         word_boundary: crate::emacs_core::regex_emacs::WordBoundaryLookup,
     ) -> Self {
@@ -578,7 +586,8 @@ impl<'a> BufferRegexpMatchContext<'a> {
     }
 
     /// Arm the lazy-propertize frontier (see [`PropertizeFrontier`]).
-    pub(crate) fn with_frontier(mut self, frontier: PropertizeFrontier<'a>) -> Self {
+    #[doc(hidden)]
+    pub fn with_frontier(mut self, frontier: PropertizeFrontier<'a>) -> Self {
         self.frontier = Some(frontier);
         self
     }
@@ -699,14 +708,17 @@ fn clear_regex_caches() {
     LITERAL_TRT_CACHE.with(|cache| *cache.borrow_mut() = None);
 }
 
-pub(crate) fn reset_regex_thread_locals() {
+#[doc(hidden)]
+pub fn reset_regex_thread_locals() {
     clear_regex_caches();
     REGEX_CACHE_COLLECTION_EPOCH.with(|epoch| epoch.set(None));
-    REGEX_CACHE_HEAP
-        .with(|owner| owner.set(neovm_value::tagged::gc::current_tagged_heap_identity().unwrap_or(0)));
+    REGEX_CACHE_HEAP.with(|owner| {
+        owner.set(neovm_value::tagged::gc::current_tagged_heap_identity().unwrap_or(0))
+    });
 }
 
-pub(crate) fn activate_regex_thread_locals(
+#[doc(hidden)]
+pub fn activate_regex_thread_locals(
     heap_identity: usize,
     collection_epoch: usize,
     collection_in_progress: bool,
@@ -723,7 +735,8 @@ pub(crate) fn activate_regex_thread_locals(
 
 /// GNU roots both regexp-cache syntax identities and case translation tables.
 /// Filter the cache's owner before reconstructing a Lisp word from a syntax key.
-pub(crate) fn collect_regex_gc_roots(
+#[doc(hidden)]
+pub fn collect_regex_gc_roots(
     roots: &mut Vec<neovm_value::value::Value>,
     heap_identity: usize,
     collection_epoch: usize,
@@ -817,7 +830,8 @@ pub struct MatchData {
 /// represent the impossible combination "buffer match with no buffer ID" by
 /// pairing a boolean with an `Option<BufferId>`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, strum::EnumIs)]
-pub(crate) enum MatchDataSource {
+#[doc(hidden)]
+pub enum MatchDataSource {
     String,
     Buffer(BufferId),
 }
@@ -868,7 +882,8 @@ struct EngineMatchData {
 /// into the evaluator's match data in place -- GNU's global `search_regs`,
 /// without the ~180-byte result a by-value search success copied at every
 /// hop between the matcher and the match-data slot.
-pub(crate) struct SearchRegisters(SearchRegistersKind);
+#[doc(hidden)]
+pub struct SearchRegisters(SearchRegistersKind);
 
 enum SearchRegistersKind {
     /// Registers as buffer byte ranges: a literal search, the zero-count
@@ -890,7 +905,8 @@ impl Default for SearchRegisters {
 impl SearchRegisters {
     /// An empty match at POS and no other register: GNU `search_buffer`'s
     /// `set_search_regs (pos_byte, 0)` for a search made zero times.
-    pub(crate) fn empty_match_at(pos: EmacsBytePos) -> Self {
+    #[doc(hidden)]
+    pub fn empty_match_at(pos: EmacsBytePos) -> Self {
         Self(SearchRegistersKind::Groups(EngineMatchData::new(
             gnu_single_group_vec(Some(MatchGroup::new(pos.get(), pos.get()))),
         )))
@@ -938,7 +954,8 @@ impl SearchRegisters {
     /// match data in TARGET, reusing TARGET's register storage when it
     /// already holds Lisp registers, including those retained by a failed
     /// string search.
-    pub(crate) fn publish_buffer_into(&self, buf: &Buffer, target: &mut Option<MatchData>) {
+    #[doc(hidden)]
+    pub fn publish_buffer_into(&self, buf: &Buffer, target: &mut Option<MatchData>) {
         if let Some(match_data) = target
             && let MatchDataKind::LispRegisters { source, groups } = &mut match_data.kind
         {
@@ -987,7 +1004,8 @@ impl SearchRegisters {
     /// place when TARGET already holds string match data, and answer where
     /// the match starts: what `string-match` returns. `None` for TARGET
     /// (INHIBIT-MODIFY, `inhibit-changing-match-data`) publishes nothing.
-    pub(crate) fn publish_string_into(
+    #[doc(hidden)]
+    pub fn publish_string_into(
         &self,
         searched: SearchedString,
         target: Option<&mut Option<MatchData>>,
@@ -1062,7 +1080,8 @@ impl SearchRegisters {
 /// syntax` compiles it: SYNTAX supplies only the cache key (the current
 /// buffer's syntax table) and the table a `[[:word:]]` fastmap is baked
 /// against.
-pub(crate) fn compile_string_search_pattern(
+#[doc(hidden)]
+pub fn compile_string_search_pattern(
     pattern: &LispString,
     string: &LispString,
     case_fold: bool,
@@ -1084,7 +1103,8 @@ pub(crate) fn compile_string_search_pattern(
 /// ([`compile_string_search_pattern`]): the matcher run of
 /// `string_search_full_with_case_fold_source_lisp_pattern_posix_syntax`,
 /// its registers left in OUT for [`SearchRegisters::publish_string_into`].
-pub(crate) fn string_search_compiled_into(
+#[doc(hidden)]
+pub fn string_search_compiled_into(
     compiled: &CompiledPattern,
     string: &LispString,
     start: usize,
@@ -1163,7 +1183,8 @@ fn fill_buffer_groups_from_registers(
 /// the still-unchanged buffer, so callers can move point and store match data
 /// without knowing any coordinate-conversion rules.
 #[derive(Clone, Debug)]
-pub(crate) struct BufferSearchSuccess {
+#[doc(hidden)]
+pub struct BufferSearchSuccess {
     point: EmacsBytePos,
     match_data: MatchData,
 }
@@ -1173,7 +1194,8 @@ pub(crate) struct BufferSearchSuccess {
 /// publish registers first. No callback or GC boundary may outlive the source.
 /// Threading: this carrier retains a mutator-owned searched Value and is confined.
 #[derive(Clone, Debug)]
-pub(crate) struct StringSearchSuccess {
+#[doc(hidden)]
+pub struct StringSearchSuccess {
     byte_start: EmacsBytePos,
     bytes: EngineMatchData,
     searched: SearchedString,
@@ -1246,16 +1268,19 @@ static_assertions::assert_impl_all!(StringMatchRangeError: Send, Sync);
 /// origins remain zero-based signed GNU registers. Only start<0 means unset.
 /// Threading: immutable numeric metadata, containing no Lisp state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct LispMatchEndpoints {
+#[doc(hidden)]
+pub struct LispMatchEndpoints {
     start: i64,
     end: i64,
 }
 
 impl LispMatchEndpoints {
-    pub(crate) fn start(self) -> i64 {
+    #[doc(hidden)]
+    pub fn start(self) -> i64 {
         self.start
     }
-    pub(crate) fn end(self) -> i64 {
+    #[doc(hidden)]
+    pub fn end(self) -> i64 {
         self.end
     }
 }
@@ -1264,7 +1289,8 @@ impl LispMatchEndpoints {
 /// GNU unwind restoration keeps signed metadata independently of Lisp parsing.
 /// Threading: owned numeric metadata only; no Lisp state or callback lifetime.
 #[derive(Clone, Debug)]
-pub(crate) struct StringMatchRegisterSnapshot {
+#[doc(hidden)]
+pub struct StringMatchRegisterSnapshot {
     groups: smallvec::SmallVec<[Option<StringMatchRange>; GNU_SEARCH_REGS_BASE_CAPACITY]>,
 }
 static_assertions::assert_impl_all!(StringMatchRegisterSnapshot: Send, Sync);
@@ -1408,7 +1434,8 @@ pub enum SearchedString {
 }
 
 impl SearchedString {
-    pub(crate) fn as_lisp_string(&self) -> Option<&LispString> {
+    #[doc(hidden)]
+    pub fn as_lisp_string(&self) -> Option<&LispString> {
         match self {
             Self::Heap(val) => val.as_lisp_string(),
             Self::Owned(text) => Some(text),
@@ -1427,12 +1454,16 @@ impl SearchedString {
     }
 }
 
-pub fn char_pos_to_byte_lisp_string(s: &neovm_value::heap_types::LispString, char_pos: usize) -> usize {
+pub fn char_pos_to_byte_lisp_string(
+    s: &neovm_value::heap_types::LispString,
+    char_pos: usize,
+) -> usize {
     s.char_to_byte_pos(char_pos)
 }
 
 impl MatchData {
-    pub(crate) fn string_register_snapshot(&self) -> Option<StringMatchRegisterSnapshot> {
+    #[doc(hidden)]
+    pub fn string_register_snapshot(&self) -> Option<StringMatchRegisterSnapshot> {
         match &self.kind {
             MatchDataKind::StringChars { groups, .. } => Some(StringMatchRegisterSnapshot {
                 groups: groups.clone(),
@@ -1441,7 +1472,8 @@ impl MatchData {
         }
     }
 
-    pub(crate) fn from_string_register_snapshot(snapshot: StringMatchRegisterSnapshot) -> Self {
+    #[doc(hidden)]
+    pub fn from_string_register_snapshot(snapshot: StringMatchRegisterSnapshot) -> Self {
         Self {
             kind: MatchDataKind::StringChars {
                 groups: snapshot.groups,
@@ -1452,10 +1484,8 @@ impl MatchData {
         }
     }
 
-    pub(crate) fn string(
-        groups: Vec<Option<MatchGroup>>,
-        searched: Option<SearchedString>,
-    ) -> Self {
+    #[doc(hidden)]
+    pub fn string(groups: Vec<Option<MatchGroup>>, searched: Option<SearchedString>) -> Self {
         Self {
             kind: MatchDataKind::StringChars {
                 groups: groups
@@ -1473,7 +1503,8 @@ impl MatchData {
         }
     }
 
-    pub(crate) fn buffer_lisp_chars(groups: Vec<Option<MatchGroup>>, buffer_id: BufferId) -> Self {
+    #[doc(hidden)]
+    pub fn buffer_lisp_chars(groups: Vec<Option<MatchGroup>>, buffer_id: BufferId) -> Self {
         Self {
             kind: MatchDataKind::LispRegisters {
                 source: LispRegisterSource::Buffer(buffer_id),
@@ -1487,14 +1518,16 @@ impl MatchData {
         }
     }
 
-    pub(crate) fn searched_string(&self) -> Option<&SearchedString> {
+    #[doc(hidden)]
+    pub fn searched_string(&self) -> Option<&SearchedString> {
         match &self.kind {
             MatchDataKind::StringChars { searched, .. } => searched.as_ref(),
             MatchDataKind::LispRegisters { .. } => None,
         }
     }
 
-    pub(crate) fn source(&self) -> MatchDataSource {
+    #[doc(hidden)]
+    pub fn source(&self) -> MatchDataSource {
         match self.kind {
             MatchDataKind::StringChars { .. } => MatchDataSource::String,
             MatchDataKind::LispRegisters { source, .. } => match source {
@@ -1507,7 +1540,8 @@ impl MatchData {
     /// A failed string search changes GNU's `last_thing_searched` to `Qt`
     /// while retaining the register numbers (search.c:422-427). The old
     /// buffer positions now name string indices; do not subtract one.
-    pub(crate) fn record_failed_string_search(&mut self) {
+    #[doc(hidden)]
+    pub fn record_failed_string_search(&mut self) {
         match &mut self.kind {
             MatchDataKind::StringChars { searched, .. } => *searched = None,
             MatchDataKind::LispRegisters { source, .. } => {
@@ -1516,14 +1550,16 @@ impl MatchData {
         }
     }
 
-    pub(crate) fn group_count(&self) -> usize {
+    #[doc(hidden)]
+    pub fn group_count(&self) -> usize {
         match &self.kind {
             MatchDataKind::StringChars { groups, .. } => groups.len(),
             MatchDataKind::LispRegisters { groups, .. } => groups.len(),
         }
     }
 
-    pub(crate) fn group(&self, index: usize) -> Option<MatchGroup> {
+    #[doc(hidden)]
+    pub fn group(&self, index: usize) -> Option<MatchGroup> {
         #[cfg(debug_assertions)]
         match_stats::count_group_read(index);
         let result = match &self.kind {
@@ -1548,7 +1584,8 @@ impl MatchData {
 
     /// GNU match_limit/Fmatch_data filter only the signed start register.
     /// A negative end or reversed endpoints still belong to a matched group.
-    pub(crate) fn lisp_group(&self, index: usize) -> Option<LispMatchEndpoints> {
+    #[doc(hidden)]
+    pub fn lisp_group(&self, index: usize) -> Option<LispMatchEndpoints> {
         #[cfg(debug_assertions)]
         match_stats::count_group_read(index);
         let result = match &self.kind {
@@ -1599,13 +1636,15 @@ impl MatchData {
         }
     }
 
-    pub(crate) fn groups_snapshot(&self) -> Vec<Option<MatchGroup>> {
+    #[doc(hidden)]
+    pub fn groups_snapshot(&self) -> Vec<Option<MatchGroup>> {
         (0..self.group_count())
             .map(|index| self.group(index))
             .collect()
     }
 
-    pub(crate) fn translate_positions(
+    #[doc(hidden)]
+    pub fn translate_positions(
         &mut self,
         delta: i64,
     ) -> Result<(), neovm_value::heap_types::GnuStringCharPosError> {
@@ -1644,7 +1683,8 @@ impl MatchData {
     /// plain integers records string-sourced data that still describes the
     /// buffer.  Skipping the adjustment there leaves a caller that replaces in
     /// a loop reading the same stale registers forever.
-    pub(crate) fn map_lisp_positions(&mut self, mut map: impl FnMut(MatchGroup) -> MatchGroup) {
+    #[doc(hidden)]
+    pub fn map_lisp_positions(&mut self, mut map: impl FnMut(MatchGroup) -> MatchGroup) {
         match &mut self.kind {
             MatchDataKind::StringChars { groups, .. } => {
                 for range in groups.iter_mut().flatten() {
@@ -1799,7 +1839,8 @@ impl BufferSearchSuccess {
         }
     }
 
-    pub(crate) fn into_parts(self) -> (BufferId, EmacsBytePos, MatchData) {
+    #[doc(hidden)]
+    pub fn into_parts(self) -> (BufferId, EmacsBytePos, MatchData) {
         let MatchDataSource::Buffer(buffer_id) = self.match_data.source() else {
             unreachable!("buffer search success always carries buffer match data");
         };
@@ -1826,12 +1867,14 @@ impl StringSearchSuccess {
     }
 
     /// An inhibited search converts only its returned position, as GNU does.
-    pub(crate) fn into_start(self) -> GnuStringCharPos {
+    #[doc(hidden)]
+    pub fn into_start(self) -> GnuStringCharPos {
         searched_byte_to_gnu_char(&self.searched, self.byte_start.get())
     }
 
     /// Publish registers first, then convert VAL again using the same source.
-    pub(crate) fn into_parts(self) -> (GnuStringCharPos, MatchData) {
+    #[doc(hidden)]
+    pub fn into_parts(self) -> (GnuStringCharPos, MatchData) {
         let match_data = self.bytes.publish_string(self.searched);
         let start = searched_byte_to_gnu_char(
             match_data
@@ -2630,7 +2673,8 @@ fn compile_lisp_pattern_with_posix_translation(
 /// a second time (~300 Ir per probe; `looking-at` did it twice per call).
 /// GNU's `Flooking_at` compiles once (`compile_pattern`) and matches with
 /// that.
-pub(crate) fn buffer_regexp_syntax_dependency_compiled_with_symbols(
+#[doc(hidden)]
+pub fn buffer_regexp_syntax_dependency_compiled_with_symbols(
     buf: &Buffer,
     pattern: &LispString,
     case_fold: bool,
@@ -2661,7 +2705,8 @@ pub(crate) fn buffer_regexp_syntax_dependency_compiled_with_symbols(
 /// pattern's finite maximum per-attempt span in characters (`None` when
 /// unbounded), for callers that can propertize a bounded window instead of
 /// the whole tail.
-pub(crate) fn buffer_regexp_syntax_dependency_and_span(
+#[doc(hidden)]
+pub fn buffer_regexp_syntax_dependency_and_span(
     buf: &Buffer,
     pattern: &LispString,
     case_fold: bool,
@@ -3204,9 +3249,9 @@ fn literal_find_emacs_bytes(
                     return None;
                 }
                 for at in 0..=text.len() - literal.len() {
-                    if let Some(end) = neovm_value::emacs_char::unibyte_case_fold_match_len(
-                        text, at, literal,
-                    ) {
+                    if let Some(end) =
+                        neovm_value::emacs_char::unibyte_case_fold_match_len(text, at, literal)
+                    {
                         return Some(MatchGroup::new(at, end));
                     }
                 }
@@ -3224,9 +3269,7 @@ fn literal_find_emacs_bytes(
             // (eight-bit chars are caseless, matching GNU) — no storage round-trip.
             let mut at = 0;
             loop {
-                if let Some(end) =
-                    neovm_value::emacs_char::case_fold_match_len(text, at, literal)
-                {
+                if let Some(end) = neovm_value::emacs_char::case_fold_match_len(text, at, literal) {
                     return Some(MatchGroup::new(at, end));
                 }
                 if at >= text.len() {
@@ -3268,9 +3311,9 @@ fn literal_rfind_emacs_bytes(
                     return None;
                 }
                 for at in (0..=text.len() - literal.len()).rev() {
-                    if let Some(end) = neovm_value::emacs_char::unibyte_case_fold_match_len(
-                        text, at, literal,
-                    ) {
+                    if let Some(end) =
+                        neovm_value::emacs_char::unibyte_case_fold_match_len(text, at, literal)
+                    {
                         return Some(MatchGroup::new(at, end));
                     }
                 }
@@ -3288,9 +3331,7 @@ fn literal_rfind_emacs_bytes(
             let mut best = None;
             let mut at = 0;
             while at < text.len() {
-                if let Some(end) =
-                    neovm_value::emacs_char::case_fold_match_len(text, at, literal)
-                {
+                if let Some(end) = neovm_value::emacs_char::case_fold_match_len(text, at, literal) {
                     best = Some(MatchGroup::new(at, end));
                 }
                 let (_code, len) = neovm_value::emacs_char::string_char(&text[at..]);
@@ -3456,11 +3497,11 @@ fn forward_search_slice_range(
 /// regexp but do not need match data.  It mirrors GNU's `fast_c_string_match`:
 /// matching is case-sensitive, uses the standard syntax table, and reuses the
 /// shared compiled-pattern cache.
-pub(crate) fn predicate_match(pattern: &LispString, text: &str) -> Result<bool, EmacsRegexpError> {
+#[doc(hidden)]
+pub fn predicate_match(pattern: &LispString, text: &str) -> Result<bool, EmacsRegexpError> {
     if pattern.is_multibyte() {
-        let unibyte_pattern = LispString::from_unibyte(
-            neovm_value::emacs_char::str_to_unibyte(pattern.as_bytes()),
-        );
+        let unibyte_pattern =
+            LispString::from_unibyte(neovm_value::emacs_char::str_to_unibyte(pattern.as_bytes()));
         predicate_match_with_case_fold(&unibyte_pattern, text, false, false)
     } else {
         predicate_match_with_case_fold(pattern, text, false, false)
@@ -3472,7 +3513,8 @@ pub(crate) fn predicate_match(pattern: &LispString, text: &str) -> Result<bool, 
 /// GNU's font APIs use `fast_string_match_ignore_case` for Lisp-supplied
 /// patterns.  Keeping that policy as a named operation avoids exposing engine
 /// flags or translation tables to callers.
-pub(crate) fn predicate_match_ignore_case(
+#[doc(hidden)]
+pub fn predicate_match_ignore_case(
     pattern: &LispString,
     text: &str,
 ) -> Result<bool, EmacsRegexpError> {
@@ -3515,7 +3557,8 @@ fn predicate_match_with_case_fold(
 /// regexp engine.  Supplying only that region to the matcher gives anchors
 /// the same narrowed-buffer bounds while retaining the buffer's syntax and
 /// current point for assertions such as `\\=`.
-pub(crate) fn treesit_predicate_match_lisp(
+#[doc(hidden)]
+pub fn treesit_predicate_match_lisp(
     buf: &Buffer,
     pattern: &LispString,
     range: EmacsByteRange,
@@ -3594,7 +3637,8 @@ pub(crate) fn search_forward_into(
     )
 }
 
-pub(crate) fn search_forward_into_with_symbols(
+#[doc(hidden)]
+pub fn search_forward_into_with_symbols(
     buf: &mut Buffer,
     pattern: &neovm_value::heap_types::LispString,
     bound: Option<usize>,
@@ -3692,7 +3736,8 @@ pub(crate) fn search_backward_into(
     )
 }
 
-pub(crate) fn search_backward_into_with_symbols(
+#[doc(hidden)]
+pub fn search_backward_into_with_symbols(
     buf: &mut Buffer,
     pattern: &neovm_value::heap_types::LispString,
     bound: Option<usize>,
@@ -4025,7 +4070,8 @@ fn buffer_search_translation_table(
 
 /// [`re_search_forward_lisp_with_posix_into`] with its registers published into a
 /// [`BufferSearchSuccess`].
-pub(crate) fn re_search_forward_lisp_with_posix(
+#[doc(hidden)]
+pub fn re_search_forward_lisp_with_posix(
     buf: &mut Buffer,
     pattern: &LispString,
     bound: Option<usize>,
@@ -4048,7 +4094,8 @@ pub(crate) fn re_search_forward_lisp_with_posix(
     Ok(point.map(|point| BufferSearchSuccess::new(buf, point, regs.into_engine_match_data())))
 }
 
-pub(crate) fn re_search_forward_lisp_with_posix_into(
+#[doc(hidden)]
+pub fn re_search_forward_lisp_with_posix_into(
     buf: &mut Buffer,
     pattern: &LispString,
     bound: Option<usize>,
@@ -4114,7 +4161,8 @@ pub(crate) fn re_search_forward_lisp_with_posix_into(
 
 /// `re_search_forward_lisp_with_posix` for a pattern the caller already
 /// compiled: the same search, no second pattern-cache probe.
-pub(crate) fn re_search_forward_compiled_into(
+#[doc(hidden)]
+pub fn re_search_forward_compiled_into(
     buf: &mut Buffer,
     compiled: &CompiledPattern,
     bound: Option<usize>,
@@ -4168,7 +4216,8 @@ pub(crate) fn re_search_forward_compiled_into(
     }
 }
 
-pub(crate) fn re_search_backward_lisp_with_posix_into(
+#[doc(hidden)]
+pub fn re_search_backward_lisp_with_posix_into(
     buf: &mut Buffer,
     pattern: &LispString,
     bound: Option<usize>,
@@ -4231,7 +4280,8 @@ pub(crate) fn re_search_backward_lisp_with_posix_into(
 }
 
 /// Backward search with an already prepared pattern; no second cache probe.
-pub(crate) fn re_search_backward_compiled_into(
+#[doc(hidden)]
+pub fn re_search_backward_compiled_into(
     buf: &mut Buffer,
     compiled: &CompiledPattern,
     bound: Option<usize>,
@@ -4346,7 +4396,8 @@ pub(crate) fn looking_at_with_posix(
     Ok(engine_match.map(|engine_match| engine_match.publish_buffer(buf)))
 }
 
-pub(crate) fn looking_at_lisp_with_posix(
+#[doc(hidden)]
+pub fn looking_at_lisp_with_posix(
     buf: &Buffer,
     pattern: &LispString,
     case_fold: bool,
@@ -4403,7 +4454,8 @@ pub(crate) fn looking_at_lisp_with_posix(
 /// `looking_at_lisp_with_posix` for a pattern the caller already compiled
 /// (from `buffer_regexp_syntax_dependency_compiled`): the same match with no
 /// second pattern-cache probe.
-pub(crate) fn looking_at_compiled(
+#[doc(hidden)]
+pub fn looking_at_compiled(
     buf: &Buffer,
     compiled: &CompiledPattern,
     match_context: BufferRegexpMatchContext<'_>,
@@ -4432,7 +4484,8 @@ pub(crate) fn looking_at_compiled(
 /// the pattern matches at point, with the match's registers in OUT for
 /// [`SearchRegisters::publish_buffer_into`]. The match data is published in
 /// place instead of built and moved (U2.8).
-pub(crate) fn looking_at_compiled_into(
+#[doc(hidden)]
+pub fn looking_at_compiled_into(
     buf: &Buffer,
     compiled: &CompiledPattern,
     match_context: BufferRegexpMatchContext<'_>,
@@ -4755,7 +4808,8 @@ fn engine_match_byte_start(bytes: &EngineMatchData) -> EmacsBytePos {
 }
 
 #[allow(clippy::too_many_arguments)] // matching options remain explicit at the GNU-regexp boundary
-pub(crate) fn string_search_full_with_case_fold_source_lisp_pattern_posix_syntax(
+#[doc(hidden)]
+pub fn string_search_full_with_case_fold_source_lisp_pattern_posix_syntax(
     pattern: &LispString,
     string: &neovm_value::heap_types::LispString,
     searched_string: SearchedString,
@@ -4782,7 +4836,8 @@ pub(crate) fn string_search_full_with_case_fold_source_lisp_pattern_posix_syntax
 /// `find-file-name-handler` and consumes the string by pointer, so callers
 /// with a borrowed `&LispString` need no owned copy to match.
 #[allow(clippy::too_many_arguments)] // matching options remain explicit at the GNU-regexp boundary
-pub(crate) fn string_search_start_with_case_fold_source_lisp_pattern_posix_syntax(
+#[doc(hidden)]
+pub fn string_search_start_with_case_fold_source_lisp_pattern_posix_syntax(
     pattern: &LispString,
     string: &neovm_value::heap_types::LispString,
     start: usize,
@@ -4832,7 +4887,8 @@ pub(crate) fn string_match_full_with_case_fold_source_posix(
         .transpose()
 }
 
-pub(crate) fn string_search_full_with_case_fold_and_posix(
+#[doc(hidden)]
+pub fn string_search_full_with_case_fold_and_posix(
     pattern: &str,
     string: &str,
     start: usize,
@@ -5357,7 +5413,8 @@ fn apply_match_case_with_syntax(
 /// are ever read back. Read by the ignored probe test
 /// `match_publish_read_stats_probe`; absent from optimized builds.
 #[cfg(debug_assertions)]
-pub(crate) mod match_stats {
+#[doc(hidden)]
+pub mod match_stats {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     pub(crate) static PUBLISHES: AtomicUsize = AtomicUsize::new(0);
@@ -5386,7 +5443,8 @@ pub(crate) mod match_stats {
         }
     }
 
-    pub(crate) fn count_full_export() {
+    #[doc(hidden)]
+    pub fn count_full_export() {
         FULL_EXPORTS.fetch_add(1, Ordering::Relaxed);
     }
 
@@ -5477,7 +5535,8 @@ mod pike_vm_fuzz_regression_tests;
 
 /// Debug-only carrier TLS fingerprint for this module's classified records.
 #[cfg(debug_assertions)]
-pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+#[doc(hidden)]
+pub fn carrier_tls_fingerprint(h: &mut u64) {
     neovm_value::tls_fingerprint::mix(
         h,
         LISP_REGEX_PATTERN_CACHE.with(|slot| slot.borrow().len() as u64),
@@ -5490,4 +5549,12 @@ pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
         h,
         SEARCH_PATTERN_CACHE.with(|slot| slot.borrow().len() as u64),
     );
+}
+
+#[doc(hidden)]
+impl<'a> PropertizeFrontier<'a> {
+    #[doc(hidden)]
+    pub fn new(byte: EmacsBytePos, crossed: &'a std::cell::Cell<Option<EmacsBytePos>>) -> Self {
+        Self { byte, crossed }
+    }
 }

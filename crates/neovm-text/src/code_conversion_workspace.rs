@@ -58,14 +58,16 @@ pub struct CodeConversionBufferLease {
 }
 
 impl CodeConversionBufferLease {
-    pub(crate) const fn buffer_id(&self) -> BufferId {
+    #[doc(hidden)]
+    pub const fn buffer_id(&self) -> BufferId {
         self.buffer
     }
 }
 
 /// Evaluator-owned state for GNU's code-conversion scratch buffers.
 #[derive(Debug, Default)]
-pub(crate) struct CodeConversionWorkspace {
+#[doc(hidden)]
+pub struct CodeConversionWorkspace {
     reusable: ReusableBufferState,
 }
 
@@ -75,7 +77,8 @@ impl CodeConversionWorkspace {
     /// The first/top-level conversion reuses the canonical hidden buffer.
     /// Reentrant conversions receive uniquely named temporary buffers, just
     /// as GNU does while `reused_workbuf_in_use` is set.
-    pub(crate) fn acquire(
+    #[doc(hidden)]
+    pub fn acquire(
         &mut self,
         buffers: &mut BufferManager,
         encoding: ConversionBufferEncoding,
@@ -123,11 +126,8 @@ impl CodeConversionWorkspace {
     }
 
     /// Release one active conversion, retaining only the canonical buffer.
-    pub(crate) fn release(
-        &mut self,
-        buffers: &mut BufferManager,
-        lease: CodeConversionBufferLease,
-    ) {
+    #[doc(hidden)]
+    pub fn release(&mut self, buffers: &mut BufferManager, lease: CodeConversionBufferLease) {
         let buffer = lease.buffer_id();
         match lease.kind {
             LeaseKind::Reusable => {
@@ -143,7 +143,8 @@ impl CodeConversionWorkspace {
         }
     }
 
-    pub(crate) fn replace_contents(
+    #[doc(hidden)]
+    pub fn replace_contents(
         &self,
         buffers: &mut BufferManager,
         lease: &CodeConversionBufferLease,

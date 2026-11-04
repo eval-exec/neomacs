@@ -1,7 +1,7 @@
 use super::*;
 use neovm_value::error::{FlowKind, FlowResultExt as _};
-use neovm_value::value::{ValueKind, VecLikeType};
 use neovm_value::heap_types::LispString;
+use neovm_value::value::{ValueKind, VecLikeType};
 
 #[test]
 fn json_option_domains_match_gnu_symbols() {

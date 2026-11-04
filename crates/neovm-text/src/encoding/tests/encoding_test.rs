@@ -364,7 +364,9 @@ fn builtin_coding_string_helpers_runtime_match_oracle_core_cases() {
         other => panic!("expected signal, got: {other:?}"),
     }
 
-    let unibyte_val = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![0xE9]));
+    let unibyte_val = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![
+        0xE9,
+    ]));
     let decoded_unibyte = builtin_decode_coding_string(vec![unibyte_val, Value::symbol("utf-8")])
         .expect("decode-coding-string should preserve invalid bytes");
     let decoded_ls = decoded_unibyte
@@ -374,7 +376,9 @@ fn builtin_coding_string_helpers_runtime_match_oracle_core_cases() {
     let codes: Vec<u32> = crate::emacs_core::builtins::lisp_string_char_codes(decoded_ls);
     assert_eq!(codes, vec![0x3FFF00 + 0xE9]);
 
-    let unibyte_val2 = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![0xE9]));
+    let unibyte_val2 = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![
+        0xE9,
+    ]));
     let encoded_unibyte = builtin_encode_coding_string(vec![unibyte_val2, Value::symbol("utf-8")])
         .expect("encode-coding-string should preserve unibyte bytes");
     let encoded_ls = encoded_unibyte.as_lisp_string().unwrap();
@@ -572,10 +576,7 @@ fn ascii_coding_string_nocopy_allocates_when_eol_conversion_needed() {
         builtin_encode_coding_string(vec![encode_source, Value::symbol("utf-8-dos"), Value::T])
             .expect("utf-8-dos encode");
     assert_eq!(encoded.as_lisp_string().unwrap().as_bytes(), b"a\r\nb");
-    assert!(!neovm_value::value::eq_value(
-        &encode_source,
-        &encoded
-    ));
+    assert!(!neovm_value::value::eq_value(&encode_source, &encoded));
 
     let decode_source = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(
         b"a\r\nb".to_vec(),
@@ -584,10 +585,7 @@ fn ascii_coding_string_nocopy_allocates_when_eol_conversion_needed() {
         builtin_decode_coding_string(vec![decode_source, Value::symbol("utf-8-dos"), Value::T])
             .expect("utf-8-dos decode");
     assert_eq!(decoded.as_utf8_str(), Some("a\nb"));
-    assert!(!neovm_value::value::eq_value(
-        &decode_source,
-        &decoded
-    ));
+    assert!(!neovm_value::value::eq_value(&decode_source, &decoded));
 }
 
 #[test]
@@ -722,7 +720,9 @@ fn builtin_coding_string_helpers_accept_iso_8859_9_alias() {
 #[test]
 fn decode_latin1_attaches_charset_text_property() {
     crate::test_utils::init_test_tracing();
-    let encoded = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![0xE9]));
+    let encoded = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![
+        0xE9,
+    ]));
     let decoded = builtin_decode_coding_string(vec![encoded, Value::symbol("latin-1")])
         .expect("latin-1 decode should succeed");
     if !decoded.is_string() {
@@ -766,7 +766,9 @@ fn decode_latin1_charset_property_spans_ascii_like_gnu() {
 #[test]
 fn encode_no_conversion_preserves_unibyte_storage_bytes() {
     crate::test_utils::init_test_tracing();
-    let source = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![0xE9]));
+    let source = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![
+        0xE9,
+    ]));
     let encoded =
         builtin_encode_coding_string(vec![source, Value::symbol("no-conversion")]).unwrap();
     if !encoded.is_string() {
@@ -919,7 +921,10 @@ fn encode_coding_region_destination_t_returns_encoded_string() {
     let mut eval = crate::emacs_core::Context::new();
     let current = eval.buffers.current_buffer_id().expect("current buffer");
     eval.buffers
-        .insert_lisp_string_into_buffer(current, &neovm_value::heap_types::LispString::from_utf8("é"))
+        .insert_lisp_string_into_buffer(
+            current,
+            &neovm_value::heap_types::LispString::from_utf8("é"),
+        )
         .expect("insert source text");
 
     let encoded = builtin_encode_coding_region(
@@ -1210,8 +1215,9 @@ fn builtin_multibyte_string_p_matches_oracle_non_string_and_unibyte_storage() {
         Value::T
     );
 
-    let unibyte_val =
-        Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(b"abc".to_vec()));
+    let unibyte_val = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(
+        b"abc".to_vec(),
+    ));
     assert_eq!(
         builtin_multibyte_string_p_1(&mut ctx, unibyte_val).unwrap(),
         Value::NIL

@@ -57,7 +57,8 @@ fn is_valid_ccl_program(program: &Value, mode: SymbolMode) -> bool {
 }
 
 #[derive(Default)]
-pub(crate) struct CclRegistry {
+#[doc(hidden)]
+pub struct CclRegistry {
     programs: HashMap<SymId, (i64, Value)>,
     code_conversion_maps: HashMap<SymId, (i64, Value)>,
     /// Integer-to-integer tables for `lookup-integer` / `lookup-character`
@@ -155,10 +156,8 @@ struct CclVariableHooks {
 
 /// Run `body` while CCL symbol resolution can see these variables' obarray
 /// plists and the translation vectors `define-translation-hash-table` fills.
-pub(crate) fn with_ccl_obarray<'a, V: RawTextVariableView<'a>, R>(
-    vars: V,
-    body: impl FnOnce() -> R,
-) -> R {
+#[doc(hidden)]
+pub fn with_ccl_obarray<'a, V: RawTextVariableView<'a>, R>(vars: V, body: impl FnOnce() -> R) -> R {
     let raw = vars.into_raw();
     // The closures capture nothing; each is monomorphized for this
     // publication's V and 'a, and `raw` names the local below, which
@@ -231,28 +230,34 @@ fn with_ccl_registry_mut<R>(f: impl FnOnce(&mut CclRegistry) -> R) -> R {
     CCL_REGISTRY.with(|r| f(&mut r.borrow_mut()))
 }
 
-pub(crate) type CclRegistryHandle = HeapRegistryHandle<CclRegistry>;
+#[doc(hidden)]
+pub type CclRegistryHandle = HeapRegistryHandle<CclRegistry>;
 
-pub(crate) fn current_ccl_registry_handle() -> CclRegistryHandle {
+#[doc(hidden)]
+pub fn current_ccl_registry_handle() -> CclRegistryHandle {
     CCL_REGISTRY.with(HeapRegistrySlot::current)
 }
 
-pub(crate) fn install_ccl_registry_handle(handle: &CclRegistryHandle) {
+#[doc(hidden)]
+pub fn install_ccl_registry_handle(handle: &CclRegistryHandle) {
     CCL_REGISTRY.with(|slot| slot.install(handle));
 }
 
 /// Reset the active heap's registry without losing another Context's state.
-pub(crate) fn reset_ccl_registry() {
+#[doc(hidden)]
+pub fn reset_ccl_registry() {
     CCL_REGISTRY.with(|slot| slot.reset(CclRegistry::with_defaults()));
 }
 
 /// Carrier park: forget the installed registry handle (a plain store).
-pub(crate) fn park_ccl_registry() {
+#[doc(hidden)]
+pub fn park_ccl_registry() {
     CCL_REGISTRY.with(HeapRegistrySlot::park);
 }
 
 /// Trace a Context's registry even when another heap is installed on this thread.
-pub(crate) fn collect_ccl_registry_gc_roots(handle: &CclRegistryHandle, roots: &mut Vec<Value>) {
+#[doc(hidden)]
+pub fn collect_ccl_registry_gc_roots(handle: &CclRegistryHandle, roots: &mut Vec<Value>) {
     let registry = handle.borrow();
     roots.extend(registry.programs.values().map(|(_, value)| *value));
     roots.extend(
@@ -271,13 +276,15 @@ pub(crate) fn collect_ccl_gc_roots(roots: &mut Vec<Value>, heap_identity: usize)
     }
 }
 
-pub(crate) fn unregister_registered_ccl_program(name: SymId) {
+#[doc(hidden)]
+pub fn unregister_registered_ccl_program(name: SymId) {
     with_ccl_registry_mut(|registry| {
         let _ = registry.programs.remove(&name);
     });
 }
 
-pub(crate) fn is_registered_ccl_program(name: SymId) -> bool {
+#[doc(hidden)]
+pub fn is_registered_ccl_program(name: SymId) -> bool {
     with_ccl_registry(|registry| registry.programs.contains_key(&name))
 }
 
@@ -1344,10 +1351,8 @@ pub(crate) fn builtin_ccl_program_p_impl(args: Vec<Value>) -> EvalResult {
     builtin_ccl_program_p_impl_with_symbols(args, SymbolMode::Bare)
 }
 
-pub(crate) fn builtin_ccl_program_p_impl_with_symbols(
-    args: Vec<Value>,
-    mode: SymbolMode,
-) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_ccl_program_p_impl_with_symbols(args: Vec<Value>, mode: SymbolMode) -> EvalResult {
     expect_args("ccl-program-p", &args, 1)?;
     let is_program = resolve_ccl_program_designator(&args[0], mode)
         .is_some_and(|program| is_valid_ccl_program(&program, mode));
@@ -1363,10 +1368,8 @@ pub(crate) fn builtin_ccl_execute_impl(args: Vec<Value>) -> EvalResult {
     builtin_ccl_execute_impl_with_symbols(args, SymbolMode::Bare)
 }
 
-pub(crate) fn builtin_ccl_execute_impl_with_symbols(
-    args: Vec<Value>,
-    mode: SymbolMode,
-) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_ccl_execute_impl_with_symbols(args: Vec<Value>, mode: SymbolMode) -> EvalResult {
     expect_args("ccl-execute", &args, 2)?;
     if !args[1].is_vector() {
         return Err(signal(
@@ -1463,7 +1466,8 @@ pub(crate) fn builtin_ccl_execute_on_string_impl(args: Vec<Value>) -> EvalResult
     builtin_ccl_execute_on_string_impl_with_symbols(args, SymbolMode::Bare)
 }
 
-pub(crate) fn builtin_ccl_execute_on_string_impl_with_symbols(
+#[doc(hidden)]
+pub fn builtin_ccl_execute_on_string_impl_with_symbols(
     args: Vec<Value>,
     mode: SymbolMode,
 ) -> EvalResult {
@@ -1543,7 +1547,8 @@ pub(crate) fn builtin_register_ccl_program_impl(args: Vec<Value>) -> EvalResult 
     builtin_register_ccl_program_impl_with_symbols(args, SymbolMode::Bare)
 }
 
-pub(crate) fn builtin_register_ccl_program_impl_with_symbols(
+#[doc(hidden)]
+pub fn builtin_register_ccl_program_impl_with_symbols(
     args: Vec<Value>,
     mode: SymbolMode,
 ) -> EvalResult {
@@ -1585,7 +1590,8 @@ pub(crate) fn builtin_register_code_conversion_map_impl(args: Vec<Value>) -> Eva
     builtin_register_code_conversion_map_impl_with_symbols(args, SymbolMode::Bare)
 }
 
-pub(crate) fn builtin_register_code_conversion_map_impl_with_symbols(
+#[doc(hidden)]
+pub fn builtin_register_code_conversion_map_impl_with_symbols(
     args: Vec<Value>,
     mode: SymbolMode,
 ) -> EvalResult {
@@ -1620,7 +1626,8 @@ mod gc_tls_ownership_tests;
 
 /// Debug-only carrier TLS fingerprint for this module's classified records.
 #[cfg(debug_assertions)]
-pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+#[doc(hidden)]
+pub fn carrier_tls_fingerprint(h: &mut u64) {
     neovm_value::tls_fingerprint::mix(
         h,
         CCL_REGISTRY.with(|slot| slot.installed_heap_identity().unwrap_or(0) as u64),

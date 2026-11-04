@@ -16,24 +16,32 @@ pub(crate) const TREESIT_COMPILED_QUERY_TAG: &str = "treesit-compiled-query";
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) const PARSER_SLOT_TYPE: usize = 0;
 pub(crate) const PARSER_SLOT_ID: usize = 1;
-pub(crate) const PARSER_SLOT_LANGUAGE: usize = 2;
+#[doc(hidden)]
+pub const PARSER_SLOT_LANGUAGE: usize = 2;
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) const PARSER_SLOT_BUFFER: usize = 3;
-pub(crate) const PARSER_SLOT_TAG: usize = 4;
-pub(crate) const PARSER_SLOT_EMBED_LEVEL: usize = 5;
-pub(crate) const PARSER_SLOT_NOTIFIERS: usize = 6;
-pub(crate) const PARSER_SLOT_INCLUDED_RANGES: usize = 7;
+#[doc(hidden)]
+pub const PARSER_SLOT_TAG: usize = 4;
+#[doc(hidden)]
+pub const PARSER_SLOT_EMBED_LEVEL: usize = 5;
+#[doc(hidden)]
+pub const PARSER_SLOT_NOTIFIERS: usize = 6;
+#[doc(hidden)]
+pub const PARSER_SLOT_INCLUDED_RANGES: usize = 7;
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) const NODE_SLOT_TYPE: usize = 0;
 pub(crate) const NODE_SLOT_ID: usize = 1;
-pub(crate) const NODE_SLOT_PARSER: usize = 2;
+#[doc(hidden)]
+pub const NODE_SLOT_PARSER: usize = 2;
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) const QUERY_SLOT_TYPE: usize = 0;
 pub(crate) const QUERY_SLOT_ID: usize = 1;
-pub(crate) const QUERY_SLOT_LANGUAGE: usize = 2;
-pub(crate) const QUERY_SLOT_SOURCE: usize = 3;
+#[doc(hidden)]
+pub const QUERY_SLOT_LANGUAGE: usize = 2;
+#[doc(hidden)]
+pub const QUERY_SLOT_SOURCE: usize = 3;
 
 /// Marker for an upper-layer owner of a dynamically loaded native library.
 ///
@@ -65,7 +73,8 @@ impl RetainedLibrary {
     }
 }
 
-pub(crate) struct LoadedLanguage {
+#[doc(hidden)]
+pub struct LoadedLanguage {
     pub(crate) language: Language,
     pub(crate) filename: Option<String>,
     // Kept last so the language (whose function pointers live in the loaded
@@ -74,14 +83,16 @@ pub(crate) struct LoadedLanguage {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct LineColCache {
+#[doc(hidden)]
+pub struct LineColCache {
     pub(crate) line: i64,
     pub(crate) col: i64,
     pub(crate) bytepos: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct SourceByteRange {
+#[doc(hidden)]
+pub struct SourceByteRange {
     start: usize,
     end: usize,
 }
@@ -102,12 +113,14 @@ const TREESIT_TS_POINT_1_0: Point = Point { row: 1, column: 0 };
 /// on the parser (`src/treesit.h:98-118`); narrowing therefore moves a tree's
 /// window instead of invalidating the tree.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ParserInputRevision {
+#[doc(hidden)]
+pub struct ParserInputRevision {
     chars_modified_tick: i64,
 }
 
 impl ParserInputRevision {
-    pub(crate) fn for_buffer(buffer: &Buffer) -> Self {
+    #[doc(hidden)]
+    pub fn for_buffer(buffer: &Buffer) -> Self {
         Self {
             chars_modified_tick: buffer.chars_modified_tick(),
         }
@@ -129,21 +142,25 @@ impl ParserInputRevision {
 /// every reparse -- and therefore what keeps the whole-buffer affected range
 /// (`treesit_get_affected_ranges`, `src/treesit.c:1857-1880`) to the one case
 /// GNU uses it for: a parser that has never parsed.
-pub(crate) struct ParsedTree {
+#[doc(hidden)]
+pub struct ParsedTree {
     tree: Tree,
     visible: EmacsByteRange,
 }
 
 impl ParsedTree {
-    pub(crate) const fn new(tree: Tree, visible: EmacsByteRange) -> Self {
+    #[doc(hidden)]
+    pub const fn new(tree: Tree, visible: EmacsByteRange) -> Self {
         Self { tree, visible }
     }
 
-    pub(crate) const fn tree(&self) -> &Tree {
+    #[doc(hidden)]
+    pub const fn tree(&self) -> &Tree {
         &self.tree
     }
 
-    pub(crate) const fn visible(&self) -> EmacsByteRange {
+    #[doc(hidden)]
+    pub const fn visible(&self) -> EmacsByteRange {
         self.visible
     }
 
@@ -244,7 +261,8 @@ impl ParsedTree {
 /// the tree's window is no longer known to describe the buffer and reusing it
 /// would corrupt the parse rather than merely widen a range.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ParserFreshness {
+#[doc(hidden)]
+pub enum ParserFreshness {
     Unparsed,
     Clean(ParserInputRevision),
     /// The tree is in sync with the buffer (every change since the last parse
@@ -254,16 +272,15 @@ pub(crate) enum ParserFreshness {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ParserReparseKind {
+#[doc(hidden)]
+pub enum ParserReparseKind {
     Incremental,
     Full,
 }
 
 impl ParserFreshness {
-    pub(crate) fn reparse_kind(
-        &mut self,
-        current: ParserInputRevision,
-    ) -> Option<ParserReparseKind> {
+    #[doc(hidden)]
+    pub fn reparse_kind(&mut self, current: ParserInputRevision) -> Option<ParserReparseKind> {
         match *self {
             Self::Clean(parsed) if parsed == current => None,
             Self::ReparsePending(edited) if edited == current => {
@@ -298,20 +315,24 @@ impl ParserFreshness {
 }
 
 impl SourceByteRange {
-    pub(crate) const fn new(start: usize, end: usize) -> Self {
+    #[doc(hidden)]
+    pub const fn new(start: usize, end: usize) -> Self {
         Self { start, end }
     }
 
-    pub(crate) const fn start(self) -> usize {
+    #[doc(hidden)]
+    pub const fn start(self) -> usize {
         self.start
     }
 
-    pub(crate) const fn end(self) -> usize {
+    #[doc(hidden)]
+    pub const fn end(self) -> usize {
         self.end
     }
 }
 
-pub(crate) struct ParserEntry {
+#[doc(hidden)]
+pub struct ParserEntry {
     pub(crate) value: Value,
     pub(crate) orig_buffer_id: BufferId,
     pub(crate) root_buffer_id: BufferId,
@@ -327,13 +348,15 @@ pub(crate) struct ParserEntry {
     pub(crate) last_changed_ranges: Vec<SourceByteRange>,
 }
 
-pub(crate) struct NodeEntry {
+#[doc(hidden)]
+pub struct NodeEntry {
     pub(crate) parser_id: u64,
     pub(crate) raw: tree_sitter::ffi::TSNode,
     pub(crate) generation: u64,
 }
 
-pub(crate) struct QueryEntry {
+#[doc(hidden)]
+pub struct QueryEntry {
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
     pub(crate) language: SymId,
     pub(crate) compiled: Option<EmacsQuery>,
@@ -346,24 +369,28 @@ pub(crate) struct QueryEntry {
 /// builtin layer implement GNU's accepted argument orders for `eq?`,
 /// `match?`, and `pred?`.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum QueryPredicateArg {
+#[doc(hidden)]
+pub enum QueryPredicateArg {
     Capture(u32),
     String(String),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct QueryPredicate {
+#[doc(hidden)]
+pub struct QueryPredicate {
     pub(crate) steps: Vec<QueryPredicateArg>,
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct RawQueryCapture {
+#[doc(hidden)]
+pub struct RawQueryCapture {
     pub(crate) index: u32,
     pub(crate) node: ffi::TSNode,
 }
 
 #[derive(Clone)]
-pub(crate) struct RawQueryMatch {
+#[doc(hidden)]
+pub struct RawQueryMatch {
     pub(crate) pattern_index: usize,
     pub(crate) captures: Vec<RawQueryCapture>,
 }
@@ -374,14 +401,16 @@ pub(crate) struct RawQueryMatch {
 /// GNU Emacs accepts predicate forms that the Rust wrapper rejects (notably
 /// regex-first `#match?`) and evaluates them with Emacs Lisp semantics.  The
 /// raw C query API preserves those predicate steps for the builtin layer.
-pub(crate) struct EmacsQuery {
+#[doc(hidden)]
+pub struct EmacsQuery {
     raw: NonNull<ffi::TSQuery>,
     capture_names: Vec<String>,
     predicates: Vec<Vec<QueryPredicate>>,
 }
 
 impl EmacsQuery {
-    pub(crate) fn new(language: &Language, source: &str) -> Result<Self, QueryError> {
+    #[doc(hidden)]
+    pub fn new(language: &Language, source: &str) -> Result<Self, QueryError> {
         let raw = NonNull::new(Query::new_raw(language, source)?)
             .expect("tree-sitter returned a null query without an error");
         let mut query = Self {
@@ -394,15 +423,18 @@ impl EmacsQuery {
         Ok(query)
     }
 
-    pub(crate) fn capture_names(&self) -> &[String] {
+    #[doc(hidden)]
+    pub fn capture_names(&self) -> &[String] {
         &self.capture_names
     }
 
-    pub(crate) fn predicates(&self) -> &[Vec<QueryPredicate>] {
+    #[doc(hidden)]
+    pub fn predicates(&self) -> &[Vec<QueryPredicate>] {
         &self.predicates
     }
 
-    pub(crate) fn matches(
+    #[doc(hidden)]
+    pub fn matches(
         &self,
         node: ffi::TSNode,
         byte_range: Option<Range<usize>>,
@@ -697,7 +729,8 @@ fn clamp_into(pos: EmacsBytePos, range: EmacsByteRange) -> EmacsBytePos {
 }
 
 #[derive(Default)]
-pub(crate) struct TreeSitterManager {
+#[doc(hidden)]
+pub struct TreeSitterManager {
     next_parser_id: u64,
     next_node_id: u64,
     next_query_id: u64,
@@ -710,7 +743,8 @@ pub(crate) struct TreeSitterManager {
 }
 
 impl TreeSitterManager {
-    pub(crate) fn new() -> Self {
+    #[doc(hidden)]
+    pub fn new() -> Self {
         Self {
             next_parser_id: 1,
             next_node_id: 1,
@@ -726,24 +760,28 @@ impl TreeSitterManager {
 
     /// Trace every native Value owner independently of the parser record's
     /// aliases. Both the serial census and stopped World walk use this list.
-    pub(crate) fn roots(&self) -> Vec<Value> {
+    #[doc(hidden)]
+    pub fn roots(&self) -> Vec<Value> {
         self.parsers
             .values()
             .flat_map(|entry| [entry.value, entry.tag])
             .collect()
     }
 
-    pub(crate) fn loaded_language(&self, key: SymId) -> Option<(Language, Option<String>)> {
+    #[doc(hidden)]
+    pub fn loaded_language(&self, key: SymId) -> Option<(Language, Option<String>)> {
         self.loaded_languages
             .get(&key)
             .map(|loaded| (loaded.language.clone(), loaded.filename.clone()))
     }
 
-    pub(crate) fn cache_loaded_language(&mut self, key: SymId, loaded: LoadedLanguage) {
+    #[doc(hidden)]
+    pub fn cache_loaded_language(&mut self, key: SymId, loaded: LoadedLanguage) {
         self.loaded_languages.entry(key).or_insert(loaded);
     }
 
-    pub(crate) fn find_reusable_parser(
+    #[doc(hidden)]
+    pub fn find_reusable_parser(
         &self,
         orig_buffer_id: BufferId,
         language: SymId,
@@ -761,7 +799,8 @@ impl TreeSitterManager {
     }
 
     #[allow(clippy::too_many_arguments)] // parser registry stores the full GNU-visible parser identity
-    pub(crate) fn insert_parser(
+    #[doc(hidden)]
+    pub fn insert_parser(
         &mut self,
         value: Value,
         orig_buffer_id: BufferId,
@@ -794,15 +833,18 @@ impl TreeSitterManager {
         id
     }
 
-    pub(crate) fn parser(&self, id: u64) -> Option<&ParserEntry> {
+    #[doc(hidden)]
+    pub fn parser(&self, id: u64) -> Option<&ParserEntry> {
         self.parsers.get(&id)
     }
 
-    pub(crate) fn parser_mut(&mut self, id: u64) -> Option<&mut ParserEntry> {
+    #[doc(hidden)]
+    pub fn parser_mut(&mut self, id: u64) -> Option<&mut ParserEntry> {
         self.parsers.get_mut(&id)
     }
 
-    pub(crate) fn parser_values_for(
+    #[doc(hidden)]
+    pub fn parser_values_for(
         &self,
         root_buffer_id: BufferId,
         orig_buffer_id: BufferId,
@@ -836,7 +878,8 @@ impl TreeSitterManager {
         items
     }
 
-    pub(crate) fn mark_parser_deleted(&mut self, id: u64) -> bool {
+    #[doc(hidden)]
+    pub fn mark_parser_deleted(&mut self, id: u64) -> bool {
         let Some(entry) = self.parsers.get_mut(&id) else {
             return false;
         };
@@ -844,7 +887,8 @@ impl TreeSitterManager {
         true
     }
 
-    pub(crate) fn insert_node(
+    #[doc(hidden)]
+    pub fn insert_node(
         &mut self,
         parser_id: u64,
         raw: tree_sitter::ffi::TSNode,
@@ -863,15 +907,18 @@ impl TreeSitterManager {
         id
     }
 
-    pub(crate) fn node(&self, id: u64) -> Option<&NodeEntry> {
+    #[doc(hidden)]
+    pub fn node(&self, id: u64) -> Option<&NodeEntry> {
         self.nodes.get(&id)
     }
 
-    pub(crate) fn clear_nodes_for_parser(&mut self, parser_id: u64) {
+    #[doc(hidden)]
+    pub fn clear_nodes_for_parser(&mut self, parser_id: u64) {
         self.nodes.retain(|_, entry| entry.parser_id != parser_id);
     }
 
-    pub(crate) fn insert_query(&mut self, language: SymId) -> u64 {
+    #[doc(hidden)]
+    pub fn insert_query(&mut self, language: SymId) -> u64 {
         let id = self.next_query_id;
         self.next_query_id += 1;
         self.queries.insert(
@@ -884,19 +931,23 @@ impl TreeSitterManager {
         id
     }
 
-    pub(crate) fn query(&self, id: u64) -> Option<&QueryEntry> {
+    #[doc(hidden)]
+    pub fn query(&self, id: u64) -> Option<&QueryEntry> {
         self.queries.get(&id)
     }
 
-    pub(crate) fn query_mut(&mut self, id: u64) -> Option<&mut QueryEntry> {
+    #[doc(hidden)]
+    pub fn query_mut(&mut self, id: u64) -> Option<&mut QueryEntry> {
         self.queries.get_mut(&id)
     }
 
-    pub(crate) fn linecol_cache(&self, buffer_id: BufferId) -> Option<LineColCache> {
+    #[doc(hidden)]
+    pub fn linecol_cache(&self, buffer_id: BufferId) -> Option<LineColCache> {
         self.linecol_caches.get(&buffer_id).copied()
     }
 
-    pub(crate) fn set_linecol_cache(&mut self, buffer_id: BufferId, cache: LineColCache) {
+    #[doc(hidden)]
+    pub fn set_linecol_cache(&mut self, buffer_id: BufferId, cache: LineColCache) {
         self.linecol_caches.insert(buffer_id, cache);
         for parser in self.parsers.values_mut() {
             if parser.orig_buffer_id == buffer_id && !parser.deleted {
@@ -905,7 +956,8 @@ impl TreeSitterManager {
         }
     }
 
-    pub(crate) fn enable_linecol_tracking(&mut self, buffer_id: BufferId) {
+    #[doc(hidden)]
+    pub fn enable_linecol_tracking(&mut self, buffer_id: BufferId) {
         self.linecol_caches
             .entry(buffer_id)
             .or_insert(LineColCache {
@@ -920,7 +972,8 @@ impl TreeSitterManager {
         }
     }
 
-    pub(crate) fn note_buffer_change(&mut self, buffer_id: BufferId, start_byte: EmacsBytePos) {
+    #[doc(hidden)]
+    pub fn note_buffer_change(&mut self, buffer_id: BufferId, start_byte: EmacsBytePos) {
         let start_byte = start_byte.get();
         if let Some(cache) = self.linecol_caches.get_mut(&buffer_id)
             && cache.bytepos > start_byte
@@ -940,7 +993,8 @@ impl TreeSitterManager {
     ///
     /// The tree is moved onto the new window rather than discarded, so a
     /// narrowing is a reason to reparse, never a reason to lose the tree.
-    pub(crate) fn sync_visible_region(&mut self, parser_id: u64, buffer: &Buffer) {
+    #[doc(hidden)]
+    pub fn sync_visible_region(&mut self, parser_id: u64, buffer: &Buffer) {
         let Some(parser) = self.parsers.get_mut(&parser_id) else {
             return;
         };
@@ -959,17 +1013,20 @@ impl TreeSitterManager {
         }
     }
 
-    pub(crate) fn has_editable_tree(&self, buffer_id: BufferId) -> bool {
+    #[doc(hidden)]
+    pub fn has_editable_tree(&self, buffer_id: BufferId) -> bool {
         self.parsers.values().any(|parser| {
             !parser.deleted && parser.orig_buffer_id == buffer_id && parser.tree.is_some()
         })
     }
 
-    pub(crate) fn has_pending_edit(&self, buffer_id: BufferId) -> bool {
+    #[doc(hidden)]
+    pub fn has_pending_edit(&self, buffer_id: BufferId) -> bool {
         self.pending_edits.contains_key(&buffer_id)
     }
 
-    pub(crate) fn begin_buffer_edit(
+    #[doc(hidden)]
+    pub fn begin_buffer_edit(
         &mut self,
         buffer_id: BufferId,
         buffer: &Buffer,
@@ -1001,7 +1058,8 @@ impl TreeSitterManager {
             .collect()
     }
 
-    pub(crate) fn finish_buffer_edit(
+    #[doc(hidden)]
+    pub fn finish_buffer_edit(
         &mut self,
         buffer_id: BufferId,
         buffer: &Buffer,
@@ -1076,7 +1134,8 @@ fn parser_point_at(
 }
 
 #[derive(Clone, Copy)]
-pub(crate) enum ParserTagFilter {
+#[doc(hidden)]
+pub enum ParserTagFilter {
     Any,
     Exact(Value),
 }
@@ -1090,12 +1149,8 @@ impl ParserTagFilter {
     }
 }
 
-pub(crate) fn make_parser_value(
-    id: u64,
-    language_symbol: Value,
-    buffer: Value,
-    tag: Value,
-) -> Value {
+#[doc(hidden)]
+pub fn make_parser_value(id: u64, language_symbol: Value, buffer: Value, tag: Value) -> Value {
     Value::make_record(vec![
         Value::symbol(TREESIT_PARSER_TAG),
         Value::fixnum(id as i64),
@@ -1108,7 +1163,8 @@ pub(crate) fn make_parser_value(
     ])
 }
 
-pub(crate) fn make_node_value(id: u64, parser: Value) -> Value {
+#[doc(hidden)]
+pub fn make_node_value(id: u64, parser: Value) -> Value {
     Value::make_record(vec![
         Value::symbol(TREESIT_NODE_TAG),
         Value::fixnum(id as i64),
@@ -1116,7 +1172,8 @@ pub(crate) fn make_node_value(id: u64, parser: Value) -> Value {
     ])
 }
 
-pub(crate) fn make_query_value(id: u64, language_symbol: Value, source: Value) -> Value {
+#[doc(hidden)]
+pub fn make_query_value(id: u64, language_symbol: Value, source: Value) -> Value {
     Value::make_record(vec![
         Value::symbol(TREESIT_COMPILED_QUERY_TAG),
         Value::fixnum(id as i64),
@@ -1125,27 +1182,33 @@ pub(crate) fn make_query_value(id: u64, language_symbol: Value, source: Value) -
     ])
 }
 
-pub(crate) fn parser_id(value: Value) -> Option<u64> {
+#[doc(hidden)]
+pub fn parser_id(value: Value) -> Option<u64> {
     record_id_with_tag(value, TREESIT_PARSER_TAG, PARSER_SLOT_ID)
 }
 
-pub(crate) fn node_id(value: Value) -> Option<u64> {
+#[doc(hidden)]
+pub fn node_id(value: Value) -> Option<u64> {
     record_id_with_tag(value, TREESIT_NODE_TAG, NODE_SLOT_ID)
 }
 
-pub(crate) fn query_id(value: Value) -> Option<u64> {
+#[doc(hidden)]
+pub fn query_id(value: Value) -> Option<u64> {
     record_id_with_tag(value, TREESIT_COMPILED_QUERY_TAG, QUERY_SLOT_ID)
 }
 
-pub(crate) fn is_parser(value: Value) -> bool {
+#[doc(hidden)]
+pub fn is_parser(value: Value) -> bool {
     record_tag_is(value, TREESIT_PARSER_TAG)
 }
 
-pub(crate) fn is_node(value: Value) -> bool {
+#[doc(hidden)]
+pub fn is_node(value: Value) -> bool {
     record_tag_is(value, TREESIT_NODE_TAG)
 }
 
-pub(crate) fn is_compiled_query(value: Value) -> bool {
+#[doc(hidden)]
+pub fn is_compiled_query(value: Value) -> bool {
     record_tag_is(value, TREESIT_COMPILED_QUERY_TAG)
 }
 
@@ -1165,4 +1228,212 @@ fn record_tag_is(value: Value, expected_tag: &str) -> bool {
         .and_then(|items| items.first().copied())
         .and_then(|tag| tag.as_bare_symbol_name())
         == Some(expected_tag)
+}
+
+#[doc(hidden)]
+impl LineColCache {
+    #[doc(hidden)]
+    pub fn line(&self) -> i64 {
+        self.line
+    }
+
+    #[doc(hidden)]
+    pub fn col(&self) -> i64 {
+        self.col
+    }
+
+    #[doc(hidden)]
+    pub fn bytepos(&self) -> usize {
+        self.bytepos
+    }
+}
+
+#[doc(hidden)]
+impl LoadedLanguage {
+    #[doc(hidden)]
+    pub fn language(&self) -> &Language {
+        &self.language
+    }
+
+    #[doc(hidden)]
+    pub fn filename(&self) -> &Option<String> {
+        &self.filename
+    }
+}
+
+#[doc(hidden)]
+impl QueryPredicate {
+    #[doc(hidden)]
+    pub fn steps(&self) -> &[QueryPredicateArg] {
+        &self.steps
+    }
+}
+
+#[doc(hidden)]
+impl ParserEntry {
+    #[doc(hidden)]
+    pub fn value(&self) -> Value {
+        self.value
+    }
+
+    #[doc(hidden)]
+    pub fn set_value(&mut self, value: Value) {
+        self.value = value;
+    }
+
+    #[doc(hidden)]
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    #[doc(hidden)]
+    pub fn set_generation(&mut self, generation: u64) {
+        self.generation = generation;
+    }
+
+    #[doc(hidden)]
+    pub fn orig_buffer_id(&self) -> BufferId {
+        self.orig_buffer_id
+    }
+
+    #[doc(hidden)]
+    pub fn deleted(&self) -> bool {
+        self.deleted
+    }
+
+    #[doc(hidden)]
+    pub fn need_to_gc_buffer(&self) -> bool {
+        self.need_to_gc_buffer
+    }
+
+    #[doc(hidden)]
+    pub fn set_need_to_gc_buffer(&mut self, need: bool) {
+        self.need_to_gc_buffer = need;
+    }
+
+    #[doc(hidden)]
+    pub fn freshness(&self) -> ParserFreshness {
+        self.freshness
+    }
+
+    #[doc(hidden)]
+    pub fn set_freshness(&mut self, freshness: ParserFreshness) {
+        self.freshness = freshness;
+    }
+
+    #[doc(hidden)]
+    pub fn tree(&self) -> Option<&ParsedTree> {
+        self.tree.as_ref()
+    }
+
+    #[doc(hidden)]
+    pub fn set_tree(&mut self, tree: Option<ParsedTree>) {
+        self.tree = tree;
+    }
+
+    #[doc(hidden)]
+    pub fn last_changed_ranges_mut(&mut self) -> &mut Vec<SourceByteRange> {
+        &mut self.last_changed_ranges
+    }
+
+    #[doc(hidden)]
+    pub fn set_last_changed_ranges(&mut self, ranges: Vec<SourceByteRange>) {
+        self.last_changed_ranges = ranges;
+    }
+
+    #[doc(hidden)]
+    pub fn tracking_linecol(&self) -> bool {
+        self.tracking_linecol
+    }
+
+    #[doc(hidden)]
+    pub fn parser_mut(&mut self) -> &mut Parser {
+        &mut self.parser
+    }
+}
+
+#[doc(hidden)]
+impl NodeEntry {
+    #[doc(hidden)]
+    pub fn parser_id(&self) -> u64 {
+        self.parser_id
+    }
+
+    #[doc(hidden)]
+    pub fn raw(&self) -> tree_sitter::ffi::TSNode {
+        self.raw
+    }
+
+    #[doc(hidden)]
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+}
+
+#[doc(hidden)]
+impl QueryEntry {
+    #[doc(hidden)]
+    pub fn compiled(&self) -> Option<&EmacsQuery> {
+        self.compiled.as_ref()
+    }
+
+    #[doc(hidden)]
+    pub fn set_compiled(&mut self, compiled: Option<EmacsQuery>) {
+        self.compiled = compiled;
+    }
+}
+
+#[doc(hidden)]
+impl RawQueryMatch {
+    #[doc(hidden)]
+    pub fn pattern_index(&self) -> usize {
+        self.pattern_index
+    }
+
+    #[doc(hidden)]
+    pub fn captures_len(&self) -> usize {
+        self.captures.len()
+    }
+
+    #[doc(hidden)]
+    pub fn into_captures(self) -> Vec<RawQueryCapture> {
+        self.captures
+    }
+}
+
+#[doc(hidden)]
+impl RawQueryCapture {
+    #[doc(hidden)]
+    pub fn index(&self) -> u32 {
+        self.index
+    }
+
+    #[doc(hidden)]
+    pub fn node(&self) -> tree_sitter::ffi::TSNode {
+        self.node
+    }
+}
+
+#[doc(hidden)]
+impl LoadedLanguage {
+    #[doc(hidden)]
+    pub fn from_loaded_parts(
+        language: Language,
+        filename: Option<String>,
+        library: Option<RetainedLibrary>,
+    ) -> Self {
+        Self {
+            language,
+            filename,
+            _library: library,
+        }
+    }
+}
+
+#[doc(hidden)]
+impl LineColCache {
+    #[doc(hidden)]
+    pub fn from_parts(line: i64, col: i64, bytepos: usize) -> Self {
+        Self { line, col, bytepos }
+    }
 }

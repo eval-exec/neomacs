@@ -326,9 +326,12 @@ fn coding_system_aliases_unknown() {
 fn coding_system_aliases_nil_maps_to_no_conversion_family() {
     crate::test_utils::init_test_tracing();
     let m = mgr();
-    let result =
-        builtin_coding_system_aliases(&m, vec![Value::NIL], neovm_value::tagged::value::SymbolMode::Bare)
-            .unwrap();
+    let result = builtin_coding_system_aliases(
+        &m,
+        vec![Value::NIL],
+        neovm_value::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
     assert_eq!(
         result,
         Value::list(vec![
@@ -501,9 +504,12 @@ fn coding_system_plist_normalizes_alias_and_eol_variant_name() {
 fn coding_system_plist_nil_maps_to_no_conversion() {
     crate::test_utils::init_test_tracing();
     let m = mgr();
-    let plist =
-        builtin_coding_system_plist(&m, vec![Value::NIL], neovm_value::tagged::value::SymbolMode::Bare)
-            .unwrap();
+    let plist = builtin_coding_system_plist(
+        &m,
+        vec![Value::NIL],
+        neovm_value::tagged::value::SymbolMode::Bare,
+    )
+    .unwrap();
     assert_eq!(
         plist_get(&plist, ":name"),
         Some(Value::symbol("no-conversion"))
@@ -930,7 +936,9 @@ fn eol_type_unknown_returns_nil() {
 fn find_coding_systems_region_internal_accepts_raw_unibyte_string() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::Context::new();
-    let raw = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![0xFF]));
+    let raw = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![
+        0xFF,
+    ]));
     let result = builtin_find_coding_systems_region_internal(&mut eval, vec![raw, Value::NIL]);
     assert_eq!(result.unwrap(), Value::T);
 }
@@ -1884,7 +1892,8 @@ fn coding_system_get_wrong_arg_count() {
 fn coding_system_base_wrong_arg_count() {
     crate::test_utils::init_test_tracing();
     let m = mgr();
-    let result = builtin_coding_system_base(&m, vec![], neovm_value::tagged::value::SymbolMode::Bare);
+    let result =
+        builtin_coding_system_base(&m, vec![], neovm_value::tagged::value::SymbolMode::Bare);
     assert!(result.is_err());
 }
 
@@ -1892,7 +1901,8 @@ fn coding_system_base_wrong_arg_count() {
 fn coding_system_aliases_wrong_arg_count() {
     crate::test_utils::init_test_tracing();
     let m = mgr();
-    let result = builtin_coding_system_aliases(&m, vec![], neovm_value::tagged::value::SymbolMode::Bare);
+    let result =
+        builtin_coding_system_aliases(&m, vec![], neovm_value::tagged::value::SymbolMode::Bare);
     assert!(result.is_err());
 }
 
@@ -1928,9 +1938,13 @@ fn coding_system_p_accepts_nil_and_supported_derived_variants() {
     crate::test_utils::init_test_tracing();
     let m = mgr();
     assert!(
-        builtin_coding_system_p(&m, vec![Value::NIL], neovm_value::tagged::value::SymbolMode::Bare)
-            .unwrap()
-            .is_truthy()
+        builtin_coding_system_p(
+            &m,
+            vec![Value::NIL],
+            neovm_value::tagged::value::SymbolMode::Bare
+        )
+        .unwrap()
+        .is_truthy()
     );
     assert!(
         builtin_coding_system_p(
@@ -2457,7 +2471,10 @@ fn text_quoting_style_domain_matches_gnu_symbols() {
         None
     );
     assert_eq!(
-        TextQuotingStyle::from_symbol_value(Value::NIL, neovm_value::tagged::value::SymbolMode::Bare),
+        TextQuotingStyle::from_symbol_value(
+            Value::NIL,
+            neovm_value::tagged::value::SymbolMode::Bare
+        ),
         None
     );
 }
@@ -2979,7 +2996,11 @@ fn priority_list_keeps_chinese_iso_8bit_and_big5_after_charset_front() {
     // iso-latin-1 is `coding-category-charset`; the two Chinese systems are
     // distinct (`iso-8-2` and `big5`).
     assert_eq!(
-        coding_category_of(&m, "iso-latin-1", neovm_value::tagged::value::SymbolMode::Bare),
+        coding_category_of(
+            &m,
+            "iso-latin-1",
+            neovm_value::tagged::value::SymbolMode::Bare
+        ),
         Some("coding-category-charset")
     );
     assert_eq!(
@@ -2991,7 +3012,11 @@ fn priority_list_keeps_chinese_iso_8bit_and_big5_after_charset_front() {
         Some("coding-category-iso-8-2")
     );
     assert_eq!(
-        coding_category_of(&m, "chinese-big5", neovm_value::tagged::value::SymbolMode::Bare),
+        coding_category_of(
+            &m,
+            "chinese-big5",
+            neovm_value::tagged::value::SymbolMode::Bare
+        ),
         Some("coding-category-big5")
     );
 
@@ -3034,10 +3059,11 @@ fn coding_category_priority_list_has_all_21_categories_in_order() {
     // and the now-distinct `iso-8-2`/`big5` categories.  The exact GNU order is
     // verified end-to-end against the booted binary's `coding-category-list`.
     let m = mgr();
-    let cats: Vec<&str> = coding_category_priority_list(&m, neovm_value::tagged::value::SymbolMode::Bare)
-        .iter()
-        .map(|&s| resolve_sym(s))
-        .collect();
+    let cats: Vec<&str> =
+        coding_category_priority_list(&m, neovm_value::tagged::value::SymbolMode::Bare)
+            .iter()
+            .map(|&s| resolve_sym(s))
+            .collect();
     assert_eq!(cats.len(), 21, "expected 21 categories, got {cats:?}");
     assert!(cats.contains(&"coding-category-ccl"), "ccl must be present");
     assert!(
@@ -3452,8 +3478,9 @@ fn context_eol_conversion_reads_the_defvar_bool_dynamically() {
 fn accessor_memo_follows_every_registry_change() {
     let mut m = mgr();
     let utf8 = Value::symbol("utf-8");
-    let first = builtin_coding_system_plist(&m, vec![utf8], neovm_value::tagged::value::SymbolMode::Bare)
-        .expect("plist");
+    let first =
+        builtin_coding_system_plist(&m, vec![utf8], neovm_value::tagged::value::SymbolMode::Bare)
+            .expect("plist");
     let second =
         builtin_coding_system_plist(&m, vec![utf8], neovm_value::tagged::value::SymbolMode::Bare)
             .expect("plist");
@@ -3472,16 +3499,24 @@ fn accessor_memo_follows_every_registry_change() {
     m.add_alias("memo-test-alias", "utf-8");
     let alias = Value::symbol("memo-test-alias");
     assert_eq!(
-        builtin_coding_system_base(&m, vec![alias], neovm_value::tagged::value::SymbolMode::Bare)
-            .expect("base")
-            .as_bare_symbol_name(),
+        builtin_coding_system_base(
+            &m,
+            vec![alias],
+            neovm_value::tagged::value::SymbolMode::Bare
+        )
+        .expect("base")
+        .as_bare_symbol_name(),
         Some("utf-8")
     );
     m.add_alias("memo-test-alias", "iso-latin-1");
     assert_eq!(
-        builtin_coding_system_base(&m, vec![alias], neovm_value::tagged::value::SymbolMode::Bare)
-            .expect("base")
-            .as_bare_symbol_name(),
+        builtin_coding_system_base(
+            &m,
+            vec![alias],
+            neovm_value::tagged::value::SymbolMode::Bare
+        )
+        .expect("base")
+        .as_bare_symbol_name(),
         Some("iso-latin-1"),
         "re-pointed alias: the memo was dropped"
     );
@@ -3499,8 +3534,9 @@ fn accessor_memo_follows_every_registry_change() {
         neovm_value::tagged::value::SymbolMode::Bare,
     )
     .expect("put");
-    let third = builtin_coding_system_plist(&m, vec![utf8], neovm_value::tagged::value::SymbolMode::Bare)
-        .expect("plist");
+    let third =
+        builtin_coding_system_plist(&m, vec![utf8], neovm_value::tagged::value::SymbolMode::Bare)
+            .expect("plist");
     assert_ne!(first.bits(), third.bits(), "a new plist after the write");
     let items = neovm_value::value::list_to_vec(&third).expect("list");
     let at = items

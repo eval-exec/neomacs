@@ -1180,16 +1180,15 @@ fn convert_tl_attributes(attrs: &tl::Attributes) -> Vec<Value> {
 // ---------------------------------------------------------------------------
 
 /// (libxml-available-p) → t
-pub(crate) fn builtin_libxml_available_p(args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_libxml_available_p(args: Vec<Value>) -> EvalResult {
     expect_args("libxml-available-p", &args, 0)?;
     Ok(Value::T)
 }
 
 /// (libxml-parse-html-region &optional START END BASE-URL DISCARD-COMMENTS)
-pub(crate) fn builtin_libxml_parse_html_region<H: EditHost>(
-    host: &mut H,
-    args: Vec<Value>,
-) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_libxml_parse_html_region<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_max_args("libxml-parse-html-region", &args, 4)?;
     let (edit, _vars) = host.edit_and_vars();
     let Some((buffer_id, byte_range)) = validate_region_byte_bounds(&mut edit.buffers, &args)?
@@ -1212,10 +1211,8 @@ pub(crate) fn builtin_libxml_parse_html_region<H: EditHost>(
 }
 
 /// (libxml-parse-xml-region &optional START END BASE-URL DISCARD-COMMENTS)
-pub(crate) fn builtin_libxml_parse_xml_region<H: EditHost>(
-    host: &mut H,
-    args: Vec<Value>,
-) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_libxml_parse_xml_region<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_max_args("libxml-parse-xml-region", &args, 4)?;
     let (edit, _vars) = host.edit_and_vars();
     let Some((buffer_id, byte_range)) = validate_region_byte_bounds(&mut edit.buffers, &args)?

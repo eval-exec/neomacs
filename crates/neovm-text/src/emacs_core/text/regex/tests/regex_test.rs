@@ -1,7 +1,7 @@
 use super::*;
 use neovm_edit::buffer::{Buffer, BufferId, BufferTextBackendKind, EmacsByteRange};
-use neovm_value::value::Value;
 use neovm_value::heap_types::LispString;
+use neovm_value::value::Value;
 
 fn match_group(group: Option<MatchGroup>) -> Option<MatchGroup> {
     group
@@ -2721,7 +2721,9 @@ fn replace_match_buffer_preserves_unibyte_raw_bytes() {
         neovm_edit::buffer::shared::SavedPointBeforeCommand::new_editor_global(),
     );
     buf.set_multibyte_value(false);
-    buf.insert_lisp_string(&neovm_value::heap_types::LispString::from_unibyte(vec![0xFF]));
+    buf.insert_lisp_string(&neovm_value::heap_types::LispString::from_unibyte(vec![
+        0xFF,
+    ]));
     buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(0));
 
     let mut md = None;

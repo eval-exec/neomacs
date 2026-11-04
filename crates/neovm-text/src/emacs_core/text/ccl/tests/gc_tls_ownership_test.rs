@@ -77,9 +77,9 @@ fn gc_tls_ownership_ccl_registration_follows_context_activation() {
     let mut first = Context::new();
     let program = populate(&mut first);
     let second = Context::new();
-    assert!(!is_registered_ccl_program(
-        neovm_value::intern::intern("gc-tls-owned-ccl")
-    ));
+    assert!(!is_registered_ccl_program(neovm_value::intern::intern(
+        "gc-tls-owned-ccl"
+    )));
     first.setup_thread_locals();
     assert!(
         roots(&first)

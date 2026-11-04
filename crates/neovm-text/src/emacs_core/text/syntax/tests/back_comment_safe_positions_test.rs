@@ -205,10 +205,9 @@ fn safe_position_restarts_answer_exactly_as_the_parse_from_begv() {
                             let buf = eval.buffers.current_buffer_mut().expect("buffer");
                             let b0 = buf.char_pos_to_emacs_byte_pos_clamped(CharPos0::new(at));
                             let b1 = buf.char_pos_to_emacs_byte_pos_clamped(CharPos0::new(at + 1));
-                            buf.delete_emacs_byte_range(neovm_edit::buffer::EmacsByteRange::from_usize(
-                                b0.get(),
-                                b1.get(),
-                            ));
+                            buf.delete_emacs_byte_range(
+                                neovm_edit::buffer::EmacsByteRange::from_usize(b0.get(), b1.get()),
+                            );
                             buf.goto_emacs_byte_pos(b0);
                             buf.insert(&ch.to_string());
                         }

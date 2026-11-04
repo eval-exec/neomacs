@@ -135,7 +135,7 @@ fn casify_replace_current_buffer_region(
         &eval.edit.buffers,
         buffer_id,
         byte_range,
-        &replacement.text,
+        replacement.text(),
     )?;
     let end = change
         .old_range()
@@ -145,7 +145,7 @@ fn casify_replace_current_buffer_region(
     // before hook runs for that case, but the after hook requires changed text.
     // GNU sticky inheritance controls are read only after modification hooks.
     // Plain/no-expansion casing needs no policy lookup or interval allocation.
-    let controls = (!replacement.expansions.is_empty()
+    let controls = (!replacement.expansions().is_empty()
         && eval
             .edit
             .buffers
@@ -159,20 +159,20 @@ fn casify_replace_current_buffer_region(
         .casify_replace_buffer_region_with_expansions(
             buffer_id,
             byte_range,
-            &replacement.text,
-            &replacement.expansions,
-            replacement.storage_shape,
+            replacement.text(),
+            replacement.expansions(),
+            replacement.storage_shape(),
             &properties,
         )?;
-    if replacement.text.as_bytes() != text.as_bytes() {
+    if replacement.text().as_bytes() != text.as_bytes() {
         if let Some(span) = changed_char_span(&text, &replacement) {
             // GNU casefiddle.c:475-525 retains the first source position and
             // last output end; :570 subtracts character growth from the old length.
             super::editfns::signal_after_change_chars(
                 eval,
-                change.old_range().char_start().add_len(span.offset),
-                span.old_len,
-                span.new_len,
+                change.old_range().char_start().add_len(span.offset()),
+                span.old_len(),
+                span.new_len(),
             )?;
         }
     }

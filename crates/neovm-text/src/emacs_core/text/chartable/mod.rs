@@ -34,7 +34,8 @@ use neovm_value::value::*;
 
 pub use neovm_value::chartab::{ct_ref, ct_set_single};
 
-pub(crate) use neovm_value::chartab::{
+#[doc(hidden)]
+pub use neovm_value::chartab::{
     OptimizeCharTableTest, builtin_char_table_subtype, char_table_atomic_runs_in_range,
     char_table_default, char_table_external_slots, char_table_extra_slot_value,
     char_table_has_subtype_named_with_symbols, char_table_length, char_table_local_entries,
@@ -58,8 +59,10 @@ pub(crate) use neovm_value::chartab::{
 
 /// Maximum valid Unicode code point.
 const MAX_CHAR: i64 = 0x3F_FFFF;
-pub(crate) use neovm_value::boolvec::{bool_vector_length, is_bool_vector};
-pub(crate) use neovm_value::value::{bump_char_table_write_tick, char_table_write_tick};
+#[doc(hidden)]
+pub use neovm_value::boolvec::{bool_vector_length, is_bool_vector};
+#[doc(hidden)]
+pub use neovm_value::value::{bump_char_table_write_tick, char_table_write_tick};
 /// Extract an integer (Int or Char), signal otherwise.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 fn expect_int(value: &Value) -> Result<i64, Flow> {
@@ -144,7 +147,8 @@ pub(crate) fn copy_char_table(table: Value) -> Option<Value> {
 ///
 /// If SUB-TYPE has a `char-table-extra-slots` property, its value
 /// specifies how many extra slots the char-table has (0..10).
-pub(crate) fn builtin_make_char_table<H: TextHost>(eval: &mut H, args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_make_char_table<H: TextHost>(eval: &mut H, args: Vec<Value>) -> EvalResult {
     expect_min_args("make-char-table", &args, 1)?;
     expect_max_args("make-char-table", &args, 2)?;
     let sub_type = args[0];
@@ -168,7 +172,8 @@ pub(crate) fn builtin_make_char_table<H: TextHost>(eval: &mut H, args: Vec<Value
     let n_extras = neovm_value::alloc::CharTableExtras::try_from(Value::fixnum(n_extras))?;
     Value::try_char_table(sub_type, default, n_extras)
 }
-pub(crate) fn fill_char_table_from_fillarray(table: &Value, item: Value) -> Result<(), Flow> {
+#[doc(hidden)]
+pub fn fill_char_table_from_fillarray(table: &Value, item: Value) -> Result<(), Flow> {
     if !is_char_table(table) {
         return Err(wrong_type("char-table-p", table));
     }
@@ -183,7 +188,8 @@ pub(crate) fn fill_char_table_from_fillarray(table: &Value, item: Value) -> Resu
     Ok(())
 }
 /// `(char-table-p OBJ)` -- return t if OBJ is a char-table.
-pub(crate) fn builtin_char_table_p(args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_char_table_p(args: Vec<Value>) -> EvalResult {
     expect_args("char-table-p", &args, 1)?;
     Ok(Value::bool_val(is_char_table(&args[0])))
 }
@@ -200,13 +206,15 @@ pub(crate) fn builtin_set_char_table_range(
 ) -> EvalResult {
     builtin_set_char_table_range_with_style(args, style, SymbolMode::Bare)
 }
-pub(crate) fn builtin_set_char_table_range_in_state<H: TextHost>(
+#[doc(hidden)]
+pub fn builtin_set_char_table_range_in_state<H: TextHost>(
     eval: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_set_char_table_range_with_symbols(args, Some(eval.variables()), eval.symbol_mode())
 }
-pub(crate) fn builtin_set_char_table_range_with_symbols<'a, V: EditVariableRead<'a>>(
+#[doc(hidden)]
+pub fn builtin_set_char_table_range_with_symbols<'a, V: EditVariableRead<'a>>(
     args: Vec<Value>,
     obarray: Option<V>,
     mode: SymbolMode,
@@ -220,7 +228,8 @@ pub(crate) fn builtin_set_char_table_range_with_symbols<'a, V: EditVariableRead<
 /// The no-view entry point: callers without an evaluator (core internals,
 /// tests) pass a pre-resolved style or `None` for the batch/UTF-8 `curve`
 /// default. Avoids forcing a `V` at `None` call sites.
-pub(crate) fn builtin_set_char_table_range_with_style(
+#[doc(hidden)]
+pub fn builtin_set_char_table_range_with_style(
     args: Vec<Value>,
     style: Option<TextQuotingStyle>,
     mode: SymbolMode,
@@ -293,13 +302,15 @@ pub(crate) fn builtin_char_table_range(
 ) -> EvalResult {
     builtin_char_table_range_with_style(args, style, SymbolMode::Bare)
 }
-pub(crate) fn builtin_char_table_range_in_state<H: TextHost>(
+#[doc(hidden)]
+pub fn builtin_char_table_range_in_state<H: TextHost>(
     eval: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_char_table_range_with_symbols(args, Some(eval.variables()), eval.symbol_mode())
 }
-pub(crate) fn builtin_char_table_range_with_symbols<'a, V: EditVariableRead<'a>>(
+#[doc(hidden)]
+pub fn builtin_char_table_range_with_symbols<'a, V: EditVariableRead<'a>>(
     args: Vec<Value>,
     obarray: Option<V>,
     mode: SymbolMode,
@@ -311,7 +322,8 @@ pub(crate) fn builtin_char_table_range_with_symbols<'a, V: EditVariableRead<'a>>
     )
 }
 /// The no-view entry point; see [`builtin_set_char_table_range_with_style`].
-pub(crate) fn builtin_char_table_range_with_style(
+#[doc(hidden)]
+pub fn builtin_char_table_range_with_style(
     args: Vec<Value>,
     style: Option<TextQuotingStyle>,
     mode: SymbolMode,
@@ -388,7 +400,8 @@ pub(crate) fn maybe_unify_char(c: i64, val: &Value) -> i64 {
     c
 }
 /// `(char-table-parent CHAR-TABLE)` -- return the parent table (or nil).
-pub(crate) fn builtin_char_table_parent(args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_char_table_parent(args: Vec<Value>) -> EvalResult {
     expect_args("char-table-parent", &args, 1)?;
     let table = &args[0];
     if !is_char_table(table) {
@@ -397,7 +410,8 @@ pub(crate) fn builtin_char_table_parent(args: Vec<Value>) -> EvalResult {
     Ok(table.as_char_table_obj().unwrap().parent.get())
 }
 /// `(set-char-table-parent CHAR-TABLE PARENT)` -- set the parent table.
-pub(crate) fn builtin_set_char_table_parent(args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_set_char_table_parent(args: Vec<Value>) -> EvalResult {
     expect_args("set-char-table-parent", &args, 2)?;
     bump_char_table_write_tick();
     let table = &args[0];
@@ -445,7 +459,8 @@ pub(crate) fn for_each_char_table_mapping(
 ) -> Result<(), Flow> {
     for_each_char_table_mapping_with_symbols(table, f, SymbolMode::Bare)
 }
-pub(crate) fn builtin_map_char_table<H: TextHost>(eval: &mut H, args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_map_char_table<H: TextHost>(eval: &mut H, args: Vec<Value>) -> EvalResult {
     expect_args("map-char-table", &args, 2)?;
     let func = args[0];
     let table = args[1];
@@ -465,7 +480,8 @@ pub(crate) fn optimize_char_table(table: &Value, test: OptimizeCharTableTest) ->
     optimize_char_table_with_symbols(table, test, SymbolMode::Bare)
 }
 /// `(char-table-extra-slot TABLE N)` -- get extra slot N (0-based).
-pub(crate) fn builtin_char_table_extra_slot(args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_char_table_extra_slot(args: Vec<Value>) -> EvalResult {
     expect_args("char-table-extra-slot", &args, 2)?;
     let table = &args[0];
     let n = expect_fixnump(&args[1])?;
@@ -483,7 +499,8 @@ pub(crate) fn builtin_char_table_extra_slot(args: Vec<Value>) -> EvalResult {
     Ok(obj.extras[n as usize])
 }
 /// `(set-char-table-extra-slot TABLE N VALUE)` -- set extra slot N.
-pub(crate) fn builtin_set_char_table_extra_slot(args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_set_char_table_extra_slot(args: Vec<Value>) -> EvalResult {
     expect_args("set-char-table-extra-slot", &args, 3)?;
     bump_char_table_write_tick();
     let table = &args[0];
@@ -528,7 +545,8 @@ fn invalid_unicode_property_table() -> Flow {
 pub(crate) fn builtin_get_unicode_property_internal(args: Vec<Value>) -> EvalResult {
     builtin_get_unicode_property_internal_with_symbols(args, SymbolMode::Bare)
 }
-pub(crate) fn builtin_get_unicode_property_internal_in_state<H: TextHost>(
+#[doc(hidden)]
+pub fn builtin_get_unicode_property_internal_in_state<H: TextHost>(
     eval: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -637,7 +655,8 @@ fn encode_uniprop_value_numeric(
 pub(crate) fn builtin_put_unicode_property_internal(args: Vec<Value>) -> EvalResult {
     builtin_put_unicode_property_internal_with_symbols(args, SymbolMode::Bare)
 }
-pub(crate) fn builtin_put_unicode_property_internal_in_state<H: TextHost>(
+#[doc(hidden)]
+pub fn builtin_put_unicode_property_internal_in_state<H: TextHost>(
     eval: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -675,7 +694,8 @@ pub(crate) fn builtin_put_unicode_property_internal_with_symbols(
 // Bool-vector builtins (`boolvec`, both representations)
 // ---------------------------------------------------------------------------
 
-pub(crate) use neovm_value::boolvec::{
+#[doc(hidden)]
+pub use neovm_value::boolvec::{
     builtin_bool_vector, builtin_bool_vector_count_consecutive,
     builtin_bool_vector_count_population, builtin_bool_vector_exclusive_or,
     builtin_bool_vector_intersection, builtin_bool_vector_not, builtin_bool_vector_p,

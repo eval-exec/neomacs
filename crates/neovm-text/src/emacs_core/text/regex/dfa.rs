@@ -50,8 +50,8 @@ use super::{
     matcher_overflow_pending, opcode_len, posix_class_bits_read_syntax, re_match_candidate_in,
     re_text_char,
 };
-use neovm_value::emacs_char;
 use crate::emacs_core::syntax::SyntaxClass;
+use neovm_value::emacs_char;
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use std::cell::{RefCell, RefMut};

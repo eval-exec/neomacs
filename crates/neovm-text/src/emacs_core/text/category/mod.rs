@@ -42,7 +42,8 @@ pub fn reset_category_thread_locals() {
     });
 }
 
-pub(crate) fn restore_standard_category_table_object(table: Value) {
+#[doc(hidden)]
+pub fn restore_standard_category_table_object(table: Value) {
     STANDARD_CATEGORY_TABLE_OBJECT.with(|slot| *slot.borrow_mut() = Some(table));
     STANDARD_CATEGORY_TABLE_HEAP.with(|owner| {
         owner.set(neovm_value::tagged::gc::current_tagged_heap_identity().unwrap_or(0))
@@ -195,7 +196,8 @@ fn category_set_bits(category_set: &Value) -> Option<u128> {
     }
 }
 
-pub(crate) fn category_bit_runs_in_table(table: Value) -> Option<Vec<(u32, u32, u128)>> {
+#[doc(hidden)]
+pub fn category_bit_runs_in_table(table: Value) -> Option<Vec<(u32, u32, u128)>> {
     Some(
         super::chartable::char_table_atomic_runs_in_range(&table, 0, i64::MAX)
             .ok()?
@@ -281,7 +283,8 @@ fn make_category_table_object() -> EvalResult {
     Ok(table)
 }
 
-pub(crate) fn ensure_standard_category_table_object() -> EvalResult {
+#[doc(hidden)]
+pub fn ensure_standard_category_table_object() -> EvalResult {
     STANDARD_CATEGORY_TABLE_OBJECT.with(|slot| {
         if let Some(table) = slot.borrow().as_ref() {
             return Ok(*table);
@@ -478,7 +481,8 @@ fn category_set_contains(category_set: &Value, category: char) -> Result<bool, F
     Ok(index < view.len() && view.get(index))
 }
 
-pub(crate) fn active_category_table_for_buffer(
+#[doc(hidden)]
+pub fn active_category_table_for_buffer(
     buffer: Option<&neovm_edit::buffer::Buffer>,
 ) -> Result<Value, Flow> {
     if let Some(buffer) = buffer {
@@ -520,7 +524,8 @@ pub(crate) fn builtin_category_table_p_with_symbols(
     )?))
 }
 
-pub(crate) fn builtin_make_category_table(args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_make_category_table(args: Vec<Value>) -> EvalResult {
     expect_max_args("make-category-table", &args, 0)?;
     make_category_table_object()
 }
@@ -553,7 +558,8 @@ pub(crate) fn builtin_copy_category_table_with_symbols(
     deep_copy_category_table_with_symbols(&source, mode)
 }
 
-pub(crate) fn builtin_make_category_set(args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_make_category_set(args: Vec<Value>) -> EvalResult {
     expect_args("make-category-set", &args, 1)?;
 
     let Some(string) = args[0].as_lisp_string() else {
@@ -580,7 +586,8 @@ pub(crate) fn builtin_make_category_set(args: Vec<Value>) -> EvalResult {
     Ok(make_category_set_from_bits(bits))
 }
 
-pub(crate) fn builtin_category_set_mnemonics(args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_category_set_mnemonics(args: Vec<Value>) -> EvalResult {
     expect_args("category-set-mnemonics", &args, 1)?;
 
     // GNU `CHECK_CATEGORY_SET`: a bool-vector of exactly 128 bits.
@@ -601,10 +608,8 @@ pub(crate) fn builtin_category_set_mnemonics(args: Vec<Value>) -> EvalResult {
     Ok(Value::string(&out))
 }
 
-pub(crate) fn builtin_modify_category_entry<H: TextHost>(
-    host: &mut H,
-    args: Vec<Value>,
-) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_modify_category_entry<H: TextHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_min_args("modify-category-entry", &args, 2)?;
     expect_max_args("modify-category-entry", &args, 4)?;
 
@@ -679,7 +684,8 @@ pub(crate) fn builtin_modify_category_entry<H: TextHost>(
     Ok(Value::NIL)
 }
 
-pub(crate) fn builtin_define_category<H: TextHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_define_category<H: TextHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_min_args("define-category", &args, 2)?;
     expect_max_args("define-category", &args, 3)?;
 
@@ -709,10 +715,8 @@ pub(crate) fn builtin_define_category<H: TextHost>(host: &mut H, args: Vec<Value
     Ok(Value::NIL)
 }
 
-pub(crate) fn builtin_category_docstring<H: TextHost>(
-    host: &mut H,
-    args: Vec<Value>,
-) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_category_docstring<H: TextHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_min_args("category-docstring", &args, 1)?;
     expect_max_args("category-docstring", &args, 2)?;
 
@@ -721,10 +725,8 @@ pub(crate) fn builtin_category_docstring<H: TextHost>(
     category_docstring_in_table(table, category)
 }
 
-pub(crate) fn builtin_get_unused_category<H: TextHost>(
-    host: &mut H,
-    args: Vec<Value>,
-) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_get_unused_category<H: TextHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_max_args("get-unused-category", &args, 1)?;
 
     let table = check_category_table(host, args.first().copied())?;
@@ -737,7 +739,8 @@ pub(crate) fn builtin_get_unused_category<H: TextHost>(
     Ok(Value::NIL)
 }
 
-pub(crate) fn builtin_char_category_set<H: TextHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_char_category_set<H: TextHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_args("char-category-set", &args, 1)?;
     let _ = extract_char_code(&args[0], "char-category-set")?;
     let table = current_buffer_category_table_in_buffers(host.buffers_mut())?;
@@ -748,7 +751,8 @@ pub(crate) fn builtin_char_category_set<H: TextHost>(host: &mut H, args: Vec<Val
     )
 }
 
-pub(crate) fn builtin_category_table<H: TextHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_category_table<H: TextHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     builtin_category_table_in_buffers(host.buffers_mut(), args)
 }
 
@@ -760,18 +764,14 @@ pub(crate) fn builtin_category_table_in_buffers(
     current_buffer_category_table_in_buffers(buffers)
 }
 
-pub(crate) fn builtin_standard_category_table<H: TextHost>(
-    _host: &mut H,
-    args: Vec<Value>,
-) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_standard_category_table<H: TextHost>(_host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_max_args("standard-category-table", &args, 0)?;
     ensure_standard_category_table_object()
 }
 
-pub(crate) fn builtin_set_category_table<H: TextHost>(
-    host: &mut H,
-    args: Vec<Value>,
-) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_set_category_table<H: TextHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     let mode = host.symbol_mode();
     builtin_set_category_table_in_buffers_with_symbols(host.buffers_mut(), args, mode)
 }
@@ -797,14 +797,16 @@ mod tests;
 #[path = "tests/gc_tls_ownership_test.rs"]
 mod gc_tls_ownership_tests;
 
-pub(crate) fn builtin_category_table_p_in_state<H: TextHost>(
+#[doc(hidden)]
+pub fn builtin_category_table_p_in_state<H: TextHost>(
     host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_category_table_p_with_symbols(args, host.symbol_mode())
 }
 
-pub(crate) fn builtin_copy_category_table_in_state<H: TextHost>(
+#[doc(hidden)]
+pub fn builtin_copy_category_table_in_state<H: TextHost>(
     host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -823,7 +825,8 @@ pub(crate) fn char_has_category_in_table_with_symbols(
 
 /// Debug-only carrier TLS fingerprint for this module's classified records.
 #[cfg(debug_assertions)]
-pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+#[doc(hidden)]
+pub fn carrier_tls_fingerprint(h: &mut u64) {
     neovm_value::tls_fingerprint::mix(
         h,
         STANDARD_CATEGORY_TABLE_HEAP.with(|slot| slot.get() as u64),

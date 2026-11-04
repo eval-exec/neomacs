@@ -1,14 +1,14 @@
 use super::*;
-use neovm_edit::buffer::LispCharPos1;
 use crate::emacs_core::builtins::search::{
     builtin_looking_at, builtin_match_data, builtin_match_data_translate, builtin_match_string,
     builtin_re_search_forward, builtin_replace_match, builtin_set_match_data, builtin_string_match,
 };
-use neovm_value::error::FlowResultExt as _;
-use neovm_edit::emacs_core::marker;
 use crate::emacs_core::search::builtin_replace_regexp_in_string;
-use neovm_value::value::{ValueKind, list_to_vec};
+use neovm_edit::buffer::LispCharPos1;
+use neovm_edit::emacs_core::marker;
+use neovm_value::error::FlowResultExt as _;
 use neovm_value::heap_types::LispString;
+use neovm_value::value::{ValueKind, list_to_vec};
 
 // Test helpers that keep the Context alive across the returned
 // Value. Previously these created a bare Context inside a block
@@ -1028,7 +1028,9 @@ fn replace_regexp_preserves_raw_unibyte_source() {
 #[test]
 fn replace_regexp_preserves_raw_unibyte_replacement() {
     crate::test_utils::init_test_tracing();
-    let replacement = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![0xFE]));
+    let replacement = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![
+        0xFE,
+    ]));
     let source = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![
         b'a', 0xFF, b'b',
     ]));
@@ -1046,7 +1048,9 @@ fn replace_regexp_function_can_return_raw_unibyte_string() {
     let replacement = Value::list(vec![
         Value::symbol("lambda"),
         Value::list(vec![Value::symbol("_")]),
-        Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![0xFE])),
+        Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![
+            0xFE,
+        ])),
     ]);
     let result =
         call_replace_regexp_in_string(vec![Value::string("a"), replacement, source]).unwrap();

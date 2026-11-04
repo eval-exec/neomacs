@@ -379,29 +379,29 @@ pub mod composite {
     pub use neovm_text::emacs_core::composite::*;
     #[path = "subrs.rs"]
     mod subrs;
-    pub(crate) use subrs::register_subrs;
     #[cfg(test)]
     pub(crate) use subrs::SUBRS;
+    pub(crate) use subrs::register_subrs;
 }
-pub use neovm_value::emacs_char;
 pub use neovm_text::emacs_core::format;
-pub(crate) use neovm_value::heap_registry;
 pub use neovm_text::emacs_core::json;
 pub use neovm_text::emacs_core::regex;
 pub use neovm_text::emacs_core::regex_emacs;
 pub use neovm_text::emacs_core::search;
 pub(crate) use neovm_text::emacs_core::string_escape;
 pub(crate) use neovm_text::emacs_core::substrate_hooks;
+pub use neovm_value::emacs_char;
+pub(crate) use neovm_value::heap_registry;
 // The character<->byte position cache (GNU fns.c string_char_to_byte)
 // moved into neovm-value with the stage-3 split (C12); the historical
 // `emacs_core::string_pos_cache` paths keep resolving through this facade.
-pub(crate) use neovm_value::string_pos_cache;
+pub use neovm_edit::emacs_core::textprop;
 pub use neovm_text::emacs_core::syntax;
 pub use neovm_text::emacs_core::text_host;
-pub use neovm_edit::emacs_core::textprop;
 pub use neovm_text::emacs_core::treesit;
 pub use neovm_text::emacs_core::xml;
 pub(crate) use neovm_text::emacs_core::zlib;
+pub(crate) use neovm_value::string_pos_cache;
 
 // Cross-subsystem and externally-shaped regression suites retain the
 // `emacs_core` lexical parent while living beside the subsystem they cover.
@@ -583,10 +583,6 @@ mod plist_collection_capture_test;
 // The string-position cache's regression children stayed in core with the
 // stage-3 C12 move: they drive the evaluator's heap and activation machinery
 // (Context, TaggedHeap, tls_scope), which the value layer cannot name.
-
-
-
-
 
 #[cfg(test)]
 #[path = "tests/architecture/parallel_exec_substrate_test.rs"]

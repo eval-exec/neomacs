@@ -15,18 +15,19 @@ use strum::{EnumString, IntoStaticStr};
 use super::text_host::TextHost;
 // The variable view is EditHost::Vars; its read methods live on
 // EditVariableRead, so method resolution on the projection needs it in scope.
-use neovm_edit::emacs_core::textprop::CharPropertyResolver;
 use neovm_edit::buffer::{
     Buffer, BufferManager, CharLen, CharPos0, EmacsByteLen, EmacsBytePos, LispCharPos1,
     TextPropertyTable,
 };
-use neovm_value::heap_types::{GnuStringCharPos, LispString, StringCharacterCountKind};
 use neovm_edit::emacs_core::edit_host::EditVariableRead;
+use neovm_edit::emacs_core::textprop::CharPropertyResolver;
 use neovm_value::error::{EvalResult, Flow, signal};
+use neovm_value::heap_types::{GnuStringCharPos, LispString, StringCharacterCountKind};
 use neovm_value::value::{Value, ValueKind, list_to_vec};
 
 mod declared_string;
-pub(crate) mod parse_cache;
+#[doc(hidden)]
+pub mod parse_cache;
 mod parse_loop;
 mod pps_propertize;
 use parse_loop::{Entry, Plain, SafePositionRecorder, ScanEnd, ScanFinish, run_parse_loop};
@@ -61,7 +62,8 @@ fn buffer_byte_to_char_pos(buf: &Buffer, byte_pos: EmacsBytePos) -> usize {
 }
 
 #[inline]
-pub(crate) fn buffer_char_to_emacs_byte_pos(buf: &Buffer, char_pos: CharPos0) -> EmacsBytePos {
+#[doc(hidden)]
+pub fn buffer_char_to_emacs_byte_pos(buf: &Buffer, char_pos: CharPos0) -> EmacsBytePos {
     buf.char_pos_to_emacs_byte_pos_clamped(char_pos)
 }
 
@@ -129,7 +131,8 @@ fn buffer_syntax_char_before(buf: &Buffer, byte_pos: EmacsBytePos) -> Option<Buf
 }
 
 #[inline]
-pub(crate) fn buffer_byte_to_lisp_pos(buf: &Buffer, byte_pos: EmacsBytePos) -> i64 {
+#[doc(hidden)]
+pub fn buffer_byte_to_lisp_pos(buf: &Buffer, byte_pos: EmacsBytePos) -> i64 {
     buf.emacs_byte_pos_to_char_pos_clamped(byte_pos)
         .to_lisp()
         .as_i64()
@@ -163,21 +166,26 @@ pub fn reset_syntax_thread_locals() {
 /// NeoVM exposes it through a thread-local cache because `standard-syntax-table`
 /// is currently a no-evaluator builtin; callers that reconstruct or move an
 /// `Context` between threads must restore that identity explicitly.
-pub(crate) fn restore_standard_syntax_table_object(table: Value) {
+#[doc(hidden)]
+pub fn restore_standard_syntax_table_object(table: Value) {
     STANDARD_SYNTAX_TABLE_OBJECT.with(|slot| *slot.borrow_mut() = Some(table));
-    STANDARD_SYNTAX_TABLE_HEAP
-        .with(|owner| owner.set(neovm_value::tagged::gc::current_tagged_heap_identity().unwrap_or(0)));
+    STANDARD_SYNTAX_TABLE_HEAP.with(|owner| {
+        owner.set(neovm_value::tagged::gc::current_tagged_heap_identity().unwrap_or(0))
+    });
 }
 
 /// Restore GNU's canonical vector of bare syntax descriptor objects.
-pub(crate) fn restore_syntax_code_objects(objects: Value) {
+#[doc(hidden)]
+pub fn restore_syntax_code_objects(objects: Value) {
     SYNTAX_CODE_OBJECTS.with(|slot| *slot.borrow_mut() = Some(objects));
-    SYNTAX_CODE_OBJECTS_HEAP
-        .with(|owner| owner.set(neovm_value::tagged::gc::current_tagged_heap_identity().unwrap_or(0)));
+    SYNTAX_CODE_OBJECTS_HEAP.with(|owner| {
+        owner.set(neovm_value::tagged::gc::current_tagged_heap_identity().unwrap_or(0))
+    });
 }
 
 /// Snapshot GNU's canonical vector of bare syntax descriptor objects.
-pub(crate) fn snapshot_syntax_code_objects() -> Option<Value> {
+#[doc(hidden)]
+pub fn snapshot_syntax_code_objects() -> Option<Value> {
     SYNTAX_CODE_OBJECTS.with(|slot| *slot.borrow())
 }
 
@@ -263,7 +271,8 @@ impl SyntaxStateVariable {
 /// call sites: scanners ask whether a quoted ender terminates, rather than
 /// remembering what `true` meant in Lisp.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) enum CommentEndEscapePolicy {
+#[doc(hidden)]
+pub enum CommentEndEscapePolicy {
     /// GNU's default: quoting cannot suppress a comment end marker.
     #[default]
     EnderAlwaysTerminates,
@@ -314,13 +323,15 @@ impl CommentEndEscapePolicy {
 
 /// Lisp-visible policy captured once before an evaluator-owned sexp scan.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct SexpScanPolicy {
+#[doc(hidden)]
+pub struct SexpScanPolicy {
     ignore_comments: bool,
     pub(crate) comment_end_escape: CommentEndEscapePolicy,
 }
 
 impl SexpScanPolicy {
-    pub(crate) fn for_context<H: TextHost>(ctx: &H) -> Self {
+    #[doc(hidden)]
+    pub fn for_context<H: TextHost>(ctx: &H) -> Self {
         Self {
             ignore_comments: SyntaxStateVariable::ParseSexpIgnoreComments.enabled(ctx),
             comment_end_escape: CommentEndEscapePolicy::for_context(ctx),
@@ -385,7 +396,8 @@ pub use neovm_edit::buffer::syntax_class::SyntaxClass;
 /// called at evaluator construction and image restore.  The table carries
 /// only value/edit types and the implementations stay here, where the live
 /// syntax char-table lives; there is no dynamic dispatch and no new TLS.
-pub(crate) fn install_substrate_seams() {
+#[doc(hidden)]
+pub fn install_substrate_seams() {
     static INSTALLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if INSTALLED.load(std::sync::atomic::Ordering::Acquire) {
         return;
@@ -619,8 +631,9 @@ pub fn syntax_entry_to_value(entry: &SyntaxEntry) -> Value {
 }
 
 fn make_syntax_code_objects() -> Value {
-    SYNTAX_CODE_OBJECTS_HEAP
-        .with(|owner| owner.set(neovm_value::tagged::gc::current_tagged_heap_identity().unwrap_or(0)));
+    SYNTAX_CODE_OBJECTS_HEAP.with(|owner| {
+        owner.set(neovm_value::tagged::gc::current_tagged_heap_identity().unwrap_or(0))
+    });
     Value::vector(
         (0..SYNTAX_CLASS_COUNT)
             .map(|code| Value::cons(Value::fixnum(code as i64), Value::NIL))
@@ -628,7 +641,8 @@ fn make_syntax_code_objects() -> Value {
     )
 }
 
-pub(crate) fn ensure_syntax_code_objects() -> Value {
+#[doc(hidden)]
+pub fn ensure_syntax_code_objects() -> Value {
     SYNTAX_CODE_OBJECTS.with(|slot| {
         if let Some(objects) = *slot.borrow() {
             return objects;
@@ -1318,7 +1332,8 @@ impl<'a> ParseBufferChars<'a> {
     }
 }
 
-pub(crate) fn forward_word_with_options(
+#[doc(hidden)]
+pub fn forward_word_with_options(
     buf: &Buffer,
     table: &SyntaxTable,
     count: i64,
@@ -1416,7 +1431,8 @@ pub fn backward_word(buf: &Buffer, table: &SyntaxTable, count: i64) -> EmacsByte
 /// Whether `find-word-boundary-function-table` has any binding (i.e. some mode
 /// like subword/superword installed boundary functions). When empty (the
 /// common case) word motion uses the plain syntax scan unchanged.
-pub(crate) fn word_boundary_table_active(table: &Value, mode: neovm_value::tagged::SymbolMode) -> bool {
+#[doc(hidden)]
+pub fn word_boundary_table_active(table: &Value, mode: neovm_value::tagged::SymbolMode) -> bool {
     if !super::chartable::is_char_table(table) {
         return false;
     }
@@ -1439,7 +1455,8 @@ pub(crate) fn word_boundary_table_active(table: &Value, mode: neovm_value::tagge
 /// `honor` rather than a snapshot: the boundary callback below is arbitrary
 /// Lisp, so each probe takes its own [`SyntaxProperties::for_scan`] snapshot,
 /// just as it already builds its own property-run cache.
-pub(crate) fn word_motion_with_table<H: TextHost>(
+#[doc(hidden)]
+pub fn word_motion_with_table<H: TextHost>(
     eval: &mut H,
     count: i64,
     honor: bool,
@@ -1619,7 +1636,8 @@ pub(crate) fn word_motion_with_table<H: TextHost>(
 /// Compute where `forward-word`/`backward-word` over `count` words would land,
 /// honoring `find-word-boundary-function-table`, WITHOUT moving point. Used by
 /// the word-casing commands that operate on the [point, destination] region.
-pub(crate) fn forward_word_destination<H: TextHost>(
+#[doc(hidden)]
+pub fn forward_word_destination<H: TextHost>(
     eval: &mut H,
     count: i64,
     honor: bool,
@@ -2898,7 +2916,8 @@ fn scan_sexp_backward(
 // ===========================================================================
 
 /// `(string-to-syntax S)` — parse a syntax descriptor string.
-pub(crate) fn builtin_string_to_syntax(args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_string_to_syntax(args: Vec<Value>) -> EvalResult {
     if args.len() != 1 {
         return Err(signal(
             LispCondition::WrongNumberOfArguments,
@@ -3045,7 +3064,8 @@ fn current_buffer_syntax_table_object_in_buffers(
     )
 }
 
-pub(crate) fn sync_current_buffer_syntax_table_state<H: TextHost>(ctx: &mut H) -> Result<(), Flow> {
+#[doc(hidden)]
+pub fn sync_current_buffer_syntax_table_state<H: TextHost>(ctx: &mut H) -> Result<(), Flow> {
     let mode = ctx.symbol_mode();
     // Just ensure the slot is seeded with the standard chartable if
     // it was left `Value::NIL`. No compilation, no cache rebuild —
@@ -3330,7 +3350,8 @@ pub(crate) fn syntax_table_decodes_for_test() -> usize {
 /// `category`-supplied syntax -- is not a value this type can hold.
 /// [`Self::for_scan`] is the one place the Lisp flag becomes a resolver.
 #[derive(Clone, Copy)]
-pub(crate) enum SyntaxProperties<'a> {
+#[doc(hidden)]
+pub enum SyntaxProperties<'a> {
     /// `parse-sexp-lookup-properties` is nil: buffer table syntax only.
     Ignore,
     /// Resolve `syntax-table` per character exactly as `get-char-property`
@@ -3602,7 +3623,8 @@ struct StringPropSource<'a> {
 /// strings serve the existing Rust-only matcher domain. Threading: neither
 /// binding may leave its current mutator, including when it is immutable.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct StringSyntaxPositionSource<'a> {
+#[doc(hidden)]
+pub struct StringSyntaxPositionSource<'a> {
     kind: StringSyntaxPositionSourceKind<'a>,
     _mutator: std::marker::PhantomData<std::rc::Rc<()>>,
 }
@@ -3617,7 +3639,8 @@ enum StringSyntaxPositionSourceKind<'a> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
-pub(crate) enum StringSyntaxPositionSourceError {
+#[doc(hidden)]
+pub enum StringSyntaxPositionSourceError {
     #[error("String regexp syntax source is not a Lisp string")]
     NotString,
 }
@@ -3641,14 +3664,16 @@ impl<'a> TryFrom<&'a Value> for StringSyntaxPositionSource<'a> {
 }
 
 impl<'a> StringSyntaxPositionSource<'a> {
-    pub(crate) const fn owned(string: &'a LispString) -> Self {
+    #[doc(hidden)]
+    pub const fn owned(string: &'a LispString) -> Self {
         Self {
             kind: StringSyntaxPositionSourceKind::Owned(string),
             _mutator: std::marker::PhantomData,
         }
     }
 
-    pub(crate) const fn string(self) -> &'a LispString {
+    #[doc(hidden)]
+    pub const fn string(self) -> &'a LispString {
         match self.kind {
             StringSyntaxPositionSourceKind::Heap { string, .. } => string,
             StringSyntaxPositionSourceKind::Owned(string) => string,
@@ -3658,9 +3683,7 @@ impl<'a> StringSyntaxPositionSource<'a> {
     fn byte_to_gnu_char_pos(self, byte_pos: usize) -> GnuStringCharPos {
         match self.kind {
             StringSyntaxPositionSourceKind::Heap { value, string } => {
-                neovm_value::string_pos_cache::string_byte_to_gnu_char(
-                    value, string, byte_pos,
-                )
+                neovm_value::string_pos_cache::string_byte_to_gnu_char(value, string, byte_pos)
             }
             StringSyntaxPositionSourceKind::Owned(string) => string.byte_to_gnu_char_pos(byte_pos),
         }
@@ -3687,7 +3710,8 @@ static_assertions::assert_impl_all!(StringSyntaxPositionUpdate: Send, Sync, Copy
 /// before it consults intervals (textprop.c:523-550). No unsigned/clamped
 /// lookup may replace this diagnostic. Threading: immutable numeric data.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
-pub(crate) enum StringSyntaxPositionError {
+#[doc(hidden)]
+pub enum StringSyntaxPositionError {
     #[error("String syntax property position is outside declared bounds: {position:?}")]
     OutOfRange { position: GnuStringCharPos },
     #[error("Error in syntax_table logic for to-the-end intervals")]
@@ -4054,7 +4078,9 @@ fn supplied_boundary_syntax(
                     .unwrap_or_else(|| {
                         record_syntax_table_decode();
                         let entry = match mode {
-                            neovm_value::tagged::SymbolMode::Bare => table.get_entry_code(ch.code()),
+                            neovm_value::tagged::SymbolMode::Bare => {
+                                table.get_entry_code(ch.code())
+                            }
                             neovm_value::tagged::SymbolMode::Positioned => {
                                 syntax_entry_at_char_code_with_symbols(
                                     &table.chartable(),
@@ -4693,7 +4719,8 @@ fn syntax_entry_from_table_logged(
         .unwrap_or_else(|| SyntaxEntry::simple(table.char_syntax(ch)))
 }
 
-pub(crate) fn parse_sexp_lookup_properties_enabled<H: TextHost>(ctx: &H) -> bool {
+#[doc(hidden)]
+pub fn parse_sexp_lookup_properties_enabled<H: TextHost>(ctx: &H) -> bool {
     SyntaxStateVariable::ParseSexpLookupProperties.enabled(ctx)
 }
 
@@ -4708,12 +4735,14 @@ fn internal_syntax_propertize_sym() -> neovm_value::intern::SymId {
 /// `syntax-propertize--done` id, shared with the search prep's warm
 /// precheck.
 #[inline(always)]
-pub(crate) fn syntax_propertize_done_sym() -> neovm_value::intern::SymId {
+#[doc(hidden)]
+pub fn syntax_propertize_done_sym() -> neovm_value::intern::SymId {
     static SYMBOL: std::sync::OnceLock<neovm_value::intern::SymId> = std::sync::OnceLock::new();
     *SYMBOL.get_or_init(|| neovm_value::intern::intern("syntax-propertize--done"))
 }
 
-pub(crate) fn maybe_syntax_propertize_for_scan<H: TextHost>(
+#[doc(hidden)]
+pub fn maybe_syntax_propertize_for_scan<H: TextHost>(
     eval: &mut H,
     target_char_pos: usize,
 ) -> EvalResult {
@@ -4722,7 +4751,8 @@ pub(crate) fn maybe_syntax_propertize_for_scan<H: TextHost>(
 
 /// Enter a caller's root scope only when propertization actually calls Lisp.
 /// Warm scans retain the usual single function/frontier check.
-pub(crate) fn maybe_syntax_propertize_for_scan_with_scope<H: TextHost, G>(
+#[doc(hidden)]
+pub fn maybe_syntax_propertize_for_scan_with_scope<H: TextHost, G>(
     eval: &mut H,
     target_char_pos: usize,
     enter_scope: impl FnOnce() -> G,
@@ -4779,7 +4809,8 @@ pub(crate) fn maybe_syntax_propertize_for_scan_with_scope<H: TextHost, G>(
 /// does not already cover the target. A builtin that sees `false` may skip
 /// the call (and everything it would re-read after Lisp ran) with nothing
 /// observable changed.
-pub(crate) fn syntax_propertize_would_run<H: TextHost>(eval: &H, target_char_pos: usize) -> bool {
+#[doc(hidden)]
+pub fn syntax_propertize_would_run<H: TextHost>(eval: &H, target_char_pos: usize) -> bool {
     if eval
         .variables()
         .obarray()
@@ -4801,7 +4832,8 @@ pub(crate) fn syntax_propertize_would_run<H: TextHost>(eval: &H, target_char_pos
 /// `[from + 1, end]` so a scan window always makes progress; when nothing
 /// tracks the frontier (no propertize function, unbound variable) the whole
 /// accessible range is usable.
-pub(crate) fn syntax_propertize_frontier_for_scan<H: TextHost>(
+#[doc(hidden)]
+pub fn syntax_propertize_frontier_for_scan<H: TextHost>(
     eval: &mut H,
     from: usize,
     end: usize,
@@ -4819,7 +4851,8 @@ pub(crate) fn syntax_propertize_frontier_for_scan<H: TextHost>(
 }
 
 /// `(syntax-class-to-char CLASS)` — map syntax class code to descriptor char.
-pub(crate) fn builtin_syntax_class_to_char(args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_syntax_class_to_char(args: Vec<Value>) -> EvalResult {
     if args.len() != 1 {
         return Err(signal(
             LispCondition::WrongNumberOfArguments,
@@ -4855,7 +4888,8 @@ pub(crate) fn builtin_syntax_class_to_char(args: Vec<Value>) -> EvalResult {
 /// This is an evaluator-dependent version that uses the current buffer's
 /// syntax table, matching GNU `Fmatching_paren`: return a match only when the
 /// effective syntax class is open or close.
-pub(crate) fn builtin_matching_paren<H: TextHost>(eval: &mut H, args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_matching_paren<H: TextHost>(eval: &mut H, args: Vec<Value>) -> EvalResult {
     builtin_matching_paren_in_buffers(eval.buffers(), args)
 }
 
@@ -4901,7 +4935,8 @@ pub(crate) fn builtin_matching_paren_in_buffers(
 }
 
 /// `(standard-syntax-table)` — return the standard syntax table.
-pub(crate) fn builtin_standard_syntax_table(args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_standard_syntax_table(args: Vec<Value>) -> EvalResult {
     if !args.is_empty() {
         return Err(signal(
             LispCondition::WrongNumberOfArguments,
@@ -4931,7 +4966,8 @@ pub(crate) fn builtin_syntax_table<H: TextHost>(eval: &mut H, args: Vec<Value>) 
 /// `syntax-table` as registered: fixed arity 0, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a0` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_syntax_table_0<H: TextHost>(eval: &mut H) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_syntax_table_0<H: TextHost>(eval: &mut H) -> EvalResult {
     let mode = eval.symbol_mode();
     let args: [Value; 0] = [];
     builtin_syntax_table_in_buffers_with_symbols(eval.buffers_mut(), &args, mode)
@@ -4950,7 +4986,8 @@ pub(crate) fn builtin_set_syntax_table<H: TextHost>(eval: &mut H, args: Vec<Valu
 /// `set-syntax-table` as registered: fixed arity 1, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_set_syntax_table_1<H: TextHost>(eval: &mut H, table: Value) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_set_syntax_table_1<H: TextHost>(eval: &mut H, table: Value) -> EvalResult {
     let mode = eval.symbol_mode();
     let args: [Value; 1] = [table];
     builtin_set_syntax_table_in_buffers_with_symbols(eval.buffers_mut(), &args, mode)
@@ -4961,10 +4998,8 @@ pub(crate) fn builtin_set_syntax_table_1<H: TextHost>(eval: &mut H, table: Value
 // ===========================================================================
 
 /// `(modify-syntax-entry CHAR NEWENTRY &optional SYNTAX-TABLE)`
-pub(crate) fn builtin_modify_syntax_entry<H: TextHost>(
-    eval: &mut H,
-    args: Vec<Value>,
-) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_modify_syntax_entry<H: TextHost>(eval: &mut H, args: Vec<Value>) -> EvalResult {
     let mode = eval.symbol_mode();
     modify_syntax_entry_in_buffers_with_symbols(eval.buffers_mut(), &args, mode)
 }
@@ -4979,7 +5014,8 @@ pub(crate) fn builtin_char_syntax<H: TextHost>(eval: &mut H, args: Vec<Value>) -
 /// `char-syntax` as registered: fixed arity 1, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_char_syntax_1<H: TextHost>(eval: &mut H, character: Value) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_char_syntax_1<H: TextHost>(eval: &mut H, character: Value) -> EvalResult {
     let args: [Value; 1] = [character];
     builtin_char_syntax_in_buffers(eval.buffers(), &args)
 }
@@ -4998,9 +5034,7 @@ pub(crate) fn builtin_char_syntax_in_buffers(
         ));
     }
     let code = match args[0].kind() {
-        ValueKind::Fixnum(c)
-            if (0..=neovm_value::emacs_char::MAX_CHAR as i64).contains(&c) =>
-        {
+        ValueKind::Fixnum(c) if (0..=neovm_value::emacs_char::MAX_CHAR as i64).contains(&c) => {
             c as u32
         }
         ValueKind::Fixnum(_) => {
@@ -5045,9 +5079,8 @@ pub(crate) fn builtin_char_syntax_in_buffers(
 /// syntax via `modify-syntax-entry`) participate in a word -- Unicode
 /// letterness is irrelevant. Falls back to the standard syntax table when there
 /// is no current buffer (e.g. casing a plain string outside any buffer).
-pub(crate) fn casing_word_predicate<H: TextHost>(
-    eval: &H,
-) -> impl Fn(u32) -> bool + Copy + 'static {
+#[doc(hidden)]
+pub fn casing_word_predicate<H: TextHost>(eval: &H) -> impl Fn(u32) -> bool + Copy + 'static {
     let symbols_as_words = eval
         .eval_symbol_by_id(neovm_value::intern::intern("case-symbols-as-words"))
         .unwrap_or(Value::NIL)
@@ -5139,7 +5172,8 @@ pub(crate) fn builtin_syntax_after_in_buffers_with_symbols<'a, V: EditVariableRe
     Ok(syntax_entry_to_value(&entry))
 }
 
-pub(crate) fn expect_forward_comment_count(args: &[Value]) -> Result<i64, Flow> {
+#[doc(hidden)]
+pub fn expect_forward_comment_count(args: &[Value]) -> Result<i64, Flow> {
     if args.len() != 1 {
         return Err(signal(
             LispCondition::WrongNumberOfArguments,
@@ -5162,7 +5196,8 @@ pub(crate) fn expect_forward_comment_count(args: &[Value]) -> Result<i64, Flow> 
     Ok(count)
 }
 
-pub(crate) fn forward_comment_in_buffers(
+#[doc(hidden)]
+pub fn forward_comment_in_buffers(
     buffers: &mut BufferManager,
     count: i64,
     props: SyntaxProperties<'_>,
@@ -5189,7 +5224,8 @@ pub(crate) fn forward_comment_in_buffers(
 /// Run the comment scan without moving point; returns (all-skipped, stop pos).
 /// The cursor only ever advances toward the scan direction, so for forward
 /// scans the stop position is also the maximum position examined.
-pub(crate) fn forward_comment_scan_in_buffer(
+#[doc(hidden)]
+pub fn forward_comment_scan_in_buffer(
     buf: &Buffer,
     count: i64,
     props: SyntaxProperties<'_>,
@@ -6225,7 +6261,8 @@ fn scan_backward_comment_fence(
     }
 }
 
-pub(crate) fn builtin_backward_prefix_chars_in_buffers(
+#[doc(hidden)]
+pub fn builtin_backward_prefix_chars_in_buffers(
     buffers: &mut BufferManager,
     args: &[Value],
     props: SyntaxProperties<'_>,
@@ -6476,7 +6513,8 @@ pub(crate) fn builtin_scan_lists<H: TextHost>(ctx: &mut H, args: Vec<Value>) -> 
 /// `scan-lists` as registered: fixed arity 3, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a3` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_scan_lists_3<H: TextHost>(
+#[doc(hidden)]
+pub fn builtin_scan_lists_3<H: TextHost>(
     ctx: &mut H,
     from: Value,
     count: Value,
@@ -6620,11 +6658,8 @@ pub(crate) fn builtin_scan_sexps<H: TextHost>(ctx: &mut H, args: Vec<Value>) -> 
 /// `scan-sexps` as registered: fixed arity 2, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a2` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_scan_sexps_2<H: TextHost>(
-    ctx: &mut H,
-    from: Value,
-    count: Value,
-) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_scan_sexps_2<H: TextHost>(ctx: &mut H, from: Value, count: Value) -> EvalResult {
     let args: [Value; 2] = [from, count];
     if args.len() != 2 {
         return Err(signal(
@@ -7410,7 +7445,8 @@ pub(crate) fn builtin_parse_partial_sexp<H: TextHost>(
 /// `parse-partial-sexp` as registered: fixed arity 6, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a6` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_parse_partial_sexp_6<H: TextHost>(
+#[doc(hidden)]
+pub fn builtin_parse_partial_sexp_6<H: TextHost>(
     eval: &mut H,
     from: Value,
     to: Value,
@@ -7608,7 +7644,8 @@ pub(crate) fn builtin_skip_syntax_forward<H: TextHost>(
 /// `skip-syntax-forward` as registered: fixed arity 2, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a2` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_skip_syntax_forward_2<H: TextHost>(
+#[doc(hidden)]
+pub fn builtin_skip_syntax_forward_2<H: TextHost>(
     eval: &mut H,
     syntax: Value,
     lim: Value,
@@ -7734,7 +7771,8 @@ pub(crate) fn builtin_skip_syntax_forward_2<H: TextHost>(
 ///
 /// Registered at fixed arity 2, called straight off the bytecode stack like
 /// GNU `funcall_subr`'s `a2` case (absent optionals arrive as nil).
-pub(crate) fn builtin_skip_syntax_backward_2<H: TextHost>(
+#[doc(hidden)]
+pub fn builtin_skip_syntax_backward_2<H: TextHost>(
     eval: &mut H,
     syntax: Value,
     lim: Value,
@@ -7879,7 +7917,8 @@ mod skip_syntax_classes_tests;
 mod gc_tls_ownership_tests;
 
 mod symbol_policy;
-pub(crate) use symbol_policy::*;
+#[doc(hidden)]
+pub use symbol_policy::*;
 
 #[cfg(test)]
 #[path = "tests/signed_string_positions.rs"]
@@ -7891,7 +7930,8 @@ mod declared_logical_state_tests;
 
 /// Carrier park: drop the flat-ASCII syntax caches (the standard-table
 /// objects are reset by `reset_syntax_thread_locals`).
-pub(crate) fn reset_carrier_tls() {
+#[doc(hidden)]
+pub fn reset_carrier_tls() {
     SYNTAX_FLAT_ASCII_CACHE.with(|slot| slot.set(None));
     SYNTAX_FLAT_ASCII_ENTRIES
         .with(|entries| *entries.borrow_mut() = [ParseSyntaxEntry::WHITESPACE; 128]);
@@ -7902,7 +7942,8 @@ pub(crate) fn reset_carrier_tls() {
 
 /// Debug-only carrier TLS fingerprint for this module's classified records.
 #[cfg(debug_assertions)]
-pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+#[doc(hidden)]
+pub fn carrier_tls_fingerprint(h: &mut u64) {
     neovm_value::tls_fingerprint::mix(h, STANDARD_SYNTAX_TABLE_HEAP.with(|slot| slot.get() as u64));
     neovm_value::tls_fingerprint::mix(
         h,
@@ -7945,4 +7986,12 @@ pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
             x
         }),
     );
+}
+
+#[doc(hidden)]
+impl SexpScanPolicy {
+    #[doc(hidden)]
+    pub fn comment_end_escape(&self) -> CommentEndEscapePolicy {
+        self.comment_end_escape
+    }
 }

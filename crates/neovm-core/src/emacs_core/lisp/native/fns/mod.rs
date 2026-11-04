@@ -668,7 +668,7 @@ fn encoded_hash_slice_for_buffer_in_context(
     let coding_system = coding_override
         .map(crate::encoding::RuntimeCodingSystem::from_symbol)
         .unwrap_or_else(|| super::fileio::resolve_write_coding_system(eval, buffer_id, fallback));
-    Ok(crate::encoding::encode_external_text_in_context(eval, text, coding_system)?.bytes)
+    Ok(crate::encoding::encode_external_text_in_context(eval, text, coding_system)?.into_bytes())
 }
 
 fn secure_hash_algorithm_name(
