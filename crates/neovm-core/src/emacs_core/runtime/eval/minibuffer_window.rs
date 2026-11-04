@@ -9,7 +9,7 @@
 //! (`use super::*` keeps the parent's view of `Context` and its imports).
 
 use super::*;
-use crate::emacs_core::minibuffer::MinibufferManagerExt;
+use crate::emacs_core::eval::data::minibuffer_entry::MinibufferManagerExt;
 
 impl Context {
     pub fn minibuffer_is_active(&self) -> bool {

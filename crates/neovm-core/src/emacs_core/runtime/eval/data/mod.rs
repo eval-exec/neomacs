@@ -15,6 +15,7 @@ pub(crate) mod fontset_state;
 pub mod frame_alpha;
 pub mod layout_input;
 pub mod minibuffer;
+pub mod minibuffer_entry;
 pub mod point_rows;
 pub mod posn_object_extent;
 pub mod process_spawn;

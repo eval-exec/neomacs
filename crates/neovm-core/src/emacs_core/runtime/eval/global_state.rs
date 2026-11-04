@@ -8,6 +8,7 @@
 
 use super::*;
 use crate::emacs_core::eval::data::minibuffer::MinibufferManager;
+use crate::emacs_core::eval::data::minibuffer_entry::MinibufferManagerExt;
 use std::ptr::NonNull;
 
 macro_rules! global_state {
