@@ -4,6 +4,7 @@
 //! value/edit vocabulary, so the evaluator can hold them without naming a
 //! display-crate type.
 
+pub mod command_loop;
 pub mod dynamic_module_registry;
 pub mod face;
 pub mod minibuffer;
