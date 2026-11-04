@@ -13,6 +13,10 @@ use strum::{EnumString, IntoStaticStr};
 
 use self::data::xwidget;
 use self::interactive_registry::InteractiveRegistry;
+pub use self::protocol::{
+    FontOpeningSize, FrameFontSize, TerminalCreateRequest, TerminalDisplayTarget,
+    TerminalFloatPlacement, TerminalGridSize, TerminalId,
+};
 use super::abbrev::AbbrevManager;
 use super::advice::VariableWatcherList;
 use super::autoload::AutoloadManager;
@@ -25,11 +29,7 @@ use super::command_observation::{
 };
 use super::custom::CustomManager;
 use super::debug_on_call::DebugOnCallCode;
-pub use super::display_host::{
-    DisplayHost, FontOpeningSize, FrameFontRequest, FrameFontSize, GraphicalFaceAttribute,
-    TerminalCreateRequest, TerminalDisplayTarget, TerminalFloatPlacement, TerminalGridSize,
-    TerminalId, XwidgetScriptRequestId,
-};
+pub use super::display_host::{DisplayHost, FrameFontRequest};
 use super::error::*;
 use super::intern::{
     SymId, WellKnown, format_symbol_name_for_diagnostic, intern, intern_uninterned,
@@ -55,11 +55,14 @@ use crate::window::{
     BodyRedisplayRevision, ForcedBodyRedisplay, FrameFullscreen, FrameManager,
     WindowLayoutQueryAdapter,
 };
+pub use neomacs_display_protocol::GraphicalFaceAttribute;
 use neovm_edit::emacs_core::display_metrics::WindowId;
+pub use neovm_value::display_vocab::XwidgetScriptRequestId;
 use neovm_value::display_vocab::{FontSlant, FontWeight, FontWidth};
 use neovm_value::kmacro::KmacroManager;
 
 pub mod data;
+pub mod protocol;
 pub(crate) mod world;
 pub use world::{ContextShutdownError, ObarrayWriteAccess, OutstandingWorldViews, WorldEra};
 pub(crate) use world::{ObarrayView, OwnedRootRegistryView, WorldSlot, WorldView};
