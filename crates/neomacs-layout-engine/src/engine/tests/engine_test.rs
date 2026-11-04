@@ -34119,6 +34119,58 @@ fn overlay_string_shadow_invisible_overlay_shows_both_strings_once() {
     assert_eq!(visible, "abcBdefAgh ");
 }
 
+/// Overlay strings whose own text carry an `invisible` property matching
+/// `buffer-invisibility-spec` without an ellipsis are dropped, matching GNU
+/// `handle_invisible_prop` (xdisp.c:5442-5452).
+#[test]
+fn overlay_string_shadow_invisible_string_is_dropped() {
+    // 1. When buffer-invisibility-spec includes the symbol, the after-string is hidden.
+    let hidden = overlay_string_row_text(
+        "hello world\n",
+        &[
+            "(setq buffer-invisibility-spec '(my-hide t))",
+            "(let ((ov (make-overlay 1 5))) \
+               (overlay-put ov 'after-string (propertize \"[1]\" 'invisible 'my-hide)))",
+        ],
+    );
+    assert_eq!(hidden, "hello world ");
+
+    // 2. When the symbol is not in buffer-invisibility-spec, the string renders.
+    let visible = overlay_string_row_text(
+        "hello world\n",
+        &[
+            "(setq buffer-invisibility-spec nil)",
+            "(let ((ov (make-overlay 1 5))) \
+               (overlay-put ov 'after-string (propertize \"[1]\" 'invisible 'my-hide)))",
+        ],
+    );
+    assert_eq!(visible, "hell[1]o world ");
+
+    // 3. Before-strings carrying an invisible text property are also dropped.
+    let before_hidden = overlay_string_row_text(
+        "hello world\n",
+        &[
+            "(setq buffer-invisibility-spec '(my-hide t))",
+            "(let ((ov (make-overlay 1 5))) \
+               (overlay-put ov 'before-string (propertize \"(PRE)\" 'invisible 'my-hide)))",
+        ],
+    );
+    assert_eq!(before_hidden, "hello world ");
+
+    // 4. Multiple overlays at the same anchor: only the invisible one is dropped.
+    let selective_hidden = overlay_string_row_text(
+        "hello world\n",
+        &[
+            "(setq buffer-invisibility-spec '(my-hide t))",
+            "(let ((ov1 (make-overlay 1 5)) \
+                   (ov2 (make-overlay 1 5))) \
+               (overlay-put ov1 'after-string (propertize \"[HIDE]\" 'invisible 'my-hide)) \
+               (overlay-put ov2 'after-string \"[SHOW]\"))",
+        ],
+    );
+    assert_eq!(selective_hidden, "hell[SHOW]o world ");
+}
+
 /// Cursor placement AROUND an anchor. Overlay strings are not cursor targets
 /// unless they carry a `cursor` text property, so point on the anchor character
 /// must land on the buffer character, at the column AFTER the inserted string.
