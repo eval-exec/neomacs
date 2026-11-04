@@ -5,7 +5,9 @@ use neovm_edit::buffer::{
     TextPositionAnchor,
 };
 use neovm_edit::emacs_core::display_metrics::{Rect, WindowId, WindowMargins};
-use neovm_value::display_vocab::{FrameId, WindowLayoutVariable};
+use neovm_value::display_vocab::{
+    ChangeStamp, FrameId, SplitDirection, WindowHistoryState, WindowLayoutVariable,
+};
 use neovm_value::intern::SymId;
 use neovm_value::value::Value;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
@@ -974,4 +976,217 @@ impl WindowVisibleBufferSpan {
             LispCharPos1::new(self.end.as_i64().saturating_add(1))
         }
     }
+}
+
+// --- E5-FM Window + WindowTree (stage-4 W2/E5) ---
+
+/// A window in the window tree.
+#[derive(Clone, Debug)]
+// Window nodes own their complete leaf/split state and are cloned as snapshots;
+// boxing the larger leaf would add indirection throughout the hot layout path.
+#[allow(clippy::large_enum_variant)]
+pub enum Window {
+    /// Leaf window displaying a buffer.
+    Leaf {
+        id: WindowId,
+        buffer_id: BufferId,
+        /// Cleared at GNU freshness boundaries, never restored from a saved
+        /// configuration or shared with a newly cloned sibling.
+        mode_line_base: Option<ModeLineBase>,
+        /// Pixel bounds within the frame.
+        bounds: Rect,
+        /// Cached byte position of the first visible character.
+        ///
+        /// GNU Emacs stores this as a marker (`w->start`) so that buffer
+        /// edits before the start position auto-shift it.  neomacs now
+        /// maintains a real marker in `position_markers` alongside this
+        /// cached Lisp-visible position.  The cache is refreshed from the marker
+        /// by `sync_window_positions_from_markers` after every text edit,
+        /// and on every explicit position write.  All read sites continue
+        /// to use this typed cache for zero-cost reads.
+        window_start: LispCharPos1,
+        /// Atomic ownership state for GNU's `start`, `pointm`, and
+        /// `old_pointm` markers.
+        position_markers: WindowPositionMarkerState,
+        /// Last atomically published window-end record and its freshness.
+        window_end: WindowEndState,
+        /// Cached cursor (point) position in this window.
+        ///
+        /// GNU Emacs stores this as a marker (`w->pointm`) so that buffer
+        /// insertions before the position auto-shift it.  neomacs now
+        /// maintains a real marker in `position_markers` alongside this
+        /// cached Lisp-visible position.  The cache is refreshed from the marker
+        /// after every text edit.  For the selected window, reads should
+        /// prefer `buffer.pt` directly (GNU fast path); this cached value
+        /// is authoritative for non-selected windows.
+        point: LispCharPos1,
+        /// Cached previous point value mirrored from GNU `w->old_pointm`.
+        old_point: LispCharPos1,
+        /// GNU `w->old_buffer`: the buffer this window showed when its epoch was
+        /// recorded.  `None` is GNU's nil.
+        old_buffer: Option<BufferId>,
+        /// GNU `w->change_stamp`: the window-change epoch this window was last
+        /// recorded in.  `None` is GNU's 0 -- "created since the last record",
+        /// which is why a brand-new window reports no old buffer.
+        change_stamp: Option<ChangeStamp>,
+        /// Mirror GNU `w->dedicated`: the dedication flag value.
+        /// nil = not dedicated, t = strongly dedicated,
+        /// side = side-window dedication (blocks display-buffer reuse but
+        /// allows switch-to-buffer / set-window-buffer).
+        dedicated: Value,
+        /// Lisp-visible per-window parameter alist, newest entries first.
+        parameters: WindowParameters,
+        /// Monotonic identity for changes to `parameters`.
+        parameters_generation: u64,
+        /// Live-window history state mirrored from GNU `struct window`.
+        history: WindowHistoryState,
+        /// Desired height in lines (for fixed windows, 0 = flexible).
+        fixed_height: usize,
+        /// Desired width in columns (for fixed windows, 0 = flexible).
+        fixed_width: usize,
+        /// Horizontal scroll offset (columns).
+        hscroll: usize,
+        /// Lower bound for automatic horizontal scrolling (columns).
+        ///
+        /// Mirrors GNU `w->min_hscroll` (`src/window.h`). Set equal to the
+        /// current `hscroll` by `scroll-left`/`scroll-right` when their
+        /// SET-MINIMUM argument is non-nil; the auto-hscroll pass
+        /// (`hscroll_window_tree`, STEP 7) never scrolls below it. Reset to
+        /// 0 on buffer switch.
+        min_hscroll: usize,
+        /// Whether automatic horizontal scrolling is currently suspended for
+        /// this window.
+        ///
+        /// Mirrors GNU `w->suspend_auto_hscroll` (`src/window.h`). Set true by
+        /// `set-window-hscroll` and `scroll-left`/`scroll-right` so a manual
+        /// hscroll sticks instead of being recomputed every redisplay; cleared
+        /// by `hscroll_window_tree` STEP 4 once window point explicitly moves,
+        /// and reset to false on buffer switch.
+        suspend_auto_hscroll: bool,
+        /// Raw GNU `w->vscroll` value in pixels: zero or negative.
+        ///
+        /// Lisp-visible `window-vscroll` reports `-vscroll`, either in pixels
+        /// or in canonical line units depending on the call site.
+        vscroll: i32,
+        /// Mirrors GNU `w->preserve_vscroll_p`.
+        preserve_vscroll_p: bool,
+        /// Mirrors GNU `w->force_start`: the window start was set explicitly
+        /// (window_scroll / set-window-start), so the next redisplay must
+        /// honor it and move POINT into the window if it ended up outside,
+        /// instead of recomputing the start around point. One-shot: cleared
+        /// when redisplay publishes the window's positions.
+        force_start: bool,
+        /// Window margins in columns.
+        margins: WindowMargins,
+        /// Window-local display settings mirrored from GNU `struct window`.
+        display: WindowDisplayState,
+        /// Pending pixel size queued by `set-window-new-pixel`. GNU
+        /// stores this as `w->new_pixel`
+        /// (`src/window.h:283`). Cleared by `window-resize-apply`
+        /// once committed. Window audit Structural 1 in
+        /// `drafts/window-system-audit.md` moved this off a
+        /// thread-local HashMap onto the window struct so
+        /// window-configuration save/restore round-trips it
+        /// automatically.
+        new_pixel: Option<i64>,
+        /// Pending total (line-cell) size queued by
+        /// `set-window-new-total`. GNU `w->new_total`
+        /// (`src/window.h:284`).
+        new_total: Option<i64>,
+        cell_dimensions: WindowCellDimensions,
+        /// Pending normal-size fraction queued by
+        /// `set-window-new-normal`. GNU `w->new_normal`
+        /// (`src/window.h:285`). Stored as a `Value` to mirror
+        /// GNU's Lisp_Object slot — `Value::NIL` means "unset".
+        new_normal: Value,
+        /// Authoritative proportional vertical size
+        /// (height fraction of parent). GNU `w->normal_lines`
+        /// (`src/window.h:128`). Initialized to 1.0 on the root
+        /// and updated by `window-resize-apply` from
+        /// `new_normal`. `(window-normal-size w nil)` returns
+        /// this value. Window audit Critical 7 in
+        /// `drafts/window-system-audit.md`.
+        normal_lines: Value,
+        /// Authoritative proportional horizontal size
+        /// (width fraction of parent). GNU `w->normal_cols`
+        /// (`src/window.h:129`).
+        normal_cols: Value,
+        /// Character-line top edge, stored separately from `bounds` (pixels).
+        /// Mirrors GNU `w->top_line` (`src/window.h`). GNU maintains this in
+        /// parallel with `pixel_top`; in batch a menu bar occupies 1 *line* but
+        /// 0 *pixels*, so `top_line` can be nonzero while `bounds.y` is 0.
+        /// Set by the resize passes (root gets `FRAME_TOP_MARGIN`).
+        top_line: i64,
+        /// Character-column left edge; GNU `w->left_col`. See `top_line`.
+        left_col: i64,
+    },
+
+    /// Internal node: contains children split in a direction.
+    Internal {
+        id: WindowId,
+        direction: SplitDirection,
+        children: Vec<WindowId>,
+        bounds: Rect,
+        /// Character-line top edge; GNU `w->top_line`. See `Leaf::top_line`.
+        top_line: i64,
+        /// Character-column left edge; GNU `w->left_col`. See `Leaf::top_line`.
+        left_col: i64,
+        /// Lisp-visible per-window parameter alist, newest entries first.
+        parameters: WindowParameters,
+        /// Monotonic identity for changes to `parameters`.
+        parameters_generation: u64,
+        /// Combination limit — prevents recombination when non-nil.
+        /// Mirrors GNU Emacs `w->combination_limit`.
+        combination_limit: bool,
+        /// Pending pixel size — see `Leaf::new_pixel`. GNU keeps
+        /// the same `new_pixel` slot on every `struct window`,
+        /// regardless of leaf/internal split state.
+        new_pixel: Option<i64>,
+        /// Pending total size — see `Leaf::new_total`.
+        new_total: Option<i64>,
+        cell_dimensions: WindowCellDimensions,
+        /// Pending normal-size fraction — see `Leaf::new_normal`.
+        new_normal: Value,
+        /// Persistent normal-size fraction — see
+        /// `Leaf::normal_lines`.
+        normal_lines: Value,
+        /// Persistent normal-size fraction — see
+        /// `Leaf::normal_cols`.
+        normal_cols: Value,
+    },
+}
+
+/// A window tree: its nodes, and which of them is the root.
+///
+/// This is the ONE place that knows how a tree is stored, and the only handle
+/// that can hand out a node.  Nodes live in an arena keyed by `WindowId` and
+/// name their children by id, which is GNU's shape: windows there are heap
+/// structs in a pointer graph (`w->parent`, `w->next`, `w->contents`), so
+/// reaching one is a dereference rather than a walk from the root.
+///
+/// Two consequences shape every walk over a tree.  A node cannot reach its own
+/// children -- only the tree can -- so a walk is written as "gather ids, then
+/// visit one node at a time" ([`WindowTree::for_each_leaf_mut`],
+/// [`WindowTree::for_each_node_mut`]), never as recursion through
+/// `&mut Window`.  And moving a window is repointing one slot: the promotion
+/// in `delete_window_in_tree` and the interposition in `split_window_in_tree`
+/// each edit a child list instead of copying a subtree over another.
+///
+/// `Frame` is not the only owner of one.  `WindowConfigurationSnapshot` holds
+/// a tree taken by `current-window-configuration` and restored later, which is
+/// why the arena lives here and not on `Frame`: a detached tree has to carry
+/// its own nodes.
+#[derive(Debug, Clone)]
+pub struct WindowTree {
+    /// Every node of this tree, live or detached, keyed by its own id.
+    ///
+    /// GNU's windows are heap structs in a pointer graph (`w->parent`,
+    /// `w->next`, `w->contents`), so reaching one is a dereference and a
+    /// window that has been deleted still exists -- it just has `contents`
+    /// nil.  The map is that graph: a lookup is a probe rather than a walk
+    /// from the root, and a node removed from its parent's child list is
+    /// still here to answer `windowp`.
+    pub(crate) nodes: HashMap<WindowId, Window>,
+    /// The id of the node every walk starts from.
+    pub(crate) root: WindowId,
 }
