@@ -8,7 +8,6 @@
 //! |---|---|---|
 //! | `NEOVM_EMACS_MULE_PREPARED` | off | Prepare emacs-mule encoder candidates once per conversion, honoring charset priority. |
 
-use crate::emacs_core::eval::Context;
 use crate::emacs_core::text_host::TextHost;
 use neovm_value::error::LispCondition;
 use neovm_value::error::{expect_args, expect_args_range, expect_min_args};
@@ -2163,7 +2162,7 @@ pub enum CodingEncoderState {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct Iso2022EncodeState {
+pub struct Iso2022EncodeState {
     designation: [Option<SymId>; 4],
     gl: usize,
 }
