@@ -10,6 +10,7 @@ pub mod face;
 pub mod layout_input;
 pub mod minibuffer;
 pub mod point_rows;
+pub mod posn_object_extent;
 pub mod process_spawn;
 pub mod process_state;
 pub mod process_tls;
