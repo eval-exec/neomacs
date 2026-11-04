@@ -773,13 +773,13 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ctx.register_subr(
         crate::emacs_core::subr::world_subr!(SubrSpec::fixed2(
             "narrow-to-region",
-            builtin_narrow_to_region_2,
+            |ctx, start, end| builtin_narrow_to_region_2(ctx, start, end),
             FixedMin2::Two,
         ))
         .interactive(crate::emacs_core::interactive::BuiltinInteractiveSpec::String("r")),
     );
     ctx.register_subr(
-        crate::emacs_core::subr::world_subr!(SubrSpec::fixed0("widen", builtin_widen_0))
+        crate::emacs_core::subr::world_subr!(SubrSpec::fixed0("widen", |ctx| builtin_widen_0(ctx)))
             .interactive(crate::emacs_core::interactive::BuiltinInteractiveSpec::String("")),
     );
     ctx.register_subr(

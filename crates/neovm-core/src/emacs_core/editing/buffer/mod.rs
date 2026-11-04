@@ -3684,60 +3684,59 @@ pub(crate) fn builtin_buffer_size(
     }
 }
 
-pub(crate) fn builtin_narrow_to_region(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
+pub(crate) fn builtin_narrow_to_region<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     crate::emacs_core::error::expect_args("narrow-to-region", &args, 2)?;
     let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
-    builtin_narrow_to_region_2(eval, arg(0), arg(1))
+    builtin_narrow_to_region_2(host, arg(0), arg(1))
 }
 /// `narrow-to-region` as registered: fixed arity 2, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a2` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_narrow_to_region_2(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_narrow_to_region_2<H: EditHost>(
+    host: &mut H,
     start: Value,
     end: Value,
 ) -> EvalResult {
     let args: [Value; 2] = [start, end];
     expect_args("narrow-to-region", &args, 2)?;
-    let start = expect_integer_or_marker_in_buffers(&eval.edit.buffers, &args[0])?;
-    let end = expect_integer_or_marker_in_buffers(&eval.edit.buffers, &args[1])?;
-    let current_id = eval
-        .edit
-        .buffers
-        .current_buffer_id()
-        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    let byte_range = normalize_narrow_region_in_buffers(
-        &eval.edit.buffers,
-        current_id,
-        LispCharPos1::new(start),
-        LispCharPos1::new(end),
-        args[0],
-        args[1],
-    )?;
-    let before = accessible_bounds(&mut eval.edit.buffers, current_id);
-    let _ = eval
-        .edit
-        .buffers
-        .narrow_buffer_to_emacs_byte_range(current_id, byte_range);
-    // GNU carries narrowing into the mode line through `clip_changed`: it is a
-    // term of the update_mode_line expression (xdisp.c:20471-20475) and
-    // redisplay_internal escalates it to the buffer flag outright
-    // (`if (current_buffer->clip_changed) bset_update_mode_line`, :17498).
-    // `%n` ("Narrow") and `%p`/`%o` all change here.
-    //
-    // Only when the bounds ACTUALLY move, which is how GNU guards it
-    // (`buf->clip_changed = 1` sits inside a bounds-changed test,
-    // editfns.c:3104 and :3121). Marking unconditionally is not a
-    // conservative-but-safe choice: `widen` is called about twice per
-    // keystroke by font-lock's `save-restriction` + `widen`, so an
-    // unconditional mark leaves chrome permanently dirty and silently
-    // disables every chrome skip. Measured: 440 marks over 200 keystrokes,
-    // and a chrome skip rate of exactly zero.
-    if accessible_bounds(&mut eval.edit.buffers, current_id) != before {
-        eval.mark_chrome_dirty_all();
+    let bounds_changed = {
+        let (edit, _) = host.edit_and_vars();
+        let start = expect_integer_or_marker_in_buffers(&edit.buffers, &args[0])?;
+        let end = expect_integer_or_marker_in_buffers(&edit.buffers, &args[1])?;
+        let current_id = edit
+            .buffers
+            .current_buffer_id()
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        let byte_range = normalize_narrow_region_in_buffers(
+            &edit.buffers,
+            current_id,
+            LispCharPos1::new(start),
+            LispCharPos1::new(end),
+            args[0],
+            args[1],
+        )?;
+        let before = accessible_bounds(&mut edit.buffers, current_id);
+        let _ = edit
+            .buffers
+            .narrow_buffer_to_emacs_byte_range(current_id, byte_range);
+        // GNU carries narrowing into the mode line through `clip_changed`: it is a
+        // term of the update_mode_line expression (xdisp.c:20471-20475) and
+        // redisplay_internal escalates it to the buffer flag outright
+        // (`if (current_buffer->clip_changed) bset_update_mode_line`, :17498).
+        // `%n` ("Narrow") and `%p`/`%o` all change here.
+        //
+        // Only when the bounds ACTUALLY move, which is how GNU guards it
+        // (`buf->clip_changed = 1` sits inside a bounds-changed test,
+        // editfns.c:3104 and :3121). Marking unconditionally is not a
+        // conservative-but-safe choice: `widen` is called about twice per
+        // keystroke by font-lock's `save-restriction` + `widen`, so an
+        // unconditional mark leaves chrome permanently dirty and silently
+        // disables every chrome skip. Measured: 440 marks over 200 keystrokes,
+        // and a chrome skip rate of exactly zero.
+        accessible_bounds(&mut edit.buffers, current_id) != before
+    };
+    if bounds_changed {
+        host.mark_chrome_dirty_all();
     }
     Ok(Value::NIL)
 }
@@ -3756,29 +3755,32 @@ fn accessible_bounds(
 }
 
 #[cfg(test)]
-pub(crate) fn builtin_widen(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_widen<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_args("widen", &args, 0)?;
-    builtin_widen_0(eval)
+    builtin_widen_0(host)
 }
 /// `widen` as registered: fixed arity 0, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a0` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_widen_0(eval: &mut super::eval::Context) -> EvalResult {
+pub(crate) fn builtin_widen_0<H: EditHost>(host: &mut H) -> EvalResult {
     let args: [Value; 0] = [];
     expect_args("widen", &args, 0)?;
-    let current_id = eval
-        .edit
-        .buffers
-        .current_buffer_id()
-        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    let before = accessible_bounds(&mut eval.edit.buffers, current_id);
-    let _ = eval.edit.buffers.widen_buffer(current_id);
-    // The other half of GNU's clip_changed, and the same bounds-changed guard
-    // (GNU: `if (BEGV != s || ZV != e) current_buffer->clip_changed = 1;`,
-    // editfns.c:2990). This is the call that made the guard load-bearing —
-    // font-lock widens constantly on an already-widened buffer.
-    if accessible_bounds(&mut eval.edit.buffers, current_id) != before {
-        eval.mark_chrome_dirty_all();
+    let bounds_changed = {
+        let (edit, _) = host.edit_and_vars();
+        let current_id = edit
+            .buffers
+            .current_buffer_id()
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        let before = accessible_bounds(&mut edit.buffers, current_id);
+        let _ = edit.buffers.widen_buffer(current_id);
+        // The other half of GNU's clip_changed, and the same bounds-changed guard
+        // (GNU: `if (BEGV != s || ZV != e) current_buffer->clip_changed = 1;`,
+        // editfns.c:2990). This is the call that made the guard load-bearing —
+        // font-lock widens constantly on an already-widened buffer.
+        accessible_bounds(&mut edit.buffers, current_id) != before
+    };
+    if bounds_changed {
+        host.mark_chrome_dirty_all();
     }
     Ok(Value::NIL)
 }
