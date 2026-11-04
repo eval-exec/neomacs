@@ -2453,7 +2453,7 @@ impl Context {
         // the same one-time seam, before any case-sensitive operation or
         // buffer kill can run.
         crate::emacs_core::eval_hook_installers::install_case_table_hooks();
-        crate::emacs_core::xdisp::install_eval_display_query_hooks();
+        crate::emacs_core::eval_hook_installers::install_display_query_hooks();
         // Keyboard-macro entries are core command bodies the VM dispatch
         // reaches through eval; publish their cold table at the same seam.
         crate::emacs_core::eval_hook_installers::install_kmacro_hooks();

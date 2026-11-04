@@ -31,3 +31,12 @@ pub(crate) fn install_kmacro_hooks() {
 pub(crate) fn install_perf_trace_hooks() {
     crate::emacs_core::perf_trace::install_perf_hooks();
 }
+
+/// Publish the display-query descriptor pair (redisplay policy, window
+/// geometry/motion/invisibility queries) that the eval manifest reads through
+/// `eval::display_query_hooks`. The canonical implementations remain in
+/// display/xdisp; the evaluator constructors reach them through this one bare
+/// facade instead of naming the display module.
+pub(crate) fn install_display_query_hooks() {
+    crate::emacs_core::xdisp::install_eval_display_query_hooks();
+}
