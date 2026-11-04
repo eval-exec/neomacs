@@ -1688,6 +1688,35 @@ fn a_position_for_a_window_still_being_created_is_kept_for_creation() {
     );
 }
 
+#[test]
+fn destroying_a_frame_drops_its_queued_creation() {
+    let mut mgr = GuiFrameWindowManager::new();
+    for frame in [7, 8] {
+        mgr.request_create(
+            frame,
+            800,
+            600,
+            "Win".to_string(),
+            default_geometry_hints(),
+            WindowVisibility::Visible,
+        );
+    }
+
+    mgr.request_destroy(7);
+
+    let queued: Vec<u64> = mgr
+        .pending_creates
+        .iter()
+        .map(|p| p.emacs_frame_id)
+        .collect();
+    assert_eq!(
+        queued,
+        vec![8],
+        "only the deleted frame's creation is dropped"
+    );
+    assert!(mgr.destroy_pending(7));
+}
+
 // =======================================================================
 // PendingWindow struct
 // =======================================================================

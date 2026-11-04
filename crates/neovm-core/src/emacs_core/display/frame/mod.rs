@@ -1113,9 +1113,7 @@ fn move_gui_frame_window(
     if frame.effective_window_system().is_none() || frame.parent_frame.as_frame_id().is_some() {
         return Ok(());
     }
-    // Called after `apply_frame_position`, so an edge that was not requested
-    // still holds the frame's current position.
-    let Some((x, y)) = absolute_window_position(left, top, (frame.left_pos, frame.top_pos)) else {
+    let Some((x, y)) = absolute_window_position(left, top) else {
         return Ok(());
     };
     if let Some(host) = eval.display_host.as_mut() {

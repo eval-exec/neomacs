@@ -2192,8 +2192,12 @@ impl GuiFrameWindowManager {
         found
     }
 
-    /// Schedule a window for destruction.
+    /// Schedule a window for destruction.  A creation still queued for the
+    /// frame is dropped: `process_creates` can run after `process_destroys`,
+    /// and would otherwise make a window for a frame that no longer exists.
     pub fn request_destroy(&mut self, emacs_frame_id: u64) {
+        self.pending_creates
+            .retain(|pending| pending.emacs_frame_id != emacs_frame_id);
         self.pending_destroys.push(emacs_frame_id);
     }
 
