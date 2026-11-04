@@ -200,17 +200,15 @@ pub(crate) fn builtin_substring(args: Vec<Value>) -> EvalResult {
 
 #[inline(never)]
 pub(crate) fn builtin_substring_slice(args: &[Value]) -> EvalResult {
-    crate::emacs_core::perf_trace::time_op(
-        crate::emacs_core::perf_trace::HotpathOp::Substring,
-        || crate::strings_core::substring_impl("substring", args, true),
-    )
+    crate::emacs_core::eval::perf::time_op(crate::emacs_core::eval::perf::PerfOp::Substring, || {
+        crate::strings_core::substring_impl("substring", args, true)
+    })
 }
 
 pub(crate) fn builtin_substring_no_properties(args: Vec<Value>) -> EvalResult {
-    crate::emacs_core::perf_trace::time_op(
-        crate::emacs_core::perf_trace::HotpathOp::Substring,
-        || crate::strings_core::substring_impl("substring-no-properties", &args, false),
-    )
+    crate::emacs_core::eval::perf::time_op(crate::emacs_core::eval::perf::PerfOp::Substring, || {
+        crate::strings_core::substring_impl("substring-no-properties", &args, false)
+    })
 }
 
 pub(crate) fn builtin_concat(args: Vec<Value>) -> EvalResult {
@@ -219,7 +217,7 @@ pub(crate) fn builtin_concat(args: Vec<Value>) -> EvalResult {
 
 #[inline(never)]
 pub(crate) fn builtin_concat_slice(args: &[Value]) -> EvalResult {
-    crate::emacs_core::perf_trace::time_op(crate::emacs_core::perf_trace::HotpathOp::Concat, || {
+    crate::emacs_core::eval::perf::time_op(crate::emacs_core::eval::perf::PerfOp::Concat, || {
         crate::strings_core::concat_impl(args)
     })
 }
@@ -2880,7 +2878,7 @@ pub(crate) fn builtin_format_wrapper_strict_slice(
     ctx: &mut super::eval::Context,
     args: &[Value],
 ) -> EvalResult {
-    crate::emacs_core::perf_trace::time_op(crate::emacs_core::perf_trace::HotpathOp::Format, || {
+    crate::emacs_core::eval::perf::time_op(crate::emacs_core::eval::perf::PerfOp::Format, || {
         expect_min_args("format", args, 1)?;
         if let Some(result) = exact_percent_s_string_result(args) {
             return Ok(result);
@@ -3070,7 +3068,7 @@ pub(crate) fn builtin_format_message_slice(
     ctx: &mut super::eval::Context,
     args: &[Value],
 ) -> EvalResult {
-    crate::emacs_core::perf_trace::time_op(crate::emacs_core::perf_trace::HotpathOp::Format, || {
+    crate::emacs_core::eval::perf::time_op(crate::emacs_core::eval::perf::PerfOp::Format, || {
         expect_min_args("format-message", args, 1)?;
         if let Some(result) = exact_percent_s_string_result(args) {
             return Ok(result);

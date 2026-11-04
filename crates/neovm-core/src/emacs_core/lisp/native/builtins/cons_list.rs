@@ -1089,7 +1089,7 @@ fn assoc_values_scan<const OBSERVED: bool>(
 }
 
 pub(crate) fn builtin_assoc_slice(eval: &mut super::eval::Context, args: &[Value]) -> EvalResult {
-    crate::emacs_core::perf_trace::time_op(crate::emacs_core::perf_trace::HotpathOp::Assoc, || {
+    crate::emacs_core::eval::perf::time_op(crate::emacs_core::eval::perf::PerfOp::Assoc, || {
         expect_args_range("assoc", args, 2, 3)?;
         let key = &args[0];
         let list = args[1];

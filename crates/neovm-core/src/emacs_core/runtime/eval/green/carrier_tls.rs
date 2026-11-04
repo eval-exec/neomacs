@@ -234,7 +234,7 @@ pub(crate) fn reset_carrier_tls() {
     );
     reset_step!(
         "perf_trace",
-        crate::emacs_core::perf_trace::reset_carrier_tls()
+        crate::emacs_core::eval::perf::reset_carrier_tls()
     );
     reset_step!(
         "pdump_convert",
@@ -325,7 +325,7 @@ pub(crate) fn snapshot_carrier_tls() -> u64 {
     crate::emacs_core::indent::carrier_tls_fingerprint(&mut h);
     crate::emacs_core::print::carrier_tls_fingerprint(&mut h);
     crate::emacs_core::subr::leaf::carrier_tls_fingerprint(&mut h);
-    crate::emacs_core::perf_trace::carrier_tls_fingerprint(&mut h);
+    crate::emacs_core::eval::perf::carrier_tls_fingerprint(&mut h);
     crate::emacs_core::pdump::convert::carrier_tls_fingerprint(&mut h);
     crate::emacs_core::pdump::runtime::carrier_tls_fingerprint(&mut h);
     crate::emacs_core::jit::carrier_tls_fingerprint(&mut h);

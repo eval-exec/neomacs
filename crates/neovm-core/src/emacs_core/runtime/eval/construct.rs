@@ -37,8 +37,12 @@ pub(super) fn install_scratch_root_hooks() {
 /// `HotpathOp` counters, and the layout hook is the display layer's exact
 /// mutation note, so behavior is unchanged on both paths.
 pub(super) fn install_text_substrate_hooks() {
+    // The evaluator's hot-path pair and carrier hooks (E8) publish here, at
+    // the same one-time seam; the text layer's C7 seam below reads its enable
+    // answer and records through the same pair.
+    crate::emacs_core::perf_trace::install_perf_hooks();
     crate::emacs_core::substrate_hooks::install_perf(
-        crate::emacs_core::perf_trace::hotpath_timing_enabled(),
+        crate::emacs_core::eval::perf::enabled(),
         text_perf_record,
     );
     crate::emacs_core::substrate_hooks::install_layout_mutation(
@@ -50,16 +54,16 @@ fn text_perf_record(
     op: crate::emacs_core::substrate_hooks::TextPerfOp,
     elapsed: std::time::Duration,
 ) {
-    use crate::emacs_core::perf_trace::HotpathOp;
+    use crate::emacs_core::eval::perf::PerfOp;
     use crate::emacs_core::substrate_hooks::TextPerfOp;
     let op = match op {
-        TextPerfOp::RegexCompileHit => HotpathOp::RegexCompileHit,
-        TextPerfOp::RegexCompileMiss => HotpathOp::RegexCompileMiss,
-        TextPerfOp::RegexLiteralFind => HotpathOp::RegexLiteralFind,
-        TextPerfOp::RegexMatchDataChars => HotpathOp::RegexMatchDataChars,
-        TextPerfOp::RegexpQuote => HotpathOp::RegexpQuote,
+        TextPerfOp::RegexCompileHit => PerfOp::RegexCompileHit,
+        TextPerfOp::RegexCompileMiss => PerfOp::RegexCompileMiss,
+        TextPerfOp::RegexLiteralFind => PerfOp::RegexLiteralFind,
+        TextPerfOp::RegexMatchDataChars => PerfOp::RegexMatchDataChars,
+        TextPerfOp::RegexpQuote => PerfOp::RegexpQuote,
     };
-    crate::emacs_core::perf_trace::record_op(op, elapsed);
+    crate::emacs_core::eval::perf::record_op(op, elapsed);
 }
 
 /// Select raw constructor storage BEFORE the World is sealed or callable.

@@ -116,17 +116,6 @@ pub(crate) fn hotpath_timing_enabled() -> bool {
     })
 }
 
-pub(crate) fn time_op<R>(op: HotpathOp, f: impl FnOnce() -> R) -> R {
-    if !hotpath_timing_enabled() {
-        return f();
-    }
-
-    let start = Instant::now();
-    let result = f();
-    record_op(op, start.elapsed());
-    result
-}
-
 /// Account one measured operation in this thread's counter table.
 ///
 /// The text layer reaches this through its installed seam
@@ -209,5 +198,48 @@ pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
             }
             x
         }),
+    );
+}
+
+fn record_eval_op(op: crate::emacs_core::eval::perf::PerfOp, elapsed: Duration) {
+    use crate::emacs_core::eval::perf::PerfOp;
+    let op = match op {
+        PerfOp::StringMatch => HotpathOp::StringMatch,
+        PerfOp::RegexCompileHit => HotpathOp::RegexCompileHit,
+        PerfOp::RegexCompileMiss => HotpathOp::RegexCompileMiss,
+        PerfOp::RegexLiteralFind => HotpathOp::RegexLiteralFind,
+        PerfOp::RegexMatchDataChars => HotpathOp::RegexMatchDataChars,
+        PerfOp::MatchBeginning => HotpathOp::MatchBeginning,
+        PerfOp::MatchEnd => HotpathOp::MatchEnd,
+        PerfOp::RegexpQuote => HotpathOp::RegexpQuote,
+        PerfOp::Substring => HotpathOp::Substring,
+        PerfOp::Concat => HotpathOp::Concat,
+        PerfOp::Format => HotpathOp::Format,
+        PerfOp::Assoc => HotpathOp::Assoc,
+    };
+    record_op(op, elapsed);
+}
+
+#[cfg(debug_assertions)]
+const PERF_CARRIER_FINGERPRINT: Option<fn(&mut u64)> = Some(carrier_tls_fingerprint);
+#[cfg(not(debug_assertions))]
+const PERF_CARRIER_FINGERPRINT: Option<fn(&mut u64)> = None;
+
+/// The one canonical perf pair + carrier descriptor (peer-ruled C7/PC2 shape).
+static CANONICAL_PERF_HOOKS: crate::emacs_core::eval::perf::PerfHooks =
+    crate::emacs_core::eval::perf::PerfHooks::new(
+        record_eval_op,
+        reset_carrier_tls,
+        PERF_CARRIER_FINGERPRINT,
+    );
+
+pub(crate) fn install_perf_hooks() {
+    let installed = crate::emacs_core::eval::perf::install_perf_hooks(
+        hotpath_timing_enabled(),
+        &CANONICAL_PERF_HOOKS,
+    );
+    debug_assert!(
+        installed.is_ok(),
+        "a different perf hook table is already installed"
     );
 }

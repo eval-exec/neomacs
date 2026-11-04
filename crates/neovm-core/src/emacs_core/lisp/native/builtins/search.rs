@@ -2298,8 +2298,8 @@ pub(crate) fn builtin_string_match_with_state(
     match_data: Option<&mut Option<super::regex::MatchData>>,
     args: &[Value],
 ) -> EvalResult {
-    crate::emacs_core::perf_trace::time_op(
-        crate::emacs_core::perf_trace::HotpathOp::StringMatch,
+    crate::emacs_core::eval::perf::time_op(
+        crate::emacs_core::eval::perf::PerfOp::StringMatch,
         || {
             expect_args_range("string-match", args, 2, 4)?;
             let inhibit_modify = args.get(3).is_some_and(|v| v.is_truthy());
@@ -2560,8 +2560,8 @@ pub(crate) fn builtin_posix_string_match_with_state(
     // body of `builtin_string_match_with_state` and route through
     // the `*_posix` compile helpers so `CompiledPattern::posix` is
     // set for the matcher.
-    crate::emacs_core::perf_trace::time_op(
-        crate::emacs_core::perf_trace::HotpathOp::StringMatch,
+    crate::emacs_core::eval::perf::time_op(
+        crate::emacs_core::eval::perf::PerfOp::StringMatch,
         || {
             expect_args_range("posix-string-match", args, 2, 4)?;
             let inhibit_modify = args.get(3).is_some_and(|v| v.is_truthy());
@@ -2852,8 +2852,8 @@ pub(crate) fn builtin_match_beginning_with_state(
     match_data: &Option<super::regex::MatchData>,
     args: &[Value],
 ) -> EvalResult {
-    crate::emacs_core::perf_trace::time_op(
-        crate::emacs_core::perf_trace::HotpathOp::MatchBeginning,
+    crate::emacs_core::eval::perf::time_op(
+        crate::emacs_core::eval::perf::PerfOp::MatchBeginning,
         || {
             expect_args("match-beginning", args, 1)?;
             // GNU `match_limit` (search.c) runs SUBEXP through `CHECK_FIXNUM`,
@@ -2904,32 +2904,29 @@ pub(crate) fn builtin_match_end_with_state(
     match_data: &Option<super::regex::MatchData>,
     args: &[Value],
 ) -> EvalResult {
-    crate::emacs_core::perf_trace::time_op(
-        crate::emacs_core::perf_trace::HotpathOp::MatchEnd,
-        || {
-            expect_args("match-end", args, 1)?;
-            // GNU `match_limit` (search.c) runs SUBEXP through `CHECK_FIXNUM`,
-            // signalling `(wrong-type-argument fixnump …)` — not `integerp`.
-            let group = expect_fixnum(&args[0])?;
-            if group < 0 {
-                return Err(signal(
-                    LispCondition::ArgsOutOfRange,
-                    vec![Value::fixnum(group), Value::fixnum(0)],
-                ));
-            }
-            let group = group as usize;
+    crate::emacs_core::eval::perf::time_op(crate::emacs_core::eval::perf::PerfOp::MatchEnd, || {
+        expect_args("match-end", args, 1)?;
+        // GNU `match_limit` (search.c) runs SUBEXP through `CHECK_FIXNUM`,
+        // signalling `(wrong-type-argument fixnump …)` — not `integerp`.
+        let group = expect_fixnum(&args[0])?;
+        if group < 0 {
+            return Err(signal(
+                LispCondition::ArgsOutOfRange,
+                vec![Value::fixnum(group), Value::fixnum(0)],
+            ));
+        }
+        let group = group as usize;
 
-            let md = match match_data {
-                Some(md) => md,
-                None => return Ok(Value::NIL),
-            };
+        let md = match match_data {
+            Some(md) => md,
+            None => return Ok(Value::NIL),
+        };
 
-            match md.lisp_group(group) {
-                Some(group) => Ok(Value::fixnum(group.end())),
-                None => Ok(Value::NIL),
-            }
-        },
-    )
+        match md.lisp_group(group) {
+            Some(group) => Ok(Value::fixnum(group.end())),
+            None => Ok(Value::NIL),
+        }
+    })
 }
 
 #[cfg(test)]

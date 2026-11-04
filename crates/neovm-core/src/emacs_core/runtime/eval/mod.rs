@@ -7609,6 +7609,7 @@ pub mod case_tables;
 mod gc_pacing;
 pub mod interactive_registry;
 pub mod keymap_lookup;
+pub mod perf;
 mod thread_local_roots;
 use thread_local_roots::{collect_thread_local_gc_roots, for_each_thread_local_root_source};
 mod hash_test_gc_inhibit;
