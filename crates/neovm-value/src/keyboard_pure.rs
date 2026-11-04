@@ -714,3 +714,13 @@ pub fn register_bootstrap_vars(obarray: &mut crate::symbol::Obarray) {
 #[cfg(test)]
 #[path = "keyboard_pure/tests/pure_test.rs"]
 mod tests;
+
+/// One mouse button as GNU event code maps it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MouseButton {
+    Left,
+    Middle,
+    Right,
+    Button4,
+    Button5,
+}

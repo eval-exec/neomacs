@@ -1604,25 +1604,16 @@ impl InputEvent {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MouseButton {
-    Left,
-    Middle,
-    Right,
-    Button4,
-    Button5,
-}
+pub use neovm_value::keyboard_pure::MouseButton;
 
-impl MouseButton {
-    /// Index into [`KBoard::button_down`].
-    fn index(self) -> usize {
-        match self {
-            Self::Left => 0,
-            Self::Middle => 1,
-            Self::Right => 2,
-            Self::Button4 => 3,
-            Self::Button5 => 4,
-        }
+/// Index into [`KBoard::button_down`].
+fn mouse_button_slot(button: MouseButton) -> usize {
+    match button {
+        MouseButton::Left => 0,
+        MouseButton::Middle => 1,
+        MouseButton::Right => 2,
+        MouseButton::Button4 => 3,
+        MouseButton::Button5 => 4,
     }
 }
 
@@ -5743,7 +5734,7 @@ impl crate::emacs_core::eval::Context {
                 // Mirrors GNU `keyboard.c:6041-6130`.
                 let position = Self::make_mouse_position(x, y, target_frame_id, self);
                 let click_count = self.classify_mouse_click_on_press(button, x, y, target_frame_id);
-                self.command_loop.keyboard.kboard.button_down[button.index()] =
+                self.command_loop.keyboard.kboard.button_down[mouse_button_slot(button)] =
                     Some(MousePressState {
                         x,
                         y,
@@ -5776,7 +5767,7 @@ impl crate::emacs_core::eval::Context {
                 // release, so an up event with no matching down is dropped
                 // (`src/keyboard.c:6564-6566`, `6628-6632`).
                 let Some(press) =
-                    self.command_loop.keyboard.kboard.button_down[button.index()].take()
+                    self.command_loop.keyboard.kboard.button_down[mouse_button_slot(button)].take()
                 else {
                     return Ok(None);
                 };
