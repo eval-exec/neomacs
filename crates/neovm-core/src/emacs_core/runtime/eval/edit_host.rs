@@ -18,7 +18,7 @@
 use super::{
     Context, LispArgVec, SpecpdlCount, SpecpdlRootScopeState, SpecpdlRootSlot, VariableView,
 };
-use crate::buffer::{Buffer, BufferId, EditRuntime, LispCharPos1};
+use crate::buffer::{Buffer, BufferId, EditRuntime, EmacsBytePos, EmacsByteRange, LispCharPos1};
 use crate::emacs_core::bookmark::BookmarkManager;
 use crate::emacs_core::builtins::symbols::builtin_set_2;
 use crate::emacs_core::display_metrics::{
@@ -101,8 +101,56 @@ impl EditHost for Context {
         let _ = Context::try_set_runtime_binding_by_id(self, sym, value);
     }
 
+    fn store_variable_by_name(&mut self, name: &str, value: Value) {
+        Context::store_variable_by_name(self, name, value)
+    }
+
+    fn undo_truncation_variable(&self, name: &str) -> Value {
+        Context::undo_truncation_variable(self, name)
+    }
+
     fn bookmarks(&mut self) -> &mut BookmarkManager {
         &mut *self.bookmarks
+    }
+
+    fn set_current_buffer_unrecorded(&mut self, id: BufferId) -> Result<(), Flow> {
+        Context::set_current_buffer_unrecorded(self, id)
+    }
+
+    fn restore_current_buffer_if_live(&mut self, id: BufferId) {
+        Context::restore_current_buffer_if_live(self, id)
+    }
+
+    fn with_gc_inhibited<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        Context::with_gc_inhibited(self, f)
+    }
+
+    fn treesit_has_editable_tree(&self, buffer: BufferId) -> bool {
+        self.treesit.has_editable_tree(buffer)
+    }
+
+    fn treesit_has_pending_edit(&self, buffer: BufferId) -> bool {
+        self.treesit.has_pending_edit(buffer)
+    }
+
+    fn treesit_begin_buffer_edit(&mut self, buffer: BufferId, byte_range: EmacsByteRange) {
+        // The buffer reference and the parser set are disjoint field borrows
+        // of the same Context, exactly as the old direct call site read them.
+        if let Some(buffer_data) = self.edit.buffers.get(buffer) {
+            self.treesit
+                .begin_buffer_edit(buffer, buffer_data, byte_range)
+        }
+    }
+
+    fn treesit_note_buffer_change(&mut self, buffer: BufferId, start_byte: EmacsBytePos) {
+        self.treesit.note_buffer_change(buffer, start_byte)
+    }
+
+    fn treesit_finish_buffer_edit(&mut self, buffer: BufferId, new_end_byte: EmacsBytePos) {
+        if let Some(buffer_data) = self.edit.buffers.get(buffer) {
+            self.treesit
+                .finish_buffer_edit(buffer, buffer_data, new_end_byte)
+        }
     }
 
     fn inhibit_modification_hooks(&self) -> bool {
@@ -164,6 +212,10 @@ impl EditHost for Context {
         }
         let sym = EditHost::hook_symbol_by_id(self, sym);
         hook_runtime::hook_value_by_id(self, sym).is_some_and(|v| v.is_truthy())
+    }
+
+    fn lisp_string<'a>(&'a self, value: Value) -> Option<&'a LispString> {
+        Context::lisp_string(self, value)
     }
 
     fn apply(&mut self, function: Value, args: &[Value]) -> EvalResult {
@@ -260,6 +312,13 @@ impl EditHost for Context {
         Context::gnu_mark_buffer_redisplay(self, buffer)
     }
 
+    fn sync_window_positions(&mut self, buffer: BufferId) {
+        // Inherent `Context` method (defined beside the window position
+        // caches it refreshes); the path resolves to it, not to this
+        // trait method, because inherent items take precedence.
+        Context::sync_window_positions(self, buffer)
+    }
+
     fn invisible_source_run_end(
         &mut self,
         buffer: BufferId,
@@ -336,16 +395,21 @@ impl EditHost for Context {
 
     fn word_wrap_policy(
         &self,
-        buffer: &Buffer,
+        buffer: BufferId,
         mode: crate::emacs_core::word_wrap::WordWrapMode,
-    ) -> crate::emacs_core::word_wrap::WordWrapPolicy {
-        crate::window::word_wrap_policy_for_buffer(buffer, mode)
+    ) -> Option<crate::emacs_core::word_wrap::WordWrapPolicy> {
+        let buffer = self.edit.buffers.get(buffer)?;
+        Some(crate::window::word_wrap_policy_for_buffer(buffer, mode))
     }
 
-    fn word_wrap_mode(&self, buffer: &Buffer) -> crate::emacs_core::word_wrap::WordWrapMode {
+    fn word_wrap_mode(
+        &self,
+        buffer: BufferId,
+    ) -> Option<crate::emacs_core::word_wrap::WordWrapMode> {
         // GNU `init_iterator` reaches WORD_WRAP from the buffer's `word-wrap`
         // only when `word-wrap-by-category` is also non-nil
         // (src/xdisp.c:3425-3426); the scan's fallback reads that flag.
+        let buffer = self.edit.buffers.get(buffer)?;
         let categories = self
             .variable_value_in_buffer(
                 Some(buffer),
@@ -353,11 +417,15 @@ impl EditHost for Context {
             )
             .is_some_and(|value| value.is_truthy());
         if categories {
-            crate::emacs_core::word_wrap::WordWrapMode::Category
+            Some(crate::emacs_core::word_wrap::WordWrapMode::Category)
         } else {
-            crate::emacs_core::word_wrap::WordWrapMode::Whitespace
+            Some(crate::emacs_core::word_wrap::WordWrapMode::Whitespace)
         }
     }
+    fn composition_width_at(&mut self, charpos1: i64) -> Option<(i64, i64)> {
+        crate::emacs_core::composite::composition_width_at(self, charpos1)
+    }
+
     fn line_number_display_target(&self) -> Option<LineNumberDisplayTarget> {
         let frame = self.frames.selected_frame()?;
         let window = frame.find_window(frame.selected_window)?;

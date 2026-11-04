@@ -70,6 +70,11 @@ impl<'a> crate::emacs_core::edit_host::EditVariableRead<'a> for VariableView<'a>
     }
 
     #[inline(always)]
+    fn value_in_buffer(self, buf: Option<&crate::buffer::Buffer>, id: SymId) -> Option<Value> {
+        VariableView::value_in_buffer(self, buf, id)
+    }
+
+    #[inline(always)]
     fn value_or_nil(self, id: SymId) -> Value {
         VariableView::value_or_nil(self, id)
     }

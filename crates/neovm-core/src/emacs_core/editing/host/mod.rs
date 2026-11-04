@@ -19,7 +19,7 @@
 //! correct only where no host is in scope (C7 substrate sites, C4b from
 //! host-free code) — never here.
 
-use crate::buffer::{Buffer, BufferId, EditRuntime, LispCharPos1};
+use crate::buffer::{Buffer, BufferId, EditRuntime, EmacsBytePos, EmacsByteRange, LispCharPos1};
 use crate::emacs_core::bookmark::BookmarkManager;
 use crate::emacs_core::display_metrics::{
     InvisibleRunContext, LineNumberDisplayTarget, LineWrap, MeasuredMotion, MotionEngine,
@@ -54,6 +54,10 @@ pub trait EditVariableRead<'a>: Copy {
 
     /// [`Self::value`] by name.
     fn value_by_name(self, name: &str) -> Option<Value>;
+
+    /// The variable's visible value in `buf`: the buffer's local binding
+    /// when it has one, else the default, `None` when void.
+    fn value_in_buffer(self, buf: Option<&Buffer>, id: SymId) -> Option<Value>;
 
     /// [`Self::value`], nil when void.
     fn value_or_nil(self, id: SymId) -> Value;
@@ -124,10 +128,29 @@ pub trait EditHost {
     /// `set_variable`. C2.
     fn reset_variable_on_error(&mut self, sym: SymId, value: Value);
 
+    /// GNU `Vfoo = VALUE` from C, by name: the canonical-default store
+    /// with no alias resolution and no variable watchers — the obarray's
+    /// `set_canonical_value` write. Every alias-resolving, watcher-running
+    /// store is `set_variable`. C2.
+    fn store_variable_by_name(&mut self, name: &str, value: Value);
+
+    /// Read one of the undo-truncation variables the way GNU's C code
+    /// sees it: a `DEFVAR_INT`/`DEFVAR_LISP` global, so no lexical
+    /// binding shadows it, only the dynamic value visible in the current
+    /// buffer counts, and void reads back nil. Feeds the edit layer's
+    /// `UndoLimitBindings` adapter. C2.
+    fn undo_truncation_variable(&self, name: &str) -> Value;
+
     /// Whether `inhibit-modification-hooks` is non-nil. GNU `insdel.c`
     /// reads the `DEFVAR_BOOL` flag in one load; the fast paths over
     /// the forwarding live on the host, where the symbol table is. C2.
     fn inhibit_modification_hooks(&self) -> bool;
+
+    /// The epoch-checked string borrow (the `as_lisp_string` safety
+    /// discipline, DIVERGENCES.md 161): `Some(&LispString)` only while the
+    /// value is a live string in the current GC epoch. The borrow must not
+    /// cross a Lisp call; copy the bytes out when it must survive one. C3.
+    fn lisp_string<'a>(&'a self, value: Value) -> Option<&'a LispString>;
 
     /// The session's bookmark set (bookmark.el globals). The state is
     /// `WorldSlot`-owned on the host and does NOT move with the edit
@@ -135,6 +158,48 @@ pub trait EditHost {
     /// C1); edit reaches it only through this accessor. The rectangle
     /// `WorldSlot` needs no accessor: only core code touches it.
     fn bookmarks(&mut self) -> &mut BookmarkManager;
+
+    // --- current-buffer switches and GC inhibition: runtime state the
+    // edit layer drives at GC-time compaction (GNU `compact_buffer`). ---
+
+    /// Make `id` current without recording a buffer-change window point
+    /// (GNU `set_buffer_internal` for internal switches); `Err` when
+    /// `id` is not live.
+    fn set_current_buffer_unrecorded(&mut self, id: BufferId) -> Result<(), Flow>;
+
+    /// GNU `set_buffer_if_live` for an unwind: re-select `id` unless it
+    /// was killed meanwhile or is already current.
+    fn restore_current_buffer_if_live(&mut self, id: BufferId);
+
+    /// Run `f` with garbage collection inhibited (GNU holds
+    /// `garbage_collection_inhibited` across `truncate_undo_list`'s
+    /// outer-limit call, src/undo.c:296-298).
+    fn with_gc_inhibited<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T;
+
+    // --- Tree-sitter edit notification (the parsers live above the edit
+    // layer, so edit reaches them only through the host). Shapes mirror
+    // the manager's methods 1:1; every type is value- or edit-owned. ---
+
+    /// Whether any live parser still holds an editable tree for BUFFER.
+    fn treesit_has_editable_tree(&self, buffer: BufferId) -> bool;
+
+    /// Whether a parser edit began for BUFFER and has not finished.
+    fn treesit_has_pending_edit(&self, buffer: BufferId) -> bool;
+
+    /// Begin the parser edit for BUFFER covering BYTE_RANGE (GNU
+    /// `treesit_notify_before_change`). No-op when BUFFER is not live:
+    /// the manager reads the buffer's tick and restriction, which the
+    /// host supplies from its own edit state.
+    fn treesit_begin_buffer_edit(&mut self, buffer: BufferId, byte_range: EmacsByteRange);
+
+    /// Fold START_BYTE into the parsers' line/column caches (GNU
+    /// `treesit_notify_change`).
+    fn treesit_note_buffer_change(&mut self, buffer: BufferId, start_byte: EmacsBytePos);
+
+    /// Apply the pending parser edit and mark its trees for reparse (GNU
+    /// `treesit_notify_after_change`). No-op when BUFFER is not live,
+    /// exactly like the caller-side liveness guard it replaces.
+    fn treesit_finish_buffer_edit(&mut self, buffer: BufferId, new_end_byte: EmacsBytePos);
 
     /// GNU `apply`: call a function value on already-evaluated
     /// arguments. C3.
@@ -157,8 +222,10 @@ pub trait EditHost {
     // constructor. Edit never sees `SpecBinding`, `&mut specpdl`, a
     // count as `usize`, or a push of an arbitrary entry. ---
 
-    /// Opaque specpdl depth (GNU `SPECPDL_INDEX`).
-    type SpecCount;
+    /// Opaque specpdl depth (GNU `SPECPDL_INDEX`). `Copy`: a depth snapshot
+    /// is an integer reading of a stack top, and callers pass one count to
+    /// both the bind and the matching unwind.
+    type SpecCount: Copy;
 
     /// Opaque mark of the GcRoot suffix (one per rooted traversal).
     type RootMark;
@@ -241,6 +308,12 @@ pub trait EditHost {
     /// shows it or it is not the selected buffer. C4b.
     fn mark_buffer_redisplay(&mut self, buffer: BufferId);
 
+    /// Refresh the typed window position caches derived from the markers
+    /// of BUFFER after a character change (GNU keeps the caches inside
+    /// its markers; Neomacs derives them, at the common post-edit
+    /// boundary `signal_after_change` is). C4b.
+    fn sync_window_positions(&mut self, buffer: BufferId);
+
     /// The first visible byte of the invisible run at BYTE_POS, or `None`
     /// when the position is visible (GNU `skip_invisible`). C5.
     fn invisible_source_run_end(
@@ -293,13 +366,25 @@ pub trait EditHost {
     fn character_width(&self, table: Option<Value>, code: u32) -> usize;
 
     /// Project BUFFER's word-wrap policy for MODE (GNU's category
-    /// `char_can_wrap_*` ranges), observing the per-epoch cache. C5.
-    fn word_wrap_policy(&self, buffer: &Buffer, mode: WordWrapMode) -> WordWrapPolicy;
+    /// `char_can_wrap_*` ranges), observing the per-epoch cache; `None`
+    /// when BUFFER is not live. The buffer comes by id, not reference: a
+    /// generic host caller cannot hold a `&Buffer` borrowed from the host
+    /// it is about to call. C5.
+    fn word_wrap_policy(&self, buffer: BufferId, mode: WordWrapMode) -> Option<WordWrapPolicy>;
 
     /// The wrap mode of the edit layer's screen-line scan for BUFFER: GNU
     /// `init_iterator` consults the buffer's `word-wrap-by-category` flag
-    /// before it can produce `WORD_WRAP` rows. C5.
-    fn word_wrap_mode(&self, buffer: &Buffer) -> WordWrapMode;
+    /// before it can produce `WORD_WRAP` rows; `None` when BUFFER is not
+    /// live. C5.
+    fn word_wrap_mode(&self, buffer: BufferId) -> Option<WordWrapMode>;
+
+    /// Display width and covered character length of the `composition`
+    /// property at 1-based CHARPOS1 (GNU `get_composition_id` as called from
+    /// `current_column_1`), `None` when no valid composition begins there.
+    /// The measurement lives in the composite layer above the edit crate and
+    /// registers the composition on first sight (rewriting the property in
+    /// place), so it runs on the host. C5.
+    fn composition_width_at(&mut self, charpos1: i64) -> Option<(i64, i64)>;
 
     /// The selected window's line-number measurement: its buffer, the frame's
     /// character cell width, and its visible row count, or `None` when no live

@@ -7338,7 +7338,35 @@ impl Context {
             .flatten()
             .unwrap_or(Value::NIL)
     }
+}
 
+/// Read the truncation limits out of the bindings visible in the current
+/// buffer, which is what GNU's `set_buffer_internal (b)` at the top of
+/// `truncate_undo_list' (src/undo.c:296-306) arranges for.
+///
+/// The edit layer cannot name `Context`, so its GC compaction reads the
+/// same four variables through the `EditHost` adapter in
+/// `editing::undo`; this impl is the core-side bindings for callers that
+/// already hold a `Context`.
+impl crate::buffer::UndoLimitBindings for Context {
+    fn undo_limit(&self) -> Value {
+        self.undo_truncation_variable("undo-limit")
+    }
+
+    fn undo_strong_limit(&self) -> Value {
+        self.undo_truncation_variable("undo-strong-limit")
+    }
+
+    fn undo_outer_limit(&self) -> Value {
+        self.undo_truncation_variable("undo-outer-limit")
+    }
+
+    fn undo_outer_limit_function(&self) -> Value {
+        self.undo_truncation_variable("undo-outer-limit-function")
+    }
+}
+
+impl Context {
     /// What `inhibit-eol-conversion` holds right now, for the coding
     /// conversion that is about to run.
     ///
