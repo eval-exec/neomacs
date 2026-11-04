@@ -18,14 +18,14 @@ static TRACE_ALL_BUILTINS: AtomicBool = AtomicBool::new(false);
 pub(crate) use super::buffer::lisp_string_from_buffer_bytes;
 pub(super) use super::error::{EvalResult, Flow, LispCondition, signal};
 pub(super) use super::intern::{SymId, intern, resolve_sym};
-pub(super) use super::keyboard::pure::{
-    KEY_CHAR_CODE_MASK, KEY_CHAR_META, convert_lucid_event_list, describe_single_key_value,
-    key_sequence_values,
-};
 pub(super) use super::value::*;
 pub(crate) use neovm_value::emacs_char::character_code_to_rust_char;
 pub(crate) use neovm_value::emacs_char::downcase_char_code_emacs_compat;
 pub(crate) use neovm_value::emacs_char::upcase_char_code_emacs_compat;
+pub(super) use neovm_value::keyboard_pure::{
+    KEY_CHAR_CODE_MASK, KEY_CHAR_META, convert_lucid_event_list, describe_single_key_value,
+    key_sequence_values,
+};
 pub(super) use std::cell::RefCell;
 pub(super) use std::collections::{HashMap, HashSet};
 

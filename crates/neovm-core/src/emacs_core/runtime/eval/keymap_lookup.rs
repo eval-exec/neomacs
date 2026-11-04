@@ -1387,9 +1387,9 @@ pub enum KeyEvent {
 /// modifier policy cooks Option to either `meta' or `alt'
 /// (`parse_solitary_modifier', src/keyboard.c:7917), so the frontend's alt
 /// modifier must survive this conversion instead of being dropped.
-impl From<crate::keyboard::KeyEvent> for KeyEvent {
-    fn from(ke: crate::keyboard::KeyEvent) -> Self {
-        use crate::keyboard::{Key, NamedKey};
+impl From<super::keyboard::KeyEvent> for KeyEvent {
+    fn from(ke: super::keyboard::KeyEvent) -> Self {
+        use super::keyboard::{Key, NamedKey};
         match ke.key {
             Key::Char(c) => KeyEvent::Char {
                 code: c,

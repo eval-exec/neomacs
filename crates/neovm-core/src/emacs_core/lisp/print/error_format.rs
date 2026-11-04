@@ -85,7 +85,7 @@ fn format_signal_payload(raw_data: Option<&Value>, data: &[Value]) -> String {
 
 pub(crate) fn format_opaque_handle_in_state(
     buffers: &crate::buffer::BufferManager,
-    frames: &crate::window::FrameManager,
+    frames: &crate::emacs_core::eval::data::window_state::FrameManager,
     threads: &crate::emacs_core::threads::ThreadManager,
     value: &Value,
 ) -> Option<String> {
@@ -158,7 +158,7 @@ pub(crate) fn format_opaque_handle_in_state(
 
 pub(crate) fn format_window_handle_in_state(
     buffers: &crate::buffer::BufferManager,
-    frames: &crate::window::FrameManager,
+    frames: &crate::emacs_core::eval::data::window_state::FrameManager,
     window_id: WindowId,
 ) -> String {
     let sequence = frames.window_sequence_number(window_id);
@@ -327,7 +327,7 @@ fn truncate_format_object_stack(len: usize) {
 fn format_value_in_state(
     obarray: &crate::emacs_core::symbol::Obarray,
     buffers: &crate::buffer::BufferManager,
-    frames: &crate::window::FrameManager,
+    frames: &crate::emacs_core::eval::data::window_state::FrameManager,
     threads: &crate::emacs_core::threads::ThreadManager,
     value: &Value,
     options: PrintOptions,
@@ -363,7 +363,7 @@ fn format_value_in_state(
 fn format_value_in_state_slow(
     obarray: &crate::emacs_core::symbol::Obarray,
     buffers: &crate::buffer::BufferManager,
-    frames: &crate::window::FrameManager,
+    frames: &crate::emacs_core::eval::data::window_state::FrameManager,
     threads: &crate::emacs_core::threads::ThreadManager,
     value: &Value,
     options: PrintOptions,
@@ -536,7 +536,7 @@ fn quote_payload(value: &Value) -> Option<Value> {
 fn format_list_shorthand_in_state(
     obarray: &crate::emacs_core::symbol::Obarray,
     buffers: &crate::buffer::BufferManager,
-    frames: &crate::window::FrameManager,
+    frames: &crate::emacs_core::eval::data::window_state::FrameManager,
     threads: &crate::emacs_core::threads::ThreadManager,
     value: &Value,
     options: PrintOptions,
@@ -570,7 +570,7 @@ fn format_list_shorthand_in_state(
 fn format_cons_in_state(
     obarray: &crate::emacs_core::symbol::Obarray,
     buffers: &crate::buffer::BufferManager,
-    frames: &crate::window::FrameManager,
+    frames: &crate::emacs_core::eval::data::window_state::FrameManager,
     threads: &crate::emacs_core::threads::ThreadManager,
     value: &Value,
     out: &mut String,
@@ -643,7 +643,7 @@ fn format_cons_in_state(
 pub(crate) fn print_value_bytes_in_state(
     vars: crate::emacs_core::eval::VariableView<'_>,
     buffers: &crate::buffer::BufferManager,
-    frames: &crate::window::FrameManager,
+    frames: &crate::emacs_core::eval::data::window_state::FrameManager,
     threads: &crate::emacs_core::threads::ThreadManager,
     value: &Value,
 ) -> Vec<u8> {
@@ -684,7 +684,7 @@ pub(crate) fn print_value_bytes_in_state_with_options(
 pub(crate) fn format_value_bytes_in_state_with_options(
     obarray: &crate::emacs_core::symbol::Obarray,
     buffers: &crate::buffer::BufferManager,
-    frames: &crate::window::FrameManager,
+    frames: &crate::emacs_core::eval::data::window_state::FrameManager,
     threads: &crate::emacs_core::threads::ThreadManager,
     value: &Value,
     options: PrintOptions,
@@ -754,7 +754,7 @@ pub(crate) fn format_value_bytes_in_state_with_options(
 fn format_string_bytes_in_state(
     obarray: &crate::emacs_core::symbol::Obarray,
     buffers: &crate::buffer::BufferManager,
-    frames: &crate::window::FrameManager,
+    frames: &crate::emacs_core::eval::data::window_state::FrameManager,
     threads: &crate::emacs_core::threads::ThreadManager,
     value: &Value,
     options: PrintOptions,
@@ -788,7 +788,7 @@ fn format_string_bytes_in_state(
 fn format_cons_bytes_in_state(
     obarray: &crate::emacs_core::symbol::Obarray,
     buffers: &crate::buffer::BufferManager,
-    frames: &crate::window::FrameManager,
+    frames: &crate::emacs_core::eval::data::window_state::FrameManager,
     threads: &crate::emacs_core::threads::ThreadManager,
     value: &Value,
     options: PrintOptions,
@@ -808,7 +808,7 @@ fn format_cons_bytes_in_state(
 fn format_vector_bytes_in_state(
     obarray: &crate::emacs_core::symbol::Obarray,
     buffers: &crate::buffer::BufferManager,
-    frames: &crate::window::FrameManager,
+    frames: &crate::emacs_core::eval::data::window_state::FrameManager,
     threads: &crate::emacs_core::threads::ThreadManager,
     value: &Value,
     options: PrintOptions,
@@ -834,7 +834,7 @@ fn format_vector_bytes_in_state(
 fn format_record_bytes_in_state(
     obarray: &crate::emacs_core::symbol::Obarray,
     buffers: &crate::buffer::BufferManager,
-    frames: &crate::window::FrameManager,
+    frames: &crate::emacs_core::eval::data::window_state::FrameManager,
     threads: &crate::emacs_core::threads::ThreadManager,
     value: &Value,
     options: PrintOptions,
@@ -869,7 +869,7 @@ fn format_record_bytes_in_state(
 fn format_list_shorthand_bytes_in_state(
     obarray: &crate::emacs_core::symbol::Obarray,
     buffers: &crate::buffer::BufferManager,
-    frames: &crate::window::FrameManager,
+    frames: &crate::emacs_core::eval::data::window_state::FrameManager,
     threads: &crate::emacs_core::threads::ThreadManager,
     value: &Value,
     options: PrintOptions,
@@ -912,7 +912,7 @@ fn format_list_shorthand_bytes_in_state(
 fn append_cons_bytes_in_state(
     obarray: &crate::emacs_core::symbol::Obarray,
     buffers: &crate::buffer::BufferManager,
-    frames: &crate::window::FrameManager,
+    frames: &crate::emacs_core::eval::data::window_state::FrameManager,
     threads: &crate::emacs_core::threads::ThreadManager,
     value: &Value,
     out: &mut Vec<u8>,

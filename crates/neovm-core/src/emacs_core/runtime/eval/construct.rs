@@ -1501,7 +1501,7 @@ impl Context {
         super::super::undo::register_bootstrap_vars(obarray);
         super::super::category::register_bootstrap_vars(obarray);
         super::boot_vars::window::register_bootstrap_vars(obarray);
-        super::super::keyboard::pure::register_bootstrap_vars(obarray);
+        neovm_value::keyboard_pure::register_bootstrap_vars(obarray);
         super::super::composite::register_bootstrap_vars(obarray);
         // T6.3: core constructs every VariableStore; text only sees the
         // TextVariableStore surface. Bootstrap has no owner yet.
