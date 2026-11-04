@@ -1526,7 +1526,7 @@ pub(crate) fn composition_get_gstring(
     }
 
     let segment = &codes;
-    let mut encoded = vec![if super::font::is_font_object(&args[2]) {
+    let mut encoded = vec![if args[2].is_font_object() {
         args[2]
     } else {
         Value::symbol("utf-8-unix")
@@ -1580,7 +1580,7 @@ pub(crate) fn composition_gstring_p(ctx: &super::eval::Context, value: Value) ->
         return false;
     }
     let valid_header_font = header[0].is_nil()
-        || super::font::is_font_object(&header[0])
+        || header[0].is_font_object()
         || header[0]
             .as_symbol_name(symbol_mode)
             .is_some_and(|name| ctx.coding_systems.is_known_or_derived(name));
