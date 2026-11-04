@@ -55,8 +55,7 @@ pub mod display_spec;
 pub mod display_when;
 #[path = "display/dispnew/mod.rs"]
 pub mod dispnew;
-#[path = "editing/host/mod.rs"]
-pub mod edit_host;
+pub use neovm_edit::emacs_core::edit_host;
 #[path = "display/effect_profile/mod.rs"]
 pub mod effect_profile;
 #[path = "display/font/mod.rs"]
@@ -101,38 +100,30 @@ pub mod xfaces;
 pub mod xwidget;
 
 // Editor state and editing operations.
-#[path = "editing/bookmark/mod.rs"]
-pub mod bookmark;
-#[path = "editing/buffer/mod.rs"]
-pub mod buffer;
-#[path = "editing/buffer_vars/mod.rs"]
-pub mod buffer_vars;
-#[path = "editing/case_encoding/mod.rs"]
-pub mod case_encoding;
+pub use neovm_edit::emacs_core::bookmark;
+pub use neovm_edit::emacs_core::buffer;
+pub use neovm_edit::emacs_core::buffer_vars;
+pub use neovm_edit::emacs_core::case_encoding;
 #[path = "editing/dired/mod.rs"]
 pub mod dired;
-#[path = "editing/display_metrics.rs"]
-pub mod display_metrics;
-#[path = "editing/editfns/mod.rs"]
-pub mod editfns;
-#[path = "editing/file_name.rs"]
-pub(crate) mod file_name;
-#[path = "editing/indent/mod.rs"]
-pub mod indent;
-#[path = "editing/marker/mod.rs"]
-pub mod marker;
-#[path = "editing/mode/mod.rs"]
-pub mod mode;
-#[path = "editing/navigation/mod.rs"]
-pub mod navigation;
-#[path = "editing/rect/mod.rs"]
-pub mod rect;
-#[path = "editing/redisplay_policy.rs"]
-pub(crate) mod redisplay_policy;
-#[path = "editing/undo/mod.rs"]
-pub mod undo;
-#[path = "editing/word_wrap.rs"]
-pub mod word_wrap;
+pub use neovm_edit::emacs_core::display_metrics;
+pub use neovm_edit::emacs_core::editfns;
+pub(crate) use neovm_edit::emacs_core::file_name;
+pub mod indent {
+    pub use neovm_edit::emacs_core::indent::*;
+    #[path = "subrs.rs"]
+    mod subrs;
+    #[cfg(test)]
+    pub(crate) use subrs::SUBRS;
+    pub(crate) use subrs::register_subrs;
+}
+pub use neovm_edit::emacs_core::marker;
+pub use neovm_edit::emacs_core::mode;
+pub use neovm_edit::emacs_core::navigation;
+pub use neovm_edit::emacs_core::rect;
+pub(crate) use neovm_edit::emacs_core::redisplay_policy;
+pub use neovm_edit::emacs_core::undo;
+pub use neovm_edit::emacs_core::word_wrap;
 
 // Lisp loading, documentation, and language-level facilities.
 #[path = "lisp/advice/mod.rs"]
@@ -287,9 +278,8 @@ pub mod jit;
 pub mod owned_roots;
 #[path = "runtime/pdump/mod.rs"]
 pub mod pdump;
+pub(crate) use neovm_edit::emacs_core::position;
 pub use neovm_value::plist;
-#[path = "editing/position/mod.rs"]
-pub(crate) mod position;
 #[path = "runtime/runtime_identity/mod.rs"]
 pub(crate) mod runtime_identity;
 #[cfg(not(test))]
@@ -406,8 +396,7 @@ pub(crate) mod string_escape;
 pub(crate) use neovm_value::string_pos_cache;
 #[path = "text/syntax/mod.rs"]
 pub mod syntax;
-#[path = "editing/textprop/mod.rs"]
-pub mod textprop;
+pub use neovm_edit::emacs_core::textprop;
 #[path = "text/treesit/mod.rs"]
 pub mod treesit;
 #[path = "text/xml/mod.rs"]
@@ -435,9 +424,6 @@ mod gnu_defvar_special_test;
 #[cfg(test)]
 #[path = "tests/gnu_surface/subr_test.rs"]
 mod gnu_subr_surface_test;
-#[cfg(test)]
-#[path = "editing/undo/tests/kill_ring_test.rs"]
-mod kill_ring_test;
 #[cfg(test)]
 #[path = "tests/architecture/layout_test.rs"]
 mod layout_test;

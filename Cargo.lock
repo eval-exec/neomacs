@@ -4314,6 +4314,7 @@ dependencies = [
  "neomacs-test-oracle",
  "neomacs-video-model",
  "neovm-display-identity",
+ "neovm-edit",
  "neovm-host-abi",
  "neovm-value",
  "network-interface",
@@ -4372,6 +4373,25 @@ name = "neovm-display-identity"
 version = "0.0.20"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "neovm-edit"
+version = "0.0.20"
+dependencies = [
+ "libc",
+ "malachite",
+ "memchr",
+ "neovm-value",
+ "num_enum",
+ "parking_lot",
+ "rustc-hash 2.1.3",
+ "smallvec",
+ "static_assertions",
+ "strum",
+ "sysinfo",
+ "thiserror 2.0.20",
+ "tracing",
 ]
 
 [[package]]

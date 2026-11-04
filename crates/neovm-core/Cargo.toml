@@ -11,6 +11,7 @@ description = "Core runtime structures for NeoVM"
 autotests = false
 
 [dependencies]
+neovm-edit = { path = "../neovm-edit" }
 neovm-display-identity.workspace = true
 neovm-host-abi.workspace = true
 neovm-value.workspace = true
@@ -143,7 +144,7 @@ desktop-font-settings = []
 # MARKER_DEBUG) because it is O(scan) -- the exact per-char work the cache exists
 # to skip -- so it must not tax ordinary debug/test builds. Enable it in a
 # dedicated validation run.
-display-stop-validate = []
+display-stop-validate = ["neovm-edit/display-stop-validate"]
 # Numeric redisplay policy injection for dependent crate fixtures only.
 # Dev-dependencies opt in; shipping builds retain process-once selectors.
 redisplay-test-policy = []
@@ -160,6 +161,7 @@ jit = [
     "dep:object",
     "dep:cranelift-native",
     "neovm-value/jit",
+    "neovm-edit/jit",
 ]
 # Dynamic, execution-weighted interpreter opcode histogram — a profiling aid for
 # sizing JIT work (which ops dominate real execution). Compiled in ONLY under

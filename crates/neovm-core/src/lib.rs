@@ -1,4 +1,4 @@
-pub mod buffer;
+pub use neovm_edit::buffer;
 mod code_conversion_workspace;
 pub mod display_evaluation;
 pub mod emacs_core;
