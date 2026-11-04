@@ -10,9 +10,8 @@ mod echo_message;
 
 use super::*;
 use crate::buffer::{BufferId, LispCharPos1};
+use crate::emacs_core::eval::data::window_state::{PreparedMiniResizeOutcome, Window};
 use crate::emacs_core::intern::WellKnown;
-use crate::window::DisplayFrameExt;
-use crate::window::{PreparedMiniResizeOutcome, Window};
 use neovm_edit::emacs_core::display_metrics::WindowId;
 use neovm_value::display_vocab::FrameId;
 
@@ -310,7 +309,7 @@ impl Context {
             if let Some(resize) = resize
                 && let Some(state) = self.frames.get_mut(frame)
             {
-                state.apply_mini_window_resize(resize);
+                crate::emacs_core::eval::lifecycle::apply_mini_window_resize(state, resize);
                 return Ok(PreparedMiniResizeOutcome::Committed);
             }
             return Ok(PreparedMiniResizeOutcome::Unchanged);
@@ -344,7 +343,7 @@ impl Context {
         let Some(state) = self.frames.get(frame) else {
             return Ok(PreparedMiniResizeOutcome::Unchanged);
         };
-        if !crate::window::window_resize_check(
+        if !crate::emacs_core::eval::lifecycle::window_resize_check(
             state.tree(),
             state.tree().root_id(),
             neovm_value::display_vocab::SplitDirection::Vertical,

@@ -61,6 +61,15 @@ fn configure_window_system_runtime(identity: neomacs_display_protocol::Graphical
     configure_terminal_runtime(TerminalRuntimeConfig::window_system(identity));
 }
 
+/// Apply a planned minibuffer resize (display-owned frame layout chain).
+fn apply_mini_window_resize(
+    frame: &mut crate::window::Frame,
+    resize: crate::emacs_core::eval::data::window_state::MiniWindowResize,
+) {
+    use crate::window::DisplayFrameExt;
+    frame.apply_mini_window_resize(resize);
+}
+
 static CANONICAL_LIFECYCLE_HOOKS: LifecycleHooks = LifecycleHooks::new(
     DynamicModuleHooks::new(
         crate::emacs_core::dynamic_module::reset_carrier_tls,
@@ -143,6 +152,7 @@ static CANONICAL_LIFECYCLE_HOOKS: LifecycleHooks = LifecycleHooks::new(
         char_property_window_lookup,
         crate::window::window_resize_check,
         crate::window::window_resize_apply,
+        apply_mini_window_resize,
     ),
     crate::emacs_core::timefns::reset_timefns_thread_locals,
     crate::emacs_core::sqlite::reset_sqlite_thread_locals,

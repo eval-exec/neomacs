@@ -23,7 +23,7 @@
 //! descriptor means the construction seam itself is broken.
 
 use super::data::fontset_state::FontsetRegistrySnapshot;
-use super::data::window_state::{Frame, FrameManager, WindowTree};
+use super::data::window_state::{Frame, FrameManager, MiniWindowResize, WindowTree};
 use super::*;
 use crate::emacs_core::builtins::WindowConfigurationRestoreOptions;
 use crate::emacs_core::reader::{MinibufferBufferUnwind, MinibufferSessionUnwind};
@@ -312,6 +312,7 @@ pub struct WindowTreeHooks {
     char_property_window_lookup: fn(Option<&FrameManager>, WindowId) -> WindowBufferLookup,
     window_resize_check: fn(&WindowTree, WindowId, SplitDirection, WindowBodyCellSize) -> bool,
     window_resize_apply: fn(&mut WindowTree, WindowId, bool, f32, f32),
+    apply_mini_window_resize: fn(&mut Frame, MiniWindowResize),
 }
 
 impl WindowTreeHooks {
@@ -320,11 +321,13 @@ impl WindowTreeHooks {
         char_property_window_lookup: fn(Option<&FrameManager>, WindowId) -> WindowBufferLookup,
         window_resize_check: fn(&WindowTree, WindowId, SplitDirection, WindowBodyCellSize) -> bool,
         window_resize_apply: fn(&mut WindowTree, WindowId, bool, f32, f32),
+        apply_mini_window_resize: fn(&mut Frame, MiniWindowResize),
     ) -> Self {
         Self {
             char_property_window_lookup,
             window_resize_check,
             window_resize_apply,
+            apply_mini_window_resize,
         }
     }
 }
@@ -654,6 +657,10 @@ impl WindowTreeHooks {
 
     fn window_resize_apply(&self) -> fn(&mut WindowTree, WindowId, bool, f32, f32) {
         self.window_resize_apply
+    }
+
+    fn apply_mini_window_resize(&self) -> fn(&mut Frame, MiniWindowResize) {
+        self.apply_mini_window_resize
     }
 }
 
@@ -1051,4 +1058,9 @@ pub fn fontset_registry_snapshot() -> FontsetRegistrySnapshot {
 /// Restore the display fontset registry from a pdump snapshot.
 pub fn restore_fontset_registry(snapshot: FontsetRegistrySnapshot) {
     (lifecycle_hooks().fontset().restore())(snapshot)
+}
+
+/// Apply a planned minibuffer resize to one frame.
+pub fn apply_mini_window_resize(frame: &mut Frame, resize: MiniWindowResize) {
+    (lifecycle_hooks().window_tree().apply_mini_window_resize())(frame, resize)
 }
