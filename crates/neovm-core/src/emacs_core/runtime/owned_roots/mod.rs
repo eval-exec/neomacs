@@ -3,7 +3,8 @@
 //! The evaluator owns only weak references, so cancellation and cache eviction
 //! release roots without borrowing the evaluator or modifying the specpdl.
 
-use crate::emacs_core::{Context, Value};
+use crate::emacs_core::Value;
+use crate::emacs_core::eval::Context;
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 

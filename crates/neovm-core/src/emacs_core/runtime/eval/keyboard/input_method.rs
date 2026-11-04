@@ -1,7 +1,8 @@
 //! Ownership of the outer key reader while Lisp runs an input method.
 
 use super::{KBoard, KeyEchoState, ReadKeySequenceState};
-use crate::emacs_core::{Context, error::EvalResult, value::Value};
+use crate::emacs_core::eval::Context;
+use crate::emacs_core::{error::EvalResult, value::Value};
 
 /// Quail performs nested key reads. Their accumulator and command-key
 /// publication belong to those reads, not to the suspended outer reader.

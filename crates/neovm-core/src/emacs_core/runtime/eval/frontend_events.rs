@@ -32,7 +32,7 @@ impl FrontendInputQuery {
 /// helper library owns the customizable hook. Until that library has defined
 /// the hook, preserve user visibility with an echo-area fallback.
 pub(crate) fn report_frame_shader_failure(
-    eval: &mut crate::emacs_core::Context,
+    eval: &mut super::Context,
     error: &str,
 ) -> Result<InternalEventEffects, crate::emacs_core::error::Flow> {
     let hook = "neomacs-frame-shader-error-functions";

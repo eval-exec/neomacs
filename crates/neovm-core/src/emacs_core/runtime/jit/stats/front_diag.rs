@@ -2,7 +2,8 @@
 //! Entry-only by default; `NEOVM_JIT_FRONT_DIAGNOSTIC_CLASSES=all` includes
 //! every cache/OSR compile class, including synchronous Legacy attempts.
 use super::CompileOrigin;
-use crate::{emacs_core::jit::bg::JobClass, tls_scope::TlsScope};
+use crate::emacs_core::jit::bg::JobClass;
+use neovm_value::tls_scope::TlsScope;
 use std::cell::{Cell, RefCell};
 use std::io::{self, Write};
 use std::sync::{

@@ -4,8 +4,8 @@
 //! may be cloned across producer threads, but cannot separate the queue from
 //! that backend's wake capability. No Lisp state crosses this boundary.
 
+use super::Context;
 use super::keyboard::InputEvent;
-use crate::emacs_core::Context;
 use crate::emacs_core::eval::data::process_state::WaitNotifier;
 use crate::emacs_core::process::SystemProcessExt;
 use crate::host_effect::wake::{
