@@ -22,12 +22,12 @@ use self::expr::{eval_expr_self, eval_set_expr};
 use self::extension::{ExtensionStep, MapMultipleState, execute_extension};
 use crate::tagged::value::SymbolMode;
 
-use super::error::{EvalResult, Flow, signal};
-use super::value::*;
-use crate::emacs_core::SymId;
-use crate::emacs_core::error::LispCondition;
-use crate::emacs_core::error::{expect_args, expect_max_args, expect_min_args};
-use crate::emacs_core::heap_registry::{HeapRegistryHandle, HeapRegistrySlot};
+use neovm_value::error::LispCondition;
+use neovm_value::error::{EvalResult, Flow, signal};
+use neovm_value::error::{expect_args, expect_max_args, expect_min_args};
+use neovm_value::heap_registry::{HeapRegistryHandle, HeapRegistrySlot};
+use neovm_value::intern::SymId;
+use neovm_value::value::*;
 use std::cell::Cell;
 use std::collections::HashMap;
 
@@ -290,7 +290,7 @@ fn surface_ccl_quit(flow: Flow, on_string: bool) -> Flow {
             ))],
         );
     }
-    signal(crate::emacs_core::error::LispCondition::Quit, vec![])
+    signal(neovm_value::error::LispCondition::Quit, vec![])
 }
 
 fn invalid_ccl_program_at(index: usize) -> Flow {
@@ -319,7 +319,7 @@ fn property_symbol(name: &str) -> Option<SymId> {
 fn symbol_property_integer(symbol: SymId, property: SymId, mode: SymbolMode) -> Option<i64> {
     let vars = ccl_variables()?;
     let plist = vars.obarray().symbol_plist_id(symbol);
-    super::plist::plist_get_swp(
+    neovm_value::plist::plist_get_swp(
         plist,
         &Value::from_sym_id(property),
         matches!(mode, SymbolMode::Positioned),

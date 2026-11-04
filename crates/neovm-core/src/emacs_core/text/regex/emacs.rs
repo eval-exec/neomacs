@@ -496,7 +496,7 @@ pub struct CaseTranslation {
     /// char-table (see [`CaseTranslation::from_char_table_with_symbols`]).
     /// [`CASE_TRANSLATION_UNFILLED`] marks a slot not yet computed.
     byte: [std::cell::Cell<u32>; 256],
-    table: Option<crate::emacs_core::value::Value>,
+    table: Option<neovm_value::value::Value>,
     symbol_mode: SymbolMode,
     /// Memo for codes from 256 up when backed by a char-table, allocated on
     /// the first such code (see [`WideTranslationMemo`]).
@@ -532,7 +532,7 @@ impl WideTranslationMemo {
         }
     }
 
-    fn translate(&self, table: &crate::emacs_core::value::Value, c: u32, mode: SymbolMode) -> u32 {
+    fn translate(&self, table: &neovm_value::value::Value, c: u32, mode: SymbolMode) -> u32 {
         let tick = crate::emacs_core::chartable::char_table_write_tick();
         if self.tick.get() != tick {
             for slot in &self.slots {
@@ -635,7 +635,7 @@ impl CaseTranslation {
     #[inline(never)]
     fn recheck_ascii_preimage(
         &self,
-        table: crate::emacs_core::value::Value,
+        table: neovm_value::value::Value,
         tick: u64,
         walk: CharTableWalk,
     ) -> AsciiPreimage {
@@ -700,7 +700,7 @@ thread_local! {
 #[cold]
 #[inline(never)]
 fn char_table_folds_into_ascii(
-    table: &crate::emacs_core::value::Value,
+    table: &neovm_value::value::Value,
     tick: u64,
     walk: CharTableWalk,
 ) -> Option<bool> {
@@ -718,7 +718,7 @@ fn char_table_folds_into_ascii(
         crate::emacs_core::chartable::char_table_may_hold_value_from(table, 0x80, &mut |value| {
             matches!(
                 value.kind(),
-                crate::emacs_core::value::ValueKind::Fixnum(code) if (0..0x80).contains(&code)
+                neovm_value::value::ValueKind::Fixnum(code) if (0..0x80).contains(&code)
             )
         });
     CHAR_TABLE_ASCII_FOLD.with(|memo| memo.set(Some((bits, tick, folds))));
@@ -768,7 +768,7 @@ impl CaseTranslation {
     /// `standard()` above already applied the same lesson to the constant
     /// table; this path was simply missed.
     #[cfg(test)]
-    pub(crate) fn from_char_table(table: crate::emacs_core::value::Value) -> Self {
+    pub(crate) fn from_char_table(table: neovm_value::value::Value) -> Self {
         Self::from_char_table_with_symbols(table, SymbolMode::Bare)
     }
 
@@ -4062,7 +4062,7 @@ impl WordBoundaryLookup {
             return false;
         }
 
-        let same_script = crate::emacs_core::value::eq_value_swp(
+        let same_script = neovm_value::value::eq_value_swp(
             &self.script_at(c1),
             &self.script_at(c2),
             self.symbol_mode == SymbolMode::Positioned,
@@ -4135,7 +4135,7 @@ impl WordBoundaryLookup {
         c2: emacs_char::EmacsChar,
         syntax: &BufferSyntaxLookup,
     ) -> bool {
-        let same_script = crate::emacs_core::value::eq_value_swp(
+        let same_script = neovm_value::value::eq_value_swp(
             &self.script_at_emacs(c1),
             &self.script_at_emacs(c2),
             self.symbol_mode == SymbolMode::Positioned,
@@ -4527,7 +4527,7 @@ pub(crate) struct DefaultSyntaxLookup;
 #[derive(Clone, Copy)]
 pub(crate) struct BufferSyntaxLookup {
     pub syntax_table: crate::emacs_core::syntax::SyntaxTable,
-    pub category_table: Option<crate::emacs_core::value::Value>,
+    pub category_table: Option<neovm_value::value::Value>,
     pub word_boundary: WordBoundaryLookup,
 }
 

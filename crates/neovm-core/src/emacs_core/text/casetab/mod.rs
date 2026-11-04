@@ -4,12 +4,12 @@
 //! mappings, a `CaseTableManager` with standard ASCII case tables pre-initialized,
 //! and pure builtins for case-table predicates and character case conversion.
 
-use super::error::{EvalResult, Flow, signal};
-use super::value::*;
-use crate::emacs_core::error::LispCondition;
-use crate::emacs_core::error::expect_args;
-use crate::emacs_core::intern::{SymId, intern};
 use crate::tagged::SymbolMode;
+use neovm_value::error::LispCondition;
+use neovm_value::error::expect_args;
+use neovm_value::error::{EvalResult, Flow, signal};
+use neovm_value::intern::{SymId, intern};
+use neovm_value::value::*;
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -451,11 +451,11 @@ fn current_case_table_for_context(
 }
 
 fn ensure_standard_case_table_object_in_state_with_symbols(
-    obarray: &mut super::symbol::Obarray,
+    obarray: &mut neovm_value::symbol::Obarray,
     mode: SymbolMode,
 ) -> EvalResult {
     if let Some(value) = obarray.canonical_value(
-        crate::emacs_core::symbol::CanonicalAccess::STORAGE,
+        neovm_value::symbol::CanonicalAccess::STORAGE,
         standard_case_table_object_symbol_id(),
     ) && is_case_table_with_symbols(&value, mode)
     {
@@ -463,7 +463,7 @@ fn ensure_standard_case_table_object_in_state_with_symbols(
     }
     let table = make_standard_case_table_value();
     obarray.set_canonical_value(
-        crate::emacs_core::symbol::CanonicalAccess::STORAGE,
+        neovm_value::symbol::CanonicalAccess::STORAGE,
         standard_case_table_object_symbol_id(),
         table,
     );
@@ -471,7 +471,7 @@ fn ensure_standard_case_table_object_in_state_with_symbols(
 }
 
 fn current_case_table_for_buffer_in_state_with_symbols(
-    obarray: &mut super::symbol::Obarray,
+    obarray: &mut neovm_value::symbol::Obarray,
     buffers: &mut crate::buffer::BufferManager,
     mode: SymbolMode,
 ) -> Result<Value, Flow> {

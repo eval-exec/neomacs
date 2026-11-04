@@ -3,13 +3,13 @@
 //! Implements `capitalize`, `upcase-initials`, and `char-resolve-modifiers`.
 
 use super::casetab::{CaseMap, CaseTableOverride};
-use super::error::{EvalResult, Flow, signal};
-use super::value::*;
 use crate::emacs_core::case_encoding::CaseEncoding;
-use crate::emacs_core::error::LispCondition;
-use crate::emacs_core::error::expect_args;
-use crate::emacs_core::value::ValueKind;
 use crate::heap_types::LispString;
+use neovm_value::error::LispCondition;
+use neovm_value::error::expect_args;
+use neovm_value::error::{EvalResult, Flow, signal};
+use neovm_value::value::ValueKind;
+use neovm_value::value::*;
 
 // ---------------------------------------------------------------------------
 // Argument helpers
@@ -801,7 +801,7 @@ fn noncontiguous_case_regions(
         .eval_symbol("region-extract-function")
         .unwrap_or(Value::symbol("buffer-substring"));
     let bounds = eval.funcall_general(extractor, vec![Value::symbol("bounds")])?;
-    let bounds_list = crate::emacs_core::value::list_to_vec(&bounds).ok_or_else(|| {
+    let bounds_list = neovm_value::value::list_to_vec(&bounds).ok_or_else(|| {
         signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("listp"), bounds],

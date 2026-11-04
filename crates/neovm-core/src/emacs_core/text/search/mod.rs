@@ -12,15 +12,15 @@
 //! - `replace-match`
 //! - `word-search-forward`, `word-search-backward`
 
-use super::error::{EvalResult, Flow, signal};
 use super::regex::MatchGroup;
-use super::value::*;
 use crate::buffer::{CharLen, CharPos0, EmacsBytePos};
-use crate::emacs_core::error::LispCondition;
+use neovm_value::error::LispCondition;
 #[cfg(test)]
-use crate::emacs_core::error::expect_args_range;
-use crate::emacs_core::error::{expect_args, expect_fixnum};
-use crate::emacs_core::value::ValueKind;
+use neovm_value::error::expect_args_range;
+use neovm_value::error::{EvalResult, Flow, signal};
+use neovm_value::error::{expect_args, expect_fixnum};
+use neovm_value::value::ValueKind;
+use neovm_value::value::*;
 
 // ---------------------------------------------------------------------------
 // Argument helpers
@@ -811,7 +811,7 @@ where
 /// `drafts/regex-search-audit.md`).
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 fn dynamic_or_global_symbol_value(eval: &super::eval::Context, name: &str) -> Option<Value> {
-    let id = crate::emacs_core::intern::intern(name);
+    let id = neovm_value::intern::intern(name);
     eval.eval_symbol_by_id(id).ok()
 }
 

@@ -1031,9 +1031,8 @@ impl ScanMode for Record {
 
 /// The `category` property name, interned once.
 fn category_symbol() -> Value {
-    static SYMBOL: std::sync::OnceLock<crate::emacs_core::intern::SymId> =
-        std::sync::OnceLock::new();
-    Value::from_sym_id(*SYMBOL.get_or_init(|| crate::emacs_core::intern::intern("category")))
+    static SYMBOL: std::sync::OnceLock<neovm_value::intern::SymId> = std::sync::OnceLock::new();
+    Value::from_sym_id(*SYMBOL.get_or_init(|| neovm_value::intern::intern("category")))
 }
 
 /// Whether the buffer's `syntax-table` properties resolve through Lisp

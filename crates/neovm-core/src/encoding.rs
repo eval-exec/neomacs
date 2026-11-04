@@ -8,17 +8,17 @@
 //! |---|---|---|
 //! | `NEOVM_EMACS_MULE_PREPARED` | off | Prepare emacs-mule encoder candidates once per conversion, honoring charset priority. |
 
-use crate::emacs_core::error::LispCondition;
-use crate::emacs_core::error::{expect_args, expect_args_range, expect_min_args};
 use crate::emacs_core::eval::Context;
-use crate::emacs_core::intern::{SymId, intern, resolve_sym};
+use neovm_value::error::LispCondition;
+use neovm_value::error::{expect_args, expect_args_range, expect_min_args};
+use neovm_value::intern::{SymId, intern, resolve_sym};
 // encoding.rs: sentinel imports removed; using emacs_char + LispString directly
 use crate::buffer::{EmacsBytePos, EmacsByteRange, LispCharPos1, TextPositionAnchor};
 use crate::emacs_core::display_metrics::display_glyph_character;
 pub use crate::emacs_core::emacs_char::char_width;
 use crate::emacs_core::emacs_char::{GNU_DEFAULT_WIDE_RANGES, ZERO_WIDTH_RANGES};
-use crate::emacs_core::value::{StringTextPropertyRun, Value, ValueKind};
 use encoding_rs::{BIG5, GBK};
+use neovm_value::value::{StringTextPropertyRun, Value, ValueKind};
 
 const MAX_CHAR_CODE: i64 = 0x3F_FFFF;
 const RAW_BYTE_SENTINEL_BASE: u32 = 0xE000;
@@ -65,7 +65,7 @@ pub(crate) fn active_display_table(ctx: &crate::emacs_core::eval::Context) -> Op
     {
         return Some(table);
     }
-    ctx.eval_symbol_by_id(crate::emacs_core::intern::intern("standard-display-table"))
+    ctx.eval_symbol_by_id(neovm_value::intern::intern("standard-display-table"))
         .ok()
         .filter(crate::emacs_core::chartable::is_char_table)
 }
@@ -134,10 +134,10 @@ impl<'ctx> CharacterWidthPolicy<'ctx> {
                 // GNU SANE_TAB_WIDTH: the current buffer's `tab-width`
                 // slot with the 1..=1000-else-8 validation the edit
                 // layer owns (`indent::sane_tab_width_from_value`).
-                crate::emacs_core::indent::sane_tab_width_from_value(
+                neovm_edit::emacs_core::indent::sane_tab_width_from_value(
                     self.context
                         .variable_value_in_current_buffer(
-                            crate::emacs_core::indent::tab_width_sym_id(),
+                            neovm_edit::emacs_core::indent::tab_width_sym_id(),
                         )
                         .unwrap_or(Value::NIL),
                 )
@@ -1554,7 +1554,7 @@ pub fn glyphless_char_display(c: char) -> String {
 // Builtins
 // ---------------------------------------------------------------------------
 
-use crate::emacs_core::error::{EvalResult, signal};
+use neovm_value::error::{EvalResult, signal};
 
 fn known_coding_system(name: &str) -> bool {
     crate::emacs_core::coding::CodingSystemManager::new().is_known_or_derived(name)
@@ -1564,7 +1564,7 @@ fn validate_coding_system(
     name: &str,
     arg: Value,
     known: impl FnOnce(&str) -> bool,
-) -> Result<(), crate::emacs_core::error::Flow> {
+) -> Result<(), neovm_value::error::Flow> {
     if known(name) {
         Ok(())
     } else {
@@ -1601,7 +1601,7 @@ fn coding_string_trivial_ascii_nocopy(bytes: &[u8], coding: &str, encode: bool) 
         )
 }
 
-fn copy_lisp_string_value(value: Value) -> Result<Value, crate::emacs_core::error::Flow> {
+fn copy_lisp_string_value(value: Value) -> Result<Value, neovm_value::error::Flow> {
     let string = value.as_lisp_string().ok_or_else(|| {
         signal(
             LispCondition::WrongTypeArgument,
@@ -1614,7 +1614,7 @@ fn copy_lisp_string_value(value: Value) -> Result<Value, crate::emacs_core::erro
 fn context_coding_name(
     ctx: &crate::emacs_core::eval::Context,
     coding_arg: Value,
-) -> Result<String, crate::emacs_core::error::Flow> {
+) -> Result<String, neovm_value::error::Flow> {
     let name = if coding_arg.is_nil() {
         "no-conversion".to_owned()
     } else if let Some(id) = coding_arg.as_symbol_id(ctx.symbol_mode()) {
@@ -1649,7 +1649,7 @@ fn canonical_context_coding_name(_ctx: &crate::emacs_core::eval::Context, name: 
 fn coding_region_destination(
     arg: Option<Value>,
     mode: crate::tagged::SymbolMode,
-) -> Result<Option<Option<crate::buffer::BufferId>>, crate::emacs_core::error::Flow> {
+) -> Result<Option<Option<crate::buffer::BufferId>>, neovm_value::error::Flow> {
     let Some(value) = arg else {
         return Ok(Some(None));
     };
@@ -1862,7 +1862,7 @@ fn transformed_region_string_in_context(
     source: crate::heap_types::LispString,
     coding: &str,
     direction: CodingDirection,
-) -> Result<Value, crate::emacs_core::error::Flow> {
+) -> Result<Value, neovm_value::error::Flow> {
     // Destination nil => the codec returns the converted string, which
     // `builtin_coding_region` carries back into the region.  The ENTRY is still
     // `code_convert_region`, not `code_convert_string`: GNU's region function
@@ -1890,7 +1890,7 @@ fn insert_coding_result(
     buffer_id: crate::buffer::BufferId,
     text: &crate::heap_types::LispString,
     restore_point: Option<TextPositionAnchor>,
-) -> Result<(), crate::emacs_core::error::Flow> {
+) -> Result<(), neovm_value::error::Flow> {
     ctx.edit
         .buffers
         .insert_lisp_string_into_buffer(buffer_id, text)
@@ -1904,7 +1904,7 @@ fn insert_coding_result(
 fn coding_string_destination(
     arg: Option<Value>,
     mode: crate::tagged::SymbolMode,
-) -> Result<Option<crate::buffer::BufferId>, crate::emacs_core::error::Flow> {
+) -> Result<Option<crate::buffer::BufferId>, neovm_value::error::Flow> {
     let Some(value) = arg else {
         return Ok(None);
     };
@@ -1971,8 +1971,8 @@ fn general_charset_coding_list(
     // not `big5`, so gate on the family rather than the coding type.)
     if matches!(family, "chinese-big5" | "chinese-big5-hkscs") {
         return Some(vec![
-            crate::emacs_core::intern::intern("ascii"),
-            crate::emacs_core::intern::intern("big5"),
+            neovm_value::intern::intern("ascii"),
+            neovm_value::intern::intern("big5"),
         ]);
     }
     Some(info.charset_list.clone())
@@ -2803,7 +2803,7 @@ fn decode_fallthrough_source(
 fn decoded_string_with_charset_runs(bytes: Vec<u8>, runs: Vec<StringTextPropertyRun>) -> Value {
     let value = Value::heap_string(crate::heap_types::LispString::from_emacs_bytes(bytes));
     if !runs.is_empty() {
-        crate::emacs_core::value::set_string_text_properties_for_value(value, runs);
+        neovm_value::value::set_string_text_properties_for_value(value, runs);
     }
     value
 }
@@ -3042,7 +3042,7 @@ fn decode_via_euc(
     // refusing any coding system carrying `IsoFlag::Designation` (or
     // `SevenBits`). Do NOT copy this hoist into the full ISO-2022 decoder,
     // where an escape sequence re-designates a register as the string is read.
-    let resolved = |register: Option<crate::emacs_core::intern::SymId>| {
+    let resolved = |register: Option<neovm_value::intern::SymId>| {
         let width = register
             .and_then(crate::emacs_core::charset::charset_dimension_by_sym)
             .unwrap_or(1) as usize;
@@ -3774,7 +3774,7 @@ fn run_coding_with_conversion_hook(
         Value,
         Option<crate::emacs_core::coding::DecodeEolResolution>,
     ),
-    crate::emacs_core::error::Flow,
+    neovm_value::error::Flow,
 > {
     // The base `:coding-type` symbol names the codec to apply to the text the
     // hook produces / consumes.  GNU's mnemonic codings are utf-8 based; map
@@ -4182,7 +4182,7 @@ fn encode_via_ccl(
     coding: &str,
     boundary: EncodingBoundary,
     mode: crate::tagged::SymbolMode,
-) -> Result<Vec<u8>, crate::emacs_core::error::Flow> {
+) -> Result<Vec<u8>, neovm_value::error::Flow> {
     let input = ccl_encoding_input(source, coding);
     let output = crate::emacs_core::ccl::execute_compiled_ccl_with_symbols(
         spec.encoder,
@@ -4198,7 +4198,7 @@ fn decode_via_ccl(
     spec: crate::emacs_core::coding::CclCodingSpec,
     coding: &str,
     mode: crate::tagged::SymbolMode,
-) -> Result<Vec<u8>, crate::emacs_core::error::Flow> {
+) -> Result<Vec<u8>, neovm_value::error::Flow> {
     let input = source
         .iter()
         .map(|byte| i64::from(*byte))
@@ -4604,7 +4604,7 @@ fn detect_undecided_coding(
     prefer_utf_8: bool,
     block: crate::emacs_core::coding::SourceBlock,
     mode: crate::tagged::SymbolMode,
-) -> Option<crate::emacs_core::intern::SymId> {
+) -> Option<neovm_value::intern::SymId> {
     // `prefer-utf-8` raises UTF-8 ahead of the configured category priority --
     // GNU's `prefer_utf_8 && detect_coding_utf_8 (coding, &detect_info)`
     // (src/coding.c:6619-6620), which is the same detector as everywhere else
@@ -5428,7 +5428,7 @@ pub(crate) fn builtin_decode_coding_string_in_context(
 /// that produced it.
 pub(crate) struct EncodedTextBytes {
     pub(crate) bytes: Vec<u8>,
-    pub(crate) coding_system: crate::emacs_core::intern::SymId,
+    pub(crate) coding_system: neovm_value::intern::SymId,
 }
 
 /// A coding-system symbol that must be interpreted by the current evaluator.
@@ -5437,14 +5437,14 @@ pub(crate) struct EncodedTextBytes {
 /// accidentally turn a runtime coding protocol back into a name and feed it
 /// to the context-free family encoder.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct RuntimeCodingSystem(crate::emacs_core::intern::SymId);
+pub(crate) struct RuntimeCodingSystem(neovm_value::intern::SymId);
 
 impl RuntimeCodingSystem {
-    pub(crate) fn from_symbol(symbol: crate::emacs_core::intern::SymId) -> Self {
+    pub(crate) fn from_symbol(symbol: neovm_value::intern::SymId) -> Self {
         Self(symbol)
     }
 
-    pub(crate) fn symbol(self) -> crate::emacs_core::intern::SymId {
+    pub(crate) fn symbol(self) -> neovm_value::intern::SymId {
         self.0
     }
 }
@@ -5508,7 +5508,7 @@ fn encode_external_text_with_boundary(
     text: crate::heap_types::LispString,
     coding: RuntimeCodingSystem,
     boundary: ExternalEncodingBoundary,
-) -> Result<EncodedTextBytes, crate::emacs_core::error::Flow> {
+) -> Result<EncodedTextBytes, neovm_value::error::Flow> {
     let encoded = builtin_coding_string_in_context(
         ctx,
         vec![Value::heap_string(text), Value::symbol(coding.0)],
@@ -5539,7 +5539,7 @@ pub(crate) fn encode_external_text_in_context(
     ctx: &mut crate::emacs_core::eval::Context,
     text: crate::heap_types::LispString,
     coding: RuntimeCodingSystem,
-) -> Result<EncodedTextBytes, crate::emacs_core::error::Flow> {
+) -> Result<EncodedTextBytes, neovm_value::error::Flow> {
     encode_external_text_with_boundary(ctx, text, coding, ExternalEncodingBoundary::CompleteText)
 }
 
@@ -5550,7 +5550,7 @@ pub(crate) fn encode_process_text_in_context(
     text: crate::heap_types::LispString,
     coding: RuntimeCodingSystem,
     process: crate::heap_types::ProcessId,
-) -> Result<Vec<u8>, crate::emacs_core::error::Flow> {
+) -> Result<Vec<u8>, neovm_value::error::Flow> {
     let encoded = builtin_coding_string_in_context(
         ctx,
         vec![Value::heap_string(text), Value::symbol(coding.0)],
@@ -5575,7 +5575,7 @@ pub(crate) fn encode_file_region_in_context(
     ctx: &mut crate::emacs_core::eval::Context,
     text: crate::heap_types::LispString,
     coding: RuntimeCodingSystem,
-) -> Result<EncodedTextBytes, crate::emacs_core::error::Flow> {
+) -> Result<EncodedTextBytes, neovm_value::error::Flow> {
     encode_external_text_with_boundary(ctx, text, coding, ExternalEncodingBoundary::FileRegion)
 }
 
@@ -5583,7 +5583,7 @@ pub(crate) fn encode_file_region_in_context(
 fn process_encoder_state(
     ctx: &mut crate::emacs_core::eval::Context,
     process: crate::heap_types::ProcessId,
-) -> Result<&mut CodingEncoderState, crate::emacs_core::error::Flow> {
+) -> Result<&mut CodingEncoderState, neovm_value::error::Flow> {
     ctx.processes
         .get_any_mut(process)
         .and_then(|proc| proc.encoding_state.encoder_mut())
@@ -5599,7 +5599,7 @@ fn process_encoder_state(
 /// protocol value until the file-I/O boundary needs its Lisp name.
 pub(crate) struct DecodedFileBytes {
     pub(crate) text: crate::heap_types::LispString,
-    pub(crate) coding_system: crate::emacs_core::intern::SymId,
+    pub(crate) coding_system: neovm_value::intern::SymId,
 }
 
 /// Decode raw file bytes through the complete context-aware coding engine.
@@ -5614,7 +5614,7 @@ pub(crate) fn decode_file_bytes_in_context(
     ctx: &mut crate::emacs_core::eval::Context,
     bytes: &[u8],
     coding: &str,
-) -> Result<DecodedFileBytes, crate::emacs_core::error::Flow> {
+) -> Result<DecodedFileBytes, neovm_value::error::Flow> {
     let source = Value::heap_string(crate::heap_types::LispString::from_unibyte(bytes.to_vec()));
     let decoded = builtin_coding_string_in_context(
         ctx,
@@ -5672,7 +5672,7 @@ pub(crate) fn decode_process_run_in_context(
     coding: &'static str,
     state: &mut CodingDecoderState,
     block: crate::emacs_core::coding::SourceBlock,
-) -> Result<DecodedProcessRun, crate::emacs_core::error::Flow> {
+) -> Result<DecodedProcessRun, neovm_value::error::Flow> {
     let source = Value::heap_string(crate::heap_types::LispString::from_unibyte(bytes.to_vec()));
     let mut run = CodingRun::process_read(state, block);
     let decoded = builtin_coding_string_in_context(
@@ -5875,7 +5875,7 @@ fn builtin_coding_region(
                     (saved_pt, from_char, to_char - from_char)
                 })
                 .unwrap_or((1, 1, 0));
-            crate::emacs_core::fns::replace_buffer_emacs_byte_range_lisp_string(
+            neovm_edit::emacs_core::editfns::replace_buffer_emacs_byte_range_lisp_string(
                 ctx,
                 current_id,
                 EmacsByteRange::new(EmacsBytePos::new(start_byte), EmacsBytePos::new(end_byte)),

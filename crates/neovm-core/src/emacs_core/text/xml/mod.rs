@@ -5,11 +5,11 @@
 //! - `libxml-parse-xml-region` — XML parsing via `quick-xml` crate
 //! - `libxml-available-p` — feature availability probe
 
-use super::error::{EvalResult, Flow, signal};
-use super::value::*;
 use crate::buffer::EmacsByteRange;
-use crate::emacs_core::error::LispCondition;
-use crate::emacs_core::value::ValueKind;
+use neovm_value::error::LispCondition;
+use neovm_value::error::{EvalResult, Flow, signal};
+use neovm_value::value::ValueKind;
+use neovm_value::value::*;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
@@ -716,7 +716,7 @@ fn comment_value(text: &str) -> Value {
 
 /// Is `value` a `(comment ...)` element node?
 fn is_comment_node(value: &Value) -> bool {
-    super::value::list_to_vec(value)
+    neovm_value::value::list_to_vec(value)
         .and_then(|items| items.first().copied())
         .and_then(|head| head.as_bare_symbol_name())
         .is_some_and(|name| name == "comment")
@@ -725,7 +725,7 @@ fn is_comment_node(value: &Value) -> bool {
 /// Return the children of an element node `(tag attrs child...)` (i.e. drop the
 /// leading tag symbol and attribute list).
 fn element_children(value: &Value) -> Vec<Value> {
-    match super::value::list_to_vec(value) {
+    match neovm_value::value::list_to_vec(value) {
         Some(items) if items.len() > 2 => items[2..].to_vec(),
         _ => Vec::new(),
     }

@@ -5,22 +5,22 @@
 //! `string-to-syntax` descriptor parser.
 
 use crate::emacs_core::emacs_char::EmacsChar;
-use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::eval::VariableView;
-use crate::emacs_core::symbol::CanonicalAccess;
+use neovm_value::error::LispCondition;
+use neovm_value::symbol::CanonicalAccess;
 use std::cell::{Cell, RefCell};
 use std::ops::Deref;
 
 use strum::{EnumString, IntoStaticStr};
 
-use super::error::{EvalResult, Flow, signal};
 use super::textprop::CharPropertyResolver;
-use super::value::{Value, ValueKind, list_to_vec};
 use crate::buffer::{
     Buffer, BufferManager, CharLen, CharPos0, EmacsByteLen, EmacsBytePos, LispCharPos1,
     TextPropertyTable,
 };
 use crate::heap_types::{GnuStringCharPos, LispString, StringCharacterCountKind};
+use neovm_value::error::{EvalResult, Flow, signal};
+use neovm_value::value::{Value, ValueKind, list_to_vec};
 
 mod declared_string;
 pub(crate) mod parse_cache;
@@ -43,11 +43,11 @@ use parse_loop::{Entry, Plain, SafePositionRecorder, ScanEnd, ScanFinish, run_pa
 #[inline(always)]
 fn syntax_table_prop_symbol() -> Value {
     use std::sync::OnceLock;
-    static SYMBOL: OnceLock<crate::emacs_core::intern::SymId> = OnceLock::new();
+    static SYMBOL: OnceLock<neovm_value::intern::SymId> = OnceLock::new();
     let id = if let Some(id) = SYMBOL.get() {
         *id
     } else {
-        *SYMBOL.get_or_init(|| crate::emacs_core::intern::intern("syntax-table"))
+        *SYMBOL.get_or_init(|| neovm_value::intern::intern("syntax-table"))
     };
     Value::symbol(id)
 }
@@ -226,25 +226,23 @@ enum SyntaxStateVariable {
 
 impl SyntaxStateVariable {
     #[inline(always)]
-    fn symbol_id(self) -> crate::emacs_core::intern::SymId {
+    fn symbol_id(self) -> neovm_value::intern::SymId {
         use std::sync::OnceLock;
 
-        static COMMENT_END_CAN_BE_ESCAPED: OnceLock<crate::emacs_core::intern::SymId> =
-            OnceLock::new();
-        static PARSE_SEXP_IGNORE_COMMENTS: OnceLock<crate::emacs_core::intern::SymId> =
-            OnceLock::new();
-        static PARSE_SEXP_LOOKUP_PROPERTIES: OnceLock<crate::emacs_core::intern::SymId> =
-            OnceLock::new();
+        static COMMENT_END_CAN_BE_ESCAPED: OnceLock<neovm_value::intern::SymId> = OnceLock::new();
+        static PARSE_SEXP_IGNORE_COMMENTS: OnceLock<neovm_value::intern::SymId> = OnceLock::new();
+        static PARSE_SEXP_LOOKUP_PROPERTIES: OnceLock<neovm_value::intern::SymId> = OnceLock::new();
         let name: &'static str = self.into();
         match self {
             Self::CommentEndCanBeEscaped => {
-                *COMMENT_END_CAN_BE_ESCAPED.get_or_init(|| crate::emacs_core::intern::intern(name))
+                *COMMENT_END_CAN_BE_ESCAPED.get_or_init(|| neovm_value::intern::intern(name))
             }
             Self::ParseSexpIgnoreComments => {
-                *PARSE_SEXP_IGNORE_COMMENTS.get_or_init(|| crate::emacs_core::intern::intern(name))
+                *PARSE_SEXP_IGNORE_COMMENTS.get_or_init(|| neovm_value::intern::intern(name))
             }
-            Self::ParseSexpLookupProperties => *PARSE_SEXP_LOOKUP_PROPERTIES
-                .get_or_init(|| crate::emacs_core::intern::intern(name)),
+            Self::ParseSexpLookupProperties => {
+                *PARSE_SEXP_LOOKUP_PROPERTIES.get_or_init(|| neovm_value::intern::intern(name))
+            }
         }
     }
 
@@ -336,7 +334,7 @@ impl SexpScanPolicy {
 
 /// Pre-populate GNU Emacs syntax variables that are defined from C.
 pub fn init_syntax_vars(
-    obarray: &mut super::symbol::Obarray,
+    obarray: &mut neovm_value::symbol::Obarray,
     _custom: &mut super::custom::CustomManager,
 ) {
     obarray.define_int_variable("syntax-propertize--done", -1);
@@ -366,10 +364,10 @@ pub fn init_syntax_vars(
     // freshly-set LOCALIZED redirect back to PLAINVAL and
     // orphans the BLV.
     for name in ["syntax-propertize--done", "comment-end-can-be-escaped"] {
-        let id = crate::emacs_core::intern::intern(name);
+        let id = neovm_value::intern::intern(name);
         let default = obarray
             .canonical_find_value(CanonicalAccess::BOOTSTRAP, id)
-            .unwrap_or(crate::emacs_core::value::Value::NIL);
+            .unwrap_or(neovm_value::value::Value::NIL);
         obarray.make_symbol_localized(id, default);
         obarray.set_blv_local_if_set(id, true);
     }
@@ -4702,19 +4700,17 @@ pub(crate) fn parse_sexp_lookup_properties_enabled(ctx: &super::eval::Context) -
 /// Interned-once ids for the propertize-for-scan gate — it runs before
 /// every syntax-dependent search/scan and re-hashed both names per call.
 #[inline(always)]
-fn internal_syntax_propertize_sym() -> crate::emacs_core::intern::SymId {
-    static SYMBOL: std::sync::OnceLock<crate::emacs_core::intern::SymId> =
-        std::sync::OnceLock::new();
-    *SYMBOL.get_or_init(|| crate::emacs_core::intern::intern("internal--syntax-propertize"))
+fn internal_syntax_propertize_sym() -> neovm_value::intern::SymId {
+    static SYMBOL: std::sync::OnceLock<neovm_value::intern::SymId> = std::sync::OnceLock::new();
+    *SYMBOL.get_or_init(|| neovm_value::intern::intern("internal--syntax-propertize"))
 }
 
 /// `syntax-propertize--done` id, shared with the search prep's warm
 /// precheck.
 #[inline(always)]
-pub(crate) fn syntax_propertize_done_sym() -> crate::emacs_core::intern::SymId {
-    static SYMBOL: std::sync::OnceLock<crate::emacs_core::intern::SymId> =
-        std::sync::OnceLock::new();
-    *SYMBOL.get_or_init(|| crate::emacs_core::intern::intern("syntax-propertize--done"))
+pub(crate) fn syntax_propertize_done_sym() -> neovm_value::intern::SymId {
+    static SYMBOL: std::sync::OnceLock<neovm_value::intern::SymId> = std::sync::OnceLock::new();
+    *SYMBOL.get_or_init(|| neovm_value::intern::intern("syntax-propertize--done"))
 }
 
 pub(crate) fn maybe_syntax_propertize_for_scan(
@@ -4936,7 +4932,7 @@ pub(crate) fn builtin_syntax_table(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    crate::emacs_core::error::expect_args("syntax-table", &args, 0)?;
+    neovm_value::error::expect_args("syntax-table", &args, 0)?;
     builtin_syntax_table_0(eval)
 }
 /// `syntax-table` as registered: fixed arity 0, called straight off the bytecode
@@ -4957,7 +4953,7 @@ pub(crate) fn builtin_set_syntax_table(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    crate::emacs_core::error::expect_args("set-syntax-table", &args, 1)?;
+    neovm_value::error::expect_args("set-syntax-table", &args, 1)?;
     let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
     builtin_set_syntax_table_1(eval, arg(0))
 }
@@ -4989,7 +4985,7 @@ pub(crate) fn builtin_modify_syntax_entry(
 /// `(char-syntax CHAR)` — return the syntax class designator char.
 #[cfg(test)]
 pub(crate) fn builtin_char_syntax(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
-    crate::emacs_core::error::expect_args("char-syntax", &args, 1)?;
+    neovm_value::error::expect_args("char-syntax", &args, 1)?;
     let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
     builtin_char_syntax_1(eval, arg(0))
 }
@@ -6522,7 +6518,7 @@ pub(crate) fn builtin_forward_word(
     // `Fconstrain_to_field` so that motion does not cross input-field
     // boundaries (e.g. the minibuffer prompt). The full call is
     // (constrain-to-field VAL PT nil nil nil).
-    let constrained = crate::emacs_core::builtins::builtin_constrain_to_field_5(
+    let constrained = neovm_edit::emacs_core::buffer::builtin_constrain_to_field_5(
         eval,
         &[
             Value::fixnum(raw_char),
@@ -6778,7 +6774,7 @@ pub(crate) fn builtin_backward_sexp(
 /// This uses the same core scanner as `forward-sexp`/`backward-sexp`.
 #[cfg(test)]
 pub(crate) fn builtin_scan_lists(ctx: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
-    crate::emacs_core::error::expect_args("scan-lists", &args, 3)?;
+    neovm_value::error::expect_args("scan-lists", &args, 3)?;
     let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
     builtin_scan_lists_3(ctx, arg(0), arg(1), arg(2))
 }
@@ -6924,7 +6920,7 @@ pub(crate) fn builtin_scan_lists_3(
 /// `(scan-sexps FROM COUNT)` — scan over COUNT sexps from FROM.
 #[cfg(test)]
 pub(crate) fn builtin_scan_sexps(ctx: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
-    crate::emacs_core::error::expect_args("scan-sexps", &args, 2)?;
+    neovm_value::error::expect_args("scan-sexps", &args, 2)?;
     let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
     builtin_scan_sexps_2(ctx, arg(0), arg(1))
 }
@@ -7716,7 +7712,7 @@ pub(crate) fn builtin_parse_partial_sexp(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    crate::emacs_core::error::expect_args_range("parse-partial-sexp", &args, 2, 6)?;
+    neovm_value::error::expect_args_range("parse-partial-sexp", &args, 2, 6)?;
     let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
     builtin_parse_partial_sexp_6(eval, arg(0), arg(1), arg(2), arg(3), arg(4), arg(5))
 }
@@ -7913,7 +7909,7 @@ pub(crate) fn builtin_skip_syntax_forward(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    crate::emacs_core::error::expect_args_range("skip-syntax-forward", &args, 1, 2)?;
+    neovm_value::error::expect_args_range("skip-syntax-forward", &args, 1, 2)?;
     let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
     builtin_skip_syntax_forward_2(eval, arg(0), arg(1))
 }

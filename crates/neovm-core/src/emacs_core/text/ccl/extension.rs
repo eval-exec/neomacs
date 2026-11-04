@@ -562,7 +562,7 @@ enum MapHit {
     Identity,
     Miss,
     Lambda,
-    Call(crate::emacs_core::SymId),
+    Call(neovm_value::intern::SymId),
     /// Content that fails GNU's `IN_INT_RANGE` guard without being nil, t,
     /// lambda, a cons pair, or a symbol.
     Invalid,
@@ -582,7 +582,7 @@ enum MapCallResolution {
     Invalid,
 }
 
-fn resolve_map_call(symbol: crate::emacs_core::SymId, mode: SymbolMode) -> MapCallResolution {
+fn resolve_map_call(symbol: neovm_value::intern::SymId, mode: SymbolMode) -> MapCallResolution {
     match program_words_by_symbol(symbol, mode) {
         Some(words) => MapCallResolution::Called(words),
         None => MapCallResolution::Invalid,
@@ -676,7 +676,7 @@ enum ValueSlot {
     Nil,
     True,
     Lambda,
-    Symbol(crate::emacs_core::SymId),
+    Symbol(neovm_value::intern::SymId),
     Other,
 }
 

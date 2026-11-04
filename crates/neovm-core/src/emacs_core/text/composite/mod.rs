@@ -10,13 +10,13 @@ pub(crate) use subrs::SUBRS;
 pub(crate) use subrs::register_subrs;
 
 use super::chartable::make_char_table_value;
-use super::error::{EvalResult, Flow, signal};
-use super::value::*;
 use crate::buffer::{CharLen, CharPos0, CharRange, EmacsByteRange};
-use crate::emacs_core::error::LispCondition;
-use crate::emacs_core::error::{expect_args, expect_args_range, expect_max_args};
-use crate::emacs_core::value::ValueKind;
 use neomacs_display_protocol::glyph_matrix::{TerminalComposition, TerminalCompositionCell};
+use neovm_value::error::LispCondition;
+use neovm_value::error::{EvalResult, Flow, signal};
+use neovm_value::error::{expect_args, expect_args_range, expect_max_args};
+use neovm_value::value::ValueKind;
+use neovm_value::value::*;
 use unicode_general_category::GeneralCategory;
 
 pub use crate::buffer::composition::{
@@ -139,10 +139,14 @@ pub(crate) fn compose_region_internal(
     // GNU `Fcompose_region_internal` runs `validate_region (&start, &end)`
     // (buffer.c), which resolves markers, swaps so the lower bound comes first,
     // then bounds-checks against `BEGV`/`ZV`.
-    let mut beg =
-        super::builtins::expect_integer_or_marker_in_buffers(&ctx.edit.buffers, &args[0])?;
-    let mut end =
-        super::builtins::expect_integer_or_marker_in_buffers(&ctx.edit.buffers, &args[1])?;
+    let mut beg = neovm_edit::emacs_core::buffer::expect_integer_or_marker_in_buffers(
+        &ctx.edit.buffers,
+        &args[0],
+    )?;
+    let mut end = neovm_edit::emacs_core::buffer::expect_integer_or_marker_in_buffers(
+        &ctx.edit.buffers,
+        &args[1],
+    )?;
     if end < beg {
         std::mem::swap(&mut beg, &mut end);
     }
@@ -470,9 +474,8 @@ fn composition_register_prop(
 /// Lisp state is cached.
 #[inline(always)]
 fn composition_prop_symbol() -> Value {
-    static SYMBOL: std::sync::OnceLock<crate::emacs_core::intern::SymId> =
-        std::sync::OnceLock::new();
-    Value::symbol(*SYMBOL.get_or_init(|| crate::emacs_core::intern::intern("composition")))
+    static SYMBOL: std::sync::OnceLock<neovm_value::intern::SymId> = std::sync::OnceLock::new();
+    Value::symbol(*SYMBOL.get_or_init(|| neovm_value::intern::intern("composition")))
 }
 
 /// Display width and character length of the composition whose `composition`
@@ -1050,7 +1053,7 @@ fn select_automatic_composition_spans(
         }
 
         let mut matched = None;
-        for rule in crate::emacs_core::value::list_iter(rules) {
+        for rule in neovm_value::value::list_iter(rules) {
             let Some(fields) = rule.as_vector_data() else {
                 continue;
             };
@@ -1664,7 +1667,7 @@ fn sort_rules(_ctx: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
 // Bootstrap variables
 // ---------------------------------------------------------------------------
 
-pub fn register_bootstrap_vars(obarray: &mut crate::emacs_core::symbol::Obarray) {
+pub fn register_bootstrap_vars(obarray: &mut neovm_value::symbol::Obarray) {
     // Official Emacs leaves unicode-category-table as nil at C init time;
     // it is populated later by characters.el via unicode-property-table-internal.
     // character.c:1156 DEFVAR_LISP, init nil.

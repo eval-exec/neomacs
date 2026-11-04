@@ -6,9 +6,9 @@ use std::ptr::NonNull;
 use libloading::Library;
 use tree_sitter::{InputEdit, Language, Parser, Point, Query, QueryError, Tree, ffi};
 
-use super::intern::SymId;
-use super::value::Value;
 use crate::buffer::{Buffer, BufferId, EmacsBytePos, EmacsByteRange};
+use neovm_value::intern::SymId;
+use neovm_value::value::Value;
 
 pub(crate) const TREESIT_PARSER_TAG: &str = "treesit-parser";
 pub(crate) const TREESIT_NODE_TAG: &str = "treesit-node";

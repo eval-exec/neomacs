@@ -10,8 +10,8 @@ use std::cell::Cell;
 
 use crate::buffer::{CharLen, CharPos0, ObjectIntervalPlistRun, TextPropertyTable};
 use crate::emacs_core::textprop::CharPropertyResolver;
-use crate::emacs_core::value::Value;
 use crate::heap_types::GnuStringCharPos;
+use neovm_value::value::Value;
 
 use super::{StringSyntaxPositionError, StringSyntaxPositionSource, StringSyntaxPositionUpdate};
 

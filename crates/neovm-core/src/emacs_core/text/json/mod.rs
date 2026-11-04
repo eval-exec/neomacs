@@ -18,13 +18,13 @@
 //! No external crate (serde_json etc.) is used — the parser and serializer
 //! are implemented from scratch with simple recursive descent.
 
-use super::error::{EvalResult, Flow, signal};
-use super::intern::{SymId, resolve_sym};
-use super::value::*;
 use crate::buffer::{EmacsByteLen, EmacsBytePos, EmacsByteRange, TextExtent};
-use crate::emacs_core::error::LispCondition;
-use crate::emacs_core::error::expect_min_args;
 use crate::tagged::value::SymbolMode;
+use neovm_value::error::LispCondition;
+use neovm_value::error::expect_min_args;
+use neovm_value::error::{EvalResult, Flow, signal};
+use neovm_value::intern::{SymId, resolve_sym};
+use neovm_value::value::*;
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use strum::{EnumString, IntoStaticStr};
@@ -256,7 +256,7 @@ fn parse_serialize_kwargs(
 /// Check if two Values are equivalent for the purpose of matching the
 /// null/false sentinel objects.
 fn value_matches(a: &Value, b: &Value, mode: SymbolMode) -> bool {
-    super::value::eq_value_swp(a, b, matches!(mode, SymbolMode::Positioned))
+    neovm_value::value::eq_value_swp(a, b, matches!(mode, SymbolMode::Positioned))
 }
 
 /// Serialize a Lisp value to a JSON string.

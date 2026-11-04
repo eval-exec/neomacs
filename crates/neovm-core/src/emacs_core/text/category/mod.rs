@@ -8,14 +8,14 @@
 //! NeoVM now mirrors that ownership model instead of routing semantics
 //! through a parallel Rust-side manager.
 
-use crate::emacs_core::error::LispCondition;
-use crate::emacs_core::error::{expect_args, expect_max_args, expect_min_args};
 use crate::tagged::SymbolMode;
+use neovm_value::error::LispCondition;
+use neovm_value::error::{expect_args, expect_max_args, expect_min_args};
 use std::cell::{Cell, RefCell};
 
 use super::boolvec::{self, BoolVectorView};
-use super::error::{EvalResult, Flow, signal};
-use super::value::{HashTableTest, Value, ValueKind, VecLikeType};
+use neovm_value::error::{EvalResult, Flow, signal};
+use neovm_value::value::{HashTableTest, Value, ValueKind, VecLikeType};
 
 thread_local! {
     static STANDARD_CATEGORY_TABLE_OBJECT: RefCell<Option<Value>> = const { RefCell::new(None) };
@@ -26,7 +26,7 @@ thread_local! {
 /// category lists are DEFVAR_LISP specials. Without the special flag a
 /// lexical-binding `let` of them lands in the lexenv, invisible to the
 /// internal `find_symbol_value` reads the regexp matcher performs.
-pub fn register_bootstrap_vars(obarray: &mut super::symbol::Obarray) {
+pub fn register_bootstrap_vars(obarray: &mut neovm_value::symbol::Obarray) {
     obarray.seed_value("word-combining-categories", Value::NIL);
     obarray.make_special("word-combining-categories");
     obarray.seed_value("word-separating-categories", Value::NIL);

@@ -6,8 +6,8 @@
 //! cleanup independently.
 
 use crate::buffer::{BufferId, BufferManager};
-use crate::emacs_core::value::Value;
 use crate::heap_types::LispString;
+use neovm_value::value::Value;
 
 pub(crate) const CODE_CONVERSION_WORK_BUFFER_NAME: &str = " *code-conversion-work*";
 
@@ -181,13 +181,13 @@ impl crate::emacs_core::eval::Context {
     pub(crate) fn acquire_code_conversion_buffer(
         &mut self,
         encoding: ConversionBufferEncoding,
-    ) -> Result<CodeConversionBufferLease, crate::emacs_core::error::Flow> {
+    ) -> Result<CodeConversionBufferLease, neovm_value::error::Flow> {
         let lease = self
             .code_conversion_workspace
             .acquire(&mut self.edit.buffers, encoding);
         if let Err(flow) = self.set_buffer_local_binding_by_id(
             lease.buffer_id(),
-            crate::emacs_core::intern::intern("inhibit-modification-hooks"),
+            neovm_value::intern::intern("inhibit-modification-hooks"),
             Value::T,
         ) {
             self.code_conversion_workspace

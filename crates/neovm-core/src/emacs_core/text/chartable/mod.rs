@@ -16,14 +16,14 @@
 //! re-exports the container's public surface so every historical
 //! `chartable::` path is unchanged.
 
-use super::error::{EvalResult, Flow, signal};
 use super::eval::Context;
-use super::intern::{SymId, intern};
-use super::value::*;
-use crate::emacs_core::error::LispCondition;
-use crate::emacs_core::error::{expect_args, expect_max_args, expect_min_args};
 use crate::emacs_core::eval::VariableView;
 use crate::tagged::SymbolMode;
+use neovm_value::error::LispCondition;
+use neovm_value::error::{EvalResult, Flow, signal};
+use neovm_value::error::{expect_args, expect_max_args, expect_min_args};
+use neovm_value::intern::{SymId, intern};
+use neovm_value::value::*;
 
 // ---------------------------------------------------------------------------
 // Container facade (stage-3 C7a): the moved substrate's public surface
@@ -57,7 +57,7 @@ pub(crate) use neovm_value::chartab::{
 /// Maximum valid Unicode code point.
 const MAX_CHAR: i64 = 0x3F_FFFF;
 pub(crate) use super::boolvec::{bool_vector_length, is_bool_vector};
-pub(crate) use crate::emacs_core::value::{bump_char_table_write_tick, char_table_write_tick};
+pub(crate) use neovm_value::value::{bump_char_table_write_tick, char_table_write_tick};
 /// Extract an integer (Int or Char), signal otherwise.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 fn expect_int(value: &Value) -> Result<i64, Flow> {
@@ -159,7 +159,7 @@ pub(crate) fn builtin_make_char_table(eval: &mut Context, args: Vec<Value>) -> E
     } else {
         0
     };
-    let n_extras = crate::emacs_core::alloc::CharTableExtras::try_from(Value::fixnum(n_extras))?;
+    let n_extras = neovm_value::alloc::CharTableExtras::try_from(Value::fixnum(n_extras))?;
     Value::try_char_table(sub_type, default, n_extras)
 }
 pub(crate) fn fill_char_table_from_fillarray(table: &Value, item: Value) -> Result<(), Flow> {

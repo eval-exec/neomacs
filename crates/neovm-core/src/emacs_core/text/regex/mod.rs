@@ -724,7 +724,7 @@ pub(crate) fn activate_regex_thread_locals(
 /// GNU roots both regexp-cache syntax identities and case translation tables.
 /// Filter the cache's owner before reconstructing a Lisp word from a syntax key.
 pub(crate) fn collect_regex_gc_roots(
-    roots: &mut Vec<super::value::Value>,
+    roots: &mut Vec<neovm_value::value::Value>,
     heap_identity: usize,
     collection_epoch: usize,
     scan: crate::tagged::gc::CacheRootScan,
@@ -756,11 +756,11 @@ pub(crate) fn collect_regex_gc_roots(
             activate_regex_thread_locals(heap_identity, collection_epoch, collection_in_progress);
         }
     }
-    fn syntax_root(roots: &mut Vec<super::value::Value>, key: Option<SyntaxCacheKey>) {
+    fn syntax_root(roots: &mut Vec<neovm_value::value::Value>, key: Option<SyntaxCacheKey>) {
         if let Some(SyntaxCacheKey::Table { id, .. }) = key {
             roots.push(unsafe {
                 /* SAFETY: real Value word */
-                super::value::Value::from_bits(id)
+                neovm_value::value::Value::from_bits(id)
             });
         }
     }
@@ -1067,7 +1067,7 @@ pub(crate) fn compile_string_search_pattern(
     string: &LispString,
     case_fold: bool,
     posix: bool,
-    translation_table: Option<super::value::Value>,
+    translation_table: Option<neovm_value::value::Value>,
     syntax: &dyn SyntaxLookup,
 ) -> Result<Rc<CompiledPattern>, String> {
     compile_lisp_pattern_with_posix_translation(
@@ -1403,7 +1403,7 @@ impl MatchGroup {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SearchedString {
-    Heap(super::value::Value),
+    Heap(neovm_value::value::Value),
     Owned(LispString),
 }
 
@@ -2529,7 +2529,7 @@ fn compile_lisp_pattern_with_posix_translation(
     // building + cloning one per search call was ~170 Ir of pure waste.
     // The compiled pattern (cached) owns the built translation instead,
     // so its memo warms across calls.
-    translation_table: Option<super::value::Value>,
+    translation_table: Option<neovm_value::value::Value>,
     syntax: &dyn SyntaxLookup,
 ) -> Result<Rc<CompiledPattern>, String> {
     // The standard translation's cache key is a constant (its table is
@@ -4013,7 +4013,10 @@ fn buffer_search_translation_with_symbols(
 /// The case-canon table alone, for the regexp-compile path: the compiled
 /// pattern builds (and caches) its own `CaseTranslation`, so handing compile
 /// a prebuilt 1KB memo per call would be waste the cache-hit path discards.
-fn buffer_search_translation_table(buf: &Buffer, case_fold: bool) -> Option<super::value::Value> {
+fn buffer_search_translation_table(
+    buf: &Buffer,
+    case_fold: bool,
+) -> Option<neovm_value::value::Value> {
     if !case_fold {
         return None;
     }
@@ -4670,7 +4673,7 @@ pub(crate) fn string_match_full_with_case_fold_source_lisp_pattern_posix_syntax(
     start: usize,
     case_fold: bool,
     posix: bool,
-    translation_table: Option<super::value::Value>,
+    translation_table: Option<neovm_value::value::Value>,
     syntax: &dyn SyntaxLookup,
     match_data: &mut Option<MatchData>,
 ) -> Result<Option<usize>, String> {
@@ -4709,7 +4712,7 @@ fn string_search_engine(
     start: usize,
     case_fold: bool,
     posix: bool,
-    translation_table: Option<super::value::Value>,
+    translation_table: Option<neovm_value::value::Value>,
     syntax: &dyn SyntaxLookup,
 ) -> Result<Option<EngineMatchData>, String> {
     if start > string.byte_len() {
@@ -4759,7 +4762,7 @@ pub(crate) fn string_search_full_with_case_fold_source_lisp_pattern_posix_syntax
     start: usize,
     case_fold: bool,
     posix: bool,
-    translation_table: Option<super::value::Value>,
+    translation_table: Option<neovm_value::value::Value>,
     syntax: &dyn SyntaxLookup,
 ) -> Result<Option<StringSearchSuccess>, String> {
     Ok(string_search_engine(
@@ -4785,7 +4788,7 @@ pub(crate) fn string_search_start_with_case_fold_source_lisp_pattern_posix_synta
     start: usize,
     case_fold: bool,
     posix: bool,
-    translation_table: Option<super::value::Value>,
+    translation_table: Option<neovm_value::value::Value>,
     syntax: &dyn SyntaxLookup,
 ) -> Result<Option<EmacsBytePos>, String> {
     Ok(string_search_engine(
@@ -5457,7 +5460,7 @@ fn buffer_search_translation_table_with_symbols(
     buf: &Buffer,
     case_fold: bool,
     mode: SymbolMode,
-) -> Option<super::value::Value> {
+) -> Option<neovm_value::value::Value> {
     if !case_fold {
         return None;
     }

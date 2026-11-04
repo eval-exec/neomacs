@@ -16,19 +16,19 @@
 //!   terminal-coding-system, set-keyboard-coding-system,
 //!   set-terminal-coding-system, coding-system-priority-list
 
-use super::error::{EvalResult, Flow, signal};
-use super::errors::CErrorMessage;
 use super::eval::Context;
-use super::intern::{SymId, intern, lookup_interned, resolve_sym};
-use super::value::*;
 use crate::buffer::{BufferManager, EmacsByteRange, LispCharPos1};
 use crate::emacs_core::emacs_char::EmacsChar;
-use crate::emacs_core::error::LispCondition;
-use crate::emacs_core::error::{expect_args, expect_max_args, expect_min_args};
 use crate::emacs_core::eval::VariableStore;
-use crate::emacs_core::intern::WellKnown;
 use crate::heap_types::LispString;
 use crate::tagged::value::SymbolMode;
+use neovm_value::error::LispCondition;
+use neovm_value::error::{EvalResult, Flow, signal};
+use neovm_value::error::{expect_args, expect_max_args, expect_min_args};
+use neovm_value::errors::CErrorMessage;
+use neovm_value::intern::WellKnown;
+use neovm_value::intern::{SymId, intern, lookup_interned, resolve_sym};
+use neovm_value::value::*;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use std::collections::{HashMap, HashSet};
 use strum::{EnumString, IntoStaticStr};
@@ -973,7 +973,7 @@ pub(crate) fn iso2022_spec(info: &CodingSystemInfo, mode: SymbolMode) -> Option<
     }
 
     let mut request = Vec::new();
-    if let Some(pairs) = super::value::list_to_vec(request_val) {
+    if let Some(pairs) = neovm_value::value::list_to_vec(request_val) {
         for pair in pairs {
             if let (Some(cs), Some(reg)) =
                 (pair.cons_car().as_symbol_id(mode), pair.cons_cdr().as_int())
@@ -1903,7 +1903,7 @@ fn apply_put_overrides(
     let Some(overrides) = info.int_properties.get(&PUT_OVERRIDES_KEY) else {
         return Value::list(reconstructed);
     };
-    let Some(pairs) = super::value::list_to_vec(overrides) else {
+    let Some(pairs) = neovm_value::value::list_to_vec(overrides) else {
         return Value::list(reconstructed);
     };
     if pairs.is_empty() {
@@ -1912,7 +1912,7 @@ fn apply_put_overrides(
     let mut plist = Value::list(std::mem::take(&mut reconstructed));
     let mut i = 0;
     while i + 1 < pairs.len() {
-        if let Ok((next, _)) = super::plist::plist_put_swp(
+        if let Ok((next, _)) = neovm_value::plist::plist_put_swp(
             plist,
             pairs[i],
             pairs[i + 1],
@@ -2495,7 +2495,7 @@ fn builtin_coding_system_plist_uncached(
             Value::symbol(":category"),
             Value::symbol(compute_coding_category(info, mode)),
         ];
-        if let Some(items) = super::value::list_to_vec(verbatim) {
+        if let Some(items) = neovm_value::value::list_to_vec(verbatim) {
             plist.extend(items);
         }
         return Ok(apply_put_overrides(info, plist, mode));
@@ -2681,9 +2681,12 @@ fn record_put_override(info: &mut CodingSystemInfo, prop: Value, val: Value, mod
         .get(&PUT_OVERRIDES_KEY)
         .copied()
         .unwrap_or(Value::NIL);
-    if let Ok((updated, _)) =
-        super::plist::plist_put_swp(current, prop, val, matches!(mode, SymbolMode::Positioned))
-    {
+    if let Ok((updated, _)) = neovm_value::plist::plist_put_swp(
+        current,
+        prop,
+        val,
+        matches!(mode, SymbolMode::Positioned),
+    ) {
         info.int_properties.insert(PUT_OVERRIDES_KEY, updated);
     }
 }
@@ -3618,7 +3621,7 @@ pub(crate) fn builtin_define_coding_system_internal(
     // arg[3]: charset-list (list of symbols, or special symbol like 'iso-2022)
     let charset_list = if let Some(id) = args[3].as_symbol_id(mode).filter(|_| !args[3].is_nil()) {
         vec![id]
-    } else if let Some(items) = super::value::list_to_vec(&args[3]) {
+    } else if let Some(items) = neovm_value::value::list_to_vec(&args[3]) {
         items.iter().filter_map(|v| v.as_symbol_id(mode)).collect()
     } else {
         Vec::new()
@@ -3658,7 +3661,7 @@ pub(crate) fn builtin_define_coding_system_internal(
 
     // arg[11]: plist
     let mut properties = HashMap::new();
-    if let Some(items) = super::value::list_to_vec(&args[11]) {
+    if let Some(items) = neovm_value::value::list_to_vec(&args[11]) {
         let mut i = 0;
         while i + 1 < items.len() {
             if let Some(key) = items[i].as_symbol_id(mode) {
@@ -5104,7 +5107,7 @@ fn apply_detected_eol(
     if highest {
         return rewrite(detected);
     }
-    let Some(items) = super::value::list_to_vec(&detected) else {
+    let Some(items) = neovm_value::value::list_to_vec(&detected) else {
         return detected;
     };
     Value::list(items.into_iter().map(rewrite).collect())
@@ -6040,12 +6043,14 @@ fn coding_exclude_list(exclude: Option<Value>) -> Result<Option<Vec<Value>>, Flo
     match exclude {
         None => Ok(None),
         Some(value) if value.is_nil() => Ok(None),
-        Some(value) => super::value::list_to_vec(&value).map(Some).ok_or_else(|| {
-            signal(
-                LispCondition::WrongTypeArgument,
-                vec![Value::symbol("listp"), value],
-            )
-        }),
+        Some(value) => neovm_value::value::list_to_vec(&value)
+            .map(Some)
+            .ok_or_else(|| {
+                signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("listp"), value],
+                )
+            }),
     }
 }
 
@@ -6187,8 +6192,8 @@ pub(crate) fn builtin_find_coding_systems_region_internal(
 
 /// Initialize coding-system-related variables that official Emacs sets
 /// in C code (coding.c syms_of_coding).
-pub fn register_bootstrap_vars(obarray: &mut crate::emacs_core::symbol::Obarray) {
-    fn defvar_lisp(obarray: &mut crate::emacs_core::symbol::Obarray, name: &str, value: Value) {
+pub fn register_bootstrap_vars(obarray: &mut neovm_value::symbol::Obarray) {
+    fn defvar_lisp(obarray: &mut neovm_value::symbol::Obarray, name: &str, value: Value) {
         obarray.seed_value(name, value);
         obarray.make_special(name);
     }
