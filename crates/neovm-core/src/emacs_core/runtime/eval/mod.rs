@@ -13,6 +13,7 @@ use strum::{EnumString, IntoStaticStr};
 
 use self::data::xwidget;
 use self::interactive_registry::InteractiveRegistry;
+use self::protocol::tty_host::TtyFrameHostFactory;
 pub use self::protocol::{DisplayHost, FrameFontRequest};
 pub use self::protocol::{
     FontOpeningSize, FrameFontSize, TerminalCreateRequest, TerminalDisplayTarget,
@@ -44,7 +45,6 @@ use super::rect::RectangleState;
 use super::regex::MatchData;
 use super::register::RegisterManager;
 use super::symbol::{CanonicalAccess, ConstantWrite, Obarray};
-use super::terminal::pure::TtyFrameHostFactory;
 use super::threads::ThreadManager;
 use super::value::*;
 use crate::buffer::{BufferId, BufferManager, CharPos0, EmacsBytePos, LispCharPos1};

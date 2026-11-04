@@ -42,6 +42,7 @@ pub mod image_catalog;
 mod rows_authority;
 pub use rows_authority::InertRowsHostAuthority;
 pub(crate) use rows_authority::actual_rows_host_type;
+pub mod tty_host;
 
 /// The display object that owns a neo-term instance.
 ///
