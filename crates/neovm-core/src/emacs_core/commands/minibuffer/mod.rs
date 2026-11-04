@@ -200,18 +200,6 @@ pub use crate::emacs_core::eval::data::minibuffer::{
     MinibufferState,
 };
 
-impl From<&LispString> for CompletionDirectory {
-    fn from(directory: &LispString) -> Self {
-        Self(directory.without_properties())
-    }
-}
-
-impl AsRef<LispString> for CompletionDirectory {
-    fn as_ref(&self) -> &LispString {
-        &self.0
-    }
-}
-
 static_assertions::assert_eq_size!(CompletionDirectory, LispString);
 static_assertions::assert_not_impl_any!(CompletionDirectory: Send, Sync);
 
@@ -784,12 +772,6 @@ impl MinibufferManager {
     /// Set the completion style.
     pub fn set_completion_style(&mut self, style: CompletionStyle) {
         self.completion_style = style;
-    }
-}
-
-impl Default for MinibufferManager {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

@@ -6,6 +6,7 @@ use neovm_value::heap_types::LispString;
 use neovm_value::intern::SymId;
 use neovm_value::value::Value;
 use std::collections::HashMap;
+use std::convert::AsRef;
 
 /// What can be completed against.
 pub enum CompletionTable {
@@ -191,6 +192,32 @@ impl GcTrace for MinibufferManager {
             for text in entries {
                 text.trace_roots_with(visit);
             }
+        }
+    }
+}
+
+// --- E5-FM-6c1 data impls (stage-4 W2/E5) ---
+
+impl From<&LispString> for CompletionDirectory {
+    fn from(directory: &LispString) -> Self {
+        Self(directory.without_properties())
+    }
+}
+
+impl AsRef<LispString> for CompletionDirectory {
+    fn as_ref(&self) -> &LispString {
+        &self.0
+    }
+}
+
+impl Default for MinibufferManager {
+    fn default() -> Self {
+        Self {
+            state_stack: Vec::new(),
+            history: MinibufferHistory::new(),
+            completion_style: CompletionStyle::Prefix,
+            #[cfg(test)]
+            max_depth: 10,
         }
     }
 }
