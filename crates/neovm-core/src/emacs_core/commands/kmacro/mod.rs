@@ -401,3 +401,29 @@ fn resolve_macro_events(eval: &super::eval::Context, value: &Value) -> Result<Ve
 #[cfg(test)]
 #[path = "tests/kmacro_test.rs"]
 mod tests;
+
+// ---------------------------------------------------------------------------
+// Cold entry table (stage-4 K2 batch K7)
+// ---------------------------------------------------------------------------
+//
+// The evaluator's VM byte-code dispatch enters these five bodies through one
+// eval-declared PC2 table installed at `Context::new_inner`/`from_dump`; the
+// bodies stay here because they drive the command loop and the core builtin
+// dispatcher.
+static CANONICAL_KMACRO_HOOKS: crate::emacs_core::eval::kmacro_hooks::KmacroHooks =
+    crate::emacs_core::eval::kmacro_hooks::KmacroHooks::new(
+        builtin_start_kbd_macro,
+        builtin_end_kbd_macro,
+        builtin_call_last_kbd_macro,
+        builtin_execute_kbd_macro,
+        builtin_store_kbd_macro_event,
+    );
+
+pub(crate) fn install_kmacro_hooks() {
+    let installed =
+        crate::emacs_core::eval::kmacro_hooks::install_kmacro_hooks(&CANONICAL_KMACRO_HOOKS);
+    debug_assert!(
+        installed.is_ok(),
+        "a different keyboard-macro entry table is already installed"
+    );
+}

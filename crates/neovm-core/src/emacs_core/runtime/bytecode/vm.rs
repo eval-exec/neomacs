@@ -7268,11 +7268,11 @@ impl<'a> Vm<'a> {
     }
 
     fn builtin_call_last_kbd_macro_shared(&mut self, args: &[Value]) -> EvalResult {
-        crate::emacs_core::kmacro::builtin_call_last_kbd_macro(&mut *self.ctx, args.to_vec())
+        crate::emacs_core::eval::kmacro_hooks::call_last_kbd_macro(&mut *self.ctx, args.to_vec())
     }
 
     fn builtin_execute_kbd_macro_shared(&mut self, args: &[Value]) -> EvalResult {
-        crate::emacs_core::kmacro::builtin_execute_kbd_macro(&mut *self.ctx, args.to_vec())
+        crate::emacs_core::eval::kmacro_hooks::execute_kbd_macro(&mut *self.ctx, args.to_vec())
     }
 
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
@@ -9666,13 +9666,13 @@ impl<'a> Vm<'a> {
         match name {
             "call-interactively" => return self.builtin_call_interactively_shared(&args),
             "start-kbd-macro" => {
-                return crate::emacs_core::kmacro::builtin_start_kbd_macro(
+                return crate::emacs_core::eval::kmacro_hooks::start_kbd_macro(
                     &mut *self.ctx,
                     args.into_vec(),
                 );
             }
             "end-kbd-macro" => {
-                return crate::emacs_core::kmacro::builtin_end_kbd_macro(
+                return crate::emacs_core::eval::kmacro_hooks::end_kbd_macro(
                     &mut *self.ctx,
                     args.into_vec(),
                 );
@@ -9683,7 +9683,7 @@ impl<'a> Vm<'a> {
             "mapatoms" => return self.builtin_mapatoms_shared(&args),
             "maphash" => return self.builtin_maphash_shared(&args),
             "store-kbd-macro-event" => {
-                return crate::emacs_core::kmacro::builtin_store_kbd_macro_event(
+                return crate::emacs_core::eval::kmacro_hooks::store_kbd_macro_event(
                     &mut *self.ctx,
                     args.into_vec(),
                 );

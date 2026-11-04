@@ -7624,6 +7624,7 @@ pub mod input_hooks;
 pub mod interactive_registry;
 pub mod kbd;
 pub mod keymap_lookup;
+pub mod kmacro_hooks;
 pub mod lifecycle;
 pub mod perf;
 pub mod process_hooks;
