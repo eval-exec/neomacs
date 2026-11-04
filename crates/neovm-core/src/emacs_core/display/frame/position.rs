@@ -97,27 +97,25 @@ impl FramePositionSpec {
     }
 }
 
-/// The absolute display position a top-level window should move to.
+/// The absolute display position a top-level window should move to, or
+/// `None` unless both edges are absolute.
 ///
-/// A missing edge keeps the frame's CURRENT position, as GNU's
-/// `gui_set_frame_parameters_1` takes it from `f->left_pos` / `f->top_pos`
-/// (src/frame.c).  `None` when nothing was requested, or when a requested
-/// edge is relative to the display's far edge or extent: those need the
-/// window's outer size and the workarea, which the evaluator does not have.
+/// GNU's `gui_set_frame_parameters_1` (src/frame.c) also moves the window
+/// for a lone `left` or `top`, taking the other edge from `f->left_pos` /
+/// `f->top_pos`, which GNU keeps equal to the native position.  Neomacs does
+/// not read the native position back, so the stored edge can be stale (moved
+/// by the user or the window manager) or an unresolved far-edge offset;
+/// moving with it would put the window in the wrong place.  A far-edge or
+/// proportional edge needs the window's outer size and the workarea, which
+/// the evaluator does not have either.
 pub(crate) fn absolute_window_position(
     left: Option<FramePositionSpec>,
     top: Option<FramePositionSpec>,
-    current: (i64, i64),
 ) -> Option<(i32, i32)> {
-    if left.is_none() && top.is_none() {
-        return None;
+    match (left?.0, top?.0) {
+        (PositionKind::Absolute(x), PositionKind::Absolute(y)) => Some((x, y)),
+        _ => None,
     }
-    let edge = |spec: Option<FramePositionSpec>, current: i64| match spec {
-        Some(FramePositionSpec(PositionKind::Absolute(offset))) => Some(offset),
-        Some(_) => None,
-        None => i32::try_from(current).ok(),
-    };
-    Some((edge(left, current.0)?, edge(top, current.1)?))
 }
 
 /// Resolve only after size/font changes, then publish numeric parent-local

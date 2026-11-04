@@ -1314,6 +1314,10 @@ struct GuiStartupParameters {
     publisher: startup_frame::InitialWindowPublisher,
     primary_frame: Arc<Mutex<Option<FrameId>>>,
     pending_request: Option<GuiFrameHostRequest>,
+    /// Outer position requested for the adopted frame before its window is
+    /// published.  Held here like the rest of `pending_request`, so a frame
+    /// abandoned before publication leaves nothing for a later one to inherit.
+    pending_position: Option<(i32, i32)>,
 }
 
 #[derive(Clone)]
@@ -1707,6 +1711,16 @@ impl DisplayHost for PrimaryWindowDisplayHost {
                 "failed to finalize initial GUI frame",
             )?;
         }
+        if let Some((x, y)) = startup.pending_position {
+            self.send_render_command(
+                RenderCommand::Window(WindowCommand::SetWindowPosition {
+                    frame: FrameRef::Primary,
+                    x,
+                    y,
+                }),
+                "failed to finalize initial GUI frame",
+            )?;
+        }
         startup.publisher.complete(
             neomacs_display_runtime::render_thread::InitialWindowPreparation {
                 size: neomacs_display_runtime::render_thread::InitialWindowSize {
@@ -1970,6 +1984,7 @@ impl DisplayHost for PrimaryWindowDisplayHost {
                     .lock()
                     .map_err(|error| error.to_string())? = None;
                 startup.pending_request = None;
+                startup.pending_position = None;
                 self.primary_frame = PrimaryFrame::Awaiting;
                 return Ok(());
             }
@@ -2212,6 +2227,12 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         x: i32,
         y: i32,
     ) -> Result<(), String> {
+        if self.pending_primary_request_mut(frame_id).is_some()
+            && let Some(startup) = self.gui_startup.as_mut()
+        {
+            startup.pending_position = Some((x, y));
+            return Ok(());
+        }
         let frame = self.frame_ref_for_gui_frame(frame_id);
         self.send_render_command(
             RenderCommand::Window(WindowCommand::SetWindowPosition { frame, x, y }),
@@ -4156,6 +4177,7 @@ fn run_gui_evaluator_worker(
             publisher: native_startup.publisher(),
             primary_frame: Arc::clone(&primary_frame),
             pending_request: None,
+            pending_position: None,
         }),
         last_window_titles: Mutex::new(HashMap::new()),
         font_metrics: None,
