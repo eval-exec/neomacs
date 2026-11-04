@@ -25,6 +25,7 @@
 //! | `NEOMACS_MODE_LINE_NUMERIC_PADDING` | `on` | `off`; `on`/`1`/`true`/`yes` | Keep numeric-wrapper padding independent of inherited mode-line properties |
 //! | `NEOMACS_REDISPLAY_GNU_HOOKS` | `off` | `off`; `on`/`1`/`true`/`yes` | GNU redisplay transaction, owned pre targets, live hook order and core configuration-hook default; selected-mini preparation; renderer-inert snapshot positions |
 
+mod eval_display_queries;
 mod mode_line_append;
 mod mode_line_coding;
 use mode_line_coding::CodingAccess;
@@ -83,6 +84,7 @@ use crate::window::{
     DisplayRowSnapshot, FrameId, FrameManager, Window, WindowChromeLine, WindowChromePresence,
     WindowDisplaySnapshot, WindowId,
 };
+pub(crate) use eval_display_queries::install_eval_display_query_hooks;
 use std::num::NonZeroUsize;
 use std::ops::ControlFlow;
 use strum::{EnumString, IntoStaticStr};

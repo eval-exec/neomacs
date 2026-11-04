@@ -93,6 +93,7 @@ impl Context {
         // the same one-time seam, before any case-sensitive operation or
         // buffer kill can run.
         crate::emacs_core::casetab_entries::install_case_table_hooks();
+        crate::emacs_core::xdisp::install_eval_display_query_hooks();
         crate::emacs_core::buffer_ops::install_buffer_kill_hook();
         // The evaluator's observed-run log of function-epoch moves is plain
         // process state too; install it unconditionally so non-JIT builds

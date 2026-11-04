@@ -1004,7 +1004,7 @@ impl RedisplayTransaction<'_> {
         self.eval.gnu_distribute_text_marks();
         let unchanged =
             self.eval.last_redisplay_signature.as_ref() == Some(&self.eval.redisplay_signature());
-        if (!force || crate::emacs_core::xdisp::redisplay_idle_skip_enabled())
+        if (!force || display_query_hooks::redisplay_idle_skip_enabled()?)
             && !self.eval.echo_area_resize_exact_pending
             && unchanged
             && !(force && self.eval.displayed_buffer_changes_unacknowledged())

@@ -707,7 +707,7 @@ impl Context {
         let inhibit_redisplay = self.variable_value(CommandLoopSymbol::InhibitRedisplay.id());
         if inhibit_redisplay.as_ref().is_some_and(|v| v.is_truthy())
             && (!force
-                || crate::emacs_core::xdisp::mode_line_flow_enabled()
+                || display_query_hooks::mode_line_flow_enabled()?
                 || crate::face::realization::enabled())
         {
             tracing::debug!(
@@ -797,7 +797,7 @@ impl Context {
         // then reads the state the hooks left.
         let unchanged = self.last_redisplay_signature.as_ref() == Some(&before_signature);
         self.run_pre_redisplay_function(if unchanged { Value::NIL } else { Value::T });
-        let skip_when_forced = crate::emacs_core::xdisp::redisplay_idle_skip_enabled();
+        let skip_when_forced = display_query_hooks::redisplay_idle_skip_enabled()?;
         if (!force || skip_when_forced)
             && !self.echo_area_resize_exact_pending
             && self.last_redisplay_signature.is_some()
