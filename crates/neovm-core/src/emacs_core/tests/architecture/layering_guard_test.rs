@@ -158,6 +158,10 @@ enum LowerRoot {
     /// carrier pool (main f479e27499). A top-level production module like the
     /// other lower roots; it names no emacs_core item.
     TlsFingerprint,
+    /// The cross-thread quit request and the asynchronous attention word
+    /// moved from eval with stage-3b T4.1. A top-level production module like
+    /// the other lower roots; it names no emacs_core item.
+    Quit,
 }
 
 impl LowerRoot {
@@ -183,6 +187,7 @@ impl LowerRoot {
             "host_input" => Self::HostInput,
             "host_effect" => Self::HostEffect,
             "tls_fingerprint" => Self::TlsFingerprint,
+            "quit" => Self::Quit,
             unknown => {
                 panic!("unknown top-level production module {unknown}; add a LowerRoot variant")
             }
@@ -211,6 +216,7 @@ impl LowerRoot {
             Self::HostInput => "host_input",
             Self::HostEffect => "host_effect",
             Self::TlsFingerprint => "tls_fingerprint",
+            Self::Quit => "quit",
         }
     }
 }

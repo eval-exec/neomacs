@@ -2057,7 +2057,7 @@ impl ExistenceDfa {
             polled += d - start;
             if polled >= QUIT_POLL_BYTES {
                 polled = 0;
-                if crate::emacs_core::eval::tls_quit_pending() {
+                if neovm_value::quit::quit_pending() {
                     return Exists::Unknown;
                 }
             }

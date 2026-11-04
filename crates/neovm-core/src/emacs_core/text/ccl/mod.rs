@@ -246,7 +246,7 @@ fn resolve_ccl_program_designator(value: &Value, mode: SymbolMode) -> Option<Val
 }
 
 fn ccl_quit_pending() -> bool {
-    if !crate::emacs_core::eval::tls_quit_pending() {
+    if !neovm_value::quit::quit_pending() {
         return false;
     }
     let Some(vars) = ccl_variables() else {

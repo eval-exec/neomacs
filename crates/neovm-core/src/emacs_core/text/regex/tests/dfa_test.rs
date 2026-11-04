@@ -2102,9 +2102,9 @@ fn a_pending_quit_leaves_the_candidate_undecided() {
     dfa.classes_mut().sync(context);
     // A long text of `z`s: the DFA keeps walking until a poll.
     let text = vec![b'z'; 200_000];
-    let flag = crate::emacs_core::eval::install_quit_requested_for_test(true);
+    let flag = neovm_value::quit::install_quit_requested_for_test(true);
     let verdict = dfa.anchored_exists(&compiled, &text, 0, text.len(), 0, &DefaultSyntaxLookup);
-    crate::emacs_core::eval::clear_quit_requested_for_test();
+    neovm_value::quit::clear_quit_requested_for_test();
     drop(flag);
     // `zq` dies at the second `z`: decided before any poll.
     assert!(matches!(verdict, Exists::No { .. }));
@@ -2112,9 +2112,9 @@ fn a_pending_quit_leaves_the_candidate_undecided() {
     let nfa = Nfa::build(&compiled).unwrap();
     let mut dfa = ExistenceDfa::new(nfa);
     dfa.classes_mut().sync(context);
-    let _flag = crate::emacs_core::eval::install_quit_requested_for_test(true);
+    let _flag = neovm_value::quit::install_quit_requested_for_test(true);
     let verdict = dfa.anchored_exists(&compiled, &text, 0, text.len(), 0, &DefaultSyntaxLookup);
-    crate::emacs_core::eval::clear_quit_requested_for_test();
+    neovm_value::quit::clear_quit_requested_for_test();
     assert_eq!(verdict, Exists::Unknown);
 }
 
@@ -2713,7 +2713,7 @@ fn cold_isolated_whole_search_failures_admit_at_threshold() {
     // A matcher quit also returns None, but it does not complete the scan.
     // It must not turn a pending isolated failure into admitted heat.
     let compiled = regex_compile("z[0-9]", false, false).unwrap();
-    let flag = crate::emacs_core::eval::install_quit_requested_for_test(true);
+    let flag = neovm_value::quit::install_quit_requested_for_test(true);
     let results = with_cold_path(true, || {
         with_dfa_mode(DfaMode::On, || {
             (0..COLD_THRESHOLD * 2)
@@ -2721,7 +2721,7 @@ fn cold_isolated_whole_search_failures_admit_at_threshold() {
                 .collect::<Vec<_>>()
         })
     });
-    crate::emacs_core::eval::clear_quit_requested_for_test();
+    neovm_value::quit::clear_quit_requested_for_test();
     drop(flag);
     assert!(results.into_iter().all(|result| result == (None, false)));
     assert!(!compiled.dfa.initialized());

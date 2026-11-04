@@ -32,13 +32,17 @@ pub(crate) const G0_MEMBERS: [&str; 10] = [
 /// character<->byte position cache is value-shaped and moved down beside
 /// the substring/concat cores; core re-exports it as
 /// `emacs_core::string_pos_cache`.
-pub(crate) const BOTTOM_PEER_MODULES: [&str; 6] = [
+/// `quit` joined with the stage-3b T4.1 move: the cross-thread quit request
+/// and the asynchronous attention word are std-only and name no evaluator
+/// item; core re-exports them through `emacs_core::eval`.
+pub(crate) const BOTTOM_PEER_MODULES: [&str; 7] = [
     "tagged",
     "heap_types",
     "gc_trace",
     "tls_fingerprint",
     "plist",
     "string_pos_cache",
+    "quit",
 ];
 
 /// The first lower crate of the extraction. Its modules are already inside

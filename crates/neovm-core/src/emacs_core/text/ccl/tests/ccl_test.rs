@@ -1354,13 +1354,13 @@ fn ccl_execute_quit_signals_quit() {
     crate::test_utils::init_test_tracing();
     // GNU `ccl-execute` stops for `Vquit_flag`, then `maybe_quit` signals
     // `quit` rather than the interrupted-program error.
-    let _flag = crate::emacs_core::eval::install_quit_requested_for_test(true);
+    let _flag = neovm_value::quit::install_quit_requested_for_test(true);
     let registers = Value::vector(vec![Value::NIL; 8]);
     let err = builtin_ccl_execute_impl(vec![
         Value::vector([1, 3, 1793, 22].into_iter().map(Value::fixnum).collect()),
         registers,
     ]);
-    crate::emacs_core::eval::clear_quit_requested_for_test();
+    neovm_value::quit::clear_quit_requested_for_test();
     let err = err.expect_err("ccl-execute promotes a pending quit");
     match err.into_kind() {
         FlowKind::Signal(sig) => {
@@ -1379,14 +1379,14 @@ fn ccl_execute_on_string_quit_interrupts_before_the_first_instruction() {
     // GNU checks `Vquit_flag` before fetching an instruction. At the start
     // the counter is 2, so the message is "at 2th code". The status vector
     // is not updated, and the quit flag stays set.
-    let flag = crate::emacs_core::eval::install_quit_requested_for_test(true);
+    let flag = neovm_value::quit::install_quit_requested_for_test(true);
     let status = Value::vector(vec![Value::NIL; 9]);
     let err = builtin_ccl_execute_on_string_impl(vec![
         Value::vector([1, 3, 1793, 22].into_iter().map(Value::fixnum).collect()),
         status,
         Value::heap_string(crate::heap_types::LispString::from_unibyte(Vec::new())),
     ]);
-    crate::emacs_core::eval::clear_quit_requested_for_test();
+    neovm_value::quit::clear_quit_requested_for_test();
     let err = err.expect_err("a pending quit interrupts CCL");
     match err.into_kind() {
         FlowKind::Signal(sig) => {

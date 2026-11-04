@@ -6514,7 +6514,7 @@ fn re_match_loop<const SEALED: bool>(
                     let exit = ((ofj_pc as i64) + 3 + bc_num!(ofj_pc + 1) as i64) as usize;
                     'fused_exactn: loop {
                         push_failure_point!(ofj_pc, exit, FailureInput::Restore(d));
-                        if crate::emacs_core::eval::tls_quit_pending() {
+                        if neovm_value::quit::quit_pending() {
                             return None;
                         }
                         let mut lit_off = 0usize;
@@ -6555,7 +6555,7 @@ fn re_match_loop<const SEALED: bool>(
                     && ((pc as i64) + 3 + bc_num!(pc + 1) as i64) as usize == op_pc
                 {
                     'ks_exactn: loop {
-                        if crate::emacs_core::eval::tls_quit_pending() {
+                        if neovm_value::quit::quit_pending() {
                             return None;
                         }
                         let mut lit_off = 0usize;
@@ -6602,7 +6602,7 @@ fn re_match_loop<const SEALED: bool>(
                     let exit = ((ofj_pc as i64) + 3 + bc_num!(ofj_pc + 1) as i64) as usize;
                     'star_exactn: loop {
                         push_failure_point!(ofj_pc, exit, FailureInput::Restore(d));
-                        if crate::emacs_core::eval::tls_quit_pending() {
+                        if neovm_value::quit::quit_pending() {
                             return None;
                         }
                         let mut lit_off = 0usize;
@@ -6651,7 +6651,7 @@ fn re_match_loop<const SEALED: bool>(
                             let exit = ((ofj_pc as i64) + 3 + bc_num!(ofj_pc + 1) as i64) as usize;
                             loop {
                                 push_failure_point!(ofj_pc, exit, FailureInput::Restore(d));
-                                if crate::emacs_core::eval::tls_quit_pending() {
+                                if neovm_value::quit::quit_pending() {
                                     return None;
                                 }
                                 match match_anychar_at(text, d, stop, target_multibyte, translate) {
@@ -6670,7 +6670,7 @@ fn re_match_loop<const SEALED: bool>(
                             && ((pc as i64) + 3 + bc_num!(pc + 1) as i64) as usize == op_pc
                         {
                             loop {
-                                if crate::emacs_core::eval::tls_quit_pending() {
+                                if neovm_value::quit::quit_pending() {
                                     return None;
                                 }
                                 match match_anychar_at(text, d, stop, target_multibyte, translate) {
@@ -6695,7 +6695,7 @@ fn re_match_loop<const SEALED: bool>(
                             let exit = ((ofj_pc as i64) + 3 + bc_num!(ofj_pc + 1) as i64) as usize;
                             loop {
                                 push_failure_point!(ofj_pc, exit, FailureInput::Restore(d));
-                                if crate::emacs_core::eval::tls_quit_pending() {
+                                if neovm_value::quit::quit_pending() {
                                     return None;
                                 }
                                 match match_anychar_at(text, d, stop, target_multibyte, translate) {
@@ -6753,7 +6753,7 @@ fn re_match_loop<const SEALED: bool>(
                             let exit = ((ofj_pc as i64) + 3 + bc_num!(ofj_pc + 1) as i64) as usize;
                             loop {
                                 push_failure_point!(ofj_pc, exit, FailureInput::Restore(d));
-                                if crate::emacs_core::eval::tls_quit_pending() {
+                                if neovm_value::quit::quit_pending() {
                                     return None;
                                 }
                                 match match_charset_at(
@@ -6781,7 +6781,7 @@ fn re_match_loop<const SEALED: bool>(
                             && ((pc as i64) + 3 + bc_num!(pc + 1) as i64) as usize == charset_op_pos
                         {
                             loop {
-                                if crate::emacs_core::eval::tls_quit_pending() {
+                                if neovm_value::quit::quit_pending() {
                                     return None;
                                 }
                                 match match_charset_at(
@@ -6816,7 +6816,7 @@ fn re_match_loop<const SEALED: bool>(
                             let exit = ((ofj_pc as i64) + 3 + bc_num!(ofj_pc + 1) as i64) as usize;
                             loop {
                                 push_failure_point!(ofj_pc, exit, FailureInput::Restore(d));
-                                if crate::emacs_core::eval::tls_quit_pending() {
+                                if neovm_value::quit::quit_pending() {
                                     return None;
                                 }
                                 match match_charset_at(
@@ -7058,7 +7058,7 @@ fn re_match_loop<const SEALED: bool>(
                 // dispatch loop. Gives interactive `C-g` a chance to
                 // abort a pathological regex that would otherwise run
                 // for many seconds on a large input.
-                if crate::emacs_core::eval::tls_quit_pending() {
+                if neovm_value::quit::quit_pending() {
                     return None;
                 }
                 let offset = bc_num!(pc);
@@ -7853,7 +7853,7 @@ fn goto_fail(
     // pathological-regex responsiveness; a `C-g` arriving mid-backtrack
     // aborts the entire search here so the evaluator can surface the
     // quit signal on its next `maybe_quit` poll.
-    if crate::emacs_core::eval::tls_quit_pending() {
+    if neovm_value::quit::quit_pending() {
         return None;
     }
     let frame = pop_failure_point(frames, undo, regstart, regend, counters)?;
@@ -7933,7 +7933,7 @@ fn goto_fail_nastyloop(
                 return Some(());
             }
             FailureInput::NastyloopMarker(_) => {
-                if crate::emacs_core::eval::tls_quit_pending() {
+                if neovm_value::quit::quit_pending() {
                     return None;
                 }
                 frame = pop_failure_point(frames, undo, regstart, regend, counters)?;
@@ -10389,10 +10389,7 @@ pub(crate) fn re_search(
     // admit that miss for future searches; overflow returned above before
     // reaching this epilogue, quit aborts are excluded, and zero-span
     // attempts never marked it.
-    if dfa_cold_heat.is_isolated()
-        && result.is_none()
-        && !crate::emacs_core::eval::tls_quit_pending()
-    {
+    if dfa_cold_heat.is_isolated() && result.is_none() && !neovm_value::quit::quit_pending() {
         drop(dfa::DfaLease::after_cold_failure(
             pattern,
             syntax.lookup,

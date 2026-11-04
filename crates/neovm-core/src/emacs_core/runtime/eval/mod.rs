@@ -596,44 +596,13 @@ thread_local! {
     #[cfg(test)]
     static BYTECODE_BRANCH_POLL_COUNT: Cell<usize> = const { Cell::new(0) };
 
-    /// Thread-local handle to the active `Context::quit_requested`
-    /// atomic. Installed by `Context::setup_thread_locals`, read by
-    /// leaf functions (e.g. the regex matcher) that need a cheap quit
-    /// check without threading `&mut Context` through their signature.
-    /// Mirrors the call site shape of GNU's `maybe_quit()` — reachable
-    /// from anywhere without an explicit context pointer.
-    static QUIT_REQUESTED_TLS: RefCell<Option<QuitRequest>> = const { RefCell::new(None) };
+    // The active quit-request slot is defined once in `neovm_value::quit`
+    // (stage-3b T4.1); `tls_quit_pending` below is a re-export of its reader.
 }
 
-/// Check whether a quit is pending without needing `&mut Context`.
-/// The regex matcher calls this at jump/fail sites, mirroring GNU's
-/// `regex-emacs.c:4901,5236`. When it returns `true`, the caller
-/// should unwind its work so the next `maybe_quit()` poll can promote
-/// the pending flag to a `quit` signal.
-pub(crate) fn tls_quit_pending() -> bool {
-    QUIT_REQUESTED_TLS.with(|cell| {
-        cell.borrow()
-            .as_ref()
-            .is_some_and(QuitRequest::is_requested)
-    })
-}
-
-/// Install a quit-request flag for the current thread. CCL polls this the
-/// way GNU's driver polls `Vquit_flag`. The flag is not cleared by CCL.
-#[cfg(test)]
-pub(crate) fn install_quit_requested_for_test(pending: bool) -> QuitRequest {
-    let flag = QuitRequest::new();
-    if pending {
-        flag.request();
-    }
-    QUIT_REQUESTED_TLS.with(|cell| *cell.borrow_mut() = Some(flag.clone()));
-    flag
-}
-
-#[cfg(test)]
-pub(crate) fn clear_quit_requested_for_test() {
-    QUIT_REQUESTED_TLS.with(|cell| *cell.borrow_mut() = None);
-}
+// The quit-poll reader (`tls_quit_pending`) and the test installer live in
+// `neovm_value::quit` (stage-3b T4.1); the re-exports below keep the
+// evaluator's call sites unchanged.
 
 /// One bit per `SymId` (the first million): "registered with
 /// `dispatch_kind == Builtin`". A lock-free mirror of `GLOBAL_SUBR_TABLE`
@@ -7627,8 +7596,11 @@ mod attention;
 mod minibuffer_window;
 pub(crate) use super::value::flow_vocab::ResumeTarget;
 pub use super::value::flow_vocab::ShutdownRequest;
-pub use attention::QuitRequest;
-pub(crate) use attention::{ASYNC_ATTENTION, AsyncSource, AttentionMask};
+pub(crate) use attention::AttentionMask;
+pub use neovm_value::quit::QuitRequest;
+pub(crate) use neovm_value::quit::{
+    ASYNC_ATTENTION, AsyncSource, quit_pending as tls_quit_pending,
+};
 
 pub(crate) mod runtime_projection;
 
@@ -7929,7 +7901,7 @@ pub use rows_observation::{RowsDependencyMetadata, RowsObservationEpoch, RowsObs
 /// Carrier park: forget the owner's quit request. The next owner replaces it;
 /// leaving it would leak a request raised against the retired owner.
 pub(crate) fn park_carrier_tls() {
-    QUIT_REQUESTED_TLS.with(|slot| *slot.borrow_mut() = None);
+    neovm_value::quit::clear_quit_requested_tls();
 }
 
 /// Deferred carrier reset: drop the owner-installed subr tables and scratch GC
@@ -7949,9 +7921,6 @@ pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
     cconv_memo::carrier_tls_fingerprint(h);
     crate::tls_fingerprint::mix(h, GLOBAL_SUBR_TABLE.with(|slot| slot.borrow().len() as u64));
     crate::tls_fingerprint::mix(h, INLINE_SUBR_TABLE.with(|slot| slot.borrow().len() as u64));
-    crate::tls_fingerprint::mix(
-        h,
-        QUIT_REQUESTED_TLS.with(|slot| slot.borrow().is_some() as u64),
-    );
+    neovm_value::quit::mix_quit_requested_tls_fingerprint(h);
     crate::tls_fingerprint::mix(h, SCRATCH_GC_ROOTS.with(|slot| slot.borrow().len() as u64));
 }

@@ -115,7 +115,7 @@ impl Literal {
         if stop - start >= super::PREFILTER_MIN_BUILD_SPAN {
             return None;
         }
-        if crate::emacs_core::eval::tls_quit_pending() {
+        if neovm_value::quit::quit_pending() {
             return None;
         }
         let mut candidate = start;

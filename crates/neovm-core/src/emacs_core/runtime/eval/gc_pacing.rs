@@ -893,9 +893,7 @@ impl Context {
         // Install this Context's quit-request flag so leaf functions
         // (regex matcher, other long-running scans) can poll it
         // without `&mut Context` access.
-        QUIT_REQUESTED_TLS.with(|cell| {
-            *cell.borrow_mut() = Some(self.quit_requested.clone());
-        });
+        neovm_value::quit::install_quit_requested_tls(self.quit_requested.clone());
         // Compiled leaves guard this thread's stack from now on.
         self.refresh_jit_stack_limit();
     }
