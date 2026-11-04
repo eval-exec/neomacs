@@ -26,7 +26,7 @@
 //! consumer: the policy is an argument of the one function every consumer
 //! classifies with.
 
-use super::value::Value;
+use crate::emacs_core::value::Value;
 use std::ops::ControlFlow;
 
 /// Geometry operands of a stretch-space display specification. Shared by
@@ -400,3 +400,65 @@ impl DisplayPropertySpecs {
 #[cfg(test)]
 #[path = "tests/display_spec_test.rs"]
 mod tests;
+
+/// Port of GNU `xdisp.c:display_prop_intangible_p`: does this `display` property
+/// value *replace* the underlying text (a string, image, space, fringe, …),
+/// making the covered buffer positions intangible? Mirrors `handle_display_spec`'s
+/// dispatch over a single spec, a list of specs, or a vector of specs.
+/// `frame_window_p` is GNU's `FRAME_WINDOW_P`: image- and xwidget-class specs
+/// replace text only on a window (GUI) frame, never on a tty.
+///
+/// Pure over the `Value` (no eval, no host state) so the command loop's
+/// `adjust_point_for_property` and the layout engine's classifier can share one
+/// decision. `when` forms are resolved structurally rather than evaluated,
+/// matching GNU's own `single_display_spec_string_p` shortcut (the text was
+/// already displayed, so the condition was non-nil).
+pub(crate) fn display_prop_replacing_p(spec: Value, frame_window_p: bool) -> bool {
+    let mut replacing = false;
+    // The shape decode (single spec / list of specs / vector of specs, minus a
+    // `(disable-eval …)` wrapper) lives in ONE place -- see `display_spec`.
+    let specs = DisplayPropertySpecs::of(spec);
+    specs.for_each(|single| {
+        if display_single_spec_replacing_p(single, specs.eval, frame_window_p) {
+            replacing = true;
+            return ControlFlow::Break(());
+        }
+        ControlFlow::Continue(())
+    });
+    replacing
+}
+
+/// Replacing-determination for a *single* `display` spec, mirroring the
+/// `it == NULL` paths of GNU `xdisp.c:handle_single_display_spec`. The head
+/// taxonomy comes from [`display_spec_kind`], so this reads as the
+/// decision alone. `eval` is the policy of the `display` value SPEC belongs to.
+fn display_single_spec_replacing_p(
+    spec: Value,
+    eval: DisplayEval,
+    frame_window_p: bool,
+) -> bool {
+    match display_spec_kind(spec, eval).replaces_text(frame_window_p) {
+        Some(replacing) => replacing,
+        // `(when FORM . VALUE)`: a nil FORM disables the spec; otherwise the
+        // decision is VALUE's. Resolved structurally rather than evaluated -- see
+        // the note on `display_prop_replacing_p`. Under `disable-eval` GNU takes
+        // any FORM but `t` as nil without evaluating it (xdisp.c,
+        // `handle_single_display_spec`), so only a literal `t` holds there.
+        None => match display_spec_when_parts(spec) {
+            // GNU continues with its SINGLE-spec arms on VALUE -- it does not
+            // re-enter `handle_display_spec` -- so `(when t . SPEC)` never treats
+            // SPEC as a list of specs.
+            Some((form, value)) => {
+                let holds = match eval {
+                    DisplayEval::Enabled => !form.is_nil(),
+                    DisplayEval::Disabled => form.is_t(),
+                };
+                holds && display_single_spec_replacing_p(value, eval, frame_window_p)
+            }
+            // `((margin AREA) VALUE)`: replacing iff VALUE is itself replacing
+            // (typically a string). An AREA GNU rejects displays nothing.
+            None => display_spec_margin_value(spec)
+                .is_some_and(|value| display_single_spec_replacing_p(value, eval, frame_window_p)),
+        },
+    }
+}

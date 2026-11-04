@@ -69,8 +69,10 @@ pub mod chrome_dirty;
 pub mod display;
 #[path = "display/display_host/mod.rs"]
 pub mod display_host;
-#[path = "display/display_spec/mod.rs"]
-pub mod display_spec;
+// The display-property decode moved into the eval manifest (stage-4 K2
+// display_prop TD); the historical emacs_core path stays as a re-export for
+// the display engine and window input code above eval.
+pub use crate::emacs_core::eval::data::display_spec;
 #[path = "display/display_when/mod.rs"]
 pub mod display_when;
 #[path = "display/dispnew/mod.rs"]

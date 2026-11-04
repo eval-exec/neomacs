@@ -9,6 +9,7 @@ use crate::emacs_core::Context;
 use crate::emacs_core::error::FlowKind;
 use crate::emacs_core::eval::DisplayHost;
 use crate::emacs_core::eval::VariableView;
+use crate::emacs_core::eval::data::display_spec::display_prop_replacing_p;
 use crate::emacs_core::image_catalog::{
     ImageCatalog, ImageId, ImageLayoutExtent, ImageLoadAttempt, ImageLoadToken, ImageLookup,
     ImageMaskKind, ImageResolveRequest, ImageSizeLimit, ReadyImage, ResolvedImageMetadata,

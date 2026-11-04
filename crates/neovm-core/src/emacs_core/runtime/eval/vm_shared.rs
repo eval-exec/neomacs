@@ -203,7 +203,11 @@ impl Context {
             // the new position, mirroring GNU's `check_display`/`check_invisible`
             // cycling.
             let disp = self.apfp_char_property(pt, display_sym)?;
-            if !disp.is_nil() && super::super::xdisp::display_prop_replacing_p(disp, frame_window_p)
+            if !disp.is_nil()
+                && crate::emacs_core::eval::data::display_spec::display_prop_replacing_p(
+                    disp,
+                    frame_window_p,
+                )
             {
                 // Maximal run [dbeg, dend) around PT whose `display` value is
                 // `eq` to the one at PT (GNU `get_property_and_range`). Stepped
@@ -294,7 +298,10 @@ impl Context {
             let shown = {
                 let dprop = self.apfp_char_property(beg, display_sym)?;
                 !dprop.is_nil()
-                    && super::super::xdisp::display_prop_replacing_p(dprop, frame_window_p)
+                    && crate::emacs_core::eval::data::display_spec::display_prop_replacing_p(
+                        dprop,
+                        frame_window_p,
+                    )
             };
 
             if !modified && !shown && !ellipsis && beg < end {

@@ -5,6 +5,7 @@
 //! display-crate type.
 
 pub mod command_loop;
+pub mod display_spec;
 pub mod dynamic_module_registry;
 pub mod face;
 pub mod file_coding;
