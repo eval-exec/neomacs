@@ -46,7 +46,7 @@ pub(super) fn install_text_substrate_hooks() {
         text_perf_record,
     );
     crate::emacs_core::substrate_hooks::install_layout_mutation(
-        crate::window::note_char_table_layout_mutation,
+        crate::emacs_core::eval::data::window_state::note_char_table_layout_mutation,
     );
 }
 

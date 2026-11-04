@@ -29,7 +29,9 @@ pub(crate) fn builtin_get_pos_property_3(
     crate::emacs_core::textprop::builtin_get_pos_property_impl(
         eval.variables(),
         &[],
-        crate::window::char_property_window_lookup(Some(&eval.frames)),
+        crate::emacs_core::eval::data::window_state::char_property_window_lookup(Some(
+            &eval.frames,
+        )),
         &eval.edit.buffers,
         &args,
     )
@@ -305,7 +307,9 @@ pub(crate) fn builtin_next_single_char_property_change_4(
     let args: [Value; 4] = [position, prop, object, limit];
     crate::emacs_core::textprop::builtin_next_single_char_property_change_in_buffers_with_symbols(
         eval.variables(),
-        crate::window::char_property_window_lookup(Some(&eval.frames)),
+        crate::emacs_core::eval::data::window_state::char_property_window_lookup(Some(
+            &eval.frames,
+        )),
         &eval.edit.buffers,
         &args,
         eval.symbol_mode(),
@@ -318,7 +322,7 @@ pub(crate) fn builtin_previous_single_char_property_change(
 ) -> EvalResult {
     crate::emacs_core::textprop::builtin_previous_single_char_property_change_in_buffers_with_symbols(
         eval.variables(),
-        crate::window::char_property_window_lookup(Some(&eval.frames)),
+        crate::emacs_core::eval::data::window_state::char_property_window_lookup(Some(&eval.frames)),
         &eval.edit.buffers,
         args,
         eval.symbol_mode(),

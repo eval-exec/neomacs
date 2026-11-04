@@ -2068,7 +2068,7 @@ impl Context {
                 && let Some(window) = self.frames.lookup_window_mut(window_id)
                 && window.buffer_id() == Some(restored_buffer)
             {
-                crate::window::window_markers::set_window_point_with_marker(
+                crate::emacs_core::eval::data::window_markers::set_window_point_with_marker(
                     &mut self.edit.buffers,
                     window,
                     point,

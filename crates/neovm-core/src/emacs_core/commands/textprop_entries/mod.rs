@@ -35,7 +35,9 @@ pub(crate) fn builtin_get_char_property_3(
     builtin_get_char_property_with_window_lookup(
         eval.variables(),
         &eval.edit.buffers,
-        crate::window::char_property_window_lookup(Some(&eval.frames)),
+        crate::emacs_core::eval::data::window_state::char_property_window_lookup(Some(
+            &eval.frames,
+        )),
         &args,
     )
 }
@@ -48,7 +50,9 @@ pub(crate) fn builtin_get_char_property_and_overlay(
     builtin_get_char_property_and_overlay_with_window_lookup(
         eval.variables(),
         &eval.edit.buffers,
-        crate::window::char_property_window_lookup(Some(&eval.frames)),
+        crate::emacs_core::eval::data::window_state::char_property_window_lookup(Some(
+            &eval.frames,
+        )),
         args,
     )
 }

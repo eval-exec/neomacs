@@ -16,6 +16,7 @@ use neovm_edit::buffer::{
 };
 use neovm_edit::emacs_core::display_metrics::GuiFrameGeometryHints;
 use neovm_edit::emacs_core::display_metrics::{Rect, WindowId, WindowMargins};
+use neovm_edit::emacs_core::textprop::WindowBufferLookup;
 use neovm_value::display_vocab::{
     ChangeStamp, FRAME_ID_BASE, FrameId, FrameParam, FrameQueryParam, FrameVisibility,
     RenderFrameVisibility, SourcePreloadWindowRetirementRefusal, SplitDirection,
@@ -7126,3 +7127,48 @@ impl FrameManager {
 impl Frame {}
 
 impl FrameManager {}
+
+// --- E5-K2 char-property window lookup (stage-4 W2/E5) ---
+
+/// The edit layer's char-property WINDOW lookup for a caller that owns frames.
+pub(crate) fn char_property_window_lookup(
+    frames: Option<&FrameManager>,
+) -> impl Fn(WindowId) -> WindowBufferLookup + '_ {
+    move |window| match frames {
+        Some(frames) => char_property_window_buffer(frames, window),
+        None => WindowBufferLookup::NotAvailable,
+    }
+}
+
+/// Resolve a char-property WINDOW designator to its buffer for the edit layer.
+///
+/// GNU resolves a WINDOW object through `XWINDOW(object)->contents` and reports
+/// a dead or unknown window as `window-live-p`. The edit layer owns no display
+/// state, so its caller supplies this lookup.
+pub(crate) fn char_property_window_buffer(
+    frames: &FrameManager,
+    window: WindowId,
+) -> crate::emacs_core::textprop::WindowBufferLookup {
+    match frames.lookup_window(window).and_then(Window::buffer_id) {
+        Some(buffer) => crate::emacs_core::textprop::WindowBufferLookup::Buffer(buffer),
+        None => crate::emacs_core::textprop::WindowBufferLookup::Missing,
+    }
+}
+
+// --- E5-K2 data accessors (stage-4 W2/E5) ---
+
+impl Frame {}
+
+impl FrameManager {
+    /// Look up a window by id across every live frame, returning a
+    /// shared reference. Mirrors GNU's `decode_window` plus tree
+    /// walk.
+    pub fn lookup_window(&self, window_id: WindowId) -> Option<&Window> {
+        for frame in self.frames.values() {
+            if let Some(w) = frame.find_window(window_id) {
+                return Some(w);
+            }
+        }
+        None
+    }
+}

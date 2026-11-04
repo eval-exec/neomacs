@@ -74,8 +74,8 @@ const CARRIERS: &[(Placeholder, Swap)] = &[
     ),
     // Display-table and window-parameter layout epochs.
     (
-        crate::window::display_world_state_placeholder,
-        crate::window::swap_display_world_state,
+        crate::emacs_core::eval::data::window_state::world_state_placeholder,
+        crate::emacs_core::eval::data::window_state::swap_world_state,
     ),
     // The time-zone rule (GNU's TZ, process-wide).
     (

@@ -1938,8 +1938,6 @@ pub trait DisplayFrameManagerExt {
 
     fn is_window_object_id(&self, window_id: WindowId) -> bool;
 
-    fn lookup_window(&self, window_id: WindowId) -> Option<&Window>;
-
     fn window_new_pixel(&self, window_id: WindowId) -> Option<i64>;
 
     fn window_new_total(&self, window_id: WindowId) -> Option<i64>;
@@ -3176,18 +3174,6 @@ impl DisplayFrameManagerExt for FrameManager {
 
     fn is_window_object_id(&self, window_id: WindowId) -> bool {
         self.is_valid_window_id(window_id) || self.deleted_windows.contains_key(&window_id)
-    }
-
-    /// Look up a window by id across every live frame, returning a
-    /// shared reference. Mirrors GNU's `decode_window` plus tree
-    /// walk.
-    fn lookup_window(&self, window_id: WindowId) -> Option<&Window> {
-        for frame in self.frames.values() {
-            if let Some(w) = frame.find_window(window_id) {
-                return Some(w);
-            }
-        }
-        None
     }
 
     /// Read `w->new_pixel`. Mirrors GNU

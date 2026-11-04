@@ -220,7 +220,7 @@ impl Context {
             .get_mut(frame)
             .and_then(|frame| frame.find_window_mut(window))
         {
-            crate::window::window_markers::set_window_start_with_marker(
+            crate::emacs_core::eval::data::window_markers::set_window_start_with_marker(
                 &mut self.edit.buffers,
                 window,
                 start,
@@ -931,7 +931,7 @@ impl RedisplayTransaction<'_> {
         self.eval.sync_pending_resize_events();
         self.eval.gnu_prune_dead_owners();
         if let Some(buffer) = self.eval.edit.buffers.current_buffer() {
-            crate::window::window_markers::sync_all_frames_for_buffer(
+            crate::emacs_core::eval::data::window_markers::sync_all_frames_for_buffer(
                 &mut self.eval.frames,
                 buffer.id(),
             );
@@ -1185,7 +1185,7 @@ impl<'a> MiniDisplaySource<'a> {
                     // saved window snapshot roots those marker objects.
                     *position_markers = crate::emacs_core::eval::data::window_state::WindowPositionMarkerState::Detached;
                 }
-                crate::window::window_markers::attach_window_position_markers(
+                crate::emacs_core::eval::data::window_markers::attach_window_position_markers(
                     &mut scope.eval.edit.buffers,
                     window,
                 );
@@ -1214,7 +1214,7 @@ impl<'a> MiniDisplaySource<'a> {
                 .get_mut(self.request.frame)
                 .and_then(|frame| frame.find_window_mut(self.request.window))
             {
-                crate::window::window_markers::unchain_window_markers(
+                crate::emacs_core::eval::data::window_markers::unchain_window_markers(
                     &mut self.eval.edit.buffers,
                     window,
                 );
@@ -1236,17 +1236,17 @@ impl<'a> MiniDisplaySource<'a> {
                     *position_markers = markers;
                     *force_start = old_force_start;
                 }
-                crate::window::window_markers::set_window_start_with_marker(
+                crate::emacs_core::eval::data::window_markers::set_window_start_with_marker(
                     &mut self.eval.edit.buffers,
                     window,
                     start,
                 );
-                crate::window::window_markers::set_window_point_with_marker(
+                crate::emacs_core::eval::data::window_markers::set_window_point_with_marker(
                     &mut self.eval.edit.buffers,
                     window,
                     point,
                 );
-                crate::window::window_markers::set_window_old_point_with_marker(
+                crate::emacs_core::eval::data::window_markers::set_window_old_point_with_marker(
                     &mut self.eval.edit.buffers,
                     window,
                     old_point,

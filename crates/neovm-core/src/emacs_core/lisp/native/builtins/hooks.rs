@@ -161,14 +161,14 @@ impl WindowConfigurationSnapshot {
             frame_id: self.frame_id,
             change_stamp: self.change_stamp,
             tree:
-                crate::window::window_markers::clone_window_tree_with_independent_position_markers(
+                crate::emacs_core::eval::data::window_markers::clone_window_tree_with_independent_position_markers(
                     buffers, &self.tree,
                 ),
             selected_window: self.selected_window,
             current_buffer: self.current_buffer,
             minibuffer_window: self.minibuffer_window,
             minibuffer_leaf: self.minibuffer_leaf.as_ref().map(|window| {
-                crate::window::window_markers::clone_window_leaf_with_independent_position_markers(
+                crate::emacs_core::eval::data::window_markers::clone_window_leaf_with_independent_position_markers(
                     buffers, window,
                 )
             }),

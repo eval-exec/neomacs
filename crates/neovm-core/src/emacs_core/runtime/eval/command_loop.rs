@@ -721,7 +721,10 @@ impl Context {
         // may be stale.  Refresh them before redisplay reads positions.
         if let Some(buffer) = self.edit.buffers.current_buffer() {
             let buf_id = buffer.id();
-            crate::window::window_markers::sync_all_frames_for_buffer(&mut self.frames, buf_id);
+            crate::emacs_core::eval::data::window_markers::sync_all_frames_for_buffer(
+                &mut self.frames,
+                buf_id,
+            );
         }
         // GNU's selected-window point belongs to the selected window's buffer,
         // even when Lisp has temporarily made another buffer current.  Refresh
