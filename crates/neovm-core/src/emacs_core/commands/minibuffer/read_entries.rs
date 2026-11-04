@@ -15,7 +15,6 @@ use crate::emacs_core::eval::{Context, VariableView};
 use crate::emacs_core::intern::{intern, resolve_sym};
 use crate::emacs_core::keyboard::CommandLoopHost;
 use crate::emacs_core::minibuffer::MinibufferManagerExt;
-use crate::window::DisplayFrameManagerExt;
 use std::io::Write;
 
 use strum::{EnumString, IntoStaticStr};

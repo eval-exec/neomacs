@@ -1,8 +1,6 @@
 //! Selected-terminal keyboard forwarding and graphical connection lifetimes.
 
 use super::{Context, Value, intern};
-use crate::window::DisplayFrameExt;
-use crate::window::DisplayFrameManagerExt;
 
 impl Context {
     /// Synchronize keyboard-owned state after the display host assigns a

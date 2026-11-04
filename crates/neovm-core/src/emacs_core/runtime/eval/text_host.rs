@@ -10,8 +10,6 @@
 //! and no stale view can outlive it. Static dispatch, never `dyn`, one
 //! production impl. Precedent: `runtime/eval/edit_host.rs`.
 
-use crate::window::DisplayFrameExt;
-use crate::window::DisplayFrameManagerExt;
 use neovm_value::heap_types::{LispString, ProcessId};
 
 use super::{Context, VariableView};

@@ -10,20 +10,27 @@
 use self::pixel_input::SpaceInputExt;
 use self::string_property_input::{StringContentInputExt, StringDisplayInputsExt};
 use crate::buffer::{BufferId, BufferManager, LispCharPos1};
-use crate::emacs_core::value::{HashTableTest, Value};
+use crate::emacs_core::value::Value;
 use neomacs_display_protocol::TransitionDirection;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
-use std::hash::Hash;
 
 pub(crate) mod body;
 mod chrome;
 pub use chrome::WindowChromePresence;
 mod display;
-pub use display::current_char_table_layout_revision;
-pub(crate) use display::{
-    frame_line_height, swap_world_state as swap_display_world_state,
+pub use crate::emacs_core::eval::data::window_state::GUI_SCROLL_BAR_DEFAULT_WIDTH_PX;
+pub use crate::emacs_core::eval::data::window_state::{
+    current_char_table_layout_revision, resolve_window_scroll_bar_geometry,
+};
+pub(crate) use crate::emacs_core::eval::data::window_state::{
+    frame_has_horizontal_scroll_bar, frame_vertical_scroll_bar_side,
+    note_char_table_layout_mutation,
+};
+pub(crate) use crate::emacs_core::eval::data::window_state::{
+    swap_world_state as swap_display_world_state,
     world_state_placeholder as display_world_state_placeholder,
 };
+pub(crate) use display::frame_line_height;
 mod display_table_input;
 pub(crate) use display::WindowScrollUpdate;
 pub use display_table_input::LayoutDisplayTableInput;
@@ -78,14 +85,10 @@ pub use display_ext::{
     DisplayFrameExt, DisplayFrameManagerExt, DisplayWindowExt, DisplayWindowTreeExt,
 };
 
-pub use display::{
-    GUI_SCROLL_BAR_DEFAULT_WIDTH_PX, WindowBufferDisplayDefaults, WindowFringeDefaults,
-    WindowScrollBarDefaults, WindowScrollBarGeometry, resolve_window_scroll_bar_geometry,
-};
+pub use crate::emacs_core::eval::data::window_state::WindowScrollBarGeometry;
+pub use display::{WindowBufferDisplayDefaults, WindowFringeDefaults, WindowScrollBarDefaults};
 pub(crate) use display::{
     WindowLayoutQueryAdapter, frame_config_scroll_bar_height, frame_config_scroll_bar_width,
-    frame_has_horizontal_scroll_bar, frame_vertical_scroll_bar_side,
-    note_char_table_layout_mutation,
 };
 pub use frame_params::{
     CursorTypeSymbol, FrameFullscreen, FrameParam, FrameParamKey, FrameToolBarPosition,
@@ -142,22 +145,12 @@ pub(crate) use crate::emacs_core::eval::data::window_state::{
 
 static_assertions::assert_eq_size!(WindowSequenceOrigin, WindowId);
 
-pub(crate) use neovm_value::display_vocab::SourcePreloadWindowRetirementRefusal;
-
 pub use neovm_value::display_vocab::FrameId;
 
 pub(crate) use crate::emacs_core::eval::data::window_state::GuiResizeDelivery;
 pub use crate::emacs_core::eval::data::window_state::{GuiBarPresentation, PendingGuiResize};
 
 pub mod frame_alpha;
-
-/// Whether a logical frame selection may retarget existing focus redirections.
-/// GNU `do_switch_frame` tracks explicit selections, but not input events.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FrameFocusTracking {
-    FollowSelection,
-    Preserve,
-}
 
 /// GNU-compatible lifecycle state for a live frame.
 ///
@@ -583,8 +576,6 @@ pub enum WindowOldBuffer {
 
 pub use crate::emacs_core::eval::data::window_state::{Window, WindowTree};
 
-pub(crate) use crate::emacs_core::eval::data::window_state::redisplay_f32_bits;
-
 fn collect_leaf_window_paths(
     tree: &WindowTree,
     window: WindowId,
@@ -826,17 +817,7 @@ impl FrameDivider {
 
 pub use crate::emacs_core::eval::data::window_state::{Frame, FrameManager};
 
-/// The window and part a frame-relative coordinate resolved to.
-///
-/// GNU returns the window from `window_from_coordinates` and the part through
-/// an out-parameter; bundling them means a caller cannot use one without the
-/// other, and cannot pair a part with a window that was not the one classified.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct FrameCoordinateHit {
-    pub window: WindowId,
-    pub geometry: WindowPartGeometry,
-    pub coordinate: WindowCoordinate,
-}
+pub use crate::emacs_core::eval::data::window_state::FrameCoordinateHit;
 
 /// Result of a prepared minibuffer resize under one exclusive Context borrow.
 /// The copied outcome owns no Lisp values or cross-mutator state; an unchanged
@@ -851,46 +832,6 @@ pub enum PreparedMiniResizeOutcome {
 static_assertions::assert_impl_all!(PreparedMiniResizeOutcome: Copy, Send, Sync);
 const _: () = assert!(std::mem::size_of::<PreparedMiniResizeOutcome>() == 1);
 
-/// A nonempty geometry change tied to one live minibuffer allocation.
-#[derive(Debug, PartialEq)]
-#[must_use = "a resize plan must be applied or explicitly discarded"]
-pub struct MiniWindowResize {
-    frame: FrameId,
-    window: WindowId,
-    previous_height: f32,
-    height: f32,
-}
-
-impl MiniWindowResize {
-    pub fn previous_height_px(&self) -> f32 {
-        self.previous_height
-    }
-    pub fn height_px(&self) -> f32 {
-        self.height
-    }
-    pub fn is_growth(&self) -> bool {
-        self.height > self.previous_height
-    }
-}
-
-/// Whole rows of `unit` pixels that a mini-window `height` pixels tall holds.
-///
-/// GNU works in integer pixels; here a whole-row `f32` height can divide
-/// to `k - 1e-7`. Compare the reconstructed row boundary in pixels so an
-/// exactly representable allocation keeps its last row, without forgiving
-/// real sub-pixel shortfalls. This is only for row-based requests and caps;
-/// redisplay compares measured content directly in pixels.
-fn mini_window_rows(height: f32, unit: f32) -> usize {
-    let unit = unit.max(1.0);
-    let rows = height / unit;
-    let nearest = rows.round();
-    if nearest * unit <= height {
-        nearest.max(0.0) as usize
-    } else {
-        rows.floor().max(0.0) as usize
-    }
-}
-
 // ---------------------------------------------------------------------------
 // FrameManager
 // ---------------------------------------------------------------------------
@@ -904,37 +845,6 @@ fn is_generated_tty_frame_name(value: Value) -> bool {
                 !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
             })
         })
-}
-
-impl<Scope> Default for PendingIntentLedger<Scope> {
-    fn default() -> Self {
-        Self {
-            by_scope: HashMap::default(),
-        }
-    }
-}
-
-impl<Scope> PendingIntentLedger<Scope>
-where
-    Scope: Copy + Eq + Hash,
-{
-    fn record(&mut self, scope: Scope, intent: NavigationIntentToken) {
-        self.by_scope.insert(scope, intent);
-    }
-
-    fn pending(&self, scope: Scope) -> Option<NavigationIntentToken> {
-        self.by_scope.get(&scope).copied()
-    }
-
-    fn acknowledge(&mut self, scope: Scope, observed: NavigationIntentToken) {
-        if self.pending(scope) == Some(observed) {
-            self.by_scope.remove(&scope);
-        }
-    }
-
-    fn remove(&mut self, scope: Scope) {
-        self.by_scope.remove(&scope);
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1924,3 +1834,8 @@ mod eob_overlay_motion_tests;
 #[cfg(test)]
 #[path = "tests/resize_commit_test.rs"]
 mod resize_commit_tests;
+
+pub use crate::emacs_core::eval::data::window_state::MiniWindowResize;
+pub(crate) use crate::emacs_core::eval::data::window_state::mini_window_rows;
+
+pub use crate::emacs_core::eval::data::window_state::FrameFocusTracking;

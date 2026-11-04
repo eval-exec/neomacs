@@ -10,7 +10,6 @@ use crate::emacs_core::intern::WellKnown;
 use crate::emacs_core::value::Value;
 use crate::window::DisplayFrameExt;
 use crate::window::DisplayFrameManagerExt;
-use std::cell::Cell;
 
 /// One complete marker-backed viewport transition chosen by a scroll engine.
 /// Row-based terminal and pixel-based graphical scrolling share its commit;
@@ -119,42 +118,6 @@ pub(crate) type WindowLayoutQueryCallback = Box<
     ) -> crate::window::WindowLayoutQueryOutcome,
 >;
 
-thread_local! {
-    /// Mutation generation for retained-layout inputs that contain char tables.
-    ///
-    /// Char tables are mutable heap objects, so their tagged `Value` identity
-    /// does not change when a display table is edited in place. Keeping the
-    /// epoch local to the evaluator thread avoids unrelated parallel contexts
-    /// invalidating one another while making every in-thread mutation visible.
-    static CHAR_TABLE_LAYOUT_MUTATION_EPOCH: Cell<u64> = const { Cell::new(0) };
-
-    /// Unique identities for window-parameter states created on this
-    /// evaluator thread.  Window trees are cloned for saved configurations,
-    /// so a counter stored on the window itself can fork and later collide.
-    static WINDOW_PARAMETERS_LAYOUT_GENERATION: Cell<u64> = const { Cell::new(0) };
-}
-
-/// Existing evaluator-thread char-table invalidation shared by freshness
-/// validation and retained-row reuse. This is not a per-table revision.
-pub fn current_char_table_layout_revision() -> super::CharTableLayoutRevision {
-    super::CharTableLayoutRevision::from_counter(CHAR_TABLE_LAYOUT_MUTATION_EPOCH.with(Cell::get))
-}
-
-pub(crate) fn note_char_table_layout_mutation() {
-    CHAR_TABLE_LAYOUT_MUTATION_EPOCH.with(|epoch| epoch.set(epoch.get().wrapping_add(1)));
-}
-
-pub(super) fn next_window_parameters_generation() -> u64 {
-    WINDOW_PARAMETERS_LAYOUT_GENERATION.with(|generation| {
-        let next = generation
-            .get()
-            .checked_add(1)
-            .expect("window parameter layout generation exhausted");
-        generation.set(next);
-        next
-    })
-}
-
 #[derive(Clone, Copy, Debug, Default)]
 pub struct WindowBufferDisplayDefaults {
     pub margins: Option<WindowMargins>,
@@ -203,21 +166,6 @@ impl WindowScrollBarDefaults {
     }
 }
 
-/// Effective scroll-bar geometry for one live window.
-///
-/// GNU keeps raw scroll-bar settings on the window, resolves `t` through
-/// frame defaults, and then exposes area macros such as
-/// `WINDOW_SCROLL_BAR_AREA_WIDTH`.  Keep that resolution in core so layout,
-/// Lisp-visible queries, and later input hit-testing cannot drift apart.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct WindowScrollBarGeometry {
-    /// Effective vertical type after frame inheritance (`left`/`right`/nil).
-    pub vertical_type: Option<Value>,
-    pub left_area_width: i64,
-    pub right_area_width: i64,
-    pub horizontal_area_height: i64,
-}
-
 pub(crate) fn frame_line_height(frame: &Frame) -> i64 {
     frame.char_height.max(1.0).round() as i64
 }
@@ -228,134 +176,6 @@ pub(crate) fn canon_y_from_pixel_y(frame: &Frame, y: i64) -> Value {
         Value::make_float(y as f64 / unit as f64)
     } else {
         Value::fixnum(y / unit)
-    }
-}
-
-pub(crate) fn frame_default_left_fringe_width(frame: &Frame) -> i32 {
-    frame
-        .known_parameter(FrameParam::LeftFringe)
-        .and_then(|v| v.as_int())
-        .and_then(|value| i32::try_from(value).ok())
-        .unwrap_or(8)
-}
-
-pub(crate) fn frame_default_right_fringe_width(frame: &Frame) -> i32 {
-    frame
-        .known_parameter(FrameParam::RightFringe)
-        .and_then(|v| v.as_int())
-        .and_then(|value| i32::try_from(value).ok())
-        .unwrap_or(8)
-}
-
-pub(crate) fn frame_vertical_scroll_bar_side(frame: &Frame) -> Option<Value> {
-    // GNU gates the scroll-bar type on FRAME_WINDOW_P /
-    // FRAME_HAS_VERTICAL_SCROLL_BARS (src/window.c), so a terminal frame has
-    // no scroll bar no matter what its parameter alist says:
-    // `set-frame-parameter' on a tty is a no-op and every query stays zero.
-    // Trusting the stored parameter here reserved a column the TTY backend
-    // never paints and shrank window-body-width 80 -> 79.
-    if frame.effective_window_system().is_none() {
-        return None;
-    }
-    let raw = frame
-        .known_parameter(FrameParam::VerticalScrollBars)
-        .unwrap_or_else(|| Value::symbol("right"));
-    match VerticalScrollBarType::from_symbol_value(&raw) {
-        Some(side) => Some(side.symbol()),
-        _ if raw.is_nil() => None,
-        _ if raw.is_truthy() => Some(Value::symbol("right")),
-        _ => None,
-    }
-}
-
-pub(crate) fn frame_has_horizontal_scroll_bar(frame: &Frame) -> bool {
-    // Same FRAME_WINDOW_P gate as the vertical resolver: a tty frame has no
-    // scroll bar, so its horizontal parameter is inert.
-    if frame.effective_window_system().is_none() {
-        return false;
-    }
-    let raw = frame
-        .known_parameter(FrameParam::HorizontalScrollBars)
-        .unwrap_or(Value::NIL);
-    HorizontalScrollBarType::from_symbol_value(&raw).is_some() || raw.is_truthy()
-}
-
-/// Pixel thickness of a GUI frame's scroll bar when the frame names none.
-///
-/// GNU does not derive this from the character cell.  `x_set_scroll_bar_default_width`
-/// and `x_set_scroll_bar_default_height` (src/xfns.c:2393-2438) take the
-/// toolkit default: the GTK theme's `scrollbar-width`/`scrollbar-height`, or
-/// the constant 16 in a build without a toolkit.  The Adwaita theme the
-/// oracle runs under answers 16 as well, so a fresh GUI frame reserves a
-/// 16-pixel band on each side (COLUMNS = (16 + char width - 1) / char width,
-/// `x_set_scroll_bar_default_width`'s rounding at :2403).
-///
-/// Neomacs paints its own scroll bars, so its analogue of the toolkit default
-/// is GNU's toolkit-independent constant, not `char_width`: the two differ on
-/// every font whose cell is not 16 pixels wide.
-///
-/// Every place that reserves the default band must use THIS constant.  The
-/// initial GUI frame's size request (`startup_dimensions`, crates/neomacs)
-/// used to reserve one character cell, so with any other cell width the
-/// native window was a fraction of a column too narrow and the first frame
-/// came up one column short of the requested grid.
-pub const GUI_SCROLL_BAR_DEFAULT_WIDTH_PX: u32 = 16;
-
-pub(crate) fn frame_config_scroll_bar_width(frame: &Frame) -> i32 {
-    frame
-        .known_parameter(FrameParam::ScrollBarWidth)
-        .and_then(|v| v.as_int())
-        .and_then(|value| i32::try_from(value).ok())
-        .filter(|value| *value > 0)
-        .unwrap_or(GUI_SCROLL_BAR_DEFAULT_WIDTH_PX as i32)
-}
-
-pub(crate) fn frame_config_scroll_bar_height(frame: &Frame) -> i32 {
-    frame
-        .known_parameter(FrameParam::ScrollBarHeight)
-        .and_then(|v| v.as_int())
-        .and_then(|value| i32::try_from(value).ok())
-        .filter(|value| *value > 0)
-        .unwrap_or(GUI_SCROLL_BAR_DEFAULT_WIDTH_PX as i32)
-}
-
-fn effective_vertical_scroll_bar_type(
-    frame: &Frame,
-    display: &WindowDisplayState,
-) -> Option<Value> {
-    match VerticalScrollBarType::from_symbol_value(&display.vertical_scroll_bar_type) {
-        Some(side) => Some(side.symbol()),
-        _ if display.vertical_scroll_bar_type.is_nil() => None,
-        _ if display.vertical_scroll_bar_type.is_truthy() => frame_vertical_scroll_bar_side(frame),
-        _ => None,
-    }
-}
-
-fn effective_horizontal_scroll_bar_enabled(
-    frame: &Frame,
-    display: &WindowDisplayState,
-    is_minibuffer: bool,
-) -> bool {
-    match HorizontalScrollBarType::from_symbol_value(&display.horizontal_scroll_bar_type) {
-        Some(_) => true,
-        _ if display.horizontal_scroll_bar_type.is_nil() => false,
-        _ if is_minibuffer => false,
-        _ if display.horizontal_scroll_bar_type.is_truthy() => {
-            frame_has_horizontal_scroll_bar(frame)
-        }
-        _ => false,
-    }
-}
-
-pub(crate) fn vertical_scroll_bar_area_width(frame: &Frame, display: &WindowDisplayState) -> i64 {
-    if effective_vertical_scroll_bar_type(frame, display).is_some() {
-        i64::from(if display.scroll_bar_width >= 0 {
-            display.scroll_bar_width
-        } else {
-            frame_config_scroll_bar_width(frame)
-        })
-    } else {
-        0
     }
 }
 
@@ -383,22 +203,6 @@ pub(crate) fn right_scroll_bar_area_width(frame: &Frame, display: &WindowDisplay
     }
 }
 
-pub(crate) fn horizontal_scroll_bar_area_height(
-    frame: &Frame,
-    display: &WindowDisplayState,
-    is_minibuffer: bool,
-) -> i64 {
-    if effective_horizontal_scroll_bar_enabled(frame, display, is_minibuffer) {
-        i64::from(if display.scroll_bar_height >= 0 {
-            display.scroll_bar_height
-        } else {
-            frame_config_scroll_bar_height(frame)
-        })
-    } else {
-        0
-    }
-}
-
 pub(crate) fn vertical_scroll_bar_cols(frame: &Frame, display: &WindowDisplayState) -> i64 {
     let width = vertical_scroll_bar_area_width(frame, display);
     if width == 0 {
@@ -406,55 +210,6 @@ pub(crate) fn vertical_scroll_bar_cols(frame: &Frame, display: &WindowDisplaySta
     } else {
         (width + frame.char_width.max(1.0).round() as i64 - 1)
             / frame.char_width.max(1.0).round() as i64
-    }
-}
-
-pub(crate) fn horizontal_scroll_bar_lines(
-    frame: &Frame,
-    display: &WindowDisplayState,
-    is_minibuffer: bool,
-) -> i64 {
-    let height = horizontal_scroll_bar_area_height(frame, display, is_minibuffer);
-    if height == 0 {
-        0
-    } else {
-        (height + frame.char_height.max(1.0).round() as i64 - 1)
-            / frame.char_height.max(1.0).round() as i64
-    }
-}
-
-pub fn resolve_window_scroll_bar_geometry(
-    frame: &Frame,
-    display: &WindowDisplayState,
-    is_minibuffer: bool,
-) -> WindowScrollBarGeometry {
-    let vertical_type = effective_vertical_scroll_bar_type(frame, display);
-    let vertical_area_width = if vertical_type.is_some() {
-        vertical_scroll_bar_area_width(frame, display)
-    } else {
-        0
-    };
-    let horizontal_area_height = horizontal_scroll_bar_area_height(frame, display, is_minibuffer);
-
-    WindowScrollBarGeometry {
-        vertical_type,
-        left_area_width: if matches!(
-            vertical_type.and_then(|value| VerticalScrollBarType::from_symbol_value(&value)),
-            Some(VerticalScrollBarType::Left)
-        ) {
-            vertical_area_width
-        } else {
-            0
-        },
-        right_area_width: if matches!(
-            vertical_type.and_then(|value| VerticalScrollBarType::from_symbol_value(&value)),
-            Some(VerticalScrollBarType::Right)
-        ) {
-            vertical_area_width
-        } else {
-            0
-        },
-        horizontal_area_height,
     }
 }
 
@@ -1066,25 +821,6 @@ impl crate::emacs_core::eval::Context {
     }
 }
 
-/// Round 3w (plan-3w.md section 7, C1): this World state lives in a
-/// thread-local while its World's Baton holder runs, and in the World while
-/// it is parked; the Green runtime moves it at each park and resume, so
-/// every Lisp thread sees one value, as in GNU. (N-mutator mode needs shared
-/// storage instead: a recorded obligation.)
-#[cold]
-pub(crate) fn world_state_placeholder() -> Box<dyn std::any::Any> {
-    Box::new((0_u64, 0_u64))
-}
-
-#[cold]
-pub(crate) fn swap_world_state(slot: &mut dyn std::any::Any) {
-    let slot = slot
-        .downcast_mut::<(u64, u64)>()
-        .expect("carried World state");
-    CHAR_TABLE_LAYOUT_MUTATION_EPOCH.with(|cell| slot.0 = cell.replace(slot.0));
-    WINDOW_PARAMETERS_LAYOUT_GENERATION.with(|cell| slot.1 = cell.replace(slot.1));
-}
-
 #[cfg(test)]
 #[path = "tests/attempt_freshness_reuse_test.rs"]
 mod attempt_freshness_reuse_tests;
@@ -1092,3 +828,10 @@ mod attempt_freshness_reuse_tests;
 #[cfg(test)]
 #[path = "tests/buffer_layout_projection_test.rs"]
 mod buffer_layout_projection_tests;
+
+pub(crate) use crate::emacs_core::eval::data::window_state::{
+    current_char_table_layout_revision, effective_horizontal_scroll_bar_enabled,
+    effective_vertical_scroll_bar_type, frame_config_scroll_bar_height,
+    frame_config_scroll_bar_width, frame_has_horizontal_scroll_bar, frame_vertical_scroll_bar_side,
+    horizontal_scroll_bar_area_height, horizontal_scroll_bar_lines, vertical_scroll_bar_area_width,
+};

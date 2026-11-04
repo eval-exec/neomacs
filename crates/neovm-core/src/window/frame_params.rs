@@ -149,37 +149,7 @@ impl From<FrameQueryParam> for FrameParamKey {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum FrameParamKey {
-    Known(FrameParam),
-    Unknown(SymId),
-}
-
-impl FrameParamKey {
-    pub fn from_symbol_id(symbol: SymId) -> Self {
-        FrameParam::from_symbol_id(symbol)
-            .map(Self::Known)
-            .unwrap_or(Self::Unknown(symbol))
-    }
-
-    pub fn from_symbol_value(value: Value) -> Option<Self> {
-        value.as_bare_symbol_id().map(Self::from_symbol_id)
-    }
-
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Known(param) => param.name(),
-            Self::Unknown(symbol) => resolve_sym(symbol),
-        }
-    }
-
-    pub fn symbol(self) -> Value {
-        match self {
-            Self::Known(param) => param.symbol(),
-            Self::Unknown(symbol) => Value::from_sym_id(symbol),
-        }
-    }
-}
+pub use crate::emacs_core::eval::data::window_state::FrameParamKey;
 
 impl From<FrameParam> for FrameParamKey {
     fn from(value: FrameParam) -> Self {

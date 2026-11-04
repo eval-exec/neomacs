@@ -148,11 +148,11 @@ pub(crate) struct WindowConfigurationSnapshot {
     /// rather than a bare `Window` for the same reason `Frame` holds one --
     /// when the tree stores its nodes in an arena, a snapshot has to carry its
     /// own nodes or its child ids refer to windows that are not there.
-    pub(crate) tree: crate::window::WindowTree,
+    pub(crate) tree: crate::emacs_core::eval::data::window_state::WindowTree,
     pub(crate) selected_window: neovm_edit::emacs_core::display_metrics::WindowId,
     pub(crate) current_buffer: Option<crate::buffer::BufferId>,
     pub(crate) minibuffer_window: Option<neovm_edit::emacs_core::display_metrics::WindowId>,
-    pub(crate) minibuffer_leaf: Option<crate::window::Window>,
+    pub(crate) minibuffer_leaf: Option<crate::emacs_core::eval::data::window_state::Window>,
 }
 
 impl WindowConfigurationSnapshot {

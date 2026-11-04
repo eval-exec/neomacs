@@ -30,11 +30,7 @@ pub enum PresentationPrepareError {
     InvalidGeometry(GeometryError),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PresentationActivateError {
-    UnknownPresentation(PresentationId),
-}
-
+pub use crate::emacs_core::eval::data::window_state::PresentationActivateError;
 pub use crate::emacs_core::eval::data::window_state::{
     CellOrigin, FrameLogicalSpace, GeometryError, LogicalPx, PixelPoint, PixelRect,
     PresentationFrame, PresentationGeometry, PresentationWindow, WindowBodySpace, WindowLocalSpace,

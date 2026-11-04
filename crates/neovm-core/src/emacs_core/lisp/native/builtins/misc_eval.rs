@@ -7,7 +7,6 @@ use crate::emacs_core::error::{
 };
 use crate::emacs_core::symbol::Obarray;
 use crate::tagged::value::SymbolMode;
-use crate::window::DisplayFrameManagerExt;
 
 pub(crate) fn builtin_get_pos_property(
     eval: &mut super::eval::Context,
@@ -2167,9 +2166,7 @@ fn process_cpu_time_micros() -> i64 {
         }
         windows => {
             use windows_sys::Win32::Foundation::FILETIME;
-            use windows_sys::Win32::System::Threading::{
-                GetCurrentProcess, GetProcessTimes,
-            };
+            use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
 
             let mut creation = FILETIME::default();
             let mut exit = FILETIME::default();

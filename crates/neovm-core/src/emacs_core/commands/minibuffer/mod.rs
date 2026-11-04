@@ -582,8 +582,6 @@ pub trait MinibufferManagerExt {
 
     fn current_mut(&mut self) -> Option<&mut MinibufferState>;
 
-    fn depth(&self) -> usize;
-
     fn is_active(&self) -> bool;
 
     fn has_buffer(&self, buffer_id: BufferId) -> bool;
@@ -836,11 +834,6 @@ impl MinibufferManagerExt for MinibufferManager {
     /// Mutable reference to the current (innermost) minibuffer state.
     fn current_mut(&mut self) -> Option<&mut MinibufferState> {
         self.state_stack.last_mut()
-    }
-
-    /// Current recursive minibuffer depth (0 = not in minibuffer).
-    fn depth(&self) -> usize {
-        self.state_stack.len()
     }
 
     /// Whether any minibuffer is currently active.

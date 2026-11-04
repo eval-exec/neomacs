@@ -2,14 +2,12 @@
 //! No public API here grants geometry, coverage or cached-query authority.
 use super::Context;
 use super::display_query_hooks;
+use crate::emacs_core::eval::data::face::{FaceTableIdentity, RealizationEpoch};
 use crate::emacs_core::eval::protocol::{InertRowsHostAuthority, actual_rows_host_type};
-use crate::face::{FaceTableIdentity, realization::RealizationEpoch};
 use crate::tagged::{
     collection_reads::CollectionReads,
     gc::{self, HeapIdentity, RowsOwnedDomain},
 };
-use crate::window::DisplayFrameExt;
-use crate::window::DisplayFrameManagerExt;
 use neovm_value::display_vocab::FrameId;
 use std::any::TypeId;
 use std::{marker::PhantomData, ops::Range};

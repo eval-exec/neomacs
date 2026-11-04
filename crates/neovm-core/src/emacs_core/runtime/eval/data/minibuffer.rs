@@ -221,3 +221,10 @@ impl Default for MinibufferManager {
         }
     }
 }
+
+impl MinibufferManager {
+    /// Current recursive minibuffer depth (0 = not in minibuffer).
+    pub fn depth(&self) -> usize {
+        self.state_stack.len()
+    }
+}

@@ -15,8 +15,9 @@ use crate::emacs_core::eval::input_hooks::CommandInputWaitOutcome;
 use crate::emacs_core::eval::keymap_lookup::KeymapMarker;
 use crate::emacs_core::intern::{WellKnown, intern, resolve_sym};
 use crate::tagged::value::SymbolMode;
+use crate::window::DisplayFrameExt;
 use crate::window::geometry::DisplayGeometryExt;
-use crate::window::{DisplayFrameExt, DisplayFrameManagerExt};
+
 use neovm_value::keyboard_pure::KEY_CHAR_META;
 // decode_storage_char_codes import removed — now using emacs_char directly
 use crate::emacs_core::value::{Value, ValueKind, VecLikeType};
@@ -1525,7 +1526,7 @@ fn mouse_button_slot(button: MouseButton) -> usize {
 // ---------------------------------------------------------------------------
 
 fn apply_resize_input_event_in_keyboard_runtime(
-    frames: &mut crate::window::FrameManager,
+    frames: &mut crate::emacs_core::eval::data::window_state::FrameManager,
     buffers: &crate::buffer::BufferManager,
     width: u32,
     height: u32,
@@ -1558,7 +1559,7 @@ fn apply_resize_input_event_in_keyboard_runtime(
 }
 
 fn pending_live_gui_resize_target(
-    frames: &crate::window::FrameManager,
+    frames: &crate::emacs_core::eval::data::window_state::FrameManager,
     emacs_frame_id: u64,
 ) -> Option<neovm_value::display_vocab::FrameId> {
     let target_fid = if emacs_frame_id == 0 {
@@ -1576,7 +1577,7 @@ fn pending_live_gui_resize_target(
 }
 
 fn sync_pending_resize_events_in_keyboard_runtime(
-    frames: &mut crate::window::FrameManager,
+    frames: &mut crate::emacs_core::eval::data::window_state::FrameManager,
     buffers: &crate::buffer::BufferManager,
     input_rx: &mut super::host_input::HostInputReceiver,
     keyboard: &mut KeyboardRuntime,
@@ -1690,7 +1691,7 @@ fn sync_pending_resize_events_in_keyboard_runtime(
 }
 
 fn sync_opening_gui_frame_size_from_host_in_keyboard_runtime(
-    frames: &mut crate::window::FrameManager,
+    frames: &mut crate::emacs_core::eval::data::window_state::FrameManager,
     buffers: &crate::buffer::BufferManager,
     display_host: Option<&dyn crate::emacs_core::eval::DisplayHost>,
 ) -> Option<neovm_value::display_vocab::FrameId> {
@@ -5507,7 +5508,7 @@ impl crate::emacs_core::eval::Context {
 
     fn key_sequence_target_buffer_id(
         events: &[Value],
-        frames: &crate::window::FrameManager,
+        frames: &crate::emacs_core::eval::data::window_state::FrameManager,
         mode: SymbolMode,
     ) -> Option<crate::buffer::BufferId> {
         let position = Self::key_sequence_lookup_position(events, mode)?;

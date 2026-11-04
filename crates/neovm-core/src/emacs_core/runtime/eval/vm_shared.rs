@@ -4,9 +4,6 @@
 //! the same view of `Context` and the parent's private items (`use super::*`).
 
 use super::*;
-use crate::emacs_core::minibuffer::MinibufferManagerExt;
-use crate::window::DisplayFrameExt;
-use crate::window::DisplayFrameManagerExt;
 use neovm_value::display_vocab::text_prop_means_invisible;
 
 impl Context {

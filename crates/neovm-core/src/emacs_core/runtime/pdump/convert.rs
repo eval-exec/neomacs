@@ -45,6 +45,7 @@ use crate::emacs_core::eval::Context;
 use crate::emacs_core::eval::data::face::{
     BoxBorder, BoxStyle, Color, FaceHeight, Underline, UnderlinePosition, UnderlineStyle,
 };
+use crate::emacs_core::eval::data::face::{Face, FaceDecoration, FaceTable};
 use crate::emacs_core::eval::interactive_registry::{InteractiveRegistry, InteractiveSpec};
 use crate::emacs_core::eval::subr_abi::SubrObj;
 use crate::emacs_core::fontset::{
@@ -69,7 +70,6 @@ use crate::emacs_core::value::{ValueKind, VecLikeType};
 use crate::emacs_core::value::{
     get_string_text_properties_for_value, set_string_text_properties_for_value,
 };
-use crate::face::{Face, FaceDecoration, FaceTable};
 use crate::heap_types::LispString;
 use crate::tagged::gc::with_tagged_heap;
 use crate::tagged::header::{

@@ -6,8 +6,6 @@
 //! (which keeps only the typed payloads) so the bottom `neovm-value` layer
 //! never reaches up into the printer.
 
-use crate::window::DisplayFrameExt;
-use crate::window::DisplayFrameManagerExt;
 use std::cell::RefCell;
 
 use strum::{EnumString, IntoStaticStr};

@@ -1,7 +1,5 @@
 //! Context — special forms, function application, and dispatch.
 
-use crate::window::DisplayFrameExt;
-use crate::window::DisplayFrameManagerExt;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -49,8 +47,8 @@ use super::symbol::{CanonicalAccess, ConstantWrite, Obarray};
 use super::threads::ThreadManager;
 use super::value::*;
 use crate::buffer::{BufferId, BufferManager, CharPos0, EmacsBytePos, LispCharPos1};
+use crate::emacs_core::eval::data::face::FaceTable;
 use crate::emacs_core::eval::data::process_state::ProcessManager;
-use crate::face::FaceTable;
 use crate::gc_trace::GcTrace;
 use crate::tagged::header::{CLOSURE_ARGLIST, SubrDispatchKind, SubrInteractivity};
 use crate::window::{
@@ -566,7 +564,7 @@ struct RedisplayWindowSignature {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct RedisplayBufferSignature {
-    layout: crate::window::BufferLayoutInputState,
+    layout: crate::emacs_core::eval::data::layout_input::BufferLayoutInputState,
     save_modified_tick: i64,
     autosave_modified_tick: i64,
     point: CharPos0,
@@ -2327,7 +2325,7 @@ pub struct GuiFrameHostRequest {
 impl GuiFrameHostRequest {
     /// Snapshot final frame parameters without transferring evaluator-owned
     /// values to the native thread. Callers retain their creation guards.
-    pub fn for_frame(frame: &crate::window::Frame) -> Self {
+    pub fn for_frame(frame: &crate::emacs_core::eval::data::window_state::Frame) -> Self {
         Self {
             frame_id: frame.id,
             width: frame.width,
