@@ -351,8 +351,6 @@ pub(crate) mod platform_facts;
 pub(crate) mod post_image_init;
 #[path = "system/process/mod.rs"]
 pub mod process;
-#[path = "system/profiler/mod.rs"]
-pub(crate) mod profiler;
 #[path = "system/shell_file_name/mod.rs"]
 pub(crate) mod shell_file_name;
 #[path = "system/sqlite/mod.rs"]

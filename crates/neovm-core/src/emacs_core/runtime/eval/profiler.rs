@@ -1,12 +1,20 @@
+//! GNU profiler state and sampling behaviour (stage-4 W2/E6a: STATE-DOWN).
+//!
+//! Moved verbatim from `emacs_core::system::profiler` into the evaluator
+//! layer: the state is reached only from eval (Context field, green
+//! owner-carried handoff, GC root trace) and its dependencies are all
+//! eval-manifest or lower (bytecode, value, std).  The builtins and the
+//! diagnostics server keep reaching it through the same `Context` methods.
+
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodePolicyExt;
 use std::time::Instant;
 
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
-use super::eval::{ASYNC_ATTENTION, AsyncSource, Context, SpecBinding};
-use super::intern::resolve_sym;
-use super::value::{
+use super::{ASYNC_ATTENTION, AsyncSource, Context, SpecBinding};
+use crate::emacs_core::intern::resolve_sym;
+use crate::emacs_core::value::{
     FunctionSourceIdentity, HashKey, HashTableTest, Value, build_hash_table_literal_value,
 };
 

@@ -9,10 +9,10 @@
 //! it. (N-mutator mode needs shared storage instead: a recorded obligation.)
 
 use super::super::Context;
+use super::super::profiler::ProfilerState;
 use super::super::redisplay_hooks::RedisplayHookOwnership;
 use crate::buffer::BufferId;
 use crate::emacs_core::eval::data::window_state::ChromeDirty;
-use crate::emacs_core::profiler::ProfilerState;
 use crate::emacs_core::value::Value;
 use neovm_edit::emacs_core::display_metrics::WindowId;
 use rustc_hash::FxHashMap;
