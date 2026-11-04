@@ -16,6 +16,7 @@ use crate::emacs_core::keyboard::CommandLoopHost;
 use crate::emacs_core::keymap::KeymapMarker;
 use crate::emacs_core::wait::CommandInputWaitOutcome;
 use crate::tagged::value::SymbolMode;
+use crate::window::geometry::DisplayGeometryExt;
 use crate::window::{DisplayFrameExt, DisplayFrameManagerExt};
 use neovm_value::keyboard_pure::KEY_CHAR_META;
 // decode_storage_char_codes import removed — now using emacs_char directly

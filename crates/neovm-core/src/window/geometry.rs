@@ -15,14 +15,12 @@
 //! a borrowed, per-rectangle-validated view, so a query that needs one
 //! width does not pay for the fourteen-rectangle owned conversion.
 
-use super::{FrameId, LispCharPos1, WindowChromeLine, WindowDisplaySnapshot, WindowId};
+use super::{FrameId, LispCharPos1, WindowChromeLine, WindowId};
 use neomacs_display_protocol::frame_glyphs::PresentedWindowRegions;
 use neomacs_display_protocol::types::Rect as TransportRect;
-use rustc_hash::FxHashMap as HashMap;
 use std::marker::PhantomData;
 
 mod positions;
-use positions::{GeometryPositionsMode, PresentationPositions, geometry_positions_mode};
 
 pub use crate::emacs_core::eval::data::window_state::PresentationId;
 
@@ -38,256 +36,13 @@ pub enum PresentationActivateError {
 }
 
 pub use crate::emacs_core::eval::data::window_state::{
-    CellOrigin, FrameLogicalSpace, LogicalPx, PixelPoint, PixelRect, PresentationFrame,
-    PresentationGeometry, PresentationWindow, WindowBodySpace, WindowLocalSpace, WindowRegions,
+    CellOrigin, FrameLogicalSpace, GeometryError, LogicalPx, PixelPoint, PixelRect,
+    PresentationFrame, PresentationGeometry, PresentationWindow, WindowBodySpace, WindowLocalSpace,
+    WindowRegions,
 };
 pub(crate) use crate::emacs_core::eval::data::window_state::{
-    Column, Line, PresentationCursor, PresentationPosition, PresentedBufferPositionMatch,
+    PresentationPosition, PresentedBufferPositionMatch,
 };
-
-impl PresentationGeometry {
-    pub(crate) fn new<S: std::borrow::Borrow<WindowDisplaySnapshot>>(
-        frame: FrameId,
-        presentation: PresentationId,
-        snapshots: impl IntoIterator<Item = S>,
-    ) -> Result<Self, GeometryError> {
-        let mut windows = HashMap::default();
-        for snapshot in snapshots {
-            let window = PresentationWindow::from_snapshot(snapshot.borrow())?;
-            let id = window.id;
-            if windows.insert(id, window).is_some() {
-                return Err(GeometryError::DuplicateWindow(id));
-            }
-        }
-        let placement = neomacs_display_protocol::PresentedFramePlacement::new(
-            neomacs_display_protocol::DisplayFrameId::new(frame.0),
-            neomacs_display_protocol::PresentationId::new(presentation.get()),
-            None,
-            neomacs_display_protocol::ParentFrameRect::new(0.0, 0.0, 0.0, 0.0)
-                .expect("zero root extent is valid for compatibility construction"),
-            0,
-        );
-        Ok(Self {
-            presentation,
-            frame: PresentationFrame {
-                id: frame,
-                placement,
-                windows,
-            },
-        })
-    }
-
-    #[allow(clippy::too_many_arguments)] // constructor receives the complete immutable frame placement
-    pub(crate) fn new_with_frame_placement<S: std::borrow::Borrow<WindowDisplaySnapshot>>(
-        frame: FrameId,
-        presentation: PresentationId,
-        parent: Option<FrameId>,
-        left: i64,
-        top: i64,
-        width: u32,
-        height: u32,
-        z_order: i32,
-        snapshots: impl IntoIterator<Item = S>,
-    ) -> Result<Self, GeometryError> {
-        let mut geometry = Self::new(frame, presentation, snapshots)?;
-        let (left, top) = if parent.is_some() {
-            (left as f32, top as f32)
-        } else {
-            (0.0, 0.0)
-        };
-        geometry.frame.placement = neomacs_display_protocol::PresentedFramePlacement::new(
-            neomacs_display_protocol::DisplayFrameId::new(frame.0),
-            neomacs_display_protocol::PresentationId::new(presentation.get()),
-            parent.map(|parent| neomacs_display_protocol::DisplayFrameId::new(parent.0)),
-            neomacs_display_protocol::ParentFrameRect::new(left, top, width as f32, height as f32)
-                .map_err(|_| GeometryError::InvalidExtent)?,
-            z_order,
-        );
-        Ok(geometry)
-    }
-
-    pub const fn frame_placement(&self) -> neomacs_display_protocol::PresentedFramePlacement {
-        self.frame.placement
-    }
-
-    pub const fn presentation(&self) -> PresentationId {
-        self.presentation
-    }
-
-    /// Logical source extent captured by this immutable presentation.
-    ///
-    /// Compatibility publications built by [`Self::new`] predate explicit
-    /// frame placement and carry a zero extent.  `None` preserves that unknown
-    /// state instead of conflating it with empty content.
-    pub fn content_extent(
-        &self,
-    ) -> Option<neomacs_display_protocol::GeometrySize<neomacs_display_protocol::LogicalPixels>>
-    {
-        let outer = self.frame.placement.outer_in_parent();
-        (outer.width() > 0.0 && outer.height() > 0.0).then_some(*outer.size())
-    }
-
-    fn window(&self, window: WindowId) -> Option<&PresentationWindow> {
-        self.frame.windows.get(&window)
-    }
-
-    /// Resolve one of the closed set of semantic geometry queries against this
-    /// immutable publication.
-    pub fn resolve<Q: GeometryQuery>(&self, query: Q) -> Result<Q::Output<'_>, GeometryQueryError> {
-        if query.presentation() != self.presentation {
-            return Err(GeometryQueryError::StalePresentation {
-                requested: query.presentation(),
-                available: self.presentation,
-            });
-        }
-        query.resolve_presented(self)
-    }
-}
-
-impl PresentationWindow {
-    #[inline]
-    fn from_snapshot(snapshot: &WindowDisplaySnapshot) -> Result<Self, GeometryError> {
-        Self::from_snapshot_with_mode(snapshot, geometry_positions_mode())
-    }
-
-    /// Build one presentation without forcing deferred positions. Cursor paint
-    /// wins over explicit logical extent, then legacy canonical lookup is used.
-    #[inline]
-    fn from_snapshot_with_mode(
-        snapshot: &WindowDisplaySnapshot,
-        mode: GeometryPositionsMode,
-    ) -> Result<Self, GeometryError> {
-        let outer = PixelRect::from_transport(&snapshot.regions.outer)?;
-        let regions = snapshot
-            .regions_materialized
-            .then(|| WindowRegions::from_transport(&snapshot.regions))
-            .transpose()?;
-        let mut body_rows =
-            HashMap::with_capacity_and_hasher(snapshot.body_rows.len(), Default::default());
-        for row in &snapshot.body_rows {
-            if body_rows.insert(row.output_row, *row).is_some() {
-                return Err(GeometryError::DuplicateBodyRow {
-                    window: snapshot.window_id,
-                    output_row: row.output_row,
-                });
-            }
-        }
-        let mut row_heights =
-            HashMap::with_capacity_and_hasher(snapshot.rows.len(), Default::default());
-        for row in &snapshot.rows {
-            row_heights.insert(row.row, row.height);
-        }
-        let positions =
-            PresentationPositions::from_snapshot(snapshot, body_rows, row_heights, mode)?;
-        let cursor = snapshot.logical_cursor_pos().and_then(|cursor| {
-            // Paint takes precedence; hidden cursors retain the selected glyph's
-            // extent without guessing identity from potentially colliding columns.
-            let (width, height) = snapshot
-                .phys_cursor
-                .as_ref()
-                .map(|physical| (physical.width, physical.height))
-                .or_else(|| {
-                    snapshot
-                        .logical_cursor_dimensions
-                        .map(|extent| (i64::from(extent.width), i64::from(extent.height)))
-                })
-                .or_else(|| positions.cursor_dimensions(cursor.row, cursor.col, None))?;
-            Some(PresentationCursor {
-                x: cursor.x,
-                body_y: cursor.y,
-                width,
-                height,
-            })
-        });
-        Ok(Self {
-            id: snapshot.window_id,
-            cell_origin: snapshot.cell_origin,
-            outer,
-            regions,
-            positions,
-            cursor,
-        })
-    }
-}
-
-impl WindowRegions {
-    pub(crate) fn from_transport(regions: &PresentedWindowRegions) -> Result<Self, GeometryError> {
-        let optional = |rect: Option<TransportRect>| {
-            rect.map(|rect| PixelRect::from_transport(&rect))
-                .transpose()
-        };
-        Ok(Self {
-            outer: PixelRect::from_transport(&regions.outer)?,
-            text_body: PixelRect::from_transport(&regions.text_body)?,
-            left_margin_columns: regions.left_margin_columns,
-            right_margin_columns: regions.right_margin_columns,
-            left_margin: optional(regions.left_margin)?,
-            right_margin: optional(regions.right_margin)?,
-            left_fringe: optional(regions.left_fringe)?,
-            right_fringe: optional(regions.right_fringe)?,
-            left_scroll_bar: optional(regions.left_scroll_bar)?,
-            right_scroll_bar: optional(regions.right_scroll_bar)?,
-            horizontal_scroll_bar: optional(regions.horizontal_scroll_bar)?,
-            tab_line: optional(regions.tab_line)?,
-            header_line: optional(regions.header_line)?,
-            mode_line: optional(regions.mode_line)?,
-            right_divider: optional(regions.right_divider)?,
-            bottom_divider: optional(regions.bottom_divider)?,
-        })
-    }
-
-    pub const fn outer(self) -> PixelRect<FrameLogicalSpace> {
-        self.outer
-    }
-    pub const fn text_body(self) -> PixelRect<FrameLogicalSpace> {
-        self.text_body
-    }
-    pub const fn left_margin_columns(self) -> i64 {
-        self.left_margin_columns
-    }
-    pub const fn right_margin_columns(self) -> i64 {
-        self.right_margin_columns
-    }
-    pub fn matches_transport(self, regions: &PresentedWindowRegions) -> bool {
-        Self::from_transport(regions).is_ok_and(|other| other == self)
-    }
-    pub const fn left_margin(self) -> Option<PixelRect<FrameLogicalSpace>> {
-        self.left_margin
-    }
-    pub const fn right_margin(self) -> Option<PixelRect<FrameLogicalSpace>> {
-        self.right_margin
-    }
-    pub const fn left_fringe(self) -> Option<PixelRect<FrameLogicalSpace>> {
-        self.left_fringe
-    }
-    pub const fn right_fringe(self) -> Option<PixelRect<FrameLogicalSpace>> {
-        self.right_fringe
-    }
-    pub const fn left_scroll_bar(self) -> Option<PixelRect<FrameLogicalSpace>> {
-        self.left_scroll_bar
-    }
-    pub const fn right_scroll_bar(self) -> Option<PixelRect<FrameLogicalSpace>> {
-        self.right_scroll_bar
-    }
-    pub const fn horizontal_scroll_bar(self) -> Option<PixelRect<FrameLogicalSpace>> {
-        self.horizontal_scroll_bar
-    }
-    pub const fn tab_line(self) -> Option<PixelRect<FrameLogicalSpace>> {
-        self.tab_line
-    }
-    pub const fn header_line(self) -> Option<PixelRect<FrameLogicalSpace>> {
-        self.header_line
-    }
-    pub const fn mode_line(self) -> Option<PixelRect<FrameLogicalSpace>> {
-        self.mode_line
-    }
-    pub const fn right_divider(self) -> Option<PixelRect<FrameLogicalSpace>> {
-        self.right_divider
-    }
-    pub const fn bottom_divider(self) -> Option<PixelRect<FrameLogicalSpace>> {
-        self.bottom_divider
-    }
-}
 
 /// Borrowed view of the rectangle table one redisplay publication carries.
 ///
@@ -915,38 +670,8 @@ impl GeometryQuery for WindowCoordinateQuery {
     }
 }
 
-impl LogicalPx {
-    pub const fn get(self) -> f32 {
-        self.0
-    }
-
-    fn from_i64(value: i64) -> Self {
-        Self(value as f32)
-    }
-}
-
-impl Column {
-    pub const fn new(value: i64) -> Self {
-        Self(value)
-    }
-
-    pub const fn get(self) -> i64 {
-        self.0
-    }
-}
-
-impl Line {
-    pub const fn new(value: i64) -> Self {
-        Self(value)
-    }
-
-    pub const fn get(self) -> i64 {
-        self.0
-    }
-}
-
 impl<Space> PixelPoint<Space> {
-    fn new(x: f32, y: f32) -> Result<Self, GeometryError> {
+    pub(crate) fn new(x: f32, y: f32) -> Result<Self, GeometryError> {
         if !x.is_finite() || !y.is_finite() {
             return Err(GeometryError::NonFiniteCoordinate);
         }
@@ -967,7 +692,7 @@ impl<Space> PixelPoint<Space> {
 }
 
 impl<Space> PixelRect<Space> {
-    fn from_transport(rect: &TransportRect) -> Result<Self, GeometryError> {
+    pub(crate) fn from_transport(rect: &TransportRect) -> Result<Self, GeometryError> {
         if rect.x < 0.0
             || rect.y < 0.0
             || !rect.width.is_finite()
@@ -994,23 +719,6 @@ impl<Space> PixelRect<Space> {
 
     pub const fn height(self) -> LogicalPx {
         self.height
-    }
-}
-
-impl CellOrigin {
-    pub const fn new(column: i64, line: i64) -> Self {
-        Self {
-            column: Column::new(column),
-            line: Line::new(line),
-        }
-    }
-
-    pub const fn column(self) -> Column {
-        self.column
-    }
-
-    pub const fn line(self) -> Line {
-        self.line
     }
 }
 
@@ -1055,16 +763,6 @@ impl<Space> WindowPoint<Space> {
     pub const fn y(self) -> LogicalPx {
         self.point.y()
     }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum GeometryError {
-    SnapshotWindowMismatch,
-    DuplicateWindow(WindowId),
-    MissingBodyRow { window: WindowId, output_row: i64 },
-    DuplicateBodyRow { window: WindowId, output_row: i64 },
-    NonFiniteCoordinate,
-    InvalidExtent,
 }
 
 /// Typed geometry for one visible source position in a window snapshot.
@@ -1280,3 +978,23 @@ impl<'a> SnapshotWindowGeometry<'a> {
 #[cfg(test)]
 #[path = "tests/geometry_positions_test.rs"]
 mod geometry_positions_test;
+
+/// Resolve the closed set of semantic geometry queries against an
+/// evaluator-owned presentation publication (stage-4 W2/E5 FM-6b2).
+pub trait DisplayGeometryExt {
+    fn resolve<Q: GeometryQuery>(&self, query: Q) -> Result<Q::Output<'_>, GeometryQueryError>;
+}
+
+impl DisplayGeometryExt for PresentationGeometry {
+    /// Resolve one of the closed set of semantic geometry queries against this
+    /// immutable publication.
+    fn resolve<Q: GeometryQuery>(&self, query: Q) -> Result<Q::Output<'_>, GeometryQueryError> {
+        if query.presentation() != self.presentation {
+            return Err(GeometryQueryError::StalePresentation {
+                requested: query.presentation(),
+                available: self.presentation,
+            });
+        }
+        query.resolve_presented(self)
+    }
+}

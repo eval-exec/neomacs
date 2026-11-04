@@ -6,6 +6,7 @@ use neomacs_display_protocol::TransitionDirection;
 use neomacs_display_protocol::frame_glyphs::PresentedWindowRegions;
 use neomacs_display_protocol::posn_frame_pool::PosnFramePool;
 use neomacs_display_protocol::posn_object_extent::PosnPointRole as DisplayPointRole;
+use neomacs_display_protocol::types::Rect as TransportRect;
 use neovm_edit::buffer::{
     BufferId, BufferManager, CharLen, CharPos0, EmacsByteLen, EmacsBytePos, LispCharPos1,
     MarkerRef, TextPositionAnchor,
@@ -4506,4 +4507,766 @@ pub struct ChromeLineHit {
     pub dy: i64,
     pub width: i64,
     pub height: i64,
+}
+
+// --- E5-FM-6b2 part/geometry record impls (stage-4 W2/E5) ---
+
+impl PresentationGeometry {
+    pub(crate) fn new<S: std::borrow::Borrow<WindowDisplaySnapshot>>(
+        frame: FrameId,
+        presentation: PresentationId,
+        snapshots: impl IntoIterator<Item = S>,
+    ) -> Result<Self, GeometryError> {
+        let mut windows = HashMap::default();
+        for snapshot in snapshots {
+            let window = PresentationWindow::from_snapshot(snapshot.borrow())?;
+            let id = window.id;
+            if windows.insert(id, window).is_some() {
+                return Err(GeometryError::DuplicateWindow(id));
+            }
+        }
+        let placement = neomacs_display_protocol::PresentedFramePlacement::new(
+            neomacs_display_protocol::DisplayFrameId::new(frame.0),
+            neomacs_display_protocol::PresentationId::new(presentation.get()),
+            None,
+            neomacs_display_protocol::ParentFrameRect::new(0.0, 0.0, 0.0, 0.0)
+                .expect("zero root extent is valid for compatibility construction"),
+            0,
+        );
+        Ok(Self {
+            presentation,
+            frame: PresentationFrame {
+                id: frame,
+                placement,
+                windows,
+            },
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)] // constructor receives the complete immutable frame placement
+    pub(crate) fn new_with_frame_placement<S: std::borrow::Borrow<WindowDisplaySnapshot>>(
+        frame: FrameId,
+        presentation: PresentationId,
+        parent: Option<FrameId>,
+        left: i64,
+        top: i64,
+        width: u32,
+        height: u32,
+        z_order: i32,
+        snapshots: impl IntoIterator<Item = S>,
+    ) -> Result<Self, GeometryError> {
+        let mut geometry = Self::new(frame, presentation, snapshots)?;
+        let (left, top) = if parent.is_some() {
+            (left as f32, top as f32)
+        } else {
+            (0.0, 0.0)
+        };
+        geometry.frame.placement = neomacs_display_protocol::PresentedFramePlacement::new(
+            neomacs_display_protocol::DisplayFrameId::new(frame.0),
+            neomacs_display_protocol::PresentationId::new(presentation.get()),
+            parent.map(|parent| neomacs_display_protocol::DisplayFrameId::new(parent.0)),
+            neomacs_display_protocol::ParentFrameRect::new(left, top, width as f32, height as f32)
+                .map_err(|_| GeometryError::InvalidExtent)?,
+            z_order,
+        );
+        Ok(geometry)
+    }
+
+    pub const fn frame_placement(&self) -> neomacs_display_protocol::PresentedFramePlacement {
+        self.frame.placement
+    }
+
+    pub const fn presentation(&self) -> PresentationId {
+        self.presentation
+    }
+
+    /// Logical source extent captured by this immutable presentation.
+    ///
+    /// Compatibility publications built by [`Self::new`] predate explicit
+    /// frame placement and carry a zero extent.  `None` preserves that unknown
+    /// state instead of conflating it with empty content.
+    pub fn content_extent(
+        &self,
+    ) -> Option<neomacs_display_protocol::GeometrySize<neomacs_display_protocol::LogicalPixels>>
+    {
+        let outer = self.frame.placement.outer_in_parent();
+        (outer.width() > 0.0 && outer.height() > 0.0).then_some(*outer.size())
+    }
+
+    pub(crate) fn window(&self, window: WindowId) -> Option<&PresentationWindow> {
+        self.frame.windows.get(&window)
+    }
+}
+
+impl PresentationWindow {
+    #[inline]
+    pub(crate) fn from_snapshot(snapshot: &WindowDisplaySnapshot) -> Result<Self, GeometryError> {
+        Self::from_snapshot_with_mode(snapshot, geometry_positions_mode())
+    }
+
+    /// Build one presentation without forcing deferred positions. Cursor paint
+    /// wins over explicit logical extent, then legacy canonical lookup is used.
+    #[inline]
+    pub(crate) fn from_snapshot_with_mode(
+        snapshot: &WindowDisplaySnapshot,
+        mode: GeometryPositionsMode,
+    ) -> Result<Self, GeometryError> {
+        let outer = PixelRect::from_transport(&snapshot.regions.outer)?;
+        let regions = snapshot
+            .regions_materialized
+            .then(|| WindowRegions::from_transport(&snapshot.regions))
+            .transpose()?;
+        let mut body_rows =
+            HashMap::with_capacity_and_hasher(snapshot.body_rows.len(), Default::default());
+        for row in &snapshot.body_rows {
+            if body_rows.insert(row.output_row, *row).is_some() {
+                return Err(GeometryError::DuplicateBodyRow {
+                    window: snapshot.window_id,
+                    output_row: row.output_row,
+                });
+            }
+        }
+        let mut row_heights =
+            HashMap::with_capacity_and_hasher(snapshot.rows.len(), Default::default());
+        for row in &snapshot.rows {
+            row_heights.insert(row.row, row.height);
+        }
+        let positions =
+            PresentationPositions::from_snapshot(snapshot, body_rows, row_heights, mode)?;
+        let cursor = snapshot.logical_cursor_pos().and_then(|cursor| {
+            // Paint takes precedence; hidden cursors retain the selected glyph's
+            // extent without guessing identity from potentially colliding columns.
+            let (width, height) = snapshot
+                .phys_cursor
+                .as_ref()
+                .map(|physical| (physical.width, physical.height))
+                .or_else(|| {
+                    snapshot
+                        .logical_cursor_dimensions
+                        .map(|extent| (i64::from(extent.width), i64::from(extent.height)))
+                })
+                .or_else(|| positions.cursor_dimensions(cursor.row, cursor.col, None))?;
+            Some(PresentationCursor {
+                x: cursor.x,
+                body_y: cursor.y,
+                width,
+                height,
+            })
+        });
+        Ok(Self {
+            id: snapshot.window_id,
+            cell_origin: snapshot.cell_origin,
+            outer,
+            regions,
+            positions,
+            cursor,
+        })
+    }
+}
+
+impl WindowRegions {
+    pub(crate) fn from_transport(regions: &PresentedWindowRegions) -> Result<Self, GeometryError> {
+        let optional = |rect: Option<TransportRect>| {
+            rect.map(|rect| PixelRect::from_transport(&rect))
+                .transpose()
+        };
+        Ok(Self {
+            outer: PixelRect::from_transport(&regions.outer)?,
+            text_body: PixelRect::from_transport(&regions.text_body)?,
+            left_margin_columns: regions.left_margin_columns,
+            right_margin_columns: regions.right_margin_columns,
+            left_margin: optional(regions.left_margin)?,
+            right_margin: optional(regions.right_margin)?,
+            left_fringe: optional(regions.left_fringe)?,
+            right_fringe: optional(regions.right_fringe)?,
+            left_scroll_bar: optional(regions.left_scroll_bar)?,
+            right_scroll_bar: optional(regions.right_scroll_bar)?,
+            horizontal_scroll_bar: optional(regions.horizontal_scroll_bar)?,
+            tab_line: optional(regions.tab_line)?,
+            header_line: optional(regions.header_line)?,
+            mode_line: optional(regions.mode_line)?,
+            right_divider: optional(regions.right_divider)?,
+            bottom_divider: optional(regions.bottom_divider)?,
+        })
+    }
+
+    pub const fn outer(self) -> PixelRect<FrameLogicalSpace> {
+        self.outer
+    }
+    pub const fn text_body(self) -> PixelRect<FrameLogicalSpace> {
+        self.text_body
+    }
+    pub const fn left_margin_columns(self) -> i64 {
+        self.left_margin_columns
+    }
+    pub const fn right_margin_columns(self) -> i64 {
+        self.right_margin_columns
+    }
+    pub fn matches_transport(self, regions: &PresentedWindowRegions) -> bool {
+        Self::from_transport(regions).is_ok_and(|other| other == self)
+    }
+    pub const fn left_margin(self) -> Option<PixelRect<FrameLogicalSpace>> {
+        self.left_margin
+    }
+    pub const fn right_margin(self) -> Option<PixelRect<FrameLogicalSpace>> {
+        self.right_margin
+    }
+    pub const fn left_fringe(self) -> Option<PixelRect<FrameLogicalSpace>> {
+        self.left_fringe
+    }
+    pub const fn right_fringe(self) -> Option<PixelRect<FrameLogicalSpace>> {
+        self.right_fringe
+    }
+    pub const fn left_scroll_bar(self) -> Option<PixelRect<FrameLogicalSpace>> {
+        self.left_scroll_bar
+    }
+    pub const fn right_scroll_bar(self) -> Option<PixelRect<FrameLogicalSpace>> {
+        self.right_scroll_bar
+    }
+    pub const fn horizontal_scroll_bar(self) -> Option<PixelRect<FrameLogicalSpace>> {
+        self.horizontal_scroll_bar
+    }
+    pub const fn tab_line(self) -> Option<PixelRect<FrameLogicalSpace>> {
+        self.tab_line
+    }
+    pub const fn header_line(self) -> Option<PixelRect<FrameLogicalSpace>> {
+        self.header_line
+    }
+    pub const fn mode_line(self) -> Option<PixelRect<FrameLogicalSpace>> {
+        self.mode_line
+    }
+    pub const fn right_divider(self) -> Option<PixelRect<FrameLogicalSpace>> {
+        self.right_divider
+    }
+    pub const fn bottom_divider(self) -> Option<PixelRect<FrameLogicalSpace>> {
+        self.bottom_divider
+    }
+}
+
+impl LogicalPx {
+    pub const fn get(self) -> f32 {
+        self.0
+    }
+
+    pub(crate) fn from_i64(value: i64) -> Self {
+        Self(value as f32)
+    }
+}
+
+impl Column {
+    pub const fn new(value: i64) -> Self {
+        Self(value)
+    }
+
+    pub const fn get(self) -> i64 {
+        self.0
+    }
+}
+
+impl Line {
+    pub const fn new(value: i64) -> Self {
+        Self(value)
+    }
+
+    pub const fn get(self) -> i64 {
+        self.0
+    }
+}
+
+impl CellOrigin {
+    pub const fn new(column: i64, line: i64) -> Self {
+        Self {
+            column: Column::new(column),
+            line: Line::new(line),
+        }
+    }
+
+    pub const fn column(self) -> Column {
+        self.column
+    }
+
+    pub const fn line(self) -> Line {
+        self.line
+    }
+}
+
+impl WindowChromeLine {
+    pub const fn part(self) -> WindowPart {
+        match self {
+            Self::TabLine => WindowPart::TabLine,
+            Self::HeaderLine => WindowPart::HeaderLine,
+            Self::ModeLine => WindowPart::ModeLine,
+        }
+    }
+}
+
+impl WindowPart {
+    /// The chrome line this part is, if it is one.
+    pub const fn chrome_line(self) -> Option<WindowChromeLine> {
+        match self {
+            Self::TabLine => Some(WindowChromeLine::TabLine),
+            Self::HeaderLine => Some(WindowChromeLine::HeaderLine),
+            Self::ModeLine => Some(WindowChromeLine::ModeLine),
+            _ => None,
+        }
+    }
+
+    /// The text-area coordinate of a window-relative click on this part, for a
+    /// caller whose region was resolved by something other than
+    /// [`WindowPartGeometry::classify`].
+    ///
+    /// `None` for every part but [`Self::Text`], which is what keeps the
+    /// guarantee: the presented-geometry hit test and test fixtures can make a
+    /// witness, but only by holding a classification that says "text area",
+    /// so no route reaches the buffer-position lookup with a mode-line or
+    /// header-line coordinate.
+    pub const fn text_area_coordinate(
+        self,
+        text_area_x: i64,
+        window_y: i64,
+        top_chrome_height: i64,
+    ) -> Option<TextAreaCoordinate> {
+        match self {
+            Self::Text => Some(TextAreaCoordinate::new(
+                text_area_x,
+                window_y,
+                top_chrome_height,
+            )),
+            _ => None,
+        }
+    }
+
+    /// The symbol `make_lispy_position` puts in the posn's AREA slot for this
+    /// part (src/keyboard.c:5862-5975).
+    ///
+    /// `None` for the text area, where GNU puts the buffer POSITION instead --
+    /// `posn = make_fixnum (textpos)` at src/keyboard.c:6024 runs only while
+    /// `posn` is still nil.
+    pub const fn area_symbol(self) -> Option<&'static str> {
+        match self {
+            Self::Text => None,
+            Self::ModeLine => Some("mode-line"),
+            Self::VerticalBorder => Some("vertical-line"),
+            Self::HeaderLine => Some("header-line"),
+            Self::TabLine => Some("tab-line"),
+            Self::LeftFringe => Some("left-fringe"),
+            Self::RightFringe => Some("right-fringe"),
+            Self::LeftMargin => Some("left-margin"),
+            Self::RightMargin => Some("right-margin"),
+            Self::VerticalScrollBar => Some("vertical-scroll-bar"),
+            Self::HorizontalScrollBar => Some("horizontal-scroll-bar"),
+            Self::RightDivider => Some("right-divider"),
+            Self::BottomDivider => Some("bottom-divider"),
+        }
+    }
+}
+
+impl PosnArea {
+    pub const fn symbol_name(self) -> Option<&'static str> {
+        match self {
+            Self::Window(part) => part.area_symbol(),
+            Self::MenuBar => Some("menu-bar"),
+            Self::ToolBar => Some("tool-bar"),
+            Self::TabBar => Some("tab-bar"),
+        }
+    }
+}
+
+impl TextAreaCoordinate {
+    /// X relative to the text area's left edge -- GNU's `xret = mx -
+    /// window_box_left (w, TEXT_AREA)` (src/keyboard.c:5882), which is also the
+    /// `x2` it hands to `buffer_posn_from_coords` (src/keyboard.c:5985-5991).
+    pub const fn text_area_x(self) -> i64 {
+        self.text_area_x
+    }
+
+    /// Y relative to the WINDOW's top edge, tab and header lines included.
+    /// GNU passes `y2 = wy` (src/keyboard.c:5992), not the text-area-relative
+    /// value it reports in the posn.
+    pub const fn window_y(self) -> i64 {
+        self.window_y
+    }
+
+    /// Y relative to the top of the text area -- GNU's `yret = wy -
+    /// WINDOW_TAB_LINE_HEIGHT (w) - WINDOW_HEADER_LINE_HEIGHT (w)`
+    /// (src/keyboard.c:5883), which is the value that reaches the posn and
+    /// that `posn-col-row` divides the character cell out of.
+    pub const fn text_area_y(self) -> i64 {
+        self.text_area_y
+    }
+
+    const fn new(text_area_x: i64, window_y: i64, top_chrome_height: i64) -> Self {
+        Self {
+            text_area_x,
+            window_y,
+            text_area_y: window_y - top_chrome_height,
+        }
+    }
+}
+
+impl WindowCoordinate {
+    pub const fn part(self) -> WindowPart {
+        match self {
+            Self::ChromeLine { line, .. } => line.part(),
+            Self::Buffer { part, .. } => part,
+        }
+    }
+}
+
+impl WindowPartGeometry {
+    /// Build the classifier's inputs from a window's frame-relative bounds and
+    /// the chrome geometry the last redisplay published for it.
+    ///
+    /// `text_area_left_offset` and `text_area_width` describe the horizontal
+    /// box; passing the window's whole width for the latter is the terminal
+    /// case, where a window has no fringes and by default no margins.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        bounds: Rect,
+        tab_line_height: i64,
+        header_line_height: i64,
+        mode_line_height: i64,
+        text_area_left_offset: i64,
+        text_area_width: i64,
+        left_margin_width: i64,
+        right_margin_width: i64,
+        column_width: i64,
+        rightmost: bool,
+    ) -> Self {
+        let left_x = bounds.x.round() as i64;
+        let top_y = bounds.y.round() as i64;
+        Self {
+            left_x,
+            right_x: left_x + bounds.width.round() as i64,
+            top_y,
+            bottom_y: top_y + bounds.height.round() as i64,
+            tab_line_height: tab_line_height.max(0),
+            header_line_height: header_line_height.max(0),
+            mode_line_height: mode_line_height.max(0),
+            text_area_left_offset: text_area_left_offset.max(0),
+            text_area_width: text_area_width.max(0),
+            left_margin_width: left_margin_width.max(0),
+            right_margin_width: right_margin_width.max(0),
+            column_width: column_width.max(1),
+            rightmost,
+        }
+    }
+
+    /// Height of the tab and header lines together -- the offset between a
+    /// window-relative Y and a text-area-relative one.
+    pub const fn top_chrome_height(self) -> i64 {
+        self.tab_line_height + self.header_line_height
+    }
+
+    /// GNU `coordinates_in_window` (src/window.c:1348-1489). X and Y are
+    /// frame-relative pixels; `None` is `ON_NOTHING`.
+    ///
+    /// The branch order is GNU's, and it is load-bearing: the mode line is
+    /// tested before the text area, so the bottom row of a window is never a
+    /// text coordinate, and the tab and header lines are tested before it too,
+    /// so Y = 0 in a window with a header line IS the header line. GNU's own
+    /// `posn-at-x-y` doc string says as much -- "the text area includes the
+    /// header-line and the tab-line of the window".
+    pub fn classify(self, x: i64, y: i64) -> Option<WindowPart> {
+        // "Outside any interesting row or column?" (src/window.c:1360-1362)
+        if y < self.top_y || y >= self.bottom_y || x < self.left_x || x >= self.right_x {
+            return None;
+        }
+
+        // The mode/tab/header line test, src/window.c:1389-1421. GNU's own
+        // `||` chain: whichever matches first wins, and the mode line is first.
+        if self.mode_line_height > 0 && y >= self.bottom_y - self.mode_line_height {
+            return Some(WindowPart::ModeLine);
+        }
+        if self.tab_line_height > 0 && y < self.top_y + self.tab_line_height {
+            return Some(WindowPart::TabLine);
+        }
+        if self.header_line_height > 0 && y < self.top_y + self.top_chrome_height() {
+            return Some(WindowPart::HeaderLine);
+        }
+
+        let box_left = self.left_x;
+        let box_right = self.right_x - 1;
+        if x < box_left || x > box_right {
+            return Some(WindowPart::VerticalScrollBar);
+        }
+
+        // "Need to say x > right_x rather than >=, since on character
+        // terminals, the vertical line's x coordinate is right_x."
+        // (src/window.c:1455-1462)
+        if !self.rightmost && x > box_right - self.column_width {
+            return Some(WindowPart::VerticalBorder);
+        }
+
+        let text_left = self.left_x + self.text_area_left_offset;
+        let text_right = text_left + self.text_area_width;
+        if x < text_left {
+            if self.left_margin_width > 0 && x < box_left + self.left_margin_width {
+                return Some(WindowPart::LeftMargin);
+            }
+            return Some(WindowPart::LeftFringe);
+        }
+        if x >= text_right {
+            if self.right_margin_width > 0 && x >= box_right - self.right_margin_width {
+                return Some(WindowPart::RightMargin);
+            }
+            return Some(WindowPart::RightFringe);
+        }
+
+        // "Everything special ruled out - must be on text area"
+        Some(WindowPart::Text)
+    }
+
+    /// Classify a frame-relative coordinate and carry it into the branch
+    /// `make_lispy_position` takes for that part (src/keyboard.c:5862-6000).
+    pub fn resolve(self, x: i64, y: i64) -> Option<WindowCoordinate> {
+        let part = self.classify(x, y)?;
+        let window_x = x - self.left_x;
+        let window_y = y - self.top_y;
+        if let Some(line) = part.chrome_line() {
+            return Some(WindowCoordinate::ChromeLine {
+                line,
+                window_x,
+                window_y,
+            });
+        }
+        // GNU's `x2`: the text-area-relative X for the text area and for the
+        // parts that lie to the RIGHT of it, and zero for everything on the
+        // left, where a click carries no column of its own
+        // (src/keyboard.c:5985-5991). `y2` is `wy` in every case.
+        let text_area_x = match part {
+            WindowPart::Text
+            | WindowPart::RightFringe
+            | WindowPart::RightMargin
+            | WindowPart::VerticalScrollBar => window_x - self.text_area_left_offset,
+            _ => 0,
+        };
+        Some(WindowCoordinate::Buffer {
+            part,
+            window_x,
+            window_y,
+            at: TextAreaCoordinate::new(text_area_x, window_y, self.top_chrome_height()),
+        })
+    }
+}
+
+impl PresentationPositions {
+    #[inline]
+    pub(super) fn from_snapshot(
+        snapshot: &WindowDisplaySnapshot,
+        body_rows: HashMap<i64, PresentedBodyRowSnapshot>,
+        row_heights: HashMap<i64, i64>,
+        mode: GeometryPositionsMode,
+    ) -> Result<Self, GeometryError> {
+        if mode == GeometryPositionsMode::On {
+            if let Some(rows) = snapshot.point_rows.as_ref() {
+                // The merge ranks equal source positions by descriptor Vec
+                // index, not visual row id. Ignore empty descriptors, exactly
+                // as iter_points does, and report its first missing mapping.
+                let first_missing = rows
+                    .rows
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, row)| !body_rows.contains_key(&row.row()))
+                    .filter_map(|(index, row)| {
+                        row.min_buffer_position()
+                            .map(|position| ((position, index), row.row()))
+                    })
+                    .min_by_key(|(rank, _)| *rank);
+                if let Some((_, output_row)) = first_missing {
+                    return Err(GeometryError::MissingBodyRow {
+                        window: snapshot.window_id,
+                        output_row,
+                    });
+                }
+                return Ok(Self::Deferred(Arc::new(DeferredPositions {
+                    rows: rows.clone(),
+                    body_rows,
+                    row_heights,
+                    positions: OnceLock::new(),
+                })));
+            }
+        }
+        // Legacy flat snapshots and the OFF arm preserve their exact original
+        // traversal and eager error order, including unsorted compatibility data.
+        snapshot
+            .iter_points()
+            .map(|point| {
+                let body_row = body_rows
+                    .get(&point.row)
+                    .ok_or(GeometryError::MissingBodyRow {
+                        window: snapshot.window_id,
+                        output_row: point.row,
+                    })?;
+                Ok(project_point(point, body_row, &row_heights))
+            })
+            .collect::<Result<Vec<_>, GeometryError>>()
+            .map(Self::Eager)
+    }
+
+    #[inline]
+    pub(crate) fn as_slice(&self) -> &[PresentationPosition] {
+        match self {
+            Self::Eager(points) => points,
+            Self::Deferred(source) => source.positions.get_or_init(|| {
+                source
+                    .rows
+                    .iter_points()
+                    .map(|point| {
+                        let body_row = &source.body_rows[&point.row];
+                        project_point(point, body_row, &source.row_heights)
+                    })
+                    .collect()
+            }),
+        }
+    }
+
+    #[inline]
+    pub(super) fn cursor_dimensions(
+        &self,
+        body_row: i64,
+        col: i64,
+        physical: Option<&WindowCursorSnapshot>,
+    ) -> Option<(i64, i64)> {
+        match self {
+            Self::Eager(points) => {
+                let point = points
+                    .iter()
+                    .find(|point| point.body_row == body_row && point.col == col);
+                let width = physical
+                    .map(|cursor| cursor.width)
+                    .or_else(|| point.map(|p| p.width))?;
+                let height = physical
+                    .map(|cursor| cursor.height)
+                    .or_else(|| point.map(|p| p.height))?;
+                Some((width, height))
+            }
+            Self::Deferred(source) => {
+                if let Some(cursor) = physical {
+                    return Some((cursor.width, cursor.height));
+                }
+                // Preserve first canonical source match, including markers and
+                // several output rows mapped to the same body row. No glyph
+                // preference or visual-row sort is allowed here.
+                source
+                    .rows
+                    .rows
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, row)| {
+                        source
+                            .body_rows
+                            .get(&row.row())
+                            .is_some_and(|mapped| mapped.body_row == body_row)
+                    })
+                    .filter_map(|(row_index, row)| {
+                        row.points()
+                            .enumerate()
+                            .find(|(_, point)| point.col == col)
+                            .map(|(source_index, point)| {
+                                (
+                                    (point.buffer_pos, row_index, source_index),
+                                    (point.width, point.height),
+                                )
+                            })
+                    })
+                    .min_by_key(|(rank, _)| *rank)
+                    .map(|(_, dimensions)| dimensions)
+            }
+        }
+    }
+
+    #[cfg(test)]
+    #[inline]
+    pub(super) fn is_materialized(&self) -> bool {
+        match self {
+            Self::Eager(_) => true,
+            Self::Deferred(source) => source.positions.get().is_some(),
+        }
+    }
+}
+
+impl PartialEq for PresentationPositions {
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        self.as_slice() == other.as_slice()
+    }
+}
+
+impl Eq for PresentationPositions {}
+
+impl std::fmt::Debug for PresentationPositions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.as_slice().fmt(f)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GeometryError {
+    SnapshotWindowMismatch,
+    DuplicateWindow(WindowId),
+    MissingBodyRow { window: WindowId, output_row: i64 },
+    DuplicateBodyRow { window: WindowId, output_row: i64 },
+    NonFiniteCoordinate,
+    InvalidExtent,
+}
+
+/// Numeric process-wide mode published by OnceLock; safe to copy across threads.
+/// Contains no Lisp values, live window references, or mutable evaluator state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GeometryPositionsMode {
+    Off,
+    On,
+}
+
+impl GeometryPositionsMode {
+    #[inline]
+    pub(crate) fn from_setting(setting: Option<&str>) -> Self {
+        if setting.is_none()
+            || setting.is_some_and(|value| {
+                let value = value.trim();
+                ["on", "1", "true", "yes"]
+                    .iter()
+                    .any(|enabled| value.eq_ignore_ascii_case(enabled))
+            })
+        {
+            Self::On
+        } else {
+            Self::Off
+        }
+    }
+}
+
+#[inline]
+pub(crate) fn geometry_positions_mode() -> GeometryPositionsMode {
+    static MODE: OnceLock<GeometryPositionsMode> = OnceLock::new();
+    *MODE.get_or_init(|| {
+        GeometryPositionsMode::from_setting(
+            std::env::var("NEOMACS_PRESENT_GEOMETRY_LAZY")
+                .ok()
+                .as_deref(),
+        )
+    })
+}
+
+// --- E5-FM-6b2 project_point (stage-4 W2/E5) ---
+
+#[inline]
+pub(crate) fn project_point(
+    point: DisplayPointSnapshot,
+    body_row: &PresentedBodyRowSnapshot,
+    row_heights: &HashMap<i64, i64>,
+) -> PresentationPosition {
+    PresentationPosition {
+        buffer_pos: point.buffer_pos,
+        x: point.x,
+        body_y: body_row.body_y,
+        width: point.width,
+        height: point.height,
+        // Compatibility snapshots can contain only points. Real publications
+        // retain canonical mixed-font, raised-text and line-spacing extents.
+        row_height: row_heights.get(&point.row).copied().unwrap_or(point.height),
+        body_row: body_row.body_row,
+        col: point.col,
+    }
 }

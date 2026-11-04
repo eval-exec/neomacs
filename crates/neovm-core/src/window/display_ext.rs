@@ -17,6 +17,7 @@ use super::tty_posn_current::{
 };
 use super::*;
 use crate::emacs_core::value::Value;
+use crate::window::geometry::DisplayGeometryExt;
 use neomacs_display_protocol::posn_frame_pool::PosnFramePool;
 use neovm_value::value::eq_value;
 use std::sync::Arc;

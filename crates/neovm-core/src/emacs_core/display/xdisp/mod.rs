@@ -31,6 +31,7 @@ mod mode_line_coding;
 use crate::emacs_core::process::SystemProcessExt;
 use crate::window::DisplayFrameExt;
 use crate::window::DisplayFrameManagerExt;
+use crate::window::geometry::DisplayGeometryExt;
 use mode_line_coding::CodingAccess;
 #[path = "mode_line_flow.rs"]
 mod mode_line_flow_policy;
