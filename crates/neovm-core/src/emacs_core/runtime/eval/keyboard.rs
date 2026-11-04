@@ -10,20 +10,18 @@
 //! - Pre/post-command hooks
 //! - Prefix argument handling
 
-use crate::buffer::{CharLen, CharPos0, CharRange};
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::intern::{WellKnown, intern, resolve_sym};
 use crate::emacs_core::keyboard::CommandLoopHost;
-use crate::emacs_core::keyboard::pure::KEY_CHAR_META;
 use crate::emacs_core::keymap::KeymapMarker;
 use crate::emacs_core::wait::CommandInputWaitOutcome;
 use crate::tagged::value::SymbolMode;
-use crate::window::DisplayFrameExt;
-use crate::window::DisplayFrameManagerExt;
+use crate::window::{DisplayFrameExt, DisplayFrameManagerExt};
+use neovm_value::keyboard_pure::KEY_CHAR_META;
 // decode_storage_char_codes import removed — now using emacs_char directly
 use crate::emacs_core::value::{Value, ValueKind, VecLikeType};
 use crate::heap_types::LispString;
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 mod diagnostic_knobs;
@@ -34,8 +32,8 @@ mod unread;
 
 pub use keysym::{native_key_android, native_key_macos, native_key_ohos, native_key_windows};
 pub(crate) use neovm_value::system_vocab::input::{
-    ExecutingKbdMacroRuntimeSnapshot, InputPendingFilter, KeySequenceBufferSelection,
-    ReadKeySequenceOptions, TtyInputDecoding,
+    ExecutingKbdMacroRuntimeSnapshot, KeySequenceBufferSelection, ReadKeySequenceOptions,
+    TtyInputDecoding,
 };
 pub(crate) use unread::UnreadCommandEvent;
 
@@ -44,11 +42,11 @@ pub(crate) use unread::UnreadCommandEvent;
 pub(crate) use crate::emacs_core::eval::data::command_loop::{
     AUTO_SAVE_TIMEOUT, COMMAND_EXECUTE, ECHO_KEYSTROKES, ECHO_KEYSTROKES_HELP, EXECUTING_KBD_MACRO,
     HELP_CHAR, HELP_EVENT_LIST, INPUT_METHOD_FUNCTION, INTERNAL_TIMER_START_IDLE,
-    InputEventHistoryDisposition, KEY_TRANSLATION_MAP, KEYBOARD_TRANSLATE_TABLE, KeyEchoDecoration,
-    KeyEchoSegment, KeyEchoState, LAST_INPUT_EVENT, LAST_KBD_MACRO, LAST_NONMENU_EVENT,
-    MouseEventPayload, PREFIX_HELP_COMMAND, SPECIAL_EVENT_MAP, THIS_COMMAND_KEYS_SHIFT_TRANSLATED,
-    TRANSLATE_UPPER_CASE_KEY_BINDINGS, UNDEFINED_SYMBOL, UNREAD_INPUT_METHOD_EVENTS,
-    UNREAD_POST_INPUT_METHOD_EVENTS, help_event_echo_suffix, num_nonmacro_input_events_symbol,
+    KEY_TRANSLATION_MAP, KEYBOARD_TRANSLATE_TABLE, KeyEchoDecoration, KeyEchoState,
+    LAST_INPUT_EVENT, LAST_KBD_MACRO, LAST_NONMENU_EVENT, MouseEventPayload, PREFIX_HELP_COMMAND,
+    SPECIAL_EVENT_MAP, THIS_COMMAND_KEYS_SHIFT_TRANSLATED, TRANSLATE_UPPER_CASE_KEY_BINDINGS,
+    UNDEFINED_SYMBOL, UNREAD_INPUT_METHOD_EVENTS, UNREAD_POST_INPUT_METHOD_EVENTS,
+    help_event_echo_suffix, num_nonmacro_input_events_symbol,
 };
 pub use crate::emacs_core::eval::data::command_loop::{
     CommandLoop, KBoard, KeyboardRuntime, LastMouseClick, MousePixelPositionState, MousePressState,
@@ -207,7 +205,7 @@ impl Modifiers {
 
     /// Convert to Emacs modifier bitmask.
     pub fn to_bits(&self) -> u32 {
-        use crate::emacs_core::keyboard::pure::{
+        use neovm_value::keyboard_pure::{
             KEY_CHAR_ALT, KEY_CHAR_CTRL, KEY_CHAR_HYPER, KEY_CHAR_META, KEY_CHAR_SHIFT,
             KEY_CHAR_SUPER,
         };
@@ -235,7 +233,7 @@ impl Modifiers {
 
     /// Parse from Emacs modifier bitmask.
     pub fn from_bits(bits: u32) -> Self {
-        use crate::emacs_core::keyboard::pure::{
+        use neovm_value::keyboard_pure::{
             KEY_CHAR_ALT, KEY_CHAR_CTRL, KEY_CHAR_HYPER, KEY_CHAR_META, KEY_CHAR_SHIFT,
             KEY_CHAR_SUPER,
         };
@@ -461,13 +459,9 @@ impl KeyEvent {
         let emacs_event = self.to_emacs_event_value();
         // A Rust-side label (logs, messages): decode here rather than making
         // the shared builder lossy for the Lisp-facing callers.
-        crate::emacs_core::keyboard::pure::describe_single_key_value(
-            &emacs_event,
-            false,
-            SymbolMode::Bare,
-        )
-        .map(|bytes| crate::emacs_core::emacs_char::to_utf8_lossy(&bytes))
-        .unwrap_or_else(|_| format!("{:?}", emacs_event))
+        neovm_value::keyboard_pure::describe_single_key_value(&emacs_event, false, SymbolMode::Bare)
+            .map(|bytes| crate::emacs_core::emacs_char::to_utf8_lossy(&bytes))
+            .unwrap_or_else(|_| format!("{:?}", emacs_event))
     }
 
     /// Parse an Emacs key description (e.g., "C-x", "M-f").
@@ -1217,7 +1211,7 @@ pub fn keysym_to_key_event(keysym: u32, modifiers: u32) -> Option<KeyEvent> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TtyInputTarget {
     SelectedFrame,
-    Frame(crate::window::FrameId),
+    Frame(neovm_value::display_vocab::FrameId),
     Terminal(u64),
 }
 
@@ -1226,7 +1220,7 @@ impl TtyInputTarget {
         if emacs_frame_id == 0 {
             Self::SelectedFrame
         } else {
-            Self::Frame(crate::window::FrameId(emacs_frame_id))
+            Self::Frame(neovm_value::display_vocab::FrameId(emacs_frame_id))
         }
     }
 }
@@ -1321,7 +1315,7 @@ pub enum InputEvent {
     LayoutInvalidated,
     /// Renderer image-cache lifecycle changed for a stable image identity.
     ImageStateChanged {
-        event: crate::emacs_core::image_catalog::ImageStateEvent,
+        event: neomacs_display_protocol::image::ImageStateEvent,
     },
     /// Popup menu selection.  The display layer reports the selected
     /// zero-based item index; -1 means the menu was cancelled.
@@ -1388,7 +1382,9 @@ pub enum InputEvent {
         display: neomacs_display_protocol::GraphicalDisplayIdentity,
     },
     /// Window-selection change.
-    SelectWindow { window_id: crate::window::WindowId },
+    SelectWindow {
+        window_id: neovm_edit::emacs_core::display_metrics::WindowId,
+    },
     /// Window-manager close request.
     WindowClose { emacs_frame_id: u64 },
     /// GNU `THREAD_EVENT`: `thread-signal` targeted the main thread
@@ -1531,11 +1527,11 @@ fn apply_resize_input_event_in_keyboard_runtime(
     height: u32,
     scale_factor: f64,
     emacs_frame_id: u64,
-) -> Option<crate::window::FrameId> {
+) -> Option<neovm_value::display_vocab::FrameId> {
     let target_fid = if emacs_frame_id == 0 {
         frames.selected_frame().map(|frame| frame.id)
     } else {
-        Some(crate::window::FrameId(emacs_frame_id))
+        Some(neovm_value::display_vocab::FrameId(emacs_frame_id))
     };
 
     if let Some(fid) = target_fid
@@ -1560,11 +1556,11 @@ fn apply_resize_input_event_in_keyboard_runtime(
 fn pending_live_gui_resize_target(
     frames: &crate::window::FrameManager,
     emacs_frame_id: u64,
-) -> Option<crate::window::FrameId> {
+) -> Option<neovm_value::display_vocab::FrameId> {
     let target_fid = if emacs_frame_id == 0 {
         frames.selected_frame().map(|frame| frame.id)
     } else {
-        Some(crate::window::FrameId(emacs_frame_id))
+        Some(neovm_value::display_vocab::FrameId(emacs_frame_id))
     }?;
     frames.get(target_fid).and_then(|frame| {
         frame
@@ -1580,7 +1576,7 @@ fn sync_pending_resize_events_in_keyboard_runtime(
     buffers: &crate::buffer::BufferManager,
     input_rx: &mut super::host_input::HostInputReceiver,
     keyboard: &mut KeyboardRuntime,
-    publications: &mut Vec<crate::window::FrameId>,
+    publications: &mut Vec<neovm_value::display_vocab::FrameId>,
 ) -> bool {
     let mut applied_resize = false;
     let mut deferred = VecDeque::new();
@@ -1693,7 +1689,7 @@ fn sync_opening_gui_frame_size_from_host_in_keyboard_runtime(
     frames: &mut crate::window::FrameManager,
     buffers: &crate::buffer::BufferManager,
     display_host: Option<&dyn crate::emacs_core::eval::DisplayHost>,
-) -> Option<crate::window::FrameId> {
+) -> Option<neovm_value::display_vocab::FrameId> {
     let trace_host_sync = diagnostic_knobs::trace_host_sync_enabled();
     let Some(host) = display_host else {
         if trace_host_sync {
@@ -1842,7 +1838,9 @@ impl crate::emacs_core::eval::Context {
                 } => {
                     self.retire_interaction_presentation(presentation);
                     if let Some(presentation) =
-                        crate::window::geometry::PresentationId::try_new(presentation)
+                        crate::emacs_core::eval::data::window_state::PresentationId::try_new(
+                            presentation,
+                        )
                     {
                         for frame in self.frame_manager_mut().frames_mut() {
                             frame.retire_display_presentation(presentation);
@@ -1855,10 +1853,12 @@ impl crate::emacs_core::eval::Context {
                     emacs_frame_id,
                 } => {
                     if let Some(presentation) =
-                        crate::window::geometry::PresentationId::try_new(presentation)
+                        crate::emacs_core::eval::data::window_state::PresentationId::try_new(
+                            presentation,
+                        )
                         && let Some(frame) = self
                             .frame_manager_mut()
-                            .get_mut(crate::window::FrameId(emacs_frame_id))
+                            .get_mut(neovm_value::display_vocab::FrameId(emacs_frame_id))
                         && let Err(error) = frame.activate_display_presentation(presentation)
                     {
                         tracing::debug!(
@@ -1875,10 +1875,12 @@ impl crate::emacs_core::eval::Context {
                 } => {
                     self.retire_interaction_presentation(presentation);
                     if let Some(presentation) =
-                        crate::window::geometry::PresentationId::try_new(presentation)
+                        crate::emacs_core::eval::data::window_state::PresentationId::try_new(
+                            presentation,
+                        )
                         && let Some(frame) = self
                             .frame_manager_mut()
-                            .get_mut(crate::window::FrameId(emacs_frame_id))
+                            .get_mut(neovm_value::display_vocab::FrameId(emacs_frame_id))
                     {
                         frame.discard_display_presentation(presentation);
                     }
@@ -1973,7 +1975,7 @@ impl crate::emacs_core::eval::Context {
                 .selected_frame()
                 .map(|frame| Value::make_frame(frame.id.0))
         } else {
-            let fid = crate::window::FrameId(emacs_frame_id);
+            let fid = neovm_value::display_vocab::FrameId(emacs_frame_id);
             self.frames.get(fid)?;
             Some(Value::make_frame(emacs_frame_id))
         }
@@ -1995,7 +1997,10 @@ impl crate::emacs_core::eval::Context {
         ]))
     }
 
-    fn make_lispy_select_window_event(&self, window_id: crate::window::WindowId) -> Option<Value> {
+    fn make_lispy_select_window_event(
+        &self,
+        window_id: neovm_edit::emacs_core::display_metrics::WindowId,
+    ) -> Option<Value> {
         for frame_id in self.frames.frame_list() {
             let Some(frame) = self.frames.get(frame_id) else {
                 continue;
@@ -2641,7 +2646,7 @@ impl crate::emacs_core::eval::Context {
         let target_fid = if emacs_frame_id == 0 {
             self.frames.selected_frame().map(|frame| frame.id)
         } else {
-            Some(crate::window::FrameId(emacs_frame_id))
+            Some(neovm_value::display_vocab::FrameId(emacs_frame_id))
         };
         let selected_fid = self.frames.selected_frame().map(|selected| selected.id);
         tracing::debug!(
@@ -2660,7 +2665,8 @@ impl crate::emacs_core::eval::Context {
                     frame.width,
                     frame.height,
                     frame.effective_window_system(),
-                    frame.fixed_parameter(crate::window::FrameQueryParam::WindowSystem)
+                    frame
+                        .fixed_parameter(neovm_value::display_vocab::FrameQueryParam::WindowSystem)
                 );
             }
             if let Some(frame) = apply_resize_input_event_in_keyboard_runtime(
@@ -2694,7 +2700,9 @@ impl crate::emacs_core::eval::Context {
                         frame.width,
                         frame.height,
                         frame.effective_window_system(),
-                        frame.fixed_parameter(crate::window::FrameQueryParam::WindowSystem)
+                        frame.fixed_parameter(
+                            neovm_value::display_vocab::FrameQueryParam::WindowSystem
+                        )
                     );
                 }
             }
@@ -4979,18 +4987,21 @@ impl crate::emacs_core::eval::Context {
         Ok(self.read_char_with_timeout(None)?.unwrap_or(Value::NIL))
     }
 
-    fn resolve_input_frame_id(&self, emacs_frame_id: u64) -> Option<crate::window::FrameId> {
+    fn resolve_input_frame_id(
+        &self,
+        emacs_frame_id: u64,
+    ) -> Option<neovm_value::display_vocab::FrameId> {
         if emacs_frame_id == 0 {
             self.frames.selected_frame().map(|frame| frame.id)
         } else {
-            let frame_id = crate::window::FrameId(emacs_frame_id);
+            let frame_id = neovm_value::display_vocab::FrameId(emacs_frame_id);
             self.frames.get(frame_id).map(|frame| frame.id)
         }
     }
 
     fn record_mouse_pixel_position(
         &mut self,
-        frame_id: Option<crate::window::FrameId>,
+        frame_id: Option<neovm_value::display_vocab::FrameId>,
         x: i64,
         y: i64,
     ) {
@@ -5018,7 +5029,7 @@ impl crate::emacs_core::eval::Context {
 
     fn resolve_text_area_help_echo_event(
         &mut self,
-        frame_id: crate::window::FrameId,
+        frame_id: neovm_value::display_vocab::FrameId,
         x: i64,
         y: i64,
     ) -> Option<Value> {
@@ -5041,10 +5052,10 @@ impl crate::emacs_core::eval::Context {
                 return None;
             }
             let window = hit.region().window()?;
-            let window_id = crate::window::WindowId(window.get() as u64);
+            let window_id = neovm_edit::emacs_core::display_metrics::WindowId(window.get() as u64);
             match frame.active_window_presentation(window_id)? {
-                crate::window::WindowPresentationSnapshot::LiveWindow(_) => {}
-                crate::window::WindowPresentationSnapshot::GeometryOnly(_) => return None,
+                crate::emacs_core::eval::data::window_state::WindowPresentationSnapshot::LiveWindow(_) => {}
+                crate::emacs_core::eval::data::window_state::WindowPresentationSnapshot::GeometryOnly(_) => return None,
             }
             let position = hit.text_position()?;
             (window_id, position.buffer_position())
@@ -5062,7 +5073,10 @@ impl crate::emacs_core::eval::Context {
             // position. Only a coordinate the classifier placed outside the
             // chrome lines has a position to read a text property at.
             let hit = frame.coordinate_hit(x, y)?;
-            let crate::window::WindowCoordinate::Buffer { at, .. } = hit.coordinate else {
+            let crate::emacs_core::eval::data::window_state::WindowCoordinate::Buffer {
+                at, ..
+            } = hit.coordinate
+            else {
                 return None;
             };
             let snapshot = frame.redisplay_snapshot(hit.window)?;
@@ -5106,7 +5120,7 @@ impl crate::emacs_core::eval::Context {
 
     fn queue_mouse_help_echo_update(
         &mut self,
-        frame_id: Option<crate::window::FrameId>,
+        frame_id: Option<neovm_value::display_vocab::FrameId>,
         x: i64,
         y: i64,
     ) {
@@ -5145,7 +5159,7 @@ impl crate::emacs_core::eval::Context {
 
     pub(crate) fn note_mouse_move_for_frame(
         &mut self,
-        frame_id: Option<crate::window::FrameId>,
+        frame_id: Option<neovm_value::display_vocab::FrameId>,
         x: i64,
         y: i64,
     ) {
@@ -5482,7 +5496,7 @@ impl crate::emacs_core::eval::Context {
         let slots = crate::emacs_core::value::list_to_vec(&position)?;
         let first = *slots.first()?;
         let wid = first.as_window_id()?;
-        let window_id = crate::window::WindowId(wid);
+        let window_id = neovm_edit::emacs_core::display_metrics::WindowId(wid);
 
         for frame_id in frames.frame_list() {
             let Some(frame) = frames.get(frame_id) else {
@@ -5603,7 +5617,7 @@ impl crate::emacs_core::eval::Context {
     ) -> Option<(MouseEventFallbackStep, Option<Value>)> {
         let symbol_name = Self::mouse_event_symbol_name(&event, mode)?;
         let (modifier_prefix, base) =
-            crate::emacs_core::keyboard::pure::split_symbol_modifiers(&symbol_name);
+            neovm_value::keyboard_pure::split_symbol_modifiers(&symbol_name);
         let mut rewritten_name = modifier_prefix;
 
         let rewritten_base = if let Some(rest) = base.strip_prefix("triple-") {
@@ -5705,10 +5719,12 @@ impl crate::emacs_core::eval::Context {
         }
     }
 
-    fn window_point(window: &crate::window::Window) -> Option<i64> {
+    fn window_point(window: &crate::emacs_core::eval::data::window_state::Window) -> Option<i64> {
         match window {
-            crate::window::Window::Leaf { point, .. } => Some(point.as_i64()),
-            crate::window::Window::Internal { .. } => None,
+            crate::emacs_core::eval::data::window_state::Window::Leaf { point, .. } => {
+                Some(point.as_i64())
+            }
+            crate::emacs_core::eval::data::window_state::Window::Internal { .. } => None,
         }
     }
 
@@ -5744,11 +5760,11 @@ impl crate::emacs_core::eval::Context {
         ])
     }
 
-    fn event_frame_id(&self, emacs_frame_id: u64) -> Option<crate::window::FrameId> {
+    fn event_frame_id(&self, emacs_frame_id: u64) -> Option<neovm_value::display_vocab::FrameId> {
         if emacs_frame_id == 0 {
             self.frames.selected_frame().map(|frame| frame.id)
         } else {
-            Some(crate::window::FrameId(emacs_frame_id))
+            Some(neovm_value::display_vocab::FrameId(emacs_frame_id))
         }
     }
 
@@ -5901,7 +5917,8 @@ impl crate::emacs_core::eval::Context {
         let Some(frame) = (if frame_id == 0 {
             eval.frames.selected_frame()
         } else {
-            eval.frames.get(crate::window::FrameId(frame_id))
+            eval.frames
+                .get(neovm_value::display_vocab::FrameId(frame_id))
         }) else {
             return Self::mouse_posn_descriptor_value(MousePosnDescriptor {
                 window_or_frame: Value::NIL,
@@ -6054,7 +6071,7 @@ impl crate::emacs_core::eval::Context {
         let column_width = frame.char_width.max(1.0).round() as i64;
 
         match hit.coordinate {
-            crate::window::WindowCoordinate::ChromeLine {
+            crate::emacs_core::eval::data::window_state::WindowCoordinate::ChromeLine {
                 line,
                 window_x,
                 window_y,
@@ -6063,7 +6080,8 @@ impl crate::emacs_core::eval::Context {
                 // never re-runs a walk (src/dispnew.c:6444-6519), and GNU sets
                 // `textpos = -1` for this branch (src/keyboard.c:5900) -- so a
                 // chrome posn has no buffer position at all.
-                let unfilled = crate::window::WindowDisplaySnapshot::default();
+                let unfilled =
+                    crate::emacs_core::eval::data::window_state::WindowDisplaySnapshot::default();
                 let retained = frame.redisplay_snapshot(window_id).unwrap_or(&unfilled);
                 let chrome = retained.chrome_line_hit(
                     line,
@@ -6089,7 +6107,7 @@ impl crate::emacs_core::eval::Context {
                     },
                 })
             }
-            crate::window::WindowCoordinate::Buffer {
+            crate::emacs_core::eval::data::window_state::WindowCoordinate::Buffer {
                 part,
                 window_x,
                 window_y,
@@ -6100,17 +6118,22 @@ impl crate::emacs_core::eval::Context {
                 // top of the TEXT area, everything else relative to the
                 // window's own corner (src/keyboard.c:5878-5975).
                 let (report_x, report_y) = match part {
-                    crate::window::WindowPart::Text => (at.text_area_x(), at.text_area_y()),
-                    crate::window::WindowPart::LeftMargin
-                    | crate::window::WindowPart::RightMargin
-                    | crate::window::WindowPart::LeftFringe
-                    | crate::window::WindowPart::RightFringe => (window_x, at.text_area_y()),
+                    crate::emacs_core::eval::data::window_state::WindowPart::Text => {
+                        (at.text_area_x(), at.text_area_y())
+                    }
+                    crate::emacs_core::eval::data::window_state::WindowPart::LeftMargin
+                    | crate::emacs_core::eval::data::window_state::WindowPart::RightMargin
+                    | crate::emacs_core::eval::data::window_state::WindowPart::LeftFringe
+                    | crate::emacs_core::eval::data::window_state::WindowPart::RightFringe => {
+                        (window_x, at.text_area_y())
+                    }
                     _ => (window_x, window_y),
                 };
                 if let Some(snapshot) = frame.redisplay_snapshot(window_id)
                     && let Some(point) = snapshot.point_at_coords(at)
                 {
-                    let (object_width, object_height) = if part == crate::window::WindowPart::Text
+                    let (object_width, object_height) = if part
+                        == crate::emacs_core::eval::data::window_state::WindowPart::Text
                         && frame.effective_window_system().is_none()
                         && frame.posn_object_extent_mode().enabled()
                     {
@@ -6193,7 +6216,7 @@ impl crate::emacs_core::eval::Context {
     }
 
     fn make_presented_mouse_position(
-        frame: &crate::window::Frame,
+        frame: &crate::emacs_core::eval::data::window_state::Frame,
         frame_id: u64,
         x: f32,
         y: f32,
@@ -6247,11 +6270,13 @@ impl crate::emacs_core::eval::Context {
                 },
             }));
         };
-        let window_id = crate::window::WindowId(window_id.get() as u64);
+        let window_id = neovm_edit::emacs_core::display_metrics::WindowId(window_id.get() as u64);
         let publication = frame.active_presentation_geometry()?;
         let presented = publication
             .resolve(crate::window::geometry::WindowGeometryQuery::new(
-                crate::window::geometry::PresentationId::new(observation.presentation),
+                crate::emacs_core::eval::data::window_state::PresentationId::new(
+                    observation.presentation,
+                ),
                 window_id,
             ))
             .ok()?;
@@ -6272,7 +6297,7 @@ impl crate::emacs_core::eval::Context {
             frame.active_window_presentation(window_id)?,
             hit.text_position(),
         ) {
-            (crate::window::WindowPresentationSnapshot::LiveWindow(_), Some(point)) => {
+            (crate::emacs_core::eval::data::window_state::WindowPresentationSnapshot::LiveWindow(_), Some(point)) => {
                 let bounds = point.bounds();
                 let mut object_dimensions = (
                     bounds.width().round().max(1.0) as i64,
@@ -6293,7 +6318,7 @@ impl crate::emacs_core::eval::Context {
                         .unwrap_or(point.row());
                     let mut matrix_position = (output_row, point.column());
                     if point.point_role() == neomacs_display_protocol::posn_object_extent::PosnPointRole::SyntheticBoundary {
-                        if let Some(at) = crate::window::WindowPart::Text.text_area_coordinate(
+                        if let Some(at) = crate::emacs_core::eval::data::window_state::WindowPart::Text.text_area_coordinate(
                             (x - presented.regions().text_body().origin().x().get()).round() as i64,
                             (y - outer.origin().y().get()).round() as i64,
                             snapshot.header_line_height + snapshot.tab_line_height)
@@ -6318,12 +6343,12 @@ impl crate::emacs_core::eval::Context {
                     anchor_y: None,
                 }
             }
-            (crate::window::WindowPresentationSnapshot::LiveWindow(snapshot), None)
+            (crate::emacs_core::eval::data::window_state::WindowPresentationSnapshot::LiveWindow(snapshot), None)
                 if region.kind() == neomacs_display_protocol::PresentedRegionKind::TextBody
                     && frame.effective_window_system().is_none()
                     && frame.posn_object_extent_mode().enabled() =>
             {
-                let extent = crate::window::WindowPart::Text
+                let extent = crate::emacs_core::eval::data::window_state::WindowPart::Text
                     .text_area_coordinate(
                         (x - presented.regions().text_body().origin().x().get()).round() as i64,
                         (y - outer.origin().y().get()).round() as i64,
@@ -6352,8 +6377,8 @@ impl crate::emacs_core::eval::Context {
                     anchor_y: None,
                 }
             }
-            (crate::window::WindowPresentationSnapshot::LiveWindow(_), None)
-            | (crate::window::WindowPresentationSnapshot::GeometryOnly(_), _) => MousePosnMetrics {
+            (crate::emacs_core::eval::data::window_state::WindowPresentationSnapshot::LiveWindow(_), None)
+            | (crate::emacs_core::eval::data::window_state::WindowPresentationSnapshot::GeometryOnly(_), _) => MousePosnMetrics {
                 point: fallback_point,
                 col: None,
                 row: None,
@@ -6383,8 +6408,8 @@ impl crate::emacs_core::eval::Context {
 
     fn presented_string_position_value(
         eval: &Self,
-        frame: &crate::window::Frame,
-        window: crate::window::WindowId,
+        frame: &crate::emacs_core::eval::data::window_state::Frame,
+        window: neovm_edit::emacs_core::display_metrics::WindowId,
         hit: neomacs_display_protocol::PresentedHit,
     ) -> Option<Value> {
         let position = hit.string_position()?;
