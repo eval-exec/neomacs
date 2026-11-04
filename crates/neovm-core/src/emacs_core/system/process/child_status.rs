@@ -176,7 +176,7 @@ use super::{
     Process, ProcessId, ProcessManager, ProcessStatusSymbol, Value, process_effective_status,
     process_public_status_symbol,
 };
-use crate::emacs_core::eval::data::process_state::StatusChangeTicks;
+use crate::emacs_core::eval::data::process_state::{StatusChangeSite, StatusChangeTicks};
 use crate::emacs_core::process::SystemProcessExt;
 
 /// A process that GNU's SIGCHLD sweep may harvest.
@@ -599,75 +599,6 @@ impl ProcessManager {
 // GNU's per-process tick pair
 // ---------------------------------------------------------------------------
 
-/// GNU's `p->tick = ++process_tick;` -- the assignment that puts a process
-/// into `status_notify`'s visit set -- with **one variant per line in
-/// `src/process.c` that spells it**.
-///
-/// `grep -n 'tick = ++process_tick' src/process.c` returns exactly eight lines
-/// on GNU master since e381cf1fc97 (2025-08-15, "Allow child processes to
-/// continue after EPIPE"), and they are the eight below.  The emacs-31.1
-/// release (a360712c9d, 2026-08-24) predates that change on its branch and
-/// still has a NINTH: `send_process`'s EPIPE arm at :6927, which synthesizes
-/// `(exit . 256)` -- behavior 4d7e6e51dd4 introduced in 2012 and master no
-/// longer has.  This port follows master's arm (see `write_process_input_once`),
-/// so the ninth line is deliberately not a variant; the line numbers cited
-/// on the eight variants are emacs-31.0.90's, identical in emacs-31.1
-/// (master's are 1169, 1189, 6075, 6092, 6101, 6158, 7193, 7752, the same
-/// eight sites renumbered).  **Seven of them have nothing to do with
-/// SIGCHLD**, which is the fact this type exists to keep in front of the next
-/// reader: the record that decides whom `status_notify` visits is not the
-/// child-signal record.  GNU declares the counter and the reason for it at
-/// :232-235:
-///
-/// ```c
-/// /* Number of events of change of status of a process.  */
-/// static EMACS_INT process_tick;
-/// /* Number of events for which the user or sentinel has been notified.  */
-/// static EMACS_INT update_tick;
-/// ```
-///
-/// A ninth site cannot be added without a GNU citation, because
-/// [`Self::gnu`], [`Self::what`] and [`Self::notifier`] are exhaustive matches
-/// and [`Self::COUNT`] (derived from the last discriminant) is asserted in
-/// `process_test.rs`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(usize)]
-pub(crate) enum StatusChangeSite {
-    /// `Fdelete_process`'s network/serial/pipe arm (:1128).
-    DeleteProcessConnection = 0,
-    /// `Fdelete_process`'s real-subprocess arm, `infd >= 0` (:1148).
-    DeleteProcessChild,
-    /// `read_process_output`'s PTY `EIO` arm for a `pid == -2` process
-    /// (:6058), which becomes `Qfailed`.
-    ///
-    /// **Never constructed outside the table, and the compiler is right about
-    /// that.**  It is GNU's line all the same, and the table is the eight lines
-    /// rather than the seven this port reaches; `Self::recorder`'s `NoAnalogue`
-    /// arm says why there is nothing to record here, and deleting the `allow`
-    /// is how a future entry that grows the window announces itself.
-    #[allow(dead_code)]
-    PtyEioBeforeFork,
-    /// `wait_reading_process_output`'s pipe-connection EOF arm (:6075).
-    PipeConnectionReadEof,
-    /// `wait_reading_process_output`'s non-EOF read failure arm (:6084),
-    /// which becomes `(exit . 256)`.
-    SubprocessReadFailure,
-    /// `connect_network_socket`'s failed non-blocking connect (:6141), which
-    /// becomes `(failed . ERRNO)`.
-    NonBlockingConnectFailed,
-    /// `send_process`'s EPIPE arm on the release lineage (:6927), which
-    /// becomes `(exit . 256)` and deactivates the connection.  GNU master
-    /// (e381cf1fc97) removed this bump; this port applies it only to network
-    /// connections, which have no child whose real status must survive the
-    /// write failure.  See `ProcessManager::write_process_input_once`.
-    SendProcessEpipe,
-    /// `process_send_signal` sent `SIGCONT` (:7178), which becomes `Qrun`.
-    ProcessSendSignalSigcont,
-    /// `handle_child_signal`'s `child_status_changed` (:7746) -- the only one
-    /// of the eight that is the SIGCHLD record.
-    HandleChildSignal,
-}
-
 /// Who runs the sentinel for a change recorded at a [`StatusChangeSite`].
 ///
 /// GNU's eight bump sites are not one mechanism.  Four of them call
@@ -711,129 +642,6 @@ pub(crate) enum StatusChangeRecorder {
     Here(&'static str),
     /// GNU's state has no analogue here, with the reason.
     NoAnalogue { why: &'static str },
-}
-
-impl StatusChangeSite {
-    /// Derived from the last discriminant, so a variant missing from
-    /// [`Self::ALL`] is a compile error rather than a silent omission.
-    #[cfg(test)]
-    pub(crate) const COUNT: usize = Self::HandleChildSignal as usize + 1;
-
-    #[cfg(test)]
-    pub(crate) const ALL: [Self; Self::COUNT] = [
-        Self::DeleteProcessConnection,
-        Self::DeleteProcessChild,
-        Self::PtyEioBeforeFork,
-        Self::PipeConnectionReadEof,
-        Self::SubprocessReadFailure,
-        Self::NonBlockingConnectFailed,
-        Self::SendProcessEpipe,
-        Self::ProcessSendSignalSigcont,
-        Self::HandleChildSignal,
-    ];
-
-    /// `file:line` of the `p->tick = ++process_tick;` in the GNU tree.
-    pub(crate) fn gnu(self) -> &'static str {
-        match self {
-            Self::DeleteProcessConnection => "src/process.c:1128",
-            Self::DeleteProcessChild => "src/process.c:1148",
-            Self::PtyEioBeforeFork => "src/process.c:6058",
-            Self::PipeConnectionReadEof => "src/process.c:6075",
-            Self::SubprocessReadFailure => "src/process.c:6084",
-            Self::NonBlockingConnectFailed => "src/process.c:6141",
-            Self::SendProcessEpipe => "src/process.c:6927",
-            Self::ProcessSendSignalSigcont => "src/process.c:7178",
-            Self::HandleChildSignal => "src/process.c:7746",
-        }
-    }
-
-    /// The status GNU publishes at the site, so the table reads as a table.
-    pub(crate) fn what(self) -> &'static str {
-        match self {
-            Self::DeleteProcessConnection => "(exit . 0) on a deleted connection",
-            Self::DeleteProcessChild => "(signal . SIGKILL) on a deleted subprocess",
-            Self::PtyEioBeforeFork => "failed, on EIO before the fork completed",
-            Self::PipeConnectionReadEof => "(exit . 0) on a pipe connection's EOF",
-            Self::SubprocessReadFailure => "(exit . 256) on a subprocess read failure",
-            Self::NonBlockingConnectFailed => "(failed . ERRNO) on a failed connect",
-            Self::SendProcessEpipe => "(exit . 256) on a network connection's EPIPE",
-            Self::ProcessSendSignalSigcont => "run, on SIGCONT",
-            Self::HandleChildSignal => "the raw wait status of a changed child",
-        }
-    }
-
-    /// Where this port records the change, or why it has nothing to record.
-    #[cfg(test)]
-    pub(crate) fn recorder(self) -> StatusChangeRecorder {
-        match self {
-            Self::DeleteProcessConnection | Self::DeleteProcessChild => {
-                StatusChangeRecorder::Here("ProcessManager::stamp_process_for_delete")
-            }
-            Self::PipeConnectionReadEof => {
-                StatusChangeRecorder::Here("ProcessManager::retire_pipe_process_at_read_eof")
-            }
-            Self::SubprocessReadFailure => {
-                StatusChangeRecorder::Here("ProcessManager::retire_process_at_read_failure")
-            }
-            Self::NonBlockingConnectFailed => {
-                StatusChangeRecorder::Here("ProcessManager::complete_pending_network_connect")
-            }
-            Self::SendProcessEpipe => {
-                StatusChangeRecorder::Here("ProcessManager::write_process_input_once")
-            }
-            Self::ProcessSendSignalSigcont => {
-                StatusChangeRecorder::Here("builtin_continue_process_impl")
-            }
-            Self::HandleChildSignal => {
-                StatusChangeRecorder::Here("ProcessManager::set_child_status_pending")
-            }
-            // GNU's `p->pid == -2` is the window between `allocate_pty` and a
-            // successful `fork` (src/process.c:6053-6060): the PTY master is
-            // open and no child owns the slave yet, so an `EIO` on it means
-            // the fork will never be reported by SIGCHLD.  This port has no
-            // such window -- `spawn_child_with_environment` either returns a
-            // child handle or reports the failure as a status in the same
-            // call, so a process is never listed with a PTY and no child --
-            // and `Fprocess_id` therefore has no `-2` to answer.
-            Self::PtyEioBeforeFork => StatusChangeRecorder::NoAnalogue {
-                why: "no pid == -2 window: the spawn publishes its own failure status",
-            },
-        }
-    }
-
-    /// Whether GNU consumes the bump on the spot or leaves it for the wait.
-    #[cfg(test)]
-    pub(crate) fn notifier(self) -> StatusChangeNotifier {
-        match self {
-            Self::DeleteProcessConnection => StatusChangeNotifier::SynchronouslyAtTheSite {
-                gnu: "src/process.c:1129, status_notify (p, NULL)",
-                here: "Context::delete_process_running_its_sentinel",
-            },
-            Self::DeleteProcessChild => StatusChangeNotifier::SynchronouslyAtTheSite {
-                gnu: "src/process.c:1149, status_notify (p, NULL)",
-                here: "Context::delete_process_running_its_sentinel",
-            },
-            Self::NonBlockingConnectFailed => StatusChangeNotifier::SynchronouslyAtTheSite {
-                // GNU has no `status_notify` here; its :6141 bump is picked up
-                // by the wait it is already inside.  This port completes a
-                // pending connect and runs the `failed` sentinel in the same
-                // service pass, which is the same call, so the tick must be
-                // consumed there or the sentinel runs twice.
-                gnu: "src/process.c:6141, inside wait_reading_process_output's own pass",
-                here: "Context::service_process_output_for_ids, \
-                       PendingNetworkConnectCompletion::Failed",
-            },
-            Self::ProcessSendSignalSigcont => StatusChangeNotifier::SynchronouslyAtTheSite {
-                gnu: "src/process.c:7181, status_notify (NULL, NULL)",
-                here: "Context::builtin_continue_process -> notify_process_status_sentinel",
-            },
-            Self::PtyEioBeforeFork
-            | Self::PipeConnectionReadEof
-            | Self::SubprocessReadFailure
-            | Self::SendProcessEpipe
-            | Self::HandleChildSignal => StatusChangeNotifier::TheWaitsStatusNotify,
-        }
-    }
 }
 
 impl StatusChangeTicks {

@@ -72,7 +72,7 @@ use status_notify::ProcessStatusNotification;
 /// being read before the recording has been made.  See
 /// `process/child_status.rs`.
 pub(crate) mod child_status;
-pub(crate) use child_status::{StatusChangeSite, UnrecordedStatusRead, UpdateStatusSite};
+pub(crate) use child_status::{UnrecordedStatusRead, UpdateStatusSite};
 
 /// The single owner of `waitpid`, and GNU's `p->alive` as a type: a child that
 /// has been reaped has no pid to hand to `kill(2)` or to a second `waitpid`.

@@ -9,10 +9,13 @@
 //! delivery of A3 re-points them here.
 
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::io::Read;
 use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
 #[cfg(unix)]
 use std::os::fd::OwnedFd;
+#[cfg(unix)]
+use std::os::unix::ffi::OsStrExt;
 #[cfg(unix)]
 use std::os::unix::net::{UnixDatagram, UnixListener, UnixStream};
 use std::path::PathBuf;
@@ -23,12 +26,15 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use neovm_value::heap_types::{LispString, ProcessId};
-use neovm_value::value::{Value, ValueKind};
+use neovm_value::value::buffer_vocab::BufferId;
+use neovm_value::value::{Value, ValueKind, equal_value, list_to_vec};
 use num_enum::IntoPrimitive;
 use polling::Poller;
 use socket2::Socket;
 use strum::{EnumString, IntoStaticStr};
 
+use crate::buffer::BufferManager;
+use crate::emacs_core::error::{EvalResult, Flow, signal};
 use crate::emacs_core::eval::data::process_spawn::SpawnedChild;
 use crate::emacs_core::eval::data::process_tls::TlsStream;
 use crate::emacs_core::intern::resolve_sym;
@@ -1312,3 +1318,867 @@ impl ProcessFilterDispatch {
 // Default filter symbol (A3b-6).
 
 pub const DEFAULT_PROCESS_FILTER_SYMBOL: &str = "internal-default-process-filter";
+
+// ProcessManager state impl (A3b-2).
+
+impl ProcessManager {
+    pub fn new() -> Self {
+        Self {
+            processes: HashMap::new(),
+            deleted_processes: HashMap::new(),
+            ids: Box::new(ProcessIdState {
+                next_id: 1,
+                last_read_process: 0,
+            }),
+            process_tick: 0,
+            default_read_config: ProcessReadConfig::default(),
+            env_overrides: HashMap::new(),
+            wait_backend: ProcessWaitBackend::new(),
+        }
+    }
+
+    pub fn set_default_read_config(&mut self, config: ProcessReadConfig) {
+        self.default_read_config = config;
+    }
+
+    pub fn adaptive_read_timeout(&self) -> Option<Duration> {
+        self.processes
+            .values()
+            .filter(|process| process.adaptive_read_buffering != 0)
+            .filter_map(|process| {
+                (!process.read_output_delay.is_zero()).then_some(process.read_output_delay)
+            })
+            .min()
+            .map(|delay| delay.min(Duration::from_millis(READ_OUTPUT_DELAY_MAX_MS)))
+    }
+
+    pub fn clear_adaptive_read_skip_if_needed(&mut self, id: ProcessId) -> bool {
+        let Some(proc) = self.processes.get_mut(&id) else {
+            return false;
+        };
+        if proc.adaptive_read_buffering == 0
+            || proc.read_output_delay.is_zero()
+            || !proc.read_output_skip
+        {
+            return false;
+        }
+        proc.read_output_skip = false;
+        true
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_process_record(
+        &mut self,
+        name: LispString,
+        buffer: Value,
+        command: LispString,
+        args: Vec<LispString>,
+        kind: ProcessKind,
+        executable: Option<LispString>,
+        coding: ProcessCodingSystems,
+    ) -> ProcessId {
+        // GNU `make_process` owns process-name allocation for every process
+        // kind.  Probe the live process registry and append the smallest free
+        // `<N>` suffix before the new record becomes visible.
+        let name = self.allocate_process_name(name);
+        let id = self.ids.next_id;
+        self.ids.next_id += 1;
+        let (tty_name, tty_stdin, tty_stdout, tty_stderr) = match kind {
+            ProcessKind::Real => {
+                let tty_name = Value::string(default_process_tty_name());
+                (tty_name, true, true, true)
+            }
+            ProcessKind::Network | ProcessKind::Pipe | ProcessKind::Serial => {
+                (Value::NIL, false, false, false)
+            }
+        };
+        let proc_type = process_type_value(&kind);
+        let childp = if kind == ProcessKind::Real {
+            Value::T
+        } else {
+            Value::NIL
+        };
+        let read_config = self.default_read_config;
+        let proc = Process {
+            id,
+            name: process_name_lisp_value(&name),
+            command: make_process_command_lisp_value(&kind, &command, &args),
+            executable,
+            kind,
+            proc_type,
+            status: process_status_run_value(),
+            status_notify_pending: false,
+            status_ticks: StatusChangeTicks::default(),
+            pending_status: Value::NIL,
+            buffer,
+            childp,
+            write_queue: Value::NIL,
+            readmax: read_config.readmax,
+            adaptive_read_buffering: read_config.adaptive_read_buffering,
+            read_output_delay: Duration::ZERO,
+            read_output_skip: false,
+            exit_query_policy: ExitQueryPolicy::GNU_MAKE_PROCESS,
+            filter: Value::symbol(DEFAULT_PROCESS_FILTER_SYMBOL),
+            sentinel: Value::symbol(DEFAULT_PROCESS_SENTINEL_SYMBOL),
+            log: Value::NIL,
+            plist: Value::NIL,
+            stderrproc: Value::NIL,
+            // There is no initialiser to write here any more.  GNU's
+            // `make_process` leaves both slots nil and lets the creating
+            // primitive's own resolver fill them in; each of the five
+            // primitives now supplies its resolver's answer as an argument, so
+            // the pair arrives already attributed.  The `utf-8-unix` literal
+            // that used to sit here was not a neutral placeholder -- it was the
+            // answer `default-process-coding-system` happens to hold under a
+            // UTF-8 locale, which is why nothing noticed that
+            // `make-pipe-process` and `make-serial-process` never resolved
+            // anything.  See DIVERGENCES.md entries 131 and 137.
+            coding_decode: coding.decode,
+            coding_state: ProcessCodingState::default(),
+            coding_encode: coding.encode,
+            encoding_state: ProcessEncodingState::default(),
+            coding_explicitly_set: false,
+            explicit_coding_status_deferred_once: false,
+            inherit_coding_system_flag: false,
+            thread: Value::NIL,
+            window_cols: None,
+            window_rows: None,
+            tty_name,
+            tty_stdin,
+            tty_stdout,
+            tty_stderr,
+            os_pid: None,
+            input_disposition: ProcessInputDisposition::Connected,
+            eof_sent_to_process: false,
+            live_io: LiveProcessIo::default(),
+            datagram_address: Value::NIL,
+            datagram_socket_addr: None,
+            #[cfg(unix)]
+            datagram_unix_path: None,
+            gnutls_initstage: GnutlsInitStage::Empty,
+            gnutls_boot_parameters: Value::NIL,
+            mark: crate::emacs_core::marker::make_marker_value(None, None, false),
+            default_directory: None,
+        };
+        register_process_print_name(id, &process_name_runtime(proc.name));
+        self.processes.insert(id, proc);
+        id
+    }
+
+    pub fn allocate_process_name(&self, requested: LispString) -> LispString {
+        if !self.process_name_is_in_use(&requested) {
+            return requested;
+        }
+
+        for suffix in 1_u64.. {
+            let suffix = LispString::from_unibyte(format!("<{suffix}>").into_bytes());
+            let candidate = requested.concat(&suffix);
+            if !self.process_name_is_in_use(&candidate) {
+                return candidate;
+            }
+        }
+
+        unreachable!("the process-name suffix space cannot be exhausted")
+    }
+
+    pub fn process_name_is_in_use(&self, candidate: &LispString) -> bool {
+        self.processes.values().any(|process| {
+            process.name.as_lisp_string().is_some_and(|existing| {
+                // `Fget_process` searches `Vprocess_alist` with `assoc`, whose
+                // string equality compares character count, byte count, and
+                // contents while ignoring text properties and the
+                // unibyte/multibyte flag itself.
+                existing.schars() == candidate.schars()
+                    && existing.sbytes() == candidate.sbytes()
+                    && existing.as_bytes() == candidate.as_bytes()
+            })
+        })
+    }
+
+    pub fn sync_process_mark(&mut self, buffers: &mut BufferManager, id: ProcessId) -> EvalResult {
+        let proc = self
+            .get_mut(id)
+            .ok_or_else(|| signal("error", vec![Value::string("Process not found")]))?;
+        update_process_mark(buffers, proc)
+    }
+
+    pub fn set_child_status_pending(&mut self, id: ProcessId, status: Value) {
+        if let Some(proc) = self.processes.get_mut(&id) {
+            proc.pending_status = status;
+            proc.status_notify_pending = true;
+        } else {
+            return;
+        }
+        // GNU stamps the tick and `raw_status_new` together in
+        // `handle_child_signal` (src/process.c:7746-7747).  Recording the tick
+        // here rather than at the callers is what keeps the invariant this
+        // module rests on: every `status_notify_pending` this port sets has an
+        // unnotified tick behind it, so `status_notify`'s visit set can be read
+        // off the tick pair alone.
+        self.record_status_change(StatusChangeSite::HandleChildSignal, id);
+    }
+
+    pub fn stderr_pipe_owner(&self, stderr_id: ProcessId) -> Option<ProcessId> {
+        self.processes
+            .get(&stderr_id)
+            .and_then(|stderr| stderr.live_io.stderr_pipe_owner)
+    }
+
+    pub fn clear_status_notify_pending(&mut self, id: ProcessId) {
+        if let Some(proc) = self.processes.get_mut(&id) {
+            proc.status_notify_pending = false;
+            proc.pending_status = Value::NIL;
+            #[cfg(windows)]
+            {}
+        }
+    }
+
+    pub fn process_ids_for_buffer(&self, buffer_id: BufferId) -> Vec<ProcessId> {
+        let buffer = Value::make_buffer(buffer_id);
+        self.processes
+            .iter()
+            .filter_map(|(id, proc)| (proc.buffer == buffer).then_some(*id))
+            .collect()
+    }
+
+    /// Get process status.
+    pub fn process_status(&self, id: ProcessId) -> Option<&Value> {
+        self.processes.get(&id).map(|p| &p.status)
+    }
+
+    /// Get process status for both live and stale process handles.
+    pub fn process_status_any(&self, id: ProcessId) -> Option<&Value> {
+        self.processes
+            .get(&id)
+            .map(|p| &p.status)
+            .or_else(|| self.deleted_processes.get(&id).map(|p| &p.status))
+    }
+
+    /// Project only the live owner's actual pending TCP state. This neither
+    /// changes nor claims to inspect the native poller's registration. The
+    /// fixture separately requires the real canonical writable backend event.
+    #[cfg(test)]
+    pub fn main_connect_pending_for_test(
+        &self,
+        id: ProcessId,
+    ) -> Result<MainConnectPending, PendingConnectObservationError> {
+        let process = self
+            .get(id)
+            .ok_or(PendingConnectObservationError::MissingProcess)?;
+        if ProcessStatusSymbol::from_status_value(process.status)
+            != Some(ProcessStatusSymbol::Connect)
+        {
+            return Err(PendingConnectObservationError::AlreadyDecoded);
+        }
+        match process.live_io.pending_network_connect.as_ref() {
+            Some(PendingNetworkConnect::Tcp { .. }) => {}
+            Some(PendingNetworkConnect::Dns(_)) | None => {
+                return Err(PendingConnectObservationError::NotPendingTcp);
+            }
+            #[cfg(unix)]
+            Some(PendingNetworkConnect::Local) => {
+                return Err(PendingConnectObservationError::NotPendingTcp);
+            }
+        }
+        let socket = process
+            .live_io
+            .network_socket
+            .as_ref()
+            .ok_or(PendingConnectObservationError::MissingSocket)?;
+        match socket {
+            NetworkSocket::TcpStream(_) => {}
+            NetworkSocket::TcpListener(_) | NetworkSocket::UdpSocket(_) => {
+                return Err(PendingConnectObservationError::NotTcpStream);
+            }
+            #[cfg(unix)]
+            NetworkSocket::SeqpacketStream(_)
+            | NetworkSocket::SeqpacketListener(_)
+            | NetworkSocket::UnixStream(_)
+            | NetworkSocket::UnixListener(_)
+            | NetworkSocket::UnixDatagram(_) => {
+                return Err(PendingConnectObservationError::NotTcpStream);
+            }
+        }
+        self.wait_backend
+            .poller()
+            .ok_or(PendingConnectObservationError::MissingBackend)?;
+        Ok(MainConnectPending { process: id })
+    }
+
+    /// Get a process by id.
+    pub fn get(&self, id: ProcessId) -> Option<&Process> {
+        self.processes.get(&id)
+    }
+
+    /// Get a process by id from either live or stale process tables.
+    pub fn get_any(&self, id: ProcessId) -> Option<&Process> {
+        self.processes
+            .get(&id)
+            .or_else(|| self.deleted_processes.get(&id))
+    }
+
+    /// Get a mutable process by id.
+    pub fn get_mut(&mut self, id: ProcessId) -> Option<&mut Process> {
+        self.processes.get_mut(&id)
+    }
+
+    /// Get a mutable process by id from either live or stale process tables.
+    pub fn get_any_mut(&mut self, id: ProcessId) -> Option<&mut Process> {
+        if self.processes.contains_key(&id) {
+            self.processes.get_mut(&id)
+        } else {
+            self.deleted_processes.get_mut(&id)
+        }
+    }
+
+    /// List all process ids.
+    pub fn list_processes(&self) -> Vec<ProcessId> {
+        // GNU `process-list` is `(mapcar #'cdr Vprocess_alist)`, and a new
+        // process is consed to the FRONT of `Vprocess_alist` (process.c:953), so
+        // the list is newest-first. `ProcessId` is a monotonic counter, so
+        // sorting by descending id reproduces GNU's order exactly (a deleted
+        // process is removed from both the alist and the map).
+        let mut ids: Vec<ProcessId> = self.processes.keys().copied().collect();
+        ids.sort_unstable_by(|a, b| b.cmp(a));
+        ids
+    }
+
+    /// Return IDs of processes with output or lifecycle work the wait loop can service.
+    ///
+    /// Child status observation is deliberately independent of readable I/O:
+    /// a stopped child does not admit output, but GNU continues including it
+    /// in `waitpid(WUNTRACED | WCONTINUED)` scans so a later `SIGCONT` can
+    /// publish the `run` transition.
+    ///
+    /// The order is GNU's, and it is Lisp-visible.  This list drives the
+    /// service pass that both drains output and publishes status, which is
+    /// `status_notify`'s `FOR_EACH_PROCESS` walk (src/process.c:7885) -- over
+    /// `Vprocess_alist`, onto whose FRONT `make_process` conses each new
+    /// process (:953).  So the walk is NEWEST-FIRST, and two children that
+    /// exited together run their sentinels in reverse creation order.  A
+    /// `HashMap` iteration order made that a coin flip instead; sorting on
+    /// descending `ProcessId` is the same identity `list_processes` uses to
+    /// reproduce `process-list`.
+    pub fn live_process_ids(&self) -> Vec<ProcessId> {
+        let mut ids: Vec<ProcessId> = self
+            .processes
+            .iter()
+            .filter(|(_, p)| {
+                if p.status_notify_pending {
+                    return true;
+                }
+                if p.live_io.pending_network_connect.is_some() {
+                    return true;
+                }
+                if process_has_observable_child_status(p) {
+                    return true;
+                }
+                if !process_has_readable_process_io(p) {
+                    return false;
+                }
+                if p.live_io.network_socket.is_some() || p.live_io.tls_stream.is_some() {
+                    return true;
+                }
+                // Standalone pipe processes (including a make-process
+                // `:stderr` pipe) have no child of their own.  Their readable
+                // endpoint is `child_stdout`, and they must be serviced so
+                // output is drained and EOF retires them.
+                if is_standalone_pipe_process(p) {
+                    return true;
+                }
+                false
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        ids.sort_unstable_by(|a, b| b.cmp(a));
+        ids
+    }
+
+    /// Returns true if this id has been allocated at least once.
+    pub fn was_issued_id(&self, id: ProcessId) -> bool {
+        id > 0 && id < self.ids.next_id
+    }
+
+    /// Find a process by name.
+    pub fn find_by_name(&self, name: &str) -> Option<ProcessId> {
+        let wanted = process_name_value(name);
+        self.processes
+            .values()
+            .find(|p| equal_value(&p.name, &wanted, 0))
+            .map(|p| p.id)
+    }
+
+    /// Find a process associated with BUFFER-ID.
+    pub fn find_by_buffer_id(
+        &self,
+        buffer_id: neovm_value::value::buffer_vocab::BufferId,
+    ) -> Option<ProcessId> {
+        self.processes
+            .values()
+            .find(|p| p.buffer.as_buffer_id() == Some(buffer_id))
+            .map(|p| p.id)
+    }
+
+    pub fn queue_input(&mut self, id: ProcessId, input: &LispString) -> Result<bool, Flow> {
+        let Some(proc) = self.processes.get_mut(&id) else {
+            return Ok(false);
+        };
+        proc.write_queue =
+            write_queue_push(proc.write_queue, Value::heap_string(input.clone()), false);
+        Ok(true)
+    }
+
+    pub fn write_queue_is_empty(&self, id: ProcessId) -> bool {
+        self.processes
+            .get(&id)
+            .is_none_or(|proc| proc.write_queue.is_nil())
+    }
+
+    pub fn pop_process_write_queue(&mut self, id: ProcessId) -> Option<ProcessWriteQueueEntry> {
+        let proc = self.processes.get_mut(&id)?;
+        let (queue, entry) = write_queue_pop(proc.write_queue);
+        proc.write_queue = queue;
+        entry
+    }
+
+    pub fn push_process_write_queue_entry(
+        &mut self,
+        id: ProcessId,
+        entry: ProcessWriteQueueEntry,
+        front: bool,
+    ) {
+        if let Some(proc) = self.processes.get_mut(&id) {
+            proc.write_queue = write_queue_push_entry(proc.write_queue, entry, front);
+        }
+    }
+
+    /// Get an environment variable (checking overrides first, then OS).
+    pub fn getenv(&self, name: &str) -> Option<LispString> {
+        let key = LispString::from_utf8(name);
+        if let Some(override_val) = self.env_overrides.get(&key) {
+            return override_val.clone();
+        }
+        std::env::var_os(name)
+            .as_ref()
+            .map(|value| os_str_to_lisp_string(value.as_os_str()))
+    }
+
+    /// Set an environment variable override.  If value is None, unset it.
+    pub fn setenv(&mut self, name: LispString, value: Option<LispString>) {
+        self.env_overrides.insert(name, value);
+    }
+}
+
+// Wait-queue/coding/status vocabulary (A3b-7).
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ProcessWriteQueueEntry {
+    pub object: Value,
+    pub offset: usize,
+    pub len: usize,
+}
+
+impl ProcessWriteQueueEntry {
+    pub fn bytes(self) -> Option<Vec<u8>> {
+        let string = self.object.as_lisp_string()?;
+        let bytes = string.as_bytes();
+        let start = self.offset.min(bytes.len());
+        let end = start.saturating_add(self.len).min(bytes.len());
+        Some(bytes[start..end].to_vec())
+    }
+
+    pub fn advance(self, written: usize) -> Self {
+        let written = written.min(self.len);
+        Self {
+            object: self.object,
+            offset: self.offset.saturating_add(written),
+            len: self.len.saturating_sub(written),
+        }
+    }
+}
+
+pub fn write_queue_push_entry(queue: Value, entry: ProcessWriteQueueEntry, front: bool) -> Value {
+    let entry = Value::cons(
+        entry.object,
+        Value::cons(
+            Value::fixnum(entry.offset as i64),
+            Value::fixnum(entry.len as i64),
+        ),
+    );
+    let mut entries = list_to_vec(&queue).unwrap_or_default();
+    if front {
+        entries.insert(0, entry);
+    } else {
+        entries.push(entry);
+    }
+    Value::list(entries)
+}
+
+pub fn write_queue_push(queue: Value, input_obj: Value, front: bool) -> Value {
+    let len = input_obj
+        .as_lisp_string()
+        .map(|string| string.sbytes())
+        .unwrap_or(0);
+    write_queue_push_entry(
+        queue,
+        ProcessWriteQueueEntry {
+            object: input_obj,
+            offset: 0,
+            len,
+        },
+        front,
+    )
+}
+
+/// The decode/encode coding systems an asynchronous subprocess is created with.
+///
+/// There is deliberately no `Default` and no field-wise constructor: GNU has
+/// FIVE creation-time resolvers for this pair -- `Fcall_process`
+/// (src/callproc.c:729-763), `Fmake_process` (src/process.c:1950-2008),
+/// `Fmake_pipe_process` (:2517-2570), `Fmake_serial_process` (:3247-3275) and
+/// `set_network_socket_coding_system` (:3291-3367) -- and they disagree about
+/// the explicit override, about which operation symbol (if any) reaches
+/// `process-coding-system-alist`, about whether a unibyte buffer short-circuits
+/// the lookup, about WHICH buffer answers that question for each half, and
+/// about whether `default-process-coding-system` applies at all.  A pair that
+/// does not say which resolver produced it is a pair nobody can check, which is
+/// exactly how `make-process` came to ship a coding system invented in Rust --
+/// and how `make-pipe-process` and `make-serial-process` went on shipping one
+/// after entry 131 fixed `make-process`.
+///
+/// It is a REQUIRED parameter of every process constructor, so there is no
+/// signature left in which a process can come into existence without a caller
+/// naming where its pair came from.
+#[derive(Clone, Copy, Debug)]
+pub struct ProcessCodingSystems {
+    pub decode: Value,
+    pub encode: Value,
+}
+
+pub const DEFAULT_PROCESS_SENTINEL_SYMBOL: &str = "internal-default-process-sentinel";
+
+/// GNU's `p->tick = ++process_tick;` -- the assignment that puts a process
+/// into `status_notify`'s visit set -- with **one variant per line in
+/// `src/process.c` that spells it**.
+///
+/// `grep -n 'tick = ++process_tick' src/process.c` returns exactly eight lines
+/// on GNU master since e381cf1fc97 (2025-08-15, "Allow child processes to
+/// continue after EPIPE"), and they are the eight below.  The emacs-31.1
+/// release (a360712c9d, 2026-08-24) predates that change on its branch and
+/// still has a NINTH: `send_process`'s EPIPE arm at :6927, which synthesizes
+/// `(exit . 256)` -- behavior 4d7e6e51dd4 introduced in 2012 and master no
+/// longer has.  This port follows master's arm (see `write_process_input_once`),
+/// so the ninth line is deliberately not a variant; the line numbers cited
+/// on the eight variants are emacs-31.0.90's, identical in emacs-31.1
+/// (master's are 1169, 1189, 6075, 6092, 6101, 6158, 7193, 7752, the same
+/// eight sites renumbered).  **Seven of them have nothing to do with
+/// SIGCHLD**, which is the fact this type exists to keep in front of the next
+/// reader: the record that decides whom `status_notify` visits is not the
+/// child-signal record.  GNU declares the counter and the reason for it at
+/// :232-235:
+///
+/// ```c
+/// /* Number of events of change of status of a process.  */
+/// static EMACS_INT process_tick;
+/// /* Number of events for which the user or sentinel has been notified.  */
+/// static EMACS_INT update_tick;
+/// ```
+///
+/// A ninth site cannot be added without a GNU citation, because
+/// [`Self::gnu`], [`Self::what`] and [`Self::notifier`] are exhaustive matches
+/// and [`Self::COUNT`] (derived from the last discriminant) is asserted in
+/// `process_test.rs`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(usize)]
+pub enum StatusChangeSite {
+    /// `Fdelete_process`'s network/serial/pipe arm (:1128).
+    DeleteProcessConnection = 0,
+    /// `Fdelete_process`'s real-subprocess arm, `infd >= 0` (:1148).
+    DeleteProcessChild,
+    /// `read_process_output`'s PTY `EIO` arm for a `pid == -2` process
+    /// (:6058), which becomes `Qfailed`.
+    ///
+    /// **Never constructed outside the table, and the compiler is right about
+    /// that.**  It is GNU's line all the same, and the table is the eight lines
+    /// rather than the seven this port reaches; `Self::recorder`'s `NoAnalogue`
+    /// arm says why there is nothing to record here, and deleting the `allow`
+    /// is how a future entry that grows the window announces itself.
+    #[allow(dead_code)]
+    PtyEioBeforeFork,
+    /// `wait_reading_process_output`'s pipe-connection EOF arm (:6075).
+    PipeConnectionReadEof,
+    /// `wait_reading_process_output`'s non-EOF read failure arm (:6084),
+    /// which becomes `(exit . 256)`.
+    SubprocessReadFailure,
+    /// `connect_network_socket`'s failed non-blocking connect (:6141), which
+    /// becomes `(failed . ERRNO)`.
+    NonBlockingConnectFailed,
+    /// `send_process`'s EPIPE arm on the release lineage (:6927), which
+    /// becomes `(exit . 256)` and deactivates the connection.  GNU master
+    /// (e381cf1fc97) removed this bump; this port applies it only to network
+    /// connections, which have no child whose real status must survive the
+    /// write failure.  See `ProcessManager::write_process_input_once`.
+    SendProcessEpipe,
+    /// `process_send_signal` sent `SIGCONT` (:7178), which becomes `Qrun`.
+    ProcessSendSignalSigcont,
+    /// `handle_child_signal`'s `child_status_changed` (:7746) -- the only one
+    /// of the eight that is the SIGCHLD record.
+    HandleChildSignal,
+}
+
+impl StatusChangeSite {
+    /// Derived from the last discriminant, so a variant missing from
+    /// [`Self::ALL`] is a compile error rather than a silent omission.
+    #[cfg(test)]
+    pub const COUNT: usize = Self::HandleChildSignal as usize + 1;
+
+    #[cfg(test)]
+    pub const ALL: [Self; Self::COUNT] = [
+        Self::DeleteProcessConnection,
+        Self::DeleteProcessChild,
+        Self::PtyEioBeforeFork,
+        Self::PipeConnectionReadEof,
+        Self::SubprocessReadFailure,
+        Self::NonBlockingConnectFailed,
+        Self::SendProcessEpipe,
+        Self::ProcessSendSignalSigcont,
+        Self::HandleChildSignal,
+    ];
+
+    /// `file:line` of the `p->tick = ++process_tick;` in the GNU tree.
+    pub fn gnu(self) -> &'static str {
+        match self {
+            Self::DeleteProcessConnection => "src/process.c:1128",
+            Self::DeleteProcessChild => "src/process.c:1148",
+            Self::PtyEioBeforeFork => "src/process.c:6058",
+            Self::PipeConnectionReadEof => "src/process.c:6075",
+            Self::SubprocessReadFailure => "src/process.c:6084",
+            Self::NonBlockingConnectFailed => "src/process.c:6141",
+            Self::SendProcessEpipe => "src/process.c:6927",
+            Self::ProcessSendSignalSigcont => "src/process.c:7178",
+            Self::HandleChildSignal => "src/process.c:7746",
+        }
+    }
+
+    /// The status GNU publishes at the site, so the table reads as a table.
+    pub fn what(self) -> &'static str {
+        match self {
+            Self::DeleteProcessConnection => "(exit . 0) on a deleted connection",
+            Self::DeleteProcessChild => "(signal . SIGKILL) on a deleted subprocess",
+            Self::PtyEioBeforeFork => "failed, on EIO before the fork completed",
+            Self::PipeConnectionReadEof => "(exit . 0) on a pipe connection's EOF",
+            Self::SubprocessReadFailure => "(exit . 256) on a subprocess read failure",
+            Self::NonBlockingConnectFailed => "(failed . ERRNO) on a failed connect",
+            Self::SendProcessEpipe => "(exit . 256) on a network connection's EPIPE",
+            Self::ProcessSendSignalSigcont => "run, on SIGCONT",
+            Self::HandleChildSignal => "the raw wait status of a changed child",
+        }
+    }
+
+    /// Where this port records the change, or why it has nothing to record.
+    #[cfg(test)]
+    pub fn recorder(self) -> StatusChangeRecorder {
+        match self {
+            Self::DeleteProcessConnection | Self::DeleteProcessChild => {
+                StatusChangeRecorder::Here("ProcessManager::stamp_process_for_delete")
+            }
+            Self::PipeConnectionReadEof => {
+                StatusChangeRecorder::Here("ProcessManager::retire_pipe_process_at_read_eof")
+            }
+            Self::SubprocessReadFailure => {
+                StatusChangeRecorder::Here("ProcessManager::retire_process_at_read_failure")
+            }
+            Self::NonBlockingConnectFailed => {
+                StatusChangeRecorder::Here("ProcessManager::complete_pending_network_connect")
+            }
+            Self::SendProcessEpipe => {
+                StatusChangeRecorder::Here("ProcessManager::write_process_input_once")
+            }
+            Self::ProcessSendSignalSigcont => {
+                StatusChangeRecorder::Here("builtin_continue_process_impl")
+            }
+            Self::HandleChildSignal => {
+                StatusChangeRecorder::Here("ProcessManager::set_child_status_pending")
+            }
+            // GNU's `p->pid == -2` is the window between `allocate_pty` and a
+            // successful `fork` (src/process.c:6053-6060): the PTY master is
+            // open and no child owns the slave yet, so an `EIO` on it means
+            // the fork will never be reported by SIGCHLD.  This port has no
+            // such window -- `spawn_child_with_environment` either returns a
+            // child handle or reports the failure as a status in the same
+            // call, so a process is never listed with a PTY and no child --
+            // and `Fprocess_id` therefore has no `-2` to answer.
+            Self::PtyEioBeforeFork => StatusChangeRecorder::NoAnalogue {
+                why: "no pid == -2 window: the spawn publishes its own failure status",
+            },
+        }
+    }
+
+    /// Whether GNU consumes the bump on the spot or leaves it for the wait.
+    #[cfg(test)]
+    pub fn notifier(self) -> StatusChangeNotifier {
+        match self {
+            Self::DeleteProcessConnection => StatusChangeNotifier::SynchronouslyAtTheSite {
+                gnu: "src/process.c:1129, status_notify (p, NULL)",
+                here: "Context::delete_process_running_its_sentinel",
+            },
+            Self::DeleteProcessChild => StatusChangeNotifier::SynchronouslyAtTheSite {
+                gnu: "src/process.c:1149, status_notify (p, NULL)",
+                here: "Context::delete_process_running_its_sentinel",
+            },
+            Self::NonBlockingConnectFailed => StatusChangeNotifier::SynchronouslyAtTheSite {
+                // GNU has no `status_notify` here; its :6141 bump is picked up
+                // by the wait it is already inside.  This port completes a
+                // pending connect and runs the `failed` sentinel in the same
+                // service pass, which is the same call, so the tick must be
+                // consumed there or the sentinel runs twice.
+                gnu: "src/process.c:6141, inside wait_reading_process_output's own pass",
+                here: "Context::service_process_output_for_ids, \
+                       PendingNetworkConnectCompletion::Failed",
+            },
+            Self::ProcessSendSignalSigcont => StatusChangeNotifier::SynchronouslyAtTheSite {
+                gnu: "src/process.c:7181, status_notify (NULL, NULL)",
+                here: "Context::builtin_continue_process -> notify_process_status_sentinel",
+            },
+            Self::PtyEioBeforeFork
+            | Self::PipeConnectionReadEof
+            | Self::SubprocessReadFailure
+            | Self::SendProcessEpipe
+            | Self::HandleChildSignal => StatusChangeNotifier::TheWaitsStatusNotify,
+        }
+    }
+}
+
+// Misc process-name/status helpers (A3b-8).
+
+/// Record a process id -> name mapping for the printer.
+pub fn register_process_print_name(id: ProcessId, name: &str) {
+    PROCESS_NAME_REGISTRY.with(|slot| {
+        slot.borrow_mut().insert(id, name.to_string());
+    });
+}
+
+pub fn process_name_value(name: &str) -> Value {
+    Value::heap_string(crate::emacs_core::builtins::plain_str_to_lisp_string(
+        name, true,
+    ))
+}
+
+pub fn process_name_lisp_value(name: &LispString) -> Value {
+    Value::heap_string(name.clone())
+}
+
+pub fn process_name_runtime(name: Value) -> String {
+    name.as_lisp_string()
+        .map(|ls| crate::emacs_core::emacs_char::to_utf8_lossy(ls.as_bytes()))
+        .unwrap_or_else(|| "<invalid-process-name>".to_string())
+}
+
+pub fn process_type_value(kind: &ProcessKind) -> Value {
+    Value::symbol(kind.name())
+}
+
+pub fn make_process_command_lisp_value(
+    kind: &ProcessKind,
+    program: &LispString,
+    args: &[LispString],
+) -> Value {
+    if *kind != ProcessKind::Real || program.is_empty() {
+        return Value::NIL;
+    }
+    let mut items = Vec::with_capacity(args.len() + 1);
+    items.push(Value::heap_string(program.clone()));
+    items.extend(args.iter().cloned().map(Value::heap_string));
+    Value::list(items)
+}
+
+pub fn os_str_to_lisp_string(value: &OsStr) -> LispString {
+    #[cfg(unix)]
+    {
+        LispString::from_unibyte(value.as_bytes().to_vec())
+    }
+
+    #[cfg(not(unix))]
+    {
+        LispString::from_utf8(value.to_string_lossy().as_ref())
+    }
+}
+
+pub fn update_process_mark(buffers: &mut BufferManager, proc: &mut Process) -> EvalResult {
+    let Some(buffer_id) = proc.buffer.as_buffer_id() else {
+        return crate::emacs_core::marker::builtin_set_marker_in_buffers(
+            buffers,
+            &[proc.mark, Value::NIL],
+        );
+    };
+    let Some(buffer) = buffers.get(buffer_id) else {
+        return crate::emacs_core::marker::builtin_set_marker_in_buffers(
+            buffers,
+            &[proc.mark, Value::NIL],
+        );
+    };
+    let position = Value::fixnum(buffer.z_lisp_char_pos().as_i64());
+    crate::emacs_core::marker::builtin_set_marker_in_buffers(
+        buffers,
+        &[proc.mark, position, proc.buffer],
+    )
+}
+
+pub fn process_status_run_value() -> Value {
+    Value::symbol("run")
+}
+
+pub fn write_queue_pop(queue: Value) -> (Value, Option<ProcessWriteQueueEntry>) {
+    if queue.is_nil() {
+        return (Value::NIL, None);
+    }
+    let entries = list_to_vec(&queue).unwrap_or_default();
+    let Some((entry, rest)) = entries.split_first() else {
+        return (Value::NIL, None);
+    };
+    let object = entry.cons_car();
+    let offset_len = entry.cons_cdr();
+    let offset = offset_len.cons_car().as_fixnum().unwrap_or(0).max(0) as usize;
+    let len = offset_len.cons_cdr().as_fixnum().unwrap_or(0).max(0) as usize;
+    let rest = Value::list(rest.to_vec());
+    (
+        rest,
+        Some(ProcessWriteQueueEntry {
+            object,
+            offset,
+            len,
+        }),
+    )
+}
+
+pub fn is_standalone_pipe_process(proc: &Process) -> bool {
+    proc.kind == ProcessKind::Pipe
+        && proc.live_io.child_stdout.is_some()
+        && !proc.live_io.child.has_child()
+}
+
+// Name registry and printer helper (A3b-9).
+
+thread_local! {
+    /// Name registry keyed by process id, used by the printer to render
+    /// `#<process NAME>` without threading a `ProcessManager` into the
+    /// stateless print path (mirrors the terminal handle registry).  A process
+    /// name never changes after creation and survives `delete-process`, so
+    /// entries are inserted once and never removed.
+    pub static PROCESS_NAME_REGISTRY: std::cell::RefCell<rustc_hash::FxHashMap<ProcessId, String>> =
+        std::cell::RefCell::new(rustc_hash::FxHashMap::default());
+}
+
+pub fn print_process_handle(value: &Value) -> Option<String> {
+    let id = value.as_process_id()?;
+    let name = PROCESS_NAME_REGISTRY.with(|slot| slot.borrow().get(&id).cloned());
+    Some(match name {
+        Some(name) => format!("#<process {name}>"),
+        None => "#<process>".to_string(),
+    })
+}
+
+pub fn default_process_tty_name() -> String {
+    // Fallback TTY name when the actual PTY slave path is not available.
+    "/dev/pts/0".to_string()
+}

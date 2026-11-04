@@ -776,8 +776,3 @@ pub(super) fn process_public_status_symbol(process: &Process) -> Value {
         _ => Value::NIL,
     }
 }
-
-pub(super) fn default_process_tty_name() -> String {
-    // Fallback TTY name when the actual PTY slave path is not available.
-    "/dev/pts/0".to_string()
-}
