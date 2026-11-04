@@ -833,6 +833,123 @@ fn libxml_parse_html_region_coalesces_adjacent_text_like_libxml2() {
 }
 
 #[test]
+fn libxml_parse_html_region_preserves_whitespace_like_libxml2() {
+    crate::test_utils::init_test_tracing();
+
+    // Inside elements whitespace is content.
+    // GNU 31.1: (html nil (body nil (div nil " ")))
+    assert_eq!(
+        parse_html_region(br#"<div> </div>"#, false).unwrap(),
+        html(vec![body(vec![Value::list(vec![
+            Value::symbol("div"),
+            Value::NIL,
+            Value::string(" "),
+        ])])])
+    );
+
+    // Whitespace between top-level elements is content.
+    // GNU 31.1: (html nil (body nil (div nil "a") " " (div nil "b")))
+    assert_eq!(
+        parse_html_region(br#"<div>a</div> <div>b</div>"#, false).unwrap(),
+        html(vec![body(vec![
+            Value::list(vec![Value::symbol("div"), Value::NIL, Value::string("a"),]),
+            Value::string(" "),
+            Value::list(vec![Value::symbol("div"), Value::NIL, Value::string("b"),]),
+        ])])
+    );
+
+    // Whitespace between inline elements is content.
+    // GNU 31.1: (html nil (body nil (p nil (b nil "a") " " (i nil "b"))))
+    assert_eq!(
+        parse_html_region(br#"<p><b>a</b> <i>b</i></p>"#, false).unwrap(),
+        html(vec![body(vec![Value::list(vec![
+            Value::symbol("p"),
+            Value::NIL,
+            Value::list(vec![Value::symbol("b"), Value::NIL, Value::string("a"),]),
+            Value::string(" "),
+            Value::list(vec![Value::symbol("i"), Value::NIL, Value::string("b"),]),
+        ])])])
+    );
+
+    // Document-level leading and trailing blanks are dropped.
+    // GNU 31.1: (html nil (body nil (p nil "x")))
+    let expected = html(vec![body(vec![Value::list(vec![
+        Value::symbol("p"),
+        Value::NIL,
+        Value::string("x"),
+    ])])]);
+    assert_eq!(
+        parse_html_region(br#"   <p>x</p>"#, false).unwrap(),
+        expected
+    );
+    assert_eq!(
+        parse_html_region(br#"<p>x</p>   "#, false).unwrap(),
+        expected
+    );
+    assert_eq!(parse_html_region(br#"   "#, false).unwrap(), Value::NIL);
+
+    // Whitespace around dropped DOCTYPEs stays one text run.
+    // GNU 31.1: (html nil (body nil (p nil "a b")))
+    assert_eq!(
+        parse_html_region(br#"<p>a<!DOCTYPE html> <!DOCTYPE html>b</p>"#, false).unwrap(),
+        html(vec![body(vec![Value::list(vec![
+            Value::symbol("p"),
+            Value::NIL,
+            Value::string("a b"),
+        ])])])
+    );
+
+    // Newlines inside body are content.
+    // GNU 31.1: (html nil (body nil "\n" (p nil "x") "\n"))
+    assert_eq!(
+        parse_html_region(b"<html><body>\n<p>x</p>\n</body></html>", false).unwrap(),
+        html(vec![body(vec![
+            Value::string("\n"),
+            Value::list(vec![Value::symbol("p"), Value::NIL, Value::string("x")]),
+            Value::string("\n"),
+        ])])
+    );
+}
+
+#[test]
+fn libxml_parse_html_region_routes_head_tags_after_body_to_body() {
+    crate::test_utils::init_test_tracing();
+
+    // GNU 31.1: (html nil (body nil (p nil "x") (title nil "T")))
+    assert_eq!(
+        parse_html_region(br#"<p>x</p><head><title>T</title></head>"#, false).unwrap(),
+        html(vec![body(vec![
+            Value::list(vec![Value::symbol("p"), Value::NIL, Value::string("x")]),
+            Value::list(vec![Value::symbol("title"), Value::NIL, Value::string("T")]),
+        ])])
+    );
+
+    // GNU 31.1: (html nil (head nil (title nil "T"))
+    //                   (body nil (p nil "x") (meta nil)))
+    let expected = Value::list(vec![
+        Value::symbol("html"),
+        Value::NIL,
+        Value::list(vec![
+            Value::symbol("head"),
+            Value::NIL,
+            Value::list(vec![Value::symbol("title"), Value::NIL, Value::string("T")]),
+        ]),
+        body(vec![
+            Value::list(vec![Value::symbol("p"), Value::NIL, Value::string("x")]),
+            Value::list(vec![Value::symbol("meta"), Value::NIL]),
+        ]),
+    ]);
+    assert_eq!(
+        parse_html_region(
+            br#"<head><title>T</title></head><p>x</p><head><meta></head>"#,
+            false
+        )
+        .unwrap(),
+        expected
+    );
+}
+
+#[test]
 fn libxml_parse_html_region_strips_a_leading_utf8_bom_like_libxml2() {
     crate::test_utils::init_test_tracing();
 

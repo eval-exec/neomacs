@@ -11,7 +11,7 @@ use crate::buffer::EmacsByteRange;
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::value::ValueKind;
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 // ---------------------------------------------------------------------------
 // Argument helpers
@@ -408,55 +408,13 @@ fn parse_html_region(data: &[u8], discard_comments: bool) -> Option<Value> {
     if remaining.starts_with(bom) && remaining.len() > bom.len_utf8() {
         remaining = &remaining[bom.len_utf8()..];
     }
-    let mut nodes: Vec<TopNode> = Vec::new();
 
-    // libxml2's HTML parser treats a processing instruction as a comment
-    // running from after `<` to the first `>` (not `?>`), and skips a
-    // `<!DOCTYPE ...>` through the first `>`. `tl` would otherwise parse a
-    // leading `<?xml ...?>` as a corrupt `##` element and swallow the rest of
-    // the document. Consume the prolog here, in order, so comments, PIs, and
-    // DOCTYPEs can be interleaved. An unterminated prolog token leaves no
-    // root element, so libxml2 returns nil.
-    loop {
-        let trimmed = remaining.trim_start_matches(|c: char| c.is_ascii_whitespace());
-        if let Some(rest) = trimmed.strip_prefix("<!--") {
-            let Some(end) = rest.find("-->") else {
-                return Some(Value::NIL);
-            };
-            nodes.push(TopNode {
-                tag: None,
-                value: comment_value(&rest[..end]),
-            });
-            remaining = &rest[end + 3..];
-            continue;
-        } else if trimmed.starts_with("<?") {
-            let Some(end) = trimmed.find('>') else {
-                return Some(Value::NIL);
-            };
-            // "?xml version=...?" or "?foo" -- the leading `?` is part of the
-            // comment text in GNU's make_dom output.
-            nodes.push(TopNode {
-                tag: None,
-                value: comment_value(&trimmed[1..end]),
-            });
-            remaining = &trimmed[end + 1..];
-            continue;
-        } else if trimmed
-            .get(..9)
-            .is_some_and(|p| p.eq_ignore_ascii_case("<!DOCTYPE"))
-        {
-            let Some(end) = trimmed.find('>') else {
-                return Some(Value::NIL);
-            };
-            remaining = &trimmed[end + 1..];
-            continue;
-        }
-        break;
-    }
-
+    // shield_html handles comments, processing instructions, DOCTYPEs, and
+    // text-element bodies uniformly, including at the document prolog.
     let (protected, shielded) = shield_html(remaining);
     let dom = tl::parse(protected.as_ref(), tl::ParserOptions::default()).ok()?;
     let parser = dom.parser();
+    let mut nodes: Vec<TopNode> = Vec::new();
     for handle in dom.children() {
         let node = handle.get(parser)?;
         if let Some(top) = convert_tl_top_node(node, parser, &shielded) {
@@ -483,17 +441,43 @@ fn parse_html_region(data: &[u8], discard_comments: bool) -> Option<Value> {
 /// This matches GNU `parse_region` / `make_dom` in `src/xml.c`: the flag only
 /// removes document-level comments, never nested ones.
 fn wrap_html_document(nodes: Vec<TopNode>, discard_comments: bool) -> Option<Value> {
-    let non_comment_count = nodes.iter().filter(|n| !is_top_comment(n)).count();
+    // libxml2 drops document-level leading/trailing ASCII whitespace but keeps
+    // whitespace between elements and inside elements.
+    let mut doc_comments: Vec<Value> = Vec::new();
+    let mut fragment: Vec<TopNode> = Vec::new();
+    let mut started = false;
+    for node in nodes {
+        if !started {
+            if is_top_comment(&node) {
+                if !discard_comments {
+                    doc_comments.push(node.value);
+                }
+                continue;
+            }
+            if is_blank_text_node(&node) {
+                continue;
+            }
+            started = true;
+        }
+        fragment.push(node);
+    }
+    while fragment.last().is_some_and(is_blank_text_node) {
+        fragment.pop();
+    }
+    if !fragment.iter().any(|n| !is_top_comment(n)) {
+        return Some(Value::NIL);
+    }
 
-    // A single explicit <html> root is already a complete document. Keep any
-    // document-level comments before or after it in source order.
+    // A single explicit <html> root is already a complete document. Keep
+    // document-level comments on both sides of it in source order.
+    let non_comment_count = fragment.iter().filter(|n| !is_top_comment(n)).count();
     if non_comment_count == 1
-        && nodes
+        && fragment
             .iter()
             .any(|n| !is_top_comment(n) && n.tag.as_deref() == Some("html"))
     {
-        let mut values: Vec<Value> = Vec::new();
-        for node in nodes {
+        let mut values = doc_comments;
+        for node in fragment {
             if is_top_comment(&node) && discard_comments {
                 continue;
             }
@@ -503,26 +487,6 @@ fn wrap_html_document(nodes: Vec<TopNode>, discard_comments: bool) -> Option<Val
             return values.into_iter().next();
         }
         return Some(top_document(values));
-    }
-
-    // Split leading document-level comments from the fragment. A comment-only
-    // document has no root element; libxml2 returns nil even when comments
-    // are kept.
-    let mut doc_comments: Vec<Value> = Vec::new();
-    let mut fragment: Vec<TopNode> = Vec::new();
-    let mut seen_non_comment = false;
-    for node in nodes {
-        if !seen_non_comment && is_top_comment(&node) {
-            if !discard_comments {
-                doc_comments.push(node.value);
-            }
-            continue;
-        }
-        seen_non_comment = true;
-        fragment.push(node);
-    }
-    if !fragment.iter().any(|n| !is_top_comment(n)) {
-        return Some(Value::NIL);
     }
 
     let document = wrap_html_fragment(fragment)?;
@@ -548,6 +512,15 @@ fn is_top_comment(node: &TopNode) -> bool {
     node.tag.is_none() && is_comment_node(&node.value)
 }
 
+fn is_blank_text_node(node: &TopNode) -> bool {
+    node.tag.is_none()
+        && node
+            .value
+            .as_lisp_string()
+            .and_then(|text| text.as_utf8_str())
+            .is_some_and(|text| text.chars().all(|c| c.is_ascii_whitespace()))
+}
+
 /// Where a top-level node lands while reconstructing libxml2's document.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum FragmentMode {
@@ -566,10 +539,10 @@ enum FragmentMode {
 /// Wrap the fragment part of a document in libxml2's implicit html/head/body
 /// structure.
 fn wrap_html_fragment(nodes: Vec<TopNode>) -> Option<Value> {
-    let mut head: Vec<Value> = Vec::new();
-    let mut between: Vec<Value> = Vec::new();
-    let mut body: Vec<Value> = Vec::new();
-    let mut after_body: Vec<Value> = Vec::new();
+    let mut head = ChildVec::default();
+    let mut between = ChildVec::default();
+    let mut body = ChildVec::default();
+    let mut after_body = ChildVec::default();
     // Independent facts needed for the result: explicit head/body elements are
     // emitted even when empty, and their attributes are preserved.
     let mut explicit_head_seen = false;
@@ -580,20 +553,25 @@ fn wrap_html_fragment(nodes: Vec<TopNode>) -> Option<Value> {
     for node in nodes {
         if is_top_comment(&node) {
             match mode {
-                FragmentMode::Head => push_child(&mut head, node.value),
-                FragmentMode::AfterHead => push_child(&mut between, node.value),
-                FragmentMode::Body => push_child(&mut body, node.value),
-                FragmentMode::AfterBody => push_child(&mut after_body, node.value),
+                FragmentMode::Head => head.push(node.value),
+                FragmentMode::AfterHead => between.push(node.value),
+                FragmentMode::Body => body.push(node.value),
+                FragmentMode::AfterBody => after_body.push(node.value),
             }
             continue;
         }
         match node.tag.as_deref() {
             Some("head") => match mode {
-                FragmentMode::AfterBody => push_child(&mut after_body, node.value),
-                _ => {
+                FragmentMode::AfterBody => after_body.push(node.value),
+                FragmentMode::Body => {
+                    // A head tag after body content has started is ignored;
+                    // its children are body content.
+                    body.extend_children(&node.value);
+                }
+                FragmentMode::Head | FragmentMode::AfterHead => {
                     // Unwrap an explicit <head>, merging its children into head.
                     head_attrs = element_attributes(&node.value);
-                    extend_children(&mut head, &node.value);
+                    head.extend_children(&node.value);
                     explicit_head_seen = true;
                     if mode == FragmentMode::Head {
                         mode = FragmentMode::AfterHead;
@@ -601,37 +579,41 @@ fn wrap_html_fragment(nodes: Vec<TopNode>) -> Option<Value> {
                 }
             },
             Some("body") => match mode {
-                FragmentMode::AfterBody => push_child(&mut after_body, node.value),
+                FragmentMode::AfterBody => after_body.push(node.value),
                 FragmentMode::Head | FragmentMode::AfterHead => {
                     // An explicit body starts the body only when no body
                     // content has appeared yet.
                     mode = FragmentMode::AfterBody;
                     body_attrs = element_attributes(&node.value);
-                    extend_children(&mut body, &node.value);
+                    body.extend_children(&node.value);
                 }
                 FragmentMode::Body => {
                     // A body tag after content has started merges into the
                     // implicit body and does not switch modes.
-                    extend_children(&mut body, &node.value);
+                    body.extend_children(&node.value);
                 }
             },
             Some(tag) if is_head_element(tag) => match mode {
-                FragmentMode::Head => push_child(&mut head, node.value),
-                FragmentMode::AfterHead => push_child(&mut between, node.value),
-                FragmentMode::Body => push_child(&mut body, node.value),
-                FragmentMode::AfterBody => push_child(&mut after_body, node.value),
+                FragmentMode::Head => head.push(node.value),
+                FragmentMode::AfterHead => between.push(node.value),
+                FragmentMode::Body => body.push(node.value),
+                FragmentMode::AfterBody => after_body.push(node.value),
             },
             _ => match mode {
                 FragmentMode::Head | FragmentMode::AfterHead => {
-                    push_child(&mut body, node.value);
+                    body.push(node.value);
                     mode = FragmentMode::Body;
                 }
-                FragmentMode::Body => push_child(&mut body, node.value),
-                FragmentMode::AfterBody => push_child(&mut after_body, node.value),
+                FragmentMode::Body => body.push(node.value),
+                FragmentMode::AfterBody => after_body.push(node.value),
             },
         }
     }
 
+    let head = head.finish();
+    let between = between.finish();
+    let body = body.finish();
+    let after_body = after_body.finish();
     // (html nil [head nil HEAD...] [BETWEEN...] (body nil BODY...) [AFTER...])
     let has_head = !head.is_empty() || explicit_head_seen;
     let has_body = !body.is_empty() || mode == FragmentMode::AfterBody;
@@ -706,44 +688,58 @@ fn element_attributes(value: &Value) -> Value {
     }
 }
 
-/// Append a child, coalescing adjacent Lisp strings as libxml2 coalesces
-/// adjacent text nodes.
-fn push_child(children: &mut Vec<Value>, value: Value) {
-    if let Some(last) = children.last() {
-        let prev = last.as_lisp_string().and_then(|text| text.as_utf8_str());
-        let next = value.as_lisp_string().and_then(|text| text.as_utf8_str());
-        if let (Some(prev), Some(next)) = (prev, next) {
-            let merged = format!("{prev}{next}");
-            if let Some(slot) = children.last_mut() {
-                *slot = Value::string(merged.as_str());
-                return;
-            }
-        }
-    }
-    children.push(value);
+/// Accumulates element children while coalescing adjacent text runs.
+///
+/// Appending to a String and creating the Lisp string once avoids the
+/// quadratic copying of merging a growing string for every piece.
+#[derive(Default)]
+struct ChildVec {
+    values: Vec<Value>,
+    text: String,
 }
 
-/// Append an element node's children, coalescing adjacent text.
-fn extend_children(children: &mut Vec<Value>, value: &Value) {
-    for child in element_children(value) {
-        push_child(children, child);
+impl ChildVec {
+    fn push(&mut self, value: Value) {
+        if let Some(text) = value.as_lisp_string().and_then(|text| text.as_utf8_str()) {
+            self.text.push_str(text);
+        } else {
+            self.flush_text();
+            self.values.push(value);
+        }
+    }
+
+    fn extend_children(&mut self, value: &Value) {
+        for child in element_children(value) {
+            self.push(child);
+        }
+    }
+
+    fn flush_text(&mut self) {
+        if !self.text.is_empty() {
+            let text = std::mem::take(&mut self.text);
+            self.values.push(Value::string(text.as_str()));
+        }
+    }
+
+    fn finish(mut self) -> Vec<Value> {
+        self.flush_text();
+        self.values
     }
 }
 
 fn convert_tl_node(node: &tl::Node, parser: &tl::Parser, shielded: &ShieldedHtml) -> Option<Value> {
     match node {
         tl::Node::Raw(raw) => {
-            let text = raw.as_utf8_str();
-            // libxml2's HTML whitespace is ASCII-only; non-breaking and other
-            // Unicode spaces are content and must survive HTML_PARSE_NOBLANKS.
-            if text.chars().all(|c| c.is_ascii_whitespace()) {
+            // GNU's libxml2 parser resolves HTML character references before
+            // make_dom copies a text node into Lisp. tl deliberately exposes
+            // source bytes, so normalize them at this adapter boundary. Keep
+            // whitespace here; the document builder trims only leading and
+            // trailing document-level blanks.
+            let raw_text = raw.as_utf8_str();
+            let text = htmlize::unescape(raw_text.as_ref());
+            if text.is_empty() {
                 None
             } else {
-                // GNU's libxml2 parser resolves HTML character references
-                // before `make_dom' copies an XML_TEXT_NODE into Lisp.  `tl'
-                // deliberately exposes source bytes, so normalize them at
-                // this adapter boundary using the HTML text context.
-                let text = htmlize::unescape(text.as_ref());
                 Some(Value::string(text.as_ref()))
             }
         }
@@ -756,11 +752,7 @@ fn convert_tl_node(node: &tl::Node, parser: &tl::Parser, shielded: &ShieldedHtml
             if text.ends_with("-->") {
                 text = &text[..text.len() - 3];
             }
-            if shielded
-                .ignored_comments
-                .iter()
-                .any(|ignored| ignored.as_str() == text)
-            {
+            if shielded.ignored_comments.contains(text) {
                 return None;
             }
             let text = shielded
@@ -805,14 +797,14 @@ fn convert_tl_node(node: &tl::Node, parser: &tl::Parser, shielded: &ShieldedHtml
             } else {
                 let children = element.children();
                 let children_handles = children.top();
-                let mut vals = Vec::new();
+                let mut vals = ChildVec::default();
                 for handle in children_handles.iter() {
                     let child_node = handle.get(parser)?;
                     if let Some(val) = convert_tl_node(child_node, parser, shielded) {
-                        push_child(&mut vals, val);
+                        vals.push(val);
                     }
                 }
-                vals
+                vals.finish()
             };
             Some(make_element_node(tag, attrs, child_values))
         }
@@ -836,7 +828,7 @@ struct ShieldedHtml {
     /// Placeholder -> original processing-instruction text.
     pi_comments: HashMap<String, String>,
     /// Boundary comments standing in for dropped DOCTYPEs.
-    ignored_comments: Vec<String>,
+    ignored_comments: HashSet<String>,
 }
 
 /// Replace text-element bodies and processing instructions with internal
@@ -900,7 +892,7 @@ fn shield_html(input: &str) -> (Cow<'_, str>, ShieldedHtml) {
             protected.push_str("<!--");
             protected.push_str(&token);
             protected.push_str("-->");
-            shielded.ignored_comments.push(token);
+            shielded.ignored_comments.insert(token);
             index += rest.find('>').map_or(rest.len(), |end| end + 1);
             continue;
         }
