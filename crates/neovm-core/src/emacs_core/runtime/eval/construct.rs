@@ -267,7 +267,7 @@ impl Context {
         *ev.modes = ModeRegistry::new();
         *ev.threads = ThreadManager::new();
         *ev.kmacro = KmacroManager::new();
-        *ev.command_loop = crate::keyboard::CommandLoop::default();
+        *ev.command_loop = crate::emacs_core::eval::data::command_loop::CommandLoop::default();
         ev.input_rx.clear();
         ev.eval_task_rx = None;
         ev.redisplay_fn = None;
@@ -2295,7 +2295,7 @@ impl Context {
             threads: world.global.threads,
             kmacro: world.global.kmacro,
             command_loop: world.global.command_loop,
-            input_rx: crate::host_input::HostInputReceiver::default(),
+            input_rx: crate::emacs_core::eval::host_input::HostInputReceiver::default(),
             eval_task_rx: None,
             quit_requested: QuitRequest::new(),
             redisplay_fn: None,
@@ -2623,7 +2623,7 @@ impl Context {
         #[cfg(target_os = "windows")]
         super::super::w32::register_bootstrap_symbols(&mut obarray);
 
-        let mut command_loop = crate::keyboard::CommandLoop::new();
+        let mut command_loop = crate::emacs_core::eval::data::command_loop::CommandLoop::new();
         command_loop
             .keyboard
             .set_terminal_translation_maps(input_decode_map, local_function_key_map);

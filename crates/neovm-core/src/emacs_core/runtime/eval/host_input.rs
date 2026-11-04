@@ -4,12 +4,12 @@
 //! may be cloned across producer threads, but cannot separate the queue from
 //! that backend's wake capability. No Lisp state crosses this boundary.
 
+use super::keyboard::InputEvent;
 use crate::emacs_core::Context;
 use crate::emacs_core::process::WaitNotifier;
 use crate::host_effect::wake::{
     ControlDestination, ControlNudge, ControlNudgeOutcome, HostSessionControl,
 };
-use crate::keyboard::InputEvent;
 use crossbeam_channel::{Receiver, Sender};
 use std::sync::Arc;
 

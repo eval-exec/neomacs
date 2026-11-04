@@ -334,7 +334,7 @@ impl SpecialInputServiceOutcome {
     }
 
     pub(crate) fn from_internal_effects(
-        effects: crate::frontend_events::InternalEventEffects,
+        effects: super::frontend_events::InternalEventEffects,
     ) -> Self {
         Self {
             redisplay_needed: effects.redisplay_needed,
@@ -1576,7 +1576,7 @@ fn pending_live_gui_resize_target(
 fn sync_pending_resize_events_in_keyboard_runtime(
     frames: &mut crate::window::FrameManager,
     buffers: &crate::buffer::BufferManager,
-    input_rx: &mut crate::host_input::HostInputReceiver,
+    input_rx: &mut super::host_input::HostInputReceiver,
     keyboard: &mut KeyboardRuntime,
     publications: &mut Vec<crate::window::FrameId>,
 ) -> bool {
@@ -1799,8 +1799,8 @@ enum QueuedReadCharEvent {
 impl crate::emacs_core::eval::Context {
     pub(crate) fn service_leading_internal_frontend_events(
         &mut self,
-    ) -> crate::frontend_events::InternalEventEffects {
-        let mut effects = crate::frontend_events::InternalEventEffects::default();
+    ) -> super::frontend_events::InternalEventEffects {
+        let mut effects = super::frontend_events::InternalEventEffects::default();
         while let Some(event) = self
             .command_loop
             .keyboard
@@ -1808,7 +1808,7 @@ impl crate::emacs_core::eval::Context {
             .take_leading_internal()
         {
             let event_effects = match event {
-                crate::frontend_events::InternalFrontendEvent::PresentedRegion {
+                super::frontend_events::InternalFrontendEvent::PresentedRegion {
                     presentation,
                     hit,
                     x,
@@ -1833,9 +1833,9 @@ impl crate::emacs_core::eval::Context {
                             frame_id: frame_id.0,
                         });
                     }
-                    crate::frontend_events::InternalEventEffects::default()
+                    super::frontend_events::InternalEventEffects::default()
                 }
-                crate::frontend_events::InternalFrontendEvent::PresentationRetired {
+                super::frontend_events::InternalFrontendEvent::PresentationRetired {
                     presentation,
                 } => {
                     self.retire_interaction_presentation(presentation);
@@ -1846,9 +1846,9 @@ impl crate::emacs_core::eval::Context {
                             frame.retire_display_presentation(presentation);
                         }
                     }
-                    crate::frontend_events::InternalEventEffects::default()
+                    super::frontend_events::InternalEventEffects::default()
                 }
-                crate::frontend_events::InternalFrontendEvent::PresentationActivated {
+                super::frontend_events::InternalFrontendEvent::PresentationActivated {
                     presentation,
                     emacs_frame_id,
                 } => {
@@ -1865,9 +1865,9 @@ impl crate::emacs_core::eval::Context {
                             "ignored activation for a presentation no longer prepared"
                         );
                     }
-                    crate::frontend_events::InternalEventEffects::default()
+                    super::frontend_events::InternalEventEffects::default()
                 }
-                crate::frontend_events::InternalFrontendEvent::PresentationDiscarded {
+                super::frontend_events::InternalFrontendEvent::PresentationDiscarded {
                     presentation,
                     emacs_frame_id,
                 } => {
@@ -1880,15 +1880,15 @@ impl crate::emacs_core::eval::Context {
                     {
                         frame.discard_display_presentation(presentation);
                     }
-                    crate::frontend_events::InternalEventEffects::default()
+                    super::frontend_events::InternalEventEffects::default()
                 }
-                crate::frontend_events::InternalFrontendEvent::LayoutInvalidated => {
+                super::frontend_events::InternalFrontendEvent::LayoutInvalidated => {
                     self.invalidate_media();
-                    crate::frontend_events::InternalEventEffects {
+                    super::frontend_events::InternalEventEffects {
                         redisplay_needed: true,
                     }
                 }
-                crate::frontend_events::InternalFrontendEvent::ImageStateChanged { event } => {
+                super::frontend_events::InternalFrontendEvent::ImageStateChanged { event } => {
                     // Async media completed or lost renderer residency, so
                     // retained image glyphs must not be reused. Reconcile the
                     // exact identity before bumping media_generation.
@@ -1896,7 +1896,7 @@ impl crate::emacs_core::eval::Context {
                         host.reconcile_image_catalog_for_media_rebuild(event);
                     }
                     self.invalidate_media();
-                    crate::frontend_events::InternalEventEffects {
+                    super::frontend_events::InternalEventEffects {
                         redisplay_needed: true,
                     }
                 }
@@ -2760,12 +2760,12 @@ impl crate::emacs_core::eval::Context {
     /// bare cursor-position update here. With track-mouse off it is a pure
     /// position update and is consumed as before.
     fn input_event_is_wait_request_special_now(&self, event: &InputEvent) -> bool {
-        crate::frontend_events::is_wait_special(event, self.track_mouse_enabled())
+        super::frontend_events::is_wait_special(event, self.track_mouse_enabled())
     }
 
     fn take_next_wait_request_special_input_event(
         &mut self,
-        internal_effects: &mut crate::frontend_events::InternalEventEffects,
+        internal_effects: &mut super::frontend_events::InternalEventEffects,
         idle_policy: IdleTransitionPolicy,
     ) -> Result<Option<InputEvent>, crate::emacs_core::error::Flow> {
         *internal_effects =
@@ -2892,7 +2892,7 @@ impl crate::emacs_core::eval::Context {
 
     pub(crate) fn stage_pending_command_input_for_wait_request(
         &mut self,
-        query: crate::frontend_events::FrontendInputQuery,
+        query: super::frontend_events::FrontendInputQuery,
     ) -> Result<bool, crate::emacs_core::error::Flow> {
         self.service_leading_internal_frontend_events();
         if self.command_loop.keyboard.has_pending_kboard_input() || self.has_frontend_input(query) {
@@ -2929,7 +2929,7 @@ impl crate::emacs_core::eval::Context {
         idle_policy: IdleTransitionPolicy,
     ) -> Result<SpecialInputServiceOutcome, crate::emacs_core::error::Flow> {
         let mut outcome = SpecialInputServiceOutcome::default();
-        let mut internal_effects = crate::frontend_events::InternalEventEffects::default();
+        let mut internal_effects = super::frontend_events::InternalEventEffects::default();
 
         crate::emacs_core::builtins::drain_file_notify_events(self)?;
         crate::emacs_core::dbusbind::drain_events(self)?;
@@ -2941,7 +2941,7 @@ impl crate::emacs_core::eval::Context {
         while let Some(event) =
             self.take_next_wait_request_special_input_event(&mut internal_effects, idle_policy)?
         {
-            if crate::frontend_events::interrupts(&event)
+            if super::frontend_events::interrupts(&event)
                 && self.interrupt_for_input_event_if_requested(event.clone())?
             {
                 continue;
@@ -3016,7 +3016,7 @@ impl crate::emacs_core::eval::Context {
                 }
                 InputEvent::FrameShaderFailed { error } => {
                     let effects =
-                        crate::frontend_events::report_frame_shader_failure(self, &error)?;
+                        super::frontend_events::report_frame_shader_failure(self, &error)?;
                     outcome =
                         outcome.merge(SpecialInputServiceOutcome::from_internal_effects(effects));
                 }
@@ -4033,7 +4033,7 @@ impl crate::emacs_core::eval::Context {
         tty_input_decoding: TtyInputDecoding,
         idle_policy: IdleTransitionPolicy,
     ) -> Result<Option<Value>, crate::emacs_core::error::Flow> {
-        if crate::frontend_events::interrupts(&event)
+        if super::frontend_events::interrupts(&event)
             && self.interrupt_for_input_event_if_requested(event.clone())?
         {
             return Ok(None);
@@ -4188,7 +4188,7 @@ impl crate::emacs_core::eval::Context {
                 Ok(None)
             }
             InputEvent::FrameShaderFailed { error } => {
-                let effects = crate::frontend_events::report_frame_shader_failure(self, &error)?;
+                let effects = super::frontend_events::report_frame_shader_failure(self, &error)?;
                 if effects.redisplay_needed {
                     self.redisplay()?;
                 }

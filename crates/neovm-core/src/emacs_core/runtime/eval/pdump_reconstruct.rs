@@ -169,7 +169,9 @@ impl Context {
                 kmacro,
                 registers,
                 bookmarks,
-                ..super::global_state::GlobalState::fresh(crate::keyboard::CommandLoop::new())
+                ..super::global_state::GlobalState::fresh(
+                    crate::emacs_core::eval::data::command_loop::CommandLoop::new(),
+                )
             },
             // Prepare allocation-capable managers before retiring the old TLS
             // installation. The closed factory reinstalls the final view.
@@ -258,7 +260,7 @@ impl Context {
             threads: world.global.threads,
             kmacro: world.global.kmacro,
             command_loop: world.global.command_loop,
-            input_rx: crate::host_input::HostInputReceiver::default(),
+            input_rx: crate::emacs_core::eval::host_input::HostInputReceiver::default(),
             eval_task_rx: None,
             quit_requested: QuitRequest::new(),
             redisplay_fn: None,

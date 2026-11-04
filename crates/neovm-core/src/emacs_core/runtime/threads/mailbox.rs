@@ -34,7 +34,7 @@ impl super::super::eval::Context {
             .map_err(event_error)?
         {
             self.command_loop.keyboard.pending_input_events.push_back(
-                crate::keyboard::InputEvent::ThreadEvent {
+                crate::emacs_core::eval::keyboard::InputEvent::ThreadEvent {
                     sender: event.sender,
                     error_symbol: event.error_symbol,
                     data: event.data,

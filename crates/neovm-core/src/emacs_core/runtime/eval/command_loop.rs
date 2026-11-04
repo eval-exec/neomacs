@@ -2427,14 +2427,14 @@ impl Context {
     }
 
     pub(crate) fn has_pending_frontend_input_with_configured_filter(&self) -> bool {
-        self.has_frontend_input(crate::frontend_events::FrontendInputQuery::Pending(
+        self.has_frontend_input(super::frontend_events::FrontendInputQuery::Pending(
             neovm_value::system_vocab::input::InputPendingFilter::ConfiguredIgnoreList,
         ))
     }
 
     pub(crate) fn has_frontend_input(
         &self,
-        query: crate::frontend_events::FrontendInputQuery,
+        query: super::frontend_events::FrontendInputQuery,
     ) -> bool {
         self.command_loop.keyboard.pending_input_events.has_input(
             query,

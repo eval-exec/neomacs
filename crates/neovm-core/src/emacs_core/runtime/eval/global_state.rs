@@ -98,7 +98,7 @@ global_state! {
     /// KBOARD `kbd_macro_*` (per terminal, one terminal in Phase 0).
     kmacro: KmacroManager,
     /// keyboard.c `command_loop_level`, KBOARD input state.
-    command_loop: crate::keyboard::CommandLoop,
+    command_loop: crate::emacs_core::eval::data::command_loop::CommandLoop,
     /// xfaces.c `face_alist` / frame face caches.
     face_table: FaceTable,
     /// The face table's materialized source (xfaces.c frame caches).
@@ -117,7 +117,9 @@ global_state! {
 
 impl GlobalState {
     /// A new World's state, COMMAND_LOOP being its first owner's.
-    pub(super) fn fresh(command_loop: crate::keyboard::CommandLoop) -> Self {
+    pub(super) fn fresh(
+        command_loop: crate::emacs_core::eval::data::command_loop::CommandLoop,
+    ) -> Self {
         Self {
             cached_system_name: Value::NIL,
             xwidgets: super::data::xwidget::XwidgetState::new(),

@@ -2991,7 +2991,7 @@ pub struct Context {
     pub(crate) threads: WorldSlot<ThreadManager>,
     /// Command loop state — event queue, prefix args, kbd macros, quit flag.
     /// Used by the interactive command loop (recursive-edit → command_loop).
-    pub(crate) command_loop: WorldSlot<crate::keyboard::CommandLoop>,
+    pub(crate) command_loop: WorldSlot<crate::emacs_core::eval::data::command_loop::CommandLoop>,
     /// Consecutive graphical scroll commands retain a pixel goal, not a
     /// possibly clipped buffer column. Owned exclusively by this VM.
     pub(crate) scroll_goal: Option<crate::emacs_core::eval::data::window_state::ScrollGoal>,
@@ -3042,7 +3042,7 @@ pub struct Context {
     pub(crate) match_data: Option<MatchData>,
     /// Host-input receiving owner. Only HostInputPublisher can attach a queue
     /// paired with this Context's process wait backend.
-    pub(crate) input_rx: crate::host_input::HostInputReceiver,
+    pub(crate) input_rx: crate::emacs_core::eval::host_input::HostInputReceiver,
     /// Tasks queued from other threads (e.g. the diagnostics server) to run on
     /// the Lisp thread at a safe point. Drained in the `read_char` loop.
     eval_task_rx: Option<crossbeam_channel::Receiver<EvalThreadTask>>,
@@ -5582,8 +5582,11 @@ impl Context {
         }
     }
 
-    pub(crate) fn route_tty_keyboard_input(&mut self, target: crate::keyboard::TtyInputTarget) {
-        use crate::keyboard::TtyInputTarget;
+    pub(crate) fn route_tty_keyboard_input(
+        &mut self,
+        target: crate::emacs_core::eval::keyboard::TtyInputTarget,
+    ) {
+        use crate::emacs_core::eval::keyboard::TtyInputTarget;
 
         let frame_id = match target {
             TtyInputTarget::SelectedFrame => self.frames.selected_frame().map(|frame| frame.id),
