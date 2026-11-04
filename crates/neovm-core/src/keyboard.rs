@@ -7591,7 +7591,7 @@ impl crate::emacs_core::eval::Context {
         x: f32,
         y: f32,
         target_frame_id: u64,
-    ) -> Option<crate::emacs_core::window_edge_drag::WindowEdgeGrab> {
+    ) -> Option<crate::emacs_core::eval::data::window_edge_drag::WindowEdgeGrab> {
         let observation = self
             .command_loop
             .keyboard
@@ -7606,7 +7606,7 @@ impl crate::emacs_core::eval::Context {
         {
             return None;
         }
-        crate::emacs_core::window_edge_drag::WindowEdgeGrab::of(
+        crate::emacs_core::eval::data::window_edge_drag::WindowEdgeGrab::of(
             button,
             observation.hit?.region().kind(),
         )

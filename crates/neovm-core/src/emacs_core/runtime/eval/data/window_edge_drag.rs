@@ -17,7 +17,7 @@
 use neomacs_display_protocol::PresentedRegionKind;
 use neomacs_display_protocol::presentation_origin::{InteractionSessionId, PresentationOrigin};
 
-use crate::keyboard::MouseButton;
+use neovm_value::keyboard_pure::MouseButton;
 
 /// A press that took hold of a window edge.
 ///
@@ -116,7 +116,7 @@ impl WindowEdgeDrag {
     }
 }
 
-impl crate::emacs_core::Context {
+impl crate::emacs_core::eval::Context {
     /// Why a presentation sealed now was produced.
     ///
     /// Read by the layout engine at the moment it seals, so the stamp
@@ -129,5 +129,5 @@ impl crate::emacs_core::Context {
 }
 
 #[cfg(test)]
-#[path = "tests/window_edge_drag_test.rs"]
+#[path = "window_edge_drag/tests/window_edge_drag_test.rs"]
 mod tests;

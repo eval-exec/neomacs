@@ -3158,7 +3158,7 @@ pub struct Context {
     /// ordered against the redisplays those events cause: every presentation
     /// composed between a grab and its release is stamped as the drag's, and
     /// none after it is.
-    pub(crate) window_edge_drag: crate::emacs_core::window_edge_drag::WindowEdgeDrag,
+    pub(crate) window_edge_drag: data::window_edge_drag::WindowEdgeDrag,
     /// Arithmetic policy ownership, reconstructed rather than dumped.
     pub(crate) integer_width_context: super::builtins::IntegerWidthContext,
     pub(crate) owned_roots: OwnedRootRegistryView,

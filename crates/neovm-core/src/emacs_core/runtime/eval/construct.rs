@@ -2216,7 +2216,7 @@ impl Context {
             after_pdump_load_hook_pending: false,
             cached_system_name: world.global.cached_system_name,
             obarray: world.obarray,
-            window_edge_drag: crate::emacs_core::window_edge_drag::WindowEdgeDrag::default(),
+            window_edge_drag: super::data::window_edge_drag::WindowEdgeDrag::default(),
             specpdl: Vec::new(),
             suspended_thread_bindings: Vec::new(),
             profiler: super::profiler::ProfilerState::default(),
