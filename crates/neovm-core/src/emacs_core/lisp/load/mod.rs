@@ -15,7 +15,9 @@ use crate::heap_types::LispString;
 pub use neovm_value::runtime_root::image_data_directory;
 use neovm_value::runtime_root::{compile_time_project_root, runtime_project_root};
 #[cfg(test)]
-pub(crate) use neovm_value::runtime_root::{is_runtime_root, runtime_root_candidates};
+pub(crate) use neovm_value::runtime_root::{
+    is_runtime_root, runtime_project_root_from_paths, runtime_root_candidates,
+};
 use sha2::{Digest, Sha256};
 use std::ffi::OsStr;
 use std::fs;

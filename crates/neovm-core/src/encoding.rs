@@ -1856,8 +1856,8 @@ impl CodingDirection {
 /// shared path.  The standalone `encode_lisp_string` / `decode` fallbacks below
 /// only know the UTF-8 / single-byte / Big5 families and silently drop CJK text
 /// for the charset/ISO-2022 codings.
-fn transformed_region_string_in_context(
-    ctx: &mut crate::emacs_core::eval::Context,
+fn transformed_region_string_in_context<H: TextHost>(
+    ctx: &mut H,
     source: crate::heap_types::LispString,
     coding: &str,
     direction: CodingDirection,
@@ -4735,8 +4735,8 @@ fn apply_explicit_eol_suffix(base: &str, eol: crate::emacs_core::coding::EolType
 /// line terminator at all: `decode_eol` guards the call with
 /// `if (eol_seen != EOL_SEEN_NONE)` (src/coding.c:6805), which is why
 /// `(decode-coding-string "abc" 'undecided)` still reports plain `undecided'.
-fn builtin_coding_string_in_context(
-    ctx: &mut crate::emacs_core::eval::Context,
+fn builtin_coding_string_in_context<H: TextHost>(
+    ctx: &mut H,
     mut args: Vec<Value>,
     direction: CodingDirection,
     encoding_boundary: EncodingBoundary,
@@ -4810,7 +4810,7 @@ fn builtin_coding_string_in_context(
             args[0].as_lisp_string().expect("string validated above"),
         )));
         if entry.reports_coding_result() {
-            ctx.set_variable(
+            ctx.set_variable_by_name(
                 "last-coding-system-used",
                 if requested_coding.is_nil() {
                     Value::symbol("no-conversion")
@@ -4949,16 +4949,7 @@ fn builtin_coding_string_in_context(
             run_pre_write_conversion(ctx, hook, args[0], PreWriteFailurePolicy::IgnoreSignals)?;
         // A hook can send recursively or replace this descriptor's coding.
         // Reacquire both its coding and its continuation after the callback.
-        let latest = ctx
-            .processes
-            .get_any(process)
-            .and_then(|proc| proc.encoding_state.coding())
-            .ok_or_else(|| {
-                signal(
-                    "error",
-                    vec![Value::string("Process output coding is not initialized")],
-                )
-            })?;
+        let latest = ctx.process_encoding_coding(process)?;
         args[0] = transformed;
         args[1] = Value::symbol(latest.symbol());
         let roots = ctx.save_specpdl_roots();
@@ -5062,7 +5053,7 @@ fn builtin_coding_string_in_context(
             })?
             .clone();
         if entry.reports_coding_result() {
-            ctx.set_variable(
+            ctx.set_variable_by_name(
                 "last-coding-system-used",
                 Value::symbol(canonical_context_coding_name(&reported_coding)),
             );
@@ -5070,11 +5061,7 @@ fn builtin_coding_string_in_context(
         let Some(buffer_id) = destination else {
             return Ok(result);
         };
-        let restore_point = ctx
-            .edit
-            .buffers
-            .get(buffer_id)
-            .map(|buf| buf.point_anchor());
+        let restore_point = ctx.buffers().get(buffer_id).map(|buf| buf.point_anchor());
         if restore_point.is_none() {
             return Err(signal(
                 "error",
@@ -5089,10 +5076,7 @@ fn builtin_coding_string_in_context(
     // captured at setup and includes hooks and codec requirements, not just EOL.
     let encode_eol_conversion = if let EncodingBoundary::ProcessChunk { process } =
         encoding_boundary
-        && ctx
-            .processes
-            .get_any(process)
-            .is_some_and(|proc| !proc.encoding_state.requires_encoding())
+        && ctx.process_encoding_bypasses(process)
     {
         crate::emacs_core::coding::EolConversion::Inhibited
     } else {
@@ -5164,7 +5148,7 @@ fn builtin_coding_string_in_context(
             let source = source_string();
             let mut scratch = CodingEncoderState::default();
             let state = match encoding_boundary {
-                EncodingBoundary::ProcessChunk { process } => process_encoder_state(ctx, process)?,
+                EncodingBoundary::ProcessChunk { process } => ctx.process_encoder_state(process)?,
                 EncodingBoundary::CompleteText | EncodingBoundary::FileRegion => &mut scratch,
             };
             let mut bytes = if matches!(state, CodingEncoderState::Utf8SignatureStarted) {
@@ -5190,7 +5174,7 @@ fn builtin_coding_string_in_context(
             // No process borrow spans Lisp callbacks. The conversion hooks ran
             // above; only this pure codec borrows the latest continuation.
             let state = match encoding_boundary {
-                EncodingBoundary::ProcessChunk { process } => process_encoder_state(ctx, process)?,
+                EncodingBoundary::ProcessChunk { process } => ctx.process_encoder_state(process)?,
                 EncodingBoundary::CompleteText | EncodingBoundary::FileRegion => &mut scratch,
             };
             let bytes = encode_via_iso2022(source, spec, charsets, encoding_boundary, state);
@@ -5370,7 +5354,7 @@ fn builtin_coding_string_in_context(
         })?
         .clone();
     if entry.reports_coding_result() {
-        ctx.set_variable(
+        ctx.set_variable_by_name(
             "last-coding-system-used",
             Value::symbol(canonical_context_coding_name(&reported_coding)),
         );
@@ -5379,11 +5363,7 @@ fn builtin_coding_string_in_context(
     let Some(buffer_id) = destination else {
         return Ok(result);
     };
-    let restore_point = ctx
-        .edit
-        .buffers
-        .get(buffer_id)
-        .map(|buf| buf.point_anchor());
+    let restore_point = ctx.buffers().get(buffer_id).map(|buf| buf.point_anchor());
     if restore_point.is_none() {
         return Err(signal(
             "error",
@@ -5394,8 +5374,8 @@ fn builtin_coding_string_in_context(
     Ok(Value::fixnum(result_text.schars() as i64))
 }
 
-pub(crate) fn builtin_encode_coding_string_in_context(
-    ctx: &mut crate::emacs_core::eval::Context,
+pub(crate) fn builtin_encode_coding_string_in_context<H: TextHost>(
+    ctx: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_coding_string_in_context(
@@ -5408,8 +5388,8 @@ pub(crate) fn builtin_encode_coding_string_in_context(
     )
 }
 
-pub(crate) fn builtin_decode_coding_string_in_context(
-    ctx: &mut crate::emacs_core::eval::Context,
+pub(crate) fn builtin_decode_coding_string_in_context<H: TextHost>(
+    ctx: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_coding_string_in_context(
@@ -5501,8 +5481,8 @@ impl ExternalEncodingBoundary {
 /// call boundary.  The result also carries GNU's concrete
 /// `last-coding-system-used` value, so callers can report aliases and EOL
 /// subsidiaries consistently.
-fn encode_external_text_with_boundary(
-    ctx: &mut crate::emacs_core::eval::Context,
+fn encode_external_text_with_boundary<H: TextHost>(
+    ctx: &mut H,
     text: crate::heap_types::LispString,
     coding: RuntimeCodingSystem,
     boundary: ExternalEncodingBoundary,
@@ -5523,7 +5503,7 @@ fn encode_external_text_with_boundary(
         .as_bytes()
         .to_vec();
     let coding_system = ctx
-        .visible_variable_value_or_nil("last-coding-system-used")
+        .visible_variable_value_or_nil(intern("last-coding-system-used"))
         .as_bare_symbol_id()
         .filter(|&symbol| symbol != intern("nil"))
         .expect("a successful context-aware encode records its concrete coding system");
@@ -5533,8 +5513,8 @@ fn encode_external_text_with_boundary(
     })
 }
 
-pub(crate) fn encode_external_text_in_context(
-    ctx: &mut crate::emacs_core::eval::Context,
+pub(crate) fn encode_external_text_in_context<H: TextHost>(
+    ctx: &mut H,
     text: crate::heap_types::LispString,
     coding: RuntimeCodingSystem,
 ) -> Result<EncodedTextBytes, neovm_value::error::Flow> {
@@ -5543,8 +5523,8 @@ pub(crate) fn encode_external_text_in_context(
 
 /// Encode one subprocess write through runtime coding definitions and hooks.
 /// A send is a stream chunk, so it must not append an end-of-stream reset.
-pub(crate) fn encode_process_text_in_context(
-    ctx: &mut crate::emacs_core::eval::Context,
+pub(crate) fn encode_process_text_in_context<H: TextHost>(
+    ctx: &mut H,
     text: crate::heap_types::LispString,
     coding: RuntimeCodingSystem,
     process: crate::heap_types::ProcessId,
@@ -5569,20 +5549,12 @@ pub(crate) fn encode_process_text_in_context(
 /// Unlike complete string or region conversion, this operation does not claim
 /// the final coding block. Stateful encoders therefore preserve their ending
 /// designation instead of appending a synthetic stream terminator.
-pub(crate) fn encode_file_region_in_context(
-    ctx: &mut crate::emacs_core::eval::Context,
+pub(crate) fn encode_file_region_in_context<H: TextHost>(
+    ctx: &mut H,
     text: crate::heap_types::LispString,
     coding: RuntimeCodingSystem,
 ) -> Result<EncodedTextBytes, neovm_value::error::Flow> {
     encode_external_text_with_boundary(ctx, text, coding, ExternalEncodingBoundary::FileRegion)
-}
-
-/// Borrow a live process continuation only after callback execution ends.
-fn process_encoder_state<H: TextHost>(
-    ctx: &mut H,
-    process: crate::heap_types::ProcessId,
-) -> Result<&mut CodingEncoderState, neovm_value::error::Flow> {
-    ctx.process_encoder_state(process)
 }
 
 /// A file decode result whose coding-system selection remains an interned
@@ -5600,8 +5572,8 @@ pub(crate) struct DecodedFileBytes {
 /// Encapsulate GNU's `last-coding-system-used` protocol here and return the
 /// concrete interned coding-system symbol together with the decoded text, so
 /// file-I/O callers cannot accidentally report the unresolved input alias.
-pub(crate) fn decode_file_bytes_in_context(
-    ctx: &mut crate::emacs_core::eval::Context,
+pub(crate) fn decode_file_bytes_in_context<H: TextHost>(
+    ctx: &mut H,
     bytes: &[u8],
     coding: &str,
 ) -> Result<DecodedFileBytes, neovm_value::error::Flow> {
@@ -5624,7 +5596,7 @@ pub(crate) fn decode_file_bytes_in_context(
         .expect("decode-coding-string must return a Lisp string")
         .clone();
     let coding_system = ctx
-        .visible_variable_value_or_nil("last-coding-system-used")
+        .visible_variable_value_or_nil(intern("last-coding-system-used"))
         .as_bare_symbol_id()
         .filter(|&symbol| symbol != intern("nil"))
         .expect("a successful context-aware decode records its concrete coding system");
@@ -5656,8 +5628,8 @@ pub(crate) fn decode_file_bytes_in_context(
 /// [`crate::emacs_core::process::PendingProcessRun`] hand-off: the evaluator
 /// owns the `ProcessManager`, so the read has to have let go of the process
 /// before this can be called.
-pub(crate) fn decode_process_run_in_context(
-    ctx: &mut crate::emacs_core::eval::Context,
+pub(crate) fn decode_process_run_in_context<H: TextHost>(
+    ctx: &mut H,
     bytes: &[u8],
     coding: &'static str,
     state: &mut CodingDecoderState,
@@ -5684,7 +5656,7 @@ pub(crate) fn decode_process_run_in_context(
     // to be read back out of the variable the shared engine records it in --
     // the same variable `read_process_output_set_last_coding_system` writes.
     let used = ctx
-        .visible_variable_value_or_nil("last-coding-system-used")
+        .visible_variable_value_or_nil(intern("last-coding-system-used"))
         .as_bare_symbol_id()
         .filter(|&symbol| symbol != intern("nil"))
         .expect("a successful context-aware decode records its concrete coding system");
@@ -5740,8 +5712,8 @@ fn coding_result_for_buffer_multibyte(
     converted
 }
 
-fn builtin_coding_region(
-    ctx: &mut crate::emacs_core::eval::Context,
+fn builtin_coding_region<H: TextHost>(
+    ctx: &mut H,
     args: Vec<Value>,
     direction: CodingDirection,
 ) -> EvalResult {
@@ -5754,25 +5726,24 @@ fn builtin_coding_region(
     // (GNU `code_convert_region` with dst_object == the source buffer), not an
     // insertion that would duplicate the text.
     if let Some(Some(dest_id)) = destination
-        && Some(dest_id) == ctx.edit.buffers.current_buffer_id()
+        && Some(dest_id) == ctx.buffers().current_buffer_id()
     {
         destination = Some(None);
     }
     let Some(byte_range) =
         crate::emacs_core::editfns::current_buffer_accessible_char_region_in_buffers(
-            &ctx.edit.buffers,
+            &ctx.buffers(),
             &args[0],
             &args[1],
         )?
     else {
         return Ok(Value::NIL);
     };
-    let Some(current_id) = ctx.edit.buffers.current_buffer_id() else {
+    let Some(current_id) = ctx.buffers().current_buffer_id() else {
         return Ok(Value::NIL);
     };
     let source = ctx
-        .edit
-        .buffers
+        .buffers()
         .get(current_id)
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?
         .buffer_substring_lisp_string_range(byte_range);
@@ -5833,14 +5804,13 @@ fn builtin_coding_region(
             crate::emacs_core::editfns::ensure_current_buffer_writable_in_state(
                 ctx.variables(),
                 &[],
-                &ctx.edit.buffers,
+                &ctx.buffers(),
             )?;
             // GNU sets `coding->dst_multibyte` from the destination buffer, so
             // the stored text must match the buffer's multibyteness
             // (coding.c:8153).
             let target_multibyte = ctx
-                .edit
-                .buffers
+                .buffers()
                 .get(current_id)
                 .map(|buf| buf.get_multibyte())
                 .unwrap_or(true);
@@ -5851,8 +5821,7 @@ fn builtin_coding_region(
             // `decode_coding_object`/`encode_coding_object`, the `saved_pt >= 0`
             // block).  All three are 1-based char positions.
             let (saved_pt, from_char, chars) = ctx
-                .edit
-                .buffers
+                .buffers()
                 .get(current_id)
                 .map(|buf| {
                     let saved_pt = buf.point_lisp_char_pos().as_i64();
@@ -5884,21 +5853,19 @@ fn builtin_coding_region(
             } else {
                 saved_pt + (produced_chars as i64 - chars)
             };
-            if let Some(buf) = ctx.edit.buffers.get(current_id) {
-                let byte_pos = buf.lisp_pos_to_accessible_emacs_byte_pos(LispCharPos1::new(new_pt));
+            let byte_pos = ctx
+                .buffers()
+                .get(current_id)
+                .map(|buf| buf.lisp_pos_to_accessible_emacs_byte_pos(LispCharPos1::new(new_pt)));
+            if let Some(byte_pos) = byte_pos {
                 let _ = ctx
-                    .edit
-                    .buffers
+                    .buffers_mut()
                     .goto_buffer_emacs_byte_pos(current_id, byte_pos);
             }
             Ok(Value::fixnum(produced_chars as i64))
         }
         Some(Some(buffer_id)) => {
-            let restore_point = ctx
-                .edit
-                .buffers
-                .get(buffer_id)
-                .map(|buf| buf.point_anchor());
+            let restore_point = ctx.buffers().get(buffer_id).map(|buf| buf.point_anchor());
             if restore_point.is_none() {
                 return Err(signal(
                     "error",
@@ -5906,8 +5873,7 @@ fn builtin_coding_region(
                 ));
             }
             let target_multibyte = ctx
-                .edit
-                .buffers
+                .buffers()
                 .get(buffer_id)
                 .map(|buf| buf.get_multibyte())
                 .unwrap_or(true);
@@ -5919,15 +5885,15 @@ fn builtin_coding_region(
     }
 }
 
-pub(crate) fn builtin_encode_coding_region(
-    ctx: &mut crate::emacs_core::eval::Context,
+pub(crate) fn builtin_encode_coding_region<H: TextHost>(
+    ctx: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_coding_region(ctx, args, CodingDirection::Encode)
 }
 
-pub(crate) fn builtin_decode_coding_region(
-    ctx: &mut crate::emacs_core::eval::Context,
+pub(crate) fn builtin_decode_coding_region<H: TextHost>(
+    ctx: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_coding_region(ctx, args, CodingDirection::Decode)
