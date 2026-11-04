@@ -915,7 +915,7 @@ impl SearchRegisters {
             EmacsBytePos::new(regs.start[0] as usize + offset),
             EmacsBytePos::new(regs.end[0] as usize + offset),
         );
-        self.0 = if crate::emacs_core::eval::builtin_frontend_on() {
+        self.0 = if neovm_value::builtin_frontend::builtin_frontend_on() {
             SearchRegistersKind::Engine { regs, offset }
         } else {
             SearchRegistersKind::Groups(buffer_engine_match_data_from_registers(&regs, offset))
@@ -3772,7 +3772,7 @@ fn coerce_pattern_to_buffer_bytes(
     // U2.8: the pattern's own bytes whenever the coercion is the identity --
     // the same multibyteness, or all ASCII, whose bytes both conversions
     // keep -- instead of a copy per search call.
-    if crate::emacs_core::eval::builtin_frontend_on()
+    if neovm_value::builtin_frontend::builtin_frontend_on()
         && (pattern.is_multibyte() == buf_multibyte || pattern.as_bytes().is_ascii())
     {
         return std::borrow::Cow::Borrowed(pattern.as_bytes());

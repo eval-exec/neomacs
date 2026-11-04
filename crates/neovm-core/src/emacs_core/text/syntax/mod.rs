@@ -7277,7 +7277,7 @@ impl PartialParseState {
             self.prev_syntax_element(),
         ];
         // U2.8: GNU `Flist` from the stack, not through a heap vector.
-        if super::eval::builtin_frontend_on() {
+        if neovm_value::builtin_frontend::builtin_frontend_on() {
             Value::list_from_slice(&elements)
         } else {
             Value::list(elements.to_vec())
@@ -7808,7 +7808,7 @@ fn expect_skip_syntax_args(
     // U2.8: parse the class string's bytes in place; with the knob off,
     // decode it to UTF-8 first as before.
     let syntax_chars = match args[0].as_lisp_string() {
-        Some(string) if super::eval::builtin_frontend_on() => {
+        Some(string) if neovm_value::builtin_frontend::builtin_frontend_on() => {
             SkipSyntaxClasses::parse_spec_bytes(string.as_bytes())
         }
         _ => SkipSyntaxClasses::parse_str(&syntax_runtime_string(&args[0])?),

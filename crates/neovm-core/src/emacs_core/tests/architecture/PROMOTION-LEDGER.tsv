@@ -1227,3 +1227,6 @@ HeapRegistrySlot::park	method	pub(crate)	crates/neovm-value/src/heap_registry/mo
 HeapRegistrySlot::reset	method	pub(crate)	crates/neovm-value/src/heap_registry/mod.rs:195	heap_registry	stage-3b T3: signed exact-caller row — each registry own reset entry point (charset ccl dynamic_module file_notify hooks terminal collections xfaces) and the carrier activation code
 HeapRegistrySlot::borrow	method	pub(crate)	crates/neovm-value/src/heap_registry/mod.rs:210	heap_registry	stage-3b T3: plain row — moved verbatim with the module
 HeapRegistrySlot::borrow_mut	method	pub(crate)	crates/neovm-value/src/heap_registry/mod.rs:228	heap_registry	stage-3b T3: plain row — moved verbatim with the module
+builtin_frontend_on	fn	pub(crate)	crates/neovm-value/src/builtin_frontend.rs:60	builtin_frontend	stage-3b T5 frontend-service row: process-global U2.8 knob reader named by the text regex/syntax engines; core eval keeps a re-export alias
+parse_builtin_frontend_knob	fn	pub(crate)	crates/neovm-value/src/builtin_frontend.rs:26	builtin_frontend	stage-3b T5 plain row: knob-value parser; core eval re-export used by the builtin-vars tests
+set_builtin_frontend_for_test	fn	(new fn)	crates/neovm-value/src/builtin_frontend.rs:52	builtin_frontend	stage-3b T5 test_only row: cfg(any(test, feature=test-support)) thread-local knob override
