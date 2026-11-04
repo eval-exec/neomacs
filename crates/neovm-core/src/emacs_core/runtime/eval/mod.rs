@@ -55,8 +55,8 @@ use crate::window::{
     WindowLayoutQueryAdapter,
 };
 use neovm_edit::emacs_core::display_metrics::WindowId;
-use neovm_value::kmacro::KmacroManager;
 use neovm_value::display_vocab::{FontSlant, FontWeight, FontWidth};
+use neovm_value::kmacro::KmacroManager;
 
 pub mod data;
 pub(crate) mod world;
@@ -5672,7 +5672,7 @@ impl Context {
         &mut self,
         face_name: &str,
         attr: neovm_value::display_vocab::LFaceAttr,
-        value: crate::face::FaceAttrValue,
+        value: crate::emacs_core::eval::data::face::FaceAttrValue,
     ) -> bool {
         // GNU Emacs stores the internal face ID as the symbol's `face`
         // property during `internal-make-lisp-face`.  Ensure this is set

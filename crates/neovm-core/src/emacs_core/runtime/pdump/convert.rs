@@ -42,6 +42,9 @@ use crate::emacs_core::chartable::{
 use crate::emacs_core::coding::{CodingSystemInfo, CodingSystemManager, EolType};
 use crate::emacs_core::custom::CustomManager;
 use crate::emacs_core::eval::Context;
+use crate::emacs_core::eval::data::face::{
+    BoxBorder, BoxStyle, Color, FaceHeight, Underline, UnderlinePosition, UnderlineStyle,
+};
 use crate::emacs_core::eval::subr_abi::SubrObj;
 use crate::emacs_core::fontset::{
     FontDefinitionMetadata, FontRepertory, FontSpecEntry, FontsetDataSnapshot,
@@ -66,10 +69,7 @@ use crate::emacs_core::value::{ValueKind, VecLikeType};
 use crate::emacs_core::value::{
     get_string_text_properties_for_value, set_string_text_properties_for_value,
 };
-use crate::face::{
-    BoxBorder, BoxStyle, Color, Face, FaceDecoration, FaceHeight, FaceTable, Underline,
-    UnderlinePosition, UnderlineStyle,
-};
+use crate::face::{Face, FaceDecoration, FaceTable};
 use crate::heap_types::LispString;
 use crate::tagged::gc::with_tagged_heap;
 use crate::tagged::header::{
@@ -78,8 +78,8 @@ use crate::tagged::header::{
     RecordObj, StringObj, SubCharTableObj, VecLikeHeader, VectorObj,
 };
 use crate::tagged::value::TaggedValue;
-use neovm_value::kmacro::KmacroManager;
 use neovm_value::display_vocab::{FontSlant, FontWeight, FontWidth};
+use neovm_value::kmacro::KmacroManager;
 thread_local! {
     static PDUMP_LOAD_NAME_REMAP: RefCell<Option<Vec<NameId>>> = const { RefCell::new(None) };
     static PDUMP_LOAD_SYM_REMAP: RefCell<Option<Vec<SymId>>> = const { RefCell::new(None) };
