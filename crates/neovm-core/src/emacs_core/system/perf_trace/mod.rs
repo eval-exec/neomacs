@@ -233,6 +233,16 @@ static CANONICAL_PERF_HOOKS: crate::emacs_core::eval::perf::PerfHooks =
         PERF_CARRIER_FINGERPRINT,
     );
 
+/// The one canonical hot-path perf pair.
+pub(crate) fn canonical_perf_hooks() -> &'static crate::emacs_core::eval::perf::PerfHooks {
+    &CANONICAL_PERF_HOOKS
+}
+
+/// The process-level enable answer that accompanies the canonical pair.
+pub(crate) fn canonical_perf_enabled() -> bool {
+    hotpath_timing_enabled()
+}
+
 pub(crate) fn install_perf_hooks() {
     let installed = crate::emacs_core::eval::perf::install_perf_hooks(
         hotpath_timing_enabled(),

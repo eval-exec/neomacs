@@ -3,6 +3,7 @@
 //! Moved out of `eval/mod.rs` unchanged; a child module of `eval` so it keeps
 //! the same view of `Context` and the parent's private items (`use super::*`).
 
+use super::hooks_proof::EvalHooksInstalled;
 use super::*;
 use crate::emacs_core::eval::subr_abi::SubrValueExt;
 use crate::emacs_core::symbol::CanonicalAccess;
@@ -37,10 +38,9 @@ pub(super) fn install_scratch_root_hooks() {
 /// `HotpathOp` counters, and the layout hook is the display layer's exact
 /// mutation note, so behavior is unchanged on both paths.
 pub(super) fn install_text_substrate_hooks() {
-    // The evaluator's hot-path pair and carrier hooks (E8) publish here, at
-    // the same one-time seam; the text layer's C7 seam below reads its enable
+    // The evaluator's hot-path pair is part of the E3a boot set (published
+    // before construction); the text layer's C7 seam below reads its enable
     // answer and records through the same pair.
-    crate::emacs_core::eval_hook_installers::install_perf_trace_hooks();
     crate::emacs_core::substrate_hooks::install_perf(
         crate::emacs_core::eval::perf::enabled(),
         text_perf_record,
@@ -170,8 +170,8 @@ impl RegistryHandles {
 }
 
 impl Context {
-    pub fn new() -> Self {
-        let mut ctx = Self::new_inner(ConstructionSurface::Full);
+    pub fn new(_hooks: EvalHooksInstalled) -> Self {
+        let mut ctx = Self::new_inner(ConstructionSurface::Full, _hooks);
         // Register builtins AFTER new_inner returns — the function is too
         // large (1500+ lines) for reliable codegen in debug mode when
         // combined with the full native subr manifest in the same frame.
@@ -203,25 +203,25 @@ impl Context {
     /// obarray membership. Used by the legacy dump fixture: the image must
     /// lack the C-owned hook declaration rather than carry an empty member.
     #[cfg(test)]
-    pub(crate) fn new_legacy_image_without_defsym_membership() -> Self {
-        let mut ctx = Self::new_inner(ConstructionSurface::LegacyImageWithoutDefsyms);
+    pub(crate) fn new_legacy_image_without_defsym_membership(_hooks: EvalHooksInstalled) -> Self {
+        let mut ctx = Self::new_inner(ConstructionSurface::LegacyImageWithoutDefsyms, _hooks);
         builtins::init_builtins(&mut ctx);
         ctx.pre_register_standard_fringe_bitmaps();
         ctx
     }
 
     #[cfg(test)]
-    pub(crate) fn new_vm_runtime_harness() -> Self {
+    pub(crate) fn new_vm_runtime_harness(_hooks: EvalHooksInstalled) -> Self {
         // GNU bytecode executes inside the same callable runtime surface as the
         // ordinary evaluator. Keep the default VM harness on that full surface.
-        Self::new()
+        Self::new(_hooks)
     }
 
     #[cfg(test)]
-    pub(crate) fn new_minimal_vm_harness() -> Self {
+    pub(crate) fn new_minimal_vm_harness(_hooks: EvalHooksInstalled) -> Self {
         // Keep this reduced constructor only for low-level VM/opcode tests
         // that intentionally do not depend on the full builtin surface.
-        let mut ev = Self::new_inner(ConstructionSurface::MinimalVm);
+        let mut ev = Self::new_inner(ConstructionSurface::MinimalVm, _hooks);
         // SAFETY: standard error seeding is a noncalling property/value helper;
         // it changes no function cell, descriptor or admitted manager identity.
         unsafe {
@@ -2396,17 +2396,13 @@ impl Context {
         }
     }
 
-    pub(super) fn new_inner(surface: ConstructionSurface) -> Self {
+    pub(super) fn new_inner(surface: ConstructionSurface, _hooks: EvalHooksInstalled) -> Self {
         // Byte-code structural semantics live above the value layer; install
         // them before any byte-code value can be compared or hashed. This is
         // the one-time hook, not a per-allocation check: the constructors stay
         // free of it so the allocation fast path is untouched.
-        // Lifecycle hooks (stage-4 W4/E11) publish first, before any
-        // GC-capable allocation: their owners keep the state in core, and no
-        // call site can run before construction/dump.
-        crate::emacs_core::lifecycle_hooks::install_lifecycle_hooks();
-        crate::emacs_core::process_hooks::install_process_hooks();
-        crate::emacs_core::input_hooks::install_input_hooks();
+        // Every core-owned cold table was published by the E3a boot entry
+        // before this constructor was allowed to run (the proof parameter).
         crate::emacs_core::bytecode::semantics::install();
         // The value layer owns the function-cell observer table; the JIT
         // installs its four observations here, before any compiled leaf can
@@ -2444,19 +2440,9 @@ impl Context {
         // before the first SqliteObj exists.
         #[cfg(feature = "sqlite")]
         crate::emacs_core::sqlite::install_sqlite_finalizer_hook();
-        // `call-interactively` argument acquisition is a core command-layer
-        // body (minibuffer/reader Lisp entries stay there). Publish its one
-        // cold table before any form can reach the VM path.
-        crate::emacs_core::eval_hook_installers::install_call_interactively_hook();
-        // Case-table read/sync and the green buffer-kill notification are
-        // core command-layer authority bodies; publish their cold tables at
-        // the same one-time seam, before any case-sensitive operation or
-        // buffer kill can run.
-        crate::emacs_core::eval_hook_installers::install_case_table_hooks();
-        crate::emacs_core::eval_hook_installers::install_display_query_hooks();
-        // Keyboard-macro entries are core command bodies the VM dispatch
-        // reaches through eval; publish their cold table at the same seam.
-        crate::emacs_core::eval_hook_installers::install_kmacro_hooks();
+        // The `call-interactively`, case-table, buffer-kill, keyboard-macro
+        // and display-query tables are part of the E3a boot set, published
+        // above this constructor; nothing is installed here.
         // The evaluator's observed-run log of function-epoch moves is plain
         // process state too; install it unconditionally so non-JIT builds
         // keep the verify-run mismatch report.

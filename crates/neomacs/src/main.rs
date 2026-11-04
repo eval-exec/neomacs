@@ -3654,6 +3654,7 @@ fn create_startup_evaluator_for_mode(mode: RuntimeMode, startup: &StartupOptions
                 RuntimeImageRole::Bootstrap,
                 BOOTSTRAP_CORE_FEATURES,
                 startup.dump_file_override.as_deref(),
+                neovm_core::emacs_core::eval_hook_installers::install_eval_hooks(),
             )
             .unwrap_or_else(|err| {
                 panic!(
@@ -3677,6 +3678,7 @@ fn create_startup_evaluator_for_mode(mode: RuntimeMode, startup: &StartupOptions
                     RuntimeImageRole::Final,
                     BOOTSTRAP_CORE_FEATURES,
                     startup.dump_file_override.as_deref(),
+                    neovm_core::emacs_core::eval_hook_installers::install_eval_hooks(),
                 )
                 .unwrap_or_else(|err| {
                     panic!(
@@ -3696,6 +3698,7 @@ fn create_startup_evaluator_for_mode(mode: RuntimeMode, startup: &StartupOptions
                     RuntimeImageRole::Bootstrap,
                     BOOTSTRAP_CORE_FEATURES,
                     None,
+                    neovm_core::emacs_core::eval_hook_installers::install_eval_hooks(),
                 )
                 .unwrap_or_else(|err| {
                     panic!(
@@ -3741,6 +3744,7 @@ fn raw_source_bootstrap_evaluator() -> Context {
     neovm_core::emacs_core::load::create_bootstrap_evaluator_for_loadup(
         BOOTSTRAP_CORE_FEATURES,
         &invocation,
+        neovm_core::emacs_core::eval_hook_installers::install_eval_hooks(),
     )
     .expect("raw bootstrap should succeed")
 }
@@ -5090,6 +5094,7 @@ fn run_temacs_dump_mode(dump_mode: LoadupDumpMode, startup: &StartupOptions) {
     let eval = neovm_core::emacs_core::load::create_bootstrap_evaluator_for_loadup(
         BOOTSTRAP_CORE_FEATURES,
         &invocation,
+        neovm_core::emacs_core::eval_hook_installers::install_eval_hooks(),
     )
     .expect("temacs bootstrap dump should succeed");
 

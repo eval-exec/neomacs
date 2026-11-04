@@ -94,7 +94,9 @@ use crate::window::{
     DisplayRowSnapshot, FrameId, FrameManager, Window, WindowChromeLine, WindowChromePresence,
     WindowDisplaySnapshot, WindowId,
 };
-pub(crate) use eval_display_queries::install_eval_display_query_hooks;
+pub(crate) use eval_display_queries::{
+    canonical_display_query_hooks, install_eval_display_query_hooks,
+};
 use std::num::NonZeroUsize;
 use std::ops::ControlFlow;
 use strum::{EnumString, IntoStaticStr};

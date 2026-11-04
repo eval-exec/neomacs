@@ -22,6 +22,7 @@
 
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
+use crate::emacs_core::eval::hooks_proof::EvalHooksInstalled;
 use crate::emacs_core::jit::compile::param_shape::JitParamShape;
 use cranelift_codegen::settings::{self, Configurable};
 use cranelift_module::{Linkage, Module, default_libcall_names};
@@ -2281,19 +2282,23 @@ pub fn is_d0_aot_candidate(
 /// precise-frame metadata and the imported allocator together.
 #[cfg(target_os = "linux")]
 #[doc(hidden)]
-pub fn testkit_mir_cons_reconstruction_selftest(dir: &std::path::Path) {
-    testkit_mir_cons_reconstruction_case(dir, false);
-    testkit_mir_cons_reconstruction_case(dir, true);
+pub fn testkit_mir_cons_reconstruction_selftest(dir: &std::path::Path, hooks: EvalHooksInstalled) {
+    testkit_mir_cons_reconstruction_case(dir, false, hooks);
+    testkit_mir_cons_reconstruction_case(dir, true, hooks);
 }
 
 #[cfg(target_os = "linux")]
-fn testkit_mir_cons_reconstruction_case(dir: &std::path::Path, singleton: bool) {
+fn testkit_mir_cons_reconstruction_case(
+    dir: &std::path::Path,
+    singleton: bool,
+    hooks: EvalHooksInstalled,
+) {
     use crate::emacs_core::bytecode::{ByteCodeFunction, Vm};
     use crate::emacs_core::eval::Context;
     use crate::emacs_core::jit::compile::{DeoptResume, LoadedUnit, NativeRun};
     use crate::emacs_core::value::LambdaParams;
 
-    let mut ev = Context::new();
+    let mut ev = Context::new(hooks);
     ev.eval_str("(setq aot-rebuild-count 0) (fset 'aot-rebuild-effect (lambda () (setq aot-rebuild-count (1+ aot-rebuild-count))))").unwrap();
     let mut f = ByteCodeFunction::new(LambdaParams {
         required: vec![
@@ -2422,7 +2427,10 @@ fn testkit_mir_cons_reconstruction_case(dir: &std::path::Path, singleton: bool) 
 ///  4. (#A) a heap constant the leaf returns is EQ-identical to the source const.
 #[doc(hidden)]
 #[cfg(target_os = "linux")]
-pub fn testkit_call_bearing_selftest(dir: &std::path::Path) -> Result<(), String> {
+pub fn testkit_call_bearing_selftest(
+    dir: &std::path::Path,
+    hooks: EvalHooksInstalled,
+) -> Result<(), String> {
     use crate::emacs_core::bytecode::{ByteCodeFunction, Vm};
     use crate::emacs_core::eval::Context;
     use crate::emacs_core::intern::SymId;
@@ -2457,7 +2465,7 @@ pub fn testkit_call_bearing_selftest(dir: &std::path::Path) -> Result<(), String
         (s, id)
     };
 
-    let mut ev = Context::new();
+    let mut ev = Context::new(hooks);
 
     // Callee `bump`: (setcar cell (1+ (car cell))) ; arg.  The car of `cell`
     // counts how many times bump actually ran — the observable side effect.
@@ -2590,7 +2598,10 @@ pub fn testkit_call_bearing_selftest(dir: &std::path::Path) -> Result<(), String
 /// (no op-SymId reloc) so this isolates the deopt-RESUME from must-nail #2's reloc.
 #[doc(hidden)]
 #[cfg(target_os = "linux")]
-pub fn testkit_baseline_aot_selftest(dir: &std::path::Path) -> Result<(), String> {
+pub fn testkit_baseline_aot_selftest(
+    dir: &std::path::Path,
+    hooks: EvalHooksInstalled,
+) -> Result<(), String> {
     use crate::emacs_core::bytecode::ByteCodeFunction;
     use crate::emacs_core::eval::Context;
     use crate::emacs_core::intern::SymId;
@@ -2628,7 +2639,7 @@ pub fn testkit_baseline_aot_selftest(dir: &std::path::Path) -> Result<(), String
         f
     };
 
-    let mut ev = Context::new();
+    let mut ev = Context::new(hooks);
     let ctx = &mut ev as *mut Context;
 
     // Helper: AOT result via the cache (forced), and interp result, for one input
@@ -2729,7 +2740,10 @@ pub fn testkit_baseline_aot_selftest(dir: &std::path::Path) -> Result<(), String
 /// interp proves the deeper restore is correct.
 #[doc(hidden)]
 #[cfg(target_os = "linux")]
-pub fn testkit_baseline_deep_rawslot_deopt_selftest(dir: &std::path::Path) -> Result<(), String> {
+pub fn testkit_baseline_deep_rawslot_deopt_selftest(
+    dir: &std::path::Path,
+    hooks: EvalHooksInstalled,
+) -> Result<(), String> {
     use crate::emacs_core::bytecode::{ByteCodeFunction, Vm};
     use crate::emacs_core::eval::Context;
     use crate::emacs_core::intern::SymId;
@@ -2782,7 +2796,7 @@ pub fn testkit_baseline_deep_rawslot_deopt_selftest(dir: &std::path::Path) -> Re
         f
     };
 
-    let mut ev = Context::new();
+    let mut ev = Context::new(hooks);
     let ctx = &mut ev as *mut Context;
 
     // Serve via the cache (baseline-backed) + the interpreter; compare. Two regimes:
@@ -2875,7 +2889,10 @@ pub fn testkit_baseline_deep_rawslot_deopt_selftest(dir: &std::path::Path) -> Re
 /// protection.)
 #[doc(hidden)]
 #[cfg(target_os = "linux")]
-pub fn testkit_callbuiltinsym_aot_selftest(dir: &std::path::Path) -> Result<(), String> {
+pub fn testkit_callbuiltinsym_aot_selftest(
+    dir: &std::path::Path,
+    hooks: EvalHooksInstalled,
+) -> Result<(), String> {
     use crate::emacs_core::bytecode::{ByteCodeFunction, Vm};
     use crate::emacs_core::eval::Context;
     use crate::emacs_core::intern::SymId;
@@ -2936,7 +2953,7 @@ pub fn testkit_callbuiltinsym_aot_selftest(dir: &std::path::Path) -> Result<(), 
         f
     };
 
-    let mut ev = Context::new();
+    let mut ev = Context::new(hooks);
     let ctx = &mut ev as *mut Context;
     // arg = a 3-element list → (length arg) == 3.
     let arg = Value::list(vec![
@@ -3148,7 +3165,10 @@ fn cbsym_aot_serve_and_check(
 /// machinery before increment B.
 #[doc(hidden)]
 #[cfg(target_os = "linux")]
-pub fn testkit_cbsym_aot_fast_shim_selftest(dir: &std::path::Path) -> Result<(), String> {
+pub fn testkit_cbsym_aot_fast_shim_selftest(
+    dir: &std::path::Path,
+    hooks: EvalHooksInstalled,
+) -> Result<(), String> {
     use crate::emacs_core::eval::Context;
     use crate::emacs_core::intern::intern;
 
@@ -3159,7 +3179,7 @@ pub fn testkit_cbsym_aot_fast_shim_selftest(dir: &std::path::Path) -> Result<(),
     // A Context with a non-trivial buffer + a moved point, so `(point)` is a
     // deterministic non-trivial fixnum (and `(point)` is a pure read, so the AOT
     // run doesn't perturb the interp cross-check).
-    let mut ev = Context::new();
+    let mut ev = Context::new(hooks);
     ev.eval_str("(insert \"abc\\ndef\")")
         .map_err(|_| "buffer setup (insert) failed".to_string())?;
     ev.eval_str("(goto-char 3)")
@@ -3232,7 +3252,10 @@ pub fn testkit_cbsym_aot_fast_shim_selftest(dir: &std::path::Path) -> Result<(),
 /// result matches the interpreter.
 #[doc(hidden)]
 #[cfg(target_os = "linux")]
-pub fn testkit_baseline_op_symbol_reloc_selftest(dir: &std::path::Path) -> Result<(), String> {
+pub fn testkit_baseline_op_symbol_reloc_selftest(
+    dir: &std::path::Path,
+    hooks: EvalHooksInstalled,
+) -> Result<(), String> {
     use crate::emacs_core::bytecode::{ByteCodeFunction, Vm};
     use crate::emacs_core::eval::Context;
     use crate::emacs_core::intern::SymId;
@@ -3367,7 +3390,7 @@ pub fn testkit_baseline_op_symbol_reloc_selftest(dir: &std::path::Path) -> Resul
             f
         };
 
-        let mut ev = Context::new();
+        let mut ev = Context::new(hooks);
         let ctx = &mut ev as *mut Context;
         let f = mk_fn();
         let f_val = Value::make_bytecode(f.clone());
@@ -3508,7 +3531,10 @@ pub fn testkit_baseline_op_symbol_reloc_selftest(dir: &std::path::Path) -> Resul
 // Consumes the debug-only SUBR_SPEC_* counters → must match their cfg, else
 // `cargo build --release --features jit` fails to resolve them (E0432).
 #[cfg(all(target_os = "linux", debug_assertions))]
-pub fn testkit_spec_aot_selftest(dir: &std::path::Path) -> Result<(), String> {
+pub fn testkit_spec_aot_selftest(
+    dir: &std::path::Path,
+    hooks: EvalHooksInstalled,
+) -> Result<(), String> {
     use super::compile::{SUBR_SPEC_FAST_COUNT, SUBR_SPEC_GENERIC_COUNT};
     use crate::emacs_core::bytecode::{ByteCodeFunction, Vm};
     use crate::emacs_core::eval::Context;
@@ -3562,7 +3588,7 @@ pub fn testkit_spec_aot_selftest(dir: &std::path::Path) -> Result<(), String> {
         pushes: Vec<Op>,
         args: Vec<Value>,
     }
-    // All callees are Rust builtins bound in a minimal `Context::new()` (so no
+    // All callees are Rust builtins bound in a minimal `Context::new(hooks)` (so no
     // loadup is needed). This exercises three spec shims a builtin-only context
     // can reach — `neovm_jit_pred_spec` (PredRecordp), `neovm_jit_call_subr_spec`
     // (SubrGeneral), and `neovm_jit_arith_spec` (ArithIntrinsic, logand). The
@@ -3618,7 +3644,7 @@ pub fn testkit_spec_aot_selftest(dir: &std::path::Path) -> Result<(), String> {
     // is emitted with its callee aliased to its builtin so `find_spec_sites` bakes
     // the spec fast path + descriptor entry.
     for c in &corpus {
-        let mut emit_ctx = Context::new();
+        let mut emit_ctx = Context::new(hooks);
         alias(&mut emit_ctx, c.alias, c.builtin)?;
         let f = mk_fn(c.alias, c.arity, &c.pushes);
         let (obj, content_hash) =
@@ -3630,7 +3656,7 @@ pub fn testkit_spec_aot_selftest(dir: &std::path::Path) -> Result<(), String> {
     }
     // Emit the CRUX body — aliased to `recordp` at emit (bakes a PredRecordp site).
     {
-        let mut emit_ctx = Context::new();
+        let mut emit_ctx = Context::new(hooks);
         alias(&mut emit_ctx, "aot-spec-crux", "recordp")?;
         let f = mk_fn("aot-spec-crux", 1, &[Op::StackRef(1)]);
         let (obj, content_hash) =
@@ -3650,7 +3676,7 @@ pub fn testkit_spec_aot_selftest(dir: &std::path::Path) -> Result<(), String> {
     // PASS 2a — SERVE each armed body against a FRESH obarray (same binding), and
     // prove FAST-from-call-1 + AOT==interp.
     for c in &corpus {
-        let mut load_ctx = Context::new();
+        let mut load_ctx = Context::new(hooks);
         alias(&mut load_ctx, c.alias, c.builtin)?;
         let ctx = &mut load_ctx as *mut Context;
         let g = mk_fn(c.alias, c.arity, &c.pushes);
@@ -3769,7 +3795,7 @@ pub fn testkit_spec_aot_selftest(dir: &std::path::Path) -> Result<(), String> {
     // PredRecordp site must DISARM (not run `is_record`): on a STRING, the generic
     // `stringp` returns `t` where a wrongly-armed `is_record` would return `nil`.
     {
-        let mut load_ctx = Context::new();
+        let mut load_ctx = Context::new(hooks);
         alias(&mut load_ctx, "aot-spec-crux", "stringp")?;
         // Sanity: the load-session binding IS `stringp` now — resolve the actual
         // subr NAME its cell holds, so a mismatch is diagnosable.
@@ -3890,7 +3916,10 @@ pub fn testkit_spec_aot_selftest(dir: &std::path::Path) -> Result<(), String> {
 /// so the `neovm_jit_pred_spec` import resolves at dlopen).
 #[doc(hidden)]
 #[cfg(all(target_os = "linux", debug_assertions))]
-pub fn testkit_pgo_roundtrip_selftest(dir: &std::path::Path) -> Result<(), String> {
+pub fn testkit_pgo_roundtrip_selftest(
+    dir: &std::path::Path,
+    hooks: EvalHooksInstalled,
+) -> Result<(), String> {
     use super::compile::SUBR_SPEC_FAST_COUNT;
     use crate::emacs_core::bytecode::{ByteCodeFunction, Vm};
     use crate::emacs_core::eval::Context;
@@ -3939,7 +3968,7 @@ pub fn testkit_pgo_roundtrip_selftest(dir: &std::path::Path) -> Result<(), Strin
     // BEFORE any load. Aliased to `recordp` so `find_spec_sites` bakes the pred spec
     // fast path + descriptor entry.
     {
-        let mut emit_ctx = Context::new();
+        let mut emit_ctx = Context::new(hooks);
         alias(&mut emit_ctx, "aot-pgo-pred", "recordp")?;
         let f = mk_fn("aot-pgo-pred", 1, &[Op::StackRef(1)]);
         let (obj, content_hash) =
@@ -3961,7 +3990,7 @@ pub fn testkit_pgo_roundtrip_selftest(dir: &std::path::Path) -> Result<(), Strin
 
     // PASS 2 — SERVE against a FRESH obarray (same binding); prove FAST-from-call-1
     // + AOT==interp through the PUBLIC try_run_compiled.
-    let mut load_ctx = Context::new();
+    let mut load_ctx = Context::new(hooks);
     alias(&mut load_ctx, "aot-pgo-pred", "recordp")?;
     let ctx = &mut load_ctx as *mut Context;
     let g = mk_fn("aot-pgo-pred", 1, &[Op::StackRef(1)]);
@@ -4027,7 +4056,10 @@ pub fn testkit_pgo_roundtrip_selftest(dir: &std::path::Path) -> Result<(), Strin
 /// present. Invoked from `tests/aot_pgo.rs` (shim-exporting `-rdynamic` binary).
 #[doc(hidden)]
 #[cfg(all(target_os = "linux", debug_assertions))]
-pub fn testkit_pgo_drain_selftest(dir: &std::path::Path) -> Result<(), String> {
+pub fn testkit_pgo_drain_selftest(
+    dir: &std::path::Path,
+    hooks: EvalHooksInstalled,
+) -> Result<(), String> {
     use super::compile::SUBR_SPEC_FAST_COUNT;
     use crate::emacs_core::bytecode::{ByteCodeFunction, Vm};
     use crate::emacs_core::eval::Context;
@@ -4067,7 +4099,7 @@ pub fn testkit_pgo_drain_selftest(dir: &std::path::Path) -> Result<(), String> {
     };
 
     // ---- PASS 1 — stage a hot JIT pred leaf in ctx1, then DRAIN. ----
-    let mut c1 = Context::new();
+    let mut c1 = Context::new(hooks);
     alias(&mut c1, "pgo-drain-callee", "recordp")?;
     // Bind the fn under an interned name so the drain's obarray WALK finds it, and
     // retrieve the heap `bc` the walk will use (same identity → same compiled_id).
@@ -4109,7 +4141,7 @@ pub fn testkit_pgo_drain_selftest(dir: &std::path::Path) -> Result<(), String> {
 
     // ---- PASS 2 — a FRESH session serves the drained `.so` AOT + FAST-from-call-1. ----
     super::cache::clear();
-    let mut c2 = Context::new();
+    let mut c2 = Context::new(hooks);
     alias(&mut c2, "pgo-drain-callee", "recordp")?;
     let g = mk_fn("pgo-drain-callee");
     let g_val = Value::make_bytecode(g.clone());
@@ -4164,14 +4196,17 @@ pub fn testkit_pgo_drain_selftest(dir: &std::path::Path) -> Result<(), String> {
 /// in a process that deliberately does NOT set `NEOVM_AOT_PGO`.
 #[doc(hidden)]
 #[cfg(target_os = "linux")]
-pub fn testkit_pgo_default_off_selftest(dir: &std::path::Path) -> Result<(), String> {
+pub fn testkit_pgo_default_off_selftest(
+    dir: &std::path::Path,
+    hooks: EvalHooksInstalled,
+) -> Result<(), String> {
     use crate::emacs_core::eval::Context;
 
     if aot_pgo_enabled() {
         return Err("NEOVM_AOT_PGO must be UNSET for the default-off proof".into());
     }
 
-    let mut c1 = Context::new();
+    let mut c1 = Context::new(hooks);
     let f = ev_alias_and_build(&mut c1)?;
     super::cache::compile_and_cache_jit_leaf(f, Some(&c1.obarray))
         .ok_or("staging: hot leaf did not JIT-compile")?;

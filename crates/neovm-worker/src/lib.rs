@@ -1173,7 +1173,8 @@ impl WorkerRuntime {
 }
 
 fn create_elisp_context() -> Result<Box<Context>, WorkerStartError> {
-    let mut evaluator = Box::new(create_bootstrap_evaluator_cached().map_err(|err| {
+    let proof = neovm_core::emacs_core::eval_hook_installers::install_eval_hooks();
+    let mut evaluator = Box::new(create_bootstrap_evaluator_cached(proof).map_err(|err| {
         WorkerStartError::Initialization(format!("bootstrap evaluator: {err:?}"))
     })?);
     evaluator.setup_thread_locals();

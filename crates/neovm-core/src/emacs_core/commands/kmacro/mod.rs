@@ -419,6 +419,12 @@ static CANONICAL_KMACRO_HOOKS: crate::emacs_core::eval::kmacro_hooks::KmacroHook
         builtin_store_kbd_macro_event,
     );
 
+/// The one canonical keyboard-macro entry descriptor.
+pub(crate) fn canonical_kmacro_hooks() -> &'static crate::emacs_core::eval::kmacro_hooks::KmacroHooks
+{
+    &CANONICAL_KMACRO_HOOKS
+}
+
 pub(crate) fn install_kmacro_hooks() {
     let installed =
         crate::emacs_core::eval::kmacro_hooks::install_kmacro_hooks(&CANONICAL_KMACRO_HOOKS);

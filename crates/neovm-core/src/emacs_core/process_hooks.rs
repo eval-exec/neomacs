@@ -241,6 +241,11 @@ static CANONICAL_PROCESS_HOOKS: ProcessHooks = ProcessHooks::new(
 );
 
 /// Publish the process-IO table at the one-time construction seams.
+/// The one canonical process descriptor.
+pub(crate) fn canonical_process_hooks() -> &'static ProcessHooks {
+    &CANONICAL_PROCESS_HOOKS
+}
+
 pub(crate) fn install_process_hooks() {
     let installed =
         crate::emacs_core::eval::process_hooks::install_process_hooks(&CANONICAL_PROCESS_HOOKS);

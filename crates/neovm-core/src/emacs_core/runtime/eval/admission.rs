@@ -220,8 +220,11 @@ impl Context {
     /// A Context whose World runs Lisp threads in MODE, fixed before any
     /// Lisp runs. [`Context::new`] is `Sim`.
     #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn new_with_threading(mode: ThreadingMode) -> Self {
-        let mut ctx = Self::new();
+    pub(crate) fn new_with_threading(
+        mode: ThreadingMode,
+        _hooks: super::hooks_proof::EvalHooksInstalled,
+    ) -> Self {
+        let mut ctx = Self::new(_hooks);
         ctx.set_threading_mode_at_construction(mode);
         ctx
     }

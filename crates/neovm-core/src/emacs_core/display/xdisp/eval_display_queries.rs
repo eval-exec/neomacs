@@ -55,6 +55,12 @@ static CANONICAL_DISPLAY_QUERY_HOOKS: DisplayQueryHooks = DisplayQueryHooks::new
 );
 
 /// Publish the canonical display-policy table at the two construction seams.
+/// The one canonical display-query descriptor.
+pub(crate) fn canonical_display_query_hooks()
+-> &'static crate::emacs_core::eval::display_query_hooks::DisplayQueryHooks {
+    &CANONICAL_DISPLAY_QUERY_HOOKS
+}
+
 pub(crate) fn install_eval_display_query_hooks() {
     let _status = display_query_hooks::install_display_query_hooks(&CANONICAL_DISPLAY_QUERY_HOOKS)
         .expect("display-query hooks must publish once");

@@ -230,6 +230,11 @@ static CANONICAL_LIFECYCLE_HOOKS: LifecycleHooks = LifecycleHooks::new(
 );
 
 /// Publish the lifecycle table; first in the one-time hook block (E3).
+/// The one canonical lifecycle descriptor (its publication is E3a's first slot).
+pub(crate) fn canonical_lifecycle_hooks() -> &'static LifecycleHooks {
+    &CANONICAL_LIFECYCLE_HOOKS
+}
+
 pub(crate) fn install_lifecycle_hooks() {
     // The green buffer-kill notification table is eval-declared; publishing
     // it from this first-in-the-block installer keeps the eval->core

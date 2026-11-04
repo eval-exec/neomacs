@@ -527,11 +527,14 @@ pub fn dump_to_file(eval: &Context, path: &Path) -> Result<(), DumpError> {
 ///
 /// This reconstructs a full `Context` from explicit mmap sections, setting up
 /// thread-local pointers and resetting caches.
-pub fn load_from_dump(path: &Path) -> Result<Context, DumpError> {
+pub fn load_from_dump(
+    path: &Path,
+    proof: crate::emacs_core::eval::hooks_proof::EvalHooksInstalled,
+) -> Result<Context, DumpError> {
     let load_start = std::time::Instant::now();
     let mut image = mmap_image::load_image(path)?;
     image.apply_relocations()?;
-    let mut eval = match load_from_mapped_image(&mut image) {
+    let mut eval = match load_from_mapped_image(&mut image, proof) {
         Ok(eval) => eval,
         Err(err) => {
             // A failed load may already have installed process-lifetime
@@ -552,7 +555,10 @@ pub fn load_from_dump(path: &Path) -> Result<Context, DumpError> {
     Ok(eval)
 }
 
-fn load_from_mapped_image(image: &mut mmap_image::LoadedMmapImage) -> Result<Context, DumpError> {
+fn load_from_mapped_image(
+    image: &mut mmap_image::LoadedMmapImage,
+    proof: crate::emacs_core::eval::hooks_proof::EvalHooksInstalled,
+) -> Result<Context, DumpError> {
     let mut state = empty_context_state();
 
     let _cleanup = RestoreCleanup;
@@ -631,6 +637,7 @@ fn load_from_mapped_image(image: &mut mmap_image::LoadedMmapImage) -> Result<Con
         spans,
         mapped_heap,
         value_fixups_section,
+        proof,
     )?;
     drop(_cleanup);
     Ok(eval)
@@ -688,8 +695,11 @@ pub fn restore_active_runtime(eval: &mut Context, snapshot: &ActiveRuntimeSnapsh
 }
 
 /// Reconstruct an evaluator from a previously captured in-memory pdump snapshot.
-pub fn restore_snapshot(state: &DumpContextState) -> Result<Context, DumpError> {
-    reconstruct_evaluator(state, None)
+pub fn restore_snapshot(
+    state: &DumpContextState,
+    proof: crate::emacs_core::eval::hooks_proof::EvalHooksInstalled,
+) -> Result<Context, DumpError> {
+    reconstruct_evaluator(state, None, proof)
 }
 
 /// Clone a live evaluator through the pdump conversion pipeline.
@@ -697,7 +707,7 @@ pub fn restore_snapshot(state: &DumpContextState) -> Result<Context, DumpError> 
 /// Prefer `snapshot_evaluator` + `restore_snapshot` when cloning the same
 /// template repeatedly; that avoids rebuilding the intermediate dump state.
 pub fn clone_evaluator(eval: &Context) -> Result<Context, DumpError> {
-    restore_snapshot(&snapshot_evaluator(eval))
+    restore_snapshot(&snapshot_evaluator(eval), eval.hooks_installed())
 }
 
 /// Clone an evaluator after activating its thread-local runtime bindings.
@@ -705,19 +715,20 @@ pub fn clone_evaluator(eval: &Context) -> Result<Context, DumpError> {
 /// Use this when cloning from a live runtime that shares the current thread
 /// with other `Context`s.
 pub fn clone_active_evaluator(eval: &mut Context) -> Result<Context, DumpError> {
-    restore_snapshot(&snapshot_active_evaluator(eval))
+    restore_snapshot(&snapshot_active_evaluator(eval), eval.hooks_installed())
 }
 
 /// Reconstruct an `Context` from deserialized dump state.
 fn reconstruct_evaluator(
     state: &DumpContextState,
     mapped_heap: Option<mapped_heap::MappedHeapView>,
+    proof: crate::emacs_core::eval::hooks_proof::EvalHooksInstalled,
 ) -> Result<Context, DumpError> {
     // 1. Reconstruct the dump-local symbol table before any values that refer
     // to dump-local `DumpSymId`s are loaded.
     let _cleanup = RestoreCleanup;
     load_symbol_table(&state.symbol_table)?;
-    let eval = reconstruct_evaluator_after_symbol_table(state, mapped_heap, &[])?;
+    let eval = reconstruct_evaluator_after_symbol_table(state, mapped_heap, &[], proof)?;
     drop(_cleanup);
     Ok(eval)
 }
@@ -726,13 +737,14 @@ fn reconstruct_evaluator_after_symbol_table(
     state: &DumpContextState,
     mapped_heap: Option<mapped_heap::MappedHeapView>,
     value_fixups: &[value_fixups::RawValueFixup],
+    proof: crate::emacs_core::eval::hooks_proof::EvalHooksInstalled,
 ) -> Result<Context, DumpError> {
     let decoder = LoadDecoder::new_with_mapped_heap_and_fixups(
         &state.tagged_heap,
         mapped_heap,
         value_fixups.to_vec(),
     );
-    reconstruct_evaluator_after_symbol_table_with_decoder(state, decoder)
+    reconstruct_evaluator_after_symbol_table_with_decoder(state, decoder, proof)
 }
 
 fn reconstruct_evaluator_after_symbol_table_with_tagged_heap_parts(
@@ -741,6 +753,7 @@ fn reconstruct_evaluator_after_symbol_table_with_tagged_heap_parts(
     spans: object_starts::LoadedSpans<'_>,
     mapped_heap: Option<mapped_heap::MappedHeapView>,
     value_fixups_section: Option<&[u8]>,
+    proof: crate::emacs_core::eval::hooks_proof::EvalHooksInstalled,
 ) -> Result<Context, DumpError> {
     let decoder = LoadDecoder::from_file_descriptors_and_spans_with_mapped_heap_and_fixups(
         object_descriptors,
@@ -752,20 +765,25 @@ fn reconstruct_evaluator_after_symbol_table_with_tagged_heap_parts(
         state,
         decoder,
         value_fixups_section,
+        proof,
     )
 }
 
 fn reconstruct_evaluator_after_symbol_table_with_decoder(
     state: &DumpContextState,
     decoder: LoadDecoder<'_>,
+    proof: crate::emacs_core::eval::hooks_proof::EvalHooksInstalled,
 ) -> Result<Context, DumpError> {
-    reconstruct_evaluator_after_symbol_table_with_decoder_and_value_fixups(state, decoder, None)
+    reconstruct_evaluator_after_symbol_table_with_decoder_and_value_fixups(
+        state, decoder, None, proof,
+    )
 }
 
 fn reconstruct_evaluator_after_symbol_table_with_decoder_and_value_fixups(
     state: &DumpContextState,
     mut decoder: LoadDecoder<'_>,
     value_fixups_section: Option<&[u8]>,
+    proof: crate::emacs_core::eval::hooks_proof::EvalHooksInstalled,
 ) -> Result<Context, DumpError> {
     // 2. Reconstruct the tagged heap before any heap-backed value/object loads
     // so tagged dump references can resolve directly to live tagged objects.
@@ -829,6 +847,7 @@ fn reconstruct_evaluator_after_symbol_table_with_decoder_and_value_fixups(
         load_register_manager(&mut decoder, &state.registers),
         load_bookmark_manager(&state.bookmarks),
         load_watcher_list(&mut decoder, &state.watchers),
+        proof,
     );
 
     // Phase 10E follow-up: re-install BUFFER_OBJFWD forwarders.

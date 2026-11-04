@@ -4459,12 +4459,6 @@ impl Context {
     }
 }
 
-impl Default for Context {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl Context {
     pub(crate) fn current_global_map(&self) -> Value {
         self.selected_global_map.value()
@@ -7617,6 +7611,7 @@ pub mod case_tables;
 pub mod display_query_hooks;
 pub mod font_shape;
 mod gc_pacing;
+pub mod hooks_proof;
 pub mod input_hooks;
 pub mod interactive_registry;
 pub mod kbd;

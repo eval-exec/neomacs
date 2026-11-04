@@ -337,7 +337,7 @@ pub(crate) mod environment;
 #[path = "system/errno/mod.rs"]
 pub mod errno;
 #[path = "eval_hook_installers.rs"]
-pub(crate) mod eval_hook_installers;
+pub mod eval_hook_installers;
 #[path = "system/fileio/mod.rs"]
 pub mod fileio;
 #[path = "system/filelock/mod.rs"]
@@ -519,7 +519,7 @@ pub use value::{LambdaData, LambdaParams, Value, ValueKind, VecLikeType};
 
 /// Convenience: parse and evaluate source code, returning the last form's value.
 pub fn eval_source(input: &str) -> Result<Value, EvalError> {
-    let mut evaluator = Context::new();
+    let mut evaluator = eval_hook_installers::new_context();
     evaluator.eval_str(input)
 }
 

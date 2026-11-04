@@ -3,6 +3,7 @@
 //! Moved out of `eval/mod.rs` unchanged; a child module of `eval` so it keeps
 //! the same view of `Context` and the parent's private items (`use super::*`).
 
+use super::hooks_proof::EvalHooksInstalled;
 use super::*;
 use crate::emacs_core::symbol::CanonicalAccess;
 
@@ -37,16 +38,14 @@ impl Context {
         registers: RegisterManager,
         bookmarks: BookmarkManager,
         watchers: VariableWatcherList,
+        _hooks: EvalHooksInstalled,
     ) -> Self {
         // A restored image can contain byte-code values before any Context
         // constructor ran; install the structural semantics before the first
         // one can be compared or hashed.
-        // Lifecycle hooks (stage-4 W4/E11) publish first, before any
-        // GC-capable allocation: their owners keep the state in core, and no
-        // call site can run before construction/dump.
-        crate::emacs_core::lifecycle_hooks::install_lifecycle_hooks();
-        crate::emacs_core::process_hooks::install_process_hooks();
-        crate::emacs_core::input_hooks::install_input_hooks();
+        // Every core-owned cold table (lifecycle, process, input, command
+        // layer, display query, perf) was published by the E3a boot entry
+        // before this constructor was allowed to run (the proof parameter).
         crate::emacs_core::bytecode::semantics::install();
         // The function-cell observer is process state, not image state, and a
         // restored image can hold byte-code functions before any Context
@@ -86,19 +85,8 @@ impl Context {
         // before the first SqliteObj exists.
         #[cfg(feature = "sqlite")]
         crate::emacs_core::sqlite::install_sqlite_finalizer_hook();
-        // `call-interactively` argument acquisition is a core command-layer
-        // body (minibuffer/reader Lisp entries stay there). Publish its one
-        // cold table before any form can reach the VM path.
-        crate::emacs_core::eval_hook_installers::install_call_interactively_hook();
-        // Case-table read/sync and the green buffer-kill notification are
-        // core command-layer authority bodies; publish their cold tables at
-        // the same one-time seam, before any case-sensitive operation or
-        // buffer kill can run.
-        crate::emacs_core::eval_hook_installers::install_case_table_hooks();
-        crate::emacs_core::eval_hook_installers::install_display_query_hooks();
-        // Keyboard-macro entries are core command bodies the VM dispatch
-        // reaches through eval; publish their cold table at the same seam.
-        crate::emacs_core::eval_hook_installers::install_kmacro_hooks();
+        // The command-layer and display-query tables are part of the E3a
+        // boot set, published above this constructor.
         // The evaluator's observed-run log of function-epoch moves is plain
         // process state too; install it unconditionally so non-JIT builds
         // keep the verify-run mismatch report.

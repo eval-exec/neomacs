@@ -47,6 +47,11 @@ static CANONICAL_INPUT_HOOKS: InputHooks = InputHooks::new(
 );
 
 /// Publish the input-wait table at the one-time construction seams.
+/// The one canonical input-wait descriptor.
+pub(crate) fn canonical_input_hooks() -> &'static InputHooks {
+    &CANONICAL_INPUT_HOOKS
+}
+
 pub(crate) fn install_input_hooks() {
     let installed =
         crate::emacs_core::eval::input_hooks::install_input_hooks(&CANONICAL_INPUT_HOOKS);

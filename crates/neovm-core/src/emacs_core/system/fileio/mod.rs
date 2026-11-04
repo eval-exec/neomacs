@@ -986,7 +986,7 @@ fn directory_files(
     nosort: bool,
     count: Option<usize>,
 ) -> Result<Vec<crate::heap_types::LispString>, DirectoryFilesError> {
-    let mut eval = super::eval::Context::new();
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
     let syntax = super::builtins::search::FastStringMatchSyntax::for_current_buffer(&eval);
     directory_files_with_decoder(
         &mut eval,
