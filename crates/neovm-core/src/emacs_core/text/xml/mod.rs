@@ -563,6 +563,7 @@ enum FragmentMode {
 /// Wrap the fragment part of a document in libxml2's implicit html/head/body
 /// structure.
 fn wrap_html_fragment(nodes: Vec<TopNode>) -> Option<Value> {
+    let mut before_head = ChildVec::default();
     let mut head = ChildVec::default();
     let mut between = ChildVec::default();
     let mut body = ChildVec::default();
@@ -570,6 +571,7 @@ fn wrap_html_fragment(nodes: Vec<TopNode>) -> Option<Value> {
     // Independent facts needed for the result: explicit head/body elements are
     // emitted even when empty, and their attributes are preserved.
     let mut explicit_head_seen = false;
+    let mut head_seen = false;
     let mut head_attrs = Value::NIL;
     let mut body_attrs = Value::NIL;
     let mut mode = FragmentMode::Head;
@@ -577,7 +579,15 @@ fn wrap_html_fragment(nodes: Vec<TopNode>) -> Option<Value> {
     for node in nodes {
         if is_top_comment(&node) {
             match mode {
-                FragmentMode::Head => head.push(node.value),
+                FragmentMode::Head => {
+                    if head_seen {
+                        head.push(node.value);
+                    } else {
+                        // libxml2 keeps comments before head content as direct
+                        // children of <html>, before any <head> node.
+                        before_head.push(node.value);
+                    }
+                }
                 FragmentMode::AfterHead => between.push(node.value),
                 FragmentMode::Body => body.push(node.value),
                 FragmentMode::AfterBody => after_body.push(node.value),
@@ -602,6 +612,7 @@ fn wrap_html_fragment(nodes: Vec<TopNode>) -> Option<Value> {
                     head_attrs = element_attributes(&node.value);
                     head.extend_children(&node.value);
                     explicit_head_seen = true;
+                    head_seen = true;
                     if mode == FragmentMode::Head {
                         mode = FragmentMode::AfterHead;
                     }
@@ -623,7 +634,10 @@ fn wrap_html_fragment(nodes: Vec<TopNode>) -> Option<Value> {
                 }
             },
             Some(tag) if is_head_element(tag) => match mode {
-                FragmentMode::Head => head.push(node.value),
+                FragmentMode::Head => {
+                    head.push(node.value);
+                    head_seen = true;
+                }
                 FragmentMode::AfterHead => between.push(node.value),
                 FragmentMode::Body => body.push(node.value),
                 FragmentMode::AfterBody => after_body.push(node.value),
@@ -639,22 +653,27 @@ fn wrap_html_fragment(nodes: Vec<TopNode>) -> Option<Value> {
         }
     }
 
+    let before_head = before_head.finish();
     let head = head.finish();
     let between = between.finish();
     let body = body.finish();
     let after_body = after_body.finish();
-    // (html nil [head nil HEAD...] [BETWEEN...] (body nil BODY...) [AFTER...])
+    // (html nil BEFORE [head nil HEAD...] [BETWEEN...]
+    //        (body nil BODY...) [AFTER...])
+    let has_before_head = !before_head.is_empty();
     let has_head = !head.is_empty() || explicit_head_seen;
     let has_body = !body.is_empty() || mode == FragmentMode::AfterBody;
     let mut html_children: Vec<Value> = vec![Value::symbol("html"), Value::NIL];
+    html_children.extend(before_head);
     if has_head {
         let mut head_node = vec![Value::symbol("head"), head_attrs];
         head_node.extend(head);
         html_children.push(Value::list(head_node));
     }
     html_children.extend(between);
-    // libxml2 omits <body> only when there is exclusively head content.
-    if has_body || !has_head {
+    // libxml2 omits <body> when there is only head content or only comments
+    // before the head.
+    if has_body || (!has_head && !has_before_head) {
         let mut body_node = vec![Value::symbol("body"), body_attrs];
         body_node.extend(body);
         html_children.push(Value::list(body_node));
