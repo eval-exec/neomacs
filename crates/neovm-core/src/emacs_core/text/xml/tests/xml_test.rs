@@ -659,6 +659,42 @@ fn libxml_parse_html_region_handles_processing_instructions_like_libxml2() {
 }
 
 #[test]
+fn libxml_parse_html_region_strips_a_leading_utf8_bom_like_libxml2() {
+    crate::test_utils::init_test_tracing();
+
+    // GNU 31.1 strips one leading BOM when content follows, then handles the
+    // prolog normally.
+    let mut doc = "\u{FEFF}".as_bytes().to_vec();
+    doc.extend_from_slice(br#"<?xml version="1.0"?><html><body>x</body></html>"#);
+    let document = html(vec![body(vec![Value::string("x")])]);
+    assert_eq!(
+        parse_html_region(&doc, false).unwrap(),
+        Value::list(vec![
+            Value::symbol("top"),
+            Value::NIL,
+            comment(r#"?xml version="1.0"?"#),
+            document.clone(),
+        ])
+    );
+    assert_eq!(parse_html_region(&doc, true).unwrap(), document);
+
+    // A second BOM is text, not another encoding signature.
+    let mut doc = "\u{FEFF}\u{FEFF}".as_bytes().to_vec();
+    doc.extend_from_slice(b"<p>x</p>");
+    let expected = html(vec![body(vec![
+        Value::string("\u{FEFF}"),
+        Value::list(vec![Value::symbol("p"), Value::NIL, Value::string("x")]),
+    ])]);
+    assert_eq!(parse_html_region(&doc, false).unwrap(), expected);
+
+    // A lone BOM has no following content, so libxml2 parses it as text.
+    assert_eq!(
+        parse_html_region("\u{FEFF}".as_bytes(), false).unwrap(),
+        html(vec![body(vec![Value::string("\u{FEFF}")])])
+    );
+}
+
+#[test]
 fn libxml_parse_html_region_wraps_fragments_around_toplevel_comments() {
     crate::test_utils::init_test_tracing();
 

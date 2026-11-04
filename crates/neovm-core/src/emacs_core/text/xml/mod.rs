@@ -401,6 +401,13 @@ fn is_head_element(tag: &str) -> bool {
 fn parse_html_region(data: &[u8], discard_comments: bool) -> Option<Value> {
     let input = String::from_utf8_lossy(data);
     let mut remaining = input.as_ref();
+    // libxml2 recognizes a UTF-8 BOM only when it precedes document content;
+    // a lone BOM is parsed as text. Strip one leading BOM under that rule so an
+    // encoded HTML file still reaches the prolog scanner below.
+    let bom = '\u{FEFF}';
+    if remaining.starts_with(bom) && remaining.len() > bom.len_utf8() {
+        remaining = &remaining[bom.len_utf8()..];
+    }
     let mut nodes: Vec<TopNode> = Vec::new();
 
     // libxml2's HTML parser treats a processing instruction as a comment
