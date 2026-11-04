@@ -809,7 +809,7 @@ where
 /// See the extended comment on the identical helper in
 /// `builtins/misc_eval.rs` (audit finding #3 in
 /// `drafts/regex-search-audit.md`).
-#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg(test)] // sole caller is the test-only entry below
 fn dynamic_or_global_symbol_value(eval: &super::eval::Context, name: &str) -> Option<Value> {
     let id = neovm_value::intern::intern(name);
     eval.eval_symbol_by_id(id).ok()
