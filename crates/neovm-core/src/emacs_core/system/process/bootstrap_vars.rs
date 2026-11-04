@@ -458,13 +458,6 @@ pub(super) fn signal_hup_number() -> i32 {
     }
 }
 
-pub(super) fn signal_kill_number() -> i32 {
-    cfg_select! {
-        unix => { libc::SIGKILL }
-        _ => { 9 }
-    }
-}
-
 pub(super) fn ticks_to_secs_usecs(ticks: i64, hz: i64) -> (i64, i64) {
     if hz <= 0 {
         return (0, 0);

@@ -14,37 +14,6 @@ use crate::tagged::value::SymbolMode;
 /// Unique identifier for a process.
 pub use crate::heap_types::ProcessId;
 
-pub(super) const DEFAULT_READ_PROCESS_OUTPUT_MAX: usize = 65_536;
-pub(super) const READ_PROCESS_OUTPUT_MAX_CEILING: usize = i32::MAX as usize;
-pub(super) const READ_OUTPUT_DELAY_INCREMENT_MS: u64 = 10;
-pub(super) const READ_OUTPUT_DELAY_MAX_MS: u64 = READ_OUTPUT_DELAY_INCREMENT_MS * 5;
-pub(super) const READ_OUTPUT_DELAY_MAX_MAX_MS: u64 = READ_OUTPUT_DELAY_INCREMENT_MS * 7;
-
-impl ExitQueryPolicy {
-    pub(super) const GNU_MAKE_PROCESS: Self = Self::Query;
-
-    pub(super) fn from_lisp_query_flag(flag: Value) -> Self {
-        if flag.is_truthy() {
-            Self::Query
-        } else {
-            Self::NoQuery
-        }
-    }
-
-    pub(super) fn queries_on_exit(self) -> bool {
-        self == Self::Query
-    }
-}
-
-impl Default for ProcessReadConfig {
-    fn default() -> Self {
-        Self {
-            readmax: DEFAULT_READ_PROCESS_OUTPUT_MAX,
-            adaptive_read_buffering: 0,
-        }
-    }
-}
-
 thread_local! {
     /// Name registry keyed by process id, used by the printer to render
     /// `#<process NAME>` without threading a `ProcessManager` into the
@@ -271,88 +240,6 @@ impl ProcessOutputServiceOutcome {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct ProcessWaitEvents {
-    pub(super) notification_wakeup: bool,
-    pub(super) ready_processes: Vec<ProcessId>,
-    pub(super) writable_processes: Vec<ProcessId>,
-}
-
-impl ProcessWaitEvents {
-    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    pub(crate) fn from_sources(notification_wakeup: bool, ready_processes: Vec<ProcessId>) -> Self {
-        Self::from_sources_with_writable(notification_wakeup, ready_processes, Vec::new())
-    }
-
-    pub(crate) fn from_sources_with_writable(
-        notification_wakeup: bool,
-        ready_processes: Vec<ProcessId>,
-        writable_processes: Vec<ProcessId>,
-    ) -> Self {
-        Self {
-            notification_wakeup,
-            ready_processes,
-            writable_processes,
-        }
-    }
-
-    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    pub(crate) fn notification_wakeup() -> Self {
-        Self::from_sources(true, Vec::new())
-    }
-
-    pub(crate) fn ready_processes(processes: Vec<ProcessId>) -> Self {
-        Self {
-            notification_wakeup: false,
-            ready_processes: processes,
-            writable_processes: Vec::new(),
-        }
-    }
-
-    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    pub(crate) fn writable_processes(processes: Vec<ProcessId>) -> Self {
-        Self::from_sources_with_writable(false, Vec::new(), processes)
-    }
-
-    pub(crate) fn has_notification_wakeup(&self) -> bool {
-        self.notification_wakeup
-    }
-
-    pub(crate) fn has_ready_processes(&self) -> bool {
-        !self.ready_processes.is_empty()
-    }
-
-    pub(crate) fn has_writable_processes(&self) -> bool {
-        !self.writable_processes.is_empty()
-    }
-
-    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    pub(crate) fn has_ready_process(&self, process: ProcessId) -> bool {
-        self.ready_processes.contains(&process)
-    }
-
-    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    pub(crate) fn is_empty(&self) -> bool {
-        !self.notification_wakeup
-            && self.ready_processes.is_empty()
-            && self.writable_processes.is_empty()
-    }
-
-    pub(crate) fn ready_processes_ref(&self) -> &[ProcessId] {
-        &self.ready_processes
-    }
-
-    pub(crate) fn writable_processes_ref(&self) -> &[ProcessId] {
-        &self.writable_processes
-    }
-}
-
-impl ProcessKind {
-    pub(super) fn name(self) -> &'static str {
-        self.into()
-    }
-}
-
 /// The process kinds whose record can be brought into existence with no OS
 /// device in hand.
 ///
@@ -383,26 +270,12 @@ impl From<ProcessKindWithoutDevice> for ProcessKind {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, EnumString, IntoStaticStr)]
-#[strum(serialize_all = "kebab-case")]
-pub(super) enum ProcessStatusSymbol {
-    Run,
-    Stop,
-    Exit,
-    Signal,
-    Open,
-    Listen,
-    Closed,
-    Connect,
-    Failed,
-}
-
 impl ProcessStatusSymbol {
     pub(super) fn from_symbol_value(value: Value) -> Option<Self> {
         value.as_bare_symbol_name()?.parse().ok()
     }
 
-    pub(super) fn from_status_value(status: Value) -> Option<Self> {
+    pub fn from_status_value(status: Value) -> Option<Self> {
         Self::from_symbol_value(process_status_symbol_value(status))
     }
 
@@ -449,24 +322,6 @@ impl ProcessTtyStream {
     }
 }
 
-impl ProcessKeyword {
-    pub(super) fn keyword(self) -> &'static str {
-        self.into()
-    }
-
-    pub(super) fn value(self) -> Value {
-        Value::keyword(self.keyword())
-    }
-
-    pub(super) fn from_keyword(name: &str) -> Option<Self> {
-        name.strip_prefix(':')?.parse().ok()
-    }
-
-    pub(super) fn from_value(value: &Value) -> Option<Self> {
-        Self::from_keyword(keyword_name(value)?)
-    }
-}
-
 pub(super) fn process_keyword_already_seen(
     seen: &mut Vec<ProcessKeyword>,
     keyword: ProcessKeyword,
@@ -476,27 +331,6 @@ pub(super) fn process_keyword_already_seen(
     } else {
         seen.push(keyword);
         false
-    }
-}
-
-impl std::io::Read for ChildOutputReader {
-    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
-        // GNU emacs_read never exposes EINTR (sysdep.c:2758-2789). Finish
-        // that interrupted operation before the caller can classify a failed
-        // read and retire the pipe, or status_notify can publish exit while
-        // unread bytes still belong to this descriptor.
-        loop {
-            let result = match self {
-                Self::Stdout(stdout) => stdout.read(buffer),
-                Self::Shared(pipe) => pipe.read(buffer),
-                #[cfg(all(test, unix))]
-                Self::Injected(pipe) => pipe.read(buffer),
-            };
-            match result {
-                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-                result => return result,
-            }
-        }
     }
 }
 
@@ -541,28 +375,6 @@ pub(super) fn duplicate_module_pipe_writer(
     (duplicate != -1).then_some(duplicate)
 }
 
-#[cfg(unix)]
-impl std::os::fd::AsRawFd for ChildOutputReader {
-    fn as_raw_fd(&self) -> std::os::fd::RawFd {
-        match self {
-            Self::Stdout(stdout) => stdout.as_raw_fd(),
-            Self::Shared(pipe) => pipe.as_raw_fd(),
-            #[cfg(test)]
-            Self::Injected(pipe) => pipe.as_raw_fd(),
-        }
-    }
-}
-
-#[cfg(windows)]
-impl std::os::windows::io::AsRawHandle for ChildOutputReader {
-    fn as_raw_handle(&self) -> std::os::windows::io::RawHandle {
-        match self {
-            Self::Stdout(stdout) => stdout.as_raw_handle(),
-            Self::Shared(pipe) => pipe.as_raw_handle(),
-        }
-    }
-}
-
 #[cfg(windows)]
 pub(super) fn peek_child_output_readiness(
     stdout: &ChildOutputReader,
@@ -605,28 +417,6 @@ pub(super) fn peek_child_output_readiness(
         ERROR_BROKEN_PIPE | ERROR_PIPE_NOT_CONNECTED => Ok(None),
         ERROR_NO_DATA => Ok(Some(0)),
         error => Err(std::io::Error::from_raw_os_error(error as i32)),
-    }
-}
-
-impl LiveProcessIo {
-    /// GNU's `record_kill_process` (src/callproc.c:196-211), reached from
-    /// `Fdelete_process` as `if (p->alive) record_kill_process (p, Qnil);`
-    /// (src/process.c:1135).
-    ///
-    /// The `p->alive` gate lives in [`ChildOwnership`] now.  It used to be
-    /// spelled here as `!matches!(child.try_wait(), Ok(Some(_)))`, which is a
-    /// second `waitpid` on a child `sys::poll_child_status` had already reaped
-    /// and reads its `ECHILD` -- *nobody has that child* -- as "still
-    /// running", so `kill(-pid, SIGKILL)` went to a pid the kernel had handed
-    /// back.  See `process/reap.rs`.
-    pub(super) fn terminate_and_defer_children(&mut self) {
-        self.child.terminate_and_defer_reaping(signal_kill_number());
-    }
-}
-
-impl Drop for LiveProcessIo {
-    fn drop(&mut self) {
-        self.terminate_and_defer_children();
     }
 }
 
@@ -735,40 +525,6 @@ impl Drop for StderrPipeWriterTransfer<'_> {
     }
 }
 
-impl WaitNotifier {
-    pub(super) fn new(
-        poller: Arc<polling::Poller>,
-        notification_pending: Arc<NotificationLatch>,
-    ) -> Self {
-        Self {
-            poller,
-            notification_pending,
-        }
-    }
-
-    /// Metadata-only notification. The caller publishes its durable request
-    /// before this hint; failed wakeup never returns an accepted obligation.
-    pub(crate) fn nudge_control(
-        &self,
-        destination: ControlDestination,
-        reason: ControlNudge,
-    ) -> ControlNudgeOutcome {
-        self.notification_pending.nudge(destination, reason)
-    }
-
-    /// Wake the current (or next) `poller.wait()` so the evaluator services
-    /// work already published by the caller (input, diagnostics, async DNS).
-    #[must_use = "a failed notification can leave the evaluator blocked"]
-    pub fn notify(&self) -> std::io::Result<()> {
-        // `Poller::wait` represents both notify and timeout as an empty event
-        // batch.  Preserve the semantic cause separately so the wait adapter
-        // never invents a notification on a timeout.  Release pairs with the backend's
-        // AcqRel swap; Poller supplies the actual cross-thread wakeup.
-        self.notification_pending.store(true, Ordering::Release);
-        self.poller.notify()
-    }
-}
-
 static_assertions::assert_eq_size!(WaitNotifier, [usize; 2]);
 
 /// Refusal to observe this fixture's actual pending TCP owner state.
@@ -874,27 +630,6 @@ static_assertions::const_assert_eq!(std::mem::size_of::<ProcessManager>(), 264);
 #[cfg(test)]
 static_assertions::assert_impl_all!(BackendWaitEntry: Send, Sync, Copy, std::fmt::Debug);
 
-#[cfg(test)]
-impl BackendWaitEntry {
-    pub(crate) fn requested_timeout(self) -> Duration {
-        self.requested_timeout
-    }
-
-    pub(crate) fn interest(self) -> ProcessWaitBackendInterest {
-        self.interest
-    }
-}
-
-/// A validated monotonic deadline. An overflowing duration denotes an
-/// indefinite wait, which still wakes for process or evaluator notifications.
-/// This immutable clock value contains no mutator-owned state.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum ProcessWaitDeadline {
-    Poll,
-    Until(Instant),
-    Forever,
-}
-
 static_assertions::assert_impl_all!(ProcessWaitDeadline: Send, Sync);
 
 impl From<Duration> for ProcessWaitDeadline {
@@ -910,239 +645,8 @@ impl From<Duration> for ProcessWaitDeadline {
     }
 }
 
-impl ProcessWaitDeadline {
-    #[inline]
-    pub(super) fn remaining(self, now: Instant) -> Option<Duration> {
-        match self {
-            Self::Poll => Some(Duration::ZERO),
-            Self::Until(deadline) => Some(deadline.saturating_duration_since(now)),
-            Self::Forever => None,
-        }
-    }
-
-    #[inline]
-    pub(super) fn is_expired(self, now: Instant) -> bool {
-        match self {
-            Self::Poll => true,
-            Self::Until(deadline) => now >= deadline,
-            Self::Forever => false,
-        }
-    }
-}
-
-impl ProcessWaitBackendInterest {
-    pub(super) fn wants_notifications(self) -> bool {
-        matches!(
-            self,
-            Self::NotificationsOnly | Self::NotificationsAndProcesses
-        )
-    }
-
-    pub(super) fn wants_processes(self) -> bool {
-        matches!(self, Self::ProcessesOnly | Self::NotificationsAndProcesses)
-    }
-}
-
 // The process backend is the control source's lifetime authority. A notifier
 // or temporary Green selector may outlive it, but cannot reopen its session.
-impl Drop for ProcessWaitBackend {
-    fn drop(&mut self) {
-        if let Some(wake) = self.notification_pending.control() {
-            wake.retire();
-        }
-    }
-}
-
-impl ProcessWaitBackend {
-    pub(super) fn new() -> Self {
-        // Miri implements no `timerfd_create`, which `polling::Poller::new`
-        // uses on Linux. The backend already tolerates a missing poller (its
-        // wait loop falls back to sleep-polling), and interpreted tests do not
-        // spawn children, so interpreted runs start without one.
-        #[cfg(not(miri))]
-        let poller = polling::Poller::new().ok().map(Arc::new);
-        #[cfg(miri)]
-        let poller: Option<Arc<polling::Poller>> = None;
-        #[cfg(unix)]
-        let signal_fd = poller.as_ref().and_then(|poller| {
-            let fd = crate::emacs_core::os_signal::install().self_pipe_read_fd()?;
-            // SAFETY: the install report owns the descriptor for the process
-            // lifetime, longer than every registration. The reserved event key
-            // cannot collide with a real process identifier.
-            unsafe { poller.add(fd, polling::Event::readable(usize::MAX - 1)) }
-                .expect("cannot register evaluator signal wake pipe");
-            Some(fd)
-        });
-        Self {
-            poller,
-            #[cfg(test)]
-            before_next_wait: std::sync::Mutex::new(None),
-            #[cfg(test)]
-            native_connect_observer: NativeConnectObservationSlot::default(),
-            #[cfg(unix)]
-            signal_fd,
-            notification_pending: Arc::new(NotificationLatch::new()),
-        }
-    }
-
-    pub(super) fn poller(&self) -> Option<&polling::Poller> {
-        self.poller.as_deref()
-    }
-
-    /// A shared handle producers use to wake a blocked wait (cross-platform).
-    pub(super) fn notify_handle(&self) -> Option<WaitNotifier> {
-        self.poller
-            .clone()
-            .map(|poller| WaitNotifier::new(poller, Arc::clone(&self.notification_pending)))
-    }
-
-    pub(super) fn has_notifications(&self) -> bool {
-        // Cross-platform: any live poller can be woken via `Poller::notify()`,
-        // so the unified notification+process wait path is available on every OS.
-        self.poller.is_some()
-    }
-
-    pub(super) fn wait_for_events(
-        &self,
-        processes: &HashMap<ProcessId, Process>,
-        timeout: std::time::Duration,
-        interest: ProcessWaitBackendInterest,
-    ) -> Option<ProcessWaitEvents> {
-        if let Some(ref poller) = self.poller {
-            if crate::emacs_core::os_signal::pending() {
-                return Some(ProcessWaitEvents::notification_wakeup());
-            }
-            #[cfg(unix)]
-            if let Some(fd) = self.signal_fd {
-                // Rearm one-shot interest. A signal between the pending check
-                // and wait leaves a readable byte, so no wake is lost.
-                // SAFETY: install owns fd for the process lifetime.
-                let source = unsafe { std::os::fd::BorrowedFd::borrow_raw(fd) };
-                poller
-                    .modify(source, polling::Event::readable(usize::MAX - 1))
-                    .ok()?;
-            }
-            if interest.wants_notifications()
-                && self.notification_pending.swap(false, Ordering::AcqRel)
-            {
-                return Some(ProcessWaitEvents::notification_wakeup());
-            }
-
-            #[cfg(test)]
-            if !timeout.is_zero() {
-                // Nonblocking service polls are not reader wait-entry witnesses.
-                let before_wait = self.before_next_wait.lock().expect("wait gate lock").take();
-                if let Some(before_wait) = before_wait {
-                    before_wait(BackendWaitEntry {
-                        requested_timeout: timeout,
-                        interest,
-                    });
-                }
-            }
-
-            let deadline = ProcessWaitDeadline::from(timeout);
-            loop {
-                let now = Instant::now();
-                let wait_time = deadline.remaining(now);
-                let mut events = polling::Events::new();
-                match poller.wait(&mut events, wait_time) {
-                    Ok(_) => {
-                        let mut notification_wakeup = interest.wants_notifications()
-                            && self.notification_pending.swap(false, Ordering::AcqRel);
-                        let mut ready_processes = Vec::new();
-                        let mut writable_processes = Vec::new();
-                        for event in events.iter() {
-                            #[cfg(unix)]
-                            if event.key == usize::MAX - 1 {
-                                if let Some(fd) = self.signal_fd {
-                                    crate::emacs_core::os_signal::drain_wake_pipe(fd);
-                                }
-                                notification_wakeup = true;
-                                continue;
-                            }
-                            if interest.wants_processes() {
-                                let id = event.key as ProcessId;
-                                let Some(process) = processes.get(&id) else {
-                                    continue;
-                                };
-                                if event.readable
-                                    && (process_has_readable_process_io(process)
-                                        || process_has_pending_tls_handshake_io(process)
-                                        || process_has_observable_child_status(process))
-                                {
-                                    ready_processes.push(id);
-                                }
-                                if event.writable
-                                    && (process.live_io.pending_network_connect.is_some()
-                                        || process_has_pending_tls_handshake_io(process)
-                                        || !process.write_queue.is_nil())
-                                {
-                                    writable_processes.push(id);
-                                }
-                            }
-                        }
-                        // A cross-platform `Poller::notify()` wake carries no
-                        // poll event.  The shared pending bit above distinguishes
-                        // that semantic wake from an equally eventless timeout.
-                        if interest.wants_processes() {
-                            ready_processes.extend(processes.iter().filter_map(|(id, process)| {
-                                process_has_ready_async_dns(process).then_some(*id)
-                            }));
-                        }
-                        let backend = ProcessWaitEvents::from_sources_with_writable(
-                            notification_wakeup,
-                            ready_processes,
-                            writable_processes,
-                        );
-                        if backend.has_notification_wakeup()
-                            || backend.has_ready_processes()
-                            || backend.has_writable_processes()
-                            || deadline.is_expired(Instant::now())
-                        {
-                            return Some(backend);
-                        }
-                        std::thread::yield_now();
-                    }
-                    // GNU's own wait spells the answer in one line -- `if
-                    // (xerrno == EINTR) no_avail = 1;`
-                    // (src/process.c:5891-5892) -- i.e. treat an interrupted
-                    // poll as an empty batch and let the loop re-check its
-                    // deadline, NOT as a broken poller.
-                    //
-                    // **This arm is not reached today, and ledger 200 measured
-                    // that rather than reasoning about it.**  A previous
-                    // version of this comment claimed it "became reachable the
-                    // moment ledger 184 installed the first `sigaction`",
-                    // because `epoll_wait` is one of the calls signal(7) lists
-                    // as never restarted regardless of `SA_RESTART`.  That is
-                    // true of the syscall and false of this call site:
-                    // `polling::Poller::wait` catches `ErrorKind::Interrupted`
-                    // from the sys poller and re-enters the wait itself
-                    // (polling-3.11.0/src/lib.rs:751-764), so a delivery
-                    // cannot surface here.  Measured: a confirmed SIGCHLD
-                    // delivered during a 3s block left it running the full
-                    // 3.000038747s.  The arm stays because `io::ErrorKind` is
-                    // non-exhaustive and a future backend may surface it; what
-                    // it must NOT be is a mechanism something else relies on.
-                    Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {
-                        if deadline.is_expired(Instant::now()) {
-                            return Some(ProcessWaitEvents::from_sources_with_writable(
-                                false,
-                                Vec::new(),
-                                Vec::new(),
-                            ));
-                        }
-                    }
-                    Err(_) => {
-                        return None;
-                    }
-                }
-            }
-        }
-
-        None
-    }
-}
 
 /// Buffer work that GNU performs specifically for an accepted connection.
 ///
@@ -4027,84 +3531,10 @@ pub(super) fn process_status_is_exit_or_signal(status: &Value) -> bool {
     )
 }
 
-pub(super) fn process_status_has_readable_process_io(status: &Value) -> bool {
-    matches!(
-        ProcessStatusSymbol::from_status_value(*status),
-        Some(
-            ProcessStatusSymbol::Run
-                | ProcessStatusSymbol::Open
-                | ProcessStatusSymbol::Listen
-                | ProcessStatusSymbol::Connect
-        )
-    )
-}
-
-pub(super) fn process_stopped_for_io(proc: &Process) -> bool {
-    proc.command == Value::T
-}
-
-pub(super) const DEFAULT_PROCESS_FILTER_SYMBOL: &str = "internal-default-process-filter";
-
-/// The three behaviors GNU assigns to a process filter Lisp value.
-///
-/// Keep the original [`Value`] on [`Process`] so `process-filter` can return
-/// it exactly.  Classify it at the I/O boundary so Lisp `t` changes read
-/// interest instead of ever being treated as a callable value.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum ProcessFilterDispatch {
-    Default,
-    Suspended,
-    Callback(Value),
-}
-
-impl ProcessFilterDispatch {
-    pub(super) fn from_lisp(filter: Value) -> Self {
-        if filter.is_nil() || filter.is_bare_symbol_named(DEFAULT_PROCESS_FILTER_SYMBOL) {
-            Self::Default
-        } else if filter.is_t() {
-            Self::Suspended
-        } else {
-            Self::Callback(filter)
-        }
-    }
-
-    pub(super) fn accepts_output(self) -> bool {
-        !matches!(self, Self::Suspended)
-    }
-}
-
-fn process_has_pending_tls_handshake_io(process: &Process) -> bool {
-    process.gnutls_initstage == GnutlsInitStage::HandshakeTried
-        && process.live_io.tls_stream.is_some()
-        && process.live_io.tls_polling == TlsPolling::Enabled
-}
-
-pub(super) fn process_filter_accepts_output(proc: &Process) -> bool {
-    ProcessFilterDispatch::from_lisp(proc.filter).accepts_output()
-}
-
 pub(super) fn is_standalone_pipe_process(proc: &Process) -> bool {
     proc.kind == ProcessKind::Pipe
         && proc.live_io.child_stdout.is_some()
         && !proc.live_io.child.has_child()
-}
-
-pub(super) fn process_has_readable_process_io(proc: &Process) -> bool {
-    !process_stopped_for_io(proc)
-        && proc
-            .live_io
-            .pty_reader
-            .as_ref()
-            .is_none_or(PtyOutputReader::is_monitored)
-        && process_filter_accepts_output(proc)
-        && process_status_has_readable_process_io(&proc.status)
-}
-
-pub(super) fn process_has_observable_child_status(proc: &Process) -> bool {
-    matches!(
-        ProcessStatusSymbol::from_status_value(proc.status),
-        Some(ProcessStatusSymbol::Run | ProcessStatusSymbol::Stop)
-    ) && (proc.os_pid.is_some() || proc.live_io.child.has_child())
 }
 
 pub(super) fn process_defers_pty_status_after_explicit_coding(proc: &Process) -> bool {
@@ -4198,23 +3628,6 @@ pub(super) fn process_contact_server_p(proc: &Process) -> bool {
     process_contact_plist_get(proc.childp, ProcessKeyword::Server.value()).is_truthy()
 }
 
-impl PendingDnsRequest {
-    pub(super) fn is_ready(&self) -> bool {
-        self.ready.load(Ordering::Acquire)
-    }
-}
-
-pub(super) fn pending_network_connect_has_ready_async_dns(pending: &PendingNetworkConnect) -> bool {
-    matches!(pending, PendingNetworkConnect::Dns(request) if request.is_ready())
-}
-
-pub(super) fn process_has_ready_async_dns(proc: &Process) -> bool {
-    proc.live_io
-        .pending_network_connect
-        .as_ref()
-        .is_some_and(pending_network_connect_has_ready_async_dns)
-}
-
 #[derive(Debug)]
 pub(super) struct PendingNetworkConnectStarted {
     pub(super) stream: TcpStream,
@@ -4235,25 +3648,6 @@ pub(super) enum PendingNetworkConnectCompletion {
     Connected { sentinel: Value },
     Failed { sentinel: Value, code: i32 },
     DnsFailed,
-}
-
-impl NetworkSocketOption {
-    pub(super) fn from_keyword(keyword: ProcessKeyword) -> Option<Self> {
-        match keyword {
-            #[cfg(any(target_os = "linux", target_os = "android"))]
-            ProcessKeyword::Bindtodevice => Some(Self::Bindtodevice),
-            ProcessKeyword::Broadcast => Some(Self::Broadcast),
-            ProcessKeyword::Dontroute => Some(Self::Dontroute),
-            ProcessKeyword::Keepalive => Some(Self::Keepalive),
-            ProcessKeyword::Linger => Some(Self::Linger),
-            ProcessKeyword::Oobinline => Some(Self::Oobinline),
-            #[cfg(any(target_os = "linux", target_os = "android"))]
-            ProcessKeyword::Priority => Some(Self::Priority),
-            ProcessKeyword::Reuseaddr => Some(Self::Reuseaddr),
-            ProcessKeyword::Nodelay => Some(Self::Nodelay),
-            _ => None,
-        }
-    }
 }
 
 pub(super) fn network_socket_options_include(

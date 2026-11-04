@@ -6,21 +6,21 @@ use std::io::{self, Read};
 use crate::emacs_core::eval::data::process_state::{PtyOutputReader, PtyReadInterest};
 
 impl PtyOutputReader {
-    pub(super) fn new(reader: Box<dyn Read + Send>) -> Self {
+    pub fn new(reader: Box<dyn Read + Send>) -> Self {
         Self {
             reader,
             interest: PtyReadInterest::Monitored,
         }
     }
 
-    pub(super) fn is_monitored(&self) -> bool {
+    pub fn is_monitored(&self) -> bool {
         match self.interest {
             PtyReadInterest::Monitored => true,
             PtyReadInterest::DrainOnly => false,
         }
     }
 
-    pub(super) fn stop_monitoring(&mut self) {
+    pub fn stop_monitoring(&mut self) {
         self.interest = PtyReadInterest::DrainOnly;
     }
 }

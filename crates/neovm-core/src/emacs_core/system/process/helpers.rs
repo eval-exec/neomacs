@@ -260,12 +260,6 @@ pub(super) fn expect_process_name_lisp_string(value: &Value) -> Result<LispStrin
     }
 }
 
-pub(super) fn keyword_name(value: &Value) -> Option<&str> {
-    match value.kind() {
-        ValueKind::Symbol(k) => Some(resolve_sym(k)),
-        _ => None,
-    }
-}
 pub(crate) fn parse_lisp_string_args_strict(args: &[Value]) -> Result<Vec<LispString>, Flow> {
     args.iter()
         .map(|arg| {
