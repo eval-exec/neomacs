@@ -1829,11 +1829,11 @@ fn eval_buffer_live_p_tracks_killed_buffers() {
     crate::test_utils::init_test_tracing();
     let mut eval = super::super::eval::Context::new();
     let buf = builtin_get_buffer_create(&mut eval, vec![Value::string("*blp*")]).unwrap();
-    let live = builtin_buffer_live_p(&mut eval, &vec![buf]).unwrap();
+    let live = builtin_buffer_live_p(&mut eval.edit.buffers, &vec![buf]).unwrap();
     assert_eq!(live, Value::T);
 
     let _ = builtin_kill_buffer(&mut eval, vec![buf]).unwrap();
-    let dead = builtin_buffer_live_p(&mut eval, &vec![buf]).unwrap();
+    let dead = builtin_buffer_live_p(&mut eval.edit.buffers, &vec![buf]).unwrap();
     assert_eq!(dead, Value::NIL);
 }
 
@@ -1849,7 +1849,7 @@ fn kill_buffer_optional_arg_and_error_semantics() {
     let killed_current = builtin_kill_buffer(&mut eval, vec![]).unwrap();
     assert_eq!(killed_current, Value::T);
     assert_eq!(
-        builtin_buffer_live_p(&mut eval, &vec![a]).unwrap(),
+        builtin_buffer_live_p(&mut eval.edit.buffers, &vec![a]).unwrap(),
         Value::NIL
     );
     assert!(
@@ -1969,9 +1969,10 @@ fn set_buffer_does_not_record_buffer_list_order_like_gnu() {
 fn eval_buffer_live_p_non_buffer_objects_return_nil() {
     crate::test_utils::init_test_tracing();
     let mut eval = super::super::eval::Context::new();
-    let by_name = builtin_buffer_live_p(&mut eval, &vec![Value::string("*scratch*")]).unwrap();
+    let by_name =
+        builtin_buffer_live_p(&mut eval.edit.buffers, &vec![Value::string("*scratch*")]).unwrap();
     assert_eq!(by_name, Value::NIL);
-    let nil_arg = builtin_buffer_live_p(&mut eval, &vec![Value::NIL]).unwrap();
+    let nil_arg = builtin_buffer_live_p(&mut eval.edit.buffers, &vec![Value::NIL]).unwrap();
     assert_eq!(nil_arg, Value::NIL);
 }
 
@@ -2057,7 +2058,7 @@ fn get_buffer_rejects_non_string_non_buffer_designators() {
     crate::test_utils::init_test_tracing();
     let mut eval = super::super::eval::Context::new();
     for bad in [Value::fixnum(1), Value::NIL, Value::symbol("foo")] {
-        let err = builtin_get_buffer(&mut eval, vec![bad])
+        let err = builtin_get_buffer(&mut eval.edit.buffers, vec![bad])
             .expect_err("get-buffer should reject non-string/non-buffer args");
         match err.into_kind() {
             FlowKind::Signal(sig) => {
@@ -2070,7 +2071,10 @@ fn get_buffer_rejects_non_string_non_buffer_designators() {
 
     let dead = create_unique_test_buffer(&mut eval, "*gb-dead*");
     let _ = builtin_kill_buffer(&mut eval, vec![dead]).unwrap();
-    assert_eq!(builtin_get_buffer(&mut eval, vec![dead]).unwrap(), dead);
+    assert_eq!(
+        builtin_get_buffer(&mut eval.edit.buffers, vec![dead]).unwrap(),
+        dead
+    );
 }
 
 #[test]
@@ -2138,7 +2142,7 @@ fn buffer_size_and_modified_p_return_defaults_for_deleted_buffer_objects() {
 
     let dead_for_size = create_unique_test_buffer(&mut eval, "*bs-dead*");
     let _ = builtin_kill_buffer(&mut eval, vec![dead_for_size]).unwrap();
-    let size = builtin_buffer_size(&mut eval, vec![dead_for_size]).unwrap();
+    let size = builtin_buffer_size(&mut eval.edit.buffers, vec![dead_for_size]).unwrap();
     assert_eq!(size, Value::fixnum(0));
 
     let dead_for_modified = create_unique_test_buffer(&mut eval, "*bm-dead*");
@@ -2156,7 +2160,7 @@ fn buffer_size_counts_full_buffer_characters_ignoring_narrowing() {
     builtin_narrow_to_region(&mut eval, vec![Value::fixnum(2), Value::fixnum(3)]).unwrap();
 
     assert_eq!(
-        builtin_buffer_size(&mut eval, vec![]).unwrap(),
+        builtin_buffer_size(&mut eval.edit.buffers, vec![]).unwrap(),
         Value::fixnum(4)
     );
 }
@@ -2177,35 +2181,39 @@ fn buffer_base_buffer_and_last_name_semantics() {
         .expect("indirect buffer");
 
     assert_eq!(
-        builtin_buffer_base_buffer(&mut eval, vec![]).unwrap(),
+        builtin_buffer_base_buffer(&mut eval.edit.buffers, vec![]).unwrap(),
         Value::NIL
     );
     assert_eq!(
-        builtin_buffer_last_name(&mut eval, vec![]).unwrap(),
+        builtin_buffer_last_name(&mut eval.edit.buffers, vec![]).unwrap(),
         Value::NIL
     );
     assert_eq!(
-        builtin_buffer_base_buffer(&mut eval, vec![Value::NIL]).unwrap(),
+        builtin_buffer_base_buffer(&mut eval.edit.buffers, vec![Value::NIL]).unwrap(),
         Value::NIL
     );
     assert_eq!(
-        builtin_buffer_base_buffer(&mut eval, vec![Value::make_buffer(indirect_id)]).unwrap(),
+        builtin_buffer_base_buffer(
+            &mut eval.edit.buffers,
+            vec![Value::make_buffer(indirect_id)]
+        )
+        .unwrap(),
         Value::make_buffer(base_id)
     );
     assert_eq!(
-        builtin_buffer_last_name(&mut eval, vec![Value::NIL]).unwrap(),
+        builtin_buffer_last_name(&mut eval.edit.buffers, vec![Value::NIL]).unwrap(),
         Value::NIL
     );
 
     let created = create_unique_test_buffer(&mut eval, "*bln-created*");
-    let created_name = builtin_buffer_name(&mut eval, &vec![created]).unwrap();
+    let created_name = builtin_buffer_name(&mut eval.edit.buffers, &vec![created]).unwrap();
     assert_eq!(
-        builtin_buffer_last_name(&mut eval, vec![created]).unwrap(),
+        builtin_buffer_last_name(&mut eval.edit.buffers, vec![created]).unwrap(),
         created_name,
         "GNU get-buffer-create initializes last_name to the buffer name"
     );
 
-    let base_type = builtin_buffer_base_buffer(&mut eval, vec![Value::symbol("x")])
+    let base_type = builtin_buffer_base_buffer(&mut eval.edit.buffers, vec![Value::symbol("x")])
         .expect_err("buffer-base-buffer should reject non-buffer, non-nil optional arg");
     match base_type.into_kind() {
         FlowKind::Signal(sig) => {
@@ -2215,7 +2223,7 @@ fn buffer_base_buffer_and_last_name_semantics() {
         other => panic!("unexpected flow: {other:?}"),
     }
 
-    let last_type = builtin_buffer_last_name(&mut eval, vec![Value::symbol("x")])
+    let last_type = builtin_buffer_last_name(&mut eval.edit.buffers, vec![Value::symbol("x")])
         .expect_err("buffer-last-name should reject non-buffer, non-nil optional arg");
     match last_type.into_kind() {
         FlowKind::Signal(sig) => {
@@ -2225,8 +2233,9 @@ fn buffer_base_buffer_and_last_name_semantics() {
         other => panic!("unexpected flow: {other:?}"),
     }
 
-    let base_arity = builtin_buffer_base_buffer(&mut eval, vec![Value::NIL, Value::NIL])
-        .expect_err("buffer-base-buffer should reject >1 args");
+    let base_arity =
+        builtin_buffer_base_buffer(&mut eval.edit.buffers, vec![Value::NIL, Value::NIL])
+            .expect_err("buffer-base-buffer should reject >1 args");
     match base_arity.into_kind() {
         FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
@@ -2238,7 +2247,7 @@ fn buffer_base_buffer_and_last_name_semantics() {
         other => panic!("unexpected flow: {other:?}"),
     }
 
-    let last_arity = builtin_buffer_last_name(&mut eval, vec![Value::NIL, Value::NIL])
+    let last_arity = builtin_buffer_last_name(&mut eval.edit.buffers, vec![Value::NIL, Value::NIL])
         .expect_err("buffer-last-name should reject >1 args");
     match last_arity.into_kind() {
         FlowKind::Signal(sig) => {
@@ -2252,15 +2261,15 @@ fn buffer_base_buffer_and_last_name_semantics() {
     }
 
     let dead = create_unique_test_buffer(&mut eval, "*bln-dead*");
-    let live_name = builtin_buffer_name(&mut eval, &vec![dead]).unwrap();
+    let live_name = builtin_buffer_name(&mut eval.edit.buffers, &vec![dead]).unwrap();
     let _ = builtin_kill_buffer(&mut eval, vec![dead]).unwrap();
 
     assert_eq!(
-        builtin_buffer_base_buffer(&mut eval, vec![dead]).unwrap(),
+        builtin_buffer_base_buffer(&mut eval.edit.buffers, vec![dead]).unwrap(),
         Value::NIL
     );
     assert_eq!(
-        builtin_buffer_last_name(&mut eval, vec![dead]).unwrap(),
+        builtin_buffer_last_name(&mut eval.edit.buffers, vec![dead]).unwrap(),
         live_name
     );
 }
@@ -2287,7 +2296,7 @@ fn make_indirect_buffer_shares_text_and_flattens_base_buffer_chain() {
     let indirect_id = indirect.as_buffer_id().unwrap();
 
     assert_eq!(
-        builtin_buffer_base_buffer(&mut eval, vec![indirect]).unwrap(),
+        builtin_buffer_base_buffer(&mut eval.edit.buffers, vec![indirect]).unwrap(),
         base
     );
     assert!(
@@ -2310,7 +2319,7 @@ fn make_indirect_buffer_shares_text_and_flattens_base_buffer_chain() {
         builtin_make_indirect_buffer(&mut eval, vec![indirect, Value::string("*mib-indirect-2*")])
             .expect("second indirect buffer should be created");
     assert_eq!(
-        builtin_buffer_base_buffer(&mut eval, vec![second]).unwrap(),
+        builtin_buffer_base_buffer(&mut eval.edit.buffers, vec![second]).unwrap(),
         base
     );
 }
@@ -2402,8 +2411,8 @@ fn make_indirect_buffer_clone_and_hook_semantics_follow_buffer_c() {
         Some(Value::symbol("neo-mode"))
     );
     assert_eq!(
-        builtin_buffer_last_name(&mut eval, vec![cloned]).unwrap(),
-        builtin_buffer_last_name(&mut eval, vec![base]).unwrap(),
+        builtin_buffer_last_name(&mut eval.edit.buffers, vec![cloned]).unwrap(),
+        builtin_buffer_last_name(&mut eval.edit.buffers, vec![base]).unwrap(),
         "GNU clone_per_buffer_values copies base last_name into cloned indirect buffers"
     );
     assert_eq!(
@@ -2517,7 +2526,7 @@ fn make_indirect_buffer_clone_nil_resets_buffer_state() {
     let indirect_id = indirect.as_buffer_id().unwrap();
 
     assert_eq!(
-        builtin_buffer_last_name(&mut eval, vec![indirect]).unwrap(),
+        builtin_buffer_last_name(&mut eval.edit.buffers, vec![indirect]).unwrap(),
         Value::string("*mib-default*"),
         "GNU non-clone make-indirect-buffer keeps the new buffer name as last_name"
     );
@@ -2540,56 +2549,56 @@ fn buffer_modified_tick_semantics() {
     let mut eval = super::super::eval::Context::new();
 
     assert_eq!(
-        builtin_buffer_modified_tick(&mut eval, vec![]).unwrap(),
+        builtin_buffer_modified_tick(&mut eval.edit.buffers, vec![]).unwrap(),
         Value::fixnum(1)
     );
     assert_eq!(
-        builtin_buffer_chars_modified_tick(&mut eval, vec![]).unwrap(),
+        builtin_buffer_chars_modified_tick(&mut eval.edit.buffers, vec![]).unwrap(),
         Value::fixnum(1)
     );
 
     builtin_insert(&mut eval, vec![Value::string("abcdef")]).unwrap();
     assert_eq!(
-        builtin_buffer_modified_tick(&mut eval, vec![]).unwrap(),
+        builtin_buffer_modified_tick(&mut eval.edit.buffers, vec![]).unwrap(),
         Value::fixnum(4)
     );
     assert_eq!(
-        builtin_buffer_chars_modified_tick(&mut eval, vec![]).unwrap(),
+        builtin_buffer_chars_modified_tick(&mut eval.edit.buffers, vec![]).unwrap(),
         Value::fixnum(4)
     );
 
     builtin_set_buffer_modified_p(&mut eval, vec![Value::NIL]).unwrap();
     assert_eq!(
-        builtin_buffer_modified_tick(&mut eval, vec![]).unwrap(),
+        builtin_buffer_modified_tick(&mut eval.edit.buffers, vec![]).unwrap(),
         Value::fixnum(4)
     );
     assert_eq!(
-        builtin_buffer_chars_modified_tick(&mut eval, vec![]).unwrap(),
+        builtin_buffer_chars_modified_tick(&mut eval.edit.buffers, vec![]).unwrap(),
         Value::fixnum(4)
     );
 
     builtin_delete_region(&mut eval, vec![Value::fixnum(1), Value::fixnum(7)]).unwrap();
     assert_eq!(
-        builtin_buffer_modified_tick(&mut eval, vec![]).unwrap(),
+        builtin_buffer_modified_tick(&mut eval.edit.buffers, vec![]).unwrap(),
         Value::fixnum(7)
     );
     assert_eq!(
-        builtin_buffer_chars_modified_tick(&mut eval, vec![]).unwrap(),
+        builtin_buffer_chars_modified_tick(&mut eval.edit.buffers, vec![]).unwrap(),
         Value::fixnum(7)
     );
 
     let dead = create_unique_test_buffer(&mut eval, "*ticks-dead*");
     let _ = builtin_kill_buffer(&mut eval, vec![dead]).unwrap();
     assert_eq!(
-        builtin_buffer_modified_tick(&mut eval, vec![dead]).unwrap(),
+        builtin_buffer_modified_tick(&mut eval.edit.buffers, vec![dead]).unwrap(),
         Value::fixnum(1)
     );
     assert_eq!(
-        builtin_buffer_chars_modified_tick(&mut eval, vec![dead]).unwrap(),
+        builtin_buffer_chars_modified_tick(&mut eval.edit.buffers, vec![dead]).unwrap(),
         Value::fixnum(1)
     );
 
-    let type_error = builtin_buffer_modified_tick(&mut eval, vec![Value::symbol("x")])
+    let type_error = builtin_buffer_modified_tick(&mut eval.edit.buffers, vec![Value::symbol("x")])
         .expect_err("buffer-modified-tick should reject non-buffer optional arg");
     match type_error.into_kind() {
         FlowKind::Signal(sig) => {
@@ -2599,8 +2608,9 @@ fn buffer_modified_tick_semantics() {
         other => panic!("unexpected flow: {other:?}"),
     }
 
-    let arity_error = builtin_buffer_chars_modified_tick(&mut eval, vec![Value::NIL, Value::NIL])
-        .expect_err("buffer-chars-modified-tick should reject >1 args");
+    let arity_error =
+        builtin_buffer_chars_modified_tick(&mut eval.edit.buffers, vec![Value::NIL, Value::NIL])
+            .expect_err("buffer-chars-modified-tick should reject >1 args");
     match arity_error.into_kind() {
         FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
@@ -3265,16 +3275,22 @@ fn delete_all_overlays_clears_current_buffer() {
         let buf = eval.buffers.current_buffer_mut().expect("current buffer");
         buf.insert("hello");
     }
-    builtin_make_overlay(&mut eval, vec![Value::fixnum(1), Value::fixnum(3)])
-        .expect("first overlay should be created");
-    builtin_make_overlay(&mut eval, vec![Value::fixnum(2), Value::fixnum(5)])
-        .expect("second overlay should be created");
+    builtin_make_overlay(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(1), Value::fixnum(3)],
+    )
+    .expect("first overlay should be created");
+    builtin_make_overlay(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(2), Value::fixnum(5)],
+    )
+    .expect("second overlay should be created");
 
     let buf = eval.buffers.current_buffer().expect("current buffer");
     assert_eq!(buf.overlays.len(), 2);
 
     assert_eq!(
-        builtin_delete_all_overlays(&mut eval, vec![]).unwrap(),
+        builtin_delete_all_overlays(&mut eval.edit.buffers, vec![]).unwrap(),
         Value::NIL
     );
 
@@ -3988,8 +4004,11 @@ fn buffer_swap_text_swaps_owned_backend_and_state() {
         }
 
         eval.buffers.set_current(second_id);
-        let overlay = builtin_make_overlay(&mut eval, vec![Value::fixnum(2), Value::fixnum(4)])
-            .expect("overlay creation should succeed");
+        let overlay = builtin_make_overlay(
+            &mut eval.edit.buffers,
+            vec![Value::fixnum(2), Value::fixnum(4)],
+        )
+        .expect("overlay creation should succeed");
 
         eval.buffers.set_current(first_id);
         assert_eq!(
@@ -4842,8 +4861,8 @@ fn buffer_undo_designators_match_deleted_and_missing_buffer_semantics() {
     ));
     assert_eq!(current.get_buffer_local("buffer-undo-list"), Some(Value::T));
 
-    let enable_current =
-        builtin_buffer_enable_undo(&mut eval, vec![]).expect("buffer-enable-undo should work");
+    let enable_current = builtin_buffer_enable_undo(&mut eval.edit.buffers, vec![])
+        .expect("buffer-enable-undo should work");
     assert_eq!(enable_current, Value::NIL);
     let current = eval.buffers.get(current_id).expect("current buffer");
     assert!(!crate::buffer::undo_list_is_disabled(
@@ -4854,9 +4873,11 @@ fn buffer_undo_designators_match_deleted_and_missing_buffer_semantics() {
         Some(Value::NIL)
     );
 
-    let enable_missing_name =
-        builtin_buffer_enable_undo(&mut eval, vec![Value::string("*undo-enable-missing*")])
-            .expect_err("buffer-enable-undo missing string should signal");
+    let enable_missing_name = builtin_buffer_enable_undo(
+        &mut eval.edit.buffers,
+        vec![Value::string("*undo-enable-missing*")],
+    )
+    .expect_err("buffer-enable-undo missing string should signal");
     match enable_missing_name.into_kind() {
         FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "error");
@@ -4870,7 +4891,8 @@ fn buffer_undo_designators_match_deleted_and_missing_buffer_semantics() {
 
     let dead_for_enable = create_unique_test_buffer(&mut eval, "*undo-enable-deleted*");
     let _ = builtin_kill_buffer(&mut eval, vec![dead_for_enable]).unwrap();
-    let enable_deleted = builtin_buffer_enable_undo(&mut eval, vec![dead_for_enable]).unwrap();
+    let enable_deleted =
+        builtin_buffer_enable_undo(&mut eval.edit.buffers, vec![dead_for_enable]).unwrap();
     assert_eq!(enable_deleted, Value::NIL);
 }
 
@@ -6455,7 +6477,8 @@ fn pure_dispatch_buffer_placeholder_mutators_match_compat_contracts() {
             Value::string("new-name")
         );
         assert_eq!(
-            builtin_buffer_last_name(&mut eval, vec![Value::make_buffer(buf_id)]).unwrap(),
+            builtin_buffer_last_name(&mut eval.edit.buffers, vec![Value::make_buffer(buf_id)])
+                .unwrap(),
             Value::string("old-name")
         );
     }
@@ -18285,8 +18308,11 @@ fn overlay_put_and_move_bump_overlay_modified_tick() {
         .insert_into_buffer(buffer_id, "hello world")
         .expect("insert");
 
-    let overlay = builtin_make_overlay(&mut eval, vec![Value::fixnum(1), Value::fixnum(3)])
-        .expect("make-overlay");
+    let overlay = builtin_make_overlay(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(1), Value::fixnum(3)],
+    )
+    .expect("make-overlay");
 
     let before = eval.buffers.get(buffer_id).unwrap().overlay_modified_tick();
     crate::emacs_core::buffer::builtin_overlay_put(

@@ -458,7 +458,11 @@ fn overlay_lifecycle_bumps_overlay_modified_tick() {
         .current_buffer()
         .expect("current buffer")
         .overlay_modified_tick();
-    let ov = builtin_make_overlay(&mut eval, vec![Value::fixnum(1), Value::fixnum(3)]).unwrap();
+    let ov = builtin_make_overlay(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(1), Value::fixnum(3)],
+    )
+    .unwrap();
     let after_make = eval
         .buffer_manager()
         .current_buffer()
@@ -510,7 +514,11 @@ fn get_char_property_and_overlay_shape() {
     let pair = list_to_vec(&result).unwrap();
     assert_eq!(pair, vec![Value::NIL]);
 
-    let ov = builtin_make_overlay(&mut eval, vec![Value::fixnum(2), Value::fixnum(4)]).unwrap();
+    let ov = builtin_make_overlay(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(2), Value::fixnum(4)],
+    )
+    .unwrap();
     builtin_overlay_put(
         &mut eval,
         vec![ov, Value::symbol("foo"), Value::symbol("bar")],
@@ -550,7 +558,7 @@ fn get_char_property_prefers_highest_priority_overlay() {
     .unwrap();
 
     let low = builtin_make_overlay(
-        &mut eval,
+        &mut eval.edit.buffers,
         vec![
             Value::fixnum(2),
             Value::fixnum(4),
@@ -561,7 +569,7 @@ fn get_char_property_prefers_highest_priority_overlay() {
     )
     .unwrap();
     let high = builtin_make_overlay(
-        &mut eval,
+        &mut eval.edit.buffers,
         vec![
             Value::fixnum(2),
             Value::fixnum(4),
@@ -620,8 +628,16 @@ fn get_char_property_prefers_highest_priority_overlay() {
 fn get_char_property_same_range_overlays_use_the_creation_serial_tiebreaker() {
     crate::test_utils::init_test_tracing();
     let mut eval = eval_with_text("abcd");
-    let first = builtin_make_overlay(&mut eval, vec![Value::fixnum(1), Value::fixnum(5)]).unwrap();
-    let second = builtin_make_overlay(&mut eval, vec![Value::fixnum(1), Value::fixnum(5)]).unwrap();
+    let first = builtin_make_overlay(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(1), Value::fixnum(5)],
+    )
+    .unwrap();
+    let second = builtin_make_overlay(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(1), Value::fixnum(5)],
+    )
+    .unwrap();
 
     // GNU's final precedence tiebreaker (buffer.c:3277-3281) compares the raw
     // overlay address, an order GNU documents as arbitrary: "The result can
@@ -770,7 +786,7 @@ fn get_pos_property_respects_overlay_advance_and_text_stickiness() {
     .unwrap();
 
     let low = builtin_make_overlay(
-        &mut eval,
+        &mut eval.edit.buffers,
         vec![
             Value::fixnum(2),
             Value::fixnum(4),
@@ -781,7 +797,7 @@ fn get_pos_property_respects_overlay_advance_and_text_stickiness() {
     )
     .unwrap();
     let high = builtin_make_overlay(
-        &mut eval,
+        &mut eval.edit.buffers,
         vec![
             Value::fixnum(2),
             Value::fixnum(4),
@@ -1950,7 +1966,11 @@ fn text_property_not_all_reports_first_mismatch() {
 fn make_and_delete_overlay() {
     crate::test_utils::init_test_tracing();
     let mut eval = eval_with_text("hello world");
-    let ov = builtin_make_overlay(&mut eval, vec![Value::fixnum(1), Value::fixnum(6)]).unwrap();
+    let ov = builtin_make_overlay(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(1), Value::fixnum(6)],
+    )
+    .unwrap();
 
     assert!(ov.is_overlay());
 
@@ -1967,7 +1987,11 @@ fn make_and_delete_overlay() {
 fn overlay_put_and_get() {
     crate::test_utils::init_test_tracing();
     let mut eval = eval_with_text("hello");
-    let ov = builtin_make_overlay(&mut eval, vec![Value::fixnum(1), Value::fixnum(6)]).unwrap();
+    let ov = builtin_make_overlay(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(1), Value::fixnum(6)],
+    )
+    .unwrap();
 
     builtin_overlay_put(
         &mut eval,
@@ -1983,7 +2007,11 @@ fn overlay_put_and_get() {
 fn deleted_overlay_preserves_plist_and_identity() {
     crate::test_utils::init_test_tracing();
     let mut eval = eval_with_text("hello");
-    let ov = builtin_make_overlay(&mut eval, vec![Value::fixnum(1), Value::fixnum(3)]).unwrap();
+    let ov = builtin_make_overlay(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(1), Value::fixnum(3)],
+    )
+    .unwrap();
 
     builtin_overlay_put(
         &mut eval,
@@ -1998,15 +2026,15 @@ fn deleted_overlay_preserves_plist_and_identity() {
     let face = builtin_overlay_get(&mut eval, vec![ov, Value::symbol("face")]).unwrap();
     assert_eq!(face.as_bare_symbol_name(), Some("bold"));
 
-    let properties = builtin_overlay_properties(&mut eval, vec![ov]).unwrap();
+    let properties = builtin_overlay_properties(&mut eval.edit.buffers, vec![ov]).unwrap();
     assert_eq!(
         crate::emacs_core::print::print_value(&properties),
         "(face bold)"
     );
 
-    let start = builtin_overlay_start(&mut eval, vec![ov]).unwrap();
-    let end = builtin_overlay_end(&mut eval, vec![ov]).unwrap();
-    let buffer = builtin_overlay_buffer(&mut eval, vec![ov]).unwrap();
+    let start = builtin_overlay_start(&mut eval.edit.buffers, vec![ov]).unwrap();
+    let end = builtin_overlay_end(&mut eval.edit.buffers, vec![ov]).unwrap();
+    let buffer = builtin_overlay_buffer(&mut eval.edit.buffers, vec![ov]).unwrap();
     assert!(start.is_nil());
     assert!(end.is_nil());
     assert!(buffer.is_nil());
@@ -2016,7 +2044,11 @@ fn deleted_overlay_preserves_plist_and_identity() {
 fn overlay_get_absent_property() {
     crate::test_utils::init_test_tracing();
     let mut eval = eval_with_text("hello");
-    let ov = builtin_make_overlay(&mut eval, vec![Value::fixnum(1), Value::fixnum(6)]).unwrap();
+    let ov = builtin_make_overlay(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(1), Value::fixnum(6)],
+    )
+    .unwrap();
 
     let result = builtin_overlay_get(&mut eval, vec![ov, Value::symbol("missing")]).unwrap();
     assert!(result.is_nil());
@@ -2047,7 +2079,11 @@ fn overlay_get_uses_category_symbol_identity() {
 fn overlayp_true() {
     crate::test_utils::init_test_tracing();
     let mut eval = eval_with_text("hello");
-    let ov = builtin_make_overlay(&mut eval, vec![Value::fixnum(1), Value::fixnum(6)]).unwrap();
+    let ov = builtin_make_overlay(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(1), Value::fixnum(6)],
+    )
+    .unwrap();
 
     let result = builtin_overlayp(&mut eval, &vec![ov]).unwrap();
     assert!(result.is_t());
@@ -2069,7 +2105,11 @@ fn overlayp_false() {
 fn overlays_at_finds_overlay() {
     crate::test_utils::init_test_tracing();
     let mut eval = eval_with_text("hello world");
-    let _ov = builtin_make_overlay(&mut eval, vec![Value::fixnum(1), Value::fixnum(6)]).unwrap();
+    let _ov = builtin_make_overlay(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(1), Value::fixnum(6)],
+    )
+    .unwrap();
 
     let result = builtin_overlays_at(&mut eval, vec![Value::fixnum(3)]).unwrap();
     let items = list_to_vec(&result).unwrap();
@@ -2080,7 +2120,11 @@ fn overlays_at_finds_overlay() {
 fn overlays_at_outside() {
     crate::test_utils::init_test_tracing();
     let mut eval = eval_with_text("hello world");
-    let _ov = builtin_make_overlay(&mut eval, vec![Value::fixnum(1), Value::fixnum(3)]).unwrap();
+    let _ov = builtin_make_overlay(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(1), Value::fixnum(3)],
+    )
+    .unwrap();
 
     let result = builtin_overlays_at(&mut eval, vec![Value::fixnum(5)]).unwrap();
     let items = list_to_vec(&result).unwrap();
@@ -2091,9 +2135,21 @@ fn overlays_at_outside() {
 fn overlays_at_unsorted_matches_gnu_same_start_itree_order() {
     crate::test_utils::init_test_tracing();
     let mut eval = eval_with_text("hello world");
-    let first = builtin_make_overlay(&mut eval, vec![Value::fixnum(1), Value::fixnum(6)]).unwrap();
-    let second = builtin_make_overlay(&mut eval, vec![Value::fixnum(1), Value::fixnum(6)]).unwrap();
-    let third = builtin_make_overlay(&mut eval, vec![Value::fixnum(1), Value::fixnum(6)]).unwrap();
+    let first = builtin_make_overlay(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(1), Value::fixnum(6)],
+    )
+    .unwrap();
+    let second = builtin_make_overlay(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(1), Value::fixnum(6)],
+    )
+    .unwrap();
+    let third = builtin_make_overlay(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(1), Value::fixnum(6)],
+    )
+    .unwrap();
 
     let result = builtin_overlays_at(&mut eval, vec![Value::fixnum(3)]).unwrap();
     let items = list_to_vec(&result).unwrap();
@@ -2165,8 +2221,16 @@ fn insert_reorders_equal_start_front_advancing_overlays_like_gnu() {
 fn overlays_at_sorted_matches_gnu_same_range_identity_order() {
     crate::test_utils::init_test_tracing();
     let mut eval = eval_with_text("hello world");
-    let first = builtin_make_overlay(&mut eval, vec![Value::fixnum(1), Value::fixnum(6)]).unwrap();
-    let second = builtin_make_overlay(&mut eval, vec![Value::fixnum(1), Value::fixnum(6)]).unwrap();
+    let first = builtin_make_overlay(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(1), Value::fixnum(6)],
+    )
+    .unwrap();
+    let second = builtin_make_overlay(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(1), Value::fixnum(6)],
+    )
+    .unwrap();
 
     let result = builtin_overlays_at(&mut eval, vec![Value::fixnum(3), Value::T]).unwrap();
     let items = list_to_vec(&result).unwrap();
@@ -2177,10 +2241,21 @@ fn overlays_at_sorted_matches_gnu_same_range_identity_order() {
 fn overlays_at_sorted_returns_highest_priority_first() {
     crate::test_utils::init_test_tracing();
     let mut eval = eval_with_text("hello world");
-    let low = builtin_make_overlay(&mut eval, vec![Value::fixnum(1), Value::fixnum(6)]).unwrap();
-    let high = builtin_make_overlay(&mut eval, vec![Value::fixnum(1), Value::fixnum(6)]).unwrap();
-    let nil_priority =
-        builtin_make_overlay(&mut eval, vec![Value::fixnum(1), Value::fixnum(6)]).unwrap();
+    let low = builtin_make_overlay(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(1), Value::fixnum(6)],
+    )
+    .unwrap();
+    let high = builtin_make_overlay(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(1), Value::fixnum(6)],
+    )
+    .unwrap();
+    let nil_priority = builtin_make_overlay(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(1), Value::fixnum(6)],
+    )
+    .unwrap();
 
     builtin_overlay_put(
         &mut eval,
@@ -2202,10 +2277,22 @@ fn overlays_at_sorted_returns_highest_priority_first() {
 fn overlays_in_basic() {
     crate::test_utils::init_test_tracing();
     let mut eval = eval_with_text("hello world");
-    builtin_make_overlay(&mut eval, vec![Value::fixnum(1), Value::fixnum(6)]).unwrap();
-    builtin_make_overlay(&mut eval, vec![Value::fixnum(4), Value::fixnum(10)]).unwrap();
+    builtin_make_overlay(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(1), Value::fixnum(6)],
+    )
+    .unwrap();
+    builtin_make_overlay(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(4), Value::fixnum(10)],
+    )
+    .unwrap();
 
-    let result = builtin_overlays_in(&mut eval, vec![Value::fixnum(1), Value::fixnum(12)]).unwrap();
+    let result = builtin_overlays_in(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(1), Value::fixnum(12)],
+    )
+    .unwrap();
     let items = list_to_vec(&result).unwrap();
     assert_eq!(items.len(), 2);
 }
@@ -2214,15 +2301,32 @@ fn overlays_in_basic() {
 fn overlays_in_empty_region_matches_gnu_boundary_rules() {
     crate::test_utils::init_test_tracing();
     let mut eval = eval_with_text("abcdef");
-    builtin_make_overlay(&mut eval, vec![Value::fixnum(1), Value::fixnum(6)]).unwrap();
-    builtin_make_overlay(&mut eval, vec![Value::fixnum(3), Value::fixnum(3)]).unwrap();
+    builtin_make_overlay(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(1), Value::fixnum(6)],
+    )
+    .unwrap();
+    builtin_make_overlay(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(3), Value::fixnum(3)],
+    )
+    .unwrap();
 
-    let at_start = builtin_overlays_in(&mut eval, vec![Value::fixnum(1), Value::fixnum(1)])
-        .expect("overlays-in at start");
-    let inside = builtin_overlays_in(&mut eval, vec![Value::fixnum(3), Value::fixnum(3)])
-        .expect("overlays-in inside");
-    let at_end = builtin_overlays_in(&mut eval, vec![Value::fixnum(6), Value::fixnum(6)])
-        .expect("overlays-in at end");
+    let at_start = builtin_overlays_in(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(1), Value::fixnum(1)],
+    )
+    .expect("overlays-in at start");
+    let inside = builtin_overlays_in(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(3), Value::fixnum(3)],
+    )
+    .expect("overlays-in inside");
+    let at_end = builtin_overlays_in(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(6), Value::fixnum(6)],
+    )
+    .expect("overlays-in at end");
 
     assert!(at_start.is_nil());
     assert_eq!(list_to_vec(&inside).expect("inside list").len(), 2);
@@ -2239,12 +2343,19 @@ fn overlays_in_beg_greater_than_end_returns_nil_like_gnu() {
     //                     (length (overlays-in 5 2)))  => 0   (GNU)
     crate::test_utils::init_test_tracing();
     let mut eval = eval_with_text("abcdef");
-    builtin_make_overlay(&mut eval, vec![Value::fixnum(2), Value::fixnum(5)]).unwrap();
+    builtin_make_overlay(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(2), Value::fixnum(5)],
+    )
+    .unwrap();
 
     // BEG > END: every reversed range is empty.
     for (beg, end) in [(5, 2), (6, 1), (4, 3)] {
-        let result =
-            builtin_overlays_in(&mut eval, vec![Value::fixnum(beg), Value::fixnum(end)]).unwrap();
+        let result = builtin_overlays_in(
+            &mut eval.edit.buffers,
+            vec![Value::fixnum(beg), Value::fixnum(end)],
+        )
+        .unwrap();
         assert!(
             result.is_nil(),
             "(overlays-in {beg} {end}) must be nil like GNU, got {result:?}"
@@ -2252,9 +2363,17 @@ fn overlays_in_beg_greater_than_end_returns_nil_like_gnu() {
     }
 
     // BEG == END and the normal BEG < END case still work.
-    let equal = builtin_overlays_in(&mut eval, vec![Value::fixnum(3), Value::fixnum(3)]).unwrap();
+    let equal = builtin_overlays_in(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(3), Value::fixnum(3)],
+    )
+    .unwrap();
     assert_eq!(list_to_vec(&equal).unwrap().len(), 1);
-    let forward = builtin_overlays_in(&mut eval, vec![Value::fixnum(2), Value::fixnum(5)]).unwrap();
+    let forward = builtin_overlays_in(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(2), Value::fixnum(5)],
+    )
+    .unwrap();
     assert_eq!(list_to_vec(&forward).unwrap().len(), 1);
 }
 
@@ -2278,8 +2397,16 @@ fn get_char_property_coerces_non_fixnum_overlay_priority_to_zero_like_gnu() {
         F2: FnOnce() -> Value,
     {
         let mut eval = eval_with_text("abcdef");
-        let o1 = builtin_make_overlay(&mut eval, vec![Value::fixnum(2), Value::fixnum(5)]).unwrap();
-        let o2 = builtin_make_overlay(&mut eval, vec![Value::fixnum(2), Value::fixnum(5)]).unwrap();
+        let o1 = builtin_make_overlay(
+            &mut eval.edit.buffers,
+            vec![Value::fixnum(2), Value::fixnum(5)],
+        )
+        .unwrap();
+        let o2 = builtin_make_overlay(
+            &mut eval.edit.buffers,
+            vec![Value::fixnum(2), Value::fixnum(5)],
+        )
+        .unwrap();
         builtin_overlay_put(
             &mut eval,
             vec![o1, Value::symbol("face"), Value::symbol("a")],
@@ -2318,17 +2445,26 @@ fn get_char_property_coerces_non_fixnum_overlay_priority_to_zero_like_gnu() {
 fn next_previous_overlay_change_boundaries() {
     crate::test_utils::init_test_tracing();
     let mut eval = eval_with_text("abcd");
-    let no_overlay_next = builtin_next_overlay_change(&mut eval, vec![Value::fixnum(1)]).unwrap();
+    let no_overlay_next =
+        builtin_next_overlay_change(&mut eval.edit.buffers, vec![Value::fixnum(1)]).unwrap();
     let no_overlay_prev =
-        builtin_previous_overlay_change(&mut eval, vec![Value::fixnum(4)]).unwrap();
+        builtin_previous_overlay_change(&mut eval.edit.buffers, vec![Value::fixnum(4)]).unwrap();
     assert!(no_overlay_next.is_fixnum());
     assert!(no_overlay_prev.is_fixnum());
 
-    builtin_make_overlay(&mut eval, vec![Value::fixnum(2), Value::fixnum(4)]).unwrap();
-    let next_from_1 = builtin_next_overlay_change(&mut eval, vec![Value::fixnum(1)]).unwrap();
-    let next_from_2 = builtin_next_overlay_change(&mut eval, vec![Value::fixnum(2)]).unwrap();
-    let prev_from_4 = builtin_previous_overlay_change(&mut eval, vec![Value::fixnum(4)]).unwrap();
-    let prev_from_2 = builtin_previous_overlay_change(&mut eval, vec![Value::fixnum(2)]).unwrap();
+    builtin_make_overlay(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(2), Value::fixnum(4)],
+    )
+    .unwrap();
+    let next_from_1 =
+        builtin_next_overlay_change(&mut eval.edit.buffers, vec![Value::fixnum(1)]).unwrap();
+    let next_from_2 =
+        builtin_next_overlay_change(&mut eval.edit.buffers, vec![Value::fixnum(2)]).unwrap();
+    let prev_from_4 =
+        builtin_previous_overlay_change(&mut eval.edit.buffers, vec![Value::fixnum(4)]).unwrap();
+    let prev_from_2 =
+        builtin_previous_overlay_change(&mut eval.edit.buffers, vec![Value::fixnum(2)]).unwrap();
     assert!(next_from_1.is_fixnum());
     assert!(next_from_2.is_fixnum());
     assert!(prev_from_4.is_fixnum());
@@ -2339,18 +2475,36 @@ fn next_previous_overlay_change_boundaries() {
 fn overlay_change_boundaries_respect_narrowing_limits() {
     crate::test_utils::init_test_tracing();
     let mut eval = eval_with_text("abcdef");
-    builtin_make_overlay(&mut eval, vec![Value::fixnum(1), Value::fixnum(1)]).unwrap();
-    builtin_make_overlay(&mut eval, vec![Value::fixnum(2), Value::fixnum(2)]).unwrap();
-    builtin_make_overlay(&mut eval, vec![Value::fixnum(4), Value::fixnum(4)]).unwrap();
-    builtin_make_overlay(&mut eval, vec![Value::fixnum(7), Value::fixnum(7)]).unwrap();
+    builtin_make_overlay(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(1), Value::fixnum(1)],
+    )
+    .unwrap();
+    builtin_make_overlay(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(2), Value::fixnum(2)],
+    )
+    .unwrap();
+    builtin_make_overlay(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(4), Value::fixnum(4)],
+    )
+    .unwrap();
+    builtin_make_overlay(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(7), Value::fixnum(7)],
+    )
+    .unwrap();
 
     let buffer_id = eval.buffers.current_buffer_id().unwrap();
     eval.buffers
         .narrow_buffer_to_emacs_byte_range(buffer_id, EmacsByteRange::from_usize(1, 5))
         .unwrap();
 
-    let next_at_zv = builtin_next_overlay_change(&mut eval, vec![Value::fixnum(6)]).unwrap();
-    let prev_at_begv = builtin_previous_overlay_change(&mut eval, vec![Value::fixnum(2)]).unwrap();
+    let next_at_zv =
+        builtin_next_overlay_change(&mut eval.edit.buffers, vec![Value::fixnum(6)]).unwrap();
+    let prev_at_begv =
+        builtin_previous_overlay_change(&mut eval.edit.buffers, vec![Value::fixnum(2)]).unwrap();
 
     assert_eq!(next_at_zv.as_fixnum(), Some(6));
     assert_eq!(prev_at_begv.as_fixnum(), Some(2));
@@ -2364,12 +2518,16 @@ fn overlay_change_boundaries_respect_narrowing_limits() {
 fn move_overlay_changes_range() {
     crate::test_utils::init_test_tracing();
     let mut eval = eval_with_text("hello world");
-    let ov = builtin_make_overlay(&mut eval, vec![Value::fixnum(1), Value::fixnum(6)]).unwrap();
+    let ov = builtin_make_overlay(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(1), Value::fixnum(6)],
+    )
+    .unwrap();
 
     builtin_move_overlay(&mut eval, vec![ov, Value::fixnum(3), Value::fixnum(8)]).unwrap();
 
-    let start = builtin_overlay_start(&mut eval, vec![ov]).unwrap();
-    let end = builtin_overlay_end(&mut eval, vec![ov]).unwrap();
+    let start = builtin_overlay_start(&mut eval.edit.buffers, vec![ov]).unwrap();
+    let end = builtin_overlay_end(&mut eval.edit.buffers, vec![ov]).unwrap();
     assert!(start.is_fixnum());
     assert!(end.is_fixnum());
 }
@@ -2378,14 +2536,18 @@ fn move_overlay_changes_range() {
 fn move_overlay_evaporates_zero_width_overlay() {
     crate::test_utils::init_test_tracing();
     let mut eval = eval_with_text("hello world");
-    let ov = builtin_make_overlay(&mut eval, vec![Value::fixnum(1), Value::fixnum(6)]).unwrap();
+    let ov = builtin_make_overlay(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(1), Value::fixnum(6)],
+    )
+    .unwrap();
     builtin_overlay_put(&mut eval, vec![ov, Value::symbol("evaporate"), Value::T]).unwrap();
 
     builtin_move_overlay(&mut eval, vec![ov, Value::fixnum(4), Value::fixnum(4)]).unwrap();
 
-    let start = builtin_overlay_start(&mut eval, vec![ov]).unwrap();
-    let end = builtin_overlay_end(&mut eval, vec![ov]).unwrap();
-    let buffer = builtin_overlay_buffer(&mut eval, vec![ov]).unwrap();
+    let start = builtin_overlay_start(&mut eval.edit.buffers, vec![ov]).unwrap();
+    let end = builtin_overlay_end(&mut eval.edit.buffers, vec![ov]).unwrap();
+    let buffer = builtin_overlay_buffer(&mut eval.edit.buffers, vec![ov]).unwrap();
     assert!(start.is_nil());
     assert!(end.is_nil());
     assert!(buffer.is_nil());
@@ -2395,15 +2557,19 @@ fn move_overlay_evaporates_zero_width_overlay() {
 fn move_deleted_evaporating_overlay_into_empty_range_keeps_it_deleted() {
     crate::test_utils::init_test_tracing();
     let mut eval = eval_with_text("hello world");
-    let ov = builtin_make_overlay(&mut eval, vec![Value::fixnum(1), Value::fixnum(6)]).unwrap();
+    let ov = builtin_make_overlay(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(1), Value::fixnum(6)],
+    )
+    .unwrap();
     builtin_overlay_put(&mut eval, vec![ov, Value::symbol("evaporate"), Value::T]).unwrap();
     builtin_delete_overlay(&mut eval, vec![ov]).unwrap();
 
     builtin_move_overlay(&mut eval, vec![ov, Value::fixnum(4), Value::fixnum(4)]).unwrap();
 
-    let start = builtin_overlay_start(&mut eval, vec![ov]).unwrap();
-    let end = builtin_overlay_end(&mut eval, vec![ov]).unwrap();
-    let buffer = builtin_overlay_buffer(&mut eval, vec![ov]).unwrap();
+    let start = builtin_overlay_start(&mut eval.edit.buffers, vec![ov]).unwrap();
+    let end = builtin_overlay_end(&mut eval.edit.buffers, vec![ov]).unwrap();
+    let buffer = builtin_overlay_buffer(&mut eval.edit.buffers, vec![ov]).unwrap();
     assert!(start.is_nil());
     assert!(end.is_nil());
     assert!(buffer.is_nil());
@@ -2417,10 +2583,14 @@ fn move_deleted_evaporating_overlay_into_empty_range_keeps_it_deleted() {
 fn overlay_start_and_end() {
     crate::test_utils::init_test_tracing();
     let mut eval = eval_with_text("hello world");
-    let ov = builtin_make_overlay(&mut eval, vec![Value::fixnum(2), Value::fixnum(8)]).unwrap();
+    let ov = builtin_make_overlay(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(2), Value::fixnum(8)],
+    )
+    .unwrap();
 
-    let start = builtin_overlay_start(&mut eval, vec![ov]).unwrap();
-    let end = builtin_overlay_end(&mut eval, vec![ov]).unwrap();
+    let start = builtin_overlay_start(&mut eval.edit.buffers, vec![ov]).unwrap();
+    let end = builtin_overlay_end(&mut eval.edit.buffers, vec![ov]).unwrap();
     assert!(start.is_fixnum());
     assert!(end.is_fixnum());
 }
@@ -2433,9 +2603,13 @@ fn overlay_start_and_end() {
 fn overlay_buffer_returns_buffer() {
     crate::test_utils::init_test_tracing();
     let mut eval = eval_with_text("hello");
-    let ov = builtin_make_overlay(&mut eval, vec![Value::fixnum(1), Value::fixnum(3)]).unwrap();
+    let ov = builtin_make_overlay(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(1), Value::fixnum(3)],
+    )
+    .unwrap();
 
-    let result = builtin_overlay_buffer(&mut eval, vec![ov]).unwrap();
+    let result = builtin_overlay_buffer(&mut eval.edit.buffers, vec![ov]).unwrap();
     assert!(result.is_buffer());
 }
 
@@ -2447,7 +2621,11 @@ fn overlay_buffer_returns_buffer() {
 fn overlay_properties_returns_plist() {
     crate::test_utils::init_test_tracing();
     let mut eval = eval_with_text("hello");
-    let ov = builtin_make_overlay(&mut eval, vec![Value::fixnum(1), Value::fixnum(6)]).unwrap();
+    let ov = builtin_make_overlay(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(1), Value::fixnum(6)],
+    )
+    .unwrap();
 
     builtin_overlay_put(
         &mut eval,
@@ -2460,7 +2638,7 @@ fn overlay_properties_returns_plist() {
     )
     .unwrap();
 
-    let result = builtin_overlay_properties(&mut eval, vec![ov]).unwrap();
+    let result = builtin_overlay_properties(&mut eval.edit.buffers, vec![ov]).unwrap();
     let items = list_to_vec(&result).unwrap();
     assert_eq!(items.len(), 4); // 2 properties * 2 (key+value)
 }
@@ -2469,9 +2647,13 @@ fn overlay_properties_returns_plist() {
 fn overlay_properties_empty() {
     crate::test_utils::init_test_tracing();
     let mut eval = eval_with_text("hello");
-    let ov = builtin_make_overlay(&mut eval, vec![Value::fixnum(1), Value::fixnum(3)]).unwrap();
+    let ov = builtin_make_overlay(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(1), Value::fixnum(3)],
+    )
+    .unwrap();
 
-    let result = builtin_overlay_properties(&mut eval, vec![ov]).unwrap();
+    let result = builtin_overlay_properties(&mut eval.edit.buffers, vec![ov]).unwrap();
     // Empty plist is nil.
     assert!(result.is_nil());
 }
@@ -2484,12 +2666,24 @@ fn overlay_properties_empty() {
 fn remove_overlays_all() {
     crate::test_utils::init_test_tracing();
     let mut eval = eval_with_text("hello world");
-    builtin_make_overlay(&mut eval, vec![Value::fixnum(1), Value::fixnum(6)]).unwrap();
-    builtin_make_overlay(&mut eval, vec![Value::fixnum(3), Value::fixnum(10)]).unwrap();
+    builtin_make_overlay(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(1), Value::fixnum(6)],
+    )
+    .unwrap();
+    builtin_make_overlay(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(3), Value::fixnum(10)],
+    )
+    .unwrap();
 
     builtin_remove_overlays(&mut eval, vec![]).unwrap();
 
-    let result = builtin_overlays_in(&mut eval, vec![Value::fixnum(1), Value::fixnum(12)]).unwrap();
+    let result = builtin_overlays_in(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(1), Value::fixnum(12)],
+    )
+    .unwrap();
     let items = list_to_vec(&result).unwrap();
     assert_eq!(items.len(), 0);
 }
@@ -2498,8 +2692,16 @@ fn remove_overlays_all() {
 fn remove_overlays_by_property() {
     crate::test_utils::init_test_tracing();
     let mut eval = eval_with_text("hello world");
-    let ov1 = builtin_make_overlay(&mut eval, vec![Value::fixnum(1), Value::fixnum(6)]).unwrap();
-    let ov2 = builtin_make_overlay(&mut eval, vec![Value::fixnum(3), Value::fixnum(10)]).unwrap();
+    let ov1 = builtin_make_overlay(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(1), Value::fixnum(6)],
+    )
+    .unwrap();
+    let ov2 = builtin_make_overlay(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(3), Value::fixnum(10)],
+    )
+    .unwrap();
 
     builtin_overlay_put(
         &mut eval,
@@ -2524,7 +2726,11 @@ fn remove_overlays_by_property() {
     )
     .unwrap();
 
-    let result = builtin_overlays_in(&mut eval, vec![Value::fixnum(1), Value::fixnum(12)]).unwrap();
+    let result = builtin_overlays_in(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(1), Value::fixnum(12)],
+    )
+    .unwrap();
     let items = list_to_vec(&result).unwrap();
     assert_eq!(items.len(), 1); // only the italic one remains
 }
@@ -2734,7 +2940,7 @@ fn remove_overlays_rejects_too_many_args() {
 fn make_overlay_wrong_args() {
     crate::test_utils::init_test_tracing();
     let mut eval = eval_with_text("hello");
-    let result = builtin_make_overlay(&mut eval, vec![Value::fixnum(1)]);
+    let result = builtin_make_overlay(&mut eval.edit.buffers, vec![Value::fixnum(1)]);
     assert!(result.is_err());
 }
 
@@ -2743,7 +2949,7 @@ fn make_overlay_rejects_too_many_args() {
     crate::test_utils::init_test_tracing();
     let mut eval = eval_with_text("hello");
     let result = builtin_make_overlay(
-        &mut eval,
+        &mut eval.edit.buffers,
         vec![
             Value::fixnum(1),
             Value::fixnum(2),
@@ -2768,7 +2974,7 @@ fn overlays_at_rejects_too_many_args() {
 fn next_overlay_change_wrong_args() {
     crate::test_utils::init_test_tracing();
     let mut eval = eval_with_text("hello");
-    let result = builtin_next_overlay_change(&mut eval, vec![]);
+    let result = builtin_next_overlay_change(&mut eval.edit.buffers, vec![]);
     assert!(result.is_err());
 }
 
@@ -2776,7 +2982,8 @@ fn next_overlay_change_wrong_args() {
 fn previous_overlay_change_rejects_too_many_args() {
     crate::test_utils::init_test_tracing();
     let mut eval = eval_with_text("hello");
-    let result = builtin_previous_overlay_change(&mut eval, vec![Value::fixnum(1), Value::NIL]);
+    let result =
+        builtin_previous_overlay_change(&mut eval.edit.buffers, vec![Value::fixnum(1), Value::NIL]);
     assert!(result.is_err());
 }
 
@@ -2852,7 +3059,7 @@ fn overlay_front_advance() {
     let mut eval = eval_with_text("hello world");
     // Create overlay with front-advance = t
     let ov = builtin_make_overlay(
-        &mut eval,
+        &mut eval.edit.buffers,
         vec![
             Value::fixnum(3),
             Value::fixnum(8),
@@ -2864,7 +3071,7 @@ fn overlay_front_advance() {
     .unwrap();
 
     // Verify overlay was created.
-    let start = builtin_overlay_start(&mut eval, vec![ov]).unwrap();
+    let start = builtin_overlay_start(&mut eval.edit.buffers, vec![ov]).unwrap();
     assert!(start.is_fixnum());
 }
 
@@ -2873,7 +3080,7 @@ fn overlay_rear_advance() {
     crate::test_utils::init_test_tracing();
     let mut eval = eval_with_text("hello world");
     let ov = builtin_make_overlay(
-        &mut eval,
+        &mut eval.edit.buffers,
         vec![
             Value::fixnum(3),
             Value::fixnum(8),
@@ -2884,7 +3091,7 @@ fn overlay_rear_advance() {
     )
     .unwrap();
 
-    let end = builtin_overlay_end(&mut eval, vec![ov]).unwrap();
+    let end = builtin_overlay_end(&mut eval.edit.buffers, vec![ov]).unwrap();
     assert!(end.is_fixnum());
 }
 
@@ -2914,7 +3121,11 @@ fn overlays_at_empty_buffer() {
 fn delete_overlay_twice_is_ok() {
     crate::test_utils::init_test_tracing();
     let mut eval = eval_with_text("hello");
-    let ov = builtin_make_overlay(&mut eval, vec![Value::fixnum(1), Value::fixnum(3)]).unwrap();
+    let ov = builtin_make_overlay(
+        &mut eval.edit.buffers,
+        vec![Value::fixnum(1), Value::fixnum(3)],
+    )
+    .unwrap();
 
     builtin_delete_overlay(&mut eval, vec![ov]).unwrap();
     // Second delete should not crash.

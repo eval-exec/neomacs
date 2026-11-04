@@ -3618,7 +3618,9 @@ unsafe fn cbsym_read_contained(
             CBSYM_A_EOBP => navigation::builtin_eobp_0(&ctx.edit.buffers),
             CBSYM_A_FOLLOWING_CHAR => editfns::builtin_following_char_0(ctx),
             CBSYM_A_PRECEDING_CHAR => editfns::builtin_preceding_char(ctx, Vec::new()),
-            CBSYM_A_CHAR_AFTER => crate::emacs_core::buffer::builtin_char_after_1(ctx, Value::NIL),
+            CBSYM_A_CHAR_AFTER => {
+                crate::emacs_core::buffer::builtin_char_after_1(&mut ctx.edit.buffers, Value::NIL)
+            }
             _ => return STATUS_NEED_GENERIC,
         };
         match res {

@@ -749,7 +749,7 @@ fn buffer_xwidgets(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     if args[0].is_nil() {
         return Ok(Value::NIL);
     }
-    let buffer = builtin_get_buffer(eval, vec![args[0]])?;
+    let buffer = builtin_get_buffer(&mut eval.edit.buffers, vec![args[0]])?;
     if buffer.is_nil() {
         return Ok(Value::NIL);
     }

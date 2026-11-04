@@ -363,8 +363,11 @@ pub(crate) fn finish_make_indirect_buffer_hooks(
     Ok(Value::make_buffer(plan.id))
 }
 
-pub(crate) fn builtin_get_buffer(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
-    let buffers = &eval.edit.buffers;
+pub(crate) fn builtin_get_buffer(
+    edit_buffers: &mut crate::buffer::BufferManager,
+    args: Vec<Value>,
+) -> EvalResult {
+    let buffers = edit_buffers;
     expect_args("get-buffer", &args, 1)?;
     match args[0].kind() {
         ValueKind::Veclike(VecLikeType::Buffer) => Ok(args[0]),
@@ -433,10 +436,10 @@ pub(crate) fn builtin_find_buffer(eval: &mut super::eval::Context, args: Vec<Val
 }
 
 pub(crate) fn builtin_delete_all_overlays(
-    eval: &mut super::eval::Context,
+    edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
-    let buffers = &mut eval.edit.buffers;
+    let buffers = edit_buffers;
     expect_max_args("delete-all-overlays", &args, 1)?;
     let target = if args.is_empty() || args[0].is_nil() {
         buffers.current_buffer().map(|buf| buf.id)
@@ -455,8 +458,11 @@ pub(crate) fn builtin_delete_all_overlays(
     Ok(Value::NIL)
 }
 
-pub(crate) fn builtin_buffer_live_p(eval: &mut super::eval::Context, args: &[Value]) -> EvalResult {
-    let buffers = &eval.edit.buffers;
+pub(crate) fn builtin_buffer_live_p(
+    edit_buffers: &mut crate::buffer::BufferManager,
+    args: &[Value],
+) -> EvalResult {
+    let buffers = edit_buffers;
     expect_args("buffer-live-p", &args, 1)?;
     match args[0].kind() {
         ValueKind::Veclike(VecLikeType::Buffer) => {
@@ -602,14 +608,16 @@ pub(crate) fn builtin_current_buffer(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("current-buffer", &args, 0)?;
-    builtin_current_buffer_0(eval)
+    builtin_current_buffer_0(&mut eval.edit.buffers)
 }
 /// `current-buffer` as registered: fixed arity 0, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a0` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_current_buffer_0(eval: &mut super::eval::Context) -> EvalResult {
+pub(crate) fn builtin_current_buffer_0(
+    edit_buffers: &mut crate::buffer::BufferManager,
+) -> EvalResult {
     let args: [Value; 0] = [];
-    let buffers = &eval.edit.buffers;
+    let buffers = edit_buffers;
     expect_args("current-buffer", &args, 0)?;
     match buffers.current_buffer() {
         Some(buf) => Ok(Value::make_buffer(buf.id)),
@@ -617,8 +625,11 @@ pub(crate) fn builtin_current_buffer_0(eval: &mut super::eval::Context) -> EvalR
     }
 }
 
-pub(crate) fn builtin_buffer_name(eval: &mut super::eval::Context, args: &[Value]) -> EvalResult {
-    let buffers = &eval.edit.buffers;
+pub(crate) fn builtin_buffer_name(
+    edit_buffers: &mut crate::buffer::BufferManager,
+    args: &[Value],
+) -> EvalResult {
+    let buffers = edit_buffers;
     expect_max_args("buffer-name", &args, 1)?;
     let id = if args.is_empty() || args[0].is_nil() {
         match buffers.current_buffer() {
@@ -635,10 +646,10 @@ pub(crate) fn builtin_buffer_name(eval: &mut super::eval::Context, args: &[Value
 }
 
 pub(crate) fn builtin_buffer_file_name(
-    eval: &mut super::eval::Context,
+    edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
-    let buffers = &eval.edit.buffers;
+    let buffers = edit_buffers;
     expect_max_args("buffer-file-name", &args, 1)?;
     let id = if args.is_empty() || args[0].is_nil() {
         match buffers.current_buffer() {
@@ -655,10 +666,10 @@ pub(crate) fn builtin_buffer_file_name(
 }
 
 pub(crate) fn builtin_buffer_base_buffer(
-    eval: &mut super::eval::Context,
+    edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
-    let buffers = &eval.edit.buffers;
+    let buffers = edit_buffers;
     expect_max_args("buffer-base-buffer", &args, 1)?;
     let target = if args.is_empty() || args[0].is_nil() {
         match buffers.current_buffer() {
@@ -677,10 +688,10 @@ pub(crate) fn builtin_buffer_base_buffer(
 }
 
 pub(crate) fn builtin_buffer_last_name(
-    eval: &mut super::eval::Context,
+    edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
-    let buffers = &eval.edit.buffers;
+    let buffers = edit_buffers;
     expect_max_args("buffer-last-name", &args, 1)?;
     let target = if args.is_empty() || args[0].is_nil() {
         match buffers.current_buffer() {
@@ -830,19 +841,17 @@ pub(crate) fn builtin_buffer_string(
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) fn resolve_buffer_designator_allow_nil_current(
-    eval: &mut super::eval::Context,
+    edit_buffers: &mut crate::buffer::BufferManager,
     arg: &Value,
 ) -> Result<Option<BufferId>, Flow> {
     match arg.kind() {
-        ValueKind::Nil => eval
-            .edit
-            .buffers
+        ValueKind::Nil => edit_buffers
             .current_buffer()
             .map(|buf| Some(buf.id))
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")])),
         ValueKind::Veclike(VecLikeType::Buffer) => {
             let id = arg.as_buffer_id().unwrap();
-            if eval.edit.buffers.get(id).is_some() {
+            if edit_buffers.get(id).is_some() {
                 Ok(Some(id))
             } else {
                 Err(signal(
@@ -853,8 +862,7 @@ pub(crate) fn resolve_buffer_designator_allow_nil_current(
         }
         ValueKind::String => {
             let name = expect_buffer_name_string(arg)?;
-            eval.edit
-                .buffers
+            edit_buffers
                 .find_buffer_by_name(&name)
                 .map(Some)
                 .ok_or_else(|| {
@@ -1147,10 +1155,10 @@ fn compare_buffer_substring_strings(
 }
 
 pub(crate) fn builtin_buffer_line_statistics(
-    eval: &mut super::eval::Context,
+    edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
-    let buffers = &eval.edit.buffers;
+    let buffers = edit_buffers;
     expect_max_args("buffer-line-statistics", &args, 1)?;
     let buffer_id = if args.is_empty() {
         resolve_buffer_designator_allow_nil_current_in_manager(buffers, &Value::NIL)?
@@ -2346,22 +2354,18 @@ pub(crate) fn builtin_command_error_default_function(
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) fn builtin_point(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     expect_args("point", &args, 0)?;
-    builtin_point_0(eval)
+    builtin_point_0(&mut eval.edit.buffers)
 }
 
-pub(crate) fn builtin_point_0(eval: &mut super::eval::Context) -> EvalResult {
-    let buf = eval
-        .edit
-        .buffers
+pub(crate) fn builtin_point_0(edit_buffers: &mut crate::buffer::BufferManager) -> EvalResult {
+    let buf = edit_buffers
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     Ok(Value::from_fixnum(buf.point_position().into()))
 }
 
-pub(crate) fn builtin_point_min_0(eval: &mut super::eval::Context) -> EvalResult {
-    let buf = eval
-        .edit
-        .buffers
+pub(crate) fn builtin_point_min_0(edit_buffers: &mut crate::buffer::BufferManager) -> EvalResult {
+    let buf = edit_buffers
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     Ok(Value::from_fixnum(buf.point_min_position().into()))
@@ -2370,13 +2374,11 @@ pub(crate) fn builtin_point_min_0(eval: &mut super::eval::Context) -> EvalResult
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) fn builtin_point_max(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     expect_args("point-max", &args, 0)?;
-    builtin_point_max_0(eval)
+    builtin_point_max_0(&mut eval.edit.buffers)
 }
 
-pub(crate) fn builtin_point_max_0(eval: &mut super::eval::Context) -> EvalResult {
-    let buf = eval
-        .edit
-        .buffers
+pub(crate) fn builtin_point_max_0(edit_buffers: &mut crate::buffer::BufferManager) -> EvalResult {
+    let buf = edit_buffers
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     Ok(Value::from_fixnum(buf.point_max_position().into()))
@@ -3593,7 +3595,14 @@ pub(crate) fn builtin_subst_char_in_region(
     }
 
     let Some((range, changed_range)) = subst_char_in_region_scan(
-        eval, current_id, start, end, from_code, to_code, &to_bytes, &args,
+        &mut eval.edit.buffers,
+        current_id,
+        start,
+        end,
+        from_code,
+        to_code,
+        &to_bytes,
+        &args,
     )?
     else {
         return Ok(Value::NIL);
@@ -3623,7 +3632,14 @@ pub(crate) fn builtin_subst_char_in_region(
     // Lisp range in the current buffer and either performs the substitutions
     // found there or returns without an after-change signal.
     let Some((range, changed_range)) = subst_char_in_region_scan(
-        eval, current_id, start, end, from_code, to_code, &to_bytes, &args,
+        &mut eval.edit.buffers,
+        current_id,
+        start,
+        end,
+        from_code,
+        to_code,
+        &to_bytes,
+        &args,
     )?
     else {
         return Ok(Value::NIL);
@@ -3648,7 +3664,7 @@ pub(crate) fn builtin_subst_char_in_region(
 
 #[allow(clippy::too_many_arguments)] // keeps the scan's validated region and replacement state explicit
 fn subst_char_in_region_scan(
-    eval: &super::eval::Context,
+    edit_buffers: &mut crate::buffer::BufferManager,
     current_id: BufferId,
     start: i64,
     end: i64,
@@ -3657,7 +3673,7 @@ fn subst_char_in_region_scan(
     to_bytes: &[u8],
     args: &[Value],
 ) -> Result<Option<(TextEditRange, TextEditRange)>, Flow> {
-    let buf = eval.edit.buffers.get(current_id).ok_or_else(|| {
+    let buf = edit_buffers.get(current_id).ok_or_else(|| {
         signal(
             LispCondition::Error,
             vec![Value::string("No current buffer")],
@@ -3684,7 +3700,7 @@ fn subst_char_in_region_scan(
 }
 
 pub(crate) fn builtin_buffer_enable_undo(
-    eval: &mut super::eval::Context,
+    edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
     if args.len() > 1 {
@@ -3698,8 +3714,7 @@ pub(crate) fn builtin_buffer_enable_undo(
     }
 
     let id = if args.is_empty() || args[0].is_nil() {
-        eval.edit
-            .buffers
+        edit_buffers
             .current_buffer()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?
             .id
@@ -3707,22 +3722,19 @@ pub(crate) fn builtin_buffer_enable_undo(
         match args[0].kind() {
             ValueKind::Veclike(VecLikeType::Buffer) => {
                 let bid = args[0].as_buffer_id().unwrap();
-                if eval.edit.buffers.get(bid).is_none() {
+                if edit_buffers.get(bid).is_none() {
                     return Ok(Value::NIL);
                 }
                 bid
             }
             ValueKind::String => {
                 let name = expect_buffer_name_string(&args[0])?;
-                eval.edit
-                    .buffers
-                    .find_buffer_by_name(&name)
-                    .ok_or_else(|| {
-                        signal(
-                            "error",
-                            vec![Value::string(format!("No buffer named {name}"))],
-                        )
-                    })?
+                edit_buffers.find_buffer_by_name(&name).ok_or_else(|| {
+                    signal(
+                        "error",
+                        vec![Value::string(format!("No buffer named {name}"))],
+                    )
+                })?
             }
             _other => {
                 return Err(signal(
@@ -3732,8 +3744,7 @@ pub(crate) fn builtin_buffer_enable_undo(
             }
         }
     };
-    eval.edit
-        .buffers
+    edit_buffers
         .enable_buffer_undo(id)
         .ok_or_else(|| signal("error", vec![Value::string("Selecting deleted buffer")]))?;
     Ok(Value::NIL)
@@ -3745,19 +3756,20 @@ pub(crate) fn builtin_buffer_enable_undo(
 // three lines of `with-current-buffer' + `setq' over `get-buffer'.
 // DIVERGENCES.md 150.
 
-pub(crate) fn builtin_buffer_size(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_buffer_size(
+    edit_buffers: &mut crate::buffer::BufferManager,
+    args: Vec<Value>,
+) -> EvalResult {
     expect_max_args("buffer-size", &args, 1)?;
     if args.is_empty() || args[0].is_nil() {
-        let buf = eval
-            .edit
-            .buffers
+        let buf = edit_buffers
             .current_buffer()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
         return Ok(Value::fixnum(buf.total_char_len().get() as i64));
     }
 
     let id = expect_buffer_id(&args[0])?;
-    if let Some(buf) = eval.edit.buffers.get(id) {
+    if let Some(buf) = edit_buffers.get(id) {
         Ok(Value::fixnum(buf.total_char_len().get() as i64))
     } else {
         Ok(Value::fixnum(0))
@@ -3797,7 +3809,7 @@ pub(crate) fn builtin_narrow_to_region_2(
         args[0],
         args[1],
     )?;
-    let before = accessible_bounds(eval, current_id);
+    let before = accessible_bounds(&mut eval.edit.buffers, current_id);
     let _ = eval
         .edit
         .buffers
@@ -3816,7 +3828,7 @@ pub(crate) fn builtin_narrow_to_region_2(
     // unconditional mark leaves chrome permanently dirty and silently
     // disables every chrome skip. Measured: 440 marks over 200 keystrokes,
     // and a chrome skip rate of exactly zero.
-    if accessible_bounds(eval, current_id) != before {
+    if accessible_bounds(&mut eval.edit.buffers, current_id) != before {
         eval.mark_chrome_dirty_all();
     }
     Ok(Value::NIL)
@@ -3826,10 +3838,10 @@ pub(crate) fn builtin_narrow_to_region_2(
 /// test. A missing buffer reports an impossible range so a disappearing buffer
 /// never reads as "unchanged".
 fn accessible_bounds(
-    eval: &super::eval::Context,
+    edit_buffers: &mut crate::buffer::BufferManager,
     buffer: crate::buffer::BufferId,
 ) -> Option<(usize, usize)> {
-    eval.edit.buffers.get(buffer).map(|buf| {
+    edit_buffers.get(buffer).map(|buf| {
         let range = buf.accessible_emacs_byte_region().range();
         (range.start().get(), range.end().get())
     })
@@ -3851,13 +3863,13 @@ pub(crate) fn builtin_widen_0(eval: &mut super::eval::Context) -> EvalResult {
         .buffers
         .current_buffer_id()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    let before = accessible_bounds(eval, current_id);
+    let before = accessible_bounds(&mut eval.edit.buffers, current_id);
     let _ = eval.edit.buffers.widen_buffer(current_id);
     // The other half of GNU's clip_changed, and the same bounds-changed guard
     // (GNU: `if (BEGV != s || ZV != e) current_buffer->clip_changed = 1;`,
     // editfns.c:2990). This is the call that made the guard load-bearing —
     // font-lock widens constantly on an already-widened buffer.
-    if accessible_bounds(eval, current_id) != before {
+    if accessible_bounds(&mut eval.edit.buffers, current_id) != before {
         eval.mark_chrome_dirty_all();
     }
     Ok(Value::NIL)
@@ -3870,28 +3882,26 @@ pub(crate) fn builtin_buffer_modified_p(
 ) -> EvalResult {
     crate::emacs_core::error::expect_args_range("buffer-modified-p", &args, 0, 1)?;
     let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
-    builtin_buffer_modified_p_1(eval, arg(0))
+    builtin_buffer_modified_p_1(&mut eval.edit.buffers, arg(0))
 }
 /// `buffer-modified-p` as registered: fixed arity 1, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
 pub(crate) fn builtin_buffer_modified_p_1(
-    eval: &mut super::eval::Context,
+    edit_buffers: &mut crate::buffer::BufferManager,
     buffer: Value,
 ) -> EvalResult {
     let args: [Value; 1] = [buffer];
     expect_max_args("buffer-modified-p", &args, 1)?;
     if args.is_empty() || args[0].is_nil() {
-        let buf = eval
-            .edit
-            .buffers
+        let buf = edit_buffers
             .current_buffer()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
         return Ok(buf.modified_state_value());
     }
 
     let id = expect_buffer_id(&args[0])?;
-    if let Some(buf) = eval.edit.buffers.get(id) {
+    if let Some(buf) = edit_buffers.get(id) {
         Ok(buf.modified_state_value())
     } else {
         Ok(Value::NIL)
@@ -3979,13 +3989,13 @@ fn optional_buffer_tick_target_in_manager(
 }
 
 pub(crate) fn builtin_buffer_modified_tick(
-    eval: &mut super::eval::Context,
+    edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
     let target =
-        optional_buffer_tick_target_in_manager(&eval.edit.buffers, "buffer-modified-tick", &args)?;
+        optional_buffer_tick_target_in_manager(edit_buffers, "buffer-modified-tick", &args)?;
     if let Some(id) = target
-        && let Some(buf) = eval.edit.buffers.get(id)
+        && let Some(buf) = edit_buffers.get(id)
     {
         return Ok(Value::fixnum(buf.modified_tick()));
     }
@@ -3993,16 +4003,13 @@ pub(crate) fn builtin_buffer_modified_tick(
 }
 
 pub(crate) fn builtin_buffer_chars_modified_tick(
-    eval: &mut super::eval::Context,
+    edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
-    let target = optional_buffer_tick_target_in_manager(
-        &eval.edit.buffers,
-        "buffer-chars-modified-tick",
-        &args,
-    )?;
+    let target =
+        optional_buffer_tick_target_in_manager(edit_buffers, "buffer-chars-modified-tick", &args)?;
     if let Some(id) = target
-        && let Some(buf) = eval.edit.buffers.get(id)
+        && let Some(buf) = edit_buffers.get(id)
     {
         return Ok(Value::fixnum(buf.chars_modified_tick()));
     }
@@ -4010,54 +4017,48 @@ pub(crate) fn builtin_buffer_chars_modified_tick(
 }
 
 pub(crate) fn builtin_internal_set_buffer_modified_tick(
-    eval: &mut super::eval::Context,
+    edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args_range("internal--set-buffer-modified-tick", &args, 1, 2)?;
     let tick = expect_fixnum(&args[0])?;
     let target = if let Some(buffer) = args.get(1) {
         if buffer.is_nil() {
-            eval.edit.buffers.current_buffer_id()
+            edit_buffers.current_buffer_id()
         } else {
             Some(expect_buffer_id(buffer)?)
         }
     } else {
-        eval.edit.buffers.current_buffer_id()
+        edit_buffers.current_buffer_id()
     }
     .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
 
-    eval.edit
-        .buffers
+    edit_buffers
         .set_buffer_modified_tick(target, tick)
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     Ok(Value::NIL)
 }
 
 pub(crate) fn builtin_recent_auto_save_p(
-    eval: &mut super::eval::Context,
+    edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("recent-auto-save-p", &args, 0)?;
-    let buf = eval
-        .edit
-        .buffers
+    let buf = edit_buffers
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     Ok(Value::bool_val(buf.recent_auto_save_p()))
 }
 
 pub(crate) fn builtin_set_buffer_auto_saved(
-    eval: &mut super::eval::Context,
+    edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("set-buffer-auto-saved", &args, 0)?;
-    let current_id = eval
-        .edit
-        .buffers
+    let current_id = edit_buffers
         .current_buffer_id()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    eval.edit
-        .buffers
+    edit_buffers
         .set_buffer_auto_saved(current_id)
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     Ok(Value::NIL)
@@ -4271,15 +4272,18 @@ pub(crate) fn builtin_bufferp(args: Vec<Value>) -> EvalResult {
 pub(crate) fn builtin_char_after(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     crate::emacs_core::error::expect_args_range("char-after", &args, 0, 1)?;
     let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
-    builtin_char_after_1(eval, arg(0))
+    builtin_char_after_1(&mut eval.edit.buffers, arg(0))
 }
 /// `char-after` as registered: fixed arity 1, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_char_after_1(eval: &mut super::eval::Context, pos: Value) -> EvalResult {
+pub(crate) fn builtin_char_after_1(
+    edit_buffers: &mut crate::buffer::BufferManager,
+    pos: Value,
+) -> EvalResult {
     let args: [Value; 1] = [pos];
     expect_max_args("char-after", &args, 1)?;
-    let buf = eval.edit.buffers.current_buffer().ok_or_else(|| {
+    let buf = edit_buffers.current_buffer().ok_or_else(|| {
         signal(
             LispCondition::Error,
             vec![Value::string("No current buffer")],
@@ -4292,7 +4296,7 @@ pub(crate) fn builtin_char_after_1(eval: &mut super::eval::Context, pos: Value) 
     } else if pos.is_marker() {
         // GNU editfns.c:1052-1057/1085-1090 uses the marker's own byte
         // position even when its buffer differs from the current buffer.
-        let location = super::marker::marker_location_or_signal(&eval.edit.buffers, pos)?;
+        let location = super::marker::marker_location_or_signal(edit_buffers, pos)?;
         let byte_pos = location.byte_pos();
         if !accessible.contains(byte_pos) {
             return Ok(Value::NIL);
@@ -4304,7 +4308,7 @@ pub(crate) fn builtin_char_after_1(eval: &mut super::eval::Context, pos: Value) 
         };
         return Ok(code.map_or(Value::NIL, |code| Value::fixnum(i64::from(code))));
     } else {
-        let pos = expect_integer_or_marker_in_buffers(&eval.edit.buffers, &args[0])?;
+        let pos = expect_integer_or_marker_in_buffers(edit_buffers, &args[0])?;
         if pos <= 0 {
             return Ok(Value::NIL);
         }
@@ -4325,15 +4329,18 @@ pub(crate) fn builtin_char_after_1(eval: &mut super::eval::Context, pos: Value) 
 pub(crate) fn builtin_char_before(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     crate::emacs_core::error::expect_args_range("char-before", &args, 0, 1)?;
     let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
-    builtin_char_before_1(eval, arg(0))
+    builtin_char_before_1(&mut eval.edit.buffers, arg(0))
 }
 /// `char-before` as registered: fixed arity 1, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_char_before_1(eval: &mut super::eval::Context, pos: Value) -> EvalResult {
+pub(crate) fn builtin_char_before_1(
+    edit_buffers: &mut crate::buffer::BufferManager,
+    pos: Value,
+) -> EvalResult {
     let args: [Value; 1] = [pos];
     expect_max_args("char-before", &args, 1)?;
-    let buf = eval.edit.buffers.current_buffer().ok_or_else(|| {
+    let buf = edit_buffers.current_buffer().ok_or_else(|| {
         signal(
             LispCondition::Error,
             vec![Value::string("No current buffer")],
@@ -4348,13 +4355,12 @@ pub(crate) fn builtin_char_before_1(eval: &mut super::eval::Context, pos: Value)
     } else if pos.is_marker() {
         // GNU editfns.c:1052-1057/1085-1090 uses the marker's own byte
         // position even when its buffer differs from the current buffer.
-        let byte_pos =
-            super::marker::marker_location_or_signal(&eval.edit.buffers, pos)?.byte_pos();
+        let byte_pos = super::marker::marker_location_or_signal(edit_buffers, pos)?.byte_pos();
         accessible
             .contains_preceding_char_boundary(byte_pos)
             .then_some(byte_pos)
     } else {
-        let pos = expect_integer_or_marker_in_buffers(&eval.edit.buffers, &args[0])?;
+        let pos = expect_integer_or_marker_in_buffers(edit_buffers, &args[0])?;
         if pos <= 0 {
             return Ok(Value::NIL);
         }
@@ -4392,11 +4398,11 @@ pub(crate) fn builtin_byte_to_position(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("byte-to-position", &args, 1)?;
-    builtin_byte_to_position_1(eval, args[0])
+    builtin_byte_to_position_1(&mut eval.edit.buffers, args[0])
 }
 
 pub(crate) fn builtin_byte_to_position_1(
-    eval: &mut super::eval::Context,
+    edit_buffers: &mut crate::buffer::BufferManager,
     arg: Value,
 ) -> EvalResult {
     let byte_pos = expect_fixnum(&arg)?;
@@ -4404,9 +4410,7 @@ pub(crate) fn builtin_byte_to_position_1(
         return Ok(Value::NIL);
     }
 
-    let buf = eval
-        .edit
-        .buffers
+    let buf = edit_buffers
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
 
@@ -4440,15 +4444,16 @@ pub(crate) fn builtin_position_bytes(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("position-bytes", &args, 1)?;
-    builtin_position_bytes_1(eval, args[0])
+    builtin_position_bytes_1(&mut eval.edit.buffers, args[0])
 }
 
-pub(crate) fn builtin_position_bytes_1(eval: &mut super::eval::Context, arg: Value) -> EvalResult {
-    let pos = expect_integer_or_marker_in_buffers(&eval.edit.buffers, &arg)?;
+pub(crate) fn builtin_position_bytes_1(
+    edit_buffers: &mut crate::buffer::BufferManager,
+    arg: Value,
+) -> EvalResult {
+    let pos = expect_integer_or_marker_in_buffers(edit_buffers, &arg)?;
 
-    let buf = eval
-        .edit
-        .buffers
+    let buf = edit_buffers
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
 
@@ -4699,10 +4704,10 @@ use super::textprop::{
 
 /// (next-overlay-change POS)
 pub(crate) fn builtin_next_overlay_change(
-    eval: &mut super::eval::Context,
+    edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_next_overlay_change_in_buffers(&eval.edit.buffers, args)
+    builtin_next_overlay_change_in_buffers(edit_buffers, args)
 }
 
 pub(crate) fn builtin_next_overlay_change_in_buffers(
@@ -4729,10 +4734,10 @@ pub(crate) fn builtin_next_overlay_change_in_buffers(
 
 /// (previous-overlay-change POS)
 pub(crate) fn builtin_previous_overlay_change(
-    eval: &mut super::eval::Context,
+    edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_previous_overlay_change_in_buffers(&eval.edit.buffers, args)
+    builtin_previous_overlay_change_in_buffers(edit_buffers, args)
 }
 
 pub(crate) fn builtin_previous_overlay_change_in_buffers(
@@ -4759,10 +4764,10 @@ pub(crate) fn builtin_previous_overlay_change_in_buffers(
 
 /// (make-overlay BEG END &optional BUFFER FRONT-ADVANCE REAR-ADVANCE)
 pub(crate) fn builtin_make_overlay(
-    eval: &mut super::eval::Context,
+    edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_make_overlay_in_buffers(&mut eval.edit.buffers, args)
+    builtin_make_overlay_in_buffers(edit_buffers, args)
 }
 
 pub(crate) fn builtin_make_overlay_in_buffers(
@@ -4970,8 +4975,11 @@ pub(crate) fn builtin_overlays_at(eval: &mut super::eval::Context, args: Vec<Val
 }
 
 /// (overlays-in BEG END)
-pub(crate) fn builtin_overlays_in(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
-    builtin_overlays_in_in_buffers(&eval.edit.buffers, args)
+pub(crate) fn builtin_overlays_in(
+    edit_buffers: &mut crate::buffer::BufferManager,
+    args: Vec<Value>,
+) -> EvalResult {
+    builtin_overlays_in_in_buffers(edit_buffers, args)
 }
 
 pub(crate) fn builtin_overlays_in_in_buffers(
@@ -5014,10 +5022,10 @@ pub(crate) fn builtin_overlays_in_in_buffers(
 /// list and returns `(cons overlays Qnil)`. Even for an empty buffer GNU
 /// returns `(nil)` (i.e. `(cons nil nil)`), never bare `nil`.
 pub(crate) fn builtin_overlay_lists(
-    eval: &mut super::eval::Context,
+    edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_overlay_lists_in_buffers(&eval.edit.buffers, args)
+    builtin_overlay_lists_in_buffers(edit_buffers, args)
 }
 
 pub(crate) fn builtin_overlay_lists_in_buffers(
@@ -5040,11 +5048,11 @@ pub(crate) fn builtin_overlay_lists_in_buffers(
 /// no-op (overlay lookup is fast at any position with the `itree` store), but
 /// it still type-checks POS as a fixnum-or-marker and returns nil.
 pub(crate) fn builtin_overlay_recenter(
-    eval: &mut super::eval::Context,
+    edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("overlay-recenter", &args, 1)?;
-    let _ = expect_integer_or_marker_in_buffers(&eval.edit.buffers, &args[0])?;
+    let _ = expect_integer_or_marker_in_buffers(edit_buffers, &args[0])?;
     Ok(Value::NIL)
 }
 
@@ -5155,10 +5163,10 @@ pub(crate) fn builtin_move_overlay_in_buffers(
 
 /// (overlay-start OVERLAY)
 pub(crate) fn builtin_overlay_start(
-    eval: &mut super::eval::Context,
+    edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_overlay_start_in_buffers(&eval.edit.buffers, args)
+    builtin_overlay_start_in_buffers(edit_buffers, args)
 }
 
 pub(crate) fn builtin_overlay_start_in_buffers(
@@ -5181,8 +5189,11 @@ pub(crate) fn builtin_overlay_start_in_buffers(
 }
 
 /// (overlay-end OVERLAY)
-pub(crate) fn builtin_overlay_end(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
-    builtin_overlay_end_in_buffers(&eval.edit.buffers, args)
+pub(crate) fn builtin_overlay_end(
+    edit_buffers: &mut crate::buffer::BufferManager,
+    args: Vec<Value>,
+) -> EvalResult {
+    builtin_overlay_end_in_buffers(edit_buffers, args)
 }
 
 pub(crate) fn builtin_overlay_end_in_buffers(
@@ -5206,10 +5217,10 @@ pub(crate) fn builtin_overlay_end_in_buffers(
 
 /// (overlay-buffer OVERLAY)
 pub(crate) fn builtin_overlay_buffer(
-    eval: &mut super::eval::Context,
+    edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_overlay_buffer_in_buffers(&eval.edit.buffers, args)
+    builtin_overlay_buffer_in_buffers(edit_buffers, args)
 }
 
 pub(crate) fn builtin_overlay_buffer_in_buffers(
@@ -5228,10 +5239,10 @@ pub(crate) fn builtin_overlay_buffer_in_buffers(
 
 /// (overlay-properties OVERLAY)
 pub(crate) fn builtin_overlay_properties(
-    eval: &mut super::eval::Context,
+    edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_overlay_properties_in_buffers(&eval.edit.buffers, args)
+    builtin_overlay_properties_in_buffers(edit_buffers, args)
 }
 
 pub(crate) fn builtin_overlay_properties_in_buffers(

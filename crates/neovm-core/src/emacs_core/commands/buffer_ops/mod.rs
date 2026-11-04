@@ -304,7 +304,7 @@ pub(crate) fn builtin_replace_buffer_contents(
     // Delegating keeps the minimal (Myers-diff) non-destructive replacement,
     // so markers, point, properties and overlays in the accessible portion
     // outside the changed runs are preserved exactly as in GNU.
-    let source_id = resolve_buffer_designator_allow_nil_current(eval, &args[0])?;
+    let source_id = resolve_buffer_designator_allow_nil_current(&mut eval.edit.buffers, &args[0])?;
     let source_buffer = match source_id {
         Some(id) => Value::make_buffer(id),
         None => Value::NIL,

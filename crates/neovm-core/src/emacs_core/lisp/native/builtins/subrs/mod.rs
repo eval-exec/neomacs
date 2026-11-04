@@ -433,7 +433,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "get-buffer",
-        NativeFn::ContextVec(builtin_get_buffer),
+        NativeFn::ContextVec(|ctx, args| builtin_get_buffer(&mut ctx.edit.buffers, args)),
         SubrArity::new(1, Some(1)),
     )));
     crate::emacs_core::neo::terminal::register_subrs(ctx);
@@ -460,7 +460,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "buffer-live-p",
-        NativeFn::ContextSlice(builtin_buffer_live_p),
+        NativeFn::ContextSlice(|ctx, args| builtin_buffer_live_p(&mut ctx.edit.buffers, args)),
         SubrArity::new(1, Some(1)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -495,26 +495,26 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::fixed0(
         "current-buffer",
-        builtin_current_buffer_0
+        |ctx| builtin_current_buffer_0(&mut ctx.edit.buffers)
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "buffer-name",
-        NativeFn::ContextSlice(builtin_buffer_name),
+        NativeFn::ContextSlice(|ctx, args| builtin_buffer_name(&mut ctx.edit.buffers, args)),
         SubrArity::new(0, Some(1)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "buffer-file-name",
-        NativeFn::ContextVec(builtin_buffer_file_name),
+        NativeFn::ContextVec(|ctx, args| builtin_buffer_file_name(&mut ctx.edit.buffers, args)),
         SubrArity::new(0, Some(1)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "buffer-base-buffer",
-        NativeFn::ContextVec(builtin_buffer_base_buffer),
+        NativeFn::ContextVec(|ctx, args| builtin_buffer_base_buffer(&mut ctx.edit.buffers, args)),
         SubrArity::new(0, Some(1)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "buffer-last-name",
-        NativeFn::ContextVec(builtin_buffer_last_name),
+        NativeFn::ContextVec(|ctx, args| builtin_buffer_last_name(&mut ctx.edit.buffers, args)),
         SubrArity::new(0, Some(1)),
     )));
     ctx.register_subr(
@@ -536,7 +536,10 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "buffer-line-statistics",
-        NativeFn::ContextVec(builtin_buffer_line_statistics),
+        NativeFn::ContextVec(|ctx, args| builtin_buffer_line_statistics(
+            &mut ctx.edit.buffers,
+            args
+        )),
         SubrArity::new(0, Some(1)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -595,15 +598,15 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::fixed0(
         "point",
-        builtin_point_0
+        |ctx| builtin_point_0(&mut ctx.edit.buffers)
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::fixed0(
         "point-min",
-        builtin_point_min_0
+        |ctx| builtin_point_min_0(&mut ctx.edit.buffers)
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::fixed0(
         "point-max",
-        builtin_point_max_0
+        |ctx| builtin_point_max_0(&mut ctx.edit.buffers)
     )));
     ctx.register_subr(
         crate::emacs_core::subr::world_subr!(SubrSpec::fixed1(
@@ -739,7 +742,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "delete-all-overlays",
-        NativeFn::ContextVec(builtin_delete_all_overlays),
+        NativeFn::ContextVec(|ctx, args| builtin_delete_all_overlays(&mut ctx.edit.buffers, args)),
         SubrArity::new(0, Some(1)),
     )));
     ctx.register_subr(
@@ -754,14 +757,17 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ctx.register_subr(
         crate::emacs_core::subr::world_subr!(SubrSpec::new(
             "buffer-enable-undo",
-            NativeFn::ContextVec(builtin_buffer_enable_undo),
+            NativeFn::ContextVec(|ctx, args| builtin_buffer_enable_undo(
+                &mut ctx.edit.buffers,
+                args
+            )),
             SubrArity::new(0, Some(1)),
         ))
         .interactive(crate::emacs_core::interactive::BuiltinInteractiveSpec::String("")),
     );
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "buffer-size",
-        NativeFn::ContextVec(builtin_buffer_size),
+        NativeFn::ContextVec(|ctx, args| builtin_buffer_size(&mut ctx.edit.buffers, args)),
         SubrArity::new(0, Some(1)),
     )));
     ctx.register_subr(
@@ -794,8 +800,8 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     );
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::fixed1(
         "buffer-modified-p",
-        builtin_buffer_modified_p_1,
-        FixedMin1::Zero,
+        |ctx, arg| builtin_buffer_modified_p_1(&mut ctx.edit.buffers, arg),
+        FixedMin1::Zero
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "set-buffer-modified-p",
@@ -804,12 +810,15 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "buffer-modified-tick",
-        NativeFn::ContextVec(builtin_buffer_modified_tick),
+        NativeFn::ContextVec(|ctx, args| builtin_buffer_modified_tick(&mut ctx.edit.buffers, args)),
         SubrArity::new(0, Some(1)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "buffer-chars-modified-tick",
-        NativeFn::ContextVec(builtin_buffer_chars_modified_tick),
+        NativeFn::ContextVec(|ctx, args| builtin_buffer_chars_modified_tick(
+            &mut ctx.edit.buffers,
+            args
+        )),
         SubrArity::new(0, Some(1)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -829,23 +838,23 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::fixed1(
         "char-after",
-        builtin_char_after_1,
-        FixedMin1::Zero,
+        |ctx, arg| builtin_char_after_1(&mut ctx.edit.buffers, arg),
+        FixedMin1::Zero
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::fixed1(
         "char-before",
-        builtin_char_before_1,
-        FixedMin1::Zero,
+        |ctx, arg| builtin_char_before_1(&mut ctx.edit.buffers, arg),
+        FixedMin1::Zero
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::fixed1(
         "byte-to-position",
-        builtin_byte_to_position_1,
-        FixedMin1::One,
+        |ctx, arg| builtin_byte_to_position_1(&mut ctx.edit.buffers, arg),
+        FixedMin1::One
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::fixed1(
         "position-bytes",
-        builtin_position_bytes_1,
-        FixedMin1::One,
+        |ctx, arg| builtin_position_bytes_1(&mut ctx.edit.buffers, arg),
+        FixedMin1::One
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "get-byte",
@@ -1716,17 +1725,27 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "next-overlay-change",
-        NativeFn::ContextVec(crate::emacs_core::buffer::builtin_next_overlay_change),
+        NativeFn::ContextVec(
+            |ctx, args| crate::emacs_core::buffer::builtin_next_overlay_change(
+                &mut ctx.edit.buffers,
+                args
+            )
+        ),
         SubrArity::new(1, Some(1)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "previous-overlay-change",
-        NativeFn::ContextVec(crate::emacs_core::buffer::builtin_previous_overlay_change),
+        NativeFn::ContextVec(|ctx, args| {
+            crate::emacs_core::buffer::builtin_previous_overlay_change(&mut ctx.edit.buffers, args)
+        }),
         SubrArity::new(1, Some(1)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "make-overlay",
-        NativeFn::ContextVec(crate::emacs_core::buffer::builtin_make_overlay),
+        NativeFn::ContextVec(|ctx, args| crate::emacs_core::buffer::builtin_make_overlay(
+            &mut ctx.edit.buffers,
+            args
+        )),
         SubrArity::new(2, Some(5)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -1751,7 +1770,10 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "overlays-in",
-        NativeFn::ContextVec(crate::emacs_core::buffer::builtin_overlays_in),
+        NativeFn::ContextVec(|ctx, args| crate::emacs_core::buffer::builtin_overlays_in(
+            &mut ctx.edit.buffers,
+            args
+        )),
         SubrArity::new(2, Some(2)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -1761,22 +1783,40 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "overlay-start",
-        NativeFn::ContextVec(crate::emacs_core::buffer::builtin_overlay_start),
+        NativeFn::ContextVec(
+            |ctx, args| crate::emacs_core::buffer::builtin_overlay_start(
+                &mut ctx.edit.buffers,
+                args
+            )
+        ),
         SubrArity::new(1, Some(1)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "overlay-end",
-        NativeFn::ContextVec(crate::emacs_core::buffer::builtin_overlay_end),
+        NativeFn::ContextVec(|ctx, args| crate::emacs_core::buffer::builtin_overlay_end(
+            &mut ctx.edit.buffers,
+            args
+        )),
         SubrArity::new(1, Some(1)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "overlay-buffer",
-        NativeFn::ContextVec(crate::emacs_core::buffer::builtin_overlay_buffer),
+        NativeFn::ContextVec(
+            |ctx, args| crate::emacs_core::buffer::builtin_overlay_buffer(
+                &mut ctx.edit.buffers,
+                args
+            )
+        ),
         SubrArity::new(1, Some(1)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "overlay-properties",
-        NativeFn::ContextVec(crate::emacs_core::buffer::builtin_overlay_properties),
+        NativeFn::ContextVec(
+            |ctx, args| crate::emacs_core::buffer::builtin_overlay_properties(
+                &mut ctx.edit.buffers,
+                args
+            )
+        ),
         SubrArity::new(1, Some(1)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -4685,7 +4725,10 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "internal--set-buffer-modified-tick",
-        NativeFn::ContextVec(builtin_internal_set_buffer_modified_tick),
+        NativeFn::ContextVec(|ctx, args| builtin_internal_set_buffer_modified_tick(
+            &mut ctx.edit.buffers,
+            args
+        )),
         SubrArity::new(1, Some(2)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -4959,12 +5002,22 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "overlay-lists",
-        NativeFn::ContextVec(crate::emacs_core::buffer::builtin_overlay_lists),
+        NativeFn::ContextVec(
+            |ctx, args| crate::emacs_core::buffer::builtin_overlay_lists(
+                &mut ctx.edit.buffers,
+                args
+            )
+        ),
         SubrArity::new(0, Some(0)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "overlay-recenter",
-        NativeFn::ContextVec(crate::emacs_core::buffer::builtin_overlay_recenter),
+        NativeFn::ContextVec(
+            |ctx, args| crate::emacs_core::buffer::builtin_overlay_recenter(
+                &mut ctx.edit.buffers,
+                args
+            )
+        ),
         SubrArity::new(1, Some(1)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -5059,7 +5112,12 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "recent-auto-save-p",
-        NativeFn::ContextVec(crate::emacs_core::buffer::builtin_recent_auto_save_p),
+        NativeFn::ContextVec(
+            |ctx, args| crate::emacs_core::buffer::builtin_recent_auto_save_p(
+                &mut ctx.edit.buffers,
+                args
+            )
+        ),
         SubrArity::new(0, Some(0)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -5136,7 +5194,12 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "set-buffer-auto-saved",
-        NativeFn::ContextVec(crate::emacs_core::buffer::builtin_set_buffer_auto_saved),
+        NativeFn::ContextVec(
+            |ctx, args| crate::emacs_core::buffer::builtin_set_buffer_auto_saved(
+                &mut ctx.edit.buffers,
+                args
+            )
+        ),
         SubrArity::new(0, Some(0)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(

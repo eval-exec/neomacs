@@ -3165,7 +3165,7 @@ fn test_window_text_pixel_size_measures_overlay_before_string_at_point_max() {
     // Zero-length overlay at point-max with the candidate `before-string`,
     // mirroring `(make-overlay (point-max) (point-max) nil t t)`.
     let overlay = crate::emacs_core::buffer::builtin_make_overlay(
-        &mut eval,
+        &mut eval.edit.buffers,
         vec![
             Value::fixnum(point_max),
             Value::fixnum(point_max),
