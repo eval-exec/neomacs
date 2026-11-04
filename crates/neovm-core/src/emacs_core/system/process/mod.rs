@@ -82,7 +82,7 @@ pub(crate) use green_select::{GreenSelectHandle, MainNativePreparation};
 mod executable;
 pub(super) use executable::{ExecutableLookupMode, ExecutableSearch};
 
-mod pty_output;
+pub(crate) mod pty_output;
 use pty_output::PtyOutputReader;
 
 /// GNU `status_notify`'s "retire, then run the sentinel" ordering, as a type.
@@ -160,7 +160,7 @@ enum ProcessIoTeardown {
 /// discard still-readable output. Naming the three states preserves GNU's
 /// half-connection semantics independently of resource ownership.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum ProcessInputDisposition {
+pub(crate) enum ProcessInputDisposition {
     #[default]
     Connected,
     Discard,

@@ -3,6 +3,8 @@
 //! Moved out of `mod.rs` unchanged; a child module so it keeps the
 //! parent's view of its private items (`use super::*`).
 
+pub use crate::emacs_core::eval::data::process_state::*;
+
 use super::*;
 use crate::host_effect::wake::{
     ControlDestination, ControlNudge, ControlNudgeOutcome, NotificationLatch,
@@ -18,18 +20,6 @@ pub(super) const READ_OUTPUT_DELAY_INCREMENT_MS: u64 = 10;
 pub(super) const READ_OUTPUT_DELAY_MAX_MS: u64 = READ_OUTPUT_DELAY_INCREMENT_MS * 5;
 pub(super) const READ_OUTPUT_DELAY_MAX_MAX_MS: u64 = READ_OUTPUT_DELAY_INCREMENT_MS * 7;
 
-/// Whether a live process participates in the exit confirmation query.
-///
-/// GNU stores this as the inverse `kill_without_query` bit.  Naming the two
-/// policies directly keeps that inversion out of process creation and, more
-/// importantly, makes the accepted-client default explicit: `make_process`
-/// creates a querying client even when its listening server is `:noquery t`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ExitQueryPolicy {
-    Query,
-    NoQuery,
-}
-
 impl ExitQueryPolicy {
     pub(super) const GNU_MAKE_PROCESS: Self = Self::Query;
 
@@ -44,12 +34,6 @@ impl ExitQueryPolicy {
     pub(super) fn queries_on_exit(self) -> bool {
         self == Self::Query
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct ProcessReadConfig {
-    pub(super) readmax: usize,
-    pub(super) adaptive_read_buffering: u8,
 }
 
 impl Default for ProcessReadConfig {
@@ -363,16 +347,6 @@ impl ProcessWaitEvents {
     }
 }
 
-/// Process family used by compatibility helpers.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, EnumString, IntoStaticStr)]
-#[strum(serialize_all = "kebab-case")]
-pub enum ProcessKind {
-    Real,
-    Network,
-    Pipe,
-    Serial,
-}
-
 impl ProcessKind {
     pub(super) fn name(self) -> &'static str {
         self.into()
@@ -475,51 +449,6 @@ impl ProcessTtyStream {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, EnumString, IntoStaticStr)]
-#[strum(prefix = ":", serialize_all = "kebab-case")]
-pub(super) enum ProcessKeyword {
-    Name,
-    Type,
-    Buffer,
-    Command,
-    Coding,
-    Noquery,
-    Stop,
-    ConnectionType,
-    Filter,
-    Sentinel,
-    Stderr,
-    FileHandler,
-    Host,
-    Service,
-    Family,
-    Local,
-    Remote,
-    Server,
-    Nowait,
-    Log,
-    TlsParameters,
-    UseExternalSocket,
-    Plist,
-    Bindtodevice,
-    Broadcast,
-    Dontroute,
-    Keepalive,
-    Linger,
-    Oobinline,
-    Priority,
-    Reuseaddr,
-    Nodelay,
-    Port,
-    Speed,
-    Process,
-    Bytesize,
-    Stopbits,
-    Parity,
-    Flowcontrol,
-    Summary,
-}
-
 impl ProcessKeyword {
     pub(super) fn keyword(self) -> &'static str {
         self.into()
@@ -548,76 +477,6 @@ pub(super) fn process_keyword_already_seen(
         seen.push(keyword);
         false
     }
-}
-
-#[derive(Default, PartialEq, Eq)]
-enum TlsPolling {
-    #[default]
-    Enabled,
-    Suspended,
-}
-
-/// Operating-system resources owned by a live process connection.
-///
-/// GNU keeps Lisp process identity/status alive after `remove_process`, but
-/// `deactivate_process` closes every descriptor immediately.  Keeping all
-/// native handles in one Rust owner gives Neomacs the same lifetime split:
-/// `Process` is durable Lisp-visible state, while replacing this bundle with
-/// `Default::default()` drops every live handle as one operation.
-#[derive(Default)]
-pub(super) struct LiveProcessIo {
-    /// Pollable child-status wakeup source, where the platform exposes one.
-    pub(super) child_status_source: Option<ChildStatusSource>,
-    /// The OS child this process owns, and GNU's `p->alive` for it.
-    ///
-    /// One slot for both spawn shapes -- the `std::process::Child` a pipe (or
-    /// a `pre_exec` pty) leaves behind and the `portable_pty` handle -- because
-    /// they are the same obligation: each owns a `waitpid`, and GNU allows
-    /// exactly one owner (src/process.c:1080-1088).  See `process/reap.rs`.
-    pub(super) child: ChildOwnership,
-    /// OS-level output pipe for non-blocking reads (pipe mode).  With no
-    /// explicit `:stderr`, this is one shared pipe carrying both stdout and
-    /// stderr in the child's write order, as in GNU Emacs.
-    pub(super) child_stdout: Option<ChildOutputReader>,
-    /// Writable endpoint owned by a `make-pipe-process` connection.
-    pub(super) module_pipe_writer: Option<os_pipe::PipeWriter>,
-    /// Real process that received this pipe's writer as its `:stderr`.
-    ///
-    /// GNU obtains this ordering relation from process-alist insertion order.
-    /// Keeping the actual transfer owner here avoids confusing it with later
-    /// processes that merely retain the same Lisp `:stderr` reference after
-    /// the one writable endpoint has already been consumed.
-    pub(super) stderr_pipe_owner: Option<ProcessId>,
-    /// PTY master handle for resize and I/O (PTY mode).
-    pub(super) pty_master: Option<Box<dyn portable_pty::MasterPty + Send>>,
-    /// PTY reader for non-blocking reads from the master side.
-    pub(super) pty_reader: Option<PtyOutputReader>,
-    /// PTY writer for sending input to the master side.
-    pub(super) pty_writer: Option<Box<dyn std::io::Write + Send>>,
-    pub(super) network_socket: Option<NetworkSocket>,
-    /// Filesystem identity captured when binding a Unix listener. Exit cleanup
-    /// must not unlink a different endpoint installed by an exit hook.
-    #[cfg(unix)]
-    pub(super) unix_listener_path: Option<(PathBuf, u64, u64)>,
-    pub(super) pending_network_connect: Option<PendingNetworkConnect>,
-    /// TLS-wrapped stream for encrypted network connections.
-    pub(super) tls_stream: Option<TlsStream>,
-    tls_polling: TlsPolling,
-    /// The open device behind a serial process.  GNU keeps one descriptor for
-    /// both directions (`p->infd = fd; p->outfd = fd`, src/process.c:3216-3217),
-    /// so this single slot is the read source AND the write source.
-    ///
-    /// It is `Option` only because `LiveProcessIo` is one struct for every
-    /// process kind and `deactivate_process_io` empties it; a serial process
-    /// cannot be BORN without one -- see [`ProcessManager::create_serial_process`].
-    pub(super) serial_port: Option<sys::SerialPort>,
-}
-
-pub(super) enum ChildOutputReader {
-    Stdout(std::fs::File),
-    Shared(os_pipe::PipeReader),
-    #[cfg(all(test, unix))]
-    Injected(super::pipe_exit_tests::PipeReader),
 }
 
 impl std::io::Read for ChildOutputReader {
@@ -771,117 +630,6 @@ impl Drop for LiveProcessIo {
     }
 }
 
-/// A tracked process record.
-pub struct Process {
-    pub id: ProcessId,
-    pub name: Value,
-    pub command: Value,
-    pub executable: Option<LispString>,
-    pub kind: ProcessKind,
-    pub proc_type: Value,
-    pub status: Value,
-    /// A child-status transition has been recorded, but GNU-style status
-    /// notification (sentinel/default buffer message and optional reaping)
-    /// still needs to run.
-    pub status_notify_pending: bool,
-    /// GNU's `p->tick` / `p->update_tick` (src/process.h:144-147), which is
-    /// `status_notify`'s membership test (:7892) and NOT the same bit as
-    /// `status_notify_pending` (GNU's `raw_status_new`).
-    pub(crate) status_ticks: StatusChangeTicks,
-    /// Kernel child-status transition delivered by the wait backend but not
-    /// yet published to the process sentinel.  This includes stop/continue as
-    /// well as exit/signal, mirroring GNU's `raw_status_new`.
-    pub pending_status: Value,
-    pub buffer: Value,
-    pub childp: Value,
-    /// Queued input entries `(STRING . (OFFSET . LENGTH))`, matching GNU's `write_queue`.
-    pub write_queue: Value,
-    /// Maximum bytes read by one `read_process_output` pass.
-    pub readmax: usize,
-    /// GNU's tri-state adaptive read buffering flag: 0=nil, 1=t, 2=other non-nil.
-    pub adaptive_read_buffering: u8,
-    /// Current adaptive read delay.
-    pub read_output_delay: Duration,
-    /// Whether the next non-targeted service pass should skip this process once.
-    pub read_output_skip: bool,
-    /// Whether this process participates in the exit confirmation query.
-    pub(crate) exit_query_policy: ExitQueryPolicy,
-    /// Process filter callback (or default marker symbol).
-    pub filter: Value,
-    /// Process sentinel callback (or default marker symbol).
-    pub sentinel: Value,
-    /// Server process log callback.
-    pub log: Value,
-    /// Process plist state.
-    pub plist: Value,
-    /// Pipe process attached to standard error.
-    pub stderrproc: Value,
-    /// Current decoding coding-system.
-    pub coding_decode: Value,
-    /// GNU's per-process `struct coding_system`, reduced to the fields that
-    /// outlive a single read: the decoder's carryover and its
-    /// `CODING_MODE_LAST_BLOCK` latch.  See [`ProcessCodingState`].
-    pub coding_state: ProcessCodingState,
-    /// Current encoding coding-system.
-    pub coding_encode: Value,
-    /// The coding and encoder continuation currently installed on the output fd.
-    pub(crate) encoding_state: ProcessEncodingState,
-    /// True once Lisp explicitly changes this process's coding system.
-    pub coding_explicitly_set: bool,
-    /// True after explicit process coding has deferred one terminal status
-    /// notification so Lisp can observe decoded output before the sentinel.
-    pub explicit_coding_status_deferred_once: bool,
-    /// Inherit-coding-system flag.
-    pub inherit_coding_system_flag: bool,
-    /// Attached thread object.
-    pub thread: Value,
-    /// Last process-window-size columns value.
-    pub window_cols: Option<i64>,
-    /// Last process-window-size rows value.
-    pub window_rows: Option<i64>,
-    /// Terminal name reported by `process-tty-name`, when this process uses a tty.
-    pub tty_name: Value,
-    /// Whether stdin is tty-backed for this process.
-    pub tty_stdin: bool,
-    /// Whether stdout is tty-backed for this process.
-    pub tty_stdout: bool,
-    /// Whether stderr is tty-backed for this process.
-    pub tty_stderr: bool,
-    /// The child's real OS process id, captured at spawn time.  GNU's
-    /// `Fprocess_id` returns this pid (`XPROCESS (process)->pid`); it is `None`
-    /// for network/serial/pipe connections that have no OS child, and stays
-    /// independent of the internal `ProcessId` used to key the manager.
-    pub os_pid: Option<u32>,
-    /// GNU's three write-side states, kept separate from bidirectional native
-    /// resource ownership. See [`ProcessInputDisposition`].
-    pub(super) input_disposition: ProcessInputDisposition,
-    /// True after Lisp explicitly called `process-send-eof' on this process.
-    /// GNU can publish the ensuing pipe status in the same wait that reads
-    /// output from that explicit EOF, while naturally exiting pipe children can
-    /// remain `run' until a later wait.  PTY subprocesses have their own
-    /// same-wait status rule.
-    pub eof_sent_to_process: bool,
-    /// Native resources exist only while this process has active I/O.
-    pub(super) live_io: LiveProcessIo,
-    /// Current peer address for datagram network processes, as Lisp.
-    pub datagram_address: Value,
-    /// Current peer address for datagram network processes, as a Rust socket address.
-    pub datagram_socket_addr: Option<SocketAddr>,
-    /// Current peer address for Unix datagram network processes.
-    #[cfg(unix)]
-    pub datagram_unix_path: Option<PathBuf>,
-    /// GNU-compatible GnuTLS initialization stage for this process.
-    pub(crate) gnutls_initstage: GnutlsInitStage,
-    /// Deferred parameters set by `gnutls-asynchronous-parameters`.
-    pub(crate) gnutls_boot_parameters: Value,
-    /// End-of-output marker, matching GNU's `p->mark`.
-    pub mark: Value,
-    /// Working directory for the subprocess, derived from
-    /// `default-directory` at the time the process was created.
-    /// If `None`, the child inherits the Rust process's cwd.
-    pub default_directory: Option<PathBuf>,
-}
-
 impl std::fmt::Debug for Process {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Process")
@@ -917,38 +665,6 @@ impl std::fmt::Debug for Process {
             )
             .finish_non_exhaustive()
     }
-}
-
-/// Manages the set of live processes.
-///
-/// Uses `polling::Poller` for efficient I/O multiplexing (epoll on Linux,
-/// kqueue on macOS, wepoll on Windows) instead of sleep-based polling.
-pub struct ProcessManager {
-    pub(super) processes: HashMap<ProcessId, Process>,
-    pub(super) deleted_processes: HashMap<ProcessId, Process>,
-    // WorldSlot reserves ProcessManager's original size in Context. Keep the
-    // new read cursor behind the word formerly occupied by next_id so adding
-    // scheduling state does not shift Context's pinned offsets/JIT ABI.
-    ids: Box<ProcessIdState>,
-    /// GNU's file-scope `process_tick` (src/process.c:232-233), *"Number of
-    /// events of change of status of a process"*.  GNU's `update_tick`
-    /// counterpart (:234-235) has no field here on purpose: it is only ever
-    /// read at two lines (:5524, :5845), both of them a performance
-    /// short-circuit deciding whether to bother calling `status_notify`, and
-    /// this port's walk is unconditional.  The invariant lives in the
-    /// per-process [`StatusChangeTicks`].
-    pub(super) process_tick: u64,
-    pub(super) default_read_config: ProcessReadConfig,
-    /// Environment variable overrides (for `setenv`/`getenv`).
-    pub(super) env_overrides: HashMap<LispString, Option<LispString>>,
-    pub(super) wait_backend: ProcessWaitBackend,
-}
-
-/// Process allocation and round-robin discovery share one manager lifetime.
-struct ProcessIdState {
-    next_id: ProcessId,
-    /// Resume live reads after this source, like GNU's last_read_channel.
-    last_read_process: ProcessId,
 }
 
 /// Transactional ownership of a `make-pipe-process` writer while a child is
@@ -1017,19 +733,6 @@ impl Drop for StderrPipeWriterTransfer<'_> {
             stderr_proc.live_io.module_pipe_writer = Some(writer);
         }
     }
-}
-
-/// Opaque, thread-safe handle a cross-thread producer uses to wake the blocked
-/// evaluator after publishing work, via cross-platform `Poller::notify()`.
-///
-/// This is the platform-agnostic replacement for the Unix-only wakeup pipe: it
-/// works identically on Linux/macOS/Windows (the `polling` crate maps `notify`
-/// onto eventfd/pipe/IOCP as appropriate) and is one-shot + remembered if no
-/// waiter is currently blocked, so `send`-then-`notify` never loses a wakeup.
-#[derive(Clone)]
-pub struct WaitNotifier {
-    pub(super) poller: Arc<polling::Poller>,
-    pub(super) notification_pending: Arc<NotificationLatch>,
 }
 
 impl WaitNotifier {
@@ -1157,28 +860,6 @@ static_assertions::assert_not_impl_any!(NativeConnectObservationSlot: Clone, Cop
 #[cfg(all(test, target_arch = "x86_64", target_os = "linux"))]
 static_assertions::const_assert_eq!(std::mem::size_of::<NativeConnectObservationSlot>(), 40);
 
-pub(super) struct ProcessWaitBackend {
-    /// A per-backend, one-shot scheduling gate for input-wakeup regressions.
-    /// Installation and consumption are synchronized; callbacks own no Lisp state.
-    #[cfg(test)]
-    before_next_wait: std::sync::Mutex<Option<Box<dyn FnOnce(BackendWaitEntry) + Send>>>,
-    #[cfg(test)]
-    native_connect_observer: NativeConnectObservationSlot,
-    #[cfg(unix)]
-    pub(super) signal_fd: Option<std::os::fd::RawFd>,
-    /// I/O multiplexer for process descriptors and cross-thread notifications.
-    ///
-    /// Shared (`Arc`) so any cross-thread producer can wake a blocked
-    /// `poller.wait()` via the cross-platform `Poller::notify()` — the basis for
-    /// the unified single-poll wait loop (no per-OS wakeup pipe needed).
-    pub(super) poller: Option<Arc<polling::Poller>>,
-    /// Semantic cause paired with the poller's eventless notify wakeup.
-    ///
-    /// A bool is sufficient because notifications are coalescing readiness,
-    /// not a count: one wake tells the evaluator to service published work.
-    pub(super) notification_pending: Arc<NotificationLatch>,
-}
-
 // Frozen x86-64 Linux baseline: replacing only the Arc pointee must not
 // enlarge the process manager reserved inside Context/World storage.
 #[cfg(all(target_arch = "x86_64", target_os = "linux", not(test)))]
@@ -1189,22 +870,6 @@ static_assertions::const_assert_eq!(std::mem::size_of::<ProcessManager>(), 200);
 static_assertions::const_assert_eq!(std::mem::size_of::<ProcessWaitBackend>(), 88);
 #[cfg(all(target_arch = "x86_64", target_os = "linux", test))]
 static_assertions::const_assert_eq!(std::mem::size_of::<ProcessManager>(), 264);
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ProcessWaitBackendInterest {
-    ProcessesOnly,
-    NotificationsOnly,
-    NotificationsAndProcesses,
-}
-
-/// A native pre-Poller observation, after pending signal/notification checks.
-/// This reports entry to the wait boundary, not proof of a kernel-blocked task.
-#[cfg(test)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct BackendWaitEntry {
-    requested_timeout: Duration,
-    interest: ProcessWaitBackendInterest,
-}
 
 #[cfg(test)]
 static_assertions::assert_impl_all!(BackendWaitEntry: Send, Sync, Copy, std::fmt::Debug);
@@ -2317,33 +1982,6 @@ impl ProcessOutputDestination {
     }
 }
 
-/// GNU `coding->mode & CODING_MODE_LAST_BLOCK` for a process's decoder.
-///
-/// A latch and not a boolean argument, because `read_process_output` READS and
-/// RAISES it in the same three lines and behaves differently on each side of
-/// the transition (src/process.c:6315-6321):
-///
-/// ```c
-///   if (nbytes <= 0)
-///     {
-///       if (nbytes < 0 || coding->mode & CODING_MODE_LAST_BLOCK)
-///         { SAFE_FREE_UNBIND_TO (count, Qnil); return nbytes; }
-///       coding->mode |= CODING_MODE_LAST_BLOCK;
-///     }
-/// ```
-///
-/// It is never lowered, and it lives on the process rather than on the read
-/// because GNU's `coding` here IS the process's own `struct coding_system`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(super) enum LastBlock {
-    /// No read has returned zero bytes yet.
-    #[default]
-    NotReached,
-    /// A read returned zero bytes and raised the flag.  Every later zero-byte
-    /// read returns immediately.
-    Reached,
-}
-
 /// What a zero-byte read found the latch in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum LastBlockArrival {
@@ -2351,32 +1989,6 @@ pub(super) enum LastBlockArrival {
     JustRaised,
     /// The flag was already up: `return nbytes` with nothing decoded.
     AlreadyRaised,
-}
-
-/// GNU keeps ONE `struct coding_system` per process for the process's whole
-/// life -- `proc_decode_coding_system[channel]`, set up by
-/// `setup_process_coding_systems` (src/process.c:8395-8407) and read back by
-/// every `read_process_output` (:6238) -- and some of its fields are facts
-/// about the PROCESS rather than about a single read:
-///
-/// * `coding->carryover` / `carryover_bytes`, the trailing bytes the decoder
-///   could not consume.  Written AFTER the decode (:6448-6457) and prepended
-///   to the next read (:6252-6254).
-/// * `coding->mode & CODING_MODE_LAST_BLOCK`, raised exactly once by the first
-///   read that returns nothing (:6313-6321) and never lowered.
-///
-/// This port had the first as a bare `Vec<u8>` on the process and the second
-/// nowhere at all: every call site worked out a `flush` boolean for itself, and
-/// "flush" happened to mean "there is carryover left" -- which is why the EOF
-/// read of a process with no carryover decoded nothing where GNU decodes zero
-/// bytes and runs the coding system's `:post-read-conversion` for it.  One
-/// struct is what GNU has, and it is what makes the two impossible to update
-/// independently.
-#[derive(Clone, Debug, Default)]
-pub struct ProcessCodingState {
-    pub(super) carryover: Vec<u8>,
-    pub(super) last_block: LastBlock,
-    pub(super) decoder: crate::encoding::CodingDecoderState,
 }
 
 impl ProcessCodingState {
@@ -2436,31 +2048,6 @@ impl ProcessCodingState {
     pub(super) fn reset(&mut self) {
         *self = Self::default();
     }
-}
-
-/// Whether GNU's installed output descriptor invokes an encoding engine.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ProcessEncodingEligibility {
-    Required,
-    Bypass,
-}
-
-/// A descriptor groups its coding identity, setup flags, and continuation.
-/// Fields stay private so changing identity cannot retain another codec's state.
-#[derive(Clone, Debug)]
-pub(crate) struct ProcessEncodingDescriptor {
-    coding: crate::encoding::RuntimeCodingSystem,
-    raw_coding: crate::encoding::RuntimeCodingSystem,
-    eligibility: ProcessEncodingEligibility,
-    encoder: crate::encoding::CodingEncoderState,
-}
-
-#[derive(Clone, Debug, Default)]
-pub(crate) enum ProcessEncodingState {
-    /// Manager-only records have no Context with which to perform GNU setup.
-    #[default]
-    Uninitialized,
-    Active(ProcessEncodingDescriptor),
 }
 
 impl ProcessEncodingState {
@@ -4609,47 +4196,6 @@ pub(super) fn process_contact_plist_member(contact: Value, key: Value) -> Value 
 
 pub(super) fn process_contact_server_p(proc: &Process) -> bool {
     process_contact_plist_get(proc.childp, ProcessKeyword::Server.value()).is_truthy()
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum NetworkSocketOption {
-    #[cfg(any(target_os = "linux", target_os = "android"))]
-    Bindtodevice,
-    Broadcast,
-    Dontroute,
-    Keepalive,
-    Linger,
-    Oobinline,
-    #[cfg(any(target_os = "linux", target_os = "android"))]
-    Priority,
-    Reuseaddr,
-    Nodelay,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(super) struct NetworkSocketOptionSpec {
-    pub(super) keyword: ProcessKeyword,
-    pub(super) option: NetworkSocketOption,
-    pub(super) value: Value,
-}
-
-#[derive(Debug)]
-pub(super) enum PendingNetworkConnect {
-    Tcp {
-        remaining_addrs: Vec<SocketAddr>,
-        socket_options: Vec<NetworkSocketOptionSpec>,
-    },
-    Dns(PendingDnsRequest),
-    #[cfg(unix)]
-    Local,
-}
-
-#[derive(Debug)]
-pub(super) struct PendingDnsRequest {
-    pub(super) host: String,
-    pub(super) receiver: mpsc::Receiver<Result<Vec<SocketAddr>, String>>,
-    pub(super) ready: Arc<AtomicBool>,
-    pub(super) socket_options: Vec<NetworkSocketOptionSpec>,
 }
 
 impl PendingDnsRequest {

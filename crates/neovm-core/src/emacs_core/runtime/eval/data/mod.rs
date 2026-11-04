@@ -10,6 +10,7 @@ pub mod face;
 pub mod layout_input;
 pub mod minibuffer;
 pub mod process_spawn;
+pub mod process_state;
 pub mod process_tls;
 pub mod redisplay;
 pub mod window_edge_drag;
