@@ -1497,8 +1497,7 @@ impl Context {
         super::super::defvar_bool::apply_post_main_batch_defaults(obarray);
         super::super::alloc::register_bootstrap_vars(obarray);
         super::super::load::register_bootstrap_vars(obarray);
-        super::super::fileio::register_bootstrap_vars(obarray);
-        super::super::process::register_bootstrap_vars(obarray);
+        crate::emacs_core::eval::lifecycle::register_core_bootstrap_vars(obarray);
         super::super::undo::register_bootstrap_vars(obarray);
         super::super::category::register_bootstrap_vars(obarray);
         super::super::window_cmds::register_bootstrap_vars(obarray);
@@ -1516,7 +1515,6 @@ impl Context {
         super::super::buffer_vars::register_bootstrap_vars(obarray);
         super::super::image::register_bootstrap_vars(obarray);
         super::super::fontset::register_bootstrap_vars(obarray);
-        super::super::dbusbind::register_bootstrap_vars(obarray);
 
         // ---- end C-level bootstrap variables ----
 

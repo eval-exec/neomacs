@@ -1192,7 +1192,7 @@ fn locate_file_expand_name(
     if let Some(dir) = default_dir {
         args.push(Value::heap_string(dir.clone()));
     }
-    let expanded = crate::emacs_core::fileio::builtin_expand_file_name(eval, args)?;
+    let expanded = crate::emacs_core::eval::lifecycle::expand_file_name_entry(eval, args)?;
     Ok(expanded
         .as_lisp_string()
         .expect("expand-file-name should return a string")

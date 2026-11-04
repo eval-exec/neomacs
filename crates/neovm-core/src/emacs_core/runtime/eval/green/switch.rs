@@ -267,7 +267,7 @@ fn switch_refusal(ctx: &Context) -> Option<&'static str> {
         Some("Cannot switch threads while garbage collection is inhibited")
     } else if ctx.gc_driver_active {
         Some("Cannot switch threads while a collection driver is active")
-    } else if super::super::super::dynamic_module::module_call_active() {
+    } else if super::super::lifecycle::dynamic_module_call_active() {
         Some("Cannot switch threads inside a module call")
     } else {
         None

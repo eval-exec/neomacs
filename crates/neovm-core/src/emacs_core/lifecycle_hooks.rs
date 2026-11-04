@@ -7,7 +7,8 @@
 //! `Context::new_inner` / `Context::from_dump`.
 
 use crate::emacs_core::eval::lifecycle::{
-    BootHooks, DynamicModuleHooks, LifecycleHooks, WorldStateHooks,
+    BootHooks, DbusbindHooks, DynamicModuleHooks, FileIoHooks, LifecycleHooks, TerminalHooks,
+    WorldStateHooks,
 };
 use neovm_value::display_vocab::FrameId;
 
@@ -32,20 +33,35 @@ fn seed_batch_startup_frame(ctx: &mut crate::emacs_core::eval::Context) -> Frame
     )
 }
 
+/// Register the bootstrap variables of the core modules that stay above eval.
+fn register_core_bootstrap_vars(obarray: &mut crate::emacs_core::symbol::Obarray) {
+    crate::emacs_core::fileio::register_bootstrap_vars(obarray);
+    crate::emacs_core::process::register_bootstrap_vars(obarray);
+    crate::emacs_core::dbusbind::register_bootstrap_vars(obarray);
+}
+
 static CANONICAL_LIFECYCLE_HOOKS: LifecycleHooks = LifecycleHooks::new(
     DynamicModuleHooks::new(
         crate::emacs_core::dynamic_module::reset_carrier_tls,
         DYNAMIC_MODULE_FINGERPRINT,
         crate::emacs_core::dynamic_module::panic_message,
         crate::emacs_core::dynamic_module::load_module,
+        crate::emacs_core::dynamic_module::apply_module_function,
+        crate::emacs_core::dynamic_module::module_call_active,
+        crate::emacs_core::dynamic_module::collect_dynamic_module_gc_roots,
     ),
     WorldStateHooks::new(
         crate::emacs_core::sqlite::world_state_placeholder,
         crate::emacs_core::sqlite::swap_world_state,
     ),
-    WorldStateHooks::new(
-        crate::emacs_core::dbusbind::world_state_placeholder,
-        crate::emacs_core::dbusbind::swap_world_state,
+    DbusbindHooks::new(
+        WorldStateHooks::new(
+            crate::emacs_core::dbusbind::world_state_placeholder,
+            crate::emacs_core::dbusbind::swap_world_state,
+        ),
+        crate::emacs_core::dbusbind::drain_events,
+        crate::emacs_core::dbusbind::has_active_watches,
+        crate::emacs_core::dbusbind::reset_thread_locals,
     ),
     WorldStateHooks::new(
         crate::emacs_core::timefns::world_state_placeholder,
@@ -63,8 +79,21 @@ static CANONICAL_LIFECYCLE_HOOKS: LifecycleHooks = LifecycleHooks::new(
         crate::emacs_core::shell_file_name::install,
         crate::emacs_core::shell_file_name::install_dump_default,
         seed_batch_startup_frame,
+        register_core_bootstrap_vars,
+    ),
+    FileIoHooks::new(
+        crate::emacs_core::fileio::builtin_expand_file_name,
+        crate::emacs_core::fileio::dispatch_file_handler,
+        crate::emacs_core::fileio::resolve_filename_lisp_for_eval,
+        crate::emacs_core::filelock::lock_file,
+        crate::emacs_core::filelock::unlock_file,
+    ),
+    TerminalHooks::new(
+        crate::emacs_core::terminal::pure::terminal_handle_value,
+        crate::emacs_core::terminal::pure::delete_terminal_noelisp_owned,
     ),
     crate::emacs_core::timefns::reset_timefns_thread_locals,
+    crate::emacs_core::sqlite::reset_sqlite_thread_locals,
 );
 
 /// Publish the lifecycle table; first in the one-time hook block (E3).

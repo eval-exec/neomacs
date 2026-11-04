@@ -3,12 +3,13 @@
 //! The process authority (ProcessManager and its system extension traits)
 //! stays in the core/system layer. The evaluator reaches the process IO it
 //! drives — the exit-time listener/process teardown, the dynamic-module
-//! channel open, and the process object's printed handle — through this one
-//! cold PC2 table installed by core at `Context::new_inner` and
+//! channel open, the process object's printed handle, and GNU's
+//! `record_kill_process` signal-plus-deferred-reap transition — through this
+//! one cold PC2 table installed by core at `Context::new_inner` and
 //! `Context::from_dump`.
 //!
 //! Frequency: per buffer/process teardown, per module channel open, per
-//! process object print — never in a Lisp loop.
+//! process object print, per process kill — never in a Lisp loop.
 //!
 //! `WaitNotifier` is eval-owned (eval::data::process_state) and is carried by
 //! this table.  The remaining host-effect-typed readiness slots
@@ -17,7 +18,7 @@
 
 #![allow(private_interfaces)] // host_effect vocabulary becomes eval-owned at W5/E13
 use super::*;
-use crate::emacs_core::eval::data::process_state::WaitNotifier;
+use crate::emacs_core::eval::data::process_state::{ChildOwnership, WaitNotifier};
 use crate::heap_types::ProcessId;
 use crate::host_effect::wake::{ControlDestination, ControlNudge, ControlWake};
 use neovm_value::{HookInstallError, HookInstallStatus};
@@ -244,6 +245,9 @@ impl SelectHooks {
 /// Host-input/diagnostic wake handle for the current wait loop.
 pub type WaitNotifierHook = fn(&Context) -> Option<WaitNotifier>;
 
+/// GNU `record_kill_process`: signal the child and defer its reap.
+pub type TerminateAndDeferReaping = fn(&mut ChildOwnership, i32);
+
 /// The cold process-IO bodies eval calls.
 #[derive(Clone, Copy)]
 pub struct ProcessHooks {
@@ -252,18 +256,21 @@ pub struct ProcessHooks {
     open_channel: OpenChannelForModule,
     print_handle: PrintProcessHandle,
     wait_notifier: WaitNotifierHook,
+    terminate_and_defer_reaping: TerminateAndDeferReaping,
     select: SelectHooks,
     main_wait: MainWaitHooks,
 }
 
 impl ProcessHooks {
     /// Build the one canonical descriptor core publishes.
+    #[allow(clippy::too_many_arguments)] // one cold descriptor, one install site
     pub const fn new(
         unlink: UnlinkOwnedUnixListener,
         delete: DeleteProcess,
         open_channel: OpenChannelForModule,
         print_handle: PrintProcessHandle,
         wait_notifier: WaitNotifierHook,
+        terminate_and_defer_reaping: TerminateAndDeferReaping,
         select: SelectHooks,
         main_wait: MainWaitHooks,
     ) -> Self {
@@ -273,6 +280,7 @@ impl ProcessHooks {
             open_channel,
             print_handle,
             wait_notifier,
+            terminate_and_defer_reaping,
             select,
             main_wait,
         }
@@ -338,6 +346,11 @@ pub fn print_process_handle(value: &Value) -> Option<String> {
 /// asynchronous process work).
 pub fn wait_notifier(ctx: &Context) -> Option<WaitNotifier> {
     (process_hooks().wait_notifier)(ctx)
+}
+
+/// GNU `record_kill_process`: signal CHILD and defer its reap.
+pub fn terminate_and_defer_reaping(child: &mut ChildOwnership, kill_signal: i32) {
+    (process_hooks().terminate_and_defer_reaping)(child, kill_signal)
 }
 
 /// Capture the world's process-select handle as an eval token.

@@ -52,6 +52,14 @@ fn wait_notifier(
     ctx.processes.wait_notifier()
 }
 
+fn terminate_and_defer_reaping(
+    child: &mut crate::emacs_core::eval::data::process_state::ChildOwnership,
+    kill_signal: i32,
+) {
+    use crate::emacs_core::process::reap::ChildOwnershipIo;
+    child.terminate_and_defer_reaping(kill_signal);
+}
+
 static NEXT_TOKEN: AtomicU64 = AtomicU64::new(1);
 
 fn next_token() -> Option<NonZeroU64> {
@@ -218,6 +226,7 @@ static CANONICAL_PROCESS_HOOKS: ProcessHooks = ProcessHooks::new(
     open_channel_for_module,
     print_process_handle,
     wait_notifier,
+    terminate_and_defer_reaping,
     SelectHooks::new(
         eval_select_handle,
         select_notify,

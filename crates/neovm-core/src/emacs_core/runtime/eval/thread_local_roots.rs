@@ -71,7 +71,7 @@ pub(super) fn for_each_thread_local_root_source(
     });
     // Terminal Lisp state is traced from Context, including after migration.
     sink("dynamic-module-thread-local", &mut |group| {
-        super::super::dynamic_module::collect_dynamic_module_gc_roots(group, heap_id)
+        super::lifecycle::collect_dynamic_module_active_gc_roots(group, heap_id)
     });
     sink("regex-thread-local", &mut |group| {
         super::super::regex::collect_regex_gc_roots(group, heap_id, collection_epoch, scan)

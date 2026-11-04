@@ -39,8 +39,6 @@ use crate::emacs_core::error::{EvalResult, Flow, LispCondition, signal};
 use crate::emacs_core::eval::data::process_spawn::SpawnedChild;
 use crate::emacs_core::eval::data::process_tls::TlsStream;
 use crate::emacs_core::intern::resolve_sym;
-use crate::emacs_core::process::NetworkSocketIo;
-use crate::emacs_core::process::reap::ChildOwnershipIo;
 #[cfg(test)]
 use crate::emacs_core::process::types::NativeConnectObservationSlot;
 use crate::gc_trace::GcTrace;
@@ -567,6 +565,27 @@ pub enum NetworkSocket {
     UnixDatagram(UnixDatagram),
 }
 
+impl NetworkSocket {
+    /// GNU's process `:type` name for this socket.
+    pub fn kind_name(&self) -> &'static str {
+        match self {
+            Self::TcpStream(_) => "tcp-stream",
+            Self::TcpListener(_) => "tcp-listener",
+            Self::UdpSocket(_) => "udp-socket",
+            #[cfg(unix)]
+            Self::SeqpacketStream(_) => "seqpacket-stream",
+            #[cfg(unix)]
+            Self::SeqpacketListener(_) => "seqpacket-listener",
+            #[cfg(unix)]
+            Self::UnixStream(_) => "unix-stream",
+            #[cfg(unix)]
+            Self::UnixListener(_) => "unix-listener",
+            #[cfg(unix)]
+            Self::UnixDatagram(_) => "unix-datagram",
+        }
+    }
+}
+
 /// GNU's `p->alive`, with the pid attached to the arm that may use it.
 ///
 /// [`Default`] is [`Self::NotAChild`], which is what ledger 165's finding
@@ -593,6 +612,17 @@ pub enum ChildOwnership {
     /// The sole unreaped handle belongs to the deferred registry. This process
     /// cannot signal or wait for it again; native completion performs the reap.
     Deferred,
+}
+
+impl ChildOwnership {
+    /// Whether a child was ever spawned -- live or already reaped.
+    ///
+    /// This is *not* `p->alive`: a reaped child is still a child, and the
+    /// `Real`-process predicates that ask "does this record have OS backing?"
+    /// mean this question rather than the liveness one.
+    pub fn has_child(&self) -> bool {
+        !matches!(self, Self::NotAChild)
+    }
 }
 
 /// Which kind of child handle a spawn left behind.
@@ -805,7 +835,10 @@ impl LiveProcessIo {
     /// running", so `kill(-pid, SIGKILL)` went to a pid the kernel had handed
     /// back.  See `process/reap.rs`.
     pub fn terminate_and_defer_children(&mut self) {
-        self.child.terminate_and_defer_reaping(signal_kill_number());
+        crate::emacs_core::eval::process_hooks::terminate_and_defer_reaping(
+            &mut self.child,
+            signal_kill_number(),
+        );
     }
 }
 

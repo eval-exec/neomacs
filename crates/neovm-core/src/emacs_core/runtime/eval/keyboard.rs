@@ -2943,7 +2943,7 @@ impl crate::emacs_core::eval::Context {
         let mut internal_effects = super::frontend_events::InternalEventEffects::default();
 
         crate::emacs_core::builtins::drain_file_notify_events(self)?;
-        crate::emacs_core::dbusbind::drain_events(self)?;
+        crate::emacs_core::eval::lifecycle::dbusbind_drain_events(self)?;
 
         if self.sync_pending_resize_events() {
             outcome = outcome.merge(SpecialInputServiceOutcome::resize_with_redisplay());
@@ -2984,7 +2984,7 @@ impl crate::emacs_core::eval::Context {
                         self,
                         "display-monitors-changed-functions",
                     );
-                    let terminal = crate::emacs_core::terminal::pure::terminal_handle_value();
+                    let terminal = crate::emacs_core::eval::lifecycle::terminal_handle_value();
                     let _ = crate::emacs_core::hook_runtime::run_named_hook(
                         self,
                         hook_sym,
@@ -3973,7 +3973,7 @@ impl crate::emacs_core::eval::Context {
 
     fn handle_display_terminal_disconnect(&mut self) {
         self.input_rx.clear();
-        let _ = crate::emacs_core::terminal::pure::delete_terminal_noelisp_owned(
+        let _ = crate::emacs_core::eval::lifecycle::delete_terminal_noelisp_owned(
             self,
             crate::emacs_core::eval::protocol::tty_host::TERMINAL_ID,
         );
@@ -4261,7 +4261,7 @@ impl crate::emacs_core::eval::Context {
                     self,
                     "display-monitors-changed-functions",
                 );
-                let terminal = crate::emacs_core::terminal::pure::terminal_handle_value();
+                let terminal = crate::emacs_core::eval::lifecycle::terminal_handle_value();
                 let _ =
                     crate::emacs_core::hook_runtime::run_named_hook(self, hook_sym, &[terminal])?;
                 Ok(None)
@@ -4680,7 +4680,7 @@ impl crate::emacs_core::eval::Context {
             // every idle wake, so a request is handled within one iteration.
             self.drain_eval_tasks();
             crate::emacs_core::builtins::drain_file_notify_events(self)?;
-            crate::emacs_core::dbusbind::drain_events(self)?;
+            crate::emacs_core::eval::lifecycle::dbusbind_drain_events(self)?;
             match self.pop_queued_read_char_event(idle_policy)? {
                 QueuedReadCharEvent::Event(event) => return Ok(Some(event)),
                 QueuedReadCharEvent::HandledInternally => continue,
@@ -4758,7 +4758,7 @@ impl crate::emacs_core::eval::Context {
             if deadline.is_none()
                 && self.input_rx.as_ref().is_none()
                 && !crate::emacs_core::builtins::has_active_file_notify_watches()
-                && !crate::emacs_core::dbusbind::has_active_watches()
+                && !crate::emacs_core::eval::lifecycle::dbusbind_has_active_watches()
                 && self.processes.live_process_ids().is_empty()
             {
                 // With no host input, file-notify watch, or live process, this

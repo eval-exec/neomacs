@@ -216,7 +216,6 @@ impl ProcessInputEndpoint {
 }
 
 pub(crate) trait NetworkSocketIo {
-    fn kind_name(&self) -> &'static str;
     fn register_readable(&self, poller: &polling::Poller, id: ProcessId) -> Result<(), String>;
     fn register_writable(&self, poller: &polling::Poller, id: ProcessId) -> Result<(), String>;
     fn unregister_readable(&self, poller: &polling::Poller);
@@ -238,24 +237,6 @@ pub(crate) trait NetworkSocketIo {
 }
 
 impl NetworkSocketIo for NetworkSocket {
-    fn kind_name(&self) -> &'static str {
-        match self {
-            Self::TcpStream(_) => "tcp-stream",
-            Self::TcpListener(_) => "tcp-listener",
-            Self::UdpSocket(_) => "udp-socket",
-            #[cfg(unix)]
-            Self::SeqpacketStream(_) => "seqpacket-stream",
-            #[cfg(unix)]
-            Self::SeqpacketListener(_) => "seqpacket-listener",
-            #[cfg(unix)]
-            Self::UnixStream(_) => "unix-stream",
-            #[cfg(unix)]
-            Self::UnixListener(_) => "unix-listener",
-            #[cfg(unix)]
-            Self::UnixDatagram(_) => "unix-datagram",
-        }
-    }
-
     fn register_readable(&self, poller: &polling::Poller, id: ProcessId) -> Result<(), String> {
         match self {
             Self::TcpStream(stream) => ProcessManager::register_readable_source(poller, stream, id),

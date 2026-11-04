@@ -637,12 +637,6 @@ pub(crate) trait ChildOwnershipIo {
     /// because a pidless child is exactly what `eassert (child > 0)` rejects
     /// one frame below GNU's own sweep.
     fn of_pty_child(child: Box<dyn portable_pty::Child + Send + Sync>) -> Self;
-    /// Whether a child was ever spawned -- live or already reaped.
-    ///
-    /// This is *not* `p->alive`: a reaped child is still a child, and the
-    /// `Real`-process predicates that ask "does this record have OS backing?"
-    /// mean this question rather than the liveness one.
-    fn has_child(&self) -> bool;
     /// GNU's `p->alive`: the pid, and only while this port still owns it.
     ///
     /// Every `kill(2)` aimed at one of this port's own children goes through
@@ -714,15 +708,6 @@ impl ChildOwnershipIo for ChildOwnership {
             }),
             None => Self::NotAChild,
         }
-    }
-
-    /// Whether a child was ever spawned -- live or already reaped.
-    ///
-    /// This is *not* `p->alive`: a reaped child is still a child, and the
-    /// `Real`-process predicates that ask "does this record have OS backing?"
-    /// mean this question rather than the liveness one.
-    fn has_child(&self) -> bool {
-        !matches!(self, Self::NotAChild)
     }
 
     /// GNU's `p->alive`: the pid, and only while this port still owns it.

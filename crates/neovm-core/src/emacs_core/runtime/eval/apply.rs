@@ -3931,7 +3931,7 @@ impl Context {
         function: Value,
         args: LispArgVec,
     ) -> EvalResult {
-        super::super::dynamic_module::apply_module_function(self, function, args.to_vec())
+        super::lifecycle::dynamic_module_apply_module_function(self, function, args.to_vec())
     }
 
     #[inline]

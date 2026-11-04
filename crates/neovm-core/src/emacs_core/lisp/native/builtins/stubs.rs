@@ -364,12 +364,12 @@ pub(crate) fn builtin_neomacs_core_backend(args: Vec<Value>) -> EvalResult {
 }
 
 pub(super) fn reset_stubs_thread_locals() {
-    super::super::sqlite::reset_sqlite_thread_locals();
+    crate::emacs_core::eval::lifecycle::reset_sqlite_thread_locals();
     NEOMACS_CLIPBOARD_TEXT.with(|slot| *slot.borrow_mut() = None);
     NEOMACS_PRIMARY_SELECTION_TEXT.with(|slot| *slot.borrow_mut() = None);
     NEOMACS_MONITORS.with(|slot| slot.borrow_mut().clear());
     super::file_notify::reset_file_notify_thread_locals();
-    crate::emacs_core::dbusbind::reset_thread_locals();
+    crate::emacs_core::eval::lifecycle::reset_dbusbind_thread_locals();
 }
 
 thread_local! {

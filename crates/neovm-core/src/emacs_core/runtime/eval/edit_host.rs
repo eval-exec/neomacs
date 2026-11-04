@@ -385,16 +385,16 @@ impl EditHost for Context {
     // --- display/system queries (C4b, C5, C15) ---
 
     fn resolve_filename(&self, filename: &LispString) -> LispString {
-        crate::emacs_core::fileio::resolve_filename_lisp_for_eval(self, filename)
+        crate::emacs_core::eval::lifecycle::resolve_filename(self, filename)
     }
 
     fn lock_file(&mut self, filename: &LispString) -> Result<(), Flow> {
-        let _ = crate::emacs_core::filelock::lock_file(self, filename)?;
+        let _ = crate::emacs_core::eval::lifecycle::lock_file(self, filename)?;
         Ok(())
     }
 
     fn unlock_file(&mut self, filename: &LispString) -> Result<(), Flow> {
-        let _ = crate::emacs_core::filelock::unlock_file(self, filename)?;
+        let _ = crate::emacs_core::eval::lifecycle::unlock_file(self, filename)?;
         Ok(())
     }
 

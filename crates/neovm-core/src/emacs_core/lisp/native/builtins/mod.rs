@@ -376,7 +376,6 @@ pub(super) use super::chartable;
 pub(super) use super::editfns;
 pub(super) use super::error;
 pub(super) use super::eval;
-pub(super) use super::fileio;
 pub(super) use super::kbd;
 pub(super) use super::keymap;
 pub(super) use super::load;
