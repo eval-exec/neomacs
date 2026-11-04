@@ -9,9 +9,9 @@
 use super::error::EvalResult;
 use super::eval::Context;
 use super::value::Value;
+use crate::emacs_core::eval::data::window_state::{Frame, FrameDisplayIdentity};
 use crate::heap_types::LispString;
-use crate::window::DisplayFrameExt;
-use crate::window::DisplayFrameManagerExt;
+use neovm_value::display_vocab::{FrameId, FrameQueryParam};
 use std::ffi::{OsStr, OsString};
 #[cfg(unix)]
 use std::os::unix::ffi::OsStringExt;
@@ -185,13 +185,11 @@ fn process_environment_prefix(environment: Value) -> Vec<(OsString, Option<OsStr
     entries
 }
 
-fn frame_x_display_value(frame: &crate::window::Frame) -> Option<Value> {
+fn frame_x_display_value(frame: &Frame) -> Option<Value> {
     match frame.display_identity() {
-        crate::window::FrameDisplayIdentity::Graphical(identity) => {
-            identity.x_display().map(Value::string)
-        }
-        crate::window::FrameDisplayIdentity::None => frame
-            .fixed_parameter(crate::window::FrameQueryParam::Display)
+        FrameDisplayIdentity::Graphical(identity) => identity.x_display().map(Value::string),
+        FrameDisplayIdentity::None => frame
+            .fixed_parameter(FrameQueryParam::Display)
             .filter(|value| value.as_lisp_string().is_some()),
     }
 }
@@ -338,7 +336,7 @@ fn selected_frame_display(eval: &mut Context, frame: Value) -> EvalResult {
     } else {
         frame
             .as_frame_id()
-            .and_then(|frame_id| eval.frames.get(crate::window::FrameId(frame_id)))
+            .and_then(|frame_id| eval.frames.get(FrameId(frame_id)))
     };
     if let Some(frame) = selected {
         // A native Wayland display is not an X DISPLAY. GNU's PGTK path

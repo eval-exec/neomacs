@@ -5587,6 +5587,15 @@ impl Frame {
         self.parameter_key(key.into())
     }
 
+    /// The frame's native display identity (X display / Wayland / none).
+    ///
+    /// Pure read of the eval-owned field; the writers stay in the display
+    /// layer's `DisplayFrameExt::set_display_identity`, which also maintains
+    /// the `display` frame parameter.
+    pub fn display_identity(&self) -> &FrameDisplayIdentity {
+        &self.display_identity
+    }
+
     pub fn horizontal_non_text_width(&self) -> i64 {
         if self.effective_window_system().is_none() {
             return 0;

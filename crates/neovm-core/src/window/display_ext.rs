@@ -147,8 +147,6 @@ pub trait DisplayFrameExt {
 
     fn set_display_identity(&mut self, identity: FrameDisplayIdentity);
 
-    fn display_identity(&self) -> &FrameDisplayIdentity;
-
     fn set_known_parameter(&mut self, key: FrameParam, value: Value) -> Option<Value>;
 
     fn set_parameter_key(&mut self, key: FrameParamKey, value: Value) -> Option<Value>;
@@ -535,10 +533,6 @@ impl DisplayFrameExt for Frame {
             self.remove_parameter(Value::symbol("display"));
         }
         self.display_identity = identity;
-    }
-
-    fn display_identity(&self) -> &FrameDisplayIdentity {
-        &self.display_identity
     }
 
     fn set_known_parameter(&mut self, key: FrameParam, value: Value) -> Option<Value> {
