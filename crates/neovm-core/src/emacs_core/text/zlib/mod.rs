@@ -9,12 +9,12 @@ use std::io::Read;
 
 use super::editfns::buffer_read_only_active_in_state;
 use super::error::{EvalResult, signal};
-use super::fns::{
-    read_buffer_region_bytes_in_manager, replace_buffer_emacs_byte_range_lisp_string,
-};
 use super::value::*;
 use crate::heap_types::LispString;
 use flate2::{Decompress, FlushDecompress, Status};
+use neovm_edit::emacs_core::editfns::{
+    read_buffer_region_bytes_in_manager, replace_buffer_emacs_byte_range_lisp_string,
+};
 
 /// (zlib-available-p)
 /// Return t if zlib decompression is available.

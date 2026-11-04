@@ -69,8 +69,11 @@ fn read_region_bytes(
     buffer_id: crate::buffer::BufferId,
     byte_range: EmacsByteRange,
 ) -> Result<Vec<u8>, Flow> {
-    let bytes =
-        super::fns::read_buffer_region_bytes_in_manager(&ctx.edit.buffers, buffer_id, byte_range)?;
+    let bytes = neovm_edit::emacs_core::editfns::read_buffer_region_bytes_in_manager(
+        &ctx.edit.buffers,
+        buffer_id,
+        byte_range,
+    )?;
     Ok(bytes)
 }
 
