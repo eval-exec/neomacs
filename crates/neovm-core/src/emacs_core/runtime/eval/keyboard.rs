@@ -466,8 +466,8 @@ impl KeyEvent {
 
     /// Parse an Emacs key description (e.g., "C-x", "M-f").
     pub fn from_description(desc: &str) -> Option<Self> {
-        let encoded = crate::emacs_core::kbd::parse_kbd_string(desc).ok()?;
-        let events = crate::emacs_core::kbd::key_events_from_designator(&encoded).ok()?;
+        let encoded = super::kbd::parse_kbd_string(desc).ok()?;
+        let events = super::kbd::key_events_from_designator(&encoded).ok()?;
         let [event] = events.as_slice() else {
             return None;
         };
@@ -624,8 +624,8 @@ impl KeySequence {
 
     /// Parse an Emacs key sequence description (e.g., "C-x C-f").
     pub fn from_description(desc: &str) -> Option<Self> {
-        let encoded = crate::emacs_core::kbd::parse_kbd_string(desc).ok()?;
-        let emacs_events = crate::emacs_core::kbd::key_events_from_designator(&encoded).ok()?;
+        let encoded = super::kbd::parse_kbd_string(desc).ok()?;
+        let emacs_events = super::kbd::key_events_from_designator(&encoded).ok()?;
         let events = emacs_events
             .into_iter()
             .map(KeyEvent::from_emacs_key_event)

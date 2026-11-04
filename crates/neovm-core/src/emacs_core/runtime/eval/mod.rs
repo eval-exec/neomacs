@@ -7623,6 +7623,7 @@ pub mod font_shape;
 mod gc_pacing;
 pub mod input_hooks;
 pub mod interactive_registry;
+pub mod kbd;
 pub mod keymap_lookup;
 pub mod lifecycle;
 pub mod perf;
