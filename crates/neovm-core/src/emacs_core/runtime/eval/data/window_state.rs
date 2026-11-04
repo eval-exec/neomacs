@@ -2913,6 +2913,28 @@ impl BodyRedisplayRevision {
     }
 }
 
+/// Which window bodies an explicit `force-window-update` invalidated.
+///
+/// Mirrors the three branches of GNU `Fforce_window_update`
+/// (`src/window.c:4492`):
+///
+/// - `AllWindows` — nil OBJECT: `windows_or_buffers_changed = 29`.
+/// - `Window(W)` — a live window: W is marked inaccurate and W's buffer gets
+///   `prevent_redisplay_optimizations_p`, so every window showing that buffer
+///   also loses reuse.
+/// - `Buffer(B)` — a displayed buffer (or its name): every window displaying B
+///   is forced.
+///
+/// The target is a closed sum type so a call site cannot smuggle an unrelated
+/// boolean (or a naked counter) into a decision about *which* bodies must be
+/// rebuilt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ForcedBodyRedisplay {
+    AllWindows,
+    Window(WindowId),
+    Buffer(BufferId),
+}
+
 // --- E5-FM-3a window display snapshot (stage-4 W2/E5) ---
 
 /// Last authoritative redisplay geometry for a live leaf window.

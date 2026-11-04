@@ -49,11 +49,12 @@ use super::value::*;
 use crate::buffer::{BufferId, BufferManager, CharPos0, EmacsBytePos, LispCharPos1};
 use crate::emacs_core::eval::data::face::FaceTable;
 use crate::emacs_core::eval::data::process_state::ProcessManager;
+use crate::emacs_core::eval::data::window_state::{
+    BodyRedisplayRevision, ForcedBodyRedisplay, FrameManager,
+};
 use crate::gc_trace::GcTrace;
 use crate::tagged::header::{CLOSURE_ARGLIST, SubrDispatchKind, SubrInteractivity};
-use crate::window::{
-    BodyRedisplayRevision, ForcedBodyRedisplay, FrameManager, WindowLayoutQueryAdapter,
-};
+use crate::window::WindowLayoutQueryAdapter;
 pub use neomacs_display_protocol::GraphicalFaceAttribute;
 use neovm_edit::emacs_core::display_metrics::WindowId;
 pub use neovm_value::display_vocab::XwidgetScriptRequestId;

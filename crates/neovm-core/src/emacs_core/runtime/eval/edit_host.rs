@@ -490,7 +490,9 @@ impl EditHost for Context {
         mode: crate::emacs_core::word_wrap::WordWrapMode,
     ) -> Option<crate::emacs_core::word_wrap::WordWrapPolicy> {
         let buffer = self.edit.buffers.get(buffer)?;
-        Some(crate::window::word_wrap_policy_for_buffer(buffer, mode))
+        Some(super::data::word_wrap::word_wrap_policy_for_buffer(
+            buffer, mode,
+        ))
     }
 
     fn word_wrap_mode(
