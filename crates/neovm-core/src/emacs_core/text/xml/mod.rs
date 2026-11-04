@@ -461,24 +461,35 @@ fn wrap_html_document(nodes: Vec<TopNode>, discard_comments: bool) -> Option<Val
         }
         fragment.push(node);
     }
-    // Drop document-level trailing blanks, including blanks between the root
-    // and a trailing comment.
-    let mut keep = vec![true; fragment.len()];
-    let mut saw_content = false;
-    for index in (0..fragment.len()).rev() {
-        if is_blank_text_node(&fragment[index]) {
-            if !saw_content {
-                keep[index] = false;
+    // Around an explicit root, document-level blanks include blanks between
+    // the root and trailing comments. For a bare fragment all content,
+    // including blanks before a comment, stays in the implicit body; only
+    // trailing blanks at the very end are dropped.
+    let has_html_root = fragment
+        .iter()
+        .any(|node| !is_top_comment(node) && node.tag.as_deref() == Some("html"));
+    if has_html_root {
+        let mut keep = vec![true; fragment.len()];
+        let mut saw_content = false;
+        for index in (0..fragment.len()).rev() {
+            if is_blank_text_node(&fragment[index]) {
+                if !saw_content {
+                    keep[index] = false;
+                }
+            } else if !is_top_comment(&fragment[index]) {
+                saw_content = true;
             }
-        } else if !is_top_comment(&fragment[index]) {
-            saw_content = true;
+        }
+        fragment = fragment
+            .into_iter()
+            .zip(keep)
+            .filter_map(|(node, keep)| keep.then_some(node))
+            .collect();
+    } else {
+        while fragment.last().is_some_and(is_blank_text_node) {
+            fragment.pop();
         }
     }
-    fragment = fragment
-        .into_iter()
-        .zip(keep)
-        .filter_map(|(node, keep)| keep.then_some(node))
-        .collect();
     if !fragment.iter().any(|n| !is_top_comment(n)) {
         return Some(Value::NIL);
     }
@@ -486,11 +497,7 @@ fn wrap_html_document(nodes: Vec<TopNode>, discard_comments: bool) -> Option<Val
     // A single explicit <html> root is already a complete document. Keep
     // document-level comments on both sides of it in source order.
     let non_comment_count = fragment.iter().filter(|n| !is_top_comment(n)).count();
-    if non_comment_count == 1
-        && fragment
-            .iter()
-            .any(|n| !is_top_comment(n) && n.tag.as_deref() == Some("html"))
-    {
+    if has_html_root && non_comment_count == 1 {
         let mut values = doc_comments;
         for node in fragment {
             if is_top_comment(&node) && discard_comments {
