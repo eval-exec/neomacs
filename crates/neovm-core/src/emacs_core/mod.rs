@@ -25,6 +25,8 @@ pub mod casetab_entries;
 pub mod chartable_entries;
 #[path = "commands/command_observation/mod.rs"]
 pub(crate) mod command_observation;
+#[path = "commands/display_entries/mod.rs"]
+pub mod display_entries;
 #[path = "commands/format_time_entries/mod.rs"]
 pub mod format_time_entries;
 #[path = "commands/identity_commands/mod.rs"]

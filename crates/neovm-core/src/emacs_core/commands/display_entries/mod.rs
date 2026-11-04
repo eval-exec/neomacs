@@ -1,0 +1,198 @@
+//! Display Lisp entries that stay in the core command layer (stage-4 E7 R0).
+//!
+//! Frame-id, image-library and mouse-position entries bind window/frame records
+//! and the command loop's pointer snapshot.  Under R0 the bodies stay core-side;
+//! the window/frame records and the display engine remain core-owned and the
+//! evaluator context is reached through the core facade.
+
+use crate::emacs_core::eval::Context;
+use crate::tagged::SymbolMode;
+use neovm_value::error::{EvalResult, expect_args, expect_args_range};
+use neovm_value::value::*;
+
+/// Eval-dependent variant: defaults to selected frame.
+pub(crate) fn builtin_frame_id(
+    eval: &mut crate::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args_range("frame-id", &args, 0, 1)?;
+    let fid = crate::emacs_core::window_cmds::resolve_frame_id_in_state(
+        &mut eval.frames,
+        &mut eval.edit.buffers,
+        args.first(),
+        crate::emacs_core::window_cmds::FrameDomain::Live,
+    )?;
+    let public_id = if fid.0 >= crate::window::FRAME_ID_BASE {
+        fid.0 - crate::window::FRAME_ID_BASE + 1
+    } else {
+        fid.0
+    };
+    Ok(Value::fixnum(public_id as i64))
+}
+
+pub(crate) fn builtin_init_image_library(args: Vec<Value>, symbol_mode: SymbolMode) -> EvalResult {
+    expect_args("init-image-library", &args, 1)?;
+    let available = args[0]
+        .as_symbol_name(symbol_mode)
+        .is_some_and(crate::emacs_core::image::is_supported_image_type);
+    Ok(Value::bool_val(available))
+}
+
+/// `(mouse-position-in-root-frame)` -> (X . Y) or nil
+///
+/// Mirrors GNU `Fmouse_position_in_root_frame` (`src/frame.c:7010-7039`):
+/// take `mouse-position` (after `mouse-position-function`) and add the
+/// position of its frame and of every ancestor frame.  On a tty
+/// `mouse-drag-line` reads the pointer through this primitive
+/// (`lisp/mouse.el:862-871`), so answering nil left mode-line and divider
+/// drags unable to resize.
+pub(crate) fn builtin_mouse_position_in_root_frame(
+    eval: &mut crate::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args("mouse-position-in-root-frame", &args, 0)?;
+    let pos = builtin_mouse_position(eval, vec![])?;
+    if !pos.is_cons() {
+        return Ok(Value::NIL);
+    }
+    let Some(frame_id) = pos.cons_car().as_frame_id() else {
+        return Ok(Value::NIL);
+    };
+    let coords = pos.cons_cdr();
+    if !coords.is_cons() {
+        // GNU reads the cdr with XCAR/XCDR without validating it; a hook that
+        // returns this shape crashes the reference build.  Stay nil instead.
+        return Ok(Value::NIL);
+    }
+    let (Some(mut x), Some(mut y)) = (
+        mouse_position_coordinate(coords.cons_car()),
+        mouse_position_coordinate(coords.cons_cdr()),
+    ) else {
+        return Ok(Value::NIL);
+    };
+    let mut current = Some(crate::window::FrameId(frame_id));
+    let mut seen: Vec<crate::window::FrameId> = Vec::new();
+    while let Some(id) = current {
+        if seen.contains(&id) {
+            break;
+        }
+        seen.push(id);
+        let Some(frame) = eval.frames.get(id) else {
+            // `mouse-position-function` can return a frame that has since
+            // been deleted; Neomacs keeps no geometry for it.  GNU would read
+            // the dead frame's stale left_pos/top_pos, which cannot be
+            // reproduced once the frame record is gone.
+            return Ok(Value::NIL);
+        };
+        x += frame.left_pos;
+        y += frame.top_pos;
+        let parent = frame.parent_frame;
+        let Some(parent_id) = parent.as_frame_id().map(crate::window::FrameId) else {
+            break;
+        };
+        if eval.frames.get(parent_id).is_none() {
+            // A surviving child can reference a parent that delete-frame
+            // removed: Neomacs does not yet soft-delete children the way GNU
+            // does (src/frame.c:2645-2664).  The root position cannot be
+            // computed without that ancestor's offset.
+            return Ok(Value::NIL);
+        }
+        current = Some(parent_id);
+    }
+    Ok(Value::cons(Value::fixnum(x), Value::fixnum(y)))
+}
+
+/// Decode one X/Y element of `mouse-position`.
+///
+/// `mouse-position` documents nil X/Y on a mouseless terminal.  The reference
+/// GNU build evaluates `XFIXNUM` on that nil as zero, so the normal mouseless
+/// `(FRAME nil . nil)` still answers the frame offsets.  Any other non-fixnum
+/// has no defined GNU result and is rejected instead of copied.
+pub(crate) fn mouse_position_coordinate(value: Value) -> Option<i64> {
+    if value.is_nil() {
+        Some(0)
+    } else {
+        value.as_fixnum()
+    }
+}
+
+pub(crate) fn builtin_mouse_pixel_position(
+    eval: &mut crate::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args("mouse-pixel-position", &args, 0)?;
+    current_mouse_position_value(eval, true)
+}
+
+pub(crate) fn builtin_mouse_position(
+    eval: &mut crate::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args("mouse-position", &args, 0)?;
+    current_mouse_position_value(eval, false)
+}
+
+fn current_mouse_position_value(
+    eval: &mut crate::emacs_core::eval::Context,
+    pixel_units: bool,
+) -> EvalResult {
+    let selected_frame = selected_frame_value(eval);
+    let (frame_value, x, y) = match eval.command_loop.keyboard.mouse_pixel_position() {
+        Some(state) => {
+            let frame_value = state
+                .frame_id
+                .map(|frame_id| Value::make_frame(frame_id.0))
+                .unwrap_or(Value::NIL);
+            let (x, y) = if pixel_units {
+                (Value::fixnum(state.x), Value::fixnum(state.y))
+            } else {
+                pixel_to_char_mouse_position(eval, state.frame_id, state.x, state.y)
+            };
+            (frame_value, x, y)
+        }
+        None => (selected_frame, Value::NIL, Value::NIL),
+    };
+    maybe_transform_mouse_position(eval, Value::cons(frame_value, Value::cons(x, y)))
+}
+
+fn maybe_transform_mouse_position(
+    eval: &mut crate::emacs_core::eval::Context,
+    value: Value,
+) -> EvalResult {
+    let transform = eval
+        .variable_value_by_name("mouse-position-function")
+        .unwrap_or(Value::NIL);
+    if transform.is_truthy() {
+        eval.apply(transform, vec![value])
+    } else {
+        Ok(value)
+    }
+}
+
+fn selected_frame_value(eval: &mut crate::emacs_core::eval::Context) -> Value {
+    let fid = crate::emacs_core::window_cmds::ensure_selected_frame_id_in_state(
+        &mut eval.frames,
+        &mut eval.edit.buffers,
+    );
+    Value::make_frame(fid.0)
+}
+
+fn pixel_to_char_mouse_position(
+    eval: &crate::emacs_core::eval::Context,
+    frame_id: Option<crate::window::FrameId>,
+    x: i64,
+    y: i64,
+) -> (Value, Value) {
+    let Some(frame_id) = frame_id else {
+        return (Value::NIL, Value::NIL);
+    };
+    let Some(frame) = eval.frames.get(frame_id) else {
+        return (Value::NIL, Value::NIL);
+    };
+    let char_width = frame.char_width.max(1.0);
+    let char_height = frame.char_height.max(1.0);
+    (
+        Value::fixnum((x as f32 / char_width).floor() as i64),
+        Value::fixnum((y as f32 / char_height).floor() as i64),
+    )
+}

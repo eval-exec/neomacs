@@ -3420,7 +3420,7 @@ fn read_char_mouse_move_updates_mouse_position_even_without_track_mouse() {
     let result = ev.read_char().expect("keypress should remain readable");
     assert_eq!(result, Value::fixnum('a' as i64));
 
-    let pixel = crate::emacs_core::builtins::symbols::builtin_mouse_pixel_position(&mut ev, vec![])
+    let pixel = crate::emacs_core::display_entries::builtin_mouse_pixel_position(&mut ev, vec![])
         .expect("mouse-pixel-position should succeed");
     if !pixel.is_cons() {
         panic!("expected dotted mouse pixel position");

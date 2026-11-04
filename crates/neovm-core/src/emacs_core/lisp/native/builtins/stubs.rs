@@ -842,14 +842,6 @@ pub(crate) fn builtin_handle_save_session(args: Vec<Value>) -> EvalResult {
     Ok(Value::NIL)
 }
 
-pub(crate) fn builtin_init_image_library(args: Vec<Value>, symbol_mode: SymbolMode) -> EvalResult {
-    expect_args("init-image-library", &args, 1)?;
-    let available = args[0]
-        .as_symbol_name(symbol_mode)
-        .is_some_and(super::super::image::is_supported_image_type);
-    Ok(Value::bool_val(available))
-}
-
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) fn builtin_describe_buffer_bindings(args: Vec<Value>) -> EvalResult {
     expect_args_range("describe-buffer-bindings", &args, 1, 3)?;
@@ -1181,23 +1173,6 @@ pub(crate) fn builtin_frame_scroll_bar_width(
 // --- frame.c missing builtins ---
 
 /// Eval-dependent variant: defaults to selected frame.
-pub(crate) fn builtin_frame_id(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
-    expect_args_range("frame-id", &args, 0, 1)?;
-    let fid = super::window_cmds::resolve_frame_id_in_state(
-        &mut eval.frames,
-        &mut eval.edit.buffers,
-        args.first(),
-        crate::emacs_core::window_cmds::FrameDomain::Live,
-    )?;
-    let public_id = if fid.0 >= crate::window::FRAME_ID_BASE {
-        fid.0 - crate::window::FRAME_ID_BASE + 1
-    } else {
-        fid.0
-    };
-    Ok(Value::fixnum(public_id as i64))
-}
-
-/// Eval-dependent variant: defaults to selected frame.
 pub(crate) fn builtin_frame_root_frame(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
@@ -1211,84 +1186,6 @@ pub(crate) fn builtin_frame_root_frame(
     )?;
     let root = eval.frames.root_frame_id(fid).unwrap_or(fid);
     Ok(Value::make_frame(root.0))
-}
-
-/// `(mouse-position-in-root-frame)` -> (X . Y) or nil
-///
-/// Mirrors GNU `Fmouse_position_in_root_frame` (`src/frame.c:7010-7039`):
-/// take `mouse-position` (after `mouse-position-function`) and add the
-/// position of its frame and of every ancestor frame.  On a tty
-/// `mouse-drag-line` reads the pointer through this primitive
-/// (`lisp/mouse.el:862-871`), so answering nil left mode-line and divider
-/// drags unable to resize.
-pub(crate) fn builtin_mouse_position_in_root_frame(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    expect_args("mouse-position-in-root-frame", &args, 0)?;
-    let pos = builtin_mouse_position(eval, vec![])?;
-    if !pos.is_cons() {
-        return Ok(Value::NIL);
-    }
-    let Some(frame_id) = pos.cons_car().as_frame_id() else {
-        return Ok(Value::NIL);
-    };
-    let coords = pos.cons_cdr();
-    if !coords.is_cons() {
-        // GNU reads the cdr with XCAR/XCDR without validating it; a hook that
-        // returns this shape crashes the reference build.  Stay nil instead.
-        return Ok(Value::NIL);
-    }
-    let (Some(mut x), Some(mut y)) = (
-        mouse_position_coordinate(coords.cons_car()),
-        mouse_position_coordinate(coords.cons_cdr()),
-    ) else {
-        return Ok(Value::NIL);
-    };
-    let mut current = Some(crate::window::FrameId(frame_id));
-    let mut seen: Vec<crate::window::FrameId> = Vec::new();
-    while let Some(id) = current {
-        if seen.contains(&id) {
-            break;
-        }
-        seen.push(id);
-        let Some(frame) = eval.frames.get(id) else {
-            // `mouse-position-function` can return a frame that has since
-            // been deleted; Neomacs keeps no geometry for it.  GNU would read
-            // the dead frame's stale left_pos/top_pos, which cannot be
-            // reproduced once the frame record is gone.
-            return Ok(Value::NIL);
-        };
-        x += frame.left_pos;
-        y += frame.top_pos;
-        let parent = frame.parent_frame;
-        let Some(parent_id) = parent.as_frame_id().map(crate::window::FrameId) else {
-            break;
-        };
-        if eval.frames.get(parent_id).is_none() {
-            // A surviving child can reference a parent that delete-frame
-            // removed: Neomacs does not yet soft-delete children the way GNU
-            // does (src/frame.c:2645-2664).  The root position cannot be
-            // computed without that ancestor's offset.
-            return Ok(Value::NIL);
-        }
-        current = Some(parent_id);
-    }
-    Ok(Value::cons(Value::fixnum(x), Value::fixnum(y)))
-}
-
-/// Decode one X/Y element of `mouse-position`.
-///
-/// `mouse-position` documents nil X/Y on a mouseless terminal.  The reference
-/// GNU build evaluates `XFIXNUM` on that nil as zero, so the normal mouseless
-/// `(FRAME nil . nil)` still answers the frame offsets.  Any other non-fixnum
-/// has no defined GNU result and is rejected instead of copied.
-fn mouse_position_coordinate(value: Value) -> Option<i64> {
-    if value.is_nil() {
-        Some(0)
-    } else {
-        value.as_fixnum()
-    }
 }
 
 pub(crate) fn builtin_gap_position(

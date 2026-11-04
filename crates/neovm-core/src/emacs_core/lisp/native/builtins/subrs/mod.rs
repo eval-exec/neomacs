@@ -2487,12 +2487,12 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "mouse-pixel-position",
-        NativeFn::ContextVec(builtin_mouse_pixel_position),
+        NativeFn::ContextVec(crate::emacs_core::display_entries::builtin_mouse_pixel_position),
         SubrArity::new(0, Some(0)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "mouse-position",
-        NativeFn::ContextVec(builtin_mouse_position),
+        NativeFn::ContextVec(crate::emacs_core::display_entries::builtin_mouse_position),
         SubrArity::new(0, Some(0)),
     )));
     ctx.register_subr(
@@ -2707,7 +2707,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "frame-id",
-        NativeFn::ContextVec(builtin_frame_id),
+        NativeFn::ContextVec(crate::emacs_core::display_entries::builtin_frame_id),
         SubrArity::new(0, Some(1)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -4381,7 +4381,9 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "mouse-position-in-root-frame",
-        NativeFn::ContextVec(builtin_mouse_position_in_root_frame),
+        NativeFn::ContextVec(
+            crate::emacs_core::display_entries::builtin_mouse_position_in_root_frame
+        ),
         SubrArity::new(0, Some(0)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -4721,7 +4723,9 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "init-image-library",
-        NativeFn::ContextVec(|ctx, args| builtin_init_image_library(args, ctx.symbol_mode())),
+        NativeFn::ContextVec(|ctx, args| {
+            crate::emacs_core::display_entries::builtin_init_image_library(args, ctx.symbol_mode())
+        }),
         SubrArity::new(1, Some(1)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
