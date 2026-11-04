@@ -805,7 +805,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "set-buffer-modified-p",
-        NativeFn::ContextVec(builtin_set_buffer_modified_p),
+        NativeFn::ContextVec(|ctx, args| builtin_set_buffer_modified_p(ctx, args)),
         SubrArity::new(1, Some(1)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(

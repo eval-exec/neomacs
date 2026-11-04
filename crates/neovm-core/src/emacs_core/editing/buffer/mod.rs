@@ -3803,38 +3803,41 @@ pub(crate) fn builtin_buffer_modified_p_1(
     }
 }
 
-pub(crate) fn builtin_set_buffer_modified_p(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_set_buffer_modified_p<H: EditHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("set-buffer-modified-p", &args, 1)?;
-    let current_id = eval
-        .edit
-        .buffers
-        .current_buffer_id()
-        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    let was_modified = eval
-        .edit
-        .buffers
-        .modified_state_root_id(current_id)
-        .and_then(|root_id| eval.edit.buffers.get(root_id))
-        .is_some_and(|buffer| buffer.modified_state_value().is_truthy());
-    if let Some(filename) =
-        super::file_name::buffer_file_lock_target(&eval.edit.buffers, current_id)
-    {
+    let (current_id, was_modified, lock_target) = {
+        let (edit, _) = host.edit_and_vars();
+        let current_id = edit
+            .buffers
+            .current_buffer_id()
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        let was_modified = edit
+            .buffers
+            .modified_state_root_id(current_id)
+            .and_then(|root_id| edit.buffers.get(root_id))
+            .is_some_and(|buffer| buffer.modified_state_value().is_truthy());
+        let lock_target = super::file_name::buffer_file_lock_target(&edit.buffers, current_id);
+        (current_id, was_modified, lock_target)
+    };
+    if let Some(filename) = lock_target {
         // No expansion here: GNU's restore_buffer_modified_p hands
         // BVAR (b, file_truename) to Flock_file / Funlock_file untouched.
         if !was_modified && !args[0].is_nil() {
-            eval.lock_file(&filename)?;
+            host.lock_file(&filename)?;
         } else if was_modified && args[0].is_nil() {
-            eval.unlock_file(&filename)?;
+            host.unlock_file(&filename)?;
         }
     }
-    let _ = eval
-        .edit
-        .buffers
-        .restore_buffer_modified_state(current_id, args[0]);
-    super::builtins::misc_pure::builtin_force_mode_line_update(eval, vec![Value::NIL])
+    {
+        let (edit, _) = host.edit_and_vars();
+        let _ = edit
+            .buffers
+            .restore_buffer_modified_state(current_id, args[0]);
+    }
+    host.force_mode_line_update()
 }
 
 pub(crate) fn builtin_restore_buffer_modified_p(
