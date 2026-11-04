@@ -72,6 +72,9 @@ pub use part::{
 use sibling_layout::{ChildExtent, sibling_bounds};
 pub use split::{CombinationLimit, DeleteOutcome, DeleteResize, ParentSeal, SplitAttachment};
 
+mod display_ext;
+pub use display_ext::{DisplayWindowExt, DisplayWindowTreeExt};
+
 pub use display::{
     GUI_SCROLL_BAR_DEFAULT_WIDTH_PX, WindowBufferDisplayDefaults, WindowFringeDefaults,
     WindowScrollBarDefaults, WindowScrollBarGeometry, resolve_window_scroll_bar_geometry,
@@ -578,28 +581,6 @@ pub enum WindowOldBuffer {
 pub use crate::emacs_core::eval::data::window_state::{Window, WindowTree};
 
 pub(crate) use crate::emacs_core::eval::data::window_state::redisplay_f32_bits;
-
-impl Window {
-    /// Return a mutable reference to this window's Lisp-visible parameter alist.
-    pub fn parameters_mut(&mut self) -> &mut WindowParameters {
-        let next_generation = display::next_window_parameters_generation();
-        match self {
-            Window::Leaf {
-                parameters,
-                parameters_generation,
-                ..
-            }
-            | Window::Internal {
-                parameters,
-                parameters_generation,
-                ..
-            } => {
-                *parameters_generation = next_generation;
-                parameters
-            }
-        }
-    }
-}
 
 fn collect_leaf_window_paths(
     tree: &WindowTree,
@@ -6563,38 +6544,3 @@ mod eob_overlay_motion_tests;
 #[cfg(test)]
 #[path = "tests/resize_commit_test.rs"]
 mod resize_commit_tests;
-
-impl WindowTree {
-    /// The rectangles `parent`'s children should occupy inside `bounds`, in
-    /// child order.
-    ///
-    /// Reading each child's extent finishes before any of them is written, so
-    /// no two nodes are borrowed at once.  The arithmetic itself lives in
-    /// [`sibling_layout`], where it is testable without a window tree.
-    fn sibling_bounds_of(&self, parent: WindowId, bounds: Rect) -> Vec<Rect> {
-        let extents: Vec<ChildExtent> = self
-            .child_ids(parent)
-            .iter()
-            .filter_map(|child| self.find(*child))
-            .map(|child| ChildExtent {
-                bounds: *child.bounds(),
-                fixed_width_cols: child.fixed_width_cols(),
-                fixed_height_lines: child.fixed_height_lines(),
-            })
-            .collect();
-        sibling_bounds(bounds, &extents)
-    }
-
-    /// Give `parent`'s children their share of `bounds`, without descending.
-    fn redistribute_bounds(&mut self, parent: WindowId, bounds: Rect) {
-        let children = self.child_ids(parent).to_vec();
-        for (child, rect) in children
-            .into_iter()
-            .zip(self.sibling_bounds_of(parent, bounds))
-        {
-            if let Some(node) = self.find_mut(child) {
-                node.set_bounds(rect);
-            }
-        }
-    }
-}

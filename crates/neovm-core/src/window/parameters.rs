@@ -1,3 +1,4 @@
+use super::DisplayWindowExt;
 use super::{FrameManager, Window, WindowId};
 use crate::emacs_core::value::{Value, eq_value};
 
