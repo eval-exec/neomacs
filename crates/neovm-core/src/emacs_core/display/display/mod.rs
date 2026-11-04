@@ -1617,7 +1617,7 @@ fn menu_bar_navigation_position(
 ) -> Option<Value> {
     let items = list_to_vec(&position)?;
     let current_key = *items.first()?;
-    let menu_bar_items = super::keymap::menu_bar_top_level_items(ctx);
+    let menu_bar_items = crate::emacs_core::eval::lifecycle::menu_bar_top_level_items(ctx);
     let current_index = menu_bar_items
         .iter()
         .position(|(key, _)| key.bits() == current_key.bits())?;

@@ -197,6 +197,9 @@ static CANONICAL_LIFECYCLE_HOOKS: LifecycleHooks = LifecycleHooks::new(
         crate::emacs_core::minibuffer::builtin_try_completion,
         crate::emacs_core::minibuffer::builtin_all_completions,
         crate::emacs_core::minibuffer::builtin_test_completion,
+        crate::emacs_core::keymap::menu_bar_top_level_items,
+        crate::emacs_core::interactive::builtin_key_binding,
+        crate::emacs_core::interactive::builtin_where_is_internal,
     ),
     WindowTreeHooks::new(
         char_property_window_lookup,

@@ -35,7 +35,7 @@ pub(crate) fn builtin_menu_bar_menu_at_x_y(eval: &mut Context, args: Vec<Value>)
     Ok(Value::NIL)
 }
 
-pub(crate) fn menu_bar_top_level_items(eval: &Context) -> Vec<(Value, String)> {
+pub fn menu_bar_top_level_items(eval: &Context) -> Vec<(Value, String)> {
     menu_bar_top_level_items_for_frame(eval, eval.frames.selected_frame().map(|frame| frame.id))
 }
 

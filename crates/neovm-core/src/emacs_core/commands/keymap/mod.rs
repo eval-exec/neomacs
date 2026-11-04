@@ -67,20 +67,7 @@ pub use crate::emacs_core::eval::keymap_lookup::{
     resolve_prefix_keymap_binding_in_obarray, where_is_keymaps_in_context,
 };
 
-/// Lisp variables whose values are native inputs to GNU's active-keymap
-/// collector.
-///
-/// GNU stores these as predeclared `Lisp_Object` globals (`V...` fields), so a
-/// key lookup reads their identities directly.  Keeping the corresponding
-/// Neomacs identities behind a closed enum prevents hot callers from falling
-/// back to string-based lookup and makes every newly modeled variable choose a
-/// cache slot at compile time.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, EnumString, IntoStaticStr)]
-#[strum(prefix = ":", serialize_all = "kebab-case")]
-pub enum MenuButtonKind {
-    Toggle,
-    Radio,
-}
+pub use crate::emacs_core::eval::keymap_lookup::MenuButtonKind;
 
 impl MenuButtonKind {
     pub fn keyword(self) -> &'static str {

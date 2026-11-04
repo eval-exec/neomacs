@@ -5128,7 +5128,9 @@ fn update_buffer_display_metadata_in_state(
     buffers: &mut BufferManager,
     buffer_id: BufferId,
 ) -> EvalResult {
-    let display_time = super::timefns::builtin_current_time(vec![])?;
+    let display_time = neovm_value::time_core::current_time_value(
+        neovm_value::time_core::LispTimeOutput::LegacyList,
+    );
     let Some(buffer) = buffers.get_mut(buffer_id) else {
         return Ok(Value::NIL);
     };

@@ -7153,7 +7153,7 @@ impl FrameManager {}
 // --- E5-K2 char-property window lookup (stage-4 W2/E5) ---
 
 /// The edit layer's char-property WINDOW lookup for a caller that owns frames.
-pub(crate) fn char_property_window_lookup(
+pub fn char_property_window_lookup(
     frames: Option<&FrameManager>,
 ) -> impl Fn(WindowId) -> WindowBufferLookup + '_ {
     move |window| match frames {

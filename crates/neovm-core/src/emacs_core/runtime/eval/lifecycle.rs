@@ -303,6 +303,9 @@ pub struct CommandSeamHooks {
     try_completion: fn(&mut Context, Vec<Value>) -> EvalResult,
     all_completions: fn(&mut Context, Vec<Value>) -> EvalResult,
     test_completion: fn(&mut Context, Vec<Value>) -> EvalResult,
+    menu_bar_top_level_items: fn(&Context) -> Vec<(Value, String)>,
+    key_binding: fn(&mut Context, Vec<Value>) -> EvalResult,
+    where_is_internal: fn(&mut Context, Vec<Value>) -> EvalResult,
 }
 
 impl CommandSeamHooks {
@@ -322,6 +325,9 @@ impl CommandSeamHooks {
         try_completion: fn(&mut Context, Vec<Value>) -> EvalResult,
         all_completions: fn(&mut Context, Vec<Value>) -> EvalResult,
         test_completion: fn(&mut Context, Vec<Value>) -> EvalResult,
+        menu_bar_top_level_items: fn(&Context) -> Vec<(Value, String)>,
+        key_binding: fn(&mut Context, Vec<Value>) -> EvalResult,
+        where_is_internal: fn(&mut Context, Vec<Value>) -> EvalResult,
     ) -> Self {
         Self {
             window_configuration_capture,
@@ -333,6 +339,9 @@ impl CommandSeamHooks {
             try_completion,
             all_completions,
             test_completion,
+            menu_bar_top_level_items,
+            key_binding,
+            where_is_internal,
         }
     }
 }
@@ -767,6 +776,18 @@ impl CommandSeamHooks {
     fn test_completion(&self) -> fn(&mut Context, Vec<Value>) -> EvalResult {
         self.test_completion
     }
+
+    fn menu_bar_top_level_items(&self) -> fn(&Context) -> Vec<(Value, String)> {
+        self.menu_bar_top_level_items
+    }
+
+    fn key_binding(&self) -> fn(&mut Context, Vec<Value>) -> EvalResult {
+        self.key_binding
+    }
+
+    fn where_is_internal(&self) -> fn(&mut Context, Vec<Value>) -> EvalResult {
+        self.where_is_internal
+    }
 }
 
 impl WindowTreeHooks {
@@ -1080,6 +1101,21 @@ pub fn all_completions(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
 /// The `test-completion` entry.
 pub fn test_completion(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
     (lifecycle_hooks().command().test_completion())(ctx, args)
+}
+
+/// Collect the top-level menu-bar items (command-layer collector).
+pub fn menu_bar_top_level_items(ctx: &Context) -> Vec<(Value, String)> {
+    (lifecycle_hooks().command().menu_bar_top_level_items())(ctx)
+}
+
+/// `(key-binding KEYS)` through the command-layer entry.
+pub fn key_binding(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+    (lifecycle_hooks().command().key_binding())(ctx, args)
+}
+
+/// `(where-is-internal ...)` through the command-layer entry.
+pub fn where_is_internal(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+    (lifecycle_hooks().command().where_is_internal())(ctx, args)
 }
 
 /// The edit layer's char-property WINDOW lookup for a caller that owns frames.

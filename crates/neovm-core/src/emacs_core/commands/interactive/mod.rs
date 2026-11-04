@@ -2867,7 +2867,7 @@ fn self_insert_should_auto_fill(eval: &Context, ch: char) -> bool {
 /// `(keyboard-quit)` -- cancel the current command sequence.
 /// `(key-binding KEY &optional ACCEPT-DEFAULTS NO-REMAP POSITION)`
 /// Return the binding for KEY in the current keymaps.
-pub(crate) fn builtin_key_binding(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+pub fn builtin_key_binding(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     builtin_key_binding_impl(eval, args)
 }
 
@@ -3095,7 +3095,7 @@ fn where_is_sequence_is_non_key_event(
 
 /// `(where-is-internal DEFINITION &optional KEYMAP FIRSTONLY NOINDIRECT NO-REMAP)`
 /// Return list of key sequences that invoke DEFINITION.
-pub(crate) fn builtin_where_is_internal(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+pub fn builtin_where_is_internal(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     let symbol_mode = eval.symbol_mode();
     expect_min_args("where-is-internal", &args, 1)?;
     expect_max_args("where-is-internal", &args, 5)?;

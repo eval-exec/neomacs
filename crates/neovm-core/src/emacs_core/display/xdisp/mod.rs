@@ -5449,20 +5449,34 @@ fn buffer_invisibility_spec_sym_id() -> super::intern::SymId {
     *SYMBOL.get_or_init(|| intern("buffer-invisibility-spec"))
 }
 
+/// Read a char property through the edit layer, with this display caller's
+/// window lookup (stage-5 C4; the Lisp entry wrapper stays in commands).
+fn char_property_at_position(
+    eval: &mut super::eval::Context,
+    position: Value,
+    prop: Value,
+) -> EvalResult {
+    let args = [position, prop, Value::NIL];
+    crate::emacs_core::textprop::builtin_get_char_property_with_window_lookup(
+        eval.variables(),
+        &eval.edit.buffers,
+        crate::emacs_core::eval::data::window_state::char_property_window_lookup(Some(
+            &eval.frames,
+        )),
+        &args,
+    )
+}
+
 pub(crate) fn invisible_status_for_value(
     eval: &mut super::eval::Context,
     pos_or_prop: Value,
 ) -> Result<Invisibility, Flow> {
     let prop = match pos_or_prop.kind() {
-        ValueKind::Fixnum(v) if v >= 0 => super::textprop_entries::builtin_get_char_property(
-            eval,
-            vec![pos_or_prop, invisible_prop_symbol(), Value::NIL],
-        )?,
+        ValueKind::Fixnum(v) if v >= 0 => {
+            char_property_at_position(eval, pos_or_prop, invisible_prop_symbol())?
+        }
         _ if super::marker::is_marker(&pos_or_prop) => {
-            super::textprop_entries::builtin_get_char_property(
-                eval,
-                vec![pos_or_prop, invisible_prop_symbol(), Value::NIL],
-            )?
+            char_property_at_position(eval, pos_or_prop, invisible_prop_symbol())?
         }
         _ => pos_or_prop,
     };

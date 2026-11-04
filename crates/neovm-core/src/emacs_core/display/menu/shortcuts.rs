@@ -26,7 +26,7 @@ pub(super) fn resolve(
     };
     let mut keys = Value::NIL;
     if let Some(hint) = hints.sequence.filter(|value| !value.is_nil()) {
-        let binding = crate::emacs_core::interactive::builtin_key_binding(ctx, vec![hint])?;
+        let binding = crate::emacs_core::eval::lifecycle::key_binding(ctx, vec![hint])?;
         let alias = command
             .as_symbol_name(symbol_mode)
             .and_then(|name| ctx.obarray().symbol_function(name));
@@ -35,7 +35,7 @@ pub(super) fn resolve(
         }
     }
     if keys.is_nil() {
-        keys = crate::emacs_core::interactive::builtin_where_is_internal(
+        keys = crate::emacs_core::eval::lifecycle::where_is_internal(
             ctx,
             vec![command, Value::NIL, Value::T, Value::NIL, Value::NIL],
         )?;
