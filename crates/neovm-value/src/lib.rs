@@ -18,6 +18,7 @@ pub mod gc_trace;
 pub mod hashtab;
 pub mod heap_registry;
 pub mod heap_types;
+pub mod image_identity;
 pub mod intern;
 pub mod keyboard_pure;
 pub mod kmacro;

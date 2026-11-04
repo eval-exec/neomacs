@@ -420,7 +420,7 @@ pub enum ImageResolveSource {
 
 static_assertions::assert_impl_all!(ImageResolveSource: Send, Sync, Clone, std::fmt::Debug, Eq, std::hash::Hash);
 
-pub use crate::image_identity::ImageSpecIdentity;
+pub use neovm_value::image_identity::ImageSpecIdentity;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ImageResolveRequest {

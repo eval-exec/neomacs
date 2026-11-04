@@ -16,6 +16,7 @@ pub use neovm_value::heap_types;
 pub mod heap_types;
 pub mod host_effect;
 pub mod host_input;
+#[cfg(test)]
 mod image_identity;
 pub mod keyboard;
 mod keyboard_input;
