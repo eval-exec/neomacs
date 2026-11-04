@@ -9,7 +9,7 @@ use crate::emacs_core::value::Value;
 use crate::gc_trace::GcTrace;
 use crate::tagged::transport::SharedRoot;
 use enum_map::EnumMap;
-use rustc_hash::{FxHashMap, FxHasher};
+use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::OnceLock;
 
@@ -80,11 +80,10 @@ impl FaceChangeScope<'_> {
     }
 }
 
-/// Identity of one realized-face lifetime. Definitions-only changes retain
-/// the token; full cache retirement replaces it. The exclusive frame mutator
-/// shares this immutable identity locally, never across mutator threads.
-#[derive(Clone, Debug)]
-pub(crate) struct RealizationEpoch(std::rc::Rc<()>);
+pub use crate::emacs_core::eval::data::face::CachedFaceSlot;
+pub(crate) use crate::emacs_core::eval::data::face::{
+    DefaultLookupPosition, FrameFaceRealizationCache, RealizationEpoch,
+};
 
 impl RealizationEpoch {
     fn new() -> Self {
@@ -98,53 +97,8 @@ impl RealizationEpoch {
 
 static_assertions::assert_not_impl_any!(RealizationEpoch: Send, Sync, Copy);
 
-/// Generic face lookup classification read under the owning Context/frame
-/// borrow. This copied native value contains no Lisp roots or shared state;
-/// Unavailable carries no authority to infer a default slot.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CachedFaceSlot {
-    Unavailable,
-    Default,
-    NonDefault,
-}
-
 static_assertions::assert_impl_all!(CachedFaceSlot: Copy, Send, Sync);
 const _: () = assert!(std::mem::size_of::<CachedFaceSlot>() == 1);
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum DefaultLookupPosition {
-    #[default]
-    Shadowed,
-    Winner,
-}
-
-/// Each frame's exclusive mutator owns this cache. Immutable FaceTable handles
-/// remain copy-on-write; no cache entry or Lisp value is shared across mutators.
-#[derive(Default)]
-pub(crate) struct FrameFaceRealizationCache {
-    generation: Option<u64>,
-    epoch: Option<RealizationEpoch>,
-    table: Option<FaceTable>,
-    /// One independently retained root bundle per immutable raw snapshot.
-    /// Layout may keep Arc clones after this cache retires its source table.
-    root_lease: Option<std::sync::Arc<[SharedRoot]>>,
-    entries: FxHashMap<u64, Vec<(Face, Face)>>,
-    /// Allocated only by the lifecycle path, owned by the same frame mutator.
-    /// The enum owns the role count and indexing; no numeric role mirrors exist.
-    basics: Option<Box<EnumMap<BasicFace, Option<(Face, Face)>>>>,
-    /// GNU's cached DEFAULT_FACE_ID retains its complete Lisp source vector.
-    /// The typed display projection omits font/fontset and original plist slots.
-    default_lface: Option<Value>,
-    default_predecessor: Option<(Face, Face)>,
-    default_lookup_position: DefaultLookupPosition,
-    /// Face names whose frame-local Lisp vectors changed after `table` was
-    /// derived. GNU stores definitions as the frame's face vectors and never
-    /// re-derives an untouched one: a set writes one slot (xfaces.c:3767-3773)
-    /// and realization stays content-keyed (lookup_face, xfaces.c:5064-5093).
-    /// An unknown writer (no face name) sets `definitions_all_dirty` instead.
-    dirty_definitions: rustc_hash::FxHashSet<Box<str>>,
-    definitions_all_dirty: bool,
-}
 
 fn route_hash(face: &Face) -> u64 {
     let mut hash = FxHasher::default();

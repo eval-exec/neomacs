@@ -1,6 +1,7 @@
 //! Window state records owned by the evaluator layer (stage-4 W1 E2).
 
 use neomacs_display_protocol::PresentedWindowChromeArea;
+use neomacs_display_protocol::posn_frame_pool::PosnFramePool;
 use neomacs_display_protocol::posn_object_extent::PosnPointRole as DisplayPointRole;
 use neovm_edit::buffer::{
     BufferId, CharLen, CharPos0, EmacsByteLen, EmacsBytePos, LispCharPos1, MarkerRef,
@@ -1820,4 +1821,40 @@ pub struct WindowPartGeometry {
 pub enum PosnObjectExtentMode {
     Off,
     On,
+}
+
+// --- E5-FM-3a tty posn records (stage-4 W2/E5) ---
+
+/// Which existing numeric producer GNU's current rows presently admit.
+/// Copy-only state may be read concurrently through immutable Frame publication.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TtyCurrentMatrixAuthority {
+    AcceptedLocal,
+    FramePoolPartition,
+    Undrawn,
+}
+
+/// GNU desired-matrix allocation facts, not source/display-body freshness.
+/// Numeric values are initialized by the exclusive Frame mutator and immutable
+/// to readers; no query advances this allocation observation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct TtyMatrixAllocation {
+    pub(crate) window: WindowId,
+    pub(crate) x: i64,
+    pub(crate) y: i64,
+    pub(crate) width: i64,
+    pub(crate) height: i64,
+    pub(crate) left_margin_glyphs: i64,
+    pub(crate) right_margin_glyphs: i64,
+}
+
+/// Same inline Option<Arc<_>> representation as the prior pool-only owner.
+/// COW copies small numeric allocation/authority records and the pool Arc,
+/// never the retained pool's row/cell vectors. All writes require &mut Frame.
+#[derive(Clone, Debug)]
+pub(crate) struct TtyPosnCurrentOwner {
+    pub(crate) pool: Option<Arc<PosnFramePool>>,
+    pub(crate) allocation: Vec<TtyMatrixAllocation>,
+    pub(crate) dimensions: (i64, i64),
+    pub(crate) authority: HashMap<WindowId, TtyCurrentMatrixAuthority>,
 }

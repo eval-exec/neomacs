@@ -1,10 +1,13 @@
 //! Face vocabulary owned by the evaluator layer (stage-4 W1 E2).
 
+use enum_map::EnumMap;
 pub use neovm_value::display_vocab::{FontSlant, FontWeight, FontWidth, LFaceAttr};
 use neovm_value::gc_trace::GcTrace;
 use neovm_value::intern::{SymId, WellKnown, resolve_sym};
+use neovm_value::tagged::transport::SharedRoot;
 use neovm_value::value::Value;
 use neovm_value::value::{ProducerSymbolName, ValueKind};
+use rustc_hash::FxHashMap;
 use std::collections::HashMap;
 use strum::EnumString;
 
@@ -2270,4 +2273,57 @@ impl GcTrace for FaceTable {
             visit(*root);
         }
     }
+}
+
+// --- E5-FM-3a frame face realization cache (stage-4 W2/E5) ---
+
+/// Generic face lookup classification read under the owning Context/frame
+/// borrow. This copied native value contains no Lisp roots or shared state;
+/// Unavailable carries no authority to infer a default slot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CachedFaceSlot {
+    Unavailable,
+    Default,
+    NonDefault,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum DefaultLookupPosition {
+    #[default]
+    Shadowed,
+    Winner,
+}
+
+/// Identity of one realized-face lifetime. Definitions-only changes retain
+/// the token; full cache retirement replaces it. The exclusive frame mutator
+/// shares this immutable identity locally, never across mutator threads.
+#[derive(Clone, Debug)]
+pub(crate) struct RealizationEpoch(pub(crate) std::rc::Rc<()>);
+
+/// Each frame's exclusive mutator owns this cache. Immutable FaceTable handles
+/// remain copy-on-write; no cache entry or Lisp value is shared across mutators.
+#[derive(Default)]
+pub(crate) struct FrameFaceRealizationCache {
+    pub(crate) generation: Option<u64>,
+    pub(crate) epoch: Option<RealizationEpoch>,
+    pub(crate) table: Option<FaceTable>,
+    /// One independently retained root bundle per immutable raw snapshot.
+    /// Layout may keep Arc clones after this cache retires its source table.
+    pub(crate) root_lease: Option<std::sync::Arc<[SharedRoot]>>,
+    pub(crate) entries: FxHashMap<u64, Vec<(Face, Face)>>,
+    /// Allocated only by the lifecycle path, owned by the same frame mutator.
+    /// The enum owns the role count and indexing; no numeric role mirrors exist.
+    pub(crate) basics: Option<Box<EnumMap<BasicFace, Option<(Face, Face)>>>>,
+    /// GNU's cached DEFAULT_FACE_ID retains its complete Lisp source vector.
+    /// The typed display projection omits font/fontset and original plist slots.
+    pub(crate) default_lface: Option<Value>,
+    pub(crate) default_predecessor: Option<(Face, Face)>,
+    pub(crate) default_lookup_position: DefaultLookupPosition,
+    /// Face names whose frame-local Lisp vectors changed after `table` was
+    /// derived. GNU stores definitions as the frame's face vectors and never
+    /// re-derives an untouched one: a set writes one slot (xfaces.c:3767-3773)
+    /// and realization stays content-keyed (lookup_face, xfaces.c:5064-5093).
+    /// An unknown writer (no face name) sets `definitions_all_dirty` instead.
+    pub(crate) dirty_definitions: rustc_hash::FxHashSet<Box<str>>,
+    pub(crate) definitions_all_dirty: bool,
 }

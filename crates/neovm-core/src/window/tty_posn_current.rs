@@ -5,39 +5,9 @@
 use super::*;
 use neomacs_display_protocol::posn_frame_pool::PosnFramePool;
 
-/// Which existing numeric producer GNU's current rows presently admit.
-/// Copy-only state may be read concurrently through immutable Frame publication.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum TtyCurrentMatrixAuthority {
-    AcceptedLocal,
-    FramePoolPartition,
-    Undrawn,
-}
-
-/// GNU desired-matrix allocation facts, not source/display-body freshness.
-/// Numeric values are initialized by the exclusive Frame mutator and immutable
-/// to readers; no query advances this allocation observation.
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct TtyMatrixAllocation {
-    window: WindowId,
-    x: i64,
-    y: i64,
-    width: i64,
-    height: i64,
-    left_margin_glyphs: i64,
-    right_margin_glyphs: i64,
-}
-
-/// Same inline Option<Arc<_>> representation as the prior pool-only owner.
-/// COW copies small numeric allocation/authority records and the pool Arc,
-/// never the retained pool's row/cell vectors. All writes require &mut Frame.
-#[derive(Clone, Debug)]
-pub(super) struct TtyPosnCurrentOwner {
-    pub(super) pool: Option<Arc<PosnFramePool>>,
-    allocation: Vec<TtyMatrixAllocation>,
-    dimensions: (i64, i64),
-    authority: HashMap<WindowId, TtyCurrentMatrixAuthority>,
-}
+pub(crate) use crate::emacs_core::eval::data::window_state::{
+    TtyCurrentMatrixAuthority, TtyMatrixAllocation, TtyPosnCurrentOwner,
+};
 
 impl Frame {
     /// Port of dispnew.c allocate_matrices_for_frame_redisplay's TTY branch.
