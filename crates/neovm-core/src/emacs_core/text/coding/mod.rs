@@ -17,7 +17,7 @@
 //!   set-terminal-coding-system, coding-system-priority-list
 
 use super::eval::Context;
-use super::text_host::TextVariableStore;
+use super::text_host::{TextHost, TextVariableStore};
 use crate::buffer::{BufferManager, EmacsByteRange, LispCharPos1};
 use crate::emacs_core::emacs_char::EmacsChar;
 use crate::heap_types::LispString;
@@ -773,7 +773,7 @@ pub(crate) fn effective_text_quoting_style<
 
 /// The `(text-quoting-style)` builtin's half of the same decision, from a
 /// `Context` whose dynamic bindings must be respected.
-pub(crate) fn context_text_quoting_style(eval: &Context, args: Vec<Value>) -> EvalResult {
+pub(crate) fn context_text_quoting_style<H: TextHost>(eval: &H, args: Vec<Value>) -> EvalResult {
     expect_args("text-quoting-style", &args, 0)?;
     // GNU's fixed `Qtext_quoting_style`; the function is called for every
     // message that quotes text and previously interned the spelling per call.
@@ -3317,8 +3317,8 @@ fn scan_unencodable_positions(
 /// CODING-SYSTEMS can encode the region.  The ASCII/unibyte fast paths mirror
 /// GNU `Fcheck_coding_systems_region`: they return nil before validating the
 /// coding-system list.
-pub(crate) fn builtin_check_coding_systems_region(
-    eval: &mut Context,
+pub(crate) fn builtin_check_coding_systems_region<H: TextHost>(
+    eval: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("check-coding-systems-region", &args, 3)?;
@@ -3340,8 +3340,7 @@ pub(crate) fn builtin_check_coding_systems_region(
         let end = marker_or_integer_position(&args[1])?;
 
         let buffer = eval
-            .edit
-            .buffers
+            .buffers()
             .current_buffer()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
         let buffer_start = 1;
@@ -3370,7 +3369,7 @@ pub(crate) fn builtin_check_coding_systems_region(
     // Validate the coding-system list (GNU `CODING_SYSTEM_SPEC` would signal
     // `coding-system-error` for a non-coding-system) before scanning.
     validate_coding_system_list_cars_for_non_ascii(
-        &eval.coding_systems,
+        eval.coding_systems(),
         args[2],
         eval.symbol_mode(),
     )?;
@@ -3388,7 +3387,7 @@ pub(crate) fn builtin_check_coding_systems_region(
             continue;
         };
         let Some(repertoire) =
-            CodingRepertoire::for_coding_system(&eval.coding_systems, name, eval.symbol_mode())
+            CodingRepertoire::for_coding_system(eval.coding_systems(), name, eval.symbol_mode())
         else {
             continue;
         };
@@ -3411,8 +3410,8 @@ pub(crate) fn builtin_check_coding_systems_region(
 /// nil if it encodes the whole region.  With COUNT non-nil, return a list of at
 /// most COUNT such positions.  With STRING non-nil, START and END index STRING
 /// (`substring`-style) and the returned positions are 0-based char indices.
-pub(crate) fn builtin_unencodable_char_position(
-    eval: &mut Context,
+pub(crate) fn builtin_unencodable_char_position<H: TextHost>(
+    eval: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_min_args("unencodable-char-position", &args, 3)?;
@@ -3422,16 +3421,18 @@ pub(crate) fn builtin_unencodable_char_position(
     // validate first (signalling on an unknown coding system), then short-circuit
     // for raw-text which encodes every byte verbatim.
     let coding_name = coding_symbol_name(&args[2], eval.symbol_mode())?;
-    if !is_known_or_derived_coding_system(&eval.coding_systems, &coding_name) {
+    if !is_known_or_derived_coding_system(eval.coding_systems(), &coding_name) {
         return Err(signal(LispCondition::CodingSystemError, vec![args[2]]));
     }
-    match classify_write_coding(&eval.coding_systems, &coding_name) {
+    match classify_write_coding(eval.coding_systems(), &coding_name) {
         WriteCodingClass::RawText => return Ok(Value::NIL),
         WriteCodingClass::Selectable => {}
     }
-    let Some(repertoire) =
-        CodingRepertoire::for_coding_system(&eval.coding_systems, &coding_name, eval.symbol_mode())
-    else {
+    let Some(repertoire) = CodingRepertoire::for_coding_system(
+        eval.coding_systems(),
+        &coding_name,
+        eval.symbol_mode(),
+    ) else {
         return Ok(Value::NIL);
     };
 
@@ -3477,8 +3478,7 @@ pub(crate) fn builtin_unencodable_char_position(
             (end_raw, start_raw)
         };
         let buffer = eval
-            .edit
-            .buffers
+            .buffers()
             .current_buffer()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
         let buffer_end = buffer.total_char_len().get() as i64 + 1;
@@ -5771,10 +5771,7 @@ pub(crate) fn builtin_set_safe_terminal_coding_system_internal(
 ///     standard display table's U+2018 entry).
 ///   - Any other value is treated as `curve'.
 ///   - Never returns nil.
-pub(crate) fn builtin_text_quoting_style(
-    eval: &super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
+pub(crate) fn builtin_text_quoting_style<H: TextHost>(eval: &H, args: Vec<Value>) -> EvalResult {
     context_text_quoting_style(eval, args)
 }
 
@@ -6142,8 +6139,8 @@ fn marker_or_integer_position(value: &Value) -> Result<i64, Flow> {
     }
 }
 
-pub(crate) fn builtin_find_coding_systems_region_internal(
-    eval: &mut Context,
+pub(crate) fn builtin_find_coding_systems_region_internal<H: TextHost>(
+    eval: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_min_args("find-coding-systems-region-internal", &args, 2)?;
@@ -6151,7 +6148,7 @@ pub(crate) fn builtin_find_coding_systems_region_internal(
 
     if let Some(text) = args[0].as_lisp_string() {
         return safe_coding_systems_for_text(
-            &eval.coding_systems,
+            eval.coding_systems(),
             text,
             args.get(2).copied(),
             eval.symbol_mode(),
@@ -6162,8 +6159,7 @@ pub(crate) fn builtin_find_coding_systems_region_internal(
     let end = marker_or_integer_position(&args[1])?;
 
     let buffer = eval
-        .edit
-        .buffers
+        .buffers()
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     if !buffer.get_multibyte() {
@@ -6185,7 +6181,7 @@ pub(crate) fn builtin_find_coding_systems_region_internal(
     );
     let text = buffer.buffer_substring_lisp_string_range(byte_range);
     safe_coding_systems_for_text(
-        &eval.coding_systems,
+        eval.coding_systems(),
         &text,
         args.get(2).copied(),
         eval.symbol_mode(),
