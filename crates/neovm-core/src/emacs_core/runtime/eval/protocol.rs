@@ -14,6 +14,8 @@ use neovm_edit::buffer::BufferId;
 
 use super::data::face::FaceHeight;
 
+pub mod image_catalog;
+
 /// The display object that owns a neo-term instance.
 ///
 /// Window terminals carry their buffer identity in the variant itself, so a
