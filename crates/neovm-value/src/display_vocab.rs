@@ -31,7 +31,7 @@ impl XwidgetScriptRequestId {
 }
 
 use crate::intern::{self, SymId, WellKnown, resolve_sym};
-use crate::value::{Value, eq_value};
+use crate::value::{Value, ValueKind, VecLikeType, eq_value};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use strum::{EnumCount, EnumString, IntoStaticStr, VariantArray};
 
@@ -1192,5 +1192,38 @@ pub fn text_prop_means_invisible(prop: Value, invisibility_spec: Value) -> Invis
         }
     } else {
         invisible_prop(prop, invisibility_spec)
+    }
+}
+
+/// Font-vector tag spellings (GNU font-spec/font-entity/font-object).
+pub const FONT_SPEC_TAG: &str = "font-spec";
+pub const FONT_ENTITY_TAG: &str = "font-entity";
+pub const FONT_OBJECT_TAG: &str = "font-object";
+
+/// Whether `val` is a vector whose first element is `tag` (with GNU's
+/// optional leading-colon spelling).
+pub fn is_tagged_font_vector(val: &Value, tag: &str) -> bool {
+    match val.kind() {
+        ValueKind::Veclike(VecLikeType::Vector) => {
+            let elems = val.as_vector_data().unwrap().clone();
+            elems
+                .first()
+                .and_then(|v| v.as_bare_symbol_name())
+                .is_some_and(|name| name.trim_start_matches(':') == tag)
+        }
+        _ => false,
+    }
+}
+
+/// GNU `cl-type-of`'s font-vector classification.
+pub fn font_value_type_symbol(val: &Value) -> Option<&'static str> {
+    if is_tagged_font_vector(val, FONT_SPEC_TAG) {
+        Some(FONT_SPEC_TAG)
+    } else if is_tagged_font_vector(val, FONT_ENTITY_TAG) {
+        Some(FONT_ENTITY_TAG)
+    } else if val.is_font_object() {
+        Some(FONT_OBJECT_TAG)
+    } else {
+        None
     }
 }

@@ -1189,10 +1189,9 @@ pub fn seed_live_frame_default_face_from_font_parameter(
 // Font-spec helpers
 // ---------------------------------------------------------------------------
 
+use neovm_value::display_vocab::is_tagged_font_vector;
 /// The tag keyword used to identify font-spec vectors: `:font-spec`.
-const FONT_SPEC_TAG: &str = "font-spec";
-const FONT_ENTITY_TAG: &str = "font-entity";
-pub(crate) const FONT_OBJECT_TAG: &str = "font-object";
+pub use neovm_value::display_vocab::{FONT_ENTITY_TAG, FONT_OBJECT_TAG, FONT_SPEC_TAG};
 
 type OpenedFontMetrics = FontObjectMetrics;
 
@@ -1314,19 +1313,6 @@ impl OpenedFont {
     }
 }
 
-fn is_tagged_font_vector(val: &Value, tag: &str) -> bool {
-    match val.kind() {
-        ValueKind::Veclike(VecLikeType::Vector) => {
-            let elems = val.as_vector_data().unwrap().clone();
-            elems
-                .first()
-                .and_then(|v| v.as_bare_symbol_name())
-                .is_some_and(|name| name.trim_start_matches(':') == tag)
-        }
-        _ => false,
-    }
-}
-
 /// Check whether a Value is a font-spec (a vector whose first element is
 /// the tag symbol/keyword `font-spec` / `:font-spec`.
 pub(crate) fn is_font_spec(val: &Value) -> bool {
@@ -1360,18 +1346,6 @@ pub(crate) fn font_value_fields(value: &Value) -> Option<&'static [Value]> {
 /// `font-object`, src/font.h FONT_*_MAX). Specs and entities are tagged public
 /// vectors; opened fonts use the opaque `PVEC_FONT` runtime tag. `None` for
 /// non-font values.
-pub(crate) fn font_value_type_symbol(val: &Value) -> Option<&'static str> {
-    if is_font_spec(val) {
-        Some(FONT_SPEC_TAG)
-    } else if is_font_entity(val) {
-        Some(FONT_ENTITY_TAG)
-    } else if is_font_object(val) {
-        Some(FONT_OBJECT_TAG)
-    } else {
-        None
-    }
-}
-
 /// Extract a property from a tagged font vector.
 ///
 /// Property lookup is strict: keys only match if they are exactly equal to

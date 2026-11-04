@@ -405,7 +405,7 @@ impl Context {
         // value cell. It cannot call Lisp or retarget canonical dispatch metadata.
         unsafe {
             ev.obarray.with_legacy_value_write(
-                super::super::window_cmds::restore_gnu_configuration_hook_default,
+                super::redisplay_hooks::restore_gnu_configuration_hook_default,
             );
         }
 
