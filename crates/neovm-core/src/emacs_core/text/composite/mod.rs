@@ -11,6 +11,7 @@ pub(crate) use subrs::register_subrs;
 
 use super::chartable::make_char_table_value;
 use crate::buffer::{CharLen, CharPos0, CharRange, EmacsByteRange};
+use crate::emacs_core::text_host::TextHost;
 use neomacs_display_protocol::glyph_matrix::{TerminalComposition, TerminalCompositionCell};
 use neovm_value::error::LispCondition;
 use neovm_value::error::{EvalResult, Flow, signal};
@@ -134,20 +135,17 @@ fn validate_subarray_indices(
 // ---------------------------------------------------------------------------
 
 /// Context-backed `(compose-region-internal START END &optional COMPONENTS MODIFICATION-FUNC)`.
-pub(crate) fn compose_region_internal(
-    ctx: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
+pub(crate) fn compose_region_internal<H: TextHost>(ctx: &mut H, args: Vec<Value>) -> EvalResult {
     expect_args_range("compose-region-internal", &args, 2, 4)?;
     // GNU `Fcompose_region_internal` runs `validate_region (&start, &end)`
     // (buffer.c), which resolves markers, swaps so the lower bound comes first,
     // then bounds-checks against `BEGV`/`ZV`.
     let mut beg = neovm_edit::emacs_core::buffer::expect_integer_or_marker_in_buffers(
-        &ctx.edit.buffers,
+        ctx.buffers(),
         &args[0],
     )?;
     let mut end = neovm_edit::emacs_core::buffer::expect_integer_or_marker_in_buffers(
-        &ctx.edit.buffers,
+        ctx.buffers(),
         &args[1],
     )?;
     if end < beg {
@@ -157,8 +155,7 @@ pub(crate) fn compose_region_internal(
     let modification_func = args.get(3).copied().unwrap_or(Value::NIL);
     expect_composition_components(components)?;
 
-    let (buffer_handle, point_min, point_max) = if let Some(buf) = ctx.edit.buffers.current_buffer()
-    {
+    let (buffer_handle, point_min, point_max) = if let Some(buf) = ctx.buffers().current_buffer() {
         (
             Value::make_buffer(buf.id()),
             buf.point_min_lisp_char_pos().as_i64(),
@@ -1188,9 +1185,10 @@ fn is_unicode_combining_mark(code: u32) -> bool {
 /// composition per character.  This recognizes the rule installed by
 /// `lisp/composite.el`; general execution of arbitrary composition rules remains
 /// the broader `find_automatic_composition' port.
-fn has_default_combining_rule(ctx: &super::eval::Context, code: u32) -> bool {
+fn has_default_combining_rule<H: TextHost>(ctx: &H, code: u32) -> bool {
     let symbol_mode = ctx.symbol_mode();
-    let table = ctx.visible_variable_value_or_nil("composition-function-table");
+    let table = ctx
+        .visible_variable_value_or_nil(neovm_value::intern::intern("composition-function-table"));
     let Ok(rules) = super::chartable::builtin_char_table_range_with_symbols(
         vec![table, Value::fixnum(code as i64)],
         Some(ctx.variables()),
@@ -1213,20 +1211,6 @@ fn has_default_combining_rule(ctx: &super::eval::Context, code: u32) -> bool {
     })
 }
 
-fn current_buffer_is_displayed(ctx: &super::eval::Context) -> bool {
-    let Some(buffer_id) = ctx.edit.buffers.current_buffer_id() else {
-        return false;
-    };
-    ctx.frames.selected_frame().is_some_and(|frame| {
-        frame.window_list().into_iter().any(|window_id| {
-            frame
-                .find_window(window_id)
-                .and_then(|window| window.buffer_id())
-                == Some(buffer_id)
-        })
-    })
-}
-
 /// Fast path for the default base-plus-combining-marks rule installed by GNU
 /// `composite.el`.
 ///
@@ -1235,16 +1219,16 @@ fn current_buffer_is_displayed(ctx: &super::eval::Context) -> bool {
 /// `auto-composition-mode`, multibyte-ness, and the live
 /// `composition-function-table`, matching the control points used by GNU's
 /// `find_automatic_composition`.
-fn find_default_combining_composition_in_string(
-    ctx: &super::eval::Context,
+fn find_default_combining_composition_in_string<H: TextHost>(
+    ctx: &H,
     string: &crate::heap_types::LispString,
     pos: usize,
     limit: i64,
 ) -> Option<CharRange> {
     if !string.is_multibyte()
-        || !current_buffer_is_displayed(ctx)
+        || !ctx.current_buffer_is_displayed()
         || ctx
-            .visible_variable_value_or_nil("auto-composition-mode")
+            .visible_variable_value_or_nil(neovm_value::intern::intern("auto-composition-mode"))
             .is_nil()
     {
         return None;
@@ -1282,10 +1266,7 @@ fn find_default_combining_composition_in_string(
 /// `(FROM TO COMPONENTS RELATIVE-P MOD-FUNC WIDTH)`.  The default
 /// base-plus-combining-marks automatic rule is implemented here; arbitrary
 /// font-driven rules still require the broader display shaper port.
-pub(crate) fn find_composition_internal(
-    ctx: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
+pub(crate) fn find_composition_internal<H: TextHost>(ctx: &mut H, args: Vec<Value>) -> EvalResult {
     expect_args("find-composition-internal", &args, 4)?;
     expect_integer_or_marker_p(&args[0])?;
     if !args[1].is_nil() {
@@ -1361,7 +1342,7 @@ pub(crate) fn find_composition_internal(
         }
     } else {
         let (begv, zv) = {
-            let Some(buf) = ctx.edit.buffers.current_buffer() else {
+            let Some(buf) = ctx.buffers().current_buffer() else {
                 return Err(signal(
                     LispCondition::ArgsOutOfRange,
                     vec![Value::NIL, Value::fixnum(pos)],
@@ -1374,8 +1355,7 @@ pub(crate) fn find_composition_internal(
         };
         if pos < begv || pos > zv {
             let handle = ctx
-                .edit
-                .buffers
+                .buffers()
                 .current_buffer()
                 .map(|b| Value::make_buffer(b.id()))
                 .unwrap_or(Value::NIL);
@@ -1386,8 +1366,7 @@ pub(crate) fn find_composition_internal(
         }
         let to = if limit < 0 { -1 } else { limit.clamp(begv, zv) };
         let buf = ctx
-            .edit
-            .buffers
+            .buffers()
             .current_buffer()
             .expect("checked current buffer");
         find_composition_in_buffer(buf, begv, zv, pos, to, comp).map(|(start, end, property)| {
@@ -1457,7 +1436,7 @@ pub(crate) fn find_composition_internal(
     } else {
         let relative_p = composition_relative_p(components);
         let key =
-            composition_components_key(&ctx.edit.buffers, components, args[2], start, end - start);
+            composition_components_key(ctx.buffers(), components, args[2], start, end - start);
         // GNU `get_composition_id` validates the components and returns -1 for an
         // invalid composition (e.g. an even-length rule vector). On -1 the detail
         // `tail` is nil, so only `(FROM TO)` is returned and PROP is not
@@ -1484,19 +1463,16 @@ pub(crate) fn find_composition_internal(
 /// between FROM and TO with FONT-OBJECT in STRING.
 ///
 /// Stub: return nil (let the display engine handle shaping).
-pub(crate) fn composition_get_gstring(
-    ctx: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
+pub(crate) fn composition_get_gstring<H: TextHost>(ctx: &mut H, args: Vec<Value>) -> EvalResult {
     expect_args("composition-get-gstring", &args, 4)?;
 
     let codes = if args[3].is_nil() {
         let byte_range = super::editfns::current_buffer_accessible_char_region_in_buffers(
-            &ctx.edit.buffers,
+            ctx.buffers(),
             &args[0],
             &args[1],
         )?;
-        let Some(buf) = ctx.edit.buffers.current_buffer() else {
+        let Some(buf) = ctx.buffers().current_buffer() else {
             return Err(signal("error", vec![Value::string("No current buffer")]));
         };
         if !buf.get_multibyte() {
@@ -1571,7 +1547,7 @@ pub(crate) fn composition_get_gstring(
 /// GNU `composition_gstring_p`: validate the public glyph-string shape before
 /// a font driver sees it.  A glyph vector after the first nil slot is unused,
 /// exactly as in `src/composite.c`.
-pub(crate) fn composition_gstring_p(ctx: &super::eval::Context, value: Value) -> bool {
+pub(crate) fn composition_gstring_p<H: TextHost>(ctx: &H, value: Value) -> bool {
     let symbol_mode = ctx.symbol_mode();
     let Some(gstring) = value.as_vector_data() else {
         return false;
@@ -1589,7 +1565,7 @@ pub(crate) fn composition_gstring_p(ctx: &super::eval::Context, value: Value) ->
         || header[0].is_font_object()
         || header[0]
             .as_symbol_name(symbol_mode)
-            .is_some_and(|name| ctx.coding_systems.is_known_or_derived(name));
+            .is_some_and(|name| ctx.coding_systems().is_known_or_derived(name));
     if !valid_header_font
         || !header[1..]
             .iter()
