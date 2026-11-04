@@ -174,44 +174,6 @@ fn prepare_work_buffer(
         .expect("newly acquired code-conversion buffer must be live");
 }
 
-impl crate::emacs_core::eval::Context {
-    /// Acquire through the evaluator so GNU's `Fmake_local_variable` side of
-    /// `code_conversion_save` updates both the buffer and the symbol's
-    /// localized forwarding metadata.
-    pub(crate) fn acquire_code_conversion_buffer(
-        &mut self,
-        encoding: ConversionBufferEncoding,
-    ) -> Result<CodeConversionBufferLease, neovm_value::error::Flow> {
-        let lease = self
-            .code_conversion_workspace
-            .acquire(&mut self.edit.buffers, encoding);
-        if let Err(flow) = self.set_buffer_local_binding_by_id(
-            lease.buffer_id(),
-            neovm_value::intern::intern("inhibit-modification-hooks"),
-            Value::T,
-        ) {
-            self.code_conversion_workspace
-                .release(&mut self.edit.buffers, lease);
-            return Err(flow);
-        }
-        Ok(lease)
-    }
-
-    pub(crate) fn set_code_conversion_buffer_contents(
-        &mut self,
-        lease: &CodeConversionBufferLease,
-        text: &LispString,
-    ) {
-        self.code_conversion_workspace
-            .replace_contents(&mut self.edit.buffers, lease, text);
-    }
-
-    pub(crate) fn release_code_conversion_buffer(&mut self, lease: CodeConversionBufferLease) {
-        self.code_conversion_workspace
-            .release(&mut self.edit.buffers, lease);
-    }
-}
-
 #[cfg(test)]
 #[path = "code_conversion_workspace/tests/code_conversion_workspace_test.rs"]
 mod tests;
