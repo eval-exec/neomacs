@@ -1574,7 +1574,7 @@ fn editor_capabilities(
         "--batch",
         "-Q",
         "--eval",
-        r#"(princ (format "%d,%d,%d,%d,%d,%d" (if (and (fboundp 'native-comp-available-p) (native-comp-available-p)) 1 0) (if (and (fboundp 'treesit-available-p) (treesit-available-p)) 1 0) (if (fboundp 'module-load) 1 0) (if (fboundp 'neomacs-video-load) 1 0) (if (featurep 'xwidget-internal) 1 0) (if (fboundp 'neomacs-terminal-create) 1 0)))"#,
+        r#"(princ (format "%d,%d,%d,%d,%d,%d" (if (and (fboundp 'native-comp-available-p) (native-comp-available-p)) 1 0) (if (and (fboundp 'treesit-available-p) (treesit-available-p)) 1 0) (if (fboundp 'module-load) 1 0) (if (fboundp 'neomacs-video-load) 1 0) (if (fboundp 'neomacs-webkit-create) 1 0) (if (fboundp 'neomacs-terminal-create) 1 0)))"#,
     ]);
     let output = command
         .output()
