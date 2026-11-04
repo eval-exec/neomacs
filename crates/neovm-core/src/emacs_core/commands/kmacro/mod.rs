@@ -18,6 +18,7 @@ use super::intern::resolve_sym;
 use super::value::*;
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_max_args, expect_min_args};
+use crate::emacs_core::keyboard::CommandLoopHost;
 use std::collections::HashSet;
 
 // ---------------------------------------------------------------------------

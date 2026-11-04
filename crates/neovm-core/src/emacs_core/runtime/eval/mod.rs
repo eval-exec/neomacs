@@ -2747,7 +2747,7 @@ pub struct PopupMenuRequest {
 /// `minibuffer-quit-recursive-edit` raises `minibuffer-quit` rather than the
 /// plain `quit` that `abort-recursive-edit` raises.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum CommandLoopExit {
+pub(crate) enum CommandLoopExit {
     /// Any other value, notably `nil` (`exit-recursive-edit`).
     Normal,
     /// `t` — `abort-recursive-edit`.
@@ -3252,8 +3252,8 @@ pub struct Context {
     /// Lexical environment: flat cons alist mirroring GNU Emacs's
     /// `Vinternal_interpreter_environment`.
     pub(crate) lexenv: Value,
-    quit_flag: Value,
-    inhibit_quit: Value,
+    pub(crate) quit_flag: Value,
+    pub(crate) inhibit_quit: Value,
     /// `throw-on-input`'s value, cached beside the two flags it is polled
     /// with.  GNU's `QUIT` reads C globals; reading this one out of the
     /// obarray instead put a symbol lookup on every safe point, because the
@@ -3485,7 +3485,7 @@ pub struct Context {
     /// identities cached here to avoid repeated name interning/lookups.
     quit_flag_symbol: SymId,
     inhibit_quit_symbol: SymId,
-    throw_on_input_symbol: SymId,
+    pub(crate) throw_on_input_symbol: SymId,
     kill_emacs_symbol: SymId,
     /// The attention word (`attention.rs`): one bit per input a safe point
     /// or a speculated call site must look at.  Derived from `quit_flag`,
@@ -7580,7 +7580,7 @@ impl Context {
     }
 }
 
-fn format_startup_value(value: Option<&Value>) -> String {
+pub(crate) fn format_startup_value(value: Option<&Value>) -> String {
     value
         .map(super::print::print_value)
         .unwrap_or_else(|| "<unbound>".to_string())
@@ -7846,7 +7846,7 @@ fn next_context_instance_id() -> u64 {
 /// How the command loop's log treats an uncaught command signal; see
 /// `Context::command_error_severity'.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum CommandErrorSeverity {
+pub(crate) enum CommandErrorSeverity {
     /// What the user just did: a quit, or a condition GNU's debugger ignores
     /// (`debug-ignored-errors').  Shown in the echo area, logged at debug.
     Routine,
@@ -7857,7 +7857,7 @@ enum CommandErrorSeverity {
 
 /// An owned snapshot of one uncaught command signal, captured before Lisp
 /// presentation code can alter the state used to classify or render it.
-struct CommandLoopDiagnostic {
+pub(crate) struct CommandLoopDiagnostic {
     severity: CommandErrorSeverity,
     condition: String,
     message: String,
@@ -7866,7 +7866,24 @@ struct CommandLoopDiagnostic {
 }
 
 impl CommandLoopDiagnostic {
-    fn emit(self) {
+    /// Build one owned diagnostic snapshot at the signal-dispatch boundary.
+    pub(crate) fn new(
+        severity: CommandErrorSeverity,
+        condition: String,
+        message: String,
+        signal: String,
+        backtrace: String,
+    ) -> Self {
+        Self {
+            severity,
+            condition,
+            message,
+            signal,
+            backtrace,
+        }
+    }
+
+    pub(crate) fn emit(self) {
         let Self {
             severity,
             condition,

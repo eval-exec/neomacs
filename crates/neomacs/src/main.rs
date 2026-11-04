@@ -4292,7 +4292,7 @@ fn run_gui_evaluator_worker(
     neovm_core::emacs_core::load::maybe_run_after_pdump_load_hook(&mut evaluator);
     tracing::info!("Entering GNU command loop on GUI evaluator worker...");
     mark_jit_command_loop_entry();
-    let exit_status = evaluator.recursive_edit();
+    let exit_status = neovm_core::emacs_core::keyboard::recursive_edit(&mut evaluator);
     // Stop/join the native settings owner on every normal shutdown, before
     // the evaluator is deliberately retained for process exit. Unwinding and
     // failed startup also drop this guard.
@@ -4673,7 +4673,7 @@ pub fn run(mode: RuntimeMode) {
         },
     };
     let _logging_guard = neovm_core::logging::init(log_target);
-    Context::initialize_termination_signals(startup.noninteractive);
+    neovm_core::emacs_core::keyboard::initialize_termination_signals(startup.noninteractive);
 
     if mode == RuntimeMode::Raw
         && let Some(temacs_mode) = startup.temacs_mode
@@ -5003,7 +5003,7 @@ pub fn run(mode: RuntimeMode) {
     neovm_core::emacs_core::load::maybe_run_after_pdump_load_hook(&mut evaluator);
     tracing::info!("Entering GNU command loop (recursive-edit)...");
     mark_jit_command_loop_entry();
-    let exit_status = evaluator.recursive_edit();
+    let exit_status = neovm_core::emacs_core::keyboard::recursive_edit(&mut evaluator);
     if exit_status.is_ok() {
         tracing::info!("Command loop exited normally");
     } else {
@@ -6074,7 +6074,7 @@ fn run_gnu_startup_inner(eval: &mut Context) {
 
     eval.init_input_system();
 
-    let result = eval.recursive_edit();
+    let result = neovm_core::emacs_core::keyboard::recursive_edit(&mut eval);
 
     if let Err(other) = result {
         let last_phase = eval

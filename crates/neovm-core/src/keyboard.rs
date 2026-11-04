@@ -13,6 +13,7 @@
 use crate::buffer::{CharLen, CharPos0, CharRange};
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::intern::{WellKnown, intern, resolve_sym};
+use crate::emacs_core::keyboard::CommandLoopHost;
 use crate::emacs_core::keyboard::pure::KEY_CHAR_META;
 use crate::emacs_core::keymap::KeymapMarker;
 use crate::emacs_core::wait::CommandInputWaitOutcome;

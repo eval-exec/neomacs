@@ -605,7 +605,7 @@ impl Context {
     /// that is not a valid regexp makes the matcher signal `invalid-regexp',
     /// and that must classify the original error, not unwind the command
     /// loop.  So this is infallible: a matcher failure is a `Diagnostic'.
-    pub(super) fn command_error_severity(&mut self, sig: &SignalData) -> CommandErrorSeverity {
+    pub(crate) fn command_error_severity(&mut self, sig: &SignalData) -> CommandErrorSeverity {
         if crate::emacs_core::errors::signal_matches_condition_value_sym(
             &self.obarray,
             sig.symbol,

@@ -13,6 +13,7 @@ use crate::emacs_core::error::{
 };
 use crate::emacs_core::eval::{Context, VariableView};
 use crate::emacs_core::intern::{intern, resolve_sym};
+use crate::emacs_core::keyboard::CommandLoopHost;
 use std::io::Write;
 
 use strum::{EnumString, IntoStaticStr};

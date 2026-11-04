@@ -86,7 +86,7 @@ impl Context {
     // --- Post-command point adjustment (GNU `keyboard.c`) -------------------
 
     /// Current buffer point as a 1-based Lisp char position.
-    pub(super) fn apfp_point(&self, id: crate::buffer::BufferId) -> i64 {
+    pub(crate) fn apfp_point(&self, id: crate::buffer::BufferId) -> i64 {
         self.edit
             .buffers
             .get(id)
