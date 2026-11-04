@@ -9,13 +9,7 @@ use neomacs_display_protocol::glyph_matrix::GlyphArea;
 pub use neomacs_display_protocol::posn_object_extent::PosnObjectExtent;
 use std::ffi::OsStr;
 
-/// Immutable process policy, safely published by OnceLock. Independent
-/// mutators share only this numeric enum; there is no Lisp state or TLS cache.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PosnObjectExtentMode {
-    Off,
-    On,
-}
+pub use crate::emacs_core::eval::data::window_state::PosnObjectExtentMode;
 
 impl PosnObjectExtentMode {
     pub fn parse(setting: Option<&OsStr>) -> Self {

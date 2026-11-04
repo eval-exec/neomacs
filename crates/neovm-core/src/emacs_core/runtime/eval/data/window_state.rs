@@ -1670,3 +1670,154 @@ pub(crate) struct DeferredPositions {
     pub(crate) row_heights: HashMap<i64, i64>,
     pub(crate) positions: OnceLock<Vec<PresentationPosition>>,
 }
+
+// --- E5-FM-3a part geometry records (stage-4 W2/E5) ---
+
+/// One of GNU's `enum window_part` values (src/dispextern.h:216-232).
+///
+/// `ON_NOTHING` is deliberately absent. GNU uses it as the "no" answer of
+/// `coordinates_in_window`, and every caller compares against it before using
+/// the value; here that answer is `None`, so every value of this type names a
+/// region that really exists.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum WindowPart {
+    Text,
+    ModeLine,
+    VerticalBorder,
+    HeaderLine,
+    TabLine,
+    LeftFringe,
+    RightFringe,
+    LeftMargin,
+    RightMargin,
+    VerticalScrollBar,
+    HorizontalScrollBar,
+    RightDivider,
+    BottomDivider,
+}
+
+/// The three window-chrome lines, which GNU answers through `mode_line_string`
+/// (src/dispnew.c:6444-6519) instead of `buffer_posn_from_coords`.
+///
+/// They are a type of their own because they are the only parts for which GNU
+/// sets `textpos = -1` (src/keyboard.c:5900), which is what makes a chrome
+/// posn's `posn-point` nil.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum WindowChromeLine {
+    TabLine,
+    HeaderLine,
+    ModeLine,
+}
+
+/// Everything a posn's AREA slot can name.
+///
+/// GNU fills it from two different places: `make_lispy_position`'s window
+/// branch, which is [`WindowPart`], and its frame-bar special cases, which
+/// replace the window with the frame entirely (src/keyboard.c:5799-5843 for
+/// the GUI tab/tool bar windows, :5844-5852 for the terminal tab bar). Naming
+/// both in one type is what keeps the area strings in a single table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PosnArea {
+    Window(WindowPart),
+    MenuBar,
+    ToolBar,
+    TabBar,
+}
+
+/// A coordinate a part classification has placed in a window's text area.
+///
+/// There is no public constructor: [`WindowPartGeometry::resolve`] is the only
+/// thing that makes one, and it makes one for exactly the parts GNU lets reach
+/// `buffer_posn_from_coords`. The row lookup that answers a buffer position
+/// accepts nothing else, so "look the position up first and classify later" --
+/// the shape ledger 205 left behind -- is not expressible.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TextAreaCoordinate {
+    pub(crate) text_area_x: i64,
+    pub(crate) window_y: i64,
+    pub(crate) text_area_y: i64,
+}
+
+/// What `make_lispy_position` does with a coordinate once it is classified.
+///
+/// The two arms are GNU's own and they are exclusive there: the chrome branch
+/// sets `textpos = -1` (src/keyboard.c:5900) so the `if (!textpos)` block that
+/// runs `buffer_posn_from_coords` (src/keyboard.c:5975) is skipped, and every
+/// other part leaves `textpos` at 0 so it runs. Only [`Self::Buffer`] carries
+/// a [`TextAreaCoordinate`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WindowCoordinate {
+    /// A tab, header or mode line. `window_x`/`window_y` are GNU's `wx`/`wy`,
+    /// which for this branch are both the posn's reported coordinates and the
+    /// input to `mode_line_string` (src/keyboard.c:5890-5905).
+    ChromeLine {
+        line: WindowChromeLine,
+        window_x: i64,
+        window_y: i64,
+    },
+    /// Everything else. The part still names the AREA (nil for `Text`), and the
+    /// buffer position is looked up at `at`.
+    Buffer {
+        part: WindowPart,
+        window_x: i64,
+        window_y: i64,
+        at: TextAreaCoordinate,
+    },
+}
+
+/// The window geometry `coordinates_in_window` reads (src/window.c:1348-1489),
+/// in the frame's pixel units and relative to the frame's origin.
+///
+/// GNU asks two separate questions about each chrome line and so does this:
+/// whether the window HAS one at all (`window_wants_mode_line`,
+/// src/window.c:6021-6060 -- a question about the window, its parameters and
+/// its buffer's `mode-line-format`) and how TALL it is
+/// (`CURRENT_MODE_LINE_HEIGHT`, src/dispextern.h:1563-1570 -- the last
+/// redisplay's answer, or an estimate when there is none). This port publishes
+/// one number per line, so the two collapse into "height > 0"; ledger 205's
+/// residual 4 is that collapse seen from the other side, and it is why a
+/// window whose `mode-line-format` was set to nil without a redisplay still
+/// reports a mode line here.
+///
+/// Scroll bars and window dividers are not among the fields. GNU reads their
+/// widths off the window (`WINDOW_SCROLL_BAR_AREA_WIDTH`,
+/// `WINDOW_RIGHT_DIVIDER_WIDTH`), and on a terminal frame -- the frames this
+/// classifier serves -- they are all zero. A window-system frame answers a
+/// coordinate from its published presentation regions instead, which carry the
+/// scroll bar and divider rectangles directly; [`WindowPart`] still names them
+/// so both routes share one table of AREA symbols.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WindowPartGeometry {
+    /// `WINDOW_LEFT_EDGE_X` / `WINDOW_RIGHT_EDGE_X`.
+    pub left_x: i64,
+    pub right_x: i64,
+    /// `WINDOW_TOP_EDGE_Y` / `WINDOW_BOTTOM_EDGE_Y`.
+    pub top_y: i64,
+    pub bottom_y: i64,
+    /// `CURRENT_TAB_LINE_HEIGHT` and friends, zero when the line is absent.
+    pub tab_line_height: i64,
+    pub header_line_height: i64,
+    pub mode_line_height: i64,
+    /// `window_box_left_offset (w, TEXT_AREA)`: fringes, margins and any
+    /// left-hand scroll bar between the window's left edge and its text.
+    pub text_area_left_offset: i64,
+    /// `window_box_width (w, TEXT_AREA)`.
+    pub text_area_width: i64,
+    /// `window_box_width (w, LEFT_MARGIN_AREA)` / `RIGHT_MARGIN_AREA`.
+    pub left_margin_width: i64,
+    pub right_margin_width: i64,
+    /// `FRAME_COLUMN_WIDTH`, the width of the draggable strip GNU calls
+    /// `grabbable_width`.
+    pub column_width: i64,
+    /// `WINDOW_RIGHTMOST_P`: a window that is not rightmost owns a vertical
+    /// border in its last column on a terminal frame.
+    pub rightmost: bool,
+}
+
+/// Immutable process policy, safely published by OnceLock. Independent
+/// mutators share only this numeric enum; there is no Lisp state or TLS cache.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PosnObjectExtentMode {
+    Off,
+    On,
+}
