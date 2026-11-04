@@ -730,7 +730,7 @@ impl Context {
         // only the selected window cache from its own buffer; redisplay must
         // not realign `current-buffer` with the selected window here.
         if let Some(frame_id) = self.frames.selected_frame().map(|frame| frame.id) {
-            super::super::window_cmds::remember_selected_window_point_in_state(
+            super::display_query_hooks::remember_selected_window_point(
                 &mut self.frames,
                 &mut self.edit.buffers,
                 frame_id,
@@ -829,7 +829,7 @@ impl Context {
         // `C-e` case, issue #140) this keeps the cursor visible. Updating
         // `Window::Leaf.hscroll` here makes both the layout render and
         // `(window-hscroll)` reflect the new value (no post-layout write-back).
-        crate::emacs_core::hscroll::update_auto_hscroll_before_redisplay(self);
+        super::display_query_hooks::update_auto_hscroll(self);
         let has_fn = self.redisplay_fn.is_some();
         tracing::debug!("redisplay called (has_fn={})", has_fn);
         if let Some(mut f) = self.redisplay_fn.take() {
@@ -1025,7 +1025,7 @@ impl Context {
             }
         });
         RedisplaySignature {
-            fontset_generation: crate::emacs_core::fontset::fontset_generation(),
+            fontset_generation: super::display_query_hooks::fontset_generation(),
             compositor_scrolling_enabled: selected_window.is_some_and(|window| {
                 self.compositor_scrolling_enabled(
                     neovm_edit::emacs_core::display_metrics::WindowId(window),

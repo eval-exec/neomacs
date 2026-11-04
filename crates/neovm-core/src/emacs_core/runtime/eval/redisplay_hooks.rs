@@ -365,7 +365,7 @@ impl Context {
         } else {
             return Ok(PreparedMiniResizeOutcome::Unchanged);
         }
-        let committed = super::super::window_cmds::builtin_resize_mini_window_internal(
+        let committed = super::display_query_hooks::resize_mini_window(
             self,
             vec![Value::make_window(window.0)],
         )?;
@@ -753,7 +753,7 @@ impl Context {
                 .and_then(|frame| frame.redisplay_snapshot(window))
                 .filter(|snapshot| snapshot.regions_materialized)
                 .and_then(|_| {
-                    crate::emacs_core::window_cmds::hook_window_body_dimensions(
+                    super::display_query_hooks::window_body_dimensions(
                         &self.frames,
                         &self.edit.buffers,
                         frame,
@@ -938,7 +938,7 @@ impl RedisplayTransaction<'_> {
             );
         }
         if let Some(frame) = self.eval.frames.selected_frame().map(|frame| frame.id) {
-            super::super::window_cmds::remember_selected_window_point_in_state(
+            super::display_query_hooks::remember_selected_window_point(
                 &mut self.eval.frames,
                 &mut self.eval.edit.buffers,
                 frame,
@@ -1018,7 +1018,7 @@ impl RedisplayTransaction<'_> {
         {
             return Ok(Value::NIL);
         }
-        crate::emacs_core::hscroll::update_auto_hscroll_before_redisplay(self.eval);
+        super::display_query_hooks::update_auto_hscroll(self.eval);
         self.eval.gnu_distribute_text_marks();
         let accepted_before = self.eval.gnu_redisplay_hooks.accepted_serial;
         self.callback = self.eval.redisplay_fn.take();

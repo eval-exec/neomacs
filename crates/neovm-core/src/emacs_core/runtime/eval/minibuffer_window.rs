@@ -83,7 +83,7 @@ impl Context {
             return None;
         }
         let caller = (*self.minibuffer_selected_window)?;
-        crate::emacs_core::window_cmds::WindowDomainFrameOf::frame_of(
+        super::display_query_hooks::window_domain_frame_of(
             crate::emacs_core::eval::data::window_state::WindowDomain::Live,
             &self.frames,
             caller,
@@ -109,7 +109,7 @@ impl Context {
             neovm_value::minibuffer_state::MinibufferEntryLevel::from_depth(depth)
         };
 
-        let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id_in_state(
+        let frame_id = super::display_query_hooks::ensure_selected_frame_id(
             &mut self.frames,
             &mut self.edit.buffers,
         );
@@ -132,7 +132,7 @@ impl Context {
             }
         }
 
-        crate::emacs_core::window_cmds::remember_selected_window_point_in_state(
+        super::display_query_hooks::remember_selected_window_point(
             &mut self.frames,
             &mut self.edit.buffers,
             frame_id,
