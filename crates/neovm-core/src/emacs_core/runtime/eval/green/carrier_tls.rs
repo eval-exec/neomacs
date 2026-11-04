@@ -225,7 +225,10 @@ pub(crate) fn reset_carrier_tls() {
     reset_step!("intern", crate::emacs_core::intern::reset_carrier_tls());
     reset_step!("symbol", crate::emacs_core::symbol::reset_carrier_tls());
     reset_step!("load", crate::emacs_core::load::reset_carrier_tls());
-    reset_step!("xdisp", crate::emacs_core::xdisp::reset_carrier_tls());
+    reset_step!(
+        "xdisp",
+        super::super::data::xdisp_column_spec::reset_carrier_tls()
+    );
     reset_step!("indent", crate::emacs_core::indent::reset_carrier_tls());
     reset_step!("print", crate::emacs_core::print::reset_carrier_tls());
     reset_step!(
@@ -321,7 +324,7 @@ pub(crate) fn snapshot_carrier_tls() -> u64 {
     crate::emacs_core::intern::carrier_tls_fingerprint(&mut h);
     crate::emacs_core::symbol::carrier_tls_fingerprint(&mut h);
     crate::emacs_core::load::carrier_tls_fingerprint(&mut h);
-    crate::emacs_core::xdisp::carrier_tls_fingerprint(&mut h);
+    super::super::data::xdisp_column_spec::carrier_tls_fingerprint(&mut h);
     crate::emacs_core::indent::carrier_tls_fingerprint(&mut h);
     crate::emacs_core::print::carrier_tls_fingerprint(&mut h);
     crate::emacs_core::subr::leaf::carrier_tls_fingerprint(&mut h);

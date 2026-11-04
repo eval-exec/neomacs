@@ -83,6 +83,10 @@ use crate::buffer::{
 use crate::emacs_core::display_metrics::MotionEngine;
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_args_range};
+use crate::emacs_core::eval::data::xdisp_column_spec::note_column_spec_consumed;
+pub use crate::emacs_core::eval::data::xdisp_column_spec::{
+    column_spec_consumed, reset_column_spec_consumed,
+};
 use crate::emacs_core::intern::WellKnown;
 use crate::window::{
     DisplayRowSnapshot, FrameId, FrameManager, Window, WindowChromeLine, WindowChromePresence,
@@ -457,34 +461,6 @@ impl LineAdvance {
 // same-screen-row precondition does NOT pin: moving point left or right within
 // a row changes `%c` while the row is unchanged.
 //
-// We record only WHETHER the spec was consumed, not its value. Refusing the
-// chrome skip outright whenever `%c`/`%C` is displayed is strictly more
-// conservative than GNU (which compares the value and still skips when the
-// column happens to be unchanged), and it costs nothing in the default
-// configuration because `column-number-mode` is off (lisp/simple.el:9387).
-// Comparing values is the later relaxation.
-//
-// Thread-local for the same reason as the layout engine's eval counter: the
-// mode line is expanded on the evaluator's thread.
-thread_local! {
-    static COLUMN_SPEC_CONSUMED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-fn note_column_spec_consumed() {
-    COLUMN_SPEC_CONSUMED.with(|consumed| consumed.set(true));
-}
-
-/// Arm the `%c`/`%C` detector for one mode-line expansion.
-pub fn reset_column_spec_consumed() {
-    COLUMN_SPEC_CONSUMED.with(|consumed| consumed.set(false));
-}
-
-/// Whether the expansion since [`reset_column_spec_consumed`] displayed a
-/// column. See the `COLUMN_SPEC_CONSUMED` comment for why redisplay asks.
-pub fn column_spec_consumed() -> bool {
-    COLUMN_SPEC_CONSUMED.with(std::cell::Cell::get)
-}
-
 fn prefix_line_and_column(
     buf: &Buffer,
     accessible: AccessibleEmacsByteRange,
@@ -10357,14 +10333,3 @@ mod mode_line_point_test;
 #[cfg(test)]
 #[path = "tests/mode_line_nested_point_test.rs"]
 mod mode_line_nested_point_test;
-
-/// Carrier park: clear the column-spec consumption latch.
-pub(crate) fn reset_carrier_tls() {
-    COLUMN_SPEC_CONSUMED.with(|slot| slot.set(false));
-}
-
-/// Debug-only carrier TLS fingerprint for this module's classified records.
-#[cfg(debug_assertions)]
-pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
-    crate::tls_fingerprint::mix(h, COLUMN_SPEC_CONSUMED.with(|slot| slot.get() as u64));
-}

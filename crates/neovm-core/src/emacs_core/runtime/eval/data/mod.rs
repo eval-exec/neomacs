@@ -20,4 +20,5 @@ pub mod process_tls;
 pub mod redisplay;
 pub mod window_edge_drag;
 pub mod window_state;
+pub mod xdisp_column_spec;
 pub mod xwidget;
