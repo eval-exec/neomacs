@@ -1,8 +1,8 @@
 pub use neovm_edit::buffer;
-mod code_conversion_workspace;
+pub(crate) use neovm_text::code_conversion_workspace;
 pub mod display_evaluation;
 pub mod emacs_core;
-pub mod encoding;
+pub use neovm_text::encoding;
 pub mod face;
 mod frontend_events;
 #[cfg(any(test, feature = "fuzzing"))]

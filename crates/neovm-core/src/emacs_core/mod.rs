@@ -367,55 +367,41 @@ pub use neovm_value::boolvec;
 #[cfg(test)]
 #[path = "../../core_test_facades/emacs_core/boolvec.rs"]
 pub mod boolvec;
-#[path = "text/casefiddle/mod.rs"]
-pub mod casefiddle;
-#[path = "text/casetab/mod.rs"]
-pub mod casetab;
-#[path = "text/category/mod.rs"]
-pub mod category;
-#[path = "text/ccl/mod.rs"]
-pub mod ccl;
-#[path = "text/character/mod.rs"]
-pub mod character;
-#[path = "text/charset/mod.rs"]
-pub mod charset;
-#[path = "text/chartable/mod.rs"]
-pub mod chartable;
-#[path = "text/coding/mod.rs"]
-pub mod coding;
-#[path = "text/composite/mod.rs"]
-pub mod composite;
+pub use neovm_text::emacs_core::casefiddle;
+pub use neovm_text::emacs_core::casetab;
+pub use neovm_text::emacs_core::category;
+pub use neovm_text::emacs_core::ccl;
+pub use neovm_text::emacs_core::character;
+pub use neovm_text::emacs_core::charset;
+pub use neovm_text::emacs_core::chartable;
+pub use neovm_text::emacs_core::coding;
+pub mod composite {
+    pub use neovm_text::emacs_core::composite::*;
+    #[path = "subrs.rs"]
+    mod subrs;
+    pub(crate) use subrs::register_subrs;
+    #[cfg(test)]
+    pub(crate) use subrs::SUBRS;
+}
 pub use neovm_value::emacs_char;
-#[path = "text/format/mod.rs"]
-pub mod format;
+pub use neovm_text::emacs_core::format;
 pub(crate) use neovm_value::heap_registry;
-#[path = "text/json/mod.rs"]
-pub mod json;
-#[path = "text/regex/mod.rs"]
-pub mod regex;
-#[path = "text/regex/emacs.rs"]
-pub mod regex_emacs;
-#[path = "text/search/mod.rs"]
-pub mod search;
-#[path = "text/string_escape/mod.rs"]
-pub(crate) mod string_escape;
-#[path = "text/substrate_hooks.rs"]
-pub(crate) mod substrate_hooks;
+pub use neovm_text::emacs_core::json;
+pub use neovm_text::emacs_core::regex;
+pub use neovm_text::emacs_core::regex_emacs;
+pub use neovm_text::emacs_core::search;
+pub(crate) use neovm_text::emacs_core::string_escape;
+pub(crate) use neovm_text::emacs_core::substrate_hooks;
 // The character<->byte position cache (GNU fns.c string_char_to_byte)
 // moved into neovm-value with the stage-3 split (C12); the historical
 // `emacs_core::string_pos_cache` paths keep resolving through this facade.
 pub(crate) use neovm_value::string_pos_cache;
-#[path = "text/syntax/mod.rs"]
-pub mod syntax;
-#[path = "text/host/mod.rs"]
-pub mod text_host;
+pub use neovm_text::emacs_core::syntax;
+pub use neovm_text::emacs_core::text_host;
 pub use neovm_edit::emacs_core::textprop;
-#[path = "text/treesit/mod.rs"]
-pub mod treesit;
-#[path = "text/xml/mod.rs"]
-pub mod xml;
-#[path = "text/zlib/mod.rs"]
-pub(crate) mod zlib;
+pub use neovm_text::emacs_core::treesit;
+pub use neovm_text::emacs_core::xml;
+pub(crate) use neovm_text::emacs_core::zlib;
 
 // Cross-subsystem and externally-shaped regression suites retain the
 // `emacs_core` lexical parent while living beside the subsystem they cover.
@@ -478,14 +464,6 @@ mod symbol_plist_regression_test;
 #[cfg(test)]
 #[path = "../../core_tests/emacs_core/runtime/symbol/tests/redirect_regression_test.rs"]
 mod symbol_redirect_regression_test;
-#[cfg(test)]
-#[cfg(test)]
-#[cfg(test)]
-#[path = "text/syntax/tests/category_property_test.rs"]
-mod syntax_category_property_test;
-#[cfg(test)]
-#[path = "text/syntax/tests/gnu_parity_regression_test.rs"]
-mod syntax_gnu_parity_regression_test;
 #[cfg(test)]
 #[path = "system/tls/tests/runtime_test.rs"]
 mod tls_test;
@@ -605,25 +583,10 @@ mod plist_collection_capture_test;
 // The string-position cache's regression children stayed in core with the
 // stage-3 C12 move: they drive the evaluator's heap and activation machinery
 // (Context, TaggedHeap, tls_scope), which the value layer cannot name.
-#[cfg(test)]
-#[path = "text/string_pos_cache/tests/string_pos_cache_test.rs"]
-mod string_pos_cache_test;
 
-#[cfg(test)]
-#[path = "text/string_pos_cache/tests/gc_tls_ownership_test.rs"]
-mod string_pos_cache_gc_ownership_test;
 
-#[cfg(test)]
-#[path = "text/string_pos_cache/tests/gc_collection_epoch_test.rs"]
-mod string_pos_cache_gc_epoch_test;
 
-#[cfg(test)]
-#[path = "text/string_pos_cache/tests/gc_collection_epoch_minor_test.rs"]
-mod string_pos_cache_gc_epoch_minor_test;
 
-#[cfg(test)]
-#[path = "text/string_pos_cache/tests/signed_string_positions.rs"]
-mod string_pos_cache_signed_positions_test;
 
 #[cfg(test)]
 #[path = "tests/architecture/parallel_exec_substrate_test.rs"]

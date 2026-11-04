@@ -11,6 +11,7 @@ description = "Core runtime structures for NeoVM"
 autotests = false
 
 [dependencies]
+neovm-text = { path = "../neovm-text" }
 neovm-edit = { path = "../neovm-edit" }
 neovm-display-identity.workspace = true
 neovm-host-abi.workspace = true
@@ -161,6 +162,7 @@ jit = [
     "dep:object",
     "dep:cranelift-native",
     "neovm-value/jit",
+    "neovm-text/jit",
     "neovm-edit/jit",
 ]
 # Dynamic, execution-weighted interpreter opcode histogram — a profiling aid for
