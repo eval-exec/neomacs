@@ -2557,3 +2557,13 @@ pub fn process_status_symbol_value(status: Value) -> Value {
         .and_then(|items| items.first().copied())
         .unwrap_or(status)
 }
+
+// Debug impl moved with the type (A3d).
+
+impl std::fmt::Debug for PtyOutputReader {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PtyOutputReader")
+            .field("interest", &self.interest)
+            .finish_non_exhaustive()
+    }
+}

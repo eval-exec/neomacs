@@ -178,7 +178,6 @@ use super::{
     process_public_status_symbol,
 };
 use crate::emacs_core::eval::data::process_state::{StatusChangeSite, StatusChangeTicks};
-use crate::emacs_core::process::SystemProcessExt;
 
 /// A process that GNU's SIGCHLD sweep may harvest.
 ///
