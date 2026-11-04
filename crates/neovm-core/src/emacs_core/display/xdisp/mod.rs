@@ -144,7 +144,7 @@ impl super::eval::Context {
             self.restore_current_buffer_if_live(saved_buffer_id);
         }
         let start_byte = match motion {
-            Ok(motion) => motion.target,
+            Ok(motion) => motion.target(),
             Err(flow) => {
                 tracing::debug!("display-row viewport placement failed: {flow:?}");
                 return None;
@@ -500,19 +500,19 @@ fn prefix_line_and_column(
     // accumulator is the BEG_UNCHANGED analog of GNU's
     // BASE_LINE_NUMBER_VALID_P (xdisp.c:19351). An invalid or missing
     // anchor falls back to the full prefix scan (SIMD over the gap buffer).
-    let anchor = buf.line_number_anchor.get();
+    let anchor = buf.line_number_anchor().get();
     let anchor_valid = anchor.is_some_and(|anchor| {
-        anchor.accessible_start == origin
-            && anchor.line_start <= end
+        anchor.accessible_start() == origin
+            && anchor.line_start() <= end
             && buf.changed_char_range().is_none_or(|(dirty_start, _)| {
                 buf.char_pos_to_emacs_byte_pos_clamped(crate::buffer::CharPos0::new(
                     dirty_start.max(0) as usize,
-                )) > anchor.line_start
+                )) > anchor.line_start()
             })
     });
     let line = if anchor_valid {
         let anchor = anchor.expect("validated mode-line number anchor");
-        anchor.line_number + buf.count_newlines_emacs_byte(anchor.line_start, end)
+        anchor.line_number() + buf.count_newlines_emacs_byte(anchor.line_start(), end)
     } else {
         buf.count_newlines_emacs_byte(origin, end) + 1
     };
@@ -524,16 +524,14 @@ fn prefix_line_and_column(
         || end.get().abs_diff(
             anchor
                 .expect("validated mode-line number anchor")
-                .line_start
+                .line_start()
                 .get(),
         ) > RESEAT_DISTANCE_BYTES
     {
-        buf.line_number_anchor
-            .set(Some(crate::buffer::buffer::ModeLineNumberAnchor {
-                accessible_start: origin,
-                line_start: bol,
-                line_number: line,
-            }));
+        buf.line_number_anchor()
+            .set(Some(crate::buffer::buffer::ModeLineNumberAnchor::new(
+                origin, bol, line,
+            )));
     }
     let mut tail = Vec::new();
     buf.copy_emacs_byte_range_to(EmacsByteRange::new(bol, end), &mut tail);
@@ -755,71 +753,6 @@ impl RowEdge {
 #[cfg(test)]
 #[path = "tests/xdisp_row_edge_test.rs"]
 mod row_edge_tests;
-
-impl LineWrap {
-    /// Whether a display line is a whole logical line.
-    pub(crate) fn truncates(self) -> bool {
-        matches!(self, Self::Truncate)
-    }
-
-    /// Whether a `(COLS . LINES)` goal past the row's content may stop at the
-    /// row's own right EDGE -- the column a truncation `$` or continuation
-    /// `\` covers -- or must stop at the last glyph the row drew.
-    ///
-    /// GNU decides this in `move_it_in_display_line`, which is the function
-    /// `Fvertical_motion` calls for the goal (`src/indent.c:2540`) and is NOT
-    /// the same function as the walk it wraps:
-    ///
-    /// ```c
-    ///   if (it->line_wrap == WORD_WRAP && (op & MOVE_TO_X))
-    ///     {
-    ///       SAVE_IT (save_it, *it, save_data);
-    ///       skip = move_it_in_display_line_to (it, to_charpos, to_x, op);
-    ///       /* When word-wrap is on, TO_X may lie past the end of a wrapped
-    ///          line.  Then it->current is the character on the next line, so
-    ///          backtrack to the space before the wrap point.  */
-    ///       if (skip == MOVE_LINE_CONTINUED)
-    ///         {
-    ///           int prev_x = max (it->current_x - 1, 0);
-    ///           RESTORE_IT (it, &save_it, save_data);
-    ///           move_it_in_display_line_to (it, -1, prev_x, MOVE_TO_X);
-    ///         }
-    ///     }
-    ///   else
-    ///     move_it_in_display_line_to (it, to_charpos, to_x, op);
-    /// ```
-    ///
-    /// (`src/xdisp.c:10859-10888`).  So the WORD_WRAP difference is a
-    /// backtrack in the CALLER, taken whenever the goal ran off the end of a
-    /// continued row, and it does not depend on `wrap_it` at all.  Ledger 212
-    /// residual 1 recorded a reading of `move_it_in_display_line_to`'s
-    /// `it->line_wrap != WORD_WRAP || wrap_it.sp < 0` branch that its own
-    /// measurement contradicted, and asked the next reader to start from the
-    /// contradiction; this is where it goes.  A TRUNCATE row cannot reach the
-    /// backtrack (it returns `MOVE_LINE_TRUNCATED`, and the wrapper is not
-    /// entered anyway), and a row that ends at a newline or at ZV returns
-    /// `MOVE_NEWLINE_OR_CR` / `MOVE_POS_MATCH_OR_ZV`, so only a CONTINUED row
-    /// backs off -- which is exactly a row that carries a marker column.
-    ///
-    /// Measured, GNU Emacs 31.0.90, 80x24 pty, `truncate-lines' nil, ONE
-    /// 300-character line of `x' with no wrap opportunity anywhere in it
-    /// (`tmp/l216/wrapgoal-gnu-*.txt`), identical COLD and WARM:
-    ///
-    /// ```text
-    ///   word-wrap nil   goal 78 -> 79   goal 79 -> 80   goal 80 -> 80
-    ///   word-wrap t     goal 78 -> 79   goal 79 -> 80   goal 80 -> 79
-    /// ```
-    ///
-    /// The two agree until the goal passes the row's edge, and only then does
-    /// WORD_WRAP step back -- non-monotonically, which is the signature of a
-    /// backtrack rather than of a different stop set.
-    pub(crate) fn goal_stops_at_row_edge(self) -> bool {
-        match self {
-            Self::Truncate | Self::WindowWrap => true,
-            Self::WordWrap => false,
-        }
-    }
-}
 
 /// Per-character column width policy for [`region_text_metrics_with_display`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1529,7 +1462,7 @@ fn display_element_run(
     // End of the run: overlay-end for an overlay `display`, else the
     // text-property range end (GNU `OVERLAY_END` vs `get_property_and_range`).
     let run_end = if let Some(ov) = overlay {
-        buf.overlays
+        buf.overlays()
             .overlay_end_emacs_byte_pos(ov)
             .map(|p| p.get())
             .unwrap_or(region_end)
@@ -1608,7 +1541,7 @@ fn invisible_measure_run(
         return None;
     }
     let run_end = if let Some(ov) = overlay {
-        buf.overlays
+        buf.overlays()
             .overlay_end_emacs_byte_pos(ov)
             .map(|p| p.get())
             .unwrap_or(region_end)
@@ -1755,7 +1688,7 @@ fn collect_overlay_strings_at(buf: &Buffer, pos: usize, before: bool) -> Vec<Ove
         EmacsBytePos::new(pos.saturating_sub(1)),
         EmacsBytePos::new(pos + 1),
     );
-    let mut overlay_ids = buf.overlays.overlays_in_emacs_byte_range(scan_range);
+    let mut overlay_ids = buf.overlays().overlays_in_emacs_byte_range(scan_range);
     overlay_ids.sort();
     overlay_ids.dedup();
 
@@ -1764,9 +1697,9 @@ fn collect_overlay_strings_at(buf: &Buffer, pos: usize, before: bool) -> Vec<Ove
         let priority = overlay_string_priority(oid);
 
         if before
-            && buf.overlays.overlay_start_emacs_byte_pos(oid) == Some(bytepos)
+            && buf.overlays().overlay_start_emacs_byte_pos(oid) == Some(bytepos)
             && let Some(val) = buf
-                .overlays
+                .overlays()
                 .overlay_get_named(oid, Value::symbol("before-string"))
             && val.is_string()
         {
@@ -1778,9 +1711,9 @@ fn collect_overlay_strings_at(buf: &Buffer, pos: usize, before: bool) -> Vec<Ove
             });
         }
 
-        if buf.overlays.overlay_end_emacs_byte_pos(oid) == Some(bytepos)
+        if buf.overlays().overlay_end_emacs_byte_pos(oid) == Some(bytepos)
             && let Some(val) = buf
-                .overlays
+                .overlays()
                 .overlay_get_named(oid, Value::symbol("after-string"))
             && val.is_string()
         {
@@ -1821,7 +1754,7 @@ fn process_overlay_strings_at(
     display_sym: &Value,
     state: &mut ScanState,
 ) {
-    if buf.overlays.is_empty() {
+    if buf.overlays().is_empty() {
         return;
     }
     for entry in collect_overlay_strings_at(buf, pos, true) {
@@ -6042,10 +5975,10 @@ fn window_text_pixel_offset_target(
     let window = Some(Value::make_window(window_id.0));
     let motion =
         super::indent::scan_screen_line_motion_target(eval, buffer_id, from, window, lines)?;
-    let target = if lines > 0 && motion.moved < lines {
-        motion.last_occupied_target
+    let target = if lines > 0 && motion.moved() < lines {
+        motion.last_occupied_target()
     } else {
-        motion.target
+        motion.target()
     };
     let occupied = y_offset > 0
         && eval
@@ -6897,7 +6830,7 @@ fn bidi_buffer_var(ctx: &super::eval::Context, buf_id: BufferId, name: &str) -> 
     // falling back to a buffer-local binding then the global value.
     if let Some(buf) = ctx.edit.buffers.get(buf_id) {
         if let Some(info) = crate::buffer::buffer::lookup_buffer_slot(name) {
-            return buf.slots[info.offset.index()];
+            return buf.slots()[info.offset.index()];
         }
         if let Some(value) = buf.get_buffer_local(name) {
             return value;

@@ -373,13 +373,13 @@ pub(crate) fn builtin_buffer_local_variables(
             .edit
             .buffers
             .current_buffer()
-            .map(|b| b.id)
+            .map(|b| b.id())
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?,
         Some(v) if v.is_nil() => ctx
             .edit
             .buffers
             .current_buffer()
-            .map(|b| b.id)
+            .map(|b| b.id())
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?,
         Some(v) if v.is_buffer() => v.as_buffer_id().unwrap(),
         Some(other) => {
@@ -668,7 +668,7 @@ pub(crate) fn builtin_kill_local_variable_impl(
             {
                 buf.set_slot_local_flag(slot, false);
                 if let Some(default_value) = default_value {
-                    buf.slots[offset] = default_value;
+                    buf.slots_mut()[offset] = default_value;
                 }
             }
             return Ok(KillLocalVariableOutcome {

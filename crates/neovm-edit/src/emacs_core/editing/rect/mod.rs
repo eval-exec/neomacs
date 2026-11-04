@@ -70,7 +70,8 @@ fn dynamic_or_global_symbol_value<H: crate::emacs_core::edit_host::EditHost>(
 
 /// Persistent state for rectangle operations across the session.
 #[derive(Clone, Debug)]
-pub(crate) struct RectangleState {
+#[doc(hidden)]
+pub struct RectangleState {
     /// The last killed rectangle: one string per line.
     pub killed: Vec<LispString>,
 }

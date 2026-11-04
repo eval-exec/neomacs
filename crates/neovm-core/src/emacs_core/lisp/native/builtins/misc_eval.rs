@@ -180,11 +180,11 @@ pub(crate) fn builtin_previous_property_change_in_buffers(
     let buf_id = match args.get(1) {
         None => buffers
             .current_buffer()
-            .map(|b| b.id)
+            .map(|b| b.id())
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")])),
         Some(v) if v.is_nil() => buffers
             .current_buffer()
-            .map(|b| b.id)
+            .map(|b| b.id())
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")])),
         Some(v) if v.is_buffer() => Ok(v.as_buffer_id().unwrap()),
         Some(other) => Err(signal(
@@ -661,7 +661,7 @@ pub(crate) fn builtin_barf_if_buffer_read_only_impl(
     }
     Err(signal(
         LispCondition::BufferReadOnly,
-        vec![Value::make_buffer(buf.id)],
+        vec![Value::make_buffer(buf.id())],
     ))
 }
 

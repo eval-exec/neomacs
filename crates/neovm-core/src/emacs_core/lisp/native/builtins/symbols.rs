@@ -2417,7 +2417,7 @@ pub(crate) fn builtin_rename_buffer(
     }
 
     let (current_id, old_name) = match eval.edit.buffers.current_buffer() {
-        Some(buf) => (buf.id, buf.name_value()),
+        Some(buf) => (buf.id(), buf.name_value()),
         None => {
             return Err(signal("error", vec![Value::string("No current buffer")]));
         }
@@ -3792,7 +3792,7 @@ pub(crate) fn builtin_transpose_regions(
             if start < point_min || start > point_max || end < point_min || end > point_max {
                 return Err(signal(
                     LispCondition::ArgsOutOfRange,
-                    vec![Value::make_buffer(buf.id), start_arg, end_arg],
+                    vec![Value::make_buffer(buf.id()), start_arg, end_arg],
                 ));
             }
         }
@@ -4134,12 +4134,12 @@ fn compare_buffer_ids_for_value_lt(
         .edit
         .buffers
         .get(lhs)
-        .map(|buffer| buffer.name.as_utf8_str());
+        .map(|buffer| buffer.name_value().as_utf8_str());
     let right_name = eval
         .edit
         .buffers
         .get(rhs)
-        .map(|buffer| buffer.name.as_utf8_str());
+        .map(|buffer| buffer.name_value().as_utf8_str());
     match (left_name, right_name) {
         (Some(left), Some(right)) => left.cmp(&right),
         (None, Some(_)) => Ordering::Less,
@@ -4299,7 +4299,7 @@ pub(crate) fn builtin_variable_binding_locus(
         match sym.value_cell() {
             ValueCell::Localized(_) => {
                 if let Some(buf) = ctx.edit.buffers.current_buffer() {
-                    let target_buf = Value::make_buffer(buf.id);
+                    let target_buf = Value::make_buffer(buf.id());
                     if buf.has_buffer_local_by_sym_id(resolved) {
                         return Ok(target_buf);
                     }
@@ -4341,7 +4341,7 @@ pub(crate) fn builtin_variable_binding_locus(
                         }
                     };
                     if is_local {
-                        return Ok(Value::make_buffer(buf.id));
+                        return Ok(Value::make_buffer(buf.id()));
                     }
                 }
             }
@@ -4353,7 +4353,7 @@ pub(crate) fn builtin_variable_binding_locus(
         && let Some(buf) = ctx.edit.buffers.current_buffer()
         && buf.has_buffer_local_by_sym_id(resolved)
     {
-        return Ok(Value::make_buffer(buf.id));
+        return Ok(Value::make_buffer(buf.id()));
     }
     Ok(Value::NIL)
 }
@@ -4925,7 +4925,7 @@ fn internal_complete_buffer_alist(ctx: &super::eval::Context) -> Value {
             ctx.edit
                 .buffers
                 .get(id)
-                .map(|buf| Value::cons(buf.name, Value::make_buffer(id)))
+                .map(|buf| Value::cons(buf.name_value(), Value::make_buffer(id)))
         })
         .collect();
     Value::list(entries)

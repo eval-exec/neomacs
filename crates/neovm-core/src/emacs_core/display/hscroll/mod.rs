@@ -382,7 +382,7 @@ pub(crate) fn update_auto_hscroll_before_redisplay(ctx: &mut Context) {
         .edit
         .buffers
         .current_buffer()
-        .map(|b| (b.id, b.point_emacs_byte_pos()));
+        .map(|b| (b.id(), b.point_emacs_byte_pos()));
 
     for frame_id in &frame_ids {
         let Some(frame) = ctx.frames.get(*frame_id) else {

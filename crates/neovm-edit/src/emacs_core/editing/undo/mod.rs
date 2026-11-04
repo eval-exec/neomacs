@@ -122,7 +122,8 @@ impl CompactionLatch {
 /// Errors from `undo-outer-limit-function' are swallowed, as they are for the
 /// finalizers and `post-gc-hook' this collector already runs: a collection
 /// cannot propagate a signal to whatever the mutator was doing.
-pub(crate) fn compact_buffers_for_gc<H: crate::emacs_core::edit_host::EditHost>(host: &mut H) {
+#[doc(hidden)]
+pub fn compact_buffers_for_gc<H: crate::emacs_core::edit_host::EditHost>(host: &mut H) {
     let Some(latch) = CompactionLatch::acquire() else {
         return;
     };
@@ -227,7 +228,8 @@ fn compact_one_buffer_for_gc<H: crate::emacs_core::edit_host::EditHost>(
 ///
 /// Context-dependent variant used during normal execution: inserts an
 /// undo boundary into the current buffer's undo list.
-pub(crate) fn builtin_undo_boundary<H: crate::emacs_core::edit_host::EditHost>(
+#[doc(hidden)]
+pub fn builtin_undo_boundary<H: crate::emacs_core::edit_host::EditHost>(
     host: &mut H,
     args: &[Value],
 ) -> EvalResult {
@@ -258,7 +260,8 @@ pub(crate) fn builtin_undo_boundary<H: crate::emacs_core::edit_host::EditHost>(
 /// case -- `undo-auto--undoably-changed-buffers' processing localizes it.
 /// Delegating also picks up alias resolution, the constant check and variable
 /// watchers, all of which GNU gets for free from the same call.
-pub(crate) fn set_last_boundary_cause_explicit<H: crate::emacs_core::edit_host::EditHost>(
+#[doc(hidden)]
+pub fn set_last_boundary_cause_explicit<H: crate::emacs_core::edit_host::EditHost>(
     host: &mut H,
 ) -> Result<(), Flow> {
     // GNU's `Fset (Qundo_auto__last_boundary_cause, Qexplicit)` with both
@@ -284,12 +287,14 @@ pub(crate) fn set_last_boundary_cause_explicit<H: crate::emacs_core::edit_host::
 /// every Lisp thread sees one value, as in GNU. (N-mutator mode needs shared
 /// storage instead: a recorded obligation.)
 #[cold]
-pub(crate) fn world_state_placeholder() -> Box<dyn std::any::Any> {
+#[doc(hidden)]
+pub fn world_state_placeholder() -> Box<dyn std::any::Any> {
     Box::new(false)
 }
 
 #[cold]
-pub(crate) fn swap_world_state(slot: &mut dyn std::any::Any) {
+#[doc(hidden)]
+pub fn swap_world_state(slot: &mut dyn std::any::Any) {
     let slot = slot.downcast_mut::<bool>().expect("carried World state");
     COMPACTION_IN_PROGRESS.with(|latch| *slot = latch.replace(*slot));
 }

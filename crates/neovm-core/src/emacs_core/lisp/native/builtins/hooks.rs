@@ -990,7 +990,7 @@ fn disconnected_window_point(
         .edit
         .buffers
         .get(outgoing.buffer_id)
-        .and_then(|buffer| buffer.last_selected_window);
+        .and_then(|buffer| buffer.last_selected_window());
     if let Some(window_id) = last_selected_window
         && window_id != outgoing.window_id
         && live_window_displays_buffer(&eval.frames, window_id, outgoing.buffer_id)
@@ -1043,7 +1043,7 @@ fn unshow_frame_root_buffers(eval: &mut super::eval::Context, frame_id: crate::w
     for outgoing in outgoing_windows {
         let point = disconnected_window_point(eval, outgoing);
         if let Some(buffer) = eval.edit.buffers.get_mut(outgoing.buffer_id) {
-            buffer.last_window_start = outgoing.window_start.max(LispCharPos1::ONE);
+            buffer.set_last_window_start(outgoing.window_start.max(LispCharPos1::ONE));
         }
 
         match point {
@@ -1069,9 +1069,9 @@ fn unshow_frame_root_buffers(eval: &mut super::eval::Context, frame_id: crate::w
         }
 
         if let Some(buffer) = eval.edit.buffers.get_mut(outgoing.buffer_id)
-            && buffer.last_selected_window == Some(outgoing.window_id)
+            && buffer.last_selected_window() == Some(outgoing.window_id)
         {
-            buffer.last_selected_window = None;
+            buffer.set_last_selected_window(None);
         }
     }
 }

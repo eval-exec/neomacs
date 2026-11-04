@@ -19,7 +19,8 @@ use std::path::PathBuf;
 /// GNU keeps file names as Lisp strings until ENCODE_FILE / platform I/O.
 /// On Unix, preserve the original bytes exactly so raw unibyte file names
 /// survive intact.
-pub(crate) fn lisp_file_name_to_path_buf(filename: &LispString) -> PathBuf {
+#[doc(hidden)]
+pub fn lisp_file_name_to_path_buf(filename: &LispString) -> PathBuf {
     #[cfg(unix)]
     {
         PathBuf::from(std::ffi::OsString::from_vec(filename.as_bytes().to_vec()))

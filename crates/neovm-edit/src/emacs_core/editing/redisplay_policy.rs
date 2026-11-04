@@ -29,7 +29,8 @@ pub(crate) fn parse_redisplay_hooks(value: Option<&OsStr>) -> RedisplayHookPolic
 }
 
 #[inline]
-pub(crate) fn gnu_redisplay_hooks_enabled() -> bool {
+#[doc(hidden)]
+pub fn gnu_redisplay_hooks_enabled() -> bool {
     #[cfg(any(test, feature = "redisplay-test-policy"))]
     if let Some(policy) = TEST_REDISPLAY_HOOK_POLICY.with(std::cell::Cell::get) {
         return policy == RedisplayHookPolicy::Gnu;

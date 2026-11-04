@@ -20,7 +20,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 /// What changed since a syntax parse cache was last used.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Invalidation {
+#[doc(hidden)]
+pub enum Invalidation {
     /// Nothing a scan reads.
     Nothing,
     /// Text at or after `byte`, or syntax-relevant properties at or after
@@ -109,11 +110,13 @@ impl SyntaxMutationNotes {
 
 /// Identity of one `BufferTextStorage`'s syntax parse cache.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct SyntaxCacheId(u64);
+#[doc(hidden)]
+pub struct SyntaxCacheId(u64);
 
 impl SyntaxCacheId {
     #[inline]
-    pub(crate) fn get(self) -> u64 {
+    #[doc(hidden)]
+    pub fn get(self) -> u64 {
         self.0
     }
 }
@@ -179,7 +182,8 @@ type ForgetHook = fn(u64);
 
 static FORGET_HOOK: OnceLock<ForgetHook> = OnceLock::new();
 
-pub(crate) fn install_forget_hook(hook: ForgetHook) {
+#[doc(hidden)]
+pub fn install_forget_hook(hook: ForgetHook) {
     let _ = FORGET_HOOK.set(hook);
 }
 

@@ -1,11 +1,13 @@
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct BufferTextBytesSnapshot {
+#[doc(hidden)]
+pub struct BufferTextBytesSnapshot {
     bytes: Vec<u8>,
     multibyte: bool,
 }
 
 impl BufferTextBytesSnapshot {
-    pub(crate) const fn new(bytes: Vec<u8>, multibyte: bool) -> Self {
+    #[doc(hidden)]
+    pub const fn new(bytes: Vec<u8>, multibyte: bool) -> Self {
         Self { bytes, multibyte }
     }
 
@@ -17,7 +19,8 @@ impl BufferTextBytesSnapshot {
         self.multibyte
     }
 
-    pub(crate) fn into_parts(self) -> (Vec<u8>, bool) {
+    #[doc(hidden)]
+    pub fn into_parts(self) -> (Vec<u8>, bool) {
         (self.bytes, self.multibyte)
     }
 }

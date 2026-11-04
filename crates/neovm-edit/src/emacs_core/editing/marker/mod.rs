@@ -38,11 +38,13 @@ pub(crate) struct Marker {
 // Marker value helpers
 // ---------------------------------------------------------------------------
 
-pub(crate) fn is_marker(v: &Value) -> bool {
+#[doc(hidden)]
+pub fn is_marker(v: &Value) -> bool {
     v.is_marker()
 }
 
-pub(crate) fn make_marker_value(
+#[doc(hidden)]
+pub fn make_marker_value(
     buffer_id: Option<BufferId>,
     position: Option<LispCharPos1>,
     insertion_type: bool,
@@ -70,7 +72,8 @@ pub(crate) fn make_marker_value(
     ))
 }
 
-pub(crate) fn make_registered_buffer_marker(
+#[doc(hidden)]
+pub fn make_registered_buffer_marker(
     buffers: &mut BufferManager,
     buffer_id: BufferId,
     position: LispCharPos1,
@@ -113,7 +116,8 @@ pub(crate) fn make_registered_buffer_marker(
 /// that back into a byte, and the byte back into a char. `None` when
 /// `buffer_id` names no live buffer.
 #[inline(always)]
-pub(crate) fn make_registered_point_marker(
+#[doc(hidden)]
+pub fn make_registered_point_marker(
     buffers: &mut BufferManager,
     buffer_id: BufferId,
 ) -> Option<Value> {
@@ -124,9 +128,8 @@ pub(crate) fn make_registered_point_marker(
     Some(marker)
 }
 
-pub(crate) fn marker_logical_fields(
-    v: &Value,
-) -> Option<(Option<BufferId>, Option<LispCharPos1>, bool)> {
+#[doc(hidden)]
+pub fn marker_logical_fields(v: &Value) -> Option<(Option<BufferId>, Option<LispCharPos1>, bool)> {
     if !v.is_marker() {
         return None;
     };
@@ -151,7 +154,8 @@ pub(crate) fn marker_logical_fields(
 /// It is never cached
 /// across Lisp callbacks, which may move the marker or kill its buffer.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct MarkerLocation {
+#[doc(hidden)]
+pub struct MarkerLocation {
     buffer: BufferId,
     byte_pos: EmacsBytePos,
 }
@@ -159,15 +163,18 @@ pub(crate) struct MarkerLocation {
 static_assertions::assert_impl_all!(MarkerLocation: Send, Sync);
 
 impl MarkerLocation {
-    pub(crate) fn buffer(self) -> BufferId {
+    #[doc(hidden)]
+    pub fn buffer(self) -> BufferId {
         self.buffer
     }
-    pub(crate) fn byte_pos(self) -> EmacsBytePos {
+    #[doc(hidden)]
+    pub fn byte_pos(self) -> EmacsBytePos {
         self.byte_pos
     }
 }
 
-pub(crate) fn marker_location(buffers: &BufferManager, marker: Value) -> Option<MarkerLocation> {
+#[doc(hidden)]
+pub fn marker_location(buffers: &BufferManager, marker: Value) -> Option<MarkerLocation> {
     let data = marker.as_marker_data()?;
     let buffer = data.buffer_id()?;
     buffers.get(buffer)?;
@@ -204,7 +211,8 @@ pub(crate) fn marker_equal_hash_key_value(v: &Value) -> HashKey {
 
 /// GNU `unchain_marker` (`src/marker.c`): a marker knows its buffer, so
 /// leaving it is one walk of THAT buffer's chain, by pointer.
-pub(crate) fn unchain_marker(buffers: &mut BufferManager, marker: &Value) {
+#[doc(hidden)]
+pub fn unchain_marker(buffers: &mut BufferManager, marker: &Value) {
     let Some(ptr) = marker
         .as_veclike_ptr()
         .map(|p| p as *mut neovm_value::tagged::header::MarkerObj)
@@ -224,7 +232,8 @@ pub(crate) fn unchain_marker(buffers: &mut BufferManager, marker: &Value) {
     }
 }
 
-pub(crate) fn detach_marker_in_buffers(buffers: &mut BufferManager, marker: &Value) {
+#[doc(hidden)]
+pub fn detach_marker_in_buffers(buffers: &mut BufferManager, marker: &Value) {
     if !is_marker(marker) {
         return;
     }
@@ -272,7 +281,8 @@ fn marker_position_value(v: &Value) -> Value {
 ///
 /// Signals `error` when marker is unset, matching Emacs behavior in position
 /// contexts that require a concrete marker location.
-pub(crate) fn marker_position_as_int(v: &Value) -> Result<i64, Flow> {
+#[doc(hidden)]
+pub fn marker_position_as_int(v: &Value) -> Result<i64, Flow> {
     expect_marker("marker-position", v)?;
     match marker_position_value(v).kind() {
         ValueKind::Fixnum(n) => Ok(n),
@@ -283,7 +293,8 @@ pub(crate) fn marker_position_as_int(v: &Value) -> Result<i64, Flow> {
     }
 }
 
-pub(crate) fn marker_position_as_int_with_buffers(
+#[doc(hidden)]
+pub fn marker_position_as_int_with_buffers(
     _buffers: &BufferManager,
     v: &Value,
 ) -> Result<i64, Flow> {
@@ -338,7 +349,8 @@ fn lisp_pos_to_byte(buf: &crate::buffer::Buffer, lisp_pos: LispCharPos1) -> Emac
 // ---------------------------------------------------------------------------
 
 /// (markerp OBJECT) -> t if OBJECT is a marker, nil otherwise
-pub(crate) fn builtin_markerp(args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_markerp(args: Vec<Value>) -> EvalResult {
     expect_args("markerp", &args, 1)?;
     Ok(Value::bool_val(is_marker(&args[0])))
 }
@@ -346,7 +358,8 @@ pub(crate) fn builtin_markerp(args: Vec<Value>) -> EvalResult {
 /// `marker-position` as registered: fixed arity 1, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves the unit tests.
-pub(crate) fn builtin_marker_position_1(buffers: &BufferManager, marker: Value) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_marker_position_1(buffers: &BufferManager, marker: Value) -> EvalResult {
     let args: [Value; 1] = [marker];
     builtin_marker_position_in_buffers(buffers, &args)
 }
@@ -362,10 +375,8 @@ pub(crate) fn builtin_marker_position_in_buffers(
 
 /// Buffer-aware marker-buffer for the VM fast dispatch path.
 /// Returns nil for killed buffers.
-pub(crate) fn builtin_marker_buffer_in_buffers(
-    buffers: &BufferManager,
-    args: &[Value],
-) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_marker_buffer_in_buffers(buffers: &BufferManager, args: &[Value]) -> EvalResult {
     expect_args("marker-buffer", &args, 1)?;
     expect_marker("marker-buffer", &args[0])?;
     if let Some(buffer_id) = marker_buffer_id(&args[0])
@@ -377,13 +388,15 @@ pub(crate) fn builtin_marker_buffer_in_buffers(
 }
 
 /// (marker-insertion-type MARKER) -> t or nil
-pub(crate) fn builtin_marker_insertion_type(args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_marker_insertion_type(args: Vec<Value>) -> EvalResult {
     expect_args("marker-insertion-type", &args, 1)?;
     expect_marker("marker-insertion-type", &args[0])?;
     Ok(marker_insertion_type_value(&args[0]))
 }
 
-pub(crate) fn builtin_set_marker_insertion_type_in_buffers(
+#[doc(hidden)]
+pub fn builtin_set_marker_insertion_type_in_buffers(
     _buffers: &mut BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -409,15 +422,14 @@ pub(crate) fn builtin_set_marker_insertion_type_in_buffers(
 }
 
 /// (make-marker) -> new empty marker (no buffer, no position)
-pub(crate) fn builtin_make_marker(args: &[Value]) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_make_marker(args: &[Value]) -> EvalResult {
     expect_args("make-marker", &args, 0)?;
     Ok(make_marker_value(None, None, false))
 }
 
-pub(crate) fn builtin_copy_marker_in_buffers(
-    buffers: &mut BufferManager,
-    args: &[Value],
-) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_copy_marker_in_buffers(buffers: &mut BufferManager, args: &[Value]) -> EvalResult {
     // GNU `Fcopy_marker` (marker.c:753) is `(0, 2)`: with no arguments, it
     // returns a fresh marker that points nowhere; passing nil for MARKER
     // does the same.  TYPE is also optional.
@@ -469,10 +481,8 @@ pub(crate) fn builtin_copy_marker_in_buffers(
 ///
 /// Registered with fixed arity 3 and called straight off the bytecode stack
 /// like GNU `funcall_subr`'s `a3` case (absent optionals arrive as nil).
-pub(crate) fn builtin_set_marker_in_buffers(
-    buffers: &mut BufferManager,
-    args: &[Value],
-) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_set_marker_in_buffers(buffers: &mut BufferManager, args: &[Value]) -> EvalResult {
     expect_args_range("set-marker", args, 2, 3)?;
     expect_marker("set-marker", &args[0])?;
 
@@ -641,7 +651,8 @@ fn register_marker_in_buffers(
 }
 
 /// (point-marker) -> marker at current point
-pub(crate) fn builtin_point_marker_in_buffers(
+#[doc(hidden)]
+pub fn builtin_point_marker_in_buffers(
     buffers: &mut BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -657,7 +668,8 @@ pub(crate) fn builtin_point_marker_in_buffers(
 }
 
 /// (point-min-marker) -> marker at point-min
-pub(crate) fn builtin_point_min_marker_in_buffers(
+#[doc(hidden)]
+pub fn builtin_point_min_marker_in_buffers(
     buffers: &mut BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -673,7 +685,8 @@ pub(crate) fn builtin_point_min_marker_in_buffers(
 }
 
 /// (point-max-marker) -> marker at point-max
-pub(crate) fn builtin_point_max_marker_in_buffers(
+#[doc(hidden)]
+pub fn builtin_point_max_marker_in_buffers(
     buffers: &mut BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -697,7 +710,8 @@ pub(crate) fn builtin_point_max_marker_in_buffers(
 /// a detached marker, which `set-mark` or `set-marker` then attaches to this
 /// buffer's chain. `Buffer::mark_marker` roots it, so it survives GC with no
 /// other reference.
-pub(crate) fn builtin_mark_marker(buffers: &mut BufferManager, args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_mark_marker(buffers: &mut BufferManager, args: Vec<Value>) -> EvalResult {
     expect_args("mark-marker", &args, 0)?;
     let buffer_id = buffers
         .current_buffer()

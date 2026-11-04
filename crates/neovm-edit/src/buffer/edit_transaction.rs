@@ -33,7 +33,8 @@ const _: () = assert!(
 /// character-modification tick. A range measured at a tick stays coherent
 /// for as long as the tick is unchanged. Plain data; it grants nothing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct TextMeasurement {
+#[doc(hidden)]
+pub struct TextMeasurement {
     buffer: BufferId,
     chars_tick: i64,
 }
@@ -41,7 +42,8 @@ pub(crate) struct TextMeasurement {
 impl TextMeasurement {
     /// The current text state of BUFFER, or None for a dead buffer.
     #[inline]
-    pub(crate) fn of(buffers: &BufferManager, buffer: BufferId) -> Option<Self> {
+    #[doc(hidden)]
+    pub fn of(buffers: &BufferManager, buffer: BufferId) -> Option<Self> {
         buffers.get(buffer).map(|live| Self {
             buffer,
             chars_tick: live.chars_modified_tick(),
@@ -64,7 +66,8 @@ impl TextMeasurement {
 /// their owning manager and must not mutate a detached alias while a lease lives.
 /// This lease introduces no process-global or thread-local state.
 #[must_use = "consume the prepared lease to mutate, or drop it to cancel"]
-pub(crate) struct PreparedBufferEdit<'a> {
+#[doc(hidden)]
+pub struct PreparedBufferEdit<'a> {
     buffers: &'a mut BufferManager,
     buffer: BufferId,
     range: TextEditRange,
@@ -136,7 +139,8 @@ impl<'a> PreparedBufferEdit<'a> {
     /// Read-only measured geometry for notifications; this value alone
     /// cannot authorize mutation outside the buffer implementation.
     #[inline]
-    pub(crate) fn range(&self) -> TextEditRange {
+    #[doc(hidden)]
+    pub fn range(&self) -> TextEditRange {
         self.range
     }
 
@@ -163,17 +167,16 @@ impl<'a> PreparedBufferEdit<'a> {
     }
 
     #[inline]
-    pub(crate) fn replace(self, text: &LispString) -> Option<TextExtent> {
+    #[doc(hidden)]
+    pub fn replace(self, text: &LispString) -> Option<TextExtent> {
         self.buffers
             .replace_buffer_measured_region_lisp_string(self.buffer, self.range, text)
     }
 }
 
 #[inline]
-pub(in crate::buffer) fn lisp_string_from_buffer_bytes(
-    bytes: Vec<u8>,
-    multibyte: bool,
-) -> LispString {
+#[doc(hidden)]
+pub fn lisp_string_from_buffer_bytes(bytes: Vec<u8>, multibyte: bool) -> LispString {
     if multibyte {
         LispString::from_emacs_bytes(bytes)
     } else {
@@ -252,7 +255,8 @@ pub(in crate::buffer) fn convert_lisp_string_for_buffer_mode(
 /// validating constructor excludes unchanged extents. This value contains no
 /// Lisp state and may be shared between mutators; edits retain buffer ownership.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct CasifyExpansion {
+#[doc(hidden)]
+pub struct CasifyExpansion {
     source: CharPos0,
     replacement_len: CharLen,
 }
@@ -261,7 +265,8 @@ pub(crate) struct CasifyExpansion {
 /// equality alone cannot prove that interior marker byte anchors remain valid.
 /// A call-local value projection, with no shared mutable or Lisp state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CasifyStorageShape {
+#[doc(hidden)]
+pub enum CasifyStorageShape {
     PerCharacterExtentPreserved,
     Changed,
 }
@@ -270,18 +275,21 @@ static_assertions::assert_impl_all!(CasifyExpansion: Send, Sync);
 static_assertions::assert_impl_all!(CasifyStorageShape: Send, Sync);
 
 impl CasifyExpansion {
-    pub(crate) fn new(source: CharPos0, replacement_len: CharLen) -> Option<Self> {
+    #[doc(hidden)]
+    pub fn new(source: CharPos0, replacement_len: CharLen) -> Option<Self> {
         (replacement_len.get() > 1).then_some(Self {
             source,
             replacement_len,
         })
     }
 
-    pub(crate) fn source_pos(self) -> CharPos0 {
+    #[doc(hidden)]
+    pub fn source_pos(self) -> CharPos0 {
         self.source
     }
 
-    pub(crate) fn growth(self) -> CharLen {
+    #[doc(hidden)]
+    pub fn growth(self) -> CharLen {
         // Construction proves that the replacement contains at least two
         // characters for the single source character.
         CharLen::new(self.replacement_len.get() - 1)

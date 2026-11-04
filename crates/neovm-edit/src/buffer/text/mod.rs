@@ -15,12 +15,14 @@ pub(in crate::buffer) use emacs_bytes::{
     storage_string_to_emacs_buffer_bytes,
 };
 pub use kind::BufferTextBackendKind;
-pub(crate) use kind::ImplementedBufferTextBackendKind;
+#[doc(hidden)]
+pub use kind::ImplementedBufferTextBackendKind;
 pub(in crate::buffer) use layout::GapCompatState;
 #[cfg(test)]
 pub(in crate::buffer) use layout::{GapDebugLayout, TextBackendDebugLayout};
 pub use metrics::TextMetrics;
-pub(crate) use snapshot::BufferTextBytesSnapshot;
+#[doc(hidden)]
+pub use snapshot::BufferTextBytesSnapshot;
 
 #[inline]
 pub(crate) fn emacs_char_count_bytes(bytes: &[u8], multibyte: bool) -> crate::buffer::CharLen {

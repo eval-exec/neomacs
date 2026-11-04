@@ -3834,18 +3834,18 @@ fn load_lisp_char_pos(pos: Option<usize>) -> LispCharPos1 {
 }
 
 fn dump_buffer(encoder: &mut DumpEncoder, buf: &Buffer) -> DumpBuffer {
-    let is_shared_text_owner = buf.base_buffer.is_none();
+    let is_shared_text_owner = buf.base_buffer().is_none();
     // The image format stores GNU's `struct timespec` as two optional halves;
     // an indirect buffer dumps its OWN (unknown) modtime and gets its base's
     // cell back on load, exactly like `text` and `undo_state`.
     let (modtime_sec, modtime_nsec) = buf.visited_file_modtime().to_dump_halves();
     DumpBuffer {
-        id: DumpBufferId(buf.id.0),
+        id: DumpBufferId(buf.id().0),
         name_lisp: buf.name_value().as_lisp_string().map(dump_lisp_string),
         name: None,
         last_name_lisp: buf.last_name_value().as_lisp_string().map(dump_lisp_string),
         last_name: None,
-        base_buffer: buf.base_buffer.map(|id| DumpBufferId(id.0)),
+        base_buffer: buf.base_buffer().map(|id| DumpBufferId(id.0)),
         text: DumpBufferText {
             backend_kind: dump_buffer_text_backend_kind(buf.dump_text_backend_kind()),
             text: buf.dump_text_bytes(),
@@ -3862,11 +3862,11 @@ fn dump_buffer(encoder: &mut DumpEncoder, buf: &Buffer) -> DumpBuffer {
         modified_tick: buf.modified_tick(),
         chars_modified_tick: buf.chars_modified_tick(),
         save_modified_tick: Some(buf.save_modified_tick()),
-        autosave_modified_tick: Some(buf.autosave_modified_tick),
+        autosave_modified_tick: Some(buf.autosave_modified_tick()),
         modtime_sec,
         modtime_nsec,
-        modtime_size: buf.modtime_size,
-        last_window_start: Some(dump_lisp_char_pos(buf.last_window_start)),
+        modtime_size: buf.modtime_size(),
+        last_window_start: Some(dump_lisp_char_pos(buf.last_window_start())),
         read_only: buf.get_read_only(),
         multibyte: buf.get_multibyte(),
         file_name_lisp: buf.file_name_lisp_string().map(dump_lisp_string),
@@ -3894,12 +3894,14 @@ fn dump_buffer(encoder: &mut DumpEncoder, buf: &Buffer) -> DumpBuffer {
             Vec::new()
         },
         state_pt_marker: encoder
-            .marker_ref_id(buf.state_markers.map_or(MarkerRef::NONE, |m| m.pt_marker)),
-        state_begv_marker: encoder
-            .marker_ref_id(buf.state_markers.map_or(MarkerRef::NONE, |m| m.begv_marker)),
+            .marker_ref_id(buf.state_markers().map_or(MarkerRef::NONE, |m| m.pt_marker)),
+        state_begv_marker: encoder.marker_ref_id(
+            buf.state_markers()
+                .map_or(MarkerRef::NONE, |m| m.begv_marker),
+        ),
         state_zv_marker: encoder
-            .marker_ref_id(buf.state_markers.map_or(MarkerRef::NONE, |m| m.zv_marker)),
-        mark_marker: encoder.marker_ref_id(buf.mark_marker),
+            .marker_ref_id(buf.state_markers().map_or(MarkerRef::NONE, |m| m.zv_marker)),
+        mark_marker: encoder.marker_ref_id(buf.mark_marker()),
         properties_syms: buf
             .ordered_buffer_local_bindings()
             .into_iter()
@@ -3923,7 +3925,7 @@ fn dump_buffer(encoder: &mut DumpEncoder, buf: &Buffer) -> DumpBuffer {
         } else {
             dump_text_property_table(encoder, &TextPropertyTable::new())
         },
-        overlays: dump_overlay_list(encoder, &buf.overlays),
+        overlays: dump_overlay_list(encoder, &buf.overlays()),
         // Syntax table lives in `buf.slots[BUFFER_SLOT_SYNTAX_TABLE.index()]`
         // (serialized via the slots Vec below) — matches GNU where
         // `buffer->syntax_table` is a single Lisp_Object slot.
@@ -3933,14 +3935,14 @@ fn dump_buffer(encoder: &mut DumpEncoder, buf: &Buffer) -> DumpBuffer {
         // with BLVs traced as roots, slot round-trip is safe for
         // the slot vector overall.
         slots: buf
-            .slots
+            .slots()
             .iter()
             .map(|slot| encoder.dump_value(slot))
             .collect(),
         // Phase 11: per-slot local-flag bitmap. Mirrors
         // `Buffer::local_flags` (Phase 10D bitset). Safe to
         // round-trip — it's a `u64`.
-        local_flags: buf.local_flags,
+        local_flags: buf.local_flags(),
         // Phase 11: per-buffer alist for SYMBOL_LOCALIZED variables.
         // Mirrors GNU `BVAR(buf, local_var_alist)`. The cons cells
         // already round-trip safely via the dump heap.
@@ -5818,15 +5820,21 @@ fn load_buffer(
         // the same process (e.g. reload after a bootstrap). Unlink
         // defensively from this buffer's chain before splicing.
         text.chain_unlink(marker_ptr);
-        text.register_marker(
-            marker_ptr,
-            buffer_id,
-            TextPositionAnchor::new(
-                CharPos0::new(dump_marker.charpos),
-                EmacsBytePos::new(dump_marker.bytepos),
-            ),
-            insertion_type,
-        );
+        // SAFETY: `marker_ptr` is the live `MarkerObj` the dump decoder above
+        // allocated/indexed for this dump marker (`TaggedHeap::alloc_marker`
+        // through `Value::make_marker`), and `chain_unlink` above removed it
+        // from any chain before this re-bind.
+        unsafe {
+            text.register_marker(
+                marker_ptr,
+                buffer_id,
+                TextPositionAnchor::new(
+                    CharPos0::new(dump_marker.charpos),
+                    EmacsBytePos::new(dump_marker.bytepos),
+                ),
+                insertion_type,
+            );
+        }
     }
     // Phase 10F: the legacy `BufferLocals` struct is gone.
     // Reconstruct per-buffer state from the dump's properties list

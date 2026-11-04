@@ -61,14 +61,14 @@ pub(crate) fn builtin_zlib_decompress_region(
     if buffer_read_only_active_in_state(ctx.variables(), &[], buf) {
         return Err(signal(
             LispCondition::BufferReadOnly,
-            vec![Value::make_buffer(buf.id)],
+            vec![Value::make_buffer(buf.id())],
         ));
     }
 
     let from_byte = byte_range.start().get();
     let to_byte = byte_range.end().get();
 
-    let buffer_id = buf.id;
+    let buffer_id = buf.id();
     let compressed = read_buffer_region_bytes_in_manager(&ctx.edit.buffers, buffer_id, byte_range)?;
 
     // Try gzip first (most common for Emacs .gz files), then fall back to zlib.

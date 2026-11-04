@@ -348,7 +348,7 @@ pub(crate) fn builtin_point_to_register(
         .edit
         .buffers
         .current_buffer()
-        .map(|buffer| (buffer.id, buffer.point_lisp_char_pos()))
+        .map(|buffer| (buffer.id(), buffer.point_lisp_char_pos()))
     {
         Some((buffer_id, point)) => super::marker::make_registered_buffer_marker(
             &mut eval.edit.buffers,

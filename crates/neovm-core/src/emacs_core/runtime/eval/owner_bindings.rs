@@ -843,11 +843,11 @@ pub(crate) fn binding_shape(
         CanonicalArm::Plain => (BindingKind::Let, Channel::Default),
         CanonicalArm::Localized(_) => match current {
             Some(buffer) if buffer.local_variable_binding_cell(id).is_some() => {
-                (BindingKind::LetLocal, Channel::BufferLocal(buffer.id))
+                (BindingKind::LetLocal, Channel::BufferLocal(buffer.id()))
             }
             Some(buffer) => (
                 BindingKind::LetDefault {
-                    where_buf: Some(buffer.id),
+                    where_buf: Some(buffer.id()),
                 },
                 Channel::Default,
             ),
@@ -856,11 +856,11 @@ pub(crate) fn binding_shape(
         CanonicalArm::Forwarded(builtin) => match builtin.descriptor().as_buffer_obj_fwd() {
             Some(buf_fwd) => match current {
                 Some(buffer) if per_buffer_local(buffer, buf_fwd) => {
-                    (BindingKind::LetLocal, Channel::BufferLocal(buffer.id))
+                    (BindingKind::LetLocal, Channel::BufferLocal(buffer.id()))
                 }
                 _ => (
                     BindingKind::LetDefault {
-                        where_buf: current.map(|buffer| buffer.id),
+                        where_buf: current.map(|buffer| buffer.id()),
                     },
                     Channel::Default,
                 ),
@@ -1061,7 +1061,7 @@ impl Context {
             .edit
             .buffers
             .get(buffer)
-            .map_or(Value::NIL, |buf| buf.slots[off]);
+            .map_or(Value::NIL, |buf| buf.slots()[off]);
         self.push_specpdl_with(|| SpecBinding::LetLocal {
             sym_id: resolved,
             old_value,
@@ -1073,7 +1073,7 @@ impl Context {
             Err(error) => return Err(super::forward_store_signal(error, value)),
         };
         if let Some(buf) = self.edit.buffers.get_mut(buffer) {
-            buf.slots[off] = stored;
+            buf.slots_mut()[off] = stored;
         }
         Ok(())
     }

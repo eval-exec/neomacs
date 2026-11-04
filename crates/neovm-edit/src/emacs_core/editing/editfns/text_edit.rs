@@ -21,7 +21,8 @@ use neovm_value::error::Flow;
 /// How a deletion or replacement range is re-measured once its modification
 /// callbacks returned.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum RemeasureRule {
+#[doc(hidden)]
+pub enum RemeasureRule {
     /// GNU `del_range_1`: TO = min (ZV, FROM + length). FROM itself is not
     /// clamped again.
     DeleteRange,
@@ -33,7 +34,8 @@ pub(crate) enum RemeasureRule {
 /// A deletion or replacement measured before its modification callbacks ran.
 #[derive(Clone, Copy, Debug)]
 #[must_use = "prepare the pending edit: its range is stale once Lisp has run"]
-pub(crate) struct PendingTextEdit {
+#[doc(hidden)]
+pub struct PendingTextEdit {
     range: TextEditRange,
     rule: RemeasureRule,
 }
@@ -43,7 +45,8 @@ pub(crate) struct PendingTextEdit {
 /// to this module, so holding one proves the callbacks already ran.
 #[derive(Clone, Copy, Debug)]
 #[must_use = "lease and mutate the prepared range, then signal its after-change"]
-pub(crate) struct PreparedTextEdit {
+#[doc(hidden)]
+pub struct PreparedTextEdit {
     range: TextEditRange,
     measured_at: TextMeasurement,
 }
@@ -51,7 +54,8 @@ pub(crate) struct PreparedTextEdit {
 impl PendingTextEdit {
     /// RANGE is measured in the current buffer and already validated against
     /// the accessible region by the caller (GNU's `validate_region`).
-    pub(crate) fn new(range: TextEditRange, rule: RemeasureRule) -> Self {
+    #[doc(hidden)]
+    pub fn new(range: TextEditRange, rule: RemeasureRule) -> Self {
         Self { range, rule }
     }
 
@@ -59,7 +63,8 @@ impl PendingTextEdit {
     ///
     /// Returns None when no live buffer is current afterwards; there is
     /// nothing left to edit then.
-    pub(crate) fn prepare<H: crate::emacs_core::edit_host::EditHost>(
+    #[doc(hidden)]
+    pub fn prepare<H: crate::emacs_core::edit_host::EditHost>(
         self,
         host: &mut H,
     ) -> Result<Option<PreparedTextEdit>, Flow> {
@@ -120,12 +125,14 @@ impl PendingTextEdit {
 }
 
 impl PreparedTextEdit {
-    pub(crate) fn range(self) -> TextEditRange {
+    #[doc(hidden)]
+    pub fn range(self) -> TextEditRange {
         self.range
     }
 
     /// The exclusive lease that mutates the prepared range.
-    pub(crate) fn lease(
+    #[doc(hidden)]
+    pub fn lease(
         self,
         buffers: &mut crate::buffer::BufferManager,
     ) -> Option<PreparedBufferEdit<'_>> {
@@ -135,7 +142,8 @@ impl PreparedTextEdit {
 
 /// What a deletion hands back (GNU `del_range_1`'s RET_STRING).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum DeletedText {
+#[doc(hidden)]
+pub enum DeletedText {
     Discard,
     Return,
 }
@@ -146,7 +154,8 @@ pub(crate) enum DeletedText {
 ///
 /// With `DeletedText::Return` the deleted text is returned (empty when the
 /// callbacks left nothing to delete); with `Discard` the result is None.
-pub(crate) fn delete_text_range<H: crate::emacs_core::edit_host::EditHost>(
+#[doc(hidden)]
+pub fn delete_text_range<H: crate::emacs_core::edit_host::EditHost>(
     host: &mut H,
     range: TextEditRange,
     deleted: DeletedText,

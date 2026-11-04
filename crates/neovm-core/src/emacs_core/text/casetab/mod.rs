@@ -486,7 +486,7 @@ fn current_case_table_for_buffer_in_state_with_symbols(
 
     // Mirrors GNU `Fcurrent_case_table` (`casetab.c:65-72`):
     //     return BVAR (current_buffer, downcase_table);
-    let value = buf.slots[BUFFER_SLOT_CASE_TABLE.index()];
+    let value = buf.slots()[BUFFER_SLOT_CASE_TABLE.index()];
     if is_case_table_with_symbols(&value, mode) {
         return Ok(value);
     }
@@ -494,7 +494,7 @@ fn current_case_table_for_buffer_in_state_with_symbols(
     // Slot unset or invalid: seed from the standard table —
     // matches GNU `reset_buffer` cloning the standard tables
     // into a fresh buffer (`buffer.c:1149-1157`).
-    buf.slots[BUFFER_SLOT_CASE_TABLE.index()] = fallback;
+    buf.slots_mut()[BUFFER_SLOT_CASE_TABLE.index()] = fallback;
     Ok(fallback)
 }
 
@@ -547,7 +547,7 @@ pub(crate) fn buffer_case_canon_table_with_symbols(
     mode: SymbolMode,
 ) -> Option<Value> {
     use crate::buffer::buffer::BUFFER_SLOT_CASE_TABLE;
-    let table = buf.slots[BUFFER_SLOT_CASE_TABLE.index()];
+    let table = buf.slots()[BUFFER_SLOT_CASE_TABLE.index()];
     // Standard table (by object identity): fold via the hardwired path.
     // Both invalid and valid standard tables return None, so their purpose
     // and extras do not need validation or collection dependencies here.
@@ -649,7 +649,7 @@ impl CaseTableOverride {
         mode: SymbolMode,
     ) -> Self {
         use crate::buffer::buffer::BUFFER_SLOT_CASE_TABLE;
-        let table = buf.slots[BUFFER_SLOT_CASE_TABLE.index()];
+        let table = buf.slots()[BUFFER_SLOT_CASE_TABLE.index()];
         if !is_case_table_with_symbols(&table, mode) {
             return Self::none();
         }
@@ -732,7 +732,7 @@ fn set_current_case_table_for_buffer_in_state(
     // plus the implicit consistency between extras[0..2] and the other
     // 3 case tables. The case-table slot is always-local
     // (`local_flags_idx == -1`), so no flag bit needs setting.
-    buf.slots[BUFFER_SLOT_CASE_TABLE.index()] = table;
+    buf.slots_mut()[BUFFER_SLOT_CASE_TABLE.index()] = table;
     Ok(())
 }
 

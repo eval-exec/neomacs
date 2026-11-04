@@ -394,7 +394,8 @@ impl BufferText {
     /// Nth line before the one holding FROM, or FLOOR when there are fewer,
     /// and how many lines were moved -- from the index, or `None` when the
     /// index does not serve it and the caller walks back line by line.
-    pub(crate) fn lines_backward_emacs_byte(
+    #[doc(hidden)]
+    pub fn lines_backward_emacs_byte(
         &self,
         from: EmacsBytePos,
         floor: EmacsBytePos,

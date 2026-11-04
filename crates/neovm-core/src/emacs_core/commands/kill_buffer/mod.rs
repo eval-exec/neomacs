@@ -138,12 +138,12 @@ pub(crate) fn builtin_kill_buffer(
     expect_max_args("kill-buffer", &args, 1)?;
     let id = match args.first() {
         None => match eval.edit.buffers.current_buffer() {
-            Some(buf) => buf.id,
+            Some(buf) => buf.id(),
             None => return Ok(Value::NIL),
         },
         Some(arg) => match arg.kind() {
             ValueKind::Nil => match eval.edit.buffers.current_buffer() {
-                Some(buf) => buf.id,
+                Some(buf) => buf.id(),
                 None => return Ok(Value::NIL),
             },
             ValueKind::Veclike(VecLikeType::Buffer) => {
@@ -252,7 +252,7 @@ pub(crate) fn builtin_kill_buffer(
             eval.green_before_buffer_killed(dying)?;
         }
     }
-    let current_before = eval.edit.buffers.current_buffer().map(|buf| buf.id);
+    let current_before = eval.edit.buffers.current_buffer().map(|buf| buf.id());
     let killed_ids = eval
         .edit
         .buffers

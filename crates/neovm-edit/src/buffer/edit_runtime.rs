@@ -53,3 +53,59 @@ impl EditRuntime {
         }
     }
 }
+
+#[doc(hidden)]
+impl EditRuntime {
+    #[inline]
+    pub fn combine_after_change_buffer(&self) -> Option<BufferId> {
+        self.combine_after_change_buffer
+    }
+    #[inline]
+    pub fn combine_after_change_buffer_mut(&mut self) -> &mut Option<BufferId> {
+        &mut self.combine_after_change_buffer
+    }
+    #[inline]
+    pub fn set_combine_after_change_buffer(&mut self, value: Option<BufferId>) {
+        self.combine_after_change_buffer = value;
+    }
+    #[inline]
+    pub fn combine_after_change_list(&self) -> &Vec<(i64, i64, i64)> {
+        &self.combine_after_change_list
+    }
+    #[inline]
+    pub fn combine_after_change_list_mut(&mut self) -> &mut Vec<(i64, i64, i64)> {
+        &mut self.combine_after_change_list
+    }
+    #[inline]
+    pub fn set_combine_after_change_list(&mut self, value: Vec<(i64, i64, i64)>) {
+        self.combine_after_change_list = value;
+    }
+    #[inline]
+    pub fn last_overlay_modification_hooks(&self) -> &Vec<OverlayModificationHook> {
+        &self.last_overlay_modification_hooks
+    }
+    #[inline]
+    pub fn last_overlay_modification_hooks_mut(&mut self) -> &mut Vec<OverlayModificationHook> {
+        &mut self.last_overlay_modification_hooks
+    }
+    #[inline]
+    pub fn set_last_overlay_modification_hooks(&mut self, value: Vec<OverlayModificationHook>) {
+        self.last_overlay_modification_hooks = value;
+    }
+    #[inline]
+    pub fn interval_insert_behind_hooks(&self) -> neovm_value::value::Value {
+        self.interval_insert_behind_hooks
+    }
+    #[inline]
+    pub fn set_interval_insert_behind_hooks(&mut self, value: neovm_value::value::Value) {
+        self.interval_insert_behind_hooks = value;
+    }
+    #[inline]
+    pub fn interval_insert_in_front_hooks(&self) -> neovm_value::value::Value {
+        self.interval_insert_in_front_hooks
+    }
+    #[inline]
+    pub fn set_interval_insert_in_front_hooks(&mut self, value: neovm_value::value::Value) {
+        self.interval_insert_in_front_hooks = value;
+    }
+}

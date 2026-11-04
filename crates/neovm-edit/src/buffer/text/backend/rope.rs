@@ -302,7 +302,8 @@ impl RopeTextBackend {
         self.for_each_range(&self.root, start, end, &mut f)
     }
 
-    pub(in crate::buffer) fn has_contiguous_emacs_byte_range(&self, range: EmacsByteRange) -> bool {
+    #[doc(hidden)]
+    pub fn has_contiguous_emacs_byte_range(&self, range: EmacsByteRange) -> bool {
         let start = range.start().get();
         let end = range.end().get();
         assert!(
@@ -317,7 +318,8 @@ impl RopeTextBackend {
         start == end || self.contiguous_slice(start, end).is_some()
     }
 
-    pub(in crate::buffer) fn with_contiguous_emacs_byte_range<R>(
+    #[doc(hidden)]
+    pub fn with_contiguous_emacs_byte_range<R>(
         &self,
         range: EmacsByteRange,
         f: impl FnOnce(&[u8]) -> R,

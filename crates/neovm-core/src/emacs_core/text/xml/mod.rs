@@ -61,7 +61,7 @@ fn validate_region_byte_bounds(
     )?;
     let byte_range = region.accessible_byte_range(buf)?;
 
-    Ok(Some((buf.id, byte_range)))
+    Ok(Some((buf.id(), byte_range)))
 }
 
 fn read_region_bytes(

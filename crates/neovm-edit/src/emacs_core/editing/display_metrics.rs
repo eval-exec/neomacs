@@ -307,3 +307,70 @@ fn display_line_number_total_lines(buffer: &Buffer) -> i64 {
     let end = buffer.total_emacs_byte_end_pos();
     buffer.count_newlines_emacs_byte(EmacsBytePos::ZERO, end) as i64 + 1
 }
+
+impl LineWrap {
+    /// Whether a display line is a whole logical line.
+    #[doc(hidden)]
+    pub fn truncates(self) -> bool {
+        matches!(self, Self::Truncate)
+    }
+
+    /// Whether a `(COLS . LINES)` goal past the row's content may stop at the
+    /// row's own right EDGE -- the column a truncation `$` or continuation
+    /// `\` covers -- or must stop at the last glyph the row drew.
+    ///
+    /// GNU decides this in `move_it_in_display_line`, which is the function
+    /// `Fvertical_motion` calls for the goal (`src/indent.c:2540`) and is NOT
+    /// the same function as the walk it wraps:
+    ///
+    /// ```c
+    ///   if (it->line_wrap == WORD_WRAP && (op & MOVE_TO_X))
+    ///     {
+    ///       SAVE_IT (save_it, *it, save_data);
+    ///       skip = move_it_in_display_line_to (it, to_charpos, to_x, op);
+    ///       /* When word-wrap is on, TO_X may lie past the end of a wrapped
+    ///          line.  Then it->current is the character on the next line, so
+    ///          backtrack to the space before the wrap point.  */
+    ///       if (skip == MOVE_LINE_CONTINUED)
+    ///         {
+    ///           int prev_x = max (it->current_x - 1, 0);
+    ///           RESTORE_IT (it, &save_it, save_data);
+    ///           move_it_in_display_line_to (it, -1, prev_x, MOVE_TO_X);
+    ///         }
+    ///     }
+    ///   else
+    ///     move_it_in_display_line_to (it, to_charpos, to_x, op);
+    /// ```
+    ///
+    /// (`src/xdisp.c:10859-10888`).  So the WORD_WRAP difference is a
+    /// backtrack in the CALLER, taken whenever the goal ran off the end of a
+    /// continued row, and it does not depend on `wrap_it` at all.  Ledger 212
+    /// residual 1 recorded a reading of `move_it_in_display_line_to`'s
+    /// `it->line_wrap != WORD_WRAP || wrap_it.sp < 0` branch that its own
+    /// measurement contradicted, and asked the next reader to start from the
+    /// contradiction; this is where it goes.  A TRUNCATE row cannot reach the
+    /// backtrack (it returns `MOVE_LINE_TRUNCATED`, and the wrapper is not
+    /// entered anyway), and a row that ends at a newline or at ZV returns
+    /// `MOVE_NEWLINE_OR_CR` / `MOVE_POS_MATCH_OR_ZV`, so only a CONTINUED row
+    /// backs off -- which is exactly a row that carries a marker column.
+    ///
+    /// Measured, GNU Emacs 31.0.90, 80x24 pty, `truncate-lines' nil, ONE
+    /// 300-character line of `x' with no wrap opportunity anywhere in it
+    /// (`tmp/l216/wrapgoal-gnu-*.txt`), identical COLD and WARM:
+    ///
+    /// ```text
+    ///   word-wrap nil   goal 78 -> 79   goal 79 -> 80   goal 80 -> 80
+    ///   word-wrap t     goal 78 -> 79   goal 79 -> 80   goal 80 -> 79
+    /// ```
+    ///
+    /// The two agree until the goal passes the row's edge, and only then does
+    /// WORD_WRAP step back -- non-monotonically, which is the signature of a
+    /// backtrack rather than of a different stop set.
+    #[doc(hidden)]
+    pub fn goal_stops_at_row_edge(self) -> bool {
+        match self {
+            Self::Truncate | Self::WindowWrap => true,
+            Self::WordWrap => false,
+        }
+    }
+}

@@ -5845,9 +5845,9 @@ impl Context {
         {
             let offset = buf_fwd.slot_index();
             if let Some(buf) = self.edit.buffers.get_mut(buf_id)
-                && let Some(offset) = offset.below(buf.slots.len())
+                && let Some(offset) = offset.below(buf.slots().len())
             {
-                buf.slots[offset] = value;
+                buf.slots_mut()[offset] = value;
                 self.refresh_gc_runtime_settings_after_change_by_id(sym_id);
                 self.mark_redisplay_dirty_if_display_var(sym_id);
                 return;
@@ -5949,8 +5949,8 @@ impl Context {
         let off = slot.index();
         if let Some(buf) = self.edit.buffers.current_buffer() {
             let local = buf_fwd.local_flags_idx < 0 || buf.slot_local_flag(slot);
-            if local && off < buf.slots.len() {
-                return buf.slots[off];
+            if local && off < buf.slots().len() {
+                return buf.slots()[off];
             }
         }
 
@@ -6079,7 +6079,7 @@ impl Context {
                         && let Some(value) = self.obarray.read_localized_symbol_for_buffer(
                             sym_id,
                             sym,
-                            buf.id,
+                            buf.id(),
                             buf.local_var_alist_value(),
                         )
                     {
@@ -6129,7 +6129,7 @@ impl Context {
                     if let Some(buf) = self.edit.buffers.current_buffer()
                         && let Some(value) = self.obarray.read_localized_for_buffer(
                             resolved,
-                            buf.id,
+                            buf.id(),
                             buf.local_var_alist_value(),
                         )
                     {
@@ -6728,7 +6728,7 @@ pub(super) fn store_runtime_binding(
         && let Some(buf_id) = buffers.current_buffer_id()
     {
         let (cur_val, alist) = match buffers.get(buf_id) {
-            Some(buf) => (Value::make_buffer(buf.id), buf.local_var_alist_value()),
+            Some(buf) => (Value::make_buffer(buf.id()), buf.local_var_alist_value()),
             None => (Value::NIL, Value::NIL),
         };
         let new_alist = obarray.set_internal_localized_with(

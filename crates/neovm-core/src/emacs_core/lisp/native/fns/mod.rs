@@ -1035,7 +1035,7 @@ pub(crate) fn builtin_buffer_hash(eval: &mut super::eval::Context, args: Vec<Val
             .buffers
             .current_buffer()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?
-            .id
+            .id()
     } else {
         match args[0].kind() {
             ValueKind::Veclike(VecLikeType::Buffer) => args[0].as_buffer_id().unwrap(),

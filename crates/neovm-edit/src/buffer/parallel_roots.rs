@@ -8,7 +8,8 @@ impl BufferStorage {
     /// This visits storage only; it never constructs an owner view or runs Lisp.
     #[cold]
     #[inline(never)]
-    pub(crate) fn trace_parallel_roots(&self, visit: &mut dyn FnMut(Value)) {
+    #[doc(hidden)]
+    pub fn trace_parallel_roots(&self, visit: &mut dyn FnMut(Value)) {
         for buffer in self.buffers.values() {
             visit(buffer.name);
             visit(buffer.last_name);
@@ -106,7 +107,8 @@ impl BufferStorage {
     /// mutator access may overlap use of these slots; discard before resume.
     #[cold]
     #[inline(never)]
-    pub(crate) unsafe fn parallel_marker_chain_head_slots(
+    #[doc(hidden)]
+    pub unsafe fn parallel_marker_chain_head_slots(
         &self,
     ) -> Vec<*mut *mut neovm_value::tagged::header::MarkerObj> {
         self.buffers

@@ -280,17 +280,17 @@ impl BookmarkManager {
     // Bookmark keys retain exact Lisp-string equality and are stable under the
     // non-moving GC despite their interior-mutability marker.
     #[allow(clippy::mutable_key_type)]
-    pub(crate) fn dump_bookmarks(&self) -> &HashMap<BookmarkKey, Bookmark> {
+    #[doc(hidden)]
+    pub fn dump_bookmarks(&self) -> &HashMap<BookmarkKey, Bookmark> {
         &self.bookmarks
     }
-    pub(crate) fn dump_recent(&self) -> &[LispString] {
+    #[doc(hidden)]
+    pub fn dump_recent(&self) -> &[LispString] {
         &self.recent
     }
     #[allow(clippy::mutable_key_type)] // restores the exact Lisp bookmark-key representation
-    pub(crate) fn from_dump(
-        bookmarks: HashMap<BookmarkKey, Bookmark>,
-        recent: Vec<LispString>,
-    ) -> Self {
+    #[doc(hidden)]
+    pub fn from_dump(bookmarks: HashMap<BookmarkKey, Bookmark>, recent: Vec<LispString>) -> Self {
         Self {
             bookmarks,
             recent,
@@ -356,10 +356,12 @@ fn runtime_string_to_bookmark_string(text: &str) -> LispString {
 /// preserves their properties. Only this derived identity has no GC edges.
 /// The private field and shared accessor keep its constructor invariant intact.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub(crate) struct BookmarkKey(LispString);
+#[doc(hidden)]
+pub struct BookmarkKey(LispString);
 
 impl BookmarkKey {
-    pub(crate) fn from_lisp_string(text: &LispString) -> Self {
+    #[doc(hidden)]
+    pub fn from_lisp_string(text: &LispString) -> Self {
         // Issue #131: build the map key from the exact Emacs bytes, normalized
         // to canonical multibyte (matching the previous always-multibyte key),
         // instead of round-tripping through a lossy/storage Rust string. This
@@ -373,7 +375,8 @@ impl BookmarkKey {
         Self(normalized)
     }
 
-    pub(crate) fn as_lisp_string(&self) -> &LispString {
+    #[doc(hidden)]
+    pub fn as_lisp_string(&self) -> &LispString {
         &self.0
     }
 }

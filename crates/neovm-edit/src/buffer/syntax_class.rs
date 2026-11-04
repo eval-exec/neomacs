@@ -56,7 +56,8 @@ pub enum SyntaxClass {
     StringFence = 15,
 }
 
-pub(crate) const SYNTAX_CLASS_COUNT: usize = 16;
+#[doc(hidden)]
+pub const SYNTAX_CLASS_COUNT: usize = 16;
 const SYNTAX_CLASS_DESIGNATORS: [char; SYNTAX_CLASS_COUNT] = [
     ' ', '.', 'w', '_', '(', ')', '\'', '"', '$', '\\', '/', '<', '>', '@', '!', '|',
 ];
@@ -121,21 +122,24 @@ impl SyntaxClass {
     /// Parse a public syntax class integer, as accepted by
     /// `syntax-class-to-char`.  Unlike syntax table entries, GNU rejects raw
     /// integers outside 0..Smax here instead of masking flag bits.
-    pub(crate) fn from_plain_code(n: i64) -> Option<SyntaxClass> {
+    #[doc(hidden)]
+    pub fn from_plain_code(n: i64) -> Option<SyntaxClass> {
         let code = u8::try_from(n).ok()?;
         SyntaxClass::from_gnu_discriminant(code)
     }
 }
 
 /// Text-layer syntax queries the buffer substrate asks for.
-pub(crate) struct SyntaxSeams {
+#[doc(hidden)]
+pub struct SyntaxSeams {
     pub(crate) table_for_buffer: fn(&Buffer) -> Value,
     pub(crate) char_syntax_code: fn(Value, u32) -> SyntaxClass,
 }
 
 static SEAMS: OnceLock<SyntaxSeams> = OnceLock::new();
 
-pub(crate) fn install(seams: SyntaxSeams) {
+#[doc(hidden)]
+pub fn install(seams: SyntaxSeams) {
     let _ = SEAMS.set(seams);
 }
 
@@ -166,5 +170,18 @@ impl SyntaxTableView {
     /// The GNU syntax class of the Emacs character code `code`.
     pub(crate) fn char_syntax_code(self, code: u32) -> SyntaxClass {
         (seams().char_syntax_code)(self.chartable, code)
+    }
+}
+
+#[doc(hidden)]
+impl SyntaxSeams {
+    pub const fn new(
+        table_for_buffer: fn(&Buffer) -> Value,
+        char_syntax_code: fn(Value, u32) -> SyntaxClass,
+    ) -> Self {
+        Self {
+            table_for_buffer,
+            char_syntax_code,
+        }
     }
 }

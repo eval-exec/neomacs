@@ -1,5 +1,6 @@
 use super::*;
-use crate::buffer::text::{BufferTextBytesSnapshot, ImplementedBufferTextBackendKind};
+#[doc(hidden)]
+pub use crate::buffer::text::{BufferTextBytesSnapshot, ImplementedBufferTextBackendKind};
 use crate::buffer::{CharRange, LispCharPos1};
 use neovm_value::heap_types::{LispString, OverlayDataInit};
 use neovm_value::value::ValueKind;

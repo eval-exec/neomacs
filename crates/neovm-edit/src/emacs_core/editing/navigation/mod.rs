@@ -86,7 +86,8 @@ fn optional_line_count_arg(args: &[Value], default: i64) -> Result<LineCountArg,
     }
 }
 
-pub(crate) fn line_beginning_scan_count_arg(args: &[Value]) -> Result<i64, Flow> {
+#[doc(hidden)]
+pub fn line_beginning_scan_count_arg(args: &[Value]) -> Result<i64, Flow> {
     if args.is_empty() || args[0].is_nil() {
         Ok(0)
     } else {
@@ -94,7 +95,8 @@ pub(crate) fn line_beginning_scan_count_arg(args: &[Value]) -> Result<i64, Flow>
     }
 }
 
-pub(crate) fn line_end_scan_count_arg(args: &[Value]) -> Result<i64, Flow> {
+#[doc(hidden)]
+pub fn line_end_scan_count_arg(args: &[Value]) -> Result<i64, Flow> {
     if args.is_empty() || args[0].is_nil() {
         Ok(1)
     } else {
@@ -470,7 +472,8 @@ pub(crate) fn adjust_for_intangible<'a, Vars: EditVariableRead<'a>>(
 ///
 /// `bobp` as registered: fixed arity 0, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a0` case (absent optionals arrive as nil).
-pub(crate) fn builtin_bobp_0(buffers: &BufferManager) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_bobp_0(buffers: &BufferManager) -> EvalResult {
     let args: [Value; 0] = [];
     expect_args("bobp", &args, 0)?;
     let buf = current_buffer_in_manager(buffers)?;
@@ -483,7 +486,8 @@ pub(crate) fn builtin_bobp_0(buffers: &BufferManager) -> EvalResult {
 ///
 /// `eobp` as registered: fixed arity 0, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a0` case (absent optionals arrive as nil).
-pub(crate) fn builtin_eobp_0(buffers: &BufferManager) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_eobp_0(buffers: &BufferManager) -> EvalResult {
     let args: [Value; 0] = [];
     expect_args("eobp", &args, 0)?;
     let buf = current_buffer_in_manager(buffers)?;
@@ -496,7 +500,8 @@ pub(crate) fn builtin_eobp_0(buffers: &BufferManager) -> EvalResult {
 ///
 /// `bolp` as registered: fixed arity 0, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a0` case (absent optionals arrive as nil).
-pub(crate) fn builtin_bolp_0(buffers: &BufferManager) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_bolp_0(buffers: &BufferManager) -> EvalResult {
     let args: [Value; 0] = [];
     expect_args("bolp", &args, 0)?;
     let buf = current_buffer_in_manager(buffers)?;
@@ -514,7 +519,8 @@ pub(crate) fn builtin_bolp_0(buffers: &BufferManager) -> EvalResult {
 ///
 /// `eolp` as registered: fixed arity 0, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a0` case (absent optionals arrive as nil).
-pub(crate) fn builtin_eolp_0(buffers: &BufferManager) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_eolp_0(buffers: &BufferManager) -> EvalResult {
     let args: [Value; 0] = [];
     expect_args("eolp", &args, 0)?;
     let buf = current_buffer_in_manager(buffers)?;
@@ -537,7 +543,8 @@ pub(crate) fn builtin_eolp_0(buffers: &BufferManager) -> EvalResult {
 /// buffer's point after moving `n - 1` lines. Returns `(bol_charpos,
 /// orig_charpos, lines_moved)` mirroring GNU's static `bol` helper
 /// (editfns.c) plus the original PT used as anchor for field constraint.
-pub(crate) fn pos_bol_compute(
+#[doc(hidden)]
+pub fn pos_bol_compute(
     buffers: &BufferManager,
     scan_count: i64,
 ) -> Result<(BufferLispPos, BufferLispPos, i64), Flow> {
@@ -573,7 +580,8 @@ pub(crate) fn pos_bol_compute(
 /// Compute the unconstrained end-of-line position for the current buffer's
 /// point after moving `n - 1` lines. Returns `(eol_charpos, orig_charpos)`,
 /// mirroring GNU's static `eol` helper (editfns.c).
-pub(crate) fn pos_eol_compute(
+#[doc(hidden)]
+pub fn pos_eol_compute(
     buffers: &BufferManager,
     scan_count: i64,
 ) -> Result<(BufferLispPos, BufferLispPos), Flow> {
@@ -612,7 +620,8 @@ pub(crate) fn builtin_line_beginning_position<H: EditHost>(
 /// `line-beginning-position` as registered: fixed arity 1, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_line_beginning_position_1<H: EditHost>(host: &mut H, n: Value) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_line_beginning_position_1<H: EditHost>(host: &mut H, n: Value) -> EvalResult {
     let args: [Value; 1] = [n];
     expect_max_args("line-beginning-position", &args, 1)?;
     let scan_count = line_beginning_scan_count_arg(&args)?;
@@ -644,7 +653,8 @@ pub(crate) fn builtin_line_end_position<H: EditHost>(host: &mut H, args: Vec<Val
 /// `line-end-position` as registered: fixed arity 1, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_line_end_position_1<H: EditHost>(host: &mut H, n: Value) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_line_end_position_1<H: EditHost>(host: &mut H, n: Value) -> EvalResult {
     let args: [Value; 1] = [n];
     expect_max_args("line-end-position", &args, 1)?;
     let scan_count = line_end_scan_count_arg(&args)?;
@@ -689,7 +699,8 @@ impl LineNumberScope {
 }
 
 /// (line-number-at-pos &optional POS ABSOLUTE)
-pub(crate) fn builtin_line_number_at_pos(buffers: &BufferManager, args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_line_number_at_pos(buffers: &BufferManager, args: Vec<Value>) -> EvalResult {
     let buf = buffers.current_buffer().ok_or_else(no_buffer)?;
     let current_buffer_id = buf.id;
     let byte_pos = if args.is_empty() || args[0].is_nil() {
@@ -772,7 +783,8 @@ pub(crate) fn builtin_count_lines(buffers: &BufferManager, args: Vec<Value>) -> 
 ///
 /// `forward-line` as registered: fixed arity 1, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
-pub(crate) fn builtin_forward_line_1<H: EditHost>(host: &mut H, n: Value) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_forward_line_1<H: EditHost>(host: &mut H, n: Value) -> EvalResult {
     let args: [Value; 1] = [n];
     let line_arg = optional_line_count_arg(&args, 1)?;
     let n = line_arg.count;
@@ -830,7 +842,8 @@ pub(crate) fn builtin_forward_line_1<H: EditHost>(host: &mut H, n: Value) -> Eva
 ///
 /// `beginning-of-line` as registered: fixed arity 1, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
-pub(crate) fn builtin_beginning_of_line_1<H: EditHost>(host: &mut H, n: Value) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_beginning_of_line_1<H: EditHost>(host: &mut H, n: Value) -> EvalResult {
     let args: [Value; 1] = [n];
     let n = if args.is_empty() || args[0].is_nil() {
         1
@@ -877,7 +890,8 @@ pub(crate) fn builtin_beginning_of_line_1<H: EditHost>(host: &mut H, n: Value) -
 ///
 /// `end-of-line` as registered: fixed arity 1, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
-pub(crate) fn builtin_end_of_line_1<H: EditHost>(host: &mut H, n: Value) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_end_of_line_1<H: EditHost>(host: &mut H, n: Value) -> EvalResult {
     let args: [Value; 1] = [n];
     let n = if args.is_empty() || args[0].is_nil() {
         1
@@ -934,7 +948,8 @@ pub(crate) fn builtin_end_of_line_1<H: EditHost>(host: &mut H, n: Value) -> Eval
 ///
 /// Registered with fixed arity 1, called straight off the bytecode stack like
 /// GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
-pub(crate) fn builtin_forward_char_1<H: EditHost>(host: &mut H, n: Value) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_forward_char_1<H: EditHost>(host: &mut H, n: Value) -> EvalResult {
     move_characters(host, n, CharacterMotion::Forward)
 }
 
@@ -1008,7 +1023,8 @@ fn move_characters<H: EditHost>(host: &mut H, count: Value, motion: CharacterMot
 }
 
 /// (backward-char &optional N)
-pub(crate) fn builtin_backward_char<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_backward_char<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     neovm_value::error::expect_args_range("backward-char", &args, 0, 1)?;
     move_characters(
         host,
@@ -1263,7 +1279,8 @@ fn skip_chars_set(buffers: &BufferManager, string: Value) -> Result<SkipCharsSet
     Ok(set)
 }
 
-pub(crate) fn builtin_skip_chars_forward_2(
+#[doc(hidden)]
+pub fn builtin_skip_chars_forward_2(
     buffers: &mut BufferManager,
     string: Value,
     lim: Value,
@@ -1342,7 +1359,8 @@ pub(crate) fn builtin_skip_chars_forward_2(
 ///
 /// `skip-chars-backward` as registered: fixed arity 2, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a2` case (absent optionals arrive as nil).
-pub(crate) fn builtin_skip_chars_backward_2(
+#[doc(hidden)]
+pub fn builtin_skip_chars_backward_2(
     buffers: &mut BufferManager,
     string: Value,
     lim: Value,
@@ -1423,7 +1441,8 @@ pub(crate) fn builtin_skip_chars_backward_2(
 // ===========================================================================
 
 /// (region-beginning) -> integer
-pub(crate) fn builtin_region_beginning(buffers: &BufferManager, args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_region_beginning(buffers: &BufferManager, args: Vec<Value>) -> EvalResult {
     expect_args("region-beginning", &args, 0)?;
     let buf = buffers.current_buffer().ok_or_else(no_buffer)?;
     let mark = buf.mark_emacs_byte_pos().ok_or_else(|| {
@@ -1441,7 +1460,8 @@ pub(crate) fn builtin_region_beginning(buffers: &BufferManager, args: Vec<Value>
 }
 
 /// (region-end) -> integer
-pub(crate) fn builtin_region_end(buffers: &BufferManager, args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_region_end(buffers: &BufferManager, args: Vec<Value>) -> EvalResult {
     expect_args("region-end", &args, 0)?;
     let buf = buffers.current_buffer().ok_or_else(no_buffer)?;
     let mark = buf.mark_emacs_byte_pos().ok_or_else(|| {

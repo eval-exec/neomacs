@@ -927,7 +927,7 @@ impl RedisplayTransaction<'_> {
         if let Some(buffer) = self.eval.edit.buffers.current_buffer() {
             crate::window::window_markers::sync_all_frames_for_buffer(
                 &mut self.eval.frames,
-                buffer.id,
+                buffer.id(),
             );
         }
         if let Some(frame) = self.eval.frames.selected_frame().map(|frame| frame.id) {

@@ -363,7 +363,7 @@ impl Context {
     #[inline(always)]
     fn read_localized_cached(&self, sym: &LispSymbol) -> Option<Value> {
         let buf = self.edit.buffers.current_buffer()?;
-        let hit = sym.blv_cache_hit(buf.id)?;
+        let hit = sym.blv_cache_hit(buf.id())?;
         let value = hit.valcell().cons_cdr();
         if value.is_unbound() {
             return None;
@@ -383,8 +383,8 @@ impl Context {
         let buf_fwd = fwd.as_buffer_obj_fwd()?;
         let buf = self.edit.buffers.current_buffer()?;
         let value = buf_fwd.value_in(
-            Some(&buf.slots[..]),
-            buf.local_flags,
+            Some(&buf.slots()[..]),
+            buf.local_flags(),
             Some(&self.edit.buffers.buffer_defaults[..]),
         );
         if value.is_unbound() {
@@ -492,7 +492,7 @@ impl Context {
         let Some(buf) = self.edit.buffers.current_buffer() else {
             return false;
         };
-        let Some(hit) = sym.blv_cache_hit(buf.id) else {
+        let Some(hit) = sym.blv_cache_hit(buf.id()) else {
             return false;
         };
         let Some(stored) = forward_rule(hit.fwd(), value) else {
@@ -576,7 +576,7 @@ impl Context {
         // Everything the bind needs from the symbol is copied out here, so
         // its borrow ends before the push.
         let bound = if window == symcell_inline_write_value(SymbolRedirect::Localized) {
-            match self.edit.buffers.current_buffer().map(|buf| buf.id) {
+            match self.edit.buffers.current_buffer().map(|buf| buf.id()) {
                 Some(buffer_id) => match sym.blv_cache_hit(buffer_id) {
                     Some(hit) => self.specbind_localized_hit::<COMPILED>(id, buffer_id, hit, value),
                     None => false,

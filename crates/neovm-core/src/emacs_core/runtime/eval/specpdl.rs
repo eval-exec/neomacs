@@ -628,7 +628,9 @@ impl Context {
                 match self.edit.buffers.current_buffer_id() {
                     Some(buf_id) => {
                         let (cur_val, alist) = match self.edit.buffers.get(buf_id) {
-                            Some(buf) => (Value::make_buffer(buf.id), buf.local_var_alist_value()),
+                            Some(buf) => {
+                                (Value::make_buffer(buf.id()), buf.local_var_alist_value())
+                            }
                             None => (Value::NIL, Value::NIL),
                         };
                         // A `let` or its unwind never creates a binding: no
@@ -662,7 +664,7 @@ impl Context {
                     if let Some(buf_id) = self.edit.buffers.current_buffer_id()
                         && let Some(buf) = self.edit.buffers.get_mut(buf_id)
                     {
-                        buf.slots[slot.index()] = stored;
+                        buf.slots_mut()[slot.index()] = stored;
                     }
                     stored
                 }
@@ -910,7 +912,7 @@ impl Context {
                             .edit
                             .buffers
                             .get(buf_id)
-                            .map(|b| b.slots[off])
+                            .map(|b| b.slots()[off])
                             .unwrap_or(Value::NIL);
                         self.push_specpdl_with(|| SpecBinding::LetLocal {
                             sym_id: resolved,
@@ -928,7 +930,7 @@ impl Context {
                             Err(error) => return Err(forward_store_signal(error, value)),
                         };
                         if let Some(buf) = self.edit.buffers.get_mut(buf_id) {
-                            buf.slots[off] = stored;
+                            buf.slots_mut()[off] = stored;
                             // Always-local slots need no flag
                             // change; conditional slots already
                             // have the bit set (has_local check).
@@ -986,7 +988,7 @@ impl Context {
             && let Some(buf_id) = self.edit.buffers.current_buffer_id()
         {
             let (cur_val, alist) = match self.edit.buffers.get(buf_id) {
-                Some(buf) => (Value::make_buffer(buf.id), buf.local_var_alist_value()),
+                Some(buf) => (Value::make_buffer(buf.id()), buf.local_var_alist_value()),
                 None => (Value::NIL, Value::NIL),
             };
             // Force a swap so blv.found / blv.valcell match the

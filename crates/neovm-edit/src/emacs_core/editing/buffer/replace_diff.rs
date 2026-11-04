@@ -31,7 +31,8 @@ impl Changes {
         let pos = pos as usize;
         self.0[pos / 8] |= 1 << (pos % 8);
     }
-    fn get(&self, pos: usize) -> bool {
+    #[doc(hidden)]
+    pub fn get(&self, pos: usize) -> bool {
         self.0[pos / 8] & (1 << (pos % 8)) != 0
     }
 }
@@ -360,7 +361,8 @@ impl Diff<'_> {
 /// Return the GNU change runs, or `None` when the deadline expires or the
 /// O(N+M) comparison workspace cannot be reserved. The caller treats both as
 /// "comparison unavailable" and falls back to a whole-region replacement.
-pub(crate) fn change_runs(
+#[doc(hidden)]
+pub fn change_runs(
     a: &[u32],
     b: &[u32],
     deadline: Option<Instant>,

@@ -69,7 +69,8 @@ impl ReadPolicy for Unobserved {
 }
 
 #[inline]
-pub(super) fn get(plist: Value, prop: Value) -> Option<Value> {
+#[doc(hidden)]
+pub fn get(plist: Value, prop: Value) -> Option<Value> {
     // Empty/default-absent plists retain their old return before any selector.
     if !plist.is_cons() {
         return None;

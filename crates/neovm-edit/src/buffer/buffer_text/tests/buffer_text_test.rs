@@ -1,6 +1,7 @@
 use std::str::FromStr;
 
-use crate::buffer::text::{ImplementedBufferTextBackendKind, TextBackendDebugLayout};
+#[doc(hidden)]
+pub use crate::buffer::text::{ImplementedBufferTextBackendKind, TextBackendDebugLayout};
 use crate::buffer::{
     BufferTextBackendKind, CharLen, CharPos0, CharRange, EmacsByteLen, EmacsBytePos,
     EmacsByteRange, TextEditRange, TextExtent, TextMetrics,

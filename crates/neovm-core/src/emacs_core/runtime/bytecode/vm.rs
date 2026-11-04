@@ -5517,7 +5517,7 @@ impl<'a> Vm<'a> {
                             .edit
                             .buffers
                             .current_buffer()
-                            .map(|buffer| buffer.id)
+                            .map(|buffer| buffer.id())
                         {
                             aux_stack
                                 .current_mut()
@@ -6724,7 +6724,7 @@ impl<'a> Vm<'a> {
                         && let Some(value) = ob.read_localized_symbol_for_buffer(
                             name_id,
                             sym,
-                            buf.id,
+                            buf.id(),
                             buf.local_var_alist_value(),
                         )
                     {
@@ -6764,11 +6764,11 @@ impl<'a> Vm<'a> {
             let (cur_val, alist, slots_ptr, buf_id, local_flags) =
                 match self.ctx.edit.buffers.current_buffer() {
                     Some(buf) => (
-                        Value::make_buffer(buf.id),
+                        Value::make_buffer(buf.id()),
                         buf.local_var_alist_value(),
-                        Some(&buf.slots[..] as *const [Value]),
-                        Some(buf.id),
-                        buf.local_flags,
+                        Some(&buf.slots()[..] as *const [Value]),
+                        Some(buf.id()),
+                        buf.local_flags(),
                     ),
                     None => (Value::NIL, Value::NIL, None, None, 0u64),
                 };
@@ -6936,7 +6936,7 @@ impl<'a> Vm<'a> {
                         .edit
                         .buffers
                         .get(buf_id)
-                        .is_some_and(|buf| offset < buf.slots.len());
+                        .is_some_and(|buf| offset < buf.slots().len());
                     if slot_exists {
                         crate::emacs_core::eval::validate_buffer_slot_write(
                             buf_fwd.predicate,
@@ -6951,7 +6951,7 @@ impl<'a> Vm<'a> {
                             &where_value,
                         )?;
                         if let Some(buf) = self.ctx.edit.buffers.get_mut(buf_id) {
-                            buf.slots[offset] = value;
+                            buf.slots_mut()[offset] = value;
                             if flags_idx >= 0 {
                                 buf.set_slot_local_flag(slot, true);
                             }
@@ -6987,7 +6987,7 @@ impl<'a> Vm<'a> {
                 .current_buffer_id()
                 .unwrap_or(first_buf_id);
             let (cur_val, alist) = match self.ctx.edit.buffers.get(buf_id) {
-                Some(buf) => (Value::make_buffer(buf.id), buf.local_var_alist_value()),
+                Some(buf) => (Value::make_buffer(buf.id()), buf.local_var_alist_value()),
                 None => (Value::NIL, Value::NIL),
             };
             // GNU `eval.c:3559-3577 (let_shadows_buffer_binding_p)`
@@ -9595,7 +9595,7 @@ impl<'a> Vm<'a> {
         #[cfg(test)]
         INLINE_BUILTIN_DIRECT_COUNT.with(|count| count.set(count.get() + 1));
         Ok(match self.ctx.edit.buffers.current_buffer() {
-            Some(buf) => Value::make_buffer(buf.id),
+            Some(buf) => Value::make_buffer(buf.id()),
             None => Value::NIL,
         })
     }

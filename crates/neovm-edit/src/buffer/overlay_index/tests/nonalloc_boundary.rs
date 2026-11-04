@@ -14,7 +14,8 @@ fn overlay(start: usize, end: usize) -> Value {
     })
 }
 
-fn range(start: usize, end: usize) -> EmacsByteRange {
+#[doc(hidden)]
+pub fn range(start: usize, end: usize) -> EmacsByteRange {
     EmacsByteRange::from_usize(start, end)
 }
 

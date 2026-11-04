@@ -24,8 +24,10 @@ use super::position::{
     TextPositionAnchor,
 };
 #[cfg(test)]
-use super::text::BufferTextBytesSnapshot;
-use super::text::{BufferTextBackendKind, ImplementedBufferTextBackendKind};
+#[doc(hidden)]
+pub use super::text::BufferTextBytesSnapshot;
+#[doc(hidden)]
+pub use super::text::{BufferTextBackendKind, ImplementedBufferTextBackendKind};
 // Phase 10F: BufferLocals is gone. Per-buffer Lisp bindings now live
 // in `Buffer::local_var_alist` (for LOCALIZED), `Buffer::slots[]`
 // (for FORWARDED BUFFER_OBJFWD), and `Buffer::keymap` / the
@@ -1176,7 +1178,8 @@ fn buffer_slot_sym_map() -> &'static [Option<&'static BufferSlotInfo>] {
 /// Force the buffer slot schema and its value-layer `BufferSlotMeta` registry to be
 /// built. Called during evaluator construction, before any value-layer slot
 /// reader can run.
-pub(crate) fn force_slot_schema_install() {
+#[doc(hidden)]
+pub fn force_slot_schema_install() {
     let _ = buffer_slot_sym_map();
 }
 
@@ -1492,18 +1495,21 @@ fn buffer_undo_list_sym() -> SymId {
 /// probing every ordinary nil-valued global through the generic buffer-local
 /// lookup machinery.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum DedicatedBufferLocal {
+#[doc(hidden)]
+pub enum DedicatedBufferLocal {
     UndoList,
 }
 
 impl DedicatedBufferLocal {
     #[inline]
-    pub(crate) fn from_sym_id(sym_id: SymId) -> Option<Self> {
+    #[doc(hidden)]
+    pub fn from_sym_id(sym_id: SymId) -> Option<Self> {
         (sym_id == buffer_undo_list_sym()).then_some(Self::UndoList)
     }
 
     #[inline]
-    pub(crate) fn read(self, buffer: &Buffer) -> Value {
+    #[doc(hidden)]
+    pub fn read(self, buffer: &Buffer) -> Value {
         match self {
             Self::UndoList => buffer.get_undo_list(),
         }
@@ -1650,7 +1656,8 @@ impl LocalVariableBindings {
         index.as_ref()?.get(&sym_id).copied()
     }
 
-    fn value(&self, sym_id: SymId) -> Option<Value> {
+    #[doc(hidden)]
+    pub fn value(&self, sym_id: SymId) -> Option<Value> {
         self.binding_cons(sym_id).map(Value::cons_cdr)
     }
 
@@ -2139,7 +2146,8 @@ pub struct AccessibleBufferRegionSnapshot {
 /// narrowing (or under a different restriction) from being reused as though
 /// it still described the same line-number coordinate system.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ModeLineNumberAnchor {
+#[doc(hidden)]
+pub struct ModeLineNumberAnchor {
     pub(crate) accessible_start: EmacsBytePos,
     pub(crate) line_start: EmacsBytePos,
     pub(crate) line_number: usize,
@@ -2303,7 +2311,8 @@ pub struct OutermostRestrictionResetState {
 /// This is intentionally crate-private: pdump loading needs to restore the
 /// exact serialized state, but ordinary runtime code should construct buffers
 /// through [`Buffer::new`] and mutate text through the Buffer APIs.
-pub(crate) struct BufferDumpParts {
+#[doc(hidden)]
+pub struct BufferDumpParts {
     pub id: BufferId,
     pub name: Value,
     pub last_name: Value,
@@ -2509,14 +2518,16 @@ pub struct AutomaticCompositionVisibleKey {
 
 impl Buffer {
     /// The cached category projection for this buffer, if one is present.
-    pub(crate) fn cached_word_wrap_policy(
+    #[doc(hidden)]
+    pub fn cached_word_wrap_policy(
         &self,
     ) -> Option<std::rc::Rc<crate::emacs_core::word_wrap::CachedWordWrapPolicy>> {
         self.word_wrap_policy_cache.borrow().clone()
     }
 
     /// Replace the cached category projection (dump restores start empty).
-    pub(crate) fn store_word_wrap_policy_cache(
+    #[doc(hidden)]
+    pub fn store_word_wrap_policy_cache(
         &self,
         cache: Option<std::rc::Rc<crate::emacs_core::word_wrap::CachedWordWrapPolicy>>,
     ) {
@@ -2703,7 +2714,8 @@ impl Buffer {
         }
     }
 
-    pub(crate) fn from_dump_parts(parts: BufferDumpParts) -> Self {
+    #[doc(hidden)]
+    pub fn from_dump_parts(parts: BufferDumpParts) -> Self {
         assert!(parts.name.is_string(), "buffer name must be a Lisp string");
         Self {
             line_number_anchor: std::cell::Cell::new(None),
@@ -2757,7 +2769,8 @@ impl Buffer {
     /// a new head. A caller that unlinks interior entries has no way to reach
     /// this method and must use [`LocalVariableBindings::retain_bindings`],
     /// which cannot leave the derived index stale.
-    pub(crate) fn replace_local_var_alist(&mut self, alist: SetInternalAlist) {
+    #[doc(hidden)]
+    pub fn replace_local_var_alist(&mut self, alist: SetInternalAlist) {
         self.local_var_alist.replace_alist(alist.into_value());
     }
 
@@ -3070,19 +3083,25 @@ impl Buffer {
     /// instead of calling a shim that does the load on its behalf. See
     /// [`TextPositionAnchor::CHAR_POS_OFFSET`] for why baking an offset is
     /// sound for JIT-generated code and not for an AOT object.
-    pub(crate) const POINT_CHAR_POS_OFFSET: usize =
+    #[doc(hidden)]
+    pub const POINT_CHAR_POS_OFFSET: usize =
         std::mem::offset_of!(Self, point) + TextPositionAnchor::CHAR_POS_OFFSET;
-    pub(crate) const BEGV_CHAR_POS_OFFSET: usize =
+    #[doc(hidden)]
+    pub const BEGV_CHAR_POS_OFFSET: usize =
         std::mem::offset_of!(Self, accessible_start) + TextPositionAnchor::CHAR_POS_OFFSET;
-    pub(crate) const ZV_CHAR_POS_OFFSET: usize =
+    #[doc(hidden)]
+    pub const ZV_CHAR_POS_OFFSET: usize =
         std::mem::offset_of!(Self, accessible_end) + TextPositionAnchor::CHAR_POS_OFFSET;
     /// The byte-coordinate twins, for `bobp`/`eobp`, which compare
     /// `point_emacs_byte_pos` against the accessible region's byte bounds.
-    pub(crate) const POINT_EMACS_BYTE_POS_OFFSET: usize =
+    #[doc(hidden)]
+    pub const POINT_EMACS_BYTE_POS_OFFSET: usize =
         std::mem::offset_of!(Self, point) + TextPositionAnchor::EMACS_BYTE_POS_OFFSET;
-    pub(crate) const BEGV_EMACS_BYTE_POS_OFFSET: usize =
+    #[doc(hidden)]
+    pub const BEGV_EMACS_BYTE_POS_OFFSET: usize =
         std::mem::offset_of!(Self, accessible_start) + TextPositionAnchor::EMACS_BYTE_POS_OFFSET;
-    pub(crate) const ZV_EMACS_BYTE_POS_OFFSET: usize =
+    #[doc(hidden)]
+    pub const ZV_EMACS_BYTE_POS_OFFSET: usize =
         std::mem::offset_of!(Self, accessible_end) + TextPositionAnchor::EMACS_BYTE_POS_OFFSET;
 
     /// Current point converted to a character position.
@@ -3106,17 +3125,20 @@ impl Buffer {
     }
 
     /// Point, convertible to a fixnum without a range check.
-    pub(crate) fn point_position(&self) -> BufferLispPos {
+    #[doc(hidden)]
+    pub fn point_position(&self) -> BufferLispPos {
         BufferLispPos::of_live_buffer(self.point_char_pos())
     }
 
     /// `point-min`, convertible to a fixnum without a range check.
-    pub(crate) fn point_min_position(&self) -> BufferLispPos {
+    #[doc(hidden)]
+    pub fn point_min_position(&self) -> BufferLispPos {
         BufferLispPos::of_live_buffer(self.point_min_char_pos())
     }
 
     /// `point-max`, convertible to a fixnum without a range check.
-    pub(crate) fn point_max_position(&self) -> BufferLispPos {
+    #[doc(hidden)]
+    pub fn point_max_position(&self) -> BufferLispPos {
         BufferLispPos::of_live_buffer(self.point_max_char_pos())
     }
 
@@ -3202,15 +3224,18 @@ impl Buffer {
         self.text = BufferText::from_snapshot_with_backend_kind(snapshot, kind);
     }
 
-    pub(crate) fn dump_text_backend_kind(&self) -> ImplementedBufferTextBackendKind {
+    #[doc(hidden)]
+    pub fn dump_text_backend_kind(&self) -> ImplementedBufferTextBackendKind {
         self.text.implemented_backend_kind()
     }
 
-    pub(crate) fn dump_text_bytes(&self) -> Vec<u8> {
+    #[doc(hidden)]
+    pub fn dump_text_bytes(&self) -> Vec<u8> {
         self.text.dump_text()
     }
 
-    pub(crate) fn convert_text_backend_kind(&mut self, kind: ImplementedBufferTextBackendKind) {
+    #[doc(hidden)]
+    pub fn convert_text_backend_kind(&mut self, kind: ImplementedBufferTextBackendKind) {
         self.text.convert_backend_kind(kind);
     }
 
@@ -3286,10 +3311,8 @@ impl Buffer {
     }
 
     /// Native fontification conversion which never grows a position cache.
-    pub(crate) fn char_pos_to_emacs_byte_pos_clamped_no_alloc(
-        &self,
-        char_pos: CharPos0,
-    ) -> EmacsBytePos {
+    #[doc(hidden)]
+    pub fn char_pos_to_emacs_byte_pos_clamped_no_alloc(&self, char_pos: CharPos0) -> EmacsBytePos {
         let char_pos = char_pos.min(self.total_char_end_pos());
         if char_pos == self.point.char_pos() {
             return self.point.emacs_byte_pos();
@@ -3299,10 +3322,8 @@ impl Buffer {
 
     /// Native fontification conversion for a character-boundary byte position.
     /// Clamp stale endpoints without publishing growing position-anchor storage.
-    pub(crate) fn emacs_byte_pos_to_char_pos_clamped_no_alloc(
-        &self,
-        byte_pos: EmacsBytePos,
-    ) -> CharPos0 {
+    #[doc(hidden)]
+    pub fn emacs_byte_pos_to_char_pos_clamped_no_alloc(&self, byte_pos: EmacsBytePos) -> CharPos0 {
         let byte_pos = byte_pos.min(self.total_emacs_byte_end_pos());
         if byte_pos == self.point.emacs_byte_pos() {
             return self.point.char_pos();
@@ -3316,7 +3337,8 @@ impl Buffer {
 
     /// [`Self::emacs_byte_pos_to_lisp_char_pos`], clamped into this buffer, so
     /// it converts to a fixnum without a range check.
-    pub(crate) fn emacs_byte_pos_to_position(&self, byte_pos: EmacsBytePos) -> BufferLispPos {
+    #[doc(hidden)]
+    pub fn emacs_byte_pos_to_position(&self, byte_pos: EmacsBytePos) -> BufferLispPos {
         BufferLispPos::of_live_buffer(self.emacs_byte_pos_to_char_pos_clamped(byte_pos))
     }
 
@@ -3532,30 +3554,33 @@ impl Buffer {
     }
 
     /// See [`crate::buffer::buffer_text::BufferText::syntax_content_key`].
-    pub(crate) fn syntax_content_key(&self) -> (u64, u64) {
+    #[doc(hidden)]
+    pub fn syntax_content_key(&self) -> (u64, u64) {
         self.text.syntax_content_key()
     }
 
     /// The identity of this buffer text's syntax parse cache (stage-3 C7).
     #[inline]
-    pub(crate) fn syntax_cache_id(&self) -> super::syntax_cache::SyntaxCacheId {
+    #[doc(hidden)]
+    pub fn syntax_cache_id(&self) -> super::syntax_cache::SyntaxCacheId {
         self.text.syntax_cache_id()
     }
 
     /// What changed since the syntax parse cache last consumed the notes.
     #[inline]
-    pub(crate) fn take_syntax_invalidation(&self) -> super::syntax_cache::Invalidation {
+    #[doc(hidden)]
+    pub fn take_syntax_invalidation(&self) -> super::syntax_cache::Invalidation {
         self.text.take_syntax_invalidation()
     }
 
     /// See [`crate::buffer::buffer_text::SyntaxSafePositions`].
-    pub(crate) fn take_syntax_safe_positions(
-        &self,
-    ) -> crate::buffer::buffer_text::SyntaxSafePositions {
+    #[doc(hidden)]
+    pub fn take_syntax_safe_positions(&self) -> crate::buffer::buffer_text::SyntaxSafePositions {
         self.text.take_syntax_safe_positions()
     }
 
-    pub(crate) fn put_syntax_safe_positions(
+    #[doc(hidden)]
+    pub fn put_syntax_safe_positions(
         &self,
         index: crate::buffer::buffer_text::SyntaxSafePositions,
     ) {
@@ -3804,7 +3829,8 @@ impl Buffer {
         self.text.text_props_snapshot()
     }
 
-    pub(crate) fn text_props_object_interval_runs(&self) -> Vec<ObjectIntervalRun> {
+    #[doc(hidden)]
+    pub fn text_props_object_interval_runs(&self) -> Vec<ObjectIntervalRun> {
         self.text
             .text_props_object_interval_runs(self.total_char_len())
     }
@@ -3846,7 +3872,8 @@ impl Buffer {
     /// Walk the intrusive marker chain head→tail, passing each node's raw
     /// `MarkerObj` pointer together with its payload. Used by pdump to assign
     /// dump-local marker ids in chain order and serialize the chain entries.
-    pub(crate) fn walk_marker_chain_for_dump<
+    #[doc(hidden)]
+    pub fn walk_marker_chain_for_dump<
         F: FnMut(*mut neovm_value::tagged::header::MarkerObj, &neovm_value::heap_types::LispMarker),
     >(
         &self,
@@ -3932,18 +3959,21 @@ impl Buffer {
             .for_each_emacs_byte_range_chunk(self.clamped_emacs_byte_range(range), f)
     }
 
-    pub(crate) fn has_contiguous_emacs_byte_range(&self, range: EmacsByteRange) -> bool {
+    #[doc(hidden)]
+    pub fn has_contiguous_emacs_byte_range(&self, range: EmacsByteRange) -> bool {
         self.text
             .has_contiguous_emacs_byte_range(self.clamped_emacs_byte_range(range))
     }
 
     /// See [`BufferText::try_make_emacs_byte_range_contiguous`].
-    pub(crate) fn try_make_emacs_byte_range_contiguous(&self, range: EmacsByteRange) -> bool {
+    #[doc(hidden)]
+    pub fn try_make_emacs_byte_range_contiguous(&self, range: EmacsByteRange) -> bool {
         self.text
             .try_make_emacs_byte_range_contiguous(self.clamped_emacs_byte_range(range))
     }
 
-    pub(crate) fn with_contiguous_emacs_byte_range<R>(
+    #[doc(hidden)]
+    pub fn with_contiguous_emacs_byte_range<R>(
         &self,
         range: EmacsByteRange,
         f: impl FnOnce(&[u8]) -> R,
@@ -3964,7 +3994,8 @@ impl Buffer {
 
     /// Position past the `n`th `\n` in `[from, limit)`, and how many were
     /// crossed, in one traversal.  See [`BufferText::nth_newline_emacs_byte`].
-    pub(crate) fn nth_newline_emacs_byte(
+    #[doc(hidden)]
+    pub fn nth_newline_emacs_byte(
         &self,
         from: EmacsBytePos,
         limit: EmacsBytePos,
@@ -3981,7 +4012,8 @@ impl Buffer {
 
     /// `forward-line -N`'s motion from the text line index, or `None` to
     /// walk back line by line.  See [`BufferText::lines_backward_emacs_byte`].
-    pub(crate) fn lines_backward_emacs_byte(
+    #[doc(hidden)]
+    pub fn lines_backward_emacs_byte(
         &self,
         from: EmacsBytePos,
         floor: EmacsBytePos,
@@ -4005,7 +4037,8 @@ impl Buffer {
 
     /// Last `\n` in logical emacs-byte range `[floor, from)`, scanned in
     /// place.  See [`BufferText::prev_newline_emacs_byte`].
-    pub(crate) fn prev_newline_emacs_byte(
+    #[doc(hidden)]
+    pub fn prev_newline_emacs_byte(
         &self,
         from: EmacsBytePos,
         floor: EmacsBytePos,
@@ -4038,11 +4071,8 @@ impl Buffer {
 
     /// Number of `\n` in logical emacs-byte range `[from, limit)`.
     /// See [`BufferText::count_newlines_emacs_byte`].
-    pub(crate) fn count_newlines_emacs_byte(
-        &self,
-        from: EmacsBytePos,
-        limit: EmacsBytePos,
-    ) -> usize {
+    #[doc(hidden)]
+    pub fn count_newlines_emacs_byte(&self, from: EmacsBytePos, limit: EmacsBytePos) -> usize {
         self.text.count_newlines_emacs_byte(from, limit)
     }
 
@@ -4310,8 +4340,14 @@ impl Buffer {
         insertion_type: InsertionType,
     ) {
         let position = self.canonical_marker_anchor(position);
-        self.text
-            .register_marker(marker_ptr, self.id, position, insertion_type);
+        // SAFETY: in-crate marker registration paths pass a live `MarkerObj`
+        // allocated by `TaggedHeap::alloc_marker`; a marker reaching this
+        // wrapper has been `chain_unlink`ed from any previous buffer and the
+        // chain precondition is asserted by `chain_splice_at_head`.
+        unsafe {
+            self.text
+                .register_marker(marker_ptr, self.id, position, insertion_type);
+        }
     }
 
     fn marker_anchor_for_emacs_byte_pos(&self, pos: EmacsBytePos) -> TextPositionAnchor {
@@ -4360,7 +4396,8 @@ impl Buffer {
     }
 
     /// GNU's durable restriction-change flag, cleared only on accepted redisplay.
-    pub(crate) fn mode_line_clip_changed(&self) -> bool {
+    #[doc(hidden)]
+    pub fn mode_line_clip_changed(&self) -> bool {
         self.text.mode_line_clipped(self.id)
     }
 
@@ -4479,8 +4516,13 @@ impl Buffer {
                 .as_veclike_ptr()
                 .expect("freshly allocated marker should have veclike ptr")
                 as *mut neovm_value::tagged::header::MarkerObj;
-            self.text
-                .register_marker(ptr, self.id, position, super::InsertionType::Before);
+            // SAFETY: `ptr` is the marker just allocated above through
+            // `Value::make_marker(positioned_marker_data(..))`
+            // (`TaggedHeap::alloc_marker`); it is live and not on any chain.
+            unsafe {
+                self.text
+                    .register_marker(ptr, self.id, position, super::InsertionType::Before);
+            }
             self.mark_marker = MarkerRef::new(ptr);
             return;
         }
@@ -4497,8 +4539,14 @@ impl Buffer {
         // `reset_buffer`), so setting the mark attaches that detached object
         // instead of replacing it. The manager unlinks a mark marker that
         // currently sits on another buffer's chain.
-        self.text
-            .register_marker(ptr, self.id, position, self.mark_marker.insertion_type());
+        // SAFETY: `ptr` is `self.mark_marker`'s live `MarkerObj` (the buffer's
+        // GNU `BVAR (buf, mark)` marker); the branch above establishes that it
+        // is detached from this buffer's chain, and the manager unlinks a mark
+        // marker that sits on another buffer's chain before re-binding.
+        unsafe {
+            self.text
+                .register_marker(ptr, self.id, position, self.mark_marker.insertion_type());
+        }
     }
 
     /// Return the mark as an Emacs byte position, None if mark inactive.
@@ -5118,7 +5166,8 @@ impl Buffer {
     /// This is the hot path for display/VM variable resolution, where most
     /// referenced specials are global. Slot-backed and `buffer-undo-list`
     /// names are always resolved (they are per-buffer without being localized).
-    pub(crate) fn get_buffer_local_by_sym_id_gated(
+    #[doc(hidden)]
+    pub fn get_buffer_local_by_sym_id_gated(
         &self,
         sym_id: SymId,
         localized: bool,
@@ -5190,7 +5239,8 @@ impl Buffer {
 
     /// Gated form of [`Self::get_buffer_local_binding_by_sym_id`]; see
     /// [`Self::get_buffer_local_by_sym_id_gated`] for the `localized` contract.
-    pub(crate) fn get_buffer_local_binding_by_sym_id_gated(
+    #[doc(hidden)]
+    pub fn get_buffer_local_binding_by_sym_id_gated(
         &self,
         sym_id: SymId,
         localized: bool,
@@ -5240,7 +5290,8 @@ impl Buffer {
     /// non-localized symbol can never have an alist entry (see
     /// `Obarray::is_localized`), so the alist walk is skipped for it. Slot and
     /// `buffer-undo-list` names are still resolved (always per-buffer).
-    pub(crate) fn has_buffer_local_by_sym_id_gated(&self, sym_id: SymId, localized: bool) -> bool {
+    #[doc(hidden)]
+    pub fn has_buffer_local_by_sym_id_gated(&self, sym_id: SymId, localized: bool) -> bool {
         // BUFFER_OBJFWD-style names are conceptually always
         // per-buffer (mirrors GNU's `local-variable-p` returning t
         // for DEFVAR_PER_BUFFER variables regardless of whether the
@@ -5325,7 +5376,8 @@ impl Buffer {
     /// The actual first alist binding, for the localized-symbol runtime to
     /// install as its shared valcell. Keep lookup and index coherence owned
     /// by the buffer; callers must not reconstruct an index of Lisp bindings.
-    pub(crate) fn local_variable_binding_cell(&self, sym_id: SymId) -> Option<Value> {
+    #[doc(hidden)]
+    pub fn local_variable_binding_cell(&self, sym_id: SymId) -> Option<Value> {
         self.local_var_alist.binding_cons(sym_id)
     }
 
@@ -5548,7 +5600,8 @@ struct LiveBuffers {
 /// [`neovm_value::tagged::header::LispValueVec::jit_slice_offsets`], and every probe
 /// returns `None` rather than a guess when it cannot prove what it found --
 /// the caller then emits nothing and keeps the shim.
-pub(crate) mod jit_layout {
+#[doc(hidden)]
+pub mod jit_layout {
     #[cfg(test)]
     use super::LiveBuffers;
     use super::{Buffer, BufferId, BufferManager, BufferStorage};
@@ -5566,23 +5619,26 @@ pub(crate) mod jit_layout {
     const WORD: usize = std::mem::size_of::<usize>();
 
     #[cfg(any(feature = "jit", test))]
-    pub(crate) const BUFFER_MANAGER_STORAGE_PTR_OFFSET: usize =
+    #[doc(hidden)]
+    pub const BUFFER_MANAGER_STORAGE_PTR_OFFSET: usize =
         std::mem::offset_of!(BufferManager, storage_ptr);
     #[cfg(any(feature = "jit", test))]
-    pub(crate) const BUFFER_STORAGE_BUFFERS_OFFSET: usize =
-        std::mem::offset_of!(BufferStorage, buffers);
+    #[doc(hidden)]
+    pub const BUFFER_STORAGE_BUFFERS_OFFSET: usize = std::mem::offset_of!(BufferStorage, buffers);
     #[cfg(any(feature = "jit", test))]
-    pub(crate) const BUFFER_MANAGER_CURRENT_PTR_OFFSET: usize =
+    #[doc(hidden)]
+    pub const BUFFER_MANAGER_CURRENT_PTR_OFFSET: usize =
         std::mem::offset_of!(BufferManager, current_ptr);
     const _: () = assert!(
         std::mem::size_of::<Option<std::ptr::NonNull<Buffer>>>() == WORD,
         "the current-buffer designator must use the null pointer niche"
     );
-    pub(crate) const BUFFER_MANAGER_CURRENT_OFFSET: usize =
-        std::mem::offset_of!(BufferManager, current);
+    #[doc(hidden)]
+    pub const BUFFER_MANAGER_CURRENT_OFFSET: usize = std::mem::offset_of!(BufferManager, current);
     /// `BufferManager::current_raw`: the current buffer's id as one `u64`,
     /// 0 for none.
-    pub(crate) const BUFFER_MANAGER_CURRENT_RAW_OFFSET: usize =
+    #[doc(hidden)]
+    pub const BUFFER_MANAGER_CURRENT_RAW_OFFSET: usize =
         std::mem::offset_of!(BufferManager, current_raw);
     const _: () = assert!(std::mem::size_of::<BufferId>() == std::mem::size_of::<u64>());
     #[cfg(test)]
@@ -5716,7 +5772,8 @@ pub(crate) mod jit_layout {
 
 impl LiveBuffers {
     #[inline]
-    fn get(&self, id: &BufferId) -> Option<&Buffer> {
+    #[doc(hidden)]
+    pub fn get(&self, id: &BufferId) -> Option<&Buffer> {
         self.slots.get(id.0 as usize)?.as_deref()
     }
     #[inline]
@@ -5881,7 +5938,8 @@ static_assertions::assert_eq_size!(BufferBacking, [usize; 3]);
 
 /// Owner-private selection transported only during closed World construction.
 #[derive(Debug)]
-pub(crate) struct BufferSelection {
+#[doc(hidden)]
+pub struct BufferSelection {
     current: Option<BufferId>,
     owner: PhantomData<*const ()>,
 }
@@ -5889,7 +5947,8 @@ pub(crate) struct BufferSelection {
 impl BufferSelection {
     /// A further owner's selection over an existing World's buffers (a Green
     /// Lisp thread), starting in CURRENT.
-    pub(crate) fn for_owner(current: Option<BufferId>) -> Self {
+    #[doc(hidden)]
+    pub fn for_owner(current: Option<BufferId>) -> Self {
         Self {
             current,
             owner: PhantomData,
@@ -5900,13 +5959,15 @@ impl BufferSelection {
 /// Owned construction payload; cannot contain a borrowed World view.
 /// Only consuming conversion exposes its parts to the World constructor.
 #[derive(Debug)]
-pub(crate) struct OwnedBufferStorageParts {
+#[doc(hidden)]
+pub struct OwnedBufferStorageParts {
     storage: Box<UnsafeCell<BufferStorage>>,
     selection: BufferSelection,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub(crate) enum BufferStorageOwnershipError {
+#[doc(hidden)]
+pub enum BufferStorageOwnershipError {
     #[error("a World-backed buffer view cannot surrender its World allocation")]
     WorldBacked,
     #[error("a detached buffer clone must retain its originating World lease")]
@@ -5920,7 +5981,8 @@ enum BufferCreationHooks {
 }
 
 impl OwnedBufferStorageParts {
-    pub(crate) fn into_parts(self) -> (Box<UnsafeCell<BufferStorage>>, BufferSelection) {
+    #[doc(hidden)]
+    pub fn into_parts(self) -> (Box<UnsafeCell<BufferStorage>>, BufferSelection) {
         (self.storage, self.selection)
     }
 }
@@ -6369,7 +6431,8 @@ impl BufferManager {
     /// `storage_ptr` must originate from the UnsafeCell allocation owned by
     /// `lease`, with no other mutable manager view. The constructing owner
     /// must remain the only mutator. The lease must retain that same World.
-    pub(crate) unsafe fn from_world_parts(
+    #[doc(hidden)]
+    pub unsafe fn from_world_parts(
         storage_ptr: NonNull<BufferStorage>,
         selection: BufferSelection,
         lease: ColdWorldLease,
@@ -6394,7 +6457,8 @@ impl BufferManager {
     }
 
     /// Infallible standalone construction for a new runtime World.
-    pub(crate) fn new_world_parts() -> OwnedBufferStorageParts {
+    #[doc(hidden)]
+    pub fn new_world_parts() -> OwnedBufferStorageParts {
         // Phase 10D: seed `buffer_defaults` from `BUFFER_SLOT_INFO`,
         // mirroring GNU `init_buffer_once` which materializes
         // `buffer_defaults` from the per-slot `default` literals
@@ -6452,11 +6516,13 @@ impl BufferManager {
         self.default_text_backend_kind.public_kind()
     }
 
-    pub(crate) fn implemented_default_text_backend_kind(&self) -> ImplementedBufferTextBackendKind {
+    #[doc(hidden)]
+    pub fn implemented_default_text_backend_kind(&self) -> ImplementedBufferTextBackendKind {
         self.default_text_backend_kind
     }
 
-    pub(crate) fn set_default_text_backend_kind(&mut self, kind: ImplementedBufferTextBackendKind) {
+    #[doc(hidden)]
+    pub fn set_default_text_backend_kind(&mut self, kind: ImplementedBufferTextBackendKind) {
         self.storage_mut().default_text_backend_kind = kind;
     }
 
@@ -6685,7 +6751,8 @@ impl BufferManager {
 
     /// Move a live buffer immediately after another live buffer in global
     /// buffer-list order without recording display or selection.
-    pub(crate) fn note_buffer_order_after(&mut self, id: BufferId, after: BufferId) -> bool {
+    #[doc(hidden)]
+    pub fn note_buffer_order_after(&mut self, id: BufferId, after: BufferId) -> bool {
         if id == after || !self.buffers.contains_key(&id) || !self.buffers.contains_key(&after) {
             return false;
         }
@@ -6735,7 +6802,8 @@ impl BufferManager {
     /// copies. Only buffers without an explicit local override (the slot-local
     /// flag is clear, or — for unconditional slots — the slot is still nil) are
     /// updated; a buffer that set its own value keeps it.
-    pub(crate) fn seed_default_slot_into_unset_buffers(&mut self, slot: BufferSlot, value: Value) {
+    #[doc(hidden)]
+    pub fn seed_default_slot_into_unset_buffers(&mut self, slot: BufferSlot, value: Value) {
         let conditional =
             buffer_slot_info_by_offset(slot).is_some_and(|info| info.local_flags_idx >= 0);
         for buffer in self.storage_mut().buffers.values_mut() {
@@ -7061,12 +7129,14 @@ impl BufferManager {
         ids
     }
 
-    pub(crate) fn shared_text_root_id(&self, id: BufferId) -> Option<BufferId> {
+    #[doc(hidden)]
+    pub fn shared_text_root_id(&self, id: BufferId) -> Option<BufferId> {
         let buf = self.buffers.get(&id)?;
         Some(buf.base_buffer.unwrap_or(buf.id))
     }
 
-    pub(crate) fn collect_killed_buffer_ids(&self, id: BufferId) -> Option<Vec<BufferId>> {
+    #[doc(hidden)]
+    pub fn collect_killed_buffer_ids(&self, id: BufferId) -> Option<Vec<BufferId>> {
         let buf = self.buffers.get(&id)?;
         let mut killed_ids = vec![id];
         debug_assert_eq!(
@@ -7285,7 +7355,8 @@ impl BufferManager {
             .collect()
     }
 
-    pub(crate) fn shared_text_buffer_ids(&self, root_id: BufferId) -> Vec<BufferId> {
+    #[doc(hidden)]
+    pub fn shared_text_buffer_ids(&self, root_id: BufferId) -> Vec<BufferId> {
         self.buffers_sharing_root_ids(root_id)
     }
 
@@ -7333,7 +7404,8 @@ impl BufferManager {
     /// the overlay lists and their property values remain private to each owner.
     /// No Lisp state or group membership is cached here.
     #[inline]
-    pub(crate) fn note_overlay_modification(&mut self, id: BufferId) -> Option<()> {
+    #[doc(hidden)]
+    pub fn note_overlay_modification(&mut self, id: BufferId) -> Option<()> {
         if !self.buffers.any_indirect() {
             self.storage_mut()
                 .buffers
@@ -7626,7 +7698,8 @@ impl BufferManager {
 
     /// Char-range variant: the caller already knows the inserted char range, so
     /// this skips the byte->char conversion done by the byte-range version.
-    pub(crate) fn clear_inserted_plain_text_properties_in_char_range(
+    #[doc(hidden)]
+    pub fn clear_inserted_plain_text_properties_in_char_range(
         &mut self,
         id: BufferId,
         char_range: CharRange,
@@ -8384,20 +8457,25 @@ impl BufferManager {
 
     // pdump accessors
     /// Live buffers in id order (deterministic for the dump image).
-    pub(crate) fn dump_buffers(&self) -> impl Iterator<Item = (BufferId, &Buffer)> {
+    #[doc(hidden)]
+    pub fn dump_buffers(&self) -> impl Iterator<Item = (BufferId, &Buffer)> {
         self.buffers.iter()
     }
-    pub(crate) fn dump_buffer_order(&self) -> &[BufferId] {
+    #[doc(hidden)]
+    pub fn dump_buffer_order(&self) -> &[BufferId] {
         &self.buffer_order
     }
-    pub(crate) fn dump_current(&self) -> Option<BufferId> {
+    #[doc(hidden)]
+    pub fn dump_current(&self) -> Option<BufferId> {
         self.current
     }
-    pub(crate) fn dump_next_id(&self) -> u64 {
+    #[doc(hidden)]
+    pub fn dump_next_id(&self) -> u64 {
         self.next_id
     }
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn from_dump(
+    #[doc(hidden)]
+    pub fn from_dump(
         mut buffers: FxHashMap<BufferId, Buffer>,
         current: Option<BufferId>,
         next_id: u64,
@@ -8644,5 +8722,97 @@ impl BufferLocalView for Buffer {
     #[inline]
     fn local_binding_cell(&self, id: SymId) -> Option<Value> {
         self.local_variable_binding_cell(id)
+    }
+}
+
+#[doc(hidden)]
+impl Buffer {
+    #[inline]
+    pub fn slots(&self) -> &[neovm_value::value::Value; BUFFER_SLOT_COUNT] {
+        &self.slots
+    }
+    #[inline]
+    pub fn slots_mut(&mut self) -> &mut [neovm_value::value::Value; BUFFER_SLOT_COUNT] {
+        &mut self.slots
+    }
+    #[inline]
+    pub fn base_buffer(&self) -> Option<BufferId> {
+        self.base_buffer
+    }
+    #[inline]
+    pub fn modtime_size(&self) -> Option<i64> {
+        self.modtime_size
+    }
+    #[inline]
+    pub fn set_modtime_size(&mut self, value: Option<i64>) {
+        self.modtime_size = value;
+    }
+    #[inline]
+    pub fn last_selected_window(&self) -> Option<WindowId> {
+        self.last_selected_window
+    }
+    #[inline]
+    pub fn set_last_selected_window(&mut self, value: Option<WindowId>) {
+        self.last_selected_window = value;
+    }
+    #[inline]
+    pub fn last_window_start(&self) -> LispCharPos1 {
+        self.last_window_start
+    }
+    #[inline]
+    pub fn set_last_window_start(&mut self, value: LispCharPos1) {
+        self.last_window_start = value;
+    }
+    #[inline]
+    pub fn local_flags(&self) -> u64 {
+        self.local_flags
+    }
+    #[inline]
+    pub fn autosave_modified_tick(&self) -> i64 {
+        self.autosave_modified_tick
+    }
+    #[inline]
+    pub fn state_markers(&self) -> Option<BufferStateMarkers> {
+        self.state_markers
+    }
+    #[inline]
+    pub fn line_number_anchor(&self) -> &std::cell::Cell<Option<ModeLineNumberAnchor>> {
+        &self.line_number_anchor
+    }
+    #[inline]
+    pub fn mark_marker(&self) -> MarkerRef {
+        self.mark_marker
+    }
+}
+
+#[doc(hidden)]
+impl ModeLineNumberAnchor {
+    #[inline]
+    pub fn accessible_start(&self) -> EmacsBytePos {
+        self.accessible_start
+    }
+    #[inline]
+    pub fn line_start(&self) -> EmacsBytePos {
+        self.line_start
+    }
+    #[inline]
+    pub fn line_number(&self) -> usize {
+        self.line_number
+    }
+}
+
+#[doc(hidden)]
+impl ModeLineNumberAnchor {
+    #[inline]
+    pub const fn new(
+        accessible_start: EmacsBytePos,
+        line_start: EmacsBytePos,
+        line_number: usize,
+    ) -> Self {
+        Self {
+            accessible_start,
+            line_start,
+            line_number,
+        }
     }
 }

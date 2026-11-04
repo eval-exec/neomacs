@@ -7,12 +7,12 @@
 
 pub use neovm_value::value::text_props::*;
 
-pub(crate) use neovm_value::value::text_props::{
-    PropertyPlistApplication, ShiftedTextPropertySource,
-};
+#[doc(hidden)]
+pub use neovm_value::value::text_props::{PropertyPlistApplication, ShiftedTextPropertySource};
 
 use neovm_value::value::Value;
 
 #[path = "text_props/casing_insertion.rs"]
 mod casing_insertion;
-pub(crate) use casing_insertion::{CasingPropertyControls, CasingPropertyMode};
+#[doc(hidden)]
+pub use casing_insertion::{CasingPropertyControls, CasingPropertyMode};

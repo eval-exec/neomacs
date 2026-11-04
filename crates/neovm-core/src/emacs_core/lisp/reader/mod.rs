@@ -2260,7 +2260,7 @@ fn finish_read_from_minibuffer_in_vm_runtime_interactive(
     // Save state.  GNU read_minibuf saves Vcurrent_prefix_arg in
     // minibuf_save_list and restores it during read_minibuf_unwind;
     // minibuffer commands may clobber it while reading input.
-    let saved_buffer_id = shared.edit.buffers.current_buffer().map(|b| b.id);
+    let saved_buffer_id = shared.edit.buffers.current_buffer().map(|b| b.id());
     let caller_allows_text_properties = minibuffer_text_properties_enabled_in_buffer(
         shared.variables(),
         &shared.edit.buffers,

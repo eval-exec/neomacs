@@ -643,35 +643,45 @@ impl ModeRegistry {
     }
 
     // pdump accessors
-    pub(crate) fn dump_major_modes(&self) -> &HashMap<SymId, MajorMode> {
+    #[doc(hidden)]
+    pub fn dump_major_modes(&self) -> &HashMap<SymId, MajorMode> {
         &self.major_modes
     }
-    pub(crate) fn dump_minor_modes(&self) -> &HashMap<SymId, MinorMode> {
+    #[doc(hidden)]
+    pub fn dump_minor_modes(&self) -> &HashMap<SymId, MinorMode> {
         &self.minor_modes
     }
-    pub(crate) fn dump_buffer_major_modes(&self) -> &HashMap<u64, Value> {
+    #[doc(hidden)]
+    pub fn dump_buffer_major_modes(&self) -> &HashMap<u64, Value> {
         &self.buffer_major_modes
     }
-    pub(crate) fn dump_buffer_minor_modes(&self) -> &HashMap<u64, Vec<Value>> {
+    #[doc(hidden)]
+    pub fn dump_buffer_minor_modes(&self) -> &HashMap<u64, Vec<Value>> {
         &self.buffer_minor_modes
     }
-    pub(crate) fn dump_global_minor_modes(&self) -> &[Value] {
+    #[doc(hidden)]
+    pub fn dump_global_minor_modes(&self) -> &[Value] {
         &self.global_minor_modes
     }
-    pub(crate) fn dump_auto_mode_alist(&self) -> &[(LispString, Value)] {
+    #[doc(hidden)]
+    pub fn dump_auto_mode_alist(&self) -> &[(LispString, Value)] {
         &self.auto_mode_alist
     }
-    pub(crate) fn dump_custom_variables(&self) -> &HashMap<SymId, CustomVariable> {
+    #[doc(hidden)]
+    pub fn dump_custom_variables(&self) -> &HashMap<SymId, CustomVariable> {
         &self.custom_variables
     }
-    pub(crate) fn dump_custom_groups(&self) -> &HashMap<SymId, CustomGroup> {
+    #[doc(hidden)]
+    pub fn dump_custom_groups(&self) -> &HashMap<SymId, CustomGroup> {
         &self.custom_groups
     }
-    pub(crate) fn dump_fundamental_mode(&self) -> Value {
+    #[doc(hidden)]
+    pub fn dump_fundamental_mode(&self) -> Value {
         self.fundamental_mode
     }
     #[allow(clippy::too_many_arguments)] // restores the manager's independent persisted tables
-    pub(crate) fn from_dump(
+    #[doc(hidden)]
+    pub fn from_dump(
         major_modes: HashMap<SymId, MajorMode>,
         minor_modes: HashMap<SymId, MinorMode>,
         buffer_major_modes: HashMap<u64, Value>,

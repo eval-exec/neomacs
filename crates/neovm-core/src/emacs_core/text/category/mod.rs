@@ -405,7 +405,7 @@ fn current_buffer_category_table_in_buffers(
 
     // Mirrors GNU `Fcategory_table` (`category.c:184-189`):
     //     return BVAR (current_buffer, category_table);
-    let table = buf.slots[BUFFER_SLOT_CATEGORY_TABLE.index()];
+    let table = buf.slots()[BUFFER_SLOT_CATEGORY_TABLE.index()];
     if !table.is_nil() {
         return Ok(table);
     }
@@ -414,7 +414,7 @@ fn current_buffer_category_table_in_buffers(
     // matches GNU `reset_buffer` cloning the standard table into
     // a fresh buffer.
     let fallback = ensure_standard_category_table_object()?;
-    buf.slots[BUFFER_SLOT_CATEGORY_TABLE.index()] = fallback;
+    buf.slots_mut()[BUFFER_SLOT_CATEGORY_TABLE.index()] = fallback;
     Ok(fallback)
 }
 
@@ -461,7 +461,7 @@ fn set_current_buffer_category_table_in_buffers(
     //     bset_category_table (current_buffer, table);
     //     SET_PER_BUFFER_VALUE_P (current_buffer,
     //                             PER_BUFFER_VAR_IDX (category_table), 1);
-    buf.slots[BUFFER_SLOT_CATEGORY_TABLE.index()] = table;
+    buf.slots_mut()[BUFFER_SLOT_CATEGORY_TABLE.index()] = table;
     buf.set_slot_local_flag(BUFFER_SLOT_CATEGORY_TABLE, true);
     Ok(())
 }
@@ -481,7 +481,7 @@ pub(crate) fn active_category_table_for_buffer(
     buffer: Option<&crate::buffer::Buffer>,
 ) -> Result<Value, Flow> {
     if let Some(buffer) = buffer {
-        let table = buffer.slots[crate::buffer::buffer::BUFFER_SLOT_CATEGORY_TABLE.index()];
+        let table = buffer.slots()[crate::buffer::buffer::BUFFER_SLOT_CATEGORY_TABLE.index()];
         if !table.is_nil() {
             return Ok(table);
         }

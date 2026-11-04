@@ -249,11 +249,11 @@ fn resolve_eval_buffer_id_in_state(
     match arg {
         None => Ok(buffers
             .current_buffer()
-            .map(|b| b.id)
+            .map(|b| b.id())
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?),
         Some(v) if v.is_nil() => Ok(buffers
             .current_buffer()
-            .map(|b| b.id)
+            .map(|b| b.id())
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?),
         Some(v) if v.is_buffer() => Ok(v.as_buffer_id().unwrap()),
         Some(v) if v.is_string() => Ok({
@@ -537,7 +537,7 @@ fn eval_region_in_scope(eval: &mut super::eval::Context, args: &[Value]) -> Eval
             .buffers
             .current_buffer()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?
-            .id;
+            .id();
         return readevalloop_buffer_with_lisp_reader(
             eval,
             buffer_id,
@@ -555,7 +555,7 @@ fn eval_region_in_scope(eval: &mut super::eval::Context, args: &[Value]) -> Eval
         .buffers
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    eval_forms_from_lisp_source(eval, &source, Some(Value::make_buffer(buffer.id)))
+    eval_forms_from_lisp_source(eval, &source, Some(Value::make_buffer(buffer.id())))
 }
 
 /// Which function reads each top-level form of a `readevalloop`.

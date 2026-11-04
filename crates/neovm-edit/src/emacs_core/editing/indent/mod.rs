@@ -953,7 +953,8 @@ fn truncated_logical_line_step(
 /// display properties, etc. In live frames, use fresh measured rows, querying
 /// the canonical producer when necessary. Until offscreen queries are supported,
 /// motion outside measured coverage still falls back to buffer scanning.
-pub(crate) fn vertical_motion<H: EditHost>(host: &mut H, args: &[Value]) -> EvalResult {
+#[doc(hidden)]
+pub fn vertical_motion<H: EditHost>(host: &mut H, args: &[Value]) -> EvalResult {
     expect_args_range("vertical-motion", &args, 1, 3)?;
     // First arg can be LINES (integer) or (COLS . LINES) cons pair.
     // When (COLS . LINES), move LINES then position at column COLS.
@@ -1239,7 +1240,8 @@ fn goal_column_target_on_screen_line<H: EditHost>(
 /// `last_occupied_target` records the last row that actually counted as
 /// motion. Pixel-distance consumers need the latter when an unterminated
 /// final row exhausts the scan.
-pub(crate) struct ScreenLineMotionScan {
+#[doc(hidden)]
+pub struct ScreenLineMotionScan {
     pub(crate) target: EmacsBytePos,
     pub(crate) moved: i64,
     pub(crate) last_occupied_target: EmacsBytePos,
@@ -1251,7 +1253,8 @@ pub(crate) struct ScreenLineMotionScan {
 /// window scrolling. It prefers the last live redisplay snapshot and falls
 /// back to the display-property-aware scanner for motion beyond the currently
 /// visible rows.
-pub(crate) fn screen_line_motion_target<H: EditHost>(
+#[doc(hidden)]
+pub fn screen_line_motion_target<H: EditHost>(
     host: &mut H,
     current_buffer: BufferId,
     point: EmacsBytePos,
@@ -1289,7 +1292,8 @@ pub(crate) fn screen_line_motion_target<H: EditHost>(
 /// have reached its edge), or when that snapshot is stale for current layout
 /// state. Keeping the scanner independently callable prevents a fallback from
 /// accidentally re-entering the same retained rows.
-pub(crate) fn scan_screen_line_motion_target<H: EditHost>(
+#[doc(hidden)]
+pub fn scan_screen_line_motion_target<H: EditHost>(
     host: &mut H,
     current_buffer: BufferId,
     point: EmacsBytePos,
@@ -1466,7 +1470,8 @@ fn buffer_display_table_sym_id() -> neovm_value::intern::SymId {
 /// identity on every width computation. `pub(crate)` for the char-width
 /// policy's `&Context` read above the edit layer.
 #[inline(always)]
-pub(crate) fn tab_width_sym_id() -> neovm_value::intern::SymId {
+#[doc(hidden)]
+pub fn tab_width_sym_id() -> neovm_value::intern::SymId {
     static SYMBOL: OnceLock<neovm_value::intern::SymId> = OnceLock::new();
     *SYMBOL.get_or_init(|| neovm_value::intern::intern("tab-width"))
 }
@@ -1552,7 +1557,8 @@ pub(crate) fn dynamic_buffer_or_global_symbol_value<'a, Vars: EditVariableRead<'
 /// Same per-buffer-slot / buffer-local / global precedence, entirely by
 /// identity: the handle is a compile-time id and the slot and buffer-local
 /// maps are keyed by the same identity.
-pub(crate) fn dynamic_buffer_or_global_symbol_value_fixed<'a, Vars: EditVariableRead<'a>>(
+#[doc(hidden)]
+pub fn dynamic_buffer_or_global_symbol_value_fixed<'a, Vars: EditVariableRead<'a>>(
     vars: Vars,
     _dynamic: &[OrderedRuntimeBindingMap],
     buf: Option<&Buffer>,
@@ -1609,7 +1615,8 @@ fn tab_width_in_state<'a, Vars: EditVariableRead<'a>>(
 /// policy above the edit layer reads the current buffer's slot itself
 /// (it holds the context by shared reference) and reuses this
 /// validation, which is all of `tab_width_in_state` it needs.
-pub(crate) fn sane_tab_width_from_value(value: Value) -> usize {
+#[doc(hidden)]
+pub fn sane_tab_width_from_value(value: Value) -> usize {
     TabWidth::from(value).get()
 }
 
@@ -1865,7 +1872,8 @@ impl DisplayCharacterHeaders {
     /// only from a projected arm. Separate calls per variable kept the
     /// Context and the first answer live across the others (elb-scroll).
     #[inline(never)]
-    fn read<'a, Vars: EditVariableRead<'a>>(vars: Vars, buf: &Buffer) -> Self {
+    #[doc(hidden)]
+    pub fn read<'a, Vars: EditVariableRead<'a>>(vars: Vars, buf: &Buffer) -> Self {
         // Read both tables by cached identity, preserving canonical aliases,
         // forwarders and the nil-override policy. One view serves all three
         // reads, and ends before the caller enters a mutable stop probe.
@@ -2950,7 +2958,8 @@ fn insert_inheriting_indentation<H: EditHost>(
 /// (current-indentation) -> integer
 ///
 /// Return indentation columns for the current line.
-pub(crate) fn current_indentation<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn current_indentation<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_args("current-indentation", &args, 0)?;
     let Some(current_id) = host.edit_and_vars().0.buffers.current_buffer_id() else {
         return Ok(Value::fixnum(0));
@@ -3012,7 +3021,8 @@ pub(crate) fn current_indentation<H: EditHost>(host: &mut H, args: Vec<Value>) -
 /// (current-column) -> integer
 ///
 /// Return the display column at point on the current line.
-pub(crate) fn current_column<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn current_column<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_args("current-column", &args, 0)?;
     let Some(current_id) = host.edit_and_vars().0.buffers.current_buffer_id() else {
         return Ok(Value::fixnum(0));
@@ -3047,7 +3057,8 @@ pub(crate) fn current_column<H: EditHost>(host: &mut H, args: Vec<Value>) -> Eva
 /// buffer's `pt`.  Tab- and char-width-aware, honoring `tab-width`, display
 /// tables, `display`/`composition` properties, and invisibility, exactly as
 /// `current-column` does (it shares `scan_for_column`).
-pub(crate) fn display_column_at_emacs_byte_pos<H: EditHost>(
+#[doc(hidden)]
+pub fn display_column_at_emacs_byte_pos<H: EditHost>(
     host: &mut H,
     buffer_id: crate::buffer::BufferId,
     pos: EmacsBytePos,
@@ -3093,7 +3104,8 @@ fn goto_current_buffer_char_pos(buffers: &mut BufferManager, char_pos: crate::bu
 /// (move-to-column COLUMN &optional FORCE) -> COLUMN-REACHED
 ///
 /// Move point on the current line according to display columns.
-pub(crate) fn move_to_column<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn move_to_column<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_min_args("move-to-column", &args, 1)?;
     expect_max_args("move-to-column", &args, 2)?;
     let target = expect_wholenump(&args[0])?;
@@ -3192,7 +3204,8 @@ pub(crate) fn move_to_column<H: EditHost>(host: &mut H, args: Vec<Value>) -> Eva
 /// (indent-to COLUMN &optional MINIMUM) -> COLUMN
 ///
 /// GNU Emacs `Findent_to` primitive from `src/indent.c`.
-pub(crate) fn indent_to<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn indent_to<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_min_args("indent-to", &args, 1)?;
     expect_max_args("indent-to", &args, 2)?;
     let column = expect_fixnump(&args[0])?.max(0) as usize;
@@ -3329,7 +3342,8 @@ pub fn init_indent_vars(obarray: &mut neovm_value::symbol::Obarray) {
 // Tests
 // ---------------------------------------------------------------------------
 
-pub(crate) fn compute_motion<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn compute_motion<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_args("compute-motion", &args, 7)?;
 
     let from = crate::emacs_core::position::fix_position_with_buffers(
@@ -3534,7 +3548,8 @@ pub(crate) fn compute_motion<H: EditHost>(host: &mut H, args: Vec<Value>) -> Eva
 /// width without the two display padding columns when ON-DISPLAY is nil; with
 /// non-nil ON-DISPLAY it returns the actual displayed gutter width in pixels,
 /// except the symbol `columns' returns that gutter in canonical columns.
-pub(crate) fn line_number_display_width<H: EditHost>(host: &mut H, args: &[Value]) -> EvalResult {
+#[doc(hidden)]
+pub fn line_number_display_width<H: EditHost>(host: &mut H, args: &[Value]) -> EvalResult {
     expect_args_range("line-number-display-width", &args, 0, 1)?;
     let Some(target) = host.line_number_display_target() else {
         return Ok(Value::fixnum(0));
@@ -3576,15 +3591,33 @@ mod tests;
 mod scan_policy_tests;
 
 /// Carrier park: drop the last-known-column memo.
-pub(crate) fn reset_carrier_tls() {
+#[doc(hidden)]
+pub fn reset_carrier_tls() {
     LAST_KNOWN_COLUMN.with(|slot| slot.set(None));
 }
 
 /// Debug-only carrier TLS fingerprint for this module's classified records.
 #[cfg(debug_assertions)]
-pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+#[doc(hidden)]
+pub fn carrier_tls_fingerprint(h: &mut u64) {
     neovm_value::tls_fingerprint::mix(
         h,
         LAST_KNOWN_COLUMN.with(|slot| slot.get().is_some() as u64),
     );
+}
+
+#[doc(hidden)]
+impl ScreenLineMotionScan {
+    #[inline]
+    pub fn target(&self) -> EmacsBytePos {
+        self.target
+    }
+    #[inline]
+    pub fn moved(&self) -> i64 {
+        self.moved
+    }
+    #[inline]
+    pub fn last_occupied_target(&self) -> EmacsBytePos {
+        self.last_occupied_target
+    }
 }

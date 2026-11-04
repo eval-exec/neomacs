@@ -1978,7 +1978,7 @@ impl Context {
         // markers have auto-adjusted but the usize caches on Window::Leaf
         // may be stale.  Refresh them before redisplay reads positions.
         if let Some(buffer) = self.edit.buffers.current_buffer() {
-            let buf_id = buffer.id;
+            let buf_id = buffer.id();
             crate::window::window_markers::sync_all_frames_for_buffer(&mut self.frames, buf_id);
         }
         // GNU's selected-window point belongs to the selected window's buffer,
@@ -2310,11 +2310,11 @@ impl Context {
         Some(RedisplayBufferSignature {
             layout: self.redisplay_buffer_layout_inputs(id)?,
             save_modified_tick: buffer.save_modified_tick(),
-            autosave_modified_tick: buffer.autosave_modified_tick,
+            autosave_modified_tick: buffer.autosave_modified_tick(),
             point: buffer.point_char_pos(),
             point_emacs_byte: buffer.point_emacs_byte_pos(),
-            last_window_start: buffer.last_window_start,
-            last_selected_window: buffer.last_selected_window.map(|id| id.0),
+            last_window_start: buffer.last_window_start(),
+            last_selected_window: buffer.last_selected_window().map(|id| id.0),
         })
     }
 

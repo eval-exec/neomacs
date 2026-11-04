@@ -391,10 +391,10 @@ pub(crate) fn install_substrate_seams() {
     if INSTALLED.load(std::sync::atomic::Ordering::Acquire) {
         return;
     }
-    crate::buffer::syntax_class::install(crate::buffer::syntax_class::SyntaxSeams {
-        table_for_buffer: |buf| buf.syntax_chartable(),
-        char_syntax_code: |table, code| syntax_class_at_char_code(&table, code),
-    });
+    crate::buffer::syntax_class::install(crate::buffer::syntax_class::SyntaxSeams::new(
+        |buf| buf.syntax_chartable(),
+        |table, code| syntax_class_at_char_code(&table, code),
+    ));
     INSTALLED.store(true, std::sync::atomic::Ordering::Release);
 }
 
@@ -770,7 +770,7 @@ impl SyntaxTable {
     /// GNU idiom `(set-syntax-table (copy-syntax-table))`.
     pub fn isolate_for_buffer(buf: &mut crate::buffer::buffer::Buffer) -> Self {
         use crate::buffer::buffer::BUFFER_SLOT_SYNTAX_TABLE;
-        let slot = buf.slots[BUFFER_SLOT_SYNTAX_TABLE.index()];
+        let slot = buf.slots()[BUFFER_SLOT_SYNTAX_TABLE.index()];
         let source = if slot.is_nil() {
             ensure_standard_syntax_table_object().unwrap_or(Value::NIL)
         } else {
@@ -781,7 +781,7 @@ impl SyntaxTable {
         } else {
             builtin_copy_syntax_table(vec![source]).unwrap_or(source)
         };
-        buf.slots[BUFFER_SLOT_SYNTAX_TABLE.index()] = own;
+        buf.slots_mut()[BUFFER_SLOT_SYNTAX_TABLE.index()] = own;
         Self { chartable: own }
     }
 
@@ -3077,7 +3077,7 @@ fn set_current_buffer_syntax_table_object_in_buffers(
     //     bset_syntax_table (current_buffer, table);
     //     SET_PER_BUFFER_VALUE_P (current_buffer,
     //                             PER_BUFFER_VAR_IDX (syntax_table), 1);
-    buf.slots[BUFFER_SLOT_SYNTAX_TABLE.index()] = table;
+    buf.slots_mut()[BUFFER_SLOT_SYNTAX_TABLE.index()] = table;
     buf.set_slot_local_flag(BUFFER_SLOT_SYNTAX_TABLE, true);
     Ok(())
 }
@@ -5871,15 +5871,15 @@ fn back_comment_safe_key(
         }
     };
     let (content_epoch, syntax_prop_tick) = buf.syntax_content_key();
-    Some(crate::buffer::buffer_text::SyntaxSafeKey {
+    Some(crate::buffer::buffer_text::SyntaxSafeKey::new(
         content_epoch,
         syntax_prop_tick,
-        begv: buf.accessible_char_region().start().get(),
-        table_bits: table.chartable.bits(),
-        char_table_tick: crate::emacs_core::chartable::char_table_write_tick(),
+        buf.accessible_char_region().start().get(),
+        table.chartable.bits(),
+        crate::emacs_core::chartable::char_table_write_tick(),
         honor_props,
-        escape_quotes_ender: escape_policy == CommentEndEscapePolicy::EscapeQuotesEnder,
-    })
+        escape_policy == CommentEndEscapePolicy::EscapeQuotesEnder,
+    ))
 }
 
 /// Characters between recorded safe positions.
@@ -5959,21 +5959,21 @@ fn back_comment_reparse(
                 let mut index = buf.take_syntax_safe_positions();
                 #[cfg(test)]
                 BACK_COMMENT_SAFE_REPARSES.with(|c| c.set(c.get() + 1));
-                if index.key != Some(key) {
-                    index.points.clear();
-                    index.key = Some(key);
+                if index.key() != Some(key) {
+                    index.points_mut().clear();
+                    index.set_key(Some(key));
                 }
                 // Restart from the last safe position before `to` (BEGV if none),
                 // and extend the index only when parsing past its end.
                 let to0 = (to - 1) as usize;
-                let i = index.points.partition_point(|&p| p < to0);
+                let i = index.points().partition_point(|&p| p < to0);
                 let start0 = if i == 0 {
                     begv.get()
                 } else {
-                    index.points[i - 1]
+                    index.points()[i - 1]
                 };
                 let chunk = back_comment_safe_chunk();
-                let next_target = if i == index.points.len() {
+                let next_target = if i == index.points().len() {
                     start0.saturating_add(chunk)
                 } else {
                     usize::MAX
@@ -5996,7 +5996,7 @@ fn back_comment_reparse(
                     &mut SafePositionRecorder {
                         next_target,
                         chunk,
-                        points: &mut index.points,
+                        points: index.points_mut(),
                     },
                 ) else {
                     unreachable!("the safe-position recorder never pauses")
@@ -7764,7 +7764,7 @@ pub(crate) fn builtin_parse_partial_sexp_6(
     if from < point_min || from > point_max || to < point_min || to > point_max {
         return Err(signal(
             LispCondition::ArgsOutOfRange,
-            vec![Value::make_buffer(buf.id), args[0], args[1]],
+            vec![Value::make_buffer(buf.id()), args[0], args[1]],
         ));
     }
     let table = SyntaxTable::for_buffer(buf);
@@ -7803,7 +7803,7 @@ pub(crate) fn builtin_parse_partial_sexp_6(
             .buffers
             .current_buffer()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-        let current_id = buf.id;
+        let current_id = buf.id();
         let stop_byte = lisp_pos_to_byte(buf, LispCharPos1::new(stop_pos));
         let _ = eval
             .edit
@@ -7893,7 +7893,7 @@ pub(crate) fn builtin_parse_partial_sexp_6(
         );
         (state.into_value(), stop)
     };
-    let current_id = buf.id;
+    let current_id = buf.id();
     let stop_byte = lisp_pos_to_byte(buf, LispCharPos1::new(stop_pos));
     let _ = eval
         .edit

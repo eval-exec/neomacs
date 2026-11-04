@@ -4,10 +4,8 @@ use neovm_value::error::LispCondition;
 use neovm_value::error::{Flow, signal};
 use neovm_value::value::{Value, ValueKind, VecLikeType};
 
-pub(crate) fn fix_position_with_buffers(
-    buffers: &BufferManager,
-    value: &Value,
-) -> Result<i64, Flow> {
+#[doc(hidden)]
+pub fn fix_position_with_buffers(buffers: &BufferManager, value: &Value) -> Result<i64, Flow> {
     match value.kind() {
         ValueKind::Fixnum(n) => Ok(n),
         _ if super::marker::is_marker(value) => {
@@ -26,7 +24,8 @@ pub(crate) fn fix_position_with_buffers(
 /// The marker read itself needs only the buffer manager, so this takes edit
 /// state directly and never names `Context` (the caller passes
 /// `&eval.buffers`).
-pub(crate) fn fix_position_eval(buffers: &BufferManager, value: &Value) -> Result<i64, Flow> {
+#[doc(hidden)]
+pub fn fix_position_eval(buffers: &BufferManager, value: &Value) -> Result<i64, Flow> {
     match value.kind() {
         ValueKind::Fixnum(n) => Ok(n),
         _ if super::marker::is_marker(value) => {
@@ -50,7 +49,8 @@ fn fix_position_bignum(value: &Value) -> i64 {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct LispRegionArgs {
+#[doc(hidden)]
+pub struct LispRegionArgs {
     start: LispCharPos1,
     end: LispCharPos1,
     start_arg: Value,
@@ -58,11 +58,8 @@ pub(crate) struct LispRegionArgs {
 }
 
 impl LispRegionArgs {
-    pub(crate) fn from_values(
-        buffers: &BufferManager,
-        start: Value,
-        end: Value,
-    ) -> Result<Self, Flow> {
+    #[doc(hidden)]
+    pub fn from_values(buffers: &BufferManager, start: Value, end: Value) -> Result<Self, Flow> {
         Ok(Self {
             start: LispCharPos1::new(fix_position_with_buffers(buffers, &start)?),
             end: LispCharPos1::new(fix_position_with_buffers(buffers, &end)?),
@@ -71,7 +68,8 @@ impl LispRegionArgs {
         })
     }
 
-    pub(crate) fn from_optional_values(
+    #[doc(hidden)]
+    pub fn from_optional_values(
         buffers: &BufferManager,
         start: Option<Value>,
         end: Option<Value>,
@@ -103,7 +101,8 @@ impl LispRegionArgs {
         })
     }
 
-    pub(crate) fn accessible_byte_range(self, buffer: &Buffer) -> Result<EmacsByteRange, Flow> {
+    #[doc(hidden)]
+    pub fn accessible_byte_range(self, buffer: &Buffer) -> Result<EmacsByteRange, Flow> {
         let point_min = buffer.point_min_lisp_char_pos();
         let point_max = buffer.point_max_lisp_char_pos();
         let (start, end) = self.ordered_positions();

@@ -186,7 +186,8 @@ impl GapTextBackend {
         self.gap.for_each_emacs_byte_range_chunk(range, f)
     }
 
-    pub(in crate::buffer) fn has_contiguous_emacs_byte_range(&self, range: EmacsByteRange) -> bool {
+    #[doc(hidden)]
+    pub fn has_contiguous_emacs_byte_range(&self, range: EmacsByteRange) -> bool {
         self.gap.has_contiguous_emacs_byte_range(range)
     }
 
@@ -200,7 +201,8 @@ impl GapTextBackend {
             .move_gap_to_emacs_byte_pos_and_char_pos(anchor.emacs_byte_pos(), anchor.char_pos());
     }
 
-    pub(in crate::buffer) fn with_contiguous_emacs_byte_range<R>(
+    #[doc(hidden)]
+    pub fn with_contiguous_emacs_byte_range<R>(
         &self,
         range: EmacsByteRange,
         f: impl FnOnce(&[u8]) -> R,

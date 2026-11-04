@@ -3584,7 +3584,7 @@ unsafe fn cbsym_read_contained(
         // current-buffer: NEVER allocate. Read the already-materialized buffer value;
         // bounce when it was never made (general path -> make_buffer, rooted).
         if which == CBSYM_A_CURRENT_BUFFER {
-            let Some(buf_id) = ctx.edit.buffers.current_buffer().map(|b| b.id) else {
+            let Some(buf_id) = ctx.edit.buffers.current_buffer().map(|b| b.id()) else {
                 #[cfg(debug_assertions)]
                 CBSYM_SPEC_GENERIC_COUNT.fetch_add(1, Ordering::Relaxed);
                 return STATUS_NEED_GENERIC;
@@ -3726,7 +3726,7 @@ pub unsafe extern "C" fn neovm_jit_save_current_buffer(ctx: *mut u8) {
     use crate::emacs_core::eval::SpecBinding;
     // SAFETY: see neovm_jit_call's function-level contract.
     let ctx = unsafe { &mut *(ctx as *mut Context) };
-    if let Some(buffer_id) = ctx.edit.buffers.current_buffer().map(|buffer| buffer.id) {
+    if let Some(buffer_id) = ctx.edit.buffers.current_buffer().map(|buffer| buffer.id()) {
         ctx.jit_bind_stack.push(ctx.specpdl.len());
         ctx.specpdl
             .push(SpecBinding::SaveCurrentBuffer { buffer_id });

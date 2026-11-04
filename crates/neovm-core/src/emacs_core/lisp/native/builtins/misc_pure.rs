@@ -154,7 +154,7 @@ fn message_dolog(
 
     // Insert the message text at the end, followed by newline.
     // Save and restore current buffer like GNU does.
-    let old_buf = ctx.edit.buffers.current_buffer().map(|b| b.id);
+    let old_buf = ctx.edit.buffers.current_buffer().map(|b| b.id());
     let _ = ctx.set_current_buffer_unrecorded(buf_id);
     let Some((old_pt_byte, old_accessible, mut old_full_end, point_at_end, zv_at_end)) =
         ctx.edit.buffers.get(buf_id).map(|buf| {

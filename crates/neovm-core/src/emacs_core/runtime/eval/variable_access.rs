@@ -498,14 +498,14 @@ fn owner_value_in_buffer(
     let channel = match projection.arm() {
         CanonicalArm::Plain => Channel::Default,
         CanonicalArm::Localized(_) => match buffer.local_variable_binding_cell(base) {
-            Some(_) => Channel::BufferLocal(buffer.id),
+            Some(_) => Channel::BufferLocal(buffer.id()),
             None => Channel::Default,
         },
         // A per-buffer slot without the local flag holds the live default,
         // which an owner's default binding shadows, as GNU's let-default
         // writes every buffer without the flag.
         CanonicalArm::Forwarded(builtin) => match builtin.descriptor().as_buffer_obj_fwd() {
-            Some(buf_fwd) if per_buffer_local(buffer, buf_fwd) => Channel::BufferLocal(buffer.id),
+            Some(buf_fwd) if per_buffer_local(buffer, buf_fwd) => Channel::BufferLocal(buffer.id()),
             _ => Channel::Default,
         },
     };
@@ -518,7 +518,9 @@ fn owner_value_in_buffer(
             (!value.is_unbound()).then_some(value)
         }
         CanonicalArm::Forwarded(builtin) => match builtin.descriptor().as_buffer_obj_fwd() {
-            Some(buf_fwd) => buf_fwd.buffer_slot().map(|slot| buffer.slots[slot.index()]),
+            Some(buf_fwd) => buf_fwd
+                .buffer_slot()
+                .map(|slot| buffer.slots()[slot.index()]),
             None => builtin.descriptor().load(),
         },
         _ => canonical_bufferless_value(projection),
@@ -687,7 +689,7 @@ pub(crate) fn buffer_local_value_in(eval: &Context, variable: Value, buffer: Val
 
     // GNU's local cell holds the running thread's binding of it.
     if !eval.owner.is_dormant()
-        && let Some(binding) = eval.owner_local_binding(resolved_id, buf.id)
+        && let Some(binding) = eval.owner_local_binding(resolved_id, buf.id())
     {
         return binding
             .bound()
@@ -704,7 +706,7 @@ pub(crate) fn buffer_local_value_in(eval: &Context, variable: Value, buffer: Val
     if let Some(sym_slot) = eval.obarray().get_by_id(resolved_id)
         && sym_slot.redirect() == SymbolRedirect::Localized
     {
-        let target_buf = Value::make_buffer(buf.id);
+        let target_buf = Value::make_buffer(buf.id());
         if let Some(value) =
             eval.obarray()
                 .read_localized(resolved_id, target_buf, buf.local_var_alist_value())
@@ -723,7 +725,7 @@ pub(crate) fn buffer_local_value_in(eval: &Context, variable: Value, buffer: Val
         None if let Some(info) =
             crate::buffer::buffer::lookup_buffer_slot_by_sym_id(resolved_id) =>
         {
-            Ok(buf.slots[info.offset.index()])
+            Ok(buf.slots()[info.offset.index()])
         }
         None if resolved_id == intern("nil") => Ok(Value::NIL),
         None if resolved_id == intern("t") => Ok(Value::T),

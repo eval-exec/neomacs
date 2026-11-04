@@ -35,7 +35,8 @@ const EXT_SEQ_MAX_LEN: u32 = 6;
 ///
 /// Returns `None` for Unicode scalar values (which can be stored directly).
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub(crate) fn encode_nonunicode_char_for_storage(code: u32) -> Option<String> {
+#[doc(hidden)]
+pub fn encode_nonunicode_char_for_storage(code: u32) -> Option<String> {
     if code <= 0x10FFFF && char::from_u32(code).is_some() {
         return None;
     }
@@ -202,7 +203,8 @@ fn decode_extended_sequence_span(s: &str, start: usize) -> Option<(usize, u32)> 
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct StorageUnit {
+#[doc(hidden)]
+pub struct StorageUnit {
     pub storage_start: usize,
     pub storage_end: usize,
     pub code: u32,
@@ -219,7 +221,8 @@ pub(crate) struct StorageUnit {
 /// characters (e.g. nerd-font glyphs), so they pass through unchanged. Decoding
 /// them unconditionally was issue #131 (U+E322 → 0x22). The U+E080..E0FF
 /// raw-byte and U+E100.. extended sentinels are multibyte-only and always decoded.
-pub(crate) fn scan_storage_units(s: &str, multibyte: bool) -> Vec<StorageUnit> {
+#[doc(hidden)]
+pub fn scan_storage_units(s: &str, multibyte: bool) -> Vec<StorageUnit> {
     let mut out = Vec::new();
     let mut idx = 0usize;
 
@@ -291,21 +294,24 @@ pub(crate) fn scan_storage_units(s: &str, multibyte: bool) -> Vec<StorageUnit> {
 /// (e.g. `storage_string_to_buffer_bytes`) thread it through `scan_storage_units`
 /// directly instead.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub(crate) fn scan_storage_units_auto(s: &str) -> Vec<StorageUnit> {
+#[doc(hidden)]
+pub fn scan_storage_units_auto(s: &str) -> Vec<StorageUnit> {
     scan_storage_units(s, !storage_string_contains_unibyte_bytes(s))
 }
 
 /// [`decode_storage_char_codes`] with multibyte-ness inferred from content (see
 /// [`scan_storage_units_auto`]). For callers holding a bare storage string.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub(crate) fn decode_storage_char_codes_auto(s: &str) -> Vec<u32> {
+#[doc(hidden)]
+pub fn decode_storage_char_codes_auto(s: &str) -> Vec<u32> {
     decode_storage_char_codes(s, !storage_string_contains_unibyte_bytes(s))
 }
 
 /// Return the Emacs character code at a storage byte position and the next
 /// storage byte position. See [`scan_storage_units`] for how `multibyte`
 /// governs the U+E300..E3FF range.
-pub(crate) fn storage_code_step(s: &str, pos: usize, multibyte: bool) -> Option<(u32, usize)> {
+#[doc(hidden)]
+pub fn storage_code_step(s: &str, pos: usize, multibyte: bool) -> Option<(u32, usize)> {
     if pos >= s.len() {
         return None;
     }
@@ -332,7 +338,8 @@ pub(crate) fn storage_code_step(s: &str, pos: usize, multibyte: bool) -> Option<
     Some((code, next))
 }
 
-pub(crate) fn storage_has_special_units(s: &str) -> bool {
+#[doc(hidden)]
+pub fn storage_has_special_units(s: &str) -> bool {
     if s.is_ascii() {
         return false;
     }
@@ -349,7 +356,8 @@ pub(crate) fn storage_has_special_units(s: &str) -> bool {
     })
 }
 
-pub(crate) fn storage_string_contains_unibyte_bytes(s: &str) -> bool {
+#[doc(hidden)]
+pub fn storage_string_contains_unibyte_bytes(s: &str) -> bool {
     if s.is_ascii() {
         return false;
     }
@@ -365,7 +373,8 @@ pub(crate) fn storage_string_contains_unibyte_bytes(s: &str) -> bool {
 /// This keeps byte-oriented Elisp semantics for operations like `aref`,
 /// `string-bytes`, and `secure-hash` binary output.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub(crate) fn bytes_to_unibyte_storage_string(bytes: &[u8]) -> String {
+#[doc(hidden)]
+pub fn bytes_to_unibyte_storage_string(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len());
     for b in bytes {
         if *b <= 0x7f {
@@ -380,7 +389,8 @@ pub(crate) fn bytes_to_unibyte_storage_string(bytes: &[u8]) -> String {
     out
 }
 
-pub(crate) fn storage_string_to_buffer_bytes(s: &str, multibyte: bool) -> Vec<u8> {
+#[doc(hidden)]
+pub fn storage_string_to_buffer_bytes(s: &str, multibyte: bool) -> Vec<u8> {
     let codes = decode_storage_char_codes(s, multibyte);
     if !multibyte {
         return codes
@@ -404,7 +414,8 @@ pub(crate) fn storage_string_to_buffer_bytes(s: &str, multibyte: bool) -> Vec<u8
     bytes
 }
 
-pub(crate) fn decode_storage_units(s: &str, multibyte: bool) -> Vec<(u32, usize)> {
+#[doc(hidden)]
+pub fn decode_storage_units(s: &str, multibyte: bool) -> Vec<(u32, usize)> {
     if !storage_has_special_units(s) {
         return s
             .chars()
@@ -419,7 +430,8 @@ pub(crate) fn decode_storage_units(s: &str, multibyte: bool) -> Vec<(u32, usize)
 
 /// Decode NeoVM string storage into Emacs character codes. `multibyte` governs
 /// the U+E300..E3FF range (see [`scan_storage_units`]).
-pub(crate) fn decode_storage_char_codes(s: &str, multibyte: bool) -> Vec<u32> {
+#[doc(hidden)]
+pub fn decode_storage_char_codes(s: &str, multibyte: bool) -> Vec<u32> {
     decode_storage_units(s, multibyte)
         .into_iter()
         .map(|(cp, _)| cp)
@@ -429,7 +441,8 @@ pub(crate) fn decode_storage_char_codes(s: &str, multibyte: bool) -> Vec<u32> {
 /// Compute Emacs-like display width for NeoVM string storage.
 /// Count logical Emacs characters in NeoVM string storage.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub(crate) fn storage_char_len(s: &str) -> usize {
+#[doc(hidden)]
+pub fn storage_char_len(s: &str) -> usize {
     if !storage_has_special_units(s) {
         return if s.is_ascii() {
             s.len()
@@ -442,7 +455,8 @@ pub(crate) fn storage_char_len(s: &str) -> usize {
 
 /// Count Emacs string bytes represented by NeoVM string storage.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub(crate) fn storage_byte_len(s: &str) -> usize {
+#[doc(hidden)]
+pub fn storage_byte_len(s: &str) -> usize {
     if !storage_has_special_units(s) {
         return s.len();
     }
@@ -454,7 +468,8 @@ pub(crate) fn storage_byte_len(s: &str) -> usize {
 
 /// Convert a storage-byte boundary to the corresponding logical Emacs byte offset.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub(crate) fn storage_byte_to_logical_byte(s: &str, storage_byte_pos: usize) -> usize {
+#[doc(hidden)]
+pub fn storage_byte_to_logical_byte(s: &str, storage_byte_pos: usize) -> usize {
     if !storage_has_special_units(s) {
         return storage_byte_pos.min(s.len());
     }
@@ -478,7 +493,8 @@ pub(crate) fn storage_byte_to_logical_byte(s: &str, storage_byte_pos: usize) -> 
 
 /// Convert a logical Emacs byte offset at a character boundary to a storage-byte offset.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub(crate) fn storage_logical_byte_to_storage_byte(s: &str, logical_byte_pos: usize) -> usize {
+#[doc(hidden)]
+pub fn storage_logical_byte_to_storage_byte(s: &str, logical_byte_pos: usize) -> usize {
     if !storage_has_special_units(s) {
         return logical_byte_pos.min(s.len());
     }

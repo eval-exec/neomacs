@@ -2612,7 +2612,7 @@ fn active_map_position(
     };
 
     let default_position = ActiveMapPosition {
-        buffer_id: buffer.id,
+        buffer_id: buffer.id(),
         buffer_local_map: buffer.local_map(),
         char_pos: Some(buffer.point_lisp_char_pos().as_i64()),
         displayed_string: None,
@@ -2656,12 +2656,12 @@ fn active_map_position(
         if char_pos < point_min || char_pos > point_max {
             return Err(signal(
                 LispCondition::ArgsOutOfRange,
-                vec![Value::make_buffer(buffer.id), *position],
+                vec![Value::make_buffer(buffer.id()), *position],
             ));
         }
 
         return Ok(Some(ActiveMapPosition {
-            buffer_id: buffer.id,
+            buffer_id: buffer.id(),
             buffer_local_map: buffer.local_map(),
             char_pos: Some(char_pos),
             displayed_string: None,

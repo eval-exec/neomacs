@@ -596,7 +596,7 @@ fn resolve_buffer_ids(
         .buffers
         .get(orig_id)
         .ok_or_else(|| signal("error", vec![Value::string("Selecting deleted buffer")]))?;
-    let root_id = orig_buffer.base_buffer.unwrap_or(orig_id);
+    let root_id = orig_buffer.base_buffer().unwrap_or(orig_id);
     Ok((orig_id, root_id, Value::make_buffer(orig_id)))
 }
 

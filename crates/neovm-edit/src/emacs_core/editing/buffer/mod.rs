@@ -26,7 +26,8 @@ pub(crate) struct MakeIndirectBufferPlan {
     pub(crate) run_clone_hook: bool,
 }
 
-pub(crate) fn expect_buffer_id(value: &Value) -> Result<BufferId, Flow> {
+#[doc(hidden)]
+pub fn expect_buffer_id(value: &Value) -> Result<BufferId, Flow> {
     match value.kind() {
         ValueKind::Veclike(VecLikeType::Buffer) => Ok(value.as_buffer_id().unwrap()),
         _other => Err(signal(
@@ -36,7 +37,8 @@ pub(crate) fn expect_buffer_id(value: &Value) -> Result<BufferId, Flow> {
     }
 }
 
-pub(crate) fn expect_buffer_name_string(value: &Value) -> Result<String, Flow> {
+#[doc(hidden)]
+pub fn expect_buffer_name_string(value: &Value) -> Result<String, Flow> {
     value
         .as_lisp_string()
         .map(|ls| neovm_value::emacs_char::to_utf8_lossy(ls.as_bytes()))
@@ -148,7 +150,8 @@ fn clamped_lisp_char_pos_to_char_pos(pos: LispCharPos1, max_chars: CharLen) -> C
     pos.to_char_pos().min(CharPos0::ZERO.add_len(max_chars))
 }
 
-pub(crate) fn normalize_narrow_region_in_buffers(
+#[doc(hidden)]
+pub fn normalize_narrow_region_in_buffers(
     buffers: &BufferManager,
     current_id: BufferId,
     start: LispCharPos1,
@@ -186,7 +189,8 @@ pub(crate) fn normalize_narrow_region_in_buffers(
     ))
 }
 
-pub(crate) fn expect_integer_or_marker_in_buffers(
+#[doc(hidden)]
+pub fn expect_integer_or_marker_in_buffers(
     buffers: &BufferManager,
     value: &Value,
 ) -> Result<i64, Flow> {
@@ -219,7 +223,8 @@ fn run_named_hook_via_host<H: EditHost>(
     host.run_hook_value(hook_sym, hook_value, hook_args, true)
 }
 
-pub(crate) fn run_buffer_list_update_hook<H: EditHost>(host: &mut H) -> EvalResult {
+#[doc(hidden)]
+pub fn run_buffer_list_update_hook<H: EditHost>(host: &mut H) -> EvalResult {
     run_named_hook_via_host(host, "buffer-list-update-hook", &[])
 }
 
@@ -230,7 +235,8 @@ pub(crate) fn run_buffer_change_major_mode_hook<H: EditHost>(host: &mut H) -> Ev
     run_named_hook_via_host(host, "change-major-mode-hook", &[])
 }
 
-pub(crate) fn builtin_get_buffer_create<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_get_buffer_create<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_min_args("get-buffer-create", &args, 1)?;
     expect_max_args("get-buffer-create", &args, 2)?;
     match args[0].kind() {
@@ -258,10 +264,8 @@ pub(crate) fn builtin_get_buffer_create<H: EditHost>(host: &mut H, args: Vec<Val
 }
 
 /// (make-indirect-buffer BASE-BUFFER NAME &optional CLONE INHIBIT-BUFFER-HOOKS) → buffer
-pub(crate) fn builtin_make_indirect_buffer<H: EditHost>(
-    host: &mut H,
-    args: Vec<Value>,
-) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_make_indirect_buffer<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     let plan = {
         let (edit, _) = host.edit_and_vars();
         prepare_make_indirect_buffer_in_manager(&mut edit.buffers, args)?
@@ -363,7 +367,8 @@ pub(crate) fn finish_make_indirect_buffer_hooks<H: EditHost>(
     Ok(Value::make_buffer(plan.id))
 }
 
-pub(crate) fn builtin_get_buffer(
+#[doc(hidden)]
+pub fn builtin_get_buffer(
     edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -381,7 +386,8 @@ pub(crate) fn builtin_get_buffer(
     }
 }
 
-pub(crate) fn builtin_find_buffer<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_find_buffer<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     let symbol_mode = host.symbol_mode();
     let dynamic: &[OrderedRuntimeBindingMap] = &[];
     expect_args("find-buffer", &args, 2)?;
@@ -434,7 +440,8 @@ pub(crate) fn builtin_find_buffer<H: EditHost>(host: &mut H, args: Vec<Value>) -
     Ok(Value::NIL)
 }
 
-pub(crate) fn builtin_delete_all_overlays(
+#[doc(hidden)]
+pub fn builtin_delete_all_overlays(
     edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -457,7 +464,8 @@ pub(crate) fn builtin_delete_all_overlays(
     Ok(Value::NIL)
 }
 
-pub(crate) fn builtin_buffer_live_p(
+#[doc(hidden)]
+pub fn builtin_buffer_live_p(
     edit_buffers: &mut crate::buffer::BufferManager,
     args: &[Value],
 ) -> EvalResult {
@@ -478,10 +486,8 @@ pub(crate) fn builtin_buffer_live_p(
 /// GNU compares with `Fstring_equal`, which never expands or canonicalizes
 /// either side — `find-file` has already stored the truename — so this is a
 /// plain byte comparison, unlike `get-file-buffer`'s resolving search.
-pub(crate) fn builtin_get_truename_buffer<H: EditHost>(
-    host: &mut H,
-    args: Vec<Value>,
-) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_get_truename_buffer<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_args("get-truename-buffer", &args, 1)?;
     let buffer_ids = {
         let (edit, _) = host.edit_and_vars();
@@ -514,7 +520,8 @@ pub(crate) fn builtin_get_truename_buffer<H: EditHost>(
     Ok(Value::NIL)
 }
 
-pub(crate) fn builtin_get_file_buffer<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_get_file_buffer<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_args("get-file-buffer", &args, 1)?;
     let resolved = host.resolve_filename(expect_lisp_string(&args[0])?);
     let resolved_path = super::file_name::lisp_file_name_to_path_buf(&resolved);
@@ -557,7 +564,8 @@ pub(crate) fn builtin_get_file_buffer<H: EditHost>(host: &mut H, args: Vec<Value
 /// visibility and frame predicates.  Only when no other live buffer exists
 /// does it fall back to `*scratch*`, matching GNU's
 /// `get-scratch-buffer-create` fallback.
-pub(crate) fn other_buffer_safely_in_state(
+#[doc(hidden)]
+pub fn other_buffer_safely_in_state(
     buffers: &mut crate::buffer::BufferManager,
     avoid_id: Option<crate::buffer::BufferId>,
 ) -> crate::buffer::BufferId {
@@ -580,7 +588,8 @@ pub(crate) fn builtin_set_buffer<H: EditHost>(host: &mut H, args: Vec<Value>) ->
 /// `set-buffer` as registered: fixed arity 1, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_set_buffer_1<H: EditHost>(host: &mut H, buffer_or_name: Value) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_set_buffer_1<H: EditHost>(host: &mut H, buffer_or_name: Value) -> EvalResult {
     let args: [Value; 1] = [buffer_or_name];
     expect_args("set-buffer", &args, 1)?;
     let id = {
@@ -625,9 +634,8 @@ pub(crate) fn builtin_current_buffer(
 /// `current-buffer` as registered: fixed arity 0, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a0` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_current_buffer_0(
-    edit_buffers: &mut crate::buffer::BufferManager,
-) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_current_buffer_0(edit_buffers: &mut crate::buffer::BufferManager) -> EvalResult {
     let args: [Value; 0] = [];
     let buffers = edit_buffers;
     expect_args("current-buffer", &args, 0)?;
@@ -637,7 +645,8 @@ pub(crate) fn builtin_current_buffer_0(
     }
 }
 
-pub(crate) fn builtin_buffer_name(
+#[doc(hidden)]
+pub fn builtin_buffer_name(
     edit_buffers: &mut crate::buffer::BufferManager,
     args: &[Value],
 ) -> EvalResult {
@@ -657,7 +666,8 @@ pub(crate) fn builtin_buffer_name(
     }
 }
 
-pub(crate) fn builtin_buffer_file_name(
+#[doc(hidden)]
+pub fn builtin_buffer_file_name(
     edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -677,7 +687,8 @@ pub(crate) fn builtin_buffer_file_name(
         .unwrap_or(Value::NIL))
 }
 
-pub(crate) fn builtin_buffer_base_buffer(
+#[doc(hidden)]
+pub fn builtin_buffer_base_buffer(
     edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -699,7 +710,8 @@ pub(crate) fn builtin_buffer_base_buffer(
         .unwrap_or(Value::NIL))
 }
 
-pub(crate) fn builtin_buffer_last_name(
+#[doc(hidden)]
+pub fn builtin_buffer_last_name(
     edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -780,7 +792,8 @@ pub(crate) fn builtin_buffer_substring<H: EditHost>(host: &mut H, args: Vec<Valu
 /// `buffer-substring` as registered: fixed arity 2, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a2` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_buffer_substring_2<H: EditHost>(
+#[doc(hidden)]
+pub fn builtin_buffer_substring_2<H: EditHost>(
     host: &mut H,
     start: Value,
     end: Value,
@@ -817,7 +830,8 @@ pub(crate) fn builtin_buffer_substring_2<H: EditHost>(
     Ok(buffer_slice_value_range(buf, byte_range))
 }
 
-pub(crate) fn builtin_buffer_string<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_buffer_string<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_args("buffer-string", &args, 0)?;
     let (current_id, start, end) = {
         let (edit, _) = host.edit_and_vars();
@@ -844,7 +858,8 @@ pub(crate) fn builtin_buffer_string<H: EditHost>(host: &mut H, args: Vec<Value>)
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub(crate) fn resolve_buffer_designator_allow_nil_current(
+#[doc(hidden)]
+pub fn resolve_buffer_designator_allow_nil_current(
     edit_buffers: &mut crate::buffer::BufferManager,
     arg: &Value,
 ) -> Result<Option<BufferId>, Flow> {
@@ -970,7 +985,8 @@ enum BufferDesignatorDefault {
     Required,
 }
 
-pub(crate) fn resolve_buffer_designator_allow_nil_current_in_manager(
+#[doc(hidden)]
+pub fn resolve_buffer_designator_allow_nil_current_in_manager(
     buffers: &BufferManager,
     arg: &Value,
 ) -> Result<Option<BufferId>, Flow> {
@@ -1152,7 +1168,8 @@ fn compare_buffer_substring_strings(
     }
 }
 
-pub(crate) fn builtin_buffer_line_statistics(
+#[doc(hidden)]
+pub fn builtin_buffer_line_statistics(
     edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -1226,7 +1243,8 @@ fn replace_region_contents_type_predicate() -> Value {
     ])
 }
 
-pub(crate) fn replace_region_source_value_in_state(
+#[doc(hidden)]
+pub fn replace_region_source_value_in_state(
     buffers: &BufferManager,
     source: &Value,
     current_id: BufferId,
@@ -1293,7 +1311,8 @@ pub(crate) fn replace_region_source_value_in_state(
     }
 }
 
-pub(crate) fn builtin_buffer_swap_text<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_buffer_swap_text<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_args("buffer-swap-text", &args, 1)?;
     let (other_id, current_id) = {
         let (edit, _vars) = host.edit_and_vars();
@@ -1317,10 +1336,8 @@ pub(crate) fn builtin_buffer_swap_text<H: EditHost>(host: &mut H, args: Vec<Valu
         .map_err(|err| host.signal_c_error(neovm_value::errors::CErrorMessage::from(err.message())))
 }
 
-pub(crate) fn builtin_insert_buffer_substring<H: EditHost>(
-    host: &mut H,
-    args: Vec<Value>,
-) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_insert_buffer_substring<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_args_range("insert-buffer-substring", &args, 1, 3)?;
     // GNU editfns.c:1728 resolves a required BUFFER through get-buffer.
     let (buffer_id, default_start, default_end) = {
@@ -1371,10 +1388,8 @@ pub(crate) fn builtin_insert_buffer_substring<H: EditHost>(
     builtin_insert(host, vec![text])
 }
 
-pub(crate) fn builtin_kill_all_local_variables<H: EditHost>(
-    host: &mut H,
-    args: Vec<Value>,
-) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_kill_all_local_variables<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_args_range("kill-all-local-variables", &args, 0, 1)?;
     let (initial_id, kill_permanent) = {
         let (edit, _) = host.edit_and_vars();
@@ -1426,7 +1441,8 @@ pub(crate) fn builtin_kill_all_local_variables<H: EditHost>(
 }
 
 /// `(ntake N LIST)` -> LIST
-pub(crate) fn builtin_ntake(args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_ntake(args: Vec<Value>) -> EvalResult {
     expect_args("ntake", &args, 2)?;
     let TakeCount::Positive(n) = TakeCount::try_from(args[0])? else {
         return Ok(Value::NIL);
@@ -1487,7 +1503,8 @@ pub(crate) fn builtin_ntake(args: Vec<Value>) -> EvalResult {
 /// destination region with characters `[b_start, b_end)` of the source.
 /// All indices are character indices.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ReplaceRegionChangeRun {
+#[doc(hidden)]
+pub struct ReplaceRegionChangeRun {
     pub(crate) a_start: usize,
     pub(crate) a_end: usize,
     pub(crate) b_start: usize,
@@ -1498,7 +1515,8 @@ pub(crate) struct ReplaceRegionChangeRun {
 /// byte_offset)` pairs.  `byte_offset` is the offset (within `bytes`) of each
 /// character; a final sentinel entry `(0, bytes.len())` is appended so callers
 /// can map a character index to its byte offset for `0..=len`.
-pub(crate) fn decode_chars_with_byte_offsets(bytes: &[u8]) -> Vec<(u32, usize)> {
+#[doc(hidden)]
+pub fn decode_chars_with_byte_offsets(bytes: &[u8]) -> Vec<(u32, usize)> {
     let mut out = Vec::new();
     let mut pos = 0usize;
     while pos < bytes.len() {
@@ -1510,7 +1528,8 @@ pub(crate) fn decode_chars_with_byte_offsets(bytes: &[u8]) -> Vec<(u32, usize)> 
     out
 }
 
-pub(crate) mod replace_diff;
+#[doc(hidden)]
+pub mod replace_diff;
 
 /// GNU diffseq change runs, with linear workspace and MAX-COSTS heuristics.
 /// None means timeout or an unavailable comparison workspace; no edit has
@@ -1525,7 +1544,8 @@ pub(crate) fn replace_region_minimal_change_runs(
     replace_diff::change_runs(a, b, deadline, replace_diff::DEFAULT_MAX_COSTS)
 }
 
-pub(crate) fn replace_region_max_costs(value: Option<&Value>) -> Result<usize, Flow> {
+#[doc(hidden)]
+pub fn replace_region_max_costs(value: Option<&Value>) -> Result<usize, Flow> {
     match value.copied().unwrap_or(Value::NIL) {
         value if value.is_nil() => Ok(replace_diff::DEFAULT_MAX_COSTS),
         value if value.is_fixnum() => Ok(value.as_fixnum().unwrap().max(0) as usize),
@@ -1551,7 +1571,8 @@ pub(crate) fn replace_region_max_costs(value: Option<&Value>) -> Result<usize, F
 
 /// True when `value` is the fixnum 0 (used for GNU's MAX-SECS/MAX-COSTS == 0
 /// "disable comparison" fallback).
-pub(crate) fn eq_fixnum_zero(value: &Value) -> bool {
+#[doc(hidden)]
+pub fn eq_fixnum_zero(value: &Value) -> bool {
     value.as_fixnum() == Some(0)
 }
 
@@ -1561,7 +1582,8 @@ pub(crate) fn eq_fixnum_zero(value: &Value) -> bool {
 /// canonical case table, GNU editfns.c:1769-1771) is computed by the upper
 /// command wrapper and passed in; this editor-layer body only compares, so it
 /// takes edit state (`BufferManager`) and stays monomorphic.
-pub(crate) fn compare_buffer_substrings_with_canon(
+#[doc(hidden)]
+pub fn compare_buffer_substrings_with_canon(
     buffers: &BufferManager,
     args: Vec<Value>,
     canon: Option<Value>,
@@ -1686,10 +1708,8 @@ fn current_buffer_cannot_have_fields<'a, V: EditVariableRead<'a>>(
         && nil_var(syms.default_text_properties)
 }
 
-pub(crate) fn builtin_constrain_to_field<H: EditHost>(
-    host: &mut H,
-    args: Vec<Value>,
-) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_constrain_to_field<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_args_range("constrain-to-field", &args, 2, 5)?;
     builtin_constrain_to_field_5(host, &args)
 }
@@ -1767,10 +1787,8 @@ fn field_probe_out_of_range(position: FieldMotionPosition) -> Flow {
 /// arity-checked): the internal callers (`line-beginning-position`,
 /// `line-end-position`, `forward-word`) pass a stack array instead of
 /// consing a `Vec` per call.
-pub(crate) fn builtin_constrain_to_field_5<H: EditHost>(
-    host: &mut H,
-    args: &[Value],
-) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_constrain_to_field_5<H: EditHost>(host: &mut H, args: &[Value]) -> EvalResult {
     let syms = constrain_to_field_syms();
     let (bounds, point_min, orig_point, new_argument, old_argument, inhibit_field_text_motion) = {
         let (edit, vars) = host.edit_and_vars();
@@ -2070,7 +2088,8 @@ fn next_field_change_in_buffers<'a, Vars: EditVariableRead<'a>>(
     )
 }
 
-pub(crate) fn find_field_bounds_in_state<'a, Vars: EditVariableRead<'a>>(
+#[doc(hidden)]
+pub fn find_field_bounds_in_state<'a, Vars: EditVariableRead<'a>>(
     vars: Vars,
     dynamic: &[OrderedRuntimeBindingMap],
     buffers: &BufferManager,
@@ -2126,7 +2145,8 @@ pub(crate) fn find_field_bounds_in_state<'a, Vars: EditVariableRead<'a>>(
     Ok((beg, end))
 }
 
-pub(crate) fn builtin_field_beginning<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_field_beginning<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_max_args("field-beginning", &args, 3)?;
     let (edit, vars) = host.edit_and_vars();
     let limit = match args.get(2) {
@@ -2154,7 +2174,8 @@ pub(crate) fn builtin_field_beginning<H: EditHost>(host: &mut H, args: Vec<Value
     Ok(Value::fixnum(beg))
 }
 
-pub(crate) fn builtin_field_end<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_field_end<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_max_args("field-end", &args, 3)?;
     let (edit, vars) = host.edit_and_vars();
     let limit = match args.get(2) {
@@ -2176,7 +2197,8 @@ pub(crate) fn builtin_field_end<H: EditHost>(host: &mut H, args: Vec<Value>) -> 
     Ok(Value::fixnum(end))
 }
 
-pub(crate) fn builtin_field_string<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_field_string<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_max_args("field-string", &args, 1)?;
     let (beg, end) = {
         let (edit, vars) = host.edit_and_vars();
@@ -2185,7 +2207,8 @@ pub(crate) fn builtin_field_string<H: EditHost>(host: &mut H, args: Vec<Value>) 
     builtin_buffer_substring(host, vec![Value::fixnum(beg), Value::fixnum(end)])
 }
 
-pub(crate) fn builtin_field_string_no_properties<H: EditHost>(
+#[doc(hidden)]
+pub fn builtin_field_string_no_properties<H: EditHost>(
     host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -2200,7 +2223,8 @@ pub(crate) fn builtin_field_string_no_properties<H: EditHost>(
     )
 }
 
-pub(crate) fn builtin_delete_field<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_delete_field<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_max_args("delete-field", &args, 1)?;
     let (beg, end) = {
         let (edit, vars) = host.edit_and_vars();
@@ -2211,7 +2235,8 @@ pub(crate) fn builtin_delete_field<H: EditHost>(host: &mut H, args: Vec<Value>) 
 
 /// `(clear-string STRING)` -> nil
 /// Zeroes every byte, makes STRING unibyte, and removes text properties.
-pub(crate) fn builtin_clear_string(args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_clear_string(args: Vec<Value>) -> EvalResult {
     expect_args("clear-string", &args, 1)?;
     let _ = expect_lisp_string(&args[0])?;
     if args[0].is_string() {
@@ -2231,14 +2256,16 @@ pub(crate) fn builtin_point(
     builtin_point_0(edit_buffers)
 }
 
-pub(crate) fn builtin_point_0(edit_buffers: &mut crate::buffer::BufferManager) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_point_0(edit_buffers: &mut crate::buffer::BufferManager) -> EvalResult {
     let buf = edit_buffers
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     Ok(Value::from_fixnum(buf.point_position().into()))
 }
 
-pub(crate) fn builtin_point_min_0(edit_buffers: &mut crate::buffer::BufferManager) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_point_min_0(edit_buffers: &mut crate::buffer::BufferManager) -> EvalResult {
     let buf = edit_buffers
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -2254,7 +2281,8 @@ pub(crate) fn builtin_point_max(
     builtin_point_max_0(edit_buffers)
 }
 
-pub(crate) fn builtin_point_max_0(edit_buffers: &mut crate::buffer::BufferManager) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_point_max_0(edit_buffers: &mut crate::buffer::BufferManager) -> EvalResult {
     let buf = edit_buffers
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -2267,7 +2295,8 @@ pub(crate) fn builtin_goto_char<H: EditHost>(host: &mut H, args: Vec<Value>) -> 
     builtin_goto_char_1(host, args[0])
 }
 
-pub(crate) fn builtin_goto_char_1<H: EditHost>(host: &mut H, arg: Value) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_goto_char_1<H: EditHost>(host: &mut H, arg: Value) -> EvalResult {
     // GNU returns POSITION itself (a marker stays a marker), so the raw
     // arg survives extraction; the typed position carries the coordinate.
     let pos = {
@@ -2307,7 +2336,9 @@ pub(crate) fn builtin_goto_char_1<H: EditHost>(host: &mut H, arg: Value) -> Eval
     Ok(arg)
 }
 
-pub(crate) struct InsertPiece {
+#[doc(hidden)]
+
+pub struct InsertPiece {
     pub(crate) text: neovm_value::heap_types::LispString,
     text_props: Option<crate::buffer::text_props::TextPropertyTable>,
 }
@@ -2316,7 +2347,8 @@ impl InsertPiece {
     /// Reassemble converted text and properties for the typed replacement
     /// pipeline. Lisp string properties normally live beside a tagged Value;
     /// `ReplaceTextPlan` deliberately owns both in one `LispString`.
-    pub(crate) fn into_replacement_text(mut self) -> neovm_value::heap_types::LispString {
+    #[doc(hidden)]
+    pub fn into_replacement_text(mut self) -> neovm_value::heap_types::LispString {
         if let Some(properties) = self.text_props {
             *self.text.intervals_mut() = properties;
         }
@@ -2342,7 +2374,8 @@ fn current_empty_text_change_at_emacs_byte_pos(
     )
 }
 
-pub(crate) fn current_buffer_multibyte(buffers: &BufferManager) -> Result<bool, Flow> {
+#[doc(hidden)]
+pub fn current_buffer_multibyte(buffers: &BufferManager) -> Result<bool, Flow> {
     let current_id = buffers
         .current_buffer_id()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -2352,7 +2385,8 @@ pub(crate) fn current_buffer_multibyte(buffers: &BufferManager) -> Result<bool, 
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))
 }
 
-pub(crate) fn lisp_string_byte_to_char(
+#[doc(hidden)]
+pub fn lisp_string_byte_to_char(
     string: &neovm_value::heap_types::LispString,
     byte_pos: usize,
 ) -> usize {
@@ -2396,7 +2430,8 @@ fn lisp_string_advance_byte_to_boundary(
     pos
 }
 
-pub(crate) fn remap_text_property_table(
+#[doc(hidden)]
+pub fn remap_text_property_table(
     table: &crate::buffer::text_props::TextPropertyTable,
     char_map: impl Fn(usize) -> usize,
 ) -> crate::buffer::text_props::TextPropertyTable {
@@ -2453,7 +2488,8 @@ fn encode_char_code_for_buffer_bytes(code: u32, multibyte: bool) -> Option<Vec<u
     }
 }
 
-pub(crate) fn buffer_insert_lisp_string_from_lisp_string(
+#[doc(hidden)]
+pub fn buffer_insert_lisp_string_from_lisp_string(
     string: &neovm_value::heap_types::LispString,
     target_multibyte: bool,
 ) -> neovm_value::heap_types::LispString {
@@ -2505,7 +2541,8 @@ pub(crate) fn buffer_insert_lisp_string_from_lisp_string(
     }
 }
 
-pub(crate) fn buffer_insert_piece_from_string(
+#[doc(hidden)]
+pub fn buffer_insert_piece_from_string(
     value: Value,
     target_multibyte: bool,
 ) -> Result<InsertPiece, Flow> {
@@ -2525,7 +2562,8 @@ pub(crate) fn buffer_insert_piece_from_string(
     Ok(InsertPiece { text, text_props })
 }
 
-pub(crate) fn lisp_string_from_buffer_bytes(
+#[doc(hidden)]
+pub fn lisp_string_from_buffer_bytes(
     bytes: Vec<u8>,
     multibyte: bool,
 ) -> neovm_value::heap_types::LispString {
@@ -2547,10 +2585,8 @@ pub(crate) fn buffer_slice_value(
     )
 }
 
-pub(crate) fn buffer_slice_value_range(
-    buf: &crate::buffer::Buffer,
-    byte_range: EmacsByteRange,
-) -> Value {
+#[doc(hidden)]
+pub fn buffer_slice_value_range(buf: &crate::buffer::Buffer, byte_range: EmacsByteRange) -> Value {
     let mut bytes = Vec::new();
     buf.copy_emacs_byte_range_to(byte_range, &mut bytes);
     let string = lisp_string_from_buffer_bytes(bytes, buf.get_multibyte());
@@ -2565,7 +2601,8 @@ pub(crate) fn buffer_slice_value_range(
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
-pub(crate) enum BufferMultibyteConversionMode {
+#[doc(hidden)]
+pub enum BufferMultibyteConversionMode {
     AsUnibyte,
     AsMultibyte,
     ToMultibyte,
@@ -2599,7 +2636,8 @@ fn remap_string_text_props_for_conversion(
     }
 }
 
-pub(crate) fn convert_buffer_string_for_multibyte(
+#[doc(hidden)]
+pub fn convert_buffer_string_for_multibyte(
     source: Value,
     flag: Value,
 ) -> Result<(Value, BufferMultibyteConversionMode), Flow> {
@@ -2639,7 +2677,8 @@ pub(crate) fn convert_buffer_string_for_multibyte(
 /// bytes (two eight-bit chars), so old byte 2 maps to new byte 4 — without this,
 /// the old end position maps short and the buffer is wrongly narrowed. `map[k]`
 /// is the new offset of old byte `k`; `map[old_len]` is the total new length.
-pub(crate) fn build_multibyte_conversion_byte_map(
+#[doc(hidden)]
+pub fn build_multibyte_conversion_byte_map(
     old_bytes: &[u8],
     mode: BufferMultibyteConversionMode,
 ) -> Vec<usize> {
@@ -2705,7 +2744,8 @@ pub(crate) fn build_multibyte_conversion_byte_map(
 /// Remap an old buffer byte offset to a character boundary in the converted
 /// storage, via the conversion byte map (then round to a char boundary for any
 /// position that fell inside a multibyte sequence).
-pub(crate) fn remap_old_byte_to_new_boundary(
+#[doc(hidden)]
+pub fn remap_old_byte_to_new_boundary(
     byte_map: &[usize],
     old_byte_len: usize,
     new_storage: &neovm_value::heap_types::LispString,
@@ -3035,7 +3075,8 @@ fn insert_one_pending<H: EditHost>(
     Ok(Value::NIL)
 }
 
-pub(crate) fn builtin_insert<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_insert<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     general_insert_function(
         host,
         &args,
@@ -3044,10 +3085,8 @@ pub(crate) fn builtin_insert<H: EditHost>(host: &mut H, args: Vec<Value>) -> Eva
     )
 }
 
-pub(crate) fn builtin_insert_before_markers<H: EditHost>(
-    host: &mut H,
-    args: Vec<Value>,
-) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_insert_before_markers<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     general_insert_function(
         host,
         &args,
@@ -3056,10 +3095,8 @@ pub(crate) fn builtin_insert_before_markers<H: EditHost>(
     )
 }
 
-pub(crate) fn builtin_insert_and_inherit<H: EditHost>(
-    host: &mut H,
-    args: Vec<Value>,
-) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_insert_and_inherit<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     general_insert_function(
         host,
         &args,
@@ -3068,7 +3105,8 @@ pub(crate) fn builtin_insert_and_inherit<H: EditHost>(
     )
 }
 
-pub(crate) fn builtin_insert_before_markers_and_inherit<H: EditHost>(
+#[doc(hidden)]
+pub fn builtin_insert_before_markers_and_inherit<H: EditHost>(
     host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -3194,7 +3232,8 @@ pub(crate) fn insert_char_code_from_value(value: &Value) -> Result<i64, Flow> {
     }
 }
 
-pub(crate) fn builtin_insert_char<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_insert_char<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_args_range("insert-char", &args, 1, 3)?;
     let char_code = insert_char_code_from_value(&args[0])?;
     let count = match args.get(1) {
@@ -3305,7 +3344,8 @@ pub(crate) fn builtin_insert_char<H: EditHost>(host: &mut H, args: Vec<Value>) -
     Ok(Value::NIL)
 }
 
-pub(crate) fn builtin_insert_byte<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_insert_byte<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_args_range("insert-byte", &args, 2, 3)?;
     let byte = expect_fixnum(&args[0])?;
     if !(0..=255).contains(&byte) {
@@ -3452,10 +3492,8 @@ impl SubstitutionCharacters {
     }
 }
 
-pub(crate) fn builtin_subst_char_in_region<H: EditHost>(
-    host: &mut H,
-    args: Vec<Value>,
-) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_subst_char_in_region<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_args_range("subst-char-in-region", &args, 4, 5)?;
 
     // One read phase carries the argument coercions, the current-buffer
@@ -3639,7 +3677,8 @@ fn subst_char_in_region_scan(
         .map(|changed_range| (range, changed_range)))
 }
 
-pub(crate) fn builtin_buffer_enable_undo(
+#[doc(hidden)]
+pub fn builtin_buffer_enable_undo(
     edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -3696,7 +3735,8 @@ pub(crate) fn builtin_buffer_enable_undo(
 // three lines of `with-current-buffer' + `setq' over `get-buffer'.
 // DIVERGENCES.md 150.
 
-pub(crate) fn builtin_buffer_size(
+#[doc(hidden)]
+pub fn builtin_buffer_size(
     edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -3716,7 +3756,8 @@ pub(crate) fn builtin_buffer_size(
     }
 }
 
-pub(crate) fn builtin_narrow_to_region<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_narrow_to_region<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     neovm_value::error::expect_args("narrow-to-region", &args, 2)?;
     let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
     builtin_narrow_to_region_2(host, arg(0), arg(1))
@@ -3724,7 +3765,8 @@ pub(crate) fn builtin_narrow_to_region<H: EditHost>(host: &mut H, args: Vec<Valu
 /// `narrow-to-region` as registered: fixed arity 2, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a2` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_narrow_to_region_2<H: EditHost>(
+#[doc(hidden)]
+pub fn builtin_narrow_to_region_2<H: EditHost>(
     host: &mut H,
     start: Value,
     end: Value,
@@ -3794,7 +3836,8 @@ pub(crate) fn builtin_widen<H: EditHost>(host: &mut H, args: Vec<Value>) -> Eval
 /// `widen` as registered: fixed arity 0, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a0` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_widen_0<H: EditHost>(host: &mut H) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_widen_0<H: EditHost>(host: &mut H) -> EvalResult {
     let args: [Value; 0] = [];
     expect_args("widen", &args, 0)?;
     let bounds_changed = {
@@ -3829,7 +3872,8 @@ pub(crate) fn builtin_buffer_modified_p(
 /// `buffer-modified-p` as registered: fixed arity 1, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_buffer_modified_p_1(
+#[doc(hidden)]
+pub fn builtin_buffer_modified_p_1(
     edit_buffers: &mut crate::buffer::BufferManager,
     buffer: Value,
 ) -> EvalResult {
@@ -3850,10 +3894,8 @@ pub(crate) fn builtin_buffer_modified_p_1(
     }
 }
 
-pub(crate) fn builtin_set_buffer_modified_p<H: EditHost>(
-    host: &mut H,
-    args: Vec<Value>,
-) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_set_buffer_modified_p<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_args("set-buffer-modified-p", &args, 1)?;
     let (current_id, was_modified, lock_target) = {
         let (edit, _) = host.edit_and_vars();
@@ -3887,7 +3929,8 @@ pub(crate) fn builtin_set_buffer_modified_p<H: EditHost>(
     host.force_mode_line_update()
 }
 
-pub(crate) fn builtin_restore_buffer_modified_p<H: EditHost>(
+#[doc(hidden)]
+pub fn builtin_restore_buffer_modified_p<H: EditHost>(
     host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -3934,7 +3977,8 @@ fn optional_buffer_tick_target_in_manager(
     }
 }
 
-pub(crate) fn builtin_buffer_modified_tick(
+#[doc(hidden)]
+pub fn builtin_buffer_modified_tick(
     edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -3948,7 +3992,8 @@ pub(crate) fn builtin_buffer_modified_tick(
     Ok(Value::fixnum(1))
 }
 
-pub(crate) fn builtin_buffer_chars_modified_tick(
+#[doc(hidden)]
+pub fn builtin_buffer_chars_modified_tick(
     edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -3962,7 +4007,8 @@ pub(crate) fn builtin_buffer_chars_modified_tick(
     Ok(Value::fixnum(1))
 }
 
-pub(crate) fn builtin_internal_set_buffer_modified_tick(
+#[doc(hidden)]
+pub fn builtin_internal_set_buffer_modified_tick(
     edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -3985,7 +4031,8 @@ pub(crate) fn builtin_internal_set_buffer_modified_tick(
     Ok(Value::NIL)
 }
 
-pub(crate) fn builtin_recent_auto_save_p(
+#[doc(hidden)]
+pub fn builtin_recent_auto_save_p(
     edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -3996,7 +4043,8 @@ pub(crate) fn builtin_recent_auto_save_p(
     Ok(Value::bool_val(buf.recent_auto_save_p()))
 }
 
-pub(crate) fn builtin_set_buffer_auto_saved(
+#[doc(hidden)]
+pub fn builtin_set_buffer_auto_saved(
     edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -4010,7 +4058,8 @@ pub(crate) fn builtin_set_buffer_auto_saved(
     Ok(Value::NIL)
 }
 
-pub(crate) fn other_buffer_designator(
+#[doc(hidden)]
+pub fn other_buffer_designator(
     buffers: &crate::buffer::BufferManager,
     value: Option<&Value>,
 ) -> Option<crate::buffer::BufferId> {
@@ -4035,7 +4084,8 @@ pub(crate) fn other_buffer_designator(
     }
 }
 
-pub(crate) fn is_hidden_buffer(
+#[doc(hidden)]
+pub fn is_hidden_buffer(
     buffers: &crate::buffer::BufferManager,
     id: crate::buffer::BufferId,
 ) -> bool {
@@ -4045,7 +4095,8 @@ pub(crate) fn is_hidden_buffer(
         .unwrap_or(true)
 }
 
-pub(crate) fn other_buffer_impl(
+#[doc(hidden)]
+pub fn other_buffer_impl(
     buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -4078,10 +4129,8 @@ pub(crate) fn other_buffer_impl(
     Ok(Value::make_buffer(scratch))
 }
 
-pub(crate) fn builtin_generate_new_buffer_name<H: EditHost>(
-    host: &mut H,
-    args: Vec<Value>,
-) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_generate_new_buffer_name<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     let symbol_mode = host.symbol_mode();
     expect_min_args("generate-new-buffer-name", &args, 1)?;
     expect_max_args("generate-new-buffer-name", &args, 2)?;
@@ -4109,7 +4158,8 @@ pub(crate) fn builtin_generate_new_buffer_name<H: EditHost>(
 /// Keep those two concerns separate: the manager chooses the unique text;
 /// this boundary reuses BASE when possible and appends only the generated
 /// suffix when allocation is necessary, just like GNU's `concat2` path.
-pub(crate) fn generate_new_buffer_name_value_in_state(
+#[doc(hidden)]
+pub fn generate_new_buffer_name_value_in_state(
     buffers: &crate::buffer::BufferManager,
     base: Value,
     ignore: Option<&str>,
@@ -4127,7 +4177,8 @@ pub(crate) fn generate_new_buffer_name_value_in_state(
 }
 
 /// (bufferp OBJECT) → t or nil
-pub(crate) fn builtin_bufferp(args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_bufferp(args: Vec<Value>) -> EvalResult {
     expect_args("bufferp", &args, 1)?;
     Ok(Value::bool_val(args[0].is_buffer()))
 }
@@ -4144,7 +4195,8 @@ pub(crate) fn builtin_char_after(
 /// `char-after` as registered: fixed arity 1, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_char_after_1(
+#[doc(hidden)]
+pub fn builtin_char_after_1(
     edit_buffers: &mut crate::buffer::BufferManager,
     pos: Value,
 ) -> EvalResult {
@@ -4204,7 +4256,8 @@ pub(crate) fn builtin_char_before(
 /// `char-before` as registered: fixed arity 1, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_char_before_1(
+#[doc(hidden)]
+pub fn builtin_char_before_1(
     edit_buffers: &mut crate::buffer::BufferManager,
     pos: Value,
 ) -> EvalResult {
@@ -4271,7 +4324,8 @@ pub(crate) fn builtin_byte_to_position(
     builtin_byte_to_position_1(edit_buffers, args[0])
 }
 
-pub(crate) fn builtin_byte_to_position_1(
+#[doc(hidden)]
+pub fn builtin_byte_to_position_1(
     edit_buffers: &mut crate::buffer::BufferManager,
     arg: Value,
 ) -> EvalResult {
@@ -4317,7 +4371,8 @@ pub(crate) fn builtin_position_bytes(
     builtin_position_bytes_1(edit_buffers, args[0])
 }
 
-pub(crate) fn builtin_position_bytes_1(
+#[doc(hidden)]
+pub fn builtin_position_bytes_1(
     edit_buffers: &mut crate::buffer::BufferManager,
     arg: Value,
 ) -> EvalResult {
@@ -4336,7 +4391,8 @@ pub(crate) fn builtin_position_bytes_1(
     Ok(Value::fixnum(byte_pos.to_lisp_byte_pos().as_i64()))
 }
 
-pub(crate) fn builtin_get_byte<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_get_byte<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_max_args("get-byte", &args, 2)?;
 
     // STRING path: POSITION is a zero-based character index.
@@ -4440,14 +4496,16 @@ use super::textprop::{
 };
 
 /// (next-overlay-change POS)
-pub(crate) fn builtin_next_overlay_change(
+#[doc(hidden)]
+pub fn builtin_next_overlay_change(
     edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_next_overlay_change_in_buffers(edit_buffers, args)
 }
 
-pub(crate) fn builtin_next_overlay_change_in_buffers(
+#[doc(hidden)]
+pub fn builtin_next_overlay_change_in_buffers(
     buffers: &BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -4470,14 +4528,16 @@ pub(crate) fn builtin_next_overlay_change_in_buffers(
 }
 
 /// (previous-overlay-change POS)
-pub(crate) fn builtin_previous_overlay_change(
+#[doc(hidden)]
+pub fn builtin_previous_overlay_change(
     edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_previous_overlay_change_in_buffers(edit_buffers, args)
 }
 
-pub(crate) fn builtin_previous_overlay_change_in_buffers(
+#[doc(hidden)]
+pub fn builtin_previous_overlay_change_in_buffers(
     buffers: &BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -4500,7 +4560,8 @@ pub(crate) fn builtin_previous_overlay_change_in_buffers(
 }
 
 /// (make-overlay BEG END &optional BUFFER FRONT-ADVANCE REAR-ADVANCE)
-pub(crate) fn builtin_make_overlay(
+#[doc(hidden)]
+pub fn builtin_make_overlay(
     edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -4544,7 +4605,8 @@ pub(crate) fn builtin_make_overlay_in_buffers(
 }
 
 /// (delete-overlay OVERLAY)
-pub(crate) fn builtin_delete_overlay<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_delete_overlay<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     if !super::redisplay_policy::gnu_redisplay_hooks_enabled() {
         let (edit, _) = host.edit_and_vars();
         return builtin_delete_overlay_in_buffers(&mut edit.buffers, args);
@@ -4576,7 +4638,8 @@ pub(crate) fn builtin_delete_overlay_in_buffers(
 }
 
 /// (overlay-put OVERLAY PROP VAL)
-pub(crate) fn builtin_overlay_put<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_overlay_put<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     if !super::redisplay_policy::gnu_redisplay_hooks_enabled() {
         let (edit, _) = host.edit_and_vars();
         return builtin_overlay_put_in_buffers(&mut edit.buffers, args);
@@ -4654,7 +4717,8 @@ pub(crate) fn builtin_overlay_put_in_buffers(
 }
 
 /// (overlay-get OVERLAY PROP)
-pub(crate) fn builtin_overlay_get<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_overlay_get<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_args("overlay-get", &args, 2)?;
     let overlay = expect_overlay(&args[0])?;
     let (edit, vars) = host.edit_and_vars();
@@ -4667,7 +4731,8 @@ pub(crate) fn builtin_overlay_get<H: EditHost>(host: &mut H, args: Vec<Value>) -
 }
 
 /// (overlayp OBJ)
-pub(crate) fn builtin_overlayp<H: EditHost>(_host: &mut H, args: &[Value]) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_overlayp<H: EditHost>(_host: &mut H, args: &[Value]) -> EvalResult {
     builtin_overlayp_pure(args)
 }
 
@@ -4680,7 +4745,8 @@ pub(crate) fn builtin_overlayp_pure(args: &[Value]) -> EvalResult {
 }
 
 /// (overlays-at POS &optional SORTED)
-pub(crate) fn builtin_overlays_at<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_overlays_at<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_min_args("overlays-at", &args, 1)?;
     expect_max_args("overlays-at", &args, 2)?;
     let (edit, vars) = host.edit_and_vars();
@@ -4719,7 +4785,8 @@ pub(crate) fn builtin_overlays_at<H: EditHost>(host: &mut H, args: Vec<Value>) -
 }
 
 /// (overlays-in BEG END)
-pub(crate) fn builtin_overlays_in(
+#[doc(hidden)]
+pub fn builtin_overlays_in(
     edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -4765,7 +4832,8 @@ pub(crate) fn builtin_overlays_in_in_buffers(
 /// DESCENDING, which reverses back to ascending `begin` order) into a single
 /// list and returns `(cons overlays Qnil)`. Even for an empty buffer GNU
 /// returns `(nil)` (i.e. `(cons nil nil)`), never bare `nil`.
-pub(crate) fn builtin_overlay_lists(
+#[doc(hidden)]
+pub fn builtin_overlay_lists(
     edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -4791,7 +4859,8 @@ pub(crate) fn builtin_overlay_lists_in_buffers(
 /// Mirrors GNU `Foverlay_recenter` (buffer.c): since Emacs 29.1 this is a
 /// no-op (overlay lookup is fast at any position with the `itree` store), but
 /// it still type-checks POS as a fixnum-or-marker and returns nil.
-pub(crate) fn builtin_overlay_recenter(
+#[doc(hidden)]
+pub fn builtin_overlay_recenter(
     edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -4801,7 +4870,8 @@ pub(crate) fn builtin_overlay_recenter(
 }
 
 /// (move-overlay OVERLAY BEG END &optional BUFFER)
-pub(crate) fn builtin_move_overlay<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_move_overlay<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     if !super::redisplay_policy::gnu_redisplay_hooks_enabled() {
         let (edit, _) = host.edit_and_vars();
         return builtin_move_overlay_in_buffers(&mut edit.buffers, args);
@@ -4908,7 +4978,8 @@ pub(crate) fn builtin_move_overlay_in_buffers(
 }
 
 /// (overlay-start OVERLAY)
-pub(crate) fn builtin_overlay_start(
+#[doc(hidden)]
+pub fn builtin_overlay_start(
     edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -4935,7 +5006,8 @@ pub(crate) fn builtin_overlay_start_in_buffers(
 }
 
 /// (overlay-end OVERLAY)
-pub(crate) fn builtin_overlay_end(
+#[doc(hidden)]
+pub fn builtin_overlay_end(
     edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -4962,7 +5034,8 @@ pub(crate) fn builtin_overlay_end_in_buffers(
 }
 
 /// (overlay-buffer OVERLAY)
-pub(crate) fn builtin_overlay_buffer(
+#[doc(hidden)]
+pub fn builtin_overlay_buffer(
     edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -4984,7 +5057,8 @@ pub(crate) fn builtin_overlay_buffer_in_buffers(
 }
 
 /// (overlay-properties OVERLAY)
-pub(crate) fn builtin_overlay_properties(
+#[doc(hidden)]
+pub fn builtin_overlay_properties(
     edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -5006,3 +5080,35 @@ pub(crate) fn builtin_overlay_properties_in_buffers(
 #[cfg(test)]
 #[path = "tests/buffer_test.rs"]
 mod tests;
+
+#[doc(hidden)]
+impl ReplaceRegionChangeRun {
+    #[inline]
+    pub fn a_start(&self) -> usize {
+        self.a_start
+    }
+    #[inline]
+    pub fn a_end(&self) -> usize {
+        self.a_end
+    }
+    #[inline]
+    pub fn b_start(&self) -> usize {
+        self.b_start
+    }
+    #[inline]
+    pub fn b_end(&self) -> usize {
+        self.b_end
+    }
+}
+
+#[doc(hidden)]
+impl InsertPiece {
+    #[inline]
+    pub fn into_text(self) -> neovm_value::heap_types::LispString {
+        self.text
+    }
+    #[inline]
+    pub fn text(&self) -> &neovm_value::heap_types::LispString {
+        &self.text
+    }
+}

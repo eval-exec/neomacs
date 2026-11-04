@@ -5573,7 +5573,7 @@ fn validate_detect_coding_region(buffers: &BufferManager, args: &[Value]) -> Res
     if !(point_min <= beg && end <= point_max) {
         return Err(signal(
             LispCondition::ArgsOutOfRange,
-            vec![Value::make_buffer(buf.id), args[0], args[1]],
+            vec![Value::make_buffer(buf.id()), args[0], args[1]],
         ));
     }
     Ok(())

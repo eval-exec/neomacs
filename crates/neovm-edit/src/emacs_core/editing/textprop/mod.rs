@@ -14,7 +14,8 @@ use neovm_value::symbol::Obarray;
 
 // GNU's fixed `Qfontified`: every fontification scan probes this property.
 static FONTIFIED_PROPERTY: WellKnown = WellKnown::Fontified;
-use crate::buffer::text_props::{PropertyPlistApplication, TextPropertyTable};
+#[doc(hidden)]
+pub use crate::buffer::text_props::{PropertyPlistApplication, TextPropertyTable};
 use crate::buffer::{
     Buffer, BufferId, BufferManager, CharLen, CharPos0, CharRange, EmacsBytePos, EmacsByteRange,
     LispCharPos1,
@@ -93,7 +94,8 @@ impl TextPropertyControlVariable {
 /// mapping exhaustive.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, IntoStaticStr)]
 #[strum(serialize_all = "kebab-case")]
-pub(crate) enum StickinessProperty {
+#[doc(hidden)]
+pub enum StickinessProperty {
     FrontSticky,
     RearNonsticky,
 }
@@ -115,12 +117,14 @@ impl StickinessProperty {
         }
     }
 
-    pub(crate) fn value(self) -> Value {
+    #[doc(hidden)]
+    pub fn value(self) -> Value {
         Value::from_sym_id(self.symbol_id())
     }
 }
 
-pub(crate) fn init_textprop_vars(obarray: &mut neovm_value::symbol::Obarray) {
+#[doc(hidden)]
+pub fn init_textprop_vars(obarray: &mut neovm_value::symbol::Obarray) {
     let default_properties = TextPropertyControlVariable::DefaultTextProperties;
     obarray.seed_value(default_properties.name(), Value::NIL);
     obarray.make_special(default_properties.name());
@@ -207,7 +211,8 @@ fn expect_integer_or_marker(value: &Value) -> Result<i64, Flow> {
     }
 }
 
-pub(crate) fn expect_integer_or_marker_in_buffers(
+#[doc(hidden)]
+pub fn expect_integer_or_marker_in_buffers(
     buffers: &BufferManager,
     value: &Value,
 ) -> Result<i64, Flow> {
@@ -245,7 +250,8 @@ pub fn register_bootstrap_vars(obarray: &mut neovm_value::symbol::Obarray) {
 /// This lives in one function because the value used to be spelled out at four
 /// separate installation sites, so correcting one of them was silently undone
 /// by the next one to run.
-pub(crate) fn default_text_property_nonsticky_alist() -> Value {
+#[doc(hidden)]
+pub fn default_text_property_nonsticky_alist() -> Value {
     Value::list(vec![
         Value::cons(Value::symbol("composition"), Value::T),
         Value::cons(Value::symbol("syntax-table"), Value::T),
@@ -481,7 +487,8 @@ fn category_sym_id() -> SymId {
 /// `find-word-boundary-function-table` callback -- takes a fresh snapshot for
 /// each probe, exactly as it already rebuilds the run cache.
 #[derive(Clone, Copy)]
-pub(crate) struct CharPropertyResolver<'a> {
+#[doc(hidden)]
+pub struct CharPropertyResolver<'a> {
     obarray: &'a Obarray,
     prop: Value,
     /// `(cdr (assq PROP char-property-alias-alist))` at snapshot time.
@@ -491,7 +498,8 @@ pub(crate) struct CharPropertyResolver<'a> {
 }
 
 impl<'a> CharPropertyResolver<'a> {
-    pub(crate) fn snapshot<Vars: EditVariableRead<'a>>(
+    #[doc(hidden)]
+    pub fn snapshot<Vars: EditVariableRead<'a>>(
         vars: Vars,
         buffers: &BufferManager,
         prop: Value,
@@ -523,7 +531,8 @@ impl<'a> CharPropertyResolver<'a> {
     /// widen the watched-key set) and no `default-text-properties` fallback
     /// (a key-free INTERVAL resolves to the default while a GAP resolves to
     /// nothing, so merging across that edge would blur two values).
-    pub(crate) fn supports_presence_coalescing(&self) -> bool {
+    #[doc(hidden)]
+    pub fn supports_presence_coalescing(&self) -> bool {
         !self.aliases.is_cons() && self.default.is_none()
     }
 
@@ -535,7 +544,8 @@ impl<'a> CharPropertyResolver<'a> {
     /// gets no property at all -- not even the `default-text-properties`
     /// fallback.
     #[inline]
-    pub(crate) fn resolve_interval_plist(&self, plist: Value) -> Option<Value> {
+    #[doc(hidden)]
+    pub fn resolve_interval_plist(&self, plist: Value) -> Option<Value> {
         let direct = DirectCharProperties::from_plist(plist, self.prop);
         if let Some(value) = direct.value {
             return Some(value);
@@ -836,7 +846,8 @@ fn args_out_of_range_range(begin0: Value, end0: Value) -> Flow {
     signal(LispCondition::ArgsOutOfRange, vec![begin0, end0])
 }
 
-pub(crate) fn validate_string_point_raw(
+#[doc(hidden)]
+pub fn validate_string_point_raw(
     s: &neovm_value::heap_types::LispString,
     pos: i64,
     pos0: Value,
@@ -877,10 +888,8 @@ fn validate_string_range(
     )))
 }
 
-pub(crate) fn validate_buffer_point(
-    buf: &crate::buffer::buffer::Buffer,
-    pos: i64,
-) -> Result<usize, Flow> {
+#[doc(hidden)]
+pub fn validate_buffer_point(buf: &crate::buffer::buffer::Buffer, pos: i64) -> Result<usize, Flow> {
     validate_buffer_point_raw(buf, pos, Value::fixnum(pos))
 }
 
@@ -921,7 +930,8 @@ pub(crate) fn validate_buffer_point_emacs_byte_pos_raw(
     Ok(elisp_pos_to_byte(buf, validated_lisp_char_pos(pos)))
 }
 
-pub(crate) fn validate_buffer_property_point_raw(
+#[doc(hidden)]
+pub fn validate_buffer_property_point_raw(
     buf: &crate::buffer::buffer::Buffer,
     pos: i64,
     pos0: Value,
@@ -996,10 +1006,8 @@ fn validate_buffer_property_emacs_byte_range(
 }
 
 /// Convert a 0-based byte position to a 1-based Elisp char position.
-pub(crate) fn byte_to_elisp_pos(
-    buf: &crate::buffer::buffer::Buffer,
-    byte_pos: EmacsBytePos,
-) -> i64 {
+#[doc(hidden)]
+pub fn byte_to_elisp_pos(buf: &crate::buffer::buffer::Buffer, byte_pos: EmacsBytePos) -> i64 {
     buf.emacs_byte_pos_to_lisp_char_pos(byte_pos).as_i64()
 }
 
@@ -1058,7 +1066,8 @@ fn resolve_text_property_buffer_id_in_buffers(
 /// state, while a caller with frames reports a dead or unknown window as
 /// `window-live-p`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum WindowBufferLookup {
+#[doc(hidden)]
+pub enum WindowBufferLookup {
     /// The caller has no display state: every WINDOW object is wrong-type.
     NotAvailable,
     /// The caller has display state but the id names no live window.
@@ -1211,7 +1220,8 @@ pub(crate) fn is_string_object(object: Option<&Value>) -> Option<Value> {
     }
 }
 
-pub(crate) fn string_char_to_elisp_pos(
+#[doc(hidden)]
+pub fn string_char_to_elisp_pos(
     _s: &neovm_value::heap_types::LispString,
     char_pos: CharPos0,
 ) -> i64 {
@@ -1219,7 +1229,8 @@ pub(crate) fn string_char_to_elisp_pos(
 }
 
 /// Write back a modified TextPropertyTable to string text properties.
-pub(crate) fn save_string_props_for_value(value: Value, table: TextPropertyTable) {
+#[doc(hidden)]
+pub fn save_string_props_for_value(value: Value, table: TextPropertyTable) {
     set_string_text_properties_table_for_value(value, table);
 }
 
@@ -1288,7 +1299,8 @@ fn list_names_for_remove(list: Value) -> Vec<Value> {
 /// `read-only` property that is not silenced by either the
 /// `inhibit-read-only` interval property or the dynamic
 /// `inhibit-read-only` variable.
-pub(crate) fn verify_text_read_only_in_state<'a, Vars: EditVariableRead<'a>>(
+#[doc(hidden)]
+pub fn verify_text_read_only_in_state<'a, Vars: EditVariableRead<'a>>(
     vars: Vars,
     buffers: &BufferManager,
     buf_id: BufferId,
@@ -1303,7 +1315,8 @@ pub(crate) fn verify_text_read_only_in_state<'a, Vars: EditVariableRead<'a>>(
     )
 }
 
-pub(crate) fn verify_text_read_only_emacs_byte_range_in_state<'a, Vars: EditVariableRead<'a>>(
+#[doc(hidden)]
+pub fn verify_text_read_only_emacs_byte_range_in_state<'a, Vars: EditVariableRead<'a>>(
     vars: Vars,
     buffers: &BufferManager,
     buf_id: BufferId,
@@ -1815,7 +1828,8 @@ pub(crate) fn report_interval_modification<H: EditHost>(
 }
 
 /// (put-text-property BEG END PROP VAL &optional OBJECT)
-pub(crate) fn builtin_put_text_property<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_put_text_property<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     neovm_value::error::expect_args_range("put-text-property", &args, 4, 5)?;
     let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
     builtin_put_text_property_5(&mut *host, arg(0), arg(1), arg(2), arg(3), arg(4))
@@ -1823,7 +1837,8 @@ pub(crate) fn builtin_put_text_property<H: EditHost>(host: &mut H, args: Vec<Val
 /// `put-text-property` as registered: fixed arity 5, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a5` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_put_text_property_5<H: EditHost>(
+#[doc(hidden)]
+pub fn builtin_put_text_property_5<H: EditHost>(
     host: &mut H,
     start: Value,
     end: Value,
@@ -1942,7 +1957,8 @@ pub(crate) fn builtin_get_text_property<H: EditHost>(host: &mut H, args: Vec<Val
 /// `get-text-property` as registered: fixed arity 3, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a3` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_get_text_property_3<H: EditHost>(
+#[doc(hidden)]
+pub fn builtin_get_text_property_3<H: EditHost>(
     host: &mut H,
     position: Value,
     prop: Value,
@@ -1953,7 +1969,8 @@ pub(crate) fn builtin_get_text_property_3<H: EditHost>(
     builtin_get_text_property_in_state(vars, &edit.buffers, &args)
 }
 
-pub(crate) fn builtin_get_text_property_in_state<'a, Vars: EditVariableRead<'a>>(
+#[doc(hidden)]
+pub fn builtin_get_text_property_in_state<'a, Vars: EditVariableRead<'a>>(
     vars: Vars,
     buffers: &BufferManager,
     args: &[Value],
@@ -2005,7 +2022,8 @@ pub(crate) fn builtin_get_text_property_in_state<'a, Vars: EditVariableRead<'a>>
     ))
 }
 
-pub(crate) fn buffer_overlay_property_at_byte_pos<'a, Vars: EditVariableRead<'a>>(
+#[doc(hidden)]
+pub fn buffer_overlay_property_at_byte_pos<'a, Vars: EditVariableRead<'a>>(
     vars: Vars,
     buffers: &BufferManager,
     buf: &crate::buffer::buffer::Buffer,
@@ -2112,7 +2130,8 @@ pub(crate) fn buffer_pos_property_at_accessible_lisp_pos<'a, Vars: EditVariableR
 /// GNU `get_local_map` temporarily widens before calling
 /// `Fget_pos_property`. This entry point exposes only that internal policy;
 /// ordinary Lisp property primitives retain accessible-range validation.
-pub(crate) fn buffer_pos_property_at_full_lisp_pos<'a, Vars: EditVariableRead<'a>>(
+#[doc(hidden)]
+pub fn buffer_pos_property_at_full_lisp_pos<'a, Vars: EditVariableRead<'a>>(
     vars: Vars,
     buffers: &BufferManager,
     buf: &Buffer,
@@ -2328,7 +2347,8 @@ pub(crate) fn builtin_get_char_property_in_state<'a, Vars: EditVariableRead<'a>>
 /// `Fget_char_property` call (`src/intervals.c`).  Keeping that policy behind
 /// a named internal entry point prevents ordinary Lisp property primitives
 /// from accidentally losing their `BEGV..ZV` validation.
-pub(crate) fn buffer_char_property_at_full_lisp_pos<'a, Vars: EditVariableRead<'a>>(
+#[doc(hidden)]
+pub fn buffer_char_property_at_full_lisp_pos<'a, Vars: EditVariableRead<'a>>(
     vars: Vars,
     buffers: &BufferManager,
     buf: &crate::buffer::buffer::Buffer,
@@ -2355,7 +2375,8 @@ pub(crate) fn buffer_char_property_at_full_lisp_pos<'a, Vars: EditVariableRead<'
     )
 }
 
-pub(crate) fn builtin_get_char_property_with_window_lookup<
+#[doc(hidden)]
+pub fn builtin_get_char_property_with_window_lookup<
     'a,
     Vars: EditVariableRead<'a>,
     F: Fn(WindowId) -> WindowBufferLookup,
@@ -2424,7 +2445,8 @@ pub(crate) fn builtin_add_text_properties<H: EditHost>(
 /// `add-text-properties` as registered: fixed arity 4, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a4` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_add_text_properties_4<H: EditHost>(
+#[doc(hidden)]
+pub fn builtin_add_text_properties_4<H: EditHost>(
     host: &mut H,
     start: Value,
     end: Value,
@@ -2579,10 +2601,8 @@ fn merge_face_property(
 }
 
 /// `(add-face-text-property START END FACE &optional APPENDP OBJECT)`
-pub(crate) fn builtin_add_face_text_property<H: EditHost>(
-    host: &mut H,
-    args: Vec<Value>,
-) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_add_face_text_property<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_min_args("add-face-text-property", &args, 3)?;
     expect_max_args("add-face-text-property", &args, 5)?;
     // GNU backs this with the same `add_text_properties_1` (textprop.c:1368):
@@ -2725,10 +2745,8 @@ pub(crate) fn builtin_add_face_text_property_in_buffers(
 }
 
 /// (remove-text-properties BEG END PROPS &optional OBJECT)
-pub(crate) fn builtin_remove_text_properties<H: EditHost>(
-    host: &mut H,
-    args: &[Value],
-) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_remove_text_properties<H: EditHost>(host: &mut H, args: &[Value]) -> EvalResult {
     expect_min_args("remove-text-properties", &args, 3)?;
     expect_max_args("remove-text-properties", &args, 4)?;
     {
@@ -2819,10 +2837,8 @@ pub(crate) fn builtin_remove_text_properties_in_buffers(
 }
 
 /// (set-text-properties BEG END PROPS &optional OBJECT)
-pub(crate) fn builtin_set_text_properties<H: EditHost>(
-    host: &mut H,
-    args: Vec<Value>,
-) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_set_text_properties<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_min_args("set-text-properties", &args, 3)?;
     expect_max_args("set-text-properties", &args, 4)?;
     {
@@ -2853,7 +2869,8 @@ pub(crate) fn builtin_set_text_properties<H: EditHost>(
     }
 }
 
-pub(crate) fn builtin_set_text_properties_in_buffers(
+#[doc(hidden)]
+pub fn builtin_set_text_properties_in_buffers(
     buffers: &mut BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -2892,7 +2909,8 @@ pub(crate) fn builtin_set_text_properties_in_buffers(
 /// A validated string target for native property replacement and the reader.
 /// Carries no shared cache; mutations obey the owning Lisp mutator's heap rules.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct StringTextPropertyTarget {
+#[doc(hidden)]
+pub struct StringTextPropertyTarget {
     value: Value,
     _mutator: std::marker::PhantomData<*const ()>,
 }
@@ -2917,7 +2935,8 @@ impl TryFrom<Value> for StringTextPropertyTarget {
 
 impl StringTextPropertyTarget {
     /// Match GNU src/textprop.c:1404-1424: validate the plist, then endpoints.
-    pub(crate) fn set_properties(self, begin: Value, end: Value, plist: Value) -> EvalResult {
+    #[doc(hidden)]
+    pub fn set_properties(self, begin: Value, end: Value, plist: Value) -> EvalResult {
         let pairs = plist_pairs(&plist)?;
         let positions = (
             expect_integer_or_marker(&begin)?,
@@ -2972,7 +2991,8 @@ pub(crate) fn builtin_remove_list_of_text_properties<H: EditHost>(
 /// `remove-list-of-text-properties` as registered: fixed arity 4, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a4` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_remove_list_of_text_properties_4<H: EditHost>(
+#[doc(hidden)]
+pub fn builtin_remove_list_of_text_properties_4<H: EditHost>(
     host: &mut H,
     start: Value,
     end: Value,
@@ -3081,7 +3101,8 @@ pub(crate) fn builtin_text_properties_at<H: EditHost>(
 /// `text-properties-at` as registered: fixed arity 2, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a2` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_text_properties_at_2<H: EditHost>(
+#[doc(hidden)]
+pub fn builtin_text_properties_at_2<H: EditHost>(
     host: &mut H,
     position: Value,
     object: Value,
@@ -3090,7 +3111,8 @@ pub(crate) fn builtin_text_properties_at_2<H: EditHost>(
     builtin_text_properties_at_in_buffers(&host.edit_and_vars().0.buffers, &args)
 }
 
-pub(crate) fn builtin_text_properties_at_in_buffers(
+#[doc(hidden)]
+pub fn builtin_text_properties_at_in_buffers(
     buffers: &BufferManager,
     args: &[Value],
 ) -> EvalResult {
@@ -3138,7 +3160,8 @@ pub(crate) fn builtin_next_single_property_change<H: EditHost>(
 /// `next-single-property-change` as registered: fixed arity 4, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a4` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_next_single_property_change_4<H: EditHost>(
+#[doc(hidden)]
+pub fn builtin_next_single_property_change_4<H: EditHost>(
     host: &mut H,
     position: Value,
     prop: Value,
@@ -3150,7 +3173,8 @@ pub(crate) fn builtin_next_single_property_change_4<H: EditHost>(
     builtin_next_single_property_change_in_state(vars, &edit.buffers, &args)
 }
 
-pub(crate) fn builtin_next_single_property_change_in_state<'a, Vars: EditVariableRead<'a>>(
+#[doc(hidden)]
+pub fn builtin_next_single_property_change_in_state<'a, Vars: EditVariableRead<'a>>(
     vars: Vars,
     buffers: &BufferManager,
     args: &[Value],
@@ -3215,7 +3239,8 @@ pub(crate) fn builtin_next_single_property_change_in_state<'a, Vars: EditVariabl
 /// Immutable fontification-only policy. This selects a scan implementation,
 /// never a retained proof or permission to skip a queried position.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum FontificationBoundaryMode {
+#[doc(hidden)]
+pub enum FontificationBoundaryMode {
     Off,
     On,
 }
@@ -3226,7 +3251,8 @@ static_assertions::assert_impl_all!(FontificationBoundaryMode: Send, Sync);
 /// means the original argument-level validation/path must still execute.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[must_use]
-pub(crate) enum FontificationBoundaryAdmission {
+#[doc(hidden)]
+pub enum FontificationBoundaryAdmission {
     UseGeneric,
     Raw(LispCharPos1),
     Resolved(LispCharPos1),
@@ -3237,7 +3263,8 @@ pub(crate) enum FontificationBoundaryAdmission {
 /// nonnil; no Lisp value, interval cursor or proof escapes this query.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[must_use]
-pub(crate) enum FontificationScanAdmission {
+#[doc(hidden)]
+pub enum FontificationScanAdmission {
     UseGeneric,
     Raw(Option<LispCharPos1>),
 }
@@ -3245,7 +3272,8 @@ pub(crate) enum FontificationScanAdmission {
 /// Native fontification point read with the public getter's current-buffer
 /// semantics, but no argument vector or growing char/byte position cache.
 /// No Lisp runs while the borrowed resolver and buffer are live.
-pub(crate) fn fontified_property_at_position_in_state<'a, Vars: EditVariableRead<'a>>(
+#[doc(hidden)]
+pub fn fontified_property_at_position_in_state<'a, Vars: EditVariableRead<'a>>(
     vars: Vars,
     buffers: &BufferManager,
     position: LispCharPos1,
@@ -3287,7 +3315,8 @@ pub(crate) fn fontified_property_at_position_in_state<'a, Vars: EditVariableRead
 /// property builtin, without its char/byte round trip. END remains a fixnum
 /// LIMIT: it may be stale or outside current narrowing, exactly as for the
 /// original next-single-property-change request.
-pub(crate) fn resolved_fontified_property_boundary_in_state<'a, Vars: EditVariableRead<'a>>(
+#[doc(hidden)]
+pub fn resolved_fontified_property_boundary_in_state<'a, Vars: EditVariableRead<'a>>(
     vars: Vars,
     buffers: &BufferManager,
     position: LispCharPos1,
@@ -3313,7 +3342,8 @@ pub(crate) fn resolved_fontified_property_boundary_in_state<'a, Vars: EditVariab
 /// before any clamping; the canonical caller owns unusual validation/errors.
 /// This immutable query runs no Lisp/GC and retains nothing across callbacks.
 #[inline]
-pub(crate) fn first_unfontified_position_in_state<'a, Vars: EditVariableRead<'a>>(
+#[doc(hidden)]
+pub fn first_unfontified_position_in_state<'a, Vars: EditVariableRead<'a>>(
     vars: Vars,
     buffers: &BufferManager,
     position: LispCharPos1,
@@ -3356,7 +3386,8 @@ pub(crate) fn first_unfontified_position_in_state<'a, Vars: EditVariableRead<'a>
 /// resolver to the generic buffer walker instead of taking another snapshot.
 /// No witness is stored, shared or carried across a callback or retry.
 #[inline]
-pub(crate) fn next_fontified_property_boundary_in_state<'a, Vars: EditVariableRead<'a>>(
+#[doc(hidden)]
+pub fn next_fontified_property_boundary_in_state<'a, Vars: EditVariableRead<'a>>(
     vars: Vars,
     buffers: &BufferManager,
     position: LispCharPos1,
@@ -3531,10 +3562,8 @@ where
 /// would land mid-character and trip the Emacs-char-boundary assertion in
 /// `emacs_byte_pos_to_char_pos`.  `byte_pos` must already be a character
 /// boundary (validated points and interval boundaries always are).
-pub(crate) fn emacs_byte_pos_of_preceding_char(
-    buf: &Buffer,
-    byte_pos: EmacsBytePos,
-) -> EmacsBytePos {
+#[doc(hidden)]
+pub fn emacs_byte_pos_of_preceding_char(buf: &Buffer, byte_pos: EmacsBytePos) -> EmacsBytePos {
     if byte_pos <= EmacsBytePos::ZERO {
         return EmacsBytePos::ZERO;
     }
@@ -3556,7 +3585,8 @@ pub(crate) fn builtin_previous_single_property_change<H: EditHost>(
 /// `previous-single-property-change` as registered: fixed arity 4, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a4` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_previous_single_property_change_4<H: EditHost>(
+#[doc(hidden)]
+pub fn builtin_previous_single_property_change_4<H: EditHost>(
     host: &mut H,
     position: Value,
     prop: Value,
@@ -3682,14 +3712,13 @@ pub(crate) fn builtin_previous_single_property_change_in_state<'a, Vars: EditVar
 }
 
 /// (next-property-change POS &optional OBJECT LIMIT)
-pub(crate) fn builtin_next_property_change<H: EditHost>(
-    host: &mut H,
-    args: Vec<Value>,
-) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_next_property_change<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     builtin_next_property_change_in_buffers(&host.edit_and_vars().0.buffers, args)
 }
 
-pub(crate) fn builtin_next_property_change_in_buffers(
+#[doc(hidden)]
+pub fn builtin_next_property_change_in_buffers(
     buffers: &BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -3797,7 +3826,8 @@ pub(crate) fn builtin_next_property_change_in_buffers(
 }
 
 /// (text-property-any BEG END PROP VAL &optional OBJECT)
-pub(crate) fn builtin_text_property_any<H: EditHost>(host: &mut H, args: &[Value]) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_text_property_any<H: EditHost>(host: &mut H, args: &[Value]) -> EvalResult {
     let (edit, vars) = host.edit_and_vars();
     builtin_text_property_any_in_state(vars, &edit.buffers, args)
 }
@@ -3933,7 +3963,8 @@ pub(crate) fn builtin_text_property_not_all<H: EditHost>(
 /// `text-property-not-all` as registered: fixed arity 5, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a5` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_text_property_not_all_5<H: EditHost>(
+#[doc(hidden)]
+pub fn builtin_text_property_not_all_5<H: EditHost>(
     host: &mut H,
     start: Value,
     end: Value,
@@ -4047,7 +4078,8 @@ pub(crate) fn builtin_text_property_not_all_in_state<'a, Vars: EditVariableRead<
     Ok(first.map_or(Value::NIL, |pos| Value::fixnum(pos.to_lisp().as_i64())))
 }
 
-pub(crate) fn builtin_get_char_property_and_overlay_in_state<'a, Vars: EditVariableRead<'a>>(
+#[doc(hidden)]
+pub fn builtin_get_char_property_and_overlay_in_state<'a, Vars: EditVariableRead<'a>>(
     vars: Vars,
     buffers: &BufferManager,
     args: Vec<Value>,
@@ -4060,7 +4092,8 @@ pub(crate) fn builtin_get_char_property_and_overlay_in_state<'a, Vars: EditVaria
     )
 }
 
-pub(crate) fn builtin_get_char_property_and_overlay_with_window_lookup<
+#[doc(hidden)]
+pub fn builtin_get_char_property_and_overlay_with_window_lookup<
     'a,
     Vars: EditVariableRead<'a>,
     F: Fn(WindowId) -> WindowBufferLookup,
@@ -4098,10 +4131,8 @@ pub(crate) fn builtin_get_char_property_and_overlay_with_window_lookup<
 }
 
 /// (get-display-property POS PROP &optional OBJECT PROPERTIES)
-pub(crate) fn builtin_get_display_property<H: EditHost>(
-    host: &mut H,
-    args: Vec<Value>,
-) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_get_display_property<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     let (edit, vars) = host.edit_and_vars();
     builtin_get_display_property_in_state(vars, &edit.buffers, args)
 }
@@ -4210,7 +4241,8 @@ pub(crate) fn builtin_remove_overlays<H: EditHost>(host: &mut H, args: Vec<Value
     Ok(Value::NIL)
 }
 
-pub(crate) fn builtin_get_pos_property_impl<
+#[doc(hidden)]
+pub fn builtin_get_pos_property_impl<
     'a,
     Vars: EditVariableRead<'a>,
     F: Fn(WindowId) -> WindowBufferLookup,
@@ -4642,7 +4674,8 @@ pub(crate) fn builtin_next_single_char_property_change_in_buffers<
     )
 }
 
-pub(crate) fn builtin_next_single_char_property_change_in_buffers_with_symbols<
+#[doc(hidden)]
+pub fn builtin_next_single_char_property_change_in_buffers_with_symbols<
     'a,
     Vars: EditVariableRead<'a>,
     F: Fn(WindowId) -> WindowBufferLookup,
@@ -4743,7 +4776,8 @@ pub(crate) fn builtin_previous_single_char_property_change_in_buffers<
     )
 }
 
-pub(crate) fn builtin_previous_single_char_property_change_in_buffers_with_symbols<
+#[doc(hidden)]
+pub fn builtin_previous_single_char_property_change_in_buffers_with_symbols<
     'a,
     Vars: EditVariableRead<'a>,
     F: Fn(WindowId) -> WindowBufferLookup,

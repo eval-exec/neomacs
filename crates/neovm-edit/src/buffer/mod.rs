@@ -1,14 +1,20 @@
 // The public `buffer::buffer` path is established across the evaluator.
 #[allow(clippy::module_inception)]
 pub mod buffer;
-pub(crate) mod buffer_text;
-pub(crate) mod composition;
+#[doc(hidden)]
+pub mod buffer_text;
+#[doc(hidden)]
+pub mod composition;
 mod edit_runtime;
 mod edit_transaction;
-pub(crate) mod storage_string;
-pub(crate) mod syntax_cache;
-pub(crate) mod syntax_class;
-pub(crate) use edit_transaction::{CasifyExpansion, CasifyStorageShape};
+#[doc(hidden)]
+pub mod storage_string;
+#[doc(hidden)]
+pub mod syntax_cache;
+#[doc(hidden)]
+pub mod syntax_class;
+#[doc(hidden)]
+pub use edit_transaction::{CasifyExpansion, CasifyStorageShape};
 pub(crate) mod gap_buffer;
 mod marker_data;
 pub mod overlay;
@@ -33,7 +39,8 @@ pub(crate) use buffer_text::BufferText;
 pub use buffer_text::{BufferSourceAuthority, BufferSourceReadLease};
 pub use edit_runtime::EditRuntime;
 pub use edit_transaction::TranspositionAnchorPolicy;
-pub(crate) use edit_transaction::{PreparedBufferEdit, TextMeasurement};
+#[doc(hidden)]
+pub use edit_transaction::{PreparedBufferEdit, TextMeasurement};
 pub use overlay::{Overlay, OverlayList};
 pub(crate) use position::BufferLispPos;
 pub use position::{

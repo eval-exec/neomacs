@@ -7,7 +7,8 @@
 /// Buffer encoding determines whether integer characters 128..255 denote
 /// Latin-1 or raw bytes. This call-local projection contains no shared state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CaseEncoding {
+#[doc(hidden)]
+pub enum CaseEncoding {
     Unibyte,
     Multibyte,
 }

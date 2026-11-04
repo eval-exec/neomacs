@@ -118,7 +118,8 @@ impl VisitedFileModtime {
     /// one half is as unknown as one that carries neither.  GNU's negative
     /// `tv_nsec` sentinels ride along in the nanoseconds half, exactly as they
     /// do in `struct timespec`.
-    pub(crate) fn from_dump_halves(sec: Option<i64>, nsec: Option<i32>) -> Self {
+    #[doc(hidden)]
+    pub fn from_dump_halves(sec: Option<i64>, nsec: Option<i32>) -> Self {
         match sec.zip(nsec) {
             Some((0, NONEXISTENT_MODTIME_NSECS)) => Self::Nonexistent,
             Some((0, UNKNOWN_MODTIME_NSECS)) => Self::Unknown,
@@ -128,7 +129,8 @@ impl VisitedFileModtime {
     }
 
     /// The two optional halves the pdump image format stores.
-    pub(crate) fn to_dump_halves(self) -> (Option<i64>, Option<i32>) {
+    #[doc(hidden)]
+    pub fn to_dump_halves(self) -> (Option<i64>, Option<i32>) {
         match self {
             Self::Unknown => (None, None),
             Self::Nonexistent => (Some(0), Some(NONEXISTENT_MODTIME_NSECS)),

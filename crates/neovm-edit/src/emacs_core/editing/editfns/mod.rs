@@ -25,7 +25,8 @@ use std::ffi::CStr;
 use strum::IntoStaticStr;
 
 mod text_edit;
-pub(crate) use text_edit::{DeletedText, PendingTextEdit, RemeasureRule, delete_text_range};
+#[doc(hidden)]
+pub use text_edit::{DeletedText, PendingTextEdit, RemeasureRule, delete_text_range};
 
 // ---------------------------------------------------------------------------
 // Argument helpers
@@ -54,8 +55,9 @@ macro_rules! editfns_cached_symbol {
     };
 }
 editfns_cached_symbol!(inhibit_read_only_symbol, "inhibit-read-only");
+#[doc(hidden)]
 editfns_cached_symbol!(
-    pub(crate)
+    pub
     inhibit_modification_hooks_symbol,
     "inhibit-modification-hooks"
 );
@@ -100,7 +102,8 @@ const _: () = {
 /// GNU `Fbarf_if_buffer_read_only`'s test. Inlined so a writable buffer
 /// (the common one) costs its callers one slot test and no variable view.
 #[inline(always)]
-pub(crate) fn buffer_read_only_active_in_state<'a, Vars: EditVariableRead<'a>>(
+#[doc(hidden)]
+pub fn buffer_read_only_active_in_state<'a, Vars: EditVariableRead<'a>>(
     vars: Vars,
     dynamic: &[OrderedRuntimeBindingMap],
     buf: &Buffer,
@@ -130,7 +133,8 @@ fn inhibit_read_only_in_state<'a, Vars: EditVariableRead<'a>>(vars: Vars, buf: &
     vars.value_or_nil(iro).is_truthy()
 }
 
-pub(crate) fn ensure_current_buffer_writable_in_state<'a, Vars: EditVariableRead<'a>>(
+#[doc(hidden)]
+pub fn ensure_current_buffer_writable_in_state<'a, Vars: EditVariableRead<'a>>(
     vars: Vars,
     dynamic: &[OrderedRuntimeBindingMap],
     buffers: &BufferManager,
@@ -146,7 +150,8 @@ pub(crate) fn ensure_current_buffer_writable_in_state<'a, Vars: EditVariableRead
     Ok(())
 }
 
-pub(crate) fn buffer_edit_range_for_byte_range_in_manager(
+#[doc(hidden)]
+pub fn buffer_edit_range_for_byte_range_in_manager(
     buffers: &BufferManager,
     buffer_id: crate::buffer::BufferId,
     byte_range: EmacsByteRange,
@@ -156,7 +161,8 @@ pub(crate) fn buffer_edit_range_for_byte_range_in_manager(
         .ok_or_else(|| signal("error", vec![Value::string("Selecting deleted buffer")]))
 }
 
-pub(crate) fn lisp_string_text_extent(text: &LispString) -> TextExtent {
+#[doc(hidden)]
+pub fn lisp_string_text_extent(text: &LispString) -> TextExtent {
     TextExtent::new(
         CharLen::new(text.schars()),
         EmacsByteLen::new(text.sbytes()),
@@ -169,7 +175,8 @@ pub(crate) fn lisp_string_text_extent(text: &LispString) -> TextExtent {
 // through the buffer substrate here; `fns` keeps `pub(crate) use`
 // re-exports for its own subr wrappers. The replace member runs the
 // modification callbacks, so it takes the host.
-pub(crate) fn normalize_current_buffer_region_bounds_in_manager(
+#[doc(hidden)]
+pub fn normalize_current_buffer_region_bounds_in_manager(
     buffers: &BufferManager,
     start_arg: &Value,
     end_arg: &Value,
@@ -187,7 +194,8 @@ pub(crate) fn normalize_current_buffer_region_bounds_in_manager(
     Ok((buffer_id, region.accessible_byte_range(buf)?))
 }
 
-pub(crate) fn read_buffer_region_bytes_in_manager(
+#[doc(hidden)]
+pub fn read_buffer_region_bytes_in_manager(
     buffers: &BufferManager,
     buffer_id: crate::buffer::BufferId,
     byte_range: EmacsByteRange,
@@ -198,9 +206,8 @@ pub(crate) fn read_buffer_region_bytes_in_manager(
     Ok(buf.buffer_substring_bytes_range(byte_range))
 }
 
-pub(crate) fn replace_buffer_emacs_byte_range_lisp_string<
-    H: crate::emacs_core::edit_host::EditHost,
->(
+#[doc(hidden)]
+pub fn replace_buffer_emacs_byte_range_lisp_string<H: crate::emacs_core::edit_host::EditHost>(
     host: &mut H,
     buffer_id: crate::buffer::BufferId,
     byte_range: EmacsByteRange,
@@ -243,7 +250,8 @@ pub(crate) fn text_change_for_replacement_in_manager(
     Ok(TextChange::new(old_range, new_extent))
 }
 
-pub(crate) fn text_change_for_empty_insertion_at_emacs_byte_pos(
+#[doc(hidden)]
+pub fn text_change_for_empty_insertion_at_emacs_byte_pos(
     buffers: &BufferManager,
     buffer_id: crate::buffer::BufferId,
     byte_pos: EmacsBytePos,
@@ -257,7 +265,8 @@ pub(crate) fn text_change_for_empty_insertion_at_emacs_byte_pos(
     )
 }
 
-pub(crate) fn text_change_for_lisp_string_replacement_in_manager(
+#[doc(hidden)]
+pub fn text_change_for_lisp_string_replacement_in_manager(
     buffers: &BufferManager,
     buffer_id: crate::buffer::BufferId,
     byte_range: EmacsByteRange,
@@ -271,7 +280,8 @@ pub(crate) fn text_change_for_lisp_string_replacement_in_manager(
     )
 }
 
-pub(crate) fn text_change_for_deletion_in_manager(
+#[doc(hidden)]
+pub fn text_change_for_deletion_in_manager(
     buffers: &BufferManager,
     buffer_id: crate::buffer::BufferId,
     byte_range: EmacsByteRange,
@@ -280,7 +290,8 @@ pub(crate) fn text_change_for_deletion_in_manager(
     Ok(TextChange::deletion(old_range))
 }
 
-pub(crate) fn text_change_for_unchanged_extent_in_manager(
+#[doc(hidden)]
+pub fn text_change_for_unchanged_extent_in_manager(
     buffers: &BufferManager,
     buffer_id: crate::buffer::BufferId,
     byte_range: EmacsByteRange,
@@ -764,7 +775,8 @@ fn run_before_change_hooks<H: crate::emacs_core::edit_host::EditHost>(
 
 /// Run the before-change protocol for an edit whose range the caller will
 /// not re-measure: an insertion, or a change whose callbacks cannot move it.
-pub(crate) fn signal_before_text_change<H: crate::emacs_core::edit_host::EditHost>(
+#[doc(hidden)]
+pub fn signal_before_text_change<H: crate::emacs_core::edit_host::EditHost>(
     host: &mut H,
     change: TextChange,
 ) -> Result<(), Flow> {
@@ -1081,7 +1093,8 @@ fn signal_after_change_with_kind<H: crate::emacs_core::edit_host::EditHost>(
         .map(|_| ())
 }
 
-pub(crate) fn signal_after_text_change<H: crate::emacs_core::edit_host::EditHost>(
+#[doc(hidden)]
+pub fn signal_after_text_change<H: crate::emacs_core::edit_host::EditHost>(
     host: &mut H,
     change: TextChange,
 ) -> Result<(), Flow> {
@@ -1097,7 +1110,8 @@ pub(crate) fn signal_after_text_change<H: crate::emacs_core::edit_host::EditHost
 /// for callers whose positions were computed before Lisp ran: the inserted
 /// range is measured in the live text (clamped to its end), so a stale
 /// position can neither reach past the text nor split a character.
-pub(crate) fn signal_after_change_chars<H: crate::emacs_core::edit_host::EditHost>(
+#[doc(hidden)]
+pub fn signal_after_change_chars<H: crate::emacs_core::edit_host::EditHost>(
     host: &mut H,
     start: crate::buffer::CharPos0,
     deleted: CharLen,
@@ -1147,9 +1161,8 @@ pub(crate) fn signal_after_property_change<H: crate::emacs_core::edit_host::Edit
 /// like, at the `insert` door: carry the `Value`, root it, and take the borrow
 /// past the safepoint (`PendingInsert` in `emacs_core/editing/buffer/mod.rs`). Anything
 /// added here that wants to pass a heap borrow must do that instead.
-pub(crate) fn insert_lisp_string_with_change_hooks_in_buffer<
-    H: crate::emacs_core::edit_host::EditHost,
->(
+#[doc(hidden)]
+pub fn insert_lisp_string_with_change_hooks_in_buffer<H: crate::emacs_core::edit_host::EditHost>(
     host: &mut H,
     buffer_id: crate::buffer::BufferId,
     text: &LispString,
@@ -1320,7 +1333,8 @@ fn buffer_has_overlays<H: crate::emacs_core::edit_host::EditHost>(
 /// GNU `Fcombine_after_change_execute` (insdel.c:2475). Merges the deferred
 /// per-change records into a single (begpos, lendel, lenins) triple and
 /// dispatches one `signal_after_change` call.
-pub(crate) fn execute_combined_after_change<H: crate::emacs_core::edit_host::EditHost>(
+#[doc(hidden)]
+pub fn execute_combined_after_change<H: crate::emacs_core::edit_host::EditHost>(
     host: &mut H,
 ) -> Result<(), Flow> {
     if host.edit_and_vars().0.combine_after_change_list.is_empty() {
@@ -1616,7 +1630,8 @@ fn call_overlay_hook_list<H: crate::emacs_core::edit_host::EditHost>(
     result
 }
 
-fn expect_integer_or_marker_in_buffers(
+#[doc(hidden)]
+pub fn expect_integer_or_marker_in_buffers(
     buffers: &BufferManager,
     value: &Value,
 ) -> Result<LispCharPos1, Flow> {
@@ -1625,7 +1640,8 @@ fn expect_integer_or_marker_in_buffers(
     ))
 }
 
-pub(crate) fn current_buffer_accessible_char_region_in_buffers(
+#[doc(hidden)]
+pub fn current_buffer_accessible_char_region_in_buffers(
     buffers: &BufferManager,
     start_arg: &Value,
     end_arg: &Value,
@@ -1771,7 +1787,8 @@ pub(crate) fn collect_insert_text(_name: &str, args: &[Value]) -> Result<Vec<u8>
 }
 
 /// `(delete-char N &optional KILLFLAG)` — delete N characters forward.
-pub(crate) fn builtin_delete_char<H: crate::emacs_core::edit_host::EditHost>(
+#[doc(hidden)]
+pub fn builtin_delete_char<H: crate::emacs_core::edit_host::EditHost>(
     host: &mut H,
     args: &[Value],
 ) -> EvalResult {
@@ -1857,7 +1874,8 @@ pub(crate) fn builtin_delete_char<H: crate::emacs_core::edit_host::EditHost>(
 }
 
 /// `(delete-region START END)` — delete text in the accessible current buffer.
-pub(crate) fn builtin_delete_region<H: crate::emacs_core::edit_host::EditHost>(
+#[doc(hidden)]
+pub fn builtin_delete_region<H: crate::emacs_core::edit_host::EditHost>(
     host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -1868,7 +1886,8 @@ pub(crate) fn builtin_delete_region<H: crate::emacs_core::edit_host::EditHost>(
 /// `delete-region` as registered: fixed arity 2, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a2` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_delete_region_2<H: crate::emacs_core::edit_host::EditHost>(
+#[doc(hidden)]
+pub fn builtin_delete_region_2<H: crate::emacs_core::edit_host::EditHost>(
     host: &mut H,
     start: Value,
     end: Value,
@@ -1926,7 +1945,8 @@ pub(crate) fn builtin_delete_region_2<H: crate::emacs_core::edit_host::EditHost>
 }
 
 /// `(delete-and-extract-region START END)` — delete text and return it.
-pub(crate) fn builtin_delete_and_extract_region<H: crate::emacs_core::edit_host::EditHost>(
+#[doc(hidden)]
+pub fn builtin_delete_and_extract_region<H: crate::emacs_core::edit_host::EditHost>(
     host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -1985,7 +2005,8 @@ pub(crate) fn builtin_delete_and_extract_region<H: crate::emacs_core::edit_host:
 }
 
 /// `(erase-buffer)` — delete all text and remove any narrowing restriction.
-pub(crate) fn builtin_erase_buffer<H: crate::emacs_core::edit_host::EditHost>(
+#[doc(hidden)]
+pub fn builtin_erase_buffer<H: crate::emacs_core::edit_host::EditHost>(
     host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -2056,7 +2077,8 @@ pub(crate) fn erase_buffer_impl<'a, Vars: EditVariableRead<'a>>(
 
 /// `(buffer-substring-no-properties START END)` — same as buffer-substring
 /// (text properties not yet implemented at the Lisp value level).
-pub(crate) fn builtin_buffer_substring_no_properties<H: crate::emacs_core::edit_host::EditHost>(
+#[doc(hidden)]
+pub fn builtin_buffer_substring_no_properties<H: crate::emacs_core::edit_host::EditHost>(
     host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -2099,7 +2121,8 @@ pub(crate) fn builtin_following_char<H: crate::emacs_core::edit_host::EditHost>(
     following_char_value(&host.edit_and_vars().0.buffers)
 }
 
-pub(crate) fn builtin_following_char_0<H: crate::emacs_core::edit_host::EditHost>(
+#[doc(hidden)]
+pub fn builtin_following_char_0<H: crate::emacs_core::edit_host::EditHost>(
     host: &mut H,
 ) -> EvalResult {
     following_char_value(&host.edit_and_vars().0.buffers)
@@ -2123,7 +2146,8 @@ fn following_char_value(buffers: &BufferManager) -> EvalResult {
 }
 
 /// `(preceding-char)` — return character before point (0 if at beginning).
-pub(crate) fn builtin_preceding_char<H: crate::emacs_core::edit_host::EditHost>(
+#[doc(hidden)]
+pub fn builtin_preceding_char<H: crate::emacs_core::edit_host::EditHost>(
     host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -2155,7 +2179,8 @@ pub(crate) fn builtin_preceding_char<H: crate::emacs_core::edit_host::EditHost>(
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 
 /// `(group-name GID)` — return the group name for numeric GID.
-pub(crate) fn builtin_group_name(args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_group_name(args: Vec<Value>) -> EvalResult {
     expect_args("group-name", &args, 1)?;
     let gid = match args[0].kind() {
         ValueKind::Fixnum(n) => n,
@@ -2185,7 +2210,8 @@ pub(crate) fn builtin_group_name(args: Vec<Value>) -> EvalResult {
 ///
 /// With USE-FLOATS non-nil, returns 3 floats.
 /// With USE-FLOATS nil/omitted, returns 3 integers scaled by 100.
-pub(crate) fn builtin_load_average(args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_load_average(args: Vec<Value>) -> EvalResult {
     expect_max_args("load-average", &args, 1)?;
     let use_floats = args.first().is_some_and(|value| value.is_truthy());
     let loads = read_load_average().unwrap_or([0.0, 0.0, 0.0]);
@@ -2206,7 +2232,8 @@ pub(crate) fn builtin_load_average(args: Vec<Value>) -> EvalResult {
 
 /// `(logcount INTEGER)` — return the number of 1 bits for nonnegative integers,
 /// or the number of 0 bits in two's-complement form for negative integers.
-pub(crate) fn builtin_logcount(args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_logcount(args: Vec<Value>) -> EvalResult {
     expect_args("logcount", &args, 1)?;
     match args[0].kind() {
         ValueKind::Veclike(VecLikeType::Bignum) => {
@@ -2395,7 +2422,8 @@ fn encode_translation_to(to: &Value, multibyte: bool) -> Vec<u8> {
 /// char→string/vector mappings matches GNU. The multi-character
 /// `(([FROM-CHAR ...] . TO) ...)` form is currently treated as identity
 /// (no lookahead) — this is a known pragmatic deviation, marked TODO.
-pub(crate) fn builtin_translate_region_internal<H: crate::emacs_core::edit_host::EditHost>(
+#[doc(hidden)]
+pub fn builtin_translate_region_internal<H: crate::emacs_core::edit_host::EditHost>(
     host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {

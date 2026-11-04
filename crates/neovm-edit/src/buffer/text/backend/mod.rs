@@ -9,7 +9,8 @@ mod treap;
 
 use std::fmt;
 
-use super::ImplementedBufferTextBackendKind;
+#[doc(hidden)]
+pub use super::ImplementedBufferTextBackendKind;
 use crate::buffer::position::{
     CharPos0, EmacsBytePos, EmacsByteRange, TextPositionAnchor, TextPositionHint,
     TextPositionLookup,
@@ -237,7 +238,8 @@ impl TextBackend {
         dispatch_backend_ref!(self, storage => PhysicalTextBackend::for_each_emacs_byte_range_chunk(storage, range, f))
     }
 
-    pub(in crate::buffer) fn has_contiguous_emacs_byte_range(&self, range: EmacsByteRange) -> bool {
+    #[doc(hidden)]
+    pub fn has_contiguous_emacs_byte_range(&self, range: EmacsByteRange) -> bool {
         dispatch_backend_ref!(self, storage => PhysicalTextBackend::has_contiguous_emacs_byte_range(storage, range))
     }
 
@@ -246,10 +248,8 @@ impl TextBackend {
     /// moves its gap out of the range (GNU `move_gap`); chunked backends
     /// (piece tree, rope) cannot and just report their existing
     /// contiguity.  Content and logical positions are unaffected.
-    pub(in crate::buffer) fn try_make_emacs_byte_range_contiguous(
-        &mut self,
-        range: EmacsByteRange,
-    ) -> bool {
+    #[doc(hidden)]
+    pub fn try_make_emacs_byte_range_contiguous(&mut self, range: EmacsByteRange) -> bool {
         match self {
             TextBackend::Gap(gap) => {
                 gap.make_emacs_byte_range_contiguous(range);
@@ -270,7 +270,8 @@ impl TextBackend {
         }
     }
 
-    pub(in crate::buffer) fn with_contiguous_emacs_byte_range<R>(
+    #[doc(hidden)]
+    pub fn with_contiguous_emacs_byte_range<R>(
         &self,
         range: EmacsByteRange,
         f: impl FnOnce(&[u8]) -> R,
@@ -311,7 +312,8 @@ impl TextBackend {
         dispatch_backend_ref!(self, storage => PhysicalTextBackend::dump_text(storage))
     }
 
-    pub(in crate::buffer) fn snapshot(&self) -> BufferTextBytesSnapshot {
+    #[doc(hidden)]
+    pub fn snapshot(&self) -> BufferTextBytesSnapshot {
         BufferTextBytesSnapshot::new(self.dump_text(), self.is_multibyte())
     }
 }

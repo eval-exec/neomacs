@@ -962,7 +962,7 @@ impl crate::emacs_core::eval::Context {
     ) -> Option<BufferLayoutInputState<Fontification>> {
         let buffer = self.edit.buffers.get(buffer_id)?;
         Some(BufferLayoutInputState {
-            id: buffer.id,
+            id: buffer.id(),
             modified_tick: buffer.modified_tick(),
             chars_modified_tick: buffer.chars_modified_tick(),
             props_modified_tick: buffer.props_modified_tick(),

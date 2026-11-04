@@ -224,7 +224,7 @@ fn run_propertize(
         vec![Value::fixnum(zv.min(charpos + 1))],
     )?;
     let buf = current_buffer_or_error(eval)?;
-    if buf.id != buffer_id {
+    if buf.id() != buffer_id {
         // GNU would go on scanning whatever buffer is now current, at
         // positions of the old one; stop instead.
         return Err(signal(
@@ -289,7 +289,7 @@ pub(super) fn parse_partial_sexp_propertizing(
     let (buffer_id, from_char, to_char) = {
         let buf = current_buffer_or_error(eval)?;
         let (from_char, to_char) = clamped_parse_range(buf, from, to);
-        (buf.id, from_char, to_char)
+        (buf.id(), from_char, to_char)
     };
     // GNU `SETUP_SYNTAX_TABLE (from, 1)`.
     propertize_if_due(eval, buffer_id, from)?;

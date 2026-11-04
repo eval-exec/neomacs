@@ -4468,7 +4468,7 @@ pub(crate) fn builtin_verify_visited_file_modtime(
     // GNU fileio.c:6149-6153: `timespec_cmp (mtime, b->modtime) == 0
     // && (b->modtime_size < 0 || st.st_size == b->modtime_size)`.  An
     // unrecorded size means "do not check the size", not "the size is -1".
-    let size_matches = match (buf.modtime_size, disk_size) {
+    let size_matches = match (buf.modtime_size(), disk_size) {
         (None, _) => true,
         (Some(recorded_size), Some(size)) => recorded_size == size,
         (Some(_), None) => false,
@@ -4520,7 +4520,7 @@ pub(crate) fn builtin_set_visited_file_modtime(eval: &mut Context, args: Vec<Val
         buf.set_visited_file_modtime(modtime);
         // GNU: `current_buffer->modtime_size = -1;` — an explicitly given time
         // says nothing about the file's size.
-        buf.modtime_size = None;
+        buf.set_modtime_size(None);
         return Ok(Value::NIL);
     }
 
@@ -4532,7 +4532,7 @@ pub(crate) fn builtin_set_visited_file_modtime(eval: &mut Context, args: Vec<Val
         .edit
         .buffers
         .current_buffer()
-        .is_some_and(|buf| buf.base_buffer.is_some());
+        .is_some_and(|buf| buf.base_buffer().is_some());
     if current_buffer_is_indirect {
         return Err(signal(
             "error",
@@ -4587,7 +4587,7 @@ pub(crate) fn builtin_set_visited_file_modtime(eval: &mut Context, args: Vec<Val
                 sec: timestamp.seconds(),
                 nsec: timestamp.nanoseconds() as i32,
             });
-            buf.modtime_size = Some(meta.len() as i64);
+            buf.set_modtime_size(Some(meta.len() as i64));
         }
     }
     Ok(Value::NIL)
@@ -6778,7 +6778,7 @@ pub(crate) fn builtin_insert_file_contents(
             .buffers
             .get(current_id)
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-        if visit && buf.base_buffer.is_some() {
+        if visit && buf.base_buffer().is_some() {
             return Err(signal(
                 "error",
                 vec![Value::string(
@@ -6881,7 +6881,7 @@ pub(crate) fn builtin_insert_file_contents(
                 // records `(t . -1)'.
                 if let Some(buf) = eval.edit.buffers.get_mut(current_id) {
                     buf.set_visited_file_modtime(VisitedFileModtime::from_open_error(&err));
-                    buf.modtime_size = None;
+                    buf.set_modtime_size(None);
                 }
                 if empty_undo_list_p {
                     let _ = eval
@@ -7036,7 +7036,7 @@ pub(crate) fn builtin_insert_file_contents(
                     sec: timestamp.seconds(),
                     nsec: timestamp.nanoseconds() as i32,
                 });
-                buf.modtime_size = Some(meta.len() as i64);
+                buf.set_modtime_size(Some(meta.len() as i64));
             }
         }
         if empty_undo_list_p {
@@ -7651,7 +7651,7 @@ fn write_region_without_handler(
             .buffers
             .get(current_id)
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-        if buf.base_buffer.is_some() {
+        if buf.base_buffer().is_some() {
             return Err(signal(
                 "error",
                 vec![Value::string(
@@ -7816,7 +7816,7 @@ fn write_region_without_handler(
             && let Some(buf) = eval.edit.buffers.get_mut(current_id)
         {
             buf.set_visited_file_modtime(VisitedFileModtime::Known { sec, nsec });
-            buf.modtime_size = Some(size);
+            buf.set_modtime_size(Some(size));
         }
     }
 
@@ -8145,7 +8145,7 @@ pub(crate) fn builtin_do_auto_save(
             }
 
             // Skip indirect buffers
-            if buf.base_buffer.is_some() {
+            if buf.base_buffer().is_some() {
                 continue;
             }
 
@@ -8160,7 +8160,7 @@ pub(crate) fn builtin_do_auto_save(
 
             // Buffer must be modified since last auto-save
             // (modified_tick > autosave_modified_tick means unsaved changes)
-            if buf.autosave_modified_tick >= buf.modified_tick() {
+            if buf.autosave_modified_tick() >= buf.modified_tick() {
                 continue;
             }
 

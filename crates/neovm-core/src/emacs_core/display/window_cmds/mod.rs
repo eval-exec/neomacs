@@ -1548,7 +1548,7 @@ fn ensure_selected_frame_id_in_state_with_policy(
 
     let buf_id = buffers
         .current_buffer()
-        .map(|b| b.id)
+        .map(|b| b.id())
         .unwrap_or_else(|| buffers.create_buffer("*scratch*"));
     // GNU batch startup exposes an 80x24 text window plus a 1-line minibuffer.
     // Keep the synthetic startup frame in character-cell units so the GNU
@@ -5062,7 +5062,7 @@ fn note_selected_window_buffer_in_state(
         return;
     };
     if let Some(buffer) = buffers.get_mut(buffer_id) {
-        buffer.last_selected_window = Some(selected_wid);
+        buffer.set_last_selected_window(Some(selected_wid));
     }
 }
 
@@ -5451,7 +5451,7 @@ pub(crate) fn builtin_set_window_buffer(
                 ));
             }
             if let Some(buffer) = buffers.get_mut(old_buffer_id) {
-                buffer.last_window_start = old_window_start.max(LispCharPos1::ONE);
+                buffer.set_last_window_start(old_window_start.max(LispCharPos1::ONE));
             }
             let selected_buffer_id = frames
                 .get(selected_fid)
@@ -5459,7 +5459,7 @@ pub(crate) fn builtin_set_window_buffer(
                 .and_then(Window::buffer_id);
             let old_buffer_last_selected_window = buffers
                 .get(old_buffer_id)
-                .and_then(|buffer| buffer.last_selected_window);
+                .and_then(|buffer| buffer.last_selected_window());
             let preserve_old_buffer_point = selected_buffer_id == Some(old_buffer_id)
                 || old_buffer_last_selected_window.is_some_and(|last_selected_window| {
                     last_selected_window != wid
@@ -5475,9 +5475,9 @@ pub(crate) fn builtin_set_window_buffer(
             }
             if old_buffer_id != buf_id
                 && let Some(buffer) = buffers.get_mut(old_buffer_id)
-                && buffer.last_selected_window == Some(wid)
+                && buffer.last_selected_window() == Some(wid)
             {
-                buffer.last_selected_window = None;
+                buffer.set_last_selected_window(None);
             }
             if old_buffer_id != buf_id {
                 run_buffer_list_hook = record_window_buffer_change_history_in_state(
@@ -5592,7 +5592,7 @@ pub(crate) fn builtin_set_window_buffer(
                 .get(buf_id)
                 .map(|buf| {
                     (
-                        buf.last_window_start.max(LispCharPos1::ONE),
+                        buf.last_window_start().max(LispCharPos1::ONE),
                         lisp_char_pos_from_one_based_usize(
                             buf.point_char_pos().get().saturating_add(1).max(1),
                         ),
@@ -5636,7 +5636,7 @@ pub(crate) fn builtin_set_window_buffer(
         if selected_window == Some(wid)
             && let Some(buffer) = buffers.get_mut(buf_id)
         {
-            buffer.last_selected_window = Some(wid);
+            buffer.set_last_selected_window(Some(wid));
         }
     }
     display_effect.apply(eval);
@@ -6955,7 +6955,7 @@ pub(crate) fn make_frame_plain_on_terminal(
             height = height.max(1);
             let buf_id = buffers
                 .current_buffer()
-                .map(|b| b.id)
+                .map(|b| b.id())
                 .unwrap_or(BufferId(0));
             let fid =
                 frames.create_frame_value_on_terminal(name, terminal_id, width, height, buf_id);
@@ -7055,7 +7055,7 @@ pub(crate) fn make_frame_plain_on_terminal(
     }
     let buf_id = buffers
         .current_buffer()
-        .map(|b| b.id)
+        .map(|b| b.id())
         .unwrap_or(BufferId(0));
     let fid = frames.create_frame_value_on_terminal(name, terminal_id, width, height, buf_id);
     if let Some(frame) = frames.get_mut(fid) {
@@ -7582,7 +7582,7 @@ pub(crate) fn x_create_frame_impl(
         .unwrap_or_else(|| Value::heap_string(host_title.clone()));
     let current_buffer_id = buffers
         .current_buffer()
-        .map(|buffer| buffer.id)
+        .map(|buffer| buffer.id())
         .unwrap_or_else(|| buffers.create_buffer("*scratch*"));
     let child_minibuffer = parent_id
         .map(|parent_id| resolve_child_shared_minibuffer(frames, parent_id, parsed.minibuffer))

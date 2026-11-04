@@ -362,7 +362,8 @@ struct BufferTextStorage {
 /// `syntax_prop_tick` are the key the syntax run memos already trust for the
 /// text and its syntax-relevant properties.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct SyntaxSafeKey {
+#[doc(hidden)]
+pub struct SyntaxSafeKey {
     pub(crate) content_epoch: u64,
     pub(crate) syntax_prop_tick: u64,
     pub(crate) begv: usize,
@@ -379,7 +380,8 @@ pub(crate) struct SyntaxSafeKey {
 /// so `back_comment`'s lossage re-parse can start at the nearest one instead
 /// of at BEGV. Recorded and consumed only in `syntax::back_comment_reparse`.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct SyntaxSafePositions {
+#[doc(hidden)]
+pub struct SyntaxSafePositions {
     pub(crate) key: Option<SyntaxSafeKey>,
     pub(crate) points: Vec<usize>,
 }
@@ -1083,7 +1085,8 @@ impl BufferText {
         .is_ok()
     }
 
-    pub(crate) fn has_contiguous_emacs_byte_range(&self, range: EmacsByteRange) -> bool {
+    #[doc(hidden)]
+    pub fn has_contiguous_emacs_byte_range(&self, range: EmacsByteRange) -> bool {
         self.storage
             .borrow()
             .backend
@@ -1095,7 +1098,8 @@ impl BufferText {
     /// unchanged; only the gap backend's physical gap placement moves
     /// (like GNU `move_gap`, which runs freely during "read-only"
     /// searches).
-    pub(crate) fn try_make_emacs_byte_range_contiguous(&self, range: EmacsByteRange) -> bool {
+    #[doc(hidden)]
+    pub fn try_make_emacs_byte_range_contiguous(&self, range: EmacsByteRange) -> bool {
         let mut storage = self.storage.borrow_mut();
         // Already one piece (or a chunked backend, which never moves
         // anything): no mutation, so a shared snapshot is not copied.
@@ -1107,7 +1111,8 @@ impl BufferText {
         backend_mut(&mut storage.backend).try_make_emacs_byte_range_contiguous(range)
     }
 
-    pub(crate) fn with_contiguous_emacs_byte_range<R>(
+    #[doc(hidden)]
+    pub fn with_contiguous_emacs_byte_range<R>(
         &self,
         range: EmacsByteRange,
         f: impl FnOnce(&[u8]) -> R,
@@ -1174,7 +1179,8 @@ impl BufferText {
     ///
     /// Stops early at `limit`, reporting the count reached; the caller decides
     /// what a short move means.
-    pub(crate) fn nth_newline_emacs_byte(
+    #[doc(hidden)]
+    pub fn nth_newline_emacs_byte(
         &self,
         from: EmacsBytePos,
         limit: EmacsBytePos,
@@ -1228,7 +1234,8 @@ impl BufferText {
     /// Uses a backward galloping window so the work is O(distance back to the
     /// newline), not O(from) -- the in-place analog of GNU `find_newline`
     /// scanning backward with `memrchr`.  Each window is bulk-scanned.
-    pub(crate) fn prev_newline_emacs_byte(
+    #[doc(hidden)]
+    pub fn prev_newline_emacs_byte(
         &self,
         from: EmacsBytePos,
         floor: EmacsBytePos,
@@ -1268,11 +1275,8 @@ impl BufferText {
     /// Number of `\n` in the logical emacs-byte range `[from, limit)`, counted
     /// over the backend's contiguous chunks with no copy (or taken from the
     /// text line index).
-    pub(crate) fn count_newlines_emacs_byte(
-        &self,
-        from: EmacsBytePos,
-        limit: EmacsBytePos,
-    ) -> usize {
+    #[doc(hidden)]
+    pub fn count_newlines_emacs_byte(&self, from: EmacsBytePos, limit: EmacsBytePos) -> usize {
         self.count_line_ends_emacs_byte(from, limit, LineEnd::Newline)
     }
 
@@ -1450,7 +1454,8 @@ impl BufferText {
         ))
     }
 
-    pub(crate) fn from_snapshot_with_backend_kind(
+    #[doc(hidden)]
+    pub fn from_snapshot_with_backend_kind(
         snapshot: BufferTextBytesSnapshot,
         kind: ImplementedBufferTextBackendKind,
     ) -> Self {
@@ -1666,7 +1671,8 @@ impl BufferText {
 
     /// The identity of this storage's syntax parse cache (stage-3 C7).
     #[inline]
-    pub(crate) fn syntax_cache_id(&self) -> super::syntax_cache::SyntaxCacheId {
+    #[doc(hidden)]
+    pub fn syntax_cache_id(&self) -> super::syntax_cache::SyntaxCacheId {
         self.storage.borrow().syntax_cache.id()
     }
 
@@ -1675,7 +1681,8 @@ impl BufferText {
     /// The text layer keys its recorded runs by [`Self::syntax_cache_id`] and
     /// applies this invalidation before answering from them; the substrate
     /// never names a syntax type.
-    pub(crate) fn take_syntax_invalidation(&self) -> Invalidation {
+    #[doc(hidden)]
+    pub fn take_syntax_invalidation(&self) -> Invalidation {
         let storage = self.storage.borrow();
         storage
             .syntax_cache
@@ -1684,18 +1691,21 @@ impl BufferText {
 
     /// The content epoch and the text-property table's syntax tick: the
     /// text-side half of a [`SyntaxSafeKey`].
-    pub(crate) fn syntax_content_key(&self) -> (u64, u64) {
+    #[doc(hidden)]
+    pub fn syntax_content_key(&self) -> (u64, u64) {
         let storage = self.storage.borrow();
         (storage.content_epoch, storage.text_props.syntax_prop_tick())
     }
 
     /// Move the safe-position index out (no borrow is held while the caller
     /// parses); hand it back with [`Self::put_syntax_safe_positions`].
-    pub(crate) fn take_syntax_safe_positions(&self) -> SyntaxSafePositions {
+    #[doc(hidden)]
+    pub fn take_syntax_safe_positions(&self) -> SyntaxSafePositions {
         std::mem::take(&mut *self.storage.borrow().syntax_safe_positions.borrow_mut())
     }
 
-    pub(crate) fn put_syntax_safe_positions(&self, index: SyntaxSafePositions) {
+    #[doc(hidden)]
+    pub fn put_syntax_safe_positions(&self, index: SyntaxSafePositions) {
         *self.storage.borrow().syntax_safe_positions.borrow_mut() = index;
     }
 
@@ -2633,7 +2643,13 @@ impl BufferText {
     /// the marker is not currently on any chain. Callers re-binding a marker
     /// must `chain_unlink` from the old buffer first; the `debug_assert!` in
     /// `chain_splice_at_head` catches violations.
-    pub(crate) fn register_marker(
+    ///
+    /// # Safety
+    /// `marker_ptr` must be a live `MarkerObj` allocated via
+    /// `TaggedHeap::alloc_marker`, and must not currently be on any chain
+    /// (`chain_unlink` first when re-binding). The body dereferences it.
+    #[doc(hidden)]
+    pub unsafe fn register_marker(
         &self,
         marker_ptr: *mut neovm_value::tagged::header::MarkerObj,
         buffer_id: BufferId,
@@ -3080,7 +3096,8 @@ impl BufferText {
     /// the marker is in the chain, we tolerate absent markers. This is
     /// defensive: callers currently include code paths that may be
     /// double-invoked during GC sweep and kill-buffer cleanup in T8/T9.
-    pub(crate) fn chain_unlink(&self, marker: *mut neovm_value::tagged::header::MarkerObj) {
+    #[doc(hidden)]
+    pub fn chain_unlink(&self, marker: *mut neovm_value::tagged::header::MarkerObj) {
         let mut storage = self.storage.borrow_mut();
         let mut prev: *mut neovm_value::tagged::header::MarkerObj = std::ptr::null_mut();
         let mut curr = storage.markers_head;
@@ -3907,3 +3924,47 @@ mod chain_test;
 #[cfg(test)]
 #[path = "buffer_text/tests/fontification_noalloc.rs"]
 mod fontification_noalloc_tests;
+
+#[doc(hidden)]
+impl SyntaxSafePositions {
+    #[inline]
+    pub fn key(&self) -> Option<SyntaxSafeKey> {
+        self.key
+    }
+    #[inline]
+    pub fn set_key(&mut self, value: Option<SyntaxSafeKey>) {
+        self.key = value;
+    }
+    #[inline]
+    pub fn points(&self) -> &Vec<usize> {
+        &self.points
+    }
+    #[inline]
+    pub fn points_mut(&mut self) -> &mut Vec<usize> {
+        &mut self.points
+    }
+}
+
+#[doc(hidden)]
+impl SyntaxSafeKey {
+    #[inline]
+    pub const fn new(
+        content_epoch: u64,
+        syntax_prop_tick: u64,
+        begv: usize,
+        table_bits: usize,
+        char_table_tick: u64,
+        honor_props: bool,
+        escape_quotes_ender: bool,
+    ) -> Self {
+        Self {
+            content_epoch,
+            syntax_prop_tick,
+            begv,
+            table_bits,
+            char_table_tick,
+            honor_props,
+            escape_quotes_ender,
+        }
+    }
+}

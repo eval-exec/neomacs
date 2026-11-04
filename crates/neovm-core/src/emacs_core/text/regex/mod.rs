@@ -942,7 +942,7 @@ impl SearchRegisters {
         if let Some(match_data) = target
             && let MatchDataKind::LispRegisters { source, groups } = &mut match_data.kind
         {
-            *source = LispRegisterSource::Buffer(buf.id);
+            *source = LispRegisterSource::Buffer(buf.id());
             groups.clear();
             self.fill_buffer_groups(buf, groups);
             #[cfg(debug_assertions)]
@@ -955,7 +955,7 @@ impl SearchRegisters {
         self.fill_buffer_groups(buf, &mut groups);
         *target = Some(MatchData {
             kind: MatchDataKind::LispRegisters {
-                source: LispRegisterSource::Buffer(buf.id),
+                source: LispRegisterSource::Buffer(buf.id()),
                 groups,
             },
             #[cfg(debug_assertions)]
@@ -1746,7 +1746,7 @@ impl EngineMatchData {
         self.fill_buffer_groups(buf, &mut groups);
         MatchData {
             kind: MatchDataKind::LispRegisters {
-                source: LispRegisterSource::Buffer(buf.id),
+                source: LispRegisterSource::Buffer(buf.id()),
                 groups,
             },
             #[cfg(debug_assertions)]

@@ -56,17 +56,17 @@ impl OwnerCarried {
         use std::mem::{replace, take};
         Self {
             profiler: take(&mut owner.profiler),
-            last_overlay_modification_hooks: take(&mut owner.edit.last_overlay_modification_hooks),
+            last_overlay_modification_hooks: take(owner.edit.last_overlay_modification_hooks_mut()),
             interval_insert_behind_hooks: replace(
-                &mut owner.edit.interval_insert_behind_hooks,
+                &mut owner.edit.interval_insert_behind_hooks(),
                 Value::NIL,
             ),
             interval_insert_in_front_hooks: replace(
-                &mut owner.edit.interval_insert_in_front_hooks,
+                &mut owner.edit.interval_insert_in_front_hooks(),
                 Value::NIL,
             ),
-            combine_after_change_list: take(&mut owner.edit.combine_after_change_list),
-            combine_after_change_buffer: take(&mut owner.edit.combine_after_change_buffer),
+            combine_after_change_list: take(owner.edit.combine_after_change_list_mut()),
+            combine_after_change_buffer: take(owner.edit.combine_after_change_buffer_mut()),
             face_change_count: take(&mut owner.face_change_count),
             display_var_change_count: take(&mut owner.display_var_change_count),
             redisplay_generation: take(&mut owner.redisplay_generation),
@@ -86,11 +86,21 @@ impl OwnerCarried {
     pub(crate) fn put(self, owner: &mut Context) {
         owner.profiler = self.profiler;
         owner.profiler.resume_on_this_thread();
-        owner.edit.last_overlay_modification_hooks = self.last_overlay_modification_hooks;
-        owner.edit.interval_insert_behind_hooks = self.interval_insert_behind_hooks;
-        owner.edit.interval_insert_in_front_hooks = self.interval_insert_in_front_hooks;
-        owner.edit.combine_after_change_list = self.combine_after_change_list;
-        owner.edit.combine_after_change_buffer = self.combine_after_change_buffer;
+        owner
+            .edit
+            .set_last_overlay_modification_hooks(self.last_overlay_modification_hooks);
+        owner
+            .edit
+            .set_interval_insert_behind_hooks(self.interval_insert_behind_hooks);
+        owner
+            .edit
+            .set_interval_insert_in_front_hooks(self.interval_insert_in_front_hooks);
+        owner
+            .edit
+            .set_combine_after_change_list(self.combine_after_change_list);
+        owner
+            .edit
+            .set_combine_after_change_buffer(self.combine_after_change_buffer);
         owner.face_change_count = self.face_change_count;
         owner.display_var_change_count = self.display_var_change_count;
         owner.redisplay_generation = self.redisplay_generation;
@@ -105,8 +115,8 @@ impl OwnerCarried {
     pub(crate) fn trace_roots(&self, visit: &mut dyn FnMut(Value)) {
         self.profiler.trace_roots(visit);
         for hook in &self.last_overlay_modification_hooks {
-            visit(hook.hook_list);
-            visit(hook.overlay);
+            visit(hook.hook_list());
+            visit(hook.overlay());
         }
         visit(self.interval_insert_behind_hooks);
         visit(self.interval_insert_in_front_hooks);

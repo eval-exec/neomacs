@@ -240,15 +240,15 @@ pub(crate) fn builtin_replace_region_contents(
             let zv = buf.point_max_char_pos();
             let total = buf.total_char_end_pos();
             let from = region_start
-                .add_len(CharLen::new(run.a_start))
+                .add_len(CharLen::new(run.a_start()))
                 .max(begv)
                 .min(total);
             let to = region_start
-                .add_len(CharLen::new(run.a_end))
+                .add_len(CharLen::new(run.a_end()))
                 .min(zv)
                 .clamp(from, total.max(from));
             (
-                buf.id,
+                buf.id(),
                 buf.edit_range_for_char_range(CharRange::new(from, to)),
             )
         }) else {
@@ -258,15 +258,15 @@ pub(crate) fn builtin_replace_region_contents(
         // Replacement text for this run: characters [b_start, b_end) of the
         // source, sliced from the original SOURCE value so text properties are
         // preserved.
-        let replacement = if run.b_start == run.b_end {
+        let replacement = if run.b_start() == run.b_end() {
             Value::string("")
         } else {
             crate::strings_core::substring_impl(
                 "substring",
                 &[
                     source_value,
-                    Value::fixnum(run.b_start as i64),
-                    Value::fixnum(run.b_end as i64),
+                    Value::fixnum(run.b_start() as i64),
+                    Value::fixnum(run.b_end() as i64),
                 ],
                 true,
             )?
@@ -361,7 +361,7 @@ pub(crate) fn builtin_set_buffer_multibyte(
         (
             current.get_multibyte(),
             current.is_narrowed(),
-            current.base_buffer,
+            current.base_buffer(),
             eval.edit.buffers.shared_text_buffer_ids(current_id),
         )
     };
@@ -419,7 +419,7 @@ pub(crate) fn builtin_set_buffer_multibyte(
                 .get(*id)
                 .ok_or_else(|| signal("error", vec![Value::string("Missing shared buffer")]))?;
             let overlays = buffer
-                .overlays
+                .overlays()
                 .dump_overlays()
                 .into_iter()
                 .filter_map(|overlay| {
@@ -436,7 +436,7 @@ pub(crate) fn builtin_set_buffer_multibyte(
                     })
                 })
                 .collect();
-            let last_window_start = buffer.last_window_start;
+            let last_window_start = buffer.last_window_start();
             let total_end = buffer.total_emacs_byte_end_pos();
             snapshots.push(BufferSnapshot {
                 id: *id,
@@ -467,7 +467,7 @@ pub(crate) fn builtin_set_buffer_multibyte(
     let old_byte_len = old_bytes.len();
     let (converted_value, mode) = convert_buffer_string_for_multibyte(source_value, flag)?;
     let piece = buffer_insert_piece_from_string(converted_value, target_multibyte)?;
-    let new_storage = piece.text;
+    let new_storage = piece.into_text();
     let new_total_bytes = new_storage.sbytes();
     let conversion_byte_map = build_multibyte_conversion_byte_map(&old_bytes, mode);
 
@@ -624,7 +624,7 @@ pub(crate) fn builtin_set_buffer_multibyte(
             .buffers
             .get_mut(snapshot.id)
             .ok_or_else(|| signal("error", vec![Value::string("Missing shared buffer")]))?
-            .overlays
+            .overlays_mut()
             .remap_overlay_positions(&remaps);
         for _ in &remaps {
             eval.edit

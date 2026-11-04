@@ -31,7 +31,8 @@ pub enum BufferTextBackendKind {
 /// while internal constructors require this validated type.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[repr(transparent)]
-pub(crate) struct ImplementedBufferTextBackendKind(BufferTextBackendKind);
+#[doc(hidden)]
+pub struct ImplementedBufferTextBackendKind(BufferTextBackendKind);
 
 impl BufferTextBackendKind {
     pub fn variants() -> impl Iterator<Item = Self> {
@@ -58,7 +59,8 @@ impl BufferTextBackendKind {
         self.implemented().is_some()
     }
 
-    pub(crate) fn implemented(self) -> Option<ImplementedBufferTextBackendKind> {
+    #[doc(hidden)]
+    pub fn implemented(self) -> Option<ImplementedBufferTextBackendKind> {
         match self {
             Self::GapBuffer => Some(ImplementedBufferTextBackendKind::GAP_BUFFER),
             Self::PieceTree => Some(ImplementedBufferTextBackendKind::PIECE_TREE),
@@ -92,7 +94,8 @@ impl ImplementedBufferTextBackendKind {
         self.0.is_gap_buffer()
     }
 
-    pub(crate) fn public_kind(self) -> BufferTextBackendKind {
+    #[doc(hidden)]
+    pub fn public_kind(self) -> BufferTextBackendKind {
         self.0
     }
 }

@@ -1190,7 +1190,8 @@ impl OverlayIndex {
         self.intervals.read().contains(overlay)
     }
 
-    pub(super) fn range(&self, overlay: Value) -> Option<EmacsByteRange> {
+    #[doc(hidden)]
+    pub fn range(&self, overlay: Value) -> Option<EmacsByteRange> {
         self.intervals
             .read()
             .range_by_identity(OverlayIdentity::of(overlay))

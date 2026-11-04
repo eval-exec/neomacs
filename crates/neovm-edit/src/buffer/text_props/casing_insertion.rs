@@ -42,7 +42,8 @@ impl CasingPropertyEquality {
 /// Heap values remain rooted in the calling context; this snapshot cannot move
 /// to another mutator. There are no evaluator callbacks during interval edits.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct CasingPropertyControls {
+#[doc(hidden)]
+pub struct CasingPropertyControls {
     equality: CasingPropertyEquality,
     nonsticky: Value,
     aliases: Value,
@@ -51,7 +52,8 @@ pub(crate) struct CasingPropertyControls {
 }
 
 impl CasingPropertyControls {
-    pub(crate) fn for_host<H: crate::emacs_core::edit_host::EditHost>(host: &H) -> Self {
+    #[doc(hidden)]
+    pub fn for_host<H: crate::emacs_core::edit_host::EditHost>(host: &H) -> Self {
         let read =
             |variable: TextPropertyControlVariable| host.variable_value(variable.symbol_id());
         Self {
@@ -76,16 +78,15 @@ impl CasingPropertyControls {
 
 /// No interval policy is needed when there is no growth or no interval tree.
 #[derive(Debug)]
-pub(crate) enum CasingPropertyMode<'a> {
+#[doc(hidden)]
+pub enum CasingPropertyMode<'a> {
     Unneeded,
     Inherit(CasingPropertyContext<'a>),
 }
 
 impl<'a> CasingPropertyMode<'a> {
-    pub(crate) fn from_controls(
-        obarray: &'a Obarray,
-        controls: Option<CasingPropertyControls>,
-    ) -> Self {
+    #[doc(hidden)]
+    pub fn from_controls(obarray: &'a Obarray, controls: Option<CasingPropertyControls>) -> Self {
         match controls {
             None => Self::Unneeded,
             Some(controls) => Self::Inherit(CasingPropertyContext { obarray, controls }),

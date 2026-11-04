@@ -464,7 +464,8 @@ impl GapBuffer {
         f(&self.buf[self.gap_start + gap..end + gap])
     }
 
-    pub(crate) fn has_contiguous_emacs_byte_range(&self, range: EmacsByteRange) -> bool {
+    #[doc(hidden)]
+    pub fn has_contiguous_emacs_byte_range(&self, range: EmacsByteRange) -> bool {
         let start = range.start().get();
         let end = range.end().get();
         assert!(
@@ -479,7 +480,8 @@ impl GapBuffer {
         start == end || end <= self.gap_start_bytes || start >= self.gap_start_bytes
     }
 
-    pub(crate) fn with_contiguous_emacs_byte_range<R>(
+    #[doc(hidden)]
+    pub fn with_contiguous_emacs_byte_range<R>(
         &self,
         range: EmacsByteRange,
         f: impl FnOnce(&[u8]) -> R,

@@ -2935,14 +2935,14 @@ fn resolved_face_at_buffer_byte(
     }
 
     let mut overlay_layers = Vec::new();
-    for overlay_id in buffer.overlays.iter_overlays_at_emacs_byte_pos(bytepos) {
+    for overlay_id in buffer.overlays().iter_overlays_at_emacs_byte_pos(bytepos) {
         let priority = buffer
-            .overlays
+            .overlays()
             .overlay_get_named(overlay_id, Value::symbol("priority"))
             .and_then(|value| value.as_int())
             .unwrap_or(0);
         if let Some(value) = buffer
-            .overlays
+            .overlays()
             .overlay_get_named(overlay_id, Value::symbol("face"))
         {
             let resolved = resolve_face_layers_from_value(&value);

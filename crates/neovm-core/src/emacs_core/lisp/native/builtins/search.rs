@@ -4165,7 +4165,7 @@ pub(crate) fn builtin_replace_match(
                 if let Some((id, byte_pos)) = eval.edit.buffers.current_buffer().map(|buf| {
                     let accessible = buf.point_min_char_pos()..=buf.point_max_char_pos();
                     let newpoint = newpoint.clamp(*accessible.start(), *accessible.end());
-                    (buf.id, buf.char_pos_to_emacs_byte_pos_clamped(newpoint))
+                    (buf.id(), buf.char_pos_to_emacs_byte_pos_clamped(newpoint))
                 }) {
                     let _ = eval.edit.buffers.goto_buffer_emacs_byte_pos(id, byte_pos);
                 }

@@ -34,7 +34,8 @@ pub(in crate::buffer) struct CharDelta(isize);
 /// check, as GNU's `make_fixnum (PT)` does. Only buffer accessors build it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(transparent)]
-pub(crate) struct BufferLispPos(LispCharPos1);
+#[doc(hidden)]
+pub struct BufferLispPos(LispCharPos1);
 
 /// Inclusive Lisp character-position range `[BEG, Z]` for a full buffer.
 ///

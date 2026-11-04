@@ -86,7 +86,7 @@ pub(crate) fn current_buffer_syntax_table_object_in_buffers_with_symbols(
 
     // Mirrors GNU `Fsyntax_table` (`syntax.c:987-993`):
     //     return BVAR (current_buffer, syntax_table);
-    let value = buf.slots[BUFFER_SLOT_SYNTAX_TABLE.index()];
+    let value = buf.slots()[BUFFER_SLOT_SYNTAX_TABLE.index()];
     if !value.is_nil()
         && crate::emacs_core::chartable::char_table_has_subtype_named_with_symbols(
             &value,
@@ -104,7 +104,7 @@ pub(crate) fn current_buffer_syntax_table_object_in_buffers_with_symbols(
     // from the standard syntax table — matches GNU's
     // `reset_buffer` (`buffer.c:1149-1157`) which copies the
     // standard tables into a fresh buffer.
-    buf.slots[BUFFER_SLOT_SYNTAX_TABLE.index()] = fallback;
+    buf.slots_mut()[BUFFER_SLOT_SYNTAX_TABLE.index()] = fallback;
     Ok(fallback)
 }
 

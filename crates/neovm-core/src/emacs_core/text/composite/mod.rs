@@ -34,12 +34,12 @@ pub(crate) fn install_substrate_seams() {
     if INSTALLED.load(std::sync::atomic::Ordering::Acquire) {
         return;
     }
-    crate::buffer::composition::install(crate::buffer::composition::CompositionSeams {
-        spans: automatic_composition_spans_in_with_symbols,
-        ascii_no_rules: ascii_has_no_composition_rules_with_symbols,
-        composition_symbol: composition_prop_symbol,
-        width: composition_width_for_property,
-    });
+    crate::buffer::composition::install(crate::buffer::composition::CompositionSeams::new(
+        automatic_composition_spans_in_with_symbols,
+        ascii_has_no_composition_rules_with_symbols,
+        composition_prop_symbol,
+        composition_width_for_property,
+    ));
     INSTALLED.store(true, std::sync::atomic::Ordering::Release);
 }
 
@@ -153,7 +153,7 @@ pub(crate) fn compose_region_internal(
     let (buffer_handle, point_min, point_max) = if let Some(buf) = ctx.edit.buffers.current_buffer()
     {
         (
-            Value::make_buffer(buf.id),
+            Value::make_buffer(buf.id()),
             buf.point_min_lisp_char_pos().as_i64(),
             buf.point_max_lisp_char_pos().as_i64(),
         )
@@ -1371,7 +1371,7 @@ pub(crate) fn find_composition_internal(
                 .edit
                 .buffers
                 .current_buffer()
-                .map(|b| Value::make_buffer(b.id))
+                .map(|b| Value::make_buffer(b.id()))
                 .unwrap_or(Value::NIL);
             return Err(signal(
                 LispCondition::ArgsOutOfRange,

@@ -99,7 +99,8 @@ pub mod fast_path {
 /// Both functions are installed once by `emacs_core::composite`; they read the
 /// live Lisp rule table and stay above the substrate.  Plain fn pointers keep
 /// the call sites static and one indirection deep.
-pub(crate) struct CompositionSeams {
+#[doc(hidden)]
+pub struct CompositionSeams {
     pub(crate) spans: fn(&Buffer, Value, &str, usize, SymbolMode) -> Vec<AutomaticCompositionSpan>,
     pub(crate) ascii_no_rules: fn(Value, SymbolMode) -> bool,
     /// The interned `composition` property symbol (GNU `Qcomposition`).
@@ -153,7 +154,8 @@ impl CompositionSeams {
 
 static SEAMS: OnceLock<CompositionSeams> = OnceLock::new();
 
-pub(crate) fn install(seams: CompositionSeams) {
+#[doc(hidden)]
+pub fn install(seams: CompositionSeams) {
     let _ = SEAMS.set(seams);
 }
 
@@ -161,4 +163,21 @@ pub(crate) fn seams() -> &'static CompositionSeams {
     SEAMS
         .get()
         .expect("composition substrate seams are installed at evaluator construction")
+}
+
+#[doc(hidden)]
+impl CompositionSeams {
+    pub const fn new(
+        spans: fn(&Buffer, Value, &str, usize, SymbolMode) -> Vec<AutomaticCompositionSpan>,
+        ascii_no_rules: fn(Value, SymbolMode) -> bool,
+        composition_symbol: fn() -> Value,
+        width: fn(Value, &BufferManager, i64) -> Option<(i64, i64)>,
+    ) -> Self {
+        Self {
+            spans,
+            ascii_no_rules,
+            composition_symbol,
+            width,
+        }
+    }
 }

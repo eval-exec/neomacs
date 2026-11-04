@@ -577,7 +577,8 @@ impl BufferManager {
 
     /// Case replacement with the per-character growth retained by the casing
     /// transducer. Expansion offsets are in the original region's characters.
-    pub(crate) fn casify_replace_buffer_region_with_expansions(
+    #[doc(hidden)]
+    pub fn casify_replace_buffer_region_with_expansions(
         &mut self,
         id: BufferId,
         byte_range: EmacsByteRange,

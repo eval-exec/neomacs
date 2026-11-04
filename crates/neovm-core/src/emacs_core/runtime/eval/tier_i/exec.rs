@@ -901,8 +901,9 @@ impl Context {
             Op::SaveCurrentBuffer(seq) => {
                 let count = self.specpdl.len();
                 if let Some(buf) = self.edit.buffers.current_buffer() {
-                    self.specpdl
-                        .push(SpecBinding::SaveCurrentBuffer { buffer_id: buf.id });
+                    self.specpdl.push(SpecBinding::SaveCurrentBuffer {
+                        buffer_id: buf.id(),
+                    });
                 }
                 let result = self.ti_progn(act, tail, seq);
                 self.unbind_to_with_result(count, result)

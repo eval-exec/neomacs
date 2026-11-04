@@ -920,7 +920,7 @@ fn casify_replace_current_buffer_region(
                 vec![buf.name_value()],
             ));
         }
-        (buf.id, byte_range)
+        (buf.id(), byte_range)
     };
     crate::emacs_core::textprop::verify_text_read_only_emacs_byte_range_in_state(
         eval.variables(),
@@ -948,7 +948,7 @@ fn casify_replace_current_buffer_region(
             return Err(signal(
                 LispCondition::ArgsOutOfRange,
                 vec![
-                    Value::make_buffer(buf.id),
+                    Value::make_buffer(buf.id()),
                     Value::fixnum(chars.start().to_lisp().as_i64()),
                     Value::fixnum(chars.end().to_lisp().as_i64()),
                 ],
@@ -967,7 +967,7 @@ fn casify_replace_current_buffer_region(
         }
         let byte_range = buf.edit_range_for_char_range(chars).byte_range();
         (
-            buf.id,
+            buf.id(),
             byte_range,
             buf.buffer_substring_lisp_string_range(byte_range),
         )
@@ -1131,7 +1131,7 @@ fn casify_word_in_state(
     // hook, which can change byte widths again (casefiddle.c:668-669). Negative
     // word arguments retain the greater endpoint, as region validation orders it.
     if let Some(buf) = eval.edit.buffers.current_buffer() {
-        let id = buf.id;
+        let id = buf.id();
         let point = buf.char_pos_to_emacs_byte_pos_clamped(end);
         let _ = eval.edit.buffers.goto_buffer_emacs_byte_pos(id, point);
     }

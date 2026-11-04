@@ -1407,7 +1407,7 @@ fn minibuffer_prompt_end_in_state(
 ) -> Result<LispCharPos1, Flow> {
     let Some((current_id, point_min, point_max)) = buffers.current_buffer().map(|buffer| {
         (
-            buffer.id,
+            buffer.id(),
             buffer.point_min_lisp_char_pos().as_i64(),
             buffer.point_max_lisp_char_pos().as_i64(),
         )
@@ -1765,7 +1765,7 @@ pub(crate) fn minibuffer_contents_lisp_string_in_state(
 ) -> Result<LispString, Flow> {
     let Some((point_max, current_id)) = buffers
         .current_buffer()
-        .map(|buffer| (buffer.accessible_emacs_byte_region().end(), buffer.id))
+        .map(|buffer| (buffer.accessible_emacs_byte_region().end(), buffer.id()))
     else {
         return Ok(LispString::from_utf8(""));
     };

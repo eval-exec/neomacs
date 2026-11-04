@@ -33,7 +33,8 @@ use super::text::{TextEditRange, TextInsertion, TextReplacement};
 /// hook list and the overlay that triggered it, recorded by the before-change
 /// scan and replayed by the after-change scan.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct OverlayModificationHook {
+#[doc(hidden)]
+pub struct OverlayModificationHook {
     pub(crate) hook_list: Value,
     pub(crate) overlay: Value,
 }
@@ -45,7 +46,8 @@ pub type Overlay = OverlayData;
 /// of the byte ranges authoritative in the interval index. No shared cache
 /// or mutable Lisp state is published by these call-local records.
 #[derive(Clone, Copy)]
-pub(crate) struct OverlayPositionRemap {
+#[doc(hidden)]
+pub struct OverlayPositionRemap {
     pub overlay: Value,
     pub old_range: EmacsByteRange,
     pub range: EmacsByteRange,
@@ -974,7 +976,8 @@ impl OverlayList {
     /// GNU buffer.c:1031-1076 remaps an ascending snapshot using numeric begin
     /// changes, not byte-start changes. The owning buffer holds exclusive
     /// access for the complete conversion and publication.
-    pub(crate) fn remap_overlay_positions(&mut self, remaps: &[OverlayPositionRemap]) {
+    #[doc(hidden)]
+    pub fn remap_overlay_positions(&mut self, remaps: &[OverlayPositionRemap]) {
         // GNU buffer.c:1033 skips ASCII overlay remapping. Numeric equality
         // alone is insufficient: old/new byte ranges can differ after a text
         // conversion whose numeric begins stay fixed. A true no-op retains
@@ -1668,7 +1671,8 @@ impl OverlayList {
     /// Return the next endpoint without allocating or publishing a lazy index.
     /// Until the endpoint index exists, this borrows and scans interval records
     /// in O(overlays); subsequent queries reuse the existing endpoint tree.
-    pub(crate) fn next_boundary_after_until_emacs_byte_pos_no_alloc(
+    #[doc(hidden)]
+    pub fn next_boundary_after_until_emacs_byte_pos_no_alloc(
         &self,
         pos: EmacsBytePos,
         limit: EmacsBytePos,
@@ -1691,11 +1695,13 @@ impl OverlayList {
         self.index.previous_boundary_before(pos, limit)
     }
 
-    pub(crate) fn dump_overlays(&self) -> Vec<Value> {
+    #[doc(hidden)]
+    pub fn dump_overlays(&self) -> Vec<Value> {
         self.index.values().collect()
     }
 
-    pub(crate) fn from_dump(overlays: Vec<Value>) -> Self {
+    #[doc(hidden)]
+    pub fn from_dump(overlays: Vec<Value>) -> Self {
         let mut list = Self::new();
         let entries: Vec<_> = overlays
             .into_iter()
@@ -2242,5 +2248,17 @@ fn hash_value_content(value: Value, depth: u32, hasher: &mut rustc_hash::FxHashe
             hasher.write_u8(7);
             hasher.write_u64(value.bits() as u64);
         }
+    }
+}
+
+#[doc(hidden)]
+impl OverlayModificationHook {
+    #[inline]
+    pub fn hook_list(&self) -> Value {
+        self.hook_list
+    }
+    #[inline]
+    pub fn overlay(&self) -> Value {
+        self.overlay
     }
 }

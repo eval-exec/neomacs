@@ -241,7 +241,7 @@ impl EditHost for Context {
                         && let Some(value) = self.obarray.read_localized_symbol_for_buffer(
                             sym,
                             s,
-                            buf.id,
+                            buf.id(),
                             buf.local_var_alist_value(),
                         )
                     {
