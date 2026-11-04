@@ -923,7 +923,7 @@ impl ProcessWaitBackend {
         let poller: Option<Arc<polling::Poller>> = None;
         #[cfg(unix)]
         let signal_fd = poller.as_ref().and_then(|poller| {
-            let fd = crate::emacs_core::os_signal::install().self_pipe_read_fd()?;
+            let fd = super::super::input_hooks::signal_wake_pipe_read_fd()?;
             // SAFETY: the install report owns the descriptor for the process
             // lifetime, longer than every registration. The reserved event key
             // cannot collide with a real process identifier.
@@ -967,7 +967,7 @@ impl ProcessWaitBackend {
         interest: ProcessWaitBackendInterest,
     ) -> Option<ProcessWaitEvents> {
         if let Some(ref poller) = self.poller {
-            if crate::emacs_core::os_signal::pending() {
+            if super::super::input_hooks::os_signal_pending() {
                 return Some(ProcessWaitEvents::notification_wakeup());
             }
             #[cfg(unix)]
@@ -1013,7 +1013,7 @@ impl ProcessWaitBackend {
                             #[cfg(unix)]
                             if event.key == usize::MAX - 1 {
                                 if let Some(fd) = self.signal_fd {
-                                    crate::emacs_core::os_signal::drain_wake_pipe(fd);
+                                    super::super::input_hooks::drain_signal_wake_pipe(fd);
                                 }
                                 notification_wakeup = true;
                                 continue;

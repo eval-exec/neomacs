@@ -29,11 +29,21 @@ fn drain_pending_os_signals(
     crate::emacs_core::os_signal::drain_pending_os_signals(ctx).map(|_| ())
 }
 
+fn signal_wake_pipe_read_fd() -> Option<i32> {
+    crate::emacs_core::os_signal::install().self_pipe_read_fd()
+}
+
+fn drain_signal_wake_pipe(fd: i32) {
+    crate::emacs_core::os_signal::drain_wake_pipe(fd)
+}
+
 static CANONICAL_INPUT_HOOKS: InputHooks = InputHooks::new(
     interrupt_for_input_event_if_requested,
     os_signal_pending,
     take_termination_signal,
     drain_pending_os_signals,
+    signal_wake_pipe_read_fd,
+    drain_signal_wake_pipe,
 );
 
 /// Publish the input-wait table at the one-time construction seams.

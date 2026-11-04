@@ -32,14 +32,20 @@ pub type OsSignalPending = fn() -> bool;
 pub type TakeTerminationSignal = fn() -> Option<i32>;
 /// Drain pending OS signals through the evaluator.
 pub type DrainPendingOsSignals = fn(&mut Context) -> Result<(), Flow>;
+/// The process-lifetime signal self-pipe read end for evaluator wait pollers.
+pub type SignalWakePipeReadFd = fn() -> Option<i32>;
+/// Drain one wake byte from the signal self-pipe.
+pub type DrainSignalWakePipe = fn(i32);
 
-/// The four cold input-wait/OS-signal bodies eval calls.
+/// The six cold input-wait/OS-signal bodies eval calls.
 #[derive(Clone, Copy)]
 pub struct InputHooks {
     interrupt_for_input_event_if_requested: InterruptForInputEvent,
     os_signal_pending: OsSignalPending,
     take_termination_signal: TakeTerminationSignal,
     drain_pending_os_signals: DrainPendingOsSignals,
+    signal_wake_pipe_read_fd: SignalWakePipeReadFd,
+    drain_signal_wake_pipe: DrainSignalWakePipe,
 }
 
 impl InputHooks {
@@ -49,12 +55,16 @@ impl InputHooks {
         os_signal_pending: OsSignalPending,
         take_termination_signal: TakeTerminationSignal,
         drain_pending_os_signals: DrainPendingOsSignals,
+        signal_wake_pipe_read_fd: SignalWakePipeReadFd,
+        drain_signal_wake_pipe: DrainSignalWakePipe,
     ) -> Self {
         Self {
             interrupt_for_input_event_if_requested,
             os_signal_pending,
             take_termination_signal,
             drain_pending_os_signals,
+            signal_wake_pipe_read_fd,
+            drain_signal_wake_pipe,
         }
     }
 }
@@ -115,4 +125,14 @@ pub fn take_termination_signal() -> Option<i32> {
 /// Drain pending OS signals through the evaluator.
 pub fn drain_pending_os_signals(ctx: &mut Context) -> Result<(), Flow> {
     (input_hooks().drain_pending_os_signals)(ctx)
+}
+
+/// The process-lifetime signal self-pipe read end for evaluator wait pollers.
+pub fn signal_wake_pipe_read_fd() -> Option<i32> {
+    (input_hooks().signal_wake_pipe_read_fd)()
+}
+
+/// Drain one wake byte from the signal self-pipe.
+pub fn drain_signal_wake_pipe(fd: i32) {
+    (input_hooks().drain_signal_wake_pipe)(fd)
 }
