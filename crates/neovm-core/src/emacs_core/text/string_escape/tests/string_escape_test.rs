@@ -1,5 +1,6 @@
 use super::*;
 use crate::emacs_core::print::PrintOptions;
+use crate::emacs_core::print::string_format::format_lisp_string_bytes_inner;
 
 // Test-only helpers that restore the default-options ergonomics of the
 // deleted format_lisp_string / format_lisp_string_bytes shims.

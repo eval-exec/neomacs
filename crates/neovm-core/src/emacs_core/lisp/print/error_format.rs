@@ -11,6 +11,7 @@ use std::cell::RefCell;
 use strum::{EnumString, IntoStaticStr};
 
 use super::PrintOptions;
+use super::string_format::{format_lisp_string_bytes_emacs, format_lisp_string_emacs};
 use crate::buffer::EmacsBytePos;
 use crate::emacs_core::error::{
     EvalError, EvalResult, Flow, FlowKind, FlowRef, LispCondition, SignalData, signal,
@@ -18,7 +19,6 @@ use crate::emacs_core::error::{
 use crate::emacs_core::errors::signal_matches_condition_value_sym;
 use crate::emacs_core::intern::format_symbol_name_for_diagnostic;
 use crate::emacs_core::intern::intern;
-use crate::emacs_core::string_escape::{format_lisp_string_bytes_emacs, format_lisp_string_emacs};
 use crate::emacs_core::value::{Value, ValueKind, VecLikeType};
 use crate::window::WindowId;
 use std::fmt::{self, Formatter};

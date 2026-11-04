@@ -20,18 +20,20 @@ pub use error_format::{
     print_value_bytes_escaped_with_eval, print_value_bytes_with_eval, print_value_with_eval,
 };
 
+pub(crate) mod string_format;
+
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodePolicyExt;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
+use self::string_format::format_lisp_string_bytes_emacs;
 use super::chartable::{bool_vector_length, char_table_external_slots};
 use super::intern::{
     SymId, intern, lookup_interned_lisp_string, resolve_sym, resolve_sym_lisp_string,
     symbol_name_confusing,
 };
-use super::string_escape::format_lisp_string_bytes_emacs;
 use super::value::{
     HashKey, HashTableTest, LispHashTable, StringTextPropertyRun, Value,
     get_string_text_properties_for_value, list_to_vec,
@@ -3921,7 +3923,7 @@ fn append_bool_vector_bytes(value: &Value, nbits: usize, out: &mut Vec<u8>, opti
                 out.push(name);
             }
             BoolVectorByteSyntax::Octal => {
-                super::string_escape::push_octal_escape_contextual_u32(
+                self::string_format::push_octal_escape_contextual_u32(
                     out,
                     byte,
                     printed.get(index + 1).map(|next| u32::from(*next)),
