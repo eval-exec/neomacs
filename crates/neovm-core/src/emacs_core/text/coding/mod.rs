@@ -739,8 +739,11 @@ fn resolve_text_quoting_style(
 /// `grave`, `straight` and `curve` are returned verbatim, any other non-nil
 /// value is `curve`, and nil reads `internal--text-quoting-flag` and the
 /// standard display table's U+2018 entry (`src/doc.c:638-650`).
-pub(crate) fn effective_text_quoting_style(
-    vars: crate::emacs_core::eval::VariableView<'_>,
+pub(crate) fn effective_text_quoting_style<
+    'a,
+    V: neovm_edit::emacs_core::edit_host::EditVariableRead<'a>,
+>(
+    vars: V,
     mode: SymbolMode,
 ) -> TextQuotingStyle {
     let var = vars

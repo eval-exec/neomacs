@@ -746,7 +746,7 @@ pub(crate) fn builtin_char_category_set(
     expect_args("char-category-set", &args, 1)?;
     let _ = extract_char_code(&args[0], "char-category-set")?;
     let table = current_buffer_category_table_in_buffers(&mut eval.edit.buffers)?;
-    super::chartable::builtin_char_table_range_with_symbols(
+    super::chartable::builtin_char_table_range_with_style(
         vec![table, args[0]],
         None,
         eval.symbol_mode(),

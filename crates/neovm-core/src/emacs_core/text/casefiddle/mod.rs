@@ -278,10 +278,11 @@ enum CasingWordState {
 /// The current buffer's encoding projection. This reads buffer state and
 /// therefore stays with the text-side casing operations above the plain
 /// [`CaseEncoding`] data.
-pub(crate) fn case_encoding_for_current_buffer(ctx: &super::eval::Context) -> CaseEncoding {
+pub(crate) fn case_encoding_for_current_buffer<H: super::text_host::TextHost>(
+    ctx: &H,
+) -> CaseEncoding {
     if ctx
-        .edit
-        .buffers
+        .buffers()
         .current_buffer()
         .is_some_and(|buf| !buf.get_multibyte())
     {
@@ -293,8 +294,8 @@ pub(crate) fn case_encoding_for_current_buffer(ctx: &super::eval::Context) -> Ca
 
 /// Standard upcasing cannot change a capital sigma, so no syntax lookup is
 /// needed. A custom table may change it and requires GNU's word context.
-pub(crate) fn upcase_word_predicate(
-    ctx: &super::eval::Context,
+pub(crate) fn upcase_word_predicate<H: super::text_host::TextHost>(
+    ctx: &H,
     casetab: &CaseTableOverride,
 ) -> impl Fn(u32) -> bool + Copy + 'static {
     let word = casetab
@@ -794,13 +795,13 @@ fn preserve_upcase_case_string_payload(code: i64) -> bool {
     )
 }
 
-fn noncontiguous_case_regions(
-    eval: &mut super::eval::Context,
+fn noncontiguous_case_regions<H: super::text_host::TextHost>(
+    eval: &mut H,
 ) -> Result<Vec<super::position::LispRegionArgs>, Flow> {
     let extractor = eval
-        .eval_symbol("region-extract-function")
+        .eval_symbol_by_id(neovm_value::intern::intern("region-extract-function"))
         .unwrap_or(Value::symbol("buffer-substring"));
-    let bounds = eval.funcall_general(extractor, vec![Value::symbol("bounds")])?;
+    let bounds = eval.funcall_general(extractor, &[Value::symbol("bounds")])?;
     let bounds_list = neovm_value::value::list_to_vec(&bounds).ok_or_else(|| {
         signal(
             LispCondition::WrongTypeArgument,
@@ -817,7 +818,7 @@ fn noncontiguous_case_regions(
                 ));
             }
             super::position::LispRegionArgs::from_values(
-                &eval.edit.buffers,
+                eval.buffers(),
                 value.cons_car(),
                 value.cons_cdr(),
             )

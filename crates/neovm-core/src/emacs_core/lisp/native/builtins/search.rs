@@ -105,15 +105,9 @@ fn read_inhibit_changing_match_data(eval: &super::eval::Context) -> bool {
 pub(crate) fn current_word_boundary_lookup(
     eval: &super::eval::Context,
 ) -> crate::emacs_core::regex_emacs::WordBoundaryLookup {
-    crate::emacs_core::regex_emacs::WordBoundaryLookup::new_with_symbols(
-        dynamic_or_global_symbol_value(eval, SearchStateVariable::CharScriptTable)
-            .filter(|value| !value.is_nil()),
-        dynamic_or_global_symbol_value(eval, SearchStateVariable::WordCombiningCategories)
-            .unwrap_or(Value::NIL),
-        dynamic_or_global_symbol_value(eval, SearchStateVariable::WordSeparatingCategories)
-            .unwrap_or(Value::NIL),
-        eval.symbol_mode(),
-    )
+    // Moved down to the text layer at stage-3b T3 (TextHost read); core calls
+    // downward, text never calls up.
+    crate::emacs_core::regex_emacs::current_word_boundary_lookup(eval)
 }
 
 /// Snapshot the match-time state, borrowing only the obarray so the caller can

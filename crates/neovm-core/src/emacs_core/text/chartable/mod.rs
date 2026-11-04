@@ -16,9 +16,12 @@
 //! re-exports the container's public surface so every historical
 //! `chartable::` path is unchanged.
 
-use super::eval::Context;
-use crate::emacs_core::eval::VariableView;
+use super::text_host::TextHost;
+use crate::emacs_core::coding::{TextQuotingStyle, effective_text_quoting_style};
 use crate::tagged::SymbolMode;
+// The variable view is EditHost::Vars; its read methods live on
+// EditVariableRead, so method resolution on the projection needs it in scope.
+use neovm_edit::emacs_core::edit_host::EditVariableRead;
 use neovm_value::error::LispCondition;
 use neovm_value::error::{EvalResult, Flow, signal};
 use neovm_value::error::{expect_args, expect_max_args, expect_min_args};
@@ -115,21 +118,24 @@ fn expect_character_code(value: &Value) -> Result<i64, Flow> {
 /// requoting here from the active obarray's `text-quoting-style` rather than
 /// emitting the raw ASCII quotes, so the captured error data matches GNU
 /// byte-for-byte.
-fn invalid_range_error(name: &str, obarray: Option<VariableView<'_>>, mode: SymbolMode) -> Flow {
-    // GNU resolves `text-quoting-style` from the global environment in `doprnt`.
-    // When no obarray is threaded in (internal callers that pass valid ranges
-    // and never reach this path, plus tests), fall back to the batch/UTF-8
-    // default of `curve`, which is what `effective_text_quoting_style` returns
-    // for a nil `text-quoting-style`.
-    let style = obarray.map_or(
-        crate::emacs_core::coding::TextQuotingStyle::Curve,
-        |obarray| crate::emacs_core::coding::effective_text_quoting_style(obarray, mode),
-    );
+fn invalid_range_error(name: &str, style: TextQuotingStyle) -> Flow {
     let message = crate::emacs_core::coding::requote_c_error_message(
         &format!("Invalid RANGE argument to `{name}'"),
         style,
     );
     signal("error", vec![Value::string(message)])
+}
+/// The view-carrying error path: resolve the style lazily (only when the
+/// range is invalid) exactly as before, from the caller's variable view.
+fn invalid_range_error_with_vars<'a, V: EditVariableRead<'a>>(
+    name: &str,
+    obarray: Option<V>,
+    mode: SymbolMode,
+) -> Flow {
+    let style = obarray.map_or(TextQuotingStyle::Curve, |vars| {
+        effective_text_quoting_style(vars, mode)
+    });
+    invalid_range_error(name, style)
 }
 #[cfg(test)]
 pub(crate) fn copy_char_table(table: Value) -> Option<Value> {
@@ -139,7 +145,7 @@ pub(crate) fn copy_char_table(table: Value) -> Option<Value> {
 ///
 /// If SUB-TYPE has a `char-table-extra-slots` property, its value
 /// specifies how many extra slots the char-table has (0..10).
-pub(crate) fn builtin_make_char_table(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_make_char_table<H: TextHost>(eval: &mut H, args: Vec<Value>) -> EvalResult {
     expect_min_args("make-char-table", &args, 1)?;
     expect_max_args("make-char-table", &args, 2)?;
     let sub_type = args[0];
@@ -148,7 +154,8 @@ pub(crate) fn builtin_make_char_table(eval: &mut Context, args: Vec<Value>) -> E
     // Read char-table-extra-slots property from the sub-type symbol,
     // matching GNU Emacs chartab.c:Fmake_char_table.
     let n_extras = if let Some(value) = eval
-        .obarray
+        .variables()
+        .obarray()
         .get_property_id(sub_type_id, intern("char-table-extra-slots"))
     {
         if value.is_nil() {
@@ -190,19 +197,44 @@ pub(crate) fn builtin_char_table_p(args: Vec<Value>) -> EvalResult {
 /// - `t` -- set all character entries while leaving the default slot alone
 pub(crate) fn builtin_set_char_table_range(
     args: Vec<Value>,
-    obarray: Option<VariableView<'_>>,
+    style: Option<TextQuotingStyle>,
 ) -> EvalResult {
-    builtin_set_char_table_range_with_symbols(args, obarray, SymbolMode::Bare)
+    builtin_set_char_table_range_with_style(args, style, SymbolMode::Bare)
 }
-pub(crate) fn builtin_set_char_table_range_in_state(
-    eval: &mut Context,
+pub(crate) fn builtin_set_char_table_range_in_state<H: TextHost>(
+    eval: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_set_char_table_range_with_symbols(args, Some(eval.variables()), eval.symbol_mode())
 }
-pub(crate) fn builtin_set_char_table_range_with_symbols(
+pub(crate) fn builtin_set_char_table_range_with_symbols<'a, V: EditVariableRead<'a>>(
     args: Vec<Value>,
-    obarray: Option<VariableView<'_>>,
+    obarray: Option<V>,
+    mode: SymbolMode,
+) -> EvalResult {
+    set_char_table_range_impl(
+        args,
+        |name| invalid_range_error_with_vars(name, obarray, mode),
+        mode,
+    )
+}
+/// The no-view entry point: callers without an evaluator (core internals,
+/// tests) pass a pre-resolved style or `None` for the batch/UTF-8 `curve`
+/// default. Avoids forcing a `V` at `None` call sites.
+pub(crate) fn builtin_set_char_table_range_with_style(
+    args: Vec<Value>,
+    style: Option<TextQuotingStyle>,
+    mode: SymbolMode,
+) -> EvalResult {
+    set_char_table_range_impl(
+        args,
+        |name| invalid_range_error(name, style.unwrap_or(TextQuotingStyle::Curve)),
+        mode,
+    )
+}
+fn set_char_table_range_impl<E: Fn(&str) -> Flow>(
+    args: Vec<Value>,
+    invalid_range: E,
     mode: SymbolMode,
 ) -> EvalResult {
     expect_args("set-char-table-range", &args, 3)?;
@@ -231,7 +263,7 @@ pub(crate) fn builtin_set_char_table_range_with_symbols(
         ValueKind::Fixnum(_) => {
             let ch = match expect_character_code(range) {
                 Ok(ch) => ch,
-                Err(_) => return Err(invalid_range_error("set-char-table-range", obarray, mode)),
+                Err(_) => return Err(invalid_range("set-char-table-range")),
             };
             char_table_set_char_direct(*table, ch, *value, mode);
         }
@@ -245,7 +277,7 @@ pub(crate) fn builtin_set_char_table_range_with_symbols(
                 char_table_set_range_direct(*table, min, max, *value, mode);
             }
         }
-        _ => return Err(invalid_range_error("set-char-table-range", obarray, mode)),
+        _ => return Err(invalid_range("set-char-table-range")),
     }
 
     crate::emacs_core::substrate_hooks::note_char_table_layout_mutation();
@@ -258,19 +290,42 @@ pub(crate) fn builtin_set_char_table_range_with_symbols(
 /// - `nil` -- return the default value
 pub(crate) fn builtin_char_table_range(
     args: Vec<Value>,
-    obarray: Option<VariableView<'_>>,
+    style: Option<TextQuotingStyle>,
 ) -> EvalResult {
-    builtin_char_table_range_with_symbols(args, obarray, SymbolMode::Bare)
+    builtin_char_table_range_with_style(args, style, SymbolMode::Bare)
 }
-pub(crate) fn builtin_char_table_range_in_state(
-    eval: &mut Context,
+pub(crate) fn builtin_char_table_range_in_state<H: TextHost>(
+    eval: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_char_table_range_with_symbols(args, Some(eval.variables()), eval.symbol_mode())
 }
-pub(crate) fn builtin_char_table_range_with_symbols(
+pub(crate) fn builtin_char_table_range_with_symbols<'a, V: EditVariableRead<'a>>(
     args: Vec<Value>,
-    obarray: Option<VariableView<'_>>,
+    obarray: Option<V>,
+    mode: SymbolMode,
+) -> EvalResult {
+    char_table_range_impl(
+        args,
+        |name| invalid_range_error_with_vars(name, obarray, mode),
+        mode,
+    )
+}
+/// The no-view entry point; see [`builtin_set_char_table_range_with_style`].
+pub(crate) fn builtin_char_table_range_with_style(
+    args: Vec<Value>,
+    style: Option<TextQuotingStyle>,
+    mode: SymbolMode,
+) -> EvalResult {
+    char_table_range_impl(
+        args,
+        |name| invalid_range_error(name, style.unwrap_or(TextQuotingStyle::Curve)),
+        mode,
+    )
+}
+fn char_table_range_impl<E: Fn(&str) -> Flow>(
+    args: Vec<Value>,
+    invalid_range: E,
     mode: SymbolMode,
 ) -> EvalResult {
     expect_args("char-table-range", &args, 2)?;
@@ -287,7 +342,7 @@ pub(crate) fn builtin_char_table_range_with_symbols(
         ValueKind::Fixnum(_) => {
             let ch = match expect_character_code(range) {
                 Ok(ch) => ch,
-                Err(_) => return Err(invalid_range_error("char-table-range", obarray, mode)),
+                Err(_) => return Err(invalid_range("char-table-range")),
             };
             ct_lookup_with_symbols(table, ch, mode)
         }
@@ -299,7 +354,7 @@ pub(crate) fn builtin_char_table_range_with_symbols(
             let (value, _run_from, _run_to) = ct_lookup_and_range(table, from, mode)?;
             Ok(value)
         }
-        _ => Err(invalid_range_error("char-table-range", obarray, mode)),
+        _ => Err(invalid_range("char-table-range")),
     }
 }
 /// Translate character `c` through translation `table`.
@@ -391,7 +446,7 @@ pub(crate) fn for_each_char_table_mapping(
 ) -> Result<(), Flow> {
     for_each_char_table_mapping_with_symbols(table, f, SymbolMode::Bare)
 }
-pub(crate) fn builtin_map_char_table(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_map_char_table<H: TextHost>(eval: &mut H, args: Vec<Value>) -> EvalResult {
     expect_args("map-char-table", &args, 2)?;
     let func = args[0];
     let table = args[1];
@@ -399,7 +454,7 @@ pub(crate) fn builtin_map_char_table(eval: &mut Context, args: Vec<Value>) -> Ev
     for_each_char_table_mapping_with_symbols(
         &table,
         |key, value| {
-            let _ = eval.apply(func, vec![key, value])?;
+            let _ = eval.apply(func, &[key, value])?;
             Ok(())
         },
         mode,
@@ -474,8 +529,8 @@ fn invalid_unicode_property_table() -> Flow {
 pub(crate) fn builtin_get_unicode_property_internal(args: Vec<Value>) -> EvalResult {
     builtin_get_unicode_property_internal_with_symbols(args, SymbolMode::Bare)
 }
-pub(crate) fn builtin_get_unicode_property_internal_in_state(
-    eval: &mut Context,
+pub(crate) fn builtin_get_unicode_property_internal_in_state<H: TextHost>(
+    eval: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_get_unicode_property_internal_with_symbols(args, eval.symbol_mode())
@@ -583,8 +638,8 @@ fn encode_uniprop_value_numeric(
 pub(crate) fn builtin_put_unicode_property_internal(args: Vec<Value>) -> EvalResult {
     builtin_put_unicode_property_internal_with_symbols(args, SymbolMode::Bare)
 }
-pub(crate) fn builtin_put_unicode_property_internal_in_state(
-    eval: &mut Context,
+pub(crate) fn builtin_put_unicode_property_internal_in_state<H: TextHost>(
+    eval: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_put_unicode_property_internal_with_symbols(args, eval.symbol_mode())

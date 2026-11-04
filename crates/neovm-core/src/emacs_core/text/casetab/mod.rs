@@ -897,8 +897,8 @@ mod tests;
 #[path = "tests/gc_tls_ownership_test.rs"]
 mod gc_tls_ownership_tests;
 
-pub(crate) fn builtin_case_table_p_in_state(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_case_table_p_in_state<H: super::text_host::TextHost>(
+    eval: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_case_table_p_with_symbols(args, eval.symbol_mode())

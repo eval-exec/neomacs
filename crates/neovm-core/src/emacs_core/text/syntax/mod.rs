@@ -13,12 +13,16 @@ use std::ops::Deref;
 
 use strum::{EnumString, IntoStaticStr};
 
+use super::text_host::TextHost;
+// The variable view is EditHost::Vars; its read methods live on
+// EditVariableRead, so method resolution on the projection needs it in scope.
 use super::textprop::CharPropertyResolver;
 use crate::buffer::{
     Buffer, BufferManager, CharLen, CharPos0, EmacsByteLen, EmacsBytePos, LispCharPos1,
     TextPropertyTable,
 };
 use crate::heap_types::{GnuStringCharPos, LispString, StringCharacterCountKind};
+use neovm_edit::emacs_core::edit_host::EditVariableRead;
 use neovm_value::error::{EvalResult, Flow, signal};
 use neovm_value::value::{Value, ValueKind, list_to_vec};
 
@@ -247,8 +251,9 @@ impl SyntaxStateVariable {
     }
 
     #[inline(always)]
-    fn enabled(self, ctx: &super::eval::Context) -> bool {
-        ctx.builtin_var_value(self.symbol_id())
+    fn enabled<H: TextHost>(self, ctx: &H) -> bool {
+        ctx.variables()
+            .value(self.symbol_id())
             .is_some_and(|value| value.is_truthy())
     }
 }
@@ -295,7 +300,7 @@ impl BackwardCommentEntryPolicy {
 }
 
 impl CommentEndEscapePolicy {
-    fn for_context(ctx: &super::eval::Context) -> Self {
+    fn for_context<H: TextHost>(ctx: &H) -> Self {
         if SyntaxStateVariable::CommentEndCanBeEscaped.enabled(ctx) {
             Self::EscapeQuotesEnder
         } else {
@@ -316,7 +321,7 @@ struct SexpScanPolicy {
 }
 
 impl SexpScanPolicy {
-    fn for_context(ctx: &super::eval::Context) -> Self {
+    fn for_context<H: TextHost>(ctx: &H) -> Self {
         Self {
             ignore_comments: SyntaxStateVariable::ParseSexpIgnoreComments.enabled(ctx),
             comment_end_escape: CommentEndEscapePolicy::for_context(ctx),
@@ -1438,8 +1443,8 @@ fn word_boundary_table_active(table: &Value, mode: crate::tagged::SymbolMode) ->
 /// `honor` rather than a snapshot: the boundary callback below is arbitrary
 /// Lisp, so each probe takes its own [`SyntaxProperties::for_scan`] snapshot,
 /// just as it already builds its own property-run cache.
-fn word_motion_with_table(
-    eval: &mut super::eval::Context,
+fn word_motion_with_table<H: TextHost>(
+    eval: &mut H,
     count: i64,
     honor: bool,
     wbtable: Value,
@@ -1448,7 +1453,7 @@ fn word_motion_with_table(
     let forward = count > 0;
     let n = count.unsigned_abs();
     let mut completed = true;
-    let current_id = match eval.edit.buffers.current_buffer_id() {
+    let current_id = match eval.buffers().current_buffer_id() {
         Some(id) => id,
         None => return (EmacsBytePos::new(0), false),
     };
@@ -1462,12 +1467,12 @@ fn word_motion_with_table(
             let props = SyntaxProperties::for_scan_with_symbols(
                 honor,
                 eval.variables(),
-                &eval.edit.buffers,
+                eval.buffers(),
                 eval.symbol_mode(),
             );
             let prop_cache = SyntaxPropRange::new(props);
             let prop_cache = &prop_cache;
-            let buf = match eval.edit.buffers.get(current_id) {
+            let buf = match eval.buffers().get(current_id) {
                 Some(b) => b,
                 None => return (EmacsBytePos::new(0), false),
             };
@@ -1527,7 +1532,7 @@ fn word_motion_with_table(
             // instead turns the ubiquitous
             // (while (< (point) (point-max)) (forward-word)) idiom into an
             // infinite loop whenever trailing non-word text remains.
-            if let Some(buf) = eval.edit.buffers.get(current_id) {
+            if let Some(buf) = eval.buffers().get(current_id) {
                 let region = buf.accessible_emacs_byte_region();
                 let limit = if forward {
                     region.range().end()
@@ -1535,8 +1540,7 @@ fn word_motion_with_table(
                     region.range().start()
                 };
                 let _ = eval
-                    .edit
-                    .buffers
+                    .buffers_mut()
                     .goto_buffer_emacs_byte_pos(current_id, limit);
             }
             completed = false;
@@ -1553,12 +1557,12 @@ fn word_motion_with_table(
         .unwrap_or(Value::NIL);
         let mut handled = false;
         let callable = match func.as_symbol_id(symbol_mode) {
-            Some(id) => eval.obarray.fboundp_id(id),
+            Some(id) => eval.variables().obarray().fboundp_id(id),
             None => super::subr_info::subr_is_callable_function_value(&func),
         };
         if callable
             && let Ok(result) =
-                eval.funcall_general(func, vec![Value::fixnum(pos1), Value::fixnum(limit1)])
+                eval.funcall_general(func, &[Value::fixnum(pos1), Value::fixnum(limit1)])
             && let ValueKind::Fixnum(new_pos1) = result.kind()
         {
             let valid = if forward {
@@ -1569,12 +1573,11 @@ fn word_motion_with_table(
             if valid {
                 let zero_based = (new_pos1 - 1).max(0) as usize;
                 let byte = {
-                    let buf = eval.edit.buffers.get(current_id).expect("buffer");
+                    let buf = eval.buffers().get(current_id).expect("buffer");
                     buffer_char_to_emacs_byte_pos(buf, CharPos0::new(zero_based))
                 };
                 let _ = eval
-                    .edit
-                    .buffers
+                    .buffers_mut()
                     .goto_buffer_emacs_byte_pos(current_id, byte);
                 handled = true;
             }
@@ -1586,22 +1589,21 @@ fn word_motion_with_table(
                 let props = SyntaxProperties::for_scan_with_symbols(
                     honor,
                     eval.variables(),
-                    &eval.edit.buffers,
+                    eval.buffers(),
                     eval.symbol_mode(),
                 );
-                let buf = eval.edit.buffers.get(current_id).expect("buffer");
+                let buf = eval.buffers().get(current_id).expect("buffer");
                 let table = SyntaxTable::for_buffer(buf);
                 forward_word_with_options(
                     buf,
                     &table,
                     if forward { 1 } else { -1 },
                     props,
-                    super::builtins::search::current_word_boundary_lookup(eval),
+                    super::regex_emacs::current_word_boundary_lookup(eval),
                 )
             };
             let _ = eval
-                .edit
-                .buffers
+                .buffers_mut()
                 .goto_buffer_emacs_byte_pos(current_id, byte);
             if !ok {
                 completed = false;
@@ -1611,8 +1613,7 @@ fn word_motion_with_table(
     }
 
     let byte = eval
-        .edit
-        .buffers
+        .buffers()
         .get(current_id)
         .map(|b| b.point_emacs_byte_pos())
         .unwrap_or(EmacsBytePos::new(0));
@@ -1622,31 +1623,33 @@ fn word_motion_with_table(
 /// Compute where `forward-word`/`backward-word` over `count` words would land,
 /// honoring `find-word-boundary-function-table`, WITHOUT moving point. Used by
 /// the word-casing commands that operate on the [point, destination] region.
-pub(crate) fn forward_word_destination(
-    eval: &mut super::eval::Context,
+pub(crate) fn forward_word_destination<H: TextHost>(
+    eval: &mut H,
     count: i64,
     honor: bool,
 ) -> EmacsBytePos {
-    let wbtable = eval.visible_variable_value_or_nil("find-word-boundary-function-table");
+    let wbtable = eval
+        .variable_value_by_name("find-word-boundary-function-table")
+        .unwrap_or(Value::NIL);
     if word_boundary_table_active(&wbtable, eval.symbol_mode()) {
-        let current_id = eval.edit.buffers.current_buffer_id();
+        let current_id = eval.buffers().current_buffer_id();
         let saved =
-            current_id.and_then(|id| eval.edit.buffers.get(id).map(|b| b.point_emacs_byte_pos()));
+            current_id.and_then(|id| eval.buffers().get(id).map(|b| b.point_emacs_byte_pos()));
         let (dest, _) = word_motion_with_table(eval, count, honor, wbtable);
         // word_motion_with_table moves point as it scans; restore it.
         if let (Some(id), Some(saved)) = (current_id, saved) {
-            let _ = eval.edit.buffers.goto_buffer_emacs_byte_pos(id, saved);
+            let _ = eval.buffers_mut().goto_buffer_emacs_byte_pos(id, saved);
         }
         dest
     } else {
-        let buf = match eval.edit.buffers.current_buffer() {
+        let buf = match eval.buffers().current_buffer() {
             Some(b) => b,
             None => return EmacsBytePos::new(0),
         };
         let props = SyntaxProperties::for_scan_with_symbols(
             honor,
             eval.variables(),
-            &eval.edit.buffers,
+            eval.buffers(),
             eval.symbol_mode(),
         );
         let table = SyntaxTable::for_buffer(buf);
@@ -1655,7 +1658,7 @@ pub(crate) fn forward_word_destination(
             &table,
             count,
             props,
-            super::builtins::search::current_word_boundary_lookup(eval),
+            super::regex_emacs::current_word_boundary_lookup(eval),
         )
         .0
     }
@@ -3046,17 +3049,14 @@ fn current_buffer_syntax_table_object_in_buffers(
     )
 }
 
-pub(crate) fn sync_current_buffer_syntax_table_state(
-    ctx: &mut super::eval::Context,
-) -> Result<(), Flow> {
+pub(crate) fn sync_current_buffer_syntax_table_state<H: TextHost>(ctx: &mut H) -> Result<(), Flow> {
     let mode = ctx.symbol_mode();
     // Just ensure the slot is seeded with the standard chartable if
     // it was left `Value::NIL`. No compilation, no cache rebuild —
     // motion/parse code reads `buf.slots[BUFFER_SLOT_SYNTAX_TABLE.index()]`
     // directly via `SyntaxTable::for_buffer`. Matches GNU
     // `set_buffer_internal`.
-    let _ =
-        current_buffer_syntax_table_object_in_buffers_with_symbols(&mut ctx.edit.buffers, mode)?;
+    let _ = current_buffer_syntax_table_object_in_buffers_with_symbols(ctx.buffers_mut(), mode)?;
     Ok(())
 }
 
@@ -3348,7 +3348,11 @@ impl<'a> SyntaxProperties<'a> {
     /// Snapshot the property source for one scan. `honor` is the value of
     /// `parse-sexp-lookup-properties`, read (and any `syntax-propertize` run)
     /// by the caller before this point, since Lisp must not run afterwards.
-    pub(crate) fn for_scan(honor: bool, vars: VariableView<'a>, buffers: &BufferManager) -> Self {
+    pub(crate) fn for_scan<V: EditVariableRead<'a>>(
+        honor: bool,
+        vars: V,
+        buffers: &BufferManager,
+    ) -> Self {
         if honor {
             Self::Honor(CharPropertyResolver::snapshot(
                 vars,
@@ -4693,7 +4697,7 @@ fn syntax_entry_from_table_logged(
         .unwrap_or_else(|| SyntaxEntry::simple(table.char_syntax(ch)))
 }
 
-pub(crate) fn parse_sexp_lookup_properties_enabled(ctx: &super::eval::Context) -> bool {
+pub(crate) fn parse_sexp_lookup_properties_enabled<H: TextHost>(ctx: &H) -> bool {
     SyntaxStateVariable::ParseSexpLookupProperties.enabled(ctx)
 }
 
@@ -4713,8 +4717,8 @@ pub(crate) fn syntax_propertize_done_sym() -> neovm_value::intern::SymId {
     *SYMBOL.get_or_init(|| neovm_value::intern::intern("syntax-propertize--done"))
 }
 
-pub(crate) fn maybe_syntax_propertize_for_scan(
-    eval: &mut super::eval::Context,
+pub(crate) fn maybe_syntax_propertize_for_scan<H: TextHost>(
+    eval: &mut H,
     target_char_pos: usize,
 ) -> EvalResult {
     maybe_syntax_propertize_for_scan_with_scope(eval, target_char_pos, || ())
@@ -4722,14 +4726,15 @@ pub(crate) fn maybe_syntax_propertize_for_scan(
 
 /// Enter a caller's root scope only when propertization actually calls Lisp.
 /// Warm scans retain the usual single function/frontier check.
-pub(crate) fn maybe_syntax_propertize_for_scan_with_scope<G>(
-    eval: &mut super::eval::Context,
+pub(crate) fn maybe_syntax_propertize_for_scan_with_scope<H: TextHost, G>(
+    eval: &mut H,
     target_char_pos: usize,
     enter_scope: impl FnOnce() -> G,
 ) -> EvalResult {
     if !parse_sexp_lookup_properties_enabled(eval)
         || eval
-            .obarray
+            .variables()
+            .obarray()
             .symbol_function_id(internal_syntax_propertize_sym())
             .is_none()
     {
@@ -4737,7 +4742,8 @@ pub(crate) fn maybe_syntax_propertize_for_scan_with_scope<G>(
     }
 
     let done = eval
-        .builtin_var_value(syntax_propertize_done_sym())
+        .variables()
+        .value(syntax_propertize_done_sym())
         .unwrap_or(Value::fixnum(-1));
     if let ValueKind::Fixnum(done) = done.kind()
         && done >= target_char_pos as i64
@@ -4746,19 +4752,17 @@ pub(crate) fn maybe_syntax_propertize_for_scan_with_scope<G>(
     }
 
     let before_modiff = eval
-        .edit
-        .buffers
+        .buffers()
         .current_buffer()
         .map(|buf| buf.chars_modified_tick())
         .unwrap_or_default();
     let _scope = enter_scope();
     eval.apply(
         Value::from_sym_id(internal_syntax_propertize_sym()),
-        vec![Value::fixnum(target_char_pos as i64)],
+        &[Value::fixnum(target_char_pos as i64)],
     )?;
     let after_modiff = eval
-        .edit
-        .buffers
+        .buffers()
         .current_buffer()
         .map(|buf| buf.chars_modified_tick())
         .unwrap_or_default();
@@ -4779,19 +4783,17 @@ pub(crate) fn maybe_syntax_propertize_for_scan_with_scope<G>(
 /// does not already cover the target. A builtin that sees `false` may skip
 /// the call (and everything it would re-read after Lisp ran) with nothing
 /// observable changed.
-pub(crate) fn syntax_propertize_would_run(
-    eval: &super::eval::Context,
-    target_char_pos: usize,
-) -> bool {
+pub(crate) fn syntax_propertize_would_run<H: TextHost>(eval: &H, target_char_pos: usize) -> bool {
     if eval
-        .obarray
+        .variables()
+        .obarray()
         .symbol_function_id(internal_syntax_propertize_sym())
         .is_none()
     {
         return false;
     }
     !matches!(
-        eval.builtin_var_value(syntax_propertize_done_sym()).map(|done| done.kind()),
+        eval.variables().value(syntax_propertize_done_sym()).map(|done| done.kind()),
         Some(ValueKind::Fixnum(done)) if done >= target_char_pos as i64
     )
 }
@@ -4803,13 +4805,14 @@ pub(crate) fn syntax_propertize_would_run(
 /// `[from + 1, end]` so a scan window always makes progress; when nothing
 /// tracks the frontier (no propertize function, unbound variable) the whole
 /// accessible range is usable.
-fn syntax_propertize_frontier_for_scan(
-    eval: &mut super::eval::Context,
+fn syntax_propertize_frontier_for_scan<H: TextHost>(
+    eval: &mut H,
     from: usize,
     end: usize,
 ) -> usize {
     let done = eval
-        .builtin_var_value(syntax_propertize_done_sym())
+        .variables()
+        .value(syntax_propertize_done_sym())
         .unwrap_or(Value::NIL);
     match done.kind() {
         ValueKind::Fixnum(done) if done > 0 && (done as usize) <= end => {
@@ -4856,11 +4859,8 @@ pub(crate) fn builtin_syntax_class_to_char(args: Vec<Value>) -> EvalResult {
 /// This is an evaluator-dependent version that uses the current buffer's
 /// syntax table, matching GNU `Fmatching_paren`: return a match only when the
 /// effective syntax class is open or close.
-pub(crate) fn builtin_matching_paren(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    builtin_matching_paren_in_buffers(&eval.edit.buffers, args)
+pub(crate) fn builtin_matching_paren<H: TextHost>(eval: &mut H, args: Vec<Value>) -> EvalResult {
+    builtin_matching_paren_in_buffers(eval.buffers(), args)
 }
 
 pub(crate) fn builtin_matching_paren_in_buffers(
@@ -4928,20 +4928,17 @@ pub(crate) fn builtin_syntax_table_p(args: Vec<Value>) -> EvalResult {
 /// Returns the buffer-local syntax-table object, defaulting to the standard
 /// syntax-table object.
 #[cfg(test)]
-pub(crate) fn builtin_syntax_table(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
+pub(crate) fn builtin_syntax_table<H: TextHost>(eval: &mut H, args: Vec<Value>) -> EvalResult {
     neovm_value::error::expect_args("syntax-table", &args, 0)?;
     builtin_syntax_table_0(eval)
 }
 /// `syntax-table` as registered: fixed arity 0, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a0` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_syntax_table_0(eval: &mut super::eval::Context) -> EvalResult {
+pub(crate) fn builtin_syntax_table_0<H: TextHost>(eval: &mut H) -> EvalResult {
     let mode = eval.symbol_mode();
     let args: [Value; 0] = [];
-    builtin_syntax_table_in_buffers_with_symbols(&mut eval.edit.buffers, &args, mode)
+    builtin_syntax_table_in_buffers_with_symbols(eval.buffers_mut(), &args, mode)
 }
 
 /// `(set-syntax-table TABLE)` — install TABLE for current buffer and return it.
@@ -4949,10 +4946,7 @@ pub(crate) fn builtin_syntax_table_0(eval: &mut super::eval::Context) -> EvalRes
 /// NeoVM currently stores syntax behavior on `Buffer.syntax_table` internals;
 /// this installs the exposed syntax-table object for compatibility and returns it.
 #[cfg(test)]
-pub(crate) fn builtin_set_syntax_table(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
+pub(crate) fn builtin_set_syntax_table<H: TextHost>(eval: &mut H, args: Vec<Value>) -> EvalResult {
     neovm_value::error::expect_args("set-syntax-table", &args, 1)?;
     let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
     builtin_set_syntax_table_1(eval, arg(0))
@@ -4960,13 +4954,10 @@ pub(crate) fn builtin_set_syntax_table(
 /// `set-syntax-table` as registered: fixed arity 1, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_set_syntax_table_1(
-    eval: &mut super::eval::Context,
-    table: Value,
-) -> EvalResult {
+pub(crate) fn builtin_set_syntax_table_1<H: TextHost>(eval: &mut H, table: Value) -> EvalResult {
     let mode = eval.symbol_mode();
     let args: [Value; 1] = [table];
-    builtin_set_syntax_table_in_buffers_with_symbols(&mut eval.edit.buffers, &args, mode)
+    builtin_set_syntax_table_in_buffers_with_symbols(eval.buffers_mut(), &args, mode)
 }
 
 // ===========================================================================
@@ -4974,17 +4965,17 @@ pub(crate) fn builtin_set_syntax_table_1(
 // ===========================================================================
 
 /// `(modify-syntax-entry CHAR NEWENTRY &optional SYNTAX-TABLE)`
-pub(crate) fn builtin_modify_syntax_entry(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_modify_syntax_entry<H: TextHost>(
+    eval: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     let mode = eval.symbol_mode();
-    modify_syntax_entry_in_buffers_with_symbols(&mut eval.edit.buffers, &args, mode)
+    modify_syntax_entry_in_buffers_with_symbols(eval.buffers_mut(), &args, mode)
 }
 
 /// `(char-syntax CHAR)` — return the syntax class designator char.
 #[cfg(test)]
-pub(crate) fn builtin_char_syntax(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_char_syntax<H: TextHost>(eval: &mut H, args: Vec<Value>) -> EvalResult {
     neovm_value::error::expect_args("char-syntax", &args, 1)?;
     let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
     builtin_char_syntax_1(eval, arg(0))
@@ -4992,12 +4983,9 @@ pub(crate) fn builtin_char_syntax(eval: &mut super::eval::Context, args: Vec<Val
 /// `char-syntax` as registered: fixed arity 1, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_char_syntax_1(
-    eval: &mut super::eval::Context,
-    character: Value,
-) -> EvalResult {
+pub(crate) fn builtin_char_syntax_1<H: TextHost>(eval: &mut H, character: Value) -> EvalResult {
     let args: [Value; 1] = [character];
-    builtin_char_syntax_in_buffers(&eval.edit.buffers, &args)
+    builtin_char_syntax_in_buffers(eval.buffers(), &args)
 }
 
 pub(crate) fn builtin_char_syntax_in_buffers(
@@ -5061,16 +5049,15 @@ pub(crate) fn builtin_char_syntax_in_buffers(
 /// syntax via `modify-syntax-entry`) participate in a word -- Unicode
 /// letterness is irrelevant. Falls back to the standard syntax table when there
 /// is no current buffer (e.g. casing a plain string outside any buffer).
-pub(crate) fn casing_word_predicate(
-    eval: &super::eval::Context,
+pub(crate) fn casing_word_predicate<H: TextHost>(
+    eval: &H,
 ) -> impl Fn(u32) -> bool + Copy + 'static {
     let symbols_as_words = eval
-        .eval_symbol("case-symbols-as-words")
+        .eval_symbol_by_id(neovm_value::intern::intern("case-symbols-as-words"))
         .unwrap_or(Value::NIL)
         .is_truthy();
     let chartable = eval
-        .edit
-        .buffers
+        .buffers()
         .current_buffer()
         .map(|buf| SyntaxTable::for_buffer(buf).chartable);
     move |code: u32| {
@@ -5084,21 +5071,14 @@ pub(crate) fn casing_word_predicate(
 
 /// `(syntax-after POS)` — return syntax descriptor for char at POS.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub(crate) fn builtin_syntax_after(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    builtin_syntax_after_in_buffers_with_symbols(
-        eval.variables(),
-        &eval.edit.buffers,
-        args,
-        eval.symbol_mode(),
-    )
+pub(crate) fn builtin_syntax_after<H: TextHost>(eval: &mut H, args: Vec<Value>) -> EvalResult {
+    let mode = eval.symbol_mode();
+    builtin_syntax_after_in_buffers_with_symbols(eval.variables(), eval.buffers(), args, mode)
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub(crate) fn builtin_syntax_after_in_buffers(
-    vars: VariableView<'_>,
+pub(crate) fn builtin_syntax_after_in_buffers<'a, V: EditVariableRead<'a>>(
+    vars: V,
     buffers: &BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -5110,8 +5090,8 @@ pub(crate) fn builtin_syntax_after_in_buffers(
     )
 }
 
-pub(crate) fn builtin_syntax_after_in_buffers_with_symbols(
-    vars: VariableView<'_>,
+pub(crate) fn builtin_syntax_after_in_buffers_with_symbols<'a, V: EditVariableRead<'a>>(
+    vars: V,
     buffers: &BufferManager,
     args: Vec<Value>,
     mode: crate::tagged::SymbolMode,
@@ -6476,7 +6456,9 @@ pub(crate) fn builtin_forward_word(
     // When `find-word-boundary-function-table` is active (subword/superword),
     // GNU's scan_words consults it per word; otherwise the plain syntax scan is
     // used unchanged.
-    let wbtable = eval.visible_variable_value_or_nil("find-word-boundary-function-table");
+    let wbtable = eval
+        .variable_value_by_name("find-word-boundary-function-table")
+        .unwrap_or(Value::NIL);
     let (raw_byte, completed) = if word_boundary_table_active(&wbtable, eval.symbol_mode()) {
         word_motion_with_table(eval, count, honor, wbtable)
     } else {
@@ -6583,23 +6565,22 @@ pub(crate) fn builtin_forward_word(
 /// A backward scan never examines text past its start, so it keeps the cheap
 /// target. `forward-comment` in this file already had this same whole-tail
 /// mistake fixed; this is that loop, shared.
-fn scan_sexps_lazily(
-    eval: &mut super::eval::Context,
+fn scan_sexps_lazily<H: TextHost>(
+    eval: &mut H,
     from_byte: usize,
     effective_count: i64,
     honor: bool,
 ) -> Result<Option<usize>, Flow> {
-    let run = |eval: &mut super::eval::Context| -> Result<Option<usize>, Flow> {
+    let run = |eval: &mut H| -> Result<Option<usize>, Flow> {
         let props = SyntaxProperties::for_scan_with_symbols(
             honor,
             eval.variables(),
-            &eval.edit.buffers,
+            eval.buffers(),
             eval.symbol_mode(),
         );
         let policy = SexpScanPolicy::for_context(eval);
         let buf = eval
-            .edit
-            .buffers
+            .buffers()
             .current_buffer()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
         let table = SyntaxTable::for_buffer(buf);
@@ -6613,8 +6594,7 @@ fn scan_sexps_lazily(
 
     let (from_char, end_char) = {
         let buf = eval
-            .edit
-            .buffers
+            .buffers()
             .current_buffer()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
         let region = buf.accessible_char_region();
@@ -6648,8 +6628,7 @@ fn scan_sexps_lazily(
             || match found {
                 Some(byte) => {
                     let char_pos = eval
-                        .edit
-                        .buffers
+                        .buffers()
                         .current_buffer()
                         .map(|buf| {
                             buf.emacs_byte_pos_to_char_pos_clamped(EmacsBytePos::new(byte))
@@ -6667,10 +6646,7 @@ fn scan_sexps_lazily(
     }
 }
 
-pub(crate) fn builtin_forward_sexp(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
+pub(crate) fn builtin_forward_sexp<H: TextHost>(eval: &mut H, args: Vec<Value>) -> EvalResult {
     let count = if args.is_empty() || args[0].is_nil() {
         1i64
     } else {
@@ -6687,15 +6663,13 @@ pub(crate) fn builtin_forward_sexp(
 
     let honor = parse_sexp_lookup_properties_enabled(eval);
     let from = eval
-        .edit
-        .buffers
+        .buffers()
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?
         .point_emacs_byte_pos();
     let found = scan_sexps_lazily(eval, from.get(), count, honor)?;
     let buf = eval
-        .edit
-        .buffers
+        .buffers()
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     let new_pos = match found {
@@ -6705,13 +6679,11 @@ pub(crate) fn builtin_forward_sexp(
     };
 
     let current_id = eval
-        .edit
-        .buffers
+        .buffers()
         .current_buffer_id()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     let _ = eval
-        .edit
-        .buffers
+        .buffers_mut()
         .goto_buffer_emacs_byte_pos(current_id, new_pos);
     Ok(Value::NIL)
 }
@@ -6719,10 +6691,7 @@ pub(crate) fn builtin_forward_sexp(
 /// `(backward-sexp &optional COUNT)` — move point backward over COUNT balanced
 /// expressions.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub(crate) fn builtin_backward_sexp(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
+pub(crate) fn builtin_backward_sexp<H: TextHost>(eval: &mut H, args: Vec<Value>) -> EvalResult {
     let count = if args.is_empty() || args[0].is_nil() {
         1i64
     } else {
@@ -6739,16 +6708,14 @@ pub(crate) fn builtin_backward_sexp(
 
     let honor = parse_sexp_lookup_properties_enabled(eval);
     let from = eval
-        .edit
-        .buffers
+        .buffers()
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?
         .point_emacs_byte_pos();
     // backward-sexp with positive count => scan_sexps with negative count
     let found = scan_sexps_lazily(eval, from.get(), -count, honor)?;
     let buf = eval
-        .edit
-        .buffers
+        .buffers()
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     let new_pos = match found {
@@ -6758,13 +6725,11 @@ pub(crate) fn builtin_backward_sexp(
     };
 
     let current_id = eval
-        .edit
-        .buffers
+        .buffers()
         .current_buffer_id()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     let _ = eval
-        .edit
-        .buffers
+        .buffers_mut()
         .goto_buffer_emacs_byte_pos(current_id, new_pos);
     Ok(Value::NIL)
 }
@@ -6773,7 +6738,7 @@ pub(crate) fn builtin_backward_sexp(
 ///
 /// This uses the same core scanner as `forward-sexp`/`backward-sexp`.
 #[cfg(test)]
-pub(crate) fn builtin_scan_lists(ctx: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_scan_lists<H: TextHost>(ctx: &mut H, args: Vec<Value>) -> EvalResult {
     neovm_value::error::expect_args("scan-lists", &args, 3)?;
     let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
     builtin_scan_lists_3(ctx, arg(0), arg(1), arg(2))
@@ -6781,8 +6746,8 @@ pub(crate) fn builtin_scan_lists(ctx: &mut super::eval::Context, args: Vec<Value
 /// `scan-lists` as registered: fixed arity 3, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a3` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_scan_lists_3(
-    ctx: &mut super::eval::Context,
+pub(crate) fn builtin_scan_lists_3<H: TextHost>(
+    ctx: &mut H,
     from: Value,
     count: Value,
     depth: Value,
@@ -6830,8 +6795,7 @@ pub(crate) fn builtin_scan_lists_3(
 
     let (from_char, end_char) = {
         let buf = ctx
-            .edit
-            .buffers
+            .buffers()
             .current_buffer()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
         let accessible_chars = buf.accessible_char_region();
@@ -6846,17 +6810,16 @@ pub(crate) fn builtin_scan_lists_3(
 
     // Run the scan against whatever text is propertized now, recomputing the
     // resolver inputs first: propertizing ran arbitrary Lisp.
-    let mut scan = |ctx: &mut super::eval::Context| {
+    let scan = |ctx: &mut H| {
         let props = SyntaxProperties::for_scan_with_symbols(
             honor,
             ctx.variables(),
-            &ctx.edit.buffers,
+            ctx.buffers(),
             ctx.symbol_mode(),
         );
         let policy = SexpScanPolicy::for_context(ctx);
         let buf = ctx
-            .edit
-            .buffers
+            .buffers()
             .current_buffer()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
         let table = SyntaxTable::for_buffer(buf);
@@ -6919,7 +6882,7 @@ pub(crate) fn builtin_scan_lists_3(
 
 /// `(scan-sexps FROM COUNT)` — scan over COUNT sexps from FROM.
 #[cfg(test)]
-pub(crate) fn builtin_scan_sexps(ctx: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_scan_sexps<H: TextHost>(ctx: &mut H, args: Vec<Value>) -> EvalResult {
     neovm_value::error::expect_args("scan-sexps", &args, 2)?;
     let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
     builtin_scan_sexps_2(ctx, arg(0), arg(1))
@@ -6927,8 +6890,8 @@ pub(crate) fn builtin_scan_sexps(ctx: &mut super::eval::Context, args: Vec<Value
 /// `scan-sexps` as registered: fixed arity 2, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a2` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_scan_sexps_2(
-    ctx: &mut super::eval::Context,
+pub(crate) fn builtin_scan_sexps_2<H: TextHost>(
+    ctx: &mut H,
     from: Value,
     count: Value,
 ) -> EvalResult {
@@ -6966,8 +6929,7 @@ pub(crate) fn builtin_scan_sexps_2(
 
     let from_byte = {
         let buf = ctx
-            .edit
-            .buffers
+            .buffers()
             .current_buffer()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
         let from_char = LispCharPos1::new(from)
@@ -6978,8 +6940,7 @@ pub(crate) fn builtin_scan_sexps_2(
 
     let found = scan_sexps_lazily(ctx, from_byte.get(), count, honor)?;
     let buf = ctx
-        .edit
-        .buffers
+        .buffers()
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     match found {
@@ -7708,8 +7669,8 @@ fn clamped_parse_range(buf: &Buffer, from: i64, to: i64) -> (usize, usize) {
 /// `(parse-partial-sexp FROM TO &optional TARGETDEPTH STOPBEFORE STATE COMMENTSTOP)`
 /// Baseline parser-state implementation for structural Lisp motion/state queries.
 #[cfg(test)]
-pub(crate) fn builtin_parse_partial_sexp(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_parse_partial_sexp<H: TextHost>(
+    eval: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     neovm_value::error::expect_args_range("parse-partial-sexp", &args, 2, 6)?;
@@ -7719,8 +7680,8 @@ pub(crate) fn builtin_parse_partial_sexp(
 /// `parse-partial-sexp` as registered: fixed arity 6, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a6` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_parse_partial_sexp_6(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_parse_partial_sexp_6<H: TextHost>(
+    eval: &mut H,
     from: Value,
     to: Value,
     targetdepth: Value,
@@ -7739,8 +7700,8 @@ pub(crate) fn builtin_parse_partial_sexp_6(
         ));
     }
 
-    let from = super::position::fix_position_eval(&eval.edit.buffers, &args[0])?;
-    let to = super::position::fix_position_eval(&eval.edit.buffers, &args[1])?;
+    let from = super::position::fix_position_eval(eval.buffers(), &args[0])?;
+    let to = super::position::fix_position_eval(eval.buffers(), &args[1])?;
 
     if to < from {
         return Err(signal(
@@ -7749,21 +7710,22 @@ pub(crate) fn builtin_parse_partial_sexp_6(
         ));
     }
 
-    let buf = eval
-        .edit
-        .buffers
-        .current_buffer()
-        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    let accessible_chars = buf.accessible_char_region();
-    let point_min = accessible_chars.start_lisp().as_i64();
-    let point_max = accessible_chars.end_lisp().as_i64();
-    if from < point_min || from > point_max || to < point_min || to > point_max {
-        return Err(signal(
-            LispCondition::ArgsOutOfRange,
-            vec![Value::make_buffer(buf.id()), args[0], args[1]],
-        ));
-    }
-    let table = SyntaxTable::for_buffer(buf);
+    let table = {
+        let buf = eval
+            .buffers()
+            .current_buffer()
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        let accessible_chars = buf.accessible_char_region();
+        let point_min = accessible_chars.start_lisp().as_i64();
+        let point_max = accessible_chars.end_lisp().as_i64();
+        if from < point_min || from > point_max || to < point_min || to > point_max {
+            return Err(signal(
+                LispCondition::ArgsOutOfRange,
+                vec![Value::make_buffer(buf.id()), args[0], args[1]],
+            ));
+        }
+        SyntaxTable::for_buffer(buf)
+    };
     let target_depth = match args.get(2) {
         Some(v) if !v.is_nil() => match v.kind() {
             ValueKind::Fixnum(n) => Some(n),
@@ -7795,15 +7757,13 @@ pub(crate) fn builtin_parse_partial_sexp_6(
             commentstop,
         )?;
         let buf = eval
-            .edit
-            .buffers
+            .buffers()
             .current_buffer()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
         let current_id = buf.id();
         let stop_byte = lisp_pos_to_byte(buf, LispCharPos1::new(stop_pos));
         let _ = eval
-            .edit
-            .buffers
+            .buffers_mut()
             .goto_buffer_emacs_byte_pos(current_id, stop_byte);
         return Ok(state.into_value());
     }
@@ -7831,17 +7791,20 @@ pub(crate) fn builtin_parse_partial_sexp_6(
         static FAR_PARSE_TRACED: std::sync::atomic::AtomicBool =
             std::sync::atomic::AtomicBool::new(false);
         if from > 100_000 && !FAR_PARSE_TRACED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-            let _ = writeln!(
-                f,
-                "FAR-PARSE BACKTRACE:\n{}",
-                eval.render_lisp_backtrace(40)
-            );
+            let _ = writeln!(f, "FAR-PARSE BACKTRACE:\n{}", eval.lisp_backtrace(40));
         }
     }
+    // Re-acquire the buffer after the diagnostic block: that block takes the
+    // host mutably (`lisp_backtrace`) and cannot run while a `&Buffer`
+    // borrowed from `eval.buffers()` is live.
+    let buf = eval
+        .buffers()
+        .current_buffer()
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     let props = SyntaxProperties::for_scan_with_symbols(
         honor,
         eval.variables(),
-        &eval.edit.buffers,
+        eval.buffers(),
         eval.symbol_mode(),
     );
     let escape_policy = CommentEndEscapePolicy::for_context(eval);
@@ -7892,8 +7855,7 @@ pub(crate) fn builtin_parse_partial_sexp_6(
     let current_id = buf.id();
     let stop_byte = lisp_pos_to_byte(buf, LispCharPos1::new(stop_pos));
     let _ = eval
-        .edit
-        .buffers
+        .buffers_mut()
         .goto_buffer_emacs_byte_pos(current_id, stop_byte);
     Ok(state)
 }
@@ -7905,8 +7867,8 @@ fn lisp_pos_to_byte(buf: &Buffer, pos: LispCharPos1) -> EmacsBytePos {
 /// `(skip-syntax-forward SYNTAX &optional LIMIT)` — skip forward over chars
 /// matching the given syntax classes.
 #[cfg(test)]
-pub(crate) fn builtin_skip_syntax_forward(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_skip_syntax_forward<H: TextHost>(
+    eval: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     neovm_value::error::expect_args_range("skip-syntax-forward", &args, 1, 2)?;
@@ -7916,8 +7878,8 @@ pub(crate) fn builtin_skip_syntax_forward(
 /// `skip-syntax-forward` as registered: fixed arity 2, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a2` case (absent optionals arrive as nil).
 /// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_skip_syntax_forward_2(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_skip_syntax_forward_2<H: TextHost>(
+    eval: &mut H,
     syntax: Value,
     lim: Value,
 ) -> EvalResult {
@@ -7927,8 +7889,7 @@ pub(crate) fn builtin_skip_syntax_forward_2(
 
     let (old_pt, limit_byte) = {
         let buf = eval
-            .edit
-            .buffers
+            .buffers()
             .current_buffer()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
         (
@@ -7947,16 +7908,14 @@ pub(crate) fn builtin_skip_syntax_forward_2(
         // edit re-propertize the entire buffer tail: O(buffer) per call.
         const SYNTAX_PROPERTIZE_WINDOW_CHARS: usize = 500;
         let current_id = eval
-            .edit
-            .buffers
+            .buffers()
             .current_buffer_id()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
         let mut stop;
         loop {
             let (window_end_char, window_end_byte, final_limit_byte) = {
                 let buf = eval
-                    .edit
-                    .buffers
+                    .buffers()
                     .get(current_id)
                     .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
                 let from_char = buf.point_char_pos().get();
@@ -7979,12 +7938,11 @@ pub(crate) fn builtin_skip_syntax_forward_2(
             let props = SyntaxProperties::for_scan_with_symbols(
                 honor,
                 eval.variables(),
-                &eval.edit.buffers,
+                eval.buffers(),
                 eval.symbol_mode(),
             );
             let buf = eval
-                .edit
-                .buffers
+                .buffers()
                 .get(current_id)
                 .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
             let table = SyntaxTable::for_buffer(buf);
@@ -8000,15 +7958,13 @@ pub(crate) fn builtin_skip_syntax_forward_2(
             }
             // The scan consumed the whole window: advance and continue.
             let _ = eval
-                .edit
-                .buffers
+                .buffers_mut()
                 .goto_buffer_emacs_byte_pos(current_id, EmacsBytePos::new(window_end_byte));
         }
         stop
     } else {
         let buf = eval
-            .edit
-            .buffers
+            .buffers()
             .current_buffer()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
         let table = SyntaxTable::for_buffer(buf);
@@ -8023,19 +7979,16 @@ pub(crate) fn builtin_skip_syntax_forward_2(
     let new_pos = EmacsBytePos::new(new_pos);
 
     let current_id = eval
-        .edit
-        .buffers
+        .buffers()
         .current_buffer_id()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     let _ = eval
-        .edit
-        .buffers
+        .buffers_mut()
         .goto_buffer_emacs_byte_pos(current_id, new_pos);
 
     // Return number of characters skipped (Emacs convention).
     let buf = eval
-        .edit
-        .buffers
+        .buffers()
         .get(current_id)
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     let chars_moved = if new_pos >= old_pt {
@@ -8051,8 +8004,8 @@ pub(crate) fn builtin_skip_syntax_forward_2(
 ///
 /// Registered at fixed arity 2, called straight off the bytecode stack like
 /// GNU `funcall_subr`'s `a2` case (absent optionals arrive as nil).
-pub(crate) fn builtin_skip_syntax_backward_2(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_skip_syntax_backward_2<H: TextHost>(
+    eval: &mut H,
     syntax: Value,
     lim: Value,
 ) -> EvalResult {
@@ -8061,8 +8014,7 @@ pub(crate) fn builtin_skip_syntax_backward_2(
     let honor = parse_sexp_lookup_properties_enabled(eval);
     if honor {
         let target = eval
-            .edit
-            .buffers
+            .buffers()
             .current_buffer()
             .map(|buf| buf.point_char_pos().get())
             .unwrap_or(0);
@@ -8074,12 +8026,11 @@ pub(crate) fn builtin_skip_syntax_backward_2(
     let props = SyntaxProperties::for_scan_with_symbols(
         honor,
         eval.variables(),
-        &eval.edit.buffers,
+        eval.buffers(),
         eval.symbol_mode(),
     );
     let buf = eval
-        .edit
-        .buffers
+        .buffers()
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     let table = SyntaxTable::for_buffer(buf);
@@ -8087,27 +8038,23 @@ pub(crate) fn builtin_skip_syntax_backward_2(
     let new_pos = skip_syntax_backward_with_options(buf, &table, syntax_chars, limit, props);
 
     let old_pt = eval
-        .edit
-        .buffers
+        .buffers()
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?
         .point_emacs_byte_pos();
     let new_pos = EmacsBytePos::new(new_pos);
 
     let current_id = eval
-        .edit
-        .buffers
+        .buffers()
         .current_buffer_id()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     let _ = eval
-        .edit
-        .buffers
+        .buffers_mut()
         .goto_buffer_emacs_byte_pos(current_id, new_pos);
 
     // Return negative number of characters skipped.
     let buf = eval
-        .edit
-        .buffers
+        .buffers()
         .get(current_id)
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     let chars_moved = if old_pt >= new_pos {

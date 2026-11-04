@@ -13,7 +13,8 @@ use std::collections::HashSet;
 
 use super::builtins::expect_integer_or_marker_in_buffers;
 use super::chartable::{
-    builtin_char_table_range_with_symbols, builtin_set_char_table_range_with_symbols,
+    builtin_char_table_range_with_style, builtin_char_table_range_with_symbols,
+    builtin_set_char_table_range_with_style, builtin_set_char_table_range_with_symbols,
     is_char_table, make_char_table_value,
 };
 use super::error::{EvalResult, Flow, signal};
@@ -1102,7 +1103,7 @@ fn lookup_in_keymap_level_impl(
             {
                 let base = code & KEY_CHAR_CODE_MASK;
                 if (0..=0x3FFFFF).contains(&base) {
-                    let result = builtin_char_table_range_with_symbols(
+                    let result = builtin_char_table_range_with_style(
                         vec![entry_car, event.value()],
                         None,
                         symbol_mode,
@@ -1880,7 +1881,7 @@ fn store_in_keymap(keymap: Value, event: Value, def: Value, remove: bool, symbol
                     let base = code & KEY_CHAR_CODE_MASK;
                     if (0..=0x3FFFFF).contains(&base) {
                         let store_val = keymap_char_table_store_value(def, remove);
-                        let _ = builtin_set_char_table_range_with_symbols(
+                        let _ = builtin_set_char_table_range_with_style(
                             vec![entry_car, event, store_val],
                             None,
                             symbol_mode,
@@ -1890,7 +1891,7 @@ fn store_in_keymap(keymap: Value, event: Value, def: Value, remove: bool, symbol
                 }
             } else if event.is_cons() && keymap_character_range(&event).is_some() {
                 let store_val = keymap_char_table_store_value(def, remove);
-                let _ = builtin_set_char_table_range_with_symbols(
+                let _ = builtin_set_char_table_range_with_style(
                     vec![entry_car, event, store_val],
                     None,
                     symbol_mode,
@@ -1999,7 +2000,7 @@ fn store_in_keymap(keymap: Value, event: Value, def: Value, remove: bool, symbol
         let binding = if event.is_cons() && keymap_character_range(&event).is_some() {
             let char_table = make_char_table_value(KeymapMarker::Keymap.symbol_value(), Value::NIL);
             let store_val = keymap_char_table_store_value(def, false);
-            let _ = builtin_set_char_table_range_with_symbols(
+            let _ = builtin_set_char_table_range_with_style(
                 vec![char_table, event, store_val],
                 None,
                 symbol_mode,
@@ -4223,7 +4224,7 @@ fn copy_char_table_for_keymap(ct: &Value, depth: usize, symbol_mode: SymbolMode)
     };
     for (range, value) in entries {
         let copied_value = copy_keymap_item(&value, depth + 1, symbol_mode);
-        let _ = super::chartable::builtin_set_char_table_range_with_symbols(
+        let _ = super::chartable::builtin_set_char_table_range_with_style(
             vec![copied, range, copied_value],
             None,
             symbol_mode,

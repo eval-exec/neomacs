@@ -576,7 +576,7 @@ pub(crate) fn builtin_aset_args(symbols: impl ArraySymbolPolicy, args: &[Value])
         }
         VecLikeType::CharTable => {
             let ch = expect_char_table_index(&args[1])?;
-            super::chartable::builtin_set_char_table_range_with_symbols(
+            super::chartable::builtin_set_char_table_range_with_style(
                 vec![args[0], Value::fixnum(ch), args[2]],
                 None,
                 symbols.mode(),

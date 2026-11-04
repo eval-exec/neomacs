@@ -86,23 +86,25 @@ pub(crate) fn parse_pps_propertize_knob(value: Option<&str>) -> bool {
 /// `parse_sexp_lookup_properties` test of `UPDATE_SYNTAX_TABLE_FORWARD`,
 /// `parse_sexp_propertize`'s `done < ZV`, and an `internal--syntax-propertize`
 /// to call. A void `done` reads as GNU's initial -1.
-fn live_done(eval: &crate::emacs_core::eval::Context) -> i64 {
+fn live_done<H: crate::emacs_core::text_host::TextHost>(eval: &H) -> i64 {
     if !parse_sexp_lookup_properties_enabled(eval)
         || eval
-            .obarray
+            .variables()
+            .obarray()
             .symbol_function_id(internal_syntax_propertize_sym())
             .is_none()
     {
         return i64::MAX;
     }
     let Some(done) = eval
-        .builtin_var_value(syntax_propertize_done_sym())
+        .variables()
+        .value(syntax_propertize_done_sym())
         .unwrap_or(Value::fixnum(-1))
         .as_fixnum()
     else {
         return i64::MAX;
     };
-    let Some(buf) = eval.edit.buffers.current_buffer() else {
+    let Some(buf) = eval.buffers().current_buffer() else {
         return i64::MAX;
     };
     if done < buf.accessible_char_region().end_lisp().as_i64() {
@@ -116,14 +118,15 @@ fn live_done(eval: &crate::emacs_core::eval::Context) -> i64 {
 /// no position it can enter lies beyond TO. The caller has already found
 /// `parse-sexp-lookup-properties` non-nil.
 #[inline]
-pub(super) fn may_propertize(eval: &crate::emacs_core::eval::Context, to: i64) -> bool {
+pub(super) fn may_propertize<H: crate::emacs_core::text_host::TextHost>(eval: &H, to: i64) -> bool {
     if !pps_propertize_on() {
         return false;
     }
     // The common case first: `done' already covers TO (`syntax-ppss' and
     // font-lock propertize before they parse), one variable read.
     let covered = eval
-        .builtin_var_value(syntax_propertize_done_sym())
+        .variables()
+        .value(syntax_propertize_done_sym())
         .unwrap_or(Value::fixnum(-1))
         .as_fixnum()
         .is_none_or(|done| done > to);
@@ -197,17 +200,18 @@ fn syntax_of_char_at(
     (entry.class, entry.flags)
 }
 
-fn current_buffer_or_error(eval: &crate::emacs_core::eval::Context) -> Result<&Buffer, Flow> {
-    eval.edit
-        .buffers
+fn current_buffer_or_error<H: crate::emacs_core::text_host::TextHost>(
+    eval: &H,
+) -> Result<&Buffer, Flow> {
+    eval.buffers()
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))
 }
 
 /// GNU `parse_sexp_propertize` once its trigger condition holds at CHARPOS:
 /// the call, then its two checks.
-fn run_propertize(
-    eval: &mut crate::emacs_core::eval::Context,
+fn run_propertize<H: crate::emacs_core::text_host::TextHost>(
+    eval: &mut H,
     buffer_id: BufferId,
     charpos: i64,
 ) -> Result<(), Flow> {
@@ -221,7 +225,7 @@ fn run_propertize(
     tracing::trace!(charpos, "parse-partial-sexp runs syntax-propertize");
     eval.safe_funcall(
         Value::from_sym_id(internal_syntax_propertize_sym()),
-        vec![Value::fixnum(zv.min(charpos + 1))],
+        &[Value::fixnum(zv.min(charpos + 1))],
     )?;
     let buf = current_buffer_or_error(eval)?;
     if buf.id() != buffer_id {
@@ -244,7 +248,8 @@ fn run_propertize(
     }
     let zv = buf.accessible_char_region().end_lisp().as_i64();
     let done = eval
-        .builtin_var_value(syntax_propertize_done_sym())
+        .variables()
+        .value(syntax_propertize_done_sym())
         .unwrap_or(Value::fixnum(-1))
         .as_fixnum();
     if done.is_some_and(|done| done <= charpos && done < zv) {
@@ -259,8 +264,8 @@ fn run_propertize(
 }
 
 /// Enter CHARPOS: propertize if GNU's trigger holds there.
-fn propertize_if_due(
-    eval: &mut crate::emacs_core::eval::Context,
+fn propertize_if_due<H: crate::emacs_core::text_host::TextHost>(
+    eval: &mut H,
     buffer_id: BufferId,
     charpos: i64,
 ) -> Result<(), Flow> {
@@ -276,8 +281,8 @@ fn propertize_if_due(
 #[cold]
 #[inline(never)]
 #[allow(clippy::too_many_arguments)] // parse-partial-sexp's arguments
-pub(super) fn parse_partial_sexp_propertizing(
-    eval: &mut crate::emacs_core::eval::Context,
+pub(super) fn parse_partial_sexp_propertizing<H: crate::emacs_core::text_host::TextHost>(
+    eval: &mut H,
     from: i64,
     to: i64,
     target_depth: Option<i64>,
@@ -310,7 +315,7 @@ pub(super) fn parse_partial_sexp_propertizing(
             let buf = current_buffer_or_error(eval)?;
             let table = SyntaxTable::for_buffer(buf);
             let honor = parse_sexp_lookup_properties_enabled(eval);
-            let props = SyntaxProperties::for_scan(honor, eval.variables(), &eval.edit.buffers);
+            let props = SyntaxProperties::for_scan(honor, eval.variables(), eval.buffers());
             let escape_policy = CommentEndEscapePolicy::for_context(eval);
             let end = run_parse_loop(
                 buf,

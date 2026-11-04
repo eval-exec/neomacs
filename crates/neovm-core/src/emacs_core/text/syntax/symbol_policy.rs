@@ -58,7 +58,7 @@ pub(crate) fn builtin_copy_syntax_table_with_symbols(
 
     let copy = crate::emacs_core::chartable::copy_char_table_with_symbols(source, mode)
         .expect("validated syntax table");
-    crate::emacs_core::chartable::builtin_set_char_table_range_with_symbols(
+    crate::emacs_core::chartable::builtin_set_char_table_range_with_style(
         vec![copy, Value::NIL, Value::NIL],
         None,
         mode,
@@ -186,7 +186,7 @@ pub(crate) fn modify_syntax_entry_in_buffers_with_symbols(
     } else {
         syntax_entry_to_value(&entry)
     };
-    crate::emacs_core::chartable::builtin_set_char_table_range_with_symbols(
+    crate::emacs_core::chartable::builtin_set_char_table_range_with_style(
         vec![target_table, args[0], chartable_entry],
         None,
         mode,
@@ -246,7 +246,7 @@ pub(crate) fn syntax_entry_from_syntax_property_with_symbols(
         .ok()?
         .is_truthy()
     {
-        let raw = crate::emacs_core::chartable::builtin_char_table_range_with_symbols(
+        let raw = crate::emacs_core::chartable::builtin_char_table_range_with_style(
             vec![prop, Value::fixnum(ch as i64)],
             None,
             mode,
@@ -297,24 +297,24 @@ pub(crate) fn regexp_syntax_class_at_string_byte_with_symbols(
         .map_or_else(|| table.char_syntax(ch), |entry| entry.class)
 }
 
-pub(crate) fn builtin_syntax_table_p_in_state(
-    eval: &mut super::super::eval::Context,
+pub(crate) fn builtin_syntax_table_p_in_state<H: TextHost>(
+    eval: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_syntax_table_p_with_symbols(args, eval.symbol_mode())
 }
 
-pub(crate) fn builtin_copy_syntax_table_in_state(
-    eval: &mut super::super::eval::Context,
+pub(crate) fn builtin_copy_syntax_table_in_state<H: TextHost>(
+    eval: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_copy_syntax_table_with_symbols(args, eval.symbol_mode())
 }
 
 impl<'a> SyntaxProperties<'a> {
-    pub(crate) fn for_scan_with_symbols(
+    pub(crate) fn for_scan_with_symbols<V: EditVariableRead<'a>>(
         honor: bool,
-        vars: crate::emacs_core::eval::VariableView<'a>,
+        vars: V,
         buffers: &BufferManager,
         mode: SymbolMode,
     ) -> Self {
