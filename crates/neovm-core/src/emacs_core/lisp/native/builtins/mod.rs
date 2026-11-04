@@ -43,24 +43,10 @@ pub(crate) use crate::strings_core::lisp_string_char_codes;
 /// does not allocate a `Vec<u32>` — it walks bytes only as far as needed.
 /// Mirrors the byte-level access pattern used by GNU's `Faref` on strings
 /// (fns.c:3108-3123).
-pub(crate) fn lisp_string_char_at(
-    string: &crate::heap_types::LispString,
-    idx: usize,
-) -> Option<u32> {
-    let bytes = string.as_bytes();
-    if !string.is_multibyte() {
-        return bytes.get(idx).map(|&b| b as u32);
-    }
-    if idx >= string.schars() {
-        return None;
-    }
-    // `LispString::char_to_byte_pos' answers an all-ASCII multibyte string
-    // -- what `buffer-substring' returns for ASCII text -- in O(1).
-    let byte_pos = string.char_to_byte_pos(idx);
-    let tail = bytes.get(byte_pos..).unwrap_or_default();
-    let (cp, _) = crate::heap_types::decode_declared_multibyte_char(tail);
-    Some(cp.code())
-}
+///
+/// Moved below the evaluator with the stage-3 split (C12 value-helper
+/// move); this facade keeps the historical `builtins::` path working.
+pub(crate) use crate::strings_core::lisp_string_char_at;
 
 /// [`lisp_string_char_at`] for the string object `value`: the index goes
 /// through the one-entry position cache (GNU `string_char_to_byte`), so a
@@ -556,16 +542,9 @@ pub(super) fn expect_string_comparison_operand(
 /// the storage codec now survives only inside the buffer-text/runtime-reader
 /// layer (`storage_string_to_buffer_bytes`), which is unrelated to the
 /// Lisp-string path.
-pub(crate) fn plain_str_to_lisp_string(
-    text: &str,
-    multibyte: bool,
-) -> crate::heap_types::LispString {
-    if multibyte {
-        crate::heap_types::LispString::from_emacs_bytes(text.as_bytes().to_vec())
-    } else {
-        crate::heap_types::LispString::from_unibyte(text.as_bytes().to_vec())
-    }
-}
+/// Moved below the evaluator with the stage-3 split (C12 value-helper
+/// move); this facade keeps the historical `builtins::` path working.
+pub(crate) use crate::strings_core::plain_str_to_lisp_string;
 
 /// Test-only convenience: decode a string Value to a lossy `String` (valid
 /// Unicode preserved, raw eight-bit -> U+FFFD). No longer produces a storage

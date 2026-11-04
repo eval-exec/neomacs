@@ -48,6 +48,11 @@ pub(crate) use neovm_value::strings_core;
 // split (C12) once the char-table copy landed in chartab (C7a): the subr
 // wrappers and Context-routed entries resolve the symbol policy first.
 pub(crate) use neovm_value::sequence_copy;
+// The char-table container substrate (GNU chartab.c) moved below the
+// evaluator with the stage-3 split (C7a): the edit layer reaches the pure
+// lookups and `char-table-subtype` directly, below the text layer that
+// keeps the evaluator-bound entries.
+pub(crate) use neovm_value::chartab;
 // The exact (TICKS . HZ) time-conversion core (GNU timefns.c) moved with
 // the stage-3 split (C16): format's %N, fileio, buffer idle limits, dired,
 // and the dynamic-module bridge read time values below the lisp layer.

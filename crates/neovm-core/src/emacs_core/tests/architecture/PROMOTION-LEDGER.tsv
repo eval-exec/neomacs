@@ -1192,3 +1192,6 @@ builtin_string_as_multibyte	fn	pub(crate)	crates/neovm-value/src/strings_core.rs
 TakeCount	enum	pub(crate)	crates/neovm-value/src/error/mod.rs:1242	error	stage-3 C12: validated take/ntake iteration scalar (fns.c:1675-1687) shared by builtins_extra and the edit layer
 TakeCount::try_from	method	pub(crate)	crates/neovm-value/src/error/mod.rs:1253	error	stage-3 C12: fixnum-path validation moved with the scalar; keeps heap inspection off the hot path
 TakeCount::try_from_non_fixnum	method	private	crates/neovm-value/src/error/mod.rs:1268	error	stage-3 C12: bignum/integerp arm moved with the scalar (cold, inline-never)
+lisp_string_char_at	fn	pub(crate)	crates/neovm-value/src/strings_core.rs:70	strings_core	stage-3 C12: string aref core (GNU Faref walk, fns.c:3108-3123) moved below the evaluator; the builtins facade re-exports for its historical callers
+plain_str_to_lisp_string	fn	pub(crate)	crates/neovm-value/src/strings_core.rs:95	strings_core	stage-3 C12: &str-to-LispString construction core moved below the evaluator; doc strings, filenames, pdump payloads and the printer share it below edit
+builtin_char_table_subtype	fn	pub(crate)	crates/neovm-value/src/chartab.rs:694	chartab	stage-3 C7a: char-table-subtype subr (GNU Fchar_table_subtype) moved with the pure container; the edit layer translate path reaches it below the text layer

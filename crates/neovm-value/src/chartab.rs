@@ -11,7 +11,7 @@
 //! `scratch_bridge` hooks (the plist-core route), and interning uses the
 //! value-layer interner.
 
-use crate::error::{EvalResult, Flow, LispCondition, signal};
+use crate::error::{EvalResult, Flow, LispCondition, expect_args, signal};
 use crate::intern::{SymId, intern};
 use crate::tagged::SymbolMode;
 use crate::value::scratch_bridge::{
@@ -686,6 +686,18 @@ pub fn ct_lookup(table: &Value, ch: i64) -> EvalResult {
 #[doc(hidden)]
 pub fn ct_lookup_with_symbols(table: &Value, ch: i64, mode: SymbolMode) -> EvalResult {
     ct_lookup_impl(table, ch, mode)
+}
+
+/// `char-table-subtype`: the table's PURPOSE symbol (GNU
+/// `Fchar_table_subtype`, chartab.c). Pure Value in/out.
+#[doc(hidden)]
+pub fn builtin_char_table_subtype(args: Vec<Value>) -> EvalResult {
+    expect_args("char-table-subtype", &args, 1)?;
+    let table = &args[0];
+    if !is_char_table(table) {
+        return Err(wrong_type("char-table-p", table));
+    }
+    Ok(table.as_char_table_obj().unwrap().purpose.get())
 }
 fn ct_lookup_impl<P: CtLookupPolicy>(table: &Value, ch: i64, policy: P) -> EvalResult {
     let Some(obj) = table.as_char_table_obj() else {

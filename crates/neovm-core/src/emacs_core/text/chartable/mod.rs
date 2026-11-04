@@ -32,23 +32,22 @@ use crate::tagged::SymbolMode;
 pub use neovm_value::chartab::{ct_ref, ct_set_single};
 
 pub(crate) use neovm_value::chartab::{
-    OptimizeCharTableTest, assq_cell_eq, char_table_atomic_runs_in_range, char_table_default,
-    char_table_external_slots, char_table_extra_slot_value,
-    char_table_has_subtype_named_with_symbols, char_table_length, char_table_local_entries,
-    char_table_local_entries_with_symbols, char_table_may_hold_value_from,
-    char_table_may_hold_value_from_with_symbols, char_table_ref_and_range_with_symbols,
-    char_table_set_char_direct, char_table_set_range_direct, copy_char_table_with_symbols,
-    ct_lookup, ct_lookup_and_range, ct_lookup_with_symbols, ct_ref_with_symbols,
-    ct_resolved_entries, ct_set_single_with_symbols, decode_uniprop_run_length,
+    OptimizeCharTableTest, assq_cell_eq, builtin_char_table_subtype,
+    char_table_atomic_runs_in_range, char_table_default, char_table_external_slots,
+    char_table_extra_slot_value, char_table_has_subtype_named_with_symbols, char_table_length,
+    char_table_local_entries, char_table_local_entries_with_symbols,
+    char_table_may_hold_value_from, char_table_may_hold_value_from_with_symbols,
+    char_table_ref_and_range_with_symbols, char_table_set_char_direct, char_table_set_range_direct,
+    copy_char_table_with_symbols, ct_lookup, ct_lookup_and_range, ct_lookup_with_symbols,
+    ct_ref_with_symbols, ct_set_single_with_symbols, decode_uniprop_run_length,
     display_dependency_children, for_each_char_table_mapping_with_symbols,
     for_each_non_nil_char_table_run, for_each_non_nil_char_table_run_with_symbols,
     inline_vector_tag_shape, is_char_code_property_table, is_char_table,
     make_char_table_from_external_slots, make_char_table_from_external_slots_with_symbols,
     make_char_table_value, make_char_table_with_extra_slots,
     make_sub_char_table_from_external_slots, optimize_char_table_with_symbols,
-    prepare_uniprop_ascii_cache, set_char_table_ascii, set_char_table_contents,
-    set_char_table_extra_slot, sub_char_table_external_slots, translate_char_with_symbols,
-    wrong_type,
+    prepare_uniprop_ascii_cache, set_char_table_ascii, set_char_table_extra_slot,
+    sub_char_table_external_slots, translate_char_with_symbols, wrong_type,
 };
 
 // ---------------------------------------------------------------------------
@@ -450,14 +449,6 @@ pub(crate) fn builtin_set_char_table_extra_slot(args: Vec<Value>) -> EvalResult 
     let _ = table.with_char_table_mut(|obj| obj.set_extra(n as usize, *value));
     crate::window::note_char_table_layout_mutation();
     Ok(*value)
-}
-pub(crate) fn builtin_char_table_subtype(args: Vec<Value>) -> EvalResult {
-    expect_args("char-table-subtype", &args, 1)?;
-    let table = &args[0];
-    if !is_char_table(table) {
-        return Err(wrong_type("char-table-p", table));
-    }
-    Ok(table.as_char_table_obj().unwrap().purpose.get())
 }
 fn char_code_property_cell(eval: &Context, prop: Value) -> Result<Value, Flow> {
     let alist = eval

@@ -61,6 +61,45 @@ pub fn lisp_string_char_codes(string: &crate::heap_types::LispString) -> Vec<u32
     out
 }
 
+/// Return the character code at character index `idx` in `string`, or
+/// `None` if `idx` is out of range. Unlike `lisp_string_char_codes`, this
+/// does not allocate a `Vec<u32>` — it walks bytes only as far as needed.
+/// Mirrors the byte-level access pattern used by GNU's `Faref` on strings
+/// (fns.c:3108-3123).
+#[doc(hidden)]
+pub fn lisp_string_char_at(string: &crate::heap_types::LispString, idx: usize) -> Option<u32> {
+    let bytes = string.as_bytes();
+    if !string.is_multibyte() {
+        return bytes.get(idx).map(|&b| b as u32);
+    }
+    if idx >= string.schars() {
+        return None;
+    }
+    // `LispString::char_to_byte_pos' answers an all-ASCII multibyte string
+    // -- what `buffer-substring' returns for ASCII text -- in O(1).
+    let byte_pos = string.char_to_byte_pos(idx);
+    let tail = bytes.get(byte_pos..).unwrap_or_default();
+    let (cp, _) = crate::heap_types::decode_declared_multibyte_char(tail);
+    Some(cp.code())
+}
+
+/// Every Lisp-visible string built from a Rust `&str` (doc strings, parsed
+/// file data, filenames, pdump payloads, printer output) goes through here:
+/// the str carries no storage-String sentinels, so its bytes are already in
+/// Emacs internal form and become the `LispString` directly. The legacy
+/// storage-decode round-trip that this replaced has been retired (issue
+/// #131); the storage codec now survives only inside the
+/// buffer-text/runtime-reader layer (`storage_string_to_buffer_bytes`),
+/// which is unrelated to the Lisp-string path.
+#[doc(hidden)]
+pub fn plain_str_to_lisp_string(text: &str, multibyte: bool) -> crate::heap_types::LispString {
+    if multibyte {
+        crate::heap_types::LispString::from_emacs_bytes(text.as_bytes().to_vec())
+    } else {
+        crate::heap_types::LispString::from_unibyte(text.as_bytes().to_vec())
+    }
+}
+
 /// Extract an integer, signaling wrong-type-argument if not.
 fn expect_int(value: &Value) -> Result<i64, Flow> {
     match value.kind() {
