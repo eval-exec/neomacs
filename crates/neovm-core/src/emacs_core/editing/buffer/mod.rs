@@ -1865,14 +1865,13 @@ pub(crate) fn builtin_constrain_to_field_5<H: EditHost>(
     if constrain && let Some(capture_prop) = args.get(4).filter(|value| !value.is_nil()) {
         let capture = {
             let (edit, vars) = host.edit_and_vars();
-            let old_capture =
-                crate::emacs_core::builtins::misc_eval::builtin_get_pos_property_impl(
-                    vars,
-                    &[],
-                    None,
-                    &edit.buffers,
-                    &[Value::fixnum(old_pos), *capture_prop],
-                )?;
+            let old_capture = super::textprop::builtin_get_pos_property_impl(
+                vars,
+                &[],
+                None,
+                &edit.buffers,
+                &[Value::fixnum(old_pos), *capture_prop],
+            )?;
             let still_constrained = old_capture.is_nil()
                 && (old_pos <= point_min
                     || char_property_in_current_buffer(
@@ -2032,7 +2031,7 @@ fn field_property_at_position_in_state<'a, Vars: EditVariableRead<'a>>(
     buffers: &BufferManager,
     pos: i64,
 ) -> Result<Value, Flow> {
-    crate::emacs_core::builtins::misc_eval::builtin_get_pos_property_impl(
+    super::textprop::builtin_get_pos_property_impl(
         vars,
         dynamic,
         None,
@@ -2775,7 +2774,7 @@ pub(crate) fn apply_inherited_text_properties<'a, Vars: EditVariableRead<'a>>(
     let props = buffers
         .get(current_id)
         .map(|buf| {
-            super::builtins::misc_eval::inherited_text_properties_for_inserted_range_in_state(
+            super::textprop::inherited_text_properties_for_inserted_range_in_state(
                 vars, dynamic, buffers, buf, old_pt, text_len, mode,
             )
         })
