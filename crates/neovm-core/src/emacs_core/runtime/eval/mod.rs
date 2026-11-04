@@ -11,7 +11,9 @@ use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use strum::{EnumString, IntoStaticStr};
 
+use self::data::abbrev::AbbrevManager;
 use self::data::minibuffer::MinibufferManager;
+use self::data::register::RegisterManager;
 use self::data::xwidget;
 use self::interactive_registry::InteractiveRegistry;
 use self::keymap_lookup::{list_keymap_define, list_keymap_set_parent, make_sparse_list_keymap};
@@ -21,16 +23,12 @@ pub use self::protocol::{
     FontOpeningSize, FrameFontSize, TerminalCreateRequest, TerminalDisplayTarget,
     TerminalFloatPlacement, TerminalGridSize, TerminalId,
 };
-use super::abbrev::AbbrevManager;
 use super::advice::VariableWatcherList;
 use super::autoload::AutoloadManager;
 use super::bookmark::BookmarkManager;
 use super::builtins;
 use super::builtins::from_value::FromValue;
 use super::coding::CodingSystemManager;
-use super::command_observation::{
-    UserCommandIdentity, UserCommandObservation, UserCommandObservationStart, UserCommandOutcome,
-};
 use super::custom::CustomManager;
 use super::debug_on_call::DebugOnCallCode;
 use super::error::*;
@@ -42,7 +40,6 @@ use super::mode::ModeRegistry;
 use super::print::map_flow;
 use super::rect::RectangleState;
 use super::regex::MatchData;
-use super::register::RegisterManager;
 use super::symbol::{CanonicalAccess, ConstantWrite, Obarray};
 use super::threads::ThreadManager;
 use super::value::*;

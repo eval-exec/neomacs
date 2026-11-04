@@ -228,3 +228,41 @@ impl MinibufferManager {
         self.state_stack.len()
     }
 }
+
+/// Whether the minibuffer entry keeps or replaces the selected window.
+///
+/// Pure data: the evaluator's entry/exit paths and the core minibuffer window
+/// session both compute it, so it lives with the minibuffer state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MinibufferSelectedWindowUpdate {
+    Preserve,
+    Replace(neovm_edit::emacs_core::display_metrics::WindowId),
+}
+
+impl MinibufferSelectedWindowUpdate {
+    pub fn for_entry(
+        level: neovm_value::minibuffer_state::MinibufferEntryLevel,
+        selected_window: neovm_edit::emacs_core::display_metrics::WindowId,
+        minibuffer_window: neovm_edit::emacs_core::display_metrics::WindowId,
+    ) -> Self {
+        match level {
+            neovm_value::minibuffer_state::MinibufferEntryLevel::Outermost => {
+                Self::Replace(selected_window)
+            }
+            neovm_value::minibuffer_state::MinibufferEntryLevel::Recursive
+                if selected_window == minibuffer_window =>
+            {
+                Self::Preserve
+            }
+            neovm_value::minibuffer_state::MinibufferEntryLevel::Recursive => {
+                Self::Replace(selected_window)
+            }
+        }
+    }
+
+    pub fn apply(self, target: &mut Option<neovm_edit::emacs_core::display_metrics::WindowId>) {
+        if let Self::Replace(window) = self {
+            *target = Some(window);
+        }
+    }
+}

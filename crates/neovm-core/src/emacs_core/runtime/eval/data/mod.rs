@@ -4,6 +4,7 @@
 //! value/edit vocabulary, so the evaluator can hold them without naming a
 //! display-crate type.
 
+pub mod abbrev;
 pub mod command_loop;
 pub mod display_spec;
 pub mod dynamic_module_registry;
@@ -20,6 +21,7 @@ pub mod process_spawn;
 pub mod process_state;
 pub mod process_tls;
 pub mod redisplay;
+pub mod register;
 pub mod window_edge_drag;
 pub mod window_markers;
 pub mod window_state;

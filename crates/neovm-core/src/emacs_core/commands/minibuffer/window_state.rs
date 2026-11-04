@@ -43,42 +43,7 @@ pub(crate) struct MinibufferTeardownOutcome {
     pub(crate) window_restore: MinibufferWindowRestoreEffect,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum MinibufferSelectedWindowUpdate {
-    Preserve,
-    Replace(neovm_edit::emacs_core::display_metrics::WindowId),
-}
-
-impl MinibufferSelectedWindowUpdate {
-    pub(crate) fn for_entry(
-        level: neovm_value::minibuffer_state::MinibufferEntryLevel,
-        selected_window: neovm_edit::emacs_core::display_metrics::WindowId,
-        minibuffer_window: neovm_edit::emacs_core::display_metrics::WindowId,
-    ) -> Self {
-        match level {
-            neovm_value::minibuffer_state::MinibufferEntryLevel::Outermost => {
-                Self::Replace(selected_window)
-            }
-            neovm_value::minibuffer_state::MinibufferEntryLevel::Recursive
-                if selected_window == minibuffer_window =>
-            {
-                Self::Preserve
-            }
-            neovm_value::minibuffer_state::MinibufferEntryLevel::Recursive => {
-                Self::Replace(selected_window)
-            }
-        }
-    }
-
-    pub(crate) fn apply(
-        self,
-        target: &mut Option<neovm_edit::emacs_core::display_metrics::WindowId>,
-    ) {
-        if let Self::Replace(window) = self {
-            *target = Some(window);
-        }
-    }
-}
+pub(crate) use crate::emacs_core::eval::data::minibuffer::MinibufferSelectedWindowUpdate;
 
 pub(crate) fn activate_minibuffer_window_in_state(
     frames: &mut crate::window::FrameManager,

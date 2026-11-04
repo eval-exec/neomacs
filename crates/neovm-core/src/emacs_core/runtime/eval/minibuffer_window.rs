@@ -156,7 +156,7 @@ impl Context {
             let _ = frame.select_window(minibuffer_window_id);
         }
         self.edit.buffers.switch_current(minibuf_id);
-        crate::emacs_core::minibuffer::MinibufferSelectedWindowUpdate::for_entry(
+        crate::emacs_core::eval::data::minibuffer::MinibufferSelectedWindowUpdate::for_entry(
             entry_level,
             previous_selected_window,
             minibuffer_window_id,

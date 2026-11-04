@@ -25,7 +25,6 @@ use crate::buffer::text::{BufferTextBytesSnapshot, ImplementedBufferTextBackendK
 use crate::buffer::text_props::{PropertyInterval, TextPropertyTable};
 use crate::buffer::{CharLen, CharPos0, CharRange, EmacsBytePos, LispCharPos1, TextPositionAnchor};
 // Undo state is now stored directly as a Lisp Value in buffer-local properties.
-use crate::emacs_core::abbrev::{Abbrev, AbbrevManager, AbbrevTable};
 use crate::emacs_core::advice::{VariableWatcher, VariableWatcherList};
 use crate::emacs_core::autoload::{AutoloadEntry, AutoloadManager, AutoloadType};
 use crate::emacs_core::bookmark::{Bookmark, BookmarkManager};
@@ -42,6 +41,7 @@ use crate::emacs_core::chartable::{
 use crate::emacs_core::coding::{CodingSystemInfo, CodingSystemManager, EolType};
 use crate::emacs_core::custom::CustomManager;
 use crate::emacs_core::eval::Context;
+use crate::emacs_core::eval::data::abbrev::{Abbrev, AbbrevManager, AbbrevTable};
 use crate::emacs_core::eval::data::face::{
     BoxBorder, BoxStyle, Color, FaceHeight, Underline, UnderlinePosition, UnderlineStyle,
 };
@@ -50,6 +50,7 @@ use crate::emacs_core::eval::data::fontset_state::{
     FontDefinitionMetadata, FontRepertory, FontSpecEntry, FontsetDataSnapshot,
     FontsetRangeEntrySnapshot, FontsetRegistrySnapshot, StoredFontSpec,
 };
+use crate::emacs_core::eval::data::register::{RegisterContent, RegisterManager};
 use crate::emacs_core::eval::interactive_registry::{InteractiveRegistry, InteractiveSpec};
 use crate::emacs_core::eval::subr_abi::SubrObj;
 use crate::emacs_core::intern::{self, NameId, SymId};
@@ -59,7 +60,6 @@ use crate::emacs_core::mode::{
     ModeRegistry,
 };
 use crate::emacs_core::rect::RectangleState;
-use crate::emacs_core::register::{RegisterContent, RegisterManager};
 use crate::emacs_core::symbol::{LispSymbol, Obarray, SymbolTrappedWrite};
 use crate::emacs_core::value::{
     ByteCodeKeyPart, HashKey, HashTableTest, HashTableWeakness, LambdaParams, LispHashTable,

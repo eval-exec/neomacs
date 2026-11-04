@@ -150,6 +150,10 @@ static CANONICAL_LIFECYCLE_HOOKS: LifecycleHooks = LifecycleHooks::new(
 
 /// Publish the lifecycle table; first in the one-time hook block (E3).
 pub(crate) fn install_lifecycle_hooks() {
+    // The green buffer-kill notification table is eval-declared; publishing
+    // it from this first-in-the-block installer keeps the eval->core
+    // construction surface unchanged (same seam, one call earlier).
+    crate::emacs_core::buffer_ops::install_buffer_kill_hook();
     let installed =
         crate::emacs_core::eval::lifecycle::install_lifecycle_hooks(&CANONICAL_LIFECYCLE_HOOKS);
     debug_assert!(

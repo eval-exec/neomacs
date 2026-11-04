@@ -5,12 +5,17 @@
 //! implementation and leave only the sequencing call here.
 
 use super::*;
+use crate::emacs_core::buffer_ops::{
+    builtin_buffer_list, builtin_other_buffer, builtin_replace_region_contents,
+    builtin_set_buffer_multibyte,
+};
 use crate::emacs_core::display_entries::{
     builtin_old_selected_frame, builtin_query_fontset, builtin_reconsider_frame_fonts,
     builtin_tool_bar_pixel_width, builtin_xw_display_color_p_ctx,
 };
 use crate::emacs_core::frame::{builtin_next_frame, builtin_previous_frame};
 use crate::emacs_core::gnutls_entries as gnutls;
+use crate::emacs_core::kill_buffer::builtin_kill_buffer;
 #[cfg(test)]
 use crate::emacs_core::subr::SubrBatch;
 

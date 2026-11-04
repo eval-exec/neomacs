@@ -2454,7 +2454,6 @@ impl Context {
         // buffer kill can run.
         crate::emacs_core::casetab_entries::install_case_table_hooks();
         crate::emacs_core::xdisp::install_eval_display_query_hooks();
-        crate::emacs_core::buffer_ops::install_buffer_kill_hook();
         // Keyboard-macro entries are core command bodies the VM dispatch
         // reaches through eval; publish their cold table at the same seam.
         crate::emacs_core::kmacro::install_kmacro_hooks();
