@@ -461,9 +461,24 @@ fn wrap_html_document(nodes: Vec<TopNode>, discard_comments: bool) -> Option<Val
         }
         fragment.push(node);
     }
-    while fragment.last().is_some_and(is_blank_text_node) {
-        fragment.pop();
+    // Drop document-level trailing blanks, including blanks between the root
+    // and a trailing comment.
+    let mut keep = vec![true; fragment.len()];
+    let mut saw_content = false;
+    for index in (0..fragment.len()).rev() {
+        if is_blank_text_node(&fragment[index]) {
+            if !saw_content {
+                keep[index] = false;
+            }
+        } else if !is_top_comment(&fragment[index]) {
+            saw_content = true;
+        }
     }
+    fragment = fragment
+        .into_iter()
+        .zip(keep)
+        .filter_map(|(node, keep)| keep.then_some(node))
+        .collect();
     if !fragment.iter().any(|n| !is_top_comment(n)) {
         return Some(Value::NIL);
     }
@@ -820,6 +835,13 @@ fn unique_prefix(input: &str, prefix: &str) -> String {
     prefix
 }
 
+/// Whether the `<` at `index` starts an HTML tag-like token rather than text.
+fn starts_tag(input: &str, index: usize) -> bool {
+    input.as_bytes().get(index + 1).is_some_and(|byte| {
+        byte.is_ascii_alphabetic() || *byte == b'/' || *byte == b'!' || *byte == b'?'
+    })
+}
+
 /// Text elements and processing instructions hidden from `tl`.
 #[derive(Default)]
 struct ShieldedHtml {
@@ -843,7 +865,8 @@ struct ShieldedHtml {
 fn shield_html(input: &str) -> (Cow<'_, str>, ShieldedHtml) {
     if !input.match_indices('<').any(|(index, _)| {
         let rest = &input[index..];
-        rest.starts_with("<?")
+        !starts_tag(input, index)
+            || rest.starts_with("<?")
             || protected_tag_name(rest).is_some()
             || rest
                 .get(..9)
@@ -912,10 +935,7 @@ fn shield_html(input: &str) -> (Cow<'_, str>, ShieldedHtml) {
         }
 
         // A literal `<` that does not begin a tag (e.g. `a < b`) is text.
-        let starts_tag = bytes
-            .get(index + 1)
-            .is_some_and(|b| b.is_ascii_alphabetic() || *b == b'/' || *b == b'!' || *b == b'?');
-        if !starts_tag {
+        if !starts_tag(input, index) {
             // Encode a literal `<` so tl keeps it as text instead of trying to
             // parse the following bytes as a tag. Conversion unescapes it.
             protected.push_str("&lt;");
