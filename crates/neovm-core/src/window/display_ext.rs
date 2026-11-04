@@ -3795,3 +3795,14 @@ impl DisplayFrameManagerExt for FrameManager {
         self.old_selected_window
     }
 }
+
+/// PC2 entry for the evaluator's native-resize path: clamp window sizes to
+/// their buffers, then resize the frame in pixels.
+pub(crate) fn resize_pixelwise_with_buffer_constraints(
+    frame: &mut Frame,
+    buffers: &BufferManager,
+    width: u32,
+    height: u32,
+) {
+    DisplayFrameExt::resize_pixelwise_with_buffer_constraints(frame, buffers, width, height);
+}

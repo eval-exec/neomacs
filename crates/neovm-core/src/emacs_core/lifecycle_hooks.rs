@@ -153,6 +153,7 @@ static CANONICAL_LIFECYCLE_HOOKS: LifecycleHooks = LifecycleHooks::new(
         crate::window::window_resize_check,
         crate::window::window_resize_apply,
         apply_mini_window_resize,
+        crate::window::resize_pixelwise_with_buffer_constraints,
     ),
     crate::emacs_core::timefns::reset_timefns_thread_locals,
     crate::emacs_core::sqlite::reset_sqlite_thread_locals,

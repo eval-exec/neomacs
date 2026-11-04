@@ -15,8 +15,6 @@ use crate::emacs_core::eval::input_hooks::CommandInputWaitOutcome;
 use crate::emacs_core::eval::keymap_lookup::KeymapMarker;
 use crate::emacs_core::intern::{WellKnown, intern, resolve_sym};
 use crate::tagged::value::SymbolMode;
-use crate::window::DisplayFrameExt;
-use crate::window::geometry::DisplayGeometryExt;
 
 use neovm_value::keyboard_pure::KEY_CHAR_META;
 // decode_storage_char_codes import removed — now using emacs_char directly
@@ -1549,7 +1547,9 @@ fn apply_resize_input_event_in_keyboard_runtime(
         };
         let old_root_bounds = *frame.root_window().bounds();
         let pending = frame.pending_gui_resize;
-        frame.resize_pixelwise_with_buffer_constraints(buffers, width, height);
+        crate::emacs_core::eval::lifecycle::resize_frame_pixelwise_with_buffer_constraints(
+            frame, buffers, width, height,
+        );
         frame.pending_gui_resize =
             pending.and_then(|pending| pending.after_native_observation(width, height));
         (old_root_bounds != *frame.root_window().bounds()).then_some(fid)
@@ -1769,7 +1769,12 @@ fn sync_opening_gui_frame_size_from_host_in_keyboard_runtime(
         size.width,
         size.height
     );
-    frame.resize_pixelwise_with_buffer_constraints(buffers, size.width, size.height);
+    crate::emacs_core::eval::lifecycle::resize_frame_pixelwise_with_buffer_constraints(
+        frame,
+        buffers,
+        size.width,
+        size.height,
+    );
     Some(fid)
 }
 

@@ -81,6 +81,7 @@ use sibling_layout::{ChildExtent, sibling_bounds};
 pub use split::{CombinationLimit, DeleteOutcome, DeleteResize, ParentSeal, SplitAttachment};
 
 mod display_ext;
+pub(crate) use display_ext::resize_pixelwise_with_buffer_constraints;
 pub use display_ext::{
     DisplayFrameExt, DisplayFrameManagerExt, DisplayWindowExt, DisplayWindowTreeExt,
 };

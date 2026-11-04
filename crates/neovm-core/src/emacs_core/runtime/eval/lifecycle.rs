@@ -313,6 +313,7 @@ pub struct WindowTreeHooks {
     window_resize_check: fn(&WindowTree, WindowId, SplitDirection, WindowBodyCellSize) -> bool,
     window_resize_apply: fn(&mut WindowTree, WindowId, bool, f32, f32),
     apply_mini_window_resize: fn(&mut Frame, MiniWindowResize),
+    frame_resize_pixelwise: fn(&mut Frame, &BufferManager, u32, u32),
 }
 
 impl WindowTreeHooks {
@@ -322,12 +323,14 @@ impl WindowTreeHooks {
         window_resize_check: fn(&WindowTree, WindowId, SplitDirection, WindowBodyCellSize) -> bool,
         window_resize_apply: fn(&mut WindowTree, WindowId, bool, f32, f32),
         apply_mini_window_resize: fn(&mut Frame, MiniWindowResize),
+        frame_resize_pixelwise: fn(&mut Frame, &BufferManager, u32, u32),
     ) -> Self {
         Self {
             char_property_window_lookup,
             window_resize_check,
             window_resize_apply,
             apply_mini_window_resize,
+            frame_resize_pixelwise,
         }
     }
 }
@@ -662,6 +665,10 @@ impl WindowTreeHooks {
     fn apply_mini_window_resize(&self) -> fn(&mut Frame, MiniWindowResize) {
         self.apply_mini_window_resize
     }
+
+    fn frame_resize_pixelwise(&self) -> fn(&mut Frame, &BufferManager, u32, u32) {
+        self.frame_resize_pixelwise
+    }
 }
 
 static LIFECYCLE_HOOKS: OnceLock<LifecycleHooks> = OnceLock::new();
@@ -972,6 +979,18 @@ pub fn window_resize_check(
     cells: WindowBodyCellSize,
 ) -> bool {
     (lifecycle_hooks().window_tree().window_resize_check())(tree, id, axis, cells)
+}
+
+/// Resize a frame from a native size observation under the core window
+/// body-unit rules (PC2 service; per native resize event, never per Lisp
+/// step).
+pub fn resize_frame_pixelwise_with_buffer_constraints(
+    frame: &mut Frame,
+    buffers: &BufferManager,
+    width: u32,
+    height: u32,
+) {
+    (lifecycle_hooks().window_tree().frame_resize_pixelwise())(frame, buffers, width, height)
 }
 
 /// Apply a staged pixel resize plan.
