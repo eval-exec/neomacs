@@ -80,6 +80,10 @@ impl Context {
         // before the first SqliteObj exists.
         #[cfg(feature = "sqlite")]
         crate::emacs_core::sqlite::install_sqlite_finalizer_hook();
+        // `call-interactively` argument acquisition is a core command-layer
+        // body (minibuffer/reader Lisp entries stay there). Publish its one
+        // cold table before any form can reach the VM path.
+        crate::emacs_core::interactive::install_call_interactively_hook();
         // The evaluator's observed-run log of function-epoch moves is plain
         // process state too; install it unconditionally so non-JIT builds
         // keep the verify-run mismatch report.

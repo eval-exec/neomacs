@@ -9748,7 +9748,9 @@ impl<'a> Vm<'a> {
     fn builtin_call_interactively_shared(&mut self, args: &[Value]) -> EvalResult {
         crate::emacs_core::eval::interactive_registry::validate_call_interactively_args(args)?;
         let command_identity =
-            crate::emacs_core::interactive::CallInteractivelyCommandIdentity::capture(self.ctx);
+            crate::emacs_core::eval::call_interactively::CallInteractivelyCommandIdentity::capture(
+                self.ctx,
+            );
         self.with_vm_root_scope(|vm| {
             for value in args.iter().copied() {
                 vm.push_dynamic_vm_root(value);
@@ -9762,7 +9764,7 @@ impl<'a> Vm<'a> {
             )?;
             vm.push_dynamic_vm_root(interactive_form);
             let mut plan =
-                crate::emacs_core::interactive::plan_call_interactively_after_interactive_form_in_state(
+                crate::emacs_core::eval::call_interactively::plan_call_interactively_after_interactive_form_in_state(
                     &vm.ctx.obarray,
                     vm.ctx.read_command_keys(),
                     args,
@@ -9774,7 +9776,7 @@ impl<'a> Vm<'a> {
                 vm.push_dynamic_vm_root(value);
             }
             let (_function, call_args) =
-                crate::emacs_core::interactive::resolve_call_interactively_target_and_args_with_vm_fallback(
+                crate::emacs_core::eval::call_interactively::resolve_call_interactively_target_and_args(
                     vm.ctx,
                     &mut plan,
                 )?;

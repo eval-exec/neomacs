@@ -33,7 +33,7 @@ use super::keymap::{
     command_remapping_normalize_target as keymap_command_remapping_normalize_target,
     current_active_maps_for_position, current_active_maps_for_position_read_only, get_keyelt,
     get_keymap_in_obarray, is_list_keymap, key_binding_apply_remap_in_active_maps,
-    key_event_to_emacs_event, keymap_mutation_epoch, list_keymap_for_each_binding,
+    key_event_to_emacs_event, list_keymap_for_each_binding,
     lookup_key_in_keymaps_in_obarray_runtime, lookup_keymap_with_partial,
     minor_mode_key_binding_in_context, resolve_active_key_binding, where_is_keymaps_in_context,
 };
@@ -52,6 +52,16 @@ pub use crate::emacs_core::eval::interactive_registry::{
     registered_builtin_interactive_form, registered_builtin_interactive_spec,
     registry_interactive_form, sync_interactive_registry_for_symbol_definition,
     validate_call_interactively_args, value_is_interactive_autoload, value_list_to_vec,
+};
+
+// `call-interactively` planning data lives in the eval manifest (stage-4
+// W1/E4; peer ruling 13:1xZ). Core keeps the acquisition bodies and these
+// historical paths for its tests.
+pub(crate) use crate::emacs_core::eval::call_interactively::{
+    CallInteractivelyArgsSpec, CallInteractivelyCommandIdentity, CallInteractivelyPlan,
+    InteractiveInvocationContext, InteractivePrefixFlag, eval_interactive_form_value,
+    parse_interactive_code_entries, plan_call_interactively_after_interactive_form_in_state,
+    value_is_interactive_form,
 };
 
 /// GNU's predeclared `Qcommandp` identity.
@@ -463,17 +473,6 @@ pub(crate) fn builtin_command_remapping_impl(
         command_remapping_lookup_in_keymaps(&active_maps, command_name, symbol_mode)
             .unwrap_or(Value::NIL),
     )
-}
-
-fn value_is_interactive_form(value: &Value, symbol_mode: SymbolMode) -> bool {
-    match value.kind() {
-        ValueKind::Cons => {
-            let pair_car = value.cons_car();
-            let _pair_cdr = value.cons_cdr();
-            pair_car.as_symbol_id(symbol_mode) == Some(INTERACTIVE_SYMBOL.id())
-        }
-        _ => false,
-    }
 }
 
 fn is_valid_docstring_reference(value: Value) -> bool {
@@ -922,113 +921,6 @@ fn quotify_history_arg(value: Value, symbol_mode: SymbolMode) -> Value {
     }
 }
 
-/// Environment in which GNU `call-interactively` evaluates a Lisp-form
-/// interactive specification.
-///
-/// `callint.c:Fcall_interactively` does not use the caller's ambient lexical
-/// environment.  It passes an interpreted closure's `CLOSURE_CONSTANTS` to
-/// `Feval`, and passes nil for every other callable representation.  Keeping
-/// that choice in the type prevents a form spec from being detached from the
-/// environment required to evaluate it.
-#[derive(Clone, Copy, Debug)]
-enum InteractiveFormEnvironment {
-    Dynamic,
-    InterpretedClosure(Value),
-}
-
-impl InteractiveFormEnvironment {
-    fn for_callable(callable: Value) -> Self {
-        if callable
-            .closure_body_value()
-            .is_some_and(|body| body.is_cons())
-        {
-            Self::InterpretedClosure(callable.closure_env().flatten().unwrap_or(Value::NIL))
-        } else {
-            Self::Dynamic
-        }
-    }
-
-    fn lexical_arg(self) -> Value {
-        match self {
-            Self::Dynamic => Value::NIL,
-            Self::InterpretedClosure(environment) => environment,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-struct InteractiveFormSpec {
-    form: Value,
-    environment: InteractiveFormEnvironment,
-}
-
-#[derive(Clone, Debug)]
-enum ParsedInteractiveSpec {
-    NoArgs,
-    StringCode(crate::heap_types::LispString),
-    Form(InteractiveFormSpec),
-}
-
-/// Operations preceding interactive argument acquisition, in source order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum InteractivePrefixFlag {
-    RequireWritableBuffer,
-    SelectEventWindow,
-    HandleShiftSelection,
-}
-
-impl InteractivePrefixFlag {
-    fn from_byte(byte: u8) -> Option<Self> {
-        match byte {
-            b'*' => Some(Self::RequireWritableBuffer),
-            b'@' => Some(Self::SelectEventWindow),
-            b'^' => Some(Self::HandleShiftSelection),
-            _ => None,
-        }
-    }
-
-    fn requires_runtime(self) -> bool {
-        match self {
-            Self::RequireWritableBuffer => false,
-            Self::SelectEventWindow | Self::HandleShiftSelection => true,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Default)]
-struct ParsedInteractiveStringCode {
-    prefix_flags: Vec<InteractivePrefixFlag>,
-    entries: Vec<(char, crate::heap_types::LispString)>,
-}
-
-#[derive(Clone, Debug, Default)]
-struct InteractiveInvocationContext {
-    command_keys: Vec<Value>,
-    next_event_with_parameters_index: usize,
-    has_command_keys_context: bool,
-    pending_up_event: Option<Value>,
-}
-
-impl InteractiveInvocationContext {
-    fn from_keys_arg_in_state(read_command_keys: &[Value], keys: Option<&Value>) -> Self {
-        let mut context = Self::default();
-        if let Some(keys_val) = keys
-            && keys_val.is_vector()
-            && let Some(vec_data) = keys_val.as_vector_data()
-            && !vec_data.is_empty()
-        {
-            context.command_keys = vec_data.clone();
-            context.has_command_keys_context = true;
-            return context;
-        }
-        if !read_command_keys.is_empty() {
-            context.command_keys = read_command_keys.to_vec();
-            context.has_command_keys_context = true;
-        }
-        context
-    }
-}
-
 fn interactive_event_symbol_name(event: &Value, symbol_mode: SymbolMode) -> Option<&'static str> {
     match symbol_mode.unwrap(*event).kind() {
         ValueKind::Symbol(id) => Some(resolve_sym(id)),
@@ -1096,13 +988,13 @@ fn interactive_capture_up_event_in_eval(
     context: &mut InteractiveInvocationContext,
 ) -> Result<(), Flow> {
     let symbol_mode = eval.symbol_mode();
-    context.pending_up_event = None;
+    context.set_pending_up_event(None);
     if interactive_last_key_sequence_event(sequence)
         .is_some_and(|event| interactive_event_is_down_event(&event, symbol_mode))
     {
         let up_event = super::keyboard::builtin_read_event(eval, vec![])?;
         if !up_event.is_nil() {
-            context.pending_up_event = Some(up_event);
+            context.set_pending_up_event(Some(up_event));
         }
     }
     Ok(())
@@ -1114,21 +1006,20 @@ fn interactive_capture_up_event_in_vm_batch_runtime(
     context: &mut InteractiveInvocationContext,
 ) -> Result<(), Flow> {
     let symbol_mode = shared.symbol_mode();
-    context.pending_up_event = None;
+    context.set_pending_up_event(None);
     if interactive_last_key_sequence_event(sequence)
         .is_some_and(|event| interactive_event_is_down_event(&event, symbol_mode))
         && let Some(up_event) = super::keyboard::builtin_read_event_in_runtime(shared, &[])?
         && !up_event.is_nil()
     {
-        context.pending_up_event = Some(up_event);
+        context.set_pending_up_event(Some(up_event));
     }
     Ok(())
 }
 
 fn interactive_u_arg(context: &mut InteractiveInvocationContext) -> Value {
     context
-        .pending_up_event
-        .take()
+        .take_pending_up_event()
         .map(|event| Value::vector(vec![event]))
         .unwrap_or(Value::NIL)
 }
@@ -1159,7 +1050,6 @@ static OVERWRITE_MODE: WellKnown = WellKnown::OverwriteMode;
 static OVERWRITE_MODE_BINARY: WellKnown = WellKnown::OverwriteModeBinary;
 static UNDO_AUTO_AMALGAMATE: WellKnown = WellKnown::UndoAutoAmalgamate;
 static BARF_IF_BUFFER_READ_ONLY: WellKnown = WellKnown::BarfIfBufferReadOnly;
-static INTERACTIVE_SYMBOL: WellKnown = WellKnown::Interactive;
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 fn dynamic_buffer_or_global_symbol_value(
@@ -1330,7 +1220,7 @@ fn interactive_next_event_with_parameters_in_state(
     dynamic: &[OrderedRuntimeBindingMap],
     context: &mut InteractiveInvocationContext,
 ) -> Option<Value> {
-    if context.has_command_keys_context {
+    if context.has_command_keys_context() {
         return interactive_next_event_with_parameters_from_keys(context);
     }
     interactive_last_input_event_with_parameters_in_state(vars, dynamic)
@@ -1351,13 +1241,13 @@ fn interactive_args_from_string_code_in_state(
     // Defer before any effect: Lisp hooks and shift-selection policy cannot
     // execute through this split-state seam, and prefix order is observable.
     if parsed
-        .prefix_flags
+        .prefix_flags()
         .iter()
         .any(|flag| flag.requires_runtime())
     {
         return Ok(None);
     }
-    for flag in &parsed.prefix_flags {
+    for flag in parsed.prefix_flags() {
         match flag {
             InteractivePrefixFlag::RequireWritableBuffer => {
                 interactive_require_writable_current_buffer_in_state(vars, dynamic, buffers)?;
@@ -1368,12 +1258,12 @@ fn interactive_args_from_string_code_in_state(
             }
         }
     }
-    if parsed.entries.is_empty() {
+    if parsed.entries().is_empty() {
         return Ok(Some(Vec::new()));
     }
 
     let mut args = Vec::new();
-    for (letter, _prompt) in parsed.entries {
+    for (letter, _prompt) in parsed.entries().iter().cloned() {
         let Some(control) = InteractiveControlLetter::from_char(letter) else {
             return Ok(None);
         };
@@ -1440,14 +1330,14 @@ fn interactive_args_from_string_code_in_vm_runtime(
     let roots = shared.save_specpdl_roots();
     let result = (|| -> Result<Option<Vec<Value>>, Flow> {
         let parsed = parse_interactive_code_entries(code);
-        interactive_apply_prefix_flags(shared, &parsed.prefix_flags, context)?;
-        if parsed.entries.is_empty() {
+        interactive_apply_prefix_flags(shared, parsed.prefix_flags(), context)?;
+        if parsed.entries().is_empty() {
             return Ok(Some(Vec::new()));
         }
 
         let mut args = Vec::new();
         let mut visible_args = Vec::new();
-        for (letter, prompt) in parsed.entries {
+        for (letter, prompt) in parsed.entries().iter().cloned() {
             let prompt = interactive_prompt_with_visible_args(shared, &prompt, &visible_args)?;
             let args_before = args.len();
             let Some(control) = InteractiveControlLetter::from_char(letter) else {
@@ -1801,7 +1691,7 @@ fn interactive_first_event_with_parameters_from_keys(
     context: &InteractiveInvocationContext,
 ) -> Option<Value> {
     context
-        .command_keys
+        .command_keys()
         .iter()
         .copied()
         .find(interactive_event_with_parameters_p)
@@ -1811,7 +1701,7 @@ fn interactive_first_event_with_parameters(
     eval: &Context,
     context: &InteractiveInvocationContext,
 ) -> Option<Value> {
-    if context.has_command_keys_context {
+    if context.has_command_keys_context() {
         return interactive_first_event_with_parameters_from_keys(context);
     }
     interactive_last_input_event_with_parameters(eval)
@@ -1910,14 +1800,7 @@ fn interactive_event_with_parameters_p(event: &Value) -> bool {
 fn interactive_next_event_with_parameters_from_keys(
     context: &mut InteractiveInvocationContext,
 ) -> Option<Value> {
-    while context.next_event_with_parameters_index < context.command_keys.len() {
-        let event = context.command_keys[context.next_event_with_parameters_index];
-        context.next_event_with_parameters_index += 1;
-        if interactive_event_with_parameters_p(&event) {
-            return Some(event);
-        }
-    }
-    None
+    context.next_event_with_parameters()
 }
 
 fn interactive_last_input_event_with_parameters(eval: &Context) -> Option<Value> {
@@ -1929,166 +1812,10 @@ fn interactive_next_event_with_parameters(
     eval: &Context,
     context: &mut InteractiveInvocationContext,
 ) -> Option<Value> {
-    if context.has_command_keys_context {
+    if context.has_command_keys_context() {
         return interactive_next_event_with_parameters_from_keys(context);
     }
     interactive_last_input_event_with_parameters(eval)
-}
-
-/// Parse a prepared interactive spec value.
-///
-/// The input may be an `(interactive SPEC)` form returned by
-/// `interactive-form`, or the already-extracted SPEC stored by a closure.
-fn parse_interactive_spec_from_value(
-    spec: &Value,
-    environment: InteractiveFormEnvironment,
-    symbol_mode: SymbolMode,
-) -> Option<ParsedInteractiveSpec> {
-    if value_is_interactive_form(spec, symbol_mode) {
-        let items = value_list_to_vec(spec)?;
-        return match items.get(1) {
-            Some(nested_spec) => {
-                parse_interactive_spec_from_value(nested_spec, environment, symbol_mode)
-            }
-            None => Some(ParsedInteractiveSpec::NoArgs),
-        };
-    }
-    match spec.kind() {
-        ValueKind::Nil => Some(ParsedInteractiveSpec::NoArgs),
-        ValueKind::String => {
-            let s = spec
-                .as_lisp_string()
-                .cloned()
-                .expect("ValueKind::String must carry LispString payload");
-            if s.is_empty() {
-                Some(ParsedInteractiveSpec::NoArgs)
-            } else {
-                Some(ParsedInteractiveSpec::StringCode(s))
-            }
-        }
-        _ => {
-            // Could be a form to evaluate.  Preserve its evaluation
-            // environment as part of the parsed state so no caller can
-            // accidentally evaluate it in the ambient lexical scope.
-            Some(ParsedInteractiveSpec::Form(InteractiveFormSpec {
-                form: *spec,
-                environment,
-            }))
-        }
-    }
-}
-
-fn prepare_call_interactively_spec(
-    function: Value,
-    interactive_form: Value,
-    environment: InteractiveFormEnvironment,
-    symbol_mode: SymbolMode,
-) -> Result<ParsedInteractiveSpec, Flow> {
-    if !interactive_form.is_cons() {
-        return Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("commandp"), function],
-        ));
-    }
-
-    let tail = interactive_form.cons_cdr();
-    let spec = if tail.is_nil() {
-        Value::NIL
-    } else if tail.is_cons() {
-        tail.cons_car()
-    } else {
-        return Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("listp"), tail],
-        ));
-    };
-
-    parse_interactive_spec_from_value(&spec, environment, symbol_mode).ok_or_else(|| {
-        signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("listp"), spec],
-        )
-    })
-}
-
-fn interactive_form_value_to_args(value: Value) -> Result<Vec<Value>, Flow> {
-    if value.is_nil() {
-        return Ok(Vec::new());
-    }
-    if let Some(values) = value_list_to_vec(&value) {
-        return Ok(values);
-    }
-    Err(signal(
-        LispCondition::WrongTypeArgument,
-        vec![Value::symbol("listp"), value],
-    ))
-}
-
-fn parse_interactive_prefix_flags(line: &[u8]) -> (Vec<InteractivePrefixFlag>, usize) {
-    let mut flags = Vec::new();
-    let mut offset = 0usize;
-    while let Some(&byte) = line.get(offset) {
-        if let Some(flag) = InteractivePrefixFlag::from_byte(byte) {
-            flags.push(flag);
-            offset += 1;
-        } else {
-            break;
-        }
-    }
-    (flags, offset)
-}
-
-fn empty_lisp_string_like(
-    template: &crate::heap_types::LispString,
-) -> crate::heap_types::LispString {
-    if template.is_multibyte() {
-        crate::heap_types::LispString::from_emacs_bytes(Vec::new())
-    } else {
-        crate::heap_types::LispString::from_unibyte(Vec::new())
-    }
-}
-
-fn parse_interactive_code_entries(
-    code: &crate::heap_types::LispString,
-) -> ParsedInteractiveStringCode {
-    let mut parsed = ParsedInteractiveStringCode::default();
-    if code.is_empty() {
-        return parsed;
-    }
-
-    let bytes = code.as_bytes();
-    let mut line_start = 0usize;
-    let mut index = 0usize;
-    while line_start <= bytes.len() {
-        let rel_end = bytes[line_start..]
-            .iter()
-            .position(|&byte| byte == b'\n')
-            .map(|offset| line_start + offset)
-            .unwrap_or(bytes.len());
-        let line = code
-            .slice(line_start, rel_end)
-            .unwrap_or_else(|| empty_lisp_string_like(code));
-        let line_bytes = line.as_bytes();
-        let mut entry_offset = 0usize;
-        if index == 0 {
-            let (flags, stripped) = parse_interactive_prefix_flags(line_bytes);
-            parsed.prefix_flags = flags;
-            entry_offset = stripped;
-        }
-        if entry_offset < line_bytes.len() {
-            let letter = line_bytes[entry_offset] as char;
-            let prompt = line
-                .slice(entry_offset + 1, line_bytes.len())
-                .unwrap_or_else(|| empty_lisp_string_like(&line));
-            parsed.entries.push((letter, prompt));
-        }
-        if rel_end == bytes.len() {
-            break;
-        }
-        line_start = rel_end + 1;
-        index += 1;
-    }
-    parsed
 }
 
 fn interactive_prompt_with_visible_args(
@@ -2167,8 +1894,8 @@ fn interactive_args_from_string_code(
     let roots = eval.save_specpdl_roots();
     let result = (|| -> Result<Option<Vec<Value>>, Flow> {
         let parsed = parse_interactive_code_entries(code);
-        interactive_apply_prefix_flags(eval, &parsed.prefix_flags, context)?;
-        if parsed.entries.is_empty() {
+        interactive_apply_prefix_flags(eval, parsed.prefix_flags(), context)?;
+        if parsed.entries().is_empty() {
             return Ok(Some(Vec::new()));
         }
 
@@ -2181,9 +1908,9 @@ fn interactive_args_from_string_code(
         // slot at each iteration (spec entries are few, so the rebuild is
         // trivially cheap).
         let args_root_slot = eval.push_specpdl_root_slot(Value::NIL);
-        for (letter, prompt) in parsed.entries {
+        for (letter, prompt) in parsed.entries().iter().cloned() {
             let mut holder = Value::NIL;
-            for value in args.iter().chain(context.pending_up_event.iter()) {
+            for value in args.iter().chain(context.pending_up_event().iter()) {
                 if value.is_heap_object() {
                     holder = Value::cons(*value, holder);
                 }
@@ -2354,199 +2081,6 @@ fn interactive_args_from_string_code(
     result
 }
 
-fn eval_interactive_form_value(
-    eval: &mut super::eval::Context,
-    spec: InteractiveFormSpec,
-) -> Result<Vec<Value>, Flow> {
-    let roots = eval.save_specpdl_roots();
-    eval.push_specpdl_root(spec.form);
-    eval.push_specpdl_root(spec.environment.lexical_arg());
-    let result = (|| -> Result<Vec<Value>, Flow> {
-        let value =
-            eval.eval_value_with_lexical_arg(spec.form, Some(spec.environment.lexical_arg()))?;
-        interactive_form_value_to_args(value)
-    })();
-    eval.restore_specpdl_roots(roots);
-    result
-}
-
-fn resolve_command_target_in_state(
-    obarray: &Obarray,
-    designator: &Value,
-    symbol_mode: SymbolMode,
-) -> Option<(Option<SymId>, Value)> {
-    if let Some(symbol) = designator.as_symbol_id(symbol_mode) {
-        if let Some((resolved_symbol, value)) =
-            resolve_function_designator_symbol_in_state(obarray, symbol)
-        {
-            return Some((Some(resolved_symbol), value));
-        }
-        return None;
-    }
-    match designator.kind() {
-        ValueKind::Subr(id) => Some((Some(id), *designator)),
-        ValueKind::Veclike(VecLikeType::Subr) => {
-            let id = designator.as_subr_id().unwrap();
-            Some((Some(id), *designator))
-        }
-        _ => Some((designator.as_symbol_id(symbol_mode), *designator)),
-    }
-}
-
-/// Command identity that belongs to the caller of `call-interactively`.
-///
-/// GNU saves these four variables together in `Fcall_interactively` and
-/// restores them together after interactive argument acquisition. Keeping
-/// them in one Rust value prevents an interpreter or bytecode call path from
-/// restoring only a subset and exposing a mixed command identity.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct CallInteractivelyCommandIdentity {
-    this_command: Value,
-    this_original_command: Value,
-    real_this_command: Value,
-    last_command: Value,
-}
-
-impl CallInteractivelyCommandIdentity {
-    pub(crate) fn capture(eval: &Context) -> Self {
-        // GNU's `Fcall_interactively` saves these four DEFVAR_LISP cells by
-        // identity; the command-loop enum is their one native spelling set.
-        use crate::emacs_core::eval::command_loop::CommandLoopSymbol;
-        Self {
-            this_command: eval
-                .eval_symbol_by_id(CommandLoopSymbol::ThisCommand.id())
-                .unwrap_or(Value::NIL),
-            this_original_command: eval
-                .eval_symbol_by_id(CommandLoopSymbol::ThisOriginalCommand.id())
-                .unwrap_or(Value::NIL),
-            real_this_command: eval
-                .eval_symbol_by_id(CommandLoopSymbol::RealThisCommand.id())
-                .unwrap_or(Value::NIL),
-            last_command: eval
-                .eval_symbol_by_id(CommandLoopSymbol::LastCommand.id())
-                .unwrap_or(Value::NIL),
-        }
-    }
-
-    pub(crate) fn push_gc_roots(self, eval: &mut Context) {
-        for value in self.values() {
-            eval.push_specpdl_root(value);
-        }
-    }
-
-    pub(crate) fn values(self) -> [Value; 4] {
-        [
-            self.this_command,
-            self.this_original_command,
-            self.real_this_command,
-            self.last_command,
-        ]
-    }
-
-    fn restore(self, eval: &mut Context) {
-        use crate::emacs_core::eval::command_loop::CommandLoopSymbol;
-        eval.assign_by_id(CommandLoopSymbol::ThisCommand.id(), self.this_command);
-        eval.assign_by_id(
-            CommandLoopSymbol::ThisOriginalCommand.id(),
-            self.this_original_command,
-        );
-        eval.assign_by_id(
-            CommandLoopSymbol::RealThisCommand.id(),
-            self.real_this_command,
-        );
-        eval.assign_by_id(CommandLoopSymbol::LastCommand.id(), self.last_command);
-    }
-}
-
-pub(crate) struct CallInteractivelyPlan {
-    invocation_function: Value,
-    func: Value,
-    interactive_spec: ParsedInteractiveSpec,
-    context: InteractiveInvocationContext,
-    record_flag: bool,
-    command_identity: CallInteractivelyCommandIdentity,
-}
-
-impl CallInteractivelyPlan {
-    pub(crate) fn gc_roots(&self) -> Vec<Value> {
-        let mut roots = vec![self.invocation_function, self.func];
-        roots.extend(self.command_identity.values());
-        if let ParsedInteractiveSpec::Form(spec) = self.interactive_spec {
-            roots.push(spec.form);
-            roots.push(spec.environment.lexical_arg());
-        }
-        roots
-    }
-
-    /// Consume argument-acquisition state and make the command invocable.
-    ///
-    /// The invocation function remains private until this transition restores
-    /// GNU's saved command identity, so call paths outside this module cannot
-    /// accidentally invoke a command from an unrestored plan.
-    pub(crate) fn restore_for_invocation(
-        self,
-        eval: &mut Context,
-    ) -> RestoredCallInteractivelyInvocation {
-        self.command_identity.restore(eval);
-        RestoredCallInteractivelyInvocation {
-            function: self.invocation_function,
-        }
-    }
-}
-
-/// A `call-interactively` target whose caller command identity is restored.
-pub(crate) struct RestoredCallInteractivelyInvocation {
-    function: Value,
-}
-
-impl RestoredCallInteractivelyInvocation {
-    pub(crate) fn into_funcall_args(self, call_args: Vec<Value>) -> Vec<Value> {
-        let mut funcall_args = Vec::with_capacity(call_args.len() + 1);
-        funcall_args.push(self.function);
-        funcall_args.extend(call_args);
-        funcall_args
-    }
-}
-
-pub(crate) fn plan_call_interactively_after_interactive_form_in_state(
-    obarray: &Obarray,
-    read_command_keys: &[Value],
-    args: &[Value],
-    interactive_form: Value,
-    command_identity: CallInteractivelyCommandIdentity,
-    symbol_mode: SymbolMode,
-) -> Result<CallInteractivelyPlan, Flow> {
-    validate_call_interactively_args(args)?;
-
-    let func_val = args[0];
-    if !interactive_form.is_cons() {
-        return Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("commandp"), func_val],
-        ));
-    }
-    let Some((_, func)) = resolve_command_target_in_state(obarray, &func_val, symbol_mode) else {
-        return Err(signal(LispCondition::VoidFunction, vec![func_val]));
-    };
-    let interactive_spec = prepare_call_interactively_spec(
-        func_val,
-        interactive_form,
-        InteractiveFormEnvironment::for_callable(func),
-        symbol_mode,
-    )?;
-    let context =
-        InteractiveInvocationContext::from_keys_arg_in_state(read_command_keys, args.get(2));
-    let record_flag = args.get(1).is_some_and(|value| value.is_truthy());
-    Ok(CallInteractivelyPlan {
-        invocation_function: func_val,
-        func,
-        interactive_spec,
-        context,
-        record_flag,
-        command_identity,
-    })
-}
-
 /// The `command-history` form of each argument a string spec produces.
 ///
 /// Returns `None` when the flattened table does not cover the arguments that
@@ -2558,7 +2092,11 @@ fn string_code_history_forms(
     arg_count: usize,
 ) -> Option<Vec<ArgHistoryForm>> {
     let mut forms = Vec::with_capacity(arg_count);
-    for (letter, _) in parse_interactive_code_entries(code).entries {
+    for (letter, _) in parse_interactive_code_entries(code)
+        .entries()
+        .iter()
+        .cloned()
+    {
         forms.extend_from_slice(InteractiveControlLetter::from_char(letter)?.history_forms());
     }
     (forms.len() == arg_count).then_some(forms)
@@ -2626,12 +2164,12 @@ fn fixed_arity_of_function(eval: &mut Context, function: Value) -> Option<(usize
 fn record_call_interactively_command_history(
     eval: &mut Context,
     invocation_function: Value,
-    interactive_spec: &ParsedInteractiveSpec,
+    string_code: Option<&crate::heap_types::LispString>,
     call_args: &[Value],
 ) -> Result<(), Flow> {
     let symbol_mode = eval.symbol_mode();
-    let mut recorded: Vec<Value> = match interactive_spec {
-        ParsedInteractiveSpec::StringCode(code) => {
+    let mut recorded: Vec<Value> = match string_code {
+        Some(code) => {
             let forms = string_code_history_forms(code, call_args.len());
             call_args
                 .iter()
@@ -2695,7 +2233,7 @@ pub(crate) fn finish_call_interactively_in_eval(
         }
     };
     let should_record =
-        plan.record_flag || eval.interactive_minibuffer_read_count() != minibuffer_reads_before;
+        plan.record_flag() || eval.interactive_minibuffer_read_count() != minibuffer_reads_before;
     for value in &call_args {
         eval.push_specpdl_root(*value);
     }
@@ -2703,8 +2241,8 @@ pub(crate) fn finish_call_interactively_in_eval(
         if should_record {
             record_call_interactively_command_history(
                 eval,
-                plan.invocation_function,
-                &plan.interactive_spec,
+                plan.invocation_function(),
+                plan.spec_string_code(),
                 &call_args,
             )?;
         }
@@ -2726,17 +2264,19 @@ pub(crate) fn resolve_call_interactively_target_and_args_in_eval(
     eval: &mut Context,
     plan: &mut CallInteractivelyPlan,
 ) -> Result<(Value, Vec<Value>), Flow> {
-    let func = plan.func;
-    let call_args = match &plan.interactive_spec {
-        ParsedInteractiveSpec::NoArgs => Vec::new(),
-        ParsedInteractiveSpec::StringCode(code) => interactive_args_from_string_code(
+    let func = plan.target_function();
+    let call_args = match plan.args_spec() {
+        CallInteractivelyArgsSpec::NoArgs => Vec::new(),
+        CallInteractivelyArgsSpec::StringCode(code) => interactive_args_from_string_code(
             eval,
-            code,
+            &code,
             CommandInvocationKind::CallInteractively,
-            &mut plan.context,
+            plan.context_mut(),
         )?
         .unwrap_or_default(),
-        ParsedInteractiveSpec::Form(form) => eval_interactive_form_value(eval, *form)?,
+        CallInteractivelyArgsSpec::Form { value, lexical_arg } => {
+            eval_interactive_form_value(eval, value, lexical_arg)?
+        }
     };
     Ok((func, call_args))
 }
@@ -2750,21 +2290,21 @@ pub(crate) fn resolve_call_interactively_target_and_args_in_state(
     specpdl: &[crate::emacs_core::eval::SpecBinding],
     plan: &mut CallInteractivelyPlan,
 ) -> Result<Option<(Value, Vec<Value>)>, Flow> {
-    let func = plan.func;
-    match &plan.interactive_spec {
-        ParsedInteractiveSpec::NoArgs => Ok(Some((func, Vec::new()))),
-        ParsedInteractiveSpec::StringCode(code) => interactive_args_from_string_code_in_state(
+    let func = plan.target_function();
+    match plan.args_spec() {
+        CallInteractivelyArgsSpec::NoArgs => Ok(Some((func, Vec::new()))),
+        CallInteractivelyArgsSpec::StringCode(code) => interactive_args_from_string_code_in_state(
             vars,
             dynamic,
             buffers,
             custom,
             specpdl,
-            code,
+            &code,
             CommandInvocationKind::CallInteractively,
-            &mut plan.context,
+            plan.context_mut(),
         )
         .map(|maybe_args| maybe_args.map(|args| (func, args))),
-        ParsedInteractiveSpec::Form(_) => Ok(None),
+        CallInteractivelyArgsSpec::Form { .. } => Ok(None),
     }
 }
 
@@ -2772,18 +2312,20 @@ pub(crate) fn resolve_call_interactively_target_and_args_in_vm_runtime(
     shared: &mut super::eval::Context,
     plan: &mut CallInteractivelyPlan,
 ) -> Result<Option<(Value, Vec<Value>)>, Flow> {
-    let func = plan.func;
-    match plan.interactive_spec.clone() {
-        ParsedInteractiveSpec::NoArgs => Ok(Some((func, Vec::new()))),
-        ParsedInteractiveSpec::StringCode(code) => interactive_args_from_string_code_in_vm_runtime(
-            shared,
-            &code,
-            CommandInvocationKind::CallInteractively,
-            &mut plan.context,
-        )
-        .map(|maybe_args| maybe_args.map(|args| (func, args))),
-        ParsedInteractiveSpec::Form(form) => {
-            eval_interactive_form_value(shared, form).map(|args| Some((func, args)))
+    let func = plan.target_function();
+    match plan.args_spec() {
+        CallInteractivelyArgsSpec::NoArgs => Ok(Some((func, Vec::new()))),
+        CallInteractivelyArgsSpec::StringCode(code) => {
+            interactive_args_from_string_code_in_vm_runtime(
+                shared,
+                &code,
+                CommandInvocationKind::CallInteractively,
+                plan.context_mut(),
+            )
+            .map(|maybe_args| maybe_args.map(|args| (func, args)))
+        }
+        CallInteractivelyArgsSpec::Form { value, lexical_arg } => {
+            eval_interactive_form_value(shared, value, lexical_arg).map(|args| Some((func, args)))
         }
     }
 }
@@ -2802,6 +2344,26 @@ pub(crate) fn resolve_call_interactively_target_and_args_with_vm_fallback(
     let result = resolve_call_interactively_target_and_args_in_eval(shared, plan);
     shared.restore_specpdl_roots(roots);
     result
+}
+
+// The one canonical `call-interactively` acquisition table (peer ruling
+// 13:1xZ, PC2 shape). The implementation stays here because it binds the
+// minibuffer/reader Lisp entries; eval owns the plan and dispatches through
+// this descriptor once core installs it at `new_inner`/`from_dump`.
+static CANONICAL_CALL_INTERACTIVELY_HOOKS:
+    crate::emacs_core::eval::call_interactively::CallInteractivelyHooks =
+    crate::emacs_core::eval::call_interactively::CallInteractivelyHooks::new(
+        resolve_call_interactively_target_and_args_with_vm_fallback,
+    );
+
+pub(crate) fn install_call_interactively_hook() {
+    let installed = crate::emacs_core::eval::call_interactively::install_call_interactively_hooks(
+        &CANONICAL_CALL_INTERACTIVELY_HOOKS,
+    );
+    debug_assert!(
+        installed.is_ok(),
+        "a different call-interactively acquisition table is already installed"
+    );
 }
 
 /// `(self-insert-command N &optional C)` -- insert character C (or the last
