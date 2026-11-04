@@ -901,7 +901,7 @@ pub fn forward_word(buf: &Buffer, table: &SyntaxTable, count: i64) -> EmacsByteP
 }
 
 fn syntax_char_from_code(code: u32) -> char {
-    super::builtins::character_code_to_rust_char(code as i64).unwrap_or('\u{FFFD}')
+    neovm_value::emacs_char::character_code_to_rust_char(code as i64).unwrap_or('\u{FFFD}')
 }
 
 /// On-demand syntax-char accessor over a buffer.

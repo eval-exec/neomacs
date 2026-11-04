@@ -342,7 +342,7 @@ fn serialize_into(
             // "1e+20", 1e-5 → "1e-05" — and stays consistent with the rest
             // of the runtime. The nan/inf cases are rejected above, so the
             // finite path always yields valid JSON.
-            out.push_str(&crate::emacs_core::print::format_float(f));
+            out.push_str(&neovm_value::strings_core::format_float(f));
             Ok(())
         }
 

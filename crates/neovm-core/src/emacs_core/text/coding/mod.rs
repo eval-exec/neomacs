@@ -3606,7 +3606,9 @@ pub(crate) fn builtin_define_coding_system_internal(
 
     // arg[1]: mnemonic (char)
     let mnemonic = match args[1].kind() {
-        ValueKind::Fixnum(c) => super::builtins::character_code_to_rust_char(c).unwrap_or('?'),
+        ValueKind::Fixnum(c) => {
+            neovm_value::emacs_char::character_code_to_rust_char(c).unwrap_or('?')
+        }
         _ => '?',
     };
 

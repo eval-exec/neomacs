@@ -711,3 +711,327 @@ pub fn builtin_string_as_multibyte(args: Vec<Value>) -> EvalResult {
         crate::heap_types::LispString::from_emacs_bytes(out),
     ))
 }
+
+// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Base64 codec (stage-3b T2: moved verbatim from the lisp fns layer; the
+// Value-flavored multibyte wrappers stay in core and call down)
+// ---------------------------------------------------------------------------
+
+/// Standard Base64 alphabet (RFC 4648 §4).
+pub const B64_STD: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+/// URL-safe Base64 alphabet (RFC 4648 §5).
+pub const B64_URL: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+/// Build a GNU-style decode table.
+///
+/// GNU `base64_char_to_value` uses:
+/// - `-1` for always-ignored whitespace,
+/// - `0` for invalid input and `=`,
+/// - `1..=64` for represented values plus one.
+pub fn build_decode_table(alphabet: &[u8; 64]) -> [i8; 256] {
+    let mut table = [0i8; 256];
+    for b in [b'\t', b'\n', 0x0c, b'\r', b' '] {
+        table[b as usize] = -1;
+    }
+    for (i, &ch) in alphabet.iter().enumerate() {
+        table[ch as usize] = i as i8 + 1;
+    }
+    table
+}
+
+/// MIME line length used by GNU's base64 line-breaking (fns.c).
+const MIME_LINE_LENGTH: usize = 76;
+
+pub fn base64_encode(input: &[u8], alphabet: &[u8; 64], pad: bool, line_break: bool) -> String {
+    let mut out = Vec::with_capacity(input.len().div_ceil(3) * 4 + input.len() / 57);
+    // Mirror GNU `base64_encode_1` (fns.c): wrap a line every
+    // MIME_LINE_LENGTH/4 base64 groups, inserting '\n' *between* lines only.
+    // `counter` counts the groups emitted on the current line; the separator
+    // is emitted before a group when the previous line is full, so a final
+    // full line never gets a trailing newline.
+    let mut counter = 0usize;
+
+    let chunks = input.chunks(3);
+    for chunk in chunks {
+        if line_break {
+            if counter < MIME_LINE_LENGTH / 4 {
+                counter += 1;
+            } else {
+                out.push(b'\n');
+                counter = 1;
+            }
+        }
+
+        let b0 = chunk[0] as u32;
+        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
+        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+
+        out.push(alphabet[((triple >> 18) & 0x3F) as usize]);
+        out.push(alphabet[((triple >> 12) & 0x3F) as usize]);
+
+        if chunk.len() > 1 {
+            out.push(alphabet[((triple >> 6) & 0x3F) as usize]);
+        } else if pad {
+            out.push(b'=');
+        }
+
+        if chunk.len() > 2 {
+            out.push(alphabet[(triple & 0x3F) as usize]);
+        } else if pad {
+            out.push(b'=');
+        }
+    }
+
+    // Safety: we only pushed ASCII bytes
+    unsafe { String::from_utf8_unchecked(out) }
+}
+
+fn base64_next_non_ignorable(input: &[u8], pos: &mut usize, table: &[i8; 256]) -> Option<u8> {
+    while *pos < input.len() {
+        let byte = input[*pos];
+        *pos += 1;
+        if table[byte as usize] < 0 {
+            continue;
+        }
+        return Some(byte);
+    }
+    None
+}
+
+fn base64_next_value(
+    input: &[u8],
+    pos: &mut usize,
+    table: &[i8; 256],
+    ignore_invalid: bool,
+) -> Option<(u8, i8)> {
+    while *pos < input.len() {
+        let byte = input[*pos];
+        *pos += 1;
+        let value = table[byte as usize];
+        if value < 0 || (value == 0 && ignore_invalid) {
+            continue;
+        }
+        return Some((byte, value));
+    }
+    None
+}
+
+pub fn base64_decode_bytes(
+    input: &[u8],
+    table: &[i8; 256],
+    base64url: bool,
+    ignore_invalid: bool,
+) -> Result<Vec<u8>, ()> {
+    let mut out = Vec::with_capacity(input.len() * 3 / 4);
+    let mut pos = 0usize;
+
+    loop {
+        let Some((_c1, v1)) = base64_next_value(input, &mut pos, table, ignore_invalid) else {
+            return Ok(out);
+        };
+        if v1 == 0 {
+            return Err(());
+        }
+        let mut value = ((v1 - 1) as u32) << 18;
+
+        let Some((_c2, v2)) = base64_next_value(input, &mut pos, table, ignore_invalid) else {
+            return Err(());
+        };
+        if v2 == 0 {
+            return Err(());
+        }
+        value |= ((v2 - 1) as u32) << 12;
+        out.push(((value >> 16) & 0xff) as u8);
+
+        let Some((c3, v3)) = base64_next_value(input, &mut pos, table, ignore_invalid) else {
+            if !base64url && !ignore_invalid {
+                return Err(());
+            }
+            return Ok(out);
+        };
+        if c3 == b'=' {
+            let Some(c4) = base64_next_non_ignorable(input, &mut pos, table) else {
+                return Err(());
+            };
+            if c4 != b'=' {
+                return Err(());
+            }
+            continue;
+        }
+        if v3 == 0 {
+            return Err(());
+        }
+        value |= ((v3 - 1) as u32) << 6;
+        out.push(((value >> 8) & 0xff) as u8);
+
+        let Some((c4, v4)) = base64_next_value(input, &mut pos, table, ignore_invalid) else {
+            if !base64url && !ignore_invalid {
+                return Err(());
+            }
+            return Ok(out);
+        };
+        if c4 == b'=' {
+            continue;
+        }
+        if v4 == 0 {
+            return Err(());
+        }
+        value |= (v4 - 1) as u32;
+        out.push((value & 0xff) as u8);
+    }
+}
+
+pub fn base64_decode(
+    input: &[u8],
+    table: &[i8; 256],
+    base64url: bool,
+    ignore_invalid: bool,
+) -> Result<Vec<u8>, ()> {
+    base64_decode_bytes(input, table, base64url, ignore_invalid)
+}
+
+/// Standard-alphabet Base64 with no padding and no line breaks — used by the
+/// UTF-7 codec (RFC 2152 modified Base64).
+pub fn base64_standard_encode_unpadded(input: &[u8]) -> String {
+    base64_encode(input, B64_STD, false, false)
+}
+
+/// Decode standard-alphabet Base64 (the caller re-pads to a multiple of 4),
+/// returning the bytes or `None` on malformed input. Used by the UTF-7 codec.
+pub fn base64_standard_decode(input: &[u8]) -> Option<Vec<u8>> {
+    let table = build_decode_table(B64_STD);
+    base64_decode(input, &table, false, false).ok()
+}
+
+// Float formatting (stage-3b T2: moved verbatim from the print layer;
+// GNU float_to_string semantics, f64 -> String, value-pure)
+// ---------------------------------------------------------------------------
+
+pub fn format_float(f: f64) -> String {
+    const NAN_QUIET_BIT: u64 = 1u64 << 51;
+    const NAN_PAYLOAD_MASK: u64 = (1u64 << 51) - 1;
+
+    if f.is_nan() {
+        let bits = f.to_bits();
+        let frac = bits & ((1u64 << 52) - 1);
+        if (frac & NAN_QUIET_BIT) != 0 {
+            let payload = frac & NAN_PAYLOAD_MASK;
+            return if f.is_sign_negative() {
+                format!("-{}.0e+NaN", payload)
+            } else {
+                format!("{}.0e+NaN", payload)
+            };
+        }
+        return if f.is_sign_negative() {
+            "-0.0e+NaN".to_string()
+        } else {
+            "0.0e+NaN".to_string()
+        };
+    }
+    if f.is_infinite() {
+        return if f > 0.0 {
+            "1.0e+INF".to_string()
+        } else {
+            "-1.0e+INF".to_string()
+        };
+    }
+    format_float_dtoastr(f)
+}
+
+/// Format a finite float matching GNU Emacs's `dtoastr` / `float_to_string`:
+/// use `%g`-style formatting with the minimum precision (starting from DBL_DIG=15)
+/// that round-trips through strtod, then ensure a decimal point or exponent is present.
+fn format_float_dtoastr(f: f64) -> String {
+    let abs_f = f.abs();
+    let start_prec = if abs_f != 0.0 && abs_f < f64::MIN_POSITIVE {
+        1
+    } else {
+        15 // DBL_DIG
+    };
+    for prec in start_prec..=20 {
+        // %g: uses %e if exponent < -4 or >= precision, otherwise %f.
+        // %g also trims trailing zeros.
+        let s = format!("{:.prec$e}", f, prec = prec - 1);
+        // Parse back and check round-trip
+        if let Ok(parsed) = s.parse::<f64>()
+            && parsed.to_bits() == f.to_bits()
+        {
+            // Convert from Rust's scientific notation to %g-style output
+            return rust_sci_to_emacs_g(f, &s, prec);
+        }
+    }
+    // Fallback: maximum precision
+    let s = format!("{:.20e}", f);
+    rust_sci_to_emacs_g(f, &s, 21)
+}
+
+/// Convert Rust scientific notation string to GNU Emacs %g-style output.
+/// %g rules: use fixed notation unless exponent >= precision or exponent < -4.
+/// %g trims trailing zeros (but keeps at least one digit after decimal point
+/// for Emacs's post-processing).
+fn rust_sci_to_emacs_g(f: f64, sci: &str, prec: usize) -> String {
+    // Parse the exponent from Rust's scientific notation (e.g., "3.14e2")
+    let (mantissa_str, exp_str) = sci.split_once('e').unwrap_or((sci, "0"));
+    let exp: i32 = exp_str.parse().unwrap_or(0);
+
+    // %g uses fixed notation when -4 <= exp < prec
+    let result = if exp >= -4 && exp < prec as i32 {
+        // Fixed notation
+        format_g_fixed(f, mantissa_str, exp, prec)
+    } else {
+        // Scientific notation with Emacs-style exponent formatting
+        format_g_scientific(mantissa_str, exp, prec)
+    };
+
+    // Emacs post-processing: ensure decimal point or exponent is present
+    ensure_decimal_point(result)
+}
+
+/// Format as fixed-point notation for %g, trimming trailing zeros.
+fn format_g_fixed(f: f64, _mantissa: &str, exp: i32, prec: usize) -> String {
+    // %g precision = total significant digits.
+    // digits_after_dot = prec - exp - 1 (works for both positive and negative exp)
+    let digits_after_dot = (prec as i32 - exp - 1).max(0) as usize;
+    let s = format!("{:.digits$}", f, digits = digits_after_dot);
+    trim_trailing_zeros_g(&s)
+}
+
+/// Format as scientific notation for %g, trimming trailing zeros.
+fn format_g_scientific(mantissa: &str, exp: i32, _prec: usize) -> String {
+    // Trim trailing zeros from mantissa
+    let trimmed = trim_trailing_zeros_g(mantissa);
+    // Emacs uses e+XX / e-XX with at least 2-digit exponent for |exp| < 100,
+    // but %g in glibc actually uses minimal digits. Let's match C's %g.
+    if exp >= 0 {
+        format!("{}e+{:02}", trimmed, exp)
+    } else {
+        format!("{}e-{:02}", trimmed, -exp)
+    }
+}
+
+/// Trim trailing zeros after decimal point (%g style).
+/// "3.1400" -> "3.14", "3.0000" -> "3", "100" -> "100"
+fn trim_trailing_zeros_g(s: &str) -> String {
+    if !s.contains('.') {
+        return s.to_string();
+    }
+    let trimmed = s.trim_end_matches('0');
+    let trimmed = trimmed.trim_end_matches('.');
+    trimmed.to_string()
+}
+
+/// Ensure the output has a decimal point with trailing digit (Emacs requirement).
+/// If no decimal point or exponent, append ".0".
+fn ensure_decimal_point(mut s: String) -> String {
+    // Check if there's already a decimal point or exponent
+    let has_dot_or_exp = s.bytes().any(|b| b == b'.' || b == b'e' || b == b'E');
+    if !has_dot_or_exp {
+        s.push_str(".0");
+    } else if s.ends_with('.') {
+        s.push('0');
+    }
+    s
+}

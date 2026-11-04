@@ -328,10 +328,10 @@ fn simple_case_character(
     match action {
         CharacterCaseAction::Up => casetab
             .map(CaseMap::Up, code)
-            .unwrap_or_else(|| super::builtins::upcase_char_code_emacs_compat(code)),
+            .unwrap_or_else(|| neovm_value::emacs_char::upcase_char_code_emacs_compat(code)),
         CharacterCaseAction::Down => casetab
             .map(CaseMap::Down, code)
-            .unwrap_or_else(|| super::builtins::downcase_char_code_emacs_compat(code)),
+            .unwrap_or_else(|| neovm_value::emacs_char::downcase_char_code_emacs_compat(code)),
         CharacterCaseAction::Title => {
             // Unicode's simple titlecase property precedes the buffer table
             // (GNU casefiddle.c:166-180), including titlecase digraphs.

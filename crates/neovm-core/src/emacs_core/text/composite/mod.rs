@@ -555,7 +555,7 @@ fn composition_components_key(
     match components.kind() {
         ValueKind::Fixnum(code) => Value::vector(vec![Value::fixnum(code)]),
         ValueKind::String => {
-            let codes = crate::emacs_core::builtins::lisp_string_char_codes(
+            let codes = neovm_value::strings_core::lisp_string_char_codes(
                 components.as_lisp_string().expect("string"),
             );
             Value::vector(codes.into_iter().map(|c| Value::fixnum(c as i64)).collect())
@@ -565,7 +565,7 @@ fn composition_components_key(
         _ => {
             // nil components: take the chars of the composed range.
             let codes: Vec<u32> = if let Some(text) = string.as_lisp_string() {
-                let all = crate::emacs_core::builtins::lisp_string_char_codes(text);
+                let all = neovm_value::strings_core::lisp_string_char_codes(text);
                 let from = start.max(0) as usize;
                 let to = ((start + nchars).max(0) as usize).min(all.len());
                 all.get(from..to).map(|s| s.to_vec()).unwrap_or_default()
@@ -577,7 +577,7 @@ fn composition_components_key(
                 ));
                 let sub = buf
                     .buffer_substring_lisp_string_range(EmacsByteRange::new(byte_start, byte_end));
-                crate::emacs_core::builtins::lisp_string_char_codes(&sub)
+                neovm_value::strings_core::lisp_string_char_codes(&sub)
             } else {
                 Vec::new()
             };
@@ -1247,7 +1247,7 @@ fn find_default_combining_composition_in_string(
         return None;
     }
 
-    let codes = super::builtins::lisp_string_char_codes(string);
+    let codes = neovm_value::strings_core::lisp_string_char_codes(string);
     let query = AutomaticCompositionQuery::new(pos, limit);
     let mut ranges = Vec::new();
     let mut base = 0usize;
@@ -1506,7 +1506,7 @@ pub(crate) fn composition_get_gstring(
             return Err(signal("error", vec![Value::string("No current buffer")]));
         };
         let text = buf.buffer_substring_lisp_string_range(byte_range);
-        crate::emacs_core::builtins::lisp_string_char_codes(&text)
+        neovm_value::strings_core::lisp_string_char_codes(&text)
     } else {
         let text = expect_string_value(&args[3])?;
         if !text.is_multibyte() && text.as_bytes().iter().any(|byte| *byte >= 0x80) {
@@ -1515,7 +1515,7 @@ pub(crate) fn composition_get_gstring(
                 vec![Value::string("Attempt to shape unibyte text")],
             ));
         }
-        let codes = crate::emacs_core::builtins::lisp_string_char_codes(text);
+        let codes = neovm_value::strings_core::lisp_string_char_codes(text);
         let len = codes.len() as i64;
         let (from, to) = validate_subarray_indices(args[3], args[0], args[1], len)?;
         codes[from as usize..to as usize].to_vec()

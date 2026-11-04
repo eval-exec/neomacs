@@ -197,12 +197,14 @@ fn wrong_type(pred: &str, got: &Value) -> Flow {
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 fn expect_char(value: &Value) -> Result<char, Flow> {
     match value.kind() {
-        ValueKind::Fixnum(c) => super::builtins::character_code_to_rust_char(c).ok_or_else(|| {
-            signal(
-                "error",
-                vec![Value::string("Invalid character code"), *value],
-            )
-        }),
+        ValueKind::Fixnum(c) => {
+            neovm_value::emacs_char::character_code_to_rust_char(c).ok_or_else(|| {
+                signal(
+                    "error",
+                    vec![Value::string("Invalid character code"), *value],
+                )
+            })
+        }
         _other => Err(wrong_type("characterp", value)),
     }
 }

@@ -25,6 +25,9 @@ use crate::buffer::{
     BufferManager, CharPos0, CharRange, EmacsByteRange, LispCharPos1, TextEditRange,
 };
 use md5::Md5;
+use neovm_value::strings_core::{
+    B64_STD, B64_URL, base64_decode, base64_decode_bytes, base64_encode, build_decode_table,
+};
 use sha1::Sha1;
 use sha2::{Digest, Sha224, Sha256, Sha384, Sha512};
 use std::borrow::Cow;
@@ -185,94 +188,8 @@ fn bytes_to_hex(bytes: &[u8]) -> String {
     out
 }
 
-// ---------------------------------------------------------------------------
-// Base64 alphabet tables
-// ---------------------------------------------------------------------------
-
-const B64_STD: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-const B64_URL: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-
-/// Build a GNU-style decode table.
-///
-/// GNU `base64_char_to_value` uses:
-/// - `-1` for always-ignored whitespace,
-/// - `0` for invalid input and `=`,
-/// - `1..=64` for represented values plus one.
-fn build_decode_table(alphabet: &[u8; 64]) -> [i8; 256] {
-    let mut table = [0i8; 256];
-    for b in [b'\t', b'\n', 0x0c, b'\r', b' '] {
-        table[b as usize] = -1;
-    }
-    for (i, &ch) in alphabet.iter().enumerate() {
-        table[ch as usize] = i as i8 + 1;
-    }
-    table
-}
-
-// ---------------------------------------------------------------------------
-// Base64 encode (manual implementation)
-// ---------------------------------------------------------------------------
-
-/// Standard-alphabet Base64 with no padding and no line breaks — used by the
-/// UTF-7 codec (RFC 2152 modified Base64).
-pub(crate) fn base64_standard_encode_unpadded(input: &[u8]) -> String {
-    base64_encode(input, B64_STD, false, false)
-}
-
-/// Decode standard-alphabet Base64 (the caller re-pads to a multiple of 4),
-/// returning the bytes or `None` on malformed input. Used by the UTF-7 codec.
-pub(crate) fn base64_standard_decode(input: &[u8]) -> Option<Vec<u8>> {
-    let table = build_decode_table(B64_STD);
-    base64_decode(input, &table, false, false).ok()
-}
-
 /// MIME line length used by GNU's base64 line-breaking (fns.c).
 const MIME_LINE_LENGTH: usize = 76;
-
-fn base64_encode(input: &[u8], alphabet: &[u8; 64], pad: bool, line_break: bool) -> String {
-    let mut out = Vec::with_capacity(input.len().div_ceil(3) * 4 + input.len() / 57);
-    // Mirror GNU `base64_encode_1` (fns.c): wrap a line every
-    // MIME_LINE_LENGTH/4 base64 groups, inserting '\n' *between* lines only.
-    // `counter` counts the groups emitted on the current line; the separator
-    // is emitted before a group when the previous line is full, so a final
-    // full line never gets a trailing newline.
-    let mut counter = 0usize;
-
-    let chunks = input.chunks(3);
-    for chunk in chunks {
-        if line_break {
-            if counter < MIME_LINE_LENGTH / 4 {
-                counter += 1;
-            } else {
-                out.push(b'\n');
-                counter = 1;
-            }
-        }
-
-        let b0 = chunk[0] as u32;
-        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
-        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
-        let triple = (b0 << 16) | (b1 << 8) | b2;
-
-        out.push(alphabet[((triple >> 18) & 0x3F) as usize]);
-        out.push(alphabet[((triple >> 12) & 0x3F) as usize]);
-
-        if chunk.len() > 1 {
-            out.push(alphabet[((triple >> 6) & 0x3F) as usize]);
-        } else if pad {
-            out.push(b'=');
-        }
-
-        if chunk.len() > 2 {
-            out.push(alphabet[(triple & 0x3F) as usize]);
-        } else if pad {
-            out.push(b'=');
-        }
-    }
-
-    // Safety: we only pushed ASCII bytes
-    unsafe { String::from_utf8_unchecked(out) }
-}
 
 /// Flatten the internal bytes of base64-encoding input into the raw data
 /// bytes to be encoded, mirroring GNU `base64_encode_1` (fns.c): when the
@@ -311,19 +228,6 @@ fn base64_encode_string_bytes(
     base64_encode_source_bytes(string.as_bytes(), string.is_multibyte())
 }
 
-// ---------------------------------------------------------------------------
-// Base64 decode (manual implementation)
-// ---------------------------------------------------------------------------
-
-fn base64_decode(
-    input: &[u8],
-    table: &[i8; 256],
-    base64url: bool,
-    ignore_invalid: bool,
-) -> Result<Vec<u8>, ()> {
-    base64_decode_bytes(input, table, base64url, ignore_invalid)
-}
-
 /// Build the LispString that base64-decode-region inserts into the buffer.
 ///
 /// Mirrors GNU `base64_decode_1`'s `multibyte_bit` handling (fns.c): for a
@@ -337,101 +241,6 @@ fn decoded_bytes_to_lisp_string(bytes: Vec<u8>, multibyte: bool) -> crate::heap_
         crate::heap_types::LispString::from_emacs_bytes(super::emacs_char::str_to_multibyte(&bytes))
     } else {
         crate::heap_types::LispString::from_unibyte(bytes)
-    }
-}
-
-fn base64_next_value(
-    input: &[u8],
-    pos: &mut usize,
-    table: &[i8; 256],
-    ignore_invalid: bool,
-) -> Option<(u8, i8)> {
-    while *pos < input.len() {
-        let byte = input[*pos];
-        *pos += 1;
-        let value = table[byte as usize];
-        if value < 0 || (value == 0 && ignore_invalid) {
-            continue;
-        }
-        return Some((byte, value));
-    }
-    None
-}
-
-fn base64_next_non_ignorable(input: &[u8], pos: &mut usize, table: &[i8; 256]) -> Option<u8> {
-    while *pos < input.len() {
-        let byte = input[*pos];
-        *pos += 1;
-        if table[byte as usize] < 0 {
-            continue;
-        }
-        return Some(byte);
-    }
-    None
-}
-
-fn base64_decode_bytes(
-    input: &[u8],
-    table: &[i8; 256],
-    base64url: bool,
-    ignore_invalid: bool,
-) -> Result<Vec<u8>, ()> {
-    let mut out = Vec::with_capacity(input.len() * 3 / 4);
-    let mut pos = 0usize;
-
-    loop {
-        let Some((_c1, v1)) = base64_next_value(input, &mut pos, table, ignore_invalid) else {
-            return Ok(out);
-        };
-        if v1 == 0 {
-            return Err(());
-        }
-        let mut value = ((v1 - 1) as u32) << 18;
-
-        let Some((_c2, v2)) = base64_next_value(input, &mut pos, table, ignore_invalid) else {
-            return Err(());
-        };
-        if v2 == 0 {
-            return Err(());
-        }
-        value |= ((v2 - 1) as u32) << 12;
-        out.push(((value >> 16) & 0xff) as u8);
-
-        let Some((c3, v3)) = base64_next_value(input, &mut pos, table, ignore_invalid) else {
-            if !base64url && !ignore_invalid {
-                return Err(());
-            }
-            return Ok(out);
-        };
-        if c3 == b'=' {
-            let Some(c4) = base64_next_non_ignorable(input, &mut pos, table) else {
-                return Err(());
-            };
-            if c4 != b'=' {
-                return Err(());
-            }
-            continue;
-        }
-        if v3 == 0 {
-            return Err(());
-        }
-        value |= ((v3 - 1) as u32) << 6;
-        out.push(((value >> 8) & 0xff) as u8);
-
-        let Some((c4, v4)) = base64_next_value(input, &mut pos, table, ignore_invalid) else {
-            if !base64url && !ignore_invalid {
-                return Err(());
-            }
-            return Ok(out);
-        };
-        if c4 == b'=' {
-            continue;
-        }
-        if v4 == 0 {
-            return Err(());
-        }
-        value |= (v4 - 1) as u32;
-        out.push((value & 0xff) as u8);
     }
 }
 

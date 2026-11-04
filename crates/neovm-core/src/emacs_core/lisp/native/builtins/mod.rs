@@ -23,10 +23,11 @@ pub(super) use super::keyboard::pure::{
     key_sequence_values,
 };
 pub(super) use super::value::*;
+pub(crate) use neovm_value::emacs_char::character_code_to_rust_char;
+pub(crate) use neovm_value::emacs_char::downcase_char_code_emacs_compat;
+pub(crate) use neovm_value::emacs_char::upcase_char_code_emacs_compat;
 pub(super) use std::cell::RefCell;
 pub(super) use std::collections::{HashMap, HashSet};
-pub(crate) use strings::downcase_char_code_emacs_compat;
-pub(crate) use strings::upcase_char_code_emacs_compat;
 
 // ---------------------------------------------------------------------------
 // Transitional string character iteration
@@ -155,16 +156,6 @@ pub(super) fn expect_character_code(value: &Value) -> Result<i64, Flow> {
             ))
         }
     }
-}
-
-pub(crate) fn character_code_to_rust_char(code: i64) -> Option<char> {
-    let code = code as u32;
-    char::from_u32(code).or_else(|| {
-        crate::emacs_core::emacs_char::char_byte8_p(code).then(|| {
-            char::from_u32(crate::emacs_core::emacs_char::char_to_byte8(code) as u32)
-                .expect("raw byte values must be valid Unicode scalars")
-        })
-    })
 }
 
 fn maybe_trace_characterp_nil(value: &Value, source: &str) {

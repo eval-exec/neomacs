@@ -280,7 +280,7 @@ pub(crate) fn builtin_format_time_string(args: Vec<Value>) -> EvalResult {
     // is available for the `%N' directive (GNU passes `t.tv_nsec' to nstrftime,
     // src/timefns.c:1391).
     let (timestamp, nanos): (i64, i64) = if args.len() >= 2 && !args[1].is_nil() {
-        crate::emacs_core::timefns::time_value_seconds_and_nanos(&args[1])?
+        neovm_value::time_core::time_value_seconds_and_nanos(&args[1])?
     } else {
         (current_unix_timestamp(), 0)
     };

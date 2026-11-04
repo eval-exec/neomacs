@@ -509,73 +509,6 @@ fn upcase_with_override(
     }
 }
 
-fn preserve_emacs_upcase_payload(code: i64) -> bool {
-    matches!(
-        code,
-        305
-            | 329
-            | 383
-            | 411
-            | 496
-            | 612
-            | 912
-            | 944
-            | 1415
-            | 7306
-            | 7830..=7834
-            | 8016
-            | 8018
-            | 8020
-            | 8022
-            | 8072..=8079
-            | 8088..=8095
-            | 8104..=8111
-            | 8114
-            | 8116
-            | 8118..=8119
-            | 8124
-            | 8130
-            | 8132
-            | 8134..=8135
-            | 8140
-            | 8146..=8147
-            | 8150..=8151
-            | 8162..=8164
-            | 8166..=8167
-            | 8178
-            | 8180
-            | 8182..=8183
-            | 8188
-            | 42957
-            | 42959
-            | 42963
-            | 42965
-            | 42971
-            | 64256..=64262
-            | 64275..=64279
-            | 68976..=68997
-            | 93883..=93907
-    )
-}
-
-pub(crate) fn upcase_char_code_emacs_compat(code: i64) -> i64 {
-    if preserve_emacs_upcase_payload(code) {
-        return code;
-    }
-    match code {
-        223 => 7838,
-        8064..=8071 | 8080..=8087 | 8096..=8103 => code + 8,
-        8115 | 8131 | 8179 => code + 9,
-        _ => {
-            if let Some(c) = u32::try_from(code).ok().and_then(char::from_u32) {
-                c.to_uppercase().next().unwrap_or(c) as i64
-            } else {
-                code
-            }
-        }
-    }
-}
-
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 fn runtime_string_result_multibyte(source_is_multibyte: bool, rendered: &str) -> bool {
     if source_is_multibyte {
@@ -598,35 +531,6 @@ fn runtime_string_result_multibyte(source_is_multibyte: bool, rendered: &str) ->
             && !(0xE110..=0xE116).contains(&code)
             && code != 0xE100
     })
-}
-
-fn preserve_emacs_downcase_payload(code: i64) -> bool {
-    matches!(
-        code,
-        304
-            | 7305
-            | 8490
-            | 42955
-            | 42956
-            | 42958
-            | 42962
-            | 42964
-            | 42970
-            | 42972
-            | 68944..=68965
-            | 93856..=93880
-    )
-}
-
-pub(crate) fn downcase_char_code_emacs_compat(code: i64) -> i64 {
-    if preserve_emacs_downcase_payload(code) {
-        return code;
-    }
-    if let Some(c) = u32::try_from(code).ok().and_then(char::from_u32) {
-        c.to_lowercase().next().unwrap_or(c) as i64
-    } else {
-        code
-    }
 }
 
 /// Build the casing word-constituent predicate used for the Greek final-sigma

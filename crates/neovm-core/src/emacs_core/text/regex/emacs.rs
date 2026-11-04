@@ -828,7 +828,7 @@ impl CaseTranslation {
     }
 
     fn canonicalize_char(c: u32) -> u32 {
-        crate::emacs_core::builtins::downcase_char_code_emacs_compat(c as i64) as u32
+        neovm_value::emacs_char::downcase_char_code_emacs_compat(c as i64) as u32
     }
 }
 

@@ -87,7 +87,7 @@ fn check_category(value: &Value) -> Result<i64, Flow> {
 
 fn extract_char_opt(value: &Value, _fn_name: &str) -> Result<Option<char>, Flow> {
     match value.kind() {
-        ValueKind::Fixnum(c) => Ok(super::builtins::character_code_to_rust_char(c)),
+        ValueKind::Fixnum(c) => Ok(neovm_value::emacs_char::character_code_to_rust_char(c)),
         _ => Err(signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("characterp"), *value],

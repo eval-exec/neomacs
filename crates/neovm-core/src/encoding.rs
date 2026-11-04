@@ -3275,7 +3275,7 @@ fn encode_via_utf7(s: &crate::heap_types::LispString, imap: bool) -> Vec<u8> {
                 push_utf16_codepoint(&mut units, Utf16Endian::Big, cc);
                 i += 1;
             }
-            let mut b64 = crate::emacs_core::fns::base64_standard_encode_unpadded(&units);
+            let mut b64 = neovm_value::strings_core::base64_standard_encode_unpadded(&units);
             if imap {
                 b64 = b64.replace('/', ",");
             }
@@ -3337,7 +3337,7 @@ fn decode_via_utf7(bytes: &[u8], imap: bool) -> Vec<u8> {
         while !run.len().is_multiple_of(4) {
             run.push(b'=');
         }
-        if let Some(decoded) = crate::emacs_core::fns::base64_standard_decode(&run) {
+        if let Some(decoded) = neovm_value::strings_core::base64_standard_decode(&run) {
             let mut j = 0usize;
             while j + 1 < decoded.len() {
                 let unit = u16::from_be_bytes([decoded[j], decoded[j + 1]]);
