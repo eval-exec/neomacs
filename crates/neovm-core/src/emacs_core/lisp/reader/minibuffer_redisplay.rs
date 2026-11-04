@@ -11,7 +11,7 @@ use super::*;
 pub(super) fn activate(
     eval: &mut super::super::eval::Context,
     minibuf_id: crate::buffer::BufferId,
-    entry_level: super::super::minibuffer::MinibufferEntryLevel,
+    entry_level: neovm_value::minibuffer_state::MinibufferEntryLevel,
 ) -> Option<ActiveMinibufferWindowState> {
     let caller = super::super::window_cmds::ensure_selected_frame_id_in_state(
         &mut eval.frames,
@@ -53,7 +53,7 @@ pub(super) fn activate(
 /// GNU do_switch_frame's NORECORD=t path: SOME without per-window marks.
 #[cold]
 #[inline(never)]
-pub(super) fn publish_frame_switch(
+pub(crate) fn publish_frame_switch(
     eval: &mut super::super::eval::Context,
     frame: neovm_value::display_vocab::FrameId,
 ) {
@@ -117,7 +117,7 @@ fn publish_tty_top_change(
 /// Publish only a real erasure/overlay deletion, before mutating shared text.
 #[cold]
 #[inline(never)]
-pub(super) fn publish_expired_buffer(
+pub(crate) fn publish_expired_buffer(
     eval: &mut super::super::eval::Context,
     buffer: crate::buffer::BufferId,
 ) {

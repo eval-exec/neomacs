@@ -2885,22 +2885,22 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "read",
-        NativeFn::ContextVec(crate::emacs_core::reader::builtin_read),
+        NativeFn::ContextVec(crate::emacs_core::minibuffer::builtin_read),
         SubrArity::new(0, Some(1)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "read-from-minibuffer",
-        NativeFn::ContextVec(crate::emacs_core::reader::builtin_read_from_minibuffer),
+        NativeFn::ContextVec(crate::emacs_core::minibuffer::builtin_read_from_minibuffer),
         SubrArity::new(1, Some(7)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "read-string",
-        NativeFn::ContextVec(crate::emacs_core::reader::builtin_read_string),
+        NativeFn::ContextVec(crate::emacs_core::minibuffer::builtin_read_string),
         SubrArity::new(1, Some(5)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "completing-read",
-        NativeFn::ContextVec(crate::emacs_core::reader::builtin_completing_read),
+        NativeFn::ContextVec(crate::emacs_core::minibuffer::builtin_completing_read),
         SubrArity::new(2, Some(8)),
     )));
     // `read-number' is not here: it is a `defun' at lisp/subr.el:3725 over
@@ -5111,7 +5111,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "read-positioning-symbols",
         NativeFn::ContextVec(|ctx, args| {
-            crate::emacs_core::reader::builtin_read_impl(ctx, args, true)
+            crate::emacs_core::minibuffer::builtin_read_impl(ctx, args, true)
         }),
         SubrArity::new(0, Some(1)),
     )));
@@ -8162,7 +8162,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     );
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "yes-or-no-p",
-        NativeFn::ContextVec(crate::emacs_core::reader::builtin_yes_or_no_p),
+        NativeFn::ContextVec(crate::emacs_core::minibuffer::builtin_yes_or_no_p),
         SubrArity::new(1, Some(1)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -8664,12 +8664,12 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "read-coding-system",
-        NativeFn::ContextVec(crate::emacs_core::lread::builtin_read_coding_system),
+        NativeFn::ContextVec(crate::emacs_core::minibuffer::builtin_read_coding_system),
         SubrArity::new(1, Some(2)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "read-non-nil-coding-system",
-        NativeFn::ContextVec(crate::emacs_core::lread::builtin_read_non_nil_coding_system),
+        NativeFn::ContextVec(crate::emacs_core::minibuffer::builtin_read_non_nil_coding_system),
         SubrArity::new(1, Some(1)),
     )));
 

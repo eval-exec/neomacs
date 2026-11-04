@@ -21,6 +21,10 @@ use crate::heap_types::LispString;
 
 pub(crate) use neovm_value::minibuffer_state::MinibufferEntryLevel;
 
+mod read_entries;
+
+pub(crate) use read_entries::*;
+
 use super::error::{EvalResult, Flow, signal};
 use super::intern::{NIL_SYM_ID, SymId, T_SYM_ID, resolve_sym};
 use super::reader::KeyboardInputRuntime;
@@ -1112,7 +1116,7 @@ fn compute_common_prefix(strings: &[LispString]) -> Option<LispString> {
 /// In interactive mode, delegates to completing-read with buffer name candidates.
 pub(crate) fn builtin_read_buffer(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     execute_read_buffer_plan(eval, &args, |eval, completing_args| {
-        super::reader::builtin_completing_read(eval, completing_args.to_vec())
+        builtin_completing_read(eval, completing_args.to_vec())
     })
 }
 
@@ -1189,7 +1193,7 @@ pub(crate) fn finish_read_buffer_in_vm_runtime(
     args: &[Value],
 ) -> EvalResult {
     execute_read_buffer_plan(eval, args, |eval, completing_args| {
-        super::reader::finish_completing_read_in_vm_runtime(eval, completing_args)
+        finish_completing_read_in_vm_runtime(eval, completing_args)
     })
 }
 
@@ -1253,7 +1257,7 @@ pub(crate) fn finish_read_command_in_eval(
     args: &[Value],
 ) -> EvalResult {
     finish_read_command_with_minibuffer(args, |minibuffer_args| {
-        super::reader::builtin_read_from_minibuffer(eval, minibuffer_args.to_vec())
+        builtin_read_from_minibuffer(eval, minibuffer_args.to_vec())
     })
 }
 
@@ -1330,7 +1334,7 @@ pub(crate) fn finish_read_variable_in_eval(
     args: &[Value],
 ) -> EvalResult {
     finish_read_variable_with_minibuffer(args, |minibuffer_args| {
-        super::reader::builtin_read_from_minibuffer(eval, minibuffer_args.to_vec())
+        builtin_read_from_minibuffer(eval, minibuffer_args.to_vec())
     })
 }
 

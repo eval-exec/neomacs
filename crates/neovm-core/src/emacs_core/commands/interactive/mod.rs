@@ -1933,7 +1933,7 @@ fn interactive_args_from_string_code_in_vm_runtime(
                     args.push(super::minibuffer::finish_read_command_with_minibuffer(
                         &letter_args,
                         |minibuffer_args| {
-                            super::reader::finish_read_from_minibuffer_in_vm_runtime(
+                            super::minibuffer::finish_read_from_minibuffer_in_vm_runtime(
                                 shared,
                                 minibuffer_args,
                             )
@@ -2038,11 +2038,11 @@ fn interactive_args_from_string_code_in_vm_runtime(
                         Value::NIL,
                         Value::T,
                     ];
-                    super::reader::builtin_read_string_in_runtime(shared, &letter_args)?;
-                    args.push(super::reader::finish_read_string_with_minibuffer(
+                    super::minibuffer::builtin_read_string_in_runtime(shared, &letter_args)?;
+                    args.push(super::minibuffer::finish_read_string_with_minibuffer(
                         &letter_args,
                         |minibuffer_args| {
-                            super::reader::finish_read_from_minibuffer_in_vm_runtime(
+                            super::minibuffer::finish_read_from_minibuffer_in_vm_runtime(
                                 shared,
                                 minibuffer_args,
                             )
@@ -2091,11 +2091,11 @@ fn interactive_args_from_string_code_in_vm_runtime(
                 }
                 InteractiveControlLetter::String => {
                     let letter_args = [Value::heap_string(prompt.clone())];
-                    super::reader::builtin_read_string_in_runtime(shared, &letter_args)?;
-                    args.push(super::reader::finish_read_string_with_minibuffer(
+                    super::minibuffer::builtin_read_string_in_runtime(shared, &letter_args)?;
+                    args.push(super::minibuffer::finish_read_string_with_minibuffer(
                         &letter_args,
                         |minibuffer_args| {
-                            super::reader::finish_read_from_minibuffer_in_vm_runtime(
+                            super::minibuffer::finish_read_from_minibuffer_in_vm_runtime(
                                 shared,
                                 minibuffer_args,
                             )
@@ -2104,11 +2104,11 @@ fn interactive_args_from_string_code_in_vm_runtime(
                 }
                 InteractiveControlLetter::Symbol => {
                     let letter_args = [Value::heap_string(prompt.clone())];
-                    super::reader::builtin_read_string_in_runtime(shared, &letter_args)?;
-                    let sym_name = super::reader::finish_read_string_with_minibuffer(
+                    super::minibuffer::builtin_read_string_in_runtime(shared, &letter_args)?;
+                    let sym_name = super::minibuffer::finish_read_string_with_minibuffer(
                         &letter_args,
                         |minibuffer_args| {
-                            super::reader::finish_read_from_minibuffer_in_vm_runtime(
+                            super::minibuffer::finish_read_from_minibuffer_in_vm_runtime(
                                 shared,
                                 minibuffer_args,
                             )
@@ -2133,7 +2133,7 @@ fn interactive_args_from_string_code_in_vm_runtime(
                     args.push(super::minibuffer::finish_read_variable_with_minibuffer(
                         &letter_args,
                         |minibuffer_args| {
-                            super::reader::finish_read_from_minibuffer_in_vm_runtime(
+                            super::minibuffer::finish_read_from_minibuffer_in_vm_runtime(
                                 shared,
                                 minibuffer_args,
                             )
@@ -2141,7 +2141,7 @@ fn interactive_args_from_string_code_in_vm_runtime(
                     )?);
                 }
                 InteractiveControlLetter::CodingSystem => {
-                    args.push(super::lread::builtin_read_coding_system(
+                    args.push(super::minibuffer::builtin_read_coding_system(
                         shared,
                         vec![Value::heap_string(prompt.clone())],
                     )?)
@@ -2169,19 +2169,19 @@ fn interactive_read_expression_arg(
     prompt: crate::heap_types::LispString,
 ) -> Result<Value, Flow> {
     let input =
-        super::reader::builtin_read_from_minibuffer(eval, vec![Value::heap_string(prompt)])?;
-    super::reader::builtin_read(eval, vec![input])
+        super::minibuffer::builtin_read_from_minibuffer(eval, vec![Value::heap_string(prompt)])?;
+    super::minibuffer::builtin_read(eval, vec![input])
 }
 
 fn interactive_read_expression_arg_in_vm_runtime(
     shared: &mut super::eval::Context,
     prompt: crate::heap_types::LispString,
 ) -> Result<Value, Flow> {
-    let input = super::reader::finish_read_from_minibuffer_in_vm_runtime(
+    let input = super::minibuffer::finish_read_from_minibuffer_in_vm_runtime(
         shared,
         &[Value::heap_string(prompt)],
     )?;
-    super::reader::builtin_read(shared, vec![input])
+    super::minibuffer::builtin_read(shared, vec![input])
 }
 
 fn interactive_eval_expression_arg_in_vm_runtime(
@@ -2196,7 +2196,8 @@ fn interactive_read_coding_system_optional_arg(
     eval: &mut super::eval::Context,
     prompt: crate::heap_types::LispString,
 ) -> Result<Value, Flow> {
-    match super::lread::builtin_read_coding_system(eval, vec![Value::heap_string(prompt)]).kinded()
+    match super::minibuffer::builtin_read_coding_system(eval, vec![Value::heap_string(prompt)])
+        .kinded()
     {
         Ok(value) => Ok(value),
         Err(FlowKind::Signal(sig)) if sig.symbol == intern("end-of-file") => Ok(Value::NIL),
@@ -2737,7 +2738,7 @@ fn interactive_args_from_string_code(
                     args.push(arg);
                 }
                 InteractiveControlLetter::StringWithInputMethod => args.push(
-                    super::reader::builtin_read_string(eval, vec![Value::heap_string(prompt)])?,
+                    super::minibuffer::builtin_read_string(eval, vec![Value::heap_string(prompt)])?,
                 ),
                 InteractiveControlLetter::Mark => args.push(interactive_mark_arg(eval)?),
                 InteractiveControlLetter::NumberOrPrefix => {
@@ -2772,18 +2773,19 @@ fn interactive_args_from_string_code(
                     }
                 }
                 InteractiveControlLetter::Symbol => {
-                    let sym_name =
-                        super::reader::builtin_read_string(eval, vec![Value::heap_string(prompt)])?;
+                    let sym_name = super::minibuffer::builtin_read_string(
+                        eval,
+                        vec![Value::heap_string(prompt)],
+                    )?;
                     if let Some(name) = sym_name.as_utf8_str() {
                         args.push(Value::symbol(name));
                     } else {
                         return Ok(None);
                     }
                 }
-                InteractiveControlLetter::String => args.push(super::reader::builtin_read_string(
-                    eval,
-                    vec![Value::heap_string(prompt)],
-                )?),
+                InteractiveControlLetter::String => args.push(
+                    super::minibuffer::builtin_read_string(eval, vec![Value::heap_string(prompt)])?,
+                ),
                 InteractiveControlLetter::Number => args.push(
                     read_number_through_the_function_cell(eval, Value::heap_string(prompt))?,
                 ),
@@ -2802,7 +2804,7 @@ fn interactive_args_from_string_code(
                     )?)
                 }
                 InteractiveControlLetter::CodingSystem => {
-                    args.push(super::lread::builtin_read_coding_system(
+                    args.push(super::minibuffer::builtin_read_coding_system(
                         eval,
                         vec![Value::heap_string(prompt)],
                     )?)

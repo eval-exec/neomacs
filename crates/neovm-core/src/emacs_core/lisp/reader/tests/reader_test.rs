@@ -2073,7 +2073,7 @@ fn activate_minibuffer_window_switches_displayed_buffer_and_restores_state() {
     let saved = activate_minibuffer_window(
         &mut ev,
         active_buffer,
-        crate::emacs_core::minibuffer::MinibufferEntryLevel::Outermost,
+        neovm_value::minibuffer_state::MinibufferEntryLevel::Outermost,
     )
     .expect("activate minibuffer");
 
@@ -2134,14 +2134,14 @@ fn nested_minibuffer_keeps_the_outer_calling_window_active() {
     let _outer = activate_minibuffer_window(
         &mut ev,
         outer_buffer,
-        crate::emacs_core::minibuffer::MinibufferEntryLevel::Outermost,
+        neovm_value::minibuffer_state::MinibufferEntryLevel::Outermost,
     )
     .expect("activate outer minibuffer");
     let inner_buffer = ev.buffer_manager_mut().create_buffer(" *Minibuf-2*");
     let _inner = activate_minibuffer_window(
         &mut ev,
         inner_buffer,
-        crate::emacs_core::minibuffer::MinibufferEntryLevel::Recursive,
+        neovm_value::minibuffer_state::MinibufferEntryLevel::Recursive,
     )
     .expect("activate nested minibuffer");
 
@@ -2181,7 +2181,7 @@ fn activate_minibuffer_window_saves_the_callers_live_buffer_point() {
     let _saved = activate_minibuffer_window(
         &mut ev,
         minibuffer,
-        crate::emacs_core::minibuffer::MinibufferEntryLevel::Outermost,
+        neovm_value::minibuffer_state::MinibufferEntryLevel::Outermost,
     )
     .expect("activate minibuffer");
     // Redisplay/text edits refresh the cached window point from its marker.
@@ -2223,7 +2223,7 @@ fn expired_minibuffer_buffer_is_erased_before_restore() {
     let saved = activate_minibuffer_window(
         &mut ev,
         active_buffer,
-        crate::emacs_core::minibuffer::MinibufferEntryLevel::Outermost,
+        neovm_value::minibuffer_state::MinibufferEntryLevel::Outermost,
     )
     .expect("activate minibuffer");
 
@@ -2255,7 +2255,7 @@ fn active_minibuffer_window_sync_keeps_live_buffer_point() {
     let _saved = activate_minibuffer_window(
         &mut ev,
         active_buffer,
-        crate::emacs_core::minibuffer::MinibufferEntryLevel::Outermost,
+        neovm_value::minibuffer_state::MinibufferEntryLevel::Outermost,
     )
     .expect("activate minibuffer");
 
