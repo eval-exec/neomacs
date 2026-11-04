@@ -2696,17 +2696,13 @@ fn builtin_define_charset_internal_with_symbols(args: Vec<Value>, mode: SymbolMo
 ///
 /// Returns charset symbols present in the region `[BEG, END)` where BEG/END are
 /// Emacs 1-based character positions inside the accessible region.
-pub(crate) fn builtin_find_charset_region(
-    ctx: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
+pub(crate) fn builtin_find_charset_region<H: TextHost>(h: &mut H, args: Vec<Value>) -> EvalResult {
     expect_min_args("find-charset-region", &args, 2)?;
     expect_max_args("find-charset-region", &args, 3)?;
-    let region = super::position::LispRegionArgs::from_values(&ctx.edit.buffers, args[0], args[1])?;
+    let region = super::position::LispRegionArgs::from_values(h.buffers(), args[0], args[1])?;
 
-    let buf = ctx
-        .edit
-        .buffers
+    let buf = h
+        .buffers()
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
 
@@ -2996,14 +2992,10 @@ pub(crate) fn builtin_clear_charset_maps(args: Vec<Value>) -> EvalResult {
 /// Returns the charset of the character at POS (1-based), or the character
 /// after point when POS is omitted. Returns nil at end-of-buffer or for
 /// out-of-range numeric positions.
-pub(crate) fn builtin_charset_after(
-    ctx: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
+pub(crate) fn builtin_charset_after<H: TextHost>(h: &mut H, args: Vec<Value>) -> EvalResult {
     expect_max_args("charset-after", &args, 1)?;
-    let buf = ctx
-        .edit
-        .buffers
+    let buf = h
+        .buffers()
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
 
