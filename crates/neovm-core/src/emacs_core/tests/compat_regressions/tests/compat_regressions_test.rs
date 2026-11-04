@@ -853,7 +853,7 @@ fn garbage_collect_maybe_collects_when_factor_scaled_threshold_exceeded() {
 #[test]
 fn gnutls_error_string_zero_is_success() {
     crate::test_utils::init_test_tracing();
-    let out = crate::emacs_core::builtins::gnutls::builtin_gnutls_error_string(
+    let out = crate::emacs_core::gnutls_entries::builtin_gnutls_error_string(
         vec![Value::fixnum(0)],
         crate::tagged::value::SymbolMode::Bare,
     )
@@ -864,7 +864,7 @@ fn gnutls_error_string_zero_is_success() {
 #[test]
 fn gnutls_peer_status_warning_describe_rejects_non_symbol() {
     crate::test_utils::init_test_tracing();
-    let err = crate::emacs_core::builtins::gnutls::builtin_gnutls_peer_status_warning_describe(
+    let err = crate::emacs_core::gnutls_entries::builtin_gnutls_peer_status_warning_describe(
         vec![Value::fixnum(0)],
         crate::tagged::value::SymbolMode::Bare,
     )
@@ -943,7 +943,7 @@ fn gnutls_bye_requires_process() {
 fn gnutls_format_certificate_requires_string() {
     crate::test_utils::init_test_tracing();
     let err =
-        crate::emacs_core::builtins::gnutls::builtin_gnutls_format_certificate(vec![Value::NIL])
+        crate::emacs_core::gnutls_entries::builtin_gnutls_format_certificate(vec![Value::NIL])
             .unwrap_err();
     match err.into_kind() {
         FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
@@ -954,7 +954,7 @@ fn gnutls_format_certificate_requires_string() {
 #[test]
 fn gnutls_hash_digest_nil_method_signals_error() {
     crate::test_utils::init_test_tracing();
-    let err = crate::emacs_core::builtins::gnutls::builtin_gnutls_hash_digest(
+    let err = crate::emacs_core::gnutls_entries::builtin_gnutls_hash_digest(
         vec![Value::NIL, Value::string("a")],
         crate::tagged::value::SymbolMode::Bare,
     )
@@ -968,7 +968,7 @@ fn gnutls_hash_digest_nil_method_signals_error() {
 #[test]
 fn gnutls_hash_mac_returns_raw_hmac_bytes() {
     crate::test_utils::init_test_tracing();
-    let mac = crate::emacs_core::builtins::gnutls::builtin_gnutls_hash_mac(
+    let mac = crate::emacs_core::gnutls_entries::builtin_gnutls_hash_mac(
         vec![
             Value::symbol("SHA256"),
             Value::string("k"),
@@ -992,7 +992,7 @@ fn gnutls_hash_mac_returns_raw_hmac_bytes() {
 #[test]
 fn gnutls_symmetric_encrypt_requires_gnutls_support() {
     crate::test_utils::init_test_tracing();
-    let err = crate::emacs_core::builtins::gnutls::builtin_gnutls_symmetric_encrypt(
+    let err = crate::emacs_core::gnutls_entries::builtin_gnutls_symmetric_encrypt(
         vec![
             Value::symbol("AES-128-GCM"),
             Value::string("k"),

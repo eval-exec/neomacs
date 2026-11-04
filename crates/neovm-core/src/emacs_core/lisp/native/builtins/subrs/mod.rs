@@ -5,6 +5,7 @@
 //! implementation and leave only the sequencing call here.
 
 use super::*;
+use crate::emacs_core::gnutls_entries as gnutls;
 #[cfg(test)]
 use crate::emacs_core::subr::SubrBatch;
 

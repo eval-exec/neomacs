@@ -1,11 +1,19 @@
-use super::{
-    EvalResult, Value, ValueKind, expect_args, expect_args_range, expect_lisp_string, signal,
-};
+//! GnuTLS Lisp entries (the system/network surface).
+//!
+//! `gnutls-available-p`, the cipher/digest/mac tables, the error accessors,
+//! `gnutls-format-certificate` and the hash/symmetric helpers bind the
+//! system TLS implementation (including the X.509 PEM formatter), so their
+//! bodies stay in the core command layer (STAGE4 design §5, R0; peer ruling
+//! 13:3xZ) and call the system layer downward.  The subr declarations stay
+//! in `subrs/mod.rs` (C14): names, arity, order and module_path unchanged.
+
+use crate::emacs_core::builtins::expect_lisp_string;
 use crate::emacs_core::error::LispCondition;
+use crate::emacs_core::error::{EvalResult, expect_args, expect_args_range, signal};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::intern::intern;
 use crate::emacs_core::tls::format_x509_certificate_pem;
-use crate::emacs_core::value::{VecLikeType, list_to_vec};
+use crate::emacs_core::value::{Value, ValueKind, VecLikeType, list_to_vec};
 use crate::tagged::value::SymbolMode;
 use aes::Aes256;
 use aes::cipher::{BlockModeDecrypt, BlockModeEncrypt, KeyIvInit, block_padding::NoPadding};

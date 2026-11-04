@@ -427,7 +427,6 @@ mod file_notify;
 pub(crate) use file_notify::{BACKEND_SUBRS, REMOVE_WATCH_SEMANTICS, RemoveWatchSemantics};
 pub(crate) mod fringe_bitmap;
 pub(crate) mod fringe_standard_bitmaps;
-pub(crate) mod gnutls;
 pub(crate) mod hash_user_callback;
 pub(crate) mod higher_order;
 mod hooks;
@@ -480,7 +479,7 @@ pub(crate) use treesit::*;
 /// subr call, the way GNU's `mark_specpdl` marks `backtrace_args`. Saying
 /// `'static` claimed something stronger and stopped the compiler from
 /// noticing when a borrow outlived the argument list.
-pub(super) fn expect_lisp_string(value: &Value) -> Result<&crate::heap_types::LispString, Flow> {
+pub(crate) fn expect_lisp_string(value: &Value) -> Result<&crate::heap_types::LispString, Flow> {
     value.as_lisp_string().ok_or_else(|| {
         signal(
             LispCondition::WrongTypeArgument,

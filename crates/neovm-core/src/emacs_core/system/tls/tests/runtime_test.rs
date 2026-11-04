@@ -5,7 +5,7 @@ use super::tls::{
     parse_gnutls_boot_parameters, read_rustls_process_output, rustls_root_store,
 };
 use super::value::Value;
-use crate::emacs_core::builtins::gnutls::{
+use crate::emacs_core::gnutls_entries::{
     builtin_gnutls_error_fatalp, builtin_gnutls_error_string,
     builtin_gnutls_peer_status_warning_describe,
 };
@@ -815,7 +815,7 @@ fn positioned_tls_credentials_and_plist_keys_follow_symbol_policy() {
 #[test]
 fn positioned_gnutls_status_and_algorithm_operands_follow_symbol_policy() {
     // GNU gnutls.c:1008-1009 EQ, 1329 CHECK_SYMBOL, 2890 SYMBOLP.
-    use crate::emacs_core::builtins::gnutls::{builtin_gnutls_errorp, builtin_gnutls_hash_digest};
+    use crate::emacs_core::gnutls_entries::{builtin_gnutls_errorp, builtin_gnutls_hash_digest};
     use crate::tagged::value::SymbolMode;
     let mut ctx = crate::emacs_core::Context::new();
     let again = ctx
