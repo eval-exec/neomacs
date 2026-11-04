@@ -43,8 +43,7 @@ pub mod kill_buffer;
 pub mod kmacro;
 #[path = "commands/minibuffer/mod.rs"]
 pub mod minibuffer;
-#[path = "commands/prefix/mod.rs"]
-pub(crate) mod prefix;
+pub(crate) use neovm_value::prefix;
 #[path = "commands/register/mod.rs"]
 pub mod register;
 #[path = "commands/syntax_entries/mod.rs"]

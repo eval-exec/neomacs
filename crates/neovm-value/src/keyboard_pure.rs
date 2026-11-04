@@ -1,21 +1,21 @@
-use crate::emacs_core::emacs_char::EmacsChar;
-use crate::emacs_core::error::LispCondition;
-use crate::emacs_core::{
+use crate::emacs_char::EmacsChar;
+use crate::error::LispCondition;
+use crate::tagged::value::SymbolMode;
+use crate::{
     error::{Flow, signal},
     intern::resolve_sym,
     value::{Value, ValueKind, VecLikeType, list_to_vec},
 };
-use crate::tagged::value::SymbolMode;
 
-pub(crate) const KEY_CHAR_META: i64 = 0x8000000;
-pub(crate) const KEY_CHAR_CTRL: i64 = 0x4000000;
-pub(crate) const KEY_CHAR_SHIFT: i64 = 0x2000000;
-pub(crate) const KEY_CHAR_SUPER: i64 = 0x0800000;
-pub(crate) const KEY_CHAR_HYPER: i64 = 0x1000000;
-pub(crate) const KEY_CHAR_ALT: i64 = 0x0400000;
-pub(crate) const KEY_CHAR_MOD_MASK: i64 =
+pub const KEY_CHAR_META: i64 = 0x8000000;
+pub const KEY_CHAR_CTRL: i64 = 0x4000000;
+pub const KEY_CHAR_SHIFT: i64 = 0x2000000;
+pub const KEY_CHAR_SUPER: i64 = 0x0800000;
+pub const KEY_CHAR_HYPER: i64 = 0x1000000;
+pub const KEY_CHAR_ALT: i64 = 0x0400000;
+pub const KEY_CHAR_MOD_MASK: i64 =
     KEY_CHAR_META | KEY_CHAR_CTRL | KEY_CHAR_SHIFT | KEY_CHAR_SUPER | KEY_CHAR_HYPER | KEY_CHAR_ALT;
-pub(crate) const KEY_CHAR_CODE_MASK: i64 = 0x3FFFFF;
+pub const KEY_CHAR_CODE_MASK: i64 = 0x3FFFFF;
 const EVENT_MOD_UP: i64 = 1 << 0;
 const EVENT_MOD_DOWN: i64 = 1 << 1;
 const EVENT_MOD_DRAG: i64 = 1 << 2;
@@ -35,7 +35,7 @@ fn event_char_fits_in_gnu_event_string(code: i64) -> bool {
     (code & string_char_mask) < 0o200
 }
 
-pub(crate) fn make_event_array_value(events: &[Value]) -> Value {
+pub fn make_event_array_value(events: &[Value]) -> Value {
     let mut bytes = Vec::with_capacity(events.len());
 
     for event in events {
@@ -88,7 +88,7 @@ fn named_char_name(code: i64) -> Option<&'static str> {
     }
 }
 
-pub(crate) fn split_symbol_modifiers(mut name: &str) -> (String, &str) {
+pub fn split_symbol_modifiers(mut name: &str) -> (String, &str) {
     let mut prefix = String::new();
     let is_single_char = |s: &str| {
         let mut chars = s.chars();
@@ -167,7 +167,7 @@ fn describe_symbol_key(name: &str, no_angles: bool) -> Vec<u8> {
 /// byte via `CHAR_TO_BYTE8` + `BYTE8_STRING` and the description holds that
 /// one character.
 fn push_emacs_char(out: &mut Vec<u8>, code: EmacsChar) {
-    let mut buf = [0u8; crate::emacs_core::emacs_char::MAX_MULTIBYTE_LENGTH];
+    let mut buf = [0u8; crate::emacs_char::MAX_MULTIBYTE_LENGTH];
     let len = code.char_string(&mut buf);
     out.extend_from_slice(&buf[..len]);
 }
@@ -241,7 +241,7 @@ fn describe_int_key(code: i64) -> Result<Vec<u8>, Flow> {
 /// `make_specified_string (..., multibyte=1)`; callers that only want a Rust
 /// string for a message or a log convert lossily at their own call site, where
 /// the loss is visible.
-pub(crate) fn describe_single_key_value(
+pub fn describe_single_key_value(
     value: &Value,
     no_angles: bool,
     mode: SymbolMode,
@@ -309,7 +309,7 @@ pub(crate) fn describe_single_key_value(
     }
 }
 
-pub(crate) fn key_sequence_values(value: &Value, mode: SymbolMode) -> Result<Vec<Value>, Flow> {
+pub fn key_sequence_values(value: &Value, mode: SymbolMode) -> Result<Vec<Value>, Flow> {
     match value.kind() {
         ValueKind::Nil => Ok(vec![]),
         ValueKind::String => {
@@ -328,7 +328,7 @@ pub(crate) fn key_sequence_values(value: &Value, mode: SymbolMode) -> Result<Vec
                     })
                     .collect());
             }
-            Ok(crate::emacs_core::builtins::lisp_string_char_codes(string)
+            Ok(crate::strings_core::lisp_string_char_codes(string)
                 .into_iter()
                 .map(|code| Value::fixnum(code as i64))
                 .collect())
@@ -364,7 +364,7 @@ pub(crate) fn key_sequence_values(value: &Value, mode: SymbolMode) -> Result<Vec
     }
 }
 
-pub(crate) fn resolve_control_code(code: i64) -> Option<i64> {
+pub fn resolve_control_code(code: i64) -> Option<i64> {
     match code {
         32 => Some(0),               // SPC
         63 => Some(127),             // ?
@@ -380,7 +380,7 @@ pub(crate) fn resolve_control_code(code: i64) -> Option<i64> {
     }
 }
 
-pub(crate) fn event_modifier_bit(symbol: &str) -> Option<i64> {
+pub fn event_modifier_bit(symbol: &str) -> Option<i64> {
     match symbol {
         "C" | "ctrl" | "control" => Some(KEY_CHAR_CTRL),
         "M" | "meta" => Some(KEY_CHAR_META),
@@ -416,7 +416,7 @@ fn parse_written_event_modifier(name: &str) -> Option<(i64, &str)> {
     .find_map(|(prefix, bit)| name.strip_prefix(prefix).map(|rest| (bit, rest)))
 }
 
-pub(crate) fn reorder_event_symbol_modifiers(value: Value, mode: SymbolMode) -> Value {
+pub fn reorder_event_symbol_modifiers(value: Value, mode: SymbolMode) -> Value {
     let Some(name) = value.as_symbol_name(mode) else {
         return value;
     };
@@ -456,7 +456,7 @@ fn lucid_symbol_char_base(symbol: &str) -> Option<i64> {
 /// event value.  Returns `None` when the list is not a valid Lucid event
 /// (i.e. it contains non-modifier, non-base elements, or has no base).
 /// This mirrors GNU Emacs `Fevent_convert_list` (keyboard.c).
-pub(crate) fn convert_lucid_event_list(items: &[Value], mode: SymbolMode) -> Option<Value> {
+pub fn convert_lucid_event_list(items: &[Value], mode: SymbolMode) -> Option<Value> {
     if items.is_empty() {
         return None;
     }
@@ -533,7 +533,7 @@ pub(crate) fn convert_lucid_event_list(items: &[Value], mode: SymbolMode) -> Opt
     }
 }
 
-pub(crate) fn event_modifier_prefix(bits: i64) -> String {
+pub fn event_modifier_prefix(bits: i64) -> String {
     let mut out = String::new();
     if (bits & KEY_CHAR_ALT) != 0 {
         out.push_str("A-");
@@ -573,7 +573,7 @@ pub(crate) fn event_modifier_prefix(bits: i64) -> String {
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub(crate) fn basic_char_code(mut code: i64) -> i64 {
+pub fn basic_char_code(mut code: i64) -> i64 {
     code &= KEY_CHAR_CODE_MASK;
     match code {
         0 => 64,
@@ -585,7 +585,7 @@ pub(crate) fn basic_char_code(mut code: i64) -> i64 {
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub(crate) fn symbol_has_modifier_prefix(name: &str) -> bool {
+pub fn symbol_has_modifier_prefix(name: &str) -> bool {
     name.starts_with("C-")
         || name.starts_with("M-")
         || name.starts_with("S-")
@@ -594,8 +594,8 @@ pub(crate) fn symbol_has_modifier_prefix(name: &str) -> bool {
         || name.starts_with("A-")
 }
 
-pub(crate) fn register_bootstrap_vars(obarray: &mut crate::emacs_core::symbol::Obarray) {
-    use crate::emacs_core::value::Value;
+pub fn register_bootstrap_vars(obarray: &mut crate::symbol::Obarray) {
+    use crate::value::Value;
 
     // keyboard.c:13991 DEFVAR_LISP at `13988',
     // `XSETINT (menu_prompt_more_char, ' ')' -- the character code 32, not the
@@ -712,5 +712,5 @@ pub(crate) fn register_bootstrap_vars(obarray: &mut crate::emacs_core::symbol::O
     obarray.make_special("emulation-mode-map-alists");
 }
 #[cfg(test)]
-#[path = "tests/pure_test.rs"]
+#[path = "keyboard_pure/tests/pure_test.rs"]
 mod tests;

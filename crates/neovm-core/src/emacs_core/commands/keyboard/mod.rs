@@ -7,7 +7,7 @@
 //! This module exists so keymap.rs and builtins can share event-encoding
 //! semantics without depending on the stateful command-loop module.
 
-pub mod pure;
+pub use neovm_value::keyboard_pure as pure;
 
 #[cfg(test)]
 #[path = "tests/keyboard_test.rs"]

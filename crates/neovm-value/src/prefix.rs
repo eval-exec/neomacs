@@ -1,6 +1,6 @@
 use strum::{EnumString, IntoStaticStr};
 
-use super::value::{Value, ValueKind};
+use crate::value::{Value, ValueKind};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, EnumString, IntoStaticStr)]
 enum RawPrefixSymbol {
@@ -24,7 +24,7 @@ impl RawPrefixSymbol {
 /// Mirrors `src/callint.c::Fprefix_numeric_value`: nil means 1, the
 /// symbol `-' means -1, a cons contributes its fixnum car, a fixnum is
 /// returned as-is, and every other object means 1.
-pub(crate) fn prefix_numeric_value(raw: &Value) -> i64 {
+pub fn prefix_numeric_value(raw: &Value) -> i64 {
     if raw.is_nil() {
         return 1;
     }
@@ -44,5 +44,5 @@ pub(crate) fn prefix_numeric_value(raw: &Value) -> i64 {
 }
 
 #[cfg(test)]
-#[path = "tests/prefix_test.rs"]
+#[path = "prefix/tests/prefix_test.rs"]
 mod tests;
