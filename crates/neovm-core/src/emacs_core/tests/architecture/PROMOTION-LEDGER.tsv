@@ -1195,3 +1195,16 @@ TakeCount::try_from_non_fixnum	method	private	crates/neovm-value/src/error/mod.r
 lisp_string_char_at	fn	pub(crate)	crates/neovm-value/src/strings_core.rs:70	strings_core	stage-3 C12: string aref core (GNU Faref walk, fns.c:3108-3123) moved below the evaluator; the builtins facade re-exports for its historical callers
 plain_str_to_lisp_string	fn	pub(crate)	crates/neovm-value/src/strings_core.rs:95	strings_core	stage-3 C12: &str-to-LispString construction core moved below the evaluator; doc strings, filenames, pdump payloads and the printer share it below edit
 builtin_char_table_subtype	fn	pub(crate)	crates/neovm-value/src/chartab.rs:694	chartab	stage-3 C7a: char-table-subtype subr (GNU Fchar_table_subtype) moved with the pure container; the edit layer translate path reaches it below the text layer
+AsyncAttention	struct	pub(crate)	crates/neovm-value/src/quit.rs:45	quit	stage-3b T4.1 plain row: asynchronous attention word type; its doc(hidden) methods are signed individually
+AsyncAttention::addr	method	pub(crate)	crates/neovm-value/src/quit.rs:95	quit	stage-3b T4.1 signed exact-caller row: JIT lowering paths bake the word address
+AsyncAttention::raise	method	pub(crate)	crates/neovm-value/src/quit.rs:70	quit	stage-3b T4.1 signed exact-caller row: profiler watchdog + OS-signal bridge raise AsyncSource bits
+AsyncAttention::raised_quit_requests_for_test	method	(new accessor)	crates/neovm-value/src/quit.rs:102	quit	stage-3b T4.1 test_only row: core quit-request tests read the raised-request count
+AsyncAttention::take	method	pub(crate)	crates/neovm-value/src/quit.rs:79	quit	stage-3b T4.1 signed exact-caller row: profiler drain + OS-signal drain take AsyncSource bits
+QuitRequest::clear	method	pub(crate)	crates/neovm-value/src/quit.rs:177	quit	stage-3b T4.1 signed exact-caller row: Context::maybe_quit_slow clear path
+QuitRequest::is_requested	method	pub(crate)	crates/neovm-value/src/quit.rs:152	quit	stage-3b T4.1 signed exact-caller row: quit_pending reader + core quit-request tests
+QuitRequest::take	method	pub(crate)	crates/neovm-value/src/quit.rs:161	quit	stage-3b T4.1 signed exact-caller row: Context::maybe_quit_slow
+clear_quit_requested_for_test	fn	(new fn)	crates/neovm-value/src/quit.rs:276	quit	stage-3b T4.1 test_only row: CCL/DFA engine tests clear the thread slot
+clear_quit_requested_tls	fn	(new fn)	crates/neovm-value/src/quit.rs:241	quit	stage-3b T4.1 signed exact-caller row: carrier park (eval::park_carrier_tls)
+install_quit_requested_for_test	fn	(new fn)	crates/neovm-value/src/quit.rs:265	quit	stage-3b T4.1 test_only row: CCL/DFA engine tests install a pending request without a Context
+install_quit_requested_tls	fn	(new fn)	crates/neovm-value/src/quit.rs:233	quit	stage-3b T4.1 signed exact-caller row: Context::setup_thread_locals_inner (gc_pacing.rs)
+mix_quit_requested_tls_fingerprint	fn	(new fn)	crates/neovm-value/src/quit.rs:250	quit	stage-3b T4.1 signed exact-caller row: eval::carrier_tls_fingerprint (same slot)

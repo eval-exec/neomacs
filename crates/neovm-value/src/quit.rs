@@ -49,7 +49,6 @@ pub struct AsyncAttention {
 /// Nonzero while any asynchronous source may need a safe point's attention.
 /// A set bit is a hint: the slow path re-derives the exact answer from each
 /// source's own state, so a stale bit costs one cold trip, never a lost event.
-#[doc(hidden)]
 pub static ASYNC_ATTENTION: AsyncAttention = AsyncAttention {
     word: AtomicU32::new(0),
 };
@@ -98,6 +97,7 @@ impl AsyncAttention {
     }
 
     /// How many raised quit requests the word counts.
+    #[doc(hidden)]
     #[cfg(any(test, feature = "test-support"))]
     pub fn raised_quit_requests_for_test(&self) -> u32 {
         self.load() / QUIT_REQUEST_UNIT
@@ -260,6 +260,7 @@ pub fn mix_quit_requested_tls_fingerprint(hash: &mut u64) {
 /// Engine tests (CCL, DFA) use this without a `Context`; the crate-boundary
 /// rule gates the helper on `test-support` because plain `cfg(test)` is off
 /// for a dependency crate.
+#[doc(hidden)]
 #[cfg(any(test, feature = "test-support"))]
 pub fn install_quit_requested_for_test(pending: bool) -> QuitRequest {
     let flag = QuitRequest::new();
@@ -270,6 +271,7 @@ pub fn install_quit_requested_for_test(pending: bool) -> QuitRequest {
     flag
 }
 
+#[doc(hidden)]
 #[cfg(any(test, feature = "test-support"))]
 pub fn clear_quit_requested_for_test() {
     QUIT_REQUESTED_TLS.with(|cell| *cell.borrow_mut() = None);
