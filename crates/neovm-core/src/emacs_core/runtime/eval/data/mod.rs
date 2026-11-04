@@ -23,6 +23,7 @@ pub mod process_state;
 pub mod process_tls;
 pub mod redisplay;
 pub mod register;
+pub mod terminal_state;
 pub mod window_edge_drag;
 pub mod window_layout_query;
 pub mod window_markers;

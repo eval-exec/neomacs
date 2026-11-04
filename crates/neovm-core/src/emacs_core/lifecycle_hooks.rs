@@ -176,6 +176,9 @@ static CANONICAL_LIFECYCLE_HOOKS: LifecycleHooks = LifecycleHooks::new(
         terminal_world_state_placeholder,
         terminal_swap_world_state,
         live_terminal_ids_in_keyboard_poll_order,
+        crate::emacs_core::terminal::pure::current_terminal_registry_handle,
+        crate::emacs_core::terminal::pure::install_terminal_registry_handle,
+        crate::emacs_core::terminal::pure::install_owner_terminal_registry_handle,
     ),
     FontsetHooks::new(
         crate::emacs_core::fontset::fontset_alias_alist_startup_value,

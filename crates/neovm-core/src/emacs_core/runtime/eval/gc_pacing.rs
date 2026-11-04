@@ -443,7 +443,7 @@ impl Context {
                 visit(root);
             }
             group("terminal_registry");
-            super::super::terminal::pure::collect_terminal_registry_gc_roots(
+            crate::emacs_core::eval::data::terminal_state::collect_terminal_registry_gc_roots(
                 &self.terminal_registry,
                 &mut registry_roots,
             );
@@ -843,9 +843,11 @@ impl Context {
         super::super::charset::install_charset_registry_handle(&self.charset_registry);
         super::super::xfaces::install_font_registry_handle(&self.font_registry);
         if SNAPSHOT_TERMINAL_IDS {
-            super::super::terminal::pure::install_terminal_registry_handle(&self.terminal_registry);
+            crate::emacs_core::eval::lifecycle::install_terminal_registry_handle(
+                &self.terminal_registry,
+            );
         } else {
-            super::super::terminal::pure::install_owner_terminal_registry_handle(
+            crate::emacs_core::eval::lifecycle::install_owner_terminal_registry_handle(
                 &self.terminal_registry,
             );
         }

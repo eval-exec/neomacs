@@ -6,6 +6,9 @@
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{EvalResult, Flow, signal};
 use crate::emacs_core::error::{expect_args, expect_args_range, expect_max_args};
+pub(crate) use crate::emacs_core::eval::data::terminal_state::{
+    TerminalLispRegistry, TerminalRegistryHandle, collect_terminal_registry_gc_roots,
+};
 use crate::emacs_core::heap_registry::{HeapRegistryHandle, HeapRegistrySlot};
 use crate::emacs_core::value::*;
 use crate::emacs_core::value::{ValueKind, VecLikeType};
@@ -13,7 +16,6 @@ use crate::window::DisplayFrameExt;
 use crate::window::DisplayFrameManagerExt;
 use neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities;
 use std::cell::{OnceCell, RefCell};
-use std::collections::{HashMap, hash_map::Entry};
 
 // ---------------------------------------------------------------------------
 // Thread-local terminal state
@@ -24,37 +26,6 @@ thread_local! {
     static TERMINAL_LISP_STATE: HeapRegistrySlot<TerminalLispRegistry> =
         HeapRegistrySlot::new(TerminalLispRegistry::default());
 }
-
-struct TerminalLispState {
-    handle: Value,
-    params: Vec<(Value, Value)>,
-}
-
-/// Only Lisp state travels with Context; native hosts and runtime state stay TLS.
-#[derive(Default)]
-pub(crate) struct TerminalLispRegistry {
-    terminals: HashMap<u64, TerminalLispState>,
-    // GNU prepends native terminals, then Fterminal_list reverses them again.
-    // Preserve creation order independently of hash iteration and terminal ids.
-    creation_order: Vec<u64>,
-}
-
-impl TerminalLispRegistry {
-    fn ensure_terminal(&mut self, id: u64) -> &mut TerminalLispState {
-        match self.terminals.entry(id) {
-            Entry::Occupied(entry) => entry.into_mut(),
-            Entry::Vacant(entry) => {
-                self.creation_order.push(id);
-                entry.insert(TerminalLispState {
-                    handle: Value::make_terminal(id),
-                    params: Vec::new(),
-                })
-            }
-        }
-    }
-}
-
-pub(crate) type TerminalRegistryHandle = HeapRegistryHandle<TerminalLispRegistry>;
 
 fn ensure_current_terminal_registry() {
     let heap_identity = crate::tagged::gc::current_tagged_heap_identity()
@@ -127,19 +98,6 @@ pub(crate) fn install_owner_terminal_registry_handle(handle: &TerminalRegistryHa
                 .unwrap_or(ids.len())
         });
     });
-}
-
-pub(crate) fn collect_terminal_registry_gc_roots(
-    handle: &TerminalRegistryHandle,
-    roots: &mut Vec<Value>,
-) {
-    for terminal in handle.borrow().terminals.values() {
-        roots.push(terminal.handle);
-        for (key, value) in &terminal.params {
-            roots.push(*key);
-            roots.push(*value);
-        }
-    }
 }
 
 /// The physical terminal records contain no Lisp Values. Only the installed

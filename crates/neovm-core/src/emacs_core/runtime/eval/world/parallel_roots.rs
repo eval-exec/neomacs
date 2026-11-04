@@ -98,7 +98,7 @@ impl Context {
             &self.charset_registry,
             &mut words,
         );
-        crate::emacs_core::terminal::pure::collect_terminal_registry_gc_roots(
+        crate::emacs_core::eval::data::terminal_state::collect_terminal_registry_gc_roots(
             &self.terminal_registry,
             &mut words,
         );

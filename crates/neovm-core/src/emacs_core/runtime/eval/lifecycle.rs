@@ -23,6 +23,7 @@
 //! descriptor means the construction seam itself is broken.
 
 use super::data::fontset_state::FontsetRegistrySnapshot;
+use super::data::terminal_state::TerminalRegistryHandle;
 use super::data::window_state::{Frame, FrameManager, MiniWindowResize, WindowTree};
 use super::*;
 use crate::emacs_core::builtins::WindowConfigurationRestoreOptions;
@@ -242,6 +243,9 @@ pub struct TerminalHooks {
     world_state_placeholder: fn() -> Box<dyn Any>,
     swap_world_state: fn(&mut dyn Any),
     live_terminal_ids: fn() -> Vec<u64>,
+    current_registry_handle: fn() -> TerminalRegistryHandle,
+    install_registry_handle: fn(&TerminalRegistryHandle),
+    install_owner_registry_handle: fn(&TerminalRegistryHandle),
 }
 
 impl TerminalHooks {
@@ -259,6 +263,9 @@ impl TerminalHooks {
         world_state_placeholder: fn() -> Box<dyn Any>,
         swap_world_state: fn(&mut dyn Any),
         live_terminal_ids: fn() -> Vec<u64>,
+        current_registry_handle: fn() -> TerminalRegistryHandle,
+        install_registry_handle: fn(&TerminalRegistryHandle),
+        install_owner_registry_handle: fn(&TerminalRegistryHandle),
     ) -> Self {
         Self {
             handle_value,
@@ -273,6 +280,9 @@ impl TerminalHooks {
             world_state_placeholder,
             swap_world_state,
             live_terminal_ids,
+            current_registry_handle,
+            install_registry_handle,
+            install_owner_registry_handle,
         }
     }
 }
@@ -659,6 +669,18 @@ impl TerminalHooks {
 
     fn live_terminal_ids(&self) -> fn() -> Vec<u64> {
         self.live_terminal_ids
+    }
+
+    fn current_registry_handle(&self) -> fn() -> TerminalRegistryHandle {
+        self.current_registry_handle
+    }
+
+    fn install_registry_handle(&self) -> fn(&TerminalRegistryHandle) {
+        self.install_registry_handle
+    }
+
+    fn install_owner_registry_handle(&self) -> fn(&TerminalRegistryHandle) {
+        self.install_owner_registry_handle
     }
 }
 
@@ -1207,6 +1229,21 @@ pub fn terminal_swap_world_state(slot: &mut dyn Any) {
 /// Live terminal ids in the keyboard poll order.
 pub fn live_terminal_ids_in_keyboard_poll_order() -> Vec<u64> {
     (lifecycle_hooks().terminal().live_terminal_ids())()
+}
+
+/// The collecting Context's terminal Lisp registry handle.
+pub fn current_terminal_registry_handle() -> TerminalRegistryHandle {
+    (lifecycle_hooks().terminal().current_registry_handle())()
+}
+
+/// Install HANDLE as the current terminal Lisp registry (id snapshot mode).
+pub fn install_terminal_registry_handle(handle: &TerminalRegistryHandle) {
+    (lifecycle_hooks().terminal().install_registry_handle())(handle)
+}
+
+/// Install HANDLE as the owner terminal Lisp registry (no id snapshot).
+pub fn install_owner_terminal_registry_handle(handle: &TerminalRegistryHandle) {
+    (lifecycle_hooks().terminal().install_owner_registry_handle())(handle)
 }
 
 /// Park the face-attribute registry handle on a green carrier park.
