@@ -677,6 +677,82 @@ fn libxml_parse_html_region_handles_processing_instructions_like_libxml2() {
 }
 
 #[test]
+fn libxml_parse_html_region_places_non_leading_pis_as_comments() {
+    crate::test_utils::init_test_tracing();
+
+    // GNU 31.1: (html nil (body nil "x" (comment nil "?foo?") "y"))
+    let expected = html(vec![body(vec![
+        Value::string("x"),
+        comment("?foo?"),
+        Value::string("y"),
+    ])]);
+    assert_eq!(parse_html_region(br#"x<?foo?>y"#, false).unwrap(), expected);
+    assert_eq!(parse_html_region(br#"x<?foo?>y"#, true).unwrap(), expected);
+
+    // A PI after content ends at the first `>`, or at end of input.
+    // GNU 31.1: (html nil (body nil "x" (comment nil "?foo")))
+    let expected = html(vec![body(vec![Value::string("x"), comment("?foo")])]);
+    assert_eq!(parse_html_region(br#"x<?foo"#, false).unwrap(), expected);
+
+    // GNU 31.1: (html nil (body nil (p nil "x") (comment nil "?foo?") (p nil "y")))
+    assert_eq!(
+        parse_html_region(br#"<p>x</p><?foo?><p>y</p>"#, false).unwrap(),
+        html(vec![body(vec![
+            Value::list(vec![Value::symbol("p"), Value::NIL, Value::string("x")]),
+            comment("?foo?"),
+            Value::list(vec![Value::symbol("p"), Value::NIL, Value::string("y")]),
+        ])])
+    );
+
+    // A PI after an explicit body is a sibling of body.
+    // GNU 31.1: (html nil (body nil "x") (comment nil "?foo?"))
+    assert_eq!(
+        parse_html_region(br#"<body>x</body><?foo?>"#, false).unwrap(),
+        html(vec![body(vec![Value::string("x")]), comment("?foo?")])
+    );
+}
+
+#[test]
+fn libxml_parse_html_region_preserves_non_ascii_whitespace_before_prolog() {
+    crate::test_utils::init_test_tracing();
+
+    // U+00A0 is content, not HTML whitespace. The PI after it is a body
+    // comment, not a document prolog.
+    // GNU 31.1: (html nil (body nil "\u{a0}" (comment nil "?foo?") (p nil "x")))
+    let mut doc = "\u{00A0}".as_bytes().to_vec();
+    doc.extend_from_slice(br#"<?foo?><p>x</p>"#);
+    assert_eq!(
+        parse_html_region(&doc, false).unwrap(),
+        html(vec![body(vec![
+            Value::string("\u{00A0}"),
+            comment("?foo?"),
+            Value::list(vec![Value::symbol("p"), Value::NIL, Value::string("x")]),
+        ])])
+    );
+
+    // A DOCTYPE after content is dropped. GNU 31.1:
+    // (html nil (body nil "\u{a0}" (p nil "x")))
+    let mut doc = "\u{00A0}".as_bytes().to_vec();
+    doc.extend_from_slice(br#"<!DOCTYPE html><p>x</p>"#);
+    assert_eq!(
+        parse_html_region(&doc, false).unwrap(),
+        html(vec![body(vec![
+            Value::string("\u{00A0}"),
+            Value::list(vec![Value::symbol("p"), Value::NIL, Value::string("x")]),
+        ])])
+    );
+
+    // GNU 31.1: (html nil (body nil "x" (p nil "y")))
+    assert_eq!(
+        parse_html_region(br#"x<!DOCTYPE html><p>y</p>"#, false).unwrap(),
+        html(vec![body(vec![
+            Value::string("x"),
+            Value::list(vec![Value::symbol("p"), Value::NIL, Value::string("y")]),
+        ])])
+    );
+}
+
+#[test]
 fn libxml_parse_html_region_strips_a_leading_utf8_bom_like_libxml2() {
     crate::test_utils::init_test_tracing();
 
@@ -919,6 +995,63 @@ fn libxml_parse_html_region_keeps_explicit_empty_body_and_after_body_nodes() {
             Value::list(vec![Value::symbol("p"), Value::NIL, Value::string("x")]),
             Value::string("y"),
             Value::list(vec![Value::symbol("p"), Value::NIL, Value::string("z")]),
+        ])])
+    );
+}
+
+#[test]
+fn libxml_parse_html_region_preserves_explicit_head_and_body_attributes() {
+    crate::test_utils::init_test_tracing();
+
+    let id =
+        |value: &str| Value::list(vec![Value::cons(Value::symbol("id"), Value::string(value))]);
+
+    // GNU 31.1: (html nil (body ((id . "main"))))
+    let expected = html(vec![Value::list(vec![Value::symbol("body"), id("main")])]);
+    assert_eq!(
+        parse_html_region(br#"<body id="main"></body>"#, false).unwrap(),
+        expected
+    );
+    assert_eq!(
+        parse_html_region(br#"<body id="main"></body>"#, true).unwrap(),
+        expected
+    );
+
+    // GNU 31.1: (html nil (head ((id . "h")) (title nil "T")))
+    assert_eq!(
+        parse_html_region(br#"<head id="h"><title>T</title></head>"#, false).unwrap(),
+        html(vec![Value::list(vec![
+            Value::symbol("head"),
+            id("h"),
+            Value::list(vec![Value::symbol("title"), Value::NIL, Value::string("T")]),
+        ])])
+    );
+
+    // GNU 31.1: (html nil (head ((id . "h"))) (body ((id . "main"))))
+    assert_eq!(
+        parse_html_region(br#"<head id="h"></head><body id="main"></body>"#, false).unwrap(),
+        html(vec![
+            Value::list(vec![Value::symbol("head"), id("h")]),
+            Value::list(vec![Value::symbol("body"), id("main")]),
+        ])
+    );
+
+    // GNU 31.1: (html nil (body ((id . "main")) "x") (comment nil " after "))
+    assert_eq!(
+        parse_html_region(br#"<body id="main">x</body><!-- after -->"#, false).unwrap(),
+        html(vec![
+            Value::list(vec![Value::symbol("body"), id("main"), Value::string("x"),]),
+            comment(" after "),
+        ])
+    );
+
+    // A body tag after content merges and its attributes are not used.
+    // GNU 31.1: (html nil (body nil (p nil "x") "y"))
+    assert_eq!(
+        parse_html_region(br#"<p>x</p><body id="main">y</body>"#, false).unwrap(),
+        html(vec![body(vec![
+            Value::list(vec![Value::symbol("p"), Value::NIL, Value::string("x")]),
+            Value::string("y"),
         ])])
     );
 }

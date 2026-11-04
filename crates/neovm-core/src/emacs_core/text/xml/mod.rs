@@ -418,7 +418,7 @@ fn parse_html_region(data: &[u8], discard_comments: bool) -> Option<Value> {
     // DOCTYPEs can be interleaved. An unterminated prolog token leaves no
     // root element, so libxml2 returns nil.
     loop {
-        let trimmed = remaining.trim_start();
+        let trimmed = remaining.trim_start_matches(|c: char| c.is_ascii_whitespace());
         if let Some(rest) = trimmed.strip_prefix("<!--") {
             let Some(end) = rest.find("-->") else {
                 return Some(Value::NIL);
@@ -454,12 +454,12 @@ fn parse_html_region(data: &[u8], discard_comments: bool) -> Option<Value> {
         break;
     }
 
-    let (protected, raw_text) = protect_raw_text(remaining);
+    let (protected, shielded) = shield_html(remaining);
     let dom = tl::parse(protected.as_ref(), tl::ParserOptions::default()).ok()?;
     let parser = dom.parser();
     for handle in dom.children() {
         let node = handle.get(parser)?;
-        if let Some(top) = convert_tl_top_node(node, parser, &raw_text) {
+        if let Some(top) = convert_tl_top_node(node, parser, &shielded) {
             nodes.push(top);
         }
     }
@@ -570,9 +570,11 @@ fn wrap_html_fragment(nodes: Vec<TopNode>) -> Option<Value> {
     let mut between: Vec<Value> = Vec::new();
     let mut body: Vec<Value> = Vec::new();
     let mut after_body: Vec<Value> = Vec::new();
-    // Independent fact needed for the result: an explicit head is emitted even
-    // when it has no children.
+    // Independent facts needed for the result: explicit head/body elements are
+    // emitted even when empty, and their attributes are preserved.
     let mut explicit_head_seen = false;
+    let mut head_attrs = Value::NIL;
+    let mut body_attrs = Value::NIL;
     let mut mode = FragmentMode::Head;
 
     for node in nodes {
@@ -590,6 +592,7 @@ fn wrap_html_fragment(nodes: Vec<TopNode>) -> Option<Value> {
                 FragmentMode::AfterBody => after_body.push(node.value),
                 _ => {
                     // Unwrap an explicit <head>, merging its children into head.
+                    head_attrs = element_attributes(&node.value);
                     head.extend(element_children(&node.value));
                     explicit_head_seen = true;
                     if mode == FragmentMode::Head {
@@ -603,6 +606,7 @@ fn wrap_html_fragment(nodes: Vec<TopNode>) -> Option<Value> {
                     // An explicit body starts the body only when no body
                     // content has appeared yet.
                     mode = FragmentMode::AfterBody;
+                    body_attrs = element_attributes(&node.value);
                     body.extend(element_children(&node.value));
                 }
                 FragmentMode::Body => {
@@ -633,14 +637,14 @@ fn wrap_html_fragment(nodes: Vec<TopNode>) -> Option<Value> {
     let has_body = !body.is_empty() || mode == FragmentMode::AfterBody;
     let mut html_children: Vec<Value> = vec![Value::symbol("html"), Value::NIL];
     if has_head {
-        let mut head_node = vec![Value::symbol("head"), Value::NIL];
+        let mut head_node = vec![Value::symbol("head"), head_attrs];
         head_node.extend(head);
         html_children.push(Value::list(head_node));
     }
     html_children.extend(between);
     // libxml2 omits <body> only when there is exclusively head content.
     if has_body || !has_head {
-        let mut body_node = vec![Value::symbol("body"), Value::NIL];
+        let mut body_node = vec![Value::symbol("body"), body_attrs];
         body_node.extend(body);
         html_children.push(Value::list(body_node));
     }
@@ -654,9 +658,9 @@ fn wrap_html_fragment(nodes: Vec<TopNode>) -> Option<Value> {
 fn convert_tl_top_node(
     node: &tl::Node,
     parser: &tl::Parser,
-    raw_text: &HashMap<String, String>,
+    shielded: &ShieldedHtml,
 ) -> Option<TopNode> {
-    let value = convert_tl_node(node, parser, raw_text)?;
+    let value = convert_tl_node(node, parser, shielded)?;
     let tag = match node {
         tl::Node::Tag(element) => {
             let raw_tag = element.name().as_utf8_str();
@@ -694,15 +698,21 @@ fn element_children(value: &Value) -> Vec<Value> {
     }
 }
 
-fn convert_tl_node(
-    node: &tl::Node,
-    parser: &tl::Parser,
-    raw_text: &HashMap<String, String>,
-) -> Option<Value> {
+/// Return the attribute list of an element node `(tag attrs child...)`.
+fn element_attributes(value: &Value) -> Value {
+    match super::value::list_to_vec(value) {
+        Some(items) if items.len() > 1 => items[1],
+        _ => Value::NIL,
+    }
+}
+
+fn convert_tl_node(node: &tl::Node, parser: &tl::Parser, shielded: &ShieldedHtml) -> Option<Value> {
     match node {
         tl::Node::Raw(raw) => {
             let text = raw.as_utf8_str();
-            if text.trim().is_empty() {
+            // libxml2's HTML whitespace is ASCII-only; non-breaking and other
+            // Unicode spaces are content and must survive HTML_PARSE_NOBLANKS.
+            if text.chars().all(|c| c.is_ascii_whitespace()) {
                 None
             } else {
                 // GNU's libxml2 parser resolves HTML character references
@@ -722,6 +732,11 @@ fn convert_tl_node(
             if text.ends_with("-->") {
                 text = &text[..text.len() - 3];
             }
+            let text = shielded
+                .pi_comments
+                .get(text)
+                .map(String::as_str)
+                .unwrap_or(text);
             Some(comment_value(text))
         }
         tl::Node::Tag(element) => {
@@ -739,7 +754,7 @@ fn convert_tl_node(
                 || tag.eq_ignore_ascii_case("script");
             let child_values = if is_text_element {
                 let inner = element.inner_text(parser);
-                let text = match raw_text.get(inner.as_ref()) {
+                let text = match shielded.text_elements.get(inner.as_ref()) {
                     Some(original) if is_rcdata_tag => htmlize::unescape(original),
                     Some(original) => Cow::Borrowed(original.as_str()),
                     None => {
@@ -762,7 +777,7 @@ fn convert_tl_node(
                 let mut vals = Vec::new();
                 for handle in children_handles.iter() {
                     let child_node = handle.get(parser)?;
-                    if let Some(val) = convert_tl_node(child_node, parser, raw_text) {
+                    if let Some(val) = convert_tl_node(child_node, parser, shielded) {
                         vals.push(val);
                     }
                 }
@@ -773,24 +788,38 @@ fn convert_tl_node(
     }
 }
 
-/// Replace raw-text element bodies with unique plain-text placeholders before
-/// `tl` sees them.
+/// Text elements and processing instructions hidden from `tl`.
+#[derive(Default)]
+struct ShieldedHtml {
+    /// Placeholder -> original raw-text or RCDATA body.
+    text_elements: HashMap<String, String>,
+    /// Placeholder -> original processing-instruction text.
+    pi_comments: HashMap<String, String>,
+}
+
+/// Replace text-element bodies and processing instructions with internal
+/// placeholders before `tl` sees them.
 ///
-/// `<script>` and `<style>` are HTML raw-text elements: their contents are not
-/// parsed as markup. `tl` does not implement that rule for script bodies and
-/// splits at `<`, which can also move a `</body>` inside a script string into
-/// the document structure. Shielding the body keeps the tree intact; the
-/// placeholder -> original-text map lets conversion restore the exact bytes.
-fn protect_raw_text(input: &str) -> (Cow<'_, str>, HashMap<String, String>) {
-    if !input
-        .match_indices('<')
-        .any(|(index, _)| protected_tag_name(&input[index..]).is_some())
-    {
-        return (Cow::Borrowed(input), HashMap::new());
+/// `<script>`/`<style>` are HTML raw-text elements and `title`/`textarea` are
+/// RCDATA: their contents are not parsed as markup. libxml2's HTML parser also
+/// exposes a processing instruction as a comment running to the first `>` (or
+/// to the end of input). `tl` does not implement these rules and can corrupt
+/// the tree, so shield them and restore the exact bytes during conversion. A
+/// stray `<!DOCTYPE ...>` after content is dropped, as libxml2 does.
+fn shield_html(input: &str) -> (Cow<'_, str>, ShieldedHtml) {
+    if !input.match_indices('<').any(|(index, _)| {
+        let rest = &input[index..];
+        rest.starts_with("<?")
+            || protected_tag_name(rest).is_some()
+            || rest
+                .get(..9)
+                .is_some_and(|p| p.eq_ignore_ascii_case("<!DOCTYPE"))
+    }) {
+        return (Cow::Borrowed(input), ShieldedHtml::default());
     }
 
     let mut protected = String::with_capacity(input.len());
-    let mut raw_text = HashMap::new();
+    let mut shielded = ShieldedHtml::default();
     let bytes = input.as_bytes();
     let mut index = 0;
 
@@ -820,14 +849,22 @@ fn protect_raw_text(input: &str) -> (Cow<'_, str>, HashMap<String, String>) {
             .get(..9)
             .is_some_and(|p| p.eq_ignore_ascii_case("<!DOCTYPE"))
         {
-            if let Some(end) = rest.find('>') {
-                let end = index + end + 1;
-                protected.push_str(&input[index..end]);
-                index = end;
-            } else {
-                protected.push_str(rest);
-                break;
-            }
+            // libxml2 drops DOCTYPEs anywhere, including after body content.
+            index += rest.find('>').map_or(rest.len(), |end| end + 1);
+            continue;
+        }
+
+        if rest.starts_with("<?") {
+            let (content, consumed) = match rest.find('>') {
+                Some(end) => (&rest[1..end], end + 1),
+                None => (&rest[1..], rest.len()),
+            };
+            let token = format!("neomacs-internal-pi-{}", shielded.pi_comments.len());
+            protected.push_str("<!--");
+            protected.push_str(&token);
+            protected.push_str("-->");
+            shielded.pi_comments.insert(token, content.to_string());
+            index += consumed;
             continue;
         }
 
@@ -860,9 +897,12 @@ fn protect_raw_text(input: &str) -> (Cow<'_, str>, HashMap<String, String>) {
             protected.push_str(&input[index..=open_end]);
             let inner = &after_open[..inner_len];
             if !inner.is_empty() {
-                let token = format!("neomacs-rawtext-{}-placeholder", raw_text.len());
+                let token = format!(
+                    "neomacs-rawtext-{}-placeholder",
+                    shielded.text_elements.len()
+                );
                 protected.push_str(&token);
-                raw_text.insert(token, inner.to_string());
+                shielded.text_elements.insert(token, inner.to_string());
             }
             if close_len > 0 {
                 protected.push_str(&after_open[inner_len..inner_len + close_len]);
@@ -883,7 +923,7 @@ fn protect_raw_text(input: &str) -> (Cow<'_, str>, HashMap<String, String>) {
         }
     }
 
-    (Cow::Owned(protected), raw_text)
+    (Cow::Owned(protected), shielded)
 }
 
 /// Name of a text element whose body `tl` must not parse as markup.
