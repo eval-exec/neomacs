@@ -1987,6 +1987,8 @@ pub(crate) struct PendingWindow {
     pub title: String,
     pub geometry_hints: GuiFrameGeometryHints,
     pub visibility: WindowVisibility,
+    /// Outer position requested before the native window exists.
+    pub position: Option<(i32, i32)>,
 }
 
 impl GuiFrameWindowManager {
@@ -2078,15 +2080,12 @@ impl GuiFrameWindowManager {
         native.refresh_content_geometry();
         let key = self.primary_frame_key();
         if let Some(window_state) = self.windows.get_mut(&key) {
-            if let FrameLifecycle::Pending {
-                pending_position: Some((x, y)),
-                ..
-            } = window_state.lifecycle
-            {
-                native
-                    .window
-                    .set_outer_position(window_position_from_emacs_pixels(x, y));
-            }
+            let pending_position = match window_state.lifecycle {
+                FrameLifecycle::Pending {
+                    pending_position, ..
+                } => pending_position,
+                FrameLifecycle::Active { .. } => None,
+            };
             let winit_id = native.window.id();
             let surface_state = native.surface_state();
             self.primary_winit_id = Some(winit_id);
@@ -2096,6 +2095,9 @@ impl GuiFrameWindowManager {
                 ime_enabled: window_state.lifecycle.ime_enabled(),
                 last_ime_cursor_area: window_state.lifecycle.last_ime_cursor_area(),
             };
+            if let Some((x, y)) = pending_position {
+                window_state.set_outer_position(x, y);
+            }
             window_state.render.set_surface_state(surface_state);
             self.sync_primary_mapping();
         }
@@ -2145,6 +2147,7 @@ impl GuiFrameWindowManager {
             title,
             geometry_hints,
             visibility,
+            position: None,
         });
     }
 
@@ -2165,6 +2168,25 @@ impl GuiFrameWindowManager {
             .filter(|pending| pending.emacs_frame_id == emacs_frame_id)
         {
             pending.visibility = visibility;
+            found = true;
+        }
+        found
+    }
+
+    /// Move a frame's outer window, or keep the position for a window whose
+    /// native creation is still pending.  False when the frame is unknown.
+    pub(super) fn set_outer_position(&mut self, emacs_frame_id: u64, x: i32, y: i32) -> bool {
+        if let Some(window) = self.get_mut(emacs_frame_id) {
+            window.set_outer_position(x, y);
+            return true;
+        }
+        let mut found = false;
+        for pending in self
+            .pending_creates
+            .iter_mut()
+            .filter(|pending| pending.emacs_frame_id == emacs_frame_id)
+        {
+            pending.position = Some((x, y));
             found = true;
         }
         found
@@ -2206,6 +2228,11 @@ impl GuiFrameWindowManager {
                 .with_surface_size(window_size_from_emacs_pixels(req.width, req.height))
                 .with_transparent(true)
                 .with_decorations(self.chrome_defaults.decorations_enabled);
+            // Place the window where Lisp asked before it first appears.
+            let attrs = match req.position {
+                Some((x, y)) => attrs.with_position(window_position_from_emacs_pixels(x, y)),
+                None => attrs,
+            };
             let attrs = crate::window_chrome::WindowChromeController::prepare(
                 attrs,
                 self.chrome_defaults.decorations_enabled,

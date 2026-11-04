@@ -49,15 +49,24 @@ fn gui_frame_position_requests_move_the_native_window() {
          (set-frame-size-and-position-pixelwise nil 400 300 120 80) \
          (modify-frame-parameters nil '((left . 10) (top . 20))) \
          (modify-frame-parameters nil '((left . 30))) \
+         (modify-frame-parameters nil '((top . 50))) \
          (set-frame-position nil -10 40) \
+         (modify-frame-parameters nil '((left . (- 0)))) \
          (frame-position)",
     );
     assert!(results.iter().all(Result::is_ok), "{results:?}");
-    // A lone edge or a far-edge offset needs the window's actual position or
-    // the workarea, so only fully absolute requests reach the host.
+    // A lone edge keeps the other edge's current position, as GNU does.  A
+    // far-edge offset needs the window's outer size and the workarea, so it
+    // does not reach the host.
     assert_eq!(
         *positions.borrow(),
-        vec![(root, 0, 0), (root, 120, 80), (root, 10, 20)]
+        vec![
+            (root, 0, 0),
+            (root, 120, 80),
+            (root, 10, 20),
+            (root, 30, 20),
+            (root, 30, 50),
+        ]
     );
 }
 

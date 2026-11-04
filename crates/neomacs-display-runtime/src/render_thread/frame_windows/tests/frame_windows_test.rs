@@ -1620,6 +1620,74 @@ fn winit_to_emacs_map_is_empty_initially() {
     assert!(mgr.winit_to_emacs.is_empty());
 }
 
+#[test]
+fn a_position_for_a_pending_primary_window_is_kept_until_it_goes_active() {
+    let mut mgr = GuiFrameWindowManager::new();
+    mgr.set_primary_pending(GuiFrameWindowState {
+        visibility: WindowVisibility::Visible,
+        pending_scale_factor: None,
+        lifecycle: FrameLifecycle::Pending {
+            width: 800,
+            height: 600,
+            scale_factor: 1.0,
+            mouse_hidden_for_typing: false,
+            ime_enabled: false,
+            last_ime_cursor_area: None,
+            chrome: Default::default(),
+            geometry_hints: None,
+            pending_position: None,
+        },
+        render: GuiFrameRenderState::new_without_device(
+            42,
+            false,
+            neomacs_display_protocol::frame_time::observe_platform_now(),
+        ),
+    });
+    mgr.adopt_primary_frame_id(42);
+
+    // `set-frame-position` in early-init reaches the primary frame before it
+    // has a native window; both its id and the bootstrap id 0 route to it.
+    assert!(mgr.set_outer_position(42, 200, 300));
+    assert!(matches!(
+        mgr.get(42).expect("primary").lifecycle,
+        FrameLifecycle::Pending {
+            pending_position: Some((200, 300)),
+            ..
+        }
+    ));
+    assert!(mgr.set_outer_position(0, 10, 20));
+    assert!(matches!(
+        mgr.get(42).expect("primary").lifecycle,
+        FrameLifecycle::Pending {
+            pending_position: Some((10, 20)),
+            ..
+        }
+    ));
+}
+
+#[test]
+fn a_position_for_a_window_still_being_created_is_kept_for_creation() {
+    let mut mgr = GuiFrameWindowManager::new();
+    mgr.request_create(
+        7,
+        800,
+        600,
+        "Win".to_string(),
+        default_geometry_hints(),
+        WindowVisibility::Visible,
+    );
+    assert_eq!(mgr.pending_creates[0].position, None);
+
+    // `(set-frame-position (make-frame) 120 80)` arrives before the event
+    // loop creates the native window.
+    assert!(mgr.set_outer_position(7, 120, 80));
+    assert_eq!(mgr.pending_creates[0].position, Some((120, 80)));
+    assert!(
+        !mgr.set_outer_position(8, 1, 2),
+        "an unknown frame reports the miss"
+    );
+}
+
 // =======================================================================
 // PendingWindow struct
 // =======================================================================
@@ -1633,6 +1701,7 @@ fn pending_window_stores_all_fields() {
         title: "My Emacs Frame".to_string(),
         geometry_hints: default_geometry_hints(),
         visibility: WindowVisibility::Visible,
+        position: None,
     };
 
     assert_eq!(pw.emacs_frame_id, 123);
@@ -1650,6 +1719,7 @@ fn pending_window_unicode_title() {
         title: "Emacs \u{2014} \u{1F680} Neomacs".to_string(),
         geometry_hints: default_geometry_hints(),
         visibility: WindowVisibility::Visible,
+        position: None,
     };
 
     assert!(pw.title.contains('\u{2014}')); // em dash

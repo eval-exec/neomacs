@@ -97,18 +97,27 @@ impl FramePositionSpec {
     }
 }
 
-/// The absolute display position a top-level window should move to, or
-/// `None` when either edge is missing or relative to the display's far edge
-/// or extent.  Those need the window's actual position or the workarea,
-/// which the evaluator does not have.
+/// The absolute display position a top-level window should move to.
+///
+/// A missing edge keeps the frame's CURRENT position, as GNU's
+/// `gui_set_frame_parameters_1` takes it from `f->left_pos` / `f->top_pos`
+/// (src/frame.c).  `None` when nothing was requested, or when a requested
+/// edge is relative to the display's far edge or extent: those need the
+/// window's outer size and the workarea, which the evaluator does not have.
 pub(crate) fn absolute_window_position(
     left: Option<FramePositionSpec>,
     top: Option<FramePositionSpec>,
+    current: (i64, i64),
 ) -> Option<(i32, i32)> {
-    match (left?.0, top?.0) {
-        (PositionKind::Absolute(x), PositionKind::Absolute(y)) => Some((x, y)),
-        _ => None,
+    if left.is_none() && top.is_none() {
+        return None;
     }
+    let edge = |spec: Option<FramePositionSpec>, current: i64| match spec {
+        Some(FramePositionSpec(PositionKind::Absolute(offset))) => Some(offset),
+        Some(_) => None,
+        None => i32::try_from(current).ok(),
+    };
+    Some((edge(left, current.0)?, edge(top, current.1)?))
 }
 
 /// Resolve only after size/font changes, then publish numeric parent-local
