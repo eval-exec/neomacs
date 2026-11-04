@@ -710,7 +710,7 @@ pub(crate) fn system_configuration_features_value() -> Value {
 }
 
 fn gnu_system_configuration() -> String {
-    crate::emacs_core::platform_facts::system_configuration()
+    neovm_value::system_vocab::platform_facts::system_configuration()
 }
 
 /// `(emacs-version)` -> string.

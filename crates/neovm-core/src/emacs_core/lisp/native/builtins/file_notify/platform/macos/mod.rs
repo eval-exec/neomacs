@@ -60,10 +60,10 @@ mod native {
         file_notify_error, finish_watch_drain,
     };
     use super::*;
-    use crate::emacs_core::errno::Errno;
     use crate::emacs_core::error::Flow;
     use crate::emacs_core::process::WaitNotifier;
     use crate::emacs_core::value::Value;
+    use neovm_value::system_vocab::errno::Errno;
     use rustix::event::kqueue::{Event, EventFilter, EventFlags, VnodeEvents, kevent, kqueue};
     use rustix::fd::{AsRawFd, OwnedFd, RawFd};
     use std::collections::HashMap;

@@ -162,6 +162,11 @@ enum LowerRoot {
     /// moved from eval with stage-3b T4.1. A top-level production module like
     /// the other lower roots; it names no emacs_core item.
     Quit,
+    /// The system vocabulary moved down for the stage-4 eval split (W1/E3):
+    /// errno, platform facts, the C-feature table, path_exec, the wait
+    /// timeout and startup constants. A top-level production module like the
+    /// other lower roots; it names no emacs_core item.
+    SystemVocab,
     /// The Context-owned semantic-registry substrate moved from the core
     /// runtime with stage-3b T3. A top-level production module like the
     /// other lower roots; its one reach below the evaluator is
@@ -193,6 +198,7 @@ impl LowerRoot {
             "host_effect" => Self::HostEffect,
             "tls_fingerprint" => Self::TlsFingerprint,
             "quit" => Self::Quit,
+            "system_vocab" => Self::SystemVocab,
             "heap_registry" => Self::HeapRegistry,
             unknown => {
                 panic!("unknown top-level production module {unknown}; add a LowerRoot variant")
@@ -223,6 +229,7 @@ impl LowerRoot {
             Self::HostEffect => "host_effect",
             Self::TlsFingerprint => "tls_fingerprint",
             Self::Quit => "quit",
+            Self::SystemVocab => "system_vocab",
             Self::HeapRegistry => "heap_registry",
         }
     }

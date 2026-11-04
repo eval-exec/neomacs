@@ -3804,7 +3804,7 @@ fn default_fingerprinted_runtime_image_path(role: RuntimeImageRole) -> PathBuf {
 ///    stripped (`src/emacs.c:1024-1041`).
 /// 2. the fingerprinted image beside the binary -- GNU's rung 3 in the
 ///    uninstalled case, where `PATH_EXEC` *is* the executable's directory.
-///    Listed separately because [`super::path_exec`] only reports that
+///    Listed separately because [`neovm_value::system_vocab::path_exec`] only reports that
 ///    directory when no installed archlib exists.
 /// 3. `PATH_EXEC/neomacs-FINGERPRINT.pdump` (`src/emacs.c:1055-1077`).  GNU
 ///    hardcodes the product name here "so that the Emacs binary still works
@@ -3828,7 +3828,7 @@ fn runtime_image_candidate_paths_for_executable(
     executable: &Path,
     role: RuntimeImageRole,
 ) -> Vec<PathBuf> {
-    let path_exec = super::path_exec::path_exec_for_executable(executable);
+    let path_exec = neovm_value::system_vocab::path_exec::path_exec_for_executable(executable);
     let candidates = [
         runtime_image_path_for_executable(executable, role),
         fingerprinted_runtime_image_path_for_executable(executable, role),

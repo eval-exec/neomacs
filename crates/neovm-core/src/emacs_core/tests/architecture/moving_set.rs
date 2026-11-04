@@ -39,7 +39,11 @@ pub(crate) const G0_MEMBERS: [&str; 10] = [
 /// semantic-registry substrate binds std plus
 /// `tagged::gc::current_tagged_heap_identity` only, and names no evaluator
 /// item; core re-exports it through the `emacs_core::heap_registry` facade.
-pub(crate) const BOTTOM_PEER_MODULES: [&str; 8] = [
+/// `system_vocab` joined with the stage-4 W1/E3 TYPE-DOWN wave: errno,
+/// platform facts, the C-feature table, path_exec, the wait timeout and the
+/// startup constants are pure std data/helpers naming no evaluator item;
+/// core keeps every historical module path as a re-export.
+pub(crate) const BOTTOM_PEER_MODULES: [&str; 9] = [
     "tagged",
     "heap_types",
     "gc_trace",
@@ -48,6 +52,7 @@ pub(crate) const BOTTOM_PEER_MODULES: [&str; 8] = [
     "string_pos_cache",
     "quit",
     "heap_registry",
+    "system_vocab",
 ];
 
 /// The first lower crate of the extraction. Its modules are already inside

@@ -9,10 +9,10 @@ use super::super::super::WatchActivity;
 use super::super::super::delivery::{
     self, DeliveryBatch, DeliveryReceiver, DeliverySender, PublishOutcome,
 };
-use crate::emacs_core::errno::Errno;
 use crate::emacs_core::process::WaitNotifier;
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use inotify::{EventMask, Inotify, WatchDescriptor, WatchMask};
+use neovm_value::system_vocab::errno::Errno;
 use polling::{Event, Events, PollMode, Poller};
 use std::collections::HashMap;
 use std::ffi::OsString;

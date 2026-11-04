@@ -257,10 +257,10 @@ fn gnu_system_type() -> &'static str {
 /// one `configure` switch decides both the implementation and the `Fprovide`
 /// that advertises it, so GNU cannot advertise what it did not build.  Ledger
 /// 192 made that true here too -- the list is derived from
-/// [`super::c_features::gnu_c_features`], a table whose every row names either
+/// [`neovm_value::system_vocab::c_features::gnu_c_features`], a table whose every row names either
 /// the implementation behind the feature or the reason there is none.
 fn initial_feature_names() -> Vec<&'static str> {
-    super::c_features::initial_feature_names()
+    neovm_value::system_vocab::c_features::initial_feature_names()
 }
 
 fn initial_features_value() -> Value {

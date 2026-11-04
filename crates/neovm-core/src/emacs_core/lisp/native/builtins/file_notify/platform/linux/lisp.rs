@@ -2,9 +2,9 @@
 
 use super::super::super::*;
 use super::InotifyRequest;
-use crate::emacs_core::errno::Errno;
 use crate::emacs_core::error::expect_args;
 use crate::tagged::SymbolMode;
+use neovm_value::system_vocab::errno::Errno;
 
 // Both helpers below feed GNU's `report_file_notify_error` (`src/inotify.c`),
 // which reads the *global* `errno` at the time it runs rather than taking one

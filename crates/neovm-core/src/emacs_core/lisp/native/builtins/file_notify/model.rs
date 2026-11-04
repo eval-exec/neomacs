@@ -4,10 +4,10 @@
 //! That keeps platform-specific flag vocabularies out of the common state
 //! machine and makes cross-platform request mismatches a compile-time error.
 
-use crate::emacs_core::errno::Errno;
 use crate::emacs_core::error::Flow;
 use crate::emacs_core::process::WaitNotifier;
 use crate::emacs_core::value::Value;
+use neovm_value::system_vocab::errno::Errno;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};

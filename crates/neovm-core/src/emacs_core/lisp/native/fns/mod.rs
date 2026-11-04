@@ -17,7 +17,7 @@ use crate::emacs_core::builtins::{FromValue, StringDesignator};
 use crate::emacs_core::emacs_char;
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_args_range, expect_min_args};
-use crate::emacs_core::platform_facts::{STRING_COLLATION, StringCollation};
+use neovm_value::system_vocab::platform_facts::{STRING_COLLATION, StringCollation};
 // bytes_to_unibyte_storage_string and encode_nonunicode_char_for_storage
 // imports removed — using emacs_char + LispString directly
 use super::value::*;
@@ -95,7 +95,7 @@ unsafe fn collation_errno() -> libc::c_int {
 /// `io::Error` Display, so every collation error it reported carried a
 /// " (os error N)" suffix GNU never emits. The shared helper cannot do that.
 fn collation_errno_message(errno: libc::c_int) -> String {
-    crate::emacs_core::errno::emacs_strerror(errno)
+    neovm_value::system_vocab::errno::emacs_strerror(errno)
 }
 
 // ---------------------------------------------------------------------------

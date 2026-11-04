@@ -66,10 +66,10 @@ fn sleep_duration_from_blocker(value: Value) -> Option<Duration> {
     if items.len() != 2 || !items[0].is_bare_symbol_named(SLEEP_BLOCKER_MARKER) {
         return None;
     }
-    match crate::emacs_core::timer::WaitTimeout::from(items[1].xfloat()) {
-        crate::emacs_core::timer::WaitTimeout::Poll => None,
-        crate::emacs_core::timer::WaitTimeout::For(duration) => Some(duration),
-        crate::emacs_core::timer::WaitTimeout::Forever => Some(Duration::MAX),
+    match neovm_value::system_vocab::time::WaitTimeout::from(items[1].xfloat()) {
+        neovm_value::system_vocab::time::WaitTimeout::Poll => None,
+        neovm_value::system_vocab::time::WaitTimeout::For(duration) => Some(duration),
+        neovm_value::system_vocab::time::WaitTimeout::Forever => Some(Duration::MAX),
     }
 }
 

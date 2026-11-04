@@ -27,6 +27,7 @@ pub mod sequence_copy;
 pub mod string_pos_cache;
 pub mod strings_core;
 pub mod symbol;
+pub mod system_vocab;
 pub mod tagged;
 pub mod time_core;
 pub mod tls_fingerprint;

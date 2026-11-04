@@ -904,7 +904,7 @@ impl Context {
         // machine, not of the editor.
         obarray.define_int_variable(
             "command-line-max-length",
-            super::super::callproc::command_line_max_length(),
+            neovm_value::system_vocab::platform::command_line_max_length(),
         );
         // GNU callproc.c: exec-path is built from PATH env var.
         // exec-directory is the directory containing helper programs.
