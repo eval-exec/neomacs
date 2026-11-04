@@ -478,22 +478,6 @@ pub(crate) fn builtin_buffer_live_p(
 /// GNU compares with `Fstring_equal`, which never expands or canonicalizes
 /// either side — `find-file` has already stored the truename — so this is a
 /// plain byte comparison, unlike `get-file-buffer`'s resolving search.
-/// `Context::expect_lisp_string` semantics over the host's GC-safe string
-/// view: CHECK_STRING's `wrong-type-argument stringp` on failure. The ruled
-/// `EditHost::expect_lisp_string` method has not landed yet; this helper is
-/// its exact local form and goes away when the method does.
-fn host_expect_lisp_string<'a, H: EditHost>(
-    host: &'a H,
-    value: Value,
-) -> Result<&'a crate::heap_types::LispString, Flow> {
-    host.lisp_string(value).ok_or_else(|| {
-        signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("stringp"), value],
-        )
-    })
-}
-
 pub(crate) fn builtin_get_truename_buffer<H: EditHost>(
     host: &mut H,
     args: Vec<Value>,
@@ -504,23 +488,22 @@ pub(crate) fn builtin_get_truename_buffer<H: EditHost>(
         edit.buffers.buffer_list()
     };
     for id in buffer_ids {
+        // GNU skips buffers whose file_truename is not a string BEFORE
+        // calling Fstring_equal, so a non-string FILENAME only signals once
+        // some live buffer visits a file.
         let truename_value = {
             let (edit, _) = host.edit_and_vars();
-            let Some(buf) = edit.buffers.get(id) else {
-                continue;
-            };
-            // GNU skips buffers whose file_truename is not a string BEFORE
-            // calling Fstring_equal, so a non-string FILENAME only signals once
-            // some live buffer visits a file.
-            let Some(truename_value) = buf.buffer_local_value("buffer-file-truename") else {
-                continue;
-            };
-            truename_value
+            edit.buffers
+                .get(id)
+                .and_then(|buf| buf.buffer_local_value("buffer-file-truename"))
+        };
+        let Some(truename_value) = truename_value else {
+            continue;
         };
         let Some(truename) = host.lisp_string(truename_value) else {
             continue;
         };
-        let filename = host_expect_lisp_string(host, args[0])?;
+        let filename = host.expect_lisp_string(args[0])?;
         if truename.schars() == filename.schars()
             && truename.sbytes() == filename.sbytes()
             && truename.as_bytes() == filename.as_bytes()
@@ -754,23 +737,23 @@ fn buffer_access_fontified_property_sym() -> crate::emacs_core::intern::SymId {
 }
 
 /// (buffer-substring START END) → string
-fn update_buffer_properties_for_access(
-    eval: &mut super::eval::Context,
+fn update_buffer_properties_for_access<H: EditHost>(
+    host: &mut H,
     start: LispCharPos1,
     end: LispCharPos1,
 ) -> Result<(), Flow> {
-    if eval
-        .visible_variable_value_or_nil_by_id(buffer_access_fontify_functions_sym())
+    if host
+        .visible_variable_value_or_nil(buffer_access_fontify_functions_sym())
         .is_nil()
     {
         return Ok(());
     }
 
     let fontified_property =
-        eval.visible_variable_value_or_nil_by_id(buffer_access_fontified_property_sym());
+        host.visible_variable_value_or_nil(buffer_access_fontified_property_sym());
     if !fontified_property.is_nil() {
         let needs_fontification = super::textprop::builtin_text_property_any(
-            eval,
+            &mut *host,
             &[
                 Value::fixnum(start.as_i64()),
                 Value::fixnum(end.as_i64()),
@@ -784,7 +767,7 @@ fn update_buffer_properties_for_access(
     }
 
     run_named_hook_via_host(
-        eval,
+        &mut *host,
         "buffer-access-fontify-functions",
         &[Value::fixnum(start.as_i64()), Value::fixnum(end.as_i64())],
     )?;
@@ -1324,26 +1307,30 @@ pub(crate) fn replace_region_source_value_in_state(
     }
 }
 
-pub(crate) fn builtin_buffer_swap_text(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    let buffers = &mut eval.edit.buffers;
+pub(crate) fn builtin_buffer_swap_text<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_args("buffer-swap-text", &args, 1)?;
-    let other_id = expect_buffer_id(&args[0])?;
-    let current_id = buffers
-        .current_buffer()
-        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?
-        .id;
+    let (other_id, current_id) = {
+        let (edit, _vars) = host.edit_and_vars();
+        let other_id = expect_buffer_id(&args[0])?;
+        let current_id = edit
+            .buffers
+            .current_buffer()
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?
+            .id;
+        (other_id, current_id)
+    };
 
-    buffers
-        .swap_buffer_text(current_id, other_id)
-        .map(|()| Value::NIL)
-        .map_err(|err| {
-            eval.signal_c_error(crate::emacs_core::errors::CErrorMessage::from(
-                err.message(),
-            ))
-        })
+    // The swapped result is owned, so the phase closes before the M3c
+    // error-mapping host call reborrows `host` shared.
+    let swapped = {
+        let (edit, _vars) = host.edit_and_vars();
+        edit.buffers.swap_buffer_text(current_id, other_id)
+    };
+    swapped.map(|()| Value::NIL).map_err(|err| {
+        host.signal_c_error(crate::emacs_core::errors::CErrorMessage::from(
+            err.message(),
+        ))
+    })
 }
 
 pub(crate) fn builtin_insert_buffer_substring<H: EditHost>(
@@ -3511,51 +3498,62 @@ impl SubstitutionCharacters {
     }
 }
 
-pub(crate) fn builtin_subst_char_in_region(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_subst_char_in_region<H: EditHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args_range("subst-char-in-region", &args, 4, 5)?;
 
-    let start = expect_integer_or_marker_in_buffers(&eval.edit.buffers, &args[0])?;
-    let end = expect_integer_or_marker_in_buffers(&eval.edit.buffers, &args[1])?;
-    // The Lisp boundary has checked both codes against EmacsChar::MAX.
-    let from_code = EmacsChar::from_code_unchecked(expect_character_code(&args[2])? as u32);
-    let to_code = EmacsChar::from_code_unchecked(expect_character_code(&args[3])? as u32);
-    let noundo = args.get(4).is_some_and(|value| !value.is_nil());
+    // One read phase carries the argument coercions, the current-buffer
+    // lookup, and the byte encodings out as owned values; every one of them
+    // is needed again after the host calls below, and none borrows the
+    // manager.
+    let (start, end, noundo, current_id, from_code, to_code, from_bytes, to_bytes) = {
+        let (edit, _vars) = host.edit_and_vars();
+        let buffers = &edit.buffers;
+        let start = expect_integer_or_marker_in_buffers(buffers, &args[0])?;
+        let end = expect_integer_or_marker_in_buffers(buffers, &args[1])?;
+        // The Lisp boundary has checked both codes against EmacsChar::MAX.
+        let from_code = EmacsChar::from_code_unchecked(expect_character_code(&args[2])? as u32);
+        let to_code = EmacsChar::from_code_unchecked(expect_character_code(&args[3])? as u32);
+        let noundo = args.get(4).is_some_and(|value| !value.is_nil());
 
-    let current_id = eval.edit.buffers.current_buffer_id().ok_or_else(|| {
-        signal(
-            LispCondition::Error,
-            vec![Value::string("No current buffer")],
-        )
-    })?;
-    let buffer = eval.edit.buffers.get(current_id).ok_or_else(|| {
-        signal(
-            LispCondition::Error,
-            vec![Value::string("No current buffer")],
-        )
-    })?;
-    let target_multibyte = buffer.get_multibyte();
-    // GNU editfns.c:2340-2345 assigns both character codes to unsigned
-    // bytes in a unibyte buffer. Carry normalized codes through both scans
-    // and the storage edit; encoding only TOCHAR leaves FROMCHAR unmatched.
-    let (from_code, to_code) =
-        SubstitutionCharacters::for_buffer(buffer, from_code, to_code).codes();
-    let from_bytes = encode_char_code_for_buffer_bytes(from_code.code(), target_multibyte)
-        .ok_or_else(|| {
+        let current_id = buffers.current_buffer_id().ok_or_else(|| {
             signal(
-                LispCondition::WrongTypeArgument,
-                vec![Value::symbol("characterp"), args[2]],
+                LispCondition::Error,
+                vec![Value::string("No current buffer")],
             )
         })?;
-    let to_bytes =
-        encode_char_code_for_buffer_bytes(to_code.code(), target_multibyte).ok_or_else(|| {
+        let buffer = buffers.get(current_id).ok_or_else(|| {
             signal(
-                LispCondition::WrongTypeArgument,
-                vec![Value::symbol("characterp"), args[3]],
+                LispCondition::Error,
+                vec![Value::string("No current buffer")],
             )
         })?;
+        let target_multibyte = buffer.get_multibyte();
+        // GNU editfns.c:2340-2345 assigns both character codes to unsigned
+        // bytes in a unibyte buffer. Carry normalized codes through both scans
+        // and the storage edit; encoding only TOCHAR leaves FROMCHAR unmatched.
+        let (from_code, to_code) =
+            SubstitutionCharacters::for_buffer(buffer, from_code, to_code).codes();
+        let from_bytes = encode_char_code_for_buffer_bytes(from_code.code(), target_multibyte)
+            .ok_or_else(|| {
+                signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("characterp"), args[2]],
+                )
+            })?;
+        let to_bytes = encode_char_code_for_buffer_bytes(to_code.code(), target_multibyte)
+            .ok_or_else(|| {
+                signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("characterp"), args[3]],
+                )
+            })?;
+        (
+            start, end, noundo, current_id, from_code, to_code, from_bytes, to_bytes,
+        )
+    };
 
     // GNU editfns.c:3051+ uses CHAR_BYTES (Emacs internal encoding length)
     // for this check, not storage-form length. The two agree for standard
@@ -3563,29 +3561,36 @@ pub(crate) fn builtin_subst_char_in_region(
     // and nonunicode codepoints.
     if from_bytes.len() != to_bytes.len() {
         return Err(
-            eval.signal_c_error(crate::emacs_core::errors::CErrorMessage::from(
+            host.signal_c_error(crate::emacs_core::errors::CErrorMessage::from(
                 "Characters in `subst-char-in-region' have different byte-lengths",
             )),
         );
     }
 
-    let Some((range, changed_range)) = subst_char_in_region_scan(
-        &mut eval.edit.buffers,
-        current_id,
-        start,
-        end,
-        from_code,
-        to_code,
-        &to_bytes,
-        &args,
-    )?
-    else {
+    let scan = {
+        let (edit, _vars) = host.edit_and_vars();
+        subst_char_in_region_scan(
+            &mut edit.buffers,
+            current_id,
+            start,
+            end,
+            from_code,
+            to_code,
+            &to_bytes,
+            &args,
+        )?
+    };
+    let Some((range, changed_range)) = scan else {
         return Ok(Value::NIL);
     };
 
-    if eval.edit.buffers.get(current_id).is_some_and(|buf| {
-        super::editfns::buffer_read_only_active_in_state(eval.variables(), &[], buf)
-    }) {
+    let read_only = {
+        let (edit, vars) = host.edit_and_vars();
+        edit.buffers
+            .get(current_id)
+            .is_some_and(|buf| super::editfns::buffer_read_only_active_in_state(vars, &[], buf))
+    };
+    if read_only {
         return Err(signal(
             LispCondition::BufferReadOnly,
             vec![Value::make_buffer(current_id)],
@@ -3599,40 +3604,46 @@ pub(crate) fn builtin_subst_char_in_region(
     let before_range =
         TextEditRange::from_start_end(changed_range.start_anchor(), range.end_anchor());
     let change = TextChange::unchanged_extent_with_after_range(before_range, changed_range);
-    super::editfns::signal_before_text_change(eval, change)?;
+    super::editfns::signal_before_text_change(&mut *host, change)?;
 
     // GNU `subst-char-in-region` restarts after `modify_text` because
     // `before-change-functions` may move the gap or alter the buffer.  It does
     // not run before-change hooks a second time; it simply rescans the same
     // Lisp range in the current buffer and either performs the substitutions
     // found there or returns without an after-change signal.
-    let Some((range, changed_range)) = subst_char_in_region_scan(
-        &mut eval.edit.buffers,
-        current_id,
-        start,
-        end,
-        from_code,
-        to_code,
-        &to_bytes,
-        &args,
-    )?
-    else {
+    let rescan = {
+        let (edit, _vars) = host.edit_and_vars();
+        subst_char_in_region_scan(
+            &mut edit.buffers,
+            current_id,
+            start,
+            end,
+            from_code,
+            to_code,
+            &to_bytes,
+            &args,
+        )?
+    };
+    let Some((range, changed_range)) = rescan else {
         return Ok(Value::NIL);
     };
     let changed_range_through_end =
         TextEditRange::from_start_end(changed_range.start_anchor(), range.end_anchor());
     let after_change =
         TextChange::unchanged_extent_with_after_range(changed_range_through_end, changed_range);
-    let changed = eval.edit.buffers.subst_char_in_buffer_region(
-        current_id,
-        range,
-        changed_range_through_end,
-        from_code.code(),
-        &to_bytes,
-        noundo,
-    );
+    let changed = {
+        let (edit, _vars) = host.edit_and_vars();
+        edit.buffers.subst_char_in_buffer_region(
+            current_id,
+            range,
+            changed_range_through_end,
+            from_code.code(),
+            &to_bytes,
+            noundo,
+        )
+    };
     if changed == Some(true) {
-        super::editfns::signal_after_text_change(eval, after_change)?;
+        super::editfns::signal_after_text_change(&mut *host, after_change)?;
     }
     Ok(Value::NIL)
 }
@@ -4412,13 +4423,14 @@ pub(crate) fn builtin_get_byte<H: EditHost>(host: &mut H, args: Vec<Value>) -> E
         }
         // One character, not the whole string decoded (GNU `Fget_byte':
         // `string_char_to_byte' then `STRING_CHAR').
-        let code = neovm_value::strings_core::lisp_string_char_at(string, pos)
+        let code = crate::strings_core::lisp_string_char_at(string, pos)
             .expect("POSITION was range-checked against SCHARS");
         return get_byte_from_multibyte_char_code(code);
     }
 
-    // Buffer path: POSITION is a 1-based character position.
-    let (edit, _) = host.edit_and_vars();
+    // Buffer path: POSITION is a 1-based character position. The tail makes
+    // no host calls, so one phase stays open to the end of the function.
+    let (edit, _vars) = host.edit_and_vars();
     let buf = edit
         .buffers
         .current_buffer()
