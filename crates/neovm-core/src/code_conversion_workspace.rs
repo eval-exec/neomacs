@@ -5,8 +5,8 @@
 //! call sites from inventing buffer names, retention policies, or nested-call
 //! cleanup independently.
 
-use crate::buffer::{BufferId, BufferManager};
-use crate::heap_types::LispString;
+use neovm_edit::buffer::{BufferId, BufferManager};
+use neovm_value::heap_types::LispString;
 use neovm_value::value::Value;
 
 pub(crate) const CODE_CONVERSION_WORK_BUFFER_NAME: &str = " *code-conversion-work*";
