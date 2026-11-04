@@ -628,9 +628,73 @@ pub(crate) enum ChildStatusChange {
     Gone,
 }
 
-impl ChildOwnership {
+pub(crate) trait ChildOwnershipIo {
     /// Take ownership of a freshly spawned `std::process::Child`.
-    pub(crate) fn of_pipe_child(child: SpawnedChild) -> Self {
+    fn of_pipe_child(child: SpawnedChild) -> Self;
+    /// Take ownership of a freshly spawned `portable_pty` child.
+    ///
+    /// A child `portable_pty` cannot name a pid for is [`Self::NotAChild`],
+    /// because a pidless child is exactly what `eassert (child > 0)` rejects
+    /// one frame below GNU's own sweep.
+    fn of_pty_child(child: Box<dyn portable_pty::Child + Send + Sync>) -> Self;
+    /// Whether a child was ever spawned -- live or already reaped.
+    ///
+    /// This is *not* `p->alive`: a reaped child is still a child, and the
+    /// `Real`-process predicates that ask "does this record have OS backing?"
+    /// mean this question rather than the liveness one.
+    fn has_child(&self) -> bool;
+    /// GNU's `p->alive`: the pid, and only while this port still owns it.
+    ///
+    /// Every `kill(2)` aimed at one of this port's own children goes through
+    /// here, so `record_kill_process`'s `if (p->alive)` is not a test anyone
+    /// has to remember to write.
+    fn pid_if_unreaped(&self) -> Option<u32>;
+    /// The spawn stored a `portable_pty` handle rather than a
+    /// `std::process::Child`.
+    fn is_pty_handle(&self) -> bool;
+    /// The child's stdin while it exists.  Not a reap, and the only reason the
+    /// handle is reachable at all.
+    fn stdin_mut(&mut self) -> Option<&mut std::fs::File>;
+    /// The child's stdin for the poller registrations, which need the
+    /// descriptor and nothing else.
+    fn stdin(&self) -> Option<&std::fs::File>;
+    /// Whether this process has a pipe child at all -- the `else if let
+    /// Some(child) = ...` this port's write path used to spell against the
+    /// handle itself.
+    fn has_pipe_child(&self) -> bool;
+    /// GNU's `process-send-eof` for a pipe child: close stdin.  Answers
+    /// whether there was a pipe child to close it on.
+    fn close_stdin(&mut self) -> bool;
+    /// GNU's `child_status_changed (p->pid, &status, WUNTRACED | WCONTINUED)`
+    /// (src/process.c:7742), and the state transition its terminal answers
+    /// cause.
+    ///
+    /// [`ChildStatusChange::NoChange`] for a process that is not, or is no
+    /// longer, this port's to wait for -- which is GNU's `p->alive &&` at
+    /// :7741 rather than an early `continue` inside the loop.
+    fn poll_status(&mut self) -> ChildStatusChange;
+    /// GNU's `record_kill_process` (src/callproc.c:196-211): signal, then leave
+    /// the sole child handle for a later nonblocking deleted-pid sweep.
+    ///
+    /// The `if (p->alive)` is the `let ... else`, and there is no other arm: a
+    /// reaped child is neither signalled nor waited a second time.
+    fn terminate_and_defer_reaping(&mut self, kill_signal: i32);
+    /// GNU asynchronous delete records an unreaped pid instead of waiting
+    /// (callproc.c:202-207). A Darwin child can still be draining its terminal
+    /// during exit, so blocking here before closing the master can deadlock.
+    fn defer_reaping(&mut self);
+    #[cfg(test)]
+    #[cfg(test)]
+    fn defer_reaping_for_test(&mut self);
+    fn take_unreaped_for_transfer(&mut self) -> Option<ReapableChild>;
+    /// The handle's own `kill`, for the callers that fall back to it when the
+    /// process group would not take the signal.
+    fn kill_handle(&mut self);
+}
+
+impl ChildOwnershipIo for ChildOwnership {
+    /// Take ownership of a freshly spawned `std::process::Child`.
+    fn of_pipe_child(child: SpawnedChild) -> Self {
         Self::Unreaped(ReapableChild {
             pid: child.id(),
             handle: ChildHandle::Pipe(Box::new(child)),
@@ -642,7 +706,7 @@ impl ChildOwnership {
     /// A child `portable_pty` cannot name a pid for is [`Self::NotAChild`],
     /// because a pidless child is exactly what `eassert (child > 0)` rejects
     /// one frame below GNU's own sweep.
-    pub(crate) fn of_pty_child(child: Box<dyn portable_pty::Child + Send + Sync>) -> Self {
+    fn of_pty_child(child: Box<dyn portable_pty::Child + Send + Sync>) -> Self {
         match child.process_id() {
             Some(pid) => Self::Unreaped(ReapableChild {
                 pid,
@@ -657,7 +721,7 @@ impl ChildOwnership {
     /// This is *not* `p->alive`: a reaped child is still a child, and the
     /// `Real`-process predicates that ask "does this record have OS backing?"
     /// mean this question rather than the liveness one.
-    pub(crate) fn has_child(&self) -> bool {
+    fn has_child(&self) -> bool {
         !matches!(self, Self::NotAChild)
     }
 
@@ -666,7 +730,7 @@ impl ChildOwnership {
     /// Every `kill(2)` aimed at one of this port's own children goes through
     /// here, so `record_kill_process`'s `if (p->alive)` is not a test anyone
     /// has to remember to write.
-    pub(crate) fn pid_if_unreaped(&self) -> Option<u32> {
+    fn pid_if_unreaped(&self) -> Option<u32> {
         match self {
             Self::Unreaped(child) => Some(child.pid),
             Self::NotAChild | Self::Reaped | Self::Deferred => None,
@@ -675,7 +739,7 @@ impl ChildOwnership {
 
     /// The spawn stored a `portable_pty` handle rather than a
     /// `std::process::Child`.
-    pub(crate) fn is_pty_handle(&self) -> bool {
+    fn is_pty_handle(&self) -> bool {
         matches!(
             self,
             Self::Unreaped(ReapableChild {
@@ -687,7 +751,7 @@ impl ChildOwnership {
 
     /// The child's stdin while it exists.  Not a reap, and the only reason the
     /// handle is reachable at all.
-    pub(crate) fn stdin_mut(&mut self) -> Option<&mut std::fs::File> {
+    fn stdin_mut(&mut self) -> Option<&mut std::fs::File> {
         match self {
             Self::Unreaped(ReapableChild {
                 handle: ChildHandle::Pipe(child),
@@ -699,7 +763,7 @@ impl ChildOwnership {
 
     /// The child's stdin for the poller registrations, which need the
     /// descriptor and nothing else.
-    pub(crate) fn stdin(&self) -> Option<&std::fs::File> {
+    fn stdin(&self) -> Option<&std::fs::File> {
         match self {
             Self::Unreaped(ReapableChild {
                 handle: ChildHandle::Pipe(child),
@@ -712,7 +776,7 @@ impl ChildOwnership {
     /// Whether this process has a pipe child at all -- the `else if let
     /// Some(child) = ...` this port's write path used to spell against the
     /// handle itself.
-    pub(crate) fn has_pipe_child(&self) -> bool {
+    fn has_pipe_child(&self) -> bool {
         matches!(
             self,
             Self::Unreaped(ReapableChild {
@@ -724,7 +788,7 @@ impl ChildOwnership {
 
     /// GNU's `process-send-eof` for a pipe child: close stdin.  Answers
     /// whether there was a pipe child to close it on.
-    pub(crate) fn close_stdin(&mut self) -> bool {
+    fn close_stdin(&mut self) -> bool {
         match self {
             Self::Unreaped(ReapableChild {
                 handle: ChildHandle::Pipe(child),
@@ -744,7 +808,7 @@ impl ChildOwnership {
     /// [`ChildStatusChange::NoChange`] for a process that is not, or is no
     /// longer, this port's to wait for -- which is GNU's `p->alive &&` at
     /// :7741 rather than an early `continue` inside the loop.
-    pub(crate) fn poll_status(&mut self) -> ChildStatusChange {
+    fn poll_status(&mut self) -> ChildStatusChange {
         let Self::Unreaped(child) = self else {
             return ChildStatusChange::NoChange;
         };
@@ -763,7 +827,7 @@ impl ChildOwnership {
     ///
     /// The `if (p->alive)` is the `let ... else`, and there is no other arm: a
     /// reaped child is neither signalled nor waited a second time.
-    pub(crate) fn terminate_and_defer_reaping(&mut self, kill_signal: i32) {
+    fn terminate_and_defer_reaping(&mut self, kill_signal: i32) {
         let Self::Unreaped(child) = self else {
             return;
         };
@@ -781,7 +845,7 @@ impl ChildOwnership {
     /// GNU asynchronous delete records an unreaped pid instead of waiting
     /// (callproc.c:202-207). A Darwin child can still be draining its terminal
     /// during exit, so blocking here before closing the master can deadlock.
-    pub(crate) fn defer_reaping(&mut self) {
+    fn defer_reaping(&mut self) {
         if let Some(child) = self.take_unreaped_for_transfer() {
             defer_child(child);
         }
@@ -808,7 +872,7 @@ impl ChildOwnership {
 
     /// The handle's own `kill`, for the callers that fall back to it when the
     /// process group would not take the signal.
-    pub(crate) fn kill_handle(&mut self) {
+    fn kill_handle(&mut self) {
         let Self::Unreaped(child) = self else {
             return;
         };
@@ -816,7 +880,34 @@ impl ChildOwnership {
     }
 }
 
-impl ReapableChild {
+pub(crate) trait ReapableChildIo {
+    /// One non-blocking probe, decoded into the port's status vocabulary.
+    ///
+    /// The dispatch is the one `poll_child_status_change` already had, kept
+    /// exactly: a `portable_pty` child is probed through its own handle, and
+    /// everything else through the raw `waitpid` -- which is what carries
+    /// `WUNTRACED | WCONTINUED`, so the stop and continue transitions GNU asks
+    /// for at :7742 stay visible.
+    fn probe(&mut self) -> ChildStatusChange;
+    #[cfg(unix)]
+    #[cfg(unix)]
+    fn probe_pipe(pid: u32, _child: &mut SpawnedChild) -> ChildStatusChange;
+    #[cfg(not(unix))]
+    #[cfg(not(unix))]
+    fn probe_pipe(_pid: u32, child: &mut SpawnedChild) -> ChildStatusChange;
+    /// Probe without allocating Lisp values: deleted children have no pending
+    /// status or sentinel to publish. Errors other than ECHILD retain ownership
+    /// for a later sweep. EINTR resumes immediately so a one-shot native exit
+    /// event cannot be consumed without attempting the reap again.
+    fn try_reap_deleted(&mut self) -> bool;
+    /// GNU's `kill (- p->pid, SIGKILL)` (src/callproc.c:206), with this port's
+    /// existing fallback to the handle's own kill when the group does not take
+    /// it.
+    fn kill_group_then_handle(&mut self, signal_num: i32);
+    fn kill_handle(&mut self);
+}
+
+impl ReapableChildIo for ReapableChild {
     /// One non-blocking probe, decoded into the port's status vocabulary.
     ///
     /// The dispatch is the one `poll_child_status_change` already had, kept

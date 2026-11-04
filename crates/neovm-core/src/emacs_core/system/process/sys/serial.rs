@@ -19,6 +19,7 @@
 
 pub use crate::emacs_core::eval::data::process_state::SerialPort;
 
+use backend::DeviceIo;
 use std::io;
 
 /// Bits per byte. GNU accepts only 7 or 8 (`serial_configure`,
@@ -110,7 +111,7 @@ std::cfg_select! {
 #[derive(Debug)]
 pub struct SerialAttributes(backend::Attributes);
 
-impl SerialPort {
+pub(crate) trait SerialPortIo {
     /// GNU `serial_open`, src/sysdep.c:2980-2990: `open (O_RDWR | O_NOCTTY |
     /// O_NONBLOCK)` then a best-effort `TIOCEXCL`.
     ///
@@ -118,7 +119,57 @@ impl SerialPort {
     /// errno classification as `report_file_error` -- `ENOENT` is
     /// `file-missing`, `EACCES` is `permission-denied`, anything else is
     /// `file-error`, all with "Opening serial port" and the port name.
-    pub fn open(path: &std::ffi::OsStr) -> io::Result<Self> {
+    fn open(path: &std::ffi::OsStr) -> io::Result<SerialPort>;
+    /// GNU `serial_configure`, src/sysdep.c:3151-3309, with the keyword
+    /// validation supplied by the caller.
+    ///
+    /// The read (`tcgetattr` + `cfmakeraw` + `CLOCAL` + `CREAD`) always
+    /// happens first, `settings` always runs on the local copy, and the write
+    /// (`tcsetattr (TCSANOW)`) always happens last and only if `settings`
+    /// succeeded. GNU gets that ordering from statement order inside one
+    /// function; this gets it from the type, and the ordering is observable:
+    ///
+    /// * a device that is not a tty reports `Failed tcgetattr` even when the
+    ///   keywords are also invalid -- measured, `:port "/dev/null" :speed 9600
+    ///   :bytesize 5` is `(file-error "Failed tcgetattr" ...)` under GNU
+    ///   31.0.90, not the `:bytesize` message;
+    /// * an invalid keyword leaves the device UNCHANGED, because nothing has
+    ///   been written back yet.
+    ///
+    /// Neither can be got wrong by a caller: there is no way to reach the
+    /// attributes without the read having happened, and no way to reach the
+    /// write except by returning `Ok` from `settings`.
+    fn configure<E>(
+        &self,
+        settings: impl FnOnce(&mut SerialAttributes) -> Result<(), E>,
+    ) -> Result<(), SerialConfigureFailure<E>>;
+    /// Register this device's readable edge with the wait `poller`, keyed by
+    /// process id, using the same level-triggered policy as every other
+    /// process-output source.
+    fn register_readable(
+        &self,
+        poller: &polling::Poller,
+        id: crate::emacs_core::process::ProcessId,
+    ) -> Result<(), String>;
+    /// Change this device's poll interest (readable, writable, or both).
+    fn modify_interest(
+        &self,
+        poller: &polling::Poller,
+        event: polling::Event,
+    ) -> Result<(), String>;
+    /// Remove this device from `poller`.
+    fn unregister(&self, poller: &polling::Poller);
+}
+
+impl SerialPortIo for SerialPort {
+    /// GNU `serial_open`, src/sysdep.c:2980-2990: `open (O_RDWR | O_NOCTTY |
+    /// O_NONBLOCK)` then a best-effort `TIOCEXCL`.
+    ///
+    /// The error is returned raw so the caller can run it through the same
+    /// errno classification as `report_file_error` -- `ENOENT` is
+    /// `file-missing`, `EACCES` is `permission-denied`, anything else is
+    /// `file-error`, all with "Opening serial port" and the port name.
+    fn open(path: &std::ffi::OsStr) -> io::Result<Self> {
         backend::open(path).map(Self)
     }
 
@@ -141,7 +192,7 @@ impl SerialPort {
     /// Neither can be got wrong by a caller: there is no way to reach the
     /// attributes without the read having happened, and no way to reach the
     /// write except by returning `Ok` from `settings`.
-    pub fn configure<E>(
+    fn configure<E>(
         &self,
         settings: impl FnOnce(&mut SerialAttributes) -> Result<(), E>,
     ) -> Result<(), SerialConfigureFailure<E>> {
@@ -163,7 +214,7 @@ impl SerialPort {
     /// Register this device's readable edge with the wait `poller`, keyed by
     /// process id, using the same level-triggered policy as every other
     /// process-output source.
-    pub fn register_readable(
+    fn register_readable(
         &self,
         poller: &polling::Poller,
         id: crate::emacs_core::process::ProcessId,
@@ -172,7 +223,7 @@ impl SerialPort {
     }
 
     /// Change this device's poll interest (readable, writable, or both).
-    pub fn modify_interest(
+    fn modify_interest(
         &self,
         poller: &polling::Poller,
         event: polling::Event,
@@ -181,7 +232,7 @@ impl SerialPort {
     }
 
     /// Remove this device from `poller`.
-    pub fn unregister(&self, poller: &polling::Poller) {
+    fn unregister(&self, poller: &polling::Poller) {
         self.0.unregister(poller);
     }
 }

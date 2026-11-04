@@ -22,12 +22,17 @@ pub fn open(_pid: u32) -> Option<Source> {
     None
 }
 
-impl Source {
-    pub fn register(&self, _poller: &polling::Poller, _id: ProcessId) {
+pub(crate) trait SourceIo {
+    fn register(&self, _poller: &polling::Poller, _id: ProcessId);
+    fn unregister(&self, _poller: &polling::Poller);
+}
+
+impl SourceIo for Source {
+    fn register(&self, _poller: &polling::Poller, _id: ProcessId) {
         match *self {}
     }
 
-    pub fn unregister(&self, _poller: &polling::Poller) {
+    fn unregister(&self, _poller: &polling::Poller) {
         match *self {}
     }
 }

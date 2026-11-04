@@ -33,15 +33,20 @@ pub fn open(pid: u32) -> Option<Source> {
     })
 }
 
-impl Source {
-    pub fn register(&self, poller: &polling::Poller, id: ProcessId) {
+pub(crate) trait SourceIo {
+    fn register(&self, poller: &polling::Poller, id: ProcessId);
+    fn unregister(&self, poller: &polling::Poller);
+}
+
+impl SourceIo for Source {
+    fn register(&self, poller: &polling::Poller, id: ProcessId) {
         // Reuse the ProcessManager registration policy (level-triggered
         // readable, keyed by process id) so pidfd sources and process-output
         // sources are registered identically.
         let _ = ProcessManager::register_readable_source(poller, &self.pidfd, id);
     }
 
-    pub fn unregister(&self, poller: &polling::Poller) {
+    fn unregister(&self, poller: &polling::Poller) {
         let _ = poller.delete(&self.pidfd);
     }
 }

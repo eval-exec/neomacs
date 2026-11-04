@@ -172,6 +172,7 @@
 //! skipped by an `if` inside the loop -- it cannot be built, so it cannot be
 //! in the population.
 
+use super::reap::{ChildOwnershipIo, ReapableChildIo};
 use super::{
     Process, ProcessId, ProcessManager, ProcessStatusSymbol, Value, process_effective_status,
     process_public_status_symbol,

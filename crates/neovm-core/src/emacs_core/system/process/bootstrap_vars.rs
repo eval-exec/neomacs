@@ -3,6 +3,8 @@
 //! Moved out of `mod.rs` unchanged; a child module so it keeps the
 //! parent's view of its private items (`use super::*`).
 
+use super::reap::ChildOwnershipIo;
+use super::reap::ReapableChildIo;
 use super::*;
 
 pub fn register_bootstrap_vars(obarray: &mut super::super::symbol::Obarray) {

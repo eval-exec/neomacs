@@ -51,13 +51,41 @@ pub fn open(path: &OsStr) -> io::Result<Device> {
     Ok(Device { fd })
 }
 
-impl Device {
+pub(crate) trait DeviceIo {
     /// GNU's opening of `serial_configure`: `tcgetattr`, then `cfmakeraw`, then
     /// `CLOCAL` and `CREAD` (src/sysdep.c:3164-3172).
     ///
     /// The three are one step because GNU makes them one: there is no point at
     /// which the caller can see a read-but-not-yet-raw attribute set.
-    pub fn read_attributes(&self) -> Result<Attributes, i32> {
+    fn read_attributes(&self) -> Result<Attributes, i32>;
+    /// GNU `tcsetattr (p->outfd, TCSANOW, &attr)`, src/sysdep.c:3303.
+    fn write_attributes(&self, attributes: &Attributes) -> Result<(), i32>;
+    fn register_readable(
+        &self,
+        poller: &polling::Poller,
+        id: ProcessId,
+    ) -> Result<(), String>;
+    fn modify_interest(
+        &self,
+        poller: &polling::Poller,
+        event: polling::Event,
+    ) -> Result<(), String>;
+    fn unregister(&self, poller: &polling::Poller);
+    /// `read(2)`, retrying on `EINTR` as std's `Read` implementations do --
+    /// GNU reads a serial process through `emacs_read`, whose whole reason for
+    /// existing is that retry (src/sysdep.c `emacs_read`).
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize>;
+    /// `write(2)`, with the same `EINTR` retry (GNU's `emacs_write`).
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize>;
+}
+
+impl DeviceIo for Device {
+    /// GNU's opening of `serial_configure`: `tcgetattr`, then `cfmakeraw`, then
+    /// `CLOCAL` and `CREAD` (src/sysdep.c:3164-3172).
+    ///
+    /// The three are one step because GNU makes them one: there is no point at
+    /// which the caller can see a read-but-not-yet-raw attribute set.
+    fn read_attributes(&self) -> Result<Attributes, i32> {
         let mut attributes = std::mem::MaybeUninit::<libc::termios>::uninit();
         // SAFETY: `tcgetattr` initialises the whole struct on success.
         let mut attributes = unsafe {
@@ -73,7 +101,7 @@ impl Device {
     }
 
     /// GNU `tcsetattr (p->outfd, TCSANOW, &attr)`, src/sysdep.c:3303.
-    pub fn write_attributes(&self, attributes: &Attributes) -> Result<(), i32> {
+    fn write_attributes(&self, attributes: &Attributes) -> Result<(), i32> {
         // SAFETY: `tcsetattr` only reads through the provided pointer.
         let result =
             unsafe { libc::tcsetattr(self.fd.as_raw_fd(), libc::TCSANOW, &raw const attributes.0) };
@@ -83,7 +111,7 @@ impl Device {
         Ok(())
     }
 
-    pub fn register_readable(
+    fn register_readable(
         &self,
         poller: &polling::Poller,
         id: ProcessId,
@@ -91,7 +119,7 @@ impl Device {
         ProcessManager::register_readable_source(poller, &self.fd, id)
     }
 
-    pub fn modify_interest(
+    fn modify_interest(
         &self,
         poller: &polling::Poller,
         event: polling::Event,
@@ -99,14 +127,14 @@ impl Device {
         ProcessManager::modify_poll_source(poller, &self.fd, event)
     }
 
-    pub fn unregister(&self, poller: &polling::Poller) {
+    fn unregister(&self, poller: &polling::Poller) {
         let _ = poller.delete(&self.fd);
     }
 
     /// `read(2)`, retrying on `EINTR` as std's `Read` implementations do --
     /// GNU reads a serial process through `emacs_read`, whose whole reason for
     /// existing is that retry (src/sysdep.c `emacs_read`).
-    pub fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
         loop {
             // SAFETY: `read` writes at most `buffer.len()` bytes through the
             // pointer, and the descriptor is owned by `self`.
@@ -130,7 +158,7 @@ impl Device {
     }
 
     /// `write(2)`, with the same `EINTR` retry (GNU's `emacs_write`).
-    pub fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
         loop {
             // SAFETY: `write` reads at most `buffer.len()` bytes through the
             // pointer, and the descriptor is owned by `self`.

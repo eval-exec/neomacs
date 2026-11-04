@@ -65,6 +65,7 @@ pub(crate) mod pty_output;
 /// GNU `status_notify`'s "retire, then run the sentinel" ordering, as a type.
 /// See `process/status_notify.rs`.
 mod status_notify;
+use reap::ChildOwnershipIo;
 use status_notify::ProcessStatusNotification;
 
 /// GNU `handle_child_signal`'s ASYNCHRONOUS child-status recording
@@ -214,8 +215,30 @@ impl ProcessInputEndpoint {
     }
 }
 
-impl NetworkSocket {
-    pub(crate) fn kind_name(&self) -> &'static str {
+pub(crate) trait NetworkSocketIo {
+    fn kind_name(&self) -> &'static str;
+    fn register_readable(&self, poller: &polling::Poller, id: ProcessId) -> Result<(), String>;
+    fn register_writable(&self, poller: &polling::Poller, id: ProcessId) -> Result<(), String>;
+    fn unregister_readable(&self, poller: &polling::Poller);
+    fn read_stream_output(&mut self, buf: &mut [u8]) -> Option<std::io::Result<usize>>;
+    fn write_input_once(
+        &mut self,
+        bytes: &[u8],
+        datagram_addr: Option<SocketAddr>,
+        #[cfg(unix)] datagram_unix_path: Option<std::path::PathBuf>,
+    ) -> Option<std::io::Result<usize>>;
+    fn modify_interest(
+        &self,
+        poller: &polling::Poller,
+        id: ProcessId,
+        event: polling::Event,
+    ) -> Result<(), String>;
+    fn shutdown_write(&self) -> Option<std::io::Result<()>>;
+    fn take_pending_connect_error(&self) -> Option<std::io::Result<Option<std::io::Error>>>;
+}
+
+impl NetworkSocketIo for NetworkSocket {
+    fn kind_name(&self) -> &'static str {
         match self {
             Self::TcpStream(_) => "tcp-stream",
             Self::TcpListener(_) => "tcp-listener",

@@ -39,6 +39,8 @@ use crate::emacs_core::error::{EvalResult, Flow, LispCondition, signal};
 use crate::emacs_core::eval::data::process_spawn::SpawnedChild;
 use crate::emacs_core::eval::data::process_tls::TlsStream;
 use crate::emacs_core::intern::resolve_sym;
+use crate::emacs_core::process::NetworkSocketIo;
+use crate::emacs_core::process::reap::ChildOwnershipIo;
 #[cfg(test)]
 use crate::emacs_core::process::types::NativeConnectObservationSlot;
 use crate::host_effect::wake::{

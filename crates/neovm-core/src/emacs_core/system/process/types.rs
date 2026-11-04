@@ -11,6 +11,10 @@ use crate::host_effect::wake::{
 };
 use crate::tagged::value::SymbolMode;
 
+use super::NetworkSocketIo;
+use super::reap::{ChildOwnershipIo, ReapableChildIo};
+use super::sys::ChildStatusSourceIo;
+use super::sys::serial::SerialPortIo;
 /// Unique identifier for a process.
 pub use crate::heap_types::ProcessId;
 

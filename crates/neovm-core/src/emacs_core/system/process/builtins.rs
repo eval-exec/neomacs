@@ -3,6 +3,7 @@
 //! Moved out of `mod.rs` unchanged; a child module so it keeps the
 //! parent's view of its private items (`use super::*`).
 
+use super::reap::ChildOwnershipIo;
 use super::*;
 use crate::emacs_core::eval::data::process_state::StatusChangeSite;
 use crate::emacs_core::process::SystemProcessExt;

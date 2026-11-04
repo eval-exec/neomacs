@@ -31,16 +31,34 @@ pub fn open(_path: &OsStr) -> io::Result<Device> {
     Err(io::Error::from(io::ErrorKind::Unsupported))
 }
 
-impl Device {
-    pub fn read_attributes(&self) -> Result<Attributes, i32> {
+pub(crate) trait DeviceIo {
+    fn read_attributes(&self) -> Result<Attributes, i32>;
+    fn write_attributes(&self, _attributes: &Attributes) -> Result<(), i32>;
+    fn register_readable(
+        &self,
+        _poller: &polling::Poller,
+        _id: ProcessId,
+    ) -> Result<(), String>;
+    fn modify_interest(
+        &self,
+        _poller: &polling::Poller,
+        _event: polling::Event,
+    ) -> Result<(), String>;
+    fn unregister(&self, _poller: &polling::Poller);
+    fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize>;
+    fn write(&mut self, _buffer: &[u8]) -> io::Result<usize>;
+}
+
+impl DeviceIo for Device {
+    fn read_attributes(&self) -> Result<Attributes, i32> {
         match *self {}
     }
 
-    pub fn write_attributes(&self, _attributes: &Attributes) -> Result<(), i32> {
+    fn write_attributes(&self, _attributes: &Attributes) -> Result<(), i32> {
         match *self {}
     }
 
-    pub fn register_readable(
+    fn register_readable(
         &self,
         _poller: &polling::Poller,
         _id: ProcessId,
@@ -48,7 +66,7 @@ impl Device {
         match *self {}
     }
 
-    pub fn modify_interest(
+    fn modify_interest(
         &self,
         _poller: &polling::Poller,
         _event: polling::Event,
@@ -56,15 +74,15 @@ impl Device {
         match *self {}
     }
 
-    pub fn unregister(&self, _poller: &polling::Poller) {
+    fn unregister(&self, _poller: &polling::Poller) {
         match *self {}
     }
 
-    pub fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
+    fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
         match *self {}
     }
 
-    pub fn write(&mut self, _buffer: &[u8]) -> io::Result<usize> {
+    fn write(&mut self, _buffer: &[u8]) -> io::Result<usize> {
         match *self {}
     }
 }
