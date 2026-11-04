@@ -22,7 +22,8 @@
 //! assertion: every call site runs only after construction/dump, so a missing
 //! descriptor means the construction seam itself is broken.
 
-use super::data::window_state::{FrameManager, WindowTree};
+use super::data::fontset_state::FontsetRegistrySnapshot;
+use super::data::window_state::{Frame, FrameManager, WindowTree};
 use super::*;
 use crate::emacs_core::builtins::WindowConfigurationRestoreOptions;
 use crate::emacs_core::reader::{MinibufferBufferUnwind, MinibufferSessionUnwind};
@@ -140,6 +141,11 @@ pub struct BootHooks {
     shell_file_name_install_dump_default: fn(&mut Context),
     seed_batch_startup_frame: fn(&mut Context) -> FrameId,
     register_core_bootstrap_vars: fn(&mut Obarray),
+    init_frame_lisp_faces: fn(&mut Frame),
+    prepare_runtime_faces: fn(&mut Context, FrameId) -> bool,
+    sync_runtime_face_table: fn(&mut Context, FrameId),
+    ensure_lisp_face_id_property: fn(&mut Context, &str) -> Result<(), Flow>,
+    clear_font_cache_state: fn(),
 }
 
 impl BootHooks {
@@ -158,6 +164,11 @@ impl BootHooks {
         shell_file_name_install_dump_default: fn(&mut Context),
         seed_batch_startup_frame: fn(&mut Context) -> FrameId,
         register_core_bootstrap_vars: fn(&mut Obarray),
+        init_frame_lisp_faces: fn(&mut Frame),
+        prepare_runtime_faces: fn(&mut Context, FrameId) -> bool,
+        sync_runtime_face_table: fn(&mut Context, FrameId),
+        ensure_lisp_face_id_property: fn(&mut Context, &str) -> Result<(), Flow>,
+        clear_font_cache_state: fn(),
     ) -> Self {
         Self {
             ensure_startup_compat_variables,
@@ -172,6 +183,11 @@ impl BootHooks {
             shell_file_name_install_dump_default,
             seed_batch_startup_frame,
             register_core_bootstrap_vars,
+            init_frame_lisp_faces,
+            prepare_runtime_faces,
+            sync_runtime_face_table,
+            ensure_lisp_face_id_property,
+            clear_font_cache_state,
         }
     }
 }
@@ -216,6 +232,9 @@ impl FileIoHooks {
 pub struct TerminalHooks {
     handle_value: fn() -> Value,
     delete_noelisp: fn(&mut Context, u64) -> EvalResult,
+    frame_terminal: fn(&mut Context, Vec<Value>) -> EvalResult,
+    print_handle: fn(&Value) -> Option<String>,
+    configure_window_system_runtime: fn(neomacs_display_protocol::GraphicalDisplayIdentity),
 }
 
 impl TerminalHooks {
@@ -223,10 +242,16 @@ impl TerminalHooks {
     pub const fn new(
         handle_value: fn() -> Value,
         delete_noelisp: fn(&mut Context, u64) -> EvalResult,
+        frame_terminal: fn(&mut Context, Vec<Value>) -> EvalResult,
+        print_handle: fn(&Value) -> Option<String>,
+        configure_window_system_runtime: fn(neomacs_display_protocol::GraphicalDisplayIdentity),
     ) -> Self {
         Self {
             handle_value,
             delete_noelisp,
+            frame_terminal,
+            print_handle,
+            configure_window_system_runtime,
         }
     }
 }
@@ -304,6 +329,55 @@ impl WindowTreeHooks {
     }
 }
 
+/// Fontset-registry state and snapshot operations (registry stays display-side).
+#[derive(Clone, Copy)]
+pub struct FontsetHooks {
+    alias_alist_startup_value: fn() -> Value,
+    list_value: fn() -> Value,
+    reset: fn(),
+    snapshot: fn() -> FontsetRegistrySnapshot,
+    restore: fn(FontsetRegistrySnapshot),
+}
+
+impl FontsetHooks {
+    /// Build the fontset-registry group.
+    pub const fn new(
+        alias_alist_startup_value: fn() -> Value,
+        list_value: fn() -> Value,
+        reset: fn(),
+        snapshot: fn() -> FontsetRegistrySnapshot,
+        restore: fn(FontsetRegistrySnapshot),
+    ) -> Self {
+        Self {
+            alias_alist_startup_value,
+            list_value,
+            reset,
+            snapshot,
+            restore,
+        }
+    }
+
+    fn alias_alist_startup_value(&self) -> fn() -> Value {
+        self.alias_alist_startup_value
+    }
+
+    fn list_value(&self) -> fn() -> Value {
+        self.list_value
+    }
+
+    fn reset(&self) -> fn() {
+        self.reset
+    }
+
+    fn snapshot(&self) -> fn() -> FontsetRegistrySnapshot {
+        self.snapshot
+    }
+
+    fn restore(&self) -> fn(FontsetRegistrySnapshot) {
+        self.restore
+    }
+}
+
 /// The cold lifecycle descriptor core publishes at the construction seams.
 ///
 /// Besides the per-module lifecycle groups this descriptor also carries the
@@ -322,6 +396,7 @@ pub struct LifecycleHooks {
     boot: BootHooks,
     fileio: FileIoHooks,
     terminal: TerminalHooks,
+    fontset: FontsetHooks,
     command: CommandSeamHooks,
     window_tree: WindowTreeHooks,
     timefns_reset: fn(),
@@ -339,6 +414,7 @@ impl LifecycleHooks {
         boot: BootHooks,
         fileio: FileIoHooks,
         terminal: TerminalHooks,
+        fontset: FontsetHooks,
         command: CommandSeamHooks,
         window_tree: WindowTreeHooks,
         timefns_reset: fn(),
@@ -352,6 +428,7 @@ impl LifecycleHooks {
             boot,
             fileio,
             terminal,
+            fontset,
             command,
             window_tree,
             timefns_reset,
@@ -392,6 +469,11 @@ impl LifecycleHooks {
     /// Terminal-registry handle operations.
     pub fn terminal(&self) -> TerminalHooks {
         self.terminal
+    }
+
+    /// Fontset-registry state and snapshot operations.
+    pub fn fontset(&self) -> FontsetHooks {
+        self.fontset
     }
 
     /// Command-layer entry seams.
@@ -500,6 +582,20 @@ impl TerminalHooks {
 
     fn delete_noelisp(&self) -> fn(&mut Context, u64) -> EvalResult {
         self.delete_noelisp
+    }
+
+    fn frame_terminal(&self) -> fn(&mut Context, Vec<Value>) -> EvalResult {
+        self.frame_terminal
+    }
+
+    fn print_handle(&self) -> fn(&Value) -> Option<String> {
+        self.print_handle
+    }
+
+    fn configure_window_system_runtime(
+        &self,
+    ) -> fn(neomacs_display_protocol::GraphicalDisplayIdentity) {
+        self.configure_window_system_runtime
     }
 }
 
@@ -886,4 +982,73 @@ pub fn window_resize_apply(
         char_width,
         char_height,
     )
+}
+
+/// The frame-init face hook used by the runtime FrameManager.
+pub fn frame_init_hook() -> fn(&mut Frame) {
+    lifecycle_hooks().boot.init_frame_lisp_faces
+}
+
+/// Realize runtime faces for one frame, if the lifecycle is enabled.
+pub fn prepare_runtime_faces(ctx: &mut Context, frame_id: FrameId) -> bool {
+    (lifecycle_hooks().boot.prepare_runtime_faces)(ctx, frame_id)
+}
+
+/// Synchronize the runtime face table from the frame's Lisp faces.
+pub fn sync_runtime_face_table(ctx: &mut Context, frame_id: FrameId) {
+    (lifecycle_hooks().boot.sync_runtime_face_table)(ctx, frame_id)
+}
+
+/// Ensure a face's numeric id is stamped on its symbol.
+pub fn ensure_lisp_face_id_property(ctx: &mut Context, face_name: &str) -> Result<(), Flow> {
+    (lifecycle_hooks().boot.ensure_lisp_face_id_property)(ctx, face_name)
+}
+
+/// Clear the display font cache at pdump reconstruct.
+pub fn clear_font_cache_state() {
+    (lifecycle_hooks().boot.clear_font_cache_state)()
+}
+
+/// GNU `Fframe_terminal (selected_frame)` for the KBOARD forwarding arm.
+pub fn frame_terminal_value(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+    (lifecycle_hooks().terminal().frame_terminal())(ctx, args)
+}
+
+/// Format a terminal handle for the printer.
+pub fn print_terminal_handle(value: &Value) -> Option<String> {
+    (lifecycle_hooks().terminal().print_handle())(value)
+}
+
+/// Configure the terminal runtime for a graphical display identity.
+pub fn configure_window_system_runtime(
+    identity: neomacs_display_protocol::GraphicalDisplayIdentity,
+) {
+    (lifecycle_hooks()
+        .terminal()
+        .configure_window_system_runtime())(identity)
+}
+
+/// The startup `fontset-alias-alist` seed value.
+pub fn fontset_alias_alist_startup_value() -> Value {
+    (lifecycle_hooks().fontset().alias_alist_startup_value())()
+}
+
+/// The current `fontset-list` value.
+pub fn fontset_list_value() -> Value {
+    (lifecycle_hooks().fontset().list_value())()
+}
+
+/// Reset the fontset registry at carrier park.
+pub fn reset_fontset_registry() {
+    (lifecycle_hooks().fontset().reset())()
+}
+
+/// Snapshot the display fontset registry for pdump.
+pub fn fontset_registry_snapshot() -> FontsetRegistrySnapshot {
+    (lifecycle_hooks().fontset().snapshot())()
+}
+
+/// Restore the display fontset registry from a pdump snapshot.
+pub fn restore_fontset_registry(snapshot: FontsetRegistrySnapshot) {
+    (lifecycle_hooks().fontset().restore())(snapshot)
 }

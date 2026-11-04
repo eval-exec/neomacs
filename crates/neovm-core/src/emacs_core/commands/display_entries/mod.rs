@@ -6,9 +6,11 @@
 //! evaluator context is reached through the core facade.
 
 use crate::emacs_core::builtins::expect_string_lossy;
+use crate::emacs_core::builtins::strings::builtin_string_to_number;
 use crate::emacs_core::builtins::{NeomacsMonitorInfo, neomacs_monitor_info_snapshot};
 use crate::emacs_core::display;
 use crate::emacs_core::error::signal;
+use crate::emacs_core::intern::resolve_sym;
 use crate::tagged::SymbolMode;
 use crate::window::DisplayFrameExt;
 use crate::window::DisplayFrameManagerExt;
@@ -737,4 +739,139 @@ pub(crate) fn builtin_frame_root_frame(
     )?;
     let root = eval.frames.root_frame_id(fid).unwrap_or(fid);
     Ok(Value::make_frame(root.0))
+}
+
+// --- fontset and face-resource entries moved from the evaluator builtins ---
+
+fn face_boolean_x_resource_value(
+    value: &str,
+    signal_on_invalid: bool,
+) -> Result<Option<Value>, Flow> {
+    if value.eq_ignore_ascii_case("on") || value.eq_ignore_ascii_case("true") {
+        Ok(Some(Value::T))
+    } else if value.eq_ignore_ascii_case("off") || value.eq_ignore_ascii_case("false") {
+        Ok(Some(Value::NIL))
+    } else if value.eq_ignore_ascii_case("unspecified") {
+        Ok(Some(Value::symbol("unspecified")))
+    } else if signal_on_invalid {
+        Err(signal(
+            "error",
+            vec![
+                Value::string("Invalid face attribute value from X resource"),
+                Value::string(value),
+            ],
+        ))
+    } else {
+        Ok(None)
+    }
+}
+
+pub(crate) fn builtin_internal_set_lisp_face_attribute_from_resource(
+    eval: &mut crate::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args_range(
+        "internal-set-lisp-face-attribute-from-resource",
+        &args,
+        3,
+        4,
+    )?;
+    if symbol_id(&args[0], eval.symbol_mode()).is_none() {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("symbolp"), args[0]],
+        ));
+    }
+    let resource_value = expect_string_lossy(&args[2])?;
+
+    let Some(attr_id) = symbol_id(&args[1], eval.symbol_mode()) else {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("symbolp"), args[1]],
+        ));
+    };
+    let attr_name = resolve_sym(attr_id);
+
+    let converted_value = if resource_value.eq_ignore_ascii_case("unspecified") {
+        Value::symbol("unspecified")
+    } else {
+        match attr_name {
+            ":height" => {
+                let number =
+                    builtin_string_to_number(eval, Value::string(&resource_value), Value::NIL)?;
+                match number.kind() {
+                    ValueKind::Fixnum(height) if height > 0 => number,
+                    _ => {
+                        return Err(signal(
+                            "error",
+                            vec![
+                                Value::string("Invalid face height from X resource"),
+                                Value::string(resource_value),
+                            ],
+                        ));
+                    }
+                }
+            }
+            ":bold" | ":italic" => {
+                face_boolean_x_resource_value(&resource_value, true)?.expect("signal=true")
+            }
+            ":weight" | ":slant" | ":width" => Value::symbol(&resource_value),
+            ":inverse-video" | ":extend" => {
+                face_boolean_x_resource_value(&resource_value, true)?.expect("signal=true")
+            }
+            ":underline" | ":overline" | ":strike-through" => {
+                face_boolean_x_resource_value(&resource_value, false)?
+                    .unwrap_or_else(|| Value::string(&resource_value))
+            }
+            ":box" | ":inherit" => {
+                let read_result = crate::emacs_core::reader::builtin_read_from_string(
+                    eval,
+                    vec![Value::string(&resource_value)],
+                )?;
+                read_result.cons_car()
+            }
+            _ => Value::string(&resource_value),
+        }
+    };
+
+    let mut setter_args = vec![args[0], args[1], converted_value];
+    if let Some(frame) = args.get(3) {
+        setter_args.push(*frame);
+    }
+    crate::emacs_core::xfaces::builtin_internal_set_lisp_face_attribute(eval, setter_args)
+}
+
+pub(crate) fn builtin_new_fontset(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    expect_args("new-fontset", &args, 2)?;
+    let name = expect_string_lossy(&args[0])?;
+    let char_script_table = eval.variable_value_by_name("char-script-table");
+    let charset_script_alist = eval.variable_value_by_name("charset-script-alist");
+    let font_encoding_alist = eval.variable_value_by_name("font-encoding-alist");
+    let registered = crate::emacs_core::fontset::new_fontset(
+        &name,
+        &args[1],
+        char_script_table.as_ref(),
+        charset_script_alist.as_ref(),
+        font_encoding_alist.as_ref(),
+    )?;
+    Ok(Value::string(registered))
+}
+
+pub(crate) fn builtin_set_fontset_font(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args_range("set-fontset-font", &args, 3, 5)?;
+    let char_script_table = eval.variable_value_by_name("char-script-table");
+    let charset_script_alist = eval.variable_value_by_name("charset-script-alist");
+    let font_encoding_alist = eval.variable_value_by_name("font-encoding-alist");
+    crate::emacs_core::fontset::set_fontset_font(
+        &args[0],
+        &args[1],
+        &args[2],
+        args.get(4),
+        char_script_table.as_ref(),
+        charset_script_alist.as_ref(),
+        font_encoding_alist.as_ref(),
+    )
 }

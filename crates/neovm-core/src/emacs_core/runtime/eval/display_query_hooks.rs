@@ -14,7 +14,9 @@ use super::*;
 use neovm_value::{HookInstallError, HookInstallStatus};
 use std::sync::OnceLock;
 
-use super::data::window_state::{Frame, FrameManager, WindowDomain};
+use super::data::window_state::{
+    Frame, FrameManager, PresentationGeometry, PresentationId, WindowDomain, WindowRegions,
+};
 use crate::buffer::{BufferId, BufferManager};
 use crate::emacs_core::display_metrics::{
     InvisibleRunContext, LineWrap, MeasuredMotion, MotionEngine, MotionRequest, WindowId,
@@ -42,6 +44,9 @@ pub type UpdateAutoHscroll = fn(&mut Context);
 pub type FontsetGeneration = fn() -> u64;
 /// GNU's frame-domain window lookup (live/valid/any).
 pub type WindowDomainFrameOf = fn(WindowDomain, &FrameManager, WindowId) -> Option<FrameId>;
+/// Presented regions for one window in an active publication.
+pub type WindowRegionsAt =
+    fn(&PresentationGeometry, PresentationId, WindowId) -> Option<WindowRegions>;
 /// Resolve measured display-row motion.
 pub type MotionResolve = fn(&mut Context, MotionRequest) -> Result<Option<MeasuredMotion>, Flow>;
 /// GNU `init_iterator`'s line-wrap decision for one window/buffer pair.
@@ -71,6 +76,7 @@ pub struct DisplayWindowHooks {
     update_auto_hscroll: UpdateAutoHscroll,
     fontset_generation: FontsetGeneration,
     window_domain_frame_of: WindowDomainFrameOf,
+    window_regions_at: WindowRegionsAt,
     motion_resolve: MotionResolve,
     window_line_wrap: WindowLineWrapQuery,
     window_body_width: WindowBodyWidthQuery,
@@ -90,6 +96,7 @@ impl DisplayWindowHooks {
         update_auto_hscroll: UpdateAutoHscroll,
         fontset_generation: FontsetGeneration,
         window_domain_frame_of: WindowDomainFrameOf,
+        window_regions_at: WindowRegionsAt,
         motion_resolve: MotionResolve,
         window_line_wrap: WindowLineWrapQuery,
         window_body_width: WindowBodyWidthQuery,
@@ -105,6 +112,7 @@ impl DisplayWindowHooks {
             update_auto_hscroll,
             fontset_generation,
             window_domain_frame_of,
+            window_regions_at,
             motion_resolve,
             window_line_wrap,
             window_body_width,
@@ -140,6 +148,10 @@ impl DisplayWindowHooks {
 
     fn window_domain_frame_of(&self) -> WindowDomainFrameOf {
         self.window_domain_frame_of
+    }
+
+    fn window_regions_at(&self) -> WindowRegionsAt {
+        self.window_regions_at
     }
 
     fn motion_resolve(&self) -> MotionResolve {
@@ -373,4 +385,13 @@ pub fn invisible_source_run_end(
     context: InvisibleRunContext,
 ) -> Result<Option<usize>, Flow> {
     (installed_window_hooks().invisible_source_run_end())(eval, buffer, byte_pos, context)
+}
+
+/// Presented regions for one window in an active publication.
+pub fn window_regions_at(
+    geometry: &PresentationGeometry,
+    presentation: PresentationId,
+    window: WindowId,
+) -> Option<WindowRegions> {
+    (installed_window_hooks().window_regions_at())(geometry, presentation, window)
 }

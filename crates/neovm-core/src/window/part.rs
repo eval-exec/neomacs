@@ -49,28 +49,7 @@ pub use crate::emacs_core::eval::data::window_state::{
 /// tab bar replace the window with the frame entirely in GNU's posn
 /// (src/keyboard.c:5799-5852), so they have no `WindowPart` to name.
 #[must_use]
-pub fn window_part_of_region(
-    kind: neomacs_display_protocol::PresentedRegionKind,
-) -> Option<WindowPart> {
-    use neomacs_display_protocol::PresentedRegionKind as Kind;
-    match kind {
-        Kind::TextBody => Some(WindowPart::Text),
-        Kind::LeftMargin => Some(WindowPart::LeftMargin),
-        Kind::RightMargin => Some(WindowPart::RightMargin),
-        Kind::LeftFringe => Some(WindowPart::LeftFringe),
-        Kind::RightFringe => Some(WindowPart::RightFringe),
-        // GNU has one vertical scroll bar part; which side it is drawn on is a
-        // frame parameter, not a different posn.
-        Kind::LeftScrollBar | Kind::RightScrollBar => Some(WindowPart::VerticalScrollBar),
-        Kind::HorizontalScrollBar => Some(WindowPart::HorizontalScrollBar),
-        Kind::TabLine => Some(WindowPart::TabLine),
-        Kind::HeaderLine => Some(WindowPart::HeaderLine),
-        Kind::ModeLine => Some(WindowPart::ModeLine),
-        Kind::RightDivider => Some(WindowPart::RightDivider),
-        Kind::BottomDivider => Some(WindowPart::BottomDivider),
-        Kind::MenuBar | Kind::ToolBar | Kind::CompactBar | Kind::TabBar => None,
-    }
-}
+pub use crate::emacs_core::eval::data::posn_object_extent::window_part_of_region;
 
 #[cfg(test)]
 #[path = "part/tests/part_test.rs"]

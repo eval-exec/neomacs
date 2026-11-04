@@ -3077,7 +3077,7 @@ fn print_special_handle(
     value: &Value,
     buffers: Option<&crate::buffer::BufferManager>,
 ) -> Option<String> {
-    super::terminal::pure::print_terminal_handle(value)
+    crate::emacs_core::eval::lifecycle::print_terminal_handle(value)
         .or_else(|| format_marker_handle(value, buffers))
         .or_else(|| format_overlay_handle(value, buffers))
 }

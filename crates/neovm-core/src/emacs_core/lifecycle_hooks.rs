@@ -7,8 +7,8 @@
 //! `Context::new_inner` / `Context::from_dump`.
 
 use crate::emacs_core::eval::lifecycle::{
-    BootHooks, CommandSeamHooks, DbusbindHooks, DynamicModuleHooks, FileIoHooks, LifecycleHooks,
-    TerminalHooks, WindowTreeHooks, WorldStateHooks,
+    BootHooks, CommandSeamHooks, DbusbindHooks, DynamicModuleHooks, FileIoHooks, FontsetHooks,
+    LifecycleHooks, TerminalHooks, WindowTreeHooks, WorldStateHooks,
 };
 use neovm_value::display_vocab::FrameId;
 
@@ -55,6 +55,12 @@ fn char_property_window_lookup(
     }
 }
 
+/// Configure the terminal runtime for a graphical display identity.
+fn configure_window_system_runtime(identity: neomacs_display_protocol::GraphicalDisplayIdentity) {
+    use crate::emacs_core::terminal::pure::{TerminalRuntimeConfig, configure_terminal_runtime};
+    configure_terminal_runtime(TerminalRuntimeConfig::window_system(identity));
+}
+
 static CANONICAL_LIFECYCLE_HOOKS: LifecycleHooks = LifecycleHooks::new(
     DynamicModuleHooks::new(
         crate::emacs_core::dynamic_module::reset_carrier_tls,
@@ -95,6 +101,11 @@ static CANONICAL_LIFECYCLE_HOOKS: LifecycleHooks = LifecycleHooks::new(
         crate::emacs_core::shell_file_name::install_dump_default,
         seed_batch_startup_frame,
         register_core_bootstrap_vars,
+        crate::emacs_core::xfaces::init_frame_lisp_faces,
+        crate::emacs_core::xfaces::realization::prepare_runtime_faces,
+        crate::emacs_core::xfaces::sync_runtime_face_table_from_frame_lisp_faces,
+        crate::emacs_core::xfaces::ensure_lisp_face_id_property,
+        crate::emacs_core::xfaces::clear_font_cache_state,
     ),
     FileIoHooks::new(
         crate::emacs_core::fileio::builtin_expand_file_name,
@@ -106,6 +117,16 @@ static CANONICAL_LIFECYCLE_HOOKS: LifecycleHooks = LifecycleHooks::new(
     TerminalHooks::new(
         crate::emacs_core::terminal::pure::terminal_handle_value,
         crate::emacs_core::terminal::pure::delete_terminal_noelisp_owned,
+        crate::emacs_core::terminal::pure::builtin_frame_terminal,
+        crate::emacs_core::terminal::pure::print_terminal_handle,
+        configure_window_system_runtime,
+    ),
+    FontsetHooks::new(
+        crate::emacs_core::fontset::fontset_alias_alist_startup_value,
+        crate::emacs_core::fontset::fontset_list_value,
+        crate::emacs_core::fontset::reset_fontset_registry,
+        crate::emacs_core::fontset::snapshot_fontset_registry,
+        crate::emacs_core::fontset::restore_fontset_registry,
     ),
     CommandSeamHooks::new(
         crate::emacs_core::window_hooks::builtin_current_window_configuration,

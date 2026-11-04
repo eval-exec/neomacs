@@ -1059,7 +1059,7 @@ pub(crate) fn builtin_fontset_info(args: Vec<Value>) -> EvalResult {
 
 pub(crate) fn builtin_fontset_list(args: Vec<Value>) -> EvalResult {
     expect_args("fontset-list", &args, 0)?;
-    Ok(super::symbols::fontset_list_value())
+    Ok(crate::emacs_core::eval::lifecycle::fontset_list_value())
 }
 
 fn expect_window_live_or_nil(value: &Value) -> Result<(), Flow> {

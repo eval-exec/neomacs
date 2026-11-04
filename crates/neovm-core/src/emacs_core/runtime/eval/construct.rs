@@ -516,7 +516,7 @@ impl Context {
         obarray.seed_value("load-history", Value::NIL);
         obarray.seed_value(
             "fontset-alias-alist",
-            super::super::builtins::symbols::fontset_alias_alist_startup_value(),
+            super::lifecycle::fontset_alias_alist_startup_value(),
         );
         // GNU Emacs with module support includes the module suffixes before
         // compiled and source Lisp suffixes, secondary suffix first -- on darwin

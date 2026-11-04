@@ -31,10 +31,7 @@ impl Context {
         identity: neomacs_display_protocol::GraphicalDisplayIdentity,
     ) {
         use crate::emacs_core::eval::protocol::tty_host::TERMINAL_ID;
-        use crate::emacs_core::terminal::pure::{
-            TerminalRuntimeConfig, configure_terminal_runtime,
-        };
-        configure_terminal_runtime(TerminalRuntimeConfig::window_system(identity));
+        crate::emacs_core::eval::lifecycle::configure_window_system_runtime(identity);
         if let Some(forwarder) = self.window_system_keyboard_forwarder() {
             forwarder.forget_keyboard(TERMINAL_ID);
             forwarder.select_keyboard(

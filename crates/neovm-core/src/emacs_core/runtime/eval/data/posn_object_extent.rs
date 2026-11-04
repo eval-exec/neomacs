@@ -5,7 +5,7 @@
 //! | `NEOMACS_POSN_OBJECT_EXTENT` | `off` | `off`; `on`/`1`/`true`/`yes` | Resolve canonical/presented TTY TEXT object dimensions from retained current-matrix provenance; cold leaves may read accepted full-frame-width numeric partitions with proved reuse sources. Unsupported accepted horizontal/shifted rows are Undrawn; named areas retain baseline. |
 use neovm_value::display_vocab::FrameId;
 
-use super::window_state::{Frame, FrameManager, WindowDisplaySnapshot};
+use super::window_state::{Frame, FrameManager, WindowDisplaySnapshot, WindowPart};
 use neomacs_display_protocol::glyph_matrix::GlyphArea;
 pub use neomacs_display_protocol::posn_object_extent::PosnObjectExtent;
 use std::ffi::OsStr;
@@ -132,4 +132,27 @@ pub fn retained_posn_extent(
         .map_or(PosnObjectExtent::Undrawn, |matrix| {
             matrix.at(row, column, area)
         })
+}
+
+pub fn window_part_of_region(
+    kind: neomacs_display_protocol::PresentedRegionKind,
+) -> Option<WindowPart> {
+    use neomacs_display_protocol::PresentedRegionKind as Kind;
+    match kind {
+        Kind::TextBody => Some(WindowPart::Text),
+        Kind::LeftMargin => Some(WindowPart::LeftMargin),
+        Kind::RightMargin => Some(WindowPart::RightMargin),
+        Kind::LeftFringe => Some(WindowPart::LeftFringe),
+        Kind::RightFringe => Some(WindowPart::RightFringe),
+        // GNU has one vertical scroll bar part; which side it is drawn on is a
+        // frame parameter, not a different posn.
+        Kind::LeftScrollBar | Kind::RightScrollBar => Some(WindowPart::VerticalScrollBar),
+        Kind::HorizontalScrollBar => Some(WindowPart::HorizontalScrollBar),
+        Kind::TabLine => Some(WindowPart::TabLine),
+        Kind::HeaderLine => Some(WindowPart::HeaderLine),
+        Kind::ModeLine => Some(WindowPart::ModeLine),
+        Kind::RightDivider => Some(WindowPart::RightDivider),
+        Kind::BottomDivider => Some(WindowPart::BottomDivider),
+        Kind::MenuBar | Kind::ToolBar | Kind::CompactBar | Kind::TabBar => None,
+    }
 }

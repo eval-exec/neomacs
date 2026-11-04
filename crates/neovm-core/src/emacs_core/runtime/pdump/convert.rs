@@ -46,13 +46,12 @@ use crate::emacs_core::eval::data::face::{
     BoxBorder, BoxStyle, Color, FaceHeight, Underline, UnderlinePosition, UnderlineStyle,
 };
 use crate::emacs_core::eval::data::face::{Face, FaceDecoration, FaceTable};
+use crate::emacs_core::eval::data::fontset_state::{
+    FontDefinitionMetadata, FontRepertory, FontSpecEntry, FontsetDataSnapshot,
+    FontsetRangeEntrySnapshot, FontsetRegistrySnapshot, StoredFontSpec,
+};
 use crate::emacs_core::eval::interactive_registry::{InteractiveRegistry, InteractiveSpec};
 use crate::emacs_core::eval::subr_abi::SubrObj;
-use crate::emacs_core::fontset::{
-    FontDefinitionMetadata, FontRepertory, FontSpecEntry, FontsetDataSnapshot,
-    FontsetRangeEntrySnapshot, FontsetRegistrySnapshot, StoredFontSpec, restore_fontset_registry,
-    snapshot_fontset_registry,
-};
 use crate::emacs_core::intern::{self, NameId, SymId};
 use crate::emacs_core::mode::{
     CustomGroup as ModeCustomGroup, CustomType as ModeCustomType,
@@ -4473,7 +4472,7 @@ fn dump_font_spec_entry(entry: FontSpecEntry) -> DumpFontSpecEntry {
 }
 
 pub(crate) fn dump_fontset_registry() -> DumpFontsetRegistry {
-    let snapshot = snapshot_fontset_registry();
+    let snapshot = crate::emacs_core::eval::lifecycle::fontset_registry_snapshot();
     DumpFontsetRegistry {
         ordered_names_lisp: snapshot
             .ordered_names
@@ -6963,7 +6962,7 @@ pub(crate) fn load_fontset_registry(dfr: &DumpFontsetRegistry) {
         },
         generation: dfr.generation,
     };
-    restore_fontset_registry(snapshot);
+    crate::emacs_core::eval::lifecycle::restore_fontset_registry(snapshot);
 }
 
 fn load_color(c: &DumpColor) -> Color {

@@ -1046,7 +1046,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ctx.register_subr(
         crate::emacs_core::subr::world_subr!(SubrSpec::new(
             "new-fontset",
-            NativeFn::ContextVec(builtin_new_fontset),
+            NativeFn::ContextVec(crate::emacs_core::display_entries::builtin_new_fontset),
             SubrArity::new(2, Some(2)),
         ))
         .requires_eval_state(),
@@ -1054,7 +1054,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ctx.register_subr(
         crate::emacs_core::subr::world_subr!(SubrSpec::new(
             "set-fontset-font",
-            NativeFn::ContextVec(builtin_set_fontset_font),
+            NativeFn::ContextVec(crate::emacs_core::display_entries::builtin_set_fontset_font),
             SubrArity::new(3, Some(5)),
         ))
         .requires_eval_state(),
@@ -4780,7 +4780,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "internal-set-lisp-face-attribute-from-resource",
-        NativeFn::ContextVec(builtin_internal_set_lisp_face_attribute_from_resource),
+        NativeFn::ContextVec(crate::emacs_core::display_entries::builtin_internal_set_lisp_face_attribute_from_resource),
         SubrArity::new(3, Some(4)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(

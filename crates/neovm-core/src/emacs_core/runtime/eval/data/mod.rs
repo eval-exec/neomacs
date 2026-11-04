@@ -10,6 +10,7 @@ pub mod dynamic_module_registry;
 pub mod face;
 pub mod file_coding;
 pub mod file_name_expand;
+pub(crate) mod fontset_state;
 pub mod frame_alpha;
 pub mod layout_input;
 pub mod minibuffer;

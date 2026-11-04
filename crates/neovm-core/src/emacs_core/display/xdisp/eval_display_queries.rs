@@ -16,6 +16,19 @@ fn window_domain_frame_of(
     domain.frame_of(frames, window)
 }
 
+/// Presented regions for one window in an active publication.
+fn window_regions_at(
+    geometry: &crate::emacs_core::eval::data::window_state::PresentationGeometry,
+    presentation: crate::emacs_core::eval::data::window_state::PresentationId,
+    window: crate::emacs_core::display_metrics::WindowId,
+) -> Option<crate::emacs_core::eval::data::window_state::WindowRegions> {
+    use crate::window::geometry::{DisplayGeometryExt, WindowGeometryQuery};
+    geometry
+        .resolve(WindowGeometryQuery::new(presentation, window))
+        .ok()
+        .map(|view| view.regions())
+}
+
 static CANONICAL_WINDOW_HOOKS: DisplayWindowHooks = DisplayWindowHooks::new(
     crate::emacs_core::window_cmds::ensure_selected_frame_id_in_state,
     crate::emacs_core::window_cmds::remember_selected_window_point_in_state,
@@ -24,6 +37,7 @@ static CANONICAL_WINDOW_HOOKS: DisplayWindowHooks = DisplayWindowHooks::new(
     crate::emacs_core::hscroll::update_auto_hscroll_before_redisplay,
     crate::emacs_core::fontset::fontset_generation,
     window_domain_frame_of,
+    window_regions_at,
     crate::emacs_core::xdisp::motion::resolve,
     crate::emacs_core::window_cmds::window_line_wrap,
     crate::emacs_core::window_cmds::builtin_window_body_width,

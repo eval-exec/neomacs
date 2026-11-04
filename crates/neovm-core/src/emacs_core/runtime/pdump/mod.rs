@@ -47,9 +47,7 @@ use crate::emacs_core::charset::{
     CharsetRegistrySnapshot, restore_charset_registry, snapshot_charset_registry,
 };
 use crate::emacs_core::eval::Context;
-use crate::emacs_core::fontset::{
-    FontsetRegistrySnapshot, restore_fontset_registry, snapshot_fontset_registry,
-};
+use crate::emacs_core::eval::data::fontset_state::FontsetRegistrySnapshot;
 #[cfg(test)]
 use crate::emacs_core::value;
 
@@ -666,7 +664,7 @@ pub fn snapshot_active_runtime(eval: &mut Context) -> ActiveRuntimeSnapshot {
     eval.setup_thread_locals();
     ActiveRuntimeSnapshot {
         charset_registry: snapshot_charset_registry(),
-        fontset_registry: snapshot_fontset_registry(),
+        fontset_registry: crate::emacs_core::eval::lifecycle::fontset_registry_snapshot(),
     }
 }
 
@@ -684,7 +682,7 @@ pub fn restore_active_runtime(eval: &mut Context, snapshot: &ActiveRuntimeSnapsh
     // successful load would have produced.)
     crate::emacs_core::terminal::pure::reset_terminal_thread_locals();
     restore_charset_registry(snapshot.charset_registry.clone());
-    restore_fontset_registry(snapshot.fontset_registry.clone());
+    crate::emacs_core::eval::lifecycle::restore_fontset_registry(snapshot.fontset_registry.clone());
     eval.sync_thread_runtime_bindings();
     eval.sync_current_thread_buffer_state();
 }

@@ -4252,7 +4252,7 @@ impl ModuleBoundarySnapshot {
 /// creation paths.
 fn lisp_frame_manager() -> FrameManager {
     let mut frames = FrameManager::new();
-    frames.set_frame_init_hook(super::xfaces::init_frame_lisp_faces);
+    frames.set_frame_init_hook(crate::emacs_core::eval::lifecycle::frame_init_hook());
     frames
 }
 
@@ -5667,13 +5667,13 @@ impl Context {
         frame_id: neovm_value::display_vocab::FrameId,
     ) -> bool {
         if crate::emacs_core::eval::data::face::enabled() {
-            return super::xfaces::realization::prepare_runtime_faces(self, frame_id);
+            return crate::emacs_core::eval::lifecycle::prepare_runtime_faces(self, frame_id);
         }
         let source = (frame_id, self.face_change_count);
         if (*self.materialized_face_table_source) == Some(source) {
             return false;
         }
-        super::xfaces::sync_runtime_face_table_from_frame_lisp_faces(self, frame_id);
+        crate::emacs_core::eval::lifecycle::sync_runtime_face_table(self, frame_id);
         *self.materialized_face_table_source = Some(source);
         true
     }
@@ -5689,7 +5689,7 @@ impl Context {
         // GNU Emacs stores the internal face ID as the symbol's `face`
         // property during `internal-make-lisp-face`.  Ensure this is set
         // so that `check-face`, `face-id`, `face-equal`, etc. work.
-        let _ = super::xfaces::ensure_lisp_face_id_property(self, face_name);
+        let _ = crate::emacs_core::eval::lifecycle::ensure_lisp_face_id_property(self, face_name);
         let changed = self.face_table.set_attribute(face_name, attr, value);
         if changed {
             self.face_change_count += 1;

@@ -6157,7 +6157,7 @@ impl crate::emacs_core::eval::Context {
                         && frame.effective_window_system().is_none()
                         && frame.posn_object_extent_mode().enabled()
                     {
-                        crate::window::retained_posn_extent(
+                        crate::emacs_core::eval::data::posn_object_extent::retained_posn_extent(
                             Some(snapshot),
                             point.row,
                             point.col,
@@ -6259,7 +6259,9 @@ impl crate::emacs_core::eval::Context {
         // Delegated, not re-derived: `WindowPart::posn` is GNU's own table
         // (src/keyboard.c:5900-5990), and the hand-written copy that used to
         // live here had drifted from it on both dividers.
-        let area = match crate::window::part::window_part_of_region(region.kind()) {
+        let area = match crate::emacs_core::eval::data::posn_object_extent::window_part_of_region(
+            region.kind(),
+        ) {
             Some(part) => part.area_symbol(),
             // Not part of a window at all — the frame bars replace the window
             // in GNU's posn, so they name themselves.
@@ -6292,18 +6294,17 @@ impl crate::emacs_core::eval::Context {
         };
         let window_id = neovm_edit::emacs_core::display_metrics::WindowId(window_id.get() as u64);
         let publication = frame.active_presentation_geometry()?;
-        let presented = publication
-            .resolve(crate::window::geometry::WindowGeometryQuery::new(
-                crate::emacs_core::eval::data::window_state::PresentationId::new(
-                    observation.presentation,
-                ),
-                window_id,
-            ))
-            .ok()?;
-        let outer = presented.regions().outer();
+        let regions = crate::emacs_core::eval::display_query_hooks::window_regions_at(
+            &publication,
+            crate::emacs_core::eval::data::window_state::PresentationId::new(
+                observation.presentation,
+            ),
+            window_id,
+        )?;
+        let outer = regions.outer();
         let coordinate_origin =
             if region.kind() == neomacs_display_protocol::PresentedRegionKind::TextBody {
-                presented.regions().text_body().origin()
+                regions.text_body().origin()
             } else {
                 outer.origin()
             };
@@ -6339,13 +6340,13 @@ impl crate::emacs_core::eval::Context {
                     let mut matrix_position = (output_row, point.column());
                     if point.point_role() == neomacs_display_protocol::posn_object_extent::PosnPointRole::SyntheticBoundary {
                         if let Some(at) = crate::emacs_core::eval::data::window_state::WindowPart::Text.text_area_coordinate(
-                            (x - presented.regions().text_body().origin().x().get()).round() as i64,
+                            (x - regions.text_body().origin().x().get()).round() as i64,
                             (y - outer.origin().y().get()).round() as i64,
                             snapshot.header_line_height + snapshot.tab_line_height)
                             && let Some(walked) = snapshot.point_at_coords(at)
                         { matrix_position = (walked.row, walked.col); }
                     }
-                    object_dimensions = crate::window::retained_posn_extent(
+                    object_dimensions = crate::emacs_core::eval::data::posn_object_extent::retained_posn_extent(
                         Some(snapshot),
                         matrix_position.0,
                         matrix_position.1,
@@ -6370,7 +6371,7 @@ impl crate::emacs_core::eval::Context {
             {
                 let extent = crate::emacs_core::eval::data::window_state::WindowPart::Text
                     .text_area_coordinate(
-                        (x - presented.regions().text_body().origin().x().get()).round() as i64,
+                        (x - regions.text_body().origin().x().get()).round() as i64,
                         (y - outer.origin().y().get()).round() as i64,
                         snapshot.header_line_height + snapshot.tab_line_height,
                     )
@@ -6378,7 +6379,7 @@ impl crate::emacs_core::eval::Context {
                     .map_or(
                         neomacs_display_protocol::posn_object_extent::PosnObjectExtent::Undrawn,
                         |point| {
-                            crate::window::retained_posn_extent(
+                            crate::emacs_core::eval::data::posn_object_extent::retained_posn_extent(
                                 Some(snapshot),
                                 point.row,
                                 point.col,

@@ -7,6 +7,12 @@ use super::font::FontNameSpelling;
 use super::intern::{SymId, intern, resolve_sym, resolve_sym_lisp_string};
 use super::value::*;
 use crate::emacs_core::error::LispCondition;
+pub use crate::emacs_core::eval::data::fontset_state::{
+    FontDefinitionMetadata, FontRepertory, FontSpecEntry, StoredFontSpec,
+};
+use crate::emacs_core::eval::data::fontset_state::{
+    FontsetDataSnapshot, FontsetRangeEntrySnapshot, FontsetRegistrySnapshot,
+};
 use crate::face::{FontSlant, FontWeight, FontWidth};
 use crate::heap_types::LispString;
 use std::collections::HashMap;
@@ -46,38 +52,6 @@ fn fontset_name_runtime(name: &FontNameSpelling) -> String {
     crate::emacs_core::emacs_char::to_utf8_lossy(name.as_bytes())
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct StoredFontSpec {
-    pub family: Option<SymId>,
-    pub registry: Option<SymId>,
-    pub lang: Option<SymId>,
-    pub weight: Option<FontWeight>,
-    pub slant: Option<FontSlant>,
-    pub width: Option<FontWidth>,
-    pub definition: Option<FontDefinitionMetadata>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum FontSpecEntry {
-    Font(StoredFontSpec),
-    ExplicitNone,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum FontRepertory {
-    Charset(SymId),
-    CharTableRanges(Vec<(u32, u32)>),
-}
-
-/// GNU's font definition records encoding and optional repertory separately.
-/// Encoding determines informational pattern queries; neither field proves
-/// that an opened font contains a glyph.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct FontDefinitionMetadata {
-    pub encoding: SymId,
-    pub repertory: Option<FontRepertory>,
-}
-
 #[derive(Clone, Copy, Debug)]
 enum FontsetLookupPurpose {
     /// Rendering tries the configured font and tests its native glyph coverage.
@@ -105,27 +79,6 @@ struct FontsetData {
     fallback: Option<SharedFontsetEntries>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct FontsetRangeEntrySnapshot {
-    pub from: u32,
-    pub to: u32,
-    pub entries: Vec<FontSpecEntry>,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct FontsetDataSnapshot {
-    pub ranges: Vec<FontsetRangeEntrySnapshot>,
-    pub fallback: Option<Vec<FontSpecEntry>>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct FontsetRegistrySnapshot {
-    pub ordered_names: Vec<LispString>,
-    pub alias_to_name: Vec<(LispString, LispString)>,
-    pub fontsets: Vec<(LispString, FontsetDataSnapshot)>,
-    pub generation: u64,
-}
-
 #[derive(Clone, Debug)]
 struct FontsetRegistry {
     ordered_names: Vec<FontNameSpelling>,
@@ -135,7 +88,6 @@ struct FontsetRegistry {
 }
 
 static_assertions::assert_impl_all!(FontsetRegistry: Send, Sync, Clone, std::fmt::Debug);
-static_assertions::assert_not_impl_any!(FontsetRegistrySnapshot: Send, Sync);
 
 impl FontsetRegistry {
     // Only name bytes and their multibyte distinction belong to this global

@@ -11,7 +11,6 @@ use crate::emacs_core::error::{
 use crate::emacs_core::eval::{
     push_scratch_gc_root, restore_scratch_gc_roots, save_scratch_gc_roots,
 };
-use crate::emacs_core::fontset;
 use crate::emacs_core::intern::WellKnown;
 use crate::emacs_core::intern::{NIL_SYM_ID, T_SYM_ID, intern, is_canonical_id};
 use crate::emacs_core::jit::RuntimeStateTieringExt;
@@ -2667,41 +2666,6 @@ pub(crate) fn builtin_native_comp_available_p(args: Vec<Value>) -> EvalResult {
     Ok(Value::NIL)
 }
 
-pub(crate) fn fontset_alias_alist_startup_value() -> Value {
-    fontset::fontset_alias_alist_startup_value()
-}
-
-pub(super) fn fontset_list_value() -> Value {
-    fontset::fontset_list_value()
-}
-
-fn dynamic_or_global_symbol_value_in_state(
-    vars: crate::emacs_core::eval::VariableView<'_>,
-    _dynamic: &[OrderedRuntimeBindingMap],
-    name: &str,
-) -> Option<Value> {
-    vars.value_by_name(name)
-}
-
-pub(crate) fn builtin_new_fontset(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
-    expect_args("new-fontset", &args, 2)?;
-    let name = expect_string_lossy(&args[0])?;
-    let char_script_table =
-        dynamic_or_global_symbol_value_in_state(eval.variables(), &[], "char-script-table");
-    let charset_script_alist =
-        dynamic_or_global_symbol_value_in_state(eval.variables(), &[], "charset-script-alist");
-    let font_encoding_alist =
-        dynamic_or_global_symbol_value_in_state(eval.variables(), &[], "font-encoding-alist");
-    let registered = fontset::new_fontset(
-        &name,
-        &args[1],
-        char_script_table.as_ref(),
-        charset_script_alist.as_ref(),
-        font_encoding_alist.as_ref(),
-    )?;
-    Ok(Value::string(registered))
-}
-
 pub(crate) fn builtin_open_font(args: Vec<Value>, symbol_mode: SymbolMode) -> EvalResult {
     expect_args_range("open-font", &args, 1, 3)?;
     let is_font_entity = match args[0].kind() {
@@ -3026,28 +2990,6 @@ pub(crate) fn builtin_set_charset_plist(args: Vec<Value>, symbol_mode: SymbolMod
     }
     super::charset::set_charset_plist_registry(name, plist_pairs);
     Ok(args[1])
-}
-
-pub(crate) fn builtin_set_fontset_font(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    expect_args_range("set-fontset-font", &args, 3, 5)?;
-    let char_script_table =
-        dynamic_or_global_symbol_value_in_state(eval.variables(), &[], "char-script-table");
-    let charset_script_alist =
-        dynamic_or_global_symbol_value_in_state(eval.variables(), &[], "charset-script-alist");
-    let font_encoding_alist =
-        dynamic_or_global_symbol_value_in_state(eval.variables(), &[], "font-encoding-alist");
-    fontset::set_fontset_font(
-        &args[0],
-        &args[1],
-        &args[2],
-        args.get(4),
-        char_script_table.as_ref(),
-        charset_script_alist.as_ref(),
-        font_encoding_alist.as_ref(),
-    )
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
@@ -3805,7 +3747,7 @@ pub(crate) fn builtin_variable_binding_locus(
                 {
                     use crate::emacs_core::forward::LispFwdType;
                     if matches!(fwd.ty(), LispFwdType::KboardObj) {
-                        return crate::emacs_core::terminal::pure::builtin_frame_terminal(
+                        return crate::emacs_core::eval::lifecycle::frame_terminal_value(
                             ctx,
                             vec![],
                         );
@@ -4326,7 +4268,7 @@ thread_local! {
 }
 
 pub(super) fn reset_symbols_thread_locals() {
-    fontset::reset_fontset_registry();
+    crate::emacs_core::eval::lifecycle::reset_fontset_registry();
     LOSSAGE_SIZE.with(|slot| *slot.borrow_mut() = 300);
 }
 
@@ -5051,104 +4993,6 @@ pub(crate) fn builtin_internal_make_var_non_special(
     let mut obarray = eval.obarray_mut();
     obarray.make_non_special_id(symbol);
     Ok(Value::NIL)
-}
-
-fn face_boolean_x_resource_value(
-    value: &str,
-    signal_on_invalid: bool,
-) -> Result<Option<Value>, Flow> {
-    if value.eq_ignore_ascii_case("on") || value.eq_ignore_ascii_case("true") {
-        Ok(Some(Value::T))
-    } else if value.eq_ignore_ascii_case("off") || value.eq_ignore_ascii_case("false") {
-        Ok(Some(Value::NIL))
-    } else if value.eq_ignore_ascii_case("unspecified") {
-        Ok(Some(Value::symbol("unspecified")))
-    } else if signal_on_invalid {
-        Err(signal(
-            "error",
-            vec![
-                Value::string("Invalid face attribute value from X resource"),
-                Value::string(value),
-            ],
-        ))
-    } else {
-        Ok(None)
-    }
-}
-
-pub(crate) fn builtin_internal_set_lisp_face_attribute_from_resource(
-    eval: &mut crate::emacs_core::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    expect_args_range(
-        "internal-set-lisp-face-attribute-from-resource",
-        &args,
-        3,
-        4,
-    )?;
-    if symbol_id(&args[0], eval.symbol_mode()).is_none() {
-        return Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("symbolp"), args[0]],
-        ));
-    }
-    let resource_value = expect_string_lossy(&args[2])?;
-
-    let Some(attr_id) = symbol_id(&args[1], eval.symbol_mode()) else {
-        return Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("symbolp"), args[1]],
-        ));
-    };
-    let attr_name = resolve_sym(attr_id);
-
-    let converted_value = if resource_value.eq_ignore_ascii_case("unspecified") {
-        Value::symbol("unspecified")
-    } else {
-        match attr_name {
-            ":height" => {
-                let number =
-                    builtin_string_to_number(eval, Value::string(&resource_value), Value::NIL)?;
-                match number.kind() {
-                    ValueKind::Fixnum(height) if height > 0 => number,
-                    _ => {
-                        return Err(signal(
-                            "error",
-                            vec![
-                                Value::string("Invalid face height from X resource"),
-                                Value::string(resource_value),
-                            ],
-                        ));
-                    }
-                }
-            }
-            ":bold" | ":italic" => {
-                face_boolean_x_resource_value(&resource_value, true)?.expect("signal=true")
-            }
-            ":weight" | ":slant" | ":width" => Value::symbol(&resource_value),
-            ":inverse-video" | ":extend" => {
-                face_boolean_x_resource_value(&resource_value, true)?.expect("signal=true")
-            }
-            ":underline" | ":overline" | ":strike-through" => {
-                face_boolean_x_resource_value(&resource_value, false)?
-                    .unwrap_or_else(|| Value::string(&resource_value))
-            }
-            ":box" | ":inherit" => {
-                let read_result = crate::emacs_core::reader::builtin_read_from_string(
-                    eval,
-                    vec![Value::string(&resource_value)],
-                )?;
-                read_result.cons_car()
-            }
-            _ => Value::string(&resource_value),
-        }
-    };
-
-    let mut setter_args = vec![args[0], args[1], converted_value];
-    if let Some(frame) = args.get(3) {
-        setter_args.push(*frame);
-    }
-    crate::emacs_core::xfaces::builtin_internal_set_lisp_face_attribute(eval, setter_args)
 }
 
 pub(crate) fn builtin_internal_stack_stats(args: Vec<Value>) -> EvalResult {
