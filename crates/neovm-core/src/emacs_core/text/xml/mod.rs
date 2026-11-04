@@ -406,7 +406,10 @@ fn parse_html_region(data: &[u8], discard_comments: bool) -> Option<Value> {
     // and embedding subsequent elements inside it.
     loop {
         let trimmed = remaining.trim_start();
-        if trimmed.starts_with("<?xml") || trimmed.starts_with("<?XML") {
+        if trimmed
+            .get(..5)
+            .is_some_and(|p| p.eq_ignore_ascii_case("<?xml"))
+        {
             if let Some(end_idx) = trimmed.find("?>") {
                 if !discard_comments && xml_pi_comment.is_none() {
                     let content = &trimmed[1..end_idx + 1]; // "?xml ...?"
@@ -419,7 +422,10 @@ fn parse_html_region(data: &[u8], discard_comments: bool) -> Option<Value> {
                 remaining = &trimmed[end_idx + 2..];
                 continue;
             }
-        } else if trimmed.to_ascii_uppercase().starts_with("<!DOCTYPE") {
+        } else if trimmed
+            .get(..9)
+            .is_some_and(|p| p.eq_ignore_ascii_case("<!DOCTYPE"))
+        {
             if let Some(end_idx) = trimmed.find('>') {
                 remaining = &trimmed[end_idx + 1..];
                 continue;
