@@ -5704,20 +5704,23 @@ fn selected_line_pixel_height(eval: &mut super::eval::Context) -> Result<Option<
     let Some((fid, wid)) = resolve_live_window_identity(&eval.frames, None)? else {
         return Ok(None);
     };
-    let frame = eval.frames.get(fid).expect("resolved live frame");
+    let Some(frame) = eval.frames.get(fid) else {
+        return Ok(None);
+    };
     if frame.effective_window_system().is_none() {
         return Ok(None);
     }
-    let line_height = (frame.char_height.round() as i64).max(1);
-    let Some(Window::Leaf { buffer_id, .. }) = frame.find_window(wid) else {
+    let line_height = crate::window::frame_line_height(frame);
+    let Some(buffer_id) = frame.find_window(wid).and_then(|window| window.buffer_id()) else {
         return Ok(Some(line_height));
     };
-    let buffer_id = *buffer_id;
-    let pos = eval
+    let Some(pos) = eval
         .buffers
         .get(buffer_id)
-        .expect("live window buffer")
-        .point_lisp_char_pos();
+        .map(|buffer| buffer.point_lisp_char_pos())
+    else {
+        return Ok(Some(line_height));
+    };
     let row_height = |snapshot: &WindowDisplaySnapshot| {
         let point = snapshot.point_for_buffer_pos(pos)?;
         Some(
@@ -5731,27 +5734,14 @@ fn selected_line_pixel_height(eval: &mut super::eval::Context) -> Result<Option<
     {
         return Ok(Some(height));
     }
-    let scope = crate::window::WindowLayoutQueryScope::Position { target: pos };
-    let measured = match eval.query_window_layout_scope(fid, wid, scope) {
-        crate::window::WindowLayoutQueryOutcome::Ready(query) => {
-            query.into_geometry().as_ref().and_then(row_height)
-        }
-        crate::window::WindowLayoutQueryOutcome::Unavailable => None,
-        crate::window::WindowLayoutQueryOutcome::LayoutBusy => {
-            return Err(signal(
-                LispCondition::Error,
-                vec![Value::string(
-                    "Window layout query reentered an active layout callback",
-                )],
-            ));
-        }
-        crate::window::WindowLayoutQueryOutcome::Failed(failure) => {
-            return Err(signal(
-                LispCondition::Error,
-                vec![Value::string(failure.message())],
-            ));
-        }
-    };
+    let measured = compute_live_window_geometry_scope(
+        eval,
+        fid,
+        wid,
+        crate::window::WindowLayoutQueryScope::Position { target: pos },
+    )?
+    .as_ref()
+    .and_then(row_height);
     // ponytail: a point the layout cannot place (before window-start, or no
     // layout yet) falls back to the frame's default line height; GNU would
     // lay out from point itself and also see taller faces on that line.

@@ -1877,6 +1877,64 @@ fn line_pixel_height_on_a_gui_frame_is_the_line_height_not_one() {
 }
 
 #[test]
+fn line_pixel_height_on_a_gui_frame_uses_the_height_of_the_row_at_point() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = crate::emacs_core::Context::new();
+    let buf = ev.buffers.create_buffer("*lph-row*");
+    ev.buffers.set_current(buf);
+    ev.buffers.get_mut(buf).unwrap().insert("a\nb\n");
+    ev.eval_str("(goto-char 3)").unwrap();
+    let fid = ev.frames.create_frame("GUI", 800, 600, buf);
+    let frame = ev.frames.get_mut(fid).unwrap();
+    frame.set_window_system(Some(Value::symbol("neo")));
+    frame.char_height = 14.0;
+    assert!(ev.frames.select_frame(fid));
+    let (_, wid) = resolve_live_window_identity(&ev.frames, None)
+        .unwrap()
+        .expect("selected window");
+    let freshness = ev.window_display_snapshot_freshness(fid, wid, buf).unwrap();
+    let row = |row, y, height, start, end| crate::window::DisplayRowSnapshot {
+        row,
+        y,
+        height,
+        start_buffer_pos: Some(LispCharPos1::new(start)),
+        end_buffer_pos: Some(LispCharPos1::new(end)),
+        ..Default::default()
+    };
+    // Point (position 3, "b") is a 14-pixel glyph on a row that something
+    // taller later on the line made 30 pixels high; GNU's line_bottom_y
+    // measures the row.
+    ev.frames
+        .get_mut(fid)
+        .unwrap()
+        .commit_redisplay_cache_for_test(vec![crate::window::WindowDisplaySnapshot {
+            window_id: wid,
+            regions_materialized: true,
+            points: vec![crate::window::DisplayPointSnapshot {
+                role: crate::window::DisplayPointRole::Glyph,
+                buffer_pos: LispCharPos1::new(3),
+                x: 0,
+                y: 14,
+                width: 8,
+                height: 14,
+                row: 1,
+                col: 0,
+            }],
+            rows: vec![row(0, 0, 14, 1, 2), row(1, 14, 30, 3, 4)],
+            buffer_modiff: Some(ev.buffers.get(buf).unwrap().modified_tick()),
+            layout_freshness: Some(freshness),
+            ..Default::default()
+        }]);
+    assert!(
+        ev.fresh_window_display_snapshot(fid, wid, buf).is_some(),
+        "the test snapshot must be fresh so the snapshot path answers"
+    );
+
+    let result = builtin_line_pixel_height(&mut ev, &[]).unwrap();
+    assert_eq!(result, Value::fixnum(30));
+}
+
+#[test]
 fn test_window_text_pixel_size() {
     crate::test_utils::init_test_tracing();
     let result = builtin_window_text_pixel_size(vec![]).unwrap();

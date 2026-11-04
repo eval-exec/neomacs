@@ -25,7 +25,7 @@ mod chrome;
 pub use chrome::WindowChromePresence;
 mod display;
 pub(crate) use display::{
-    swap_world_state as swap_display_world_state,
+    frame_line_height, swap_world_state as swap_display_world_state,
     world_state_placeholder as display_world_state_placeholder,
 };
 mod display_table_input;
