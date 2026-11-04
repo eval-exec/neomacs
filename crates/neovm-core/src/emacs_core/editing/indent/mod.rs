@@ -1780,17 +1780,20 @@ impl DisplayStopProp {
         column: usize,
         end: usize,
     ) -> Result<Option<(usize, usize)>, Flow> {
-        let hit =
-            match self {
-                Self::Invisible => ctx
-                    .invisible_source_run_end(buffer_id, byte, InvisibleRunContext::DisplayMotion)?
-                    .filter(|&next_visible| next_visible > byte)
-                    .map(|next_visible| (0usize, next_visible)),
-                Self::Display => display_run_at(ctx, buffer_id, byte, column)
-                    .filter(|&(_, run_end)| run_end > byte),
-                Self::Composition => composition_run_at(ctx, buffer_id, byte)
-                    .filter(|&(_, comp_end)| comp_end > byte),
-            };
+        let hit = match self {
+            Self::Invisible => ctx
+                .invisible_source_run_end(buffer_id, byte, InvisibleRunContext::DisplayMotion)?
+                .filter(|&next_visible| next_visible > byte)
+                .map(|next_visible| (0usize, next_visible)),
+            Self::Display => {
+                display_run_at(ctx, buffer_id, byte, column).filter(|&(_, run_end)| run_end > byte)
+            }
+            Self::Composition => {
+                let (edit, vars) = ctx.edit_and_vars();
+                composition_run_at(vars, &edit.buffers, buffer_id, byte)
+                    .filter(|&(_, comp_end)| comp_end > byte)
+            }
+        };
         Ok(hit.map(|(width, run_end)| (width, run_end.min(end))))
     }
 }
@@ -2245,13 +2248,13 @@ fn display_table_glyph_width(dt: &Value, code: u32) -> Option<usize> {
 /// If a `composition` property begins at buffer byte `byte`, return
 /// `(composed_width, run_end_byte)` — the composed glyphs' display width and the
 /// byte position just past the composed characters. Returns None otherwise.
-fn composition_run_at<H: EditHost>(
-    host: &mut H,
+fn composition_run_at<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
+    buffers: &crate::buffer::BufferManager,
     buffer_id: crate::buffer::BufferId,
     byte: usize,
 ) -> Option<(usize, usize)> {
-    let (edit, vars) = host.edit_and_vars();
-    let buf = edit.buffers.get(buffer_id)?;
+    let buf = buffers.get(buffer_id)?;
     let charpos0 = buf.emacs_byte_pos_to_char_pos_clamped(EmacsBytePos::new(byte));
     let charpos1 = charpos0.get() as i64 + 1;
     // Resolve the property here (the edit layer owns textprop); the width
@@ -2259,11 +2262,11 @@ fn composition_run_at<H: EditHost>(
     let seams = crate::buffer::composition::seams();
     let prop = super::textprop::builtin_get_text_property_in_state(
         vars,
-        &edit.buffers,
+        buffers,
         &[Value::fixnum(charpos1), seams.property_symbol()],
     )
     .ok()?;
-    let (width, length) = seams.width_of(prop, &edit.buffers, charpos1)?;
+    let (width, length) = seams.width_of(prop, buffers, charpos1)?;
     let end_charpos0 = charpos0.get() + length.max(0) as usize;
     let end_byte = buf
         .char_pos_to_emacs_byte_pos_clamped(CharPos0::new(end_charpos0))
@@ -2750,8 +2753,10 @@ fn scan_for_column(
         // composed glyphs (GNU's display scan via get_composition_id), so the
         // run advances by the glyphs' width over the composed character count.
         if scan >= next_composition_probe {
-            if let Some((comp_width, comp_end)) = composition_run_at(ctx, buffer_id, scan)
-                && comp_end > scan
+            if let Some((comp_width, comp_end)) = {
+                let (edit, vars) = ctx.edit_and_vars();
+                composition_run_at(vars, &edit.buffers, buffer_id, scan)
+            } && comp_end > scan
             {
                 previous_byte_pos = scan;
                 previous_column = column;
