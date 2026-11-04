@@ -18,17 +18,19 @@ use std::io::Write;
 
 use strum::{EnumString, IntoStaticStr};
 
+use super::window_state::{
+    activate_minibuffer_window, find_or_create_minibuffer_buffer_in_state,
+    install_minibuffer_ambient_directory_in_state, minibuffer_ambient_directory_in_state,
+    record_active_minibuffer_selection, run_minibuffer_mode_if_bound,
+};
 use crate::emacs_core::reader::{
     CallingFrame, KeyboardInputRuntime, MinibufferBufferUnwind, MinibufferExitDisposition,
-    MinibufferInputSource, MinibufferSessionUnwind, ReadSourceObject, activate_minibuffer_window,
+    MinibufferInputSource, MinibufferSessionUnwind, ReadSourceObject,
     add_minibuffer_history_after_unwind, current_read_symbol_shorthands, expect_lisp_string,
-    find_or_create_minibuffer_buffer_in_state, finish_minibuffer_result_after_unwind,
-    history_add_new_input_enabled, initialize_unbound_minibuffer_history,
-    install_minibuffer_ambient_directory_in_state, minibuffer_ambient_directory_in_state,
-    minibuffer_history_entry, minibuffer_history_spec, read_from_active_load_cursor,
-    read_from_callable, read_from_string_impl_inner, record_active_minibuffer_selection,
-    run_minibuffer_mode_if_bound, signal_reader_error_from_buffer, signal_reader_error_from_string,
-    stdin_end_of_file_error,
+    finish_minibuffer_result_after_unwind, history_add_new_input_enabled,
+    initialize_unbound_minibuffer_history, minibuffer_history_entry, minibuffer_history_spec,
+    read_from_active_load_cursor, read_from_callable, read_from_string_impl_inner,
+    signal_reader_error_from_buffer, signal_reader_error_from_string, stdin_end_of_file_error,
 };
 use crate::emacs_core::value::{Value, ValueKind, VecLikeType};
 use crate::emacs_core::value_reader::SymbolPositionMode;
@@ -601,10 +603,7 @@ impl MinibufferInvocationRestoration {
         if let Some(calling_frame) = self.calling_frame
             && eval.frames.get(calling_frame.0).is_some()
         {
-            crate::emacs_core::reader::minibuffer_redisplay::publish_frame_switch(
-                eval,
-                calling_frame.0,
-            );
+            super::redisplay::publish_frame_switch(eval, calling_frame.0);
             let _ = eval.frames.select_frame(calling_frame.0);
         }
         crate::emacs_core::frame::sync_gui_frame_focus_redirects(eval)
@@ -962,7 +961,7 @@ fn finish_read_from_minibuffer_in_vm_runtime_interactive(
     let minibuf_depth = entry_permit.depth();
     if crate::emacs_core::eval::gnu_redisplay_hooks_enabled()
         && let Some(existing) = shared.edit.buffers.find_buffer_by_name(&format!(" *Minibuf-{minibuf_depth}*")) {
-        crate::emacs_core::reader::minibuffer_redisplay::publish_expired_buffer(shared, existing);
+        super::redisplay::publish_expired_buffer(shared, existing);
     }
     let minibuf_id = find_or_create_minibuffer_buffer_in_state(&mut shared.edit.buffers, minibuf_depth);
 

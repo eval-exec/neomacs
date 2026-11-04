@@ -9,6 +9,9 @@
 
 use super::*;
 use crate::emacs_core::eval::Context;
+use crate::emacs_core::minibuffer::{
+    activate_minibuffer_window_in_state, teardown_minibuffer_level_in_state,
+};
 
 /// Build a context with a selected frame, an active-looking ` *Minibuf-1*`
 /// buffer that carries an overlay, a grown (multi-line) minibuffer window, and a

@@ -6,14 +6,17 @@
 //! window/buffer borrows; no TLS or process-shared Lisp cache is introduced.
 use super::*;
 
+use crate::emacs_core::intern::intern;
+use crate::emacs_core::reader::ActiveMinibufferWindowState;
+
 #[cold]
 #[inline(never)]
 pub(super) fn activate(
-    eval: &mut super::super::eval::Context,
+    eval: &mut crate::emacs_core::eval::Context,
     minibuf_id: crate::buffer::BufferId,
     entry_level: neovm_value::minibuffer_state::MinibufferEntryLevel,
 ) -> Option<ActiveMinibufferWindowState> {
-    let caller = super::super::window_cmds::ensure_selected_frame_id_in_state(
+    let caller = crate::emacs_core::window_cmds::ensure_selected_frame_id_in_state(
         &mut eval.frames,
         &mut eval.edit.buffers,
     );
@@ -54,10 +57,10 @@ pub(super) fn activate(
 #[cold]
 #[inline(never)]
 pub(crate) fn publish_frame_switch(
-    eval: &mut super::super::eval::Context,
+    eval: &mut crate::emacs_core::eval::Context,
     frame: neovm_value::display_vocab::FrameId,
 ) {
-    if !super::super::eval::gnu_redisplay_hooks_enabled()
+    if !crate::emacs_core::eval::gnu_redisplay_hooks_enabled()
         || eval
             .frames
             .selected_frame()
@@ -82,7 +85,7 @@ pub(crate) fn publish_frame_switch(
 #[cold]
 #[inline(never)]
 fn publish_tty_top_change(
-    eval: &mut super::super::eval::Context,
+    eval: &mut crate::emacs_core::eval::Context,
     frame: neovm_value::display_vocab::FrameId,
 ) {
     let Some(target) = eval.frames.get(frame) else {
@@ -111,17 +114,17 @@ fn publish_tty_top_change(
         eval.gnu_request_frame_redraw(frame);
         current = eval.frames.frame_parent_id(frame);
     }
-    eval.request_menu_bar_rebuild(super::super::eval::MenuBarRebuildReason::FullFrameRedraw);
+    eval.request_menu_bar_rebuild(crate::emacs_core::eval::MenuBarRebuildReason::FullFrameRedraw);
 }
 
 /// Publish only a real erasure/overlay deletion, before mutating shared text.
 #[cold]
 #[inline(never)]
 pub(crate) fn publish_expired_buffer(
-    eval: &mut super::super::eval::Context,
+    eval: &mut crate::emacs_core::eval::Context,
     buffer: crate::buffer::BufferId,
 ) {
-    if super::super::eval::gnu_redisplay_hooks_enabled()
+    if crate::emacs_core::eval::gnu_redisplay_hooks_enabled()
         && eval.edit.buffers.get(buffer).is_some_and(|buffer| {
             buffer.total_char_len().get() != 0 || !buffer.overlays().is_empty()
         })
@@ -133,7 +136,7 @@ pub(crate) fn publish_expired_buffer(
 #[cold]
 #[inline(never)]
 pub(super) fn restore(
-    eval: &mut super::super::eval::Context,
+    eval: &mut crate::emacs_core::eval::Context,
     saved: ActiveMinibufferWindowState,
 ) -> MinibufferWindowRestoreEffect {
     let effect = restore_buffer(eval, saved);
@@ -143,7 +146,10 @@ pub(super) fn restore(
 
 #[cold]
 #[inline(never)]
-fn restore_selection(eval: &mut super::super::eval::Context, saved: ActiveMinibufferWindowState) {
+fn restore_selection(
+    eval: &mut crate::emacs_core::eval::Context,
+    saved: ActiveMinibufferWindowState,
+) {
     // Nonselected frame-selected-window assignments are pure fset operations;
     // only assignments on the globally selected frame invoke Fselect_window.
     let selected = eval
@@ -194,7 +200,7 @@ fn restore_selection(eval: &mut super::super::eval::Context, saved: ActiveMinibu
 #[cold]
 #[inline(never)]
 pub(super) fn restore_buffer(
-    eval: &mut super::super::eval::Context,
+    eval: &mut crate::emacs_core::eval::Context,
     saved: ActiveMinibufferWindowState,
 ) -> MinibufferWindowRestoreEffect {
     let mut effect = MinibufferWindowRestoreEffect::NoBufferRestored;
@@ -232,7 +238,7 @@ pub(super) fn restore_buffer(
 #[cold]
 #[inline(never)]
 pub(super) fn teardown(
-    eval: &mut super::super::eval::Context,
+    eval: &mut crate::emacs_core::eval::Context,
     buffer: crate::buffer::BufferId,
     depth_after_pop: usize,
     saved: ActiveMinibufferWindowState,
@@ -271,7 +277,7 @@ pub(super) fn teardown(
 #[cold]
 #[inline(never)]
 fn resize_empty(
-    eval: &mut super::super::eval::Context,
+    eval: &mut crate::emacs_core::eval::Context,
     buffer: crate::buffer::BufferId,
     depth_after_pop: usize,
     saved: ActiveMinibufferWindowState,

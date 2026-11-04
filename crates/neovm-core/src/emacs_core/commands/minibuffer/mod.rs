@@ -23,8 +23,11 @@ use crate::heap_types::LispString;
 pub(crate) use neovm_value::minibuffer_state::MinibufferEntryLevel;
 
 mod read_entries;
+mod redisplay;
+mod window_state;
 
 pub(crate) use read_entries::*;
+pub(crate) use window_state::*;
 
 use super::error::{EvalResult, Flow, signal};
 use super::intern::{NIL_SYM_ID, SymId, T_SYM_ID, resolve_sym};

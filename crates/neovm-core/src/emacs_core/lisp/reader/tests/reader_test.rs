@@ -2,6 +2,7 @@ use super::*;
 use crate::buffer::{CharPos0, LispCharPos1};
 use crate::emacs_core::error::{FlowKind, FlowRef};
 use crate::emacs_core::eval::{Context, DisplayHost, GuiFrameHostRequest, PopupMenuRequest};
+use crate::emacs_core::minibuffer::{activate_minibuffer_window, restore_minibuffer_window};
 use crate::emacs_core::print_value;
 use crate::emacs_core::value::{
     ValueKind, VecLikeType, eq_value, get_string_text_properties_table_for_value,
