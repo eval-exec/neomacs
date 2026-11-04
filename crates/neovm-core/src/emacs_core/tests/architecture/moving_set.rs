@@ -35,7 +35,11 @@ pub(crate) const G0_MEMBERS: [&str; 10] = [
 /// `quit` joined with the stage-3b T4.1 move: the cross-thread quit request
 /// and the asynchronous attention word are std-only and name no evaluator
 /// item; core re-exports them through `emacs_core::eval`.
-pub(crate) const BOTTOM_PEER_MODULES: [&str; 7] = [
+/// `heap_registry` joined with the stage-3b T3 move: the Context-owned
+/// semantic-registry substrate binds std plus
+/// `tagged::gc::current_tagged_heap_identity` only, and names no evaluator
+/// item; core re-exports it through the `emacs_core::heap_registry` facade.
+pub(crate) const BOTTOM_PEER_MODULES: [&str; 8] = [
     "tagged",
     "heap_types",
     "gc_trace",
@@ -43,6 +47,7 @@ pub(crate) const BOTTOM_PEER_MODULES: [&str; 7] = [
     "plist",
     "string_pos_cache",
     "quit",
+    "heap_registry",
 ];
 
 /// The first lower crate of the extraction. Its modules are already inside

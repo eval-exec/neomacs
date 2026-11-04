@@ -1208,3 +1208,22 @@ clear_quit_requested_tls	fn	(new fn)	crates/neovm-value/src/quit.rs:241	quit	sta
 install_quit_requested_for_test	fn	(new fn)	crates/neovm-value/src/quit.rs:265	quit	stage-3b T4.1 test_only row: CCL/DFA engine tests install a pending request without a Context
 install_quit_requested_tls	fn	(new fn)	crates/neovm-value/src/quit.rs:233	quit	stage-3b T4.1 signed exact-caller row: Context::setup_thread_locals_inner (gc_pacing.rs)
 mix_quit_requested_tls_fingerprint	fn	(new fn)	crates/neovm-value/src/quit.rs:250	quit	stage-3b T4.1 signed exact-caller row: eval::carrier_tls_fingerprint (same slot)
+HeapRegistryHandle	struct	pub(crate)	crates/neovm-value/src/heap_registry/mod.rs:15	heap_registry	stage-3b T3: Context-owned semantic registry substrate moved below the evaluator; core re-exports it through the emacs_core facade
+HeapRegistryWeak	struct	pub(crate)	crates/neovm-value/src/heap_registry/mod.rs:21	heap_registry	stage-3b T3: weak registry handle moved with the substrate
+HeapRegistrySlot	struct	pub(crate)	crates/neovm-value/src/heap_registry/mod.rs:93	heap_registry	stage-3b T3: the per-module registry slot moved with the substrate
+HeapRegistryRef	struct	pub(crate)	crates/neovm-value/src/heap_registry/mod.rs:103	heap_registry	stage-3b T3: borrow guard moved with the substrate (plain row)
+HeapRegistryRefMut	struct	pub(crate)	crates/neovm-value/src/heap_registry/mod.rs:117	heap_registry	stage-3b T3: borrow guard moved with the substrate (plain row)
+HeapRegistryWeak::upgrade	method	pub(crate)	crates/neovm-value/src/heap_registry/mod.rs:40	heap_registry	stage-3b T3: plain row — moved verbatim with the module
+HeapRegistryHandle::new	method	pub(crate)	crates/neovm-value/src/heap_registry/mod.rs:59	heap_registry	stage-3b T3: plain row — moved verbatim with the module
+HeapRegistryHandle::heap_identity	method	pub(crate)	crates/neovm-value/src/heap_registry/mod.rs:67	heap_registry	stage-3b T3: plain row — moved verbatim with the module
+HeapRegistryHandle::downgrade	method	pub(crate)	crates/neovm-value/src/heap_registry/mod.rs:72	heap_registry	stage-3b T3: plain row — moved verbatim with the module
+HeapRegistryHandle::borrow	method	pub(crate)	crates/neovm-value/src/heap_registry/mod.rs:81	heap_registry	stage-3b T3: plain row — moved verbatim with the module
+HeapRegistryHandle::borrow_mut	method	pub(crate)	crates/neovm-value/src/heap_registry/mod.rs:87	heap_registry	stage-3b T3: plain row — moved verbatim with the module
+HeapRegistrySlot::new	method	pub(crate)	crates/neovm-value/src/heap_registry/mod.rs:138	heap_registry	stage-3b T3: plain row — moved verbatim with the module
+HeapRegistrySlot::current	method	pub(crate)	crates/neovm-value/src/heap_registry/mod.rs:145	heap_registry	stage-3b T3: plain row — moved verbatim with the module
+HeapRegistrySlot::installed_heap_identity	method	pub(crate)	crates/neovm-value/src/heap_registry/mod.rs:159	heap_registry	stage-3b T3: plain row — moved verbatim with the module
+HeapRegistrySlot::install	method	pub(crate)	crates/neovm-value/src/heap_registry/mod.rs:169	heap_registry	stage-3b T3: signed exact-caller row — the module guard tests today; each registry own install entry point at the text move
+HeapRegistrySlot::park	method	pub(crate)	crates/neovm-value/src/heap_registry/mod.rs:188	heap_registry	stage-3b T3: signed exact-caller row — reserved for the carrier park and each registry own park entry point; no production caller at the move
+HeapRegistrySlot::reset	method	pub(crate)	crates/neovm-value/src/heap_registry/mod.rs:195	heap_registry	stage-3b T3: signed exact-caller row — each registry own reset entry point (charset ccl dynamic_module file_notify hooks terminal collections xfaces) and the carrier activation code
+HeapRegistrySlot::borrow	method	pub(crate)	crates/neovm-value/src/heap_registry/mod.rs:210	heap_registry	stage-3b T3: plain row — moved verbatim with the module
+HeapRegistrySlot::borrow_mut	method	pub(crate)	crates/neovm-value/src/heap_registry/mod.rs:228	heap_registry	stage-3b T3: plain row — moved verbatim with the module

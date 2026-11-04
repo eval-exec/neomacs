@@ -1,5 +1,8 @@
 //! Context-owned semantic registries with a thread-local active view.
 //!
+//! Moved verbatim from `emacs_core::runtime::heap_registry` (peer ruling
+//! STAGE3B T3); core re-exports it through its facade.
+//!
 //! A Context and its installed registry views remain on their owning mutator
 //! thread. Arc maintains registry lifetime across local Context activations;
 //! it does not make the RefCell registries Send or Sync.
@@ -8,12 +11,14 @@ use std::cell::{Ref, RefCell, RefMut};
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Weak};
 
-pub(crate) struct HeapRegistryHandle<T> {
+#[doc(hidden)]
+pub struct HeapRegistryHandle<T> {
     heap_identity: usize,
     registry: Arc<RefCell<T>>,
 }
 
-pub(crate) struct HeapRegistryWeak<T> {
+#[doc(hidden)]
+pub struct HeapRegistryWeak<T> {
     heap_identity: usize,
     registry: Weak<RefCell<T>>,
 }
@@ -31,7 +36,8 @@ impl<T> Clone for HeapRegistryWeak<T> {
 }
 
 impl<T> HeapRegistryWeak<T> {
-    pub(crate) fn upgrade(&self) -> Option<HeapRegistryHandle<T>> {
+    #[doc(hidden)]
+    pub fn upgrade(&self) -> Option<HeapRegistryHandle<T>> {
         Some(HeapRegistryHandle {
             heap_identity: self.heap_identity,
             registry: self.registry.upgrade()?,
@@ -49,18 +55,21 @@ impl<T> Clone for HeapRegistryHandle<T> {
 }
 
 impl<T> HeapRegistryHandle<T> {
-    pub(crate) fn new(value: T) -> Self {
+    #[doc(hidden)]
+    pub fn new(value: T) -> Self {
         Self {
             heap_identity: crate::tagged::gc::current_tagged_heap_identity().unwrap_or(0),
             registry: Arc::new(RefCell::new(value)),
         }
     }
 
-    pub(crate) fn heap_identity(&self) -> usize {
+    #[doc(hidden)]
+    pub fn heap_identity(&self) -> usize {
         self.heap_identity
     }
 
-    pub(crate) fn downgrade(&self) -> HeapRegistryWeak<T> {
+    #[doc(hidden)]
+    pub fn downgrade(&self) -> HeapRegistryWeak<T> {
         HeapRegistryWeak {
             heap_identity: self.heap_identity,
             registry: Arc::downgrade(&self.registry),
@@ -68,17 +77,20 @@ impl<T> HeapRegistryHandle<T> {
     }
 
     #[inline]
-    pub(crate) fn borrow(&self) -> Ref<'_, T> {
+    #[doc(hidden)]
+    pub fn borrow(&self) -> Ref<'_, T> {
         self.registry.borrow()
     }
 
     #[inline]
-    pub(crate) fn borrow_mut(&self) -> RefMut<'_, T> {
+    #[doc(hidden)]
+    pub fn borrow_mut(&self) -> RefMut<'_, T> {
         self.registry.borrow_mut()
     }
 }
 
-pub(crate) struct HeapRegistrySlot<T> {
+#[doc(hidden)]
+pub struct HeapRegistrySlot<T> {
     /// `None` while a parked carrier holds no registry: the carrier keeps no
     /// heap-identified handle across its idle period. The option adds no TLS
     /// bytes (`Option<HeapRegistryHandle<T>>` is the same size as the
@@ -87,7 +99,8 @@ pub(crate) struct HeapRegistrySlot<T> {
 }
 
 // The inner guard must drop before its owning outer handle guard.
-pub(crate) struct HeapRegistryRef<'a, T> {
+#[doc(hidden)]
+pub struct HeapRegistryRef<'a, T> {
     value: Ref<'a, T>,
     _handle: Ref<'a, Option<HeapRegistryHandle<T>>>,
 }
@@ -100,7 +113,8 @@ impl<T> Deref for HeapRegistryRef<'_, T> {
     }
 }
 
-pub(crate) struct HeapRegistryRefMut<'a, T> {
+#[doc(hidden)]
+pub struct HeapRegistryRefMut<'a, T> {
     value: RefMut<'a, T>,
     _handle: Ref<'a, Option<HeapRegistryHandle<T>>>,
 }
@@ -120,13 +134,15 @@ impl<T> DerefMut for HeapRegistryRefMut<'_, T> {
 }
 
 impl<T> HeapRegistrySlot<T> {
-    pub(crate) fn new(value: T) -> Self {
+    #[doc(hidden)]
+    pub fn new(value: T) -> Self {
         Self {
             active: RefCell::new(Some(HeapRegistryHandle::new(value))),
         }
     }
 
-    pub(crate) fn current(&self) -> HeapRegistryHandle<T> {
+    #[doc(hidden)]
+    pub fn current(&self) -> HeapRegistryHandle<T> {
         self.active
             .borrow()
             .as_ref()
@@ -139,14 +155,18 @@ impl<T> HeapRegistrySlot<T> {
     /// The installed handle's heap identity, or `None` while a parked carrier
     /// holds no registry. Debug fingerprints use this instead of [`Self::current`]
     /// so they can sample an idle carrier.
-    pub(crate) fn installed_heap_identity(&self) -> Option<usize> {
+    #[doc(hidden)]
+    pub fn installed_heap_identity(&self) -> Option<usize> {
         self.active
             .borrow()
             .as_ref()
             .map(|handle| handle.heap_identity)
     }
 
-    pub(crate) fn install(&self, handle: &HeapRegistryHandle<T>) {
+    /// Signed exact-caller row (STAGE3B T3): each registry's own install
+    /// entry point and the carrier activation code.
+    #[doc(hidden)]
+    pub fn install(&self, handle: &HeapRegistryHandle<T>) {
         let mut active = self.active.borrow_mut();
         if active
             .as_ref()
@@ -162,11 +182,17 @@ impl<T> HeapRegistrySlot<T> {
     /// Carrier park: forget the installed handle without allocating. The
     /// registry value stays alive through the holders that share it (the
     /// World's Contexts); the idle carrier only drops its clone.
-    pub(crate) fn park(&self) {
+    /// Signed exact-caller row (STAGE3B T3): the carrier park and each
+    /// registry's own park entry point.
+    #[doc(hidden)]
+    pub fn park(&self) {
         *self.active.borrow_mut() = None;
     }
 
-    pub(crate) fn reset(&self, value: T) {
+    /// Signed exact-caller row (STAGE3B T3): each registry's own reset
+    /// entry point and the carrier activation code.
+    #[doc(hidden)]
+    pub fn reset(&self, value: T) {
         let heap_identity = crate::tagged::gc::current_tagged_heap_identity().unwrap_or(0);
         let mut active = self.active.borrow_mut();
         if let Some(handle) = active.as_mut()
@@ -180,7 +206,8 @@ impl<T> HeapRegistrySlot<T> {
     }
 
     #[inline]
-    pub(crate) fn borrow(&self) -> HeapRegistryRef<'_, T> {
+    #[doc(hidden)]
+    pub fn borrow(&self) -> HeapRegistryRef<'_, T> {
         let handle = self.active.borrow();
         let current = handle.as_ref().expect(
             "no registry is installed on this thread; an owner installs one before Lisp runs",
@@ -197,7 +224,8 @@ impl<T> HeapRegistrySlot<T> {
     }
 
     #[inline]
-    pub(crate) fn borrow_mut(&self) -> HeapRegistryRefMut<'_, T> {
+    #[doc(hidden)]
+    pub fn borrow_mut(&self) -> HeapRegistryRefMut<'_, T> {
         let handle = self.active.borrow();
         let current = handle.as_ref().expect(
             "no registry is installed on this thread; an owner installs one before Lisp runs",
@@ -211,6 +239,15 @@ impl<T> HeapRegistrySlot<T> {
     }
 }
 
-#[cfg(test)]
+/// Whether two handles share one registry allocation: the cross-heap
+/// reset rows (kept core-side, where `Context` lives) assert on this.
+#[cfg(any(test, feature = "test-support"))]
+impl<T> HeapRegistryHandle<T> {
+    pub fn registry_ptr_eq_for_test(a: &Self, b: &Self) -> bool {
+        Arc::ptr_eq(&a.registry, &b.registry)
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
 #[path = "tests/ownership_test.rs"]
 mod ownership_tests;

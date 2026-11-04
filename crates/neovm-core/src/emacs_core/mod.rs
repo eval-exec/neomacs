@@ -380,8 +380,7 @@ pub mod composite;
 pub use neovm_value::emacs_char;
 #[path = "text/format/mod.rs"]
 pub mod format;
-#[path = "runtime/heap_registry/mod.rs"]
-pub(crate) mod heap_registry;
+pub(crate) use neovm_value::heap_registry;
 #[path = "text/json/mod.rs"]
 pub mod json;
 #[path = "text/regex/mod.rs"]
@@ -585,6 +584,9 @@ mod architecture_coherence_upper_impl_ratchet_test;
 #[path = "tests/architecture/plist_head_seam_guard_test.rs"]
 mod architecture_plist_head_seam_guard_test;
 
+#[cfg(test)]
+#[path = "tests/heap_registry_cross_heap_test.rs"]
+mod heap_registry_cross_heap_test;
 #[cfg(test)]
 #[path = "tests/plist_collection_capture_test.rs"]
 mod plist_collection_capture_test;

@@ -162,6 +162,11 @@ enum LowerRoot {
     /// moved from eval with stage-3b T4.1. A top-level production module like
     /// the other lower roots; it names no emacs_core item.
     Quit,
+    /// The Context-owned semantic-registry substrate moved from the core
+    /// runtime with stage-3b T3. A top-level production module like the
+    /// other lower roots; its one reach below the evaluator is
+    /// `neovm_value::tagged::gc`, and it names no emacs_core item.
+    HeapRegistry,
 }
 
 impl LowerRoot {
@@ -188,6 +193,7 @@ impl LowerRoot {
             "host_effect" => Self::HostEffect,
             "tls_fingerprint" => Self::TlsFingerprint,
             "quit" => Self::Quit,
+            "heap_registry" => Self::HeapRegistry,
             unknown => {
                 panic!("unknown top-level production module {unknown}; add a LowerRoot variant")
             }
@@ -217,6 +223,7 @@ impl LowerRoot {
             Self::HostEffect => "host_effect",
             Self::TlsFingerprint => "tls_fingerprint",
             Self::Quit => "quit",
+            Self::HeapRegistry => "heap_registry",
         }
     }
 }
