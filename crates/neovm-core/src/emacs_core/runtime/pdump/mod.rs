@@ -527,7 +527,7 @@ pub fn dump_to_file(eval: &Context, path: &Path) -> Result<(), DumpError> {
 ///
 /// This reconstructs a full `Context` from explicit mmap sections, setting up
 /// thread-local pointers and resetting caches.
-pub fn load_from_dump(
+pub fn load_from_dump_with_proof(
     path: &Path,
     proof: crate::emacs_core::eval::hooks_proof::EvalHooksInstalled,
 ) -> Result<Context, DumpError> {

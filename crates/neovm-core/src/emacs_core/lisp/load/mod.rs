@@ -1575,7 +1575,7 @@ pub(crate) enum EagerExpansionFailure {
     /// GNU's behaviour: the flow propagates.
     Propagate,
     /// Image construction only (`loadup.el` under
-    /// [`create_bootstrap_evaluator_for_loadup`]): a SIGNAL from the expander
+    /// [`bootstrap_evaluator_for_loadup`]): a SIGNAL from the expander
     /// evaluates the unexpanded form instead (step 1) or the one-level
     /// expansion (step 3).  Neomacs can build its image from `.el` sources,
     /// whose eager expansion meets require cycles (cl-lib <-> cl-generic <->
@@ -6044,12 +6044,6 @@ fn maybe_trace_bootstrap_macro_perf(eval: &super::eval::Context) {
     }
 }
 
-pub fn create_bootstrap_evaluator(
-    proof: EvalHooksInstalled,
-) -> Result<super::eval::Context, BootstrapError> {
-    create_bootstrap_evaluator_with_features(&[], proof)
-}
-
 /// The refusal, decided once per process.
 ///
 /// Once, because the sweep walks the whole Lisp tree and both bootstrap entry
@@ -6173,14 +6167,14 @@ fn apply_loadup_invocation(eval: &mut super::eval::Context, invocation: &LoadupI
     eval.set_variable("dump-mode", Value::string(dump.mode().as_gnu_string()));
 }
 
-pub fn create_bootstrap_evaluator_with_features(
+pub fn bootstrap_evaluator_with_features(
     extra_features: &[&str],
     proof: EvalHooksInstalled,
 ) -> Result<super::eval::Context, BootstrapError> {
-    create_bootstrap_evaluator_for_loadup(extra_features, &LoadupInvocation::PreloadOnly, proof)
+    bootstrap_evaluator_for_loadup(extra_features, &LoadupInvocation::PreloadOnly, proof)
 }
 
-pub fn create_bootstrap_evaluator_for_loadup(
+pub fn bootstrap_evaluator_for_loadup(
     extra_features: &[&str],
     invocation: &LoadupInvocation,
     proof: EvalHooksInstalled,
@@ -6428,24 +6422,24 @@ pub fn create_bootstrap_evaluator_for_loadup(
 /// The dump file is invalidated by the bootstrap image schema version and
 /// by a fingerprint of the runtime root's Lisp sources. Set
 /// `NEOVM_DISABLE_PDUMP=1` to force fresh bootstrap.
-pub fn create_bootstrap_evaluator_cached(
+pub fn bootstrap_evaluator_cached(
     proof: EvalHooksInstalled,
 ) -> Result<super::eval::Context, BootstrapError> {
-    create_bootstrap_evaluator_cached_with_features(&[], proof)
+    bootstrap_evaluator_cached_with_features(&[], proof)
 }
 
-pub fn create_runtime_startup_evaluator(
+pub fn runtime_startup_evaluator(
     proof: EvalHooksInstalled,
 ) -> Result<super::eval::Context, BootstrapError> {
-    create_runtime_startup_evaluator_with_features(&[], proof)
+    runtime_startup_evaluator_with_features(&[], proof)
 }
 
-pub(crate) fn create_runtime_startup_evaluator_at_path(
+pub fn runtime_startup_evaluator_at_path(
     extra_features: &[&str],
     dump_path: &Path,
     proof: EvalHooksInstalled,
 ) -> Result<super::eval::Context, BootstrapError> {
-    let mut eval = create_bootstrap_evaluator_cached_at_path(extra_features, dump_path, proof)?;
+    let mut eval = bootstrap_evaluator_cached_at_path(extra_features, dump_path, proof)?;
     if let Err(err) = apply_runtime_startup_state(&mut eval) {
         // Render while the evaluator heap is still alive: the caller's
         // cleanup purges the heap, leaving the signal payload unprintable.
@@ -6458,42 +6452,36 @@ pub(crate) fn create_runtime_startup_evaluator_at_path(
     Ok(eval)
 }
 
-pub fn create_runtime_startup_evaluator_with_features(
+pub fn runtime_startup_evaluator_with_features(
     extra_features: &[&str],
     proof: EvalHooksInstalled,
 ) -> Result<super::eval::Context, BootstrapError> {
     let project_root = runtime_project_root();
     let dump_path = bootstrap_dump_path(&project_root, extra_features);
-    create_runtime_startup_evaluator_at_path(extra_features, &dump_path, proof)
+    runtime_startup_evaluator_at_path(extra_features, &dump_path, proof)
 }
 
-pub fn create_runtime_startup_evaluator_cached(
+pub fn runtime_startup_evaluator_cached(
     proof: EvalHooksInstalled,
 ) -> Result<super::eval::Context, BootstrapError> {
-    create_runtime_startup_evaluator(proof)
+    runtime_startup_evaluator(proof)
 }
 
-pub fn create_runtime_startup_evaluator_cached_with_features(
+pub fn runtime_startup_evaluator_cached_with_features(
     extra_features: &[&str],
     proof: EvalHooksInstalled,
 ) -> Result<super::eval::Context, BootstrapError> {
-    create_runtime_startup_evaluator_with_features(extra_features, proof)
+    runtime_startup_evaluator_with_features(extra_features, proof)
 }
 
-pub fn load_runtime_image_with_features(
+pub fn load_runtime_image(
     role: RuntimeImageRole,
     extra_features: &[&str],
     dump_path: Option<&Path>,
     proof: EvalHooksInstalled,
 ) -> Result<super::eval::Context, EvalError> {
     let executable = runtime_image_executable(role, dump_path);
-    load_runtime_image_with_features_for_executable(
-        role,
-        extra_features,
-        dump_path,
-        &executable,
-        proof,
-    )
+    load_runtime_image_for_executable(role, extra_features, dump_path, &executable, proof)
 }
 
 fn runtime_image_executable(role: RuntimeImageRole, dump_path: Option<&Path>) -> PathBuf {
@@ -6521,7 +6509,7 @@ pub fn runtime_image_available(role: RuntimeImageRole) -> bool {
         .any(|candidate| candidate.exists())
 }
 
-pub(crate) fn load_runtime_image_with_features_for_executable(
+pub fn load_runtime_image_for_executable(
     role: RuntimeImageRole,
     extra_features: &[&str],
     dump_path: Option<&Path>,
@@ -6538,7 +6526,7 @@ pub(crate) fn load_runtime_image_with_features_for_executable(
         let mut last_error = None;
         let mut loaded = None;
         for (index, candidate) in candidates.iter().enumerate() {
-            match pdump::load_from_dump(candidate, proof) {
+            match pdump::load_from_dump_with_proof(candidate, proof) {
                 Ok(eval) => {
                     loaded = Some(eval);
                     break;
@@ -6657,16 +6645,16 @@ pub fn maybe_run_after_pdump_load_hook(eval: &mut super::eval::Context) -> bool 
     false
 }
 
-pub fn create_bootstrap_evaluator_cached_with_features(
+pub fn bootstrap_evaluator_cached_with_features(
     extra_features: &[&str],
     proof: EvalHooksInstalled,
 ) -> Result<super::eval::Context, BootstrapError> {
     let project_root = runtime_project_root();
     let dump_path = bootstrap_dump_path(&project_root, extra_features);
-    create_bootstrap_evaluator_cached_at_path(extra_features, &dump_path, proof)
+    bootstrap_evaluator_cached_at_path(extra_features, &dump_path, proof)
 }
 
-pub(crate) fn create_bootstrap_evaluator_cached_at_path(
+pub fn bootstrap_evaluator_cached_at_path(
     extra_features: &[&str],
     dump_path: &Path,
     proof: EvalHooksInstalled,
@@ -6695,7 +6683,7 @@ pub(crate) fn create_bootstrap_evaluator_cached_at_path(
         proof: EvalHooksInstalled,
     ) -> Result<Option<super::eval::Context>, BootstrapError> {
         let start = std::time::Instant::now();
-        match pdump::load_from_dump(dump_path, proof) {
+        match pdump::load_from_dump_with_proof(dump_path, proof) {
             Ok(mut eval) => {
                 tracing::info!(
                     "pdump: loaded bootstrap state from {} {} ({:.2?})",
@@ -6736,7 +6724,7 @@ pub(crate) fn create_bootstrap_evaluator_cached_at_path(
 
     // Allow disabling pdump via env var
     if std::env::var("NEOVM_DISABLE_PDUMP").unwrap_or_default() == "1" {
-        let mut eval = create_bootstrap_evaluator_with_features(extra_features, proof)?;
+        let mut eval = bootstrap_evaluator_with_features(extra_features, proof)?;
         finalize_or_log(&mut eval, &project_root, "pdump disabled finalize failed")?;
         return Ok(eval);
     }
@@ -6793,7 +6781,7 @@ pub(crate) fn create_bootstrap_evaluator_cached_at_path(
     };
 
     if _write_lock.is_none() {
-        let mut eval = create_bootstrap_evaluator_with_features(extra_features, proof)?;
+        let mut eval = bootstrap_evaluator_with_features(extra_features, proof)?;
         ensure_startup_compat_variables(&mut eval, &project_root);
         finalize_or_log(
             &mut eval,
@@ -6816,7 +6804,7 @@ pub(crate) fn create_bootstrap_evaluator_cached_at_path(
 
     // Full bootstrap
     let start = std::time::Instant::now();
-    let mut eval = create_bootstrap_evaluator_with_features(extra_features, proof)?;
+    let mut eval = bootstrap_evaluator_with_features(extra_features, proof)?;
     ensure_startup_compat_variables(&mut eval, &project_root);
     let bootstrap_time = start.elapsed();
 
@@ -6846,7 +6834,7 @@ pub(crate) fn create_bootstrap_evaluator_cached_at_path(
             // and terminal, so the in-memory evaluator must be re-activated
             // before it is used.
             let live_runtime = pdump::snapshot_active_runtime(&mut eval);
-            match pdump::load_from_dump(dump_path, proof) {
+            match pdump::load_from_dump_with_proof(dump_path, proof) {
                 Ok(mut loaded) => {
                     finalize_or_log(
                         &mut loaded,

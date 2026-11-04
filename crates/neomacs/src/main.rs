@@ -3650,11 +3650,10 @@ fn create_startup_evaluator_for_mode(mode: RuntimeMode, startup: &StartupOptions
     let evaluator = match mode {
         RuntimeMode::Raw => raw_source_bootstrap_evaluator(),
         RuntimeMode::BootstrapUse => {
-            neovm_core::emacs_core::load::load_runtime_image_with_features(
+            neovm_core::emacs_core::load_boot::load_runtime_image_with_features(
                 RuntimeImageRole::Bootstrap,
                 BOOTSTRAP_CORE_FEATURES,
                 startup.dump_file_override.as_deref(),
-                neovm_core::emacs_core::eval_hook_installers::install_eval_hooks(),
             )
             .unwrap_or_else(|err| {
                 panic!(
@@ -3674,11 +3673,10 @@ fn create_startup_evaluator_for_mode(mode: RuntimeMode, startup: &StartupOptions
             if startup.dump_file_override.is_some()
                 || neovm_core::emacs_core::load::runtime_image_available(RuntimeImageRole::Final)
             {
-                neovm_core::emacs_core::load::load_runtime_image_with_features(
+                neovm_core::emacs_core::load_boot::load_runtime_image_with_features(
                     RuntimeImageRole::Final,
                     BOOTSTRAP_CORE_FEATURES,
                     startup.dump_file_override.as_deref(),
-                    neovm_core::emacs_core::eval_hook_installers::install_eval_hooks(),
                 )
                 .unwrap_or_else(|err| {
                     panic!(
@@ -3694,11 +3692,10 @@ fn create_startup_evaluator_for_mode(mode: RuntimeMode, startup: &StartupOptions
                      image (slower startup, compile-main lisp loads from source). \
                      Run cargo xtask fresh-build --release to build runtime images."
                 );
-                neovm_core::emacs_core::load::load_runtime_image_with_features(
+                neovm_core::emacs_core::load_boot::load_runtime_image_with_features(
                     RuntimeImageRole::Bootstrap,
                     BOOTSTRAP_CORE_FEATURES,
                     None,
-                    neovm_core::emacs_core::eval_hook_installers::install_eval_hooks(),
                 )
                 .unwrap_or_else(|err| {
                     panic!(
@@ -3741,10 +3738,9 @@ fn raw_source_bootstrap_evaluator() -> Context {
     // outer command loop starts the one real session after the final GUI/TTY
     // terminal has been installed.
     let invocation = source_bootstrap_loadup_invocation();
-    neovm_core::emacs_core::load::create_bootstrap_evaluator_for_loadup(
+    neovm_core::emacs_core::load_boot::create_bootstrap_evaluator_for_loadup(
         BOOTSTRAP_CORE_FEATURES,
         &invocation,
-        neovm_core::emacs_core::eval_hook_installers::install_eval_hooks(),
     )
     .expect("raw bootstrap should succeed")
 }
@@ -5091,10 +5087,9 @@ fn run_temacs_dump_mode(dump_mode: LoadupDumpMode, startup: &StartupOptions) {
     );
 
     let invocation = raw_dump_loadup_invocation(startup, dump_mode);
-    let eval = neovm_core::emacs_core::load::create_bootstrap_evaluator_for_loadup(
+    let eval = neovm_core::emacs_core::load_boot::create_bootstrap_evaluator_for_loadup(
         BOOTSTRAP_CORE_FEATURES,
         &invocation,
-        neovm_core::emacs_core::eval_hook_installers::install_eval_hooks(),
     )
     .expect("temacs bootstrap dump should succeed");
 
