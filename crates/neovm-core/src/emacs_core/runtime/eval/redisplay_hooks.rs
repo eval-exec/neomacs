@@ -1092,7 +1092,7 @@ struct MiniDisplaySource<'a> {
         LispCharPos1,
         LispCharPos1,
         LispCharPos1,
-        crate::window::WindowPositionMarkerState,
+        crate::emacs_core::eval::data::window_state::WindowPositionMarkerState,
         bool,
     )>,
     old_buffer: Option<BufferId>,
@@ -1182,7 +1182,7 @@ impl<'a> MiniDisplaySource<'a> {
                     *old_point = LispCharPos1::ONE;
                     // Preserve old marker registrations until unwind. The
                     // saved window snapshot roots those marker objects.
-                    *position_markers = crate::window::WindowPositionMarkerState::Detached;
+                    *position_markers = crate::emacs_core::eval::data::window_state::WindowPositionMarkerState::Detached;
                 }
                 crate::window::window_markers::attach_window_position_markers(
                     &mut scope.eval.edit.buffers,

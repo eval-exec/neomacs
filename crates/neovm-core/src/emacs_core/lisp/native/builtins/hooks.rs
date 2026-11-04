@@ -246,7 +246,7 @@ fn apply_saved_leaf_buffer_restoration(
                     *window_start = LispCharPos1::ONE;
                     *point = current_point;
                     *old_point = current_point;
-                    *position_markers = crate::window::WindowPositionMarkerState::Detached;
+                    *position_markers = crate::emacs_core::eval::data::window_state::WindowPositionMarkerState::Detached;
                     crate::window::window_markers::attach_window_position_markers(buffers, window);
                 }
                 SavedWindowBufferRestoration::FindSubstitute => {}
@@ -1393,7 +1393,7 @@ pub(crate) fn set_window_configuration_with_options(
                                 *point = substitute_point;
                                 *old_point = substitute_point;
                                 *position_markers =
-                                    crate::window::WindowPositionMarkerState::Detached;
+                                    crate::emacs_core::eval::data::window_state::WindowPositionMarkerState::Detached;
                             }
                             crate::window::window_markers::attach_window_position_markers(
                                 buffers, window,

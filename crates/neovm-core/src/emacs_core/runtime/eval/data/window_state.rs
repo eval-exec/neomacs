@@ -1,8 +1,9 @@
 //! Window state records owned by the evaluator layer (stage-4 W1 E2).
 
-use neovm_edit::buffer::{BufferId, LispCharPos1};
+use neovm_edit::buffer::{BufferId, LispCharPos1, MarkerRef};
 use neovm_edit::emacs_core::display_metrics::{Rect, WindowId};
 use neovm_value::display_vocab::FrameId;
+use neovm_value::value::Value;
 use rustc_hash::FxHashMap as HashMap;
 
 /// Redisplay-owned runtime state used to decide which GNU window hooks fire.
@@ -152,5 +153,153 @@ impl WindowDomain {
     /// carried beside it.
     pub fn predicate(self) -> &'static str {
         self.into()
+    }
+}
+
+/// Marker handles have distinct roles in GNU's live-window invariant. Keeping
+/// those roles as separate types prevents accidentally moving (for example)
+/// `w->start` when a caller intended to move `w->pointm`.
+///
+/// Each handle owns both the internal chain ID and the Lisp marker value that
+/// roots its `MarkerObj` for precise GC. A numeric ID alone is not ownership:
+/// the buffer's intrusive marker chain is deliberately weak and GC unlinks
+/// unmarked entries before sweeping them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WindowStartMarker {
+    marker: MarkerRef,
+    gc_root: Value,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WindowPointMarker {
+    marker: MarkerRef,
+    gc_root: Value,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WindowOldPointMarker {
+    marker: MarkerRef,
+    gc_root: Value,
+}
+
+/// The complete marker set owned by one live leaf window.
+///
+/// The fields are intentionally private: construction is atomic through the
+/// window-marker lifecycle module, so a window cannot represent a partially
+/// attached `(start, point, old-point)` marker set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AttachedWindowPositionMarkers {
+    start: WindowStartMarker,
+    point: WindowPointMarker,
+    old_point: WindowOldPointMarker,
+}
+
+/// Marker lifecycle for a leaf window.
+///
+/// Fresh structural nodes may be detached while their buffer is being chosen;
+/// every live frame/window factory must transition them to `Attached` before
+/// publishing the window.  One enum replaces three independent `Option`s and
+/// makes all partial attachment states unrepresentable.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum WindowPositionMarkerState {
+    #[default]
+    Detached,
+    Attached(AttachedWindowPositionMarkers),
+}
+
+impl WindowPositionMarkerState {
+    pub const fn is_attached(self) -> bool {
+        matches!(self, Self::Attached(_))
+    }
+
+    pub fn attached(self) -> Option<AttachedWindowPositionMarkers> {
+        match self {
+            Self::Detached => None,
+            Self::Attached(markers) => Some(markers),
+        }
+    }
+
+    pub fn detach(&mut self) -> Option<AttachedWindowPositionMarkers> {
+        std::mem::take(self).attached()
+    }
+
+    pub fn trace_roots(self, roots: &mut Vec<Value>) {
+        if let Self::Attached(markers) = self {
+            markers.trace_roots(roots);
+        }
+    }
+}
+
+impl AttachedWindowPositionMarkers {
+    pub fn new(
+        start: (MarkerRef, Value),
+        point: (MarkerRef, Value),
+        old_point: (MarkerRef, Value),
+    ) -> Self {
+        Self {
+            start: WindowStartMarker {
+                marker: start.0,
+                gc_root: start.1,
+            },
+            point: WindowPointMarker {
+                marker: point.0,
+                gc_root: point.1,
+            },
+            old_point: WindowOldPointMarker {
+                marker: old_point.0,
+                gc_root: old_point.1,
+            },
+        }
+    }
+
+    pub fn trace_roots(self, roots: &mut Vec<Value>) {
+        roots.push(self.start.gc_root);
+        roots.push(self.point.gc_root);
+        roots.push(self.old_point.gc_root);
+    }
+}
+
+impl WindowStartMarker {
+    pub const fn raw(self) -> MarkerRef {
+        self.marker
+    }
+
+    /// The rooted Lisp marker, whose `MarkerObj` carries the position.
+    pub const fn root(self) -> Value {
+        self.gc_root
+    }
+}
+
+impl WindowPointMarker {
+    pub const fn raw(self) -> MarkerRef {
+        self.marker
+    }
+
+    pub const fn root(self) -> Value {
+        self.gc_root
+    }
+}
+
+impl WindowOldPointMarker {
+    pub const fn raw(self) -> MarkerRef {
+        self.marker
+    }
+
+    pub const fn root(self) -> Value {
+        self.gc_root
+    }
+}
+
+impl AttachedWindowPositionMarkers {
+    pub const fn start(self) -> WindowStartMarker {
+        self.start
+    }
+
+    pub const fn point(self) -> WindowPointMarker {
+        self.point
+    }
+
+    pub const fn old_point(self) -> WindowOldPointMarker {
+        self.old_point
     }
 }

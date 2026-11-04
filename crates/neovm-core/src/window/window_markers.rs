@@ -149,9 +149,9 @@ pub fn unchain_window_markers(bm: &mut BufferManager, window: &mut Window) {
 
 fn remove_attached_markers(bm: &mut BufferManager, markers: Option<AttachedWindowPositionMarkers>) {
     if let Some(markers) = markers {
-        bm.remove_marker(markers.start.raw());
-        bm.remove_marker(markers.point.raw());
-        bm.remove_marker(markers.old_point.raw());
+        bm.remove_marker(markers.start().raw());
+        bm.remove_marker(markers.point().raw());
+        bm.remove_marker(markers.old_point().raw());
     }
 }
 
@@ -186,7 +186,7 @@ pub fn set_window_start_with_marker(
         *buffer_id,
         position_markers
             .attached()
-            .map(|markers| markers.start.raw()),
+            .map(|markers| markers.start().raw()),
         lisp_position,
     );
 }
@@ -211,7 +211,7 @@ pub fn set_window_point_with_marker(
         *buffer_id,
         position_markers
             .attached()
-            .map(|markers| markers.point.raw()),
+            .map(|markers| markers.point().raw()),
         lisp_position,
     );
 }
@@ -236,7 +236,7 @@ pub fn set_window_old_point_with_marker(
         *buffer_id,
         position_markers
             .attached()
-            .map(|markers| markers.old_point.raw()),
+            .map(|markers| markers.old_point().raw()),
         lisp_position,
     );
 }
@@ -275,13 +275,13 @@ fn sync_leaf(window: &mut Window, edited_buffer_id: BufferId) {
         return;
     };
 
-    if let Some(position) = marker_lisp_position(markers.start.root(), *buffer_id) {
+    if let Some(position) = marker_lisp_position(markers.start().root(), *buffer_id) {
         *window_start = position;
     }
-    if let Some(position) = marker_lisp_position(markers.point.root(), *buffer_id) {
+    if let Some(position) = marker_lisp_position(markers.point().root(), *buffer_id) {
         *point = position;
     }
-    if let Some(position) = marker_lisp_position(markers.old_point.root(), *buffer_id) {
+    if let Some(position) = marker_lisp_position(markers.old_point().root(), *buffer_id) {
         *old_point = position;
     }
 }
@@ -338,13 +338,13 @@ fn refresh_cloned_leaf_from_shared_markers(window: &mut Window) {
     let Some(markers) = position_markers.attached() else {
         return;
     };
-    if let Some(position) = marker_lisp_position(markers.start.root(), *buffer_id) {
+    if let Some(position) = marker_lisp_position(markers.start().root(), *buffer_id) {
         *window_start = position;
     }
-    if let Some(position) = marker_lisp_position(markers.point.root(), *buffer_id) {
+    if let Some(position) = marker_lisp_position(markers.point().root(), *buffer_id) {
         *point = position;
     }
-    if let Some(position) = marker_lisp_position(markers.old_point.root(), *buffer_id) {
+    if let Some(position) = marker_lisp_position(markers.old_point().root(), *buffer_id) {
         *old_point = position;
     }
 }
