@@ -45,6 +45,8 @@ pub mod kill_buffer;
 pub mod kmacro;
 #[path = "commands/minibuffer/mod.rs"]
 pub mod minibuffer;
+#[path = "commands/window_hooks/mod.rs"]
+pub mod window_hooks;
 pub(crate) use neovm_value::prefix;
 #[path = "commands/register/mod.rs"]
 pub mod register;

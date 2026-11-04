@@ -398,7 +398,9 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "run-window-configuration-change-hook",
-        NativeFn::ContextVec(hooks::builtin_run_window_configuration_change_hook),
+        NativeFn::ContextVec(
+            crate::emacs_core::window_hooks::builtin_run_window_configuration_change_hook
+        ),
         SubrArity::new(0, Some(1)),
     )));
     // GNU emacs.c sequences composite.c before window.c/xdisp.c.

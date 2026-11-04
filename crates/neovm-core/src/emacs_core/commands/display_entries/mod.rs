@@ -5,7 +5,6 @@
 //! the window/frame records and the display engine remain core-owned and the
 //! evaluator context is reached through the core facade.
 
-use crate::emacs_core::eval::Context;
 use crate::tagged::SymbolMode;
 use neovm_value::error::{EvalResult, expect_args, expect_args_range};
 use neovm_value::value::*;

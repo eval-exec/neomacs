@@ -2078,7 +2078,7 @@ impl Context {
         // and read the auto-hscroll of 85 it had just computed. Same hook
         // pass per redisplay as before; only its position moved.
         let saved = self.edit.buffers.reset_outermost_restrictions();
-        let _ = super::super::builtins::run_redisplay_window_change_hooks(self);
+        let _ = crate::emacs_core::window_hooks::run_redisplay_window_change_hooks(self);
         // GNU `redisplay_internal` calls `hscroll_window_tree` (src/xdisp.c)
         // before laying out windows so each window's `hscroll` follows point;
         // for a truncated line whose point has moved off the right edge (the

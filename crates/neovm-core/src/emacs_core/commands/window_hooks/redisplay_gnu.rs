@@ -18,7 +18,7 @@ static INHIBIT_REDISPLAY: WellKnown = WellKnown::InhibitRedisplay;
 /// Saved binding and record state remain local to that Context; independent mutators
 /// own separate guards and root stacks.
 struct ChangePass<'a> {
-    eval: &'a mut super::eval::Context,
+    eval: &'a mut crate::emacs_core::eval::Context,
     record: bool,
     binding_count: usize,
     armed: bool,
@@ -39,7 +39,7 @@ impl Drop for ChangePass<'_> {
 /// Restores a buffer ID through an exclusive Context borrow. Each mutator owns
 /// its saved ID and guard; no Lisp state or mutable cache is shared between them.
 struct BufferContext<'a> {
-    eval: &'a mut super::eval::Context,
+    eval: &'a mut crate::emacs_core::eval::Context,
     saved: Option<BufferId>,
 }
 impl Drop for BufferContext<'_> {
@@ -51,7 +51,7 @@ impl Drop for BufferContext<'_> {
 }
 
 fn window_dimensions(
-    eval: &super::eval::Context,
+    eval: &crate::emacs_core::eval::Context,
     frame: FrameId,
     window: WindowId,
 ) -> Option<HookWindowDimensions> {
@@ -71,7 +71,7 @@ fn window_dimensions(
     })
 }
 
-fn record_frames(eval: &mut super::eval::Context) {
+fn record_frames(eval: &mut crate::emacs_core::eval::Context) {
     let selected = eval.frames.selected_frame().map(|frame| frame.id);
     let mut dimensions = std::collections::HashMap::new();
     for frame_id in eval.gnu_frame_order() {
@@ -94,14 +94,14 @@ fn record_frames(eval: &mut super::eval::Context) {
     eval.gnu_redisplay_hooks.frame_window_change.clear();
 }
 
-fn finish_record(eval: &mut super::eval::Context, record: bool) {
+fn finish_record(eval: &mut crate::emacs_core::eval::Context, record: bool) {
     if record {
         record_frames(eval);
     }
     eval.record_redisplay_selection();
 }
 
-fn live(eval: &super::eval::Context, frame: FrameId, window: WindowId) -> bool {
+fn live(eval: &crate::emacs_core::eval::Context, frame: FrameId, window: WindowId) -> bool {
     eval.frames
         .get(frame)
         .and_then(|frame| frame.find_window(window))
@@ -113,7 +113,7 @@ fn live(eval: &super::eval::Context, frame: FrameId, window: WindowId) -> bool {
 /// reading its cdr after safe_funcall observes setcdr made by the callback.
 /// GNU change functions ignore t and do not remove a signaled callback.
 fn walk(
-    eval: &mut super::eval::Context,
+    eval: &mut crate::emacs_core::eval::Context,
     record: &mut bool,
     mut functions: Value,
     argument: Value,
@@ -138,7 +138,7 @@ fn walk(
 }
 
 fn local(
-    eval: &mut super::eval::Context,
+    eval: &mut crate::emacs_core::eval::Context,
     record: &mut bool,
     buffer: BufferId,
     window: WindowId,
@@ -167,14 +167,14 @@ fn local(
 /// GNU Fdefault_value reads outside safe per-function callbacks. Preserve its
 /// void-variable/alias errors and live forwarded default storage.
 fn default_hook_value(
-    eval: &mut super::eval::Context,
+    eval: &mut crate::emacs_core::eval::Context,
     symbol: crate::emacs_core::intern::SymId,
 ) -> EvalResult {
     crate::emacs_core::data::default_value(eval, vec![Value::from_sym_id(symbol)])
 }
 
 fn global(
-    eval: &mut super::eval::Context,
+    eval: &mut crate::emacs_core::eval::Context,
     record: &mut bool,
     frame: FrameId,
     name: &str,
@@ -185,7 +185,7 @@ fn global(
 }
 
 fn selection_changed(
-    eval: &super::eval::Context,
+    eval: &crate::emacs_core::eval::Context,
     frame_id: FrameId,
     window: WindowId,
     frame_selected_change: bool,
@@ -213,7 +213,7 @@ enum NamedHookCall {
 /// at each local t marker. This adds no Lisp cache: the current tail is rooted
 /// in the exclusively borrowed evaluator's explicit specpdl root slot.
 fn named_hook_value(
-    eval: &mut super::eval::Context,
+    eval: &mut crate::emacs_core::eval::Context,
     symbol: crate::emacs_core::intern::SymId,
     mut value: Value,
     args: &[Value],
@@ -258,7 +258,7 @@ fn named_hook_value(
 }
 
 fn named_hook_call(
-    eval: &mut super::eval::Context,
+    eval: &mut crate::emacs_core::eval::Context,
     symbol: crate::emacs_core::intern::SymId,
     function: Value,
     args: &[Value],
@@ -284,7 +284,7 @@ fn named_hook_call(
 }
 
 fn safe_named_hook(
-    eval: &mut super::eval::Context,
+    eval: &mut crate::emacs_core::eval::Context,
     symbol: crate::emacs_core::intern::SymId,
     args: &[Value],
 ) -> EvalResult {
@@ -304,7 +304,10 @@ fn safe_named_hook(
 /// Explicit/eager run-window-scroll-functions has ordinary hook error and
 /// reentry semantics. Only the redisplay committed-start seam is safe-called
 /// under the private redisplay guard.
-pub(super) fn run_eager_scroll(eval: &mut super::eval::Context, window: WindowId) -> EvalResult {
+pub(super) fn run_eager_scroll(
+    eval: &mut crate::emacs_core::eval::Context,
+    window: WindowId,
+) -> EvalResult {
     let frame = eval.frames.find_window_frame_id(window).ok_or_else(|| {
         signal(
             LispCondition::WrongTypeArgument,
@@ -330,7 +333,7 @@ pub(super) fn run_eager_scroll(eval: &mut super::eval::Context, window: WindowId
     )
 }
 
-pub(super) fn run(eval: &mut super::eval::Context) -> EvalResult {
+pub(super) fn run(eval: &mut crate::emacs_core::eval::Context) -> EvalResult {
     let count = eval.specpdl.len();
     let mut pass = ChangePass {
         eval,
@@ -560,7 +563,7 @@ fn run_inner(pass: &mut ChangePass<'_>) -> EvalResult {
 /// safe_run_hooks_2 at the committed-start seam, without a Lisp-visible
 /// inhibit-redisplay binding. The enclosing private transaction owns reentry.
 pub(super) fn run_committed_scroll(
-    eval: &mut super::eval::Context,
+    eval: &mut crate::emacs_core::eval::Context,
     window: WindowId,
 ) -> EvalResult {
     let mut guard = eval.gnu_guard_committed_scroll();
@@ -586,7 +589,7 @@ pub(super) fn run_committed_scroll(
 /// Saved IDs and the root-stack boundary belong to that Context; independent
 /// mutators never share this guard or its mutable restore state.
 struct ConfigurationContext<'a> {
-    eval: &'a mut super::eval::Context,
+    eval: &'a mut crate::emacs_core::eval::Context,
     frame: Option<FrameId>,
     buffer: Option<BufferId>,
     roots: Option<crate::emacs_core::eval::SpecpdlRootScopeState>,
@@ -626,7 +629,7 @@ impl Drop for ConfigurationContext<'_> {
 /// Restores a selected-window ID through one exclusive Context borrow. Each
 /// mutator owns its guard and saved ID without shared mutable selection state.
 struct SelectedWindowContext<'a> {
-    eval: &'a mut super::eval::Context,
+    eval: &'a mut crate::emacs_core::eval::Context,
     window: Option<WindowId>,
 }
 impl SelectedWindowContext<'_> {
@@ -651,7 +654,7 @@ impl Drop for SelectedWindowContext<'_> {
     }
 }
 
-fn run_funs(eval: &mut super::eval::Context, mut functions: Value) -> EvalResult {
+fn run_funs(eval: &mut crate::emacs_core::eval::Context, mut functions: Value) -> EvalResult {
     let roots = eval.save_specpdl_roots();
     let tail = eval.push_specpdl_root_slot(functions);
     let result = (|| {
@@ -674,7 +677,10 @@ fn run_funs(eval: &mut super::eval::Context, mut functions: Value) -> EvalResult
 /// when selecting the requested frame at entry; restore each local window;
 /// leave deliberate global callback selections intact when no outer restore
 /// was registered. Snapshot and root the default list before local callbacks.
-pub(super) fn run_configuration(eval: &mut super::eval::Context, frame: FrameId) -> EvalResult {
+pub(super) fn run_configuration(
+    eval: &mut crate::emacs_core::eval::Context,
+    frame: FrameId,
+) -> EvalResult {
     let symbol = crate::emacs_core::intern::intern("window-configuration-change-hook");
     let functions = default_hook_value(eval, symbol)?;
     let roots = eval.save_specpdl_roots();

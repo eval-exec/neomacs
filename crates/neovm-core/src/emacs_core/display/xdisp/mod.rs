@@ -198,7 +198,7 @@ impl super::eval::Context {
         window_id: WindowId,
     ) -> EvalResult {
         if crate::emacs_core::eval::gnu_redisplay_hooks_enabled() {
-            return crate::emacs_core::builtins::run_gnu_committed_scroll_functions(
+            return crate::emacs_core::window_hooks::run_gnu_committed_scroll_functions(
                 self, window_id,
             );
         }
