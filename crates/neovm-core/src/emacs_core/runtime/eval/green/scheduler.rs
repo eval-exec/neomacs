@@ -2908,7 +2908,7 @@ impl Control {
     pub(crate) fn prepare_select_park_for_test(
         &self,
         owner: ThreadKey,
-        processes: &crate::emacs_core::process::ProcessManager,
+        processes: &crate::emacs_core::eval::data::process_state::ProcessManager,
     ) -> Result<(), SelectParkObservationError> {
         let mut slot = self
             .after_next_select_park
@@ -4445,7 +4445,7 @@ mod tests {
     fn ended_owner_continuation_exit_notifies_registered_native_source() {
         use crate::host_effect::wake::{ControlDestination, ControlNudge, ControlWakeOutcome};
         let worker = ThreadKey::Worker(NonZeroU64::MIN);
-        let manager = crate::emacs_core::process::ProcessManager::new();
+        let manager = crate::emacs_core::eval::data::process_state::ProcessManager::new();
         let control = Control::default();
         let _main = control.register_main();
         let _worker = control.register_worker(worker);
@@ -5194,7 +5194,7 @@ mod tests {
         use crate::host_effect::wake::{ControlDestination, ControlNudge, ControlWakeOutcome};
         let worker = ThreadKey::Worker(NonZeroU64::MIN);
         for original in [Wait::Runnable, Wait::Join(worker)] {
-            let manager = crate::emacs_core::process::ProcessManager::new();
+            let manager = crate::emacs_core::eval::data::process_state::ProcessManager::new();
             let control = Control::default();
             let _main = control.register_main();
             let _worker = control.register_worker(worker);

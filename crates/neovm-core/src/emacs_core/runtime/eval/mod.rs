@@ -42,7 +42,6 @@ use super::keymap::{list_keymap_define, list_keymap_set_parent, make_sparse_list
 use super::minibuffer::MinibufferManager;
 use super::mode::ModeRegistry;
 use super::print::map_flow;
-use super::process::ProcessManager;
 use super::rect::RectangleState;
 use super::regex::MatchData;
 use super::register::RegisterManager;
@@ -50,6 +49,7 @@ use super::symbol::{CanonicalAccess, ConstantWrite, Obarray};
 use super::threads::ThreadManager;
 use super::value::*;
 use crate::buffer::{BufferId, BufferManager, CharPos0, EmacsBytePos, LispCharPos1};
+use crate::emacs_core::eval::data::process_state::ProcessManager;
 use crate::face::FaceTable;
 use crate::gc_trace::GcTrace;
 use crate::tagged::header::{CLOSURE_ARGLIST, SubrDispatchKind, SubrInteractivity};

@@ -43,6 +43,7 @@ use crate::emacs_core::process::NetworkSocketIo;
 use crate::emacs_core::process::reap::ChildOwnershipIo;
 #[cfg(test)]
 use crate::emacs_core::process::types::NativeConnectObservationSlot;
+use crate::gc_trace::GcTrace;
 use crate::host_effect::wake::{
     ControlDestination, ControlNudge, ControlNudgeOutcome, NotificationLatch,
 };
@@ -2479,4 +2480,37 @@ pub enum LastBlockArrival {
     JustRaised,
     /// The flag was already up: `return nbytes` with nothing decoded.
     AlreadyRaised,
+}
+
+// GcTrace moved verbatim with the state type (peer ruling condition 3).
+
+impl GcTrace for ProcessManager {
+    fn trace_roots(&self, roots: &mut Vec<Value>) {
+        for process in self
+            .processes
+            .values()
+            .chain(self.deleted_processes.values())
+        {
+            roots.push(process.name);
+            roots.push(process.proc_type);
+            roots.push(process.buffer);
+            roots.push(process.mark);
+            roots.push(process.command);
+            roots.push(process.childp);
+            roots.push(process.status);
+            roots.push(process.pending_status);
+            roots.push(process.tty_name);
+            roots.push(process.write_queue);
+            roots.push(process.filter);
+            roots.push(process.sentinel);
+            roots.push(process.log);
+            roots.push(process.plist);
+            roots.push(process.stderrproc);
+            roots.push(process.datagram_address);
+            roots.push(process.coding_decode);
+            roots.push(process.coding_encode);
+            roots.push(process.thread);
+            roots.push(process.gnutls_boot_parameters);
+        }
+    }
 }
