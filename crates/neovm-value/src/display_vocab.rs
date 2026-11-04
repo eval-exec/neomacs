@@ -1081,3 +1081,37 @@ pub struct SnapshotRequest {
     pub target: SnapshotTarget,
     pub format: SnapshotFormat,
 }
+
+// --- stage-4 W2/E5: display space geometry keys (TYPE-DOWN) ---
+
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::IntoStaticStr, strum::EnumCount,
+)]
+#[repr(usize)]
+#[strum(prefix = ":", serialize_all = "kebab-case")]
+pub enum DisplaySpaceKey {
+    Width,
+    RelativeWidth,
+    AlignTo,
+    Height,
+    RelativeHeight,
+    Ascent,
+}
+
+impl DisplaySpaceKey {
+    pub fn from_lisp_value(value: Value) -> Option<Self> {
+        Self::from_keyword(value.as_bare_symbol_name()?)
+    }
+
+    pub fn from_keyword(name: &str) -> Option<Self> {
+        name.strip_prefix(':')?.parse().ok()
+    }
+
+    pub fn keyword(self) -> &'static str {
+        self.into()
+    }
+
+    pub fn value(self) -> Value {
+        Value::keyword(self.keyword())
+    }
+}

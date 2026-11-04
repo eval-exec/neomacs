@@ -31,37 +31,7 @@ use std::ops::ControlFlow;
 
 /// Geometry operands of a stretch-space display specification. Shared by
 /// geometry evaluation and its mutable-input freshness projection.
-#[derive(
-    Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::IntoStaticStr, strum::EnumCount,
-)]
-#[repr(usize)]
-#[strum(prefix = ":", serialize_all = "kebab-case")]
-pub enum DisplaySpaceKey {
-    Width,
-    RelativeWidth,
-    AlignTo,
-    Height,
-    RelativeHeight,
-    Ascent,
-}
-
-impl DisplaySpaceKey {
-    pub fn from_lisp_value(value: Value) -> Option<Self> {
-        Self::from_keyword(value.as_bare_symbol_name()?)
-    }
-
-    pub fn from_keyword(name: &str) -> Option<Self> {
-        name.strip_prefix(':')?.parse().ok()
-    }
-
-    pub fn keyword(self) -> &'static str {
-        self.into()
-    }
-
-    pub fn value(self) -> Value {
-        Value::keyword(self.keyword())
-    }
-}
+pub use neovm_value::display_vocab::DisplaySpaceKey;
 
 /// GNU's single-spec taxonomy from `handle_single_display_spec`, as the head of
 /// one spec: what KIND of spec this is, not its parsed payload.
