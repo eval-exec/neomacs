@@ -223,9 +223,25 @@ impl Default for MinibufferManager {
 }
 
 impl MinibufferManager {
+    /// Construct an empty manager (the command-layer entry constructor).
+    pub fn new() -> Self {
+        Self {
+            state_stack: Vec::new(),
+            history: MinibufferHistory::new(),
+            completion_style: CompletionStyle::Prefix,
+            #[cfg(test)]
+            max_depth: 10,
+        }
+    }
+
     /// Current recursive minibuffer depth (0 = not in minibuffer).
     pub fn depth(&self) -> usize {
         self.state_stack.len()
+    }
+
+    /// Append one history entry from a Lisp string.
+    pub fn add_to_history_lisp(&mut self, name: SymId, value: LispString, max_length: usize) {
+        self.history.add(name, value, max_length);
     }
 }
 

@@ -520,8 +520,6 @@ impl MinibufferEntryPermit {
 }
 
 pub trait MinibufferManagerExt {
-    fn new() -> Self;
-
     fn prepare_entry(
         &self,
         policy: RecursiveMinibufferPolicy,
@@ -574,8 +572,6 @@ pub trait MinibufferManagerExt {
 
     fn add_to_history(&mut self, name: SymId, value: &str, max_length: usize);
 
-    fn add_to_history_lisp(&mut self, name: SymId, value: LispString, max_length: usize);
-
     fn history_length_from_obarray(vars: VariableView<'_>) -> usize;
 
     fn current(&self) -> Option<&MinibufferState>;
@@ -590,16 +586,6 @@ pub trait MinibufferManagerExt {
 }
 
 impl MinibufferManagerExt for MinibufferManager {
-    fn new() -> Self {
-        Self {
-            state_stack: Vec::new(),
-            history: MinibufferHistory::new(),
-            completion_style: CompletionStyle::Prefix,
-            #[cfg(test)]
-            max_depth: 10,
-        }
-    }
-
     /// Decide whether the next minibuffer level may be entered.
     ///
     /// This is deliberately side-effect free. GNU `read_minibuf` rejects a
@@ -812,10 +798,6 @@ impl MinibufferManagerExt for MinibufferManager {
     /// the `history-length` symbol from the obarray (default 100).
     fn add_to_history(&mut self, name: SymId, value: &str, max_length: usize) {
         self.add_to_history_lisp(name, LispString::from_utf8(value), max_length);
-    }
-
-    fn add_to_history_lisp(&mut self, name: SymId, value: LispString, max_length: usize) {
-        self.history.add(name, value, max_length);
     }
 
     /// Read the effective `history-length` from the obarray, defaulting to 100.

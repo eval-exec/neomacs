@@ -9,7 +9,6 @@ use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::expect_min_args;
 use crate::emacs_core::eval::VariableView;
-use crate::emacs_core::minibuffer::MinibufferManagerExt;
 use crate::emacs_core::symbol::Obarray;
 use crate::tagged::SymbolMode;
 // storage imports removed — now using emacs_char directly
