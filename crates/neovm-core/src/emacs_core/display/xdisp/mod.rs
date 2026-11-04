@@ -5721,6 +5721,20 @@ fn selected_line_pixel_height(eval: &mut super::eval::Context) -> Result<Option<
     else {
         return Ok(Some(line_height));
     };
+    // `goto-char` moves the buffer's point but not the selected window's
+    // point marker, which the snapshot freshness token records.  Sync it, as
+    // a layout query does, so rows laid out for an older point are rejected.
+    if eval
+        .frames
+        .selected_frame()
+        .is_some_and(|frame| frame.id == fid)
+    {
+        crate::emacs_core::window_cmds::remember_selected_window_point_in_state(
+            &mut eval.frames,
+            &mut eval.buffers,
+            fid,
+        );
+    }
     let row_height = |snapshot: &WindowDisplaySnapshot| {
         let point = snapshot.point_for_buffer_pos(pos)?;
         Some(
@@ -5734,17 +5748,8 @@ fn selected_line_pixel_height(eval: &mut super::eval::Context) -> Result<Option<
     {
         return Ok(Some(height));
     }
-    let measured = compute_live_window_geometry_scope(
-        eval,
-        fid,
-        wid,
-        crate::window::WindowLayoutQueryScope::Position { target: pos },
-    )?
-    .as_ref()
-    .and_then(row_height);
-    // ponytail: a point the layout cannot place (before window-start, or no
-    // layout yet) falls back to the frame's default line height; GNU would
-    // lay out from point itself and also see taller faces on that line.
+    let measured = motion::screen_line_height_at(eval, fid, wid, buffer_id, pos)?;
+    // Only a window no frontend can lay out reaches the frame's line height.
     Ok(Some(measured.unwrap_or(line_height)))
 }
 

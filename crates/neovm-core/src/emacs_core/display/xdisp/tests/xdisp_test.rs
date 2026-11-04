@@ -1876,14 +1876,21 @@ fn line_pixel_height_on_a_gui_frame_is_the_line_height_not_one() {
     assert_eq!(result, Value::fixnum(14));
 }
 
-#[test]
-fn line_pixel_height_on_a_gui_frame_uses_the_height_of_the_row_at_point() {
-    crate::test_utils::init_test_tracing();
+/// A selected GUI frame (14-pixel lines) showing TEXT with point at POINT.
+fn line_pixel_height_gui_context(
+    text: &str,
+    point: i64,
+) -> (
+    Context,
+    crate::window::FrameId,
+    crate::window::WindowId,
+    crate::buffer::BufferId,
+) {
     let mut ev = crate::emacs_core::Context::new();
-    let buf = ev.buffers.create_buffer("*lph-row*");
+    let buf = ev.buffers.create_buffer("*lph*");
     ev.buffers.set_current(buf);
-    ev.buffers.get_mut(buf).unwrap().insert("a\nb\n");
-    ev.eval_str("(goto-char 3)").unwrap();
+    ev.buffers.get_mut(buf).unwrap().insert(text);
+    ev.eval_str(&format!("(goto-char {point})")).unwrap();
     let fid = ev.frames.create_frame("GUI", 800, 600, buf);
     let frame = ev.frames.get_mut(fid).unwrap();
     frame.set_window_system(Some(Value::symbol("neo")));
@@ -1892,18 +1899,41 @@ fn line_pixel_height_on_a_gui_frame_uses_the_height_of_the_row_at_point() {
     let (_, wid) = resolve_live_window_identity(&ev.frames, None)
         .unwrap()
         .expect("selected window");
-    let freshness = ev.window_display_snapshot_freshness(fid, wid, buf).unwrap();
-    let row = |row, y, height, start, end| crate::window::DisplayRowSnapshot {
+    (ev, fid, wid, buf)
+}
+
+fn line_pixel_height_row(
+    row: i64,
+    y: i64,
+    height: i64,
+    start: i64,
+    end: i64,
+) -> crate::window::DisplayRowSnapshot {
+    crate::window::DisplayRowSnapshot {
         row,
         y,
         height,
         start_buffer_pos: Some(LispCharPos1::new(start)),
         end_buffer_pos: Some(LispCharPos1::new(end)),
         ..Default::default()
-    };
-    // Point (position 3, "b") is a 14-pixel glyph on a row that something
-    // taller later on the line made 30 pixels high; GNU's line_bottom_y
-    // measures the row.
+    }
+}
+
+/// Commit "a\nb\n" rows as a redisplay at the current point: position 3
+/// ("b") is a 14-pixel glyph on a row that something taller made 30 pixels.
+fn commit_line_pixel_height_snapshot(
+    ev: &mut Context,
+    fid: crate::window::FrameId,
+    wid: crate::window::WindowId,
+    buf: crate::buffer::BufferId,
+) {
+    crate::emacs_core::window_cmds::remember_selected_window_point_in_state(
+        &mut ev.frames,
+        &mut ev.buffers,
+        fid,
+    );
+    let freshness = ev.window_display_snapshot_freshness(fid, wid, buf).unwrap();
+    let modiff = ev.buffers.get(buf).unwrap().modified_tick();
     ev.frames
         .get_mut(fid)
         .unwrap()
@@ -1920,18 +1950,79 @@ fn line_pixel_height_on_a_gui_frame_uses_the_height_of_the_row_at_point() {
                 row: 1,
                 col: 0,
             }],
-            rows: vec![row(0, 0, 14, 1, 2), row(1, 14, 30, 3, 4)],
-            buffer_modiff: Some(ev.buffers.get(buf).unwrap().modified_tick()),
+            rows: vec![
+                line_pixel_height_row(0, 0, 14, 1, 2),
+                line_pixel_height_row(1, 14, 30, 3, 4),
+            ],
+            buffer_modiff: Some(modiff),
             layout_freshness: Some(freshness),
             ..Default::default()
         }]);
+}
+
+#[test]
+fn line_pixel_height_on_a_gui_frame_uses_the_height_of_the_row_at_point() {
+    crate::test_utils::init_test_tracing();
+    let (mut ev, fid, wid, buf) = line_pixel_height_gui_context("a\nb\n", 3);
+    commit_line_pixel_height_snapshot(&mut ev, fid, wid, buf);
     assert!(
         ev.fresh_window_display_snapshot(fid, wid, buf).is_some(),
         "the test snapshot must be fresh so the snapshot path answers"
     );
 
+    // GNU's line_bottom_y measures the row, not the glyph at point.
     let result = builtin_line_pixel_height(&mut ev, &[]).unwrap();
     assert_eq!(result, Value::fixnum(30));
+}
+
+#[test]
+fn line_pixel_height_ignores_rows_laid_out_for_an_older_point() {
+    crate::test_utils::init_test_tracing();
+    let (mut ev, fid, wid, buf) = line_pixel_height_gui_context("a\nb\n", 3);
+    // The rows were laid out with point at 1.  `goto-char` then moves only
+    // the buffer's point, not the window's point marker.
+    ev.eval_str("(goto-char 1)").unwrap();
+    commit_line_pixel_height_snapshot(&mut ev, fid, wid, buf);
+    ev.eval_str("(goto-char 3)").unwrap();
+
+    // Point-dependent display (the current line number face) can change a
+    // row, so those rows must not answer; with no frontend the answer is the
+    // frame's line height, not the stale row's 30.
+    let result = builtin_line_pixel_height(&mut ev, &[]).unwrap();
+    assert_eq!(result, Value::fixnum(14));
+}
+
+#[test]
+fn line_pixel_height_lays_out_the_line_at_point_outside_the_window() {
+    use crate::window::{WindowLayoutQuery, WindowLayoutQueryOutcome, WindowLayoutQueryScope};
+    use std::sync::{Arc, Mutex};
+
+    crate::test_utils::init_test_tracing();
+    // Point is inside "bb" on the second source line; there are no current
+    // rows (as when point sits before window-start after `goto-char`).
+    let (mut ev, _fid, wid, _buf) = line_pixel_height_gui_context("aa\nbb\n", 5);
+    let starts = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::clone(&starts);
+    ev.install_window_layout_query(move |_, _, _, scope| {
+        let WindowLayoutQueryScope::Rows { start, .. } = scope else {
+            panic!("line-pixel-height lays out rows from point's line, got {scope:?}");
+        };
+        seen.lock().unwrap().push(start.as_i64());
+        let snapshot = crate::window::WindowDisplaySnapshot {
+            window_id: wid,
+            rows: vec![line_pixel_height_row(0, 0, 30, 4, 6)],
+            ..Default::default()
+        };
+        WindowLayoutQueryOutcome::Ready(WindowLayoutQuery::new(start, Some(snapshot)))
+    });
+
+    let result = builtin_line_pixel_height(&mut ev, &[]).unwrap();
+    assert_eq!(result, Value::fixnum(30));
+    assert_eq!(
+        *starts.lock().unwrap(),
+        vec![4],
+        "rows start at point's line"
+    );
 }
 
 #[test]
