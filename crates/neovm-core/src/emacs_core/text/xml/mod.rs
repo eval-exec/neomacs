@@ -5,11 +5,13 @@
 //! - `libxml-parse-xml-region` — XML parsing via `quick-xml` crate
 //! - `libxml-available-p` — feature availability probe
 
-use super::error::{signal, EvalResult, Flow};
+use super::error::{EvalResult, Flow, signal};
 use super::value::*;
 use crate::buffer::EmacsByteRange;
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::value::ValueKind;
+use std::borrow::Cow;
+use std::collections::HashMap;
 
 // ---------------------------------------------------------------------------
 // Argument helpers
@@ -178,8 +180,8 @@ impl PendingText {
 
 /// Parse region using quick-xml and return Elisp parse tree.
 fn parse_xml_region(data: &[u8], discard_comments: bool) -> Option<Value> {
-    use quick_xml::events::Event;
     use quick_xml::Reader;
+    use quick_xml::events::Event;
 
     let mut reader = Reader::from_reader(data);
     reader.config_mut().trim_text(false);
@@ -399,55 +401,58 @@ fn is_head_element(tag: &str) -> bool {
 fn parse_html_region(data: &[u8], discard_comments: bool) -> Option<Value> {
     let input = String::from_utf8_lossy(data);
     let mut remaining = input.as_ref();
-    let mut xml_pi_comment: Option<Value> = None;
+    let mut nodes: Vec<TopNode> = Vec::new();
 
-    // GNU libxml2 handles XML declarations (<?xml ...?>) as comments and skips <!DOCTYPE ...>.
-    // The `tl` HTML parser mishandles XML prologs, producing corrupted tags (tag name '##')
-    // and embedding subsequent elements inside it.
+    // libxml2's HTML parser treats a processing instruction as a comment
+    // running from after `<` to the first `>` (not `?>`), and skips a
+    // `<!DOCTYPE ...>` through the first `>`. `tl` would otherwise parse a
+    // leading `<?xml ...?>` as a corrupt `##` element and swallow the rest of
+    // the document. Consume the prolog here, in order, so comments, PIs, and
+    // DOCTYPEs can be interleaved. An unterminated prolog token leaves no
+    // root element, so libxml2 returns nil.
     loop {
         let trimmed = remaining.trim_start();
-        if trimmed
-            .get(..5)
-            .is_some_and(|p| p.eq_ignore_ascii_case("<?xml"))
-        {
-            if let Some(end_idx) = trimmed.find("?>") {
-                if !discard_comments && xml_pi_comment.is_none() {
-                    let content = &trimmed[1..end_idx + 1]; // "?xml ...?"
-                    xml_pi_comment = Some(Value::list(vec![
-                        Value::symbol("comment"),
-                        Value::NIL,
-                        Value::string(content),
-                    ]));
-                }
-                remaining = &trimmed[end_idx + 2..];
-                continue;
-            }
+        if let Some(rest) = trimmed.strip_prefix("<!--") {
+            let Some(end) = rest.find("-->") else {
+                return Some(Value::NIL);
+            };
+            nodes.push(TopNode {
+                tag: None,
+                value: comment_value(&rest[..end]),
+            });
+            remaining = &rest[end + 3..];
+            continue;
+        } else if trimmed.starts_with("<?") {
+            let Some(end) = trimmed.find('>') else {
+                return Some(Value::NIL);
+            };
+            // "?xml version=...?" or "?foo" -- the leading `?` is part of the
+            // comment text in GNU's make_dom output.
+            nodes.push(TopNode {
+                tag: None,
+                value: comment_value(&trimmed[1..end]),
+            });
+            remaining = &trimmed[end + 1..];
+            continue;
         } else if trimmed
             .get(..9)
             .is_some_and(|p| p.eq_ignore_ascii_case("<!DOCTYPE"))
         {
-            if let Some(end_idx) = trimmed.find('>') {
-                remaining = &trimmed[end_idx + 1..];
-                continue;
-            }
+            let Some(end) = trimmed.find('>') else {
+                return Some(Value::NIL);
+            };
+            remaining = &trimmed[end + 1..];
+            continue;
         }
         break;
     }
 
-    let dom = tl::parse(remaining, tl::ParserOptions::default()).ok()?;
+    let (protected, raw_text) = protect_raw_text(remaining);
+    let dom = tl::parse(protected.as_ref(), tl::ParserOptions::default()).ok()?;
     let parser = dom.parser();
-    let handles = dom.children();
-
-    let mut nodes: Vec<TopNode> = Vec::new();
-    if let Some(comment_val) = xml_pi_comment {
-        nodes.push(TopNode {
-            tag: None,
-            value: comment_val,
-        });
-    }
-    for handle in handles {
+    for handle in dom.children() {
         let node = handle.get(parser)?;
-        if let Some(top) = convert_tl_top_node(node, parser, discard_comments) {
+        if let Some(top) = convert_tl_top_node(node, parser, &raw_text) {
             nodes.push(top);
         }
     }
@@ -459,58 +464,123 @@ fn parse_html_region(data: &[u8], discard_comments: bool) -> Option<Value> {
     // libxml2's HTML parser performs full HTML5 tree construction, implicitly
     // creating the <html>/<head>/<body> document structure. The `tl` crate
     // returns the fragment verbatim, so reconstruct that wrapper here.
-    wrap_html_document(nodes)
+    wrap_html_document(nodes, discard_comments)
 }
 
 /// Reconstruct libxml2's implicit `<html>`/`<head>`/`<body>` document structure
 /// around a parsed HTML fragment.
 ///
-/// Faithfully covered (verified against GNU): bare fragments, plain text,
-/// `head`-routed elements (`title`/`meta`/`link`/`base`/`style`/`script`),
-/// an explicit `<head>`, and the head→body transition once body content
-/// appears. A fragment that already has a single `<html>` root, or that carries
-/// top-level comments, is left as libxml2's lighter handling would *not*
-/// rewrite it the same way, so those keep the pre-existing pass-through /
-/// `(top ...)` behavior rather than risk a wrong wrap.
-fn wrap_html_document(nodes: Vec<TopNode>) -> Option<Value> {
-    let has_html_root = nodes.len() == 1 && nodes[0].tag.as_deref() == Some("html");
-    let has_top_comment = nodes
-        .iter()
-        .any(|n| n.tag.is_none() && is_comment_node(&n.value));
+/// Document-level comments (and processing instructions, which libxml2's HTML
+/// parser exposes as comments) are returned in a `(top ...)` list around the
+/// root element when `DISCARD-COMMENTS` is nil, and dropped when it is non-nil.
+/// This matches GNU `parse_region` / `make_dom` in `src/xml.c`: the flag only
+/// removes document-level comments, never nested ones.
+fn wrap_html_document(nodes: Vec<TopNode>, discard_comments: bool) -> Option<Value> {
+    let non_comment_count = nodes.iter().filter(|n| !is_top_comment(n)).count();
 
-    if has_html_root || has_top_comment {
-        // Risky to rewrite faithfully — preserve previous behavior.
-        let values: Vec<Value> = nodes.into_iter().map(|n| n.value).collect();
-        if values.len() == 1 {
-            return Some(values.into_iter().next().unwrap());
+    // A single explicit <html> root is already a complete document. Keep any
+    // document-level comments before or after it in source order.
+    if non_comment_count == 1
+        && nodes
+            .iter()
+            .any(|n| !is_top_comment(n) && n.tag.as_deref() == Some("html"))
+    {
+        let mut values: Vec<Value> = Vec::new();
+        for node in nodes {
+            if is_top_comment(&node) && discard_comments {
+                continue;
+            }
+            values.push(node.value);
         }
-        return Some(Value::list(
-            std::iter::once(Value::symbol("top"))
-                .chain(std::iter::once(Value::NIL))
-                .chain(values)
-                .collect(),
-        ));
+        if values.len() == 1 {
+            return values.into_iter().next();
+        }
+        return Some(top_document(values));
     }
 
-    // Partition top-level nodes into the head and body sections, honoring the
-    // head→body transition: once body content appears, later head-type
-    // elements stay in the body (matching libxml2).
+    // Split leading document-level comments from the fragment. A comment-only
+    // document has no root element; libxml2 returns nil even when comments
+    // are kept.
+    let mut doc_comments: Vec<Value> = Vec::new();
+    let mut fragment: Vec<TopNode> = Vec::new();
+    let mut seen_non_comment = false;
+    for node in nodes {
+        if !seen_non_comment && is_top_comment(&node) {
+            if !discard_comments {
+                doc_comments.push(node.value);
+            }
+            continue;
+        }
+        seen_non_comment = true;
+        fragment.push(node);
+    }
+    if !fragment.iter().any(|n| !is_top_comment(n)) {
+        return Some(Value::NIL);
+    }
+
+    let document = wrap_html_fragment(fragment)?;
+    if doc_comments.is_empty() {
+        return Some(document);
+    }
+    let mut values = vec![Value::symbol("top"), Value::NIL];
+    values.extend(doc_comments);
+    values.push(document);
+    Some(Value::list(values))
+}
+
+fn top_document(values: Vec<Value>) -> Value {
+    Value::list(
+        std::iter::once(Value::symbol("top"))
+            .chain(std::iter::once(Value::NIL))
+            .chain(values)
+            .collect(),
+    )
+}
+
+fn is_top_comment(node: &TopNode) -> bool {
+    node.tag.is_none() && is_comment_node(&node.value)
+}
+
+/// Wrap the fragment part of a document in libxml2's implicit html/head/body
+/// structure. Comments after implicit head content stay in `<head>`; after an
+/// explicit `</head>` they (and head-type elements) are direct `<html>`
+/// children until body content starts; once body content has appeared they
+/// stay in `<body>`.
+fn wrap_html_fragment(nodes: Vec<TopNode>) -> Option<Value> {
     let mut head: Vec<Value> = Vec::new();
+    let mut between: Vec<Value> = Vec::new();
     let mut body: Vec<Value> = Vec::new();
     let mut seen_body_content = false;
+    let mut explicit_head = false;
 
     for node in nodes {
+        if is_top_comment(&node) {
+            if seen_body_content {
+                body.push(node.value);
+            } else if explicit_head {
+                between.push(node.value);
+            } else {
+                head.push(node.value);
+            }
+            continue;
+        }
         match node.tag.as_deref() {
             Some("head") => {
                 // Unwrap an explicit <head>, merging its children into head.
                 head.extend(element_children(&node.value));
+                explicit_head = true;
             }
             Some("body") => {
                 seen_body_content = true;
                 body.extend(element_children(&node.value));
             }
-            Some(tag) if !seen_body_content && is_head_element(tag) => {
+            Some(tag) if !seen_body_content && !explicit_head && is_head_element(tag) => {
                 head.push(node.value);
+            }
+            Some(tag) if !seen_body_content && explicit_head && is_head_element(tag) => {
+                // libxml2's "after head" mode makes these direct <html>
+                // children, e.g. <head></head><title>T</title>.
+                between.push(node.value);
             }
             _ => {
                 seen_body_content = true;
@@ -519,8 +589,8 @@ fn wrap_html_document(nodes: Vec<TopNode>) -> Option<Value> {
         }
     }
 
-    // (html nil [head nil HEAD...] (body nil BODY...))
-    let has_head = !head.is_empty();
+    // (html nil [head nil HEAD...] [BETWEEN...] (body nil BODY...))
+    let has_head = !head.is_empty() || explicit_head;
     let has_body = !body.is_empty();
     let mut html_children: Vec<Value> = vec![Value::symbol("html"), Value::NIL];
     if has_head {
@@ -528,6 +598,7 @@ fn wrap_html_document(nodes: Vec<TopNode>) -> Option<Value> {
         head_node.extend(head);
         html_children.push(Value::list(head_node));
     }
+    html_children.extend(between);
     // libxml2 omits <body> only when there is exclusively head content.
     if has_body || !has_head {
         let mut body_node = vec![Value::symbol("body"), Value::NIL];
@@ -543,9 +614,9 @@ fn wrap_html_document(nodes: Vec<TopNode>) -> Option<Value> {
 fn convert_tl_top_node(
     node: &tl::Node,
     parser: &tl::Parser,
-    discard_comments: bool,
+    raw_text: &HashMap<String, String>,
 ) -> Option<TopNode> {
-    let value = convert_tl_node(node, parser, discard_comments)?;
+    let value = convert_tl_node(node, parser, raw_text)?;
     let tag = match node {
         tl::Node::Tag(element) => {
             let raw_tag = element.name().as_utf8_str();
@@ -555,6 +626,15 @@ fn convert_tl_top_node(
         _ => None,
     };
     Some(TopNode { tag, value })
+}
+
+/// Build `(comment nil TEXT)`.
+fn comment_value(text: &str) -> Value {
+    Value::list(vec![
+        Value::symbol("comment"),
+        Value::NIL,
+        Value::string(text),
+    ])
 }
 
 /// Is `value` a `(comment ...)` element node?
@@ -574,7 +654,11 @@ fn element_children(value: &Value) -> Vec<Value> {
     }
 }
 
-fn convert_tl_node(node: &tl::Node, parser: &tl::Parser, discard_comments: bool) -> Option<Value> {
+fn convert_tl_node(
+    node: &tl::Node,
+    parser: &tl::Parser,
+    raw_text: &HashMap<String, String>,
+) -> Option<Value> {
     match node {
         tl::Node::Raw(raw) => {
             let text = raw.as_utf8_str();
@@ -590,23 +674,15 @@ fn convert_tl_node(node: &tl::Node, parser: &tl::Parser, discard_comments: bool)
             }
         }
         tl::Node::Comment(comment) => {
-            if discard_comments {
-                None
-            } else {
-                let raw_text = comment.as_utf8_str();
-                let mut text = raw_text.as_ref();
-                if text.starts_with("<!--") {
-                    text = &text[4..];
-                }
-                if text.ends_with("-->") {
-                    text = &text[..text.len() - 3];
-                }
-                Some(Value::list(vec![
-                    Value::symbol("comment"),
-                    Value::NIL,
-                    Value::string(text),
-                ]))
+            let raw_text = comment.as_utf8_str();
+            let mut text = raw_text.as_ref();
+            if text.starts_with("<!--") {
+                text = &text[4..];
             }
+            if text.ends_with("-->") {
+                text = &text[..text.len() - 3];
+            }
+            Some(comment_value(text))
         }
         tl::Node::Tag(element) => {
             // The `tl` crate leaves the trailing `/` of an XHTML-style
@@ -616,14 +692,29 @@ fn convert_tl_node(node: &tl::Node, parser: &tl::Parser, discard_comments: bool)
             let tag = raw_tag.strip_suffix('/').unwrap_or(raw_tag.as_ref());
             let attrs = convert_tl_attributes(element.attributes());
 
-            let is_raw_content_tag =
-                tag.eq_ignore_ascii_case("style") || tag.eq_ignore_ascii_case("script");
-            let child_values = if is_raw_content_tag {
-                let inner = element.inner_html(parser);
-                if inner.is_empty() {
+            let is_rcdata_tag =
+                tag.eq_ignore_ascii_case("title") || tag.eq_ignore_ascii_case("textarea");
+            let is_text_element = is_rcdata_tag
+                || tag.eq_ignore_ascii_case("style")
+                || tag.eq_ignore_ascii_case("script");
+            let child_values = if is_text_element {
+                let inner = element.inner_text(parser);
+                let text = match raw_text.get(inner.as_ref()) {
+                    Some(original) if is_rcdata_tag => htmlize::unescape(original),
+                    Some(original) => Cow::Borrowed(original.as_str()),
+                    None => {
+                        let fallback = raw_text_content(element, tag);
+                        if is_rcdata_tag {
+                            Cow::Owned(htmlize::unescape(&fallback).into_owned())
+                        } else {
+                            Cow::Owned(fallback)
+                        }
+                    }
+                };
+                if text.is_empty() {
                     Vec::new()
                 } else {
-                    vec![Value::string(inner.as_str())]
+                    vec![Value::string(text.as_ref())]
                 }
             } else {
                 let children = element.children();
@@ -631,7 +722,7 @@ fn convert_tl_node(node: &tl::Node, parser: &tl::Parser, discard_comments: bool)
                 let mut vals = Vec::new();
                 for handle in children_handles.iter() {
                     let child_node = handle.get(parser)?;
-                    if let Some(val) = convert_tl_node(child_node, parser, discard_comments) {
+                    if let Some(val) = convert_tl_node(child_node, parser, raw_text) {
                         vals.push(val);
                     }
                 }
@@ -640,6 +731,203 @@ fn convert_tl_node(node: &tl::Node, parser: &tl::Parser, discard_comments: bool)
             Some(make_element_node(tag, attrs, child_values))
         }
     }
+}
+
+/// Replace raw-text element bodies with unique plain-text placeholders before
+/// `tl` sees them.
+///
+/// `<script>` and `<style>` are HTML raw-text elements: their contents are not
+/// parsed as markup. `tl` does not implement that rule for script bodies and
+/// splits at `<`, which can also move a `</body>` inside a script string into
+/// the document structure. Shielding the body keeps the tree intact; the
+/// placeholder -> original-text map lets conversion restore the exact bytes.
+fn protect_raw_text(input: &str) -> (Cow<'_, str>, HashMap<String, String>) {
+    if !input
+        .match_indices('<')
+        .any(|(index, _)| protected_tag_name(&input[index..]).is_some())
+    {
+        return (Cow::Borrowed(input), HashMap::new());
+    }
+
+    let mut protected = String::with_capacity(input.len());
+    let mut raw_text = HashMap::new();
+    let bytes = input.as_bytes();
+    let mut index = 0;
+
+    while index < bytes.len() {
+        let Some(offset) = input[index..].find('<') else {
+            protected.push_str(&input[index..]);
+            break;
+        };
+        let lt = index + offset;
+        protected.push_str(&input[index..lt]);
+        index = lt;
+        let rest = &input[index..];
+
+        if rest.starts_with("<!--") {
+            if let Some(end) = rest.find("-->") {
+                let end = index + end + 3;
+                protected.push_str(&input[index..end]);
+                index = end;
+            } else {
+                protected.push_str(rest);
+                break;
+            }
+            continue;
+        }
+
+        if rest
+            .get(..9)
+            .is_some_and(|p| p.eq_ignore_ascii_case("<!DOCTYPE"))
+        {
+            if let Some(end) = rest.find('>') {
+                let end = index + end + 1;
+                protected.push_str(&input[index..end]);
+                index = end;
+            } else {
+                protected.push_str(rest);
+                break;
+            }
+            continue;
+        }
+
+        // A literal `<` that does not begin a tag (e.g. `a < b`) is text.
+        let starts_tag = bytes
+            .get(index + 1)
+            .is_some_and(|b| b.is_ascii_alphabetic() || *b == b'/' || *b == b'!' || *b == b'?');
+        if !starts_tag {
+            protected.push('<');
+            index += 1;
+            continue;
+        }
+
+        if let Some(tag) = protected_tag_name(rest) {
+            let Some(open_end) = opening_tag_end(rest) else {
+                protected.push_str(rest);
+                break;
+            };
+            let open_end = index + open_end;
+            let after_open = &input[open_end + 1..];
+            let (inner_len, close_len) = match closing_tag_start(after_open, tag) {
+                Some(close_start) => {
+                    let close_len = after_open[close_start..]
+                        .find('>')
+                        .map_or(after_open.len() - close_start, |gt| gt + 1);
+                    (close_start, close_len)
+                }
+                None => (after_open.len(), 0),
+            };
+            protected.push_str(&input[index..=open_end]);
+            let inner = &after_open[..inner_len];
+            if !inner.is_empty() {
+                let token = format!("neomacs-rawtext-{}-placeholder", raw_text.len());
+                protected.push_str(&token);
+                raw_text.insert(token, inner.to_string());
+            }
+            if close_len > 0 {
+                protected.push_str(&after_open[inner_len..inner_len + close_len]);
+            }
+            index = open_end + 1 + inner_len + close_len;
+            continue;
+        }
+
+        // Copy an ordinary tag through its terminator so `<script>` text in an
+        // attribute value is not mistaken for a raw-text element.
+        if let Some(end) = opening_tag_end(rest) {
+            let end = index + end + 1;
+            protected.push_str(&input[index..end]);
+            index = end;
+        } else {
+            protected.push_str(rest);
+            break;
+        }
+    }
+
+    (Cow::Owned(protected), raw_text)
+}
+
+/// Name of a text element whose body `tl` must not parse as markup.
+///
+/// `script`/`style` are raw-text elements and `title`/`textarea` are RCDATA.
+/// Both are opaque to tag parsing; libxml2 resolves character references only
+/// in RCDATA.
+fn protected_tag_name(rest: &str) -> Option<&'static str> {
+    let bytes = rest.as_bytes();
+    for (name, tag) in [
+        ("script", &b"script"[..]),
+        ("style", &b"style"[..]),
+        ("title", &b"title"[..]),
+        ("textarea", &b"textarea"[..]),
+    ] {
+        let Some(candidate) = bytes.get(1..1 + tag.len()) else {
+            continue;
+        };
+        if bytes[0] == b'<' && candidate.eq_ignore_ascii_case(tag) {
+            let boundary = bytes.get(1 + tag.len()).copied();
+            if boundary.is_some_and(|b| b == b'>' || b == b'/' || b.is_ascii_whitespace()) {
+                return Some(name);
+            }
+        }
+    }
+    None
+}
+
+/// Raw source text between a raw-text element's start and end tags.
+///
+/// `<script>` and `<style>` are HTML raw-text elements: libxml2 exposes their
+/// source bytes verbatim, including entity-like text and markup-looking code.
+/// `tl`'s `inner_html` re-serializes its parsed children, which corrupts text
+/// such as `if (a < b)` inside a script, so slice the original tag source
+/// instead. The closing tag is matched case-insensitively at a tag-name
+/// boundary, as the HTML parser does.
+fn raw_text_content(element: &tl::HTMLTag<'_>, tag: &str) -> String {
+    let raw = element.raw().as_utf8_str();
+    let Some(open_end) = opening_tag_end(raw.as_ref()) else {
+        return String::new();
+    };
+    let rest = &raw[open_end + 1..];
+    let end = closing_tag_start(rest, tag).unwrap_or(rest.len());
+    rest[..end].to_string()
+}
+
+/// Index of the `>` closing a start tag, skipping quoted attribute values.
+fn opening_tag_end(raw: &str) -> Option<usize> {
+    let mut quote = None;
+    for (index, byte) in raw.bytes().enumerate() {
+        match quote {
+            Some(q) if byte == q => quote = None,
+            Some(_) => {}
+            None => match byte {
+                b'\'' | b'"' => quote = Some(byte),
+                b'>' => return Some(index),
+                _ => {}
+            },
+        }
+    }
+    None
+}
+
+/// Index of a case-insensitive `</TAG` at a tag-name boundary in `text`.
+fn closing_tag_start(text: &str, tag: &str) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let tag = tag.as_bytes();
+    if tag.is_empty() || bytes.len() < tag.len() + 2 {
+        return None;
+    }
+    for start in 0..=bytes.len() - tag.len() - 2 {
+        if bytes[start] != b'<' || bytes[start + 1] != b'/' {
+            continue;
+        }
+        let name = &bytes[start + 2..start + 2 + tag.len()];
+        if !name.eq_ignore_ascii_case(tag) {
+            continue;
+        }
+        let boundary = bytes.get(start + 2 + tag.len()).copied();
+        if boundary.is_some_and(|b| b == b'>' || b == b'/' || b.is_ascii_whitespace()) {
+            return Some(start);
+        }
+    }
+    None
 }
 
 fn convert_tl_attributes(attrs: &tl::Attributes) -> Vec<Value> {
