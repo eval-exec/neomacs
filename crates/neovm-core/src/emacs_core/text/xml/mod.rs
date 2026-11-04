@@ -557,10 +557,18 @@ fn wrap_html_fragment(nodes: Vec<TopNode>) -> Option<Value> {
     let mut head: Vec<Value> = Vec::new();
     let mut between: Vec<Value> = Vec::new();
     let mut body: Vec<Value> = Vec::new();
+    let mut after_body: Vec<Value> = Vec::new();
     let mut seen_body_content = false;
     let mut explicit_head = false;
+    let mut explicit_body = false;
 
     for node in nodes {
+        // libxml2's "after body" mode makes every later top-level node a
+        // sibling of <body> under <html>, until another body start merges.
+        if explicit_body {
+            after_body.push(node.value);
+            continue;
+        }
         if is_top_comment(&node) {
             if seen_body_content {
                 body.push(node.value);
@@ -578,6 +586,12 @@ fn wrap_html_fragment(nodes: Vec<TopNode>) -> Option<Value> {
                 explicit_head = true;
             }
             Some("body") => {
+                // An explicit <body> starts the body only when no body content
+                // has appeared yet. Otherwise it merges into the implicit body
+                // and its closing tag does not switch to after-body mode.
+                if !seen_body_content {
+                    explicit_body = true;
+                }
                 seen_body_content = true;
                 body.extend(element_children(&node.value));
             }
@@ -596,9 +610,9 @@ fn wrap_html_fragment(nodes: Vec<TopNode>) -> Option<Value> {
         }
     }
 
-    // (html nil [head nil HEAD...] [BETWEEN...] (body nil BODY...))
+    // (html nil [head nil HEAD...] [BETWEEN...] (body nil BODY...) [AFTER...])
     let has_head = !head.is_empty() || explicit_head;
-    let has_body = !body.is_empty();
+    let has_body = !body.is_empty() || explicit_body;
     let mut html_children: Vec<Value> = vec![Value::symbol("html"), Value::NIL];
     if has_head {
         let mut head_node = vec![Value::symbol("head"), Value::NIL];
@@ -612,6 +626,7 @@ fn wrap_html_fragment(nodes: Vec<TopNode>) -> Option<Value> {
         body_node.extend(body);
         html_children.push(Value::list(body_node));
     }
+    html_children.extend(after_body);
     Some(Value::list(html_children))
 }
 
