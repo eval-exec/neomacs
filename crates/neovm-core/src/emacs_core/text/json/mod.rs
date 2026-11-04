@@ -19,7 +19,13 @@
 //! are implemented from scratch with simple recursive descent.
 
 use crate::buffer::{EmacsByteLen, EmacsBytePos, EmacsByteRange, TextExtent};
+use crate::emacs_core::text_host::TextHost;
 use crate::tagged::value::SymbolMode;
+use neovm_edit::emacs_core::edit_host::EditHost;
+use neovm_edit::emacs_core::editfns::{
+    signal_after_text_change, signal_before_text_change,
+    text_change_for_empty_insertion_at_emacs_byte_pos,
+};
 use neovm_value::error::LispCondition;
 use neovm_value::error::expect_min_args;
 use neovm_value::error::{EvalResult, Flow, signal};
@@ -1431,11 +1437,11 @@ pub(crate) fn builtin_json_serialize(args: Vec<Value>) -> EvalResult {
     json_serialize_with_symbols(args, SymbolMode::Bare)
 }
 
-pub(crate) fn builtin_json_serialize_in_state(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_json_serialize_in_state<H: TextHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
-    json_serialize_with_symbols(args, eval.symbol_mode())
+    json_serialize_with_symbols(args, host.symbol_mode())
 }
 
 fn json_serialize_with_symbols(args: Vec<Value>, mode: SymbolMode) -> EvalResult {
@@ -1464,11 +1470,11 @@ pub(crate) fn builtin_json_parse_string(args: Vec<Value>) -> EvalResult {
     json_parse_string_with_symbols(args, SymbolMode::Bare)
 }
 
-pub(crate) fn builtin_json_parse_string_in_state(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_json_parse_string_in_state<H: TextHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
-    json_parse_string_with_symbols(args, eval.symbol_mode())
+    json_parse_string_with_symbols(args, host.symbol_mode())
 }
 
 fn json_parse_string_with_symbols(args: Vec<Value>, mode: SymbolMode) -> EvalResult {
@@ -1504,14 +1510,11 @@ fn json_parse_string_with_symbols(args: Vec<Value>, mode: SymbolMode) -> EvalRes
 /// Unlike `json-parse-string`, this parses a single JSON value starting at the
 /// current point (after leading whitespace), leaves trailing buffer content
 /// untouched, and advances point to just after the parsed value.
-pub(crate) fn builtin_json_parse_buffer(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    let opts = parse_parse_kwargs(&args, 0, eval.symbol_mode())?;
+pub(crate) fn builtin_json_parse_buffer<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
+    let opts = parse_parse_kwargs(&args, 0, host.symbol_mode())?;
     let (input, point_base) = {
-        let buf = eval
-            .edit
+        let (edit, _vars) = host.edit_and_vars();
+        let buf = edit
             .buffers
             .current_buffer()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -1525,9 +1528,9 @@ pub(crate) fn builtin_json_parse_buffer(
     let mut parser = JsonParser::new(input.as_bytes(), input.is_multibyte(), opts);
     let result = parser.parse()?;
     let new_point = point_base.add_len(EmacsByteLen::new(parser.pos));
-    if let Some(current_id) = eval.edit.buffers.current_buffer_id() {
-        let _ = eval
-            .edit
+    let (edit, _vars) = host.edit_and_vars();
+    if let Some(current_id) = edit.buffers.current_buffer_id() {
+        let _ = edit
             .buffers
             .goto_buffer_emacs_byte_pos(current_id, new_point);
     }
@@ -1537,30 +1540,34 @@ pub(crate) fn builtin_json_parse_buffer(
 /// `(json-insert VALUE &rest ARGS)` — insert JSON text at point.
 ///
 /// Keyword arguments mirror `json-serialize` (`:null-object`, `:false-object`).
-pub(crate) fn builtin_json_insert(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_json_insert<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_min_args("json-insert", &args, 1)?;
-    let opts = parse_serialize_kwargs(&args, 1, eval.symbol_mode())?;
+    let opts = parse_serialize_kwargs(&args, 1, host.symbol_mode())?;
     let json = serialize_to_json(&args[0], &opts, 0)?;
-    let current_id = eval
-        .edit
-        .buffers
-        .current_buffer_id()
-        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    let (insert_pos, target_multibyte) = eval
-        .edit
-        .buffers
-        .get(current_id)
-        .map(|b| (b.point_emacs_byte_pos(), b.get_multibyte()))
-        .unwrap_or((EmacsBytePos::ZERO, true));
-    let change = super::editfns::text_change_for_empty_insertion_at_emacs_byte_pos(
-        &eval.edit.buffers,
-        current_id,
-        insert_pos,
-        TextExtent::from_emacs_bytes(json.as_bytes(), target_multibyte),
-    )?;
-    super::editfns::signal_before_text_change(eval, change)?;
-    let _ = eval.edit.buffers.insert_into_buffer(current_id, &json);
-    super::editfns::signal_after_text_change(eval, change)?;
+    let (current_id, change) = {
+        let (edit, _vars) = host.edit_and_vars();
+        let buffers = &mut edit.buffers;
+        let current_id = buffers
+            .current_buffer_id()
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        let (insert_pos, target_multibyte) = buffers
+            .get(current_id)
+            .map(|b| (b.point_emacs_byte_pos(), b.get_multibyte()))
+            .unwrap_or((EmacsBytePos::ZERO, true));
+        let change = text_change_for_empty_insertion_at_emacs_byte_pos(
+            buffers,
+            current_id,
+            insert_pos,
+            TextExtent::from_emacs_bytes(json.as_bytes(), target_multibyte),
+        )?;
+        (current_id, change)
+    };
+    signal_before_text_change(host, change)?;
+    {
+        let (edit, _vars) = host.edit_and_vars();
+        let _ = edit.buffers.insert_into_buffer(current_id, &json);
+    }
+    signal_after_text_change(host, change)?;
     Ok(Value::NIL)
 }
 

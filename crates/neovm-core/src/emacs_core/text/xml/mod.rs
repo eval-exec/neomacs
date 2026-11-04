@@ -5,9 +5,11 @@
 //! - `libxml-parse-xml-region` — XML parsing via `quick-xml` crate
 //! - `libxml-available-p` — feature availability probe
 
-use crate::buffer::EmacsByteRange;
+use neovm_edit::buffer::{BufferId, BufferManager, EmacsByteRange};
+use neovm_edit::emacs_core::edit_host::EditHost;
+use neovm_edit::emacs_core::position::LispRegionArgs;
 use neovm_value::error::LispCondition;
-use neovm_value::error::{EvalResult, Flow, signal};
+use neovm_value::error::{EvalResult, Flow, expect_args, expect_max_args, signal};
 use neovm_value::value::ValueKind;
 use neovm_value::value::*;
 use std::borrow::Cow;
@@ -45,15 +47,15 @@ fn validate_base_url(args: &[Value]) -> Result<(), Flow> {
 
 /// Validate region arguments, handling nil start/end as point-min/point-max.
 fn validate_region_byte_bounds(
-    ctx: &mut super::eval::Context,
+    buffers: &mut BufferManager,
     args: &[Value],
-) -> Result<Option<(crate::buffer::BufferId, EmacsByteRange)>, Flow> {
-    let Some(buf) = ctx.edit.buffers.current_buffer() else {
+) -> Result<Option<(BufferId, EmacsByteRange)>, Flow> {
+    let Some(buf) = buffers.current_buffer() else {
         return Ok(None);
     };
 
-    let region = super::position::LispRegionArgs::from_optional_values(
-        &ctx.edit.buffers,
+    let region = LispRegionArgs::from_optional_values(
+        buffers,
         args.first().copied(),
         args.get(1).copied(),
         buf.point_min_lisp_char_pos(),
@@ -65,14 +67,12 @@ fn validate_region_byte_bounds(
 }
 
 fn read_region_bytes(
-    ctx: &mut super::eval::Context,
-    buffer_id: crate::buffer::BufferId,
+    buffers: &mut BufferManager,
+    buffer_id: BufferId,
     byte_range: EmacsByteRange,
 ) -> Result<Vec<u8>, Flow> {
     let bytes = neovm_edit::emacs_core::editfns::read_buffer_region_bytes_in_manager(
-        &ctx.edit.buffers,
-        buffer_id,
-        byte_range,
+        buffers, buffer_id, byte_range,
     )?;
     Ok(bytes)
 }
@@ -1181,24 +1181,26 @@ fn convert_tl_attributes(attrs: &tl::Attributes) -> Vec<Value> {
 
 /// (libxml-available-p) → t
 pub(crate) fn builtin_libxml_available_p(args: Vec<Value>) -> EvalResult {
-    super::builtins::expect_args("libxml-available-p", &args, 0)?;
+    expect_args("libxml-available-p", &args, 0)?;
     Ok(Value::T)
 }
 
 /// (libxml-parse-html-region &optional START END BASE-URL DISCARD-COMMENTS)
-pub(crate) fn builtin_libxml_parse_html_region(
-    ctx: &mut super::eval::Context,
+pub(crate) fn builtin_libxml_parse_html_region<H: EditHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
-    super::builtins::expect_max_args("libxml-parse-html-region", &args, 4)?;
-    let Some((buffer_id, byte_range)) = validate_region_byte_bounds(ctx, &args)? else {
+    expect_max_args("libxml-parse-html-region", &args, 4)?;
+    let (edit, _vars) = host.edit_and_vars();
+    let Some((buffer_id, byte_range)) = validate_region_byte_bounds(&mut edit.buffers, &args)?
+    else {
         return Ok(Value::NIL);
     };
     // GNU `parse_region` calls `validate_region` before checking BASE-URL.
     validate_base_url(&args)?;
     let discard_comments = args.get(3).is_some_and(|v| v.is_truthy());
 
-    let bytes = read_region_bytes(ctx, buffer_id, byte_range)?;
+    let bytes = read_region_bytes(&mut edit.buffers, buffer_id, byte_range)?;
     if bytes.is_empty() {
         return Ok(Value::NIL);
     }
@@ -1210,19 +1212,21 @@ pub(crate) fn builtin_libxml_parse_html_region(
 }
 
 /// (libxml-parse-xml-region &optional START END BASE-URL DISCARD-COMMENTS)
-pub(crate) fn builtin_libxml_parse_xml_region(
-    ctx: &mut super::eval::Context,
+pub(crate) fn builtin_libxml_parse_xml_region<H: EditHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
-    super::builtins::expect_max_args("libxml-parse-xml-region", &args, 4)?;
-    let Some((buffer_id, byte_range)) = validate_region_byte_bounds(ctx, &args)? else {
+    expect_max_args("libxml-parse-xml-region", &args, 4)?;
+    let (edit, _vars) = host.edit_and_vars();
+    let Some((buffer_id, byte_range)) = validate_region_byte_bounds(&mut edit.buffers, &args)?
+    else {
         return Ok(Value::NIL);
     };
     // GNU `parse_region` calls `validate_region` before checking BASE-URL.
     validate_base_url(&args)?;
     let discard_comments = args.get(3).is_some_and(|v| v.is_truthy());
 
-    let bytes = read_region_bytes(ctx, buffer_id, byte_range)?;
+    let bytes = read_region_bytes(&mut edit.buffers, buffer_id, byte_range)?;
     if bytes.is_empty() {
         return Ok(Value::NIL);
     }

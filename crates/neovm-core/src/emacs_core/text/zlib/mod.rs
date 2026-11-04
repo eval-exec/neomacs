@@ -7,19 +7,21 @@
 use neovm_value::error::LispCondition;
 use std::io::Read;
 
-use super::editfns::buffer_read_only_active_in_state;
 use crate::heap_types::LispString;
 use flate2::{Decompress, FlushDecompress, Status};
+use neovm_edit::emacs_core::edit_host::EditHost;
 use neovm_edit::emacs_core::editfns::{
-    read_buffer_region_bytes_in_manager, replace_buffer_emacs_byte_range_lisp_string,
+    buffer_read_only_active_in_state, read_buffer_region_bytes_in_manager,
+    replace_buffer_emacs_byte_range_lisp_string,
 };
-use neovm_value::error::{EvalResult, signal};
+use neovm_edit::emacs_core::position::LispRegionArgs;
+use neovm_value::error::{EvalResult, expect_args, expect_max_args, expect_min_args, signal};
 use neovm_value::value::*;
 
 /// (zlib-available-p)
 /// Return t if zlib decompression is available.
 pub(crate) fn builtin_zlib_available_p(args: Vec<Value>) -> EvalResult {
-    super::builtins::expect_args("zlib-available-p", &args, 0)?;
+    expect_args("zlib-available-p", &args, 0)?;
     Ok(Value::T)
 }
 
@@ -29,47 +31,55 @@ pub(crate) fn builtin_zlib_available_p(args: Vec<Value>) -> EvalResult {
 /// Must be called in a unibyte buffer.
 /// Returns t on success, the number of unconsumed bytes on partial success
 /// (when ALLOW-PARTIAL is non-nil), or nil on failure.
-pub(crate) fn builtin_zlib_decompress_region(
-    ctx: &mut super::eval::Context,
+pub(crate) fn builtin_zlib_decompress_region<H: EditHost>(
+    host: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
-    super::builtins::expect_min_args("zlib-decompress-region", &args, 2)?;
-    super::builtins::expect_max_args("zlib-decompress-region", &args, 3)?;
+    expect_min_args("zlib-decompress-region", &args, 2)?;
+    expect_max_args("zlib-decompress-region", &args, 3)?;
     let allow_partial = args.get(2).is_some_and(|v| v.is_truthy());
 
-    let Some(buf) = ctx.edit.buffers.current_buffer() else {
-        return Ok(Value::NIL);
+    // Edit phase: the region reads and the read-only probe share one
+    // disjoint-borrow pair; no host call runs while `edit`/`vars` live.
+    let (buffer_id, byte_range, from_byte, to_byte, compressed) = {
+        let (edit, vars) = host.edit_and_vars();
+        let buffers = &mut edit.buffers;
+
+        let Some(buf) = buffers.current_buffer() else {
+            return Ok(Value::NIL);
+        };
+
+        let region = LispRegionArgs::from_values(buffers, args[0], args[1])?;
+
+        // GNU `Fzlib_decompress_region` calls `validate_region` before the
+        // unibyte-buffer check.
+        let byte_range = region.accessible_byte_range(buf)?;
+
+        // Check unibyte — GNU signals error in multibyte buffers.
+        if buf.get_multibyte() {
+            return Err(signal(
+                "error",
+                vec![Value::string(
+                    "This function can be called only in unibyte buffers",
+                )],
+            ));
+        }
+
+        // Check read-only.
+        if buffer_read_only_active_in_state(vars, &[], buf) {
+            return Err(signal(
+                LispCondition::BufferReadOnly,
+                vec![Value::make_buffer(buf.id())],
+            ));
+        }
+
+        let from_byte = byte_range.start().get();
+        let to_byte = byte_range.end().get();
+
+        let buffer_id = buf.id();
+        let compressed = read_buffer_region_bytes_in_manager(buffers, buffer_id, byte_range)?;
+        (buffer_id, byte_range, from_byte, to_byte, compressed)
     };
-
-    let region = super::position::LispRegionArgs::from_values(&ctx.edit.buffers, args[0], args[1])?;
-
-    // GNU `Fzlib_decompress_region` calls `validate_region` before the
-    // unibyte-buffer check.
-    let byte_range = region.accessible_byte_range(buf)?;
-
-    // Check unibyte — GNU signals error in multibyte buffers.
-    if buf.get_multibyte() {
-        return Err(signal(
-            "error",
-            vec![Value::string(
-                "This function can be called only in unibyte buffers",
-            )],
-        ));
-    }
-
-    // Check read-only.
-    if buffer_read_only_active_in_state(ctx.variables(), &[], buf) {
-        return Err(signal(
-            LispCondition::BufferReadOnly,
-            vec![Value::make_buffer(buf.id())],
-        ));
-    }
-
-    let from_byte = byte_range.start().get();
-    let to_byte = byte_range.end().get();
-
-    let buffer_id = buf.id();
-    let compressed = read_buffer_region_bytes_in_manager(&ctx.edit.buffers, buffer_id, byte_range)?;
 
     // Try gzip first (most common for Emacs .gz files), then fall back to zlib.
     // GNU uses inflateInit2 with MAX_WBITS + 32 which auto-detects format.
@@ -80,14 +90,14 @@ pub(crate) fn builtin_zlib_decompress_region(
             let replacement = data.into_unibyte_string();
             // The modification callbacks may edit the buffer; the helper
             // replaces the range they leave, re-measured after them.
-            replace_buffer_emacs_byte_range_lisp_string(ctx, buffer_id, byte_range, &replacement)?;
+            replace_buffer_emacs_byte_range_lisp_string(host, buffer_id, byte_range, &replacement)?;
             Ok(Value::T)
         }
         Some((data, remaining)) if allow_partial => {
             let replacement = data.into_unibyte_string();
             // The modification callbacks may edit the buffer; the helper
             // replaces the range they leave, re-measured after them.
-            replace_buffer_emacs_byte_range_lisp_string(ctx, buffer_id, byte_range, &replacement)?;
+            replace_buffer_emacs_byte_range_lisp_string(host, buffer_id, byte_range, &replacement)?;
             Ok(Value::fixnum(remaining as i64))
         }
         Some(_) => unreachable!("non-partial successful decompression handled above"),
