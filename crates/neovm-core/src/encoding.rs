@@ -9,6 +9,7 @@
 //! | `NEOVM_EMACS_MULE_PREPARED` | off | Prepare emacs-mule encoder candidates once per conversion, honoring charset priority. |
 
 use crate::emacs_core::eval::Context;
+use crate::emacs_core::text_host::TextHost;
 use neovm_value::error::LispCondition;
 use neovm_value::error::{expect_args, expect_args_range, expect_min_args};
 use neovm_value::intern::{SymId, intern, resolve_sym};
@@ -55,10 +56,9 @@ fn display_table_replacement_width(disp: Value) -> Option<usize> {
     )
 }
 
-pub(crate) fn active_display_table(ctx: &crate::emacs_core::eval::Context) -> Option<Value> {
+pub(crate) fn active_display_table<H: TextHost>(ctx: &H) -> Option<Value> {
     if let Some(table) = ctx
-        .edit
-        .buffers
+        .buffers()
         .current_buffer()
         .and_then(|buffer| buffer.buffer_local_value("buffer-display-table"))
         .filter(crate::emacs_core::chartable::is_char_table)
@@ -90,15 +90,15 @@ pub(crate) fn char_width_for_code_with_display_table(
 /// mutators. Its borrow prevents Lisp callbacks/GC from invalidating table Values.
 /// GNU's CHARACTER_WIDTH (src/buffer.h:1708-1715) gives printable ASCII its fixed
 /// width, then consults the live char-width-table for non-ASCII characters.
-pub(crate) struct CharacterWidthPolicy<'ctx> {
+pub(crate) struct CharacterWidthPolicy<'ctx, H: TextHost> {
     width_table: std::cell::OnceCell<CharacterWidthTable>,
     display_table: Option<Value>,
     control: std::cell::OnceCell<ControlCharacterDisplay>,
     tab_width: std::cell::OnceCell<usize>,
-    context: &'ctx Context,
+    context: &'ctx H,
 }
 
-impl std::fmt::Debug for CharacterWidthPolicy<'_> {
+impl<H: TextHost> std::fmt::Debug for CharacterWidthPolicy<'_, H> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CharacterWidthPolicy")
             .field("width_table", &self.width_table)
@@ -115,8 +115,8 @@ enum ControlCharacterDisplay {
     Octal,
 }
 
-impl<'ctx> CharacterWidthPolicy<'ctx> {
-    pub(crate) fn from_context(ctx: &'ctx Context) -> Self {
+impl<'ctx, H: TextHost> CharacterWidthPolicy<'ctx, H> {
+    pub(crate) fn from_context(ctx: &'ctx H) -> Self {
         Self {
             width_table: std::cell::OnceCell::new(),
             display_table: active_display_table(ctx),
@@ -193,7 +193,7 @@ pub(crate) struct CharacterWidthTable {
 }
 
 impl CharacterWidthTable {
-    pub(crate) fn from_context(ctx: &Context) -> Self {
+    pub(crate) fn from_context<H: TextHost>(ctx: &H) -> Self {
         Self {
             table: char_width_table_value(ctx),
         }
@@ -209,7 +209,7 @@ impl CharacterWidthTable {
 ///
 /// Only the process-global symbol identity is shared among mutators; the table
 /// itself stays a mutator-owned object.
-pub(crate) fn char_width_table_value(ctx: &Context) -> Option<Value> {
+pub(crate) fn char_width_table_value<H: TextHost>(ctx: &H) -> Option<Value> {
     static SYMBOL: std::sync::OnceLock<SymId> = std::sync::OnceLock::new();
     let symbol = *SYMBOL.get_or_init(|| intern("char-width-table"));
     ctx.eval_symbol_by_id(symbol)
@@ -1611,8 +1611,8 @@ fn copy_lisp_string_value(value: Value) -> Result<Value, neovm_value::error::Flo
     Ok(Value::heap_string(string.clone()))
 }
 
-fn context_coding_name(
-    ctx: &crate::emacs_core::eval::Context,
+fn context_coding_name<H: TextHost>(
+    ctx: &H,
     coding_arg: Value,
 ) -> Result<String, neovm_value::error::Flow> {
     let name = if coding_arg.is_nil() {
@@ -1626,7 +1626,7 @@ fn context_coding_name(
         ));
     };
     validate_coding_system(&name, coding_arg, |candidate| {
-        ctx.coding_systems.is_known_or_derived(candidate)
+        ctx.coding_systems().is_known_or_derived(candidate)
     })?;
     Ok(name)
 }
@@ -1885,18 +1885,17 @@ fn transformed_region_string_in_context(
     )
 }
 
-fn insert_coding_result(
-    ctx: &mut crate::emacs_core::eval::Context,
+fn insert_coding_result<H: TextHost>(
+    ctx: &mut H,
     buffer_id: crate::buffer::BufferId,
     text: &crate::heap_types::LispString,
     restore_point: Option<TextPositionAnchor>,
 ) -> Result<(), neovm_value::error::Flow> {
-    ctx.edit
-        .buffers
+    ctx.buffers_mut()
         .insert_lisp_string_into_buffer(buffer_id, text)
         .ok_or_else(|| signal("error", vec![Value::string("Selecting deleted buffer")]))?;
     if let Some(point) = restore_point {
-        let _ = ctx.edit.buffers.set_buffer_point_anchor(buffer_id, point);
+        let _ = ctx.buffers_mut().set_buffer_point_anchor(buffer_id, point);
     }
     Ok(())
 }
@@ -1926,8 +1925,8 @@ fn coding_string_destination(
 /// Big5 / GBK families handled elsewhere, and for non-charset coding types
 /// (iso-2022/ccl/shift-jis) that need a state machine rather than a flat
 /// charset lookup.
-fn general_charset_coding_list(
-    ctx: &crate::emacs_core::eval::Context,
+fn general_charset_coding_list<H: TextHost>(
+    ctx: &H,
     coding: &str,
     for_encode: bool,
 ) -> Option<Vec<SymId>> {
@@ -1959,7 +1958,7 @@ fn general_charset_coding_list(
     if for_encode && matches!(family, "ascii" | "us-ascii") {
         return None;
     }
-    let info = ctx.coding_systems.get(coding_system_base(coding))?;
+    let info = ctx.coding_systems().get(coding_system_base(coding))?;
     if !matches!(resolve_sym(info.coding_type), "charset" | "big5") || info.charset_list.is_empty()
     {
         return None;
@@ -2934,11 +2933,11 @@ fn decode_via_charset_list(
 /// (graphic registers loaded once, characters selected by the high bit and the
 /// SS2/SS3 single shifts) — euc-jp, euc-kr, … The full ISO-2022 escape-sequence
 /// machine (iso-2022-jp/cn/kr, 7-bit, escape designations) is not handled here.
-fn euc_iso2022_spec(
-    ctx: &crate::emacs_core::eval::Context,
+fn euc_iso2022_spec<H: TextHost>(
+    ctx: &H,
     coding: &str,
 ) -> Option<(crate::emacs_core::coding::Iso2022Spec, Vec<SymId>)> {
-    let info = ctx.coding_systems.get(coding_system_base(coding))?;
+    let info = ctx.coding_systems().get(coding_system_base(coding))?;
     if resolve_sym(info.coding_type) != "iso-2022" {
         return None;
     }
@@ -3144,8 +3143,8 @@ fn sjis_to_jis(s1: u8, s2: u8) -> u32 {
 
 /// Charset list of a Shift-JIS coding system (`(ascii katakana-jisx0201
 /// japanese-jisx0208 …)`), or `None` if `coding` is not a shift-jis type.
-fn sjis_charsets(ctx: &crate::emacs_core::eval::Context, coding: &str) -> Option<Vec<SymId>> {
-    let info = ctx.coding_systems.get(coding_system_base(coding))?;
+fn sjis_charsets<H: TextHost>(ctx: &H, coding: &str) -> Option<Vec<SymId>> {
+    let info = ctx.coding_systems().get(coding_system_base(coding))?;
     if resolve_sym(info.coding_type) != "shift-jis" || info.charset_list.len() < 3 {
         return None;
     }
@@ -3361,11 +3360,11 @@ fn decode_via_utf7(bytes: &[u8], imap: bool) -> Vec<u8> {
 }
 
 /// Charset list of the chinese-hz (HZ-GB-2312) coding system, or `None`.
-fn chinese_hz_charset(ctx: &crate::emacs_core::eval::Context, coding: &str) -> Option<SymId> {
+fn chinese_hz_charset<H: TextHost>(ctx: &H, coding: &str) -> Option<SymId> {
     if coding_system_base(coding) != "chinese-hz" {
         return None;
     }
-    let info = ctx.coding_systems.get(coding_system_base(coding))?;
+    let info = ctx.coding_systems().get(coding_system_base(coding))?;
     // charset-list = (ascii chinese-gb2312)
     info.charset_list.get(1).copied()
 }
@@ -3506,8 +3505,8 @@ fn coding_source_codepoints(s: &crate::heap_types::LispString) -> CodingSourceCo
 
 /// Whether `coding` is the emacs-mule coding system (Emacs's old internal
 /// multibyte representation as a coding system).
-fn is_emacs_mule(ctx: &crate::emacs_core::eval::Context, coding: &str) -> bool {
-    ctx.coding_systems
+fn is_emacs_mule<H: TextHost>(ctx: &H, coding: &str) -> bool {
+    ctx.coding_systems()
         .get(coding_system_base(coding))
         .is_some_and(|info| resolve_sym(info.coding_type) == "emacs-mule")
 }
@@ -3529,12 +3528,12 @@ fn is_emacs_mule(ctx: &crate::emacs_core::eval::Context, coding: &str) -> bool {
 /// emacs-mule, …) reimplement their conversion entirely in Rust and must NOT
 /// re-run the hook, so this returns `None` for them; the caller only consults
 /// it on the otherwise-generic branch.
-fn coding_conversion_hook(
-    ctx: &crate::emacs_core::eval::Context,
+fn coding_conversion_hook<H: TextHost>(
+    ctx: &H,
     coding: &str,
     encode: bool,
 ) -> Option<(SymId, String)> {
-    let info = ctx.coding_systems.get(coding_system_base(coding))?;
+    let info = ctx.coding_systems().get(coding_system_base(coding))?;
     let hook = if encode {
         info.pre_write_conversion
     } else {
@@ -3548,20 +3547,24 @@ fn coding_conversion_hook(
 /// end-of-line conversion is required (unix EOL, or no `\n`/`\r` to convert).
 /// In that case GNU returns the string unchanged and never enters
 /// encode/decode_coding_object, so the pre/post-conversion hooks do not run.
-fn coding_ascii_identity_fast_path(
-    ctx: &crate::emacs_core::eval::Context,
+fn coding_ascii_identity_fast_path<H: TextHost>(
+    ctx: &H,
     coding: &str,
     args: &[Value],
     encode: bool,
     eol_conversion: crate::emacs_core::coding::EolConversion,
 ) -> bool {
     if !ctx
-        .coding_systems
+        .coding_systems()
         .is_ascii_compatible(coding, ctx.symbol_mode())
     {
         return false;
     }
-    if ctx.coding_systems.get(coding_system_base(coding)).is_none() {
+    if ctx
+        .coding_systems()
+        .get(coding_system_base(coding))
+        .is_none()
+    {
         return false;
     }
     let Some(string) = args[0].as_lisp_string() else {
@@ -3611,8 +3614,8 @@ enum PreWriteFailurePolicy {
 /// text of whatever buffer is current afterwards (the hook is allowed to switch
 /// to its own buffer, as `viqr-pre-write-conversion` does).  Both work buffers
 /// are killed.  Returns the transformed multibyte string `Value`.
-fn run_pre_write_conversion(
-    ctx: &mut crate::emacs_core::eval::Context,
+fn run_pre_write_conversion<H: TextHost>(
+    ctx: &mut H,
     hook: SymId,
     src: Value,
     failure_policy: PreWriteFailurePolicy,
@@ -3709,11 +3712,7 @@ fn build_pre_write_form(hook: SymId, src: Value, failure_policy: PreWriteFailure
 /// Mirror GNU's `decode_coding_object` post-read protocol: insert the decoded
 /// `text` into a temp buffer, move point to the start, call `(FN LEN)`, and
 /// return the resulting buffer text.
-fn run_post_read_conversion(
-    ctx: &mut crate::emacs_core::eval::Context,
-    hook: SymId,
-    text: Value,
-) -> EvalResult {
+fn run_post_read_conversion<H: TextHost>(ctx: &mut H, hook: SymId, text: Value) -> EvalResult {
     // `text` is a heap Value that must survive form-construction allocations.
     let root_scope = ctx.save_specpdl_roots();
     ctx.push_specpdl_root(text);
@@ -3761,8 +3760,8 @@ fn quote_value(value: Value) -> Value {
 /// hook first and then encodes the transformed text with the base
 /// `:coding-type`; decoding decodes with the base `:coding-type` first and then
 /// runs the post-read hook on the decoded text.
-fn run_coding_with_conversion_hook(
-    ctx: &mut crate::emacs_core::eval::Context,
+fn run_coding_with_conversion_hook<H: TextHost>(
+    ctx: &mut H,
     args: &[Value],
     base_type: &str,
     hook: SymId,
@@ -4101,11 +4100,11 @@ fn decode_via_emacs_mule(bytes: &[u8], eol: DosEolLookahead) -> DecodedSource {
 /// designations and/or 7-bit output (iso-2022-jp/cn/kr, the 7bit / 8bit-ss2
 /// variants, compound-text/ctext), return its designation state + charset list.
 /// The fixed-designation 8-bit EUC profile is handled by `euc_iso2022_spec`.
-fn full_iso2022_spec(
-    ctx: &crate::emacs_core::eval::Context,
+fn full_iso2022_spec<H: TextHost>(
+    ctx: &H,
     coding: &str,
 ) -> Option<(crate::emacs_core::coding::Iso2022Spec, Vec<SymId>)> {
-    let info = ctx.coding_systems.get(coding_system_base(coding))?;
+    let info = ctx.coding_systems().get(coding_system_base(coding))?;
     if resolve_sym(info.coding_type) != "iso-2022" {
         return None;
     }
@@ -4117,11 +4116,11 @@ fn full_iso2022_spec(
     Some((spec, info.charset_list.clone()))
 }
 
-fn runtime_ccl_spec(
-    ctx: &crate::emacs_core::eval::Context,
+fn runtime_ccl_spec<H: TextHost>(
+    ctx: &H,
     coding: &str,
 ) -> Option<crate::emacs_core::coding::CclCodingSpec> {
-    let info = ctx.coding_systems.get(coding_system_base(coding))?;
+    let info = ctx.coding_systems().get(coding_system_base(coding))?;
     (resolve_sym(info.coding_type) == "ccl")
         .then(|| crate::emacs_core::coding::ccl_coding_spec(info))?
 }
@@ -4784,7 +4783,7 @@ fn builtin_coding_string_in_context(
     // alias exactly as the caller wrote it (see
     // `canonical_context_coding_name`), which GNU also does.
     if coding_system_base(&coding) == coding.as_str()
-        && let Some(canonical) = ctx.coding_systems.resolve(&coding)
+        && let Some(canonical) = ctx.coding_systems().resolve(&coding)
     {
         let canonical = resolve_sym(canonical);
         if canonical != coding.as_str() {
@@ -4851,7 +4850,7 @@ fn builtin_coding_string_in_context(
         {
             let bytes = lisp_string_coding_source_bytes(src);
             let detected = detect_undecided_coding(
-                &ctx.coding_systems,
+                ctx.coding_systems(),
                 &bytes,
                 base == *"prefer-utf-8",
                 // `CODING_MODE_LAST_BLOCK` is the entry's to state, not this
@@ -5050,7 +5049,7 @@ fn builtin_coding_string_in_context(
                 // `coding->id`, and the id is what every door but the string
                 // one reports.
                 reported_coding =
-                    adjusted_coding_name(&ctx.coding_systems, &reported_coding, resolution);
+                    adjusted_coding_name(ctx.coding_systems(), &reported_coding, resolution);
             }
             converted
         };
@@ -5341,7 +5340,7 @@ fn builtin_coding_string_in_context(
             // which is exactly what `inhibit-eol-conversion' would have made
             // them do.
             reported_coding =
-                adjusted_coding_name(&ctx.coding_systems, &reported_coding, resolution);
+                adjusted_coding_name(ctx.coding_systems(), &reported_coding, resolution);
             // Only a dos/mac result rebuilds the string; a unix one is a no-op
             // and must keep the decoded object as it is, text properties (the
             // source-charset runs) included.
@@ -5580,19 +5579,11 @@ pub(crate) fn encode_file_region_in_context(
 }
 
 /// Borrow a live process continuation only after callback execution ends.
-fn process_encoder_state(
-    ctx: &mut crate::emacs_core::eval::Context,
+fn process_encoder_state<H: TextHost>(
+    ctx: &mut H,
     process: crate::heap_types::ProcessId,
 ) -> Result<&mut CodingEncoderState, neovm_value::error::Flow> {
-    ctx.processes
-        .get_any_mut(process)
-        .and_then(|proc| proc.encoding_state.encoder_mut())
-        .ok_or_else(|| {
-            signal(
-                "error",
-                vec![Value::string("Process output coding is not initialized")],
-            )
-        })
+    ctx.process_encoder_state(process)
 }
 
 /// A file decode result whose coding-system selection remains an interned
@@ -5795,7 +5786,7 @@ fn builtin_coding_region(
     // temporary rather than clobbering the outer conversion's storage.
     let workspace_lease = if direction == CodingDirection::Decode && destination.is_none() {
         let encoding = ctx
-            .coding_systems
+            .coding_systems()
             .conversion_buffer_encoding(intern(&coding));
         Some(ctx.acquire_code_conversion_buffer(encoding)?)
     } else {
@@ -5950,10 +5941,7 @@ pub(crate) fn builtin_char_width(args: Vec<Value>) -> EvalResult {
 }
 
 /// `(char-width CHAR)` -> integer in the current buffer.
-pub(crate) fn builtin_char_width_in_context(
-    ctx: &crate::emacs_core::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
+pub(crate) fn builtin_char_width_in_context<H: TextHost>(ctx: &H, args: Vec<Value>) -> EvalResult {
     expect_args("char-width", &args, 1)?;
     let code = args[0]
         .as_fixnum()
