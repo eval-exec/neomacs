@@ -117,6 +117,7 @@ mod image_catalog;
 mod input_bridge;
 use input_bridge::publication::{InputPublisher, InputRoute, PrimaryInputPublisher};
 use neomacs_display_runtime::tty_input::Publication;
+use neovm_core::window::DisplayFrameExt;
 mod secondary_tty;
 mod startup_font;
 mod startup_frame;

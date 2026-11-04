@@ -1,4 +1,5 @@
 //! The staged resize plan required by GNU's low-level Lisp split primitive.
+use crate::window::DisplayFrameExt;
 use crate::window::{
     CombinationLimit, Frame, SplitAttachment, SplitDirection, SplitSizeError, SplitSizes, Window,
     WindowId, WindowPixels, WindowSizeError, WindowTree,

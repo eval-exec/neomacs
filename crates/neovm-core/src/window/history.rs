@@ -1,5 +1,6 @@
 use super::{FrameManager, Window, WindowId};
 use crate::emacs_core::value::Value;
+use crate::window::DisplayFrameExt;
 
 impl FrameManager {
     fn live_window_history(&self, window_id: WindowId) -> Option<&super::WindowHistoryState> {

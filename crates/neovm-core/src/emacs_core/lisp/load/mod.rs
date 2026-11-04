@@ -12,6 +12,7 @@ use crate::emacs_core::error::{LispCondition, signal_error_with_arg};
 use crate::emacs_core::eval::VariableView;
 use crate::emacs_core::symbol::CanonicalAccess;
 use crate::heap_types::LispString;
+use crate::window::DisplayFrameExt;
 pub use neovm_value::runtime_root::image_data_directory;
 use neovm_value::runtime_root::{compile_time_project_root, runtime_project_root};
 #[cfg(test)]

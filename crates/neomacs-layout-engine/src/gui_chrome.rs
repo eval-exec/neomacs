@@ -3,6 +3,7 @@
 //! Mirrors the existing TTY menu-bar walk, but produces GUI overlay
 //! payloads for the render thread from the active Lisp keymaps.
 
+use neovm_core::window::DisplayFrameExt;
 use std::cell::RefCell;
 use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;

@@ -9,6 +9,7 @@
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::eval::VariableView;
 use crate::tagged::SymbolMode;
+use crate::window::DisplayFrameExt;
 
 use super::builtins::expect_integer_or_marker_in_buffers;
 use super::chartable::{

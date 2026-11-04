@@ -17,6 +17,7 @@ use crate::emacs_core::display_spec::{DisplayEval, DisplayPropertySpecs, display
 use crate::emacs_core::error::{Flow, FlowKind, FlowResultExt as _};
 use crate::emacs_core::intern::WellKnown;
 use crate::emacs_core::value::Value;
+use crate::window::DisplayFrameExt;
 use crate::window::{Window, WindowId};
 use rustc_hash::FxHashMap;
 use std::ops::ControlFlow;

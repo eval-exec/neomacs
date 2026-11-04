@@ -6,6 +6,7 @@
 
 mod diagnostic_knobs;
 mod window_input_ownership;
+use neovm_core::window::DisplayFrameExt;
 use window_input_ownership::{
     resolve_window_display_source_params, resolve_window_display_source_params_legacy,
 };

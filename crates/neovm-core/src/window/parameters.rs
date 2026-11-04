@@ -1,6 +1,7 @@
 use super::DisplayWindowExt;
 use super::{FrameManager, Window, WindowId};
 use crate::emacs_core::value::{Value, eq_value};
+use crate::window::DisplayFrameExt;
 
 fn alist_from_parameters(parameters: &[(Value, Value)]) -> Value {
     if parameters.is_empty() {

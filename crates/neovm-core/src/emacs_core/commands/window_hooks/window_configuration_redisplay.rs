@@ -3,6 +3,7 @@
 //! exclusively borrowed Context; the snapshot owns no concurrent mutable cache.
 
 use super::*;
+use crate::window::DisplayFrameExt;
 
 pub(super) fn prepare(
     eval: &super::super::eval::Context,

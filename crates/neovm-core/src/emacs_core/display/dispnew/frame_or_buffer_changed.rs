@@ -18,6 +18,7 @@ use crate::emacs_core::eval::{
     push_scratch_gc_root, restore_scratch_gc_roots, save_scratch_gc_roots,
 };
 use crate::emacs_core::{Context, Value};
+use crate::window::DisplayFrameExt;
 use crate::window::FrameId;
 
 /// One recorded piece of GNU's state vector.

@@ -15,6 +15,7 @@
 use neomacs_display_protocol::face::TtySpaceIdentity;
 use neovm_core::emacs_core::eval::VariableView;
 use neovm_core::face::realization::BasicFace;
+use neovm_core::window::DisplayFrameExt;
 use std::cmp::Ordering;
 
 mod borrowed_buffer;

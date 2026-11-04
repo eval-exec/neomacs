@@ -24,6 +24,7 @@ use crate::emacs_core::image_catalog::{
     ImageResolveSource, ImageRotation, ImageScaleEnvironment, ImageScalePolicy, ImageSizeSpec,
     ImageSpecIdentity, image_scale_environment, numeric_image_scale,
 };
+use crate::window::DisplayFrameExt;
 use crate::window::FRAME_ID_BASE;
 use neomacs_display_protocol::image_diagnostic::{ImageDiagnosticSubject, ImageFormatName};
 use strum::{EnumString, IntoStaticStr};

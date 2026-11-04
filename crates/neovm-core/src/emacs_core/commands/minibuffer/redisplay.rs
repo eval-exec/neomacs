@@ -5,6 +5,7 @@
 //! across mutators. All Lisp executes through the Context after releasing
 //! window/buffer borrows; no TLS or process-shared Lisp cache is introduced.
 use super::*;
+use crate::window::DisplayFrameExt;
 
 use crate::emacs_core::intern::intern;
 use crate::emacs_core::reader::ActiveMinibufferWindowState;

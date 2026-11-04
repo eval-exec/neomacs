@@ -10,6 +10,7 @@ use super::error::EvalResult;
 use super::eval::Context;
 use super::value::Value;
 use crate::heap_types::LispString;
+use crate::window::DisplayFrameExt;
 use std::ffi::{OsStr, OsString};
 #[cfg(unix)]
 use std::os::unix::ffi::OsStringExt;

@@ -1,5 +1,6 @@
 //! Native point decoding. Live counters belong to Window, including nested
 //! format-mode-line; read-only split entry points use an isolated snapshot.
+use crate::window::DisplayFrameExt;
 use std::cell::Cell;
 
 use crate::buffer::{Buffer, BufferId, BufferManager, CharPos0, EmacsBytePos};

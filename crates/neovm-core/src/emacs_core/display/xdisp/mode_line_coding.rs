@@ -7,6 +7,7 @@
 use super::{ModeLineNativeFieldWidth, ModeLineRendered, Value, VariableView};
 use crate::emacs_core::coding::CodingSystemManager;
 use crate::emacs_core::intern::WellKnown;
+use crate::window::DisplayFrameExt;
 
 /// Immutable original-frame class; selecting another frame in :eval cannot
 /// change whether this formatter's frame has a terminal-coding prefix.

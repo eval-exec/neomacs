@@ -9,6 +9,7 @@
 //! (`use super::*` keeps the parent's view of `Context` and its imports).
 
 use super::*;
+use crate::window::DisplayFrameExt;
 
 impl Context {
     pub fn minibuffer_is_active(&self) -> bool {

@@ -1,5 +1,6 @@
 //! Context — special forms, function application, and dispatch.
 
+use crate::window::DisplayFrameExt;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::collections::HashSet;

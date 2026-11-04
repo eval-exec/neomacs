@@ -1,6 +1,7 @@
 //! Body-height projection shared by the Lisp body/text-height queries.
 
 use super::*;
+use crate::window::DisplayFrameExt;
 use crate::window::{WindowChromeLine, WindowChromePresence};
 
 pub(super) fn body_height_pixels(

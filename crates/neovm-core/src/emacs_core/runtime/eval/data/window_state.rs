@@ -1831,7 +1831,7 @@ pub enum PosnObjectExtentMode {
 /// Which existing numeric producer GNU's current rows presently admit.
 /// Copy-only state may be read concurrently through immutable Frame publication.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum TtyCurrentMatrixAuthority {
+pub enum TtyCurrentMatrixAuthority {
     AcceptedLocal,
     FramePoolPartition,
     Undrawn,
@@ -1841,7 +1841,7 @@ pub(crate) enum TtyCurrentMatrixAuthority {
 /// Numeric values are initialized by the exclusive Frame mutator and immutable
 /// to readers; no query advances this allocation observation.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct TtyMatrixAllocation {
+pub struct TtyMatrixAllocation {
     pub(crate) window: WindowId,
     pub(crate) x: i64,
     pub(crate) y: i64,

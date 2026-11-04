@@ -23,6 +23,7 @@
 //!   (`xmenu.c`/`pgtkmenu.c`) temporarily selects the frame's selected
 //!   window buffer before calling `menu_bar_items`.
 
+use neovm_core::window::DisplayFrameExt;
 use std::collections::HashSet;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

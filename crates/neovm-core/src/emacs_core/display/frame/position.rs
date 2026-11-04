@@ -6,6 +6,7 @@
 use crate::emacs_core::error::{Flow, LispCondition, signal};
 use crate::emacs_core::value::Value;
 use crate::emacs_core::window_cmds::expect_int;
+use crate::window::DisplayFrameExt;
 use crate::window::{FrameId, FrameManager};
 
 /// A validated position request, not a resolved parent-local coordinate.

@@ -16,6 +16,7 @@ use crate::emacs_core::error::LispCondition;
 pub(crate) use crate::emacs_core::error::{expect_args, expect_args_range, expect_max_args};
 use crate::emacs_core::eval::VariableView;
 use crate::emacs_core::intern::WellKnown;
+use crate::window::DisplayFrameExt;
 use crate::window::{FrameId, WindowId};
 use strum::{EnumString, IntoStaticStr};
 

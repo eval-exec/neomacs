@@ -27,6 +27,7 @@
 //! `(window-hscroll)` correct (GNU parity) — no separate write-back is needed.
 
 use crate::emacs_core::value::Value;
+use crate::window::DisplayFrameExt;
 
 /// Decoded form of the `hscroll-step` variable (GNU STEP 0 in the spec).
 ///

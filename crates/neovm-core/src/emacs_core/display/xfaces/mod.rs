@@ -20,6 +20,7 @@ use crate::emacs_core::symbol::CanonicalAccess;
 use crate::emacs_core::symbol::Obarray;
 use crate::emacs_core::value::{HashKey, HashTableTest, Value, ValueKind, list_to_vec};
 use crate::face::{LFACE_VECTOR_SIZE, LFaceAttr};
+use crate::window::DisplayFrameExt;
 
 /// Register bootstrap variables owned by the face subsystem.
 pub fn register_bootstrap_vars(obarray: &mut Obarray) {

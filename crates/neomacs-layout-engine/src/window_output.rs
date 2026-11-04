@@ -10,6 +10,7 @@ mod restart_sync;
 mod row_geometry;
 pub(crate) use restart_sync::{RestartSyncDecision, RestartSyncState, SyncStateError};
 mod snapshot_rows;
+use neovm_core::window::DisplayFrameExt;
 use row_geometry::WindowRowGeometry;
 
 use super::display_status_line::{

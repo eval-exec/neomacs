@@ -6,6 +6,7 @@
 use super::*;
 use crate::emacs_core::process::SystemProcessExt;
 use crate::tagged::gc::MarkPhase;
+use crate::window::DisplayFrameExt;
 
 /// Labels for the structured GC diagnostics; text compatibility stays in the
 /// event message for existing pause-analysis tools.

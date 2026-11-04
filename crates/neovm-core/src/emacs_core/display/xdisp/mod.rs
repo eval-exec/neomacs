@@ -28,6 +28,7 @@
 mod eval_display_queries;
 mod mode_line_append;
 mod mode_line_coding;
+use crate::window::DisplayFrameExt;
 use mode_line_coding::CodingAccess;
 #[path = "mode_line_flow.rs"]
 mod mode_line_flow_policy;

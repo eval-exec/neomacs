@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::emacs_core::intern::WellKnown;
+use crate::window::DisplayFrameExt;
 
 // GNU's `Qinhibit_redisplay`; echo-message suppression probes it per update.
 static INHIBIT_REDISPLAY: WellKnown = WellKnown::InhibitRedisplay;

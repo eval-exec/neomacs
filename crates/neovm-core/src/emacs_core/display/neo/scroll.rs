@@ -8,6 +8,7 @@ use crate::emacs_core::keymap::{
     list_keymap_lookup_one_unresolved, lookup_key_in_obarray,
 };
 use crate::emacs_core::{Context, Value};
+use crate::window::DisplayFrameExt;
 
 /// A fixed spelling consumed by the raw-input scroll predictor.
 ///

@@ -11,6 +11,7 @@
 //! are named through `neovm_value::display_vocab` and the evaluator's
 //! `eval::data::window_state` modules, exactly as the live hooks bodies do.
 
+use crate::window::DisplayFrameExt;
 use crate::window::DisplayWindowExt;
 use std::collections::HashMap;
 

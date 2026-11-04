@@ -32,6 +32,7 @@ use crate::emacs_core::hook_runtime;
 use crate::emacs_core::intern::SymId;
 use crate::emacs_core::value::Value;
 use crate::heap_types::LispString;
+use crate::window::DisplayFrameExt;
 
 impl EditHost for Context {
     fn hook_symbol_by_id(&self, hook_sym: SymId) -> SymId {

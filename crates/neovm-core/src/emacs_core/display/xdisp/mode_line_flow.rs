@@ -7,6 +7,7 @@
 use super::*;
 use crate::emacs_core::error::{FlowKind, FlowResultExt};
 use crate::emacs_core::eval::{ConditionFrame, ResumeTarget};
+use crate::window::DisplayFrameExt;
 
 /// Immutable process configuration; shared by mutators, contains no Lisp state.
 #[inline]

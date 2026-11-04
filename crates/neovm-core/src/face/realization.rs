@@ -8,6 +8,7 @@ use super::{Face, FaceTable};
 use crate::emacs_core::value::Value;
 use crate::gc_trace::GcTrace;
 use crate::tagged::transport::SharedRoot;
+use crate::window::DisplayFrameExt;
 use enum_map::EnumMap;
 use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};

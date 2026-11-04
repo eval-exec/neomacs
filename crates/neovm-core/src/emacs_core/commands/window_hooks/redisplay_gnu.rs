@@ -6,6 +6,7 @@ use super::*;
 use crate::buffer::BufferId;
 use crate::emacs_core::eval::redisplay_hooks::HookWindowDimensions;
 use crate::emacs_core::intern::WellKnown;
+use crate::window::DisplayFrameExt;
 use neovm_edit::emacs_core::display_metrics::WindowId;
 use neovm_value::display_vocab::FrameId;
 

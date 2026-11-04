@@ -5,6 +5,7 @@ use crate::emacs_core::error::{expect_args, expect_args_range, expect_fixnum};
 use crate::emacs_core::fontset;
 use crate::emacs_core::value::{ValueKind, VecLikeType};
 use crate::tagged::SymbolMode;
+use crate::window::DisplayFrameExt;
 use neomacs_display_protocol::SelectionOwner;
 use neovm_value::display_vocab::FrameDomain;
 

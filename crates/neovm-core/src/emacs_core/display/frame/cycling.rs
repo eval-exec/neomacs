@@ -4,6 +4,7 @@ use crate::emacs_core::error::{EvalResult, expect_max_args};
 use crate::emacs_core::intern::intern;
 use crate::emacs_core::{Context, Value};
 use crate::tagged::SymbolMode;
+use crate::window::DisplayFrameExt;
 use crate::window::{Frame, FrameId, FrameManager, WindowId};
 
 #[derive(Clone, Copy)]

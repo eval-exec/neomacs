@@ -16,6 +16,7 @@ use crate::buffer::{
     TextPositionAnchor,
 };
 use crate::emacs_core::value::Value;
+use crate::window::DisplayFrameExt;
 use crate::window::{
     AttachedWindowPositionMarkers, Frame, FrameManager, Window, WindowPositionMarkerState,
     WindowTree,

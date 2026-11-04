@@ -4,6 +4,7 @@
 //! resources behind one explicit `(tty . DEVICE)` request: file descriptors,
 //! termios state, raw input, terminal-size observation, and one `TtyRif`.
 
+use neovm_core::window::DisplayFrameExt;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};

@@ -4,6 +4,7 @@
 //! editor layer stays free of those policies; the buffer-text machinery they
 //! drive stays in `emacs_core::buffer`.
 
+use crate::window::DisplayFrameExt;
 use std::time::{Duration, Instant};
 
 use crate::buffer::{

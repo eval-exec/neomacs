@@ -1,11 +1,12 @@
 use super::{
     BufferLayoutInputState, Frame, FrameId, FrameManager, FrameParam, HorizontalScrollBarType,
     VerticalScrollBarType, Window, WindowDisplaySnapshot, WindowDisplaySnapshotFreshness,
-    WindowDisplayState, WindowId, WindowLayoutInputState, WindowMargins,
+    WindowDisplayState, WindowId, WindowMargins,
 };
 use crate::buffer::{BufferId, LispCharPos1};
 use crate::emacs_core::intern::WellKnown;
 use crate::emacs_core::value::Value;
+use crate::window::DisplayFrameExt;
 use std::cell::Cell;
 
 /// One complete marker-backed viewport transition chosen by a scroll engine.
@@ -227,7 +228,7 @@ fn canon_y_from_pixel_y(frame: &Frame, y: i64) -> Value {
     }
 }
 
-fn frame_default_left_fringe_width(frame: &Frame) -> i32 {
+pub(crate) fn frame_default_left_fringe_width(frame: &Frame) -> i32 {
     frame
         .known_parameter(FrameParam::LeftFringe)
         .and_then(|v| v.as_int())
@@ -235,7 +236,7 @@ fn frame_default_left_fringe_width(frame: &Frame) -> i32 {
         .unwrap_or(8)
 }
 
-fn frame_default_right_fringe_width(frame: &Frame) -> i32 {
+pub(crate) fn frame_default_right_fringe_width(frame: &Frame) -> i32 {
     frame
         .known_parameter(FrameParam::RightFringe)
         .and_then(|v| v.as_int())
@@ -451,69 +452,6 @@ pub fn resolve_window_scroll_bar_geometry(
             0
         },
         horizontal_area_height,
-    }
-}
-
-impl Frame {
-    /// Canonical projection of every live-window input that can affect rows.
-    ///
-    /// Keeping effective margins, fringes, and scroll-bar partitions here
-    /// makes redisplay skipping and retained-row freshness share one source of
-    /// truth, including frame-default values inherited by a window.
-    pub(crate) fn window_layout_inputs(
-        &self,
-        window_id: WindowId,
-    ) -> Option<WindowLayoutInputState> {
-        let window = self.find_window(window_id)?;
-        let state = window.redisplay_state()?;
-        let Window::Leaf {
-            margins, display, ..
-        } = window
-        else {
-            return None;
-        };
-        let is_window_system = self.effective_window_system().is_some();
-        let left_fringe_width = if is_window_system {
-            if display.left_fringe_width >= 0 {
-                display.left_fringe_width
-            } else {
-                frame_default_left_fringe_width(self)
-            }
-        } else {
-            0
-        };
-        let right_fringe_width = if is_window_system {
-            if display.right_fringe_width >= 0 {
-                display.right_fringe_width
-            } else {
-                frame_default_right_fringe_width(self)
-            }
-        } else {
-            0
-        };
-        let is_minibuffer = self.minibuffer_window == Some(window_id);
-        let scroll_bars = resolve_window_scroll_bar_geometry(self, display, is_minibuffer);
-
-        Some(WindowLayoutInputState {
-            id: state.id,
-            buffer_id: state.buffer_id,
-            bounds: state.bounds,
-            window_start: state.window_start,
-            point: state.point,
-            hscroll: state.hscroll,
-            vscroll: state.vscroll,
-            preserve_vscroll_p: state.preserve_vscroll_p,
-            margins: *margins,
-            display_table_identity: display.display_table.bits(),
-            char_table_mutation_epoch: current_char_table_layout_revision(),
-            window_parameters_generation: window.parameters_generation(),
-            left_fringe_width,
-            right_fringe_width,
-            fringes_outside_margins: display.fringes_outside_margins,
-            left_scroll_bar_width: scroll_bars.left_area_width,
-            right_scroll_bar_width: scroll_bars.right_area_width,
-            horizontal_scroll_bar_height: scroll_bars.horizontal_area_height,
-        })
     }
 }
 

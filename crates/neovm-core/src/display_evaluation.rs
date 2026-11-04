@@ -7,6 +7,7 @@
 
 use crate::buffer::BufferId;
 use crate::emacs_core::Context;
+use crate::window::DisplayFrameExt;
 use crate::window::{FrameId, WindowId};
 
 impl Context {
