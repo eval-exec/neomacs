@@ -9,6 +9,7 @@
 //! unicode-bmp, latin-iso8859-1, emacs, and eight-bit.
 
 use crate::buffer::{EmacsBytePos, LispCharPos1};
+use crate::emacs_core::text_host::TextHost;
 use crate::tagged::value::SymbolMode;
 use neovm_value::error::LispCondition;
 use neovm_value::error::{EvalResult, Flow, signal};
@@ -2005,10 +2006,7 @@ pub(crate) fn builtin_charsetp(args: Vec<Value>) -> EvalResult {
     builtin_charsetp_with_symbols(args, SymbolMode::Bare)
 }
 
-pub(crate) fn builtin_charsetp_in_state(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
+pub(crate) fn builtin_charsetp_in_state<H: TextHost>(eval: &mut H, args: Vec<Value>) -> EvalResult {
     builtin_charsetp_with_symbols(args, eval.symbol_mode())
 }
 
@@ -2072,8 +2070,8 @@ pub(crate) fn builtin_set_charset_priority(args: Vec<Value>) -> EvalResult {
     builtin_set_charset_priority_with_symbols(args, SymbolMode::Bare)
 }
 
-pub(crate) fn builtin_set_charset_priority_in_state(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_set_charset_priority_in_state<H: TextHost>(
+    eval: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_set_charset_priority_with_symbols(args, eval.symbol_mode())
@@ -2144,8 +2142,8 @@ pub(crate) fn builtin_char_charset(args: Vec<Value>) -> EvalResult {
     builtin_char_charset_with_symbols(args, SymbolMode::Bare)
 }
 
-pub(crate) fn builtin_char_charset_in_state(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_char_charset_in_state<H: TextHost>(
+    eval: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_char_charset_with_symbols(args, eval.symbol_mode())
@@ -2223,8 +2221,8 @@ pub(crate) fn builtin_charset_plist(args: Vec<Value>) -> EvalResult {
     builtin_charset_plist_with_symbols(args, SymbolMode::Bare)
 }
 
-pub(crate) fn builtin_charset_plist_in_state(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_charset_plist_in_state<H: TextHost>(
+    eval: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_charset_plist_with_symbols(args, eval.symbol_mode())
@@ -2257,8 +2255,8 @@ pub(crate) fn builtin_charset_id_internal(args: Vec<Value>) -> EvalResult {
     builtin_charset_id_internal_with_symbols(args, SymbolMode::Bare)
 }
 
-pub(crate) fn builtin_charset_id_internal_in_state(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_charset_id_internal_in_state<H: TextHost>(
+    eval: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_charset_id_internal_with_symbols(args, eval.symbol_mode())
@@ -2482,8 +2480,8 @@ pub(crate) fn builtin_make_char(args: Vec<Value>) -> EvalResult {
     builtin_make_char_with_symbols(args, SymbolMode::Bare)
 }
 
-pub(crate) fn builtin_make_char_in_state(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_make_char_in_state<H: TextHost>(
+    eval: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_make_char_with_symbols(args, eval.symbol_mode())
@@ -2527,8 +2525,8 @@ pub(crate) fn builtin_define_charset_internal(args: Vec<Value>) -> EvalResult {
     builtin_define_charset_internal_with_symbols(args, SymbolMode::Bare)
 }
 
-pub(crate) fn builtin_define_charset_internal_in_state(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_define_charset_internal_in_state<H: TextHost>(
+    eval: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_define_charset_internal_with_symbols(args, eval.symbol_mode())
@@ -2794,8 +2792,8 @@ pub(crate) fn builtin_declare_equiv_charset(args: Vec<Value>) -> EvalResult {
     builtin_declare_equiv_charset_with_symbols(args, SymbolMode::Bare)
 }
 
-pub(crate) fn builtin_declare_equiv_charset_in_state(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_declare_equiv_charset_in_state<H: TextHost>(
+    eval: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_declare_equiv_charset_with_symbols(args, eval.symbol_mode())
@@ -2832,8 +2830,8 @@ pub(crate) fn builtin_define_charset_alias(args: Vec<Value>) -> EvalResult {
     builtin_define_charset_alias_with_symbols(args, SymbolMode::Bare)
 }
 
-pub(crate) fn builtin_define_charset_alias_in_state(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_define_charset_alias_in_state<H: TextHost>(
+    eval: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_define_charset_alias_with_symbols(args, eval.symbol_mode())
@@ -2885,8 +2883,8 @@ pub(crate) fn builtin_decode_char(args: Vec<Value>) -> EvalResult {
     builtin_decode_char_with_symbols(args, SymbolMode::Bare)
 }
 
-pub(crate) fn builtin_decode_char_in_state(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_decode_char_in_state<H: TextHost>(
+    eval: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_decode_char_with_symbols(args, eval.symbol_mode())
@@ -2911,8 +2909,8 @@ pub(crate) fn builtin_encode_char(args: Vec<Value>) -> EvalResult {
     builtin_encode_char_with_symbols(args, SymbolMode::Bare)
 }
 
-pub(crate) fn builtin_encode_char_in_state(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_encode_char_in_state<H: TextHost>(
+    eval: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_encode_char_with_symbols(args, eval.symbol_mode())
@@ -2935,8 +2933,8 @@ pub(crate) fn builtin_unify_charset(args: Vec<Value>) -> EvalResult {
     builtin_unify_charset_with_symbols(args, SymbolMode::Bare)
 }
 
-pub(crate) fn builtin_unify_charset_in_state(
-    eval: &mut super::eval::Context,
+pub(crate) fn builtin_unify_charset_in_state<H: TextHost>(
+    eval: &mut H,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_unify_charset_with_symbols(args, eval.symbol_mode())
