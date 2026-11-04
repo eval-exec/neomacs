@@ -182,24 +182,11 @@ fn string_char_len(len: usize) -> CharLen {
     CharLen::new(len)
 }
 
-#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-fn expect_int(value: &Value) -> Result<i64, Flow> {
-    match value.kind() {
-        ValueKind::Fixnum(n) => Ok(n),
-        _ if super::marker::is_marker(value) => super::marker::marker_position_as_int(value),
-        _ => Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("integerp"), *value],
-        )),
-    }
-}
-
-#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-fn expect_int_eval(eval: &super::eval::Context, value: &Value) -> Result<i64, Flow> {
+fn expect_int_in_buffers(buffers: &BufferManager, value: &Value) -> Result<i64, Flow> {
     match value.kind() {
         ValueKind::Fixnum(n) => Ok(n),
         _ if super::marker::is_marker(value) => {
-            super::marker::marker_position_as_int_with_buffers(&eval.edit.buffers, value)
+            super::marker::marker_position_as_int_with_buffers(buffers, value)
         }
         _ => Err(signal(
             LispCondition::WrongTypeArgument,
@@ -208,7 +195,6 @@ fn expect_int_eval(eval: &super::eval::Context, value: &Value) -> Result<i64, Fl
     }
 }
 
-#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 fn expect_integer_or_marker(value: &Value) -> Result<i64, Flow> {
     match value.kind() {
         ValueKind::Fixnum(n) => Ok(n),
@@ -218,11 +204,6 @@ fn expect_integer_or_marker(value: &Value) -> Result<i64, Flow> {
             vec![Value::symbol("integer-or-marker-p"), *value],
         )),
     }
-}
-
-#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-fn expect_integer_or_marker_eval(eval: &super::eval::Context, value: &Value) -> Result<i64, Flow> {
-    super::position::fix_position_eval(&eval.edit.buffers, value)
 }
 
 pub(crate) fn expect_integer_or_marker_in_buffers(
@@ -4153,39 +4134,45 @@ pub(crate) fn builtin_get_display_property_in_state<'a, Vars: EditVariableRead<'
 
 /// (remove-overlays &optional BEG END NAME VAL)
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub(crate) fn builtin_remove_overlays(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
+pub(crate) fn builtin_remove_overlays<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_max_args("remove-overlays", &args, 4)?;
-    let buf_id = eval
-        .edit
-        .buffers
-        .current_buffer()
-        .map(|b| b.id)
-        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    let buf_id = {
+        let (edit, _vars) = host.edit_and_vars();
+        edit.buffers
+            .current_buffer()
+            .map(|b| b.id)
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?
+    };
 
     let (start_pos, end_pos) = {
-        let buf = eval
-            .edit
+        let (edit, _vars) = host.edit_and_vars();
+        let buf = edit
             .buffers
             .get(buf_id)
             .ok_or_else(|| signal("error", vec![Value::string("Buffer does not exist")]))?;
         let start = if args.is_empty() || args[0].is_nil() {
             buf.point_min_emacs_byte_pos()
         } else {
-            elisp_pos_to_byte_clipped_full(buf, LispCharPos1::new(expect_int_eval(eval, &args[0])?))
+            elisp_pos_to_byte_clipped_full(
+                buf,
+                LispCharPos1::new(expect_int_in_buffers(&edit.buffers, &args[0])?),
+            )
         };
         let end = if args.len() < 2 || args[1].is_nil() {
             buf.point_max_emacs_byte_pos()
         } else {
-            elisp_pos_to_byte_clipped_full(buf, LispCharPos1::new(expect_int_eval(eval, &args[1])?))
+            elisp_pos_to_byte_clipped_full(
+                buf,
+                LispCharPos1::new(expect_int_in_buffers(&edit.buffers, &args[1])?),
+            )
         };
         (start, end)
     };
 
-    let buf = eval
-        .edit
+    // The tail mutates overlays and makes no further host calls, so one phase
+    // stays open to the end of the function.
+    let (edit, _vars) = host.edit_and_vars();
+    let buf = edit
         .buffers
         .get_mut(buf_id)
         .ok_or_else(|| signal("error", vec![Value::string("Buffer does not exist")]))?;
