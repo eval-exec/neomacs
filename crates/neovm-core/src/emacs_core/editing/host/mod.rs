@@ -305,4 +305,8 @@ pub trait EditHost {
     /// character cell width, and its visible row count, or `None` when no live
     /// window has a buffer. C5.
     fn line_number_display_target(&self) -> Option<LineNumberDisplayTarget>;
+
+    /// GNU `force-mode-line-update` with a nil argument: mark the current
+    /// buffer's mode line for the next redisplay. C4b.
+    fn force_mode_line_update(&mut self) -> EvalResult;
 }

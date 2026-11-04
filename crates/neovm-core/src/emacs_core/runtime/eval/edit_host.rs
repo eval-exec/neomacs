@@ -376,4 +376,10 @@ impl EditHost for Context {
             visible_lines,
         })
     }
+    fn force_mode_line_update(&mut self) -> EvalResult {
+        crate::emacs_core::builtins::misc_pure::builtin_force_mode_line_update(
+            self,
+            vec![Value::NIL],
+        )
+    }
 }
