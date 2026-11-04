@@ -1,5 +1,7 @@
+use super::display_table_input::LayoutDisplayTableInputExt;
+use super::invisibility_input::LayoutInvisibilityInputExt;
 use super::{
-    BufferLayoutInputState, Frame, FrameId, FrameManager, FrameParam, HorizontalScrollBarType,
+    BufferLayoutInputState, Frame, FrameId, FrameParam, HorizontalScrollBarType,
     VerticalScrollBarType, Window, WindowDisplaySnapshot, WindowDisplaySnapshotFreshness,
     WindowDisplayState, WindowId, WindowMargins,
 };

@@ -19,8 +19,12 @@ enum Work {
     End,
 }
 
-impl StringFaceInputs {
-    pub(super) fn capture(properties: TextPropertiesRef<'_>) -> Self {
+pub(crate) trait StringFaceInputsExt: Sized {
+    fn capture(properties: TextPropertiesRef<'_>) -> Self;
+}
+
+impl StringFaceInputsExt for StringFaceInputs {
+    fn capture(properties: TextPropertiesRef<'_>) -> Self {
         let mut runs = Vec::new();
         let keys = [
             (FaceProperty::Face, Value::symbol("face")),

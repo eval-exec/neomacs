@@ -7,8 +7,12 @@ pub(crate) use crate::emacs_core::eval::data::layout_input::invisibility_input::
     Entry, Selection,
 };
 
-impl LayoutInvisibilityInput {
-    pub(super) fn capture(value: Value) -> Self {
+pub(crate) trait LayoutInvisibilityInputExt: Sized {
+    fn capture(value: Value) -> Self;
+}
+
+impl LayoutInvisibilityInputExt for LayoutInvisibilityInput {
+    fn capture(value: Value) -> Self {
         if value == Value::T {
             return Self(Selection::All);
         }

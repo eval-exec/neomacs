@@ -4,7 +4,6 @@
 //! emacs_core::eval::data::point_rows; this module re-exports them at the
 //! old `window::point_rows::*` paths and keeps the test modules.
 
-pub(crate) use crate::emacs_core::eval::data::point_rows::WindowDisplayPointIter;
 pub use crate::emacs_core::eval::data::point_rows::{
     DisplayPointRow, DisplayPointRowIter, DisplayPointRows, DisplayPointRowsIter,
     DisplayPointRowsMode, PointCell, display_point_rows_mode,

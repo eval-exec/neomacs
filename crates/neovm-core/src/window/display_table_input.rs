@@ -7,16 +7,15 @@ pub(crate) use crate::emacs_core::eval::data::layout_input::display_table_input:
     GlyphInput, GlyphVectorInput,
 };
 
-impl LayoutDisplayTableInput {
+pub(crate) trait LayoutDisplayTableInputExt: Sized {
+    fn capture(table: Value) -> Self;
+}
+
+impl LayoutDisplayTableInputExt for LayoutDisplayTableInput {
     /// Whether this immutable snapshot has no effective display table.
     /// This borrows only captured numeric state; independent mutators may
-    /// inspect their snapshots concurrently without reading Lisp objects.
-    #[inline]
-    pub fn is_unset(&self) -> bool {
-        self.table == 0
-    }
 
-    pub(super) fn capture(table: Value) -> Self {
+    fn capture(table: Value) -> Self {
         if !chartable::is_char_table(&table) {
             return Self::default();
         }

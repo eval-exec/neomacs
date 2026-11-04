@@ -7,6 +7,8 @@
 //! - The **selected window** is the one receiving input.
 //! - The **minibuffer window** is a special single-line window at the bottom.
 
+use self::pixel_input::SpaceInputExt;
+use self::string_property_input::{StringContentInputExt, StringDisplayInputsExt};
 use crate::buffer::{BufferId, BufferManager, LispCharPos1};
 use crate::emacs_core::value::{HashTableTest, Value};
 use neomacs_display_protocol::TransitionDirection;

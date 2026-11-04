@@ -1,6 +1,8 @@
 //! Geometry-bearing display properties in prefix strings. Capturing interval
 //! revisions alone cannot detect mutation inside a property's Lisp value.
+use super::face_input::StringFaceInputsExt;
 use super::pixel_input::SpaceInput;
+use super::pixel_input::SpaceInputExt;
 use crate::buffer::{CharPos0, text_props::TextPropertiesRef};
 use crate::emacs_core::{
     display_spec::{DisplayEval, DisplayPropertySpecs, display_spec_when_parts},
@@ -8,14 +10,18 @@ use crate::emacs_core::{
     plist::plist_get,
     value::Value,
 };
-use std::{ops::ControlFlow, sync::Arc};
+use std::ops::ControlFlow;
 
 pub(crate) use crate::emacs_core::eval::data::layout_input::string_property_input::{
     DisplayRun, SpecInput, SpecPayload, StringContentInput, StringDisplayInputs,
 };
 
-impl StringContentInput {
-    pub(super) fn capture(identity: usize, string: &crate::heap_types::LispString) -> Self {
+pub(crate) trait StringContentInputExt: Sized {
+    fn capture(identity: usize, string: &crate::heap_types::LispString) -> Self;
+}
+
+impl StringContentInputExt for StringContentInput {
+    fn capture(identity: usize, string: &crate::heap_types::LispString) -> Self {
         Self {
             identity,
             bytes: string.as_bytes().into(),
@@ -26,8 +32,12 @@ impl StringContentInput {
     }
 }
 
-impl StringDisplayInputs {
-    pub(super) fn capture(properties: TextPropertiesRef<'_>) -> Self {
+pub(crate) trait StringDisplayInputsExt: Sized {
+    fn capture(properties: TextPropertiesRef<'_>) -> Self;
+}
+
+impl StringDisplayInputsExt for StringDisplayInputs {
+    fn capture(properties: TextPropertiesRef<'_>) -> Self {
         let mut runs = Vec::new();
         let display = Value::symbol("display");
         properties.for_each_interval_from_char_pos(CharPos0::new(0), |start, end, plist| {

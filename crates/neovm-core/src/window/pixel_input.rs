@@ -7,14 +7,17 @@
 use crate::emacs_core::image_catalog::ImageSpecIdentity;
 use crate::emacs_core::value::Value;
 use rustc_hash::FxHashMap;
-use std::sync::Arc;
 
 pub(crate) use crate::emacs_core::eval::data::layout_input::pixel_input::{
     PixelInput, Role, SpaceInput, Token,
 };
 
-impl SpaceInput {
-    pub(super) fn capture(value: Value) -> Option<Self> {
+pub(crate) trait SpaceInputExt: Sized {
+    fn capture(value: Value) -> Option<Self>;
+}
+
+impl SpaceInputExt for SpaceInput {
+    fn capture(value: Value) -> Option<Self> {
         use crate::emacs_core::display_spec::DisplaySpaceKey;
         if !value.is_cons() || !value.cons_car().is_bare_symbol_named("space") {
             return None;
@@ -34,8 +37,12 @@ impl SpaceInput {
     }
 }
 
-impl PixelInput {
-    pub(super) fn capture(value: Value) -> Self {
+pub(crate) trait PixelInputExt: Sized {
+    fn capture(value: Value) -> Self;
+}
+
+impl PixelInputExt for PixelInput {
+    fn capture(value: Value) -> Self {
         if !value.is_cons() {
             return Self::Atom(value.bits());
         }

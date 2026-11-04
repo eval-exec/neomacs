@@ -19,3 +19,11 @@ pub(crate) enum GlyphInput {
     Packed(usize),
     CharacterAndFace { character: usize, face: usize },
 }
+
+impl LayoutDisplayTableInput {
+    /// Whether this immutable snapshot has no effective display table.
+    #[inline]
+    pub fn is_unset(&self) -> bool {
+        self.table == 0
+    }
+}
