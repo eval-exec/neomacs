@@ -607,3 +607,134 @@ pub(crate) fn builtin_remember_mouse_glyph(
     let _y = expect_fixnum(&args[2])?;
     Ok(Value::NIL)
 }
+
+// --- window/frame/mouse entries moved from the evaluator builtins ---
+
+/// Extract an integer, signaling `(wrong-type-argument integerp V)`.
+/// Mirrors the evaluator builtins' `expect_int` for the mouse entries moved
+/// here (GNU's `CHECK_TYPE_RANGED_INTEGER` predicates on `integerp`).
+fn expect_int(value: &Value) -> Result<i64, Flow> {
+    match value.kind() {
+        ValueKind::Fixnum(n) => Ok(n),
+        _ => Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("integerp"), *value],
+        )),
+    }
+}
+
+pub(crate) fn builtin_set_mouse_pixel_position(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args("set-mouse-pixel-position", &args, 3)?;
+    let fid = super::window_cmds::resolve_frame_id_in_state(
+        &mut eval.frames,
+        &mut eval.edit.buffers,
+        Some(&args[0]),
+        neovm_value::display_vocab::FrameDomain::Live,
+    )?;
+    let x = expect_int(&args[1])?;
+    let y = expect_int(&args[2])?;
+    eval.command_loop
+        .keyboard
+        .set_mouse_pixel_position(Some(fid), x, y);
+    Ok(Value::NIL)
+}
+
+pub(crate) fn builtin_set_mouse_position(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args("set-mouse-position", &args, 3)?;
+    let fid = super::window_cmds::resolve_frame_id_in_state(
+        &mut eval.frames,
+        &mut eval.edit.buffers,
+        Some(&args[0]),
+        neovm_value::display_vocab::FrameDomain::Live,
+    )?;
+    let x = expect_int(&args[1])?;
+    let y = expect_int(&args[2])?;
+    let Some(frame) = eval.frames.get(fid) else {
+        return Err(signal("error", vec![Value::string("Frame not found")]));
+    };
+    let char_width = frame.char_width.max(1.0).round() as i64;
+    let char_height = frame.char_height.max(1.0).round() as i64;
+    let pixel_x = x.saturating_mul(char_width).saturating_add(char_width / 2);
+    let pixel_y = y
+        .saturating_mul(char_height)
+        .saturating_add(char_height / 2);
+    eval.command_loop
+        .keyboard
+        .set_mouse_pixel_position(Some(fid), pixel_x, pixel_y);
+    Ok(Value::NIL)
+}
+
+pub(crate) fn builtin_display_update_for_mouse_movement(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args("display--update-for-mouse-movement", &args, 3)?;
+    let fid = super::window_cmds::resolve_frame_id_in_state(
+        &mut eval.frames,
+        &mut eval.edit.buffers,
+        Some(&args[0]),
+        neovm_value::display_vocab::FrameDomain::Live,
+    )?;
+    let x = expect_fixnum(&args[1])?;
+    let y = expect_fixnum(&args[2])?;
+    eval.note_mouse_move_for_frame(Some(fid), x, y);
+    Ok(Value::NIL)
+}
+
+pub(crate) fn builtin_frame_scroll_bar_height(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args_range("frame-scroll-bar-height", &args, 0, 1)?;
+    let fid = super::window_cmds::resolve_frame_id_in_state(
+        &mut eval.frames,
+        &mut eval.edit.buffers,
+        args.first(),
+        FrameDomain::Any,
+    )?;
+    // GNU returns FRAME_SCROLL_BAR_AREA_HEIGHT (src/frame.c:4496-4501): the
+    // configured height while the frame enables horizontal scroll bars, and
+    // zero otherwise.
+    Ok(Value::fixnum(eval.frames.get(fid).map_or(
+        0,
+        crate::window::Frame::horizontal_scroll_bar_area_height,
+    )))
+}
+
+pub(crate) fn builtin_frame_scroll_bar_width(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args_range("frame-scroll-bar-width", &args, 0, 1)?;
+    let fid = super::window_cmds::resolve_frame_id_in_state(
+        &mut eval.frames,
+        &mut eval.edit.buffers,
+        args.first(),
+        FrameDomain::Any,
+    )?;
+    Ok(Value::fixnum(eval.frames.get(fid).map_or(
+        0,
+        crate::window::Frame::vertical_scroll_bar_area_width,
+    )))
+}
+
+pub(crate) fn builtin_frame_root_frame(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args_range("frame-root-frame", &args, 0, 1)?;
+    let fid = super::window_cmds::resolve_frame_id_in_state(
+        &mut eval.frames,
+        &mut eval.edit.buffers,
+        args.first(),
+        neovm_value::display_vocab::FrameDomain::Live,
+    )?;
+    let root = eval.frames.root_frame_id(fid).unwrap_or(fid);
+    Ok(Value::make_frame(root.0))
+}

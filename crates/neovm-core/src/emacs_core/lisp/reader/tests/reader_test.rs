@@ -3442,7 +3442,7 @@ fn input_pending_p_ignores_internal_help_echo_events() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
     let frame = install_mouse_help_echo_snapshot(&mut ev, "tip");
-    crate::emacs_core::builtins::builtin_display_update_for_mouse_movement(
+    crate::emacs_core::display_entries::builtin_display_update_for_mouse_movement(
         &mut ev,
         vec![frame, Value::fixnum(12), Value::fixnum(4)],
     )
@@ -3459,7 +3459,7 @@ fn display_update_for_mouse_movement_shows_help_echo_via_read_char() {
     let frame = install_mouse_help_echo_snapshot(&mut ev, "tip");
     let _tx = HostInputPublisher::install(&mut ev);
 
-    crate::emacs_core::builtins::builtin_display_update_for_mouse_movement(
+    crate::emacs_core::display_entries::builtin_display_update_for_mouse_movement(
         &mut ev,
         vec![frame, Value::fixnum(12), Value::fixnum(4)],
     )
@@ -3479,7 +3479,7 @@ fn display_update_for_mouse_movement_clears_help_echo_when_leaving_region() {
     let frame = install_mouse_help_echo_snapshot(&mut ev, "tip");
     let _tx = HostInputPublisher::install(&mut ev);
 
-    crate::emacs_core::builtins::builtin_display_update_for_mouse_movement(
+    crate::emacs_core::display_entries::builtin_display_update_for_mouse_movement(
         &mut ev,
         vec![frame, Value::fixnum(12), Value::fixnum(4)],
     )
@@ -3488,7 +3488,7 @@ fn display_update_for_mouse_movement_clears_help_echo_when_leaving_region() {
         .expect("read-char should consume help-echo");
     assert_eq!(ev.current_message_text(), Some("tip".to_string()));
 
-    crate::emacs_core::builtins::builtin_display_update_for_mouse_movement(
+    crate::emacs_core::display_entries::builtin_display_update_for_mouse_movement(
         &mut ev,
         vec![frame, Value::fixnum(12), Value::fixnum(40)],
     )
@@ -3517,7 +3517,7 @@ fn display_update_for_mouse_movement_respects_help_echo_inhibit_substitution() {
     let frame = install_mouse_help_echo_snapshot_with_value(&mut ev, help);
     let _tx = HostInputPublisher::install(&mut ev);
 
-    crate::emacs_core::builtins::builtin_display_update_for_mouse_movement(
+    crate::emacs_core::display_entries::builtin_display_update_for_mouse_movement(
         &mut ev,
         vec![frame, Value::fixnum(12), Value::fixnum(4)],
     )
@@ -3546,7 +3546,7 @@ fn display_update_for_mouse_movement_runs_mouse_fixup_before_echo_message() {
     )
     .expect("install mouse-fixup-help-message");
 
-    crate::emacs_core::builtins::builtin_display_update_for_mouse_movement(
+    crate::emacs_core::display_entries::builtin_display_update_for_mouse_movement(
         &mut ev,
         vec![frame, Value::fixnum(12), Value::fixnum(4)],
     )
@@ -3571,7 +3571,7 @@ fn display_update_for_mouse_movement_runs_mouse_fixup_without_input_receiver() {
     )
     .expect("install mouse-fixup-help-message");
 
-    crate::emacs_core::builtins::builtin_display_update_for_mouse_movement(
+    crate::emacs_core::display_entries::builtin_display_update_for_mouse_movement(
         &mut ev,
         vec![frame, Value::fixnum(12), Value::fixnum(4)],
     )
@@ -3592,7 +3592,7 @@ fn display_update_for_mouse_movement_preserves_raw_unibyte_help_echo() {
     let frame = install_mouse_help_echo_snapshot_with_value(&mut ev, raw);
     let _tx = HostInputPublisher::install(&mut ev);
 
-    crate::emacs_core::builtins::builtin_display_update_for_mouse_movement(
+    crate::emacs_core::display_entries::builtin_display_update_for_mouse_movement(
         &mut ev,
         vec![frame, Value::fixnum(12), Value::fixnum(4)],
     )
@@ -3623,7 +3623,7 @@ fn display_update_for_mouse_movement_runs_mouse_fixup_before_show_help_function(
     )
     .expect("install help fixup/show-help-function");
 
-    crate::emacs_core::builtins::builtin_display_update_for_mouse_movement(
+    crate::emacs_core::display_entries::builtin_display_update_for_mouse_movement(
         &mut ev,
         vec![frame, Value::fixnum(12), Value::fixnum(4)],
     )

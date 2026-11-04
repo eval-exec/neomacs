@@ -386,7 +386,6 @@ pub(super) use super::regex;
 pub(super) use super::subr_info;
 pub(super) use super::textprop;
 pub(super) use super::value;
-pub(super) use super::window_cmds;
 
 // --- Submodules ---
 mod arithmetic;

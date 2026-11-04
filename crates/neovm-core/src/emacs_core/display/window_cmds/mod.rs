@@ -61,7 +61,108 @@ fn lisp_char_pos_from_one_based_usize(pos: usize) -> LispCharPos1 {
     LispCharPos1::from_one_based_usize(pos)
 }
 
-pub(crate) use super::builtins::symbols::builtin_resize_mini_window_internal;
+// Moved down from the evaluator builtins (stage-4 K2 display): this is
+// redisplay/window behaviour, not a Lisp-only entry.
+pub(crate) fn builtin_resize_mini_window_internal(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args("resize-mini-window-internal", &args, 1)?;
+    // GNU spells this `CHECK_LIVE_WINDOW (window)' (`src/window.c'): WINDOW is
+    // REQUIRED, so nil is rejected rather than defaulted, and an internal or
+    // deleted window signals `window-live-p'.  Testing `as_window_id' instead
+    // accepted any window OBJECT and only failed later, when the live-only
+    // frame lookup missed, with a plain `error "Window not found"' -- a
+    // condition GNU never reaches.
+    let (fid, window_id) = crate::emacs_core::window_cmds::check_window_id_in_state(
+        &mut eval.frames,
+        &mut eval.edit.buffers,
+        &args[0],
+        crate::emacs_core::eval::data::window_state::WindowDomain::Live,
+    )?;
+    let frame = eval
+        .frames
+        .get_mut(fid)
+        .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+    if frame.minibuffer_window != Some(window_id) {
+        return Err(signal(
+            "error",
+            vec![Value::string("Not a valid minibuffer window")],
+        ));
+    }
+
+    let root_height = frame.root_window().bounds().height.max(0.0) as i64;
+    let root_new = frame
+        .root_window()
+        .new_pixel()
+        .ok_or_else(|| signal("error", vec![Value::string("Cannot resize mini window")]))?;
+    let (mini_height, mini_new) = {
+        let mini = frame.minibuffer_leaf.as_ref().ok_or_else(|| {
+            signal(
+                "error",
+                vec![Value::string("Cannot resize a minibuffer-only frame")],
+            )
+        })?;
+        (
+            mini.bounds().height.max(0.0) as i64,
+            mini.new_pixel()
+                .ok_or_else(|| signal("error", vec![Value::string("Cannot resize mini window")]))?,
+        )
+    };
+
+    let old_total = root_height.saturating_add(mini_height);
+    let new_total = root_new.saturating_add(mini_new);
+    if !crate::window::window_resize_check(
+        frame.tree(),
+        frame.tree().root_id(),
+        neovm_value::display_vocab::SplitDirection::Vertical,
+        neovm_edit::emacs_core::display_metrics::WindowBodyCellSize::new(
+            frame.char_width,
+            frame.char_height,
+        ),
+    ) || mini_new <= 0
+        || old_total != new_total
+    {
+        return Err(signal(
+            "error",
+            vec![Value::string("Cannot resize mini window")],
+        ));
+    }
+
+    let char_width = frame.char_width;
+    let char_height = frame.char_height;
+    let geometry_changed = root_height != root_new || mini_height != mini_new;
+    let is_tty = frame.effective_window_system().is_none();
+    let root = frame.tree().root_id();
+    crate::window::window_resize_apply(frame.tree_mut(), root, false, char_width, char_height);
+    let mini = frame
+        .minibuffer_leaf
+        .as_mut()
+        .expect("minibuffer leaf validated before resize mutation");
+    let bounds = *mini.bounds();
+    mini.set_bounds(neovm_edit::emacs_core::display_metrics::Rect::new(
+        bounds.x,
+        bounds.y,
+        bounds.width,
+        mini_new as f32,
+    ));
+    mini.set_new_pixel(None);
+    frame.recalculate_minibuffer_bounds();
+    // Legacy has no GNU frame-local redisplay/current-matrix validity flag.
+    // A real allocation change must therefore forget the physical matrix,
+    // including a shrink/grow cycle completed before its next presentation.
+    // This uses existing output ownership, not the optional callback policy.
+    if geometry_changed && !eval.gnu_redisplay_hooks_policy_enabled() {
+        eval.invalidate_redisplay();
+        if is_tty {
+            eval.gnu_request_frame_redraw(fid);
+        }
+    }
+    // The successful primitive is the common GNU resize_mini_window_apply
+    // seam, including direct window.el calls outside preparatory redisplay.
+    eval.gnu_publish_mini_geometry_changed(fid);
+    Ok(Value::T)
+}
 pub(crate) use crate::emacs_core::window_hooks::{
     builtin_current_window_configuration, builtin_run_window_scroll_functions,
     builtin_set_window_configuration, builtin_window_configuration_equal_p,

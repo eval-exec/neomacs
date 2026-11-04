@@ -2720,7 +2720,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "frame-root-frame",
-        NativeFn::ContextVec(builtin_frame_root_frame),
+        NativeFn::ContextVec(crate::emacs_core::display_entries::builtin_frame_root_frame),
         SubrArity::new(0, Some(1)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -4418,7 +4418,9 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "display--update-for-mouse-movement",
-        NativeFn::ContextVec(builtin_display_update_for_mouse_movement),
+        NativeFn::ContextVec(
+            crate::emacs_core::display_entries::builtin_display_update_for_mouse_movement
+        ),
         SubrArity::new(3, Some(3)),
     )));
     ctx.register_subr(
@@ -4557,12 +4559,12 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "frame-scroll-bar-height",
-        NativeFn::ContextVec(builtin_frame_scroll_bar_height),
+        NativeFn::ContextVec(crate::emacs_core::display_entries::builtin_frame_scroll_bar_height),
         SubrArity::new(0, Some(1)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "frame-scroll-bar-width",
-        NativeFn::ContextVec(builtin_frame_scroll_bar_width),
+        NativeFn::ContextVec(crate::emacs_core::display_entries::builtin_frame_scroll_bar_width),
         SubrArity::new(0, Some(1)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -5258,12 +5260,12 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "set-mouse-pixel-position",
-        NativeFn::ContextVec(builtin_set_mouse_pixel_position),
+        NativeFn::ContextVec(crate::emacs_core::display_entries::builtin_set_mouse_pixel_position),
         SubrArity::new(3, Some(3)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "set-mouse-position",
-        NativeFn::ContextVec(builtin_set_mouse_position),
+        NativeFn::ContextVec(crate::emacs_core::display_entries::builtin_set_mouse_position),
         SubrArity::new(3, Some(3)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
