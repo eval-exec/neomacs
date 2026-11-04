@@ -84,6 +84,10 @@ impl EditHost for Context {
         Context::variable_value_in_buffer(self, buf, id)
     }
 
+    fn variable_value_in_current_buffer(&self, id: SymId) -> Option<Value> {
+        Context::variable_value_in_current_buffer(self, id)
+    }
+
     fn default_value(&self, id: SymId) -> Option<Value> {
         self.variables().default_value(id)
     }
@@ -104,6 +108,12 @@ impl EditHost for Context {
 
     fn store_variable_by_name(&mut self, name: &str, value: Value) {
         Context::store_variable_by_name(self, name, value)
+    }
+
+    fn set_variable_by_name(&mut self, name: &str, value: Value) {
+        // The `set` subr semantics (Context::set_variable), not the
+        // canonical-default store above.
+        Context::set_variable(self, name, value)
     }
 
     fn undo_truncation_variable(&self, name: &str) -> Value {

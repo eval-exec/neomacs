@@ -1498,7 +1498,10 @@ impl Context {
         super::super::window_cmds::register_bootstrap_vars(obarray);
         super::super::keyboard::pure::register_bootstrap_vars(obarray);
         super::super::composite::register_bootstrap_vars(obarray);
-        super::super::coding::register_bootstrap_vars(obarray);
+        // T6.3: core constructs every VariableStore; text only sees the
+        // TextVariableStore surface. Bootstrap has no owner yet.
+        let mut coding_store = crate::emacs_core::eval::VariableStore::new(obarray, None);
+        super::super::coding::register_bootstrap_vars(&mut coding_store);
         super::super::dired::register_bootstrap_vars(obarray);
         super::super::xdisp::register_bootstrap_vars(obarray);
         super::super::textprop::register_bootstrap_vars(obarray);

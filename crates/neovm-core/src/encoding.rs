@@ -2156,7 +2156,7 @@ pub struct CodingDecoderState {
 /// The encoder continuation retained between subprocess writes. A fresh
 /// conversion has no designation or signature; each codec starts its stream once.
 #[derive(Clone, Debug, Default)]
-pub(crate) enum CodingEncoderState {
+pub enum CodingEncoderState {
     #[default]
     Initial,
     Iso2022(Iso2022EncodeState),

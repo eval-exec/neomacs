@@ -17,11 +17,12 @@
 //!   set-terminal-coding-system, coding-system-priority-list
 
 use super::eval::Context;
+use super::text_host::TextVariableStore;
 use crate::buffer::{BufferManager, EmacsByteRange, LispCharPos1};
 use crate::emacs_core::emacs_char::EmacsChar;
-use crate::emacs_core::eval::VariableStore;
 use crate::heap_types::LispString;
 use crate::tagged::value::SymbolMode;
+use neovm_edit::emacs_core::edit_host::EditVariableRead;
 use neovm_value::error::LispCondition;
 use neovm_value::error::{EvalResult, Flow, signal};
 use neovm_value::error::{expect_args, expect_max_args, expect_min_args};
@@ -302,7 +303,7 @@ impl EolType {
 /// the one live when the bytes arrive, not the one live when the coding system
 /// was chosen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum EolConversion {
+pub enum EolConversion {
     /// `inhibit-eol-conversion` is nil.
     Enabled,
     /// `inhibit-eol-conversion` is non-nil.
@@ -1788,7 +1789,7 @@ impl CodingSystemManager {
     }
 }
 
-fn cons_coding_system_variable(vars: &mut VariableStore<'_>, name: SymId) {
+fn cons_coding_system_variable<S: TextVariableStore>(vars: &mut S, name: SymId) {
     let var = intern("coding-system-list");
     let current = vars.view().value_or_nil(var);
     vars.store(var, Value::cons(Value::from_sym_id(name), current));
@@ -1808,7 +1809,7 @@ fn coding_system_alist_has_name(mut alist: Value, name: &str) -> bool {
     false
 }
 
-fn cons_coding_system_alist(vars: &mut VariableStore<'_>, name: SymId) {
+fn cons_coding_system_alist<S: TextVariableStore>(vars: &mut S, name: SymId) {
     let var = intern("coding-system-alist");
     let current = vars.view().value_or_nil(var);
     let name_str = resolve_sym(name);
@@ -1819,7 +1820,7 @@ fn cons_coding_system_alist(vars: &mut VariableStore<'_>, name: SymId) {
     vars.store(var, Value::cons(entry, current));
 }
 
-fn record_coding_system_name(vars: &mut VariableStore<'_>, name: SymId) {
+fn record_coding_system_name<S: TextVariableStore>(vars: &mut S, name: SymId) {
     cons_coding_system_variable(vars, name);
     cons_coding_system_alist(vars, name);
 }
@@ -1828,8 +1829,8 @@ fn record_coding_system_name(vars: &mut VariableStore<'_>, name: SymId) {
 /// `Vcoding_system_list` and `Vcoding_system_alist` in `src/coding.c`.
 /// When EOL is unspecified, GNU records the three subsidiary systems first
 /// and then the base coding system, all by consing onto the front.
-pub(crate) fn record_lisp_define_coding_system_internal(
-    vars: &mut VariableStore<'_>,
+pub(crate) fn record_lisp_define_coding_system_internal<S: TextVariableStore>(
+    vars: &mut S,
     args: &[Value],
     mode: SymbolMode,
 ) {
@@ -1851,8 +1852,8 @@ pub(crate) fn record_lisp_define_coding_system_internal(
 
 /// Mirror GNU `define-coding-system-alias`: append alias metadata in the
 /// runtime registry, then cons the alias onto the Lisp-visible list and alist.
-pub(crate) fn record_lisp_define_coding_system_alias(
-    vars: &mut VariableStore<'_>,
+pub(crate) fn record_lisp_define_coding_system_alias<S: TextVariableStore>(
+    vars: &mut S,
     args: &[Value],
     mode: SymbolMode,
 ) {
@@ -6197,76 +6198,74 @@ pub(crate) fn builtin_find_coding_systems_region_internal(
 
 /// Initialize coding-system-related variables that official Emacs sets
 /// in C code (coding.c syms_of_coding).
-pub fn register_bootstrap_vars(obarray: &mut neovm_value::symbol::Obarray) {
-    fn defvar_lisp(obarray: &mut neovm_value::symbol::Obarray, name: &str, value: Value) {
+pub fn register_bootstrap_vars<S: TextVariableStore>(vars: &mut S) {
+    fn defvar_lisp<S: TextVariableStore>(vars: &mut S, name: &str, value: Value) {
+        let obarray = vars.obarray();
         obarray.seed_value(name, value);
         obarray.make_special(name);
     }
 
     // latin-extra-code-table: 256-element nil vector (coding.c:12065).
     defvar_lisp(
-        obarray,
+        vars,
         "latin-extra-code-table",
         Value::vector(vec![Value::NIL; 256]),
     );
 
     // coding.c:11927 — DEFVAR_LISP (Vcoding_system_list)
-    defvar_lisp(obarray, "coding-system-list", Value::NIL);
+    defvar_lisp(vars, "coding-system-list", Value::NIL);
     // coding.c:11930 — DEFVAR_LISP (Vcoding_system_alist)
-    defvar_lisp(obarray, "coding-system-alist", Value::NIL);
+    defvar_lisp(vars, "coding-system-alist", Value::NIL);
     // `syms_of_coding` defines these two coding systems in C before
     // `mule-conf.el` adds aliases and the rest of the language codings.
-    {
-        // Bootstrap: no owner exists yet.
-        let mut vars = VariableStore::new(obarray, None);
-        record_coding_system_name(&mut vars, intern("no-conversion"));
-        for name in [
-            "undecided-unix",
-            "undecided-dos",
-            "undecided-mac",
-            "undecided",
-        ] {
-            record_coding_system_name(&mut vars, intern(name));
-        }
+    // Bootstrap: the core caller constructed the store with no owner.
+    record_coding_system_name(vars, intern("no-conversion"));
+    for name in [
+        "undecided-unix",
+        "undecided-dos",
+        "undecided-mac",
+        "undecided",
+    ] {
+        record_coding_system_name(vars, intern(name));
     }
     // coding.c:11935 — DEFVAR_LISP (Vcoding_category_list)
-    defvar_lisp(obarray, "coding-category-list", Value::NIL);
+    defvar_lisp(vars, "coding-category-list", Value::NIL);
     // coding.c:11941 — DEFVAR_LISP (Vcoding_system_for_read)
-    defvar_lisp(obarray, "coding-system-for-read", Value::NIL);
+    defvar_lisp(vars, "coding-system-for-read", Value::NIL);
     // coding.c:11949 — DEFVAR_LISP (Vcoding_system_for_write)
-    defvar_lisp(obarray, "coding-system-for-write", Value::NIL);
+    defvar_lisp(vars, "coding-system-for-write", Value::NIL);
     // coding.c:11956 — DEFVAR_LISP (Vlast_coding_system_used).
-    obarray.make_special("last-coding-system-used");
+    vars.obarray().make_special("last-coding-system-used");
     // coding.c:11959 — DEFVAR_LISP (Vlast_code_conversion_error)
-    defvar_lisp(obarray, "last-code-conversion-error", Value::NIL);
+    defvar_lisp(vars, "last-code-conversion-error", Value::NIL);
     // coding.c:11999 — DEFVAR_LISP (Vlocale_coding_system)
-    defvar_lisp(obarray, "locale-coding-system", Value::NIL);
+    defvar_lisp(vars, "locale-coding-system", Value::NIL);
     // coding.c:12014 — DEFVAR_LISP (Veol_mnemonic_unix)
-    defvar_lisp(obarray, "eol-mnemonic-unix", Value::string(":"));
+    defvar_lisp(vars, "eol-mnemonic-unix", Value::string(":"));
     // coding.c:12019 — DEFVAR_LISP (Veol_mnemonic_dos)
-    defvar_lisp(obarray, "eol-mnemonic-dos", Value::string("\\"));
+    defvar_lisp(vars, "eol-mnemonic-dos", Value::string("\\"));
     // coding.c:12024 — DEFVAR_LISP (Veol_mnemonic_mac)
-    defvar_lisp(obarray, "eol-mnemonic-mac", Value::string("/"));
+    defvar_lisp(vars, "eol-mnemonic-mac", Value::string("/"));
     // coding.c:12029 — DEFVAR_LISP (Veol_mnemonic_undecided)
-    defvar_lisp(obarray, "eol-mnemonic-undecided", Value::string(":"));
+    defvar_lisp(vars, "eol-mnemonic-undecided", Value::string(":"));
     // coding.c:12036 — DEFVAR_LISP (Venable_character_translation)
-    defvar_lisp(obarray, "enable-character-translation", Value::T);
+    defvar_lisp(vars, "enable-character-translation", Value::T);
     // coding.c:12046 — DEFVAR_LISP (Vstandard_translation_table_for_decode)
-    defvar_lisp(obarray, "standard-translation-table-for-decode", Value::NIL);
+    defvar_lisp(vars, "standard-translation-table-for-decode", Value::NIL);
     // coding.c:12050 — DEFVAR_LISP (Vstandard_translation_table_for_encode)
-    defvar_lisp(obarray, "standard-translation-table-for-encode", Value::NIL);
+    defvar_lisp(vars, "standard-translation-table-for-encode", Value::NIL);
     // coding.c:12054 — DEFVAR_LISP (Vcharset_revision_table)
-    defvar_lisp(obarray, "charset-revision-table", Value::NIL);
+    defvar_lisp(vars, "charset-revision-table", Value::NIL);
     // coding.c:12072 — DEFVAR_LISP (Vselect_safe_coding_system_function)
-    defvar_lisp(obarray, "select-safe-coding-system-function", Value::NIL);
+    defvar_lisp(vars, "select-safe-coding-system-function", Value::NIL);
     // coding.c:12085 — DEFVAR_LISP (Vtranslation_table_for_input)
-    defvar_lisp(obarray, "translation-table-for-input", Value::NIL);
+    defvar_lisp(vars, "translation-table-for-input", Value::NIL);
     // coding.c:11993 — DEFVAR_LISP (Vnetwork_coding_system_alist)
-    defvar_lisp(obarray, "network-coding-system-alist", Value::NIL);
+    defvar_lisp(vars, "network-coding-system-alist", Value::NIL);
     // coding.c:11996 — DEFVAR_LISP (Vprocess_coding_system_alist)
-    defvar_lisp(obarray, "process-coding-system-alist", Value::NIL);
+    defvar_lisp(vars, "process-coding-system-alist", Value::NIL);
     // coding.c:12008 — DEFVAR_LISP (Vfile_coding_system_alist)
-    defvar_lisp(obarray, "file-coding-system-alist", Value::NIL);
+    defvar_lisp(vars, "file-coding-system-alist", Value::NIL);
 
     let target_idx = intern("target-idx");
     for (operation, index) in [
@@ -6277,7 +6276,9 @@ pub fn register_bootstrap_vars(obarray: &mut neovm_value::symbol::Obarray) {
         ("start-process", 2),
         ("open-network-stream", 3),
     ] {
-        let _ = obarray.put_property_id(intern(operation), target_idx, Value::fixnum(index));
+        let _ = vars
+            .obarray()
+            .put_property_id(intern(operation), target_idx, Value::fixnum(index));
     }
 }
 

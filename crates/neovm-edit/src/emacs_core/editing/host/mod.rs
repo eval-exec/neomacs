@@ -110,6 +110,11 @@ pub trait EditHost {
     /// binding when it has one, else the default. C2.
     fn variable_value_in_buffer(&self, buf: Option<&Buffer>, id: SymId) -> Option<Value>;
 
+    /// [`Self::variable_value_in_buffer`] for the current buffer (GNU's
+    /// `BVAR (current_buffer, ...)` read). Added for the text layer's
+    /// character-width policy (stage-3b T6 thin addition).
+    fn variable_value_in_current_buffer(&self, id: SymId) -> Option<Value>;
+
     /// GNU `default_value` without a buffer. C2.
     fn default_value(&self, id: SymId) -> Option<Value>;
 
@@ -127,6 +132,13 @@ pub trait EditHost {
     /// error-recovery reset and nothing else; every other store is
     /// `set_variable`. C2.
     fn reset_variable_on_error(&mut self, sym: SymId, value: Value);
+
+    /// GNU `Fset` by NAME: the full `set` subr semantics —
+    /// buffer-forwarded slot write, runtime-binding cache sync, GC refresh
+    /// and display-variable mark (`Context::set_variable`), NOT the
+    /// canonical-default `store_variable_by_name`. Added for the text
+    /// layer's `last-coding-system-used` writes (stage-3b T6 thin addition).
+    fn set_variable_by_name(&mut self, name: &str, value: Value);
 
     /// GNU `Vfoo = VALUE` from C, by name: the canonical-default store
     /// with no alias resolution and no variable watchers — the obarray's

@@ -80,6 +80,26 @@ impl<'a> crate::emacs_core::edit_host::EditVariableRead<'a> for VariableView<'a>
     }
 }
 
+/// The text layer's CCL raw-publication surface (stage-3b T2): the signed
+/// unsafe row, separate from the read trait. The raw form is this module's
+/// two-pointer [`RawVariableView`]; reconstruction copies the parts back and
+/// is sound only while the source view's borrows outlive `'a`.
+impl<'a> crate::emacs_core::text_host::RawTextVariableView<'a> for VariableView<'a> {
+    type Raw = RawVariableView;
+
+    #[inline]
+    fn into_raw(self) -> RawVariableView {
+        VariableView::into_raw(self)
+    }
+
+    #[inline]
+    unsafe fn view_from_raw(raw: RawVariableView) -> Self {
+        // SAFETY: the caller keeps the source view's obarray and slab
+        // borrows alive for 'a, on this thread (trait Safety contract).
+        unsafe { raw.view() }
+    }
+}
+
 impl std::fmt::Debug for VariableView<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("VariableView")
@@ -437,7 +457,8 @@ fn owner_store(obarray: &mut Obarray, slab: &mut OwnerSlab, id: SymId, value: Va
 /// A [`VariableView`] as raw parts. Rebuilding the view is `unsafe`: the
 /// scope that made it must still hold the borrow it was made from.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct RawVariableView {
+#[doc(hidden)]
+pub struct RawVariableView {
     obarray: *const Obarray,
     owner: *const OwnerSlot,
 }
@@ -764,6 +785,32 @@ fn projected_buffer_local_default(
             .and_then(|projection| obarray.projected_default_value(projection)),
     };
     value.ok_or_else(|| signal(LispCondition::VoidVariable, vec![original_arg]))
+}
+
+/// The text layer's variable-write surface (stage-3b T6.2/T6.3): pure
+/// delegation to the inherent store. Core constructs every `VariableStore`
+/// (including the bootstrap one), so text never names the type or the owner
+/// slot; `store` keeps today's canonical-routed + projected-store semantics.
+impl<'a> crate::emacs_core::text_host::TextVariableStore for VariableStore<'a> {
+    type View<'b>
+        = VariableView<'b>
+    where
+        Self: 'b;
+
+    #[inline(always)]
+    fn obarray(&mut self) -> &mut Obarray {
+        VariableStore::obarray(self)
+    }
+
+    #[inline(always)]
+    fn store(&mut self, id: SymId, value: Value) {
+        VariableStore::store(self, id, value)
+    }
+
+    #[inline(always)]
+    fn view(&self) -> Self::View<'_> {
+        VariableStore::view(self)
+    }
 }
 
 #[cfg(test)]

@@ -16,7 +16,7 @@ pub(crate) const CODE_CONVERSION_WORK_BUFFER_NAME: &str = " *code-conversion-wor
 /// A named enum keeps GNU's `coding->dst_multibyte` decision at the caller;
 /// passing a bare bool here makes it too easy to reverse that meaning.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ConversionBufferEncoding {
+pub enum ConversionBufferEncoding {
     Unibyte,
     Multibyte,
 }
@@ -52,7 +52,7 @@ enum LeaseKind {
 /// buffer from a nested temporary; callers cannot accidentally kill the
 /// former or retain the latter.
 #[derive(Debug)]
-pub(crate) struct CodeConversionBufferLease {
+pub struct CodeConversionBufferLease {
     buffer: BufferId,
     kind: LeaseKind,
 }
