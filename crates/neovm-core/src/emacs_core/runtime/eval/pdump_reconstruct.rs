@@ -45,6 +45,7 @@ impl Context {
         // GC-capable allocation: their owners keep the state in core, and no
         // call site can run before construction/dump.
         crate::emacs_core::lifecycle_hooks::install_lifecycle_hooks();
+        crate::emacs_core::process_hooks::install_process_hooks();
         crate::emacs_core::bytecode::semantics::install();
         // The function-cell observer is process state, not image state, and a
         // restored image can hold byte-code functions before any Context

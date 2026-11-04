@@ -7621,6 +7621,7 @@ pub mod interactive_registry;
 pub mod keymap_lookup;
 pub mod lifecycle;
 pub mod perf;
+pub mod process_hooks;
 mod thread_local_roots;
 use thread_local_roots::{collect_thread_local_gc_roots, for_each_thread_local_root_source};
 mod hash_test_gc_inhibit;

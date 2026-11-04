@@ -2407,6 +2407,7 @@ impl Context {
         // GC-capable allocation: their owners keep the state in core, and no
         // call site can run before construction/dump.
         crate::emacs_core::lifecycle_hooks::install_lifecycle_hooks();
+        crate::emacs_core::process_hooks::install_process_hooks();
         crate::emacs_core::bytecode::semantics::install();
         // The value layer owns the function-cell observer table; the JIT
         // installs its four observations here, before any compiled leaf can

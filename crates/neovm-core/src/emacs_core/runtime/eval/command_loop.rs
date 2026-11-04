@@ -198,9 +198,8 @@ impl Context {
     /// hooks, without running Lisp sentinels after the shutdown boundary.
     pub fn close_processes_for_exit(&mut self) {
         for id in self.processes.list_processes() {
-            #[cfg(unix)]
-            self.processes.unlink_owned_unix_listener_for_exit(id);
-            self.processes.delete_process(id);
+            crate::emacs_core::eval::process_hooks::unlink_owned_unix_listener_for_exit(self, id);
+            crate::emacs_core::eval::process_hooks::delete_process(self, id);
         }
     }
 
@@ -2443,8 +2442,11 @@ impl Context {
         )
     }
 
-    pub(crate) fn open_channel_for_module(&self, process: Value) -> Result<std::ffi::c_int, Flow> {
-        self.processes.open_channel_for_module(process)
+    pub(crate) fn open_channel_for_module(
+        &mut self,
+        process: Value,
+    ) -> Result<std::ffi::c_int, Flow> {
+        crate::emacs_core::eval::process_hooks::open_channel_for_module(self, process)
     }
 
     #[inline(always)]

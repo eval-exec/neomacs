@@ -48,6 +48,7 @@ pub mod kmacro;
 pub(crate) mod lifecycle_hooks;
 #[path = "commands/minibuffer/mod.rs"]
 pub mod minibuffer;
+pub(crate) mod process_hooks;
 #[path = "commands/window_hooks/mod.rs"]
 pub mod window_hooks;
 pub(crate) use neovm_value::prefix;

@@ -2016,7 +2016,7 @@ fn write_value_stateful_inner(
         }
         ValueKind::Veclike(VecLikeType::Process) => {
             out.push_str(
-                &super::process::print_process_handle(value)
+                &crate::emacs_core::eval::process_hooks::print_process_handle(value)
                     .unwrap_or_else(|| "#<process>".to_string()),
             );
         }
