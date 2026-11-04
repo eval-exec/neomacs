@@ -8,7 +8,9 @@ use neovm_edit::emacs_core::display_metrics::{Rect, WindowId, WindowMargins};
 use neovm_value::display_vocab::{FrameId, WindowLayoutVariable};
 use neovm_value::intern::SymId;
 use neovm_value::value::Value;
+use num_enum::{IntoPrimitive, TryFromPrimitive};
 use rustc_hash::FxHashMap as HashMap;
+use std::num::NonZeroU64;
 
 /// Redisplay-owned runtime state used to decide which GNU window hooks fire.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -642,5 +644,334 @@ impl ModeLineBase {
 
     pub(crate) const fn line_number(self) -> usize {
         self.line.get()
+    }
+}
+
+// --- E5-FM data records, part b (stage-4 W2/E5) ---
+
+/// Evaluator-owned identity of one immutable displayed geometry publication.
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct PresentationId(NonZeroU64);
+
+impl PresentationId {
+    pub const fn new(value: u64) -> Self {
+        match Self::try_new(value) {
+            Some(id) => id,
+            None => panic!("presentation identity must be nonzero"),
+        }
+    }
+
+    pub const fn try_new(value: u64) -> Option<Self> {
+        match NonZeroU64::new(value) {
+            Some(value) => Some(Self(value)),
+            None => None,
+        }
+    }
+
+    pub const fn get(self) -> u64 {
+        self.0.get()
+    }
+}
+
+/// Last authoritative physical cursor kind for a window.
+///
+/// Mirrors GNU `enum text_cursor_kinds` for resolved physical cursor states.
+/// GNU's `DEFAULT_CURSOR = -2` is intentionally absent here because
+/// `phys_cursor_type` stores the cursor kind after redisplay resolution.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, IntoPrimitive, TryFromPrimitive)]
+#[repr(i8)]
+pub enum WindowCursorKind {
+    NoCursor = -1,
+    FilledBox = 0,
+    HollowBox = 1,
+    Bar = 2,
+    Hbar = 3,
+}
+
+impl WindowCursorKind {
+    pub fn from_gnu_code(code: i8) -> Option<Self> {
+        Self::try_from(code).ok()
+    }
+
+    pub fn gnu_code(self) -> i8 {
+        self.into()
+    }
+}
+
+/// Cursor position within a window's text area.
+///
+/// Mirrors GNU's lightweight `struct cursor_pos`; physical cursor size and
+/// style live separately on `WindowCursorSnapshot`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WindowCursorPos {
+    /// X relative to the text area's left edge, in pixels.
+    pub x: i64,
+    /// Y relative to the text area's top edge, in pixels.
+    pub y: i64,
+    /// Visual row within the window's text area.
+    pub row: i64,
+    /// Visual column within that row.
+    pub col: i64,
+}
+
+impl WindowCursorPos {
+    pub fn from_snapshot(snapshot: &WindowCursorSnapshot) -> Self {
+        Self {
+            x: snapshot.x,
+            y: snapshot.y,
+            row: snapshot.row,
+            col: snapshot.col,
+        }
+    }
+}
+
+/// Measured extent of the selected logical glyph, independent of cursor paint.
+/// Zero-width glyphs remain representable; absence means no explicit extent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LogicalCursorDimensions {
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Last authoritative physical cursor geometry for a window.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WindowCursorSnapshot {
+    /// Physical cursor kind that redisplay emitted for this window.
+    pub kind: WindowCursorKind,
+    /// X relative to the text area's left edge, in pixels.
+    pub x: i64,
+    /// Y relative to the text area's top edge, in pixels.
+    pub y: i64,
+    /// Cursor width in pixels.
+    pub width: i64,
+    /// Cursor height in pixels.
+    pub height: i64,
+    /// Pixels above the baseline.
+    pub ascent: i64,
+    /// Visual row within the window's text area.
+    pub row: i64,
+    /// Visual column within that row.
+    pub col: i64,
+}
+
+/// One accepted window redisplay's mutually consistent output facts.
+///
+/// These values all come from the same immutable snapshot and presentation
+/// generation. Consumers never have to combine a new end record with an old
+/// visible span or cursor.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WindowRedisplayOutput {
+    pub(crate) generation: PresentationId,
+    pub(crate) window_end: WindowEndRecord,
+    pub(crate) visible_span: Option<WindowVisibleBufferSpan>,
+    pub(crate) logical_cursor: Option<WindowCursorPos>,
+    pub(crate) phys_cursor: Option<WindowCursorSnapshot>,
+}
+
+impl WindowRedisplayOutput {
+    pub const fn generation(&self) -> PresentationId {
+        self.generation
+    }
+
+    pub const fn window_end(&self) -> WindowEndRecord {
+        self.window_end
+    }
+
+    pub const fn visible_span(&self) -> Option<WindowVisibleBufferSpan> {
+        self.visible_span
+    }
+
+    pub const fn logical_cursor(&self) -> Option<WindowCursorPos> {
+        self.logical_cursor
+    }
+
+    pub fn phys_cursor(&self) -> Option<&WindowCursorSnapshot> {
+        self.phys_cursor.as_ref()
+    }
+}
+
+/// Per-window display settings that GNU Emacs stores on `struct window`.
+///
+/// # Cursor audit follow-through
+///
+/// neomacs now stores GNU-like cursor state directly on the live window:
+///
+/// - `cursor`: intended cursor position in the latest redisplay result
+/// - `output_cursor`: the nominal output position last committed by redisplay
+/// - `phys_cursor`: the last physical cursor geometry emitted on screen
+///
+/// This mirrors GNU's `struct window` ownership model closely enough for
+/// `window-cursor-info` and related stateful cursor queries. The Rust
+/// redisplay path now drives this state through an explicit per-window output
+/// pass before frame snapshots are published. Rust layout/status-line emission
+/// advances `output_cursor` through explicit output-cursor moves, while row
+/// snapshots remain published artifacts for renderer handoff.
+#[derive(Clone, Debug)]
+pub struct WindowDisplayState {
+    /// Window-local display table; nil means inherit from the buffer/frame.
+    pub display_table: Value,
+    /// Window-local cursor type; t means use the buffer-local value.
+    pub cursor_type: Value,
+    /// Intended cursor position in the latest redisplay result.
+    pub cursor: Option<WindowCursorPos>,
+    /// Last physical cursor geometry produced by redisplay for this window.
+    pub phys_cursor: Option<WindowCursorSnapshot>,
+    /// Last nominal output position actually committed by redisplay.
+    pub output_cursor: Option<WindowCursorPos>,
+    /// Last physical cursor type emitted by redisplay.
+    pub phys_cursor_type: WindowCursorKind,
+    /// Last accepted redisplay's related query/output facts, committed together.
+    pub(crate) redisplay_output: Option<WindowRedisplayOutput>,
+    /// Whether the window currently owns a live physical cursor.
+    pub phys_cursor_on_p: bool,
+    /// Whether the cursor is hidden without invalidating the geometry.
+    pub cursor_off_p: bool,
+    /// Cursor visibility state committed by the last completed redisplay.
+    pub last_cursor_off_p: bool,
+    /// Last visual row where redisplay placed the cursor.
+    pub last_cursor_vpos: i64,
+    /// Raw fringe widths; `-1` means use the frame default.
+    pub left_fringe_width: i32,
+    pub right_fringe_width: i32,
+    pub fringes_outside_margins: bool,
+    pub fringes_persistent: bool,
+    /// Raw scroll bar sizes; `-1` means use the frame default.
+    pub scroll_bar_width: i32,
+    pub vertical_scroll_bar_type: Value,
+    pub scroll_bar_height: i32,
+    pub horizontal_scroll_bar_type: Value,
+    pub scroll_bars_persistent: bool,
+}
+
+impl Default for WindowDisplayState {
+    fn default() -> Self {
+        Self {
+            display_table: Value::NIL,
+            cursor_type: Value::T,
+            cursor: None,
+            phys_cursor: None,
+            output_cursor: None,
+            phys_cursor_type: WindowCursorKind::NoCursor,
+            redisplay_output: None,
+            phys_cursor_on_p: false,
+            cursor_off_p: false,
+            last_cursor_off_p: false,
+            last_cursor_vpos: 0,
+            left_fringe_width: -1,
+            right_fringe_width: -1,
+            fringes_outside_margins: false,
+            fringes_persistent: false,
+            scroll_bar_width: -1,
+            vertical_scroll_bar_type: Value::T,
+            scroll_bar_height: -1,
+            horizontal_scroll_bar_type: Value::T,
+            scroll_bars_persistent: false,
+        }
+    }
+}
+
+impl WindowDisplayState {
+    pub const fn redisplay_output(&self) -> Option<&WindowRedisplayOutput> {
+        self.redisplay_output.as_ref()
+    }
+
+    pub fn clear_cursor_state(&mut self) {
+        self.cursor = None;
+        self.clear_output_cursor_state();
+        self.clear_physical_cursor_state();
+    }
+
+    /// Start a new output pass for this window.
+    ///
+    /// The last committed output cursor remains authoritative until redisplay
+    /// emits a new cursor position for this window.
+    pub(crate) fn begin_output_pass(&mut self) {
+        self.cursor = None;
+        self.clear_physical_cursor_state();
+    }
+
+    /// Start a new output update for a window that will actively emit rows in
+    /// the current redisplay pass.
+    pub(crate) fn begin_window_output_update(&mut self) {
+        self.begin_output_pass();
+        self.clear_output_cursor_state();
+    }
+
+    pub(crate) fn clear_output_cursor_state(&mut self) {
+        self.output_cursor = None;
+    }
+
+    pub(crate) fn clear_physical_cursor_state(&mut self) {
+        self.phys_cursor = None;
+        self.phys_cursor_type = WindowCursorKind::NoCursor;
+        self.phys_cursor_on_p = false;
+    }
+
+    pub(crate) fn install_logical_cursor(&mut self, cursor: Option<WindowCursorPos>) {
+        self.cursor = cursor;
+    }
+
+    /// Move the live output cursor to a new nominal output position.
+    ///
+    /// This mirrors GNU's `output_cursor_to` style of update more closely
+    /// than the older row-start/row-finish helpers: Rust redisplay advances
+    /// output by explicit output positions, while row boundaries remain local
+    /// to snapshot recording in the layout/output emitter.
+    pub(crate) fn output_cursor_to(&mut self, pos: WindowCursorPos) {
+        self.output_cursor = Some(pos);
+    }
+
+    pub(crate) fn apply_physical_cursor_snapshot(&mut self, cursor: Option<WindowCursorSnapshot>) {
+        self.phys_cursor = cursor.clone();
+        self.phys_cursor_type = cursor
+            .as_ref()
+            .map(|c| c.kind)
+            .unwrap_or(WindowCursorKind::NoCursor);
+        self.phys_cursor_on_p = cursor.is_some();
+    }
+
+    pub(crate) fn commit_completed_redisplay(&mut self) {
+        self.last_cursor_off_p = self.cursor_off_p;
+        if let Some(cursor) = self.phys_cursor.as_ref() {
+            self.last_cursor_vpos = cursor.row;
+        } else if let Some(cursor) = self.cursor.as_ref() {
+            self.last_cursor_vpos = cursor.row;
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WindowVisibleBufferSpan {
+    start: LispCharPos1,
+    end: LispCharPos1,
+}
+
+impl WindowVisibleBufferSpan {
+    pub const fn new(start: LispCharPos1, end: LispCharPos1) -> Self {
+        Self { start, end }
+    }
+
+    pub const fn start(self) -> LispCharPos1 {
+        self.start
+    }
+
+    pub const fn end(self) -> LispCharPos1 {
+        self.end
+    }
+
+    /// Convert the inclusive redisplay span into GNU's Lisp-visible
+    /// `window-end` position.
+    ///
+    /// Published row ends normally identify the last displayed character, so
+    /// `window-end` is the following insertion position. Redisplay also
+    /// publishes Z itself for a visible EOB insertion slot; that boundary is
+    /// already a Lisp position and must not be advanced past `point-max`.
+    pub fn lisp_window_end(self, buffer_z: LispCharPos1) -> LispCharPos1 {
+        if self.end >= buffer_z {
+            buffer_z
+        } else {
+            LispCharPos1::new(self.end.as_i64().saturating_add(1))
+        }
     }
 }

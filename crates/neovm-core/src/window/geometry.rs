@@ -20,35 +20,11 @@ use neomacs_display_protocol::frame_glyphs::PresentedWindowRegions;
 use neomacs_display_protocol::types::Rect as TransportRect;
 use rustc_hash::FxHashMap as HashMap;
 use std::marker::PhantomData;
-use std::num::NonZeroU64;
 
 mod positions;
 use positions::{GeometryPositionsMode, PresentationPositions, geometry_positions_mode};
 
-/// Evaluator-owned identity of one immutable displayed geometry publication.
-#[repr(transparent)]
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct PresentationId(NonZeroU64);
-
-impl PresentationId {
-    pub const fn new(value: u64) -> Self {
-        match Self::try_new(value) {
-            Some(id) => id,
-            None => panic!("presentation identity must be nonzero"),
-        }
-    }
-
-    pub const fn try_new(value: u64) -> Option<Self> {
-        match NonZeroU64::new(value) {
-            Some(value) => Some(Self(value)),
-            None => None,
-        }
-    }
-
-    pub const fn get(self) -> u64 {
-        self.0.get()
-    }
-}
+pub use crate::emacs_core::eval::data::window_state::PresentationId;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PresentationPrepareError {
