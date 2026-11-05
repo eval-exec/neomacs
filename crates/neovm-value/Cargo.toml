@@ -33,10 +33,6 @@ tracing-appender.workspace = true
 tracing-subscriber.workspace = true
 typed-index-collections.workspace = true
 unicode-general-category.workspace = true
-# TEST-SUPPORT-VIS (B3, peer ruling 02:2xZ): makes the cfg_attr below express
-# `pub` only in the test-support build; product visibility stays byte-identical.
-visibility = { version = "0.1.1", optional = true }
-
 # Windows process/file identity (moved from core w32/security.rs, stage-4
 # W1/E3e): Foundation handles, the SID/security descriptor queries, and the
 # process-token calls.

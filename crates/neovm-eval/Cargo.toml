@@ -83,10 +83,6 @@ rustls.workspace = true
 socket2.workspace = true
 neomacs-video-model.workspace = true
 windows-sys.workspace = true
-# TEST-SUPPORT-VIS (B3, peer ruling 02:2xZ): makes the cfg_attr on named
-# test-visible items express `pub` only in the test-support build.
-visibility = { version = "0.1.1", optional = true }
-
 [dev-dependencies]
 # Downward-only: shared value test helpers for this crate's own unit tests.
 neovm-value = { path = "../neovm-value", features = ["test-support"] }
