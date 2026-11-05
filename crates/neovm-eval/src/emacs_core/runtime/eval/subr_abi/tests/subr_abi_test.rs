@@ -41,8 +41,9 @@ enum ReaderRefusal {
 }
 #[cfg(feature = "jit")]
 fn selected_read<R>(mut body: impl FnMut() -> R) -> Result<R, ReaderRefusal> {
-    use neovm_value::tagged::gc::{
-        ExecutionTestDeadline, ExecutionTestRetry, execution_test_retry,
+    use neovm_value::test_support::authority::{
+        Deadline as ExecutionTestDeadline, Retry as ExecutionTestRetry,
+        retry as execution_test_retry,
     };
     // Only acquisition is retried: with_static_subr_entry_read does not call
     // body on Busy, and no assertion or completed operation is ever repeated.
