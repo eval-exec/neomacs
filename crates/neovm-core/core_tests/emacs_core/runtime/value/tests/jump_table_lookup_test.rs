@@ -141,10 +141,14 @@ pub(in crate::emacs_core::value) fn probe_pool(ctx: &mut Context, keys: &[Value]
         chain = Value::cons(chain, Value::NIL);
     }
     let shared = list(&[a]);
+    // SAFETY: the test owns this heap and no collection is running; tagged_heap_mut is the RB2-1 test accessor.
     let pa = unsafe { ctx.tagged_heap_mut() }.alloc_symbol_with_pos(a, Value::fixnum(3));
+    // SAFETY: the test owns this heap and no collection is running; tagged_heap_mut is the RB2-1 test accessor.
     let pb = unsafe { ctx.tagged_heap_mut() }.alloc_symbol_with_pos(b, Value::fixnum(5));
+    // SAFETY: the test owns this heap and no collection is running; tagged_heap_mut is the RB2-1 test accessor.
     let pnil = unsafe { ctx.tagged_heap_mut() }.alloc_symbol_with_pos(Value::NIL, Value::fixnum(7));
     let pkey =
+        // SAFETY: the test owns this heap and no collection is running; tagged_heap_mut is the RB2-1 test accessor.
         unsafe { ctx.tagged_heap_mut() }.alloc_symbol_with_pos(sym("jump-sym-3"), Value::fixnum(9));
     probes.extend([
         circular,

@@ -129,6 +129,7 @@ fn plan_answers_exactly_what_the_hashed_lookup_answers() {
     // identity scan and the hash disagree. The plan must answer like
     // `lookup` anyway (it declines such tables).
     let (a, b) = (sym("a"), sym("b"));
+    // SAFETY: the test owns this heap and no collection is running; tagged_heap_mut is the RB2-1 test accessor.
     let pa = unsafe { ctx.tagged_heap_mut() }.alloc_symbol_with_pos(a, Value::fixnum(1));
     for test in TESTS {
         for filler in [0usize, 40] {
@@ -574,8 +575,11 @@ fn first_dispatch_does_not_build() {
 fn positioned_symbols_match_their_bare_symbols_only_under_swp() {
     let mut ctx = crate::test_utils::new_context();
     let (a, b) = (sym("a"), sym("b"));
+    // SAFETY: the test owns this heap and no collection is running; tagged_heap_mut is the RB2-1 test accessor.
     let pa = unsafe { ctx.tagged_heap_mut() }.alloc_symbol_with_pos(a, Value::fixnum(1));
+    // SAFETY: the test owns this heap and no collection is running; tagged_heap_mut is the RB2-1 test accessor.
     let pb = unsafe { ctx.tagged_heap_mut() }.alloc_symbol_with_pos(b, Value::fixnum(2));
+    // SAFETY: the test owns this heap and no collection is running; tagged_heap_mut is the RB2-1 test accessor.
     let pnil = unsafe { ctx.tagged_heap_mut() }.alloc_symbol_with_pos(Value::NIL, Value::fixnum(3));
     let immediate = table_of(HashTableTest::Eq, &[a, Value::NIL]);
     let structural = table_of(HashTableTest::Equal, &[list(&[a, b]), a]);
