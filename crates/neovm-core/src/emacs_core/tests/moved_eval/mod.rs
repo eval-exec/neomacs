@@ -173,3 +173,7 @@ mod emacs_core_lisp_native_builtins_tests_gd_e_sort_native_storage_rs;
 #[cfg(test)]
 #[path = "emacs_core/lisp/native/builtins/tests/format_float_gnu_test.rs"]
 mod emacs_core_lisp_native_builtins_tests_format_float_gnu_test_rs;
+
+#[cfg(test)]
+#[path = "emacs_core/lisp/native/builtins/tests/keymaps_full_tests.rs"]
+mod emacs_core_lisp_native_builtins_tests_keymaps_full_tests_rs;
