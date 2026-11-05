@@ -2618,9 +2618,5 @@ impl Context {
 mod gc_heap_mut_closure_tests;
 
 #[cfg(test)]
-#[path = "tests/chrome_transitions_test.rs"]
-mod chrome_transition_tests;
-
-#[cfg(test)]
 #[path = "tests/command_symbols_test.rs"]
 mod command_symbols_tests;

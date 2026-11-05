@@ -1,19 +1,32 @@
 //! GNU macros.c and keyboard.c raise update_mode_lines at state transitions.
 
-use super::*;
+use crate::emacs_core::eval::*;
+use crate::emacs_core::keyboard::CommandLoopHost;
 #[doc(hidden)]
 pub use crate::emacs_core::subr::{NativeFn, SubrArity, SubrSpec};
+use crate::host_input::HostInputPublisher;
+use crate::window::DisplayFrameManagerExt;
+use neovm_edit::emacs_core::display_metrics::WindowId;
+use neovm_value::error::EvalResult;
+use neovm_value::value::Value;
 
 fn clean_context() -> (Context, [WindowId; 2]) {
-    let mut eval = Context::new();
-    let buffer = eval.buffers.current_buffer_id().expect("current buffer");
-    let first = eval.frames.create_frame("first", 640, 384, buffer);
-    let second = eval.frames.create_frame("second", 640, 384, buffer);
+    let mut eval = crate::test_utils::new_context();
+    let buffer = eval
+        .buffer_manager()
+        .current_buffer_id()
+        .expect("current buffer");
+    let first = eval
+        .frame_manager_mut()
+        .create_frame("first", 640, 384, buffer);
+    let second = eval
+        .frame_manager_mut()
+        .create_frame("second", 640, 384, buffer);
     let windows = [
-        eval.frames.get(first).unwrap().selected_window,
-        eval.frames.get(second).unwrap().selected_window,
+        eval.frame_manager().get(first).unwrap().selected_window,
+        eval.frame_manager().get(second).unwrap().selected_window,
     ];
-    eval.frames.select_frame(first);
+    eval.frame_manager_mut().select_frame(first);
     for window in windows {
         eval.note_chrome_generated(window);
         assert!(!eval.chrome_dirty().is_dirty(window));
@@ -56,8 +69,8 @@ fn starting_and_ending_keyboard_macro_refreshes_all_mode_lines() {
 fn observe_recursive_entry(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     assert!(args.is_empty());
     assert_eq!(eval.recursive_command_loop_depth(), 1);
-    for frame in eval.frames.frame_list() {
-        let window = eval.frames.get(frame).unwrap().selected_window;
+    for frame in eval.frame_manager().frame_list() {
+        let window = eval.frame_manager().get(frame).unwrap().selected_window;
         assert!(
             eval.chrome_dirty().is_dirty(window),
             "recursive-edit entry must invalidate every mode line before its first command"
@@ -103,13 +116,12 @@ fn recursive_edit_entry_and_unwind_refresh_all_mode_lines() {
                 neovm_value::tagged::SymbolMode::Bare,
             )
             .unwrap();
-            let sender =
-                crate::emacs_core::eval::host_input::HostInputPublisher::install(&mut eval);
+            let sender = HostInputPublisher::install(&mut eval);
             drop(sender);
 
-            eval.command_loop.running = true;
-            eval.command_loop.recursive_depth = 1;
-            eval.command_loop
+            eval.command_loop_mut().running = true;
+            eval.command_loop_mut().recursive_depth = 1;
+            eval.command_loop_mut()
                 .keyboard
                 .kboard
                 .unread_events

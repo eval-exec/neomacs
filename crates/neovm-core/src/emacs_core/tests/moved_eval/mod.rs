@@ -94,3 +94,7 @@ mod emacs_core_runtime_eval_keyboard_tests_gnu_read_timer_redisplay_oracle_rs;
 #[cfg(test)]
 #[path = "emacs_core/runtime/eval/keyboard/tests/gnu_timed_read_redisplay_oracle.rs"]
 mod emacs_core_runtime_eval_keyboard_tests_gnu_timed_read_redisplay_oracle_rs;
+
+#[cfg(test)]
+#[path = "emacs_core/runtime/eval/tests/chrome_transitions_test.rs"]
+mod emacs_core_runtime_eval_tests_chrome_transitions_test_rs;
