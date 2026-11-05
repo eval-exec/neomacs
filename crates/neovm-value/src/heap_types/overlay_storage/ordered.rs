@@ -627,6 +627,7 @@ impl<R: OrderedShiftRecord> OrderedShiftTree<R> {
         OrderedRecordRelocation::Replaced { previous }
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn record(&self, identity: R::Identity) -> Option<R> {
         let leaf = *self.by_identity.get(&identity)?;
         #[cfg(any(test, feature = "test-support"))]

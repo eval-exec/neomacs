@@ -1696,7 +1696,7 @@ impl IntervalTree {
         self.balance_upwards(Some(anchor));
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn assert_invariants_for_test(&self) {
         fn walk(tree: &IntervalTree, id: IntervalId, parent: Option<IntervalId>) -> (usize, usize) {
             let node = &tree.nodes[id.0];
@@ -2596,7 +2596,12 @@ pub struct TextPropertyTable {
     /// of walking thousands of face intervals. A Mutex from when the table
     /// backed a shared empty static; the table is thread-confined, so it is
     /// uncontended — and a failed try_lock just falls back to the cursor walk.
+    #[cfg(not(any(test, feature = "test-support")))]
     pub(crate) syntax_prop_ranges: std::sync::Mutex<(u64, Vec<(CharPos0, CharPos0)>)>,
+    /// Test-support spelling: same field, `pub` only in the test-support build
+    /// (attribute macros cannot decorate struct fields; see B3 V1 note).
+    #[cfg(any(test, feature = "test-support"))]
+    pub syntax_prop_ranges: std::sync::Mutex<(u64, Vec<(CharPos0, CharPos0)>)>,
 }
 
 /// Absence of string text properties, with no Lisp values or table storage.
@@ -4670,6 +4675,7 @@ impl TextPropertyTable {
         self.adjust_for_insert_raw(pos, len);
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn adjust_for_insert_raw(&mut self, pos: CharPos0, len: CharLen) {
         self.mutation_tick += 1;
         if len.is_empty() {
@@ -5227,7 +5233,8 @@ impl TextPropertyTable {
             .map(|(_, id)| self.intervals.nodes[id.0].plist)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn assert_tree_invariants_for_test(&self) {
         self.intervals.assert_invariants_for_test();
     }

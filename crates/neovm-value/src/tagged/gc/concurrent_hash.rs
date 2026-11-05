@@ -53,6 +53,7 @@ pub(crate) struct HashTableScanEntry {
 
 /// Capture records constant-sized metadata per table. Entries live inline in
 /// the exact-address map, without per-table Arc/Vecs or an eager slots walk.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct HashTableScanSnapshot {
     entries: FxHashMap<usize, HashTableScanEntry>,
     /// The admitted heap; zero only for unbound test snapshots, which a heap
