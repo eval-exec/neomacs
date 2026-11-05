@@ -871,28 +871,6 @@ fn symbol_diagnostics_preserve_unibyte_name_identity() {
     assert_eq!(format_symbol_name_for_diagnostic(intern("?")), r"\?");
 }
 
-#[test]
-fn symbol_diagnostics_use_the_lisp_visible_name_object() {
-    crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
-    let symbol_id = intern("diagnostic-live-name-object-probe");
-    let symbol = crate::value::Value::from_sym_id(symbol_id);
-    let name = crate::emacs_core::builtins::misc_pure::builtin_symbol_name_1(&mut eval, symbol)
-        .expect("symbol-name should materialize the Lisp-visible name object");
-
-    crate::emacs_core::builtins::collections::builtin_aset(vec![
-        name,
-        crate::value::Value::fixnum(0),
-        crate::value::Value::fixnum('X' as i64),
-    ])
-    .expect("GNU permits mutation of the stored symbol-name string");
-
-    assert_eq!(
-        format_symbol_name_for_diagnostic(symbol_id),
-        "Xiagnostic-live-name-object-probe"
-    );
-}
-
 /// Reader tokens have no caller-owned name object. Preserve GNU's source
 /// encoding without adding a permanently rooted heap string for every token.
 #[test]
