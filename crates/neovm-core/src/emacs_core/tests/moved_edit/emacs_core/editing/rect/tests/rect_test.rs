@@ -1,17 +1,20 @@
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+
 use crate::emacs_core::bytecode::opcode::Op;
+
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
+
 use crate::emacs_core::format_eval_result;
+
 use crate::test_utils::{
     eval_with_ldefs_boot_autoloads, runtime_startup_context, runtime_startup_eval_all,
 };
-use neovm_edit::emacs_core::autoload::is_autoload_value;
-use neovm_edit::emacs_core::rect::*;
-use std::fs;
 
-fn bootstrap_eval_all(src: &str) -> Vec<String> {
-    runtime_startup_eval_all(src)
-}
+use crate::emacs_core::autoload::is_autoload_value;
+
+use neovm_edit::emacs_core::rect::*;
+
+use std::fs;
 
 #[test]
 fn rectangle_copied_properties_have_only_manager_roots() {
@@ -661,4 +664,8 @@ fn replace_rectangle_uses_runtime_alias_behavior() {
                    (symbol-function 'replace-rectangle)))"#,
     );
     assert_eq!(result[0], r#"OK ("ZZbcdef|ZZ23456|" 11 string-rectangle)"#);
+}
+
+fn bootstrap_eval_all(src: &str) -> Vec<String> {
+    runtime_startup_eval_all(src)
 }

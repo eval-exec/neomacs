@@ -1,88 +1,6 @@
 use super::*;
+
 use crate::buffer::{CharLen, CharPos0, EmacsBytePos, EmacsByteRange};
-
-fn byte_to_char(buf: &GapBuffer, byte_pos: usize) -> usize {
-    buf.emacs_byte_pos_to_char_pos(EmacsBytePos::new(byte_pos))
-        .get()
-}
-
-fn char_to_byte(buf: &GapBuffer, char_pos: usize) -> usize {
-    buf.char_pos_to_emacs_byte_pos(CharPos0::new(char_pos))
-        .get()
-}
-
-fn byte_at(buf: &GapBuffer, byte_pos: usize) -> u8 {
-    buf.byte_at_emacs_byte_pos(EmacsBytePos::new(byte_pos))
-}
-
-fn char_at(buf: &GapBuffer, byte_pos: usize) -> Option<char> {
-    buf.char_at_emacs_byte_pos(EmacsBytePos::new(byte_pos))
-}
-
-fn gap_text_range(buf: &GapBuffer, start: usize, end: usize) -> String {
-    buf.text_emacs_byte_range(EmacsByteRange::from_usize(start, end))
-}
-
-fn gap_copy_bytes_to(buf: &GapBuffer, start: usize, end: usize, out: &mut Vec<u8>) {
-    buf.copy_emacs_byte_range_to(EmacsByteRange::from_usize(start, end), out);
-}
-
-fn gap_insert_emacs_bytes(buf: &mut GapBuffer, byte_pos: usize, bytes: &[u8]) {
-    buf.insert_emacs_bytes_at_emacs_byte_pos(EmacsBytePos::new(byte_pos), bytes);
-}
-
-fn gap_insert_emacs_bytes_with_char_len(
-    buf: &mut GapBuffer,
-    byte_pos: usize,
-    bytes: &[u8],
-    nchars: usize,
-) {
-    buf.insert_emacs_bytes_at_emacs_byte_pos_with_char_len(
-        EmacsBytePos::new(byte_pos),
-        bytes,
-        CharLen::new(nchars),
-    );
-}
-
-fn gap_insert_storage_string(buf: &mut GapBuffer, byte_pos: usize, text: &str) {
-    buf.insert_storage_string_at_emacs_byte_pos(EmacsBytePos::new(byte_pos), text);
-}
-
-fn gap_delete_emacs_range(buf: &mut GapBuffer, start: usize, end: usize) {
-    buf.delete_emacs_byte_range(EmacsByteRange::from_usize(start, end));
-}
-
-fn gap_delete_emacs_range_with_char_len(
-    buf: &mut GapBuffer,
-    start: usize,
-    end: usize,
-    nchars: usize,
-) {
-    buf.delete_emacs_byte_range_with_char_len(
-        EmacsByteRange::from_usize(start, end),
-        CharLen::new(nchars),
-    );
-}
-
-fn gap_replace_same_len_emacs_bytes(
-    buf: &mut GapBuffer,
-    start: usize,
-    end: usize,
-    replacement: &[u8],
-) {
-    buf.replace_same_len_emacs_byte_range(EmacsByteRange::from_usize(start, end), replacement);
-}
-
-fn gap_move_to_emacs_byte_and_char(buf: &mut GapBuffer, byte_pos: usize, char_pos: usize) {
-    buf.move_gap_to_emacs_byte_pos_and_char_pos(
-        EmacsBytePos::new(byte_pos),
-        CharPos0::new(char_pos),
-    );
-}
-
-// -----------------------------------------------------------------------
-// Construction & basic queries
-// -----------------------------------------------------------------------
 
 #[test]
 fn new_buffer_is_empty() {
@@ -111,10 +29,6 @@ fn from_str_empty() {
     assert!(buf.is_empty());
     assert_eq!(buf.to_string(), "");
 }
-
-// -----------------------------------------------------------------------
-// insert_str
-// -----------------------------------------------------------------------
 
 #[test]
 fn insert_at_beginning() {
@@ -178,10 +92,6 @@ fn insert_larger_than_gap() {
     assert_eq!(buf.len(), 256);
 }
 
-// -----------------------------------------------------------------------
-// delete_range
-// -----------------------------------------------------------------------
-
 #[test]
 fn delete_from_beginning() {
     crate::test_utils::init_test_tracing();
@@ -232,10 +142,6 @@ fn delete_then_insert() {
     assert_eq!(buf.to_string(), "hello rust");
 }
 
-// -----------------------------------------------------------------------
-// replace_same_len_emacs_bytes
-// -----------------------------------------------------------------------
-
 #[test]
 fn replace_same_len_preserves_gap_position_before_and_after_gap() {
     crate::test_utils::init_test_tracing();
@@ -281,10 +187,6 @@ fn replace_same_len_preserves_gap_position_when_range_straddles_gap() {
     assert_eq!(buf.emacs_byte_len(), "abßxd日本".len());
 }
 
-// -----------------------------------------------------------------------
-// byte_at / char_at
-// -----------------------------------------------------------------------
-
 #[test]
 fn byte_at_ascii() {
     crate::test_utils::init_test_tracing();
@@ -321,10 +223,6 @@ fn byte_at_out_of_range_panics() {
     byte_at(&buf, 2);
 }
 
-// -----------------------------------------------------------------------
-// text_range
-// -----------------------------------------------------------------------
-
 #[test]
 fn text_range_full() {
     crate::test_utils::init_test_tracing();
@@ -347,24 +245,11 @@ fn text_range_suffix() {
 }
 
 #[test]
-fn text_range_spanning_gap() {
-    crate::test_utils::init_test_tracing();
-    let mut buf = GapBuffer::from_str("hello world");
-    buf.move_gap_to(5);
-    // Range spans the gap.
-    assert_eq!(gap_text_range(&buf, 3, 8), "lo wo");
-}
-
-#[test]
 fn text_range_empty() {
     crate::test_utils::init_test_tracing();
     let buf = GapBuffer::from_str("hello");
     assert_eq!(gap_text_range(&buf, 2, 2), "");
 }
-
-// -----------------------------------------------------------------------
-// move_gap_to
-// -----------------------------------------------------------------------
 
 #[test]
 fn move_gap_to_start() {
@@ -396,10 +281,6 @@ fn move_gap_around() {
     assert_eq!(buf.to_string(), "abcdef");
 }
 
-// -----------------------------------------------------------------------
-// ensure_gap
-// -----------------------------------------------------------------------
-
 #[test]
 fn ensure_gap_grows() {
     crate::test_utils::init_test_tracing();
@@ -419,10 +300,6 @@ fn ensure_gap_noop_when_large_enough() {
     buf.ensure_gap(1);
     assert_eq!(buf.gap_size(), old_gap);
 }
-
-// -----------------------------------------------------------------------
-// Multibyte / UTF-8 (CJK, emoji)
-// -----------------------------------------------------------------------
 
 #[test]
 fn multibyte_cjk() {
@@ -498,10 +375,6 @@ fn mixed_ascii_and_multibyte() {
     gap_delete_emacs_range(&mut buf, 6, 12); // delete "世界"
     assert_eq!(buf.to_string(), "hello !");
 }
-
-// -----------------------------------------------------------------------
-// byte_to_char / char_to_byte
-// -----------------------------------------------------------------------
 
 #[test]
 fn byte_char_roundtrip_ascii() {
@@ -622,10 +495,6 @@ fn byte_char_conversion_unibyte_storage_sentinels_after_gap_move() {
     assert_eq!(byte_to_char(&buf, 2), 2);
     assert_eq!(byte_to_char(&buf, 3), 3);
 }
-
-// -----------------------------------------------------------------------
-// Edge cases
-// -----------------------------------------------------------------------
 
 #[test]
 fn repeated_insert_delete_cycle() {
@@ -764,10 +633,6 @@ fn char_to_byte_past_end_clamps() {
     assert_eq!(char_to_byte(&buf, 100), buf.len());
 }
 
-// -----------------------------------------------------------------------
-// copy_bytes_to
-// -----------------------------------------------------------------------
-
 #[test]
 fn copy_bytes_to_basic() {
     crate::test_utils::init_test_tracing();
@@ -877,10 +742,6 @@ fn contiguous_emacs_bytes_rejects_gap_spanning_range() {
         None
     );
 }
-
-// -----------------------------------------------------------------------
-// GNU parity tests (gap-sizing constants)
-// -----------------------------------------------------------------------
 
 #[test]
 fn new_buffer_has_gnu_default_gap_size() {
@@ -1011,4 +872,83 @@ fn text_up_to_gnu_buf_bytes_max_is_accepted() {
 #[should_panic(expected = "Maximum buffer size exceeded")]
 fn text_beyond_gnu_buf_bytes_max_is_rejected() {
     assert_within_buffer_limit(BUF_BYTES_MAX + 1);
+}
+
+fn byte_to_char(buf: &GapBuffer, byte_pos: usize) -> usize {
+    buf.emacs_byte_pos_to_char_pos(EmacsBytePos::new(byte_pos))
+        .get()
+}
+
+fn char_to_byte(buf: &GapBuffer, char_pos: usize) -> usize {
+    buf.char_pos_to_emacs_byte_pos(CharPos0::new(char_pos))
+        .get()
+}
+
+fn byte_at(buf: &GapBuffer, byte_pos: usize) -> u8 {
+    buf.byte_at_emacs_byte_pos(EmacsBytePos::new(byte_pos))
+}
+
+fn char_at(buf: &GapBuffer, byte_pos: usize) -> Option<char> {
+    buf.char_at_emacs_byte_pos(EmacsBytePos::new(byte_pos))
+}
+
+fn gap_text_range(buf: &GapBuffer, start: usize, end: usize) -> String {
+    buf.text_emacs_byte_range(EmacsByteRange::from_usize(start, end))
+}
+
+fn gap_copy_bytes_to(buf: &GapBuffer, start: usize, end: usize, out: &mut Vec<u8>) {
+    buf.copy_emacs_byte_range_to(EmacsByteRange::from_usize(start, end), out);
+}
+
+fn gap_insert_emacs_bytes(buf: &mut GapBuffer, byte_pos: usize, bytes: &[u8]) {
+    buf.insert_emacs_bytes_at_emacs_byte_pos(EmacsBytePos::new(byte_pos), bytes);
+}
+
+fn gap_insert_emacs_bytes_with_char_len(
+    buf: &mut GapBuffer,
+    byte_pos: usize,
+    bytes: &[u8],
+    nchars: usize,
+) {
+    buf.insert_emacs_bytes_at_emacs_byte_pos_with_char_len(
+        EmacsBytePos::new(byte_pos),
+        bytes,
+        CharLen::new(nchars),
+    );
+}
+
+fn gap_insert_storage_string(buf: &mut GapBuffer, byte_pos: usize, text: &str) {
+    buf.insert_storage_string_at_emacs_byte_pos(EmacsBytePos::new(byte_pos), text);
+}
+
+fn gap_delete_emacs_range(buf: &mut GapBuffer, start: usize, end: usize) {
+    buf.delete_emacs_byte_range(EmacsByteRange::from_usize(start, end));
+}
+
+fn gap_delete_emacs_range_with_char_len(
+    buf: &mut GapBuffer,
+    start: usize,
+    end: usize,
+    nchars: usize,
+) {
+    buf.delete_emacs_byte_range_with_char_len(
+        EmacsByteRange::from_usize(start, end),
+        CharLen::new(nchars),
+    );
+}
+
+fn gap_replace_same_len_emacs_bytes(
+    buf: &mut GapBuffer,
+    start: usize,
+    end: usize,
+    replacement: &[u8],
+) {
+    buf.replace_same_len_emacs_byte_range(EmacsByteRange::from_usize(start, end), replacement);
+}
+
+fn gap_move_to_emacs_byte_and_char(buf: &mut GapBuffer, byte_pos: usize, char_pos: usize) {
+    buf.move_gap_to_emacs_byte_pos_and_char_pos(
+        EmacsBytePos::new(byte_pos),
+        CharPos0::new(char_pos),
+    );
 }

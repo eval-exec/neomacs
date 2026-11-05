@@ -2,21 +2,10 @@ use super::{
     CharPropertyCarrier, TextPropertyControlVariable, Value, lookup_char_property_from_direct,
     plist_slice_get_value,
 };
-use crate::emacs_core::eval::Context;
-use strum::IntoEnumIterator;
 
-fn context_with_default_property(property: Value, default: Value) -> Context {
-    let mut eval = Context::new();
-    eval.obarray.set_symbol_value(
-        TextPropertyControlVariable::DefaultTextProperties.name(),
-        Value::list(vec![property, default]),
-    );
-    eval.obarray.set_symbol_value(
-        TextPropertyControlVariable::CharPropertyAliasAlist.name(),
-        Value::NIL,
-    );
-    eval
-}
+use crate::emacs_core::eval::Context;
+
+use strum::IntoEnumIterator;
 
 #[test]
 fn gde_char_property_carrier_defaults_only_apply_to_text() {
@@ -111,4 +100,17 @@ fn gde_char_property_carrier_category_and_alias_precede_defaults() {
         );
         assert_eq!(actual, alias_value, "{carrier:?}");
     }
+}
+
+fn context_with_default_property(property: Value, default: Value) -> Context {
+    let mut eval = Context::new();
+    eval.obarray.set_symbol_value(
+        TextPropertyControlVariable::DefaultTextProperties.name(),
+        Value::list(vec![property, default]),
+    );
+    eval.obarray.set_symbol_value(
+        TextPropertyControlVariable::CharPropertyAliasAlist.name(),
+        Value::NIL,
+    );
+    eval
 }

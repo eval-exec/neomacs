@@ -1,6 +1,176 @@
 //! Deterministic overlay mutation model and fixed GNU ordering checks.
 //! The vector model checks semantics, not B+ shape, allocation sizes or time.
+
 use super::*;
+
+#[test]
+fn overlay_make_move_delete_matches_bruteforce_10000_operations() {
+    crate::test_utils::init_test_tracing();
+    const SEED: u64 = 0x20a1_7e5d_91c3_6b47;
+    const OPERATIONS: usize = 10_000;
+    const SLOTS: usize = 128;
+    tracing::info!(
+        seed = SEED,
+        operations = OPERATIONS,
+        "overlay model started"
+    );
+    let mut random = SEED;
+    let mut lists = [OverlayList::new(), OverlayList::new()];
+    let mut model = vec![None; SLOTS];
+    // Start multilevel with equal starts and empty records in both owners.
+    for (slot, entry) in model.iter_mut().enumerate() {
+        let start = slot % 16 * 4;
+        let end = start + slot % 7;
+        *entry = Some(make_model_overlay(
+            &mut lists,
+            slot,
+            slot % 2,
+            start,
+            end,
+            next_random(&mut random),
+        ));
+    }
+    check_model(&lists, &model, 0);
+    let mut counts = [0_usize; 4]; // make, move, delete, cross-owner move
+    for step in 0..OPERATIONS {
+        let bits = next_random(&mut random);
+        let occupied: Vec<_> = model
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, entry)| entry.map(|_| slot))
+            .collect();
+        let vacant: Vec<_> = model
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, entry)| entry.is_none().then_some(slot))
+            .collect();
+        let mut operation = ((bits >> 32) % 4) as usize;
+        // Periodic draining exercises empty/refill without counting a no-op
+        // delete as one of the requested ten thousand operations.
+        if step % 1024 >= 896 && !occupied.is_empty() {
+            operation = 2;
+        }
+        if occupied.is_empty() {
+            operation = 0;
+        }
+        if operation == 0 && vacant.is_empty() {
+            operation = 1;
+        }
+        let choices = if operation == 0 { &vacant } else { &occupied };
+        let slot = choices[(next_random(&mut random) >> 32) as usize % choices.len()];
+        let start = ((next_random(&mut random) >> 32) as usize % 16) * 4;
+        let end = start + ((bits >> 16) as usize % 9);
+        match operation {
+            0 => {
+                let owner = (bits >> 40) as usize % 2;
+                model[slot] = Some(make_model_overlay(
+                    &mut lists, slot, owner, start, end, bits,
+                ));
+            }
+            1 => {
+                let mut entry = model[slot].unwrap();
+                // Some true same-range moves, not just start-changing moves.
+                let (start, end) = if step % 7 == 0 {
+                    (entry.start, entry.end)
+                } else {
+                    (start, end)
+                };
+                lists[entry.owner]
+                    .move_overlay_to_emacs_byte_range(entry.value, emacs_byte_range(start, end));
+                entry.start = start;
+                entry.end = end;
+                model[slot] = Some(entry);
+            }
+            2 => {
+                let entry = model[slot].take().unwrap();
+                assert!(
+                    lists[entry.owner].delete_overlay(entry.value),
+                    "delete: step {step}"
+                );
+                assert!(overlay_live_buffer(entry.value).is_none());
+                assert_eq!(overlay_start(&lists[entry.owner], entry.value), None);
+            }
+            3 => {
+                let mut entry = model[slot].unwrap();
+                assert!(
+                    lists[entry.owner].detach_overlay(entry.value),
+                    "detach: step {step}"
+                );
+                entry.owner = 1 - entry.owner;
+                entry.start = start;
+                entry.end = end;
+                let _ = entry.value.with_overlay_data_mut(|data| {
+                    data.buffer = Some(BufferId(entry.owner as u64 + 1));
+                    data.start = start;
+                    data.end = end;
+                });
+                lists[entry.owner].insert_overlay(entry.value);
+                model[slot] = Some(entry);
+            }
+            _ => unreachable!(),
+        }
+        counts[operation] += 1;
+        check_model(&lists, &model, step + 1);
+        // Additional text-edit checks exercise the stored front/rear flags;
+        // these edits do not replace any of the ten thousand overlay ops.
+        if step % 31 == 0 {
+            let owner = step % 2;
+            let position = (bits >> 24) as usize % 64;
+            let before_markers = bits & 4 != 0;
+            lists[owner].adjust_for_insert_at_emacs_byte_pos(
+                emacs_byte_pos(position),
+                emacs_byte_len(1),
+                before_markers,
+            );
+            for entry in model
+                .iter_mut()
+                .flatten()
+                .filter(|entry| entry.owner == owner)
+            {
+                let empty = entry.start == entry.end;
+                if before_markers {
+                    if entry.start >= position {
+                        entry.start += 1;
+                    }
+                    if entry.end >= position {
+                        entry.end += 1;
+                    }
+                } else {
+                    if entry.start > position
+                        || (entry.start == position && entry.front && (!empty || entry.rear))
+                    {
+                        entry.start += 1;
+                    }
+                    if entry.end > position || (entry.end == position && entry.rear) {
+                        entry.end += 1;
+                    }
+                }
+            }
+            check_model(&lists, &model, step + 1);
+            lists[owner]
+                .adjust_for_delete_emacs_byte_range(emacs_byte_range(position, position + 1));
+            for entry in model
+                .iter_mut()
+                .flatten()
+                .filter(|entry| entry.owner == owner)
+            {
+                if entry.start > position {
+                    entry.start -= 1;
+                }
+                if entry.end > position {
+                    entry.end -= 1;
+                }
+            }
+            check_model(&lists, &model, step + 1);
+        }
+    }
+    assert_eq!(counts.iter().sum::<usize>(), OPERATIONS);
+    assert!(
+        counts.iter().all(|count| *count > 0),
+        "operation counts: {counts:?}"
+    );
+    tracing::info!(seed = SEED, ?counts, "overlay model completed");
+}
 
 #[derive(Clone, Copy)]
 struct ModelOverlay {
@@ -18,12 +188,6 @@ fn next_random(state: &mut u64) -> u64 {
         .wrapping_mul(6_364_136_223_846_793_005)
         .wrapping_add(1_442_695_040_888_963_407);
     *state
-}
-
-fn identity_set(values: impl IntoIterator<Item = Value>) -> Vec<usize> {
-    let mut values: Vec<_> = values.into_iter().map(Value::bits).collect();
-    values.sort_unstable();
-    values
 }
 
 fn make_model_overlay(
@@ -209,200 +373,8 @@ fn check_model(lists: &[OverlayList; 2], model: &[Option<ModelOverlay>], step: u
     }
 }
 
-#[test]
-fn overlay_make_move_delete_matches_bruteforce_10000_operations() {
-    crate::test_utils::init_test_tracing();
-    const SEED: u64 = 0x20a1_7e5d_91c3_6b47;
-    const OPERATIONS: usize = 10_000;
-    const SLOTS: usize = 128;
-    tracing::info!(
-        seed = SEED,
-        operations = OPERATIONS,
-        "overlay model started"
-    );
-    let mut random = SEED;
-    let mut lists = [OverlayList::new(), OverlayList::new()];
-    let mut model = vec![None; SLOTS];
-    // Start multilevel with equal starts and empty records in both owners.
-    for (slot, entry) in model.iter_mut().enumerate() {
-        let start = slot % 16 * 4;
-        let end = start + slot % 7;
-        *entry = Some(make_model_overlay(
-            &mut lists,
-            slot,
-            slot % 2,
-            start,
-            end,
-            next_random(&mut random),
-        ));
-    }
-    check_model(&lists, &model, 0);
-    let mut counts = [0_usize; 4]; // make, move, delete, cross-owner move
-    for step in 0..OPERATIONS {
-        let bits = next_random(&mut random);
-        let occupied: Vec<_> = model
-            .iter()
-            .enumerate()
-            .filter_map(|(slot, entry)| entry.map(|_| slot))
-            .collect();
-        let vacant: Vec<_> = model
-            .iter()
-            .enumerate()
-            .filter_map(|(slot, entry)| entry.is_none().then_some(slot))
-            .collect();
-        let mut operation = ((bits >> 32) % 4) as usize;
-        // Periodic draining exercises empty/refill without counting a no-op
-        // delete as one of the requested ten thousand operations.
-        if step % 1024 >= 896 && !occupied.is_empty() {
-            operation = 2;
-        }
-        if occupied.is_empty() {
-            operation = 0;
-        }
-        if operation == 0 && vacant.is_empty() {
-            operation = 1;
-        }
-        let choices = if operation == 0 { &vacant } else { &occupied };
-        let slot = choices[(next_random(&mut random) >> 32) as usize % choices.len()];
-        let start = ((next_random(&mut random) >> 32) as usize % 16) * 4;
-        let end = start + ((bits >> 16) as usize % 9);
-        match operation {
-            0 => {
-                let owner = (bits >> 40) as usize % 2;
-                model[slot] = Some(make_model_overlay(
-                    &mut lists, slot, owner, start, end, bits,
-                ));
-            }
-            1 => {
-                let mut entry = model[slot].unwrap();
-                // Some true same-range moves, not just start-changing moves.
-                let (start, end) = if step % 7 == 0 {
-                    (entry.start, entry.end)
-                } else {
-                    (start, end)
-                };
-                lists[entry.owner]
-                    .move_overlay_to_emacs_byte_range(entry.value, emacs_byte_range(start, end));
-                entry.start = start;
-                entry.end = end;
-                model[slot] = Some(entry);
-            }
-            2 => {
-                let entry = model[slot].take().unwrap();
-                assert!(
-                    lists[entry.owner].delete_overlay(entry.value),
-                    "delete: step {step}"
-                );
-                assert!(overlay_live_buffer(entry.value).is_none());
-                assert_eq!(overlay_start(&lists[entry.owner], entry.value), None);
-            }
-            3 => {
-                let mut entry = model[slot].unwrap();
-                assert!(
-                    lists[entry.owner].detach_overlay(entry.value),
-                    "detach: step {step}"
-                );
-                entry.owner = 1 - entry.owner;
-                entry.start = start;
-                entry.end = end;
-                let _ = entry.value.with_overlay_data_mut(|data| {
-                    data.buffer = Some(BufferId(entry.owner as u64 + 1));
-                    data.start = start;
-                    data.end = end;
-                });
-                lists[entry.owner].insert_overlay(entry.value);
-                model[slot] = Some(entry);
-            }
-            _ => unreachable!(),
-        }
-        counts[operation] += 1;
-        check_model(&lists, &model, step + 1);
-        // Additional text-edit checks exercise the stored front/rear flags;
-        // these edits do not replace any of the ten thousand overlay ops.
-        if step % 31 == 0 {
-            let owner = step % 2;
-            let position = (bits >> 24) as usize % 64;
-            let before_markers = bits & 4 != 0;
-            lists[owner].adjust_for_insert_at_emacs_byte_pos(
-                emacs_byte_pos(position),
-                emacs_byte_len(1),
-                before_markers,
-            );
-            for entry in model
-                .iter_mut()
-                .flatten()
-                .filter(|entry| entry.owner == owner)
-            {
-                let empty = entry.start == entry.end;
-                if before_markers {
-                    if entry.start >= position {
-                        entry.start += 1;
-                    }
-                    if entry.end >= position {
-                        entry.end += 1;
-                    }
-                } else {
-                    if entry.start > position
-                        || (entry.start == position && entry.front && (!empty || entry.rear))
-                    {
-                        entry.start += 1;
-                    }
-                    if entry.end > position || (entry.end == position && entry.rear) {
-                        entry.end += 1;
-                    }
-                }
-            }
-            check_model(&lists, &model, step + 1);
-            lists[owner]
-                .adjust_for_delete_emacs_byte_range(emacs_byte_range(position, position + 1));
-            for entry in model
-                .iter_mut()
-                .flatten()
-                .filter(|entry| entry.owner == owner)
-            {
-                if entry.start > position {
-                    entry.start -= 1;
-                }
-                if entry.end > position {
-                    entry.end -= 1;
-                }
-            }
-            check_model(&lists, &model, step + 1);
-        }
-    }
-    assert_eq!(counts.iter().sum::<usize>(), OPERATIONS);
-    assert!(
-        counts.iter().all(|count| *count > 0),
-        "operation counts: {counts:?}"
-    );
-    tracing::info!(seed = SEED, ?counts, "overlay model completed");
-}
-
-#[test]
-fn overlay_equal_start_forced_order_survives_move_delete_and_refill() {
-    crate::test_utils::init_test_tracing();
-    let mut list = OverlayList::new();
-    let a = alloc_overlay(2, 5);
-    let b = alloc_overlay(2, 5);
-    let c = alloc_overlay(2, 5);
-    for value in [a, b, c] {
-        list.insert_overlay(value);
-    }
-    // Exact checked-in GNU observation already used by the overlay family;
-    // do not sort these vectors or derive expected order from the tree.
-    assert_eq!(overlays_at(&list, 3), vec![c, b, a]);
-    assert!(list.delete_overlay(b));
-    assert_eq!(overlays_at(&list, 3), vec![c, a]);
-    list.move_overlay_to_emacs_byte_range(c, emacs_byte_range(9, 12));
-    assert_eq!(overlays_at(&list, 3), vec![a]);
-    assert_eq!(overlays_at(&list, 10), vec![c]);
-    list.move_overlay_to_emacs_byte_range(c, emacs_byte_range(2, 5));
-    assert_eq!(overlays_at(&list, 3), vec![c, a]);
-    assert!(list.delete_overlay(c));
-    assert!(list.delete_overlay(a));
-    assert!(list.is_empty());
-    let replacement = alloc_overlay(2, 5);
-    list.insert_overlay(replacement);
-    assert_eq!(overlays_at(&list, 3), vec![replacement]);
-    list.index.assert_invariants();
+fn identity_set(values: impl IntoIterator<Item = Value>) -> Vec<usize> {
+    let mut values: Vec<_> = values.into_iter().map(Value::bits).collect();
+    values.sort_unstable();
+    values
 }

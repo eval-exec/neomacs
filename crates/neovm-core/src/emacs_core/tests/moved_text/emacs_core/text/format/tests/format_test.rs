@@ -1,14 +1,8 @@
 use crate::emacs_core::autoload::is_autoload_value;
+
 use crate::test_utils::{eval_with_ldefs_boot_autoloads, runtime_startup_eval_all};
+
 use neovm_text::emacs_core::format::*;
-
-fn bootstrap_eval(src: &str) -> Vec<String> {
-    runtime_startup_eval_all(src)
-}
-
-// ===================================================================
-// format-spec tests
-// ===================================================================
 
 #[test]
 fn format_spec_bootstrap_matches_gnu_elisp() {
@@ -45,10 +39,6 @@ fn format_percent_s_uses_recursive_princ_semantics_for_lists() {
     );
     assert_eq!(results[0], r#"OK "(development testing production)""#);
 }
-
-// ===================================================================
-// format-time-string tests
-// ===================================================================
 
 #[test]
 fn format_time_string_epoch() {
@@ -202,10 +192,6 @@ fn format_time_string_honors_explicit_zone_argument() {
     );
 }
 
-// ===================================================================
-// format-seconds tests
-// ===================================================================
-
 #[test]
 fn format_seconds_bootstrap_matches_gnu_elisp() {
     crate::test_utils::init_test_tracing();
@@ -222,10 +208,6 @@ fn format_seconds_bootstrap_matches_gnu_elisp() {
     assert_eq!(results[2], r#"OK "0:0:0""#);
     assert_eq!(results[3], r#"OK "100%""#);
 }
-
-// ===================================================================
-// subr-x string helper tests
-// ===================================================================
 
 #[test]
 fn subr_x_string_helpers_bootstrap_match_gnu() {
@@ -292,10 +274,6 @@ fn subr_x_string_helpers_autoload() {
     );
 }
 
-// ===================================================================
-// string-lines tests
-// ===================================================================
-
 #[test]
 fn string_lines_bootstrap_matches_gnu_subr() {
     crate::test_utils::init_test_tracing();
@@ -319,10 +297,6 @@ fn string_lines_bootstrap_matches_gnu_subr() {
     assert_eq!(results[6], "OK (\"a\n\" \"\n\" \"b\n\")");
 }
 
-// ===================================================================
-// string-clean-whitespace tests
-// ===================================================================
-
 #[test]
 fn string_clean_whitespace_bootstrap_matches_gnu_elisp() {
     crate::test_utils::init_test_tracing();
@@ -343,10 +317,6 @@ fn string_clean_whitespace_bootstrap_matches_gnu_elisp() {
     assert_eq!(results[4], "OK \"\"");
     assert_eq!(results[5], "OK wrong-type-argument");
 }
-
-// ===================================================================
-// string-pixel-width tests
-// ===================================================================
 
 #[test]
 fn string_pixel_width_startup_is_autoloaded() {
@@ -400,9 +370,6 @@ fn string_pixel_width_bootstrap_matches_gnu_subr_x() {
     assert_eq!(results[8], "OK (4 . 3)");
     assert_eq!(results[9], "OK nil");
 }
-
-// unix_to_broken_down internal tests
-// ===================================================================
 
 #[test]
 fn broken_down_epoch() {
@@ -468,24 +435,6 @@ fn broken_down_2024() {
     assert_eq!(tm.hour, 12);
     assert_eq!(tm.minute, 30);
     assert_eq!(tm.second, 45);
-}
-
-// ===================================================================
-// format-time-string directive parser parity with GNU nstrftime
-// (lib/strftime.c). Fixed time 1625402096 = 2021-07-04 12:34:56 UTC,
-// a Sunday. Each expected value was captured from GNU Emacs --batch.
-// ===================================================================
-
-fn fts(fmt: &str) -> String {
-    builtin_format_time_string(vec![
-        Value::string(fmt),
-        Value::fixnum(1625402096),
-        Value::T,
-    ])
-    .unwrap()
-    .as_utf8_str()
-    .unwrap()
-    .to_string()
 }
 
 #[test]
@@ -583,31 +532,6 @@ fn format_time_string_subsecond_flags_match_gnu() {
     assert_eq!(fts_n("%0-N"), "25");
 }
 
-// ===================================================================
-// `E` / `O` locale modifiers
-//
-// GNU `lib/strftime.c` does not ignore these: each conversion decides
-// whether it accepts one, and a conversion that does not takes
-// `goto bad_format`, which copies the WHOLE directive out literally
-// (`cpy (f - percent + 1, percent)`).  So `%Ed` yields the four-character
-// string "%Ed", not the day of month.
-//
-// In the C locale every ACCEPTED combination falls back to the plain
-// conversion (the `_NL_CURRENT` era strings are empty), so only the
-// rejections are observable.  Verified against GNU Emacs for all
-// conversion characters x {E, O}.
-// ===================================================================
-
-/// Format `spec` against a fixed UTC instant (2024-04-22 14:32:48).
-fn fts_eo(spec: &str) -> String {
-    let result = builtin_format_time_string(vec![
-        Value::string(spec),
-        Value::fixnum(1_713_796_368),
-        Value::T,
-    ]);
-    result.unwrap().as_utf8_str().unwrap().to_string()
-}
-
 #[test]
 fn format_time_string_rejects_e_modifier_like_gnu() {
     crate::test_utils::init_test_tracing();
@@ -679,18 +603,6 @@ fn format_time_string_modifier_rejection_keeps_surrounding_text() {
     assert_eq!(fts_eo("%Y-%Em-%Od"), "2024-%Em-22");
 }
 
-// ===================================================================
-// `define-coding-system-alias`
-//
-// GNU registers the alias as a KEY in the same table as its target,
-// pointing at the SAME spec (`Fputhash (alias, spec,
-// Vcoding_system_hash_table)`, src/coding.c), so every lookup resolves
-// it -- encoders and decoders included.  neomacs selects a codec by
-// matching the NAME against a table of built-in systems, which a
-// user-defined alias falls through, leaving no codec and encoding
-// non-ASCII as `?`.
-// ===================================================================
-
 #[test]
 fn coding_system_alias_encodes_through_its_target() {
     crate::test_utils::init_test_tracing();
@@ -737,4 +649,30 @@ fn coding_system_alias_is_reported_verbatim_in_last_coding_system_used() {
         crate::emacs_core::format_eval_result(&last),
         "OK neo-alias-reported"
     );
+}
+
+fn bootstrap_eval(src: &str) -> Vec<String> {
+    runtime_startup_eval_all(src)
+}
+
+fn fts(fmt: &str) -> String {
+    builtin_format_time_string(vec![
+        Value::string(fmt),
+        Value::fixnum(1625402096),
+        Value::T,
+    ])
+    .unwrap()
+    .as_utf8_str()
+    .unwrap()
+    .to_string()
+}
+
+/// Format `spec` against a fixed UTC instant (2024-04-22 14:32:48).
+fn fts_eo(spec: &str) -> String {
+    let result = builtin_format_time_string(vec![
+        Value::string(spec),
+        Value::fixnum(1_713_796_368),
+        Value::T,
+    ]);
+    result.unwrap().as_utf8_str().unwrap().to_string()
 }

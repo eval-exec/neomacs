@@ -593,6 +593,7 @@ impl<'a> BufferRegexpMatchContext<'a> {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Entry of [`SEARCH_PATTERN_CACHE`]:
 /// `(posix, case_fold, pattern_multibyte, pattern_bytes, syntax_key, compiled)`.
 type SearchPatternCacheEntry = (
@@ -617,6 +618,7 @@ impl RegexTargetKey {
 
 const _: () = assert!(std::mem::size_of::<RegexTargetKey>() == std::mem::size_of::<bool>());
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Entry of [`LISP_REGEX_PATTERN_CACHE`]; target_key includes symbol policy.
 struct LispRegexPatternCacheEntry {
     posix: bool,
@@ -684,24 +686,30 @@ thread_local! {
     //
     //   - We don't expose `whitespace-regexp`.
     //   - `charset_unibyte` has no neomacs analog (UTF-8 internal).
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     static SEARCH_PATTERN_CACHE: RefCell<Vec<SearchPatternCacheEntry>> =
         const { RefCell::new(Vec::new()) };
 
     // Boxed so the move-to-front on a hit (GNU `compile_pattern` relinks a
     // list pointer) rotates 8-byte pointers, not ~80-byte entries; the hot
     // ~20 font-lock patterns then stay in the first slots and a scan is short.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     #[allow(clippy::vec_box)] // boxed for the cheap MRU rotation above, not for heap placement
     static LISP_REGEX_PATTERN_CACHE: RefCell<Vec<Box<LispRegexPatternCacheEntry>>> =
         const { RefCell::new(Vec::new()) };
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     static LITERAL_TRT_CACHE: RefCell<Option<(usize, Rc<CaseTranslation>)>> =
         const { RefCell::new(None) };
     // Activation establishes cache ownership once, outside every search lookup.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     static REGEX_CACHE_HEAP: Cell<usize> = const { Cell::new(0) };
     // Last collection whose root enumeration included this thread's cache,
     // or the completed count at which an empty cache was activated.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     static REGEX_CACHE_COLLECTION_EPOCH: Cell<Option<usize>> = const { Cell::new(None) };
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn clear_regex_caches() {
     SEARCH_PATTERN_CACHE.with(|cache| cache.borrow_mut().clear());
     LISP_REGEX_PATTERN_CACHE.with(|cache| cache.borrow_mut().clear());
@@ -2431,6 +2439,7 @@ fn compile_search_pattern(
     compile_search_pattern_with_posix(pattern, case_fold, false, &DefaultSyntaxLookup)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Compile PATTERN for a `posix-*` search builtin.
 ///
 /// GNU's `posix-looking-at`, `posix-search-forward`, `posix-search-backward`,
@@ -2562,6 +2571,7 @@ fn compile_lisp_pattern_with_posix(
     )
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn compile_lisp_pattern_with_posix_translation(
     pattern: &LispString,
     case_fold: bool,
@@ -3038,6 +3048,7 @@ fn canon_fold_match_at(
     Some(ti)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Forward literal search that folds through the buffer's case-canon table
 /// (used only when a custom `set-case-syntax-pair` table is installed). GNU's
 /// `simple_search` canonicalizes each char through the search `trt`.
@@ -4015,6 +4026,7 @@ pub(crate) fn re_search_backward_with_posix(
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Build the case-fold translate table for a search in `buf`: the buffer's
 /// case-canon table (GNU's search `trt`) when a custom `set-case-syntax-pair`
 /// table is installed, else `None` so the engine's fast hardwired folding is
@@ -4027,6 +4039,7 @@ fn buffer_search_translation(
     buffer_search_translation_with_symbols(buf, case_fold, SymbolMode::Bare)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn buffer_search_translation_with_symbols(
     buf: &Buffer,
     case_fold: bool,
@@ -4055,6 +4068,7 @@ fn buffer_search_translation_with_symbols(
     }))
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// The case-canon table alone, for the regexp-compile path: the compiled
 /// pattern builds (and caches) its own `CaseTranslation`, so handing compile
 /// a prebuilt 1KB memo per call would be waste the cache-hit path discards.
@@ -5515,9 +5529,6 @@ fn buffer_search_translation_table_with_symbols(
 
 
 
-#[cfg(test)]
-#[path = "tests/pike_vm_fuzz_regression_test.rs"]
-mod pike_vm_fuzz_regression_tests;
 
 /// Debug-only carrier TLS fingerprint for this module's classified records.
 #[cfg(debug_assertions)]
@@ -5544,3 +5555,7 @@ impl<'a> PropertizeFrontier<'a> {
         Self { byte, crossed }
     }
 }
+
+#[cfg(test)]
+#[path = "tests/regex_test.rs"]
+mod tests;

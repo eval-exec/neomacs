@@ -100,6 +100,7 @@ use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 mod canon;
 pub(crate) use canon::{CanonMode, canon_mode};
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `NEOVM_SYNTAX_PARSE_CACHE`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ParseCacheMode {
@@ -121,6 +122,7 @@ static MODE: AtomicU8 = AtomicU8::new(MODE_UNREAD);
 
 #[cfg(test)]
 thread_local! {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// Test override of `NEOVM_SYNTAX_PARSE_CACHE`.
     pub(crate) static MODE_OVERRIDE: std::cell::Cell<Option<ParseCacheMode>> =
         const { std::cell::Cell::new(None) };
@@ -167,6 +169,7 @@ pub(crate) fn parse_parse_cache_knob(value: Option<&str>) -> ParseCacheMode {
 
 pub(crate) use neovm_edit::buffer::syntax_cache::Invalidation;
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Per-storage syntax parse cache. See the module documentation.
 #[derive(Debug, Default)]
 pub(crate) struct SyntaxParseCache {
@@ -1492,3 +1495,7 @@ pub fn reset_carrier_tls() {
 pub fn carrier_tls_fingerprint(h: &mut u64) {
     neovm_value::tls_fingerprint::mix_debug(h, STATS.with(|slot| slot.get()));
 }
+
+#[cfg(test)]
+#[path = "tests/parse_cache_invalidation_test.rs"]
+mod invalidation_tests;

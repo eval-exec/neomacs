@@ -27,6 +27,7 @@
 
 use super::*;
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// The loop-carried state of a scan at a loop top: everything the iterations
 /// after it read.
 ///
@@ -75,6 +76,7 @@ pub(super) enum Entry {
     },
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// How a scan ended.
 pub(super) enum ScanEnd {
     Finished(ScanFinish),
@@ -92,6 +94,7 @@ pub(super) struct ScanFinish {
     pub(super) cursor_byte: EmacsBytePos,
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// A loop top as a [`ScanMode`] sees it.
 pub(super) struct LoopTop<'a> {
     pub(super) char_pos: usize,
@@ -114,6 +117,7 @@ impl LoopTop<'_> {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// What the loop does after a mode's loop-top hook.
 pub(super) enum TopAction {
     /// Keep scanning; call the hook again at the first loop top at or after
@@ -123,6 +127,7 @@ pub(super) enum TopAction {
     Pause,
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// A scan mode: what, if anything, happens at loop tops.
 pub(super) trait ScanMode {
     /// Whether the hook exists at all. `false` removes the per-character
@@ -148,6 +153,7 @@ pub(super) trait ScanMode {
     fn closed(&mut self, _depth: i64) {}
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// No hook: every Lisp `parse-partial-sexp` that needs nothing else.
 pub(super) struct Plain;
 

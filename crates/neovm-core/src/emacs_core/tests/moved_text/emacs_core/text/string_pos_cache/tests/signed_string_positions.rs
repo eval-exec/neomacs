@@ -1,12 +1,6 @@
 use neovm_value::heap_types::GnuDeclaredCharacterCount;
-use neovm_value::string_pos_cache::*;
 
-fn ascii_value(chars: i128) -> Value {
-    Value::heap_string(LispString::from_emacs_bytes_with_declared_chars(
-        b"abcde".to_vec(),
-        GnuDeclaredCharacterCount::try_from(chars).expect("bounded metadata"),
-    ))
-}
+use neovm_value::string_pos_cache::*;
 
 #[test]
 fn cold_signed_cache_matches_gnu_initialized_ascii_arithmetic() {
@@ -73,4 +67,11 @@ fn ordinary_signed_cache_controls_preserve_unicode_and_unibyte_domains() {
         }
     }
     reset_string_pos_cache();
+}
+
+fn ascii_value(chars: i128) -> Value {
+    Value::heap_string(LispString::from_emacs_bytes_with_declared_chars(
+        b"abcde".to_vec(),
+        GnuDeclaredCharacterCount::try_from(chars).expect("bounded metadata"),
+    ))
 }

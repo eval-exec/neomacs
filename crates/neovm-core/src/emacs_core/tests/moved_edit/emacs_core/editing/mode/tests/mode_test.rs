@@ -1,25 +1,6 @@
 use neovm_edit::emacs_core::mode::*;
+
 use neovm_value::intern::{intern, resolve_sym};
-
-fn mode_symbol(name: &str) -> Value {
-    Value::symbol(name)
-}
-
-fn mode_symbol_opt(name: Option<&str>) -> Option<Value> {
-    name.map(mode_symbol)
-}
-
-fn mode_display(text: &str) -> neovm_value::heap_types::LispString {
-    neovm_value::heap_types::LispString::from_utf8(text)
-}
-
-fn mode_display_opt(text: Option<&str>) -> Option<neovm_value::heap_types::LispString> {
-    text.map(mode_display)
-}
-
-fn mode_pattern(text: &str) -> neovm_value::heap_types::LispString {
-    neovm_value::heap_types::LispString::from_utf8(text)
-}
 
 #[test]
 fn mode_copied_properties_have_only_manager_roots() {
@@ -204,31 +185,6 @@ fn mode_copied_properties_have_only_manager_roots() {
     }
 }
 
-// -------------------------------------------------------------------
-// ModeRegistry basics
-// -------------------------------------------------------------------
-
-#[test]
-fn new_registry_has_fundamental_mode() {
-    crate::test_utils::init_test_tracing();
-    let reg = ModeRegistry::new();
-    assert!(
-        reg.major_modes
-            .contains_key(&neovm_value::intern::intern("fundamental-mode",))
-    );
-}
-
-#[test]
-fn default_major_mode_is_fundamental() {
-    crate::test_utils::init_test_tracing();
-    let reg = ModeRegistry::new();
-    assert_eq!(reg.get_major_mode(1), "fundamental-mode");
-}
-
-// -------------------------------------------------------------------
-// Major mode registration and switching
-// -------------------------------------------------------------------
-
 #[test]
 fn register_and_set_major_mode() {
     crate::test_utils::init_test_tracing();
@@ -249,14 +205,6 @@ fn register_and_set_major_mode() {
 
     assert!(reg.set_major_mode(1, "rust-mode").is_ok());
     assert_eq!(reg.get_major_mode(1), "rust-mode");
-}
-
-#[test]
-fn set_unknown_major_mode_fails() {
-    crate::test_utils::init_test_tracing();
-    let mut reg = ModeRegistry::new();
-    let result = reg.set_major_mode(1, "nonexistent-mode");
-    assert!(result.is_err());
 }
 
 #[test]
@@ -297,10 +245,6 @@ fn set_major_mode_replaces_previous() {
     assert_eq!(reg.get_major_mode(1), "org-mode");
 }
 
-// -------------------------------------------------------------------
-// Minor mode operations
-// -------------------------------------------------------------------
-
 #[test]
 fn register_and_enable_minor_mode() {
     crate::test_utils::init_test_tracing();
@@ -317,14 +261,6 @@ fn register_and_enable_minor_mode() {
 
     assert!(reg.enable_minor_mode(1, "auto-fill-mode").is_ok());
     assert!(reg.is_minor_mode_active(1, "auto-fill-mode"));
-}
-
-#[test]
-fn enable_unknown_minor_mode_fails() {
-    crate::test_utils::init_test_tracing();
-    let mut reg = ModeRegistry::new();
-    let result = reg.enable_minor_mode(1, "nonexistent-mode");
-    assert!(result.is_err());
 }
 
 #[test]
@@ -414,31 +350,6 @@ fn active_minor_modes_lists_all() {
 }
 
 #[test]
-fn enable_minor_mode_idempotent() {
-    crate::test_utils::init_test_tracing();
-    let mut reg = ModeRegistry::new();
-    reg.register_minor_mode(
-        "hl-line-mode",
-        MinorMode {
-            lighter: None,
-            keymap_name: None,
-            global: false,
-            body: None,
-        },
-    );
-
-    reg.enable_minor_mode(1, "hl-line-mode").unwrap();
-    reg.enable_minor_mode(1, "hl-line-mode").unwrap();
-
-    let active = reg.active_minor_modes(1);
-    assert_eq!(active.len(), 1);
-}
-
-// -------------------------------------------------------------------
-// Global minor modes
-// -------------------------------------------------------------------
-
-#[test]
 fn global_minor_mode_active_in_all_buffers() {
     crate::test_utils::init_test_tracing();
     let mut reg = ModeRegistry::new();
@@ -457,27 +368,6 @@ fn global_minor_mode_active_in_all_buffers() {
     // Active in any buffer, even ones we never explicitly set.
     assert!(reg.is_minor_mode_active(1, "global-hl-line-mode"));
     assert!(reg.is_minor_mode_active(99, "global-hl-line-mode"));
-}
-
-#[test]
-fn disable_global_minor_mode() {
-    crate::test_utils::init_test_tracing();
-    let mut reg = ModeRegistry::new();
-    reg.register_minor_mode(
-        "global-mode",
-        MinorMode {
-            lighter: None,
-            keymap_name: None,
-            global: true,
-            body: None,
-        },
-    );
-
-    reg.enable_global_minor_mode("global-mode").unwrap();
-    assert!(reg.is_minor_mode_active(1, "global-mode"));
-
-    reg.disable_global_minor_mode("global-mode");
-    assert!(!reg.is_minor_mode_active(1, "global-mode"));
 }
 
 #[test]
@@ -501,10 +391,6 @@ fn global_and_buffer_local_no_duplicates() {
     let active = reg.active_minor_modes(1);
     assert_eq!(active.iter().filter(|&&m| m == "shared-mode").count(), 1);
 }
-
-// -------------------------------------------------------------------
-// Auto-mode-alist
-// -------------------------------------------------------------------
 
 #[test]
 fn auto_mode_alist_suffix_match() {
@@ -566,18 +452,6 @@ fn auto_mode_alist_first_match_wins() {
     assert_eq!(reg.mode_for_file("file.txt"), Some("mode-a"));
 }
 
-// -------------------------------------------------------------------
-// Mode-line rendering
-// -------------------------------------------------------------------
-
-#[test]
-fn mode_line_string_fundamental() {
-    crate::test_utils::init_test_tracing();
-    let reg = ModeRegistry::new();
-    let s = reg.mode_line_string(1);
-    assert_eq!(s, "(Fundamental)");
-}
-
 #[test]
 fn mode_line_string_with_minor_modes() {
     crate::test_utils::init_test_tracing();
@@ -596,38 +470,6 @@ fn mode_line_string_with_minor_modes() {
     let s = reg.mode_line_string(1);
     assert_eq!(s, "(Fundamental Fill)");
 }
-
-#[test]
-fn mode_line_format_render() {
-    crate::test_utils::init_test_tracing();
-    let reg = ModeRegistry::new();
-    let fmt = ModeLineFormat::default_format();
-    let rendered = fmt.render(1, &reg, "*scratch*", false, false, 1, 0, 0);
-    assert!(rendered.contains("*scratch*"));
-    assert!(rendered.contains("Fundamental"));
-    assert!(rendered.contains("Top"));
-    assert!(rendered.contains("--"));
-}
-
-#[test]
-fn mode_line_format_modified_and_readonly() {
-    crate::test_utils::init_test_tracing();
-    let reg = ModeRegistry::new();
-    let fmt = ModeLineFormat::default_format();
-
-    let rendered_mod = fmt.render(1, &reg, "buf", true, false, 10, 5, 50);
-    assert!(rendered_mod.contains("**"));
-    assert!(rendered_mod.contains("50%"));
-    assert!(rendered_mod.contains("10:5"));
-
-    let rendered_ro = fmt.render(1, &reg, "buf", false, true, 1, 0, 100);
-    assert!(rendered_ro.contains("%%"));
-    assert!(rendered_ro.contains("Bot"));
-}
-
-// -------------------------------------------------------------------
-// Font-lock keywords
-// -------------------------------------------------------------------
 
 #[test]
 fn font_lock_keywords_basic() {
@@ -713,17 +555,6 @@ fn font_lock_keywords_inherit_from_parent() {
 }
 
 #[test]
-fn font_lock_keywords_none() {
-    crate::test_utils::init_test_tracing();
-    let reg = ModeRegistry::new();
-    assert!(reg.font_lock_keywords("fundamental-mode").is_none());
-}
-
-// -------------------------------------------------------------------
-// Custom variables and groups
-// -------------------------------------------------------------------
-
-#[test]
 fn register_custom_variable() {
     crate::test_utils::init_test_tracing();
     let mut reg = ModeRegistry::new();
@@ -773,10 +604,6 @@ fn custom_variable_in_group() {
     let group = reg.get_custom_group("editing").unwrap();
     assert!(group.members.contains(&mode_symbol("fill-column")));
 }
-
-// -------------------------------------------------------------------
-// Mode inheritance (derived-mode-p)
-// -------------------------------------------------------------------
 
 #[test]
 fn derived_mode_p_self() {
@@ -884,66 +711,6 @@ fn derived_mode_p_unrelated() {
     assert!(!reg.derived_mode_p("prog-mode", "text-mode"));
 }
 
-// -------------------------------------------------------------------
-// Buffer removal
-// -------------------------------------------------------------------
-
-#[test]
-fn remove_buffer_cleans_up() {
-    crate::test_utils::init_test_tracing();
-    let mut reg = ModeRegistry::new();
-    reg.register_minor_mode(
-        "test-mode",
-        MinorMode {
-            lighter: None,
-            keymap_name: None,
-            global: false,
-            body: None,
-        },
-    );
-
-    reg.set_major_mode(1, "fundamental-mode").unwrap();
-    reg.enable_minor_mode(1, "test-mode").unwrap();
-
-    reg.remove_buffer(1);
-
-    // Falls back to fundamental-mode (no entry).
-    assert_eq!(reg.get_major_mode(1), "fundamental-mode");
-    assert!(
-        reg.active_minor_modes(1).is_empty()
-            || reg
-                .active_minor_modes(1)
-                .iter()
-                .all(|m| reg.global_minor_modes.contains(&mode_symbol(m)))
-    );
-}
-
-// -------------------------------------------------------------------
-// FontLockLevel default
-// -------------------------------------------------------------------
-
-#[test]
-fn font_lock_level_default_is_level3() {
-    crate::test_utils::init_test_tracing();
-    let level = FontLockLevel::default();
-    assert_eq!(level, FontLockLevel::Level3);
-}
-
-// -------------------------------------------------------------------
-// ModeLineFormat default
-// -------------------------------------------------------------------
-
-#[test]
-fn mode_line_format_default_has_elements() {
-    crate::test_utils::init_test_tracing();
-    let fmt = ModeLineFormat::default_format();
-    assert!(!fmt.elements.is_empty());
-}
-
-// -------------------------------------------------------------------
-// Custom types
-// -------------------------------------------------------------------
-
 #[test]
 fn custom_type_choice() {
     crate::test_utils::init_test_tracing();
@@ -987,4 +754,24 @@ fn custom_type_nested_list() {
 
     let var = reg.get_custom_variable("my-list").unwrap();
     assert!(matches!(var.type_, CustomType::List(_)));
+}
+
+fn mode_symbol(name: &str) -> Value {
+    Value::symbol(name)
+}
+
+fn mode_symbol_opt(name: Option<&str>) -> Option<Value> {
+    name.map(mode_symbol)
+}
+
+fn mode_display(text: &str) -> neovm_value::heap_types::LispString {
+    neovm_value::heap_types::LispString::from_utf8(text)
+}
+
+fn mode_display_opt(text: Option<&str>) -> Option<neovm_value::heap_types::LispString> {
+    text.map(mode_display)
+}
+
+fn mode_pattern(text: &str) -> neovm_value::heap_types::LispString {
+    neovm_value::heap_types::LispString::from_utf8(text)
 }

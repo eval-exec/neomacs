@@ -32,6 +32,7 @@ pub enum Invalidation {
     All,
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// The invalidation notes a `BufferTextStorage` leaves for the syntax parse
 /// cache.  Plain values: no `Value`, no borrow, nothing to trace.
 #[derive(Clone, Copy, Debug, Default)]

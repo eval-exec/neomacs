@@ -1,53 +1,12 @@
 use crate::emacs_core::eval::Context;
+
 use neovm_edit::buffer::buffer_text::*;
+
 use neovm_edit::buffer::{BufferTextBackendKind, LispCharPos1};
+
 use neovm_edit::emacs_core::textprop;
+
 use neovm_edit::emacs_core::textprop_entries;
-
-fn anchor_storage(text: &BufferText) -> (usize, usize) {
-    let storage = text.storage.borrow();
-    let anchors = storage.anchor_cache.borrow();
-    (anchors.len(), anchors.capacity())
-}
-
-fn assert_conversions(text: &BufferText, expected: &str) {
-    let before = anchor_storage(text);
-    for char_pos in [
-        0,
-        1,
-        511,
-        1025,
-        expected.chars().count() - 1,
-        expected.chars().count(),
-    ] {
-        let byte_pos = expected
-            .char_indices()
-            .nth(char_pos)
-            .map_or(expected.len(), |(byte, _)| byte);
-        assert_eq!(
-            text.char_pos_to_emacs_byte_pos_no_alloc(CharPos0::new(char_pos)),
-            EmacsBytePos::new(byte_pos)
-        );
-        assert_eq!(
-            text.emacs_byte_pos_to_char_pos_no_alloc(EmacsBytePos::new(byte_pos)),
-            CharPos0::new(char_pos)
-        );
-    }
-    assert_eq!(
-        anchor_storage(text),
-        before,
-        "native conversions grew anchor storage"
-    );
-    // The existing cached conversion remains a separate reference, outside the
-    // native-query storage observation above.
-    for char_pos in [1, 511, 1025, expected.chars().count() - 1] {
-        let position = CharPos0::new(char_pos);
-        assert_eq!(
-            text.char_pos_to_emacs_byte_pos_no_alloc(position),
-            text.char_pos_to_emacs_byte_pos(position)
-        );
-    }
-}
 
 #[test]
 fn fontification_no_alloc_conversions_match_all_backends_after_edits() {
@@ -72,10 +31,6 @@ fn fontification_no_alloc_conversions_match_all_backends_after_edits() {
         expected.replace_range(start..end, "");
         assert_conversions(&text, &expected);
     }
-}
-
-fn current_anchor_storage(ctx: &Context) -> (usize, usize) {
-    anchor_storage(&ctx.buffer_manager().current_buffer().unwrap().text)
 }
 
 #[test]
@@ -190,4 +145,53 @@ fn fontification_no_alloc_raw_and_resolved_boundaries_leave_anchors_unchanged() 
         };
         assert_eq!(Value::fixnum(next.as_i64()), public);
     }
+}
+
+fn anchor_storage(text: &BufferText) -> (usize, usize) {
+    let storage = text.storage.borrow();
+    let anchors = storage.anchor_cache.borrow();
+    (anchors.len(), anchors.capacity())
+}
+
+fn assert_conversions(text: &BufferText, expected: &str) {
+    let before = anchor_storage(text);
+    for char_pos in [
+        0,
+        1,
+        511,
+        1025,
+        expected.chars().count() - 1,
+        expected.chars().count(),
+    ] {
+        let byte_pos = expected
+            .char_indices()
+            .nth(char_pos)
+            .map_or(expected.len(), |(byte, _)| byte);
+        assert_eq!(
+            text.char_pos_to_emacs_byte_pos_no_alloc(CharPos0::new(char_pos)),
+            EmacsBytePos::new(byte_pos)
+        );
+        assert_eq!(
+            text.emacs_byte_pos_to_char_pos_no_alloc(EmacsBytePos::new(byte_pos)),
+            CharPos0::new(char_pos)
+        );
+    }
+    assert_eq!(
+        anchor_storage(text),
+        before,
+        "native conversions grew anchor storage"
+    );
+    // The existing cached conversion remains a separate reference, outside the
+    // native-query storage observation above.
+    for char_pos in [1, 511, 1025, expected.chars().count() - 1] {
+        let position = CharPos0::new(char_pos);
+        assert_eq!(
+            text.char_pos_to_emacs_byte_pos_no_alloc(position),
+            text.char_pos_to_emacs_byte_pos(position)
+        );
+    }
+}
+
+fn current_anchor_storage(ctx: &Context) -> (usize, usize) {
+    anchor_storage(&ctx.buffer_manager().current_buffer().unwrap().text)
 }

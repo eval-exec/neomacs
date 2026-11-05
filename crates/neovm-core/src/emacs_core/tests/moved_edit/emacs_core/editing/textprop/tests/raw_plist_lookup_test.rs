@@ -1,35 +1,10 @@
 //! Focused raw-plist semantic and observation regressions.
 
 use super::plist_get_value as get;
+
 use neovm_edit::emacs_core::{Value, eval::Context};
+
 use neovm_value::tagged::collection_reads::capture;
-
-struct TwoPairs {
-    first_key_cell: Value,
-    first_value_cell: Value,
-    last_key_cell: Value,
-    last_value_cell: Value,
-}
-
-impl TwoPairs {
-    fn new() -> Self {
-        let last_value_cell = Value::cons(Value::fixnum(20), Value::NIL);
-        let last_key_cell = Value::cons(Value::fixnum(2), last_value_cell);
-        let first_value_cell = Value::cons(Value::fixnum(10), last_key_cell);
-        let first_key_cell = Value::cons(Value::fixnum(1), first_value_cell);
-        Self {
-            first_key_cell,
-            first_value_cell,
-            last_key_cell,
-            last_value_cell,
-        }
-    }
-}
-
-fn context() -> Context {
-    crate::test_utils::init_test_tracing();
-    Context::new()
-}
 
 #[test]
 fn raw_plist_literal_absent_nil_duplicate_and_malformed_results() {
@@ -72,13 +47,6 @@ fn raw_plist_keeps_exact_positioned_key_identity() {
     assert_eq!(get(plist, bare), None);
 }
 
-#[derive(Clone, Copy)]
-enum FirstReadMutation {
-    KeyCar,
-    KeyCdr,
-    ValueCar,
-}
-
 #[test]
 fn raw_plist_first_hit_observes_both_key_fields_and_value() {
     let _eval = context();
@@ -99,17 +67,6 @@ fn raw_plist_first_hit_observes_both_key_fields_and_value() {
         }
         assert!(!reads.unchanged());
     }
-}
-
-#[derive(Clone, Copy)]
-enum PathMutation {
-    FirstKeyCar,
-    FirstKeyCdr,
-    FirstValueCdr,
-    LastKeyCar,
-    LastKeyCdr,
-    LastValueCar,
-    LastValueCdr,
 }
 
 #[test]
@@ -187,4 +144,49 @@ fn raw_plist_early_hit_remains_valid_on_a_cyclic_tail() {
     assert_eq!(get(plist, Value::fixnum(1)), Some(Value::fixnum(10)));
     // Deliberately do not query a missing key: old/new raw traversal does not
     // terminate there. Safe public plist_get cycle behavior is a separate API.
+}
+
+struct TwoPairs {
+    first_key_cell: Value,
+    first_value_cell: Value,
+    last_key_cell: Value,
+    last_value_cell: Value,
+}
+
+impl TwoPairs {
+    fn new() -> Self {
+        let last_value_cell = Value::cons(Value::fixnum(20), Value::NIL);
+        let last_key_cell = Value::cons(Value::fixnum(2), last_value_cell);
+        let first_value_cell = Value::cons(Value::fixnum(10), last_key_cell);
+        let first_key_cell = Value::cons(Value::fixnum(1), first_value_cell);
+        Self {
+            first_key_cell,
+            first_value_cell,
+            last_key_cell,
+            last_value_cell,
+        }
+    }
+}
+
+fn context() -> Context {
+    crate::test_utils::init_test_tracing();
+    Context::new()
+}
+
+#[derive(Clone, Copy)]
+enum FirstReadMutation {
+    KeyCar,
+    KeyCdr,
+    ValueCar,
+}
+
+#[derive(Clone, Copy)]
+enum PathMutation {
+    FirstKeyCar,
+    FirstKeyCdr,
+    FirstValueCdr,
+    LastKeyCar,
+    LastKeyCdr,
+    LastValueCar,
+    LastValueCdr,
 }

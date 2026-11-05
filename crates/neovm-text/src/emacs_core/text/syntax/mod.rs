@@ -28,7 +28,9 @@ use neovm_value::value::{Value, ValueKind, list_to_vec};
 mod declared_string;
 #[doc(hidden)]
 pub mod parse_cache;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 mod parse_loop;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 mod pps_propertize;
 use parse_loop::{Entry, Plain, SafePositionRecorder, ScanEnd, ScanFinish, run_parse_loop};
 
@@ -98,6 +100,7 @@ fn buffer_syntax_char_after(buf: &Buffer, byte_pos: EmacsBytePos) -> Option<Buff
     })
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[inline]
 fn buffer_syntax_char_before(buf: &Buffer, byte_pos: EmacsBytePos) -> Option<BufferSyntaxChar> {
     // A byte below 0x80 is a whole character in a multibyte buffer (every
@@ -429,6 +432,7 @@ pub(crate) fn standard_syntax_class_for_code(code: u32) -> SyntaxClass {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[inline]
 pub(crate) fn standard_syntax_class_for_char(ch: char) -> SyntaxClass {
     standard_syntax_class_for_code(ch as u32)
@@ -1205,6 +1209,7 @@ impl<'a> WordChars<'a> {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Forward-only character cursor for `parse-partial-sexp`.
 ///
 /// Unlike [`BufferChars`], this cursor does not preserve a logical index or a
@@ -2148,6 +2153,7 @@ fn maybe_skip_comment_forward(
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn maybe_skip_comment_backward(
     buf: &Buffer,
     idx: usize,
@@ -2935,6 +2941,7 @@ pub fn builtin_string_to_syntax(args: Vec<Value>) -> EvalResult {
     Ok(syntax_entry_to_value(&entry))
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(make-syntax-table &optional PARENT)` — create a new syntax table.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) fn builtin_make_syntax_table(args: Vec<Value>) -> EvalResult {
@@ -2960,11 +2967,13 @@ pub(crate) fn builtin_make_syntax_table(args: Vec<Value>) -> EvalResult {
     Ok(table)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(copy-syntax-table &optional TABLE)` — return a fresh copy of TABLE.
 pub(crate) fn builtin_copy_syntax_table(args: Vec<Value>) -> EvalResult {
     builtin_copy_syntax_table_with_symbols(args, neovm_value::tagged::SymbolMode::Bare)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn ensure_standard_syntax_table_object() -> EvalResult {
     STANDARD_SYNTAX_TABLE_OBJECT.with(|slot| {
         if let Some(table) = slot.borrow().as_ref() {
@@ -3054,6 +3063,7 @@ fn ensure_standard_syntax_table_object() -> EvalResult {
     })
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[cfg(test)]
 fn current_buffer_syntax_table_object_in_buffers(
     buffers: &mut BufferManager,
@@ -3151,6 +3161,7 @@ impl ParseSyntaxEntry {
 
 const _: () = assert!(std::mem::size_of::<ParseSyntaxEntry>() == 2);
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn flat_ascii_entries_for_table(table: &SyntaxTable) -> [ParseSyntaxEntry; 128] {
     let tick = crate::emacs_core::chartable::char_table_write_tick();
     let key = (table.chartable.bits(), tick);
@@ -3189,6 +3200,7 @@ const SYNTAX_ENTRY_WHITESPACE: SyntaxEntry = SyntaxEntry {
     flags: SyntaxFlags::empty(),
 };
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// The syntax entry for ASCII `cp` under `table`, served from a thread-local
 /// flat classifier that survives across match calls (the per-`SyntaxPropByteRun`
 /// memo does not). On a cache miss the whole 0..128 range is filled once via
@@ -3246,6 +3258,7 @@ fn discard_syntax_lookup_error(result: EvalResult) {
     drop(result);
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Return the `SyntaxClass` for `c` under `table`, mirroring GNU
 /// `SYNTAX(c)` in `src/syntax.h`. Uses the same fallback as
 /// `SyntaxTable::char_syntax` on the old compiled form: codepoints
@@ -3330,11 +3343,13 @@ fn record_syntax_table_decode() {
 #[cfg(not(test))]
 fn record_syntax_table_decode() {}
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[cfg(test)]
 pub(crate) fn reset_syntax_table_decodes_for_test() {
     SYNTAX_TABLE_DECODES.with(|n| n.set(0));
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[cfg(test)]
 pub(crate) fn syntax_table_decodes_for_test() -> usize {
     SYNTAX_TABLE_DECODES.with(Cell::get)
@@ -3442,6 +3457,7 @@ impl PropRunCells {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Per-scan `syntax-table` property cache for the scanners that address text by
 /// EMACS BYTE position: the regexp matcher, `forward-comment`, and
 /// `backward-prefix-chars`.
@@ -3734,6 +3750,7 @@ impl StringSyntaxPositionError {
 
 static_assertions::assert_impl_all!(StringSyntaxPositionError: Send, Sync, Copy);
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Per-match `syntax-table` property cache for a regexp over a STRING object.
 ///
 /// GNU arms the same `gl_state` for a string as for a buffer
@@ -4160,6 +4177,7 @@ fn supplied_boundary_syntax(
     request.with_classes(before, after)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Per-scan cache of the `syntax-table` text-property run, mirroring GNU
 /// `syntax.c` `gl_state` (`b_property`/`e_property` plus the current value).
 /// A scan reads the property once per char, but it is almost always nil over
@@ -4272,6 +4290,7 @@ pub(super) struct DescriptorLog {
     pub(super) unvalidatable_from: Option<usize>,
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Distinct descriptors one run validates (elisp buffers have two to four:
 /// `string-to-syntax` results are constants of the propertize function).
 pub(super) const DESCRIPTOR_LOG_CAP: usize = 32;
@@ -4510,6 +4529,7 @@ fn coalesced_syntax_run_end(
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[inline(always)]
 fn syntax_entry_from_table(table: &SyntaxTable, ch: char) -> SyntaxEntry {
     record_syntax_table_decode();
@@ -4518,6 +4538,7 @@ fn syntax_entry_from_table(table: &SyntaxTable, ch: char) -> SyntaxEntry {
         .unwrap_or_else(|| SyntaxEntry::simple(table.char_syntax(ch)))
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[inline]
 fn effective_syntax_entry_for_char_at_byte(
     buf: &Buffer,
@@ -4659,6 +4680,7 @@ fn word_syntax_entry_for_non_unicode_char(
 // Inlined into the parse/scan loops: this runs once per character
 // stepped (8.7M calls on a fontify pass) and the un-inlined five-arg
 // call cost more than the fast path it guards.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[inline]
 fn effective_syntax_entry_for_abs_char(
     buf: &Buffer,
@@ -4954,6 +4976,7 @@ pub(crate) fn builtin_syntax_table_p(args: Vec<Value>) -> EvalResult {
     builtin_syntax_table_p_with_symbols(args, neovm_value::tagged::SymbolMode::Bare)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(syntax-table)` — return the current buffer syntax table.
 ///
 /// Returns the buffer-local syntax-table object, defaulting to the standard
@@ -4973,6 +4996,7 @@ pub fn builtin_syntax_table_0<H: TextHost>(eval: &mut H) -> EvalResult {
     builtin_syntax_table_in_buffers_with_symbols(eval.buffers_mut(), &args, mode)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(set-syntax-table TABLE)` — install TABLE for current buffer and return it.
 ///
 /// NeoVM currently stores syntax behavior on `Buffer.syntax_table` internals;
@@ -5004,6 +5028,7 @@ pub fn builtin_modify_syntax_entry<H: TextHost>(eval: &mut H, args: Vec<Value>) 
     modify_syntax_entry_in_buffers_with_symbols(eval.buffers_mut(), &args, mode)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(char-syntax CHAR)` — return the syntax class designator char.
 #[cfg(test)]
 pub(crate) fn builtin_char_syntax<H: TextHost>(eval: &mut H, args: Vec<Value>) -> EvalResult {
@@ -5098,6 +5123,7 @@ pub fn casing_word_predicate<H: TextHost>(eval: &H) -> impl Fn(u32) -> bool + Co
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(syntax-after POS)` — return syntax descriptor for char at POS.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) fn builtin_syntax_after<H: TextHost>(eval: &mut H, args: Vec<Value>) -> EvalResult {
@@ -6972,6 +6998,7 @@ impl ParseCommentState {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CommentStopMode {
     None,
@@ -6987,6 +7014,7 @@ const PARSE_PREV_SYNTAX_SMAX: i64 = 16;
 /// (comment-end-first) of a `prev_from_syntax` integer.
 const PARSE_PREV_SYNTAX_COMSTARTEND_FIRST: i64 = 0x5_0000;
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Build GNU's `SYNTAX_WITH_FLAGS` integer for element 10 of `parse-partial-sexp`:
 /// the low byte is the syntax class code and bits 16..=23 hold the flag byte
 /// (matching GNU `src/syntax.h`: comment-start-first at bit 16, etc.).
@@ -6994,6 +7022,7 @@ fn parse_prev_syntax_int(class: SyntaxClass, flags: SyntaxFlags) -> i64 {
     class.code() | ((flags.bits() as i64) << 16)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct PartialParseState {
     depth: i64,
@@ -7346,6 +7375,7 @@ fn parse_commentstop_mode(arg: Option<&Value>) -> CommentStopMode {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[allow(clippy::too_many_arguments)] // parse-partial-sexp options map directly to GNU semantics
 fn parse_state_from_range_with_options(
     buf: &Buffer,
@@ -7431,6 +7461,7 @@ fn clamped_parse_range(buf: &Buffer, from: i64, to: i64) -> (usize, usize) {
     (from_char, to_char)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(parse-partial-sexp FROM TO &optional TARGETDEPTH STOPBEFORE STATE COMMENTSTOP)`
 /// Baseline parser-state implementation for structural Lisp motion/state queries.
 #[cfg(test)]
@@ -7630,6 +7661,7 @@ fn lisp_pos_to_byte(buf: &Buffer, pos: LispCharPos1) -> EmacsBytePos {
     buf.lisp_pos_to_accessible_emacs_byte_pos(pos)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(skip-syntax-forward SYNTAX &optional LIMIT)` — skip forward over chars
 /// matching the given syntax classes.
 #[cfg(test)]
@@ -7872,6 +7904,7 @@ fn expect_skip_syntax_args(
 // ===========================================================================
 #[cfg(test)]
 thread_local! {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// Test hook: byte-addressed `syntax-table` run refills.
     pub(crate) static SYNTAX_BYTE_RUN_REFILLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -7973,3 +8006,11 @@ impl SexpScanPolicy {
         self.comment_end_escape
     }
 }
+
+#[cfg(test)]
+#[path = "tests/skip_syntax_classes_test.rs"]
+mod skip_syntax_classes_tests;
+
+#[cfg(test)]
+#[path = "tests/syntax_test.rs"]
+mod tests;

@@ -6,6 +6,7 @@ use crate::buffer::Buffer;
 use std::cell::{Ref, RefCell};
 use std::rc::{Rc, Weak};
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SourceRevision {
     content_epoch: u64,
@@ -100,3 +101,7 @@ impl std::fmt::Debug for BufferSourceReadLease<'_> {
             .finish_non_exhaustive()
     }
 }
+
+#[cfg(test)]
+#[path = "tests/source_authority_test.rs"]
+mod tests;

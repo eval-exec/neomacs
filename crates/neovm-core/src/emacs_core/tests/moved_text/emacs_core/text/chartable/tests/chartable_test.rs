@@ -1,29 +1,20 @@
 use crate::emacs_core::chartable_entries::builtin_unicode_property_table_internal;
+
 use crate::emacs_core::eval::Context;
+
 use crate::emacs_core::eval::VariableView;
+
 use neovm_text::emacs_core::chartable::*;
+
 use neovm_value::boolvec::{bool_vector_from_bits, bool_vector_ref_value};
+
 use neovm_value::error::{FlowKind, FlowResultExt as _};
+
 use neovm_value::intern::{intern, intern_uninterned};
+
 use neovm_value::symbol::CanonicalAccess;
+
 use neovm_value::value::ValueKind;
-
-// -----------------------------------------------------------------------
-// Char-table tests
-// -----------------------------------------------------------------------
-
-fn assert_signal_symbol_and_predicate(result: EvalResult, symbol: &str, predicate: &str) {
-    match result.kinded() {
-        Err(FlowKind::Signal(signal)) => {
-            assert_eq!(signal.symbol_name(), symbol);
-            assert_eq!(
-                signal.data.first().and_then(|v| v.as_bare_symbol_name()),
-                Some(predicate)
-            );
-        }
-        other => panic!("expected signal {symbol} {predicate}, got {other:?}"),
-    }
-}
 
 #[test]
 fn make_char_table_basic() {
@@ -1206,44 +1197,6 @@ fn unicode_property_literal_loaded_from_el_source_preserves_raw_compression_byte
     );
 }
 
-fn find_char_table(value: Value) -> Option<Value> {
-    if neovm_text::emacs_core::chartable::is_char_table(&value) {
-        return Some(value);
-    }
-    if let Some(items) = value.as_vector_data() {
-        for item in items {
-            if let Some(table) = find_char_table(*item) {
-                return Some(table);
-            }
-        }
-        return None;
-    }
-    if value.is_cons() {
-        let mut current = value;
-        while current.is_cons() {
-            if let Some(table) = find_char_table(current.cons_car()) {
-                return Some(table);
-            }
-            current = current.cons_cdr();
-        }
-        if !current.is_nil() {
-            return find_char_table(current);
-        }
-    }
-    None
-}
-
-fn run_key_from_map_key(key: Value) -> (i64, i64) {
-    match key.kind() {
-        ValueKind::Fixnum(ch) => (ch, ch),
-        ValueKind::Cons => (
-            key.cons_car().as_fixnum().unwrap_or(-1),
-            key.cons_cdr().as_fixnum().unwrap_or(-1),
-        ),
-        _ => (-1, -1),
-    }
-}
-
 #[test]
 fn unicode_property_table_read_from_generated_uni_category_decodes_ascii() {
     crate::test_utils::init_test_tracing();
@@ -1420,10 +1373,6 @@ fn non_nil_child_default_overrides_parent_lookup() {
     let val = builtin_char_table_range(vec![child, Value::fixnum('a' as i64)], None).unwrap();
     assert!(val.is_fixnum());
 }
-
-// -----------------------------------------------------------------------
-// Bool-vector tests
-// -----------------------------------------------------------------------
 
 #[test]
 fn make_bool_vector_basic() {
@@ -1643,9 +1592,6 @@ fn bool_vector_union_into_dest() {
     assert_bv_bits(&dest, &[true, true, false]);
 }
 
-// GNU's `NILP (dest)`: an explicit nil destination is identical to an omitted
-// one — both allocate a fresh bool-vector rather than signalling
-// wrong-type-argument. `(bool-vector-union a b nil)` must not error.
 #[test]
 fn bool_vector_binops_treat_explicit_nil_dest_as_fresh() {
     crate::test_utils::init_test_tracing();
@@ -1833,75 +1779,6 @@ fn unicode_property_table_internal_returns_alist_char_table() {
     let decoded = builtin_get_unicode_property_internal(vec![returned, Value::fixnum(65)])
         .expect("run-length decoder should map through extra slot 4");
     assert!(decoded.is_bare_symbol_named("letter"));
-}
-
-// -----------------------------------------------------------------------
-// Test helpers
-// -----------------------------------------------------------------------
-
-/// Build a bool-vector from a slice of bools (test helper).
-fn make_bv(bits: &[bool]) -> Value {
-    bool_vector_from_bits(bits)
-}
-
-/// Assert that a bool-vector has the expected bits.
-fn assert_bv_bits(bv: &Value, expected: &[bool]) {
-    assert!(is_bool_vector(bv), "expected a bool-vector");
-    let len = bool_vector_length(bv).unwrap() as usize;
-    assert_eq!(len, expected.len(), "bool-vector length mismatch");
-    let bits: Vec<bool> = (0..len)
-        .map(|i| bool_vector_ref_value(bv, i).unwrap().is_truthy())
-        .collect();
-    assert_eq!(bits, expected);
-}
-
-#[test]
-fn maybe_unify_char_fixnum_returns_unified() {
-    let val = Value::fixnum(0x4E2D);
-    assert_eq!(maybe_unify_char(0x110000, &val), 0x4E2D);
-}
-
-#[test]
-fn maybe_unify_char_nil_is_identity() {
-    assert_eq!(maybe_unify_char(0x110042, &Value::NIL), 0x110042);
-}
-
-#[test]
-fn maybe_unify_char_out_of_range_fixnum_is_identity() {
-    let val = Value::fixnum(MAX_CHAR + 1);
-    assert_eq!(maybe_unify_char(0x110000, &val), 0x110000);
-}
-
-// -----------------------------------------------------------------------
-// put-unicode-property-internal (bug fix9-chartab-category #2)
-// -----------------------------------------------------------------------
-
-/// Build a `general-category`-style run-length uniprop table: decoder (slot 1)
-/// and encoder (slot 2) are index 0/1, and slot 4 holds the value vector
-/// `[nil Lu Ll Lt]`.
-fn make_run_length_uniprop_table() -> Value {
-    let table =
-        make_char_table_with_extra_slots(Value::symbol("char-code-property-table"), Value::NIL, 5);
-    builtin_set_char_table_extra_slot(vec![
-        table,
-        Value::fixnum(0),
-        Value::symbol("general-category"),
-    ])
-    .unwrap();
-    builtin_set_char_table_extra_slot(vec![table, Value::fixnum(1), Value::fixnum(0)]).unwrap();
-    builtin_set_char_table_extra_slot(vec![table, Value::fixnum(2), Value::fixnum(1)]).unwrap();
-    builtin_set_char_table_extra_slot(vec![
-        table,
-        Value::fixnum(4),
-        Value::vector(vec![
-            Value::NIL,
-            Value::symbol("Lu"),
-            Value::symbol("Ll"),
-            Value::symbol("Lt"),
-        ]),
-    ])
-    .unwrap();
-    table
 }
 
 #[test]
@@ -2101,4 +1978,99 @@ fn char_table_may_hold_value_from_sees_entries_ranges_default_and_parent() {
 
     let defaulted = make_char_table_value(Value::symbol("case-table"), Value::fixnum('y' as i64));
     assert!(holds(&defaulted), "the default shows through a nil entry");
+}
+
+fn assert_signal_symbol_and_predicate(result: EvalResult, symbol: &str, predicate: &str) {
+    match result.kinded() {
+        Err(FlowKind::Signal(signal)) => {
+            assert_eq!(signal.symbol_name(), symbol);
+            assert_eq!(
+                signal.data.first().and_then(|v| v.as_bare_symbol_name()),
+                Some(predicate)
+            );
+        }
+        other => panic!("expected signal {symbol} {predicate}, got {other:?}"),
+    }
+}
+
+fn find_char_table(value: Value) -> Option<Value> {
+    if neovm_text::emacs_core::chartable::is_char_table(&value) {
+        return Some(value);
+    }
+    if let Some(items) = value.as_vector_data() {
+        for item in items {
+            if let Some(table) = find_char_table(*item) {
+                return Some(table);
+            }
+        }
+        return None;
+    }
+    if value.is_cons() {
+        let mut current = value;
+        while current.is_cons() {
+            if let Some(table) = find_char_table(current.cons_car()) {
+                return Some(table);
+            }
+            current = current.cons_cdr();
+        }
+        if !current.is_nil() {
+            return find_char_table(current);
+        }
+    }
+    None
+}
+
+fn run_key_from_map_key(key: Value) -> (i64, i64) {
+    match key.kind() {
+        ValueKind::Fixnum(ch) => (ch, ch),
+        ValueKind::Cons => (
+            key.cons_car().as_fixnum().unwrap_or(-1),
+            key.cons_cdr().as_fixnum().unwrap_or(-1),
+        ),
+        _ => (-1, -1),
+    }
+}
+
+/// Build a bool-vector from a slice of bools (test helper).
+fn make_bv(bits: &[bool]) -> Value {
+    bool_vector_from_bits(bits)
+}
+
+/// Assert that a bool-vector has the expected bits.
+fn assert_bv_bits(bv: &Value, expected: &[bool]) {
+    assert!(is_bool_vector(bv), "expected a bool-vector");
+    let len = bool_vector_length(bv).unwrap() as usize;
+    assert_eq!(len, expected.len(), "bool-vector length mismatch");
+    let bits: Vec<bool> = (0..len)
+        .map(|i| bool_vector_ref_value(bv, i).unwrap().is_truthy())
+        .collect();
+    assert_eq!(bits, expected);
+}
+
+/// Build a `general-category`-style run-length uniprop table: decoder (slot 1)
+/// and encoder (slot 2) are index 0/1, and slot 4 holds the value vector
+/// `[nil Lu Ll Lt]`.
+fn make_run_length_uniprop_table() -> Value {
+    let table =
+        make_char_table_with_extra_slots(Value::symbol("char-code-property-table"), Value::NIL, 5);
+    builtin_set_char_table_extra_slot(vec![
+        table,
+        Value::fixnum(0),
+        Value::symbol("general-category"),
+    ])
+    .unwrap();
+    builtin_set_char_table_extra_slot(vec![table, Value::fixnum(1), Value::fixnum(0)]).unwrap();
+    builtin_set_char_table_extra_slot(vec![table, Value::fixnum(2), Value::fixnum(1)]).unwrap();
+    builtin_set_char_table_extra_slot(vec![
+        table,
+        Value::fixnum(4),
+        Value::vector(vec![
+            Value::NIL,
+            Value::symbol("Lu"),
+            Value::symbol("Ll"),
+            Value::symbol("Lt"),
+        ]),
+    ])
+    .unwrap();
+    table
 }

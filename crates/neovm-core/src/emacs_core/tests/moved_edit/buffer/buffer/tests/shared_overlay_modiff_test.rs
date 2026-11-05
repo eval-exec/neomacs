@@ -1,40 +1,9 @@
 //! GNU overlay modiff invalidates every live member of a shared text group,
 //! while overlay lists and character/property modification state stay private.
+
 use super::*;
+
 use crate::emacs_core::Context;
-
-fn fixture() -> (Context, BufferId, BufferId) {
-    crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
-    let base = eval.edit.buffers.create_buffer("shared-overlay-base");
-    eval.edit.buffers.set_current(base);
-    eval.eval_str("(insert \"abcdef\\n\")").expect("base text");
-    let indirect = eval
-        .edit
-        .buffers
-        .create_indirect_buffer(base, "shared-overlay-indirect", false)
-        .expect("indirect peer");
-    eval.edit
-        .buffers
-        .get(base)
-        .expect("base")
-        .reset_unchanged_region();
-    (eval, base, indirect)
-}
-
-fn make_overlay(eval: &mut Context, owner: BufferId) -> Value {
-    eval.edit.buffers.set_current(owner);
-    eval.eval_str("(setq shared-overlay-test-object (make-overlay 1 2))")
-        .expect("empty overlay creation")
-}
-
-fn tick(eval: &Context, buffer: BufferId) -> i64 {
-    eval.edit
-        .buffers
-        .get(buffer)
-        .expect("buffer")
-        .overlay_modified_tick()
-}
 
 #[test]
 fn shared_overlay_modiff_invalidates_peers_without_sharing_overlay_lists() {
@@ -178,4 +147,37 @@ fn shared_overlay_modiff_leaves_char_property_ticks_and_dirty_spans_unchanged() 
     )
     .expect("real overlay mutation sequence");
     assert_eq!([state(&eval, base), state(&eval, indirect)], before);
+}
+
+fn fixture() -> (Context, BufferId, BufferId) {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new();
+    let base = eval.edit.buffers.create_buffer("shared-overlay-base");
+    eval.edit.buffers.set_current(base);
+    eval.eval_str("(insert \"abcdef\\n\")").expect("base text");
+    let indirect = eval
+        .edit
+        .buffers
+        .create_indirect_buffer(base, "shared-overlay-indirect", false)
+        .expect("indirect peer");
+    eval.edit
+        .buffers
+        .get(base)
+        .expect("base")
+        .reset_unchanged_region();
+    (eval, base, indirect)
+}
+
+fn make_overlay(eval: &mut Context, owner: BufferId) -> Value {
+    eval.edit.buffers.set_current(owner);
+    eval.eval_str("(setq shared-overlay-test-object (make-overlay 1 2))")
+        .expect("empty overlay creation")
+}
+
+fn tick(eval: &Context, buffer: BufferId) -> i64 {
+    eval.edit
+        .buffers
+        .get(buffer)
+        .expect("buffer")
+        .overlay_modified_tick()
 }

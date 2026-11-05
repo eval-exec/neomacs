@@ -262,6 +262,7 @@ fn expect_marker(_name: &str, v: &Value) -> Result<(), Flow> {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn marker_position_value(v: &Value) -> Value {
     if !v.is_marker() {
         return Value::NIL;
@@ -314,6 +315,7 @@ pub fn marker_position_as_int_with_buffers(
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 fn marker_buffer_value(v: &Value) -> Value {
     if !v.is_marker() {
@@ -364,6 +366,7 @@ pub fn builtin_marker_position_1(buffers: &BufferManager, marker: Value) -> Eval
     builtin_marker_position_in_buffers(buffers, &args)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_marker_position_in_buffers(
     _buffers: &BufferManager,
     args: &[Value],
@@ -605,6 +608,7 @@ impl MarkerAttach {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn register_marker_in_buffers(
     buffers: &mut BufferManager,
     marker: &Value,
@@ -738,3 +742,7 @@ pub fn builtin_mark_marker(buffers: &mut BufferManager, args: Vec<Value>) -> Eva
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+#[cfg(test)]
+#[path = "tests/marker_test.rs"]
+mod tests;

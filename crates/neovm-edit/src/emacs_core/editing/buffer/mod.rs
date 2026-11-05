@@ -623,6 +623,7 @@ pub fn builtin_set_buffer_1<H: EditHost>(host: &mut H, buffer_or_name: Value) ->
     Ok(Value::make_buffer(id))
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[cfg(test)]
 pub(crate) fn builtin_current_buffer(
     edit_buffers: &mut crate::buffer::BufferManager,
@@ -5110,3 +5111,7 @@ impl InsertPiece {
         &self.text
     }
 }
+
+#[cfg(test)]
+#[path = "tests/buffer_test.rs"]
+mod tests;

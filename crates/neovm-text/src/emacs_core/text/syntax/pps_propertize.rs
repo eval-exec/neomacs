@@ -46,6 +46,7 @@ static PPS_PROPERTIZE: AtomicU8 = AtomicU8::new(KNOB_UNREAD);
 
 #[cfg(test)]
 thread_local! {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// Test override of `NEOVM_PPS_PROPERTIZE`.
     pub(crate) static PPS_PROPERTIZE_OVERRIDE: Cell<Option<bool>> = const { Cell::new(None) };
 }
@@ -364,3 +365,7 @@ pub(super) fn parse_partial_sexp_propertizing<H: crate::emacs_core::text_host::T
         }
     }
 }
+
+#[cfg(test)]
+#[path = "tests/pps_propertize_knob_test.rs"]
+mod knob_tests;

@@ -1,5 +1,7 @@
 use crate::emacs_core::eval::Context;
+
 use neovm_text::emacs_core::regex::*;
+
 use neovm_value::value::Value;
 
 #[test]
@@ -89,6 +91,16 @@ fn gc_tls_ownership_regex_literal_translation_keeps_its_table_alive() {
     assert_eq!(translation.translate(b'[' as u32), b']' as u32);
 }
 
+#[test]
+fn gc_tls_ownership_regex_lisp_cache_roots_its_syntax_identity() {
+    assert_cached_syntax_table_lives(SyntaxCacheOwner::LispPatterns);
+}
+
+#[test]
+fn gc_tls_ownership_regex_search_cache_roots_its_syntax_identity() {
+    assert_cached_syntax_table_lives(SyntaxCacheOwner::SearchPatterns);
+}
+
 #[derive(Clone, Copy)]
 enum SyntaxCacheOwner {
     LispPatterns,
@@ -137,14 +149,4 @@ fn assert_cached_syntax_table_lives(owner: SyntaxCacheOwner) {
         ctx.tagged_heap.owns_heap_value_for_test(payload),
         "compiled syntax cache kept table identity bits while exact GC freed that table"
     );
-}
-
-#[test]
-fn gc_tls_ownership_regex_lisp_cache_roots_its_syntax_identity() {
-    assert_cached_syntax_table_lives(SyntaxCacheOwner::LispPatterns);
-}
-
-#[test]
-fn gc_tls_ownership_regex_search_cache_roots_its_syntax_identity() {
-    assert_cached_syntax_table_lives(SyntaxCacheOwner::SearchPatterns);
 }

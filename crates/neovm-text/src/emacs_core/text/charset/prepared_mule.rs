@@ -6,6 +6,7 @@
 
 use super::*;
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// A scalar encoder resolved for one conversion. Each mutator owns its view;
 /// its map data is immutable and may be shared through Arc. It holds no Lisp
 /// values and adds no process or thread-local registry cache.
@@ -87,6 +88,7 @@ struct MuleCandidate {
     encoder: Option<CharsetEncoder>,
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// The current Mule charset list, privately owned by one conversion's mutator.
 /// This view contains physical definition identities and numeric metadata,
 /// never GC-managed Values. A physical identity is a stable registry key, like

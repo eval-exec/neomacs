@@ -1,9 +1,6 @@
 use crate::emacs_core::format_eval_result;
-use neovm_value::value::Value;
 
-#[cfg(test)]
-#[path = "set_buffer_multibyte_gnu_test.rs"]
-mod set_buffer_multibyte_gnu;
+use neovm_value::value::Value;
 
 /// GNU `Fget_truename_buffer` (src/buffer.c:524-539) returns the live buffer
 /// whose `buffer-file-truename` is `string-equal` to FILENAME.  It used to be
@@ -432,27 +429,6 @@ fn every_insert_door_reads_the_string_after_the_change_hook_like_gnu() {
     );
 }
 
-#[cfg(test)]
-#[path = "gdn_primitives_test.rs"]
-mod gdn_primitives;
-
-#[cfg(test)]
-#[path = "multibyte_overlay_order.rs"]
-mod multibyte_overlay_order;
-
-#[cfg(test)]
-mod overlay_lists_intersection;
-
-#[cfg(test)]
-mod overlay_deletion_bulk_order;
-
-#[cfg(test)]
-mod conversion_byte_boundary;
-
-#[cfg(test)]
-#[path = "tsb_boundary_numbers.rs"]
-mod tsb_boundary_numbers;
-
 /// GNU buffer.c:1998-2000 ("Don't kill the minibuffer now current"): `kill-buffer`
 /// of the buffer shown in the selected frame's minibuffer window returns nil
 /// and kills nothing, so no ordinary buffer is ever swapped into it.
@@ -556,3 +532,25 @@ fn kill_buffer_minibuffer_guard_runs_after_the_kill_buffer_hook() {
         "the hook's minibuffer display must remain"
     );
 }
+
+#[cfg(test)]
+#[path = "set_buffer_multibyte_gnu_test.rs"]
+mod set_buffer_multibyte_gnu;
+
+#[cfg(test)]
+#[path = "gdn_primitives_test.rs"]
+mod gdn_primitives;
+
+#[cfg(test)]
+#[path = "multibyte_overlay_order.rs"]
+mod multibyte_overlay_order;
+
+#[cfg(test)]
+mod overlay_lists_intersection;
+
+#[cfg(test)]
+mod overlay_deletion_bulk_order;
+
+#[cfg(test)]
+#[path = "tsb_boundary_numbers.rs"]
+mod tsb_boundary_numbers;

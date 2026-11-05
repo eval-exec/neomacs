@@ -207,6 +207,7 @@ pub(crate) fn modify_syntax_entry_in_buffers_with_symbols(
     Ok(Value::NIL)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn syntax_entry_at_char_code_with_symbols(
     table: &Value,
     code: u32,

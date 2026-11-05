@@ -1,13 +1,8 @@
 //! Focused state tests: actual GNU oracle covers the public60-case behavior.
-use neovm_text::emacs_core::syntax::*;
-use neovm_value::heap_types::GnuDeclaredCharacterCount;
 
-fn supplied_ascii(chars: i128) -> Value {
-    Value::heap_string(LispString::from_emacs_bytes_with_declared_chars(
-        b"abcde".to_vec(),
-        GnuDeclaredCharacterCount::try_from(chars).expect("bounded metadata"),
-    ))
-}
+use neovm_text::emacs_core::syntax::*;
+
+use neovm_value::heap_types::GnuDeclaredCharacterCount;
 
 #[test]
 fn supplied_no_interval_state_reports_gnu_to_end_logic_after_initial_run() {
@@ -125,4 +120,11 @@ fn syntax_heap_source_validates_object_payload_and_rejects_scalars() {
         -3
     );
     neovm_value::string_pos_cache::reset_string_pos_cache();
+}
+
+fn supplied_ascii(chars: i128) -> Value {
+    Value::heap_string(LispString::from_emacs_bytes_with_declared_chars(
+        b"abcde".to_vec(),
+        GnuDeclaredCharacterCount::try_from(chars).expect("bounded metadata"),
+    ))
 }

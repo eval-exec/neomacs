@@ -1,18 +1,8 @@
 use neovm_edit::buffer::LispCharPos1;
+
 use neovm_edit::emacs_core::bookmark::*;
+
 use neovm_value::heap_types::LispString;
-
-// -----------------------------------------------------------------------
-// BookmarkManager unit tests
-// -----------------------------------------------------------------------
-
-fn bm_str(text: &str) -> LispString {
-    runtime_string_to_bookmark_string(text)
-}
-
-fn bm_runtime(text: Option<&LispString>) -> Option<String> {
-    text.map(bookmark_string_to_runtime)
-}
 
 #[test]
 fn bookmark_lookup_key_cannot_retain_input_properties() {
@@ -555,20 +545,10 @@ fn modified_flag() {
     assert!(mgr.is_modified());
 }
 
-// -----------------------------------------------------------------------
-// Builtin-level tests
-// -----------------------------------------------------------------------
-
-fn set_current_buffer_file(eval: &mut super::super::eval::Context, path: &str) {
-    if let Some(buffer) = eval.edit.buffers.current_buffer_mut() {
-        buffer.set_file_name_value(Value::string(path));
-    }
-}
-
 #[test]
 fn test_builtin_bookmark_set_and_jump() {
     crate::test_utils::init_test_tracing();
-    use super::super::eval::Context;
+    use crate::emacs_core::eval::Context;
 
     let mut eval = Context::new();
     set_current_buffer_file(&mut eval, "/tmp/test.el");
@@ -592,7 +572,7 @@ fn test_builtin_bookmark_set_and_jump() {
 #[test]
 fn test_builtin_bookmark_jump_permissive_designators() {
     crate::test_utils::init_test_tracing();
-    use super::super::eval::Context;
+    use crate::emacs_core::eval::Context;
 
     let mut eval = Context::new();
 
@@ -617,7 +597,7 @@ fn test_builtin_bookmark_jump_permissive_designators() {
 #[test]
 fn test_builtin_bookmark_delete() {
     crate::test_utils::init_test_tracing();
-    use super::super::eval::Context;
+    use crate::emacs_core::eval::Context;
 
     let mut eval = Context::new();
     set_current_buffer_file(&mut eval, "/tmp/delete.el");
@@ -650,7 +630,7 @@ fn test_builtin_bookmark_delete() {
 #[test]
 fn test_builtin_bookmark_delete_accepts_raw_unibyte_name() {
     crate::test_utils::init_test_tracing();
-    use super::super::eval::Context;
+    use crate::emacs_core::eval::Context;
 
     let mut eval = Context::new();
     set_current_buffer_file(&mut eval, "/tmp/raw-bookmark.el");
@@ -666,7 +646,7 @@ fn test_builtin_bookmark_delete_accepts_raw_unibyte_name() {
 #[test]
 fn test_builtin_bookmark_rename() {
     crate::test_utils::init_test_tracing();
-    use super::super::eval::Context;
+    use crate::emacs_core::eval::Context;
 
     let mut eval = Context::new();
     set_current_buffer_file(&mut eval, "/tmp/rename.el");
@@ -688,7 +668,7 @@ fn test_builtin_bookmark_rename() {
 #[test]
 fn test_builtin_bookmark_rename_permissive_designators() {
     crate::test_utils::init_test_tracing();
-    use super::super::eval::Context;
+    use crate::emacs_core::eval::Context;
 
     let mut eval = Context::new();
     set_current_buffer_file(&mut eval, "/tmp/rename-permissive.el");
@@ -735,7 +715,7 @@ fn test_builtin_bookmark_rename_permissive_designators() {
 #[test]
 fn test_builtin_bookmark_all_names() {
     crate::test_utils::init_test_tracing();
-    use super::super::eval::Context;
+    use crate::emacs_core::eval::Context;
 
     let mut eval = Context::new();
     set_current_buffer_file(&mut eval, "/tmp/all-names.el");
@@ -752,7 +732,7 @@ fn test_builtin_bookmark_all_names() {
 #[test]
 fn test_builtin_bookmark_get_filename() {
     crate::test_utils::init_test_tracing();
-    use super::super::eval::Context;
+    use crate::emacs_core::eval::Context;
 
     let mut eval = Context::new();
     set_current_buffer_file(&mut eval, "/tmp/file.el");
@@ -768,7 +748,7 @@ fn test_builtin_bookmark_get_filename() {
 #[test]
 fn test_builtin_bookmark_get_position() {
     crate::test_utils::init_test_tracing();
-    use super::super::eval::Context;
+    use crate::emacs_core::eval::Context;
 
     let mut eval = Context::new();
     set_current_buffer_file(&mut eval, "/tmp/position.el");
@@ -784,7 +764,7 @@ fn test_builtin_bookmark_get_position() {
 #[test]
 fn test_builtin_bookmark_set_stores_lisp_char_position() {
     crate::test_utils::init_test_tracing();
-    use super::super::eval::Context;
+    use crate::emacs_core::eval::Context;
 
     let mut eval = Context::new();
     set_current_buffer_file(&mut eval, "/tmp/multibyte-position.el");
@@ -809,7 +789,7 @@ fn test_builtin_bookmark_set_stores_lisp_char_position() {
 #[test]
 fn test_builtin_bookmark_get_annotation() {
     crate::test_utils::init_test_tracing();
-    use super::super::eval::Context;
+    use crate::emacs_core::eval::Context;
 
     let mut eval = Context::new();
     set_current_buffer_file(&mut eval, "/tmp/annotation.el");
@@ -832,7 +812,7 @@ fn test_builtin_bookmark_get_annotation() {
 #[test]
 fn bookmark_record_key_domain_matches_gnu_bookmark_props() {
     crate::test_utils::init_test_tracing();
-    use super::super::eval::Context;
+    use crate::emacs_core::eval::Context;
 
     for (key, name) in [
         (BookmarkRecordKey::Filename, "filename"),
@@ -862,7 +842,7 @@ fn bookmark_record_key_domain_matches_gnu_bookmark_props() {
 #[test]
 fn test_builtin_bookmark_set_annotation() {
     crate::test_utils::init_test_tracing();
-    use super::super::eval::Context;
+    use crate::emacs_core::eval::Context;
 
     let mut eval = Context::new();
     set_current_buffer_file(&mut eval, "/tmp/set-annotation.el");
@@ -890,7 +870,7 @@ fn test_builtin_bookmark_set_annotation() {
 #[test]
 fn bookmark_save_load_preserves_raw_unibyte_file_path() {
     crate::test_utils::init_test_tracing();
-    use super::super::eval::Context;
+    use crate::emacs_core::eval::Context;
     use std::os::unix::ffi::OsStrExt;
 
     let mut eval = Context::new();
@@ -941,7 +921,7 @@ fn bookmark_save_load_preserves_raw_unibyte_file_path() {
 #[test]
 fn test_builtin_bookmark_save_load() {
     crate::test_utils::init_test_tracing();
-    use super::super::eval::Context;
+    use crate::emacs_core::eval::Context;
 
     let mut eval = Context::new();
     let save_file = "/tmp/neovm-bookmark-save-load.data";
@@ -994,7 +974,7 @@ fn test_builtin_bookmark_save_load() {
 #[test]
 fn test_wrong_arg_count() {
     crate::test_utils::init_test_tracing();
-    use super::super::eval::Context;
+    use crate::emacs_core::eval::Context;
 
     let mut eval = Context::new();
 
@@ -1018,4 +998,18 @@ fn test_wrong_arg_count() {
     // bookmark-rename with one arg errors in batch mode.
     let result = builtin_bookmark_rename(&mut eval, vec![Value::string("x")]);
     assert!(result.is_err());
+}
+
+fn bm_str(text: &str) -> LispString {
+    runtime_string_to_bookmark_string(text)
+}
+
+fn bm_runtime(text: Option<&LispString>) -> Option<String> {
+    text.map(bookmark_string_to_runtime)
+}
+
+fn set_current_buffer_file(eval: &mut crate::emacs_core::eval::Context, path: &str) {
+    if let Some(buffer) = eval.edit.buffers.current_buffer_mut() {
+        buffer.set_file_name_value(Value::string(path));
+    }
 }

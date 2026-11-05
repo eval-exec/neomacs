@@ -750,6 +750,7 @@ pub fn builtin_line_number_at_pos(buffers: &BufferManager, args: Vec<Value>) -> 
     Ok(Value::fixnum(line_num as i64))
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// (count-lines BEG END)
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) fn builtin_count_lines(buffers: &BufferManager, args: Vec<Value>) -> EvalResult {
@@ -1493,3 +1494,7 @@ pub fn builtin_region_end(buffers: &BufferManager, args: Vec<Value>) -> EvalResu
 // ===========================================================================
 // Tests
 // ===========================================================================
+
+#[cfg(test)]
+#[path = "tests/navigation_test.rs"]
+mod tests;

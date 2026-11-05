@@ -2,25 +2,8 @@
 //! scan that never propertizes, for attribution only.
 
 use crate::test_utils::runtime_startup_eval_one;
-use neovm_text::emacs_core::syntax::*;
 
-#[test]
-fn the_knob_is_on_unless_switched_off() {
-    for (value, on) in [
-        (None, true),
-        (Some("1"), true),
-        (Some("on"), true),
-        (Some(""), true),
-        (Some("0"), false),
-        (Some("off"), false),
-        (Some(" OFF "), false),
-        (Some("no"), false),
-        (Some("false"), false),
-        (Some("nil"), false),
-    ] {
-        assert_eq!(parse_pps_propertize_knob(value), on, "{value:?}");
-    }
-}
+use neovm_text::emacs_core::syntax::*;
 
 /// The call count GNU makes for `(parse-partial-sexp 1 30000)` on this text
 /// (the oracle form `pps_propertize_gnu_tests::..._in_chunks`: 15 calls), and

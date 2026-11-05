@@ -7,6 +7,7 @@
 use crate::fuzz_support::{
     RegexCase, RegexCheck, RegexDifferential, SearchTarget, check_regex_differential,
 };
+
 use neovm_text::emacs_core::regex_emacs::*;
 
 /// `AsciiPreimage::AsciiOnly` is a claim about every character code: the
@@ -36,37 +37,6 @@ fn standard_translation_keeps_non_ascii_out_of_ascii() {
         "non-ASCII characters translate into ASCII: {into_ascii:#x?}"
     );
 }
-
-/// A case-canon char-table for tests: `folds` maps each character to its
-/// canonical form; every other character translates to itself.
-fn case_canon_table(folds: &[(char, char)]) -> Value {
-    let table = Value::make_char_table(Value::symbol("case-table"), Value::NIL, 3);
-    for &(from, to) in folds {
-        fold_in_place(table, from, Some(to));
-    }
-    table
-}
-
-/// Edit one entry of a case-canon char-table in place; `None` clears it.
-fn fold_in_place(table: Value, from: char, to: Option<char>) {
-    let value = to.map_or(Value::NIL, |to| Value::fixnum(to as i64));
-    neovm_text::emacs_core::chartable::ct_set_single(&table, from as i64, value);
-}
-
-/// Upper case folds to lower case in ASCII, Latin-1 and Greek.
-const CANON_FOLDS: &[(char, char)] = &[
-    ('A', 'a'),
-    ('D', 'd'),
-    ('E', 'e'),
-    ('F', 'f'),
-    ('K', 'k'),
-    ('N', 'n'),
-    ('U', 'u'),
-    ('Y', 'y'),
-    ('É', 'é'),
-    ('Σ', 'σ'),
-    ('ς', 'σ'),
-];
 
 /// A case-canon char-table is `AsciiOnly` while its entries keep non-ASCII
 /// out of ASCII and ASCII in it; the answer follows in-place edits, and a
@@ -103,16 +73,6 @@ fn char_table_translation_ascii_preimage_follows_the_table() {
         CaseTranslation::from_char_table(table).ascii_preimage(),
         AsciiPreimage::Unknown
     );
-}
-
-/// Compile `pattern` case-folded for a `repr` text and build its folded scan.
-fn folded_scan_of(pattern: &str, repr: TextRepr) -> FoldedScan {
-    let mut cp = regex_compile(pattern, false, true).expect("compile");
-    cp.target_multibyte = repr == TextRepr::Multibyte;
-    let table = cp.translate.clone().expect("a case-folded pattern");
-    cp.folded_scan(&table, true)
-        .expect("built on demand")
-        .clone()
 }
 
 #[test]
@@ -160,126 +120,6 @@ fn folded_scan_kind_matches_the_pattern_shape() {
         char_table_scan(&[('K', 'k'), ('\u{212A}', 'k')]),
         FoldedScan::PerChar
     ));
-}
-
-/// Compile `pattern` case-folded through the case-canon char-table `table`.
-fn compile_with_char_table(pattern: &str, table: Value) -> CompiledPattern {
-    regex_compile_lisp_with_translation(
-        &neovm_value::heap_types::LispString::from_utf8(pattern),
-        false,
-        Some(CaseTranslation::from_char_table(table)),
-    )
-    .expect("compile")
-}
-
-/// Patterns covering every folded scan shape and the fastmap gates.
-const FOLDED_SCAN_PATTERNS: &[&str] = &[
-    "(defun",
-    "defun",
-    "(defun \\([-a-z0-9]+\\)",
-    "k",
-    "s",
-    "i",
-    "K",
-    "[a-c]x",
-    "[k-m]",
-    "[^a]",
-    "\\_<let\\*?\\_>",
-    "\\(catch\\|throw\\)",
-    "x*y",
-    "\\bfoo",
-    "é",
-    "\\(?:x\\|é\\)",
-    "ß",
-    "σ",
-    "Ａ",
-    ".",
-    "^k",
-    "",
-    "a\\|",
-    "\u{0}",
-];
-
-/// Multibyte texts: every character whose Unicode case partner is ASCII (K,
-/// İ, ı, ſ), other case pairs, CJK, raw eight-bit characters (C0/C1 forms),
-/// and malformed (non-overlong) sequences.
-const FOLDED_SCAN_MULTIBYTE_TEXTS: &[&[u8]] = &[
-    b"",
-    "xK(DEFUN a)(defun b)k Kk".as_bytes(),
-    "İıſ Iis ß ẞ SS Σσς Ａａ 中文 k\nK ſ".as_bytes(),
-    "\n(deſun x)\n(Defun LET* let)".as_bytes(),
-    b"a\xC1\xBFk\xC0\x80K \xC3\xA9\xC3\x89x",
-    b"\xE3(Defun\xE3\x80(defun)\xE3\x80\x28\x00k",
-];
-
-/// Unibyte texts: one character per byte, Latin-1 case pairs among them.
-const FOLDED_SCAN_UNIBYTE_TEXTS: &[&[u8]] = &[
-    b"",
-    b"x\xC9y\xE9 (DEFUN a) k K \xDF\xFF\xB5\xD7",
-    b"\n(defun \xC9)\x00(Defun b) \xE9\xC3\xA9 let*",
-];
-
-/// Positions a search may start or stop at: character boundaries.
-fn scan_positions(text: &[u8], repr: TextRepr) -> Vec<usize> {
-    (0..=text.len())
-        .filter(|&pos| repr == TextRepr::Unibyte || pos == text.len() || (text[pos] & 0xC0) != 0x80)
-        .collect()
-}
-
-/// Which searches `assert_folded_scans_agree` compares.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum ScanDirections {
-    Forward,
-    Both,
-}
-
-/// Every folded scan finds exactly what the exhaustive scan finds, before and
-/// after the scan is built, for every start and limit.
-fn assert_folded_scans_agree(directions: ScanDirections) {
-    let syntax = DefaultSyntaxLookup;
-    for repr in [TextRepr::Multibyte, TextRepr::Unibyte] {
-        let texts = match repr {
-            TextRepr::Multibyte => FOLDED_SCAN_MULTIBYTE_TEXTS,
-            TextRepr::Unibyte => FOLDED_SCAN_UNIBYTE_TEXTS,
-        };
-        for &pattern in FOLDED_SCAN_PATTERNS {
-            let mut cp = regex_compile(pattern, false, true).expect("compile");
-            cp.target_multibyte = repr == TextRepr::Multibyte;
-            for &text in texts {
-                let positions = scan_positions(text, repr);
-                for &start in &positions {
-                    for &limit in &positions {
-                        if directions == ScanDirections::Forward && limit < start {
-                            continue;
-                        }
-                        let search = || {
-                            re_search(
-                                &cp,
-                                text,
-                                start,
-                                limit as isize - start as isize,
-                                &syntax,
-                                start,
-                            )
-                            .map(|(pos, regs)| (pos, regs.start, regs.end))
-                        };
-                        let expected = with_fastmap_disabled(search);
-                        // Short texts leave the scan unbuilt the first time
-                        // round: the per-character loop runs.
-                        let unbuilt = search();
-                        build_search_optimizations(&cp);
-                        let built = search();
-                        let context = format!(
-                            "{pattern:?} {repr:?} {text:x?} {start} -> {limit}: scan {:?}",
-                            cp.folded_scan(cp.translate.as_ref().expect("folded"), false)
-                        );
-                        assert_eq!(unbuilt, expected, "per-character loop: {context}");
-                        assert_eq!(built, expected, "folded scan: {context}");
-                    }
-                }
-            }
-        }
-    }
 }
 
 #[test]
@@ -416,21 +256,6 @@ fn folded_scan_is_built_by_the_first_long_search() {
         ),
         "a long search builds and uses the scan"
     );
-}
-
-/// The folded prefilter's search equals the exhaustive search at every start,
-/// forward and backward, in both representations.
-fn assert_folded_prefilter_equiv(pattern: &str, text: &[u8]) {
-    for target in [SearchTarget::Multibyte, SearchTarget::Unibyte] {
-        for start in 0..=text.len() {
-            let case = RegexCase::new(pattern, text, true, start, start).with_target(target);
-            assert_eq!(
-                check_regex_differential(case, RegexDifferential::SearchOptimizations),
-                Ok(RegexCheck::Equivalent { comparisons: 2 }),
-                "{pattern:?} {target} start={start}"
-            );
-        }
-    }
 }
 
 #[test]
@@ -717,3 +542,179 @@ fn char_table_walk_waits_for_a_long_search() {
     assert_eq!(entries(&long), 1);
     assert_eq!(entries(&short), 1);
 }
+
+/// A case-canon char-table for tests: `folds` maps each character to its
+/// canonical form; every other character translates to itself.
+fn case_canon_table(folds: &[(char, char)]) -> Value {
+    let table = Value::make_char_table(Value::symbol("case-table"), Value::NIL, 3);
+    for &(from, to) in folds {
+        fold_in_place(table, from, Some(to));
+    }
+    table
+}
+
+/// Edit one entry of a case-canon char-table in place; `None` clears it.
+fn fold_in_place(table: Value, from: char, to: Option<char>) {
+    let value = to.map_or(Value::NIL, |to| Value::fixnum(to as i64));
+    neovm_text::emacs_core::chartable::ct_set_single(&table, from as i64, value);
+}
+
+/// Upper case folds to lower case in ASCII, Latin-1 and Greek.
+const CANON_FOLDS: &[(char, char)] = &[
+    ('A', 'a'),
+    ('D', 'd'),
+    ('E', 'e'),
+    ('F', 'f'),
+    ('K', 'k'),
+    ('N', 'n'),
+    ('U', 'u'),
+    ('Y', 'y'),
+    ('É', 'é'),
+    ('Σ', 'σ'),
+    ('ς', 'σ'),
+];
+
+/// Compile `pattern` case-folded for a `repr` text and build its folded scan.
+fn folded_scan_of(pattern: &str, repr: TextRepr) -> FoldedScan {
+    let mut cp = regex_compile(pattern, false, true).expect("compile");
+    cp.target_multibyte = repr == TextRepr::Multibyte;
+    let table = cp.translate.clone().expect("a case-folded pattern");
+    cp.folded_scan(&table, true)
+        .expect("built on demand")
+        .clone()
+}
+
+/// Compile `pattern` case-folded through the case-canon char-table `table`.
+fn compile_with_char_table(pattern: &str, table: Value) -> CompiledPattern {
+    regex_compile_lisp_with_translation(
+        &neovm_value::heap_types::LispString::from_utf8(pattern),
+        false,
+        Some(CaseTranslation::from_char_table(table)),
+    )
+    .expect("compile")
+}
+
+/// Positions a search may start or stop at: character boundaries.
+fn scan_positions(text: &[u8], repr: TextRepr) -> Vec<usize> {
+    (0..=text.len())
+        .filter(|&pos| repr == TextRepr::Unibyte || pos == text.len() || (text[pos] & 0xC0) != 0x80)
+        .collect()
+}
+
+/// Which searches `assert_folded_scans_agree` compares.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ScanDirections {
+    Forward,
+    Both,
+}
+
+/// Every folded scan finds exactly what the exhaustive scan finds, before and
+/// after the scan is built, for every start and limit.
+fn assert_folded_scans_agree(directions: ScanDirections) {
+    let syntax = DefaultSyntaxLookup;
+    for repr in [TextRepr::Multibyte, TextRepr::Unibyte] {
+        let texts = match repr {
+            TextRepr::Multibyte => FOLDED_SCAN_MULTIBYTE_TEXTS,
+            TextRepr::Unibyte => FOLDED_SCAN_UNIBYTE_TEXTS,
+        };
+        for &pattern in FOLDED_SCAN_PATTERNS {
+            let mut cp = regex_compile(pattern, false, true).expect("compile");
+            cp.target_multibyte = repr == TextRepr::Multibyte;
+            for &text in texts {
+                let positions = scan_positions(text, repr);
+                for &start in &positions {
+                    for &limit in &positions {
+                        if directions == ScanDirections::Forward && limit < start {
+                            continue;
+                        }
+                        let search = || {
+                            re_search(
+                                &cp,
+                                text,
+                                start,
+                                limit as isize - start as isize,
+                                &syntax,
+                                start,
+                            )
+                            .map(|(pos, regs)| (pos, regs.start, regs.end))
+                        };
+                        let expected = with_fastmap_disabled(search);
+                        // Short texts leave the scan unbuilt the first time
+                        // round: the per-character loop runs.
+                        let unbuilt = search();
+                        build_search_optimizations(&cp);
+                        let built = search();
+                        let context = format!(
+                            "{pattern:?} {repr:?} {text:x?} {start} -> {limit}: scan {:?}",
+                            cp.folded_scan(cp.translate.as_ref().expect("folded"), false)
+                        );
+                        assert_eq!(unbuilt, expected, "per-character loop: {context}");
+                        assert_eq!(built, expected, "folded scan: {context}");
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The folded prefilter's search equals the exhaustive search at every start,
+/// forward and backward, in both representations.
+fn assert_folded_prefilter_equiv(pattern: &str, text: &[u8]) {
+    for target in [SearchTarget::Multibyte, SearchTarget::Unibyte] {
+        for start in 0..=text.len() {
+            let case = RegexCase::new(pattern, text, true, start, start).with_target(target);
+            assert_eq!(
+                check_regex_differential(case, RegexDifferential::SearchOptimizations),
+                Ok(RegexCheck::Equivalent { comparisons: 2 }),
+                "{pattern:?} {target} start={start}"
+            );
+        }
+    }
+}
+
+/// Patterns covering every folded scan shape and the fastmap gates.
+const FOLDED_SCAN_PATTERNS: &[&str] = &[
+    "(defun",
+    "defun",
+    "(defun \\([-a-z0-9]+\\)",
+    "k",
+    "s",
+    "i",
+    "K",
+    "[a-c]x",
+    "[k-m]",
+    "[^a]",
+    "\\_<let\\*?\\_>",
+    "\\(catch\\|throw\\)",
+    "x*y",
+    "\\bfoo",
+    "é",
+    "\\(?:x\\|é\\)",
+    "ß",
+    "σ",
+    "Ａ",
+    ".",
+    "^k",
+    "",
+    "a\\|",
+    "\u{0}",
+];
+
+/// Multibyte texts: every character whose Unicode case partner is ASCII (K,
+/// İ, ı, ſ), other case pairs, CJK, raw eight-bit characters (C0/C1 forms),
+/// and malformed (non-overlong) sequences.
+const FOLDED_SCAN_MULTIBYTE_TEXTS: &[&[u8]] = &[
+    b"",
+    "xK(DEFUN a)(defun b)k Kk".as_bytes(),
+    "İıſ Iis ß ẞ SS Σσς Ａａ 中文 k\nK ſ".as_bytes(),
+    "\n(deſun x)\n(Defun LET* let)".as_bytes(),
+    b"a\xC1\xBFk\xC0\x80K \xC3\xA9\xC3\x89x",
+    b"\xE3(Defun\xE3\x80(defun)\xE3\x80\x28\x00k",
+];
+
+/// Unibyte texts: one character per byte, Latin-1 case pairs among them.
+const FOLDED_SCAN_UNIBYTE_TEXTS: &[&[u8]] = &[
+    b"",
+    b"x\xC9y\xE9 (DEFUN a) k K \xDF\xFF\xB5\xD7",
+    b"\n(defun \xC9)\x00(Defun b) \xE9\xC3\xA9 let*",
+];

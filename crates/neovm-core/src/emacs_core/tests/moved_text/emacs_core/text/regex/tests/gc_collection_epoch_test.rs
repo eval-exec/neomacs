@@ -1,225 +1,8 @@
 use crate::emacs_core::eval::Context;
+
 use neovm_text::emacs_core::regex::*;
+
 use neovm_value::value::Value;
-
-/// Saved owner-local caches absent from the collection's root publication.
-/// Restoring their old coverage metadata preserves stale-cache regression
-/// conditions while Context stays on the thread that constructs it.
-#[must_use]
-pub(super) struct UncoveredRegexCaches {
-    _search: neovm_value::tls_scope::TlsScope<
-        Vec<SearchPatternCacheEntry>,
-        RefCell<Vec<SearchPatternCacheEntry>>,
-    >,
-    #[allow(clippy::vec_box)] // same address-stable MRU representation as TLS
-    _lisp: neovm_value::tls_scope::TlsScope<
-        Vec<Box<LispRegexPatternCacheEntry>>,
-        RefCell<Vec<Box<LispRegexPatternCacheEntry>>>,
-    >,
-    _literal: neovm_value::tls_scope::TlsScope<
-        Option<(usize, Rc<CaseTranslation>)>,
-        RefCell<Option<(usize, Rc<CaseTranslation>)>>,
-    >,
-    _heap: neovm_value::tls_scope::TlsScope<usize, Cell<usize>>,
-    _collection_epoch: neovm_value::tls_scope::TlsScope<Option<usize>, Cell<Option<usize>>>,
-}
-
-static_assertions::assert_not_impl_any!(UncoveredRegexCaches: Send, Sync);
-
-impl UncoveredRegexCaches {
-    pub(super) fn take() -> Self {
-        use neovm_value::tls_scope::TlsScope;
-        Self {
-            _search: TlsScope::new(&SEARCH_PATTERN_CACHE, Vec::new()),
-            _lisp: TlsScope::new(&LISP_REGEX_PATTERN_CACHE, Vec::new()),
-            _literal: TlsScope::new(&LITERAL_TRT_CACHE, None),
-            _heap: TlsScope::restore(&REGEX_CACHE_HEAP, REGEX_CACHE_HEAP.with(Cell::get)),
-            _collection_epoch: TlsScope::restore(
-                &REGEX_CACHE_COLLECTION_EPOCH,
-                REGEX_CACHE_COLLECTION_EPOCH.with(Cell::get),
-            ),
-        }
-    }
-
-    pub(super) fn restore(self) {
-        drop(self);
-    }
-}
-
-#[derive(Clone, Copy)]
-enum CacheOwner {
-    SearchSyntax,
-    LispSyntax,
-    LispTranslation,
-    LiteralTranslation,
-}
-
-#[derive(Clone, Copy)]
-enum SynchronizeAt {
-    Activation,
-    RootEnumeration,
-}
-
-fn regex_roots(ctx: &Context) -> Vec<Value> {
-    let mut roots = Vec::new();
-    collect_regex_gc_roots(
-        &mut roots,
-        ctx.tagged_heap.identity(),
-        ctx.tagged_heap.gc_collections(),
-        neovm_value::tagged::gc::CacheRootScan::Snapshot {
-            collection_in_progress: ctx.tagged_heap.mark_in_progress()
-                || ctx.tagged_heap.sweep_in_progress(),
-        },
-    );
-    roots
-}
-
-fn non_generational_context() -> Context {
-    // Constructor-read selection, isolated per test by nextest. These tests
-    // specifically require concurrent marking rather than a deferred minor.
-    // SAFETY: nextest isolates this test process; configuration precedes
-    // Context construction and every runtime worker or environment reader.
-    unsafe { std::env::set_var("NEOVM_GC_GENERATIONAL", "0") };
-    let mut ctx = Context::new();
-    ctx.gc_stress = false;
-    assert!(!ctx.tagged_heap.generational_enabled());
-    assert!(!ctx.gc_stress);
-    ctx
-}
-
-fn populate_cache(ctx: &mut Context, owner: CacheOwner) -> (Value, Value) {
-    let payload = ctx.eval_str("(make-hash-table)").unwrap();
-    let table = match owner {
-        CacheOwner::SearchSyntax | CacheOwner::LispSyntax => {
-            let table = ctx
-                .eval_str("(progn (set-syntax-table (copy-syntax-table)) (syntax-table))")
-                .unwrap();
-            let syntax = BufferSyntaxLookup {
-                syntax_table: neovm_text::emacs_core::syntax::SyntaxTable::for_buffer(
-                    ctx.edit.buffers.current_buffer().unwrap(),
-                ),
-                category_table: None,
-                word_boundary: Default::default(),
-            };
-            let pattern = LispString::from_utf8("[[:word:]]");
-            match owner {
-                CacheOwner::SearchSyntax => {
-                    let compiled =
-                        compile_search_pattern_with_posix(&pattern, false, false, &syntax).unwrap();
-                    assert!(matches!(
-                        compiled,
-                        CompiledSearchPattern::Emacs(ref compiled) if compiled.used_syntax
-                    ));
-                }
-                CacheOwner::LispSyntax => {
-                    assert!(
-                        compile_lisp_pattern_with_posix_translation(
-                            &pattern, false, false, true, None, &syntax,
-                        )
-                        .unwrap()
-                        .used_syntax
-                    );
-                }
-                _ => unreachable!(),
-            }
-            ctx.eval_str("(set-syntax-table (standard-syntax-table))")
-                .unwrap();
-            table
-        }
-        CacheOwner::LispTranslation => {
-            let table =
-                neovm_text::emacs_core::chartable::make_char_table_value(Value::NIL, Value::NIL);
-            compile_lisp_pattern_with_posix_translation(
-                &LispString::from_utf8("gc-collection-epoch-translation"),
-                true,
-                false,
-                true,
-                Some(table),
-                &DefaultSyntaxLookup,
-            )
-            .unwrap();
-            table
-        }
-        CacheOwner::LiteralTranslation => {
-            let custom = Value::make_char_table(Value::symbol("case-table"), Value::NIL, 3);
-            neovm_text::emacs_core::chartable::builtin_set_char_table_range(
-                vec![
-                    custom,
-                    Value::fixnum(b'[' as i64),
-                    Value::fixnum(b']' as i64),
-                ],
-                None,
-            )
-            .unwrap();
-            neovm_text::emacs_core::casetab::builtin_set_case_table(ctx, vec![custom]).unwrap();
-            let buffer = ctx.edit.buffers.current_buffer().unwrap();
-            let table = neovm_text::emacs_core::casetab::buffer_case_canon_table(buffer).unwrap();
-            assert_eq!(
-                buffer_search_translation(buffer, true)
-                    .unwrap()
-                    .translate(b'[' as u32),
-                b']' as u32
-            );
-            ctx.eval_str("(set-case-table (standard-case-table))")
-                .unwrap();
-            table
-        }
-    };
-    neovm_text::emacs_core::chartable::builtin_set_char_table_range(
-        vec![table, Value::fixnum(0x1ffff), payload],
-        None,
-    )
-    .unwrap();
-    assert!(
-        regex_roots(ctx)
-            .iter()
-            .any(|root| root.bits() == table.bits())
-    );
-    (table, payload)
-}
-
-fn assert_uncovered_cache_discards_swept_roots(owner: CacheOwner, synchronize_at: SynchronizeAt) {
-    // Keep the owner-local cache outside TLS during collection, then restore
-    // its stale coverage metadata without moving the Context across threads.
-    let mut ctx = Context::new();
-    // Build the cache fixture without safe-point collections of Rust locals.
-    ctx.gc_inhibit_depth += 1;
-    let identity = ctx.tagged_heap.identity();
-    let (table, payload) = populate_cache(&mut ctx, owner);
-    ctx.gc_inhibit_depth -= 1;
-    let stale = UncoveredRegexCaches::take();
-    ctx.gc_collect_exact();
-    stale.restore();
-    assert_eq!(ctx.tagged_heap.identity(), identity);
-    // Box ownership checks inspect the allocation registry, never the freed
-    // char-table/hash-table memory. Exact collection must have swept both.
-    assert!(!ctx.tagged_heap.owns_heap_value_for_test(table));
-    assert!(!ctx.tagged_heap.owns_heap_value_for_test(payload));
-    match synchronize_at {
-        SynchronizeAt::Activation => ctx.setup_thread_locals(),
-        SynchronizeAt::RootEnumeration => {
-            // Install the relocated heap pointer without activating regexp
-            // caches: root enumeration must independently reject an old epoch.
-            neovm_value::tagged::gc::set_tagged_heap(&mut ctx.tagged_heap);
-        }
-    }
-    // Compare tagged words before GC can dereference a stale root. On the
-    // unfixed source this assertion detects the reclaimed syntax/case table.
-    let mut roots = Vec::new();
-    collect_regex_gc_roots(
-        &mut roots,
-        ctx.tagged_heap.identity(),
-        ctx.tagged_heap.gc_collections(),
-        neovm_value::tagged::gc::CacheRootScan::Collection,
-    );
-    assert!(
-        roots.iter().all(|root| root.bits() != table.bits()),
-        "regexp cache rooted a table swept by this Context on another thread"
-    );
-    ctx.setup_thread_locals();
-    ctx.gc_collect_exact();
-    assert_eq!(ctx.eval_str("(+ 20 22)").unwrap().as_fixnum(), Some(42));
-}
 
 #[test]
 fn gc_collection_epoch_regex_activation_discards_swept_search_syntax() {
@@ -280,6 +63,145 @@ fn gc_collection_epoch_regex_enumeration_discards_swept_literal_translation() {
         CacheOwner::LiteralTranslation,
         SynchronizeAt::RootEnumeration,
     );
+}
+
+#[test]
+fn gc_collection_epoch_regex_same_thread_exact_keeps_warm_entries() {
+    let mut ctx = Context::new();
+    ctx.gc_collect_exact();
+    ctx.setup_thread_locals();
+    let warm = WarmRegexCaches::new(&mut ctx);
+    let completed = ctx.tagged_heap.gc_collections();
+    for _ in 0..3 {
+        ctx.gc_collect_exact();
+        ctx.setup_thread_locals();
+        warm.assert_present_and_hit(&ctx);
+    }
+    assert_eq!(ctx.tagged_heap.gc_collections(), completed + 3);
+}
+
+#[test]
+fn gc_collection_epoch_regex_same_thread_concurrent_keeps_warm_entries() {
+    let mut ctx = non_generational_context();
+    ctx.gc_collect_exact();
+    ctx.setup_thread_locals();
+    let warm = WarmRegexCaches::new(&mut ctx);
+    let completed = ctx.tagged_heap.gc_collections();
+    for _ in 0..3 {
+        start_public_concurrent_cycle(&mut ctx);
+        ctx.setup_thread_locals();
+        warm.assert_present_and_hit(&ctx);
+        drive_public_cycle_until_sweeping(&mut ctx);
+        ctx.setup_thread_locals();
+        warm.assert_present_and_hit(&ctx);
+        for _ in 0..20_000 {
+            if !ctx.tagged_heap.sweep_in_progress() {
+                break;
+            }
+            ctx.gc_safe_point();
+        }
+        assert!(!ctx.tagged_heap.sweep_in_progress());
+        ctx.setup_thread_locals();
+        warm.assert_present_and_hit(&ctx);
+    }
+    assert_eq!(ctx.tagged_heap.gc_collections(), completed + 3);
+}
+
+#[test]
+fn gc_collection_epoch_regex_exact_after_older_sweep_keeps_warm_entries() {
+    let mut ctx = non_generational_context();
+    ctx.gc_collect_exact();
+    ctx.setup_thread_locals();
+    let warm = WarmRegexCaches::new(&mut ctx);
+    let completed = ctx.tagged_heap.gc_collections();
+    start_public_concurrent_cycle(&mut ctx);
+    drive_public_cycle_until_sweeping(&mut ctx);
+    // Exact GC drains the older sweep before enumerating a new collection's
+    // roots. The root seam must use the newly completed count for that seed.
+    ctx.gc_collect_exact();
+    assert_eq!(ctx.tagged_heap.gc_collections(), completed + 2);
+    ctx.setup_thread_locals();
+    warm.assert_present_and_hit(&ctx);
+}
+
+#[test]
+fn gc_collection_epoch_regex_foreign_mark_activation_clears_uncovered_entries() {
+    assert_foreign_in_progress_activation_clears(ForeignCollectionPhase::Marking);
+}
+
+#[test]
+fn gc_collection_epoch_regex_foreign_sweep_activation_clears_uncovered_entries() {
+    assert_foreign_in_progress_activation_clears(ForeignCollectionPhase::Sweeping);
+}
+
+#[derive(Clone, Copy)]
+enum CacheOwner {
+    SearchSyntax,
+    LispSyntax,
+    LispTranslation,
+    LiteralTranslation,
+}
+
+#[derive(Clone, Copy)]
+enum SynchronizeAt {
+    Activation,
+    RootEnumeration,
+}
+
+fn non_generational_context() -> Context {
+    // Constructor-read selection, isolated per test by nextest. These tests
+    // specifically require concurrent marking rather than a deferred minor.
+    // SAFETY: nextest isolates this test process; configuration precedes
+    // Context construction and every runtime worker or environment reader.
+    unsafe { std::env::set_var("NEOVM_GC_GENERATIONAL", "0") };
+    let mut ctx = Context::new();
+    ctx.gc_stress = false;
+    assert!(!ctx.tagged_heap.generational_enabled());
+    assert!(!ctx.gc_stress);
+    ctx
+}
+
+fn assert_uncovered_cache_discards_swept_roots(owner: CacheOwner, synchronize_at: SynchronizeAt) {
+    // Keep the owner-local cache outside TLS during collection, then restore
+    // its stale coverage metadata without moving the Context across threads.
+    let mut ctx = Context::new();
+    // Build the cache fixture without safe-point collections of Rust locals.
+    ctx.gc_inhibit_depth += 1;
+    let identity = ctx.tagged_heap.identity();
+    let (table, payload) = populate_cache(&mut ctx, owner);
+    ctx.gc_inhibit_depth -= 1;
+    let stale = UncoveredRegexCaches::take();
+    ctx.gc_collect_exact();
+    stale.restore();
+    assert_eq!(ctx.tagged_heap.identity(), identity);
+    // Box ownership checks inspect the allocation registry, never the freed
+    // char-table/hash-table memory. Exact collection must have swept both.
+    assert!(!ctx.tagged_heap.owns_heap_value_for_test(table));
+    assert!(!ctx.tagged_heap.owns_heap_value_for_test(payload));
+    match synchronize_at {
+        SynchronizeAt::Activation => ctx.setup_thread_locals(),
+        SynchronizeAt::RootEnumeration => {
+            // Install the relocated heap pointer without activating regexp
+            // caches: root enumeration must independently reject an old epoch.
+            neovm_value::tagged::gc::set_tagged_heap(&mut ctx.tagged_heap);
+        }
+    }
+    // Compare tagged words before GC can dereference a stale root. On the
+    // unfixed source this assertion detects the reclaimed syntax/case table.
+    let mut roots = Vec::new();
+    collect_regex_gc_roots(
+        &mut roots,
+        ctx.tagged_heap.identity(),
+        ctx.tagged_heap.gc_collections(),
+        neovm_value::tagged::gc::CacheRootScan::Collection,
+    );
+    assert!(
+        roots.iter().all(|root| root.bits() != table.bits()),
+        "regexp cache rooted a table swept by this Context on another thread"
+    );
+    ctx.setup_thread_locals();
+    ctx.gc_collect_exact();
+    assert_eq!(ctx.eval_str("(+ 20 22)").unwrap().as_fixnum(), Some(42));
 }
 
 pub(super) struct WarmRegexCaches {
@@ -519,65 +441,6 @@ fn drive_public_cycle_until_sweeping(ctx: &mut Context) {
     panic!("public safe points did not start the deferred sweep");
 }
 
-#[test]
-fn gc_collection_epoch_regex_same_thread_exact_keeps_warm_entries() {
-    let mut ctx = Context::new();
-    ctx.gc_collect_exact();
-    ctx.setup_thread_locals();
-    let warm = WarmRegexCaches::new(&mut ctx);
-    let completed = ctx.tagged_heap.gc_collections();
-    for _ in 0..3 {
-        ctx.gc_collect_exact();
-        ctx.setup_thread_locals();
-        warm.assert_present_and_hit(&ctx);
-    }
-    assert_eq!(ctx.tagged_heap.gc_collections(), completed + 3);
-}
-
-#[test]
-fn gc_collection_epoch_regex_same_thread_concurrent_keeps_warm_entries() {
-    let mut ctx = non_generational_context();
-    ctx.gc_collect_exact();
-    ctx.setup_thread_locals();
-    let warm = WarmRegexCaches::new(&mut ctx);
-    let completed = ctx.tagged_heap.gc_collections();
-    for _ in 0..3 {
-        start_public_concurrent_cycle(&mut ctx);
-        ctx.setup_thread_locals();
-        warm.assert_present_and_hit(&ctx);
-        drive_public_cycle_until_sweeping(&mut ctx);
-        ctx.setup_thread_locals();
-        warm.assert_present_and_hit(&ctx);
-        for _ in 0..20_000 {
-            if !ctx.tagged_heap.sweep_in_progress() {
-                break;
-            }
-            ctx.gc_safe_point();
-        }
-        assert!(!ctx.tagged_heap.sweep_in_progress());
-        ctx.setup_thread_locals();
-        warm.assert_present_and_hit(&ctx);
-    }
-    assert_eq!(ctx.tagged_heap.gc_collections(), completed + 3);
-}
-
-#[test]
-fn gc_collection_epoch_regex_exact_after_older_sweep_keeps_warm_entries() {
-    let mut ctx = non_generational_context();
-    ctx.gc_collect_exact();
-    ctx.setup_thread_locals();
-    let warm = WarmRegexCaches::new(&mut ctx);
-    let completed = ctx.tagged_heap.gc_collections();
-    start_public_concurrent_cycle(&mut ctx);
-    drive_public_cycle_until_sweeping(&mut ctx);
-    // Exact GC drains the older sweep before enumerating a new collection's
-    // roots. The root seam must use the newly completed count for that seed.
-    ctx.gc_collect_exact();
-    assert_eq!(ctx.tagged_heap.gc_collections(), completed + 2);
-    ctx.setup_thread_locals();
-    warm.assert_present_and_hit(&ctx);
-}
-
 #[derive(Clone, Copy)]
 enum ForeignCollectionPhase {
     Marking,
@@ -605,12 +468,149 @@ fn assert_foreign_in_progress_activation_clears(phase: ForeignCollectionPhase) {
     ctx.gc_collect_exact();
 }
 
-#[test]
-fn gc_collection_epoch_regex_foreign_mark_activation_clears_uncovered_entries() {
-    assert_foreign_in_progress_activation_clears(ForeignCollectionPhase::Marking);
+/// Saved owner-local caches absent from the collection's root publication.
+/// Restoring their old coverage metadata preserves stale-cache regression
+/// conditions while Context stays on the thread that constructs it.
+#[must_use]
+pub(super) struct UncoveredRegexCaches {
+    _search: neovm_value::tls_scope::TlsScope<
+        Vec<SearchPatternCacheEntry>,
+        RefCell<Vec<SearchPatternCacheEntry>>,
+    >,
+    #[allow(clippy::vec_box)] // same address-stable MRU representation as TLS
+    _lisp: neovm_value::tls_scope::TlsScope<
+        Vec<Box<LispRegexPatternCacheEntry>>,
+        RefCell<Vec<Box<LispRegexPatternCacheEntry>>>,
+    >,
+    _literal: neovm_value::tls_scope::TlsScope<
+        Option<(usize, Rc<CaseTranslation>)>,
+        RefCell<Option<(usize, Rc<CaseTranslation>)>>,
+    >,
+    _heap: neovm_value::tls_scope::TlsScope<usize, Cell<usize>>,
+    _collection_epoch: neovm_value::tls_scope::TlsScope<Option<usize>, Cell<Option<usize>>>,
 }
 
-#[test]
-fn gc_collection_epoch_regex_foreign_sweep_activation_clears_uncovered_entries() {
-    assert_foreign_in_progress_activation_clears(ForeignCollectionPhase::Sweeping);
+impl UncoveredRegexCaches {
+    pub(super) fn take() -> Self {
+        use neovm_value::tls_scope::TlsScope;
+        Self {
+            _search: TlsScope::new(&SEARCH_PATTERN_CACHE, Vec::new()),
+            _lisp: TlsScope::new(&LISP_REGEX_PATTERN_CACHE, Vec::new()),
+            _literal: TlsScope::new(&LITERAL_TRT_CACHE, None),
+            _heap: TlsScope::restore(&REGEX_CACHE_HEAP, REGEX_CACHE_HEAP.with(Cell::get)),
+            _collection_epoch: TlsScope::restore(
+                &REGEX_CACHE_COLLECTION_EPOCH,
+                REGEX_CACHE_COLLECTION_EPOCH.with(Cell::get),
+            ),
+        }
+    }
+
+    pub(super) fn restore(self) {
+        drop(self);
+    }
+}
+
+fn populate_cache(ctx: &mut Context, owner: CacheOwner) -> (Value, Value) {
+    let payload = ctx.eval_str("(make-hash-table)").unwrap();
+    let table = match owner {
+        CacheOwner::SearchSyntax | CacheOwner::LispSyntax => {
+            let table = ctx
+                .eval_str("(progn (set-syntax-table (copy-syntax-table)) (syntax-table))")
+                .unwrap();
+            let syntax = BufferSyntaxLookup {
+                syntax_table: neovm_text::emacs_core::syntax::SyntaxTable::for_buffer(
+                    ctx.edit.buffers.current_buffer().unwrap(),
+                ),
+                category_table: None,
+                word_boundary: Default::default(),
+            };
+            let pattern = LispString::from_utf8("[[:word:]]");
+            match owner {
+                CacheOwner::SearchSyntax => {
+                    let compiled =
+                        compile_search_pattern_with_posix(&pattern, false, false, &syntax).unwrap();
+                    assert!(matches!(
+                        compiled,
+                        CompiledSearchPattern::Emacs(ref compiled) if compiled.used_syntax
+                    ));
+                }
+                CacheOwner::LispSyntax => {
+                    assert!(
+                        compile_lisp_pattern_with_posix_translation(
+                            &pattern, false, false, true, None, &syntax,
+                        )
+                        .unwrap()
+                        .used_syntax
+                    );
+                }
+                _ => unreachable!(),
+            }
+            ctx.eval_str("(set-syntax-table (standard-syntax-table))")
+                .unwrap();
+            table
+        }
+        CacheOwner::LispTranslation => {
+            let table =
+                neovm_text::emacs_core::chartable::make_char_table_value(Value::NIL, Value::NIL);
+            compile_lisp_pattern_with_posix_translation(
+                &LispString::from_utf8("gc-collection-epoch-translation"),
+                true,
+                false,
+                true,
+                Some(table),
+                &DefaultSyntaxLookup,
+            )
+            .unwrap();
+            table
+        }
+        CacheOwner::LiteralTranslation => {
+            let custom = Value::make_char_table(Value::symbol("case-table"), Value::NIL, 3);
+            neovm_text::emacs_core::chartable::builtin_set_char_table_range(
+                vec![
+                    custom,
+                    Value::fixnum(b'[' as i64),
+                    Value::fixnum(b']' as i64),
+                ],
+                None,
+            )
+            .unwrap();
+            neovm_text::emacs_core::casetab::builtin_set_case_table(ctx, vec![custom]).unwrap();
+            let buffer = ctx.edit.buffers.current_buffer().unwrap();
+            let table = neovm_text::emacs_core::casetab::buffer_case_canon_table(buffer).unwrap();
+            assert_eq!(
+                buffer_search_translation(buffer, true)
+                    .unwrap()
+                    .translate(b'[' as u32),
+                b']' as u32
+            );
+            ctx.eval_str("(set-case-table (standard-case-table))")
+                .unwrap();
+            table
+        }
+    };
+    neovm_text::emacs_core::chartable::builtin_set_char_table_range(
+        vec![table, Value::fixnum(0x1ffff), payload],
+        None,
+    )
+    .unwrap();
+    assert!(
+        regex_roots(ctx)
+            .iter()
+            .any(|root| root.bits() == table.bits())
+    );
+    (table, payload)
+}
+
+fn regex_roots(ctx: &Context) -> Vec<Value> {
+    let mut roots = Vec::new();
+    collect_regex_gc_roots(
+        &mut roots,
+        ctx.tagged_heap.identity(),
+        ctx.tagged_heap.gc_collections(),
+        neovm_value::tagged::gc::CacheRootScan::Snapshot {
+            collection_in_progress: ctx.tagged_heap.mark_in_progress()
+                || ctx.tagged_heap.sweep_in_progress(),
+        },
+    );
+    roots
 }

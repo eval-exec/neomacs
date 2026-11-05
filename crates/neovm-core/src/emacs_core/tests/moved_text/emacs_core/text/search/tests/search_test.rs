@@ -2,45 +2,26 @@ use crate::emacs_core::builtins::search::{
     builtin_looking_at, builtin_match_data, builtin_match_data_translate, builtin_match_string,
     builtin_re_search_forward, builtin_replace_match, builtin_set_match_data, builtin_string_match,
 };
+
 use crate::emacs_core::eval::Context;
+
 use neovm_edit::buffer::LispCharPos1;
+
 use neovm_edit::emacs_core::marker;
+
 use neovm_text::emacs_core::search::*;
+
 use neovm_value::error::FlowResultExt as _;
+
 use neovm_value::error::{EvalResult, LispCondition, signal};
+
 use neovm_value::heap_types::LispString;
+
 use neovm_value::value::Value;
+
 use neovm_value::value::{ValueKind, list_to_vec};
 
-// Test helpers that keep the Context alive across the returned
-// Value. Previously these created a bare Context inside a block
-// and returned the result; the Context was dropped at end of
-// block, destroying the tagged heap and leaving the returned
-// Value pointing at freed memory. A thread_local Box<Context>
-// holds it alive until the next call replaces it.
 use std::cell::RefCell;
-thread_local! {
-    static SEARCH_TEST_CTX: RefCell<Option<Box<crate::emacs_core::eval::Context>>> =
-        const { RefCell::new(None) };
-}
-
-fn call_string_match(args: Vec<Value>) -> EvalResult {
-    SEARCH_TEST_CTX.with(|slot| {
-        let mut new_ctx = Box::new(Context::new());
-        let result = builtin_string_match(&mut new_ctx, args);
-        *slot.borrow_mut() = Some(new_ctx);
-        result
-    })
-}
-
-fn call_replace_regexp_in_string(args: Vec<Value>) -> EvalResult {
-    SEARCH_TEST_CTX.with(|slot| {
-        let mut new_ctx = Box::new(Context::new());
-        let result = builtin_replace_regexp_in_string(&mut new_ctx, args);
-        *slot.borrow_mut() = Some(new_ctx);
-        result
-    })
-}
 
 #[test]
 fn buffer_replace_match_backref_does_not_copy_source_properties() {
@@ -295,62 +276,6 @@ fn replace_match_after_change_reports_multibyte_char_positions() {
     assert_int(hook[1], 3);
     assert_int(hook[2], 1);
     assert_str(items[1], "ééb");
-}
-
-fn call_looking_at_in_buffer(pattern: Value, buffer_text: &str) -> EvalResult {
-    SEARCH_TEST_CTX.with(|slot| {
-        let mut new_ctx = Box::new(Context::new());
-        {
-            let buf = new_ctx
-                .edit
-                .buffers
-                .current_buffer_mut()
-                .expect("current buffer");
-            buf.insert(buffer_text);
-            buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(0));
-        }
-        let result = builtin_looking_at(&mut new_ctx, vec![pattern]);
-        *slot.borrow_mut() = Some(new_ctx);
-        result
-    })
-}
-
-fn assert_int(val: Value, expected: i64) {
-    match val.kind() {
-        ValueKind::Fixnum(n) => assert_eq!(n, expected),
-        _other => panic!("Expected Int({}), got {:?}", expected, val),
-    }
-}
-
-fn assert_nil(val: Value) {
-    assert!(val.is_nil(), "Expected nil, got {:?}", val);
-}
-
-fn assert_true(val: Value) {
-    assert!(val.is_truthy(), "Expected true, got {:?}", val);
-}
-
-fn assert_str(val: Value, expected: &str) {
-    match val.kind() {
-        ValueKind::String => {
-            let s = val.as_utf8_str().unwrap().to_owned();
-            assert_eq!(&*s, expected);
-        }
-        _other => panic!("Expected string {:?}, got {:?}", expected, val),
-    }
-}
-
-fn assert_lisp_string_bytes(val: Value, expected: &[u8], multibyte: bool) {
-    match val.kind() {
-        ValueKind::String => {
-            let s = val
-                .as_lisp_string()
-                .expect("ValueKind::String must carry LispString payload");
-            assert_eq!(s.as_bytes(), expected);
-            assert_eq!(s.is_multibyte(), multibyte);
-        }
-        _other => panic!("Expected string bytes {:?}, got {:?}", expected, val),
-    }
 }
 
 #[test]
@@ -1076,13 +1001,6 @@ fn replace_regexp_function_can_return_raw_unibyte_string() {
     assert_lisp_string_bytes(result, &[0xFE, 0xFF, b'b'], false);
 }
 
-fn bootstrap_eval_one(src: &str) -> String {
-    crate::test_utils::runtime_startup_eval_all(src)
-        .into_iter()
-        .next()
-        .expect("at least one form")
-}
-
 /// GNU's `Freplace_match' (search.c:2396) chooses between buffer and string
 /// from its STRING argument alone and never consults `last_thing_searched'.
 /// So a match installed by `set-match-data' from plain integers still replaces
@@ -1211,19 +1129,85 @@ fn replace_match_expands_an_ampersand_as_the_subexp_like_gnu() {
     );
 }
 
-/// Route symbol-value reads through the full GNU lookup path so
-/// LOCALIZED BLV / FORWARDED slot / specpdl let-binding state is
-/// observed. Mirrors `find_symbol_value` at GNU `src/data.c:1584-1609`.
-/// See the extended comment on the identical helper in
-/// `builtins/misc_eval.rs` (audit finding #3 in
-/// `drafts/regex-search-audit.md`).
-#[cfg(test)] // sole caller is the test-only entry below
-fn dynamic_or_global_symbol_value(
-    eval: &crate::emacs_core::eval::Context,
-    name: &str,
-) -> Option<Value> {
-    let id = neovm_value::intern::intern(name);
-    eval.eval_symbol_by_id(id).ok()
+fn call_string_match(args: Vec<Value>) -> EvalResult {
+    SEARCH_TEST_CTX.with(|slot| {
+        let mut new_ctx = Box::new(Context::new());
+        let result = builtin_string_match(&mut new_ctx, args);
+        *slot.borrow_mut() = Some(new_ctx);
+        result
+    })
+}
+
+fn call_replace_regexp_in_string(args: Vec<Value>) -> EvalResult {
+    SEARCH_TEST_CTX.with(|slot| {
+        let mut new_ctx = Box::new(Context::new());
+        let result = builtin_replace_regexp_in_string(&mut new_ctx, args);
+        *slot.borrow_mut() = Some(new_ctx);
+        result
+    })
+}
+
+fn call_looking_at_in_buffer(pattern: Value, buffer_text: &str) -> EvalResult {
+    SEARCH_TEST_CTX.with(|slot| {
+        let mut new_ctx = Box::new(Context::new());
+        {
+            let buf = new_ctx
+                .edit
+                .buffers
+                .current_buffer_mut()
+                .expect("current buffer");
+            buf.insert(buffer_text);
+            buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(0));
+        }
+        let result = builtin_looking_at(&mut new_ctx, vec![pattern]);
+        *slot.borrow_mut() = Some(new_ctx);
+        result
+    })
+}
+
+fn assert_int(val: Value, expected: i64) {
+    match val.kind() {
+        ValueKind::Fixnum(n) => assert_eq!(n, expected),
+        _other => panic!("Expected Int({}), got {:?}", expected, val),
+    }
+}
+
+fn assert_nil(val: Value) {
+    assert!(val.is_nil(), "Expected nil, got {:?}", val);
+}
+
+fn assert_true(val: Value) {
+    assert!(val.is_truthy(), "Expected true, got {:?}", val);
+}
+
+fn assert_str(val: Value, expected: &str) {
+    match val.kind() {
+        ValueKind::String => {
+            let s = val.as_utf8_str().unwrap().to_owned();
+            assert_eq!(&*s, expected);
+        }
+        _other => panic!("Expected string {:?}, got {:?}", expected, val),
+    }
+}
+
+fn assert_lisp_string_bytes(val: Value, expected: &[u8], multibyte: bool) {
+    match val.kind() {
+        ValueKind::String => {
+            let s = val
+                .as_lisp_string()
+                .expect("ValueKind::String must carry LispString payload");
+            assert_eq!(s.as_bytes(), expected);
+            assert_eq!(s.is_multibyte(), multibyte);
+        }
+        _other => panic!("Expected string bytes {:?}, got {:?}", expected, val),
+    }
+}
+
+fn bootstrap_eval_one(src: &str) -> String {
+    crate::test_utils::runtime_startup_eval_all(src)
+        .into_iter()
+        .next()
+        .expect("at least one form")
 }
 
 /// Test-only: see [`replace_regexp_in_string_lisp`].
@@ -1239,18 +1223,18 @@ pub(crate) fn builtin_replace_regexp_in_string(
 
     let fixedcase = args.get(3).is_some_and(|v| v.is_truthy());
     let literal = args.get(4).is_some_and(|v| v.is_truthy());
-    let (_parsed_start, subexp) = neovm_text::test_support::parse_replace_regexp_subexp_start(
+    let (_parsed_start, subexp) = neovm_text::emacs_core::search::parse_replace_regexp_subexp_start(
         &args,
-        neovm_text::test_support::expect_lisp_string(&args[2])?,
+        neovm_text::emacs_core::search::expect_lisp_string(&args[2])?,
     )?;
 
     if args[1].is_string() {
-        let replacement = neovm_text::test_support::expect_lisp_string(&args[1])?.clone();
-        return neovm_text::test_support::replace_regexp_in_string_lisp(
+        let replacement = neovm_text::emacs_core::search::expect_lisp_string(&args[1])?.clone();
+        return neovm_text::emacs_core::search::replace_regexp_in_string_lisp(
             &args,
             case_fold,
             |match_span, translated_md| {
-                neovm_text::test_support::replace_match_on_substring(
+                neovm_text::emacs_core::search::replace_match_on_substring(
                     match_span,
                     &replacement,
                     fixedcase,
@@ -1276,7 +1260,7 @@ pub(crate) fn builtin_replace_regexp_in_string(
         eval.push_specpdl_root(*searched);
     }
 
-    let result = neovm_text::test_support::replace_regexp_in_string_lisp(
+    let result = neovm_text::emacs_core::search::replace_regexp_in_string_lisp(
         &args,
         case_fold,
         |match_span, translated_md| {
@@ -1310,7 +1294,7 @@ pub(crate) fn builtin_replace_regexp_in_string(
                     vec![Value::symbol("stringp"), func_result],
                 )
             })?;
-            neovm_text::test_support::replace_match_on_substring(
+            neovm_text::emacs_core::search::replace_match_on_substring(
                 match_span,
                 replacement,
                 fixedcase,
@@ -1324,4 +1308,24 @@ pub(crate) fn builtin_replace_regexp_in_string(
     eval.match_data = saved_match_data;
     eval.restore_specpdl_roots(gc_roots);
     result
+}
+
+thread_local! {
+    static SEARCH_TEST_CTX: RefCell<Option<Box<crate::emacs_core::eval::Context>>> =
+        const { RefCell::new(None) };
+}
+
+/// Route symbol-value reads through the full GNU lookup path so
+/// LOCALIZED BLV / FORWARDED slot / specpdl let-binding state is
+/// observed. Mirrors `find_symbol_value` at GNU `src/data.c:1584-1609`.
+/// See the extended comment on the identical helper in
+/// `builtins/misc_eval.rs` (audit finding #3 in
+/// `drafts/regex-search-audit.md`).
+#[cfg(test)] // sole caller is the test-only entry below
+fn dynamic_or_global_symbol_value(
+    eval: &crate::emacs_core::eval::Context,
+    name: &str,
+) -> Option<Value> {
+    let id = neovm_value::intern::intern(name);
+    eval.eval_symbol_by_id(id).ok()
 }

@@ -588,3 +588,7 @@ pub fn truncate_undo_list(undo_list: Value, limits: &UndoLimits) -> Value {
 // ===========================================================================
 // Tests
 // ===========================================================================
+
+#[cfg(test)]
+#[path = "undo/tests/undo_test.rs"]
+mod tests;

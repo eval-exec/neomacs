@@ -15,7 +15,7 @@ fn gde_review_multibyte_numeric_begin_order() {
 (overlays-in (point-min) (point-max))) out))
 (nreverse out)))"#,
     );
-    let actual = neovm_edit::emacs_core::format_eval_result_with_eval(&eval, &result);
+    let actual = crate::emacs_core::format_eval_result_with_eval(&eval, &result);
     // This expectation was generated directly from GNU Emacs 31.1.
     assert_eq!(
         actual,
@@ -43,7 +43,7 @@ fn gde_review_multibyte_after_contracted_starts() {
 (mapcar (lambda (o) (overlay-get o 'tag)) (overlays-at 5))) out)
 (nreverse out)))"#,
     );
-    let actual = neovm_edit::emacs_core::format_eval_result_with_eval(&eval, &result);
+    let actual = crate::emacs_core::format_eval_result_with_eval(&eval, &result);
     // This expectation was generated directly from GNU Emacs 31.1.
     assert_eq!(
         actual,

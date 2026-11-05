@@ -6013,6 +6013,7 @@ pub(crate) fn builtin_unibyte_string_p(args: Vec<Value>) -> EvalResult {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(encode-coding-string STRING CODING-SYSTEM)` -> string, with end-of-line
 /// conversion ENABLED.
 ///
@@ -6031,6 +6032,7 @@ pub(crate) fn builtin_encode_coding_string(args: Vec<Value>) -> EvalResult {
     )
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_encode_coding_string_with_known(
     args: Vec<Value>,
     known: impl FnOnce(&str) -> bool,
@@ -6081,6 +6083,7 @@ pub(crate) fn builtin_encode_coding_string_with_known(
     ))
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(decode-coding-string STRING CODING-SYSTEM)` -> string, with end-of-line
 /// conversion ENABLED.  Test-only; see
 /// [`builtin_encode_coding_string`] for why it is `#[cfg(test)]`.
@@ -6094,6 +6097,7 @@ pub(crate) fn builtin_decode_coding_string(args: Vec<Value>) -> EvalResult {
     )
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_decode_coding_string_with_known(
     args: Vec<Value>,
     known: impl FnOnce(&str) -> bool,
@@ -6299,3 +6303,7 @@ impl<'a> RuntimeCodingMetadata<'a> {
         self.eol_type
     }
 }
+
+#[cfg(test)]
+#[path = "encoding/tests/encoding_test.rs"]
+mod tests;

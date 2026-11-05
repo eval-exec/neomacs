@@ -5,84 +5,6 @@
 
 use neovm_text::emacs_core::syntax::*;
 
-struct Rng(u64);
-impl Rng {
-    fn next(&mut self) -> u64 {
-        self.0 ^= self.0 << 13;
-        self.0 ^= self.0 >> 7;
-        self.0 ^= self.0 << 17;
-        self.0
-    }
-    fn below(&mut self, n: usize) -> usize {
-        (self.next() % n as u64) as usize
-    }
-}
-
-const PIECES: &[&str] = &["a", "/", "*", " ", "\n", "é", "λ", "\\", "\"", "xy"];
-
-fn eval_ok(eval: &mut crate::emacs_core::eval::Context, src: &str) -> Value {
-    eval.eval_str(src)
-        .unwrap_or_else(|e| panic!("{src}: {e:?}"))
-}
-
-/// Random text, then random writes: `syntax-table` and `category` puts
-/// (overlapping each other), `face` puts that split intervals, removals,
-/// whole-plist sets, and text inserts and deletes that shift everything.
-/// After every write the table's cached syntax ranges must still cover
-/// every interval carrying a syntax-relevant key.
-fn random_buffer(eval: &mut crate::emacs_core::eval::Context, rng: &mut Rng, multibyte: bool) {
-    let mut text = String::new();
-    for _ in 0..(20 + rng.below(80)) {
-        text.push_str(PIECES[rng.below(PIECES.len())]);
-    }
-    let quoted = crate::emacs_core::print::print_value(&Value::string(&text));
-    eval_ok(
-        eval,
-        &format!(
-            "(progn (put 'spbr-cat-a 'syntax-table '(2)) (put 'spbr-cat-b 'syntax-table '(3))
-                    (set-buffer-multibyte t) (widen) (erase-buffer) (insert {quoted}))"
-        ),
-    );
-    for _ in 0..rng.below(16) {
-        let len = eval_ok(eval, "(point-max)").as_fixnum().expect("point-max") as usize;
-        let a = 1 + rng.below(len);
-        let b = 1 + rng.below(len);
-        let (from, to) = (a.min(b), a.max(b));
-        let form = match rng.below(9) {
-            0 => format!("(put-text-property {from} {to} 'syntax-table '(1))"),
-            1 => format!("(put-text-property {from} {to} 'syntax-table '(0))"),
-            2 => format!("(put-text-property {from} {to} 'face 'bold)"),
-            3 => format!("(remove-text-properties {from} {to} '(syntax-table nil))"),
-            4 => format!("(put-text-property {from} {to} 'category 'spbr-cat-a)"),
-            5 => format!("(put-text-property {from} {to} 'category 'spbr-cat-b)"),
-            6 => format!("(set-text-properties {from} {to} '(face italic))"),
-            7 => format!("(progn (goto-char {from}) (insert \"ab\"))"),
-            _ => format!("(delete-region {from} {to})"),
-        };
-        eval_ok(eval, &form);
-        // Exercise the lazy caches between writes, as scans do.
-        let buf = eval.edit.buffers.current_buffer().expect("buffer");
-        let _ = buf.syntax_prop_free_run_end_at_char_pos(
-            CharPos0::new(rng.below(len)),
-            CharPos0::new(len + 4096),
-        );
-        if let Err(e) = buf.debug_syntax_caches_consistent() {
-            panic!("after {form}: {e}");
-        }
-    }
-    if !multibyte {
-        eval_ok(eval, "(set-buffer-multibyte nil)");
-    }
-}
-
-/// Byte positions of every character start in the accessible region.
-fn char_starts(buf: &Buffer) -> Vec<EmacsBytePos> {
-    let region = buf.accessible_char_region();
-    (region.start().get()..region.end().get())
-        .map(|c| buf.char_pos_to_emacs_byte_pos_clamped(CharPos0::new(c)))
-        .collect()
-}
-
 #[test]
 fn the_byte_run_cache_answers_like_a_fresh_lookup_in_any_order() {
     let mut eval = Context::new();
@@ -261,3 +183,82 @@ fn a_syntax_table_removal_inside_a_put_splits_the_run() {
         "(3 10)"
     );
 }
+
+struct Rng(u64);
+
+impl Rng {
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        self.0
+    }
+    fn below(&mut self, n: usize) -> usize {
+        (self.next() % n as u64) as usize
+    }
+}
+
+fn eval_ok(eval: &mut crate::emacs_core::eval::Context, src: &str) -> Value {
+    eval.eval_str(src)
+        .unwrap_or_else(|e| panic!("{src}: {e:?}"))
+}
+
+/// Random text, then random writes: `syntax-table` and `category` puts
+/// (overlapping each other), `face` puts that split intervals, removals,
+/// whole-plist sets, and text inserts and deletes that shift everything.
+/// After every write the table's cached syntax ranges must still cover
+/// every interval carrying a syntax-relevant key.
+fn random_buffer(eval: &mut crate::emacs_core::eval::Context, rng: &mut Rng, multibyte: bool) {
+    let mut text = String::new();
+    for _ in 0..(20 + rng.below(80)) {
+        text.push_str(PIECES[rng.below(PIECES.len())]);
+    }
+    let quoted = crate::emacs_core::print::print_value(&Value::string(&text));
+    eval_ok(
+        eval,
+        &format!(
+            "(progn (put 'spbr-cat-a 'syntax-table '(2)) (put 'spbr-cat-b 'syntax-table '(3))
+                    (set-buffer-multibyte t) (widen) (erase-buffer) (insert {quoted}))"
+        ),
+    );
+    for _ in 0..rng.below(16) {
+        let len = eval_ok(eval, "(point-max)").as_fixnum().expect("point-max") as usize;
+        let a = 1 + rng.below(len);
+        let b = 1 + rng.below(len);
+        let (from, to) = (a.min(b), a.max(b));
+        let form = match rng.below(9) {
+            0 => format!("(put-text-property {from} {to} 'syntax-table '(1))"),
+            1 => format!("(put-text-property {from} {to} 'syntax-table '(0))"),
+            2 => format!("(put-text-property {from} {to} 'face 'bold)"),
+            3 => format!("(remove-text-properties {from} {to} '(syntax-table nil))"),
+            4 => format!("(put-text-property {from} {to} 'category 'spbr-cat-a)"),
+            5 => format!("(put-text-property {from} {to} 'category 'spbr-cat-b)"),
+            6 => format!("(set-text-properties {from} {to} '(face italic))"),
+            7 => format!("(progn (goto-char {from}) (insert \"ab\"))"),
+            _ => format!("(delete-region {from} {to})"),
+        };
+        eval_ok(eval, &form);
+        // Exercise the lazy caches between writes, as scans do.
+        let buf = eval.edit.buffers.current_buffer().expect("buffer");
+        let _ = buf.syntax_prop_free_run_end_at_char_pos(
+            CharPos0::new(rng.below(len)),
+            CharPos0::new(len + 4096),
+        );
+        if let Err(e) = buf.debug_syntax_caches_consistent() {
+            panic!("after {form}: {e}");
+        }
+    }
+    if !multibyte {
+        eval_ok(eval, "(set-buffer-multibyte nil)");
+    }
+}
+
+/// Byte positions of every character start in the accessible region.
+fn char_starts(buf: &Buffer) -> Vec<EmacsBytePos> {
+    let region = buf.accessible_char_region();
+    (region.start().get()..region.end().get())
+        .map(|c| buf.char_pos_to_emacs_byte_pos_clamped(CharPos0::new(c)))
+        .collect()
+}
+
+const PIECES: &[&str] = &["a", "/", "*", " ", "\n", "é", "λ", "\\", "\"", "xy"];

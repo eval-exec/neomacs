@@ -903,6 +903,7 @@ fn deactivate_mark_set_is_noop<H: crate::emacs_core::edit_host::EditHost>(
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// GNU `signal_after_change(beg, end, old_len)` — run `after-change-functions`
 /// and overlay hooks after a buffer modification.
 ///
@@ -1265,6 +1266,7 @@ fn finish_treesit_after_buffer_change<H: crate::emacs_core::edit_host::EditHost>
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, IntoStaticStr)]
 #[strum(serialize_all = "kebab-case")]
 enum BeforeChangeSpecialFunction {
@@ -1281,6 +1283,7 @@ impl BeforeChangeSpecialFunction {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Mirrors GNU's deferral predicate for `signal_after_change`
 /// (`insdel.c:2393`). True when `combine-after-change-calls` is non-nil and
 /// `before-change-functions` is either nil or the well-known
@@ -2040,6 +2043,7 @@ pub fn builtin_erase_buffer<H: crate::emacs_core::edit_host::EditHost>(
     Ok(Value::NIL)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn erase_buffer_impl<'a, Vars: EditVariableRead<'a>>(
     vars: Vars,
     dynamic: &[OrderedRuntimeBindingMap],
@@ -2735,3 +2739,7 @@ pub fn builtin_translate_region_internal<H: crate::emacs_core::edit_host::EditHo
 
     Ok(Value::fixnum(characters_changed))
 }
+
+#[cfg(test)]
+#[path = "tests/editfns_test.rs"]
+mod tests;

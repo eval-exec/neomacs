@@ -193,6 +193,7 @@ pub fn builtin_char_table_p(args: Vec<Value>) -> EvalResult {
     expect_args("char-table-p", &args, 1)?;
     Ok(Value::bool_val(is_char_table(&args[0])))
 }
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(set-char-table-range CHAR-TABLE RANGE VALUE)` -- set entries.
 ///
 /// RANGE may be:
@@ -291,6 +292,7 @@ fn set_char_table_range_impl<E: Fn(&str) -> Flow>(
     crate::emacs_core::substrate_hooks::note_char_table_layout_mutation();
     Ok(*value)
 }
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(char-table-range CHAR-TABLE RANGE)` -- look up a value.
 ///
 /// RANGE may be:
@@ -444,6 +446,7 @@ pub fn builtin_set_char_table_parent(args: Vec<Value>) -> EvalResult {
     crate::emacs_core::substrate_hooks::note_char_table_layout_mutation();
     Ok(*parent)
 }
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(map-char-table FUNCTION CHAR-TABLE)` -- call FUNCTION for each
 /// entry with a non-nil value.  FUNCTION receives `(KEY VALUE)` where
 /// KEY is either a character (integer) or a cons `(FROM . TO)` for ranges.
@@ -536,6 +539,7 @@ fn invalid_unicode_property_table() -> Flow {
         vec![Value::string("Invalid Unicode property table")],
     )
 }
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(get-unicode-property-internal CHAR-TABLE CH)`.
 ///
 /// This mirrors GNU's C fast path for Unicode property tables: `CHAR-TABLE`
@@ -552,6 +556,7 @@ pub fn builtin_get_unicode_property_internal_in_state<H: TextHost>(
 ) -> EvalResult {
     builtin_get_unicode_property_internal_with_symbols(args, eval.symbol_mode())
 }
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_get_unicode_property_internal_with_symbols(
     args: Vec<Value>,
     mode: SymbolMode,
@@ -590,6 +595,7 @@ fn encode_uniprop_value_character(value: Value) -> Result<Value, Flow> {
         _ => Err(wrong_type("integerp", &value)),
     }
 }
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Encode VALUE as an element of TABLE that uses run-length compression.
 ///
 /// Mirrors GNU's `uniprop_encode_value_run_length` (chartab.c): the value must
@@ -708,3 +714,7 @@ pub use neovm_value::boolvec::{
 #[cfg(test)]
 #[path = "tests/collection_lookup_capture_test.rs"]
 mod collection_lookup_capture;
+
+#[cfg(test)]
+#[path = "tests/chartable_test.rs"]
+mod tests;

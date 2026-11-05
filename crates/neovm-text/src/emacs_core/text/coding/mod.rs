@@ -860,13 +860,16 @@ fn check_symbol_hook_arg(value: &Value, mode: SymbolMode) -> Result<Option<SymId
 // CodingSystemInfo
 // ---------------------------------------------------------------------------
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Information about a single coding system.
 /// Reserved `int_properties` keys carrying a coding system's ISO-2022
 /// designation/flags data. `int_properties` is pdump-serialized but not
 /// surfaced by `coding-system-plist`, and these out-of-range keys cannot
 /// collide with any integer a `coding-system-put` would use.
 const ISO2022_KEY_INITIAL: i64 = i64::MIN;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 const ISO2022_KEY_REQUEST: i64 = i64::MIN + 1;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 const ISO2022_KEY_FLAGS: i64 = i64::MIN + 2;
 const ISO2022_KEY_REG_USAGE: i64 = i64::MIN + 3;
 /// Reserved int_properties key holding the verbatim define-coding-system plist
@@ -962,6 +965,7 @@ impl Iso2022Spec {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Parse a coding system's stored ISO-2022 designation/flags data, if present.
 pub(crate) fn iso2022_spec(info: &CodingSystemInfo, mode: SymbolMode) -> Option<Iso2022Spec> {
     let initial_val = info.int_properties.get(&ISO2022_KEY_INITIAL)?;
@@ -5672,6 +5676,7 @@ pub fn builtin_terminal_coding_system(mgr: &CodingSystemManager, args: Vec<Value
     Ok(Value::symbol(mgr.terminal_coding))
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(set-keyboard-coding-system CODING-SYSTEM &optional TERMINAL)` -- set the
 /// keyboard coding system. Raw TTY byte batches are decoded incrementally with
 /// this coding system before entering the key-sequence translation maps.
@@ -5724,6 +5729,7 @@ pub(crate) fn builtin_set_keyboard_coding_system(
     Ok(Value::symbol(mgr.keyboard_coding))
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(set-terminal-coding-system CODING-SYSTEM &optional TERMINAL)` -- set the
 /// terminal coding system. Stub: records the value but has no functional effect.
 pub(crate) fn builtin_set_terminal_coding_system(
@@ -6325,3 +6331,7 @@ pub fn register_bootstrap_vars<S: TextVariableStore>(vars: &mut S) {
 // ===========================================================================
 // Tests
 // ===========================================================================
+
+#[cfg(test)]
+#[path = "tests/coding_test.rs"]
+mod tests;

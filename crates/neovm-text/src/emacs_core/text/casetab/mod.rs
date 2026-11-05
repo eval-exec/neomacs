@@ -640,6 +640,7 @@ fn set_case_table_extra(table: Value, idx: usize, value: Value) {
     });
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn make_empty_case_table() -> Value {
     Value::make_char_table(Value::symbol("case-table"), Value::NIL, 3)
 }
@@ -807,3 +808,7 @@ pub fn carrier_tls_fingerprint(h: &mut u64) {
         STANDARD_CASE_TABLE_OBJECT.with(|slot| slot.borrow().is_some() as u64),
     );
 }
+
+#[cfg(test)]
+#[path = "tests/casetab_test.rs"]
+mod tests;

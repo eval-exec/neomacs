@@ -12,6 +12,7 @@ pub use neovm_value::value::text_props::{PropertyPlistApplication, ShiftedTextPr
 
 use neovm_value::value::Value;
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[path = "text_props/casing_insertion.rs"]
 mod casing_insertion;
 #[doc(hidden)]

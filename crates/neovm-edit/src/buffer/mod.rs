@@ -6,6 +6,7 @@ pub mod buffer_text;
 #[doc(hidden)]
 pub mod composition;
 mod edit_runtime;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 mod edit_transaction;
 #[doc(hidden)]
 pub mod storage_string;
@@ -24,6 +25,7 @@ mod overlay_order;
 pub mod position;
 pub mod shared;
 pub mod text;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) mod text_index;
 pub mod text_props;
 pub mod text_snapshot;

@@ -2148,6 +2148,7 @@ impl ExistenceDfa {
 // The candidate filter in `re_search` (C5)
 // ---------------------------------------------------------------------------
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `NEOVM_REGEX_DFA`: whether `re_search` filters candidates through the
 /// existence DFA.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2181,6 +2182,7 @@ thread_local! {
         const { std::cell::Cell::new(None) };
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Run `f` with `NEOVM_REGEX_DFA` forced to `mode` on this thread.
 #[cfg(any(test, feature = "fuzzing"))]
 pub(crate) fn with_dfa_mode<R>(mode: DfaMode, f: impl FnOnce() -> R) -> R {
@@ -3006,3 +3008,7 @@ pub(crate) fn reset_carrier_tls() {
 pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
     neovm_value::tls_fingerprint::mix_debug(h, STATS.with(|slot| format!("{:?}", slot.borrow())));
 }
+
+#[cfg(test)]
+#[path = "tests/dfa_test.rs"]
+mod tests;

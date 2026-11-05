@@ -1,36 +1,6 @@
 use crate::emacs_core::eval::Context;
+
 use neovm_edit::emacs_core::indent::*;
-
-fn text_context(text: &str) -> (Context, BufferId) {
-    let mut context = Context::new();
-    let buffer = context
-        .edit
-        .buffers
-        .current_buffer_id()
-        .expect("current buffer");
-    context
-        .edit
-        .buffers
-        .insert_into_buffer(buffer, text)
-        .expect("insert scan fixture");
-    (context, buffer)
-}
-
-fn assert_row(
-    context: &mut Context,
-    buffer: BufferId,
-    start: EmacsBytePos,
-    width: usize,
-    wrap: LineWrap,
-    next: EmacsBytePos,
-    end: ScreenLineEnd,
-) {
-    let step = next_screen_line_start_from(context, buffer, start, width, wrap)
-        .expect("scan fixture")
-        .expect("nonempty accessible row");
-    assert_eq!(step.next, next, "next byte for {wrap:?}");
-    assert_eq!(step.end, end, "row end for {wrap:?}");
-}
 
 #[test]
 fn exactly_full_text_followed_by_newline_stays_one_row_in_every_policy() {
@@ -362,4 +332,35 @@ fn a_new_scan_reacquires_the_edited_buffer_and_accessible_end() {
         EmacsBytePos::new(7),
         ScreenLineEnd::Newline,
     );
+}
+
+fn text_context(text: &str) -> (Context, BufferId) {
+    let mut context = Context::new();
+    let buffer = context
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
+    context
+        .edit
+        .buffers
+        .insert_into_buffer(buffer, text)
+        .expect("insert scan fixture");
+    (context, buffer)
+}
+
+fn assert_row(
+    context: &mut Context,
+    buffer: BufferId,
+    start: EmacsBytePos,
+    width: usize,
+    wrap: LineWrap,
+    next: EmacsBytePos,
+    end: ScreenLineEnd,
+) {
+    let step = next_screen_line_start_from(context, buffer, start, width, wrap)
+        .expect("scan fixture")
+        .expect("nonempty accessible row");
+    assert_eq!(step.next, next, "next byte for {wrap:?}");
+    assert_eq!(step.end, end, "row end for {wrap:?}");
 }

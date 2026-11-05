@@ -1,12 +1,12 @@
 use crate::emacs_core::eval::Context;
-use crate::emacs_core::pdump::dump_to_file;
-use neovm_text::emacs_core::charset::*;
-use neovm_value::error::{FlowKind, FlowRef, FlowResultExt as _};
-use neovm_value::intern::{intern, resolve_sym};
 
-// -----------------------------------------------------------------------
-// CharsetRegistry unit tests
-// -----------------------------------------------------------------------
+use crate::emacs_core::pdump::dump_to_file;
+
+use neovm_text::emacs_core::charset::*;
+
+use neovm_value::error::{FlowKind, FlowRef, FlowResultExt as _};
+
+use neovm_value::intern::{intern, resolve_sym};
 
 #[test]
 fn registry_has_standard_charsets() {
@@ -86,10 +86,6 @@ fn registry_plist_none_for_unknown() {
     assert!(reg.plist(intern("nonexistent")).is_none());
 }
 
-// -----------------------------------------------------------------------
-// Builtin tests: charsetp
-// -----------------------------------------------------------------------
-
 #[test]
 fn charsetp_known() {
     crate::test_utils::init_test_tracing();
@@ -142,10 +138,6 @@ fn unibyte_charset_returns_eight_bit() {
     assert!(r.is_bare_symbol_named("eight-bit"));
 }
 
-// -----------------------------------------------------------------------
-// Builtin tests: charset-priority-list
-// -----------------------------------------------------------------------
-
 #[test]
 fn charset_priority_list_full() {
     crate::test_utils::init_test_tracing();
@@ -172,10 +164,6 @@ fn charset_priority_list_highestp_nil() {
     let items = list_to_vec(&r).unwrap();
     assert!(items.len() > 1);
 }
-
-// -----------------------------------------------------------------------
-// Builtin tests: set-charset-priority
-// -----------------------------------------------------------------------
 
 #[test]
 fn registry_set_priority_reorders_and_dedups() {
@@ -224,10 +212,6 @@ fn set_charset_priority_rejects_unknown_charset() {
         other => panic!("expected wrong-type-argument signal, got {other:?}"),
     }
 }
-
-// -----------------------------------------------------------------------
-// Builtin tests: char-charset
-// -----------------------------------------------------------------------
 
 #[test]
 fn char_charset_int() {
@@ -280,10 +264,6 @@ fn char_charset_wrong_arg_count() {
     assert!(builtin_char_charset(vec![Value::fixnum(65), Value::NIL, Value::NIL]).is_err());
 }
 
-// -----------------------------------------------------------------------
-// Builtin tests: charset-plist
-// -----------------------------------------------------------------------
-
 #[test]
 fn charset_plist_known() {
     crate::test_utils::init_test_tracing();
@@ -313,10 +293,6 @@ fn charset_plist_wrong_arg_count() {
     crate::test_utils::init_test_tracing();
     assert!(builtin_charset_plist(vec![]).is_err());
 }
-
-// -----------------------------------------------------------------------
-// Builtin tests: charset-id-internal
-// -----------------------------------------------------------------------
 
 #[test]
 fn charset_id_internal_requires_charset() {
@@ -366,10 +342,6 @@ fn charset_id_internal_wrong_arg_count() {
     crate::test_utils::init_test_tracing();
     assert!(builtin_charset_id_internal(vec![Value::NIL, Value::NIL]).is_err());
 }
-
-// -----------------------------------------------------------------------
-// Builtin tests: define-charset-internal
-// -----------------------------------------------------------------------
 
 #[test]
 fn define_charset_internal_requires_exact_arity() {
@@ -744,10 +716,6 @@ fn charset_registry_plist_values_survive_exact_gc_and_pdump_dump() {
     reset_charset_registry();
 }
 
-// -----------------------------------------------------------------------
-// Builtin tests: find-charset-region
-// -----------------------------------------------------------------------
-
 #[test]
 fn find_charset_region_ascii_default() {
     crate::test_utils::init_test_tracing();
@@ -869,10 +837,6 @@ fn find_charset_region_eval_out_of_range_errors() {
     }
 }
 
-// -----------------------------------------------------------------------
-// Builtin tests: find-charset-string
-// -----------------------------------------------------------------------
-
 #[test]
 fn find_charset_string_ascii() {
     crate::test_utils::init_test_tracing();
@@ -987,10 +951,6 @@ fn find_charset_string_wrong_arg_count() {
     );
 }
 
-// -----------------------------------------------------------------------
-// Builtin tests: decode-char
-// -----------------------------------------------------------------------
-
 #[test]
 fn decode_char_ascii() {
     crate::test_utils::init_test_tracing();
@@ -1086,10 +1046,6 @@ fn decode_char_wrong_arg_count() {
         builtin_decode_char(vec![Value::symbol("ascii"), Value::fixnum(65), Value::NIL]).is_err()
     );
 }
-
-// -----------------------------------------------------------------------
-// Builtin tests: encode-char
-// -----------------------------------------------------------------------
 
 #[test]
 fn encode_char_basic() {
@@ -1274,10 +1230,6 @@ fn define_charset_alias_adds_symbol_alias_only() {
     assert!(builtin_define_charset_alias(vec![Value::fixnum(1), Value::symbol("ascii")]).is_ok());
 }
 
-// -----------------------------------------------------------------------
-// Builtin tests: clear-charset-maps
-// -----------------------------------------------------------------------
-
 #[test]
 fn clear_charset_maps_returns_nil() {
     crate::test_utils::init_test_tracing();
@@ -1290,10 +1242,6 @@ fn clear_charset_maps_wrong_arg_count() {
     crate::test_utils::init_test_tracing();
     assert!(builtin_clear_charset_maps(vec![Value::NIL]).is_err());
 }
-
-// -----------------------------------------------------------------------
-// Builtin tests: charset-after
-// -----------------------------------------------------------------------
 
 #[test]
 fn charset_after_default_returns_unicode() {
@@ -1414,10 +1362,6 @@ fn charset_after_respects_narrowed_end() {
     );
 }
 
-// -----------------------------------------------------------------------
-// Round-trip tests
-// -----------------------------------------------------------------------
-
 #[test]
 fn decode_encode_round_trip() {
     crate::test_utils::init_test_tracing();
@@ -1444,10 +1388,6 @@ fn charsetp_all_standard() {
         assert!(r.is_t(), "charsetp should return t for {}", name);
     }
 }
-
-// -----------------------------------------------------------------------
-// char-charset / split-char: unicode-bmp must never be surfaced (GNU parity)
-// -----------------------------------------------------------------------
 
 #[test]
 fn char_charset_bmp_canonicalizes_to_unicode() {
@@ -1499,10 +1439,6 @@ fn split_char_bmp_is_dimension_three_unicode() {
     assert!(items[0].is_bare_symbol_named("ascii"));
     assert_eq!(items[1].as_fixnum(), Some(65));
 }
-
-// -----------------------------------------------------------------------
-// char-charset RESTRICTION argument (GNU walks the list in order)
-// -----------------------------------------------------------------------
 
 #[test]
 fn char_charset_restriction_walks_list_in_order() {

@@ -1,12 +1,6 @@
 //! GNU-derived semantic coverage for the immutable text-property-any scan.
 //! Expected results were captured with GNU Emacs 31.1 in the lane sandbox.
 
-fn assert_gnu_result(form: &str, expected: &str) {
-    crate::test_utils::init_test_tracing();
-    let actual = crate::test_utils::runtime_startup_eval_one(form);
-    assert_eq!(actual, format!("OK {expected}"));
-}
-
 #[test]
 fn text_property_any_interval_buffer_encodings_and_dense_boundaries() {
     assert_gnu_result(
@@ -153,4 +147,10 @@ fn text_property_any_interval_string_branch_parity() {
        (unibyte-string 65 200 66 255 67 68 69)))"#,
         "((2 3 nil nil 0 4 nil) (2 3 nil nil 0 4 nil) (2 3 nil nil 0 4 nil))",
     );
+}
+
+fn assert_gnu_result(form: &str, expected: &str) {
+    crate::test_utils::init_test_tracing();
+    let actual = crate::test_utils::runtime_startup_eval_one(form);
+    assert_eq!(actual, format!("OK {expected}"));
 }

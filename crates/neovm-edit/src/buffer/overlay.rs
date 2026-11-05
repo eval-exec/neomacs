@@ -1977,6 +1977,7 @@ fn compare_overlay_precedence_keys(
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn overlay_identity_key(overlay: Value) -> neovm_value::heap_types::OverlaySerial {
     overlay
         .as_overlay_data()
@@ -2260,3 +2261,7 @@ impl OverlayModificationHook {
         self.overlay
     }
 }
+
+#[cfg(test)]
+#[path = "overlay/tests/overlay_test.rs"]
+mod tests;

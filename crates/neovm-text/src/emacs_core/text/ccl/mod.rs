@@ -136,6 +136,7 @@ impl CclRegistry {
 }
 
 thread_local! {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// The read-hook record [`with_ccl_obarray`] holds on its stack for its
     /// body; a pointer, so the thread-local block keeps its layout.
     static CCL_VARIABLES: Cell<*const ()> = const { Cell::new(std::ptr::null()) };
@@ -1630,3 +1631,7 @@ pub fn carrier_tls_fingerprint(h: &mut u64) {
     );
     neovm_value::tls_fingerprint::mix(h, CCL_VARIABLES.with(|slot| slot.get() as usize as u64));
 }
+
+#[cfg(test)]
+#[path = "tests/ccl_test.rs"]
+mod tests;

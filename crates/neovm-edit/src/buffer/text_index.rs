@@ -190,6 +190,7 @@ thread_local! {
         const { std::cell::Cell::new(None) };
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Run F with the index settings forced to CONFIG on this thread.
 #[cfg(test)]
 pub(crate) fn with_text_line_index_config<R>(

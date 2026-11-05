@@ -5,60 +5,12 @@
 //! and `selective-display`.
 
 use super::*;
+
 use neovm_edit::buffer::text_index::tests::Rng;
+
 use neovm_edit::buffer::text_index::{
     TextLineIndexConfig, TextLineIndexMode, with_text_line_index_config,
 };
-
-fn eager(mode: TextLineIndexMode) -> TextLineIndexConfig {
-    TextLineIndexConfig::eager(mode, 32)
-}
-
-/// A random line of text: ASCII, a multibyte character, sometimes a `\r`.
-fn random_line(rng: &mut Rng) -> String {
-    let mut line = String::new();
-    for _ in 0..rng.below(12) {
-        line.push(match rng.below(10) {
-            0 => '\u{e9}',
-            1 => '\u{4e2d}',
-            2 => '\r',
-            3 => ' ',
-            _ => (b'a' + rng.below(26) as u8) as char,
-        });
-    }
-    line.push('\n');
-    line
-}
-
-fn lisp_string(text: &str) -> String {
-    let mut out = String::from("\"");
-    for ch in text.chars() {
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            _ => out.push(ch),
-        }
-    }
-    out.push('"');
-    out
-}
-
-/// FORM's printed value with the index off and with it on (verify).
-fn both_ways(ev: &mut Context, form: &str) -> (String, String) {
-    let run = |ev: &mut Context, mode| {
-        with_text_line_index_config(eager(mode), || {
-            let value = ev
-                .eval_str(form)
-                .unwrap_or_else(|err| panic!("{form}: {err:?}"));
-            neovm_edit::emacs_core::print_value(&value)
-        })
-    };
-    let off = run(ev, TextLineIndexMode::Off);
-    let on = run(ev, TextLineIndexMode::Verify);
-    (off, on)
-}
 
 #[test]
 fn line_motion_and_counting_agree_with_the_index_on_and_off() {
@@ -263,4 +215,54 @@ fn every_lisp_edit_path_keeps_the_index_exact() {
             ),
         );
     }
+}
+
+fn eager(mode: TextLineIndexMode) -> TextLineIndexConfig {
+    TextLineIndexConfig::eager(mode, 32)
+}
+
+/// A random line of text: ASCII, a multibyte character, sometimes a `\r`.
+fn random_line(rng: &mut Rng) -> String {
+    let mut line = String::new();
+    for _ in 0..rng.below(12) {
+        line.push(match rng.below(10) {
+            0 => '\u{e9}',
+            1 => '\u{4e2d}',
+            2 => '\r',
+            3 => ' ',
+            _ => (b'a' + rng.below(26) as u8) as char,
+        });
+    }
+    line.push('\n');
+    line
+}
+
+fn lisp_string(text: &str) -> String {
+    let mut out = String::from("\"");
+    for ch in text.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            _ => out.push(ch),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// FORM's printed value with the index off and with it on (verify).
+fn both_ways(ev: &mut Context, form: &str) -> (String, String) {
+    let run = |ev: &mut Context, mode| {
+        with_text_line_index_config(eager(mode), || {
+            let value = ev
+                .eval_str(form)
+                .unwrap_or_else(|err| panic!("{form}: {err:?}"));
+            crate::emacs_core::print_value(&value)
+        })
+    };
+    let off = run(ev, TextLineIndexMode::Off);
+    let on = run(ev, TextLineIndexMode::Verify);
+    (off, on)
 }

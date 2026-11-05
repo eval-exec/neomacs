@@ -4,72 +4,8 @@
 //! that bypassed the notes as "everything" too.
 
 use neovm_edit::buffer::syntax_cache::SyntaxMutationNotes;
+
 use neovm_text::emacs_core::syntax::parse_cache::*;
-
-#[test]
-fn the_knob_is_on_unless_switched_off() {
-    for (value, mode) in [
-        (None, ParseCacheMode::On),
-        (Some(""), ParseCacheMode::On),
-        (Some("0"), ParseCacheMode::Off),
-        (Some("off"), ParseCacheMode::Off),
-        (Some("no"), ParseCacheMode::Off),
-        (Some("false"), ParseCacheMode::Off),
-        (Some("nil"), ParseCacheMode::Off),
-        (Some("1"), ParseCacheMode::On),
-        (Some(" ON "), ParseCacheMode::On),
-        (Some("verify"), ParseCacheMode::Verify),
-        (Some("Verify"), ParseCacheMode::Verify),
-    ] {
-        assert_eq!(parse_parse_cache_knob(value), mode, "{value:?}");
-    }
-}
-
-#[test]
-fn notes_are_drained_as_the_lowest_changed_position() {
-    // The notes are the substrate's plain invalidation account (stage-3 C7);
-    // the cache consumes its outcome before answering from its runs.
-    let mut notes = SyntaxMutationNotes::default();
-    assert_eq!(
-        notes.take_invalidation(7, 3),
-        Invalidation::All,
-        "first sight"
-    );
-    assert_eq!(notes.take_invalidation(7, 3), Invalidation::Nothing);
-    notes.note_edit(40);
-    notes.note_edit(12);
-    assert_eq!(
-        notes.take_invalidation(9, 3),
-        Invalidation::From {
-            byte: 12,
-            char: usize::MAX
-        }
-    );
-    notes.note_prop_change(30, 1);
-    notes.note_prop_change(50, 2);
-    assert_eq!(
-        notes.take_invalidation(9, 6),
-        Invalidation::From {
-            byte: usize::MAX,
-            char: 30
-        }
-    );
-    // A tick or epoch the notes do not account for.
-    notes.note_prop_change(30, 1);
-    assert_eq!(notes.take_invalidation(9, 8), Invalidation::All);
-    assert_eq!(notes.take_invalidation(10, 8), Invalidation::All);
-    notes.clear();
-    assert_eq!(notes.take_invalidation(10, 8), Invalidation::All);
-    assert_eq!(notes.take_invalidation(10, 8), Invalidation::Nothing);
-}
-
-fn drain(eval: &crate::emacs_core::eval::Context) -> Invalidation {
-    eval.edit
-        .buffers
-        .current_buffer()
-        .expect("current buffer")
-        .take_syntax_invalidation()
-}
 
 #[test]
 fn buffer_changes_reach_the_cache() {
@@ -142,4 +78,12 @@ fn buffer_changes_reach_the_cache() {
         .expect("multibyte");
     assert_eq!(drain(&eval), Invalidation::All);
     assert_eq!(drain(&eval), Invalidation::Nothing);
+}
+
+fn drain(eval: &crate::emacs_core::eval::Context) -> Invalidation {
+    eval.edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .take_syntax_invalidation()
 }

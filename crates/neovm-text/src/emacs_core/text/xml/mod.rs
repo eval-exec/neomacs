@@ -181,6 +181,7 @@ impl PendingText {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Parse region using quick-xml and return Elisp parse tree.
 fn parse_xml_region(data: &[u8], discard_comments: bool) -> Option<Value> {
     use quick_xml::Reader;
@@ -1233,3 +1234,7 @@ pub fn builtin_libxml_parse_xml_region<H: EditHost>(host: &mut H, args: Vec<Valu
         None => Ok(Value::NIL),
     }
 }
+
+#[cfg(test)]
+#[path = "tests/xml_test.rs"]
+mod tests;

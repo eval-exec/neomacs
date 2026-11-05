@@ -43,6 +43,7 @@ fn next_visible_line_start<H: EditHost>(
     Ok(Some(step))
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Why a screen line ended.
 ///
 /// GNU's goal-column walk (`move_it_in_display_line_to` with `MOVE_TO_X`) may
@@ -1705,6 +1706,7 @@ fn raw_unibyte_display_width(byte: u8) -> usize {
 /// properties at all, at the price of an occasional redundant recompute.
 const DISPLAY_STOP_CHAR_CAP: usize = 100;
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Per-scan cache of the next byte position at which a display-relevant property
 /// (`invisible`, `display`, `composition`, or any overlay) could change, so the
 /// per-char display scanner runs the three expensive property probes only at a
@@ -1949,6 +1951,7 @@ fn decode_display_character(
 // Values -- never references into the phase. The next stop reacquires after
 // every callback.
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn display_advance_at<H: EditHost>(
     host: &mut H,
     buffer_id: crate::buffer::BufferId,
@@ -3617,3 +3620,7 @@ impl ScreenLineMotionScan {
         self.last_occupied_target
     }
 }
+
+#[cfg(test)]
+#[path = "tests/indent_test.rs"]
+mod tests;

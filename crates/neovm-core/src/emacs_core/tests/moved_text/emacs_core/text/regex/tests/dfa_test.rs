@@ -1,113 +1,31 @@
 //! Tests of the existence DFA (P3.3): the NFA over the rewind view (C2).
 
 use neovm_text::emacs_core::regex::*;
+
 use neovm_text::emacs_core::regex_emacs::{
     DefaultSyntaxLookup, fail_stack_push_sites, re_match, regex_compile,
 };
 
-fn nfa_of(pattern: &str) -> Nfa {
-    let compiled = regex_compile(pattern, false, false).expect("pattern compiles");
-    Nfa::build(&compiled).unwrap_or_else(|why| panic!("{pattern:?} is ineligible: {why:?}"))
-}
+use neovm_text::emacs_core::regex_emacs::{
+    CaseTranslation, LookupClassKey, SyntaxCacheKey, match_anychar_at, match_categoryspec_at,
+    match_charset_at, match_exactn_char_at, match_syntaxspec_at, match_syntaxspecset_at,
+    regex_compile_lisp_with_translation,
+};
 
-fn place<'a>(text: &'a [u8], d: usize) -> Place<'a> {
-    Place {
-        text,
-        d,
-        stop: text.len(),
-        point: 0,
-        target_multibyte: true,
-        syntax: MatchSyntax::new(&DefaultSyntaxLookup),
-    }
-}
+use neovm_text::emacs_core::syntax::SyntaxClass;
 
-/// The predicates of the positions the start closure reaches at `d`.
-fn start_closure(nfa: &Nfa, text: &[u8], d: usize) -> (Vec<Predicate>, bool) {
-    let mut scratch = ClosureScratch::default();
-    let mut out = Vec::new();
-    let accept = nfa.closure(
-        &[kernel_item(0, 0)],
-        &place(text, d),
-        &mut scratch,
-        &mut out,
-    );
-    out.sort_unstable();
-    let predicates = out
-        .iter()
-        .map(|&p| nfa.predicates[nfa.positions[p as usize].predicate as usize])
-        .collect();
-    (predicates, accept)
-}
+use neovm_value::value::Value;
 
-#[test]
-fn literal_positions_step_one_pattern_character_at_a_time() {
-    let nfa = nfa_of("abca");
-    assert_eq!(nfa.positions.len(), 4);
-    // `a` twice: one predicate.
-    assert_eq!(nfa.predicates.len(), 3);
-    assert_eq!(nfa.positions[0].predicate, nfa.positions[3].predicate);
-    let pc = nfa.positions[0].pc as usize;
-    for (i, position) in nfa.positions.iter().enumerate() {
-        assert_eq!(position.pc as usize, pc);
-        assert_eq!(position.lit_off as usize, i);
-    }
-    assert_eq!(nfa.positions[0].next, kernel_item(pc, 1));
-    assert_eq!(nfa.positions[2].next, kernel_item(pc, 3));
-    // The last character resumes at the opcode after the literal.
-    assert_eq!(nfa.positions[3].next, kernel_item(pc + 2 + 4, 0));
-    assert_eq!(nfa.position_at(kernel_item(pc, 2)), Some(2));
-    assert_eq!(nfa.position_at(kernel_item(pc, 5)), None);
-}
+use neovm_text::emacs_core::regex_emacs::{
+    MatchRegisters, MatchScratch, re_match_internal, take_fail_stack_probe, take_matcher_overflow,
+    take_pike_fallback,
+};
 
-#[test]
-fn multibyte_literal_positions_follow_character_lengths() {
-    let nfa = nfa_of("é中x");
-    let offsets: Vec<u8> = nfa.positions.iter().map(|p| p.lit_off).collect();
-    assert_eq!(offsets, vec![0, 2, 5]);
-    let pc = nfa.positions[0].pc as usize;
-    assert_eq!(nfa.positions[0].next, kernel_item(pc, 2));
-    assert_eq!(nfa.positions[1].next, kernel_item(pc, 5));
-    assert_eq!(nfa.positions[2].next, kernel_item(pc + 2 + 6, 0));
-}
+use neovm_text::emacs_core::regex_emacs::{matcher_entry_count, re_search};
 
-#[test]
-fn every_consuming_opcode_is_one_position_with_its_test() {
-    let nfa = nfa_of(".[a-z][^0-9]\\w\\W\\s-\\cg\\Cg");
-    let kinds: Vec<Predicate> = nfa
-        .positions
-        .iter()
-        .map(|p| nfa.predicates[p.predicate as usize])
-        .collect();
-    assert!(matches!(kinds[0], Predicate::AnyChar));
-    assert!(matches!(kinds[1], Predicate::Charset { .. }));
-    assert!(matches!(kinds[2], Predicate::Charset { .. }));
-    assert!(matches!(kinds[3], Predicate::Syntax { negate: false, .. }));
-    assert!(matches!(kinds[4], Predicate::Syntax { negate: true, .. }));
-    assert!(matches!(kinds[5], Predicate::Syntax { negate: false, .. }));
-    assert!(matches!(
-        kinds[6],
-        Predicate::Category {
-            category: b'g',
-            negate: false
-        }
-    ));
-    assert!(matches!(
-        kinds[7],
-        Predicate::Category {
-            category: b'g',
-            negate: true
-        }
-    ));
-    assert!(nfa.uses_categories);
-    // The fused `\w\|\s_` is one position with a mask.
-    let fused = nfa_of("\\(?:\\w\\|\\s_\\)+");
-    assert!(
-        fused
-            .predicates
-            .iter()
-            .any(|p| matches!(p, Predicate::SyntaxSet { .. }))
-    );
-}
+use crate::fuzz_support::{
+    RegexCase, RegexCheck, RegexDifferential, SearchTarget, check_regex_differential,
+};
 
 #[test]
 fn closure_follows_both_edges_of_every_split() {
@@ -155,39 +73,6 @@ fn closure_evaluates_assertions_at_the_real_position() {
     assert!(!start_closure(&empty, b"a\n\nb", 1).1);
 }
 
-#[test]
-fn eligibility_rejects_what_the_dfa_does_not_model() {
-    for (pattern, why) in [
-        ("\\(a\\)\\1", DfaIneligible::Backreference),
-        ("a\\{2,3\\}", DfaIneligible::IntervalCounter),
-        ("\\(?:a?\\)*?b", DfaIneligible::NullableNonGreedyLoop),
-        ("a*", DfaIneligible::MatchesEmptyEverywhere),
-        ("\\(?:a\\|\\)", DfaIneligible::MatchesEmptyEverywhere),
-        ("", DfaIneligible::MatchesEmptyEverywhere),
-    ] {
-        let compiled = regex_compile(pattern, false, false).unwrap();
-        assert_eq!(Nfa::build(&compiled).err(), Some(why), "{pattern:?}");
-    }
-    // An empty match behind a test is fine: the test can fail.
-    for pattern in ["^a*", "\\(?:a\\|\\)\\b", "\\=", "x??y", "\\(a*\\)*b"] {
-        let compiled = regex_compile(pattern, false, false).unwrap();
-        assert!(Nfa::build(&compiled).is_ok(), "{pattern:?}");
-    }
-    // POSIX patterns are eligible: existence ignores which match is chosen.
-    let posix = regex_compile("\\(a\\|ab\\)c", true, false).unwrap();
-    assert!(Nfa::build(&posix).is_ok());
-}
-
-#[test]
-fn nfa_counts_the_fail_stack_push_sites() {
-    for pattern in ["a\\|b", "\\(a*\\)b", "[a-z]*:", "x\\(?:a\\|b\\)*c"] {
-        let compiled = regex_compile(pattern, false, false).unwrap();
-        let nfa = Nfa::build(&compiled).unwrap();
-        assert_eq!(nfa.push_sites, fail_stack_push_sites(&compiled.buffer));
-        assert!(nfa.push_sites > 0, "{pattern:?}");
-    }
-}
-
 /// A closure that accepts at `p` is a zero-length match the backtracker must
 /// find too (it may prefer a longer one).
 #[test]
@@ -211,192 +96,6 @@ fn an_accepting_start_closure_is_a_match() {
             if accept {
                 assert!(matched.is_some(), "{pattern:?} at {p}");
             }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Character classes (C3)
-// ---------------------------------------------------------------------------
-
-use neovm_text::emacs_core::regex_emacs::{
-    CaseTranslation, LookupClassKey, SyntaxCacheKey, match_anychar_at, match_categoryspec_at,
-    match_charset_at, match_exactn_char_at, match_syntaxspec_at, match_syntaxspecset_at,
-    regex_compile_lisp_with_translation,
-};
-use neovm_text::emacs_core::syntax::SyntaxClass;
-use neovm_value::value::Value;
-
-/// Patterns covering every predicate kind and fact.
-const CLASS_PATTERNS: &[&str] = &[
-    "abcABC019 _-!:\n",
-    "éüß中日K\u{212A}ǅΣσςЖж😀",
-    ".",
-    "[a-z]",
-    "[^a-z0-9]",
-    "[A-Za-zé-üα-ω]",
-    "[^中]",
-    "[][^-]",
-    "[[:alpha:]]",
-    "[[:alnum:]_]",
-    "[[:upper:]]",
-    "[[:lower:]]",
-    "[[:space:]]",
-    "[[:word:]]",
-    "[[:punct:]]",
-    "[[:digit:][:xdigit:]]",
-    "[[:ascii:]]",
-    "[[:nonascii:]]",
-    "[[:multibyte:]]",
-    "[[:unibyte:]]",
-    "[[:cntrl:][:blank:]]",
-    "[[:graph:]]",
-    "[[:print:]]",
-    "[^[:space:]\n]",
-    "\\w\\W",
-    "\\s-\\s_\\s.\\sw\\S-",
-    "\\(?:\\w\\|\\s_\\)+",
-    "\\cg\\Cl\\c|\\ca\\cc",
-    "\\bx\\B\\<y\\>",
-    "\\_<z\\_>",
-    "^a$",
-    // org font-lock (P3.3 census)
-    "\\(?:^[ \t]*[-+]\\|^[ \t]+[*]\\)[ \t]+\\(.*?[ \t]+::\\)\\([ \t]+\\|$\\)",
-    "^\\*+ \\(?:.*[ \t]\\)?\\(:\\([[:alnum:]_@#%:]+\\):\\)[ \t]*$",
-    "^[ \t]*|\\(?:.*?|\\)? *\\(:?=[^|\n]*\\)",
-];
-
-/// Every character code the class tests visit in multibyte text.
-fn multibyte_sample() -> Vec<u32> {
-    let mut codes: Vec<u32> = (0..0x100).collect();
-    codes.extend([
-        0xDF, 0x212A, 0x1C5, 0x3B1, 0x3A3, 0x3C2, 0x416, 0x436, 0x4E2D, 0x65E5, 0x1F600, 0x2018,
-    ]);
-    codes.extend([0x80u8, 0xA9, 0xC0, 0xFF].map(emacs_char::byte8_to_char));
-    codes
-}
-
-fn encode(code: u32) -> Vec<u8> {
-    let mut buf = [0u8; 8];
-    let len = emacs_char::char_string(code, &mut buf);
-    buf[..len].to_vec()
-}
-
-/// A syntax table unlike the standard one: `-` is a word constituent, the
-/// newline ends comments, `é` and `中` are symbol constituents.
-struct CustomTableLookup;
-
-impl SyntaxLookup for CustomTableLookup {
-    fn char_syntax(&self, c: char) -> SyntaxClass {
-        match c {
-            '-' => SyntaxClass::Word,
-            '\n' => SyntaxClass::EndComment,
-            'é' | '中' => SyntaxClass::Symbol,
-            _ => neovm_text::emacs_core::syntax::standard_syntax_class_for_char(c),
-        }
-    }
-
-    fn char_has_category(&self, c: char, cat: u8) -> bool {
-        DefaultSyntaxLookup.char_has_category(c, cat)
-    }
-
-    fn cache_key(&self) -> SyntaxCacheKey {
-        SyntaxCacheKey::External {
-            id: usize::MAX,
-            epoch: 0,
-        }
-    }
-
-    fn class_cache_key(&self) -> Option<LookupClassKey> {
-        Some(LookupClassKey::Tables {
-            syntax: usize::MAX,
-            category: 0,
-        })
-    }
-
-    fn position_dependent(&self) -> bool {
-        false
-    }
-}
-
-fn case_table(folds: &[(char, char)]) -> Value {
-    let table = Value::make_char_table(Value::symbol("case-table"), Value::NIL, 3);
-    for &(from, to) in folds {
-        neovm_text::emacs_core::chartable::ct_set_single(
-            &table,
-            from as i64,
-            Value::fixnum(to as i64),
-        );
-    }
-    table
-}
-
-/// The case settings of the class tests: none, the standard table, a custom
-/// table, and one that folds non-ASCII characters into ASCII.
-fn case_settings() -> Vec<Option<CaseTranslation>> {
-    vec![
-        None,
-        Some(CaseTranslation::standard()),
-        Some(CaseTranslation::from_char_table(case_table(&[
-            ('A', 'a'),
-            ('É', 'é'),
-            ('Σ', 'σ'),
-            ('ς', 'σ'),
-        ]))),
-        Some(CaseTranslation::from_char_table(case_table(&[
-            ('\u{212A}', 'k'),
-            ('K', 'k'),
-            ('é', 'e'),
-            ('É', 'e'),
-        ]))),
-    ]
-}
-
-/// The matcher's own test for `predicate` at the real position, with the
-/// real lookup and the whole text as the limit.
-fn direct_accepts(
-    nfa: &Nfa,
-    predicate: Predicate,
-    pattern: &CompiledPattern,
-    text: &[u8],
-    d: usize,
-    syntax: &dyn SyntaxLookup,
-) -> Option<usize> {
-    let stop = text.len();
-    let tm = pattern.target_multibyte;
-    match predicate {
-        Predicate::Literal { pc, lit_off } => {
-            let pc = pc as usize;
-            let count = nfa.bytecode[pc + 1] as usize;
-            match_exactn_char_at(
-                &nfa.bytecode[pc + 2..pc + 2 + count],
-                lit_off as usize,
-                pattern.multibyte,
-                tm,
-                &pattern.translate,
-                text,
-                d,
-                stop,
-            )
-            .map(|(_, len)| len)
-        }
-        Predicate::AnyChar => match_anychar_at(text, d, stop, tm, &pattern.translate),
-        Predicate::Charset { pc } => match_charset_at(
-            pattern,
-            pc as usize,
-            text,
-            d,
-            stop,
-            tm,
-            &pattern.translate,
-            syntax,
-        ),
-        Predicate::Syntax { class, negate } => {
-            match_syntaxspec_at(class, negate, text, d, stop, tm, syntax)
-        }
-        Predicate::SyntaxSet { mask } => match_syntaxspecset_at(mask, text, d, stop, tm, syntax),
-        Predicate::Category { category, negate } => {
-            match_categoryspec_at(category, negate, text, d, stop, tm, syntax)
         }
     }
 }
@@ -555,173 +254,6 @@ fn class_context_reads_only_what_the_classes_depend_on() {
     assert_eq!(ClassContext::of_search(&syntax, &nfa, &NoIdentity), None);
 }
 
-// ---------------------------------------------------------------------------
-// The lazy DFA (C4)
-// ---------------------------------------------------------------------------
-
-use neovm_text::emacs_core::regex_emacs::{
-    MatchRegisters, MatchScratch, re_match_internal, take_fail_stack_probe, take_matcher_overflow,
-    take_pike_fallback,
-};
-
-struct DfaRng(u64);
-
-impl DfaRng {
-    fn below(&mut self, n: usize) -> usize {
-        self.0 ^= self.0 << 13;
-        self.0 ^= self.0 >> 7;
-        self.0 ^= self.0 << 17;
-        (self.0 % n.max(1) as u64) as usize
-    }
-
-    fn pick<'a>(&mut self, items: &[&'a str]) -> &'a str {
-        items[self.below(items.len())]
-    }
-}
-
-const GEN_ATOMS: &[&str] = &[
-    "a",
-    "b",
-    "c",
-    "x",
-    "A",
-    " ",
-    "-",
-    "_",
-    ":",
-    "\n",
-    "é",
-    "中",
-    "Ж",
-    ".",
-    "[a-c]",
-    "[^a-c\n]",
-    "[[:alpha:]]",
-    "[[:space:]]",
-    "[[:upper:]]",
-    "[[:word:]]",
-    "[[:punct:]]",
-    "[é-ü]",
-    "\\w",
-    "\\W",
-    "\\s-",
-    "\\s_",
-    "\\sw",
-    "\\S-",
-    "\\cg",
-    "\\C|",
-    "\\(?:\\w\\|\\s_\\)",
-];
-const GEN_ZERO_WIDTH: &[&str] = &[
-    "^", "$", "\\`", "\\'", "\\b", "\\B", "\\<", "\\>", "\\_<", "\\_>", "\\=",
-];
-const GEN_QUANTIFIERS: &[&str] = &["", "", "", "*", "+", "?", "*?", "+?", "??"];
-
-/// A random pattern over the whole eligible vocabulary, quantifiers nested.
-fn gen_pattern(rng: &mut DfaRng, depth: usize) -> String {
-    let mut out = String::new();
-    let arms = 1 + rng.below(3);
-    for arm in 0..arms {
-        if arm > 0 {
-            out.push_str("\\|");
-        }
-        for _ in 0..1 + rng.below(4) {
-            let atom = match rng.below(if depth == 0 { 6 } else { 9 }) {
-                0..=3 => rng.pick(GEN_ATOMS).to_string(),
-                4 | 5 => rng.pick(GEN_ZERO_WIDTH).to_string(),
-                6 | 7 => format!("\\(?:{}\\)", gen_pattern(rng, depth - 1)),
-                _ => format!("\\({}\\)", gen_pattern(rng, depth - 1)),
-            };
-            out.push_str(&atom);
-            if !GEN_ZERO_WIDTH.contains(&atom.as_str()) {
-                out.push_str(rng.pick(GEN_QUANTIFIERS));
-            }
-        }
-    }
-    out
-}
-
-/// A random valid multibyte text (raw bytes encoded as Emacs does).
-fn gen_text(rng: &mut DfaRng, max_len: usize) -> Vec<u8> {
-    const PIECES: &[&str] = &[
-        "a", "b", "c", "x", "A", "B", " ", " ", "\n", "-", "_", ":", "!", "é", "É", "中", "日",
-        "Ж", "α", "K", "ab", "cab",
-    ];
-    let mut text = Vec::new();
-    for _ in 0..rng.below(max_len) {
-        if rng.below(12) == 0 {
-            text.extend(encode(emacs_char::byte8_to_char(
-                0x80 + rng.below(0x80) as u8,
-            )));
-        } else {
-            text.extend_from_slice(rng.pick(PIECES).as_bytes());
-        }
-    }
-    text
-}
-
-fn char_boundaries(text: &[u8], multibyte: bool) -> Vec<usize> {
-    let mut out = Vec::new();
-    let mut d = 0;
-    while d < text.len() {
-        out.push(d);
-        d += re_text_char(text, d, multibyte).map_or(1, |(_, len)| len);
-    }
-    out.push(text.len());
-    out
-}
-
-/// Every verdict of the DFA against the matcher at every candidate of
-/// `text`, for a few stops and points.  Returns (yes, no, unknown).
-fn check_dfa_against_matcher(
-    compiled: &CompiledPattern,
-    dfa: &mut ExistenceDfa,
-    text: &[u8],
-    syntax: &dyn SyntaxLookup,
-    label: &str,
-) -> (usize, usize, usize) {
-    let context = ClassContext::of_search(compiled, dfa.nfa(), syntax)
-        .expect("test lookups have a class identity");
-    dfa.classes_mut().sync(context);
-    dfa.begin_search(compiled, syntax);
-    let boundaries = char_boundaries(text, compiled.target_multibyte);
-    let mut tally = (0, 0, 0);
-    let stops = [text.len(), boundaries[boundaries.len() / 2]];
-    for &stop in &stops {
-        for &point in &[0, boundaries[boundaries.len() / 3], text.len()] {
-            // One pass over the candidates is one search.
-            dfa.begin_search(compiled, syntax);
-            for &p in boundaries.iter().filter(|&&p| p <= stop) {
-                let verdict = dfa.anchored_exists(compiled, text, p, stop, point, syntax);
-                let _ = take_matcher_overflow();
-                let matched = re_match(compiled, text, p, stop, syntax, point);
-                if take_matcher_overflow() {
-                    continue;
-                }
-                let where_ = || {
-                    format!(
-                        "{label}: at {p} stop {stop} point {point} in {:?}: {verdict:?} vs {:?}",
-                        String::from_utf8_lossy(text),
-                        matched.as_ref().map(|m| m.0)
-                    )
-                };
-                match verdict {
-                    Exists::Yes => {
-                        assert!(matched.is_some(), "{}", where_());
-                        tally.0 += 1;
-                    }
-                    Exists::No { .. } => {
-                        assert!(matched.is_none(), "{}", where_());
-                        tally.1 += 1;
-                    }
-                    Exists::Unknown => tally.2 += 1,
-                }
-            }
-        }
-    }
-    tally
-}
-
 /// Existence against the backtracker: a random pattern's verdict at every
 /// candidate of random texts, in both representations, case-folded or not.
 #[test]
@@ -808,43 +340,6 @@ fn dfa_verdicts_agree_on_org_font_lock_patterns() {
             assert_eq!(tally.2, 0);
             assert!(tally.1 > 0, "{source:?} rejects some candidates");
         }
-    }
-}
-
-/// A syntax lookup whose `WORD_BOUNDARY_P` separates CJK from other word
-/// constituents, as GNU's char-script-table does.
-struct ScriptBoundaryLookup;
-
-impl SyntaxLookup for ScriptBoundaryLookup {
-    fn char_syntax(&self, c: char) -> SyntaxClass {
-        DefaultSyntaxLookup.char_syntax(c)
-    }
-
-    fn char_has_category(&self, c: char, cat: u8) -> bool {
-        DefaultSyntaxLookup.char_has_category(c, cat)
-    }
-
-    fn word_boundary_between(&self, c1: char, c2: char) -> bool {
-        if c1 as u32 <= 0xFF && c2 as u32 <= 0xFF {
-            return false;
-        }
-        let cjk = |c: char| ('\u{3000}'..='\u{9FFF}').contains(&c);
-        cjk(c1) != cjk(c2)
-    }
-
-    fn cache_key(&self) -> SyntaxCacheKey {
-        SyntaxCacheKey::Standard
-    }
-
-    fn class_cache_key(&self) -> Option<LookupClassKey> {
-        Some(LookupClassKey::Tables {
-            syntax: 1,
-            category: 1,
-        })
-    }
-
-    fn position_dependent(&self) -> bool {
-        false
     }
 }
 
@@ -957,42 +452,6 @@ fn a_full_cache_is_cleared_and_relearned() {
     assert!(tally.1 > 0);
     assert!(dfa.counters.clears > 0, "{:?}", dfa.counters);
     assert_eq!(dfa.gave_up(), None);
-}
-
-// ---------------------------------------------------------------------------
-// The candidate filter in `re_search` (C5)
-// ---------------------------------------------------------------------------
-
-use neovm_text::emacs_core::regex_emacs::{matcher_entry_count, re_search};
-
-type SearchResult = Option<(usize, Vec<i64>, Vec<i64>)>;
-
-fn search(
-    compiled: &CompiledPattern,
-    text: &[u8],
-    start: usize,
-    range: isize,
-    syntax: &dyn SyntaxLookup,
-    point: usize,
-) -> (SearchResult, bool) {
-    let _ = take_matcher_overflow();
-    let found = re_search(compiled, text, start, range, syntax, point)
-        .map(|(at, regs)| (at, regs.start.to_vec(), regs.end.to_vec()));
-    (found, take_matcher_overflow())
-}
-
-#[test]
-fn the_knob_reads_off_on_and_verify() {
-    assert_eq!(DfaMode::parse(None), DfaMode::On);
-    assert_eq!(DfaMode::parse(Some("off")), DfaMode::Off);
-    assert_eq!(DfaMode::parse(Some("0")), DfaMode::Off);
-    assert_eq!(DfaMode::parse(Some(" OFF ")), DfaMode::Off);
-    assert_eq!(DfaMode::parse(Some("no")), DfaMode::Off);
-    assert_eq!(DfaMode::parse(Some("bogus")), DfaMode::On);
-    assert_eq!(DfaMode::parse(Some("on")), DfaMode::On);
-    assert_eq!(DfaMode::parse(Some(" 1 ")), DfaMode::On);
-    assert_eq!(DfaMode::parse(Some("ON")), DfaMode::On);
-    assert_eq!(DfaMode::parse(Some("verify")), DfaMode::Verify);
 }
 
 /// A search whose candidates always succeed never borrows a cold DFA slot.
@@ -1172,141 +631,6 @@ fn verify_mode_finds_no_mismatch_on_random_searches() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// `syntax-table` property runs and the propertize frontier (C7)
-// ---------------------------------------------------------------------------
-
-/// The syntax a `syntax-table` property run gives its characters.
-#[derive(Clone, Copy)]
-enum RunSyntax {
-    /// A descriptor cons: every character has this class.
-    Descriptor(SyntaxClass),
-    /// A syntax table as the property: each character's class in it.
-    Table(&'static dyn SyntaxLookup),
-}
-
-/// A base table plus `syntax-table` property runs (sorted, disjoint
-/// `[start, end)` input ranges), and a lazy-propertize frontier that
-/// records the lowest syntax read at or past it, as the buffer lookup does.
-struct PropertyRunLookup {
-    base: &'static dyn SyntaxLookup,
-    runs: Vec<(usize, usize, RunSyntax)>,
-    /// Whether `plain_syntax_until` reports the runs; otherwise the trait's
-    /// default treats every position as propertized.
-    reports_runs: bool,
-    frontier: usize,
-    crossed: std::cell::Cell<Option<usize>>,
-}
-
-impl PropertyRunLookup {
-    fn new(base: &'static dyn SyntaxLookup, runs: Vec<(usize, usize, RunSyntax)>) -> Self {
-        Self {
-            base,
-            runs,
-            reports_runs: true,
-            frontier: usize::MAX,
-            crossed: std::cell::Cell::new(None),
-        }
-    }
-
-    fn run_at(&self, pos: usize) -> Option<RunSyntax> {
-        self.runs
-            .iter()
-            .find(|&&(start, end, _)| start <= pos && pos < end)
-            .map(|&(_, _, syntax)| syntax)
-    }
-}
-
-impl SyntaxLookup for PropertyRunLookup {
-    fn char_syntax(&self, c: char) -> SyntaxClass {
-        self.base.char_syntax(c)
-    }
-
-    fn char_syntax_at(&self, c: char, pos: usize) -> SyntaxClass {
-        if pos >= self.frontier && self.crossed.get().is_none_or(|seen| pos < seen) {
-            self.crossed.set(Some(pos));
-        }
-        match self.run_at(pos) {
-            Some(RunSyntax::Descriptor(class)) => class,
-            Some(RunSyntax::Table(table)) => table.char_syntax(c),
-            None => self.base.char_syntax(c),
-        }
-    }
-
-    fn char_has_category(&self, c: char, cat: u8) -> bool {
-        self.base.char_has_category(c, cat)
-    }
-
-    fn word_boundary_between(&self, c1: char, c2: char) -> bool {
-        self.base.word_boundary_between(c1, c2)
-    }
-
-    fn cache_key(&self) -> SyntaxCacheKey {
-        self.base.cache_key()
-    }
-
-    fn class_cache_key(&self) -> Option<LookupClassKey> {
-        self.base.class_cache_key()
-    }
-
-    fn position_dependent(&self) -> bool {
-        true
-    }
-
-    fn plain_syntax_until(&self, pos: usize) -> usize {
-        if !self.reports_runs || self.run_at(pos).is_some() {
-            return pos;
-        }
-        self.runs
-            .iter()
-            .map(|&(start, _, _)| start)
-            .filter(|&start| start > pos)
-            .min()
-            .unwrap_or(usize::MAX)
-    }
-
-    fn syntax_read_limit(&self) -> usize {
-        self.frontier
-    }
-}
-
-const RUN_CLASSES: &[SyntaxClass] = &[
-    SyntaxClass::Word,
-    SyntaxClass::Symbol,
-    SyntaxClass::Whitespace,
-    SyntaxClass::Punctuation,
-    SyntaxClass::Open,
-    SyntaxClass::EndComment,
-];
-
-/// Up to three random property runs over `text`'s character boundaries.
-fn gen_runs(rng: &mut DfaRng, text: &[u8], multibyte: bool) -> Vec<(usize, usize, RunSyntax)> {
-    let boundaries = char_boundaries(text, multibyte);
-    let mut cuts: Vec<usize> = (0..2 * rng.below(4))
-        .map(|_| boundaries[rng.below(boundaries.len())])
-        .collect();
-    cuts.sort_unstable();
-    cuts.dedup();
-    cuts.chunks_exact(2)
-        .map(|pair| {
-            let syntax = if rng.below(4) == 0 {
-                RunSyntax::Table(&CustomTableLookup)
-            } else {
-                RunSyntax::Descriptor(RUN_CLASSES[rng.below(RUN_CLASSES.len())])
-            };
-            (pair[0], pair[1], syntax)
-        })
-        .collect()
-}
-
-fn random_base(rng: &mut DfaRng) -> &'static dyn SyntaxLookup {
-    if rng.below(2) == 0 {
-        &DefaultSyntaxLookup
-    } else {
-        &CustomTableLookup
-    }
-}
-
 /// Existence against the backtracker where `syntax-table` properties change
 /// characters' syntax: every verdict at every candidate agrees, and a
 /// character inside a run is classified at its position.
@@ -1367,43 +691,6 @@ fn dfa_verdicts_agree_with_the_matcher_inside_property_runs() {
     assert!(totals.0 > 1_000 && totals.1 > 10_000, "{totals:?}");
     assert_eq!(totals.2, 0, "no verdict is left undecided");
     assert!(positional_chars > 10_000, "{positional_chars}");
-}
-
-/// The same unibyte byte has two GNU syntax identities: symbol opcodes
-/// inspect the raw current byte, while every previous/word read promotes it
-/// to byte8 (regex-emacs.c:55-56,67-95,5111,5163).
-struct RawCurrentSymbolLookup;
-
-impl SyntaxLookup for RawCurrentSymbolLookup {
-    fn char_syntax(&self, c: char) -> SyntaxClass {
-        if c == '\u{a9}' {
-            SyntaxClass::Punctuation
-        } else {
-            DefaultSyntaxLookup.char_syntax(c)
-        }
-    }
-
-    fn char_has_category(&self, c: char, cat: u8) -> bool {
-        DefaultSyntaxLookup.char_has_category(c, cat)
-    }
-
-    fn cache_key(&self) -> SyntaxCacheKey {
-        SyntaxCacheKey::External {
-            id: usize::MAX - 1,
-            epoch: 0,
-        }
-    }
-
-    fn class_cache_key(&self) -> Option<LookupClassKey> {
-        Some(LookupClassKey::Tables {
-            syntax: usize::MAX - 1,
-            category: 0,
-        })
-    }
-
-    fn position_dependent(&self) -> bool {
-        false
-    }
 }
 
 #[test]
@@ -1633,18 +920,6 @@ fn a_candidate_reaching_the_frontier_is_left_to_the_matcher() {
     ));
     assert_eq!(lookup.crossed.get(), None);
     assert_eq!(dfa.counters.frontier_unknown, 2);
-}
-
-// ---------------------------------------------------------------------------
-// Cached first-step rejection (same-binary knob)
-// ---------------------------------------------------------------------------
-
-fn first_step_dfa(pattern: &CompiledPattern, syntax: &dyn SyntaxLookup) -> ExistenceDfa {
-    let mut dfa = ExistenceDfa::new(Nfa::build(pattern).unwrap());
-    let context = ClassContext::of_search(pattern, dfa.nfa(), syntax).unwrap();
-    dfa.classes.sync(context);
-    dfa.begin_search(pattern, syntax);
-    dfa
 }
 
 /// A real candidate rejected from the cached start transition avoids the
@@ -2121,14 +1396,6 @@ fn a_pending_quit_leaves_the_candidate_undecided() {
     neovm_value::quit::clear_quit_requested_for_test();
     assert_eq!(verdict, Exists::Unknown);
 }
-
-// ---------------------------------------------------------------------------
-// Differential fuzz smoke (C6)
-// ---------------------------------------------------------------------------
-
-use crate::fuzz_support::{
-    RegexCase, RegexCheck, RegexDifferential, SearchTarget, check_regex_differential,
-};
 
 /// The `ExistenceDfa` differential on every `cargo nextest` run: random
 /// patterns and texts, both representations, case-folded or not; every
@@ -2809,3 +2076,600 @@ fn an_earlier_verdict_does_not_poison_a_later_candidate_over_a_non_head_run() {
         assert_eq!((start, registers.start[0], registers.end[0]), (5, 5, 37));
     }
 }
+
+fn nfa_of(pattern: &str) -> Nfa {
+    let compiled = regex_compile(pattern, false, false).expect("pattern compiles");
+    Nfa::build(&compiled).unwrap_or_else(|why| panic!("{pattern:?} is ineligible: {why:?}"))
+}
+
+/// The predicates of the positions the start closure reaches at `d`.
+fn start_closure(nfa: &Nfa, text: &[u8], d: usize) -> (Vec<Predicate>, bool) {
+    let mut scratch = ClosureScratch::default();
+    let mut out = Vec::new();
+    let accept = nfa.closure(
+        &[kernel_item(0, 0)],
+        &place(text, d),
+        &mut scratch,
+        &mut out,
+    );
+    out.sort_unstable();
+    let predicates = out
+        .iter()
+        .map(|&p| nfa.predicates[nfa.positions[p as usize].predicate as usize])
+        .collect();
+    (predicates, accept)
+}
+
+/// Patterns covering every predicate kind and fact.
+const CLASS_PATTERNS: &[&str] = &[
+    "abcABC019 _-!:\n",
+    "éüß中日K\u{212A}ǅΣσςЖж😀",
+    ".",
+    "[a-z]",
+    "[^a-z0-9]",
+    "[A-Za-zé-üα-ω]",
+    "[^中]",
+    "[][^-]",
+    "[[:alpha:]]",
+    "[[:alnum:]_]",
+    "[[:upper:]]",
+    "[[:lower:]]",
+    "[[:space:]]",
+    "[[:word:]]",
+    "[[:punct:]]",
+    "[[:digit:][:xdigit:]]",
+    "[[:ascii:]]",
+    "[[:nonascii:]]",
+    "[[:multibyte:]]",
+    "[[:unibyte:]]",
+    "[[:cntrl:][:blank:]]",
+    "[[:graph:]]",
+    "[[:print:]]",
+    "[^[:space:]\n]",
+    "\\w\\W",
+    "\\s-\\s_\\s.\\sw\\S-",
+    "\\(?:\\w\\|\\s_\\)+",
+    "\\cg\\Cl\\c|\\ca\\cc",
+    "\\bx\\B\\<y\\>",
+    "\\_<z\\_>",
+    "^a$",
+    // org font-lock (P3.3 census)
+    "\\(?:^[ \t]*[-+]\\|^[ \t]+[*]\\)[ \t]+\\(.*?[ \t]+::\\)\\([ \t]+\\|$\\)",
+    "^\\*+ \\(?:.*[ \t]\\)?\\(:\\([[:alnum:]_@#%:]+\\):\\)[ \t]*$",
+    "^[ \t]*|\\(?:.*?|\\)? *\\(:?=[^|\n]*\\)",
+];
+
+/// Every character code the class tests visit in multibyte text.
+fn multibyte_sample() -> Vec<u32> {
+    let mut codes: Vec<u32> = (0..0x100).collect();
+    codes.extend([
+        0xDF, 0x212A, 0x1C5, 0x3B1, 0x3A3, 0x3C2, 0x416, 0x436, 0x4E2D, 0x65E5, 0x1F600, 0x2018,
+    ]);
+    codes.extend([0x80u8, 0xA9, 0xC0, 0xFF].map(emacs_char::byte8_to_char));
+    codes
+}
+
+fn encode(code: u32) -> Vec<u8> {
+    let mut buf = [0u8; 8];
+    let len = emacs_char::char_string(code, &mut buf);
+    buf[..len].to_vec()
+}
+
+/// A syntax table unlike the standard one: `-` is a word constituent, the
+/// newline ends comments, `é` and `中` are symbol constituents.
+struct CustomTableLookup;
+
+impl SyntaxLookup for CustomTableLookup {
+    fn char_syntax(&self, c: char) -> SyntaxClass {
+        match c {
+            '-' => SyntaxClass::Word,
+            '\n' => SyntaxClass::EndComment,
+            'é' | '中' => SyntaxClass::Symbol,
+            _ => neovm_text::emacs_core::syntax::standard_syntax_class_for_char(c),
+        }
+    }
+
+    fn char_has_category(&self, c: char, cat: u8) -> bool {
+        DefaultSyntaxLookup.char_has_category(c, cat)
+    }
+
+    fn cache_key(&self) -> SyntaxCacheKey {
+        SyntaxCacheKey::External {
+            id: usize::MAX,
+            epoch: 0,
+        }
+    }
+
+    fn class_cache_key(&self) -> Option<LookupClassKey> {
+        Some(LookupClassKey::Tables {
+            syntax: usize::MAX,
+            category: 0,
+        })
+    }
+
+    fn position_dependent(&self) -> bool {
+        false
+    }
+}
+
+/// The case settings of the class tests: none, the standard table, a custom
+/// table, and one that folds non-ASCII characters into ASCII.
+fn case_settings() -> Vec<Option<CaseTranslation>> {
+    vec![
+        None,
+        Some(CaseTranslation::standard()),
+        Some(CaseTranslation::from_char_table(case_table(&[
+            ('A', 'a'),
+            ('É', 'é'),
+            ('Σ', 'σ'),
+            ('ς', 'σ'),
+        ]))),
+        Some(CaseTranslation::from_char_table(case_table(&[
+            ('\u{212A}', 'k'),
+            ('K', 'k'),
+            ('é', 'e'),
+            ('É', 'e'),
+        ]))),
+    ]
+}
+
+/// The matcher's own test for `predicate` at the real position, with the
+/// real lookup and the whole text as the limit.
+fn direct_accepts(
+    nfa: &Nfa,
+    predicate: Predicate,
+    pattern: &CompiledPattern,
+    text: &[u8],
+    d: usize,
+    syntax: &dyn SyntaxLookup,
+) -> Option<usize> {
+    let stop = text.len();
+    let tm = pattern.target_multibyte;
+    match predicate {
+        Predicate::Literal { pc, lit_off } => {
+            let pc = pc as usize;
+            let count = nfa.bytecode[pc + 1] as usize;
+            match_exactn_char_at(
+                &nfa.bytecode[pc + 2..pc + 2 + count],
+                lit_off as usize,
+                pattern.multibyte,
+                tm,
+                &pattern.translate,
+                text,
+                d,
+                stop,
+            )
+            .map(|(_, len)| len)
+        }
+        Predicate::AnyChar => match_anychar_at(text, d, stop, tm, &pattern.translate),
+        Predicate::Charset { pc } => match_charset_at(
+            pattern,
+            pc as usize,
+            text,
+            d,
+            stop,
+            tm,
+            &pattern.translate,
+            syntax,
+        ),
+        Predicate::Syntax { class, negate } => {
+            match_syntaxspec_at(class, negate, text, d, stop, tm, syntax)
+        }
+        Predicate::SyntaxSet { mask } => match_syntaxspecset_at(mask, text, d, stop, tm, syntax),
+        Predicate::Category { category, negate } => {
+            match_categoryspec_at(category, negate, text, d, stop, tm, syntax)
+        }
+    }
+}
+
+struct DfaRng(u64);
+
+impl DfaRng {
+    fn below(&mut self, n: usize) -> usize {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        (self.0 % n.max(1) as u64) as usize
+    }
+
+    fn pick<'a>(&mut self, items: &[&'a str]) -> &'a str {
+        items[self.below(items.len())]
+    }
+}
+
+/// A random pattern over the whole eligible vocabulary, quantifiers nested.
+fn gen_pattern(rng: &mut DfaRng, depth: usize) -> String {
+    let mut out = String::new();
+    let arms = 1 + rng.below(3);
+    for arm in 0..arms {
+        if arm > 0 {
+            out.push_str("\\|");
+        }
+        for _ in 0..1 + rng.below(4) {
+            let atom = match rng.below(if depth == 0 { 6 } else { 9 }) {
+                0..=3 => rng.pick(GEN_ATOMS).to_string(),
+                4 | 5 => rng.pick(GEN_ZERO_WIDTH).to_string(),
+                6 | 7 => format!("\\(?:{}\\)", gen_pattern(rng, depth - 1)),
+                _ => format!("\\({}\\)", gen_pattern(rng, depth - 1)),
+            };
+            out.push_str(&atom);
+            if !GEN_ZERO_WIDTH.contains(&atom.as_str()) {
+                out.push_str(rng.pick(GEN_QUANTIFIERS));
+            }
+        }
+    }
+    out
+}
+
+/// A random valid multibyte text (raw bytes encoded as Emacs does).
+fn gen_text(rng: &mut DfaRng, max_len: usize) -> Vec<u8> {
+    const PIECES: &[&str] = &[
+        "a", "b", "c", "x", "A", "B", " ", " ", "\n", "-", "_", ":", "!", "é", "É", "中", "日",
+        "Ж", "α", "K", "ab", "cab",
+    ];
+    let mut text = Vec::new();
+    for _ in 0..rng.below(max_len) {
+        if rng.below(12) == 0 {
+            text.extend(encode(emacs_char::byte8_to_char(
+                0x80 + rng.below(0x80) as u8,
+            )));
+        } else {
+            text.extend_from_slice(rng.pick(PIECES).as_bytes());
+        }
+    }
+    text
+}
+
+fn char_boundaries(text: &[u8], multibyte: bool) -> Vec<usize> {
+    let mut out = Vec::new();
+    let mut d = 0;
+    while d < text.len() {
+        out.push(d);
+        d += re_text_char(text, d, multibyte).map_or(1, |(_, len)| len);
+    }
+    out.push(text.len());
+    out
+}
+
+/// Every verdict of the DFA against the matcher at every candidate of
+/// `text`, for a few stops and points.  Returns (yes, no, unknown).
+fn check_dfa_against_matcher(
+    compiled: &CompiledPattern,
+    dfa: &mut ExistenceDfa,
+    text: &[u8],
+    syntax: &dyn SyntaxLookup,
+    label: &str,
+) -> (usize, usize, usize) {
+    let context = ClassContext::of_search(compiled, dfa.nfa(), syntax)
+        .expect("test lookups have a class identity");
+    dfa.classes_mut().sync(context);
+    dfa.begin_search(compiled, syntax);
+    let boundaries = char_boundaries(text, compiled.target_multibyte);
+    let mut tally = (0, 0, 0);
+    let stops = [text.len(), boundaries[boundaries.len() / 2]];
+    for &stop in &stops {
+        for &point in &[0, boundaries[boundaries.len() / 3], text.len()] {
+            // One pass over the candidates is one search.
+            dfa.begin_search(compiled, syntax);
+            for &p in boundaries.iter().filter(|&&p| p <= stop) {
+                let verdict = dfa.anchored_exists(compiled, text, p, stop, point, syntax);
+                let _ = take_matcher_overflow();
+                let matched = re_match(compiled, text, p, stop, syntax, point);
+                if take_matcher_overflow() {
+                    continue;
+                }
+                let where_ = || {
+                    format!(
+                        "{label}: at {p} stop {stop} point {point} in {:?}: {verdict:?} vs {:?}",
+                        String::from_utf8_lossy(text),
+                        matched.as_ref().map(|m| m.0)
+                    )
+                };
+                match verdict {
+                    Exists::Yes => {
+                        assert!(matched.is_some(), "{}", where_());
+                        tally.0 += 1;
+                    }
+                    Exists::No { .. } => {
+                        assert!(matched.is_none(), "{}", where_());
+                        tally.1 += 1;
+                    }
+                    Exists::Unknown => tally.2 += 1,
+                }
+            }
+        }
+    }
+    tally
+}
+
+/// A syntax lookup whose `WORD_BOUNDARY_P` separates CJK from other word
+/// constituents, as GNU's char-script-table does.
+struct ScriptBoundaryLookup;
+
+impl SyntaxLookup for ScriptBoundaryLookup {
+    fn char_syntax(&self, c: char) -> SyntaxClass {
+        DefaultSyntaxLookup.char_syntax(c)
+    }
+
+    fn char_has_category(&self, c: char, cat: u8) -> bool {
+        DefaultSyntaxLookup.char_has_category(c, cat)
+    }
+
+    fn word_boundary_between(&self, c1: char, c2: char) -> bool {
+        if c1 as u32 <= 0xFF && c2 as u32 <= 0xFF {
+            return false;
+        }
+        let cjk = |c: char| ('\u{3000}'..='\u{9FFF}').contains(&c);
+        cjk(c1) != cjk(c2)
+    }
+
+    fn cache_key(&self) -> SyntaxCacheKey {
+        SyntaxCacheKey::Standard
+    }
+
+    fn class_cache_key(&self) -> Option<LookupClassKey> {
+        Some(LookupClassKey::Tables {
+            syntax: 1,
+            category: 1,
+        })
+    }
+
+    fn position_dependent(&self) -> bool {
+        false
+    }
+}
+
+fn search(
+    compiled: &CompiledPattern,
+    text: &[u8],
+    start: usize,
+    range: isize,
+    syntax: &dyn SyntaxLookup,
+    point: usize,
+) -> (SearchResult, bool) {
+    let _ = take_matcher_overflow();
+    let found = re_search(compiled, text, start, range, syntax, point)
+        .map(|(at, regs)| (at, regs.start.to_vec(), regs.end.to_vec()));
+    (found, take_matcher_overflow())
+}
+
+/// The syntax a `syntax-table` property run gives its characters.
+#[derive(Clone, Copy)]
+enum RunSyntax {
+    /// A descriptor cons: every character has this class.
+    Descriptor(SyntaxClass),
+    /// A syntax table as the property: each character's class in it.
+    Table(&'static dyn SyntaxLookup),
+}
+
+/// A base table plus `syntax-table` property runs (sorted, disjoint
+/// `[start, end)` input ranges), and a lazy-propertize frontier that
+/// records the lowest syntax read at or past it, as the buffer lookup does.
+struct PropertyRunLookup {
+    base: &'static dyn SyntaxLookup,
+    runs: Vec<(usize, usize, RunSyntax)>,
+    /// Whether `plain_syntax_until` reports the runs; otherwise the trait's
+    /// default treats every position as propertized.
+    reports_runs: bool,
+    frontier: usize,
+    crossed: std::cell::Cell<Option<usize>>,
+}
+
+impl PropertyRunLookup {
+    fn new(base: &'static dyn SyntaxLookup, runs: Vec<(usize, usize, RunSyntax)>) -> Self {
+        Self {
+            base,
+            runs,
+            reports_runs: true,
+            frontier: usize::MAX,
+            crossed: std::cell::Cell::new(None),
+        }
+    }
+
+    fn run_at(&self, pos: usize) -> Option<RunSyntax> {
+        self.runs
+            .iter()
+            .find(|&&(start, end, _)| start <= pos && pos < end)
+            .map(|&(_, _, syntax)| syntax)
+    }
+}
+
+impl SyntaxLookup for PropertyRunLookup {
+    fn char_syntax(&self, c: char) -> SyntaxClass {
+        self.base.char_syntax(c)
+    }
+
+    fn char_syntax_at(&self, c: char, pos: usize) -> SyntaxClass {
+        if pos >= self.frontier && self.crossed.get().is_none_or(|seen| pos < seen) {
+            self.crossed.set(Some(pos));
+        }
+        match self.run_at(pos) {
+            Some(RunSyntax::Descriptor(class)) => class,
+            Some(RunSyntax::Table(table)) => table.char_syntax(c),
+            None => self.base.char_syntax(c),
+        }
+    }
+
+    fn char_has_category(&self, c: char, cat: u8) -> bool {
+        self.base.char_has_category(c, cat)
+    }
+
+    fn word_boundary_between(&self, c1: char, c2: char) -> bool {
+        self.base.word_boundary_between(c1, c2)
+    }
+
+    fn cache_key(&self) -> SyntaxCacheKey {
+        self.base.cache_key()
+    }
+
+    fn class_cache_key(&self) -> Option<LookupClassKey> {
+        self.base.class_cache_key()
+    }
+
+    fn position_dependent(&self) -> bool {
+        true
+    }
+
+    fn plain_syntax_until(&self, pos: usize) -> usize {
+        if !self.reports_runs || self.run_at(pos).is_some() {
+            return pos;
+        }
+        self.runs
+            .iter()
+            .map(|&(start, _, _)| start)
+            .filter(|&start| start > pos)
+            .min()
+            .unwrap_or(usize::MAX)
+    }
+
+    fn syntax_read_limit(&self) -> usize {
+        self.frontier
+    }
+}
+
+/// Up to three random property runs over `text`'s character boundaries.
+fn gen_runs(rng: &mut DfaRng, text: &[u8], multibyte: bool) -> Vec<(usize, usize, RunSyntax)> {
+    let boundaries = char_boundaries(text, multibyte);
+    let mut cuts: Vec<usize> = (0..2 * rng.below(4))
+        .map(|_| boundaries[rng.below(boundaries.len())])
+        .collect();
+    cuts.sort_unstable();
+    cuts.dedup();
+    cuts.chunks_exact(2)
+        .map(|pair| {
+            let syntax = if rng.below(4) == 0 {
+                RunSyntax::Table(&CustomTableLookup)
+            } else {
+                RunSyntax::Descriptor(RUN_CLASSES[rng.below(RUN_CLASSES.len())])
+            };
+            (pair[0], pair[1], syntax)
+        })
+        .collect()
+}
+
+fn random_base(rng: &mut DfaRng) -> &'static dyn SyntaxLookup {
+    if rng.below(2) == 0 {
+        &DefaultSyntaxLookup
+    } else {
+        &CustomTableLookup
+    }
+}
+
+/// The same unibyte byte has two GNU syntax identities: symbol opcodes
+/// inspect the raw current byte, while every previous/word read promotes it
+/// to byte8 (regex-emacs.c:55-56,67-95,5111,5163).
+struct RawCurrentSymbolLookup;
+
+impl SyntaxLookup for RawCurrentSymbolLookup {
+    fn char_syntax(&self, c: char) -> SyntaxClass {
+        if c == '\u{a9}' {
+            SyntaxClass::Punctuation
+        } else {
+            DefaultSyntaxLookup.char_syntax(c)
+        }
+    }
+
+    fn char_has_category(&self, c: char, cat: u8) -> bool {
+        DefaultSyntaxLookup.char_has_category(c, cat)
+    }
+
+    fn cache_key(&self) -> SyntaxCacheKey {
+        SyntaxCacheKey::External {
+            id: usize::MAX - 1,
+            epoch: 0,
+        }
+    }
+
+    fn class_cache_key(&self) -> Option<LookupClassKey> {
+        Some(LookupClassKey::Tables {
+            syntax: usize::MAX - 1,
+            category: 0,
+        })
+    }
+
+    fn position_dependent(&self) -> bool {
+        false
+    }
+}
+
+fn first_step_dfa(pattern: &CompiledPattern, syntax: &dyn SyntaxLookup) -> ExistenceDfa {
+    let mut dfa = ExistenceDfa::new(Nfa::build(pattern).unwrap());
+    let context = ClassContext::of_search(pattern, dfa.nfa(), syntax).unwrap();
+    dfa.classes.sync(context);
+    dfa.begin_search(pattern, syntax);
+    dfa
+}
+
+fn place<'a>(text: &'a [u8], d: usize) -> Place<'a> {
+    Place {
+        text,
+        d,
+        stop: text.len(),
+        point: 0,
+        target_multibyte: true,
+        syntax: MatchSyntax::new(&DefaultSyntaxLookup),
+    }
+}
+
+fn case_table(folds: &[(char, char)]) -> Value {
+    let table = Value::make_char_table(Value::symbol("case-table"), Value::NIL, 3);
+    for &(from, to) in folds {
+        neovm_text::emacs_core::chartable::ct_set_single(
+            &table,
+            from as i64,
+            Value::fixnum(to as i64),
+        );
+    }
+    table
+}
+
+const GEN_ATOMS: &[&str] = &[
+    "a",
+    "b",
+    "c",
+    "x",
+    "A",
+    " ",
+    "-",
+    "_",
+    ":",
+    "\n",
+    "é",
+    "中",
+    "Ж",
+    ".",
+    "[a-c]",
+    "[^a-c\n]",
+    "[[:alpha:]]",
+    "[[:space:]]",
+    "[[:upper:]]",
+    "[[:word:]]",
+    "[[:punct:]]",
+    "[é-ü]",
+    "\\w",
+    "\\W",
+    "\\s-",
+    "\\s_",
+    "\\sw",
+    "\\S-",
+    "\\cg",
+    "\\C|",
+    "\\(?:\\w\\|\\s_\\)",
+];
+
+const GEN_ZERO_WIDTH: &[&str] = &[
+    "^", "$", "\\`", "\\'", "\\b", "\\B", "\\<", "\\>", "\\_<", "\\_>", "\\=",
+];
+
+const GEN_QUANTIFIERS: &[&str] = &["", "", "", "*", "+", "?", "*?", "+?", "??"];
+
+type SearchResult = Option<(usize, Vec<i64>, Vec<i64>)>;
+
+const RUN_CLASSES: &[SyntaxClass] = &[
+    SyntaxClass::Word,
+    SyntaxClass::Symbol,
+    SyntaxClass::Whitespace,
+    SyntaxClass::Punctuation,
+    SyntaxClass::Open,
+    SyntaxClass::EndComment,
+];

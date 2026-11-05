@@ -1,92 +1,5 @@
 use super::*;
 
-fn colliding_properties() -> (Value, Value) {
-    let mut signatures: Vec<(OverlayPropertyFilter, Value)> = Vec::new();
-    // Each single-name signature selects one of 256 bits. Comparing the
-    // public filters finds a pair even if symbol allocation order changes.
-    for index in 0..=256 {
-        let property = Value::symbol(format!("overlay-filter-collision-{index}"));
-        let filter = OverlayPropertyFilter::for_properties([property]);
-        if let Some((_, previous)) = signatures
-            .iter()
-            .find(|(signature, _)| *signature == filter)
-        {
-            assert_ne!(property.bits(), previous.bits());
-            return (*previous, property);
-        }
-        signatures.push((filter, property));
-    }
-    panic!("257 single-property signatures must contain a collision");
-}
-
-fn filtered_runs(list: &OverlayList, property: Value) -> Vec<(usize, usize, Option<i64>)> {
-    list.overlay_property_sweep(
-        emacs_byte_range(0, 12),
-        None,
-        FilteredPropertyResolver {
-            overlays: list,
-            lookup_order: &[property],
-        },
-    )
-    .map(|run| {
-        (
-            run.range().start().get(),
-            run.range().end().get(),
-            run.winner().map(|winner| {
-                winner
-                    .value()
-                    .as_fixnum()
-                    .expect("test properties are fixnums")
-            }),
-        )
-    })
-    .collect()
-}
-
-fn assert_filtered_extent(
-    list: &OverlayList,
-    property: Value,
-    winner: Value,
-    range: EmacsByteRange,
-    value: i64,
-) {
-    let lookup_order = [property];
-    let OverlayPropertyAtPoint::Present(resolution) = list
-        .resolve_overlay_property_at_emacs_byte_pos(
-            emacs_byte_pos(5),
-            None,
-            FilteredPropertyResolver {
-                overlays: list,
-                lookup_order: &lookup_order,
-            },
-        )
-    else {
-        panic!("the exact queried property should have a carrier");
-    };
-    let extent = resolution
-        .extent(emacs_byte_range(0, 12))
-        .expect("bounded extent");
-    assert_eq!(extent.overlay().bits(), winner.bits());
-    assert_eq!(extent.value(), Value::fixnum(value));
-    assert_eq!(extent.range(), range);
-}
-
-fn replace_carrier_property(list: &mut OverlayList, carrier: Value, property: Value, value: i64) {
-    carrier
-        .with_overlay_data_mut(|data| {
-            data.plist = Value::cons(
-                Value::symbol("priority"),
-                Value::cons(
-                    Value::fixnum(20),
-                    Value::cons(property, Value::cons(Value::fixnum(value), Value::NIL)),
-                ),
-            );
-        })
-        .expect("test carrier is live");
-    list.index_mut().overlay_properties_changed(carrier);
-    list.index.assert_invariants();
-}
-
 #[test]
 fn colliding_property_signatures_keep_filtered_sweeps_and_extents_exact() {
     crate::test_utils::init_test_tracing();
@@ -203,4 +116,91 @@ fn colliding_property_names_keep_public_lisp_queries_exact() {
         format!("{result}"),
         "((nil 11 99 99 4 10 10 4) (nil 11 99 22 4 10 10 4) (nil nil 99 22 13 13 1 1) (nil 33 99 99 4 10 10 4))"
     );
+}
+
+fn colliding_properties() -> (Value, Value) {
+    let mut signatures: Vec<(OverlayPropertyFilter, Value)> = Vec::new();
+    // Each single-name signature selects one of 256 bits. Comparing the
+    // public filters finds a pair even if symbol allocation order changes.
+    for index in 0..=256 {
+        let property = Value::symbol(format!("overlay-filter-collision-{index}"));
+        let filter = OverlayPropertyFilter::for_properties([property]);
+        if let Some((_, previous)) = signatures
+            .iter()
+            .find(|(signature, _)| *signature == filter)
+        {
+            assert_ne!(property.bits(), previous.bits());
+            return (*previous, property);
+        }
+        signatures.push((filter, property));
+    }
+    panic!("257 single-property signatures must contain a collision");
+}
+
+fn filtered_runs(list: &OverlayList, property: Value) -> Vec<(usize, usize, Option<i64>)> {
+    list.overlay_property_sweep(
+        emacs_byte_range(0, 12),
+        None,
+        FilteredPropertyResolver {
+            overlays: list,
+            lookup_order: &[property],
+        },
+    )
+    .map(|run| {
+        (
+            run.range().start().get(),
+            run.range().end().get(),
+            run.winner().map(|winner| {
+                winner
+                    .value()
+                    .as_fixnum()
+                    .expect("test properties are fixnums")
+            }),
+        )
+    })
+    .collect()
+}
+
+fn assert_filtered_extent(
+    list: &OverlayList,
+    property: Value,
+    winner: Value,
+    range: EmacsByteRange,
+    value: i64,
+) {
+    let lookup_order = [property];
+    let OverlayPropertyAtPoint::Present(resolution) = list
+        .resolve_overlay_property_at_emacs_byte_pos(
+            emacs_byte_pos(5),
+            None,
+            FilteredPropertyResolver {
+                overlays: list,
+                lookup_order: &lookup_order,
+            },
+        )
+    else {
+        panic!("the exact queried property should have a carrier");
+    };
+    let extent = resolution
+        .extent(emacs_byte_range(0, 12))
+        .expect("bounded extent");
+    assert_eq!(extent.overlay().bits(), winner.bits());
+    assert_eq!(extent.value(), Value::fixnum(value));
+    assert_eq!(extent.range(), range);
+}
+
+fn replace_carrier_property(list: &mut OverlayList, carrier: Value, property: Value, value: i64) {
+    carrier
+        .with_overlay_data_mut(|data| {
+            data.plist = Value::cons(
+                Value::symbol("priority"),
+                Value::cons(
+                    Value::fixnum(20),
+                    Value::cons(property, Value::cons(Value::fixnum(value), Value::NIL)),
+                ),
+            );
+        })
+        .expect("test carrier is live");
+    list.index_mut().overlay_properties_changed(carrier);
+    list.index.assert_invariants();
 }

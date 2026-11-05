@@ -1,47 +1,9 @@
 //! Raw first-nil admission against independent per-character effective reads.
 //! No process policy/environment is changed and no hook runs inside the scan.
+
 use crate::emacs_core::eval::Context;
+
 use neovm_edit::emacs_core::textprop::*;
-
-fn scan(ctx: &Context, from: i64, end: i64) -> FontificationScanAdmission {
-    first_unfontified_position_in_state(
-        ctx.variables(),
-        ctx.buffer_manager(),
-        LispCharPos1::new(from),
-        LispCharPos1::new(end),
-        FontificationBoundaryMode::On,
-    )
-}
-
-fn assert_raw(ctx: &Context, from: i64, end: i64) {
-    // The reference asks the public effective getter for each character; it
-    // does not reuse the optimized interval cursor or raw-property predicate.
-    let expected = (from..end).find(|pos| {
-        builtin_get_char_property_with_window_lookup(
-            ctx.variables(),
-            ctx.buffer_manager(),
-            |_| WindowBufferLookup::NotAvailable,
-            &[Value::fixnum(*pos), Value::symbol("fontified")],
-        )
-        .expect("validated effective reference")
-        .is_nil()
-    });
-    assert_eq!(
-        scan(ctx, from, end),
-        FontificationScanAdmission::Raw(expected.map(LispCharPos1::new)),
-        "{from}..{end}",
-    );
-    assert_eq!(
-        first_unfontified_position_in_state(
-            ctx.variables(),
-            ctx.buffer_manager(),
-            LispCharPos1::new(from),
-            LispCharPos1::new(end),
-            FontificationBoundaryMode::Off,
-        ),
-        FontificationScanAdmission::UseGeneric,
-    );
-}
 
 #[test]
 fn fontification_scan_dense_representations_and_all_nonnil_values() {
@@ -177,4 +139,44 @@ fn fontification_scan_reacquires_live_state_after_source_changes() {
     ctx.eval_str("(let ((o (make-overlay 2 3))) (overlay-put o 'fontified t))")
         .unwrap();
     assert_eq!(scan(&ctx, 2, 7), FontificationScanAdmission::UseGeneric);
+}
+
+fn scan(ctx: &Context, from: i64, end: i64) -> FontificationScanAdmission {
+    first_unfontified_position_in_state(
+        ctx.variables(),
+        ctx.buffer_manager(),
+        LispCharPos1::new(from),
+        LispCharPos1::new(end),
+        FontificationBoundaryMode::On,
+    )
+}
+
+fn assert_raw(ctx: &Context, from: i64, end: i64) {
+    // The reference asks the public effective getter for each character; it
+    // does not reuse the optimized interval cursor or raw-property predicate.
+    let expected = (from..end).find(|pos| {
+        builtin_get_char_property_with_window_lookup(
+            ctx.variables(),
+            ctx.buffer_manager(),
+            |_| WindowBufferLookup::NotAvailable,
+            &[Value::fixnum(*pos), Value::symbol("fontified")],
+        )
+        .expect("validated effective reference")
+        .is_nil()
+    });
+    assert_eq!(
+        scan(ctx, from, end),
+        FontificationScanAdmission::Raw(expected.map(LispCharPos1::new)),
+        "{from}..{end}",
+    );
+    assert_eq!(
+        first_unfontified_position_in_state(
+            ctx.variables(),
+            ctx.buffer_manager(),
+            LispCharPos1::new(from),
+            LispCharPos1::new(end),
+            FontificationBoundaryMode::Off,
+        ),
+        FontificationScanAdmission::UseGeneric,
+    );
 }

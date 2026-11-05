@@ -1,20 +1,6 @@
 use crate::emacs_core::eval::Context;
+
 use neovm_text::emacs_core::charset::*;
-
-fn populate(_ctx: &mut Context) -> Value {
-    let payload = Value::vector(vec![Value::fixnum(42)]);
-    set_charset_plist_registry(
-        intern("ascii"),
-        vec![(intern("gc-tls-owned-plist"), payload)],
-    );
-    payload
-}
-
-fn roots(ctx: &Context) -> Vec<Value> {
-    let mut roots = Vec::new();
-    collect_charset_gc_roots(&mut roots, ctx.tagged_heap.identity());
-    roots
-}
 
 #[test]
 fn gc_tls_ownership_charset_new_heap_reset_drops_old_values() {
@@ -104,4 +90,19 @@ fn gc_tls_ownership_charset_registries_collect_on_independent_owner_threads() {
     populate(&mut second);
     second.gc_collect_exact();
     worker.join().unwrap();
+}
+
+fn populate(_ctx: &mut Context) -> Value {
+    let payload = Value::vector(vec![Value::fixnum(42)]);
+    set_charset_plist_registry(
+        intern("ascii"),
+        vec![(intern("gc-tls-owned-plist"), payload)],
+    );
+    payload
+}
+
+fn roots(ctx: &Context) -> Vec<Value> {
+    let mut roots = Vec::new();
+    collect_charset_gc_roots(&mut roots, ctx.tagged_heap.identity());
+    roots
 }

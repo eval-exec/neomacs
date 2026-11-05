@@ -1,15 +1,6 @@
 use crate::emacs_core::eval::Context;
+
 use neovm_text::emacs_core::category::*;
-
-fn populate(_ctx: &mut Context) -> Value {
-    ensure_standard_category_table_object().unwrap()
-}
-
-fn roots(ctx: &Context) -> Vec<Value> {
-    let mut roots = Vec::new();
-    collect_category_gc_roots(&mut roots, ctx.tagged_heap.identity());
-    roots
-}
 
 #[test]
 fn gc_tls_ownership_category_new_heap_reset_drops_old_values() {
@@ -50,4 +41,14 @@ fn gc_tls_ownership_category_excludes_another_live_heap() {
     second.setup_thread_locals();
     second.gc_collect_exact();
     assert!(second.tagged_heap.owns_heap_value_for_test(value));
+}
+
+fn populate(_ctx: &mut Context) -> Value {
+    ensure_standard_category_table_object().unwrap()
+}
+
+fn roots(ctx: &Context) -> Vec<Value> {
+    let mut roots = Vec::new();
+    collect_category_gc_roots(&mut roots, ctx.tagged_heap.identity());
+    roots
 }

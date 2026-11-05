@@ -1,44 +1,7 @@
 //! GNU-backed buffer primitive regressions. Refresh cached expectations only
 //! from GNU with UPDATE_EXPECT=1; conditions are ordinary Lisp result lists.
-use crate::test_utils::runtime_startup_eval_one;
 
-fn gnu_fixture(case: &str, form: &str, cached: &str) -> String {
-    if std::env::var("UPDATE_EXPECT").as_deref() != Ok("1") {
-        return cached.trim_end().to_owned();
-    }
-    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let script = root.join("../../tmp").join(format!(
-        "gdn-primitives-fixture-{case}-{}.el",
-        std::process::id()
-    ));
-    std::fs::write(&script, format!("(prin1 {form})\n")).expect("GNU fixture input");
-    // Campaign refreshes provide the PID/memory sandbox; the helper also works
-    // in ordinary checkouts that do not contain the campaign tooling.
-    let mut command = crate::test_utils::gnu_probe_command();
-    let output = command
-        .args(["-Q", "--batch", "-l"])
-        .arg(script)
-        .output()
-        .expect("GNU oracle");
-    assert!(
-        output.status.success(),
-        "GNU {case}: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let transcript = format!(
-        "OK {}",
-        String::from_utf8(output.stdout)
-            .expect("GNU UTF-8")
-            .trim_end()
-    );
-    std::fs::write(
-        root.join("src/emacs_core/editing/buffer/tests/gdn_primitives_cases")
-            .join(format!("{case}.expect")),
-        format!("{transcript}\n"),
-    )
-    .expect("GNU fixture output");
-    transcript
-}
+use crate::test_utils::runtime_startup_eval_one;
 
 #[test]
 fn gdn_buf14() {
@@ -115,4 +78,42 @@ fn gdn_buf20() {
         include_str!("gdn_primitives_cases/buf20.expect"),
     );
     assert_eq!(runtime_startup_eval_one(form), expected);
+}
+
+fn gnu_fixture(case: &str, form: &str, cached: &str) -> String {
+    if std::env::var("UPDATE_EXPECT").as_deref() != Ok("1") {
+        return cached.trim_end().to_owned();
+    }
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let script = root.join("../../tmp").join(format!(
+        "gdn-primitives-fixture-{case}-{}.el",
+        std::process::id()
+    ));
+    std::fs::write(&script, format!("(prin1 {form})\n")).expect("GNU fixture input");
+    // Campaign refreshes provide the PID/memory sandbox; the helper also works
+    // in ordinary checkouts that do not contain the campaign tooling.
+    let mut command = crate::test_utils::gnu_probe_command();
+    let output = command
+        .args(["-Q", "--batch", "-l"])
+        .arg(script)
+        .output()
+        .expect("GNU oracle");
+    assert!(
+        output.status.success(),
+        "GNU {case}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let transcript = format!(
+        "OK {}",
+        String::from_utf8(output.stdout)
+            .expect("GNU UTF-8")
+            .trim_end()
+    );
+    std::fs::write(
+        root.join("src/emacs_core/editing/buffer/tests/gdn_primitives_cases")
+            .join(format!("{case}.expect")),
+        format!("{transcript}\n"),
+    )
+    .expect("GNU fixture output");
+    transcript
 }

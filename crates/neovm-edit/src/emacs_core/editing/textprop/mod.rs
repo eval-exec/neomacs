@@ -311,6 +311,7 @@ fn current_textprop_variable_value<'a, Vars: EditVariableRead<'a>>(
     vars.value(sym_id)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn plist_get_value(plist: Value, prop: Value) -> Option<Value> {
     raw_plist_lookup::get(plist, prop)
 }
@@ -588,6 +589,7 @@ impl<'a> CharPropertyResolver<'a> {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// The property carrier determines whether GNU's text defaults are eligible.
 /// Text and overlay callers share direct/category/alias precedence, but only
 /// text consults `default-text-properties` (GNU intervals.c:1741-1742).
@@ -775,6 +777,7 @@ pub(crate) fn lookup_buffer_text_property_at_emacs_byte_pos<'a, Vars: EditVariab
     )
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn lookup_overlay_property<'a, Vars: EditVariableRead<'a>>(
     vars: Vars,
     buffers: &BufferManager,
@@ -1947,6 +1950,7 @@ fn put_text_property_in_buffer_byte_range(
     Value::NIL
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// (get-text-property POS PROP &optional OBJECT)
 #[cfg(test)]
 pub(crate) fn builtin_get_text_property<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
@@ -2432,6 +2436,7 @@ pub fn builtin_get_char_property_with_window_lookup<
     ))
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// (add-text-properties BEG END PROPS &optional OBJECT)
 #[cfg(test)]
 pub(crate) fn builtin_add_text_properties<H: EditHost>(
@@ -2978,6 +2983,7 @@ impl StringTextPropertyTarget {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// (remove-list-of-text-properties BEG END LIST &optional OBJECT)
 #[cfg(test)]
 pub(crate) fn builtin_remove_list_of_text_properties<H: EditHost>(
@@ -3088,6 +3094,7 @@ pub(crate) fn builtin_remove_list_of_text_properties_in_buffers(
     Ok(Value::T)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// (text-properties-at POS &optional OBJECT)
 #[cfg(test)]
 pub(crate) fn builtin_text_properties_at<H: EditHost>(
@@ -3148,6 +3155,7 @@ pub fn builtin_text_properties_at_in_buffers(
     Ok(buf.text_props_get_properties_plist_value_at_emacs_byte_pos(byte_pos))
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// (next-single-property-change POS PROP &optional OBJECT LIMIT)
 pub(crate) fn builtin_next_single_property_change<H: EditHost>(
     host: &mut H,
@@ -3572,6 +3580,7 @@ pub fn emacs_byte_pos_of_preceding_char(buf: &Buffer, byte_pos: EmacsBytePos) ->
     EmacsBytePos::new(buffer_char_to_byte_pos(buf, prev_char))
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// (previous-single-property-change POS PROP &optional OBJECT LIMIT)
 #[cfg(test)]
 pub(crate) fn builtin_previous_single_property_change<H: EditHost>(
@@ -3950,6 +3959,7 @@ pub(crate) fn builtin_text_property_any_in_state<'a, Vars: EditVariableRead<'a>>
     Ok(first.map_or(Value::NIL, |pos| Value::fixnum(pos.to_lisp().as_i64())))
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// (text-property-not-all BEG END PROP VAL &optional OBJECT)
 #[cfg(test)]
 pub(crate) fn builtin_text_property_not_all<H: EditHost>(
@@ -4159,6 +4169,7 @@ pub(crate) fn builtin_get_display_property_in_state<'a, Vars: EditVariableRead<'
 // Overlay builtins
 // ===========================================================================
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// (remove-overlays &optional BEG END NAME VAL)
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) fn builtin_remove_overlays<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
@@ -4864,3 +4875,7 @@ pub fn builtin_previous_single_char_property_change_in_buffers_with_symbols<
 // ===========================================================================
 // Tests
 // ===========================================================================
+
+#[cfg(test)]
+#[path = "tests/textprop_test.rs"]
+mod tests;

@@ -11,18 +11,27 @@
 
 use crate::test_utils::runtime_startup_eval_one;
 
-// Actual GNU 31.1 fixture capture (2026-10-24), serialized with no other engine:
-// CARGO_TARGET_DIR=/home/exec/nvme-rust-target/v10x-wt-lead-vmcall
-// TMPDIR=$PWD/tmp/vmcall/undofix-oracle-v1/tmp XDG_RUNTIME_DIR=/run/user/1001
-// DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus
-// taskset -c 0-3,14-31 nix develop /home/exec/Projects/github.com/eval-exec/neomacs-main -c \
-// /home/exec/Projects/github.com/eval-exec/neomacs-main/tmp/v10x/sandbox-run.sh \
-// $NEOVM_FORCE_ORACLE_PATH -Q --batch -l \
-// /home/exec/Projects/github.com/eval-exec/neomacs-main/tmp/wt-lead-vmcall/tmp/vmcall/undofix-oracle-v1/capture.el
-// Full input, argv, environment, stdout/stderr, exit and hashes are retained in
-// tmp/vmcall/undofix-oracle-v1/. The original sixteen-case GNU result was freshly
-// reproduced byte for byte (SHA256 a2a75df2e01b2ce102694de7c21c1cfab6ab7820291a9508f477576717fa7523).
-// New dirty-buffer expectations came only from the same sandboxed GNU capture.
+#[test]
+fn gnu_undo_marker_matrix_matches_all_sixteen_cases() {
+    // Includes clean replace/replace-delete/replace-insert, all eight public
+    // before/after-hook undo toggles, live marker mutation, and the sequence.
+    assert_gnu_observation(MATRIX_OBSERVE, GNU_MATRIX);
+}
+
+#[test]
+fn gnu_replace_undo_compound_sequence_matches() {
+    // This independent run keeps the entire insert -> delete -> replace list,
+    // not just the final replacement's records or the text/marker endpoints.
+    assert_gnu_observation("(undometa--sequence)", GNU_SEQUENCE);
+}
+
+#[test]
+fn gnu_replace_undo_already_modified_records_no_first_change() {
+    // Each replacement shape and the compound sequence start already modified
+    // with an empty enabled undo list. Their captured first-change counts are0.
+    let observe = format!("(progn {DIRTY_HELPERS} {DIRTY_OBSERVE})");
+    assert_gnu_observation(&observe, GNU_DIRTY);
+}
 
 const HELPERS: &str = r###"(progn
   (defun undometa--normalized-undo (undo markers)
@@ -201,26 +210,4 @@ fn assert_gnu_observation(observe: &str, expected: &str) {
         "(let ((print-length nil) (print-level nil) (print-circle nil)) (progn {HELPERS} {observe}))"
     );
     assert_eq!(runtime_startup_eval_one(&form), format!("OK {expected}"));
-}
-
-#[test]
-fn gnu_undo_marker_matrix_matches_all_sixteen_cases() {
-    // Includes clean replace/replace-delete/replace-insert, all eight public
-    // before/after-hook undo toggles, live marker mutation, and the sequence.
-    assert_gnu_observation(MATRIX_OBSERVE, GNU_MATRIX);
-}
-
-#[test]
-fn gnu_replace_undo_compound_sequence_matches() {
-    // This independent run keeps the entire insert -> delete -> replace list,
-    // not just the final replacement's records or the text/marker endpoints.
-    assert_gnu_observation("(undometa--sequence)", GNU_SEQUENCE);
-}
-
-#[test]
-fn gnu_replace_undo_already_modified_records_no_first_change() {
-    // Each replacement shape and the compound sequence start already modified
-    // with an empty enabled undo list. Their captured first-change counts are0.
-    let observe = format!("(progn {DIRTY_HELPERS} {DIRTY_OBSERVE})");
-    assert_gnu_observation(&observe, GNU_DIRTY);
 }

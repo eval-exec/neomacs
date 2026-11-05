@@ -911,6 +911,7 @@ impl GcTrace for ModeRegistry {
 // ---------------------------------------------------------------------------
 
 
+
 #[cfg(test)]
-#[path = "tests/custom_type_gc_test.rs"]
-mod custom_type_gc;
+#[path = "tests/mode_test.rs"]
+mod tests;

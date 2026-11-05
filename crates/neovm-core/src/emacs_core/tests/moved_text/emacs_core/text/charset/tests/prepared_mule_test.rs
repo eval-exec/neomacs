@@ -1,11 +1,5 @@
 use super::*;
 
-// Expected results come from the full registry rules; the encoder owns only
-// prepared numeric/map data and falls back for other charset methods.
-fn prepared_encode(name: SymId, ch: i64) -> Option<i64> {
-    CharsetEncoder::new(name).encode_char(ch)
-}
-
 #[test]
 fn prepared_mule_scalar_preserves_subset_and_superset_rules() {
     crate::test_utils::init_test_tracing();
@@ -181,4 +175,8 @@ fn prepared_mule_order_preserves_definition_chronology_through_restore() {
             .count(),
         1
     );
+}
+
+fn prepared_encode(name: SymId, ch: i64) -> Option<i64> {
+    CharsetEncoder::new(name).encode_char(ch)
 }

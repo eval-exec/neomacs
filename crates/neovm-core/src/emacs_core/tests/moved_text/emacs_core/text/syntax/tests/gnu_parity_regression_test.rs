@@ -13,46 +13,12 @@
 //! (builtins + buffer-manager helpers) that survive the refactor.
 
 use crate::emacs_core::eval::Context;
+
 use neovm_edit::buffer::BufferId;
+
 use neovm_value::tagged::value::ValueKind;
+
 use neovm_value::value::Value;
-
-fn ctx_with_buffer(text: &str) -> (Context, BufferId) {
-    let mut ctx = Context::new();
-    let id = ctx.buffer_manager_mut().create_buffer("t");
-    {
-        let buf = ctx.buffer_manager_mut().get_mut(id).expect("buffer");
-        buf.insert(text);
-        buf.widen();
-        buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(0));
-    }
-    let _ = ctx.switch_current_buffer(id);
-    (ctx, id)
-}
-
-fn call(ctx: &mut Context, name: &str, args: Vec<Value>) -> Value {
-    ctx.funcall_general(Value::symbol(name), args)
-        .expect("funcall")
-}
-
-fn fixnum(n: i64) -> Value {
-    Value::fixnum(n)
-}
-
-fn as_int(v: Value) -> i64 {
-    match v.kind() {
-        ValueKind::Fixnum(n) => n,
-        other => panic!("expected fixnum, got {:?}", other),
-    }
-}
-
-fn point(ctx: &mut Context) -> i64 {
-    as_int(call(ctx, "point", vec![]))
-}
-
-fn goto(ctx: &mut Context, pos: i64) {
-    call(ctx, "goto-char", vec![fixnum(pos)]);
-}
 
 #[test]
 fn forward_sexp_syntax_propertize_reads_buffer_local_lookup_flag() {
@@ -428,8 +394,6 @@ fn regexp_syntax_preparation_preserves_later_string_match_data() {
     assert_eq!(result, "OK \"'zeta'\"");
 }
 
-// --- char-syntax --------------------------------------------------------
-
 #[test]
 fn char_syntax_ascii_word() {
     crate::test_utils::init_test_tracing();
@@ -480,8 +444,6 @@ fn char_syntax_cjk_is_word() {
         'w' as i64
     );
 }
-
-// --- forward-word / backward-word ---------------------------------------
 
 #[test]
 fn forward_word_crosses_whitespace() {
@@ -547,8 +509,6 @@ fn forward_word_negative_goes_backward() {
         "forward-word -1 from end lands at 'w' of 'world' = 7"
     );
 }
-
-// --- skip-syntax-forward / skip-syntax-backward ------------------------
 
 #[test]
 fn skip_syntax_forward_word_returns_count() {
@@ -618,8 +578,6 @@ fn skip_syntax_backward_prepares_and_reads_syntax_table_properties() {
     assert_eq!(result, "OK (-3 2 5 (0))");
 }
 
-// --- modify-syntax-entry changes motion --------------------------------
-
 #[test]
 fn modify_syntax_entry_adds_underscore_to_word_class() {
     crate::test_utils::init_test_tracing();
@@ -638,8 +596,6 @@ fn modify_syntax_entry_adds_underscore_to_word_class() {
         "with _ as word, forward-word consumes 'foo_bar'"
     );
 }
-
-// --- parse-partial-sexp ------------------------------------------------
 
 #[test]
 fn parse_partial_sexp_tracks_depth() {
@@ -1106,4 +1062,41 @@ fn backward_list_crosses_an_elisp_string_holding_a_comment_char() {
         "#,
     );
     assert_eq!(result, "OK 2");
+}
+
+fn ctx_with_buffer(text: &str) -> (Context, BufferId) {
+    let mut ctx = Context::new();
+    let id = ctx.buffer_manager_mut().create_buffer("t");
+    {
+        let buf = ctx.buffer_manager_mut().get_mut(id).expect("buffer");
+        buf.insert(text);
+        buf.widen();
+        buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(0));
+    }
+    let _ = ctx.switch_current_buffer(id);
+    (ctx, id)
+}
+
+fn call(ctx: &mut Context, name: &str, args: Vec<Value>) -> Value {
+    ctx.funcall_general(Value::symbol(name), args)
+        .expect("funcall")
+}
+
+fn fixnum(n: i64) -> Value {
+    Value::fixnum(n)
+}
+
+fn as_int(v: Value) -> i64 {
+    match v.kind() {
+        ValueKind::Fixnum(n) => n,
+        other => panic!("expected fixnum, got {:?}", other),
+    }
+}
+
+fn point(ctx: &mut Context) -> i64 {
+    as_int(call(ctx, "point", vec![]))
+}
+
+fn goto(ctx: &mut Context, pos: i64) {
+    call(ctx, "goto-char", vec![fixnum(pos)]);
 }

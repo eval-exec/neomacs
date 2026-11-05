@@ -992,6 +992,7 @@ fn relocate_charset_keys<V>(
 // Match Registers
 // ---------------------------------------------------------------------------
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Match result — stores group start/end positions.
 ///
 /// Mirrors GNU's `struct re_registers` from regex-emacs.h.
@@ -1118,6 +1119,7 @@ const TYPICAL_FAILURE_SIZE: usize = 20;
 /// [val, ptr, -1]), so the GNU slot budget divides by 3.
 const FAIL_STACK_ENTRY_LIMIT: usize = EMACS_RE_MAX_FAILURES * TYPICAL_FAILURE_SIZE / 3;
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Reusable per-thread matcher state.  `re_search` runs `re_match` once
 /// per fastmap candidate; allocating the fail stack, register vectors and
 /// counter table afresh for every candidate was measured as a major share
@@ -1167,6 +1169,7 @@ fn clear_matcher_overflow() {
     MATCHER_OVERFLOW.with(|flag| flag.set(false));
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Read-and-clear the overflow flag.  The front-end calls this after a
 /// failed search to distinguish "no match" from "aborted on the
 /// fail-stack limit" (which GNU signals as an error).
@@ -1206,6 +1209,7 @@ thread_local! {
     /// check how many candidates a scan leaves to the matcher.
     static MATCHER_ENTRY_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[cfg(test)]
 pub(crate) fn matcher_entry_count() -> u64 {
     MATCHER_ENTRY_COUNT.with(|c| c.get())
@@ -1238,6 +1242,7 @@ fn note_fail_stack_push(depth: usize, d: usize) {
     });
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[cfg(test)]
 pub(crate) fn take_fail_stack_probe() -> FailStackProbe {
     FAIL_STACK_PROBE.with(|probe| probe.replace(FailStackProbe::default()))
@@ -1249,6 +1254,7 @@ fn set_pike_fallback() {
     PIKE_FALLBACK_COUNT.with(|c| c.set(c.get() + 1));
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Read-and-clear the Pike-fallback flag.
 fn take_pike_fallback() -> bool {
     PIKE_FALLBACK.with(|f| f.replace(false))
@@ -3946,6 +3952,7 @@ fn compile_interval(
 // Executes compiled bytecode against input text with backtracking.
 // ---------------------------------------------------------------------------
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Context for syntax-table and category-table queries during matching.
 ///
 /// The matcher queries the syntax table to implement `\w`, `\b`, `\sC`, etc.
@@ -4238,6 +4245,7 @@ impl WordBoundaryLookup {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// One zero-width opcode's bounded physical characters. Threading: immutable
 /// decoded characters and numeric byte positions; no Lisp identity or borrow.
 #[derive(Clone, Copy, Debug)]
@@ -4262,6 +4270,7 @@ impl BoundarySyntaxCharacter {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// A bounded query plan preserves opcode order and short-circuiting. A
 /// supplied-count implementation converts current_byte once, even for an
 /// end assertion whose current physical character is absent. Threading:
@@ -4368,6 +4377,7 @@ impl BoundarySyntaxRequest {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Classes retain their request's decoded characters; independent character
 /// identities cannot be attached to a returned class. Threading: plain data.
 #[derive(Clone, Copy, Debug)]
@@ -4388,6 +4398,7 @@ static_assertions::assert_impl_all!(BoundarySyntaxCharacter: Send, Sync, Copy);
 static_assertions::assert_impl_all!(BoundarySyntaxRequest: Send, Sync, Copy);
 static_assertions::assert_impl_all!(BoundarySyntaxClasses: Send, Sync, Copy);
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Boundary coordinates selected once for one match/search invocation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum BoundarySyntaxMode {
@@ -4555,6 +4566,7 @@ pub trait SyntaxLookup {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// The identity of a syntax lookup's tables (see
 /// [`SyntaxLookup::class_cache_key`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -4566,6 +4578,7 @@ pub(crate) enum LookupClassKey {
     Tables { syntax: usize, category: usize },
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Default syntax lookup — uses GNU's standard syntax-table definitions.
 /// This is used when no buffer-specific syntax table is available
 /// (e.g. in unit tests or string-only matching).
@@ -5095,6 +5108,7 @@ fn re_prev_char_start(text: &[u8], pos: usize, target_multibyte: bool) -> Option
     Some(p)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `AnyChar` (`.`): match any character except newline.  Returns the byte
 /// length of the consumed char on success.  Mirrors the `AnyChar` arm.
 #[inline]
@@ -5115,6 +5129,7 @@ fn match_anychar_at(
     Some(buf_len)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Match ONE character of an `Exactn` literal at literal byte offset
 /// `lit_off` against the input char at `d`.  Returns `(pattern_advance,
 /// text_advance)` on success.  Mirrors one iteration of the `Exactn` arm's
@@ -5193,6 +5208,7 @@ fn match_exactn_char_at(
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `Charset` / `CharsetNot`: match the char at `d` against the bitmap +
 /// range-table + POSIX class bits of the charset opcode at
 /// `charset_op_pos`.  Returns consumed byte length on success.  Mirrors
@@ -5359,6 +5375,7 @@ fn match_charset_at_slow(
     if matched { Some(ch_len) } else { None }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `SyntaxSpec` (`negate=false`) / `NotSyntaxSpec` (`negate=true`).
 #[inline]
 fn match_syntaxspec_at(
@@ -5378,6 +5395,7 @@ fn match_syntaxspec_at(
     if is != negate { Some(len) } else { None }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `SyntaxSpecSet`: char's syntax class is in the bitmask.
 #[inline]
 fn match_syntaxspecset_at(
@@ -5400,6 +5418,7 @@ fn match_syntaxspecset_at(
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `CategorySpec` (`negate=false`) / `NotCategorySpec` (`negate=true`).
 #[inline]
 fn match_categoryspec_at(
@@ -5670,6 +5689,7 @@ fn assert_sym_end(text: &[u8], d: usize, target_multibyte: bool, syntax: &MatchS
     prev_sym && !curr_sym
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Zero-width syntax assertions and their GNU match-limit protocol.
 ///
 /// GNU's `wordbeg` and `symbeg` opcodes use the ordinary `PREFETCH`, so
@@ -5726,6 +5746,7 @@ fn evaluate_syntax_assertion(
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Match a compiled pattern against input text.
 ///
 /// This is the core matching function, equivalent to GNU's `re_match_2_internal`.
@@ -9477,6 +9498,7 @@ fn fastmap_force_disabled() -> bool {
     SEARCH_OPTIMIZATION_OVERRIDE.with(|slot| slot.get() == SearchOptimizationOverride::Disabled)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Run `f` with the fastmap AND prefilter search-skips disabled, so
 /// `re_search` scans every position through the pure backtracker/Pike matcher.
 /// This is the ORACLE for the prefilter differential fuzzer: comparing it
@@ -9775,6 +9797,7 @@ pub(crate) fn start_anchor(bytecode: &[u8]) -> StartAnchor {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Search for a match of the compiled pattern in text.
 ///
 /// Equivalent to GNU's `re_search_2()` operating on a single
@@ -10496,6 +10519,7 @@ pub(crate) fn match_pattern(
     ))
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[path = "dfa.rs"]
 pub(crate) mod dfa;
 
@@ -10567,3 +10591,19 @@ pub fn carrier_tls_fingerprint(h: &mut u64) {
         }),
     );
 }
+
+#[cfg(test)]
+#[path = "tests/casefold_scan_test.rs"]
+mod casefold_scan_tests;
+
+#[cfg(test)]
+#[path = "tests/declared_boundary_positions.rs"]
+mod declared_boundary_positions_tests;
+
+#[cfg(test)]
+#[path = "tests/emacs_test.rs"]
+mod tests;
+
+#[cfg(test)]
+#[path = "tests/fail_stack_parity_test.rs"]
+mod fail_stack_parity_tests;

@@ -14,6 +14,7 @@ use crate::emacs_core::textprop::{
 use neovm_value::error::{Flow, LispCondition, signal};
 use neovm_value::symbol::Obarray;
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// GNU EQ follows symbols-with-pos-enabled (lisp.h:1316-1324).
 #[derive(Clone, Copy, Debug)]
 enum CasingPropertyEquality {
@@ -94,6 +95,7 @@ impl<'a> CasingPropertyMode<'a> {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Immutable, call-local category and dynamic-property resolution.
 pub(crate) struct CasingPropertyContext<'a> {
     obarray: &'a Obarray,
@@ -340,3 +342,7 @@ impl CasingInsertionPolicy for CasingPropertyContext<'_> {
         Ok(InsertionInheritance::Boundary(merged))
     }
 }
+
+#[cfg(test)]
+#[path = "tests/casing_insertion.rs"]
+mod tests;

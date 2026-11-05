@@ -30,6 +30,7 @@ const RAW_BYTE_SENTINEL_MAX: u32 = 0xE0FF;
 const UNIBYTE_BYTE_SENTINEL_MIN: u32 = 0xE300;
 const UNIBYTE_BYTE_SENTINEL_MAX: u32 = 0xE3FF;
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Cache key for a parsed charset `.map` file.  GNU's `load_charset_map`
 /// converts every code point in the map to a *linear index* via
 /// `CODE_POINT_TO_INDEX` (which depends on the owning charset's code-space and
@@ -47,6 +48,7 @@ static CHARSET_MAP_CACHE: OnceLock<
     RwLock<HashMap<CharsetMapCacheKey, Option<Arc<CharsetMapData>>>>,
 > = OnceLock::new();
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn charset_map_cache() -> &'static RwLock<HashMap<CharsetMapCacheKey, Option<Arc<CharsetMapData>>>>
 {
     CHARSET_MAP_CACHE.get_or_init(|| RwLock::new(HashMap::new()))
@@ -247,6 +249,7 @@ fn remember_charset_map(map_name: &str, info: &CharsetInfo, map: &Option<Arc<Cha
 // Charset data types
 // ---------------------------------------------------------------------------
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// How a charset maps code points to characters.
 #[derive(Clone, Debug)]
 enum CharsetMethod {
@@ -269,6 +272,7 @@ pub enum CharsetMethodSnapshot {
     Superset(Vec<(SymId, i64)>),
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[derive(Clone, Debug)]
 struct CharsetMapData {
     // Keyed by code point and character code -- small integers, hashed once
@@ -278,6 +282,7 @@ struct CharsetMapData {
     char_to_code: rustc_hash::FxHashMap<i64, i64>,
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[derive(Clone, Debug)]
 pub(crate) struct CharsetSubsetSpec {
     pub parent: SymId,
@@ -1232,6 +1237,7 @@ impl CharsetRegistry {
 use neovm_value::heap_registry::{HeapRegistryHandle, HeapRegistrySlot};
 
 thread_local! {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     static CHARSET_REGISTRY: HeapRegistrySlot<CharsetRegistry> =
         HeapRegistrySlot::new(CharsetRegistry::new());
 }
@@ -1269,6 +1275,7 @@ pub fn reset_charset_registry() {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Collect GC roots from charset runtime state.
 ///
 /// GNU Emacs keeps charset Lisp attributes reachable from `Vcharset_hash_table`
@@ -1493,6 +1500,7 @@ pub(crate) fn charset_encode_char_bytes(charset: SymId, ch: i64) -> Option<Vec<u
     CHARSET_REGISTRY.with(|slot| slot.borrow().encode_char_bytes(charset, ch))
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Decode the next character of `bytes` in `charset`, returning the Emacs
 /// character code and how many bytes were consumed, or `None` when the leading
 /// bytes are not an assigned code point of the charset.
@@ -1500,6 +1508,7 @@ pub(crate) fn charset_decode_char_from_bytes(charset: SymId, bytes: &[u8]) -> Op
     CHARSET_REGISTRY.with(|slot| slot.borrow().decode_char_from_bytes(charset, bytes))
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Encode `ch` in `charset` to its raw code point (not split into bytes), or
 /// `None` if unrepresentable. Used by codecs that transform the code point
 /// (e.g. Shift-JIS).
@@ -1682,6 +1691,7 @@ impl CharsetDecoder {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Resolve `charset` for decoding, or `None` on exactly the condition
 /// [`charset_leading_byte`] declines: the charset is not registered. Callers
 /// must treat `None` the same way, or a charset silently drops out of a
@@ -1692,6 +1702,7 @@ pub(crate) fn registered_charset_names() -> Vec<SymId> {
     CHARSET_REGISTRY.with(|slot| slot.borrow().charsets.keys().copied().collect())
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(min_code, max_code, dimension)` for the sweep's range.
 #[cfg(test)]
 pub(crate) fn charset_code_bounds(charset: SymId) -> Option<(i64, i64, usize)> {
@@ -1706,6 +1717,7 @@ pub(crate) fn charset_code_bounds(charset: SymId) -> Option<(i64, i64, usize)> {
     })
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn charset_decoder(charset: SymId) -> Option<CharsetDecoder> {
     CHARSET_REGISTRY.with(|slot| {
         let registry = slot.borrow();
@@ -1755,6 +1767,7 @@ pub(crate) fn charset_dimension_by_sym(charset: SymId) -> Option<i64> {
     })
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Highest-priority charset that has an emacs-mule id and can encode `ch`,
 /// returned as (emacs-mule-id, dimension, code point). The emacs-mule codec
 /// selects charsets through the same priority order GNU uses.
@@ -2082,6 +2095,7 @@ pub fn builtin_charset_priority_list(args: Vec<Value>) -> EvalResult {
     })
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(set-charset-priority &rest CHARSETS)` -- set charset detection priority.
 #[cfg(test)]
 pub(crate) fn builtin_set_charset_priority(args: Vec<Value>) -> EvalResult {
@@ -2530,6 +2544,7 @@ fn builtin_make_char_with_symbols(args: Vec<Value>, mode: SymbolMode) -> EvalRes
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(define-charset-internal NAME DIM CODE-SPACE MIN-CODE MAX-CODE
 ///    ISO-FINAL ISO-REVISION EMACS-MULE-ID ASCII-COMPAT-P SUPPLEMENTARY-P
 ///    INVALID-CODE CODE-OFFSET MAP SUBSET SUPERSET UNIFY-MAP PLIST)`
@@ -3141,3 +3156,7 @@ pub fn carrier_tls_fingerprint(h: &mut u64) {
     // architecture test covers its classification.
     neovm_value::tls_fingerprint::mix(h, 0);
 }
+
+#[cfg(test)]
+#[path = "tests/charset_test.rs"]
+mod tests;

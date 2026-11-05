@@ -1,6 +1,7 @@
 //! The GNU oracle forms of `neovm-oracle-tests` `syntax/scan_error_data.rs`,
 //! run in process against the answers GNU 31.1 gave there
 //! (`NEOVM_ORACLE_MODE=refresh UPDATE_EXPECT=1`).
+
 use crate::test_utils::{oracle_expect_transcript, runtime_startup_eval_one};
 
 #[test]

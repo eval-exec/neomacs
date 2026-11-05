@@ -59,6 +59,7 @@ pub fn parse_text_snapshot_knob(value: Option<&str>) -> TextSnapshotMode {
 }
 
 thread_local! {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     static MODE_OVERRIDE: std::cell::Cell<Option<TextSnapshotMode>> =
         const { std::cell::Cell::new(None) };
 }

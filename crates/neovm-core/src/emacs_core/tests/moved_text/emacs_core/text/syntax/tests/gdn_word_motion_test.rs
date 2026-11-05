@@ -22,7 +22,36 @@ fn gdn_word_motion_nil_category_sets_use_script_boundary() {
     );
 }
 
-// GNU category.c:384 compares script entries with EQ, before category sets.
+#[test]
+fn gdn_word_motion_compares_script_entries_by_identity() {
+    assert_eq!(
+        runtime_startup_eval_one(SCRIPT_ENTRY_IDENTITY_FORM),
+        format!(
+            "OK {}",
+            gnu_word_motion_fixture(
+                "gdn-word-script-identity",
+                SCRIPT_ENTRY_IDENTITY_FORM,
+                include_str!("gdn-word-script-identity.expect")
+            )
+        )
+    );
+}
+
+#[test]
+fn gdn_word_motion_preserves_raw_and_non_unicode_character_codes() {
+    assert_eq!(
+        runtime_startup_eval_one(EMACS_CHARACTER_CODES_FORM),
+        format!(
+            "OK {}",
+            gnu_word_motion_fixture(
+                "gdn-word-character-codes",
+                EMACS_CHARACTER_CODES_FORM,
+                include_str!("gdn-word-character-codes.expect")
+            )
+        )
+    );
+}
+
 const SCRIPT_ENTRY_IDENTITY_FORM: &str = r#"(mapcar (lambda (make-entry)
       (mapcar (lambda (shared)
         (let* ((left (funcall make-entry))
@@ -71,22 +100,6 @@ fn gnu_word_motion_fixture(name: &str, form: &str, cached: &str) -> String {
     expected.trim().to_owned()
 }
 
-#[test]
-fn gdn_word_motion_compares_script_entries_by_identity() {
-    assert_eq!(
-        runtime_startup_eval_one(SCRIPT_ENTRY_IDENTITY_FORM),
-        format!(
-            "OK {}",
-            gnu_word_motion_fixture(
-                "gdn-word-script-identity",
-                SCRIPT_ENTRY_IDENTITY_FORM,
-                include_str!("gdn-word-script-identity.expect")
-            )
-        )
-    );
-}
-
-// GNU syntax.c:1477,1505,1527,1556 uses FETCH_CHAR_AS_MULTIBYTE in both directions.
 const EMACS_CHARACTER_CODES_FORM: &str = r#"(mapcar (lambda (shape)
       (mapcar (lambda (properties)
         (mapcar (lambda (mode)
@@ -134,18 +147,3 @@ const EMACS_CHARACTER_CODES_FORM: &str = r#"(mapcar (lambda (shape)
       (list (list t (unibyte-string #x80 ?a) #x3fff80)
             (list nil (string-to-multibyte (unibyte-string #x80 ?a)) #x3fff80)
             (list nil (string #x110000 ?a) #x110000)))"#;
-
-#[test]
-fn gdn_word_motion_preserves_raw_and_non_unicode_character_codes() {
-    assert_eq!(
-        runtime_startup_eval_one(EMACS_CHARACTER_CODES_FORM),
-        format!(
-            "OK {}",
-            gnu_word_motion_fixture(
-                "gdn-word-character-codes",
-                EMACS_CHARACTER_CODES_FORM,
-                include_str!("gdn-word-character-codes.expect")
-            )
-        )
-    );
-}

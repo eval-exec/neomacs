@@ -243,6 +243,7 @@ fn push_multibyte_char_code(out: &mut Vec<u8>, code: u32) {
     out.extend_from_slice(&buf[..len]);
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Word-boundary predicate over the *standard* syntax table, for the pure/test
 /// casing forms that run without a current buffer. Mirrors GNU's `Sword` test
 /// against the standard syntax table.
@@ -447,6 +448,7 @@ impl CaseExtent {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// GNU applies ASCII fallback only to unibyte strings, while buffer casing
 /// writes the cased byte directly. The target makes callers choose that policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -525,6 +527,7 @@ fn casify_standard_unibyte_with_extents(
     LispString::from_unibyte(out)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Casing with an optional monomorphized extent sink. The no-op sink used by
 /// string builtins compiles away; buffer edits retain both coordinate units.
 /// GNU casefiddle.c:137-151 resolves Unicode special casing before case tables;
@@ -1425,3 +1428,11 @@ impl CasingChangedSpan {
         self.new_len
     }
 }
+
+#[cfg(test)]
+#[path = "tests/casefiddle_test.rs"]
+mod tests;
+
+#[cfg(test)]
+#[path = "tests/casing_types.rs"]
+mod casing_types;

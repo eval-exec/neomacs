@@ -1,11 +1,5 @@
 use neovm_text::emacs_core::chartable::*;
 
-fn positioned_purpose(context: &mut Context) -> Value {
-    context
-        .tagged_heap
-        .alloc_symbol_with_pos(Value::symbol("char-code-property-table"), Value::fixnum(0))
-}
-
 #[test]
 fn positioned_char_table_purpose_classification_follows_mode_and_preserves_value() {
     let mut context = Context::new();
@@ -88,10 +82,6 @@ fn positioned_char_table_purpose_controls_compressed_lookup() {
     );
 }
 
-fn assert_signal_invalid_property_table(result: EvalResult) {
-    assert!(result.is_err());
-}
-
 #[test]
 fn positioned_unicode_property_alist_and_encoder_follow_eq_policy() {
     let mut context = Context::new();
@@ -120,4 +110,14 @@ fn positioned_unicode_property_alist_and_encoder_follow_eq_policy() {
         encode_uniprop_value_run_length(table, bare_key, SymbolMode::Positioned).unwrap(),
         Value::fixnum(0)
     );
+}
+
+fn positioned_purpose(context: &mut Context) -> Value {
+    context
+        .tagged_heap
+        .alloc_symbol_with_pos(Value::symbol("char-code-property-table"), Value::fixnum(0))
+}
+
+fn assert_signal_invalid_property_table(result: EvalResult) {
+    assert!(result.is_err());
 }

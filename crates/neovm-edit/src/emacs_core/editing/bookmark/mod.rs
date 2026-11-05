@@ -67,6 +67,7 @@ pub struct BookmarkManager {
     modified: bool,
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, EnumString, IntoStaticStr)]
 #[strum(serialize_all = "kebab-case")]
@@ -385,6 +386,7 @@ fn bookmark_lookup_key(text: &LispString) -> BookmarkKey {
     BookmarkKey::from_lisp_string(text)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn bookmark_string_to_runtime(text: &LispString) -> String {
     // Issue #131: remaining consumers are display / print-buffer / sort text
     // reached through `&str`; a lossy UTF-8 rendering keeps real Unicode (incl.
@@ -429,6 +431,7 @@ fn expect_int(value: &Value) -> Result<i64, Flow> {
 // Builtins (evaluator-dependent)
 // ===========================================================================
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// (bookmark-set NAME &optional NO-OVERWRITE) -> nil
 ///
 /// In batch/non-file buffers GNU Emacs signals:
@@ -486,6 +489,7 @@ pub(crate) fn builtin_bookmark_set<H: crate::emacs_core::edit_host::EditHost>(
     Ok(Value::NIL)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// (bookmark-jump NAME) -> alist with bookmark data
 ///
 /// Returns an alist: ((filename . F) (position . P) (annotation . A))
@@ -547,6 +551,7 @@ pub(crate) fn builtin_bookmark_jump<H: crate::emacs_core::edit_host::EditHost>(
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// (bookmark-delete NAME &optional BATCH) -> nil
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) fn builtin_bookmark_delete<H: crate::emacs_core::edit_host::EditHost>(
@@ -575,6 +580,7 @@ pub(crate) fn builtin_bookmark_delete<H: crate::emacs_core::edit_host::EditHost>
     Ok(Value::NIL)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// (bookmark-rename OLD NEW) -> nil
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) fn builtin_bookmark_rename<H: crate::emacs_core::edit_host::EditHost>(
@@ -667,6 +673,7 @@ pub(crate) fn builtin_bookmark_rename<H: crate::emacs_core::edit_host::EditHost>
     ))
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// (bookmark-all-names) -> list of bookmark names (sorted)
 #[cfg(test)]
 pub(crate) fn builtin_bookmark_all_names<H: crate::emacs_core::edit_host::EditHost>(
@@ -683,6 +690,7 @@ pub(crate) fn builtin_bookmark_all_names<H: crate::emacs_core::edit_host::EditHo
     Ok(Value::list(names))
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// (bookmark-get-filename BOOKMARK) -> filename string or nil
 ///
 /// BOOKMARK may be a bookmark name or a bookmark record alist.
@@ -707,6 +715,7 @@ pub(crate) fn builtin_bookmark_get_filename<H: crate::emacs_core::edit_host::Edi
     Ok(filename)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// (bookmark-get-position BOOKMARK) -> integer position or nil
 ///
 /// BOOKMARK may be a bookmark name or a bookmark record alist.
@@ -730,6 +739,7 @@ pub(crate) fn builtin_bookmark_get_position<H: crate::emacs_core::edit_host::Edi
     Ok(position)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// (bookmark-get-annotation BOOKMARK) -> annotation string or nil
 ///
 /// BOOKMARK may be a bookmark name or a bookmark record alist.
@@ -754,6 +764,7 @@ pub(crate) fn builtin_bookmark_get_annotation<H: crate::emacs_core::edit_host::E
     Ok(annotation)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// (bookmark-set-annotation BOOKMARK ANNOTATION) -> annotation string or nil
 ///
 /// BOOKMARK is a bookmark name.  If missing, returns nil.
@@ -835,6 +846,7 @@ fn set_bookmark_timestamp<H: crate::emacs_core::edit_host::EditHost>(
     host.store_variable_by_name("bookmark-bookmarks-timestamp", bookmark_save_stamp(file));
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// (bookmark-save &optional PARG FILE BATCH) -> nil or save-stamp list
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) fn builtin_bookmark_save<H: crate::emacs_core::edit_host::EditHost>(
@@ -918,6 +930,7 @@ pub(crate) fn builtin_bookmark_save<H: crate::emacs_core::edit_host::EditHost>(
     Ok(Value::NIL)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// (bookmark-load FILE &optional OVERWRITE NO-MSG BATCH) -> message string or nil
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) fn builtin_bookmark_load<H: crate::emacs_core::edit_host::EditHost>(

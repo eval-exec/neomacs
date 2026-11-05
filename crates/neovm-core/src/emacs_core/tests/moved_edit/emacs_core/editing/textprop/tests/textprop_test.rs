@@ -1,39 +1,29 @@
-use super::super::eval::Context;
+use crate::emacs_core::eval::Context;
+
 use crate::emacs_core::builtins::{
     builtin_current_buffer, builtin_get_pos_property, builtin_goto_char, builtin_insert,
     builtin_make_indirect_buffer, builtin_next_char_property_change,
     builtin_previous_char_property_change, builtin_previous_property_change,
 };
+
 use malachite::Integer;
+
 use neovm_edit::buffer::{CharLen, CharRange};
+
 use neovm_edit::emacs_core::buffer::{
     builtin_delete_overlay, builtin_make_overlay, builtin_move_overlay,
     builtin_next_overlay_change, builtin_overlay_buffer, builtin_overlay_end, builtin_overlay_get,
     builtin_overlay_properties, builtin_overlay_put, builtin_overlay_start, builtin_overlayp,
     builtin_overlays_at, builtin_overlays_in, builtin_previous_overlay_change,
 };
+
 use neovm_edit::emacs_core::textprop::*;
+
 use neovm_edit::emacs_core::textprop_entries::{
     builtin_get_char_property, builtin_get_char_property_and_overlay,
 };
+
 use neovm_value::error::{FlowKind, FlowResultExt as _};
-
-/// Helper: create an evaluator with a buffer containing the given text.
-fn eval_with_text(text: &str) -> Context {
-    let mut eval = Context::new();
-    eval.edit.buffers.current_buffer_mut().unwrap().insert(text);
-    // Reset point to beginning.
-    eval.edit
-        .buffers
-        .current_buffer_mut()
-        .unwrap()
-        .goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(0));
-    eval
-}
-
-// -----------------------------------------------------------------------
-// put-text-property / get-text-property
-// -----------------------------------------------------------------------
 
 #[test]
 fn put_and_get_text_property() {
@@ -428,10 +418,6 @@ fn inheriting_insert_uses_predeclared_text_property_stickiness_identities() {
          {repeated_fixed_names:?}"
     );
 }
-
-// -----------------------------------------------------------------------
-// get-char-property
-// -----------------------------------------------------------------------
 
 #[test]
 fn get_char_property_delegates() {
@@ -1050,10 +1036,6 @@ fn get_display_property_queries_display_only() {
     assert!(display.is_bare_symbol_named("dv"));
 }
 
-// -----------------------------------------------------------------------
-// add-text-properties
-// -----------------------------------------------------------------------
-
 #[test]
 fn add_text_properties_multiple() {
     crate::test_utils::init_test_tracing();
@@ -1239,10 +1221,6 @@ fn add_face_text_property_argument_contracts() {
     .unwrap();
     assert!(string_obj.is_nil());
 }
-
-// -----------------------------------------------------------------------
-// remove-text-properties
-// -----------------------------------------------------------------------
 
 #[test]
 fn remove_text_properties_basic() {
@@ -1479,10 +1457,6 @@ fn remove_list_of_text_properties_returns_t_only_when_changed() {
     assert!(second.is_nil());
 }
 
-// -----------------------------------------------------------------------
-// text-properties-at
-// -----------------------------------------------------------------------
-
 #[test]
 fn text_properties_at_returns_plist() {
     crate::test_utils::init_test_tracing();
@@ -1512,10 +1486,6 @@ fn text_properties_at_empty_returns_nil() {
     // Empty plist is nil.
     assert!(result.is_nil());
 }
-
-// -----------------------------------------------------------------------
-// next-property-change
-// -----------------------------------------------------------------------
 
 #[test]
 fn next_property_change_basic() {
@@ -1595,10 +1565,6 @@ fn property_change_limits_coerce_bignums_like_gnu() {
             .expect("previous-property-change string limit should coerce negative bignum");
     assert!(previous.is_fixnum());
 }
-
-// -----------------------------------------------------------------------
-// next-single-property-change
-// -----------------------------------------------------------------------
 
 #[test]
 fn next_single_property_change_basic() {
@@ -1731,10 +1697,6 @@ fn next_single_property_change_nil_when_none() {
     assert!(result.is_nil());
 }
 
-// -----------------------------------------------------------------------
-// previous-single-property-change
-// -----------------------------------------------------------------------
-
 #[test]
 fn previous_single_property_change_basic() {
     crate::test_utils::init_test_tracing();
@@ -1799,10 +1761,6 @@ fn previous_single_property_change_does_not_escape_narrowing() {
 
     assert_eq!(result, Value::NIL);
 }
-
-// -----------------------------------------------------------------------
-// text-property-any
-// -----------------------------------------------------------------------
 
 #[test]
 fn text_property_any_found() {
@@ -1970,10 +1928,6 @@ fn text_property_not_all_reports_first_mismatch() {
     assert!(no_mismatch.is_nil());
 }
 
-// -----------------------------------------------------------------------
-// make-overlay / delete-overlay
-// -----------------------------------------------------------------------
-
 #[test]
 fn make_and_delete_overlay() {
     crate::test_utils::init_test_tracing();
@@ -1990,10 +1944,6 @@ fn make_and_delete_overlay() {
     let result = builtin_delete_overlay(&mut eval, vec![ov]);
     assert!(result.is_ok());
 }
-
-// -----------------------------------------------------------------------
-// overlay-put / overlay-get
-// -----------------------------------------------------------------------
 
 #[test]
 fn overlay_put_and_get() {
@@ -2083,10 +2033,6 @@ fn overlay_get_uses_category_symbol_identity() {
     assert_eq!(result.as_bare_symbol_name(), Some("from-category"));
 }
 
-// -----------------------------------------------------------------------
-// overlayp
-// -----------------------------------------------------------------------
-
 #[test]
 fn overlayp_true() {
     crate::test_utils::init_test_tracing();
@@ -2108,10 +2054,6 @@ fn overlayp_false() {
     let result = builtin_overlayp(&mut eval, &vec![Value::fixnum(42)]).unwrap();
     assert!(result.is_nil());
 }
-
-// -----------------------------------------------------------------------
-// overlays-at / overlays-in
-// -----------------------------------------------------------------------
 
 #[test]
 fn overlays_at_finds_overlay() {
@@ -2523,10 +2465,6 @@ fn overlay_change_boundaries_respect_narrowing_limits() {
     assert_eq!(prev_at_begv.as_fixnum(), Some(2));
 }
 
-// -----------------------------------------------------------------------
-// move-overlay
-// -----------------------------------------------------------------------
-
 #[test]
 fn move_overlay_changes_range() {
     crate::test_utils::init_test_tracing();
@@ -2588,10 +2526,6 @@ fn move_deleted_evaporating_overlay_into_empty_range_keeps_it_deleted() {
     assert!(buffer.is_nil());
 }
 
-// -----------------------------------------------------------------------
-// overlay-start / overlay-end
-// -----------------------------------------------------------------------
-
 #[test]
 fn overlay_start_and_end() {
     crate::test_utils::init_test_tracing();
@@ -2608,10 +2542,6 @@ fn overlay_start_and_end() {
     assert!(end.is_fixnum());
 }
 
-// -----------------------------------------------------------------------
-// overlay-buffer
-// -----------------------------------------------------------------------
-
 #[test]
 fn overlay_buffer_returns_buffer() {
     crate::test_utils::init_test_tracing();
@@ -2625,10 +2555,6 @@ fn overlay_buffer_returns_buffer() {
     let result = builtin_overlay_buffer(&mut eval.edit.buffers, vec![ov]).unwrap();
     assert!(result.is_buffer());
 }
-
-// -----------------------------------------------------------------------
-// overlay-properties
-// -----------------------------------------------------------------------
 
 #[test]
 fn overlay_properties_returns_plist() {
@@ -2670,10 +2596,6 @@ fn overlay_properties_empty() {
     // Empty plist is nil.
     assert!(result.is_nil());
 }
-
-// -----------------------------------------------------------------------
-// remove-overlays
-// -----------------------------------------------------------------------
 
 #[test]
 fn remove_overlays_all() {
@@ -2747,10 +2669,6 @@ fn remove_overlays_by_property() {
     let items = list_to_vec(&result).unwrap();
     assert_eq!(items.len(), 1); // only the italic one remains
 }
-
-// -----------------------------------------------------------------------
-// Wrong argument count tests
-// -----------------------------------------------------------------------
 
 #[test]
 fn put_text_property_wrong_args() {
@@ -3062,10 +2980,6 @@ fn move_overlay_rejects_too_many_args() {
     assert!(result.is_err());
 }
 
-// -----------------------------------------------------------------------
-// Integration: overlays with advance flags
-// -----------------------------------------------------------------------
-
 #[test]
 fn overlay_front_advance() {
     crate::test_utils::init_test_tracing();
@@ -3108,10 +3022,6 @@ fn overlay_rear_advance() {
     assert!(end.is_fixnum());
 }
 
-// -----------------------------------------------------------------------
-// Edge cases
-// -----------------------------------------------------------------------
-
 #[test]
 fn text_property_on_empty_buffer() {
     crate::test_utils::init_test_tracing();
@@ -3144,23 +3054,6 @@ fn delete_overlay_twice_is_ok() {
     // Second delete should not crash.
     let result = builtin_delete_overlay(&mut eval, vec![ov]);
     assert!(result.is_ok());
-}
-
-// -----------------------------------------------------------------------
-// A WINDOW object as the OBJECT arg resolves to the window's buffer
-// (GNU textprop.c / editfns.c window handling), instead of signalling
-// (wrong-type-argument buffer-or-string-p #<window>).
-// -----------------------------------------------------------------------
-
-/// Build an evaluator with a frame+window over a `*scratch*` buffer so that
-/// `(selected-window)` yields a live window Value backed by the current buffer.
-fn eval_with_frame_window() -> Context {
-    let mut eval = Context::new();
-    let buf = eval.edit.buffers.create_buffer("*scratch*");
-    eval.edit.buffers.set_current(buf);
-    eval.frames.create_frame("F1", 800, 600, buf);
-    neovm_edit::emacs_core::terminal::pure::mark_selected_terminal_usable_for_test(&eval);
-    eval
 }
 
 #[test]
@@ -3222,28 +3115,6 @@ fn previous_single_char_property_change_resolves_window_object_to_buffer() {
         .collect::<Vec<_>>();
     assert_eq!(results, vec!["OK 6".to_string()]);
 }
-
-// -----------------------------------------------------------------------
-// GNU position validation in the text-property family
-//
-// Expectations below were MEASURED by running tmp/coord-textprop-range-probe*.el
-// under GNU Emacs 31.0.90, never derived.  GNU has two out-of-range shapes for
-// a single text-property position and they are not interchangeable:
-//
-//   validate_interval_range          src/textprop.c:141,158 -- a point call
-//     passes `&position' as BOTH `begin' and `end', so `args_out_of_range
-//     (begin0, end0)' carries the position TWICE.
-//   get_char_property_and_overlay    src/textprop.c:642-644 -- its own bounds
-//     check uses `xsignal1', carrying the position ONCE.
-//
-// Which one a builtin gets is not a style choice; it is which GNU function the
-// builtin goes through.
-//
-// GNU prints the whole error object, `(args-out-of-range 500 500)';
-// `format_eval_result' prints the signal symbol and then its DATA as a list,
-// `ERR (args-out-of-range (500 500))'.  Same signal, different rendering -- the
-// payload to compare against GNU is what is inside the inner parens.
-// -----------------------------------------------------------------------
 
 #[test]
 fn previous_property_change_out_of_range_signal_uses_gnu_point_range_payload() {
@@ -3492,6 +3363,30 @@ fn graft_at_boundary_rehomes_predecessor_so_held_plists_survive_undo() {
         )
         .unwrap();
     assert_eq!(got, Value::T);
+}
+
+/// Helper: create an evaluator with a buffer containing the given text.
+fn eval_with_text(text: &str) -> Context {
+    let mut eval = Context::new();
+    eval.edit.buffers.current_buffer_mut().unwrap().insert(text);
+    // Reset point to beginning.
+    eval.edit
+        .buffers
+        .current_buffer_mut()
+        .unwrap()
+        .goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(0));
+    eval
+}
+
+/// Build an evaluator with a frame+window over a `*scratch*` buffer so that
+/// `(selected-window)` yields a live window Value backed by the current buffer.
+fn eval_with_frame_window() -> Context {
+    let mut eval = Context::new();
+    let buf = eval.edit.buffers.create_buffer("*scratch*");
+    eval.edit.buffers.set_current(buf);
+    eval.frames.create_frame("F1", 800, 600, buf);
+    crate::emacs_core::terminal::pure::mark_selected_terminal_usable_for_test(&eval);
+    eval
 }
 
 #[cfg(test)]

@@ -60,6 +60,7 @@ fn expect_integer_or_marker(val: &Value) -> Result<i64, Flow> {
 
 /// See `builtins::expect_lisp_string`: the borrow is tied to VAL's place, not
 /// to `'static` (DIVERGENCES.md 163).
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn expect_lisp_string(val: &Value) -> Result<&neovm_value::heap_types::LispString, Flow> {
     val.as_lisp_string().ok_or_else(|| {
         signal(
@@ -272,6 +273,17 @@ struct ReplaceRegexpSubexpStart {
     start: usize,
 }
 
+/// Test-support view of the subexp/start parse (struct fields cannot carry
+/// `visibility::make`; this tuple wrapper is the TEST-SUPPORT-VIS A1 row).
+#[cfg(any(test, feature = "test-support"))]
+pub fn parse_replace_regexp_subexp_start(
+    args: &[Value],
+    string: &neovm_value::heap_types::LispString,
+) -> Result<(usize, usize), Flow> {
+    let parsed = parse_replace_regexp_subexp_start_lisp(args, string)?;
+    Ok((parsed.start, parsed.subexp))
+}
+
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 fn translate_match_data_to_substring(
     match_data: &super::regex::MatchData,
@@ -289,6 +301,7 @@ fn translate_match_data_to_substring(
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn replace_match_on_substring(
     source: &neovm_value::heap_types::LispString,
     replacement: &neovm_value::heap_types::LispString,
@@ -723,6 +736,7 @@ pub fn compute_buffer_replacement_lisp_string(
 /// definition (which goes through the syntax-carrying `string-match`
 /// builtin); this Rust port survives for its unit tests.
 #[cfg(test)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn replace_regexp_in_string_lisp<F>(
     args: &[Value],
     case_fold: bool,
@@ -807,104 +821,14 @@ where
     Ok(Value::heap_string(concat_lisp_string_pieces(pieces)))
 }
 
-/// Route symbol-value reads through the full GNU lookup path so
-/// LOCALIZED BLV / FORWARDED slot / specpdl let-binding state is
-/// observed. Mirrors `find_symbol_value` at GNU `src/data.c:1584-1609`.
-/// See the extended comment on the identical helper in
-/// `builtins/misc_eval.rs` (audit finding #3 in
-/// `drafts/regex-search-audit.md`).
-#[cfg(test)] // sole caller is the test-only entry below
-fn dynamic_or_global_symbol_value(eval: &super::eval::Context, name: &str) -> Option<Value> {
-    let id = neovm_value::intern::intern(name);
-    eval.eval_symbol_by_id(id).ok()
-}
 
-/// Test-only: see [`replace_regexp_in_string_lisp`].
-#[cfg(test)]
-pub(crate) fn builtin_replace_regexp_in_string(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    expect_args_range("replace-regexp-in-string", &args, 3, 7)?;
-    let case_fold = dynamic_or_global_symbol_value(eval, "case-fold-search")
-        .map(|value| !value.is_nil())
-        .unwrap_or(false);
 
-    let fixedcase = args.get(3).is_some_and(|v| v.is_truthy());
-    let literal = args.get(4).is_some_and(|v| v.is_truthy());
-    let parsed = parse_replace_regexp_subexp_start_lisp(&args, expect_lisp_string(&args[2])?)?;
-    let subexp = parsed.subexp;
 
-    if args[1].is_string() {
-        let replacement = expect_lisp_string(&args[1])?.clone();
-        return replace_regexp_in_string_lisp(&args, case_fold, |match_span, translated_md| {
-            replace_match_on_substring(
-                match_span,
-                &replacement,
-                fixedcase,
-                literal,
-                subexp,
-                translated_md,
-            )
-        });
-    }
-
-    let func = args[1];
-    let gc_roots = eval.save_specpdl_roots();
-    eval.push_specpdl_root(func);
-    let saved_match_data = eval.match_data.clone();
-    // The saved match data's searched string is a heap object held only in
-    // this Rust local while REP runs arbitrary Lisp; a new string-match in
-    // REP replaces its previous root and a GC frees it before the restore.
-    if let Some(crate::emacs_core::regex::SearchedString::Heap(searched)) = saved_match_data
-        .as_ref()
-        .and_then(super::regex::MatchData::searched_string)
-    {
-        eval.push_specpdl_root(*searched);
-    }
-
-    let result = replace_regexp_in_string_lisp(&args, case_fold, |match_span, translated_md| {
-        // GNU wraps the whole function in `save-match-data`, but each REP
-        // callback observes the translated substring-local match data.
-        eval.match_data = translated_md.clone();
-        let Some(match_group) = translated_md.as_ref().and_then(|md| md.group(0)) else {
-            return Err(signal(
-                "error",
-                vec![
-                    Value::string("replace-match subexpression does not exist"),
-                    Value::fixnum(subexp as i64),
-                ],
-            ));
-        };
-        let match_start = match_group.start();
-        let match_end = match_group.end();
-        let match_start_byte = super::regex::char_pos_to_byte_lisp_string(match_span, match_start);
-        let match_end_byte = super::regex::char_pos_to_byte_lisp_string(match_span, match_end);
-        let matched = match_span
-            .slice(match_start_byte, match_end_byte)
-            .expect("translated match bounds must slice");
-        let func_result = eval.apply(func, vec![Value::heap_string(matched)])?;
-        let replacement = func_result.as_lisp_string().ok_or_else(|| {
-            signal(
-                LispCondition::WrongTypeArgument,
-                vec![Value::symbol("stringp"), func_result],
-            )
-        })?;
-        replace_match_on_substring(
-            match_span,
-            replacement,
-            fixedcase,
-            literal,
-            subexp,
-            translated_md,
-        )
-    });
-
-    eval.match_data = saved_match_data;
-    eval.restore_specpdl_roots(gc_roots);
-    result
-}
 
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+#[cfg(test)]
+#[path = "tests/search_test.rs"]
+mod tests;

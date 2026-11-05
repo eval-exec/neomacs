@@ -1,36 +1,31 @@
 //! Live deletion undo state, with expectations captured from GNU Emacs 31.1.
 //! GNU undo.c:163-190 records point, marker adjustments, then deleted text;
 //! insdel.c:2023-2037 relocates markers even when undo is disabled.
+
 use crate::emacs_core::print::print_value;
+
 use neovm_edit::buffer::*;
+
 use neovm_edit::buffer::{InsertionType, UndoRecording};
 
-fn anchor(buffer: &Buffer, position: usize) -> TextPositionAnchor {
-    let chars = CharPos0::new(position);
-    TextPositionAnchor::new(chars, buffer.text.char_pos_to_emacs_byte_pos(chars))
+#[test]
+fn deletion_enabled_at_commit_reads_live_marker_chain() {
+    assert_live_delete(UndoRecording::Enabled, UndoRecording::Enabled);
 }
 
-fn normalized_undo(mut undo: Value, markers: &[Value]) -> Value {
-    if undo.is_t() {
-        return undo;
-    }
-    let mut entries = Vec::new();
-    while undo.is_cons() {
-        let entry = undo.cons_car();
-        entries.push(
-            if entry.is_cons() && entry.cons_car().as_marker_data().is_some() {
-                let index = markers
-                    .iter()
-                    .position(|m| m.bits() == entry.cons_car().bits())
-                    .unwrap();
-                Value::cons(Value::symbol(&format!("m{index}")), entry.cons_cdr())
-            } else {
-                entry
-            },
-        );
-        undo = undo.cons_cdr();
-    }
-    Value::list(entries)
+#[test]
+fn deletion_enabling_undo_after_prepare_records_live_markers() {
+    assert_live_delete(UndoRecording::Disabled, UndoRecording::Enabled);
+}
+
+#[test]
+fn deletion_disabling_undo_after_prepare_still_relocates_markers() {
+    assert_live_delete(UndoRecording::Enabled, UndoRecording::Disabled);
+}
+
+#[test]
+fn deletion_disabled_at_commit_still_relocates_live_markers() {
+    assert_live_delete(UndoRecording::Disabled, UndoRecording::Disabled);
 }
 
 fn assert_live_delete(prepared: UndoRecording, committed: UndoRecording) {
@@ -107,22 +102,30 @@ fn assert_live_delete(prepared: UndoRecording, committed: UndoRecording) {
     assert_eq!(print_value(&result), expected.trim_end());
 }
 
-#[test]
-fn deletion_enabled_at_commit_reads_live_marker_chain() {
-    assert_live_delete(UndoRecording::Enabled, UndoRecording::Enabled);
+fn anchor(buffer: &Buffer, position: usize) -> TextPositionAnchor {
+    let chars = CharPos0::new(position);
+    TextPositionAnchor::new(chars, buffer.text.char_pos_to_emacs_byte_pos(chars))
 }
 
-#[test]
-fn deletion_enabling_undo_after_prepare_records_live_markers() {
-    assert_live_delete(UndoRecording::Disabled, UndoRecording::Enabled);
-}
-
-#[test]
-fn deletion_disabling_undo_after_prepare_still_relocates_markers() {
-    assert_live_delete(UndoRecording::Enabled, UndoRecording::Disabled);
-}
-
-#[test]
-fn deletion_disabled_at_commit_still_relocates_live_markers() {
-    assert_live_delete(UndoRecording::Disabled, UndoRecording::Disabled);
+fn normalized_undo(mut undo: Value, markers: &[Value]) -> Value {
+    if undo.is_t() {
+        return undo;
+    }
+    let mut entries = Vec::new();
+    while undo.is_cons() {
+        let entry = undo.cons_car();
+        entries.push(
+            if entry.is_cons() && entry.cons_car().as_marker_data().is_some() {
+                let index = markers
+                    .iter()
+                    .position(|m| m.bits() == entry.cons_car().bits())
+                    .unwrap();
+                Value::cons(Value::symbol(&format!("m{index}")), entry.cons_cdr())
+            } else {
+                entry
+            },
+        );
+        undo = undo.cons_cdr();
+    }
+    Value::list(entries)
 }

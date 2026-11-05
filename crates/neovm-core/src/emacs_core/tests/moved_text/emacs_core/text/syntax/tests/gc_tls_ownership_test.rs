@@ -1,17 +1,6 @@
 use crate::emacs_core::eval::Context;
+
 use neovm_text::emacs_core::syntax::*;
-
-fn populate(_ctx: &mut Context) -> Value {
-    let table = ensure_standard_syntax_table_object().unwrap();
-    ensure_syntax_code_objects();
-    table
-}
-
-fn roots(ctx: &Context) -> Vec<Value> {
-    let mut roots = Vec::new();
-    collect_syntax_gc_roots(&mut roots, ctx.tagged_heap.identity());
-    roots
-}
 
 #[test]
 fn gc_tls_ownership_syntax_new_heap_reset_drops_old_values() {
@@ -87,4 +76,16 @@ fn gc_tls_ownership_syntax_weak_ascii_keys_invalidate_before_heap_reuse() {
         SyntaxClass::Word
     );
     next.gc_collect_exact();
+}
+
+fn populate(_ctx: &mut Context) -> Value {
+    let table = ensure_standard_syntax_table_object().unwrap();
+    ensure_syntax_code_objects();
+    table
+}
+
+fn roots(ctx: &Context) -> Vec<Value> {
+    let mut roots = Vec::new();
+    collect_syntax_gc_roots(&mut roots, ctx.tagged_heap.identity());
+    roots
 }

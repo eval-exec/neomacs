@@ -530,6 +530,7 @@ pub fn builtin_make_category_table(args: Vec<Value>) -> EvalResult {
     make_category_table_object()
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[cfg(test)]
 pub(crate) fn builtin_copy_category_table(args: Vec<Value>) -> EvalResult {
     builtin_copy_category_table_with_symbols(args, SymbolMode::Bare)
@@ -832,3 +833,7 @@ pub fn carrier_tls_fingerprint(h: &mut u64) {
         STANDARD_CATEGORY_TABLE_OBJECT.with(|slot| slot.borrow().is_some() as u64),
     );
 }
+
+#[cfg(test)]
+#[path = "tests/category_test.rs"]
+mod tests;

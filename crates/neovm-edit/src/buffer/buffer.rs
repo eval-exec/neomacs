@@ -5718,6 +5718,7 @@ pub mod jit_layout {
         })
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// The direct selection designator read by generated code.
     #[cfg(test)]
     pub(crate) fn current_buffer_ptr_via_projection(
@@ -5735,6 +5736,7 @@ pub mod jit_layout {
         (!ptr.is_null()).then_some(ptr)
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// The current allocation independently reached through the storage slab.
     /// Test-only: compares the direct generated projection with canonical
     /// storage and `BufferManager::current_buffer`.
@@ -5920,6 +5922,7 @@ pub struct BufferStorage {
     saved_point_before_command: SavedPointBeforeCommand,
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Cold ownership is separate from the common hot storage pointer.
 ///
 /// `Leased` carries the two World-backed states as one variant: a live
@@ -8816,3 +8819,11 @@ impl ModeLineNumberAnchor {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "buffer/tests/buffer_test.rs"]
+mod tests;
+
+#[cfg(test)]
+#[path = "buffer/tests/world_storage_test.rs"]
+mod world_storage_tests;
