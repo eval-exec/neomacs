@@ -448,7 +448,10 @@ impl TaggedHeap {
         if has_collection_observations() {
             // A slice can free/reuse slots before the entire sweep completes.
             // Its cleared marks and epoch are visible before this publication.
-            self.publish_barrier_window();
+            // SAFETY: the caller holds this heap's exclusive mutator loan for
+            // this sweep step; no other mutator or compiled leaf runs across
+            // the publication.
+            unsafe { self.publish_barrier_window() };
         }
         done
     }

@@ -524,7 +524,10 @@ impl TaggedHeap {
                 active.set(self.concurrent_claims() && self.concurrent_hash_snapshot().is_some());
             });
         }
-        self.publish_barrier_window();
+        // SAFETY: the collector thread is not started until after this
+        // publication (the job is constructed below); the executing mutator
+        // is the only publisher.
+        unsafe { self.publish_barrier_window() };
         let job = ConcurrentMarkJob {
             gray: MarkStack::from_values(gray),
             claims: ConcurrentClaimJob {
@@ -732,7 +735,9 @@ impl TaggedHeap {
         if tagged_heap_is_current(self) {
             TAGGED_HEAP_CONCURRENT_HASH_ACTIVE.with(|active| active.set(false));
         }
-        self.publish_barrier_window();
+        // SAFETY: the GC thread has exited before this publication, so the
+        // executing mutator is the only remaining publisher.
+        unsafe { self.publish_barrier_window() };
         // New snapshot kinds hand bare symbols back in legacy full cycles
         // too: weak-symbol liveness still consults mutator-side mark_symbol.
         // Existing knob-off legacy scans produce no symbol result.

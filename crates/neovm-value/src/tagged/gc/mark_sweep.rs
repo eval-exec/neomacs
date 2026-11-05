@@ -2103,7 +2103,9 @@ impl TaggedHeap {
         if has_collection_observations() {
             // Reclamation already published its epoch after clearing marks.
             // Narrow this mutator's native envelope before stores can resume.
-            self.publish_barrier_window();
+            // SAFETY: the collector holds the stopped-world handshake at the
+            // end of this full cycle; no mutator or compiled leaf runs.
+            unsafe { self.publish_barrier_window() };
         }
     }
 

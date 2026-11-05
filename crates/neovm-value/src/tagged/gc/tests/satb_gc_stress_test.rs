@@ -17,7 +17,9 @@ fn heap() -> TestHeap {
     // GEN1's independent dirty-cons insertion retrace would repair a missing
     // SATB log and invalidate these transport mutation witnesses.
     heap.generational.enabled = false;
-    heap.publish_barrier_window();
+    // SAFETY: serial fixture; the heap is exclusively borrowed by the test
+    // thread and no other mutator or compiled leaf runs across the publication.
+    unsafe { heap.publish_barrier_window() };
     heap
 }
 

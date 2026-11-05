@@ -37,7 +37,9 @@ fn verified_heap() -> TaggedHeap {
     // The independent verifier must work without a blackened dump partition.
     heap.partition_dump = false;
     heap.dump_blackened = false;
-    heap.publish_barrier_window();
+    // SAFETY: serial fixture; the heap is exclusively borrowed by the test
+    // thread and no other mutator or compiled leaf runs across the publication.
+    unsafe { heap.publish_barrier_window() };
     heap
 }
 

@@ -27,7 +27,9 @@ fn ready_heap(enabled: bool) -> TaggedHeap {
     unsafe { heap.set_generational_enabled(enabled) };
     heap.generational.pacing_knobs = GenerationalPacingKnobs::default();
     heap.bootstrap_collected = true;
-    heap.publish_barrier_window();
+    // SAFETY: serial fixture; the heap is exclusively borrowed by the test
+    // thread and no other mutator or compiled leaf runs across the publication.
+    unsafe { heap.publish_barrier_window() };
     heap
 }
 

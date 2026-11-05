@@ -433,7 +433,15 @@ impl TaggedHeap {
     /// state and store it where the barriers read it — the thread-local
     /// mirror the Rust stores test and the heap field compiled code tests
     /// (`JitHeapState`). Called at every writer of an input.
-    pub(super) fn publish_barrier_window(&mut self) {
+    ///
+    /// # Safety
+    /// The caller must be this heap's executing mutator (its exclusive
+    /// borrow), or a collector holding the world's stopped handshake. The
+    /// publication writes the heap's protocol Cells and this thread's TLS
+    /// mirrors, so a second running mutator or a compiled leaf observing the
+    /// window mid-update would take barrier decisions against a window that
+    /// does not match the heap state.
+    pub(super) unsafe fn publish_barrier_window(&mut self) {
         let window = self.barrier_window();
         self._satb_layout_reserve
             .observations()
@@ -459,6 +467,19 @@ impl TaggedHeap {
         }
     }
 
+    /// Test hook: republish the barrier window after a serial fixture mutates
+    /// one of its inputs, exactly as the production writers do.
+    ///
+    /// # Safety
+    /// The caller must be this heap's executing mutator (its exclusive
+    /// borrow), or a collector holding the world's stopped handshake, and no
+    /// other mutator or compiled leaf may run across the publication.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) unsafe fn publish_barrier_window_for_test(&mut self) {
+        // SAFETY: the caller upholds the executing-mutator contract above.
+        unsafe { self.publish_barrier_window() }
+    }
+
     /// Test hook: arm or disarm the concurrent SATB barrier exactly as
     /// `launch_concurrent_mark` / `join_concurrent_mark` do, without a GC
     /// thread (so nothing drains `satb_shared`). Tests used to flip the heap
@@ -482,7 +503,9 @@ impl TaggedHeap {
                 );
             });
         }
-        self.publish_barrier_window();
+        // SAFETY: serial synthetic fixture; the caller's contract above
+        // excludes a concurrent marker, so this thread is the only publisher.
+        unsafe { self.publish_barrier_window() };
     }
 }
 

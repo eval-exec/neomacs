@@ -37,7 +37,9 @@ fn verified_heap() -> TaggedHeap {
     heap.generational.verify = true;
     heap.partition_dump = false;
     heap.dump_blackened = false;
-    heap.publish_barrier_window();
+    // SAFETY: serial fixture; the heap is exclusively borrowed by the test
+    // thread and no other mutator or compiled leaf runs across the publication.
+    unsafe { heap.publish_barrier_window() };
     heap
 }
 
@@ -247,7 +249,9 @@ fn gen0_heap_never_marks_a_card() {
     // SAFETY: serial fixture heap; the caller holds the only heap view and no
     // collector or compiled leaf runs.
     unsafe { heap.set_generational_enabled(false) };
-    heap.publish_barrier_window();
+    // SAFETY: serial fixture; the heap is exclusively borrowed by the test
+    // thread and no other mutator or compiled leaf runs across the publication.
+    unsafe { heap.publish_barrier_window() };
     set_tagged_heap(&mut heap);
     let roots = ScratchRoots::new();
     let owner = heap.alloc_vector(vec![TaggedValue::NIL]);

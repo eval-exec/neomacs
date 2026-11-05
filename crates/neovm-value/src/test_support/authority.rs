@@ -462,3 +462,16 @@ pub unsafe fn cons_drop_tails_for_test(
     // SAFETY: the caller upholds the no-further-storage-work contract above.
     unsafe { run.cons_drop_tails_for_test() }
 }
+
+/// Value-FENCE row (C3): republish the write-barrier owner window after a
+/// serial fixture mutates one of its inputs. Both the fence and the original
+/// are unsafe.
+///
+/// # Safety
+/// The heap is exclusively borrowed by the executing mutator (or the collector
+/// holds the stopped-world handshake), and no other mutator or compiled leaf
+/// may run while the window inputs change.
+pub unsafe fn publish_barrier_window_for_test(heap: &mut crate::tagged::gc::TaggedHeap) {
+    // SAFETY: the caller upholds the identical publication contract above.
+    unsafe { heap.publish_barrier_window_for_test() }
+}

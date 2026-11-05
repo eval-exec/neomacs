@@ -65,7 +65,9 @@ fn generational_cons_protocol_window_preserves_disabled_window_transitions() {
         // SAFETY: serial fixture heap; the caller holds the only heap view and no
         // collector or compiled leaf runs.
         unsafe { heap.set_generational_enabled(enabled) };
-        heap.publish_barrier_window();
+        // SAFETY: serial fixture; the heap is exclusively borrowed by the test
+        // thread and no other mutator or compiled leaf runs across the publication.
+        unsafe { heap.publish_barrier_window() };
         set_tagged_heap(&mut heap);
         assert_published_windows(&heap, BarrierWindow::NONE);
         heap.extend_dump_span(4096, 4096);
@@ -90,7 +92,9 @@ fn generational_cons_protocol_window_rederives_on_heap_switch_and_uninstall() {
     // SAFETY: serial fixture heap; the caller holds the only heap view and no
     // collector or compiled leaf runs.
     unsafe { enabled.set_generational_enabled(true) };
-    enabled.publish_barrier_window();
+    // SAFETY: serial fixture; the heap is exclusively borrowed by the test
+    // thread and no other mutator or compiled leaf runs across the publication.
+    unsafe { enabled.publish_barrier_window() };
     set_tagged_heap(&mut enabled);
     assert_published_windows(&enabled, BarrierWindow::NONE);
     let mut disabled = Box::new(TaggedHeap::new());
@@ -135,7 +139,9 @@ fn generational_cons_protocol_window_marks_symbols_and_keeps_preimages() {
     // SAFETY: serial fixture heap; the caller holds the only heap view and no
     // collector or compiled leaf runs.
     unsafe { heap.set_generational_enabled(true) };
-    heap.publish_barrier_window();
+    // SAFETY: serial fixture; the heap is exclusively borrowed by the test
+    // thread and no other mutator or compiled leaf runs across the publication.
+    unsafe { heap.publish_barrier_window() };
     set_tagged_heap(&mut heap);
     let owner = heap.alloc_cons(TaggedValue::NIL, TaggedValue::NIL);
     promote_cons_until_old(&mut heap, owner);
@@ -164,7 +170,9 @@ fn generational_cold_cons_reject_skips_full_hook_for_immediates_and_ineligible_o
     // SAFETY: serial fixture heap; the caller holds the only heap view and no
     // collector or compiled leaf runs.
     unsafe { heap.set_generational_enabled(true) };
-    heap.publish_barrier_window();
+    // SAFETY: serial fixture; the heap is exclusively borrowed by the test
+    // thread and no other mutator or compiled leaf runs across the publication.
+    unsafe { heap.publish_barrier_window() };
     set_tagged_heap(&mut heap);
     let old = heap.alloc_cons(TaggedValue::NIL, TaggedValue::NIL);
     promote_cons_until_old(&mut heap, old);
@@ -196,7 +204,9 @@ fn generational_cold_cons_reject_preserves_real_window_immediate_writes() {
     // SAFETY: serial fixture heap; the caller holds the only heap view and no
     // collector or compiled leaf runs.
     unsafe { heap.set_generational_enabled(true) };
-    heap.publish_barrier_window();
+    // SAFETY: serial fixture; the heap is exclusively borrowed by the test
+    // thread and no other mutator or compiled leaf runs across the publication.
+    unsafe { heap.publish_barrier_window() };
     set_tagged_heap(&mut heap);
     let young = heap.alloc_cons(TaggedValue::NIL, TaggedValue::NIL);
     heap.set_write_tracking_mode(WriteTrackingMode::OwnersAndRecords);

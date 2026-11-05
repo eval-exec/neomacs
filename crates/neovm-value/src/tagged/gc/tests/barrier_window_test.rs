@@ -15,7 +15,9 @@ fn legacy_gate_heap() -> TaggedHeap {
     // SAFETY: serial fixture heap; the caller holds the only heap view and no
     // collector or compiled leaf runs.
     unsafe { heap.set_generational_enabled(false) };
-    heap.publish_barrier_window();
+    // SAFETY: serial fixture; the heap is exclusively borrowed by the test
+    // thread and no other mutator or compiled leaf runs across the publication.
+    unsafe { heap.publish_barrier_window() };
     heap
 }
 

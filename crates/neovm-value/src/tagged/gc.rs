@@ -1294,7 +1294,9 @@ impl TaggedHeap {
     pub fn set_write_tracking_mode(&mut self, mode: WriteTrackingMode) {
         self.write_tracking_mode = mode;
         TAGGED_HEAP_WRITE_TRACKING_MODE.with(|current| current.set(mode));
-        self.publish_barrier_window();
+        // SAFETY: the executing mutator holds this heap's exclusive loan; no
+        // other mutator or compiled leaf runs across the publication.
+        unsafe { self.publish_barrier_window() };
         if mode == WriteTrackingMode::Disabled {
             self.clear_dirty_owners();
             self.clear_dirty_writes();
@@ -1997,7 +1999,10 @@ impl TaggedHeap {
             // remembered set starts being maintained immediately.
             TAGGED_HEAP_PARTITION_ACTIVE.with(|p| p.set(true));
         }
-        self.publish_barrier_window();
+        // SAFETY: the executing mutator holds this heap's exclusive loan and
+        // registers the mapped object; no compiled leaf runs across the
+        // publication.
+        unsafe { self.publish_barrier_window() };
     }
 
     /// True when a registered mapped span (a loaded pdump) has activated the
