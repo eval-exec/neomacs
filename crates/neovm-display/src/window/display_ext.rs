@@ -224,16 +224,6 @@ pub trait DisplayFrameExt {
 
     fn window_at(&self, px: f32, py: f32) -> Option<WindowId>;
 
-    #[cfg(any(test, feature = "test-support"))]
-    fn commit_redisplay_cache_for_test(&mut self, snapshots: Vec<WindowDisplaySnapshot>);
-
-    #[cfg(any(test, feature = "test-support"))]
-    fn prepare_and_activate_display_presentation_for_test(
-        &mut self,
-        presentation: geometry::PresentationId,
-        snapshots: Vec<WindowDisplaySnapshot>,
-    ) -> Result<(), geometry::PresentationPrepareError>;
-
     fn prepare_live_window_presentation(
         &mut self,
         presentation: geometry::PresentationId,
@@ -275,9 +265,6 @@ pub trait DisplayFrameExt {
         generation: geometry::PresentationId,
         publications: &[WindowPresentationSnapshot],
     );
-
-    #[cfg(any(test, feature = "test-support"))]
-    fn replace_redisplay_cache_for_test(&mut self, snapshots: Vec<WindowDisplaySnapshot>);
 
     fn tty_posn_live_margins_clear(&self) -> bool;
 
@@ -902,36 +889,6 @@ impl DisplayFrameExt for Frame {
         self.tree.window_at(px, py)
     }
 
-    /// Test fixture for installing a completed redisplay and replaying its live
-    /// output state. Production redisplay uses the presentation transaction.
-    #[cfg(any(test, feature = "test-support"))]
-    fn commit_redisplay_cache_for_test(&mut self, snapshots: Vec<WindowDisplaySnapshot>) {
-        let generation = self
-            .presentation_state
-            .last_identity
-            .unwrap_or_else(|| geometry::PresentationId::new(1));
-        let publications: Vec<_> = snapshots
-            .iter()
-            .cloned()
-            .map(WindowPresentationSnapshot::live)
-            .collect();
-        self.commit_completed_window_output(generation, &publications);
-        self.replace_redisplay_cache_for_test(snapshots);
-    }
-
-    /// Test fixture for the synchronous prepare/activate lifecycle.
-    #[cfg(any(test, feature = "test-support"))]
-    fn prepare_and_activate_display_presentation_for_test(
-        &mut self,
-        presentation: geometry::PresentationId,
-        snapshots: Vec<WindowDisplaySnapshot>,
-    ) -> Result<(), geometry::PresentationPrepareError> {
-        self.prepare_live_window_presentation(presentation, snapshots)?;
-        self.activate_display_presentation(presentation)
-            .expect("a successfully prepared presentation must activate");
-        Ok(())
-    }
-
     /// Prepare an immutable display publication without making it visible to
     /// evaluator geometry queries. The renderer owns the later activation.
     fn prepare_live_window_presentation(
@@ -1108,17 +1065,6 @@ impl DisplayFrameExt for Frame {
                 ));
             }
         }
-    }
-
-    /// Test fixture for replacing only the latest redisplay cache, without
-    /// mutating live cursor/output state.
-    #[cfg(any(test, feature = "test-support"))]
-    fn replace_redisplay_cache_for_test(&mut self, snapshots: Vec<WindowDisplaySnapshot>) {
-        self.redisplay_cache = snapshots
-            .into_iter()
-            .filter(|snapshot| self.find_window(snapshot.window_id).is_some())
-            .map(|snapshot| (snapshot.window_id, std::sync::Arc::new(snapshot)))
-            .collect();
     }
 
     /// GNU checks the entire live tree, including the minibuffer, before
@@ -3800,4 +3746,90 @@ pub fn resize_pixelwise_with_buffer_constraints(
     height: u32,
 ) {
     DisplayFrameExt::resize_pixelwise_with_buffer_constraints(frame, buffers, width, height);
+}
+
+// ---------------------------------------------------------------------------
+// Display test fixtures (peer 20:16Z condition): the three former pub-trait
+// methods are now pub(crate) FREE FUNCTIONS taking &mut Frame. The trait no
+// longer exposes any test method, so the signed
+// `neovm_display::test_support::authority` delegates are the only public
+// test-support route. Display's own tests keep method-call syntax through the
+// crate-private cfg(test) `DisplayFrameTestExt` convenience trait below.
+
+/// Install a completed redisplay and replay its live output state.
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn commit_redisplay_cache_for_test(
+    frame: &mut Frame,
+    snapshots: Vec<WindowDisplaySnapshot>,
+) {
+    let generation = frame
+        .presentation_state
+        .last_identity
+        .unwrap_or_else(|| geometry::PresentationId::new(1));
+    let publications: Vec<_> = snapshots
+        .iter()
+        .cloned()
+        .map(WindowPresentationSnapshot::live)
+        .collect();
+    frame.commit_completed_window_output(generation, &publications);
+    replace_redisplay_cache_for_test(frame, snapshots);
+}
+
+/// Synchronous prepare/activate lifecycle fixture.
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn prepare_and_activate_display_presentation_for_test(
+    frame: &mut Frame,
+    presentation: geometry::PresentationId,
+    snapshots: Vec<WindowDisplaySnapshot>,
+) -> Result<(), geometry::PresentationPrepareError> {
+    frame.prepare_live_window_presentation(presentation, snapshots)?;
+    frame
+        .activate_display_presentation(presentation)
+        .expect("a successfully prepared presentation must activate");
+    Ok(())
+}
+
+/// Replace only the latest redisplay cache, without mutating live cursor or
+/// output state.
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn replace_redisplay_cache_for_test(
+    frame: &mut Frame,
+    snapshots: Vec<WindowDisplaySnapshot>,
+) {
+    frame.redisplay_cache = snapshots
+        .into_iter()
+        .filter(|snapshot| frame.find_window(snapshot.window_id).is_some())
+        .map(|snapshot| (snapshot.window_id, std::sync::Arc::new(snapshot)))
+        .collect();
+}
+
+/// Crate-private test convenience: keeps display's own test call sites on
+/// method syntax. Not a public route (cfg(test), pub(crate)); the AUTHORITY
+/// fence remains the only cross-crate path.
+#[cfg(test)]
+pub(crate) trait DisplayFrameTestExt {
+    fn commit_redisplay_cache_for_test(&mut self, snapshots: Vec<WindowDisplaySnapshot>);
+    fn prepare_and_activate_display_presentation_for_test(
+        &mut self,
+        presentation: geometry::PresentationId,
+        snapshots: Vec<WindowDisplaySnapshot>,
+    ) -> Result<(), geometry::PresentationPrepareError>;
+    fn replace_redisplay_cache_for_test(&mut self, snapshots: Vec<WindowDisplaySnapshot>);
+}
+
+#[cfg(test)]
+impl DisplayFrameTestExt for Frame {
+    fn commit_redisplay_cache_for_test(&mut self, snapshots: Vec<WindowDisplaySnapshot>) {
+        commit_redisplay_cache_for_test(self, snapshots);
+    }
+    fn prepare_and_activate_display_presentation_for_test(
+        &mut self,
+        presentation: geometry::PresentationId,
+        snapshots: Vec<WindowDisplaySnapshot>,
+    ) -> Result<(), geometry::PresentationPrepareError> {
+        prepare_and_activate_display_presentation_for_test(self, presentation, snapshots)
+    }
+    fn replace_redisplay_cache_for_test(&mut self, snapshots: Vec<WindowDisplaySnapshot>) {
+        replace_redisplay_cache_for_test(self, snapshots);
+    }
 }

@@ -1,6 +1,7 @@
 //! Full-posn regression for canonical TTY iterator boundary offsets.
 //! Live GNU expectation is also checked by the unchanged actual SGR oracle.
 use super::*;
+use crate::window::DisplayFrameTestExt;
 use crate::window::{
     DisplayPointRole, DisplayPointSnapshot, DisplayRowSnapshot, PosnObjectExtentMode,
 };

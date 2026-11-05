@@ -86,37 +86,40 @@ fn install_mouse_help_echo_snapshot_with_value(eval: &mut Context, help: Value) 
         .expect("frame")
         .selected_window;
     let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
-    frame.commit_redisplay_cache_for_test(vec![crate::window::WindowDisplaySnapshot {
-        point_rows: None,
-        window_id,
-        text_area_left_offset: 8,
-        points: vec![crate::window::DisplayPointSnapshot {
-            role: crate::window::DisplayPointRole::Glyph,
-            buffer_pos: neovm_edit::buffer::LispCharPos1::new(1),
-            x: 0,
-            y: 0,
-            width: 8,
-            height: 16,
-            row: 0,
-            col: 0,
+    neovm_display::test_support::authority::commit_redisplay_cache_for_test(
+        frame,
+        vec![crate::window::WindowDisplaySnapshot {
+            point_rows: None,
+            window_id,
+            text_area_left_offset: 8,
+            points: vec![crate::window::DisplayPointSnapshot {
+                role: crate::window::DisplayPointRole::Glyph,
+                buffer_pos: neovm_edit::buffer::LispCharPos1::new(1),
+                x: 0,
+                y: 0,
+                width: 8,
+                height: 16,
+                row: 0,
+                col: 0,
+            }],
+            rows: vec![crate::window::DisplayRowSnapshot {
+                truncated_end_buffer_pos: None,
+                row: 0,
+                y: 0,
+                height: 16,
+                extra_line_spacing: 0,
+                start_x: 0,
+                start_col: 0,
+                end_x: 0,
+                end_col: 0,
+                start_buffer_pos: Some(neovm_edit::buffer::LispCharPos1::new(1)),
+                end_buffer_pos: Some(neovm_edit::buffer::LispCharPos1::new(3)),
+                end_source: Default::default(),
+                fringe: Default::default(),
+            }],
+            ..crate::window::WindowDisplaySnapshot::default()
         }],
-        rows: vec![crate::window::DisplayRowSnapshot {
-            truncated_end_buffer_pos: None,
-            row: 0,
-            y: 0,
-            height: 16,
-            extra_line_spacing: 0,
-            start_x: 0,
-            start_col: 0,
-            end_x: 0,
-            end_col: 0,
-            start_buffer_pos: Some(neovm_edit::buffer::LispCharPos1::new(1)),
-            end_buffer_pos: Some(neovm_edit::buffer::LispCharPos1::new(3)),
-            end_source: Default::default(),
-            fringe: Default::default(),
-        }],
-        ..crate::window::WindowDisplaySnapshot::default()
-    }]);
+    );
     Value::make_frame(frame_id.0)
 }
 

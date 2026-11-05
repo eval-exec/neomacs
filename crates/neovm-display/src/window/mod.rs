@@ -81,10 +81,17 @@ use sibling_layout::{ChildExtent, sibling_bounds};
 pub use split::{CombinationLimit, DeleteOutcome, DeleteResize, ParentSeal, SplitAttachment};
 
 mod display_ext;
+#[cfg(test)]
+pub(crate) use display_ext::DisplayFrameTestExt;
 #[doc(hidden)]
 pub use display_ext::resize_pixelwise_with_buffer_constraints;
 pub use display_ext::{
     DisplayFrameExt, DisplayFrameManagerExt, DisplayWindowExt, DisplayWindowTreeExt,
+};
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use display_ext::{
+    commit_redisplay_cache_for_test, prepare_and_activate_display_presentation_for_test,
+    replace_redisplay_cache_for_test,
 };
 
 pub use display::{WindowBufferDisplayDefaults, WindowFringeDefaults, WindowScrollBarDefaults};

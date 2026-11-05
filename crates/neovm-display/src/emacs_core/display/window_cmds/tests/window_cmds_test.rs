@@ -2,6 +2,7 @@ use crate::emacs_core::DisplayHost;
 use crate::emacs_core::window_cmds::{FrameDomain, SplitWindowSide, WindowDomain};
 use crate::face::{FontSlant, FontWeight, FontWidth};
 use crate::test_utils::{runtime_startup_context, runtime_startup_eval_all};
+use crate::window::DisplayFrameTestExt;
 use crate::window::{FrameFullscreen, FrameParam};
 use neovm_edit::buffer::{EmacsBytePos, LispCharPos1};
 use neovm_eval::emacs_core::eval::Context;

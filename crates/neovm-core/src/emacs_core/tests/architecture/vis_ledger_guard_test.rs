@@ -4839,6 +4839,109 @@ fn auth_public_use_violation(
     Ok(())
 }
 
+/// Peer 20:16Z: a method on a PUBLIC trait whose name matches an AUTHORITY
+/// row is a second public route to the signed item. Only a method (and trait)
+/// gated `#[cfg(test)]` is allowed to carry such a name: `cfg(any(test,
+/// feature = "test-support"))` trait methods stay public in the upper
+/// test-support build and are rejected.
+fn authority_pub_trait_method_violation(workspace: &Path, rows: &[AuthRow]) -> Result<(), String> {
+    fn test_only(attrs: &[syn::Attribute]) -> bool {
+        attrs.iter().any(|attr| {
+            if !attr.path().is_ident("cfg") {
+                return false;
+            }
+            let Ok(list) = attr.meta.require_list() else {
+                return false;
+            };
+            let compact: String = list.tokens.to_string().split_whitespace().collect();
+            compact.contains("test")
+                && !compact.contains("test-support")
+                && !compact.contains("feature")
+        })
+    }
+    // The trait method is a second route only when the row names the SAME
+    // trait: collect, per row leaf, the TYPE-like segments of the signed item
+    // and fence path (FunctionWriteHooks::prepare_hof_builtin is a different
+    // item from ProofEra::prepare_hof_builtin and must not collide by leaf).
+    let mut routes: BTreeMap<&str, BTreeMap<&str, BTreeSet<&str>>> = BTreeMap::new();
+    for row in rows {
+        let leaf = auth_leaf(&row.item);
+        let mut owners: BTreeSet<&str> = BTreeSet::new();
+        for segment in row
+            .item
+            .split("::")
+            .chain(row.fence_path.split("::"))
+            .take_while(|segment| !segment.is_empty())
+        {
+            if segment
+                .chars()
+                .next()
+                .is_some_and(|first| first.is_ascii_uppercase())
+            {
+                owners.insert(segment);
+            }
+        }
+        routes
+            .entry(row.crate_name.as_str())
+            .or_default()
+            .entry(leaf)
+            .or_default()
+            .extend(owners);
+    }
+    for (crate_name, crate_routes) in routes {
+        let src = workspace.join("crates").join(crate_name).join("src");
+        if !src.is_dir() {
+            continue;
+        }
+        let mut files = Vec::new();
+        walk_files(&src, &mut files)?;
+        for path in files {
+            if path.extension().is_none_or(|extension| extension != "rs") || is_test_path(&path) {
+                continue;
+            }
+            let canonical = path
+                .canonicalize()
+                .map_err(|error| format!("AUTHORITY_TRAIT {}: {error}", path.display()))?;
+            let text = read(&canonical)?;
+            let Ok(ast) = syn::parse_file(&text) else {
+                continue;
+            };
+            for item in &ast.items {
+                let syn::Item::Trait(item) = item else {
+                    continue;
+                };
+                if !matches!(item.vis, syn::Visibility::Public(_)) || test_only(&item.attrs) {
+                    continue;
+                }
+                for member in &item.items {
+                    let syn::TraitItem::Fn(function) = member else {
+                        continue;
+                    };
+                    if test_only(&function.attrs) {
+                        continue;
+                    }
+                    let leaf = function.sig.ident.to_string();
+                    let Some(owners) = crate_routes.get(leaf.as_str()) else {
+                        continue;
+                    };
+                    if !owners.contains(item.ident.to_string().as_str()) {
+                        continue;
+                    }
+                    let relative = canonical
+                        .strip_prefix(workspace)
+                        .map(|p| p.to_string_lossy().replace('\\', "/"))
+                        .unwrap_or_else(|_| canonical.display().to_string());
+                    return Err(format!(
+                        "AUTHORITY_PATHS {relative}: pub trait `{}` method `{leaf}` is named like an AUTHORITY row and is not #[cfg(test)]-only; the signed fence path would not be exclusive",
+                        item.ident
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn authority_public_paths_violation(workspace: &Path, rows: &[AuthRow]) -> Result<(), String> {
     let mut fence_maps: BTreeMap<String, BTreeMap<PathBuf, (Vec<String>, bool)>> = BTreeMap::new();
     for crate_name in rows
@@ -4997,10 +5100,59 @@ fn authority_public_paths_violation(workspace: &Path, rows: &[AuthRow]) -> Resul
         }
         fence_maps.insert(crate_name, map);
     }
+    authority_pub_trait_method_violation(workspace, rows)?;
     auth_public_use_violation(workspace, rows, &fence_maps)
 }
 
 #[test]
+#[test]
+fn authority_rejects_a_pub_trait_method_named_like_a_signed_item() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let src = dir.path().join("crates/neovm-value/src");
+    std::fs::create_dir_all(&src).expect("src");
+    std::fs::write(src.join("lib.rs"), "pub mod window;\n").expect("lib");
+    let rows = vec![AuthRow {
+        crate_name: "neovm-value".to_owned(),
+        item: "window::WindowExt::frobnicate".to_owned(),
+        defining_file: "crates/neovm-value/src/test_support/authority.rs".to_owned(),
+        fence_path: "neovm_value::window::WindowExt::frobnicate".to_owned(),
+    }];
+    std::fs::write(
+        src.join("window.rs"),
+        "pub trait WindowExt {\n    fn frobnicate(&self);\n}\n",
+    )
+    .expect("window");
+    let error = authority_pub_trait_method_violation(dir.path(), &rows)
+        .expect_err("pub trait method named like a row");
+    assert!(
+        error.contains("frobnicate") && error.contains("pub trait"),
+        "{error}"
+    );
+    // A #[cfg(test)] method is not a public route.
+    std::fs::write(
+        src.join("window.rs"),
+        "pub trait WindowExt {\n    #[cfg(test)]\n    fn frobnicate(&self);\n}\n",
+    )
+    .expect("window");
+    assert!(authority_pub_trait_method_violation(dir.path(), &rows).is_ok());
+    // A cfg(test)-only trait is not public either.
+    std::fs::write(
+        src.join("window.rs"),
+        "#[cfg(test)]\npub trait WindowExt {\n    fn frobnicate(&self);\n}\n",
+    )
+    .expect("window");
+    assert!(authority_pub_trait_method_violation(dir.path(), &rows).is_ok());
+    // A test-support-gated trait method is still public in the upper build.
+    std::fs::write(
+        src.join("window.rs"),
+        "pub trait WindowExt {\n    #[cfg(any(test, feature = \"test-support\"))]\n    fn frobnicate(&self);\n}\n",
+    )
+    .expect("window");
+    let error = authority_pub_trait_method_violation(dir.path(), &rows)
+        .expect_err("test-support trait method is still public");
+    assert!(error.contains("frobnicate"), "{error}");
+}
+
 fn authority_items_have_exactly_the_fence_public_path() {
     let workspace = workspace_root();
     let rows = auth_rows(&workspace);

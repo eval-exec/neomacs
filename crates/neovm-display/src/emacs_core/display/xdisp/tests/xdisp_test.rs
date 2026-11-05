@@ -7,6 +7,7 @@ use crate::emacs_core::image_catalog::{
     ImageCatalog, ImageId, ImageLayoutExtent, ImageLoadAttempt, ImageLoadToken, ImageLookup,
     ImageMaskKind, ImageResolveRequest, ImageSizeLimit, ReadyImage, ResolvedImageMetadata,
 };
+use crate::window::DisplayFrameTestExt;
 use malachite::Integer;
 use neovm_edit::buffer::buffer::BUFFER_SLOT_BUFFER_FILE_CODING_SYSTEM;
 use neovm_edit::buffer::{BufferTextBackendKind, CharPos0, LispCharPos1};

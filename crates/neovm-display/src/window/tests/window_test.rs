@@ -3,6 +3,7 @@
 mod attempt_freshness_span_test;
 
 use super::*;
+use crate::window::DisplayFrameTestExt;
 use neomacs_display_protocol::TransitionDirection;
 use neovm_edit::buffer::{CharLen, EmacsByteLen};
 

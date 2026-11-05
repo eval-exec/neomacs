@@ -3,6 +3,7 @@
 //! in neomacs-tui-tests::posn_object_extent_oracle; these assertions isolate
 //! the dimension cell without changing any fake fixture's physical geometry.
 use super::*;
+use crate::window::DisplayFrameTestExt;
 use crate::window::{FrameId, PosnObjectExtentMode, WindowId};
 use neomacs_display_protocol::posn_object_extent::{PosnMatrixRow, PosnMatrixSnapshot};
 

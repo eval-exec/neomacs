@@ -4,6 +4,7 @@
 //! answer a point-only move only when no chrome line can change the text area.
 
 use super::*;
+use crate::window::DisplayFrameTestExt;
 use crate::window::{Window, WindowLayoutQuery, WindowLayoutQueryOutcome, WindowLayoutQueryScope};
 use neovm_edit::buffer::LispCharPos1;
 use neovm_value::value::Value;
