@@ -10,7 +10,9 @@ description = "Evaluator and Lisp runtime extracted from neovm-core"
 [features]
 default = ["jit"]
 # Test-only accessors for cross-crate architecture probes (peer ruling A2).
-test-support = []
+# The feature forwards value's test-support so eval's test_utils foundation
+# and the moved test trees see the value helpers.
+test-support = ["neovm-value/test-support"]
 contract-fixtures = []
 desktop-font-settings = []
 gc-memory-telemetry = []
@@ -18,9 +20,6 @@ jit = ["neovm-value/jit", "neovm-edit/jit", "neovm-text/jit"]
 perf-probes = []
 redisplay-test-policy = ["neovm-edit/redisplay-test-policy"]
 sqlite = []
-# Test-only support surface: enabled only by a dev-dependency of a crate
-# ABOVE neovm-eval (core), never by a product profile.
-test-support = ["neovm-value/test-support"]
 vm-profile = []
 
 [dependencies]
