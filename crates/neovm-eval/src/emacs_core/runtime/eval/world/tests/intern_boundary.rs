@@ -5,13 +5,13 @@ use neovm_value::intern::{SymId, intern, intern_uninterned};
 struct StampsOn;
 impl Drop for StampsOn {
     fn drop(&mut self) {
-        neovm_value::symbol::force_fn_stamps_for_test(None);
+        neovm_value::test_support::authority::force_fn_stamps_for_test(None);
     }
 }
 impl Context {
     #[doc(hidden)]
     pub fn c5_function_stamps_for_test() -> impl Drop {
-        neovm_value::symbol::force_fn_stamps_for_test(Some(true));
+        neovm_value::test_support::authority::force_fn_stamps_for_test(Some(true));
         StampsOn
     }
 
