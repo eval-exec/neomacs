@@ -4136,7 +4136,7 @@ impl TaggedValue {
     #[cfg(test)]
     pub fn with_bytecode_data_mut_for_test<R>(
         self,
-        f: impl FnOnce(&mut crate::emacs_core::bytecode::ByteCodeFunction) -> R,
+        f: impl FnOnce(&mut crate::tagged::bytecode::chunk::ByteCodeFunction) -> R,
     ) -> Option<R> {
         mutate::with_bytecode_data_mut_for_test(self, f)
     }

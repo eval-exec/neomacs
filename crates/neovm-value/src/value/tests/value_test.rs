@@ -748,17 +748,17 @@ fn byte_code_probe(
     env: Option<Value>,
     docstring: Option<crate::heap_types::LispString>,
     gnu_bytes: Option<Vec<u8>>,
-    ops: Vec<crate::emacs_core::bytecode::Op>,
+    ops: Vec<crate::tagged::bytecode::opcode::Op>,
     constants: Vec<Value>,
 ) -> Value {
-    use crate::emacs_core::bytecode::ByteCodeFunction;
+    use crate::tagged::bytecode::chunk::ByteCodeFunction;
     Value::make_bytecode(ByteCodeFunction {
-        source_id: crate::emacs_core::bytecode::fresh_bytecode_source_id(),
+        source_id: crate::tagged::bytecode::chunk::fresh_bytecode_source_id(),
         ops_sealed: true,
         stack_verified: false,
         ops,
         constants: constants.into(),
-        max_stack: crate::emacs_core::bytecode::StackDepth::for_test(1),
+        max_stack: crate::tagged::bytecode::function_slots::StackDepth::for_test(1),
         params: LambdaParams::simple(vec![]).into(),
         arglist: Value::fixnum(257),
         lexical: true,
@@ -799,8 +799,8 @@ fn byte_code_probe_agreement(eval: &mut Context, a: Value, b: Value) -> (bool, b
     )
 }
 
-fn simple_ops() -> Vec<crate::emacs_core::bytecode::Op> {
-    use crate::emacs_core::bytecode::Op;
+fn simple_ops() -> Vec<crate::tagged::bytecode::opcode::Op> {
+    use crate::tagged::bytecode::opcode::Op;
     vec![Op::Constant(0), Op::Return]
 }
 
@@ -941,7 +941,7 @@ fn docstrings_compare_with_gnu_string_equality_not_representation() {
 fn functions_without_gnu_bytes_compare_their_decoded_instructions() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new();
-    use crate::emacs_core::bytecode::Op;
+    use crate::tagged::bytecode::opcode::Op;
     let consts = || vec![Value::fixnum(42)];
 
     let a = byte_code_probe(None, None, None, simple_ops(), consts());

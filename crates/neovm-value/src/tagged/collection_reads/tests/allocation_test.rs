@@ -118,7 +118,7 @@ fn collection_reads_allocation_phase_counters() {
 /// Retain several certificates across replacement to exercise escaping storage.
 #[test]
 fn collection_reads_allocation_steady_projection_counters() {
-    use crate::emacs_core::Value;
+    use crate::value::Value;
     for count in [24, 512] {
         let owners: Vec<_> = (0..count)
             .map(|_| Value::cons(Value::NIL, Value::NIL))
@@ -157,7 +157,7 @@ fn collection_reads_allocation_steady_projection_counters() {
 
 #[test]
 fn collection_reads_recent_clear_fill_counter() {
-    use crate::emacs_core::Value;
+    use crate::value::Value;
     let owners: Vec<_> = (0..7)
         .map(|_| Value::cons(Value::NIL, Value::NIL))
         .collect();
@@ -187,7 +187,7 @@ fn collection_reads_recent_clear_fill_counter() {
 /// map for an outer scope would erase its dependency or move its first read.
 #[test]
 fn collection_reads_capture_map_reuses_nested_storage() {
-    use crate::emacs_core::Value;
+    use crate::value::Value;
     for count in [24, 512] {
         let owners: Vec<_> = (0..count)
             .map(|_| Value::cons(Value::NIL, Value::NIL))

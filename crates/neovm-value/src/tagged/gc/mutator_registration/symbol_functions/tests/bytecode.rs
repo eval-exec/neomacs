@@ -1,7 +1,9 @@
 //! Existing constant bytecode is an opaque rooted replacement target only.
 use super::*;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
-use crate::emacs_core::bytecode::{ByteCodeFunction, Op, StackDepth};
+use crate::tagged::bytecode::chunk::ByteCodeFunction;
+use crate::tagged::bytecode::function_slots::StackDepth;
+use crate::tagged::bytecode::opcode::Op;
 use crate::value::LambdaParams;
 
 fn constant_function() -> ByteCodeFunction {

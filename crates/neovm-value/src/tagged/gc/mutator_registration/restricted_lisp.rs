@@ -5572,7 +5572,7 @@ fn a6_ht_sealed_edit_triggers_jit_switch_stale_shim() {
         return;
     }
     crate::test_utils::init_test_tracing();
-    use crate::emacs_core::bytecode::Op as ByteOp;
+    use crate::tagged::bytecode::opcode::Op as ByteOp;
     // A bare context admits (the bootstrapped runtime carries permanent
     // weak tables A5 refuses); the switch body is the JIT tests' own
     // `(lambda (x) (switch x TABLE))` lowering, and the jump table is
@@ -5690,12 +5690,9 @@ fn a6_ht_sealed_edit_triggers_jit_switch_stale_shim() {
         TaggedValue::fixnum(1),
         TaggedValue::fixnum(2),
     ];
-    let map: Vec<crate::emacs_core::bytecode::chunk::GnuByteOffsetMapEntry> = (0..3)
+    let map: Vec<crate::tagged::bytecode::chunk::GnuByteOffsetMapEntry> = (0..3)
         .map(|j| {
-            crate::emacs_core::bytecode::chunk::GnuByteOffsetMapEntry::new(
-                offset(j) as usize,
-                arm(j),
-            )
+            crate::tagged::bytecode::chunk::GnuByteOffsetMapEntry::new(offset(j) as usize, arm(j))
         })
         .collect();
     let before_sites =

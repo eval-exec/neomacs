@@ -1,6 +1,6 @@
 //! Real cold misses must register scratch cells before shortcuts or rejection.
 use super::*;
-use crate::emacs_core::Value;
+use crate::value::Value;
 
 struct RestoreMode;
 

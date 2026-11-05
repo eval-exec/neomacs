@@ -1,5 +1,5 @@
 use super::*;
-use crate::emacs_core::Value;
+use crate::value::Value;
 
 #[test]
 fn repeated_reads_skip_capture_state_but_preserve_nested_dependencies() {

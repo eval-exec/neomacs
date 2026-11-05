@@ -1,8 +1,8 @@
 //! Capture semantics at the fused setter's journal/projection boundary.
 
 use super::*;
-use crate::emacs_core::Value;
 use crate::tagged::mutate::{set_cons_car, set_cons_cdr, set_record_slot, set_vector_slot};
+use crate::value::Value;
 
 type Setter = fn(Value, Value) -> bool;
 

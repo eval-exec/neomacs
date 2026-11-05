@@ -1,6 +1,6 @@
 use super::*;
-use crate::emacs_core::bytecode::ByteCodeFunctionExt;
-use crate::emacs_core::bytecode::{ByteCodeFunction, Op};
+use crate::tagged::bytecode::chunk::ByteCodeFunction;
+use crate::tagged::bytecode::opcode::Op;
 use crate::value::LambdaParams;
 
 fn arm_partition(heap: &mut TaggedHeap, verify: bool) {
@@ -1338,7 +1338,7 @@ fn full_prototype_fn(constants: Vec<TaggedValue>) -> ByteCodeFunction {
     .into();
     f.arglist = TaggedValue::fixnum(0x0181);
     f.lexical = true;
-    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(11);
+    f.max_stack = crate::tagged::bytecode::function_slots::StackDepth::for_test(11);
     f.ops_sealed = true;
     f.stack_verified = true;
     f.gnu_byte_offset_map = Some(vec![GnuByteOffsetMapEntry::new(0, 0)]);
