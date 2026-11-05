@@ -61,6 +61,7 @@ const KINDS: &[&str] = &[
     "static",
     "mod",
     "field",
+    "use",
 ];
 
 /// Trybuild fixture families under `crates/neovm-core/tests`. Every `*.stderr`
@@ -120,6 +121,15 @@ enum TypeCandidate {
     Unknown,
 }
 
+/// The privacy-class view of a compiler golden: only the text inside error
+/// blocks whose class visibility can cause (E0603/E0624/E0451/E0616/E0423, or
+/// a private / not-publicly-re-exported note). Auto-trait E0277 obligation
+/// notes are excluded: visibility cannot change auto traits (peer 07:4xZ).
+struct GoldenPrivacy {
+    words: Vec<(String, bool)>,
+    chains: Vec<Vec<String>>,
+}
+
 /// One fixture or compiler golden's naming context. Resolution is per file:
 /// a bare word must resolve to the item *there*, never through an import in
 /// another fixture.
@@ -151,12 +161,95 @@ struct FixtureScope {
     /// (`SubrObj::<Entry>`); such an occurrence does not reference an item
     /// named `Entry`.
     generic_exempt: bool,
+    /// A compiler golden's privacy-class block view, used by ITEM rows.
+    golden_privacy: Option<GoldenPrivacy>,
     /// An unparseable file keeps the lexical matcher, fail-closed.
     broad: Option<FixtureNames>,
 }
 
 fn read(path: &Path) -> Result<String, String> {
     std::fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))
+}
+
+fn is_test_path(path: &Path) -> bool {
+    path.components()
+        .any(|component| component.as_os_str().to_str() == Some("tests"))
+        || path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name == "tests.rs" || name.ends_with("_test.rs"))
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum CfgTruth {
+    True,
+    False,
+    Unknown,
+}
+
+/// `test = false`, `feature = "test-support" = false`: only a predicate that
+/// is definitively false marks a test-only arm.
+fn cfg_truth(meta: &syn::Meta) -> CfgTruth {
+    match meta {
+        syn::Meta::Path(path) if path.is_ident("test") => CfgTruth::False,
+        syn::Meta::NameValue(value) if value.path.is_ident("feature") => {
+            if let syn::Expr::Lit(expr) = &value.value {
+                if let syn::Lit::Str(name) = &expr.lit {
+                    if name.value() == "test-support" {
+                        return CfgTruth::False;
+                    }
+                }
+            }
+            CfgTruth::Unknown
+        }
+        syn::Meta::List(list) if list.path.is_ident("not") => {
+            match list.parse_args::<syn::Meta>() {
+                Ok(inner) => match cfg_truth(&inner) {
+                    CfgTruth::True => CfgTruth::False,
+                    CfgTruth::False => CfgTruth::True,
+                    CfgTruth::Unknown => CfgTruth::Unknown,
+                },
+                Err(_) => CfgTruth::Unknown,
+            }
+        }
+        syn::Meta::List(list) if list.path.is_ident("any") || list.path.is_ident("all") => {
+            let any = list.path.is_ident("any");
+            match list.parse_args_with(
+                syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+            ) {
+                Ok(metas) => {
+                    let mut unknown = false;
+                    for meta in &metas {
+                        match cfg_truth(meta) {
+                            CfgTruth::True if any => return CfgTruth::True,
+                            CfgTruth::False if !any => return CfgTruth::False,
+                            CfgTruth::Unknown => unknown = true,
+                            _ => {}
+                        }
+                    }
+                    if unknown {
+                        CfgTruth::Unknown
+                    } else if any {
+                        CfgTruth::False
+                    } else {
+                        CfgTruth::True
+                    }
+                }
+                Err(_) => CfgTruth::Unknown,
+            }
+        }
+        _ => CfgTruth::Unknown,
+    }
+}
+
+fn test_gated(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|attr| {
+        attr.path().is_ident("cfg")
+            && attr
+                .parse_args::<syn::Meta>()
+                .map(|meta| cfg_truth(&meta) == CfgTruth::False)
+                .unwrap_or(false)
+    })
 }
 
 fn read_dir_sorted(path: &Path) -> Result<Vec<PathBuf>, String> {
@@ -695,6 +788,7 @@ fn fixture_scope(label: String, source: &str, rust: bool, generic_exempt: bool) 
         struct_uses: Vec::new(),
         field_mentions: field_mentions(&code),
         generic_exempt,
+        golden_privacy: None,
         broad: None,
     };
     if rust {
@@ -719,6 +813,54 @@ fn fixture_scope(label: String, source: &str, rust: bool, generic_exempt: bool) 
             }
         }
     }
+    scope
+}
+
+/// The text of a golden's privacy-class error blocks only. A golden
+/// occurrence is a V1 hit for an ITEM row only here: visibility cannot change
+/// auto-trait impls, so an E0277 Send/Sync obligation note is not a hit.
+fn privacy_error_blocks(source: &str) -> String {
+    fn privacy_line(line: &str) -> bool {
+        ["E0603", "E0624", "E0451", "E0616", "E0423"]
+            .iter()
+            .any(|code| line.contains(code))
+            || line.contains("private")
+            || line.contains("not publicly re-exported")
+    }
+    let mut blocks: Vec<Vec<&str>> = Vec::new();
+    let mut current: Vec<&str> = Vec::new();
+    for line in source.lines() {
+        let trimmed = line.trim_start();
+        let is_header = trimmed.starts_with("error[")
+            || trimmed.starts_with("error:")
+            || trimmed.starts_with("warning[")
+            || trimmed.starts_with("warning:");
+        if is_header && !current.is_empty() {
+            blocks.push(std::mem::take(&mut current));
+        }
+        current.push(line);
+    }
+    if !current.is_empty() {
+        blocks.push(current);
+    }
+    let mut text = String::new();
+    for block in blocks {
+        if block.iter().any(|line| privacy_line(line)) {
+            for line in block {
+                text.push_str(line);
+                text.push('\n');
+            }
+        }
+    }
+    text
+}
+
+/// A compiler golden's scope: the full text still feeds the field arm, while
+/// `golden_privacy` is the only view ITEM rows may match.
+fn golden_scope(label: String, source: &str) -> FixtureScope {
+    let mut scope = fixture_scope(label, source, false, true);
+    let (words, chains) = lexical_names(&privacy_error_blocks(source));
+    scope.golden_privacy = Some(GoldenPrivacy { words, chains });
     scope
 }
 
@@ -758,7 +900,7 @@ fn fixture_scopes(workspace: &Path) -> Result<Vec<FixtureScope>, String> {
             .unwrap_or(&path)
             .display()
             .to_string();
-        let mut scope = fixture_scope(label, &source, false, true);
+        let mut scope = golden_scope(label, &source);
         let sibling = path.with_extension("rs");
         if let Some(index) = fixture_index.get(&sibling) {
             let paired = &scopes[*index];
@@ -991,7 +1133,13 @@ fn field_hit(
             // Require both the `.field` mention and a resolved reference to
             // the struct.
             if scope.field_mentions.contains(field)
-                && names_in_fixtures(&parent_item, "struct", std::slice::from_ref(scope)).is_some()
+                && names_in_fixtures_scoped(
+                    &parent_item,
+                    "struct",
+                    std::slice::from_ref(scope),
+                    false,
+                )
+                .is_some()
             {
                 return Some(format!(
                     "{}: `.{}` on the row's struct in a compiler golden",
@@ -1109,6 +1257,15 @@ fn lexical_hit(item: &str, kind: &str, names: &FixtureNames) -> Option<String> {
 /// resolves to the item there. Unparseable files keep the lexical fallback,
 /// fail-closed.
 fn names_in_fixtures(item: &str, kind: &str, fixtures: &[FixtureScope]) -> Option<String> {
+    names_in_fixtures_scoped(item, kind, fixtures, true)
+}
+
+fn names_in_fixtures_scoped(
+    item: &str,
+    kind: &str,
+    fixtures: &[FixtureScope],
+    golden_privacy: bool,
+) -> Option<String> {
     // Field rows use the separate field arm (peer ruling 04:2xZ): naming the
     // type is not a hit, so the item-path rule does not apply to them.
     if kind == "field" {
@@ -1132,8 +1289,14 @@ fn names_in_fixtures(item: &str, kind: &str, fixtures: &[FixtureScope]) -> Optio
                 ));
             }
         }
+        // A golden's ITEM rows may match only its privacy-class blocks; the
+        // fixture SOURCE and field-row paths keep the full view (07:4xZ).
+        let (words, chains) = match (golden_privacy, scope.golden_privacy.as_ref()) {
+            (true, Some(privacy)) => (&privacy.words, &privacy.chains),
+            _ => (&scope.words, &scope.chains),
+        };
         if matches!(kind, "struct" | "enum" | "union" | "trait" | "type") {
-            for (word, generic) in &scope.words {
+            for (word, generic) in words {
                 if word != leaf {
                     continue;
                 }
@@ -1149,7 +1312,7 @@ fn names_in_fixtures(item: &str, kind: &str, fixtures: &[FixtureScope]) -> Optio
             }
         }
         if kind != "mod" {
-            for chain in &scope.chains {
+            for chain in chains {
                 let resolved = resolve_chain(chain, &scope.imports);
                 if item_suffix_matches(&resolved, &segments) {
                     return Some(format!(
@@ -1369,6 +1532,152 @@ fn check_row(
 
 /// Every `visibility::make(pub)` site in an extracted crate, as
 /// `(workspace-relative file, item name)`.
+/// Widenings the textual `visibility::make` scan cannot see: sibling cfg-split
+/// declarations of one item or one re-export where a test-support arm is
+/// public and a production arm is not (peer 07:4xZ; the ThreadingMode bypass).
+fn cfg_split_widening_sites(workspace: &Path) -> Result<Vec<(String, String)>, String> {
+    let mut sites = Vec::new();
+    for crate_dir in VIS_CRATES {
+        let src = workspace.join("crates").join(crate_dir).join("src");
+        let mut files = Vec::new();
+        walk_files(&src, &mut files)?;
+        for path in files {
+            if path.extension().is_none_or(|extension| extension != "rs") || is_test_path(&path) {
+                continue;
+            }
+            let relative = path
+                .strip_prefix(workspace)
+                .map_err(|_| format!("{} is outside the workspace", path.display()))?
+                .to_string_lossy()
+                .replace('\\', "/");
+            let source = read(&path)?;
+            let parsed =
+                syn::parse_file(&source).map_err(|error| format!("{relative}: {error}"))?;
+            collect_cfg_split_sites(&parsed.items, &relative, &mut sites);
+        }
+    }
+    sites.sort();
+    sites.dedup();
+    Ok(sites)
+}
+
+fn record_cfg_split(
+    declarations: &mut BTreeMap<(String, String), Vec<(bool, bool)>>,
+    kind: &str,
+    name: &str,
+    vis: &syn::Visibility,
+    attrs: &[syn::Attribute],
+) {
+    declarations
+        .entry((kind.to_owned(), name.to_owned()))
+        .or_default()
+        .push((matches!(vis, syn::Visibility::Public(_)), test_gated(attrs)));
+}
+
+fn use_local_names(tree: &syn::UseTree) -> Vec<String> {
+    fn expand(tree: &syn::UseTree, out: &mut Vec<String>) {
+        match tree {
+            syn::UseTree::Path(path) => expand(&path.tree, out),
+            syn::UseTree::Name(name) => out.push(name.ident.to_string()),
+            syn::UseTree::Rename(rename) => out.push(rename.rename.to_string()),
+            syn::UseTree::Glob(_) => {}
+            syn::UseTree::Group(group) => {
+                for item in &group.items {
+                    expand(item, out);
+                }
+            }
+        }
+    }
+    let mut names = Vec::new();
+    expand(tree, &mut names);
+    names
+}
+
+fn collect_cfg_split_sites(items: &[syn::Item], file: &str, out: &mut Vec<(String, String)>) {
+    let mut declarations: BTreeMap<(String, String), Vec<(bool, bool)>> = BTreeMap::new();
+    for item in items {
+        match item {
+            syn::Item::Mod(module) => {
+                // Module visibility uses the documented cfg-split module form;
+                // its rows are checked separately (RB-2 shell module) and the
+                // ruling's item inventory is the item/re-export class.
+                if let Some((_, inner)) = &module.content {
+                    collect_cfg_split_sites(inner, file, out);
+                }
+            }
+            syn::Item::Struct(item) => record_cfg_split(
+                &mut declarations,
+                "struct",
+                &item.ident.to_string(),
+                &item.vis,
+                &item.attrs,
+            ),
+            syn::Item::Enum(item) => record_cfg_split(
+                &mut declarations,
+                "enum",
+                &item.ident.to_string(),
+                &item.vis,
+                &item.attrs,
+            ),
+            syn::Item::Union(item) => record_cfg_split(
+                &mut declarations,
+                "union",
+                &item.ident.to_string(),
+                &item.vis,
+                &item.attrs,
+            ),
+            syn::Item::Trait(item) => record_cfg_split(
+                &mut declarations,
+                "trait",
+                &item.ident.to_string(),
+                &item.vis,
+                &item.attrs,
+            ),
+            syn::Item::Type(item) => record_cfg_split(
+                &mut declarations,
+                "type",
+                &item.ident.to_string(),
+                &item.vis,
+                &item.attrs,
+            ),
+            syn::Item::Fn(item) => record_cfg_split(
+                &mut declarations,
+                "fn",
+                &item.sig.ident.to_string(),
+                &item.vis,
+                &item.attrs,
+            ),
+            syn::Item::Const(item) => record_cfg_split(
+                &mut declarations,
+                "const",
+                &item.ident.to_string(),
+                &item.vis,
+                &item.attrs,
+            ),
+            syn::Item::Static(item) => record_cfg_split(
+                &mut declarations,
+                "static",
+                &item.ident.to_string(),
+                &item.vis,
+                &item.attrs,
+            ),
+            syn::Item::Use(item) => {
+                for name in use_local_names(&item.tree) {
+                    record_cfg_split(&mut declarations, "use", &name, &item.vis, &item.attrs);
+                }
+            }
+            _ => {}
+        }
+    }
+    for ((_kind, name), arms) in declarations {
+        let gated_public = arms.iter().any(|(public, gated)| *public && *gated);
+        let production_private = arms.iter().any(|(public, gated)| !*public && !*gated);
+        if gated_public && production_private {
+            out.push((file.to_owned(), name));
+        }
+    }
+}
+
 fn visibility_make_sites(workspace: &Path) -> Result<Vec<(String, String)>, String> {
     let mut sites = Vec::new();
     for crate_dir in VIS_CRATES {
@@ -1457,6 +1766,13 @@ fn declaration_name(line: &str) -> Option<String> {
             break;
         }
     }
+    // An `extern "C"` ABI string sits between the qualifier and the item
+    // keyword: `unsafe extern "C" fn f(...)`.
+    if rest.starts_with('"') {
+        if let Some(close) = rest[1..].find('"') {
+            rest = rest[close + 2..].trim_start();
+        }
+    }
     for keyword in [
         "fn ", "struct ", "enum ", "union ", "trait ", "type ", "static ", "mod ",
     ] {
@@ -1475,10 +1791,14 @@ fn check_visibility_coverage(workspace: &Path, ledgers: &[VisRow]) -> Result<(),
         let leaf = row.item.rsplit("::").next().unwrap_or(&row.item);
         listed.insert((row.file.clone(), leaf.to_owned()));
     }
-    for (file, item) in visibility_make_sites(workspace)? {
+    let mut sites = visibility_make_sites(workspace)?;
+    sites.extend(cfg_split_widening_sites(workspace)?);
+    sites.sort();
+    sites.dedup();
+    for (file, item) in sites {
         if !listed.contains(&(file.clone(), item.clone())) {
             return Err(format!(
-                "{file}: `{item}` carries visibility::make(pub) but has no TEST-SUPPORT-VIS row"
+                "{file}: `{item}` widens test-support visibility but has no TEST-SUPPORT-VIS row"
             ));
         }
     }
@@ -1777,6 +2097,14 @@ mod tests {
             declaration_name("pub static COUNTER: usize = 0;"),
             Some("COUNTER".to_owned())
         );
+        assert_eq!(
+            declaration_name("unsafe extern \"C\" fn module_make_global_ref("),
+            Some("module_make_global_ref".to_owned())
+        );
+        assert_eq!(
+            declaration_name("extern \"C\" fn helper() {}"),
+            Some("helper".to_owned())
+        );
     }
 
     #[test]
@@ -1856,6 +2184,119 @@ mod tests {
             "{error}"
         );
         eprintln!("MUTATION RED: {error}");
+    }
+
+    #[test]
+    fn v1_golden_privacy_block_hits_a_planted_private_item() {
+        let golden = vec![golden_scope(
+            "golden.stderr".to_owned(),
+            "error[E0603]: struct `Entry` is private\n  --> fixture.rs:1:1\n   |\n 1 | use crate::parse_loop::Entry;\n",
+        )];
+        let hit = names_in_fixtures("emacs_core::syntax::parse_loop::Entry", "struct", &golden);
+        assert!(hit.is_some(), "{hit:?}");
+        eprintln!("MUTATION RED: {hit:?}");
+    }
+
+    #[test]
+    fn v1_golden_auto_trait_note_is_not_a_hit() {
+        let golden = vec![golden_scope(
+            "golden.stderr".to_owned(),
+            "error[E0277]: `Cell<eval::admission::ThreadingMode>` cannot be shared between threads safely\n   = note: required for `Context` to implement `Sync`\n",
+        )];
+        assert!(
+            names_in_fixtures("emacs_core::admission::ThreadingMode", "enum", &golden).is_none()
+        );
+        // The real ThreadingMode goldens carry only E0277 obligation notes.
+        let workspace = workspace_root();
+        for relative in [
+            "crates/neovm-core/tests/thread_safety_ui/flow_word/context_send.stderr",
+            "crates/neovm-core/tests/p1rv_ui/era_cannot_be_shared.stderr",
+        ] {
+            let source = read(&workspace.join(relative)).expect("golden");
+            let scope = golden_scope(relative.to_owned(), &source);
+            let hit = names_in_fixtures("emacs_core::admission::ThreadingMode", "enum", &[scope]);
+            assert!(hit.is_none(), "{relative}: {hit:?}");
+        }
+    }
+
+    #[test]
+    fn v1_fixture_source_use_still_hits() {
+        let fixture = vec![fixture_scope(
+            "fixture.rs".to_owned(),
+            "use neovm_eval::emacs_core::admission::ThreadingMode;\nfn f(_: ThreadingMode) {}\n",
+            true,
+            false,
+        )];
+        assert!(
+            names_in_fixtures("emacs_core::admission::ThreadingMode", "enum", &fixture).is_some()
+        );
+    }
+
+    #[test]
+    fn cfg_split_item_and_use_widening_sites_are_detected() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = dir.path().join("crates/neovm-value/src");
+        std::fs::create_dir_all(&src).expect("src");
+        std::fs::write(
+            src.join("split.rs"),
+            r#"
+#[cfg(not(feature = "test-support"))]
+pub(crate) enum Mode {
+    A,
+}
+#[cfg(feature = "test-support")]
+pub enum Mode {
+    A,
+}
+#[cfg(not(feature = "test-support"))]
+pub(crate) use crate::thing::Thing;
+#[cfg(feature = "test-support")]
+pub use crate::thing::Thing;
+#[cfg(not(feature = "test-support"))]
+pub struct Always;
+#[cfg(feature = "test-support")]
+pub struct Always;
+"#,
+        )
+        .expect("split");
+        let sites = cfg_split_widening_sites(dir.path()).expect("sites");
+        let names: Vec<&str> = sites.iter().map(|(_, name)| name.as_str()).collect();
+        assert!(names.contains(&"Mode"), "{sites:?}");
+        assert!(names.contains(&"Thing"), "{sites:?}");
+        assert!(!names.contains(&"Always"), "both arms public: {sites:?}");
+    }
+
+    #[test]
+    fn cfg_split_site_without_a_row_turns_coverage_red() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = dir.path().join("crates/neovm-value/src");
+        std::fs::create_dir_all(&src).expect("src");
+        std::fs::write(
+            src.join("split.rs"),
+            r#"
+#[cfg(not(feature = "test-support"))]
+pub(crate) enum Mode {
+    A,
+}
+#[cfg(feature = "test-support")]
+pub enum Mode {
+    A,
+}
+"#,
+        )
+        .expect("split");
+        let file = "crates/neovm-value/src/split.rs".to_owned();
+        let error = check_visibility_coverage(dir.path(), &[]).expect_err("unrowed split");
+        assert!(error.contains("Mode"), "{error}");
+        eprintln!("MUTATION RED: {error}");
+        let row = VisRow {
+            crate_dir: "neovm-value".to_owned(),
+            item: "Mode".to_owned(),
+            kind: "enum".to_owned(),
+            file,
+            tests: Vec::new(),
+        };
+        assert!(check_visibility_coverage(dir.path(), &[row]).is_ok());
     }
 }
 
