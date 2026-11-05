@@ -84,6 +84,7 @@ pub fn install_host_environment_snapshot(eval: &mut Context) {
 }
 
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct ChildEnvironment {
     /// Shared so that handing the list to a command (possibly more than
     /// once, on a retry) copies no variable.
@@ -230,6 +231,7 @@ impl ChildEnvironment {
     /// corrects `PWD`, injects the selected frame's `DISPLAY` when policy does
     /// not mention it, preserves first-definition precedence, and removes bare
     /// negative entries.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn materialize(eval: &Context, current_dir: Option<&Path>) -> Self {
         let process_environment = eval.visible_variable_value_or_nil("process-environment");
         let process_entries = process_environment_prefix(process_environment);

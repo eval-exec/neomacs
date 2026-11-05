@@ -5682,6 +5682,7 @@ fn finalize_cached_bootstrap_eval(
     Ok(())
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn bootstrap_load_path_entries(lisp_dir: &Path) -> Vec<Value> {
     let mut load_path_entries = Vec::new();
     for sub in BOOTSTRAP_LOAD_PATH_SUBDIRS {

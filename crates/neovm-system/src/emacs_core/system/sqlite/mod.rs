@@ -262,17 +262,20 @@ pub mod enabled {
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq, EnumString, IntoStaticStr)]
     #[strum(serialize_all = "kebab-case")]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) enum SqliteReturnType {
         Set,
         Full,
     }
 
     impl SqliteReturnType {
+        #[cfg_attr(feature = "test-support", visibility::make(pub))]
         pub(super) fn from_value(value: &Value) -> Option<Self> {
             value.as_bare_symbol_name()?.parse().ok()
         }
 
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
+        #[cfg_attr(feature = "test-support", visibility::make(pub))]
         pub(super) fn symbol_name(self) -> &'static str {
             self.into()
         }
@@ -280,21 +283,25 @@ pub mod enabled {
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq, EnumString, IntoStaticStr)]
     #[strum(serialize_all = "kebab-case")]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) enum SqliteBindSymbol {
         False,
     }
 
     impl SqliteBindSymbol {
+        #[cfg_attr(feature = "test-support", visibility::make(pub))]
         pub(super) fn from_value(value: &Value) -> Option<Self> {
             value.as_bare_symbol_name()?.parse().ok()
         }
 
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
+        #[cfg_attr(feature = "test-support", visibility::make(pub))]
         pub(super) fn symbol_name(self) -> &'static str {
             self.into()
         }
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn value_is_false_symbol(v: &Value) -> bool {
         SqliteBindSymbol::from_value(v) == Some(SqliteBindSymbol::False)
     }
@@ -401,6 +408,7 @@ pub mod enabled {
     /// typed and exhaustive so a shared helper cannot silently broaden the
     /// `sqlite-locked-error` contract again.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) enum SqliteOperation {
         Execute,
         Select,
@@ -408,6 +416,7 @@ pub mod enabled {
     }
 
     impl SqliteOperation {
+        #[cfg_attr(feature = "test-support", visibility::make(pub))]
         pub(super) fn condition_for_code(self, code: i32) -> LispCondition {
             match self {
                 Self::Execute if code == ffi::SQLITE_LOCKED || code == ffi::SQLITE_BUSY => {
@@ -1079,11 +1088,3 @@ use neovm_edit::emacs_core::edit_host::EditHost;
 use neovm_value::error::LispCondition;
 #[cfg(all(test, feature = "sqlite"))]
 use rusqlite::ffi;
-
-#[cfg(all(test, feature = "sqlite"))]
-#[path = "tests/enabled_test.rs"]
-mod tests;
-
-#[cfg(all(test, not(feature = "sqlite")))]
-#[path = "tests/disabled_test.rs"]
-mod tests;

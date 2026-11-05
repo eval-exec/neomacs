@@ -64,12 +64,15 @@ pub use serial::{
 pub mod net;
 
 #[cfg(unix)]
+#[cfg(not(feature = "test-support"))]
 mod child_wait;
+#[cfg(feature = "test-support")]
+pub mod child_wait;
 #[cfg(unix)]
 pub use child_wait::{ChildWait, poll_child_status};
 // The raw-status decode entry point is currently only exercised by status-decode
 // tests; production reaps through `poll_child_status`.
-#[cfg(all(unix, test))]
+#[cfg(all(unix, any(test, feature = "test-support")))]
 pub use child_wait::decode_wait_status;
 
 #[cfg(unix)]

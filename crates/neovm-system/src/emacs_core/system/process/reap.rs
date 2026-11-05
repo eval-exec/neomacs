@@ -190,7 +190,7 @@ enum NativeReaper {
     Failed,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug)]
 enum TestReaperLifecycle {
     Serving,
@@ -204,9 +204,9 @@ struct DeferredRegistry {
     native: NativeReaper,
     newly_registered: Vec<DeferredChildId>,
     awaiting_zombie: Option<HashSet<DeferredChildId>>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     watcher: Option<std::thread::JoinHandle<()>>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     lifecycle: TestReaperLifecycle,
 }
 
@@ -218,9 +218,9 @@ impl DeferredRegistry {
             native: NativeReaper::Dormant,
             newly_registered: Vec::new(),
             awaiting_zombie: None,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             watcher: None,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             lifecycle: TestReaperLifecycle::Serving,
         }
     }
@@ -241,7 +241,7 @@ impl DeferredRegistry {
         };
         let id = match driver {
             DeferredReapDriver::NativeExit => DeferredChildId::next(),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             DeferredReapDriver::WaitSafePointFallback => None,
         };
         match id {
@@ -296,13 +296,13 @@ impl DeferredRegistry {
 #[derive(Clone, Copy, Debug)]
 enum DeferredReapDriver {
     NativeExit,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     WaitSafePointFallback,
 }
 
 #[derive(Clone, Copy, Debug)]
 enum DeferredReapSweep {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     NativeExit,
     WaitSafePoint,
 }
@@ -324,24 +324,24 @@ impl std::fmt::Debug for DeferredChild {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 static DEFERRED_WATCHER_SCOPE: AtomicBool = AtomicBool::new(false);
 
 /// Process-wide test ownership of the shared worker's explicit shutdown/join.
 /// The scope must outlive all process I/O and mutators belonging to its test.
 /// Default tests keep the persistent worker just like production; scopes stop
 /// it after native completion, leaving no finished unjoined worker.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[must_use]
 #[derive(Debug)]
 pub(super) struct DeferredWatcherTestScope {
     _thread_bound: std::marker::PhantomData<std::rc::Rc<()>>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 static_assertions::assert_not_impl_any!(DeferredWatcherTestScope: Send, Sync);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl DeferredWatcherTestScope {
     pub(super) fn new() -> Self {
         assert!(
@@ -374,7 +374,7 @@ impl DeferredWatcherTestScope {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn stop_test_reaper() -> std::thread::Result<()> {
     let handle = {
         let mut registry = DEFERRED_CHILDREN
@@ -395,7 +395,7 @@ fn stop_test_reaper() -> std::thread::Result<()> {
     result
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl Drop for DeferredWatcherTestScope {
     fn drop(&mut self) {
         let _ = stop_test_reaper();
@@ -403,7 +403,7 @@ impl Drop for DeferredWatcherTestScope {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn deferred_child_is_owned_for_test(pid: u32) -> bool {
     let mut registry = DEFERRED_CHILDREN
         .lock()
@@ -415,7 +415,7 @@ pub(super) fn deferred_child_is_owned_for_test(pid: u32) -> bool {
         || registry.fallback.iter().any(|child| child.owner.pid == pid)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn publish_deferred_child(child: ReapableChild, driver: DeferredReapDriver) -> Arc<AtomicBool> {
     DEFERRED_CHILDREN
         .lock()
@@ -442,11 +442,11 @@ fn start_shared_reaper(
         .name("neovm-child-reap".into())
         .spawn(move || shared_reaper(worker_native))?;
     registry.native = NativeReaper::Active(Arc::clone(&native));
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     {
         registry.watcher = Some(handle);
     }
-    #[cfg(not(test))]
+    #[cfg(not(any(test, feature = "test-support")))]
     drop(handle);
     Ok(native)
 }
@@ -464,7 +464,7 @@ fn shared_reaper(native: Arc<super::sys::ChildExitEvent>) {
                     registry.use_fallback(id);
                 }
                 registry.native = NativeReaper::Failed;
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-support"))]
                 if !DEFERRED_WATCHER_SCOPE.load(Ordering::Acquire) {
                     // The worker is about to finish. Default tests detach this
                     // handle rather than retaining a finished unjoined thread;
@@ -479,7 +479,7 @@ fn shared_reaper(native: Arc<super::sys::ChildExitEvent>) {
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         collect_native_notifications(&mut registry, events);
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         if matches!(registry.lifecycle, TestReaperLifecycle::Finishing)
             && registry.children().is_empty()
         {
@@ -572,13 +572,13 @@ fn collect_deferred_children(sweep: DeferredReapSweep) {
             return;
         }
         DeferredReapSweep::WaitSafePoint => {}
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         DeferredReapSweep::NativeExit => {}
     }
     let mut registry = DEFERRED_CHILDREN
         .lock()
         .unwrap_or_else(|error| error.into_inner());
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if matches!(sweep, DeferredReapSweep::NativeExit) {
         let ids: Vec<_> = registry.children().keys().copied().collect();
         for id in ids {
@@ -606,6 +606,7 @@ static_assertions::assert_impl_all!(ReapableChild: Send);
 /// `WUNTRACED | WCONTINUED`); and a change that clears `p->alive`
 /// (`WIFSIGNALED (status) || WIFEXITED (status)`, :7750-7752).
 #[derive(Debug)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum ChildStatusChange {
     /// `waitpid` returned 0: nothing to record.
     NoChange,
@@ -679,8 +680,8 @@ pub trait ChildOwnershipIo {
     /// (callproc.c:202-207). A Darwin child can still be draining its terminal
     /// during exit, so blocking here before closing the master can deadlock.
     fn defer_reaping(&mut self);
-    #[cfg(test)]
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "test-support"))]
     fn defer_reaping_for_test(&mut self);
     fn take_unreaped_for_transfer(&mut self) -> Option<ReapableChild>;
     /// The handle's own `kill`, for the callers that fall back to it when the
@@ -838,7 +839,7 @@ impl ChildOwnershipIo for ChildOwnership {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn defer_reaping_for_test(&mut self) {
         // Synthetic handles have no OS child. Exercise the same ownership
         // transfer without registering native events against their metadata.

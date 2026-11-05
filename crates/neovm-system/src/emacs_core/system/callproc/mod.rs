@@ -1011,6 +1011,7 @@ fn mapconcat_identity_lisp_strings(strings: &[LispString], separator: &[u8]) -> 
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn shell_command_with_legacy_args(command: &Value, args: &[Value]) -> Result<LispString, Flow> {
     let mut parts = Vec::with_capacity(args.len() + 1);
     parts.push(shell_command_fragment(command)?);
@@ -1513,6 +1514,7 @@ pub fn builtin_call_process(
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_call_process_shell_command(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
@@ -1588,6 +1590,7 @@ pub(crate) fn builtin_process_file(
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_process_file_shell_command(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
@@ -1687,15 +1690,3 @@ fn parse_output_lines(stdout: &[u8]) -> Value {
         Value::list(text.split('\n').map(Value::string).collect())
     }
 }
-
-#[cfg(test)]
-#[path = "tests/raw_bytes_test.rs"]
-mod raw_bytes_tests;
-
-#[cfg(test)]
-#[path = "tests/read_coding_test.rs"]
-mod read_coding_tests;
-
-#[cfg(test)]
-#[path = "tests/working_dir_infile_test.rs"]
-mod working_dir_infile_tests;

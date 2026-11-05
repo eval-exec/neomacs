@@ -982,19 +982,62 @@ enum DirectoryFilesError {
     MatchSyntax(neovm_eval::emacs_core::builtins::search::FastStringMatchError),
 }
 
-#[cfg(test)]
-fn directory_files(
+/// Test-support surface for the re-homed core fileio tests.
+///
+/// These wrap private implementation detail the tests exercise directly:
+/// the decoder result is mirrored with public fields because the production
+/// type is private to this module (TEST-SUPPORT-DESIGN rule 8; no product
+/// visibility change).
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support {
+    use neovm_eval::emacs_core::eval::Context;
+    use neovm_value::error::Flow;
+    use neovm_value::heap_types::LispString;
+
+    /// Public mirror of the private `DecodedFileContents`.
+    pub struct DecodedFileContentsForTest {
+        pub text: LispString,
+        pub coding: String,
+    }
+
+    impl DecodedFileContentsForTest {
+        pub fn text(&self) -> &LispString {
+            &self.text
+        }
+    }
+
+    pub fn decode_insert_file_contents_for_test(
+        eval: &mut Context,
+        bytes: &[u8],
+        multibyte: bool,
+        coding_system_for_read: Option<&str>,
+    ) -> Result<DecodedFileContentsForTest, Flow> {
+        super::decode_insert_file_contents(eval, bytes, multibyte, coding_system_for_read).map(
+            |decoded| DecodedFileContentsForTest {
+                text: decoded.text,
+                coding: decoded.coding,
+            },
+        )
+    }
+}
+
+/// Test-support entry for the re-homed core fileio tests: the caller owns
+/// the evaluator, so this crate keeps no upward boot edge.  The private
+/// `DirectoryFilesError` is flattened to its debug form because the moved
+/// tests only assert success.
+#[cfg(any(test, feature = "test-support"))]
+pub fn directory_files_for_test(
+    eval: &mut Context,
     dir: &neovm_value::heap_types::LispString,
     full: bool,
     match_regex: Option<&neovm_value::heap_types::LispString>,
     nosort: bool,
     count: Option<usize>,
-) -> Result<Vec<neovm_value::heap_types::LispString>, DirectoryFilesError> {
-    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+) -> Result<Vec<neovm_value::heap_types::LispString>, String> {
     let syntax =
-        neovm_eval::emacs_core::builtins::search::FastStringMatchSyntax::for_current_buffer(&eval);
+        neovm_eval::emacs_core::builtins::search::FastStringMatchSyntax::for_current_buffer(eval);
     directory_files_with_decoder(
-        &mut eval,
+        eval,
         dir,
         full,
         match_regex,
@@ -1003,6 +1046,7 @@ fn directory_files(
         syntax,
         |_, bytes| neovm_value::heap_types::LispString::from_unibyte(bytes.to_vec()),
     )
+    .map_err(|error| format!("{error:?}"))
 }
 
 #[allow(clippy::too_many_arguments)] // match-time state stays explicit at the GNU-regexp boundary
@@ -1125,6 +1169,7 @@ fn is_cross_device_rename_error(err: &std::io::Error) -> bool {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn rename_path_with_cross_device_fallback<F>(
     from_path: &Path,
     to_path: &Path,
@@ -1143,6 +1188,7 @@ where
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn rename_regular_file_by_copy_delete(
     from_path: &Path,
     to_path: &Path,
@@ -1773,6 +1819,7 @@ fn validate_file_truename_counter(counter: &Value) -> Result<(), Flow> {
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn temporary_file_directory_for_eval(
     eval: &Context,
 ) -> Option<neovm_value::heap_types::LispString> {
@@ -2178,6 +2225,7 @@ pub fn builtin_unhandled_file_name_directory_eval(
 /// Context-aware variant of `make-temp-file` that honors dynamic
 /// `temporary-file-directory`.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_make_temp_file(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_min_args("make-temp-file", &args, 1)?;
     if args.len() > 4 {
@@ -2221,6 +2269,7 @@ pub(crate) fn builtin_make_temp_file(eval: &mut Context, args: Vec<Value>) -> Ev
 /// directory-containing prefixes against dynamic/default `default-directory`
 /// and honors dynamic `temporary-file-directory` fallback.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_make_nearby_temp_file(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_min_args("make-nearby-temp-file", &args, 1)?;
     if args.len() > 3 {
@@ -2252,6 +2301,7 @@ pub(crate) fn builtin_make_nearby_temp_file(eval: &mut Context, args: Vec<Value>
 /// `(file-truename FILENAME)` — resolves FILENAME against
 /// dynamic/default `default-directory` and follows symlinks.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_file_truename(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     if let Some(result) = dispatch_file_handler(eval, "file-truename", &args)? {
         return Ok(result);
@@ -2486,6 +2536,7 @@ pub fn resolve_filename_lisp_for_eval(
     resolve_filename_lisp_in_state(eval.variables(), &[], &eval.edit.buffers, filename)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn file_error_symbol(kind: ErrorKind) -> &'static str {
     match kind {
         ErrorKind::NotFound => "file-missing",
@@ -2550,6 +2601,7 @@ fn get_file_errno_data(err: &std::io::Error, action: &str, name_items: Vec<Value
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn signal_file_io_error(err: std::io::Error, context: String) -> Flow {
     let symbol = file_error_symbol(err.kind());
     signal(symbol, vec![Value::string(format!("{context}: {err}"))])
@@ -3138,6 +3190,7 @@ fn set_file_times_path(
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn delete_file_compat(filename: &str) -> Result<(), Flow> {
     match delete_file(filename) {
         Ok(()) => Ok(()),
@@ -4020,6 +4073,7 @@ pub fn builtin_default_file_modes(args: Vec<Value>) -> EvalResult {
 /// Context-aware variant of `delete-file` that resolves relative paths
 /// against dynamic/default `default-directory`.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_delete_file(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_min_args("delete-file", &args, 1)?;
     if args.len() > 2 {
@@ -4075,6 +4129,7 @@ pub fn builtin_delete_directory_internal(eval: &mut Context, args: Vec<Value>) -
 /// Context-aware variant of `delete-directory` that resolves relative paths
 /// against dynamic/default `default-directory`.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_delete_directory(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     if let Some(result) = dispatch_file_handler(eval, "delete-directory", &args)? {
         return Ok(result);
@@ -5286,6 +5341,7 @@ fn finish_handled_insert_file_contents(
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn run_after_insert_file_pipeline(
     eval: &mut Context,
     current_id: neovm_edit::buffer::BufferId,
@@ -6064,6 +6120,7 @@ fn restore_empty_buffer_after_auto_coding_probe(
 /// The bytes GNU shows `set-auto-coding-function`: the whole file when it is
 /// at most 4 KiB, else its first 1 KiB followed by its tail from
 /// `max(len - 3 KiB, 4 KiB)` (fileio.c `Finsert_file_contents`).
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn auto_coding_probe_bytes(bytes: &[u8]) -> std::borrow::Cow<'_, [u8]> {
     const HEAD_READ: usize = 4 * 1024;
     const HEAD_KEEP: usize = 1024;
@@ -7184,6 +7241,7 @@ fn write_region_without_handler(
 /// If a buffer visiting FILENAME already exists, return it.
 /// Does not select the buffer.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_find_file_noselect(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
@@ -7629,10 +7687,3 @@ pub fn register_bootstrap_vars(obarray: &mut neovm_value::symbol::Obarray) {
 // ===========================================================================
 // Tests
 // ===========================================================================
-#[cfg(test)]
-#[path = "tests/fileio_test.rs"]
-mod tests;
-
-#[cfg(test)]
-#[path = "tests/fix8_test.rs"]
-mod fix8_tests;

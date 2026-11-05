@@ -36,9 +36,13 @@ pub(crate) use neovm_value::system_vocab::time::WaitTimeout;
 
 #[derive(Clone, Copy, Debug)]
 struct PendingGnuTimer {
+    #[cfg(not(feature = "test-support"))]
     when: GnuTimerTimestamp,
+    #[cfg(feature = "test-support")]
+    pub when: GnuTimerTimestamp,
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn pending_gnu_timer(timer: Value) -> Option<PendingGnuTimer> {
     let slots = timer.as_vector_data()?;
     if slots.len() != 10 || !slots[0].is_nil() || !slots[7].is_nil() {
@@ -337,6 +341,7 @@ fn expect_fixnum_like(value: &Value) -> Result<i64, Flow> {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn gnu_sleep_duration_from_secs(seconds: f64) -> Duration {
     match WaitTimeout::from(seconds) {
         WaitTimeout::Poll => Duration::ZERO,
@@ -399,6 +404,3 @@ pub fn builtin_sleep_for(
 // ===========================================================================
 // Tests
 // ===========================================================================
-#[cfg(test)]
-#[path = "tests/timer_test.rs"]
-mod tests;

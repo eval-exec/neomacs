@@ -149,12 +149,14 @@ pub(super) fn resolve_optional_process_with_explicit_return_in_state(
     Ok((id, Value::NIL))
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) enum SignalProcessTarget {
     Process(ProcessId),
     MissingNamedProcess,
     Pid(i64),
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) fn resolve_signal_process_target_in_state(
     processes: &ProcessManager,
     buffers: &BufferManager,
@@ -225,6 +227,7 @@ pub(super) fn resolve_signal_process_target_in_state(
 /// because GNU passes that domain to the OS. Immutable and mutator-independent.
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) struct SignalNumber(i32);
 
 static_assertions::assert_impl_all!(SignalNumber: Send, Sync);
@@ -246,6 +249,7 @@ impl From<SignalNumber> for i32 {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) fn parse_signal_number(value: &Value) -> Result<SignalNumber, Flow> {
     match value.kind() {
         ValueKind::Fixnum(n) => SignalNumber::try_from(n).map_err(|_| {
@@ -598,6 +602,7 @@ pub(super) fn value_as_nonnegative_integer(value: &Value) -> Option<i64> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, EnumString, IntoStaticStr)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) enum NetworkAddressFamily {
     #[strum(serialize = "ipv4")]
     Ipv4,
@@ -606,11 +611,13 @@ pub(super) enum NetworkAddressFamily {
 }
 
 impl NetworkAddressFamily {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn from_symbol_value(value: &Value) -> Option<Self> {
         value.as_bare_symbol_name()?.parse().ok()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn name(self) -> &'static str {
         self.into()
     }
@@ -650,6 +657,7 @@ impl NetworkProcessFamily {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, EnumString, IntoStaticStr)]
 #[strum(serialize_all = "kebab-case")]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) enum NetworkProcessFamilySymbol {
     Local,
     Ipv4,
@@ -657,11 +665,13 @@ pub(super) enum NetworkProcessFamilySymbol {
 }
 
 impl NetworkProcessFamilySymbol {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn from_symbol_value(value: &Value) -> Option<Self> {
         value.as_bare_symbol_name()?.parse().ok()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn name(self) -> &'static str {
         self.into()
     }
@@ -840,6 +850,7 @@ pub(super) fn socket2_unix_sockaddr_to_runtime_string(addr: Option<&SockAddr>) -
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) fn validate_network_process_family(value: &Value) -> Result<(), Flow> {
     if value.is_nil()
         || matches!(value.kind(), ValueKind::Fixnum(_))
@@ -887,11 +898,13 @@ pub(super) fn network_process_family_from_raw(raw: i64) -> Option<NetworkProcess
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, EnumString, IntoStaticStr)]
 #[strum(serialize_all = "kebab-case")]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) enum NetworkLookupHint {
     Numeric,
 }
 
 impl NetworkLookupHint {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn from_symbol_value(value: &Value) -> Option<Self> {
         value.as_bare_symbol_name()?.parse().ok()
     }
@@ -902,7 +915,8 @@ impl NetworkLookupHint {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn name(self) -> &'static str {
         self.into()
     }
@@ -910,17 +924,20 @@ impl NetworkLookupHint {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, EnumString, IntoStaticStr)]
 #[strum(serialize_all = "kebab-case")]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) enum NumProcessorsQuery {
     All,
     Current,
 }
 
 impl NumProcessorsQuery {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn from_symbol_value(value: &Value) -> Option<Self> {
         value.as_bare_symbol_name()?.parse().ok()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn name(self) -> &'static str {
         self.into()
     }
@@ -948,18 +965,21 @@ pub(super) fn parse_network_socket_type(value: &Value) -> Result<NetworkSocketTy
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) fn validate_network_socket_type(value: &Value) -> Result<(), Flow> {
     parse_network_socket_type(value).map(|_| ())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, EnumString, IntoStaticStr)]
 #[strum(serialize_all = "kebab-case")]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) enum ProcessConnectionType {
     Pipe,
     Pty,
 }
 
 impl ProcessConnectionType {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn from_symbol_value(value: &Value) -> Option<Self> {
         value.as_bare_symbol_name()?.parse().ok()
     }
@@ -969,6 +989,7 @@ impl ProcessConnectionType {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) fn resolve_process_connection_type_use_pty(
     connection_type: Option<&Value>,
     default_use_pty: bool,
@@ -1014,6 +1035,7 @@ pub(super) fn vector_nonnegative_integers(value: &Value) -> Option<Vec<i64>> {
     Some(out)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) fn int_vector(values: &[i64]) -> Value {
     Value::vector(values.iter().map(|v| Value::fixnum(*v)).collect())
 }
@@ -1060,6 +1082,7 @@ pub(super) fn network_directed_broadcast(
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) fn derive_network_interface_list_broadcast(
     family: NetworkAddressFamily,
     address: &Value,
@@ -1069,6 +1092,7 @@ pub(super) fn derive_network_interface_list_broadcast(
     network_directed_broadcast(family, address, netmask).unwrap_or(*raw_broadcast)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) fn derive_network_interface_info_broadcast(
     family: NetworkAddressFamily,
     address: &Value,
@@ -1107,6 +1131,7 @@ pub(super) fn ip_to_value(ip: IpAddr) -> (NetworkAddressFamily, Value) {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) fn resolve_network_lookup_addresses(
     name: &str,
     family: Option<NetworkAddressFamily>,

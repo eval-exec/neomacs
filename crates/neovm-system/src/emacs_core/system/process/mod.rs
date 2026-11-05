@@ -51,7 +51,10 @@ use super::wait::ProcessOutputWaitOutcome;
 
 /// Platform abstraction layer for OS-specific subprocess facilities (currently
 /// the child-status wait source). See `process/sys/mod.rs`.
+#[cfg(not(feature = "test-support"))]
 pub(crate) mod sys;
+#[cfg(feature = "test-support")]
+pub mod sys;
 use sys::ChildStatusSource;
 
 pub mod green_select;
@@ -72,7 +75,11 @@ use status_notify::ProcessStatusNotification;
 /// (src/process.c:7691), and the type that keeps a Lisp-visible status from
 /// being read before the recording has been made.  See
 /// `process/child_status.rs`.
+#[cfg(not(feature = "test-support"))]
 pub(crate) mod child_status;
+#[cfg(feature = "test-support")]
+pub mod child_status;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) use child_status::{UnrecordedStatusRead, UpdateStatusSite};
 
 /// The single owner of `waitpid`, and GNU's `p->alive` as a type: a child that
@@ -460,50 +467,59 @@ use neovm_value::value::{Value, ValueKind, VecLikeType, equal_value, list_to_vec
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
-#[cfg(test)]
-#[path = "tests/raw_bytes_test.rs"]
-mod raw_bytes_tests;
 
 pub mod builtins;
 pub use builtins::*;
 
 mod bootstrap_vars;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub use bootstrap_vars::*;
 
 mod helpers;
+#[cfg(not(feature = "test-support"))]
 pub(crate) use helpers::*;
+#[cfg(feature = "test-support")]
+pub use helpers::*;
 
 pub mod types;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub use types::*;
 pub(crate) use types::{swap_world_state, world_state_placeholder};
-#[cfg(test)]
-#[path = "tests/process_test.rs"]
-mod tests;
 
-#[cfg(test)]
-#[path = "tests/gnu_pty_exit_oracle.rs"]
-mod gnu_pty_exit_oracle;
+/// Test-support entry points for the option-A re-homed core process tests.
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support {
+    use super::{ProcessId, ProcessManager};
 
-#[cfg(test)]
-#[path = "tests/signal_number.rs"]
-mod signal_number_tests;
+    /// Owns the deferred-watcher lifecycle for a test scope.
+    pub struct DeferredWatcherTestScopeForTest(super::reap::DeferredWatcherTestScope);
 
-#[cfg(test)]
-#[path = "tests/timeout.rs"]
-mod timeout_tests;
+    impl DeferredWatcherTestScopeForTest {
+        pub fn new() -> Self {
+            Self(super::reap::DeferredWatcherTestScope::new())
+        }
 
-#[cfg(all(test, unix))]
-#[path = "tests/pty_exit.rs"]
-mod pty_exit_tests;
+        pub fn worker_count_for_test(&self) -> usize {
+            self.0.worker_count_for_test()
+        }
+
+        pub fn finish(self) {
+            self.0.finish();
+        }
+    }
+
+    pub fn order_pending_status_notifications_newest_first_for_test(
+        processes: &ProcessManager,
+        proc_ids: &mut [ProcessId],
+    ) {
+        super::types::order_pending_status_notifications_newest_first(processes, proc_ids);
+    }
+}
 
 #[cfg(all(test, unix))]
 #[path = "tests/native_deferred_reap.rs"]
 mod native_deferred_reap_tests;
 
-#[cfg(all(test, unix))]
-#[path = "tests/pipe_exit.rs"]
-mod pipe_exit_tests;
-
-#[cfg(all(test, unix))]
-#[path = "tests/output_fairness.rs"]
-mod output_fairness_tests;
+#[cfg(test)]
+#[path = "tests/status_change_sites_test.rs"]
+mod status_change_sites_tests;

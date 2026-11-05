@@ -56,6 +56,7 @@ fn lock_host_name(eval: &neovm_eval::emacs_core::eval::Context) -> String {
         .replace('@', "-")
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn current_lock_info_string(user: &str, host: &str) -> String {
     let prefix = format!("{}@{}.{}", user, host, std::process::id());
     let boot_time = system_boot_time_sec();
@@ -68,15 +69,28 @@ fn current_lock_info_string(user: &str, host: &str) -> String {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ParsedLockInfo {
+    #[cfg(not(feature = "test-support"))]
     user: String,
+    #[cfg(feature = "test-support")]
+    pub user: String,
+    #[cfg(not(feature = "test-support"))]
     host: String,
+    #[cfg(feature = "test-support")]
+    pub host: String,
+    #[cfg(not(feature = "test-support"))]
     pid: u32,
+    #[cfg(feature = "test-support")]
+    pub pid: u32,
+    #[cfg(not(feature = "test-support"))]
     boot_time: i64,
+    #[cfg(feature = "test-support")]
+    pub boot_time: i64,
 }
 
 /// Parse USER@HOST.PID:BOOT.  GNU (current_lock_owner) takes the LAST `@`
 /// (the user may contain one) and the last `.` after it, and rejects any
 /// trailing bytes after the pid or boot integer as EINVAL.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn parse_lock_info(contents: &str) -> Option<ParsedLockInfo> {
     let trimmed = contents.trim();
     let (user, rest) = trimmed.rsplit_once('@')?;
@@ -104,14 +118,21 @@ fn parse_lock_info(contents: &str) -> Option<ParsedLockInfo> {
 /// projections of it, so carry the parsed fields and derive each string.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct LockClasher {
+    #[cfg(not(feature = "test-support"))]
     user: String,
+    #[cfg(feature = "test-support")]
+    pub user: String,
     host: String,
+    #[cfg(not(feature = "test-support"))]
     pid: u32,
+    #[cfg(feature = "test-support")]
+    pub pid: u32,
 }
 
 impl LockClasher {
     /// GNU `lock_file` rewrites ".PID" into " (pid PID)" and drops the boot
     /// time before handing the clasher to `ask-user-about-lock`.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn opponent(&self) -> String {
         format!("{}@{} (pid {})", self.user, self.host, self.pid)
     }
@@ -119,6 +140,7 @@ impl LockClasher {
 
 /// GNU's literal answer enum from filelock.c: 0 (free) / I_OWN_IT /
 /// ANOTHER_OWNS_IT, with errno values carried separately as `io::Error`.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 enum LockOwner {
     None,
     Current,
@@ -205,6 +227,7 @@ fn read_lock_contents(lock_path: &Path) -> io::Result<String> {
 
 /// HOST is the Lisp `(system-name)` with '@' mapped to '-', exactly as
 /// lock files are written; staleness is decidable only for locks on it.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn current_lock_owner(lock_path: &Path, host: &str) -> Result<LockOwner, io::Error> {
     match fs::symlink_metadata(lock_path) {
         Ok(_) => {}
@@ -258,6 +281,7 @@ fn current_lock_owner(lock_path: &Path, host: &str) -> Result<LockOwner, io::Err
 }
 
 #[cfg(unix)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn process_is_alive(pid: u32) -> bool {
     if pid == 0 {
         return false;
@@ -270,6 +294,7 @@ fn process_is_alive(pid: u32) -> bool {
 }
 
 #[cfg(windows)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn process_is_alive(pid: u32) -> bool {
     use windows_sys::Win32::Foundation::{
         CloseHandle, ERROR_ACCESS_DENIED, ERROR_INVALID_PARAMETER, GetLastError,
@@ -310,6 +335,7 @@ fn process_is_alive(_pid: u32) -> bool {
 /// Seconds since the epoch at which this system booted, or 0 when unknown.
 /// GNU appends this value to new lock files and uses it to reject a live PID
 /// recycled after a reboot.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn system_boot_time_sec() -> i64 {
     static BOOT: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
     *BOOT.get_or_init(query_system_boot_time_sec)
@@ -334,6 +360,7 @@ fn query_system_boot_time_sec() -> i64 {
 /// check in current_lock_owner tolerates only one second of skew: reading
 /// boot time from any other source makes us zap live GNU locks as stale.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn boot_time_from_utmp_sec() -> Option<i64> {
     // getutxent is not thread-safe; this runs once under the OnceLock in
     // system_boot_time_sec, and nothing else in the process reads utmp.
@@ -752,7 +779,3 @@ pub fn builtin_unlock_buffer(
     }
     Ok(Value::NIL)
 }
-
-#[cfg(test)]
-#[path = "tests/filelock_test.rs"]
-mod tests;

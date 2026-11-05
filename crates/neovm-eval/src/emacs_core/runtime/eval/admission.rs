@@ -52,6 +52,7 @@ use std::ptr::NonNull;
 
 /// How a World runs Lisp threads, fixed at its construction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum ThreadingMode {
     /// `make-thread` simulates threads in the one owner, swapping dynamic
     /// bindings in place (`threads`); there is no admission.

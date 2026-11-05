@@ -10,12 +10,14 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 /// GNU timespecs. This immutable value contains no Lisp or mutator state and
 /// is safe to move between concurrently running mutators.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct UnixTimestamp {
     seconds: i64,
     nanoseconds: u32,
 }
 
 #[derive(Clone, Copy, Debug, thiserror::Error)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum TimestampError {
     #[error("Specified time is not representable")]
     OutOfRange,
@@ -24,10 +26,12 @@ pub(crate) enum TimestampError {
 static_assertions::assert_impl_all!(UnixTimestamp: Send, Sync);
 
 impl UnixTimestamp {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) const fn seconds(self) -> i64 {
         self.seconds
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) const fn nanoseconds(self) -> u32 {
         self.nanoseconds
     }

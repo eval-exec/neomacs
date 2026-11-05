@@ -5,7 +5,7 @@
 //! `emacs_core::host_input` (system) and re-exports this type for the
 //! `crate::host_input` facade; the publisher reaches the receiver downward.
 
-#[cfg(any(test, feature = "redisplay-test-policy"))]
+#[cfg(any(test, feature = "redisplay-test-policy", feature = "test-support"))]
 use super::Context;
 use super::keyboard::InputEvent;
 use crossbeam_channel::Receiver;
@@ -41,7 +41,7 @@ impl HostInputReceiver {
 static_assertions::assert_eq_size!(HostInputReceiver, Option<Receiver<InputEvent>>);
 static_assertions::assert_eq_align!(HostInputReceiver, Option<Receiver<InputEvent>>);
 
-#[cfg(any(test, feature = "redisplay-test-policy"))]
+#[cfg(any(test, feature = "redisplay-test-policy", feature = "test-support"))]
 impl Context {
     /// Observe host input in dependent frontend fixtures without a raw receiver.
     #[doc(hidden)]

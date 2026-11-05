@@ -248,7 +248,8 @@ impl TaggedHeap {
     /// holding it, so containment tests can exercise the refuse-to-contain
     /// probe without unwinding real GC machinery. Poison is permanent for the
     /// heap (that is the point) — callers run process-per-test under nextest.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn poison_gc_locks_for_test(&self) {
         self.satb_handoff.poison_for_test();
         assert!(self.gc_locks_poisoned(), "test poison must be observable");

@@ -19,13 +19,87 @@ use std::sync::Arc;
 
 pub(crate) use neovm_eval::emacs_core::eval::host_input::HostInputReceiver;
 
+/// Test-only wake outcome the injected probe returns.
+///
+/// Compiled for this crate's tests and for upper test builds under
+/// `test-support`; an upper test that boots a `Context` re-homes to core
+/// (TEST-SUPPORT-DESIGN §1a option A) and reaches this seam through the
+/// feature.
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Clone, Copy)]
+pub enum ProbeWake {
+    Notified,
+    Failed(std::io::ErrorKind),
+}
+
+/// Owns no sending capability: this observes only the wake side of publication.
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Clone)]
+pub struct WakeProbe {
+    outcome: ProbeWake,
+    notifications: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    observation: std::sync::Arc<std::sync::OnceLock<std::sync::Arc<dyn Fn() + Send + Sync>>>,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl WakeProbe {
+    pub fn new(outcome: ProbeWake) -> Self {
+        Self {
+            outcome,
+            notifications: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            observation: std::sync::Arc::new(std::sync::OnceLock::new()),
+        }
+    }
+
+    pub fn observe(&self, observe: impl Fn() + Send + Sync + 'static) {
+        assert!(
+            self.observation.set(std::sync::Arc::new(observe)).is_ok(),
+            "wake observation is installed once"
+        );
+    }
+
+    pub fn count(&self) -> usize {
+        self.notifications.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    pub fn notify(&self) -> HostInputWakeOutcome {
+        self.notifications
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if let Some(observe) = self.observation.get() {
+            observe();
+        }
+        match self.outcome {
+            ProbeWake::Notified => HostInputWakeOutcome::Notified,
+            ProbeWake::Failed(kind) => HostInputWakeOutcome::Failed(std::io::Error::new(
+                kind,
+                "injected native input wake failure",
+            )),
+        }
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+static_assertions::assert_impl_all!(WakeProbe: Send, Sync, Clone);
+
+/// Build the injected-observation wake arm for a test publisher.
+#[cfg(any(test, feature = "test-support"))]
+pub fn observed_wake_for_test(probe: WakeProbe) -> InputWake {
+    InputWake::Observed(probe)
+}
+
+/// Build the channel-fallback wake arm for a test publisher.
+#[cfg(any(test, feature = "test-support"))]
+pub fn channel_fallback_wake_for_test() -> InputWake {
+    InputWake::ChannelFallback
+}
+
 /// Only a Context can pair a native wake capability with its input queue.
 enum InputWake {
     Native(WaitNotifier),
     ChannelFallback,
     Closed,
-    #[cfg(test)]
-    Observed(tests::WakeProbe),
+    #[cfg(any(test, feature = "test-support"))]
+    Observed(WakeProbe),
 }
 
 impl InputWake {
@@ -38,7 +112,7 @@ impl InputWake {
             },
             Self::ChannelFallback => HostInputWakeOutcome::ChannelFallback,
             Self::Closed => HostInputWakeOutcome::Closed,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             Self::Observed(probe) => probe.notify(),
         }
     }
@@ -265,6 +339,7 @@ impl HostInputPublisher {
         publisher
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn connect(context: &mut Context) -> Self {
         let session = context.processes.attach_host_control_session();
         let wake = match context.wait_notifier() {
@@ -299,10 +374,12 @@ impl HostInputPublisher {
         publisher
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn channel(wake: InputWake) -> (Self, Receiver<InputEvent>) {
         Self::channel_with_session(wake, None)
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn channel_with_session(
         wake: InputWake,
         session: Option<HostSessionControl>,
@@ -319,6 +396,7 @@ impl HostInputPublisher {
 
     /// Wake the main host's control observer without publishing keyboard input.
     /// The scheduler or target mailbox remains the sole durable predicate.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn nudge_control(&self, reason: ControlNudge) -> ControlNudgeOutcome {
         match &self.connection.disconnect_wake.1 {
             Some(session) => session.nudge(ControlDestination::NativeMain, reason),
@@ -351,7 +429,3 @@ impl HostInputPublisher {
         publication.finish()
     }
 }
-
-#[cfg(test)]
-#[path = "host_input/tests/host_input_test.rs"]
-mod tests;

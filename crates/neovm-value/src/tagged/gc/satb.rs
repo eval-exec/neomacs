@@ -262,7 +262,7 @@ impl SatbHandoff {
         Ok(usage)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn poison_for_test(&self) {
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _guard = self.chunks.lock().unwrap();

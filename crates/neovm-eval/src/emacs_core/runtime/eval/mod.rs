@@ -3229,7 +3229,12 @@ pub struct Context {
     sequence_temp_root_frames: Vec<SequenceTempRootFrame>,
     /// Contiguous bytecode stack buffer, matching GNU Emacs's bc_thread_state.
     /// All bytecode frames share this single buffer. GC scans it directly.
+    /// Contiguous bytecode stack buffer, matching GNU Emacs's bc_thread_state.
+    /// All bytecode frames share this single buffer. GC scans it directly.
+    #[cfg(not(feature = "test-support"))]
     pub(crate) bc_buf: Vec<Value>,
+    #[cfg(feature = "test-support")]
+    pub bc_buf: Vec<Value>,
     /// JIT residual-root window stack: generated code stores the operand-stack
     /// values live across a GC-capable shim call into `[top..top+N)` slots of
     /// this stack and bumps `jit_root_stack_top` for the call's duration (see
@@ -3244,7 +3249,11 @@ pub struct Context {
     /// and the function object (so GC can trace its constants).
     pub(crate) bc_frames: Vec<BcFrame>,
     /// Shared condition runtime mirror for active catch/condition handlers.
+    /// Shared condition runtime mirror for active catch/condition handlers.
+    #[cfg(not(feature = "test-support"))]
     pub(crate) condition_stack: Vec<ConditionFrame>,
+    #[cfg(feature = "test-support")]
+    pub condition_stack: Vec<ConditionFrame>,
     /// GNU `pending_funcalls` equivalent for internal no-Lisp teardown paths.
     pub(crate) pending_safe_funcalls: WorldSlot<Vec<PendingSafeFuncall>>,
     /// Thread-private backing stores for the interpreter's per-entry stacks
@@ -3366,7 +3375,10 @@ pub struct Context {
     pub(crate) hash_table_test_registry: super::builtins::HashTableTestRegistryHandle,
     pub(crate) file_notify_registry: super::builtins::FileNotifyRegistryHandle,
     pub(crate) window_configuration_registry: super::builtins::WindowConfigurationRegistryHandle,
+    #[cfg(not(feature = "test-support"))]
     pub(crate) dynamic_module_registry: data::dynamic_module_registry::DynamicModuleRegistryHandle,
+    #[cfg(feature = "test-support")]
+    pub dynamic_module_registry: data::dynamic_module_registry::DynamicModuleRegistryHandle,
     /// Mmap-backed pdump image that owns any mapped heap payloads borrowed by
     /// this evaluator's Lisp objects.
     /// The loaded pdump mapping, LEAKED to 'static at install: process-global
@@ -3546,7 +3558,12 @@ pub struct Context {
     media_generation: u64,
     /// GNU `lisp_eval_depth`: one shared counter for interpreted cons-form
     /// evaluation, Lisp-visible `funcall`, and bytecode `Bcall`.
+    /// GNU `lisp_eval_depth`: one shared counter for interpreted cons-form
+    /// evaluation, Lisp-visible `funcall`, and bytecode `Bcall`.
+    #[cfg(not(feature = "test-support"))]
     pub(crate) depth: usize,
+    #[cfg(feature = "test-support")]
+    pub depth: usize,
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
     eval_counter: u64,
     /// Maximum recursion depth.
@@ -3715,7 +3732,17 @@ pub struct Context {
     /// can detect "this panic escaped GC machinery — heap invariants unknown"
     /// and re-raise instead of containing. A guard that cleared it on unwind
     /// would erase exactly the evidence the detector exists to preserve.
+    /// True while the mutator-side collection driver
+    /// (`gc_collect_from_current_roots_impl`) is on the stack. Set and cleared
+    /// INLINE, deliberately not via a Drop guard: a panic that unwinds out of
+    /// the driver must LEAVE the flag set, so module-boundary panic containment
+    /// can detect "this panic escaped GC machinery — heap invariants unknown"
+    /// and re-raise instead of containing. A guard that cleared it on unwind
+    /// would erase exactly the evidence the detector exists to preserve.
+    #[cfg(not(feature = "test-support"))]
     pub(crate) gc_driver_active: bool,
+    #[cfg(feature = "test-support")]
+    pub gc_driver_active: bool,
     /// Stress-test mode: force GC at every safe point regardless of threshold.
     #[cfg(not(feature = "test-support"))]
     pub(crate) gc_stress: bool,
@@ -7907,6 +7934,7 @@ mod admission;
 mod global_state;
 mod green;
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) use admission::ThreadingMode;
 #[doc(hidden)]
 pub use green::switch::MainNativeHandoff;
@@ -7982,7 +8010,7 @@ pub mod command_loop;
 
 #[doc(hidden)]
 pub mod redisplay_hooks;
-#[cfg(any(test, feature = "redisplay-test-policy"))]
+#[cfg(any(test, feature = "redisplay-test-policy", feature = "test-support"))]
 pub use neovm_edit::emacs_core::redisplay_policy::RedisplayHookPolicyGuard;
 #[doc(hidden)]
 pub use neovm_edit::emacs_core::redisplay_policy::gnu_redisplay_hooks_enabled;

@@ -27,6 +27,7 @@ pub use neovm_value::heap_types::ProcessId;
 /// bare `#<process>` fallback).
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum ProcessOutputWaitTiming {
     Poll,
     For(Duration),
@@ -51,6 +52,7 @@ impl ProcessOutputWaitTiming {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct ProcessOutputWaitRequest {
     pub(super) timing: ProcessOutputWaitTiming,
     pub(super) target_process: Option<ProcessId>,
@@ -59,6 +61,7 @@ pub(crate) struct ProcessOutputWaitRequest {
 }
 
 impl ProcessOutputWaitRequest {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn new(
         timing: ProcessOutputWaitTiming,
         target_process: Option<ProcessId>,
@@ -91,6 +94,7 @@ impl ProcessOutputWaitRequest {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum ProcessOutputServiceRequest {
     None,
     Any { target: Option<ProcessId> },
@@ -104,6 +108,7 @@ enum ProcessOutputServicePass {
 }
 
 impl ProcessOutputServiceRequest {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn none() -> Self {
         Self::None
     }
@@ -174,6 +179,7 @@ impl ProcessOutputServiceActivity {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct ProcessOutputServiceOutcome {
     pub(super) activity: ProcessOutputServiceActivity,
     /// Non-output servicing happened: a connect completed, a server accepted a
@@ -188,12 +194,14 @@ pub(crate) struct ProcessOutputServiceOutcome {
 impl ProcessOutputServiceOutcome {
     /// Record output read from a process (GNU `got_some_output = nread`).
     /// This is the only activity class that completes a process wait.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn record_activity(&mut self, target: bool) {
         self.activity = self.activity.record(target);
     }
 
     /// Record non-output servicing (connects, accepts, sentinels, EOF).
     /// Keeps the wait running, exactly like GNU.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn record_serviced(&mut self) {
         self.serviced = true;
     }
@@ -209,10 +217,12 @@ impl ProcessOutputServiceOutcome {
         }
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn has_any_process_activity(self) -> bool {
         self.activity.any()
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn has_target_process_activity(self) -> bool {
         self.activity.target()
     }
@@ -236,6 +246,7 @@ impl ProcessOutputServiceOutcome {
 /// `make-serial-process` came to build process records for ports that were
 /// never opened.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum ProcessKindWithoutDevice {
     Real,
     Network,
@@ -254,6 +265,7 @@ impl From<ProcessKindWithoutDevice> for ProcessKind {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, EnumString, IntoStaticStr)]
 #[strum(serialize_all = "kebab-case")]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) enum ProcessTtyStream {
     Stdin,
     Stdout,
@@ -261,11 +273,13 @@ pub(super) enum ProcessTtyStream {
 }
 
 impl ProcessTtyStream {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn from_value(value: &Value) -> Option<Self> {
         value.as_bare_symbol_name()?.parse().ok()
     }
 
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn name(self) -> &'static str {
         self.into()
     }
@@ -440,7 +454,7 @@ impl Drop for StderrPipeWriterTransfer<'_> {
 static_assertions::assert_eq_size!(WaitNotifier, [usize; 2]);
 
 /// Refusal to observe this fixture's actual pending TCP owner state.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum PendingConnectObservationError {
     #[error("pending connect process missing")]
@@ -456,90 +470,61 @@ pub(crate) enum PendingConnectObservationError {
     #[error("pending connect poller missing")]
     MissingBackend,
 }
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 static_assertions::assert_impl_all!(PendingConnectObservationError: std::error::Error, Send, Sync);
 
 /// Native-only proof for the one pending TCP connect in a Green test.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug)]
 pub(crate) struct MainConnectPending {
     process: ProcessId,
 }
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl MainConnectPending {
     pub(crate) fn process(&self) -> ProcessId {
         self.process
     }
 }
-#[cfg(test)]
-#[derive(Debug)]
-pub(crate) struct NativeConnectWritable {
-    process: ProcessId,
-    owner: std::thread::ThreadId,
-}
-#[cfg(test)]
-impl NativeConnectWritable {
-    pub(crate) fn process(&self) -> ProcessId {
-        self.process
-    }
-    pub(crate) fn owner(&self) -> std::thread::ThreadId {
-        self.owner
-    }
-}
-#[cfg(test)]
-struct NativeConnectObserver {
-    process: ProcessId,
-    owner: std::thread::ThreadId,
-    callback: Box<dyn FnOnce(NativeConnectWritable) + Send>,
-}
-#[cfg(test)]
-impl std::fmt::Debug for NativeConnectObserver {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("NativeConnectObserver")
-            .field("process", &self.process)
-            .field("owner", &self.owner)
-            .finish_non_exhaustive()
-    }
-}
-#[cfg(test)]
-static_assertions::assert_impl_all!(NativeConnectObserver: Send, std::fmt::Debug);
-#[cfg(test)]
-static_assertions::assert_not_impl_any!(NativeConnectObserver: Clone, Copy);
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 static_assertions::assert_impl_all!(MainConnectPending: Send, std::fmt::Debug);
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 static_assertions::assert_not_impl_any!(MainConnectPending: Clone, Copy);
-#[cfg(test)]
-static_assertions::assert_impl_all!(NativeConnectWritable: Send, std::fmt::Debug);
-#[cfg(test)]
-static_assertions::assert_not_impl_any!(NativeConnectWritable: Clone, Copy);
-
-/// Test-only storage for a consumed native-connect observation.
-/// The layout contract accounts for this slot separately from production state.
-#[cfg(test)]
-#[derive(Default, Debug)]
-#[repr(transparent)]
-pub(crate) struct NativeConnectObservationSlot(std::sync::Mutex<Option<NativeConnectObserver>>);
-
-#[cfg(test)]
-static_assertions::assert_impl_all!(NativeConnectObservationSlot: Send, Sync, std::fmt::Debug);
-#[cfg(test)]
-static_assertions::assert_not_impl_any!(NativeConnectObservationSlot: Clone, Copy);
-#[cfg(all(test, target_arch = "x86_64", target_os = "linux"))]
-static_assertions::const_assert_eq!(std::mem::size_of::<NativeConnectObservationSlot>(), 40);
 
 // Frozen x86-64 Linux baseline: replacing only the Arc pointee must not
 // enlarge the process manager reserved inside Context/World storage.
-#[cfg(all(target_arch = "x86_64", target_os = "linux", not(test)))]
-static_assertions::const_assert_eq!(std::mem::size_of::<ProcessWaitBackend>(), 24);
-#[cfg(all(target_arch = "x86_64", target_os = "linux", not(test)))]
-static_assertions::const_assert_eq!(std::mem::size_of::<ProcessManager>(), 200);
-#[cfg(all(target_arch = "x86_64", target_os = "linux", test))]
-static_assertions::const_assert_eq!(std::mem::size_of::<ProcessWaitBackend>(), 88);
-#[cfg(all(target_arch = "x86_64", target_os = "linux", test))]
-static_assertions::const_assert_eq!(std::mem::size_of::<ProcessManager>(), 264);
+//
+// `test-support` is dev-only (A2 guard), and it enables eval's per-backend
+// wait-gate/observer fields, which changes this layout in the same way
+// `cfg(test)` does.  The lower crate exports whether those fields are
+// compiled (`process_state::TEST_SUPPORT_LAYOUT`): the upper crate cannot
+// evaluate the lower crate's feature, and under `--all-targets` Cargo unifies
+// dev-dependency features across targets, so keying on our own `cfg(test)` or
+// feature alone would pin the product size while a test-layout dependency is
+// linked.
+const EXPECTED_PROCESS_WAIT_BACKEND_SIZE: usize =
+    if neovm_eval::emacs_core::eval::data::process_state::TEST_SUPPORT_LAYOUT {
+        88
+    } else {
+        24
+    };
+const EXPECTED_PROCESS_MANAGER_SIZE: usize =
+    if neovm_eval::emacs_core::eval::data::process_state::TEST_SUPPORT_LAYOUT {
+        264
+    } else {
+        200
+    };
+#[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+static_assertions::const_assert_eq!(
+    std::mem::size_of::<ProcessWaitBackend>(),
+    EXPECTED_PROCESS_WAIT_BACKEND_SIZE
+);
+#[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+static_assertions::const_assert_eq!(
+    std::mem::size_of::<ProcessManager>(),
+    EXPECTED_PROCESS_MANAGER_SIZE
+);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 static_assertions::assert_impl_all!(BackendWaitEntry: Send, Sync, Copy, std::fmt::Debug);
 
 static_assertions::assert_impl_all!(ProcessWaitDeadline: Send, Sync);
@@ -753,7 +738,7 @@ pub(super) fn process_coding_name_converts_nothing(name: &str) -> bool {
 /// (src/coding.c:7623-7625) resolves a VECTOR eol_type to `Qunix` before any
 /// encoder sees a character, so `raw-text`'s undecided end-of-line writes bare
 /// LF -- which is what "convert nothing" means on this side.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn process_encode_coding_converts_nothing(coding: Value) -> bool {
     coding.is_nil()
         || matches!(
@@ -1077,7 +1062,8 @@ pub(crate) struct PendingProcessRun {
 impl PendingProcessRun {
     /// The undecoded bytes, for the one caller that must not decode: a unit
     /// fixture with no `Context` in reach.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn undecoded_bytes(&self) -> &[u8] {
         &self.bytes
     }
@@ -1298,6 +1284,7 @@ impl ProcessOutputDestination {
 
     /// The destination a Lisp filter gives: GNU's filter branch, and a decoded
     /// (multibyte unless the coding system is `CODING_FOR_UNIBYTE`) string.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn to_filter() -> Self {
         Self {
             sink: ProcessOutputSink::DecodedText,
@@ -1333,7 +1320,7 @@ impl ProcessOutputDestination {
 /// (or an unset one) leaves the bytes untouched; every other coding goes through
 /// the shared string encoder, which performs character-code conversion and the
 /// EOL conversion the coding's eol_type requests.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn encode_process_send_input(
     processes: &ProcessManager,
     id: ProcessId,
@@ -1426,6 +1413,7 @@ pub(super) fn process_read_buffer_len(proc: &Process) -> usize {
     proc.readmax.clamp(1, READ_PROCESS_OUTPUT_MAX_CEILING)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) fn update_process_adaptive_read_buffering(
     proc: &mut Process,
     nbytes: usize,
@@ -1504,6 +1492,7 @@ pub(super) fn reset_adaptive_read_delay_after_process_write(proc: &mut Process) 
 /// process runs its `:post-read-conversion` once per chunk, a
 /// `:connection-type 'pipe` process runs it once more.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) enum ProcessReadOutcome {
     /// `nbytes > 0`.
     Bytes(usize),
@@ -1526,6 +1515,7 @@ pub(super) enum ProcessReadOutcome {
 impl ProcessReadOutcome {
     /// A source whose end of file really is a zero-byte read: a pipe, a
     /// socket, a serial device.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn from_stream_read(result: &std::io::Result<usize>) -> Self {
         match result {
             Ok(0) => Self::EndOfStream,
@@ -1538,6 +1528,7 @@ impl ProcessReadOutcome {
     /// A pty master, where `portable_pty` has already spent the `EIO` this
     /// port needs.  Its `Ok(0)` is GNU's `nbytes < 0`, so there is no last
     /// block on a pty.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn from_pty_read(result: &std::io::Result<usize>) -> Self {
         match Self::from_stream_read(result) {
             Self::EndOfStream => Self::PtyClosed,
@@ -1546,6 +1537,7 @@ impl ProcessReadOutcome {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) fn process_output_read_from_io_result(
     proc: &mut Process,
     coding_systems: &neovm_text::emacs_core::coding::CodingSystemManager,
@@ -1667,6 +1659,7 @@ pub(super) fn env_var_name_bytes_eq(left: &[u8], right: &[u8]) -> bool {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) fn process_status_connect_value() -> Value {
     Value::symbol("connect")
 }
@@ -1679,6 +1672,7 @@ pub(super) enum ProcessWriteFlush {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) enum ProcessWriteAttempt {
     Written(usize),
     WouldBlock,
@@ -1710,10 +1704,12 @@ pub(super) fn parse_make_network_tls_parameters(
     parse_gnutls_boot_parameters(credential_type, Value::list(rest.to_vec()), mode).map(Some)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) fn process_status_stop_value(signal_num: i64) -> Value {
     Value::list(vec![Value::symbol("stop"), Value::fixnum(signal_num)])
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) fn process_status_exit_value(code: i32) -> Value {
     Value::list(vec![Value::symbol("exit"), Value::fixnum(code as i64)])
 }
@@ -1762,6 +1758,7 @@ pub(super) fn process_status_from_exit(status: &std::process::ExitStatus) -> Val
 /// reaper had taken stayed `run` in this port forever, and meant the delete
 /// path then signalled its pid; see `process/reap.rs`.
 #[cfg(unix)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) fn process_child_status_change_from_wait(wait: sys::ChildWait) -> ChildStatusChange {
     match wait {
         sys::ChildWait::Running | sys::ChildWait::Undecoded => ChildStatusChange::NoChange,
@@ -1789,10 +1786,12 @@ pub(super) fn process_child_status_change_from_wait(wait: sys::ChildWait) -> Chi
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) fn process_status_signal_value(signal_num: i32) -> Value {
     process_status_signal_value_with_core(signal_num, false)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) fn process_status_signal_value_with_core(signal_num: i32, core_dumped: bool) -> Value {
     Value::list(vec![
         Value::symbol("signal"),
@@ -1826,6 +1825,7 @@ pub(super) fn process_status_from_pty_exit(status: &portable_pty::ExitStatus) ->
 /// for a finished process status. Signal/stop death reports the `strsignal`
 /// description with its first character down-cased; a non-zero exit reports
 /// "exited abnormally with code N"; a zero exit reports "finished".
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) fn gnu_process_status_message(status: Value) -> String {
     match ProcessStatusSymbol::from_status_value(status) {
         Some(ProcessStatusSymbol::Exit) => {
@@ -1961,6 +1961,7 @@ pub(super) fn process_status_core_dumped_value(status: Value) -> bool {
         .is_some_and(|value| value.is_truthy())
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) fn process_status_code_value(status: Value) -> i64 {
     process_status_code_lisp_value(status)
         .and_then(|value| value.as_fixnum())
@@ -2074,6 +2075,7 @@ impl ConnectionProcessUnibyteShortCircuit {
 /// The per-primitive environments are built from it, and each drops what its
 /// resolver may not see.
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct ConnectionProcessCodingVariables {
     pub(super) coding_system_for_read: Value,
     pub(super) coding_system_for_write: Value,
@@ -2087,7 +2089,8 @@ impl ConnectionProcessCodingVariables {
     /// `builtin_make_*` wrapper.  Nothing outside the tests has one, and the
     /// `cfg` says so rather than leaving a way to create a pipe process with a
     /// blank environment by accident.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn unbound() -> Self {
         Self {
             coding_system_for_read: Value::NIL,
@@ -2467,7 +2470,7 @@ impl ProcessCodingHalf {
 /// Stage-4 W5/E13 upper extension trait over the eval-owned type.
 #[doc(hidden)]
 pub trait ProcessCodingSystemsExt {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn gnu_make_process_initial() -> Self;
 
     fn inherited_from_server(decode: Value, encode: Value) -> Self;
@@ -2486,7 +2489,7 @@ impl ProcessCodingSystemsExt for ProcessCodingSystems {
     /// default is so that using it says which claim is being made.  Today only
     /// test fixtures make that claim, and the `cfg` keeps it that way until
     /// something in the runtime has a reason to.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn gnu_make_process_initial() -> Self {
         Self {
             decode: Value::NIL,
@@ -2889,6 +2892,7 @@ pub(super) fn apply_serial_settings(
 /// decoder nor a missing write-back: the stages are separated by types, not by
 /// a convention.
 #[derive(Debug)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) enum ProcessBytesRead {
     Data {
         run: PendingProcessRun,
@@ -2954,6 +2958,7 @@ pub(super) enum ProcessOutputRead {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) enum ProcessOutputDrainDisposition {
     Output,
     Blocked,
@@ -4012,7 +4017,7 @@ pub trait SystemProcessExt {
     fn deactivate_process_io(poller: Option<&polling::Poller>, proc: &mut Process);
     fn deactivate_terminal_process_io(&mut self, id: ProcessId);
     fn apply_process_io_teardown(&mut self, id: ProcessId, teardown: ProcessIoTeardown);
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn create_process(
         &mut self,
         name: String,
@@ -4021,7 +4026,7 @@ pub trait SystemProcessExt {
         args: Vec<String>,
         coding: ProcessCodingSystems,
     ) -> ProcessId;
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn create_process_lisp(
         &mut self,
         name: LispString,
@@ -4039,7 +4044,7 @@ pub trait SystemProcessExt {
         executable: Option<LispString>,
         coding: ProcessCodingSystems,
     ) -> ProcessId;
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn create_process_with_kind(
         &mut self,
         name: String,
@@ -4136,7 +4141,7 @@ pub trait SystemProcessExt {
     fn has_wait_notification_backend(&self) -> bool;
     fn wait_notifier(&self) -> Option<WaitNotifier>;
     fn host_control_latch(&self) -> Arc<NotificationLatch>;
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn before_next_backend_wait_for_test(
         &mut self,
         hook: impl FnOnce(BackendWaitEntry) + Send + 'static,
@@ -4159,15 +4164,15 @@ pub trait SystemProcessExt {
     fn delete_process(&mut self, id: ProcessId) -> bool;
     fn hangup_real_process_for_buffer_kill(&mut self, id: ProcessId) -> bool;
     fn reap_exited_process(&mut self, id: ProcessId);
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn after_next_native_connect_writable_for_test(
         &mut self,
         id: ProcessId,
         callback: impl FnOnce(NativeConnectWritable) + Send + 'static,
     );
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn observe_native_connect_writable_for_test(&self, events: &ProcessWaitEvents);
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn wait_for_child_stdout_readable_for_test(
         &self,
         id: ProcessId,
@@ -4228,7 +4233,7 @@ pub trait SystemProcessExt {
         coding_systems: &neovm_text::emacs_core::coding::CodingSystemManager,
         mode: SymbolMode,
     ) -> ProcessBytesRead;
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn read_process_output_without_decoding(
         &mut self,
         id: ProcessId,
@@ -4640,7 +4645,7 @@ impl SystemProcessExt for ProcessManager {
     }
 
     /// Create a new process record.  Returns the process id.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn create_process(
         &mut self,
         name: String,
@@ -4660,7 +4665,7 @@ impl SystemProcessExt for ProcessManager {
         )
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn create_process_lisp(
         &mut self,
         name: LispString,
@@ -4700,7 +4705,7 @@ impl SystemProcessExt for ProcessManager {
     }
 
     /// Create a new process record with an explicit process kind.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn create_process_with_kind(
         &mut self,
         name: String,
@@ -5553,7 +5558,7 @@ impl SystemProcessExt for ProcessManager {
         Arc::clone(&self.wait_backend.notification_pending)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn before_next_backend_wait_for_test(
         &mut self,
         hook: impl FnOnce(BackendWaitEntry) + Send + 'static,
@@ -5579,7 +5584,7 @@ impl SystemProcessExt for ProcessManager {
         let events = self
             .wait_backend
             .wait_for_events(&self.processes, timeout, interest);
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         if let Some(events) = &events {
             self.observe_native_connect_writable_for_test(events);
         }
@@ -5883,7 +5888,7 @@ impl SystemProcessExt for ProcessManager {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn after_next_native_connect_writable_for_test(
         &mut self,
         id: ProcessId,
@@ -5903,7 +5908,7 @@ impl SystemProcessExt for ProcessManager {
         });
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn observe_native_connect_writable_for_test(&self, events: &ProcessWaitEvents) {
         let observer = {
             let mut slot = self
@@ -5938,7 +5943,7 @@ impl SystemProcessExt for ProcessManager {
     /// Observe buffered real child stdout without reading, filtering or reaping it.
     /// Unix waits on the actual pipe. Windows waits on this retained child's
     /// process object, then uses the existing non-consuming PeekNamedPipe owner.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn wait_for_child_stdout_readable_for_test(
         &self,
         id: ProcessId,
@@ -7122,7 +7127,7 @@ impl SystemProcessExt for ProcessManager {
     /// no `Context` in reach can pass `&CodingSystemManager::new()`, which is
     /// the honest statement that no coding system is defined and therefore
     /// nothing detects -- not a silent inheritance of one.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn read_process_output_without_decoding(
         &mut self,
         id: ProcessId,
@@ -7372,6 +7377,7 @@ pub(super) fn order_pending_status_notifications_newest_first(
 /// is caught by timer.el's own `condition-case-unless-debug` and merely
 /// messaged (timer.el:332-338), so batch survives it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum AsyncCallbackKind {
     /// GNU `read_process_output_error_handler` (process.c:6208).
     ProcessFilter,
@@ -7530,7 +7536,7 @@ pub trait ProcessContextExt {
         target_process: Option<ProcessId>,
         publish_status_before_readable_output: bool,
     ) -> Result<ProcessOutputServiceOutcome, Flow>;
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn poll_process_output_for_readiness(
         &mut self,
         proc_ids: Vec<ProcessId>,
@@ -8603,7 +8609,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
 
     /// Test-only entry point for the readiness pass. Production enters it via
     /// `poll_process_output_for_service_request` / the wait events.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn poll_process_output_for_readiness(
         &mut self,
         proc_ids: Vec<ProcessId>,

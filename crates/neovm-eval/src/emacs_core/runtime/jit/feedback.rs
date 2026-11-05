@@ -131,7 +131,7 @@ impl FeedbackMode {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 std::thread_local! {
     static FEEDBACK_MODE_TEST_OVERRIDE: std::cell::Cell<Option<FeedbackMode>> =
         const { std::cell::Cell::new(None) };
@@ -139,13 +139,13 @@ std::thread_local! {
 
 /// Force the feedback mode on the current thread (tests only; `None`
 /// returns to the process setting).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn force_feedback_mode_for_test(mode: Option<FeedbackMode>) {
     FEEDBACK_MODE_TEST_OVERRIDE.with(|c| c.set(mode));
 }
 
 /// The test override of this thread, if any.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn feedback_mode_test_override() -> Option<FeedbackMode> {
     FEEDBACK_MODE_TEST_OVERRIDE.with(std::cell::Cell::get)
 }
@@ -156,7 +156,7 @@ pub(crate) fn feedback_mode_test_override() -> Option<FeedbackMode> {
 /// its input).
 #[inline]
 pub fn feedback_mode() -> FeedbackMode {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(mode) = feedback_mode_test_override() {
         return mode;
     }

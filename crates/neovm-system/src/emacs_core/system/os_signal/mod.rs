@@ -173,6 +173,7 @@ mod platform;
 /// and the signal then had no job left.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(usize)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum HandledSignal {
     /// `add_user_signal (SIGUSR1, "sigusr1")`.
     Sigusr1 = 0,
@@ -212,14 +213,17 @@ pub(crate) enum SignalDrainSite {
 impl HandledSignal {
     /// Derived from the last discriminant, so a variant missing from
     /// [`Self::ALL`] is a compile error rather than a silent omission.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) const COUNT: usize = Self::Sigusr2 as usize + 1;
 
     /// Every logical signal implemented by this module.  Platform ownership
     /// is a separate projection; see [`supported_signals`].
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) const ALL: [Self; Self::COUNT] = [Self::Sigusr1, Self::Sigusr2];
 
     /// The OS signal number.
     #[cfg(unix)]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) const fn number(self) -> libc::c_int {
         match self {
             Self::Sigusr1 => libc::SIGUSR1,
@@ -228,6 +232,7 @@ impl HandledSignal {
     }
 
     /// `file:line` of the install in the GNU tree.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) const fn gnu(self) -> &'static str {
         match self {
             Self::Sigusr1 => "src/sysdep.c, init_signals: add_user_signal (SIGUSR1, \"sigusr1\")",
@@ -236,6 +241,7 @@ impl HandledSignal {
     }
 
     /// What the Lisp thread does with a delivery -- **data only**.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) const fn disposition(self) -> InstalledDisposition {
         match self {
             Self::Sigusr1 => InstalledDisposition::UserSignal {
@@ -265,6 +271,7 @@ impl HandledSignal {
 /// This is deliberately distinct from [`HandledSignal::ALL`]: Windows has no
 /// POSIX signal capability, while GNU reserves SIGUSR1/SIGUSR2 on Android for
 /// `android_select` and still permits SIGCHLD process notification.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) const fn supported_signals() -> &'static [HandledSignal] {
     platform::SUPPORTED_SIGNALS
 }
@@ -276,6 +283,7 @@ pub(crate) const fn supported_signals() -> &'static [HandledSignal] {
 /// sweep) is a new variant plus one arm in [`drain_pending_os_signals`], and
 /// still no new code in signal context.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum InstalledDisposition {
     /// GNU's `add_user_signal (sig, NAME)`: the delivery becomes either a
     /// debugger entry or a `USER_SIGNAL_EVENT` carrying `NAME`, decided by
@@ -315,6 +323,7 @@ impl InstalledDisposition {
 /// records the same fact for the signals installed here, so "nothing else
 /// wanted them" is a measurement rather than an assumption.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum PreviousDisposition {
     /// `SIG_DFL` -- for SIGUSR1/2 that means `Term`, which is the bug.
     Default,
@@ -342,10 +351,12 @@ pub struct InstallReport {
 }
 
 impl InstallReport {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn previous(&self, signal: HandledSignal) -> PreviousDisposition {
         self.previous[signal as usize]
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn installed_count(&self) -> usize {
         self.installed.iter().filter(|done| **done).count()
     }
@@ -358,7 +369,8 @@ impl InstallReport {
             .and_then(platform::WakePipe::read_fd)
     }
 
-    #[cfg(all(test, unix))]
+    #[cfg(all(any(test, feature = "test-support"), unix))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn self_pipe_fds(&self) -> Option<[libc::c_int; 2]> {
         self.wake_pipe.as_ref().map(|pipe| {
             [
@@ -745,7 +757,8 @@ pub fn drain_wake_pipe(fd: libc::c_int) {
 /// That is the property this module is built around -- the handler is correct
 /// wherever it lands -- so the tests observe it rather than sidestepping it
 /// with `raise`.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn pending_count(signal: HandledSignal) -> u32 {
     PENDING[signal as usize].load(Ordering::Acquire)
 }
@@ -753,14 +766,15 @@ pub(crate) fn pending_count(signal: HandledSignal) -> u32 {
 /// GNU's `store_user_signal_events` drain (src/keyboard.c:8546-8570): take the
 /// pending counts and reset them, so a delivery is consumed exactly once.
 ///
-/// `#[cfg(test)]` on purpose, and the reason is the entry's finding rather
+/// `#[cfg(any(test, feature = "test-support"))]` on purpose, and the reason is the entry's finding rather
 /// than an oversight: production does NOT take the counts wholesale.
 /// [`drain_pending_os_signals`] consumes only the deliveries whose action is
 /// the debugger arm and leaves the rest in `p->npending`, because the port of
 /// `store_user_signal_events` -- the half that would queue a
 /// `USER_SIGNAL_EVENT` for `special-event-map` -- is ledger 184's declared
 /// residual.  When that lands, this becomes its drain and the attribute goes.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn take_pending() -> [u32; HandledSignal::COUNT] {
     neovm_eval::emacs_core::eval::ASYNC_ATTENTION
         .take(neovm_eval::emacs_core::eval::AsyncSource::OsSignal);
@@ -780,6 +794,7 @@ pub(crate) fn take_pending() -> [u32; HandledSignal::COUNT] {
 /// reason in the module docs, and the comparison is GNU's: the printed name of
 /// `debug-on-event` against the signal's `add_user_signal` NAME.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum UserSignalAction {
     /// `debug-on-event` names this signal: arm the debugger four ways and EAT
     /// the event (src/keyboard.c:8498-8508).
@@ -793,6 +808,7 @@ pub(crate) enum UserSignalAction {
 impl UserSignalAction {
     /// `debug_on_event_name` is `Some` only when `debug-on-event` holds a
     /// SYMBOL, which is GNU's `if (SYMBOLP (Vdebug_on_event))` at :8492.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn for_signal(signal: HandledSignal, debug_on_event_name: Option<&str>) -> Self {
         let disposition = signal.disposition();
         match disposition.drain_site() {
@@ -880,6 +896,21 @@ pub fn drain_pending_os_signals(
     Ok(drain)
 }
 
-#[cfg(test)]
-#[path = "tests/os_signal_test.rs"]
-mod os_signal_test;
+/// Test-support access to the signal-capture state the moved core tests
+/// observe (TEST-SUPPORT-DESIGN rule 8; the statics stay private in product
+/// builds).
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support {
+    pub fn termination_signal() -> &'static std::sync::atomic::AtomicI32 {
+        &super::TERMINATION_SIGNAL
+    }
+
+    pub fn deliver_user_signal(sig: libc::c_int) {
+        super::deliver_user_signal(sig);
+    }
+
+    /// Address of the real C signal handler, for the sigaction assertion.
+    pub fn deliver_user_signal_addr() -> usize {
+        super::deliver_user_signal as *const () as usize
+    }
+}

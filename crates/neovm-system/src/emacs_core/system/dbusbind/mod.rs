@@ -33,6 +33,33 @@ std::cfg_select! {
     _ => {}
 }
 
+/// Test-support entry points for the option-A re-homed core dbus tests.
+///
+/// The transport internals stay `pub(super)` in product builds; these thin
+/// wrappers are the only feature-gated access (TEST-SUPPORT-DESIGN rule 8).
+#[cfg(all(any(test, feature = "test-support"), neomacs_have_dbus))]
+pub mod test_support {
+    use neovm_eval::emacs_core::eval::Context;
+    use neovm_value::error::Flow;
+    use neovm_value::value::Value;
+
+    pub fn init_bus(ctx: &mut Context, args: Vec<Value>) -> Result<Value, Flow> {
+        super::connection::init_bus(ctx, args)
+    }
+
+    pub fn get_unique_name(args: Vec<Value>) -> Result<Value, Flow> {
+        super::connection::get_unique_name(args)
+    }
+
+    pub fn pump(channel: &dbus::channel::Channel) -> Result<(), Flow> {
+        super::watch::pump(channel)
+    }
+
+    pub fn queue_events(ctx: &mut Context, bus: Value, message: dbus::Message) -> Result<(), Flow> {
+        super::event::queue_events(ctx, bus, message)
+    }
+}
+
 /// D-Bus's carried World state (connections and registered fds; see
 /// `connection::swap_world_state`).
 #[cold]

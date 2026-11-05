@@ -65,6 +65,7 @@ pub fn builtin_internal_default_signal_process(
     builtin_internal_default_signal_process_impl(&mut eval.processes, &eval.edit.buffers, args)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_internal_default_signal_process_impl(
     processes: &mut ProcessManager,
     buffers: &BufferManager,
@@ -765,6 +766,7 @@ pub fn builtin_network_interface_info(
     builtin_network_interface_info_impl(args)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_network_interface_info_impl(args: Vec<Value>) -> EvalResult {
     expect_args("network-interface-info", &args, 1)?;
     let ifname_raw = expect_string_strict(&args[0])?;
@@ -963,6 +965,7 @@ pub(super) fn current_processors_count_overridable() -> u64 {
     )
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) fn current_processors_count_overridable_with_env(
     omp_threads: Option<&[u8]>,
     omp_limit: Option<&[u8]>,
@@ -981,6 +984,7 @@ pub(super) fn current_processors_count_overridable_with_env(
     current_count.min(omp_limit).max(1)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) fn parse_openmp_threads(bytes: &[u8]) -> Option<u64> {
     let mut idx = 0;
     while idx < bytes.len() && bytes[idx].is_ascii_whitespace() {
@@ -3007,6 +3011,7 @@ pub(super) fn read_connection_process_coding_variables(
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_make_pipe_process_impl(
     processes: &mut ProcessManager,
     buffers: &mut BufferManager,
@@ -3466,6 +3471,7 @@ pub fn builtin_call_process(
 
 /// (call-process-shell-command COMMAND &optional INFILE DESTINATION DISPLAY &rest ARGS)
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_call_process_shell_command(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
@@ -3484,6 +3490,7 @@ pub(crate) fn builtin_process_file(
 
 /// (process-file-shell-command COMMAND &optional INFILE DESTINATION DISPLAY &rest ARGS)
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_process_file_shell_command(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
@@ -3572,6 +3579,7 @@ pub fn builtin_delete_process(
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_delete_process_impl(
     processes: &mut ProcessManager,
     buffers: &BufferManager,
@@ -3629,6 +3637,7 @@ pub fn builtin_continue_process(
     Ok(ret)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_continue_process_impl(
     processes: &mut ProcessManager,
     buffers: &BufferManager,
@@ -3767,6 +3776,7 @@ pub fn builtin_signal_process(
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_signal_process_impl(
     processes: &mut ProcessManager,
     buffers: &BufferManager,
@@ -3829,6 +3839,7 @@ pub fn builtin_stop_process(
     builtin_stop_process_impl(&mut eval.processes, &eval.edit.buffers, args)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_stop_process_impl(
     processes: &mut ProcessManager,
     buffers: &BufferManager,
@@ -3926,9 +3937,12 @@ pub(crate) fn builtin_process_attributes_impl(args: Vec<Value>) -> EvalResult {
     darwin_attributes::attributes(pid)
 }
 
-#[cfg(any(test, target_os = "macos"))]
+#[cfg(any(test, feature = "test-support", target_os = "macos"))]
 #[path = "darwin_attributes.rs"]
 mod darwin_attributes;
+
+#[cfg(feature = "test-support")]
+pub use darwin_attributes::elapsed_time;
 
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn builtin_process_attributes_impl(args: Vec<Value>) -> EvalResult {
@@ -4270,6 +4284,7 @@ pub(super) fn make_process_keyword_arg(args: &[Value], keyword: ProcessKeyword) 
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_make_process_impl(
     processes: &mut ProcessManager,
     buffers: &mut BufferManager,
@@ -4548,36 +4563,43 @@ pub(super) struct AcceptProcessOutputRequest {
 
 impl AcceptProcessOutputRequest {
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn wait_timing_is_poll(self) -> bool {
         self.wait.timing().is_poll()
     }
 
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn wait_timing_is_finite(self) -> bool {
         self.wait.timing().is_finite()
     }
 
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn wait_timing_is_forever(self) -> bool {
         self.wait.timing().is_forever()
     }
 
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn completes_on_any_process_activity(self) -> bool {
         self.target_process.is_none()
     }
 
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn completes_on_target_process_activity(self, process: ProcessId) -> bool {
         self.target_process == Some(process)
     }
 
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn services_only_target_process_output(self) -> bool {
         self.just_this_one
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) fn parse_accept_process_output_request(
     processes: &mut ProcessManager,
     args: &[Value],
@@ -4669,6 +4691,7 @@ pub(super) fn parse_accept_process_output_request(
     }))
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) fn accept_process_output_positive_timeout(args: &[Value]) -> Option<Duration> {
     let total_seconds = if let Some(milliseconds) = args.get(2).filter(|value| !value.is_nil()) {
         let milliseconds = milliseconds.as_fixnum().unwrap_or(0) as f64 / 1000.0;
@@ -4767,11 +4790,12 @@ pub fn builtin_process_send_string(
 /// The `ProcessManager`-only spelling of `process-send-string`, for unit
 /// fixtures that have no `Context`.
 ///
-/// `#[cfg(test)]` since entry 143: with no `Context` there is no
+/// `#[cfg(any(test, feature = "test-support"))]` since entry 143: with no `Context` there is no
 /// `inhibit-eol-conversion' to read, so it names `EolConversion::Enabled`
 /// below.  A production caller must not be able to inherit that assumption by
 /// reaching for the shorter spelling.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_process_send_string_impl(
     processes: &mut ProcessManager,
     buffers: &BufferManager,
@@ -4820,6 +4844,7 @@ pub fn builtin_process_status(
     builtin_process_status_impl(&mut eval.processes, &eval.edit.buffers, args)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_process_status_impl(
     processes: &mut ProcessManager,
     buffers: &BufferManager,
@@ -4911,6 +4936,7 @@ pub fn builtin_process_name(
     builtin_process_name_impl(&eval.processes, args)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_process_name_impl(
     processes: &ProcessManager,
     args: Vec<Value>,
@@ -4931,6 +4957,7 @@ pub fn builtin_process_buffer(
     builtin_process_buffer_impl(&eval.processes, args)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_process_buffer_impl(
     processes: &ProcessManager,
     args: Vec<Value>,
@@ -5029,6 +5056,7 @@ pub fn builtin_set_process_buffer(
     builtin_set_process_buffer_impl(&mut eval.processes, &mut eval.edit.buffers, args)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_set_process_buffer_impl(
     processes: &mut ProcessManager,
     buffers: &mut BufferManager,
@@ -5310,6 +5338,7 @@ pub fn builtin_process_tty_name(
     builtin_process_tty_name_impl(&eval.processes, args)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_process_tty_name_impl(
     processes: &ProcessManager,
     args: Vec<Value>,
@@ -5372,6 +5401,7 @@ pub fn builtin_process_mark(
     builtin_process_mark_impl(&eval.processes, &eval.edit.buffers, args)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_process_mark_impl(
     processes: &ProcessManager,
     _buffers: &BufferManager,
@@ -5396,6 +5426,7 @@ pub fn builtin_process_type(
     builtin_process_type_impl(&eval.processes, &eval.edit.buffers, args)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_process_type_impl(
     processes: &ProcessManager,
     buffers: &BufferManager,
@@ -5486,9 +5517,10 @@ pub fn builtin_process_send_region(
     Ok(Value::NIL)
 }
 
-/// The `ProcessManager`-only spelling of `process-send-region`; `#[cfg(test)]`
+/// The `ProcessManager`-only spelling of `process-send-region`; `#[cfg(any(test, feature = "test-support"))]`
 /// for the reason [`builtin_process_send_string_impl`] gives.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_process_send_region_impl(
     processes: &mut ProcessManager,
     buffers: &mut BufferManager,
@@ -5591,6 +5623,7 @@ pub fn builtin_process_send_eof(
     builtin_process_send_eof_impl(&mut eval.processes, &eval.edit.buffers, args)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) fn send_eof_to_process(proc: &mut Process) -> EvalResult {
     // GNU returns a datagram process untouched before both the liveness gate
     // and every EOF state mutation (src/process.c:7444-7445).
@@ -5638,6 +5671,7 @@ pub(super) fn send_eof_to_process(proc: &mut Process) -> EvalResult {
     Ok(Value::NIL)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_process_send_eof_impl(
     processes: &mut ProcessManager,
     buffers: &BufferManager,
@@ -5761,6 +5795,7 @@ pub(super) fn process_running_child_value(proc: &Process) -> Value {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_process_running_child_p_impl(
     processes: &ProcessManager,
     buffers: &BufferManager,
@@ -5874,6 +5909,7 @@ pub(crate) fn builtin_processp_impl(_processes: &ProcessManager, args: Vec<Value
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_process_live_p_impl(
     processes: &mut ProcessManager,
     args: Vec<Value>,
@@ -5979,6 +6015,7 @@ pub fn builtin_process_command(
     builtin_process_command_impl(&eval.processes, args)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_process_command_impl(
     processes: &ProcessManager,
     args: Vec<Value>,
@@ -6011,6 +6048,7 @@ pub fn builtin_process_contact(
     builtin_process_contact_impl(&eval.processes, args)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_process_contact_impl(
     processes: &ProcessManager,
     args: Vec<Value>,
@@ -6112,6 +6150,7 @@ pub fn builtin_set_process_filter(
     builtin_set_process_filter_impl(&mut eval.processes, args)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_set_process_filter_impl(
     processes: &mut ProcessManager,
     args: Vec<Value>,
@@ -6175,6 +6214,7 @@ pub fn builtin_set_process_sentinel(
     builtin_set_process_sentinel_impl(&mut eval.processes, args)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_set_process_sentinel_impl(
     processes: &mut ProcessManager,
     args: Vec<Value>,

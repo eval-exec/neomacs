@@ -65,6 +65,7 @@ pub(super) fn attributes(pid: i64) -> EvalResult {
 
 // GNU sysdep.c:4403-4406 subtracts wall-clock times without clamping. i128
 // contains the full difference of two i64 epoch seconds in microseconds.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn elapsed_time(now: (i64, i64), start: (i64, i64)) -> Value {
     let micros = (i128::from(now.0) - i128::from(start.0)) * 1_000_000 + i128::from(now.1)
         - i128::from(start.1);
@@ -76,7 +77,3 @@ fn elapsed_time(now: (i64, i64), start: (i64, i64)) -> Value {
         Value::fixnum(0),
     ])
 }
-
-#[cfg(test)]
-#[path = "tests/darwin_attributes_test.rs"]
-mod tests;

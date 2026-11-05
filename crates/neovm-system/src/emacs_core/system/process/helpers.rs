@@ -77,6 +77,7 @@ pub(super) fn push_char_code_bytes(code: u32, bytes: &mut Vec<u8>) {
 /// U+E0B0 was rewritten to the eight-bit code 0x3FFFB0. Building the bytes
 /// directly keeps every code intact.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn char_sequence_to_lisp_string(value: &Value) -> Result<LispString, Flow> {
     if let Some(string) = value.as_lisp_string() {
         return Ok(string.clone());
@@ -135,6 +136,7 @@ pub(crate) fn checked_region_bytes(
     region.accessible_byte_range(buf)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) fn file_error_symbol(kind: std::io::ErrorKind) -> &'static str {
     match kind {
         std::io::ErrorKind::NotFound => "file-missing",

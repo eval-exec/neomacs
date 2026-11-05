@@ -30,14 +30,21 @@ pub fn builtin_neomacs_tls_available_p(args: Vec<Value>) -> EvalResult {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum GnutlsCredentialType {
     X509Pki,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GnutlsBootParameters {
+    #[cfg(not(feature = "test-support"))]
     pub(crate) credential_type: GnutlsCredentialType,
+    #[cfg(feature = "test-support")]
+    pub credential_type: GnutlsCredentialType,
+    #[cfg(not(feature = "test-support"))]
     pub(crate) client: TlsClientParameters,
+    #[cfg(feature = "test-support")]
+    pub client: TlsClientParameters,
 }
 
 /// Certificate roots a TLS client must use for peer verification.
@@ -46,15 +53,23 @@ pub(crate) struct GnutlsBootParameters {
 /// two variants keep the additive nature explicit: a Lisp trust file augments
 /// the defaults instead of replacing them or disabling verification.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum TlsTrustRoots {
     Default,
     DefaultPlusFiles(Vec<PathBuf>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct TlsClientParameters {
+    #[cfg(not(feature = "test-support"))]
     pub(crate) hostname: String,
+    #[cfg(feature = "test-support")]
+    pub hostname: String,
+    #[cfg(not(feature = "test-support"))]
     pub(crate) trust_roots: TlsTrustRoots,
+    #[cfg(feature = "test-support")]
+    pub trust_roots: TlsTrustRoots,
 }
 
 impl TlsClientParameters {
@@ -89,6 +104,7 @@ fn parse_trust_files(items: &[Value], mode: SymbolMode) -> Result<Vec<PathBuf>, 
     Ok(files)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn parse_gnutls_boot_parameters(
     credential_type: Value,
     proplist: Value,
@@ -153,6 +169,7 @@ pub(crate) fn parse_gnutls_boot_parameters(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct TlsPeerStatus {
     pub(crate) warnings: Vec<&'static str>,
     pub(crate) certificates: Vec<Value>,
@@ -177,12 +194,14 @@ impl TlsPeerStatus {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum TlsCloseNotifyResult {
     Success,
     Again,
     Interrupted,
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn gnutls_close_notify_result_value(result: TlsCloseNotifyResult) -> Value {
     match result {
         TlsCloseNotifyResult::Success => Value::T,
@@ -191,6 +210,7 @@ pub(crate) fn gnutls_close_notify_result_value(result: TlsCloseNotifyResult) -> 
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn gnutls_peer_status_to_value(status: &TlsPeerStatus) -> Value {
     let mut entries = Vec::new();
 
@@ -264,6 +284,7 @@ pub fn format_x509_certificate_pem(pem_bytes: &[u8]) -> Result<String, Certifica
     with_x509_certificate_pem(pem_bytes, format_x509_certificate)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn certificate_details_value_pem(pem: &str) -> Result<Value, CertificateFormatError> {
     with_x509_certificate_pem(pem.as_bytes(), |cert| {
         let validity = cert.validity();
@@ -389,12 +410,14 @@ fn signature_algorithm_name(cert: &X509Certificate<'_>) -> String {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum TlsHandshakeInterest {
     Readable,
     Writable,
     ReadableAndWritable,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum TlsHandshakeProgress {
     Pending(TlsHandshakeInterest),
     Ready,
@@ -403,6 +426,7 @@ pub(crate) enum TlsHandshakeProgress {
 /// TLS handshake and stream IO for the evaluator-owned stream state (peer
 /// ruling 16:2xZ).  Declared and implemented in the system layer; the state
 /// type lives in eval data and only its fields are read here.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) trait TlsStreamIo {
     fn handshake_interest(&self) -> TlsHandshakeInterest;
     fn advance_handshake(&mut self) -> Result<TlsHandshakeProgress, TlsBackendError>;
@@ -501,6 +525,7 @@ fn rustls_handshake_interest(connection: &rustls::ClientConnection) -> TlsHandsh
 
 /// Drive one bounded TLS turn over a nonblocking transport. Read and write
 /// remain independent so callers can retain the required readiness interest.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn advance_rustls_handshake(
     connection: &mut rustls::ClientConnection,
     transport: &mut (impl Read + Write),
@@ -539,6 +564,7 @@ pub(crate) fn advance_rustls_handshake(
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn read_rustls_process_output(
     connection: &mut rustls::ClientConnection,
     socket: &mut TcpStream,
@@ -705,6 +731,7 @@ fn rustls_mac_name(cipher_suite: rustls::CipherSuite) -> String {
 
 /// Error produced by a TLS backend before conversion to GNU-shaped Lisp errors.
 #[derive(Debug)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum TlsBackendError {
     InvalidHostname(String),
     TrustFile { path: PathBuf, reason: String },
@@ -733,6 +760,7 @@ impl std::fmt::Display for TlsBackendError {
 /// backend starts a verified client without waiting for any peer I/O.
 /// `TlsStream::advance_handshake` drives bounded turns; the evaluator owns
 /// readiness waits, callbacks, and cancellation between those turns.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) trait TlsClientBackend {
     fn start_client(
         tcp_stream: TcpStream,
@@ -741,8 +769,10 @@ pub(crate) trait TlsClientBackend {
 }
 
 /// Rustls-backed TLS transport implementation.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct RustlsBackend;
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn rustls_root_store(
     trust_roots: &TlsTrustRoots,
 ) -> Result<rustls::RootCertStore, TlsBackendError> {
@@ -810,6 +840,7 @@ impl TlsClientBackend for RustlsBackend {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn der_certificate_to_pem(der: &[u8]) -> String {
     let encoded = base64::engine::general_purpose::STANDARD.encode(der);
     let mut pem = String::from("-----BEGIN CERTIFICATE-----\n");

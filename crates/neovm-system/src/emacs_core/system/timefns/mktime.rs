@@ -79,6 +79,7 @@ const GLIBC_DST_DELTA_BOUND: i64 = 457_243_209 / 2 + DST_PROBE_STRIDE;
 const GNULIB_DST_DELTA_BOUND: i64 = 366 * 24 * 60 * 60 + 1 + DST_PROBE_STRIDE;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) enum MktimeError {
     /// The probe budget ran out: GNU's `EOVERFLOW`.
     #[error("the requested local time is not representable")]
@@ -94,6 +95,7 @@ pub(super) enum MktimeError {
 ///
 /// On success `broken_down` is replaced with the converted value, exactly as
 /// `mktime` does; `Err` is GNU's `(time_t) -1` with `tm_wday` left negative.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) fn mktime_local(broken_down: &mut libc::tm) -> Result<i64, MktimeError> {
     // GNU's `mktime_z` runs `set_tz`, which calls `tzset`; `localtime_r` below
     // reads the resulting rules.  The `libc` crate does not bind `tzset`.

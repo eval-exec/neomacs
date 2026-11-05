@@ -6,6 +6,7 @@ use super::{Flow, TM_YEAR_BASE, decode_epoch_secs};
 /// This plain immutable value contains no Lisp pointers or mutator state and
 /// is safe to move between concurrently running mutators.
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) struct CalendarTime {
     sec: i32,
     min: i32,
@@ -18,6 +19,7 @@ pub(super) struct CalendarTime {
 static_assertions::assert_impl_all!(CalendarTime: Send, Sync);
 
 #[derive(Clone, Copy, Debug, thiserror::Error)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) enum CalendarFieldOverflow {
     #[error("Specified time is not representable")]
     OutOfRange,
@@ -51,6 +53,7 @@ impl CalendarTime {
     /// Closed-form Gregorian conversion, bounded by the checked C-int fields.
     /// Intermediate values fit in i64 even when month/day fields normalize far
     /// outside their usual ranges. GNU rejects normalized years beyond tm_year.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn epoch_seconds(self) -> Result<i64, Flow> {
         let year = i64::from(self.year_from_1900) + TM_YEAR_BASE;
         let m0 = i64::from(self.month_zero);
@@ -74,6 +77,7 @@ impl CalendarTime {
 
 impl CalendarTime {
     #[cfg(unix)]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn into_tm(self) -> libc::tm {
         // SAFETY: zero initializes every field of libc::tm validly; the
         // checked calendar fields replace its input members below.

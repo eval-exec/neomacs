@@ -2333,7 +2333,7 @@ impl BytecodeTierPolicy {
     }
 
     /// The process policy under a test's per-thread feedback override.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn with_test_feedback_override(self) -> Self {
         match (
@@ -2623,7 +2623,7 @@ impl<'a> Vm<'a> {
     pub fn from_context(ctx: &'a mut crate::emacs_core::eval::Context) -> Self {
         #[cfg(feature = "jit")]
         let knobs = VmProcessKnobs::get();
-        #[cfg(all(feature = "jit", test))]
+        #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
         let knobs = VmProcessKnobs {
             tier_policy: if crate::emacs_core::jit::jit_forced_off_for_test() {
                 BytecodeTierPolicy::InterpreterOnly

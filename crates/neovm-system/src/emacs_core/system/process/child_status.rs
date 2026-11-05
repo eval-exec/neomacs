@@ -188,6 +188,7 @@ use neovm_eval::emacs_core::eval::data::process_state::{StatusChangeSite, Status
 /// with no child is not a member of the population rather than an early
 /// `continue` inside it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct SweepableChild {
     id: ProcessId,
 }
@@ -200,6 +201,7 @@ impl SweepableChild {
     /// `poll_child_status_change` already keeps polling so a later
     /// `WCONTINUED` stays observable -- and spells `p->pid` as any of the
     /// three child handles a spawn may have left behind.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn of(id: ProcessId, proc: &Process) -> Option<Self> {
         let status_can_change = matches!(
             ProcessStatusSymbol::from_status_value(proc.status),
@@ -234,6 +236,7 @@ impl SweepableChild {
 /// silent omission, and `child_status_test.rs` asserts the absolute count.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(usize)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum UpdateStatusSite {
     /// `Fdelete_process` (:1143).  This one does NOT harvest, and the line
     /// above it is why: `p->raw_status_new = 0;` at :1123 THROWS THE RECORD
@@ -272,6 +275,7 @@ pub(crate) enum UpdateStatusSite {
 
 /// Where the record this site reads was made.
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum Recording {
     /// GNU reaches this site with the record already made *and so does this
     /// port*, because the site is inside the wait/notification machinery
@@ -320,10 +324,12 @@ pub(crate) enum Recording {
 impl UpdateStatusSite {
     /// Derived from the last discriminant, so a new variant that is not added
     /// to [`Self::ALL`] is a compile error.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) const COUNT: usize = Self::StatusNotify as usize + 1;
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) const ALL: [Self; Self::COUNT] = [
         Self::DeleteProcess,
         Self::ProcessStatus,
@@ -336,7 +342,8 @@ impl UpdateStatusSite {
     ];
 
     /// `file:line` of the `update_status` call in the GNU tree.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn gnu(self) -> &'static str {
         match self {
             Self::DeleteProcess => "src/process.c:1143",
@@ -350,6 +357,7 @@ impl UpdateStatusSite {
         }
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn recording(self) -> Recording {
         match self {
             // The four Lisp entry points a program can reach with no wait
@@ -450,57 +458,14 @@ impl<'a> ObservedProcess<'a> {
     }
 }
 
+#[cfg(not(feature = "test-support"))]
 pub(crate) use neovm_eval::emacs_core::eval::data::process_state::UnrecordedStatusRead;
+#[cfg(feature = "test-support")]
+pub use neovm_eval::emacs_core::eval::data::process_state::UnrecordedStatusRead;
 
 // ---------------------------------------------------------------------------
 // GNU's per-process tick pair
 // ---------------------------------------------------------------------------
-
-/// Who runs the sentinel for a change recorded at a [`StatusChangeSite`].
-///
-/// GNU's eight bump sites are not one mechanism.  Four of them call
-/// `status_notify` on the very next lines, so the tick they just moved is
-/// consumed immediately and no later walk ever sees it; the rest leave the
-/// tick standing for the wait's own `status_notify` (:5554, :5854) to find.
-///
-/// The distinction is recorded here because it is what decides whether this
-/// port needs the tick at a site at all, and getting it wrong in either
-/// direction is a bug you can name: a site that notifies synchronously and
-/// also leaves the tick standing runs its sentinel TWICE, and a site that
-/// leaves the tick standing without anyone to consume it is visited by every
-/// later walk forever.
-#[cfg(test)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum StatusChangeNotifier {
-    /// GNU calls `status_notify` within a few lines of the bump, so the tick
-    /// is consumed in the same call.
-    SynchronouslyAtTheSite {
-        /// GNU's `status_notify` line for this site.
-        gnu: &'static str,
-        /// Where this port runs it, so the claim is checkable.
-        here: &'static str,
-    },
-    /// GNU leaves the bump for the next `status_notify` the wait runs
-    /// (:5554, :5854).
-    TheWaitsStatusNotify,
-}
-
-/// Where THIS port makes the record for a [`StatusChangeSite`], or why it does
-/// not.
-///
-/// A site with no analogue here is a hole, and a hole that is a variant cannot
-/// be forgotten: [`StatusChangeSite::recorder`] is an exhaustive match, so
-/// closing one is deleting a `NoAnalogue` arm and adding a citation.
-#[cfg(test)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum StatusChangeRecorder {
-    /// The function in this crate that calls
-    /// [`ProcessManager::record_status_change`] for this site.
-    Here(&'static str),
-    /// GNU's state has no analogue here, with the reason.
-    NoAnalogue { why: &'static str },
-}
-
 // ---------------------------------------------------------------------------
 // Engagement counters
 // ---------------------------------------------------------------------------
@@ -527,7 +492,8 @@ static STATUS_NOTIFY_VISITED: std::sync::atomic::AtomicU64 = std::sync::atomic::
 
 /// `(walks, stamped, visited)` since the process started.  See the statics
 /// above.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn status_notify_totals() -> (u64, u64, u64) {
     use std::sync::atomic::Ordering;
     (

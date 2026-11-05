@@ -840,7 +840,7 @@ obarray_method_proxies! {
     pub fn ensure_interned_global_id(id: SymId);
     #[doc(hidden)]
     pub fn materialize_read_symbols(value: Value);
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn set_symbol_value(name: &str, value: Value);
     pub fn seed_value(name: &str, value: Value);
     pub fn set_canonical_value_by_name(access: CanonicalAccess,
@@ -851,7 +851,7 @@ obarray_method_proxies! {
             value: Value,
             locality: LispVariableLocality,
         );
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn set_symbol_value_id(id: SymId, value: Value);
     pub fn set_canonical_value(access: CanonicalAccess,
             id: SymId,

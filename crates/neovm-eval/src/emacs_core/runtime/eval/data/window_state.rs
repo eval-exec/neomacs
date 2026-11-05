@@ -1244,7 +1244,7 @@ pub enum FrameDisplayIdentity {
 }
 
 impl FrameDisplayIdentity {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn wayland(display: impl Into<String>) -> Self {
         Self::Graphical(
             GraphicalDisplayIdentity::named(

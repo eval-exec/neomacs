@@ -270,6 +270,7 @@ pub struct emacs_runtime {
 // Value arena
 // ============================================================================
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 const VALUE_FRAME_SIZE: usize = 512;
 
 #[repr(C)]
@@ -372,6 +373,7 @@ impl emacs_value_frame {
 }
 
 impl emacs_value_storage {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn new() -> Self {
         Self {
             initial: emacs_value_frame::new(),
@@ -401,6 +403,7 @@ fn allocate_emacs_value(storage: &mut emacs_value_storage, lisp_val: Value) -> e
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn value_to_lisp(v: emacs_value) -> Value {
     if v.is_null() {
         return Value::NIL;
@@ -408,6 +411,7 @@ fn value_to_lisp(v: emacs_value) -> Value {
     unsafe { (*v).v }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 unsafe fn finalize_storage(storage: &mut emacs_value_storage) {
     let initial = &mut storage.initial as *mut emacs_value_frame;
     // Overflow frames form a reverse chain from `current` to `initial`.
@@ -434,6 +438,7 @@ impl Drop for emacs_env_private {
 // Module → Value helpers
 // ============================================================================
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn lisp_to_value(env: *mut emacs_env, val: Value) -> emacs_value {
     if env.is_null() {
         return std::ptr::null_mut::<emacs_value_tag>();
@@ -474,6 +479,7 @@ fn module_function_begin(env: *mut emacs_env) -> bool {
     !env.is_null() && !check_pending_non_local_exit(env)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 unsafe fn set_pending_signal(env: *mut emacs_env, symbol: &str, data: Value) {
     if env.is_null() {
         return;
@@ -521,12 +527,14 @@ pub fn collect_dynamic_module_gc_roots(roots: &mut Vec<Value>, heap_identity: us
 
 #[must_use = "the thread-local extent ends when this guard drops"]
 #[derive(Debug)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 struct ActiveModuleEnv {
     _scope: neovm_value::tls_scope::TlsStackScope<ActiveModuleEnvEntry>,
 }
 static_assertions::assert_not_impl_any!(ActiveModuleEnv: Send, Sync);
 
 impl ActiveModuleEnv {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn push(env_priv: *mut emacs_env_private) -> Self {
         let heap_identity = neovm_value::tagged::gc::current_tagged_heap_identity().unwrap_or(0);
         Self {
@@ -683,6 +691,7 @@ fn module_panic_recovery_blocked_via_ctx() -> bool {
 /// [`contain_lisp_panics`] / the trampolines, Drop-guarded host counters) is
 /// what makes the crossing states coherent; a caught panic here never resumes
 /// the broken computation.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn module_guard<R>(env: *mut emacs_env, sentinel: R, body: impl FnOnce() -> R) -> R {
     match catch_unwind(AssertUnwindSafe(body)) {
         Ok(value) => value,
@@ -710,6 +719,7 @@ fn module_guard<R>(env: *mut emacs_env, sentinel: R, body: impl FnOnce() -> R) -
 /// return performs frame-by-frame) and surface the panic as an `error` Flow —
 /// indistinguishable at the ABI from a Lisp signal, so it rejoins the existing
 /// `module_handle_nonlocal_exit` path.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn contain_lisp_panics<T>(
     ctx: &mut Context,
     f: impl FnOnce(&mut Context) -> Result<T, Flow>,
@@ -736,6 +746,7 @@ fn contain_lisp_panics<T>(
 // Environment init
 // ============================================================================
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 unsafe fn initialize_environment(env: *mut emacs_env, priv_: *mut emacs_env_private) {
     unsafe {
         (*priv_).pending_non_local_exit = emacs_funcall_exit::Return;
@@ -794,6 +805,7 @@ unsafe fn initialize_environment(env: *mut emacs_env, priv_: *mut emacs_env_priv
 
 // --- Memory management ---
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 unsafe extern "C" fn module_make_global_ref(
     env: *mut emacs_env,
     value: emacs_value,
@@ -834,6 +846,7 @@ unsafe extern "C" fn module_make_global_ref(
     })
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 unsafe extern "C" fn module_free_global_ref(env: *mut emacs_env, global_value: emacs_value) {
     module_guard(env, (), || {
         if global_value.is_null() {
@@ -1622,6 +1635,7 @@ unsafe extern "C" fn module_make_time(env: *mut emacs_env, time: emacs_time) -> 
 
 // --- Big integer ---
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 unsafe extern "C" fn module_extract_big_integer(
     env: *mut emacs_env,
     arg: emacs_value,
@@ -1729,6 +1743,7 @@ unsafe extern "C" fn module_extract_big_integer(
     })
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 unsafe extern "C" fn module_make_big_integer(
     env: *mut emacs_env,
     sign: std::ffi::c_int,
@@ -1870,6 +1885,7 @@ unsafe extern "C" fn module_open_channel(
 
 // --- Interactive ---
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 unsafe extern "C" fn module_make_interactive(
     env: *mut emacs_env,
     function: emacs_value,
@@ -1916,6 +1932,7 @@ unsafe extern "C" fn module_make_interactive(
 // make_function
 // ============================================================================
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 unsafe extern "C" fn module_make_function(
     env: *mut emacs_env,
     min_arity: isize,
@@ -2041,6 +2058,7 @@ unsafe extern "C" fn module_funcall(
 // ============================================================================
 
 thread_local! {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     static MODULE_CTX: std::cell::Cell<*mut Context> =
         const { std::cell::Cell::new(std::ptr::null_mut()) };
 }
@@ -2054,6 +2072,7 @@ thread_local! {
 /// keeps the teardown coherent once panics become catchable.
 #[must_use = "the thread-local extent ends when this guard drops"]
 #[derive(Debug)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 struct ModuleContextGuard {
     _scope: neovm_value::tls_scope::TlsScope<*mut Context, std::cell::Cell<*mut Context>>,
 }
@@ -2390,18 +2409,6 @@ pub fn apply_module_function(ctx: &mut Context, func: Value, args: Vec<Value>) -
     exit?;
     Ok(ret)
 }
-
-#[cfg(test)]
-#[path = "tests/dynamic_module_test.rs"]
-mod tests;
-
-#[cfg(test)]
-#[path = "tests/gc_tls_ownership_test.rs"]
-mod gc_tls_ownership_tests;
-
-#[cfg(all(test, target_os = "linux"))]
-#[path = "tests/library_lifetime.rs"]
-mod library_lifetime_tests;
 
 /// Carrier park: clear the module-environment stack and the raw Context
 /// pointer. `GLOBAL_REFS` is reset by `reset_dynamic_module_registry`.

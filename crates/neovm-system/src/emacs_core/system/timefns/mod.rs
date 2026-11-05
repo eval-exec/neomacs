@@ -46,13 +46,24 @@ use neovm_value::value::{ValueKind, VecLikeType};
 use std::cell::RefCell;
 use std::ffi::{CStr, OsString};
 use std::sync::{Mutex, OnceLock};
+#[cfg(not(feature = "test-support"))]
 mod calendar;
+#[cfg(feature = "test-support")]
+pub mod calendar;
 use calendar::{CalendarFieldOverflow, CalendarTime};
-#[cfg(unix)]
+#[cfg(all(unix, not(feature = "test-support")))]
 mod mktime;
+#[cfg(all(unix, feature = "test-support"))]
+pub mod mktime;
+#[cfg(not(feature = "test-support"))]
 mod time_zone_spec;
+#[cfg(feature = "test-support")]
+pub mod time_zone_spec;
 use time_zone_spec::TimeZoneSpec;
+#[cfg(not(feature = "test-support"))]
 mod unix_timestamp;
+#[cfg(feature = "test-support")]
+pub mod unix_timestamp;
 use neovm_edit::emacs_core::edit_host::EditHost;
 pub(crate) use unix_timestamp::{TimestampError, UnixTimestamp};
 #[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::IntoStaticStr)]
@@ -63,16 +74,19 @@ enum TimeConvertSymbolForm {
     List,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::IntoStaticStr)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 enum TimeZoneSymbol {
     #[strum(serialize = "wall")]
     Wall,
 }
 impl TimeZoneSymbol {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn from_value(value: &Value) -> Option<Self> {
         value.as_bare_symbol_name()?.parse().ok()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn name(self) -> &'static str {
         self.into()
     }
@@ -98,19 +112,41 @@ fn expect_min_max_args(name: &str, args: &[Value], min: usize, max: usize) -> Re
 /// Offset between a calendar year and glibc's `struct tm` `tm_year` field
 /// (GNU `TM_YEAR_BASE`): `tm_year = year - 1900`.
 const TM_YEAR_BASE: i64 = 1900;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn is_leap_year(year: i64) -> bool {
     (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
 }
 /// Decoded time in UTC: (sec min hour day month year dow dst utcoff).
 struct DecodedTime {
+    #[cfg(not(feature = "test-support"))]
     sec: i64,
+    #[cfg(feature = "test-support")]
+    pub sec: i64,
+    #[cfg(not(feature = "test-support"))]
     min: i64,
+    #[cfg(feature = "test-support")]
+    pub min: i64,
+    #[cfg(not(feature = "test-support"))]
     hour: i64,
-    day: i64,   // 1-based
+    #[cfg(feature = "test-support")]
+    pub hour: i64,
+    #[cfg(not(feature = "test-support"))]
+    day: i64, // 1-based
+    #[cfg(feature = "test-support")]
+    pub day: i64, // 1-based
+    #[cfg(not(feature = "test-support"))]
     month: i64, // 1-based
+    #[cfg(feature = "test-support")]
+    pub month: i64, // 1-based
+    #[cfg(not(feature = "test-support"))]
     year: i64,
+    #[cfg(feature = "test-support")]
+    pub year: i64,
+    #[cfg(not(feature = "test-support"))]
     dow: i64, // 0=Sunday, 1=Monday, ..., 6=Saturday
+    #[cfg(feature = "test-support")]
+    pub dow: i64, // 0=Sunday, 1=Monday, ..., 6=Saturday
 }
 struct ZonedDecodedTime {
     time: DecodedTime,
@@ -123,6 +159,7 @@ struct ZonedDecodedTime {
 /// which is the same closed form glibc's `__offtime`/`gmtime_r` uses; it
 /// replaces the previous O(years) year-counting loop that took ~7e13 iterations
 /// (and effectively hung) for inputs like `most-positive-fixnum`.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn civil_from_days(days: i64) -> (i64, i64, i64) {
     // Shift the epoch to 0000-03-01 so the leap day falls at the end of a
     // 400-year era and the month arithmetic below is uniform.
@@ -146,6 +183,7 @@ fn civil_from_days(days: i64) -> (i64, i64, i64) {
 /// `tm_year` (an `int`); GNU's `emacs_localtime_rz`/`gmtime_r` fails the same
 /// way, so e.g. `(decode-time most-positive-fixnum t)` signals rather than
 /// returning an out-of-range year.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn decode_epoch_secs(total_secs: i64) -> Result<DecodedTime, Flow> {
     // Handle the time-of-day part
     let days = total_secs.div_euclid(86400);
@@ -178,7 +216,8 @@ fn decode_epoch_secs(total_secs: i64) -> Result<DecodedTime, Flow> {
         dow,
     })
 }
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn encode_to_epoch_secs(sec: i64, min: i64, hour: i64, day: i64, month: i64, year: i64) -> i64 {
     CalendarTime::try_from([sec, min, hour, day, month, year])
         .unwrap()
@@ -194,6 +233,7 @@ const MONTH_NAMES: [&str; 12] = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 enum ZoneRule {
     Local,
     Utc,
@@ -224,6 +264,7 @@ pub fn swap_world_state(slot: &mut dyn std::any::Any) {
 pub fn reset_timefns_thread_locals() {
     TIME_ZONE_RULE.with(|slot| *slot.borrow_mut() = ZoneRule::Local);
 }
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn tz_env_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
@@ -362,6 +403,7 @@ fn fixed_zone_offset_name(tz_string: &str, epoch_secs: i64) -> (i64, String) {
     (offset, name)
 }
 #[cfg(unix)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn local_offset_name_at_epoch(epoch_secs: i64) -> (i64, String) {
     let mut time_val: libc::time_t = epoch_secs as libc::time_t;
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };
@@ -380,6 +422,7 @@ fn local_offset_name_at_epoch(epoch_secs: i64) -> (i64, String) {
     (offset, name)
 }
 #[cfg(not(unix))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn local_offset_name_at_epoch(_epoch_secs: i64) -> (i64, String) {
     (0, "UTC".to_string())
 }
@@ -463,6 +506,7 @@ impl LocalTzReadGuard {
 /// The owned lock and thread marker keep the guard confined to its creating thread.
 #[must_use = "dropping the guard restores the previous timezone"]
 #[derive(Debug)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 struct ScopedTzEnv {
     previous: Option<OsString>,
     _lock: std::sync::MutexGuard<'static, ()>,
@@ -470,6 +514,7 @@ struct ScopedTzEnv {
 }
 static_assertions::assert_not_impl_any!(ScopedTzEnv: Send, Sync);
 impl ScopedTzEnv {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn new(spec: Option<TimeZoneSpec<'_>>) -> Self {
         let lock = tz_env_lock()
             .lock()
@@ -502,10 +547,12 @@ impl Drop for ScopedTzEnv {
         refresh_tz_env();
     }
 }
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn with_tz_env<T>(spec: Option<&str>, f: impl FnOnce() -> T) -> T {
     let _guard = ScopedTzEnv::new(spec.map(TimeZoneSpec::from));
     f()
 }
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn parse_zone_rule(zone: &Value) -> Result<ZoneRule, Flow> {
     match zone.kind() {
         ValueKind::Nil => Ok(ZoneRule::Local),
@@ -577,6 +624,7 @@ fn utc_zone_abbreviation(epoch_secs: i64) -> String {
     }
 }
 #[cfg(unix)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn zone_rule_to_offset_name(rule: &ZoneRule, epoch_secs: i64) -> (i64, String) {
     match rule {
         ZoneRule::Local => {
@@ -606,6 +654,7 @@ fn fixed_offset_clamped(offset: i64) -> i64 {
     offset.clamp(-86_400, 86_400)
 }
 #[cfg(not(unix))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn zone_rule_to_offset_name(rule: &ZoneRule, epoch_secs: i64) -> (i64, String) {
     match rule {
         ZoneRule::Local => local_offset_name_at_epoch(epoch_secs),
@@ -939,6 +988,7 @@ fn parse_time_convert_form(
     }
 }
 /// `(current-time)` -> `(HIGH LOW USEC PSEC)` or `(TICKS . HZ)`.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_current_time(args: Vec<Value>) -> EvalResult {
     expect_args("current-time", &args, 0)?;
     Ok(current_time_value(LispTimeOutput::LegacyList))
@@ -1245,6 +1295,7 @@ pub fn builtin_decode_time(args: Vec<Value>) -> EvalResult {
 ///   - `integer`       -> integer seconds
 ///   - `t`             -> `(TICKS . HZ)` (highest precision cons cell)
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_time_convert(args: Vec<Value>) -> EvalResult {
     builtin_time_convert_with_default_output(args, LispTimeOutput::LegacyList)
 }
@@ -1318,7 +1369,3 @@ pub fn builtin_set_time_zone_rule(args: Vec<Value>) -> EvalResult {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
-
-#[cfg(test)]
-#[path = "tests/timefns_test.rs"]
-mod tests;

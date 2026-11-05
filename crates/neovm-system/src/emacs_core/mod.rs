@@ -48,11 +48,3 @@ pub mod tls;
 pub mod w32;
 #[path = "system/wait/mod.rs"]
 pub mod wait;
-
-#[cfg(test)]
-#[path = "system/platform/c_features/tests/surface_test.rs"]
-mod c_features_test;
-
-#[cfg(test)]
-#[path = "system/tls/tests/runtime_test.rs"]
-mod tls_test;

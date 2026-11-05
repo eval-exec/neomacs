@@ -30,6 +30,7 @@ use neovm_value::error::Flow;
 /// drain indefinitely. 4096 passes is 256 MiB at the default 64 KiB
 /// `read-process-output-max`, and still covers the 128-byte burst the
 /// one-byte-read regression test builds.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) const MAX_MINIMUM_DRAIN_PASSES: usize = 4096;
 
 /// GNU's `status_notify` call *inside* `wait_reading_process_output`
@@ -85,6 +86,7 @@ pub(crate) const MAX_MINIMUM_DRAIN_PASSES: usize = 4096;
 /// record was drained at the wrong safe point" is not rejected by a check --
 /// it is a sentence with no grammar.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct WaitStatusNotifySite {
     gnu: &'static str,
 }
@@ -132,7 +134,7 @@ impl WaitStatusNotifySite {
     /// A stand-in for the unit tests that exercise `handle_child_signal`'s
     /// BODY rather than its placement.
     ///
-    /// `#[cfg(test)]`, so it does not exist in the shipped crate.  The
+    /// `#[cfg(any(test, feature = "test-support"))]`, so it does not exist in the shipped crate.  The
     /// guarantee this type carries is about production code, and what enforces
     /// it is `cargo check -p neovm-core` on the library alone: with the two
     /// private constructors above and this one compiled out, `wait.rs` is the
@@ -141,7 +143,8 @@ impl WaitStatusNotifySite {
     /// `Context::record_and_notify_status_changes` demand.  A unit test that drives
     /// a bare `ProcessManager` has no wait to be inside, and saying so here is
     /// better than letting it reach for `pub(crate)`.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn for_a_unit_test_of_the_walk_itself() -> Self {
         Self {
             gnu: "src/process.c:7734 (the walk, without a wait around it)",
@@ -158,6 +161,7 @@ impl WaitStatusNotifySite {
 /// timers against the wait boundary; it cannot decide elapsed-time expiration.
 /// These immutable scalars contain no mutator-owned state and may cross threads.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 enum WaitDeadline {
     Poll,
     Until {
@@ -181,6 +185,7 @@ impl WaitDeadline {
         )
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn for_duration_with_timer_deadline(
         duration: Duration,
         timer_deadline: GnuTimerTimestamp,
@@ -207,6 +212,7 @@ impl WaitDeadline {
         }
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn remaining(self, now: Instant) -> Option<Duration> {
         match self {
             Self::Poll => Some(Duration::ZERO),
@@ -342,6 +348,7 @@ impl SpecialInputWaitPolicy {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 struct WaitRequest {
     deadline: WaitDeadline,
     keyboard: KeyboardWaitPolicy,
@@ -417,6 +424,7 @@ impl WaitRequest {
         Self::accept_process_output(deadline, processes, TimerWaitPolicy::Suppress)
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn accept_any_process_output_with_timers(timing: ProcessOutputWaitTiming) -> Self {
         Self::accept_process_output_with_timers(
             process_output_wait_deadline(timing),
@@ -424,6 +432,7 @@ impl WaitRequest {
         )
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn accept_any_process_output_without_timers(timing: ProcessOutputWaitTiming) -> Self {
         Self::accept_process_output_without_timers(
             process_output_wait_deadline(timing),
@@ -431,6 +440,7 @@ impl WaitRequest {
         )
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn accept_target_process_output_with_timers(
         timing: ProcessOutputWaitTiming,
         process: ProcessId,
@@ -442,6 +452,7 @@ impl WaitRequest {
         )
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn accept_target_process_output_without_timers(
         timing: ProcessOutputWaitTiming,
         process: ProcessId,
@@ -465,14 +476,17 @@ impl WaitRequest {
         }
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn read_command_input_until(deadline: Instant) -> Self {
         Self::read_command_input(WaitDeadline::until(deadline))
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn read_command_input_forever() -> Self {
         Self::read_command_input(WaitDeadline::Forever)
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn service_once(redisplay: bool) -> Self {
         Self {
             deadline: WaitDeadline::Poll,
@@ -497,15 +511,18 @@ impl WaitRequest {
         }
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn input_pending_without_timers() -> Self {
         Self::input_pending_poll(TimerWaitPolicy::Suppress)
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn input_pending_with_timers() -> Self {
         Self::input_pending_poll(TimerWaitPolicy::Run)
     }
 
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn timer_service(redisplay: bool) -> Self {
         Self {
             deadline: WaitDeadline::Poll,
@@ -519,6 +536,7 @@ impl WaitRequest {
     }
 
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn sleep_until(deadline: Instant) -> Self {
         Self {
             deadline: WaitDeadline::until(deadline),
@@ -546,6 +564,7 @@ impl WaitRequest {
         }
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn resize_ack(deadline: Instant) -> Self {
         Self {
             deadline: WaitDeadline::until(deadline),
@@ -559,10 +578,12 @@ impl WaitRequest {
     }
 
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn deadline(self) -> WaitDeadline {
         self.deadline
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn deadline_is_finite(self) -> bool {
         matches!(self.deadline, WaitDeadline::Until { .. })
     }
@@ -572,20 +593,24 @@ impl WaitRequest {
     }
 
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn deadline_is_forever(self) -> bool {
         matches!(self.deadline, WaitDeadline::Forever)
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn target_process(self) -> Option<ProcessId> {
         self.processes.target_process()
     }
 
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn completes_on_any_process_activity(self) -> bool {
         matches!(self.processes, ProcessWaitPolicy::Any)
     }
 
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn completes_on_target_process_activity(self, process: ProcessId) -> bool {
         matches!(
             self.processes,
@@ -594,6 +619,7 @@ impl WaitRequest {
     }
 
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn restricts_process_service_to_target(self) -> bool {
         self.processes.just_this_one()
     }
@@ -617,22 +643,27 @@ impl WaitRequest {
         }
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn services_special_input(self) -> bool {
         self.special_input.services_input()
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn waits_for_host_input(self) -> bool {
         self.keyboard.waits_for_host_input()
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn completes_on_command_input(self) -> bool {
         self.keyboard.input_query().is_some()
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn sets_waiting_for_user_input(self) -> bool {
         self.keyboard.sets_waiting_for_user_input()
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn runs_timers(self) -> bool {
         self.timers.allow()
     }
@@ -643,6 +674,7 @@ impl WaitRequest {
         self.processes.target_process()
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn poll_or_deadline_elapsed(self, now: Instant) -> bool {
         matches!(self.deadline, WaitDeadline::Poll) || self.deadline.expired(now)
     }
@@ -651,12 +683,14 @@ impl WaitRequest {
         self.deadline.expired(now)
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn base_timeout(self, now: Instant) -> Duration {
         self.deadline
             .remaining(now)
             .unwrap_or_else(|| Duration::from_secs(100_000))
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn needs_redisplay_after_service(
         self,
         special_input: SpecialInputServiceOutcome,
@@ -687,6 +721,7 @@ impl WaitRequest {
         self.redisplay && special_input.redisplay_needed()
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn completion_for(self, outcome: WaitServiceOutcome) -> Option<WaitCompletion> {
         if self.completes_on_command_input() && outcome.has_command_input_pending() {
             return Some(WaitCompletion::CommandInputPending);
@@ -737,6 +772,7 @@ impl WaitRequest {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 enum WaitCompletion {
     DisplayActivity,
     ProcessActivity,
@@ -750,8 +786,10 @@ enum WaitCompletion {
     TargetProcessTerminated,
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) use neovm_eval::emacs_core::eval::input_hooks::CommandInputWaitOutcome;
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn command_input_outcome_from_completion(completion: WaitCompletion) -> CommandInputWaitOutcome {
     match completion {
         WaitCompletion::CommandInputPending => CommandInputWaitOutcome::InputPending,
@@ -765,6 +803,7 @@ fn command_input_outcome_from_completion(completion: WaitCompletion) -> CommandI
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum ProcessOutputWaitOutcome {
     ProcessActivity,
     NoProcessActivity,
@@ -839,6 +878,7 @@ impl WaitSpecialInputActivity {
 /// Lisp events remain with their canonical reader; staged events remain with
 /// the keyboard/frontend owner. Neither case consumes the pending event.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 enum WaitCommandInput {
     #[default]
     None,
@@ -850,6 +890,7 @@ static_assertions::assert_eq_size!(WaitCommandInput, bool);
 static_assertions::assert_impl_all!(WaitCommandInput: Copy, Send, Sync);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 struct WaitServiceOutcome {
     handshake_ready: bool,
     process_activity: WaitProcessActivity,
@@ -867,14 +908,17 @@ struct WaitServiceOutcome {
 }
 
 impl WaitServiceOutcome {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn has_any_process_activity(self) -> bool {
         self.process_activity.any()
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn has_target_process_activity(self) -> bool {
         self.process_activity.target()
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn absorb_process_activity(&mut self, process_outcome: ProcessOutputServiceOutcome) {
         if process_outcome.has_target_process_activity() {
             self.process_activity = self.process_activity.record(true);
@@ -888,10 +932,12 @@ impl WaitServiceOutcome {
     /// bytes read (filters) or non-output servicing (sentinels/connects/EOF).
     /// Distinct from [`Self::has_any_process_activity`], which gates wait
     /// completion and stays output-only to match GNU's `got_some_output`.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn ran_process_callbacks(self) -> bool {
         self.process_activity.any() || self.process_serviced
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn absorb_special_input_activity(&mut self, special_input: SpecialInputServiceOutcome) {
         if special_input.has_resize_activity() {
             self.special_input_activity = self
@@ -904,14 +950,17 @@ impl WaitServiceOutcome {
         }
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn has_special_input_activity(self) -> bool {
         self.special_input_activity.any()
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn has_resize_activity(self) -> bool {
         self.special_input_activity.resize()
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn record_command_input_pending(&mut self, input: WaitCommandInput) {
         match input {
             WaitCommandInput::None => {}
@@ -919,6 +968,7 @@ impl WaitServiceOutcome {
         }
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn has_command_input_pending(self) -> bool {
         match self.command_input {
             WaitCommandInput::None => false,
@@ -926,28 +976,33 @@ impl WaitServiceOutcome {
         }
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn record_timer_activity(&mut self, fired: bool) {
         self.timers_fired |= fired;
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn has_timer_activity(self) -> bool {
         self.timers_fired
     }
 }
 
 #[derive(Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 enum WaitProcessService {
     Poll,
     Ready(ProcessWaitEvents),
 }
 
 #[derive(Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 struct WaitBlockActivity {
     notification_wakeup: bool,
     process_service: WaitProcessService,
 }
 
 impl WaitBlockActivity {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn poll() -> Self {
         Self {
             notification_wakeup: false,
@@ -955,6 +1010,7 @@ impl WaitBlockActivity {
         }
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn ready_processes(processes: Vec<ProcessId>) -> Self {
         Self {
             notification_wakeup: false,
@@ -964,6 +1020,7 @@ impl WaitBlockActivity {
         }
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn from_source_events(events: ProcessWaitEvents) -> Self {
         let notification_wakeup = events.has_notification_wakeup();
         let process_service = if !events.has_ready_processes() && !events.has_writable_processes() {
@@ -977,27 +1034,41 @@ impl WaitBlockActivity {
         }
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn has_notification_wakeup(&self) -> bool {
         self.notification_wakeup
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn has_external_activity(&self) -> bool {
         self.notification_wakeup || matches!(self.process_service, WaitProcessService::Ready(_))
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn into_process_service(self) -> WaitProcessService {
         self.process_service
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 struct WaitTimeoutChoice {
+    #[cfg(not(feature = "test-support"))]
     duration: Duration,
+    #[cfg(feature = "test-support")]
+    pub duration: Duration,
+    #[cfg(not(feature = "test-support"))]
     finite_deadline_timeout: bool,
+    #[cfg(feature = "test-support")]
+    pub finite_deadline_timeout: bool,
+    #[cfg(not(feature = "test-support"))]
     shortened_by_timer: bool,
+    #[cfg(feature = "test-support")]
+    pub shortened_by_timer: bool,
 }
 
 impl WaitTimeoutChoice {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn run_timers_after_block(self, activity: &WaitBlockActivity, deadline_elapsed: bool) -> bool {
         if deadline_elapsed {
             return false;
@@ -1129,7 +1200,7 @@ pub trait WaitContextExt {
 
     fn wait_for_resize_ack_until(&mut self, deadline: Instant) -> Result<bool, Flow>;
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn wait_for_command_input(
         &mut self,
         deadline: Option<Instant>,
@@ -1676,7 +1747,7 @@ impl WaitContextExt for neovm_eval::emacs_core::eval::Context {
         Ok(completion == WaitCompletion::SpecialInputActivity)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn wait_for_command_input(
         &mut self,
         deadline: Option<Instant>,
@@ -1892,10 +1963,6 @@ impl WaitContextExt for neovm_eval::emacs_core::eval::Context {
 
 // The default bodies above are the implementation; this binds them to the
 // upper-layer type that owns the state.
-
-#[cfg(test)]
-#[path = "tests/wait_test.rs"]
-mod tests;
 
 #[cfg(test)]
 #[path = "tests/fine_deadline.rs"]

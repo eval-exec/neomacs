@@ -36,6 +36,7 @@ thread_local! {
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn register_bootstrap_symbols(obarray: &mut Obarray) {
     register_w32term_symbols(obarray);
     register_w32proc_symbols(obarray);
@@ -675,7 +676,3 @@ fn w32_multibyte_code_page() -> i64 {
 fn w32_multibyte_code_page() -> i64 {
     0
 }
-
-#[cfg(test)]
-#[path = "tests/w32_test.rs"]
-mod tests;

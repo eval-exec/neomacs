@@ -96,6 +96,7 @@ pub struct ResetRow {
 /// implementation is unrepresentable.
 #[derive(Clone, Copy)]
 #[allow(dead_code)] // `what`/`gnu`/`by`/`why` are GNU citations; read only by the cfg(test) screen in tests/mod.rs
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum Derived {
     /// GNU derives it, and so does this port -- in the function stored here,
     /// which the sequence calls in `main`'s order.
@@ -121,8 +122,9 @@ pub(crate) enum Derived {
 
 /// Accessors the screen in `tests/mod.rs` uses to check every citation; the
 /// runtime walk in [`apply_post_image_init`] matches on `Ported` directly.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl Derived {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn what(self) -> &'static str {
         match self {
             Derived::Ported { what, .. }
@@ -131,6 +133,7 @@ impl Derived {
         }
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn gnu(self) -> &'static str {
         match self {
             Derived::Ported { gnu, .. }
@@ -142,6 +145,7 @@ impl Derived {
 
 /// What a screened `init_*` body establishes, at the level of Lisp.
 #[derive(Clone, Copy)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum Establishes {
     /// The body establishes Lisp-visible state.
     Facts {
@@ -185,6 +189,7 @@ pub(crate) enum Establishes {
 
 /// Whether GNU's `main` reaches the call site at all in this build.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum CallGuard {
     /// Runs on every startup.
     Unconditional,
@@ -199,17 +204,39 @@ pub(crate) enum CallGuard {
 #[derive(Clone, Copy)]
 pub(crate) struct PostImageInitSite {
     /// The C function's name, exactly as `main` spells it.
+    /// The C function's name, exactly as `main` spells it.
+    #[cfg(not(feature = "test-support"))]
     pub(crate) c_name: &'static str,
+    #[cfg(feature = "test-support")]
+    pub c_name: &'static str,
     /// Line of the CALL in `src/emacs.c`.  Strictly increasing across
     /// [`PostImageInit::ALL`]; the test pins that.
     #[allow(dead_code)] // GNU citation; read only by the cfg(test) screen in tests/mod.rs
+    /// Line of the CALL in `src/emacs.c`.  Strictly increasing across
+    /// [`PostImageInit::ALL`]; the test pins that.
+    #[allow(dead_code)] // GNU citation; read only by the cfg(test) screen in tests/mod.rs
+    #[cfg(not(feature = "test-support"))]
     pub(crate) call_line: u32,
+    #[cfg(feature = "test-support")]
+    pub call_line: u32,
     /// `file:first-last` for the function BODY in the GNU tree.
     #[allow(dead_code)] // GNU citation; read only by the cfg(test) screen in tests/mod.rs
+    /// `file:first-last` for the function BODY in the GNU tree.
+    #[allow(dead_code)] // GNU citation; read only by the cfg(test) screen in tests/mod.rs
+    #[cfg(not(feature = "test-support"))]
     pub(crate) body: &'static str,
+    #[cfg(feature = "test-support")]
+    pub body: &'static str,
     #[allow(dead_code)] // classification; read only by the cfg(test) screen in tests/mod.rs
+    #[allow(dead_code)] // classification; read only by the cfg(test) screen in tests/mod.rs
+    #[cfg(not(feature = "test-support"))]
     pub(crate) guard: CallGuard,
+    #[cfg(feature = "test-support")]
+    pub guard: CallGuard,
+    #[cfg(not(feature = "test-support"))]
     pub(crate) establishes: Establishes,
+    #[cfg(feature = "test-support")]
+    pub establishes: Establishes,
 }
 
 /// Every `init_*` call GNU's `main` makes AFTER `load_pdump`
@@ -266,6 +293,7 @@ pub enum PostImageInit {
 
 impl PostImageInit {
     /// Derived from the LAST discriminant, so it cannot drift from the enum.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) const COUNT: usize = Self::SfntfontAndroid as usize + 1;
 
     /// The whole sequence, in `main`'s order.
@@ -273,6 +301,7 @@ impl PostImageInit {
     /// The declared LENGTH is [`Self::COUNT`], so adding a variant without
     /// adding it here does not compile.  That is the only mechanism in this
     /// module that can catch a row nobody wrote.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) const ALL: [Self; Self::COUNT] = [
         Self::StandardFds,
         Self::Signals,
@@ -318,6 +347,7 @@ impl PostImageInit {
 
     /// The GNU citation and the classification, one exhaustive `match` so a
     /// new variant cannot be added without reading GNU's body for it.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) const fn site(self) -> PostImageInitSite {
         match self {
             // ---------------------------------------------------------------
@@ -1228,7 +1258,3 @@ pub fn apply_post_image_init(eval: &mut Context) {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "tests/post_image_init_test.rs"]
-mod post_image_init_test;

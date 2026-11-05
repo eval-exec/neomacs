@@ -2357,7 +2357,11 @@ pub struct Buffer {
     /// BEG_UNCHANGED analog) at each use.
     pub(crate) line_number_anchor: std::cell::Cell<Option<ModeLineNumberAnchor>>,
     /// Unique identifier.
+    /// Unique identifier.
+    #[cfg(not(feature = "test-support"))]
     pub(crate) id: BufferId,
+    #[cfg(feature = "test-support")]
+    pub id: BufferId,
     /// Buffer name (e.g. `"*scratch*"`). Mirrors GNU `struct buffer.name_`.
     pub(crate) name: Value,
     /// Buffer name before the last rename, or before death after kill.

@@ -36,8 +36,6 @@ use strum::{EnumString, IntoStaticStr};
 
 use crate::emacs_core::eval::data::process_spawn::SpawnedChild;
 use crate::emacs_core::eval::data::process_tls::TlsStream;
-#[cfg(test)]
-use crate::emacs_core::process::types::NativeConnectObservationSlot;
 use crate::host_effect::wake::{
     ControlDestination, ControlNudge, ControlNudgeOutcome, NotificationLatch,
 };
@@ -185,8 +183,85 @@ pub struct LiveProcessIo {
 pub enum ChildOutputReader {
     Stdout(std::fs::File),
     Shared(os_pipe::PipeReader),
-    #[cfg(all(test, unix))]
-    Injected(crate::emacs_core::process::pipe_exit_tests::PipeReader),
+    #[cfg(all(any(test, feature = "test-support"), unix))]
+    Injected(pipe_exit_test_support::PipeReader),
+}
+
+/// Test-only injected reader used by the re-homed system pipe tests.
+///
+/// The evaluator owns [`ChildOutputReader`], so the injection type must live
+/// here: upper test crates construct it, and a lower crate cannot name an
+/// upper crate's test module.  Compiled for the evaluator's own tests and for
+/// upper test builds under `test-support`.
+#[cfg(all(any(test, feature = "test-support"), unix))]
+pub mod pipe_exit_test_support {
+    use super::ChildOutputReader;
+    use std::collections::VecDeque;
+    use std::io::{self, Read};
+    use std::os::fd::{AsRawFd, RawFd};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    /// Test-only read seam around a real owned pipe. The fixture's sole
+    /// mutator injects interruptions; no global hooks, sleeps, signals or
+    /// borrowed PIDs.
+    pub struct PipeReader {
+        reader: Box<ChildOutputReader>,
+        steps: VecDeque<ReadStep>,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl PipeReader {
+        pub fn new(
+            reader: Box<ChildOutputReader>,
+            steps: VecDeque<ReadStep>,
+            calls: Arc<AtomicUsize>,
+        ) -> Self {
+            Self {
+                reader,
+                steps,
+                calls,
+            }
+        }
+    }
+
+    impl std::fmt::Debug for PipeReader {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("PipeReader")
+                .field("fd", &self.reader.as_raw_fd())
+                .field("steps", &self.steps)
+                .field("calls", &self.calls)
+                .finish()
+        }
+    }
+
+    #[derive(Debug)]
+    pub enum ReadStep {
+        Prefix(usize),
+        Interrupted,
+    }
+
+    impl Read for PipeReader {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            match self.steps.pop_front() {
+                Some(ReadStep::Interrupted) => Err(io::ErrorKind::Interrupted.into()),
+                Some(ReadStep::Prefix(limit)) => {
+                    let len = buffer.len().min(limit);
+                    self.reader.read(&mut buffer[..len])
+                }
+                None => self.reader.read(buffer),
+            }
+        }
+    }
+
+    impl AsRawFd for PipeReader {
+        fn as_raw_fd(&self) -> RawFd {
+            self.reader.as_raw_fd()
+        }
+    }
 }
 
 /// A tracked process record.
@@ -345,12 +420,74 @@ pub struct WaitNotifier {
     pub notification_pending: Arc<NotificationLatch>,
 }
 
+/// Test-only native-connect observation types (moved down from the system
+/// crate: eval cannot name system, and the wait backend owns the slot).
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Debug)]
+pub struct NativeConnectWritable {
+    pub process: ProcessId,
+    pub owner: std::thread::ThreadId,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl NativeConnectWritable {
+    pub fn process(&self) -> ProcessId {
+        self.process
+    }
+    pub fn owner(&self) -> std::thread::ThreadId {
+        self.owner
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub struct NativeConnectObserver {
+    pub process: ProcessId,
+    pub owner: std::thread::ThreadId,
+    pub callback: Box<dyn FnOnce(NativeConnectWritable) + Send>,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl std::fmt::Debug for NativeConnectObserver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NativeConnectObserver")
+            .field("process", &self.process)
+            .field("owner", &self.owner)
+            .finish_non_exhaustive()
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+static_assertions::assert_impl_all!(NativeConnectObserver: Send, std::fmt::Debug);
+#[cfg(any(test, feature = "test-support"))]
+static_assertions::assert_not_impl_any!(NativeConnectObserver: Clone, Copy);
+#[cfg(any(test, feature = "test-support"))]
+static_assertions::assert_impl_all!(NativeConnectWritable: Send, std::fmt::Debug);
+#[cfg(any(test, feature = "test-support"))]
+static_assertions::assert_not_impl_any!(NativeConnectWritable: Clone, Copy);
+
+/// Test-only storage for a consumed native-connect observation.
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Default, Debug)]
+#[repr(transparent)]
+pub struct NativeConnectObservationSlot(pub std::sync::Mutex<Option<NativeConnectObserver>>);
+
+#[cfg(any(test, feature = "test-support"))]
+static_assertions::assert_impl_all!(NativeConnectObservationSlot: Send, Sync, std::fmt::Debug);
+#[cfg(any(test, feature = "test-support"))]
+static_assertions::assert_not_impl_any!(NativeConnectObservationSlot: Clone, Copy);
+#[cfg(all(
+    any(test, feature = "test-support"),
+    target_arch = "x86_64",
+    target_os = "linux"
+))]
+static_assertions::const_assert_eq!(std::mem::size_of::<NativeConnectObservationSlot>(), 40);
+
 pub struct ProcessWaitBackend {
     /// A per-backend, one-shot scheduling gate for input-wakeup regressions.
     /// Installation and consumption are synchronized; callbacks own no Lisp state.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub before_next_wait: std::sync::Mutex<Option<Box<dyn FnOnce(BackendWaitEntry) + Send>>>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub native_connect_observer: NativeConnectObservationSlot,
     #[cfg(unix)]
     pub signal_fd: Option<std::os::fd::RawFd>,
@@ -376,7 +513,7 @@ pub enum ProcessWaitBackendInterest {
 
 /// A native pre-Poller observation, after pending signal/notification checks.
 /// This reports entry to the wait boundary, not proof of a kernel-blocked task.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BackendWaitEntry {
     pub requested_timeout: Duration,
@@ -788,6 +925,17 @@ pub struct ChildStatusSource(pub Source);
 
 // Self-contained state impls (A3b-1).
 
+/// Whether this compilation of the evaluator carries the test-support fields
+/// that change the layout of the wait backend and any host record embedding it.
+///
+/// Upper crates pin process layouts and cannot evaluate this crate's
+/// `cfg(feature = "test-support")` directly.  Exposing the predicate as a
+/// `const` keeps their pins exact even when Cargo unifies dev-dependency
+/// features across `--all-targets` targets (where the upper crate's own
+/// `cfg(test)` is off while the lower crate's test fields are on).
+#[doc(hidden)]
+pub const TEST_SUPPORT_LAYOUT: bool = cfg!(any(test, feature = "test-support"));
+
 pub const DEFAULT_READ_PROCESS_OUTPUT_MAX: usize = 65_536;
 
 pub const READ_PROCESS_OUTPUT_MAX_CEILING: usize = i32::MAX as usize;
@@ -857,7 +1005,7 @@ impl std::io::Read for ChildOutputReader {
             let result = match self {
                 Self::Stdout(stdout) => stdout.read(buffer),
                 Self::Shared(pipe) => pipe.read(buffer),
-                #[cfg(all(test, unix))]
+                #[cfg(all(any(test, feature = "test-support"), unix))]
                 Self::Injected(pipe) => pipe.read(buffer),
             };
             match result {
@@ -874,7 +1022,7 @@ impl std::os::fd::AsRawFd for ChildOutputReader {
         match self {
             Self::Stdout(stdout) => stdout.as_raw_fd(),
             Self::Shared(pipe) => pipe.as_raw_fd(),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             Self::Injected(pipe) => pipe.as_raw_fd(),
         }
     }
@@ -946,7 +1094,7 @@ impl WaitNotifier {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl BackendWaitEntry {
     pub fn requested_timeout(self) -> Duration {
         self.requested_timeout
@@ -1000,9 +1148,9 @@ impl ProcessWaitBackend {
         });
         Self {
             poller,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             before_next_wait: std::sync::Mutex::new(None),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             native_connect_observer: NativeConnectObservationSlot::default(),
             #[cfg(unix)]
             signal_fd,
@@ -1053,7 +1201,7 @@ impl ProcessWaitBackend {
                 return Some(ProcessWaitEvents::notification_wakeup());
             }
 
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             if !timeout.is_zero() {
                 // Nonblocking service polls are not reader wait-entry witnesses.
                 let before_wait = self.before_next_wait.lock().expect("wait gate lock").take();
@@ -2214,13 +2362,32 @@ pub enum StatusChangeSite {
     HandleChildSignal,
 }
 
+/// Whether GNU consumes the bump on the spot or leaves it for the wait.
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StatusChangeNotifier {
+    SynchronouslyAtTheSite {
+        gnu: &'static str,
+        here: &'static str,
+    },
+    TheWaitsStatusNotify,
+}
+
+/// Where this port makes the record for a [`StatusChangeSite`], or why not.
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StatusChangeRecorder {
+    Here(&'static str),
+    NoAnalogue { why: &'static str },
+}
+
 impl StatusChangeSite {
     /// Derived from the last discriminant, so a variant missing from
     /// [`Self::ALL`] is a compile error rather than a silent omission.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub const COUNT: usize = Self::HandleChildSignal as usize + 1;
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub const ALL: [Self; Self::COUNT] = [
         Self::DeleteProcessConnection,
         Self::DeleteProcessChild,
@@ -2264,7 +2431,7 @@ impl StatusChangeSite {
     }
 
     /// Where this port records the change, or why it has nothing to record.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn recorder(self) -> StatusChangeRecorder {
         match self {
             Self::DeleteProcessConnection | Self::DeleteProcessChild => {
@@ -2303,7 +2470,7 @@ impl StatusChangeSite {
     }
 
     /// Whether GNU consumes the bump on the spot or leaves it for the wait.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn notifier(self) -> StatusChangeNotifier {
         match self {
             Self::DeleteProcessConnection => StatusChangeNotifier::SynchronouslyAtTheSite {
@@ -2799,7 +2966,7 @@ impl ProcessStatusSymbol {
         self.into()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn gnu_public_domain() -> [Self; 9] {
         [
             Self::Run,
@@ -2922,14 +3089,14 @@ pub enum UnrecordedStatusRead {
 }
 
 impl UnrecordedStatusRead {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub const COUNT: usize = Self::ModeLinePercentS as usize + 1;
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub const ALL: [Self; Self::COUNT] = [Self::ModeLinePercentS];
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn gnu(self) -> &'static str {
         match self {
@@ -2937,7 +3104,7 @@ impl UnrecordedStatusRead {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn why(self) -> &'static str {
         match self {
