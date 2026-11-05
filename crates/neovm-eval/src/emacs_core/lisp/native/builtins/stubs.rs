@@ -1060,7 +1060,8 @@ pub(crate) fn builtin_get_unicode_property_internal(args: Vec<Value>) -> EvalRes
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub(super) const FACE_ATTRIBUTES_VECTOR_LEN: usize = 20;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) const FACE_ATTRIBUTES_VECTOR_LEN: usize = 20;
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 fn unspecified_face_attributes_vector() -> Value {

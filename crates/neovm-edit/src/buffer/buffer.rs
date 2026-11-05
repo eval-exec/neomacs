@@ -2654,6 +2654,20 @@ pub struct AutomaticCompositionVisibleKey {
 }
 
 impl Buffer {
+    /// Test-support: copied GNU `last_window_start`.
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn last_window_start_for_test(&self) -> LispCharPos1 {
+        self.last_window_start
+    }
+
+    /// Test-support: typed write for GNU `last_window_start`; the authority
+    /// fence is the only cross-crate write route.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn set_last_window_start_raw(&mut self, value: LispCharPos1) {
+        self.last_window_start = value;
+    }
+
     /// The cached category projection for this buffer, if one is present.
     #[doc(hidden)]
     pub fn cached_word_wrap_policy(

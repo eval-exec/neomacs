@@ -407,6 +407,9 @@ pub mod arithmetic;
 mod buffer_text_backend;
 #[doc(hidden)]
 pub mod collections;
+#[cfg(feature = "test-support")]
+pub mod cons_list;
+#[cfg(not(feature = "test-support"))]
 mod cons_list;
 pub(crate) mod from_value;
 #[doc(hidden)]
@@ -469,6 +472,10 @@ pub mod search;
 mod stubs;
 #[doc(hidden)]
 pub use byte_code::builtin_byte_code;
+#[cfg(feature = "test-support")]
+pub use stubs::FACE_ATTRIBUTES_VECTOR_LEN;
+#[cfg(not(feature = "test-support"))]
+pub(crate) use stubs::FACE_ATTRIBUTES_VECTOR_LEN;
 pub(crate) use stubs::{
     swap_world_state as swap_selection_world_state,
     world_state_placeholder as selection_world_state_placeholder,
@@ -476,6 +483,9 @@ pub(crate) use stubs::{
 
 #[doc(hidden)]
 pub mod symbols;
+#[cfg(feature = "test-support")]
+pub mod treesit;
+#[cfg(not(feature = "test-support"))]
 mod treesit;
 
 pub use file_notify::*;
@@ -660,9 +670,27 @@ pub(crate) fn dispatch_builtin_without_eval_state(
     })
 }
 
-#[cfg(test)]
-#[path = "tests/builtins_test.rs"]
-mod tests;
+/// Test-support: dispatch a pure/stateless builtin with a caller-supplied
+/// Context (the moved core tests construct one with the harness).  Same
+/// policy and dispatcher as `dispatch_builtin_without_eval_state`, which
+/// stays cfg(test)-only because it used a test-only Context constructor.
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn dispatch_pure_builtin_for_test(
+    ctx: &mut crate::emacs_core::eval::Context,
+    name: &str,
+    args: Vec<Value>,
+) -> Option<EvalResult> {
+    let sym_id = intern(name);
+    let policy = no_eval_policy_for(sym_id);
+    if let Some(result) = dispatch_builtin_stateless_placeholder(policy, &args) {
+        return Some(result);
+    }
+    if policy == NoEvalPolicy::RequiresEvalState {
+        return None;
+    }
+    dispatch_builtin_by_id(ctx, sym_id, args)
+}
 
 #[cfg(test)]
 #[path = "tests/fixed_arity_hot_subrs_test.rs"]

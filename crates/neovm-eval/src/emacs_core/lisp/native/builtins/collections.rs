@@ -456,6 +456,7 @@ macro_rules! aset_string_write_body {
     }};
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn aset_string_replacement(
     array: &Value,
     index: &Value,
@@ -491,7 +492,8 @@ fn aset_string_replacement_in_vm_string_arm(
 /// VM's hot paths already hold their three arguments on the stack. Requiring a
 /// `Vec` there cost a `SmallVec` clone plus a heap allocation per `aset`
 /// (`dhrystone`: 370,708 clones and 305,131 `Vec::from_iter` calls).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_aset(args: Vec<Value>) -> EvalResult {
     builtin_aset_args(ArraySymbolSource::Bare, &args)
 }
@@ -586,6 +588,7 @@ pub(crate) fn builtin_aset_args(symbols: impl ArraySymbolPolicy, args: &[Value])
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_vconcat(args: Vec<Value>) -> EvalResult {
     builtin_vconcat_slice(&args)
 }
@@ -781,7 +784,8 @@ pub(crate) fn maybe_resize_hash_table_for_insert(
     // each backing collection grow with the entries actually inserted.
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_define_hash_table_test(args: Vec<Value>) -> EvalResult {
     define_hash_table_test_with_symbols(args, SymbolMode::Bare)
 }

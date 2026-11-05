@@ -454,6 +454,7 @@ fn treesit_user_emacs_dir(eval: &super::eval::Context) -> Option<String> {
         .and_then(|value| value.as_str_owned())
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn treesit_candidate_paths(eval: &super::eval::Context, language: SymId) -> Vec<String> {
     let remapped_language = maybe_remap_language(eval, language);
     let remapped_name = resolve_sym(remapped_language);
@@ -2563,7 +2564,8 @@ pub fn builtin_treesit_parser_tag(eval: &mut super::eval::Context, args: Vec<Val
     parser_record_slot(args[0], PARSER_SLOT_TAG)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_treesit_pattern_expand(args: Vec<Value>) -> EvalResult {
     builtin_treesit_pattern_expand_with_symbols(args, SymbolMode::Bare)
 }
@@ -3110,7 +3112,8 @@ pub fn builtin_treesit_query_eagerly_compiled_p(
     Ok(if compiled { Value::T } else { Value::NIL })
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_treesit_query_expand(args: Vec<Value>) -> EvalResult {
     builtin_treesit_query_expand_with_symbols(args, SymbolMode::Bare)
 }

@@ -5087,6 +5087,7 @@ pub fn replace_match_buffer_with_syntax(
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn compute_buffer_replacement_with_syntax(
     buf: &Buffer,
     newtext: &str,

@@ -184,6 +184,7 @@ fn is_runtime_function_object(value: &Value) -> bool {
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_functionp(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     expect_args("functionp", &args, 1)?;
     builtin_functionp_1(eval, args[0])
@@ -415,6 +416,7 @@ pub fn builtin_eql_2(eval: &mut super::eval::Context, a: Value, b: Value) -> Eva
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_equal(args: Vec<Value>) -> EvalResult {
     expect_args("equal", &args, 2)?;
     Ok(Value::bool_val(try_equal_value_swp(
@@ -472,7 +474,8 @@ fn builtin_symbol_with_pos_pos_1_value(arg: Value) -> EvalResult {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_char_equal(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     neovm_value::error::expect_args("char-equal", &args, 2)?;
     let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);

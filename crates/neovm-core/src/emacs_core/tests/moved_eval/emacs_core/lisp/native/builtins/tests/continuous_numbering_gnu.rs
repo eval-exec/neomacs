@@ -31,7 +31,7 @@ fn oracle(name: &str, form: &str, fixture: &str) {
         );
         let expected = String::from_utf8(output.stdout).expect("UTF-8 GNU oracle");
         let destination = root
-            .join("src/emacs_core/lisp/native/builtins/tests")
+            .join("src/emacs_core/tests/moved_eval/emacs_core/lisp/native/builtins/tests")
             .join(format!("continuous_numbering_{name}.expect"));
         if std::fs::read_to_string(&destination).ok().as_deref() != Some(expected.as_str()) {
             std::fs::write(destination, &expected).expect("GNU fixture");
@@ -40,7 +40,7 @@ fn oracle(name: &str, form: &str, fixture: &str) {
     } else {
         fixture.to_owned()
     };
-    let mut context = crate::emacs_core::eval::Context::new();
+    let mut context = crate::test_utils::new_context();
     context.set_lexical_binding(false);
     let actual = crate::emacs_core::format_eval_result(&context.eval_str(form));
     assert_eq!(actual, format!("OK {}", expected.trim_end()), "{name}");

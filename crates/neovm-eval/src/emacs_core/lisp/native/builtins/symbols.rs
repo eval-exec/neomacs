@@ -262,6 +262,7 @@ pub(crate) fn would_create_variable_alias_cycle_in_obarray(
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_boundp(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     expect_args("boundp", &args, 1)?;
     builtin_boundp_1(eval, args[0])
@@ -319,6 +320,7 @@ pub fn builtin_obarrayp(args: Vec<Value>) -> EvalResult {
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_special_variable_p(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
@@ -584,6 +586,7 @@ pub fn builtin_internal_delete_indirect_variable(
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_fboundp(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     expect_args("fboundp", &args, 1)?;
     builtin_fboundp_1(eval, args[0])
@@ -597,6 +600,7 @@ typed_subr! {
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_symbol_value(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
@@ -618,6 +622,7 @@ pub fn builtin_symbol_value_1(eval: &mut super::eval::Context, symbol_value: Val
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_symbol_function(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
@@ -733,6 +738,7 @@ fn dispatch_symbol_func_arity_override_in_obarray(
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_set(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     expect_args("set", &args, 2)?;
     builtin_set_2(eval, args[0], args[1])
@@ -1439,7 +1445,8 @@ pub(crate) fn builtin_macroexpand_slice(
 
 /// `Vec` entry point for the Rust-side tests; production dispatch enters
 /// [`builtin_indirect_function_2`] directly.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_indirect_function(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
@@ -3418,6 +3425,7 @@ pub fn builtin_value_lt(
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn compare_value_lt(
     eval: &crate::emacs_core::eval::Context,
     lhs: &Value,
@@ -4334,7 +4342,7 @@ thread_local! {
     static LOSSAGE_SIZE: RefCell<i64> = const { RefCell::new(300) };
 }
 
-pub(super) fn reset_symbols_thread_locals() {
+pub(crate) fn reset_symbols_thread_locals() {
     crate::emacs_core::eval::lifecycle::reset_fontset_registry();
     LOSSAGE_SIZE.with(|slot| *slot.borrow_mut() = 300);
 }
@@ -5613,6 +5621,7 @@ pub(crate) fn closure_from_reader_literal_slots(slots: &[Value]) -> EvalResult {
 /// Core logic for constructing a `Value::ByteCode` from GNU-style parts.
 /// Used by both `make-byte-code` builtin and `sf_byte_code_literal`.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn make_byte_code_from_parts(
     arglist: &Value,
     bytecode_str: &Value,
@@ -5861,6 +5870,7 @@ fn make_byte_code_validates_only() -> bool {
     })
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn make_interpreted_closure_from_parts(
     params_value: &Value,
     body_value: &Value,

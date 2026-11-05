@@ -1,22 +1,66 @@
-use super::*;
-use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
-use crate::emacs_core::eval::subr_abi::SubrValueExt;
+use crate::emacs_core::builtins::*;
 use neovm_edit::buffer::{CharRange, EmacsByteRange, LispCharPos1};
+use neovm_eval::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
+use neovm_eval::emacs_core::eval::SubrValueExt;
 use neovm_value::error::{FlowKind, FlowRef, FlowResultExt as _};
 fn test_ob() -> neovm_value::symbol::Obarray {
     neovm_value::symbol::Obarray::new()
 }
 use crate::emacs_core::buffer_ops::builtin_replace_buffer_contents;
+use crate::emacs_core::buffer_ops::{
+    builtin_buffer_list, builtin_other_buffer, builtin_replace_region_contents,
+    builtin_set_buffer_multibyte,
+};
+use crate::emacs_core::builtins::collections::builtin_aset;
+use crate::emacs_core::builtins::collections::{
+    aset_string_replacement, builtin_define_hash_table_test, builtin_vconcat,
+    lookup_hash_table_test_alias,
+};
+use crate::emacs_core::builtins::cons_list::{builtin_delq, builtin_length, builtin_nconc};
+use crate::emacs_core::builtins::file_notify::RemoveWatchSemantics;
+use crate::emacs_core::builtins::misc_eval::builtin_eval;
+use crate::emacs_core::builtins::search::{
+    builtin_looking_at_p, builtin_match_beginning, builtin_match_end, builtin_search_forward,
+};
+use crate::emacs_core::builtins::strings::builtin_substring;
+use crate::emacs_core::builtins::symbols::{
+    builtin_boundp, builtin_fboundp, builtin_get, builtin_indirect_function, builtin_put,
+    builtin_set, builtin_special_variable_p, builtin_symbol_function, builtin_symbol_value,
+    compare_value_lt,
+};
+use crate::emacs_core::builtins::symbols::{
+    make_byte_code_from_parts, make_interpreted_closure_from_parts,
+};
+use crate::emacs_core::builtins::treesit::treesit_candidate_paths;
+use crate::emacs_core::builtins::treesit::{
+    builtin_treesit_pattern_expand, builtin_treesit_query_expand,
+};
+use crate::emacs_core::builtins::types::{builtin_char_equal, builtin_equal, builtin_functionp};
+use crate::emacs_core::builtins::{
+    BACKEND_SUBRS, FACE_ATTRIBUTES_VECTOR_LEN, REMOVE_WATCH_SEMANTICS,
+};
+use crate::emacs_core::eval::set_default_toplevel_value;
+use crate::emacs_core::kill_buffer::builtin_kill_buffer;
 use crate::emacs_core::window_cmds::builtin_split_window_internal;
 use crate::emacs_core::{Context, format_eval_result};
 use crate::test_utils::{load_minimal_gnu_backquote_runtime, runtime_startup_context};
 use malachite::integer::Integer;
+use neovm_display::window::DisplayFrameManagerExt;
 use neovm_edit::emacs_core::buffer::builtin_make_overlay;
+use neovm_edit::emacs_core::buffer::{
+    builtin_buffer_modified_p, builtin_buffer_substring, builtin_byte_to_position,
+    builtin_char_after, builtin_char_before, builtin_point, builtin_point_max,
+    builtin_position_bytes, builtin_set_buffer, builtin_widen,
+};
+use neovm_edit::emacs_core::editfns::builtin_following_char;
 use neovm_edit::emacs_core::editfns::{
     builtin_delete_and_extract_region, builtin_delete_region, builtin_erase_buffer,
 };
+use neovm_text::emacs_core::regex::compute_buffer_replacement_with_syntax;
 use neovm_text::emacs_core::treesit as runtime_treesit;
+use neovm_value::intern::intern;
 use neovm_value::intern::intern_uninterned;
+use neovm_value::strings_core::lisp_string_char_codes;
 use neovm_value::value::{
     HashTableTest, LambdaData, LambdaParams, StringTextPropertyRun, Value, ValueKind,
     get_string_text_properties_for_value,
@@ -37,7 +81,7 @@ fn empty_function_cell_does_not_synthesize_builtin_alias() {
     let symbol = neovm_value::intern::intern("string<");
 
     assert_eq!(
-        super::symbols::symbol_function_cell_in_obarray(&obarray, symbol),
+        crate::emacs_core::builtins::symbols::symbol_function_cell_in_obarray(&obarray, symbol),
         None
     );
 }
@@ -55,12 +99,13 @@ fn put_string_property(
 /// Decode char codes from a Value's LispString using emacs_char.
 fn decode_value_char_codes(v: &Value) -> Vec<u32> {
     let ls = v.as_lisp_string().expect("expected string value");
-    super::lisp_string_char_codes(ls)
+    neovm_value::strings_core::lisp_string_char_codes(ls)
 }
 
 /// Backward-compat: decode char codes from an &str (for tests using as_str).
 fn dispatch_builtin_pure(name: &str, args: Vec<Value>) -> Option<EvalResult> {
-    super::dispatch_builtin_without_eval_state(name, args)
+    let mut ctx = crate::test_utils::new_context();
+    crate::emacs_core::builtins::dispatch_pure_builtin_for_test(&mut ctx, name, args)
 }
 
 fn install_variable_watcher_probe(eval: &mut crate::emacs_core::eval::Context, callback: &str) {
@@ -118,12 +163,12 @@ fn install_noarg_hook_probe(
 }
 
 fn create_unique_test_buffer(eval: &mut crate::emacs_core::eval::Context, name: &str) -> Value {
-    let unique_name = eval.buffers.generate_new_buffer_name(name);
-    Value::make_buffer(eval.buffers.create_buffer(&unique_name))
+    let unique_name = eval.edit.buffers.generate_new_buffer_name(name);
+    Value::make_buffer(eval.edit.buffers.create_buffer(&unique_name))
 }
 
 fn install_test_treesit_json_language(eval: &mut Context) {
-    eval.treesit.cache_loaded_language(
+    unsafe { eval.treesit_mut() }.cache_loaded_language(
         neovm_value::intern::intern("json"),
         runtime_treesit::LoadedLanguage {
             language: Language::new(tree_sitter_json::LANGUAGE),
@@ -256,14 +301,19 @@ fn pure_dispatch_typed_max_min_preserve_selected_operand_type() {
 #[test]
 fn pure_dispatch_typed_numeric_primitives_accept_markers() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
-    eval.buffers
+    let mut eval = crate::test_utils::new_context();
+    eval.edit
+        .buffers
         .current_buffer_mut()
         .expect("current buffer")
         .insert("abcdef");
-    let buffer_id = eval.buffers.current_buffer_id().expect("current buffer");
+    let buffer_id = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
     let marker = neovm_edit::emacs_core::marker::make_registered_buffer_marker(
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         buffer_id,
         LispCharPos1::new(4),
         false,
@@ -275,7 +325,7 @@ fn pure_dispatch_typed_numeric_primitives_accept_markers() {
     assert_eq!(max_with_marker, Value::fixnum(4));
 
     let marker = neovm_edit::emacs_core::marker::make_registered_buffer_marker(
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         buffer_id,
         LispCharPos1::new(4),
         false,
@@ -286,13 +336,13 @@ fn pure_dispatch_typed_numeric_primitives_accept_markers() {
     assert_eq!(min_with_marker, Value::fixnum(4));
 
     let left_marker = neovm_edit::emacs_core::marker::make_registered_buffer_marker(
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         buffer_id,
         LispCharPos1::new(2),
         false,
     );
     let right_marker = neovm_edit::emacs_core::marker::make_registered_buffer_marker(
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         buffer_id,
         LispCharPos1::new(5),
         false,
@@ -303,7 +353,7 @@ fn pure_dispatch_typed_numeric_primitives_accept_markers() {
     assert_eq!(lt_with_markers, Value::T);
 
     let marker = neovm_edit::emacs_core::marker::make_registered_buffer_marker(
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         buffer_id,
         LispCharPos1::new(4),
         false,
@@ -314,7 +364,7 @@ fn pure_dispatch_typed_numeric_primitives_accept_markers() {
     assert_eq!(add1_with_marker, Value::fixnum(5));
 
     let marker = neovm_edit::emacs_core::marker::make_registered_buffer_marker(
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         buffer_id,
         LispCharPos1::new(4),
         false,
@@ -328,7 +378,7 @@ fn pure_dispatch_typed_numeric_primitives_accept_markers() {
 #[test]
 fn eval_dispatch_typed_max_uses_live_marker_position_after_insertions() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = eval
         .eval_str_each(
             r#"(insert "abc")
@@ -347,7 +397,7 @@ fn eval_dispatch_typed_max_uses_live_marker_position_after_insertions() {
 #[test]
 fn eval_dispatch_typed_min_uses_live_marker_position_after_insertions() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = eval
         .eval_str_each(
             r#"(insert "abc")
@@ -639,9 +689,13 @@ fn pure_dispatch_typed_append_flattens_vector_and_string() {
 #[test]
 fn pure_dispatch_typed_append_flattens_bool_vector_logical_bits() {
     crate::test_utils::init_test_tracing();
-    let bool_vector =
-        super::chartable::builtin_bool_vector(vec![Value::NIL, Value::T, Value::NIL, Value::T])
-            .expect("bool-vector");
+    let bool_vector = neovm_text::emacs_core::chartable::builtin_bool_vector(vec![
+        Value::NIL,
+        Value::T,
+        Value::NIL,
+        Value::T,
+    ])
+    .expect("bool-vector");
 
     let result = dispatch_builtin_pure("append", vec![bool_vector, Value::NIL])
         .expect("builtin append should resolve")
@@ -656,8 +710,10 @@ fn pure_dispatch_typed_append_flattens_bool_vector_logical_bits() {
 #[test]
 fn pure_dispatch_typed_append_rejects_char_table_like_gnu_concat_to_list() {
     crate::test_utils::init_test_tracing();
-    let char_table =
-        super::chartable::make_char_table_value(Value::symbol("test-only"), Value::fixnum(65));
+    let char_table = neovm_text::emacs_core::chartable::make_char_table_value(
+        Value::symbol("test-only"),
+        Value::fixnum(65),
+    );
 
     let err = dispatch_builtin_pure("append", vec![char_table, Value::NIL])
         .expect("builtin append should resolve")
@@ -746,9 +802,13 @@ fn pure_dispatch_typed_vconcat_flattens_bytecode_slots() {
 #[test]
 fn pure_dispatch_typed_vconcat_flattens_bool_vector_logical_bits() {
     crate::test_utils::init_test_tracing();
-    let bool_vector =
-        super::chartable::builtin_bool_vector(vec![Value::NIL, Value::T, Value::NIL, Value::T])
-            .expect("bool-vector");
+    let bool_vector = neovm_text::emacs_core::chartable::builtin_bool_vector(vec![
+        Value::NIL,
+        Value::T,
+        Value::NIL,
+        Value::T,
+    ])
+    .expect("bool-vector");
 
     let result = dispatch_builtin_pure("vconcat", vec![bool_vector])
         .expect("builtin vconcat should resolve")
@@ -799,7 +859,7 @@ fn make_interpreted_closure_preserves_nil_interactive_slot_presence() {
     let env = Value::list(vec![Value::T]);
     let iform = Value::list(vec![Value::symbol("interactive")]);
 
-    let closure = super::symbols::make_interpreted_closure_from_parts(
+    let closure = crate::emacs_core::builtins::symbols::make_interpreted_closure_from_parts(
         &params,
         &body,
         &env,
@@ -816,9 +876,9 @@ fn make_interpreted_closure_preserves_nil_interactive_slot_presence() {
     );
     assert_eq!(closure.closure_interactive(), Some(Value::NIL));
 
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     assert_eq!(
-        super::symbols::builtin_interactive_form(&mut eval, vec![closure])
+        crate::emacs_core::builtins::symbols::builtin_interactive_form(&mut eval, vec![closure])
             .expect("interactive-form should see nil slot"),
         Value::list(vec![Value::symbol("interactive"), Value::NIL])
     );
@@ -835,14 +895,15 @@ fn make_interpreted_closure_matches_gnu_arglist_construction_checks() {
         Value::list(vec![Value::symbol("&rest")]),
         Value::cons(Value::symbol("a"), Value::symbol("b")),
     ] {
-        let closure =
-            super::symbols::make_interpreted_closure_from_parts(&params, &body, &env, None, None)
-                .expect("GNU accepts listp arglists without parsing formals");
+        let closure = crate::emacs_core::builtins::symbols::make_interpreted_closure_from_parts(
+            &params, &body, &env, None, None,
+        )
+        .expect("GNU accepts listp arglists without parsing formals");
         assert!(closure.is_lambda());
         assert_eq!(closure.closure_slot(0), Some(params));
     }
 
-    let err = super::symbols::make_interpreted_closure_from_parts(
+    let err = crate::emacs_core::builtins::symbols::make_interpreted_closure_from_parts(
         &Value::fixnum(1),
         &body,
         &env,
@@ -859,7 +920,7 @@ fn make_interpreted_closure_matches_gnu_arglist_construction_checks() {
 #[test]
 fn malformed_interpreted_closure_arglists_signal_invalid_function_at_call_time() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let rendered = format_eval_result(&eval.eval_str(
         r#"(list
@@ -1202,7 +1263,7 @@ fn pure_dispatch_typed_case_conversion_preserves_raw_unibyte_payloads() {
 #[test]
 fn keymapp_accepts_lisp_keymap_cons_cells() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let proper = Value::list(vec![Value::symbol("keymap")]);
     assert_eq!(builtin_keymapp(&mut eval, vec![proper]).unwrap(), Value::T);
@@ -1235,7 +1296,7 @@ fn keymapp_accepts_lisp_keymap_cons_cells() {
 #[test]
 fn keymapp_rejects_non_keymap_integer_designators() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let keymap = builtin_make_sparse_keymap(&mut eval, vec![]).unwrap();
     assert_eq!(builtin_keymapp(&mut eval, vec![keymap]).unwrap(), Value::T);
     assert_eq!(
@@ -1263,7 +1324,7 @@ fn keymapp_rejects_non_keymap_integer_designators() {
 #[test]
 fn lookup_key_follows_the_parent_of_a_composed_keymaps_member() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.eval_str(
         r#"(progn
              (setq p15-grand (make-sparse-keymap))
@@ -1306,7 +1367,7 @@ fn lookup_key_follows_the_parent_of_a_composed_keymaps_member() {
 #[test]
 fn help_describe_vector_prints_ranges_only_where_shadowing_agrees() {
     crate::test_utils::init_test_tracing();
-    use crate::emacs_core::load::create_bootstrap_evaluator_cached;
+    use crate::emacs_core::load_boot::create_bootstrap_evaluator_cached;
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap evaluator");
     let rendered = eval
         .eval_str(
@@ -1349,7 +1410,7 @@ fn help_describe_vector_prints_ranges_only_where_shadowing_agrees() {
 #[test]
 fn map_keymap_copies_char_table_range_keys_before_the_shared_cons_moves() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.eval_str(
         r#"(progn
              (setq p15-dense (make-keymap))
@@ -1380,7 +1441,7 @@ fn map_keymap_copies_char_table_range_keys_before_the_shared_cons_moves() {
 #[test]
 fn accessible_keymaps_follows_a_prefix_bound_to_a_symbol_naming_a_keymap() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.eval_str(
         r#"(progn
              (setq p15-root (make-sparse-keymap))
@@ -1413,7 +1474,7 @@ fn accessible_keymaps_follows_a_prefix_bound_to_a_symbol_naming_a_keymap() {
 #[test]
 fn accessible_keymaps_metizes_a_key_following_meta_prefix_char() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.eval_str(
         r#"(progn
              (setq p15-root (make-sparse-keymap))
@@ -1449,7 +1510,7 @@ fn accessible_keymaps_metizes_a_key_following_meta_prefix_char() {
 #[test]
 fn keymap_get_keyelt_strips_menu_item_and_string_label_wrappers() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     for (form, expected) in [
         (
             "(keymap--get-keyelt '(menu-item \"Name\" p61-cmd :enable t) nil)",
@@ -1481,7 +1542,7 @@ fn keymap_get_keyelt_strips_menu_item_and_string_label_wrappers() {
 #[test]
 fn accessible_keymaps_lists_an_autoloaded_keymap_symbol_without_loading_it() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.eval_str(
         r#"(progn
              (setq p61-root (make-sparse-keymap))
@@ -1514,7 +1575,7 @@ fn accessible_keymaps_lists_an_autoloaded_keymap_symbol_without_loading_it() {
 #[test]
 fn accessible_keymaps_reports_root_and_prefix_paths() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let root = builtin_make_sparse_keymap(&mut eval, vec![]).unwrap();
     let child = builtin_make_sparse_keymap(&mut eval, vec![]).unwrap();
     builtin_define_key(
@@ -1558,7 +1619,7 @@ fn accessible_keymaps_reports_root_and_prefix_paths() {
 #[test]
 fn accessible_keymaps_prefix_type_errors_match_oracle_shape() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let map = builtin_make_sparse_keymap(&mut eval, vec![]).unwrap();
 
     let sequence_err = builtin_accessible_keymaps(&mut eval, vec![map, Value::T]).unwrap_err();
@@ -1773,13 +1834,14 @@ fn key_description_accepts_raw_unibyte_string_sequences() {
 #[test]
 fn eval_get_file_buffer_matches_visited_paths() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
-    let id = eval.buffers.create_buffer("gfb");
+    let mut eval = crate::test_utils::new_context();
+    let id = eval.edit.buffers.create_buffer("gfb");
 
     let path = std::env::temp_dir().join(format!("neovm-gfb-{}-{}", std::process::id(), "eval"));
     std::fs::write(&path, b"gfb").expect("write test file");
     let file = path.to_string_lossy().to_string();
-    eval.buffers
+    eval.edit
+        .buffers
         .get_mut(id)
         .unwrap()
         .set_file_name_value(Value::string(file.clone()));
@@ -1796,7 +1858,8 @@ fn eval_get_file_buffer_matches_visited_paths() {
 
     let default_dir = format!("{}/", path.parent().unwrap().to_string_lossy());
     let basename = path.file_name().unwrap().to_string_lossy().to_string();
-    eval.buffers
+    eval.edit
+        .buffers
         .current_buffer_mut()
         .unwrap()
         .set_buffer_local("default-directory", Value::string(default_dir));
@@ -1809,7 +1872,7 @@ fn eval_get_file_buffer_matches_visited_paths() {
 #[test]
 fn eval_get_file_buffer_type_and_missing_paths() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let missing = builtin_get_file_buffer(
         &mut eval,
         vec![Value::string("/tmp/neovm-no-such-file-for-gfb")],
@@ -1822,7 +1885,7 @@ fn eval_get_file_buffer_type_and_missing_paths() {
 #[test]
 fn eval_builtin_rejects_too_many_args() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let err = builtin_eval(
         &mut eval,
         vec![Value::fixnum(1), Value::NIL, Value::symbol("ignored")],
@@ -1840,7 +1903,7 @@ fn eval_builtin_rejects_too_many_args() {
 #[test]
 fn eval_buffer_live_p_tracks_killed_buffers() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let buf = builtin_get_buffer_create(&mut eval, vec![Value::string("*blp*")]).unwrap();
     let live = builtin_buffer_live_p(&mut eval.edit.buffers, &vec![buf]).unwrap();
     assert_eq!(live, Value::T);
@@ -1853,7 +1916,7 @@ fn eval_buffer_live_p_tracks_killed_buffers() {
 #[test]
 fn kill_buffer_optional_arg_and_error_semantics() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let a = builtin_get_buffer_create(&mut eval, vec![Value::string("*kb-opt-a*")]).unwrap();
     let b = builtin_get_buffer_create(&mut eval, vec![Value::string("*kb-opt-b*")]).unwrap();
     let _ = builtin_set_buffer(&mut eval, vec![a]).unwrap();
@@ -1913,9 +1976,15 @@ fn kill_buffer_optional_arg_and_error_semantics() {
 #[test]
 fn kill_buffer_of_an_unshown_buffer_does_not_create_scratch() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
-    let scratch = eval.buffers.current_buffer().expect("bootstrap scratch").id;
-    eval.buffers
+    let mut eval = crate::test_utils::new_context();
+    let scratch = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("bootstrap scratch")
+        .id;
+    eval.edit
+        .buffers
         .rename_buffer(scratch, Value::string("renamed-scratch"))
         .expect("rename *scratch*");
     let temp = create_unique_test_buffer(&mut eval, " *kb-unshown*");
@@ -1930,7 +1999,7 @@ fn kill_buffer_of_an_unshown_buffer_does_not_create_scratch() {
         Value::T
     );
     assert!(
-        eval.buffers.find_buffer_by_name("*scratch*").is_none(),
+        eval.edit.buffers.find_buffer_by_name("*scratch*").is_none(),
         "kill-buffer of an unshown buffer must not create *scratch*"
     );
 }
@@ -1938,7 +2007,7 @@ fn kill_buffer_of_an_unshown_buffer_does_not_create_scratch() {
 #[test]
 fn set_buffer_rejects_deleted_buffer_object() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let dead = create_unique_test_buffer(&mut eval, "*sb-dead*");
     let _ = builtin_kill_buffer(&mut eval, vec![dead]).unwrap();
 
@@ -1956,18 +2025,19 @@ fn set_buffer_rejects_deleted_buffer_object() {
 #[test]
 fn set_buffer_does_not_record_buffer_list_order_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let scratch = eval
+        .edit
         .buffers
         .find_buffer_by_name("*scratch*")
         .expect("scratch");
-    let first = eval.buffers.create_buffer("*sb-order-a*");
-    let second = eval.buffers.create_buffer("*sb-order-b*");
+    let first = eval.edit.buffers.create_buffer("*sb-order-a*");
+    let second = eval.edit.buffers.create_buffer("*sb-order-b*");
 
     let result = builtin_set_buffer(&mut eval, vec![Value::make_buffer(second)])
         .expect("set-buffer should select live buffer");
     assert_eq!(result, Value::make_buffer(second));
-    assert_eq!(eval.buffers.current_buffer_id(), Some(second));
+    assert_eq!(eval.edit.buffers.current_buffer_id(), Some(second));
     assert_eq!(
         builtin_buffer_list(&mut eval, vec![]).expect("buffer-list"),
         Value::list(vec![
@@ -1981,7 +2051,7 @@ fn set_buffer_does_not_record_buffer_list_order_like_gnu() {
 #[test]
 fn eval_buffer_live_p_non_buffer_objects_return_nil() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let by_name =
         builtin_buffer_live_p(&mut eval.edit.buffers, &vec![Value::string("*scratch*")]).unwrap();
     assert_eq!(by_name, Value::NIL);
@@ -1992,7 +2062,7 @@ fn eval_buffer_live_p_non_buffer_objects_return_nil() {
 #[test]
 fn get_buffer_create_accepts_optional_second_arg() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let first = builtin_get_buffer_create(
         &mut eval,
         vec![Value::string("*gbc-opt*"), Value::fixnum(7)],
@@ -2022,7 +2092,7 @@ fn get_buffer_create_accepts_optional_second_arg() {
 #[test]
 fn get_buffer_create_accepts_live_and_killed_buffer_designators_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let live = builtin_get_buffer_create(&mut eval, vec![Value::string("*gbc-live*")]).unwrap();
     let live_again = builtin_get_buffer_create(&mut eval, vec![live]).unwrap();
@@ -2037,7 +2107,7 @@ fn get_buffer_create_accepts_live_and_killed_buffer_designators_like_gnu() {
 #[test]
 fn buffer_creation_helpers_reject_missing_required_name_arg() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let err = builtin_get_buffer_create(&mut eval, vec![])
         .expect_err("get-buffer-create should reject missing required arg");
@@ -2069,7 +2139,7 @@ fn buffer_creation_helpers_reject_missing_required_name_arg() {
 #[test]
 fn get_buffer_rejects_non_string_non_buffer_designators() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     for bad in [Value::fixnum(1), Value::NIL, Value::symbol("foo")] {
         let err = builtin_get_buffer(&mut eval.edit.buffers, vec![bad])
             .expect_err("get-buffer should reject non-string/non-buffer args");
@@ -2093,7 +2163,7 @@ fn get_buffer_rejects_non_string_non_buffer_designators() {
 #[test]
 fn generate_new_buffer_name_optional_arg_matches_expected_types() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let _ = builtin_get_buffer_create(&mut eval, vec![Value::string("*gnbn-opt*")]).unwrap();
     let _ = builtin_get_buffer_create(&mut eval, vec![Value::string("*gnbn-opt*<2>")]).unwrap();
 
@@ -2151,7 +2221,7 @@ fn generate_new_buffer_name_optional_arg_matches_expected_types() {
 #[test]
 fn buffer_size_and_modified_p_return_defaults_for_deleted_buffer_objects() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let dead_for_size = create_unique_test_buffer(&mut eval, "*bs-dead*");
     let _ = builtin_kill_buffer(&mut eval, vec![dead_for_size]).unwrap();
@@ -2168,7 +2238,7 @@ fn buffer_size_and_modified_p_return_defaults_for_deleted_buffer_objects() {
 #[test]
 fn buffer_size_counts_full_buffer_characters_ignoring_narrowing() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     builtin_insert(&mut eval, vec![Value::string("aébc")]).unwrap();
     builtin_narrow_to_region(&mut eval, vec![Value::fixnum(2), Value::fixnum(3)]).unwrap();
@@ -2182,14 +2252,15 @@ fn buffer_size_counts_full_buffer_characters_ignoring_narrowing() {
 #[test]
 fn buffer_base_buffer_and_last_name_semantics() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
-    let base_id = eval.buffers.current_buffer().unwrap().id;
+    let mut eval = crate::test_utils::new_context();
+    let base_id = eval.edit.buffers.current_buffer().unwrap().id;
     // Make it indirect the way `make-indirect-buffer` does.  Writing
     // `base_buffer` behind the manager's back leaves its count of live
     // indirect buffers -- which `kill-buffer` trusts when it decides whether
     // to search for indirect children at all -- describing a session that no
     // longer exists.
     let indirect_id = eval
+        .edit
         .buffers
         .create_indirect_buffer(base_id, "*indirect*", false)
         .expect("indirect buffer");
@@ -2291,7 +2362,7 @@ fn buffer_base_buffer_and_last_name_semantics() {
 #[test]
 fn make_indirect_buffer_shares_text_and_flattens_base_buffer_chain() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let base = create_unique_test_buffer(&mut eval, "*mib-base*");
     if !base.is_buffer() {
         panic!("expected buffer object");
@@ -2314,18 +2385,20 @@ fn make_indirect_buffer_shares_text_and_flattens_base_buffer_chain() {
         base
     );
     assert!(
-        eval.buffers
+        eval.edit
+            .buffers
             .get(base_id)
             .unwrap()
-            .shares_text_storage_with(eval.buffers.get(indirect_id).unwrap())
+            .shares_text_storage_with(eval.edit.buffers.get(indirect_id).unwrap())
     );
 
     let _ = eval
+        .edit
         .buffers
         .goto_buffer_emacs_byte_pos(base_id, neovm_edit::buffer::EmacsBytePos::new(0));
-    let _ = eval.buffers.insert_into_buffer(base_id, "zz");
+    let _ = eval.edit.buffers.insert_into_buffer(base_id, "zz");
     assert_eq!(
-        eval.buffers.get(indirect_id).unwrap().buffer_string(),
+        eval.edit.buffers.get(indirect_id).unwrap().buffer_string(),
         "zzabcd"
     );
 
@@ -2341,7 +2414,7 @@ fn make_indirect_buffer_shares_text_and_flattens_base_buffer_chain() {
 #[test]
 fn make_indirect_buffer_rejects_duplicate_and_empty_names() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let base = create_unique_test_buffer(&mut eval, "*mib-errors-base*");
 
     let duplicate = builtin_make_indirect_buffer(&mut eval, vec![base, Value::string("*scratch*")])
@@ -2362,7 +2435,7 @@ fn make_indirect_buffer_rejects_duplicate_and_empty_names() {
 #[test]
 fn make_indirect_buffer_clone_and_hook_semantics_follow_buffer_c() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let base = create_unique_test_buffer(&mut eval, "*mib-clone-base*");
     if !base.is_buffer() {
         panic!("expected buffer object");
@@ -2370,10 +2443,13 @@ fn make_indirect_buffer_clone_and_hook_semantics_follow_buffer_c() {
     let base_id = base.as_buffer_id().unwrap();
 
     let _ = builtin_set_buffer(&mut eval, vec![base]).unwrap();
-    let _ =
-        eval.buffers
-            .set_buffer_local_property(base_id, "major-mode", Value::symbol("neo-mode"));
+    let _ = eval.edit.buffers.set_buffer_local_property(
+        base_id,
+        "major-mode",
+        Value::symbol("neo-mode"),
+    );
     let _ = eval
+        .edit
         .buffers
         .set_buffer_local_property(base_id, "mode-name", Value::string("Neo"));
 
@@ -2419,7 +2495,8 @@ fn make_indirect_buffer_clone_and_hook_semantics_follow_buffer_c() {
     let cloned_id = cloned.as_buffer_id().unwrap();
 
     assert_eq!(
-        eval.buffers
+        eval.edit
+            .buffers
             .get(cloned_id)
             .and_then(|buf| buf.get_buffer_local("major-mode")),
         Some(Value::symbol("neo-mode"))
@@ -2430,7 +2507,7 @@ fn make_indirect_buffer_clone_and_hook_semantics_follow_buffer_c() {
         "GNU clone_per_buffer_values copies base last_name into cloned indirect buffers"
     );
     assert_eq!(
-        eval.buffers.current_buffer_id(),
+        eval.edit.buffers.current_buffer_id(),
         Some(base_id),
         "make-indirect-buffer should restore the previous current buffer"
     );
@@ -2478,7 +2555,7 @@ fn make_indirect_buffer_clone_and_hook_semantics_follow_buffer_c() {
 #[test]
 fn make_indirect_buffer_clone_copies_lisp_local_var_cells() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let base = create_unique_test_buffer(&mut eval, "*mib-local-clone-base*");
     let base_id = base.as_buffer_id().expect("expected buffer object");
     let sym = intern("mib-cloned-local");
@@ -2499,14 +2576,16 @@ fn make_indirect_buffer_clone_copies_lisp_local_var_cells() {
         .expect("update cloned buffer-local binding");
 
     assert_eq!(
-        eval.buffers
+        eval.edit
+            .buffers
             .get(base_id)
             .and_then(|buf| buf.buffer_local_value("mib-cloned-local")),
         Some(Value::fixnum(1)),
         "GNU clone_per_buffer_values allocates fresh local_var_alist cells for the indirect buffer"
     );
     assert_eq!(
-        eval.buffers
+        eval.edit
+            .buffers
             .get(cloned_id)
             .and_then(|buf| buf.buffer_local_value("mib-cloned-local")),
         Some(Value::fixnum(2))
@@ -2516,7 +2595,7 @@ fn make_indirect_buffer_clone_copies_lisp_local_var_cells() {
 #[test]
 fn make_indirect_buffer_clone_nil_resets_buffer_state() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let base = create_unique_test_buffer(&mut eval, "*mib-clone-nil-base*");
     if !base.is_buffer() {
         panic!("expected buffer object");
@@ -2524,10 +2603,13 @@ fn make_indirect_buffer_clone_nil_resets_buffer_state() {
     let base_id = base.as_buffer_id().unwrap();
 
     let _ = builtin_set_buffer(&mut eval, vec![base]).unwrap();
-    let _ =
-        eval.buffers
-            .set_buffer_local_property(base_id, "major-mode", Value::symbol("neo-mode"));
+    let _ = eval.edit.buffers.set_buffer_local_property(
+        base_id,
+        "major-mode",
+        Value::symbol("neo-mode"),
+    );
     let _ = eval
+        .edit
         .buffers
         .set_buffer_local_property(base_id, "mode-name", Value::string("Neo"));
 
@@ -2544,7 +2626,7 @@ fn make_indirect_buffer_clone_nil_resets_buffer_state() {
         Value::string("*mib-default*"),
         "GNU non-clone make-indirect-buffer keeps the new buffer name as last_name"
     );
-    let indirect_buf = eval.buffers.get(indirect_id).expect("indirect buffer");
+    let indirect_buf = eval.edit.buffers.get(indirect_id).expect("indirect buffer");
     assert_eq!(
         indirect_buf.get_buffer_local("major-mode"),
         Some(Value::symbol("fundamental-mode"))
@@ -2560,7 +2642,7 @@ fn make_indirect_buffer_clone_nil_resets_buffer_state() {
 #[test]
 fn buffer_modified_tick_semantics() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     assert_eq!(
         builtin_buffer_modified_tick(&mut eval.edit.buffers, vec![]).unwrap(),
@@ -2643,7 +2725,7 @@ fn buffer_modified_tick_semantics() {
 #[test]
 fn subst_char_in_region_replaces_chars_in_accessible_region() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     builtin_insert(&mut eval, vec![Value::string("hello world hello")]).unwrap();
 
     builtin_subst_char_in_region(
@@ -2670,16 +2752,21 @@ fn subst_char_in_region_replaces_chars_in_accessible_region() {
 /// path applies instead of a full rebuild (Phase 3 same-len hook).
 #[test]
 fn subst_char_in_region_records_unchanged_region_dirty_span() {
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     builtin_insert(&mut eval, vec![Value::string("hello world hello")]).unwrap();
 
     // Ack the initial insert's dirty span so we measure only the substitution.
-    eval.buffers
+    eval.edit
+        .buffers
         .current_buffer()
         .unwrap()
         .reset_unchanged_region();
     assert_eq!(
-        eval.buffers.current_buffer().unwrap().changed_char_range(),
+        eval.edit
+            .buffers
+            .current_buffer()
+            .unwrap()
+            .changed_char_range(),
         None
     );
 
@@ -2694,7 +2781,12 @@ fn subst_char_in_region_records_unchanged_region_dirty_span() {
     )
     .expect("subst-char-in-region should succeed");
 
-    let dirty = eval.buffers.current_buffer().unwrap().changed_char_range();
+    let dirty = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .unwrap()
+        .changed_char_range();
     assert!(
         dirty.is_some(),
         "same-len subst records a dirty range (got {dirty:?})"
@@ -2706,7 +2798,7 @@ fn subst_char_in_region_records_unchanged_region_dirty_span() {
 #[test]
 fn subst_char_in_region_noundo_marks_buffer_modified_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     builtin_insert(&mut eval, vec![Value::string("a\nb\n")]).unwrap();
     builtin_set_buffer_modified_p(&mut eval, vec![Value::NIL]).unwrap();
 
@@ -2737,7 +2829,7 @@ fn subst_char_in_region_noundo_marks_buffer_modified_like_gnu() {
 #[test]
 fn subst_char_in_region_replaces_trailing_newline_with_marker_end() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let result = eval
         .eval_str_each(
@@ -2757,7 +2849,7 @@ fn subst_char_in_region_replaces_trailing_newline_with_marker_end() {
 #[test]
 fn subst_char_in_region_uses_live_marker_end_after_insertions() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let result = eval
         .eval_str_each(
@@ -2779,7 +2871,7 @@ fn subst_char_in_region_uses_live_marker_end_after_insertions() {
 #[test]
 fn subst_char_in_region_replaces_raw_byte_chars_in_multibyte_buffer() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     builtin_insert_byte(&mut eval, vec![Value::fixnum(200), Value::fixnum(2)]).unwrap();
     builtin_subst_char_in_region(
@@ -2803,7 +2895,7 @@ fn subst_char_in_region_replaces_raw_byte_chars_in_multibyte_buffer() {
 #[test]
 fn subst_char_in_region_replaces_nonunicode_emacs_chars() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     builtin_insert(
         &mut eval,
@@ -2828,7 +2920,7 @@ fn subst_char_in_region_replaces_nonunicode_emacs_chars() {
 #[test]
 fn goto_char_uses_live_marker_position_after_insertions() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let result = eval
         .eval_str_each(
@@ -2850,7 +2942,7 @@ fn goto_char_uses_live_marker_position_after_insertions() {
 #[test]
 fn buffer_substring_accepts_marker_positions() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let result = eval
         .eval_str(
@@ -2868,7 +2960,7 @@ fn buffer_substring_accepts_marker_positions() {
 #[test]
 fn char_queries_use_live_marker_positions_after_insertions() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let result = eval
         .eval_str_each(
@@ -2891,7 +2983,7 @@ fn char_queries_use_live_marker_positions_after_insertions() {
 #[test]
 fn search_forward_uses_live_marker_bound_after_insertions() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let result = eval
         .eval_str_each(
@@ -2915,7 +3007,7 @@ fn search_forward_uses_live_marker_bound_after_insertions() {
 #[test]
 fn subst_char_in_region_rejects_different_utf8_lengths() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     builtin_insert(&mut eval, vec![Value::string("aa")]).unwrap();
 
     let err = builtin_subst_char_in_region(
@@ -2946,13 +3038,15 @@ fn subst_char_in_region_rejects_different_utf8_lengths() {
 #[test]
 fn insert_honors_inhibit_read_only_override() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
-    eval.obarray.set_symbol_value("buffer-read-only", Value::T);
-    eval.obarray.set_symbol_value("inhibit-read-only", Value::T);
+    let mut eval = crate::test_utils::new_context();
+    eval.obarray_mut()
+        .set_symbol_value("buffer-read-only", Value::T);
+    eval.obarray_mut()
+        .set_symbol_value("inhibit-read-only", Value::T);
 
     builtin_insert(&mut eval, vec![Value::string("ok")]).expect("insert should bypass read-only");
 
-    let buf = eval.buffers.current_buffer().expect("current buffer");
+    let buf = eval.edit.buffers.current_buffer().expect("current buffer");
     assert_eq!(buf.buffer_string(), "ok");
     assert_eq!(buf.point_lisp_char_pos().as_i64(), 3);
 }
@@ -2960,7 +3054,7 @@ fn insert_honors_inhibit_read_only_override() {
 #[test]
 fn insert_inherit_variants_reuse_insert_semantics() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     assert_eq!(
         builtin_insert_and_inherit(
             &mut eval,
@@ -3006,7 +3100,7 @@ fn insert_inherit_variants_reuse_insert_semantics() {
 #[test]
 fn insert_copies_string_text_properties_into_buffer() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let text = Value::string("xy");
     assert!(text.is_string(), "expected string value");
 
@@ -3022,7 +3116,7 @@ fn insert_copies_string_text_properties_into_buffer() {
 
     assert_eq!(builtin_insert(&mut eval, vec![text]).unwrap(), Value::NIL);
 
-    let buf = eval.buffers.current_buffer().expect("current buffer");
+    let buf = eval.edit.buffers.current_buffer().expect("current buffer");
     assert_eq!(buf.buffer_string(), "xy");
     assert_eq!(
         buf.text_props_get_property_at_emacs_byte_pos(
@@ -3043,7 +3137,7 @@ fn insert_copies_string_text_properties_into_buffer() {
 #[test]
 fn insert_before_markers_copies_string_text_properties_into_buffer() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let text = Value::string("xy");
     assert!(text.is_string(), "expected string value");
 
@@ -3069,7 +3163,7 @@ fn insert_before_markers_copies_string_text_properties_into_buffer() {
         Value::NIL
     );
 
-    let buf = eval.buffers.current_buffer().expect("current buffer");
+    let buf = eval.edit.buffers.current_buffer().expect("current buffer");
     assert_eq!(buf.buffer_string(), "xy");
     assert_eq!(
         buf.text_props_get_property_at_emacs_byte_pos(
@@ -3090,9 +3184,13 @@ fn insert_before_markers_copies_string_text_properties_into_buffer() {
 #[test]
 fn insert_and_inherit_copies_previous_text_properties() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
-        let buf = eval.buffers.current_buffer_mut().expect("current buffer");
+        let buf = eval
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
         buf.insert("ab");
         buf.text_props_put_property_in_emacs_byte_range(
             neovm_edit::buffer::EmacsByteRange::from_usize(1, 2),
@@ -3106,7 +3204,7 @@ fn insert_and_inherit_copies_previous_text_properties() {
         Value::NIL
     );
 
-    let buf = eval.buffers.current_buffer().expect("current buffer");
+    let buf = eval.edit.buffers.current_buffer().expect("current buffer");
     assert_eq!(buf.buffer_string(), "abX");
     assert_eq!(
         buf.text_props_get_property_at_emacs_byte_pos(
@@ -3120,9 +3218,13 @@ fn insert_and_inherit_copies_previous_text_properties() {
 #[test]
 fn plain_insert_does_not_inherit_spanning_text_properties() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
-        let buf = eval.buffers.current_buffer_mut().expect("current buffer");
+        let buf = eval
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
         buf.insert("ab");
         buf.text_props_put_property_in_emacs_byte_range(
             neovm_edit::buffer::EmacsByteRange::from_usize(0, 2),
@@ -3137,7 +3239,7 @@ fn plain_insert_does_not_inherit_spanning_text_properties() {
         Value::NIL
     );
 
-    let buf = eval.buffers.current_buffer().expect("current buffer");
+    let buf = eval.edit.buffers.current_buffer().expect("current buffer");
     assert_eq!(buf.buffer_string(), "aXb");
     assert_eq!(
         buf.text_props_get_property_at_emacs_byte_pos(
@@ -3165,9 +3267,13 @@ fn plain_insert_does_not_inherit_spanning_text_properties() {
 #[test]
 fn insert_inherits_left_multibyte_text_property_at_char_boundary() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
-        let buf = eval.buffers.current_buffer_mut().expect("current buffer");
+        let buf = eval
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
         buf.insert("é");
         buf.text_props_put_property_in_emacs_byte_range(
             neovm_edit::buffer::EmacsByteRange::from_usize(0, 2),
@@ -3181,7 +3287,7 @@ fn insert_inherits_left_multibyte_text_property_at_char_boundary() {
         Value::NIL
     );
 
-    let buf = eval.buffers.current_buffer().expect("current buffer");
+    let buf = eval.edit.buffers.current_buffer().expect("current buffer");
     assert_eq!(buf.buffer_string(), "éX");
     assert_eq!(
         buf.text_props_get_property_at_emacs_byte_pos(
@@ -3195,9 +3301,13 @@ fn insert_inherits_left_multibyte_text_property_at_char_boundary() {
 #[test]
 fn insert_char_nil_count_defaults_to_one_and_can_inherit_text_properties() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
-        let buf = eval.buffers.current_buffer_mut().expect("current buffer");
+        let buf = eval
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
         buf.insert("ab");
         buf.text_props_put_property_in_emacs_byte_range(
             neovm_edit::buffer::EmacsByteRange::from_usize(1, 2),
@@ -3215,7 +3325,7 @@ fn insert_char_nil_count_defaults_to_one_and_can_inherit_text_properties() {
         Value::NIL
     );
 
-    let buf = eval.buffers.current_buffer().expect("current buffer");
+    let buf = eval.edit.buffers.current_buffer().expect("current buffer");
     assert_eq!(buf.buffer_string(), "abX");
     assert_eq!(
         buf.text_props_get_property_at_emacs_byte_pos(
@@ -3229,7 +3339,7 @@ fn insert_char_nil_count_defaults_to_one_and_can_inherit_text_properties() {
 #[test]
 fn insert_and_inherit_copies_string_properties_then_inherits_overlapping_names() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     builtin_insert(&mut eval, vec![Value::string("a")]).unwrap();
     neovm_edit::emacs_core::textprop::builtin_put_text_property(
         &mut eval,
@@ -3263,7 +3373,7 @@ fn insert_and_inherit_copies_string_properties_then_inherits_overlapping_names()
 
     builtin_insert_and_inherit(&mut eval, vec![text]).unwrap();
 
-    let buf = eval.buffers.current_buffer().expect("current buffer");
+    let buf = eval.edit.buffers.current_buffer().expect("current buffer");
     assert_eq!(buf.buffer_string(), "aX");
     assert_eq!(
         buf.text_props_get_property_at_emacs_byte_pos(
@@ -3284,9 +3394,13 @@ fn insert_and_inherit_copies_string_properties_then_inherits_overlapping_names()
 #[test]
 fn delete_all_overlays_clears_current_buffer() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
-        let buf = eval.buffers.current_buffer_mut().expect("current buffer");
+        let buf = eval
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
         buf.insert("hello");
     }
     builtin_make_overlay(
@@ -3300,7 +3414,7 @@ fn delete_all_overlays_clears_current_buffer() {
     )
     .expect("second overlay should be created");
 
-    let buf = eval.buffers.current_buffer().expect("current buffer");
+    let buf = eval.edit.buffers.current_buffer().expect("current buffer");
     assert_eq!(buf.overlays.len(), 2);
 
     assert_eq!(
@@ -3308,20 +3422,20 @@ fn delete_all_overlays_clears_current_buffer() {
         Value::NIL
     );
 
-    let buf = eval.buffers.current_buffer().expect("current buffer");
+    let buf = eval.edit.buffers.current_buffer().expect("current buffer");
     assert_eq!(buf.overlays.len(), 0);
 }
 
 #[test]
 fn insert_buffer_substring_inserts_source_region() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
-    let source_id = eval.buffers.create_buffer("*ibs-source*");
-    eval.buffers.set_current(source_id);
+    let mut eval = crate::test_utils::new_context();
+    let source_id = eval.edit.buffers.create_buffer("*ibs-source*");
+    eval.edit.buffers.set_current(source_id);
     builtin_insert(&mut eval, vec![Value::string("abcdef")]).unwrap();
 
-    let dest_id = eval.buffers.create_buffer("*ibs-dest*");
-    eval.buffers.set_current(dest_id);
+    let dest_id = eval.edit.buffers.create_buffer("*ibs-dest*");
+    eval.edit.buffers.set_current(dest_id);
     builtin_insert(&mut eval, vec![Value::string("start:")]).unwrap();
 
     assert_eq!(
@@ -3337,7 +3451,8 @@ fn insert_buffer_substring_inserts_source_region() {
         Value::NIL
     );
     assert_eq!(
-        eval.buffers
+        eval.edit
+            .buffers
             .get(dest_id)
             .expect("destination buffer should exist")
             .buffer_string(),
@@ -3374,23 +3489,25 @@ fn insert_buffer_substring_inserts_source_region() {
 #[test]
 fn insert_buffer_substring_defaults_to_source_accessible_region() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
-    let source_id = eval.buffers.create_buffer("*ibs-source-defaults*");
-    eval.buffers.set_current(source_id);
+    let mut eval = crate::test_utils::new_context();
+    let source_id = eval.edit.buffers.create_buffer("*ibs-source-defaults*");
+    eval.edit.buffers.set_current(source_id);
     builtin_insert(&mut eval, vec![Value::string("abcdef")]).unwrap();
     let _ = eval
+        .edit
         .buffers
         .narrow_buffer_to_emacs_byte_range(source_id, EmacsByteRange::from_usize(1, 4));
 
-    let dest_id = eval.buffers.create_buffer("*ibs-dest-defaults*");
-    eval.buffers.set_current(dest_id);
+    let dest_id = eval.edit.buffers.create_buffer("*ibs-dest-defaults*");
+    eval.edit.buffers.set_current(dest_id);
 
     assert_eq!(
         builtin_insert_buffer_substring(&mut eval, vec![Value::make_buffer(source_id)]).unwrap(),
         Value::NIL
     );
     assert_eq!(
-        eval.buffers
+        eval.edit
+            .buffers
             .get(dest_id)
             .expect("destination buffer should exist")
             .buffer_string(),
@@ -3401,11 +3518,12 @@ fn insert_buffer_substring_defaults_to_source_accessible_region() {
 #[test]
 fn insert_buffer_substring_signals_when_bounds_escape_source_narrowing() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
-    let source_id = eval.buffers.create_buffer("*ibs-source-range*");
-    eval.buffers.set_current(source_id);
+    let mut eval = crate::test_utils::new_context();
+    let source_id = eval.edit.buffers.create_buffer("*ibs-source-range*");
+    eval.edit.buffers.set_current(source_id);
     builtin_insert(&mut eval, vec![Value::string("abcdef")]).unwrap();
     let _ = eval
+        .edit
         .buffers
         .narrow_buffer_to_emacs_byte_range(source_id, EmacsByteRange::from_usize(1, 4));
 
@@ -3426,7 +3544,7 @@ fn insert_buffer_substring_signals_when_bounds_escape_source_narrowing() {
 #[test]
 fn insert_buffer_substring_rejects_deleted_buffer_object() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let dead = create_unique_test_buffer(&mut eval, "*ibs-dead*");
     let _ = builtin_kill_buffer(&mut eval, vec![dead]).unwrap();
 
@@ -3444,9 +3562,9 @@ fn insert_buffer_substring_rejects_deleted_buffer_object() {
 #[test]
 fn kill_all_local_variables_clears_buffer_locals() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
-        let buf = eval.buffers.current_buffer_mut().unwrap();
+        let buf = eval.edit.buffers.current_buffer_mut().unwrap();
         buf.set_buffer_local("tab-width", Value::fixnum(8));
         buf.set_buffer_local("fill-column", Value::fixnum(80));
         buf.set_buffer_local("major-mode", Value::symbol("neo-mode"));
@@ -3454,6 +3572,7 @@ fn kill_all_local_variables_clears_buffer_locals() {
         buf.set_buffer_local("buffer-undo-list", Value::T);
     }
     let _ = eval
+        .edit
         .buffers
         .set_current_local_map(crate::emacs_core::keymap::make_sparse_list_keymap());
 
@@ -3462,7 +3581,7 @@ fn kill_all_local_variables_clears_buffer_locals() {
         Value::NIL
     );
 
-    let buf = eval.buffers.current_buffer().unwrap();
+    let buf = eval.edit.buffers.current_buffer().unwrap();
     assert!(buf.get_buffer_local("tab-width").is_none());
     assert!(buf.get_buffer_local("fill-column").is_none());
     // buffer-read-only is a BUFFER_OBJFWD-style slot now: it always
@@ -3477,17 +3596,18 @@ fn kill_all_local_variables_clears_buffer_locals() {
         Some(Value::string("Fundamental"))
     );
     assert_eq!(buf.get_buffer_local("buffer-undo-list"), Some(Value::T));
-    assert!(eval.buffers.current_local_map().is_nil());
+    assert!(eval.edit.buffers.current_local_map().is_nil());
 }
 
 #[test]
 fn kill_all_local_variables_crosses_the_global_mode_line_menu_boundary_while_offscreen() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
-    let visible = eval.buffers.create_buffer("kill-locals-visible");
-    eval.frames.create_frame("F1", 800, 600, visible);
-    let offscreen = eval.buffers.create_buffer("kill-locals-offscreen");
-    eval.buffers.set_current(offscreen);
+    let mut eval = crate::test_utils::new_context();
+    let visible = eval.edit.buffers.create_buffer("kill-locals-visible");
+    eval.frame_manager_mut()
+        .create_frame("F1", 800, 600, visible);
+    let offscreen = eval.edit.buffers.create_buffer("kill-locals-offscreen");
+    eval.edit.buffers.set_current(offscreen);
 
     let initial = eval.menu_bar_rebuild_generation();
     builtin_kill_all_local_variables(&mut eval, vec![])
@@ -3539,21 +3659,21 @@ fn ntake_destructively_truncates_lists() {
 #[test]
 fn kill_all_local_variables_preserves_partial_permanent_local_hooks() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
-    let buf_id = eval.buffers.create_buffer("*kill-all-local-hook*");
-    eval.buffers.set_current(buf_id);
-    eval.obarray
+    let mut eval = crate::test_utils::new_context();
+    let buf_id = eval.edit.buffers.create_buffer("*kill-all-local-hook*");
+    eval.edit.buffers.set_current(buf_id);
+    eval.obarray_mut()
         .put_property(
             "compat-mixed-hook",
             "permanent-local",
             Value::symbol("permanent-local-hook"),
         )
         .unwrap();
-    eval.obarray
+    eval.obarray_mut()
         .put_property("compat--keep-hook", "permanent-local-hook", Value::T)
         .unwrap();
     {
-        let buf = eval.buffers.current_buffer_mut().unwrap();
+        let buf = eval.edit.buffers.current_buffer_mut().unwrap();
         buf.set_buffer_local(
             "compat-mixed-hook",
             Value::list(vec![
@@ -3569,7 +3689,7 @@ fn kill_all_local_variables_preserves_partial_permanent_local_hooks() {
         Value::NIL
     );
 
-    let buf = eval.buffers.current_buffer().unwrap();
+    let buf = eval.edit.buffers.current_buffer().unwrap();
     let hook = buf
         .get_buffer_local("compat-mixed-hook")
         .expect("partial permanent hook should remain local");
@@ -3783,7 +3903,7 @@ fn kill_all_local_variables_drops_ordinary_locals_under_a_head_permanent_local()
 
     let mut failures = Vec::new();
     for (label, source, expected) in cases {
-        let mut eval = crate::emacs_core::eval::Context::new();
+        let mut eval = crate::test_utils::new_context();
         let actual = format_eval_result(&eval.eval_str(source));
         if actual != *expected {
             failures.push(format!("  {label}: GNU {expected}, neomacs {actual}"));
@@ -3799,13 +3919,13 @@ fn kill_all_local_variables_drops_ordinary_locals_under_a_head_permanent_local()
 #[test]
 fn replace_buffer_contents_and_set_buffer_multibyte_runtime_semantics() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
-    let source_id = eval.buffers.create_buffer("*rbc-source*");
-    eval.buffers.set_current(source_id);
+    let mut eval = crate::test_utils::new_context();
+    let source_id = eval.edit.buffers.create_buffer("*rbc-source*");
+    eval.edit.buffers.set_current(source_id);
     builtin_insert(&mut eval, vec![Value::string("source-text")]).unwrap();
 
-    let dest_id = eval.buffers.create_buffer("*rbc-dest*");
-    eval.buffers.set_current(dest_id);
+    let dest_id = eval.edit.buffers.create_buffer("*rbc-dest*");
+    eval.edit.buffers.set_current(dest_id);
     builtin_insert(&mut eval, vec![Value::string("dest-text")]).unwrap();
 
     assert_eq!(
@@ -3813,7 +3933,8 @@ fn replace_buffer_contents_and_set_buffer_multibyte_runtime_semantics() {
         Value::T
     );
     assert_eq!(
-        eval.buffers
+        eval.edit
+            .buffers
             .get(dest_id)
             .expect("destination buffer should exist")
             .buffer_string(),
@@ -3824,43 +3945,46 @@ fn replace_buffer_contents_and_set_buffer_multibyte_runtime_semantics() {
         builtin_set_buffer_multibyte(&mut eval, vec![Value::NIL]).unwrap(),
         Value::NIL
     );
-    assert!(!eval.buffers.current_buffer().unwrap().get_multibyte());
+    assert!(!eval.edit.buffers.current_buffer().unwrap().get_multibyte());
 
     assert_eq!(
         builtin_set_buffer_multibyte(&mut eval, vec![Value::symbol("foo")]).unwrap(),
         Value::symbol("foo")
     );
-    assert!(eval.buffers.current_buffer().unwrap().get_multibyte());
+    assert!(eval.edit.buffers.current_buffer().unwrap().get_multibyte());
 }
 
 #[test]
 fn replace_buffer_contents_preserves_unibyte_raw_bytes() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
-    let source_id = eval.buffers.create_buffer("*rbc-raw-source*");
+    let mut eval = crate::test_utils::new_context();
+    let source_id = eval.edit.buffers.create_buffer("*rbc-raw-source*");
     {
         let source = eval
+            .edit
             .buffers
             .get_mut(source_id)
             .expect("source buffer should exist");
         source.set_multibyte_value(false);
     }
-    eval.buffers
+    eval.edit
+        .buffers
         .insert_lisp_string_into_buffer(
             source_id,
             &neovm_value::heap_types::LispString::from_unibyte(vec![0xFF]),
         )
         .expect("raw source insert should succeed");
 
-    let dest_id = eval.buffers.create_buffer("*rbc-raw-dest*");
+    let dest_id = eval.edit.buffers.create_buffer("*rbc-raw-dest*");
     {
         let dest = eval
+            .edit
             .buffers
             .get_mut(dest_id)
             .expect("destination buffer should exist");
         dest.set_multibyte_value(false);
     }
-    eval.buffers.set_current(dest_id);
+    eval.edit.buffers.set_current(dest_id);
 
     assert_eq!(
         builtin_replace_buffer_contents(&mut eval, vec![Value::make_buffer(source_id)]).unwrap(),
@@ -3868,6 +3992,7 @@ fn replace_buffer_contents_preserves_unibyte_raw_bytes() {
     );
 
     let dest = eval
+        .edit
         .buffers
         .get(dest_id)
         .expect("destination buffer should exist");
@@ -3879,12 +4004,13 @@ fn replace_buffer_contents_preserves_unibyte_raw_bytes() {
 #[test]
 fn buffer_swap_text_preserves_unibyte_raw_bytes() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
-    let first_id = eval.buffers.create_buffer("*swap-raw-a*");
-    let second_id = eval.buffers.create_buffer("*swap-raw-b*");
+    let mut eval = crate::test_utils::new_context();
+    let first_id = eval.edit.buffers.create_buffer("*swap-raw-a*");
+    let second_id = eval.edit.buffers.create_buffer("*swap-raw-b*");
 
     {
         let first = eval
+            .edit
             .buffers
             .get_mut(first_id)
             .expect("first buffer should exist");
@@ -3892,36 +4018,41 @@ fn buffer_swap_text_preserves_unibyte_raw_bytes() {
     }
     {
         let second = eval
+            .edit
             .buffers
             .get_mut(second_id)
             .expect("second buffer should exist");
         second.set_multibyte_value(false);
     }
 
-    eval.buffers
+    eval.edit
+        .buffers
         .insert_lisp_string_into_buffer(
             first_id,
             &neovm_value::heap_types::LispString::from_unibyte(vec![0xFE]),
         )
         .expect("first raw insert should succeed");
-    eval.buffers
+    eval.edit
+        .buffers
         .insert_lisp_string_into_buffer(
             second_id,
             &neovm_value::heap_types::LispString::from_unibyte(vec![0xFF]),
         )
         .expect("second raw insert should succeed");
 
-    eval.buffers.set_current(first_id);
+    eval.edit.buffers.set_current(first_id);
     assert_eq!(
         builtin_buffer_swap_text(&mut eval, vec![Value::make_buffer(second_id)]).unwrap(),
         Value::NIL
     );
 
     let first = eval
+        .edit
         .buffers
         .get(first_id)
         .expect("first buffer should exist");
     let second = eval
+        .edit
         .buffers
         .get(second_id)
         .expect("second buffer should exist");
@@ -3957,19 +4088,22 @@ fn full_buffer_bytes(buffer: &neovm_edit::buffer::Buffer) -> Vec<u8> {
 fn buffer_swap_text_swaps_owned_backend_and_state() {
     crate::test_utils::init_test_tracing();
     for backend_kind in neovm_edit::buffer::BufferTextBackendKind::non_gap_implemented_variants() {
-        let mut eval = super::super::eval::Context::new();
-        let first_id = eval.buffers.create_buffer("*swap-state-a*");
-        let second_id = eval.buffers.create_buffer("*swap-state-b*");
+        let mut eval = crate::test_utils::new_context();
+        let first_id = eval.edit.buffers.create_buffer("*swap-state-a*");
+        let second_id = eval.edit.buffers.create_buffer("*swap-state-b*");
 
-        eval.buffers
+        eval.edit
+            .buffers
             .insert_into_buffer(first_id, "abcde")
             .expect("first insert should succeed");
-        eval.buffers
+        eval.edit
+            .buffers
             .insert_into_buffer(second_id, "uvwxyz")
             .expect("second insert should succeed");
 
         {
             let second = eval
+                .edit
                 .buffers
                 .get_mut(second_id)
                 .expect("second buffer should exist");
@@ -3980,24 +4114,30 @@ fn buffer_swap_text_swaps_owned_backend_and_state() {
             );
         }
 
-        eval.buffers
+        eval.edit
+            .buffers
             .narrow_buffer_to_emacs_byte_range(first_id, EmacsByteRange::from_usize(1, 4))
             .expect("first narrow should succeed");
-        eval.buffers
+        eval.edit
+            .buffers
             .goto_buffer_emacs_byte_pos(first_id, neovm_edit::buffer::EmacsBytePos::new(2))
             .expect("first point should move");
-        eval.buffers
+        eval.edit
+            .buffers
             .goto_buffer_emacs_byte_pos(second_id, neovm_edit::buffer::EmacsBytePos::new(5))
             .expect("second point should move");
-        eval.buffers
+        eval.edit
+            .buffers
             .set_buffer_mark_emacs_byte_pos(first_id, neovm_edit::buffer::EmacsBytePos::new(3))
             .expect("first mark should set");
-        eval.buffers
+        eval.edit
+            .buffers
             .set_buffer_mark_emacs_byte_pos(second_id, neovm_edit::buffer::EmacsBytePos::new(1))
             .expect("second mark should set");
 
         {
             let first = eval
+                .edit
                 .buffers
                 .get_mut(first_id)
                 .expect("first buffer should exist");
@@ -4008,6 +4148,7 @@ fn buffer_swap_text_swaps_owned_backend_and_state() {
         }
         {
             let second = eval
+                .edit
                 .buffers
                 .get_mut(second_id)
                 .expect("second buffer should exist");
@@ -4017,24 +4158,26 @@ fn buffer_swap_text_swaps_owned_backend_and_state() {
             second.set_undo_list(Value::symbol("second-undo"));
         }
 
-        eval.buffers.set_current(second_id);
+        eval.edit.buffers.set_current(second_id);
         let overlay = builtin_make_overlay(
             &mut eval.edit.buffers,
             vec![Value::fixnum(2), Value::fixnum(4)],
         )
         .expect("overlay creation should succeed");
 
-        eval.buffers.set_current(first_id);
+        eval.edit.buffers.set_current(first_id);
         assert_eq!(
             builtin_buffer_swap_text(&mut eval, vec![Value::make_buffer(second_id)]).unwrap(),
             Value::NIL
         );
 
         let first = eval
+            .edit
             .buffers
             .get(first_id)
             .expect("first buffer should exist");
         let second = eval
+            .edit
             .buffers
             .get(second_id)
             .expect("second buffer should exist");
@@ -4081,22 +4224,23 @@ fn buffer_swap_text_swaps_owned_backend_and_state() {
 #[test]
 fn buffer_swap_text_rejects_dead_and_indirect_buffers_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
-    let base_id = eval.buffers.create_buffer("*swap-base*");
+    let mut eval = crate::test_utils::new_context();
+    let base_id = eval.edit.buffers.create_buffer("*swap-base*");
     let indirect_id = eval
+        .edit
         .buffers
         .create_indirect_buffer(base_id, "*swap-indirect*", false)
         .expect("indirect buffer should be created");
-    let other_id = eval.buffers.create_buffer("*swap-other*");
+    let other_id = eval.edit.buffers.create_buffer("*swap-other*");
 
-    eval.buffers.set_current(indirect_id);
+    eval.edit.buffers.set_current(indirect_id);
     let indirect_message = buffer_swap_text_signal_message(builtin_buffer_swap_text(
         &mut eval,
         vec![Value::make_buffer(other_id)],
     ));
     assert_eq!(indirect_message, "Cannot swap indirect buffers’s text");
 
-    eval.buffers.set_current(base_id);
+    eval.edit.buffers.set_current(base_id);
     let has_indirect_message = buffer_swap_text_signal_message(builtin_buffer_swap_text(
         &mut eval,
         vec![Value::make_buffer(other_id)],
@@ -4106,9 +4250,9 @@ fn buffer_swap_text_rejects_dead_and_indirect_buffers_like_gnu() {
         "One of the buffers to swap has indirect buffers"
     );
 
-    let dead_id = eval.buffers.create_buffer("*swap-dead*");
-    assert!(eval.buffers.kill_buffer(dead_id));
-    eval.buffers.set_current(other_id);
+    let dead_id = eval.edit.buffers.create_buffer("*swap-dead*");
+    assert!(eval.edit.buffers.kill_buffer(dead_id));
+    eval.edit.buffers.set_current(other_id);
     let dead_message = buffer_swap_text_signal_message(builtin_buffer_swap_text(
         &mut eval,
         vec![Value::make_buffer(dead_id)],
@@ -4119,30 +4263,46 @@ fn buffer_swap_text_rejects_dead_and_indirect_buffers_like_gnu() {
 #[test]
 fn buffer_swap_text_self_keeps_gnu_side_effects() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
-    let buffer_id = eval.buffers.create_buffer("*swap-self*");
-    eval.buffers
+    let mut eval = crate::test_utils::new_context();
+    let buffer_id = eval.edit.buffers.create_buffer("*swap-self*");
+    eval.edit
+        .buffers
         .insert_into_buffer(buffer_id, "abc")
         .expect("insert should succeed");
     {
         let buffer = eval
+            .edit
             .buffers
             .get_mut(buffer_id)
             .expect("buffer should exist");
         buffer.slots[neovm_edit::buffer::buffer::BUFFER_SLOT_POINT_BEFORE_SCROLL.index()] =
             Value::fixnum(2);
     }
-    let before_modified = eval.buffers.get(buffer_id).unwrap().modified_tick();
-    let before_chars_modified = eval.buffers.get(buffer_id).unwrap().chars_modified_tick();
-    let before_overlay_modified = eval.buffers.get(buffer_id).unwrap().overlay_modified_tick();
+    let before_modified = eval.edit.buffers.get(buffer_id).unwrap().modified_tick();
+    let before_chars_modified = eval
+        .edit
+        .buffers
+        .get(buffer_id)
+        .unwrap()
+        .chars_modified_tick();
+    let before_overlay_modified = eval
+        .edit
+        .buffers
+        .get(buffer_id)
+        .unwrap()
+        .overlay_modified_tick();
 
-    eval.buffers.set_current(buffer_id);
+    eval.edit.buffers.set_current(buffer_id);
     assert_eq!(
         builtin_buffer_swap_text(&mut eval, vec![Value::make_buffer(buffer_id)]).unwrap(),
         Value::NIL
     );
 
-    let buffer = eval.buffers.get(buffer_id).expect("buffer should exist");
+    let buffer = eval
+        .edit
+        .buffers
+        .get(buffer_id)
+        .expect("buffer should exist");
     assert_eq!(full_buffer_bytes(buffer), b"abc");
     assert_eq!(buffer.modified_tick(), before_modified + 2);
     assert_eq!(buffer.chars_modified_tick(), before_chars_modified + 2);
@@ -4156,18 +4316,20 @@ fn buffer_swap_text_self_keeps_gnu_side_effects() {
 #[test]
 fn compare_buffer_substrings_nil_bounds_use_accessible_region() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
-    let left_id = eval.buffers.create_buffer("*cbs-left*");
-    eval.buffers.set_current(left_id);
+    let mut eval = crate::test_utils::new_context();
+    let left_id = eval.edit.buffers.create_buffer("*cbs-left*");
+    eval.edit.buffers.set_current(left_id);
     builtin_insert(&mut eval, vec![Value::string("xaBCy")]).unwrap();
     let _ = eval
+        .edit
         .buffers
         .narrow_buffer_to_emacs_byte_range(left_id, EmacsByteRange::from_usize(1, 4));
 
-    let right_id = eval.buffers.create_buffer("*cbs-right*");
-    eval.buffers.set_current(right_id);
+    let right_id = eval.edit.buffers.create_buffer("*cbs-right*");
+    eval.edit.buffers.set_current(right_id);
     builtin_insert(&mut eval, vec![Value::string("zaBCw")]).unwrap();
     let _ = eval
+        .edit
         .buffers
         .narrow_buffer_to_emacs_byte_range(right_id, EmacsByteRange::from_usize(1, 4));
 
@@ -4191,18 +4353,20 @@ fn compare_buffer_substrings_nil_bounds_use_accessible_region() {
 #[test]
 fn compare_buffer_substrings_signals_when_bounds_escape_narrowing() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
-    let left_id = eval.buffers.create_buffer("*cbs-left-range*");
-    eval.buffers.set_current(left_id);
+    let mut eval = crate::test_utils::new_context();
+    let left_id = eval.edit.buffers.create_buffer("*cbs-left-range*");
+    eval.edit.buffers.set_current(left_id);
     builtin_insert(&mut eval, vec![Value::string("xaBCy")]).unwrap();
     let _ = eval
+        .edit
         .buffers
         .narrow_buffer_to_emacs_byte_range(left_id, EmacsByteRange::from_usize(1, 4));
 
-    let right_id = eval.buffers.create_buffer("*cbs-right-range*");
-    eval.buffers.set_current(right_id);
+    let right_id = eval.edit.buffers.create_buffer("*cbs-right-range*");
+    eval.edit.buffers.set_current(right_id);
     builtin_insert(&mut eval, vec![Value::string("zaBCw")]).unwrap();
     let _ = eval
+        .edit
         .buffers
         .narrow_buffer_to_emacs_byte_range(right_id, EmacsByteRange::from_usize(1, 4));
 
@@ -4230,12 +4394,13 @@ fn compare_buffer_substrings_signals_when_bounds_escape_narrowing() {
 #[test]
 fn compare_buffer_substrings_rejects_deleted_buffer_object() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let dead = create_unique_test_buffer(&mut eval, "*cbs-dead*");
     let _ = builtin_kill_buffer(&mut eval, vec![dead]).unwrap();
 
     let live = create_unique_test_buffer(&mut eval, "*cbs-live*");
-    eval.buffers
+    eval.edit
+        .buffers
         .set_current(expect_buffer_id(&live).expect("buffer id"));
     builtin_insert(&mut eval, vec![Value::string("abc")]).unwrap();
 
@@ -4256,7 +4421,7 @@ fn compare_buffer_substrings_rejects_deleted_buffer_object() {
 #[test]
 fn replace_region_contents_replaces_from_string_and_buffer_sources() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     builtin_insert(&mut eval, vec![Value::string("abXXef")]).unwrap();
 
     assert_eq!(
@@ -4273,16 +4438,16 @@ fn replace_region_contents_replaces_from_string_and_buffer_sources() {
         Value::T
     );
     assert_eq!(
-        eval.buffers.current_buffer().unwrap().buffer_string(),
+        eval.edit.buffers.current_buffer().unwrap().buffer_string(),
         "abcdef"
     );
 
-    let source_id = eval.buffers.create_buffer("*rrc-source*");
-    eval.buffers.set_current(source_id);
+    let source_id = eval.edit.buffers.create_buffer("*rrc-source*");
+    eval.edit.buffers.set_current(source_id);
     builtin_insert(&mut eval, vec![Value::string("1234")]).unwrap();
 
-    let dest_id = eval.buffers.create_buffer("*rrc-dest*");
-    eval.buffers.set_current(dest_id);
+    let dest_id = eval.edit.buffers.create_buffer("*rrc-dest*");
+    eval.edit.buffers.set_current(dest_id);
     builtin_insert(&mut eval, vec![Value::string("abYYef")]).unwrap();
 
     assert_eq!(
@@ -4298,7 +4463,7 @@ fn replace_region_contents_replaces_from_string_and_buffer_sources() {
         Value::T
     );
     assert_eq!(
-        eval.buffers.current_buffer().unwrap().buffer_string(),
+        eval.edit.buffers.current_buffer().unwrap().buffer_string(),
         "ab1234ef"
     );
 }
@@ -4306,13 +4471,13 @@ fn replace_region_contents_replaces_from_string_and_buffer_sources() {
 #[test]
 fn replace_region_contents_accepts_vector_buffer_slices() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
-    let source_id = eval.buffers.create_buffer("*rrc-slice-source*");
-    eval.buffers.set_current(source_id);
+    let mut eval = crate::test_utils::new_context();
+    let source_id = eval.edit.buffers.create_buffer("*rrc-slice-source*");
+    eval.edit.buffers.set_current(source_id);
     builtin_insert(&mut eval, vec![Value::string("1234")]).unwrap();
 
-    let dest_id = eval.buffers.create_buffer("*rrc-slice-dest*");
-    eval.buffers.set_current(dest_id);
+    let dest_id = eval.edit.buffers.create_buffer("*rrc-slice-dest*");
+    eval.edit.buffers.set_current(dest_id);
     builtin_insert(&mut eval, vec![Value::string("abZZef")]).unwrap();
 
     assert_eq!(
@@ -4332,7 +4497,8 @@ fn replace_region_contents_accepts_vector_buffer_slices() {
         Value::T
     );
     assert_eq!(
-        eval.buffers
+        eval.edit
+            .buffers
             .get(dest_id)
             .expect("destination buffer should exist")
             .buffer_string(),
@@ -4343,7 +4509,7 @@ fn replace_region_contents_accepts_vector_buffer_slices() {
 #[test]
 fn split_window_internal_validates_core_argument_types() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     // PIXEL-SIZE is required.  GNU `CHECK_FIXNUM`s it unconditionally
     // (`src/window.c`), and `lisp/window.el`'s `split-window` computes a real
     // `new-pixel-size` before calling in -- confirmed on GNU Emacs 31.1, where
@@ -4461,21 +4627,22 @@ fn split_window_internal_validates_core_argument_types() {
 #[test]
 fn barf_bury_char_equal_cl_type_and_cancel_semantics() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     assert!(
         builtin_char_equal(&mut eval, vec![Value::fixnum(97), Value::fixnum(65)])
             .unwrap()
             .is_truthy()
     );
-    eval.obarray
+    eval.obarray_mut()
         .set_symbol_value("case-fold-search", Value::NIL);
     assert!(
         builtin_char_equal(&mut eval, vec![Value::fixnum(97), Value::fixnum(65)])
             .unwrap()
             .is_nil()
     );
-    eval.obarray.set_symbol_value("case-fold-search", Value::T);
+    eval.obarray_mut()
+        .set_symbol_value("case-fold-search", Value::T);
 
     let char_type = builtin_char_equal(&mut eval, vec![Value::fixnum(1), Value::string("a")])
         .expect_err("char-equal should reject non-character args");
@@ -4543,7 +4710,7 @@ fn barf_bury_char_equal_cl_type_and_cancel_semantics() {
         Value::symbol("interpreted-function")
     );
 
-    let mut cancel_eval = crate::emacs_core::eval::Context::new();
+    let mut cancel_eval = crate::test_utils::new_context();
     assert_eq!(
         builtin_cancel_kbd_macro_events(&mut cancel_eval, vec![]).unwrap(),
         Value::NIL
@@ -4570,7 +4737,7 @@ fn barf_bury_char_equal_cl_type_and_cancel_semantics() {
         builtin_barf_if_buffer_read_only(&mut eval, vec![Value::fixnum(0)]).unwrap(),
         Value::NIL
     );
-    if let Some(buf) = eval.buffers.current_buffer_mut() {
+    if let Some(buf) = eval.edit.buffers.current_buffer_mut() {
         buf.set_buffer_local("buffer-read-only", Value::T);
     }
     let barf_read_only = builtin_barf_if_buffer_read_only(&mut eval, vec![])
@@ -4583,7 +4750,7 @@ fn barf_bury_char_equal_cl_type_and_cancel_semantics() {
         other => panic!("unexpected flow: {other:?}"),
     }
 
-    if let Some(buf) = eval.buffers.current_buffer_mut() {
+    if let Some(buf) = eval.edit.buffers.current_buffer_mut() {
         buf.text_props_put_property_in_emacs_byte_range(
             neovm_edit::buffer::EmacsByteRange::from_usize(1, 2),
             Value::symbol("inhibit-read-only"),
@@ -4627,7 +4794,7 @@ fn barf_bury_char_equal_cl_type_and_cancel_semantics() {
         }
         other => panic!("unexpected flow: {other:?}"),
     }
-    if let Some(buf) = eval.buffers.current_buffer_mut() {
+    if let Some(buf) = eval.edit.buffers.current_buffer_mut() {
         buf.set_buffer_local("buffer-read-only", Value::NIL);
     }
 
@@ -4662,7 +4829,7 @@ fn barf_bury_char_equal_cl_type_and_cancel_semantics() {
 #[test]
 fn byte_position_and_clear_bitmap_semantics() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     assert_eq!(
         builtin_byte_to_position(&mut eval.edit.buffers, vec![Value::fixnum(1)]).unwrap(),
@@ -4704,9 +4871,13 @@ fn byte_position_and_clear_bitmap_semantics() {
         builtin_position_bytes(&mut eval.edit.buffers, vec![Value::fixnum(3)]).unwrap(),
         Value::fixnum(4)
     );
-    let buffer_id = eval.buffers.current_buffer_id().expect("current buffer");
+    let buffer_id = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
     let marker = neovm_edit::emacs_core::marker::make_registered_buffer_marker(
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         buffer_id,
         LispCharPos1::new(2),
         false,
@@ -4795,8 +4966,8 @@ fn byte_position_and_clear_bitmap_semantics() {
         other => panic!("unexpected flow: {other:?}"),
     }
 
-    let mut face_cache_ctx = crate::emacs_core::eval::Context::new();
-    let face_change_before = face_cache_ctx.face_change_count;
+    let mut face_cache_ctx = crate::test_utils::new_context();
+    let face_change_before = face_cache_ctx.face_change_count_for_test();
     assert_eq!(
         builtin_clear_face_cache(&mut face_cache_ctx, vec![]).unwrap(),
         Value::NIL
@@ -4809,7 +4980,7 @@ fn byte_position_and_clear_bitmap_semantics() {
     // discarding every realized face is the whole point: without it a
     // `tty-color-define` that moves a colour never reaches the screen.
     assert!(
-        face_cache_ctx.face_change_count > face_change_before,
+        face_cache_ctx.face_change_count_for_test() > face_change_before,
         "clear-face-cache must invalidate the realized faces"
     );
     let clear_face_arity =
@@ -4857,7 +5028,7 @@ fn byte_position_and_clear_bitmap_semantics() {
 #[test]
 fn buffer_undo_designators_match_deleted_and_missing_buffer_semantics() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     // A bare `Context' is GNU before `loadup.el', so the disable half is void
     // here exactly as it is there.
@@ -4868,11 +5039,16 @@ fn buffer_undo_designators_match_deleted_and_missing_buffer_semantics() {
         "nil",
     );
 
-    let current_id = eval.buffers.current_buffer_id().expect("current buffer");
-    eval.buffers
+    let current_id = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
+    eval.edit
+        .buffers
         .configure_buffer_undo_list(current_id, Value::T)
         .expect("current buffer");
-    let current = eval.buffers.get(current_id).expect("current buffer");
+    let current = eval.edit.buffers.get(current_id).expect("current buffer");
     assert!(neovm_edit::buffer::undo_list_is_disabled(
         &current.get_undo_list()
     ));
@@ -4881,7 +5057,7 @@ fn buffer_undo_designators_match_deleted_and_missing_buffer_semantics() {
     let enable_current = builtin_buffer_enable_undo(&mut eval.edit.buffers, vec![])
         .expect("buffer-enable-undo should work");
     assert_eq!(enable_current, Value::NIL);
-    let current = eval.buffers.get(current_id).expect("current buffer");
+    let current = eval.edit.buffers.get(current_id).expect("current buffer");
     assert!(!neovm_edit::buffer::undo_list_is_disabled(
         &current.get_undo_list()
     ));
@@ -4916,7 +5092,7 @@ fn buffer_undo_designators_match_deleted_and_missing_buffer_semantics() {
 #[test]
 fn other_buffer_prefers_live_alternative_and_enforces_arity() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let _ = builtin_get_buffer_create(&mut eval, vec![Value::string("*Messages*")]).unwrap();
     let avoid = builtin_get_buffer_create(&mut eval, vec![Value::string("*ob-avoid*")])
         .expect("create avoid buffer");
@@ -4926,7 +5102,8 @@ fn other_buffer_prefers_live_alternative_and_enforces_arity() {
     let other = builtin_other_buffer(&mut eval, vec![avoid]).expect("other-buffer");
     assert_eq!(
         other,
-        eval.buffers
+        eval.edit
+            .buffers
             .find_buffer_by_name("*Messages*")
             .map(Value::make_buffer)
             .expect("messages buffer")
@@ -4936,7 +5113,8 @@ fn other_buffer_prefers_live_alternative_and_enforces_arity() {
         builtin_other_buffer(&mut eval, vec![avoid, Value::T]).expect("other-buffer visible-ok");
     assert_eq!(
         visible_ok,
-        eval.buffers
+        eval.edit
+            .buffers
             .find_buffer_by_name("*scratch*")
             .map(Value::make_buffer)
             .expect("scratch buffer")
@@ -4946,7 +5124,8 @@ fn other_buffer_prefers_live_alternative_and_enforces_arity() {
         builtin_other_buffer(&mut eval, vec![Value::fixnum(1)]).expect("other-buffer int");
     assert_eq!(
         from_non_buffer,
-        eval.buffers
+        eval.edit
+            .buffers
             .find_buffer_by_name("*Messages*")
             .map(Value::make_buffer)
             .expect("messages buffer")
@@ -4956,7 +5135,8 @@ fn other_buffer_prefers_live_alternative_and_enforces_arity() {
         .expect("other-buffer missing name");
     assert_eq!(
         from_missing_name,
-        eval.buffers
+        eval.edit
+            .buffers
             .find_buffer_by_name("*Messages*")
             .map(Value::make_buffer)
             .expect("messages buffer")
@@ -4982,8 +5162,9 @@ fn other_buffer_prefers_live_alternative_and_enforces_arity() {
 #[test]
 fn buffer_list_returns_live_buffers_in_creation_order() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let scratch = eval
+        .edit
         .buffers
         .find_buffer_by_name("*scratch*")
         .expect("scratch");
@@ -4999,12 +5180,14 @@ fn buffer_list_returns_live_buffers_in_creation_order() {
 #[test]
 fn buffer_list_moves_selected_buffer_to_front_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let scratch = eval
+        .edit
         .buffers
         .find_buffer_by_name("*scratch*")
         .expect("scratch");
-    eval.frames.create_frame("F1", 800, 600, scratch);
+    eval.frame_manager_mut()
+        .create_frame("F1", 800, 600, scratch);
     let messages =
         builtin_get_buffer_create(&mut eval, vec![Value::string("*Messages*")]).expect("messages");
     let target = builtin_get_buffer_create(&mut eval, vec![Value::string("buffer-list-target")])
@@ -5033,12 +5216,14 @@ fn buffer_list_moves_selected_buffer_to_front_like_gnu() {
 #[test]
 fn bury_buffer_internal_moves_buffer_to_end_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let scratch = eval
+        .edit
         .buffers
         .find_buffer_by_name("*scratch*")
         .expect("scratch");
-    eval.frames.create_frame("F1", 800, 600, scratch);
+    eval.frame_manager_mut()
+        .create_frame("F1", 800, 600, scratch);
     let messages =
         builtin_get_buffer_create(&mut eval, vec![Value::string("*Messages*")]).expect("messages");
     let target = builtin_get_buffer_create(&mut eval, vec![Value::string("bury-order-target")])
@@ -5068,12 +5253,15 @@ fn bury_buffer_internal_moves_buffer_to_end_like_gnu() {
 #[test]
 fn buffer_list_frame_arg_moves_displayed_buffer_to_front_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let scratch = eval
+        .edit
         .buffers
         .find_buffer_by_name("*scratch*")
         .expect("scratch");
-    let fid = eval.frames.create_frame("F1", 800, 600, scratch);
+    let fid = eval
+        .frame_manager_mut()
+        .create_frame("F1", 800, 600, scratch);
     let frame = Value::make_frame(fid.0);
     let messages =
         builtin_get_buffer_create(&mut eval, vec![Value::string("*Messages*")]).expect("messages");
@@ -5103,7 +5291,7 @@ fn buffer_list_frame_arg_moves_displayed_buffer_to_front_like_gnu() {
 #[test]
 fn featurep_sees_emacs_from_core_startup_features() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     assert_eq!(
         builtin_featurep(&mut eval, vec![Value::symbol("emacs")]).unwrap(),
@@ -5165,7 +5353,7 @@ fn byte_code_edits_to_features_stick_like_gnu() {
 #[test]
 fn featurep_accepts_optional_subfeature_arg() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.set_variable(
         "features",
         Value::list(vec![Value::symbol("vm-featurep-present")]),
@@ -5212,14 +5400,13 @@ fn featurep_accepts_optional_subfeature_arg() {
 #[test]
 fn featurep_accepts_symbol_with_pos_when_enabled() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.set_variable(
         "features",
         Value::list(vec![Value::symbol("vm-featurep-present")]),
     );
     eval.set_variable("symbols-with-pos-enabled", Value::T);
-    let feature = eval
-        .tagged_heap
+    let feature = unsafe { eval.tagged_heap_mut() }
         .alloc_symbol_with_pos(Value::symbol("vm-featurep-present"), Value::fixnum(42));
 
     let result = builtin_featurep(&mut eval, vec![feature]).unwrap();
@@ -5229,7 +5416,7 @@ fn featurep_accepts_symbol_with_pos_when_enabled() {
 #[test]
 fn featurep_subfeatures_property_must_be_list() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.set_variable(
         "features",
         Value::list(vec![Value::symbol("vm-featurep-present")]),
@@ -5258,7 +5445,7 @@ fn featurep_subfeatures_property_must_be_list() {
 #[test]
 fn featurep_rejects_more_than_two_args() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let err = builtin_featurep(
         &mut eval,
         vec![
@@ -6016,7 +6203,7 @@ fn define_hash_table_test_alias_redefinition_updates_mapping() {
 #[test]
 fn define_hash_table_test_accepts_user_defined_lisp_functions() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let result = eval.eval_str(
         r#"
@@ -6094,8 +6281,12 @@ fn make_symbol_keeps_exact_name_string_object() {
         .expect("builtin symbol-name should evaluate");
     assert_eq!(first_name, name);
 
-    super::collections::builtin_aset(vec![name, Value::fixnum(1), Value::fixnum('Z' as i64)])
-        .expect("aset should mutate symbol name string");
+    crate::emacs_core::builtins::collections::builtin_aset(vec![
+        name,
+        Value::fixnum(1),
+        Value::fixnum('Z' as i64),
+    ])
+    .expect("aset should mutate symbol name string");
 
     let second_name = dispatch_builtin_pure("symbol-name", vec![sym])
         .expect("builtin symbol-name should resolve")
@@ -6110,7 +6301,7 @@ fn make_symbol_keeps_exact_name_string_object() {
 #[test]
 fn intern_and_intern_soft_preserve_raw_unibyte_symbol_names() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let raw_name = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![
         0xFF, b'a',
     ]));
@@ -6136,7 +6327,7 @@ fn intern_and_intern_soft_preserve_raw_unibyte_symbol_names() {
 #[test]
 fn custom_obarray_intern_reuses_ascii_multibyte_symbol_names() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let obarray = dispatch_builtin(&mut eval, "obarray-make", vec![Value::fixnum(17)])
         .expect("builtin obarray-make should resolve")
         .expect("builtin obarray-make should evaluate");
@@ -6181,7 +6372,7 @@ fn custom_obarray_intern_reuses_ascii_multibyte_symbol_names() {
 #[test]
 fn custom_obarray_symbol_properties_roundtrip_for_ascii_multibyte_names() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let obarray = dispatch_builtin(&mut eval, "obarray-make", vec![Value::fixnum(17)])
         .expect("builtin obarray-make should resolve")
         .expect("builtin obarray-make should evaluate");
@@ -6482,15 +6673,15 @@ fn pure_dispatch_buffer_placeholder_mutators_match_compat_contracts() {
     crate::test_utils::init_test_tracing();
     // rename-buffer is now an eval builtin — test it through the evaluator
     {
-        let mut eval = crate::emacs_core::eval::Context::new();
-        let buf_id = eval.buffers.create_buffer("old-name");
-        eval.buffers.set_current(buf_id);
+        let mut eval = crate::test_utils::new_context();
+        let buf_id = eval.edit.buffers.create_buffer("old-name");
+        eval.edit.buffers.set_current(buf_id);
         let renamed = dispatch_builtin(&mut eval, "rename-buffer", vec![Value::string("new-name")])
             .expect("builtin rename-buffer should resolve")
             .expect("builtin rename-buffer should evaluate");
         assert_eq!(renamed, Value::string("new-name"));
         assert_eq!(
-            eval.buffers.get(buf_id).unwrap().name_value(),
+            eval.edit.buffers.get(buf_id).unwrap().name_value(),
             Value::string("new-name")
         );
         assert_eq!(
@@ -6501,7 +6692,7 @@ fn pure_dispatch_buffer_placeholder_mutators_match_compat_contracts() {
     }
 
     {
-        let mut eval = crate::emacs_core::eval::Context::new();
+        let mut eval = crate::test_utils::new_context();
         let redisplay = dispatch_builtin(
             &mut eval,
             "set-buffer-redisplay",
@@ -6521,11 +6712,12 @@ fn pure_dispatch_buffer_placeholder_mutators_match_compat_contracts() {
 #[test]
 fn rename_buffer_crosses_the_global_mode_line_menu_boundary_while_offscreen() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
-    let visible = eval.buffers.create_buffer("rename-visible");
-    eval.frames.create_frame("F1", 800, 600, visible);
-    let offscreen = eval.buffers.create_buffer("rename-offscreen");
-    eval.buffers.set_current(offscreen);
+    let mut eval = crate::test_utils::new_context();
+    let visible = eval.edit.buffers.create_buffer("rename-visible");
+    eval.frame_manager_mut()
+        .create_frame("F1", 800, 600, visible);
+    let offscreen = eval.edit.buffers.create_buffer("rename-offscreen");
+    eval.edit.buffers.set_current(offscreen);
 
     let initial = eval.menu_bar_rebuild_generation();
     dispatch_builtin(
@@ -6546,9 +6738,9 @@ fn rename_buffer_crosses_the_global_mode_line_menu_boundary_while_offscreen() {
 #[test]
 fn rename_and_generate_buffer_names_preserve_lisp_string_identity_and_properties_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
-    let current_id = eval.buffers.create_buffer("origin");
-    eval.buffers.set_current(current_id);
+    let mut eval = crate::test_utils::new_context();
+    let current_id = eval.edit.buffers.create_buffer("origin");
+    eval.edit.buffers.set_current(current_id);
 
     let free_name = Value::string("named");
     let mut free_properties = neovm_edit::buffer::text_props::TextPropertyTable::new();
@@ -6578,6 +6770,7 @@ fn rename_and_generate_buffer_names_preserve_lisp_string_identity_and_properties
     assert!(neovm_value::value::eq_value(
         &free_name,
         &eval
+            .edit
             .buffers
             .get(current_id)
             .expect("current buffer")
@@ -6593,7 +6786,7 @@ fn rename_and_generate_buffer_names_preserve_lisp_string_identity_and_properties
         "GNU returns the already-stored name object for a non-unique no-op"
     );
 
-    let occupied_id = eval.buffers.create_buffer("taken");
+    let occupied_id = eval.edit.buffers.create_buffer("taken");
     assert_ne!(occupied_id, current_id);
     let colliding_name = Value::string("taken");
     let mut colliding_properties = neovm_edit::buffer::text_props::TextPropertyTable::new();
@@ -6629,6 +6822,7 @@ fn rename_and_generate_buffer_names_preserve_lisp_string_identity_and_properties
     assert!(neovm_value::value::eq_value(
         &unique,
         &eval
+            .edit
             .buffers
             .get(current_id)
             .expect("renamed buffer")
@@ -6639,7 +6833,7 @@ fn rename_and_generate_buffer_names_preserve_lisp_string_identity_and_properties
 #[test]
 fn eval_dispatch_set_buffer_major_mode_runs_default_mode_function() {
     crate::test_utils::init_test_tracing();
-    use crate::emacs_core::load::create_bootstrap_evaluator_cached;
+    use crate::emacs_core::load_boot::create_bootstrap_evaluator_cached;
 
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap evaluator");
     eval.eval_str(
@@ -6650,7 +6844,7 @@ fn eval_dispatch_set_buffer_major_mode_runs_default_mode_function() {
     )
     .expect("define synthetic major mode");
 
-    let buf_id = eval.buffers.create_buffer("sbmm-target");
+    let buf_id = eval.edit.buffers.create_buffer("sbmm-target");
     let result = dispatch_builtin(
         &mut eval,
         "set-buffer-major-mode",
@@ -6660,14 +6854,14 @@ fn eval_dispatch_set_buffer_major_mode_runs_default_mode_function() {
     .expect("builtin set-buffer-major-mode should evaluate");
     assert!(result.is_nil());
 
-    eval.buffers.set_current(buf_id);
+    eval.edit.buffers.set_current(buf_id);
     assert_eq!(format_eval_result(&eval.eval_str("sbmm-ran")), "OK t");
 }
 
 #[test]
 fn bootstrap_set_buffer_major_mode_runs_fundamental_mode_file_locals() {
     crate::test_utils::init_test_tracing();
-    use crate::emacs_core::load::create_bootstrap_evaluator_cached;
+    use crate::emacs_core::load_boot::create_bootstrap_evaluator_cached;
 
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap evaluator");
     let result = format_eval_result(&eval.eval_str(
@@ -6850,7 +7044,7 @@ fn pure_dispatch_native_comp_surface_matches_no_native_comp_build() {
         );
     }
 
-    super::symbols::reset_symbols_thread_locals();
+    neovm_eval::test_support::authority::reset_symbols_thread_locals_for_test();
     assert!(
         dispatch_builtin_pure("new-fontset", vec![Value::string("x"), Value::string("y")])
             .is_none(),
@@ -7070,11 +7264,11 @@ fn pure_dispatch_record_placeholders_match_compat_contracts() {
         .expect("builtin recordp should evaluate");
     assert!(recordp.is_nil());
 
-    super::symbols::reset_symbols_thread_locals();
+    neovm_eval::test_support::authority::reset_symbols_thread_locals_for_test();
     // GNU `Fquery_fontset` calls `check_window_system (NULL)` first
     // (src/fontset.c:1248), so a headless context signals instead of
     // resolving the registry.
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let query_fontset = dispatch_builtin(
         &mut eval,
         "query-fontset",
@@ -7113,13 +7307,13 @@ fn pure_dispatch_record_placeholders_match_compat_contracts() {
 #[test]
 fn query_fontset_matches_emacs_regexp_syntax() {
     crate::test_utils::init_test_tracing();
-    super::symbols::reset_symbols_thread_locals();
+    neovm_eval::test_support::authority::reset_symbols_thread_locals_for_test();
 
     // `[([]` is the character class emitted by GNU `rx` for `[` or `(`.
     // The second Emacs-regexp alternative matches the default fontset.
     // GNU `Fquery_fontset` requires a window system (src/fontset.c:1248), so
     // the regexp contract is exercised on a window-system frame.
-    let mut eval = crate::emacs_core::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.set_variable(
         "window-system",
         Value::symbol(crate::emacs_core::display::gui_window_system_symbol()),
@@ -7210,7 +7404,7 @@ fn pure_dispatch_reconsider_redirect_placeholders_match_compat_contracts() {
         .expect("builtin restore-buffer-modified-p should evaluate");
     assert!(restore_modified.is_nil());
 
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let set_command_keys = builtin_set_this_command_keys(&mut eval, vec![Value::string("x")])
         .expect("builtin set--this-command-keys should evaluate");
     assert!(set_command_keys.is_nil());
@@ -7225,7 +7419,7 @@ fn pure_dispatch_reconsider_redirect_placeholders_match_compat_contracts() {
 #[test]
 fn reconsider_frame_fonts_accepts_live_window_system_frame() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     let frame = eval
         .frame_manager_mut()
@@ -7445,7 +7639,7 @@ fn pure_dispatch_tty_tool_bar_placeholder_cluster_matches_compat_contracts() {
 #[test]
 fn transpose_regions_moves_text_properties_and_markers_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let result = eval
         .eval_str_each(
@@ -7525,7 +7719,7 @@ fn pure_dispatch_unicode_value_placeholder_cluster_matches_compat_contracts() {
 #[test]
 fn value_lt_accepts_raw_unibyte_strings() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let low = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![
         0xFE,
     ]));
@@ -7534,11 +7728,11 @@ fn value_lt_accepts_raw_unibyte_strings() {
     ]));
 
     assert_eq!(
-        super::symbols::builtin_value_lt(&mut eval, vec![low, high]).unwrap(),
+        crate::emacs_core::builtins::symbols::builtin_value_lt(&mut eval, vec![low, high]).unwrap(),
         Value::T
     );
     assert_eq!(
-        super::symbols::builtin_value_lt(&mut eval, vec![high, low]).unwrap(),
+        crate::emacs_core::builtins::symbols::builtin_value_lt(&mut eval, vec![high, low]).unwrap(),
         Value::NIL
     );
 }
@@ -7546,12 +7740,12 @@ fn value_lt_accepts_raw_unibyte_strings() {
 #[test]
 fn value_lt_compares_buffers_by_live_name_and_dead_before_live() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
-    let z = eval.buffers.create_buffer("value-lt-z");
-    let a = eval.buffers.create_buffer("value-lt-a");
+    let mut eval = crate::test_utils::new_context();
+    let z = eval.edit.buffers.create_buffer("value-lt-z");
+    let a = eval.edit.buffers.create_buffer("value-lt-a");
 
     assert_eq!(
-        super::symbols::builtin_value_lt(
+        crate::emacs_core::builtins::symbols::builtin_value_lt(
             &mut eval,
             vec![Value::make_buffer(a), Value::make_buffer(z)]
         )
@@ -7559,10 +7753,10 @@ fn value_lt_compares_buffers_by_live_name_and_dead_before_live() {
         Value::T
     );
 
-    assert!(eval.buffers.kill_buffer(a));
+    assert!(eval.edit.buffers.kill_buffer(a));
 
     assert_eq!(
-        super::symbols::builtin_value_lt(
+        crate::emacs_core::builtins::symbols::builtin_value_lt(
             &mut eval,
             vec![Value::make_buffer(a), Value::make_buffer(z)]
         )
@@ -7674,7 +7868,7 @@ fn pure_dispatch_minibuffer_lock_placeholder_cluster_matches_compat_contracts() 
 #[test]
 fn interactive_form_eval_resolves_symbol_lambda_and_alias() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let lambda = Value::list(vec![
         Value::symbol("lambda"),
         Value::NIL,
@@ -7709,7 +7903,7 @@ fn interactive_form_eval_resolves_symbol_lambda_and_alias() {
 #[test]
 fn interactive_form_eval_uses_symbol_properties_and_builtin_subr_specs() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let target = Value::list(vec![Value::symbol("lambda"), Value::NIL, Value::fixnum(1)]);
     eval.obarray_mut()
         .set_symbol_function("vm-interactive-form-property-target", target);
@@ -7801,7 +7995,7 @@ fn interactive_form_eval_uses_symbol_properties_and_builtin_subr_specs() {
 #[test]
 fn interactive_form_eval_skips_docstring_before_interactive_spec() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let lambda_with_doc = Value::list(vec![
         Value::symbol("lambda"),
         Value::NIL,
@@ -7822,7 +8016,7 @@ fn interactive_form_eval_skips_docstring_before_interactive_spec() {
 #[test]
 fn interactive_form_eval_returns_nil_for_non_interactive_lambda() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let lambda = Value::list(vec![Value::symbol("lambda"), Value::NIL, Value::fixnum(1)]);
     eval.obarray_mut()
         .set_symbol_function("vm-interactive-form-plain", lambda);
@@ -7847,7 +8041,7 @@ fn interactive_form_eval_returns_nil_for_non_interactive_lambda() {
 #[test]
 fn interactive_form_eval_preserves_noarg_and_explicit_nil_shapes() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let noarg_lambda = Value::list(vec![
         Value::symbol("lambda"),
         Value::NIL,
@@ -7890,7 +8084,7 @@ fn interactive_form_eval_preserves_noarg_and_explicit_nil_shapes() {
 #[test]
 fn interactive_form_eval_signals_listp_for_improper_lambda_shapes() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let dotted_interactive = Value::list(vec![
         Value::symbol("lambda"),
@@ -8036,7 +8230,7 @@ fn pure_dispatch_internal_placeholder_cluster_matches_compat_contracts() {
 #[test]
 fn internal_describe_syntax_routes_prefix_documentation_through_quote_substitution() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.eval_str(
         r#"(fset 'substitute-command-keys
                  (lambda (_string &optional _no-face _include-menus)
@@ -8050,7 +8244,8 @@ fn internal_describe_syntax_routes_prefix_documentation_through_quote_substituti
         .expect("describe prefix syntax");
 
     assert_eq!(
-        eval.buffers
+        eval.edit
+            .buffers
             .current_buffer()
             .expect("current buffer")
             .buffer_string(),
@@ -8061,7 +8256,7 @@ fn internal_describe_syntax_routes_prefix_documentation_through_quote_substituti
 #[test]
 fn internal_set_lisp_face_attribute_from_resource_matches_gnu_conversion() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = eval
         .eval_str(
             r#"(let ((face 'resource-face))
@@ -8110,7 +8305,7 @@ fn internal_set_lisp_face_attribute_from_resource_matches_gnu_conversion() {
 #[test]
 fn internal_track_mouse_binds_and_restores_track_mouse() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = eval
         .eval_str(
             r#"(progn
@@ -8126,7 +8321,7 @@ fn internal_track_mouse_binds_and_restores_track_mouse() {
 #[test]
 fn internal_track_mouse_restores_track_mouse_after_error() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = eval
         .eval_str(
             r#"(progn
@@ -8148,7 +8343,7 @@ fn internal_track_mouse_restores_track_mouse_after_error() {
 #[test]
 fn internal_make_var_non_special_clears_special_flag() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.obarray_mut().make_special("x");
     assert!(eval.obarray().is_special("x"));
 
@@ -8360,7 +8555,7 @@ fn pure_dispatch_def_keymap_placeholder_cluster_matches_compat_contracts() {
 #[test]
 fn defvar_1_binds_only_when_default_is_unbound() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let result = builtin_defvar_1(
         &mut eval,
@@ -8392,7 +8587,7 @@ fn defvar_1_binds_only_when_default_is_unbound() {
 #[test]
 fn defconst_1_sets_value_and_risky_local_property_without_constant_trap() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let result = builtin_defconst_1(
         &mut eval,
@@ -8466,10 +8661,11 @@ fn pure_dispatch_process_placeholder_cluster_matches_compat_contracts() {
 #[test]
 fn kill_emacs_eval_requests_shutdown_and_stops_command_loop() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
-    eval.command_loop.running = true;
+    let mut eval = crate::test_utils::new_context();
+    eval.command_loop_mut().running = true;
 
-    let result = super::symbols::builtin_kill_emacs(&mut eval, vec![Value::fixnum(7)]);
+    let result =
+        crate::emacs_core::builtins::symbols::builtin_kill_emacs(&mut eval, vec![Value::fixnum(7)]);
     match result.kinded() {
         Err(neovm_value::error::FlowKind::Shutdown(request)) => {
             assert_eq!(request.exit_code, 7);
@@ -8477,14 +8673,14 @@ fn kill_emacs_eval_requests_shutdown_and_stops_command_loop() {
         other => panic!("kill-emacs should unwind as a shutdown, got {other:?}"),
     }
     assert_eq!(
-        eval.shutdown_request,
+        eval.shutdown_request_for_test(),
         Some(crate::emacs_core::eval::ShutdownRequest {
             exit_code: 7,
             restart: false,
         })
     );
     assert!(
-        !eval.command_loop.running,
+        !eval.command_loop().running,
         "kill-emacs should stop the interactive command loop"
     );
 }
@@ -9049,7 +9245,7 @@ fn pure_dispatch_treesit_node_placeholder_cluster_matches_compat_contracts() {
 #[test]
 fn match_data_round_trip_with_nil_groups() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     builtin_set_match_data(
         &mut eval,
@@ -9081,7 +9277,7 @@ fn match_data_round_trip_with_nil_groups() {
 #[test]
 fn buffer_match_data_keeps_lisp_positions_after_matched_text_is_deleted() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     load_minimal_gnu_backquote_runtime(&mut eval);
 
     let result = eval
@@ -9105,7 +9301,7 @@ fn buffer_match_data_keeps_lisp_positions_after_matched_text_is_deleted() {
 #[test]
 fn bootstrap_runtime_set_match_data_restores_multibyte_buffer_positions_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     load_minimal_gnu_backquote_runtime(&mut eval);
     let result = eval
         .eval_str_each(
@@ -9139,9 +9335,13 @@ fn replace_match_after_set_match_data_uses_gnu_buffer_char_positions() {
     };
     use crate::emacs_core::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
-        let buffer = eval.buffers.current_buffer_mut().expect("scratch buffer");
+        let buffer = eval
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("scratch buffer");
         buffer.insert("alpha one");
         buffer.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(0));
     }
@@ -9162,7 +9362,7 @@ fn replace_match_after_set_match_data_uses_gnu_buffer_char_positions() {
     ));
     let (start, end, replacement) =
         neovm_text::emacs_core::regex::compute_buffer_replacement_with_syntax(
-            eval.buffers.current_buffer().expect("current buffer"),
+            eval.edit.buffers.current_buffer().expect("current buffer"),
             "omega",
             true,
             true,
@@ -9181,7 +9381,7 @@ fn replace_match_after_set_match_data_uses_gnu_buffer_char_positions() {
     builtin_replace_match(&mut eval, vec![Value::string("omega"), Value::T, Value::T])
         .expect("replace-match should honor restored buffer match positions");
 
-    let buffer = eval.buffers.current_buffer().expect("current buffer");
+    let buffer = eval.edit.buffers.current_buffer().expect("current buffer");
     assert_eq!(
         buffer.buffer_substring_range(neovm_edit::buffer::EmacsByteRange::from_usize(
             0,
@@ -9194,7 +9394,7 @@ fn replace_match_after_set_match_data_uses_gnu_buffer_char_positions() {
 #[test]
 fn match_beginning_end_return_nil_without_match_data() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     builtin_set_match_data(&mut eval, vec![Value::NIL]).expect("set-match-data nil");
 
     let beg = builtin_match_beginning(&mut eval, vec![Value::fixnum(0)])
@@ -9208,7 +9408,7 @@ fn match_beginning_end_return_nil_without_match_data() {
 #[test]
 fn negative_match_group_signals_args_out_of_range() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let match_string_err = builtin_match_string(&mut eval, vec![Value::fixnum(-1)])
         .expect_err("negative subgroup should signal");
@@ -9244,7 +9444,7 @@ fn negative_match_group_signals_args_out_of_range() {
 #[test]
 fn buffer_region_negative_bounds_signal_without_panicking() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     builtin_insert(&mut eval, vec![Value::string("abc")]).expect("insert should succeed");
     let current =
         builtin_current_buffer(&mut eval.edit.buffers, vec![]).expect("current-buffer should work");
@@ -9295,7 +9495,7 @@ fn buffer_region_negative_bounds_signal_without_panicking() {
 #[test]
 fn goto_char_rejects_bignum_but_fix_position_builtins_clamp_it() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     builtin_insert(&mut eval, vec![Value::string("abc")]).expect("insert should succeed");
 
     let positive_big = Value::bignum(Integer::from(1u64) << 100u32);
@@ -9339,7 +9539,7 @@ fn goto_char_rejects_bignum_but_fix_position_builtins_clamp_it() {
 #[test]
 fn compute_motion_validates_positions_and_offsets_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     builtin_insert(&mut eval, vec![Value::string("abc")]).expect("insert should succeed");
     builtin_narrow_to_region(&mut eval, vec![Value::fixnum(2), Value::fixnum(3)])
         .expect("narrow-to-region should succeed");
@@ -9468,7 +9668,7 @@ fn compute_motion_validates_positions_and_offsets_like_gnu() {
 #[test]
 fn delete_region_normalizes_reversed_bounds() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     builtin_insert(&mut eval, vec![Value::string("abc")]).expect("insert should succeed");
 
     builtin_delete_region(&mut eval, vec![Value::fixnum(3), Value::fixnum(2)])
@@ -9481,15 +9681,18 @@ fn delete_region_normalizes_reversed_bounds() {
 #[test]
 fn delete_and_extract_region_preserves_buffer_text_properties() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     builtin_insert(&mut eval, vec![Value::string("AAABBBCCC")]).expect("insert should succeed");
-    let buf = eval.buffers.current_buffer().expect("current buffer");
-    let _ = eval.buffers.put_buffer_text_property_in_emacs_byte_range(
-        buf.id,
-        EmacsByteRange::from_usize(3, 6),
-        Value::symbol("face"),
-        Value::symbol("italic"),
-    );
+    let buf = eval.edit.buffers.current_buffer().expect("current buffer");
+    let _ = eval
+        .edit
+        .buffers
+        .put_buffer_text_property_in_emacs_byte_range(
+            buf.id,
+            EmacsByteRange::from_usize(3, 6),
+            Value::symbol("face"),
+            Value::symbol("italic"),
+        );
 
     let extracted =
         builtin_delete_and_extract_region(&mut eval, vec![Value::fixnum(4), Value::fixnum(7)])
@@ -9511,7 +9714,7 @@ fn delete_and_extract_region_preserves_buffer_text_properties() {
 #[test]
 fn string_match_start_handles_nil_and_negative_offsets() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let with_nil = builtin_string_match(
         &mut eval,
         vec![Value::string("a"), Value::string("ba"), Value::NIL],
@@ -9536,7 +9739,7 @@ fn string_match_start_handles_nil_and_negative_offsets() {
 #[test]
 fn string_match_handles_raw_unibyte_pattern_without_panicking() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let raw = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![
         0xFF,
     ]));
@@ -9552,7 +9755,7 @@ fn string_match_handles_raw_unibyte_pattern_without_panicking() {
 #[test]
 fn string_match_unibyte_high_byte_charset_range_matches_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let high_byte_range =
         Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![
             b'[', 0x80, b'-', 0xFF, b']',
@@ -9650,7 +9853,7 @@ fn substring_no_properties_drops_string_text_properties_like_gnu() {
 #[test]
 fn search_match_runtime_arity_edges_match_oracle_contracts() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let search_over_arity = builtin_search_forward(
         &mut eval,
@@ -9790,7 +9993,7 @@ fn search_match_runtime_arity_edges_match_oracle_contracts() {
 #[test]
 fn set_match_data_rejects_non_list() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = builtin_set_match_data(&mut eval, vec![Value::fixnum(1)]);
     assert!(result.is_err());
 }
@@ -9800,9 +10003,13 @@ fn looking_at_inhibit_modify_preserves_match_data() {
     crate::test_utils::init_test_tracing();
     use crate::emacs_core::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
-        let buffer = eval.buffers.current_buffer_mut().expect("scratch buffer");
+        let buffer = eval
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("scratch buffer");
         buffer.insert("abc");
         buffer.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(0));
     }
@@ -9821,9 +10028,13 @@ fn looking_at_updates_match_data_when_allowed() {
     crate::test_utils::init_test_tracing();
     use crate::emacs_core::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
-        let buffer = eval.buffers.current_buffer_mut().expect("scratch buffer");
+        let buffer = eval
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("scratch buffer");
         buffer.insert("abc");
         buffer.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(0));
     }
@@ -9864,9 +10075,13 @@ fn looking_at_p_preserves_match_data() {
     crate::test_utils::init_test_tracing();
     use crate::emacs_core::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
-        let buffer = eval.buffers.current_buffer_mut().expect("scratch buffer");
+        let buffer = eval
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("scratch buffer");
         buffer.insert("abc");
         buffer.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(0));
     }
@@ -9884,9 +10099,13 @@ fn looking_at_handles_raw_unibyte_pattern_without_panicking() {
     crate::test_utils::init_test_tracing();
     use crate::emacs_core::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
-        let buffer = eval.buffers.current_buffer_mut().expect("scratch buffer");
+        let buffer = eval
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("scratch buffer");
         buffer.insert("abc");
         buffer.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(0));
     }
@@ -9901,7 +10120,7 @@ fn looking_at_handles_raw_unibyte_pattern_without_panicking() {
 fn compare_value_lt_handles_raw_unibyte_strings_without_panicking() {
     crate::test_utils::init_test_tracing();
 
-    let eval = crate::emacs_core::eval::Context::new();
+    let eval = crate::test_utils::new_context();
     let left = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![
         0xFE,
     ]));
@@ -10121,7 +10340,7 @@ fn string_match_inhibit_modify_preserves_match_data() {
     crate::test_utils::init_test_tracing();
     use crate::emacs_core::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let baseline = Value::list(vec![Value::fixnum(10), Value::fixnum(11)]);
     builtin_set_match_data(&mut eval, vec![baseline]).expect("seed baseline");
 
@@ -10146,7 +10365,7 @@ fn string_match_honors_inhibit_changing_match_data() {
     crate::test_utils::init_test_tracing();
     use crate::emacs_core::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let baseline = Value::list(vec![Value::fixnum(10), Value::fixnum(11)]);
     builtin_set_match_data(&mut eval, vec![baseline]).expect("seed baseline");
     eval.set_variable("inhibit-changing-match-data", Value::T);
@@ -10167,7 +10386,7 @@ fn string_match_handles_gnu_flex_regex_with_repeated_nongreedy_segments() {
     crate::test_utils::init_test_tracing();
     use crate::emacs_core::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = builtin_string_match(
         &mut eval,
         vec![
@@ -10185,7 +10404,7 @@ fn replace_match_missing_subexp_signals_error() {
     crate::test_utils::init_test_tracing();
     use crate::emacs_core::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     builtin_string_match(
         &mut eval,
         vec![Value::string("\\(foo\\)"), Value::string("foo")],
@@ -10242,7 +10461,7 @@ fn posix_string_match_returns_longest_alternative_like_gnu() {
     crate::test_utils::init_test_tracing();
     use crate::emacs_core::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     // Baseline: non-POSIX `string-match` returns the leftmost-first
     // alternative and sets match data accordingly.
@@ -10276,7 +10495,7 @@ fn posix_string_match_grouped_alternation_picks_longest_like_gnu() {
     crate::test_utils::init_test_tracing();
     use crate::emacs_core::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     // Non-POSIX: m0="a", m1="a"
     let result = builtin_string_match(
@@ -10306,7 +10525,7 @@ fn replace_match_rejects_backslash_zero_and_unknown_escape_like_gnu() {
     crate::test_utils::init_test_tracing();
     use crate::emacs_core::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     // Seed match data via string-match against a plain string so the
     // replacement path is the Fstring-based one.
@@ -10404,7 +10623,7 @@ fn replace_match_string_preserves_source_and_replacement_text_properties_like_gn
         );
     }
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let source = Value::string("abcde");
     put_face(source, 0, 2, "a");
     put_face(source, 2, 5, "b");
@@ -10437,7 +10656,7 @@ fn replace_match_without_active_match_data_signals_missing_subexp_like_gnu() {
     crate::test_utils::init_test_tracing();
     use crate::emacs_core::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     builtin_set_match_data(&mut eval, vec![Value::NIL]).expect("clear match data");
 
     let result = builtin_replace_match(&mut eval, vec![Value::string("bar")]);
@@ -10463,9 +10682,13 @@ fn replace_match_buffer_updates_live_match_data_like_gnu() {
     crate::test_utils::init_test_tracing();
     use crate::emacs_core::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
-        let buffer = eval.buffers.current_buffer_mut().expect("scratch buffer");
+        let buffer = eval
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("scratch buffer");
         buffer.insert("foo-42");
         buffer.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(0));
     }
@@ -10475,7 +10698,7 @@ fn replace_match_buffer_updates_live_match_data_like_gnu() {
     builtin_replace_match(&mut eval, vec![Value::string("\\2-\\1")])
         .expect("replace-match should succeed");
 
-    let buffer = eval.buffers.current_buffer().expect("scratch buffer");
+    let buffer = eval.edit.buffers.current_buffer().expect("scratch buffer");
     assert_eq!(
         buffer.buffer_substring_range(neovm_edit::buffer::EmacsByteRange::from_usize(
             0,
@@ -10515,7 +10738,7 @@ fn match_data_translate_shifts_groups_in_shared_eval_state() {
     crate::test_utils::init_test_tracing();
     use crate::emacs_core::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     builtin_set_match_data(
         &mut eval,
         vec![Value::list(vec![
@@ -10545,9 +10768,13 @@ fn looking_at_p_respects_case_fold_search() {
     crate::test_utils::init_test_tracing();
     use crate::emacs_core::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
-        let buffer = eval.buffers.current_buffer_mut().expect("scratch buffer");
+        let buffer = eval
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("scratch buffer");
         buffer.insert("A");
         buffer.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(0));
     }
@@ -10592,9 +10819,13 @@ fn looking_at_honors_per_buffer_case_fold_search() {
     crate::test_utils::init_test_tracing();
     use crate::emacs_core::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
-        let buffer = eval.buffers.current_buffer_mut().expect("scratch buffer");
+        let buffer = eval
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("scratch buffer");
         buffer.insert("A");
         buffer.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(0));
     }
@@ -10603,7 +10834,7 @@ fn looking_at_honors_per_buffer_case_fold_search() {
     eval.set_variable("case-fold-search", Value::T);
 
     // Install a per-buffer binding of nil in the current buffer.
-    // `setq-local` is a macro not defined in a bare `Context::new()`,
+    // `setq-local` is a macro not defined in a bare `crate::test_utils::new_context()`,
     // so expand it by hand: `make-local-variable` then `set`.
     let make_local = Value::list(vec![
         Value::symbol("make-local-variable"),
@@ -10680,9 +10911,13 @@ fn re_search_forward_honors_inhibit_changing_match_data() {
     crate::test_utils::init_test_tracing();
     use crate::emacs_core::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
-        let buffer = eval.buffers.current_buffer_mut().expect("scratch buffer");
+        let buffer = eval
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("scratch buffer");
         buffer.insert("axxxxb");
         buffer.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(0));
     }
@@ -10707,7 +10942,7 @@ fn re_search_forward_honors_inhibit_changing_match_data() {
     // Set the global and move point back to the start.
     eval.set_variable("inhibit-changing-match-data", Value::T);
     {
-        let buf = eval.buffers.current_buffer_mut().expect("scratch");
+        let buf = eval.edit.buffers.current_buffer_mut().expect("scratch");
         buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(0));
     }
 
@@ -10735,7 +10970,7 @@ fn re_search_forward_honors_inhibit_changing_match_data() {
 #[test]
 fn dispatch_builtin_resolves_typed_only_pure_names() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = dispatch_builtin(
         &mut eval,
         "string-equal",
@@ -10823,7 +11058,7 @@ fn dispatch_builtin_pure_handles_treesit_parser_and_query_entrypoints() {
 #[test]
 fn treesit_query_compile_creates_lazy_compiled_query_record() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let query = crate::emacs_core::builtins::builtin_treesit_query_compile(
         &mut eval,
         vec![
@@ -10863,7 +11098,7 @@ fn treesit_query_compile_creates_lazy_compiled_query_record() {
 #[test]
 fn treesit_query_compile_reuses_compiled_query_when_language_is_nil() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     install_test_treesit_json_language(&mut eval);
     let query = crate::emacs_core::builtins::builtin_treesit_query_compile(
         &mut eval,
@@ -10895,7 +11130,7 @@ fn treesit_query_compile_reuses_compiled_query_when_language_is_nil() {
 #[test]
 fn treesit_query_compile_preserves_nil_language_for_lazy_query() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let source = Value::string("(object) @object");
 
     let query = crate::emacs_core::builtins::builtin_treesit_query_compile(
@@ -10933,28 +11168,28 @@ fn treesit_query_expand_and_pattern_expand_follow_gnu_sexp_forms() {
     ]);
 
     assert_eq!(
-        crate::emacs_core::builtins::builtin_treesit_pattern_expand(vec![Value::keyword(
+        crate::emacs_core::builtins::treesit::builtin_treesit_pattern_expand(vec![Value::keyword(
             ":anchor",
         )])
         .unwrap(),
         Value::string(".")
     );
     assert_eq!(
-        crate::emacs_core::builtins::builtin_treesit_pattern_expand(vec![Value::list(vec![
-            Value::symbol("identifier"),
-        ])])
+        crate::emacs_core::builtins::treesit::builtin_treesit_pattern_expand(vec![Value::list(
+            vec![Value::symbol("identifier"),]
+        )])
         .unwrap(),
         Value::string("(identifier)")
     );
     assert_eq!(
-        crate::emacs_core::builtins::builtin_treesit_pattern_expand(vec![
-            Value::keyword(":equal",)
-        ])
+        crate::emacs_core::builtins::treesit::builtin_treesit_pattern_expand(vec![Value::keyword(
+            ":equal",
+        )])
         .unwrap(),
         Value::string("#eq?")
     );
     assert_eq!(
-        crate::emacs_core::builtins::builtin_treesit_query_expand(vec![query]).unwrap(),
+        crate::emacs_core::builtins::treesit::builtin_treesit_query_expand(vec![query]).unwrap(),
         Value::string("(identifier) @id . \"return\" @ret #eq? @lhs @rhs")
     );
 }
@@ -10969,7 +11204,7 @@ fn treesit_candidate_paths_expand_tilde_and_relative_directories_like_gnu() {
     // every grammar under the default `user-emacs-directory` report
     // `not-found` (issue #413) while the identical file loaded in GNU.
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.eval_str(
         r#"(progn
              (setq user-emacs-directory "~/.config/emacs/")
@@ -10978,7 +11213,7 @@ fn treesit_candidate_paths_expand_tilde_and_relative_directories_like_gnu() {
     .expect("eval treesit load-path fixture");
     let language = neovm_value::intern::intern("c");
 
-    let candidates = super::treesit::treesit_candidate_paths(&eval, language);
+    let candidates = crate::emacs_core::builtins::treesit::treesit_candidate_paths(&eval, language);
 
     assert!(
         candidates
@@ -11027,15 +11262,15 @@ fn treesit_query_expand_preserves_nil_as_the_anonymous_node_marker() {
     // node pattern with no type name and matches nothing.
     crate::test_utils::init_test_tracing();
     assert_eq!(
-        crate::emacs_core::builtins::builtin_treesit_query_expand(vec![Value::list(vec![
-            Value::list(vec![Value::NIL]),
-            Value::symbol("@f"),
-        ],)])
+        crate::emacs_core::builtins::treesit::builtin_treesit_query_expand(vec![Value::list(
+            vec![Value::list(vec![Value::NIL]), Value::symbol("@f"),],
+        )])
         .unwrap(),
         Value::string("(nil) @f"),
     );
     assert_eq!(
-        crate::emacs_core::builtins::builtin_treesit_pattern_expand(vec![Value::NIL]).unwrap(),
+        crate::emacs_core::builtins::treesit::builtin_treesit_pattern_expand(vec![Value::NIL])
+            .unwrap(),
         Value::string("nil"),
     );
 }
@@ -11043,7 +11278,7 @@ fn treesit_query_expand_preserves_nil_as_the_anonymous_node_marker() {
 #[test]
 fn treesit_query_compile_eager_missing_language_signals_language_load_error() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     // GNU 31.1 distinguishes grammar loading from query syntax failures.
     let result = eval
         .eval_str(
@@ -11059,10 +11294,13 @@ fn treesit_query_compile_eager_missing_language_signals_language_load_error() {
 #[test]
 fn treesit_query_capture_runs_against_cached_json_grammar() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     install_test_treesit_json_language(&mut eval);
     let buffer = create_unique_test_buffer(&mut eval, "*treesit-json*");
-    let _ = eval.buffers.switch_current(buffer.as_buffer_id().unwrap());
+    let _ = eval
+        .edit
+        .buffers
+        .switch_current(buffer.as_buffer_id().unwrap());
     builtin_insert(&mut eval, vec![Value::string("{\"a\": 1, \"b\": 2}")]).unwrap();
 
     let parser = crate::emacs_core::builtins::builtin_treesit_parser_create(
@@ -11097,10 +11335,13 @@ fn treesit_query_capture_runs_against_cached_json_grammar() {
 #[test]
 fn treesit_query_compile_and_capture_accept_sexp_queries() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     install_test_treesit_json_language(&mut eval);
     let buffer = create_unique_test_buffer(&mut eval, "*treesit-json-sexp*");
-    let _ = eval.buffers.switch_current(buffer.as_buffer_id().unwrap());
+    let _ = eval
+        .edit
+        .buffers
+        .switch_current(buffer.as_buffer_id().unwrap());
     builtin_insert(&mut eval, vec![Value::string("{\"a\": 1, \"b\": 2}")]).unwrap();
 
     let query = Value::list(vec![
@@ -11114,7 +11355,7 @@ fn treesit_query_compile_and_capture_accept_sexp_queries() {
     .unwrap();
 
     assert_eq!(
-        crate::emacs_core::builtins::builtin_treesit_query_expand(vec![compiled]).unwrap(),
+        crate::emacs_core::builtins::treesit::builtin_treesit_query_expand(vec![compiled]).unwrap(),
         Value::string("(object) @obj")
     );
 
@@ -11143,10 +11384,13 @@ fn treesit_query_compile_and_capture_accept_sexp_queries() {
 #[test]
 fn treesit_search_and_match_work_against_cached_json_grammar() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     install_test_treesit_json_language(&mut eval);
     let buffer = create_unique_test_buffer(&mut eval, "*treesit-search*");
-    let _ = eval.buffers.switch_current(buffer.as_buffer_id().unwrap());
+    let _ = eval
+        .edit
+        .buffers
+        .switch_current(buffer.as_buffer_id().unwrap());
     builtin_insert(&mut eval, vec![Value::string("{\"a\": 1, \"b\": 2}")]).unwrap();
 
     let parser = crate::emacs_core::builtins::builtin_treesit_parser_create(
@@ -11185,7 +11429,7 @@ fn treesit_search_and_match_work_against_cached_json_grammar() {
 #[test]
 fn treesit_parse_string_and_linecol_cache_are_runtime_backed() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     install_test_treesit_json_language(&mut eval);
 
     let root = crate::emacs_core::builtins::builtin_treesit_parse_string(
@@ -11199,7 +11443,10 @@ fn treesit_parse_string_and_linecol_cache_are_runtime_backed() {
     );
 
     let buffer = create_unique_test_buffer(&mut eval, "*treesit-linecol*");
-    let _ = eval.buffers.switch_current(buffer.as_buffer_id().unwrap());
+    let _ = eval
+        .edit
+        .buffers
+        .switch_current(buffer.as_buffer_id().unwrap());
     builtin_insert(&mut eval, vec![Value::string("a\nbc")]).unwrap();
     crate::emacs_core::builtins::builtin_treesit_linecol_cache_set(
         &mut eval,
@@ -11221,7 +11468,7 @@ fn treesit_parse_string_and_linecol_cache_are_runtime_backed() {
 #[test]
 fn treesit_parse_string_temp_buffer_is_cleaned_up_with_parser_delete() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     install_test_treesit_json_language(&mut eval);
 
     let root = crate::emacs_core::builtins::builtin_treesit_parse_string(
@@ -11234,24 +11481,27 @@ fn treesit_parse_string_temp_buffer_is_cleaned_up_with_parser_delete() {
         crate::emacs_core::builtins::builtin_treesit_parser_buffer(&mut eval, vec![parser])
             .unwrap();
     let buffer_id = buffer.as_buffer_id().unwrap();
-    assert!(eval.buffers.get(buffer_id).is_some());
+    assert!(eval.edit.buffers.get(buffer_id).is_some());
 
     crate::emacs_core::builtins::builtin_treesit_parser_delete(&mut eval, vec![parser]).unwrap();
-    assert!(eval.buffers.get(buffer_id).is_none());
+    assert!(eval.edit.buffers.get(buffer_id).is_none());
 }
 
 #[test]
 fn treesit_parser_create_enables_linecol_tracking_for_configured_languages() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     install_test_treesit_json_language(&mut eval);
-    eval.obarray.set_symbol_value(
+    eval.obarray_mut().set_symbol_value(
         "treesit-languages-require-line-column-tracking",
         Value::list(vec![Value::symbol("json")]),
     );
 
     let buffer = create_unique_test_buffer(&mut eval, "*treesit-linecol-parser*");
-    let _ = eval.buffers.switch_current(buffer.as_buffer_id().unwrap());
+    let _ = eval
+        .edit
+        .buffers
+        .switch_current(buffer.as_buffer_id().unwrap());
     builtin_insert(&mut eval, vec![Value::string("{\"x\": 1}")]).unwrap();
 
     let parser = crate::emacs_core::builtins::builtin_treesit_parser_create(
@@ -11278,9 +11528,12 @@ fn treesit_parser_create_enables_linecol_tracking_for_configured_languages() {
 #[test]
 fn treesit_linecol_cache_invalidates_when_edit_moves_before_cached_point() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let buffer = create_unique_test_buffer(&mut eval, "*treesit-linecol-edit*");
-    let _ = eval.buffers.switch_current(buffer.as_buffer_id().unwrap());
+    let _ = eval
+        .edit
+        .buffers
+        .switch_current(buffer.as_buffer_id().unwrap());
     builtin_insert(&mut eval, vec![Value::string("a\nbc")]).unwrap();
 
     crate::emacs_core::builtins::builtin_treesit_linecol_cache_set(
@@ -11303,10 +11556,13 @@ fn treesit_linecol_cache_invalidates_when_edit_moves_before_cached_point() {
 #[test]
 fn treesit_parser_changed_regions_reports_buffer_edits() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     install_test_treesit_json_language(&mut eval);
     let buffer = create_unique_test_buffer(&mut eval, "*treesit-changes*");
-    let _ = eval.buffers.switch_current(buffer.as_buffer_id().unwrap());
+    let _ = eval
+        .edit
+        .buffers
+        .switch_current(buffer.as_buffer_id().unwrap());
     builtin_insert(&mut eval, vec![Value::string("{\"a\": 1}")]).unwrap();
 
     let parser = crate::emacs_core::builtins::builtin_treesit_parser_create(
@@ -11499,7 +11755,7 @@ fn dispatch_builtin_pure_handles_fillarray_and_find_coding_region_internal() {
         "find-coding-systems-region-internal should use the eval-aware path"
     );
 
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let coding = dispatch_builtin(
         &mut eval,
         "find-coding-systems-region-internal",
@@ -11619,7 +11875,7 @@ fn dispatch_builtin_pure_handles_fringe_display_and_debug_output_placeholders() 
 #[test]
 fn defined_fringe_bitmap_can_receive_face_until_destroyed() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = eval
         .eval_str(
             r#"
@@ -11664,7 +11920,7 @@ fn defined_fringe_bitmap_can_receive_face_until_destroyed() {
 #[test]
 fn set_fringe_bitmap_face_rejects_non_symbol_bitmap_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let err = dispatch_builtin(
         &mut eval,
         "set-fringe-bitmap-face",
@@ -11685,7 +11941,7 @@ fn set_fringe_bitmap_face_rejects_non_symbol_bitmap_like_gnu() {
 #[test]
 fn mouse_position_builtins_default_to_selected_frame_with_nil_coords() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let selected = dispatch_builtin(&mut eval, "selected-frame", vec![])
         .expect("selected-frame should resolve")
         .expect("selected-frame should evaluate");
@@ -11710,7 +11966,7 @@ fn mouse_position_builtins_default_to_selected_frame_with_nil_coords() {
 #[test]
 fn display_update_for_mouse_movement_updates_shared_mouse_state() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let frame = dispatch_builtin(&mut eval, "selected-frame", vec![])
         .expect("selected-frame should resolve")
         .expect("selected-frame should evaluate");
@@ -11718,7 +11974,10 @@ fn display_update_for_mouse_movement_updates_shared_mouse_state() {
         panic!("selected-frame should return a frame");
     };
     let frame_id = frame.as_frame_id().unwrap();
-    if let Some(frame) = eval.frames.get_mut(crate::window::FrameId(frame_id)) {
+    if let Some(frame) = eval
+        .frame_manager_mut()
+        .get_mut(crate::window::FrameId(frame_id))
+    {
         frame.char_width = 8.0;
         frame.char_height = 16.0;
     }
@@ -11752,13 +12011,16 @@ fn display_update_for_mouse_movement_updates_shared_mouse_state() {
 #[test]
 fn mouse_position_in_root_frame_adds_frame_offsets_to_mouse_position() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let frame = dispatch_builtin(&mut eval, "selected-frame", vec![])
         .expect("selected-frame should resolve")
         .expect("selected-frame should evaluate");
     let frame_id = frame.as_frame_id().unwrap();
 
-    if let Some(frame) = eval.frames.get_mut(crate::window::FrameId(frame_id)) {
+    if let Some(frame) = eval
+        .frame_manager_mut()
+        .get_mut(crate::window::FrameId(frame_id))
+    {
         frame.char_width = 1.0;
         frame.char_height = 1.0;
         frame.left_pos = 3;
@@ -11789,18 +12051,27 @@ fn mouse_position_in_root_frame_adds_frame_offsets_to_mouse_position() {
 #[test]
 fn mouse_position_in_root_frame_walks_parent_frames() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let parent = dispatch_builtin(&mut eval, "selected-frame", vec![])
         .expect("selected-frame should resolve")
         .expect("selected-frame should evaluate");
     let parent_id = parent.as_frame_id().unwrap();
-    if let Some(frame) = eval.frames.get_mut(crate::window::FrameId(parent_id)) {
+    if let Some(frame) = eval
+        .frame_manager_mut()
+        .get_mut(crate::window::FrameId(parent_id))
+    {
         frame.left_pos = 3;
         frame.top_pos = 4;
     }
-    let buffer = eval.buffers.current_buffer_id().expect("current buffer");
-    let child_id = eval.frames.create_frame("issue660-child", 80, 24, buffer);
-    if let Some(frame) = eval.frames.get_mut(child_id) {
+    let buffer = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
+    let child_id = eval
+        .frame_manager_mut()
+        .create_frame("issue660-child", 80, 24, buffer);
+    if let Some(frame) = eval.frame_manager_mut().get_mut(child_id) {
         frame.left_pos = 5;
         frame.top_pos = 6;
         frame.parent_frame = Value::make_frame(parent_id);
@@ -11824,7 +12095,7 @@ fn mouse_position_in_root_frame_walks_parent_frames() {
 #[test]
 fn mouse_position_in_root_frame_rejects_a_frame_that_no_longer_exists() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.store_variable_by_name("issue660-dead-frame", Value::make_frame(999_999));
     eval.eval_str(
         "(setq mouse-position-function
@@ -11841,10 +12112,16 @@ fn mouse_position_in_root_frame_rejects_a_frame_that_no_longer_exists() {
 #[test]
 fn mouse_position_in_root_frame_rejects_a_missing_ancestor_frame() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
-    let buffer = eval.buffers.current_buffer_id().expect("current buffer");
-    let child_id = eval.frames.create_frame("issue660-orphan", 80, 24, buffer);
-    if let Some(frame) = eval.frames.get_mut(child_id) {
+    let mut eval = crate::test_utils::new_context();
+    let buffer = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
+    let child_id = eval
+        .frame_manager_mut()
+        .create_frame("issue660-orphan", 80, 24, buffer);
+    if let Some(frame) = eval.frame_manager_mut().get_mut(child_id) {
         frame.left_pos = 5;
         frame.top_pos = 6;
         // Neomacs delete-frame does not yet soft-delete a parent's children
@@ -11868,7 +12145,7 @@ fn mouse_position_in_root_frame_rejects_a_missing_ancestor_frame() {
 #[test]
 fn mouse_position_in_root_frame_returns_nil_for_malformed_positions() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     // GNU reads these shapes without validation: the reference build
     // segfaults on a non-cons cdr and on a non-list position.  Neomacs must
@@ -11894,7 +12171,7 @@ fn mouse_position_in_root_frame_returns_nil_for_malformed_positions() {
 #[test]
 fn set_mouse_position_builtins_update_shared_mouse_state() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let frame = dispatch_builtin(&mut eval, "selected-frame", vec![])
         .expect("selected-frame should resolve")
         .expect("selected-frame should evaluate");
@@ -11902,7 +12179,10 @@ fn set_mouse_position_builtins_update_shared_mouse_state() {
         panic!("selected-frame should return a frame");
     };
     let frame_id = frame.as_frame_id().unwrap();
-    if let Some(frame) = eval.frames.get_mut(crate::window::FrameId(frame_id)) {
+    if let Some(frame) = eval
+        .frame_manager_mut()
+        .get_mut(crate::window::FrameId(frame_id))
+    {
         frame.char_width = 8.0;
         frame.char_height = 16.0;
     }
@@ -11986,7 +12266,7 @@ fn dispatch_builtin_pure_handles_internal_labeled_and_modified_tick_placeholders
 #[test]
 fn internal_define_uninitialized_variable_marks_special_and_sets_doc() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = dispatch_builtin(
         &mut eval,
         "internal--define-uninitialized-variable",
@@ -12006,10 +12286,10 @@ fn internal_define_uninitialized_variable_marks_special_and_sets_doc() {
 #[test]
 fn internal_labeled_narrow_to_region_clamps_within_current_restriction() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
-    let buf_id = eval.buffers.create_buffer(" *vm-labeled-narrow*");
-    eval.buffers.set_current(buf_id);
-    let _ = eval.buffers.insert_into_buffer(buf_id, "abcdef");
+    let mut eval = crate::test_utils::new_context();
+    let buf_id = eval.edit.buffers.create_buffer(" *vm-labeled-narrow*");
+    eval.edit.buffers.set_current(buf_id);
+    let _ = eval.edit.buffers.insert_into_buffer(buf_id, "abcdef");
     dispatch_builtin(
         &mut eval,
         "internal--labeled-narrow-to-region",
@@ -12035,7 +12315,11 @@ fn internal_labeled_narrow_to_region_clamps_within_current_restriction() {
     .expect("internal--labeled-narrow-to-region should evaluate");
     assert_eq!(narrowed, Value::NIL);
 
-    let buf = eval.buffers.get(buf_id).expect("buffer should stay live");
+    let buf = eval
+        .edit
+        .buffers
+        .get(buf_id)
+        .expect("buffer should stay live");
     assert_eq!(buf.point_min_lisp_char_pos().as_i64(), 2);
     assert_eq!(buf.point_max_lisp_char_pos().as_i64(), 5);
 }
@@ -12239,8 +12523,9 @@ fn gap_position_and_size_use_current_buffer_storage() {
     assert!(dispatch_builtin_pure("gap-size", vec![]).is_none());
 
     for backend_kind in neovm_edit::buffer::BufferTextBackendKind::non_gap_implemented_variants() {
-        let mut eval = super::super::eval::Context::new();
+        let mut eval = crate::test_utils::new_context();
         let current = eval
+            .edit
             .buffers
             .current_buffer_id()
             .expect("scratch buffer should exist");
@@ -12249,7 +12534,8 @@ fn gap_position_and_size_use_current_buffer_storage() {
             builtin_gap_size(&mut eval, vec![]).expect("gap-size"),
         ]);
 
-        eval.buffers
+        eval.edit
+            .buffers
             .insert_into_buffer(current, "abc")
             .expect("insert should succeed");
         let after_gap_insert = Value::list(vec![
@@ -12262,7 +12548,8 @@ fn gap_position_and_size_use_current_buffer_storage() {
             vec![Value::symbol(backend_kind.symbol_name())],
         )
         .expect("non-gap backend should be implemented");
-        eval.buffers
+        eval.edit
+            .buffers
             .insert_into_buffer(current, "d")
             .expect("non-gap insert should succeed");
         let after_non_gap_insert = Value::list(vec![
@@ -12388,7 +12675,7 @@ fn dispatch_builtin_pure_handles_gnutls_query_and_error_placeholders() {
 #[test]
 fn gnutls_error_helpers_honor_gnu_symbol_code_properties() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = eval.eval_str(
         r#"(let ((custom 'custom-gnutls-error)
                  (bad-string 'custom-gnutls-bad-string)
@@ -12673,7 +12960,7 @@ fn gnutls_aes_256_cbc_crypto_matches_gnu_auth_source_shape() {
 #[test]
 fn dispatch_builtin_pure_handles_face_attribute_vector() {
     crate::test_utils::init_test_tracing();
-    let _eval = crate::emacs_core::Context::new();
+    let _eval = crate::test_utils::new_context();
     let face = dispatch_builtin_pure("face-attributes-as-vector", vec![Value::NIL])
         .expect("face-attributes-as-vector should resolve")
         .expect("face-attributes-as-vector should evaluate");
@@ -12689,7 +12976,7 @@ fn dispatch_builtin_pure_handles_face_attribute_vector() {
 #[test]
 fn dispatch_builtin_pure_handles_fontset_placeholders() {
     crate::test_utils::init_test_tracing();
-    super::symbols::reset_symbols_thread_locals();
+    neovm_eval::test_support::authority::reset_symbols_thread_locals_for_test();
     let system = dispatch_builtin_pure("font-get-system-font", vec![])
         .expect("font-get-system-font should resolve")
         .expect("font-get-system-font should evaluate");
@@ -12752,7 +13039,7 @@ fn dispatch_builtin_pure_handles_fontset_placeholders() {
 #[test]
 fn prin1_to_string_prints_canonical_threading_handles_as_opaque() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let thread = dispatch_builtin(&mut eval, "current-thread", vec![])
         .expect("current-thread should resolve")
@@ -12782,7 +13069,7 @@ fn prin1_to_string_prints_canonical_threading_handles_as_opaque() {
 #[test]
 fn prin1_to_string_keeps_forged_threading_handles_as_cons() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let forged_thread = Value::cons(Value::symbol("thread"), Value::fixnum(0));
     let thread_text = dispatch_builtin(&mut eval, "prin1-to-string", vec![forged_thread])
@@ -12806,7 +13093,7 @@ fn prin1_to_string_keeps_forged_threading_handles_as_cons() {
 #[test]
 fn prin1_to_string_supports_noescape_for_strings() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let value = Value::string("a\nb");
 
     let escaped = dispatch_builtin(&mut eval, "prin1-to-string", vec![value])
@@ -12825,7 +13112,7 @@ fn prin1_to_string_supports_noescape_for_strings() {
 #[test]
 fn prin1_to_string_uses_gnu_default_cycle_tail_indices() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let result = eval
         .eval_str(
@@ -12853,7 +13140,7 @@ fn prin1_to_string_uses_gnu_default_cycle_tail_indices() {
 #[test]
 fn prin1_runtime_path_detects_string_cycles_through_text_properties() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let result = eval
         .eval_str(
@@ -12897,7 +13184,7 @@ fn prin1_runtime_path_detects_string_cycles_through_text_properties() {
 #[test]
 fn prin1_to_buffer_preserves_private_use_glyphs_issue_131() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let result = eval
         .eval_str(
@@ -12933,7 +13220,7 @@ fn prin1_to_buffer_preserves_private_use_glyphs_issue_131() {
 #[test]
 fn write_char_to_buffer_preserves_private_use_glyphs_issue_131() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let result = eval
         .eval_str(
@@ -12971,7 +13258,7 @@ fn write_char_to_buffer_preserves_private_use_glyphs_issue_131() {
 #[test]
 fn case_and_propertize_preserve_private_use_glyphs_issue_131() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let result = eval
         .eval_str(
@@ -12997,7 +13284,7 @@ fn case_and_propertize_preserve_private_use_glyphs_issue_131() {
 #[test]
 fn princ_to_buffer_preserves_private_use_glyphs_issue_131() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let result = eval
         .eval_str(
@@ -13027,7 +13314,7 @@ fn princ_to_buffer_preserves_private_use_glyphs_issue_131() {
 #[test]
 fn princ_to_function_preserves_private_use_glyph_codes_issue_131() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     // GNU `(let (out) (princ (char-to-string #xe0a0) (lambda (c) ...))
     //       (nreverse out))` => (57504): princ to a function emits the real
@@ -13073,7 +13360,7 @@ fn princ_to_function_preserves_private_use_glyph_codes_issue_131() {
 #[test]
 fn format_preserves_private_use_glyphs_issue_131() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let result = eval
         .eval_str(
@@ -13094,7 +13381,7 @@ fn format_preserves_private_use_glyphs_issue_131() {
 #[test]
 fn format_promotes_raw_byte_to_eight_bit_in_multibyte_result_issue_131() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     // GNU: (format "%c%s" #xe0a0 (unibyte-string 255)) => length 2, multibyte,
     // aref 0 = 57504 (the Private-Use glyph), aref 1 = 4194303 (#x3FFFFF, the
@@ -13123,7 +13410,7 @@ fn format_promotes_raw_byte_to_eight_bit_in_multibyte_result_issue_131() {
 #[test]
 fn format_preserves_unibyte_raw_byte_payload_and_width_issue_131() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     // GNU: (format "%5s" (unibyte-string 200)) => a UNIBYTE string of 5 bytes,
     // four leading ASCII spaces then the raw byte 200 (one display column, not
@@ -13155,7 +13442,7 @@ fn format_preserves_unibyte_raw_byte_payload_and_width_issue_131() {
 #[test]
 fn prin1_to_string_respects_print_overrides_for_control_characters() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let result = eval
         .eval_str(
@@ -13171,7 +13458,7 @@ fn prin1_to_string_respects_print_overrides_for_control_characters() {
 #[test]
 fn prin1_to_string_honors_print_quoted_binding_and_override() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let result = eval
         .eval_str(
@@ -13206,7 +13493,7 @@ fn prin1_to_string_honors_print_quoted_binding_and_override() {
 #[test]
 fn prin1_to_string_honors_print_number_table_string_alias() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let result = eval
         .eval_str(
@@ -13227,7 +13514,7 @@ fn prin1_to_string_honors_print_number_table_string_alias() {
 #[test]
 fn prin1_to_string_honors_print_number_table_string_alias_in_lists() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let result = eval
         .eval_str(
@@ -13248,7 +13535,7 @@ fn prin1_to_string_honors_print_number_table_string_alias_in_lists() {
 #[test]
 fn prin1_to_string_ignores_print_number_table_without_continuous_numbering() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let result = eval
         .eval_str(
@@ -13269,7 +13556,7 @@ fn prin1_to_string_ignores_print_number_table_without_continuous_numbering() {
 #[test]
 fn prin1_to_string_honors_print_number_table_override() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let result = eval
         .eval_str(
@@ -13292,7 +13579,7 @@ fn prin1_to_string_honors_print_number_table_override() {
 #[test]
 fn prin1_to_string_updates_print_number_table_after_first_print() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let result = eval
         .eval_str(
@@ -13313,7 +13600,7 @@ fn prin1_to_string_updates_print_number_table_after_first_print() {
 #[test]
 fn prin1_to_string_reuses_print_number_table_positive_label() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let result = eval
         .eval_str(
@@ -13335,7 +13622,7 @@ fn prin1_to_string_reuses_print_number_table_positive_label() {
 #[test]
 fn prin1_to_string_preserves_gensym_lambda_parameter_identity_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let sym = neovm_value::intern::intern_uninterned("stack");
     let lambda = Value::make_lambda(LambdaData {
         params: LambdaParams::simple(vec![sym]).into(),
@@ -13361,7 +13648,7 @@ fn prin1_to_string_preserves_gensym_lambda_parameter_identity_like_gnu() {
 #[test]
 fn prin1_to_string_noncontinuous_print_resets_label_index_even_without_circle() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let result = eval
         .eval_str(
@@ -13393,7 +13680,7 @@ fn prin1_to_string_noncontinuous_print_resets_label_index_even_without_circle() 
 #[test]
 fn prin1_to_string_empty_container_print_resets_label_index() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let result = eval
         .eval_str(
@@ -13425,7 +13712,7 @@ fn prin1_to_string_empty_container_print_resets_label_index() {
 #[test]
 fn prin1_loaddefs_docstring_layout_matches_gnu_print_form() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let result = eval
         .eval_str(
@@ -13476,7 +13763,7 @@ fn prin1_loaddefs_docstring_layout_matches_gnu_print_form() {
 #[test]
 fn prin1_to_string_respects_print_gensym_binding() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let sym = Value::symbol(intern_uninterned("vm-print-gensym"));
 
     let default_text = dispatch_builtin(&mut eval, "prin1-to-string", vec![sym])
@@ -13494,7 +13781,7 @@ fn prin1_to_string_respects_print_gensym_binding() {
 #[test]
 fn prin1_to_string_preserves_raw_unibyte_symbol_bytes() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let raw_name = neovm_value::heap_types::LispString::from_unibyte(vec![0xFF, b'a']);
     let sym = Value::symbol(neovm_value::intern::intern_uninterned_lisp_string(
         &raw_name,
@@ -13523,7 +13810,7 @@ fn prin1_to_string_preserves_raw_unibyte_symbol_bytes() {
 #[test]
 fn prin1_to_string_ignores_extra_args_for_compat() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = dispatch_builtin(
         &mut eval,
         "prin1-to-string",
@@ -13537,7 +13824,7 @@ fn prin1_to_string_ignores_extra_args_for_compat() {
 #[test]
 fn format_prints_thread_handles_as_opaque_in_eval_dispatch() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let thread = dispatch_builtin(&mut eval, "current-thread", vec![])
         .expect("current-thread should resolve")
         .expect("current-thread should evaluate");
@@ -13564,7 +13851,7 @@ fn format_prints_thread_handles_as_opaque_in_eval_dispatch() {
 #[test]
 fn message_prints_thread_handles_as_opaque_in_eval_dispatch() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let thread = dispatch_builtin(&mut eval, "current-thread", vec![])
         .expect("current-thread should resolve")
         .expect("current-thread should evaluate");
@@ -13581,7 +13868,7 @@ fn message_prints_thread_handles_as_opaque_in_eval_dispatch() {
 #[test]
 fn format_and_message_render_terminal_handles_in_eval_dispatch() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let terminals = dispatch_builtin(&mut eval, "terminal-list", vec![])
         .expect("terminal-list should resolve")
         .expect("terminal-list should evaluate");
@@ -13610,7 +13897,7 @@ fn format_and_message_render_terminal_handles_in_eval_dispatch() {
 #[test]
 fn format_and_message_render_mutex_condvar_handles_in_eval_dispatch() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let mutex = dispatch_builtin(&mut eval, "make-mutex", vec![])
         .expect("make-mutex should resolve")
         .expect("make-mutex should evaluate");
@@ -13644,7 +13931,7 @@ fn format_and_message_render_mutex_condvar_handles_in_eval_dispatch() {
 #[test]
 fn format_and_message_render_killed_buffer_handles_in_eval_dispatch() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let buffer = create_unique_test_buffer(&mut eval, "*format-killed-buffer*");
     let _ = dispatch_builtin(&mut eval, "kill-buffer", vec![buffer])
         .expect("kill-buffer should resolve")
@@ -13664,7 +13951,7 @@ fn format_and_message_render_killed_buffer_handles_in_eval_dispatch() {
 #[test]
 fn format_and_message_render_live_buffer_handles_in_eval_dispatch() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let buffer = create_unique_test_buffer(&mut eval, "*format-live-buffer*");
 
     let formatted = dispatch_builtin(&mut eval, "format", vec![Value::string("%S"), buffer])
@@ -13691,7 +13978,7 @@ fn format_and_message_render_live_buffer_handles_in_eval_dispatch() {
 #[test]
 fn format_and_message_percent_s_render_live_buffer_names_in_eval_dispatch() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let expected = "*format-live-s-buffer*";
     let buffer = create_unique_test_buffer(&mut eval, expected);
 
@@ -13709,7 +13996,7 @@ fn format_and_message_percent_s_render_live_buffer_names_in_eval_dispatch() {
 #[test]
 fn format_and_message_percent_s_render_killed_buffer_handles_in_eval_dispatch() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let buffer = create_unique_test_buffer(&mut eval, "*format-killed-s-buffer*");
     let _ = dispatch_builtin(&mut eval, "kill-buffer", vec![buffer])
         .expect("kill-buffer should resolve")
@@ -13729,7 +14016,7 @@ fn format_and_message_percent_s_render_killed_buffer_handles_in_eval_dispatch() 
 #[test]
 fn format_and_message_render_frame_window_handles_in_eval_dispatch() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let frame = dispatch_builtin(&mut eval, "selected-frame", vec![])
         .expect("selected-frame should resolve")
         .expect("selected-frame should evaluate");
@@ -13777,7 +14064,7 @@ fn format_and_message_render_frame_window_handles_in_eval_dispatch() {
 #[test]
 fn format_message_renders_opaque_handles_in_eval_dispatch() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let thread = dispatch_builtin(&mut eval, "current-thread", vec![])
         .expect("current-thread should resolve")
@@ -13881,7 +14168,7 @@ fn format_message_renders_opaque_handles_in_eval_dispatch() {
 #[test]
 fn error_message_string_preserves_percent_s_handle_semantics() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let render_error_message = |eval: &mut crate::emacs_core::eval::Context,
                                 spec: &str,
@@ -13941,7 +14228,7 @@ fn error_message_string_preserves_percent_s_handle_semantics() {
 #[test]
 fn message_box_wrappers_render_opaque_handles_in_eval_dispatch() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     for (builtin, symbol) in [
         ("message-box", "message-box"),
         ("message-or-box", "message-or-box"),
@@ -14211,7 +14498,7 @@ fn message_box_wrappers_render_opaque_handles_in_eval_dispatch() {
 #[test]
 fn message_nil_returns_nil() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     // GNU populates the echo area (read back by `current-message`) only on the
     // interactive display path (xdisp.c `message3_frame_nolog`). The default
     // test Context is noninteractive, so opt into the interactive path here.
@@ -14238,7 +14525,7 @@ fn message_nil_returns_nil() {
 #[test]
 fn message_logs_to_visible_messages_buffer_name_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     assert_eq!(
         eval.eval_str("(list (boundp 'messages-buffer-name) messages-buffer-name)")
@@ -14250,13 +14537,17 @@ fn message_logs_to_visible_messages_buffer_name_like_gnu() {
         .expect("message eval should log to *Messages*");
 
     let messages_id = eval
+        .edit
         .buffers
         .find_buffer_by_name("*Messages*")
         .expect("*Messages* buffer");
-    let messages = eval.buffers.get(messages_id).expect("*Messages* live");
+    let messages = eval.edit.buffers.get(messages_id).expect("*Messages* live");
     assert_eq!(messages.buffer_string(), "hello echo\n");
     assert!(
-        eval.buffers.find_buffer_by_name(" *Messages*").is_none(),
+        eval.edit
+            .buffers
+            .find_buffer_by_name(" *Messages*")
+            .is_none(),
         "message should not create hidden legacy messages buffer"
     );
 }
@@ -14264,17 +14555,18 @@ fn message_logs_to_visible_messages_buffer_name_like_gnu() {
 #[test]
 fn native_add_to_log_coalesces_without_changing_the_echo_area() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.set_variable("noninteractive", Value::NIL);
 
     eval.add_to_log("Invalid face reference: missing-face");
     eval.add_to_log("Invalid face reference: missing-face");
 
     let messages_id = eval
+        .edit
         .buffers
         .find_buffer_by_name("*Messages*")
         .expect("native diagnostic should create *Messages*");
-    let messages = eval.buffers.get(messages_id).expect("*Messages* live");
+    let messages = eval.edit.buffers.get(messages_id).expect("*Messages* live");
     assert_eq!(
         messages.buffer_string(),
         "Invalid face reference: missing-face [2 times]\n"
@@ -14290,7 +14582,7 @@ fn native_add_to_log_coalesces_without_changing_the_echo_area() {
 #[test]
 fn message_progress_completion_replaces_previous_log_entry_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     builtin_message(&mut eval, &vec![Value::string("Indexing project...")])
         .expect("initial progress message should be logged");
@@ -14298,17 +14590,18 @@ fn message_progress_completion_replaces_previous_log_entry_like_gnu() {
         .expect("completed progress message should be logged");
 
     let messages_id = eval
+        .edit
         .buffers
         .find_buffer_by_name("*Messages*")
         .expect("*Messages* buffer");
-    let messages = eval.buffers.get(messages_id).expect("*Messages* live");
+    let messages = eval.edit.buffers.get(messages_id).expect("*Messages* live");
     assert_eq!(messages.buffer_string(), "Indexing project...done\n");
 }
 
 #[test]
 fn message_progress_update_scans_from_previous_line_start_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let long_progress = format!("Indexing project...{}", "working".repeat(32));
 
     builtin_message(&mut eval, &vec![Value::string(long_progress)])
@@ -14317,23 +14610,26 @@ fn message_progress_update_scans_from_previous_line_start_like_gnu() {
         .expect("progress update should be logged");
 
     let messages_id = eval
+        .edit
         .buffers
         .find_buffer_by_name("*Messages*")
         .expect("*Messages* buffer");
-    let messages = eval.buffers.get(messages_id).expect("*Messages* live");
+    let messages = eval.edit.buffers.get(messages_id).expect("*Messages* live");
     assert_eq!(messages.buffer_string(), "Indexing project...done\n");
 }
 
 #[test]
 fn message_log_appends_after_full_messages_buffer_when_narrowed() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let messages_id = eval
+        .edit
         .buffers
         .find_buffer_by_name("*Messages*")
-        .unwrap_or_else(|| eval.buffers.create_buffer("*Messages*"));
+        .unwrap_or_else(|| eval.edit.buffers.create_buffer("*Messages*"));
     {
         let messages = eval
+            .edit
             .buffers
             .get_mut(messages_id)
             .expect("*Messages* buffer");
@@ -14345,7 +14641,11 @@ fn message_log_appends_after_full_messages_buffer_when_narrowed() {
     builtin_message(&mut eval, &vec![Value::string("hello")])
         .expect("message should append to *Messages*");
 
-    let messages = eval.buffers.get(messages_id).expect("*Messages* buffer");
+    let messages = eval
+        .edit
+        .buffers
+        .get(messages_id)
+        .expect("*Messages* buffer");
     assert_eq!(messages.buffer_string(), "ke");
     assert_eq!(messages.point_emacs_byte_pos().get(), 2);
     assert_eq!(
@@ -14357,20 +14657,25 @@ fn message_log_appends_after_full_messages_buffer_when_narrowed() {
 #[test]
 fn message_respects_rebound_messages_buffer_name_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     eval.eval_str(r#"(let ((messages-buffer-name "*Alt Messages*")) (message "redirected"))"#)
         .expect("message should accept rebound messages-buffer-name");
 
     assert!(
-        eval.buffers.find_buffer_by_name("*Messages*").is_none(),
+        eval.edit
+            .buffers
+            .find_buffer_by_name("*Messages*")
+            .is_none(),
         "rebound messages-buffer-name should avoid the default buffer"
     );
     let alt_id = eval
+        .edit
         .buffers
         .find_buffer_by_name("*Alt Messages*")
         .expect("alternate messages buffer");
     let alt = eval
+        .edit
         .buffers
         .get(alt_id)
         .expect("alternate messages buffer live");
@@ -14380,18 +14685,20 @@ fn message_respects_rebound_messages_buffer_name_like_gnu() {
 #[test]
 fn interactive_message_materializes_echo_area_buffers_after_messages_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.set_variable("noninteractive", Value::NIL);
 
     builtin_message(&mut eval, &vec![Value::string("hello echo")])
         .expect("interactive message should install echo area buffers");
 
     let names: Vec<String> = eval
+        .edit
         .buffers
         .buffer_list()
         .into_iter()
         .filter_map(|id| {
-            eval.buffers
+            eval.edit
+                .buffers
                 .get(id)
                 .map(|buf| buf.name_runtime_string_owned())
         })
@@ -14407,10 +14714,11 @@ fn interactive_message_materializes_echo_area_buffers_after_messages_like_gnu() 
     );
     for name in [" *Echo Area 0*", " *Echo Area 1*"] {
         let id = eval
+            .edit
             .buffers
             .find_buffer_by_name(name)
             .expect("echo area buffer");
-        let buffer = eval.buffers.get(id).expect("echo area buffer live");
+        let buffer = eval.edit.buffers.get(id).expect("echo area buffer live");
         assert_eq!(buffer.get_buffer_local("truncate-lines"), Some(Value::NIL));
         assert_eq!(buffer.get_buffer_local("buffer-undo-list"), Some(Value::T));
     }
@@ -14430,21 +14738,24 @@ fn echo_area_follows_its_buffer_across_a_rename_like_gnu() {
     //     " *Echo Area 0*" is manufactured;
     //   * a user buffer that afterwards takes the freed name is NOT the echo
     //     area, and messages must not overwrite it.
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.set_variable("noninteractive", Value::NIL);
 
     builtin_message(&mut eval, &vec![Value::string("first")]).expect("message");
     let echo0 = eval
+        .edit
         .buffers
         .find_buffer_by_name(" *Echo Area 0*")
         .expect("echo area buffer");
-    eval.buffers
+    eval.edit
+        .buffers
         .rename_buffer(echo0, Value::string(" *Echo Area RENAMED*"))
         .expect("rename echo area buffer");
 
     builtin_message(&mut eval, &vec![Value::string("second")]).expect("message");
     assert_eq!(
-        eval.buffers
+        eval.edit
+            .buffers
             .get(echo0)
             .expect("renamed echo buffer")
             .buffer_string(),
@@ -14452,22 +14763,31 @@ fn echo_area_follows_its_buffer_across_a_rename_like_gnu() {
         "the echo area must follow its buffer across a rename"
     );
     assert!(
-        eval.buffers.find_buffer_by_name(" *Echo Area 0*").is_none(),
+        eval.edit
+            .buffers
+            .find_buffer_by_name(" *Echo Area 0*")
+            .is_none(),
         "a live echo buffer must not be re-created under its old name"
     );
 
-    let user = eval.buffers.create_buffer(" *Echo Area 0*");
-    eval.buffers
+    let user = eval.edit.buffers.create_buffer(" *Echo Area 0*");
+    eval.edit
+        .buffers
         .replace_buffer_contents(user, "PRECIOUS USER CONTENT")
         .expect("seed user buffer");
     builtin_message(&mut eval, &vec![Value::string("third")]).expect("message");
     assert_eq!(
-        eval.buffers.get(user).expect("user buffer").buffer_string(),
+        eval.edit
+            .buffers
+            .get(user)
+            .expect("user buffer")
+            .buffer_string(),
         "PRECIOUS USER CONTENT",
         "a user buffer holding the echo area's old NAME is not the echo area"
     );
     assert_eq!(
-        eval.buffers
+        eval.edit
+            .buffers
             .get(echo0)
             .expect("renamed echo buffer")
             .buffer_string(),
@@ -14482,25 +14802,28 @@ fn echo_area_buffer_is_re_created_only_after_it_dies_like_gnu() {
     // replaced, and `Fget_buffer_create' is what replaces it -- so a user
     // buffer already standing at the canonical name becomes the echo area,
     // exactly as it does in GNU (src/xdisp.c:12868-12876).
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.set_variable("noninteractive", Value::NIL);
 
     builtin_message(&mut eval, &vec![Value::string("first")]).expect("message");
     let echo0 = eval
+        .edit
         .buffers
         .find_buffer_by_name(" *Echo Area 0*")
         .expect("echo area buffer");
-    eval.buffers.kill_buffer(echo0);
-    assert!(eval.buffers.get(echo0).is_none(), "echo buffer killed");
+    eval.edit.buffers.kill_buffer(echo0);
+    assert!(eval.edit.buffers.get(echo0).is_none(), "echo buffer killed");
 
     builtin_message(&mut eval, &vec![Value::string("second")]).expect("message");
     let replacement = eval
+        .edit
         .buffers
         .find_buffer_by_name(" *Echo Area 0*")
         .expect("echo area buffer re-created after death");
     assert_ne!(replacement, echo0);
     assert_eq!(
-        eval.buffers
+        eval.edit
+            .buffers
             .get(replacement)
             .expect("echo buffer")
             .buffer_string(),
@@ -14511,7 +14834,7 @@ fn echo_area_buffer_is_re_created_only_after_it_dies_like_gnu() {
 #[test]
 fn format_message_preserves_raw_unibyte_payload_without_quoting() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let raw = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![
         0xFF,
     ]));
@@ -14545,7 +14868,7 @@ fn format_message_preserves_raw_unibyte_payload_without_quoting() {
 #[test]
 fn current_message_promotes_a_raw_unibyte_payload_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     // Interactive echo-area path: GNU only populates `current-message` when not
     // in batch mode (xdisp.c `message3_frame_nolog`).
     eval.set_variable("noninteractive", Value::NIL);
@@ -14577,7 +14900,7 @@ fn current_message_promotes_a_raw_unibyte_payload_like_gnu() {
 #[test]
 fn echo_area_print_after_message_replaces_message_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.set_variable("noninteractive", Value::NIL);
 
     eval.eval_str(r#"(progn (message "inner") (prin1 "outer" t) nil)"#)
@@ -14593,16 +14916,17 @@ fn echo_area_print_after_message_replaces_message_like_gnu() {
 #[test]
 fn echo_area_print_appends_the_same_fragment_to_messages_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.set_variable("noninteractive", Value::NIL);
 
     eval.eval_str(r#"(progn (message "inner") (prin1 "outer" t) nil)"#)
         .expect("message followed by echo print should evaluate");
 
     let messages = eval
+        .edit
         .buffers
         .find_buffer_by_name("*Messages*")
-        .and_then(|id| eval.buffers.get(id))
+        .and_then(|id| eval.edit.buffers.get(id))
         .expect("echo print should retain the messages buffer");
     assert_eq!(messages.buffer_string(), "inner\n\"outer\"");
 }
@@ -14610,16 +14934,17 @@ fn echo_area_print_appends_the_same_fragment_to_messages_like_gnu() {
 #[test]
 fn clearing_echo_area_terminates_a_pending_print_fragment_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.set_variable("noninteractive", Value::NIL);
 
     eval.eval_str(r#"(progn (message "inner") (prin1 "outer" t) (message ""))"#)
         .expect("clearing the echo area should terminate pending printer output");
 
     let messages = eval
+        .edit
         .buffers
         .find_buffer_by_name("*Messages*")
-        .and_then(|id| eval.buffers.get(id))
+        .and_then(|id| eval.edit.buffers.get(id))
         .expect("echo print should retain the messages buffer");
     assert_eq!(messages.buffer_string(), "inner\n\"outer\"\n");
 }
@@ -14627,7 +14952,7 @@ fn clearing_echo_area_terminates_a_pending_print_fragment_like_gnu() {
 #[test]
 fn echo_area_print_calls_append_until_next_message_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.set_variable("noninteractive", Value::NIL);
 
     eval.eval_str("(progn (prin1 'a t) (prin1 'b t) nil)")
@@ -14642,7 +14967,7 @@ fn echo_area_print_calls_append_until_next_message_like_gnu() {
 #[test]
 fn inhibit_message_has_gnu_native_boolean_storage_semantics() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let result = eval.eval_str(
         r#"(let ((set-result (set 'inhibit-message :assigned)))
@@ -14668,7 +14993,7 @@ fn inhibit_message_has_gnu_native_boolean_storage_semantics() {
 #[test]
 fn inhibited_message_preserves_the_current_echo_area_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     // Interactive echo-area path (GNU populates `current-message` only when not
     // in batch mode, xdisp.c `message3_frame_nolog`).
     eval.set_variable("noninteractive", Value::NIL);
@@ -14689,7 +15014,7 @@ fn inhibited_message_preserves_the_current_echo_area_like_gnu() {
 #[test]
 fn message_uses_set_message_function_string_and_suppression_results() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     // set-message-function only runs on the interactive echo-area path; GNU's
     // batch path (xdisp.c `message3_frame_nolog`) routes straight to stderr.
     eval.set_variable("noninteractive", Value::NIL);
@@ -14726,7 +15051,7 @@ fn message_uses_set_message_function_string_and_suppression_results() {
 #[test]
 fn message_nil_runs_clear_message_function_after_suppressed_minibuffer_message() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     // set-message-function / clear-message-function only run on the interactive
     // echo-area path; GNU's batch path (xdisp.c `message3_frame_nolog`) routes
     // straight to stderr and never invokes them.
@@ -14783,7 +15108,7 @@ fn message_nil_runs_clear_message_function_after_suppressed_minibuffer_message()
 #[test]
 fn message_ignores_non_function_set_message_function_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     // Interactive echo-area path (GNU `message3_frame_nolog` only sets the echo
     // area when not in batch mode).
     eval.set_variable("noninteractive", Value::NIL);
@@ -14798,7 +15123,7 @@ fn message_ignores_non_function_set_message_function_like_gnu() {
 #[test]
 fn message_demotes_set_message_function_errors_like_gnu_dsafe_call() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     // set-message-function only runs on the interactive echo-area path.
     eval.set_variable("noninteractive", Value::NIL);
 
@@ -14824,7 +15149,7 @@ fn message_demotes_set_message_function_errors_like_gnu_dsafe_call() {
 #[test]
 fn format_message_promotes_unibyte_ascii_to_multibyte_when_quoting() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let formatted = dispatch_builtin(&mut eval, "format-message", vec![Value::string("`'")])
         .expect("format-message should resolve")
         .expect("format-message should evaluate");
@@ -14841,7 +15166,7 @@ fn message_eval_stores_echo_text_without_immediate_redisplay() {
     // NeoMacs matches: message() updates current-message but does not
     // invoke the redisplay callback.
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     // Interactive echo-area path: GNU populates `current-message` only when not
     // in batch mode (xdisp.c `message3_frame_nolog`).
     eval.set_variable("noninteractive", Value::NIL);
@@ -14869,7 +15194,7 @@ fn message_eval_stores_echo_text_without_immediate_redisplay() {
 #[test]
 fn batch_newline_output_uses_stdout_not_echo_area() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.set_variable("noninteractive", Value::T);
 
     eval.eval_str("(progn (terpri) (write-char 10) nil)")
@@ -15006,7 +15331,7 @@ fn text_char_description_nonunicode_char_code_bounds_match_oracle() {
 #[test]
 fn assoc_delete_all_supports_default_equal_and_optional_test() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     load_minimal_gnu_backquote_runtime(&mut eval);
     let results = eval
         .eval_str_each(
@@ -15029,7 +15354,7 @@ fn assoc_delete_all_supports_default_equal_and_optional_test() {
 #[test]
 fn insert_char_nonunicode_char_code_bounds_match_oracle() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     builtin_erase_buffer(&mut eval, vec![]).expect("erase-buffer should succeed");
     builtin_insert_char(&mut eval, vec![Value::fixnum(0x11_0000), Value::fixnum(1)])
@@ -15060,7 +15385,7 @@ fn insert_char_nonunicode_char_code_bounds_match_oracle() {
 #[test]
 fn insert_nonunicode_integer_arguments_match_oracle() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     builtin_erase_buffer(&mut eval, vec![]).expect("erase-buffer should succeed");
     builtin_insert(&mut eval, vec![Value::fixnum(0x11_0000)])
@@ -15094,7 +15419,7 @@ fn insert_nonunicode_integer_arguments_match_oracle() {
 #[test]
 fn insert_byte_matches_gnu_multibyte_and_unibyte_storage() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     builtin_insert_byte(&mut eval, vec![Value::fixnum(65), Value::fixnum(2)])
         .expect("insert-byte should insert ASCII bytes");
@@ -15117,8 +15442,13 @@ fn insert_byte_matches_gnu_multibyte_and_unibyte_storage() {
     assert_eq!(decode_value_char_codes(&multibyte), vec![0x3FFF00 + 200]);
 
     builtin_erase_buffer(&mut eval, vec![]).expect("erase-buffer should succeed");
-    let current_id = eval.buffers.current_buffer_id().expect("current buffer");
-    eval.buffers
+    let current_id = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
+    eval.edit
+        .buffers
         .set_buffer_multibyte_flag(current_id, false)
         .expect("set-buffer-multibyte should accept current buffer");
     builtin_insert_byte(&mut eval, vec![Value::fixnum(200), Value::fixnum(1)])
@@ -15134,10 +15464,15 @@ fn insert_byte_matches_gnu_multibyte_and_unibyte_storage() {
 #[test]
 fn buffer_string_returns_unibyte_storage_for_unibyte_buffer() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
-    let current_id = eval.buffers.current_buffer_id().expect("current buffer");
-    eval.buffers
+    let current_id = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
+    eval.edit
+        .buffers
         .set_buffer_multibyte_flag(current_id, false)
         .expect("set-buffer-multibyte should accept current buffer");
     builtin_insert(&mut eval, vec![Value::string("é")]).unwrap();
@@ -15156,7 +15491,7 @@ fn set_buffer_multibyte_t_preserves_positions_for_consecutive_eight_bit() {
     // the byte->char position cache was poisoned by mid-character byte queries,
     // collapsing the whole buffer to a unibyte (byte==char) mapping.
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     builtin_set_buffer_multibyte(&mut eval, vec![Value::NIL]).unwrap();
     for b in [255i64, 254, 255] {
         builtin_insert_byte(&mut eval, vec![Value::fixnum(b), Value::fixnum(1)]).unwrap();
@@ -15199,7 +15534,7 @@ fn set_buffer_multibyte_t_preserves_positions_for_consecutive_eight_bit() {
 #[test]
 fn set_buffer_multibyte_reinterprets_bytes_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     builtin_insert(&mut eval, vec![Value::string("é")]).unwrap();
     assert_eq!(
@@ -15266,30 +15601,39 @@ fn set_buffer_multibyte_reinterprets_bytes_like_gnu() {
 #[test]
 fn set_buffer_multibyte_remaps_last_window_start_as_lisp_position() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
-    let current_id = eval.buffers.current_buffer_id().expect("current buffer");
+    let mut eval = crate::test_utils::new_context();
+    let current_id = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
 
     builtin_insert(&mut eval, vec![Value::string("éx")]).unwrap();
-    eval.buffers
-        .get_mut(current_id)
-        .expect("current buffer")
-        .last_window_start = LispCharPos1::from_one_based_usize(2);
+    neovm_edit::test_support::authority::set_last_window_start_for_test(
+        eval.edit
+            .buffers
+            .get_mut(current_id)
+            .expect("current buffer"),
+        LispCharPos1::from_one_based_usize(2),
+    );
 
     builtin_set_buffer_multibyte(&mut eval, vec![Value::NIL]).unwrap();
     assert_eq!(
-        eval.buffers
+        eval.edit
+            .buffers
             .get(current_id)
             .expect("current buffer")
-            .last_window_start,
+            .last_window_start_for_test(),
         LispCharPos1::from_one_based_usize(3)
     );
 
     builtin_set_buffer_multibyte(&mut eval, vec![Value::T]).unwrap();
     assert_eq!(
-        eval.buffers
+        eval.edit
+            .buffers
             .get(current_id)
             .expect("current buffer")
-            .last_window_start,
+            .last_window_start_for_test(),
         LispCharPos1::from_one_based_usize(2)
     );
 }
@@ -15297,7 +15641,7 @@ fn set_buffer_multibyte_remaps_last_window_start_as_lisp_position() {
 #[test]
 fn set_buffer_multibyte_rejects_narrowed_and_indirect_buffers() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     builtin_insert(&mut eval, vec![Value::string("abcdef")]).unwrap();
     builtin_narrow_to_region(&mut eval, vec![Value::fixnum(2), Value::fixnum(5)]).unwrap();
@@ -15314,7 +15658,11 @@ fn set_buffer_multibyte_rejects_narrowed_and_indirect_buffers() {
     }
 
     builtin_widen(&mut eval, vec![]).unwrap();
-    let base = eval.buffers.current_buffer_id().expect("current buffer");
+    let base = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
     let indirect = builtin_make_indirect_buffer(
         &mut eval,
         vec![
@@ -15325,7 +15673,7 @@ fn set_buffer_multibyte_rejects_narrowed_and_indirect_buffers() {
     .unwrap()
     .as_buffer_id()
     .expect("indirect buffer id");
-    eval.buffers.set_current(indirect);
+    eval.edit.buffers.set_current(indirect);
 
     let indirect_err = builtin_set_buffer_multibyte(&mut eval, vec![Value::NIL]).unwrap_err();
     match indirect_err.into_kind() {
@@ -15345,10 +15693,11 @@ fn set_buffer_multibyte_rejects_narrowed_and_indirect_buffers() {
 #[test]
 fn set_buffer_multibyte_records_gnu_style_undo_entry() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     assert!(
-        eval.buffers
+        eval.edit
+            .buffers
             .current_buffer()
             .expect("current buffer")
             .get_multibyte()
@@ -15359,6 +15708,7 @@ fn set_buffer_multibyte_records_gnu_style_undo_entry() {
     );
 
     let undo_list = eval
+        .edit
         .buffers
         .current_buffer()
         .expect("current buffer")
@@ -15395,9 +15745,14 @@ fn set_buffer_multibyte_records_gnu_style_undo_entry() {
 #[test]
 fn insert_string_converts_props_from_multibyte_source_to_unibyte_buffer() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
-    let current_id = eval.buffers.current_buffer_id().expect("current buffer");
-    eval.buffers
+    let mut eval = crate::test_utils::new_context();
+    let current_id = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
+    eval.edit
+        .buffers
         .set_buffer_multibyte_flag(current_id, false)
         .expect("set-buffer-multibyte should accept current buffer");
 
@@ -15434,7 +15789,7 @@ fn insert_string_converts_props_from_multibyte_source_to_unibyte_buffer() {
 #[test]
 fn byte_position_helpers_count_multibyte_raw_bytes() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     builtin_insert_byte(&mut eval, vec![Value::fixnum(200), Value::fixnum(1)]).unwrap();
 
@@ -15463,7 +15818,7 @@ fn byte_position_helpers_count_multibyte_raw_bytes() {
 #[test]
 fn set_buffer_multibyte_preserves_marker_and_text_properties() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     builtin_insert(&mut eval, vec![Value::string("é")]).unwrap();
     neovm_edit::emacs_core::textprop::builtin_put_text_property(
@@ -15490,8 +15845,11 @@ fn set_buffer_multibyte_preserves_marker_and_text_properties() {
         Value::fixnum(3)
     );
     assert_eq!(
-        neovm_edit::emacs_core::marker::marker_position_as_int_with_buffers(&eval.buffers, &marker)
-            .expect("marker position"),
+        neovm_edit::emacs_core::marker::marker_position_as_int_with_buffers(
+            &eval.edit.buffers,
+            &marker
+        )
+        .expect("marker position"),
         3
     );
 
@@ -15524,7 +15882,7 @@ fn set_buffer_multibyte_preserves_marker_and_text_properties() {
 #[test]
 fn insert_unibyte_string_converts_props_into_multibyte_buffer() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let text = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![
         0xE9, b'z',
@@ -15564,7 +15922,7 @@ fn insert_unibyte_string_converts_props_into_multibyte_buffer() {
 #[test]
 fn char_queries_return_nonunicode_emacs_character_codes() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     builtin_insert_char(&mut eval, vec![Value::fixnum(0x20_0000), Value::fixnum(1)]).unwrap();
 
@@ -15586,7 +15944,7 @@ fn char_queries_return_nonunicode_emacs_character_codes() {
 #[test]
 fn delete_char_handles_nonunicode_storage_units() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     crate::test_utils::load_gnu_undo_auto_runtime(&mut eval);
     let test_buffer = create_unique_test_buffer(&mut eval, "*delete-char-nonunicode*");
     builtin_set_buffer(&mut eval, vec![test_buffer]).unwrap();
@@ -15604,13 +15962,18 @@ fn delete_char_handles_nonunicode_storage_units() {
 #[test]
 fn delete_char_handles_unibyte_high_bytes() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     crate::test_utils::load_gnu_undo_auto_runtime(&mut eval);
     let test_buffer = create_unique_test_buffer(&mut eval, "*delete-char-unibyte*");
     builtin_set_buffer(&mut eval, vec![test_buffer]).unwrap();
 
-    let current_id = eval.buffers.current_buffer_id().expect("current buffer");
-    eval.buffers
+    let current_id = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
+    eval.edit
+        .buffers
         .set_buffer_multibyte_flag(current_id, false)
         .expect("set-buffer-multibyte should accept current buffer");
     builtin_insert_byte(&mut eval, vec![Value::fixnum(200), Value::fixnum(1)]).unwrap();
@@ -15628,7 +15991,7 @@ fn delete_char_handles_unibyte_high_bytes() {
 #[test]
 fn format_message_and_message_signal_strict_format_errors() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     for builtin in ["format", "format-message"] {
         for bad in [Value::fixnum(1), Value::NIL, Value::symbol("foo")] {
@@ -15788,7 +16151,7 @@ fn format_message_and_message_signal_strict_format_errors() {
 #[test]
 fn format_matches_gnu_numbered_fields_and_integer_aliases() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let numbered = dispatch_builtin(
         &mut eval,
@@ -15855,7 +16218,7 @@ fn format_matches_gnu_numbered_fields_and_integer_aliases() {
 #[test]
 fn user_error_signals_user_error_symbol_and_formatted_message() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     load_minimal_gnu_backquote_runtime(&mut eval);
     let result = eval
         .eval_str(r#"(condition-case err (user-error "oops %s" "now") (user-error err))"#)
@@ -15867,7 +16230,7 @@ fn user_error_signals_user_error_symbol_and_formatted_message() {
 #[test]
 fn user_error_requires_message_argument() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     load_minimal_gnu_backquote_runtime(&mut eval);
     let result = eval
         .eval_str(r#"(condition-case err (user-error) (error (car err)))"#)
@@ -15879,7 +16242,7 @@ fn user_error_requires_message_argument() {
 #[test]
 fn internal_save_selected_window_helpers_restore_selected_window() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     load_minimal_gnu_backquote_runtime(&mut eval);
     load_gnu_save_selected_window_runtime(&mut eval);
     let result = eval
@@ -15898,7 +16261,7 @@ fn internal_save_selected_window_helpers_restore_selected_window() {
 #[test]
 fn functionp_eval_matches_symbol_and_lambda_form_semantics() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let builtin_symbol = builtin_functionp(&mut eval, vec![Value::symbol("message")])
         .expect("functionp should accept builtin symbol");
@@ -16033,9 +16396,8 @@ fn functionp_eval_matches_symbol_and_lambda_form_semantics() {
 #[test]
 fn functionp_accepts_symbol_with_pos_when_enabled() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
-    let positioned_message = eval
-        .tagged_heap
+    let mut eval = crate::test_utils::new_context();
+    let positioned_message = unsafe { eval.tagged_heap_mut() }
         .alloc_symbol_with_pos(Value::symbol("message"), Value::fixnum(42));
 
     eval.set_variable("symbols-with-pos-enabled", Value::T);
@@ -16052,9 +16414,8 @@ fn functionp_accepts_symbol_with_pos_when_enabled() {
 #[test]
 fn functionp_accepts_lambda_form_with_positioned_head_when_enabled() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
-    let positioned_lambda = eval
-        .tagged_heap
+    let mut eval = crate::test_utils::new_context();
+    let positioned_lambda = unsafe { eval.tagged_heap_mut() }
         .alloc_symbol_with_pos(Value::symbol("lambda"), Value::fixnum(42));
     let lambda_form = Value::list(vec![
         positioned_lambda,
@@ -16076,7 +16437,7 @@ fn functionp_accepts_lambda_form_with_positioned_head_when_enabled() {
 #[test]
 fn functionp_eval_resolves_t_and_keyword_symbol_designators() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let keyword = Value::keyword(":vm-functionp-keyword");
     let orig_t = builtin_symbol_function(&mut eval, vec![Value::T])
@@ -16102,7 +16463,7 @@ fn functionp_eval_resolves_t_and_keyword_symbol_designators() {
 #[test]
 fn fmakunbound_masks_builtin_special_and_evaluator_callables() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     builtin_fmakunbound(&mut eval, vec![Value::symbol("car")])
         .expect("fmakunbound should accept builtin name");
@@ -16163,7 +16524,7 @@ fn fmakunbound_masks_builtin_special_and_evaluator_callables() {
 #[test]
 fn fset_nil_clears_fboundp_for_regular_and_fallback_names() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let regular = builtin_fset(&mut eval, vec![Value::symbol("vm-fsetnil"), Value::NIL])
         .expect("fset should accept nil definition payload");
@@ -16186,7 +16547,7 @@ fn fset_nil_clears_fboundp_for_regular_and_fallback_names() {
 #[test]
 fn fset_nil_nil_is_allowed_and_fmakunbound_rejects_constants() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let fset_nil = builtin_fset(&mut eval, vec![Value::NIL, Value::NIL])
         .expect("fset nil nil should match GNU");
@@ -16211,7 +16572,7 @@ fn fset_nil_nil_is_allowed_and_fmakunbound_rejects_constants() {
 #[test]
 fn func_arity_eval_resolves_symbol_designators_and_nil_cells() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let keyword = Value::keyword(":vm-func-arity-keyword");
     let vm_nil = Value::symbol("vm-func-arity-nil-cell");
@@ -16271,7 +16632,7 @@ fn func_arity_eval_resolves_symbol_designators_and_nil_cells() {
 #[test]
 fn indirect_function_follows_t_and_keyword_alias_values() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let keyword = Value::keyword(":vm-indirect-keyword-alias");
     let t_alias = Value::symbol("vm-indirect-through-t");
@@ -16318,7 +16679,7 @@ fn indirect_function_follows_t_and_keyword_alias_values() {
 #[test]
 fn macroexpand_runtime_environment_overrides_and_shadows_global_macros() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     // Install a test macro on `vm-test-mac` that acts like `when`:
     // (macro . (lambda (cond &rest body) (list 'if cond (cons 'progn body))))
@@ -16375,7 +16736,7 @@ fn macroexpand_runtime_environment_overrides_and_shadows_global_macros() {
 #[test]
 fn macroexpand_runtime_environment_type_and_payload_edges_match_oracle() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let atom_ignores_bad_env =
         builtin_macroexpand(&mut eval, vec![Value::symbol("x"), Value::fixnum(1)])
@@ -16437,7 +16798,7 @@ fn macroexpand_runtime_environment_type_and_payload_edges_match_oracle() {
 #[test]
 fn macroexpand_runtime_improper_lists_match_oracle_error_behavior() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let _ = eval.eval_str_each(
         r#"(fset 'vm-improper-macro
                  (cons 'macro
@@ -16475,7 +16836,7 @@ fn macroexpand_runtime_improper_lists_match_oracle_error_behavior() {
 #[test]
 fn macroexpand_runtime_reinvokes_load_macros_without_suppressing_effects() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let _ = eval.eval_str_each(
         r#"(defvar vm-macroexpand-count 0)
             (fset 'vm-cache-macro
@@ -16486,7 +16847,7 @@ fn macroexpand_runtime_reinvokes_load_macros_without_suppressing_effects() {
                          x)))"#,
     );
     eval.set_variable("load-in-progress", Value::T);
-    let calls0 = eval.macro_expand_calls;
+    let calls0 = eval.macro_expand_calls_for_test();
 
     let tail = Value::cons(Value::fixnum(1), Value::NIL);
     let form = Value::cons(Value::symbol("vm-cache-macro"), tail);
@@ -16495,7 +16856,7 @@ fn macroexpand_runtime_reinvokes_load_macros_without_suppressing_effects() {
     let second = builtin_macroexpand(&mut eval, vec![form]).expect("second expansion");
     assert_eq!(first, Value::fixnum(1));
     assert_eq!(second, Value::fixnum(1));
-    assert_eq!(eval.macro_expand_calls - calls0, 2);
+    assert_eq!(eval.macro_expand_calls_for_test() - calls0, 2);
     assert_eq!(
         eval.obarray().symbol_value_copied("vm-macroexpand-count"),
         Some(Value::fixnum(2))
@@ -16506,12 +16867,12 @@ fn macroexpand_runtime_reinvokes_load_macros_without_suppressing_effects() {
     let third =
         builtin_macroexpand(&mut eval, vec![equivalent_form]).expect("equivalent runtime form");
     assert_eq!(third, Value::fixnum(1));
-    assert_eq!(eval.macro_expand_calls - calls0, 3);
+    assert_eq!(eval.macro_expand_calls_for_test() - calls0, 3);
 
     tail.set_car(Value::fixnum(2));
     let fourth = builtin_macroexpand(&mut eval, vec![form]).expect("mutated expansion");
     assert_eq!(fourth, Value::fixnum(2));
-    assert_eq!(eval.macro_expand_calls - calls0, 4);
+    assert_eq!(eval.macro_expand_calls_for_test() - calls0, 4);
     assert_eq!(
         eval.obarray().symbol_value_copied("vm-macroexpand-count"),
         Some(Value::fixnum(4))
@@ -16521,7 +16882,7 @@ fn macroexpand_runtime_reinvokes_load_macros_without_suppressing_effects() {
 #[test]
 fn macroexpand_runtime_repeated_expansions_survive_exact_gc() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let _ = eval.eval_str_each(
         r#"(defvar vm-macroexpand-gc-count 0)
             (fset 'vm-cache-macro
@@ -16532,14 +16893,14 @@ fn macroexpand_runtime_repeated_expansions_survive_exact_gc() {
                          x)))"#,
     );
     eval.set_variable("load-in-progress", Value::T);
-    let calls0 = eval.macro_expand_calls;
+    let calls0 = eval.macro_expand_calls_for_test();
 
     let tail = Value::cons(Value::fixnum(1), Value::NIL);
     let form = Value::cons(Value::symbol("vm-cache-macro"), tail);
 
     let first = builtin_macroexpand(&mut eval, vec![form]).expect("first expansion");
     assert_eq!(first, Value::fixnum(1));
-    assert_eq!(eval.macro_expand_calls - calls0, 1);
+    assert_eq!(eval.macro_expand_calls_for_test() - calls0, 1);
 
     eval.gc_collect_exact();
     eval.set_variable("load-in-progress", Value::T);
@@ -16550,7 +16911,7 @@ fn macroexpand_runtime_repeated_expansions_survive_exact_gc() {
 
     let second = builtin_macroexpand(&mut eval, vec![second_form]).expect("second expansion");
     assert_eq!(second, Value::fixnum(1));
-    assert_eq!(eval.macro_expand_calls - calls0, 2);
+    assert_eq!(eval.macro_expand_calls_for_test() - calls0, 2);
     assert_eq!(
         eval.obarray()
             .symbol_value_copied("vm-macroexpand-gc-count"),
@@ -16561,7 +16922,7 @@ fn macroexpand_runtime_repeated_expansions_survive_exact_gc() {
 #[test]
 fn indirect_function_nil_and_non_symbol_behavior() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let noerror = builtin_indirect_function(
         &mut eval,
@@ -16596,9 +16957,8 @@ fn indirect_function_nil_and_non_symbol_behavior() {
 #[test]
 fn indirect_function_symbol_with_pos_follows_gnu_toggle() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
-    let positioned = eval
-        .tagged_heap
+    let mut eval = crate::test_utils::new_context();
+    let positioned = unsafe { eval.tagged_heap_mut() }
         .alloc_symbol_with_pos(Value::symbol("file-exists-p"), Value::fixnum(11));
 
     let disabled = builtin_indirect_function(&mut eval, vec![positioned])
@@ -16614,7 +16974,7 @@ fn indirect_function_symbol_with_pos_follows_gnu_toggle() {
 #[test]
 fn indirect_function_rejects_overflow_arity() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let err = builtin_indirect_function(
         &mut eval,
         vec![Value::symbol("ignore"), Value::NIL, Value::NIL],
@@ -16629,7 +16989,7 @@ fn indirect_function_rejects_overflow_arity() {
 #[test]
 fn indirect_function_resolves_deep_alias_chain_without_depth_cutoff() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let depth = 120;
 
     for idx in 0..depth {
@@ -16651,7 +17011,7 @@ fn indirect_function_resolves_deep_alias_chain_without_depth_cutoff() {
 #[test]
 fn fset_rejects_self_alias_cycle() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let err = builtin_fset(
         &mut eval,
@@ -16678,7 +17038,7 @@ fn fset_rejects_self_alias_cycle() {
 #[test]
 fn fset_rejects_two_node_alias_cycle() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let first = builtin_fset(
         &mut eval,
@@ -16710,7 +17070,7 @@ fn fset_rejects_two_node_alias_cycle() {
 #[test]
 fn fset_rejects_keyword_and_t_alias_cycles() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let first = builtin_fset(
         &mut eval,
@@ -16749,7 +17109,7 @@ fn fset_rejects_keyword_and_t_alias_cycles() {
 #[test]
 fn fset_nil_signals_setting_constant() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let err = builtin_fset(&mut eval, vec![Value::NIL, Value::symbol("car")])
         .expect_err("fset should reject writing nil's function cell");
@@ -16765,7 +17125,7 @@ fn fset_nil_signals_setting_constant() {
 #[test]
 fn fset_t_accepts_symbol_cell_updates() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let result = builtin_fset(&mut eval, vec![Value::T, Value::symbol("car")])
         .expect("fset should allow writing t's function cell");
@@ -16779,7 +17139,7 @@ fn fset_t_accepts_symbol_cell_updates() {
 #[test]
 fn keyword_symbols_are_bound_and_special_constants() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let keyword = Value::keyword(":vm-bound-keyword");
 
     let bound = builtin_boundp(&mut eval, vec![keyword]).expect("boundp should accept keyword");
@@ -16797,13 +17157,17 @@ fn keyword_symbols_are_bound_and_special_constants() {
 #[test]
 fn boundp_and_symbol_value_see_dynamic_and_current_buffer_local_bindings() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     eval.obarray_mut().make_special_id(intern("vm-bound-dyn"));
     eval.try_specbind(intern("vm-bound-dyn"), Value::fixnum(9))
         .expect("dynamic binding");
 
-    let current = eval.buffers.current_buffer_id().expect("current buffer");
+    let current = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
     eval.set_buffer_local_binding_by_id(current, intern("vm-bound-buf"), Value::fixnum(7))
         .expect("buffer-local binding");
 
@@ -16833,11 +17197,15 @@ fn boundp_and_symbol_value_see_dynamic_and_current_buffer_local_bindings() {
 #[test]
 fn boundp_buffer_local_lookup_uses_symbol_identity() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let uninterned = neovm_value::intern::intern_uninterned("vm-bound-shadow");
     let interned = intern("vm-bound-shadow");
-    let current = eval.buffers.current_buffer_id().expect("current buffer");
+    let current = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
 
     eval.obarray_mut()
         .set_symbol_value_id(uninterned, Value::fixnum(11));
@@ -16856,7 +17224,7 @@ fn boundp_buffer_local_lookup_uses_symbol_identity() {
 #[test]
 fn defvaralias_and_indirect_variable_follow_runtime_aliases() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let aliased = builtin_defvaralias(
         &mut eval,
@@ -16943,7 +17311,7 @@ fn defvaralias_and_indirect_variable_follow_runtime_aliases() {
 #[test]
 fn variable_watchers_observe_set_setq_and_makunbound() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     install_variable_watcher_probe(&mut eval, "vm-watcher-probe");
 
     super::super::advice::builtin_add_variable_watcher(
@@ -16989,7 +17357,7 @@ fn variable_watchers_observe_set_setq_and_makunbound() {
 #[test]
 fn variable_watchers_observe_set_default_toplevel_value() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     install_variable_watcher_probe(&mut eval, "vm-watcher-probe");
 
     super::super::advice::builtin_add_variable_watcher(
@@ -17020,7 +17388,7 @@ fn variable_watchers_observe_set_default_toplevel_value() {
 #[test]
 fn defvaralias_triggers_variable_watchers_and_clears_alias_entry() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     install_variable_watcher_probe(&mut eval, "vm-defvaralias-watch-probe");
 
     super::super::advice::builtin_add_variable_watcher(
@@ -17062,7 +17430,7 @@ fn defvaralias_triggers_variable_watchers_and_clears_alias_entry() {
 #[test]
 fn defvaralias_raw_plist_error_preserves_gnu_watcher_order() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     install_variable_watcher_probe(&mut eval, "vm-defvaralias-watch-probe");
 
     super::super::advice::builtin_add_variable_watcher(
@@ -17112,7 +17480,7 @@ fn defvaralias_raw_plist_error_preserves_gnu_watcher_order() {
 #[test]
 fn defvaralias_repoint_notifies_previous_alias_target_watchers() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     install_variable_watcher_probe(&mut eval, "vm-defvaralias-repoint-watch");
 
     builtin_defvaralias(
@@ -17156,7 +17524,7 @@ fn defvaralias_repoint_notifies_previous_alias_target_watchers() {
 #[test]
 fn defvaralias_rejects_invalid_inputs_and_cycles() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let constant_err = builtin_defvaralias(
         &mut eval,
@@ -17215,7 +17583,7 @@ fn defvaralias_rejects_invalid_inputs_and_cycles() {
 #[test]
 fn setplist_runtime_controls_get_put_and_symbol_plist_edges() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let initial_plist = Value::list(vec![
         Value::symbol("a"),
@@ -17305,7 +17673,7 @@ fn setplist_runtime_controls_get_put_and_symbol_plist_edges() {
 #[test]
 fn put_promotes_symbol_properties_to_live_raw_plists() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let sym = Value::symbol("vm-live-plist");
 
     builtin_put(
@@ -17341,7 +17709,7 @@ fn put_promotes_symbol_properties_to_live_raw_plists() {
 #[test]
 fn put_string_property_survives_exact_gc() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.gc_stress = true;
 
     let result = eval.eval_str(
@@ -17355,7 +17723,7 @@ fn put_string_property_survives_exact_gc() {
 #[test]
 fn register_code_conversion_map_publishes_symbol_properties() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let map = Value::vector(vec![Value::fixnum(1), Value::fixnum(2), Value::fixnum(3)]);
 
     let map_id = dispatch_builtin(
@@ -17407,7 +17775,7 @@ fn register_code_conversion_map_publishes_symbol_properties() {
 #[test]
 fn register_ccl_program_publishes_symbol_properties() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let program = Value::vector(vec![Value::fixnum(10), Value::fixnum(0), Value::fixnum(0)]);
 
     let program_id = dispatch_builtin(
@@ -17459,7 +17827,7 @@ fn register_ccl_program_publishes_symbol_properties() {
 #[test]
 fn ccl_symbol_designators_follow_plist_idx_gates() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let _ = builtin_put(
         &mut eval,
@@ -17613,7 +17981,7 @@ fn ccl_symbol_designators_follow_plist_idx_gates() {
 #[test]
 fn register_code_conversion_map_existing_symbol_plist_edges() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let first_id = dispatch_builtin(
         &mut eval,
@@ -17716,7 +18084,7 @@ fn register_code_conversion_map_existing_symbol_plist_edges() {
 #[test]
 fn ccl_registration_plist_errors_preserve_oracle_id_side_effects() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let baseline_program_id = dispatch_builtin(
         &mut eval,
@@ -17830,7 +18198,7 @@ fn ccl_registration_plist_errors_preserve_oracle_id_side_effects() {
 #[test]
 fn variable_alias_to_constant_reports_alias_in_setting_constant_errors() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     builtin_defvaralias(
         &mut eval,
         vec![
@@ -17881,7 +18249,7 @@ fn variable_alias_to_constant_reports_alias_in_setting_constant_errors() {
 #[test]
 fn set_allows_keyword_self_assignment_like_gnu_emacs() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let keyword = Value::keyword(":vm-set-keyword");
 
     let direct = builtin_set(&mut eval, vec![keyword, keyword])
@@ -17938,7 +18306,7 @@ fn set_allows_keyword_self_assignment_like_gnu_emacs() {
 #[test]
 fn defvaralias_raises_plistp_errors_when_symbol_plist_is_non_list() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     builtin_setplist(
         &mut eval,
         vec![Value::symbol("vm-defvaralias-bad-plist"), Value::fixnum(1)],
@@ -17971,7 +18339,7 @@ fn defvaralias_raises_plistp_errors_when_symbol_plist_is_non_list() {
 #[test]
 fn get_byte_string_semantics_match_oracle_edges() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     assert_eq!(
         builtin_get_byte(&mut eval, vec![Value::fixnum(0), Value::string("abc")]).unwrap(),
@@ -18040,7 +18408,7 @@ fn get_byte_string_semantics_match_oracle_edges() {
 #[test]
 fn get_byte_buffer_semantics_match_oracle_edges() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     builtin_erase_buffer(&mut eval, vec![]).unwrap();
     builtin_insert(&mut eval, vec![Value::string("abc")]).unwrap();
 
@@ -18056,9 +18424,13 @@ fn get_byte_buffer_semantics_match_oracle_edges() {
         builtin_get_byte(&mut eval, vec![Value::fixnum(2)]).unwrap(),
         Value::fixnum(98)
     );
-    let buffer_id = eval.buffers.current_buffer_id().expect("current buffer");
+    let buffer_id = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
     let marker = neovm_edit::emacs_core::marker::make_registered_buffer_marker(
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         buffer_id,
         LispCharPos1::new(2),
         false,
@@ -18103,8 +18475,13 @@ fn get_byte_buffer_semantics_match_oracle_edges() {
     }
 
     builtin_erase_buffer(&mut eval, vec![]).unwrap();
-    let current_id = eval.buffers.current_buffer_id().expect("current buffer");
-    eval.buffers
+    let current_id = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
+    eval.edit
+        .buffers
         .set_buffer_multibyte_flag(current_id, false)
         .expect("set-buffer-multibyte should accept current buffer");
     builtin_insert_byte(&mut eval, vec![Value::fixnum(200), Value::fixnum(1)]).unwrap();
@@ -18122,7 +18499,7 @@ fn get_byte_buffer_semantics_match_oracle_edges() {
 #[test]
 fn get_byte_unibyte_string_returns_raw_byte_values() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let s = builtin_unibyte_string(vec![Value::fixnum(255), Value::fixnum(65)]).unwrap();
 
     assert_eq!(
@@ -18143,20 +18520,29 @@ fn get_byte_unibyte_string_returns_raw_byte_values() {
 #[test]
 fn buffer_text_pixel_size_honors_display_align_to() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let mut eval = crate::test_utils::new_context();
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     let frame_id = eval
-        .frames
+        .frame_manager_mut()
         .create_frame("buf-pixel-align-to", 200, 24, buf_id);
-    eval.frames.select_frame(frame_id);
+    eval.frame_manager_mut().select_frame(frame_id);
     {
-        let frame = eval.frames.selected_frame_mut().expect("selected frame");
+        let frame = eval
+            .frame_manager_mut()
+            .selected_frame_mut()
+            .expect("selected frame");
         frame.char_width = 1.0;
         frame.char_height = 1.0;
         frame.font_pixel_size = 1.0;
         frame.set_window_system(None);
     }
-    eval.buffers
+    eval.edit
+        .buffers
         .get_mut(buf_id)
         .expect("buffer")
         .insert("AB XY");
@@ -18191,20 +18577,29 @@ fn buffer_text_pixel_size_honors_display_align_to() {
 #[test]
 fn buffer_text_pixel_size_honors_display_space_width() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let mut eval = crate::test_utils::new_context();
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     let frame_id = eval
-        .frames
+        .frame_manager_mut()
         .create_frame("buf-pixel-space-width", 200, 24, buf_id);
-    eval.frames.select_frame(frame_id);
+    eval.frame_manager_mut().select_frame(frame_id);
     {
-        let frame = eval.frames.selected_frame_mut().expect("selected frame");
+        let frame = eval
+            .frame_manager_mut()
+            .selected_frame_mut()
+            .expect("selected frame");
         frame.char_width = 1.0;
         frame.char_height = 1.0;
         frame.font_pixel_size = 1.0;
         frame.set_window_system(None);
     }
-    eval.buffers
+    eval.edit
+        .buffers
         .get_mut(buf_id)
         .expect("buffer")
         .insert("AB XY");
@@ -18245,14 +18640,22 @@ fn buffer_text_pixel_size_honors_display_space_width() {
 #[test]
 fn window_text_pixel_size_includes_overlay_after_string_align_to() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
-    let frame_id = eval
-        .frames
-        .create_frame("win-pixel-overlay-after", 200, 24, buf_id);
-    eval.frames.select_frame(frame_id);
+    let mut eval = crate::test_utils::new_context();
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
+    let frame_id =
+        eval.frame_manager_mut()
+            .create_frame("win-pixel-overlay-after", 200, 24, buf_id);
+    eval.frame_manager_mut().select_frame(frame_id);
     {
-        let frame = eval.frames.selected_frame_mut().expect("selected frame");
+        let frame = eval
+            .frame_manager_mut()
+            .selected_frame_mut()
+            .expect("selected frame");
         frame.char_width = 1.0;
         frame.char_height = 1.0;
         frame.font_pixel_size = 1.0;
@@ -18260,7 +18663,11 @@ fn window_text_pixel_size_includes_overlay_after_string_align_to() {
     }
 
     // Short prompt buffer text (4 columns).
-    eval.buffers.get_mut(buf_id).expect("buffer").insert("M-x ");
+    eval.edit
+        .buffers
+        .get_mut(buf_id)
+        .expect("buffer")
+        .insert("M-x ");
 
     // Overlay after-string at point-max: a multi-line candidate list whose
     // WIDEST line is `cand1` + `(space :align-to 80)` + `ann1` => 84 columns.
@@ -18298,21 +18705,33 @@ fn window_text_pixel_size_includes_overlay_after_string_align_to() {
 #[test]
 fn buffer_text_pixel_size_includes_overlay_before_string_multiline() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
-    let frame_id = eval
-        .frames
-        .create_frame("buf-pixel-overlay-before", 200, 24, buf_id);
-    eval.frames.select_frame(frame_id);
+    let mut eval = crate::test_utils::new_context();
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
+    let frame_id =
+        eval.frame_manager_mut()
+            .create_frame("buf-pixel-overlay-before", 200, 24, buf_id);
+    eval.frame_manager_mut().select_frame(frame_id);
     {
-        let frame = eval.frames.selected_frame_mut().expect("selected frame");
+        let frame = eval
+            .frame_manager_mut()
+            .selected_frame_mut()
+            .expect("selected frame");
         frame.char_width = 1.0;
         frame.char_height = 1.0;
         frame.font_pixel_size = 1.0;
         frame.set_window_system(None);
     }
 
-    eval.buffers.get_mut(buf_id).expect("buffer").insert("abc");
+    eval.edit
+        .buffers
+        .get_mut(buf_id)
+        .expect("buffer")
+        .insert("abc");
 
     // Before-string at buffer start whose widest embedded line is 10 columns.
     eval.eval_str(
@@ -18336,18 +18755,29 @@ fn buffer_text_pixel_size_includes_overlay_before_string_multiline() {
 #[test]
 fn buffer_text_pixel_size_plain_text_unchanged() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
-    let frame_id = eval.frames.create_frame("buf-pixel-plain", 200, 24, buf_id);
-    eval.frames.select_frame(frame_id);
+    let mut eval = crate::test_utils::new_context();
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("buf-pixel-plain", 200, 24, buf_id);
+    eval.frame_manager_mut().select_frame(frame_id);
     {
-        let frame = eval.frames.selected_frame_mut().expect("selected frame");
+        let frame = eval
+            .frame_manager_mut()
+            .selected_frame_mut()
+            .expect("selected frame");
         frame.char_width = 1.0;
         frame.char_height = 1.0;
         frame.font_pixel_size = 1.0;
         frame.set_window_system(None);
     }
-    eval.buffers
+    eval.edit
+        .buffers
         .get_mut(buf_id)
         .expect("buffer")
         .insert("hello\nworld!");
@@ -18363,10 +18793,11 @@ fn buffer_text_pixel_size_plain_text_unchanged() {
 /// reuse rows that don't reflect the overlay (e.g. hl-line stuck on the old line).
 #[test]
 fn overlay_put_and_move_bump_overlay_modified_tick() {
-    let mut eval = super::super::eval::Context::new();
-    let buffer_id = eval.buffers.create_buffer("*ov-tick*");
-    eval.buffers.set_current(buffer_id);
-    eval.buffers
+    let mut eval = crate::test_utils::new_context();
+    let buffer_id = eval.edit.buffers.create_buffer("*ov-tick*");
+    eval.edit.buffers.set_current(buffer_id);
+    eval.edit
+        .buffers
         .insert_into_buffer(buffer_id, "hello world")
         .expect("insert");
 
@@ -18376,13 +18807,23 @@ fn overlay_put_and_move_bump_overlay_modified_tick() {
     )
     .expect("make-overlay");
 
-    let before = eval.buffers.get(buffer_id).unwrap().overlay_modified_tick();
+    let before = eval
+        .edit
+        .buffers
+        .get(buffer_id)
+        .unwrap()
+        .overlay_modified_tick();
     neovm_edit::emacs_core::buffer::builtin_overlay_put(
         &mut eval,
         vec![overlay, Value::symbol("face"), Value::symbol("bold")],
     )
     .expect("overlay-put");
-    let after_put = eval.buffers.get(buffer_id).unwrap().overlay_modified_tick();
+    let after_put = eval
+        .edit
+        .buffers
+        .get(buffer_id)
+        .unwrap()
+        .overlay_modified_tick();
     assert!(
         after_put > before,
         "overlay-put must bump the overlay tick ({before} -> {after_put})"
@@ -18393,7 +18834,12 @@ fn overlay_put_and_move_bump_overlay_modified_tick() {
         vec![overlay, Value::fixnum(5), Value::fixnum(8)],
     )
     .expect("move-overlay");
-    let after_move = eval.buffers.get(buffer_id).unwrap().overlay_modified_tick();
+    let after_move = eval
+        .edit
+        .buffers
+        .get(buffer_id)
+        .unwrap()
+        .overlay_modified_tick();
     assert!(
         after_move > after_put,
         "move-overlay must bump the overlay tick ({after_put} -> {after_move})"
@@ -18443,7 +18889,7 @@ fn define_fringe_bitmap_registers_the_symbol_in_fringe_bitmaps() {
 #[test]
 fn intern_stores_the_name_string_object_it_was_handed() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     for name in [
         Value::multibyte_string("p16-intern-mb"),
@@ -18459,7 +18905,8 @@ fn intern_stores_the_name_string_object_it_was_handed() {
         // `Value`'s `PartialEq` is `equal`, not `eq` -- assert on the tagged
         // word so this pins OBJECT identity the way GNU's `eq` does.
         assert_eq!(
-            roundtrip.0, name.0,
+            roundtrip.bits(),
+            name.bits(),
             "symbol-name must be eq to the string intern was handed"
         );
     }
@@ -18503,7 +18950,7 @@ fn intern_keeps_a_multibyte_name_strings_text_properties() {
 #[test]
 fn custom_obarray_intern_stores_the_name_string_object_it_was_handed() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let obarray = dispatch_builtin(&mut eval, "obarray-make", vec![Value::fixnum(17)])
         .expect("builtin obarray-make should resolve")
         .expect("builtin obarray-make should evaluate");
@@ -18525,7 +18972,8 @@ fn custom_obarray_intern_stores_the_name_string_object_it_was_handed() {
         .expect("builtin symbol-name should resolve")
         .expect("builtin symbol-name should evaluate");
     assert_eq!(
-        stored.0, ascii_multibyte.0,
+        stored.bits(),
+        ascii_multibyte.bits(),
         "symbol-name must be eq to the string intern was handed"
     );
 }

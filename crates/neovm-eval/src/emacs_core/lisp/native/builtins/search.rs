@@ -465,7 +465,8 @@ fn commit_buffer_search_success(
     Ok(point)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_search_forward(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
@@ -2133,6 +2134,7 @@ fn builtin_looking_at_with_state_and_syntax_properties(
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_looking_at_p(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
@@ -2916,7 +2918,8 @@ pub(crate) fn builtin_match_beginning_with_state(
     )
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_match_beginning(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
@@ -2963,7 +2966,8 @@ pub(crate) fn builtin_match_end_with_state(
     })
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_match_end(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     expect_args("match-end", &args, 1)?;
     let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);

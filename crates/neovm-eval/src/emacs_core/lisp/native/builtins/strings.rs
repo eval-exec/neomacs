@@ -197,6 +197,7 @@ mod gdh_format_width_scan_tests;
 #[path = "tests/format_float_gnu_test.rs"]
 mod format_float_gnu;
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_substring(args: Vec<Value>) -> EvalResult {
     builtin_substring_slice(&args)
 }

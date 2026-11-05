@@ -2118,6 +2118,7 @@ pub fn builtin_buffer_substring_no_properties<H: crate::emacs_core::edit_host::E
 
 /// `(following-char)` — return character after point (0 if at end).
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_following_char<H: crate::emacs_core::edit_host::EditHost>(
     host: &mut H,
     args: Vec<Value>,

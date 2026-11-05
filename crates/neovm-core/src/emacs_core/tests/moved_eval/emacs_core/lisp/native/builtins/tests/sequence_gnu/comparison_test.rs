@@ -13,15 +13,17 @@ fn value_lt_exact() {
 #[test]
 fn value_lt_orders_adjacent_integer_and_float_exactly() {
     crate::test_utils::init_test_tracing();
-    let mut context = Context::new();
+    let mut context = crate::test_utils::new_context();
     let integer = Value::fixnum(9_007_199_254_740_993);
     let float = Value::make_float(9_007_199_254_740_992.0);
     assert_eq!(
-        super::super::super::symbols::builtin_value_lt(&mut context, vec![float, integer]).unwrap(),
+        crate::emacs_core::builtins::symbols::builtin_value_lt(&mut context, vec![float, integer])
+            .unwrap(),
         Value::T
     );
     assert_eq!(
-        super::super::super::symbols::builtin_value_lt(&mut context, vec![integer, float]).unwrap(),
+        crate::emacs_core::builtins::symbols::builtin_value_lt(&mut context, vec![integer, float])
+            .unwrap(),
         Value::NIL
     );
 }
@@ -30,9 +32,9 @@ fn value_lt_orders_adjacent_integer_and_float_exactly() {
 fn value_lt_numeric_decoding_preserves_fixnum_boundaries_and_nan() {
     use std::cmp::Ordering;
     crate::test_utils::init_test_tracing();
-    let context = Context::new();
+    let context = crate::test_utils::new_context();
     let compare = |left, right| {
-        super::super::super::symbols::compare_value_lt(&context, &left, &right).unwrap()
+        crate::emacs_core::builtins::symbols::compare_value_lt(&context, &left, &right).unwrap()
     };
     // GNU fns.c:3091-3100: conversion ties must compare in the integer
     // domain, including the rounded value just above the fixnum ceiling.
@@ -84,9 +86,9 @@ fn value_lt_borrows_large_integer_operands_without_losing_mixed_order() {
     use malachite::integer::Integer;
     use std::cmp::Ordering;
     crate::test_utils::init_test_tracing();
-    let context = Context::new();
+    let context = crate::test_utils::new_context();
     let compare = |left, right| {
-        super::super::super::symbols::compare_value_lt(&context, &left, &right).unwrap()
+        crate::emacs_core::builtins::symbols::compare_value_lt(&context, &left, &right).unwrap()
     };
     let magnitude = Integer::from(1) << 500_u32;
     let big = Value::make_integer(magnitude.clone());

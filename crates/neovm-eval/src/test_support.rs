@@ -10,6 +10,12 @@
 
 /// TA2 authority fence. Exactly the signed AUTHORITY-ITEMS rows live here.
 pub mod authority {
+    /// P1-CLASSES-ALL-CRATES FENCE: reset the symbol writer thread-locals.
+    /// A reset is a write (N2), so the fence is the only cross-crate route.
+    pub fn reset_symbols_thread_locals_for_test() {
+        crate::emacs_core::builtins::symbols::reset_symbols_thread_locals();
+    }
+
     use crate::emacs_core::eval::Context;
     use crate::emacs_core::eval::GreenStartError;
     use crate::emacs_core::eval::hooks_proof::EvalHooksInstalled;

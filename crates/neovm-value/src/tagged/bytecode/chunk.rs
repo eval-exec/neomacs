@@ -508,6 +508,7 @@ impl ByteCodeFunction {
     /// Decoded instructions that are resident now, without materializing a
     /// cold function. Used by heap diagnostics and capacity accounting.
     #[inline]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn resident_ops(&self) -> &[Op] {
         match &self.lazy_gnu_code {
             Some(lazy) => lazy

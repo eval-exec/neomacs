@@ -5275,6 +5275,29 @@ impl Context {
         &mut self.tagged_heap
     }
 
+    /// Test-support: copied macro-expansion counter.
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn macro_expand_calls_for_test(&self) -> u64 {
+        self.macro_expand_calls
+    }
+
+    /// Test-support: copied face-change counter.
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn face_change_count_for_test(&self) -> u64 {
+        self.face_change_count
+    }
+
+    /// Test-support: copied pending-shutdown request.
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn shutdown_request_for_test(
+        &self,
+    ) -> Option<neovm_value::value::flow_vocab::ShutdownRequest> {
+        self.shutdown_request
+    }
+
     /// Test-support: copied autoload query (the manager is a WorldView that
     /// holds heap Values, so N3 forbids handing out `&`/`&mut`; a copied
     /// query is the VIS route).
@@ -5907,11 +5930,13 @@ impl Context {
 
     #[inline]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn treesit(&self) -> &neovm_text::emacs_core::treesit::TreeSitterManager {
         &self.treesit
     }
 
     #[inline]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn treesit_mut(
         &mut self,
@@ -7729,6 +7754,7 @@ pub(crate) fn default_toplevel_value(ctx: &mut Context, args: Vec<Value>) -> Eva
 /// Mirrors GNU `Fset_default_toplevel_value` (`src/eval.c`): only the saved
 /// value of an outer dynamic binding is eval-owned. With no such binding, the
 /// complete write delegates to data.c's `set_default_internal` path.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn set_default_toplevel_value(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_args("set-default-toplevel-value", &args, 2)?;
     let symbol = SymId::from_value(ctx, args[0])?;

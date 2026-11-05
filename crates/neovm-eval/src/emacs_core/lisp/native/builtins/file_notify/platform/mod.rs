@@ -48,6 +48,7 @@ std::cfg_select! {
 /// :739.  A build therefore cannot answer another platform's watch
 /// primitive, and tests ask this table instead of naming one OS's set.
 #[cfg_attr(not(test), allow(dead_code))] // test-facing inventory today
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) const BACKEND_SUBRS: Option<[&'static str; 3]> = std::cfg_select! {
     target_os = "linux" => Some([
         "inotify-add-watch",
@@ -79,6 +80,7 @@ pub(crate) const BACKEND_SUBRS: Option<[&'static str; 3]> = std::cfg_select! {
 /// (src/w32notify.c:640-668).  A test of the watch lifecycle must ask which
 /// backend it is running, not assume inotify's answer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum RemoveWatchSemantics {
     /// inotify: rm-watch returns t for any well-shaped descriptor.
     Inotify,
@@ -90,6 +92,7 @@ pub(crate) enum RemoveWatchSemantics {
 
 /// The compiled backend's `rm-watch` semantics, or `None` with no backend.
 #[cfg_attr(not(test), allow(dead_code))] // test-facing inventory today
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) const REMOVE_WATCH_SEMANTICS: Option<RemoveWatchSemantics> = std::cfg_select! {
     target_os = "linux" => Some(RemoveWatchSemantics::Inotify),
     target_os = "macos" => Some(RemoveWatchSemantics::Kqueue),

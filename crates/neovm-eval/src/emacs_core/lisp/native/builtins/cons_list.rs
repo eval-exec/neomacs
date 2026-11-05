@@ -269,6 +269,7 @@ pub fn builtin_list_slice(_eval: &mut super::eval::Context, args: &[Value]) -> E
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_length(args: Vec<Value>) -> EvalResult {
     expect_args("length", &args, 1)?;
     builtin_length_value(args[0])
@@ -1388,6 +1389,7 @@ fn builtin_delete_with_symbols(args: Vec<Value>, symbols_with_pos_enabled: bool)
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_delq(args: Vec<Value>) -> EvalResult {
     builtin_delq_with_symbols(args, false)
 }
@@ -1509,6 +1511,7 @@ pub(crate) fn builtin_elt_values(
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_nconc(args: Vec<Value>) -> EvalResult {
     builtin_nconc_slice_values(&args)
 }

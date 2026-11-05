@@ -5,6 +5,10 @@ mod delivery;
 mod lisp;
 mod model;
 mod platform;
+#[cfg(feature = "test-support")]
+pub use platform::{BACKEND_SUBRS, REMOVE_WATCH_SEMANTICS, RemoveWatchSemantics};
+#[cfg(not(feature = "test-support"))]
+pub(crate) use platform::{BACKEND_SUBRS, REMOVE_WATCH_SEMANTICS, RemoveWatchSemantics};
 mod registry;
 
 // The compiled-in backend's primitive names, re-exported from the private

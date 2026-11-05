@@ -582,7 +582,8 @@ pub fn other_buffer_safely_in_state(
         .unwrap_or_else(|| buffers.create_buffer("*scratch*"))
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_set_buffer<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     neovm_value::error::expect_args("set-buffer", &args, 1)?;
     let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
@@ -788,6 +789,7 @@ fn update_buffer_properties_for_access<H: EditHost>(
     Ok(())
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_buffer_substring<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_args("buffer-substring", &args, 2)?;
     let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
@@ -2252,6 +2254,7 @@ pub fn builtin_clear_string(args: Vec<Value>) -> EvalResult {
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_point(
     edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
@@ -2277,6 +2280,7 @@ pub fn builtin_point_min_0(edit_buffers: &mut crate::buffer::BufferManager) -> E
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_point_max(
     edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
@@ -3833,7 +3837,8 @@ fn accessible_bounds(
     })
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_widen<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_args("widen", &args, 0)?;
     builtin_widen_0(host)
@@ -3865,7 +3870,8 @@ pub fn builtin_widen_0<H: EditHost>(host: &mut H) -> EvalResult {
     Ok(Value::NIL)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_buffer_modified_p(
     edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
@@ -4188,7 +4194,8 @@ pub fn builtin_bufferp(args: Vec<Value>) -> EvalResult {
     Ok(Value::bool_val(args[0].is_buffer()))
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_char_after(
     edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
@@ -4249,7 +4256,8 @@ pub fn builtin_char_after_1(
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_char_before(
     edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
@@ -4320,7 +4328,8 @@ fn get_byte_from_multibyte_char_code(code: u32) -> EvalResult {
     ))
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_byte_to_position(
     edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,
@@ -4367,7 +4376,8 @@ pub fn builtin_byte_to_position_1(
     )))
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_position_bytes(
     edit_buffers: &mut crate::buffer::BufferManager,
     args: Vec<Value>,

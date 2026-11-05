@@ -4,7 +4,9 @@ use crate::test_utils::runtime_startup_context;
 fn assert_gnu(name: &str, form: &str) {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let fixture = root
-        .join("src/emacs_core/lisp/native/builtins/tests/printer_streams")
+        .join(
+            "src/emacs_core/tests/moved_eval/emacs_core/lisp/native/builtins/tests/printer_streams",
+        )
         .join(format!("{name}.expect"));
     let expected = if std::env::var("UPDATE_EXPECT").as_deref() == Ok("1") {
         let script = root
