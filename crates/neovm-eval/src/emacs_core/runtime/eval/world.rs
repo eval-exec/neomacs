@@ -29,18 +29,20 @@ mod era;
 pub(crate) use era::ParallelHeapEraWorldCollectExt;
 pub(crate) use era::ParallelHeapEraWorldExt;
 pub use era::WorldEra;
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use era::WorldProofEra;
 #[cfg(test)]
 pub(crate) use era::WorldProofEraExt;
-pub(crate) use era::prepare_keeper_backing;
 #[cfg(test)]
-pub(crate) use era::{WorldProofEra, WorldProofEraFinishFailure};
+pub(crate) use era::WorldProofEraFinishFailure;
+pub(crate) use era::prepare_keeper_backing;
 mod function_write_hooks;
 mod green_owner;
 mod slot;
 mod sole_owner;
 #[allow(unused_imports)]
 pub use green_owner::Baton;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) use green_owner::OwnedProofProjection;
 #[allow(unused_imports)]
 pub(crate) use green_owner::{FrozenLegacyRoots, OwnedParallelError, OwnedParallelProjection};

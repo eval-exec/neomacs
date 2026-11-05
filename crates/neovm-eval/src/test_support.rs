@@ -30,6 +30,26 @@ pub mod authority {
     };
     use std::sync::Arc;
 
+    /// C1 FENCE (peer 22:11Z shape): the ONE cross-crate route for owned-proof
+    /// parallel admission in re-homed tests. Delegates ONLY to
+    /// `Context::admit_owned_proof_parallel` (ProofPlan): no generic plan
+    /// parameter, no ProductionPlan/WeakProofPlan route, and `admit_owned_with`
+    /// stays `pub(crate)`. Safe because the real admission transaction (keeper
+    /// issue, legacy-root capture, drain_to_quiescent, recovery) runs under
+    /// `&mut Context`; the projection is lifetime-bound and consumed by finish.
+    /// The projection/error types gain A' `make(pub)` only in this build; no
+    /// field or constructor is exposed.
+    #[doc(hidden)]
+    pub fn admit_owned_proof_parallel_for_test<R>(
+        context: &mut Context,
+        body: impl for<'heap> FnOnce(
+            crate::emacs_core::eval::world::OwnedProofProjection<'heap>,
+        )
+            -> (neovm_value::tagged::gc::QuiescentCollector<'heap>, Baton, R),
+    ) -> Result<R, crate::emacs_core::eval::world::OwnedParallelError> {
+        context.admit_owned_proof_parallel(body)
+    }
+
     /// S-2: the V1 minimal VM harness, reached only with the REAL boot proof.
     ///
     /// The constructor stays `pub(crate)` and unwidened; this fence is the one

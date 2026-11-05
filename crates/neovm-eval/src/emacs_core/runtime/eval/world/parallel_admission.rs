@@ -8,9 +8,11 @@ use super::Context;
 #[path = "parallel_admission/factory.rs"]
 mod factory;
 use crate::emacs_core::eval::green::GreenStartError;
-use factory::{AdmissionPlan, ProductionPlan};
+#[cfg(any(test, feature = "test-support"))]
+use factory::ProofPlan;
 #[cfg(test)]
-use factory::{ProofPlan, WeakProofPlan};
+use factory::WeakProofPlan;
+use factory::{AdmissionPlan, ProductionPlan};
 use neovm_value::tagged::gc::{
     QuiescentCollector, RegistrationError, RendezvousError, clear_tagged_heap_root_if_installed,
 };
@@ -20,6 +22,7 @@ use neovm_value::value::{HashTableTest, HashTableWeakness, LispHashTable};
 /// Why owned admission refused before any owner ran.
 #[derive(Debug, PartialEq, Eq)]
 #[allow(dead_code)] // No public NEOVM_THREADS entry calls this yet.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum OwnedParallelError {
     Publication,
     Busy,
@@ -54,13 +57,14 @@ impl<'heap> OwnedParallelProjection<'heap> {
 
 /// Closed proof-only projection; deliberately has no Deref or conversion to
 /// the production wrapper. Finish remains the sole serial ownership return.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[must_use]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct OwnedProofProjection<'heap> {
     era: crate::emacs_core::eval::world::WorldProofEra<'heap>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl<'heap> OwnedProofProjection<'heap> {
     #[doc(hidden)]
     pub fn era(&self) -> &crate::emacs_core::eval::world::WorldProofEra<'heap> {
@@ -111,7 +115,7 @@ impl Context {
 
     /// Retained closed proof kernels may exercise either collector mode.
     /// This nominal route cannot produce a production era or JIT admission.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn admit_owned_proof_parallel<R>(
         &mut self,
         body: impl for<'heap> FnOnce(

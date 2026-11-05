@@ -39,7 +39,7 @@ use crate::emacs_core::eval::world::WorldProofEraExt;
 
 #[path = "parallel_roots.rs"]
 mod parallel_roots;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) use parallel_roots::OwnedProofProjection;
 pub(crate) use parallel_roots::{FrozenLegacyRoots, OwnedParallelError, OwnedParallelProjection};
 

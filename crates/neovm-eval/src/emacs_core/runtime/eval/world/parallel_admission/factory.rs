@@ -2,7 +2,7 @@
 //! Only this child module implements a plan; proof plans do not exist in a
 //! product build and cannot manufacture the production projection.
 use super::super::{Baton, FrozenLegacyRoots};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use super::OwnedProofProjection;
 use super::{OwnedParallelError, OwnedParallelProjection, map_registration};
 use crate::emacs_core::eval::world::ParallelHeapEraWorldExt;
@@ -80,11 +80,11 @@ impl AdmissionPlan for ProductionPlan {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) struct ProofPlan;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl sealed::Sealed for ProofPlan {}
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl AdmissionPlan for ProofPlan {
     type Projection<'heap> = OwnedProofProjection<'heap>;
 
@@ -94,16 +94,27 @@ impl AdmissionPlan for ProofPlan {
         keeper: Baton,
         roots: FrozenLegacyRoots,
     ) -> Result<Self::Projection<'heap>, AdmissionFailure<'heap>> {
-        ProofEra::admit_rooted(collector, keeper, roots)
-            .map(|era| OwnedProofProjection { era })
-            .map_err(|failure| {
-                let (reason, collector, keeper) = failure.into_parts();
-                AdmissionFailure {
-                    reason: map_registration(reason),
-                    collector,
-                    keeper,
-                }
-            })
+        // SAFETY: identical to the value fence's admission contract; this
+        // transaction holds the sealed collector and keeper, and the prepare
+        // callback derives the original retained epoch/backing at the lower
+        // admission's unchanged preparation point.
+        unsafe {
+            neovm_value::test_support::authority::admit_rooted_for_test(
+                collector,
+                keeper,
+                roots,
+                crate::emacs_core::eval::world::prepare_keeper_backing,
+            )
+        }
+        .map(|era| OwnedProofProjection { era })
+        .map_err(|failure| {
+            let (reason, collector, keeper) = failure.into_parts();
+            AdmissionFailure {
+                reason: map_registration(reason),
+                collector,
+                keeper,
+            }
+        })
     }
 }
 

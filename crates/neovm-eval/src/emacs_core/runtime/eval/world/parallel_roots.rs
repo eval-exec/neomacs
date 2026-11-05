@@ -11,7 +11,7 @@ use neovm_value::tagged::value::TaggedValue;
 
 #[path = "parallel_admission.rs"]
 mod parallel_admission;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) use parallel_admission::OwnedProofProjection;
 pub(crate) use parallel_admission::{OwnedParallelError, OwnedParallelProjection};
 
