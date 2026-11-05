@@ -4,15 +4,15 @@
 //! bytes (`string-as-multibyte` of a unibyte string). `C0 80` is the two
 //! eight-bit characters 4194240 and 4194176, four bytes, not one raw byte.
 
-use super::super::{
+use crate::emacs_core::format_eval_result;
+use crate::emacs_core::misc::builtin_string_as_multibyte;
+use neovm_value::emacs_char::{
     MAX_MULTIBYTE_LENGTH, byte8_to_char, char_string, multibyte_length, parse_str_as_multibyte,
     str_as_multibyte, str_as_multibyte_span, str_to_multibyte,
 };
-use crate::emacs_core::builtins::lisp_string_char_codes;
-use crate::emacs_core::format_eval_result;
-use crate::emacs_core::misc::builtin_string_as_multibyte;
-use crate::heap_types::LispString;
-use crate::value::Value;
+use neovm_value::heap_types::LispString;
+use neovm_value::strings_core::lisp_string_char_codes;
+use neovm_value::value::Value;
 
 fn promoted(src: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(src.len() * 2);
@@ -117,7 +117,7 @@ fn lone_high_byte_and_c0_before_ascii_still_promote_one_byte() {
 #[test]
 fn compiled_and_interpreted_callers_see_the_split() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let rendered = format_eval_result(&eval.eval_str(
         r#"(let ((f (lambda (s) (string-as-multibyte s)))
                  (s (unibyte-string 192 128))

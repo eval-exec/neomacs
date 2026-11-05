@@ -431,7 +431,8 @@ pub(crate) fn with_root_table_lock_for_test(heap: HeapIdentity, op: impl FnOnce(
 }
 
 /// Live and retired-but-unrecycled cells of `heap`'s table.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) fn cell_census(heap: HeapIdentity) -> (usize, usize) {
     let Some(table) = existing_table(heap) else {
         return (0, 0);

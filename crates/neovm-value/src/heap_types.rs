@@ -97,6 +97,9 @@ fn note_string_bytes_changed() {
 pub struct LispString {
     /// Character count plus immutable count-proof metadata in the spare top bit.
     /// Counts fit isize::MAX; SCHARS and compiled consumers mask metadata.
+    #[cfg(feature = "test-support")]
+    pub size: usize,
+    #[cfg(not(feature = "test-support"))]
     size: usize,
     /// Byte count for multibyte strings, or GNU's negative unibyte marker.
     size_byte: i64,
@@ -117,6 +120,9 @@ pub struct LispString {
     intervals: AtomicPtr<TextPropertyTable>,
     /// Direct string byte pointer, like GNU's `Lisp_String.u.s.data`.
     ///
+    #[cfg(feature = "test-support")]
+    pub data: *const u8,
+    #[cfg(not(feature = "test-support"))]
     data: *const u8,
     /// Capacity of allocator-owned storage, including the trailing NUL. Zero
     /// denotes borrowed mapped/static bytes. The logical length comes from
@@ -1065,6 +1071,7 @@ impl LispString {
     /// Mutator-only: the exclusive borrow covers the complete live allocation.
     /// Unlike an ordinary memset followed by free, these writes cannot be
     /// eliminated as dead stores. Borrowed dump and static storage is untouched.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn erase_owned_payload(&mut self) {
         if self.storage_capacity == 0 {
             return;
@@ -1208,6 +1215,7 @@ impl LispString {
     /// GNU's trailing NUL. Mapped/static strings reserve no allocator-backed
     /// payload bytes in this process; their bytes belong to the pdump mapping
     /// or executable image instead.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn owned_capacity(&self) -> usize {
         self.storage_capacity
     }
@@ -1448,6 +1456,7 @@ impl LispString {
     }
 
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn has_trailing_nul(&self) -> bool {
         !self.data.is_null() && unsafe { *self.data.add(self.sbytes()) == 0 }
     }
@@ -1607,10 +1616,6 @@ impl<'de> Deserialize<'de> for LispString {
 #[cfg(test)]
 #[path = "heap_types/tests/declared_character_count.rs"]
 mod declared_character_count_tests;
-
-#[cfg(test)]
-#[path = "heap_types/tests/clear_string_in_place_test.rs"]
-mod clear_string_in_place_tests;
 
 /// Creation-order identity of one overlay, used only for the final
 /// precedence tie-break in GNU `compare_overlays` (`src/buffer.c:3256-3282`).

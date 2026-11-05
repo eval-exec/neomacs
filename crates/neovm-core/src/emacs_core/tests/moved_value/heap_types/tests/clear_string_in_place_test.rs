@@ -1,6 +1,6 @@
-use super::{GnuDeclaredCharacterCount, LispString, StringCharacterCountKind};
 use crate::emacs_core::buffer::builtin_clear_string;
-use crate::tagged::gc::{TaggedHeap, set_tagged_heap};
+use neovm_value::heap_types::{GnuDeclaredCharacterCount, LispString, StringCharacterCountKind};
+use neovm_value::tagged::gc::{TaggedHeap, set_tagged_heap};
 
 #[test]
 fn clear_string_erases_owned_payload_before_release() {

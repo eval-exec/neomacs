@@ -1916,6 +1916,7 @@ pub fn resolve_sym_lisp_string(id: SymId) -> &'static LispString {
 /// symbol.  Neomacs keeps symbol objects in a process-global registry, so the
 /// obarray layer must explicitly remove the registry's canonical name mapping
 /// when the initial obarray uninterns a canonical symbol.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn unintern_canonical_id(id: SymId) -> bool {
     let changed = {
         let mut registry = global_symbol_registry().write();

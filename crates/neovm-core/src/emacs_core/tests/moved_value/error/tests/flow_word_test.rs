@@ -204,23 +204,23 @@ fn clone_keeps_the_original_context_registry_after_activation_changes() {
     let _second = crate::test_utils::new_context();
     let second_registry = current_in_flight_registry_handle();
     let second_before = registry_state(&second_registry);
-    assert!(!std::sync::Arc::ptr_eq(
-        &first_registry.table,
-        &second_registry.table
-    ));
+    assert!(!first_registry.shares_table_with(&second_registry));
     let cloned = original.clone();
-    assert!(std::sync::Arc::ptr_eq(
-        &owning_pin(&original).registry.table,
-        &first_registry.table
-    ));
-    assert!(std::sync::Arc::ptr_eq(
-        &owning_pin(&cloned).registry.table,
-        &first_registry.table
-    ));
-    assert!(!std::sync::Arc::ptr_eq(
-        &owning_pin(&cloned).registry.table,
-        &second_registry.table
-    ));
+    assert!(
+        owning_pin(&original)
+            .registry
+            .shares_table_with(&first_registry)
+    );
+    assert!(
+        owning_pin(&cloned)
+            .registry
+            .shares_table_with(&first_registry)
+    );
+    assert!(
+        !owning_pin(&cloned)
+            .registry
+            .shares_table_with(&second_registry)
+    );
     assert_eq!(registry_state(&first_registry).live, first_before.live + 2);
     assert_eq!(registry_state(&second_registry).live, second_before.live);
     drop(original);
@@ -418,10 +418,7 @@ fn with_signal_result_forwards_throw_thread_blocked_shutdown_and_ok_owners() {
             slot
         );
         if let Some(flow) = forwarded.as_ref().err().filter(|flow| !flow.is_shutdown()) {
-            assert!(std::sync::Arc::ptr_eq(
-                &owning_pin(flow).registry.table,
-                &registry.table
-            ));
+            assert!(owning_pin(flow).registry.shares_table_with(&registry));
         }
         drop(forwarded);
         assert_eq!(registry_state(&registry).live, before.live);

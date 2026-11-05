@@ -3,14 +3,14 @@
 
 use std::sync::{Arc, Barrier, mpsc};
 
-use super::root_table::cell_census;
-use super::{
+use neovm_value::heap_types::LispString;
+use neovm_value::intern::{intern, intern_uninterned, is_canonical_id, unintern_canonical_id};
+use neovm_value::tagged::gc::TaggedHeap;
+use neovm_value::tagged::transport::cell_census;
+use neovm_value::tagged::transport::{
     ImmediateValue, NotImmediate, SharedRoot, SharedRootError, collect_shared_root_gc_roots,
 };
-use crate::heap_types::LispString;
-use crate::intern::{intern, intern_uninterned, is_canonical_id, unintern_canonical_id};
-use crate::tagged::gc::TaggedHeap;
-use crate::tagged::value::TaggedValue;
+use neovm_value::tagged::value::TaggedValue;
 
 /// Collect with this heap's shared roots as the only roots.
 fn collect_with_shared_roots(heap: &mut TaggedHeap) {
@@ -329,7 +329,7 @@ fn shared_roots_cross_threads_while_the_mutator_collects() {
 #[test]
 fn context_root_walk_includes_shared_roots() {
     crate::test_utils::init_test_tracing();
-    let mut context = crate::emacs_core::eval::Context::new();
+    let mut context = crate::test_utils::new_context();
     let text = TaggedValue::string("context-shared-root");
     // SAFETY: `text` was just allocated through this Context's installed
     // heap. Context collections include its shared-root table, and the
@@ -354,7 +354,7 @@ fn context_root_walk_includes_shared_roots() {
 
 #[test]
 fn one_batch_lease_keeps_all_children_until_foreign_thread_retirement() {
-    let mut context = Box::new(crate::emacs_core::Context::new());
+    let mut context = Box::new(crate::test_utils::new_context());
     context.setup_thread_locals();
     let left = TaggedValue::string("batch-left");
     let right = TaggedValue::string("batch-right");
@@ -409,7 +409,7 @@ fn batch_child_identity_and_structural_equality_survive_different_batches() {
     use crate::window::{PresentedWindowChromeArea, PresentedWindowChromeString};
     use neomacs_display_protocol::GlyphStringId;
 
-    let mut context = Box::new(crate::emacs_core::Context::new());
+    let mut context = Box::new(crate::test_utils::new_context());
     context.setup_thread_locals();
     let first = TaggedValue::string("equal batch children");
     let equal = TaggedValue::string("equal batch children");
@@ -437,7 +437,7 @@ fn batch_child_identity_and_structural_equality_survive_different_batches() {
     assert_eq!(left, right);
     assert!(!std::thread::spawn(move || left == right).join().unwrap());
 
-    let mut second_context = Box::new(crate::emacs_core::Context::new());
+    let mut second_context = Box::new(crate::test_utils::new_context());
     second_context.setup_thread_locals();
     assert!(matches!(
         second_context.materialize(&first_batch[0]),
@@ -450,7 +450,7 @@ fn window_snapshot_coalesces_all_areas_and_reuses_its_single_lease() {
     use crate::window::{PresentedWindowChromeArea, PresentedWindowChromeString};
     use neomacs_display_protocol::GlyphStringId;
 
-    let mut context = Box::new(crate::emacs_core::Context::new());
+    let mut context = Box::new(crate::test_utils::new_context());
     context.setup_thread_locals();
     let mode = TaggedValue::string("mode flattened");
     let mode_leaf = TaggedValue::string("mode leaf");
@@ -521,7 +521,7 @@ fn coalescing_rejects_foreign_heap_without_replacing_existing_handles() {
     use crate::window::{PresentedWindowChromeArea, PresentedWindowChromeString};
     use neomacs_display_protocol::GlyphStringId;
 
-    let mut first = Box::new(crate::emacs_core::Context::new());
+    let mut first = Box::new(crate::test_utils::new_context());
     first.setup_thread_locals();
     let text = TaggedValue::string("foreign batch");
     // SAFETY: this fresh child belongs to the installed first evaluator,
@@ -536,7 +536,7 @@ fn coalescing_rejects_foreign_heap_without_replacing_existing_handles() {
         GlyphStringId::new(1),
         root,
     )];
-    let mut second = Box::new(crate::emacs_core::Context::new());
+    let mut second = Box::new(crate::test_utils::new_context());
     second.setup_thread_locals();
     assert!(matches!(
         PresentedWindowChromeString::coalesce_roots(&mut sources, &second),
