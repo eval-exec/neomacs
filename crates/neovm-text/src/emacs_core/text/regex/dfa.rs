@@ -2385,7 +2385,7 @@ impl DfaMode {
     }
 }
 
-#[cfg(any(test, feature = "fuzzing"))]
+#[cfg(any(test, feature = "fuzzing", feature = "test-support"))]
 thread_local! {
     static DFA_MODE_OVERRIDE: std::cell::Cell<Option<DfaMode>> =
         const { std::cell::Cell::new(None) };
@@ -2393,7 +2393,7 @@ thread_local! {
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Run `f` with `NEOVM_REGEX_DFA` forced to `mode` on this thread.
-#[cfg(any(test, feature = "fuzzing"))]
+#[cfg(any(test, feature = "fuzzing", feature = "test-support"))]
 pub(crate) fn with_dfa_mode<R>(mode: DfaMode, f: impl FnOnce() -> R) -> R {
     struct Guard(Option<DfaMode>);
     impl Drop for Guard {
@@ -2405,7 +2405,7 @@ pub(crate) fn with_dfa_mode<R>(mode: DfaMode, f: impl FnOnce() -> R) -> R {
     f()
 }
 
-#[cfg(any(test, feature = "fuzzing"))]
+#[cfg(any(test, feature = "fuzzing", feature = "test-support"))]
 thread_local! {
     // A test-only knob override, not a cache of Lisp state.
     static DFA_COLD_OVERRIDE: std::cell::Cell<Option<bool>> =
@@ -2413,7 +2413,7 @@ thread_local! {
 }
 
 /// Run `f` with the cold-path knob forced to `on` on this thread.
-#[cfg(any(test, feature = "fuzzing"))]
+#[cfg(any(test, feature = "fuzzing", feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn with_cold_path<R>(on: bool, f: impl FnOnce() -> R) -> R {
     struct Guard(Option<bool>);
@@ -2437,7 +2437,7 @@ pub(crate) fn with_cold_path<R>(on: bool, f: impl FnOnce() -> R) -> R {
 /// process.
 #[inline]
 pub(crate) fn cold_path_enabled() -> bool {
-    #[cfg(any(test, feature = "fuzzing"))]
+    #[cfg(any(test, feature = "fuzzing", feature = "test-support"))]
     if let Some(on) = DFA_COLD_OVERRIDE.with(|slot| slot.get()) {
         return on;
     }
@@ -2452,7 +2452,7 @@ pub(crate) fn cold_path_enabled() -> bool {
 /// The `NEOVM_REGEX_DFA` mode, read once per process.
 #[inline]
 pub(crate) fn dfa_mode() -> DfaMode {
-    #[cfg(any(test, feature = "fuzzing"))]
+    #[cfg(any(test, feature = "fuzzing", feature = "test-support"))]
     if let Some(mode) = DFA_MODE_OVERRIDE.with(|slot| slot.get()) {
         return mode;
     }
@@ -2476,7 +2476,7 @@ fn read_dfa_mode() -> DfaMode {
     mode
 }
 
-#[cfg(any(test, feature = "fuzzing"))]
+#[cfg(any(test, feature = "fuzzing", feature = "test-support"))]
 thread_local! {
     // A test-only knob override; the runtime has no additional TLS cache.
     static DFA_FIRST_STEP_OVERRIDE: std::cell::Cell<Option<bool>> =
@@ -2485,7 +2485,7 @@ thread_local! {
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Run `f` with the cached first-step knob forced to `on` on this thread.
-#[cfg(any(test, feature = "fuzzing"))]
+#[cfg(any(test, feature = "fuzzing", feature = "test-support"))]
 pub(crate) fn with_first_step<R>(on: bool, f: impl FnOnce() -> R) -> R {
     struct Guard(Option<bool>);
     impl Drop for Guard {
@@ -2501,7 +2501,7 @@ pub(crate) fn with_first_step<R>(on: bool, f: impl FnOnce() -> R) -> R {
 /// transition within an eight-byte cached prefix before the general loop.
 #[inline]
 pub(crate) fn first_step_enabled() -> bool {
-    #[cfg(any(test, feature = "fuzzing"))]
+    #[cfg(any(test, feature = "fuzzing", feature = "test-support"))]
     if let Some(on) = DFA_FIRST_STEP_OVERRIDE.with(|slot| slot.get()) {
         return on;
     }
@@ -2606,7 +2606,7 @@ fn stat(update: impl FnOnce(&mut DfaStats)) {
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// This thread's filter counters.
-#[cfg(any(test, feature = "fuzzing"))]
+#[cfg(any(test, feature = "fuzzing", feature = "test-support"))]
 pub(crate) fn dfa_stats() -> DfaStats {
     STATS.with(|cell| *cell.borrow())
 }
@@ -3211,7 +3211,7 @@ impl<'p> DfaLease<'p> {
 
 /// Build `pattern`'s DFA now, skipping the cold phase, so a short
 /// differential case exercises the filter.
-#[cfg(any(test, feature = "fuzzing"))]
+#[cfg(any(test, feature = "fuzzing", feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn prime(
     pattern: &CompiledPattern,

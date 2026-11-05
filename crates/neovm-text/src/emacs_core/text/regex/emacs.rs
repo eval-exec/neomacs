@@ -1455,7 +1455,7 @@ fn take_pike_fallback() -> bool {
 }
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
-#[cfg(any(test, feature = "fuzzing"))]
+#[cfg(any(test, feature = "fuzzing", feature = "test-support"))]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum RegexEngineOverride {
     #[default]
@@ -1464,31 +1464,31 @@ pub(crate) enum RegexEngineOverride {
     PikeVm,
 }
 
-#[cfg(any(test, feature = "fuzzing"))]
+#[cfg(any(test, feature = "fuzzing", feature = "test-support"))]
 thread_local! {
     static REGEX_ENGINE_OVERRIDE: std::cell::Cell<RegexEngineOverride> =
         const { std::cell::Cell::new(RegexEngineOverride::Production) };
 }
 
-#[cfg(any(test, feature = "fuzzing"))]
+#[cfg(any(test, feature = "fuzzing", feature = "test-support"))]
 #[inline]
 fn force_backtrack() -> bool {
     REGEX_ENGINE_OVERRIDE.with(|slot| slot.get() == RegexEngineOverride::Backtracker)
 }
 
-#[cfg(not(any(test, feature = "fuzzing")))]
+#[cfg(not(any(test, feature = "fuzzing", feature = "test-support")))]
 #[inline]
 fn force_backtrack() -> bool {
     false
 }
 
-#[cfg(any(test, feature = "fuzzing"))]
+#[cfg(any(test, feature = "fuzzing", feature = "test-support"))]
 #[inline]
 fn force_pike() -> bool {
     REGEX_ENGINE_OVERRIDE.with(|slot| slot.get() == RegexEngineOverride::PikeVm)
 }
 
-#[cfg(not(any(test, feature = "fuzzing")))]
+#[cfg(not(any(test, feature = "fuzzing", feature = "test-support")))]
 #[inline]
 fn force_pike() -> bool {
     false
@@ -1496,7 +1496,7 @@ fn force_pike() -> bool {
 
 /// Run `f` with one regex routing policy, restoring the previous policy even
 /// when `f` unwinds.
-#[cfg(any(test, feature = "fuzzing"))]
+#[cfg(any(test, feature = "fuzzing", feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn with_regex_engine_override<R>(
     engine: RegexEngineOverride,
@@ -9696,7 +9696,7 @@ fn collect_prefix_literals(
 
 // Test/fuzz-only escape hatch: force `re_search` down the no-fastmap path so
 // equivalence checks can prove search optimizations never change match results.
-#[cfg(any(test, feature = "fuzzing"))]
+#[cfg(any(test, feature = "fuzzing", feature = "test-support"))]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 enum SearchOptimizationOverride {
     #[default]
@@ -9704,13 +9704,13 @@ enum SearchOptimizationOverride {
     Disabled,
 }
 
-#[cfg(any(test, feature = "fuzzing"))]
+#[cfg(any(test, feature = "fuzzing", feature = "test-support"))]
 thread_local! {
     static SEARCH_OPTIMIZATION_OVERRIDE: std::cell::Cell<SearchOptimizationOverride> =
         const { std::cell::Cell::new(SearchOptimizationOverride::Production) };
 }
 
-#[cfg(any(test, feature = "fuzzing"))]
+#[cfg(any(test, feature = "fuzzing", feature = "test-support"))]
 fn fastmap_force_disabled() -> bool {
     SEARCH_OPTIMIZATION_OVERRIDE.with(|slot| slot.get() == SearchOptimizationOverride::Disabled)
 }
@@ -9720,7 +9720,7 @@ fn fastmap_force_disabled() -> bool {
 /// This is the ORACLE for the prefilter differential fuzzer: comparing it
 /// against the normal (prefilter-enabled) search proves the prefilter never
 /// changes match results. The previous policy is restored even if `f` unwinds.
-#[cfg(any(test, feature = "fuzzing"))]
+#[cfg(any(test, feature = "fuzzing", feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn with_fastmap_disabled<R>(f: impl FnOnce() -> R) -> R {
     let _guard = neovm_value::tls_scope::TlsScope::new(
@@ -9730,7 +9730,7 @@ pub(crate) fn with_fastmap_disabled<R>(f: impl FnOnce() -> R) -> R {
     f()
 }
 
-#[cfg(not(any(test, feature = "fuzzing")))]
+#[cfg(not(any(test, feature = "fuzzing", feature = "test-support")))]
 #[inline(always)]
 fn fastmap_force_disabled() -> bool {
     false
@@ -9739,7 +9739,7 @@ fn fastmap_force_disabled() -> bool {
 /// Build every scanner a search derives lazily from `pattern`, as the first
 /// search long enough to use them would.  The differential checker calls this
 /// so a short generated text still exercises the optimized scans.
-#[cfg(any(test, feature = "fuzzing"))]
+#[cfg(any(test, feature = "fuzzing", feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn build_search_optimizations(pattern: &CompiledPattern) {
     let _ = pattern.literal_prefilter();
@@ -9915,14 +9915,14 @@ fn regex_knob_on(value: Option<&str>) -> bool {
     )
 }
 
-#[cfg(any(test, feature = "fuzzing"))]
+#[cfg(any(test, feature = "fuzzing", feature = "test-support"))]
 thread_local! {
     static ANCHOR_ALT_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
 }
 
 /// Run `f` with `NEOVM_REGEX_ANCHOR_ALT` forced to `on` on this thread.  It is
 /// read when a pattern compiles, so compile inside `f`.
-#[cfg(any(test, feature = "fuzzing"))]
+#[cfg(any(test, feature = "fuzzing", feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn with_anchor_alt<R>(on: bool, f: impl FnOnce() -> R) -> R {
     let _guard = neovm_value::tls_scope::TlsScope::new(&ANCHOR_ALT_OVERRIDE, Some(on));
@@ -9936,7 +9936,7 @@ pub(crate) fn with_anchor_alt<R>(on: bool, f: impl FnOnce() -> R) -> R {
 /// board A/B (org-editing -1.4% instructions, org-editing-heavy -0.45%, the
 /// census pattern pat-026 1.81M -> 0.20M instructions per search).
 pub(crate) fn anchor_alt_enabled() -> bool {
-    #[cfg(any(test, feature = "fuzzing"))]
+    #[cfg(any(test, feature = "fuzzing", feature = "test-support"))]
     if let Some(on) = ANCHOR_ALT_OVERRIDE.with(|slot| slot.get()) {
         return on;
     }
