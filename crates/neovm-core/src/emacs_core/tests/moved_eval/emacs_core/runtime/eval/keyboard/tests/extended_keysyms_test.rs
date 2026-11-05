@@ -1,6 +1,13 @@
 //! #398: named frontend input must remain a bindable Lisp event.
 
-use super::*;
+use crate::emacs_core::eval::*;
+use crate::host_input::HostInputPublisher;
+use crate::keyboard::{
+    FrontendKey, InputEvent, RENDER_CTRL_MASK, RENDER_SHIFT_MASK,
+    render_key_transport_to_input_event,
+};
+use crate::window::{DisplayFrameExt, DisplayFrameManagerExt};
+use neovm_value::value::Value;
 
 // GNU keyboard.c's function-key names and the toolkit's XF86 names, kept
 // literal so a frontend/decoder renaming cannot rewrite this expectation.
@@ -53,7 +60,7 @@ fn extended_keysym_transport_reaches_the_bound_command() {
     )
     .unwrap();
     let frame = eval.frame_manager().selected_frame().unwrap().id.0;
-    let sender = crate::emacs_core::eval::host_input::HostInputPublisher::install(&mut eval);
+    let sender = HostInputPublisher::install(&mut eval);
 
     for (keysym, name) in REPORTED_KEYS {
         eval.eval_str(&format!(
@@ -105,7 +112,7 @@ fn extended_keysym_transport_retains_command_modifiers() {
     )
     .unwrap();
     let frame = eval.frame_manager().selected_frame().unwrap().id.0;
-    let sender = crate::emacs_core::eval::host_input::HostInputPublisher::install(&mut eval);
+    let sender = HostInputPublisher::install(&mut eval);
 
     sender
         .send(

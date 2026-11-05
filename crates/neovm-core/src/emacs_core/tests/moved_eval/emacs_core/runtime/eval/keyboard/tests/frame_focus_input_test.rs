@@ -1,9 +1,13 @@
 //! #395: framed input must select its editing target before the key executes.
 
-use super::*;
 use crate::emacs_core::Context;
+use crate::emacs_core::eval::*;
+use crate::host_input::HostInputPublisher;
+use crate::keyboard::{FrontendKey, InputEvent, render_key_transport_to_input_event};
+use crate::window::DisplayFrameManagerExt;
 use crate::window::FrameId;
 use neovm_edit::buffer::BufferId;
+use neovm_value::value::Value;
 
 struct FocusFixture {
     eval: Context,
@@ -24,19 +28,21 @@ impl FocusFixture {
                (defvar issue395-input-sequence nil))",
         )
         .unwrap();
-        let first = eval.frames.selected_frame().unwrap().id;
-        let primary = eval.buffers.current_buffer_id().unwrap();
-        let secondary = eval.buffers.create_buffer("*issue395-secondary*");
+        let first = eval.frame_manager().selected_frame().unwrap().id;
+        let primary = eval.buffer_manager().current_buffer_id().unwrap();
+        let secondary = eval
+            .buffer_manager_mut()
+            .create_buffer("*issue395-secondary*");
         let second = eval
-            .frames
+            .frame_manager_mut()
             .create_frame("issue395-second", 800, 600, secondary);
         for id in [first, second] {
-            eval.frames
+            eval.frame_manager_mut()
                 .get_mut(id)
                 .unwrap()
                 .set_window_system(Some(Value::symbol("neomacs")));
         }
-        assert_eq!(eval.frames.selected_frame().unwrap().id, first);
+        assert_eq!(eval.frame_manager().selected_frame().unwrap().id, first);
         Self {
             eval,
             first,
@@ -54,8 +60,7 @@ impl FocusFixture {
 
     #[doc(hidden)]
     pub fn deliver(&mut self, events: Vec<InputEvent>) {
-        let sender =
-            crate::emacs_core::eval::host_input::HostInputPublisher::install(&mut self.eval);
+        let sender = HostInputPublisher::install(&mut self.eval);
         for event in events {
             sender.send(event).unwrap();
         }
@@ -87,12 +92,22 @@ impl FocusFixture {
 
         // Fail on the historical no-op handler before attempting the key:
         // native focus alone must not count as logical editing selection.
-        assert_eq!(self.eval.frames.selected_frame().unwrap().id, target);
-        assert_eq!(self.eval.buffers.current_buffer_id(), Some(buffer));
+        assert_eq!(
+            self.eval.frame_manager().selected_frame().unwrap().id,
+            target
+        );
+        assert_eq!(self.eval.buffer_manager().current_buffer_id(), Some(buffer));
         let selected = self.eval.eval_str("(selected-window)").unwrap();
         assert_eq!(
             selected.as_window_id(),
-            Some(self.eval.frames.get(target).unwrap().selected_window.0)
+            Some(
+                self.eval
+                    .frame_manager()
+                    .get(target)
+                    .unwrap()
+                    .selected_window
+                    .0
+            )
         );
 
         let key = self
@@ -107,8 +122,11 @@ impl FocusFixture {
         self.eval
             .eval_str("(execute-kbd-macro issue395-input-sequence)")
             .unwrap();
-        assert_eq!(self.eval.frames.selected_frame().unwrap().id, target);
-        assert_eq!(self.eval.buffers.current_buffer_id(), Some(buffer));
+        assert_eq!(
+            self.eval.frame_manager().selected_frame().unwrap().id,
+            target
+        );
+        assert_eq!(self.eval.buffer_manager().current_buffer_id(), Some(buffer));
     }
 
     #[doc(hidden)]
