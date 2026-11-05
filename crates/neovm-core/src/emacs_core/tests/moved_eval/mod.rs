@@ -6,5 +6,8 @@
 //! API-drift shims). Origin crate: neovm-eval.
 
 #[cfg(test)]
+#[path = "emacs_core/lisp/custom/tests/custom_test.rs"]
+mod emacs_core_lisp_custom_tests_custom_test_rs;
+#[cfg(test)]
 #[path = "emacs_core/lisp/lread/tests/lread_test.rs"]
 mod emacs_core_lisp_lread_tests_lread_test_rs;

@@ -7440,3 +7440,18 @@ pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
         PDUMP_LOAD_SYM_REMAP.with(|slot| slot.borrow().is_some() as u64),
     );
 }
+
+/// A1 test-surface rows (post-split option A, peer sign-off batch).
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub mod test_support {
+    use super::*;
+
+    pub fn dump_custom_manager(cm: &CustomManager) -> DumpCustomManager {
+        super::dump_custom_manager(cm)
+    }
+
+    pub fn load_custom_manager(dcm: &DumpCustomManager) -> CustomManager {
+        super::load_custom_manager(dcm)
+    }
+}

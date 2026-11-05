@@ -8201,3 +8201,13 @@ pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
     neovm_value::quit::mix_quit_requested_tls_fingerprint(h);
     neovm_value::tls_fingerprint::mix(h, SCRATCH_GC_ROOTS.with(|slot| slot.borrow().len() as u64));
 }
+
+/// A1 test-surface row (post-split option A): the gc_stress test flag was a
+/// crate-visible field; moved tests set it through this additive accessor.
+#[cfg(any(test, feature = "test-support"))]
+impl Context {
+    #[doc(hidden)]
+    pub fn set_gc_stress_for_test(&mut self, enabled: bool) {
+        self.gc_stress = enabled;
+    }
+}

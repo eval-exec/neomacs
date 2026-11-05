@@ -1,16 +1,21 @@
-use super::*;
+use neovm_eval::emacs_core::custom::*;
 fn test_ob() -> neovm_value::symbol::Obarray {
     neovm_value::symbol::Obarray::new()
 }
 use crate::emacs_core::{Context, format_eval_result};
 use crate::test_utils::{runtime_startup_context, runtime_startup_eval_all};
+use neovm_eval::emacs_core::pdump::convert::test_support::{
+    dump_custom_manager, load_custom_manager,
+};
+use neovm_value::intern::intern;
+use neovm_value::value::Value;
 
 fn eval_all(src: &str) -> Vec<String> {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let forms = crate::emacs_core::value_reader::read_all(
         src,
         crate::emacs_core::eval::VariableView::canonical(
-            neovm_value::symbol::CanonicalAccess::TEST,
+            neovm_value::symbol::CanonicalAccess::STORAGE,
             &test_ob(),
         ),
     )
@@ -56,7 +61,7 @@ fn custom_manager_pdump_round_trip() {
     // Phase D: dump_custom_manager emits empty vecs; load_custom_manager
     // ignores the payload. Round-trip is a no-op.
     let cm = CustomManager::new();
-    let dump = crate::emacs_core::pdump::convert::dump_custom_manager(&cm);
+    let dump = dump_custom_manager(&cm);
     assert!(dump.auto_buffer_local.is_empty());
     assert!(dump.auto_buffer_local_syms.is_empty());
     // Loading a legacy dump with entries should succeed and return an
@@ -65,7 +70,7 @@ fn custom_manager_pdump_round_trip() {
         auto_buffer_local_syms: Vec::new(),
         auto_buffer_local: vec!["tab-width".to_string(), "fill-column".to_string()],
     };
-    let _restored = crate::emacs_core::pdump::convert::load_custom_manager(&legacy_dump);
+    let _restored = load_custom_manager(&legacy_dump);
 }
 
 // -- GNU custom.el runtime tests ----------------------------------------
@@ -102,7 +107,7 @@ fn defcustom_with_group() {
 fn custom_declare_variable_version_string_survives_gc_stress() {
     crate::test_utils::init_test_tracing();
     let mut ev = bootstrap_context();
-    ev.gc_stress = true;
+    ev.set_gc_stress_for_test(true);
 
     let result = ev
         .eval_str(
@@ -230,7 +235,7 @@ Multiple lines, just like the bindings.el version."
     assert!(elc_path.exists(), ".elc file should exist");
 
     let mut ev = bootstrap_context();
-    super::super::load::load_file(&mut ev, &elc_path).expect("load .elc fixture");
+    neovm_eval::emacs_core::load::load_file(&mut ev, &elc_path).expect("load .elc fixture");
     let result = ev.eval_str("(boundp 'test-mle-edge)").expect("boundp eval");
     assert_eq!(
         result,
@@ -1193,7 +1198,7 @@ fn setq_default_works_on_new_variable() {
 /// pins the representation behind them.
 #[test]
 fn make_variable_buffer_local_leaves_per_buffer_slots_alone() {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str("(progn (make-variable-buffer-local 'fill-column) (setq fill-column 33))")
         .expect("evaluates");
     assert_eq!(
