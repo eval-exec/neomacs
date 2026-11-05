@@ -1775,8 +1775,8 @@ fn window_body_width_remap_without_face_remapping_returns_columns() {
 fn window_body_remap_uses_the_current_buffer_default_face_metrics() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new();
-    let buffer = eval.buffers.create_buffer("*remapped-window-body*");
-    eval.buffers.set_current(buffer);
+    let buffer = eval.edit.buffers.create_buffer("*remapped-window-body*");
+    eval.edit.buffers.set_current(buffer);
     let frame_id = eval.frames.create_frame("F1", 800, 600, buffer);
     eval.frames
         .get_mut(frame_id)
@@ -1810,8 +1810,8 @@ fn window_body_remap_uses_the_current_buffer_default_face_metrics() {
 fn window_body_remap_uses_the_current_buffers_face_remapping_like_gnu() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new();
-    let displayed = eval.buffers.create_buffer("*displayed-window-body*");
-    eval.buffers.set_current(displayed);
+    let displayed = eval.edit.buffers.create_buffer("*displayed-window-body*");
+    eval.edit.buffers.set_current(displayed);
     let frame_id = eval.frames.create_frame("F1", 800, 600, displayed);
     eval.frames
         .get_mut(frame_id)
@@ -1821,8 +1821,8 @@ fn window_body_remap_uses_the_current_buffers_face_remapping_like_gnu() {
     // GNU's `window_body_width` reads the buffer-local
     // `Vface_remapping_alist` of the current buffer.  The WINDOW argument
     // supplies geometry; it does not switch buffers as a side effect.
-    let query_buffer = eval.buffers.create_buffer("*query-window-body*");
-    eval.buffers.set_current(query_buffer);
+    let query_buffer = eval.edit.buffers.create_buffer("*query-window-body*");
+    eval.edit.buffers.set_current(query_buffer);
     eval.set_display_host(Box::new(RecordingDisplayHost::with_resolved_frame_font(
         remapped_mono_font_metrics(),
     )));
@@ -11127,9 +11127,10 @@ fn graphical_recenter_context(
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new();
     eval.set_variable("noninteractive", Value::NIL);
-    let buffer = eval.buffers.create_buffer("*bottom-recenter-pixels*");
-    eval.buffers.set_current(buffer);
-    eval.buffers
+    let buffer = eval.edit.buffers.create_buffer("*bottom-recenter-pixels*");
+    eval.edit.buffers.set_current(buffer);
+    eval.edit
+        .buffers
         .get_mut(buffer)
         .expect("buffer")
         .insert(&"line\n".repeat(100));
@@ -11301,8 +11302,9 @@ fn graphical_bottom_recenter_keeps_its_target_when_display_callback_selects_anot
         );
         let frame = eval.frames.selected_frame().expect("frame").id;
         let original = eval.frames.get(frame).expect("frame").selected_window;
-        let other_buffer = eval.buffers.create_buffer("*other-recenter-window*");
-        eval.buffers
+        let other_buffer = eval.edit.buffers.create_buffer("*other-recenter-window*");
+        eval.edit
+            .buffers
             .get_mut(other_buffer)
             .expect("other buffer")
             .insert("Other window\n");

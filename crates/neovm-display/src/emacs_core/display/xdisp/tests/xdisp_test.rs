@@ -79,16 +79,29 @@ fn implemented_text_backends() -> impl Iterator<Item = BufferTextBackendKind> {
 
 fn convert_current_buffer_text_backend(eval: &mut Context, kind: BufferTextBackendKind) {
     let implemented_kind = kind.implemented().expect("test backend is implemented");
-    let buffer_id = eval.buffers.current_buffer_id().expect("current buffer");
-    eval.buffers
+    let buffer_id = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
+    eval.edit
+        .buffers
         .get_mut(buffer_id)
         .expect("current buffer")
         .convert_text_backend_kind(implemented_kind);
 }
 
 fn fragment_current_buffer(eval: &mut Context, text: &str) {
-    let buffer_id = eval.buffers.current_buffer_id().expect("current buffer");
-    let buffer = eval.buffers.get_mut(buffer_id).expect("current buffer");
+    let buffer_id = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
+    let buffer = eval
+        .edit
+        .buffers
+        .get_mut(buffer_id)
+        .expect("current buffer");
     buffer.insert(text);
 
     let first_fragment = text.find('\n').unwrap_or(text.len()).min(text.len());
@@ -175,7 +188,7 @@ fn display_line_numbers_assignment_is_buffer_local_on_set() {
     let mut eval = Context::new();
     eval.eval_str("(setq display-line-numbers t)")
         .expect("setq display-line-numbers");
-    let buffer = eval.buffers.current_buffer().expect("current buffer");
+    let buffer = eval.edit.buffers.current_buffer().expect("current buffer");
     assert_eq!(
         buffer.get_buffer_local("display-line-numbers"),
         Some(Value::T)
@@ -191,7 +204,11 @@ fn display_line_numbers_assignment_is_buffer_local_on_set() {
 fn redisplay_fontification_walks_successive_unfontified_chunks() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new();
-    let target = eval.buffers.current_buffer_id().expect("current buffer");
+    let target = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
     eval.eval_str(
         r#"
         (insert "abcdefghij")
@@ -215,7 +232,7 @@ fn redisplay_fontification_walks_successive_unfontified_chunks() {
         ensure_fontified_for_redisplay(&mut eval, target, 0, 10).expect("fontify target buffer");
     assert_eq!(outcome, RedisplayFontificationOutcome::Fontified);
 
-    assert_eq!(eval.buffers.current_buffer_id(), Some(other));
+    assert_eq!(eval.edit.buffers.current_buffer_id(), Some(other));
     eval.set_current_buffer_unrecorded(target)
         .expect("switch back to target");
     let result = eval
@@ -276,7 +293,12 @@ fn test_format_mode_line() {
 fn test_format_mode_line_eval_optional_designators() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buffer_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let buffer_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     let frame_id = eval.frames.create_frame("xdisp-format", 80, 24, buffer_id);
     let window_id = eval.frames.get(frame_id).expect("frame").selected_window.0 as i64;
 
@@ -292,6 +314,7 @@ fn test_format_mode_line_eval_optional_designators() {
     .unwrap();
     // %b expands to the current buffer name
     let buf_name = eval
+        .edit
         .buffers
         .current_buffer()
         .map(|b| b.name_runtime_string_owned())
@@ -347,40 +370,50 @@ fn test_format_mode_line_noninteractive_returns_empty_after_validation() {
 fn test_resolve_live_window_display_context_uses_selected_window_buffer_point() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new();
-    let selected_buffer_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let selected_buffer_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     let frame_id = eval
         .frames
         .create_frame("xdisp-selected-point", 800, 600, selected_buffer_id);
     let selected_window = eval.frames.get(frame_id).expect("frame").selected_window;
     {
         let buffer = eval
+            .edit
             .buffers
             .get_mut(selected_buffer_id)
             .expect("selected window buffer");
         buffer.insert("abc\ndef\n");
         buffer.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(5));
     }
-    let other_id = eval.buffers.create_buffer("*other*");
-    eval.buffers.set_current(other_id);
+    let other_id = eval.edit.buffers.create_buffer("*other*");
+    eval.edit.buffers.set_current(other_id);
 
     let ctx = resolve_live_window_display_context(
         &eval.frames,
-        &eval.buffers,
+        &eval.edit.buffers,
         Some(&Value::make_window(selected_window.0)),
     )
     .expect("display context")
     .expect("selected window context");
 
     assert_eq!(ctx.window_point, LispCharPos1::from_one_based_usize(6));
-    assert_eq!(eval.buffers.current_buffer_id(), Some(other_id));
+    assert_eq!(eval.edit.buffers.current_buffer_id(), Some(other_id));
 }
 
 #[test]
 fn test_format_mode_line_eval_uses_explicit_buffer_instead_of_current_buffer() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let saved_current = eval.buffers.current_buffer_id().expect("current buffer");
-    let other_id = eval.buffers.create_buffer("*other*");
+    let saved_current = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
+    let other_id = eval.edit.buffers.create_buffer("*other*");
 
     let ok = builtin_format_mode_line_ctx(
         &mut eval,
@@ -394,18 +427,22 @@ fn test_format_mode_line_eval_uses_explicit_buffer_instead_of_current_buffer() {
     .unwrap();
 
     assert_eq!(ok, Value::string("*other*"));
-    assert_eq!(eval.buffers.current_buffer_id(), Some(saved_current));
+    assert_eq!(eval.edit.buffers.current_buffer_id(), Some(saved_current));
 }
 
 #[test]
 fn test_format_mode_line_eval_uses_window_buffer_instead_of_current_buffer() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let saved_current = eval.buffers.current_buffer_id().expect("current buffer");
+    let saved_current = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
     let frame_id = eval
         .frames
         .create_frame("xdisp-window", 80, 24, saved_current);
-    let other_id = eval.buffers.create_buffer("*window*");
+    let other_id = eval.edit.buffers.create_buffer("*window*");
     let window_id = {
         let frame = eval.frames.get_mut(frame_id).expect("frame");
         let selected = frame.selected_window;
@@ -431,16 +468,21 @@ fn test_format_mode_line_eval_uses_window_buffer_instead_of_current_buffer() {
     .unwrap();
 
     assert_eq!(ok, Value::string("*window*"));
-    assert_eq!(eval.buffers.current_buffer_id(), Some(saved_current));
+    assert_eq!(eval.edit.buffers.current_buffer_id(), Some(saved_current));
 }
 
 #[test]
 fn test_format_mode_line_in_state_uses_buffer_local_symbols_and_restores_buffer() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let saved_current = eval.buffers.current_buffer_id().expect("current buffer");
-    let other_id = eval.buffers.create_buffer("*mode-line*");
-    eval.buffers
+    let saved_current = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
+    let other_id = eval.edit.buffers.create_buffer("*mode-line*");
+    eval.edit
+        .buffers
         .set_buffer_local_property(other_id, "mode-name", Value::string("Neo"))
         .expect("mode-name local should set");
 
@@ -448,7 +490,7 @@ fn test_format_mode_line_in_state_uses_buffer_local_symbols_and_restores_buffer(
         VariableView::new(&eval.obarray, &eval.owner),
         &[],
         &eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         &eval.processes,
         vec![
             Value::list(vec![
@@ -483,16 +525,21 @@ fn test_format_mode_line_in_state_uses_buffer_local_symbols_and_restores_buffer(
     // value (e.g. bindings.el's `(:eval (if (display-graphic-p) " " "-"))`),
     // so it was removed.
     assert_eq!(rendered, Value::string("*mode-line* Neo "));
-    assert_eq!(eval.buffers.current_buffer_id(), Some(saved_current));
+    assert_eq!(eval.edit.buffers.current_buffer_id(), Some(saved_current));
 }
 
 #[test]
 fn test_format_mode_line_eval_keeps_shared_buffer_context_around_eval_forms() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let saved_current = eval.buffers.current_buffer_id().expect("current buffer");
-    let other_id = eval.buffers.create_buffer("*mode-line-eval*");
-    eval.buffers
+    let saved_current = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
+    let other_id = eval.edit.buffers.create_buffer("*mode-line-eval*");
+    eval.edit
+        .buffers
         .set_buffer_local_property(other_id, "mode-name", Value::string("Neo"))
         .expect("mode-name local should set");
 
@@ -511,16 +558,21 @@ fn test_format_mode_line_eval_keeps_shared_buffer_context_around_eval_forms() {
     .expect("format-mode-line eval");
 
     assert_eq!(rendered, Value::string("*mode-line-eval* Neo"));
-    assert_eq!(eval.buffers.current_buffer_id(), Some(saved_current));
+    assert_eq!(eval.edit.buffers.current_buffer_id(), Some(saved_current));
 }
 
 #[test]
 fn test_format_mode_line_in_state_with_eval_keeps_shared_buffer_context_around_eval_forms() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let saved_current = eval.buffers.current_buffer_id().expect("current buffer");
-    let other_id = eval.buffers.create_buffer("*mode-line-shared-eval*");
-    eval.buffers
+    let saved_current = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
+    let other_id = eval.edit.buffers.create_buffer("*mode-line-shared-eval*");
+    eval.edit
+        .buffers
         .set_buffer_local_property(other_id, "mode-name", Value::string("Neo"))
         .expect("mode-name local should set");
 
@@ -528,7 +580,7 @@ fn test_format_mode_line_in_state_with_eval_keeps_shared_buffer_context_around_e
         VariableView::new(&eval.obarray, &eval.owner),
         &[],
         &eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         &eval.processes,
         &[
             Value::list(vec![
@@ -550,7 +602,7 @@ fn test_format_mode_line_in_state_with_eval_keeps_shared_buffer_context_around_e
     .expect("format-mode-line shared eval");
 
     assert_eq!(rendered, Value::string("*mode-line-shared-eval* Neo"));
-    assert_eq!(eval.buffers.current_buffer_id(), Some(saved_current));
+    assert_eq!(eval.edit.buffers.current_buffer_id(), Some(saved_current));
 }
 
 #[test]
@@ -611,8 +663,9 @@ fn test_format_mode_line_symbol_conditional_uses_only_selected_branch() {
 fn test_format_mode_line_string_valued_symbols_render_literally() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let other_id = eval.buffers.create_buffer("*mode-line-literal*");
-    eval.buffers
+    let other_id = eval.edit.buffers.create_buffer("*mode-line-literal*");
+    eval.edit
+        .buffers
         .set_buffer_local_property(other_id, "mode-name", Value::string("%b"))
         .expect("mode-name local should set");
 
@@ -620,7 +673,7 @@ fn test_format_mode_line_string_valued_symbols_render_literally() {
         VariableView::new(&eval.obarray, &eval.owner),
         &[],
         &eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         &eval.processes,
         vec![
             Value::list(vec![Value::string("%b "), Value::symbol("mode-name")]),
@@ -639,13 +692,13 @@ fn test_format_mode_line_string_valued_symbols_render_literally() {
 fn test_format_mode_line_fixnum_elements_pad_and_truncate_tail() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let other_id = eval.buffers.create_buffer("xy");
+    let other_id = eval.edit.buffers.create_buffer("xy");
 
     let rendered = format_mode_line_from_state(
         VariableView::new(&eval.obarray, &eval.owner),
         &[],
         &eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         &eval.processes,
         vec![
             Value::list(vec![
@@ -668,13 +721,13 @@ fn test_format_mode_line_fixnum_elements_pad_and_truncate_tail() {
 fn test_format_mode_line_percent_specs_keep_gnu_field_width_and_dash_semantics() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let other_id = eval.buffers.create_buffer("xy");
+    let other_id = eval.edit.buffers.create_buffer("xy");
 
     let rendered = format_mode_line_from_state(
         VariableView::new(&eval.obarray, &eval.owner),
         &[],
         &eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         &eval.processes,
         vec![
             Value::string("%5b|%-|%2*"),
@@ -754,8 +807,8 @@ fn test_format_mode_line_propertize_preserves_text_properties() {
 fn test_format_mode_line_percent_specs_preserve_source_string_text_properties() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buffer_id = eval.buffers.create_buffer("fmt-prop-buffer");
-    eval.buffers.set_current(buffer_id);
+    let buffer_id = eval.edit.buffers.create_buffer("fmt-prop-buffer");
+    eval.edit.buffers.set_current(buffer_id);
 
     let format = Value::string("%b!");
     assert!(format.is_string(), "expected string format");
@@ -805,7 +858,12 @@ fn test_format_mode_line_percent_specs_preserve_source_string_text_properties() 
 fn mode_line_display_preserves_nested_literal_string_sources() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buffer_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let buffer_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     let frame_id = eval
         .frames
         .create_frame("mode-line-string-sources", 800, 600, buffer_id);
@@ -836,8 +894,8 @@ fn mode_line_display_preserves_nested_literal_string_sources() {
 fn mode_line_percent_field_padding_inherits_the_format_string_face() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buffer_id = eval.buffers.create_buffer("xy");
-    eval.buffers.set_current(buffer_id);
+    let buffer_id = eval.edit.buffers.create_buffer("xy");
+    eval.edit.buffers.set_current(buffer_id);
 
     let format = Value::string("%12b");
     set_string_text_properties_for_value(
@@ -865,10 +923,10 @@ fn mode_line_percent_field_padding_inherits_the_format_string_face() {
 fn test_format_mode_line_status_specs_match_gnu_buffer_state() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buffer_id = eval.buffers.create_buffer("status-buffer");
-    eval.buffers.set_current(buffer_id);
+    let buffer_id = eval.edit.buffers.create_buffer("status-buffer");
+    eval.edit.buffers.set_current(buffer_id);
     {
-        let buffer = eval.buffers.get_mut(buffer_id).expect("buffer");
+        let buffer = eval.edit.buffers.get_mut(buffer_id).expect("buffer");
         buffer.insert("abc");
         buffer.set_modified(true);
         buffer.set_buffer_local("buffer-read-only", Value::T);
@@ -879,7 +937,7 @@ fn test_format_mode_line_status_specs_match_gnu_buffer_state() {
     assert_eq!(status, Value::string("%|*|*"));
 
     {
-        let buffer = eval.buffers.get_mut(buffer_id).expect("buffer");
+        let buffer = eval.edit.buffers.get_mut(buffer_id).expect("buffer");
         buffer.set_buffer_local("buffer-read-only", Value::NIL);
         buffer.set_modified(false);
         buffer.narrow_to_emacs_byte_range(neovm_edit::buffer::EmacsByteRange::from_usize(1, 2));
@@ -1008,10 +1066,10 @@ fn test_format_mode_line_recursive_depth_specs_match_gnu() {
 fn test_format_mode_line_size_and_process_specs_match_gnu() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buffer_id = eval.buffers.create_buffer("mode-line-metadata");
-    eval.buffers.set_current(buffer_id);
+    let buffer_id = eval.edit.buffers.create_buffer("mode-line-metadata");
+    eval.edit.buffers.set_current(buffer_id);
     {
-        let buffer = eval.buffers.get_mut(buffer_id).expect("buffer");
+        let buffer = eval.edit.buffers.get_mut(buffer_id).expect("buffer");
         buffer.insert(&"x".repeat(1536));
     }
 
@@ -1039,10 +1097,10 @@ fn test_format_mode_line_size_specs_count_characters_not_bytes() {
     // divergence ("4.1k" where GNU says "3.1k").
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buffer_id = eval.buffers.create_buffer("mode-line-multibyte-size");
-    eval.buffers.set_current(buffer_id);
+    let buffer_id = eval.edit.buffers.create_buffer("mode-line-multibyte-size");
+    eval.edit.buffers.set_current(buffer_id);
     {
-        let buffer = eval.buffers.get_mut(buffer_id).expect("buffer");
+        let buffer = eval.edit.buffers.get_mut(buffer_id).expect("buffer");
         buffer.insert(&"─".repeat(1536));
     }
 
@@ -1055,10 +1113,10 @@ fn test_format_mode_line_size_specs_count_characters_not_bytes() {
 fn test_format_mode_line_column_c_and_big_c_specs_match_gnu() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buffer_id = eval.buffers.create_buffer("col-test");
-    eval.buffers.set_current(buffer_id);
+    let buffer_id = eval.edit.buffers.create_buffer("col-test");
+    eval.edit.buffers.set_current(buffer_id);
     {
-        let buffer = eval.buffers.get_mut(buffer_id).expect("buffer");
+        let buffer = eval.edit.buffers.get_mut(buffer_id).expect("buffer");
         buffer.insert("abcdef");
         buffer.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(3)); // point at column 3 (0-indexed)
     }
@@ -1076,10 +1134,10 @@ fn test_format_mode_line_line_and_column_at_deep_position() {
     // starts after an interior newline.
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buffer_id = eval.buffers.create_buffer("line-col-deep");
-    eval.buffers.set_current(buffer_id);
+    let buffer_id = eval.edit.buffers.create_buffer("line-col-deep");
+    eval.edit.buffers.set_current(buffer_id);
     {
-        let buffer = eval.buffers.get_mut(buffer_id).expect("buffer");
+        let buffer = eval.edit.buffers.get_mut(buffer_id).expect("buffer");
         buffer.insert("l1\nl2\nl3\nabcXdef");
         // point after "l1\nl2\nl3\nabc" -> line 4 (three preceding newlines),
         // column 3 (0-indexed) on that line.
@@ -1123,9 +1181,14 @@ fn format_mode_line_line_uses_the_target_windows_point_not_the_buffer_point() {
     // window showing the same buffer reported the selected window's line.
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buffer_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let buffer_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     {
-        let buffer = eval.buffers.get_mut(buffer_id).expect("buffer");
+        let buffer = eval.edit.buffers.get_mut(buffer_id).expect("buffer");
         buffer.insert("line1\nline2\nline3\nline4\n");
         // Selected window / live buffer point -> line 1.
         buffer.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(0));
@@ -1171,8 +1234,16 @@ fn format_mode_line_position_backend_trace(kind: BufferTextBackendKind) -> Strin
     convert_current_buffer_text_backend(&mut eval, kind);
     fragment_current_buffer(&mut eval, "αβ\ncdé\nlast");
     {
-        let buffer_id = eval.buffers.current_buffer_id().expect("current buffer");
-        let buffer = eval.buffers.get_mut(buffer_id).expect("current buffer");
+        let buffer_id = eval
+            .edit
+            .buffers
+            .current_buffer_id()
+            .expect("current buffer");
+        let buffer = eval
+            .edit
+            .buffers
+            .get_mut(buffer_id)
+            .expect("current buffer");
         buffer.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new("αβ\ncd".len()));
         assert_eq!(buffer.text_backend_kind(), kind);
     }
@@ -1207,9 +1278,10 @@ fn implemented_text_backends_match_format_mode_line_position_specs() {
 fn test_format_mode_line_major_mode_name_spec_matches_gnu() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buffer_id = eval.buffers.create_buffer("mode-test");
-    eval.buffers.set_current(buffer_id);
-    eval.buffers
+    let buffer_id = eval.edit.buffers.create_buffer("mode-test");
+    eval.edit.buffers.set_current(buffer_id);
+    eval.edit
+        .buffers
         .set_buffer_local_property(buffer_id, "mode-name", Value::string("Emacs-Lisp"))
         .expect("set mode-name");
 
@@ -1218,8 +1290,8 @@ fn test_format_mode_line_major_mode_name_spec_matches_gnu() {
     assert_eq!(rendered, Value::string("Emacs-Lisp"));
 
     // Default mode-name is "Fundamental"
-    let other_id = eval.buffers.create_buffer("default-mode");
-    eval.buffers.set_current(other_id);
+    let other_id = eval.edit.buffers.create_buffer("default-mode");
+    eval.edit.buffers.set_current(other_id);
     let default =
         builtin_format_mode_line_ctx(&mut eval, &vec![Value::string("%m")]).expect("default mode");
     assert_eq!(default, Value::string("Fundamental"));
@@ -1229,12 +1301,13 @@ fn test_format_mode_line_major_mode_name_spec_matches_gnu() {
 fn test_format_mode_line_major_mode_name_preserves_raw_unibyte_value() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buffer_id = eval.buffers.create_buffer("raw-mode-test");
-    eval.buffers.set_current(buffer_id);
+    let buffer_id = eval.edit.buffers.create_buffer("raw-mode-test");
+    eval.edit.buffers.set_current(buffer_id);
     let raw_mode = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![
         0xFF, b'-', b'M',
     ]));
-    eval.buffers
+    eval.edit
+        .buffers
         .set_buffer_local_property(buffer_id, "mode-name", raw_mode)
         .expect("set raw mode-name");
 
@@ -1251,8 +1324,8 @@ fn test_format_mode_line_major_mode_name_preserves_raw_unibyte_value() {
 fn test_format_mode_line_frame_name_f_spec_prefers_title_and_preserves_raw_unibyte_value() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buffer_id = eval.buffers.create_buffer("frame-title-test");
-    eval.buffers.set_current(buffer_id);
+    let buffer_id = eval.edit.buffers.create_buffer("frame-title-test");
+    eval.edit.buffers.set_current(buffer_id);
 
     let frame_id = eval.frames.create_frame("frame-name", 80, 24, buffer_id);
     let raw_title = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![
@@ -1285,8 +1358,8 @@ fn test_format_mode_line_frame_name_f_spec_defaults_to_emacs_without_frame() {
 fn test_format_mode_line_frame_name_f_spec_uses_emacs_for_gui_frame_without_explicit_name() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buffer_id = eval.buffers.create_buffer("frame-name-default-test");
-    eval.buffers.set_current(buffer_id);
+    let buffer_id = eval.edit.buffers.create_buffer("frame-name-default-test");
+    eval.edit.buffers.set_current(buffer_id);
 
     let frame_id = eval.frames.create_frame("F1", 80, 24, buffer_id);
     {
@@ -1303,11 +1376,12 @@ fn test_format_mode_line_frame_name_f_spec_uses_emacs_for_gui_frame_without_expl
 fn test_format_mode_line_remote_at_spec_matches_gnu() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buffer_id = eval.buffers.create_buffer("remote-test");
-    eval.buffers.set_current(buffer_id);
+    let buffer_id = eval.edit.buffers.create_buffer("remote-test");
+    eval.edit.buffers.set_current(buffer_id);
 
     // Local directory → "-"
-    eval.buffers
+    eval.edit
+        .buffers
         .set_buffer_local_property(buffer_id, "default-directory", Value::string("/home/user"))
         .expect("set local default-directory");
     let local =
@@ -1315,7 +1389,8 @@ fn test_format_mode_line_remote_at_spec_matches_gnu() {
     assert_eq!(local, Value::string("-"));
 
     // Remote (Tramp-style) directory → "@"
-    eval.buffers
+    eval.edit
+        .buffers
         .set_buffer_local_property(
             buffer_id,
             "default-directory",
@@ -1331,11 +1406,12 @@ fn test_format_mode_line_remote_at_spec_matches_gnu() {
 fn test_format_mode_line_remote_at_spec_accepts_raw_unibyte_default_directory() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buffer_id = eval.buffers.create_buffer("remote-raw-test");
-    eval.buffers.set_current(buffer_id);
+    let buffer_id = eval.edit.buffers.create_buffer("remote-raw-test");
+    eval.edit.buffers.set_current(buffer_id);
     let mut remote_dir = b"/ssh:host:/home/user".to_vec();
     remote_dir.push(0xFF);
-    eval.buffers
+    eval.edit
+        .buffers
         .set_buffer_local_property(
             buffer_id,
             "default-directory",
@@ -1354,11 +1430,12 @@ fn test_format_mode_line_remote_at_spec_accepts_raw_unibyte_default_directory() 
 fn test_format_mode_line_coding_system_z_and_big_z_specs_match_gnu() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buffer_id = eval.buffers.create_buffer("coding-test");
-    eval.buffers.set_current(buffer_id);
+    let buffer_id = eval.edit.buffers.create_buffer("coding-test");
+    eval.edit.buffers.set_current(buffer_id);
 
     // utf-8-unix → mnemonic 'U', EOL ':'
-    eval.buffers
+    eval.edit
+        .buffers
         .set_buffer_local_property(
             buffer_id,
             "buffer-file-coding-system",
@@ -1370,7 +1447,8 @@ fn test_format_mode_line_coding_system_z_and_big_z_specs_match_gnu() {
     assert_eq!(z, Value::string("U|U:"));
 
     // undecided-dos → mnemonic '-', EOL '\'
-    eval.buffers
+    eval.edit
+        .buffers
         .set_buffer_local_property(
             buffer_id,
             "buffer-file-coding-system",
@@ -1386,12 +1464,14 @@ fn test_format_mode_line_coding_system_z_and_big_z_specs_match_gnu() {
 fn test_format_mode_line_blanks_coding_mnemonics_for_unibyte_buffer() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buffer_id = eval.buffers.create_buffer("unibyte-coding-test");
-    eval.buffers.set_current(buffer_id);
-    eval.buffers
+    let buffer_id = eval.edit.buffers.create_buffer("unibyte-coding-test");
+    eval.edit.buffers.set_current(buffer_id);
+    eval.edit
+        .buffers
         .set_buffer_multibyte_flag(buffer_id, false)
         .expect("make test buffer unibyte");
-    eval.buffers
+    eval.edit
+        .buffers
         .set_buffer_local_property(
             buffer_id,
             "buffer-file-coding-system",
@@ -1418,10 +1498,11 @@ fn test_format_mode_line_blanks_coding_mnemonics_for_unibyte_buffer() {
 fn test_format_mode_line_big_z_preserves_raw_unibyte_eol_indicator() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buffer_id = eval.buffers.create_buffer("coding-raw-eol-test");
-    eval.buffers.set_current(buffer_id);
+    let buffer_id = eval.edit.buffers.create_buffer("coding-raw-eol-test");
+    eval.edit.buffers.set_current(buffer_id);
 
-    eval.buffers
+    eval.edit
+        .buffers
         .set_buffer_local_property(
             buffer_id,
             "buffer-file-coding-system",
@@ -1449,12 +1530,13 @@ fn test_format_mode_line_tty_z_uses_live_coding_manager_state() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
     utf8_locale_terminal(&mut eval);
-    let buffer_id = eval.buffers.create_buffer("tty-coding-test");
-    eval.buffers.set_current(buffer_id);
+    let buffer_id = eval.edit.buffers.create_buffer("tty-coding-test");
+    eval.edit.buffers.set_current(buffer_id);
     eval.frames
         .create_frame("tty-coding-frame", 80, 24, buffer_id);
 
-    eval.buffers
+    eval.edit
+        .buffers
         .set_buffer_local_property(
             buffer_id,
             "buffer-file-coding-system",
@@ -1476,12 +1558,16 @@ fn test_format_mode_line_tty_z_uses_prefer_utf8_declared_mnemonic() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
     utf8_locale_terminal(&mut eval);
-    let buffer_id = eval.buffers.create_buffer("tty-prefer-utf8-coding-test");
-    eval.buffers.set_current(buffer_id);
+    let buffer_id = eval
+        .edit
+        .buffers
+        .create_buffer("tty-prefer-utf8-coding-test");
+    eval.edit.buffers.set_current(buffer_id);
     eval.frames
         .create_frame("tty-coding-frame", 80, 24, buffer_id);
 
-    eval.buffers
+    eval.edit
+        .buffers
         .set_buffer_local_property(
             buffer_id,
             "buffer-file-coding-system",
@@ -1498,8 +1584,8 @@ fn test_format_mode_line_tty_z_uses_prefer_utf8_declared_mnemonic() {
 fn test_format_mode_line_tty_z_orders_keyboard_before_terminal() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buffer_id = eval.buffers.create_buffer("tty-coding-order-test");
-    eval.buffers.set_current(buffer_id);
+    let buffer_id = eval.edit.buffers.create_buffer("tty-coding-order-test");
+    eval.edit.buffers.set_current(buffer_id);
     eval.frames
         .create_frame("tty-coding-frame", 80, 24, buffer_id);
 
@@ -1515,7 +1601,8 @@ fn test_format_mode_line_tty_z_orders_keyboard_before_terminal() {
         neovm_value::tagged::value::SymbolMode::Bare,
     )
     .expect("set terminal coding");
-    eval.buffers
+    eval.edit
+        .buffers
         .set_buffer_local_property(
             buffer_id,
             "buffer-file-coding-system",
@@ -1533,19 +1620,24 @@ fn test_format_mode_line_tty_z_reads_visible_buffer_file_coding_value_without_lo
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
     utf8_locale_terminal(&mut eval);
-    let buffer_id = eval.buffers.create_buffer("tty-coding-visible-slot-test");
-    eval.buffers.set_current(buffer_id);
+    let buffer_id = eval
+        .edit
+        .buffers
+        .create_buffer("tty-coding-visible-slot-test");
+    eval.edit.buffers.set_current(buffer_id);
     eval.frames
         .create_frame("tty-coding-frame", 80, 24, buffer_id);
 
-    eval.buffers
+    eval.edit
+        .buffers
         .set_buffer_local_property(
             buffer_id,
             "buffer-file-coding-system",
             Value::symbol("utf-8-unix"),
         )
         .expect("set coding");
-    eval.buffers
+    eval.edit
+        .buffers
         .get_mut(buffer_id)
         .expect("buffer")
         .set_slot_local_flag(BUFFER_SLOT_BUFFER_FILE_CODING_SYSTEM, false);
@@ -1564,12 +1656,13 @@ fn test_format_mode_line_tty_big_z_uses_live_coding_manager_state_and_eol_indica
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
     utf8_locale_terminal(&mut eval);
-    let buffer_id = eval.buffers.create_buffer("tty-coding-big-z-test");
-    eval.buffers.set_current(buffer_id);
+    let buffer_id = eval.edit.buffers.create_buffer("tty-coding-big-z-test");
+    eval.edit.buffers.set_current(buffer_id);
     eval.frames
         .create_frame("tty-coding-frame", 80, 24, buffer_id);
 
-    eval.buffers
+    eval.edit
+        .buffers
         .set_buffer_local_property(
             buffer_id,
             "buffer-file-coding-system",
@@ -1628,7 +1721,12 @@ fn test_format_mode_line_string_keeps_min_width_property_without_display_padding
 fn mode_line_display_does_not_flush_a_terminal_min_width_run() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buffer_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let buffer_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     let frame_id = eval
         .frames
         .create_frame("mode-line-min-width", 800, 600, buffer_id);
@@ -1667,7 +1765,12 @@ fn mode_line_display_closes_a_min_width_run_when_another_one_starts() {
     let _legacy_padding = mode_line_numeric_padding_test::PaddingPolicyGuard::set(false);
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buffer_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let buffer_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     let frame_id = eval
         .frames
         .create_frame("mode-line-min-width-transition", 800, 600, buffer_id);
@@ -1707,8 +1810,8 @@ fn mode_line_display_closes_a_min_width_run_when_another_one_starts() {
 fn test_format_mode_line_position_o_and_q_specs() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buffer_id = eval.buffers.create_buffer("pos-test");
-    eval.buffers.set_current(buffer_id);
+    let buffer_id = eval.edit.buffers.create_buffer("pos-test");
+    eval.edit.buffers.set_current(buffer_id);
 
     // Empty buffer → "All" for %o, "All   " (with trailing spaces) for %q (GNU compat)
     let empty =
@@ -1717,7 +1820,7 @@ fn test_format_mode_line_position_o_and_q_specs() {
 
     // With content and no window set, fallback covers full buffer → "All"
     {
-        let buffer = eval.buffers.get_mut(buffer_id).expect("buffer");
+        let buffer = eval.edit.buffers.get_mut(buffer_id).expect("buffer");
         buffer.insert(&"x".repeat(100));
     }
     let all_visible =
@@ -1785,20 +1888,20 @@ fn test_format_mode_line_position_o_and_q_specs() {
 fn test_format_mode_line_percent_specs_use_window_buffer_and_completed_window_end() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let target_id = eval.buffers.create_buffer("window-target");
+    let target_id = eval.edit.buffers.create_buffer("window-target");
     {
-        let buffer = eval.buffers.get_mut(target_id).expect("target buffer");
+        let buffer = eval.edit.buffers.get_mut(target_id).expect("target buffer");
         buffer.insert(&"x".repeat(100));
     }
-    let other_id = eval.buffers.create_buffer("other-buffer");
+    let other_id = eval.edit.buffers.create_buffer("other-buffer");
     {
-        let buffer = eval.buffers.get_mut(other_id).expect("other buffer");
+        let buffer = eval.edit.buffers.get_mut(other_id).expect("other buffer");
         buffer.insert(&"y".repeat(1000));
     }
     let frame_id = eval.frames.create_frame("pos-frame", 80, 24, target_id);
     let selected_window = eval.frames.get(frame_id).expect("frame").selected_window;
     {
-        let target = eval.buffers.get(target_id).expect("target buffer");
+        let target = eval.edit.buffers.get(target_id).expect("target buffer");
         let frame = eval.frames.get_mut(frame_id).expect("frame");
         let window = frame
             .find_window_mut(selected_window)
@@ -1819,7 +1922,7 @@ fn test_format_mode_line_percent_specs_use_window_buffer_and_completed_window_en
             other => panic!("expected leaf window, got {:?}", other),
         }
     }
-    eval.buffers.set_current(other_id);
+    eval.edit.buffers.set_current(other_id);
 
     let rendered = builtin_format_mode_line_ctx(
         &mut eval,
@@ -2162,7 +2265,12 @@ fn test_window_text_pixel_size_arg_validation() {
 fn test_window_text_pixel_size_from_t_starts_at_first_non_empty_line() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     let frame_id = eval.frames.create_frame("xdisp-test", 80, 24, buf_id);
     {
         let frame = eval.frames.get_mut(frame_id).expect("frame");
@@ -2172,7 +2280,7 @@ fn test_window_text_pixel_size_from_t_starts_at_first_non_empty_line() {
         frame.set_window_system(None);
     }
     {
-        let buffer = eval.buffers.get_mut(buf_id).expect("buffer");
+        let buffer = eval.edit.buffers.get_mut(buf_id).expect("buffer");
         buffer.insert("\n\n  abc\n");
     }
     let selected_window = eval.frames.get(frame_id).expect("frame").selected_window.0 as i64;
@@ -2191,7 +2299,12 @@ fn test_window_text_pixel_size_from_t_starts_at_first_non_empty_line() {
 fn test_window_text_pixel_size_eval_window_validation() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     let frame_id = eval.frames.create_frame("xdisp-test", 80, 24, buf_id);
     let selected_window = eval.frames.get(frame_id).expect("frame").selected_window.0 as i64;
 
@@ -2217,7 +2330,12 @@ fn test_window_text_pixel_size_eval_window_validation() {
 fn test_window_text_pixel_size_tty_frame_uses_char_cell_metrics() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     let frame_id = eval.frames.create_frame("xdisp-test", 80, 24, buf_id);
     {
         let frame = eval.frames.get_mut(frame_id).expect("frame");
@@ -2227,7 +2345,7 @@ fn test_window_text_pixel_size_tty_frame_uses_char_cell_metrics() {
         frame.set_window_system(None);
     }
     {
-        let buffer = eval.buffers.get_mut(buf_id).expect("buffer");
+        let buffer = eval.edit.buffers.get_mut(buf_id).expect("buffer");
         buffer.insert("tiny\n");
     }
     let selected_window = eval.frames.get(frame_id).expect("frame").selected_window.0 as i64;
@@ -2253,7 +2371,12 @@ fn test_window_text_pixel_size_tty_frame_uses_char_cell_metrics() {
 fn window_text_pixel_size_counts_tty_wrapped_screen_rows() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     let frame_id = eval.frames.create_frame("xdisp-wrap-test", 10, 24, buf_id);
     {
         let frame = eval.frames.get_mut(frame_id).expect("frame");
@@ -2262,7 +2385,8 @@ fn window_text_pixel_size_counts_tty_wrapped_screen_rows() {
         frame.font_pixel_size = 1.0;
         frame.set_window_system(None);
     }
-    eval.buffers
+    eval.edit
+        .buffers
         .get_mut(buf_id)
         .expect("buffer")
         .insert("123456789012\nnext\n");
@@ -2292,7 +2416,12 @@ fn window_text_pixel_size_counts_tty_wrapped_screen_rows() {
 fn window_text_pixel_size_honors_tty_truncate_lines() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     let frame_id = eval
         .frames
         .create_frame("xdisp-truncate-test", 10, 24, buf_id);
@@ -2303,10 +2432,12 @@ fn window_text_pixel_size_honors_tty_truncate_lines() {
         frame.font_pixel_size = 1.0;
         frame.set_window_system(None);
     }
-    eval.buffers
+    eval.edit
+        .buffers
         .set_buffer_local_property(buf_id, "truncate-lines", Value::T)
         .expect("enable truncation in measured buffer");
-    eval.buffers
+    eval.edit
+        .buffers
         .get_mut(buf_id)
         .expect("buffer")
         .insert("123456789012345678901234567890\nnext");
@@ -2333,7 +2464,12 @@ fn window_text_pixel_size_honors_tty_truncate_lines() {
 fn test_window_text_pixel_size_ctx_coerces_bignum_positions_like_gnu() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     let frame_id = eval.frames.create_frame("xdisp-test", 80, 24, buf_id);
     {
         let frame = eval.frames.get_mut(frame_id).expect("frame");
@@ -2342,7 +2478,8 @@ fn test_window_text_pixel_size_ctx_coerces_bignum_positions_like_gnu() {
         frame.font_pixel_size = 1.0;
         frame.set_window_system(None);
     }
-    eval.buffers
+    eval.edit
+        .buffers
         .get_mut(buf_id)
         .expect("buffer")
         .insert("abc\n");
@@ -2372,7 +2509,12 @@ fn test_window_text_pixel_size_ctx_coerces_bignum_positions_like_gnu() {
 fn test_window_text_pixel_size_matches_gnu_trailing_line_semantics() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     let frame_id = eval.frames.create_frame("xdisp-test", 80, 24, buf_id);
     {
         let frame = eval.frames.get_mut(frame_id).expect("frame");
@@ -2382,7 +2524,7 @@ fn test_window_text_pixel_size_matches_gnu_trailing_line_semantics() {
         frame.set_window_system(None);
     }
     {
-        let buffer = eval.buffers.get_mut(buf_id).expect("buffer");
+        let buffer = eval.edit.buffers.get_mut(buf_id).expect("buffer");
         buffer.insert("hello\nworld\n\n");
     }
     let selected_window = eval.frames.get(frame_id).expect("frame").selected_window.0 as i64;
@@ -2421,7 +2563,12 @@ fn test_window_text_pixel_size_matches_gnu_trailing_line_semantics() {
 fn test_window_text_pixel_size_uses_char_positions_for_multibyte_range() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     let frame_id = eval.frames.create_frame("xdisp-test", 80, 24, buf_id);
     {
         let frame = eval.frames.get_mut(frame_id).expect("frame");
@@ -2431,7 +2578,7 @@ fn test_window_text_pixel_size_uses_char_positions_for_multibyte_range() {
         frame.set_window_system(None);
     }
     {
-        let buffer = eval.buffers.get_mut(buf_id).expect("buffer");
+        let buffer = eval.edit.buffers.get_mut(buf_id).expect("buffer");
         buffer.insert("α\nwide");
     }
     let selected_window = eval.frames.get(frame_id).expect("frame").selected_window.0 as i64;
@@ -2455,7 +2602,12 @@ fn test_window_text_pixel_size_uses_char_positions_for_multibyte_range() {
 /// tests below.  Returns the selected-window id as a fixnum-able integer.
 fn pixel_size_tty_context() -> (Context, i64) {
     let mut eval = interactive_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     let frame_id = eval
         .frames
         .create_frame("xdisp-display-spec", 200, 24, buf_id);
@@ -2490,7 +2642,12 @@ fn pixel_size_tty_context() -> (Context, i64) {
 /// its default font in the reference run (`tmp/textsize/gnu5.txt`).
 fn pixel_size_image_context() -> (Context, i64) {
     let mut eval = interactive_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     let frame_id = eval
         .frames
         .create_frame("xdisp-image-pixels", 200, 24, buf_id);
@@ -2648,15 +2805,21 @@ impl ImageProbe {
     /// Measure the probe in a window-system frame with a 10x20 cell.
     fn measure(self, x_limit: Value, y_limit: Value) -> (i64, i64) {
         let (mut eval, selected_window) = pixel_size_image_context();
-        let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
+        let buf_id = eval
+            .edit
+            .buffers
+            .current_buffer()
+            .expect("current buffer")
+            .id;
         {
-            let buffer = eval.buffers.get_mut(buf_id).expect("buffer");
+            let buffer = eval.edit.buffers.get_mut(buf_id).expect("buffer");
             buffer.insert(&self.text);
         }
         // The reference runs (`tmp/textsize/probe.el`) set `truncate-lines' in
         // the measured buffer before every measurement, so the row edge a
         // straying element meets is GNU's TRUNCATE and not WINDOW_WRAP.
-        eval.buffers
+        eval.edit
+            .buffers
             .set_buffer_local_property(buf_id, "truncate-lines", Value::T)
             .expect("enable truncation in measured buffer");
         for (start, end, spec) in self.display_runs {
@@ -2951,9 +3114,14 @@ fn window_text_pixel_size_pads_an_image_by_its_margin() {
 fn window_text_pixel_size_ignores_images_on_a_terminal_frame() {
     crate::test_utils::init_test_tracing();
     let (mut eval, selected_window) = pixel_size_tty_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     {
-        let buffer = eval.buffers.get_mut(buf_id).expect("buffer");
+        let buffer = eval.edit.buffers.get_mut(buf_id).expect("buffer");
         buffer.insert("ab cd\n");
     }
     neovm_edit::emacs_core::textprop::builtin_put_text_property(
@@ -2985,10 +3153,16 @@ fn window_text_pixel_size_ignores_images_on_a_terminal_frame() {
 fn test_window_text_pixel_size_honors_display_align_to_column() {
     crate::test_utils::init_test_tracing();
     let (mut eval, selected_window) = pixel_size_tty_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     // "AB" + space + "XY": the space is at column 2; align-to 80 pushes "XY" to
     // columns 80,81 so the widest column reached is 82.
-    eval.buffers
+    eval.edit
+        .buffers
         .get_mut(buf_id)
         .expect("buffer")
         .insert("AB XY");
@@ -3031,8 +3205,14 @@ fn test_window_text_pixel_size_honors_display_align_to_column() {
 fn test_window_text_pixel_size_honors_display_align_to_plus_left() {
     crate::test_utils::init_test_tracing();
     let (mut eval, selected_window) = pixel_size_tty_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
-    eval.buffers
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
+    eval.edit
+        .buffers
         .get_mut(buf_id)
         .expect("buffer")
         .insert("AB XY");
@@ -3069,9 +3249,15 @@ fn test_window_text_pixel_size_honors_display_align_to_plus_left() {
 fn test_window_text_pixel_size_honors_display_space_width() {
     crate::test_utils::init_test_tracing();
     let (mut eval, selected_window) = pixel_size_tty_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     // "AB" (cols 0,1) + width-20 space (cols 2..22) + "XY" (cols 22,23) => 24.
-    eval.buffers
+    eval.edit
+        .buffers
         .get_mut(buf_id)
         .expect("buffer")
         .insert("AB XY");
@@ -3122,10 +3308,20 @@ fn test_window_text_pixel_size_honors_display_space_width() {
 fn test_window_text_pixel_size_measures_overlay_before_string_at_point_max() {
     crate::test_utils::init_test_tracing();
     let (mut eval, selected_window) = pixel_size_tty_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     // The minibuffer text: a short prompt "M-x ".  point-max is right after it.
-    eval.buffers.get_mut(buf_id).expect("buffer").insert("M-x ");
+    eval.edit
+        .buffers
+        .get_mut(buf_id)
+        .expect("buffer")
+        .insert("M-x ");
     let point_max = eval
+        .edit
         .buffers
         .get(buf_id)
         .expect("buffer")
@@ -3214,8 +3410,14 @@ fn test_window_text_pixel_size_measures_overlay_before_string_at_point_max() {
 fn test_window_text_pixel_size_plain_text_unchanged_by_fix() {
     crate::test_utils::init_test_tracing();
     let (mut eval, selected_window) = pixel_size_tty_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
-    eval.buffers
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
+    eval.edit
+        .buffers
         .get_mut(buf_id)
         .expect("buffer")
         .insert("hello\nworld!");
@@ -3233,8 +3435,14 @@ fn test_window_text_pixel_size_plain_text_unchanged_by_fix() {
 fn window_text_pixel_size_cons_from_reports_offset_start() {
     crate::test_utils::init_test_tracing();
     let (mut eval, selected_window) = pixel_size_tty_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
-    eval.buffers
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
+    eval.edit
+        .buffers
         .get_mut(buf_id)
         .expect("buffer")
         .insert("a\nb\nc\nd\ne\n");
@@ -3261,8 +3469,14 @@ fn window_text_pixel_size_cons_from_reports_offset_start() {
 fn window_text_pixel_size_clips_to_before_applying_from_offset() {
     crate::test_utils::init_test_tracing();
     let (mut eval, selected_window) = pixel_size_tty_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
-    eval.buffers
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
+    eval.edit
+        .buffers
         .get_mut(buf_id)
         .expect("buffer")
         .insert("a\nb\nc\nd\ne\n");
@@ -3287,8 +3501,14 @@ fn window_text_pixel_size_clips_to_before_applying_from_offset() {
 fn window_text_pixel_size_keeps_row_height_when_offset_moves_past_to() {
     crate::test_utils::init_test_tracing();
     let (mut eval, selected_window) = pixel_size_tty_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
-    eval.buffers
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
+    eval.edit
+        .buffers
         .get_mut(buf_id)
         .expect("buffer")
         .insert("a\nb\nc\nd\ne\n");
@@ -3313,8 +3533,14 @@ fn window_text_pixel_size_keeps_row_height_when_offset_moves_past_to() {
 fn window_text_pixel_size_negative_offset_at_clipped_to_has_zero_height() {
     crate::test_utils::init_test_tracing();
     let (mut eval, selected_window) = pixel_size_tty_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
-    eval.buffers
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
+    eval.edit
+        .buffers
         .get_mut(buf_id)
         .expect("buffer")
         .insert("a\nb\nc\n");
@@ -3339,8 +3565,14 @@ fn window_text_pixel_size_negative_offset_at_clipped_to_has_zero_height() {
 fn window_text_pixel_size_offset_to_trailing_empty_row_has_zero_height() {
     crate::test_utils::init_test_tracing();
     let (mut eval, selected_window) = pixel_size_tty_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
-    eval.buffers
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
+    eval.edit
+        .buffers
         .get_mut(buf_id)
         .expect("buffer")
         .insert("a\nb\nc\n");
@@ -3385,8 +3617,14 @@ fn window_text_pixel_size_offset_in_empty_buffer_has_zero_height() {
 fn window_text_pixel_size_zero_cons_offset_preserves_pair_shape() {
     crate::test_utils::init_test_tracing();
     let (mut eval, selected_window) = pixel_size_tty_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
-    eval.buffers
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
+    eval.edit
+        .buffers
         .get_mut(buf_id)
         .expect("buffer")
         .insert("a\nb\n");
@@ -3408,8 +3646,14 @@ fn window_text_pixel_size_zero_cons_offset_preserves_pair_shape() {
 fn window_text_pixel_size_positive_cons_offset_moves_forward() {
     crate::test_utils::init_test_tracing();
     let (mut eval, selected_window) = pixel_size_tty_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
-    eval.buffers
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
+    eval.edit
+        .buffers
         .get_mut(buf_id)
         .expect("buffer")
         .insert("a\nb\nc\nd\ne\n");
@@ -3438,8 +3682,14 @@ fn window_text_pixel_size_positive_subrow_offset_stays_on_current_row() {
         .selected_frame_mut()
         .expect("selected frame")
         .char_height = 16.0;
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
-    eval.buffers
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
+    eval.edit
+        .buffers
         .get_mut(buf_id)
         .expect("buffer")
         .insert("a\nb\nc\n");
@@ -3468,8 +3718,14 @@ fn window_text_pixel_size_offset_uses_live_row_pixel_heights() {
         .selected_frame_mut()
         .expect("selected frame")
         .char_height = 16.0;
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
-    eval.buffers
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
+    eval.edit
+        .buffers
         .get_mut(buf_id)
         .expect("buffer")
         .insert("a\nb\nc\n");
@@ -3521,13 +3777,25 @@ fn window_text_pixel_size_rejects_snapshot_after_overlay_change() {
         .selected_frame_mut()
         .expect("selected frame")
         .char_height = 16.0;
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
-    eval.buffers
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
+    eval.edit
+        .buffers
         .get_mut(buf_id)
         .expect("buffer")
         .insert("a\nb\nc\n");
-    let buffer_modiff = eval.buffers.get(buf_id).expect("buffer").modified_tick();
+    let buffer_modiff = eval
+        .edit
+        .buffers
+        .get(buf_id)
+        .expect("buffer")
+        .modified_tick();
     let overlay_modiff = eval
+        .edit
         .buffers
         .get(buf_id)
         .expect("buffer")
@@ -3567,7 +3835,7 @@ fn window_text_pixel_size_rejects_snapshot_after_overlay_change() {
            (overlay-put overlay 'help-echo \"changed\"))",
     )
     .expect("mutate overlay state after snapshot");
-    let buffer = eval.buffers.get(buf_id).expect("buffer");
+    let buffer = eval.edit.buffers.get(buf_id).expect("buffer");
     assert_eq!(buffer.modified_tick(), buffer_modiff);
     assert_ne!(buffer.overlay_modified_tick(), overlay_modiff);
 
@@ -3595,12 +3863,23 @@ fn window_text_pixel_size_rejects_snapshot_after_narrowing() {
         .selected_frame_mut()
         .expect("selected frame")
         .char_height = 16.0;
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
-    eval.buffers
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
+    eval.edit
+        .buffers
         .get_mut(buf_id)
         .expect("buffer")
         .insert("a\nb\nc\n");
-    let buffer_modiff = eval.buffers.get(buf_id).expect("buffer").modified_tick();
+    let buffer_modiff = eval
+        .edit
+        .buffers
+        .get(buf_id)
+        .expect("buffer")
+        .modified_tick();
 
     let row = |row, y, start, end| crate::window::DisplayRowSnapshot {
         row,
@@ -3654,8 +3933,17 @@ fn window_text_pixel_size_rejects_snapshot_after_narrowing() {
 fn retained_display_rows_reject_window_system_changes() {
     crate::test_utils::init_test_tracing();
     let (mut eval, selected_window) = pixel_size_tty_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
-    eval.buffers.get_mut(buf_id).expect("buffer").insert("a\n");
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
+    eval.edit
+        .buffers
+        .get_mut(buf_id)
+        .expect("buffer")
+        .insert("a\n");
     let window_id = crate::window::WindowId(selected_window as u64);
     let frame_id = eval.frames.selected_frame().expect("selected frame").id;
     let layout_freshness = eval
@@ -3698,7 +3986,7 @@ fn retained_display_rows_reject_local_tab_width_reset() {
     .expect("local tab-width and tabbed text");
     // GNU 31.1: current-column changes from 4 to 8 after resetting locals.
     assert_eq!(eval.eval_str("(current-column)").unwrap(), Value::fixnum(4));
-    let buffer_id = eval.buffers.current_buffer_id().unwrap();
+    let buffer_id = eval.edit.buffers.current_buffer_id().unwrap();
     let frame_id = eval.frames.selected_frame().unwrap().id;
     let window_id = crate::window::WindowId(selected_window as u64);
     let recorded = eval
@@ -3745,7 +4033,12 @@ fn retained_display_rows_reject_local_tab_width_reset() {
 fn retained_display_rows_reject_window_margin_changes() {
     crate::test_utils::init_test_tracing();
     let (mut eval, selected_window) = pixel_size_tty_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     let window_id = crate::window::WindowId(selected_window as u64);
     let frame_id = eval.frames.selected_frame().expect("selected frame").id;
     let layout_freshness = eval
@@ -3778,7 +4071,12 @@ fn retained_display_rows_reject_window_margin_changes() {
 fn retained_display_rows_reject_window_display_table_changes() {
     crate::test_utils::init_test_tracing();
     let (mut eval, selected_window) = pixel_size_tty_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     let window_id = crate::window::WindowId(selected_window as u64);
     let frame_id = eval.frames.selected_frame().expect("selected frame").id;
     let display_table = eval
@@ -3827,7 +4125,12 @@ fn retained_display_rows_reject_window_display_table_changes() {
 fn retained_display_rows_reject_window_face_filter_parameter_changes() {
     crate::test_utils::init_test_tracing();
     let (mut eval, selected_window) = pixel_size_tty_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     let window_id = crate::window::WindowId(selected_window as u64);
     let frame_id = eval.frames.selected_frame().expect("selected frame").id;
     let layout_freshness = eval
@@ -3860,7 +4163,12 @@ fn retained_display_rows_reject_window_face_filter_parameter_changes() {
 fn retained_display_rows_reject_restored_window_parameter_state() {
     crate::test_utils::init_test_tracing();
     let (mut eval, selected_window) = pixel_size_tty_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     let window_id = crate::window::WindowId(selected_window as u64);
     let frame_id = eval.frames.selected_frame().expect("selected frame").id;
     let saved_window = eval
@@ -3919,8 +4227,14 @@ fn window_text_pixel_size_preserves_pixel_progress_beyond_live_rows() {
         .selected_frame_mut()
         .expect("selected frame")
         .char_height = 16.0;
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
-    eval.buffers
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
+    eval.edit
+        .buffers
         .get_mut(buf_id)
         .expect("buffer")
         .insert("a\nb\nc\nd\n");
@@ -3964,8 +4278,17 @@ fn window_text_pixel_size_preserves_pixel_progress_beyond_live_rows() {
 fn window_text_pixel_size_forward_offset_stays_on_final_unterminated_row() {
     crate::test_utils::init_test_tracing();
     let (mut eval, selected_window) = pixel_size_tty_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
-    eval.buffers.get_mut(buf_id).expect("buffer").insert("abc");
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
+    eval.edit
+        .buffers
+        .get_mut(buf_id)
+        .expect("buffer")
+        .insert("abc");
 
     let result = builtin_window_text_pixel_size_ctx(
         &mut eval,
@@ -3986,8 +4309,14 @@ fn window_text_pixel_size_forward_offset_stays_on_final_unterminated_row() {
 fn window_text_pixel_size_cons_offset_counts_wrapped_rows() {
     crate::test_utils::init_test_tracing();
     let (mut eval, selected_window) = pixel_size_tty_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
-    eval.buffers
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
+    eval.edit
+        .buffers
         .get_mut(buf_id)
         .expect("buffer")
         .insert(&format!("{}\nb\nc\n", "a".repeat(400)));
@@ -4016,8 +4345,14 @@ fn window_text_pixel_size_cons_offset_counts_wrapped_rows() {
 fn window_text_pixel_size_logs_invalid_named_face_property_runs() {
     crate::test_utils::init_test_tracing();
     let (mut eval, selected_window) = pixel_size_tty_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
-    eval.buffers
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
+    eval.edit
+        .buffers
         .get_mut(buf_id)
         .expect("buffer")
         .insert("prefix alpha attrs layered");
@@ -4059,11 +4394,13 @@ fn window_text_pixel_size_logs_invalid_named_face_property_runs() {
         .expect("window-text-pixel-size");
 
     let messages_id = eval
+        .edit
         .buffers
         .find_buffer_by_name("*Messages*")
         .expect("face diagnostic should create *Messages*");
     assert_eq!(
-        eval.buffers
+        eval.edit
+            .buffers
             .get(messages_id)
             .expect("*Messages* live")
             .buffer_string(),
@@ -4075,7 +4412,12 @@ fn window_text_pixel_size_backend_trace(kind: BufferTextBackendKind) -> (i64, i6
     let mut eval = interactive_context();
     convert_current_buffer_text_backend(&mut eval, kind);
     fragment_current_buffer(&mut eval, "αx\nb\tc\nlast\n\n");
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     let frame_id = eval
         .frames
         .create_frame("xdisp-backend-pixels", 80, 24, buf_id);
@@ -4189,11 +4531,16 @@ fn test_pos_visible_in_window_p_eval_returns_partial_geometry_for_live_window() 
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
     eval.set_variable("noninteractive", Value::NIL);
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     let frame_id = eval.frames.create_frame("xdisp-pos", 160, 64, buf_id);
     let selected_window = eval.frames.get(frame_id).expect("frame").selected_window;
     {
-        let buf = eval.buffers.get_mut(buf_id).expect("buffer");
+        let buf = eval.edit.buffers.get_mut(buf_id).expect("buffer");
         buf.insert("abc\ndef\nghi\n");
         buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(4));
     }
@@ -4234,8 +4581,9 @@ fn test_pos_visible_in_window_p_eval_returns_partial_geometry_for_live_window() 
 fn pos_visible_queries_target_rows_but_last_row_still_queries_the_viewport() {
     use crate::window::{WindowLayoutQueryOutcome, WindowLayoutQueryScope};
     let mut eval = interactive_context();
-    let buffer = eval.buffers.current_buffer().unwrap().id;
-    eval.buffers
+    let buffer = eval.edit.buffers.current_buffer().unwrap().id;
+    eval.edit
+        .buffers
         .get_mut(buffer)
         .unwrap()
         .insert("first\nsecond\nthird\n");
@@ -4273,8 +4621,9 @@ fn pos_visible_queries_target_rows_but_last_row_still_queries_the_viewport() {
 fn posn_at_point_queries_the_target_instead_of_completing_the_viewport() {
     use crate::window::{WindowLayoutQueryOutcome, WindowLayoutQueryScope};
     let mut eval = interactive_context();
-    let buffer = eval.buffers.current_buffer().unwrap().id;
-    eval.buffers
+    let buffer = eval.edit.buffers.current_buffer().unwrap().id;
+    eval.edit
+        .buffers
         .get_mut(buffer)
         .unwrap()
         .insert("first\nsecond\nthird\n");
@@ -4327,7 +4676,7 @@ fn line_numbers_point_independence_uses_defaults_and_local_overrides() {
         ),
     ] {
         let mut eval = interactive_context();
-        let buffer = eval.buffers.current_buffer().unwrap().id;
+        let buffer = eval.edit.buffers.current_buffer().unwrap().id;
         let frame = eval
             .frames
             .create_frame("line-number-point-independence", 160, 96, buffer);
@@ -4345,7 +4694,7 @@ fn line_number_faces_use_gnu_frame_local_inherit_equality() {
     use crate::emacs_core::xfaces::lisp_faces_equal_in_frame;
 
     let mut eval = interactive_context();
-    let buffer = eval.buffers.current_buffer().unwrap().id;
+    let buffer = eval.edit.buffers.current_buffer().unwrap().id;
     let frame = eval
         .frames
         .create_frame("line-number-face-equality", 160, 96, buffer);
@@ -4418,8 +4767,8 @@ fn assert_point_only_warm_query_reuse_with_face_setup(
     use crate::window::{WindowLayoutQuery, WindowLayoutQueryOutcome, WindowLayoutQueryScope};
 
     let mut eval = interactive_context();
-    let buffer = eval.buffers.current_buffer().unwrap().id;
-    eval.buffers.get_mut(buffer).unwrap().insert("a\nb\n");
+    let buffer = eval.edit.buffers.current_buffer().unwrap().id;
+    eval.edit.buffers.get_mut(buffer).unwrap().insert("a\nb\n");
     let frame = eval
         .frames
         .create_frame("point-only-row-query", 160, 96, buffer);
@@ -4454,7 +4803,7 @@ fn assert_point_only_warm_query_reuse_with_face_setup(
 
     // Deliberately give the current buffer the opposite admission conditions.
     // The gate must inspect the queried window's buffer, not this buffer.
-    let other_buffer = eval.buffers.create_buffer("*point-query-other*");
+    let other_buffer = eval.edit.buffers.create_buffer("*point-query-other*");
     eval.set_current_buffer_unrecorded(other_buffer).unwrap();
     let other_value = if reuse_after_move {
         Value::T
@@ -4467,7 +4816,8 @@ fn assert_point_only_warm_query_reuse_with_face_setup(
         "header-line-format",
         "tab-line-format",
     ] {
-        eval.buffers
+        eval.edit
+            .buffers
             .set_buffer_local_property(other_buffer, name, other_value)
             .unwrap();
     }
@@ -4496,7 +4846,7 @@ fn assert_point_only_warm_query_reuse_with_face_setup(
             end_buffer_pos: Some(LispCharPos1::new(4)),
             ..Default::default()
         }],
-        buffer_modiff: Some(eval.buffers.get(buffer).unwrap().modified_tick()),
+        buffer_modiff: Some(eval.edit.buffers.get(buffer).unwrap().modified_tick()),
         layout_freshness: Some(freshness.clone()),
         ..Default::default()
     };
@@ -4551,7 +4901,8 @@ fn assert_point_only_warm_query_reuse_with_face_setup(
     );
     assert_eq!(calls.get(), 0, "exact-fresh rows must not query: {setup}");
 
-    eval.buffers
+    eval.edit
+        .buffers
         .get_mut(buffer)
         .unwrap()
         .goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(3));
@@ -4585,7 +4936,7 @@ fn assert_point_only_warm_query_reuse_with_face_setup(
     );
     assert_eq!(query(&mut eval).is_nil(), !reuse_after_move, "{setup}");
     assert_eq!(calls.get(), usize::from(!reuse_after_move), "{setup}");
-    assert_eq!(eval.buffers.current_buffer_id(), Some(other_buffer));
+    assert_eq!(eval.edit.buffers.current_buffer_id(), Some(other_buffer));
 }
 
 #[test]
@@ -4624,8 +4975,8 @@ fn posn_at_point_requeries_warm_rows_after_point_moves_with_default_relative_num
     use crate::window::{WindowLayoutQueryOutcome, WindowLayoutQueryScope};
 
     let mut eval = interactive_context();
-    let buffer = eval.buffers.current_buffer().unwrap().id;
-    eval.buffers.get_mut(buffer).unwrap().insert("a\nb\n");
+    let buffer = eval.edit.buffers.current_buffer().unwrap().id;
+    eval.edit.buffers.get_mut(buffer).unwrap().insert("a\nb\n");
     let frame = eval
         .frames
         .create_frame("relative-row-query", 160, 96, buffer);
@@ -4656,7 +5007,7 @@ fn posn_at_point_requeries_warm_rows_after_point_moves_with_default_relative_num
             end_buffer_pos: Some(LispCharPos1::new(4)),
             ..Default::default()
         }],
-        buffer_modiff: Some(eval.buffers.get(buffer).unwrap().modified_tick()),
+        buffer_modiff: Some(eval.edit.buffers.get(buffer).unwrap().modified_tick()),
         layout_freshness: Some(freshness.clone()),
         ..Default::default()
     };
@@ -4725,16 +5076,21 @@ fn posn_at_point_requeries_warm_rows_after_face_overlay_height_changes_or_moves(
         ),
     ] {
         let mut eval = interactive_context();
-        let buffer = eval.buffers.current_buffer().unwrap().id;
-        eval.buffers.get_mut(buffer).unwrap().insert("a\nb\n");
+        let buffer = eval.edit.buffers.current_buffer().unwrap().id;
+        eval.edit.buffers.get_mut(buffer).unwrap().insert("a\nb\n");
         let frame = eval
             .frames
             .create_frame("overlay-row-query", 160, 96, buffer);
         let window = eval.frames.get(frame).unwrap().selected_window;
         eval.frames.get_mut(frame).unwrap().initial = false;
         eval.eval_str(setup).unwrap();
-        let buffer_modiff = eval.buffers.get(buffer).unwrap().modified_tick();
-        let overlay_modiff = eval.buffers.get(buffer).unwrap().overlay_modified_tick();
+        let buffer_modiff = eval.edit.buffers.get(buffer).unwrap().modified_tick();
+        let overlay_modiff = eval
+            .edit
+            .buffers
+            .get(buffer)
+            .unwrap()
+            .overlay_modified_tick();
         let freshness = eval
             .window_display_snapshot_freshness(frame, window, buffer)
             .unwrap();
@@ -4806,7 +5162,7 @@ fn posn_at_point_requeries_warm_rows_after_face_overlay_height_changes_or_moves(
         // Face-only overlay changes preserve text but can double the preceding
         // row's height; retained render-plan reuse cannot validate query rows.
         eval.eval_str(mutation).unwrap();
-        let live = eval.buffers.get(buffer).unwrap();
+        let live = eval.edit.buffers.get(buffer).unwrap();
         assert_eq!(live.modified_tick(), buffer_modiff);
         assert_ne!(live.overlay_modified_tick(), overlay_modiff);
         assert_eq!(
@@ -4822,7 +5178,12 @@ fn posn_at_point_requeries_warm_rows_after_face_overlay_height_changes_or_moves(
 fn pos_visible_in_new_live_window_falls_back_when_active_presentation_predates_it() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let original_buffer = eval.buffers.current_buffer().expect("current buffer").id;
+    let original_buffer = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     let frame_id = eval
         .frames
         .create_frame("xdisp-new-window", 800, 600, original_buffer);
@@ -4845,7 +5206,7 @@ fn pos_visible_in_new_live_window_falls_back_when_active_presentation_predates_i
     // Model the real Issue #249 ordering: help-mode creates a live window,
     // then asks whether its point is visible before the asynchronous GUI has
     // presented a frame containing that new window.
-    let help_buffer = eval.buffers.create_buffer("*Disabled Command*");
+    let help_buffer = eval.edit.buffers.create_buffer("*Disabled Command*");
     let help_window = eval
         .frames
         .split_window(
@@ -4876,7 +5237,12 @@ fn test_pos_visible_in_window_p_noninteractive_returns_nil_like_gnu_batch() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
     eval.set_variable("noninteractive", Value::T);
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     let frame_id = eval.frames.create_frame("xdisp-batch-pos", 160, 64, buf_id);
     // GNU `pos_visible_p` answers nil because the --batch frame is the
     // INITIAL frame (`FRAME_INITIAL_P`), not because `noninteractive` is t:
@@ -4884,7 +5250,7 @@ fn test_pos_visible_in_window_p_noninteractive_returns_nil_like_gnu_batch() {
     eval.frames.get_mut(frame_id).expect("frame").initial = true;
     let selected_window = eval.frames.get(frame_id).expect("frame").selected_window;
     {
-        let buf = eval.buffers.get_mut(buf_id).expect("buffer");
+        let buf = eval.edit.buffers.get_mut(buf_id).expect("buffer");
         buf.insert("abc\ndef\n");
         buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(1));
     }
@@ -4912,13 +5278,18 @@ fn test_pos_visible_in_window_p_noninteractive_returns_nil_like_gnu_batch() {
 fn test_window_line_height_eval_returns_live_gui_row_metrics() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     let frame_id = eval
         .frames
         .create_frame("xdisp-line-height", 160, 64, buf_id);
     let selected_window = eval.frames.get(frame_id).expect("frame").selected_window;
     {
-        let buf = eval.buffers.get_mut(buf_id).expect("buffer");
+        let buf = eval.edit.buffers.get_mut(buf_id).expect("buffer");
         buf.insert("abc\ndef\nghi\n");
         buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(4));
     }
@@ -4999,7 +5370,12 @@ fn test_window_line_height_eval_returns_live_gui_row_metrics() {
 fn test_window_line_height_eval_uses_exact_chrome_rows() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     let frame_id = eval
         .frames
         .create_frame("xdisp-line-height-chrome", 160, 80, buf_id);
@@ -5126,7 +5502,12 @@ fn test_window_line_height_eval_uses_exact_chrome_rows() {
 fn test_window_line_height_eval_reports_text_rows_relative_to_text_area() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     let frame_id = eval
         .frames
         .create_frame("xdisp-line-height-text-origin", 160, 80, buf_id);
@@ -5233,11 +5614,16 @@ fn test_posn_at_point_eval_uses_exact_redisplay_snapshot() {
     let _legacy_extent = PosnExtentFixtureGuard::set(crate::window::PosnObjectExtentMode::Off);
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     let frame_id = eval.frames.create_frame("xdisp-posn", 160, 64, buf_id);
     let selected_window = eval.frames.get(frame_id).expect("frame").selected_window;
     {
-        let buf = eval.buffers.get_mut(buf_id).expect("buffer");
+        let buf = eval.edit.buffers.get_mut(buf_id).expect("buffer");
         buf.insert("abcdef\n");
         buf.insert(&"long off-screen tail 中文\n".repeat(100_000));
         buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(4));
@@ -5353,13 +5739,18 @@ fn test_posn_at_point_reports_text_area_relative_y_below_window_chrome() {
     let _legacy_extent = PosnExtentFixtureGuard::set(crate::window::PosnObjectExtentMode::Off);
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     let frame_id = eval
         .frames
         .create_frame("xdisp-posn-chrome", 800, 600, buf_id);
     let selected_window = eval.frames.get(frame_id).expect("frame").selected_window;
     {
-        let buf = eval.buffers.get_mut(buf_id).expect("buffer");
+        let buf = eval.edit.buffers.get_mut(buf_id).expect("buffer");
         buf.insert("completion");
     }
     {
@@ -5445,14 +5836,19 @@ fn posn_at_point_recomputes_a_terminal_window_redisplay_has_not_drawn_yet() {
     // already uses -- is this port's `start_display`, so ask it.
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     let frame_id = eval
         .frames
         .create_frame("xdisp-posn-cold", 800, 600, buf_id);
     let window_id = eval.frames.get(frame_id).expect("frame").selected_window;
     eval.frames.get_mut(frame_id).expect("frame").initial = false;
     {
-        let buf = eval.buffers.get_mut(buf_id).expect("buffer");
+        let buf = eval.edit.buffers.get_mut(buf_id).expect("buffer");
         buf.insert("completion");
         buf.insert(&"long off-screen tail 中文\n".repeat(100_000));
     }
@@ -5562,10 +5958,11 @@ fn posn_at_point_recomputes_a_terminal_window_redisplay_has_not_drawn_yet() {
 fn gui_posn_at_point_uses_next_presented_glyph_only_within_the_same_body_row() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buffer = eval.buffers.current_buffer().expect("buffer").id;
+    let buffer = eval.edit.buffers.current_buffer().expect("buffer").id;
     let frame_id = eval.frames.create_frame("posn-hidden", 800, 600, buffer);
     let window_id = eval.frames.get(frame_id).expect("frame").selected_window;
-    eval.buffers
+    eval.edit
+        .buffers
         .get_mut(buffer)
         .expect("buffer")
         .insert("abcdefghijklmnopqrstuvwxyz\n");
@@ -5741,13 +6138,18 @@ fn posn_at_x_y_decodes_frame_or_window_the_way_gnu_dispatches_it() {
 fn tty_posn_at_x_y_uses_the_named_live_grid_approximation() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     let frame_id = eval
         .frames
         .create_frame("xdisp-posn-xy-chrome", 160, 80, buf_id);
     let selected_window = eval.frames.get(frame_id).expect("frame").selected_window;
     {
-        let buf = eval.buffers.get_mut(buf_id).expect("buffer");
+        let buf = eval.edit.buffers.get_mut(buf_id).expect("buffer");
         buf.insert("abcdef\n");
     }
     let result = builtin_posn_at_x_y(
@@ -5771,7 +6173,7 @@ fn tty_posn_at_x_y_uses_the_named_live_grid_approximation() {
 fn posn_at_x_y_uses_one_presented_transform_for_text_window_and_frame_coordinates() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buffer = eval.buffers.current_buffer().expect("buffer").id;
+    let buffer = eval.edit.buffers.current_buffer().expect("buffer").id;
     let frame_id = eval.frames.create_frame("posn-presented", 800, 600, buffer);
     let window_id = eval.frames.get(frame_id).expect("frame").selected_window;
     {
@@ -5880,7 +6282,7 @@ fn posn_at_x_y_uses_one_presented_transform_for_text_window_and_frame_coordinate
 fn frame_relative_posn_at_x_y_rejects_new_surface_area_outside_stale_presentation() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buffer = eval.buffers.current_buffer().expect("buffer").id;
+    let buffer = eval.edit.buffers.current_buffer().expect("buffer").id;
     let frame_id = eval.frames.create_frame("posn-expose", 800, 600, buffer);
     let window_id = eval.frames.get(frame_id).expect("frame").selected_window;
     {
@@ -5961,11 +6363,16 @@ fn test_posn_at_x_y_eval_uses_exact_redisplay_snapshot() {
     let _legacy_extent = PosnExtentFixtureGuard::set(crate::window::PosnObjectExtentMode::Off);
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     let frame_id = eval.frames.create_frame("xdisp-posn-xy", 160, 64, buf_id);
     let selected_window = eval.frames.get(frame_id).expect("frame").selected_window;
     {
-        let buf = eval.buffers.get_mut(buf_id).expect("buffer");
+        let buf = eval.edit.buffers.get_mut(buf_id).expect("buffer");
         buf.insert("abcdef\n");
         buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(4));
     }
@@ -6154,7 +6561,12 @@ fn posn_at_x_y_on_the_mode_line_answers_the_mode_line() {
     // number of text rows (src/dispnew.c:6460).
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     let frame_id = eval
         .frames
         .create_frame("xdisp-posn-mode-line", 640, 384, buf_id);
@@ -6269,7 +6681,12 @@ fn posn_at_x_y_at_y_zero_of_a_window_with_a_header_line_answers_row_minus_one() 
     //   header-line|r0.x40   (nil (40 . 0) (40 . -1) header-line)
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     let frame_id = eval
         .frames
         .create_frame("xdisp-posn-header-line", 640, 384, buf_id);
@@ -6379,7 +6796,12 @@ fn posn_at_x_y_past_a_window_with_no_mode_line_resolves_the_window_below_it() {
     // position, with the minibuffer's own coordinates.
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     let frame_id = eval
         .frames
         .create_frame("xdisp-posn-no-mode-line", 640, 384, buf_id);
@@ -6498,7 +6920,12 @@ fn posn_at_x_y_outside_every_window_answers_the_frame() {
     // posn-actual-col-row, posn-area).
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     let frame_id = eval
         .frames
         .create_frame("xdisp-posn-off-frame", 640, 384, buf_id);
@@ -6549,14 +6976,18 @@ fn posn_at_x_y_outside_every_window_answers_the_frame() {
 fn test_posn_at_x_y_batch_uses_selected_window_without_snapshot() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new();
-    let scratch = eval.buffers.current_buffer_id().expect("scratch buffer");
+    let scratch = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("scratch buffer");
     eval.frames
         .create_frame("xdisp-batch-posn", 80, 25, scratch);
-    let temp = eval.buffers.create_buffer(" *temp*");
+    let temp = eval.edit.buffers.create_buffer(" *temp*");
     eval.set_current_buffer_unrecorded(temp)
         .expect("switch to temp buffer");
     {
-        let buffer = eval.buffers.current_buffer_mut().expect("temp buffer");
+        let buffer = eval.edit.buffers.current_buffer_mut().expect("temp buffer");
         buffer.insert("hello world\nsecond line");
     }
 
@@ -6604,12 +7035,20 @@ fn tty_right_divider_parameter_does_not_change_geometry_or_border_hit() {
 fn test_posn_at_x_y_batch_wraps_long_visual_lines_like_gnu_tty() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new();
-    let scratch = eval.buffers.current_buffer_id().expect("scratch buffer");
+    let scratch = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("scratch buffer");
     let frame_id = eval
         .frames
         .create_frame("xdisp-batch-wrap-posn", 80 * 8, 25 * 16, scratch);
     {
-        let buffer = eval.buffers.current_buffer_mut().expect("scratch buffer");
+        let buffer = eval
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("scratch buffer");
         buffer.insert(&"x".repeat(500));
     }
     let (char_width, char_height) = {
@@ -6644,7 +7083,12 @@ fn test_posn_at_point_eval_returns_nil_outside_visible_snapshot_span() {
     let _legacy_extent = PosnExtentFixtureGuard::set(crate::window::PosnObjectExtentMode::Off);
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     let frame_id = eval
         .frame_manager_mut()
         .create_frame("xdisp-posn-offscreen", 160, 64, buf_id);
@@ -6654,7 +7098,7 @@ fn test_posn_at_point_eval_returns_nil_outside_visible_snapshot_span() {
         .expect("frame")
         .selected_window;
     {
-        let buf = eval.buffers.get_mut(buf_id).expect("buffer");
+        let buf = eval.edit.buffers.get_mut(buf_id).expect("buffer");
         buf.insert("abcdefghijklmnopqrstuvwxyz\n");
         buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(0));
     }
@@ -6763,7 +7207,12 @@ fn test_posn_at_point_eval_returns_nil_outside_visible_snapshot_span() {
 fn test_posn_at_point_eval_returns_nil_for_positions_missing_entire_visible_row() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     let frame_id = eval
         .frame_manager_mut()
         .create_frame("xdisp-posn-missing-row", 160, 96, buf_id);
@@ -6773,7 +7222,7 @@ fn test_posn_at_point_eval_returns_nil_for_positions_missing_entire_visible_row(
         .expect("frame")
         .selected_window;
     {
-        let buf = eval.buffers.get_mut(buf_id).expect("buffer");
+        let buf = eval.edit.buffers.get_mut(buf_id).expect("buffer");
         buf.insert("abcdef\n");
         buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(0));
     }
@@ -6856,7 +7305,12 @@ fn test_posn_at_point_eval_returns_nil_for_positions_missing_entire_visible_row(
 fn test_vertical_motion_eval_uses_live_redisplay_rows() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     let frame_id =
         eval.frame_manager_mut()
             .create_frame("xdisp-vertical-motion-rows", 160, 96, buf_id);
@@ -6866,7 +7320,7 @@ fn test_vertical_motion_eval_uses_live_redisplay_rows() {
         .expect("frame")
         .selected_window;
     {
-        let buf = eval.buffers.get_mut(buf_id).expect("buffer");
+        let buf = eval.edit.buffers.get_mut(buf_id).expect("buffer");
         buf.insert(&"a\n".repeat(100));
         buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(0));
     }
@@ -6955,7 +7409,12 @@ fn redisplay_point_relative_motion_reports_failure_without_inventing_a_start() {
 fn test_vertical_motion_eval_uses_live_redisplay_goal_column() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     let frame_id =
         eval.frame_manager_mut()
             .create_frame("xdisp-vertical-motion-column", 160, 96, buf_id);
@@ -6965,7 +7424,7 @@ fn test_vertical_motion_eval_uses_live_redisplay_goal_column() {
         .expect("frame")
         .selected_window;
     {
-        let buf = eval.buffers.get_mut(buf_id).expect("buffer");
+        let buf = eval.edit.buffers.get_mut(buf_id).expect("buffer");
         buf.insert(&"a\n".repeat(100));
         buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(0));
     }
@@ -7074,7 +7533,12 @@ fn test_vertical_motion_eval_uses_live_redisplay_goal_column() {
 fn test_vertical_motion_goal_column_past_row_end_lands_on_the_row_end_like_gnu() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     let frame_id =
         eval.frame_manager_mut()
             .create_frame("xdisp-vertical-motion-row-end", 160, 96, buf_id);
@@ -7084,7 +7548,7 @@ fn test_vertical_motion_goal_column_past_row_end_lands_on_the_row_end_like_gnu()
         .expect("frame")
         .selected_window;
     {
-        let buf = eval.buffers.get_mut(buf_id).expect("buffer");
+        let buf = eval.edit.buffers.get_mut(buf_id).expect("buffer");
         buf.insert("hello world\nsecond\n");
         buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(0));
     }
@@ -7348,7 +7812,12 @@ fn test_tool_bar_height() {
 fn test_tool_bar_height_eval_frame_validation() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     let frame_id = eval.frames.create_frame("xdisp-test", 80, 24, buf_id);
 
     {
@@ -7391,7 +7860,12 @@ fn test_tab_bar_height() {
 fn test_tab_bar_height_eval_frame_validation() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     let frame_id = eval.frames.create_frame("xdisp-test", 80, 24, buf_id);
 
     let result =
@@ -7453,7 +7927,11 @@ fn test_line_number_display_width() {
         .expect("selected frame")
         .char_width = 8.0;
     {
-        let buffer = eval.buffers.current_buffer_mut().expect("current buffer");
+        let buffer = eval
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
         buffer.set_buffer_local("display-line-numbers", Value::T);
         for _ in 0..100 {
             buffer.insert("x\n");
@@ -7491,7 +7969,11 @@ fn line_number_display_width_uses_byte_newline_count_not_char_pos_scan() {
         .expect("selected frame")
         .char_width = 8.0;
     {
-        let buffer = eval.buffers.current_buffer_mut().expect("current buffer");
+        let buffer = eval
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
         buffer.set_buffer_local("display-line-numbers", Value::T);
         for _ in 0..2_000 {
             buffer.insert("é journal line\n");
@@ -7862,10 +8344,10 @@ fn line_number_anchor_counts_from_recent_line_and_survives_edits_below() {
     ))
     .expect("setup");
     let point_at = |eval: &Context, charpos: usize| {
-        let buf = eval.buffers.current_buffer().expect("buffer");
+        let buf = eval.edit.buffers.current_buffer().expect("buffer");
         buf.char_pos_to_emacs_byte_pos_clamped(neovm_edit::buffer::CharPos0::new(charpos))
     };
-    let buf = eval.buffers.current_buffer().expect("buffer");
+    let buf = eval.edit.buffers.current_buffer().expect("buffer");
     // First computation seeds the anchor at point's line (5000 chars / 5 = 1000 newlines).
     let p = point_at(&eval, 5000);
     assert_eq!(
@@ -7878,7 +8360,7 @@ fn line_number_anchor_counts_from_recent_line_and_survives_edits_below() {
     buf.reset_unchanged_region();
     eval.eval_str("(progn (goto-char 9000) (insert \"x\"))")
         .expect("edit below");
-    let buf = eval.buffers.current_buffer().expect("buffer");
+    let buf = eval.edit.buffers.current_buffer().expect("buffer");
     let p = point_at(&eval, 5000);
     assert_eq!(
         super::prefix_line_and_column(buf, buf.accessible_emacs_byte_region(), p).line,
@@ -7888,7 +8370,7 @@ fn line_number_anchor_counts_from_recent_line_and_survives_edits_below() {
     // start must shift the count, never show a stale number.
     eval.eval_str("(progn (goto-char 1) (insert \"\\n\"))")
         .expect("edit above");
-    let buf = eval.buffers.current_buffer().expect("buffer");
+    let buf = eval.edit.buffers.current_buffer().expect("buffer");
     let p = point_at(&eval, 5001);
     assert_eq!(
         super::prefix_line_and_column(buf, buf.accessible_emacs_byte_region(), p).line,
@@ -7904,8 +8386,14 @@ fn line_number_anchor_counts_from_recent_line_and_survives_edits_below() {
 /// three-element list, and only a position on no row at all answers nil.
 fn fringe_bitmaps_at_pos_fixture() -> (Context, crate::window::FrameId) {
     let mut eval = interactive_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
-    eval.buffers
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
+    eval.edit
+        .buffers
         .get_mut(buf_id)
         .expect("current buffer")
         .insert("alpha\nbeta\ngamma\n");
@@ -8032,8 +8520,13 @@ fn test_fringe_bitmaps_at_pos_reports_gnu_left_right_overlay_triple() {
 fn test_fringe_bitmaps_at_pos_defaults_pos_to_point_in_selected_window() {
     crate::test_utils::init_test_tracing();
     let (mut eval, _frame_id) = fringe_bitmaps_at_pos_fixture();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
-    let buffer = eval.buffers.get_mut(buf_id).expect("current buffer");
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
+    let buffer = eval.edit.buffers.get_mut(buf_id).expect("current buffer");
     // The fixture text is ASCII, so char and byte offsets coincide; Lisp
     // position 7 is the start of the second row.
     buffer.set_point_anchor(neovm_edit::buffer::TextPositionAnchor::new(
@@ -8110,13 +8603,18 @@ fn test_fringe_bitmaps_at_pos_signals_args_out_of_range_beyond_accessible_portio
 fn window_line_height_refuses_every_line_form_without_a_current_matrix_like_gnu() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
     let frame_id = eval
         .frames
         .create_frame("l217-no-current-matrix", 160, 64, buf_id);
     let selected_window = eval.frames.get(frame_id).expect("frame").selected_window;
     {
-        let buf = eval.buffers.get_mut(buf_id).expect("buffer");
+        let buf = eval.edit.buffers.get_mut(buf_id).expect("buffer");
         buf.insert("abc\ndef\nghi\n");
     }
 
@@ -8155,9 +8653,14 @@ fn window_line_height_refuses_every_line_form_without_a_current_matrix_like_gnu(
 fn redisplay_start_before_point_scans_the_window_buffer_not_the_current_one() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
-    let window_buffer = eval.buffers.current_buffer_id().expect("current buffer");
+    let window_buffer = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
     let text: String = (0..600).map(|index| format!("line {index:03}\n")).collect();
-    eval.buffers
+    eval.edit
+        .buffers
         .get_mut(window_buffer)
         .expect("window buffer")
         .insert(&text);
@@ -8168,10 +8671,11 @@ fn redisplay_start_before_point_scans_the_window_buffer_not_the_current_one() {
 
     // A four-character buffer is current, as " *Minibuf-1*" is while `M-x`
     // completes; every position the scan probes lies beyond its end.
-    let tiny = eval.buffers.create_buffer(" *tiny*");
+    let tiny = eval.edit.buffers.create_buffer(" *tiny*");
     eval.switch_current_buffer(tiny)
         .expect("select the tiny buffer");
-    eval.buffers
+    eval.edit
+        .buffers
         .get_mut(tiny)
         .expect("tiny buffer")
         .insert("M-x ");
@@ -8193,7 +8697,7 @@ fn redisplay_start_before_point_scans_the_window_buffer_not_the_current_one() {
         "two rows above point on unwrapped lines is two source lines up"
     );
     assert_eq!(
-        eval.buffers.current_buffer_id(),
+        eval.edit.buffers.current_buffer_id(),
         Some(tiny),
         "the placement scan restores the buffer redisplay was entered with"
     );
@@ -8275,9 +8779,19 @@ fn probe_text_region(
     y_limit: Value,
 ) -> (i64, i64) {
     let (mut eval, selected_window) = pixel_size_image_context();
-    let buf_id = eval.buffers.current_buffer().expect("current buffer").id;
-    eval.buffers.get_mut(buf_id).expect("buffer").insert(text);
-    eval.buffers
+    let buf_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
+    eval.edit
+        .buffers
+        .get_mut(buf_id)
+        .expect("buffer")
+        .insert(text);
+    eval.edit
+        .buffers
         .set_buffer_local_property(
             buf_id,
             "truncate-lines",

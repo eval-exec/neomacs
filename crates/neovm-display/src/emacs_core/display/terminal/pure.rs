@@ -936,8 +936,9 @@ pub(crate) fn write_bytes_to_terminal(terminal_id: u64, bytes: &[u8]) -> Result<
 /// `make-terminal-frame`, which in a real session run on an interactive
 /// terminal (the production batch path deliberately has neither a controlling
 /// tty nor a type, so frame creation errors like GNU).
+#[cfg(any(test, feature = "test-support"))]
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub(crate) fn mark_selected_terminal_usable_for_test(eval: &neovm_eval::emacs_core::eval::Context) {
+pub fn mark_selected_terminal_usable_for_test(eval: &neovm_eval::emacs_core::eval::Context) {
     if let Some(id) = decode_terminal_id_eval(eval, &Value::NIL) {
         with_terminal_manager(|slot| {
             if let Some(record) = slot.borrow_mut().get_mut(id) {
