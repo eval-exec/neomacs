@@ -187,6 +187,7 @@ impl std::ops::BitOrAssign for Assertions {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// The NFA of one pattern: its consuming positions and their tests, walked
 /// over the rewind view.
 #[derive(Debug)]
@@ -2290,6 +2291,7 @@ thread_local! {
         const { std::cell::Cell::new(None) };
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Run `f` with the cached first-step knob forced to `on` on this thread.
 #[cfg(any(test, feature = "fuzzing"))]
 pub(crate) fn with_first_step<R>(on: bool, f: impl FnOnce() -> R) -> R {
@@ -2410,6 +2412,7 @@ fn stat(update: impl FnOnce(&mut DfaStats)) {
     });
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// This thread's filter counters.
 #[cfg(any(test, feature = "fuzzing"))]
 pub(crate) fn dfa_stats() -> DfaStats {

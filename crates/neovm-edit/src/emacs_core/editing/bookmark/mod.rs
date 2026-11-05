@@ -346,6 +346,7 @@ impl GcTrace for BookmarkManager {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn runtime_string_to_bookmark_string(text: &str) -> LispString {
     neovm_value::strings_core::plain_str_to_lisp_string(text, true)
 }

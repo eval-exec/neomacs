@@ -65,7 +65,10 @@ use super::text::{GapDebugLayout, TextBackendDebugLayout};
 use super::text_index::TextLineIndex;
 use super::text_props::{ObjectIntervalRun, PropertyInterval, TextPropertyTable};
 
+#[cfg(not(any(test, feature = "test-support")))]
 mod line_index;
+#[cfg(any(test, feature = "test-support"))]
+pub mod line_index;
 use line_index::LineIndexRole;
 
 #[cfg(test)]

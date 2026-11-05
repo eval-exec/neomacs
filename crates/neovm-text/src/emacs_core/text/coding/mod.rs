@@ -2056,6 +2056,7 @@ pub fn builtin_coding_system_aliases(
     Ok(Value::list(names.into_iter().map(Value::symbol).collect()))
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(coding-system-get CODING-SYSTEM PROP)` -- get a property of a coding system.
 /// Recognized built-in properties: :name, :type, :mnemonic, :eol-type.
 /// Other properties are looked up from the per-system property list.
@@ -2965,6 +2966,7 @@ pub fn coding_inherit_eol_type_unix(
     Value::from_sym_id(coding_inherit_eol_type(mgr, id, EolParent::System))
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(coding-system-type CODING-SYSTEM)` -- return the type symbol of the
 /// coding system (e.g. utf-8, charset, raw-text, undecided).
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up

@@ -1430,6 +1430,7 @@ struct CompileStackEntry {
     group_bytecode_start: usize,
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Compile an Emacs regex pattern into bytecode.
 ///
 /// This is the main entry point, equivalent to GNU's `regex_compile()`.

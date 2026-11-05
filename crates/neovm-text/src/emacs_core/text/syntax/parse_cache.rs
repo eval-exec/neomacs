@@ -328,6 +328,7 @@ impl BufferSyntaxParseCache for Buffer {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Multiplicative hashing uses the high bits so aligned FROM positions do not
 /// all land in the same bucket. The filter never substitutes for key equality.
 #[inline]
@@ -345,6 +346,7 @@ static MIN_SPAN: AtomicUsize = AtomicUsize::new(0);
 
 #[cfg(test)]
 thread_local! {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// Test override of the chunk and the minimum span.
     pub(crate) static GEOMETRY_OVERRIDE: std::cell::Cell<Option<(usize, usize)>> =
         const { std::cell::Cell::new(None) };
@@ -467,6 +469,7 @@ thread_local! {
 /// Mismatches `verify` found in this process, on any thread.
 static MISMATCHES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// This thread's cache statistics.
 pub(crate) fn parse_cache_stats() -> ParseCacheStats {
     STATS.with(std::cell::Cell::get)

@@ -1484,6 +1484,7 @@ impl std::ops::Deref for CodingSourceBytes<'_> {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn lisp_string_coding_source_bytes(
     s: &neovm_value::heap_types::LispString,
 ) -> CodingSourceBytes<'_> {

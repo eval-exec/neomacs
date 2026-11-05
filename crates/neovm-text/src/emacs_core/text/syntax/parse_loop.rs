@@ -167,6 +167,7 @@ impl ScanMode for Plain {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Where a recording parse notes safe restart positions for `back_comment`:
 /// see `buffer_text::SyntaxSafePositions`.
 pub(super) struct SafePositionRecorder<'a> {
@@ -199,6 +200,7 @@ impl ScanMode for SafePositionRecorder<'_> {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Run the scan loop from `entry` to `to_char` (absolute, 0-based, already
 /// clamped to the accessible region by the caller).
 ///

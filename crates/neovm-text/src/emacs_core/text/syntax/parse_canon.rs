@@ -87,6 +87,7 @@ use super::*;
 #[cfg(test)]
 use std::cell::Cell;
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `NEOVM_SYNTAX_PARSE_CACHE_L2`.
 /// Process-wide scalar policy, published without associated data; this enum
 /// holds no mutator state.

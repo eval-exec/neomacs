@@ -196,6 +196,7 @@ fn rectangle_lines_for_extract(start_line: usize, end_line: usize) -> Vec<usize>
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 fn delete_extract_rectangle_from_text(
     text: &LispString,
@@ -249,6 +250,7 @@ fn delete_extract_rectangle_from_text(
 // Eval-dependent builtins
 // ---------------------------------------------------------------------------
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(extract-rectangle-line STARTCOL ENDCOL &optional LINE)` -- extract one
 /// line of a rectangle as a string.
 ///

@@ -20,7 +20,10 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, RwLock};
 
+#[cfg(not(any(test, feature = "test-support")))]
 mod prepared_mule;
+#[cfg(any(test, feature = "test-support"))]
+pub mod prepared_mule;
 #[cfg(test)]
 use prepared_mule::CharsetEncoder;
 pub(crate) use prepared_mule::EmacsMuleEncoder;

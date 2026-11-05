@@ -5808,9 +5808,11 @@ fn back_comment_safe_chunk() -> usize {
 
 #[cfg(test)]
 thread_local! {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// Test hooks: bypass the safe-position index entirely; override the
     /// chunk; count re-parses that started after BEGV.
     pub(crate) static BACK_COMMENT_SAFE_BYPASS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) static BACK_COMMENT_SAFE_CHUNK_OVERRIDE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     pub(crate) static BACK_COMMENT_SAFE_STARTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     pub(crate) static BACK_COMMENT_SAFE_REPARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -6443,6 +6445,7 @@ fn scan_sexps_lazily<H: TextHost>(
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_forward_sexp<H: TextHost>(eval: &mut H, args: Vec<Value>) -> EvalResult {
     let count = if args.is_empty() || args[0].is_nil() {
         1i64
@@ -6531,6 +6534,7 @@ pub(crate) fn builtin_backward_sexp<H: TextHost>(eval: &mut H, args: Vec<Value>)
     Ok(Value::NIL)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(scan-lists FROM COUNT DEPTH)` — scan across balanced expressions.
 ///
 /// This uses the same core scanner as `forward-sexp`/`backward-sexp`.
@@ -6678,6 +6682,7 @@ pub fn builtin_scan_lists_3<H: TextHost>(
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(scan-sexps FROM COUNT)` — scan over COUNT sexps from FROM.
 #[cfg(test)]
 pub(crate) fn builtin_scan_sexps<H: TextHost>(ctx: &mut H, args: Vec<Value>) -> EvalResult {

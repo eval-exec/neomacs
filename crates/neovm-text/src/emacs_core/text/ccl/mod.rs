@@ -269,6 +269,7 @@ pub fn collect_ccl_registry_gc_roots(handle: &CclRegistryHandle, roots: &mut Vec
     );
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Collect roots only when the installed registry belongs to the collecting heap.
 pub(crate) fn collect_ccl_gc_roots(roots: &mut Vec<Value>, heap_identity: usize) {
     let handle = current_ccl_registry_handle();
@@ -457,6 +458,7 @@ pub(super) fn program_words_by_symbol(symbol: SymId, mode: SymbolMode) -> Option
     program_words(id, mode)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) fn install_translation_hash(entries: HashMap<i64, i64>) -> i64 {
     with_ccl_registry_mut(|registry| registry.add_translation_hash(entries))
 }
@@ -1360,6 +1362,7 @@ pub fn builtin_ccl_program_p_impl_with_symbols(args: Vec<Value>, mode: SymbolMod
     Ok(Value::bool_val(is_program))
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// (ccl-execute CCL-PROGRAM REGISTERS) -> nil
 ///
 /// Runs a program that does not read or write. Register results are written
@@ -1541,6 +1544,7 @@ pub fn builtin_ccl_execute_on_string_impl_with_symbols(
     Ok(ccl_output_string(execution.output, unibyte))
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// (register-ccl-program NAME CCL-PROG) -> nil
 /// Stub: accepts and discards the CCL program registration.
 #[cfg(test)]

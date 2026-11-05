@@ -229,6 +229,7 @@ fn expect_char(value: &Value) -> Result<char, Flow> {
 // Builtins
 // ---------------------------------------------------------------------------
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(case-table-p OBJ)` -- return t if OBJ is a case table.
 ///
 /// A case table is a char-table with `case-table` sub-type and 3 extra slots
@@ -243,6 +244,7 @@ pub(crate) fn builtin_case_table_p_with_symbols(args: Vec<Value>, mode: SymbolMo
     Ok(Value::bool_val(is_case_table_with_symbols(&args[0], mode)))
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(downcase CHAR)` -- convert a character to lowercase.
 ///
 /// If the argument is an integer or character, returns the lowercase version
@@ -425,6 +427,7 @@ pub fn current_case_table_for_buffer_in_state_with_symbols(
     Ok(fallback)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// The case-fold canon char-table to use as the search translate table for a
 /// search in `buf` -- GNU's `BVAR (current_buffer, case_canon_table)` used as
 /// the search `trt`. Returns `None` when `buf` uses the standard case table

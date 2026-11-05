@@ -743,6 +743,7 @@ struct WordWrapScanState {
     policy: WordWrapPolicy,
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Choose the mode once, retaining the original post-callback buffer reads.
 #[inline(always)]
 fn next_screen_line_start_from<H: EditHost>(

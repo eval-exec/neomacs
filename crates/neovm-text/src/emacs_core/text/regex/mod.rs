@@ -98,6 +98,7 @@ impl std::fmt::Display for EmacsRegexpError {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn buffer_syntax_lookup(buf: &Buffer) -> BufferSyntaxLookup {
     buffer_syntax_lookup_with_word_boundary(
         buf,
@@ -521,6 +522,7 @@ fn gnu_single_group_vec(group: Option<MatchGroup>) -> MatchGroupVec {
     groups
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[derive(Clone)]
 enum CompiledSearchPattern {
     /// GNU-translated engine (primary path for all patterns).
