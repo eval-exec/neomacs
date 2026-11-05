@@ -82,8 +82,13 @@ pub use crate::tagged::gc::mutator_registration::test_fences::{
 /// the A'-widened item has no cross-crate path. Same item and rows as
 /// `tagged::gc::cons_storage::catalog_waits_for_test` / `CatalogWaitsSnapshot`
 /// (VIS-VALUE rows); this re-export adds no widening.
+#[cfg(feature = "test-support")]
 #[doc(hidden)]
 pub use crate::tagged::gc::mutator_registration::test_fences::{
+    CatalogWaitsSnapshot, catalog_waits_for_test,
+};
+#[cfg(not(feature = "test-support"))]
+pub(crate) use crate::tagged::gc::mutator_registration::test_fences::{
     CatalogWaitsSnapshot, catalog_waits_for_test,
 };
 

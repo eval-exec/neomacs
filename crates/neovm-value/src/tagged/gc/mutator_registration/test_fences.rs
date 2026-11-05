@@ -34,10 +34,16 @@ pub fn begin_restore_retry_for_test<'owner, 'era>(
 /// catalog-waits observer. `cons_storage` is a private module, so without this
 /// bridge the A'-widened item has no cross-crate path. Same item and rows as
 /// `tagged::gc::cons_storage::catalog_waits_for_test` / `CatalogWaitsSnapshot`
-/// (VIS-VALUE rows); no widening is added here.
+/// (VIS-VALUE rows); no widening is added here. The item is A' (pub only under
+/// the test-support feature), so the arms keep value's own cfg(test) build
+/// legal: its not(feature) path is crate-visible only.
+#[cfg(feature = "test-support")]
 pub use super::super::cons_storage::CatalogWaitsSnapshot;
+#[cfg(not(feature = "test-support"))]
+pub(crate) use super::super::cons_storage::CatalogWaitsSnapshot;
 
-pub fn catalog_waits_for_test() -> CatalogWaitsSnapshot {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn catalog_waits_for_test() -> CatalogWaitsSnapshot {
     super::super::cons_storage::catalog_waits_for_test()
 }
 
