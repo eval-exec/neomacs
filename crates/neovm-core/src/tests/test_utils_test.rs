@@ -870,6 +870,7 @@ mod tests {
 #[path = "test_utils/mock_redisplay.rs"]
 pub mod mock_redisplay;
 
-pub(crate) use crate::emacs_core::eval::subr_abi::{
-    SubrValueExt, builtin_hof_entry_for_test, leaked_subr_metadata_for_test,
+pub(crate) use crate::emacs_core::eval::SubrValueExt;
+pub(crate) use neovm_eval::test_support::authority::{
+    builtin_hof_entry_for_test, leaked_subr_metadata_for_test,
 };

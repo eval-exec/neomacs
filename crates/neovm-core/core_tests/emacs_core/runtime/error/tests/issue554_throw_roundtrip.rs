@@ -1,10 +1,10 @@
 //! GNU's chosen catch policy survives rooted loader/public error boundaries.
 use super::{Flow, collect_in_flight_flow_gc_roots, flow_from_eval_error};
-use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::print::map_flow;
 use crate::emacs_core::{Context, Value, print::print_value};
 use crate::tagged::SymbolMode;
+use neovm_eval::test_support::authority::seal_hand_assembled_ops_for_test;
 
 #[test]
 fn issue554_throw_policy_survives_real_load_and_flag_unbinding() {
@@ -124,7 +124,7 @@ fn issue554_throw_policy_survives_bytecode_loader_frame() {
         shim.ops = vec![Op::Constant(0), Op::Call(0), Op::Return];
         shim.constants = vec![Value::symbol("issue554-loaded-form")].into();
         shim.max_stack = StackDepth::for_test(4);
-        shim.seal_hand_assembled_ops_for_test();
+        seal_hand_assembled_ops_for_test(&mut shim);
         ctx.obarray().set_symbol_function_id(
             intern("issue554-compiled-loader"),
             Value::make_bytecode(shim),
