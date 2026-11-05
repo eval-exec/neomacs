@@ -7929,7 +7929,10 @@ mod admission;
 mod global_state;
 mod green;
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub use admission::ThreadingMode;
+#[cfg(not(feature = "test-support"))]
 pub(crate) use admission::ThreadingMode;
 #[doc(hidden)]
 pub use green::switch::MainNativeHandoff;

@@ -51,9 +51,25 @@ use rustc_hash::FxHashMap;
 use std::ptr::NonNull;
 
 /// How a World runs Lisp threads, fixed at its construction.
+///
+/// TEST-SUPPORT-VIS note: this enum is V1-blocked for a VIS row because the
+/// trybuild goldens name `eval::admission::ThreadingMode`; the documented
+/// cfg-split spelling keeps the production visibility and exposes it only in
+/// the test-support build, pending the path-qualified exemption ruling (same
+/// class as oracleb's parse_loop::{Entry,Plain} request).
+#[cfg(not(feature = "test-support"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum ThreadingMode {
+    /// `make-thread` simulates threads in the one owner, swapping dynamic
+    /// bindings in place (`threads`); there is no admission.
+    Sim,
+    /// Lisp threads are owners with owner-local bindings, after admission.
+    Green,
+}
+/// How a World runs Lisp threads, fixed at its construction.
+#[cfg(feature = "test-support")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ThreadingMode {
     /// `make-thread` simulates threads in the one owner, swapping dynamic
     /// bindings in place (`threads`); there is no admission.
     Sim,
