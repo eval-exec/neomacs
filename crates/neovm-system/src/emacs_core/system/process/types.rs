@@ -453,43 +453,6 @@ impl Drop for StderrPipeWriterTransfer<'_> {
 
 static_assertions::assert_eq_size!(WaitNotifier, [usize; 2]);
 
-/// Refusal to observe this fixture's actual pending TCP owner state.
-#[cfg(any(test, feature = "test-support"))]
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum PendingConnectObservationError {
-    #[error("pending connect process missing")]
-    MissingProcess,
-    #[error("Main reached Select after connect was already decoded")]
-    AlreadyDecoded,
-    #[error("expected pending TCP connect")]
-    NotPendingTcp,
-    #[error("pending connect socket missing")]
-    MissingSocket,
-    #[error("expected TCP stream")]
-    NotTcpStream,
-    #[error("pending connect poller missing")]
-    MissingBackend,
-}
-#[cfg(any(test, feature = "test-support"))]
-static_assertions::assert_impl_all!(PendingConnectObservationError: std::error::Error, Send, Sync);
-
-/// Native-only proof for the one pending TCP connect in a Green test.
-#[cfg(any(test, feature = "test-support"))]
-#[derive(Debug)]
-pub(crate) struct MainConnectPending {
-    process: ProcessId,
-}
-#[cfg(any(test, feature = "test-support"))]
-impl MainConnectPending {
-    pub(crate) fn process(&self) -> ProcessId {
-        self.process
-    }
-}
-#[cfg(any(test, feature = "test-support"))]
-static_assertions::assert_impl_all!(MainConnectPending: Send, std::fmt::Debug);
-#[cfg(any(test, feature = "test-support"))]
-static_assertions::assert_not_impl_any!(MainConnectPending: Clone, Copy);
-
 // Frozen x86-64 Linux baseline: replacing only the Arc pointee must not
 // enlarge the process manager reserved inside Context/World storage.
 //

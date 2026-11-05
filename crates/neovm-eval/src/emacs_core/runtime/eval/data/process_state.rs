@@ -482,6 +482,47 @@ static_assertions::assert_not_impl_any!(NativeConnectObservationSlot: Clone, Cop
 ))]
 static_assertions::const_assert_eq!(std::mem::size_of::<NativeConnectObservationSlot>(), 40);
 
+/// Refusal to observe this fixture's actual pending TCP owner state.
+///
+/// Moved down from the system process vocabulary (peer 02:5xZ pattern: the
+/// pending-connect observation types live with the evaluator state they
+/// describe; the system copies had no users).
+#[cfg(test)]
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum PendingConnectObservationError {
+    #[error("pending connect process missing")]
+    MissingProcess,
+    #[error("Main reached Select after connect was already decoded")]
+    AlreadyDecoded,
+    #[error("expected pending TCP connect")]
+    NotPendingTcp,
+    #[error("pending connect socket missing")]
+    MissingSocket,
+    #[error("expected TCP stream")]
+    NotTcpStream,
+    #[error("pending connect poller missing")]
+    MissingBackend,
+}
+#[cfg(test)]
+static_assertions::assert_impl_all!(PendingConnectObservationError: std::error::Error, Send, Sync);
+
+/// Native-only proof for the one pending TCP connect in a Green test.
+#[cfg(test)]
+#[derive(Debug)]
+pub(crate) struct MainConnectPending {
+    process: ProcessId,
+}
+#[cfg(test)]
+impl MainConnectPending {
+    pub(crate) fn process(&self) -> ProcessId {
+        self.process
+    }
+}
+#[cfg(test)]
+static_assertions::assert_impl_all!(MainConnectPending: Send, std::fmt::Debug);
+#[cfg(test)]
+static_assertions::assert_not_impl_any!(MainConnectPending: Clone, Copy);
+
 pub struct ProcessWaitBackend {
     /// A per-backend, one-shot scheduling gate for input-wakeup regressions.
     /// Installation and consumption are synchronized; callbacks own no Lisp state.
