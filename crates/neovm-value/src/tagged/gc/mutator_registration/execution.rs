@@ -5,7 +5,10 @@
 //! borrows its activation, so it cannot forget an owned guard or release the
 //! enclosing IN_SLICE admission before all borrowed table addresses are dead.
 mod hof;
+#[cfg(not(feature = "test-support"))]
 mod read;
+#[cfg(feature = "test-support")]
+pub mod read;
 use super::construction::Gen1Construction;
 use super::*;
 use crate::tagged::gc::mark_word::MarkWord;

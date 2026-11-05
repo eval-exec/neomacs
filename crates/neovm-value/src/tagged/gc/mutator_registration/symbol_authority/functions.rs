@@ -1,12 +1,18 @@
 //! Direct function-cell answers move into owner roots under symbol authority.
 mod call;
 mod constant;
+#[cfg(not(feature = "test-support"))]
 mod hof;
+#[cfg(feature = "test-support")]
+pub mod hof;
 mod name;
 #[doc(hidden)]
 pub use hof::PreparedHofBuiltin;
 pub(crate) use hof::{EraCoreHofExt, RunAccessHofExt};
+#[cfg(not(feature = "test-support"))]
 mod unary;
+#[cfg(feature = "test-support")]
+pub mod unary;
 pub(super) use constant::{CallShape, ReturnSubset};
 #[cfg(test)]
 pub(in crate::tagged::gc::mutator_registration) use name::PreparedNameFunction;

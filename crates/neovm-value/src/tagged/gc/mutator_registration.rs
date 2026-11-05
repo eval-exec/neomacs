@@ -18,7 +18,10 @@ mod collection;
 mod cons_allocation;
 mod cons_catalog;
 mod construction;
+#[cfg(not(feature = "test-support"))]
 mod execution;
+#[cfg(feature = "test-support")]
+pub mod execution;
 pub(crate) use execution::EraCoreExecutionExt;
 pub(crate) use symbol_authority::{
     EraCoreHofExt, EraCoreUnaryExt, RunAccessHofExt, RunAccessUnaryExt,
@@ -68,7 +71,10 @@ pub use root_slot::OwnerRootSlot;
 pub use run_slice::{RunSlice, SliceRoot};
 mod rendezvous;
 mod summaries;
+#[cfg(not(feature = "test-support"))]
 mod symbol_authority;
+#[cfg(feature = "test-support")]
+pub mod symbol_authority;
 #[cfg(all(test, not(feature = "gc-memory-telemetry")))]
 mod symbol_diagnostics;
 #[cfg(test)]

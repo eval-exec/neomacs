@@ -11,13 +11,19 @@ pub(super) fn check_owner_home_for_test(
 mod globals;
 pub(super) use globals::check_home as check_symbol_home;
 mod intern;
+#[cfg(not(feature = "test-support"))]
 mod roots;
+#[cfg(feature = "test-support")]
+pub mod roots;
 pub use globals::GlobalError;
 pub(crate) use globals::SymbolReadToken;
 #[doc(hidden)]
 pub use globals::SymbolWriteToken;
 pub use intern::InitialInternError;
+#[cfg(not(feature = "test-support"))]
 mod functions;
+#[cfg(feature = "test-support")]
+pub mod functions;
 #[cfg(test)]
 pub use functions::FunctionOpKind;
 #[cfg(test)]

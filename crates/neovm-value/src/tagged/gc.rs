@@ -2785,7 +2785,10 @@ pub use collection_observed::{
 mod cons_allocator;
 mod cons_storage;
 use cons_allocator::{ConsAllocatorOwner, ConsBlockBase};
+#[cfg(not(feature = "test-support"))]
 mod cons_blocks;
+#[cfg(feature = "test-support")]
+pub mod cons_blocks;
 /// The cons-block trailer's shape, for `jit_layout::heap`.
 #[cfg_attr(not(feature = "jit"), allow(unused_imports))]
 #[doc(hidden)]
@@ -2816,7 +2819,10 @@ pub use arena_pages::*;
 mod gc_thread;
 pub use gc_thread::*;
 
+#[cfg(not(feature = "test-support"))]
 mod barrier_window;
+#[cfg(feature = "test-support")]
+pub mod barrier_window;
 #[cfg(feature = "jit")]
 #[doc(hidden)]
 pub use barrier_window::neovm_jit_unobserved_collection_owner;
@@ -2850,7 +2856,10 @@ mod cold_gc;
 mod facade_mark;
 mod gen1_admission;
 pub use gen1_admission::{Gen1Admission, Gen1AdmissionError};
+#[cfg(not(feature = "test-support"))]
 mod mutator_registration;
+#[cfg(feature = "test-support")]
+pub mod mutator_registration;
 #[cfg(test)]
 use census::CensusRecord;
 use census::{CensusCycleKind, GenCensus, census_remset_probe_on};
