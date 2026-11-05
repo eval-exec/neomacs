@@ -267,6 +267,7 @@ impl SharedRoot {
     /// dereferences Lisp storage nor materializes a LocalRoot.
     #[cold]
     #[inline(never)]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn parallel_word(&self) -> usize {
         self.word()
     }

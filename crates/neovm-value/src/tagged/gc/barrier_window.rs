@@ -603,6 +603,7 @@ impl TaggedHeap {
     }
 
     /// Test hook: is this owner queued for remembered-child tracing?
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn is_remembered_for_test(&self, owner: TaggedValue) -> bool {
         self.mapped_remembered.contains(&owner.bits())
             || (self.generational.enabled

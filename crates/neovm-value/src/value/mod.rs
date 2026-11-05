@@ -957,6 +957,9 @@ pub struct HashTableStorage {
     /// table takes: equal epochs of ONE table object mean equal contents.
     /// JIT code that answers a jump table inline guards on it
     /// ([`switch_plan::SWITCH_EPOCH_OFFSET`]).
+    #[cfg(feature = "test-support")]
+    pub switch_epoch: u64,
+    #[cfg(not(feature = "test-support"))]
     pub(crate) switch_epoch: u64,
     /// Proof 2 sealed authority (design §2.1), appended AFTER `switch_epoch`
     /// so every existing field offset — in particular the JIT-read

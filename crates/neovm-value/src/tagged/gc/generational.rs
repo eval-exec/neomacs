@@ -553,7 +553,8 @@ impl TaggedHeap {
         Self::owner_card_addr(owner).is_some_and(|addr| self.owner_card_is_dirty(addr))
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn remembered_log_len_for_test(&self) -> usize {
         self.mutators().map(|m| m.remset.len()).sum()
     }
