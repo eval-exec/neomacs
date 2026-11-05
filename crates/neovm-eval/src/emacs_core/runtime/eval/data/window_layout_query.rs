@@ -146,3 +146,186 @@ pub(crate) type WindowLayoutQueryCallback = Box<
         WindowLayoutQueryScope,
     ) -> WindowLayoutQueryOutcome,
 >;
+
+/// Why a frontend layout-query handler could not be installed.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LayoutQueryInstallError {
+    /// A synchronous layout query is in flight. Installing now would clobber
+    /// the Running state that makes nested queries report `LayoutBusy`.
+    Running,
+}
+
+impl std::fmt::Display for LayoutQueryInstallError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Running => f.write_str("a layout query is already running"),
+        }
+    }
+}
+
+impl std::error::Error for LayoutQueryInstallError {}
+
+/// Proof that the layout-query adapter was taken into the Running state.
+///
+/// The token is minted only by [`take_layout_query_adapter`], is
+/// `#[must_use]`, and is consumed by [`restore_layout_query_adapter`]. The
+/// replaced adapter can be moved out only while a Ready callback runs and must
+/// be put back before the restore, so a take can neither be forgotten,
+/// restored twice, replayed on another Context, nor restored outside the
+/// Running state. Every violation asserts in release builds too; none is a
+/// silent no-op.
+#[doc(hidden)]
+#[must_use = "a layout-query take must be restored with restore_layout_query_adapter"]
+pub struct LayoutQueryTake {
+    previous: Option<WindowLayoutQueryAdapter>,
+    owner: u64,
+}
+
+impl LayoutQueryTake {
+    /// Move the replaced adapter out to run a Ready callback.
+    #[doc(hidden)]
+    pub fn take_previous(&mut self) -> WindowLayoutQueryAdapter {
+        self.previous
+            .take()
+            .expect("layout-query take previous adapter is moved out only once")
+    }
+
+    /// Put the adapter back before restoring the take.
+    #[doc(hidden)]
+    pub fn put_previous(&mut self, adapter: WindowLayoutQueryAdapter) {
+        assert!(
+            self.previous.is_none(),
+            "layout-query take previous adapter is already present"
+        );
+        self.previous = Some(adapter);
+    }
+
+    fn into_previous(mut self, owner: u64) -> WindowLayoutQueryAdapter {
+        assert_eq!(
+            self.owner, owner,
+            "a layout-query take must be restored on the Context that minted it"
+        );
+        self.previous
+            .take()
+            .expect("layout-query take restored before the previous adapter was put back")
+    }
+}
+
+/// Install a non-running adapter. The Running state is entered only through
+/// [`take_layout_query_adapter`].
+pub(crate) fn install_layout_query_adapter(
+    slot: &mut WindowLayoutQueryAdapter,
+    adapter: WindowLayoutQueryAdapter,
+) -> Result<(), LayoutQueryInstallError> {
+    assert!(
+        !matches!(adapter, WindowLayoutQueryAdapter::Running),
+        "the Running layout-query state is entered only by take_layout_query_adapter"
+    );
+    if matches!(slot, WindowLayoutQueryAdapter::Running) {
+        return Err(LayoutQueryInstallError::Running);
+    }
+    *slot = adapter;
+    Ok(())
+}
+
+/// Enter Running and mint the proof the caller must restore.
+pub(crate) fn take_layout_query_adapter(
+    slot: &mut WindowLayoutQueryAdapter,
+    owner: u64,
+) -> LayoutQueryTake {
+    LayoutQueryTake {
+        previous: Some(std::mem::replace(slot, WindowLayoutQueryAdapter::Running)),
+        owner,
+    }
+}
+
+/// Consume the take proof and restore the adapter it replaced.
+pub(crate) fn restore_layout_query_adapter(
+    slot: &mut WindowLayoutQueryAdapter,
+    owner: u64,
+    take: LayoutQueryTake,
+) {
+    assert!(
+        matches!(slot, WindowLayoutQueryAdapter::Running),
+        "a layout-query restore requires the outstanding take's Running state"
+    );
+    *slot = take.into_previous(owner);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ready() -> WindowLayoutQueryAdapter {
+        WindowLayoutQueryAdapter::Ready(Box::new(|_, _, _, _| {
+            WindowLayoutQueryOutcome::Unavailable
+        }))
+    }
+
+    // Mutation proof: an install while Running is refused and preserves the
+    // Running state that LayoutBusy depends on.
+    #[test]
+    fn install_while_running_is_refused() {
+        let mut slot = WindowLayoutQueryAdapter::Running;
+        assert_eq!(
+            install_layout_query_adapter(&mut slot, ready()),
+            Err(LayoutQueryInstallError::Running)
+        );
+        assert!(matches!(slot, WindowLayoutQueryAdapter::Running));
+    }
+
+    // Mutation proof: take/restore round-trips the exact previous adapter.
+    #[test]
+    fn take_and_restore_round_trip_restores_ready() {
+        let mut slot = ready();
+        let mut take = take_layout_query_adapter(&mut slot, 7);
+        assert!(matches!(slot, WindowLayoutQueryAdapter::Running));
+        let previous = take.take_previous();
+        take.put_previous(previous);
+        restore_layout_query_adapter(&mut slot, 7, take);
+        assert!(matches!(slot, WindowLayoutQueryAdapter::Ready(_)));
+    }
+
+    // Mutation proof: a nested take (previous Running) restores Running.
+    #[test]
+    fn nested_take_restores_running() {
+        let mut slot = WindowLayoutQueryAdapter::Running;
+        let mut take = take_layout_query_adapter(&mut slot, 7);
+        let previous = take.take_previous();
+        take.put_previous(previous);
+        restore_layout_query_adapter(&mut slot, 7, take);
+        assert!(matches!(slot, WindowLayoutQueryAdapter::Running));
+    }
+
+    // Mutation proof: a token cannot be replayed on another Context.
+    #[test]
+    #[should_panic(expected = "Context that minted it")]
+    fn restore_on_foreign_context_panics() {
+        let mut first = ready();
+        let token = take_layout_query_adapter(&mut first, 7);
+        let mut second = ready();
+        restore_layout_query_adapter(&mut second, 8, token);
+    }
+
+    // Mutation proof: restore without the outstanding take is not a silent
+    // no-op in release builds.
+    #[test]
+    #[should_panic(expected = "outstanding take")]
+    fn restore_without_running_slot_panics() {
+        let mut slot = ready();
+        let token = take_layout_query_adapter(&mut slot, 7);
+        slot = ready();
+        restore_layout_query_adapter(&mut slot, 7, token);
+    }
+
+    // Mutation proof: the replaced adapter can be moved out only once.
+    #[test]
+    #[should_panic(expected = "moved out only once")]
+    fn take_previous_twice_panics() {
+        let mut slot = ready();
+        let mut take = take_layout_query_adapter(&mut slot, 7);
+        let _ = take.take_previous();
+        let _ = take.take_previous();
+    }
+}

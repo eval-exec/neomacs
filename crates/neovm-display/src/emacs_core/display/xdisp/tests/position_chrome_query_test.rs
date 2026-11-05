@@ -130,7 +130,8 @@ fn assert_point_only_warm_query_reuse(setup: &str, reuse_after_move: bool) {
             LispCharPos1::ONE,
             Some(refreshed.clone()),
         ))
-    });
+    })
+    .expect("install the layout-query handler");
     let query = |eval: &mut Context| {
         builtin_posn_at_point(eval, vec![Value::fixnum(3), Value::make_window(window.0)]).unwrap()
     };

@@ -31,7 +31,8 @@ fn lisp_precision_scroll_survives_redisplay_in_both_directions() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     eval.eval_str(
         r#"
         (require 'pixel-scroll)

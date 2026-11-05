@@ -889,7 +889,8 @@ fn small_vertical_motion_measures_only_the_needed_rows() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     let result = eval.eval_str("(progn (goto-char 2001) (let ((noninteractive nil)) (list (vertical-motion 1) (point) (vertical-motion -1) (point))))").unwrap();
     assert_eq!(
         neovm_core::emacs_core::print::print_value(&result),
@@ -934,7 +935,8 @@ fn small_backward_pixel_measurement_starts_with_bounded_rows() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     let result = eval.eval_str("(progn (goto-char 2001) (cdr (window-text-pixel-size nil '(2001 . -1) 2001 nil nil nil t)))").unwrap();
     assert_eq!(
         neovm_core::emacs_core::print::print_value(&result),
@@ -970,7 +972,8 @@ fn backward_pixel_measurement_uses_the_offscreen_rows_actual_height() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     let result = eval.eval_str("(list (mapcar (lambda (offset) (cdr (window-text-pixel-size nil (cons 5 offset) 5 nil nil nil t))) '(-1 -63 -64 -65)) (window-start) (point))").unwrap();
     assert_eq!(
         neovm_core::emacs_core::print::print_value(&result),
@@ -1039,7 +1042,8 @@ fn backward_pixel_measurement_expands_past_wrapped_source_lines() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     let result = eval
         .eval_str("(cdr (window-text-pixel-size nil '(2002 . -1) 2002 nil nil nil t))")
         .unwrap();
@@ -1087,7 +1091,8 @@ fn consecutive_scroll_commands_preserve_the_original_goal_past_short_rows() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     let result = eval
         .eval_str(
             r#"(let ((noninteractive nil)
@@ -1131,7 +1136,8 @@ fn graphical_scrolling_honors_screen_position_and_scroll_margin() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     let result = eval
         .eval_str(
             r#"(let ((noninteractive nil))
@@ -1167,7 +1173,8 @@ fn motion_backtracking_does_not_reseat_inside_a_multiline_replacement() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     let result = eval
         .eval_str(
             r#"(progn (goto-char 8)
@@ -1270,7 +1277,8 @@ fn scrolling_restarts_after_fontification_moves_source_positions() {
                 Ok(query) => WindowLayoutQueryOutcome::Ready(query),
                 Err(error) => WindowLayoutQueryOutcome::Failed(error),
             }
-        });
+        })
+        .expect("install the layout-query handler");
         let result = eval
             .eval_str(
                 r#"(let ((noninteractive nil))
@@ -1300,7 +1308,8 @@ fn measured_motion_distinguishes_overlay_insertions_from_replacements() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     let result = eval.eval_str(r#"(let ((noninteractive nil))
         (mapcar (lambda (property)
           (let ((overlay (make-overlay 1 2)))
@@ -1337,7 +1346,8 @@ fn measured_motion_reaches_an_invisible_accessible_beginning() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     let result = eval
         .eval_str(
             r#"(let ((noninteractive nil))
@@ -1381,7 +1391,8 @@ fn page_scrolling_back_to_a_tall_row_keeps_point_in_the_new_viewport() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     let result = eval
         .eval_str(
             r#"(let ((noninteractive nil))
@@ -1436,7 +1447,8 @@ fn scrolling_promotes_a_bottom_clipped_point_row_before_pixel_scrolling() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     let result = eval
         .eval_str(
             r#"(let ((noninteractive nil))
@@ -1485,7 +1497,8 @@ fn page_scrolling_a_tall_first_row_uses_pixels_and_returns_to_the_same_viewport(
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     let result = eval
         .eval_str(
             r#"(let ((noninteractive nil))
@@ -1525,7 +1538,8 @@ fn page_scroll_reaching_zv_without_final_newline_signals_end_of_buffer() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     let result = eval
         .eval_str(
             r#"(let ((noninteractive nil)
@@ -1588,7 +1602,8 @@ fn page_scroll_reaching_a_partially_visible_final_row_keeps_gnu_vscroll() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     let result = eval
         .eval_str(
             r#"(let ((noninteractive nil)
@@ -1625,7 +1640,8 @@ fn page_scroll_final_row_accounts_for_an_existing_pixel_offset() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     let result = eval
         .eval_str(
             r#"(let ((noninteractive nil)
@@ -1678,7 +1694,8 @@ fn vertical_motion_measures_replacements_outside_the_presented_viewport() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     // GNU -nw in a real PTY: the first step leaves both replacement rows;
     // the second reaches source line 43, with three physical rows crossed.
     let result = eval
@@ -1728,7 +1745,8 @@ fn vertical_motion_leaves_a_wrapped_replacement_before_taking_another_step() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     let result = eval
         .eval_str(
             r#"(let ((noninteractive nil))
@@ -1769,7 +1787,8 @@ fn vertical_motion_remeasures_display_rows_after_a_display_property_change() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     let result = eval
         .eval_str(
             r#"(progn
@@ -1884,7 +1903,8 @@ fn vertical_motion_counts_measured_rows_at_accessible_boundaries() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     let result = eval
         .eval_str(
             r#"(let ((noninteractive nil))
@@ -1962,7 +1982,8 @@ fn vertical_motion_preserves_a_labeled_accessible_region_during_measurement() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     let result = eval
         .eval_str(
             r#"(progn
@@ -2018,7 +2039,8 @@ fn scrolling_places_a_point_past_the_right_margin_on_the_truncated_row() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     let result = eval
         .eval_str(
             r#"(let ((noninteractive nil) (truncate-lines t))
@@ -2065,7 +2087,8 @@ fn vertical_motion_reaches_the_end_of_a_truncated_line() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     let result = eval
         .eval_str(
             r#"(let ((noninteractive nil) (truncate-lines t))
@@ -2121,7 +2144,8 @@ fn graphical_posn_queries_follow_live_scroll_before_presentation() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     let observe = |eval: &mut Context| {
         let value = eval.eval_str(
             "(let ((noninteractive nil)) (list (nth 1 (posn-at-x-y 0 100 (selected-window))) (nth 2 (posn-at-point 881))))",
@@ -2571,7 +2595,8 @@ fn backward_page_does_not_treat_bounded_wrapped_rows_as_covering_the_origin() {
             }
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     let actual = eval
         .eval_str("(let ((noninteractive nil)) (scroll-down) (window-start))")
         .unwrap()
@@ -2711,7 +2736,8 @@ fn page_viewports_measure_their_pixel_extent_in_one_walk() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     eval.eval_str("(let ((noninteractive nil)) (scroll-up))")
         .unwrap();
     assert!(
@@ -2854,7 +2880,8 @@ fn forward_page_uses_the_visible_wrap_context_with_tabs_and_overlays() {
                 Ok(query) => WindowLayoutQueryOutcome::Ready(query),
                 Err(error) => WindowLayoutQueryOutcome::Failed(error),
             }
-        });
+        })
+        .expect("install the layout-query handler");
         eval.eval_str("(let ((noninteractive nil)) (scroll-up))")
             .unwrap();
         assert_eq!(
@@ -2891,7 +2918,8 @@ fn backward_page_grows_pixel_coverage_without_guessing_row_counts() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     eval.eval_str("(let ((noninteractive nil)) (scroll-down))")
         .unwrap();
     let actual = eval
@@ -3542,7 +3570,8 @@ fn backward_page_growth_handles_different_physical_line_lengths() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     eval.eval_str("(let ((noninteractive nil)) (scroll-down))")
         .unwrap();
     let actual = eval

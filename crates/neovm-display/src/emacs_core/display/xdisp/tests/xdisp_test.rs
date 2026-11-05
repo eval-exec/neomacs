@@ -2126,7 +2126,8 @@ fn line_pixel_height_lays_out_the_line_at_point_outside_the_window() {
             ..Default::default()
         };
         WindowLayoutQueryOutcome::Ready(WindowLayoutQuery::new(start, Some(snapshot)))
-    });
+    })
+    .expect("install the layout-query handler");
 
     let result = builtin_line_pixel_height(&mut ev, &[]).unwrap();
     assert_eq!(result, Value::fixnum(30));
@@ -2163,7 +2164,8 @@ fn line_pixel_height_inside_a_layout_query_falls_back_instead_of_signaling() {
             ..Default::default()
         };
         WindowLayoutQueryOutcome::Ready(WindowLayoutQuery::new(start, Some(snapshot)))
-    });
+    })
+    .expect("install the layout-query handler");
 
     let result = builtin_line_pixel_height(&mut ev, &[]).unwrap();
     assert_eq!(result, Value::fixnum(30));
@@ -4595,7 +4597,8 @@ fn pos_visible_queries_target_rows_but_last_row_still_queries_the_viewport() {
     eval.install_window_layout_query(move |_, _, _, scope| {
         observed.borrow_mut().push(scope);
         WindowLayoutQueryOutcome::Unavailable
-    });
+    })
+    .expect("install the layout-query handler");
     for pos in [Value::fixnum(3), Value::NIL, Value::T] {
         builtin_pos_visible_in_window_p_ctx(
             &mut eval,
@@ -4636,7 +4639,8 @@ fn posn_at_point_queries_the_target_instead_of_completing_the_viewport() {
     eval.install_window_layout_query(move |_, _, _, scope| {
         observed.borrow_mut().push(scope);
         WindowLayoutQueryOutcome::Unavailable
-    });
+    })
+    .expect("install the layout-query handler");
     builtin_posn_at_point(
         &mut eval,
         vec![Value::fixnum(3), Value::make_window(window.0)],
@@ -4891,7 +4895,8 @@ fn assert_point_only_warm_query_reuse_with_face_setup(
             LispCharPos1::ONE,
             Some(refreshed.clone()),
         ))
-    });
+    })
+    .expect("install the layout-query handler");
     let query = |eval: &mut Context| {
         builtin_posn_at_point(eval, vec![Value::fixnum(3), Value::make_window(window.0)]).unwrap()
     };
@@ -5021,7 +5026,8 @@ fn posn_at_point_requeries_warm_rows_after_point_moves_with_default_relative_num
         assert_eq!((fid, wid), (frame, window));
         observed.borrow_mut().push(scope);
         WindowLayoutQueryOutcome::Unavailable
-    });
+    })
+    .expect("install the layout-query handler");
     let query = |eval: &mut Context| {
         builtin_posn_at_point(eval, vec![Value::fixnum(3), Value::make_window(window.0)]).unwrap()
     };
@@ -5139,7 +5145,8 @@ fn posn_at_point_requeries_warm_rows_after_face_overlay_height_changes_or_moves(
                 LispCharPos1::ONE,
                 Some(refreshed.clone()),
             ))
-        });
+        })
+        .expect("install the layout-query handler");
         let query = |eval: &mut Context| {
             builtin_posn_at_point(eval, vec![Value::fixnum(3), Value::make_window(window.0)])
                 .unwrap()
@@ -5903,7 +5910,8 @@ fn posn_at_point_recomputes_a_terminal_window_redisplay_has_not_drawn_yet() {
                 ..crate::window::WindowDisplaySnapshot::default()
             }),
         ))
-    });
+    })
+    .expect("install the layout-query handler");
 
     APPROX_WINDOW_TEXT_COPIED_CHARS.with(|count| count.set(0));
     let result = builtin_posn_at_point(

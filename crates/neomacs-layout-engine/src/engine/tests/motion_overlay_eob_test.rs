@@ -88,7 +88,8 @@ fn install_motion_query(eval: &mut Context) -> Arc<AtomicUsize> {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     calls
 }
 

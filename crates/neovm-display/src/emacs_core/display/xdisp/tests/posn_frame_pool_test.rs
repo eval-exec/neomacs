@@ -196,7 +196,8 @@ fn tty_posn_split_without_local_output_reads_the_accepted_frame_pool() {
                 ..Default::default()
             }),
         ))
-    });
+    })
+    .expect("install the layout-query handler");
     let query = |eval: &mut Context, x, y| {
         neovm_value::value::list_to_vec(
             &builtin_posn_at_x_y(

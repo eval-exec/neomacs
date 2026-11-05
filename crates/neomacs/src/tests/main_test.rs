@@ -1390,7 +1390,8 @@ fn current_fresh_window_end_does_not_reenter_the_layout_adapter() {
         neovm_core::window::WindowLayoutQueryOutcome::Failed(
             neovm_core::window::WindowLayoutQueryFailure::DidNotConverge,
         )
-    });
+    })
+    .expect("install the layout-query handler");
     let updated = eval
         .eval_form(Value::list(vec![
             Value::symbol("window-end"),

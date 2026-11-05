@@ -348,7 +348,8 @@ fn integer_motion_expands_a_query_that_covers_source_eob_but_not_its_overlay_tai
             LispCharPos1::new(4),
             Some(snapshot),
         ))
-    });
+    })
+    .expect("install the layout-query handler");
     let result = eval
         .eval_str("(let ((noninteractive nil)) (goto-char 1) (list (vertical-motion 1) (point)))")
         .expect("source EOB does not prematurely terminate an unfinished display walk");

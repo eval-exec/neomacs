@@ -33,7 +33,11 @@ use super::print::map_flow;
 use super::threads::ThreadManager;
 use crate::emacs_core::eval::data::face::FaceTable;
 use crate::emacs_core::eval::data::process_state::ProcessManager;
-use crate::emacs_core::eval::data::window_layout_query::WindowLayoutQueryAdapter;
+use crate::emacs_core::eval::data::window_layout_query::{
+    LayoutQueryInstallError, LayoutQueryTake, WindowLayoutQueryAdapter, WindowLayoutQueryOutcome,
+    WindowLayoutQueryScope, install_layout_query_adapter, restore_layout_query_adapter,
+    take_layout_query_adapter,
+};
 use crate::emacs_core::eval::data::window_state::{
     BodyRedisplayRevision, ForcedBodyRedisplay, FrameManager,
 };
@@ -46,7 +50,7 @@ use neovm_edit::emacs_core::rect::RectangleState;
 use neovm_text::emacs_core::coding::CodingSystemManager;
 use neovm_text::emacs_core::regex::MatchData;
 pub use neovm_value::display_vocab::XwidgetScriptRequestId;
-use neovm_value::display_vocab::{FontSlant, FontWeight, FontWidth, FrameFullscreen};
+use neovm_value::display_vocab::{FontSlant, FontWeight, FontWidth, FrameFullscreen, FrameId};
 use neovm_value::error::*;
 use neovm_value::gc_trace::GcTrace;
 use neovm_value::intern::{
@@ -5520,61 +5524,55 @@ impl Context {
         &self.window_layout_query_adapter
     }
 
-    /// Install or reset the frontend layout-query adapter.
+    /// Install the frontend layout-query handler.
     ///
-    /// Only the non-running states are installable. The `Running` state is
-    /// entered exclusively through [`Self::take_window_layout_query_adapter`],
-    /// and a restore is only accepted while a take is outstanding, so a
-    /// frontend install or restore cannot bypass `LayoutBusy`.
+    /// Returns `Err(LayoutQueryInstallError::Running)` when a synchronous
+    /// layout query is already in flight; the handler is not installed and
+    /// the Running state is preserved, so `LayoutBusy` cannot be bypassed.
     #[doc(hidden)]
     #[inline]
-    pub fn install_window_layout_query_adapter(&mut self, adapter: WindowLayoutQueryAdapter) {
-        if matches!(adapter, WindowLayoutQueryAdapter::Running) {
-            debug_assert!(
-                false,
-                "the Running layout-query state is entered only by take"
-            );
-            return;
-        }
-        if matches!(
-            self.window_layout_query_adapter,
-            WindowLayoutQueryAdapter::Running
-        ) {
-            debug_assert!(false, "layout query installed while a query is running");
-            return;
-        }
-        self.window_layout_query_adapter = adapter;
-    }
-
-    /// Enter the Running state and return the adapter the caller must restore.
-    ///
-    /// A nested query may take while already running; it receives `Running`
-    /// and reports `LayoutBusy` instead of starting a second walk.
-    #[doc(hidden)]
-    #[inline]
-    pub fn take_window_layout_query_adapter(&mut self) -> WindowLayoutQueryAdapter {
-        std::mem::replace(
+    pub fn install_window_layout_query_handler<F>(
+        &mut self,
+        query: F,
+    ) -> Result<(), LayoutQueryInstallError>
+    where
+        F: FnMut(
+                &mut Context,
+                FrameId,
+                WindowId,
+                WindowLayoutQueryScope,
+            ) -> WindowLayoutQueryOutcome
+            + 'static,
+    {
+        install_layout_query_adapter(
             &mut self.window_layout_query_adapter,
-            WindowLayoutQueryAdapter::Running,
+            WindowLayoutQueryAdapter::Ready(Box::new(query)),
         )
     }
 
-    /// Restore the adapter returned by
-    /// [`Self::take_window_layout_query_adapter`].
+    /// Enter the Running state and mint the take proof the caller must
+    /// restore with [`Self::restore_window_layout_query`].
     ///
-    /// The restore is accepted only while the slot is `Running`, so it cannot
-    /// be used to install `Running` from outside a take.
+    /// A nested query may take while already running; its token carries
+    /// `Running` and it reports `LayoutBusy` instead of starting a second
+    /// walk. The token is `#[must_use]` and consumed by the restore, so the
+    /// transition cannot be forgotten or repeated.
     #[doc(hidden)]
     #[inline]
-    pub fn restore_window_layout_query_adapter(&mut self, previous: WindowLayoutQueryAdapter) {
-        debug_assert!(
-            matches!(
-                self.window_layout_query_adapter,
-                WindowLayoutQueryAdapter::Running
-            ),
-            "layout query restored without an outstanding take"
-        );
-        self.window_layout_query_adapter = previous;
+    pub fn take_window_layout_query(&mut self) -> LayoutQueryTake {
+        let owner = self.context_instance_id();
+        take_layout_query_adapter(&mut self.window_layout_query_adapter, owner)
+    }
+
+    /// Consume the take proof and restore the adapter it replaced.
+    ///
+    /// The token is consumed; the owner and the outstanding Running state are
+    /// asserted in release builds too, so misuse is never a silent no-op.
+    #[doc(hidden)]
+    #[inline]
+    pub fn restore_window_layout_query(&mut self, take: LayoutQueryTake) {
+        let owner = self.context_instance_id();
+        restore_layout_query_adapter(&mut self.window_layout_query_adapter, owner, take)
     }
 
     #[doc(hidden)]

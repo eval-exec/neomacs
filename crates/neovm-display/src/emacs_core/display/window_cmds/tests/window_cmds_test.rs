@@ -10379,7 +10379,8 @@ fn window_end_update_returns_the_query_record_without_publishing_it() {
             LispCharPos1::new(17),
             None,
         ))
-    });
+    })
+    .expect("install the layout-query handler");
 
     let result =
         super::builtin_window_end(&mut ev, vec![Value::NIL, Value::T]).expect("window-end");
@@ -10415,7 +10416,8 @@ fn window_end_update_signals_when_installed_layout_query_does_not_converge() {
         crate::window::WindowLayoutQueryOutcome::Failed(
             crate::window::WindowLayoutQueryFailure::DidNotConverge,
         )
-    });
+    })
+    .expect("install the layout-query handler");
 
     let error = super::builtin_window_end(&mut ev, vec![Value::NIL, Value::T])
         .expect_err("an installed adapter failure must not return stale retained state");
@@ -11217,7 +11219,8 @@ fn graphical_recenter_context(
                 ..Default::default()
             }),
         ))
-    });
+    })
+    .expect("install the layout-query handler");
     eval
 }
 

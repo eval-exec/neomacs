@@ -268,11 +268,13 @@ fn install_window_layout_query_with_policy(
     }));
     // The immutable native policy lives in this existing heap allocation.
     // Context, LayoutEngine and the runtime's TLS representation do not grow.
-    evaluator.install_window_layout_query(move |eval, frame_id, window_id, scope| {
-        REDISPLAY_RUNTIME.with(|runtime| {
-            runtime.query_window_with_policy(eval, frame_id, window_id, scope, &policy)
+    evaluator
+        .install_window_layout_query(move |eval, frame_id, window_id, scope| {
+            REDISPLAY_RUNTIME.with(|runtime| {
+                runtime.query_window_with_policy(eval, frame_id, window_id, scope, &policy)
+            })
         })
-    });
+        .expect("install the layout-query handler");
 }
 
 pub(crate) fn tty_rows_host_authority()

@@ -281,7 +281,8 @@ fn chrome_position_queries_do_not_reenter_chrome_or_signal_layout_busy() {
                 Ok(query) => WindowLayoutQueryOutcome::Ready(query),
                 Err(error) => WindowLayoutQueryOutcome::Failed(error),
             }
-        });
+        })
+        .expect("install the layout-query handler");
         crate::display_status_line::reset_mode_line_eval_count();
         if outer_is_query {
             assert!(!eval.eval_str("(posn-at-point 1)").unwrap().is_nil());
@@ -381,7 +382,8 @@ fn position_query_propagates_deferred_chrome_exit_to_lisp() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
 
     // Warm a reusable body first. The next query must still execute chrome
     // and propagate its throw rather than returning that observation.

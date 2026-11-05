@@ -247,7 +247,8 @@ fn assert_mini_offset_height(
             }
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     let public_size = eval
         .eval_form(Value::list(vec![
             Value::symbol("window-text-pixel-size"),

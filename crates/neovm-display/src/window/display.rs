@@ -10,7 +10,9 @@ use crate::window::DisplayFrameExt;
 use crate::window::DisplayFrameManagerExt;
 use crate::window::LayoutPrefixInputExt;
 use neovm_edit::buffer::{BufferId, LispCharPos1};
-use neovm_eval::emacs_core::eval::data::window_layout_query::WindowLayoutQueryAdapter;
+use neovm_eval::emacs_core::eval::data::window_layout_query::{
+    LayoutQueryInstallError, WindowLayoutQueryAdapter,
+};
 use neovm_value::intern::WellKnown;
 use neovm_value::value::Value;
 
@@ -216,7 +218,7 @@ pub trait WindowDisplayContextExt {
         admission: super::WindowLayoutLispAdmission,
     ) -> Option<std::borrow::Cow<'a, crate::window::WindowLayoutAttemptFreshness>>;
 
-    fn install_window_layout_query<F>(&mut self, query: F)
+    fn install_window_layout_query<F>(&mut self, query: F) -> Result<(), LayoutQueryInstallError>
     where
         F: FnMut(
                 &mut Self,
@@ -485,7 +487,7 @@ impl WindowDisplayContextExt for neovm_eval::emacs_core::eval::Context {
     }
 
     /// Install the frontend half of the synchronous layout-query boundary.
-    fn install_window_layout_query<F>(&mut self, query: F)
+    fn install_window_layout_query<F>(&mut self, query: F) -> Result<(), LayoutQueryInstallError>
     where
         F: FnMut(
                 &mut Self,
@@ -495,7 +497,7 @@ impl WindowDisplayContextExt for neovm_eval::emacs_core::eval::Context {
             ) -> crate::window::WindowLayoutQueryOutcome
             + 'static,
     {
-        self.install_window_layout_query_adapter(WindowLayoutQueryAdapter::Ready(Box::new(query)));
+        self.install_window_layout_query_handler(query)
     }
 
     /// Whether a layout query is running, so a nested one would be refused
@@ -556,10 +558,11 @@ impl WindowDisplayContextExt for neovm_eval::emacs_core::eval::Context {
                 frames, buffers, frame_id,
             );
         }
-        let adapter = self.take_window_layout_query_adapter();
-        let mut query = match adapter {
+        let mut take = self.take_window_layout_query();
+        let mut query = match take.take_previous() {
             WindowLayoutQueryAdapter::Unavailable => {
-                self.restore_window_layout_query_adapter(WindowLayoutQueryAdapter::Unavailable);
+                take.put_previous(WindowLayoutQueryAdapter::Unavailable);
+                self.restore_window_layout_query(take);
                 return crate::window::WindowLayoutQueryOutcome::Unavailable;
             }
             WindowLayoutQueryAdapter::Running => {
@@ -567,6 +570,8 @@ impl WindowDisplayContextExt for neovm_eval::emacs_core::eval::Context {
                 // another position. The outer adapter owns the walk; let the
                 // nested consumer fall back to accepted geometry instead of
                 // turning an ordinary chrome expression into a layout error.
+                take.put_previous(WindowLayoutQueryAdapter::Running);
+                self.restore_window_layout_query(take);
                 if matches!(
                     scope,
                     crate::window::WindowLayoutQueryScope::Position { .. }
@@ -592,7 +597,8 @@ impl WindowDisplayContextExt for neovm_eval::emacs_core::eval::Context {
                 .buffers
                 .restore_outermost_restrictions(saved_restrictions);
         }
-        self.restore_window_layout_query_adapter(WindowLayoutQueryAdapter::Ready(query));
+        take.put_previous(WindowLayoutQueryAdapter::Ready(query));
+        self.restore_window_layout_query(take);
         record
     }
 

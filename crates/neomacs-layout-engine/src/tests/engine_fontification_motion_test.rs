@@ -51,7 +51,8 @@ fn installing_fontification_hook_remeasures_retained_motion_before_redisplay() {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),
             Err(error) => WindowLayoutQueryOutcome::Failed(error),
         }
-    });
+    })
+    .expect("install the layout-query handler");
     // No forced update/redisplay between installation and motion. GNU31.1's
     // interactive display iterator calls this hook once and sees its newline
     // replacement: (rows moved, target point, hook calls, hook completed).
