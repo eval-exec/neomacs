@@ -22,3 +22,7 @@ mod cons_tails_tests;
 #[cfg(test)]
 #[path = "../../../core_tests/tagged/gc/mutator_registration/native_extent_tests.rs"]
 mod native_extent_tests;
+
+#[cfg(test)]
+#[path = "../../../core_tests/tagged/gc/mutator_registration/era_fixtures.rs"]
+pub(crate) mod era_fixtures;
