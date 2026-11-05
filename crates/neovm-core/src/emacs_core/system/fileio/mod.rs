@@ -5,8 +5,8 @@
 
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_fixnum, expect_max_args, expect_min_args};
-use crate::emacs_core::eval::VariableView;
 use crate::emacs_core::timefns::{TimestampError, UnixTimestamp};
+use neovm_eval::emacs_core::eval::VariableView;
 use std::collections::{HashMap, VecDeque};
 #[cfg(unix)]
 use std::ffi::CString;
@@ -36,15 +36,17 @@ use crate::emacs_core::intern::WellKnown;
 // The pure file-name expansion and file-coding helpers moved to eval data
 // (stage-4 K2 oracleb batch 4); the names the remaining system callers use
 // resolve through these re-exports.
-pub(crate) use crate::emacs_core::eval::data::file_coding::{
+pub(crate) use neovm_eval::emacs_core::eval::data::file_coding::{
     WriteCodingFallback, coding_system_value_to_name, decode_file_name_lisp,
     resolve_write_coding_system_symbol,
 };
-pub(crate) use crate::emacs_core::eval::data::file_name_expand::{
+pub(crate) use neovm_eval::emacs_core::eval::data::file_name_expand::{
     current_user_home_bytes, expand_file_name_with_home, expand_user_home_prefix_bytes,
     home_env_bytes,
 };
-pub use crate::emacs_core::eval::data::file_name_expand::{expand_file_name, file_name_absolute_p};
+pub use neovm_eval::emacs_core::eval::data::file_name_expand::{
+    expand_file_name, file_name_absolute_p,
+};
 
 #[cfg(unix)]
 pub(crate) mod directory_stream;
@@ -5365,9 +5367,10 @@ fn run_after_insert_file_pipeline(
 
             let hook_sym = intern("after-insert-file-functions");
             let hook_value = eval.visible_variable_value_or_nil("after-insert-file-functions");
-            let hook_functions = crate::emacs_core::hook_runtime::collect_hook_functions_in_state(
-                eval, hook_sym, hook_value, true,
-            );
+            let hook_functions =
+                neovm_eval::emacs_core::hook_runtime::collect_hook_functions_in_state(
+                    eval, hook_sym, hook_value, true,
+                );
             if !hook_functions.is_empty() {
                 let gc_roots = eval.save_specpdl_roots();
                 for func in &hook_functions {
@@ -5731,7 +5734,7 @@ fn prepare_write_region(
     let mut callback_end = end;
     let hook_sym = intern("write-region-annotate-functions");
     let hook_value = eval.visible_variable_value_or_nil("write-region-annotate-functions");
-    let functions = crate::emacs_core::hook_runtime::collect_hook_functions_in_state(
+    let functions = neovm_eval::emacs_core::hook_runtime::collect_hook_functions_in_state(
         eval, hook_sym, hook_value, true,
     );
     let root_scope = eval.save_specpdl_roots();
@@ -5814,7 +5817,7 @@ fn has_utf8_signature(bytes: &[u8]) -> bool {
 }
 
 fn decode_insert_file_contents(
-    eval: &mut crate::emacs_core::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     bytes: &[u8],
     multibyte: bool,
     coding_system_for_read: Option<&str>,

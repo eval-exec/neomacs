@@ -7,17 +7,17 @@
 //! `crate::host_input` re-exports this module and its receiver, so the facade
 //! paths used by crates/neomacs stay valid.
 
-use crate::emacs_core::eval::Context;
-use crate::emacs_core::eval::data::process_state::WaitNotifier;
-use crate::emacs_core::eval::keyboard::InputEvent;
 use crate::emacs_core::process::SystemProcessExt;
-use crate::host_effect::wake::{
+use crossbeam_channel::{Receiver, Sender};
+use neovm_eval::emacs_core::eval::Context;
+use neovm_eval::emacs_core::eval::data::process_state::WaitNotifier;
+use neovm_eval::emacs_core::eval::keyboard::InputEvent;
+use neovm_eval::host_effect::wake::{
     ControlDestination, ControlNudge, ControlNudgeOutcome, HostSessionControl,
 };
-use crossbeam_channel::{Receiver, Sender};
 use std::sync::Arc;
 
-pub(crate) use crate::emacs_core::eval::host_input::HostInputReceiver;
+pub(crate) use neovm_eval::emacs_core::eval::host_input::HostInputReceiver;
 
 /// Only a Context can pair a native wake capability with its input queue.
 enum InputWake {

@@ -10,7 +10,7 @@ use crate::emacs_core::process::ProcessContextExt;
 use crate::emacs_core::process::SystemProcessExt;
 use std::time::{Duration, Instant};
 
-use crate::keyboard::SpecialInputServiceOutcome;
+use neovm_eval::emacs_core::eval::keyboard::SpecialInputServiceOutcome;
 
 use super::error::Flow;
 use super::eval::GnuTimerTimestamp;
@@ -240,8 +240,10 @@ enum KeyboardWaitPolicy {
 }
 
 impl KeyboardWaitPolicy {
-    fn input_query(self) -> Option<crate::frontend_events::FrontendInputQuery> {
-        use crate::frontend_events::FrontendInputQuery;
+    fn input_query(
+        self,
+    ) -> Option<neovm_eval::emacs_core::eval::frontend_events::FrontendInputQuery> {
+        use neovm_eval::emacs_core::eval::frontend_events::FrontendInputQuery;
         match self {
             // GNU process.c's command wait uses detect_input_pending_run_timers,
             // without READABLE_EVENTS_FILTER_EVENTS. Ignored focus events must
@@ -347,7 +349,7 @@ struct WaitRequest {
     timers: TimerWaitPolicy,
     redisplay: bool,
     special_input: SpecialInputWaitPolicy,
-    idle_policy: crate::keyboard::IdleTransitionPolicy,
+    idle_policy: neovm_eval::emacs_core::eval::keyboard::IdleTransitionPolicy,
 }
 
 impl WaitRequest {
@@ -397,7 +399,7 @@ impl WaitRequest {
             timers,
             redisplay: false,
             special_input: SpecialInputWaitPolicy::ServiceOnly,
-            idle_policy: crate::keyboard::IdleTransitionPolicy::Manage,
+            idle_policy: neovm_eval::emacs_core::eval::keyboard::IdleTransitionPolicy::Manage,
         }
     }
 
@@ -459,7 +461,7 @@ impl WaitRequest {
             timers: TimerWaitPolicy::Run,
             redisplay: true,
             special_input: SpecialInputWaitPolicy::ServiceOnly,
-            idle_policy: crate::keyboard::IdleTransitionPolicy::Manage,
+            idle_policy: neovm_eval::emacs_core::eval::keyboard::IdleTransitionPolicy::Manage,
         }
     }
 
@@ -479,7 +481,7 @@ impl WaitRequest {
             timers: TimerWaitPolicy::Run,
             redisplay,
             special_input: SpecialInputWaitPolicy::ServiceOnly,
-            idle_policy: crate::keyboard::IdleTransitionPolicy::Manage,
+            idle_policy: neovm_eval::emacs_core::eval::keyboard::IdleTransitionPolicy::Manage,
         }
     }
 
@@ -491,7 +493,7 @@ impl WaitRequest {
             timers,
             redisplay: false,
             special_input: SpecialInputWaitPolicy::ServiceOnly,
-            idle_policy: crate::keyboard::IdleTransitionPolicy::Manage,
+            idle_policy: neovm_eval::emacs_core::eval::keyboard::IdleTransitionPolicy::Manage,
         }
     }
 
@@ -512,7 +514,7 @@ impl WaitRequest {
             timers: TimerWaitPolicy::Run,
             redisplay,
             special_input: SpecialInputWaitPolicy::Suppress,
-            idle_policy: crate::keyboard::IdleTransitionPolicy::Manage,
+            idle_policy: neovm_eval::emacs_core::eval::keyboard::IdleTransitionPolicy::Manage,
         }
     }
 
@@ -525,7 +527,7 @@ impl WaitRequest {
             timers: TimerWaitPolicy::Run,
             redisplay: false,
             special_input: SpecialInputWaitPolicy::ServiceOnly,
-            idle_policy: crate::keyboard::IdleTransitionPolicy::Manage,
+            idle_policy: neovm_eval::emacs_core::eval::keyboard::IdleTransitionPolicy::Manage,
         }
     }
 
@@ -540,7 +542,7 @@ impl WaitRequest {
             timers: TimerWaitPolicy::Run,
             redisplay: false,
             special_input: SpecialInputWaitPolicy::ServiceOnly,
-            idle_policy: crate::keyboard::IdleTransitionPolicy::Manage,
+            idle_policy: neovm_eval::emacs_core::eval::keyboard::IdleTransitionPolicy::Manage,
         }
     }
 
@@ -552,7 +554,7 @@ impl WaitRequest {
             timers: TimerWaitPolicy::Suppress,
             redisplay: false,
             special_input: SpecialInputWaitPolicy::CompleteOnResize,
-            idle_policy: crate::keyboard::IdleTransitionPolicy::Manage,
+            idle_policy: neovm_eval::emacs_core::eval::keyboard::IdleTransitionPolicy::Manage,
         }
     }
 
@@ -748,7 +750,7 @@ enum WaitCompletion {
     TargetProcessTerminated,
 }
 
-pub(crate) use crate::emacs_core::eval::input_hooks::CommandInputWaitOutcome;
+pub(crate) use neovm_eval::emacs_core::eval::input_hooks::CommandInputWaitOutcome;
 
 fn command_input_outcome_from_completion(completion: WaitCompletion) -> CommandInputWaitOutcome {
     match completion {
@@ -1040,7 +1042,7 @@ pub trait WaitContextExt {
 
     fn service_read_char_preliminary_redisplay(
         &mut self,
-        idle_policy: crate::keyboard::IdleTransitionPolicy,
+        idle_policy: neovm_eval::emacs_core::eval::keyboard::IdleTransitionPolicy,
     ) -> Result<(), Flow>;
 
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
@@ -1136,7 +1138,7 @@ pub trait WaitContextExt {
     fn wait_for_command_input_with_idle_policy(
         &mut self,
         deadline: Option<Instant>,
-        idle_policy: crate::keyboard::IdleTransitionPolicy,
+        idle_policy: neovm_eval::emacs_core::eval::keyboard::IdleTransitionPolicy,
     ) -> Result<CommandInputWaitOutcome, Flow>;
 
     fn block_for_wait_request(
@@ -1179,7 +1181,7 @@ impl WaitContextExt for super::eval::Context {
     /// unread events, while process and special-input service stays afterward.
     fn service_read_char_preliminary_redisplay(
         &mut self,
-        idle_policy: crate::keyboard::IdleTransitionPolicy,
+        idle_policy: neovm_eval::emacs_core::eval::keyboard::IdleTransitionPolicy,
     ) -> Result<(), Flow> {
         // GNU's initial-frame and inhibit guards are inside redisplay, not
         // around timer-aware detection (xdisp.c:17369-17387). Neither guard
@@ -1681,14 +1683,14 @@ impl WaitContextExt for super::eval::Context {
     ) -> Result<CommandInputWaitOutcome, Flow> {
         self.wait_for_command_input_with_idle_policy(
             deadline,
-            crate::keyboard::IdleTransitionPolicy::Manage,
+            neovm_eval::emacs_core::eval::keyboard::IdleTransitionPolicy::Manage,
         )
     }
 
     fn wait_for_command_input_with_idle_policy(
         &mut self,
         deadline: Option<Instant>,
-        idle_policy: crate::keyboard::IdleTransitionPolicy,
+        idle_policy: neovm_eval::emacs_core::eval::keyboard::IdleTransitionPolicy,
     ) -> Result<CommandInputWaitOutcome, Flow> {
         let mut request = if let Some(deadline) = deadline {
             if deadline <= Instant::now() {
@@ -1710,10 +1712,10 @@ impl WaitContextExt for super::eval::Context {
     ) -> Result<WaitBlockActivity, Flow> {
         // GNU `thread_select`: other Lisp threads run during the wait.
         let wait_time = match self.green_select_switch(wait_time)? {
-            crate::emacs_core::eval::SelectTurn::Switched => {
+            neovm_eval::emacs_core::eval::SelectTurn::Switched => {
                 return Ok(self.green_resumed_select_activity());
             }
-            crate::emacs_core::eval::SelectTurn::Block(wait_time) => wait_time,
+            neovm_eval::emacs_core::eval::SelectTurn::Block(wait_time) => wait_time,
         };
         match self.wait_block(request, wait_time) {
             WaitBlock::Poll => Ok(WaitBlockActivity::poll()),

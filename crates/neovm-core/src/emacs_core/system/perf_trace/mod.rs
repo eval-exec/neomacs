@@ -201,8 +201,8 @@ pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
     );
 }
 
-fn record_eval_op(op: crate::emacs_core::eval::perf::PerfOp, elapsed: Duration) {
-    use crate::emacs_core::eval::perf::PerfOp;
+fn record_eval_op(op: neovm_eval::emacs_core::eval::perf::PerfOp, elapsed: Duration) {
+    use neovm_eval::emacs_core::eval::perf::PerfOp;
     let op = match op {
         PerfOp::StringMatch => HotpathOp::StringMatch,
         PerfOp::RegexCompileHit => HotpathOp::RegexCompileHit,
@@ -226,15 +226,15 @@ const PERF_CARRIER_FINGERPRINT: Option<fn(&mut u64)> = Some(carrier_tls_fingerpr
 const PERF_CARRIER_FINGERPRINT: Option<fn(&mut u64)> = None;
 
 /// The one canonical perf pair + carrier descriptor (peer-ruled C7/PC2 shape).
-static CANONICAL_PERF_HOOKS: crate::emacs_core::eval::perf::PerfHooks =
-    crate::emacs_core::eval::perf::PerfHooks::new(
+static CANONICAL_PERF_HOOKS: neovm_eval::emacs_core::eval::perf::PerfHooks =
+    neovm_eval::emacs_core::eval::perf::PerfHooks::new(
         record_eval_op,
         reset_carrier_tls,
         PERF_CARRIER_FINGERPRINT,
     );
 
 /// The one canonical hot-path perf pair.
-pub(crate) fn canonical_perf_hooks() -> &'static crate::emacs_core::eval::perf::PerfHooks {
+pub(crate) fn canonical_perf_hooks() -> &'static neovm_eval::emacs_core::eval::perf::PerfHooks {
     &CANONICAL_PERF_HOOKS
 }
 
@@ -244,7 +244,7 @@ pub(crate) fn canonical_perf_enabled() -> bool {
 }
 
 pub(crate) fn install_perf_hooks() {
-    let installed = crate::emacs_core::eval::perf::install_perf_hooks(
+    let installed = neovm_eval::emacs_core::eval::perf::install_perf_hooks(
         hotpath_timing_enabled(),
         &CANONICAL_PERF_HOOKS,
     );

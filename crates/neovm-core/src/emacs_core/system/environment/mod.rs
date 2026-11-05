@@ -9,9 +9,9 @@
 use super::error::EvalResult;
 use super::eval::Context;
 use super::value::Value;
-use crate::emacs_core::eval::data::window_state::{Frame, FrameDisplayIdentity};
 use crate::heap_types::LispString;
 use neovm_edit::emacs_core::edit_host::EditHost;
+use neovm_eval::emacs_core::eval::data::window_state::{Frame, FrameDisplayIdentity};
 use neovm_value::display_vocab::{FrameId, FrameQueryParam};
 use std::ffi::{OsStr, OsString};
 #[cfg(unix)]
@@ -346,7 +346,11 @@ fn selected_frame_display(eval: &mut Context, frame: Value) -> EvalResult {
         return Ok(frame_x_display_value(frame).unwrap_or(Value::NIL));
     }
 
-    crate::emacs_core::eval::lifecycle::frame_parameter_entry(eval, frame, Value::symbol("display"))
+    neovm_eval::emacs_core::eval::lifecycle::frame_parameter_entry(
+        eval,
+        frame,
+        Value::symbol("display"),
+    )
 }
 
 /// Resolve `getenv-internal` through GNU's environment policy.
