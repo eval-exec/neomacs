@@ -183,8 +183,7 @@ impl<K: EraKeeper> EraCore<'_, K> {
     }
 
     #[cfg(any(test, feature = "test-support"))]
-    #[doc(hidden)]
-    pub fn cons_catalog_snapshot_for_test(
+    pub(super) fn cons_catalog_snapshot_for_test(
         &self,
     ) -> Result<super::super::cons_storage::CatalogSnapshot, RegistrationError> {
         self.registry().cons_catalog.snapshot_for_test()
