@@ -83,9 +83,18 @@ fn canonical_pair_pointer_from_allocation_root_survives_cold_replacement() {
 
 #[test]
 fn canonical_pair_preserves_completed_writer_updates_after_rust_panic() {
-    let mut obarray = Obarray::new();
+    let mut obarray =
+        Obarray::from_dump(Vec::new(), Vec::new(), Vec::new(), 17).expect("empty dump restores");
+    let snapshot = neovm_value::test_support::authority::snapshot_function_epoch_for_test(&obarray);
+    // A real canonical writer moves the clock, so the restore below is an
+    // observable completed update rather than a no-op.
+    let id = intern("world-canonical-panic-clock");
+    obarray.set_symbol_function_id(id, Value::fixnum(1));
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        obarray.set_function_epoch_for_test(17);
+        neovm_value::test_support::authority::restore_function_epoch_for_test(
+            &mut obarray,
+            snapshot,
+        );
         panic!("permitted canonical-writer panic");
     }));
     assert!(result.is_err());

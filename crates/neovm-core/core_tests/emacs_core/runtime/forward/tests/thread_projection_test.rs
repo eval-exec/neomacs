@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::buffer::buffer::{BUFFER_SLOT_COUNT, BufferSlot};
+use neovm_value::test_support::authority::{from_address, project_for_test, set_plain_value};
 
 static_assertions::assert_not_impl_any!(ThreadProjectionDescriptor: Copy, Clone, Send, Sync);
 static_assertions::assert_not_impl_any!(ThreadProjectionTable: Send, Sync, Clone);
@@ -21,7 +22,7 @@ fn plain_projection(
     table: &mut ThreadProjectionTable,
     value: Value,
 ) -> &'static ThreadProjectionDescriptor {
-    table.project_for_test(CanonicalArm::Plain, value, false)
+    project_for_test(table, CanonicalArm::Plain, value, false)
 }
 
 /// The family byte is untouched: a projection reads as a per-buffer header
@@ -35,10 +36,10 @@ fn projection_heads_with_a_per_buffer_header_no_buffer_has() {
         ForwardSlot::BufferObj(buf_fwd) => buf_fwd,
         other => panic!("projection resolved to {other:?}"),
     };
-    assert_eq!(buf_fwd.offset, THREAD_PROJECTION_OFFSET);
+    assert_eq!(buf_fwd.offset_for_test(), THREAD_PROJECTION_OFFSET);
     assert_eq!(buf_fwd.local_flags_idx, -1);
     assert!(buf_fwd.default.is_unbound());
-    assert!(BufferSlot::from_u16(buf_fwd.offset).is_none());
+    assert!(BufferSlot::from_u16(buf_fwd.offset_for_test()).is_none());
 }
 
 /// The only ways from a per-buffer header to a slot are the two checked
@@ -130,13 +131,13 @@ fn canonical_storage_keeps_the_logical_cell() {
     assert_eq!(plain.plain_value(), Value::fixnum(4242));
     // The plain word is an ordinary objfwd the obarray roots.
     assert_eq!(plain.plain_root().load(), Some(Value::fixnum(4242)));
-    plain.set_plain_value(Value::fixnum(1));
+    set_plain_value(plain, Value::fixnum(1));
     assert_eq!(plain.plain_value(), Value::fixnum(1));
     assert_eq!(plain.plain_root().load(), Some(Value::fixnum(1)));
 
     let builtin = alloc_objfwd(Value::fixnum(7)).header();
     let arm = CanonicalArm::Forwarded(BuiltinForwarder::new(builtin).expect("a GNU family"));
-    let wrapped = table.project_for_test(arm, Value::UNBOUND, true);
+    let wrapped = project_for_test(&mut table, arm, Value::UNBOUND, true);
     assert!(wrapped.host_projected());
     match wrapped.arm() {
         CanonicalArm::Forwarded(canonical) => {
@@ -206,7 +207,8 @@ fn miriub3_fwdref_resolves_whole_thread_projection() {
         handle.thread_projection().unwrap(),
         projection
     ));
-    let stored = FwdRef::from_address(handle.address());
+    // SAFETY: handle.address() names the live descriptor header built above.
+    let stored = unsafe { from_address(handle.address()) };
     let resolved = stored.thread_projection().unwrap();
     assert!(std::ptr::eq(resolved, projection));
     assert_eq!(resolved.plain_value(), Value::fixnum(97));

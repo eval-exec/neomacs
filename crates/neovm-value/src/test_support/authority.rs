@@ -112,3 +112,76 @@ pub unsafe fn admit_rooted_for_test<'heap, K: crate::tagged::gc::EraKeeper>(
     // SAFETY: the caller contract is identical to `ProofEra::admit_rooted_with`.
     unsafe { ProofEra::admit_rooted_with(collector, keeper, roots, prepare) }
 }
+
+/// P1-HOOKS-2 FENCE (peer 16:4xZ): issue a thread projection. Identical
+/// signature to `ThreadProjectionTable::project_for_test`; the method stays
+/// `pub(crate)` and `cfg(any(test, feature = "test-support"))`, and the table
+/// is the only authority that maps a header back to its descriptor.
+pub fn project_for_test(
+    table: &mut crate::forward::ThreadProjectionTable,
+    arm: crate::forward::CanonicalArm,
+    plain: crate::value::Value,
+    host_projected: bool,
+) -> &'static crate::forward::ThreadProjectionDescriptor {
+    table.project_for_test(arm, plain, host_projected)
+}
+
+/// P1-HOOKS-2 FENCE (peer 16:4xZ): write a descriptor's canonical plain word.
+/// Same body as `ThreadProjectionDescriptor::set_plain_value`, whose note-the-
+/// overwritten-word contract is unchanged; the method stays `pub(crate)`.
+pub fn set_plain_value(
+    descriptor: &crate::forward::ThreadProjectionDescriptor,
+    value: crate::value::Value,
+) {
+    descriptor.set_plain_value(value);
+}
+
+/// P1-HOOKS-2 unsafe FENCE (peer 16:4xZ): rebuild a cell handle from a raw
+/// header address, exactly as `FwdRef::from_address`.
+///
+/// # Safety
+/// The caller must pass an address that names a live descriptor header (the
+/// cell only stores addresses that came from `FwdRef::of`); the conversion is
+/// infallible by that invariant.
+pub unsafe fn from_address(address: usize) -> crate::forward::FwdRef {
+    // SAFETY: the caller contract is identical to `FwdRef::from_address`'s.
+    unsafe { crate::forward::FwdRef::from_address(address) }
+}
+
+/// P1-HOOKS-2 unsafe FENCE (peer 16:4xZ): promote a header to the permanent
+/// generation through the `ImageResident` capability.
+///
+/// # Safety
+/// `header` must belong to an object live in this heap, and the caller must
+/// hold the world-stopped guarantee: no collection is in progress and no
+/// mutator is running. The permanent generation stays reserved for the dump
+/// image; `resident` must be the real image-row proof (or its `for_test`
+/// capability in a fixture).
+pub unsafe fn make_permanent_for_test(
+    header: &mut crate::tagged::header::GcHeader,
+    resident: &crate::tagged::header::ImageResident,
+) {
+    header.make_permanent(resident);
+}
+
+/// P1-HOOKS-2 FENCE (peer 16:4xZ): opaque copy of an obarray's function-cell
+/// publication clock. The value can only be minted by
+/// [`snapshot_function_epoch_for_test`] from a live obarray and restored into
+/// the same obarray; it is not a general epoch setter (forging the clock can
+/// make stale dispatch caches look valid).
+#[derive(Clone, Copy, Debug)]
+pub struct FunctionEpochSnapshot(u64);
+
+/// The snapshot half of the signed snapshot/restore fence.
+pub fn snapshot_function_epoch_for_test(obarray: &crate::symbol::Obarray) -> FunctionEpochSnapshot {
+    FunctionEpochSnapshot(obarray.function_epoch_snapshot_raw())
+}
+
+/// The restore half of the signed snapshot/restore fence: store back a clock
+/// this same obarray read earlier.
+pub fn restore_function_epoch_for_test(
+    obarray: &mut crate::symbol::Obarray,
+    snapshot: FunctionEpochSnapshot,
+) {
+    obarray.restore_function_epoch_raw(snapshot.0);
+}

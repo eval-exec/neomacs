@@ -4933,6 +4933,25 @@ impl Obarray {
             .store(epoch, Ordering::Release);
     }
 
+    /// Test-support: read the clock for the signed snapshot half of the
+    /// snapshot/restore fence. The value only leaves through the opaque
+    /// [`crate::test_support::authority::FunctionEpochSnapshot`].
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn function_epoch_snapshot_raw(&self) -> u64 {
+        self.dispatch_cells.function_epoch()
+    }
+
+    /// Test-support: restore a clock previously read from THIS obarray
+    /// through the signed restore half of the fence. Not a general setter:
+    /// the snapshot type is opaque and can only be minted by the snapshot
+    /// call.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn restore_function_epoch_raw(&mut self, epoch: u64) {
+        self.dispatch_cells
+            .function_epoch
+            .store(epoch, Ordering::Release);
+    }
+
     /// True when `fmakunbound` explicitly masked this symbol's fallback function definition.
     pub fn is_function_unbound(&self, name: &str) -> bool {
         self.is_function_unbound_id(intern(name))

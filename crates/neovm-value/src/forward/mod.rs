@@ -913,6 +913,15 @@ impl LispBufferObjFwd {
         UncheckedSlotIndex(self.offset as usize)
     }
 
+    /// Test-support: the raw `offset` word (a copy). The field stays private;
+    /// a thread projection's marker only reaches a test through this read.
+    #[inline(always)]
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn offset_for_test(&self) -> u16 {
+        self.offset
+    }
+
     /// GNU `do_symval_forwarding`'s `Lisp_Fwd_Buffer_Obj` arm plus
     /// `PER_BUFFER_VALUE_P` (`src/data.c:1345-1350`, `buffer.h:1640`): the
     /// value this slot reads in the buffer whose slot array is SLOTS and whose

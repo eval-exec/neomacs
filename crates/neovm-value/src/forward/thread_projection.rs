@@ -233,7 +233,8 @@ impl ThreadProjectionDescriptor {
     }
 
     /// The forwarder whose slot is the plain word.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn plain_root(&'static self) -> FwdRef {
         use super::FwdDescriptor;
         self.plain.header()
@@ -338,6 +339,7 @@ impl ThreadProjectionTable {
     /// How many projections the table has issued (VOID not counted).
     #[inline]
     #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn len(&self) -> usize {
         self.issued.len()
     }
@@ -345,6 +347,7 @@ impl ThreadProjectionTable {
     /// Whether no projection has been issued.
     #[inline]
     #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn is_empty(&self) -> bool {
         self.issued.is_empty()
     }
@@ -356,6 +359,7 @@ impl ThreadProjectionTable {
     /// matched against this table's, so a header copied out of a projection
     /// is never mistaken for one.
     #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn projection(&self, fwd: FwdRef) -> Option<&'static ThreadProjectionDescriptor> {
         if fwd.as_buffer_obj_fwd()?.offset != THREAD_PROJECTION_OFFSET {
             return None;
@@ -395,6 +399,7 @@ impl ThreadProjectionTable {
 
     /// The descriptor issued for INDEX, if any (never VOID).
     #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn get(&self, index: TlsIndex) -> Option<&'static ThreadProjectionDescriptor> {
         self.issued.get(index.slot().checked_sub(1)?).copied()
     }
@@ -479,7 +484,7 @@ impl ThreadProjectionTable {
     }
 
     /// [`Self::issue`] under its pre-3c name, for the table's unit tests.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn project_for_test(
         &mut self,
         arm: CanonicalArm,

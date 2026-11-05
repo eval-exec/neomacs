@@ -46,7 +46,15 @@ fn pending_permanent_table(heap: &mut TaggedHeap) -> Value {
     let header = value.as_veclike_ptr().unwrap() as *mut crate::tagged::header::GcHeader;
     // Model a permanent table loaded before its parked entries are touched.
     // No allocation or safe point occurs between publication and this flag.
-    unsafe { (*header).make_permanent(&ImageResident::for_test()) };
+    // SAFETY: the header names this heap's live table and the world is
+    // stopped here (single-threaded test, no allocation or safe point
+    // between publication and this mark).
+    unsafe {
+        neovm_value::test_support::authority::make_permanent_for_test(
+            &mut *header,
+            &ImageResident::for_test(),
+        )
+    };
     value
 }
 
