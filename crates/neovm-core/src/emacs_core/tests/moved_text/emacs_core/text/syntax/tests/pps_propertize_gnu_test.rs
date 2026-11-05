@@ -3,30 +3,6 @@
 //! (`NEOVM_ORACLE_MODE=refresh UPDATE_EXPECT=1`): `parse-partial-sexp` runs
 //! `syntax-propertize` where GNU's scan does (U0.7, P3.4 C0d).
 
-use neovm_value::emacs_char::EmacsChar;
-use neovm_value::error::LispCondition;
-use neovm_value::symbol::CanonicalAccess;
-use std::cell::{Cell, RefCell};
-use std::ops::Deref;
-use strum::{EnumString, IntoStaticStr};
-use neovm_edit::buffer::{
-    Buffer, BufferManager, CharLen, CharPos0, EmacsByteLen, EmacsBytePos, LispCharPos1,
-    TextPropertyTable,
-};
-use neovm_edit::emacs_core::edit_host::EditVariableRead;
-use neovm_edit::emacs_core::textprop::CharPropertyResolver;
-use neovm_value::error::{EvalResult, Flow, signal};
-use neovm_value::heap_types::{GnuStringCharPos, LispString, StringCharacterCountKind};
-use neovm_value::value::{Value, ValueKind, list_to_vec};
-use parse_loop::{Entry, Plain, SafePositionRecorder, ScanEnd, ScanFinish, run_parse_loop};
-    use std::sync::OnceLock;
-        use std::sync::OnceLock;
-        use neovm_edit::buffer::buffer::BUFFER_SLOT_SYNTAX_TABLE;
-        use LispSyntaxObjectReuse::{CanonicalBare, Fresh};
-    use neovm_edit::buffer::buffer::BUFFER_SLOT_SYNTAX_TABLE;
-        use neovm_text::emacs_core::regex_emacs::BoundarySyntaxMode;
-    use neovm_text::emacs_core::regex_emacs::SyntaxAssertion;
-
 use crate::test_utils::{oracle_expect_transcript, runtime_startup_eval_one};
 
 /// An emacs-lisp-mode buffer: a scan from BEGV propertizes chunk by chunk

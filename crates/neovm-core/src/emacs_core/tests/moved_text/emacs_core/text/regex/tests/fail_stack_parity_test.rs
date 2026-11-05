@@ -5,15 +5,6 @@
 //! Every expected value below is GNU 31.1's `(string-match RE S)` followed by
 //! `(match-data t)` (probe: `tmp/probes/nasty.el` in the U0.5 worktree).
 
-use neovm_value::tagged::SymbolMode;
-use rustc_hash::FxHashMap;
-use std::collections::HashSet;
-use neovm_text::emacs_core::syntax::SyntaxClass;
-use neovm_value::{emacs_char, value::Value};
-use regex_automata::{MatchKind, Span};
-use smallvec::SmallVec;
-    use std::panic::{AssertUnwindSafe, catch_unwind};
-
 use neovm_eval::emacs_core::eval::Context;
 use neovm_text::emacs_core::regex_emacs::*;
 

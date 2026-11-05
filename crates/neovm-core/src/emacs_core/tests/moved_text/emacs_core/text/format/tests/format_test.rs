@@ -1,7 +1,3 @@
-use neovm_value::error::LispCondition;
-use neovm_value::error::{Flow, signal};
-    use std::time::{SystemTime, UNIX_EPOCH};
-
 use neovm_value::value::Value;
 use crate::emacs_core::format_time_entries::builtin_format_time_string;
 use crate::emacs_core::autoload::is_autoload_value;

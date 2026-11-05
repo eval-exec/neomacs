@@ -9,10 +9,6 @@
 //! and point, must equal the uncached scan's; the cache must actually serve
 //! (exact answers and resumes), and each invalidation path must be taken.
 
-use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
-use std::collections::HashMap;
-use std::sync::{LazyLock, Mutex};
-
 use neovm_value::value::list_to_vec;
 use neovm_value::value::Value;
 use neovm_text::emacs_core::syntax::builtin_parse_partial_sexp_6;

@@ -1,5 +1,3 @@
-    use neovm_value::emacs_char;
-
 use crate::emacs_core::print::PrintOptions;
 
 use crate::emacs_core::print::string_format::format_lisp_string_bytes_inner;

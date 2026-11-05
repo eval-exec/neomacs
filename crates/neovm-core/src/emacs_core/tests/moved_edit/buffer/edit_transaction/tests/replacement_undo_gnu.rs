@@ -9,16 +9,6 @@
 //! MODIFF changes only afterward at insdel.c:1687. A clean replacement therefore
 //! has two first-change entries; an already modified buffer has none.
 
-use neovm_edit::buffer::text::TextExtentDelta;
-use neovm_edit::buffer::undo;
-use neovm_edit::buffer::{
-    BufferId, BufferText, CharLen, CharPos0, EmacsByteLen, EmacsBytePos, EmacsByteRange,
-    TextEditRange, TextExtent, TextInsertion, TextPositionAnchor, TextPropertyTable,
-    TextReplacement, TextTransposition,
-};
-use neovm_value::heap_types::LispString;
-use neovm_value::value::Value;
-
 use crate::test_utils::runtime_startup_eval_one;
 
 #[test]

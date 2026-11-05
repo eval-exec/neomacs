@@ -3,10 +3,6 @@
 //! their first character, wholesale changes as "everything", and a change
 //! that bypassed the notes as "everything" too.
 
-use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
-use std::collections::HashMap;
-use std::sync::{LazyLock, Mutex};
-
 use neovm_eval::emacs_core::eval::Context;
 use neovm_edit::buffer::syntax_cache::Invalidation;
 use neovm_edit::buffer::syntax_cache::SyntaxMutationNotes;

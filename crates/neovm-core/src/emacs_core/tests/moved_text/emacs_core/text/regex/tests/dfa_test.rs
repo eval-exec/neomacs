@@ -1,9 +1,5 @@
 //! Tests of the existence DFA (P3.3): the NFA over the rewind view (C2).
 
-use rustc_hash::FxHashMap;
-use smallvec::SmallVec;
-use std::cell::{RefCell, RefMut};
-
 use neovm_value::emacs_char;
 use neovm_text::emacs_core::regex_emacs::SyntaxLookup;
 use neovm_text::emacs_core::regex_emacs::CompiledPattern;

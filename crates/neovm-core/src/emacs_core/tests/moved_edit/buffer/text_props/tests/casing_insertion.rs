@@ -1,10 +1,3 @@
-use neovm_edit::emacs_core::textprop::{
-    DirectCharProperties, StickinessProperty, TextPropertyControlVariable,
-    resolve_effective_char_property,
-};
-use neovm_value::error::{Flow, LispCondition, signal};
-use neovm_value::symbol::Obarray;
-
 use neovm_value::value::positions::CharRange;
 use neovm_value::value::positions::CharPos0;
 use neovm_value::value::positions::CharLen;

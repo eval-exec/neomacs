@@ -1,10 +1,6 @@
 //! Recursive custom-type descriptors are runtime roots, independently of the
 //! variable's default value. These tests use explicit roots and no Lisp code.
 
-use std::collections::HashMap;
-use neovm_value::intern::SymId;
-use neovm_value::intern::intern;
-
 use neovm_value::gc_trace::GcTrace;
 use super::{CustomType, CustomVariable, GcTrace, LispString, ModeRegistry, Value};
 

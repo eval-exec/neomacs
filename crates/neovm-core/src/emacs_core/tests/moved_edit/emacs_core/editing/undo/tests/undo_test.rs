@@ -1,12 +1,3 @@
-use neovm_edit::buffer::buffer::UndoBoundaryOutcome;
-use neovm_value::error::expect_args;
-use neovm_value::error::{EvalResult, Flow, signal};
-use neovm_value::intern::WellKnown;
-use neovm_value::value::scratch_bridge::{
-    push_scratch_gc_root, restore_scratch_gc_roots, save_scratch_gc_roots,
-};
-    use neovm_edit::buffer::{UndoLimits, UndoRecording};
-
 use neovm_value::value::Value;
 use neovm_value::tagged::value::ValueKind;
 use neovm_edit::emacs_core::undo::*;

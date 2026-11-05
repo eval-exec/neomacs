@@ -2,15 +2,6 @@
 //! GNU undo.c:163-190 records point, marker adjustments, then deleted text;
 //! insdel.c:2023-2037 relocates markers even when undo is disabled.
 
-use neovm_edit::buffer::text::TextExtentDelta;
-use neovm_edit::buffer::undo;
-use neovm_edit::buffer::{
-    BufferId, BufferText, CharLen, CharPos0, EmacsByteLen, EmacsBytePos, EmacsByteRange,
-    TextEditRange, TextExtent, TextInsertion, TextPositionAnchor, TextPropertyTable,
-    TextReplacement, TextTransposition,
-};
-use neovm_value::heap_types::LispString;
-
 use neovm_value::value::Value;
 use crate::emacs_core::print::print_value;
 

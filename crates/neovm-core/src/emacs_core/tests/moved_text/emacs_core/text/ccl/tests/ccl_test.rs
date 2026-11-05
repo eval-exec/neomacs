@@ -1,15 +1,3 @@
-use self::command::CclCommand;
-use self::expr::{eval_expr_self, eval_set_expr};
-use self::extension::{ExtensionStep, MapMultipleState, execute_extension};
-use neovm_value::tagged::value::SymbolMode;
-use neovm_value::error::LispCondition;
-use neovm_value::error::{EvalResult, Flow, signal};
-use neovm_value::error::{expect_args, expect_max_args, expect_min_args};
-use neovm_value::heap_registry::{HeapRegistryHandle, HeapRegistrySlot};
-use neovm_value::intern::SymId;
-use std::cell::Cell;
-use std::collections::HashMap;
-
 use neovm_value::value::Value;
 use neovm_text::emacs_core::ccl::*;
 

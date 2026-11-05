@@ -1,6 +1,3 @@
-use neovm_value::error::LispCondition;
-use neovm_value::error::{expect_args, expect_args_range};
-
 use neovm_value::value::Value;
 use neovm_value::error::EvalResult;
 use neovm_eval::emacs_core::eval::Context;

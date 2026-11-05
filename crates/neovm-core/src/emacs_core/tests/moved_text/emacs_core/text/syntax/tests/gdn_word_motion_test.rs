@@ -1,8 +1,3 @@
-use neovm_edit::buffer::buffer::{Buffer, BufferId};
-use neovm_edit::buffer::{CharPos0, LispCharPos1};
-use neovm_value::error::{FlowKind, FlowResultExt as _};
-use neovm_value::value::eq_value;
-
 use crate::test_utils::runtime_startup_eval_one;
 
 #[test]

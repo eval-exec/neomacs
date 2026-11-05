@@ -1,21 +1,3 @@
-use neovm_edit::buffer::overlay::OverlayModificationHook;
-use neovm_edit::emacs_core::edit_host::EditVariableRead;
-use neovm_value::error::LispCondition;
-use neovm_value::error::{EvalResult, Flow, signal};
-use neovm_value::heap_types::LispString;
-use neovm_value::value::ValueKind;
-use std::ffi::CStr;
-use strum::IntoStaticStr;
-    use neovm_value::symbol::{SymbolRedirect, SymbolTrappedWrite};
-    use neovm_value::emacs_char;
-    use neovm_value::emacs_char::string_char_advance;
-    use neovm_value::emacs_char::{MAX_CHAR, MAX_MULTIBYTE_LENGTH, char_string};
-    use neovm_value::chartab::{builtin_char_table_subtype, ct_lookup_with_symbols, is_char_table};
-    use neovm_value::emacs_char::{
-        MAX_CHAR, MAX_MULTIBYTE_LENGTH, byte8_to_char, char_string, chars_in_multibyte,
-        string_char_advance,
-    };
-
 use neovm_value::value::positions::CharLen;
 use neovm_value::value::Value;
 use neovm_value::value::OrderedRuntimeBindingMap;

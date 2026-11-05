@@ -1,16 +1,3 @@
-use neovm_edit::emacs_core::edit_host::{EditHost, EditVariableRead};
-use neovm_edit::emacs_core::word_wrap::{WordWrapDirection, WordWrapOpportunity, WordWrapPolicy};
-use neovm_value::error::LispCondition;
-use neovm_value::error::{EvalResult, Flow, signal};
-use neovm_value::error::{
-    expect_args, expect_args_range, expect_fixnum, expect_max_args, expect_min_args,
-};
-use neovm_value::heap_types::LispString;
-use neovm_value::value::ValueKind;
-use std::cell::Cell;
-use std::collections::VecDeque;
-use std::sync::OnceLock;
-
 use neovm_value::value::buffer_vocab::BufferId;
 use neovm_value::heap_types::byte_positions::EmacsByteRange;
 use neovm_value::heap_types::byte_positions::EmacsBytePos;

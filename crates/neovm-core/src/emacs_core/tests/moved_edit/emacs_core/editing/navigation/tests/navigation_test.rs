@@ -1,15 +1,3 @@
-use neovm_edit::buffer::syntax_class::{SyntaxClass, SyntaxTableView};
-use neovm_edit::buffer::{
-    AccessibleEmacsByteRange, BufferLispPos, BufferManager, CharPos0, EmacsByteLen, EmacsBytePos,
-    EmacsByteRange, LispCharPos1,
-};
-use neovm_edit::emacs_core::edit_host::{EditHost, EditVariableRead};
-use neovm_value::error::LispCondition;
-use neovm_value::error::{EvalResult, Flow, signal};
-use neovm_value::error::{expect_args, expect_fixnum, expect_max_args, expect_min_args};
-use neovm_value::intern::intern;
-use num_enum::{IntoPrimitive, TryFromPrimitive};
-
 use crate::emacs_core::eval::Context;
 
 use neovm_value::error::FlowKind;

@@ -1,15 +1,5 @@
 //! Transposition observations refreshed only from GNU Emacs 31.1.
 
-use neovm_edit::buffer::text::TextExtentDelta;
-use neovm_edit::buffer::undo;
-use neovm_edit::buffer::{
-    BufferId, BufferText, CharLen, CharPos0, EmacsByteLen, EmacsBytePos, EmacsByteRange,
-    TextEditRange, TextExtent, TextInsertion, TextPositionAnchor, TextPropertyTable,
-    TextReplacement, TextTransposition,
-};
-use neovm_value::heap_types::LispString;
-use neovm_value::value::Value;
-
 use crate::test_utils::runtime_startup_eval_one;
 
 use std::path::PathBuf;
