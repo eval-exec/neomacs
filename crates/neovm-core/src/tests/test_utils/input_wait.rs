@@ -5,8 +5,10 @@
 
 use crate::emacs_core::Context;
 use crate::emacs_core::eval::QuitRequest;
-use crate::emacs_core::process::{BackendWaitEntry, WaitNotifier};
+use crate::emacs_core::process::{BackendWaitEntry, SystemProcessExt, WaitNotifier};
 use crate::keyboard::InputEvent;
+use neovm_display::window::DisplayFrameManagerExt;
+use neovm_system::emacs_core::wait::WaitContextExt;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -16,8 +18,8 @@ pub(crate) use crate::host_input::{HostInputPublishError, HostInputPublisher};
 
 /// Give timer fixtures a displayed buffer whose real edits admit redisplay.
 pub(crate) fn select_visible_fixture(context: &mut Context, name: &str) {
-    let buffer = context.buffers.create_buffer(name);
-    context.buffers.set_current(buffer);
+    let buffer = context.edit.buffers.create_buffer(name);
+    context.edit.buffers.set_current(buffer);
     let frame = context.frames.create_frame("wait-fixture", 80, 24, buffer);
     assert!(
         context.frames.select_frame(frame),
