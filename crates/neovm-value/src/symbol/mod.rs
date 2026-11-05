@@ -2152,7 +2152,7 @@ impl Obarray {
     /// **This is not GNU's `Vfoo`.** For a symbol some buffer has localised it
     /// answers the BLV *defcell*, and for a `DEFVAR_PER_BUFFER` name it
     /// answers `None`; see [`BufferlessValue`] for why, and
-    /// [`Self::value_in_buffer`] for the reader that does mirror GNU's C.
+    /// [`Self::canonical_value_in_buffer`] for the reader that does mirror GNU's C.
     ///
     /// The returned word does not borrow the mutable symbol or descriptor slot.
     #[inline]
@@ -2190,7 +2190,7 @@ impl Obarray {
         self.canonical_value_in_buffer_id(access, buf, intern(name))
     }
 
-    /// [`Self::value_in_buffer`] by identity.
+    /// [`Self::canonical_value_in_buffer`] by identity.
     ///
     /// The `local_var_alist` lookup is gated on [`Self::is_localized`]: a
     /// symbol no buffer has ever localised can have no alist entry (every
@@ -2274,7 +2274,7 @@ impl Obarray {
     /// A deliberate buffer-less read, with the disagreement with GNU named.
     ///
     /// Use this where a site genuinely has no buffer and the ledger row that
-    /// licensed it can be cited at the `match`; use [`Self::value_in_buffer`]
+    /// licensed it can be cited at the `match`; use [`Self::canonical_value_in_buffer`]
     /// everywhere else.
     pub fn canonical_value_without_buffer(
         &self,
@@ -5168,20 +5168,6 @@ impl Obarray {
     }
     pub fn symbol_value_id_or_nil(&self, id: SymId) -> Value {
         self.canonical_value_or_nil(CanonicalAccess::TEST, id)
-    }
-    pub fn value_in_buffer(
-        &self,
-        buf: Option<&crate::buffer::Buffer>,
-        name: &str,
-    ) -> Option<Value> {
-        self.canonical_value_in_buffer(CanonicalAccess::TEST, buf, name)
-    }
-    pub fn value_in_buffer_id(
-        &self,
-        buf: Option<&crate::buffer::Buffer>,
-        id: SymId,
-    ) -> Option<Value> {
-        self.canonical_value_in_buffer_id(CanonicalAccess::TEST, buf, id)
     }
     pub fn value_without_buffer(&self, name: &str) -> BufferlessValue {
         self.canonical_value_without_buffer(CanonicalAccess::TEST, name)

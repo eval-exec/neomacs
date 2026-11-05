@@ -2780,7 +2780,7 @@ pub use aliasable::AliasableBox;
 mod test_heap;
 #[cfg(test)]
 #[doc(hidden)]
-pub use test_heap::{SyntheticConcurrentBarrier, TestHeap};
+pub(crate) use test_heap::{SyntheticConcurrentBarrier, TestHeap};
 
 #[cfg(not(feature = "test-support"))]
 mod arena_pages;
