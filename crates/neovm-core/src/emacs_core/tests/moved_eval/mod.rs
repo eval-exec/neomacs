@@ -140,6 +140,9 @@ mod emacs_core_runtime_eval_tests_idle_redisplay_test_rs;
 // private tier_i state is reached through the signed eval test-support
 // fences; the context-free parser tests stay in eval).
 #[cfg(test)]
+#[path = "emacs_core/lisp/native/builtins/tests/gd_e_sort.rs"]
+mod emacs_core_lisp_native_builtins_tests_gd_e_sort_rs;
+#[cfg(test)]
 #[path = "emacs_core/runtime/eval/tier_i/tests/analyzer_test.rs"]
 mod emacs_core_runtime_eval_tier_i_tests_analyzer_test_rs;
 #[cfg(test)]
@@ -154,9 +157,6 @@ mod emacs_core_runtime_eval_tier_i_tests_knob_fresh_context_test_rs;
 #[cfg(test)]
 #[path = "emacs_core/runtime/eval/tier_i/tests/soak_test.rs"]
 mod emacs_core_runtime_eval_tier_i_tests_soak_test_rs;
-#[cfg(test)]
-#[path = "emacs_core/lisp/native/builtins/tests/gd_e_sort.rs"]
-mod emacs_core_lisp_native_builtins_tests_gd_e_sort_rs;
 
 #[cfg(test)]
 #[path = "emacs_core/lisp/native/builtins/tests/gd_e_sort_stack_temporary.rs"]
