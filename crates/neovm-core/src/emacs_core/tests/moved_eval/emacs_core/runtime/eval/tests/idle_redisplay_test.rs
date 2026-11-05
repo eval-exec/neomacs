@@ -3,7 +3,9 @@
 //! does (xdisp.c:14237-14262): with nil -- the selected window only -- when
 //! nothing needs redisplay, with t otherwise.
 
-use super::*;
+use crate::emacs_core::eval::*;
+use crate::window::{DisplayFrameExt, DisplayFrameManagerExt};
+use neovm_value::value::Value;
 
 /// A context with one frame showing a buffer of text, a counting
 /// `redisplay_fn`, and a recording `pre-redisplay-function`.
@@ -11,12 +13,18 @@ use super::*;
 /// Counter fixtures explicitly select the legacy contract; the marker-value
 /// fixture keeps the ambient policy to exercise GNU ownership when enabled.
 fn idle_context() -> (Context, std::rc::Rc<std::cell::Cell<usize>>) {
-    let mut eval = Context::new();
-    let buf_id = eval.buffers.current_buffer_id().expect("current buffer");
-    eval.frames
+    let mut eval = crate::test_utils::new_context();
+    let buf_id = eval
+        .buffer_manager()
+        .current_buffer_id()
+        .expect("current buffer");
+    eval.frame_manager_mut()
         .create_frame("idle-redisplay", 80 * 8, 24 * 16, buf_id);
     let text: String = (0..50).map(|i| format!("line {i}\n")).collect();
-    eval.buffers.get_mut(buf_id).expect("buffer").insert(&text);
+    eval.buffer_manager_mut()
+        .get_mut(buf_id)
+        .expect("buffer")
+        .insert(&text);
     eval.eval_str(
         "(progn (goto-char 120)
                 (defvar idle-prered-args nil)
@@ -37,7 +45,7 @@ fn idle_context() -> (Context, std::rc::Rc<std::cell::Cell<usize>>) {
 }
 
 fn acknowledge_current_buffer(eval: &Context) {
-    if let Some(buffer) = eval.buffers.current_buffer() {
+    if let Some(buffer) = eval.buffer_manager().current_buffer() {
         buffer.reset_unchanged_region();
     }
 }
@@ -66,14 +74,14 @@ fn an_idle_redisplay_skips_layout_but_runs_pre_redisplay_function() {
 #[test]
 fn a_forced_idle_redisplay_lays_out_unless_the_idle_skip_is_on() {
     let _policy = RedisplayHookPolicyGuard::legacy();
-    crate::emacs_core::xdisp::set_redisplay_idle_skip_for_test(Some(false));
+    neovm_display::test_support::authority::set_redisplay_idle_skip_for_test(Some(false));
     let (mut eval, layouts) = idle_context();
     eval.eval_str("(redisplay t)").expect("first");
     eval.eval_str("(redisplay t)").expect("second");
     assert_eq!(layouts.get(), 2, "force lays out");
-    crate::emacs_core::xdisp::set_redisplay_idle_skip_for_test(Some(true));
+    neovm_display::test_support::authority::set_redisplay_idle_skip_for_test(Some(true));
     eval.eval_str("(redisplay t)").expect("third");
-    crate::emacs_core::xdisp::set_redisplay_idle_skip_for_test(None);
+    neovm_display::test_support::authority::set_redisplay_idle_skip_for_test(None);
     assert_eq!(layouts.get(), 2, "the idle skip holds under force");
     assert_eq!(prered_args(&mut eval), "(t nil nil)");
 }
@@ -117,7 +125,7 @@ fn a_forced_idle_redisplay_lays_out_a_change_made_after_the_last_layout() {
                 .expect("post-layout change");
         }
     }));
-    crate::emacs_core::xdisp::set_redisplay_idle_skip_for_test(Some(true));
+    neovm_display::test_support::authority::set_redisplay_idle_skip_for_test(Some(true));
     eval.eval_str("(redisplay t)").expect("first");
     assert_eq!(layouts.get(), 1);
     eval.eval_str("(redisplay t)").expect("second");
@@ -127,7 +135,7 @@ fn a_forced_idle_redisplay_lays_out_a_change_made_after_the_last_layout() {
         "the change after the first layout's acknowledgement is laid out"
     );
     eval.eval_str("(redisplay t)").expect("third");
-    crate::emacs_core::xdisp::set_redisplay_idle_skip_for_test(None);
+    neovm_display::test_support::authority::set_redisplay_idle_skip_for_test(None);
     assert_eq!(layouts.get(), 2, "now idle, the forced redisplay skips");
 }
 
@@ -158,14 +166,14 @@ fn background_alpha_repaints_an_idle_gui_frame() {
     struct Reset;
     impl Drop for Reset {
         fn drop(&mut self) {
-            crate::emacs_core::xdisp::set_redisplay_idle_skip_for_test(None);
+            neovm_display::test_support::authority::set_redisplay_idle_skip_for_test(None);
         }
     }
     let _reset = Reset;
-    crate::emacs_core::xdisp::set_redisplay_idle_skip_for_test(Some(true));
+    neovm_display::test_support::authority::set_redisplay_idle_skip_for_test(Some(true));
     let (mut eval, layouts) = idle_context();
-    let frame = eval.frames.selected_frame().expect("frame").id;
-    eval.frames
+    let frame = eval.frame_manager().selected_frame().expect("frame").id;
+    eval.frame_manager_mut()
         .get_mut(frame)
         .unwrap()
         .set_window_system(Some(Value::symbol("neo")));
@@ -173,9 +181,12 @@ fn background_alpha_repaints_an_idle_gui_frame() {
     eval.eval_str("(redisplay t)").unwrap();
     assert_eq!(layouts.get(), 1, "the unchanged frame is positively idle");
     eval.eval_str("(condition-case nil (modify-frame-parameters nil '((alpha-background . bad))) (error nil))").unwrap();
-    assert_eq!(eval.frames.get(frame).unwrap().background_alpha, 1.0);
     assert_eq!(
-        eval.frames
+        eval.frame_manager().get(frame).unwrap().background_alpha,
+        1.0
+    );
+    assert_eq!(
+        eval.frame_manager()
             .get(frame)
             .unwrap()
             .parameter("alpha-background"),
@@ -189,7 +200,10 @@ fn background_alpha_repaints_an_idle_gui_frame() {
     );
     eval.eval_str("(modify-frame-parameters nil '((alpha-background . 50)))")
         .unwrap();
-    assert_eq!(eval.frames.get(frame).unwrap().background_alpha, 0.5);
+    assert_eq!(
+        eval.frame_manager().get(frame).unwrap().background_alpha,
+        0.5
+    );
     eval.eval_str("(redisplay t)").unwrap();
     assert_eq!(
         layouts.get(),
@@ -200,7 +214,10 @@ fn background_alpha_repaints_an_idle_gui_frame() {
     assert_eq!(layouts.get(), 2, "no continuous forced repaint");
     eval.eval_str("(modify-frame-parameters nil '((alpha-background . nil)))")
         .unwrap();
-    assert_eq!(eval.frames.get(frame).unwrap().background_alpha, 1.0);
+    assert_eq!(
+        eval.frame_manager().get(frame).unwrap().background_alpha,
+        1.0
+    );
     eval.eval_str("(redisplay t)").unwrap();
     assert_eq!(layouts.get(), 3, "nil restores opaque paint");
 }
@@ -210,23 +227,28 @@ fn background_alpha_repaints_an_unselected_idle_child() {
     struct Reset;
     impl Drop for Reset {
         fn drop(&mut self) {
-            crate::emacs_core::xdisp::set_redisplay_idle_skip_for_test(None);
+            neovm_display::test_support::authority::set_redisplay_idle_skip_for_test(None);
         }
     }
     let _reset = Reset;
-    crate::emacs_core::xdisp::set_redisplay_idle_skip_for_test(Some(true));
+    neovm_display::test_support::authority::set_redisplay_idle_skip_for_test(Some(true));
     let (mut eval, layouts) = idle_context();
-    let selected = eval.frames.selected_frame().expect("selected").id;
-    let buffer = eval.buffers.current_buffer_id().unwrap();
-    let child = eval.frames.create_frame("idle-child", 200, 160, buffer);
+    let selected = eval.frame_manager().selected_frame().expect("selected").id;
+    let buffer = eval.buffer_manager().current_buffer_id().unwrap();
+    let child = eval
+        .frame_manager_mut()
+        .create_frame("idle-child", 200, 160, buffer);
     for id in [selected, child] {
-        eval.frames
+        eval.frame_manager_mut()
             .get_mut(id)
             .unwrap()
             .set_window_system(Some(Value::symbol("neo")));
     }
-    eval.frames.get_mut(child).unwrap().parent_frame = Value::make_frame(selected.0);
-    eval.frames.select_frame(selected);
+    eval.frame_manager_mut()
+        .get_mut(child)
+        .unwrap()
+        .parent_frame = Value::make_frame(selected.0);
+    eval.frame_manager_mut().select_frame(selected);
     eval.obarray_mut()
         .set_symbol_value("idle-alpha-child", Value::make_frame(child.0));
     eval.eval_str("(redisplay t)").unwrap();
@@ -235,10 +257,13 @@ fn background_alpha_repaints_an_unselected_idle_child() {
     eval.eval_str("(modify-frame-parameters idle-alpha-child '((alpha-background . 25)))")
         .unwrap();
     assert_eq!(
-        eval.frames.selected_frame().map(|frame| frame.id),
+        eval.frame_manager().selected_frame().map(|frame| frame.id),
         Some(selected)
     );
-    assert_eq!(eval.frames.get(child).unwrap().background_alpha, 0.25);
+    assert_eq!(
+        eval.frame_manager().get(child).unwrap().background_alpha,
+        0.25
+    );
     eval.eval_str("(redisplay t)").unwrap();
     assert_eq!(layouts.get(), 2, "unselected child paint must reach layout");
     eval.eval_str("(redisplay t)").unwrap();
