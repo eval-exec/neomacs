@@ -37,5 +37,8 @@ pub use neovm_value::value::HashTableWeakness;
 #[path = "../../core_tests/tagged/gc/tests/chartable_contract_test.rs"]
 mod chartable_contract_tests;
 #[cfg(test)]
+#[path = "../../core_tests/tagged/gc/tests/marker_chain_unchain_test.rs"]
+mod marker_chain_unchain_tests;
+#[cfg(test)]
 #[path = "../../core_tests/tagged/gc/tests/symbol_barrier_test.rs"]
 mod symbol_barrier_tests;

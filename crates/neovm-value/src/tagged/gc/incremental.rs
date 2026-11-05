@@ -2509,7 +2509,8 @@ impl TaggedHeap {
         self.owner_is_mapped(value)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn assert_object_arenas_coherent(&self) {
         self.assert_one_arena_coherent(&self.float_arena);
         self.assert_one_arena_coherent(&self.string_arena);
@@ -2612,7 +2613,7 @@ impl TaggedHeap {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn assert_one_arena_coherent<T: PagedObject>(&self, arena: &ObjectArena<T>) {
         use std::collections::HashSet;
         // Partial chain: acyclic, flags consistent, members have free slots,

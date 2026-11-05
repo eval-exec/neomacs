@@ -9,3 +9,18 @@ pub fn set_last_window_start_for_test(
 ) {
     buffer.set_last_window_start_raw(value);
 }
+
+/// P1-CLASSES-ALL-CRATES FENCE (C1 write): splice a live marker onto this
+/// text's marker chain head for the relocated marker-unchain test. The chain
+/// link is heap MarkerObj state, so the write is unsafe; the raw method stays
+/// pub(crate).
+///
+/// # Safety
+/// `marker` must be a live marker owned by this text's heap and not already
+/// on a chain, and the serial fixture must hold the heap/owner exclusively.
+pub unsafe fn chain_splice_at_head_for_test(
+    text: &crate::buffer::buffer_text::BufferText,
+    marker: *mut neovm_value::tagged::header::MarkerObj,
+) {
+    text.chain_splice_at_head(marker);
+}

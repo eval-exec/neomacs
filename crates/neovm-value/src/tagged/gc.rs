@@ -2540,6 +2540,14 @@ impl TaggedHeap {
         self.marker_chain_head_slots = slots;
     }
 
+    /// VIS row: copied marker-arena ownership predicate (plain bool) for the
+    /// relocated marker-chain test; the arena field stays private.
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn marker_arena_owns_for_test(&self, ptr: *const u8) -> bool {
+        self.marker_arena.owns(ptr)
+    }
+
     // -----------------------------------------------------------------------
     // Internal helpers
     // -----------------------------------------------------------------------
