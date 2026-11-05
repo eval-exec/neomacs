@@ -6,8 +6,10 @@ pub mod buffer_text;
 #[doc(hidden)]
 pub mod composition;
 mod edit_runtime;
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
+#[cfg(not(any(test, feature = "test-support")))]
 mod edit_transaction;
+#[cfg(any(test, feature = "test-support"))]
+pub mod edit_transaction;
 #[doc(hidden)]
 pub mod storage_string;
 #[doc(hidden)]
@@ -25,8 +27,10 @@ mod overlay_order;
 pub mod position;
 pub mod shared;
 pub mod text;
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
+#[cfg(not(any(test, feature = "test-support")))]
 pub(crate) mod text_index;
+#[cfg(any(test, feature = "test-support"))]
+pub mod text_index;
 pub mod text_props;
 pub mod text_snapshot;
 pub mod undo;

@@ -10519,9 +10519,12 @@ pub(crate) fn match_pattern(
     ))
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
+#[cfg(not(any(test, feature = "test-support")))]
 #[path = "dfa.rs"]
 pub(crate) mod dfa;
+#[cfg(any(test, feature = "test-support"))]
+#[path = "dfa.rs"]
+pub mod dfa;
 
 #[path = "suffix_literal.rs"]
 mod suffix_literal;

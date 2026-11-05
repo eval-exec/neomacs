@@ -28,10 +28,14 @@ use neovm_value::value::{Value, ValueKind, list_to_vec};
 mod declared_string;
 #[doc(hidden)]
 pub mod parse_cache;
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
+#[cfg(not(any(test, feature = "test-support")))]
 mod parse_loop;
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
+#[cfg(any(test, feature = "test-support"))]
+pub mod parse_loop;
+#[cfg(not(any(test, feature = "test-support")))]
 mod pps_propertize;
+#[cfg(any(test, feature = "test-support"))]
+pub mod pps_propertize;
 use parse_loop::{Entry, Plain, SafePositionRecorder, ScanEnd, ScanFinish, run_parse_loop};
 
 /// The `syntax-table` property symbol, interned once.

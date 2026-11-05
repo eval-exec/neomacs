@@ -2593,7 +2593,12 @@ pub struct TextPropertyTable {
     /// of walking thousands of face intervals. A Mutex from when the table
     /// backed a shared empty static; the table is thread-confined, so it is
     /// uncontended — and a failed try_lock just falls back to the cursor walk.
+    #[cfg(not(any(test, feature = "test-support")))]
     pub(crate) syntax_prop_ranges: std::sync::Mutex<(u64, Vec<(CharPos0, CharPos0)>)>,
+    /// Test-support spelling: same field, `pub` only in the test-support build
+    /// (attribute macros cannot decorate struct fields; see B3 V1 note).
+    #[cfg(any(test, feature = "test-support"))]
+    pub syntax_prop_ranges: std::sync::Mutex<(u64, Vec<(CharPos0, CharPos0)>)>,
 }
 
 /// Absence of string text properties, with no Lisp values or table storage.
@@ -5225,17 +5230,8 @@ impl TextPropertyTable {
             .map(|(_, id)| self.intervals.nodes[id.0].plist)
     }
 
-    /// Test-support view of the syntax property range cache.  The field
-    /// cannot take `visibility::make` (attribute macros are rejected on
-    /// fields), so this accessor is the TEST-SUPPORT-VIS A1-shaped row.
     #[cfg(any(test, feature = "test-support"))]
-    pub fn syntax_prop_ranges_for_test(
-        &self,
-    ) -> &std::sync::Mutex<(u64, Vec<(CharPos0, CharPos0)>)> {
-        &self.syntax_prop_ranges
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn assert_tree_invariants_for_test(&self) {
         self.intervals.assert_invariants_for_test();
     }
