@@ -3229,8 +3229,6 @@ pub struct Context {
     sequence_temp_root_frames: Vec<SequenceTempRootFrame>,
     /// Contiguous bytecode stack buffer, matching GNU Emacs's bc_thread_state.
     /// All bytecode frames share this single buffer. GC scans it directly.
-    /// Contiguous bytecode stack buffer, matching GNU Emacs's bc_thread_state.
-    /// All bytecode frames share this single buffer. GC scans it directly.
     #[cfg(not(feature = "test-support"))]
     pub(crate) bc_buf: Vec<Value>,
     #[cfg(feature = "test-support")]
@@ -3248,7 +3246,6 @@ pub struct Context {
     /// Each entry records where the frame's stack region starts in bc_buf
     /// and the function object (so GC can trace its constants).
     pub(crate) bc_frames: Vec<BcFrame>,
-    /// Shared condition runtime mirror for active catch/condition handlers.
     /// Shared condition runtime mirror for active catch/condition handlers.
     #[cfg(not(feature = "test-support"))]
     pub(crate) condition_stack: Vec<ConditionFrame>,
@@ -3556,8 +3553,6 @@ pub struct Context {
     /// 1x1 `Pending` placeholder — every async-decoded buffer image stayed one
     /// pixel for the lifetime of the buffer.
     media_generation: u64,
-    /// GNU `lisp_eval_depth`: one shared counter for interpreted cons-form
-    /// evaluation, Lisp-visible `funcall`, and bytecode `Bcall`.
     /// GNU `lisp_eval_depth`: one shared counter for interpreted cons-form
     /// evaluation, Lisp-visible `funcall`, and bytecode `Bcall`.
     #[cfg(not(feature = "test-support"))]
