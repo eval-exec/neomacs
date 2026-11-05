@@ -75,12 +75,13 @@ static INPUT_HOOKS_IDENTITY: OnceLock<&'static InputHooks> = OnceLock::new();
 /// Publish the input-wait descriptor.
 ///
 /// Idempotent for the same descriptor; a different table is a typed refusal
-/// (`HookInstallError::DifferentTable`), never a silent overwrite. Core calls
-/// this at `Context::new_inner` and `Context::from_dump`.
+/// (`HookInstallError::DifferentTable`), never a silent overwrite. Called only
+/// by the one eval `install_eval_hooks` entry (E3a); core no longer calls this
+/// per-table installer (peer follow-up F2).
 #[must_use = "handle a conflicting input-wait publication"]
 #[cold]
 #[inline(never)]
-pub fn install_input_hooks(
+pub(crate) fn install_input_hooks(
     hooks: &'static InputHooks,
 ) -> Result<HookInstallStatus, HookInstallError> {
     let selected = INPUT_HOOKS_IDENTITY.get_or_init(|| hooks);

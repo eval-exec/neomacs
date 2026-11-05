@@ -95,9 +95,7 @@ use crate::window::{
     DisplayRowSnapshot, FrameId, FrameManager, Window, WindowChromeLine, WindowChromePresence,
     WindowDisplaySnapshot, WindowId,
 };
-pub(crate) use eval_display_queries::{
-    canonical_display_query_hooks, install_eval_display_query_hooks,
-};
+pub(crate) use eval_display_queries::canonical_display_query_hooks;
 use neovm_edit::emacs_core::edit_host::EditHost;
 use std::num::NonZeroUsize;
 use std::ops::ControlFlow;

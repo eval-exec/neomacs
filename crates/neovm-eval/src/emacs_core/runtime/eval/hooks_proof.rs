@@ -21,10 +21,18 @@
 
 use super::*;
 use neovm_value::HookInstallError;
+use neovm_value::HookInstallStatus;
 use neovm_value::error::Flow;
 use neovm_value::value::Value;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
+
+/// Installer for the process-global sqlite object-finalizer table.
+///
+/// The slot returns the typed publication status so [`install_eval_hooks`]
+/// propagates a conflict (`HookInstallError::DifferentTable`) instead of
+/// swallowing it in release builds (peer follow-up F1).
+pub type SqliteFinalizerInstaller = fn() -> Result<HookInstallStatus, HookInstallError>;
 
 /// The one core-owned set of eval cold tables.
 ///
@@ -48,7 +56,10 @@ pub struct EvalHookSet {
     /// boot but invoked from each constructor.
     register_core_subrs: fn(&mut Context),
     /// The sqlite object-finalizer table (a no-op without the feature).
-    sqlite: fn(),
+    ///
+    /// Returns the typed publication status so a conflicting table is
+    /// propagated by [`install_eval_hooks`] (peer follow-up F1).
+    sqlite: SqliteFinalizerInstaller,
     wait: &'static WaitServiceHooks,
     timer: &'static TimerServiceHooks,
     frontend: &'static FrontendServiceHooks,
@@ -125,7 +136,7 @@ impl EvalHookSet {
         perf_enabled: bool,
         perf: &'static perf::PerfHooks,
         register_core_subrs: fn(&mut Context),
-        sqlite: fn(),
+        sqlite: SqliteFinalizerInstaller,
         wait: &'static WaitServiceHooks,
         timer: &'static TimerServiceHooks,
         frontend: &'static FrontendServiceHooks,
@@ -202,8 +213,10 @@ pub fn install_eval_hooks(
     perf::install_perf_hooks(set.perf_enabled, set.perf)?;
     // 6. Process-global feature tables, then the runtime upcall tables (S3):
     //    published last; none enumerates GC roots or participates in pdump
-    //    reconstruction.
-    (set.sqlite)();
+    //    reconstruction. The sqlite slot answers with the typed publication
+    //    status, so a conflicting finalizer table reaches the caller instead
+    //    of failing a release-mode assertion (peer follow-up F1).
+    (set.sqlite)()?;
     publish(&WAIT_SERVICE, set.wait)?;
     publish(&TIMER_SERVICE, set.timer)?;
     publish(&FRONTEND_SERVICE, set.frontend)?;

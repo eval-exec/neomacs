@@ -893,13 +893,14 @@ static LIFECYCLE_HOOKS_IDENTITY: OnceLock<&'static LifecycleHooks> = OnceLock::n
 /// Publish the lifecycle descriptor.
 ///
 /// Idempotent for the same descriptor; a different table is a typed refusal
-/// (`HookInstallError::DifferentTable`), never a silent overwrite. Core calls
-/// this at `Context::new_inner` and `Context::from_dump`, first in the
-/// one-time hook block so it precedes any GC-capable allocation.
+/// (`HookInstallError::DifferentTable`), never a silent overwrite. Called only
+/// by the one eval `install_eval_hooks` entry (E3a), first in the one-time hook
+/// block so it precedes any GC-capable allocation; core no longer calls this
+/// per-table installer (peer follow-up F2).
 #[must_use = "handle a conflicting lifecycle publication"]
 #[cold]
 #[inline(never)]
-pub fn install_lifecycle_hooks(
+pub(crate) fn install_lifecycle_hooks(
     hooks: &'static LifecycleHooks,
 ) -> Result<HookInstallStatus, HookInstallError> {
     let selected = LIFECYCLE_HOOKS_IDENTITY.get_or_init(|| hooks);

@@ -90,12 +90,13 @@ static PERF_ENABLED: OnceLock<bool> = OnceLock::new();
 /// Hooks are published before the enable bool, so an enabled read always
 /// implies a published descriptor. Idempotent for the same descriptor and
 /// enable answer; a different descriptor (or a different enable answer) is a
-/// typed refusal, never a silent overwrite. Core calls this at
-/// `Context::new_inner` and `Context::from_dump`.
+/// typed refusal, never a silent overwrite. Called only by the one eval
+/// `install_eval_hooks` entry (E3a); core no longer calls this per-table
+/// installer (peer follow-up F2).
 #[must_use = "handle a conflicting perf publication"]
 #[cold]
 #[inline(never)]
-pub fn install_perf_hooks(
+pub(crate) fn install_perf_hooks(
     enabled: bool,
     hooks: &'static PerfHooks,
 ) -> Result<HookInstallStatus, HookInstallError> {

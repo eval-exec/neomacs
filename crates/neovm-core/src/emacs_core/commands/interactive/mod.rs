@@ -2358,20 +2358,11 @@ static CANONICAL_CALL_INTERACTIVELY_HOOKS:
         resolve_call_interactively_target_and_args_with_vm_fallback,
     );
 
-/// The one canonical call-interactively acquisition descriptor.
+/// The one canonical call-interactively acquisition descriptor (published
+/// only by the one core boot entry, peer follow-up F2).
 pub(crate) fn canonical_call_interactively_hooks()
 -> &'static crate::emacs_core::eval::call_interactively::CallInteractivelyHooks {
     &CANONICAL_CALL_INTERACTIVELY_HOOKS
-}
-
-pub(crate) fn install_call_interactively_hook() {
-    let installed = crate::emacs_core::eval::call_interactively::install_call_interactively_hooks(
-        &CANONICAL_CALL_INTERACTIVELY_HOOKS,
-    );
-    debug_assert!(
-        installed.is_ok(),
-        "a different call-interactively acquisition table is already installed"
-    );
 }
 
 /// `(self-insert-command N &optional C)` -- insert character C (or the last

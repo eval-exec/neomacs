@@ -12,7 +12,8 @@ fn standalone_sqlite_obj(is_statement: bool, id: i64) -> Box<crate::tagged::head
 
 #[test]
 fn installed_finalizer_removes_both_registry_kinds() {
-    install_sqlite_finalizer_hook();
+    install_sqlite_finalizer_hook()
+        .expect("the canonical sqlite finalizer table is process-unique");
     let database_id = NEXT_HANDLE.fetch_add(1, Ordering::SeqCst);
     let statement_id = NEXT_HANDLE.fetch_add(1, Ordering::SeqCst);
     let connection = Rc::new(Connection::open_in_memory().unwrap());

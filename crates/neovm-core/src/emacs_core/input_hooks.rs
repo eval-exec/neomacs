@@ -46,17 +46,8 @@ static CANONICAL_INPUT_HOOKS: InputHooks = InputHooks::new(
     drain_signal_wake_pipe,
 );
 
-/// Publish the input-wait table at the one-time construction seams.
-/// The one canonical input-wait descriptor.
+/// The one canonical input-wait descriptor (published only by the one core
+/// boot entry, peer follow-up F2).
 pub(crate) fn canonical_input_hooks() -> &'static InputHooks {
     &CANONICAL_INPUT_HOOKS
-}
-
-pub(crate) fn install_input_hooks() {
-    let installed =
-        crate::emacs_core::eval::input_hooks::install_input_hooks(&CANONICAL_INPUT_HOOKS);
-    debug_assert!(
-        installed.is_ok(),
-        "a different input-wait hook table is already installed"
-    );
 }

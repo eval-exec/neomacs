@@ -240,17 +240,8 @@ static CANONICAL_PROCESS_HOOKS: ProcessHooks = ProcessHooks::new(
     MainWaitHooks::new(prepare_main_wait, wait_main_native, cancel_native_wait),
 );
 
-/// Publish the process-IO table at the one-time construction seams.
-/// The one canonical process descriptor.
+/// The one canonical process descriptor (published only by the one core
+/// boot entry, peer follow-up F2).
 pub(crate) fn canonical_process_hooks() -> &'static ProcessHooks {
     &CANONICAL_PROCESS_HOOKS
-}
-
-pub(crate) fn install_process_hooks() {
-    let installed =
-        crate::emacs_core::eval::process_hooks::install_process_hooks(&CANONICAL_PROCESS_HOOKS);
-    debug_assert!(
-        installed.is_ok(),
-        "a different process-IO hook table is already installed"
-    );
 }

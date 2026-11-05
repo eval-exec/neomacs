@@ -103,12 +103,13 @@ static CASE_TABLE_HOOKS_IDENTITY: OnceLock<&'static CaseTableHooks> = OnceLock::
 /// Publish the core command layer's case-table bodies.
 ///
 /// Idempotent for the same descriptor; a different table is a typed refusal
-/// (`HookInstallError::DifferentTable`), never a silent overwrite. Core calls
-/// this at `Context::new_inner` and `Context::from_dump`.
+/// (`HookInstallError::DifferentTable`), never a silent overwrite. Called only
+/// by the one eval `install_eval_hooks` entry (E3a); core no longer calls this
+/// per-table installer (peer follow-up F2).
 #[must_use = "handle a conflicting case-table publication"]
 #[cold]
 #[inline(never)]
-pub fn install_case_table_hooks(
+pub(crate) fn install_case_table_hooks(
     hooks: &'static CaseTableHooks,
 ) -> Result<HookInstallStatus, HookInstallError> {
     let selected = CASE_TABLE_HOOKS_IDENTITY.get_or_init(|| hooks);

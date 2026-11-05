@@ -22,6 +22,7 @@ mod enabled {
     use std::sync::atomic::{AtomicI64, Ordering};
     use std::time::Duration;
 
+    use neovm_value::{HookInstallError, HookInstallStatus};
     use rusqlite::{Connection, OpenFlags, ffi};
     use strum::{EnumString, IntoStaticStr};
 
@@ -130,13 +131,15 @@ mod enabled {
         };
 
     /// Install the finalizer table beside the other one-time hooks. Idempotent:
-    /// the handle-construction path calls it before the first SqliteObj exists.
-    pub(crate) fn install_sqlite_finalizer_hook() {
-        let installed = neovm_value::install_sqlite_obj_finalizer(&CANONICAL_SQLITE_FINALIZER);
-        debug_assert!(
-            installed.is_ok(),
-            "a different sqlite finalizer table is already installed"
-        );
+    /// the core boot entry publishes it before any `Context` (and thus any
+    /// SqliteObj) can exist.
+    ///
+    /// Returns the typed publication status instead of asserting, so the one
+    /// boot entry propagates a conflicting table in release builds too (peer
+    /// follow-up F1). The handle-construction path re-publishes this same
+    /// canonical table, where a refusal is a violated process-wide invariant.
+    pub(crate) fn install_sqlite_finalizer_hook() -> Result<HookInstallStatus, HookInstallError> {
+        neovm_value::install_sqlite_obj_finalizer(&CANONICAL_SQLITE_FINALIZER)
     }
 
     /// Reset all thread-local state (called between test runs).
@@ -214,12 +217,16 @@ mod enabled {
     }
 
     fn make_db_handle(id: i64) -> Value {
-        install_sqlite_finalizer_hook();
+        // The boot entry already published this exact table; nothing else can
+        // occupy the slot, so a refusal here is a violated invariant.
+        install_sqlite_finalizer_hook()
+            .expect("the canonical sqlite finalizer table is process-unique");
         Value::make_sqlite(false, id)
     }
 
     fn make_stmt_handle(id: i64) -> Value {
-        install_sqlite_finalizer_hook();
+        install_sqlite_finalizer_hook()
+            .expect("the canonical sqlite finalizer table is process-unique");
         Value::make_sqlite(true, id)
     }
 

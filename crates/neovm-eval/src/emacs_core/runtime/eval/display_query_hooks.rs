@@ -249,12 +249,13 @@ static DISPLAY_QUERY_HOOKS_IDENTITY: OnceLock<&'static DisplayQueryHooks> = Once
 /// Publish the display layer's redisplay-policy queries.
 ///
 /// Idempotent for the same descriptor; a different table is a typed refusal
-/// (`HookInstallError::DifferentTable`), never a silent overwrite. Core calls
-/// this at `Context::new_inner` and `Context::from_dump`.
+/// (`HookInstallError::DifferentTable`), never a silent overwrite. Called only
+/// by the one eval `install_eval_hooks` entry (E3a); core no longer calls this
+/// per-table installer (peer follow-up F2).
 #[must_use = "handle a conflicting display-query publication"]
 #[cold]
 #[inline(never)]
-pub fn install_display_query_hooks(
+pub(crate) fn install_display_query_hooks(
     hooks: &'static DisplayQueryHooks,
 ) -> Result<HookInstallStatus, HookInstallError> {
     let selected = DISPLAY_QUERY_HOOKS_IDENTITY.get_or_init(|| hooks);

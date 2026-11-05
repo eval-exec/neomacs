@@ -623,12 +623,13 @@ static CALL_INTERACTIVELY_HOOKS_IDENTITY: OnceLock<&'static CallInteractivelyHoo
 /// Publish the core command layer's argument-acquisition body.
 ///
 /// Idempotent for the same descriptor; a different table is a typed refusal
-/// (`HookInstallError::DifferentTable`), never a silent overwrite. Core calls
-/// this at `Context::new_inner` and `Context::from_dump`.
+/// (`HookInstallError::DifferentTable`), never a silent overwrite. Called only
+/// by the one eval `install_eval_hooks` entry (E3a); core no longer calls this
+/// per-table installer (peer follow-up F2).
 #[must_use = "handle a conflicting call-interactively publication"]
 #[cold]
 #[inline(never)]
-pub fn install_call_interactively_hooks(
+pub(crate) fn install_call_interactively_hooks(
     hooks: &'static CallInteractivelyHooks,
 ) -> Result<HookInstallStatus, HookInstallError> {
     let selected = CALL_INTERACTIVELY_HOOKS_IDENTITY.get_or_init(|| hooks);

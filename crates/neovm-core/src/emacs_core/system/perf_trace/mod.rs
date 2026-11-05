@@ -242,14 +242,3 @@ pub(crate) fn canonical_perf_hooks() -> &'static neovm_eval::emacs_core::eval::p
 pub(crate) fn canonical_perf_enabled() -> bool {
     hotpath_timing_enabled()
 }
-
-pub(crate) fn install_perf_hooks() {
-    let installed = neovm_eval::emacs_core::eval::perf::install_perf_hooks(
-        hotpath_timing_enabled(),
-        &CANONICAL_PERF_HOOKS,
-    );
-    debug_assert!(
-        installed.is_ok(),
-        "a different perf hook table is already installed"
-    );
-}

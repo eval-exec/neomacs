@@ -19,6 +19,7 @@ use crate::emacs_core::eval::hooks_proof::{
     DisplayServiceHooks, EvalHookSet, EvalHooksInstalled, FileNotifyHostQueries,
     FrontendServiceHooks, TimerServiceHooks, WaitServiceHooks,
 };
+use neovm_value::{HookInstallError, HookInstallStatus};
 use std::sync::OnceLock;
 
 static CANONICAL_EVAL_HOOK_SET: OnceLock<EvalHookSet> = OnceLock::new();
@@ -58,12 +59,16 @@ pub fn install_eval_hooks() -> EvalHooksInstalled {
 }
 
 #[cfg(feature = "sqlite")]
-fn install_sqlite_finalizer_hook() {
-    crate::emacs_core::sqlite::install_sqlite_finalizer_hook();
+fn install_sqlite_finalizer_hook() -> Result<HookInstallStatus, HookInstallError> {
+    crate::emacs_core::sqlite::install_sqlite_finalizer_hook()
 }
 
 #[cfg(not(feature = "sqlite"))]
-fn install_sqlite_finalizer_hook() {}
+fn install_sqlite_finalizer_hook() -> Result<HookInstallStatus, HookInstallError> {
+    // No finalizer table is compiled in; report it as published so the one
+    // boot entry stays uniform across feature configurations.
+    Ok(HookInstallStatus::Installed)
+}
 
 // The wait/timer/frontend/display slots call the upper-layer service
 // implementations in place. They run per command boundary / per frontend

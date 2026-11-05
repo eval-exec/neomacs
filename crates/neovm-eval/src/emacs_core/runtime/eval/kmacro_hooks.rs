@@ -82,12 +82,13 @@ static KMACRO_HOOKS_IDENTITY: OnceLock<&'static KmacroHooks> = OnceLock::new();
 /// Publish the core command layer's keyboard-macro bodies.
 ///
 /// Idempotent for the same descriptor; a different table is a typed refusal
-/// (`HookInstallError::DifferentTable`), never a silent overwrite. Core calls
-/// this at `Context::new_inner` and `Context::from_dump`.
+/// (`HookInstallError::DifferentTable`), never a silent overwrite. Called only
+/// by the one eval `install_eval_hooks` entry (E3a); core no longer calls this
+/// per-table installer (peer follow-up F2).
 #[must_use = "handle a conflicting keyboard-macro publication"]
 #[cold]
 #[inline(never)]
-pub fn install_kmacro_hooks(
+pub(crate) fn install_kmacro_hooks(
     hooks: &'static KmacroHooks,
 ) -> Result<HookInstallStatus, HookInstallError> {
     let selected = KMACRO_HOOKS_IDENTITY.get_or_init(|| hooks);

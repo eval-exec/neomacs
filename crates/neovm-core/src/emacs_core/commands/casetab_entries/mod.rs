@@ -196,17 +196,9 @@ fn standard_case_table_for_admission(
     builtin_standard_case_table(ctx, Vec::new())
 }
 
-/// The one canonical case-table descriptor.
+/// The one canonical case-table descriptor (published only by the one core
+/// boot entry, peer follow-up F2).
 pub(crate) fn canonical_case_table_hooks()
 -> &'static crate::emacs_core::eval::case_tables::CaseTableHooks {
     &CANONICAL_CASE_TABLE_HOOKS
-}
-
-pub(crate) fn install_case_table_hooks() {
-    let installed =
-        crate::emacs_core::eval::case_tables::install_case_table_hooks(&CANONICAL_CASE_TABLE_HOOKS);
-    debug_assert!(
-        installed.is_ok(),
-        "a different case-table hook table is already installed"
-    );
 }

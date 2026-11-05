@@ -831,18 +831,9 @@ fn other_buffer_for_killed_buffer(
 static CANONICAL_BUFFER_KILL_HOOKS: crate::emacs_core::eval::buffer_kill::BufferKillHooks =
     crate::emacs_core::eval::buffer_kill::BufferKillHooks::new(other_buffer_for_killed_buffer);
 
-/// The one canonical green buffer-kill descriptor.
+/// The one canonical green buffer-kill descriptor (published only by the one
+/// core boot entry, peer follow-up F2).
 pub(crate) fn canonical_buffer_kill_hooks()
 -> &'static crate::emacs_core::eval::buffer_kill::BufferKillHooks {
     &CANONICAL_BUFFER_KILL_HOOKS
-}
-
-pub(crate) fn install_buffer_kill_hook() {
-    let installed = crate::emacs_core::eval::buffer_kill::install_buffer_kill_hooks(
-        &CANONICAL_BUFFER_KILL_HOOKS,
-    );
-    debug_assert!(
-        installed.is_ok(),
-        "a different buffer-kill hook table is already installed"
-    );
 }

@@ -4,7 +4,8 @@ fn register_heap_sqlite_pair() -> (crate::tagged::gc::TaggedHeap, i64, i64) {
     // This helper builds SqliteObjs directly (bypassing make_db_handle), so
     // it installs the same finalizer table the handle-construction path
     // installs; without it the signed uninstalled Drop is a typed no-op.
-    install_sqlite_finalizer_hook();
+    install_sqlite_finalizer_hook()
+        .expect("the canonical sqlite finalizer table is process-unique");
     let database_id = NEXT_HANDLE.fetch_add(1, Ordering::SeqCst);
     let statement_id = NEXT_HANDLE.fetch_add(1, Ordering::SeqCst);
     let connection = Rc::new(Connection::open_in_memory().unwrap());
