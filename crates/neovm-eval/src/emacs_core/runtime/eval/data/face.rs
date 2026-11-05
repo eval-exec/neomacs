@@ -2349,6 +2349,16 @@ pub struct FrameFaceRealizationCache {
     pub table: Option<FaceTable>,
     /// One independently retained root bundle per immutable raw snapshot.
     /// Layout may keep Arc clones after this cache retires its source table.
+    ///
+    /// T1 safe-code proof (peer ruling 07:0xZ item 4): `GcTrace for
+    /// FrameFaceRealizationCache` visits `entries`, `table`, `basics`,
+    /// `default_lface` and `default_predecessor` directly, so every Value
+    /// reachable from those fields is rooted independently of this lease.
+    /// Setting the field to `None` or swapping it can only move or drop one
+    /// `Arc` owner; a layout still using a retired snapshot holds its own
+    /// clone, so the cache dropping its clone cannot unroot that snapshot.
+    /// Safe code therefore cannot unroot a Value still reachable from
+    /// `entries`/`table` by mutating this field.
     pub root_lease: Option<std::sync::Arc<[SharedRoot]>>,
     pub entries: FxHashMap<u64, Vec<(Face, Face)>>,
     /// Allocated only by the lifecycle path, owned by the same frame mutator.

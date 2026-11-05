@@ -64,6 +64,7 @@ pub unsafe fn install_scratch_root_hooks(
 /// The route for every scratch-root consumer below the evaluator: this
 /// crate's own storage and, after the stage-3 split, the edit layer's
 /// Context-free bodies, which cannot name the evaluator's free functions.
+#[doc(hidden)]
 #[inline]
 pub fn save_scratch_gc_roots() -> usize {
     SCRATCH_ROOT_HOOKS.get().map_or(0, |hooks| (hooks.save)())
@@ -74,6 +75,7 @@ pub fn save_scratch_gc_roots() -> usize {
 /// See [`save_scratch_gc_roots`]: callers must run only under a live
 /// evaluator (the hooks install at `Context` construction); pre-install
 /// pushes are typed no-ops, as nothing can collect yet.
+#[doc(hidden)]
 #[inline]
 pub fn push_scratch_gc_root(value: Value) {
     if let Some(hooks) = SCRATCH_ROOT_HOOKS.get() {
@@ -84,6 +86,7 @@ pub fn push_scratch_gc_root(value: Value) {
 /// Truncate the scratch-root stack back to a saved length.
 ///
 /// See [`save_scratch_gc_roots`] for the audience and pre-install behavior.
+#[doc(hidden)]
 #[inline]
 pub fn restore_scratch_gc_roots(saved_len: usize) {
     if let Some(hooks) = SCRATCH_ROOT_HOOKS.get() {

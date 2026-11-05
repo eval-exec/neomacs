@@ -21,6 +21,7 @@ static SQLITE_OBJ_FINALIZER_IDENTITY: OnceLock<&'static SqliteObjFinalizer> = On
 
 /// Install the sqlite finalizer. Idempotent like the other one-time hooks;
 /// a different finalizer table is a typed refusal, never a silent skip.
+#[doc(hidden)]
 #[must_use = "handle a conflicting sqlite-finalizer publication"]
 pub fn install_sqlite_obj_finalizer(
     finalizer: &'static SqliteObjFinalizer,
