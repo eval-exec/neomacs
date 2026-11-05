@@ -731,6 +731,16 @@ impl CharsetRegistry {
         &self.priority
     }
 
+    /// The preferred charsets, GNU's `Vcharset_ordered_list` up to
+    /// `Vcharset_non_preferred_head`, by canonical name.
+    fn preferred_charsets(&self) -> Vec<SymId> {
+        let end = self.non_preferred_head.unwrap_or(self.priority.len());
+        self.priority[..end.min(self.priority.len())]
+            .iter()
+            .map(|&name| self.resolve_name(name))
+            .collect()
+    }
+
     /// Classify a character into the highest-priority charset that contains it,
     /// mirroring GNU `char_charset` (charset.c:1968-1998) walking
     /// `Vcharset_ordered_list`.
@@ -1217,12 +1227,20 @@ pub(crate) fn warm_carrier_charset_registry() {
     CHARSET_REGISTRY.with(|_| ());
 }
 
+/// Give fontset lookups this thread's current charset preference.  GNU
+/// reorders fontset entries whenever `charset_ordered_list_tick` changes.
+fn publish_charset_preference() {
+    let preferred = CHARSET_REGISTRY.with(|slot| slot.borrow().preferred_charsets());
+    crate::emacs_core::fontset::publish_charset_preference(&preferred);
+}
+
 /// Reset charset registry to default state (called from Context::new).
 pub(crate) fn reset_charset_registry() {
     // A Context activatable on a different heap needs its own mutable registry
     // bound to the current heap: callers may define charsets through the slot
     // before installing the Context's registry.
     CHARSET_REGISTRY.with(|slot| slot.reset(CharsetRegistry::new()));
+    publish_charset_preference();
     if let Ok(mut cache) = charset_map_cache().write() {
         cache.clear();
     }
@@ -1249,6 +1267,7 @@ pub(crate) fn current_charset_registry_handle() -> CharsetRegistryHandle {
 
 pub(crate) fn install_charset_registry_handle(handle: &CharsetRegistryHandle) {
     CHARSET_REGISTRY.with(|slot| slot.install(handle));
+    publish_charset_preference();
 }
 
 /// Context-owned registries remain roots while another heap is active.
@@ -1271,6 +1290,7 @@ pub(crate) fn snapshot_charset_registry() -> CharsetRegistrySnapshot {
 
 pub(crate) fn restore_charset_registry(snapshot: CharsetRegistrySnapshot) {
     CHARSET_REGISTRY.with(|slot| *slot.borrow_mut() = CharsetRegistry::restore(snapshot));
+    publish_charset_preference();
 }
 
 /// Set the plist for a charset (used by `set-charset-plist` builtin).
@@ -2067,6 +2087,7 @@ fn builtin_set_charset_priority_with_symbols(args: Vec<Value>, mode: SymbolMode)
         requested.push(name);
     }
     CHARSET_REGISTRY.with(|slot| slot.borrow_mut().set_priority(&requested));
+    publish_charset_preference();
     Ok(Value::NIL)
 }
 

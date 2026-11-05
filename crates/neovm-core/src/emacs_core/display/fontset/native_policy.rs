@@ -9,7 +9,7 @@ use crate::face::{FontSlant, FontWeight, FontWidth};
 use std::borrow::Cow;
 use std::num::NonZeroU64;
 use std::ops::Deref;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 /// Native spelling of a Lisp font name, without exposing storage sentinels.
 ///
@@ -126,9 +126,70 @@ impl StoredFontsetEntry {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct SharedFontsetEntries(Arc<[StoredFontsetEntry]>);
 
+/// The preferred charsets: GNU's `Vcharset_ordered_list` up to
+/// `Vcharset_non_preferred_head`, published by the charset registry whenever
+/// its priority changes (GNU bumps `charset_ordered_list_tick` there).  Kept
+/// outside the fontset registry so a fontset restore cannot drop it, and
+/// global so detached native workers read the same order.
+static CHARSET_PREFERENCE: RwLock<Vec<SymId>> = RwLock::new(Vec::new());
+
+/// Record a new charset preference.  The font-selection revision changes with
+/// it, so every cached fontset lookup is re-resolved in the new order.
+pub(crate) fn publish_charset_preference(preferred: &[SymId]) {
+    {
+        let Ok(mut slot) = CHARSET_PREFERENCE.write() else {
+            return;
+        };
+        if slot.as_slice() == preferred {
+            return;
+        }
+        *slot = preferred.to_vec();
+    }
+    super::invalidate_font_selection_policy();
+}
+
 impl SharedFontsetEntries {
     pub(super) fn from_stored_entries(entries: Vec<StoredFontsetEntry>) -> Self {
         Self(entries.into())
+    }
+
+    /// The entries in the order GNU's `reorder_font_vector` (src/fontset.c)
+    /// tries them: an entry whose encoding charset comes earlier among the
+    /// preferred charsets goes first, every non-preferred encoding ranks after
+    /// all preferred ones, and ties keep their definition order.  So with the
+    /// Japanese language environment a `jisx0208` entry is tried before a
+    /// `gb2312` entry listed ahead of it.
+    ///
+    /// Only GNU's encoding rule is applied.  Its exemptions for a spec that
+    /// matches the face's ASCII font or has `:otf`, and its `:lang` rule for
+    /// specs without an encoding, are not.  An `ExplicitNone` ends the chain,
+    /// so only the entries before it are reordered.
+    pub(super) fn in_charset_order(&self) -> Self {
+        let Ok(preferred) = CHARSET_PREFERENCE.read() else {
+            return self.clone();
+        };
+        let rank = |entry: &StoredFontsetEntry| match entry.original() {
+            FontSpecEntry::Font(spec) => spec.definition.as_ref().map_or(0, |definition| {
+                preferred
+                    .iter()
+                    .position(|charset| *charset == definition.encoding)
+                    .unwrap_or(preferred.len())
+            }),
+            FontSpecEntry::ExplicitNone => 0,
+        };
+        let end = self
+            .0
+            .iter()
+            .position(|entry| matches!(entry.original(), FontSpecEntry::ExplicitNone))
+            .unwrap_or(self.0.len());
+        let head = &self.0[..end];
+        if head.windows(2).all(|pair| rank(&pair[0]) <= rank(&pair[1])) {
+            return self.clone();
+        }
+        let mut ordered = head.to_vec();
+        ordered.sort_by_key(|entry| rank(entry));
+        ordered.extend_from_slice(&self.0[end..]);
+        Self::from_stored_entries(ordered)
     }
 
     pub(super) fn as_slice(&self) -> &[StoredFontsetEntry] {
@@ -169,9 +230,13 @@ impl CapturedFontsetChain {
             revision,
             specific: data
                 .find_range(ch as u32)
-                .map(|range| range.entries.clone())
+                .map(|range| range.entries.in_charset_order())
                 .unwrap_or_default(),
-            fallback: data.fallback.clone().unwrap_or_default(),
+            fallback: data
+                .fallback
+                .as_ref()
+                .map(SharedFontsetEntries::in_charset_order)
+                .unwrap_or_default(),
         }
     }
 

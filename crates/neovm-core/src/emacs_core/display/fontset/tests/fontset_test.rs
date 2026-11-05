@@ -799,3 +799,67 @@ fn bounded_fontset_capture_omits_repertory_metadata_without_expansion() {
         Some(vec![registry_spec("fixture")])
     );
 }
+
+fn registry_names(entries: &[FontSpecEntry]) -> Vec<String> {
+    entries
+        .iter()
+        .map(|entry| match entry {
+            FontSpecEntry::Font(spec) => spec.registry.map_or_else(String::new, |sym| {
+                crate::emacs_core::intern::resolve_sym(sym).to_owned()
+            }),
+            FontSpecEntry::ExplicitNone => "none".to_owned(),
+        })
+        .collect()
+}
+
+/// GNU's `reorder_font_vector`: rendering tries the entry whose encoding
+/// comes first among the preferred charsets, whatever the definition order,
+/// and follows each `set-charset-priority`.  `fontset-font` still reports the
+/// definition order.
+#[test]
+fn rendering_tries_fontset_entries_in_charset_priority_order() {
+    crate::test_utils::init_test_tracing();
+    reset_fontset_registry();
+    reset_charset_registry();
+    let encodings = Value::list(vec![
+        Value::cons(Value::string("iso8859-1"), Value::symbol("iso-8859-1")),
+        Value::cons(Value::string("iso10646-1"), Value::symbol("unicode-bmp")),
+    ]);
+    for registry in ["iso8859-1", "iso10646-1"] {
+        set_fontset_font(
+            &Value::T,
+            &Value::fixnum('é' as i64),
+            &Value::cons(Value::NIL, Value::string(registry)),
+            Some(&Value::symbol("append")),
+            None,
+            None,
+            Some(&encodings),
+        )
+        .expect("install a registry entry");
+    }
+    let set_priority = |charset: &str| {
+        crate::emacs_core::charset::builtin_set_charset_priority(vec![Value::symbol(charset)])
+            .expect("set-charset-priority");
+    };
+    let rendering = || registry_names(&matching_entries_for_char('é'));
+
+    let before = fontset_generation();
+    set_priority("unicode-bmp");
+    assert_ne!(
+        fontset_generation(),
+        before,
+        "cached lookups must be redone"
+    );
+    assert_eq!(rendering(), ["iso10646-1", "iso8859-1"]);
+
+    set_priority("iso-8859-1");
+    assert_eq!(rendering(), ["iso8859-1", "iso10646-1"]);
+
+    set_priority("unicode-bmp");
+    let patterns = registry().read().unwrap().matching_entries_for_char(
+        &fontset_name_spelling(DEFAULT_FONTSET_NAME),
+        'é',
+        FontsetLookupPurpose::Patterns,
+    );
+    assert_eq!(registry_names(&patterns), ["iso8859-1", "iso10646-1"]);
+}

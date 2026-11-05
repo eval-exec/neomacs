@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::sync::{OnceLock, RwLock};
 
 mod native_policy;
+pub(crate) use native_policy::publish_charset_preference;
 pub use native_policy::{
     CapturedFontsetChain, FontSelectionRevision, FontsetCaptureError, FontsetRenderingEntry,
     FontsetRenderingSpec, capture_default_fontset_chain, native_font_name,
@@ -264,12 +265,20 @@ impl FontsetRegistry {
 
 impl FontsetData {
     fn entries_for_char(&self, code: u32, purpose: FontsetLookupPurpose) -> Vec<FontSpecEntry> {
+        // Rendering tries entries in GNU's charset-priority order;
+        // `fontset-font` reports them in definition order, as GNU does.
+        let order = |entries: &SharedFontsetEntries| match purpose {
+            FontsetLookupPurpose::Rendering => entries.in_charset_order(),
+            FontsetLookupPurpose::Patterns => entries.clone(),
+        };
         let specific = self
             .find_range(code)
-            .map_or(&[][..], |range| range.entries.as_slice());
+            .map(|range| order(&range.entries))
+            .unwrap_or_default();
+        let fallback = self.fallback.as_ref().map(order).unwrap_or_default();
         specific
             .iter()
-            .chain(self.fallback.as_deref().unwrap_or_default())
+            .chain(fallback.iter())
             .filter_map(|entry| entry.original().for_lookup(code, purpose))
             .collect()
     }
@@ -281,10 +290,15 @@ impl FontsetData {
     ) -> Option<Vec<FontSpecEntry>> {
         let specific = self
             .find_range(code)
-            .map_or(&[][..], |range| range.entries.as_slice());
-        let fallback = self.fallback.as_deref().unwrap_or_default();
+            .map(|range| range.entries.in_charset_order())
+            .unwrap_or_default();
+        let fallback = self
+            .fallback
+            .as_ref()
+            .map(SharedFontsetEntries::in_charset_order)
+            .unwrap_or_default();
         let mut result = Vec::new();
-        for (index, entry) in specific.iter().chain(fallback).enumerate() {
+        for (index, entry) in specific.iter().chain(fallback.iter()).enumerate() {
             if index >= max_entries {
                 return None;
             }
