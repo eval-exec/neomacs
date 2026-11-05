@@ -308,7 +308,7 @@ pub(super) fn transfer_case(backing: PlainSymbolBacking, transfer: Transfer) {
                 Transfer::Intern => {
                     assert_eq!(worker.step(session), Ok(ReadyStep::Progress));
                     let symbol = worker.word(home(2));
-                    let id = TaggedValue::from_bits(symbol.0)
+                    let id = unsafe { TaggedValue::from_bits(symbol.0) }
                         .as_bare_symbol_id()
                         .unwrap();
                     // Existing assertion-only scalar census: no string is
@@ -467,7 +467,7 @@ fn p3sym_c6_mixed_intern_and_soft_allow_the_same_source_destination_home() {
             worker.complete(session);
             assert_eq!(worker.word(home(0)), worker.word(home(1)));
             assert!(
-                TaggedValue::from_bits(worker.word(home(0)).0)
+                unsafe { TaggedValue::from_bits(worker.word(home(0)).0) }
                     .as_bare_symbol_id()
                     .is_some()
             );

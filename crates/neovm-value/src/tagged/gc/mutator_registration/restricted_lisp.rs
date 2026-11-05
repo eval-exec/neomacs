@@ -1041,7 +1041,7 @@ fn prin1(bits: usize) -> String {
         panic!("prin1 length");
     }
     let mut out = String::new();
-    walk(TaggedValue::from_bits(bits), &mut out, 0);
+    walk(unsafe { TaggedValue::from_bits(bits) }, &mut out, 0);
     out
 }
 
@@ -1148,7 +1148,7 @@ fn exec<'brand>(
             Op::BranchIfNil { cond, target } => {
                 let cond = home_index(cond, homes.len())?;
                 let dest = jump_to(target, ops.len())?;
-                if TaggedValue::from_bits(home_bits(slice, &homes[cond])).is_nil() {
+                if unsafe { TaggedValue::from_bits(home_bits(slice, &homes[cond])) }.is_nil() {
                     if !edge(&mut machine.backedges, bound, from, target) {
                         return Err(ExecError::Backedge);
                     }
@@ -1235,10 +1235,10 @@ fn fix_operands<'brand>(
 ) -> Result<(i64, i64), ExecError> {
     let a = home_index(a, homes.len())?;
     let b = home_index(b, homes.len())?;
-    let x = TaggedValue::from_bits(home_bits(slice, &homes[a]))
+    let x = unsafe { TaggedValue::from_bits(home_bits(slice, &homes[a])) }
         .as_fixnum()
         .ok_or(ExecError::Type)?;
-    let y = TaggedValue::from_bits(home_bits(slice, &homes[b]))
+    let y = unsafe { TaggedValue::from_bits(home_bits(slice, &homes[b])) }
         .as_fixnum()
         .ok_or(ExecError::Type)?;
     Ok((x, y))
@@ -1284,7 +1284,7 @@ fn field_load<'brand>(
     let cell_i = home_index(cell, homes.len())?;
     let dst_i = home_index(dst, homes.len())?;
     let cell_home = homes[cell_i].clone();
-    let value = TaggedValue::from_bits(home_bits(slice, &cell_home));
+    let value = unsafe { TaggedValue::from_bits(home_bits(slice, &cell_home)) };
     if value.is_nil() {
         // Global reads may return nil. GNU car/cdr of nil both return nil.
         slice.store_immediate(&mut homes[dst_i], TaggedValue::NIL.bits())?;
@@ -1312,7 +1312,7 @@ fn field_store<'brand>(
     let cell_i = home_index(cell, homes.len())?;
     let value_i = home_index(value, homes.len())?;
     let cell_bits = home_bits(slice, &homes[cell_i]);
-    if !TaggedValue::from_bits(cell_bits).is_cons() {
+    if !unsafe { TaggedValue::from_bits(cell_bits) }.is_cons() {
         return Err(ExecError::Type);
     }
     if !owned.contains(&cell_bits) {
@@ -1694,7 +1694,7 @@ fn user_wanted_hash<'era>(
         index,
     )?;
     drop(hold);
-    TaggedValue::from_bits(out)
+    unsafe { TaggedValue::from_bits(out) }
         .as_fixnum()
         .ok_or(ExecError::Type)
 }
@@ -1748,7 +1748,7 @@ fn user_keys_equal<'era>(
     if let Some(hs) = editor {
         hs.step(3, 4);
     }
-    Ok(!TaggedValue::from_bits(out).is_nil())
+    Ok(!unsafe { TaggedValue::from_bits(out) }.is_nil())
 }
 
 /// Copy the remembered-hash candidates out under one reader lease, with the
@@ -2095,7 +2095,8 @@ fn user_rem<'era>(
         }
         Ok(lease.edit(|ht| match matched {
             Some(bits) => {
-                let storage_key = TaggedValue::from_bits(bits).to_hash_key(&HashTableTest::Eq);
+                let storage_key =
+                    unsafe { TaggedValue::from_bits(bits) }.to_hash_key(&HashTableTest::Eq);
                 ht.data.remove(&storage_key)
             }
             None => None,
@@ -2117,7 +2118,9 @@ fn ht_operand<'era>(
     with_run(owner, |run| {
         Ok(which
             .iter()
-            .map(|&slot| TaggedValue::from_bits(slots[usize::from(slot)].word_for_test(run)))
+            .map(|&slot| unsafe {
+                TaggedValue::from_bits(slots[usize::from(slot)].word_for_test(run))
+            })
             .collect())
     })
 }
@@ -2837,7 +2840,7 @@ fn dump_witness(overlap: &Overlap, label: &str) {
 
 fn assert_owned_conses(heap: &crate::tagged::gc::TaggedHeap, conses: &FxHashSet<usize>) {
     for bits in conses {
-        let cell = TaggedValue::from_bits(*bits);
+        let cell = unsafe { TaggedValue::from_bits(*bits) };
         assert!(cell.is_cons());
         assert!(
             heap.owns_heap_value_for_test(cell),

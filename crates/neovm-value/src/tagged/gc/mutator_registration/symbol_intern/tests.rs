@@ -27,7 +27,9 @@ fn fresh_intern(kind: PlainSymbolBacking, query: Query, exact_epoch: bool) {
         let charge = run.owner.local.as_ref().unwrap().hot.bytes_since_gc;
         intern_retry(run, &homes.name, &mut homes.dst).expect("fresh initial_intern_into");
         let word = homes.dst.word_for_test(run);
-        let id = Value::from_bits(word).as_bare_symbol_id().unwrap();
+        let id = unsafe { Value::from_bits(word) }
+            .as_bare_symbol_id()
+            .unwrap();
         if exact_epoch {
             assert_eq!(id.0 as usize, registry_before.1);
             assert_eq!(
@@ -333,7 +335,7 @@ fn p3sym_c5_soft_busy_is_a_refusal_and_releases_the_reader() {
                 );
             });
             soft_retry(run, &homes.name, &mut homes.dst).unwrap();
-            assert!(!Value::from_bits(homes.dst.word_for_test(run)).is_nil());
+            assert!(!unsafe { Value::from_bits(homes.dst.word_for_test(run)) }.is_nil());
         },
     )
     .unwrap();

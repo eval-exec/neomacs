@@ -139,7 +139,7 @@ fn actor<'era>(
             })
         })
         .map_err(|error| format!("C5 executor rooted answer: {error:?}"))?;
-        let id = TaggedValue::from_bits(result[2])
+        let id = unsafe { TaggedValue::from_bits(result[2]) }
             .as_bare_symbol_id()
             .ok_or("C5 executor answer is not a bare symbol")?;
         Ok(Row {

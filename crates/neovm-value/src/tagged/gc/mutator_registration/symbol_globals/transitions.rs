@@ -83,10 +83,10 @@ fn p3sym_c3_aliased_destination_and_retained_set_result() {
             run.sym_value_into(handle, &mut scratch).unwrap();
             let result = format!(
                 "({} {})",
-                Value::from_bits(dst.word_for_test(run))
+                unsafe { Value::from_bits(dst.word_for_test(run)) }
                     .as_fixnum()
                     .unwrap(),
-                Value::from_bits(scratch.word_for_test(run))
+                unsafe { Value::from_bits(scratch.word_for_test(run)) }
                     .as_fixnum()
                     .unwrap()
             );

@@ -38,7 +38,7 @@ fn ages(heap: &TaggedHeap, graph: GraphWords) -> [Age; 4] {
     graph.0.map(|word| age(heap, word))
 }
 pub(super) fn age(heap: &TaggedHeap, word: WordIdentity) -> Age {
-    let value = TaggedValue::from_bits(word.0);
+    let value = unsafe { TaggedValue::from_bits(word.0) };
     if !heap.owns_heap_value_for_test(value) {
         return Age::Missing;
     }

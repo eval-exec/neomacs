@@ -20,7 +20,7 @@ fn sample<'era>(
     dst: &mut OwnerRootSlot<'era>,
 ) -> Result<Option<i64>, GlobalError> {
     match run.sym_value_into(handle, dst) {
-        Ok(()) => Value::from_bits(dst.word_for_test(run))
+        Ok(()) => unsafe { Value::from_bits(dst.word_for_test(run)) }
             .as_fixnum()
             .map(Some)
             .ok_or(GlobalError::Authority(RegistrationError::Publication)),

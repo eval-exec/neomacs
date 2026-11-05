@@ -45,7 +45,7 @@ impl ExecutionTestHomes {
     }
 
     pub(crate) fn is_cons(home: &OwnerRootSlot<'_>, run: &RunAccess<'_, '_>) -> bool {
-        TaggedValue::from_bits(home.word_for_test(run)).is_cons()
+        unsafe { TaggedValue::from_bits(home.word_for_test(run)) }.is_cons()
     }
 
     pub(crate) fn nil<'era>(

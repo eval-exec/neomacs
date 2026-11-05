@@ -123,7 +123,7 @@ fn counts(stopped: &AllStopped<'_>, tables: &[usize]) -> Vec<usize> {
     tables
         .iter()
         .map(|&bits| {
-            KeeperTableMut::enter(stopped, TaggedValue::from_bits(bits))
+            KeeperTableMut::enter(stopped, unsafe { TaggedValue::from_bits(bits) })
                 .unwrap()
                 .inspect(|table| table.data.len())
         })
@@ -430,7 +430,7 @@ fn memo_program(owner: usize) -> Vec<Op> {
 }
 
 fn exact_memos(stopped: &AllStopped<'_>, table: usize, expected: usize) {
-    let lease = KeeperTableMut::enter(stopped, TaggedValue::from_bits(table)).unwrap();
+    let lease = KeeperTableMut::enter(stopped, unsafe { TaggedValue::from_bits(table) }).unwrap();
     lease.inspect(|table| {
         assert_eq!(table.data.len(), expected);
         let live = table.data.live_hash_keys_in_slot_order();

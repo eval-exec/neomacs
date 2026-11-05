@@ -263,7 +263,7 @@ fn p3sym_c4_call_stale_generations_index_reuse_and_capacity() {
                     RegistrationError::StaleRegistration
                 ))
             );
-            assert!(Value::from_bits(fresh.word_for_test(run)).is_nil());
+            assert!(unsafe { Value::from_bits(fresh.word_for_test(run)) }.is_nil());
             run.sym_call_begin(&handles[0], &mut fresh_cache, &mut fresh_activation)
                 .unwrap();
             assert_eq!(finish(run, &mut fresh_activation, &mut fresh), oracle()[3]);

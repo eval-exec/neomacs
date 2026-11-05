@@ -179,7 +179,7 @@ impl KeeperSymbols<'_> {
             // the actual keeper still holds word zero, and backing() checked
             // Plain/projected-Plain before the test-only rooted value probe.
             let bits = unsafe { self.registry.symbols.backing.probe(input.key.symbol) };
-            check_role(Value::from_bits(bits), input.role, lambda)?;
+            check_role(unsafe { Value::from_bits(bits) }, input.role, lambda)?;
         }
         Ok(AdmittedCombinedInputs {
             target: *target,

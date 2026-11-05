@@ -53,10 +53,10 @@ pub(super) struct Winner {
 pub(super) fn observe(worker: &mut Worker<'_>) -> Winner {
     // Actual checked owner homes, before the separate final-clear phase.
     // Symbol results decode totally; the name remains an opaque observation.
-    let id = TaggedValue::from_bits(worker.word(home(2)).0)
+    let id = unsafe { TaggedValue::from_bits(worker.word(home(2)).0) }
         .as_bare_symbol_id()
         .expect("intern returns a symbol");
-    let soft = TaggedValue::from_bits(worker.word(home(0)).0)
+    let soft = unsafe { TaggedValue::from_bits(worker.word(home(0)).0) }
         .as_bare_symbol_id()
         .expect("soft finds the same symbol");
     Winner {
@@ -96,7 +96,7 @@ fn snapshot(
         Age::Missing => Text::Missing,
         Age::Young | Age::Old => {
             // Membership is established before decoding the exact known name.
-            let name = TaggedValue::from_bits(graph.name().0);
+            let name = unsafe { TaggedValue::from_bits(graph.name().0) };
             Text::Bytes(name.as_lisp_string().unwrap().as_bytes().to_vec())
         }
     };
@@ -104,7 +104,7 @@ fn snapshot(
     let candidate_text = match candidate_age {
         Age::Missing => Text::Missing,
         Age::Young | Age::Old => Text::Bytes(
-            TaggedValue::from_bits(candidate.0)
+            unsafe { TaggedValue::from_bits(candidate.0) }
                 .as_lisp_string()
                 .unwrap()
                 .as_bytes()

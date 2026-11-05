@@ -32,7 +32,7 @@ fn refusal(kind: PlainSymbolBacking, query: Query) {
         let heap = run.owner.registry.heap;
         let name = homes.name.word_for_test(run);
         let equal = homes.equal_name.word_for_test(run);
-        let spelling = String::from_utf8(Value::from_bits(name).as_lisp_string().unwrap().as_bytes().to_vec()).unwrap();
+        let spelling = String::from_utf8(unsafe { Value::from_bits(name) }.as_lisp_string().unwrap().as_bytes().to_vec()).unwrap();
         let registry_before = fresh_registry_facts_for_test(heap, id, name, &spelling);
         let before = run.initial_facts_for_test(id).unwrap();
         let old = run.initial_facts_for_test(homes.old_id).unwrap();
@@ -70,7 +70,7 @@ fn refusal(kind: PlainSymbolBacking, query: Query) {
         // Refusal is clean: the next attempt reuses the same proposed ID and
         // publishes exactly once, rather than leaving a gap or stale atom.
         intern_retry(run, &homes.name, &mut homes.dst).unwrap();
-        assert_eq!(Value::from_bits(homes.dst.word_for_test(run)).as_bare_symbol_id(), Some(id));
+        assert_eq!(unsafe { Value::from_bits(homes.dst.word_for_test(run)) }.as_bare_symbol_id(), Some(id));
         let committed = fresh_registry_facts_for_test(heap, id, name, &spelling);
         assert_eq!((committed.epoch, committed.symbols),
             (registry_before.epoch + 1, registry_before.symbols + 1));
@@ -85,7 +85,7 @@ fn refusal(kind: PlainSymbolBacking, query: Query) {
             assert!(!run.initial_facts_for_test(SymId(id.0 - 1)).unwrap().present);
         }
         intern_retry(run, &homes.equal_name, &mut homes.dst).unwrap();
-        assert_eq!(Value::from_bits(homes.dst.word_for_test(run)).as_bare_symbol_id(), Some(id));
+        assert_eq!(unsafe { Value::from_bits(homes.dst.word_for_test(run)) }.as_bare_symbol_id(), Some(id));
         assert_eq!(fresh_registry_facts_for_test(heap, id, name, &spelling), committed);
         assert_eq!(name_publication_for_test(heap, id, equal), (Some(name), true, false, true));
         eprintln!("P3SYM_C5_FRESH_REFUSAL {kind:?} {query:?} unpublished=1 retry_winners=1 world_bytes={} registry_bytes={}",

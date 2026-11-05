@@ -304,11 +304,11 @@ impl ValueCell {
 /// other is detectable by value comparison.
 fn heap_a() -> Value {
     // 0x1_0000 | 0b011 = 0x1_0003. 8-aligned base, cons tag.
-    Value::from_bits(0x1_0000 | crate::tagged::value::TAG_CONS)
+    unsafe { Value::from_bits(0x1_0000 | crate::tagged::value::TAG_CONS) }
 }
 fn heap_b() -> Value {
     // 0x2_0000 | 0b011 = 0x2_0003. Distinct 8-aligned base, cons tag.
-    Value::from_bits(0x2_0000 | crate::tagged::value::TAG_CONS)
+    unsafe { Value::from_bits(0x2_0000 | crate::tagged::value::TAG_CONS) }
 }
 
 /// Raw-pointer bundle to share the symbol + seqlock across threads. The only
@@ -457,7 +457,7 @@ fn seqlock_negative_control_tears_without_protocol() {
         // mid-flip V->P: redirect is Plainval while the word is still HEAP_B.
         arm_published.wait();
         let redirect = sym.flags.load_redirect();
-        let value = Value::from_bits(sym.load_word_acquire());
+        let value = unsafe { Value::from_bits(sym.load_word_acquire()) };
         reader_sampled.wait();
         writer.join().unwrap();
         (redirect, value)

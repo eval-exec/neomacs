@@ -203,7 +203,7 @@ impl<'brand> RunSlice<'brand, '_> {
 
     #[cfg(test)]
     pub(super) fn plant_word_for_test(&mut self, result: &mut SliceRoot<'brand>, bits: usize) {
-        write_slot(result, TaggedValue::from_bits(bits));
+        write_slot(result, unsafe { TaggedValue::from_bits(bits) });
     }
 
     // Commit before any potentially failing/caught operation, and invalidate

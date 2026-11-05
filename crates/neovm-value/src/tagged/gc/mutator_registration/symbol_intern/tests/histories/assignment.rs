@@ -75,7 +75,7 @@ fn prepare<'era>(
         })?;
         symbols.push(attempt(owner, "assignment rooted intern/handle", |run| {
             run.initial_intern_into(name, &mut dst)?;
-            let id = Value::from_bits(dst.word_for_test(run))
+            let id = unsafe { Value::from_bits(dst.word_for_test(run)) }
                 .as_bare_symbol_id()
                 .ok_or(Failure::Fixture("assignment intern returned no symbol"))?;
             Ok((id, run.initial_symbol_handle(&dst)?))

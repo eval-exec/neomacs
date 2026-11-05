@@ -169,7 +169,7 @@ enum OwnerSnapshot {
     },
 }
 fn owner_snapshot(heap: &TaggedHeap, owner: OwnerCons) -> OwnerSnapshot {
-    let value = TaggedValue::from_bits(owner.0.0);
+    let value = unsafe { TaggedValue::from_bits(owner.0.0) };
     let owner_age = age(heap, owner.0);
     if owner_age == Age::Missing || !value.is_cons() {
         return OwnerSnapshot::Missing;

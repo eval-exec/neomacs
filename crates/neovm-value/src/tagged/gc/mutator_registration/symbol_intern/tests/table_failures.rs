@@ -37,7 +37,7 @@ fn table_limit(limit: Limit) {
             let heap = registry.heap;
             let name = homes.name.word_for_test(run);
             let spelling = String::from_utf8(
-                Value::from_bits(name)
+                unsafe { Value::from_bits(name) }
                     .as_lisp_string()
                     .unwrap()
                     .as_bytes()
