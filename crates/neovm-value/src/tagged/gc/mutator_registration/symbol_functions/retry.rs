@@ -51,7 +51,6 @@ pub(in super::super) fn function(error: &FunctionError) -> Retry {
     }
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[doc(hidden)]
 pub fn rendezvous(error: &RendezvousError) -> Retry {
     match error {
