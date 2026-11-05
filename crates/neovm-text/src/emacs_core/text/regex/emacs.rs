@@ -880,7 +880,6 @@ pub const CHAR_TABLE_WALK_MIN_SPAN: usize = 16 * 1024;
 thread_local! {
     /// The last char-table walked by [`char_table_folds_into_ascii`]:
     /// `(table bits, char-table write tick, folds)`.
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     static CHAR_TABLE_ASCII_FOLD: std::cell::Cell<Option<(usize, u64, bool)>> =
         const { std::cell::Cell::new(None) };
 }

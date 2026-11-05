@@ -1393,7 +1393,6 @@ impl OverlayIndex {
     }
 
     #[cfg(any(test, feature = "test-support"))]
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn interval_height(&self) -> usize {
         self.intervals.read().height()
     }

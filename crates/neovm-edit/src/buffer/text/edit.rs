@@ -25,8 +25,8 @@ pub(in crate::buffer) struct TextExtentDelta {
 #[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TextExtentDelta {
-    pub chars: CharDelta,
-    pub emacs_bytes: EmacsByteDelta,
+    chars: CharDelta,
+    emacs_bytes: EmacsByteDelta,
 }
 
 /// Insertion point plus the text size known by the caller.

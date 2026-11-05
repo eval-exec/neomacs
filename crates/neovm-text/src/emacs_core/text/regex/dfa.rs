@@ -1420,7 +1420,6 @@ const CACHED_PREFIX_BYTES: usize = 8;
 /// A DFA state: the NFA kernel (where threads resume, before the closure)
 /// and the facts about the character before the position.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 struct StateKey {
     kernel: Box<[KernelItem]>,
     prev: Facts,

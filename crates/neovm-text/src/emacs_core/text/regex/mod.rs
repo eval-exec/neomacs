@@ -88,7 +88,6 @@ pub const STRING_MATCH_AT_DOT_UNREACHABLE: usize = usize::MAX;
 /// exposing errors from an implementation-specific native regexp dialect.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[doc(hidden)]
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub enum EmacsRegexpError {
     Compile(String),
     MatcherOverflow,
@@ -4750,7 +4749,6 @@ pub(crate) fn string_match_full_with_case_fold_source_lisp_posix(
 /// [`string_match_full_with_case_fold_source_lisp`] for why this
 /// [`DefaultSyntaxLookup`] bypass is test-only.
 #[cfg(any(test, feature = "test-support"))]
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn string_match_full_with_case_fold_source_lisp_pattern_posix(
     pattern: &LispString,
     string: &neovm_value::heap_types::LispString,
@@ -4774,7 +4772,6 @@ pub(crate) fn string_match_full_with_case_fold_source_lisp_pattern_posix(
 }
 
 #[cfg(any(test, feature = "test-support"))] // production match-data callers commit through StringSearchSuccess
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[allow(clippy::too_many_arguments)] // matching options remain explicit at the GNU-regexp boundary
 pub(crate) fn string_match_full_with_case_fold_source_lisp_pattern_posix_syntax(
     pattern: &LispString,

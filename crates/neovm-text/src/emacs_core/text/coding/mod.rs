@@ -899,7 +899,6 @@ const CCL_KEY_VALIDS: i64 = i64::MIN + 8;
 /// coding system. These are the three type-specific attributes GNU's
 /// `define-coding-system` passes after the common coding attributes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct CclCodingSpec {
     pub(crate) decoder: Value,
     pub(crate) encoder: Value,

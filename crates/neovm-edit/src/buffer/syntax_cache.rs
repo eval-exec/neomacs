@@ -56,7 +56,6 @@ impl SyntaxMutationNotes {
     /// A text edit whose first changed byte is `at_byte` (every later byte may
     /// have moved). Called once per content-epoch bump.
     #[inline]
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn note_edit(&mut self, at_byte: usize) {
         self.dirty_byte = Some(self.dirty_byte.map_or(at_byte, |dirty| dirty.min(at_byte)));
         self.noted_edits = self.noted_edits.wrapping_add(1);
@@ -65,7 +64,6 @@ impl SyntaxMutationNotes {
     /// A property mutation that moved the syntax tick by `ticks` and can
     /// change syntax-relevant properties only at or after `at_char`.
     #[inline]
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn note_prop_change(&mut self, at_char: usize, ticks: u64) {
         self.dirty_char = Some(self.dirty_char.map_or(at_char, |dirty| dirty.min(at_char)));
         self.noted_prop_ticks = self.noted_prop_ticks.wrapping_add(ticks);
@@ -80,7 +78,6 @@ impl SyntaxMutationNotes {
 
     /// Apply what changed since the last drain, given the storage's current
     /// text epoch and syntax tick, and reset the notes.
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn take_invalidation(&mut self, epoch: u64, prop_tick: u64) -> Invalidation {
         let unaccounted_text = epoch.wrapping_sub(self.seen_epoch) != self.noted_edits;
         let unaccounted_props =
