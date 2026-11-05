@@ -5,16 +5,16 @@ mod delivery;
 mod lisp;
 mod model;
 mod platform;
+// The compiled-in backend's primitive names, re-exported from the private
+// selection module so tests can ask the build instead of naming an OS. The
+// feature arm is the cross-crate test-support route; the other arm covers
+// production and this crate's own cfg(test) build, so every build has
+// exactly one binding.
 #[cfg(feature = "test-support")]
 pub use platform::{BACKEND_SUBRS, REMOVE_WATCH_SEMANTICS, RemoveWatchSemantics};
 #[cfg(not(feature = "test-support"))]
 pub(crate) use platform::{BACKEND_SUBRS, REMOVE_WATCH_SEMANTICS, RemoveWatchSemantics};
 mod registry;
-
-// The compiled-in backend's primitive names, re-exported from the private
-// selection module so tests can ask the build instead of naming an OS.
-#[cfg(test)]
-pub(crate) use platform::{BACKEND_SUBRS, REMOVE_WATCH_SEMANTICS, RemoveWatchSemantics};
 
 // Private to the subsystem: every caller is inside `file_notify`, and keeping
 // it here means minting a `file-notify-error` stays within the module that
