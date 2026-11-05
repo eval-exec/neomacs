@@ -18,6 +18,7 @@ pub(crate) mod body;
 mod chrome;
 pub use chrome::WindowChromePresence;
 pub mod display;
+pub(crate) use display::frame_line_height;
 pub use neovm_eval::emacs_core::eval::data::window_state::GUI_SCROLL_BAR_DEFAULT_WIDTH_PX;
 pub use neovm_eval::emacs_core::eval::data::window_state::{
     current_char_table_layout_revision, resolve_window_scroll_bar_geometry,
@@ -30,7 +31,6 @@ pub(crate) use neovm_eval::emacs_core::eval::data::window_state::{
     swap_world_state as swap_display_world_state,
     world_state_placeholder as display_world_state_placeholder,
 };
-pub(crate) use display::frame_line_height;
 mod display_table_input;
 pub(crate) use display::WindowScrollUpdate;
 pub use display_table_input::LayoutDisplayTableInput;

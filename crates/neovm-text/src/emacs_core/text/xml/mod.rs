@@ -733,7 +733,7 @@ fn element_children(value: &Value) -> Vec<Value> {
 
 /// Return the attribute list of an element node `(tag attrs child...)`.
 fn element_attributes(value: &Value) -> Value {
-    match super::value::list_to_vec(value) {
+    match neovm_value::value::list_to_vec(value) {
         Some(items) if items.len() > 1 => items[1],
         _ => Value::NIL,
     }

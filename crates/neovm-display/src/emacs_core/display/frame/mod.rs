@@ -1150,7 +1150,7 @@ pub fn builtin_set_frame_position(
 /// `left`/`top`; without this, Lisp saw the new position while the window
 /// stayed where it was.
 fn move_gui_frame_window(
-    eval: &mut super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     fid: FrameId,
     left: Option<FramePositionSpec>,
     top: Option<FramePositionSpec>,

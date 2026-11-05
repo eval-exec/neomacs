@@ -240,6 +240,10 @@ pub trait WindowDisplayContextExt {
             ) -> crate::window::WindowLayoutQueryOutcome
             + 'static;
 
+    /// Whether a layout query is running, so a nested one would be refused
+    /// as `LayoutBusy`.
+    fn window_layout_query_running(&self) -> bool;
+
     fn query_window_layout(
         &mut self,
         frame_id: FrameId,
@@ -514,7 +518,7 @@ impl WindowDisplayContextExt for neovm_eval::emacs_core::eval::Context {
 
     /// Whether a layout query is running, so a nested one would be refused
     /// as `LayoutBusy`.
-    pub(crate) fn window_layout_query_running(&self) -> bool {
+    fn window_layout_query_running(&self) -> bool {
         matches!(
             self.window_layout_query_adapter,
             WindowLayoutQueryAdapter::Running

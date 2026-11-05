@@ -144,7 +144,7 @@ pub(crate) fn screen_line_height_at(
     if eval.window_layout_query_running() {
         return Ok(None);
     }
-    let Some(source) = eval.buffers.get(buffer) else {
+    let Some(source) = eval.edit.buffers.get(buffer) else {
         return Ok(None);
     };
     let start = measurement::backtrack(source, pos, 0);

@@ -5707,7 +5707,9 @@ pub fn builtin_line_pixel_height(
     ))
 }
 
-fn selected_line_pixel_height(eval: &mut super::eval::Context) -> Result<Option<i64>, Flow> {
+fn selected_line_pixel_height(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+) -> Result<Option<i64>, Flow> {
     let Some((fid, wid)) = resolve_live_window_identity(&eval.frames, None)? else {
         return Ok(None);
     };
@@ -5722,6 +5724,7 @@ fn selected_line_pixel_height(eval: &mut super::eval::Context) -> Result<Option<
         return Ok(Some(line_height));
     };
     let Some(pos) = eval
+        .edit
         .buffers
         .get(buffer_id)
         .map(|buffer| buffer.point_lisp_char_pos())
@@ -5738,7 +5741,7 @@ fn selected_line_pixel_height(eval: &mut super::eval::Context) -> Result<Option<
     {
         crate::emacs_core::window_cmds::remember_selected_window_point_in_state(
             &mut eval.frames,
-            &mut eval.buffers,
+            &mut eval.edit.buffers,
             fid,
         );
     }
