@@ -67,7 +67,7 @@ pub use cell::{
     LISP_SYMBOL_INTERNED_GLOBAL_OFFSET, LISP_SYMBOL_SIZE, LISP_SYMBOL_VAL_OFFSET, ValueCell,
 };
 pub use cell::{LispSymbol, SymbolFlags};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) use fn_stamps::force_fn_stamps_for_test;
 pub use function_cell_observer::FunctionCellObserver;
 pub(crate) use function_cell_observer::{function_cell_observer, note_function_epoch_move};
@@ -4044,6 +4044,7 @@ impl Obarray {
     /// unless `NEOVM_FN_STAMPS` is on. Cold paths only: hot paths keep their
     /// one compare against the clock and ask this after it fails.
     #[inline]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn fn_unchanged_since(&self, id: SymId, since: u64) -> bool {
         fn_stamps::fn_stamps_enabled()
             && self.symbols.fn_unchanged_since(Self::slot_index(id), since)

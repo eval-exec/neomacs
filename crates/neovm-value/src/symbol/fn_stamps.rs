@@ -230,7 +230,7 @@ mod prepared_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     static FN_STAMPS_TEST_OVERRIDE: std::cell::Cell<Option<bool>> =
         const { std::cell::Cell::new(None) };
@@ -238,7 +238,7 @@ thread_local! {
 
 /// Force `NEOVM_FN_STAMPS` on/off on the current thread (tests only); `None`
 /// returns to the environment.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn force_fn_stamps_for_test(on: Option<bool>) {
     FN_STAMPS_TEST_OVERRIDE.with(|c| c.set(on));
 }

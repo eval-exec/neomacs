@@ -24,6 +24,9 @@ pub use crate::emacs_core::host_input;
 pub(crate) use neovm_display::image_identity;
 pub use neovm_eval::host_effect;
 pub use neovm_value::logging;
+#[cfg(test)]
+#[path = "../core_test_facades/symbol.rs"]
+pub mod symbol;
 #[cfg(not(test))]
 pub use neovm_value::tagged;
 #[cfg(test)]

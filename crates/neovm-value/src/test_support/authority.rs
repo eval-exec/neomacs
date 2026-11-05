@@ -260,3 +260,9 @@ pub fn set_arm(
 ) {
     descriptor.set_arm(arm);
 }
+/// Value-FENCE row (peer 17:15Z fn_stamps split): the thread-local fn-stamps
+/// policy switch for the relocated Context tests. Safe: it toggles only the
+/// test override and touches no heap state.
+pub fn force_fn_stamps_for_test(on: Option<bool>) {
+    crate::symbol::force_fn_stamps_for_test(on);
+}
