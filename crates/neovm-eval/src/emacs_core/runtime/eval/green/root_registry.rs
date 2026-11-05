@@ -25,8 +25,7 @@ impl super::GreenRuntime {
     /// All owners have restored or terminated, either after teardown's joins
     /// or at exclusive World destruction. The borrowed drain proof prevents
     /// any collection until the final registration has explicitly finished.
-    #[doc(hidden)]
-    pub fn finish_terminated_roots(&self, collector: &QuiescentCollector<'_>) {
+    pub(crate) fn finish_terminated_roots(&self, collector: &QuiescentCollector<'_>) {
         let mut parked = self.parked.borrow_mut();
         if let Err(error) = parked.close_and_drain(collector) {
             tracing::error!(%error, "terminated host registry cannot drain");
@@ -53,8 +52,9 @@ impl super::GreenRuntime {
 
 impl super::Context {
     /// Called only after main has restored and joined every worker.
-    #[doc(hidden)]
-    pub fn finish_ended_parked_roots(&mut self) -> Result<(), super::host_service::DrainBlocked> {
+    pub(crate) fn finish_ended_parked_roots(
+        &mut self,
+    ) -> Result<(), super::host_service::DrainBlocked> {
         if self.with_green_runtime(|runtime| runtime.parked.borrow().is_empty()) {
             return Ok(());
         }

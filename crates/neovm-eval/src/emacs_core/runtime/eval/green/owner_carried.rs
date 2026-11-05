@@ -84,8 +84,7 @@ impl OwnerCarried {
 
     /// Put the state into OWNER, which now runs on this OS thread.
     #[cold]
-    #[doc(hidden)]
-    pub fn put(self, owner: &mut Context) {
+    pub(crate) fn put(self, owner: &mut Context) {
         owner.profiler = self.profiler;
         owner.profiler.resume_on_this_thread();
         owner

@@ -86,8 +86,7 @@ impl Context {
     /// Keep private keeper minting within the Context module. Fence negatives
     /// borrow the real serial keeper for one scope; no Baton can escape it.
     #[cfg(test)]
-    #[doc(hidden)]
-    pub fn with_weak_sweep_keeper_for_test<R>(
+    pub(crate) fn with_weak_sweep_keeper_for_test<R>(
         &mut self,
         body: impl FnOnce(&mut Context, &super::Baton) -> R,
     ) -> R {
@@ -98,8 +97,7 @@ impl Context {
     /// Explicit closed-fixture weak sweep admission. Production keeps its
     /// strict weak-table fence and GEN1-only capability boundary.
     #[cfg(test)]
-    #[doc(hidden)]
-    pub fn admit_owned_parallel_with_weak_tables_for_test<R>(
+    pub(crate) fn admit_owned_parallel_with_weak_tables_for_test<R>(
         &mut self,
         tables: &[TaggedValue],
         body: impl for<'heap> FnOnce(
@@ -114,8 +112,7 @@ impl Context {
     /// Retained closed proof kernels may exercise either collector mode.
     /// This nominal route cannot produce a production era or JIT admission.
     #[cfg(test)]
-    #[doc(hidden)]
-    pub fn admit_owned_proof_parallel<R>(
+    pub(crate) fn admit_owned_proof_parallel<R>(
         &mut self,
         body: impl for<'heap> FnOnce(
             OwnedProofProjection<'heap>,
@@ -127,8 +124,7 @@ impl Context {
     /// Admit this suspended Context for production owned overlap. GEN0 is
     /// refused by the actual collector capability before any owner can run.
     #[allow(dead_code)]
-    #[doc(hidden)]
-    pub fn admit_owned_parallel<R>(
+    pub(crate) fn admit_owned_parallel<R>(
         &mut self,
         body: impl for<'heap> FnOnce(
             OwnedParallelProjection<'heap>,
@@ -140,8 +136,7 @@ impl Context {
     /// One preparation/recovery transaction for sealed static factories. The
     /// plan chooses a nominal construction boundary at compile time; no mode
     /// flag or heap-mode branch is carried into execution.
-    #[doc(hidden)]
-    pub fn admit_owned_with<P: AdmissionPlan, R>(
+    pub(crate) fn admit_owned_with<P: AdmissionPlan, R>(
         &mut self,
         plan: P,
         body: impl for<'heap> FnOnce(
@@ -209,8 +204,7 @@ impl Context {
     /// and admission refuses it. Returns whether the original object was
     /// actually reclaimed; only then does serial recovery install a fresh
     /// empty weak-value table.
-    #[doc(hidden)]
-    pub fn retire_empty_dead_windows_table(&mut self) -> bool {
+    pub(crate) fn retire_empty_dead_windows_table(&mut self) -> bool {
         // The canonical variable read, not the evaluator: admission must not
         // run Lisp, and GNU stores this DEFVAR_LISP as one global value.
         let Some(value) = self.variable_value_by_name("window-dead-windows-table") else {
@@ -229,8 +223,7 @@ impl Context {
         true
     }
 
-    #[doc(hidden)]
-    pub fn recover_serial_context(&mut self, retired_dead_windows: bool) {
+    pub(crate) fn recover_serial_context(&mut self, retired_dead_windows: bool) {
         // The original returning continuation owns the current receiver.
         // Retire parallel function publication before any serial allocation
         // or entry; never retain or refresh a parked admission-header pointer.
@@ -241,8 +234,7 @@ impl Context {
         }
     }
 
-    #[doc(hidden)]
-    pub fn install_empty_dead_windows_table(&mut self) {
+    pub(crate) fn install_empty_dead_windows_table(&mut self) {
         let table = self
             .tagged_heap
             .alloc_hash_table(LispHashTable::new_with_options(

@@ -20,8 +20,10 @@ pub(super) struct ValidatedWait {
 }
 
 impl ValidatedWait {
-    #[doc(hidden)]
-    pub fn unlock(manager: &mut ThreadManager, condition: CondVarHandle) -> Result<Self, Flow> {
+    pub(crate) fn unlock(
+        manager: &mut ThreadManager,
+        condition: CondVarHandle,
+    ) -> Result<Self, Flow> {
         let mutex = manager.condition_variable_mutex(condition);
         let depth = manager.mutex_unlock_for_wait(mutex).ok_or_else(|| {
             signal(
@@ -109,8 +111,7 @@ impl<'a> WaitOwner<'a> {
         }
     }
 
-    #[doc(hidden)]
-    pub fn start_reacquiring(&mut self) -> Result<(), Flow> {
+    pub(crate) fn start_reacquiring(&mut self) -> Result<(), Flow> {
         let wait = self.waiting()?;
         self.context
             .green_seat()
@@ -122,8 +123,7 @@ impl<'a> WaitOwner<'a> {
         Ok(())
     }
 
-    #[doc(hidden)]
-    pub fn reacquiring(&mut self) -> Result<ValidatedWait, Flow> {
+    pub(crate) fn reacquiring(&mut self) -> Result<ValidatedWait, Flow> {
         match self
             .context
             .green_seat()

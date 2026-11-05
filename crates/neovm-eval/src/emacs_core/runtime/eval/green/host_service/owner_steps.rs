@@ -109,8 +109,7 @@ impl RevokedOwnerStep {
 }
 
 impl OwnerStepState {
-    #[doc(hidden)]
-    pub fn unrevoked_key(&self) -> Option<StepKey> {
+    pub(crate) fn unrevoked_key(&self) -> Option<StepKey> {
         match self {
             Self::Issued(key) => Some(*key),
             Self::Prepared(pending) | Self::AwaitingOwner(pending) => Some(pending.key()),
@@ -173,20 +172,17 @@ impl Default for OwnerSteps {
 
 impl OwnerSteps {
     #[cfg(test)]
-    #[doc(hidden)]
-    pub fn state_for_test(&self) -> &OwnerStepState {
+    pub(crate) fn state_for_test(&self) -> &OwnerStepState {
         &self.state
     }
 
-    #[doc(hidden)]
-    pub fn can_settle(&self) -> bool {
+    pub(crate) fn can_settle(&self) -> bool {
         matches!(self.state, OwnerStepState::Idle)
     }
 
     /// Private state transition shared by both kinds of terminal authority.
     /// Neither caller may dispose a published or claimed owner port.
-    #[doc(hidden)]
-    pub fn discard_unused_after_terminal(&mut self) -> Result<(), OwnerStepError> {
+    pub(crate) fn discard_unused_after_terminal(&mut self) -> Result<(), OwnerStepError> {
         match self.state {
             OwnerStepState::Idle => Ok(()),
             OwnerStepState::Issued(_) | OwnerStepState::Prepared(_) => {
@@ -200,8 +196,7 @@ impl OwnerSteps {
         }
     }
 
-    #[doc(hidden)]
-    pub fn request_interruption(&mut self, reason: CancelReason) -> OwnerInterruption {
+    pub(crate) fn request_interruption(&mut self, reason: CancelReason) -> OwnerInterruption {
         match self.interruption {
             OwnerInterruption::Uninterrupted => {
                 self.interruption = OwnerInterruption::Requested(reason);
@@ -342,8 +337,7 @@ fn validate_owner_frame_records(
 }
 
 impl HostRegistry {
-    #[doc(hidden)]
-    pub fn validate_owner_step_baton(&self, baton: &Baton) -> Result<(), OwnerStepError> {
+    pub(crate) fn validate_owner_step_baton(&self, baton: &Baton) -> Result<(), OwnerStepError> {
         if !baton.held_here() {
             return Err(HostRootError::BatonRequired.into());
         }
@@ -358,8 +352,7 @@ impl HostRegistry {
         Ok(())
     }
 
-    #[doc(hidden)]
-    pub fn request_owner_interruption(
+    pub(crate) fn request_owner_interruption(
         &mut self,
         baton: &Baton,
         parent: HostRequestKey,
@@ -373,8 +366,7 @@ impl HostRegistry {
         Ok(record.steps.request_interruption(reason))
     }
 
-    #[doc(hidden)]
-    pub fn owner_interruption(
+    pub(crate) fn owner_interruption(
         &self,
         baton: &Baton,
         key: StepKey,
@@ -402,8 +394,7 @@ impl HostRegistry {
         Ok(record.steps.interruption)
     }
 
-    #[doc(hidden)]
-    pub fn continuation_record(&self, key: StepKey) -> Result<&Record, OwnerStepError> {
+    pub(crate) fn continuation_record(&self, key: StepKey) -> Result<&Record, OwnerStepError> {
         let record = self
             .records
             .get(&key.parent())
@@ -419,8 +410,7 @@ impl HostRegistry {
 
     /// Issue before the original requester publishes its first park, or while
     /// a restored requester prepares its next semantic stop.
-    #[doc(hidden)]
-    pub fn issue_owner_step(
+    pub(crate) fn issue_owner_step(
         &mut self,
         baton: &Baton,
         heap: &TaggedHeap,
@@ -453,8 +443,7 @@ impl HostRegistry {
         Ok(key)
     }
 
-    #[doc(hidden)]
-    pub fn prepare_owner_step(
+    pub(crate) fn prepare_owner_step(
         &mut self,
         baton: &Baton,
         heap: &TaggedHeap,
@@ -499,8 +488,7 @@ impl HostRegistry {
 
     /// An admitted requester can reserve one next semantic stop, including
     /// cleanup during Closing, while its current consuming claim remains live.
-    #[doc(hidden)]
-    pub fn issue_successor(
+    pub(crate) fn issue_successor(
         &mut self,
         baton: &Baton,
         heap: &TaggedHeap,
@@ -534,8 +522,7 @@ impl HostRegistry {
         Ok(next)
     }
 
-    #[doc(hidden)]
-    pub fn prepare_successor(
+    pub(crate) fn prepare_successor(
         &mut self,
         baton: &Baton,
         heap: &TaggedHeap,
@@ -579,8 +566,7 @@ impl HostRegistry {
 
     /// Native main can publish only the step already rooted by its requester.
     /// This mutates metadata, never dereferences a worker Lisp object.
-    #[doc(hidden)]
-    pub fn publish_owner_step(
+    pub(crate) fn publish_owner_step(
         &mut self,
         baton: &Baton,
         key: StepKey,
@@ -602,8 +588,10 @@ impl HostRegistry {
         Ok(())
     }
 
-    #[doc(hidden)]
-    pub fn awaiting_owner_step(&self, parent: HostRequestKey) -> Result<StepKey, OwnerStepError> {
+    pub(crate) fn awaiting_owner_step(
+        &self,
+        parent: HostRequestKey,
+    ) -> Result<StepKey, OwnerStepError> {
         let record = self
             .records
             .get(&parent)
@@ -619,8 +607,7 @@ impl HostRegistry {
         }
     }
 
-    #[doc(hidden)]
-    pub fn claim_owner_step(
+    pub(crate) fn claim_owner_step(
         &mut self,
         restored: &RestoredHostOwner<'_>,
         key: StepKey,
@@ -660,8 +647,7 @@ impl HostRegistry {
         }
     }
 
-    #[doc(hidden)]
-    pub fn validate_continuation_access(
+    pub(crate) fn validate_continuation_access(
         &self,
         baton: &Baton,
         heap: &TaggedHeap,
@@ -681,8 +667,7 @@ impl HostRegistry {
     /// # Safety
     /// Roots must be live same-heap roots of the restored original requester;
     /// no GC, callback or handoff occurs through registration.
-    #[doc(hidden)]
-    pub unsafe fn register_continuation<K: RegisteredRecord>(
+    pub(crate) unsafe fn register_continuation<K: RegisteredRecord>(
         &mut self,
         baton: &Baton,
         heap: &TaggedHeap,
@@ -704,8 +689,7 @@ impl HostRegistry {
         Ok(reference)
     }
 
-    #[doc(hidden)]
-    pub fn complete_owner_step(
+    pub(crate) fn complete_owner_step(
         &mut self,
         baton: &Baton,
         heap: &TaggedHeap,
@@ -812,8 +796,7 @@ impl HostRegistry {
         }
     }
 
-    #[doc(hidden)]
-    pub fn take_owner_completion(
+    pub(crate) fn take_owner_completion(
         &mut self,
         baton: &Baton,
         key: StepKey,
@@ -849,8 +832,7 @@ impl HostRegistry {
         })
     }
 
-    #[doc(hidden)]
-    pub fn validate_owner_completion(
+    pub(crate) fn validate_owner_completion(
         &self,
         baton: &Baton,
         key: StepKey,
@@ -867,8 +849,7 @@ impl HostRegistry {
         }
     }
 
-    #[doc(hidden)]
-    pub fn finish_native_owner_step(
+    pub(crate) fn finish_native_owner_step(
         &mut self,
         baton: &Baton,
         settled: super::scheduling::NativeCleanupSettled,
@@ -894,8 +875,7 @@ impl HostRegistry {
 
     /// Only the transport/admission owner can mint this undispatched proof.
     /// Active owner authority is never disposed through this transition.
-    #[doc(hidden)]
-    pub fn finish_unstarted_owner_step(
+    pub(crate) fn finish_unstarted_owner_step(
         &mut self,
         baton: &Baton,
         unstarted: super::scheduling::UnstartedHostCall,
@@ -908,8 +888,7 @@ impl HostRegistry {
         record.steps.discard_unused_after_terminal()
     }
 
-    #[doc(hidden)]
-    pub fn revoke_owner_step(
+    pub(crate) fn revoke_owner_step(
         &mut self,
         baton: &Baton,
         ended: &super::super::scheduler::EndedServiceOwner,
@@ -949,8 +928,7 @@ impl HostRegistry {
         }
     }
 
-    #[doc(hidden)]
-    pub fn owner_frame_layout(
+    pub(crate) fn owner_frame_layout(
         &self,
         key: StepKey,
     ) -> Result<(OwnerFrameLayout, [OwnerFrameRecordSlot; 3]), OwnerStepError> {
@@ -999,8 +977,7 @@ impl HostRegistry {
         ))
     }
 
-    #[doc(hidden)]
-    pub fn copy_owner_frame(
+    pub(crate) fn copy_owner_frame(
         &self,
         baton: &Baton,
         heap: &TaggedHeap,
@@ -1075,8 +1052,7 @@ impl<'seat> OwnerBatonLoan<'seat> {
         })
     }
 
-    #[doc(hidden)]
-    pub fn baton(&self) -> Result<&Baton, HostRootError> {
+    pub(crate) fn baton(&self) -> Result<&Baton, HostRootError> {
         self.baton.as_ref().ok_or(HostRootError::BatonRequired)
     }
 }
@@ -1105,8 +1081,7 @@ impl OwnerExecutionFrame<'_> {
     /// reader or registry borrow, and the seat holds its Baton again on return.
     #[cold]
     #[inline(never)]
-    #[doc(hidden)]
-    pub fn interruption(&mut self) -> Result<OwnerInterruption, OwnerStepError> {
+    pub(crate) fn interruption(&mut self) -> Result<OwnerInterruption, OwnerStepError> {
         let key = self.key;
         let seat = self
             .context
@@ -1140,12 +1115,10 @@ impl OwnerExecutionFrame<'_> {
     pub fn arguments(&self) -> Result<&[Value], OwnerStepError> {
         self.span(self.layout.arguments)
     }
-    #[doc(hidden)]
-    pub fn execution_roots(&self) -> Result<&[Value], OwnerStepError> {
+    pub(crate) fn execution_roots(&self) -> Result<&[Value], OwnerStepError> {
         self.span(self.layout.execution)
     }
-    #[doc(hidden)]
-    pub fn restore_roots(&self) -> Result<&[Value], OwnerStepError> {
+    pub(crate) fn restore_roots(&self) -> Result<&[Value], OwnerStepError> {
         self.span(self.layout.restore)
     }
 
@@ -1159,8 +1132,7 @@ impl OwnerExecutionFrame<'_> {
     /// Keep the exact requester Flow and all its private state. The canonical
     /// in-flight registry walk includes deferred bytecode-backtrace pins; no
     /// transport-side copy of SignalData/ThrowData is maintained here.
-    #[doc(hidden)]
-    pub fn retain_flow(
+    pub(crate) fn retain_flow(
         &mut self,
         access: &ContinuationAccess,
         flow: neovm_value::error::Flow,
@@ -1235,8 +1207,7 @@ impl OwnerExecutionFrame<'_> {
 impl Context {
     /// Recover the original control-flow object only on its requester. Main's
     /// native service never receives this object or this method's authority.
-    #[doc(hidden)]
-    pub fn take_owner_step_flow(
+    pub(crate) fn take_owner_step_flow(
         &mut self,
         key: StepKey,
     ) -> Result<neovm_value::error::Flow, OwnerStepError> {
@@ -1256,8 +1227,7 @@ impl Context {
     /// Restore/materialize using the original requester, then release every
     /// reader before calling the owner-local executor. The seat again holds
     /// its Baton before execution, so a callback can enter a genuine wait.
-    #[doc(hidden)]
-    pub fn with_owner_execution_frame<R>(
+    pub(crate) fn with_owner_execution_frame<R>(
         &mut self,
         key: StepKey,
         execute: impl FnOnce(&mut OwnerExecutionFrame<'_>, StepClaim, ContinuationAccess) -> R,

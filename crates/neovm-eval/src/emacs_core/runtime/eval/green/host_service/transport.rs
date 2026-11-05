@@ -290,8 +290,7 @@ pub(super) struct DispatchTicket {
 }
 
 impl DispatchTicket {
-    #[doc(hidden)]
-    pub fn settle(self, outcome: NativeOutcome) -> NativeCompletion {
+    pub(crate) fn settle(self, outcome: NativeOutcome) -> NativeCompletion {
         NativeCompletion {
             key: self.key,
             outcome,
@@ -355,8 +354,7 @@ pub(super) enum CloseProgress {
 
 impl ServiceTransport {
     /// Process every earlier control message before selecting native work.
-    #[doc(hidden)]
-    pub fn dispatch_next(&mut self) -> DispatchPoll {
+    pub(crate) fn dispatch_next(&mut self) -> DispatchPoll {
         self.drain_commands();
         while let Some(key) = self.queued.pop_front() {
             let Some(entry) = self.entries.get_mut(&key) else {
@@ -380,8 +378,7 @@ impl ServiceTransport {
         DispatchPoll::Idle
     }
 
-    #[doc(hidden)]
-    pub fn drain_commands(&mut self) {
+    pub(crate) fn drain_commands(&mut self) {
         while let Ok(command) = self.commands.try_recv() {
             match command {
                 Command::Publish {
@@ -421,8 +418,7 @@ impl ServiceTransport {
         }
     }
 
-    #[doc(hidden)]
-    pub fn next_observation(&mut self) -> Option<ControlObservation> {
+    pub(crate) fn next_observation(&mut self) -> Option<ControlObservation> {
         self.observations.pop_front()
     }
 
@@ -544,8 +540,7 @@ impl ServiceTransport {
     }
 
     /// Consuming a reply leaves a tombstone until explicit registry retirement.
-    #[doc(hidden)]
-    pub fn take_terminal(&mut self, key: HostRequestKey) -> TerminalRead {
+    pub(crate) fn take_terminal(&mut self, key: HostRequestKey) -> TerminalRead {
         self.drain_commands();
         let Some(entry) = self.entries.get_mut(&key) else {
             return TerminalRead::UnknownRequest;
@@ -607,8 +602,7 @@ impl ServiceTransport {
     }
 
     /// Closing never removes terminal records or an in-flight native obligation.
-    #[doc(hidden)]
-    pub fn close_and_drain(&mut self) -> CloseProgress {
+    pub(crate) fn close_and_drain(&mut self) -> CloseProgress {
         self.drain_commands();
         self.close();
         let pending: Vec<_> = self

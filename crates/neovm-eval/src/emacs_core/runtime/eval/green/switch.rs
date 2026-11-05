@@ -119,8 +119,7 @@ impl RestoringTurn {
 
     /// Initial carrier entry and an ordinary native input wait cannot consume
     /// another invocation's intermediate owner continuation.
-    #[doc(hidden)]
-    pub fn into_ordinary_baton(self) -> Baton {
+    pub(crate) fn into_ordinary_baton(self) -> Baton {
         match self.disposition {
             OwnerRestore::Ordinary => self.baton,
             OwnerRestore::Intermediate(_) => std::process::abort(),
@@ -186,8 +185,7 @@ impl NativeWaitHandoff for MainNativeHandoff<'_> {
 }
 
 impl MainNativeHandoff<'_> {
-    #[doc(hidden)]
-    pub fn into_baton(self) -> Baton {
+    pub(crate) fn into_baton(self) -> Baton {
         match self.authority {
             MainWaitAuthority::Held(baton) => baton,
             MainWaitAuthority::Released(_) | MainWaitAuthority::Transition => std::process::abort(),
@@ -221,15 +219,13 @@ pub struct GreenSeat {
 }
 
 impl GreenSeat {
-    #[doc(hidden)]
-    pub fn take_owner_step_baton(&mut self) -> Result<Baton, host_service::HostRootError> {
+    pub(crate) fn take_owner_step_baton(&mut self) -> Result<Baton, host_service::HostRootError> {
         self.baton
             .take()
             .ok_or(host_service::HostRootError::BatonRequired)
     }
 
-    #[doc(hidden)]
-    pub fn restore_owner_step_baton(&mut self, baton: Baton) {
+    pub(crate) fn restore_owner_step_baton(&mut self, baton: Baton) {
         if self.baton.is_some() {
             tracing::error!("owner step attempted to duplicate its Green Baton");
             std::process::abort();
@@ -237,8 +233,9 @@ impl GreenSeat {
         self.baton = Some(baton);
     }
 
-    #[doc(hidden)]
-    pub fn owner_step_receive(&mut self) -> Result<&mut OwnerReceive, host_service::HostRootError> {
+    pub(crate) fn owner_step_receive(
+        &mut self,
+    ) -> Result<&mut OwnerReceive, host_service::HostRootError> {
         self.receiver
             .as_mut()
             .ok_or(host_service::HostRootError::OwnerNotParked)
@@ -252,8 +249,7 @@ static_assertions::const_assert_eq!(
 );
 
 impl GreenSeat {
-    #[doc(hidden)]
-    pub fn trace_binding_resume_error(&self, visit: &mut dyn FnMut(Value)) {
+    pub(crate) fn trace_binding_resume_error(&self, visit: &mut dyn FnMut(Value)) {
         if let Some(BindingResumeError::Forward(_, value)) = self.binding_resume_error {
             visit(value);
         }
@@ -284,20 +280,17 @@ fn switch_refusal(ctx: &Context) -> Option<&'static str> {
 
 impl Context {
     /// This owner's Green seat, if it runs in a Green runtime.
-    #[doc(hidden)]
-    pub fn green_seat(&mut self) -> Option<&mut GreenSeat> {
+    pub(crate) fn green_seat(&mut self) -> Option<&mut GreenSeat> {
         self.owner.slab_mut()?.green_seat_mut()
     }
 
     /// The running thread's key, if this owner runs in a Green runtime.
-    #[doc(hidden)]
-    pub fn green_key(&mut self) -> Option<ThreadKey> {
+    pub(crate) fn green_key(&mut self) -> Option<ThreadKey> {
         self.green_seat().map(|seat| seat.key)
     }
 
     /// Seat this owner, which holds BATON, in the runtime CONTROL as KEY.
-    #[doc(hidden)]
-    pub fn take_green_seat(
+    pub(crate) fn take_green_seat(
         &mut self,
         key: ThreadKey,
         control: Arc<Control>,
@@ -321,8 +314,7 @@ impl Context {
 
     /// Copy every root only this owner holds: its private execution state
     /// and its thread-local roots, without the World's storage.
-    #[doc(hidden)]
-    pub fn collect_parked_roots(&mut self) -> Vec<Value> {
+    pub(crate) fn collect_parked_roots(&mut self) -> Vec<Value> {
         let mut roots = std::mem::take(
             &mut self
                 .green_seat()
@@ -361,8 +353,7 @@ impl Context {
     /// thread could give (GNU hangs there; neomacs reports the deadlock), or
     /// when the process is exiting. A pending `thread-signal` stays pending:
     /// [`Context::green_wait`] raises it.
-    #[doc(hidden)]
-    pub fn green_park(&mut self, wait: Wait) -> Result<(), Flow> {
+    pub(crate) fn green_park(&mut self, wait: Wait) -> Result<(), Flow> {
         self.green_park_impl(ParkRequest::Ordinary(wait), |completion| match completion {
             ParkCompletion::Ordinary => Ok(()),
             ParkCompletion::Host { .. }
@@ -376,8 +367,10 @@ impl Context {
     /// roots in the World and cannot expose stale registered records.
     #[cold]
     #[inline(never)]
-    #[doc(hidden)]
-    pub fn green_abandon_prepared_host_call(&mut self, call: PreparedHostCall) -> Result<(), Flow> {
+    pub(crate) fn green_abandon_prepared_host_call(
+        &mut self,
+        call: PreparedHostCall,
+    ) -> Result<(), Flow> {
         fn root_error(error: host_service::HostRootError) -> Flow {
             signal(LispCondition::Error, vec![Value::string(error.to_string())])
         }
@@ -395,8 +388,7 @@ impl Context {
 
     /// Borrow the seated Baton in place. No take/restore pair or registry borrow
     /// survives the closure, and the closure receives no evaluator access.
-    #[doc(hidden)]
-    pub fn with_held_host_registry<R>(
+    pub(crate) fn with_held_host_registry<R>(
         &mut self,
         operation: impl FnOnce(
             &mut host_service::HostRegistry,
@@ -424,8 +416,10 @@ impl Context {
 
     #[cold]
     #[inline(never)]
-    #[doc(hidden)]
-    pub fn abandon_unpublished_park_request(&mut self, request: ParkRequest) -> Result<(), Flow> {
+    pub(crate) fn abandon_unpublished_park_request(
+        &mut self,
+        request: ParkRequest,
+    ) -> Result<(), Flow> {
         match request {
             ParkRequest::Host { call, native: _ } => self.green_abandon_prepared_host_call(call),
             ParkRequest::Ordinary(_)
@@ -443,8 +437,7 @@ impl Context {
         dead_code,
         reason = "owned host adapters are installed in a later range"
     )]
-    #[doc(hidden)]
-    pub unsafe fn green_prepare_host_call(
+    pub(crate) unsafe fn green_prepare_host_call(
         &mut self,
         roots: &[Value],
     ) -> Result<PreparedHostCall, host_service::HostRootError> {
@@ -479,8 +472,7 @@ impl Context {
         dead_code,
         reason = "owned host adapters are installed in a later range"
     )]
-    #[doc(hidden)]
-    pub fn green_host_call<R>(
+    pub(crate) fn green_host_call<R>(
         &mut self,
         call: PreparedHostCall,
         native: OwnedNativeData,
@@ -504,8 +496,7 @@ impl Context {
         reason = "owned host adapters are installed in a later range"
     )]
     #[cold]
-    #[doc(hidden)]
-    pub fn green_host_call_turn<R>(
+    pub(crate) fn green_host_call_turn<R>(
         &mut self,
         call: PreparedHostCall,
         native: OwnedNativeData,
@@ -530,8 +521,7 @@ impl Context {
         reason = "owned host adapters are installed in a later range"
     )]
     #[cold]
-    #[doc(hidden)]
-    pub fn green_continue_host_turn<R>(
+    pub(crate) fn green_continue_host_turn<R>(
         &mut self,
         parent: HostRequestKey,
         consume: impl FnOnce(&RestoredHostOwner<'_>, &NativeSettlement) -> Result<R, Flow>,
@@ -548,8 +538,7 @@ impl Context {
         )
     }
 
-    #[doc(hidden)]
-    pub fn green_park_impl<R>(
+    pub(crate) fn green_park_impl<R>(
         &mut self,
         request: ParkRequest,
         consume: impl FnOnce(ParkCompletion<'_>) -> Result<R, Flow>,
@@ -857,8 +846,7 @@ impl Context {
 
     /// [`Context::green_park`], then raise an error another thread signalled
     /// into this one (GNU `post_acquire_global_lock`).
-    #[doc(hidden)]
-    pub fn green_wait(&mut self, wait: Wait) -> Result<(), Flow> {
+    pub(crate) fn green_wait(&mut self, wait: Wait) -> Result<(), Flow> {
         let Some(key) = self.green_key() else {
             return Ok(());
         };
@@ -867,16 +855,14 @@ impl Context {
     }
 
     /// Preserve GNU's first failed rebind until the safe resume signal point.
-    #[doc(hidden)]
-    pub fn green_defer_binding_resume_error(&mut self, symbol: SymId) {
+    pub(crate) fn green_defer_binding_resume_error(&mut self, symbol: SymId) {
         if let Some(seat) = self.green_seat() {
             seat.binding_resume_error
                 .get_or_insert(BindingResumeError::Constant(symbol));
         }
     }
 
-    #[doc(hidden)]
-    pub fn green_defer_forward_resume_error(
+    pub(crate) fn green_defer_forward_resume_error(
         &mut self,
         error: neovm_value::forward::ForwardStoreError,
         value: Value,
@@ -888,8 +874,7 @@ impl Context {
     }
 
     /// Raise a failed rebind or an error another thread signalled into KEY.
-    #[doc(hidden)]
-    pub fn green_raise_pending_signal(&mut self, key: ThreadKey) -> Result<(), Flow> {
+    pub(crate) fn green_raise_pending_signal(&mut self, key: ThreadKey) -> Result<(), Flow> {
         if let Some(error) = self.green_seat().and_then(|seat| seat.binding_resume_error) {
             // Keep a forwarded offending value rooted in the seat while
             // constructing signal data, which may allocate a Lisp string.
@@ -930,8 +915,7 @@ impl Context {
 
     #[cold]
     #[inline(never)]
-    #[doc(hidden)]
-    pub fn green_select_turn(&mut self, wait_time: Duration) -> Result<SelectTurn, Flow> {
+    pub(crate) fn green_select_turn(&mut self, wait_time: Duration) -> Result<SelectTurn, Flow> {
         if wait_time.is_zero() || switch_refusal(self).is_some() {
             return Ok(SelectTurn::Block(wait_time));
         }
@@ -1004,8 +988,7 @@ impl Context {
     /// watched at this safepoint, but an owner that reacquires its own turn
     /// needs no binding exchange or parked-root publication (GNU's
     /// post_acquire_global_lock also skips exchange for the same owner).
-    #[doc(hidden)]
-    pub fn green_yield(&mut self) -> Result<(), Flow> {
+    pub(crate) fn green_yield(&mut self) -> Result<(), Flow> {
         let Some(seat) = self.green_seat() else {
             return Ok(());
         };
@@ -1034,8 +1017,7 @@ impl Context {
     /// joins their OS threads.
     #[cold]
     #[inline(never)]
-    #[doc(hidden)]
-    pub fn green_teardown(&mut self) {
+    pub(crate) fn green_teardown(&mut self) {
         let Some(seat) = self.green_seat() else {
             return;
         };
@@ -1085,8 +1067,7 @@ impl Context {
     /// Context retirement, while its ordinary views still keep the World alive.
     #[cold]
     #[inline(never)]
-    #[doc(hidden)]
-    pub fn green_release_seat(&mut self) {
+    pub(crate) fn green_release_seat(&mut self) {
         if let Some(slab) = self.owner.slab_mut() {
             drop(slab.take_green_seat());
         }
@@ -1094,8 +1075,7 @@ impl Context {
 
     /// KEY's error held since its start is pending again
     /// (`GreenRuntime::deferred_errors`).
-    #[doc(hidden)]
-    pub fn restore_deferred_error(&mut self, baton: &Baton, key: ThreadKey) {
+    pub(crate) fn restore_deferred_error(&mut self, baton: &Baton, key: ThreadKey) {
         let deferred = baton
             .green_runtime()
             .as_ref()
@@ -1106,8 +1086,7 @@ impl Context {
     }
 
     /// Keep ROOTS traced while KEY is parked.
-    #[doc(hidden)]
-    pub fn publish_parked_roots(
+    pub(crate) fn publish_parked_roots(
         &self,
         baton: &Baton,
         key: ThreadKey,
@@ -1126,8 +1105,7 @@ impl Context {
     }
 
     /// KEY runs again: its roots are its own Context's once more.
-    #[doc(hidden)]
-    pub fn retire_parked_roots(&mut self, key: ThreadKey) -> Result<(), Flow> {
+    pub(crate) fn retire_parked_roots(&mut self, key: ThreadKey) -> Result<(), Flow> {
         self.prepare_parked_root_retirement()?;
         let publication = self
             .with_green_runtime(|runtime| runtime.parked.borrow_mut().remove(&key))
@@ -1150,8 +1128,7 @@ impl Context {
         Ok(())
     }
 
-    #[doc(hidden)]
-    pub fn finish_retained_parked_roots(&mut self, key: ThreadKey) -> Result<(), Flow> {
+    pub(crate) fn finish_retained_parked_roots(&mut self, key: ThreadKey) -> Result<(), Flow> {
         if !self.with_green_runtime(|runtime| runtime.parked.borrow().contains_key(&key)) {
             return Ok(());
         }
@@ -1163,8 +1140,7 @@ impl Context {
         }
     }
 
-    #[doc(hidden)]
-    pub fn finish_restored_publication(
+    pub(crate) fn finish_restored_publication(
         &mut self,
         key: ThreadKey,
         publication: neovm_value::tagged::transport::RootBatchLease,
@@ -1184,8 +1160,7 @@ impl Context {
     /// A restored owner may retire its duplicate publication during a pending
     /// sweep: marking has finished, and sweep never reads root tables. Keep
     /// every other collector state on the complete drain and validation path.
-    #[doc(hidden)]
-    pub fn prepare_parked_root_retirement(&mut self) -> Result<(), Flow> {
+    pub(crate) fn prepare_parked_root_retirement(&mut self) -> Result<(), Flow> {
         // switch_refusal prevents any owner from parking a synchronous driver
         // extent. Defend that proof here too, before retirement or a drain.
         if self.gc_driver_active {
@@ -1225,8 +1200,7 @@ impl Context {
     }
 
     /// Retain census scratch without retaining any of its raw Lisp words.
-    #[doc(hidden)]
-    pub fn return_parked_root_buffer(&mut self, mut roots: Vec<Value>) {
+    pub(crate) fn return_parked_root_buffer(&mut self, mut roots: Vec<Value>) {
         roots.clear();
         let seat = self.green_seat().expect("a publishing owner is seated");
         debug_assert!(seat.parked_roots_buffer.is_empty());
@@ -1240,8 +1214,7 @@ impl Context {
     /// use. Returns the thread object.
     #[cold]
     #[inline(never)]
-    #[doc(hidden)]
-    pub fn green_spawn(&mut self, args: &[Value]) -> Result<Value, Flow> {
+    pub(crate) fn green_spawn(&mut self, args: &[Value]) -> Result<Value, Flow> {
         if self.green_seat().is_none() {
             self.start_green_threads()
                 .map_err(|error| signal("error", vec![Value::string(error.to_string())]))?;
@@ -1291,8 +1264,7 @@ impl Context {
     /// Start the Green runtime and seat this owner as its main thread.
     #[cold]
     #[inline(never)]
-    #[doc(hidden)]
-    pub fn start_green_threads(&mut self) -> Result<(), super::GreenThreadStartError> {
+    pub(crate) fn start_green_threads(&mut self) -> Result<(), super::GreenThreadStartError> {
         self.green_admission_readiness()
             .map_err(super::GreenThreadStartError::Admission)?;
         let baton = self.start_green_runtime()?;
@@ -1307,8 +1279,7 @@ impl Context {
     }
 
     /// Run OP on this World's Green runtime (which has started).
-    #[doc(hidden)]
-    pub fn with_green_runtime<R>(&self, op: impl FnOnce(&super::GreenRuntime) -> R) -> R {
+    pub(crate) fn with_green_runtime<R>(&self, op: impl FnOnce(&super::GreenRuntime) -> R) -> R {
         let runtime = self.green_runtime_ref();
         op(runtime.as_ref().expect("the Green runtime has started"))
     }

@@ -218,8 +218,7 @@ impl ServiceRuntime {
     /// Close admission before the quiescent root drain. Undispatched owned
     /// tickets settle without invoking native code; active native work retains
     /// every registry lease until its callback has completed.
-    #[doc(hidden)]
-    pub fn prepare_shutdown(&mut self) -> Result<(), HostRootError> {
+    pub(crate) fn prepare_shutdown(&mut self) -> Result<(), HostRootError> {
         let session = match self {
             Self::Dormant => return Ok(()),
             Self::Open(session) => session,
@@ -246,8 +245,7 @@ impl ServiceRuntime {
 
     /// The caller has successfully drained every host RootBatch under full
     /// collector quiescence. Drop-only native metadata has no callbacks/waits.
-    #[doc(hidden)]
-    pub fn finish_shutdown(&mut self) {
+    pub(crate) fn finish_shutdown(&mut self) {
         if let Self::Open(session) = self {
             for (_, waiter) in std::mem::take(&mut session.waiters) {
                 waiter.finish();
@@ -256,8 +254,7 @@ impl ServiceRuntime {
         *self = Self::Dormant;
     }
 
-    #[doc(hidden)]
-    pub fn transfer_plan(
+    pub(crate) fn transfer_plan(
         &self,
         key: HostRequestKey,
         control: &Control,
@@ -275,8 +272,7 @@ impl ServiceRuntime {
             .map_err(|_| HostRootError::WrongStage)
     }
 
-    #[doc(hidden)]
-    pub fn take_turn(&mut self, key: HostRequestKey) -> Result<NativeTurn, HostRootError> {
+    pub(crate) fn take_turn(&mut self, key: HostRequestKey) -> Result<NativeTurn, HostRootError> {
         let session = match self {
             Self::Open(session) => session,
             Self::Dormant => return Err(HostRootError::UnknownRequest),
@@ -369,8 +365,7 @@ impl ServiceRuntime {
         }
     }
 
-    #[doc(hidden)]
-    pub fn save_owner_continuation(
+    pub(crate) fn save_owner_continuation(
         &mut self,
         continuation: OwnerContinuation,
     ) -> Result<(), OwnerContinuation> {
@@ -385,8 +380,7 @@ impl ServiceRuntime {
         Ok(())
     }
 
-    #[doc(hidden)]
-    pub fn take_owner_continuation(
+    pub(crate) fn take_owner_continuation(
         &mut self,
         parent: HostRequestKey,
     ) -> Result<OwnerContinuation, HostRootError> {
@@ -399,8 +393,7 @@ impl ServiceRuntime {
             .ok_or(HostRootError::UnknownRequest)
     }
 
-    #[doc(hidden)]
-    pub fn owner_continuation_keys(&self) -> Vec<HostRequestKey> {
+    pub(crate) fn owner_continuation_keys(&self) -> Vec<HostRequestKey> {
         match self {
             Self::Dormant => Vec::new(),
             Self::Open(session) => session.owner_continuations.keys().copied().collect(),
@@ -409,8 +402,7 @@ impl ServiceRuntime {
 
     /// Consume a saved continuation only with its owning scheduler's explicit
     /// exit proof. An unknown/live requester retains all linear obligations.
-    #[doc(hidden)]
-    pub fn take_ended_owner_continuation(
+    pub(crate) fn take_ended_owner_continuation(
         &mut self,
         control: &Control,
         baton: &Baton,
@@ -431,8 +423,7 @@ impl ServiceRuntime {
         Some((saved, ended))
     }
 
-    #[doc(hidden)]
-    pub fn native_observations(&mut self) -> Vec<transport::ControlObservation> {
+    pub(crate) fn native_observations(&mut self) -> Vec<transport::ControlObservation> {
         let session = match self {
             Self::Dormant => return Vec::new(),
             Self::Open(session) => session,
@@ -445,8 +436,10 @@ impl ServiceRuntime {
         observations
     }
 
-    #[doc(hidden)]
-    pub fn take_terminal(&mut self, key: HostRequestKey) -> Result<HostTerminal, HostRootError> {
+    pub(crate) fn take_terminal(
+        &mut self,
+        key: HostRequestKey,
+    ) -> Result<HostTerminal, HostRootError> {
         let session = match self {
             Self::Open(session) => session,
             Self::Dormant => return Err(HostRootError::UnknownRequest),
@@ -468,8 +461,7 @@ impl ServiceRuntime {
         }
     }
 
-    #[doc(hidden)]
-    pub fn defer_terminal(&mut self, terminal: HostTerminal) -> Result<(), HostTerminal> {
+    pub(crate) fn defer_terminal(&mut self, terminal: HostTerminal) -> Result<(), HostTerminal> {
         let session = match self {
             Self::Open(session) => session,
             Self::Dormant => return Err(terminal),
@@ -528,8 +520,7 @@ impl ServiceRuntime {
         }
     }
 
-    #[doc(hidden)]
-    pub fn suppress_before_transfer(
+    pub(crate) fn suppress_before_transfer(
         &mut self,
         key: HostRequestKey,
     ) -> Result<ReservedServiceSlice, HostRootError> {
@@ -603,8 +594,7 @@ pub(in crate::emacs_core::eval::green) struct MainServiceTurn<'receive> {
 }
 
 impl<'receive> MainServiceTurn<'receive> {
-    #[doc(hidden)]
-    pub fn from_main_wake(
+    pub(crate) fn from_main_wake(
         key: HostRequestKey,
         baton: Baton,
         control: &'receive Control,
@@ -631,8 +621,7 @@ impl<'receive> MainServiceTurn<'receive> {
         }
     }
 
-    #[doc(hidden)]
-    pub fn serve(
+    pub(crate) fn serve(
         self,
         serve: impl FnOnce(&mut NativeServiceScope<'_>) -> NativeOutcome,
     ) -> ServedSlice {
@@ -666,8 +655,7 @@ impl<'receive> MainServiceTurn<'receive> {
     }
 
     /// The owned path returns a pending native record, never a borrowed scope.
-    #[doc(hidden)]
-    pub fn serve_step(
+    pub(crate) fn serve_step(
         self,
         start: impl FnOnce(HostRequestKey, OwnedNativeData) -> NativeAdapterStep<StepKey>,
     ) -> ServiceStep {
@@ -908,8 +896,7 @@ pub(in crate::emacs_core::eval::green) struct ServedSlice {
 }
 
 impl ServedSlice {
-    #[doc(hidden)]
-    pub fn return_to_requester(self, control: &Control) -> ServiceReturn {
+    pub(crate) fn return_to_requester(self, control: &Control) -> ServiceReturn {
         let returned = if self.slice.requester() == super::super::scheduler::ThreadKey::Main {
             control.return_from_local_service(self.slice, self.baton)
         } else {
@@ -951,16 +938,14 @@ pub(in crate::emacs_core::eval::green) struct NativeServiceScope<'receive> {
 }
 
 impl NativeServiceScope<'_> {
-    #[doc(hidden)]
-    pub fn take_arguments(&mut self) -> Result<OwnedNativeData, HostRootError> {
+    pub(crate) fn take_arguments(&mut self) -> Result<OwnedNativeData, HostRootError> {
         match std::mem::replace(&mut self.arguments, NativeArguments::Taken) {
             NativeArguments::Available(data) => Ok(data),
             NativeArguments::Taken => Err(HostRootError::WrongStage),
         }
     }
 
-    #[doc(hidden)]
-    pub fn into_authority(self) -> (Baton, ReservedServiceSlice) {
+    pub(crate) fn into_authority(self) -> (Baton, ReservedServiceSlice) {
         match self.authority {
             ServiceAuthority::Held { baton, slice } => (baton, slice),
             ServiceAuthority::Released { .. } | ServiceAuthority::Transition => {
@@ -969,8 +954,7 @@ impl NativeServiceScope<'_> {
         }
     }
 
-    #[doc(hidden)]
-    pub fn begin_native_release(&mut self, permit: RealWaitPermit) {
+    pub(crate) fn begin_native_release(&mut self, permit: RealWaitPermit) {
         let authority = std::mem::replace(&mut self.authority, ServiceAuthority::Transition);
         let (baton, slice) = match authority {
             ServiceAuthority::Held { baton, slice } => (baton, slice),
@@ -991,8 +975,7 @@ impl NativeServiceScope<'_> {
         self.authority = ServiceAuthority::Released { release, slice };
     }
 
-    #[doc(hidden)]
-    pub fn finish_native_release(&mut self) {
+    pub(crate) fn finish_native_release(&mut self) {
         let authority = std::mem::replace(&mut self.authority, ServiceAuthority::Transition);
         let (release, slice) = match authority {
             ServiceAuthority::Released { release, slice } => (release, slice),
@@ -1014,8 +997,7 @@ impl NativeServiceScope<'_> {
     /// Fixtures use the same private physical executor as production. The
     /// forwarding thread owns only native data; no second permit mint exists.
     #[cfg(test)]
-    #[doc(hidden)]
-    pub fn receive_native<T: Send + 'static>(
+    pub(crate) fn receive_native<T: Send + 'static>(
         &mut self,
         receiver: Receiver<T>,
     ) -> Result<T, std::sync::mpsc::RecvError> {
@@ -1088,8 +1070,7 @@ pub(in crate::emacs_core::eval::green) enum FixtureDriver {
 #[cfg(test)]
 impl ServiceRuntime {
     /// Preserve an actual actor-issued dispatch and waiter for lifecycle controls.
-    #[doc(hidden)]
-    pub fn native_dispatch_for_test(
+    pub(crate) fn native_dispatch_for_test(
         &mut self,
         key: HostRequestKey,
     ) -> (DispatchTicket, HostWaiter) {
@@ -1107,8 +1088,7 @@ impl ServiceRuntime {
         (ticket, waiter)
     }
 
-    #[doc(hidden)]
-    pub fn complete_native_dispatch_for_test(
+    pub(crate) fn complete_native_dispatch_for_test(
         &mut self,
         ticket: DispatchTicket,
         outcome: NativeOutcome,
@@ -1118,16 +1098,17 @@ impl ServiceRuntime {
 
     /// Exercise actual actor publication, dispatch and completion rather than
     /// constructing the native-settlement proof from a correlation key.
-    #[doc(hidden)]
-    pub fn native_cleanup_settled_for_test(&mut self, key: HostRequestKey) -> NativeCleanupSettled {
+    pub(crate) fn native_cleanup_settled_for_test(
+        &mut self,
+        key: HostRequestKey,
+    ) -> NativeCleanupSettled {
         let (ticket, waiter) = self.native_dispatch_for_test(key);
         let settled = self.complete_native_dispatch_for_test(ticket, NativeOutcome::HostClosed);
         waiter.finish();
         settled
     }
 
-    #[doc(hidden)]
-    pub fn install_fixture_completion(
+    pub(crate) fn install_fixture_completion(
         &mut self,
         sender: std::sync::mpsc::Sender<FixtureGcCompleted>,
         count: std::sync::Arc<std::sync::atomic::AtomicUsize>,
@@ -1136,8 +1117,7 @@ impl ServiceRuntime {
     }
 
     /// Called only by the test primitive after a completed exact collection.
-    #[doc(hidden)]
-    pub fn finish_fixture_gc(&mut self) -> Result<(), HostRootError> {
+    pub(crate) fn finish_fixture_gc(&mut self) -> Result<(), HostRootError> {
         let slot = std::mem::replace(&mut self.session().completion, FixtureCompletion::Completed);
         match slot {
             FixtureCompletion::Pending { sender, count } => {
@@ -1154,26 +1134,28 @@ impl ServiceRuntime {
         }
     }
 
-    #[doc(hidden)]
-    pub fn install_fixture_driver(
+    pub(crate) fn install_fixture_driver(
         &mut self,
         driver: impl FnOnce(&mut NativeServiceScope<'_>) -> NativeOutcome + Send + 'static,
     ) {
         self.session().driver = FixtureDriver::Installed(Box::new(driver));
     }
 
-    #[doc(hidden)]
-    pub fn install_native_fixture_driver(&mut self, driver: super::pump::FixtureNativeDriver) {
+    pub(crate) fn install_native_fixture_driver(
+        &mut self,
+        driver: super::pump::FixtureNativeDriver,
+    ) {
         self.session().driver = FixtureDriver::Owned(driver);
     }
 
-    #[doc(hidden)]
-    pub fn install_semantic_fixture_driver(&mut self, driver: super::pump::FixtureSemanticDriver) {
+    pub(crate) fn install_semantic_fixture_driver(
+        &mut self,
+        driver: super::pump::FixtureSemanticDriver,
+    ) {
         self.session().driver = FixtureDriver::Semantic(driver);
     }
 
-    #[doc(hidden)]
-    pub fn install_cleanup_fixture_driver(
+    pub(crate) fn install_cleanup_fixture_driver(
         &mut self,
         driver: super::pump::FixtureSemanticDriver,
         cleanup: super::pump::FixtureCleanupDriver,
@@ -1183,8 +1165,7 @@ impl ServiceRuntime {
 
     /// Fault injection retires the actual publication receiver before any
     /// request exists. The stored client then reports ReceiverClosed naturally.
-    #[doc(hidden)]
-    pub fn retire_publication_receiver_for_test(&mut self) {
+    pub(crate) fn retire_publication_receiver_for_test(&mut self) {
         let session = self.session();
         assert!(session.reservations.is_empty());
         assert!(session.waiters.is_empty());
@@ -1195,8 +1176,7 @@ impl ServiceRuntime {
         session.transport = replacement;
     }
 
-    #[doc(hidden)]
-    pub fn take_fixture_driver(&mut self) -> FixtureDriver {
+    pub(crate) fn take_fixture_driver(&mut self) -> FixtureDriver {
         std::mem::replace(&mut self.session().driver, FixtureDriver::Unavailable)
     }
 }

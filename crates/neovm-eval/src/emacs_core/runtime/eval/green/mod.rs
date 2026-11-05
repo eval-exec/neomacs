@@ -93,8 +93,7 @@ impl GreenRuntime {
     /// The process exit KEY takes on resuming, if any: main exits with a
     /// `kill-emacs` another thread ran, and every other thread ends once
     /// main has ended.
-    #[doc(hidden)]
-    pub fn exit_for(
+    pub(crate) fn exit_for(
         &self,
         key: ThreadKey,
         control: &scheduler::Control,
@@ -175,8 +174,7 @@ pub(crate) enum GreenStartError {
 
 impl Context {
     #[cold]
-    #[doc(hidden)]
-    pub fn green_admission_readiness(&self) -> Result<(), GreenAdmissionRefusal> {
+    pub(crate) fn green_admission_readiness(&self) -> Result<(), GreenAdmissionRefusal> {
         self.processes.green_native_readiness().map_err(|cause| {
             self.processes.observe_green_admission_refusal(|cause| {
                 let refusal = GreenAdmissionRefusal::NativeReadinessUnavailable { cause };
@@ -194,8 +192,7 @@ impl Context {
     /// collection is not inhibited.
     #[cold]
     #[inline(never)]
-    #[doc(hidden)]
-    pub fn start_green_runtime(&mut self) -> Result<super::world::Baton, GreenStartError> {
+    pub(crate) fn start_green_runtime(&mut self) -> Result<super::world::Baton, GreenStartError> {
         if self.threading_mode() != ThreadingMode::Green {
             return Err(GreenStartError::NotGreen);
         }
@@ -234,8 +231,7 @@ impl Context {
     /// canonical registries and the startup subr tables.
     #[cold]
     #[inline(never)]
-    #[doc(hidden)]
-    pub fn new_green_owner(baton: &super::world::Baton) -> Context {
+    pub(crate) fn new_green_owner(baton: &super::world::Baton) -> Context {
         // The job prologue restored the World's carried state before this
         // call (the carrier reset and `unstow_carried_state` run in
         // `run_carrier_job`). This owner is about to run on this OS thread;
@@ -274,8 +270,7 @@ impl Context {
     /// further owner shares with the rest of the World).
     #[cold]
     #[inline(never)]
-    #[doc(hidden)]
-    pub fn retire_green_owner(mut self) {
+    pub(crate) fn retire_green_owner(mut self) {
         self.dynamic_module_registry =
             super::data::dynamic_module_registry::DynamicModuleRegistryHandle::new(Vec::new());
         drop(self);

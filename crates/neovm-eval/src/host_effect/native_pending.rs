@@ -114,29 +114,25 @@ impl PendingNativeOperation {
 
     /// An expired deadline requests cancellation only once. Native settlement
     /// thereafter waits on actual readiness, rather than spinning on the past.
-    #[doc(hidden)]
-    pub fn next_wait_deadline(&self) -> ReadDeadline {
+    pub(crate) fn next_wait_deadline(&self) -> ReadDeadline {
         match self.phase {
             PendingPhase::Waiting(_) => self.deadline,
             PendingPhase::AwaitingSettlement(_) | PendingPhase::Observed => ReadDeadline::Unbounded,
         }
     }
 
-    #[doc(hidden)]
-    pub fn cancellation_requested(&self) -> Option<NativeCancellationRequest> {
+    pub(crate) fn cancellation_requested(&self) -> Option<NativeCancellationRequest> {
         match self.phase {
             PendingPhase::AwaitingSettlement(request) => Some(request),
             PendingPhase::Waiting(_) | PendingPhase::Observed => None,
         }
     }
 
-    #[doc(hidden)]
-    pub fn request_cancel(&mut self, reason: CancelReason) -> NativeCancelProgress {
+    pub(crate) fn request_cancel(&mut self, reason: CancelReason) -> NativeCancelProgress {
         self.request(NativeCancellationRequest::Owner(reason))
     }
 
-    #[doc(hidden)]
-    pub fn expire_deadline(&mut self, now: Instant) -> NativeDeadlineProgress {
+    pub(crate) fn expire_deadline(&mut self, now: Instant) -> NativeDeadlineProgress {
         let elapsed = match self.deadline {
             ReadDeadline::Immediate => true,
             ReadDeadline::At(end) => now >= end,
@@ -282,8 +278,7 @@ pub(crate) enum NativePublication {
 }
 
 impl NativeCompletionPublisher {
-    #[doc(hidden)]
-    pub fn cancellation(&self) -> NativeCancellationObservation {
+    pub(crate) fn cancellation(&self) -> NativeCancellationObservation {
         match self.cancellations.try_recv() {
             Ok(request) => NativeCancellationObservation::Requested(request),
             Err(TryRecvError::Empty) => NativeCancellationObservation::NoRequest,
@@ -293,8 +288,7 @@ impl NativeCompletionPublisher {
 
     /// A native producer without the Lisp Baton can wait for the owned
     /// cancellation request. This does not mint a Green real-wait permit.
-    #[doc(hidden)]
-    pub fn wait_cancellation(&self) -> NativeCancellationObservation {
+    pub(crate) fn wait_cancellation(&self) -> NativeCancellationObservation {
         match self.cancellations.recv() {
             Ok(request) => NativeCancellationObservation::Requested(request),
             Err(_) => NativeCancellationObservation::OwnerClosed,

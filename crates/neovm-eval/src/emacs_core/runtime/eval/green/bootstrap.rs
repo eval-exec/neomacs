@@ -136,8 +136,7 @@ impl GreenBootstrap {
     }
 
     /// Install the startup subr tables on this OS thread.
-    #[doc(hidden)]
-    pub fn install_native_tables(&self) {
+    pub(crate) fn install_native_tables(&self) {
         self.native.install();
     }
 

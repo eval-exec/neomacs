@@ -237,8 +237,7 @@ pub(super) enum Wake {
 }
 
 impl Wake {
-    #[doc(hidden)]
-    pub fn baton(&self) -> &Baton {
+    pub(crate) fn baton(&self) -> &Baton {
         match self {
             Self::Resume(baton)
             | Self::ServiceTurn { baton, .. }
@@ -326,8 +325,7 @@ impl EndedServiceOwner {
         self.key
     }
 
-    #[doc(hidden)]
-    pub fn requester(&self) -> ThreadKey {
+    pub(crate) fn requester(&self) -> ThreadKey {
         self.requester
     }
 }
@@ -566,13 +564,11 @@ impl WaitMap {
         Some(old)
     }
 
-    #[doc(hidden)]
-    pub fn runnable_count(&self) -> usize {
+    pub(crate) fn runnable_count(&self) -> usize {
         self.runnable_count
     }
 
-    #[doc(hidden)]
-    pub fn select_len(&self) -> usize {
+    pub(crate) fn select_len(&self) -> usize {
         self.select_index.len()
     }
 
@@ -597,8 +593,7 @@ impl WaitMap {
         }
     }
 
-    #[doc(hidden)]
-    pub fn unindex(&mut self, key: ThreadKey, wait: Wait) {
+    pub(crate) fn unindex(&mut self, key: ThreadKey, wait: Wait) {
         match wait {
             Wait::Runnable => {
                 debug_assert!(self.runnable_count > 0, "runnable_count underflow");
@@ -628,13 +623,11 @@ impl WaitMap {
     }
 
     #[cfg(all(test, not(debug_assertions)))]
-    #[doc(hidden)]
-    pub fn take_condition_index_skip_for_test() -> bool {
+    pub(crate) fn take_condition_index_skip_for_test() -> bool {
         SKIP_NEXT_CONDITION_INDEX_REMOVAL.swap(false, std::sync::atomic::Ordering::SeqCst)
     }
 
-    #[doc(hidden)]
-    pub fn remove_waiter<K: Ord>(
+    pub(crate) fn remove_waiter<K: Ord>(
         waiters: &mut BTreeMap<K, BTreeSet<ThreadKey>>,
         object: K,
         key: ThreadKey,
@@ -890,15 +883,13 @@ struct ReadyQueue {
 }
 
 impl ReadyQueue {
-    #[doc(hidden)]
-    pub fn fresh_ticket(&mut self) -> ReadyTicket {
+    pub(crate) fn fresh_ticket(&mut self) -> ReadyTicket {
         self.next_ticket += 1;
         ReadyTicket(NonZeroU64::new(self.next_ticket).expect("ready tickets start at one"))
     }
 
     /// Queue KEY at the back unless it already owns a queued turn.
-    #[doc(hidden)]
-    pub fn enqueue_back(&mut self, key: ThreadKey) -> bool {
+    pub(crate) fn enqueue_back(&mut self, key: ThreadKey) -> bool {
         if self.is_queued(&key) {
             return false;
         }
@@ -910,8 +901,7 @@ impl ReadyQueue {
     }
 
     /// Queue KEY at the front unless it already owns a queued turn.
-    #[doc(hidden)]
-    pub fn enqueue_front(&mut self, key: ThreadKey) -> bool {
+    pub(crate) fn enqueue_front(&mut self, key: ThreadKey) -> bool {
         if self.is_queued(&key) {
             return false;
         }
@@ -924,8 +914,7 @@ impl ReadyQueue {
 
     /// `prioritize`: drop every existing turn for KEY, then queue a fresh one
     /// at the front (the old `ready.retain` + `push_front`).
-    #[doc(hidden)]
-    pub fn move_to_front(&mut self, key: ThreadKey) {
+    pub(crate) fn move_to_front(&mut self, key: ThreadKey) {
         self.discard(key);
         let ticket = self.fresh_ticket();
         self.entries.push_front((key, ticket));
@@ -957,8 +946,7 @@ impl ReadyQueue {
         matches!(self.slots.get(key), Some(ReadySlot::Queued(_)))
     }
 
-    #[doc(hidden)]
-    pub fn valid_count(&self) -> usize {
+    pub(crate) fn valid_count(&self) -> usize {
         self.valid_count
     }
 
@@ -967,8 +955,7 @@ impl ReadyQueue {
     /// its key is `Runnable` (the old `ready.retain` rule); eligible-but-
     /// ineligible entries (main in a native wait) keep their place, exactly
     /// as the old position scan did.
-    #[doc(hidden)]
-    pub fn pop_valid(
+    pub(crate) fn pop_valid(
         &mut self,
         mut runnable: impl FnMut(ThreadKey) -> bool,
         mut eligible: impl FnMut(ThreadKey) -> bool,
@@ -1007,8 +994,7 @@ impl ReadyQueue {
 
     /// Consume main's turn only (the idle-Baton acquire path). The old code
     /// removed the first Main entry whether or not it was still valid.
-    #[doc(hidden)]
-    pub fn pop_main(&mut self) -> Option<ThreadKey> {
+    pub(crate) fn pop_main(&mut self) -> Option<ThreadKey> {
         let index = self
             .entries
             .iter()
@@ -1024,8 +1010,7 @@ impl ReadyQueue {
         Some(key)
     }
 
-    #[doc(hidden)]
-    pub fn valid_excluding(&self, me: &ThreadKey) -> usize {
+    pub(crate) fn valid_excluding(&self, me: &ThreadKey) -> usize {
         self.valid_count - usize::from(self.is_queued(me))
     }
 
@@ -1121,8 +1106,7 @@ impl ReadyQueue {
 
     /// The valid queued keys in FIFO order (the differential's ready view).
     #[cfg(test)]
-    #[doc(hidden)]
-    pub fn valid_keys(&self) -> Vec<ThreadKey> {
+    pub(crate) fn valid_keys(&self) -> Vec<ThreadKey> {
         self.entries
             .iter()
             .filter(|(key, ticket)| {
@@ -1156,8 +1140,7 @@ impl ControlState {
     /// The one wait-index predicate: wait map and ready queue. Debug builds
     /// call it at every transition seam; release builds call it only at the
     /// cold deadlock verdict. It only reports; it never repairs.
-    #[doc(hidden)]
-    pub fn verify_invariants(&self) -> Result<(), SchedulerIndexInconsistency> {
+    pub(crate) fn verify_invariants(&self) -> Result<(), SchedulerIndexInconsistency> {
         self.waits.verify()?;
         self.ready.verify(&self.waits)?;
         Ok(())
@@ -1207,12 +1190,10 @@ impl SelectParked {
     pub fn owner(&self) -> ThreadKey {
         self.owner
     }
-    #[doc(hidden)]
-    pub fn wait_end(&self) -> Instant {
+    pub(crate) fn wait_end(&self) -> Instant {
         self.wait_end
     }
-    #[doc(hidden)]
-    pub fn into_facts(self) -> SelectParkFacts {
+    pub(crate) fn into_facts(self) -> SelectParkFacts {
         self.facts
     }
 }
@@ -1298,18 +1279,15 @@ impl std::fmt::Debug for Control {
 
 impl Control {
     #[cfg(test)]
-    #[doc(hidden)]
-    pub fn record_main_native_event_for_test(&self, event: MainNativeWaitEvent) {
+    pub(crate) fn record_main_native_event_for_test(&self, event: MainNativeWaitEvent) {
         self.main_native_events.lock().unwrap().push(event);
     }
     #[cfg(test)]
-    #[doc(hidden)]
-    pub fn main_native_events_for_test(&self) -> Vec<MainNativeWaitEvent> {
+    pub(crate) fn main_native_events_for_test(&self) -> Vec<MainNativeWaitEvent> {
         self.main_native_events.lock().unwrap().clone()
     }
 
-    #[doc(hidden)]
-    pub fn install_select(
+    pub(crate) fn install_select(
         &self,
         select: Option<crate::emacs_core::eval::process_hooks::SelectHandleToken>,
     ) {
@@ -1319,8 +1297,7 @@ impl Control {
         );
     }
 
-    #[doc(hidden)]
-    pub fn notify_select(&self) {
+    pub(crate) fn notify_select(&self) {
         self.metadata_changed.notify_all();
         if let Some(Some(select)) = self.select.get() {
             let select = *select;
@@ -1341,13 +1318,11 @@ impl Control {
         }
     }
 
-    #[doc(hidden)]
-    pub fn nudge_main_mailbox(&self) {
+    pub(crate) fn nudge_main_mailbox(&self) {
         self.nudge_main(crate::host_effect::wake::ControlNudge::MainMailboxReady);
     }
 
-    #[doc(hidden)]
-    pub fn nudge_main(&self, reason: crate::host_effect::wake::ControlNudge) {
+    pub(crate) fn nudge_main(&self, reason: crate::host_effect::wake::ControlNudge) {
         self.metadata_changed.notify_all();
         if let Some(Some(select)) = self.select.get() {
             crate::emacs_core::eval::process_hooks::select_nudge(
@@ -1365,8 +1340,7 @@ impl Control {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    #[doc(hidden)]
-    pub fn reserve_service(
+    pub(crate) fn reserve_service(
         &self,
         registration: &HostParkRegistration,
     ) -> Result<ReservedServiceSlice, ServiceRefusal> {
@@ -1406,8 +1380,7 @@ impl Control {
     }
 
     /// Sealed local-owner admission. Routed admission still refuses main.
-    #[doc(hidden)]
-    pub fn reserve_local_service(
+    pub(crate) fn reserve_local_service(
         &self,
         registration: &HostParkRegistration,
     ) -> Result<ReservedServiceSlice, ServiceRefusal> {
@@ -1440,8 +1413,7 @@ impl Control {
         })
     }
 
-    #[doc(hidden)]
-    pub fn transfer_local_metadata(
+    pub(crate) fn transfer_local_metadata(
         state: &mut ControlState,
         key: HostRequestKey,
         requester: ThreadKey,
@@ -1470,8 +1442,7 @@ impl Control {
     }
 
     /// Enter local native service after canonical owner/root publication.
-    #[doc(hidden)]
-    pub fn transfer_local_service(
+    pub(crate) fn transfer_local_service(
         &self,
         slice: &ReservedServiceSlice,
         baton: Baton,
@@ -1493,8 +1464,7 @@ impl Control {
 
     /// Consume the plan only after all registry/actor borrows have ended.
     /// Local service never sends to or receives from main's own channel.
-    #[doc(hidden)]
-    pub fn transfer_prepared_local_service(
+    pub(crate) fn transfer_prepared_local_service(
         &self,
         plan: ServiceTransferPlan,
         baton: Baton,
@@ -1514,16 +1484,14 @@ impl Control {
         }
     }
 
-    #[doc(hidden)]
-    pub fn intermediate_metadata(
+    pub(crate) fn intermediate_metadata(
         state: &mut ControlState,
         slice: &ReservedServiceSlice,
     ) -> Result<(), ServiceRefusal> {
         Self::intermediate_metadata_for(state, slice.key, slice.requester)
     }
 
-    #[doc(hidden)]
-    pub fn intermediate_metadata_for(
+    pub(crate) fn intermediate_metadata_for(
         state: &mut ControlState,
         key: HostRequestKey,
         requester: ThreadKey,
@@ -1568,8 +1536,7 @@ impl Control {
 
     /// The caller retains the linear slice beside its published owner step.
     /// Neither this hop nor its wake creates FIFO or signal eligibility.
-    #[doc(hidden)]
-    pub fn return_to_requester_intermediate(
+    pub(crate) fn return_to_requester_intermediate(
         &self,
         slice: &ReservedServiceSlice,
         baton: Baton,
@@ -1581,8 +1548,7 @@ impl Control {
         self.return_prepared_intermediate(plan, baton)
     }
 
-    #[doc(hidden)]
-    pub fn prepare_intermediate_return(
+    pub(crate) fn prepare_intermediate_return(
         &self,
         slice: &ReservedServiceSlice,
     ) -> Result<IntermediateReturnPlan, ServiceRefusal> {
@@ -1611,8 +1577,7 @@ impl Control {
         })
     }
 
-    #[doc(hidden)]
-    pub fn return_prepared_intermediate(
+    pub(crate) fn return_prepared_intermediate(
         &self,
         plan: IntermediateReturnPlan,
         baton: Baton,
@@ -1653,16 +1618,14 @@ impl Control {
         }
     }
 
-    #[doc(hidden)]
-    pub fn resume_owner_metadata(
+    pub(crate) fn resume_owner_metadata(
         state: &mut ControlState,
         slice: &ReservedServiceSlice,
     ) -> Result<(), ServiceRefusal> {
         Self::resume_owner_metadata_for(state, slice.key, slice.requester)
     }
 
-    #[doc(hidden)]
-    pub fn resume_owner_metadata_for(
+    pub(crate) fn resume_owner_metadata_for(
         state: &mut ControlState,
         key: HostRequestKey,
         requester: ThreadKey,
@@ -1699,8 +1662,7 @@ impl Control {
 
     /// Continue an existing parent even after close; no new actor publication.
     /// A native main first reacquires physically before accepting this Baton.
-    #[doc(hidden)]
-    pub fn resume_owner_step(
+    pub(crate) fn resume_owner_step(
         &self,
         slice: &ReservedServiceSlice,
         baton: Baton,
@@ -1712,8 +1674,7 @@ impl Control {
         self.resume_prepared_owner_step(plan, baton)
     }
 
-    #[doc(hidden)]
-    pub fn prepare_owner_resume(
+    pub(crate) fn prepare_owner_resume(
         &self,
         slice: &ReservedServiceSlice,
     ) -> Result<OwnerResumePlan, ServiceRefusal> {
@@ -1734,8 +1695,7 @@ impl Control {
         })
     }
 
-    #[doc(hidden)]
-    pub fn resume_prepared_owner_step(
+    pub(crate) fn resume_prepared_owner_step(
         &self,
         plan: OwnerResumePlan,
         baton: Baton,
@@ -1785,16 +1745,14 @@ impl Control {
         }
     }
 
-    #[doc(hidden)]
-    pub fn resume_local_metadata(
+    pub(crate) fn resume_local_metadata(
         state: &mut ControlState,
         slice: &ReservedServiceSlice,
     ) -> Result<(), ServiceRefusal> {
         Self::resume_local_metadata_for(state, slice.key, slice.requester)
     }
 
-    #[doc(hidden)]
-    pub fn resume_local_metadata_for(
+    pub(crate) fn resume_local_metadata_for(
         state: &mut ControlState,
         key: HostRequestKey,
         requester: ThreadKey,
@@ -1827,8 +1785,7 @@ impl Control {
         Ok(())
     }
 
-    #[doc(hidden)]
-    pub fn resume_local_owner_step(
+    pub(crate) fn resume_local_owner_step(
         &self,
         slice: &ReservedServiceSlice,
         baton: Baton,
@@ -1840,8 +1797,7 @@ impl Control {
         self.resume_prepared_local_owner_step(plan, baton)
     }
 
-    #[doc(hidden)]
-    pub fn resume_prepared_local_owner_step(
+    pub(crate) fn resume_prepared_local_owner_step(
         &self,
         plan: OwnerResumePlan,
         baton: Baton,
@@ -1874,8 +1830,7 @@ impl Control {
     }
 
     /// Only a semantically final local result clears the parent's reservation.
-    #[doc(hidden)]
-    pub fn return_from_local_service(
+    pub(crate) fn return_from_local_service(
         &self,
         slice: ReservedServiceSlice,
         baton: Baton,
@@ -1907,8 +1862,7 @@ impl Control {
 
     /// Native settlement does not acknowledge a dead owner. It only removes
     /// the exact ended continuation's scheduler reservation before quiescent drain.
-    #[doc(hidden)]
-    pub fn ended_service_owner(
+    pub(crate) fn ended_service_owner(
         &self,
         slice: &ReservedServiceSlice,
         baton: &Baton,
@@ -1930,8 +1884,7 @@ impl Control {
     }
 
     #[cfg(test)]
-    #[doc(hidden)]
-    pub fn ended_service_owner_for_test(
+    pub(crate) fn ended_service_owner_for_test(
         key: HostRequestKey,
         requester: ThreadKey,
         baton: &Baton,
@@ -1957,8 +1910,7 @@ impl Control {
         control.ended_service_owner(&slice, baton).unwrap()
     }
 
-    #[doc(hidden)]
-    pub fn finish_ended_continuation(
+    pub(crate) fn finish_ended_continuation(
         &self,
         slice: ReservedServiceSlice,
         settled: SettledHostCall,
@@ -1985,8 +1937,7 @@ impl Control {
         Ok(())
     }
 
-    #[doc(hidden)]
-    pub fn finish_ended_continuation_metadata(
+    pub(crate) fn finish_ended_continuation_metadata(
         state: &mut ControlState,
         slice: &ReservedServiceSlice,
     ) -> Result<(), ServiceRefusal> {
@@ -1998,8 +1949,7 @@ impl Control {
         Ok(())
     }
 
-    #[doc(hidden)]
-    pub fn validate_ended_continuation(
+    pub(crate) fn validate_ended_continuation(
         state: &ControlState,
         slice: &ReservedServiceSlice,
     ) -> Result<(), ServiceRefusal> {
@@ -2015,8 +1965,7 @@ impl Control {
 
     /// GNU-real waits release every active parent in this owner's nested
     /// continuation ancestry. Artificial service/owner hops never call this.
-    #[doc(hidden)]
-    pub fn note_continuation_release(state: &mut ControlState, requester: ThreadKey) {
+    pub(crate) fn note_continuation_release(state: &mut ControlState, requester: ThreadKey) {
         for metadata in state.services.values_mut() {
             if metadata.requester == requester {
                 if let ServicePhase::Continuing(eligibility) = &mut metadata.phase {
@@ -2032,8 +1981,7 @@ impl Control {
         dead_code,
         reason = "dormant service API; hosted activation remains refused"
     )]
-    #[doc(hidden)]
-    pub fn transfer_to_service(
+    pub(crate) fn transfer_to_service(
         &self,
         slice: &ReservedServiceSlice,
         baton: Baton,
@@ -2045,8 +1993,7 @@ impl Control {
         self.transfer_prepared_service(plan, baton)
     }
 
-    #[doc(hidden)]
-    pub fn prepare_service_transfer(
+    pub(crate) fn prepare_service_transfer(
         &self,
         slice: &ReservedServiceSlice,
     ) -> Result<ServiceTransferPlan, ServiceRefusal> {
@@ -2066,8 +2013,7 @@ impl Control {
         })
     }
 
-    #[doc(hidden)]
-    pub fn transfer_prepared_service(
+    pub(crate) fn transfer_prepared_service(
         &self,
         slice: ServiceTransferPlan,
         baton: Baton,
@@ -2142,8 +2088,7 @@ impl Control {
         dead_code,
         reason = "dormant service API; hosted activation remains refused"
     )]
-    #[doc(hidden)]
-    pub fn take_queued_service(&self, baton: Baton) -> Result<Wake, ServiceTransferRefusal> {
+    pub(crate) fn take_queued_service(&self, baton: Baton) -> Result<Wake, ServiceTransferRefusal> {
         let mut state = self.state();
         if state.main_os_thread != Some(std::thread::current().id()) {
             return Err(ServiceTransferRefusal {
@@ -2166,8 +2111,7 @@ impl Control {
     /// The service result was committed to the registry first. An immediate
     /// service returns its reserved slice; a real release completes through
     /// ordinary FIFO eligibility. Main's original Wait stays intact.
-    #[doc(hidden)]
-    pub fn return_from_service(
+    pub(crate) fn return_from_service(
         &self,
         slice: ReservedServiceSlice,
         baton: Baton,
@@ -2276,8 +2220,7 @@ impl Control {
 
     /// The owned native wrapper has reached a genuine GNU release point.
     /// The requester remains parked; only this permit admits ordinary peers.
-    #[doc(hidden)]
-    pub fn release_service(
+    pub(crate) fn release_service(
         &self,
         slice: &ReservedServiceSlice,
         _permit: RealWaitPermit,
@@ -2322,8 +2265,7 @@ impl Control {
 
     /// Called after the native wrapper returns. Main reacquires for native
     /// completion only; its suspended Lisp Wait is neither consumed nor read.
-    #[doc(hidden)]
-    pub fn reacquire_service(
+    pub(crate) fn reacquire_service(
         &self,
         slice: &ReservedServiceSlice,
         release: NativeRelease,
@@ -2390,8 +2332,7 @@ impl Control {
 
     /// Preserve this request's linear reservation while the owned driver
     /// serves another request. Deferral alone admits no ordinary Lisp owner.
-    #[doc(hidden)]
-    pub fn defer_native_service(
+    pub(crate) fn defer_native_service(
         &self,
         slice: &ReservedServiceSlice,
         baton: Baton,
@@ -2408,8 +2349,7 @@ impl Control {
         }
     }
 
-    #[doc(hidden)]
-    pub fn defer_native_metadata(
+    pub(crate) fn defer_native_metadata(
         state: &mut ControlState,
         slice: &ReservedServiceSlice,
     ) -> Result<(), ServiceRefusal> {
@@ -2441,8 +2381,7 @@ impl Control {
 
     /// Called only after the owned native record has an actual completion.
     /// The record retains the request's dispatch and cancellation obligations.
-    #[doc(hidden)]
-    pub fn enter_native_completion(
+    pub(crate) fn enter_native_completion(
         &self,
         slice: &ReservedServiceSlice,
         baton: Baton,
@@ -2459,8 +2398,7 @@ impl Control {
         }
     }
 
-    #[doc(hidden)]
-    pub fn enter_native_completion_metadata(
+    pub(crate) fn enter_native_completion_metadata(
         state: &mut ControlState,
         slice: &ReservedServiceSlice,
     ) -> Result<(), ServiceRefusal> {
@@ -2492,8 +2430,7 @@ impl Control {
 
     /// The sole physical executor lends ordinary eligibility to every newly
     /// pending call together. The driver owns one release, never one per key.
-    #[doc(hidden)]
-    pub fn release_native_pump(
+    pub(crate) fn release_native_pump(
         &self,
         _permit: RealWaitPermit,
         baton: Baton,
@@ -2545,8 +2482,7 @@ impl Control {
 
     /// Physical completion first reacquires the native driver, not whichever
     /// request happened to arm the poll. A service wake for another key is valid.
-    #[doc(hidden)]
-    pub fn reacquire_native_pump(
+    pub(crate) fn reacquire_native_pump(
         &self,
         release: NativeRelease,
         receiver: &mpsc::Receiver<Wake>,
@@ -2593,8 +2529,7 @@ impl Control {
 
     /// Service-only choices preserve main's original wait. A still-reserved
     /// PendingNative call cannot admit main's unrelated Lisp continuation.
-    #[doc(hidden)]
-    pub fn choose_native_pump_turn(
+    pub(crate) fn choose_native_pump_turn(
         &self,
         baton: Baton,
         purpose: NativePumpPurpose,
@@ -2616,8 +2551,7 @@ impl Control {
         }
     }
 
-    #[doc(hidden)]
-    pub fn choose_native_metadata(
+    pub(crate) fn choose_native_metadata(
         state: &mut ControlState,
         purpose: NativePumpPurpose,
     ) -> NativePumpChoice {
@@ -2671,8 +2605,7 @@ impl Control {
     }
 
     /// Existing owned process source; no host object or World borrow escapes.
-    #[doc(hidden)]
-    pub fn native_pump_source(
+    pub(crate) fn native_pump_source(
         &self,
     ) -> Result<std::sync::Arc<crate::host_effect::wake::ControlWake>, ServiceRefusal> {
         self.select
@@ -2685,8 +2618,7 @@ impl Control {
     }
 
     /// Recheck after registration, before committing to an actual OS wait.
-    #[doc(hidden)]
-    pub fn native_service_queued(&self) -> NativeWork {
+    pub(crate) fn native_service_queued(&self) -> NativeWork {
         if Self::queued_native_work(&self.state()) == NativeWork::Ready {
             NativeWork::Ready
         } else {
@@ -2696,8 +2628,7 @@ impl Control {
 
     /// The requester keeps the Baton while main finishes an earlier native
     /// release. This metadata-only wait cannot run unrelated Lisp.
-    #[doc(hidden)]
-    pub fn wait_queued_prepared(
+    pub(crate) fn wait_queued_prepared(
         &self,
         slice: ServiceTransferPlan,
         baton: Baton,
@@ -2734,8 +2665,7 @@ impl Control {
         dead_code,
         reason = "dormant service API; hosted activation remains refused"
     )]
-    #[doc(hidden)]
-    pub fn wait_queued_service(
+    pub(crate) fn wait_queued_service(
         &self,
         slice: &ReservedServiceSlice,
         baton: Baton,
@@ -2753,8 +2683,7 @@ impl Control {
         dead_code,
         reason = "dormant service API; hosted activation remains refused"
     )]
-    #[doc(hidden)]
-    pub fn main_native_acquire(&self, receiver: &mpsc::Receiver<Wake>) -> Wake {
+    pub(crate) fn main_native_acquire(&self, receiver: &mpsc::Receiver<Wake>) -> Wake {
         {
             let mut state = self.state();
             if state.main_os_thread != Some(std::thread::current().id())
@@ -2783,8 +2712,7 @@ impl Control {
         dead_code,
         reason = "dormant service API; hosted activation remains refused"
     )]
-    #[doc(hidden)]
-    pub fn main_native_released(&self) -> Result<(), ServiceRefusal> {
+    pub(crate) fn main_native_released(&self) -> Result<(), ServiceRefusal> {
         let mut state = self.state();
         if state.main_os_thread != Some(std::thread::current().id()) {
             return Err(ServiceRefusal::WrongMainThread);
@@ -2801,8 +2729,7 @@ impl Control {
     /// Main has published its canonical parked roots and reached an actual
     /// native wait. Its Select remains distinct from its physical location:
     /// peers may run, but cannot resume main before the native observer returns.
-    #[doc(hidden)]
-    pub fn release_main_wait(
+    pub(crate) fn release_main_wait(
         &self,
         _permit: RealWaitPermit,
         baton: Baton,
@@ -2842,8 +2769,7 @@ impl Control {
 
     /// The physical wait has returned. Publish main's readiness before waking
     /// an idle scheduler; owner restoration and all Lisp remain in switch.rs.
-    #[doc(hidden)]
-    pub fn reacquire_main_wait(
+    pub(crate) fn reacquire_main_wait(
         &self,
         release: NativeRelease,
         receiver: &mpsc::Receiver<Wake>,
@@ -2885,8 +2811,7 @@ impl Control {
         }
     }
 
-    #[doc(hidden)]
-    pub fn finish_idle_main_acquire(state: &mut ControlState) {
+    pub(crate) fn finish_idle_main_acquire(state: &mut ControlState) {
         Self::set_wait(state, ThreadKey::Main, Wait::Runnable);
         // Readiness may have queued main while the physical wait excluded it.
         // Returning its idle Baton consumes that turn without selecting a peer.
@@ -2903,8 +2828,7 @@ impl Control {
         dead_code,
         reason = "dormant service API; hosted activation remains refused"
     )]
-    #[doc(hidden)]
-    pub fn cancel_before_service(
+    pub(crate) fn cancel_before_service(
         &self,
         slice: ReservedServiceSlice,
         settled: SettledHostCall,
@@ -2914,8 +2838,7 @@ impl Control {
 
     /// A refused/queued transfer left the requester holding the Baton. Its
     /// existing restore path resumes directly, without another FIFO turn.
-    #[doc(hidden)]
-    pub fn cancel_current_service(
+    pub(crate) fn cancel_current_service(
         &self,
         slice: ReservedServiceSlice,
         settled: SettledHostCall,
@@ -2924,8 +2847,7 @@ impl Control {
         self.cancel_service(slice, settled, CancelPlacement::CurrentBatonOwner)
     }
 
-    #[doc(hidden)]
-    pub fn cancel_service(
+    pub(crate) fn cancel_service(
         &self,
         slice: ReservedServiceSlice,
         settled: SettledHostCall,
@@ -2985,8 +2907,7 @@ impl Control {
     }
 
     #[cfg(test)]
-    #[doc(hidden)]
-    pub fn after_next_select_park_for_test(
+    pub(crate) fn after_next_select_park_for_test(
         &self,
         owner: ThreadKey,
         expectation: SelectParkExpectation,
@@ -3008,8 +2929,7 @@ impl Control {
     /// parked-root/Baton transfer. No process operation occurs during that
     /// transfer; the token itself is minted only after Select is committed.
     #[cfg(test)]
-    #[doc(hidden)]
-    pub fn prepare_select_park_for_test(
+    pub(crate) fn prepare_select_park_for_test(
         &self,
         owner: ThreadKey,
         processes: &crate::emacs_core::eval::data::process_state::ProcessManager,
@@ -3082,8 +3002,7 @@ impl Control {
     }
 
     #[cfg(test)]
-    #[doc(hidden)]
-    pub fn observe_select_park_for_test(&self, owner: ThreadKey, wait_end: Instant) {
+    pub(crate) fn observe_select_park_for_test(&self, owner: ThreadKey, wait_end: Instant) {
         let callback = {
             let mut slot = self
                 .after_next_select_park
@@ -3136,8 +3055,7 @@ impl Control {
     }
 
     /// Register the main thread, which holds the Baton: its channel.
-    #[doc(hidden)]
-    pub fn register_main(&self) -> mpsc::Receiver<Wake> {
+    pub(crate) fn register_main(&self) -> mpsc::Receiver<Wake> {
         let (sender, receiver) = mpsc::sync_channel(1);
         let mut state = self.state();
         state.senders.insert(ThreadKey::Main, sender);
@@ -3150,8 +3068,7 @@ impl Control {
     }
 
     /// Register the new thread KEY, ready to run in its turn: its channel.
-    #[doc(hidden)]
-    pub fn register_worker(&self, key: ThreadKey) -> mpsc::Receiver<Wake> {
+    pub(crate) fn register_worker(&self, key: ThreadKey) -> mpsc::Receiver<Wake> {
         let (sender, receiver) = mpsc::sync_channel(1);
         let mut state = self.state();
         state.senders.insert(key, sender);
@@ -3171,8 +3088,7 @@ impl Control {
     /// queued turn stale) and `remove_key` releases the whole record, so the
     /// stale turn is never selected. A stale Runnable turn would be picked
     /// and block the scheduler on a carrier that does not exist.
-    #[doc(hidden)]
-    pub fn unregister_worker(&self, key: ThreadKey) {
+    pub(crate) fn unregister_worker(&self, key: ThreadKey) {
         let mut state = self.state();
         Self::set_wait(&mut state, key, Wait::Exited);
         // Whole-key removal goes through the seam; this path no longer writes
@@ -3182,8 +3098,7 @@ impl Control {
 
     /// Test-only: whether any scheduler record still names KEY.
     #[cfg(test)]
-    #[doc(hidden)]
-    pub fn worker_registered_for_test(&self, key: ThreadKey) -> bool {
+    pub(crate) fn worker_registered_for_test(&self, key: ThreadKey) -> bool {
         let state = self.state();
         state.senders.contains_key(&key)
             || state.waits.contains_key(&key)
@@ -3193,27 +3108,23 @@ impl Control {
     /// Test-only: how many threads the registry currently charges (wait
     /// entries, wake senders).
     #[cfg(test)]
-    #[doc(hidden)]
-    pub fn registry_sizes_for_test(&self) -> (usize, usize) {
+    pub(crate) fn registry_sizes_for_test(&self) -> (usize, usize) {
         let state = self.state();
         (state.waits.len(), state.senders.len())
     }
 
     /// Whether KEY has ended.
-    #[doc(hidden)]
-    pub fn exited(&self, key: ThreadKey) -> bool {
+    pub(crate) fn exited(&self, key: ThreadKey) -> bool {
         matches!(self.state().waits.get(&key), Some(Wait::Exited) | None)
     }
 
     /// `Wait::Runnable` entries other than ME's own contribution.
-    #[doc(hidden)]
-    pub fn runnable_excluding(state: &ControlState, me: ThreadKey) -> usize {
+    pub(crate) fn runnable_excluding(state: &ControlState, me: ThreadKey) -> usize {
         state.waits.runnable_count() - usize::from(state.waits.get(&me) == Some(&Wait::Runnable))
     }
 
     /// Select waits other than ME's own contribution.
-    #[doc(hidden)]
-    pub fn selects_excluding(state: &ControlState, me: ThreadKey) -> usize {
+    pub(crate) fn selects_excluding(state: &ControlState, me: ThreadKey) -> usize {
         state.waits.select_len()
             - usize::from(matches!(state.waits.get(&me), Some(Wait::Select { .. })))
     }
@@ -3221,8 +3132,10 @@ impl Control {
     /// The earliest Select deadline other than ME's, in `(wait_end, key)`
     /// order. One index entry per key, so peeking at most two entries is the
     /// old skip-`me` scan.
-    #[doc(hidden)]
-    pub fn earliest_other_select(state: &ControlState, me: ThreadKey) -> Option<DeadlineKey> {
+    pub(crate) fn earliest_other_select(
+        state: &ControlState,
+        me: ThreadKey,
+    ) -> Option<DeadlineKey> {
         let mut index = state.waits.select_index.keys();
         let first = index.next()?;
         if first.key == me {
@@ -3233,15 +3146,13 @@ impl Control {
     }
 
     /// Queued ready turns other than ME's own contribution.
-    #[doc(hidden)]
-    pub fn ready_valid_excluding(state: &ControlState, me: ThreadKey) -> usize {
+    pub(crate) fn ready_valid_excluding(state: &ControlState, me: ThreadKey) -> usize {
         state.ready.valid_excluding(&me)
     }
 
     /// Whether a thread other than ME is ready to run, or will be at a
     /// deadline.
-    #[doc(hidden)]
-    pub fn others_could_run(&self, me: ThreadKey) -> bool {
+    pub(crate) fn others_could_run(&self, me: ThreadKey) -> bool {
         let state = self.state();
         Self::service_ready(&state)
             || Self::runnable_excluding(&state, me) > 0
@@ -3249,8 +3160,7 @@ impl Control {
     }
 
     /// What the threads other than ME are doing at NOW.
-    #[doc(hidden)]
-    pub fn peers(&self, me: ThreadKey, now: Instant) -> Peers {
+    pub(crate) fn peers(&self, me: ThreadKey, now: Instant) -> Peers {
         let state = self.state();
         if Self::service_ready(&state) {
             return Peers::Ready;
@@ -3267,13 +3177,11 @@ impl Control {
 
     /// Poll the selectors at a yield safepoint without taking an owner
     /// off the CPU. Preserve FIFO order: only readiness changes queue state.
-    #[doc(hidden)]
-    pub fn yield_peer_ready(&self, me: ThreadKey) -> bool {
+    pub(crate) fn yield_peer_ready(&self, me: ThreadKey) -> bool {
         self.yield_peer_ready_at(me, Instant::now())
     }
 
-    #[doc(hidden)]
-    pub fn yield_peer_ready_at(&self, me: ThreadKey, now: Instant) -> bool {
+    pub(crate) fn yield_peer_ready_at(&self, me: ThreadKey, now: Instant) -> bool {
         let mut state = self.state();
         if state.closing
             || Self::service_ready(&state)
@@ -3294,8 +3202,7 @@ impl Control {
     }
 
     /// Make KEY the next thread to run, whatever it waits for.
-    #[doc(hidden)]
-    pub fn prioritize(&self, key: ThreadKey) {
+    pub(crate) fn prioritize(&self, key: ThreadKey) {
         let mut state = self.state();
         if matches!(
             state.waits.get(&key),
@@ -3309,8 +3216,7 @@ impl Control {
     }
 
     /// What KEY waits for.
-    #[doc(hidden)]
-    pub fn wait_of(&self, key: ThreadKey) -> Option<Wait> {
+    pub(crate) fn wait_of(&self, key: ThreadKey) -> Option<Wait> {
         self.state().waits.get(&key).copied()
     }
 
@@ -3335,8 +3241,7 @@ impl Control {
 
     /// Make every thread waiting for WAIT runnable (a mutex release, a
     /// notification to all, a thread's end).
-    #[doc(hidden)]
-    pub fn wake_waiting_for(&self, wait: Wait) -> usize {
+    pub(crate) fn wake_waiting_for(&self, wait: Wait) -> usize {
         let mut state = self.state();
         match wait {
             Wait::Join(target) => {
@@ -3396,8 +3301,7 @@ impl Control {
     }
 
     /// Make the first thread (in key order) waiting for WAIT runnable.
-    #[doc(hidden)]
-    pub fn wake_one_waiting_for(&self, wait: Wait) -> bool {
+    pub(crate) fn wake_one_waiting_for(&self, wait: Wait) -> bool {
         let mut state = self.state();
         let key = match wait {
             Wait::Join(target) => state
@@ -3430,8 +3334,7 @@ impl Control {
         }
     }
 
-    #[doc(hidden)]
-    pub fn wake_locked(state: &mut ControlState, key: ThreadKey) {
+    pub(crate) fn wake_locked(state: &mut ControlState, key: ThreadKey) {
         match state.waits.get(&key) {
             Some(Wait::Runnable | Wait::Exited | Wait::HostRequest(_)) | None => {}
             Some(Wait::Join(_) | Wait::Mutex(_) | Wait::Condition(_) | Wait::Select { .. }) => {
@@ -3446,8 +3349,7 @@ impl Control {
     /// expired set comes out in exactly the order the independent per-thread
     /// timers would have produced; simultaneous deadlines keep `ThreadKey`
     /// order (the b262 pin).
-    #[doc(hidden)]
-    pub fn expire_deadlines(state: &mut ControlState, now: Instant) {
+    pub(crate) fn expire_deadlines(state: &mut ControlState, now: Instant) {
         while let Some(deadline) = state.waits.select_index.keys().next().copied() {
             if deadline.wait_end > now {
                 break;
@@ -3462,21 +3364,18 @@ impl Control {
     /// `ThreadKey` order, as the independent host waits would. They inspect
     /// their own wait policy and poll live descriptors only after
     /// reacquiring the Baton.
-    #[doc(hidden)]
-    pub fn wake_selects(state: &mut ControlState) {
+    pub(crate) fn wake_selects(state: &mut ControlState) {
         Self::wake_selects_at(state, Instant::now());
     }
 
-    #[doc(hidden)]
-    pub fn wake_selects_at(state: &mut ControlState, now: Instant) {
+    pub(crate) fn wake_selects_at(state: &mut ControlState, now: Instant) {
         Self::expire_deadlines(state, now);
         while let Some(key) = state.waits.select_keys.first().copied() {
             Self::wake_locked(state, key);
         }
     }
 
-    #[doc(hidden)]
-    pub fn pick_acquire(state: &mut ControlState) -> Option<NativeTurn> {
+    pub(crate) fn pick_acquire(state: &mut ControlState) -> Option<NativeTurn> {
         while let Some(acquire) = state.pending_acquires.pop_front() {
             match acquire {
                 NativeAcquire::Pump => {
@@ -3515,8 +3414,7 @@ impl Control {
         None
     }
 
-    #[doc(hidden)]
-    pub fn pick_reserved_service(state: &mut ControlState) -> Option<NativeTurn> {
+    pub(crate) fn pick_reserved_service(state: &mut ControlState) -> Option<NativeTurn> {
         while let Some(key) = state.pending_services.pop_front() {
             let Some(metadata) = state.services.get_mut(&key) else {
                 continue;
@@ -3566,8 +3464,7 @@ impl Control {
         None
     }
 
-    #[doc(hidden)]
-    pub fn continuation_progress(
+    pub(crate) fn continuation_progress(
         waits: &BTreeMap<ThreadKey, Wait>,
         metadata: &ServiceMetadata,
     ) -> ContinuationProgress {
@@ -3596,8 +3493,7 @@ impl Control {
         }
     }
 
-    #[doc(hidden)]
-    pub fn pending_native(state: &ControlState) -> NativeWork {
+    pub(crate) fn pending_native(state: &ControlState) -> NativeWork {
         if state.services.values().any(|metadata| {
             matches!(
                 metadata.phase,
@@ -3611,8 +3507,7 @@ impl Control {
         }
     }
 
-    #[doc(hidden)]
-    pub fn pick_queued_service(state: &mut ControlState) -> Option<NativeTurn> {
+    pub(crate) fn pick_queued_service(state: &mut ControlState) -> Option<NativeTurn> {
         if state.physical.get(&ThreadKey::Main) != Some(&OwnerLocation::Receiving) {
             return None;
         }
@@ -3620,8 +3515,7 @@ impl Control {
     }
 
     /// Native acquire/service turns never complete main's semantic Wait.
-    #[doc(hidden)]
-    pub fn pick_service(state: &mut ControlState) -> Option<NativeTurn> {
+    pub(crate) fn pick_service(state: &mut ControlState) -> Option<NativeTurn> {
         if let Some(turn) = Self::pick_queued_service(state) {
             return Some(turn);
         }
@@ -3638,8 +3532,7 @@ impl Control {
         None
     }
 
-    #[doc(hidden)]
-    pub fn queued_native_work(state: &ControlState) -> NativeWork {
+    pub(crate) fn queued_native_work(state: &ControlState) -> NativeWork {
         if state.pending_acquires.iter().any(|acquire| match acquire {
             NativeAcquire::Pump => Self::pending_native(state) == NativeWork::Ready,
             NativeAcquire::Service(key) => state
@@ -3660,14 +3553,12 @@ impl Control {
         }
     }
 
-    #[doc(hidden)]
-    pub fn service_ready(state: &ControlState) -> bool {
+    pub(crate) fn service_ready(state: &ControlState) -> bool {
         state.physical.get(&ThreadKey::Main) == Some(&OwnerLocation::Receiving)
             && Self::queued_native_work(state) == NativeWork::Ready
     }
 
-    #[doc(hidden)]
-    pub fn native_wake(turn: NativeTurn, baton: Baton) -> Wake {
+    pub(crate) fn native_wake(turn: NativeTurn, baton: Baton) -> Wake {
         match turn {
             NativeTurn::Service(key) => Wake::ServiceTurn { key, baton },
             NativeTurn::Continuation(key) => Wake::ContinuationTurn { key, baton },
@@ -3675,16 +3566,14 @@ impl Control {
         }
     }
 
-    #[doc(hidden)]
-    pub fn wake_for(next: NextOwner, baton: Baton) -> (ThreadKey, Wake) {
+    pub(crate) fn wake_for(next: NextOwner, baton: Baton) -> (ThreadKey, Wake) {
         match next {
             NextOwner::Resume(key) => (key, Wake::Resume(baton)),
             NextOwner::Native(turn) => (ThreadKey::Main, Self::native_wake(turn, baton)),
         }
     }
 
-    #[doc(hidden)]
-    pub fn intercept_ready(state: &mut ControlState, me: ThreadKey) -> Option<NativeTurn> {
+    pub(crate) fn intercept_ready(state: &mut ControlState, me: ThreadKey) -> Option<NativeTurn> {
         if me == ThreadKey::Main {
             state.physical.insert(me, OwnerLocation::Receiving);
         }
@@ -3709,8 +3598,7 @@ impl Control {
     /// A Resume may already be in flight when main announces its native
     /// acquire. Run that service first, before restoring any Context/JIT state.
     /// The loop holds scheduler metadata only while forwarding the Baton.
-    #[doc(hidden)]
-    pub fn intercept_acquire(
+    pub(crate) fn intercept_acquire(
         &self,
         me: ThreadKey,
         mut wake: Wake,
@@ -3749,8 +3637,7 @@ impl Control {
         }
     }
 
-    #[doc(hidden)]
-    pub fn send_wake(&self, target: ThreadKey, wake: Wake) {
+    pub(crate) fn send_wake(&self, target: ThreadKey, wake: Wake) {
         let sender = self.state().senders.get(&target).cloned();
         let Some(sender) = sender else {
             std::process::abort()
@@ -3764,8 +3651,7 @@ impl Control {
 
     /// Choose an owner, blocking only while every owner is parked. The
     /// Baton stays local and no World cell is read during this OS wait.
-    #[doc(hidden)]
-    pub fn pick_next(&self) -> PickNext {
+    pub(crate) fn pick_next(&self) -> PickNext {
         loop {
             // Register BEFORE checking scheduler predicates. A transition
             // between this check and the OS block advances the same snapshot;
@@ -3849,8 +3735,7 @@ impl Control {
     /// `set_wait` moves KEY's wait and every wait-derived index together. A
     /// transition away from `Runnable` also makes KEY's queued turn stale;
     /// a later `Runnable` transition queues a fresh turn via `enqueue_ready`.
-    #[doc(hidden)]
-    pub fn set_wait(state: &mut ControlState, key: ThreadKey, wait: Wait) {
+    pub(crate) fn set_wait(state: &mut ControlState, key: ThreadKey, wait: Wait) {
         state.waits.insert(key, wait);
         if !matches!(wait, Wait::Runnable) {
             state.ready.invalidate(key);
@@ -3867,8 +3752,7 @@ impl Control {
     /// counts, the sender and the physical location together. Before discarding
     /// an observed exit, retain in-flight continuation authority in its service
     /// record. Arbitrary absence cannot authorize native cleanup.
-    #[doc(hidden)]
-    pub fn remove_key(state: &mut ControlState, key: ThreadKey) {
+    pub(crate) fn remove_key(state: &mut ControlState, key: ThreadKey) {
         debug_assert!(
             matches!(state.waits.get(&key), Some(Wait::Exited) | None),
             "remove_key follows the exit publication, not a pause"
@@ -3903,22 +3787,22 @@ impl Control {
 
     /// Queue KEY's ready turn at the back if it has none. The caller already
     /// made KEY `Runnable` through [`Self::set_wait`].
-    #[doc(hidden)]
-    pub fn enqueue_ready(state: &mut ControlState, key: ThreadKey) {
+    pub(crate) fn enqueue_ready(state: &mut ControlState, key: ThreadKey) {
         state.ready.enqueue_back(key);
         Self::check_invariants(state);
     }
 
     /// Queue KEY's ready turn at the front if it has none (the native
     /// interception requeue preserves the turn it is about to use).
-    #[doc(hidden)]
-    pub fn enqueue_ready_front(state: &mut ControlState, key: ThreadKey) {
+    pub(crate) fn enqueue_ready_front(state: &mut ControlState, key: ThreadKey) {
         state.ready.enqueue_front(key);
         Self::check_invariants(state);
     }
 
-    #[doc(hidden)]
-    pub fn pop_ready(state: &mut ControlState, selection: ReadySelection) -> Option<ThreadKey> {
+    pub(crate) fn pop_ready(
+        state: &mut ControlState,
+        selection: ReadySelection,
+    ) -> Option<ThreadKey> {
         match selection {
             ReadySelection::NativeMainAcquire => return state.ready.pop_main(),
             ReadySelection::NextEligible => {}
@@ -3938,8 +3822,7 @@ impl Control {
 
     /// Whether main's ordinary ready turn is ineligible: its physical wait
     /// owns the Baton until native completion.
-    #[doc(hidden)]
-    pub fn main_excluded(state: &ControlState) -> bool {
+    pub(crate) fn main_excluded(state: &ControlState) -> bool {
         matches!(
             state.physical.get(&ThreadKey::Main),
             Some(
@@ -3952,15 +3835,16 @@ impl Control {
 
     /// The next thread to hold the Baton, if any can run; with no ready
     /// thread but one waiting for a deadline, the earliest deadline.
-    #[doc(hidden)]
-    pub fn pick(state: &mut ControlState) -> Option<(ThreadKey, Option<Instant>)> {
+    pub(crate) fn pick(state: &mut ControlState) -> Option<(ThreadKey, Option<Instant>)> {
         Self::pick_at(state, Instant::now())
     }
 
     /// `pick` at an explicit clock instant (the differential harness drives
     /// the same instants through both the reference scans and this code).
-    #[doc(hidden)]
-    pub fn pick_at(state: &mut ControlState, now: Instant) -> Option<(ThreadKey, Option<Instant>)> {
+    pub(crate) fn pick_at(
+        state: &mut ControlState,
+        now: Instant,
+    ) -> Option<(ThreadKey, Option<Instant>)> {
         Self::expire_deadlines(state, now);
         if let Some(key) = Self::pop_ready(state, ReadySelection::NextEligible) {
             return Some((key, None));
@@ -3978,16 +3862,14 @@ impl Control {
     /// Debug per-transition contract: the same predicate the release deadlock
     /// verdict runs, so both builds agree on what an inconsistent index is.
     #[cfg(debug_assertions)]
-    #[doc(hidden)]
-    pub fn check_invariants(state: &ControlState) {
+    pub(crate) fn check_invariants(state: &ControlState) {
         if let Err(error) = state.verify_invariants() {
             panic!("scheduler wait-index invariant violated: {error}");
         }
     }
 
     #[cfg(not(debug_assertions))]
-    #[doc(hidden)]
-    pub fn check_invariants(state: &ControlState) {
+    pub(crate) fn check_invariants(state: &ControlState) {
         let _ = state;
     }
 
@@ -4069,8 +3951,7 @@ impl Control {
 
     /// Publish exit and join readiness before entering a scheduler/native wait.
     /// A released native main may be the only owner that can make progress.
-    #[doc(hidden)]
-    pub fn publish_owner_exit(&self, me: ThreadKey) {
+    pub(crate) fn publish_owner_exit(&self, me: ThreadKey) {
         {
             let mut state = self.state();
             Self::set_wait(&mut state, me, Wait::Exited);

@@ -69,8 +69,7 @@ impl ThreadingMode {
     /// The mode `NEOVM_THREADS` selects for a new World: `green`, or `sim`
     /// (the default, also when unset). Any other value warns once and
     /// selects `sim`.
-    #[doc(hidden)]
-    pub fn from_env() -> Self {
+    pub(crate) fn from_env() -> Self {
         match std::env::var("NEOVM_THREADS").as_deref() {
             Ok("green") => Self::Green,
             Ok("sim") | Err(_) => Self::Sim,
@@ -228,8 +227,7 @@ impl Context {
     /// A Context whose World runs Lisp threads in MODE, fixed before any
     /// Lisp runs. [`Context::new`] is `Sim`.
     #[cfg_attr(not(test), allow(dead_code))]
-    #[doc(hidden)]
-    pub fn new_with_threading(
+    pub(crate) fn new_with_threading(
         mode: ThreadingMode,
         _hooks: super::hooks_proof::EvalHooksInstalled,
     ) -> Self {
@@ -252,23 +250,25 @@ impl Context {
     /// owner-local dynamic bindings, this Context being the first owner.
     /// Reachable from tests and the green-thread runtime only.
     #[cfg_attr(not(test), allow(dead_code))]
-    #[doc(hidden)]
-    pub fn admit_threads(&mut self) -> Result<(), AdmissionError> {
+    pub(crate) fn admit_threads(&mut self) -> Result<(), AdmissionError> {
         self.fix_standard_case_table_cell();
         self.admit_threads_with(Reservation::Real)
     }
 
     /// [`Self::admit_threads`] refusing after it reserved everything.
     #[cfg(test)]
-    #[doc(hidden)]
-    pub fn admit_threads_refusing_capacity_for_test(&mut self) -> Result<(), AdmissionError> {
+    pub(crate) fn admit_threads_refusing_capacity_for_test(
+        &mut self,
+    ) -> Result<(), AdmissionError> {
         self.admit_threads_with(Reservation::RefuseAfterReserving)
     }
 
     #[cold]
     #[inline(never)]
-    #[doc(hidden)]
-    pub fn admit_threads_with(&mut self, reservation: Reservation) -> Result<(), AdmissionError> {
+    pub(crate) fn admit_threads_with(
+        &mut self,
+        reservation: Reservation,
+    ) -> Result<(), AdmissionError> {
         if self.threading_mode() != ThreadingMode::Green {
             return Err(AdmissionError::NotGreen);
         }
@@ -297,8 +297,7 @@ impl Context {
     /// notices; casetab writes its storage.
     #[cold]
     #[inline(never)]
-    #[doc(hidden)]
-    pub fn fix_standard_case_table_cell(&mut self) {
+    pub(crate) fn fix_standard_case_table_cell(&mut self) {
         if self.threading_mode() != ThreadingMode::Green || self.threads_admitted() {
             return;
         }
@@ -311,8 +310,7 @@ impl Context {
 
     /// Decide what admission does: the bindings it rewrites, what each
     /// channel publishes and keeps, and the cells it projects.
-    #[doc(hidden)]
-    pub fn plan_admission(&mut self) -> AdmissionPlan {
+    pub(crate) fn plan_admission(&mut self) -> AdmissionPlan {
         let undo_list = super::buffer_undo_list_symbol();
         let mut bindings = Vec::new();
         let mut chains: Vec<PlannedChain> = Vec::new();
@@ -450,8 +448,7 @@ impl Context {
 
     /// Whether a binding of ID is a per-buffer variable's, which binds in
     /// place on both channels and stays legacy (design §1.3b).
-    #[doc(hidden)]
-    pub fn binds_in_place(&self, id: SymId) -> bool {
+    pub(crate) fn binds_in_place(&self, id: SymId) -> bool {
         self.obarray
             .get_by_id(id)
             .is_some_and(|symbol| match symbol.value_cell() {
@@ -463,8 +460,7 @@ impl Context {
     /// Reserve everything PLAN's commit allocates, and the owner's slab if
     /// it has none yet, which the commit installs. A refusal leaves this
     /// owner as it was: what was reserved stays reserved, unseen.
-    #[doc(hidden)]
-    pub fn reserve_admission(
+    pub(crate) fn reserve_admission(
         &mut self,
         plan: &AdmissionPlan,
         reservation: Reservation,
@@ -505,8 +501,11 @@ impl Context {
 
     /// Commit PLAN, installing FRESH as the owner's slab: no Lisp, no
     /// watcher, no allocation.
-    #[doc(hidden)]
-    pub fn commit_admission(&mut self, plan: &AdmissionPlan, fresh: Option<NonNull<OwnerSlab>>) {
+    pub(crate) fn commit_admission(
+        &mut self,
+        plan: &AdmissionPlan,
+        fresh: Option<NonNull<OwnerSlab>>,
+    ) {
         if let Some(slab) = fresh {
             self.owner.install(slab);
         }

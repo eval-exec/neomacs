@@ -57,8 +57,7 @@ impl RegisteredPayload {
 
     /// Fill already reserved owner-local storage while the batch reader is
     /// live. The caller roots this storage before ending that reader.
-    #[doc(hidden)]
-    pub fn copy_into(
+    pub(crate) fn copy_into(
         &self,
         traced: &[TaggedValue],
         destination: &mut [TaggedValue],

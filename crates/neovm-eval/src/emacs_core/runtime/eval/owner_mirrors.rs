@@ -70,8 +70,7 @@ impl Context {
     /// also run alone by tests that simulate another owner's write.
     #[cold]
     #[inline(never)]
-    #[doc(hidden)]
-    pub fn refresh_owner_mirrors(&mut self) {
+    pub(crate) fn refresh_owner_mirrors(&mut self) {
         self.reconcile_aliased_owner_bindings();
         self.swap_host_bindings(HostBindingSwap::In);
         self.retire_dead_owner_locals();
@@ -80,8 +79,7 @@ impl Context {
 
     /// Republish every host mirror and the debugger header from what this
     /// owner sees now. Allocates nothing, so admission's commit runs it too.
-    #[doc(hidden)]
-    pub fn republish_owner_mirrors(&mut self) {
+    pub(crate) fn republish_owner_mirrors(&mut self) {
         for word_index in 0..self.runtime_projection_mask().len() {
             let mut word = self.runtime_projection_mask()[word_index];
             while word != 0 {
@@ -107,8 +105,7 @@ impl Context {
     #[cold]
     #[inline(never)]
     #[cfg_attr(not(test), allow(dead_code))]
-    #[doc(hidden)]
-    pub fn park_owner(&mut self) -> ParkedOwner {
+    pub(crate) fn park_owner(&mut self) -> ParkedOwner {
         self.swap_host_bindings(HostBindingSwap::Out);
         ParkedOwner {
             generation: self.obarray.generation(),
@@ -124,8 +121,7 @@ impl Context {
     #[cold]
     #[inline(never)]
     #[cfg_attr(not(test), allow(dead_code))]
-    #[doc(hidden)]
-    pub fn resume_owner(&mut self, parked: ParkedOwner) {
+    pub(crate) fn resume_owner(&mut self, parked: ParkedOwner) {
         debug_assert_eq!(
             parked.generation,
             self.obarray.generation(),
@@ -139,8 +135,7 @@ impl Context {
     /// Admitted owners keep the ordinary heap, epoch, cache and table
     /// activation, using borrowed terminal IDs instead of a fresh snapshot.
     #[inline(always)]
-    #[doc(hidden)]
-    pub fn setup_owner_thread_locals(&mut self) {
+    pub(crate) fn setup_owner_thread_locals(&mut self) {
         self.setup_thread_locals_inner::<false>();
     }
 
@@ -152,8 +147,7 @@ impl Context {
     /// gone turns into a no-op entry, as GNU's does, which drops its parked
     /// value. While the owner is parked its binding values sit in its slab,
     /// which the collector traces from the World (design §1.3b).
-    #[doc(hidden)]
-    pub fn swap_host_bindings(&mut self, direction: HostBindingSwap) {
+    pub(crate) fn swap_host_bindings(&mut self, direction: HostBindingSwap) {
         let mut entries: Vec<usize> = self
             .specpdl
             .iter()
@@ -210,8 +204,7 @@ impl Context {
     /// GNU's thread-switch zap of a `let` whose buffer-local binding is
     /// gone (`src/eval.c:4204-4228`): the record restores nothing at its
     /// pop, and the owner's slot for it goes.
-    #[doc(hidden)]
-    pub fn retire_dead_owner_locals(&mut self) {
+    pub(crate) fn retire_dead_owner_locals(&mut self) {
         let Some(slab) = self.owner.slab() else {
             return;
         };
@@ -242,8 +235,7 @@ impl Context {
     /// canonical cell otherwise.
     #[cold]
     #[inline(never)]
-    #[doc(hidden)]
-    pub fn point_owner_debugger(&mut self) {
+    pub(crate) fn point_owner_debugger(&mut self) {
         let id = debug_on_next_call_symbol();
         let index = self
             .obarray
@@ -263,8 +255,7 @@ impl Context {
     /// cell is this owner's, its binding becomes nil too.
     #[cold]
     #[inline(never)]
-    #[doc(hidden)]
-    pub fn owner_debugger_disarmed(&mut self) {
+    pub(crate) fn owner_debugger_disarmed(&mut self) {
         let id = debug_on_next_call_symbol();
         let Some(index) = self
             .obarray

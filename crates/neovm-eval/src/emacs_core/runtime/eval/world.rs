@@ -122,8 +122,7 @@ static_assertions::assert_eq_size!(WorldLease, Arc<World>);
 #[cfg(test)]
 impl Context {
     /// Observe allocation lifetime without extending it or exposing World data.
-    #[doc(hidden)]
-    pub fn world_lifetime_probe_for_test(&self) -> impl Fn() -> bool + use<> {
+    pub(crate) fn world_lifetime_probe_for_test(&self) -> impl Fn() -> bool + use<> {
         let world = Arc::downgrade(&self.obarray.lease.0);
         move || world.upgrade().is_some()
     }
@@ -139,8 +138,7 @@ impl fmt::Debug for WorldLease {
 
 impl WorldLease {
     #[cold]
-    #[doc(hidden)]
-    pub fn duplicate_for_view(&self) -> Self {
+    pub(crate) fn duplicate_for_view(&self) -> Self {
         Self(Arc::clone(&self.0))
     }
 
@@ -155,8 +153,7 @@ impl WorldLease {
     }
 
     #[cold]
-    #[doc(hidden)]
-    pub fn into_exclusive(self) -> Result<ExclusiveWorldFinish, OutstandingWorldViews> {
+    pub(crate) fn into_exclusive(self) -> Result<ExclusiveWorldFinish, OutstandingWorldViews> {
         match Arc::try_unwrap(self.0) {
             Ok(world) => Ok(ExclusiveWorldFinish(world)),
             Err(world) => {
@@ -213,8 +210,8 @@ impl WorldView<neovm_value::tagged::gc::TaggedHeap> {
     /// must start here, not at a `&mut *view` reborrow: a reference-derived
     /// pointer is a child tag that the next sibling reborrow freezes or pops
     /// (Tree/Stacked Borrows respectively).
-    #[doc(hidden)]
-    pub fn heap_root(&self) -> NonNull<neovm_value::tagged::gc::TaggedHeap> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn heap_root(&self) -> NonNull<neovm_value::tagged::gc::TaggedHeap> {
         self.ptr
     }
 
@@ -223,8 +220,8 @@ impl WorldView<neovm_value::tagged::gc::TaggedHeap> {
     /// The slot is set from the view's provenance root, which is the same
     /// root every access through the view derives from, so later `&mut`
     /// reborrows through the view cannot invalidate the installed pointer.
-    #[doc(hidden)]
-    pub fn install_tagged_heap(&self) {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn install_tagged_heap(&self) {
         neovm_value::tagged::gc::set_tagged_heap_root(self.ptr);
     }
 }
@@ -324,8 +321,7 @@ impl AdmissionHeader {
     /// owner's unbind gives the canonical descriptor back
     /// ([`ObarrayView::point_debugger`]).
     #[inline(always)]
-    #[doc(hidden)]
-    pub fn retire_current_admission(&self, canonical: &CanonicalDispatchCells) {
+    pub(crate) fn retire_current_admission(&self, canonical: &CanonicalDispatchCells) {
         self.epoch.set(canonical.admission_epoch());
         if !self.debugger.get().is_owner() {
             self.debugger.set(canonical.admission_debugger());
@@ -337,8 +333,7 @@ impl AdmissionHeader {
     /// (resolution and installation do, in full-dispatch phases), so the
     /// header's debugger -- canonical, or this owner's own cell -- stays.
     #[inline(always)]
-    #[doc(hidden)]
-    pub fn retire_function_epoch(&self, canonical: &CanonicalDispatchCells) {
+    pub(crate) fn retire_function_epoch(&self, canonical: &CanonicalDispatchCells) {
         self.epoch.set(canonical.admission_epoch());
     }
 
@@ -349,8 +344,7 @@ impl AdmissionHeader {
     }
 
     #[inline(always)]
-    #[doc(hidden)]
-    pub fn debug_on_next_call_armed_fast(&self) -> bool {
+    pub(crate) fn debug_on_next_call_armed_fast(&self) -> bool {
         self.debugger.get().armed()
     }
 }
@@ -551,26 +545,21 @@ impl ObarrayView {
     /// establish sole Context ownership. The private construction marker does.
     /// This grants no second manager view and performs no lease operation.
     #[inline(always)]
-    #[doc(hidden)]
-    pub fn sole_owner_registration(&self) -> SoleOwnerRegistration {
+    pub(crate) fn sole_owner_registration(&self) -> SoleOwnerRegistration {
         self.lease.0.sole_context.registration()
     }
 
     #[cfg(feature = "jit")]
-    #[doc(hidden)]
-    pub const ADMISSION_HEADER_OFFSET: usize = std::mem::offset_of!(Self, admission);
+    pub(crate) const ADMISSION_HEADER_OFFSET: usize = std::mem::offset_of!(Self, admission);
     #[cfg(feature = "jit")]
-    #[doc(hidden)]
-    pub const ADMISSION_EPOCH_OFFSET: usize =
+    pub(crate) const ADMISSION_EPOCH_OFFSET: usize =
         Self::ADMISSION_HEADER_OFFSET + std::mem::offset_of!(AdmissionHeader, epoch);
     #[cfg(feature = "jit")]
-    #[doc(hidden)]
-    pub const ADMISSION_DEBUGGER_OFFSET: usize =
+    pub(crate) const ADMISSION_DEBUGGER_OFFSET: usize =
         Self::ADMISSION_HEADER_OFFSET + std::mem::offset_of!(AdmissionHeader, debugger);
 
     #[cold]
-    #[doc(hidden)]
-    pub fn closing_lease(&self) -> WorldLease {
+    pub(crate) fn closing_lease(&self) -> WorldLease {
         self.lease.duplicate_for_view()
     }
 
@@ -581,8 +570,7 @@ impl ObarrayView {
     /// Neither the scheduler nor World may retain a destination or refresh a
     /// parked Context beneath its live protector; that protocol is not built here.
     #[cold]
-    #[doc(hidden)]
-    pub fn refresh_admission(&mut self) {
+    pub(crate) fn refresh_admission(&mut self) {
         // SAFETY: no manager loan overlaps this exclusive receiver borrow;
         // canonical source and current destination are kept by one view/lease.
         self.admission
@@ -592,8 +580,7 @@ impl ObarrayView {
     /// Name OWNER_CELL as this owner's `debug-on-next-call` while the owner
     /// binds it, or the canonical descriptor again (`None`).
     #[cold]
-    #[doc(hidden)]
-    pub fn point_debugger(
+    pub(crate) fn point_debugger(
         &mut self,
         owner_cell: Option<&'static neovm_value::forward::LispBoolFwd>,
     ) {
@@ -607,8 +594,7 @@ impl ObarrayView {
 
     /// Test the actual descriptor identity, not just two equal Boolean values.
     #[cfg(any(test, feature = "test-support"))]
-    #[doc(hidden)]
-    pub fn admission_matches_canonical(&self) -> bool {
+    pub(crate) fn admission_matches_canonical(&self) -> bool {
         // SAFETY: this shared borrow excludes both manager writers and header
         // retirement; the allocation-root source is kept by this same lease.
         let canonical = unsafe { self.dispatch.as_ref() };
@@ -618,8 +604,7 @@ impl ObarrayView {
 
     /// Canonical-changing proxies alone use this private, noncalling phase.
     #[inline(always)]
-    #[doc(hidden)]
-    pub fn with_dispatch_write<R>(
+    pub(crate) fn with_dispatch_write<R>(
         &mut self,
         write: impl for<'manager> FnOnce(&'manager mut Obarray) -> R,
     ) -> R {
@@ -629,8 +614,7 @@ impl ObarrayView {
     /// [`Self::with_dispatch_write`] for a function-cell write, which moves
     /// only the function clock ([`AdmissionHeader::retire_function_epoch`]).
     #[inline(always)]
-    #[doc(hidden)]
-    pub fn with_function_write<R>(
+    pub(crate) fn with_function_write<R>(
         &mut self,
         write: impl for<'manager> FnOnce(&'manager mut Obarray) -> R,
     ) -> R {
@@ -638,8 +622,7 @@ impl ObarrayView {
     }
 
     #[inline(always)]
-    #[doc(hidden)]
-    pub fn with_retiring_write<R>(
+    pub(crate) fn with_retiring_write<R>(
         &mut self,
         scope: RetirementScope,
         write: impl for<'manager> FnOnce(&'manager mut Obarray) -> R,
@@ -665,8 +648,7 @@ impl ObarrayView {
     /// descriptor writes must use the canonical installation/resolution hooks.
     /// No manager, canonical or header reader may overlap the mutable phase.
     #[inline(always)]
-    #[doc(hidden)]
-    pub unsafe fn with_legacy_storage_write<R>(
+    pub(crate) unsafe fn with_legacy_storage_write<R>(
         &mut self,
         write: impl for<'manager> FnOnce(&'manager mut Obarray) -> R,
     ) -> R {
@@ -707,16 +689,14 @@ impl ObarrayView {
     }
 
     #[inline(always)]
-    #[doc(hidden)]
-    pub fn debug_on_next_call_bool_fwd_cached(
+    pub(crate) fn debug_on_next_call_bool_fwd_cached(
         &self,
     ) -> Option<&'static neovm_value::forward::LispBoolFwd> {
         self.admission.debugger.get().resolved()
     }
 
     #[inline(always)]
-    #[doc(hidden)]
-    pub fn debug_on_next_call_bool_fwd(
+    pub(crate) fn debug_on_next_call_bool_fwd(
         &mut self,
         id: SymId,
     ) -> Option<&'static neovm_value::forward::LispBoolFwd> {
@@ -773,8 +753,7 @@ impl ObarrayWriteAccess<'_> {
     }
     #[cfg(test)]
     #[inline(always)]
-    #[doc(hidden)]
-    pub fn invalidate_all_function_bindings(&mut self, why: FunctionEpochBump) {
+    pub(crate) fn invalidate_all_function_bindings(&mut self, why: FunctionEpochBump) {
         self.view.invalidate_all_function_bindings(why);
     }
     #[inline(always)]
@@ -806,8 +785,8 @@ impl ObarrayWriteAccess<'_> {
 /// forwards the audited `&mut self` operations callers need, but it never
 /// yields `&mut ObarrayView` and implements no `DerefMut`, so the view value
 /// cannot be swapped, replaced or moved out by safe code.
-#[doc(hidden)]
 #[must_use]
+#[doc(hidden)]
 pub struct ObarrayViewMut<'ctx> {
     view: &'ctx mut ObarrayView,
 }
@@ -1144,8 +1123,7 @@ impl DispatchExclusiveProjection<'_> {
 }
 impl Context {
     #[inline(always)]
-    #[doc(hidden)]
-    pub fn dispatch_projection(&self) -> DispatchReadProjection<'_> {
+    pub(crate) fn dispatch_projection(&self) -> DispatchReadProjection<'_> {
         DispatchReadProjection {
             ptr: NonNull::from(&self.obarray.admission),
             owner: PhantomData,
@@ -1153,8 +1131,7 @@ impl Context {
     }
     #[inline(always)]
     #[cfg(feature = "jit")]
-    #[doc(hidden)]
-    pub fn dispatch_projection_exclusive(&mut self) -> DispatchExclusiveProjection<'_> {
+    pub(crate) fn dispatch_projection_exclusive(&mut self) -> DispatchExclusiveProjection<'_> {
         DispatchExclusiveProjection {
             ptr: NonNull::from(&mut self.obarray.admission),
             owner: PhantomData,
@@ -1300,8 +1277,7 @@ impl WorldStorageBuilder {
     /// The unique set of manager views one owner Context holds over the
     /// World LEASE names, with SELECTION as its current buffer.
     #[cold]
-    #[doc(hidden)]
-    pub fn publish_views(lease: &WorldLease, selection: BufferSelection) -> ReadyWorld {
+    pub(crate) fn publish_views(lease: &WorldLease, selection: BufferSelection) -> ReadyWorld {
         let ptr = cell_ptr(&lease.0.obarray);
         // SAFETY: final stable UnsafeCell allocation root, not a temporary
         // manager reference. Embedded repr(C) canonical pair has this const
@@ -1387,8 +1363,9 @@ impl Context {
     /// Allocate this Context's owner slab in its World's registry.
     #[cold]
     #[inline(never)]
-    #[doc(hidden)]
-    pub fn register_owner_slab(&mut self) -> std::ptr::NonNull<super::owner_bindings::OwnerSlab> {
+    pub(crate) fn register_owner_slab(
+        &mut self,
+    ) -> std::ptr::NonNull<super::owner_bindings::OwnerSlab> {
         let heap = self.tagged_heap.identity();
         self.obarray.lease.0.owner_slabs.borrow_mut().register(heap)
     }
@@ -1396,8 +1373,7 @@ impl Context {
     /// Visit every owner slab's values -- each owner's bindings are roots,
     /// whether or not that owner is running -- and the canonical plain word
     /// of every projected variable, which the World's table roots.
-    #[doc(hidden)]
-    pub fn trace_owner_slabs(&self, heap_id: usize, visit: &mut dyn FnMut(Value)) {
+    pub(crate) fn trace_owner_slabs(&self, heap_id: usize, visit: &mut dyn FnMut(Value)) {
         let world = &self.obarray.lease.0;
         world.owner_slabs.borrow().trace_roots(heap_id, visit);
         world.thread_projections.borrow().trace_roots(visit);
@@ -1411,16 +1387,17 @@ impl Context {
 impl Context {
     /// How this Context's World runs Lisp threads.
     #[inline]
-    #[doc(hidden)]
-    pub fn threading_mode(&self) -> super::admission::ThreadingMode {
+    pub(crate) fn threading_mode(&self) -> super::admission::ThreadingMode {
         self.obarray.lease.0.threading.get()
     }
 
     /// Fix the World's threading mode. Only construction calls this, before
     /// any Lisp runs (`Context::new_with_threading`).
     #[cold]
-    #[doc(hidden)]
-    pub fn set_threading_mode_at_construction(&mut self, mode: super::admission::ThreadingMode) {
+    pub(crate) fn set_threading_mode_at_construction(
+        &mut self,
+        mode: super::admission::ThreadingMode,
+    ) {
         debug_assert!(
             !self.threads_admitted(),
             "the mode is fixed before admission"
@@ -1430,16 +1407,14 @@ impl Context {
 
     /// Whether thread admission has run in this World.
     #[inline]
-    #[doc(hidden)]
-    pub fn threads_admitted(&self) -> bool {
+    pub(crate) fn threads_admitted(&self) -> bool {
         self.tagged_heap.threads_admitted()
     }
 
     /// Make room for admission to project OWNED variables onto descriptors
     /// of their own, plus the VOID one: arena pages and the issued list. A
     /// refusal changes nothing a reader sees.
-    #[doc(hidden)]
-    pub fn reserve_thread_projections(&mut self, owned: usize) -> Result<(), ()> {
+    pub(crate) fn reserve_thread_projections(&mut self, owned: usize) -> Result<(), ()> {
         self.obarray
             .lease
             .0
@@ -1450,8 +1425,10 @@ impl Context {
     }
 
     /// The index the ORDINAL-th next projection this World issues will get.
-    #[doc(hidden)]
-    pub fn upcoming_thread_projection(&self, ordinal: usize) -> neovm_value::forward::TlsIndex {
+    pub(crate) fn upcoming_thread_projection(
+        &self,
+        ordinal: usize,
+    ) -> neovm_value::forward::TlsIndex {
         self.obarray
             .lease
             .0
@@ -1463,8 +1440,7 @@ impl Context {
     /// Admission's projection of CELLS, each as its plan says, in one
     /// canonical-changing phase. Allocates nothing once
     /// [`Self::reserve_thread_projections`] covered them.
-    #[doc(hidden)]
-    pub fn project_admitted_cells(
+    pub(crate) fn project_admitted_cells(
         &mut self,
         cells: &[(SymId, neovm_value::symbol::AdmissionPlanCell)],
     ) {
@@ -1480,8 +1456,7 @@ impl Context {
     /// Enter this World's projection scope, so its obarray births symbols
     /// on VOID. Allocates nothing once
     /// `reserve_projection_scope` and the table's reservation ran.
-    #[doc(hidden)]
-    pub fn enter_world_projection_scope(&self) {
+    pub(crate) fn enter_world_projection_scope(&self) {
         let world = &self.obarray.lease.0;
         let void = world.thread_projections.borrow_mut().void_descriptor();
         // SAFETY: the table is this World's, which owns the obarray of this
@@ -1503,8 +1478,7 @@ impl Context {
     /// Project `id`'s variable through this World's table
     /// (`Obarray::project_thread_variable_for_test`, a redirect change and
     /// so a canonical-changing phase).
-    #[doc(hidden)]
-    pub fn project_thread_variable_for_test(
+    pub(crate) fn project_thread_variable_for_test(
         &mut self,
         id: SymId,
     ) -> Option<&'static neovm_value::forward::ThreadProjectionDescriptor> {
@@ -1524,8 +1498,7 @@ impl Context {
     }
 
     /// The projection CELL's header heads, resolved by the World's table.
-    #[doc(hidden)]
-    pub fn thread_projection_for_test(
+    pub(crate) fn thread_projection_for_test(
         &self,
         id: SymId,
     ) -> Option<&'static neovm_value::forward::ThreadProjectionDescriptor> {
@@ -1539,16 +1512,14 @@ impl Context {
     }
 
     /// How many projections this World's table has issued.
-    #[doc(hidden)]
-    pub fn thread_projection_count_for_test(&self) -> usize {
+    pub(crate) fn thread_projection_count_for_test(&self) -> usize {
         self.obarray.lease.0.thread_projections.borrow().len()
     }
 }
 
 impl Context {
     #[cold]
-    #[doc(hidden)]
-    pub fn shutdown_world(mut self: Box<Self>) -> Result<(), ContextShutdownError> {
+    pub(crate) fn shutdown_world(mut self: Box<Self>) -> Result<(), ContextShutdownError> {
         self.finish_concurrent_mark()?;
         let closing = self.obarray.closing_lease();
         // Context Drop retracts owner TLS/registries before its views retire.

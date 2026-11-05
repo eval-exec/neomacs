@@ -169,8 +169,7 @@ impl std::fmt::Debug for RestoredHostOwner<'_> {
 }
 
 impl<'owner> RestoredHostOwner<'owner> {
-    #[doc(hidden)]
-    pub fn after_restore(
+    pub(crate) fn after_restore(
         context: &'owner mut super::super::Context,
         baton: &'owner Baton,
     ) -> Result<Self, HostRootError> {
@@ -230,8 +229,7 @@ pub(super) struct HostParkRegistration {
 }
 
 impl PublishedHostCall {
-    #[doc(hidden)]
-    pub fn into_registration(self) -> HostParkRegistration {
+    pub(crate) fn into_registration(self) -> HostParkRegistration {
         HostParkRegistration {
             key: self.key,
             owner: self.owner,
@@ -336,8 +334,7 @@ impl DrainBlocked {
 
     /// Used only when shutdown has no remaining owner able to retire roots.
     /// Keep allocation backing, report the refusal, and never block in Drop.
-    #[doc(hidden)]
-    pub fn retain_for_shutdown(self) {
+    pub(crate) fn retain_for_shutdown(self) {
         tracing::error!(error = %self.error, "retaining World with unfinished host roots");
         std::mem::forget(self.retention);
     }
@@ -374,8 +371,7 @@ impl WorldRootRegistry {
     pub fn values(&self) -> impl Iterator<Item = &RootBatchLease> {
         self.owners.values()
     }
-    #[doc(hidden)]
-    pub fn first_owner_key(&self) -> Option<ThreadKey> {
+    pub(crate) fn first_owner_key(&self) -> Option<ThreadKey> {
         self.owners.keys().next().copied()
     }
     #[doc(hidden)]
@@ -392,8 +388,7 @@ impl WorldRootRegistry {
     }
 
     /// Issue Ready only after the ordinary owner census has committed.
-    #[doc(hidden)]
-    pub fn publish_host(
+    pub(crate) fn publish_host(
         &mut self,
         prepared: PreparedHostCall,
     ) -> Result<HostRequestKey, HostRootError> {
@@ -424,8 +419,7 @@ impl WorldRootRegistry {
 
     /// Native settlement precedes collector-authorized dead-owner root drain.
     /// Refusal preserves the entire registry and its existing World retention.
-    #[doc(hidden)]
-    pub fn close_and_drain(
+    pub(crate) fn close_and_drain(
         &mut self,
         collector: &QuiescentCollector<'_>,
     ) -> Result<DrainReceipt, HostRootError> {
@@ -435,8 +429,7 @@ impl WorldRootRegistry {
         Ok(receipt)
     }
 
-    #[doc(hidden)]
-    pub fn hosts(&mut self) -> &mut HostRegistry {
+    pub(crate) fn hosts(&mut self) -> &mut HostRegistry {
         &mut self.hosts
     }
 }
@@ -460,8 +453,7 @@ impl HostRegistry {
 
     /// Stop new admission while retaining already-published continuations.
     /// This is the cold close boundary; it grants no owner execution authority.
-    #[doc(hidden)]
-    pub fn begin_closing(&mut self, baton: &Baton) -> Result<(), HostRootError> {
+    pub(crate) fn begin_closing(&mut self, baton: &Baton) -> Result<(), HostRootError> {
         if !baton.held_here() {
             return Err(HostRootError::BatonRequired);
         }
@@ -484,8 +476,7 @@ impl HostRegistry {
     /// Reflect the actor's FIFO close observation only after earlier individual
     /// cancellation observations have been recorded. Closing admission alone
     /// must not overtake an already enqueued requester intent.
-    #[doc(hidden)]
-    pub fn observe_session_closing(&mut self, baton: &Baton) -> Result<(), HostRootError> {
+    pub(crate) fn observe_session_closing(&mut self, baton: &Baton) -> Result<(), HostRootError> {
         self.begin_closing(baton)?;
         for record in self.records.values_mut() {
             match record.state {
@@ -523,8 +514,7 @@ impl HostRegistry {
         }
     }
 
-    #[doc(hidden)]
-    pub fn record_mut(&mut self, key: HostRequestKey) -> Result<&mut Record, HostRootError> {
+    pub(crate) fn record_mut(&mut self, key: HostRequestKey) -> Result<&mut Record, HostRootError> {
         self.records
             .get_mut(&key)
             .ok_or(HostRootError::UnknownRequest)
@@ -532,8 +522,7 @@ impl HostRegistry {
 
     /// Consume unpublished admission and revoke materialization before collector
     /// preflight. Dropping this handle retains the record for quiescent drain.
-    #[doc(hidden)]
-    pub fn abandon_prepared(
+    pub(crate) fn abandon_prepared(
         &mut self,
         baton: &Baton,
         heap: &TaggedHeap,
@@ -560,8 +549,7 @@ impl HostRegistry {
 
     /// Original owner has completed canonical collector preflight, outside all
     /// registry borrows. Never retire a lease directly from an active GC driver.
-    #[doc(hidden)]
-    pub fn retire_abandoned(
+    pub(crate) fn retire_abandoned(
         &mut self,
         baton: &Baton,
         heap: &TaggedHeap,
@@ -682,8 +670,7 @@ impl HostRegistry {
     ///
     /// # Safety
     /// Same live original-owner roots and no-GC extent as `register`.
-    #[doc(hidden)]
-    pub unsafe fn register_record<K: RegisteredRecord>(
+    pub(crate) unsafe fn register_record<K: RegisteredRecord>(
         &mut self,
         baton: &Baton,
         heap: &TaggedHeap,
@@ -740,8 +727,11 @@ impl HostRegistry {
         Ok(reference)
     }
 
-    #[doc(hidden)]
-    pub fn validate_access(&self, baton: &Baton, heap: &TaggedHeap) -> Result<(), HostRootError> {
+    pub(crate) fn validate_access(
+        &self,
+        baton: &Baton,
+        heap: &TaggedHeap,
+    ) -> Result<(), HostRootError> {
         if !baton.held_here() {
             return Err(HostRootError::BatonRequired);
         }
@@ -758,8 +748,7 @@ impl HostRegistry {
 
     /// Read only on the held same-World Baton. A native endpoint never receives
     /// the reader or the heap, only its registered reference metadata.
-    #[doc(hidden)]
-    pub fn with_registered_roots<K: RegisteredRecord, R>(
+    pub(crate) fn with_registered_roots<K: RegisteredRecord, R>(
         &self,
         restored: &RestoredHostOwner<'_>,
         key: HostRequestKey,
@@ -829,8 +818,7 @@ impl HostRegistry {
         }
     }
 
-    #[doc(hidden)]
-    pub fn settle(&mut self, key: HostRequestKey) -> Result<SettledHostCall, HostRootError> {
+    pub(crate) fn settle(&mut self, key: HostRequestKey) -> Result<SettledHostCall, HostRootError> {
         let record = self.record_mut(key)?;
         if !record.steps.can_settle() {
             return Err(HostRootError::WrongStage);
@@ -893,8 +881,7 @@ impl HostRegistry {
         retired.map_err(|error| RetirementBlocked { ack, error })
     }
 
-    #[doc(hidden)]
-    pub fn finish_roots(record: &mut Record) -> Result<(), HostRootError> {
+    pub(crate) fn finish_roots(record: &mut Record) -> Result<(), HostRootError> {
         while let Some(lease) = record.roots.pop() {
             match super::root_registry::finish(lease) {
                 Ok(()) => {}

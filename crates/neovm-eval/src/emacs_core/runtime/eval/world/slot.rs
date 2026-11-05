@@ -24,8 +24,7 @@ pub union WorldSlot<T> {
 
 impl<T> WorldSlot<T> {
     /// A slot is in place of a value at least a pointer wide and as aligned.
-    #[doc(hidden)]
-    pub const FITS: () = assert!(
+    pub(crate) const FITS: () = assert!(
         std::mem::size_of::<T>() >= std::mem::size_of::<NonNull<T>>()
             && std::mem::align_of::<T>() == std::mem::align_of::<NonNull<T>>()
     );

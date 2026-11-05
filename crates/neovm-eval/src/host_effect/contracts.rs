@@ -70,8 +70,7 @@ pub(crate) struct HostRequestKey {
 }
 
 impl HostRequestKey {
-    #[doc(hidden)]
-    pub const fn from_owner_identity(
+    pub(crate) const fn from_owner_identity(
         session: HostSessionId,
         request: HostRequestId,
         generation: HostRequestGeneration,
@@ -84,8 +83,7 @@ impl HostRequestKey {
     }
 
     #[cfg(test)]
-    #[doc(hidden)]
-    pub const fn for_test(request: NonZeroU64) -> Self {
+    pub(crate) const fn for_test(request: NonZeroU64) -> Self {
         Self::from_owner_identity(
             HostSessionId::from_owner_id(NonZeroU64::MIN),
             HostRequestId::from_owner_id(request),
@@ -607,8 +605,7 @@ pub mod contract_fixture {
             self.affinity
         }
 
-        #[doc(hidden)]
-        pub fn next_binding(&self) -> RequestIdentity {
+        pub(crate) fn next_binding(&self) -> RequestIdentity {
             let request = self.next_request.get();
             self.next_request
                 .set(request.checked_add(1).expect("finite contract fixture"));

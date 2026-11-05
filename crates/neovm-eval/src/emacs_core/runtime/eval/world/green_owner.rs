@@ -48,8 +48,7 @@ impl World {
     /// World exclusivity proves that every former owner has terminated.
     #[cold]
     #[inline(never)]
-    #[doc(hidden)]
-    pub fn finish_green_registry(&mut self) {
+    pub(crate) fn finish_green_registry(&mut self) {
         let Some(runtime) = self.green.get_mut().as_mut() else {
             return;
         };
@@ -106,8 +105,8 @@ impl fmt::Debug for Baton {
 impl Baton {
     /// Cold proof-3 backing admission. Original allocation roots only; no
     /// Context view, heap reference or ordinary mutable manager borrow.
-    #[doc(hidden)]
-    pub fn parallel_symbol_backing(&self) -> neovm_value::symbol::parallel::SymbolBacking {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn parallel_symbol_backing(&self) -> neovm_value::symbol::parallel::SymbolBacking {
         assert!(self.held_here(), "symbol backing keeper must be held here");
         // SAFETY: era admission has escrowed the serial Context and retains
         // this Baton for every owner loan, including abandoned-era retention.
@@ -128,8 +127,8 @@ impl Baton {
     }
 
     /// Whether the calling OS thread holds the Baton.
-    #[doc(hidden)]
-    pub fn held_here(&self) -> bool {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn held_here(&self) -> bool {
         self.world.baton_holder.get() == Some(std::thread::current().id())
     }
 
@@ -137,16 +136,16 @@ impl Baton {
     /// separately checks `held_here`; metadata alone grants no World access.
     #[cold]
     #[inline(never)]
-    #[doc(hidden)]
-    pub fn parallel_heap_identity(&self) -> neovm_value::tagged::gc::HeapIdentity {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn parallel_heap_identity(&self) -> neovm_value::tagged::gc::HeapIdentity {
         self._retention.heap_identity()
     }
 
     /// Cold metadata retention for parallel root publications, with no heap loan.
     #[cold]
     #[inline(never)]
-    #[doc(hidden)]
-    pub fn parallel_epoch_retention(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn parallel_epoch_retention(
         &self,
     ) -> Result<
         neovm_value::tagged::gc::FacadeEpochRetention,
@@ -178,8 +177,7 @@ impl Baton {
 
     /// A further owner's views of the World, starting in CURRENT. Only the
     /// holder may build them (point 2, checked in debug builds).
-    #[doc(hidden)]
-    pub fn owner_views(&self, current: Option<BufferId>) -> ReadyWorld {
+    pub(crate) fn owner_views(&self, current: Option<BufferId>) -> ReadyWorld {
         debug_assert!(
             self.held_here(),
             "a World view made off the thread holding the World's Baton"
@@ -189,8 +187,7 @@ impl Baton {
     }
 
     /// Reserve a parked root publication under this World's held exclusion.
-    #[doc(hidden)]
-    pub fn prepare_parked_batch(
+    pub(crate) fn prepare_parked_batch(
         &self,
         heap: &neovm_value::tagged::gc::TaggedHeap,
         capacity: usize,
@@ -208,8 +205,7 @@ impl Baton {
 
     /// Retire an exiting worker's final native root after its Context and
     /// carrier TLS have gone. This is intentionally not a payload accessor.
-    #[doc(hidden)]
-    pub fn retire_thread_completion(
+    pub(crate) fn retire_thread_completion(
         &mut self,
         completion: crate::emacs_core::threads::CompletingThread,
     ) -> crate::emacs_core::threads::RetiredCompletion {
@@ -227,8 +223,7 @@ impl Baton {
     }
 
     /// The World's Green runtime.
-    #[doc(hidden)]
-    pub fn green_runtime(
+    pub(crate) fn green_runtime(
         &self,
     ) -> std::cell::Ref<'_, Option<Box<super::super::green::GreenRuntime>>> {
         debug_assert!(self.held_here(), "the Green runtime read off the Baton");
@@ -240,8 +235,7 @@ impl Context {
     /// Build registration fixtures with a real World and its unique keeper.
     /// The higher-ranked closure cannot return an era or collector heap loan.
     #[cfg(test)]
-    #[doc(hidden)]
-    pub fn with_test_mutator_era<R>(
+    pub(crate) fn with_test_mutator_era<R>(
         f: impl for<'heap> FnOnce(neovm_value::tagged::gc::ProofEra<'heap>) -> R,
     ) -> R {
         let mut context = Self::new();
@@ -274,8 +268,7 @@ impl Context {
     /// Real heap roots prepared by its sole serial owner before the synthetic
     /// parallel era. Participants receive SharedRoot handles, never raw Values.
     #[cfg(test)]
-    #[doc(hidden)]
-    pub fn with_test_rooted_mutator_era<R>(
+    pub(crate) fn with_test_rooted_mutator_era<R>(
         f: impl for<'heap> FnOnce(
             neovm_value::tagged::gc::ProofEra<'heap>,
             Vec<neovm_value::tagged::transport::SharedRoot>,
@@ -320,8 +313,10 @@ impl Context {
     /// the Green era, so no concurrent marker runs while Green owners exist.
     #[cold]
     #[inline(never)]
-    #[doc(hidden)]
-    pub fn issue_green_baton(&mut self) -> Result<Baton, super::super::green::GreenStartError> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn issue_green_baton(
+        &mut self,
+    ) -> Result<Baton, super::super::green::GreenStartError> {
         let heap: *mut neovm_value::tagged::gc::TaggedHeap = self.tagged_heap.heap_root().as_ptr();
         // SAFETY: the sole running owner, at a safe point, with no manager
         // loan or callback live; the reseed enumerates the registered root
@@ -345,16 +340,14 @@ impl Context {
     }
 
     /// This World's Green runtime, if it started.
-    #[doc(hidden)]
-    pub fn green_runtime_ref(
+    pub(crate) fn green_runtime_ref(
         &self,
     ) -> std::cell::Ref<'_, Option<Box<super::super::green::GreenRuntime>>> {
         self.obarray.lease.0.green.borrow()
     }
 
     /// Install the World's Green runtime (once).
-    #[doc(hidden)]
-    pub fn install_green_runtime(&self, runtime: Box<super::super::green::GreenRuntime>) {
+    pub(crate) fn install_green_runtime(&self, runtime: Box<super::super::green::GreenRuntime>) {
         let mut slot = self.obarray.lease.0.green.borrow_mut();
         debug_assert!(slot.is_none(), "a World starts its Green runtime once");
         *slot = Some(runtime);

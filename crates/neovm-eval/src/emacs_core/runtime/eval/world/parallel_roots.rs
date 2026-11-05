@@ -23,8 +23,7 @@ impl Context {
     /// activation or outstanding job from this owner. Its closed executor can
     /// create neither while this original Context remains suspended.
     #[cold]
-    #[doc(hidden)]
-    pub fn function_cells_quiescent(&self) -> bool {
+    pub(crate) fn function_cells_quiescent(&self) -> bool {
         use crate::emacs_core::eval::SpecBinding;
         if self.jit_root_stack_top != 0
             || self.specpdl.iter().any(|entry| {
@@ -55,8 +54,8 @@ impl Context {
     // `admit_owned_parallel` in the child module. It calls this capture and
     // then `admit_rooted` with no Context execution between them. The fixture
     // sequences below remain the test-only NIL preclean.
-    #[doc(hidden)]
-    pub fn capture_parallel_legacy_roots(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn capture_parallel_legacy_roots(
         &self,
         keeper: &Baton,
     ) -> Result<FrozenLegacyRoots, RendezvousError> {
@@ -138,8 +137,8 @@ impl Baton {
     /// The returned proof cannot outlive this retained Baton or cross threads.
     #[cold]
     #[inline(never)]
-    #[doc(hidden)]
-    pub fn keeper_designator(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn keeper_designator(
         &self,
     ) -> Result<
         neovm_value::symbol::parallel::KeeperWorldDesignator<'_>,
@@ -166,8 +165,8 @@ impl Baton {
     /// Marker unlink slots are valid only for the caller's stopped phase.
     #[cold]
     #[inline(never)]
-    #[doc(hidden)]
-    pub fn collect_parallel_world_roots(
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn collect_parallel_world_roots(
         &self,
         stopped: &mut AllStopped<'_>,
         out: &mut Vec<TaggedValue>,
@@ -267,8 +266,7 @@ impl Context {
     /// Prepare a real frozen World and legacy Context before admitting the
     /// synthetic participants. Setup runs serially; body cannot return an era.
     #[cfg(test)]
-    #[doc(hidden)]
-    pub fn with_test_collection_era<S, R>(
+    pub(crate) fn with_test_collection_era<S, R>(
         setup: impl FnOnce(&mut Context) -> S,
         body: impl for<'heap> FnOnce(neovm_value::tagged::gc::ProofEra<'heap>, S) -> R,
     ) -> R {
@@ -305,8 +303,7 @@ impl Context {
     /// finish capabilities. A poisoned/abandoned era cannot produce this pair;
     /// there is no unconditional serial access after an arbitrary body return.
     #[cfg(test)]
-    #[doc(hidden)]
-    pub fn with_test_collection_era_then<S, R>(
+    pub(crate) fn with_test_collection_era_then<S, R>(
         setup: impl FnOnce(&mut Context) -> S,
         body: impl for<'heap> FnOnce(
             neovm_value::tagged::gc::ProofEra<'heap>,

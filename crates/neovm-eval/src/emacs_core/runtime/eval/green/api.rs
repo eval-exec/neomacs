@@ -27,14 +27,12 @@ impl Context {
     }
 
     /// The running thread's id in the World's `ThreadManager`.
-    #[doc(hidden)]
-    pub fn green_current_id(&mut self) -> u64 {
+    pub(crate) fn green_current_id(&mut self) -> u64 {
         self.green_key().map_or(0, ThreadKey::id)
     }
 
     /// `(thread-yield)`: let every other ready thread run first.
-    #[doc(hidden)]
-    pub fn green_thread_yield(&mut self, args: &[Value]) -> EvalResult {
+    pub(crate) fn green_thread_yield(&mut self, args: &[Value]) -> EvalResult {
         expect_args("thread-yield", args, 0)?;
         self.green_yield()?;
         Ok(Value::NIL)
@@ -46,8 +44,7 @@ impl Context {
     /// as snapshotted before the wait; an error THREAD signalled itself is
     /// only `thread-last-error`. An error signalled into this thread ends
     /// the wait.
-    #[doc(hidden)]
-    pub fn green_thread_join(&mut self, args: &[Value]) -> EvalResult {
+    pub(crate) fn green_thread_join(&mut self, args: &[Value]) -> EvalResult {
         expect_args("thread-join", args, 1)?;
         let id = crate::emacs_core::threads::expect_thread_id(&self.threads, &args[0])?;
         if id == self.green_current_id() {
@@ -84,8 +81,12 @@ impl Context {
     /// A main-thread target never reaches here: `builtin_thread_signal`
     /// queues GNU's `THREAD_EVENT` for the command loop first
     /// (`src/thread.c:1002-1021`), exactly as GNU does.
-    #[doc(hidden)]
-    pub fn green_thread_signal(&mut self, thread: Value, symbol: Value, data: Value) -> EvalResult {
+    pub(crate) fn green_thread_signal(
+        &mut self,
+        thread: Value,
+        symbol: Value,
+        data: Value,
+    ) -> EvalResult {
         let id = crate::emacs_core::threads::expect_thread_id(&self.threads, &thread)?;
         debug_assert_ne!(id, 0, "the main thread receives a THREAD_EVENT");
         self.threads
@@ -106,8 +107,7 @@ impl Context {
     /// this only makes a main owner parked in `read-event` re-check its input
     /// queue.  No other wait is interrupted: GNU's input event does not end a
     /// join, mutex or condition wait.
-    #[doc(hidden)]
-    pub fn green_wake_main_for_thread_event(&mut self) {
+    pub(crate) fn green_wake_main_for_thread_event(&mut self) {
         let control = self.green_control();
         let main = ThreadKey::from_id(0);
         if matches!(control.wait_of(main), Some(Wait::Select { .. })) {
@@ -118,8 +118,7 @@ impl Context {
 
     /// `(mutex-lock MUTEX)` (GNU `Fmutex_lock`): take MUTEX, waiting
     /// while another thread holds it, until this thread is signalled.
-    #[doc(hidden)]
-    pub fn green_mutex_lock(&mut self, mutex: MutexHandle) -> EvalResult {
+    pub(crate) fn green_mutex_lock(&mut self, mutex: MutexHandle) -> EvalResult {
         match self.threads.mutex_lock(mutex) {
             MutexAcquisition::Acquired => return Ok(Value::NIL),
             MutexAcquisition::Blocked => {}
@@ -144,8 +143,7 @@ impl Context {
 
     /// `(mutex-unlock MUTEX)` once its owner is checked: a release wakes
     /// every thread waiting for the mutex. This thread keeps running.
-    #[doc(hidden)]
-    pub fn green_mutex_unlock(&mut self, mutex: MutexHandle) -> EvalResult {
+    pub(crate) fn green_mutex_unlock(&mut self, mutex: MutexHandle) -> EvalResult {
         match self.threads.mutex_unlock(mutex) {
             MutexRelease::StillLocked => {}
             MutexRelease::Released => {
@@ -167,8 +165,7 @@ impl Context {
     /// whatever its count, wait for a notification unless already
     /// signalled, take the mutex back with its count (even when signalled),
     /// then raise a pending signal.
-    #[doc(hidden)]
-    pub fn green_condition_wait(&mut self, condition: CondVarHandle) -> EvalResult {
+    pub(crate) fn green_condition_wait(&mut self, condition: CondVarHandle) -> EvalResult {
         super::condition_wait::wait(self, condition)
     }
 
@@ -176,8 +173,7 @@ impl Context {
     /// COND's mutex: wake one waiting thread, or all of them. GNU releases
     /// and retakes the mutex around the notification without letting
     /// another thread run, so nothing else changes.
-    #[doc(hidden)]
-    pub fn green_condition_notify(
+    pub(crate) fn green_condition_notify(
         &mut self,
         condition: CondVarHandle,
         scope: NotificationScope,
@@ -237,8 +233,7 @@ impl Context {
 
     /// Run WAIT with this thread's `thread--blocker` set to OBJECT (GNU's
     /// `event_object`), cleared however it ends.
-    #[doc(hidden)]
-    pub fn green_blocked_on(
+    pub(crate) fn green_blocked_on(
         &mut self,
         object: Value,
         wait: impl FnOnce(&mut Self) -> Result<(), neovm_value::error::Flow>,
@@ -251,8 +246,7 @@ impl Context {
     }
 
     /// The runtime's scheduler.
-    #[doc(hidden)]
-    pub fn green_control(&mut self) -> std::sync::Arc<super::scheduler::Control> {
+    pub(crate) fn green_control(&mut self) -> std::sync::Arc<super::scheduler::Control> {
         std::sync::Arc::clone(&self.green_seat().expect("a Green thread").control)
     }
 }

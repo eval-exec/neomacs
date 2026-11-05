@@ -105,8 +105,7 @@ impl CarriedState {
     /// Placeholders, while the World's state is in the running holder's
     /// thread-locals (when the Green runtime starts).
     #[cold]
-    #[doc(hidden)]
-    pub fn placeholders() -> Self {
+    pub(crate) fn placeholders() -> Self {
         Self {
             pieces: CARRIERS
                 .iter()
@@ -118,8 +117,7 @@ impl CarriedState {
 
     /// Take the World's state out of this OS thread's thread-locals.
     #[cold]
-    #[doc(hidden)]
-    pub fn stow(&mut self) {
+    pub(crate) fn stow(&mut self) {
         assert!(
             !self.holds_world,
             "the World's carried state is in two places"
@@ -130,8 +128,7 @@ impl CarriedState {
 
     /// Put the World's state into this OS thread's thread-locals.
     #[cold]
-    #[doc(hidden)]
-    pub fn unstow(&mut self) {
+    pub(crate) fn unstow(&mut self) {
         if self.holds_world {
             self.swap();
             self.holds_world = false;

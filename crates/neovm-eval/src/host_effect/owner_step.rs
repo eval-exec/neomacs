@@ -156,8 +156,7 @@ pub(crate) enum RegisteredOwnerFlow<'s> {
     Shutdown(RegisteredRootRef<'s, OwnerShutdownFlowRecord>),
 }
 impl RegisteredOwnerFlow<'_> {
-    #[doc(hidden)]
-    pub fn result_slot(&self) -> OwnerFrameRecordSlot {
+    pub(crate) fn result_slot(&self) -> OwnerFrameRecordSlot {
         match self {
             Self::Signal(record) => OwnerFrameRecordSlot::from_reference(record),
             Self::Throw(record) => OwnerFrameRecordSlot::from_reference(record),
@@ -243,8 +242,7 @@ pub(crate) struct OwnerFrameRecordSlot {
     kind: RecordKind,
 }
 impl OwnerFrameRecordSlot {
-    #[doc(hidden)]
-    pub fn from_reference<K: RegisteredRecord>(record: &RegisteredRootRef<'_, K>) -> Self {
+    pub(crate) fn from_reference<K: RegisteredRecord>(record: &RegisteredRootRef<'_, K>) -> Self {
         Self {
             record: record.record(),
             kind: record.kind(),
@@ -330,8 +328,7 @@ macro_rules! step_families {
                     Self::ContractInjected(record) => OwnerFrameRecordSlot::from_reference(record),
                 }
             }
-            #[doc(hidden)]
-            pub fn association(&self) -> ResultAssociation {
+            pub(crate) fn association(&self) -> ResultAssociation {
                 match self {
                     $(Self::$variant(_) => ResultAssociation::Family(OwnerStepFamily::$variant),)+
                     Self::Flow(_) => ResultAssociation::OwnerFlow,
@@ -375,8 +372,7 @@ macro_rules! step_families {
             pub fn key(&self) -> OwnerStepKey<O> { match self { $(Self::$variant(entry) => entry.port.key,)+ } }
             #[doc(hidden)]
             pub fn family(&self) -> OwnerStepFamily { match self { $(Self::$variant(_) => OwnerStepFamily::$variant,)+ } }
-            #[doc(hidden)]
-            pub fn frame_schema(&self) -> OwnerFrameSchema {
+            pub(crate) fn frame_schema(&self) -> OwnerFrameSchema {
                 match self { $(Self::$variant(entry) => {
                     let PublishedOwnerStep { key: _, arguments, frame, restore } = &entry.published;
                     OwnerFrameSchema::$variant {
@@ -388,8 +384,7 @@ macro_rules! step_families {
             }
             /// The registry validates durable phase, live heap and restored
             /// requester before supplying its authoritative expected key.
-            #[doc(hidden)]
-            pub fn claim(self, expected: OwnerStepKey<O>) -> Result<ClaimedOwnerStep<'s, O>, RejectedOwnerStep<Self>> {
+            pub(crate) fn claim(self, expected: OwnerStepKey<O>) -> Result<ClaimedOwnerStep<'s, O>, RejectedOwnerStep<Self>> {
                 if let Err(reason) = compare_key(self.key(), expected) {
                     return Err(RejectedOwnerStep { item: self, reason });
                 }

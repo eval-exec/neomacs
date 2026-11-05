@@ -60,8 +60,7 @@ impl SoleOwnerRegistration {
     /// This transfers only a pointer-free policy token, not owner identity or a
     /// manager loan. The actual `Vm.ctx` reference remains access authority.
     #[inline(always)]
-    #[doc(hidden)]
-    pub fn into_vm(self) -> SoleOwnerVm {
+    pub(crate) fn into_vm(self) -> SoleOwnerVm {
         SoleOwnerVm {
             _confined: PhantomData,
         }
@@ -119,8 +118,7 @@ impl SoleOwnerDriver {
     /// This method changes only policy state; actual root publication belongs to
     /// the VM's paired consuming cursor operation, not this pointer-free token.
     #[inline(always)]
-    #[doc(hidden)]
-    pub fn into_published(self) -> PublishedSoleOwnerDriver {
+    pub(crate) fn into_published(self) -> PublishedSoleOwnerDriver {
         PublishedSoleOwnerDriver {
             _confined: PhantomData,
         }
@@ -141,8 +139,7 @@ pub(crate) struct PublishedSoleOwnerDriver {
 impl PublishedSoleOwnerDriver {
     /// Consume the published token when the original VM reacquires its cursor.
     #[inline(always)]
-    #[doc(hidden)]
-    pub fn into_running(self) -> SoleOwnerDriver {
+    pub(crate) fn into_running(self) -> SoleOwnerDriver {
         SoleOwnerDriver::new()
     }
 }

@@ -45,8 +45,7 @@ impl NotificationLatch {
         self.control.get().map(|attachment| &attachment.wake)
     }
 
-    #[doc(hidden)]
-    pub fn install_control(&self, wake: Arc<ControlWake>) -> Result<(), Arc<ControlWake>> {
+    pub(crate) fn install_control(&self, wake: Arc<ControlWake>) -> Result<(), Arc<ControlWake>> {
         self.control
             .set(Arc::new(ControlAttachment {
                 wake: Arc::clone(&wake),
@@ -65,8 +64,7 @@ impl NotificationLatch {
     }
 
     #[cfg(test)]
-    #[doc(hidden)]
-    pub fn refuse_native_for_test(&self, cause: NativeReadinessCause) {
+    pub(crate) fn refuse_native_for_test(&self, cause: NativeReadinessCause) {
         let attachment = match cause {
             NativeReadinessCause::AbsentPoller => {
                 ControlAttachment::open(None, ControlWake::paired_native)
@@ -151,8 +149,7 @@ impl ControlAttachment {
         }
     }
 
-    #[doc(hidden)]
-    pub fn observe_admission_refusal(&self, observe: impl FnOnce(NativeReadinessCause)) {
+    pub(crate) fn observe_admission_refusal(&self, observe: impl FnOnce(NativeReadinessCause)) {
         match self.readiness {
             NativeReadiness::Available => {}
             NativeReadiness::Unavailable(cause) => {
@@ -419,8 +416,8 @@ impl ControlWake {
 
     /// Cold owner attachment. Installation always creates a fresh session;
     /// physical input publication is independent of Green admission.
-    #[doc(hidden)]
-    pub fn attach_host_session(self: &Arc<Self>) -> HostSessionControl {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn attach_host_session(self: &Arc<Self>) -> HostSessionControl {
         let identity = Arc::new(HostSessionIdentity);
         self.lock().host_session = Some(Arc::clone(&identity));
         HostSessionControl {
@@ -430,13 +427,11 @@ impl ControlWake {
     }
 
     /// Revoke host attachment without retiring the backend's scheduler source.
-    #[doc(hidden)]
-    pub fn revoke_host_session(&self) {
+    pub(crate) fn revoke_host_session(&self) {
         self.lock().host_session = None;
     }
 
-    #[doc(hidden)]
-    pub fn revoke_exact_host_session(&self, identity: &Arc<HostSessionIdentity>) {
+    pub(crate) fn revoke_exact_host_session(&self, identity: &Arc<HostSessionIdentity>) {
         let mut metadata = self.lock();
         if metadata
             .host_session
@@ -462,8 +457,7 @@ impl ControlWake {
     }
 
     #[cfg(test)]
-    #[doc(hidden)]
-    pub fn report_wait_stage(&self) {
+    pub(crate) fn report_wait_stage(&self) {
         if let Some(sender) = &*self.wait_stage.lock().unwrap() {
             // Unbounded send never waits for the observing test. In fallback
             // this happens while holding the predicate lock, directly before
@@ -509,8 +503,7 @@ impl ControlWake {
     /// Owned fault seam: production has neither a failure knob nor a second
     /// notifier path. The next actual native notification closes this source.
     #[cfg(test)]
-    #[doc(hidden)]
-    pub fn fail_next_native_notification_for_test(&self) {
+    pub(crate) fn fail_next_native_notification_for_test(&self) {
         self.native
             .as_ref()
             .expect("native endpoint fixture")
@@ -581,8 +574,7 @@ impl HostSessionControl {
 }
 
 impl ControlWake {
-    #[doc(hidden)]
-    pub fn publish_nudge(
+    pub(crate) fn publish_nudge(
         &self,
         destination: ControlDestination,
         reason: ControlNudge,
@@ -648,8 +640,7 @@ pub struct WaitRegistration {
 
 impl WaitRegistration {
     #[cfg(test)]
-    #[doc(hidden)]
-    pub fn report_fallback_stage(
+    pub(crate) fn report_fallback_stage(
         &self,
         metadata: &Metadata,
         reported: &mut Option<ControlWakeEpoch>,
@@ -960,15 +951,13 @@ impl LoopbackWakeListener {
         std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).map(Self)
     }
 
-    #[doc(hidden)]
-    pub fn into_pair(self) -> io::Result<LoopbackWakePair> {
+    pub(crate) fn into_pair(self) -> io::Result<LoopbackWakePair> {
         self.into_pair_with(LoopbackWakePair::validate)
     }
 
     /// One construction path; the test-only caller can omit just validation
     /// to prove the foreign-first connection is an actual invariant violation.
-    #[doc(hidden)]
-    pub fn into_pair_with(
+    pub(crate) fn into_pair_with(
         self,
         validate: impl FnOnce(
             std::net::TcpStream,
@@ -1015,8 +1004,7 @@ impl LoopbackWakePair {
         Ok(Self { reader, writer })
     }
 
-    #[doc(hidden)]
-    pub fn into_streams(self) -> (std::net::TcpStream, std::net::TcpStream) {
+    pub(crate) fn into_streams(self) -> (std::net::TcpStream, std::net::TcpStream) {
         (self.reader, self.writer)
     }
 }
@@ -1075,8 +1063,7 @@ impl NativeEndpoint {
         }
     }
 
-    #[doc(hidden)]
-    pub fn close_writer(&self) {
+    pub(crate) fn close_writer(&self) {
         #[cfg(test)]
         if self.suppress_close.load(Ordering::Acquire) {
             return;
@@ -1084,8 +1071,7 @@ impl NativeEndpoint {
         self.writer.lock().unwrap_or_else(|e| e.into_inner()).take();
     }
 
-    #[doc(hidden)]
-    pub fn rearm(&self) -> io::Result<()> {
+    pub(crate) fn rearm(&self) -> io::Result<()> {
         self.poller
             .modify(&self.reader, polling::Event::readable(self.event_key.0))
     }

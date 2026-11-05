@@ -157,8 +157,7 @@ impl CarrierPool {
     /// Test-only: make the next fresh carrier spawn fail without creating an
     /// OS thread.
     #[cfg(test)]
-    #[doc(hidden)]
-    pub fn inject_spawn_failure(&self) {
+    pub(crate) fn inject_spawn_failure(&self) {
         self.shared
             .fail_next_spawn
             .store(true, std::sync::atomic::Ordering::SeqCst);
@@ -166,8 +165,7 @@ impl CarrierPool {
 
     /// Test-only: the worker key of the last refused spawn, if any.
     #[cfg(test)]
-    #[doc(hidden)]
-    pub fn last_refusal_for_test(&self) -> Option<ThreadKey> {
+    pub(crate) fn last_refusal_for_test(&self) -> Option<ThreadKey> {
         *self
             .shared
             .last_refusal
@@ -187,8 +185,7 @@ impl CarrierPool {
         self.spawn(job)
     }
 
-    #[doc(hidden)]
-    pub fn take_idle_job_slot(&self, mut job: CarrierJob) -> Result<(), CarrierJob> {
+    pub(crate) fn take_idle_job_slot(&self, mut job: CarrierJob) -> Result<(), CarrierJob> {
         let (id, job_tx) = {
             let mut inner = self.shared.lock();
             if inner.state != PoolState::Open {
@@ -286,8 +283,7 @@ impl CarrierPool {
     }
 
     /// Mark the reserved slot dead and hand the job back to the caller.
-    #[doc(hidden)]
-    pub fn refuse_spawn(
+    pub(crate) fn refuse_spawn(
         &self,
         id: CarrierId,
         job: CarrierJob,

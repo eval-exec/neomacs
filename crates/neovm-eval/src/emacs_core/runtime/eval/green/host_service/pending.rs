@@ -31,8 +31,7 @@ pub(super) trait ContinuationReservation {
 }
 
 impl ContinuationInsertion {
-    #[doc(hidden)]
-    pub fn from_service(slice: &impl ContinuationReservation) -> Self {
+    pub(crate) fn from_service(slice: &impl ContinuationReservation) -> Self {
         Self {
             key: slice.continuation_request(),
         }
@@ -142,8 +141,7 @@ impl<R: PendingReservation> NativePendingCalls<R> {
         self.insert_authorized(operation, reservation, InsertAdmission::New)
     }
 
-    #[doc(hidden)]
-    pub fn insert_continuation(
+    pub(crate) fn insert_continuation(
         &mut self,
         operation: PendingNativeOperation,
         reservation: R,
@@ -156,8 +154,7 @@ impl<R: PendingReservation> NativePendingCalls<R> {
         )
     }
 
-    #[doc(hidden)]
-    pub fn insert_authorized(
+    pub(crate) fn insert_authorized(
         &mut self,
         mut operation: PendingNativeOperation,
         reservation: R,
@@ -202,8 +199,7 @@ impl<R: PendingReservation> NativePendingCalls<R> {
     }
 
     /// Pending logical interests carry deadlines, never physical poll leases.
-    #[doc(hidden)]
-    pub fn next_deadline(&self) -> ReadDeadline {
+    pub(crate) fn next_deadline(&self) -> ReadDeadline {
         self.entries
             .values()
             .fold(ReadDeadline::Unbounded, |next, entry| {
@@ -221,8 +217,7 @@ impl<R: PendingReservation> NativePendingCalls<R> {
 
     /// Moving the ready record transfers its reservation intact. Actual actor
     /// completion occurs only after the caller reacquires this specific key.
-    #[doc(hidden)]
-    pub fn observe_ready(&mut self) -> Vec<ReadyPending<R>> {
+    pub(crate) fn observe_ready(&mut self) -> Vec<ReadyPending<R>> {
         let mut observations = Vec::new();
         for (&key, entry) in &mut self.entries {
             match entry.operation.observe() {
@@ -251,8 +246,7 @@ impl<R: PendingReservation> NativePendingCalls<R> {
         ready
     }
 
-    #[doc(hidden)]
-    pub fn request_cancel(
+    pub(crate) fn request_cancel(
         &mut self,
         key: HostRequestKey,
         reason: CancelReason,
@@ -263,8 +257,7 @@ impl<R: PendingReservation> NativePendingCalls<R> {
         }
     }
 
-    #[doc(hidden)]
-    pub fn expire_deadlines(
+    pub(crate) fn expire_deadlines(
         &mut self,
         now: Instant,
     ) -> Vec<(HostRequestKey, NativeDeadlineProgress)> {
@@ -274,8 +267,7 @@ impl<R: PendingReservation> NativePendingCalls<R> {
             .collect()
     }
 
-    #[doc(hidden)]
-    pub fn request_all_cancel(&mut self, reason: CancelReason) -> NativeDrainProgress {
+    pub(crate) fn request_all_cancel(&mut self, reason: CancelReason) -> NativeDrainProgress {
         for entry in self.entries.values_mut() {
             entry.operation.request_cancel(reason);
         }
@@ -288,8 +280,7 @@ impl<R: PendingReservation> NativePendingCalls<R> {
         self.request_all_cancel(CancelReason::SessionClosing)
     }
 
-    #[doc(hidden)]
-    pub fn drain_progress(&self) -> NativeDrainProgress {
+    pub(crate) fn drain_progress(&self) -> NativeDrainProgress {
         match NonZeroUsize::new(self.entries.len()) {
             Some(pending) => NativeDrainProgress::AwaitingNativeSettlement(pending),
             None => NativeDrainProgress::Drained,

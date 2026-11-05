@@ -104,8 +104,7 @@ impl Channel {
     /// The buffer an assignment on this channel lands in, as
     /// `store_runtime_binding` reports it.
     #[inline]
-    #[doc(hidden)]
-    pub fn locus(self) -> Option<BufferId> {
+    pub(crate) fn locus(self) -> Option<BufferId> {
         match self {
             Self::Default => None,
             Self::BufferLocal(buffer) => Some(buffer),
@@ -376,8 +375,7 @@ impl OwnerSlab {
     /// dispatch. This is used only after a projected binding has selected
     /// its channel; ordinary specbind and unbind paths remain unchanged.
     #[inline(always)]
-    #[doc(hidden)]
-    pub fn replace_default_slot(&mut self, index: TlsIndex, state: SlotState) -> SlotState {
+    pub(crate) fn replace_default_slot(&mut self, index: TlsIndex, state: SlotState) -> SlotState {
         let slot = index.slot();
         let old = match self
             .pages
@@ -405,8 +403,7 @@ impl OwnerSlab {
     /// against the record's current storage symbol: alias migration can
     /// change it while the specpdl reference keeps the original symbol.
     #[inline(always)]
-    #[doc(hidden)]
-    pub fn pop_default_binding(
+    pub(crate) fn pop_default_binding(
         &mut self,
         id: OwnerRecordId,
         unwatched: impl FnOnce(SymId) -> bool,
@@ -439,8 +436,7 @@ impl OwnerSlab {
     }
 
     /// The owner runs again: its parked values are back in its specpdl.
-    #[doc(hidden)]
-    pub fn unpark(&mut self) {
+    pub(crate) fn unpark(&mut self) {
         for value in std::mem::take(&mut self.parked) {
             note_dropped(Some(SlotValue::new(value)));
         }
@@ -448,8 +444,7 @@ impl OwnerSlab {
 
     /// This owner's own `debug-on-next-call` cell for the variable INDEX
     /// names, made on first use and holding the default-channel slot.
-    #[doc(hidden)]
-    pub fn debugger_cell(&mut self, index: TlsIndex) -> &'static LispBoolFwd {
+    pub(crate) fn debugger_cell(&mut self, index: TlsIndex) -> &'static LispBoolFwd {
         match self.debugger {
             Some((debugger, cell)) => {
                 debug_assert_eq!(debugger, index, "one debug-on-next-call per owner");
@@ -467,8 +462,7 @@ impl OwnerSlab {
     /// Make room for admission's commit to push RECORDS records, bind
     /// LOCALS buffer-local channels and fill the default-channel SLOTS
     /// without allocating: their pages are made now, empty.
-    #[doc(hidden)]
-    pub fn try_reserve_admission(
+    pub(crate) fn try_reserve_admission(
         &mut self,
         records: usize,
         locals: usize,
@@ -502,8 +496,7 @@ impl OwnerSlab {
     /// new local must hold instead (GNU's entry exchanges with the local it
     /// finds, `src/eval.c:3871-3883`, `:4204-4228`); `None` when no such
     /// binding exists.
-    #[doc(hidden)]
-    pub fn reattach_captured(
+    pub(crate) fn reattach_captured(
         &mut self,
         sym: SymId,
         index: TlsIndex,
@@ -523,8 +516,11 @@ impl OwnerSlab {
     /// suspended by `backtrace-eval` while a new binding starts another one.
     /// Killing/remaking the local must preserve this newer link's restore,
     /// rather than selecting the older suspended entry.
-    #[doc(hidden)]
-    pub fn canonical_root_record(&self, sym: SymId, channel: Channel) -> Option<OwnerRecordId> {
+    pub(crate) fn canonical_root_record(
+        &self,
+        sym: SymId,
+        channel: Channel,
+    ) -> Option<OwnerRecordId> {
         self.record_ids_of(sym).into_iter().find(|id| {
             self.record(*id).is_some_and(|record| {
                 record.channel == channel
@@ -537,35 +533,30 @@ impl OwnerSlab {
     }
 
     /// This owner's Green seat, if it runs in a Green runtime.
-    #[doc(hidden)]
-    pub fn green_seat_mut(&mut self) -> Option<&mut super::green::GreenSeat> {
+    pub(crate) fn green_seat_mut(&mut self) -> Option<&mut super::green::GreenSeat> {
         self.green.as_deref_mut()
     }
 
     /// A Context's cold retirement breaks the seat's Baton -> World cycle
     /// and cancels any unused root-batch reservation before heap destruction.
-    #[doc(hidden)]
-    pub fn take_green_seat(&mut self) -> Option<Box<super::green::GreenSeat>> {
+    pub(crate) fn take_green_seat(&mut self) -> Option<Box<super::green::GreenSeat>> {
         self.green.take()
     }
 
     /// Seat this owner in a Green runtime (once).
-    #[doc(hidden)]
-    pub fn install_green_seat(&mut self, seat: Box<super::green::GreenSeat>) {
+    pub(crate) fn install_green_seat(&mut self, seat: Box<super::green::GreenSeat>) {
         debug_assert!(self.green.is_none(), "an owner takes one seat");
         self.green = Some(seat);
     }
 
     /// Whether this owner has its own `debug-on-next-call` cell.
-    #[doc(hidden)]
-    pub fn has_debugger_cell(&self) -> bool {
+    pub(crate) fn has_debugger_cell(&self) -> bool {
         self.debugger.is_some()
     }
 
     /// Take CELL, made before admission's commit, as this owner's
     /// `debug-on-next-call` cell for the variable INDEX names.
-    #[doc(hidden)]
-    pub fn adopt_debugger_cell(&mut self, index: TlsIndex, cell: &'static LispBoolFwd) {
+    pub(crate) fn adopt_debugger_cell(&mut self, index: TlsIndex, cell: &'static LispBoolFwd) {
         debug_assert!(self.debugger.is_none(), "one debug-on-next-call per owner");
         cell.set(debugger_armed(self.slot(index, Channel::Default)));
         self.debugger = Some((index, cell));
@@ -574,8 +565,7 @@ impl OwnerSlab {
     /// The page holding default-channel SLOT, made on first use.
     #[cold]
     #[inline(never)]
-    #[doc(hidden)]
-    pub fn new_page(&mut self, slot: usize) -> &mut [SlotState; SLOT_PAGE] {
+    pub(crate) fn new_page(&mut self, slot: usize) -> &mut [SlotState; SLOT_PAGE] {
         let page = slot / SLOT_PAGE;
         if page >= self.pages.len() {
             self.pages.resize_with(page + 1, || None);
@@ -584,8 +574,7 @@ impl OwnerSlab {
     }
 
     /// Push a record and return its id.
-    #[doc(hidden)]
-    pub fn push_record(
+    pub(crate) fn push_record(
         &mut self,
         sym: SymId,
         index: TlsIndex,
@@ -622,8 +611,11 @@ impl OwnerSlab {
 
     /// Replace the undo target of the live record ID names, noting the
     /// value it held. Returns the previous target.
-    #[doc(hidden)]
-    pub fn replace_undo(&mut self, id: OwnerRecordId, undo: UndoTarget) -> Option<UndoTarget> {
+    pub(crate) fn replace_undo(
+        &mut self,
+        id: OwnerRecordId,
+        undo: UndoTarget,
+    ) -> Option<UndoTarget> {
         let record = self
             .records
             .get_mut(id.position())?
@@ -638,8 +630,7 @@ impl OwnerSlab {
     /// Take the record ID names off the stack: `None` if it is already gone.
     /// The caller owns the record's values from here on.
     #[inline]
-    #[doc(hidden)]
-    pub fn take_record(&mut self, id: OwnerRecordId) -> Option<OwnerBindingRecord> {
+    pub(crate) fn take_record(&mut self, id: OwnerRecordId) -> Option<OwnerBindingRecord> {
         if id.position() + 1 != self.records.len() {
             return self.take_record_below(id);
         }
@@ -656,8 +647,7 @@ impl OwnerSlab {
     /// [`Self::take_record`] of a record with live records above it.
     #[cold]
     #[inline(never)]
-    #[doc(hidden)]
-    pub fn take_record_below(&mut self, id: OwnerRecordId) -> Option<OwnerBindingRecord> {
+    pub(crate) fn take_record_below(&mut self, id: OwnerRecordId) -> Option<OwnerBindingRecord> {
         let slot = self.records.get_mut(id.position())?;
         if slot.as_ref()?.generation != id.generation {
             return None;
@@ -667,16 +657,14 @@ impl OwnerSlab {
 
     #[cold]
     #[inline(never)]
-    #[doc(hidden)]
-    pub fn trim_taken(&mut self) {
+    pub(crate) fn trim_taken(&mut self) {
         while self.records.last().is_some_and(Option::is_none) {
             self.records.pop();
         }
     }
 
     /// The live records binding SYM, outermost first.
-    #[doc(hidden)]
-    pub fn records_of(&self, sym: SymId) -> impl Iterator<Item = &OwnerBindingRecord> {
+    pub(crate) fn records_of(&self, sym: SymId) -> impl Iterator<Item = &OwnerBindingRecord> {
         self.records
             .iter()
             .flatten()
@@ -684,8 +672,7 @@ impl OwnerSlab {
     }
 
     /// The live records binding SYM, with their ids, outermost first.
-    #[doc(hidden)]
-    pub fn record_ids_of(&self, sym: SymId) -> Vec<OwnerRecordId> {
+    pub(crate) fn record_ids_of(&self, sym: SymId) -> Vec<OwnerRecordId> {
         self.live_records()
             .filter(|(_, record)| record.sym == sym)
             .map(|(id, _)| id)
@@ -693,8 +680,9 @@ impl OwnerSlab {
     }
 
     /// Every live record with its id, outermost first.
-    #[doc(hidden)]
-    pub fn live_records(&self) -> impl Iterator<Item = (OwnerRecordId, &OwnerBindingRecord)> {
+    pub(crate) fn live_records(
+        &self,
+    ) -> impl Iterator<Item = (OwnerRecordId, &OwnerBindingRecord)> {
         self.records
             .iter()
             .enumerate()
@@ -713,8 +701,7 @@ impl OwnerSlab {
 
     /// GNU `let_shadows_buffer_binding_p` (`src/eval.c:3593-3610`): a
     /// default binding of SYM made with BUFFER current.
-    #[doc(hidden)]
-    pub fn shadows_buffer_binding(&self, sym: SymId, buffer: Option<BufferId>) -> bool {
+    pub(crate) fn shadows_buffer_binding(&self, sym: SymId, buffer: Option<BufferId>) -> bool {
         buffer.is_some()
             && self
                 .records_of(sym)
@@ -817,8 +804,7 @@ impl std::fmt::Debug for OwnerSlot {
 
 impl OwnerSlot {
     /// No owner bindings: every Context starts so.
-    #[doc(hidden)]
-    pub const DORMANT: Self = Self(None);
+    pub(crate) const DORMANT: Self = Self(None);
 
     /// Install SLAB, which the World's registry owns.
     #[doc(hidden)]
@@ -837,8 +823,7 @@ impl OwnerSlot {
 
     /// The slab, for reading.
     #[inline]
-    #[doc(hidden)]
-    pub fn slab(&self) -> Option<&OwnerSlab> {
+    pub(crate) fn slab(&self) -> Option<&OwnerSlab> {
         // SAFETY: the World's registry keeps the allocation alive for as long
         // as this Context holds its World lease, and only this owner mutates
         // it, through `slab_mut`, which a shared borrow of the slot excludes.
@@ -847,8 +832,7 @@ impl OwnerSlot {
 
     /// The slab, for this owner's writes.
     #[inline]
-    #[doc(hidden)]
-    pub fn slab_mut(&mut self) -> Option<&mut OwnerSlab> {
+    pub(crate) fn slab_mut(&mut self) -> Option<&mut OwnerSlab> {
         // SAFETY: as in `slab`; the exclusive borrow of the slot is the
         // owner's exclusive access, and the registry reads the slab only in
         // the root phase, which no `&mut Context` borrow overlaps.
@@ -970,8 +954,7 @@ fn set_makes_local(projection: &ThreadProjectionDescriptor) -> bool {
 
 impl Context {
     /// This owner's slab, made and registered with the World on first use.
-    #[doc(hidden)]
-    pub fn ensure_owner_slab(&mut self) -> &mut OwnerSlab {
+    pub(crate) fn ensure_owner_slab(&mut self) -> &mut OwnerSlab {
         if self.owner.slab().is_none() {
             let slab = self.register_owner_slab();
             self.owner.install(slab);
@@ -985,8 +968,7 @@ impl Context {
     /// RESOLVED: record the binding, run the `let` watchers, then store on
     /// the channel they left (`do_specbind` → `set_internal`). The binding
     /// is this owner's; canonical storage does not change.
-    #[doc(hidden)]
-    pub fn specbind_owner(
+    pub(crate) fn specbind_owner(
         &mut self,
         resolved: SymId,
         projection: &'static ThreadProjectionDescriptor,
@@ -1090,8 +1072,7 @@ impl Context {
     /// (design §1.3b).
     #[cold]
     #[inline(never)]
-    #[doc(hidden)]
-    pub fn specbind_slot_in_place(
+    pub(crate) fn specbind_slot_in_place(
         &mut self,
         resolved: SymId,
         logical: neovm_value::forward::FwdRef,
@@ -1132,8 +1113,7 @@ impl Context {
     /// its pop; an owner leaving the baton swaps it out (design §1.3b).
     #[cold]
     #[inline(never)]
-    #[doc(hidden)]
-    pub fn specbind_default_in_place(
+    pub(crate) fn specbind_default_in_place(
         &mut self,
         resolved: SymId,
         buf_fwd: &LispBufferObjFwd,
@@ -1163,8 +1143,7 @@ impl Context {
 
     /// Republish host mirrors of RESOLVED after an owner binding changed.
     #[inline(always)]
-    #[doc(hidden)]
-    pub fn publish_owner_binding(&mut self, resolved: SymId) {
+    pub(crate) fn publish_owner_binding(&mut self, resolved: SymId) {
         if resolved == super::owner_mirrors::debug_on_next_call_symbol() {
             self.point_owner_debugger();
         }
@@ -1179,8 +1158,7 @@ impl Context {
     /// unmirrored bind/pop path, whose inline gate is only a bit test.
     #[cold]
     #[inline(never)]
-    #[doc(hidden)]
-    pub fn publish_owner_binding_mirrors(&mut self, resolved: SymId) {
+    pub(crate) fn publish_owner_binding_mirrors(&mut self, resolved: SymId) {
         let visible = match self.find_symbol_value_by_id(resolved) {
             Ok(super::SymbolValueLookup::Bound(value)) => value,
             _ => Value::NIL,
@@ -1200,8 +1178,7 @@ impl Context {
     /// then the restore runs through the paths a `Let` entry takes.
     #[cold]
     #[inline(never)]
-    #[doc(hidden)]
-    pub fn unbind_owner_binding(&mut self, binding: OwnerBindingRef) -> Result<(), Flow> {
+    pub(crate) fn unbind_owner_binding(&mut self, binding: OwnerBindingRef) -> Result<(), Flow> {
         let restored = {
             let watchers = &self.watchers;
             self.owner.slab_mut().and_then(|slab| {
@@ -1219,8 +1196,10 @@ impl Context {
     /// or retired bindings. Keep its larger frame off the common pop.
     #[cold]
     #[inline(never)]
-    #[doc(hidden)]
-    pub fn unbind_owner_binding_slow(&mut self, binding: OwnerBindingRef) -> Result<(), Flow> {
+    pub(crate) fn unbind_owner_binding_slow(
+        &mut self,
+        binding: OwnerBindingRef,
+    ) -> Result<(), Flow> {
         let Some(record) = self
             .owner
             .slab_mut()
@@ -1284,8 +1263,10 @@ impl Context {
     /// A record whose variable is no longer projected: restore what it saved
     /// through the variable's own paths.
     #[cold]
-    #[doc(hidden)]
-    pub fn unbind_retired_owner_record(&mut self, record: OwnerBindingRecord) -> Result<(), Flow> {
+    pub(crate) fn unbind_retired_owner_record(
+        &mut self,
+        record: OwnerBindingRecord,
+    ) -> Result<(), Flow> {
         match record.undo {
             UndoTarget::Previous(saved) | UndoTarget::Captured(saved) => {
                 self.push_vm_frame_root(saved.get());
@@ -1298,8 +1279,7 @@ impl Context {
     /// Move the owner's current binding of RECORD's channel into canonical
     /// storage and leave the owner unbound there: GNU's shared cell holding
     /// a popped binding while its `unlet` watchers run.
-    #[doc(hidden)]
-    pub fn publish_owner_slot(&mut self, record: &OwnerBindingRecord) {
+    pub(crate) fn publish_owner_slot(&mut self, record: &OwnerBindingRecord) {
         let current = self
             .owner
             .slab()
@@ -1314,8 +1294,7 @@ impl Context {
     /// GNU's notify-then-store of VALUE for RECORD's kind of entry, through
     /// the same paths a `Let`, `LetDefault` or `LetLocal` pop takes; the
     /// stores land in this owner's slot when it still binds the channel.
-    #[doc(hidden)]
-    pub fn restore_owner_binding(
+    pub(crate) fn restore_owner_binding(
         &mut self,
         record: &OwnerBindingRecord,
         value: Value,
@@ -1355,8 +1334,7 @@ impl Context {
 
     /// Store VALUE on RECORD's channel without watchers: the owner's slot
     /// while it binds the channel, canonical storage otherwise.
-    #[doc(hidden)]
-    pub fn store_owner_channel(&mut self, record: &OwnerBindingRecord, value: Value) {
+    pub(crate) fn store_owner_channel(&mut self, record: &OwnerBindingRecord, value: Value) {
         let bound = self
             .owner
             .slab()
@@ -1375,8 +1353,7 @@ impl Context {
         self.publish_owner_binding(record.sym);
     }
 
-    #[doc(hidden)]
-    pub fn clear_owner_slot(&mut self, index: TlsIndex, channel: Channel) {
+    pub(crate) fn clear_owner_slot(&mut self, index: TlsIndex, channel: Channel) {
         if let Some(slab) = self.owner.slab_mut() {
             slab.set_slot(index, channel, SlotState::NoBinding);
         }
@@ -1384,8 +1361,7 @@ impl Context {
 
     /// Whether CHANNEL still names storage of the variable: a buffer-local
     /// channel only while its buffer has the local.
-    #[doc(hidden)]
-    pub fn owner_channel_live(
+    pub(crate) fn owner_channel_live(
         &self,
         id: SymId,
         projection: &ThreadProjectionDescriptor,
@@ -1410,8 +1386,7 @@ impl Context {
     /// The canonical value of the projected variable ID on CHANNEL
     /// ([`Value::UNBOUND`] when void): what every owner without a binding
     /// there sees.
-    #[doc(hidden)]
-    pub fn owner_canonical_value(&mut self, id: SymId, channel: Channel) -> Value {
+    pub(crate) fn owner_canonical_value(&mut self, id: SymId, channel: Channel) -> Value {
         self.with_revealed_projection(id, |ctx| match channel {
             Channel::Default => super::super::data::default_value_by_id(ctx, id),
             Channel::BufferLocal(buffer) => ctx.local_binding_value_for_thread_switch(id, buffer),
@@ -1422,8 +1397,7 @@ impl Context {
     /// Store VALUE in the canonical storage of the projected variable ID on
     /// CHANNEL, below watchers and type signals (a value the storage refuses
     /// leaves it unchanged), as GNU's specpdl swaps do.
-    #[doc(hidden)]
-    pub fn owner_canonical_store(&mut self, id: SymId, channel: Channel, value: Value) {
+    pub(crate) fn owner_canonical_store(&mut self, id: SymId, channel: Channel, value: Value) {
         self.with_revealed_projection(id, |ctx| match channel {
             Channel::Default => {
                 ctx.discard_restore_default_binding(id, SlotValue::new(value).bound());
@@ -1442,8 +1416,7 @@ impl Context {
     /// Panic-recovery restore of an owner binding: storage only, no Lisp.
     #[cold]
     #[inline(never)]
-    #[doc(hidden)]
-    pub fn discard_owner_binding(&mut self, binding: OwnerBindingRef) {
+    pub(crate) fn discard_owner_binding(&mut self, binding: OwnerBindingRef) {
         let Some(record) = self
             .owner
             .slab_mut()
@@ -1484,8 +1457,7 @@ impl Context {
     /// whose local is gone is dropped, as GNU turns it into `SPECPDL_NOP`.
     #[cold]
     #[inline(never)]
-    #[doc(hidden)]
-    pub fn swap_owner_binding(&mut self, binding: OwnerBindingRef) {
+    pub(crate) fn swap_owner_binding(&mut self, binding: OwnerBindingRef) {
         let Some(record) = self
             .owner
             .slab()
@@ -1518,8 +1490,10 @@ impl Context {
     /// The saved side of an owner entry after a backtrace exchange, with
     /// GNU's original specpdl symbol rather than its migrated storage key.
     #[cold]
-    #[doc(hidden)]
-    pub fn owner_binding_saved_value(&self, binding: OwnerBindingRef) -> Option<(SymId, Value)> {
+    pub(crate) fn owner_binding_saved_value(
+        &self,
+        binding: OwnerBindingRef,
+    ) -> Option<(SymId, Value)> {
         let record = self.owner.slab()?.record(binding.record)?;
         let value = record.undo.values()[0]?;
         Some((binding.symbol(), value.get()))
@@ -1534,8 +1508,7 @@ impl Context {
     /// symbol for GNU's EQ-based let-bound and toplevel scans.
     #[cold]
     #[inline(never)]
-    #[doc(hidden)]
-    pub fn reconcile_aliased_owner_bindings(&mut self) {
+    pub(crate) fn reconcile_aliased_owner_bindings(&mut self) {
         self.reconcile_owner_alias_redirect(None);
     }
 
@@ -1543,8 +1516,7 @@ impl Context {
     /// again. Keywords assigned their own value remain an allowed no-op.
     #[cold]
     #[inline(never)]
-    #[doc(hidden)]
-    pub fn failed_constant_owner_binding(&self, outgoing: bool) -> Option<SymId> {
+    pub(crate) fn failed_constant_owner_binding(&self, outgoing: bool) -> Option<SymId> {
         let slab = self.owner.slab()?;
         let mut failure = None;
         // Outgoing exchanges walk inner to outer; returning exchanges walk
@@ -1577,8 +1549,7 @@ impl Context {
     /// a cell that an older, differently named binding currently reaches.
     #[cold]
     #[inline(never)]
-    #[doc(hidden)]
-    pub fn owner_alias_redirect_value(&mut self, alias: SymId) -> Option<Value> {
+    pub(crate) fn owner_alias_redirect_value(&mut self, alias: SymId) -> Option<Value> {
         if !self
             .owner
             .slab()?
@@ -1592,15 +1563,13 @@ impl Context {
 
     #[cold]
     #[inline(never)]
-    #[doc(hidden)]
-    pub fn finish_owner_alias_redirect(&mut self, alias: SymId, old_value: Value) {
+    pub(crate) fn finish_owner_alias_redirect(&mut self, alias: SymId, old_value: Value) {
         self.reconcile_owner_alias_redirect(Some((alias, old_value)));
     }
 
     #[cold]
     #[inline(never)]
-    #[doc(hidden)]
-    pub fn reconcile_owner_alias_redirect(&mut self, active: Option<(SymId, Value)>) {
+    pub(crate) fn reconcile_owner_alias_redirect(&mut self, active: Option<(SymId, Value)>) {
         let Some(slab) = self.owner.slab() else {
             return;
         };
@@ -1837,8 +1806,7 @@ impl Context {
 
     /// Owner entries naming SYMBOL, preserving GNU's original specpdl
     /// symbol even after their effective storage followed an alias.
-    #[doc(hidden)]
-    pub fn original_owner_records(
+    pub(crate) fn original_owner_records(
         &self,
         symbol: SymId,
     ) -> impl Iterator<Item = (OwnerRecordId, &OwnerBindingRecord)> {
@@ -1861,8 +1829,7 @@ impl Context {
     /// (`src/eval.c:811-825`): the value the outermost default binding of ID
     /// hides, `Some(None)` when void, or `None` when this owner has no
     /// default binding of ID.
-    #[doc(hidden)]
-    pub fn owner_default_toplevel_value(&mut self, id: SymId) -> Option<Option<Value>> {
+    pub(crate) fn owner_default_toplevel_value(&mut self, id: SymId) -> Option<Option<Value>> {
         let outermost = self
             .original_owner_records(id)
             .find(|(_, record)| {
@@ -1884,8 +1851,7 @@ impl Context {
     /// GNU `Fset_default_toplevel_value` for an owner binding
     /// (`src/eval.c:827-840`): set the value the outermost default binding of
     /// ID hides. `false` when this owner has no default binding of ID.
-    #[doc(hidden)]
-    pub fn set_owner_default_toplevel_value(&mut self, id: SymId, value: Value) -> bool {
+    pub(crate) fn set_owner_default_toplevel_value(&mut self, id: SymId, value: Value) -> bool {
         let Some(slab) = self.owner.slab() else {
             return false;
         };
@@ -1924,8 +1890,11 @@ impl Context {
     /// The same two questions for GNU's `local_toplevel_binding`
     /// (`src/eval.c:766-782`): the outermost buffer-local binding of ID in
     /// BUFFER. `None` when this owner has none.
-    #[doc(hidden)]
-    pub fn owner_local_toplevel_value(&mut self, id: SymId, buffer: BufferId) -> Option<Value> {
+    pub(crate) fn owner_local_toplevel_value(
+        &mut self,
+        id: SymId,
+        buffer: BufferId,
+    ) -> Option<Value> {
         let outermost = self
             .owner
             .slab()?
@@ -1942,8 +1911,7 @@ impl Context {
 
     /// Set the value the outermost buffer-local binding of ID in BUFFER
     /// hides. `false` when this owner has none.
-    #[doc(hidden)]
-    pub fn set_owner_local_toplevel_value(
+    pub(crate) fn set_owner_local_toplevel_value(
         &mut self,
         id: SymId,
         buffer: BufferId,
@@ -1980,8 +1948,7 @@ impl Context {
 
     /// Whether this owner binds ID (`Fdefvaralias`'s let-bound refusal).
     #[inline]
-    #[doc(hidden)]
-    pub fn owner_binds(&self, id: SymId) -> bool {
+    pub(crate) fn owner_binds(&self, id: SymId) -> bool {
         self.original_owner_records(id).next().is_some()
     }
 
@@ -1990,8 +1957,7 @@ impl Context {
     /// the default (`src/data.c:1962-2004`). A Context with no owner bindings
     /// pays one compare of its owner word and a branch.
     #[inline]
-    #[doc(hidden)]
-    pub fn owner_default_binding(&self, id: SymId) -> Option<SlotValue> {
+    pub(crate) fn owner_default_binding(&self, id: SymId) -> Option<SlotValue> {
         if self.owner.is_dormant() {
             return None;
         }
@@ -2000,8 +1966,7 @@ impl Context {
 
     #[cold]
     #[inline(never)]
-    #[doc(hidden)]
-    pub fn owner_default_binding_slow(&self, id: SymId) -> Option<SlotValue> {
+    pub(crate) fn owner_default_binding_slow(&self, id: SymId) -> Option<SlotValue> {
         let slab = self.owner.slab()?;
         let projection = self.obarray.thread_projection_of(id)?;
         slab.slot(projection.index(), Channel::Default).value()
@@ -2009,8 +1974,7 @@ impl Context {
 
     /// Store VALUE in this owner's default binding of the projected variable
     /// ID (`set-default` while the owner binds the default).
-    #[doc(hidden)]
-    pub fn store_owner_default(&mut self, id: SymId, value: Value) {
+    pub(crate) fn store_owner_default(&mut self, id: SymId, value: Value) {
         let Some(projection) = self.obarray.thread_projection_of(id) else {
             return;
         };
@@ -2028,8 +1992,7 @@ impl Context {
     /// local now hides nothing. Its outermost binding keeps the value the
     /// local held, which GNU's entry carries and restores if the local is
     /// made again (`src/eval.c:3871-3883`).
-    #[doc(hidden)]
-    pub fn owner_local_killed(&mut self, id: SymId) {
+    pub(crate) fn owner_local_killed(&mut self, id: SymId) {
         let Some(buffer) = self.edit.buffers.current_buffer_id() else {
             return;
         };
@@ -2044,8 +2007,7 @@ impl Context {
     /// The local of ID in BUFFER, which held CANONICAL, is gone: this owner's
     /// outermost binding of it keeps CANONICAL to restore if the local is
     /// made again, and the owner's slot for it goes.
-    #[doc(hidden)]
-    pub fn capture_owner_local(&mut self, id: SymId, buffer: BufferId, canonical: Value) {
+    pub(crate) fn capture_owner_local(&mut self, id: SymId, buffer: BufferId, canonical: Value) {
         let channel = Channel::BufferLocal(buffer);
         let Some(slab) = self.owner.slab() else {
             return;
@@ -2071,8 +2033,7 @@ impl Context {
     /// hides, for [`Self::owner_locals_reset`].
     #[cold]
     #[inline(never)]
-    #[doc(hidden)]
-    pub fn owner_locals_before_reset(&mut self, buffer: BufferId) -> Vec<(SymId, Value)> {
+    pub(crate) fn owner_locals_before_reset(&mut self, buffer: BufferId) -> Vec<(SymId, Value)> {
         let channel = Channel::BufferLocal(buffer);
         let Some(slab) = self.owner.slab() else {
             return Vec::new();
@@ -2098,8 +2059,7 @@ impl Context {
     /// values are still reachable from nothing a collection could miss.
     #[cold]
     #[inline(never)]
-    #[doc(hidden)]
-    pub fn owner_locals_reset(&mut self, buffer: BufferId, before: Vec<(SymId, Value)>) {
+    pub(crate) fn owner_locals_reset(&mut self, buffer: BufferId, before: Vec<(SymId, Value)>) {
         let channel = Channel::BufferLocal(buffer);
         for (id, canonical) in before {
             let Some(projection) = self.obarray.thread_projection_of(id) else {
@@ -2141,8 +2101,7 @@ impl Context {
     /// local cell holds the running thread's binding.
     #[cold]
     #[inline(never)]
-    #[doc(hidden)]
-    pub fn owner_local_binding(&self, id: SymId, buffer: BufferId) -> Option<SlotValue> {
+    pub(crate) fn owner_local_binding(&self, id: SymId, buffer: BufferId) -> Option<SlotValue> {
         let projection = self.obarray.thread_projection_of(id)?;
         self.owner
             .slab()?
@@ -2152,8 +2111,7 @@ impl Context {
 
     /// Whether the current buffer has a local binding of the projected
     /// variable ID.
-    #[doc(hidden)]
-    pub fn projected_local_in_current_buffer(&self, id: SymId) -> bool {
+    pub(crate) fn projected_local_in_current_buffer(&self, id: SymId) -> bool {
         let (Some(projection), Some(buffer)) = (
             self.obarray.thread_projection_of(id),
             self.edit.buffers.current_buffer_id(),
@@ -2169,8 +2127,7 @@ impl Context {
     /// when it has one. A binding of this owner whose local was killed takes
     /// the new local back: the local holds what its outermost binding hid,
     /// and the owner's slot the value the local starts with.
-    #[doc(hidden)]
-    pub fn owner_local_made(&mut self, id: SymId) {
+    pub(crate) fn owner_local_made(&mut self, id: SymId) {
         let Some(buffer) = self.edit.buffers.current_buffer_id() else {
             return;
         };
@@ -2258,8 +2215,7 @@ pub(super) fn canonical_bufferless_value(projection: &ThreadProjectionDescriptor
 /// Context with owner bindings.
 impl Context {
     /// The projection behind ID, through its aliases.
-    #[doc(hidden)]
-    pub fn projection_behind(
+    pub(crate) fn projection_behind(
         &self,
         id: SymId,
     ) -> Option<(SymId, &'static ThreadProjectionDescriptor)> {
@@ -2272,8 +2228,7 @@ impl Context {
     /// max_depth after completing the paired depth/reserve stores.
     #[cold]
     #[inline(never)]
-    #[doc(hidden)]
-    pub fn store_owner_signal_depth_integer(&mut self, id: SymId, value: LispInteger) {
+    pub(crate) fn store_owner_signal_depth_integer(&mut self, id: SymId, value: LispInteger) {
         debug_assert!(
             id == super::max_lisp_eval_depth_symbol()
                 || id == super::lisp_eval_depth_reserve_symbol()
@@ -2330,8 +2285,7 @@ impl Context {
     /// [`Context::store_variable`] of a projected cell.
     #[cold]
     #[inline(never)]
-    #[doc(hidden)]
-    pub fn store_owner_variable(&mut self, id: SymId, value: Value) {
+    pub(crate) fn store_owner_variable(&mut self, id: SymId, value: Value) {
         debug_assert!(
             self.owner.slab().is_some(),
             "a Context that sees a projected cell has an owner slab"
@@ -2361,8 +2315,7 @@ impl Context {
     /// [`Context::makunbound_variable`] of a projected cell.
     #[cold]
     #[inline(never)]
-    #[doc(hidden)]
-    pub fn makunbound_owner_variable(&mut self, id: SymId) {
+    pub(crate) fn makunbound_owner_variable(&mut self, id: SymId) {
         debug_assert!(
             self.owner.slab().is_some(),
             "a Context that sees a projected cell has an owner slab"

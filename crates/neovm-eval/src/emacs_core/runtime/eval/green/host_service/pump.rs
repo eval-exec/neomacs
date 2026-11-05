@@ -144,8 +144,7 @@ impl NativeBackend {
         }
     }
 
-    #[doc(hidden)]
-    pub fn native_complete(
+    pub(crate) fn native_complete(
         &mut self,
         key: HostRequestKey,
         outcome: NativeOutcome,
@@ -169,8 +168,7 @@ impl NativeBackend {
         }
     }
 
-    #[doc(hidden)]
-    pub fn owner_complete(
+    pub(crate) fn owner_complete(
         &mut self,
         key: HostRequestKey,
         ready: OwnerStepReady,
@@ -196,8 +194,7 @@ impl NativeBackend {
         }
     }
 
-    #[doc(hidden)]
-    pub fn owner_ended(
+    pub(crate) fn owner_ended(
         &mut self,
         step: StepKey,
         route: NativeCompletionRoute,
@@ -220,8 +217,7 @@ impl NativeBackend {
         }
     }
 
-    #[doc(hidden)]
-    pub fn cleanup_complete(
+    pub(crate) fn cleanup_complete(
         &mut self,
         key: HostRequestKey,
         outcome: NativeOutcome,
@@ -291,20 +287,17 @@ static_assertions::assert_not_impl_any!(MainNativePump: Send, Sync, Clone, Copy)
 
 impl MainNativePump {
     #[cfg(test)]
-    #[doc(hidden)]
-    pub fn install_fixture_driver(&mut self, driver: FixtureNativeDriver) {
+    pub(crate) fn install_fixture_driver(&mut self, driver: FixtureNativeDriver) {
         self.backend = NativeBackend::Fixture(driver);
     }
 
     #[cfg(test)]
-    #[doc(hidden)]
-    pub fn install_semantic_fixture_driver(&mut self, driver: FixtureSemanticDriver) {
+    pub(crate) fn install_semantic_fixture_driver(&mut self, driver: FixtureSemanticDriver) {
         self.backend = NativeBackend::Semantic(driver);
     }
 
     #[cfg(test)]
-    #[doc(hidden)]
-    pub fn install_cleanup_fixture_driver(
+    pub(crate) fn install_cleanup_fixture_driver(
         &mut self,
         driver: FixtureSemanticDriver,
         cleanup: FixtureCleanupDriver,
@@ -332,8 +325,7 @@ impl MainNativePump {
         self.drain_progress()
     }
 
-    #[doc(hidden)]
-    pub fn drain_progress(&self) -> MainNativeDrain {
+    pub(crate) fn drain_progress(&self) -> MainNativeDrain {
         if !self.owner_attempts.is_empty() {
             return MainNativeDrain::Pending;
         }
@@ -344,8 +336,7 @@ impl MainNativePump {
         }
     }
 
-    #[doc(hidden)]
-    pub fn close_admission(&mut self, baton: &Baton) {
+    pub(crate) fn close_admission(&mut self, baton: &Baton) {
         if self.lifecycle == PumpLifecycle::CloseRequested {
             let runtime = baton.green_runtime();
             let Some(runtime) = runtime.as_ref() else {
@@ -362,8 +353,7 @@ impl MainNativePump {
         }
     }
 
-    #[doc(hidden)]
-    pub fn settlement_wait(&self, deadline: ReadDeadline) -> PreparedNativeWait {
+    pub(crate) fn settlement_wait(&self, deadline: ReadDeadline) -> PreparedNativeWait {
         // The same owned plan and exclusive lease guard the condition-backed
         // drain. Its physical wait still goes through BlockingNativeWait.
         match PreparedNativeWait::new(&self.settlement, NativePollOwner::NativeMain, deadline) {
@@ -378,8 +368,7 @@ impl MainNativePump {
         }
     }
 
-    #[doc(hidden)]
-    pub fn prepare_wait(
+    pub(crate) fn prepare_wait(
         &mut self,
         source: &Arc<ControlWake>,
         deadline: ReadDeadline,
@@ -401,8 +390,7 @@ impl MainNativePump {
         }
     }
 
-    #[doc(hidden)]
-    pub fn serve(
+    pub(crate) fn serve(
         &mut self,
         key: HostRequestKey,
         baton: Baton,
@@ -422,8 +410,7 @@ impl MainNativePump {
         self.run(DriverTurn::Drive(baton), control, receiver)
     }
 
-    #[doc(hidden)]
-    pub fn continue_owner_step(
+    pub(crate) fn continue_owner_step(
         &mut self,
         parent: HostRequestKey,
         baton: Baton,
@@ -528,8 +515,7 @@ impl MainNativePump {
         }
     }
 
-    #[doc(hidden)]
-    pub fn take_ended_owner_step(
+    pub(crate) fn take_ended_owner_step(
         &mut self,
         baton: &Baton,
         control: &Control,
@@ -557,8 +543,7 @@ impl MainNativePump {
 
     /// The ended route retains its exact exit proof and dispatch through every
     /// physical continuation. It cannot enter the live-owner service transitions.
-    #[doc(hidden)]
-    pub fn advance_ended(
+    pub(crate) fn advance_ended(
         &mut self,
         baton: Baton,
         slice: ReservedServiceSlice,
@@ -775,8 +760,7 @@ impl MainNativePump {
         }
     }
 
-    #[doc(hidden)]
-    pub fn observe_controls(&mut self, baton: &Baton) {
+    pub(crate) fn observe_controls(&mut self, baton: &Baton) {
         let observations = {
             let runtime = baton.green_runtime();
             let Some(runtime) = runtime.as_ref() else {
@@ -938,8 +922,7 @@ impl NativeWaitHandoff for PumpHandoff<'_> {
 }
 
 impl PumpHandoff<'_> {
-    #[doc(hidden)]
-    pub fn into_wake(self) -> Wake {
+    pub(crate) fn into_wake(self) -> Wake {
         match self.authority {
             PumpAuthority::Acquired(wake) => wake,
             // A known-ready registration performs no physical release.
@@ -999,15 +982,13 @@ impl OwnerReceive {
         }
     }
 
-    #[doc(hidden)]
-    pub fn as_channel(&self) -> &Receiver<Wake> {
+    pub(crate) fn as_channel(&self) -> &Receiver<Wake> {
         match &self.state {
             ReceiveState::Worker(channel) | ReceiveState::Main { channel, .. } => channel,
         }
     }
 
-    #[doc(hidden)]
-    pub fn into_worker_channel(self) -> Receiver<Wake> {
+    pub(crate) fn into_worker_channel(self) -> Receiver<Wake> {
         // Retained !Send exits are destroyed on this actual owner before its
         // transport channel may enter an idle carrier pool.
         drop(self.owner_flows);
@@ -1017,8 +998,7 @@ impl OwnerReceive {
         }
     }
 
-    #[doc(hidden)]
-    pub fn owner_flows_mut(&mut self) -> &mut OwnerLocalFlows {
+    pub(crate) fn owner_flows_mut(&mut self) -> &mut OwnerLocalFlows {
         &mut self.owner_flows
     }
 
@@ -1055,16 +1035,14 @@ impl OwnerReceive {
         }
     }
 
-    #[doc(hidden)]
-    pub fn close_native(&mut self) -> MainNativeDrain {
+    pub(crate) fn close_native(&mut self) -> MainNativeDrain {
         match &mut self.state {
             ReceiveState::Main { pump, .. } => pump.close(),
             ReceiveState::Worker(_) => MainNativeDrain::Drained,
         }
     }
 
-    #[doc(hidden)]
-    pub fn native_drain(&self) -> MainNativeDrain {
+    pub(crate) fn native_drain(&self) -> MainNativeDrain {
         match &self.state {
             ReceiveState::Main { pump, .. } => pump.drain_progress(),
             ReceiveState::Worker(_) => MainNativeDrain::Drained,
