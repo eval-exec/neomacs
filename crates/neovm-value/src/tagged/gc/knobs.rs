@@ -61,7 +61,7 @@ fn note_knob(name: &str, value: &str) {
     tracing::info!(target: "neovm::gc::knobs", "{name}={value} is on in this process");
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     static CENSUS_OVERRIDE: std::cell::Cell<Option<CensusMode>> = const { std::cell::Cell::new(None) };
     static CHUNK_MAP_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
