@@ -5487,20 +5487,61 @@ impl Context {
         &self.window_layout_query_adapter
     }
 
-    /// Scoped mutation for the frontend's single install/take boundary.
+    /// Install or reset the frontend layout-query adapter.
     ///
-    /// The field is not writable through any returned reference: the only
-    /// transitions are install (Ready), take (replace with Running), and the
-    /// two restore arms that follow a take.  Keeping them inside this
-    /// callback preserves the LayoutBusy invariant without exposing a
-    /// writable field to downstream crates.
+    /// Only the non-running states are installable. The `Running` state is
+    /// entered exclusively through [`Self::take_window_layout_query_adapter`],
+    /// and a restore is only accepted while a take is outstanding, so a
+    /// frontend install or restore cannot bypass `LayoutBusy`.
     #[doc(hidden)]
     #[inline]
-    pub fn with_window_layout_query_adapter_mut<R>(
-        &mut self,
-        f: impl FnOnce(&mut WindowLayoutQueryAdapter) -> R,
-    ) -> R {
-        f(&mut self.window_layout_query_adapter)
+    pub fn install_window_layout_query_adapter(&mut self, adapter: WindowLayoutQueryAdapter) {
+        if matches!(adapter, WindowLayoutQueryAdapter::Running) {
+            debug_assert!(
+                false,
+                "the Running layout-query state is entered only by take"
+            );
+            return;
+        }
+        if matches!(
+            self.window_layout_query_adapter,
+            WindowLayoutQueryAdapter::Running
+        ) {
+            debug_assert!(false, "layout query installed while a query is running");
+            return;
+        }
+        self.window_layout_query_adapter = adapter;
+    }
+
+    /// Enter the Running state and return the adapter the caller must restore.
+    ///
+    /// A nested query may take while already running; it receives `Running`
+    /// and reports `LayoutBusy` instead of starting a second walk.
+    #[doc(hidden)]
+    #[inline]
+    pub fn take_window_layout_query_adapter(&mut self) -> WindowLayoutQueryAdapter {
+        std::mem::replace(
+            &mut self.window_layout_query_adapter,
+            WindowLayoutQueryAdapter::Running,
+        )
+    }
+
+    /// Restore the adapter returned by
+    /// [`Self::take_window_layout_query_adapter`].
+    ///
+    /// The restore is accepted only while the slot is `Running`, so it cannot
+    /// be used to install `Running` from outside a take.
+    #[doc(hidden)]
+    #[inline]
+    pub fn restore_window_layout_query_adapter(&mut self, previous: WindowLayoutQueryAdapter) {
+        debug_assert!(
+            matches!(
+                self.window_layout_query_adapter,
+                WindowLayoutQueryAdapter::Running
+            ),
+            "layout query restored without an outstanding take"
+        );
+        self.window_layout_query_adapter = previous;
     }
 
     #[doc(hidden)]
