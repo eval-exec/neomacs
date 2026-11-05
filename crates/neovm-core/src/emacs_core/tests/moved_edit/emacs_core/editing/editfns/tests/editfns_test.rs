@@ -175,7 +175,7 @@ fn combine_after_change_still_updates_treesit_linecol_cache() {
         .expect("insert test text");
     eval.treesit.set_linecol_cache(
         current,
-        neovm_edit::emacs_core::treesit::LineColCache {
+        neovm_text::emacs_core::treesit::LineColCache {
             line: 3,
             col: 4,
             bytepos: 5,

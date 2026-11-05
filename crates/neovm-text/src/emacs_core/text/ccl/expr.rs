@@ -103,6 +103,7 @@ fn combine_bytes(high: i32, low: i32) -> i32 {
 }
 
 /// `reg[destination] OP= operand`. Shift-JIS encoding is not in this switch.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) fn eval_expr_self(
     registers: &mut [i64; 8],
     destination: usize,
@@ -171,6 +172,7 @@ pub(super) fn eval_expr_self(
 ///
 /// `CCL_DIVMOD` with a divisor of -1 follows GNU and negates the register
 /// already stored at `destination`, then clears `r7`.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) fn eval_set_expr(
     registers: &mut [i64; 8],
     destination: usize,

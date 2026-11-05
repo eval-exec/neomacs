@@ -914,8 +914,12 @@ struct EngineMatchData {
 /// into the evaluator's match data in place -- GNU's global `search_regs`,
 /// without the ~180-byte result a by-value search success copied at every
 /// hop between the matcher and the match-data slot.
+#[cfg(not(any(test, feature = "test-support")))]
 #[doc(hidden)]
 pub struct SearchRegisters(SearchRegistersKind);
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub struct SearchRegisters(pub SearchRegistersKind);
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 enum SearchRegistersKind {

@@ -1027,7 +1027,7 @@ fn eval_with_text(text: &str) -> Context {
 
 fn eval_with_unibyte_bytes(bytes: &[u8]) -> Context {
     let mut ev = crate::test_utils::new_context();
-    let storage = neovm_edit::emacs_core::string_escape::bytes_to_unibyte_storage_string(bytes);
+    let storage = neovm_text::emacs_core::string_escape::bytes_to_unibyte_storage_string(bytes);
     {
         let buf = ev.edit.buffers.current_buffer_mut().unwrap();
         buf.set_multibyte_value(false);
@@ -1039,7 +1039,7 @@ fn eval_with_unibyte_bytes(bytes: &[u8]) -> Context {
 
 fn gnu_simple_line_eval_with_unibyte_bytes(bytes: &[u8]) -> Context {
     let mut ev = gnu_simple_line_eval();
-    let storage = neovm_edit::emacs_core::string_escape::bytes_to_unibyte_storage_string(bytes);
+    let storage = neovm_text::emacs_core::string_escape::bytes_to_unibyte_storage_string(bytes);
     {
         let buf = ev.edit.buffers.current_buffer_mut().unwrap();
         buf.set_multibyte_value(false);

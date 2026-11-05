@@ -104,6 +104,7 @@ pub(crate) struct EmacsMuleEncoder {
 }
 
 impl EmacsMuleEncoder {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn new() -> Self {
         let candidates = CHARSET_REGISTRY.with(|slot| {
             let registry = slot.borrow();

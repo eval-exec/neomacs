@@ -11,6 +11,7 @@ use neovm_edit::buffer::{EmacsByteRange, LispCharPos1};
 use neovm_edit::emacs_core::marker::*;
 
 use std::cell::RefCell;
+use crate::emacs_core::moved_edit::emacs_core::marker::builtin_marker_position;
 
 #[test]
 fn make_marker_creates_heap_marker() {

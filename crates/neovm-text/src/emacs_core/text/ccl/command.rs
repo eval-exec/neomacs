@@ -7,6 +7,7 @@
 /// generates `from_repr`, a safe `const` match from those discriminants.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, strum::FromRepr)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) enum CclCommand {
     SetRegister = 0x00,
     SetShortConst = 0x01,

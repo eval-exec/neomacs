@@ -838,8 +838,10 @@ impl ClassKey {
 /// table is the answer.  A character inside a property run is classified
 /// through the real lookup at its position
 /// ([`CharClasses::class_at_position`]).
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
+#[cfg(not(any(test, feature = "test-support")))]
 pub(crate) struct BaseTableView<'a>(pub(crate) &'a dyn SyntaxLookup);
+#[cfg(any(test, feature = "test-support"))]
+pub struct BaseTableView<'a>(pub &'a dyn SyntaxLookup);
 
 impl SyntaxLookup for BaseTableView<'_> {
     fn emacs_char_syntax(&self, c: emacs_char::EmacsChar) -> SyntaxClass {

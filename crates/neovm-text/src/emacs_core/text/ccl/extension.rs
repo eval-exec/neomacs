@@ -42,11 +42,13 @@ enum ExtendedCommand {
 /// `map-multiple` instruction. The stack stays put across that call so
 /// the resume can tell a returned -1, -2, or -3 from a real mapping.
 #[derive(Clone, Debug, Default)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) struct MapMultipleState {
     stack: Vec<(i32, i32)>,
     call_mark: i32,
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) enum ExtensionStep {
     Continue,
     Eof,
@@ -58,6 +60,7 @@ pub(super) enum ExtensionStep {
     },
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) fn execute_extension(
     words: &[i32],
     instruction: &mut usize,
