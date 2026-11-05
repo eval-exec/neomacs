@@ -9,7 +9,7 @@ use crate::face::{FontSlant, FontWeight, FontWidth};
 use std::borrow::Cow;
 use std::num::NonZeroU64;
 use std::ops::Deref;
-use std::sync::{Arc, PoisonError, RwLock};
+use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
 /// Native spelling of a Lisp font name, without exposing storage sentinels.
 ///
@@ -123,8 +123,25 @@ impl StoredFontsetEntry {
 }
 
 /// Immutable storage: split ranges and worker captures share an owner's chain.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(super) struct SharedFontsetEntries(Arc<[StoredFontsetEntry]>);
+#[derive(Clone, Debug, Default)]
+pub(super) struct SharedFontsetEntries(Arc<FontsetChain>);
+
+#[derive(Debug, Default)]
+pub(super) struct FontsetChain {
+    entries: Box<[StoredFontsetEntry]>,
+    /// The chain in charset-priority order for one preference revision, so
+    /// every range and capture that shares this chain shares one ordering.
+    /// `None` inside means the entries are already in that order.
+    ordered: Mutex<Option<(u64, Option<SharedFontsetEntries>)>>,
+}
+
+impl PartialEq for SharedFontsetEntries {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.entries == other.0.entries
+    }
+}
+
+impl Eq for SharedFontsetEntries {}
 
 /// The preferred charsets by canonical name: GNU's `Vcharset_ordered_list`
 /// up to `Vcharset_non_preferred_head`, published by the charset registry
@@ -133,29 +150,42 @@ pub(super) struct SharedFontsetEntries(Arc<[StoredFontsetEntry]>);
 /// stores a charset id, so names compare directly.  Kept outside the fontset
 /// registry so a fontset restore cannot drop it, and process-wide like that
 /// registry so detached native workers read the same order.
-static CHARSET_PREFERENCE: RwLock<Vec<SymId>> = RwLock::new(Vec::new());
+#[derive(Default)]
+struct CharsetPreference {
+    revision: u64,
+    charsets: Vec<SymId>,
+}
 
-/// Record a new charset preference.  The font-selection revision changes with
-/// it, so every cached fontset lookup is re-resolved in the new order.
+static CHARSET_PREFERENCE: RwLock<CharsetPreference> = RwLock::new(CharsetPreference {
+    revision: 0,
+    charsets: Vec::new(),
+});
+
+/// Record a new charset preference.  The preference and the font-selection
+/// revision change under one fontset-registry write lock, so a capture, which
+/// holds the registry read lock, never pairs the new order with the old
+/// revision.  Lock order: registry, then preference.
 pub(crate) fn publish_charset_preference(preferred: Vec<SymId>) {
-    // The value is always a complete list, so a poisoned lock still holds a
-    // usable one.
-    if *CHARSET_PREFERENCE
-        .read()
-        .unwrap_or_else(PoisonError::into_inner)
-        == preferred
-    {
+    // Both values are always complete, so a poisoned lock still holds usable
+    // ones.
+    let mut registry = registry().write().unwrap_or_else(PoisonError::into_inner);
+    let mut preference = CHARSET_PREFERENCE
+        .write()
+        .unwrap_or_else(PoisonError::into_inner);
+    if preference.charsets == preferred {
         return;
     }
-    *CHARSET_PREFERENCE
-        .write()
-        .unwrap_or_else(PoisonError::into_inner) = preferred;
-    super::invalidate_font_selection_policy();
+    preference.charsets = preferred;
+    preference.revision = preference.revision.wrapping_add(1);
+    registry.generation = registry.generation.wrapping_add(1);
 }
 
 impl SharedFontsetEntries {
     pub(super) fn from_stored_entries(entries: Vec<StoredFontsetEntry>) -> Self {
-        Self(entries.into())
+        Self(Arc::new(FontsetChain {
+            entries: entries.into(),
+            ordered: Mutex::new(None),
+        }))
     }
 
     /// The entries in the order GNU's `reorder_font_vector` (src/fontset.c)
@@ -168,17 +198,35 @@ impl SharedFontsetEntries {
     /// Only GNU's encoding rule is applied.  Its exemptions for a spec that
     /// matches the face's ASCII font or has `:otf`, and its `:lang` rule for
     /// specs without an encoding, are not.  An `ExplicitNone` ends the chain,
-    /// so only the entries before it are reordered.
+    /// so only the entries before it are reordered.  The result is computed
+    /// once per preference revision and shared by every holder of this chain.
     pub(super) fn in_charset_order(&self) -> Self {
-        let preferred = CHARSET_PREFERENCE
+        let preference = CHARSET_PREFERENCE
             .read()
             .unwrap_or_else(PoisonError::into_inner);
-        let end = self
+        let mut cache = self
             .0
+            .ordered
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some((revision, ordered)) = cache.as_ref()
+            && *revision == preference.revision
+        {
+            return ordered.clone().unwrap_or_else(|| self.clone());
+        }
+        let ordered = self.sorted_by(&preference.charsets);
+        *cache = Some((preference.revision, ordered.clone()));
+        ordered.unwrap_or_else(|| self.clone())
+    }
+
+    /// A copy sorted by charset rank, or `None` when already in that order.
+    fn sorted_by(&self, preferred: &[SymId]) -> Option<Self> {
+        let entries = &self.0.entries;
+        let end = entries
             .iter()
             .position(|entry| matches!(entry.original(), FontSpecEntry::ExplicitNone))
-            .unwrap_or(self.0.len());
-        let ranks: Vec<usize> = self.0[..end]
+            .unwrap_or(entries.len());
+        let ranks: Vec<usize> = entries[..end]
             .iter()
             .map(|entry| match entry.original() {
                 FontSpecEntry::Font(spec) => spec.definition.as_ref().map_or(0, |definition| {
@@ -191,24 +239,28 @@ impl SharedFontsetEntries {
             })
             .collect();
         if ranks.is_sorted() {
-            return self.clone();
+            return None;
         }
-        let mut ordered: Vec<_> = ranks
-            .into_iter()
-            .zip(self.0[..end].iter().cloned())
-            .collect();
+        let mut ordered: Vec<_> = ranks.into_iter().zip(entries[..end].iter()).collect();
         ordered.sort_by_key(|(rank, _)| *rank);
-        let mut ordered: Vec<_> = ordered.into_iter().map(|(_, entry)| entry).collect();
-        ordered.extend_from_slice(&self.0[end..]);
-        Self::from_stored_entries(ordered)
+        let mut ordered: Vec<_> = ordered
+            .into_iter()
+            .map(|(_, entry)| entry.clone())
+            .collect();
+        ordered.extend_from_slice(&entries[end..]);
+        Some(Self::from_stored_entries(ordered))
     }
 
     pub(super) fn as_slice(&self) -> &[StoredFontsetEntry] {
-        &self.0
+        &self.0.entries
     }
 
     pub(super) fn to_original_entries(&self) -> Vec<FontSpecEntry> {
-        self.0.iter().map(|entry| entry.original.clone()).collect()
+        self.0
+            .entries
+            .iter()
+            .map(|entry| entry.original.clone())
+            .collect()
     }
 }
 

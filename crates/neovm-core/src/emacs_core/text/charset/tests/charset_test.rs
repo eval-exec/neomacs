@@ -186,6 +186,20 @@ fn registry_set_priority_reorders_and_dedups() {
     assert_eq!(resolve_sym(reg.priority[1]), "unicode");
 }
 
+/// GNU's ordered list holds charset ids, so the preferred charsets chosen
+/// through an alias stay preferred after the alias is re-pointed.
+#[test]
+fn preferred_charsets_keep_the_charset_an_alias_named() {
+    crate::test_utils::init_test_tracing();
+    let mut reg = CharsetRegistry::new();
+    reg.define_alias(intern("neomacs-test-pref"), intern("unicode-bmp"));
+    reg.set_priority(&[intern("neomacs-test-pref")]);
+    assert_eq!(reg.preferred_identities, vec![intern("unicode-bmp")]);
+
+    reg.define_alias(intern("neomacs-test-pref"), intern("iso-8859-1"));
+    assert_eq!(reg.preferred_identities, vec![intern("unicode-bmp")]);
+}
+
 #[test]
 fn set_charset_priority_requires_at_least_one_arg() {
     crate::test_utils::init_test_tracing();

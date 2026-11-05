@@ -6817,7 +6817,11 @@ fn load_font_spec_entry(entry: &DumpFontSpecEntry) -> FontSpecEntry {
                 .definition
                 .as_ref()
                 .map(|definition| FontDefinitionMetadata {
-                    encoding: load_sym_id(&definition.encoding),
+                    // Canonical, as `set-fontset-font` stores it; the
+                    // charset registry is restored before the fontsets.
+                    encoding: crate::emacs_core::charset::charset_canonical_name(load_sym_id(
+                        &definition.encoding,
+                    )),
                     repertory: definition.repertory.as_ref().map(load_font_repertory),
                 }),
         }),
