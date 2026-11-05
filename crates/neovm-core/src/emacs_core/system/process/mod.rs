@@ -449,13 +449,13 @@ impl NetworkSocketIo for NetworkSocket {
 
 use super::error::{EvalResult, Flow, signal};
 use super::intern::{intern, resolve_sym};
-use super::threads::ThreadManager;
 use super::value::{Value, ValueKind, VecLikeType, equal_value, list_to_vec};
 use crate::buffer::{
     BufferId, BufferManager, EmacsByteLen, EmacsBytePos, EmacsByteRange, LispCharPos1,
 };
 use crate::gc_trace::GcTrace;
 use crate::heap_types::LispString;
+use neovm_eval::emacs_core::threads::ThreadManager;
 
 // ---------------------------------------------------------------------------
 // Tests

@@ -23,12 +23,12 @@ use crate::emacs_core::process::ProcessContextExt;
 use std::time::Duration;
 
 use super::error::{EvalResult, Flow, signal};
-use super::eval::GnuTimerTimestamp;
 use super::intern::intern;
 use super::value::{Value, ValueKind, VecLikeType};
 use crate::emacs_core::intern::WellKnown;
 use malachite::base::num::conversion::traits::RoundingFrom;
 use malachite::base::rounding_modes::RoundingMode;
+use neovm_eval::emacs_core::eval::GnuTimerTimestamp;
 
 use crate::emacs_core::wait::WaitContextExt;
 use neovm_edit::emacs_core::edit_host::EditHost;
@@ -154,7 +154,7 @@ pub trait TimerContextExt {
     ) -> Result<(), Flow>;
 }
 
-impl TimerContextExt for super::eval::Context {
+impl TimerContextExt for neovm_eval::emacs_core::eval::Context {
     fn capture_gnu_timer_batch(&self) -> GnuTimerBatch {
         let ordinary = self
             .variable_value(TIMER_LIST.id())
@@ -348,7 +348,10 @@ fn gnu_sleep_duration_from_secs(seconds: f64) -> Duration {
 /// `(sleep-for SECONDS &optional MILLISECONDS)` — GNU `Fsleep_for`
 /// (dispnew.c): pause, reading process output, without redisplay or servicing
 /// command input.
-pub(crate) fn builtin_sleep_for(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_sleep_for(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
     expect_min_args("sleep-for", &args, 1)?;
     if args.len() > 2 {
         return Err(signal(

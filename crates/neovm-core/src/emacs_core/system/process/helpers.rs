@@ -53,7 +53,9 @@ pub(super) fn signal_wrong_type_character(value: Value) -> Flow {
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(super) fn char_code_from_value(value: &Value) -> Result<u32, Flow> {
     match value.kind() {
-        ValueKind::Fixnum(_) => Ok(super::super::builtins::expect_character_code(value)? as u32),
+        ValueKind::Fixnum(_) => {
+            Ok(neovm_eval::emacs_core::builtins::expect_character_code(value)? as u32)
+        }
         _ => Err(signal_wrong_type_character(*value)),
     }
 }
@@ -265,7 +267,7 @@ pub(super) fn expect_process_name_lisp_string(value: &Value) -> Result<LispStrin
 pub(crate) fn parse_lisp_string_args_strict(args: &[Value]) -> Result<Vec<LispString>, Flow> {
     args.iter()
         .map(|arg| {
-            super::super::builtins::expect_lisp_string(arg)
+            neovm_eval::emacs_core::builtins::expect_lisp_string(arg)
                 .cloned()
                 .map_err(|_| signal_wrong_type_string(*arg))
         })

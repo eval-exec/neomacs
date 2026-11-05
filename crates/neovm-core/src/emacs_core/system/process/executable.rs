@@ -157,7 +157,7 @@ impl ExecutableSearch {
             .ok_or_else(|| signal_wrong_type_string(self.exec_suffixes))?;
         suffix_values
             .iter()
-            .map(|value| super::super::builtins::expect_lisp_string(value).cloned())
+            .map(|value| neovm_eval::emacs_core::builtins::expect_lisp_string(value).cloned())
             .collect()
     }
 

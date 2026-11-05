@@ -152,7 +152,7 @@ pub(crate) fn isolate_child_command(command: &mut Command) {
 }
 
 fn maybe_redisplay_sync_output(
-    eval: &mut super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     destination: &Value,
     display: bool,
 ) -> Result<(), Flow> {
@@ -226,7 +226,7 @@ fn lisp_string_to_output_path(string: &LispString) -> std::path::PathBuf {
 }
 
 fn resolve_call_process_program(
-    eval: &super::eval::Context,
+    eval: &neovm_eval::emacs_core::eval::Context,
     program: &LispString,
 ) -> Result<OsString, Flow> {
     let search = super::process::ExecutableSearch::capture(eval);
@@ -241,7 +241,9 @@ fn fallback_subprocess_directory() -> Option<PathBuf> {
         .or_else(|| std::env::current_dir().ok())
 }
 
-pub(super) fn subprocess_default_directory(eval: &super::eval::Context) -> Option<PathBuf> {
+pub(super) fn subprocess_default_directory(
+    eval: &neovm_eval::emacs_core::eval::Context,
+) -> Option<PathBuf> {
     let default_dir =
         super::fileio::default_directory_lisp_in_state(eval.variables(), &[], &eval.edit.buffers)?;
     // GNU's encode_current_directory (callproc.c) runs default-directory through
@@ -261,7 +263,10 @@ pub(super) fn subprocess_default_directory(eval: &super::eval::Context) -> Optio
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-fn configure_subprocess_current_dir(eval: &super::eval::Context, command: &mut ChildCommand) {
+fn configure_subprocess_current_dir(
+    eval: &neovm_eval::emacs_core::eval::Context,
+    command: &mut ChildCommand,
+) {
     if let Some(dir) = subprocess_default_directory(eval) {
         command.current_dir(dir);
     }
@@ -271,7 +276,7 @@ fn configure_subprocess_current_dir(eval: &super::eval::Context, command: &mut C
 /// `BVAR (current_buffer, directory)`.  A `(let ((default-directory ...)) ...)`
 /// dynamically rebinds the buffer-local slot, so prefer the dynamically-visible
 /// value (let-aware) and fall back to the buffer-local/global value.
-fn subprocess_curdir_lisp(eval: &super::eval::Context) -> Option<LispString> {
+fn subprocess_curdir_lisp(eval: &neovm_eval::emacs_core::eval::Context) -> Option<LispString> {
     let visible = eval.visible_variable_value_or_nil("default-directory");
     if let Some(string) = visible.as_lisp_string() {
         return Some(string.clone());
@@ -292,7 +297,7 @@ fn subprocess_curdir_lisp(eval: &super::eval::Context) -> Option<LispString> {
 /// performs no accessibility check (we keep neomacs's `$HOME` fallback).  Only a
 /// *local* directory is expanded and validated, and only that case can signal.
 fn validate_subprocess_current_directory(
-    eval: &mut super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
 ) -> Result<Option<PathBuf>, Flow> {
     let Some(curdir) = subprocess_curdir_lisp(eval) else {
         return Ok(None);
@@ -377,7 +382,7 @@ fn accessible_directory_errno(path: &std::path::Path) -> Option<libc::c_int> {
 /// (callproc.c:327).  Without this a bare relative INFILE ("foo.txt") is resolved
 /// against the editor's process cwd instead of the buffer's `default-directory`.
 fn expand_subprocess_infile(
-    eval: &mut super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     infile: Option<LispString>,
 ) -> Result<Option<LispString>, Flow> {
     let Some(infile) = infile else {
@@ -389,12 +394,12 @@ fn expand_subprocess_infile(
     let expanded =
         super::fileio::builtin_expand_file_name(eval, vec![Value::heap_string(infile), base])?;
     Ok(Some(
-        super::builtins::expect_lisp_string(&expanded)?.clone(),
+        neovm_eval::emacs_core::builtins::expect_lisp_string(&expanded)?.clone(),
     ))
 }
 
 fn configure_subprocess_environment(
-    eval: &super::eval::Context,
+    eval: &neovm_eval::emacs_core::eval::Context,
     command: &mut ChildCommand,
     current_dir: Option<&Path>,
 ) {
@@ -416,7 +421,7 @@ fn parse_file_target(value: &Value) -> Result<OutputTarget, Flow> {
     } else {
         tail
     };
-    let file = super::builtins::expect_lisp_string(&file_value)?.clone();
+    let file = neovm_eval::emacs_core::builtins::expect_lisp_string(&file_value)?.clone();
     Ok(OutputTarget::File(file))
 }
 
@@ -535,7 +540,7 @@ fn destination_writes_to_buffer_in_state(
 }
 
 fn insert_process_output_in_state(
-    eval: &mut super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     destination: &BufferOutputTarget,
     output: &crate::heap_types::LispString,
 ) -> Result<(), Flow> {
@@ -559,7 +564,7 @@ fn insert_process_output_in_state(
 }
 
 fn write_output_target_in_state(
-    eval: &mut super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     target: &OutputTarget,
     decoding: &mut ProcessOutputDecoding,
     output: &[u8],
@@ -687,7 +692,7 @@ fn write_output_target_in_state(
 }
 
 fn route_captured_output_in_state(
-    eval: &mut super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     destination: &DestinationSpec,
     decoding: ProcessOutputDecoding,
     stdout: &[u8],
@@ -790,7 +795,9 @@ fn encode_call_process_region_buffer_text(
 /// take effect on the region bytes.  When no write coding is requested the data
 /// is left untouched (`raw-text`, a byte pass-through), matching the previous
 /// behavior.
-fn resolve_call_process_region_write_coding(eval: &super::eval::Context) -> String {
+fn resolve_call_process_region_write_coding(
+    eval: &neovm_eval::emacs_core::eval::Context,
+) -> String {
     let for_write = eval.visible_variable_value_or_nil("coding-system-for-write");
     for_write
         .is_truthy()
@@ -800,7 +807,7 @@ fn resolve_call_process_region_write_coding(eval: &super::eval::Context) -> Stri
 }
 
 fn run_process_command_in_state(
-    eval: &mut super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     program: &LispString,
     infile: Option<LispString>,
     destination: &Value,
@@ -888,7 +895,7 @@ fn run_process_command_in_state(
 /// Keep all synchronous evaluator-owned subprocess entries on one attention
 /// boundary, preserving the original Flow after the child has been cleaned up.
 fn wait_for_process_output(
-    eval: &mut super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     child: SpawnedChild,
     error_context: &str,
 ) -> Result<std::process::Output, Flow> {
@@ -916,7 +923,7 @@ fn wait_for_process_output(
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 fn run_process_capture_output(
-    eval: &mut super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     program: &LispString,
     cmd_args: &[LispString],
 ) -> Result<(i32, Vec<u8>), Flow> {
@@ -941,7 +948,7 @@ fn run_process_capture_output(
 fn parse_optional_infile(args: &[Value], index: usize) -> Result<Option<LispString>, Flow> {
     if args.len() > index && !args[index].is_nil() {
         Ok(Some(
-            super::builtins::expect_lisp_string(&args[index])?.clone(),
+            neovm_eval::emacs_core::builtins::expect_lisp_string(&args[index])?.clone(),
         ))
     } else {
         Ok(None)
@@ -958,7 +965,7 @@ fn obarray_lisp_string_variable(
     if value.is_nil() {
         Ok(LispString::from_utf8(fallback))
     } else {
-        Ok(super::builtins::expect_lisp_string(&value)?.clone())
+        Ok(neovm_eval::emacs_core::builtins::expect_lisp_string(&value)?.clone())
     }
 }
 
@@ -1025,7 +1032,10 @@ fn shell_command_with_legacy_args(command: &Value, args: &[Value]) -> Result<Lis
 ///     `find-operation-coding-system` returns nil for `call-process`);
 ///   * finally, if the resolved coding is NOT ASCII-compatible, downgrade to
 ///     `raw-text` so we never feed a multibyte-shifting codec into argv.
-fn resolve_call_process_arg_coding(eval: &super::eval::Context, cmd_args: &[LispString]) -> String {
+fn resolve_call_process_arg_coding(
+    eval: &neovm_eval::emacs_core::eval::Context,
+    cmd_args: &[LispString],
+) -> String {
     let raw_text = || "raw-text".to_string();
 
     let for_write = eval.visible_variable_value_or_nil("coding-system-for-write");
@@ -1083,7 +1093,7 @@ fn resolve_call_process_arg_coding(eval: &super::eval::Context, cmd_args: &[Lisp
 /// matches its regexps against PROGRAM and hands the whole vector to a
 /// function-valued alist entry.
 fn resolve_call_process_output_decoding(
-    eval: &mut super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     operation_args: &[Value],
     destination: &DestinationSpec,
 ) -> Result<ProcessOutputDecoding, Flow> {
@@ -1131,7 +1141,10 @@ fn resolve_call_process_output_decoding(
 /// unibyte rule above then has nothing to weaken: the bytes are written to a
 /// file or discarded without ever being decoded.  A named buffer that does not
 /// exist yet also answers `true` — it will be created multibyte.
-fn destination_buffer_is_multibyte(eval: &super::eval::Context, target: &OutputTarget) -> bool {
+fn destination_buffer_is_multibyte(
+    eval: &neovm_eval::emacs_core::eval::Context,
+    target: &OutputTarget,
+) -> bool {
     let OutputTarget::Buffer(destination) = target else {
         return true;
     };
@@ -1154,7 +1167,7 @@ fn destination_buffer_is_multibyte(eval: &super::eval::Context, target: &OutputT
 /// return nil, and skipping it keeps a user callback from being invited to run
 /// arbitrary Lisp on every subprocess.
 fn find_call_process_operation_coding_system(
-    eval: &mut super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     operation_args: &[Value],
 ) -> EvalResult {
     if operation_args.is_empty()
@@ -1175,7 +1188,7 @@ fn find_call_process_operation_coding_system(
     for value in &args {
         eval.push_specpdl_root(*value);
     }
-    let result = super::builtins::builtin_find_operation_coding_system(eval, args);
+    let result = neovm_eval::emacs_core::builtins::builtin_find_operation_coding_system(eval, args);
     eval.restore_specpdl_roots(roots);
     result
 }
@@ -1195,7 +1208,7 @@ fn resolve_sym_value_name(value: &Value) -> Option<String> {
 /// `execvp`, so EOL conversion (e.g. `utf-8-dos` turning `\n` into `\r\n`) and
 /// charset encoding are honored.
 fn encode_call_process_args(
-    eval: &super::eval::Context,
+    eval: &neovm_eval::emacs_core::eval::Context,
     cmd_args: &[LispString],
 ) -> Vec<LispString> {
     if cmd_args.is_empty() {
@@ -1212,9 +1225,12 @@ fn encode_call_process_args(
         .collect()
 }
 
-fn builtin_call_process_impl(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+fn builtin_call_process_impl(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
     expect_min_args("call-process", &args, 1)?;
-    let program = super::builtins::expect_lisp_string(&args[0])?.clone();
+    let program = neovm_eval::emacs_core::builtins::expect_lisp_string(&args[0])?.clone();
     let infile = parse_optional_infile(&args, 1)?;
     let destination = args.get(2).copied().unwrap_or(Value::NIL);
     let cmd_args = if args.len() > 4 {
@@ -1237,7 +1253,7 @@ fn builtin_call_process_impl(eval: &mut super::eval::Context, args: Vec<Value>) 
 }
 
 fn builtin_call_process_region_impl(
-    eval: &mut super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_min_args("call-process-region", &args, 3)?;
@@ -1358,7 +1374,7 @@ fn builtin_call_process_region_impl(
     // and argument vector are built, and the destination is resolved.  A signal
     // from any of these leaves the DELETE above already applied, exactly as in
     // GNU.
-    let program = super::builtins::expect_lisp_string(&args[2])?.clone();
+    let program = neovm_eval::emacs_core::builtins::expect_lisp_string(&args[2])?.clone();
     let program_os = resolve_call_process_program(eval, &program)?;
     // GNU `Fcall_process_region` delegates the chdir to `Fcall_process`, so the
     // same `get_current_directory` validation applies: signal "Setting current
@@ -1488,7 +1504,7 @@ fn builtin_call_process_region_impl(
 }
 
 pub(crate) fn builtin_call_process(
-    eval: &mut super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     let destination = args.get(2).copied().unwrap_or(Value::NIL);
@@ -1500,7 +1516,7 @@ pub(crate) fn builtin_call_process(
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) fn builtin_call_process_shell_command(
-    eval: &mut super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_min_args("call-process-shell-command", &args, 1)?;
@@ -1547,11 +1563,11 @@ fn shell_call_process_operation_args(
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) fn builtin_process_file(
-    eval: &mut super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_min_args("process-file", &args, 1)?;
-    let program = super::builtins::expect_lisp_string(&args[0])?.clone();
+    let program = neovm_eval::emacs_core::builtins::expect_lisp_string(&args[0])?.clone();
     let infile = parse_optional_infile(&args, 1)?;
     let destination = args.get(2).copied().unwrap_or(Value::NIL);
     let display = args.get(3).is_some_and(|v| v.is_truthy());
@@ -1575,7 +1591,7 @@ pub(crate) fn builtin_process_file(
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) fn builtin_process_file_shell_command(
-    eval: &mut super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_min_args("process-file-shell-command", &args, 1)?;
@@ -1603,11 +1619,11 @@ pub(crate) fn builtin_process_file_shell_command(
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) fn builtin_process_lines(
-    eval: &mut super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_min_args("process-lines", &args, 1)?;
-    let program = super::builtins::expect_lisp_string(&args[0])?.clone();
+    let program = neovm_eval::emacs_core::builtins::expect_lisp_string(&args[0])?.clone();
     let cmd_args = super::process::parse_lisp_string_args_strict(&args[1..])?;
     let (status, stdout) = run_process_capture_output(eval, &program, &cmd_args)?;
     if status != 0 {
@@ -1618,11 +1634,11 @@ pub(crate) fn builtin_process_lines(
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) fn builtin_process_lines_ignore_status(
-    eval: &mut super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_min_args("process-lines-ignore-status", &args, 1)?;
-    let program = super::builtins::expect_lisp_string(&args[0])?.clone();
+    let program = neovm_eval::emacs_core::builtins::expect_lisp_string(&args[0])?.clone();
     let cmd_args = super::process::parse_lisp_string_args_strict(&args[1..])?;
     let (_, stdout) = run_process_capture_output(eval, &program, &cmd_args)?;
     Ok(parse_output_lines(&stdout))
@@ -1630,11 +1646,11 @@ pub(crate) fn builtin_process_lines_ignore_status(
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) fn builtin_process_lines_handling_status(
-    eval: &mut super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_min_args("process-lines-handling-status", &args, 2)?;
-    let program = super::builtins::expect_lisp_string(&args[0])?.clone();
+    let program = neovm_eval::emacs_core::builtins::expect_lisp_string(&args[0])?.clone();
     let status_handler = args[1];
     let cmd_args = super::process::parse_lisp_string_args_strict(&args[2..])?;
     let (status, stdout) = run_process_capture_output(eval, &program, &cmd_args)?;
@@ -1650,7 +1666,7 @@ pub(crate) fn builtin_process_lines_handling_status(
 }
 
 pub(crate) fn builtin_call_process_region(
-    eval: &mut super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_min_args("call-process-region", &args, 3)?;

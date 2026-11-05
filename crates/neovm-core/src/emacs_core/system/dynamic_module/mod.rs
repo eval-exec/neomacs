@@ -20,13 +20,13 @@ use std::sync::{Mutex, PoisonError};
 use libloading::Library;
 
 use super::error::{EvalResult, Flow, FlowKind, signal};
-use super::eval::Context;
 use super::intern::{intern, intern_lisp_string, resolve_sym};
 use super::timefns::{LispTimeOutput, make_lisp_time};
 use super::value::Value;
 use crate::heap_types::LispString;
 use crate::tagged::gc::{HeapWriteKind, note_heap_write};
 use crate::tagged::header::{ModuleFunctionObj, UserPtrObj, VecLikeType};
+use neovm_eval::emacs_core::eval::Context;
 
 // ============================================================================
 // C-compatible types matching GNU emacs-module.h

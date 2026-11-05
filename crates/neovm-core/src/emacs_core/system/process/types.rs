@@ -710,7 +710,7 @@ pub(super) fn lisp_string_to_os_string(string: &LispString) -> OsString {
 }
 
 pub(super) fn visible_default_directory_lisp(
-    eval: &super::super::eval::Context,
+    eval: &neovm_eval::emacs_core::eval::Context,
 ) -> Option<LispString> {
     let visible = eval.visible_variable_value_or_nil("default-directory");
     if let Some(string) = visible.as_lisp_string() {
@@ -2349,7 +2349,7 @@ pub(super) fn resolve_serial_process_coding_systems(
 /// an undefined name, GNU reports `(file-error "make client process failed")`
 /// and never gets as far as the coding system.
 pub(super) fn create_network_process_record(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     name: LispString,
     buffer: Value,
     coding: ProcessCodingSystems,
@@ -2403,7 +2403,7 @@ pub(super) fn resolve_network_process_coding_systems(
 }
 
 pub(super) fn find_network_operation_coding_system(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     name: &LispString,
     buffer: Value,
     host: Value,
@@ -2432,7 +2432,7 @@ pub(super) fn find_network_operation_coding_system(
     for value in &args {
         eval.push_specpdl_root(*value);
     }
-    let result = super::super::builtins::builtin_find_operation_coding_system(eval, args);
+    let result = neovm_eval::emacs_core::builtins::builtin_find_operation_coding_system(eval, args);
     eval.restore_specpdl_roots(roots);
     result
 }
@@ -2661,7 +2661,7 @@ pub(super) fn validate_process_coding_component(
 }
 
 pub(super) fn copy_process_plist(plist: Value) -> EvalResult {
-    super::super::builtins::builtin_copy_sequence(vec![plist])
+    neovm_eval::emacs_core::builtins::builtin_copy_sequence(vec![plist])
 }
 
 pub(super) fn apply_connection_process_flags(proc: &mut Process, noquery: bool, stop: bool) {
@@ -3150,11 +3150,11 @@ pub(super) fn process_uses_contact_plist(proc: &Process) -> bool {
 }
 
 pub(super) fn process_contact_plist_get(contact: Value, key: Value) -> Value {
-    super::super::builtins::builtin_plist_get(vec![contact, key]).unwrap_or(Value::NIL)
+    neovm_eval::emacs_core::builtins::builtin_plist_get(vec![contact, key]).unwrap_or(Value::NIL)
 }
 
 pub(super) fn process_contact_plist_put(contact: Value, key: Value, value: Value) -> EvalResult {
-    super::super::builtins::builtin_plist_put(vec![contact, key, value])
+    neovm_eval::emacs_core::builtins::builtin_plist_put(vec![contact, key, value])
 }
 
 pub(super) fn process_contact_plist_member(contact: Value, key: Value) -> Value {
@@ -6851,8 +6851,9 @@ impl SystemProcessExt for ProcessManager {
                 thread: server_thread,
             };
 
-            let mut contact = super::super::builtins::builtin_copy_sequence(vec![server_contact])
-                .unwrap_or(server_contact);
+            let mut contact =
+                neovm_eval::emacs_core::builtins::builtin_copy_sequence(vec![server_contact])
+                    .unwrap_or(server_contact);
             contact =
                 process_contact_plist_put(contact, ProcessKeyword::Server.value(), Value::NIL)
                     .unwrap_or(contact);
@@ -7545,7 +7546,7 @@ pub(crate) trait ProcessContextExt {
     ) -> Result<ProcessOutputServiceOutcome, Flow>;
 }
 
-impl ProcessContextExt for super::super::eval::Context {
+impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
     fn wait_while_network_process_connecting(&mut self, id: ProcessId) -> Result<(), Flow> {
         while self.processes.get(id).is_some_and(|proc| {
             proc.kind == ProcessKind::Network && process_status_is_connect(&proc.status)

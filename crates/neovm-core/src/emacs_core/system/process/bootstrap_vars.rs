@@ -525,7 +525,7 @@ pub(super) fn parse_make_process_command(value: &Value) -> Result<Vec<LispString
     items
         .into_iter()
         .map(|item| {
-            super::super::builtins::expect_lisp_string(&item)
+            neovm_eval::emacs_core::builtins::expect_lisp_string(&item)
                 .cloned()
                 .map_err(|_| signal_wrong_type_string(item))
         })
@@ -533,7 +533,7 @@ pub(super) fn parse_make_process_command(value: &Value) -> Result<Vec<LispString
 }
 
 pub(super) fn parse_make_process_buffer(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     value: &Value,
 ) -> Result<Value, Flow> {
     parse_make_process_buffer_in_state(&mut eval.edit.buffers, value)
@@ -743,7 +743,7 @@ pub(super) fn parse_network_address_spec(value: &Value) -> Result<NetworkAddress
     if matches!(value.kind(), ValueKind::String) {
         return Ok(NetworkAddressSpec::Local(
             crate::emacs_core::fileio::lisp_file_name_to_path_buf(
-                super::super::builtins::expect_lisp_string(value)?,
+                neovm_eval::emacs_core::builtins::expect_lisp_string(value)?,
             ),
         ));
     }

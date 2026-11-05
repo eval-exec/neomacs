@@ -26,7 +26,7 @@ fn process_signal_recipient(args: &[Value]) -> ProcessSignalRecipient {
 
 /// (internal-default-interrupt-process &optional PROCESS CURRENT-GROUP) -> process-or-nil
 pub(crate) fn builtin_internal_default_interrupt_process(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_internal_default_interrupt_process_impl(&mut eval.processes, &eval.edit.buffers, args)
@@ -59,7 +59,7 @@ pub(crate) fn builtin_internal_default_interrupt_process_impl(
 
 /// (internal-default-signal-process PROCESS SIGNAL &optional CURRENT-GROUP) -> int-or-nil
 pub(crate) fn builtin_internal_default_signal_process(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_internal_default_signal_process_impl(&mut eval.processes, &eval.edit.buffers, args)
@@ -169,7 +169,7 @@ impl DefaultProcessBufferInsertion<'_> {
 /// target-buffer switch, read-only override, point adjustment, marker advance,
 /// and callback-specific current-buffer restoration as one deep operation.
 pub(super) fn insert_default_process_buffer_payload(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     id: ProcessId,
     insertion: DefaultProcessBufferInsertion<'_>,
 ) -> EvalResult {
@@ -280,7 +280,7 @@ pub(super) fn insert_default_process_buffer_payload(
 /// buffer at the process mark position (or end of buffer when mark is None).
 /// This matches GNU Emacs's `internal-default-process-filter` behavior.
 pub(crate) fn builtin_internal_default_process_filter(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("internal-default-process-filter", &args, 2)?;
@@ -312,7 +312,7 @@ pub(crate) fn builtin_internal_default_process_filter(
 
 /// (internal-default-process-sentinel PROCESS STRING) -> nil
 pub(crate) fn builtin_internal_default_process_sentinel(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("internal-default-process-sentinel", &args, 2)?;
@@ -347,7 +347,7 @@ pub(crate) fn builtin_internal_default_process_sentinel(
 /// supplies SNI and certificate hostname validation, while `:trustfiles`
 /// supplies additional PEM trust anchors.
 pub(crate) fn builtin_gnutls_boot(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("gnutls-boot", &args, 3)?;
@@ -365,7 +365,7 @@ pub(crate) fn builtin_gnutls_boot(
 }
 
 pub(crate) fn builtin_gnutls_asynchronous_parameters(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("gnutls-asynchronous-parameters", &args, 2)?;
@@ -379,7 +379,7 @@ pub(crate) fn builtin_gnutls_asynchronous_parameters(
 }
 
 pub(crate) fn builtin_gnutls_bye(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("gnutls-bye", &args, 2)?;
@@ -398,7 +398,7 @@ pub(crate) fn builtin_gnutls_bye(
 }
 
 pub(crate) fn builtin_gnutls_deinit(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("gnutls-deinit", &args, 1)?;
@@ -417,7 +417,7 @@ pub(crate) fn builtin_gnutls_deinit(
 }
 
 pub(crate) fn builtin_gnutls_get_initstage(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("gnutls-get-initstage", &args, 1)?;
@@ -430,7 +430,7 @@ pub(crate) fn builtin_gnutls_get_initstage(
 }
 
 pub(crate) fn builtin_gnutls_peer_status(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("gnutls-peer-status", &args, 1)?;
@@ -457,7 +457,7 @@ pub(crate) fn builtin_gnutls_peer_status(
 /// native TLS backend. This is intentionally separate from GNU's `gnutls-*`
 /// API: rustls provides TLS transport, not libgnutls semantics.
 pub(crate) fn builtin_neomacs_open_tls_stream(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("neomacs-open-tls-stream", &args, 4)?;
@@ -488,7 +488,7 @@ pub(crate) fn builtin_neomacs_open_tls_stream(
 }
 
 pub(super) fn upgrade_process_to_tls<B: TlsClientBackend>(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     id: ProcessId,
     parameters: &TlsClientParameters,
     operation: &str,
@@ -589,7 +589,7 @@ pub(super) fn signal_neomacs_tls_error(err: TlsBackendError) -> Flow {
 /// `print-number-table` hash when `print-circle' is non-nil, and does nothing
 /// otherwise.  Mirrors GNU `Fprint_preprocess` (src/print.c).
 pub(crate) fn builtin_print_preprocess(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("print--preprocess", &args, 1)?;
@@ -624,7 +624,7 @@ pub(crate) fn builtin_print_preprocess(
     let roots = eval.save_specpdl_roots();
     eval.push_specpdl_root(object);
     eval.push_specpdl_root(table_value);
-    super::super::print::preprocess_print_number_table(
+    neovm_eval::emacs_core::print::preprocess_print_number_table(
         &object,
         table_value,
         print_gensym,
@@ -643,7 +643,7 @@ pub(crate) fn builtin_print_preprocess(
 /// (window-adjust-process-window-size-smallest PROCESS WINDOW) -> nil
 /// (format-network-address ADDRESS &optional OMIT-PORT) -> string-or-nil
 pub(crate) fn builtin_format_network_address(
-    _eval: &mut super::super::eval::Context,
+    _eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_format_network_address_impl(args)
@@ -694,7 +694,7 @@ pub(crate) fn builtin_format_network_address_impl(args: Vec<Value>) -> EvalResul
 
 /// (network-interface-list &optional FULL FAMILY) -> interface-list
 pub(crate) fn builtin_network_interface_list(
-    _eval: &mut super::super::eval::Context,
+    _eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_network_interface_list_impl(args)
@@ -758,7 +758,7 @@ pub(crate) fn builtin_network_interface_list_impl(args: Vec<Value>) -> EvalResul
 
 /// (network-interface-info IFNAME) -> interface-info-or-nil
 pub(crate) fn builtin_network_interface_info(
-    _eval: &mut super::super::eval::Context,
+    _eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_network_interface_info_impl(args)
@@ -816,7 +816,7 @@ pub(crate) fn builtin_network_interface_info_impl(args: Vec<Value>) -> EvalResul
 
 /// (network-lookup-address-info NAME &optional FAMILY HINTS) -> address-list
 pub(crate) fn builtin_network_lookup_address_info(
-    _eval: &mut super::super::eval::Context,
+    _eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_network_lookup_address_info_impl(args)
@@ -860,7 +860,7 @@ pub(crate) fn builtin_network_lookup_address_info_impl(args: Vec<Value>) -> Eval
 
 /// (signal-names) -> list-of-signal-name-strings
 pub(crate) fn builtin_signal_names(
-    _eval: &mut super::super::eval::Context,
+    _eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_signal_names_impl(args)
@@ -884,7 +884,7 @@ pub(crate) fn builtin_signal_names_impl(args: Vec<Value>) -> EvalResult {
 
 /// (list-system-processes) -> process-id-list
 pub(crate) fn builtin_list_system_processes(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("list-system-processes", &args, 0)?;
@@ -912,7 +912,7 @@ pub(crate) fn builtin_list_system_processes_impl(args: Vec<Value>) -> EvalResult
 
 /// (num-processors &optional QUERY) -> integer
 pub(crate) fn builtin_num_processors(
-    _eval: &mut super::super::eval::Context,
+    _eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_num_processors_impl(args)
@@ -1047,7 +1047,7 @@ fn client_local_contact(contact: Value, fd: std::os::fd::RawFd) -> EvalResult {
 /// Extracted verbatim from builtin_make_network_process.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn connect_network_process_at_explicit_address(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     explicit_address: Value,
     remote_address_value: Value,
     name: LispString,
@@ -1828,7 +1828,7 @@ pub(super) fn connect_network_process_at_explicit_address(
 /// Extracted verbatim from builtin_make_network_process.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn connect_datagram_network_process(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     family: NetworkProcessFamily,
     host: Option<String>,
     service: Value,
@@ -1970,7 +1970,7 @@ pub(super) fn connect_datagram_network_process(
 /// verbatim from builtin_make_network_process.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn listen_stream_network_process(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     family: NetworkProcessFamily,
     host: Option<String>,
     service: Value,
@@ -2058,7 +2058,7 @@ pub(super) fn listen_stream_network_process(
 #[allow(clippy::too_many_arguments)]
 #[allow(unused_variables)] // family/host_value feed cfg(unix)-gated arms
 pub(super) fn connect_local_socket_process(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     family: NetworkProcessFamily,
     host_value: Value,
     service: Value,
@@ -2091,7 +2091,7 @@ pub(super) fn connect_local_socket_process(
     #[cfg(unix)]
     {
         let service_path = crate::emacs_core::fileio::lisp_file_name_to_path_buf(
-            super::super::builtins::expect_lisp_string(&service)?,
+            neovm_eval::emacs_core::builtins::expect_lisp_string(&service)?,
         );
         if !host_value.is_nil() {
             contact = process_contact_plist_put(contact, ProcessKeyword::Host.value(), Value::NIL)?;
@@ -2518,7 +2518,7 @@ pub(super) fn connect_local_socket_process(
 }
 
 pub(crate) fn builtin_make_network_process(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     if args.is_empty() {
@@ -2949,7 +2949,7 @@ pub(crate) fn builtin_make_network_process(
 
 /// Install the output descriptor before a newly created process is exposed.
 fn initialize_created_process_output(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     result: EvalResult,
 ) -> EvalResult {
     let value = result?;
@@ -2975,7 +2975,7 @@ fn initialize_created_process_output(
 
 /// (make-pipe-process &rest ARGS) -> process-or-nil
 pub(crate) fn builtin_make_pipe_process(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     let symbol_mode = eval.symbol_mode();
@@ -2996,7 +2996,7 @@ pub(crate) fn builtin_make_pipe_process(
 /// Capture the dynamic coding variables the way GNU reads them: at the moment
 /// the primitive runs, in the buffer that is current then.
 pub(super) fn read_connection_process_coding_variables(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
 ) -> ConnectionProcessCodingVariables {
     ConnectionProcessCodingVariables {
         coding_system_for_read: eval.visible_variable_value_or_nil("coding-system-for-read"),
@@ -3140,7 +3140,7 @@ pub(crate) fn builtin_make_pipe_process_impl(
 
 /// (make-serial-process &rest ARGS) -> process-or-nil
 pub(crate) fn builtin_make_serial_process(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     let symbol_mode = eval.symbol_mode();
@@ -3207,7 +3207,8 @@ pub(crate) fn builtin_make_serial_process_impl(
                 if value.is_nil() {
                     port = None;
                 } else {
-                    let string = super::super::builtins::expect_lisp_string(&value)?.clone();
+                    let string =
+                        neovm_eval::emacs_core::builtins::expect_lisp_string(&value)?.clone();
                     port = Some(value);
                     port_name = Some(string);
                 }
@@ -3311,7 +3312,7 @@ pub(crate) fn builtin_make_serial_process_impl(
 
 /// (serial-process-configure &rest ARGS) -> nil
 pub(crate) fn builtin_serial_process_configure(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_serial_process_configure_impl(&mut eval.processes, &eval.edit.buffers, args)
@@ -3367,7 +3368,7 @@ pub(crate) fn builtin_serial_process_configure_impl(
 
 /// (set-network-process-option PROCESS OPTION VALUE &optional NO-ERROR) -> t-or-nil
 pub(crate) fn builtin_set_network_process_option(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     if (3..=4).contains(&args.len())
@@ -3456,7 +3457,7 @@ pub(crate) fn builtin_set_network_process_option_impl(
 /// Runs the command synchronously using `std::process::Command`, captures
 /// output.  Returns the exit code as an integer.
 pub(crate) fn builtin_call_process(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     super::super::callproc::builtin_call_process(eval, args)
@@ -3465,7 +3466,7 @@ pub(crate) fn builtin_call_process(
 /// (call-process-shell-command COMMAND &optional INFILE DESTINATION DISPLAY &rest ARGS)
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) fn builtin_call_process_shell_command(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     super::super::callproc::builtin_call_process_shell_command(eval, args)
@@ -3474,7 +3475,7 @@ pub(crate) fn builtin_call_process_shell_command(
 /// (process-file PROGRAM &optional INFILE DESTINATION DISPLAY &rest ARGS)
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) fn builtin_process_file(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     super::super::callproc::builtin_process_file(eval, args)
@@ -3483,7 +3484,7 @@ pub(crate) fn builtin_process_file(
 /// (process-file-shell-command COMMAND &optional INFILE DESTINATION DISPLAY &rest ARGS)
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) fn builtin_process_file_shell_command(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     super::super::callproc::builtin_process_file_shell_command(eval, args)
@@ -3492,7 +3493,7 @@ pub(crate) fn builtin_process_file_shell_command(
 /// (process-lines PROGRAM &rest ARGS) -> list of lines
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) fn builtin_process_lines(
-    _eval: &mut super::super::eval::Context,
+    _eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     super::super::callproc::builtin_process_lines(_eval, args)
@@ -3501,7 +3502,7 @@ pub(crate) fn builtin_process_lines(
 /// (process-lines-ignore-status PROGRAM &rest ARGS) -> list of lines
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) fn builtin_process_lines_ignore_status(
-    _eval: &mut super::super::eval::Context,
+    _eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     super::super::callproc::builtin_process_lines_ignore_status(_eval, args)
@@ -3510,7 +3511,7 @@ pub(crate) fn builtin_process_lines_ignore_status(
 /// (process-lines-handling-status PROGRAM STATUS-HANDLER &rest ARGS) -> list of lines
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) fn builtin_process_lines_handling_status(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     super::super::callproc::builtin_process_lines_handling_status(eval, args)
@@ -3520,7 +3521,7 @@ pub(crate) fn builtin_process_lines_handling_status(
 ///
 /// Pipes buffer region from START to END through PROGRAM.
 pub(crate) fn builtin_call_process_region(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     super::super::callproc::builtin_call_process_region(eval, args)
@@ -3528,7 +3529,7 @@ pub(crate) fn builtin_call_process_region(
 
 /// (delete-process PROCESS) -> nil
 pub(crate) fn builtin_delete_process(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     if args.len() > 1 {
@@ -3599,7 +3600,7 @@ pub(crate) fn builtin_delete_process_impl(
 
 /// (continue-process &optional PROCESS CURRENT-GROUP) -> process-or-nil
 pub(crate) fn builtin_continue_process(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     if args.len() > 2 {
@@ -3685,7 +3686,7 @@ pub(crate) fn builtin_continue_process_impl(
 
 /// (interrupt-process &optional PROCESS CURRENT-GROUP) -> process-or-nil
 pub(crate) fn builtin_interrupt_process(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     if args.len() > 2 {
@@ -3709,7 +3710,7 @@ pub(crate) fn builtin_interrupt_process(
 
 /// (kill-process &optional PROCESS CURRENT-GROUP) -> process-or-nil
 pub(crate) fn builtin_kill_process(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_kill_process_impl(&mut eval.processes, &eval.edit.buffers, args)
@@ -3740,7 +3741,7 @@ pub(crate) fn builtin_kill_process_impl(
 
 /// (signal-process PROCESS SIGNAL &optional CURRENT-GROUP) -> int-or-nil
 pub(crate) fn builtin_signal_process(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_min_args("signal-process", &args, 2)?;
@@ -3821,7 +3822,7 @@ pub(crate) fn builtin_signal_process_impl(
 
 /// (stop-process &optional PROCESS CURRENT-GROUP) -> process-or-nil
 pub(crate) fn builtin_stop_process(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_stop_process_impl(&mut eval.processes, &eval.edit.buffers, args)
@@ -3864,7 +3865,7 @@ pub(crate) fn builtin_stop_process_impl(
 
 /// (quit-process &optional PROCESS CURRENT-GROUP) -> process-or-nil
 pub(crate) fn builtin_quit_process(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_quit_process_impl(&mut eval.processes, &eval.edit.buffers, args)
@@ -3899,7 +3900,7 @@ pub(crate) fn builtin_quit_process_impl(
 
 /// (process-attributes PID) -> alist-or-nil
 pub(crate) fn builtin_process_attributes(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("process-attributes", &args, 1)?;
@@ -4129,7 +4130,7 @@ pub(super) fn process_id_max() -> i64 {
 
 /// (make-process &rest ARGS) -> process-or-nil
 pub(crate) fn builtin_make_process(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     let symbol_mode = eval.symbol_mode();
@@ -4197,7 +4198,7 @@ pub(crate) fn builtin_make_process(
 /// (measured: an entry keyed on the name does not fire).  GNU guards the call
 /// the same way at src/process.c:1970.
 pub(super) fn make_process_coding_environment(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: &[Value],
 ) -> Result<MakeProcessCodingEnvironment, Flow> {
     let mut env = MakeProcessCodingEnvironment {
@@ -4244,7 +4245,10 @@ pub(super) fn make_process_coding_environment(
     for value in &operation_args {
         eval.push_specpdl_root(*value);
     }
-    let result = super::super::builtins::builtin_find_operation_coding_system(eval, operation_args);
+    let result = neovm_eval::emacs_core::builtins::builtin_find_operation_coding_system(
+        eval,
+        operation_args,
+    );
     eval.restore_specpdl_roots(roots);
     env.operation_coding_system = result?;
     Ok(env)
@@ -4692,7 +4696,7 @@ pub(super) fn accept_process_output_positive_timeout(args: &[Value]) -> Option<D
 
 /// Encode a subprocess write with the current evaluator's coding definitions.
 fn encode_process_send_input_in_context(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     id: ProcessId,
     input: LispString,
 ) -> Result<LispString, Flow> {
@@ -4728,7 +4732,7 @@ fn encode_process_send_input_in_context(
 
 /// (process-send-string PROCESS STRING) -> nil
 pub(crate) fn builtin_process_send_string(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("process-send-string", &args, 2)?;
@@ -4809,7 +4813,7 @@ pub(crate) fn builtin_process_send_string_impl(
 
 /// (process-status PROCESS) -> symbol
 pub(crate) fn builtin_process_status(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_process_status_impl(&mut eval.processes, &eval.edit.buffers, args)
@@ -4839,7 +4843,7 @@ pub(crate) fn builtin_process_status_impl(
 
 /// (process-exit-status PROCESS) -> integer
 pub(crate) fn builtin_process_exit_status(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_process_exit_status_impl(&mut eval.processes, args)
@@ -4882,7 +4886,7 @@ pub(crate) fn builtin_process_exit_status_impl(
 
 /// (process-list) -> list of process ids
 pub(crate) fn builtin_process_list(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_process_list_impl(&eval.processes, args)
@@ -4900,7 +4904,7 @@ pub(crate) fn builtin_process_list_impl(
 
 /// (process-name PROCESS) -> string
 pub(crate) fn builtin_process_name(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_process_name_impl(&eval.processes, args)
@@ -4920,7 +4924,7 @@ pub(crate) fn builtin_process_name_impl(
 
 /// (process-buffer PROCESS) -> buffer or nil
 pub(crate) fn builtin_process_buffer(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_process_buffer_impl(&eval.processes, args)
@@ -4940,7 +4944,7 @@ pub(crate) fn builtin_process_buffer_impl(
 
 /// (process-coding-system PROCESS) -> (decode . encode)
 pub(crate) fn builtin_process_coding_system(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_process_coding_system_impl(&eval.processes, args)
@@ -4963,7 +4967,7 @@ pub(crate) fn builtin_process_coding_system_impl(
 
 /// (process-datagram-address PROCESS) -> address-or-nil
 pub(crate) fn builtin_process_datagram_address(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     if args.len() == 1
@@ -4995,7 +4999,7 @@ pub(crate) fn builtin_process_datagram_address_impl(
 
 /// (process-inherit-coding-system-flag PROCESS) -> bool
 pub(crate) fn builtin_process_inherit_coding_system_flag(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_process_inherit_coding_system_flag_impl(&eval.processes, args)
@@ -5018,7 +5022,7 @@ pub(crate) fn builtin_process_inherit_coding_system_flag_impl(
 
 /// (set-process-buffer PROCESS BUFFER) -> BUFFER
 pub(crate) fn builtin_set_process_buffer(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_set_process_buffer_impl(&mut eval.processes, &mut eval.edit.buffers, args)
@@ -5061,7 +5065,7 @@ pub(crate) fn builtin_set_process_buffer_impl(
 
 /// (set-process-coding-system PROCESS &optional DECODING ENCODING) -> nil
 pub(crate) fn builtin_set_process_coding_system(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     let symbol_mode = eval.symbol_mode();
@@ -5129,7 +5133,7 @@ pub(crate) fn builtin_set_process_coding_system_impl(
 
 /// (set-process-datagram-address PROCESS ADDRESS) -> nil
 pub(crate) fn builtin_set_process_datagram_address(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     if args.len() == 2
@@ -5188,7 +5192,7 @@ pub(crate) fn builtin_set_process_datagram_address_impl(
 
 /// (set-process-inherit-coding-system-flag PROCESS FLAG) -> FLAG
 pub(crate) fn builtin_set_process_inherit_coding_system_flag(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_set_process_inherit_coding_system_flag_impl(&mut eval.processes, args)
@@ -5212,7 +5216,7 @@ pub(crate) fn builtin_set_process_inherit_coding_system_flag_impl(
 
 /// (set-process-thread PROCESS THREAD) -> thread-or-nil
 pub(crate) fn builtin_set_process_thread(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_set_process_thread_impl(&mut eval.processes, &eval.threads, args)
@@ -5244,7 +5248,7 @@ pub(crate) fn builtin_set_process_thread_impl(
 
 /// (set-process-window-size PROCESS HEIGHT WIDTH) -> t-or-nil
 pub(crate) fn builtin_set_process_window_size(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_set_process_window_size_impl(&mut eval.processes, args)
@@ -5288,7 +5292,7 @@ pub(crate) fn builtin_set_process_window_size_impl(
 /// (process-menu-visit-buffer LINE) -> nil
 /// (process-tty-name PROCESS &optional STREAM) -> string-or-nil
 pub(crate) fn builtin_process_tty_name(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_process_tty_name_impl(&eval.processes, args)
@@ -5350,7 +5354,7 @@ pub(crate) fn builtin_process_tty_name_impl(
 
 /// (process-mark PROCESS) -> marker
 pub(crate) fn builtin_process_mark(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_process_mark_impl(&eval.processes, &eval.edit.buffers, args)
@@ -5374,7 +5378,7 @@ pub(crate) fn builtin_process_mark_impl(
 
 /// (process-type PROCESS) -> symbol
 pub(crate) fn builtin_process_type(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_process_type_impl(&eval.processes, &eval.edit.buffers, args)
@@ -5398,7 +5402,7 @@ pub(crate) fn builtin_process_type_impl(
 
 /// (process-thread PROCESS) -> object-or-nil
 pub(crate) fn builtin_process_thread(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_process_thread_impl(&eval.processes, args)
@@ -5421,7 +5425,7 @@ pub(crate) fn builtin_process_thread_impl(
 
 /// (process-send-region PROCESS START END) -> nil
 pub(crate) fn builtin_process_send_region(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("process-send-region", &args, 3)?;
@@ -5518,7 +5522,7 @@ pub(crate) fn builtin_process_send_region_impl(
 
 /// (process-send-eof &optional PROCESS) -> process-or-nil
 pub(crate) fn builtin_process_send_eof(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     if args.len() <= 1 {
@@ -5683,7 +5687,7 @@ pub(super) fn process_send_eof_liveness_gate(
 
 /// (process-running-child-p &optional PROCESS) -> bool
 pub(crate) fn builtin_process_running_child_p(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_process_running_child_p_impl(&eval.processes, &eval.edit.buffers, args)
@@ -5778,7 +5782,7 @@ pub(crate) fn builtin_process_running_child_p_impl(
 
 /// (accept-process-output &optional PROCESS SECONDS MILLISECS JUST-THIS-ONE) -> bool
 pub(crate) fn builtin_accept_process_output(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     let Some(request) = parse_accept_process_output_request(&mut eval.processes, &args)? else {
@@ -5793,7 +5797,7 @@ pub(crate) fn builtin_accept_process_output(
 
 /// (get-process NAME) -> process-or-nil
 pub(crate) fn builtin_get_process(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_get_process_impl(&eval.processes, args)
@@ -5815,7 +5819,7 @@ pub(crate) fn builtin_get_process_impl(processes: &ProcessManager, args: Vec<Val
 
 /// (get-buffer-process BUFFER-OR-NAME) -> process-or-nil
 pub(crate) fn builtin_get_buffer_process(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_get_buffer_process_impl(&eval.edit.buffers, &eval.processes, args)
@@ -5838,7 +5842,7 @@ pub(crate) fn builtin_get_buffer_process_impl(
 
 /// (processp OBJECT) -> bool
 pub(crate) fn builtin_processp(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_processp_impl(&eval.processes, args)
@@ -5876,7 +5880,7 @@ pub(crate) fn builtin_process_live_p_impl(
 
 /// (process-id PROCESS) -> integer
 pub(crate) fn builtin_process_id(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_process_id_impl(&eval.processes, args)
@@ -5904,7 +5908,7 @@ pub(crate) fn builtin_process_id_impl(processes: &ProcessManager, args: Vec<Valu
 
 /// (process-query-on-exit-flag PROCESS) -> bool
 pub(crate) fn builtin_process_query_on_exit_flag(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_process_query_on_exit_flag_impl(&eval.processes, args)
@@ -5927,7 +5931,7 @@ pub(crate) fn builtin_process_query_on_exit_flag_impl(
 
 /// (set-process-query-on-exit-flag PROCESS FLAG) -> FLAG
 pub(crate) fn builtin_set_process_query_on_exit_flag(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_set_process_query_on_exit_flag_impl(&mut eval.processes, args)
@@ -5952,7 +5956,7 @@ pub(crate) fn builtin_set_process_query_on_exit_flag_impl(
 
 /// (process-command PROCESS) -> list
 pub(crate) fn builtin_process_command(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_process_command_impl(&eval.processes, args)
@@ -5975,7 +5979,7 @@ pub(crate) fn builtin_process_command_impl(
 
 /// (process-contact PROCESS &optional KEY NO-BLOCK) -> value
 pub(crate) fn builtin_process_contact(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     if (1..=3).contains(&args.len()) {
@@ -6062,7 +6066,7 @@ pub(crate) fn builtin_process_contact_impl(
 
 /// (process-filter PROCESS) -> function
 pub(crate) fn builtin_process_filter(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_process_filter_impl(&eval.processes, args)
@@ -6085,7 +6089,7 @@ pub(crate) fn builtin_process_filter_impl(
 
 /// (set-process-filter PROCESS FILTER) -> FILTER
 pub(crate) fn builtin_set_process_filter(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_set_process_filter_impl(&mut eval.processes, args)
@@ -6125,7 +6129,7 @@ pub(crate) fn builtin_set_process_filter_impl(
 
 /// (process-sentinel PROCESS) -> function
 pub(crate) fn builtin_process_sentinel(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_process_sentinel_impl(&eval.processes, args)
@@ -6148,7 +6152,7 @@ pub(crate) fn builtin_process_sentinel_impl(
 
 /// (set-process-sentinel PROCESS SENTINEL) -> SENTINEL
 pub(crate) fn builtin_set_process_sentinel(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_set_process_sentinel_impl(&mut eval.processes, args)
@@ -6181,7 +6185,7 @@ pub(crate) fn builtin_set_process_sentinel_impl(
 
 /// (process-plist PROCESS) -> plist
 pub(crate) fn builtin_process_plist(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_process_plist_impl(&eval.processes, args)
@@ -6204,7 +6208,7 @@ pub(crate) fn builtin_process_plist_impl(
 
 /// (set-process-plist PROCESS PLIST) -> plist
 pub(crate) fn builtin_set_process_plist(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_set_process_plist_impl(&mut eval.processes, args)
@@ -6238,7 +6242,7 @@ pub(crate) fn builtin_set_process_plist_impl(
 
 /// (getenv-internal VARIABLE &optional ENV) -> string or nil
 pub(crate) fn builtin_getenv_internal(
-    eval: &mut super::super::eval::Context,
+    eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_min_args("getenv-internal", &args, 1)?;

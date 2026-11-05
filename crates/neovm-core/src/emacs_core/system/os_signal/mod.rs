@@ -846,7 +846,7 @@ pub(crate) fn drain_pending_os_signals(
         && eval.shutdown_request().is_none()
         && !eval.shutdown_in_progress
     {
-        crate::emacs_core::builtins::symbols::builtin_kill_emacs(
+        neovm_eval::emacs_core::builtins::symbols::builtin_kill_emacs(
             eval,
             vec![crate::emacs_core::Value::fixnum(i64::from(sig))],
         )?;
