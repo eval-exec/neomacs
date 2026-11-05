@@ -250,6 +250,7 @@ impl SymbolFlags {
     /// The raw byte, for a caller that packs it into a wider word (the
     /// symbol's write window).
     #[inline(always)]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn bits(&self) -> u8 {
         self.load()
     }

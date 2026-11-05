@@ -488,6 +488,7 @@ impl MemorySignalBinding {
         }
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn original(self) -> Value {
         self.original
     }

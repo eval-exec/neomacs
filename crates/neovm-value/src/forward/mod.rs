@@ -1085,6 +1085,7 @@ static_assertions::assert_impl_all!(LispKboardObjFwd: std::fmt::Debug);
 static_assertions::assert_not_impl_any!(LispKboardObjFwd: Copy, Clone, Send, Sync);
 
 impl LispKboardObjFwd {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn use_selected_keyboard(&self) {
         let mut keyboards = self.keyboards.lock().unwrap();
         keyboards.get_or_insert_with(|| SelectedKeyboardSlots {

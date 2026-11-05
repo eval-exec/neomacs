@@ -1473,6 +1473,7 @@ impl LispString {
     /// borrowed bytes stay mapped; for pdump image strings that is the
     /// process lifetime (the same contract the aliased string itself relies
     /// on).
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn borrowed_alias(&self) -> Option<LispString> {
         if self.storage_capacity != 0 || self.has_intervals() {
             return None;

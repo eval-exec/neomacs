@@ -211,6 +211,7 @@ fn cons_observed(address: usize) -> bool {
 /// observed again can conservatively survive another mutator's old ledger;
 /// certificates still require the caller to retain their original owners.
 #[inline]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn collection_observed_metadata(bits: usize) -> bool {
     let address = bits & !TAG_MASK;
     if address == 0 {

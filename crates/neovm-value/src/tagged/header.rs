@@ -695,6 +695,7 @@ impl GcHeader {
     /// Clear a dying object's mark under collector/mutator exclusion. No
     /// observation or collection write to this object may still be in flight.
     #[inline]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn clear_collection_observed(&self) {
         let cleared = self.collection_observed()
             && crate::tagged::gc::clear_noncons_collection_observed_metadata(
@@ -726,6 +727,7 @@ impl GcHeader {
     /// Permanent implies tenured, so under [`CollectionScope::Young`] this is
     /// exactly the `tenured` byte.
     #[inline(always)]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn black_by_generation(&self, scope: CollectionScope) -> bool {
         match scope {
             CollectionScope::Young => self.tenured,
