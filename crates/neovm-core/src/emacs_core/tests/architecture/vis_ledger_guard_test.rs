@@ -4085,6 +4085,15 @@ fn auth_fence_file(crate_name: &str) -> Option<(&'static str, &'static [&'static
             "crates/neovm-eval/src/test_support.rs",
             &["test_support", "authority"],
         )),
+        // The display fence is the cfg-gated trait surface on `window`: the
+        // three signed rows' paths are `neovm_display::window::DisplayFrameExt
+        // ::<method>`, defined in window/display_ext.rs. The fence module is
+        // the `window` module itself (the trait re-export is not a second
+        // route: the signed paths name the trait's methods, not the trait).
+        "neovm-display" => Some((
+            "crates/neovm-display/src/window/display_ext.rs",
+            &["window"],
+        )),
         _ => None,
     }
 }
@@ -4285,6 +4294,14 @@ fn auth_declares_public(file: &Path, leaf: &str) -> Result<bool, String> {
                 }
                 syn::Item::Enum(item) => {
                     item.ident == leaf && matches!(item.vis, syn::Visibility::Public(_))
+                }
+                // Trait methods carry no `pub` keyword; a method of a public
+                // trait is a public path (the display fence's shape).
+                syn::Item::Trait(item) => {
+                    matches!(item.vis, syn::Visibility::Public(_))
+                        && item.items.iter().any(|member| {
+                            matches!(member, syn::TraitItem::Fn(function) if function.sig.ident == leaf)
+                        })
                 }
                 syn::Item::Const(item) => {
                     item.ident == leaf && matches!(item.vis, syn::Visibility::Public(_))
@@ -4740,6 +4757,16 @@ fn auth_public_use_violation(
                                 if canonical == fence_file.as_path() {
                                     continue;
                                 }
+                                // The display fence IS the cfg-gated public
+                                // trait surface (an original-path fence):
+                                // there is no separate private original to
+                                // protect, and re-exporting the production
+                                // window module is the crate's normal public
+                                // architecture. Exclusivity applies to the
+                                // test_support-module fences (value/eval).
+                                if fence_name == "neovm-display" {
+                                    continue;
+                                }
                                 // A named import re-exports exactly `rest` (the
                                 // imported module or item); a glob re-exports
                                 // the contents of the module `rest`.
@@ -4879,7 +4906,14 @@ fn authority_public_paths_violation(workspace: &Path, rows: &[AuthRow]) -> Resul
                 // verified against that module instead of the fence file, and
                 // the fence must not expose the item as a second route.
                 let item_parts: Vec<&str> = row.item.split("::").collect();
-                let method_row = item_parts.len() >= 2;
+                // A method/associated-function row has a TYPE-like penultimate
+                // segment; a lowercase penultimate segment is a module path
+                // (e.g. a test-only `module::function` fence).
+                let method_row = item_parts.len() >= 2
+                    && item_parts[item_parts.len() - 2]
+                        .chars()
+                        .next()
+                        .is_some_and(|first| first.is_ascii_uppercase());
                 let owner = if method_row {
                     item_parts[item_parts.len() - 2]
                 } else {
@@ -4943,9 +4977,14 @@ fn authority_public_paths_violation(workspace: &Path, rows: &[AuthRow]) -> Resul
                         }
                         original.push_str("::");
                         original.push_str(leaf);
-                        return Err(format!(
-                            "AUTHORITY_PATHS {expected}: the defining item is also publicly reachable at {original}"
-                        ));
+                        // An original-path row's signed path IS the item's
+                        // own module path; only a DIFFERENT public path is a
+                        // second route.
+                        if original != expected {
+                            return Err(format!(
+                                "AUTHORITY_PATHS {expected}: the defining item is also publicly reachable at {original}"
+                            ));
+                        }
                     }
                 }
             }
