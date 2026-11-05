@@ -54,20 +54,20 @@ fn canonical_pair_tracks_function_writes_and_restored_clocks() {
     let restored =
         Obarray::from_dump(Vec::new(), Vec::new(), Vec::new(), 777).expect("empty dump restores");
     assert_eq!(restored.dispatch_cells_function_epoch_for_test(), 777);
-    assert!(restored.dispatch_cells.debug_on_next_call_armed_fast());
+    assert!(restored.debug_on_next_call_armed_fast());
 }
 
 #[test]
 fn canonical_pair_pointer_from_allocation_root_survives_cold_replacement() {
-    let storage = Box::new(UnsafeCell::new(Obarray::new()));
+    let storage = Box::new(UnsafeCell::new(
+        Obarray::from_dump(Vec::new(), Vec::new(), Vec::new(), 7).expect("empty dump restores"),
+    ));
     let manager = storage.get();
     // SAFETY: the designator comes directly from the final UnsafeCell allocation
     // root, not a temporary field reference; storage owns its lifetime.
     let cells = unsafe { std::ptr::addr_of_mut!((*manager).dispatch_cells) };
     let cells = NonNull::new(cells).expect("live allocation subfield");
-    // SAFETY: one owner, short exclusive phase, no canonical reader is live.
-    unsafe { &mut *manager }.set_function_epoch_for_test(7);
-    // SAFETY: the completed mutable phase precedes this canonical read.
+    // SAFETY: the construction phase precedes this canonical read.
     assert_eq!(unsafe { cells.as_ref() }.function_epoch(), 7);
     // SAFETY: cold full replacement retains the allocation and field address;
     // no generated symbol pointer or manager reference remains active.
@@ -105,24 +105,24 @@ fn canonical_pair_preserves_completed_writer_updates_after_rust_panic() {
 fn canonical_pair_follows_live_boolean_and_clone_owns_its_descriptor() {
     let mut obarray = Obarray::new();
     let id = intern("debug-on-next-call");
-    assert!(obarray.dispatch_cells.debug_on_next_call_armed_fast());
+    assert!(obarray.debug_on_next_call_armed_fast());
     assert!(obarray.debug_on_next_call_bool_fwd(id).is_none());
-    assert!(!obarray.dispatch_cells.debug_on_next_call_armed_fast());
+    assert!(!obarray.debug_on_next_call_armed_fast());
     obarray.define_bool_variable("debug-on-next-call", false, ByteBooleanVars::Listed);
     let source = obarray.bool_forwarder(id).expect("installed Boolean cell");
     source.set(true);
-    assert!(obarray.dispatch_cells.debug_on_next_call_armed_fast());
+    assert!(obarray.debug_on_next_call_armed_fast());
     let mut cloned = obarray.clone();
-    assert!(cloned.dispatch_cells.debug_on_next_call_armed_fast());
+    assert!(cloned.debug_on_next_call_armed_fast());
     let clone_cell = cloned
         .debug_on_next_call_bool_fwd(id)
         .expect("clone resolves its own forwarded cell");
     assert!(!std::ptr::eq(source, clone_cell));
     clone_cell.set(false);
-    assert!(obarray.dispatch_cells.debug_on_next_call_armed_fast());
-    assert!(!cloned.dispatch_cells.debug_on_next_call_armed_fast());
+    assert!(obarray.debug_on_next_call_armed_fast());
+    assert!(!cloned.debug_on_next_call_armed_fast());
     source.set(false);
-    assert!(!obarray.dispatch_cells.debug_on_next_call_armed_fast());
+    assert!(!obarray.debug_on_next_call_armed_fast());
 }
 
 #[test]
@@ -130,17 +130,17 @@ fn canonical_pair_debugger_discovery_is_read_only_until_publication() {
     crate::test_utils::init_test_tracing();
     let mut obarray = Obarray::new();
     let id = intern("debug-on-next-call");
-    let before = obarray.dispatch_cells.admission_debugger();
+    let before = obarray.admission_debugger_for_test();
     let interrupted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         assert!(obarray.discover_debug_on_next_call_descriptor(id).is_none());
-        assert_eq!(obarray.dispatch_cells.admission_debugger(), before);
+        assert_eq!(obarray.admission_debugger_for_test(), before);
         panic!("permitted panic after pure discovery, before publication");
     }));
     assert!(interrupted.is_err());
-    assert_eq!(obarray.dispatch_cells.admission_debugger(), before);
+    assert_eq!(obarray.admission_debugger_for_test(), before);
     assert!(obarray.debug_on_next_call_armed_fast());
 
     assert!(obarray.debug_on_next_call_bool_fwd(id).is_none());
     assert!(!obarray.debug_on_next_call_armed_fast());
-    assert_ne!(obarray.dispatch_cells.admission_debugger(), before);
+    assert_ne!(obarray.admission_debugger_for_test(), before);
 }

@@ -915,6 +915,7 @@ impl CanonicalDispatchCells {
     }
 
     #[inline(always)]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn function_epoch(&self) -> u64 {
         self.function_epoch.load(Ordering::Acquire)
     }
@@ -940,6 +941,7 @@ impl CanonicalDispatchCells {
     }
 
     #[inline(always)]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn debug_on_next_call_armed_fast(&self) -> bool {
         self.debug_on_next_call_cell_ref().get()
     }
@@ -2880,6 +2882,16 @@ impl Obarray {
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn debug_on_next_call_armed_fast(&self) -> bool {
         self.debug_on_next_call_cell_ref().get()
+    }
+
+    /// Test-support: the canonical debugger descriptor identity as a copied
+    /// observer on the Obarray (the dispatch cells have interior mutability,
+    /// so the peer fallback is a copied observer, not a borrowed `&cells`).
+    #[inline(always)]
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn admission_debugger_for_test(&self) -> crate::symbol::DebuggerDescriptor {
+        self.dispatch_cells.admission_debugger()
     }
 
     /// The canonical cell the pointer names: a leaked descriptor or stand-in.
