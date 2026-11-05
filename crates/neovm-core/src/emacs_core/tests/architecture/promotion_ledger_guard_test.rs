@@ -1317,3 +1317,128 @@ fn architecture_pc11_mutation_reexport_keys_and_source_ambiguity_are_strict() {
         "B3_REEXPORT_RESTORED"
     );
 }
+
+// ---------------------------------------------------------------------------
+// S-1 (peer 06:4xZ): a SEAL row's mint item may never appear in any ledger.
+//
+// The regression: `EvalHooksInstalled` kept its SEAL row while a K1 `mint`
+// row in the same module promoted the private constructor. The rule is
+// fail-closed over every promotion ledger and every TEST-SUPPORT-VIS ledger:
+// a `mint` leaf in a sealed module (promotion) or sealed defining file (VIS)
+// is a violation.
+// ---------------------------------------------------------------------------
+
+/// Raw-TSV scan so it works for every ledger kind spelling, independent of
+/// the (stricter) `Kind` parser used by the bijection guard.
+fn seal_mint_violation(promotions: &[&str], vis: &[&str]) -> Result<(), String> {
+    let mut sealed_modules = BTreeSet::new();
+    let mut sealed_files = BTreeSet::new();
+    for text in promotions {
+        for line in text.lines().skip(1) {
+            let fields: Vec<&str> = line.split('\t').collect();
+            if fields.len() != 6 {
+                continue;
+            }
+            if fields[1] == "seal" {
+                sealed_modules.insert(fields[4].to_string());
+                sealed_files.insert(
+                    fields[3]
+                        .rsplit_once(':')
+                        .map(|(file, _)| file.to_string())
+                        .unwrap_or_default(),
+                );
+            }
+        }
+    }
+    for (name, text) in promotions.iter().enumerate() {
+        for (index, line) in text.lines().enumerate().skip(1) {
+            let fields: Vec<&str> = line.split('\t').collect();
+            if fields.len() != 6 {
+                continue;
+            }
+            let leaf = fields[0].rsplit("::").next().unwrap_or_default();
+            if leaf == "mint" && sealed_modules.contains(fields[4]) {
+                return Err(format!(
+                    "B3_SEAL_MINT_ROW: promotion ledger {name} line {} promotes `mint` in sealed module {}",
+                    index + 2,
+                    fields[4]
+                ));
+            }
+        }
+    }
+    for (name, text) in vis.iter().enumerate() {
+        for (index, line) in text.lines().enumerate().skip(1) {
+            let fields: Vec<&str> = line.split('\t').collect();
+            if fields.len() < 6 {
+                continue;
+            }
+            let leaf = fields[1].rsplit("::").next().unwrap_or_default();
+            if leaf == "mint" && sealed_files.contains(fields[3]) {
+                return Err(format!(
+                    "B3_SEAL_MINT_ROW: VIS ledger {name} line {} widens `mint` in sealed file {}",
+                    index + 2,
+                    fields[3]
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn read_ledger_family(prefix: &str) -> Vec<(String, String)> {
+    let directory = root().join("crates/neovm-core/src/emacs_core/tests/architecture");
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(&directory).expect("B3 ledger directory") {
+        let path = entry.expect("B3 ledger entry").path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if name.starts_with(prefix) && name.ends_with(".tsv") {
+            out.push((
+                name.to_string(),
+                std::fs::read_to_string(&path).expect("B3 ledger read"),
+            ));
+        }
+    }
+    out.sort();
+    out
+}
+
+#[test]
+fn architecture_seal_mint_items_are_never_ledger_rows() {
+    let promotions = read_ledger_family("PROMOTION-LEDGER");
+    let vis = read_ledger_family("TEST-SUPPORT-VIS-");
+    let promotions: Vec<&str> = promotions.iter().map(|(_, text)| text.as_str()).collect();
+    let vis: Vec<&str> = vis.iter().map(|(_, text)| text.as_str()).collect();
+    seal_mint_violation(&promotions, &vis).unwrap_or_else(|error| panic!("{error}"));
+}
+
+#[test]
+fn architecture_mutation_seal_mint_row_is_rejected() {
+    let seal = "item\tkind\told_vis\tfile:line\tmodule\treason\nProof\tseal\t-\tcrates/x/src/proof.rs:10\tm::proof\tSEAL-producer\nProof\tstruct\tprivate\tcrates/x/src/proof.rs:10\tm::proof\tsealed type\n";
+    let mint = "item\tkind\told_vis\tfile:line\tmodule\treason\nmint\tfn\tprivate\tcrates/x/src/proof.rs:11\tm::proof\tconstructor\n";
+    let clean = "item\tkind\told_vis\tfile:line\tmodule\treason\nother\tfn\tprivate\tcrates/x/src/proof.rs:12\tm::proof\tunrelated\n";
+    assert!(seal_mint_violation(&[seal, clean], &[]).is_ok());
+    assert!(
+        seal_mint_violation(&[seal, mint], &[])
+            .unwrap_err()
+            .contains("B3_SEAL_MINT_ROW")
+    );
+    // A mint row in an unsealed module is legal.
+    let loose = "item\tkind\told_vis\tfile:line\tmodule\treason\nmint\tfn\tprivate\tcrates/x/src/other.rs:1\tm::other\tconstructor\n";
+    assert!(seal_mint_violation(&[seal, loose], &[]).is_ok());
+    // The VIS spelling is checked against the sealed defining file.
+    let vis_header = "crate\titem\tkind\tfile\ttests\treason\n";
+    let vis_mint = format!(
+        "{vis_header}neovm-eval\tm::proof::mint\tfn\tcrates/x/src/proof.rs\tsome/test.rs\trow\n"
+    );
+    let vis_clean = format!(
+        "{vis_header}neovm-eval\tm::proof::other\tfn\tcrates/x/src/proof.rs\tsome/test.rs\trow\n"
+    );
+    assert!(seal_mint_violation(&[seal], &[&vis_clean]).is_ok());
+    assert!(
+        seal_mint_violation(&[seal], &[&vis_mint])
+            .unwrap_err()
+            .contains("B3_SEAL_MINT_ROW")
+    );
+}

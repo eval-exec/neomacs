@@ -252,6 +252,9 @@ pub use neovm_value::error;
 #[path = "../../core_test_facades/emacs_core/error.rs"]
 pub mod error;
 pub use neovm_eval::emacs_core::eval;
+#[cfg(test)]
+#[path = "../../core_test_facades/emacs_core/eval.rs"]
+mod eval_tests;
 pub use neovm_value::errors;
 #[cfg(not(test))]
 pub use neovm_value::forward;

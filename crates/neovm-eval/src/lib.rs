@@ -10,6 +10,8 @@ pub mod host_effect;
 /// `test-support`, by core's test build (a dependency crate never has
 /// `cfg(test)` on). See TEST-SUPPORT-DESIGN.md rev 2.
 #[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
+#[cfg(any(test, feature = "test-support"))]
 pub mod test_utils;
 
 // GNU seeds emacs-version from configure.ac's PACKAGE_VERSION; version.el

@@ -173,11 +173,11 @@ impl EvalHookSet {
 pub struct EvalHooksInstalled(());
 
 impl EvalHooksInstalled {
-    /// Mint the proof. Reachable only from this module: the publication
+    /// Mint the proof. Private (S-1): the only callers are the publication
     /// entry (after the last slot) and `Context::hooks_installed` (an
-    /// existing Context implies permanent installation).
-    #[doc(hidden)]
-    pub fn mint() -> Self {
+    /// existing Context implies permanent installation). No crate outside
+    /// this module may forge it.
+    fn mint() -> Self {
         Self(())
     }
 }

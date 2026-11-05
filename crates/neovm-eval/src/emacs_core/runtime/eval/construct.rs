@@ -71,7 +71,7 @@ fn text_perf_record(
 #[derive(Clone, Copy, Debug)]
 pub(super) enum ConstructionSurface {
     Full,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     MinimalVm,
     /// Full context without GNU's initial DEFSYM obarray membership: the
     /// shape of an image dumped before the port seeded the table.
@@ -88,7 +88,7 @@ impl ConstructionSurface {
             Self::Full => true,
             #[cfg(test)]
             Self::LegacyImageWithoutDefsyms => true,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             Self::MinimalVm => false,
         }
     }
@@ -98,7 +98,9 @@ impl ConstructionSurface {
         match self {
             Self::Full => true,
             #[cfg(test)]
-            Self::MinimalVm | Self::LegacyImageWithoutDefsyms => false,
+            Self::LegacyImageWithoutDefsyms => false,
+            #[cfg(any(test, feature = "test-support"))]
+            Self::MinimalVm => false,
         }
     }
 }
@@ -224,9 +226,9 @@ impl Context {
         Self::new(_hooks)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
-    pub fn new_minimal_vm_harness(_hooks: EvalHooksInstalled) -> Self {
+    pub(crate) fn new_minimal_vm_harness(_hooks: EvalHooksInstalled) -> Self {
         // Keep this reduced constructor only for low-level VM/opcode tests
         // that intentionally do not depend on the full builtin surface.
         let mut ev = Self::new_inner(ConstructionSurface::MinimalVm, _hooks);
@@ -253,11 +255,11 @@ impl Context {
         ev.loads_in_progress.clear();
         ev.load_read_cursors.clear();
         ev.last_uncaught_signal_backtrace = None;
-        ev.buffers.reset_for_minimal_runtime();
+        ev.edit.buffers.reset_for_minimal_runtime();
         *ev.xwidgets = super::data::xwidget::XwidgetState::new();
-        ev.last_overlay_modification_hooks.clear();
-        ev.interval_insert_behind_hooks = Value::NIL;
-        ev.interval_insert_in_front_hooks = Value::NIL;
+        ev.edit.last_overlay_modification_hooks_mut().clear();
+        ev.edit.set_interval_insert_behind_hooks(Value::NIL);
+        ev.edit.set_interval_insert_in_front_hooks(Value::NIL);
         ev.match_data = None;
         *ev.processes = ProcessManager::new();
         *ev.watchers = VariableWatcherList::new();
@@ -2671,7 +2673,7 @@ impl Context {
             ConstructionSurface::Full => obarray,
             #[cfg(test)]
             ConstructionSurface::LegacyImageWithoutDefsyms => obarray,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             ConstructionSurface::MinimalVm => Obarray::new(),
         };
         let world = world::WorldStorageBuilder {
