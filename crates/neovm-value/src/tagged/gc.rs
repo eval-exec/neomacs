@@ -2891,7 +2891,6 @@ use alloc_region::RegionBook;
 #[cfg(not(feature = "test-support"))]
 use alloc_region::RegionStats;
 #[cfg(feature = "test-support")]
-#[doc(hidden)]
 pub use alloc_region::RegionStats;
 #[cfg(test)]
 use alloc_region::{CONS_REGION_MAX_CELLS, ConsRegionSource, FLOAT_REGION_MAX_SLOTS};
