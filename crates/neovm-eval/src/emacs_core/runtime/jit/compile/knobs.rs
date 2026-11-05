@@ -1826,7 +1826,7 @@ impl OptAdmit {
     }
 }
 pub(crate) fn jit_opt_admit() -> OptAdmit {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(bits) = OPT_ADMIT_TEST_OVERRIDE.with(|v| v.get()) {
         return bits;
     }
@@ -1843,14 +1843,14 @@ pub(crate) fn jit_opt_admit() -> OptAdmit {
         )
     })
 }
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     /// Configuration only, never Lisp state.
     static OPT_TEST_OVERRIDE: std::cell::Cell<Option<OptMode>> = const { std::cell::Cell::new(None) };
     /// Configuration only, never Lisp state.
     static OPT_ADMIT_TEST_OVERRIDE: std::cell::Cell<Option<OptAdmit>> = const { std::cell::Cell::new(None) };
 }
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn force_opt_for_test(mode: Option<OptMode>, admit: Option<OptAdmit>) {
     OPT_TEST_OVERRIDE.with(|v| v.set(mode));
     OPT_ADMIT_TEST_OVERRIDE.with(|v| v.set(admit));
@@ -2085,7 +2085,7 @@ impl OptProfitMode {
     }
 }
 pub(crate) fn jit_opt_profit() -> OptProfitMode {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(mode) = OPT_PROFIT_TEST_OVERRIDE.with(std::cell::Cell::get) {
         return mode;
     }
@@ -2102,13 +2102,13 @@ pub(crate) fn jit_opt_profit() -> OptProfitMode {
         )
     })
 }
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     /// Compiler configuration only, never Lisp state or runtime feedback.
     static OPT_PROFIT_TEST_OVERRIDE: std::cell::Cell<Option<OptProfitMode>> =
         const { std::cell::Cell::new(None) };
 }
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn force_opt_profit_for_test(mode: Option<OptProfitMode>) {
     OPT_PROFIT_TEST_OVERRIDE.with(|value| value.set(mode));
 }
@@ -2118,7 +2118,7 @@ pub(crate) fn force_opt_profit_for_test(mode: Option<OptProfitMode>) {
 /// is an immutable scalar; test overrides belong only to the current compiler
 /// invocation, with no Lisp state, cache entries or runtime recording.
 pub(crate) fn jit_opt_require_osr() -> bool {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(value) = OPT_REQUIRE_OSR_TEST_OVERRIDE.with(std::cell::Cell::get) {
         return value;
     }
@@ -2136,14 +2136,14 @@ pub(crate) fn jit_opt_require_osr() -> bool {
     })
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     /// Test-thread scalar compiler configuration only, never Lisp/mutator state.
     static OPT_REQUIRE_OSR_TEST_OVERRIDE: std::cell::Cell<Option<bool>> =
         const { std::cell::Cell::new(None) };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn force_opt_require_osr_for_test(value: Option<bool>) {
     OPT_REQUIRE_OSR_TEST_OVERRIDE.with(|setting| setting.set(value));
 }
@@ -2205,7 +2205,7 @@ impl OptEarlyMode {
     }
 }
 pub(crate) fn jit_opt_early() -> OptEarlyMode {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(value) = OPT_EARLY_TEST_OVERRIDE.with(std::cell::Cell::get) {
         return value;
     }
@@ -2226,7 +2226,7 @@ pub(crate) fn jit_opt_early() -> OptEarlyMode {
 /// Threading: immutable compiler configuration only. The builder retains its
 /// independent 1000-op hard ceiling.
 pub(crate) fn jit_opt_max_ops() -> usize {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(value) = OPT_MAX_OPS_TEST_OVERRIDE.with(std::cell::Cell::get) {
         return value;
     }
@@ -2247,18 +2247,18 @@ pub(crate) fn jit_opt_max_ops() -> usize {
         )
     })
 }
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     /// Scalar compiler configuration only; never Lisp/runtime state.
     static OPT_EARLY_TEST_OVERRIDE: std::cell::Cell<Option<OptEarlyMode>> = const { std::cell::Cell::new(None) };
     /// Scalar compiler configuration only; never Lisp/runtime state.
     static OPT_MAX_OPS_TEST_OVERRIDE: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
 }
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn force_opt_early_for_test(value: Option<OptEarlyMode>) {
     OPT_EARLY_TEST_OVERRIDE.with(|mode| mode.set(value));
 }
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn force_opt_max_ops_for_test(value: Option<usize>) {
     OPT_MAX_OPS_TEST_OVERRIDE.with(|mode| mode.set(value));
 }

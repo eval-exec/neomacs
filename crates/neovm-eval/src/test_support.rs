@@ -645,6 +645,129 @@ pub mod authority {
     pub fn finish_load_interner_for_test() {
         crate::emacs_core::pdump::convert::finish_load_interner();
     }
+
+    // ---- vm_test STOP-subset exact-tier JIT fixture (P1 vm_test re-home) ----
+
+    /// The exact JIT code producer a moved oracle wishes to exercise.
+    #[cfg(feature = "jit")]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum ExactTier {
+        Baseline,
+        Mir,
+        Opt,
+    }
+
+    /// Opaque witness for an installed exact-tier leaf. The compiler knob
+    /// types, the `CompiledLeaf` handle and the cache entry never leave eval;
+    /// only the copied tier identity and the entry counter are readable.
+    #[cfg(feature = "jit")]
+    pub struct ExactTierWitness {
+        selected: ExactTier,
+        leaf: std::rc::Rc<crate::emacs_core::jit::compile::CompiledLeaf>,
+    }
+
+    #[cfg(feature = "jit")]
+    impl ExactTierWitness {
+        /// The code producer the cache actually selected for this leaf.
+        pub fn selected(&self) -> ExactTier {
+            self.selected
+        }
+
+        /// Native entries observed by the installed leaf's prologue counter.
+        pub fn entry_count(&self) -> u64 {
+            self.leaf
+                .obs
+                .entry_counter()
+                .expect("native entry witness")
+                .get()
+        }
+    }
+
+    /// FENCE: compile `function` at exactly `tier`'s code producer, install
+    /// the leaf in `context`'s cache for the next call, and return the opaque
+    /// witness. Thread-local compiler overrides are restored on scope exit;
+    /// the compiler's knob types and the leaf handle never escape eval.
+    #[cfg(feature = "jit")]
+    pub fn install_exact_tier_for_test(
+        context: &mut crate::emacs_core::eval::Context,
+        function: neovm_value::value::Value,
+        tier: ExactTier,
+    ) -> ExactTierWitness {
+        use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
+        use crate::emacs_core::jit::compile::lowering::RegallocPolicy;
+        use crate::emacs_core::jit::compile::opt_census::SelectedTier;
+        use crate::emacs_core::jit::compile::{
+            self, CompileRequest, OptAdmit, OptEarlyMode, OptMode, OptProfitMode,
+        };
+        use crate::emacs_core::jit::tier2::{CompileTier, T2Upgrade};
+        // This thread owns only compiler scalar overrides. The non-Send guard
+        // restores them on early return and assertion failures on this thread.
+        struct Settings(std::marker::PhantomData<std::rc::Rc<()>>);
+        static_assertions::assert_not_impl_any!(Settings: Send, Sync);
+        impl Drop for Settings {
+            fn drop(&mut self) {
+                compile::force_opt_for_test(None, None);
+                compile::force_opt_profit_for_test(None);
+                compile::force_opt_require_osr_for_test(None);
+                compile::force_opt_early_for_test(None);
+                crate::emacs_core::jit::stats::force_observe_for_test(Default::default());
+            }
+        }
+        let _settings = Settings(std::marker::PhantomData);
+        crate::emacs_core::jit::stats::force_observe_for_test(
+            crate::emacs_core::jit::stats::ObserveOverride {
+                entry_count: true,
+                ..Default::default()
+            },
+        );
+        let (mode, regalloc, request_tier, _selected) = match tier {
+            ExactTier::Baseline => (
+                OptMode::Off,
+                RegallocPolicy::Auto,
+                CompileTier::Plain,
+                SelectedTier::Baseline,
+            ),
+            ExactTier::Mir => (
+                OptMode::Legacy,
+                RegallocPolicy::Full,
+                CompileTier::Plain,
+                SelectedTier::Mir,
+            ),
+            ExactTier::Opt => (
+                OptMode::Opt,
+                RegallocPolicy::Full,
+                CompileTier::Upgrade(T2Upgrade::Feedback),
+                SelectedTier::Opt,
+            ),
+        };
+        compile::force_opt_for_test(Some(mode), Some(OptAdmit::ALL));
+        compile::force_opt_profit_for_test(Some(OptProfitMode::Off));
+        compile::force_opt_require_osr_for_test(Some(false));
+        compile::force_opt_early_for_test(Some(OptEarlyMode::Off));
+        let source = function.get_bytecode_data().expect("rooted source");
+        let leaf = compile::compile_bytecode_function_requested(
+            source,
+            Some(context.obarray()),
+            CompileRequest {
+                regalloc,
+                bypass_profit_gate: true,
+                origin: crate::emacs_core::jit::stats::CompileOrigin::Direct,
+                tier: request_tier,
+            },
+        )
+        .expect("exact requested native tier compiles");
+        let observed = match leaf.selected_tier() {
+            SelectedTier::Baseline => ExactTier::Baseline,
+            SelectedTier::Mir => ExactTier::Mir,
+            SelectedTier::Opt => ExactTier::Opt,
+            other => panic!("unexpected selected tier: {other:?}"),
+        };
+        let leaf = crate::emacs_core::jit::cache::install_leaf_for_test(context, source, leaf);
+        ExactTierWitness {
+            selected: observed,
+            leaf,
+        }
+    }
 }
 
 /// Test-support `aset` over a caller-owned Bare argument slice (K1 fence-ask

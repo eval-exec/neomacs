@@ -489,7 +489,7 @@ pub(crate) fn report_line(tag: ReportTag, body: &str) {
 /// cycles). The first-time read lives in the cold helper.
 #[inline(always)]
 pub(crate) fn summary_enabled() -> bool {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(o) = OBSERVE_OVERRIDE.with(Cell::get) {
         return o.stats;
     }
@@ -875,7 +875,7 @@ fn report_requested() -> bool {
 /// off the generated code carries no counter at all. Read only on the
 /// compile-miss path.
 pub(crate) fn entry_counting_enabled() -> bool {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(o) = OBSERVE_OVERRIDE.with(Cell::get) {
         return o.entry_count;
     }
@@ -890,7 +890,7 @@ pub(crate) fn entry_counting_enabled() -> bool {
 /// under `NEOVM_JIT_DUMP_CLIF` / `NEOVM_JIT_DUMP_ASM`. Read only on
 /// compile-miss and spec re-arm paths, never per call.
 pub(crate) fn naming_enabled() -> bool {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(o) = OBSERVE_OVERRIDE.with(Cell::get) {
         return o.naming;
     }
@@ -1120,7 +1120,7 @@ fn op_name(op: &crate::emacs_core::bytecode::opcode::Op) -> String {
 /// Test-only override of the observability knobs for compiles and reports on
 /// the current thread, without the process-global environment variables
 /// (the `force_deopt_for_test` pattern). Consulted first by the predicates.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct ObserveOverride {
     /// [`summary_enabled`] (`NEOVM_JIT_COMPILE_STATS=1`).
@@ -1131,13 +1131,13 @@ pub(crate) struct ObserveOverride {
     pub(crate) entry_count: bool,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     static OBSERVE_OVERRIDE: Cell<Option<ObserveOverride>> = const { Cell::new(None) };
 }
 
 /// Force the observability knobs for the current thread (tests only).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn force_observe_for_test(o: ObserveOverride) {
     OBSERVE_OVERRIDE.with(|c| c.set(Some(o)));
 }

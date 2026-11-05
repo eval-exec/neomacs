@@ -127,6 +127,9 @@ mod emacs_core_runtime_eval_tests_rows_observation_test_rs;
 mod emacs_core_runtime_eval_tests_sort_stack_boundary_test_rs;
 
 #[cfg(test)]
+#[path = "emacs_core/runtime/bytecode/tests/primitive_error_backtrace_test.rs"]
+mod emacs_core_runtime_bytecode_tests_primitive_error_backtrace_test_rs;
+#[cfg(test)]
 #[path = "emacs_core/runtime/eval/keyboard/tests/keyboard_test.rs"]
 mod emacs_core_runtime_eval_keyboard_tests_keyboard_test_rs;
 #[cfg(test)]

@@ -20,10 +20,6 @@ use std::rc::Rc;
 #[path = "primitive_opcode_cells_test.rs"]
 mod primitive_opcode_cells;
 
-#[cfg(test)]
-#[path = "primitive_error_backtrace_test.rs"]
-mod primitive_error_backtrace;
-
 #[path = "verified_dead_checks_test.rs"]
 mod verified_dead_checks;
 

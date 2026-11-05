@@ -3712,7 +3712,7 @@ mod hof_regalloc_tests;
 /// Install a directly compiled leaf for an exact-tier runtime observation.
 /// Threading: the fixture owns this dormant Context and this mutator's cache;
 /// the function cell roots the source, and the cache roots the leaf constants.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn install_leaf_for_test(
     ctx: &Context,
     func: &ByteCodeFunction,

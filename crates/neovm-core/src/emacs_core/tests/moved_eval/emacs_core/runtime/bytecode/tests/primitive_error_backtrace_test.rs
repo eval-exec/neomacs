@@ -2,11 +2,13 @@
 //! sites. Fixtures are refreshed exclusively from GNU with UPDATE_EXPECT=1.
 //! Threading: each test owns its evaluator, roots, and debugger observations.
 
-use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::Op;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::print::print_value;
 use std::path::PathBuf;
+
+#[cfg(feature = "jit")]
+use neovm_eval::test_support::authority::{ExactTier as NativeTier, install_exact_tier_for_test};
 
 #[derive(Clone, Copy, Debug)]
 enum Primitive {
@@ -149,7 +151,7 @@ fn gnu_expect(name: &str, program: &str, fixture: &str) -> String {
         .to_owned();
     assert!(!expected.is_empty(), "GNU must produce an expectation");
     let path = root
-        .join("src/emacs_core/runtime/bytecode/tests/primitive_error_backtrace")
+        .join("src/emacs_core/tests/moved_eval/emacs_core/runtime/bytecode/tests/primitive_error_backtrace")
         .join(format!("{name}.expect"));
     let refreshed = format!("{}\n", expected.trim_end());
     if std::fs::read_to_string(&path).ok().as_deref() != Some(refreshed.as_str()) {
@@ -163,14 +165,6 @@ enum Execution {
     Dispatch,
     #[cfg(feature = "jit")]
     Native(NativeTier),
-}
-
-#[cfg(feature = "jit")]
-#[derive(Clone, Copy, Debug)]
-enum NativeTier {
-    Baseline,
-    Mir,
-    Opt,
 }
 
 fn assert_case(name: &str, primitive: Primitive, args: &str, fixture: &str) {
@@ -192,29 +186,34 @@ fn assert_case_in(
     ctx.eval_str(&setup)
         .expect("compile and warm successful operands");
     let function = ctx
-        .obarray
+        .obarray()
         .symbol_function("carframe--f")
         .expect("compiled function");
     let source = function
         .get_bytecode_data()
         .expect("real GNU bytecode body");
+    let executable_ops = crate::emacs_core::bytecode::executable_ops_for_test(source);
     assert!(
-        source
-            .executable_ops()
-            .iter()
-            .any(|op| primitive.matches_op(op)),
-        "{primitive:?}: expected primitive opcode, got {:?}",
-        source.executable_ops()
+        executable_ops.iter().any(|op| primitive.matches_op(op)),
+        "{primitive:?}: expected primitive opcode, got {executable_ops:?}"
     );
     #[cfg(feature = "jit")]
-    let native_leaf = match execution {
+    let native_witness = match execution {
         Execution::Dispatch => None,
-        Execution::Native(tier) => Some(install_exact_tier(&mut ctx, function, tier)),
+        Execution::Native(tier) => {
+            let witness = install_exact_tier_for_test(&mut ctx, function, tier);
+            assert_eq!(
+                witness.selected(),
+                tier,
+                "{tier:?} must really execute its selected code producer"
+            );
+            Some(witness)
+        }
     };
     #[cfg(not(feature = "jit"))]
     let _ = execution;
     let frontier = (
-        ctx.specpdl.len(),
+        ctx.specpdl().len(),
         ctx.condition_stack.len(),
         ctx.bc_buf.len(),
         ctx.depth,
@@ -224,19 +223,16 @@ fn assert_case_in(
         .expect("debugger throws to outer catch");
     assert_eq!(print_value(&value), expected, "{name}");
     #[cfg(feature = "jit")]
-    if let Some(leaf) = native_leaf {
+    if let Some(witness) = native_witness {
         assert_eq!(
-            leaf.obs
-                .entry_counter()
-                .expect("native entry witness")
-                .get(),
+            witness.entry_count(),
             1,
             "{name}: the installed selected tier must actually enter native code"
         );
     }
     assert_eq!(
         (
-            ctx.specpdl.len(),
+            ctx.specpdl().len(),
             ctx.condition_stack.len(),
             ctx.bc_buf.len(),
             ctx.depth
@@ -371,7 +367,7 @@ fn gnu_bytecode_error_condition_case_pops_frame() {
     ctx.set_lexical_binding(true);
     ctx.eval_str(&setup).expect("compile and warm car");
     let frontier = (
-        ctx.specpdl.len(),
+        ctx.specpdl().len(),
         ctx.condition_stack.len(),
         ctx.bc_buf.len(),
         ctx.depth,
@@ -383,7 +379,7 @@ fn gnu_bytecode_error_condition_case_pops_frame() {
         assert_eq!(print_value(&value), expected);
         assert_eq!(
             (
-                ctx.specpdl.len(),
+                ctx.specpdl().len(),
                 ctx.condition_stack.len(),
                 ctx.bc_buf.len(),
                 ctx.depth
@@ -416,7 +412,7 @@ fn gnu_bytecode_error_unwind_protect_pops_primitive_before_cleanup() {
     ctx.eval_str(&setup)
         .expect("compile and warm unwind-protect");
     let frontier = (
-        ctx.specpdl.len(),
+        ctx.specpdl().len(),
         ctx.condition_stack.len(),
         ctx.bc_buf.len(),
         ctx.depth,
@@ -425,89 +421,13 @@ fn gnu_bytecode_error_unwind_protect_pops_primitive_before_cleanup() {
     assert_eq!(print_value(&value), expected);
     assert_eq!(
         (
-            ctx.specpdl.len(),
+            ctx.specpdl().len(),
             ctx.condition_stack.len(),
             ctx.bc_buf.len(),
             ctx.depth
         ),
         frontier
     );
-}
-
-#[cfg(feature = "jit")]
-fn install_exact_tier(
-    ctx: &mut crate::emacs_core::eval::Context,
-    function: neovm_value::value::Value,
-    tier: NativeTier,
-) -> std::rc::Rc<crate::emacs_core::jit::compile::CompiledLeaf> {
-    use crate::emacs_core::jit::compile::lowering::RegallocPolicy;
-    use crate::emacs_core::jit::compile::opt_census::SelectedTier;
-    use crate::emacs_core::jit::compile::{
-        self, CompileRequest, OptAdmit, OptEarlyMode, OptMode, OptProfitMode,
-    };
-    use crate::emacs_core::jit::tier2::{CompileTier, T2Upgrade};
-    // This thread owns only compiler scalar overrides. The non-Send guard
-    // restores them on early return and assertion failures on the same thread.
-    struct Settings(std::marker::PhantomData<std::rc::Rc<()>>);
-    static_assertions::assert_not_impl_any!(Settings: Send, Sync);
-    impl Drop for Settings {
-        fn drop(&mut self) {
-            compile::force_opt_for_test(None, None);
-            compile::force_opt_profit_for_test(None);
-            compile::force_opt_require_osr_for_test(None);
-            compile::force_opt_early_for_test(None);
-            crate::emacs_core::jit::stats::force_observe_for_test(Default::default());
-        }
-    }
-    let _settings = Settings(std::marker::PhantomData);
-    crate::emacs_core::jit::stats::force_observe_for_test(
-        crate::emacs_core::jit::stats::ObserveOverride {
-            entry_count: true,
-            ..Default::default()
-        },
-    );
-    let (mode, regalloc, request_tier, selected) = match tier {
-        NativeTier::Baseline => (
-            OptMode::Off,
-            RegallocPolicy::Auto,
-            CompileTier::Plain,
-            SelectedTier::Baseline,
-        ),
-        NativeTier::Mir => (
-            OptMode::Legacy,
-            RegallocPolicy::Full,
-            CompileTier::Plain,
-            SelectedTier::Mir,
-        ),
-        NativeTier::Opt => (
-            OptMode::Opt,
-            RegallocPolicy::Full,
-            CompileTier::Upgrade(T2Upgrade::Feedback),
-            SelectedTier::Opt,
-        ),
-    };
-    compile::force_opt_for_test(Some(mode), Some(OptAdmit::ALL));
-    compile::force_opt_profit_for_test(Some(OptProfitMode::Off));
-    compile::force_opt_require_osr_for_test(Some(false));
-    compile::force_opt_early_for_test(Some(OptEarlyMode::Off));
-    let source = function.get_bytecode_data().expect("rooted source");
-    let leaf = compile::compile_bytecode_function_requested(
-        source,
-        Some(&ctx.obarray),
-        CompileRequest {
-            regalloc,
-            bypass_profit_gate: true,
-            origin: crate::emacs_core::jit::stats::CompileOrigin::Direct,
-            tier: request_tier,
-        },
-    )
-    .expect("exact requested native tier compiles");
-    assert_eq!(
-        leaf.selected_tier(),
-        selected,
-        "{tier:?} must really execute its selected code producer"
-    );
-    crate::emacs_core::jit::cache::install_leaf_for_test(ctx, source, leaf)
 }
 
 #[cfg(feature = "jit")]
