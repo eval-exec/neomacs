@@ -337,7 +337,7 @@ impl ConcurrentMarkCapture<'_> {
         Ok(())
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     /// # Safety
     /// The same serialized fixture owner admitted this heap's unlaunched
     /// start, and still excludes its obarray and TLS writers without callbacks.
