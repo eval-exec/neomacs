@@ -249,3 +249,14 @@ pub fn test_root_epoch_retention<'heap, K: crate::tagged::gc::EraKeeper>(
 ) -> crate::tagged::gc::FacadeEpochRetention {
     era.test_root_epoch_retention()
 }
+
+/// P1-HOOKS-2 FENCE (peer 17:04:43Z pre-signed): record a change of a thread
+/// projection's logical redirect. Identical signature to
+/// `ThreadProjectionDescriptor::set_arm`; the method stays `pub(crate)` and
+/// the `Cell` write stays inside this crate.
+pub fn set_arm(
+    descriptor: &crate::forward::ThreadProjectionDescriptor,
+    arm: crate::forward::CanonicalArm,
+) {
+    descriptor.set_arm(arm);
+}

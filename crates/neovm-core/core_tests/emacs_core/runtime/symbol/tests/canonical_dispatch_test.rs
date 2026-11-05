@@ -16,7 +16,10 @@ fn canonical_pair_layout_reaches_the_same_clock_and_descriptor_slots() {
             .add(OBARRAY_DISPATCH_CELLS_OFFSET)
             .cast::<CanonicalDispatchCells>()
     };
-    assert!(std::ptr::eq(pair, &obarray.dispatch_cells));
+    assert_eq!(
+        pair as *const CanonicalDispatchCells as usize,
+        obarray.dispatch_cells_address_for_test()
+    );
     assert_eq!(
         OBARRAY_FUNCTION_EPOCH_OFFSET,
         OBARRAY_DISPATCH_CELLS_OFFSET + DISPATCH_FUNCTION_EPOCH_OFFSET
@@ -65,8 +68,9 @@ fn canonical_pair_pointer_from_allocation_root_survives_cold_replacement() {
     let manager = storage.get();
     // SAFETY: the designator comes directly from the final UnsafeCell allocation
     // root, not a temporary field reference; storage owns its lifetime.
-    let cells = unsafe { std::ptr::addr_of_mut!((*manager).dispatch_cells) };
-    let cells = NonNull::new(cells).expect("live allocation subfield");
+    let cells_address = unsafe { &*manager }.dispatch_cells_address_for_test();
+    let cells = NonNull::new(cells_address as *mut CanonicalDispatchCells)
+        .expect("live allocation subfield");
     // SAFETY: the construction phase precedes this canonical read.
     assert_eq!(unsafe { cells.as_ref() }.function_epoch(), 7);
     // SAFETY: cold full replacement retains the allocation and field address;
@@ -90,6 +94,7 @@ fn canonical_pair_preserves_completed_writer_updates_after_rust_panic() {
     // observable completed update rather than a no-op.
     let id = intern("world-canonical-panic-clock");
     obarray.set_symbol_function_id(id, Value::fixnum(1));
+    assert_ne!(obarray.function_epoch(), 17);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         neovm_value::test_support::authority::restore_function_epoch_for_test(
             &mut obarray,

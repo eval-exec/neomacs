@@ -956,9 +956,11 @@ impl CanonicalDispatchCells {
 }
 
 /// Pair-relative offset of the canonical function clock.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) const DISPATCH_FUNCTION_EPOCH_OFFSET: usize =
     std::mem::offset_of!(CanonicalDispatchCells, function_epoch);
 /// Pair-relative offset of the canonical debugger descriptor slot.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) const DISPATCH_DEBUG_FWD_OFFSET: usize =
     std::mem::offset_of!(CanonicalDispatchCells, debug_on_next_call_fwd);
 
@@ -4923,6 +4925,17 @@ impl Obarray {
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn dispatch_cells_function_epoch_for_test(&self) -> u64 {
         self.dispatch_cells.function_epoch()
+    }
+
+    /// Test-support: the address of the canonical dispatch cells as a copied
+    /// `usize`, at the original `ptr::eq` deref depth (the 17:2xZ identity
+    /// rule). The layout tests compare this address with the jit-layout
+    /// designator built from the same containing allocation; no reference to
+    /// the interior-mutable cells escapes.
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn dispatch_cells_address_for_test(&self) -> usize {
+        std::ptr::from_ref(&self.dispatch_cells) as usize
     }
 
     /// Read the publication clock while this obarray is exclusively owned.

@@ -1771,6 +1771,7 @@ impl HashTableStorage {
             .key = new_key;
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn known_storage_bytes(&self) -> usize {
         self.index
             .capacity()

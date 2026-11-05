@@ -4,7 +4,9 @@
 
 use super::*;
 use crate::buffer::buffer::{BUFFER_SLOT_COUNT, BufferSlot};
-use neovm_value::test_support::authority::{from_address, project_for_test, set_plain_value};
+use neovm_value::test_support::authority::{
+    from_address, project_for_test, set_arm, set_plain_value,
+};
 
 static_assertions::assert_not_impl_any!(ThreadProjectionDescriptor: Copy, Clone, Send, Sync);
 static_assertions::assert_not_impl_any!(ThreadProjectionTable: Send, Sync, Clone);
@@ -145,7 +147,7 @@ fn canonical_storage_keeps_the_logical_cell() {
         }
         other => panic!("canonical storage became {other:?}"),
     }
-    wrapped.set_arm(CanonicalArm::Plain);
+    set_arm(wrapped, CanonicalArm::Plain);
     assert_eq!(wrapped.arm(), CanonicalArm::Plain);
 }
 
