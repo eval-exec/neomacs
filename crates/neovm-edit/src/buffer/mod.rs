@@ -54,7 +54,10 @@ pub use edit_transaction::TranspositionAnchorPolicy;
 #[doc(hidden)]
 pub use edit_transaction::{PreparedBufferEdit, TextMeasurement};
 pub use overlay::{Overlay, OverlayList};
+#[cfg(not(any(test, feature = "test-support")))]
 pub(crate) use position::BufferLispPos;
+#[cfg(any(test, feature = "test-support"))]
+pub use position::BufferLispPos;
 pub use position::{
     AccessibleCharRange, AccessibleEmacsByteRange, CharLen, CharPos0, CharRange, DisplayColumn,
     EmacsByteLen, EmacsBytePos, EmacsByteRange, FullBufferLispCharRange, LispBytePos1,

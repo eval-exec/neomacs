@@ -291,6 +291,7 @@ fn ensure_forget_hook() {
 /// the outer call replaces the entry afterwards.  Losing an entry to a panic
 /// only costs the next lookups their hits: the cache never answers from a
 /// state it did not validate after the substrate's invalidation.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) trait BufferSyntaxParseCache {
     /// Run `f` with the cache and what changed since its last use.
     fn with_syntax_parse_cache<R>(

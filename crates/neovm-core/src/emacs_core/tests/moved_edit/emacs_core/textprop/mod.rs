@@ -9,3 +9,4 @@ mod raw_plist_lookup_tests;
 mod tests;
 #[path = "../editing/textprop/tests/text_property_any_interval_test.rs"]
 mod text_property_any_interval_tests;
+pub use neovm_value::value::Value;

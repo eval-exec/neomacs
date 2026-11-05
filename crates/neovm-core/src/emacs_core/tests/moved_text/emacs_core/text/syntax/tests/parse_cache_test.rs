@@ -9,6 +9,7 @@
 //! and point, must equal the uncached scan's; the cache must actually serve
 //! (exact answers and resumes), and each invalidation path must be taken.
 
+use neovm_text::emacs_core::syntax::BufferSyntaxParseCache;
 use super::*;
 use std::collections::BTreeMap;
 

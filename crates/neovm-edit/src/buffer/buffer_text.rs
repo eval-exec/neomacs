@@ -362,24 +362,24 @@ struct BufferTextStorage {
 }
 #[cfg(any(test, feature = "test-support"))]
 pub struct BufferTextStorage {
-    metrics: TextMetrics,
+    pub metrics: TextMetrics,
     /// Copy-on-write text bytes, the same pattern as `text_props`. Under
     /// `NEOMACS_TEXT_SNAPSHOT=share` a layout snapshot shares them with an
     /// `Rc` bump; every mutation goes through [`backend_mut`], which copies
     /// only while a snapshot still holds the old bytes (counted by
     /// `text_snapshot::buffer_text_cow_copies`). `Rc` has no `DerefMut`, so
     /// the compiler forces every mutation site through that one function.
-    backend: Rc<TextBackend>,
-    content_epoch: u64,
+    pub backend: Rc<TextBackend>,
+    pub content_epoch: u64,
     virtual_gap: GapCompatState,
     modified_tick: i64,
-    chars_modified_tick: i64,
+    pub chars_modified_tick: i64,
     /// Tracks `modified_tick` at the last text-PROPERTY change (GNU has no
     /// direct analog; mirrors `chars_modified_tick` for char edits). Lets
     /// redisplay distinguish "appearance changed" (face/display/invisible
     /// props) from "text changed" without conflating the two. Bumped only via
     /// [`BufferText::record_text_property_modification`].
-    props_modified_tick: i64,
+    pub props_modified_tick: i64,
     /// GNU `BEG_UNCHANGED` analog (incremental-layout Phase 3, spec §6): the
     /// number of chars at the buffer START that are unchanged since the last
     /// redisplay ack. `i64::MAX` means "fully unchanged" (no edit since reset).

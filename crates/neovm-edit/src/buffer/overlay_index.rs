@@ -436,7 +436,7 @@ impl EndpointBPlusTree {
         self.records.shift_at_or_after(position, inclusive, delta);
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn assert_invariants(&self) {
         self.records.assert_invariants();
     }
@@ -1397,7 +1397,8 @@ impl OverlayIndex {
         self.intervals.read().height()
     }
 
-    #[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn assert_invariants(&self) {
         let interval_len = {
             let intervals = self.intervals.read();

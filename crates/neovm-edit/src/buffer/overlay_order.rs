@@ -745,7 +745,7 @@ where
         self.set_color(node, Color::Black);
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn assert_invariants(&self) {
         assert_eq!(self.by_identity.len(), self.nodes.iter().flatten().count());
         if let Some(root) = self.root {
@@ -757,7 +757,7 @@ where
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn assert_subtree_invariants(&self, node: OrderNodeId) -> usize {
         let record = self.node(node);
         assert_eq!(self.by_identity.get(&record.identity), Some(&node));

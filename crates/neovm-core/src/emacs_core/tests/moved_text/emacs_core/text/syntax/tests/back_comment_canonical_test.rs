@@ -5,6 +5,7 @@
 //! cache layers off and the legacy safe-position index bypassed. These are
 //! differential cache tests; they do not assert independent GNU expectations.
 
+use neovm_text::emacs_core::syntax::BufferSyntaxParseCache;
 use super::*;
 
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};

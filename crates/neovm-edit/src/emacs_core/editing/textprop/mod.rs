@@ -605,6 +605,14 @@ enum CharPropertyCarrier {
 }
 static_assertions::assert_impl_all!(CharPropertyCarrier: Send, Sync);
 
+#[cfg(any(test, feature = "test-support"))]
+impl CharPropertyCarrier {
+    /// Every carrier, for tests that check each variant's behavior.
+    pub fn iter() -> impl Iterator<Item = CharPropertyCarrier> {
+        [CharPropertyCarrier::Text, CharPropertyCarrier::Overlay].into_iter()
+    }
+}
+
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn lookup_char_property_from_direct<'a, F, Vars: EditVariableRead<'a>>(
     vars: Vars,

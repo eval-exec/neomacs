@@ -3,4 +3,4 @@ pub use neovm_text::emacs_core::casetab::*;
 mod gc_tls_ownership_tests;
 #[path = "../text/casetab/tests/casetab_test.rs"]
 mod tests;
-pub use crate::emacs_core::casetab_entries::builtin_set_case_table;
+pub(crate) use crate::emacs_core::casetab_entries::builtin_set_case_table;

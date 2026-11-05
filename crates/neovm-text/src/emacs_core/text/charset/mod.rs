@@ -370,7 +370,7 @@ struct CharsetInfo {
 pub struct CharsetInfo {
     pub id: i64,
     pub name: SymId,
-    dimension: i64,
+    pub dimension: i64,
     pub code_space: [i64; 8],
     pub min_code: i64,
     pub max_code: i64,

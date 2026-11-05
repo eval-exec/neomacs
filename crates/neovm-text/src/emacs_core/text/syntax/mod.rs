@@ -8191,3 +8191,5 @@ mod skip_syntax_classes_tests;
 #[cfg(test)]
 #[path = "tests/syntax_test.rs"]
 mod tests;
+#[cfg(feature = "test-support")]
+pub use parse_cache::BufferSyntaxParseCache;

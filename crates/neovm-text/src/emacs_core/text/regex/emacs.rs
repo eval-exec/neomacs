@@ -4178,7 +4178,7 @@ pub(crate) enum SyntaxCacheKey {
     /// syntax-table mutation epoch. Pattern caches root this identity.
     Table { id: usize, epoch: u64 },
     /// Identity supplied by a Rust-owned synthetic lookup, with no Lisp object.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     External { id: usize, epoch: u64 },
 }
 
