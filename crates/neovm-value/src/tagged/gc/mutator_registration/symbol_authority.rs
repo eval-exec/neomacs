@@ -165,6 +165,39 @@ impl<K: EraKeeper> GenericProofEra<'_, K> {
     }
 }
 
+// LEAD 11:5xZ (peer-signed fence-only observers): read-only views of the
+// symbol authority word and backing for the re-homed core_tests roots file.
+// They expose no borrow beyond the retained era, no field is widened, and
+// the private Registry/SymbolSidecar types stay unnameable outside value.
+#[cfg(any(test, feature = "test-support"))]
+impl<K: EraKeeper> GenericProofEra<'_, K> {
+    #[doc(hidden)]
+    pub fn symbol_word_for_test(&self) -> &std::sync::atomic::AtomicU64 {
+        &self.core.registry().symbols.word
+    }
+
+    #[doc(hidden)]
+    pub fn check_symbol_backing_for_test(
+        &self,
+        symbols: &KeeperSymbols<'_>,
+        keeper: &KeeperWorldDesignator<'_>,
+    ) -> Result<(), RegistrationError> {
+        symbols.check_symbol_backing(&self.core.registry().symbols.backing, keeper)
+    }
+
+    #[doc(hidden)]
+    pub fn check_root_designators_for_test(
+        &self,
+        keeper: &KeeperWorldDesignator<'_>,
+    ) -> Result<(), RegistrationError> {
+        self.core
+            .registry()
+            .symbols
+            .backing
+            .check_root_designators(keeper.obarray(), keeper.projections())
+    }
+}
+
 impl<K: EraKeeper> EraCore<'_, K> {
     /// Serial keeper admission only, before ANY participant is registered.
     /// Unsupported/absent cells refuse without creating or redirecting them.
