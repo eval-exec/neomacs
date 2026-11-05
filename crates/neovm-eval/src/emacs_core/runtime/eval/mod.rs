@@ -5264,6 +5264,39 @@ impl Context {
         &self.obarray
     }
 
+    /// R-b (PC11-F f1): the Context's tagged-heap view. The field this reads
+    /// narrows to `pub(crate)`; cross-crate test code uses this accessor.
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn tagged_heap(&self) -> &WorldView<neovm_value::tagged::gc::TaggedHeap> {
+        &self.tagged_heap
+    }
+
+    /// R-b (PC11-F f2): mutable tagged-heap view, for fixture setup that
+    /// allocates (`alloc_cons`) or sets heap policy. Live callers are the
+    /// re-homed value era fixtures.
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn tagged_heap_mut(&mut self) -> &mut WorldView<neovm_value::tagged::gc::TaggedHeap> {
+        &mut self.tagged_heap
+    }
+
+    /// R-b (PC11-F f1): the edit runtime (buffers, overlays, markers). The
+    /// `edit` field predates the split; this is the named read route the
+    /// re-homed value test tree uses.
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn edit(&self) -> &neovm_edit::buffer::EditRuntime {
+        &self.edit
+    }
+
+    /// R-b (PC11-F f2): mutable edit runtime for fixture setup that needs it.
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn edit_mut(&mut self) -> &mut neovm_edit::buffer::EditRuntime {
+        &mut self.edit
+    }
+
     /// Access the obarray's view capability (phase-scoped writes that must go
     /// through `with_legacy_value_write`).
     #[doc(hidden)]
