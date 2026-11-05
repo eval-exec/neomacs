@@ -10,7 +10,7 @@ pub enum CacheRootScan {
     /// Copy the current owner's cache roots without certifying coverage of a
     /// future collection. Green's held facade epoch keeps the collector idle.
     Parked,
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(test)]
     Snapshot {
         collection_in_progress: bool,
     },
