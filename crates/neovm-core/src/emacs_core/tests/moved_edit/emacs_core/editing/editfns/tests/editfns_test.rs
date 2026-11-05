@@ -173,14 +173,7 @@ fn combine_after_change_still_updates_treesit_linecol_cache() {
         .buffers
         .insert_into_buffer(current, "abcdef")
         .expect("insert test text");
-    eval.treesit_mut().set_linecol_cache(
-        current,
-        neovm_text::emacs_core::treesit::LineColCache {
-            line: 3,
-            col: 4,
-            bytepos: 5,
-        },
-    );
+    neovm_eval::test_support::authority::set_linecol_cache_for_test(&mut eval, current, 3, 4, 5);
     eval.obarray_mut()
         .set_symbol_value("combine-after-change-calls", Value::T);
 
@@ -191,7 +184,7 @@ fn combine_after_change_still_updates_treesit_linecol_cache() {
         .treesit()
         .linecol_cache(current)
         .expect("linecol cache should remain installed");
-    assert_eq!((cache.line, cache.col, cache.bytepos), (1, 1, 0));
+    assert_eq!((cache.line(), cache.col(), cache.bytepos()), (1, 1, 0));
     assert_eq!(eval.edit.combine_after_change_list().len(), 1);
 }
 

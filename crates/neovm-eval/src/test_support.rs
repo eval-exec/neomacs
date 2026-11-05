@@ -364,6 +364,41 @@ pub mod authority {
         // raw helper has the identical contract and stays crate-private.
         unsafe { context.replace_autoloads_raw(manager) };
     }
+
+    /// P1-CLASSES-ALL-CRATES FENCE (peer 19:24Z wave3 condition): seed the
+    /// treesit language cache for the moved builtins fixture.
+    /// `TreeSitterManager` is a WorldView and N3 forbids handing out `&mut`,
+    /// so this typed operation is the only cross-crate route; the manager
+    /// stays inside eval.
+    pub fn cache_loaded_language_for_test(
+        context: &mut Context,
+        key: SymId,
+        language: tree_sitter::Language,
+        filename: Option<String>,
+    ) {
+        context.treesit_mut().cache_loaded_language(
+            key,
+            neovm_text::emacs_core::treesit::LoadedLanguage::from_loaded_parts(
+                language, filename, None,
+            ),
+        );
+    }
+
+    /// P1-CLASSES-ALL-CRATES FENCE (peer 19:24Z wave3 condition): install the
+    /// moved editfns line/column cache through a typed operation, so
+    /// `Context::treesit_mut` keeps no test-support exposure.
+    pub fn set_linecol_cache_for_test(
+        context: &mut Context,
+        buffer: neovm_edit::buffer::BufferId,
+        line: i64,
+        col: i64,
+        bytepos: usize,
+    ) {
+        context.treesit_mut().set_linecol_cache(
+            buffer,
+            neovm_text::emacs_core::treesit::LineColCache::from_parts(line, col, bytepos),
+        );
+    }
 }
 
 /// Test-support `aset` over a caller-owned Bare argument slice (K1 fence-ask

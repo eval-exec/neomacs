@@ -5937,14 +5937,11 @@ impl Context {
 
     #[inline]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn treesit(&self) -> &neovm_text::emacs_core::treesit::TreeSitterManager {
         &self.treesit
     }
 
     #[inline]
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn treesit_mut(
         &mut self,
     ) -> &mut neovm_text::emacs_core::treesit::TreeSitterManager {

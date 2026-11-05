@@ -57,7 +57,6 @@ use neovm_edit::emacs_core::editfns::{
     builtin_delete_and_extract_region, builtin_delete_region, builtin_erase_buffer,
 };
 use neovm_text::emacs_core::regex::compute_buffer_replacement_with_syntax;
-use neovm_text::emacs_core::treesit as runtime_treesit;
 use neovm_value::intern::intern;
 use neovm_value::intern::intern_uninterned;
 use neovm_value::strings_core::lisp_string_char_codes;
@@ -168,13 +167,11 @@ fn create_unique_test_buffer(eval: &mut crate::emacs_core::eval::Context, name: 
 }
 
 fn install_test_treesit_json_language(eval: &mut Context) {
-    unsafe { eval.treesit_mut() }.cache_loaded_language(
+    neovm_eval::test_support::authority::cache_loaded_language_for_test(
+        eval,
         neovm_value::intern::intern("json"),
-        runtime_treesit::LoadedLanguage {
-            language: Language::new(tree_sitter_json::LANGUAGE),
-            filename: Some("test:json".to_string()),
-            _library: None,
-        },
+        Language::new(tree_sitter_json::LANGUAGE),
+        Some("test:json".to_string()),
     );
 }
 
