@@ -2855,6 +2855,12 @@ pub(crate) use mutator_registration::{EraCoreHofExt, RunAccessHofExt, RunAccessU
 pub(crate) use crate::emacs_core::eval::world::WorldProofEra as ProofEra;
 #[doc(hidden)]
 pub use mutator_registration::facade::*;
+/// R6 TA2 fence spelling for the proof-era type in a `test-support` build
+/// (value is then a dependency and cannot reach the evaluator's alias above).
+#[cfg(all(feature = "test-support", not(test)))]
+pub(crate) use mutator_registration::{
+    GenericProofEra as ProofEra, GenericProofEraFinishFailure as ProofEraFinishFailure,
+};
 
 mod alloc_region;
 #[cfg(test)]

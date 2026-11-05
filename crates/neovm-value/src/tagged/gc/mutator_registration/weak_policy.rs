@@ -3,7 +3,7 @@
 
 use super::super::TaggedHeap;
 use super::*;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use crate::tagged::header::HashTableObj;
 use crate::tagged::header::{GcHeader, HeapObjectKind, VecLikeHeader, VecLikeType};
 use crate::tagged::value::TaggedValue;
@@ -20,7 +20,7 @@ pub(super) struct WeakSweepPermit {
 impl WeakSweepPermit {
     /// Only the serial keeper's explicit fixture admission can mint permission.
     /// Validate catalog membership before interpreting any caller-supplied word.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn mint<K: EraKeeper>(
         heap: &TaggedHeap,
         keeper: &K,
@@ -68,7 +68,7 @@ impl WeakSweepPermit {
         })
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn bind(mut self, registry: &Arc<Registry>) -> Self {
         debug_assert_eq!(self.heap, registry.heap);
         debug_assert!(self.registry.is_none());

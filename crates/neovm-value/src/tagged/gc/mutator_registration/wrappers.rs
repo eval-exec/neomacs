@@ -4,7 +4,7 @@
 //! collector. The test-only proof wrapper cannot convert to that evidence.
 use super::super::Gen1Admission;
 use super::construction::{Gen1Construction, ProductionAdmission};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use super::construction::{ProofAdmission, ProofConstruction};
 use super::*;
 use crate::tagged::gc::mutator_registration::{
@@ -19,7 +19,7 @@ pub struct ParallelHeapEra<'heap, K: EraKeeper> {
 }
 
 /// Restricted proof executors retain GEN0 coverage without production admission.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[must_use = "finish explicitly; abandonment retains the World and poisons the era"]
 pub(crate) struct ProofEra<'heap, K: EraKeeper> {
     pub(super) core: EraCore<'heap, K>,
@@ -33,7 +33,7 @@ pub struct EraFinishFailure<'heap, K: EraKeeper> {
     pub(crate) reason: RegistrationError,
     pub(crate) era: ParallelHeapEra<'heap, K>,
 }
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[must_use]
 #[doc(hidden)]
 pub struct ProofEraFinishFailure<'heap, K: EraKeeper> {
@@ -50,7 +50,7 @@ impl<'heap, K: EraKeeper> EraFinishFailure<'heap, K> {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl<'heap, K: EraKeeper> ProofEraFinishFailure<'heap, K> {
     /// SEAL: observe the finish refusal reason (Copy).
     #[inline]
@@ -117,7 +117,7 @@ impl<'heap, K: EraKeeper> ParallelHeapEra<'heap, K> {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl<'heap, K: EraKeeper> ProofEra<'heap, K> {
     /// # Safety
     /// prepare must return the original retained keeper's epoch and backing,
@@ -209,6 +209,7 @@ impl<'heap, K: EraKeeper> ProofEra<'heap, K> {
         self.core.shutdown_admission_stopped_for_test(stopped)
     }
 
+    #[cfg(test)]
     pub(super) fn cons_catalog_snapshot_for_test(
         &self,
     ) -> Result<super::super::cons_storage::CatalogSnapshot, RegistrationError> {
@@ -219,6 +220,7 @@ impl<'heap, K: EraKeeper> ProofEra<'heap, K> {
         self.core.test_root_epoch_retention()
     }
 
+    #[cfg(test)]
     pub(super) fn prepare_name_function_symbol(
         &self,
         key: &SymbolHandle,
@@ -389,7 +391,7 @@ macro_rules! era_operations {
     };
 }
 era_operations!(ParallelHeapEra, EraFinishFailure);
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 era_operations!(ProofEra, ProofEraFinishFailure);
 
 #[cfg(test)]

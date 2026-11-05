@@ -221,7 +221,7 @@ fn supported_with_weak(
 }
 
 impl<'heap, K: EraKeeper> EraCore<'heap, K> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn admit_rooted_with_weak_tables_for_test<
         A: construction::CoreAdmission<'heap, K>,
     >(
@@ -259,7 +259,7 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
             checked,
             witness,
             prepare,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             InitialTablePreparation::Actual,
         )?;
         era.weak_sweep = Some(permit.bind(era.registry.as_ref().expect("new era registry")));
@@ -306,7 +306,7 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
             checked,
             witness,
             prepare,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             InitialTablePreparation::Actual,
         )?;
         era.legacy_roots = Some(roots);
@@ -324,7 +324,7 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
         Ok(())
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn with_stopped_heap_for_test<R>(
         &self,
         stopped: &AllStopped<'_>,
@@ -343,7 +343,7 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
         ))
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn shutdown_admission_stopped_for_test(
         &self,
         stopped: &AllStopped<'_>,

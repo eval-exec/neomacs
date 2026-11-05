@@ -20,3 +20,55 @@
 pub fn mark_collection_observed(bits: usize) -> bool {
     crate::tagged::gc::mark_collection_observed(bits)
 }
+
+/// The restricted proof-era type used by the re-homed era-fixture tests.
+/// Same item as `tagged::gc::GenericProofEra`; the original path stays
+/// `cfg(any(test, feature = "test-support"))` + `pub(crate)`.
+pub type ProofEra<'heap, K> = crate::tagged::gc::ProofEra<'heap, K>;
+
+/// Finish refusal of [`ProofEra`]; same item as
+/// `tagged::gc::GenericProofEraFinishFailure`.
+pub type ProofEraFinishFailure<'heap, K> = crate::tagged::gc::ProofEraFinishFailure<'heap, K>;
+
+/// # Safety
+/// prepare must return the original retained keeper's epoch and backing,
+/// without executing Lisp, resuming owners, or leaking a manager reference.
+#[cold]
+pub unsafe fn admit_for_test<'heap, K: crate::tagged::gc::EraKeeper>(
+    collector: crate::tagged::gc::QuiescentCollector<'heap>,
+    keeper: K,
+    prepare: impl FnOnce(
+        &K,
+    ) -> Result<
+        (
+            crate::tagged::gc::FacadeEpochRetention,
+            crate::symbol::parallel::SymbolBacking,
+        ),
+        crate::tagged::gc::RegistrationError,
+    >,
+) -> Result<ProofEra<'heap, K>, crate::tagged::gc::EraAdmissionFailure<'heap, K>> {
+    // SAFETY: the caller contract is identical to `ProofEra::admit_with`.
+    unsafe { ProofEra::admit_with(collector, keeper, prepare) }
+}
+
+/// # Safety
+/// prepare must return the original retained keeper's epoch and backing,
+/// without executing Lisp, resuming owners, or leaking a manager reference.
+#[cold]
+pub unsafe fn admit_rooted_for_test<'heap, K: crate::tagged::gc::EraKeeper>(
+    collector: crate::tagged::gc::QuiescentCollector<'heap>,
+    keeper: K,
+    roots: crate::tagged::gc::FrozenLegacyRoots,
+    prepare: impl FnOnce(
+        &K,
+    ) -> Result<
+        (
+            crate::tagged::gc::FacadeEpochRetention,
+            crate::symbol::parallel::SymbolBacking,
+        ),
+        crate::tagged::gc::RegistrationError,
+    >,
+) -> Result<ProofEra<'heap, K>, crate::tagged::gc::EraAdmissionFailure<'heap, K>> {
+    // SAFETY: the caller contract is identical to `ProofEra::admit_rooted_with`.
+    unsafe { ProofEra::admit_rooted_with(collector, keeper, roots, prepare) }
+}

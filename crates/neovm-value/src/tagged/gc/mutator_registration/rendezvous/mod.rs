@@ -181,7 +181,7 @@ impl Rendezvous<'_> {
     }
 }
 impl<K: EraKeeper> EraCore<'_, K> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn test_root_epoch_retention(&self) -> super::super::FacadeEpochRetention {
         self.registry()
             .root_epoch

@@ -1858,3 +1858,117 @@ mod tests {
         eprintln!("MUTATION RED: {error}");
     }
 }
+
+/// B3 AUTHORITY-ITEMS guard (peer ruling 07:3xZ): every row has the signed
+/// eight-column shape, its defining file exists, and every public item in the
+/// value TA2 fence has exactly one row. Future fence items must be rowed
+/// before they are added; the defining-file check is the ledger's existence
+/// requirement, while the `tests` column intentionally may name a test file
+/// that lands with the same batch.
+#[test]
+fn authority_items_have_rows_and_existing_defining_files() {
+    let workspace = workspace_root();
+    let path = workspace.join(ARCHITECTURE_DIR).join("AUTHORITY-ITEMS.tsv");
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+    let mut lines = text.lines();
+    let header = lines.next().expect("AUTHORITY-ITEMS header");
+    assert_eq!(
+        header, "crate\titem\tkind\tdefining_file\tfence_path\ttests\treason\tsafety",
+        "AUTHORITY-ITEMS.tsv: signed header"
+    );
+    let mut rows: BTreeSet<(String, String)> = BTreeSet::new();
+    for (index, line) in lines.enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let fields: Vec<&str> = line.split('\t').collect();
+        assert_eq!(
+            fields.len(),
+            8,
+            "AUTHORITY-ITEMS.tsv line {} has {} columns",
+            index + 2,
+            fields.len()
+        );
+        let (crate_name, item, kind, file, fence_path, tests, reason, safety) = (
+            fields[0], fields[1], fields[2], fields[3], fields[4], fields[5], fields[6], fields[7],
+        );
+        assert!(
+            !item.is_empty(),
+            "AUTHORITY-ITEMS.tsv line {}: empty item",
+            index + 2
+        );
+        assert!(
+            !fence_path.is_empty(),
+            "AUTHORITY-ITEMS.tsv line {}: empty fence_path",
+            index + 2
+        );
+        assert!(
+            !tests.is_empty(),
+            "AUTHORITY-ITEMS.tsv line {}: empty tests",
+            index + 2
+        );
+        assert!(
+            !reason.is_empty(),
+            "AUTHORITY-ITEMS.tsv line {}: empty reason",
+            index + 2
+        );
+        assert!(
+            matches!(
+                kind,
+                "fn" | "unsafe fn"
+                    | "method"
+                    | "type"
+                    | "struct"
+                    | "enum"
+                    | "const"
+                    | "static"
+                    | "mod"
+            ),
+            "AUTHORITY-ITEMS.tsv line {}: kind {kind:?}",
+            index + 2
+        );
+        assert!(
+            safety == "safe" || safety.starts_with("unsafe: "),
+            "AUTHORITY-ITEMS.tsv line {}: safety {safety:?}",
+            index + 2
+        );
+        let defining = workspace.join(file);
+        assert!(
+            defining.is_file(),
+            "AUTHORITY-ITEMS.tsv line {}: defining file missing: {file}",
+            index + 2
+        );
+        assert!(
+            rows.insert((crate_name.to_owned(), item.to_owned())),
+            "AUTHORITY-ITEMS.tsv line {}: duplicate row {crate_name}/{item}",
+            index + 2
+        );
+    }
+    assert!(!rows.is_empty(), "AUTHORITY-ITEMS.tsv has no rows");
+    let fence_path = workspace.join("crates/neovm-value/src/test_support/authority.rs");
+    let fence = std::fs::read_to_string(&fence_path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", fence_path.display()));
+    let parsed = syn::parse_file(&fence).expect("parse value TA2 fence");
+    let mut fence_items = BTreeSet::new();
+    for item in &parsed.items {
+        let (name, visibility) = match item {
+            syn::Item::Fn(item) => (item.sig.ident.to_string(), &item.vis),
+            syn::Item::Type(item) => (item.ident.to_string(), &item.vis),
+            syn::Item::Struct(item) => (item.ident.to_string(), &item.vis),
+            syn::Item::Enum(item) => (item.ident.to_string(), &item.vis),
+            syn::Item::Const(item) => (item.ident.to_string(), &item.vis),
+            syn::Item::Static(item) => (item.ident.to_string(), &item.vis),
+            _ => continue,
+        };
+        if matches!(visibility, syn::Visibility::Public(_)) {
+            fence_items.insert(name);
+        }
+    }
+    for item in fence_items {
+        assert!(
+            rows.contains(&("neovm-value".to_owned(), item.clone())),
+            "value TA2 fence item {item} has no AUTHORITY-ITEMS row"
+        );
+    }
+}

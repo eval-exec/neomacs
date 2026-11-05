@@ -45,7 +45,7 @@ use crate::emacs_core::eval::world::{
 };
 pub(crate) use wrappers::EraFinishFailure;
 pub use wrappers::ParallelHeapEra;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) use wrappers::{
     ProofEra as GenericProofEra, ProofEraFinishFailure as GenericProofEraFinishFailure,
 };
@@ -344,7 +344,7 @@ struct EraCore<'heap, K: EraKeeper> {
     legacy_roots: Option<FrozenLegacyRoots>,
     #[cfg(test)]
     symbol_table_admission_charge: super::symbol_table::publication::RetainedTableBytes,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     weak_sweep: Option<WeakSweepPermit>,
     keeper: Option<K>,
     registry: Option<Arc<Registry>>,
@@ -392,7 +392,7 @@ struct CoreFinishFailure<'heap, K: EraKeeper> {
     core: EraCore<'heap, K>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 enum InitialTablePreparation {
     Actual,
     RefuseOnce,
@@ -415,7 +415,7 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
             checked,
             witness,
             prepare,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             InitialTablePreparation::Actual,
         )
     }
@@ -429,7 +429,7 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
             (super::FacadeEpochRetention, symbol_authority::SymbolBacking),
             RegistrationError,
         >,
-        #[cfg(test)] preparation: InitialTablePreparation,
+        #[cfg(any(test, feature = "test-support"))] preparation: InitialTablePreparation,
     ) -> Result<(Self, W), EraAdmissionFailure<'heap, K>> {
         let (mut collector, keeper) = checked.into_parts();
         let heap = collector.heap_identity();
@@ -547,7 +547,7 @@ impl<'heap, K: EraKeeper> EraCore<'heap, K> {
                 legacy_roots: None,
                 #[cfg(test)]
                 symbol_table_admission_charge: table_bytes,
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-support"))]
                 weak_sweep: None,
                 keeper: Some(keeper),
                 registry: Some(Arc::new(Registry {

@@ -88,12 +88,12 @@ impl<'heap, K: EraKeeper> CoreAdmission<'heap, K> for ProductionAdmission<'heap,
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[must_use]
 pub(super) struct ProofAdmission<'heap, K: EraKeeper> {
     checked: CheckedCollector<'heap, K>,
 }
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl<'heap, K: EraKeeper> ProofAdmission<'heap, K> {
     pub(super) fn check(
         collector: QuiescentCollector<'heap>,
@@ -102,18 +102,18 @@ impl<'heap, K: EraKeeper> ProofAdmission<'heap, K> {
         CheckedCollector::check(collector, keeper).map(|checked| Self { checked })
     }
 }
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[must_use]
 pub(super) struct ProofConstruction {
     _private: (),
 }
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl sealed::Sealed for ProofConstruction {}
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl ConstructionEvidence for ProofConstruction {}
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl<K: EraKeeper> sealed::Sealed for ProofAdmission<'_, K> {}
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl<'heap, K: EraKeeper> CoreAdmission<'heap, K> for ProofAdmission<'heap, K> {
     type Evidence = ProofConstruction;
     fn into_checked(self) -> (CheckedCollector<'heap, K>, Self::Evidence) {
