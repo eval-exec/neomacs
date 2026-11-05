@@ -399,3 +399,14 @@ pub fn reset_bytecode_function_clone_count_for_test() {
 pub fn reset_plain_value_slot_visits() {
     crate::symbol::reset_plain_value_slot_visits()
 }
+
+/// Value-FENCE row (P1-CLASSES-ALL-CRATES A/N2): test-mode Tier-0 pin write
+/// reached from eval's signed JIT fence delegate. The Atomic field stays
+/// private and is never handed out. Deliberately a bare setter rather than a
+/// scoped guard: the JIT A/B fixtures move the owning `ByteCodeFunction` into
+/// a `Value` immediately after pinning, so a borrow-carrying guard cannot
+/// outlive the move; the pin is per-function state and never shared heap
+/// state, so a panicking test can leak only its own function's pin.
+pub fn set_force_interpret_for_test(state: &crate::value::jit_runtime::RuntimeState, on: bool) {
+    state.set_force_interpret_for_test(on);
+}

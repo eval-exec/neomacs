@@ -8,9 +8,9 @@ pub mod emacs_core;
 pub mod face;
 pub mod image_identity;
 /// Test-support authority fence for the re-homed oracles (peer 19:36Z
-/// follow-up): the three DisplayFrameExt test fixtures are signed rows and
-/// this module is their only fence path. Compiled only for tests and the
-/// upper test-support build.
+/// follow-up; extended by the jitcall eval_test re-home, peer 20:55Z): signed
+/// test fixtures route through this module and it is their only fence path.
+/// Compiled only for tests and the upper test-support build.
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 /// Shared upper-free test helpers (re-export; see `test_utils.rs`).

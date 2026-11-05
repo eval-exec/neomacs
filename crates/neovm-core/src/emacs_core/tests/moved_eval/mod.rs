@@ -35,6 +35,13 @@ mod emacs_core_lisp_provide_coupled_vars_tests_runtime_surface_test_rs;
 #[path = "emacs_core/runtime/eval/tests/quit_regression_test.rs"]
 mod emacs_core_runtime_eval_tests_quit_regression_test_rs;
 
+// Option-A re-home of eval's main test file (P1 eval-scope ruling 16:5xZ:
+// the file needs core/display/system items, so it re-homes byte-identically
+// except imports). Eval loses these 836 tests; core gains them.
+#[cfg(test)]
+#[path = "emacs_core/runtime/eval/tests/eval_test.rs"]
+mod emacs_core_runtime_eval_tests_eval_test_rs;
+
 #[cfg(test)]
 #[path = "emacs_core/lisp/load/tests/stale_bytecode_test.rs"]
 mod emacs_core_lisp_load_tests_stale_bytecode_test_rs;

@@ -807,13 +807,13 @@ pub(crate) fn jit_inline_on() -> bool {
     })
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     static FORCE_INLINE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
 }
 
 /// Test-only override of [`jit_inline_on`].
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn force_inline_for_test(on: Option<bool>) {
     FORCE_INLINE.with(|f| f.set(on));
 }

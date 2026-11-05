@@ -228,6 +228,11 @@ pub(crate) mod retreat;
 /// feature. See `jit/bg.rs`.
 #[cfg(feature = "jit")]
 pub(crate) mod bg;
+/// The plain mode enum the re-homed eval tests name; the module and the
+/// mode-arming `TestModeScope` constructor stay private (the constructor is
+/// reached only through the signed fence delegate).
+#[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+pub use bg::BgMode;
 
 /// Cold admission and restoration of parked Green native continuations.
 #[cfg(feature = "jit")]
@@ -600,14 +605,14 @@ pub fn profit_defer_factor() -> u32 {
     })
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 std::thread_local! {
     static PROFIT_DEFER_TEST_OVERRIDE: std::cell::Cell<Option<u32>> =
         const { std::cell::Cell::new(None) };
 }
 
 /// Test-only: pin [`profit_defer_factor`] for this thread.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn force_profit_defer_for_test(factor: Option<u32>) {
     PROFIT_DEFER_TEST_OVERRIDE.with(|c| c.set(factor));
 }
@@ -1079,14 +1084,14 @@ pub(crate) trait RuntimeStateTieringExt {
     fn mark_aot_prewarmed(&self);
     /// Whether this function is marked to run a preload leaf from call 1.
     fn is_aot_prewarmed(&self) -> bool;
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn set_hot_for_test(&self);
     /// Test-only: set the heat outright (re-tier tests).
     #[cfg(test)]
     fn set_heat_for_test(&self, heat: u32);
     /// Test-only: pin this function to the Tier-0 interpreter forever (the
     /// forced-cold half of the benchmark A/B; see `force_interpret`).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn set_cold_for_test(&self);
     /// Record an observed callee `sym` at the call site at instruction `pc`
     /// (`ops_len` = the function's instruction count, for lazy sizing).
@@ -1598,23 +1603,23 @@ impl RuntimeStateTieringExt for RuntimeState {
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn set_hot_for_test(&self) {
-        self.heat.store(Self::HOT_THRESHOLD, Ordering::Relaxed);
+        self.heat_ref()
+            .store(Self::HOT_THRESHOLD, Ordering::Relaxed);
     }
 
     /// Test-only: set the heat outright (re-tier tests).
     #[cfg(test)]
     fn set_heat_for_test(&self, heat: u32) {
-        self.heat.store(heat, Ordering::Relaxed);
+        self.heat_ref().store(heat, Ordering::Relaxed);
     }
 
     /// Test-only: pin this function to the Tier-0 interpreter forever (the
     /// forced-cold half of the benchmark A/B; see `force_interpret`).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn set_cold_for_test(&self) {
-        self.force_interpret
-            .store(true, std::sync::atomic::Ordering::Relaxed);
+        crate::test_support::authority::set_force_interpret_for_test(self, true);
     }
 
     /// Record an observed callee `sym` at the call site at instruction `pc`

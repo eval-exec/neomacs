@@ -84,6 +84,7 @@ mod worker;
 /// How JIT compiles run (`NEOVM_JIT_BG`). Exhaustive matches only.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, strum::IntoStaticStr)]
 #[strum(serialize_all = "lowercase")]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) enum BgMode {
     /// The persistent per-thread module defines in place (the B4 path).
     Legacy,
@@ -1496,7 +1497,7 @@ fn stress_probe_skips(seq: u64) -> u8 {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     static MODE_TEST_OVERRIDE: Cell<Option<BgMode>> = const { Cell::new(None) };
     static DEFERRED_INSTALL_TEST: Cell<bool> = const { Cell::new(false) };
@@ -1653,14 +1654,14 @@ mod inline_size_tests;
 
 /// Scoped ownership for tests of a particular backend's thread-local module.
 /// Native execution fixtures should await the real worker instead.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[must_use]
 pub(crate) struct TestModeScope {
     prior: Option<BgMode>,
     _thread: std::marker::PhantomData<std::rc::Rc<()>>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl TestModeScope {
     #[doc(hidden)]
     pub fn enter(mode: BgMode) -> Self {
@@ -1674,7 +1675,7 @@ impl TestModeScope {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl Drop for TestModeScope {
     fn drop(&mut self) {
         MODE_TEST_OVERRIDE.with(|override_| override_.set(self.prior));

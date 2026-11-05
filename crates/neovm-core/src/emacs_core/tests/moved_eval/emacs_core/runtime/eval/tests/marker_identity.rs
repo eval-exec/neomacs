@@ -3,7 +3,7 @@ use crate::emacs_core::{eval::Context, print::print_value};
 
 #[test]
 fn p6_uninterned_parameter_marker_names_bind_as_required_variables() {
-    let mut context = Context::new();
+    let mut context = crate::test_utils::new_context();
     let mut answers = Vec::new();
     for name in ["&optional", "&rest"] {
         let source = format!(

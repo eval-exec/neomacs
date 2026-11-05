@@ -4,9 +4,8 @@ use crate::emacs_core::print::print_value;
 
 fn check(source: &str, expected: &str) {
     for mode in [TierIMode::Off, TierIMode::On, TierIMode::Verify] {
-        let mut context = Context::new();
-        context.tier_i.set_mode(mode);
-        context.tier_i.set_threshold(1);
+        let mut context = crate::test_utils::new_context();
+        neovm_eval::test_support::authority::configure_tier_i_for_test(&mut context, mode, 1);
         let result = context.eval_str(source).expect("GNU binding policy form");
         assert_eq!(print_value(&result), expected, "tier {mode:?}");
     }

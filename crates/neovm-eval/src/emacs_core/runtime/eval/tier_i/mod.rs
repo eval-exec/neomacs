@@ -152,6 +152,7 @@ fn count_cons_forms(body: Value) -> u32 {
 /// What `NEOVM_TIER_I` selects.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) enum TierIMode {
     /// The tree walker alone.
     Off = 0,
@@ -439,13 +440,13 @@ impl TierI {
         &self.stats
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn set_mode(&mut self, mode: TierIMode) {
         self.mode = mode;
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn set_threshold(&mut self, threshold: u32) {
         self.threshold = threshold.max(1);

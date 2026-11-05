@@ -6663,7 +6663,7 @@ impl crate::emacs_core::eval::Context {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn idle_timer_running(&self) -> bool {
         self.command_loop.idle_start_time.is_some()

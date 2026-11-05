@@ -88,7 +88,7 @@ impl Context {
     }
 
     /// The comparison chain the mask replaced, kept to pin their equivalence.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn runtime_binding_has_projection_by_comparison(&self, resolved: SymId) -> bool {
         resolved == self.quit_flag_symbol

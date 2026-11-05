@@ -140,6 +140,7 @@ pub enum MemoryUseCountSlot {
 
 impl MemoryUseCountSlot {
     #[inline]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) const fn index(self) -> usize {
         self as usize
     }
@@ -1432,7 +1433,8 @@ impl TaggedHeap {
     /// Deferred-sweep cost + termination-drain instrumentation snapshot.
     /// Read the collector's mark bit without exposing collector internals to
     /// evaluator regression fixtures. Call only while the fixture excludes writes.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn value_is_marked_for_test(&self, value: TaggedValue) -> bool {
         self.is_value_marked(value)
     }

@@ -780,7 +780,7 @@ impl Context {
 
     /// Test-only: observed depth of the backtrace args stack (containment
     /// regression tests assert deferred unwind returns it to its base).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn backtrace_args_stack_len_for_test(&self) -> usize {
         self.backtrace_args_stack.len()

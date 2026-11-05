@@ -203,7 +203,7 @@ pub struct RuntimeState {
     /// process — a hot copy and a forced-cold copy — to cancel the
     /// cross-process CPU-frequency variance that wrecks a two-process A/B).
     /// Absent from the production library (only the test binary carries it).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) force_interpret: std::sync::atomic::AtomicBool,
 }
 
@@ -274,7 +274,7 @@ impl RuntimeState {
             // HofCallerBit::Unknown (0): the cached HOF classification has
             // not been computed yet.
             hof_caller: std::sync::atomic::AtomicU8::new(0),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             force_interpret: std::sync::atomic::AtomicBool::new(false),
         }
     }
@@ -492,6 +492,15 @@ impl RuntimeState {
     #[doc(hidden)]
     pub fn heat_ref(&self) -> &AtomicU32 {
         &self.heat
+    }
+
+    /// Test-support writer for the Tier-0 pin knob (P1-CLASSES-ALL-CRATES:
+    /// a test-mode write; the Atomic itself is never handed out). Reached only
+    /// through the value fence delegate `test_support::authority`.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn set_force_interpret_for_test(&self, on: bool) {
+        self.force_interpret
+            .store(on, std::sync::atomic::Ordering::Relaxed);
     }
     #[cfg_attr(not(feature = "jit"), allow(dead_code))]
     #[inline]

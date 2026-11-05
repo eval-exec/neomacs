@@ -5,7 +5,7 @@ use super::*;
 
 fn safe_call_context() -> Context {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     ctx.eval_str(
         r#"(defvar gd-b-safe-events nil)
            (defvar gd-b-safe-hooks nil)
@@ -45,9 +45,9 @@ fn gd_b_safe_call_barrier_stops_outer_handlers_after_inner_handlers() {
                                 gd-b-safe-events)))))"#,
         )
         .unwrap();
-    let spec_depth = ctx.specpdl.len();
+    let spec_depth = ctx.specpdl().len();
     assert_eq!(ctx.safe_funcall(callback, vec![]).unwrap(), Value::NIL);
-    assert_eq!(ctx.specpdl.len(), spec_depth);
+    assert_eq!(ctx.specpdl().len(), spec_depth);
     assert_eq!(ctx.condition_stack.len(), 1);
     assert_eq!(
         format_eval_result(&ctx.eval_str("(list gd-b-safe-events gd-b-safe-hooks gd-b-safe-debug inhibit-redisplay inhibit-debugger)")),
@@ -80,7 +80,7 @@ fn gd_b_safe_call_debug_on_signal_overrides_the_qt_barrier() {
             Value::bool(inhibit_debugger)
         );
         assert!(ctx.condition_stack.is_empty());
-        assert!(ctx.specpdl.is_empty());
+        assert!(ctx.specpdl().is_empty());
     }
 }
 
@@ -90,13 +90,13 @@ fn gd_b_safe_call_qt_handler_catches_quit_and_non_error_conditions() {
         "(lambda () (signal 'quit nil))",
         "(lambda () (signal 'gd-b-safe-condition '(payload)))",
     ] {
-        let mut ctx = Context::new();
+        let mut ctx = crate::test_utils::new_context();
         ctx.eval_str("(put 'gd-b-safe-condition 'error-conditions '(gd-b-safe-condition))")
             .unwrap();
         let callback = ctx.eval_str(callback_source).unwrap();
         assert_eq!(ctx.safe_funcall(callback, vec![]).unwrap(), Value::NIL);
         assert!(ctx.condition_stack.is_empty());
-        assert!(ctx.specpdl.is_empty());
+        assert!(ctx.specpdl().is_empty());
     }
 }
 
@@ -105,7 +105,7 @@ fn gd_b_safe_call_preserves_values_and_nonlocal_throws() {
     fn call_safe(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
         ctx.safe_funcall(args[0], vec![])
     }
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     ctx.register_subr(SubrSpec::new(
         "gd-b-safe-call",
         NativeFn::ContextVec(call_safe),
@@ -118,13 +118,13 @@ fn gd_b_safe_call_preserves_values_and_nonlocal_throws() {
         "OK (42 escaped)"
     );
     assert!(ctx.condition_stack.is_empty());
-    assert!(ctx.specpdl.is_empty());
+    assert!(ctx.specpdl().is_empty());
 }
 
 #[test]
 fn gd_b_safe_call_its_own_binding_is_outside_the_qt_handler() {
     for operation in ["let", "unlet"] {
-        let mut ctx = Context::new();
+        let mut ctx = crate::test_utils::new_context();
         let callback = ctx.eval_str("(lambda () 42)").unwrap();
         ctx.eval_str(&format!(
             r#"(add-variable-watcher
@@ -142,6 +142,6 @@ fn gd_b_safe_call_its_own_binding_is_outside_the_qt_handler() {
             "(error (\"safe binding\"))"
         );
         assert!(ctx.condition_stack.is_empty());
-        assert!(ctx.specpdl.is_empty());
+        assert!(ctx.specpdl().is_empty());
     }
 }

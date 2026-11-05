@@ -1,14 +1,106 @@
-use super::*;
-use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::eval::*;
+mod moved_eval_prelude {
+    #![allow(unused_imports, ambiguous_glob_reexports)]
+    pub use crate::emacs_core::advice::VariableWatcherList;
+    pub use crate::emacs_core::autoload::AutoloadManager;
+    pub use crate::emacs_core::builtins;
+    pub use crate::emacs_core::custom::CustomManager;
+    pub use crate::emacs_core::eval::data::abbrev::AbbrevManager;
+    pub use crate::emacs_core::eval::data::face::FaceTable;
+    pub use crate::emacs_core::eval::data::minibuffer::MinibufferManager;
+    pub use crate::emacs_core::eval::data::process_state::ProcessManager;
+    pub use crate::emacs_core::eval::data::register::RegisterManager;
+    pub use crate::emacs_core::eval::data::xwidget;
+    pub use crate::emacs_core::eval::interactive_registry::InteractiveRegistry;
+    pub use crate::emacs_core::eval::keymap_lookup::{
+        list_keymap_define, list_keymap_set_parent, make_sparse_list_keymap,
+    };
+    pub use crate::emacs_core::eval::protocol::tty_host::TtyFrameHostFactory;
+    pub use crate::emacs_core::eval::protocol::{DisplayHost, FrameFontRequest};
+    pub use crate::emacs_core::eval::protocol::{
+        FontOpeningSize, FrameFontSize, TerminalCreateRequest, TerminalDisplayTarget,
+        TerminalFloatPlacement, TerminalGridSize, TerminalId,
+    };
+    pub use crate::emacs_core::print::map_flow;
+    pub use crate::emacs_core::process::{ProcessCodingSystemsExt, SystemProcessExt};
+    pub use crate::emacs_core::threads::ThreadManager;
+    pub use crate::window::display::WindowDisplayContextExt;
+    pub use crate::window::{DisplayFrameExt, DisplayFrameManagerExt};
+    pub use neovm_eval::test_support::authority::{
+        force_profit_gate_for_test, jit_compiled_id_for_test, jit_compiled_id_or_assign_for_test,
+        jit_is_hot_for_test, jit_mark_cold_for_test, jit_mark_hot_for_test,
+        jit_patched_prefix_for_test, service_pending_timers_for_test,
+    };
+    pub use neovm_system::emacs_core::timer::TimerContextExt;
+    pub use neovm_system::emacs_core::wait::WaitContextExt;
+    pub use rustc_hash::FxHashMap;
+    pub use smallvec::SmallVec;
+    pub use std::cell::{Cell, RefCell};
+    pub use std::collections::HashMap;
+    pub use std::collections::HashSet;
+    pub use std::hash::Hash;
+    pub use std::path::Path;
+    pub use std::sync::OnceLock;
+    pub use strum::{EnumString, IntoStaticStr};
+
+    pub use crate::emacs_core::eval::data::window_state::{
+        BodyRedisplayRevision, ForcedBodyRedisplay, FrameManager,
+    };
+    pub use crate::emacs_core::eval::redisplay_hooks::{
+        RedisplayMiniGeometryRequest, RedisplayMiniGeometrySource, RedisplayMiniPreparationFailure,
+    };
+    pub use crate::emacs_core::eval::{
+        collect_thread_local_gc_roots, for_each_thread_local_root_source,
+    };
+    pub use neomacs_display_protocol::GraphicalFaceAttribute;
+    pub use neovm_edit::buffer::{BufferId, BufferManager, CharPos0, EmacsBytePos, LispCharPos1};
+    pub use neovm_edit::emacs_core::bookmark::BookmarkManager;
+    pub use neovm_edit::emacs_core::display_metrics::WindowId;
+    pub use neovm_edit::emacs_core::mode::ModeRegistry;
+    pub use neovm_edit::emacs_core::rect::RectangleState;
+    pub use neovm_edit::emacs_core::redisplay_policy::RedisplayHookPolicyGuard;
+    pub use neovm_edit::emacs_core::redisplay_policy::gnu_redisplay_hooks_enabled;
+    pub use neovm_text::emacs_core::coding::CodingSystemManager;
+    pub use neovm_text::emacs_core::regex::MatchData;
+    pub use neovm_value::display_vocab::XwidgetScriptRequestId;
+    pub use neovm_value::display_vocab::{
+        FontSlant, FontWeight, FontWidth, FrameFullscreen, FrameId,
+    };
+    pub use neovm_value::error::*;
+    pub use neovm_value::gc_trace::GcTrace;
+    pub use neovm_value::intern::{
+        SymId, WellKnown, format_symbol_name_for_diagnostic, intern, intern_uninterned,
+        is_canonical_id, is_keyword_id, resolve_sym, symbol_name_id,
+    };
+    pub use neovm_value::kmacro::KmacroManager;
+    pub use neovm_value::quit::QuitRequest;
+    pub use neovm_value::quit::{ASYNC_ATTENTION, AsyncSource, quit_pending as tls_quit_pending};
+    pub use neovm_value::symbol::{CanonicalAccess, ConstantWrite, Obarray};
+    pub use neovm_value::tagged::header::{CLOSURE_ARGLIST, SubrDispatchKind, SubrInteractivity};
+    pub use neovm_value::value::flow_vocab::ResumeTarget;
+    pub use neovm_value::value::flow_vocab::ShutdownRequest;
+    pub use neovm_value::value::*;
+}
+use self::moved_eval_prelude::*;
+use crate::emacs_core::builtins;
+use crate::emacs_core::jit::compile;
+use crate::emacs_core::keyboard::CommandLoopHost;
+
+/// The V1 minimal VM harness through the signed TA2 fence, with the REAL
+/// boot proof from core test_utils (S-2 precedent); the constructor itself
+/// stays unwidened.
+fn minimal_vm_harness_for_test() -> Context {
+    let boot = crate::test_utils::new_context();
+    neovm_eval::test_support::authority::new_minimal_vm_harness(boot.hooks_installed())
+}
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
-use crate::emacs_core::eval::subr_abi::SubrValueExt;
-use crate::emacs_core::jit::RuntimeStateTieringExt;
+use crate::emacs_core::eval::SubrValueExt;
 /// GNU `Fprogn` (eval.c:440-445) reads the rest of the body list BEFORE
 /// evaluating each form; a form that mutates its own containing list must
 /// not skip its later siblings. Neo used to re-read the cdr after the call.
 #[test]
 fn progn_reads_the_body_tail_before_evaluating_a_form() {
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let value = ctx
         .eval_str(
             "(progn
@@ -101,13 +193,13 @@ fn legacy_redisplay_fixture_policy() -> RedisplayHookPolicyGuard {
 }
 
 fn eval_one(src: &str) -> String {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let result = ev.eval_str(src);
     format_eval_result(&result)
 }
 
 fn eval_one_lexical(src: &str) -> String {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_lexical_binding(true);
     let result = ev.eval_str(src);
     format_eval_result(&result)
@@ -120,7 +212,7 @@ fn install_global_map_for_test(ev: &mut Context, global_map: Value) {
 
 #[test]
 fn c_level_defsym_hook_names_are_in_global_obarray() {
-    let ev = Context::new();
+    let ev = crate::test_utils::new_context();
 
     for name in [
         "insert-in-front-hooks",
@@ -149,7 +241,7 @@ fn c_level_defsym_hook_names_are_in_global_obarray() {
 
 #[test]
 fn erase_buffer_is_disabled_by_c_level_initialization() {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
 
     assert_eq!(
         ev.eval_str("(get 'erase-buffer 'disabled)")
@@ -160,7 +252,7 @@ fn erase_buffer_is_disabled_by_c_level_initialization() {
 
 #[test]
 fn x_selection_hooks_match_gnu_xselect_startup_bindings() {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let result = ev
         .eval_str(
             r#"(list (boundp 'emacs-clipboard-manager-exit-hook)
@@ -224,7 +316,7 @@ fn sort_signals_circular_list_like_gnu() {
 }
 
 fn eval_all(src: &str) -> Vec<String> {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let forms = crate::emacs_core::value_reader::read_all(
         src,
         VariableView::canonical(CanonicalAccess::TEST, &test_ob()),
@@ -250,10 +342,10 @@ fn eval_all(src: &str) -> Vec<String> {
 }
 
 fn eval_one_with_frame(src: &str) -> String {
-    let mut ev = Context::new();
-    let buf = ev.buffers.create_buffer("*scratch*");
-    ev.buffers.set_current(buf);
-    ev.frames.create_frame("F1", 800, 600, buf);
+    let mut ev = crate::test_utils::new_context();
+    let buf = ev.edit.buffers.create_buffer("*scratch*");
+    ev.edit.buffers.set_current(buf);
+    ev.frame_manager_mut().create_frame("F1", 800, 600, buf);
     // These tests exercise `make-frame`, which requires a usable terminal (in
     // production --batch deliberately has none, so it errors like GNU).
     crate::emacs_core::terminal::pure::mark_selected_terminal_usable_for_test(&ev);
@@ -262,7 +354,7 @@ fn eval_one_with_frame(src: &str) -> String {
 }
 
 fn eval_all_with_subr(src: &str) -> Vec<String> {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     load_minimal_gnu_backquote_runtime(&mut ev);
     ev.eval_str_each(src)
         .iter()
@@ -485,17 +577,19 @@ fn symbol_with_pos_property_keys_follow_gnu_eq_rules() {
 #[test]
 fn skip_debugger_matches_raw_unibyte_ignored_error_regex() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     // SAFETY: the native standard-error fixture writes only properties,
     // with no Lisp/collection, canonical dispatch changes or escaping loan.
     unsafe {
-        ev.obarray
-            .with_legacy_value_write(neovm_value::errors::init_standard_errors);
+        neovm_eval::test_support::authority::with_legacy_value_write_for_test(
+            &mut ev,
+            neovm_value::errors::init_standard_errors,
+        );
     }
     let raw = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![
         0xFF,
     ]));
-    ev.obarray
+    ev.obarray_mut()
         .set_symbol_value("debug-ignored-errors", Value::list(vec![raw]));
     let sig = match neovm_value::error::signal("error", vec![raw]).into_kind() {
         FlowKind::Signal(sig) => sig,
@@ -518,12 +612,14 @@ fn skip_debugger_matches_raw_unibyte_ignored_error_regex() {
 #[test]
 fn command_error_severity_follows_gnus_debug_ignored_errors() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     // SAFETY: the native standard-error fixture writes only properties,
     // with no Lisp/collection, canonical dispatch changes or escaping loan.
     unsafe {
-        ev.obarray
-            .with_legacy_value_write(neovm_value::errors::init_standard_errors);
+        neovm_eval::test_support::authority::with_legacy_value_write_for_test(
+            &mut ev,
+            neovm_value::errors::init_standard_errors,
+        );
     }
     let signal_of =
         |name: &str, data: Vec<Value>| match neovm_value::error::signal(name, data).into_kind() {
@@ -603,12 +699,14 @@ fn command_error_severity_follows_gnus_debug_ignored_errors() {
 #[test]
 fn command_error_severity_never_signals_on_a_bad_ignore_list() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     // SAFETY: the native standard-error fixture writes only properties,
     // with no Lisp/collection, canonical dispatch changes or escaping loan.
     unsafe {
-        ev.obarray
-            .with_legacy_value_write(neovm_value::errors::init_standard_errors);
+        neovm_eval::test_support::authority::with_legacy_value_write_for_test(
+            &mut ev,
+            neovm_value::errors::init_standard_errors,
+        );
     }
     ev.eval_str(r#"(setq debug-ignored-errors '("[" end-of-buffer))"#)
         .expect("install a broken regexp entry");
@@ -792,7 +890,7 @@ fn eval_with_explicit_lexenv_restores_outer_lexenv() {
 #[test]
 fn neomacs_effect_api_sets_and_queries_named_properties() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let effect_calls = Rc::new(RefCell::new(Vec::new()));
     ev.set_display_host(Box::new(VisualConfigRecordingDisplayHost {
         visual_calls: Rc::clone(&effect_calls),
@@ -831,7 +929,7 @@ fn neomacs_effect_api_sets_and_queries_named_properties() {
 #[test]
 fn neomacs_effect_profiles_validate_atomically() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let visual_calls = Rc::new(RefCell::new(Vec::new()));
     ev.set_display_host(Box::new(VisualConfigRecordingDisplayHost {
         visual_calls: Rc::clone(&visual_calls),
@@ -871,7 +969,7 @@ fn neomacs_effect_profiles_validate_atomically() {
 #[test]
 fn named_visual_behavior_configs_replace_positional_animation_setters() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
 
     let value = ev
         .eval_str(
@@ -1015,7 +1113,7 @@ fn eval_with_explicit_lexenv_shadows_special_reads_and_setq() {
 #[test]
 fn source_cons_macro_form_expands_via_value_expansion_path() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     // Verify that the eval loop's macro dispatch correctly handles a
     // macro defined as a `(macro . FN)` cons cell (mirrors GNU
     // eval.c:2730 — a "macro function" cell that wraps a lambda).
@@ -1042,7 +1140,7 @@ fn source_cons_macro_form_expands_via_value_expansion_path() {
 fn recursive_edit_without_input_receiver_still_runs_noninteractive_top_level() {
     crate::test_utils::init_test_tracing();
 
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_variable("noninteractive", Value::T);
     let top_level = crate::emacs_core::value_reader::read_all(
         "(progn (setq neomacs--batch-no-input-probe 42) nil)",
@@ -1054,7 +1152,7 @@ fn recursive_edit_without_input_receiver_still_runs_noninteractive_top_level() {
     .expect("top-level form");
     ev.set_variable("top-level", top_level);
 
-    let result = ev.recursive_edit();
+    let result = crate::emacs_core::keyboard::recursive_edit(&mut ev);
     assert!(result.is_ok(), "batch recursive edit should exit cleanly");
     assert_eq!(
         ev.shutdown_request(),
@@ -1074,7 +1172,7 @@ fn recursive_edit_without_input_receiver_still_runs_noninteractive_top_level() {
 fn outer_command_loop_leaves_exit_unmatched_inside_keyboard_macro() {
     crate::test_utils::init_test_tracing();
 
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_variable("noninteractive", Value::T);
     let top_level = crate::emacs_core::value_reader::read_all(
         r#"(progn
@@ -1104,7 +1202,7 @@ fn outer_command_loop_leaves_exit_unmatched_inside_keyboard_macro() {
     .expect("top-level form");
     ev.set_variable("top-level", top_level);
 
-    let result = ev.recursive_edit();
+    let result = crate::emacs_core::keyboard::recursive_edit(&mut ev);
 
     assert!(result.is_ok(), "batch recursive edit should exit cleanly");
     assert_eq!(
@@ -1126,19 +1224,11 @@ fn outer_command_loop_leaves_exit_unmatched_inside_keyboard_macro() {
 fn clear_top_level_eval_state_discards_stale_named_call_cache_entries() {
     crate::test_utils::init_test_tracing();
 
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str(r#"(autoload 'neomacs--stale-call-target "dummy-file" nil t)"#)
         .expect("autoload registration should succeed");
     let sym = intern("neomacs--stale-call-target");
-    let epoch = ev.obarray.function_epoch();
-
-    ev.named_call_cache.insert(
-        sym,
-        NamedCallCacheEntry {
-            function_epoch: epoch,
-            target: NamedCallTarget::Void,
-        },
-    );
+    neovm_eval::test_support::authority::plant_stale_named_call_cache_entry_for_test(&mut ev, sym);
     assert!(matches!(
         ev.resolve_named_call_target_by_id(sym),
         NamedCallTarget::Void
@@ -1163,7 +1253,7 @@ fn clear_top_level_eval_state_discards_stale_named_call_cache_entries() {
 #[test]
 fn runtime_macro_expansion_repeats_across_equivalent_explicit_environments() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     // `load-in-progress` must not change macro invocation semantics.
     ev.set_variable("load-in-progress", Value::T);
     ev.eval_str("(defvar runtime-cache-count 0)")
@@ -1191,7 +1281,7 @@ fn runtime_macro_expansion_repeats_across_equivalent_explicit_environments() {
         Value::symbol("marker"),
     )]);
 
-    let calls0 = ev.macro_expand_calls;
+    let calls0 = ev.macro_expand_calls_for_test();
 
     let first = ev
         .expand_macro_for_macroexpand(form, definition, vec![arg], Some(env1))
@@ -1202,7 +1292,7 @@ fn runtime_macro_expansion_repeats_across_equivalent_explicit_environments() {
 
     assert!(equal_value(&first, &arg, 0));
     assert!(equal_value(&second, &arg, 0));
-    assert_eq!(ev.macro_expand_calls - calls0, 2);
+    assert_eq!(ev.macro_expand_calls_for_test() - calls0, 2);
     assert_eq!(
         ev.obarray()
             .symbol_value_copied("runtime-cache-count")
@@ -1214,7 +1304,7 @@ fn runtime_macro_expansion_repeats_across_equivalent_explicit_environments() {
 #[test]
 fn runtime_macro_expansion_handles_raw_unibyte_strings_in_environment() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_variable("load-in-progress", Value::T);
     ev.eval_str("(defvar runtime-cache-count 0)")
         .expect("defvar runtime-cache-count");
@@ -1238,7 +1328,7 @@ fn runtime_macro_expansion_handles_raw_unibyte_strings_in_environment() {
     let env1 = Value::list(vec![Value::cons(Value::symbol("context"), raw_unibyte)]);
     let env2 = Value::list(vec![Value::cons(Value::symbol("context"), raw_unibyte)]);
 
-    let calls0 = ev.macro_expand_calls;
+    let calls0 = ev.macro_expand_calls_for_test();
 
     let first = ev
         .expand_macro_for_macroexpand(form, definition, vec![arg], Some(env1))
@@ -1249,7 +1339,7 @@ fn runtime_macro_expansion_handles_raw_unibyte_strings_in_environment() {
 
     assert!(equal_value(&first, &arg, 0));
     assert!(equal_value(&second, &arg, 0));
-    assert_eq!(ev.macro_expand_calls - calls0, 2);
+    assert_eq!(ev.macro_expand_calls_for_test() - calls0, 2);
     assert_eq!(
         ev.obarray()
             .symbol_value_copied("runtime-cache-count")
@@ -1261,7 +1351,7 @@ fn runtime_macro_expansion_handles_raw_unibyte_strings_in_environment() {
 #[test]
 fn runtime_macro_expansion_handles_raw_unibyte_string_arguments() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_variable("load-in-progress", Value::T);
     ev.eval_str("(defvar runtime-cache-bytes-count 0)")
         .expect("defvar runtime-cache-bytes-count");
@@ -1282,7 +1372,7 @@ fn runtime_macro_expansion_handles_raw_unibyte_string_arguments() {
     let arg = Value::heap_string(LispString::from_unibyte(vec![0xFF]));
     let form = Value::list(vec![Value::symbol("runtime-cache-bytes-macro"), arg]);
 
-    let calls0 = ev.macro_expand_calls;
+    let calls0 = ev.macro_expand_calls_for_test();
 
     let first = ev
         .expand_macro_for_macroexpand(form, definition, vec![arg], None)
@@ -1293,7 +1383,7 @@ fn runtime_macro_expansion_handles_raw_unibyte_string_arguments() {
 
     assert!(equal_value(&first, &arg, 0));
     assert!(equal_value(&second, &arg, 0));
-    assert_eq!(ev.macro_expand_calls - calls0, 2);
+    assert_eq!(ev.macro_expand_calls_for_test() - calls0, 2);
     assert_eq!(
         ev.obarray()
             .symbol_value_copied("runtime-cache-bytes-count")
@@ -1305,7 +1395,7 @@ fn runtime_macro_expansion_handles_raw_unibyte_string_arguments() {
 #[test]
 fn catch_leaves_shared_condition_stack_balanced() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let result = ev.eval_str("(catch 'tag (throw 'tag 42))");
     assert_eq!(format_eval_result(&result), "OK 42");
     assert_eq!(ev.condition_stack_depth_for_test(), 0);
@@ -1315,7 +1405,7 @@ fn catch_leaves_shared_condition_stack_balanced() {
 #[test]
 fn condition_case_leaves_shared_condition_stack_balanced() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let result = ev.eval_str("(condition-case err (signal 'error 1) (error err))");
     assert_eq!(format_eval_result(&result), "OK (error . 1)");
     assert_eq!(ev.condition_stack_depth_for_test(), 0);
@@ -1325,7 +1415,7 @@ fn condition_case_leaves_shared_condition_stack_balanced() {
 #[test]
 fn condition_case_without_handlers_returns_body_value() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let result = ev.eval_str("(condition-case nil (progn 42))");
     assert_eq!(format_eval_result(&result), "OK 42");
     assert_eq!(ev.condition_stack_depth_for_test(), 0);
@@ -1335,7 +1425,7 @@ fn condition_case_without_handlers_returns_body_value() {
 #[test]
 fn condition_case_value_path_catches_default_toplevel_value_signal() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let result = ev.eval_str(
         "(condition-case nil
             (default-toplevel-value 'vm-unbound-value-path)
@@ -1349,7 +1439,7 @@ fn condition_case_value_path_catches_default_toplevel_value_signal() {
 #[test]
 fn handler_bind_1_leaves_shared_condition_stack_balanced() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let result = ev.eval_str(
         r#"(condition-case err
            (handler-bind-1 (lambda () (signal 'error 1))
@@ -1385,7 +1475,7 @@ fn handler_bind_1_runs_inside_signal_dynamic_extent() {
 #[test]
 fn set_lexical_binding_syncs_top_level_lexenv_sentinel() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
 
     assert!(ev.lexenv.is_nil());
     assert!(!ev.lexical_binding());
@@ -1404,10 +1494,10 @@ fn set_lexical_binding_syncs_top_level_lexenv_sentinel() {
 #[test]
 fn set_lexical_binding_updates_visible_dynamic_binding() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let sym = intern("lexical-binding");
 
-    let specpdl_count = ev.specpdl.len();
+    let specpdl_count = ev.specpdl().len();
     ev.try_specbind(sym, Value::NIL)
         .expect("lexical-binding dynamic binding");
     assert!(ev.visible_variable_value_or_nil("lexical-binding").is_nil());
@@ -1439,7 +1529,7 @@ fn lexical_binding_is_local_if_set_like_gnu() {
 #[test]
 fn clear_top_level_eval_state_restores_top_level_lexenv_mode() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_lexical_binding(true);
     ev.lexenv = Value::list(vec![Value::symbol("vm-temp"), Value::T]);
 
@@ -1496,7 +1586,7 @@ fn handler_bind_1_handlers_do_not_apply_within_handlers() {
 #[test]
 fn signal_hook_function_sees_raw_signal_payload_before_condition_case() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     assert_eq!(
         format_eval_result(&eval.eval_str(
@@ -1515,7 +1605,7 @@ fn signal_hook_function_sees_raw_signal_payload_before_condition_case() {
 #[test]
 fn signal_hook_function_runs_before_invalid_error_symbol_canonicalization() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     assert_eq!(
         format_eval_result(&eval.eval_str(
@@ -1550,7 +1640,7 @@ fn signal_nil_symbol_with_nil_payload_becomes_plain_error() {
 #[test]
 fn signal_nil_error_object_uses_embedded_symbol_and_skips_signal_hook() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     assert_eq!(
         format_eval_result(&eval.eval_str(
@@ -1579,7 +1669,7 @@ fn signal_nil_error_object_with_invalid_symbol_reports_generic_invalid_error() {
 fn evaluator_drop_leaves_symids_resolvable() {
     crate::test_utils::init_test_tracing();
     let sym = {
-        let _ev = Context::new_minimal_vm_harness();
+        let _ev = minimal_vm_harness_for_test();
         neovm_value::intern::intern("drop-stable-symbol")
     };
     assert_eq!(neovm_value::intern::resolve_sym(sym), "drop-stable-symbol");
@@ -1588,38 +1678,44 @@ fn evaluator_drop_leaves_symids_resolvable() {
 #[test]
 fn evaluator_reuses_hidden_internal_interpreter_environment_symbol() {
     crate::test_utils::init_test_tracing();
-    let first = Context::new_minimal_vm_harness().internal_interpreter_environment_symbol;
-    let second = Context::new_minimal_vm_harness().internal_interpreter_environment_symbol;
+    let first = minimal_vm_harness_for_test().internal_interpreter_environment_symbol_for_test();
+    let second = minimal_vm_harness_for_test().internal_interpreter_environment_symbol_for_test();
     assert_eq!(first, second);
 }
 
 #[test]
 fn read_char_applies_resize_event_before_returning_next_keypress() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let fid = ev
-        .frames
+        .frame_manager_mut()
         .create_frame("F1", 960, 640, neovm_edit::buffer::BufferId(1));
-    assert_eq!(ev.frames.selected_frame().map(|frame| frame.id), Some(fid));
+    assert_eq!(
+        ev.frame_manager().selected_frame().map(|frame| frame.id),
+        Some(fid)
+    );
 
-    let tx = crate::host_input::HostInputPublisher::install(&mut ev);
+    let tx = neovm_system::emacs_core::host_input::HostInputPublisher::install(&mut ev);
 
-    tx.send(crate::keyboard::InputEvent::Resize {
+    tx.send(crate::emacs_core::eval::keyboard::InputEvent::Resize {
         width: 700,
         height: 800,
         scale_factor: 1.0,
         emacs_frame_id: 0,
     })
     .unwrap();
-    tx.send(crate::keyboard::InputEvent::key_press(
-        crate::keyboard::KeyEvent::char('a'),
+    tx.send(crate::emacs_core::eval::keyboard::InputEvent::key_press(
+        crate::emacs_core::eval::keyboard::KeyEvent::char('a'),
     ))
     .unwrap();
 
     let event = ev.read_char().expect("read_char should return a keypress");
     assert_eq!(event, Value::fixnum('a' as i64));
 
-    let frame = ev.frames.get(fid).expect("frame should still be live");
+    let frame = ev
+        .frame_manager()
+        .get(fid)
+        .expect("frame should still be live");
     assert_eq!(frame.width, 700);
     assert_eq!(frame.height, 800);
 }
@@ -1627,10 +1723,10 @@ fn read_char_applies_resize_event_before_returning_next_keypress() {
 #[test]
 fn read_char_exposes_raw_tty_escape_without_a_native_timeout() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    let tx = crate::host_input::HostInputPublisher::install(&mut ev);
+    let mut ev = crate::test_utils::new_context();
+    let tx = neovm_system::emacs_core::host_input::HostInputPublisher::install(&mut ev);
 
-    tx.send(crate::keyboard::InputEvent::raw_tty_bytes(vec![0x1b], 0))
+    tx.send(crate::emacs_core::eval::keyboard::InputEvent::raw_tty_bytes(vec![0x1b], 0))
         .unwrap();
 
     assert_eq!(ev.read_char().unwrap(), Value::fixnum(0x1b));
@@ -1639,24 +1735,18 @@ fn read_char_exposes_raw_tty_escape_without_a_native_timeout() {
 #[test]
 fn read_char_decodes_utf8_tty_input_split_across_host_reads() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     // A UTF-8 locale's keyboard coding (`set-locale-environment`); a bare
     // context has GNU `create_terminal`'s `no-conversion`.
     ev.eval_str("(set-keyboard-coding-system-internal 'utf-8-unix)")
         .expect("set the keyboard coding");
-    let tx = crate::host_input::HostInputPublisher::install(&mut ev);
+    let tx = neovm_system::emacs_core::host_input::HostInputPublisher::install(&mut ev);
 
     let bytes = "中".as_bytes();
-    tx.send(crate::keyboard::InputEvent::raw_tty_bytes(
-        bytes[..2].to_vec(),
-        0,
-    ))
-    .unwrap();
-    tx.send(crate::keyboard::InputEvent::raw_tty_bytes(
-        bytes[2..].to_vec(),
-        0,
-    ))
-    .unwrap();
+    tx.send(crate::emacs_core::eval::keyboard::InputEvent::raw_tty_bytes(bytes[..2].to_vec(), 0))
+        .unwrap();
+    tx.send(crate::emacs_core::eval::keyboard::InputEvent::raw_tty_bytes(bytes[2..].to_vec(), 0))
+        .unwrap();
 
     assert_eq!(ev.read_char().unwrap(), Value::fixnum('中' as i64));
 }
@@ -1664,16 +1754,16 @@ fn read_char_decodes_utf8_tty_input_split_across_host_reads() {
 #[test]
 fn read_char_applies_keyboard_coding_system_to_raw_tty_bytes() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     neovm_text::emacs_core::coding::builtin_set_keyboard_coding_system(
-        &mut ev.coding_systems,
+        ev.coding_systems_mut(),
         vec![Value::symbol("iso-latin-9")],
         neovm_value::tagged::value::SymbolMode::Bare,
     )
     .expect("set keyboard coding system");
-    let tx = crate::host_input::HostInputPublisher::install(&mut ev);
+    let tx = neovm_system::emacs_core::host_input::HostInputPublisher::install(&mut ev);
 
-    tx.send(crate::keyboard::InputEvent::raw_tty_bytes(vec![0xa4], 0))
+    tx.send(crate::emacs_core::eval::keyboard::InputEvent::raw_tty_bytes(vec![0xa4], 0))
         .unwrap();
 
     assert_eq!(ev.read_char().unwrap(), Value::fixnum('€' as i64));
@@ -1682,9 +1772,9 @@ fn read_char_applies_keyboard_coding_system_to_raw_tty_bytes() {
 #[test]
 fn read_char_preserves_emacs_internal_raw_byte_characters() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     neovm_text::emacs_core::coding::builtin_set_keyboard_coding_system(
-        &mut ev.coding_systems,
+        ev.coding_systems_mut(),
         vec![Value::symbol("emacs-internal")],
         neovm_value::tagged::value::SymbolMode::Bare,
     )
@@ -1692,17 +1782,16 @@ fn read_char_preserves_emacs_internal_raw_byte_characters() {
     let raw = neovm_value::emacs_char::EmacsChar::from_byte8(0xa4);
     let mut encoded = [0_u8; neovm_value::emacs_char::MAX_MULTIBYTE_LENGTH];
     let encoded_len = raw.char_string(&mut encoded);
-    let tx = crate::host_input::HostInputPublisher::install(&mut ev);
+    let tx = neovm_system::emacs_core::host_input::HostInputPublisher::install(&mut ev);
 
-    tx.send(crate::keyboard::InputEvent::raw_tty_bytes(
-        encoded[..1].to_vec(),
-        0,
-    ))
-    .unwrap();
-    tx.send(crate::keyboard::InputEvent::raw_tty_bytes(
-        encoded[1..encoded_len].to_vec(),
-        0,
-    ))
+    tx.send(crate::emacs_core::eval::keyboard::InputEvent::raw_tty_bytes(encoded[..1].to_vec(), 0))
+        .unwrap();
+    tx.send(
+        crate::emacs_core::eval::keyboard::InputEvent::raw_tty_bytes(
+            encoded[1..encoded_len].to_vec(),
+            0,
+        ),
+    )
     .unwrap();
 
     assert_eq!(
@@ -1714,18 +1803,18 @@ fn read_char_preserves_emacs_internal_raw_byte_characters() {
 #[test]
 fn read_char_streams_multibyte_keyboard_coding_across_host_reads() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     neovm_text::emacs_core::coding::builtin_set_keyboard_coding_system(
-        &mut ev.coding_systems,
+        ev.coding_systems_mut(),
         vec![Value::symbol("chinese-big5")],
         neovm_value::tagged::value::SymbolMode::Bare,
     )
     .expect("set keyboard coding system");
-    let tx = crate::host_input::HostInputPublisher::install(&mut ev);
+    let tx = neovm_system::emacs_core::host_input::HostInputPublisher::install(&mut ev);
 
-    tx.send(crate::keyboard::InputEvent::raw_tty_bytes(vec![0xa4], 0))
+    tx.send(crate::emacs_core::eval::keyboard::InputEvent::raw_tty_bytes(vec![0xa4], 0))
         .unwrap();
-    tx.send(crate::keyboard::InputEvent::raw_tty_bytes(vec![0x40], 0))
+    tx.send(crate::emacs_core::eval::keyboard::InputEvent::raw_tty_bytes(vec![0x40], 0))
         .unwrap();
 
     assert_eq!(ev.read_char().unwrap(), Value::fixnum('一' as i64));
@@ -1734,7 +1823,7 @@ fn read_char_streams_multibyte_keyboard_coding_across_host_reads() {
 #[test]
 fn read_key_sequence_translates_raw_tty_csi_through_input_decode_map() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let global_map = crate::emacs_core::keymap::make_sparse_list_keymap();
     install_global_map_for_test(&mut ev, global_map);
     crate::emacs_core::keymap::list_keymap_define_seq(
@@ -1758,13 +1847,10 @@ fn read_key_sequence_translates_raw_tty_csi_through_input_decode_map() {
         neovm_value::tagged::SymbolMode::Bare,
     )
     .expect("define CSI translation");
-    let tx = crate::host_input::HostInputPublisher::install(&mut ev);
+    let tx = neovm_system::emacs_core::host_input::HostInputPublisher::install(&mut ev);
 
-    tx.send(crate::keyboard::InputEvent::raw_tty_bytes(
-        b"\x1b[A".to_vec(),
-        0,
-    ))
-    .unwrap();
+    tx.send(crate::emacs_core::eval::keyboard::InputEvent::raw_tty_bytes(b"\x1b[A".to_vec(), 0))
+        .unwrap();
 
     let (keys, binding) = ev.read_key_sequence().expect("read translated CSI");
     assert_eq!(keys, vec![Value::symbol("up")]);
@@ -1774,7 +1860,7 @@ fn read_key_sequence_translates_raw_tty_csi_through_input_decode_map() {
 #[test]
 fn read_key_sequence_keeps_events_after_an_earlier_decode_translation() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let global_map = crate::emacs_core::keymap::make_sparse_list_keymap();
     install_global_map_for_test(&mut ev, global_map);
     let ctrl_x = Value::fixnum(0x18);
@@ -1799,13 +1885,10 @@ fn read_key_sequence_keeps_events_after_an_earlier_decode_translation() {
         )
         .expect("define identity translation");
     }
-    let tx = crate::host_input::HostInputPublisher::install(&mut ev);
+    let tx = neovm_system::emacs_core::host_input::HostInputPublisher::install(&mut ev);
 
-    tx.send(crate::keyboard::InputEvent::raw_tty_bytes(
-        vec![0x18, 0x03],
-        0,
-    ))
-    .unwrap();
+    tx.send(crate::emacs_core::eval::keyboard::InputEvent::raw_tty_bytes(vec![0x18, 0x03], 0))
+        .unwrap();
     // Close the channel so a reader that lost C-c fails with quit instead of
     // waiting forever for another key.
     drop(tx);
@@ -1818,11 +1901,11 @@ fn read_key_sequence_keeps_events_after_an_earlier_decode_translation() {
 #[test]
 fn read_char_switches_active_kboard_to_keypress_source_frame_terminal() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    let buf = ev.buffers.create_buffer("*scratch*");
-    ev.buffers.set_current(buf);
-    let primary = ev.frames.create_frame("F1", 960, 640, buf);
-    ev.command_loop
+    let mut ev = crate::test_utils::new_context();
+    let buf = ev.edit.buffers.create_buffer("*scratch*");
+    ev.edit.buffers.set_current(buf);
+    let primary = ev.frame_manager_mut().create_frame("F1", 960, 640, buf);
+    ev.command_loop_mut()
         .keyboard
         .set_input_decode_map(Value::symbol("primary-map"));
 
@@ -1831,17 +1914,21 @@ fn read_char_switches_active_kboard_to_keypress_source_frame_terminal() {
         "tty-7",
         crate::emacs_core::terminal::pure::TerminalRuntimeConfig::interactive(Some("xterm-256color".to_string()), neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities::full_with_color_cells(256)),
     );
-    let secondary = ev.frames.create_frame_on_terminal("F2", 7, 960, 640, buf);
-    assert!(ev.frames.select_frame(primary));
+    let secondary = ev
+        .frame_manager_mut()
+        .create_frame_on_terminal("F2", 7, 960, 640, buf);
+    assert!(ev.frame_manager_mut().select_frame(primary));
     ev.sync_keyboard_terminal_owner();
-    assert_eq!(ev.command_loop.keyboard.active_terminal_id(), 0);
+    assert_eq!(ev.command_loop().keyboard.active_terminal_id(), 0);
 
-    let tx = crate::host_input::HostInputPublisher::install(&mut ev);
+    let tx = neovm_system::emacs_core::host_input::HostInputPublisher::install(&mut ev);
 
-    tx.send(crate::keyboard::InputEvent::key_press_in_frame(
-        crate::keyboard::KeyEvent::char('z'),
-        secondary.0,
-    ))
+    tx.send(
+        crate::emacs_core::eval::keyboard::InputEvent::key_press_in_frame(
+            crate::emacs_core::eval::keyboard::KeyEvent::char('z'),
+            secondary.0,
+        ),
+    )
     .unwrap();
 
     let event = ev
@@ -1854,13 +1941,13 @@ fn read_char_switches_active_kboard_to_keypress_source_frame_terminal() {
             Value::make_frame(secondary.0)
         ])
     );
-    assert_eq!(ev.command_loop.keyboard.active_terminal_id(), 7);
+    assert_eq!(ev.command_loop().keyboard.active_terminal_id(), 7);
     assert_eq!(
         ev.read_char().expect("the original key stays queued"),
         Value::fixnum('z' as i64)
     );
     assert_eq!(
-        ev.command_loop.keyboard.input_decode_map(),
+        ev.command_loop().keyboard.input_decode_map(),
         Value::NIL,
         "raw key ingress should switch to the source frame terminal before key decoding state is used"
     );
@@ -1869,11 +1956,14 @@ fn read_char_switches_active_kboard_to_keypress_source_frame_terminal() {
 #[test]
 fn read_char_returns_unread_emacs_event_value_without_reencoding() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    let meta_x = crate::keyboard::KeyEvent::char_with_mods('x', crate::keyboard::Modifiers::meta())
-        .to_emacs_event_value();
+    let mut ev = crate::test_utils::new_context();
+    let meta_x = crate::emacs_core::eval::keyboard::KeyEvent::char_with_mods(
+        'x',
+        crate::emacs_core::eval::keyboard::Modifiers::meta(),
+    )
+    .to_emacs_event_value();
 
-    ev.command_loop
+    ev.command_loop_mut()
         .keyboard
         .kboard
         .unread_events
@@ -1888,24 +1978,26 @@ fn read_char_returns_unread_emacs_event_value_without_reencoding() {
 #[test]
 fn read_char_returns_macro_playback_event_value_without_reencoding() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    let return_event =
-        crate::keyboard::KeyEvent::named(crate::keyboard::NamedKey::Return).to_emacs_event_value();
+    let mut ev = crate::test_utils::new_context();
+    let return_event = crate::emacs_core::eval::keyboard::KeyEvent::named(
+        crate::emacs_core::eval::keyboard::NamedKey::Return,
+    )
+    .to_emacs_event_value();
 
-    ev.command_loop.keyboard.kboard.executing_kbd_macro = Some(vec![return_event]);
-    ev.command_loop.keyboard.kboard.kbd_macro_index = 0;
+    ev.command_loop_mut().keyboard.kboard.executing_kbd_macro = Some(vec![return_event]);
+    ev.command_loop_mut().keyboard.kboard.kbd_macro_index = 0;
 
     let event = ev
         .read_char()
         .expect("read_char should return executing macro event");
     assert_eq!(event, return_event);
-    assert_eq!(ev.command_loop.keyboard.kboard.kbd_macro_index, 1);
+    assert_eq!(ev.command_loop().keyboard.kboard.kbd_macro_index, 1);
 }
 
 #[test]
 fn read_char_prefers_ready_keypress_over_due_timer_callback() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str(
         r#"(progn
              (fset 'read-char-priority-timer
@@ -1932,9 +2024,9 @@ fn read_char_prefers_ready_keypress_over_due_timer_callback() {
         )]),
     );
 
-    let tx = crate::host_input::HostInputPublisher::install(&mut ev);
-    tx.send(crate::keyboard::InputEvent::key_press(
-        crate::keyboard::KeyEvent::char('a'),
+    let tx = neovm_system::emacs_core::host_input::HostInputPublisher::install(&mut ev);
+    tx.send(crate::emacs_core::eval::keyboard::InputEvent::key_press(
+        crate::emacs_core::eval::keyboard::KeyEvent::char('a'),
     ))
     .expect("queue ready keypress");
 
@@ -1946,7 +2038,7 @@ fn read_char_prefers_ready_keypress_over_due_timer_callback() {
         Value::NIL
     );
 
-    ev.fire_pending_timers();
+    let _ = neovm_eval::test_support::authority::service_pending_timers_for_test(&mut ev);
     assert_eq!(
         ev.eval_symbol("read-char-priority-timer-fired")
             .expect("timer callback flag after explicit service"),
@@ -1958,7 +2050,7 @@ fn read_char_prefers_ready_keypress_over_due_timer_callback() {
 fn read_char_prefers_ready_keypress_over_process_filter_callback() {
     crate::test_utils::init_test_tracing();
     let echo = find_bin("echo");
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str(
         r#"(progn
              (fset 'read-char-priority-filter
@@ -1968,14 +2060,14 @@ fn read_char_prefers_ready_keypress_over_process_filter_callback() {
     )
     .expect("install process priority setup");
 
-    let pid = ev.processes.create_process(
+    let pid = ev.processes_mut().create_process(
         "read-char-priority".into(),
         Value::NIL,
         echo,
         vec!["out".into()],
         crate::emacs_core::process::ProcessCodingSystems::gnu_make_process_initial(),
     );
-    ev.processes
+    ev.processes_mut()
         .spawn_child(pid, false)
         .expect("spawn process priority child");
     crate::emacs_core::process::builtin_set_process_filter(
@@ -1987,13 +2079,13 @@ fn read_char_prefers_ready_keypress_over_process_filter_callback() {
     )
     .expect("install process priority filter");
 
-    ev.processes
+    ev.processes_mut()
         .wait_for_child_stdout_readable_for_test(pid, Duration::from_secs(5))
         .expect("actual undrained child output before ready keypress");
 
-    let tx = crate::host_input::HostInputPublisher::install(&mut ev);
-    tx.send(crate::keyboard::InputEvent::key_press(
-        crate::keyboard::KeyEvent::char('a'),
+    let tx = neovm_system::emacs_core::host_input::HostInputPublisher::install(&mut ev);
+    tx.send(crate::emacs_core::eval::keyboard::InputEvent::key_press(
+        crate::emacs_core::eval::keyboard::KeyEvent::char('a'),
     ))
     .expect("queue ready keypress");
 
@@ -2020,17 +2112,20 @@ fn read_char_prefers_ready_keypress_over_process_filter_callback() {
 #[test]
 fn read_char_triggers_redisplay_after_resize_event() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let fid = ev
-        .frames
+        .frame_manager_mut()
         .create_frame("F1", 960, 640, neovm_edit::buffer::BufferId(1));
-    assert_eq!(ev.frames.selected_frame().map(|frame| frame.id), Some(fid));
+    assert_eq!(
+        ev.frame_manager().selected_frame().map(|frame| frame.id),
+        Some(fid)
+    );
 
     let redisplay_calls = Rc::new(RefCell::new(Vec::new()));
     let redisplay_calls_in_cb = redisplay_calls.clone();
     ev.redisplay_fn = Some(Box::new(move |ev: &mut Context| {
         let frame = ev
-            .frames
+            .frame_manager()
             .selected_frame()
             .expect("selected frame during redisplay");
         redisplay_calls_in_cb
@@ -2038,17 +2133,17 @@ fn read_char_triggers_redisplay_after_resize_event() {
             .push((frame.width, frame.height));
     }));
 
-    let tx = crate::host_input::HostInputPublisher::install(&mut ev);
+    let tx = neovm_system::emacs_core::host_input::HostInputPublisher::install(&mut ev);
 
-    tx.send(crate::keyboard::InputEvent::Resize {
+    tx.send(crate::emacs_core::eval::keyboard::InputEvent::Resize {
         width: 700,
         height: 800,
         scale_factor: 1.0,
         emacs_frame_id: 0,
     })
     .unwrap();
-    tx.send(crate::keyboard::InputEvent::key_press(
-        crate::keyboard::KeyEvent::char('a'),
+    tx.send(crate::emacs_core::eval::keyboard::InputEvent::key_press(
+        crate::emacs_core::eval::keyboard::KeyEvent::char('a'),
     ))
     .unwrap();
 
@@ -2060,23 +2155,26 @@ fn read_char_triggers_redisplay_after_resize_event() {
 #[test]
 fn read_char_redisplays_when_resize_arrives_after_pre_block_redisplay() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let fid = ev
-        .frames
+        .frame_manager_mut()
         .create_frame("F1", 960, 640, neovm_edit::buffer::BufferId(1));
-    assert_eq!(ev.frames.selected_frame().map(|frame| frame.id), Some(fid));
+    assert_eq!(
+        ev.frame_manager().selected_frame().map(|frame| frame.id),
+        Some(fid)
+    );
 
     let redisplay_calls = Rc::new(RefCell::new(Vec::new()));
     let redisplay_calls_in_cb = redisplay_calls.clone();
 
-    let tx = crate::host_input::HostInputPublisher::install(&mut ev);
+    let tx = neovm_system::emacs_core::host_input::HostInputPublisher::install(&mut ev);
     let tx_in_cb = tx.clone();
     let injected = Rc::new(RefCell::new(false));
     let injected_in_cb = injected.clone();
 
     ev.redisplay_fn = Some(Box::new(move |ev: &mut Context| {
         let frame = ev
-            .frames
+            .frame_manager()
             .selected_frame()
             .expect("selected frame during redisplay");
         redisplay_calls_in_cb
@@ -2086,7 +2184,7 @@ fn read_char_redisplays_when_resize_arrives_after_pre_block_redisplay() {
         if !*injected_in_cb.borrow() {
             *injected_in_cb.borrow_mut() = true;
             tx_in_cb
-                .send(crate::keyboard::InputEvent::Resize {
+                .send(crate::emacs_core::eval::keyboard::InputEvent::Resize {
                     width: 700,
                     height: 800,
                     scale_factor: 1.0,
@@ -2094,8 +2192,8 @@ fn read_char_redisplays_when_resize_arrives_after_pre_block_redisplay() {
                 })
                 .expect("enqueue resize after first redisplay");
             tx_in_cb
-                .send(crate::keyboard::InputEvent::key_press(
-                    crate::keyboard::KeyEvent::char('a'),
+                .send(crate::emacs_core::eval::keyboard::InputEvent::key_press(
+                    crate::emacs_core::eval::keyboard::KeyEvent::char('a'),
                 ))
                 .expect("enqueue keypress after resize");
         }
@@ -2110,8 +2208,9 @@ fn read_char_redisplays_when_resize_arrives_after_pre_block_redisplay() {
 fn read_char_respects_inhibit_redisplay_during_input_wait() {
     use crate::test_utils::input_wait::{InputGateOwner, WaitWitness};
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    ev.obarray.set_symbol_value("inhibit-redisplay", Value::T);
+    let mut ev = crate::test_utils::new_context();
+    ev.obarray_mut()
+        .set_symbol_value("inhibit-redisplay", Value::T);
 
     let redisplay_count = Rc::new(RefCell::new(0usize));
     let redisplay_count_in_cb = Rc::clone(&redisplay_count);
@@ -2120,9 +2219,11 @@ fn read_char_respects_inhibit_redisplay_during_input_wait() {
     }));
 
     let input_owner = InputGateOwner::install(&mut ev);
-    let (gate, publication) = input_owner.gate(vec![crate::keyboard::InputEvent::key_press(
-        crate::keyboard::KeyEvent::char('a'),
-    )]);
+    let (gate, publication) = input_owner.gate(vec![
+        crate::emacs_core::eval::keyboard::InputEvent::key_press(
+            crate::emacs_core::eval::keyboard::KeyEvent::char('a'),
+        ),
+    ]);
     gate.arm(&mut ev, WaitWitness::InputWaitEntered);
 
     let event = ev.read_char();
@@ -2139,7 +2240,7 @@ fn read_char_respects_inhibit_redisplay_during_input_wait() {
 fn redisplay_skips_callback_when_visible_state_is_unchanged() {
     let _policy = legacy_redisplay_fixture_policy();
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
 
     let redisplay_count = Rc::new(RefCell::new(0usize));
     let redisplay_count_in_cb = Rc::clone(&redisplay_count);
@@ -2162,30 +2263,33 @@ fn redisplay_skips_callback_when_visible_state_is_unchanged() {
 
     // Preserve this fixture's legacy forced-callback assertion. Explicit
     // OFF/ON idle behavior is covered by tests::idle_redisplay.
-    crate::emacs_core::xdisp::set_redisplay_idle_skip_for_test(Some(false));
+    neovm_display::test_support::authority::set_redisplay_idle_skip_for_test(Some(false));
     ev.redisplay_with_force(true).expect("redisplay");
-    crate::emacs_core::xdisp::set_redisplay_idle_skip_for_test(None);
+    neovm_display::test_support::authority::set_redisplay_idle_skip_for_test(None);
     assert_eq!(*redisplay_count.borrow(), 4);
 }
 
 #[test]
 fn redisplay_runs_resize_mini_frame_for_minibuffer_only_frame() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    let frame_id = ev
-        .frames
-        .create_frame("F1", 960, 640, neovm_edit::buffer::BufferId(1));
+    let mut ev = crate::test_utils::new_context();
+    let frame_id =
+        ev.frame_manager_mut()
+            .create_frame("F1", 960, 640, neovm_edit::buffer::BufferId(1));
     let root_window_id = ev
-        .frames
+        .frame_manager()
         .get(frame_id)
         .expect("created frame")
         .root_window()
         .id();
     {
-        let frame = ev.frames.get_mut(frame_id).expect("created frame");
+        let frame = ev
+            .frame_manager_mut()
+            .get_mut(frame_id)
+            .expect("created frame");
         frame.minibuffer_leaf = None;
         frame.minibuffer_window = Some(root_window_id);
-        frame.visibility = crate::window::FrameVisibility::Visible;
+        frame.visibility = neovm_display::window::FrameVisibility::Visible;
     }
 
     ev.eval_str(
@@ -2219,12 +2323,13 @@ fn redisplay_runs_resize_mini_frame_for_minibuffer_only_frame() {
 #[test]
 fn overlay_property_change_invalidates_redisplay_signature() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
 
     ev.eval_str(r#"(progn (insert "x") (setq neo-test-overlay (make-overlay 1 2)))"#)
         .expect("overlay should be created");
 
     let buffer_id = ev
+        .edit
         .buffers
         .current_buffer_id()
         .expect("current buffer should exist");
@@ -2239,23 +2344,28 @@ fn overlay_property_change_invalidates_redisplay_signature() {
         .expect("buffer should still have a redisplay signature");
 
     assert_ne!(before, after);
-    assert_eq!(before.layout.modified_tick, after.layout.modified_tick);
+    assert_eq!(
+        before.layout_modified_tick_for_test(),
+        after.layout_modified_tick_for_test()
+    );
     assert_ne!(
-        before.layout.overlay_modified_tick,
-        after.layout.overlay_modified_tick
+        before.layout_overlay_modified_tick_for_test(),
+        after.layout_overlay_modified_tick_for_test()
     );
 }
 
 #[test]
 fn redisplay_frame_signature_omits_hook_identity_while_full_freshness_refuses() {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     // Build the replacement before capturing function epochs. Installing the
     // already-built list changes no function definition or text property.
     ev.eval_str("(setq ttykey-signature-hook (list 'ignore) fontification-functions nil)")
         .unwrap();
-    let buffer = ev.buffers.current_buffer_id().unwrap();
-    let frame = ev.frames.create_frame("signature-hook", 800, 600, buffer);
-    let window = ev.frames.get(frame).unwrap().selected_window;
+    let buffer = ev.edit.buffers.current_buffer_id().unwrap();
+    let frame = ev
+        .frame_manager_mut()
+        .create_frame("signature-hook", 800, 600, buffer);
+    let window = ev.frame_manager().get(frame).unwrap().selected_window;
     ev.redisplay_signature();
     let retained_before = ev
         .window_display_snapshot_freshness(frame, window, buffer)
@@ -2280,12 +2390,15 @@ fn redisplay_frame_signature_omits_hook_identity_while_full_freshness_refuses() 
     let attempt_after = ev
         .window_layout_attempt_freshness(frame, window, buffer)
         .unwrap();
-    assert_eq!(signature_before.frame, signature_after.frame);
+    assert_eq!(
+        signature_before.frame_for_test(),
+        signature_after.frame_for_test()
+    );
     assert_ne!(retained_before, retained_after);
     assert!(!retained_before.same_query_row_content(&retained_after));
     assert!(!attempt_before.remains_valid_across(
         &attempt_after,
-        crate::window::WindowLayoutLispBoundary::BufferBody,
+        neovm_display::window::WindowLayoutLispBoundary::BufferBody,
     ));
 }
 
@@ -2293,8 +2406,8 @@ fn redisplay_frame_signature_omits_hook_identity_while_full_freshness_refuses() 
 fn redisplay_skips_callback_after_unwatched_symbol_value_change() {
     let _policy = legacy_redisplay_fixture_policy();
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    ev.obarray
+    let mut ev = crate::test_utils::new_context();
+    ev.obarray_mut()
         .set_symbol_value("blink-cursor-blinks-done", Value::fixnum(1));
 
     let redisplay_count = Rc::new(RefCell::new(0usize));
@@ -2316,7 +2429,7 @@ fn redisplay_skips_callback_after_unwatched_symbol_value_change() {
 fn set_buffer_redisplay_watcher_invalidates_redisplay() {
     let _policy = legacy_redisplay_fixture_policy();
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
 
     let redisplay_count = Rc::new(RefCell::new(0usize));
     let redisplay_count_in_cb = Rc::clone(&redisplay_count);
@@ -2359,7 +2472,7 @@ fn setq_display_var_invalidates_redisplay_without_watcher() {
         "(setq selective-display 4)",
         "(setq word-wrap t)",
     ] {
-        let mut ev = Context::new();
+        let mut ev = crate::test_utils::new_context();
         let redisplay_count = Rc::new(RefCell::new(0usize));
         let redisplay_count_in_cb = Rc::clone(&redisplay_count);
         ev.redisplay_fn = Some(Box::new(move |_ev: &mut Context| {
@@ -2400,8 +2513,8 @@ fn setq_display_var_invalidates_redisplay_without_watcher() {
 fn setq_non_display_var_does_not_invalidate_redisplay() {
     let _policy = legacy_redisplay_fixture_policy();
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    ev.obarray
+    let mut ev = crate::test_utils::new_context();
+    ev.obarray_mut()
         .set_symbol_value("neo-test-counter", Value::fixnum(0));
 
     let redisplay_count = Rc::new(RefCell::new(0usize));
@@ -2428,7 +2541,7 @@ fn setq_non_display_var_does_not_invalidate_redisplay() {
 #[test]
 fn set_default_display_var_invalidates_redisplay() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
 
     let redisplay_count = Rc::new(RefCell::new(0usize));
     let redisplay_count_in_cb = Rc::clone(&redisplay_count);
@@ -2489,12 +2602,12 @@ fn variable_affects_display_classifies_curated_set() {
 #[test]
 fn read_char_does_not_redisplay_again_when_monitor_change_arrives_after_pre_block_redisplay() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
 
     let redisplay_count = Rc::new(RefCell::new(0usize));
     let redisplay_count_in_cb = Rc::clone(&redisplay_count);
 
-    let tx = crate::host_input::HostInputPublisher::install(&mut ev);
+    let tx = neovm_system::emacs_core::host_input::HostInputPublisher::install(&mut ev);
     let tx_in_cb = tx.clone();
     let injected = Rc::new(RefCell::new(false));
     let injected_in_cb = Rc::clone(&injected);
@@ -2505,22 +2618,24 @@ fn read_char_does_not_redisplay_again_when_monitor_change_arrives_after_pre_bloc
         if !*injected_in_cb.borrow() {
             *injected_in_cb.borrow_mut() = true;
             tx_in_cb
-                .send(crate::keyboard::InputEvent::MonitorsChanged {
-                    monitors: vec![crate::emacs_core::builtins::NeomacsMonitorInfo {
-                        x: 0,
-                        y: 0,
-                        width: 2560,
-                        height: 1440,
-                        scale: 1.25,
-                        width_mm: 600,
-                        height_mm: 340,
-                        name: Some("DP-1".to_string()),
-                    }],
-                })
+                .send(
+                    crate::emacs_core::eval::keyboard::InputEvent::MonitorsChanged {
+                        monitors: vec![crate::emacs_core::builtins::NeomacsMonitorInfo {
+                            x: 0,
+                            y: 0,
+                            width: 2560,
+                            height: 1440,
+                            scale: 1.25,
+                            width_mm: 600,
+                            height_mm: 340,
+                            name: Some("DP-1".to_string()),
+                        }],
+                    },
+                )
                 .expect("enqueue monitor change after first redisplay");
             tx_in_cb
-                .send(crate::keyboard::InputEvent::key_press(
-                    crate::keyboard::KeyEvent::char('a'),
+                .send(crate::emacs_core::eval::keyboard::InputEvent::key_press(
+                    crate::emacs_core::eval::keyboard::KeyEvent::char('a'),
                 ))
                 .expect("enqueue keypress after monitor change");
         }
@@ -2534,17 +2649,20 @@ fn read_char_does_not_redisplay_again_when_monitor_change_arrives_after_pre_bloc
 #[test]
 fn redisplay_applies_pending_resize_before_callback() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let fid = ev
-        .frames
+        .frame_manager_mut()
         .create_frame("F1", 960, 640, neovm_edit::buffer::BufferId(1));
-    assert_eq!(ev.frames.selected_frame().map(|frame| frame.id), Some(fid));
+    assert_eq!(
+        ev.frame_manager().selected_frame().map(|frame| frame.id),
+        Some(fid)
+    );
 
     let redisplay_calls = Rc::new(RefCell::new(Vec::new()));
     let redisplay_calls_in_cb = redisplay_calls.clone();
     ev.redisplay_fn = Some(Box::new(move |ev: &mut Context| {
         let frame = ev
-            .frames
+            .frame_manager()
             .selected_frame()
             .expect("selected frame during redisplay");
         redisplay_calls_in_cb
@@ -2552,9 +2670,9 @@ fn redisplay_applies_pending_resize_before_callback() {
             .push((frame.width, frame.height));
     }));
 
-    let tx = crate::host_input::HostInputPublisher::install(&mut ev);
+    let tx = neovm_system::emacs_core::host_input::HostInputPublisher::install(&mut ev);
 
-    tx.send(crate::keyboard::InputEvent::Resize {
+    tx.send(crate::emacs_core::eval::keyboard::InputEvent::Resize {
         width: 700,
         height: 800,
         scale_factor: 1.0,
@@ -2570,11 +2688,11 @@ fn redisplay_applies_pending_resize_before_callback() {
 #[test]
 fn redisplay_syncs_opening_gui_frame_size_from_display_host() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let fid = ev
-        .frames
+        .frame_manager_mut()
         .create_frame("F1", 960, 640, neovm_edit::buffer::BufferId(1));
-    ev.frames
+    ev.frame_manager_mut()
         .get_mut(fid)
         .expect("frame should exist")
         .set_window_system(Some(Value::symbol("x")));
@@ -2583,7 +2701,7 @@ fn redisplay_syncs_opening_gui_frame_size_from_display_host() {
     let redisplay_calls_in_cb = redisplay_calls.clone();
     ev.redisplay_fn = Some(Box::new(move |ev: &mut Context| {
         let frame = ev
-            .frames
+            .frame_manager()
             .selected_frame()
             .expect("selected frame during redisplay");
         redisplay_calls_in_cb
@@ -2603,15 +2721,15 @@ fn redisplay_syncs_opening_gui_frame_size_from_display_host() {
 #[test]
 fn recursive_edit_runs_top_level_before_outer_command_loop_reads_input() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let _ = ev.eval_str_each("(setq top-level '(setq neo-top-level-hit t))");
 
-    let tx = crate::host_input::HostInputPublisher::install(&mut ev);
-    tx.send(crate::keyboard::InputEvent::WindowClose { emacs_frame_id: 0 })
+    let tx = neovm_system::emacs_core::host_input::HostInputPublisher::install(&mut ev);
+    tx.send(crate::emacs_core::eval::keyboard::InputEvent::WindowClose { emacs_frame_id: 0 })
         .expect("queue close request");
     drop(tx);
 
-    ev.command_loop.running = true;
+    ev.command_loop_mut().running = true;
     // A window-close request from the display ends the loop through a quit that
     // only an interactive session survives (GNU `cmd_error_internal` kills a
     // noninteractive Emacs on any quit); this models a GUI session.
@@ -2632,20 +2750,23 @@ fn recursive_edit_runs_top_level_before_outer_command_loop_reads_input() {
 #[test]
 fn nested_recursive_edit_propagates_top_level_and_runs_unwind_cleanup() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    let scratch = ev.buffers.create_buffer("*nested-recursive-edit*");
-    ev.buffers.set_current(scratch);
-    let frame = ev.frames.create_frame("F1", 80, 24, scratch);
-    assert!(ev.frames.select_frame(frame), "test needs a selected frame");
+    let mut ev = crate::test_utils::new_context();
+    let scratch = ev.edit.buffers.create_buffer("*nested-recursive-edit*");
+    ev.edit.buffers.set_current(scratch);
+    let frame = ev.frame_manager_mut().create_frame("F1", 80, 24, scratch);
+    assert!(
+        ev.frame_manager_mut().select_frame(frame),
+        "test needs a selected frame"
+    );
     let global_map = crate::emacs_core::keymap::make_sparse_list_keymap();
     install_global_map_for_test(&mut ev, global_map);
-    let tx = crate::host_input::HostInputPublisher::install(&mut ev);
+    let tx = neovm_system::emacs_core::host_input::HostInputPublisher::install(&mut ev);
     drop(tx);
 
-    ev.command_loop.running = true;
+    ev.command_loop_mut().running = true;
     // Simulate an already-active outer command loop. The recursive-edit
     // below must not catch the top-level throw meant to unwind it.
-    ev.command_loop.recursive_depth = 1;
+    ev.command_loop_mut().recursive_depth = 1;
     ev.eval_str(
         r#"(progn
              (setq neo-recursive-edit-cleanup nil)
@@ -2663,7 +2784,7 @@ fn nested_recursive_edit_propagates_top_level_and_runs_unwind_cleanup() {
         neovm_value::tagged::SymbolMode::Bare,
     )
     .expect("define top-level test command");
-    ev.command_loop
+    ev.command_loop_mut()
         .keyboard
         .kboard
         .unread_events
@@ -2690,10 +2811,10 @@ fn nested_recursive_edit_propagates_top_level_and_runs_unwind_cleanup() {
 #[test]
 fn command_loop_runs_initial_post_command_hook_before_first_command() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     fn stop_command_loop_for_test(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
         assert!(args.is_empty(), "stop helper should not receive arguments");
-        ctx.command_loop.running = false;
+        ctx.command_loop_mut().running = false;
         Ok(Value::NIL)
     }
     ev.register_subr(SubrSpec::new(
@@ -2702,11 +2823,11 @@ fn command_loop_runs_initial_post_command_hook_before_first_command() {
         SubrArity::new(0, Some(0)),
     ));
 
-    let scratch = ev.buffers.create_buffer("*command-loop-prologue*");
-    ev.buffers.set_current(scratch);
-    let frame = ev.frames.create_frame("F1", 80, 24, scratch);
+    let scratch = ev.edit.buffers.create_buffer("*command-loop-prologue*");
+    ev.edit.buffers.set_current(scratch);
+    let frame = ev.frame_manager_mut().create_frame("F1", 80, 24, scratch);
     assert!(
-        ev.frames.select_frame(frame),
+        ev.frame_manager_mut().select_frame(frame),
         "command loop test should have a selected frame"
     );
 
@@ -2743,12 +2864,12 @@ fn command_loop_runs_initial_post_command_hook_before_first_command() {
         neovm_value::tagged::SymbolMode::Bare,
     )
     .expect("define exit command");
-    ev.command_loop
+    ev.command_loop_mut()
         .keyboard
         .kboard
         .unread_events
         .push_back(Value::fixnum('q' as i64));
-    ev.command_loop.running = true;
+    ev.command_loop_mut().running = true;
 
     let result = ev
         .recursive_edit_inner()
@@ -2774,14 +2895,14 @@ fn command_loop_runs_initial_post_command_hook_before_first_command() {
 #[test]
 fn read_char_requeues_keypress_and_throws_on_input() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    let tx = crate::host_input::HostInputPublisher::install(&mut ev);
-    tx.send(crate::keyboard::InputEvent::key_press(
-        crate::keyboard::KeyEvent::char('a'),
+    let mut ev = crate::test_utils::new_context();
+    let tx = neovm_system::emacs_core::host_input::HostInputPublisher::install(&mut ev);
+    tx.send(crate::emacs_core::eval::keyboard::InputEvent::key_press(
+        crate::emacs_core::eval::keyboard::KeyEvent::char('a'),
     ))
     .expect("queue keypress");
 
-    ev.obarray
+    ev.obarray_mut()
         .set_symbol_value("throw-on-input", Value::symbol("tag"));
 
     let flow = ev
@@ -2793,7 +2914,8 @@ fn read_char_requeues_keypress_and_throws_on_input() {
             if thrown.tag == Value::symbol("tag") && thrown.value == Value::T
     ));
 
-    ev.obarray.set_symbol_value("throw-on-input", Value::NIL);
+    ev.obarray_mut()
+        .set_symbol_value("throw-on-input", Value::NIL);
     let event = ev.read_char().expect("keypress should remain queued");
     assert_eq!(event, Value::fixnum('a' as i64));
 }
@@ -2801,12 +2923,12 @@ fn read_char_requeues_keypress_and_throws_on_input() {
 #[test]
 fn read_char_window_close_honors_throw_on_input_before_quit() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    let tx = crate::host_input::HostInputPublisher::install(&mut ev);
-    tx.send(crate::keyboard::InputEvent::WindowClose { emacs_frame_id: 0 })
+    let mut ev = crate::test_utils::new_context();
+    let tx = neovm_system::emacs_core::host_input::HostInputPublisher::install(&mut ev);
+    tx.send(crate::emacs_core::eval::keyboard::InputEvent::WindowClose { emacs_frame_id: 0 })
         .expect("queue close request");
 
-    ev.obarray
+    ev.obarray_mut()
         .set_symbol_value("throw-on-input", Value::symbol("tag"));
 
     let flow = ev
@@ -2818,7 +2940,8 @@ fn read_char_window_close_honors_throw_on_input_before_quit() {
             if thrown.tag == Value::symbol("tag") && thrown.value == Value::T
     ));
 
-    ev.obarray.set_symbol_value("throw-on-input", Value::NIL);
+    ev.obarray_mut()
+        .set_symbol_value("throw-on-input", Value::NIL);
     let flow = ev
         .read_char()
         .expect_err("window close should still quit afterwards");
@@ -2828,19 +2951,19 @@ fn read_char_window_close_honors_throw_on_input_before_quit() {
 #[test]
 fn read_char_window_close_uses_special_event_map_handler_when_loaded() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let scratch = ev.buffer_manager_mut().create_buffer("*scratch*");
     ev.buffer_manager_mut().set_current(scratch);
-    let frame = ev.frames.create_frame("F1", 80, 24, scratch);
+    let frame = ev.frame_manager_mut().create_frame("F1", 80, 24, scratch);
     install_minimal_special_event_command_runtime(&mut ev);
 
-    let tx = crate::host_input::HostInputPublisher::install(&mut ev);
-    tx.send(crate::keyboard::InputEvent::WindowClose {
+    let tx = neovm_system::emacs_core::host_input::HostInputPublisher::install(&mut ev);
+    tx.send(crate::emacs_core::eval::keyboard::InputEvent::WindowClose {
         emacs_frame_id: frame.0,
     })
     .expect("queue window close");
 
-    ev.command_loop.running = true;
+    ev.command_loop_mut().running = true;
 
     let event = match ev.read_char_with_timeout(Some(Duration::from_millis(0))) {
         Ok(event) => event,
@@ -2867,17 +2990,17 @@ fn read_char_window_close_uses_special_event_map_handler_when_loaded() {
 fn read_char_disconnected_input_uses_noelisp_terminal_teardown() {
     crate::test_utils::init_test_tracing();
     crate::emacs_core::terminal::pure::reset_terminal_thread_locals();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let scratch = ev.buffer_manager_mut().create_buffer("*scratch*");
     ev.buffer_manager_mut().set_current(scratch);
     let _frame = ev.frame_manager_mut().create_frame_on_terminal(
         "F1",
-        crate::emacs_core::terminal::pure::TERMINAL_ID,
+        crate::emacs_core::eval::protocol::tty_host::TERMINAL_ID,
         80,
         25,
         scratch,
     );
-    let tx = crate::host_input::HostInputPublisher::install(&mut ev);
+    let tx = neovm_system::emacs_core::host_input::HostInputPublisher::install(&mut ev);
 
     drop(tx);
 
@@ -2937,10 +3060,10 @@ fn read_char_disconnected_input_uses_noelisp_terminal_teardown() {
 #[test]
 fn eval_list_form_throws_on_pending_host_input() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    let tx = crate::host_input::HostInputPublisher::install(&mut ev);
-    tx.send(crate::keyboard::InputEvent::key_press(
-        crate::keyboard::KeyEvent::char('a'),
+    let mut ev = crate::test_utils::new_context();
+    let tx = neovm_system::emacs_core::host_input::HostInputPublisher::install(&mut ev);
+    tx.send(crate::emacs_core::eval::keyboard::InputEvent::key_press(
+        crate::emacs_core::eval::keyboard::KeyEvent::char('a'),
     ))
     .expect("queue keypress");
 
@@ -2961,9 +3084,9 @@ fn eval_list_form_throws_on_pending_host_input() {
 #[test]
 fn presentation_retirement_does_not_interrupt_while_no_input() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    let tx = crate::host_input::HostInputPublisher::install(&mut ev);
-    tx.send(crate::keyboard::InputEvent::PresentationRetired { presentation: 7 })
+    let mut ev = crate::test_utils::new_context();
+    let tx = neovm_system::emacs_core::host_input::HostInputPublisher::install(&mut ev);
+    tx.send(crate::emacs_core::eval::keyboard::InputEvent::PresentationRetired { presentation: 7 })
         .expect("queue presentation retirement");
 
     ev.set_variable("throw-on-input", Value::symbol("tag"));
@@ -2978,19 +3101,21 @@ fn presentation_retirement_does_not_interrupt_while_no_input() {
 #[test]
 fn input_pending_services_presentation_retirement_without_redisplay() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let presentation = ev.begin_interaction_presentation();
     let interaction = ev.register_presented_mouse_target(
         presentation,
-        crate::keyboard::PresentedMouseTarget {
-            area: crate::keyboard::PresentedMouseArea::TabBar,
+        crate::emacs_core::eval::keyboard::PresentedMouseTarget {
+            area: crate::emacs_core::eval::keyboard::PresentedMouseArea::TabBar,
             posn_string: Value::cons(Value::string("tab"), Value::fixnum(0)),
         },
     );
-    ev.command_loop
+    ev.command_loop_mut()
         .keyboard
         .pending_input_events
-        .push_back(crate::keyboard::InputEvent::PresentationRetired { presentation });
+        .push_back(
+            crate::emacs_core::eval::keyboard::InputEvent::PresentationRetired { presentation },
+        );
     let redisplays = Rc::new(RefCell::new(0));
     let redisplays_in_callback = Rc::clone(&redisplays);
     ev.redisplay_fn = Some(Box::new(move |_| {
@@ -3006,35 +3131,37 @@ fn input_pending_services_presentation_retirement_without_redisplay() {
         None
     );
     assert_eq!(*redisplays.borrow(), 0);
-    assert!(ev.command_loop.keyboard.pending_input_events.is_empty());
+    assert!(ev.command_loop().keyboard.pending_input_events.is_empty());
 }
 
 #[test]
 fn presentation_retirement_does_not_preempt_work_or_reset_idle_epoch() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.timer_start_idle();
     assert!(ev.idle_timer_running());
-    ev.command_loop
+    ev.command_loop_mut()
         .keyboard
         .pending_input_events
-        .push_back(crate::keyboard::InputEvent::PresentationRetired { presentation: 99 });
+        .push_back(
+            crate::emacs_core::eval::keyboard::InputEvent::PresentationRetired { presentation: 99 },
+        );
 
     let command_pending = ev
         .stage_pending_command_input_for_wait_request(
-            crate::frontend_events::FrontendInputQuery::Readable,
+            crate::emacs_core::eval::frontend_events::FrontendInputQuery::Readable,
         )
         .expect("internal event service should succeed");
 
     assert!(!command_pending);
     assert!(ev.idle_timer_running());
-    assert!(ev.command_loop.keyboard.pending_input_events.is_empty());
+    assert!(ev.command_loop().keyboard.pending_input_events.is_empty());
 }
 
 #[test]
 fn presentation_retirement_does_not_preempt_timer_batches() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let when = SystemTime::now()
         .checked_sub(Duration::from_millis(1))
         .unwrap_or(UNIX_EPOCH)
@@ -3072,9 +3199,11 @@ fn presentation_retirement_does_not_preempt_timer_batches() {
     )
     .expect("install timer-batch probe");
     ev.set_variable("timer-list", Value::list(vec![timer]));
-    let tx = crate::host_input::HostInputPublisher::install(&mut ev);
-    tx.send(crate::keyboard::InputEvent::PresentationRetired { presentation: 77 })
-        .expect("queue renderer acknowledgement");
+    let tx = neovm_system::emacs_core::host_input::HostInputPublisher::install(&mut ev);
+    tx.send(
+        crate::emacs_core::eval::keyboard::InputEvent::PresentationRetired { presentation: 77 },
+    )
+    .expect("queue renderer acknowledgement");
     // Callback three, rather than elapsed wall time, completes the wait. The
     // long deadline only bounds a broken wait; an acknowledgement is not input.
     let outcome = ev
@@ -3089,7 +3218,7 @@ fn presentation_retirement_does_not_preempt_timer_batches() {
     );
     assert_eq!(
         outcome,
-        crate::emacs_core::wait::CommandInputWaitOutcome::InputPending
+        crate::emacs_core::eval::input_hooks::CommandInputWaitOutcome::InputPending
     );
     assert_eq!(
         ev.peek_unread_command_event(),
@@ -3104,7 +3233,7 @@ fn retirement_wakeup_returns_to_same_blocking_read_without_redisplay_loop() {
     };
     crate::test_utils::init_test_tracing();
     let _policy = RedisplayHookPolicyGuard::legacy();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let input_owner = InputGateOwner::install(&mut ev);
 
     let redisplays = Rc::new(RefCell::new(0));
@@ -3113,13 +3242,19 @@ fn retirement_wakeup_returns_to_same_blocking_read_without_redisplay_loop() {
     ev.redisplay_fn = Some(Box::new(move |_| {
         *redisplays_in_callback.borrow_mut() += 1;
         retirement_tx
-            .send(crate::keyboard::InputEvent::PresentationRetired { presentation: 42 })
+            .send(
+                crate::emacs_core::eval::keyboard::InputEvent::PresentationRetired {
+                    presentation: 42,
+                },
+            )
             .expect("queue renderer acknowledgement");
     }));
 
-    let (gate, publication) = input_owner.gate(vec![crate::keyboard::InputEvent::key_press(
-        crate::keyboard::KeyEvent::char('x'),
-    )]);
+    let (gate, publication) = input_owner.gate(vec![
+        crate::emacs_core::eval::keyboard::InputEvent::key_press(
+            crate::emacs_core::eval::keyboard::KeyEvent::char('x'),
+        ),
+    ]);
     install_after_redisplay(&mut ev, gate, |_| {
         Readiness::Ready(WaitWitness::RetirementDrained)
     });
@@ -3145,18 +3280,18 @@ fn retirement_wakeup_returns_to_same_blocking_read_without_redisplay_loop() {
 #[test]
 fn frame_native_width_syncs_pending_resize_without_read_char() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let fid = ev
-        .frames
+        .frame_manager_mut()
         .create_frame("F1", 960, 640, neovm_edit::buffer::BufferId(1));
-    ev.frames
+    ev.frame_manager_mut()
         .get_mut(fid)
         .expect("frame should exist")
         .set_parameter(Value::symbol("window-system"), Value::symbol("x"));
 
-    let tx = crate::host_input::HostInputPublisher::install(&mut ev);
+    let tx = neovm_system::emacs_core::host_input::HostInputPublisher::install(&mut ev);
 
-    tx.send(crate::keyboard::InputEvent::Resize {
+    tx.send(crate::emacs_core::eval::keyboard::InputEvent::Resize {
         width: 700,
         height: 800,
         scale_factor: 1.0,
@@ -3176,14 +3311,14 @@ fn frame_native_width_syncs_pending_resize_without_read_char() {
 #[test]
 fn fire_pending_timers_does_not_service_pending_resize_input() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let fid = ev
-        .frames
+        .frame_manager_mut()
         .create_frame("F1", 960, 640, neovm_edit::buffer::BufferId(1));
 
-    let tx = crate::host_input::HostInputPublisher::install(&mut ev);
+    let tx = neovm_system::emacs_core::host_input::HostInputPublisher::install(&mut ev);
 
-    tx.send(crate::keyboard::InputEvent::Resize {
+    tx.send(crate::emacs_core::eval::keyboard::InputEvent::Resize {
         width: 700,
         height: 800,
         scale_factor: 1.0,
@@ -3191,9 +3326,9 @@ fn fire_pending_timers_does_not_service_pending_resize_input() {
     })
     .unwrap();
 
-    ev.fire_pending_timers();
+    let _ = neovm_eval::test_support::authority::service_pending_timers_for_test(&mut ev);
 
-    let frame = ev.frames.get(fid).expect("frame should exist");
+    let frame = ev.frame_manager().get(fid).expect("frame should exist");
     assert_eq!(frame.width, 960);
     assert_eq!(frame.height, 640);
 }
@@ -3202,21 +3337,26 @@ fn fire_pending_timers_does_not_service_pending_resize_input() {
 fn wait_for_pending_resize_events_blocks_until_resize_and_preserves_keypress() {
     use crate::test_utils::input_wait::{InputGateOwner, WaitWitness};
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let fid = ev
-        .frames
+        .frame_manager_mut()
         .create_frame("F1", 960, 640, neovm_edit::buffer::BufferId(1));
-    assert_eq!(ev.frames.selected_frame().map(|frame| frame.id), Some(fid));
+    assert_eq!(
+        ev.frame_manager().selected_frame().map(|frame| frame.id),
+        Some(fid)
+    );
 
     let input_owner = InputGateOwner::install(&mut ev);
     let (gate, publication) = input_owner.gate(vec![
-        crate::keyboard::InputEvent::Resize {
+        crate::emacs_core::eval::keyboard::InputEvent::Resize {
             width: 700,
             height: 800,
             scale_factor: 1.0,
             emacs_frame_id: 0,
         },
-        crate::keyboard::InputEvent::key_press(crate::keyboard::KeyEvent::char('r')),
+        crate::emacs_core::eval::keyboard::InputEvent::key_press(
+            crate::emacs_core::eval::keyboard::KeyEvent::char('r'),
+        ),
     ]);
     gate.arm(&mut ev, WaitWitness::InputWaitEntered);
 
@@ -3229,7 +3369,7 @@ fn wait_for_pending_resize_events_blocks_until_resize_and_preserves_keypress() {
         WaitWitness::InputWaitEntered
     );
     assert!(resized);
-    let frame = ev.frames.get(fid).expect("frame should exist");
+    let frame = ev.frame_manager().get(fid).expect("frame should exist");
     assert_eq!(frame.width, 700);
     assert_eq!(frame.height, 800);
 
@@ -3242,23 +3382,23 @@ fn wait_for_pending_resize_events_blocks_until_resize_and_preserves_keypress() {
 #[test]
 fn frame_native_width_syncs_pending_resize_behind_focus_event() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let fid = ev
-        .frames
+        .frame_manager_mut()
         .create_frame("F1", 960, 640, neovm_edit::buffer::BufferId(1));
-    ev.frames
+    ev.frame_manager_mut()
         .get_mut(fid)
         .expect("frame should exist")
         .set_parameter(Value::symbol("window-system"), Value::symbol("x"));
 
-    let tx = crate::host_input::HostInputPublisher::install(&mut ev);
+    let tx = neovm_system::emacs_core::host_input::HostInputPublisher::install(&mut ev);
 
-    tx.send(crate::keyboard::InputEvent::Focus {
+    tx.send(crate::emacs_core::eval::keyboard::InputEvent::Focus {
         focused: true,
         emacs_frame_id: 0,
     })
     .unwrap();
-    tx.send(crate::keyboard::InputEvent::Resize {
+    tx.send(crate::emacs_core::eval::keyboard::InputEvent::Resize {
         width: 700,
         height: 800,
         scale_factor: 1.0,
@@ -3278,17 +3418,20 @@ fn frame_native_width_syncs_pending_resize_behind_focus_event() {
 #[test]
 fn redisplay_applies_resize_already_queued_behind_focus_event() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let fid = ev
-        .frames
+        .frame_manager_mut()
         .create_frame("F1", 960, 640, neovm_edit::buffer::BufferId(1));
-    assert_eq!(ev.frames.selected_frame().map(|frame| frame.id), Some(fid));
+    assert_eq!(
+        ev.frame_manager().selected_frame().map(|frame| frame.id),
+        Some(fid)
+    );
 
     let redisplay_calls = Rc::new(RefCell::new(Vec::new()));
     let redisplay_calls_in_cb = redisplay_calls.clone();
     ev.redisplay_fn = Some(Box::new(move |ev: &mut Context| {
         let frame = ev
-            .frames
+            .frame_manager()
             .selected_frame()
             .expect("selected frame during redisplay");
         redisplay_calls_in_cb
@@ -3296,17 +3439,17 @@ fn redisplay_applies_resize_already_queued_behind_focus_event() {
             .push((frame.width, frame.height));
     }));
 
-    ev.command_loop
+    ev.command_loop_mut()
         .keyboard
         .pending_input_events
-        .push_back(crate::keyboard::InputEvent::Focus {
+        .push_back(crate::emacs_core::eval::keyboard::InputEvent::Focus {
             focused: true,
             emacs_frame_id: 0,
         });
-    ev.command_loop
+    ev.command_loop_mut()
         .keyboard
         .pending_input_events
-        .push_back(crate::keyboard::InputEvent::Resize {
+        .push_back(crate::emacs_core::eval::keyboard::InputEvent::Resize {
             width: 700,
             height: 800,
             scale_factor: 1.0,
@@ -3317,48 +3460,57 @@ fn redisplay_applies_resize_already_queued_behind_focus_event() {
 
     assert_eq!(*redisplay_calls.borrow(), vec![(700, 800)]);
     assert!(matches!(
-        ev.command_loop.keyboard.pending_input_events.front(),
-        Some(crate::keyboard::InputEvent::Focus {
+        ev.command_loop().keyboard.pending_input_events.front(),
+        Some(crate::emacs_core::eval::keyboard::InputEvent::Focus {
             focused: true,
             emacs_frame_id: 0
         })
     ));
-    assert_eq!(ev.command_loop.keyboard.pending_input_events.len(), 1);
+    assert_eq!(ev.command_loop().keyboard.pending_input_events.len(), 1);
 }
 
 #[test]
 fn read_char_preserves_keypress_after_queued_focus_and_resize() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let fid = ev
-        .frames
+        .frame_manager_mut()
         .create_frame("F1", 960, 640, neovm_edit::buffer::BufferId(1));
-    assert_eq!(ev.frames.selected_frame().map(|frame| frame.id), Some(fid));
+    assert_eq!(
+        ev.frame_manager().selected_frame().map(|frame| frame.id),
+        Some(fid)
+    );
 
-    ev.command_loop
+    ev.command_loop_mut()
         .keyboard
         .pending_input_events
-        .push_back(crate::keyboard::InputEvent::Focus {
+        .push_back(crate::emacs_core::eval::keyboard::InputEvent::Focus {
             focused: true,
             emacs_frame_id: 0,
         });
-    ev.command_loop
+    ev.command_loop_mut()
         .keyboard
         .pending_input_events
-        .push_back(crate::keyboard::InputEvent::Resize {
+        .push_back(crate::emacs_core::eval::keyboard::InputEvent::Resize {
             width: 700,
             height: 800,
             scale_factor: 1.0,
             emacs_frame_id: 0,
         });
-    ev.command_loop.keyboard.pending_input_events.push_back(
-        crate::keyboard::InputEvent::key_press(crate::keyboard::KeyEvent::char('a')),
-    );
+    ev.command_loop_mut()
+        .keyboard
+        .pending_input_events
+        .push_back(crate::emacs_core::eval::keyboard::InputEvent::key_press(
+            crate::emacs_core::eval::keyboard::KeyEvent::char('a'),
+        ));
 
     let event = ev.read_char().expect("read_char should return a keypress");
     assert_eq!(event, Value::fixnum('a' as i64));
 
-    let frame = ev.frames.get(fid).expect("frame should still be live");
+    let frame = ev
+        .frame_manager()
+        .get(fid)
+        .expect("frame should still be live");
     assert_eq!(frame.width, 700);
     assert_eq!(frame.height, 800);
 }
@@ -3366,15 +3518,15 @@ fn read_char_preserves_keypress_after_queued_focus_and_resize() {
 #[test]
 fn keyboard_runtime_starts_with_terminal_translation_maps_from_context_bootstrap() {
     crate::test_utils::init_test_tracing();
-    let ev = Context::new();
+    let ev = crate::test_utils::new_context();
 
     assert_eq!(
-        ev.command_loop.keyboard.input_decode_map(),
+        ev.command_loop().keyboard.input_decode_map(),
         ev.eval_symbol("input-decode-map")
             .expect("input-decode-map should be bound")
     );
     assert_eq!(
-        ev.command_loop.keyboard.local_function_key_map(),
+        ev.command_loop().keyboard.local_function_key_map(),
         ev.eval_symbol("local-function-key-map")
             .expect("local-function-key-map should be bound")
     );
@@ -3383,7 +3535,7 @@ fn keyboard_runtime_starts_with_terminal_translation_maps_from_context_bootstrap
 #[test]
 fn assigning_terminal_translation_maps_updates_keyboard_runtime_owner() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let input_decode_map = crate::emacs_core::keymap::make_sparse_list_keymap();
     let local_function_key_map = crate::emacs_core::keymap::make_sparse_list_keymap();
 
@@ -3391,11 +3543,11 @@ fn assigning_terminal_translation_maps_updates_keyboard_runtime_owner() {
     ev.assign("local-function-key-map", local_function_key_map);
 
     assert_eq!(
-        ev.command_loop.keyboard.input_decode_map(),
+        ev.command_loop().keyboard.input_decode_map(),
         input_decode_map
     );
     assert_eq!(
-        ev.command_loop.keyboard.local_function_key_map(),
+        ev.command_loop().keyboard.local_function_key_map(),
         local_function_key_map
     );
 }
@@ -3403,7 +3555,7 @@ fn assigning_terminal_translation_maps_updates_keyboard_runtime_owner() {
 #[test]
 fn read_key_sequence_prefers_bound_gui_return_before_ascii_fallback() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let global_map = crate::emacs_core::keymap::make_sparse_list_keymap();
     install_global_map_for_test(&mut ev, global_map);
 
@@ -3432,11 +3584,14 @@ fn read_key_sequence_prefers_bound_gui_return_before_ascii_fallback() {
     )
     .expect("define GNU Return fallback");
 
-    ev.command_loop.keyboard.pending_input_events.push_back(
-        crate::keyboard::InputEvent::key_press(crate::keyboard::KeyEvent::named(
-            crate::keyboard::NamedKey::Return,
-        )),
-    );
+    ev.command_loop_mut()
+        .keyboard
+        .pending_input_events
+        .push_back(crate::emacs_core::eval::keyboard::InputEvent::key_press(
+            crate::emacs_core::eval::keyboard::KeyEvent::named(
+                crate::emacs_core::eval::keyboard::NamedKey::Return,
+            ),
+        ));
 
     let (keys, binding) = ev.read_key_sequence().expect("read GUI Return");
 
@@ -3447,7 +3602,7 @@ fn read_key_sequence_prefers_bound_gui_return_before_ascii_fallback() {
 #[test]
 fn read_key_sequence_prefers_bound_gui_tab_before_ascii_fallback() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let global_map = crate::emacs_core::keymap::make_sparse_list_keymap();
     install_global_map_for_test(&mut ev, global_map);
 
@@ -3476,11 +3631,14 @@ fn read_key_sequence_prefers_bound_gui_tab_before_ascii_fallback() {
     )
     .expect("define GNU Tab fallback");
 
-    ev.command_loop.keyboard.pending_input_events.push_back(
-        crate::keyboard::InputEvent::key_press(crate::keyboard::KeyEvent::named(
-            crate::keyboard::NamedKey::Tab,
-        )),
-    );
+    ev.command_loop_mut()
+        .keyboard
+        .pending_input_events
+        .push_back(crate::emacs_core::eval::keyboard::InputEvent::key_press(
+            crate::emacs_core::eval::keyboard::KeyEvent::named(
+                crate::emacs_core::eval::keyboard::NamedKey::Tab,
+            ),
+        ));
 
     let (keys, binding) = ev.read_key_sequence().expect("read GUI Tab");
 
@@ -3491,7 +3649,7 @@ fn read_key_sequence_prefers_bound_gui_tab_before_ascii_fallback() {
 #[test]
 fn read_key_sequence_falls_back_from_unbound_gui_return_to_ascii_ret() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let global_map = crate::emacs_core::keymap::make_sparse_list_keymap();
     install_global_map_for_test(&mut ev, global_map);
 
@@ -3513,11 +3671,14 @@ fn read_key_sequence_falls_back_from_unbound_gui_return_to_ascii_ret() {
     )
     .expect("define GNU Return fallback");
 
-    ev.command_loop.keyboard.pending_input_events.push_back(
-        crate::keyboard::InputEvent::key_press(crate::keyboard::KeyEvent::named(
-            crate::keyboard::NamedKey::Return,
-        )),
-    );
+    ev.command_loop_mut()
+        .keyboard
+        .pending_input_events
+        .push_back(crate::emacs_core::eval::keyboard::InputEvent::key_press(
+            crate::emacs_core::eval::keyboard::KeyEvent::named(
+                crate::emacs_core::eval::keyboard::NamedKey::Return,
+            ),
+        ));
 
     let (keys, binding) = ev.read_key_sequence().expect("read GUI Return");
 
@@ -3528,7 +3689,7 @@ fn read_key_sequence_falls_back_from_unbound_gui_return_to_ascii_ret() {
 #[test]
 fn read_key_sequence_falls_back_from_unbound_gui_tab_to_ascii_tab() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let global_map = crate::emacs_core::keymap::make_sparse_list_keymap();
     install_global_map_for_test(&mut ev, global_map);
 
@@ -3550,11 +3711,14 @@ fn read_key_sequence_falls_back_from_unbound_gui_tab_to_ascii_tab() {
     )
     .expect("define GNU Tab fallback");
 
-    ev.command_loop.keyboard.pending_input_events.push_back(
-        crate::keyboard::InputEvent::key_press(crate::keyboard::KeyEvent::named(
-            crate::keyboard::NamedKey::Tab,
-        )),
-    );
+    ev.command_loop_mut()
+        .keyboard
+        .pending_input_events
+        .push_back(crate::emacs_core::eval::keyboard::InputEvent::key_press(
+            crate::emacs_core::eval::keyboard::KeyEvent::named(
+                crate::emacs_core::eval::keyboard::NamedKey::Tab,
+            ),
+        ));
 
     let (keys, binding) = ev.read_key_sequence().expect("read GUI Tab");
 
@@ -3565,7 +3729,7 @@ fn read_key_sequence_falls_back_from_unbound_gui_tab_to_ascii_tab() {
 #[test]
 fn read_key_sequence_prefers_bound_gui_escape_before_ascii_fallback() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let global_map = crate::emacs_core::keymap::make_sparse_list_keymap();
     install_global_map_for_test(&mut ev, global_map);
 
@@ -3594,11 +3758,14 @@ fn read_key_sequence_prefers_bound_gui_escape_before_ascii_fallback() {
     )
     .expect("define GNU Escape fallback");
 
-    ev.command_loop.keyboard.pending_input_events.push_back(
-        crate::keyboard::InputEvent::key_press(crate::keyboard::KeyEvent::named(
-            crate::keyboard::NamedKey::Escape,
-        )),
-    );
+    ev.command_loop_mut()
+        .keyboard
+        .pending_input_events
+        .push_back(crate::emacs_core::eval::keyboard::InputEvent::key_press(
+            crate::emacs_core::eval::keyboard::KeyEvent::named(
+                crate::emacs_core::eval::keyboard::NamedKey::Escape,
+            ),
+        ));
 
     let (keys, binding) = ev.read_key_sequence().expect("read GUI Escape");
 
@@ -3609,7 +3776,7 @@ fn read_key_sequence_prefers_bound_gui_escape_before_ascii_fallback() {
 #[test]
 fn read_key_sequence_falls_back_from_unbound_gui_escape_to_ascii_esc() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let global_map = crate::emacs_core::keymap::make_sparse_list_keymap();
     install_global_map_for_test(&mut ev, global_map);
 
@@ -3631,11 +3798,14 @@ fn read_key_sequence_falls_back_from_unbound_gui_escape_to_ascii_esc() {
     )
     .expect("define GNU Escape fallback");
 
-    ev.command_loop.keyboard.pending_input_events.push_back(
-        crate::keyboard::InputEvent::key_press(crate::keyboard::KeyEvent::named(
-            crate::keyboard::NamedKey::Escape,
-        )),
-    );
+    ev.command_loop_mut()
+        .keyboard
+        .pending_input_events
+        .push_back(crate::emacs_core::eval::keyboard::InputEvent::key_press(
+            crate::emacs_core::eval::keyboard::KeyEvent::named(
+                crate::emacs_core::eval::keyboard::NamedKey::Escape,
+            ),
+        ));
 
     let (keys, binding) = ev.read_key_sequence().expect("read GUI Escape");
 
@@ -3646,7 +3816,7 @@ fn read_key_sequence_falls_back_from_unbound_gui_escape_to_ascii_esc() {
 #[test]
 fn read_key_sequence_function_translation_receives_prompt() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let global_map = crate::emacs_core::keymap::make_sparse_list_keymap();
     install_global_map_for_test(&mut ev, global_map);
     ev.eval_str(
@@ -3680,19 +3850,21 @@ fn read_key_sequence_function_translation_receives_prompt() {
     )
     .expect("define translation");
 
-    ev.command_loop
+    ev.command_loop_mut()
         .keyboard
         .kboard
         .unread_events
         .push_back(Value::fixnum('a' as i64));
 
     let (keys, binding) = ev
-        .read_key_sequence_with_options(crate::keyboard::ReadKeySequenceOptions::new(
-            Value::string("Prompt> "),
-            false,
-            false,
-            false,
-        ))
+        .read_key_sequence_with_options(
+            neovm_value::system_vocab::input::ReadKeySequenceOptions::new(
+                Value::string("Prompt> "),
+                false,
+                false,
+                false,
+            ),
+        )
         .expect("read translated key sequence");
 
     let binding = binding.executed();
@@ -3718,7 +3890,7 @@ fn read_key_sequence_function_translation_receives_prompt() {
 #[test]
 fn read_key_sequence_stops_at_an_exhausted_kbd_macro_boundary() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let global_map = crate::emacs_core::keymap::make_sparse_list_keymap();
     install_global_map_for_test(&mut ev, global_map);
     let prefix_map = ev.eval_str("(make-sparse-keymap)").expect("prefix map");
@@ -3731,19 +3903,21 @@ fn read_key_sequence_stops_at_an_exhausted_kbd_macro_boundary() {
     .expect("define prefix key");
     // The probes' contract: the Lisp-visible macro value forces the exit.
     ev.assign("executing-kbd-macro", Value::T);
-    ev.command_loop
+    ev.command_loop_mut()
         .keyboard
         .kboard
         .unread_events
         .push_back(Value::fixnum('x' as i64));
 
     let read = ev
-        .read_command_key_sequence_with_options(crate::keyboard::ReadKeySequenceOptions::default())
+        .read_command_key_sequence_with_options(
+            neovm_value::system_vocab::input::ReadKeySequenceOptions::default(),
+        )
         .expect("key sequence read");
     assert_eq!(
         read,
-        crate::keyboard::CommandKeySequenceRead::End(
-            crate::keyboard::CommandKeySequenceEnd::KeyboardMacroIteration
+        crate::emacs_core::eval::keyboard::CommandKeySequenceRead::End(
+            crate::emacs_core::eval::keyboard::CommandKeySequenceEnd::KeyboardMacroIteration
         ),
         "an exhausted macro must end the key read, not wait for input"
     );
@@ -3758,24 +3932,28 @@ fn read_key_sequence_stops_at_an_exhausted_kbd_macro_boundary() {
 #[test]
 fn read_key_sequence_macro_boundary_ignores_queued_special_events() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let global_map = crate::emacs_core::keymap::make_sparse_list_keymap();
     install_global_map_for_test(&mut ev, global_map);
     ev.assign("executing-kbd-macro", Value::T);
     // A special event no special-event-map handler will consume.
-    ev.command_loop.keyboard.unread_event(Value::list(vec![
-        Value::symbol("dbus-event"),
-        Value::symbol(":session"),
-        Value::fixnum(2),
-    ]));
+    ev.command_loop_mut()
+        .keyboard
+        .unread_event(Value::list(vec![
+            Value::symbol("dbus-event"),
+            Value::symbol(":session"),
+            Value::fixnum(2),
+        ]));
 
     let read = ev
-        .read_command_key_sequence_with_options(crate::keyboard::ReadKeySequenceOptions::default())
+        .read_command_key_sequence_with_options(
+            neovm_value::system_vocab::input::ReadKeySequenceOptions::default(),
+        )
         .expect("key sequence read");
     assert_eq!(
         read,
-        crate::keyboard::CommandKeySequenceRead::End(
-            crate::keyboard::CommandKeySequenceEnd::KeyboardMacroIteration
+        crate::emacs_core::eval::keyboard::CommandKeySequenceRead::End(
+            crate::emacs_core::eval::keyboard::CommandKeySequenceEnd::KeyboardMacroIteration
         ),
         "a queued special event must not defer the exhausted-macro boundary"
     );
@@ -3787,7 +3965,7 @@ fn read_key_sequence_macro_boundary_ignores_queued_special_events() {
 #[test]
 fn read_key_sequence_prompt_preserves_text_properties_in_echo_area() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_variable("noninteractive", Value::NIL);
     let global_map = crate::emacs_core::keymap::make_sparse_list_keymap();
     install_global_map_for_test(&mut ev, global_map);
@@ -3808,15 +3986,15 @@ fn read_key_sequence_prompt_preserves_text_properties_in_echo_area() {
             plist: Value::list(vec![Value::symbol("face"), face]),
         }],
     );
-    ev.command_loop
+    ev.command_loop_mut()
         .keyboard
         .kboard
         .unread_events
         .push_back(Value::fixnum('a' as i64));
 
-    ev.read_key_sequence_with_options(crate::keyboard::ReadKeySequenceOptions::new(
-        prompt, false, false, false,
-    ))
+    ev.read_key_sequence_with_options(
+        neovm_value::system_vocab::input::ReadKeySequenceOptions::new(prompt, false, false, false),
+    )
     .expect("read key sequence");
 
     let message = ev.current_message_value().expect("prompt echo message");
@@ -3832,7 +4010,7 @@ fn read_key_sequence_prompt_preserves_text_properties_in_echo_area() {
 #[test]
 fn read_key_sequence_continues_through_pending_suffix_translation_prefix() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let global_map = crate::emacs_core::keymap::make_sparse_list_keymap();
     install_global_map_for_test(&mut ev, global_map);
     ev.eval_str(
@@ -3865,7 +4043,7 @@ fn read_key_sequence_continues_through_pending_suffix_translation_prefix() {
         Value::fixnum('b' as i64),
         Value::fixnum('c' as i64),
     ] {
-        ev.command_loop
+        ev.command_loop_mut()
             .keyboard
             .kboard
             .unread_events
@@ -3885,7 +4063,7 @@ fn read_key_sequence_continues_through_pending_suffix_translation_prefix() {
 #[test]
 fn fast_read_key_sequence_does_not_publish_or_log_a_prefix_echo() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_variable("noninteractive", Value::NIL);
     let global_map = crate::emacs_core::keymap::make_sparse_list_keymap();
     install_global_map_for_test(&mut ev, global_map);
@@ -3895,12 +4073,12 @@ fn fast_read_key_sequence_does_not_publish_or_log_a_prefix_echo() {
     )
     .expect("setup prefix target command");
 
-    let sequence =
-        crate::keyboard::KeySequence::from_description("C-x C-f").expect("C-x C-f key sequence");
+    let sequence = crate::emacs_core::eval::keyboard::KeySequence::from_description("C-x C-f")
+        .expect("C-x C-f key sequence");
     let events = sequence
         .events
         .iter()
-        .map(crate::keyboard::KeyEvent::to_emacs_event_value)
+        .map(crate::emacs_core::eval::keyboard::KeyEvent::to_emacs_event_value)
         .collect::<Vec<_>>();
     crate::emacs_core::keymap::list_keymap_define_seq(
         global_map,
@@ -3910,7 +4088,7 @@ fn fast_read_key_sequence_does_not_publish_or_log_a_prefix_echo() {
     )
     .expect("define prefix command");
     for event in events {
-        ev.command_loop
+        ev.command_loop_mut()
             .keyboard
             .kboard
             .unread_events
@@ -3923,8 +4101,8 @@ fn fast_read_key_sequence_does_not_publish_or_log_a_prefix_echo() {
         ev.current_message_text().is_none(),
         "GNU only publishes a prefix after echo-keystrokes elapses without input"
     );
-    if let Some(messages_id) = ev.buffers.find_buffer_by_name("*Messages*") {
-        let messages = ev.buffers.get(messages_id).expect("*Messages* live");
+    if let Some(messages_id) = ev.edit.buffers.find_buffer_by_name("*Messages*") {
+        let messages = ev.edit.buffers.get(messages_id).expect("*Messages* live");
         assert!(
             !messages.buffer_string().contains("C-x"),
             "GNU prefix-key echo uses message3_nolog and must not log to *Messages*"
@@ -3935,7 +4113,7 @@ fn fast_read_key_sequence_does_not_publish_or_log_a_prefix_echo() {
 #[test]
 fn prefix_without_a_blocking_input_source_is_not_eagerly_echoed() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_variable("noninteractive", Value::NIL);
     let global_map = crate::emacs_core::keymap::make_sparse_list_keymap();
     install_global_map_for_test(&mut ev, global_map);
@@ -3955,7 +4133,7 @@ fn prefix_without_a_blocking_input_source_is_not_eagerly_echoed() {
         neovm_value::tagged::SymbolMode::Bare,
     )
     .expect("define prefix command");
-    ev.command_loop
+    ev.command_loop_mut()
         .keyboard
         .kboard
         .unread_events
@@ -3969,7 +4147,7 @@ fn prefix_without_a_blocking_input_source_is_not_eagerly_echoed() {
 #[test]
 fn help_prefix_without_a_blocking_input_source_is_not_eagerly_echoed() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_variable("noninteractive", Value::NIL);
     let global_map = crate::emacs_core::keymap::make_sparse_list_keymap();
     install_global_map_for_test(&mut ev, global_map);
@@ -3987,7 +4165,7 @@ fn help_prefix_without_a_blocking_input_source_is_not_eagerly_echoed() {
         neovm_value::tagged::SymbolMode::Bare,
     )
     .expect("define help prefix command");
-    ev.command_loop
+    ev.command_loop_mut()
         .keyboard
         .kboard
         .unread_events
@@ -4001,7 +4179,7 @@ fn help_prefix_without_a_blocking_input_source_is_not_eagerly_echoed() {
 #[test]
 fn read_key_sequence_shift_translates_uppercase_binding() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let global_map = crate::emacs_core::keymap::make_sparse_list_keymap();
     install_global_map_for_test(&mut ev, global_map);
     ev.eval_str(
@@ -4018,7 +4196,7 @@ fn read_key_sequence_shift_translates_uppercase_binding() {
     )
     .expect("define lowercase command");
 
-    ev.command_loop
+    ev.command_loop_mut()
         .keyboard
         .kboard
         .unread_events
@@ -4041,7 +4219,7 @@ fn read_key_sequence_shift_translates_uppercase_binding() {
 #[test]
 fn read_key_sequence_dont_downcase_last_restores_original_event() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let global_map = crate::emacs_core::keymap::make_sparse_list_keymap();
     install_global_map_for_test(&mut ev, global_map);
     ev.eval_str(
@@ -4058,19 +4236,21 @@ fn read_key_sequence_dont_downcase_last_restores_original_event() {
     )
     .expect("define lowercase command");
 
-    ev.command_loop
+    ev.command_loop_mut()
         .keyboard
         .kboard
         .unread_events
         .push_back(Value::fixnum('A' as i64));
 
     let (keys, binding) = ev
-        .read_key_sequence_with_options(crate::keyboard::ReadKeySequenceOptions::new(
-            Value::NIL,
-            false,
-            true,
-            false,
-        ))
+        .read_key_sequence_with_options(
+            neovm_value::system_vocab::input::ReadKeySequenceOptions::new(
+                Value::NIL,
+                false,
+                true,
+                false,
+            ),
+        )
         .expect("read shifted key without downcasing");
 
     let binding = binding.executed();
@@ -4089,13 +4269,13 @@ fn read_key_sequence_dont_downcase_last_restores_original_event() {
 #[test]
 fn read_key_sequence_undefined_shift_translation_restores_original_event() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.assign(
         "global-map",
         crate::emacs_core::keymap::make_sparse_list_keymap(),
     );
 
-    ev.command_loop
+    ev.command_loop_mut()
         .keyboard
         .kboard
         .unread_events
@@ -4115,7 +4295,7 @@ fn read_key_sequence_undefined_shift_translation_restores_original_event() {
 #[test]
 fn read_key_sequence_shift_translates_shifted_function_key() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let global_map = crate::emacs_core::keymap::make_sparse_list_keymap();
     install_global_map_for_test(&mut ev, global_map);
     ev.eval_str(
@@ -4132,7 +4312,7 @@ fn read_key_sequence_shift_translates_shifted_function_key() {
     )
     .expect("define function-key command");
 
-    ev.command_loop
+    ev.command_loop_mut()
         .keyboard
         .kboard
         .unread_events
@@ -4157,17 +4337,20 @@ fn read_key_sequence_shift_translates_shifted_function_key() {
 #[test]
 fn read_char_returns_lispy_switch_frame_for_focus_event() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     install_minimal_special_event_command_runtime(&mut ev);
-    ev.frames
+    ev.frame_manager_mut()
         .create_frame("F1", 960, 640, neovm_edit::buffer::BufferId(1));
-    let target_buffer = ev.buffers.create_buffer("focus-target");
-    let target_frame = ev.frames.create_frame("F2", 960, 640, target_buffer).0;
+    let target_buffer = ev.edit.buffers.create_buffer("focus-target");
+    let target_frame = ev
+        .frame_manager_mut()
+        .create_frame("F2", 960, 640, target_buffer)
+        .0;
 
-    ev.command_loop
+    ev.command_loop_mut()
         .keyboard
         .pending_input_events
-        .push_back(crate::keyboard::InputEvent::Focus {
+        .push_back(crate::emacs_core::eval::keyboard::InputEvent::Focus {
             focused: true,
             emacs_frame_id: target_frame,
         });
@@ -4187,51 +4370,37 @@ fn read_char_returns_lispy_switch_frame_for_focus_event() {
 #[test]
 fn raw_tty_input_switches_to_the_frame_owned_by_that_terminal_before_the_character() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     install_minimal_special_event_command_runtime(&mut ev);
-    let first = crate::emacs_core::window_cmds::make_frame_plain_on_terminal(
-        &mut ev.frames,
-        &mut ev.buffers,
-        vec![Value::NIL],
-        0,
-        80,
-        25,
-    )
-    .expect("first terminal frame");
-    let first_on_secondary = crate::emacs_core::window_cmds::make_frame_plain_on_terminal(
-        &mut ev.frames,
-        &mut ev.buffers,
-        vec![Value::NIL],
-        17,
-        80,
-        25,
-    )
-    .expect("secondary terminal frame");
-    let second_on_secondary = crate::emacs_core::window_cmds::make_frame_plain_on_terminal(
-        &mut ev.frames,
-        &mut ev.buffers,
-        vec![Value::NIL],
-        17,
-        80,
-        25,
-    )
-    .expect("second frame on secondary terminal");
-    let first_id = first.as_frame_id().expect("first frame id");
-    let first_secondary_id = first_on_secondary
-        .as_frame_id()
-        .expect("first secondary frame id");
-    let second_id = second_on_secondary
-        .as_frame_id()
-        .expect("second secondary frame id");
+    // The Lisp-argument constructor is private to the display crate; this
+    // fixture needs only the caller-owned frame-manager constructor with the
+    // same terminal assignment, so use the public DisplayFrameExt method.
+    let frame_buffer = ev.edit.buffers.current_buffer_id().expect("current buffer");
+    let first_id = ev
+        .frame_manager_mut()
+        .create_frame_on_terminal("F1", 0, 80, 25, frame_buffer)
+        .0;
+    let first_secondary_id = ev
+        .frame_manager_mut()
+        .create_frame_on_terminal("F2", 17, 80, 25, frame_buffer)
+        .0;
+    let second_id = ev
+        .frame_manager_mut()
+        .create_frame_on_terminal("F3", 17, 80, 25, frame_buffer)
+        .0;
     assert_ne!(first_secondary_id, second_id);
-    ev.frames.select_frame(crate::window::FrameId(second_id));
-    ev.frames.select_frame(crate::window::FrameId(first_id));
-    let tx = crate::host_input::HostInputPublisher::install(&mut ev);
+    ev.frame_manager_mut()
+        .select_frame(neovm_display::window::FrameId(second_id));
+    ev.frame_manager_mut()
+        .select_frame(neovm_display::window::FrameId(first_id));
+    let tx = neovm_system::emacs_core::host_input::HostInputPublisher::install(&mut ev);
     ev.init_input_system();
-    tx.send(crate::keyboard::InputEvent::raw_tty_bytes_for_terminal(
-        b"x".to_vec(),
-        17,
-    ))
+    tx.send(
+        crate::emacs_core::eval::keyboard::InputEvent::raw_tty_bytes_for_terminal(
+            b"x".to_vec(),
+            17,
+        ),
+    )
     .expect("queue secondary TTY input");
 
     assert_eq!(
@@ -4250,12 +4419,15 @@ fn raw_tty_input_switches_to_the_frame_owned_by_that_terminal_before_the_charact
 #[test]
 fn read_key_sequence_defers_switch_frame_until_after_current_key_sequence() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     install_minimal_special_event_command_runtime(&mut ev);
-    ev.frames
+    ev.frame_manager_mut()
         .create_frame("F1", 960, 640, neovm_edit::buffer::BufferId(1));
-    let target_buffer = ev.buffers.create_buffer("focus-target");
-    let target_frame = ev.frames.create_frame("F2", 960, 640, target_buffer).0;
+    let target_buffer = ev.edit.buffers.create_buffer("focus-target");
+    let target_frame = ev
+        .frame_manager_mut()
+        .create_frame("F2", 960, 640, target_buffer)
+        .0;
     let global_map = crate::emacs_core::keymap::make_sparse_list_keymap();
     install_global_map_for_test(&mut ev, global_map);
     ev.eval_str(
@@ -4271,19 +4443,25 @@ fn read_key_sequence_defers_switch_frame_until_after_current_key_sequence() {
     )
     .expect("define command");
 
-    ev.command_loop.keyboard.pending_input_events.push_back(
-        crate::keyboard::InputEvent::key_press(crate::keyboard::KeyEvent::char('a')),
-    );
-    ev.command_loop
+    ev.command_loop_mut()
         .keyboard
         .pending_input_events
-        .push_back(crate::keyboard::InputEvent::Focus {
+        .push_back(crate::emacs_core::eval::keyboard::InputEvent::key_press(
+            crate::emacs_core::eval::keyboard::KeyEvent::char('a'),
+        ));
+    ev.command_loop_mut()
+        .keyboard
+        .pending_input_events
+        .push_back(crate::emacs_core::eval::keyboard::InputEvent::Focus {
             focused: true,
             emacs_frame_id: target_frame,
         });
-    ev.command_loop.keyboard.pending_input_events.push_back(
-        crate::keyboard::InputEvent::key_press(crate::keyboard::KeyEvent::char('b')),
-    );
+    ev.command_loop_mut()
+        .keyboard
+        .pending_input_events
+        .push_back(crate::emacs_core::eval::keyboard::InputEvent::key_press(
+            crate::emacs_core::eval::keyboard::KeyEvent::char('b'),
+        ));
 
     let (keys, binding) = ev.read_key_sequence().expect("read key sequence");
     assert_eq!(
@@ -4310,12 +4488,15 @@ fn read_key_sequence_defers_switch_frame_until_after_current_key_sequence() {
 #[test]
 fn read_key_sequence_can_return_switch_frame_at_sequence_start() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     install_minimal_special_event_command_runtime(&mut ev);
-    ev.frames
+    ev.frame_manager_mut()
         .create_frame("F1", 960, 640, neovm_edit::buffer::BufferId(1));
-    let target_buffer = ev.buffers.create_buffer("focus-target");
-    let target_frame = ev.frames.create_frame("F2", 960, 640, target_buffer).0;
+    let target_buffer = ev.edit.buffers.create_buffer("focus-target");
+    let target_frame = ev
+        .frame_manager_mut()
+        .create_frame("F2", 960, 640, target_buffer)
+        .0;
     let global_map = crate::emacs_core::keymap::make_sparse_list_keymap();
     install_global_map_for_test(&mut ev, global_map);
     crate::emacs_core::keymap::list_keymap_define_seq(
@@ -4326,21 +4507,23 @@ fn read_key_sequence_can_return_switch_frame_at_sequence_start() {
     )
     .expect("define switch-frame binding");
 
-    ev.command_loop
+    ev.command_loop_mut()
         .keyboard
         .pending_input_events
-        .push_back(crate::keyboard::InputEvent::Focus {
+        .push_back(crate::emacs_core::eval::keyboard::InputEvent::Focus {
             focused: true,
             emacs_frame_id: target_frame,
         });
 
     let (keys, binding) = ev
-        .read_key_sequence_with_options(crate::keyboard::ReadKeySequenceOptions::new(
-            Value::NIL,
-            false,
-            false,
-            true,
-        ))
+        .read_key_sequence_with_options(
+            neovm_value::system_vocab::input::ReadKeySequenceOptions::new(
+                Value::NIL,
+                false,
+                false,
+                true,
+            ),
+        )
         .expect("read switch-frame sequence");
 
     let binding = binding.executed();
@@ -4357,7 +4540,7 @@ fn read_key_sequence_can_return_switch_frame_at_sequence_start() {
 #[test]
 fn special_event_map_bootstraps_delete_frame_and_focus_handlers() {
     crate::test_utils::init_test_tracing();
-    let ev = Context::new();
+    let ev = crate::test_utils::new_context();
     let special_event_map = ev
         .eval_symbol("special-event-map")
         .expect("special-event-map should be bound");
@@ -4400,7 +4583,7 @@ fn special_event_map_bootstraps_delete_frame_and_focus_handlers() {
 #[test]
 fn read_char_updates_monitor_snapshot_and_runs_display_monitor_hooks() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str(
         r#"(progn
              (setq monitor-hook-terminal nil)
@@ -4409,23 +4592,29 @@ fn read_char_updates_monitor_snapshot_and_runs_display_monitor_hooks() {
                            (setq monitor-hook-terminal terminal)))))"#,
     )
     .expect("install display monitor hook");
-    ev.command_loop.keyboard.pending_input_events.push_back(
-        crate::keyboard::InputEvent::MonitorsChanged {
-            monitors: vec![crate::emacs_core::builtins::NeomacsMonitorInfo {
-                x: 10,
-                y: 20,
-                width: 2560,
-                height: 1440,
-                scale: 1.25,
-                width_mm: 600,
-                height_mm: 340,
-                name: Some("DP-1".to_string()),
-            }],
-        },
-    );
-    ev.command_loop.keyboard.pending_input_events.push_back(
-        crate::keyboard::InputEvent::key_press(crate::keyboard::KeyEvent::char('x')),
-    );
+    ev.command_loop_mut()
+        .keyboard
+        .pending_input_events
+        .push_back(
+            crate::emacs_core::eval::keyboard::InputEvent::MonitorsChanged {
+                monitors: vec![crate::emacs_core::builtins::NeomacsMonitorInfo {
+                    x: 10,
+                    y: 20,
+                    width: 2560,
+                    height: 1440,
+                    scale: 1.25,
+                    width_mm: 600,
+                    height_mm: 340,
+                    name: Some("DP-1".to_string()),
+                }],
+            },
+        );
+    ev.command_loop_mut()
+        .keyboard
+        .pending_input_events
+        .push_back(crate::emacs_core::eval::keyboard::InputEvent::key_press(
+            crate::emacs_core::eval::keyboard::KeyEvent::char('x'),
+        ));
 
     let event = ev
         .read_char()
@@ -4448,28 +4637,32 @@ fn read_char_updates_monitor_snapshot_and_runs_display_monitor_hooks() {
 #[test]
 fn read_char_returns_lispy_select_window_for_transport_event() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    ev.frames
+    let mut ev = crate::test_utils::new_context();
+    ev.frame_manager_mut()
         .create_frame("F1", 960, 640, neovm_edit::buffer::BufferId(1));
-    let fid = ev.frames.selected_frame().expect("selected frame").id;
-    let w1 = ev.frames.get(fid).expect("frame").window_list()[0];
-    let other_buffer = ev.buffers.create_buffer("select-window-target");
+    let fid = ev
+        .frame_manager()
+        .selected_frame()
+        .expect("selected frame")
+        .id;
+    let w1 = ev.frame_manager().get(fid).expect("frame").window_list()[0];
+    let other_buffer = ev.edit.buffers.create_buffer("select-window-target");
     let w2 = ev
-        .frames
+        .frame_manager_mut()
         .split_window(
             fid,
             w1,
-            crate::window::SplitDirection::Horizontal,
+            neovm_display::window::SplitDirection::Horizontal,
             other_buffer,
             None,
-            crate::window::SplitPlacement::AfterTarget,
+            neovm_display::window::SplitPlacement::AfterTarget,
         )
         .expect("split window");
 
-    ev.command_loop
+    ev.command_loop_mut()
         .keyboard
         .pending_input_events
-        .push_back(crate::keyboard::InputEvent::SelectWindow { window_id: w2 });
+        .push_back(crate::emacs_core::eval::keyboard::InputEvent::SelectWindow { window_id: w2 });
 
     let event = ev
         .read_char()
@@ -4486,21 +4679,25 @@ fn read_char_returns_lispy_select_window_for_transport_event() {
 #[test]
 fn read_key_sequence_defers_select_window_until_after_current_key_sequence() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    ev.frames
+    let mut ev = crate::test_utils::new_context();
+    ev.frame_manager_mut()
         .create_frame("F1", 960, 640, neovm_edit::buffer::BufferId(1));
-    let fid = ev.frames.selected_frame().expect("selected frame").id;
-    let w1 = ev.frames.get(fid).expect("frame").window_list()[0];
-    let other_buffer = ev.buffers.create_buffer("select-window-target");
+    let fid = ev
+        .frame_manager()
+        .selected_frame()
+        .expect("selected frame")
+        .id;
+    let w1 = ev.frame_manager().get(fid).expect("frame").window_list()[0];
+    let other_buffer = ev.edit.buffers.create_buffer("select-window-target");
     let w2 = ev
-        .frames
+        .frame_manager_mut()
         .split_window(
             fid,
             w1,
-            crate::window::SplitDirection::Horizontal,
+            neovm_display::window::SplitDirection::Horizontal,
             other_buffer,
             None,
-            crate::window::SplitPlacement::AfterTarget,
+            neovm_display::window::SplitPlacement::AfterTarget,
         )
         .expect("split window");
 
@@ -4524,16 +4721,22 @@ fn read_key_sequence_defers_select_window_until_after_current_key_sequence() {
     )
     .expect("define command");
 
-    ev.command_loop.keyboard.pending_input_events.push_back(
-        crate::keyboard::InputEvent::key_press(crate::keyboard::KeyEvent::char('a')),
-    );
-    ev.command_loop
+    ev.command_loop_mut()
         .keyboard
         .pending_input_events
-        .push_back(crate::keyboard::InputEvent::SelectWindow { window_id: w2 });
-    ev.command_loop.keyboard.pending_input_events.push_back(
-        crate::keyboard::InputEvent::key_press(crate::keyboard::KeyEvent::char('b')),
-    );
+        .push_back(crate::emacs_core::eval::keyboard::InputEvent::key_press(
+            crate::emacs_core::eval::keyboard::KeyEvent::char('a'),
+        ));
+    ev.command_loop_mut()
+        .keyboard
+        .pending_input_events
+        .push_back(crate::emacs_core::eval::keyboard::InputEvent::SelectWindow { window_id: w2 });
+    ev.command_loop_mut()
+        .keyboard
+        .pending_input_events
+        .push_back(crate::emacs_core::eval::keyboard::InputEvent::key_press(
+            crate::emacs_core::eval::keyboard::KeyEvent::char('b'),
+        ));
 
     let (keys, binding) = ev.read_key_sequence().expect("read key sequence");
     assert_eq!(
@@ -4560,21 +4763,25 @@ fn read_key_sequence_defers_select_window_until_after_current_key_sequence() {
 #[test]
 fn read_key_sequence_can_return_select_window_at_sequence_start() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    ev.frames
+    let mut ev = crate::test_utils::new_context();
+    ev.frame_manager_mut()
         .create_frame("F1", 960, 640, neovm_edit::buffer::BufferId(1));
-    let fid = ev.frames.selected_frame().expect("selected frame").id;
-    let w1 = ev.frames.get(fid).expect("frame").window_list()[0];
-    let other_buffer = ev.buffers.create_buffer("select-window-target");
+    let fid = ev
+        .frame_manager()
+        .selected_frame()
+        .expect("selected frame")
+        .id;
+    let w1 = ev.frame_manager().get(fid).expect("frame").window_list()[0];
+    let other_buffer = ev.edit.buffers.create_buffer("select-window-target");
     let w2 = ev
-        .frames
+        .frame_manager_mut()
         .split_window(
             fid,
             w1,
-            crate::window::SplitDirection::Horizontal,
+            neovm_display::window::SplitDirection::Horizontal,
             other_buffer,
             None,
-            crate::window::SplitPlacement::AfterTarget,
+            neovm_display::window::SplitPlacement::AfterTarget,
         )
         .expect("split window");
 
@@ -4593,18 +4800,20 @@ fn read_key_sequence_can_return_select_window_at_sequence_start() {
     )
     .expect("define select-window binding");
 
-    ev.command_loop
+    ev.command_loop_mut()
         .keyboard
         .pending_input_events
-        .push_back(crate::keyboard::InputEvent::SelectWindow { window_id: w2 });
+        .push_back(crate::emacs_core::eval::keyboard::InputEvent::SelectWindow { window_id: w2 });
 
     let (keys, binding) = ev
-        .read_key_sequence_with_options(crate::keyboard::ReadKeySequenceOptions::new(
-            Value::NIL,
-            false,
-            false,
-            true,
-        ))
+        .read_key_sequence_with_options(
+            neovm_value::system_vocab::input::ReadKeySequenceOptions::new(
+                Value::NIL,
+                false,
+                false,
+                true,
+            ),
+        )
         .expect("read select-window sequence");
 
     let binding = binding.executed();
@@ -4622,37 +4831,41 @@ fn read_key_sequence_can_return_select_window_at_sequence_start() {
 #[test]
 fn read_char_mouse_press_uses_clicked_window_geometry() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    ev.frames
+    let mut ev = crate::test_utils::new_context();
+    ev.frame_manager_mut()
         .create_frame("F1", 960, 640, neovm_edit::buffer::BufferId(1));
-    let fid = ev.frames.selected_frame().expect("selected frame").id;
-    let w1 = ev.frames.get(fid).expect("frame").window_list()[0];
-    let other_buffer = ev.buffers.create_buffer("mouse-click-target");
+    let fid = ev
+        .frame_manager()
+        .selected_frame()
+        .expect("selected frame")
+        .id;
+    let w1 = ev.frame_manager().get(fid).expect("frame").window_list()[0];
+    let other_buffer = ev.edit.buffers.create_buffer("mouse-click-target");
     let w2 = ev
-        .frames
+        .frame_manager_mut()
         .split_window(
             fid,
             w1,
-            crate::window::SplitDirection::Horizontal,
+            neovm_display::window::SplitDirection::Horizontal,
             other_buffer,
             None,
-            crate::window::SplitPlacement::AfterTarget,
+            neovm_display::window::SplitPlacement::AfterTarget,
         )
         .expect("split window");
     let _ = ev
+        .edit
         .buffers
         .replace_buffer_contents(other_buffer, &"x".repeat(96));
 
     let (click_x, click_y) = {
-        let frame = ev.frames.get(fid).expect("frame after split");
+        let frame = ev.frame_manager().get(fid).expect("frame after split");
         let bounds = *frame.find_window(w2).expect("clicked window").bounds();
         (bounds.x + 25.0, bounds.y + 10.0)
     };
 
-    ev.frames
-        .get_mut(fid)
-        .expect("mutable frame")
-        .commit_redisplay_cache_for_test(vec![crate::window::WindowDisplaySnapshot {
+    neovm_display::test_support::authority::commit_redisplay_cache_for_test(
+        ev.frame_manager_mut().get_mut(fid).expect("mutable frame"),
+        vec![neovm_display::window::WindowDisplaySnapshot {
             logical_cursor_dimensions: None,
             posn_matrix: None,
             point_rows: None,
@@ -4671,10 +4884,10 @@ fn read_char_mouse_press_uses_clicked_window_geometry() {
             buffer_modiff: None,
             layout_freshness: None,
             window_end_record: None,
-            eob_overlay_motion: crate::window::EobOverlayMotionCoverage::NotObserved,
+            eob_overlay_motion: neovm_display::window::EobOverlayMotionCoverage::NotObserved,
             test_posn_object_extent_mode: None,
-            points: vec![crate::window::DisplayPointSnapshot {
-                role: crate::window::DisplayPointRole::Glyph,
+            points: vec![neovm_display::window::DisplayPointSnapshot {
+                role: neovm_display::window::DisplayPointRole::Glyph,
                 buffer_pos: neovm_edit::buffer::LispCharPos1::new(77),
                 x: 20,
                 y: 0,
@@ -4683,7 +4896,7 @@ fn read_char_mouse_press_uses_clicked_window_geometry() {
                 row: 0,
                 col: 2,
             }],
-            rows: vec![crate::window::DisplayRowSnapshot {
+            rows: vec![neovm_display::window::DisplayRowSnapshot {
                 truncated_end_buffer_pos: None,
                 row: 0,
                 y: 0,
@@ -4698,17 +4911,19 @@ fn read_char_mouse_press_uses_clicked_window_geometry() {
                 end_source: Default::default(),
                 fringe: Default::default(),
             }],
-        }]);
+        }],
+    );
 
-    ev.command_loop.keyboard.pending_input_events.push_back(
-        crate::keyboard::InputEvent::MousePress {
-            button: crate::keyboard::MouseButton::Left,
+    ev.command_loop_mut()
+        .keyboard
+        .pending_input_events
+        .push_back(crate::emacs_core::eval::keyboard::InputEvent::MousePress {
+            button: neovm_value::keyboard_pure::MouseButton::Left,
             x: click_x,
             y: click_y,
-            modifiers: crate::keyboard::Modifiers::none(),
+            modifiers: crate::emacs_core::eval::keyboard::Modifiers::none(),
             target_frame_id: fid.0,
-        },
-    );
+        });
 
     let event = ev.read_char().expect("read mouse press");
     let event_slots = neovm_value::value::list_to_vec(&event).expect("event list");
@@ -4737,24 +4952,29 @@ fn read_char_mouse_press_uses_clicked_window_geometry() {
 #[test]
 fn read_key_sequence_uses_clicked_window_local_map_for_mouse_event() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    ev.frames
+    let mut ev = crate::test_utils::new_context();
+    ev.frame_manager_mut()
         .create_frame("F1", 960, 640, neovm_edit::buffer::BufferId(1));
-    let fid = ev.frames.selected_frame().expect("selected frame").id;
-    let w1 = ev.frames.get(fid).expect("frame").window_list()[0];
-    let other_buffer = ev.buffers.create_buffer("mouse-click-binding");
+    let fid = ev
+        .frame_manager()
+        .selected_frame()
+        .expect("selected frame")
+        .id;
+    let w1 = ev.frame_manager().get(fid).expect("frame").window_list()[0];
+    let other_buffer = ev.edit.buffers.create_buffer("mouse-click-binding");
     let w2 = ev
-        .frames
+        .frame_manager_mut()
         .split_window(
             fid,
             w1,
-            crate::window::SplitDirection::Horizontal,
+            neovm_display::window::SplitDirection::Horizontal,
             other_buffer,
             None,
-            crate::window::SplitPlacement::AfterTarget,
+            neovm_display::window::SplitPlacement::AfterTarget,
         )
         .expect("split window");
     let _ = ev
+        .edit
         .buffers
         .replace_buffer_contents(other_buffer, &"x".repeat(96));
 
@@ -4765,7 +4985,8 @@ fn read_key_sequence_uses_clicked_window_local_map_for_mouse_event() {
     .expect("setup");
 
     let local_map = crate::emacs_core::keymap::make_sparse_list_keymap();
-    ev.buffers
+    ev.edit
+        .buffers
         .set_buffer_local_map(other_buffer, local_map)
         .expect("buffer local map");
     crate::emacs_core::keymap::list_keymap_define_seq(
@@ -4777,15 +4998,14 @@ fn read_key_sequence_uses_clicked_window_local_map_for_mouse_event() {
     .expect("define mouse binding");
 
     let (click_x, click_y) = {
-        let frame = ev.frames.get(fid).expect("frame after split");
+        let frame = ev.frame_manager().get(fid).expect("frame after split");
         let bounds = *frame.find_window(w2).expect("clicked window").bounds();
         (bounds.x + 25.0, bounds.y + 10.0)
     };
 
-    ev.frames
-        .get_mut(fid)
-        .expect("mutable frame")
-        .commit_redisplay_cache_for_test(vec![crate::window::WindowDisplaySnapshot {
+    neovm_display::test_support::authority::commit_redisplay_cache_for_test(
+        ev.frame_manager_mut().get_mut(fid).expect("mutable frame"),
+        vec![neovm_display::window::WindowDisplaySnapshot {
             posn_matrix: None,
             point_rows: None,
             window_id: w2,
@@ -4803,10 +5023,10 @@ fn read_key_sequence_uses_clicked_window_local_map_for_mouse_event() {
             buffer_modiff: None,
             layout_freshness: None,
             window_end_record: None,
-            eob_overlay_motion: crate::window::EobOverlayMotionCoverage::NotObserved,
+            eob_overlay_motion: neovm_display::window::EobOverlayMotionCoverage::NotObserved,
             test_posn_object_extent_mode: None,
-            points: vec![crate::window::DisplayPointSnapshot {
-                role: crate::window::DisplayPointRole::Glyph,
+            points: vec![neovm_display::window::DisplayPointSnapshot {
+                role: neovm_display::window::DisplayPointRole::Glyph,
                 buffer_pos: neovm_edit::buffer::LispCharPos1::new(77),
                 x: 20,
                 y: 0,
@@ -4815,7 +5035,7 @@ fn read_key_sequence_uses_clicked_window_local_map_for_mouse_event() {
                 row: 0,
                 col: 2,
             }],
-            rows: vec![crate::window::DisplayRowSnapshot {
+            rows: vec![neovm_display::window::DisplayRowSnapshot {
                 truncated_end_buffer_pos: None,
                 row: 0,
                 y: 0,
@@ -4831,27 +5051,32 @@ fn read_key_sequence_uses_clicked_window_local_map_for_mouse_event() {
                 fringe: Default::default(),
             }],
             logical_cursor_dimensions: None,
-        }]);
+        }],
+    );
 
     // GNU drops an up event with no matching down (src/keyboard.c:6628-6632),
     // so model the complete click gesture.
-    ev.command_loop.keyboard.pending_input_events.push_back(
-        crate::keyboard::InputEvent::MousePress {
-            button: crate::keyboard::MouseButton::Left,
+    ev.command_loop_mut()
+        .keyboard
+        .pending_input_events
+        .push_back(crate::emacs_core::eval::keyboard::InputEvent::MousePress {
+            button: neovm_value::keyboard_pure::MouseButton::Left,
             x: click_x,
             y: click_y,
-            modifiers: crate::keyboard::Modifiers::none(),
+            modifiers: crate::emacs_core::eval::keyboard::Modifiers::none(),
             target_frame_id: fid.0,
-        },
-    );
-    ev.command_loop.keyboard.pending_input_events.push_back(
-        crate::keyboard::InputEvent::MouseRelease {
-            button: crate::keyboard::MouseButton::Left,
-            x: click_x,
-            y: click_y,
-            target_frame_id: fid.0,
-        },
-    );
+        });
+    ev.command_loop_mut()
+        .keyboard
+        .pending_input_events
+        .push_back(
+            crate::emacs_core::eval::keyboard::InputEvent::MouseRelease {
+                button: neovm_value::keyboard_pure::MouseButton::Left,
+                x: click_x,
+                y: click_y,
+                target_frame_id: fid.0,
+            },
+        );
 
     let (keys, binding) = ev.read_key_sequence().expect("read mouse sequence");
     let position = neovm_value::value::list_to_vec(&keys[0]).expect("event list")[1];
@@ -4866,24 +5091,29 @@ fn read_key_sequence_uses_clicked_window_local_map_for_mouse_event() {
 #[test]
 fn read_key_sequence_drops_unbound_down_mouse_before_bound_click() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    ev.frames
+    let mut ev = crate::test_utils::new_context();
+    ev.frame_manager_mut()
         .create_frame("F1", 960, 640, neovm_edit::buffer::BufferId(1));
-    let fid = ev.frames.selected_frame().expect("selected frame").id;
-    let w1 = ev.frames.get(fid).expect("frame").window_list()[0];
-    let other_buffer = ev.buffers.create_buffer("mouse-click-binding");
+    let fid = ev
+        .frame_manager()
+        .selected_frame()
+        .expect("selected frame")
+        .id;
+    let w1 = ev.frame_manager().get(fid).expect("frame").window_list()[0];
+    let other_buffer = ev.edit.buffers.create_buffer("mouse-click-binding");
     let w2 = ev
-        .frames
+        .frame_manager_mut()
         .split_window(
             fid,
             w1,
-            crate::window::SplitDirection::Horizontal,
+            neovm_display::window::SplitDirection::Horizontal,
             other_buffer,
             None,
-            crate::window::SplitPlacement::AfterTarget,
+            neovm_display::window::SplitPlacement::AfterTarget,
         )
         .expect("split window");
     let _ = ev
+        .edit
         .buffers
         .replace_buffer_contents(other_buffer, &"x".repeat(96));
 
@@ -4894,7 +5124,8 @@ fn read_key_sequence_drops_unbound_down_mouse_before_bound_click() {
     .expect("setup");
 
     let local_map = crate::emacs_core::keymap::make_sparse_list_keymap();
-    ev.buffers
+    ev.edit
+        .buffers
         .set_buffer_local_map(other_buffer, local_map)
         .expect("buffer local map");
     crate::emacs_core::keymap::list_keymap_define_seq(
@@ -4906,15 +5137,14 @@ fn read_key_sequence_drops_unbound_down_mouse_before_bound_click() {
     .expect("define mouse binding");
 
     let (click_x, click_y) = {
-        let frame = ev.frames.get(fid).expect("frame after split");
+        let frame = ev.frame_manager().get(fid).expect("frame after split");
         let bounds = *frame.find_window(w2).expect("clicked window").bounds();
         (bounds.x + 25.0, bounds.y + 10.0)
     };
 
-    ev.frames
-        .get_mut(fid)
-        .expect("mutable frame")
-        .commit_redisplay_cache_for_test(vec![crate::window::WindowDisplaySnapshot {
+    neovm_display::test_support::authority::commit_redisplay_cache_for_test(
+        ev.frame_manager_mut().get_mut(fid).expect("mutable frame"),
+        vec![neovm_display::window::WindowDisplaySnapshot {
             posn_matrix: None,
             point_rows: None,
             window_id: w2,
@@ -4932,10 +5162,10 @@ fn read_key_sequence_drops_unbound_down_mouse_before_bound_click() {
             buffer_modiff: None,
             layout_freshness: None,
             window_end_record: None,
-            eob_overlay_motion: crate::window::EobOverlayMotionCoverage::NotObserved,
+            eob_overlay_motion: neovm_display::window::EobOverlayMotionCoverage::NotObserved,
             test_posn_object_extent_mode: None,
-            points: vec![crate::window::DisplayPointSnapshot {
-                role: crate::window::DisplayPointRole::Glyph,
+            points: vec![neovm_display::window::DisplayPointSnapshot {
+                role: neovm_display::window::DisplayPointRole::Glyph,
                 buffer_pos: neovm_edit::buffer::LispCharPos1::new(77),
                 x: 20,
                 y: 0,
@@ -4944,7 +5174,7 @@ fn read_key_sequence_drops_unbound_down_mouse_before_bound_click() {
                 row: 0,
                 col: 2,
             }],
-            rows: vec![crate::window::DisplayRowSnapshot {
+            rows: vec![neovm_display::window::DisplayRowSnapshot {
                 truncated_end_buffer_pos: None,
                 row: 0,
                 y: 0,
@@ -4960,25 +5190,30 @@ fn read_key_sequence_drops_unbound_down_mouse_before_bound_click() {
                 fringe: Default::default(),
             }],
             logical_cursor_dimensions: None,
-        }]);
+        }],
+    );
 
-    ev.command_loop.keyboard.pending_input_events.push_back(
-        crate::keyboard::InputEvent::MousePress {
-            button: crate::keyboard::MouseButton::Left,
+    ev.command_loop_mut()
+        .keyboard
+        .pending_input_events
+        .push_back(crate::emacs_core::eval::keyboard::InputEvent::MousePress {
+            button: neovm_value::keyboard_pure::MouseButton::Left,
             x: click_x,
             y: click_y,
-            modifiers: crate::keyboard::Modifiers::none(),
+            modifiers: crate::emacs_core::eval::keyboard::Modifiers::none(),
             target_frame_id: fid.0,
-        },
-    );
-    ev.command_loop.keyboard.pending_input_events.push_back(
-        crate::keyboard::InputEvent::MouseRelease {
-            button: crate::keyboard::MouseButton::Left,
-            x: click_x,
-            y: click_y,
-            target_frame_id: fid.0,
-        },
-    );
+        });
+    ev.command_loop_mut()
+        .keyboard
+        .pending_input_events
+        .push_back(
+            crate::emacs_core::eval::keyboard::InputEvent::MouseRelease {
+                button: neovm_value::keyboard_pure::MouseButton::Left,
+                x: click_x,
+                y: click_y,
+                target_frame_id: fid.0,
+            },
+        );
 
     let (keys, binding) = ev.read_key_sequence().expect("read mouse sequence");
     let position = neovm_value::value::list_to_vec(&keys[0]).expect("event list")[1];
@@ -4996,12 +5231,16 @@ fn read_key_sequence_drops_unbound_down_mouse_before_bound_click() {
 #[test]
 fn read_key_sequence_drops_unbound_menu_bar_down_mouse_before_bound_click() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    ev.frames
+    let mut ev = crate::test_utils::new_context();
+    ev.frame_manager_mut()
         .create_frame("F1", 960, 640, neovm_edit::buffer::BufferId(1));
-    let fid = ev.frames.selected_frame().expect("selected frame").id;
+    let fid = ev
+        .frame_manager()
+        .selected_frame()
+        .expect("selected frame")
+        .id;
     {
-        let frame = ev.frames.get_mut(fid).expect("frame");
+        let frame = ev.frame_manager_mut().get_mut(fid).expect("frame");
         frame.menu_bar_height = 33;
         frame.char_width = 12.0;
     }
@@ -5021,23 +5260,27 @@ fn read_key_sequence_drops_unbound_menu_bar_down_mouse_before_bound_click() {
     )
     .expect("define menu-bar mouse binding");
 
-    ev.command_loop.keyboard.pending_input_events.push_back(
-        crate::keyboard::InputEvent::MousePress {
-            button: crate::keyboard::MouseButton::Left,
+    ev.command_loop_mut()
+        .keyboard
+        .pending_input_events
+        .push_back(crate::emacs_core::eval::keyboard::InputEvent::MousePress {
+            button: neovm_value::keyboard_pure::MouseButton::Left,
             x: 24.0,
             y: 14.0,
-            modifiers: crate::keyboard::Modifiers::none(),
+            modifiers: crate::emacs_core::eval::keyboard::Modifiers::none(),
             target_frame_id: fid.0,
-        },
-    );
-    ev.command_loop.keyboard.pending_input_events.push_back(
-        crate::keyboard::InputEvent::MouseRelease {
-            button: crate::keyboard::MouseButton::Left,
-            x: 24.0,
-            y: 14.0,
-            target_frame_id: fid.0,
-        },
-    );
+        });
+    ev.command_loop_mut()
+        .keyboard
+        .pending_input_events
+        .push_back(
+            crate::emacs_core::eval::keyboard::InputEvent::MouseRelease {
+                button: neovm_value::keyboard_pure::MouseButton::Left,
+                x: 24.0,
+                y: 14.0,
+                target_frame_id: fid.0,
+            },
+        );
 
     let (keys, binding) = ev
         .read_key_sequence()
@@ -5062,14 +5305,15 @@ fn read_key_sequence_drops_unbound_menu_bar_down_mouse_before_bound_click() {
 #[test]
 fn read_key_sequence_dispatches_gui_tool_bar_click_by_item_key() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    ev.frames
+    let mut ev = crate::test_utils::new_context();
+    ev.frame_manager_mut()
         .create_frame("F1", 960, 640, neovm_edit::buffer::BufferId(1));
 
     let global_map = crate::emacs_core::keymap::make_sparse_list_keymap();
     let tool_bar_map = crate::emacs_core::keymap::make_sparse_list_keymap();
     install_global_map_for_test(&mut ev, global_map);
-    ev.obarray.set_symbol_value("tool-bar-map", tool_bar_map);
+    ev.obarray_mut()
+        .set_symbol_value("tool-bar-map", tool_bar_map);
     ev.eval_str(
         r#"(fset 'neomacs-tool-bar-click-command
                   (lambda () (interactive) 'ok))"#,
@@ -5095,12 +5339,15 @@ fn read_key_sequence_dispatches_gui_tool_bar_click_by_item_key() {
     )
     .expect("define tool-bar binding");
 
-    ev.command_loop.keyboard.pending_input_events.push_back(
-        crate::keyboard::InputEvent::ToolBarClick {
-            index: 0,
-            emacs_frame_id: 0,
-        },
-    );
+    ev.command_loop_mut()
+        .keyboard
+        .pending_input_events
+        .push_back(
+            crate::emacs_core::eval::keyboard::InputEvent::ToolBarClick {
+                index: 0,
+                emacs_frame_id: 0,
+            },
+        );
 
     let (keys, binding) = ev
         .read_key_sequence()
@@ -5117,19 +5364,21 @@ fn read_key_sequence_dispatches_gui_tool_bar_click_by_item_key() {
 #[test]
 fn read_key_sequence_dispatches_gui_tool_bar_click_from_owning_frame() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    let primary = ev
-        .frames
-        .create_frame("F1", 960, 640, neovm_edit::buffer::BufferId(1));
+    let mut ev = crate::test_utils::new_context();
+    let primary =
+        ev.frame_manager_mut()
+            .create_frame("F1", 960, 640, neovm_edit::buffer::BufferId(1));
     let secondary_buffer = ev.buffer_manager_mut().create_buffer("secondary");
-    let secondary = ev.frames.create_frame("F2", 960, 640, secondary_buffer);
-    ev.frames.select_frame(primary);
+    let secondary = ev
+        .frame_manager_mut()
+        .create_frame("F2", 960, 640, secondary_buffer);
+    ev.frame_manager_mut().select_frame(primary);
 
     let global_map = crate::emacs_core::keymap::make_sparse_list_keymap();
     let primary_tool_bar_map = crate::emacs_core::keymap::make_sparse_list_keymap();
     let secondary_tool_bar_map = crate::emacs_core::keymap::make_sparse_list_keymap();
     install_global_map_for_test(&mut ev, global_map);
-    ev.obarray
+    ev.obarray_mut()
         .set_symbol_value("tool-bar-map", primary_tool_bar_map);
     ev.buffer_manager_mut()
         .get_mut(secondary_buffer)
@@ -5172,12 +5421,15 @@ fn read_key_sequence_dispatches_gui_tool_bar_click_from_owning_frame() {
     )
     .expect("define secondary tool-bar binding");
 
-    ev.command_loop.keyboard.pending_input_events.push_back(
-        crate::keyboard::InputEvent::ToolBarClick {
-            index: 0,
-            emacs_frame_id: secondary.0,
-        },
-    );
+    ev.command_loop_mut()
+        .keyboard
+        .pending_input_events
+        .push_back(
+            crate::emacs_core::eval::keyboard::InputEvent::ToolBarClick {
+                index: 0,
+                emacs_frame_id: secondary.0,
+            },
+        );
 
     let (keys, binding) = ev
         .read_key_sequence()
@@ -5203,19 +5455,21 @@ fn read_key_sequence_dispatches_gui_tool_bar_click_from_owning_frame() {
 #[test]
 fn read_key_sequence_gui_tool_bar_frame_fallback_ignores_current_buffer_local_map() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    let primary = ev
-        .frames
-        .create_frame("F1", 960, 640, neovm_edit::buffer::BufferId(1));
+    let mut ev = crate::test_utils::new_context();
+    let primary =
+        ev.frame_manager_mut()
+            .create_frame("F1", 960, 640, neovm_edit::buffer::BufferId(1));
     let secondary_buffer = ev.buffer_manager_mut().create_buffer("secondary");
-    let secondary = ev.frames.create_frame("F2", 960, 640, secondary_buffer);
-    ev.frames.select_frame(primary);
+    let secondary = ev
+        .frame_manager_mut()
+        .create_frame("F2", 960, 640, secondary_buffer);
+    ev.frame_manager_mut().select_frame(primary);
 
     let global_map = crate::emacs_core::keymap::make_sparse_list_keymap();
     let primary_local_tool_bar_map = crate::emacs_core::keymap::make_sparse_list_keymap();
     let default_tool_bar_map = crate::emacs_core::keymap::make_sparse_list_keymap();
     install_global_map_for_test(&mut ev, global_map);
-    ev.obarray
+    ev.obarray_mut()
         .set_symbol_value("tool-bar-map", default_tool_bar_map);
     ev.buffer_manager_mut()
         .get_mut(neovm_edit::buffer::BufferId(1))
@@ -5258,12 +5512,15 @@ fn read_key_sequence_gui_tool_bar_frame_fallback_ignores_current_buffer_local_ma
     )
     .expect("define default tool-bar binding");
 
-    ev.command_loop.keyboard.pending_input_events.push_back(
-        crate::keyboard::InputEvent::ToolBarClick {
-            index: 0,
-            emacs_frame_id: secondary.0,
-        },
-    );
+    ev.command_loop_mut()
+        .keyboard
+        .pending_input_events
+        .push_back(
+            crate::emacs_core::eval::keyboard::InputEvent::ToolBarClick {
+                index: 0,
+                emacs_frame_id: secondary.0,
+            },
+        );
 
     let (keys, binding) = ev
         .read_key_sequence()
@@ -5280,14 +5537,14 @@ fn read_key_sequence_gui_tool_bar_frame_fallback_ignores_current_buffer_local_ma
 #[test]
 fn read_key_sequence_dispatches_gui_menu_bar_click_with_frame_id() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    let primary = ev
-        .frames
-        .create_frame("F1", 960, 640, neovm_edit::buffer::BufferId(1));
-    let secondary = ev
-        .frames
-        .create_frame("F2", 960, 640, neovm_edit::buffer::BufferId(1));
-    ev.frames.select_frame(primary);
+    let mut ev = crate::test_utils::new_context();
+    let primary =
+        ev.frame_manager_mut()
+            .create_frame("F1", 960, 640, neovm_edit::buffer::BufferId(1));
+    let secondary =
+        ev.frame_manager_mut()
+            .create_frame("F2", 960, 640, neovm_edit::buffer::BufferId(1));
+    ev.frame_manager_mut().select_frame(primary);
 
     let global_map = crate::emacs_core::keymap::make_sparse_list_keymap();
     install_global_map_for_test(&mut ev, global_map);
@@ -5304,20 +5561,23 @@ fn read_key_sequence_dispatches_gui_menu_bar_click_with_frame_id() {
     )
     .expect("define menu-bar binding");
 
-    ev.command_loop.keyboard.pending_input_events.push_back(
-        crate::keyboard::InputEvent::MenuBarClick {
-            request_id: Some(neomacs_display_protocol::menu::MenuBarRequestId(42)),
-            index: 2,
-            key: "tools".to_string(),
-            menu_x: 11.0,
-            menu_y: 0.0,
-            anchor_x: 128.0,
-            anchor_y: 4.0,
-            anchor_width: 64.0,
-            anchor_height: 24.0,
-            emacs_frame_id: secondary.0,
-        },
-    );
+    ev.command_loop_mut()
+        .keyboard
+        .pending_input_events
+        .push_back(
+            crate::emacs_core::eval::keyboard::InputEvent::MenuBarClick {
+                request_id: Some(neomacs_display_protocol::menu::MenuBarRequestId(42)),
+                index: 2,
+                key: "tools".to_string(),
+                menu_x: 11.0,
+                menu_y: 0.0,
+                anchor_x: 128.0,
+                anchor_y: 4.0,
+                anchor_width: 64.0,
+                anchor_height: 24.0,
+                emacs_frame_id: secondary.0,
+            },
+        );
 
     let (keys, binding) = ev
         .read_key_sequence()
@@ -5365,7 +5625,7 @@ fn read_key_sequence_dispatches_gui_menu_bar_click_with_frame_id() {
 #[test]
 fn read_key_sequence_drops_unbound_down_mouse_without_losing_keyboard_prefix() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let global_map = crate::emacs_core::keymap::make_sparse_list_keymap();
     install_global_map_for_test(&mut ev, global_map);
 
@@ -5391,17 +5651,17 @@ fn read_key_sequence_drops_unbound_down_mouse_without_losing_keyboard_prefix() {
     )
     .expect("define mouse binding");
 
-    ev.command_loop
+    ev.command_loop_mut()
         .keyboard
         .kboard
         .unread_events
         .push_back(Value::fixnum('a' as i64));
-    ev.command_loop
+    ev.command_loop_mut()
         .keyboard
         .kboard
         .unread_events
         .push_back(Value::symbol("down-mouse-1"));
-    ev.command_loop
+    ev.command_loop_mut()
         .keyboard
         .kboard
         .unread_events
@@ -5421,7 +5681,7 @@ fn read_key_sequence_drops_unbound_down_mouse_without_losing_keyboard_prefix() {
 #[test]
 fn read_key_sequence_reduces_unbound_triple_mouse_to_bound_click() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let global_map = crate::emacs_core::keymap::make_sparse_list_keymap();
     install_global_map_for_test(&mut ev, global_map);
 
@@ -5439,7 +5699,7 @@ fn read_key_sequence_reduces_unbound_triple_mouse_to_bound_click() {
     )
     .expect("define mouse binding");
 
-    ev.command_loop
+    ev.command_loop_mut()
         .keyboard
         .kboard
         .unread_events
@@ -5455,25 +5715,30 @@ fn read_key_sequence_reduces_unbound_triple_mouse_to_bound_click() {
 #[test]
 fn read_key_sequence_uses_clicked_window_buffer_local_minor_mode_maps() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    ev.frames
+    let mut ev = crate::test_utils::new_context();
+    ev.frame_manager_mut()
         .create_frame("F1", 960, 640, neovm_edit::buffer::BufferId(1));
-    let original_buffer = ev.buffers.current_buffer_id().expect("current buffer");
-    let fid = ev.frames.selected_frame().expect("selected frame").id;
-    let w1 = ev.frames.get(fid).expect("frame").window_list()[0];
-    let other_buffer = ev.buffers.create_buffer("mouse-minor-mode-binding");
+    let original_buffer = ev.edit.buffers.current_buffer_id().expect("current buffer");
+    let fid = ev
+        .frame_manager()
+        .selected_frame()
+        .expect("selected frame")
+        .id;
+    let w1 = ev.frame_manager().get(fid).expect("frame").window_list()[0];
+    let other_buffer = ev.edit.buffers.create_buffer("mouse-minor-mode-binding");
     let w2 = ev
-        .frames
+        .frame_manager_mut()
         .split_window(
             fid,
             w1,
-            crate::window::SplitDirection::Horizontal,
+            neovm_display::window::SplitDirection::Horizontal,
             other_buffer,
             None,
-            crate::window::SplitPlacement::AfterTarget,
+            neovm_display::window::SplitPlacement::AfterTarget,
         )
         .expect("split window");
     let _ = ev
+        .edit
         .buffers
         .replace_buffer_contents(other_buffer, &"x".repeat(96));
 
@@ -5483,11 +5748,12 @@ fn read_key_sequence_uses_clicked_window_buffer_local_minor_mode_maps() {
     )
     .expect("setup");
 
-    ev.obarray
+    ev.obarray_mut()
         .set_symbol_value("neomacs-click-minor-mode", Value::NIL);
-    ev.obarray
+    ev.obarray_mut()
         .make_buffer_local("neomacs-click-minor-mode", true);
-    ev.buffers
+    ev.edit
+        .buffers
         .set_buffer_local_property(other_buffer, "neomacs-click-minor-mode", Value::T)
         .expect("buffer-local minor mode");
 
@@ -5508,15 +5774,14 @@ fn read_key_sequence_uses_clicked_window_buffer_local_minor_mode_maps() {
     );
 
     let (click_x, click_y) = {
-        let frame = ev.frames.get(fid).expect("frame after split");
+        let frame = ev.frame_manager().get(fid).expect("frame after split");
         let bounds = *frame.find_window(w2).expect("clicked window").bounds();
         (bounds.x + 25.0, bounds.y + 10.0)
     };
 
-    ev.frames
-        .get_mut(fid)
-        .expect("mutable frame")
-        .commit_redisplay_cache_for_test(vec![crate::window::WindowDisplaySnapshot {
+    neovm_display::test_support::authority::commit_redisplay_cache_for_test(
+        ev.frame_manager_mut().get_mut(fid).expect("mutable frame"),
+        vec![neovm_display::window::WindowDisplaySnapshot {
             logical_cursor_dimensions: None,
             posn_matrix: None,
             point_rows: None,
@@ -5535,10 +5800,10 @@ fn read_key_sequence_uses_clicked_window_buffer_local_minor_mode_maps() {
             buffer_modiff: None,
             layout_freshness: None,
             window_end_record: None,
-            eob_overlay_motion: crate::window::EobOverlayMotionCoverage::NotObserved,
+            eob_overlay_motion: neovm_display::window::EobOverlayMotionCoverage::NotObserved,
             test_posn_object_extent_mode: None,
-            points: vec![crate::window::DisplayPointSnapshot {
-                role: crate::window::DisplayPointRole::Glyph,
+            points: vec![neovm_display::window::DisplayPointSnapshot {
+                role: neovm_display::window::DisplayPointRole::Glyph,
                 buffer_pos: neovm_edit::buffer::LispCharPos1::new(77),
                 x: 20,
                 y: 0,
@@ -5547,7 +5812,7 @@ fn read_key_sequence_uses_clicked_window_buffer_local_minor_mode_maps() {
                 row: 0,
                 col: 2,
             }],
-            rows: vec![crate::window::DisplayRowSnapshot {
+            rows: vec![neovm_display::window::DisplayRowSnapshot {
                 truncated_end_buffer_pos: None,
                 row: 0,
                 y: 0,
@@ -5562,27 +5827,32 @@ fn read_key_sequence_uses_clicked_window_buffer_local_minor_mode_maps() {
                 end_source: Default::default(),
                 fringe: Default::default(),
             }],
-        }]);
+        }],
+    );
 
     // GNU drops an up event with no matching down (src/keyboard.c:6628-6632),
     // so model the complete click gesture.
-    ev.command_loop.keyboard.pending_input_events.push_back(
-        crate::keyboard::InputEvent::MousePress {
-            button: crate::keyboard::MouseButton::Left,
+    ev.command_loop_mut()
+        .keyboard
+        .pending_input_events
+        .push_back(crate::emacs_core::eval::keyboard::InputEvent::MousePress {
+            button: neovm_value::keyboard_pure::MouseButton::Left,
             x: click_x,
             y: click_y,
-            modifiers: crate::keyboard::Modifiers::none(),
+            modifiers: crate::emacs_core::eval::keyboard::Modifiers::none(),
             target_frame_id: fid.0,
-        },
-    );
-    ev.command_loop.keyboard.pending_input_events.push_back(
-        crate::keyboard::InputEvent::MouseRelease {
-            button: crate::keyboard::MouseButton::Left,
-            x: click_x,
-            y: click_y,
-            target_frame_id: fid.0,
-        },
-    );
+        });
+    ev.command_loop_mut()
+        .keyboard
+        .pending_input_events
+        .push_back(
+            crate::emacs_core::eval::keyboard::InputEvent::MouseRelease {
+                button: neovm_value::keyboard_pure::MouseButton::Left,
+                x: click_x,
+                y: click_y,
+                target_frame_id: fid.0,
+            },
+        );
 
     let (keys, binding) = ev.read_key_sequence().expect("read mouse sequence");
     let position = neovm_value::value::list_to_vec(&keys[0]).expect("event list")[1];
@@ -5590,28 +5860,32 @@ fn read_key_sequence_uses_clicked_window_buffer_local_minor_mode_maps() {
 
     assert_eq!(binding, Value::symbol("neomacs-mouse-minor-mode-command"));
     assert_eq!(position_slots[0], Value::make_window(w2.0));
-    assert_eq!(ev.buffers.current_buffer_id(), Some(original_buffer));
+    assert_eq!(ev.edit.buffers.current_buffer_id(), Some(original_buffer));
 }
 
 /// Preserve the mode-line area prefix when resolving a mouse-key binding.
 #[test]
 fn read_key_sequence_prefixes_mode_line_mouse_click_for_lookup() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    ev.frames
+    let mut ev = crate::test_utils::new_context();
+    ev.frame_manager_mut()
         .create_frame("F1", 960, 640, neovm_edit::buffer::BufferId(1));
-    let fid = ev.frames.selected_frame().expect("selected frame").id;
-    let w1 = ev.frames.get(fid).expect("frame").window_list()[0];
-    let other_buffer = ev.buffers.create_buffer("mouse-mode-line-binding");
+    let fid = ev
+        .frame_manager()
+        .selected_frame()
+        .expect("selected frame")
+        .id;
+    let w1 = ev.frame_manager().get(fid).expect("frame").window_list()[0];
+    let other_buffer = ev.edit.buffers.create_buffer("mouse-mode-line-binding");
     let w2 = ev
-        .frames
+        .frame_manager_mut()
         .split_window(
             fid,
             w1,
-            crate::window::SplitDirection::Horizontal,
+            neovm_display::window::SplitDirection::Horizontal,
             other_buffer,
             None,
-            crate::window::SplitPlacement::AfterTarget,
+            neovm_display::window::SplitPlacement::AfterTarget,
         )
         .expect("split window");
 
@@ -5622,7 +5896,8 @@ fn read_key_sequence_prefixes_mode_line_mouse_click_for_lookup() {
     .expect("setup");
 
     let local_map = crate::emacs_core::keymap::make_sparse_list_keymap();
-    ev.buffers
+    ev.edit
+        .buffers
         .set_buffer_local_map(other_buffer, local_map)
         .expect("buffer local map");
     crate::emacs_core::keymap::list_keymap_define_seq(
@@ -5634,15 +5909,14 @@ fn read_key_sequence_prefixes_mode_line_mouse_click_for_lookup() {
     .expect("define mode-line mouse binding");
 
     let (click_x, click_y) = {
-        let frame = ev.frames.get(fid).expect("frame after split");
+        let frame = ev.frame_manager().get(fid).expect("frame after split");
         let bounds = *frame.find_window(w2).expect("clicked window").bounds();
         (bounds.x + 25.0, bounds.bottom() - 4.0)
     };
 
-    ev.frames
-        .get_mut(fid)
-        .expect("mutable frame")
-        .commit_redisplay_cache_for_test(vec![crate::window::WindowDisplaySnapshot {
+    neovm_display::test_support::authority::commit_redisplay_cache_for_test(
+        ev.frame_manager_mut().get_mut(fid).expect("mutable frame"),
+        vec![neovm_display::window::WindowDisplaySnapshot {
             posn_matrix: None,
             point_rows: None,
             window_id: w2,
@@ -5661,31 +5935,36 @@ fn read_key_sequence_prefixes_mode_line_mouse_click_for_lookup() {
             buffer_modiff: None,
             layout_freshness: None,
             window_end_record: None,
-            eob_overlay_motion: crate::window::EobOverlayMotionCoverage::NotObserved,
+            eob_overlay_motion: neovm_display::window::EobOverlayMotionCoverage::NotObserved,
             test_posn_object_extent_mode: None,
             points: Vec::new(),
             rows: Vec::new(),
-        }]);
+        }],
+    );
 
     // GNU drops an up event with no matching down (src/keyboard.c:6628-6632),
     // so model the complete click gesture.
-    ev.command_loop.keyboard.pending_input_events.push_back(
-        crate::keyboard::InputEvent::MousePress {
-            button: crate::keyboard::MouseButton::Left,
+    ev.command_loop_mut()
+        .keyboard
+        .pending_input_events
+        .push_back(crate::emacs_core::eval::keyboard::InputEvent::MousePress {
+            button: neovm_value::keyboard_pure::MouseButton::Left,
             x: click_x,
             y: click_y,
-            modifiers: crate::keyboard::Modifiers::none(),
+            modifiers: crate::emacs_core::eval::keyboard::Modifiers::none(),
             target_frame_id: fid.0,
-        },
-    );
-    ev.command_loop.keyboard.pending_input_events.push_back(
-        crate::keyboard::InputEvent::MouseRelease {
-            button: crate::keyboard::MouseButton::Left,
-            x: click_x,
-            y: click_y,
-            target_frame_id: fid.0,
-        },
-    );
+        });
+    ev.command_loop_mut()
+        .keyboard
+        .pending_input_events
+        .push_back(
+            crate::emacs_core::eval::keyboard::InputEvent::MouseRelease {
+                button: neovm_value::keyboard_pure::MouseButton::Left,
+                x: click_x,
+                y: click_y,
+                target_frame_id: fid.0,
+            },
+        );
 
     let (keys, binding) = ev.read_key_sequence().expect("read mode-line click");
     let position = neovm_value::value::list_to_vec(&keys[1]).expect("event list")[1];
@@ -5700,7 +5979,7 @@ fn read_key_sequence_prefixes_mode_line_mouse_click_for_lookup() {
 #[test]
 fn clear_current_message_runs_echo_area_clear_hook_once_when_message_present() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str(
         r#"
         (setq echo-clear-count 0)
@@ -5731,7 +6010,7 @@ fn clear_current_message_runs_echo_area_clear_hook_once_when_message_present() {
 #[test]
 fn update_active_region_selection_after_command_calls_gnu_owned_selection_surface() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
 
     ev.eval_str(
         r#"
@@ -5773,16 +6052,19 @@ fn update_active_region_selection_after_command_calls_gnu_owned_selection_surfac
 #[test]
 fn redisplay_preserves_non_resize_input_for_read_char() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let fid = ev
-        .frames
+        .frame_manager_mut()
         .create_frame("F1", 960, 640, neovm_edit::buffer::BufferId(1));
-    assert_eq!(ev.frames.selected_frame().map(|frame| frame.id), Some(fid));
+    assert_eq!(
+        ev.frame_manager().selected_frame().map(|frame| frame.id),
+        Some(fid)
+    );
 
-    let tx = crate::host_input::HostInputPublisher::install(&mut ev);
+    let tx = neovm_system::emacs_core::host_input::HostInputPublisher::install(&mut ev);
 
-    tx.send(crate::keyboard::InputEvent::key_press(
-        crate::keyboard::KeyEvent::char('a'),
+    tx.send(crate::emacs_core::eval::keyboard::InputEvent::key_press(
+        crate::emacs_core::eval::keyboard::KeyEvent::char('a'),
     ))
     .unwrap();
 
@@ -5797,7 +6079,7 @@ fn redisplay_preserves_non_resize_input_for_read_char() {
 #[test]
 fn fire_pending_timers_executes_lisp_callbacks() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_variable("vm-timer-fired", Value::NIL);
     ev.eval_str(
         r#"(progn
@@ -5824,7 +6106,7 @@ fn fire_pending_timers_executes_lisp_callbacks() {
     ]);
     ev.set_variable("timer-list", Value::list(vec![timer]));
 
-    ev.fire_pending_timers();
+    let _ = neovm_eval::test_support::authority::service_pending_timers_for_test(&mut ev);
 
     assert_eq!(
         ev.eval_symbol("vm-timer-fired")
@@ -5836,7 +6118,7 @@ fn fire_pending_timers_executes_lisp_callbacks() {
 #[test]
 fn fire_pending_timers_requests_redisplay_after_callbacks() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_variable("vm-timer-fired", Value::NIL);
 
     let redisplay_calls = Rc::new(RefCell::new(Vec::new()));
@@ -5873,7 +6155,7 @@ fn fire_pending_timers_requests_redisplay_after_callbacks() {
     ]);
     ev.set_variable("timer-list", Value::list(vec![timer]));
 
-    ev.fire_pending_timers();
+    let _ = neovm_eval::test_support::authority::service_pending_timers_for_test(&mut ev);
 
     assert_eq!(*redisplay_calls.borrow(), vec![Value::symbol("done")]);
 }
@@ -5881,7 +6163,7 @@ fn fire_pending_timers_requests_redisplay_after_callbacks() {
 #[test]
 fn fire_pending_timers_prefers_more_overdue_ordinary_timer_over_idle_timer() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str(
         r#"(progn
            (setq vm-timer-order nil)
@@ -5917,7 +6199,7 @@ fn fire_pending_timers_prefers_more_overdue_ordinary_timer_over_idle_timer() {
     ev.timer_start_idle();
     thread::sleep(Duration::from_millis(5));
 
-    ev.fire_pending_timers();
+    let _ = neovm_eval::test_support::authority::service_pending_timers_for_test(&mut ev);
 
     assert_eq!(
         ev.eval_symbol("vm-timer-order")
@@ -5929,7 +6211,7 @@ fn fire_pending_timers_prefers_more_overdue_ordinary_timer_over_idle_timer() {
 #[test]
 fn fire_pending_timers_prefers_more_overdue_idle_timer_over_ordinary_timer() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str(
         r#"(progn
            (setq vm-timer-order nil)
@@ -5970,7 +6252,7 @@ fn fire_pending_timers_prefers_more_overdue_idle_timer_over_ordinary_timer() {
     );
     thread::sleep(Duration::from_millis(20));
 
-    ev.fire_pending_timers();
+    let _ = neovm_eval::test_support::authority::service_pending_timers_for_test(&mut ev);
 
     assert_eq!(
         ev.eval_symbol("vm-timer-order")
@@ -5982,7 +6264,7 @@ fn fire_pending_timers_prefers_more_overdue_idle_timer_over_ordinary_timer() {
 #[test]
 fn next_input_wait_timeout_accounts_for_gnu_timer_list() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_variable(
         "timer-list",
         Value::list(vec![gnu_timer_after(Duration::from_millis(200), "ignore")]),
@@ -5999,7 +6281,7 @@ fn next_input_wait_timeout_accounts_for_gnu_timer_list() {
 #[test]
 fn next_input_wait_timeout_chooses_earliest_timer_source() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_variable(
         "timer-list",
         Value::list(vec![
@@ -6018,7 +6300,7 @@ fn next_input_wait_timeout_chooses_earliest_timer_source() {
 #[test]
 fn next_input_wait_timeout_accounts_for_gnu_idle_timer_list_when_idle() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_variable(
         "timer-idle-list",
         Value::list(vec![gnu_idle_timer_after(
@@ -6057,9 +6339,11 @@ fn read_char_fires_bootstrapped_gnu_run_with_timer_while_waiting_for_input() {
     .expect("schedule GNU Lisp timer");
 
     let input_owner = InputGateOwner::install(&mut ev);
-    let (gate, publication) = input_owner.gate(vec![crate::keyboard::InputEvent::key_press(
-        crate::keyboard::KeyEvent::char('a'),
-    )]);
+    let (gate, publication) = input_owner.gate(vec![
+        crate::emacs_core::eval::keyboard::InputEvent::key_press(
+            crate::emacs_core::eval::keyboard::KeyEvent::char('a'),
+        ),
+    ]);
     install_after_redisplay(&mut ev, gate, |context| {
         match context.eval_symbol("vm-timer-fired").ok() {
             Some(value) if value == Value::symbol("done") => {
@@ -6110,9 +6394,11 @@ fn read_char_fires_bootstrapped_gnu_run_with_idle_timer_while_waiting_for_input(
     .expect("schedule GNU Lisp idle timer");
 
     let input_owner = InputGateOwner::install(&mut ev);
-    let (gate, publication) = input_owner.gate(vec![crate::keyboard::InputEvent::key_press(
-        crate::keyboard::KeyEvent::char('a'),
-    )]);
+    let (gate, publication) = input_owner.gate(vec![
+        crate::emacs_core::eval::keyboard::InputEvent::key_press(
+            crate::emacs_core::eval::keyboard::KeyEvent::char('a'),
+        ),
+    ]);
     install_after_redisplay(&mut ev, gate, |context| {
         match context.eval_symbol("vm-idle-fired").ok() {
             Some(value) if value == Value::symbol("done") => {
@@ -6181,10 +6467,11 @@ fn repeating_idle_timer_rearms_after_user_input_starts_new_idle_epoch() {
     .expect("schedule repeating GNU Lisp idle timer");
 
     let input_owner = InputGateOwner::install(&mut ev);
-    let (first, first_publication) =
-        input_owner.gate(vec![crate::keyboard::InputEvent::key_press(
-            crate::keyboard::KeyEvent::char('a'),
-        )]);
+    let (first, first_publication) = input_owner.gate(vec![
+        crate::emacs_core::eval::keyboard::InputEvent::key_press(
+            crate::emacs_core::eval::keyboard::KeyEvent::char('a'),
+        ),
+    ]);
     install_after_redisplay(&mut ev, first, |context| {
         match context.eval_symbol("vm-repeating-idle-count").ok() {
             Some(value) if value == Value::fixnum(1) => {
@@ -6206,10 +6493,11 @@ fn repeating_idle_timer_rearms_after_user_input_starts_new_idle_epoch() {
         Value::fixnum('a' as i64)
     );
 
-    let (second, second_publication) =
-        input_owner.gate(vec![crate::keyboard::InputEvent::key_press(
-            crate::keyboard::KeyEvent::char('b'),
-        )]);
+    let (second, second_publication) = input_owner.gate(vec![
+        crate::emacs_core::eval::keyboard::InputEvent::key_press(
+            crate::emacs_core::eval::keyboard::KeyEvent::char('b'),
+        ),
+    ]);
     install_after_redisplay(&mut ev, second, |context| {
         match context.eval_symbol("vm-repeating-idle-count").ok() {
             Some(value) if value == Value::fixnum(2) => {
@@ -6262,10 +6550,13 @@ fn read_key_sequence_clears_stale_this_command_keys_at_entry_for_idle_probe() {
     crate::test_utils::init_test_tracing();
     let _policy = RedisplayHookPolicyGuard::legacy();
     let mut ev = runtime_startup_context();
-    let scratch = ev.buffers.create_buffer("*rks-entry-clear*");
-    ev.buffers.set_current(scratch);
-    let frame = ev.frames.create_frame("F1", 80, 24, scratch);
-    assert!(ev.frames.select_frame(frame), "need a selected frame");
+    let scratch = ev.edit.buffers.create_buffer("*rks-entry-clear*");
+    ev.edit.buffers.set_current(scratch);
+    let frame = ev.frame_manager_mut().create_frame("F1", 80, 24, scratch);
+    assert!(
+        ev.frame_manager_mut().select_frame(frame),
+        "need a selected frame"
+    );
 
     // Pre-seed a stale, non-empty committed key sequence, exactly as the
     // command loop leaves it after reading the command's invoking keys
@@ -6295,9 +6586,11 @@ fn read_key_sequence_clears_stale_this_command_keys_at_entry_for_idle_probe() {
     .expect("arm idle snapshot timer");
 
     let input_owner = InputGateOwner::install(&mut ev);
-    let (gate, publication) = input_owner.gate(vec![crate::keyboard::InputEvent::key_press(
-        crate::keyboard::KeyEvent::char('a'),
-    )]);
+    let (gate, publication) = input_owner.gate(vec![
+        crate::emacs_core::eval::keyboard::InputEvent::key_press(
+            crate::emacs_core::eval::keyboard::KeyEvent::char('a'),
+        ),
+    ]);
     install_after_redisplay(&mut ev, gate, |context| {
         match context.eval_symbol("rks-idle-snapshot").ok() {
             Some(value) if value.is_vector() => {
@@ -6307,12 +6600,14 @@ fn read_key_sequence_clears_stale_this_command_keys_at_entry_for_idle_probe() {
         }
     });
 
-    let read = ev.read_key_sequence_with_options(crate::keyboard::ReadKeySequenceOptions::new(
-        Value::NIL,
-        false, // continue-echo = nil -> clear stale this-command-keys
-        false,
-        false,
-    ));
+    let read = ev.read_key_sequence_with_options(
+        neovm_value::system_vocab::input::ReadKeySequenceOptions::new(
+            Value::NIL,
+            false, // continue-echo = nil -> clear stale this-command-keys
+            false,
+            false,
+        ),
+    );
 
     assert_eq!(
         publication
@@ -6336,7 +6631,7 @@ fn read_key_sequence_clears_stale_this_command_keys_at_entry_for_idle_probe() {
         "idle timer must have fired and captured a vector (got {snapshot:?})"
     );
     assert_eq!(
-        crate::emacs_core::print::print_value_with_buffers(&snapshot, &ev.buffers),
+        crate::emacs_core::print::print_value_with_buffers(&snapshot, &ev.edit.buffers),
         "[]",
         "while the nested read (continue-echo=nil) is waiting, \
          (this-command-keys-vector) must be EMPTY — the stale invoking \
@@ -6733,22 +7028,22 @@ fn reader_recognizes_bignum_literals() {
 #[test]
 fn let_buffer_local_does_not_corrupt_other_buffers() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    let buf_a = ev.buffers.create_buffer("A");
-    let buf_b = ev.buffers.create_buffer("B");
-    ev.buffers.set_current(buf_a);
+    let mut ev = crate::test_utils::new_context();
+    let buf_a = ev.edit.buffers.create_buffer("A");
+    let buf_b = ev.edit.buffers.create_buffer("B");
+    ev.edit.buffers.set_current(buf_a);
     ev.eval_str("(make-variable-buffer-local 'phase7-x)")
         .expect("make-variable-buffer-local should succeed");
     // Seed each buffer with its own per-buffer value via setq.
     ev.eval_str("(setq phase7-x 1)").expect("setq A");
-    ev.buffers.set_current(buf_b);
+    ev.edit.buffers.set_current(buf_b);
     ev.eval_str("(setq phase7-x 2)").expect("setq B");
     // Switch back to A and let-bind phase7-x to 999. Inside the
     // let, switching to B must read B's value (2), NOT 999.
     // We use save-current-buffer + set-buffer instead of
     // with-current-buffer because the latter is a macro that may
-    // not be available in Context::new().
-    ev.buffers.set_current(buf_a);
+    // not be available in crate::test_utils::new_context().
+    ev.edit.buffers.set_current(buf_a);
     let inside = ev.eval_str(
         "(let ((phase7-x 999))
            (save-current-buffer
@@ -6770,7 +7065,7 @@ fn let_buffer_local_does_not_corrupt_other_buffers() {
     );
     // After the let unwinds, A's binding must be restored to its
     // pre-let value (1).
-    ev.buffers.set_current(buf_a);
+    ev.edit.buffers.set_current(buf_a);
     let after_a = ev.eval_str("phase7-x").unwrap();
     assert_eq!(
         after_a.as_int(),
@@ -6779,7 +7074,7 @@ fn let_buffer_local_does_not_corrupt_other_buffers() {
         after_a
     );
     // And B's binding is unchanged.
-    ev.buffers.set_current(buf_b);
+    ev.edit.buffers.set_current(buf_b);
     let after_b = ev.eval_str("phase7-x").unwrap();
     assert_eq!(
         after_b.as_int(),
@@ -6867,7 +7162,7 @@ fn bignum_round_trips_through_print_and_parse() {
 fn file_name_handler_dispatch_invokes_handler_for_matching_filenames() {
     crate::test_utils::init_test_tracing();
     // Use a raw lambda on the alist instead of a `defun`-defined
-    // symbol — `Context::new()` is the bare-metal evaluator and
+    // symbol — `crate::test_utils::new_context()` is the bare-metal evaluator and
     // doesn't include the higher-level `defun` macro. The raw
     // lambda value is what `find-file-name-handler` returns and
     // what `funcall` invokes, mirroring the same dispatch path
@@ -7140,10 +7435,10 @@ fn eval_of_generated_lambda_preserves_uninterned_symbol_identity() {
 #[test]
 fn save_restriction_restores_labeled_restrictions_and_widen_semantics() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
-    let buffer_id = eval.buffers.create_buffer("eval-labeled-restriction");
-    eval.buffers.set_current(buffer_id);
-    let _ = eval.buffers.insert_into_buffer(buffer_id, "abcdef");
+    let mut eval = crate::test_utils::new_context();
+    let buffer_id = eval.edit.buffers.create_buffer("eval-labeled-restriction");
+    eval.edit.buffers.set_current(buffer_id);
+    let _ = eval.edit.buffers.insert_into_buffer(buffer_id, "abcdef");
     let result = eval.eval_str(
         r#"(progn
              (internal--labeled-narrow-to-region 2 5 'tag)
@@ -7194,25 +7489,32 @@ fn indirect_replace_while_widened_restores_original_restriction_once() {
 #[test]
 fn redisplay_restores_current_innermost_labeled_restriction_after_callback_mutation() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
-    let buffer_id = eval.buffers.create_buffer("redisplay-labeled");
-    eval.buffers.set_current(buffer_id);
-    let _ = eval.buffers.insert_into_buffer(buffer_id, "abcdef");
-    let _ = eval.buffers.internal_labeled_narrow_to_emacs_byte_range(
-        buffer_id,
-        EmacsByteRange::from_usize(1, 5),
-        Value::symbol("outer"),
-    );
-    let _ = eval.buffers.internal_labeled_narrow_to_emacs_byte_range(
-        buffer_id,
-        EmacsByteRange::from_usize(2, 4),
-        Value::symbol("inner"),
-    );
+    let mut eval = crate::test_utils::new_context();
+    let buffer_id = eval.edit.buffers.create_buffer("redisplay-labeled");
+    eval.edit.buffers.set_current(buffer_id);
+    let _ = eval.edit.buffers.insert_into_buffer(buffer_id, "abcdef");
+    let _ = eval
+        .edit
+        .buffers
+        .internal_labeled_narrow_to_emacs_byte_range(
+            buffer_id,
+            EmacsByteRange::from_usize(1, 5),
+            Value::symbol("outer"),
+        );
+    let _ = eval
+        .edit
+        .buffers
+        .internal_labeled_narrow_to_emacs_byte_range(
+            buffer_id,
+            EmacsByteRange::from_usize(2, 4),
+            Value::symbol("inner"),
+        );
 
     let observed = Rc::new(RefCell::new(Vec::new()));
     let observed_in_callback = observed.clone();
     eval.redisplay_fn = Some(Box::new(move |ev: &mut Context| {
         let buf = ev
+            .edit
             .buffers
             .get(buffer_id)
             .expect("buffer visible during redisplay");
@@ -7221,9 +7523,11 @@ fn redisplay_restores_current_innermost_labeled_restriction_after_callback_mutat
             buf.point_max_emacs_byte_pos().get(),
         ));
         let _ = ev
+            .edit
             .buffers
             .internal_labeled_widen(buffer_id, &Value::symbol("inner"));
         let buf = ev
+            .edit
             .buffers
             .get(buffer_id)
             .expect("buffer after labeled widen");
@@ -7236,7 +7540,11 @@ fn redisplay_restores_current_innermost_labeled_restriction_after_callback_mutat
     eval.redisplay().expect("redisplay");
 
     assert_eq!(*observed.borrow(), vec![(0, 6), (1, 5)]);
-    let buf = eval.buffers.get(buffer_id).expect("buffer after redisplay");
+    let buf = eval
+        .edit
+        .buffers
+        .get(buffer_id)
+        .expect("buffer after redisplay");
     assert_eq!(
         (
             buf.point_min_emacs_byte_pos().get(),
@@ -7249,7 +7557,7 @@ fn redisplay_restores_current_innermost_labeled_restriction_after_callback_mutat
 #[test]
 fn simple_defvar_declares_local_dynamic_scope_in_lexical_environment() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_lexical_binding(true);
     ev.lexenv = Value::list(vec![Value::T]);
 
@@ -7294,7 +7602,7 @@ fn put_get_preserves_closure_captured_uninterned_symbol_identity() {
 #[test]
 fn recent_input_events_are_bounded() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     for i in 0..(RECENT_INPUT_EVENT_LIMIT + 1) {
         ev.record_input_event(Value::fixnum(i as i64));
     }
@@ -7310,7 +7618,7 @@ fn recent_input_events_are_bounded() {
 #[test]
 fn recent_keys_include_cmds_reports_command_markers() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.record_input_event(Value::fixnum('x' as i64));
     ev.record_recent_command(Value::symbol("forward-char"));
 
@@ -7336,7 +7644,7 @@ fn recent_keys_include_cmds_reports_command_markers() {
 #[test]
 fn eval_and_compile_defines_function() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let rendered: Vec<String> = ev
         .eval_str_each(
             r#"
@@ -7362,7 +7670,7 @@ fn eval_and_compile_defines_function() {
 #[test]
 fn eval_and_compile_with_backtick_name() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let results: Vec<String> = ev
         .eval_str_each(r#"
         (defalias 'eval-and-compile (cons 'macro #'(lambda (&rest body)
@@ -7652,7 +7960,7 @@ fn defconst_updates_dynamic_binding_without_enforcing_constancy() {
 #[test]
 fn bootstrap_does_not_prebind_lisp_derived_mode_tables() {
     crate::test_utils::init_test_tracing();
-    let ev = Context::new();
+    let ev = crate::test_utils::new_context();
 
     for name in [
         "completion-list-mode-abbrev-table",
@@ -7662,7 +7970,7 @@ fn bootstrap_does_not_prebind_lisp_derived_mode_tables() {
         "minibuffer-mode-abbrev-table",
     ] {
         assert_eq!(
-            ev.obarray.symbol_value_copied(name),
+            ev.obarray().symbol_value_copied(name),
             None,
             "{name} must remain void until Lisp define-derived-mode creates it"
         );
@@ -8009,7 +8317,7 @@ fn function_special_form_symbol_and_literal_payloads() {
 #[test]
 fn lambda_captures_docstring_metadata() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let value = ev
         .eval_str("(lambda nil \"lambda-doc\" nil)")
         .expect("eval");
@@ -8025,7 +8333,7 @@ fn lambda_captures_docstring_metadata() {
 #[test]
 fn function_special_form_evaluates_dynamic_documentation_form() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let value = ev
         .eval_str("(function (lambda nil (:documentation (if t \"dyn-doc\" \"bad\")) nil))")
         .expect("eval");
@@ -8046,7 +8354,7 @@ fn function_special_form_evaluates_dynamic_documentation_form() {
 #[test]
 fn function_special_form_value_path_evaluates_dynamic_documentation_form() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let value = ev
         .eval_str("(function (lambda nil (:documentation (if t \"dyn-doc\" \"bad\")) nil))")
         .expect("eval");
@@ -8067,7 +8375,7 @@ fn function_special_form_value_path_evaluates_dynamic_documentation_form() {
 #[test]
 fn byte_code_literal_value_path_produces_bytecode() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let value = ev
         .eval_str(r#"#[(x) "\bT\207" [x] 1 (#$ . 83)]"#)
         .expect("eval");
@@ -8108,7 +8416,7 @@ fn function_lambda_funcall_strips_dynamic_documentation_form_like_gnu() {
 #[test]
 fn lambda_single_string_body_is_a_return_value_not_a_docstring() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let value = ev.eval_str("(lambda nil \"ok-1\")").expect("eval");
     assert_eq!(value.closure_docstring().flatten(), None);
     let body = value
@@ -8124,11 +8432,11 @@ fn defmacro_captures_docstring_metadata() {
     crate::test_utils::init_test_tracing();
     // defmacro is no longer a bare-evaluator special form; install a
     // macro with a docstring via defalias + cons 'macro + lambda.
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str("(defalias 'vm-doc-macro (cons 'macro #'(lambda (x) \"macro-doc\" x)))")
         .expect("eval defalias macro");
     let macro_val = ev
-        .obarray
+        .obarray()
         .symbol_function("vm-doc-macro")
         .expect("macro function cell");
     // The value is (macro . lambda), extract the lambda for docstring.
@@ -8367,7 +8675,7 @@ fn setq_constants_signal_setting_constant_after_rhs_evaluation() {
 #[test]
 fn set_ignores_lexical_bindings_and_updates_dynamic_cell() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_lexical_binding(true);
     let results = ev.eval_str_each(
         "(makunbound 'vm-lex-set)
@@ -8456,7 +8764,7 @@ fn special_form_alias_wrong_arity_mentions_surface_symbol() {
 #[test]
 fn makunbound_ignores_lexical_bindings_and_unbinds_runtime_cell() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_lexical_binding(true);
     let results = ev.eval_str_each(
         "(setq vm-lex-makunbound 30)
@@ -8732,9 +9040,9 @@ fn variable_watchers_report_let_and_unlet_runtime_transitions() {
 fn watched_variables_carry_gnu_trapped_write_on_their_symbol() {
     use neovm_value::symbol::SymbolTrappedWrite;
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let flag = |ev: &Context, name: &str| {
-        ev.obarray
+        ev.obarray()
             .get_by_id(intern(name))
             .map(|sym| sym.trapped_write())
             .unwrap_or(SymbolTrappedWrite::Untrapped)
@@ -9009,7 +9317,7 @@ fn lambda_forms_validate_non_list_arglists_during_closure_construction() {
         "OK (wrong-type-argument listp _)"
     );
 
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_lexical_binding(true);
     ev.eval_str(
         r#"
@@ -9123,7 +9431,7 @@ fn throw_alias_wrong_arity_mentions_surface_symbol() {
 #[test]
 fn funcall_throw_uses_shared_condition_stack_without_catch_tag_mirror() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let tag = Value::symbol("vm-shared-throw");
     ev.push_condition_frame(ConditionFrame::Catch {
         tag,
@@ -9192,8 +9500,8 @@ fn unwind_protect_cleanup_signal_overrides_throw() {
 #[test]
 fn native_unwind_scope_runs_lower_cleanups_after_a_cleanup_error() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
-    let original_depth = eval.specpdl.len();
+    let mut eval = crate::test_utils::new_context();
+    let original_depth = eval.specpdl().len();
     let lower_cleanup = eval
         .eval_str("'((setq native-lower-cleanup-ran t))")
         .expect("parse lower cleanup forms");
@@ -9202,11 +9510,13 @@ fn native_unwind_scope_runs_lower_cleanups_after_a_cleanup_error() {
         .expect("parse failing cleanup forms");
 
     let result = eval.with_unwind_scope(|eval| {
-        eval.specpdl.push(SpecBinding::UnwindProtect {
+        // SAFETY: test-only push on the owner thread; every push is matched by the test's own truncate/pop on the same path and the Vec is never replaced or moved across Contexts.
+        unsafe { eval.specpdl_mut() }.push(SpecBinding::UnwindProtect {
             forms: lower_cleanup,
             lexenv: Value::NIL,
         });
-        eval.specpdl.push(SpecBinding::UnwindProtect {
+        // SAFETY: test-only push on the owner thread; every push is matched by the test's own truncate/pop on the same path and the Vec is never replaced or moved across Contexts.
+        unsafe { eval.specpdl_mut() }.push(SpecBinding::UnwindProtect {
             forms: failing_cleanup,
             lexenv: Value::NIL,
         });
@@ -9219,7 +9529,7 @@ fn native_unwind_scope_runs_lower_cleanups_after_a_cleanup_error() {
             .expect("lower cleanup should have run"),
         Value::T
     );
-    assert_eq!(eval.specpdl.len(), original_depth);
+    assert_eq!(eval.specpdl().len(), original_depth);
 }
 
 #[test]
@@ -9289,7 +9599,7 @@ fn fset_restoring_subr_object_keeps_callability() {
 #[test]
 fn canonical_subr_survives_rebinding_and_gc() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let sym_id = intern("car");
     let original = Value::subr(sym_id);
 
@@ -9311,7 +9621,7 @@ fn canonical_subr_survives_rebinding_and_gc() {
 #[test]
 fn dispatch_subr_id_uses_name_identity_not_symbol_slot_identity() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let namesake = neovm_value::intern::intern_uninterned("car");
     let args = vec![Value::list(vec![Value::fixnum(1), Value::fixnum(2)])];
     let result = ev
@@ -9581,10 +9891,14 @@ fn set_default_toplevel_alias_triggers_variable_watchers_twice() {
 #[test]
 fn set_default_toplevel_updates_only_buffers_without_local_override() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
-    let current = ctx.buffers.current_buffer_id().expect("current buffer");
-    let inherited = ctx.buffers.create_buffer("*inherited*");
-    let local = ctx.buffers.create_buffer("*local*");
+    let mut ctx = crate::test_utils::new_context();
+    let current = ctx
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
+    let inherited = ctx.edit.buffers.create_buffer("*inherited*");
+    let local = ctx.edit.buffers.create_buffer("*local*");
     let local_value = Value::list(vec![Value::string("LOCAL")]);
     ctx.set_buffer_local_binding_by_id(
         local,
@@ -9607,14 +9921,16 @@ fn set_default_toplevel_updates_only_buffers_without_local_override() {
     );
     for buffer_id in [current, inherited] {
         assert_eq!(
-            ctx.buffers
+            ctx.edit
+                .buffers
                 .get(buffer_id)
                 .and_then(|buffer| buffer.buffer_local_value("mode-line-format")),
             Some(new_default)
         );
     }
     assert_eq!(
-        ctx.buffers
+        ctx.edit
+            .buffers
             .get(local)
             .and_then(|buffer| buffer.buffer_local_value("mode-line-format")),
         Some(local_value)
@@ -9671,9 +9987,9 @@ fn set_default_toplevel_value_does_not_notify_when_updating_saved_binding() {
 #[test]
 fn set_default_toplevel_saved_buffer_default_is_published_on_unwind() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let symbol = intern("truncate-lines");
-    let specpdl_depth = ctx.specpdl.len();
+    let specpdl_depth = ctx.specpdl().len();
 
     ctx.try_specbind(symbol, Value::T)
         .expect("bind inherited truncate-lines default");
@@ -9963,14 +10279,16 @@ fn lambda_and_condition_case_propagate_dynamic_cleanup_signals() {
 #[test]
 fn fallible_cleanup_restores_a_pending_quit_flag() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let quoted_error = Value::list(vec![Value::symbol("quote"), Value::symbol("error")]);
     let error_data = Value::list(vec![Value::string("cleanup")]);
     let quoted_data = Value::list(vec![Value::symbol("quote"), error_data]);
     let cleanup_form = Value::list(vec![Value::symbol("signal"), quoted_error, quoted_data]);
-    ctx.specpdl.push(SpecBinding::UnwindProtect {
+    // SAFETY: test-only push on the owner thread; every push is matched by the test's own truncate/pop on the same path and the Vec is never replaced or moved across Contexts.
+    let lexenv = ctx.lexenv;
+    unsafe { ctx.specpdl_mut() }.push(SpecBinding::UnwindProtect {
         forms: Value::list(vec![cleanup_form]),
-        lexenv: ctx.lexenv,
+        lexenv,
     });
     ctx.set_quit_flag_value(Value::T);
 
@@ -9979,20 +10297,20 @@ fn fallible_cleanup_restores_a_pending_quit_flag() {
         Err(FlowRef::Signal(_))
     ));
     assert_eq!(ctx.quit_flag_value(), Value::T);
-    assert!(ctx.specpdl.is_empty());
+    assert!(ctx.specpdl().is_empty());
 }
 
 #[test]
 fn thread_switch_round_trip_preserves_live_buffer_default_binding() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let symbol = intern("truncate-lines");
-    let specpdl_depth = ctx.specpdl.len();
+    let specpdl_depth = ctx.specpdl().len();
 
     ctx.try_specbind(symbol, Value::T)
         .expect("bind inherited truncate-lines default");
     assert_eq!(
-        super::super::data::default_value_by_id(&ctx, symbol),
+        neovm_eval::emacs_core::data::test_support::default_value_by_id(&ctx, symbol),
         Some(Value::T)
     );
 
@@ -10000,7 +10318,7 @@ fn thread_switch_round_trip_preserves_live_buffer_default_binding() {
         .suspend_dynamic_bindings_for_thread_switch()
         .expect("suspend dynamic bindings");
     assert_eq!(
-        super::super::data::default_value_by_id(&ctx, symbol),
+        neovm_eval::emacs_core::data::test_support::default_value_by_id(&ctx, symbol),
         Some(Value::NIL),
         "suspending restores the thread's outer default"
     );
@@ -10008,14 +10326,14 @@ fn thread_switch_round_trip_preserves_live_buffer_default_binding() {
     ctx.resume_dynamic_bindings_for_thread_switch(thread_state)
         .expect("resume dynamic bindings");
     assert_eq!(
-        super::super::data::default_value_by_id(&ctx, symbol),
+        neovm_eval::emacs_core::data::test_support::default_value_by_id(&ctx, symbol),
         Some(Value::T),
         "resuming restores the thread's dynamically bound live default"
     );
 
     ctx.unbind_to(specpdl_depth);
     assert_eq!(
-        super::super::data::default_value_by_id(&ctx, symbol),
+        neovm_eval::emacs_core::data::test_support::default_value_by_id(&ctx, symbol),
         Some(Value::NIL)
     );
 }
@@ -10023,11 +10341,11 @@ fn thread_switch_round_trip_preserves_live_buffer_default_binding() {
 #[test]
 fn thread_switch_rechecks_plain_binding_that_became_buffer_local() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let symbol = intern("vm-thread-switch-localized-during-let");
     ctx.obarray_mut()
         .set_symbol_value_id(symbol, Value::fixnum(10));
-    let specpdl_depth = ctx.specpdl.len();
+    let specpdl_depth = ctx.specpdl().len();
 
     ctx.try_specbind(symbol, Value::fixnum(20))
         .expect("bind plain symbol");
@@ -10042,7 +10360,7 @@ fn thread_switch_rechecks_plain_binding_that_became_buffer_local() {
     )
     .expect("create current-buffer local value");
     assert_eq!(
-        super::super::data::default_value_by_id(&ctx, symbol),
+        neovm_eval::emacs_core::data::test_support::default_value_by_id(&ctx, symbol),
         Some(Value::fixnum(20))
     );
 
@@ -10050,7 +10368,7 @@ fn thread_switch_rechecks_plain_binding_that_became_buffer_local() {
         .suspend_dynamic_bindings_for_thread_switch()
         .expect("suspend dynamic bindings");
     assert_eq!(
-        super::super::data::default_value_by_id(&ctx, symbol),
+        neovm_eval::emacs_core::data::test_support::default_value_by_id(&ctx, symbol),
         Some(Value::fixnum(10)),
         "suspending restores the outer default"
     );
@@ -10063,7 +10381,7 @@ fn thread_switch_rechecks_plain_binding_that_became_buffer_local() {
     ctx.resume_dynamic_bindings_for_thread_switch(thread_state)
         .expect("resume dynamic bindings");
     assert_eq!(
-        super::super::data::default_value_by_id(&ctx, symbol),
+        neovm_eval::emacs_core::data::test_support::default_value_by_id(&ctx, symbol),
         Some(Value::fixnum(20))
     );
     assert_eq!(
@@ -10077,11 +10395,12 @@ fn thread_switch_rechecks_plain_binding_that_became_buffer_local() {
 #[test]
 fn thread_switch_propagates_rejected_saved_default_without_losing_it() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let symbol = intern("undo-limit");
-    let specpdl_depth = ctx.specpdl.len();
-    let outer_default = super::super::data::default_value_by_id(&ctx, symbol)
-        .expect("undo-limit has a forwarded default");
+    let specpdl_depth = ctx.specpdl().len();
+    let outer_default =
+        neovm_eval::emacs_core::data::test_support::default_value_by_id(&ctx, symbol)
+            .expect("undo-limit has a forwarded default");
 
     ctx.try_specbind(symbol, Value::fixnum(5))
         .expect("bind valid undo-limit");
@@ -10095,7 +10414,7 @@ fn thread_switch_propagates_rejected_saved_default_without_losing_it() {
         Err(FlowRef::Signal(_))
     ));
     assert_eq!(
-        super::super::data::default_value_by_id(&ctx, symbol),
+        neovm_eval::emacs_core::data::test_support::default_value_by_id(&ctx, symbol),
         Some(Value::fixnum(5)),
         "a rejected thread-switch store must leave the live binding intact"
     );
@@ -10115,14 +10434,16 @@ fn thread_switch_propagates_rejected_saved_default_without_losing_it() {
 #[test]
 fn failed_thread_switch_rolls_back_inner_binding_exchanges() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let outer = intern("undo-limit");
     let inner = intern("gc-cons-threshold");
-    let specpdl_depth = ctx.specpdl.len();
-    let outer_default = super::super::data::default_value_by_id(&ctx, outer)
-        .expect("undo-limit has a forwarded default");
-    let inner_default = super::super::data::default_value_by_id(&ctx, inner)
-        .expect("gc-cons-threshold has a forwarded default");
+    let specpdl_depth = ctx.specpdl().len();
+    let outer_default =
+        neovm_eval::emacs_core::data::test_support::default_value_by_id(&ctx, outer)
+            .expect("undo-limit has a forwarded default");
+    let inner_default =
+        neovm_eval::emacs_core::data::test_support::default_value_by_id(&ctx, inner)
+            .expect("gc-cons-threshold has a forwarded default");
 
     ctx.try_specbind(outer, Value::fixnum(5))
         .expect("bind valid outer forwarder");
@@ -10139,7 +10460,7 @@ fn failed_thread_switch_rolls_back_inner_binding_exchanges() {
         Err(FlowRef::Signal(_))
     ));
     assert_eq!(
-        super::super::data::default_value_by_id(&ctx, inner),
+        neovm_eval::emacs_core::data::test_support::default_value_by_id(&ctx, inner),
         Some(live_inner),
         "the successfully exchanged inner binding must be rolled back"
     );
@@ -10301,7 +10622,7 @@ fn condition_case_suppresses_debugger_without_debug_marker() {
 #[test]
 fn active_condition_handler_detection_matches_condition_case_error_clause() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.push_condition_frame(ConditionFrame::ConditionCase {
         conditions: Value::symbol("error"),
         resume: ResumeTarget::InterpreterConditionCase {
@@ -10390,7 +10711,7 @@ fn backward_compat_core_forms() {
           (funcall f))))
     "#;
 
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let rendered: Vec<String> = ev
         .eval_str_each(source)
         .iter()
@@ -10492,7 +10813,7 @@ fn interpreted_closure_is_not_a_cons_cell() {
 fn lexical_binding_closure() {
     crate::test_utils::init_test_tracing();
     // With lexical binding, closures capture the lexical environment
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_lexical_binding(true);
     let result = format_eval_result(&ev.eval_str(
         r#"
@@ -10510,7 +10831,7 @@ fn lexical_binding_closure() {
 fn dynamic_binding_closure() {
     crate::test_utils::init_test_tracing();
     // Without lexical binding (default), closures see dynamic scope
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let result = format_eval_result(&ev.eval_str(
         r#"
         (let ((x 1))
@@ -10526,7 +10847,7 @@ fn dynamic_binding_closure() {
 #[test]
 fn dynamic_closure_clears_callers_lexical_environment() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_lexical_binding(true);
 
     let result = format_eval_result(&ev.eval_str(
@@ -10549,7 +10870,7 @@ fn dynamic_closure_clears_callers_lexical_environment() {
 fn lexical_binding_special_var_stays_dynamic() {
     crate::test_utils::init_test_tracing();
     // defvar makes a variable special — it stays dynamically scoped
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_lexical_binding(true);
     let results: Vec<String> = ev
         .eval_str_each(
@@ -10726,7 +11047,7 @@ fn byte_code_function_prints_readable_gnu_literal() {
 #[test]
 fn provide_require() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let results: Vec<String> = ev
         .eval_str_each("(provide 'my-feature) (featurep 'my-feature)")
         .iter()
@@ -11046,8 +11367,9 @@ fn no_variable_documentation_is_installed_before_any_lisp_runs() {
 #[test]
 fn mapatoms_roots_anonymous_callback_across_exact_gc() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    ev.tagged_heap.set_gc_threshold(1);
+    let mut ev = crate::test_utils::new_context();
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1);
     let result = format_eval_result(&ev.eval_str(
         r#"(let ((ob (make-vector 7 0)))
              (intern "mapatoms-root-a" ob)
@@ -11083,8 +11405,9 @@ fn mapatoms_default_obarray_uses_dynamic_lisp_binding() {
 #[test]
 fn maphash_roots_reconstructed_keys_across_exact_gc() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    ev.tagged_heap.set_gc_threshold(1);
+    let mut ev = crate::test_utils::new_context();
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1);
     let result = format_eval_result(&ev.eval_str(
         r#"(let ((h (make-hash-table :test 'equal))
                  (sum 0))
@@ -11396,9 +11719,9 @@ fn local_hook_inheritance_marker_is_canonical_t_like_gnu() {
 #[test]
 fn safe_run_hook_removes_failing_local_hook_and_continues_to_global_hook() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    let buffer = ev.buffers.create_buffer("*safe-hook*");
-    ev.buffers.set_current(buffer);
+    let mut ev = crate::test_utils::new_context();
+    let buffer = ev.edit.buffers.create_buffer("*safe-hook*");
+    ev.edit.buffers.set_current(buffer);
 
     ev.eval_str(
         r#"(progn
@@ -11429,10 +11752,15 @@ fn safe_run_hook_removes_failing_local_hook_and_continues_to_global_hook() {
     assert_eq!(format!("{}", result), "((good bad) (t) (safe-hook-good))");
 
     let messages_id = ev
+        .edit
         .buffers
         .find_buffer_by_name("*Messages*")
         .expect("safe hook errors should be reported through `message`");
-    let messages = ev.buffers.get(messages_id).expect("live *Messages* buffer");
+    let messages = ev
+        .edit
+        .buffers
+        .get(messages_id)
+        .expect("live *Messages* buffer");
     assert_eq!(
         messages.buffer_string(),
         "Error in safe-local-hook (safe-hook-bad): (error \"boom\")\n"
@@ -11474,8 +11802,9 @@ fn run_hook_with_args_runtime_value_shapes() {
 #[test]
 fn run_hook_with_args_roots_callbacks_and_args_across_exact_gc() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    ev.tagged_heap.set_gc_threshold(1);
+    let mut ev = crate::test_utils::new_context();
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1);
     let result = format_eval_result(&ev.eval_str(
         r#"
 (progn
@@ -11518,7 +11847,7 @@ fn run_hook_with_args_accepts_uninterned_symbol_after_same_eval_let_setup() {
 #[test]
 fn run_hook_with_args_accepts_uninterned_symbol_after_same_eval_lexical_let_setup() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_lexical_binding(true);
     let result = format_eval_result(&ev.eval_str(
         r#"(progn
@@ -11928,7 +12257,7 @@ fn adjacent_overlay_intangible_values_remain_separate_like_gnu() {
 #[test]
 fn run_window_configuration_change_hook_uses_window_buffer_context() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str(
         r#"(progn
            (setq hook-log nil)
@@ -11943,8 +12272,8 @@ fn run_window_configuration_change_hook_uses_window_buffer_context() {
     )
     .expect("hook setup");
 
-    let buf1 = ev.buffers.create_buffer("wcch-a");
-    let buf2 = ev.buffers.create_buffer("wcch-b");
+    let buf1 = ev.edit.buffers.create_buffer("wcch-a");
+    let buf2 = ev.edit.buffers.create_buffer("wcch-b");
     ev.switch_current_buffer(buf1).expect("switch to buf1");
 
     let selected_window = crate::emacs_core::window_cmds::builtin_selected_window(&mut ev, &vec![])
@@ -11963,14 +12292,16 @@ fn run_window_configuration_change_hook_uses_window_buffer_context() {
     )
     .expect("split window buffer");
 
-    ev.buffers
+    ev.edit
+        .buffers
         .set_buffer_local_property(
             buf1,
             "window-configuration-change-hook",
             Value::list(vec![Value::symbol("wcch-log-current-buffer")]),
         )
         .expect("buf1 local hook");
-    ev.buffers
+    ev.edit
+        .buffers
         .set_buffer_local_property(
             buf2,
             "window-configuration-change-hook",
@@ -11986,19 +12317,21 @@ fn run_window_configuration_change_hook_uses_window_buffer_context() {
     )
     .expect("default hook");
     assert!(
-        ev.buffers
+        ev.edit
+            .buffers
             .get(buf1)
             .and_then(|buffer| buffer.buffer_local_value("window-configuration-change-hook"))
             .is_some()
     );
     assert!(
-        ev.buffers
+        ev.edit
+            .buffers
             .get(buf2)
             .and_then(|buffer| buffer.buffer_local_value("window-configuration-change-hook"))
             .is_some()
     );
     assert_eq!(
-        ev.frames
+        ev.frame_manager()
             .selected_frame()
             .expect("selected frame")
             .window_list()
@@ -12007,7 +12340,7 @@ fn run_window_configuration_change_hook_uses_window_buffer_context() {
     );
 
     ev.switch_current_buffer(buf1).expect("restore buf1");
-    super::builtins::builtin_run_window_configuration_change_hook(&mut ev, vec![])
+    crate::emacs_core::window_hooks::builtin_run_window_configuration_change_hook(&mut ev, vec![])
         .expect("run window-configuration-change-hook");
 
     let hook_log = ev.eval_symbol("hook-log").expect("hook log");
@@ -12023,7 +12356,8 @@ fn run_window_configuration_change_hook_uses_window_buffer_context() {
         "names={names:?}"
     );
     assert_eq!(
-        ev.buffers
+        ev.edit
+            .buffers
             .current_buffer()
             .expect("current buffer")
             .name_value(),
@@ -12041,7 +12375,7 @@ fn run_window_configuration_change_hook_ignores_sides_inhibit_check() {
     // silenced the hook whenever that var was t -- winum never renumbered a
     // freshly-opened popup/compile window until an unrelated command forced it.
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str(
         r#"(progn
              (setq wcch-fired 0)
@@ -12050,7 +12384,7 @@ fn run_window_configuration_change_hook_ignores_sides_inhibit_check() {
              (set-default 'window-configuration-change-hook '(wcch-count)))"#,
     )
     .expect("setup");
-    super::builtins::builtin_run_window_configuration_change_hook(&mut ev, vec![])
+    crate::emacs_core::window_hooks::builtin_run_window_configuration_change_hook(&mut ev, vec![])
         .expect("run window-configuration-change-hook");
     let fired = ev.eval_symbol("wcch-fired").expect("wcch-fired");
     assert_eq!(
@@ -12603,7 +12937,7 @@ fn overlay_modification_hooks_are_collected_after_before_change_functions() {
 #[test]
 fn deleting_before_a_large_overlay_suffix_does_not_enumerate_every_overlay() {
     crate::test_utils::init_test_tracing();
-    neovm_edit::buffer::overlay::reset_overlay_full_enumeration_visit_count();
+    neovm_value::heap_types::overlay_storage::instrumentation::reset_overlay_full_enumeration_visit_count();
 
     let result = eval_one(
         r#"(progn
@@ -12621,7 +12955,7 @@ fn deleting_before_a_large_overlay_suffix_does_not_enumerate_every_overlay() {
 
     assert_eq!(result, "OK 1");
     assert_eq!(
-        neovm_edit::buffer::overlay::overlay_full_enumeration_visit_count(),
+        neovm_value::heap_types::overlay_storage::instrumentation::overlay_full_enumeration_visit_count(),
         0,
         "a localized deletion must not walk all live overlays"
     );
@@ -12979,9 +13313,9 @@ fn buffer_save_excursion_tracks_marker_through_edits() {
 #[test]
 fn save_excursion_unlinks_point_markers_after_unwind() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    let buffer_id = ev.buffers.create_buffer("se-marker-chain");
-    ev.buffers.set_current(buffer_id);
+    let mut ev = crate::test_utils::new_context();
+    let buffer_id = ev.edit.buffers.create_buffer("se-marker-chain");
+    ev.edit.buffers.set_current(buffer_id);
     let result = ev.eval_str(
         r#"(progn
              (insert "abcdef")
@@ -12994,63 +13328,72 @@ fn save_excursion_unlinks_point_markers_after_unwind() {
     );
     assert_eq!(format_eval_result(&result), "OK nil");
 
-    let buffer = ev.buffers.get(buffer_id).expect("test buffer should exist");
+    let buffer = ev
+        .edit
+        .buffers
+        .get(buffer_id)
+        .expect("test buffer should exist");
     assert_eq!(buffer.marker_chain_len(), 0);
 }
 
 #[test]
 fn save_excursion_preserves_marker_across_stack_growth_and_gc() {
     for grow in [false, true] {
-        let mut ev = Context::new();
-        let buffer_id = ev.buffers.create_buffer("se-stack-growth");
-        let other_buffer = ev.buffers.create_buffer("se-other-buffer");
-        ev.buffers.set_current(buffer_id);
-        ev.buffers
+        let mut ev = crate::test_utils::new_context();
+        let buffer_id = ev.edit.buffers.create_buffer("se-stack-growth");
+        let other_buffer = ev.edit.buffers.create_buffer("se-other-buffer");
+        ev.edit.buffers.set_current(buffer_id);
+        ev.edit
+            .buffers
             .insert_into_buffer(buffer_id, "abé中")
             .expect("insert initial text");
         ev.gc_collect_exact();
-        assert!(ev.specpdl.is_empty());
-        ev.specpdl = Vec::with_capacity(if grow { 1 } else { 2 });
+        assert!(ev.specpdl().is_empty());
+        // SAFETY: test-only stack capacity setup on the owner thread; the
+        // replacement Vec is the same stack storage and never crosses Contexts.
+        *unsafe { ev.specpdl_mut() } = Vec::with_capacity(if grow { 1 } else { 2 });
         let outer_root = Value::string("outer specpdl root");
-        ev.specpdl.push(SpecBinding::GcRoot { value: outer_root });
+        unsafe { ev.specpdl_mut() }.push(SpecBinding::GcRoot { value: outer_root });
 
         let count = ev.record_save_excursion().expect("save live buffer");
         assert_eq!(count, 1);
-        assert_eq!(ev.specpdl.len(), 2);
+        assert_eq!(ev.specpdl().len(), 2);
         let SpecBinding::SaveExcursion {
             _saved_buffer_id: saved_buffer,
             marker,
             ..
-        } = ev.specpdl[count]
+        } = ev.specpdl()[count]
         else {
             panic!("save-excursion record missing");
         };
         assert_eq!(saved_buffer, buffer_id);
         ev.gc_collect_exact();
-        assert!(ev.tagged_heap.owns_heap_value_for_test(marker));
-        assert!(ev.tagged_heap.owns_heap_value_for_test(outer_root));
+        assert!(ev.tagged_heap().owns_heap_value_for_test(marker));
+        assert!(ev.tagged_heap().owns_heap_value_for_test(outer_root));
 
-        ev.buffers
+        ev.edit
+            .buffers
             .goto_buffer_emacs_byte_pos(buffer_id, neovm_edit::buffer::EmacsBytePos::new(0))
             .expect("move before saved point");
-        ev.buffers
+        ev.edit
+            .buffers
             .insert_into_buffer(buffer_id, "λ")
             .expect("move the saved marker through a multibyte edit");
-        ev.buffers.set_current(other_buffer);
+        ev.edit.buffers.set_current(other_buffer);
         ev.gc_collect_exact();
         ev.unbind_to_result(count).expect("restore excursion");
 
-        assert_eq!(ev.buffers.current_buffer_id(), Some(buffer_id));
-        let buffer = ev.buffers.get(buffer_id).unwrap();
+        assert_eq!(ev.edit.buffers.current_buffer_id(), Some(buffer_id));
+        let buffer = ev.edit.buffers.get(buffer_id).unwrap();
         assert_eq!(
             buffer.point_emacs_byte_pos(),
             neovm_edit::buffer::EmacsBytePos::new(9)
         );
         assert_eq!(buffer.marker_chain_len(), 0);
-        assert_eq!(ev.specpdl.len(), count);
+        assert_eq!(ev.specpdl().len(), count);
         assert_eq!(outer_root.as_utf8_str(), Some("outer specpdl root"));
         ev.unbind_to_result(0).expect("release outer root");
-        assert!(ev.specpdl.is_empty());
+        assert!(ev.specpdl().is_empty());
     }
 }
 
@@ -13662,17 +14005,17 @@ fn save_window_excursion_restores_window_layout_after_split() {
 #[test]
 fn set_window_configuration_reconciles_restored_batch_frame_geometry() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    let buffer_id = ev.buffers.create_buffer("*scratch*");
-    ev.buffers.set_current(buffer_id);
-    let frame_id = ev.frames.create_frame("F1", 80, 25, buffer_id);
+    let mut ev = crate::test_utils::new_context();
+    let buffer_id = ev.edit.buffers.create_buffer("*scratch*");
+    ev.edit.buffers.set_current(buffer_id);
+    let frame_id = ev.frame_manager_mut().create_frame("F1", 80, 25, buffer_id);
     {
-        let frame = ev.frames.get_mut(frame_id).expect("frame");
+        let frame = ev.frame_manager_mut().get_mut(frame_id).expect("frame");
         frame.char_width = 1.0;
         frame.char_height = 1.0;
         if let Some(minibuffer) = frame.minibuffer_leaf.as_mut() {
             let bounds = *minibuffer.bounds();
-            minibuffer.set_bounds(crate::window::Rect::new(
+            minibuffer.set_bounds(neovm_display::window::Rect::new(
                 bounds.x,
                 bounds.y,
                 bounds.width,
@@ -13728,16 +14071,20 @@ fn set_window_configuration_reconciles_restored_batch_frame_geometry() {
 #[test]
 fn set_window_configuration_honors_dont_set_frame() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    let first_buffer = ev.buffers.create_buffer("*first-frame*");
-    let second_buffer = ev.buffers.create_buffer("*second-frame*");
-    ev.buffers.set_current(first_buffer);
-    let first_frame = ev.frames.create_frame("F1", 80, 24, first_buffer);
-    let second_frame = ev.frames.create_frame("F2", 80, 24, second_buffer);
-    ev.frames.select_frame(first_frame);
-    ev.obarray
+    let mut ev = crate::test_utils::new_context();
+    let first_buffer = ev.edit.buffers.create_buffer("*first-frame*");
+    let second_buffer = ev.edit.buffers.create_buffer("*second-frame*");
+    ev.edit.buffers.set_current(first_buffer);
+    let first_frame = ev
+        .frame_manager_mut()
+        .create_frame("F1", 80, 24, first_buffer);
+    let second_frame = ev
+        .frame_manager_mut()
+        .create_frame("F2", 80, 24, second_buffer);
+    ev.frame_manager_mut().select_frame(first_frame);
+    ev.obarray_mut()
         .set_symbol_value("test-first-frame", Value::make_frame(first_frame.0));
-    ev.obarray
+    ev.obarray_mut()
         .set_symbol_value("test-second-frame", Value::make_frame(second_frame.0));
 
     let result = ev
@@ -13761,10 +14108,11 @@ fn set_window_configuration_honors_dont_set_frame() {
 #[test]
 fn set_window_configuration_honors_dont_set_miniwindow() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    let root_buffer = ev.buffers.create_buffer("*root*");
-    ev.buffers.set_current(root_buffer);
-    ev.frames.create_frame("F1", 80, 24, root_buffer);
+    let mut ev = crate::test_utils::new_context();
+    let root_buffer = ev.edit.buffers.create_buffer("*root*");
+    ev.edit.buffers.set_current(root_buffer);
+    ev.frame_manager_mut()
+        .create_frame("F1", 80, 24, root_buffer);
 
     let result = ev
         .eval_str(
@@ -13856,28 +14204,41 @@ fn save_window_excursion_with_help_window_restores_original_window_buffer() {
 #[test]
 fn redisplay_does_not_copy_unrelated_current_buffer_point_into_selected_window() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
 
-    let selected_buffer = ev.buffers.create_buffer("*redisplay-selected*");
-    ev.buffers.set_current(selected_buffer);
-    ev.buffers
+    let selected_buffer = ev.edit.buffers.create_buffer("*redisplay-selected*");
+    ev.edit.buffers.set_current(selected_buffer);
+    ev.edit
+        .buffers
         .get_mut(selected_buffer)
         .expect("selected buffer")
         .insert("selected buffer\n");
-    ev.buffers
+    ev.edit
+        .buffers
         .goto_buffer_emacs_byte_pos(selected_buffer, neovm_edit::buffer::EmacsBytePos::new(0))
         .expect("move selected buffer point");
-    ev.frames.create_frame("F1", 960, 640, selected_buffer);
-    let frame_id = ev.frames.selected_frame().expect("selected frame").id;
-    let selected_window = ev.frames.get(frame_id).expect("frame").selected_window;
+    ev.frame_manager_mut()
+        .create_frame("F1", 960, 640, selected_buffer);
+    let frame_id = ev
+        .frame_manager()
+        .selected_frame()
+        .expect("selected frame")
+        .id;
+    let selected_window = ev
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
 
-    let current_buffer = ev.buffers.create_buffer("*redisplay-current*");
-    ev.buffers.set_current(current_buffer);
-    ev.buffers
+    let current_buffer = ev.edit.buffers.create_buffer("*redisplay-current*");
+    ev.edit.buffers.set_current(current_buffer);
+    ev.edit
+        .buffers
         .get_mut(current_buffer)
         .expect("current buffer")
         .insert("current buffer point should not affect the selected window\n");
-    ev.buffers
+    ev.edit
+        .buffers
         .goto_buffer_emacs_byte_pos(current_buffer, neovm_edit::buffer::EmacsBytePos::new(40))
         .expect("move current buffer point");
 
@@ -13885,12 +14246,12 @@ fn redisplay_does_not_copy_unrelated_current_buffer_point_into_selected_window()
     ev.redisplay().expect("redisplay");
 
     let selected_window_point = ev
-        .frames
+        .frame_manager()
         .get(frame_id)
         .and_then(|frame| frame.find_window(selected_window))
         .and_then(|window| match window {
-            crate::window::Window::Leaf { point, .. } => Some(*point),
-            crate::window::Window::Internal { .. } => None,
+            neovm_display::window::Window::Leaf { point, .. } => Some(*point),
+            neovm_display::window::Window::Internal { .. } => None,
         })
         .expect("selected window point");
     assert_eq!(selected_window_point, neovm_edit::buffer::LispCharPos1::ONE);
@@ -13899,14 +14260,16 @@ fn redisplay_does_not_copy_unrelated_current_buffer_point_into_selected_window()
 #[test]
 fn save_window_excursion_defers_restore_redisplay_until_the_next_cycle() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    let buffer_id = ev.buffers.create_buffer("*scratch*");
-    ev.buffers.set_current(buffer_id);
-    ev.buffers
+    let mut ev = crate::test_utils::new_context();
+    let buffer_id = ev.edit.buffers.create_buffer("*scratch*");
+    ev.edit.buffers.set_current(buffer_id);
+    ev.edit
+        .buffers
         .get_mut(buffer_id)
         .expect("scratch buffer")
         .insert("0123456789abcdefghijklmnopqrstuvwxyz");
-    ev.frames.create_frame("F1", 960, 640, buffer_id);
+    ev.frame_manager_mut()
+        .create_frame("F1", 960, 640, buffer_id);
 
     let redisplayed_points = Rc::new(RefCell::new(Vec::new()));
     let redisplayed_points_in_cb = Rc::clone(&redisplayed_points);
@@ -13958,14 +14321,16 @@ fn save_window_excursion_defers_restore_redisplay_until_the_next_cycle() {
 #[test]
 fn current_window_configuration_does_not_save_point_in_the_current_buffer() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    let buffer_id = ev.buffers.create_buffer("*scratch*");
-    ev.buffers.set_current(buffer_id);
-    ev.buffers
+    let mut ev = crate::test_utils::new_context();
+    let buffer_id = ev.edit.buffers.create_buffer("*scratch*");
+    ev.edit.buffers.set_current(buffer_id);
+    ev.edit
+        .buffers
         .get_mut(buffer_id)
         .expect("scratch buffer")
         .insert("0123456789abcdefghijklmnopqrstuvwxyz");
-    ev.frames.create_frame("F1", 960, 640, buffer_id);
+    ev.frame_manager_mut()
+        .create_frame("F1", 960, 640, buffer_id);
 
     let result = ev
         .eval_str(
@@ -14517,12 +14882,13 @@ fn while_no_input_catches_pending_key_queued_during_body() {
 
     fn queue_key_for_while_no_input_test(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
         assert!(args.is_empty(), "queue helper should not receive arguments");
-        ctx.command_loop.keyboard.pending_input_events.push_back(
-            crate::keyboard::InputEvent::KeyPress {
-                key: crate::keyboard::KeyEvent::char('k'),
+        ctx.command_loop_mut()
+            .keyboard
+            .pending_input_events
+            .push_back(crate::emacs_core::eval::keyboard::InputEvent::KeyPress {
+                key: crate::emacs_core::eval::keyboard::KeyEvent::char('k'),
                 emacs_frame_id: 0,
-            },
-        );
+            });
         Ok(Value::NIL)
     }
 
@@ -14552,12 +14918,13 @@ fn while_no_input_catches_pending_key_across_load_boundary() {
 
     fn queue_key_for_while_no_input_test(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
         assert!(args.is_empty(), "queue helper should not receive arguments");
-        ctx.command_loop.keyboard.pending_input_events.push_back(
-            crate::keyboard::InputEvent::KeyPress {
-                key: crate::keyboard::KeyEvent::char('k'),
+        ctx.command_loop_mut()
+            .keyboard
+            .pending_input_events
+            .push_back(crate::emacs_core::eval::keyboard::InputEvent::KeyPress {
+                key: crate::emacs_core::eval::keyboard::KeyEvent::char('k'),
                 emacs_frame_id: 0,
-            },
-        );
+            });
         Ok(Value::NIL)
     }
 
@@ -14604,15 +14971,16 @@ fn with_selected_window_restores_after_while_no_input_keyboard_interrupt() {
 
     fn queue_key_for_while_no_input_test(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
         assert!(args.is_empty(), "queue helper should not receive arguments");
-        ctx.command_loop.keyboard.pending_input_events.push_back(
-            crate::keyboard::InputEvent::KeyPress {
-                key: crate::keyboard::KeyEvent::char_with_mods(
+        ctx.command_loop_mut()
+            .keyboard
+            .pending_input_events
+            .push_back(crate::emacs_core::eval::keyboard::InputEvent::KeyPress {
+                key: crate::emacs_core::eval::keyboard::KeyEvent::char_with_mods(
                     'n',
-                    crate::keyboard::Modifiers::ctrl(),
+                    crate::emacs_core::eval::keyboard::Modifiers::ctrl(),
                 ),
                 emacs_frame_id: 0,
-            },
-        );
+            });
         Ok(Value::NIL)
     }
 
@@ -14659,15 +15027,16 @@ fn while_no_input_unwinds_inner_with_selected_window_on_keyboard_input() {
 
     fn queue_key_for_while_no_input_test(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
         assert!(args.is_empty(), "queue helper should not receive arguments");
-        ctx.command_loop.keyboard.pending_input_events.push_back(
-            crate::keyboard::InputEvent::KeyPress {
-                key: crate::keyboard::KeyEvent::char_with_mods(
+        ctx.command_loop_mut()
+            .keyboard
+            .pending_input_events
+            .push_back(crate::emacs_core::eval::keyboard::InputEvent::KeyPress {
+                key: crate::emacs_core::eval::keyboard::KeyEvent::char_with_mods(
                     'n',
-                    crate::keyboard::Modifiers::ctrl(),
+                    crate::emacs_core::eval::keyboard::Modifiers::ctrl(),
                 ),
                 emacs_frame_id: 0,
-            },
-        );
+            });
         Ok(Value::NIL)
     }
 
@@ -14716,9 +15085,14 @@ fn sit_for_requeues_delayed_input_after_with_selected_window_cleanup() {
     let mut ev = runtime_startup_context();
     ev.set_variable("noninteractive", Value::NIL);
     let input_owner = InputGateOwner::install(&mut ev);
-    let (gate, publication) = input_owner.gate(vec![crate::keyboard::InputEvent::key_press(
-        crate::keyboard::KeyEvent::char_with_mods('n', crate::keyboard::Modifiers::ctrl()),
-    )]);
+    let (gate, publication) = input_owner.gate(vec![
+        crate::emacs_core::eval::keyboard::InputEvent::key_press(
+            crate::emacs_core::eval::keyboard::KeyEvent::char_with_mods(
+                'n',
+                crate::emacs_core::eval::keyboard::Modifiers::ctrl(),
+            ),
+        ),
+    ]);
     gate.arm(&mut ev, WaitWitness::InputWaitEntered);
 
     let result = ev.eval_str(
@@ -14754,15 +15128,16 @@ fn safe_run_hook_preserves_selected_window_after_while_no_input_interrupt() {
 
     fn queue_key_for_while_no_input_test(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
         assert!(args.is_empty(), "queue helper should not receive arguments");
-        ctx.command_loop.keyboard.pending_input_events.push_back(
-            crate::keyboard::InputEvent::KeyPress {
-                key: crate::keyboard::KeyEvent::char_with_mods(
+        ctx.command_loop_mut()
+            .keyboard
+            .pending_input_events
+            .push_back(crate::emacs_core::eval::keyboard::InputEvent::KeyPress {
+                key: crate::emacs_core::eval::keyboard::KeyEvent::char_with_mods(
                     'n',
-                    crate::keyboard::Modifiers::ctrl(),
+                    crate::emacs_core::eval::keyboard::Modifiers::ctrl(),
                 ),
                 emacs_frame_id: 0,
-            },
-        );
+            });
         Ok(Value::NIL)
     }
 
@@ -14839,36 +15214,39 @@ fn window_and_minibuffer_defvars_are_bound_and_special_like_gnu() {
 #[test]
 fn input_pending_p_filters_default_ignored_events_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let fid = ev
-        .frames
+        .frame_manager_mut()
         .create_frame("F1", 960, 640, neovm_edit::buffer::BufferId(1));
-    let window_id = ev.frames.get(fid).expect("frame").window_list()[0];
+    let window_id = ev.frame_manager().get(fid).expect("frame").window_list()[0];
 
-    ev.command_loop.keyboard.pending_input_events.push_back(
-        crate::keyboard::InputEvent::MonitorsChanged {
-            monitors: vec![crate::emacs_core::builtins::NeomacsMonitorInfo {
-                x: 0,
-                y: 0,
-                width: 1920,
-                height: 1080,
-                scale: 1.0,
-                width_mm: 500,
-                height_mm: 300,
-                name: Some("DP-1".to_string()),
-            }],
-        },
-    );
-    ev.command_loop
+    ev.command_loop_mut()
         .keyboard
         .pending_input_events
-        .push_back(crate::keyboard::InputEvent::SelectWindow { window_id });
+        .push_back(
+            crate::emacs_core::eval::keyboard::InputEvent::MonitorsChanged {
+                monitors: vec![crate::emacs_core::builtins::NeomacsMonitorInfo {
+                    x: 0,
+                    y: 0,
+                    width: 1920,
+                    height: 1080,
+                    scale: 1.0,
+                    width_mm: 500,
+                    height_mm: 300,
+                    name: Some("DP-1".to_string()),
+                }],
+            },
+        );
+    ev.command_loop_mut()
+        .keyboard
+        .pending_input_events
+        .push_back(crate::emacs_core::eval::keyboard::InputEvent::SelectWindow { window_id });
 
     let filtered = crate::emacs_core::keyboard::builtin_input_pending_p(&mut ev, vec![])
         .expect("default input-pending-p should succeed");
     assert_eq!(filtered, Value::NIL);
 
-    ev.obarray
+    ev.obarray_mut()
         .set_symbol_value("input-pending-p-filter-events", Value::NIL);
     let unfiltered = crate::emacs_core::keyboard::builtin_input_pending_p(&mut ev, vec![])
         .expect("unfiltered input-pending-p should succeed");
@@ -15198,11 +15576,11 @@ fn aset_string_writeback_equal_hash_key_lookup_stays_nil() {
 #[test]
 fn gc_collect_retains_reachable() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str_each("(setq x (cons 1 2))");
-    let before = ev.tagged_heap.allocated_count();
+    let before = ev.tagged_heap().allocated_count();
     ev.gc_collect();
-    let after = ev.tagged_heap.allocated_count();
+    let after = ev.tagged_heap().allocated_count();
     // The cons stored in variable `x` must survive.
     assert!(after >= 1, "reachable cons was collected");
     assert!(after <= before, "gc should not increase count");
@@ -15214,7 +15592,7 @@ fn gc_collect_retains_reachable() {
 #[test]
 fn gc_collect_exact_retains_reachable() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
 
     ev.eval_str_each("(setq x (cons 11 22))");
     ev.gc_collect_exact();
@@ -15226,7 +15604,7 @@ fn gc_collect_exact_retains_reachable() {
 #[test]
 fn finalizer_runs_after_object_becomes_unreachable() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
 
     ev.eval_str_each("(setq finalizer-ran nil)");
     ev.eval_str_each("(progn (make-finalizer (lambda () (setq finalizer-ran t))) nil)");
@@ -15246,7 +15624,7 @@ fn finalizer_runs_after_object_becomes_unreachable() {
 #[test]
 fn finalizer_runs_exactly_once_across_multiple_gcs() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
 
     ev.eval_str_each("(setq finalizer-count 0)");
     ev.eval_str_each(
@@ -15263,7 +15641,7 @@ fn finalizer_runs_exactly_once_across_multiple_gcs() {
 #[test]
 fn finalizer_does_not_run_while_object_reachable() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
 
     ev.eval_str_each("(setq finalizer-ran nil)");
     ev.eval_str_each("(setq finalizer-keeper (make-finalizer (lambda () (setq finalizer-ran t))))");
@@ -15285,7 +15663,7 @@ fn finalizer_does_not_run_while_object_reachable() {
 #[test]
 fn finalizer_function_closure_data_kept_alive_until_run() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_lexical_binding(true);
 
     ev.eval_str_each("(setq finalizer-data nil)");
@@ -15305,7 +15683,7 @@ fn finalizer_function_closure_data_kept_alive_until_run() {
 #[test]
 fn finalizer_error_is_ignored_and_other_finalizers_run() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
 
     ev.eval_str_each("(setq finalizer-log nil)");
     ev.eval_str_each(
@@ -15325,7 +15703,7 @@ fn finalizer_error_is_ignored_and_other_finalizers_run() {
 #[test]
 fn finalizer_created_inside_finalizer_runs_on_later_gc() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
 
     ev.eval_str_each("(setq finalizer-inner-ran nil)");
     ev.eval_str_each(
@@ -15351,9 +15729,9 @@ fn finalizer_created_inside_finalizer_runs_on_later_gc() {
 #[test]
 fn finalizer_type_of_and_prints_opaquely() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
 
-    // `Context::new()` is a bare evaluator with no dumped subrs, so `ignore'
+    // `crate::test_utils::new_context()` is a bare evaluator with no dumped subrs, so `ignore'
     // is not fbound here; GNU `Fmake_finalizer' checks FUNCTIONP at creation,
     // and a lambda is a function in every context.
     let results = ev.eval_str_each("(type-of (make-finalizer (lambda ())))");
@@ -15367,14 +15745,14 @@ fn finalizer_type_of_and_prints_opaquely() {
 #[test]
 fn gc_collect_exact_frees_stack_only_values() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
 
     ev.gc_collect_exact();
-    let baseline = ev.tagged_heap.allocated_count();
+    let baseline = ev.tagged_heap().allocated_count();
     let stack_only = Value::cons(Value::fixnum(31), Value::fixnum(32));
     let keep_visible = [stack_only];
     std::hint::black_box(&keep_visible);
-    let after_alloc = ev.tagged_heap.allocated_count();
+    let after_alloc = ev.tagged_heap().allocated_count();
     assert_eq!(
         after_alloc,
         baseline + 1,
@@ -15383,7 +15761,7 @@ fn gc_collect_exact_frees_stack_only_values() {
 
     ev.gc_collect_exact();
 
-    let after_gc = ev.tagged_heap.allocated_count();
+    let after_gc = ev.tagged_heap().allocated_count();
     assert_eq!(
         after_gc, baseline,
         "exact GC must ignore the configured conservative stack scan and free stack-only objects: baseline={baseline}, after_alloc={after_alloc}, after_gc={after_gc}"
@@ -15393,17 +15771,17 @@ fn gc_collect_exact_frees_stack_only_values() {
 #[test]
 fn gc_collect_exact_inside_extra_root_scope_retains_explicit_slice() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let rooted = Value::cons(Value::fixnum(11), Value::fixnum(22));
     let _unreachable = Value::cons(Value::fixnum(1), Value::fixnum(2));
-    let before = ev.tagged_heap.allocated_count();
+    let before = ev.tagged_heap().allocated_count();
 
     let scope = ev.save_specpdl_roots();
     ev.push_specpdl_root(rooted);
     ev.gc_collect_exact();
     ev.restore_specpdl_roots(scope);
 
-    let after = ev.tagged_heap.allocated_count();
+    let after = ev.tagged_heap().allocated_count();
     assert_eq!(rooted.cons_car(), Value::fixnum(11));
     assert!(
         after < before,
@@ -15414,7 +15792,7 @@ fn gc_collect_exact_inside_extra_root_scope_retains_explicit_slice() {
 #[test]
 fn specpdl_roots_are_traced_across_exact_gc() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
 
     let payload = Value::vector(vec![Value::fixnum(29)]);
     let scope = ev.save_specpdl_roots();
@@ -15422,7 +15800,7 @@ fn specpdl_roots_are_traced_across_exact_gc() {
 
     ev.gc_collect_exact();
 
-    let rooted = match ev.specpdl.last() {
+    let rooted = match ev.specpdl().last() {
         Some(SpecBinding::GcRoot { value }) => *value,
         other => panic!("expected specpdl gc root entry, got {other:?}"),
     };
@@ -15432,13 +15810,13 @@ fn specpdl_roots_are_traced_across_exact_gc() {
     );
 
     ev.restore_specpdl_roots(scope);
-    assert!(ev.specpdl.is_empty());
+    assert!(ev.specpdl().is_empty());
 }
 
 #[test]
 fn eval_str_each_roots_parsed_forms_on_specpdl() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
 
     let results = ev.eval_str_each("(setq x (cons 11 22)) (garbage-collect) (car x)");
     assert_eq!(format_eval_result(&results[2]), "OK 11");
@@ -15463,7 +15841,7 @@ fn unwind_protect_primary_survives_cleanup_garbage_collect() {
 #[test]
 fn let_init_values_survive_gc_stress_until_bindings_own_them() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_lexical_binding(true);
     ev.gc_stress = true;
 
@@ -15478,17 +15856,17 @@ fn let_init_values_survive_gc_stress_until_bindings_own_them() {
 #[test]
 fn specpdl_backtrace_frame_args_survive_exact_gc() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
 
     let payload = Value::vector(vec![Value::fixnum(17)]);
-    let bt_count = ev.specpdl.len();
+    let bt_count = ev.specpdl().len();
     ev.push_backtrace_frame(Value::symbol("runtime-backtrace-active-call"), &[payload]);
 
     ev.gc_collect_exact();
 
     // Find the backtrace frame and verify args survived GC.
     let rooted = ev
-        .specpdl
+        .specpdl()
         .iter()
         .rev()
         .find_map(|entry| {
@@ -15507,16 +15885,16 @@ fn specpdl_backtrace_frame_args_survive_exact_gc() {
 #[test]
 fn specpdl_gc_root_survives_exact_gc() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
 
     let payload = Value::vector(vec![Value::fixnum(13)]);
-    let bt_count = ev.specpdl.len();
+    let bt_count = ev.specpdl().len();
     ev.push_backtrace_frame(Value::symbol("active-call-root"), &[payload]);
 
     ev.gc_collect_exact();
 
     let rooted = ev
-        .specpdl
+        .specpdl()
         .iter()
         .rev()
         .find_map(|entry| {
@@ -15535,14 +15913,14 @@ fn specpdl_gc_root_survives_exact_gc() {
 #[test]
 fn specpdl_gc_root_entries_are_traced_across_exact_gc() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
 
     let payload = Value::vector(vec![Value::fixnum(17)]);
     let scope = ev.save_specpdl_roots();
     ev.push_specpdl_root(payload);
     ev.gc_collect_exact();
 
-    let rooted = match ev.specpdl.last() {
+    let rooted = match ev.specpdl().last() {
         Some(SpecBinding::GcRoot { value }) => *value,
         other => panic!("expected specpdl gc root entry, got {other:?}"),
     };
@@ -15556,7 +15934,7 @@ fn specpdl_gc_root_entries_are_traced_across_exact_gc() {
 #[test]
 fn vm_root_frames_are_traced_across_exact_gc() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
 
     let payload = Value::vector(vec![Value::fixnum(37)]);
     ev.push_vm_root_frame();
@@ -15565,10 +15943,8 @@ fn vm_root_frames_are_traced_across_exact_gc() {
     ev.gc_collect_exact();
 
     let rooted = ev
-        .vm_root_frames
-        .last()
-        .expect("vm root frame should remain present")
-        .roots[0];
+        .vm_root_frames_last_first_root_for_test()
+        .expect("vm root frame should remain present");
     assert_eq!(
         rooted.as_vector_data().unwrap().as_slice(),
         &[Value::fixnum(37)]
@@ -15580,7 +15956,7 @@ fn vm_root_frames_are_traced_across_exact_gc() {
 #[test]
 fn make_symbol_name_value_survives_exact_gc() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.gc_stress = true;
 
     let result = ev.eval_str(
@@ -15603,7 +15979,7 @@ fn make_symbol_name_value_survives_exact_gc() {
 #[test]
 fn custom_obarray_intern_preserves_exact_name_value() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
 
     let result = ev.eval_str(
         r#"(let* ((obarray (make-vector 17 0))
@@ -15629,18 +16005,18 @@ fn custom_obarray_intern_preserves_exact_name_value() {
 #[test]
 fn extra_gc_roots_use_specpdl_when_no_runtime_frame_owns_them() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
 
     let payload = Value::vector(vec![Value::fixnum(43)]);
 
     let scope = ev.save_specpdl_roots();
     ev.push_specpdl_root(payload);
     assert!(matches!(
-        ev.specpdl.last(),
+        ev.specpdl().last(),
         Some(SpecBinding::GcRoot { .. })
     ));
     ev.gc_collect_exact();
-    let rooted = match ev.specpdl.last() {
+    let rooted = match ev.specpdl().last() {
         Some(SpecBinding::GcRoot { value }) => *value,
         other => panic!("expected specpdl gc root entry, got {other:?}"),
     };
@@ -15650,24 +16026,24 @@ fn extra_gc_roots_use_specpdl_when_no_runtime_frame_owns_them() {
         rooted.as_vector_data().unwrap().as_slice(),
         &[Value::fixnum(43)]
     );
-    assert!(ev.specpdl.is_empty());
+    assert!(ev.specpdl().is_empty());
 }
 
 #[test]
 fn push_specpdl_root_creates_gc_root_entry_and_restore_removes_it() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
 
     let payload = Value::vector(vec![Value::fixnum(44)]);
 
     let scope = ev.save_specpdl_roots();
     ev.push_specpdl_root(payload);
     assert!(matches!(
-        ev.specpdl.last(),
+        ev.specpdl().last(),
         Some(SpecBinding::GcRoot { .. })
     ));
     ev.gc_collect_exact();
-    let rooted = match ev.specpdl.last() {
+    let rooted = match ev.specpdl().last() {
         Some(SpecBinding::GcRoot { value }) => *value,
         other => panic!("expected specpdl gc root entry, got {other:?}"),
     };
@@ -15677,13 +16053,13 @@ fn push_specpdl_root_creates_gc_root_entry_and_restore_removes_it() {
         rooted.as_vector_data().unwrap().as_slice(),
         &[Value::fixnum(44)]
     );
-    assert!(ev.specpdl.is_empty());
+    assert!(ev.specpdl().is_empty());
 }
 
 #[test]
 fn lexical_binding_rooting_uses_specpdl() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let payload = Value::vector(vec![Value::fixnum(47)]);
     let sym = intern("specpdl-lexical-binding");
 
@@ -15700,7 +16076,7 @@ fn lexical_binding_rooting_uses_specpdl() {
     // bind_lexical_value_rooted uses a temporary specpdl root that is
     // popped after the cons cells are allocated, so specpdl should be empty.
     assert!(
-        ev.specpdl.is_empty(),
+        ev.specpdl().is_empty(),
         "temporary specpdl roots should be released once lexenv owns the binding"
     );
 }
@@ -15708,7 +16084,7 @@ fn lexical_binding_rooting_uses_specpdl() {
 #[test]
 fn lexical_binding_fallback_uses_specpdl_when_no_frame_is_available() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.gc_stress = true;
     let payload = Value::vector(vec![Value::fixnum(48)]);
     let sym = intern("specpdl-lexical-fallback");
@@ -15724,7 +16100,7 @@ fn lexical_binding_fallback_uses_specpdl_when_no_frame_is_available() {
         &[Value::fixnum(48)]
     );
     assert!(
-        ev.specpdl.is_empty(),
+        ev.specpdl().is_empty(),
         "temporary specpdl roots should be released once lexenv owns the binding"
     );
 }
@@ -15732,7 +16108,7 @@ fn lexical_binding_fallback_uses_specpdl_when_no_frame_is_available() {
 #[test]
 fn direct_closure_call_uses_specpdl_for_rooting() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_lexical_binding(true);
     ev.gc_stress = true;
 
@@ -15744,7 +16120,7 @@ fn direct_closure_call_uses_specpdl_for_rooting() {
         )
         .expect("closure should evaluate");
 
-    let specpdl_before = ev.specpdl.len();
+    let specpdl_before = ev.specpdl().len();
 
     let result = match ev
         .funcall_general_untraced(
@@ -15772,7 +16148,7 @@ fn direct_closure_call_uses_specpdl_for_rooting() {
         "(71 1 2 (3 4))"
     );
     assert_eq!(
-        ev.specpdl.len(),
+        ev.specpdl().len(),
         specpdl_before,
         "closure call should clean up all specpdl entries"
     );
@@ -15781,7 +16157,7 @@ fn direct_closure_call_uses_specpdl_for_rooting() {
 #[test]
 fn direct_closure_call_rest_args_preserve_heap_values_under_gc() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.gc_stress = true;
 
     let callable = ev
@@ -15809,7 +16185,7 @@ fn jit_tierup_executes_through_funcall_seam() {
     use crate::emacs_core::bytecode::opcode::Op;
     use neovm_value::value::LambdaParams;
 
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
 
     // Build a *hot* nullary bytecode function (forced hot so the next dispatch
     // tiers it up, instead of driving HOT_THRESHOLD real calls).
@@ -15822,7 +16198,7 @@ fn jit_tierup_executes_through_funcall_seam() {
         f.ops = ops;
         f.constants = consts.into();
         f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
-        f.jit_runtime().set_hot_for_test();
+        jit_mark_hot_for_test(&f);
         Value::make_bytecode(f)
     };
 
@@ -15868,7 +16244,7 @@ fn jit_tierup_executes_through_funcall_seam() {
     addf.lexical = true;
     addf.ops = vec![Op::StackRef(1), Op::StackRef(1), Op::Add, Op::Return];
     addf.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
-    addf.jit_runtime().set_hot_for_test();
+    jit_mark_hot_for_test(&addf);
     let addv = Value::make_bytecode(addf);
     assert_eq!(
         ev.funcall_general_untraced(addv, vec![Value::make_int(40), Value::make_int(2)])
@@ -15894,7 +16270,7 @@ fn jit_cons_through_funcall_seam() {
     use crate::emacs_core::bytecode::opcode::Op;
     use neovm_value::value::LambdaParams;
 
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     // (lambda (a b) (cons a b)):
     //  0 StackRef(1)=a; 1 StackRef(1)=b; 2 Cons; 3 Return
     let mut f = ByteCodeFunction::new(LambdaParams {
@@ -15910,7 +16286,7 @@ fn jit_cons_through_funcall_seam() {
     f.lexical = true;
     f.ops = vec![Op::StackRef(1), Op::StackRef(1), Op::Cons, Op::Return];
     f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
-    f.jit_runtime().set_hot_for_test();
+    jit_mark_hot_for_test(&f);
     let fv = Value::make_bytecode(f);
 
     let r = ev
@@ -15933,7 +16309,7 @@ fn jit_call_through_funcall_seam() {
     use crate::emacs_core::bytecode::opcode::Op;
     use neovm_value::value::LambdaParams;
 
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     // Callee: (lambda (y) (* y 2)) as cold bytecode (a bare Context has no
     // elisp preloaded, so build it directly instead of via defun).
     let mut dbl = ByteCodeFunction::new(LambdaParams {
@@ -15950,7 +16326,7 @@ fn jit_call_through_funcall_seam() {
     let ValueKind::Symbol(dbl_id) = dbl_sym.kind() else {
         panic!("symbol expected");
     };
-    ev.obarray
+    ev.obarray_mut()
         .set_symbol_function_id(dbl_id, Value::make_bytecode(dbl));
 
     // Hot caller: (lambda (x) (jit-e2e-double (1+ x))) — a guard BEFORE the
@@ -15973,7 +16349,7 @@ fn jit_call_through_funcall_seam() {
         f.constants = vec![Value::symbol("jit-e2e-double")].into();
         f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         if hot {
-            f.jit_runtime().set_hot_for_test();
+            jit_mark_hot_for_test(&f);
         }
         Value::make_bytecode(f)
     };
@@ -16022,12 +16398,12 @@ fn jit_call_through_funcall_seam() {
     callee.ops = vec![Op::StackRef(0), Op::Constant(0), Op::Mul, Op::Return];
     callee.constants = vec![Value::make_int(3)].into();
     callee.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
-    callee.jit_runtime().set_hot_for_test();
+    jit_mark_hot_for_test(&callee);
     let callee_sym = Value::symbol("jit-e2e-triple-hot");
     let ValueKind::Symbol(callee_id) = callee_sym.kind() else {
         panic!("symbol expected");
     };
-    ev.obarray
+    ev.obarray_mut()
         .set_symbol_function_id(callee_id, Value::make_bytecode(callee));
 
     let mut nested = ByteCodeFunction::new(LambdaParams {
@@ -16045,7 +16421,7 @@ fn jit_call_through_funcall_seam() {
     ];
     nested.constants = vec![callee_sym].into();
     nested.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
-    nested.jit_runtime().set_hot_for_test();
+    jit_mark_hot_for_test(&nested);
     let nested_v = Value::make_bytecode(nested);
     assert_eq!(
         ev.funcall_general_untraced(nested_v, vec![Value::make_int(14)])
@@ -16064,7 +16440,7 @@ fn jit_call_through_funcall_seam() {
     sig.ops = vec![Op::Constant(0), Op::Call(0), Op::Return];
     sig.constants = vec![Value::symbol("jit-e2e-no-such-function")].into();
     sig.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
-    sig.jit_runtime().set_hot_for_test();
+    jit_mark_hot_for_test(&sig);
     let sig_v = Value::make_bytecode(sig);
     assert!(
         ev.funcall_general_untraced(sig_v, vec![]).is_err(),
@@ -16088,7 +16464,7 @@ fn jit_handlers_through_funcall_seam() {
     use crate::emacs_core::bytecode::opcode::Op;
     use neovm_value::value::LambdaParams;
 
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let mk = |required: usize, ops: Vec<Op>, consts: Vec<Value>, hot: bool| -> Value {
         let mut f = ByteCodeFunction::new(LambdaParams {
             required: (1..=required)
@@ -16103,7 +16479,7 @@ fn jit_handlers_through_funcall_seam() {
         f.constants = consts.into();
         f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         if hot {
-            f.jit_runtime().set_hot_for_test();
+            jit_mark_hot_for_test(&f);
         }
         Value::make_bytecode(f)
     };
@@ -16163,7 +16539,8 @@ fn jit_handlers_through_funcall_seam() {
         vec![Value::make_int(5)],
         false,
     );
-    ev.obarray.set_symbol_function_id(boom_id, boom_signal);
+    ev.obarray_mut()
+        .set_symbol_function_id(boom_id, boom_signal);
     let cc_fn = |hot: bool| {
         mk(
             0,
@@ -16200,7 +16577,7 @@ fn jit_handlers_through_funcall_seam() {
         vec![Value::make_int(31)],
         false,
     );
-    ev.obarray.set_symbol_function_id(boom_id, boom_ok);
+    ev.obarray_mut().set_symbol_function_id(boom_id, boom_ok);
     assert_eq!(
         ev.funcall_general_untraced(hot_cc, vec![])
             .expect("native normal path runs"),
@@ -16322,7 +16699,7 @@ fn jit_switch_through_funcall_seam() {
     use crate::emacs_core::bytecode::opcode::Op;
     use neovm_value::value::{HashTableTest, LambdaParams};
 
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     // Jump table {a -> 5, b -> 7} (raw instruction indices: no GNU byte-offset
     // map on natively built chunks, same as the interpreter's resolution).
     let table = Value::hash_table(HashTableTest::Eq);
@@ -16361,7 +16738,7 @@ fn jit_switch_through_funcall_seam() {
         .into();
         f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         if hot {
-            f.jit_runtime().set_hot_for_test();
+            jit_mark_hot_for_test(&f);
         }
         Value::make_bytecode(f)
     };
@@ -16396,7 +16773,7 @@ fn jit_named_builtins_through_funcall_seam() {
     use crate::emacs_core::bytecode::opcode::Op;
     use neovm_value::value::LambdaParams;
 
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let mk = |ops: Vec<Op>, consts: Vec<Value>, hot: bool| -> Value {
         let mut f = ByteCodeFunction::new(LambdaParams {
             // SAFETY: test placeholder id, never resolved (peer seal N8).
@@ -16409,7 +16786,7 @@ fn jit_named_builtins_through_funcall_seam() {
         f.constants = consts.into();
         f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         if hot {
-            f.jit_runtime().set_hot_for_test();
+            jit_mark_hot_for_test(&f);
         }
         Value::make_bytecode(f)
     };
@@ -16492,7 +16869,7 @@ fn jit_save_window_excursion_through_funcall_seam() {
     use crate::emacs_core::bytecode::opcode::Op;
     use neovm_value::value::LambdaParams;
 
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     // (lambda () (save-window-excursion (+ 20 22))) — body list as a constant.
     let body = ev.eval_str("'((+ 20 22))").expect("body list parses");
     let mk = |hot: bool| {
@@ -16506,7 +16883,7 @@ fn jit_save_window_excursion_through_funcall_seam() {
         f.constants = vec![body].into();
         f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         if hot {
-            f.jit_runtime().set_hot_for_test();
+            jit_mark_hot_for_test(&f);
         }
         Value::make_bytecode(f)
     };
@@ -16532,7 +16909,7 @@ fn jit_save_window_excursion_through_funcall_seam() {
         f.constants = vec![bad_body].into();
         f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         if hot {
-            f.jit_runtime().set_hot_for_test();
+            jit_mark_hot_for_test(&f);
         }
         Value::make_bytecode(f)
     };
@@ -16550,18 +16927,19 @@ fn jit_save_window_excursion_through_funcall_seam() {
 fn jit_direct_call_speculation_tracks_redefinition() {
     // Asserts what a tier-up installs by the call that triggered it: the
     // deterministic split, whatever `NEOVM_JIT_BG` the suite runs under.
-    let _bg_mode =
-        crate::emacs_core::jit::bg::TestModeScope::enter(crate::emacs_core::jit::bg::BgMode::Sync);
+    let _bg_mode = neovm_eval::test_support::authority::enter_test_mode_for_test(
+        crate::emacs_core::jit::BgMode::Sync,
+    );
     crate::test_utils::init_test_tracing();
     // Compiles a deliberately call-only forwarder to exercise direct-call
     // speculation; production would decline it as unprofitable, so disable the
     // profitability gate for this machinery test.
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
     use crate::emacs_core::bytecode::ByteCodeFunction;
     use crate::emacs_core::bytecode::opcode::Op;
     use neovm_value::value::LambdaParams;
 
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let mk_times = |k: i64| -> Value {
         let mut f = ByteCodeFunction::new(LambdaParams {
             // SAFETY: test placeholder id, never resolved (peer seal N8).
@@ -16592,7 +16970,7 @@ fn jit_direct_call_speculation_tracks_redefinition() {
     let ValueKind::Symbol(g_id) = g_sym.kind() else {
         panic!("symbol expected");
     };
-    ev.obarray.set_symbol_function_id(g_id, mk_times(2));
+    ev.obarray_mut().set_symbol_function_id(g_id, mk_times(2));
 
     // Hot caller (lambda (x) (jit-spec-g x)) — the exact speculation shape:
     // Constant(sym) StackRef Call(1).
@@ -16608,7 +16986,7 @@ fn jit_direct_call_speculation_tracks_redefinition() {
         f.constants = vec![g_sym].into();
         f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         if hot {
-            f.jit_runtime().set_hot_for_test();
+            jit_mark_hot_for_test(&f);
         }
         Value::make_bytecode(f)
     };
@@ -16620,21 +16998,19 @@ fn jit_direct_call_speculation_tracks_redefinition() {
     //    the spec shim engaged (the generic path would also compute 10; the
     //    engagement counter only exists in debug builds).
     #[cfg(debug_assertions)]
-    let spec_before =
-        crate::emacs_core::jit::compile::SPEC_CALL_COUNT.load(std::sync::atomic::Ordering::Relaxed);
+    let spec_before = compile::spec_call_count_for_test();
     assert_eq!(
         ev.funcall_general_untraced(hot, five.clone()).unwrap(),
         Value::make_int(10)
     );
     #[cfg(debug_assertions)]
     assert!(
-        crate::emacs_core::jit::compile::SPEC_CALL_COUNT.load(std::sync::atomic::Ordering::Relaxed)
-            > spec_before,
+        compile::spec_call_count_for_test() > spec_before,
         "the speculated call site must route through the spec shim"
     );
     // 2) Redefine: MUST take effect on the next call (epoch moved, binding
     //    differs -> strict symbol path).
-    ev.obarray.set_symbol_function_id(g_id, mk_times(3));
+    ev.obarray_mut().set_symbol_function_id(g_id, mk_times(3));
     assert_eq!(
         ev.funcall_general_untraced(hot, five.clone()).unwrap(),
         Value::make_int(15)
@@ -16649,7 +17025,8 @@ fn jit_direct_call_speculation_tracks_redefinition() {
     let ValueKind::Symbol(other_id) = other.kind() else {
         panic!("symbol expected");
     };
-    ev.obarray.set_symbol_function_id(other_id, mk_times(7));
+    ev.obarray_mut()
+        .set_symbol_function_id(other_id, mk_times(7));
     assert_eq!(
         ev.funcall_general_untraced(hot, five.clone()).unwrap(),
         Value::make_int(15)
@@ -16659,13 +17036,13 @@ fn jit_direct_call_speculation_tracks_redefinition() {
     let lam = ev
         .eval_str("(lambda (x) (* x 10))")
         .expect("lambda evaluates");
-    ev.obarray.set_symbol_function_id(g_id, lam);
+    ev.obarray_mut().set_symbol_function_id(g_id, lam);
     assert_eq!(
         ev.funcall_general_untraced(hot, five.clone()).unwrap(),
         Value::make_int(50)
     );
     // 5) fmakunbound: the call must now signal void-function.
-    ev.obarray.fmakunbound_id(g_id);
+    ev.obarray_mut().fmakunbound_id(g_id);
     assert!(ev.funcall_general_untraced(hot, five).is_err());
 }
 
@@ -16681,7 +17058,7 @@ fn jit_direct_call_speculation_mid_execution_redefinition() {
     use crate::emacs_core::bytecode::opcode::Op;
     use neovm_value::value::LambdaParams;
 
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let h_sym = Value::symbol("jit-spec-h");
     let ValueKind::Symbol(h_id) = h_sym.kind() else {
         panic!("symbol expected");
@@ -16715,7 +17092,7 @@ fn jit_direct_call_speculation_mid_execution_redefinition() {
     ];
     h1.constants = vec![Value::symbol("fset"), h_sym, h2_val, Value::make_int(1)].into();
     h1.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
-    ev.obarray
+    ev.obarray_mut()
         .set_symbol_function_id(h_id, Value::make_bytecode(h1));
 
     // Hot caller: (lambda () (list (jit-spec-h) (jit-spec-h))) — both call
@@ -16738,7 +17115,7 @@ fn jit_direct_call_speculation_mid_execution_redefinition() {
         f.constants = vec![h_sym].into();
         f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         if hot {
-            f.jit_runtime().set_hot_for_test();
+            jit_mark_hot_for_test(&f);
         }
         Value::make_bytecode(f)
     };
@@ -16774,7 +17151,7 @@ fn jit_direct_call_speculation_mid_execution_redefinition() {
     ];
     h1b.constants = vec![Value::symbol("fset"), h_sym, h2_val, Value::make_int(1)].into();
     h1b.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
-    ev.obarray
+    ev.obarray_mut()
         .set_symbol_function_id(h_id, Value::make_bytecode(h1b));
     let r = ev
         .funcall_general_untraced(mk_caller(false), vec![])
@@ -16791,7 +17168,10 @@ fn jit_subr_spec_caller(name: &str, nargs: usize, hot: bool) -> Value {
     use crate::emacs_core::bytecode::opcode::Op;
     use neovm_value::value::LambdaParams;
     let mut f = ByteCodeFunction::new(LambdaParams {
-        required: (1..=nargs as u32).map(neovm_value::intern::SymId).collect(),
+        // SAFETY: test placeholder ids, never resolved (peer seal N8).
+        required: (1..=nargs as u32)
+            .map(|id| unsafe { neovm_value::intern::SymId::from_raw(id) })
+            .collect(),
         optional: Vec::new(),
         rest: None,
     });
@@ -16807,7 +17187,7 @@ fn jit_subr_spec_caller(name: &str, nargs: usize, hot: bool) -> Value {
     f.constants = vec![Value::symbol(name)].into();
     f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     if hot {
-        f.jit_runtime().set_hot_for_test();
+        jit_mark_hot_for_test(&f);
     }
     let v = Value::make_bytecode(f);
     // The caller holds `v` in a Rust local across evaluations that can
@@ -16824,9 +17204,9 @@ fn jit_subr_spec_counters() -> (u64, u64, u64) {
     use crate::emacs_core::jit::compile;
     use std::sync::atomic::Ordering;
     (
-        compile::SUBR_SPEC_COUNT.load(Ordering::Relaxed),
-        compile::SUBR_SPEC_FAST_COUNT.load(Ordering::Relaxed),
-        compile::SUBR_SPEC_GENERIC_COUNT.load(Ordering::Relaxed),
+        compile::subr_spec_count_for_test(),
+        compile::subr_spec_fast_count_for_test(),
+        compile::subr_spec_generic_count_for_test(),
     )
 }
 
@@ -16839,18 +17219,19 @@ fn jit_subr_spec_counters() -> (u64, u64, u64) {
 fn jit_subr_spec_pred_recordp_engages_and_matches() {
     // Asserts what a tier-up installs by the call that triggered it: the
     // deterministic split, whatever `NEOVM_JIT_BG` the suite runs under.
-    let _bg_mode =
-        crate::emacs_core::jit::bg::TestModeScope::enter(crate::emacs_core::jit::bg::BgMode::Sync);
+    let _bg_mode = neovm_eval::test_support::authority::enter_test_mode_for_test(
+        crate::emacs_core::jit::BgMode::Sync,
+    );
     crate::test_utils::init_test_tracing();
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
     // This pins the SHIM's Gap-1 engagement (entry + armed fast counters);
     // the default-on inline `recordp` lowering answers before the shim
     // (`lowering::emit_inline_type_tag_predicate`), so that counter is not
     // what this test is about. The inline path's parity, both modes and
     // every miss path are pinned by
     // `compile_test::type_tag_predicate_sites_answer_inline`.
-    crate::emacs_core::jit::compile::force_inline_predicates_for_test(Some(false));
-    let mut ev = Context::new();
+    neovm_eval::test_support::authority::force_inline_predicates_for_test(Some(false));
+    let mut ev = crate::test_utils::new_context();
     // Root each cross-eval Rust local AT CREATION (see the swp-p test note).
     let hot = jit_subr_spec_caller("recordp", 1, true);
     ev.push_specpdl_root(hot);
@@ -16898,7 +17279,7 @@ fn jit_subr_spec_pred_recordp_engages_and_matches() {
         );
         assert!(fast1 > fast0, "the armed predicate fast path must fire");
     }
-    crate::emacs_core::jit::compile::force_inline_predicates_for_test(None);
+    neovm_eval::test_support::authority::force_inline_predicates_for_test(None);
 }
 
 /// `vectorp` must stay a GENERAL site (correct through the real builtin, no
@@ -16910,11 +17291,12 @@ fn jit_subr_spec_pred_recordp_engages_and_matches() {
 fn jit_subr_spec_vectorp_stays_general() {
     // Asserts what a tier-up installs by the call that triggered it: the
     // deterministic split, whatever `NEOVM_JIT_BG` the suite runs under.
-    let _bg_mode =
-        crate::emacs_core::jit::bg::TestModeScope::enter(crate::emacs_core::jit::bg::BgMode::Sync);
+    let _bg_mode = neovm_eval::test_support::authority::enter_test_mode_for_test(
+        crate::emacs_core::jit::BgMode::Sync,
+    );
     crate::test_utils::init_test_tracing();
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
+    let mut ev = crate::test_utils::new_context();
     let hot = jit_subr_spec_caller("vectorp", 1, true);
     // Later setup evaluations can collect. Keep each earlier fixture rooted
     // so this test reaches the JIT with the object it intended to inspect.
@@ -16966,8 +17348,8 @@ fn jit_subr_spec_vectorp_stays_general() {
 #[test]
 fn jit_subr_spec_symbol_with_pos_p_both_flag_states() {
     crate::test_utils::init_test_tracing();
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
+    let mut ev = crate::test_utils::new_context();
     // Heap values held in Rust locals across evals must be rooted AT
     // CREATION: under NEOVM_GC_STRESS every allocation-bearing safe point
     // collects, so the very next eval can free an unrooted local.
@@ -17012,11 +17394,12 @@ fn jit_subr_spec_symbol_with_pos_p_both_flag_states() {
 fn jit_subr_spec_eq_incl_props_hit_and_miss() {
     // Asserts what a tier-up installs by the call that triggered it: the
     // deterministic split, whatever `NEOVM_JIT_BG` the suite runs under.
-    let _bg_mode =
-        crate::emacs_core::jit::bg::TestModeScope::enter(crate::emacs_core::jit::bg::BgMode::Sync);
+    let _bg_mode = neovm_eval::test_support::authority::enter_test_mode_for_test(
+        crate::emacs_core::jit::BgMode::Sync,
+    );
     crate::test_utils::init_test_tracing();
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
+    let mut ev = crate::test_utils::new_context();
     let hot = jit_subr_spec_caller("equal-including-properties", 2, true);
     let cold = jit_subr_spec_caller("equal-including-properties", 2, false);
     let s = Value::string("hello");
@@ -17075,11 +17458,12 @@ fn jit_subr_spec_eq_incl_props_hit_and_miss() {
 fn jit_subr_spec_put_general_engages_and_matches() {
     // Asserts what a tier-up installs by the call that triggered it: the
     // deterministic split, whatever `NEOVM_JIT_BG` the suite runs under.
-    let _bg_mode =
-        crate::emacs_core::jit::bg::TestModeScope::enter(crate::emacs_core::jit::bg::BgMode::Sync);
+    let _bg_mode = neovm_eval::test_support::authority::enter_test_mode_for_test(
+        crate::emacs_core::jit::BgMode::Sync,
+    );
     crate::test_utils::init_test_tracing();
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
+    let mut ev = crate::test_utils::new_context();
     let hot = jit_subr_spec_caller("put", 3, true);
     #[cfg(debug_assertions)]
     let (entries0, fast0, _) = jit_subr_spec_counters();
@@ -17117,11 +17501,12 @@ fn jit_subr_spec_put_general_engages_and_matches() {
 fn jit_subr_spec_tracks_redefinition_and_rearms() {
     // Asserts what a tier-up installs by the call that triggered it: the
     // deterministic split, whatever `NEOVM_JIT_BG` the suite runs under.
-    let _bg_mode =
-        crate::emacs_core::jit::bg::TestModeScope::enter(crate::emacs_core::jit::bg::BgMode::Sync);
+    let _bg_mode = neovm_eval::test_support::authority::enter_test_mode_for_test(
+        crate::emacs_core::jit::BgMode::Sync,
+    );
     crate::test_utils::init_test_tracing();
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
+    let mut ev = crate::test_utils::new_context();
     // Root each cross-eval Rust local AT CREATION (see the swp-p test note).
     let hot = jit_subr_spec_caller("recordp", 1, true);
     ev.push_specpdl_root(hot);
@@ -17156,7 +17541,8 @@ fn jit_subr_spec_tracks_redefinition_and_rearms() {
     let ValueKind::Symbol(recordp_id) = Value::symbol("recordp").kind() else {
         panic!("symbol expected");
     };
-    ev.obarray.set_symbol_function_id(recordp_id, original);
+    ev.obarray_mut()
+        .set_symbol_function_id(recordp_id, original);
     #[cfg(debug_assertions)]
     let (_, fast0, gen0) = jit_subr_spec_counters();
     let r = ev
@@ -17200,9 +17586,9 @@ fn jit_subr_spec_tracks_redefinition_and_rearms() {
 #[test]
 fn jit_subr_spec_arity_and_variadic_stay_generic() {
     crate::test_utils::init_test_tracing();
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
     use crate::emacs_core::print::map_flow;
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
 
     // n=2 < put's min_args=3: no site; identical signal hot vs cold.
     let hot = jit_subr_spec_caller("put", 2, true);
@@ -17243,8 +17629,8 @@ fn jit_subr_spec_arity_and_variadic_stay_generic() {
 #[cfg(feature = "jit")]
 #[test]
 fn jit_subr_spec_string_queries_match_interpreter() {
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
+    let mut ev = crate::test_utils::new_context();
     let names = ["string-bytes", "multibyte-string-p", "char-or-string-p"];
     let cases = [
         (
@@ -17283,10 +17669,7 @@ fn jit_subr_spec_string_queries_match_interpreter() {
     for (index, name) in names.into_iter().enumerate() {
         let hot = jit_subr_spec_caller(name, 1, true);
         let cold = jit_subr_spec_caller(name, 1, false);
-        cold.get_bytecode_data()
-            .unwrap()
-            .jit_runtime()
-            .set_cold_for_test();
+        jit_mark_cold_for_test(cold.get_bytecode_data().unwrap());
         for (form, expected) in cases {
             let arg = ev.eval_str(form).expect("query argument");
             let roots = save_scratch_gc_roots();
@@ -17339,15 +17722,12 @@ fn jit_subr_spec_string_queries_match_interpreter() {
 #[cfg(feature = "jit")]
 #[test]
 fn jit_subr_spec_position_queries_match_interpreter() {
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
+    let mut ev = crate::test_utils::new_context();
     for name in ["position-bytes", "byte-to-position"] {
         let hot = jit_subr_spec_caller(name, 1, true);
         let cold = jit_subr_spec_caller(name, 1, false);
-        cold.get_bytecode_data()
-            .unwrap()
-            .jit_runtime()
-            .set_cold_for_test();
+        jit_mark_cold_for_test(cold.get_bytecode_data().unwrap());
         let setups: [(&str, &[i64], &[i64]); 4] = [
             ("(progn (widen) (erase-buffer))", &[1], &[1]),
             (
@@ -17478,17 +17858,18 @@ fn jit_subr_spec_position_queries_match_interpreter() {
 fn jit_subr_spec_inplace_rewrite_calls_fresh_entry() {
     // Asserts what a tier-up installs by the call that triggered it: the
     // deterministic split, whatever `NEOVM_JIT_BG` the suite runs under.
-    let _bg_mode =
-        crate::emacs_core::jit::bg::TestModeScope::enter(crate::emacs_core::jit::bg::BgMode::Sync);
+    let _bg_mode = neovm_eval::test_support::authority::enter_test_mode_for_test(
+        crate::emacs_core::jit::BgMode::Sync,
+    );
     crate::test_utils::init_test_tracing();
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
     fn f1(_: &mut Context, _: Value) -> neovm_value::error::EvalResult {
         Ok(Value::make_int(1))
     }
     fn f2(_: &mut Context, _: Value) -> neovm_value::error::EvalResult {
         Ok(Value::make_int(2))
     }
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.register_subr(SubrSpec::fixed1(
         "jit-subr-spec-rewrite",
         f1,
@@ -17534,12 +17915,13 @@ fn jit_subr_spec_inplace_rewrite_calls_fresh_entry() {
 fn jit_subr_spec_fixed_return_preserves_unwind_protocol() {
     // Asserts what a tier-up installs by the call that triggered it: the
     // deterministic split, whatever `NEOVM_JIT_BG` the suite runs under.
-    let _bg_mode =
-        crate::emacs_core::jit::bg::TestModeScope::enter(crate::emacs_core::jit::bg::BgMode::Sync);
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
+    let _bg_mode = neovm_eval::test_support::authority::enter_test_mode_for_test(
+        crate::emacs_core::jit::BgMode::Sync,
+    );
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
     fn callee(ctx: &mut Context, mode: Value) -> EvalResult {
         let mode = mode.as_int().unwrap();
-        let frame = ctx.specpdl.len() - 1;
+        let frame = ctx.specpdl().len() - 1;
         if mode == 2 || mode == 4 {
             assert!(ctx.set_backtrace_debug_on_exit(frame, true));
         }
@@ -17553,7 +17935,7 @@ fn jit_subr_spec_fixed_return_preserves_unwind_protocol() {
             _ => Ok(value),
         }
     }
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.register_subr(SubrSpec::fixed1(
         "neo-fixed-return-probe",
         callee,
@@ -17579,10 +17961,10 @@ fn jit_subr_spec_fixed_return_preserves_unwind_protocol() {
                                  (list sym data neo-return-binding))))"#,
             )
             .expect("return protocol setup");
-            let count = ev.specpdl.len();
+            let count = ev.specpdl().len();
             let depth = ev.depth;
             let result = ev.funcall_general_untraced(caller, vec![Value::fixnum(mode)]);
-            assert_eq!(ev.specpdl.len(), count, "mode {mode}: frame cleanup");
+            assert_eq!(ev.specpdl().len(), count, "mode {mode}: frame cleanup");
             assert_eq!(ev.depth, depth, "mode {mode}: depth cleanup");
             if mode < 2 {
                 assert_eq!(
@@ -17627,11 +18009,12 @@ fn jit_subr_spec_fixed_return_preserves_unwind_protocol() {
 fn jit_subr_spec_many_re_search_forward_engages_and_matches() {
     // Asserts what a tier-up installs by the call that triggered it: the
     // deterministic split, whatever `NEOVM_JIT_BG` the suite runs under.
-    let _bg_mode =
-        crate::emacs_core::jit::bg::TestModeScope::enter(crate::emacs_core::jit::bg::BgMode::Sync);
+    let _bg_mode = neovm_eval::test_support::authority::enter_test_mode_for_test(
+        crate::emacs_core::jit::BgMode::Sync,
+    );
     crate::test_utils::init_test_tracing();
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str("(insert \"hello world\")")
         .expect("buffer content");
     // Root each cross-eval Rust local AT CREATION (see the swp-p test note).
@@ -17688,11 +18071,12 @@ fn jit_subr_spec_many_re_search_forward_engages_and_matches() {
 fn jit_subr_spec_many_get_text_property_engages_and_matches() {
     // Asserts what a tier-up installs by the call that triggered it: the
     // deterministic split, whatever `NEOVM_JIT_BG` the suite runs under.
-    let _bg_mode =
-        crate::emacs_core::jit::bg::TestModeScope::enter(crate::emacs_core::jit::bg::BgMode::Sync);
+    let _bg_mode = neovm_eval::test_support::authority::enter_test_mode_for_test(
+        crate::emacs_core::jit::BgMode::Sync,
+    );
     crate::test_utils::init_test_tracing();
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str(
         "(progn (insert \"hello world\") \
                 (put-text-property 1 6 'face 'bold) \
@@ -17748,8 +18132,8 @@ fn jit_subr_spec_many_get_text_property_engages_and_matches() {
 #[test]
 fn jit_subr_spec_many_side_effect_goldens_match_interp() {
     crate::test_utils::init_test_tracing();
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str("(insert \"foo (bar baz) qux\")")
         .expect("buffer");
 
@@ -17833,9 +18217,9 @@ fn jit_subr_spec_many_side_effect_goldens_match_interp() {
 #[test]
 fn jit_subr_spec_many_signal_parity_armed_vs_interp() {
     crate::test_utils::init_test_tracing();
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
     use crate::emacs_core::print::map_flow;
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str("(insert \"hello (world\")").expect("buffer"); // unbalanced paren
 
     // re-search-forward, no match, no NOERROR -> search-failed.
@@ -17906,9 +18290,9 @@ fn jit_subr_spec_many_signal_parity_armed_vs_interp() {
 #[test]
 fn jit_subr_spec_many_put_text_property_arity_and_effect() {
     crate::test_utils::init_test_tracing();
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
     use crate::emacs_core::print::map_flow;
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str("(insert \"hello world\")").expect("buffer");
 
     // Valid Op::Call(4): side-effect + result parity.
@@ -17989,8 +18373,8 @@ fn jit_subr_spec_many_put_text_property_arity_and_effect() {
 #[test]
 fn jit_subr_spec_many_redefinition_deopts_like_interp() {
     crate::test_utils::init_test_tracing();
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str("(insert \"hello world\")").ok();
 
     // fset re-search-forward -> lambda: armed site deopts, new def runs.
@@ -18083,7 +18467,7 @@ fn jit_cbsym_spec_caller(name: &str, nargs: usize, hot: bool) -> Value {
     f.constants = Vec::new().into();
     f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     if hot {
-        f.jit_runtime().set_hot_for_test();
+        jit_mark_hot_for_test(&f);
     }
     let v = Value::make_bytecode(f);
     // The caller holds `v` in a Rust local across evaluations that can
@@ -18100,9 +18484,9 @@ fn jit_cbsym_spec_counters() -> (u64, u64, u64) {
     use crate::emacs_core::jit::compile;
     use std::sync::atomic::Ordering;
     (
-        compile::CBSYM_SPEC_COUNT.load(Ordering::Relaxed),
-        compile::CBSYM_SPEC_FAST_COUNT.load(Ordering::Relaxed),
-        compile::CBSYM_SPEC_GENERIC_COUNT.load(Ordering::Relaxed),
+        compile::cbsym_spec_count_for_test(),
+        compile::cbsym_spec_fast_count_for_test(),
+        compile::cbsym_spec_generic_count_for_test(),
     )
 }
 
@@ -18128,11 +18512,12 @@ fn jit_cbsym_fastpath_suppressed_by_harness() -> bool {
 fn jit_cbsym_spec_tierb_engages_and_matches() {
     // Asserts what a tier-up installs by the call that triggered it: the
     // deterministic split, whatever `NEOVM_JIT_BG` the suite runs under.
-    let _bg_mode =
-        crate::emacs_core::jit::bg::TestModeScope::enter(crate::emacs_core::jit::bg::BgMode::Sync);
+    let _bg_mode = neovm_eval::test_support::authority::enter_test_mode_for_test(
+        crate::emacs_core::jit::BgMode::Sync,
+    );
     crate::test_utils::init_test_tracing();
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str("(insert \"hello world\")")
         .expect("buffer setup");
     #[cfg(debug_assertions)]
@@ -18182,11 +18567,12 @@ fn jit_cbsym_spec_tierb_engages_and_matches() {
 fn jit_cbsym_spec_tierb_end_of_line_engages_and_matches() {
     // Asserts what a tier-up installs by the call that triggered it: the
     // deterministic split, whatever `NEOVM_JIT_BG` the suite runs under.
-    let _bg_mode =
-        crate::emacs_core::jit::bg::TestModeScope::enter(crate::emacs_core::jit::bg::BgMode::Sync);
+    let _bg_mode = neovm_eval::test_support::authority::enter_test_mode_for_test(
+        crate::emacs_core::jit::BgMode::Sync,
+    );
     crate::test_utils::init_test_tracing();
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str("(insert \"line one\\nsecond line\\nthird\")")
         .expect("multi-line buffer");
     #[cfg(debug_assertions)]
@@ -18228,14 +18614,15 @@ fn jit_cbsym_spec_tierb_end_of_line_engages_and_matches() {
 fn jit_cbsym_buffer_loop_tiers_with_profit_gate_on() {
     // Asserts what a tier-up installs by the call that triggered it: the
     // deterministic split, whatever `NEOVM_JIT_BG` the suite runs under.
-    let _bg_mode =
-        crate::emacs_core::jit::bg::TestModeScope::enter(crate::emacs_core::jit::bg::BgMode::Sync);
+    let _bg_mode = neovm_eval::test_support::authority::enter_test_mode_for_test(
+        crate::emacs_core::jit::BgMode::Sync,
+    );
     crate::test_utils::init_test_tracing();
     use crate::emacs_core::bytecode::ByteCodeFunction;
     use crate::emacs_core::bytecode::opcode::Op;
     use neovm_value::value::LambdaParams;
     // Gate ON (production default) — do NOT disable it; the re-weight must carry.
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(true);
+    neovm_eval::test_support::authority::force_profit_gate_for_test(true);
     let mk = |hot: bool| {
         let mut f = ByteCodeFunction::new(LambdaParams {
             // SAFETY: test placeholder id, never resolved (peer seal N8).
@@ -18266,11 +18653,11 @@ fn jit_cbsym_buffer_loop_tiers_with_profit_gate_on() {
         f.constants = vec![Value::make_int(0), Value::make_int(1)].into();
         f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         if hot {
-            f.jit_runtime().set_hot_for_test();
+            jit_mark_hot_for_test(&f);
         }
         Value::make_bytecode(f)
     };
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str("(insert \"abcdef\")").expect("buffer setup");
     #[cfg(debug_assertions)]
     let (_, fast0, _) = jit_cbsym_spec_counters();
@@ -18307,16 +18694,17 @@ fn jit_cbsym_buffer_loop_tiers_with_profit_gate_on() {
 fn jit_cbsym_spec_inplace_rewrite_to_nonbuiltin_bounces_like_interp() {
     // Asserts what a tier-up installs by the call that triggered it: the
     // deterministic split, whatever `NEOVM_JIT_BG` the suite runs under.
-    let _bg_mode =
-        crate::emacs_core::jit::bg::TestModeScope::enter(crate::emacs_core::jit::bg::BgMode::Sync);
+    let _bg_mode = neovm_eval::test_support::authority::enter_test_mode_for_test(
+        crate::emacs_core::jit::BgMode::Sync,
+    );
     crate::test_utils::init_test_tracing();
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    use crate::emacs_core::eval::{
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
+    use neovm_eval::test_support::authority::{
         SubrEntry, lookup_global_subr_entry, register_global_subr_entry,
     };
     use neovm_value::intern::intern;
     use neovm_value::tagged::header::SubrDispatchKind;
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let widen = intern("widen"); // Tier-B, 0-arg, not used between rewrite/restore
     let orig = lookup_global_subr_entry(widen).expect("widen is a builtin");
     let hot = jit_cbsym_spec_caller("widen", 0, true);
@@ -18374,8 +18762,8 @@ fn jit_cbsym_spec_inplace_rewrite_to_nonbuiltin_bounces_like_interp() {
 #[test]
 fn jit_cbsym_spec_insert_pushes_no_backtrace_frame_like_gnu() {
     crate::test_utils::init_test_tracing();
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
+    let mut ev = crate::test_utils::new_context();
     // A hook that captures the printed form of the first `insert` runtime
     // backtrace frame (mapbacktrace calls (fn EVALD FUNC ARGS FLAGS); FUNC is
     // the frame's callable). `backtrace-frames` proper is stubbed in neomacs;
@@ -18423,8 +18811,8 @@ fn jit_cbsym_spec_adds_no_eval_depth_level() {
     use crate::emacs_core::bytecode::ByteCodeFunction;
     use crate::emacs_core::bytecode::opcode::Op;
     use neovm_value::value::LambdaParams;
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str("(defvar cbsym-depth 0)").unwrap();
     // f: (setq cbsym-depth (1+ cbsym-depth)) (widen) (f) — recurse until the
     // depth guard signals; `cbsym-depth` is left at the deepest level reached.
@@ -18452,7 +18840,7 @@ fn jit_cbsym_spec_adds_no_eval_depth_level() {
         f.constants = vec![Value::symbol("cbsym-depth"), f_sym].into();
         f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         if hot {
-            f.jit_runtime().set_hot_for_test();
+            jit_mark_hot_for_test(&f);
         }
         Value::make_bytecode(f)
     };
@@ -18460,7 +18848,7 @@ fn jit_cbsym_spec_adds_no_eval_depth_level() {
     ev.eval_str("(setq max-lisp-eval-depth 150)").unwrap();
     let depth_after = |ev: &mut Context, hot: bool| -> i64 {
         ev.eval_str("(setq cbsym-depth 0)").unwrap();
-        ev.obarray.set_symbol_function_id(f_id, mk(hot));
+        ev.obarray_mut().set_symbol_function_id(f_id, mk(hot));
         // Recurses until max-lisp-eval-depth signals; catch it.
         let _ = ev.funcall_general_untraced(f_sym, Vec::<Value>::new());
         ev.eval_str("cbsym-depth").unwrap().as_fixnum().unwrap()
@@ -18487,11 +18875,12 @@ fn jit_cbsym_spec_adds_no_eval_depth_level() {
 fn jit_cbsym_read_tiera_engages_and_matches() {
     // Asserts what a tier-up installs by the call that triggered it: the
     // deterministic split, whatever `NEOVM_JIT_BG` the suite runs under.
-    let _bg_mode =
-        crate::emacs_core::jit::bg::TestModeScope::enter(crate::emacs_core::jit::bg::BgMode::Sync);
+    let _bg_mode = neovm_eval::test_support::authority::enter_test_mode_for_test(
+        crate::emacs_core::jit::BgMode::Sync,
+    );
     crate::test_utils::init_test_tracing();
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str("(insert \"abc\\ndef\")").unwrap();
     ev.eval_str("(goto-char 2)").unwrap();
     #[cfg(debug_assertions)]
@@ -18538,8 +18927,8 @@ fn jit_cbsym_read_tiera_engages_and_matches() {
 #[test]
 fn jit_cbsym_read_match_beginning_end_char_positions_and_edges() {
     crate::test_utils::init_test_tracing();
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str("(insert \"foo bar baz\")").unwrap();
     ev.eval_str("(goto-char (point-min))").unwrap();
     ev.eval_str("(search-forward \"bar\")").unwrap(); // sets match-data, group 0 = "bar"
@@ -18602,8 +18991,8 @@ fn jit_cbsym_read_match_beginning_end_char_positions_and_edges() {
 #[test]
 fn jit_cbsym_read_char_accessors_at_boundaries() {
     crate::test_utils::init_test_tracing();
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str("(insert \"xy\")").unwrap();
     ev.eval_str("(goto-char (point-max))").unwrap(); // at ZV
     let fc = jit_cbsym_spec_caller("following-char", 0, true);
@@ -18643,8 +19032,8 @@ fn jit_cbsym_read_char_accessors_at_boundaries() {
 #[test]
 fn jit_cbsym_read_bolp_at_begv_in_narrowed_buffer() {
     crate::test_utils::init_test_tracing();
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str("(insert \"line1\\nline2\\nline3\")").unwrap();
     ev.eval_str("(narrow-to-region 3 10)").unwrap(); // BEGV = 3 (mid-line)
     ev.eval_str("(goto-char (point-min))").unwrap(); // point = BEGV = 3
@@ -18672,8 +19061,9 @@ fn jit_cbsym_read_bolp_at_begv_in_narrowed_buffer() {
 fn jit_cbsym_read_current_buffer_bounces_when_unmaterialized() {
     // Asserts what a tier-up installs by the call that triggered it: the
     // deterministic split, whatever `NEOVM_JIT_BG` the suite runs under.
-    let _bg_mode =
-        crate::emacs_core::jit::bg::TestModeScope::enter(crate::emacs_core::jit::bg::BgMode::Sync);
+    let _bg_mode = neovm_eval::test_support::authority::enter_test_mode_for_test(
+        crate::emacs_core::jit::BgMode::Sync,
+    );
     crate::test_utils::init_test_tracing();
     // This test's premise is that the current buffer's tagged value has NOT
     // been materialized before the first compiled call. Under NEOVM_GC_STRESS
@@ -18684,8 +19074,8 @@ fn jit_cbsym_read_current_buffer_bounces_when_unmaterialized() {
     if std::env::var("NEOVM_GC_STRESS").as_deref() == Ok("1") {
         return;
     }
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
+    let mut ev = crate::test_utils::new_context();
     // Do NOT call current-buffer / make_buffer before the compiled call, so the
     // current buffer's tagged value is (likely) not yet in the buffer registry.
     let hot = jit_cbsym_spec_caller("current-buffer", 0, true);
@@ -18733,8 +19123,8 @@ fn jit_cbsym_read_current_buffer_bounces_when_unmaterialized() {
 #[test]
 fn jit_cbsym_read_ignores_function_cell_override() {
     crate::test_utils::init_test_tracing();
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str("(insert \"abcd\")").unwrap();
     ev.eval_str("(goto-char 3)").unwrap();
     let real_point = ev.eval_str("(point)").unwrap(); // 3 (interp CBSym is also cell-immune)
@@ -18777,7 +19167,7 @@ fn jit_fib_and_loops_compile_under_precise_deopt() {
     use crate::emacs_core::bytecode::opcode::Op;
     use neovm_value::value::LambdaParams;
 
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     // fib: (lambda (n) (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2))))) —
     // self-recursive through its constant symbol (also exercises direct-call
     // speculation), with Sub/Add guards AFTER the recursive calls.
@@ -18816,18 +19206,19 @@ fn jit_fib_and_loops_compile_under_precise_deopt() {
         f.constants = vec![Value::make_int(2), fib_sym, Value::make_int(1)].into();
         f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         if hot {
-            f.jit_runtime().set_hot_for_test();
+            jit_mark_hot_for_test(&f);
         }
         Value::make_bytecode(f)
     };
     // Interpreter oracle first (cold installed), then the hot version.
-    ev.obarray.set_symbol_function_id(fib_id, mk_fib(false));
+    ev.obarray_mut()
+        .set_symbol_function_id(fib_id, mk_fib(false));
     let interp = ev
         .funcall_general_untraced(mk_fib(false), vec![Value::make_int(12)])
         .expect("interpreted fib runs");
     assert_eq!(interp, Value::make_int(144));
     let hot = mk_fib(true);
-    ev.obarray.set_symbol_function_id(fib_id, hot);
+    ev.obarray_mut().set_symbol_function_id(fib_id, hot);
     let native = ev
         .funcall_general_untraced(hot, vec![Value::make_int(12)])
         .expect("native fib runs");
@@ -18854,7 +19245,7 @@ fn jit_fib_and_loops_compile_under_precise_deopt() {
     ident.lexical = true;
     ident.ops = vec![Op::StackRef(0), Op::Return];
     ident.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
-    ev.obarray
+    ev.obarray_mut()
         .set_symbol_function_id(id_id, Value::make_bytecode(ident));
     let mk_loop = |hot: bool| {
         let mut f = ByteCodeFunction::new(LambdaParams {
@@ -18881,7 +19272,7 @@ fn jit_fib_and_loops_compile_under_precise_deopt() {
         f.constants = vec![Value::make_int(0), id_sym].into();
         f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         if hot {
-            f.jit_runtime().set_hot_for_test();
+            jit_mark_hot_for_test(&f);
         }
         Value::make_bytecode(f)
     };
@@ -18907,7 +19298,7 @@ fn jit_native_to_native_optional_callee_pure_and_marshaled() {
     use crate::emacs_core::bytecode::opcode::Op;
     use neovm_value::value::LambdaParams;
 
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     // Callee (lambda (a &optional b) (if b (+ a b) a)) as hand-built bytecode.
     let mut callee = ByteCodeFunction::new(LambdaParams {
         // SAFETY: test placeholder id, never resolved (peer seal N8).
@@ -18932,7 +19323,7 @@ fn jit_native_to_native_optional_callee_pure_and_marshaled() {
     let ValueKind::Symbol(c_id) = c_sym.kind() else {
         panic!("symbol expected");
     };
-    ev.obarray
+    ev.obarray_mut()
         .set_symbol_function_id(c_id, Value::make_bytecode(callee));
 
     // Caller with 2 args -> callee nargs==2==arity -> PURE native pass-through.
@@ -18958,7 +19349,7 @@ fn jit_native_to_native_optional_callee_pure_and_marshaled() {
         f.constants = vec![c_sym].into();
         f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         if hot {
-            f.jit_runtime().set_hot_for_test();
+            jit_mark_hot_for_test(&f);
         }
         Value::make_bytecode(f)
     };
@@ -18975,7 +19366,7 @@ fn jit_native_to_native_optional_callee_pure_and_marshaled() {
         f.constants = vec![c_sym].into();
         f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         if hot {
-            f.jit_runtime().set_hot_for_test();
+            jit_mark_hot_for_test(&f);
         }
         Value::make_bytecode(f)
     };
@@ -19017,19 +19408,20 @@ fn jit_native_to_native_optional_callee_pure_and_marshaled() {
 fn jit_v3_fast_path_engages_and_tracks_redefinition() {
     // Asserts what a tier-up installs by the call that triggered it: the
     // deterministic split, whatever `NEOVM_JIT_BG` the suite runs under.
-    let _bg_mode =
-        crate::emacs_core::jit::bg::TestModeScope::enter(crate::emacs_core::jit::bg::BgMode::Sync);
+    let _bg_mode = neovm_eval::test_support::authority::enter_test_mode_for_test(
+        crate::emacs_core::jit::BgMode::Sync,
+    );
     crate::test_utils::init_test_tracing();
     // Compiles a deliberately call-only forwarder to exercise the V3 fast-path
     // speculation; production would decline it as unprofitable, so disable the
     // profitability gate for this machinery test.
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
     use crate::emacs_core::bytecode::ByteCodeFunction;
     use crate::emacs_core::bytecode::opcode::Op;
     use neovm_value::value::LambdaParams;
     use std::sync::atomic::Ordering;
 
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let mk_times = |k: i64| -> Value {
         let mut f = ByteCodeFunction::new(LambdaParams {
             // SAFETY: test placeholder id, never resolved (peer seal N8).
@@ -19060,7 +19452,7 @@ fn jit_v3_fast_path_engages_and_tracks_redefinition() {
     let ValueKind::Symbol(g_id) = g_sym.kind() else {
         panic!("symbol expected");
     };
-    ev.obarray.set_symbol_function_id(g_id, mk_times(2));
+    ev.obarray_mut().set_symbol_function_id(g_id, mk_times(2));
 
     let mk_caller = || {
         let mut f = ByteCodeFunction::new(LambdaParams {
@@ -19073,13 +19465,13 @@ fn jit_v3_fast_path_engages_and_tracks_redefinition() {
         f.ops = vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return];
         f.constants = vec![g_sym].into();
         f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
-        f.jit_runtime().set_hot_for_test();
+        jit_mark_hot_for_test(&f);
         Value::make_bytecode(f)
     };
     let hot = mk_caller();
     let five = vec![Value::make_int(5)];
 
-    let fast_before = crate::emacs_core::jit::compile::SPEC_FAST_CALL_COUNT.load(Ordering::Relaxed);
+    let fast_before = compile::spec_fast_call_count_for_test();
     assert_eq!(
         ev.funcall_general_untraced(hot, five.clone()).unwrap(),
         Value::make_int(10)
@@ -19089,7 +19481,7 @@ fn jit_v3_fast_path_engages_and_tracks_redefinition() {
         ev.funcall_general_untraced(hot, five.clone()).unwrap(),
         Value::make_int(10)
     );
-    let fast_after = crate::emacs_core::jit::compile::SPEC_FAST_CALL_COUNT.load(Ordering::Relaxed);
+    let fast_after = compile::spec_fast_call_count_for_test();
     assert!(
         fast_after >= fast_before + 2,
         "both speculated calls must take the V3 fast path (cached direct native call)"
@@ -19097,7 +19489,7 @@ fn jit_v3_fast_path_engages_and_tracks_redefinition() {
 
     // Redefine to different bytecode: epoch moves, revalidation fails, the
     // cached leaf is cleared, the strict path resolves the new binding.
-    ev.obarray.set_symbol_function_id(g_id, mk_times(3));
+    ev.obarray_mut().set_symbol_function_id(g_id, mk_times(3));
     assert_eq!(
         ev.funcall_general_untraced(hot, five.clone()).unwrap(),
         Value::make_int(15)
@@ -19105,7 +19497,7 @@ fn jit_v3_fast_path_engages_and_tracks_redefinition() {
     // Redefine to a NON-bytecode callable: the fast path must abandon (the
     // strict path resolves the interpreted lambda).
     let lam = ev.eval_str("(lambda (x) (* x 100))").unwrap();
-    ev.obarray.set_symbol_function_id(g_id, lam);
+    ev.obarray_mut().set_symbol_function_id(g_id, lam);
     assert_eq!(
         ev.funcall_general_untraced(hot, five).unwrap(),
         Value::make_int(500)
@@ -19122,13 +19514,13 @@ fn jit_v3_fast_path_engages_and_tracks_redefinition() {
 #[test]
 fn a_spec_slot_drops_its_leaf_when_the_callee_slot_is_recycled() {
     crate::test_utils::init_test_tracing();
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
     use crate::emacs_core::bytecode::ByteCodeFunction;
     use crate::emacs_core::bytecode::opcode::Op;
     use neovm_value::value::LambdaParams;
     use std::sync::atomic::Ordering;
 
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     // The first cycle is the bootstrap collection; the objects below must be
     // ordinary post-bootstrap arena allocations that a sweep can free.
     ev.gc_collect_exact();
@@ -19162,7 +19554,7 @@ fn a_spec_slot_drops_its_leaf_when_the_callee_slot_is_recycled() {
     let ValueKind::Symbol(g_id) = g_sym.kind() else {
         panic!("symbol expected");
     };
-    ev.obarray.set_symbol_function_id(g_id, mk_times(2));
+    ev.obarray_mut().set_symbol_function_id(g_id, mk_times(2));
     let mut caller = ByteCodeFunction::new(LambdaParams {
         // SAFETY: test placeholder id, never resolved (peer seal N8).
         required: vec![unsafe { neovm_value::intern::SymId::from_raw(1) }],
@@ -19173,12 +19565,12 @@ fn a_spec_slot_drops_its_leaf_when_the_callee_slot_is_recycled() {
     caller.ops = vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return];
     caller.constants = vec![g_sym].into();
     caller.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
-    caller.jit_runtime().set_hot_for_test();
+    jit_mark_hot_for_test(&caller);
     let hot = Value::make_bytecode(caller);
     crate::emacs_core::eval::push_scratch_gc_root(hot);
     let five = vec![Value::make_int(5)];
 
-    let fast = || crate::emacs_core::jit::compile::SPEC_FAST_CALL_COUNT.load(Ordering::Relaxed);
+    let fast = || compile::spec_fast_call_count_for_test();
     let before = fast();
     for _ in 0..2 {
         assert_eq!(
@@ -19187,13 +19579,13 @@ fn a_spec_slot_drops_its_leaf_when_the_callee_slot_is_recycled() {
         );
     }
     assert!(fast() >= before + 2, "the site caches the callee's leaf");
-    let first_bits = ev.obarray.symbol_function_id(g_id).expect("bound").bits();
+    let first_bits = ev.obarray().symbol_function_id(g_id).expect("bound").bits();
 
     // Unbind and collect: the first definition is garbage and its arena slot
     // joins the free list. Then define again until a definition lands on
     // that very slot (the free list is LIFO; every allocation is kept alive
     // so the walk cannot revisit a slot).
-    ev.obarray.set_symbol_function_id(g_id, Value::NIL);
+    ev.obarray_mut().set_symbol_function_id(g_id, Value::NIL);
     ev.gc_collect_exact();
     let mut kept = Vec::new();
     let mut recycled = None;
@@ -19207,7 +19599,7 @@ fn a_spec_slot_drops_its_leaf_when_the_callee_slot_is_recycled() {
         }
     }
     let recycled = recycled.expect("a definition reuses the freed bytecode slot");
-    ev.obarray.set_symbol_function_id(g_id, recycled);
+    ev.obarray_mut().set_symbol_function_id(g_id, recycled);
     assert_eq!(
         ev.funcall_general_untraced(hot, five.clone()).unwrap(),
         Value::make_int(15),
@@ -19236,13 +19628,13 @@ fn a_spec_slot_drops_its_leaf_when_the_callee_slot_is_recycled() {
 #[test]
 fn spec_call_fast_path_keeps_the_reference_protocol_on_its_exits() {
     crate::test_utils::init_test_tracing();
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
     use crate::emacs_core::bytecode::ByteCodeFunction;
     use crate::emacs_core::bytecode::opcode::Op;
     use neovm_value::value::LambdaParams;
     use std::sync::atomic::Ordering;
 
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let lambda = |nargs: usize, hot: bool, ops: Vec<Op>, constants: Vec<Value>| -> Value {
         let mut f = ByteCodeFunction::new(LambdaParams {
             required: (1..=nargs)
@@ -19257,7 +19649,7 @@ fn spec_call_fast_path_keeps_the_reference_protocol_on_its_exits() {
         f.constants = constants.into();
         f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         if hot {
-            f.jit_runtime().set_hot_for_test();
+            jit_mark_hot_for_test(&f);
         }
         let v = Value::make_bytecode(f);
         crate::emacs_core::eval::push_scratch_gc_root(v);
@@ -19266,7 +19658,7 @@ fn spec_call_fast_path_keeps_the_reference_protocol_on_its_exits() {
     // The shim's OWN fast-path counter: the slow half also runs cached
     // leaves (and bumps SPEC_FAST_CALL_COUNT), so only this one proves the
     // path under test was taken.
-    let fast = || crate::emacs_core::jit::compile::SPEC_SHIM_FAST_COUNT.load(Ordering::Relaxed);
+    let fast = || compile::spec_shim_fast_count_for_test();
     let signal_name = |r: Result<Value, neovm_value::error::Flow>| -> String {
         match r.kinded() {
             Ok(v) => format!("value {}", crate::emacs_core::print::print_value(&v)),
@@ -19295,7 +19687,7 @@ fn spec_call_fast_path_keeps_the_reference_protocol_on_its_exits() {
         ],
         vec![],
     );
-    ev.obarray
+    ev.obarray_mut()
         .set_symbol_function_id(neovm_value::intern::intern("jit-fp-car3"), car3);
     // (lambda (x) (jit-fp-car3 x 1 2))
     let call3 = lambda(
@@ -19338,7 +19730,7 @@ fn spec_call_fast_path_keeps_the_reference_protocol_on_its_exits() {
         ],
         vec![Value::symbol("jit-fp-dyn")],
     );
-    ev.obarray
+    ev.obarray_mut()
         .set_symbol_function_id(neovm_value::intern::intern("jit-fp-bound"), bound);
     // (lambda (x) (jit-fp-bound x))
     let call_bound = lambda(
@@ -19367,7 +19759,7 @@ fn spec_call_fast_path_keeps_the_reference_protocol_on_its_exits() {
         ],
         vec![Value::symbol("signal"), Value::symbol("error"), Value::NIL],
     );
-    ev.obarray
+    ev.obarray_mut()
         .set_symbol_function_id(neovm_value::intern::intern("jit-fp-raise3"), raise3);
     // (lambda (x) (jit-fp-raise3 x 1 2))
     let call_raise3 = lambda(
@@ -19418,7 +19810,7 @@ fn spec_call_fast_path_keeps_the_reference_protocol_on_its_exits() {
             Value::symbol("jit-fp-dyn"),
         ],
     );
-    ev.obarray.set_symbol_function_id(
+    ev.obarray_mut().set_symbol_function_id(
         neovm_value::intern::intern("jit-fp-bound-raise"),
         bound_raise,
     );
@@ -19431,7 +19823,7 @@ fn spec_call_fast_path_keeps_the_reference_protocol_on_its_exits() {
     );
     let seven = ev.eval_str("'(7)").expect("list");
     crate::emacs_core::eval::push_scratch_gc_root(seven);
-    let spec_base = ev.specpdl.len();
+    let spec_base = ev.specpdl().len();
 
     // Raw entry: the first call arms the slot, the second takes the fast
     // path, the third signals through it.
@@ -19452,7 +19844,7 @@ fn spec_call_fast_path_keeps_the_reference_protocol_on_its_exits() {
     );
     assert!(fast() > before, "the signalling call took the fast path");
     assert_eq!(
-        ev.specpdl.len(),
+        ev.specpdl().len(),
         spec_base,
         "the callee's frame is popped after a signal"
     );
@@ -19474,7 +19866,7 @@ fn spec_call_fast_path_keeps_the_reference_protocol_on_its_exits() {
         "wrong-type-argument"
     );
     assert_eq!(
-        ev.specpdl.len(),
+        ev.specpdl().len(),
         spec_base,
         "frame and binding are popped after a signal"
     );
@@ -19503,7 +19895,7 @@ fn spec_call_fast_path_keeps_the_reference_protocol_on_its_exits() {
             "{what}: the signalling call took the fast path"
         );
         assert_eq!(
-            ev.specpdl.len(),
+            ev.specpdl().len(),
             spec_base,
             "{what}: frame popped after the signal"
         );
@@ -19516,14 +19908,15 @@ fn spec_call_fast_path_keeps_the_reference_protocol_on_its_exits() {
 
     // At the depth limit (the callee would be one past it) the fast path
     // declines and the slow half signals as the interpreter would.
-    let (depth, max_depth) = (ev.depth, ev.max_depth);
+    let depth = ev.depth;
+    let max_depth = ev.max_depth_for_test();
     ev.depth = 101;
-    ev.max_depth = 101;
+    neovm_eval::test_support::authority::set_max_depth_for_test(&mut ev, 101);
     let at_limit = signal_name(ev.funcall_general_untraced(call3, vec![seven]));
     ev.depth = depth;
-    ev.max_depth = max_depth;
+    neovm_eval::test_support::authority::set_max_depth_for_test(&mut ev, max_depth);
     assert_eq!(at_limit, "error", "a call over max-lisp-eval-depth signals");
-    assert_eq!(ev.specpdl.len(), spec_base);
+    assert_eq!(ev.specpdl().len(), spec_base);
     // And the site still works afterwards.
     assert_eq!(
         signal_name(ev.funcall_general_untraced(call3, vec![seven])),
@@ -19541,13 +19934,13 @@ fn spec_call_fast_path_keeps_the_reference_protocol_on_its_exits() {
 #[test]
 fn optional_arity_callees_take_the_spec_fast_path() {
     crate::test_utils::init_test_tracing();
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
     use crate::emacs_core::bytecode::ByteCodeFunction;
     use crate::emacs_core::bytecode::opcode::Op;
     use neovm_value::value::LambdaParams;
     use std::sync::atomic::Ordering;
 
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let make = |params: LambdaParams, hot: bool, ops: Vec<Op>, constants: Vec<Value>| -> Value {
         let mut f = ByteCodeFunction::new(params);
         f.lexical = true;
@@ -19555,7 +19948,7 @@ fn optional_arity_callees_take_the_spec_fast_path() {
         f.constants = constants.into();
         f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         if hot {
-            f.jit_runtime().set_hot_for_test();
+            jit_mark_hot_for_test(&f);
         }
         let v = Value::make_bytecode(f);
         crate::emacs_core::eval::push_scratch_gc_root(v);
@@ -19585,7 +19978,7 @@ fn optional_arity_callees_take_the_spec_fast_path() {
         ],
         vec![],
     );
-    ev.obarray
+    ev.obarray_mut()
         .set_symbol_function_id(neovm_value::intern::intern("jit-opt-callee"), callee);
     let one = |name: &str| -> LambdaParams {
         let _ = name;
@@ -19618,7 +20011,7 @@ fn optional_arity_callees_take_the_spec_fast_path() {
     );
     let a = Value::string("a");
     crate::emacs_core::eval::push_scratch_gc_root(a);
-    let fast = || crate::emacs_core::jit::compile::SPEC_SHIM_FAST_COUNT.load(Ordering::Relaxed);
+    let fast = || compile::spec_shim_fast_count_for_test();
     let text = |r: Result<Value, neovm_value::error::Flow>| -> String {
         crate::emacs_core::print::print_value(&r.expect("call succeeds"))
     };
@@ -19676,7 +20069,7 @@ fn jit_bench_fib_value(sym_name: &str, tier: BenchTier) -> Value {
     ];
     f.constants = vec![Value::make_int(2), fib_sym, Value::make_int(1)].into();
     f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
-    tier.apply(f.jit_runtime());
+    tier.apply(&f);
     let v = Value::make_bytecode(f);
     // The caller holds `v` in a Rust local across evaluations that can
     // collect; the collector is precise (no stack scan), so root it here or
@@ -19720,7 +20113,7 @@ fn jit_bench_loop_value(tier: BenchTier) -> Value {
     ];
     f.constants = vec![Value::make_int(0)].into();
     f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
-    tier.apply(f.jit_runtime());
+    tier.apply(&f);
     let v = Value::make_bytecode(f);
     // The caller holds `v` in a Rust local across evaluations that can
     // collect; the collector is precise (no stack scan), so root it here or
@@ -19807,7 +20200,7 @@ fn jit_bench_big_body_value(tier: BenchTier) -> Value {
     ]
     .into();
     f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
-    tier.apply(f.jit_runtime());
+    tier.apply(&f);
     let v = Value::make_bytecode(f);
     // The caller holds `v` in a Rust local across evaluations that can
     // collect; the collector is precise (no stack scan), so root it here or
@@ -19834,7 +20227,7 @@ fn jit_bench_big_body_matcher_shape() {
     // scaled threshold is 4x that).
     unsafe { std::env::set_var("NEOVM_JIT_MAX_OPS", "0") };
     unsafe { std::env::set_var("NEOVM_JIT_SIZE_UNIT", "0") };
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let native = jit_bench_big_body_value(BenchTier::Hot);
     let cold = jit_bench_big_body_value(BenchTier::Cold);
     let n = 50_000i64;
@@ -19865,10 +20258,10 @@ enum BenchTier {
 #[cfg(feature = "jit")]
 impl BenchTier {
     #[doc(hidden)]
-    pub fn apply(self, rt: &crate::emacs_core::jit::Runtime) {
+    pub fn apply(self, f: &crate::emacs_core::bytecode::ByteCodeFunction) {
         match self {
-            BenchTier::Hot => rt.set_hot_for_test(),
-            BenchTier::Cold => rt.set_cold_for_test(),
+            BenchTier::Hot => jit_mark_hot_for_test(f),
+            BenchTier::Cold => jit_mark_cold_for_test(f),
         }
     }
 }
@@ -19909,7 +20302,7 @@ fn jit_bench_min(
 #[cfg(feature = "perf-probes")]
 fn jit_bench_fib() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let native = jit_bench_fib_value("jit-bench-fib-n", BenchTier::Hot);
     let cold = jit_bench_fib_value("jit-bench-fib-c", BenchTier::Cold);
     let ValueKind::Symbol(nid) = Value::symbol("jit-bench-fib-n").kind() else {
@@ -19934,7 +20327,7 @@ fn jit_bench_fib() {
 #[cfg(feature = "perf-probes")]
 fn jit_bench_loop() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let native = jit_bench_loop_value(BenchTier::Hot);
     let cold = jit_bench_loop_value(BenchTier::Cold);
     let n = 5_000_000i64;
@@ -19999,7 +20392,7 @@ fn jit_bench_call_bound_caller(tier: BenchTier) -> Value {
     ];
     f.constants = vec![Value::make_int(0), Value::symbol("jit-bench-cbleaf")].into();
     f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
-    tier.apply(f.jit_runtime());
+    tier.apply(&f);
     let v = Value::make_bytecode(f);
     // The caller holds `v` in a Rust local across evaluations that can
     // collect; the collector is precise (no stack scan), so root it here or
@@ -20017,7 +20410,7 @@ fn jit_bench_call_bound_loop() {
     use crate::emacs_core::bytecode::opcode::Op;
     use neovm_value::value::LambdaParams;
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     // Hot trivial callee (lambda (x) x) so the calls hit the native fast path.
     let mut leaf = ByteCodeFunction::new(LambdaParams {
         // SAFETY: test placeholder id, never resolved (peer seal N8).
@@ -20038,7 +20431,7 @@ fn jit_bench_call_bound_loop() {
         Op::Return,       // 5
     ];
     leaf.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
-    leaf.jit_runtime().set_hot_for_test();
+    jit_mark_hot_for_test(&leaf);
     let ValueKind::Symbol(cbleaf_id) = Value::symbol("jit-bench-cbleaf").kind() else {
         panic!("symbol")
     };
@@ -20046,7 +20439,7 @@ fn jit_bench_call_bound_loop() {
         .set_symbol_function_id(cbleaf_id, Value::make_bytecode(leaf));
     // Force the profitability gate OFF so the call-dominated caller actually tiers
     // (else NotProfitable keeps BOTH copies interpreted -> interp-vs-interp ~1x).
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
     let native = jit_bench_call_bound_caller(BenchTier::Hot);
     let cold = jit_bench_call_bound_caller(BenchTier::Cold);
     let n = 200_000i64;
@@ -20109,7 +20502,7 @@ fn jit_bench_builtin_bound_caller(tier: BenchTier) -> Value {
     ];
     f.constants = vec![Value::make_int(0)].into();
     f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
-    tier.apply(f.jit_runtime());
+    tier.apply(&f);
     let v = Value::make_bytecode(f);
     // The caller holds `v` in a Rust local across evaluations that can
     // collect; the collector is precise (no stack scan), so root it here or
@@ -20124,8 +20517,8 @@ fn jit_bench_builtin_bound_caller(tier: BenchTier) -> Value {
 #[cfg(feature = "perf-probes")]
 fn jit_bench_builtin_bound_loop() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
+    let mut ev = crate::test_utils::new_context();
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
     let native = jit_bench_builtin_bound_caller(BenchTier::Hot);
     let cold = jit_bench_builtin_bound_caller(BenchTier::Cold);
     let n = 200_000i64;
@@ -20163,7 +20556,7 @@ fn aot_bench_compute_loop() {
     use neovm_value::value::LambdaParams;
 
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
 
     // The SAME pure-arith countdown-accumulator loop body as `jit_bench_loop_value`
     // (Constant/StackRef/Gtr/GotoIfNil/Add/Sub1/StackSet/Goto/Return) — AOT-runnable.
@@ -20380,13 +20773,13 @@ fn jit_bench_call_heavy_fontlock_reweight() {
     // re-weight would change).
     compile::force_profit_gate_for_test(false);
     let hot = bc.clone();
-    hot.jit_runtime().set_hot_for_test();
+    jit_mark_hot_for_test(&hot);
     let hot_val = Value::make_bytecode(hot);
     // Clones SHARE tiering state (jit::Runtime); give the cold copy its own so
     // the pin does not reach the hot copy.
     let mut cold = bc.clone();
     cold.runtime = Some(crate::emacs_core::jit::Runtime::new());
-    cold.jit_runtime().set_cold_for_test();
+    jit_mark_cold_for_test(&cold);
     let cold_val = Value::make_bytecode(cold);
 
     // Parity: native+spec sweep must equal the interpreter sweep.
@@ -20399,7 +20792,7 @@ fn jit_bench_call_heavy_fontlock_reweight() {
     // — the one confound that would fake a ~1x result. (debug-assertions only,
     // which is how release+jit is built here.)
     #[cfg(debug_assertions)]
-    let fast_before = compile::SUBR_SPEC_FAST_COUNT.load(std::sync::atomic::Ordering::Relaxed);
+    let fast_before = compile::subr_spec_fast_count_for_test();
     let hot_first = ev
         .funcall_general_untraced(hot_val, vec![])
         .expect("hot scan runs");
@@ -20410,7 +20803,7 @@ fn jit_bench_call_heavy_fontlock_reweight() {
     );
     #[cfg(debug_assertions)]
     {
-        let fast_after = compile::SUBR_SPEC_FAST_COUNT.load(std::sync::atomic::Ordering::Relaxed);
+        let fast_after = compile::subr_spec_fast_count_for_test();
         assert!(
             fast_after > fast_before,
             "the Hot copy must run NATIVE with the Many-spec fast path armed \
@@ -20490,13 +20883,13 @@ fn jit_bench_spec_call_dispatch_upper_bound() {
 
     compile::force_profit_gate_for_test(false);
     let hot = bc.clone();
-    hot.jit_runtime().set_hot_for_test();
+    jit_mark_hot_for_test(&hot);
     let hot_val = Value::make_bytecode(hot);
     // Clones SHARE tiering state (jit::Runtime); give the cold copy its own so
     // the pin does not reach the hot copy.
     let mut cold = bc.clone();
     cold.runtime = Some(crate::emacs_core::jit::Runtime::new());
-    cold.jit_runtime().set_cold_for_test();
+    jit_mark_cold_for_test(&cold);
     let cold_val = Value::make_bytecode(cold);
 
     let n = 200_000i64;
@@ -20504,13 +20897,13 @@ fn jit_bench_spec_call_dispatch_upper_bound() {
     let arg = || vec![Value::make_int(n)];
     let cold_r = ev.funcall_general_untraced(cold_val, arg()).expect("cold");
     #[cfg(debug_assertions)]
-    let fast_before = compile::SUBR_SPEC_FAST_COUNT.load(std::sync::atomic::Ordering::Relaxed);
+    let fast_before = compile::subr_spec_fast_count_for_test();
     let hot_r = ev.funcall_general_untraced(hot_val, arg()).expect("hot");
     assert_eq!(cold_r.bits(), want.bits());
     assert_eq!(hot_r.bits(), want.bits(), "native+spec result == interp");
     #[cfg(debug_assertions)]
     {
-        let fast_after = compile::SUBR_SPEC_FAST_COUNT.load(std::sync::atomic::Ordering::Relaxed);
+        let fast_after = compile::subr_spec_fast_count_for_test();
         assert!(
             fast_after > fast_before,
             "Hot copy must run native+spec (fast delta={})",
@@ -20563,7 +20956,7 @@ fn aot_bench_real_algorithm() {
     use neovm_value::value::LambdaParams;
 
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
 
     // rb-collatz-steps's REAL byte-compiled ops (extracted from the byte-compiler,
     // VERIFIED zero CallBuiltin(Sym) — pure dedicated arith). (defun rb-collatz-steps
@@ -20653,7 +21046,7 @@ fn aot_bench_real_algorithm() {
     cold_f.ops = ops.clone();
     cold_f.constants = constants.clone().into();
     cold_f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
-    BenchTier::Cold.apply(cold_f.jit_runtime());
+    BenchTier::Cold.apply(&cold_f);
     let cold_val = Value::make_bytecode(cold_f);
 
     let ctx = &mut ev as *mut Context;
@@ -20787,7 +21180,7 @@ fn aot_bench_real_algorithm() {
 #[cfg(feature = "perf-probes")]
 fn vm_op_mix_loop() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let cold = jit_bench_loop_value(BenchTier::Cold);
     let n = 1_000_000i64;
     let want = Value::make_int(n * (n + 1) / 2);
@@ -21094,7 +21487,7 @@ fn jit_compile_time_profile() {
         let bc = f
             .get_bytecode_data()
             .unwrap_or_else(|| panic!("{name} must be byte-compiled (else it never tiers up)"));
-        bc.jit_runtime().set_hot_for_test();
+        jit_mark_hot_for_test(&bc);
         ev.eval_str(call).expect(call);
     }
     let snap = crate::emacs_core::jit::stats::compile_stats_snapshot();
@@ -21201,7 +21594,7 @@ fn vm_bench_call_dispatch_closure_sym_vs_val() {
     // reads the JIT gate so every arm stays on the Tier-0 interpreter (the
     // dispatch path this bench measures).
     unsafe { std::env::set_var("NEOVM_JIT", "0") };
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
 
     // Callee closure: (lambda (x) (1+ x)) — at entry the stack is [x].
     let mut callee = ByteCodeFunction::new(LambdaParams {
@@ -21301,7 +21694,7 @@ fn vm_bench_varref_localized_vs_plain() {
     crate::test_utils::init_test_tracing();
     // SAFETY: nextest per-process isolation; set before the VM reads the gate.
     unsafe { std::env::set_var("NEOVM_JIT", "0") };
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
 
     ev.eval_str("(set-buffer (get-buffer-create \"vmb\"))")
         .expect("create bench buffer");
@@ -21378,7 +21771,7 @@ fn read_var_warm(ev: &mut Context, reader: Value) -> Value {
 /// (`emacs --batch` probes, Task-4 report §5).
 #[test]
 fn blv_swap_cache_setq_updates_cached_read() {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str("(set-default 'blvt-a 1)").unwrap();
     ev.eval_str("(set-buffer (get-buffer-create \"blvt-a\"))")
         .unwrap();
@@ -21392,7 +21785,7 @@ fn blv_swap_cache_setq_updates_cached_read() {
 
 #[test]
 fn blv_swap_cache_kill_local_variable_reverts_to_default() {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str("(set-default 'blvt-b 1)").unwrap();
     ev.eval_str("(set-buffer (get-buffer-create \"blvt-b\"))")
         .unwrap();
@@ -21407,7 +21800,7 @@ fn blv_swap_cache_kill_local_variable_reverts_to_default() {
 
 #[test]
 fn blv_swap_cache_make_local_then_set_default_keeps_snapshot() {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str("(set-default 'blvt-c 1)").unwrap();
     ev.eval_str("(set-buffer (get-buffer-create \"blvt-c\"))")
         .unwrap();
@@ -21427,7 +21820,7 @@ fn blv_swap_cache_make_local_then_set_default_keeps_snapshot() {
 
 #[test]
 fn blv_swap_cache_kill_all_local_variables_reverts() {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str("(set-default 'blvt-d 1)").unwrap();
     ev.eval_str("(set-buffer (get-buffer-create \"blvt-d\"))")
         .unwrap();
@@ -21441,7 +21834,7 @@ fn blv_swap_cache_kill_all_local_variables_reverts() {
 
 #[test]
 fn blv_swap_cache_buffer_switch_swaps_values() {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str("(set-default 'blvt-e 1)").unwrap();
     ev.eval_str("(set-buffer (get-buffer-create \"blvt-e1\"))")
         .unwrap();
@@ -21462,7 +21855,7 @@ fn blv_swap_cache_buffer_switch_swaps_values() {
 
 #[test]
 fn blv_swap_cache_let_binding_shadows_and_restores() {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str("(set-default 'blvt-f 1)").unwrap();
     ev.eval_str("(set-buffer (get-buffer-create \"blvt-f\"))")
         .unwrap();
@@ -21472,7 +21865,7 @@ fn blv_swap_cache_let_binding_shadows_and_restores() {
     let ValueKind::Symbol(reader_sym) = Value::symbol("blvt-f-reader").kind() else {
         panic!()
     };
-    ev.obarray.set_symbol_function_id(reader_sym, reader);
+    ev.obarray_mut().set_symbol_function_id(reader_sym, reader);
     assert_eq!(read_var_warm(&mut ev, reader), Value::make_int(5));
     // GNU pin: inside the let the bytecode read sees 7; after, 5 again.
     assert_eq!(
@@ -21488,7 +21881,7 @@ fn blv_swap_cache_let_binding_shadows_and_restores() {
 /// exactly the paths the structural-epoch bump exists for.
 #[test]
 fn blv_swap_cache_raw_buffer_helper_edits_are_seen() {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str("(set-default 'blvt-g 1)").unwrap();
     ev.eval_str("(set-buffer (get-buffer-create \"blvt-g\"))")
         .unwrap();
@@ -21501,14 +21894,16 @@ fn blv_swap_cache_raw_buffer_helper_edits_are_seen() {
         panic!()
     };
     // Raw helper PREPENDS a binding behind the cache's back.
-    let buf_id = ev.buffers.current_buffer_id().unwrap();
-    ev.buffers
+    let buf_id = ev.edit.buffers.current_buffer_id().unwrap();
+    ev.edit
+        .buffers
         .get_mut(buf_id)
         .unwrap()
         .set_buffer_local_by_sym_id(sym, Value::make_int(8));
     assert_eq!(read_var_warm(&mut ev, reader), Value::make_int(8));
     // Raw helper REMOVES it again behind the cache's back.
-    ev.buffers
+    ev.edit
+        .buffers
         .get_mut(buf_id)
         .unwrap()
         .set_buffer_local_void_by_sym_id(sym);
@@ -21553,7 +21948,7 @@ fn jit_bench_cbsym_value(tier: BenchTier) -> Value {
     ]
     .into();
     f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
-    tier.apply(f.jit_runtime());
+    tier.apply(&f);
     let v = Value::make_bytecode(f);
     // The caller holds `v` in a Rust local across evaluations that can
     // collect; the collector is precise (no stack scan), so root it here or
@@ -21568,7 +21963,7 @@ fn jit_bench_cbsym_value(tier: BenchTier) -> Value {
 #[cfg(feature = "perf-probes")]
 fn jit_bench_cbsym() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let native = jit_bench_cbsym_value(BenchTier::Hot);
     let cold = jit_bench_cbsym_value(BenchTier::Cold);
     let n = 2_000_000i64;
@@ -21619,7 +22014,7 @@ fn jit_bench_cbsym_goto_value(tier: BenchTier) -> Value {
     ];
     f.constants = vec![Value::make_int(0), Value::make_int(1)].into();
     f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
-    tier.apply(f.jit_runtime());
+    tier.apply(&f);
     let v = Value::make_bytecode(f);
     // The caller holds `v` in a Rust local across evaluations that can
     // collect; the collector is precise (no stack scan), so root it here or
@@ -21634,7 +22029,7 @@ fn jit_bench_cbsym_goto_value(tier: BenchTier) -> Value {
 #[cfg(feature = "perf-probes")]
 fn jit_bench_cbsym_goto() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str("(insert \"hello world\")")
         .expect("buffer content");
     let native = jit_bench_cbsym_goto_value(BenchTier::Hot);
@@ -21689,7 +22084,7 @@ fn jit_bench_subr_value(tier: BenchTier) -> Value {
     ]
     .into();
     f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
-    tier.apply(f.jit_runtime());
+    tier.apply(&f);
     let v = Value::make_bytecode(f);
     // The caller holds `v` in a Rust local across evaluations that can
     // collect; the collector is precise (no stack scan), so root it here or
@@ -21704,7 +22099,7 @@ fn jit_bench_subr_value(tier: BenchTier) -> Value {
 #[cfg(feature = "perf-probes")]
 fn jit_bench_subr() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let native = jit_bench_subr_value(BenchTier::Hot);
     let cold = jit_bench_subr_value(BenchTier::Cold);
     let n = 2_000_000i64;
@@ -21770,7 +22165,7 @@ fn jit_bench_many_value(tier: BenchTier) -> Value {
     ]
     .into();
     f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
-    tier.apply(f.jit_runtime());
+    tier.apply(&f);
     let v = Value::make_bytecode(f);
     // The caller holds `v` in a Rust local across evaluations that can
     // collect; the collector is precise (no stack scan), so root it here or
@@ -21789,8 +22184,8 @@ fn jit_bench_many() {
     // so force the gate off to tier the Hot copy. This is the exact shape COMMIT
     // B weighs: does forced-tier + Many-spec beat the interpreter? Cold stays
     // interpreted (the tier-0 baseline production runs without the re-weight).
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str("(insert \"(defun f (a b) (+ a b))\")")
         .expect("buffer content for looking-at");
     ev.eval_str("(goto-char (point-min))")
@@ -21853,7 +22248,7 @@ fn jit_bench_pred_value(tier: BenchTier) -> Value {
     ]
     .into();
     f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
-    tier.apply(f.jit_runtime());
+    tier.apply(&f);
     let v = Value::make_bytecode(f);
     // The caller holds `v` in a Rust local across evaluations that can
     // collect; the collector is precise (no stack scan), so root it here or
@@ -21868,7 +22263,7 @@ fn jit_bench_pred_value(tier: BenchTier) -> Value {
 #[cfg(feature = "perf-probes")]
 fn jit_bench_pred() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let native = jit_bench_pred_value(BenchTier::Hot);
     let cold = jit_bench_pred_value(BenchTier::Cold);
     let n = 2_000_000i64;
@@ -21919,7 +22314,7 @@ fn jit_bench_cons_value(tier: BenchTier) -> Value {
     ];
     f.constants = vec![Value::make_int(0)].into();
     f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
-    tier.apply(f.jit_runtime());
+    tier.apply(&f);
     let v = Value::make_bytecode(f);
     // The caller holds `v` in a Rust local across evaluations that can
     // collect; the collector is precise (no stack scan), so root it here or
@@ -21934,7 +22329,7 @@ fn jit_bench_cons_value(tier: BenchTier) -> Value {
 #[cfg(feature = "perf-probes")]
 fn jit_bench_cons() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let native = jit_bench_cons_value(BenchTier::Hot);
     let cold = jit_bench_cons_value(BenchTier::Cold);
     // Root BOTH function objects via obarray for the whole test. This is a
@@ -21973,12 +22368,12 @@ fn jit_bench_cons() {
 #[test]
 fn direct_context_apply_accepts_uninterned_symbol_function_designators() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let fun = intern_uninterned("vm-apply-uninterned");
     let callable = ev
         .eval_str("(lambda (x) (+ x 1))")
         .expect("lambda should evaluate");
-    ev.obarray.set_symbol_function_id(fun, callable);
+    ev.obarray_mut().set_symbol_function_id(fun, callable);
 
     let result = ev
         .apply(Value::from_sym_id(fun), vec![Value::fixnum(41)])
@@ -21990,13 +22385,13 @@ fn direct_context_apply_accepts_uninterned_symbol_function_designators() {
 #[test]
 fn macro_expansion_scope_uses_lexenv_dynvars() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_lexical_binding(true);
     ev.gc_stress = true;
     ev.bind_lexical_value_rooted(intern("macro-scope-a"), Value::fixnum(1));
     ev.bind_lexical_value_rooted(intern("macro-scope-b"), Value::fixnum(2));
     ev.lexenv = Value::cons(Value::from_sym_id(intern("macro-scope-special")), ev.lexenv);
-    let specpdl_count = ev.specpdl.len();
+    let specpdl_count = ev.specpdl().len();
     let dyn_sym = intern("macro-scope-dyn");
     ev.try_specbind(dyn_sym, Value::fixnum(9))
         .expect("macro scope dynamic binding");
@@ -22007,14 +22402,14 @@ fn macro_expansion_scope_uses_lexenv_dynvars() {
 
     // lexical-binding is specbound as the last entry, with the GcRoot
     // for macroexp--dynvars at the penultimate position.
-    assert!(matches!(ev.specpdl.last(), Some(SpecBinding::Let { .. })));
+    assert!(matches!(ev.specpdl().last(), Some(SpecBinding::Let { .. })));
     assert!(matches!(
-        ev.specpdl.get(specpdl_count + 1),
+        ev.specpdl().get(specpdl_count + 1),
         Some(SpecBinding::GcRoot { .. })
     ));
 
     let dynvars = ev
-        .obarray
+        .obarray()
         .symbol_value_id_copied(macroexp_dynvars_symbol())
         .expect("macroexp--dynvars should be bound inside macro expansion scope");
     let dynvars = list_to_vec(&dynvars).expect("macroexp--dynvars should stay a proper list");
@@ -22040,22 +22435,22 @@ fn macro_expansion_scope_uses_lexenv_dynvars() {
         .expect("macro expansion scope cleanup");
 
     assert!(
-        ev.specpdl.len() == specpdl_count + 1,
+        ev.specpdl().len() == specpdl_count + 1,
         "macro expansion scope should release only its temporary specpdl roots"
     );
     ev.unbind_to(specpdl_count);
-    assert!(ev.specpdl.is_empty());
+    assert!(ev.specpdl().is_empty());
 }
 
 #[test]
 fn gc_collect_frees_unreachable() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     // Create orphaned conses that aren't bound to any variable.
     let _ = ev.eval_str("(progn (cons 1 2) (cons 3 4) (cons 5 6) nil)");
-    let before = ev.tagged_heap.allocated_count();
+    let before = ev.tagged_heap().allocated_count();
     ev.gc_collect();
-    let after = ev.tagged_heap.allocated_count();
+    let after = ev.tagged_heap().allocated_count();
     // The orphaned conses should have been freed.
     assert!(
         after < before,
@@ -22066,7 +22461,7 @@ fn gc_collect_frees_unreachable() {
 #[test]
 fn gc_collect_handles_cycles() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     // Create a circular list: (setq x (cons 1 nil)) (setcdr x x)
     let _ = ev.eval_str("(progn (setq x (cons 1 nil)) (setcdr x x) t)");
     // GC should handle cycles without infinite loop.
@@ -22077,9 +22472,9 @@ fn gc_collect_handles_cycles() {
 
     // Now remove the root and collect — the cycle should be freed.
     ev.eval_str_each("(setq x nil)");
-    let before = ev.tagged_heap.allocated_count();
+    let before = ev.tagged_heap().allocated_count();
     ev.gc_collect();
-    let after = ev.tagged_heap.allocated_count();
+    let after = ev.tagged_heap().allocated_count();
     assert!(
         after < before,
         "cyclic cons not freed: before={before}, after={after}"
@@ -22089,12 +22484,13 @@ fn gc_collect_handles_cycles() {
 #[test]
 fn gc_safe_point_collects_when_threshold_reached() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    ev.tagged_heap.set_gc_threshold(5);
+    let mut ev = crate::test_utils::new_context();
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(5);
     // Allocate enough conses to exceed threshold.
     ev.eval_str_each("(progn (cons 1 2) (cons 3 4) (cons 5 6) (cons 7 8) (cons 9 10) nil)");
     assert!(
-        ev.gc_count > 0 || ev.gc_pending || ev.tagged_heap.should_collect(),
+        ev.gc_count > 0 || ev.gc_pending || ev.tagged_heap().should_collect(),
         "incremental GC should be pending, active, or already finished"
     );
     // With incremental GC, safe point may need multiple calls to finish.
@@ -22107,15 +22503,15 @@ fn gc_safe_point_collects_when_threshold_reached() {
 #[test]
 fn gc_threshold_adapts_after_collection() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     // Create 3 conses that are reachable via variables.
     ev.eval_str_each("(progn (setq a (cons 1 2)) (setq b (cons 3 4)) (setq c (cons 5 6)))");
     ev.gc_collect();
     // GNU uses a byte threshold driven by `gc-cons-threshold` and
     // `gc-cons-percentage`, not a raw object-count heuristic.
-    let alive = ev.tagged_heap.allocated_count();
+    let alive = ev.tagged_heap().allocated_count();
     assert!(alive >= 3);
-    let threshold = ev.tagged_heap.gc_threshold();
+    let threshold = ev.tagged_heap().gc_threshold();
     assert!(
         threshold >= 800_000,
         "threshold should track GNU's default byte budget, got {threshold}"
@@ -22125,7 +22521,7 @@ fn gc_threshold_adapts_after_collection() {
 #[test]
 fn gc_threshold_grows_with_live_heap() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     // Retain ~200k conses (~3.2 MB of cons cells alone) so the live heap far
     // exceeds the default 800 KB byte budget, then collect so `live_bytes` is
     // recomputed exactly at the sweep and the threshold re-synced from it.
@@ -22133,23 +22529,23 @@ fn gc_threshold_grows_with_live_heap() {
     ev.gc_collect();
     let retained_bytes = 200_000 * 2 * std::mem::size_of::<usize>();
     assert!(
-        ev.tagged_heap.live_bytes() >= retained_bytes,
+        ev.tagged_heap().live_bytes() >= retained_bytes,
         "live heap should include the retained structure, got {}",
-        ev.tagged_heap.live_bytes()
+        ev.tagged_heap().live_bytes()
     );
     // The live-proportional trigger requires allocating at least half the live
     // heap before the next cycle (the elisp defaults stay floors below it).
     assert!(
-        ev.tagged_heap.gc_threshold() >= retained_bytes / 2,
+        ev.tagged_heap().gc_threshold() >= retained_bytes / 2,
         "threshold should grow with the live heap, got {}",
-        ev.tagged_heap.gc_threshold()
+        ev.tagged_heap().gc_threshold()
     );
 }
 
 #[test]
 fn gc_startup_ceiling_bounds_explicit_huge_cons_threshold() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str_each(
         "(progn
            (setq neomacs--startup-gc-ceiling-active t)
@@ -22157,7 +22553,7 @@ fn gc_startup_ceiling_bounds_explicit_huge_cons_threshold() {
            (setq gc-cons-threshold 268435456))",
     );
     assert_eq!(
-        ev.tagged_heap.gc_threshold(),
+        ev.tagged_heap().gc_threshold(),
         GC_STARTUP_THRESHOLD_CEILING_BYTES
     );
 }
@@ -22165,7 +22561,7 @@ fn gc_startup_ceiling_bounds_explicit_huge_cons_threshold() {
 #[test]
 fn gc_explicit_huge_cons_threshold_stays_the_floor_after_startup() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     // Once startup is complete, an explicit `gc-cons-threshold` far above the
     // live-proportional term wins exactly. Clearing the host's startup flag
     // releases the ceiling; no later threshold mutation or collection is
@@ -22177,7 +22573,7 @@ fn gc_explicit_huge_cons_threshold_stays_the_floor_after_startup() {
            (setq gc-cons-threshold 268435456)
            (setq neomacs--startup-gc-ceiling-active nil))",
     );
-    assert_eq!(ev.tagged_heap.gc_threshold(), 268_435_456);
+    assert_eq!(ev.tagged_heap().gc_threshold(), 268_435_456);
 }
 
 #[test]
@@ -22189,8 +22585,8 @@ fn gc_startup_ceiling_is_released_by_the_first_command() {
     // a command runs. This needs the real preloaded `startup.el` definition and
     // the real command loop, so it runs on a bootstrap evaluator and drives a
     // key through `execute-kbd-macro` rather than calling the hook by hand.
-    let mut ev =
-        crate::emacs_core::load::create_bootstrap_evaluator_cached().expect("bootstrap evaluator");
+    let mut ev = crate::emacs_core::load_boot::create_bootstrap_evaluator_cached_with_features(&[])
+        .expect("bootstrap evaluator");
     assert_eq!(
         format_eval_result(&ev.eval_str("(fboundp 'neomacs--release-startup-gc-ceiling)")),
         "OK t",
@@ -22204,7 +22600,7 @@ fn gc_startup_ceiling_is_released_by_the_first_command() {
          (add-hook 'pre-command-hook #'neomacs--release-startup-gc-ceiling)",
     );
     assert_eq!(
-        ev.tagged_heap.gc_threshold(),
+        ev.tagged_heap().gc_threshold(),
         GC_STARTUP_THRESHOLD_CEILING_BYTES,
         "the ceiling should still bound the interval before any command runs"
     );
@@ -22216,7 +22612,7 @@ fn gc_startup_ceiling_is_released_by_the_first_command() {
         "the first command should release the ceiling"
     );
     assert_eq!(
-        ev.tagged_heap.gc_threshold(),
+        ev.tagged_heap().gc_threshold(),
         268_435_456,
         "and hand the allocation interval back to the user's setting"
     );
@@ -22225,23 +22621,23 @@ fn gc_startup_ceiling_is_released_by_the_first_command() {
 #[test]
 fn gc_runtime_setting_mutation_reloads_threshold_immediately() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
 
     ev.eval_str_each(
         "(progn
            (setq gc-cons-percentage nil)
            (setq gc-cons-threshold 1234567))",
     );
-    assert_eq!(ev.tagged_heap.gc_threshold(), 1_234_567);
+    assert_eq!(ev.tagged_heap().gc_threshold(), 1_234_567);
 
     ev.eval_str_each("(setq gc-cons-threshold 2345678)");
-    assert_eq!(ev.tagged_heap.gc_threshold(), 2_345_678);
+    assert_eq!(ev.tagged_heap().gc_threshold(), 2_345_678);
 }
 
 #[test]
 fn gc_collect_uses_exact_root_tracing() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
 
     ev.eval_str_each("(setq mode-root (cons 7 8))");
     ev.gc_collect();
@@ -22253,8 +22649,9 @@ fn gc_collect_uses_exact_root_tracing() {
 #[test]
 fn gc_safe_point_uses_exact_root_tracing() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    ev.tagged_heap.set_gc_threshold(5);
+    let mut ev = crate::test_utils::new_context();
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(5);
 
     ev.eval_str_each(
         "(progn
@@ -22277,18 +22674,19 @@ fn gc_safe_point_uses_exact_root_tracing() {
 #[test]
 fn gc_safe_point_runs_concurrent_cycles_without_a_dump() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     // A rooted structure that must survive every cycle.
     ev.eval_str_each("(setq gc-concurrent-root (cons 7 8))");
     // Small threshold so safe points trigger collections immediately.
-    ev.tagged_heap.set_gc_threshold(1024);
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1024);
     // Bootstrap: the first completed safe-point collection is stop-the-world.
     while ev.gc_count == 0 {
         ev.eval_str_each("(make-list 64 0)");
         ev.gc_safe_point();
     }
     assert!(
-        ev.tagged_heap.should_run_concurrent(),
+        ev.tagged_heap().should_run_concurrent(),
         "a dump-less heap must enable the concurrent collector after bootstrap"
     );
 
@@ -22302,7 +22700,7 @@ fn gc_safe_point_runs_concurrent_cycles_without_a_dump() {
         ev.eval_str_each("(make-list 64 0)");
         ev.gc_safe_point();
         // Opportunistic: a mark observed in flight between safe points.
-        saw_mark_overlap |= ev.tagged_heap.concurrent_mark_running();
+        saw_mark_overlap |= ev.tagged_heap().concurrent_mark_running();
         if ev.gc_count > bootstrap_count {
             break;
         }
@@ -22326,9 +22724,10 @@ fn gc_safe_point_runs_concurrent_cycles_without_a_dump() {
 #[test]
 fn gc_concurrent_handshake_stats_populate_per_group() {
     crate::test_utils::init_test_tracing();
-    let mut ev = crate::test_utils::with_legacy_gc(Context::new);
+    let mut ev = crate::test_utils::with_legacy_gc(crate::test_utils::new_context);
     ev.eval_str_each("(setq gc-handshake-root (cons 1 2))");
-    ev.tagged_heap.set_gc_threshold(1024);
+    // SAFETY: test-only owner-thread heap policy setup through the non-swappable mutable accessor contract; the view is used in place and never swapped or moved across Worlds.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1024);
     // Bootstrap STW cycle first; then churn until a concurrent cycle
     // completes (same driver as `gc_safe_point_runs_concurrent_cycles_
     // without_a_dump`).
@@ -22336,7 +22735,7 @@ fn gc_concurrent_handshake_stats_populate_per_group() {
         ev.eval_str_each("(make-list 64 0)");
         ev.gc_safe_point();
     }
-    assert!(ev.tagged_heap.should_run_concurrent());
+    assert!(ev.tagged_heap().should_run_concurrent());
     let bootstrap_count = ev.gc_count;
     for _ in 0..50_000 {
         ev.eval_str_each("(make-list 64 0)");
@@ -22350,7 +22749,7 @@ fn gc_concurrent_handshake_stats_populate_per_group() {
         "no concurrent cycle completed"
     );
 
-    let hs = ev.tagged_heap.handshake_stats();
+    let hs = ev.tagged_heap().handshake_stats();
     assert!(hs.start_count >= 1, "start handshake never recorded");
     assert!(hs.term_count >= 1, "termination handshake never recorded");
     assert!(
@@ -22394,11 +22793,12 @@ fn gc_concurrent_handshake_stats_populate_per_group() {
 #[test]
 fn gc_safe_point_exact_inside_extra_root_scope_retains_explicit_slice() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    ev.tagged_heap.set_gc_threshold(2);
+    let mut ev = crate::test_utils::new_context();
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(2);
     let rooted = Value::cons(Value::fixnum(21), Value::fixnum(22));
     let _unreachable = Value::cons(Value::fixnum(1), Value::fixnum(2));
-    let before = ev.tagged_heap.allocated_count();
+    let before = ev.tagged_heap().allocated_count();
 
     while ev.gc_count == 0 {
         let scope = ev.save_specpdl_roots();
@@ -22407,7 +22807,7 @@ fn gc_safe_point_exact_inside_extra_root_scope_retains_explicit_slice() {
         ev.restore_specpdl_roots(scope);
     }
 
-    let after = ev.tagged_heap.allocated_count();
+    let after = ev.tagged_heap().allocated_count();
     assert_eq!(rooted.cons_car(), Value::fixnum(21));
     assert!(
         after < before,
@@ -22418,17 +22818,18 @@ fn gc_safe_point_exact_inside_extra_root_scope_retains_explicit_slice() {
 #[test]
 fn gc_safe_point_exact_frees_stack_only_values() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    ev.tagged_heap.set_gc_threshold(1);
+    let mut ev = crate::test_utils::new_context();
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1);
 
     ev.gc_collect_exact();
-    let baseline = ev.tagged_heap.allocated_count();
-    let baseline_cons = ev.tagged_heap.cons_live_count_exact();
+    let baseline = ev.tagged_heap().allocated_count();
+    let baseline_cons = ev.tagged_heap().cons_live_count_exact();
     let gc_count_before = ev.gc_count;
     let stack_only = Value::cons(Value::fixnum(41), Value::fixnum(42));
     let keep_visible = [stack_only];
     std::hint::black_box(&keep_visible);
-    let after_alloc = ev.tagged_heap.allocated_count();
+    let after_alloc = ev.tagged_heap().allocated_count();
     assert_eq!(
         after_alloc,
         baseline + 1,
@@ -22442,7 +22843,7 @@ fn gc_safe_point_exact_frees_stack_only_values() {
     // Completion allocates a new gc-elapsed float. A minor can retain the
     // previous old float, so all-class population need not return to baseline.
     // Only the stack-only cons is the subject of this precise-rooting test.
-    let after_gc_cons = ev.tagged_heap.cons_live_count_exact();
+    let after_gc_cons = ev.tagged_heap().cons_live_count_exact();
     assert_eq!(
         after_gc_cons, baseline_cons,
         "exact GC safe points must ignore the configured conservative stack scan and free the stack-only cons: baseline_cons={baseline_cons}, after_gc_cons={after_gc_cons}"
@@ -22470,8 +22871,9 @@ fn gc_safe_point_exact_frees_stack_only_values() {
 #[test]
 fn a_subr_argument_string_survives_a_collection_inside_the_subr() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    ev.tagged_heap.set_gc_threshold(1);
+    let mut ev = crate::test_utils::new_context();
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1);
     ev.gc_collect_exact();
 
     // A fresh string reachable from nothing but the argument list — exactly
@@ -22479,7 +22881,7 @@ fn a_subr_argument_string_survives_a_collection_inside_the_subr() {
     let arg = Value::heap_string(neovm_value::heap_types::LispString::from_utf8(
         "subr-argument",
     ));
-    let bt_count = ev.specpdl.len();
+    let bt_count = ev.specpdl().len();
     ev.push_backtrace_frame(Value::symbol("neovm-probe-subr"), &[arg]);
 
     // The subr body borrows its argument...
@@ -22515,8 +22917,9 @@ fn a_subr_argument_string_survives_a_collection_inside_the_subr() {
 #[test]
 fn a_string_with_no_backtrace_frame_is_reclaimed_at_the_same_safepoint() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    ev.tagged_heap.set_gc_threshold(1);
+    let mut ev = crate::test_utils::new_context();
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1);
     ev.gc_collect_exact();
 
     // Keep one rooted string so the arena page survives and the doomed
@@ -22551,8 +22954,9 @@ fn a_string_with_no_backtrace_frame_is_reclaimed_at_the_same_safepoint() {
 #[should_panic(expected = "use-after-free")]
 fn borrowing_a_reclaimed_string_aborts_at_the_scene() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    ev.tagged_heap.set_gc_threshold(1);
+    let mut ev = crate::test_utils::new_context();
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1);
     ev.gc_collect_exact();
 
     let anchor = Value::heap_string(neovm_value::heap_types::LispString::from_utf8("anchor"));
@@ -22575,7 +22979,7 @@ fn borrowing_a_reclaimed_string_aborts_at_the_scene() {
 #[test]
 fn dropping_the_evaluator_uninstalls_its_thread_local_heap() {
     crate::test_utils::init_test_tracing();
-    let ev = Context::new();
+    let ev = crate::test_utils::new_context();
     assert!(
         neovm_value::tagged::gc::tagged_heap_is_installed(),
         "constructing an evaluator installs its heap for allocation"
@@ -22592,8 +22996,8 @@ fn dropping_the_evaluator_uninstalls_its_thread_local_heap() {
 #[test]
 fn dropping_a_displaced_evaluator_leaves_the_live_installation() {
     crate::test_utils::init_test_tracing();
-    let first = Context::new();
-    let _second = Context::new();
+    let first = crate::test_utils::new_context();
+    let _second = crate::test_utils::new_context();
     drop(first);
     assert!(
         neovm_value::tagged::gc::tagged_heap_is_installed(),
@@ -22607,12 +23011,12 @@ fn dropping_a_displaced_evaluator_leaves_the_live_installation() {
 #[test]
 fn gc_stress_collects_after_allocation_not_at_unchanged_safe_points() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.gc_stress = true;
     ev.gc_collect_exact();
     ev.gc_count = 0;
 
-    assert_eq!(ev.tagged_heap.bytes_since_gc(), 0);
+    assert_eq!(ev.tagged_heap().bytes_since_gc(), 0);
     ev.gc_safe_point_exact();
     assert_eq!(
         ev.gc_count, 0,
@@ -22620,7 +23024,7 @@ fn gc_stress_collects_after_allocation_not_at_unchanged_safe_points() {
     );
 
     let rooted = Value::cons(Value::fixnum(21), Value::fixnum(22));
-    assert!(ev.tagged_heap.bytes_since_gc() > 0);
+    assert!(ev.tagged_heap().bytes_since_gc() > 0);
     let roots = ev.save_specpdl_roots();
     ev.push_specpdl_root(rooted);
     ev.gc_safe_point_exact();
@@ -22638,8 +23042,9 @@ fn gc_stress_collects_after_allocation_not_at_unchanged_safe_points() {
 #[test]
 fn eval_sub_exact_gc_retains_cons_form() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    ev.tagged_heap.set_gc_threshold(1);
+    let mut ev = crate::test_utils::new_context();
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1);
 
     let form = Value::list(vec![
         Value::symbol("car"),
@@ -22659,8 +23064,9 @@ fn eval_sub_exact_gc_retains_cons_form() {
 #[test]
 fn apply_exact_gc_retains_rooted_args() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    ev.tagged_heap.set_gc_threshold(1);
+    let mut ev = crate::test_utils::new_context();
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1);
 
     let arg = Value::cons(Value::fixnum(12), Value::fixnum(13));
     let result = ev
@@ -22689,7 +23095,7 @@ fn gc_collect_runs_post_gc_hook() {
 #[test]
 fn gc_safe_point_runs_post_gc_hook_when_incremental_collection_finishes() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str_each(
         "(progn
            (setq gc-hook-log nil)
@@ -22697,7 +23103,8 @@ fn gc_safe_point_runs_post_gc_hook_when_incremental_collection_finishes() {
                  (list (lambda ()
                          (setq gc-hook-log (cons 'ran gc-hook-log))))))",
     );
-    ev.tagged_heap.set_gc_threshold(5);
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(5);
     ev.eval_str_each("(progn (cons 1 2) (cons 3 4) (cons 5 6) (cons 7 8) (cons 9 10) nil)");
     while ev.gc_count == 0 {
         ev.gc_safe_point();
@@ -22715,7 +23122,7 @@ fn gc_safe_point_runs_post_gc_hook_when_incremental_collection_finishes() {
 // -----------------------------------------------------------------------
 
 fn eval_stress(src: &str) -> Vec<String> {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let forms = crate::emacs_core::value_reader::read_all(
         src,
         VariableView::canonical(CanonicalAccess::TEST, &test_ob()),
@@ -22723,7 +23130,8 @@ fn eval_stress(src: &str) -> Vec<String> {
     .expect("parse");
     ev.gc_stress = true;
     // Force very low threshold so gc_safe_point triggers on every call
-    ev.tagged_heap.set_gc_threshold(1);
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1);
     // Root all parsed forms before the eval loop. The Vec<Value>
     // lives on the malloc heap and is invisible to conservative
     // stack scanning; without rooting, the forced low-threshold
@@ -22808,10 +23216,11 @@ fn gc_stress_closures() {
 #[test]
 fn gc_stress_lambda_argument_closure_survives_binding_installation() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_lexical_binding(true);
     ev.gc_stress = true;
-    ev.tagged_heap.set_gc_threshold(1);
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1);
     let result = format_eval_result(&ev.eval_str(
         r#"(let ((payload (list 1 2 3)))
              ((lambda (orig)
@@ -22824,10 +23233,11 @@ fn gc_stress_lambda_argument_closure_survives_binding_installation() {
 #[test]
 fn gc_stress_direct_lambda_head_roots_fresh_closure_during_arg_eval() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_lexical_binding(true);
     ev.gc_stress = true;
-    ev.tagged_heap.set_gc_threshold(1);
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1);
     let result = format_eval_result(&ev.eval_str(
         r#"((lambda (f value)
               (funcall f value))
@@ -22842,10 +23252,11 @@ fn gc_stress_direct_lambda_head_roots_fresh_closure_during_arg_eval() {
 #[test]
 fn gc_stress_builtin_apply_roots_closure_function_argument() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_lexical_binding(true);
     ev.gc_stress = true;
-    ev.tagged_heap.set_gc_threshold(1);
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1);
     let result = format_eval_result(&ev.eval_str(
         r#"(let ((payload (list 7 8 9)))
              (let ((f (lambda () payload)))
@@ -22857,9 +23268,10 @@ fn gc_stress_builtin_apply_roots_closure_function_argument() {
 #[test]
 fn gc_stress_macro_expansion_result_stays_rooted_for_eval() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.gc_stress = true;
-    ev.tagged_heap.set_gc_threshold(1);
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1);
     let result = format_eval_result(&ev.eval_str(
         r#"(progn
              (defalias 'vm-gc-expand-put
@@ -22875,10 +23287,11 @@ fn gc_stress_macro_expansion_result_stays_rooted_for_eval() {
 #[test]
 fn gc_stress_closure_call_restores_outer_lexenv_after_exact_gc() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_lexical_binding(true);
     ev.gc_stress = true;
-    ev.tagged_heap.set_gc_threshold(1);
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1);
     let result = format_eval_result(&ev.eval_str(
         r#"(let ((warnings nil))
              (let ((warn (lambda (form)
@@ -22892,10 +23305,11 @@ fn gc_stress_closure_call_restores_outer_lexenv_after_exact_gc() {
 #[test]
 fn gc_stress_let_star_lexical_binding_roots_evaluated_values() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_lexical_binding(true);
     ev.gc_stress = true;
-    ev.tagged_heap.set_gc_threshold(1);
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1);
     let result = format_eval_result(&ev.eval_str(
         r#"(let ((build (lambda () (list 4 5 6))))
              (let* ((x (funcall build))
@@ -22915,11 +23329,12 @@ fn gc_stress_prog1_roots_first_value() {
 #[test]
 fn gc_stress_apply_env_expander_closure_capturing_uninterned_symbol() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_lexical_binding(true);
     ev.lexenv = Value::list(vec![Value::T]);
     ev.gc_stress = true;
-    ev.tagged_heap.set_gc_threshold(1);
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1);
     let result = format_eval_result(&ev.eval_str(
         r#"
         (let ((newenv nil)
@@ -22945,7 +23360,7 @@ fn gc_stress_apply_env_expander_closure_capturing_uninterned_symbol() {
 #[test]
 fn interpreted_closure_while_can_advance_lexical_loop_variable() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_lexical_binding(true);
     let result = format_eval_result(&ev.eval_str(
         r#"
@@ -22966,7 +23381,7 @@ fn interpreted_closure_while_can_advance_lexical_loop_variable() {
 #[test]
 fn interpreted_closure_trim_cache_survives_exact_gc() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_lexical_binding(true);
 
     ev.eval_str(
@@ -23001,7 +23416,7 @@ fn interpreted_closure_trim_cache_survives_exact_gc() {
 #[test]
 fn raw_quoted_lambda_uses_nil_lexenv_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_lexical_binding(true);
 
     let rendered = format_eval_result(&ev.eval_str(
@@ -23015,10 +23430,11 @@ fn raw_quoted_lambda_uses_nil_lexenv_like_gnu() {
 #[test]
 fn gc_stress_aref_on_closure_survives_closure_vector_conversion() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_lexical_binding(true);
     ev.gc_stress = true;
-    ev.tagged_heap.set_gc_threshold(1);
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1);
     let result = format_eval_result(&ev.eval_str(
         r#"(let ((payload (list 1 2 3)))
              (let ((closure (lambda () payload)))
@@ -23030,10 +23446,11 @@ fn gc_stress_aref_on_closure_survives_closure_vector_conversion() {
 #[test]
 fn gc_stress_cdr_rejects_closure_without_losing_capture() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_lexical_binding(true);
     ev.gc_stress = true;
-    ev.tagged_heap.set_gc_threshold(1);
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    unsafe { ev.tagged_heap_mut() }.set_gc_threshold(1);
     let result = format_eval_result(&ev.eval_str(
         r#"(let ((payload (list 1 2 3)))
              (let ((closure (lambda () payload)))
@@ -23165,7 +23582,7 @@ fn lexical_closure_mutation_visible() {
     crate::test_utils::init_test_tracing();
     // Closures must share the same lexical frame — mutations through
     // one closure must be visible to the outer scope.
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_lexical_binding(true);
     let result = format_eval_result(&ev.eval_str(
         r#"(let ((x 0))
@@ -23181,7 +23598,7 @@ fn lexical_closure_mutation_visible() {
 fn lexical_closure_shared_state() {
     crate::test_utils::init_test_tracing();
     // Two closures sharing the same binding (inc + get).
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_lexical_binding(true);
     let result = format_eval_result(&ev.eval_str(
         r#"(let ((x 0))
@@ -23199,7 +23616,7 @@ fn lexical_closure_shared_state() {
 fn lexical_closure_make_counter() {
     crate::test_utils::init_test_tracing();
     // Classic make-counter pattern with independent counters.
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_lexical_binding(true);
     let result = format_eval_result(&ev.eval_str(
         r#"(progn
@@ -23223,7 +23640,7 @@ fn lexical_closure_make_counter() {
 fn lexical_closure_outer_mutation_visible() {
     crate::test_utils::init_test_tracing();
     // Outer setq visible to closure.
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_lexical_binding(true);
     let result = format_eval_result(&ev.eval_str(
         r#"(let ((x 10))
@@ -23307,7 +23724,7 @@ fn closure_inside_real_backquote_with_fn_call_captures_outer_param() {
 #[test]
 fn real_backquote_computed_symbols_match_runtime_macro_semantics() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     load_minimal_gnu_backquote_runtime(&mut eval);
 
     let result = format_eval_result(&eval.eval_str(
@@ -23348,7 +23765,7 @@ fn real_backquote_macroexpand_preserves_debug_head_before_splice() {
 #[test]
 fn loaded_subr_condition_case_unless_debug_calls_debugger_before_handler() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     load_minimal_gnu_backquote_runtime(&mut eval);
 
     assert_eq!(
@@ -23370,7 +23787,7 @@ fn loaded_subr_condition_case_unless_debug_calls_debugger_before_handler() {
 #[test]
 fn loaded_subr_condition_case_unless_debug_macroexpand_includes_debug_marker() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     load_minimal_gnu_backquote_runtime(&mut eval);
 
     assert_eq!(
@@ -23407,7 +23824,7 @@ fn macroexpand_environment_shadows_alias_targets_like_gnu() {
 #[test]
 fn lexical_condition_case_debug_marker_calls_debugger_before_handler() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.set_lexical_binding(true);
 
     assert_eq!(
@@ -23429,7 +23846,7 @@ fn lexical_condition_case_debug_marker_calls_debugger_before_handler() {
 #[test]
 fn real_backquote_nested_eval_chain_matches_gnu_error_shape() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     load_minimal_gnu_backquote_runtime(&mut eval);
 
     let result = format_eval_result(&eval.eval_str(
@@ -23445,7 +23862,7 @@ fn real_backquote_nested_eval_chain_matches_gnu_error_shape() {
 #[test]
 fn condition_case_lexical_handler_binding_restores_outer_let() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.set_lexical_binding(true);
 
     let result = format_eval_result(&eval.eval_str(
@@ -23479,7 +23896,7 @@ fn gc_stress_lexical_closure_mutation() {
 #[test]
 fn evaluator_face_table_has_standard_faces() {
     crate::test_utils::init_test_tracing();
-    let ev = Context::new();
+    let ev = crate::test_utils::new_context();
     let ft = ev.face_table();
 
     // Standard faces must exist
@@ -23607,7 +24024,7 @@ fn cl_deftype_basic() {
 #[test]
 fn bootstrap_window_system_modes_match_gnu_defaults() {
     crate::test_utils::init_test_tracing();
-    let eval = Context::new();
+    let eval = crate::test_utils::new_context();
     assert_eq!(
         eval.obarray().symbol_value_copied("menu-bar-mode"),
         Some(Value::T),
@@ -23631,9 +24048,9 @@ fn bootstrap_window_system_modes_match_gnu_defaults() {
 /// invisible, `(goto-char 6)` followed by the command loop leaves point at 4.
 #[test]
 fn adjust_point_for_property_relocates_out_of_invisible_run() {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     {
-        let buf = ev.buffers.current_buffer_mut().unwrap();
+        let buf = ev.edit.buffers.current_buffer_mut().unwrap();
         buf.insert("abcXXXXdef");
         buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(0));
     }
@@ -23658,9 +24075,9 @@ fn adjust_point_for_property_relocates_out_of_invisible_run() {
 /// The adjustment must be a no-op when point is not inside invisible text.
 #[test]
 fn adjust_point_for_property_noop_in_visible_text() {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     {
-        let buf = ev.buffers.current_buffer_mut().unwrap();
+        let buf = ev.edit.buffers.current_buffer_mut().unwrap();
         buf.insert("abcXXXXdef");
         buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(0));
     }
@@ -23684,9 +24101,9 @@ fn adjust_point_for_property_noop_in_visible_text() {
 /// moving FORWARD (last_pt=1) relocates point to the run END (8).
 #[test]
 fn adjust_point_for_property_relocates_out_of_display_intangible_run_forward() {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     {
-        let buf = ev.buffers.current_buffer_mut().unwrap();
+        let buf = ev.edit.buffers.current_buffer_mut().unwrap();
         buf.insert("abcXXXXdef");
         buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(0));
     }
@@ -23712,9 +24129,9 @@ fn adjust_point_for_property_relocates_out_of_display_intangible_run_forward() {
 /// relocates point to the run START (4). GNU 31.0.50 ground truth.
 #[test]
 fn adjust_point_for_property_relocates_out_of_display_intangible_run_backward() {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     {
-        let buf = ev.buffers.current_buffer_mut().unwrap();
+        let buf = ev.edit.buffers.current_buffer_mut().unwrap();
         buf.insert("abcXXXXdef");
         buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(0));
     }
@@ -23736,7 +24153,7 @@ fn set_current_message_mirrors_into_echo_area_buffer() {
     // GNU set_message_1: the echo message is written into the ` *Echo Area 0*`
     // buffer so redisplay can render it as ordinary buffer text. Slice 8 step 1
     // stages this additively; the layout still renders from current_message.
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     // The echo-area buffers are materialized by the message-display setup, not by
     // set_current_message (GNU set_message_1 assumes they exist).
     ev.ensure_echo_area_buffers();
@@ -23744,11 +24161,13 @@ fn set_current_message_mirrors_into_echo_area_buffer() {
     ev.set_current_message(Some(message));
 
     let id = ev
+        .edit
         .buffers
         .find_buffer_by_name(" *Echo Area 0*")
         .expect("echo-area buffer should exist");
     assert_eq!(
-        ev.buffers
+        ev.edit
+            .buffers
             .get(id)
             .expect("echo buffer live")
             .full_text_string(),
@@ -23758,7 +24177,8 @@ fn set_current_message_mirrors_into_echo_area_buffer() {
 
     ev.set_current_message(None);
     assert_eq!(
-        ev.buffers
+        ev.edit
+            .buffers
             .get(id)
             .expect("echo buffer live")
             .full_text_string(),
@@ -23777,7 +24197,7 @@ fn set_current_message_handles_back_to_back_messages_of_differing_multibyteness(
     // still held the previous message, so the full-range delete in
     // `replace_buffer_contents_lisp_string` ran against content encoded in the
     // other multibyteness and miscomputed its marker/position adjustment.
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.ensure_echo_area_buffers();
 
     let multibyte = crate::emacs_core::builtins::plain_str_to_lisp_string("中文", true);
@@ -23788,11 +24208,13 @@ fn set_current_message_handles_back_to_back_messages_of_differing_multibyteness(
     ev.set_current_message(Some(unibyte));
 
     let id = ev
+        .edit
         .buffers
         .find_buffer_by_name(" *Echo Area 0*")
         .expect("echo-area buffer should exist");
     assert_eq!(
-        ev.buffers
+        ev.edit
+            .buffers
             .get(id)
             .expect("echo buffer live")
             .full_text_string(),
@@ -23804,7 +24226,8 @@ fn set_current_message_handles_back_to_back_messages_of_differing_multibyteness(
     let multibyte2 = crate::emacs_core::builtins::plain_str_to_lisp_string("日本語", true);
     ev.set_current_message(Some(multibyte2));
     assert_eq!(
-        ev.buffers
+        ev.edit
+            .buffers
             .get(id)
             .expect("echo buffer live")
             .full_text_string(),
@@ -23817,11 +24240,11 @@ fn set_current_message_handles_back_to_back_messages_of_differing_multibyteness(
 /// selected frame and window so `command_loop_1` has somewhere to run.
 fn command_loop_test_context() -> Context {
     let mut ev = runtime_startup_context();
-    let scratch = ev.buffers.create_buffer("*command-loop-finding*");
-    ev.buffers.set_current(scratch);
-    let frame = ev.frames.create_frame("F1", 80, 24, scratch);
+    let scratch = ev.edit.buffers.create_buffer("*command-loop-finding*");
+    ev.edit.buffers.set_current(scratch);
+    let frame = ev.frame_manager_mut().create_frame("F1", 80, 24, scratch);
     assert!(
-        ev.frames.select_frame(frame),
+        ev.frame_manager_mut().select_frame(frame),
         "command loop test should have a selected frame"
     );
     ev
@@ -23829,17 +24252,20 @@ fn command_loop_test_context() -> Context {
 
 fn stop_command_loop_error_test(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
     assert!(args.is_empty(), "stop helper should not receive arguments");
-    ctx.command_loop.running = false;
+    ctx.command_loop_mut().running = false;
     Ok(Value::NIL)
 }
 
 /// Build the minimal interactive state shared by command-error recovery tests.
 fn command_loop_error_test_context() -> (Context, Value) {
-    let mut ev = Context::new();
-    let scratch = ev.buffers.create_buffer("*command-loop-error-test*");
-    ev.buffers.set_current(scratch);
-    let frame = ev.frames.create_frame("F1", 80, 24, scratch);
-    assert!(ev.frames.select_frame(frame), "test needs a selected frame");
+    let mut ev = crate::test_utils::new_context();
+    let scratch = ev.edit.buffers.create_buffer("*command-loop-error-test*");
+    ev.edit.buffers.set_current(scratch);
+    let frame = ev.frame_manager_mut().create_frame("F1", 80, 24, scratch);
+    assert!(
+        ev.frame_manager_mut().select_frame(frame),
+        "test needs a selected frame"
+    );
     let global_map = crate::emacs_core::keymap::make_sparse_list_keymap();
     install_global_map_for_test(&mut ev, global_map);
 
@@ -23873,7 +24299,7 @@ fn run_command_loop_error_commands(ev: &mut Context, global_map: Value, commands
             neovm_value::tagged::SymbolMode::Bare,
         )
         .expect("define signaling command");
-        ev.command_loop.unread_event(Value::symbol(key));
+        ev.command_loop_mut().unread_event(Value::symbol(key));
     }
     crate::emacs_core::keymap::list_keymap_define_seq(
         global_map,
@@ -23882,8 +24308,9 @@ fn run_command_loop_error_commands(ev: &mut Context, global_map: Value, commands
         neovm_value::tagged::SymbolMode::Bare,
     )
     .expect("define stop command");
-    ev.command_loop.unread_event(Value::fixnum('q' as i64));
-    ev.command_loop.running = true;
+    ev.command_loop_mut()
+        .unread_event(Value::fixnum('q' as i64));
+    ev.command_loop_mut().running = true;
 
     ev.recursive_edit_inner()
         .expect("command loop should recover and run the stop command");
@@ -24067,7 +24494,7 @@ fn command_loop_emits_structured_timing_for_one_user_command() {
 
     fn stop_observed_command(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
         assert!(args.is_empty(), "stop helper should not receive arguments");
-        ctx.command_loop.running = false;
+        ctx.command_loop_mut().running = false;
         Ok(Value::NIL)
     }
     ev.register_subr(SubrSpec::new(
@@ -24084,12 +24511,12 @@ fn command_loop_emits_structured_timing_for_one_user_command() {
              (keymap-set global-map "q" 'neo-observed-command))"#,
     )
     .expect("install observed command");
-    ev.command_loop
+    ev.command_loop_mut()
         .keyboard
         .kboard
         .unread_events
         .push_back(Value::fixnum('q' as i64));
-    ev.command_loop.running = true;
+    ev.command_loop_mut().running = true;
 
     ev.recursive_edit_inner()
         .expect("observed command should stop the command loop cleanly");
@@ -24115,7 +24542,7 @@ fn command_loop_input_interval_triggers_auto_save_hook() {
 
     fn stop_command_loop_after_auto_save_probe(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
         assert!(args.is_empty(), "stop helper should not receive arguments");
-        ctx.command_loop.running = false;
+        ctx.command_loop_mut().running = false;
         Ok(Value::NIL)
     }
     ev.register_subr(SubrSpec::new(
@@ -24140,18 +24567,18 @@ fn command_loop_input_interval_triggers_auto_save_hook() {
     .expect("install auto-save command-loop probe");
 
     for _ in 0..21 {
-        ev.command_loop
+        ev.command_loop_mut()
             .keyboard
             .kboard
             .unread_events
             .push_back(Value::fixnum('a' as i64));
     }
-    ev.command_loop
+    ev.command_loop_mut()
         .keyboard
         .kboard
         .unread_events
         .push_back(Value::fixnum('q' as i64));
-    ev.command_loop.running = true;
+    ev.command_loop_mut().running = true;
 
     ev.recursive_edit_inner()
         .expect("command loop should exit through the stop command");
@@ -24184,7 +24611,7 @@ fn command_loop_idle_timeout_triggers_auto_save_hook() {
         args: Vec<Value>,
     ) -> EvalResult {
         assert!(args.is_empty(), "stop helper should not receive arguments");
-        ctx.command_loop.running = false;
+        ctx.command_loop_mut().running = false;
         Ok(Value::NIL)
     }
     ev.register_subr(SubrSpec::new(
@@ -24215,10 +24642,10 @@ fn command_loop_idle_timeout_triggers_auto_save_hook() {
     )
     .expect("install idle auto-save command-loop probe");
 
-    let input = crate::host_input::HostInputPublisher::install(&mut ev);
+    let input = neovm_system::emacs_core::host_input::HostInputPublisher::install(&mut ev);
     input
-        .send(crate::keyboard::InputEvent::key_press(
-            crate::keyboard::KeyEvent::char('a'),
+        .send(crate::emacs_core::eval::keyboard::InputEvent::key_press(
+            crate::emacs_core::eval::keyboard::KeyEvent::char('a'),
         ))
         .expect("queue editing keypress");
     // Without an idle auto-save the loop would wait for input forever.  The
@@ -24232,13 +24659,13 @@ fn command_loop_idle_timeout_triggers_auto_save_hook() {
             cancel_guard.recv_timeout(HANG_GUARD)
         {
             guard_input
-                .send(crate::keyboard::InputEvent::key_press(
-                    crate::keyboard::KeyEvent::char('q'),
+                .send(crate::emacs_core::eval::keyboard::InputEvent::key_press(
+                    crate::emacs_core::eval::keyboard::KeyEvent::char('q'),
                 ))
                 .expect("stop a loop that never auto-saved");
         }
     });
-    ev.command_loop.running = true;
+    ev.command_loop_mut().running = true;
 
     let result = ev.recursive_edit_inner();
     drop(loop_returned);
@@ -24273,7 +24700,7 @@ fn unbound_key_runs_undefined_command_and_per_command_hooks() {
     // stop the loop after the first iteration, so the test terminates.
     fn stop_command_loop_for_test(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
         assert!(args.is_empty(), "stop helper should not receive arguments");
-        ctx.command_loop.running = false;
+        ctx.command_loop_mut().running = false;
         Ok(Value::NIL)
     }
     ev.register_subr(SubrSpec::new(
@@ -24333,17 +24760,17 @@ fn unbound_key_runs_undefined_command_and_per_command_hooks() {
         "<f9> must be unbound for this test"
     );
 
-    ev.command_loop
+    ev.command_loop_mut()
         .keyboard
         .kboard
         .unread_events
         .push_back(Value::symbol("f9"));
-    ev.command_loop
+    ev.command_loop_mut()
         .keyboard
         .kboard
         .unread_events
         .push_back(Value::fixnum('a' as i64));
-    ev.command_loop.running = true;
+    ev.command_loop_mut().running = true;
 
     ev.recursive_edit_inner()
         .expect("command loop should exit through the stop command");
@@ -24383,7 +24810,7 @@ fn yes_or_no_p_preserves_callers_real_this_command() {
 
     fn stop_command_loop_for_yes_or_no_test(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
         assert!(args.is_empty(), "stop helper should not receive arguments");
-        ctx.command_loop.running = false;
+        ctx.command_loop_mut().running = false;
         Ok(Value::NIL)
     }
     ev.register_subr(SubrSpec::new(
@@ -24405,17 +24832,17 @@ fn yes_or_no_p_preserves_callers_real_this_command() {
     )
     .expect("install yes-or-no-p caller-preservation probe");
 
-    let tx = crate::host_input::HostInputPublisher::install(&mut ev);
+    let tx = neovm_system::emacs_core::host_input::HostInputPublisher::install(&mut ev);
 
     let _tx_keepalive = tx;
     for event in ['a', 'y', 'e', 's', '\r'] {
-        ev.command_loop
+        ev.command_loop_mut()
             .keyboard
             .kboard
             .unread_events
             .push_back(Value::fixnum(event as i64));
     }
-    ev.command_loop.running = true;
+    ev.command_loop_mut().running = true;
     ev.recursive_edit_inner()
         .expect("query command should stop the command loop");
 
@@ -24434,7 +24861,7 @@ fn command_loop_dispatches_select_window_before_following_key() {
 
     fn stop_command_loop_for_test(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
         assert!(args.is_empty(), "stop helper should not receive arguments");
-        ctx.command_loop.running = false;
+        ctx.command_loop_mut().running = false;
         Ok(Value::NIL)
     }
     ev.register_subr(SubrSpec::new(
@@ -24493,7 +24920,7 @@ fn command_loop_dispatches_select_window_before_following_key() {
             Value::fixnum('a' as i64),
         ]),
     );
-    ev.command_loop.running = true;
+    ev.command_loop_mut().running = true;
 
     ev.recursive_edit_inner()
         .expect("command loop should exit through the stop command");
@@ -24523,7 +24950,7 @@ fn deactivate_mark_runs_after_post_command_hook() {
 
     fn stop_command_loop_for_test(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
         assert!(args.is_empty(), "stop helper should not receive arguments");
-        ctx.command_loop.running = false;
+        ctx.command_loop_mut().running = false;
         Ok(Value::NIL)
     }
     ev.register_subr(SubrSpec::new(
@@ -24569,12 +24996,12 @@ fn deactivate_mark_runs_after_post_command_hook() {
         "region must be active before the command runs"
     );
 
-    ev.command_loop
+    ev.command_loop_mut()
         .keyboard
         .kboard
         .unread_events
         .push_back(Value::symbol("f9"));
-    ev.command_loop.running = true;
+    ev.command_loop_mut().running = true;
 
     ev.recursive_edit_inner()
         .expect("command loop should exit through the stop hook");
@@ -24678,15 +25105,15 @@ fn bench_jit_vs_vm_loop() {
         f.constants = constants.clone().into();
         f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(64);
         if hot {
-            f.jit_runtime().set_hot_for_test();
+            jit_mark_hot_for_test(&f);
         } else {
             // Pin to Tier-0 forever so the timed VM loop never tiers up.
-            f.jit_runtime().set_cold_for_test();
+            jit_mark_cold_for_test(&f);
         }
         Value::make_bytecode(f)
     };
 
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
 
     // --- Correctness gate 1: VM result matches the closed form. ---
     let vm_fn = build(false);
@@ -24834,7 +25261,7 @@ fn jit_bench_threshold_economics() {
         Value::make_bytecode(f)
     };
 
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let threshold = crate::emacs_core::jit::hot_threshold();
 
     // Call volumes bracketing the decision: "hot" amortizes any compile cost,
@@ -25073,21 +25500,21 @@ fn gc_drain_kinds_profile(pdump: bool, chunks: usize) {
         unsafe { std::env::set_var("NEOVM_DISABLE_PDUMP", "1") };
     }
     let mut ev = runtime_startup_context();
-    if pdump && !ev.tagged_heap.dump_partition_active() {
+    if pdump && !ev.tagged_heap().dump_partition_active() {
         // Cold bootstrap cache: that first call ran the live bootstrap
         // (dump-less) and WROTE the cache; load the freshly written pdump so
         // the measured heap really has the mapped partition.
         ev = runtime_startup_context();
         assert!(
-            ev.tagged_heap.dump_partition_active(),
+            ev.tagged_heap().dump_partition_active(),
             "pdump probe config requires a mapped bootstrap image",
         );
     }
     ev.set_lexical_binding(true);
     eprintln!(
         "DRAIN-KINDS PROBE start: pdump={pdump} partition_active={} live={}B",
-        ev.tagged_heap.dump_partition_active(),
-        ev.tagged_heap.live_bytes(),
+        ev.tagged_heap().dump_partition_active(),
+        ev.tagged_heap().live_bytes(),
     );
     ev.eval_str(
         "(progn \
@@ -25121,18 +25548,18 @@ fn gc_drain_kinds_profile(pdump: bool, chunks: usize) {
     // that washes out of the medians).
     let mut hs_captures: Vec<neovm_value::tagged::gc::HandshakeStats> = Vec::new();
     let mut missed = 0usize;
-    let mut seen = ev.tagged_heap.sweep_stats().termination_count;
-    let start_collections = ev.tagged_heap.gc_collections();
+    let mut seen = ev.tagged_heap().sweep_stats().termination_count;
+    let start_collections = ev.tagged_heap().gc_collections();
     for _ in 0..chunks {
         ev.eval_str("(drain-probe--step 200)").expect("churn step");
-        let stats = ev.tagged_heap.sweep_stats();
+        let stats = ev.tagged_heap().sweep_stats();
         if stats.termination_count > seen {
             // More than one termination inside a single chunk loses all but
             // the last cycle's per-cycle stats; count the loss honestly.
             missed += stats.termination_count - seen - 1;
             seen = stats.termination_count;
             captures.push(stats);
-            hs_captures.push(ev.tagged_heap.handshake_stats());
+            hs_captures.push(ev.tagged_heap().handshake_stats());
         }
     }
 
@@ -25171,8 +25598,8 @@ fn gc_drain_kinds_profile(pdump: bool, chunks: usize) {
         },
         captures.len(),
         missed,
-        ev.tagged_heap.gc_collections() - start_collections,
-        ev.tagged_heap.live_bytes(),
+        ev.tagged_heap().gc_collections() - start_collections,
+        ev.tagged_heap().live_bytes(),
         med(|s| s.last_termination_deferred as u64),
         med(|s| s.last_termination_satb as u64),
         med(|s| s.last_termination_fold_us),
@@ -25193,7 +25620,7 @@ fn gc_drain_kinds_profile(pdump: bool, chunks: usize) {
         med(|s| s.last_termination_kinds.cons as u64),
         med(|s| s.last_termination_kinds.subr as u64),
         med(|s| s.last_termination_kinds.other as u64),
-        ev.tagged_heap.sweep_stats().max_termination_kinds,
+        ev.tagged_heap().sweep_stats().max_termination_kinds,
     );
 
     // --- HANDSHAKE decomposition (root-scan floor probe): per-phase and
@@ -25317,7 +25744,7 @@ fn gc_concurrent_leaked_subr_drop_under_pdump_verifiers() {
     crate::test_utils::init_test_tracing();
     unsafe { std::env::set_var("NEOVM_GC_VERIFY_PARTITION", "1") };
     let mut ev = crate::test_utils::with_legacy_gc(runtime_startup_context);
-    if !ev.tagged_heap.dump_partition_active() {
+    if !ev.tagged_heap().dump_partition_active() {
         // Cold bootstrap cache: the first call ran the live bootstrap and
         // wrote it; reload so the measured heap has the mapped partition
         // (mirrors the drain profiler's cold-cache handling).
@@ -25326,9 +25753,9 @@ fn gc_concurrent_leaked_subr_drop_under_pdump_verifiers() {
     ev.set_lexical_binding(true);
 
     // Churn until two concurrent terminations complete (bounded).
-    let seen0 = ev.tagged_heap.sweep_stats().termination_count;
+    let seen0 = ev.tagged_heap().sweep_stats().termination_count;
     let mut guard = 0usize;
-    while ev.tagged_heap.sweep_stats().termination_count < seen0 + 2 {
+    while ev.tagged_heap().sweep_stats().termination_count < seen0 + 2 {
         ev.eval_str("(let ((l nil)) (dotimes (i 2000) (push (format \"s%d\" i) l)) (length l))")
             .expect("churn step");
         guard += 1;
@@ -25338,7 +25765,7 @@ fn gc_concurrent_leaked_subr_drop_under_pdump_verifiers() {
         );
     }
 
-    let stats = ev.tagged_heap.sweep_stats();
+    let stats = ev.tagged_heap().sweep_stats();
     assert!(
         stats.last_concurrent_subr_dropped > 0,
         "builtin subrs (function cells scanned every cycle) must be dropped \
@@ -25399,7 +25826,7 @@ fn gc_concurrent_obarray_scan_vs_defalias_churn() {
     // concurrent mark engages and its obarray scan runs on the GC thread.
     unsafe { std::env::set_var("NEOVM_GC_VERIFY_PARTITION", "1") };
     let mut ev = crate::test_utils::with_legacy_gc(runtime_startup_context);
-    if !ev.tagged_heap.dump_partition_active() {
+    if !ev.tagged_heap().dump_partition_active() {
         // Cold bootstrap cache: reload so the measured heap has the partition.
         ev = crate::test_utils::with_legacy_gc(runtime_startup_context);
     }
@@ -25411,11 +25838,11 @@ fn gc_concurrent_obarray_scan_vs_defalias_churn() {
     // startup obarray already spans several chunks, but top up defensively so the
     // precondition holds on any build.
     let mut topup = 0u64;
-    while ev.obarray.current_slot_len() < 2 * 4096 {
-        ev.obarray.intern(&format!("t23-topup-{topup}"));
+    while ev.obarray_mut().current_slot_len() < 2 * 4096 {
+        ev.obarray_mut().intern(&format!("t23-topup-{topup}"));
         topup += 1;
     }
-    assert!(ev.obarray.current_slot_len() >= 2 * 4096);
+    assert!(ev.obarray().current_slot_len() >= 2 * 4096);
 
     // A pool of already-interned symbols whose function cells we flip IN PLACE
     // (race A). Materialize their obarray slots up front so the churn below is a
@@ -25423,7 +25850,7 @@ fn gc_concurrent_obarray_scan_vs_defalias_churn() {
     let churn_ids: Vec<SymId> = (0..64)
         .map(|i| {
             let id = neovm_value::intern::intern(&format!("t23-churn-{i}"));
-            ev.obarray.set_symbol_function_id(id, Value::NIL);
+            ev.obarray_mut().set_symbol_function_id(id, Value::NIL);
             id
         })
         .collect();
@@ -25438,7 +25865,7 @@ fn gc_concurrent_obarray_scan_vs_defalias_churn() {
     // reliably overlap a mutation of the same slot. The churn is cheap (tens of
     // ms per iteration — startup dominates wall time); the burst is sized for
     // many scan overlaps.
-    let seen0 = ev.tagged_heap.sweep_stats().termination_count;
+    let seen0 = ev.tagged_heap().sweep_stats().termination_count;
     let mut fresh = 0u64;
     // Cap fresh interns so the obarray can't grow without bound; the fset churn
     // (race A) keeps running regardless.
@@ -25449,10 +25876,10 @@ fn gc_concurrent_obarray_scan_vs_defalias_churn() {
         //     interned symbols — the write the pre-fix presence read raced.
         for (k, &id) in churn_ids.iter().enumerate() {
             if k % 2 == 0 {
-                ev.obarray
+                ev.obarray_mut()
                     .set_symbol_function_id(id, Value::fixnum(k as i64));
             } else {
-                ev.obarray.fmakunbound_id(id);
+                ev.obarray_mut().fmakunbound_id(id);
             }
         }
         // (b) fresh-fill empty tail slots None->Some (races B/C/D/E): each new
@@ -25460,7 +25887,7 @@ fn gc_concurrent_obarray_scan_vs_defalias_churn() {
         //     of the snapshotted obarray.
         if fresh < MAX_FRESH {
             for _ in 0..16 {
-                ev.obarray.intern(&format!("t23-fill-{fresh}"));
+                ev.obarray_mut().intern(&format!("t23-fill-{fresh}"));
                 fresh += 1;
             }
         }
@@ -25473,7 +25900,7 @@ fn gc_concurrent_obarray_scan_vs_defalias_churn() {
     // Concurrency actually engaged: the GC obarray scan demonstrably ran on the
     // GC thread while we churned (else there was no race surface to exercise).
     // Mirrors the leaked-subr repro's ">=2 concurrent terminations" bar.
-    let terminations = ev.tagged_heap.sweep_stats().termination_count - seen0;
+    let terminations = ev.tagged_heap().sweep_stats().termination_count - seen0;
     assert!(
         terminations >= 2,
         "concurrent GC did not engage under churn (terminations={terminations}); \
@@ -25486,13 +25913,13 @@ fn gc_concurrent_obarray_scan_vs_defalias_churn() {
     for (k, &id) in churn_ids.iter().enumerate() {
         if k % 2 == 0 {
             assert_eq!(
-                ev.obarray.symbol_function_id(id),
+                ev.obarray().symbol_function_id(id),
                 Some(Value::fixnum(k as i64)),
                 "churn symbol {k} lost its function cell across concurrent GC",
             );
         } else {
             assert!(
-                ev.obarray.is_function_unbound_id(id),
+                ev.obarray().is_function_unbound_id(id),
                 "fmakunbound'd churn symbol {k} not unbound after concurrent GC",
             );
         }
@@ -25504,7 +25931,7 @@ fn gc_concurrent_obarray_scan_vs_defalias_churn() {
     assert_eq!(ev.eval_str("(+ 20 22)").expect("plus"), Value::fixnum(42));
     // The freshly-filled tail symbols are present and resolvable.
     assert!(
-        ev.obarray.all_symbols().len() >= churn_ids.len(),
+        ev.obarray().all_symbols().len() >= churn_ids.len(),
         "obarray scan/walk lost interned symbols",
     );
 }
@@ -25554,12 +25981,12 @@ fn alloc_class_profile(pdump: bool) {
     // -- Phase 1: startup allocation profile --
     alloc_probe::reset();
     let mut ev = runtime_startup_context();
-    if pdump && !ev.tagged_heap.dump_partition_active() {
+    if pdump && !ev.tagged_heap().dump_partition_active() {
         // Cold bootstrap cache: first call ran the live bootstrap and wrote
         // the cache; reload so the measured config really has the partition.
         alloc_probe::reset();
         ev = runtime_startup_context();
-        assert!(ev.tagged_heap.dump_partition_active());
+        assert!(ev.tagged_heap().dump_partition_active());
     }
     let startup_report = alloc_probe::report();
     ev.set_lexical_binding(true);
@@ -25776,17 +26203,18 @@ fn alloc_probe_bytecode_hash_isolation() {
 /// since these change layout with no buffer/face/overlay tick.
 #[test]
 fn display_affecting_var_set_bumps_display_var_change_count() {
-    let mut eval = Context::new();
-    let before = eval.display_var_change_count;
+    let mut eval = crate::test_utils::new_context();
+    let before = eval.display_var_change_count_for_test();
     eval.mark_redisplay_dirty_if_display_var(intern("truncate-lines"));
-    let after = eval.display_var_change_count;
+    let after = eval.display_var_change_count_for_test();
     assert!(
         after > before,
         "a display-affecting var must bump display_var_change_count ({before} -> {after})"
     );
     eval.mark_redisplay_dirty_if_display_var(intern("neomacs--definitely-not-a-display-var"));
     assert_eq!(
-        eval.display_var_change_count, after,
+        eval.display_var_change_count_for_test(),
+        after,
         "an ordinary variable must not bump the display-var counter"
     );
 }
@@ -25797,7 +26225,7 @@ fn display_affecting_var_set_bumps_display_var_change_count() {
 /// once a caller catches the panic. `GcInhibitGuard` restores it in `Drop`.
 #[test]
 fn gc_inhibit_depth_rebalances_when_inhibited_closure_panics() {
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     assert_eq!(eval.gc_inhibit_depth, 0);
 
     // Normal path: nesting is visible inside, fully unwound after.
@@ -25825,29 +26253,35 @@ fn gc_inhibit_depth_rebalances_when_inhibited_closure_panics() {
 /// suppress `throw-on-input` polling once panics become catchable.
 #[test]
 fn unwind_cleanup_depth_rebalances_when_guard_scope_panics() {
-    let mut eval = Context::new();
-    assert_eq!(eval.unwind_cleanup_depth, 0);
+    let mut eval = crate::test_utils::new_context();
+    assert_eq!(eval.unwind_cleanup_depth_for_test(), 0);
 
     // Normal path: nested guards count up and fully unwind.
     {
-        let mut outer = UnwindCleanupGuard::enter(&mut eval);
-        assert_eq!(outer.context().unwind_cleanup_depth, 1);
+        let mut outer =
+            neovm_eval::test_support::authority::enter_unwind_cleanup_guard_for_test(&mut eval);
+        assert_eq!(outer.context().unwind_cleanup_depth_for_test(), 1);
         {
-            let mut inner = UnwindCleanupGuard::enter(outer.context());
-            assert_eq!(inner.context().unwind_cleanup_depth, 2);
+            let mut inner =
+                neovm_eval::test_support::authority::enter_unwind_cleanup_guard_for_test(
+                    outer.context(),
+                );
+            assert_eq!(inner.context().unwind_cleanup_depth_for_test(), 2);
         }
-        assert_eq!(outer.context().unwind_cleanup_depth, 1);
+        assert_eq!(outer.context().unwind_cleanup_depth_for_test(), 1);
     }
-    assert_eq!(eval.unwind_cleanup_depth, 0);
+    assert_eq!(eval.unwind_cleanup_depth_for_test(), 0);
 
     // Panic path: the guard's scope unwinds.
     let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _guard = UnwindCleanupGuard::enter(&mut eval);
+        let _guard =
+            neovm_eval::test_support::authority::enter_unwind_cleanup_guard_for_test(&mut eval);
         panic!("boom inside cleanup scope");
     }));
     assert!(panicked.is_err());
     assert_eq!(
-        eval.unwind_cleanup_depth, 0,
+        eval.unwind_cleanup_depth_for_test(),
+        0,
         "a panicking cleanup scope must not leave throw-on-input suppressed"
     );
 }
@@ -25857,7 +26291,7 @@ fn eval_task_drain_runs_queued_closures_in_order() {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let (tx, rx) = crossbeam_channel::unbounded::<crate::emacs_core::eval::EvalThreadTask>();
     ctx.init_eval_task_system(rx);
 
@@ -25882,7 +26316,7 @@ fn eval_task_drain_runs_queued_closures_in_order() {
 #[test]
 fn render_uncaught_signal_backtrace_lists_live_frames_innermost_first() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.push_backtrace_frame(Value::symbol("outer-fn"), &[]);
     ev.push_backtrace_frame(Value::symbol("inner-fn"), &[Value::fixnum(42)]);
     let bt = ev.render_uncaught_signal_backtrace(64);
@@ -25900,13 +26334,13 @@ fn render_uncaught_signal_backtrace_lists_live_frames_innermost_first() {
 
 #[test]
 fn bytecode_backtraces_reference_the_live_caller_stack_for_every_arity() {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
 
     for nargs in 0..=3 {
         let args_start = ev.bc_buf.len();
         ev.bc_buf
             .extend((0..nargs).map(|arg| Value::fixnum(arg as i64 + 10)));
-        let backtrace_base = ev.specpdl.len();
+        let backtrace_base = ev.specpdl().len();
         let backtrace =
             ev.push_backtrace_frame_from_bc_stack(Value::symbol("callee"), args_start, nargs);
         assert_eq!(backtrace.base_for_test(), backtrace_base);
@@ -25916,7 +26350,7 @@ fn bytecode_backtraces_reference_the_live_caller_stack_for_every_arity() {
             "the ordinary bytecode-call token must be the raw specpdl base so its hot pop needs no decode"
         );
 
-        let args = match ev.specpdl.last() {
+        let args = match ev.specpdl().last() {
             Some(SpecBinding::Backtrace { args, .. }) => args,
             other => panic!("expected bytecode backtrace frame, got {other:?}"),
         };
@@ -25947,12 +26381,14 @@ fn bytecode_backtraces_reference_the_live_caller_stack_for_every_arity() {
 fn bytecode_backtrace_push_preserves_live_span_across_growth_and_gc() {
     for grow in [false, true] {
         for nargs in [0, 1, 2, 3, 8] {
-            let mut ev = Context::new();
+            let mut ev = crate::test_utils::new_context();
             ev.gc_collect_exact();
-            assert!(ev.specpdl.is_empty());
-            ev.specpdl = Vec::with_capacity(if grow { 1 } else { 2 });
+            assert!(ev.specpdl().is_empty());
+            // SAFETY: test-only stack capacity setup on the owner thread; the
+            // replacement Vec is the same stack storage and never crosses Contexts.
+            *unsafe { ev.specpdl_mut() } = Vec::with_capacity(if grow { 1 } else { 2 });
             ev.push_specpdl_root(Value::T);
-            assert_eq!(ev.specpdl.len() == ev.specpdl.capacity(), grow);
+            assert_eq!(ev.specpdl().len() == ev.specpdl().capacity(), grow);
             ev.bc_buf.extend([Value::fixnum(91), Value::fixnum(92)]);
             let args_start = ev.bc_buf.len();
             for i in 0..nargs {
@@ -25961,7 +26397,7 @@ fn bytecode_backtrace_push_preserves_live_span_across_growth_and_gc() {
             let function = Value::string("bytecode frame function");
             let frame = ev.push_backtrace_frame_from_bc_stack(function, args_start, nargs);
             assert_eq!(frame.word_for_test(), 1);
-            assert_eq!(ev.specpdl.len(), 2);
+            assert_eq!(ev.specpdl().len(), 2);
 
             // The descriptor must keep live indices, even when a callee grows
             // the caller stack and replaces an argument before a collection.
@@ -25973,7 +26409,7 @@ fn bytecode_backtrace_push_preserves_live_span_across_growth_and_gc() {
             }
             ev.gc_collect_exact();
             let (actual_function, args, debug, unevalled) = ev
-                .backtrace_entry_values(&ev.specpdl[1])
+                .backtrace_entry_values(&ev.specpdl()[1])
                 .expect("bytecode frame is inspectable");
             assert_eq!(actual_function, function);
             assert_eq!(
@@ -25983,7 +26419,7 @@ fn bytecode_backtrace_push_preserves_live_span_across_growth_and_gc() {
             assert_eq!(args.as_slice(), &ev.bc_buf[args_start..]);
             assert!(!debug && !unevalled);
             for value in std::iter::once(function).chain(args.iter().copied()) {
-                assert!(ev.tagged_heap.owns_heap_value_for_test(value));
+                assert!(ev.tagged_heap().owns_heap_value_for_test(value));
             }
             for (i, arg) in args.iter().enumerate() {
                 let expected = if i == 0 {
@@ -25993,38 +26429,38 @@ fn bytecode_backtrace_push_preserves_live_span_across_growth_and_gc() {
                 };
                 assert_eq!(arg.as_utf8_str(), Some(expected.as_str()));
             }
-            assert!(ev.backtrace_args_stack.is_empty());
+            assert!(ev.backtrace_args_stack_len_for_test() == 0);
             assert!(ev.set_backtrace_debug_on_exit(1, true));
             let frame = match ev.pop_fast_bytecode_backtrace_frame(frame) {
                 FastBytecodePop::OwesDebugOnExit(frame) => frame,
                 FastBytecodePop::Popped => panic!("a flagged frame owes the exit debugger"),
             };
-            assert_eq!(ev.specpdl.len(), 2);
+            assert_eq!(ev.specpdl().len(), 2);
             assert!(ev.set_backtrace_debug_on_exit(1, false));
             assert!(matches!(
                 ev.pop_fast_bytecode_backtrace_frame(frame),
                 FastBytecodePop::Popped
             ));
-            assert_eq!(ev.specpdl.len(), 1);
+            assert_eq!(ev.specpdl().len(), 1);
         }
     }
 }
 
 #[test]
 fn generic_backtraces_keep_one_and_two_arguments_inline() {
-    let mut ev = Context::new();
-    let owned_base = ev.backtrace_args_stack.len();
+    let mut ev = crate::test_utils::new_context();
+    let owned_base = ev.backtrace_args_stack_len_for_test();
 
     ev.push_backtrace_frame(Value::symbol("one"), &[Value::fixnum(11)]);
     assert!(matches!(
-        ev.specpdl.last(),
+        ev.specpdl().last(),
         Some(SpecBinding::Backtrace1 {
             arg: value,
             debug_on_exit: false,
             ..
         }) if *value == Value::fixnum(11)
     ));
-    assert_eq!(ev.backtrace_args_stack.len(), owned_base);
+    assert_eq!(ev.backtrace_args_stack_len_for_test(), owned_base);
     ev.unbind_to(0);
 
     ev.push_backtrace_frame(
@@ -26032,30 +26468,30 @@ fn generic_backtraces_keep_one_and_two_arguments_inline() {
         &[Value::fixnum(21), Value::fixnum(22)],
     );
     assert!(matches!(
-        ev.specpdl.last(),
+        ev.specpdl().last(),
         Some(SpecBinding::Backtrace2 {
             arg0,
             arg1,
             ..
         }) if *arg0 == Value::fixnum(21) && *arg1 == Value::fixnum(22)
     ));
-    assert_eq!(ev.backtrace_args_stack.len(), owned_base);
+    assert_eq!(ev.backtrace_args_stack_len_for_test(), owned_base);
     ev.unbind_to(0);
 
-    let frame_base = ev.specpdl.len();
+    let frame_base = ev.specpdl().len();
     ev.push_backtrace_frame(
         Value::symbol("three"),
         &[Value::fixnum(31), Value::fixnum(32), Value::fixnum(33)],
     );
-    assert_eq!(ev.backtrace_args_stack.len(), owned_base + 1);
+    assert_eq!(ev.backtrace_args_stack_len_for_test(), owned_base + 1);
     let result = ev.unbind_to_with_result(frame_base, Ok(Value::fixnum(34)));
     assert_eq!(
         result.expect("trivial pop preserves success"),
         Value::fixnum(34)
     );
-    assert_eq!(ev.specpdl.len(), frame_base);
+    assert_eq!(ev.specpdl().len(), frame_base);
     assert_eq!(
-        ev.backtrace_args_stack.len(),
+        ev.backtrace_args_stack_len_for_test(),
         owned_base,
         "the trivial pointer-decrement pop must still release owned variadic arguments"
     );
@@ -26069,7 +26505,7 @@ fn generic_backtraces_keep_one_and_two_arguments_inline() {
 #[test]
 #[should_panic(expected = "fast bytecode pop requires its frame to remain the specpdl top")]
 fn bytecode_backtrace_token_rejects_an_unbalanced_fast_pop() {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let backtrace = ev.push_backtrace_frame_from_bc_stack(Value::symbol("callee"), 0, 0);
     ev.push_specpdl_root(Value::T);
     let _ = ev.pop_fast_bytecode_backtrace_frame(backtrace);
@@ -26117,10 +26553,10 @@ fn compact_saved_binding_options_round_trip_none_and_live_values() {
 #[test]
 fn runtime_projection_mask_matches_the_comparison_chain() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.refresh_gc_runtime_settings_cache();
     let mut projected = 0;
-    for id in 0..ev.obarray.len() as u32 {
+    for id in 0..ev.obarray().len() as u32 {
         // SAFETY: test placeholder id, never resolved (peer seal N8).
         let id = unsafe { neovm_value::intern::SymId::from_raw(id) };
         let by_mask = ev.runtime_binding_has_projection(id);
@@ -26128,7 +26564,7 @@ fn runtime_projection_mask_matches_the_comparison_chain() {
             by_mask,
             ev.runtime_binding_has_projection_by_comparison(id),
             "symbol id {} ({})",
-            id.0,
+            id.to_raw(),
             neovm_value::intern::resolve_sym(id)
         );
         projected += usize::from(by_mask);
@@ -26151,7 +26587,7 @@ fn runtime_projection_mask_matches_the_comparison_chain() {
 #[test]
 fn every_mirrored_runtime_variable_is_gated_and_rooted() {
     crate::test_utils::init_test_tracing();
-    let ev = Context::new();
+    let ev = crate::test_utils::new_context();
     for name in [
         "quit-flag",
         "inhibit-quit",
@@ -26180,7 +26616,7 @@ fn every_mirrored_runtime_variable_is_gated_and_rooted() {
 #[test]
 fn context_cached_symbols_are_marked_runtime_projected() {
     crate::test_utils::init_test_tracing();
-    let ev = Context::new();
+    let ev = crate::test_utils::new_context();
     for name in [
         "quit-flag",
         "inhibit-quit",
@@ -26193,7 +26629,7 @@ fn context_cached_symbols_are_marked_runtime_projected() {
         "buffer-undo-list",
     ] {
         let sym = ev
-            .obarray
+            .obarray()
             .get_by_id(intern(name))
             .unwrap_or_else(|| panic!("{name} should have a slot"));
         assert!(
@@ -26202,7 +26638,7 @@ fn context_cached_symbols_are_marked_runtime_projected() {
         );
     }
     assert!(
-        ev.obarray
+        ev.obarray()
             .get_by_id(intern("most-positive-fixnum"))
             .is_some_and(|s| !s.flags().runtime_projected()),
         "an ordinary variable must stay on the fast tier"
@@ -26266,7 +26702,7 @@ fn let_pop_restores_an_unbound_plain_cell() {
 /// the symbol to the one-visit fast tier.
 #[test]
 fn plain_let_takes_one_obarray_visit_per_bind_and_pop() {
-    use neovm_value::symbol::{plain_value_slot_visits, reset_plain_value_slot_visits};
+    use neovm_value::symbol::plain_value_slot_visits;
     crate::test_utils::init_test_tracing();
     let results = eval_all(
         "(setq vm-diet-events nil)
@@ -26287,7 +26723,7 @@ fn plain_let_takes_one_obarray_visit_per_bind_and_pop() {
 
     // The counter is the claim: one obarray slot visit for the bind, one for
     // the pop, on a plain unwatched variable.
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let form = crate::emacs_core::value_reader::read_all(
         "(defvar neo-visit-var 1)",
         VariableView::canonical(CanonicalAccess::TEST, &test_ob()),
@@ -26298,15 +26734,15 @@ fn plain_let_takes_one_obarray_visit_per_bind_and_pop() {
     .expect("one form");
     ev.eval_form(form).expect("defvar");
     let sym = intern("neo-visit-var");
-    let base = ev.specpdl.len();
-    reset_plain_value_slot_visits();
+    let base = ev.specpdl().len();
+    neovm_value::test_support::authority::reset_plain_value_slot_visits();
     ev.try_specbind(sym, Value::fixnum(2)).expect("bind");
     assert_eq!(plain_value_slot_visits(), 1, "one visit for the bind");
-    reset_plain_value_slot_visits();
+    neovm_value::test_support::authority::reset_plain_value_slot_visits();
     ev.unbind_to_with_result(base, Ok(Value::NIL)).expect("pop");
     assert_eq!(plain_value_slot_visits(), 1, "one visit for the pop");
     assert_eq!(
-        ev.obarray.symbol_value_id_copied(sym).map(|v| v.bits()),
+        ev.obarray().symbol_value_id_copied(sym).map(|v| v.bits()),
         Some(Value::fixnum(1).bits()),
         "the pop restored the old value"
     );
@@ -26321,26 +26757,26 @@ fn plain_let_takes_one_obarray_visit_per_bind_and_pop() {
 #[test]
 fn native_backtrace_pop_accepts_every_arity_it_pushes() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let func = Value::from_sym_id(intern("neo-native-pop"));
     let args = [Value::fixnum(1), Value::fixnum(2), Value::fixnum(3)];
     let args_ptr = args.as_ptr() as *const i64;
 
     for nargs in [1usize, 2, 3] {
-        let count = ev.specpdl.len();
+        let count = ev.specpdl().len();
         // SAFETY: `args` outlives the call and holds three tagged words.
         unsafe { ev.push_backtrace_frame_from_native_args(func, args_ptr, nargs) };
-        assert_eq!(ev.specpdl.len(), count + 1);
+        assert_eq!(ev.specpdl().len(), count + 1);
         assert!(
             ev.pop_native_backtrace_frame(count),
             "a {nargs}-argument native frame must pop through the fast exit"
         );
-        assert_eq!(ev.specpdl.len(), count);
+        assert_eq!(ev.specpdl().len(), count);
     }
 
     // A frame the debugger flagged is rewritten to the owned shape and must
     // keep the general path, which is the only place the exit debugger runs.
-    let count = ev.specpdl.len();
+    let count = ev.specpdl().len();
     // SAFETY: as above.
     unsafe { ev.push_backtrace_frame_from_native_args(func, args_ptr, 1) };
     assert!(ev.set_backtrace_debug_on_exit(count, true));
@@ -26348,12 +26784,12 @@ fn native_backtrace_pop_accepts_every_arity_it_pushes() {
         !ev.pop_native_backtrace_frame(count),
         "a debug-on-exit frame must not take the fast exit"
     );
-    assert_eq!(ev.specpdl.len(), count + 1, "the refused frame stays put");
+    assert_eq!(ev.specpdl().len(), count + 1, "the refused frame stays put");
     let _ = ev.unbind_to_with_result(count, Ok(Value::NIL));
 
     // An unbalanced stack (the callee left an entry above the frame) is
     // refused too.
-    let count = ev.specpdl.len();
+    let count = ev.specpdl().len();
     // SAFETY: as above.
     unsafe { ev.push_backtrace_frame_from_native_args(func, args_ptr, 2) };
     ev.push_specpdl_root(Value::T);
@@ -26362,7 +26798,7 @@ fn native_backtrace_pop_accepts_every_arity_it_pushes() {
         "the fast exit requires the balanced single-frame state"
     );
     let _ = ev.unbind_to_with_result(count, Ok(Value::NIL));
-    assert_eq!(ev.specpdl.len(), count);
+    assert_eq!(ev.specpdl().len(), count);
 }
 
 /// The native pop checks the exact shapes the native push writes, for every
@@ -26372,15 +26808,15 @@ fn native_backtrace_pop_accepts_every_arity_it_pushes() {
 #[test]
 fn native_backtrace_pop_accepts_exactly_the_shapes_it_pushes() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let func = Value::from_sym_id(intern("neo-native-shapes"));
     let args: Vec<Value> = (0..6).map(Value::fixnum).collect();
     let args_ptr = args.as_ptr() as *const i64;
     for nargs in 0..=5usize {
-        let count = ev.specpdl.len();
+        let count = ev.specpdl().len();
         // SAFETY: `args` outlives the frame and holds six tagged words.
         unsafe { ev.push_backtrace_frame_from_native_args(func, args_ptr, nargs) };
-        let top = ev.specpdl.last().expect("pushed");
+        let top = ev.specpdl().last().expect("pushed");
         assert!(
             matches!(
                 top,
@@ -26403,24 +26839,24 @@ fn native_backtrace_pop_accepts_exactly_the_shapes_it_pushes() {
             ev.pop_native_backtrace_frame(count),
             "{nargs} arguments pop through the fast exit"
         );
-        assert_eq!(ev.specpdl.len(), count);
+        assert_eq!(ev.specpdl().len(), count);
     }
 
     let refused = |ev: &mut Context, push: &dyn Fn(&mut Context), what: &str| {
-        let count = ev.specpdl.len();
+        let count = ev.specpdl().len();
         push(ev);
-        assert_eq!(ev.specpdl.len(), count + 1);
+        assert_eq!(ev.specpdl().len(), count + 1);
         assert!(
             !ev.pop_native_backtrace_frame(count),
             "{what} on top is not a native frame"
         );
         assert_eq!(
-            ev.specpdl.len(),
+            ev.specpdl().len(),
             count + 1,
             "{what}: the refused entry stays"
         );
         let _ = ev.unbind_to_with_result(count, Ok(Value::NIL));
-        assert_eq!(ev.specpdl.len(), count);
+        assert_eq!(ev.specpdl().len(), count);
     };
     refused(&mut ev, &|ev| ev.push_specpdl_root(Value::T), "a GcRoot");
     refused(
@@ -26445,14 +26881,14 @@ fn native_backtrace_pop_accepts_exactly_the_shapes_it_pushes() {
 #[test]
 fn native_two_argument_frame_copies_both_argument_words() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let func = Value::from_sym_id(intern("neo-native-two"));
     let args = [Value::fixnum(21), Value::fixnum(22)];
     let args_ptr = args.as_ptr() as *const i64;
     // SAFETY: `args` outlives the frame and holds two tagged words.
     unsafe { ev.push_backtrace_frame_from_native_args(func, args_ptr, 2) };
     assert!(matches!(
-        ev.specpdl.last(),
+        ev.specpdl().last(),
         Some(SpecBinding::Backtrace2 { function, arg0, arg1 })
             if *function == func && *arg0 == args[0] && *arg1 == args[1]
     ));
@@ -26470,8 +26906,8 @@ fn finish_traced_call_agrees_with_unbind() {
     let args = [Value::fixnum(1), Value::fixnum(2), Value::fixnum(3)];
     for nargs in 0..=3 {
         for extra_root in [false, true] {
-            let mut via_finish = Context::new();
-            let mut via_unbind = Context::new();
+            let mut via_finish = crate::test_utils::new_context();
+            let mut via_unbind = crate::test_utils::new_context();
             for ev in [&mut via_finish, &mut via_unbind] {
                 ev.push_backtrace_frame(func, &args[..nargs]);
                 if extra_root {
@@ -26485,11 +26921,11 @@ fn finish_traced_call_agrees_with_unbind() {
                 unbound.map(|v| v.bits()).ok(),
                 "nargs={nargs} extra_root={extra_root}"
             );
-            assert!(via_finish.specpdl.is_empty());
-            assert!(via_unbind.specpdl.is_empty());
+            assert!(via_finish.specpdl().is_empty());
+            assert!(via_unbind.specpdl().is_empty());
             assert_eq!(
-                via_finish.backtrace_args_stack.len(),
-                via_unbind.backtrace_args_stack.len()
+                via_finish.backtrace_args_stack_len_for_test(),
+                via_unbind.backtrace_args_stack_len_for_test()
             );
         }
     }
@@ -26515,10 +26951,12 @@ fn specpdl_entry_stays_compact_for_hot_backtrace_pushes() {
 fn native_backtrace_push_preserves_values_across_growth_and_gc() {
     for grow in [false, true] {
         for nargs in [0, 1, 2, 3, 8] {
-            let mut ev = Context::new();
+            let mut ev = crate::test_utils::new_context();
             ev.gc_collect_exact();
-            assert!(ev.specpdl.is_empty());
-            ev.specpdl = if grow {
+            assert!(ev.specpdl().is_empty());
+            // SAFETY: test-only stack capacity setup on the owner thread; the
+            // replacement Vec is the same stack storage and never crosses Contexts.
+            *unsafe { ev.specpdl_mut() } = if grow {
                 Vec::new()
             } else {
                 Vec::with_capacity(1)
@@ -26532,16 +26970,16 @@ fn native_backtrace_push_preserves_values_across_growth_and_gc() {
             unsafe {
                 ev.push_backtrace_frame_from_native_args(function, args.as_ptr().cast(), nargs);
             }
-            assert_eq!(ev.specpdl.len(), 1);
+            assert_eq!(ev.specpdl().len(), 1);
             ev.gc_collect_exact();
             let (actual_function, actual_args, debug, unevalled) = ev
-                .backtrace_entry_values(&ev.specpdl[0])
+                .backtrace_entry_values(&ev.specpdl()[0])
                 .expect("native frame is inspectable");
             assert_eq!(actual_function, function);
             assert_eq!(actual_args.as_slice(), args.as_slice());
             assert!(!debug && !unevalled);
             for value in std::iter::once(function).chain(args.iter().copied()) {
-                assert!(ev.tagged_heap.owns_heap_value_for_test(value));
+                assert!(ev.tagged_heap().owns_heap_value_for_test(value));
             }
             assert_eq!(actual_function.as_utf8_str(), Some("native frame function"));
             for (i, arg) in actual_args.iter().enumerate() {
@@ -26551,7 +26989,7 @@ fn native_backtrace_push_preserves_values_across_growth_and_gc() {
                 );
             }
             assert!(ev.pop_native_backtrace_frame(0));
-            assert!(ev.specpdl.is_empty());
+            assert!(ev.specpdl().is_empty());
         }
     }
 }
@@ -26577,23 +27015,27 @@ fn a_buffer_change_during_redisplay_is_not_recorded_as_already_displayed() {
     // window's `last_modified` against `BUF_MODIFF (b)`, and `last_modified` is
     // assigned from the buffer state the window was laid out FROM
     // (src/xdisp.c:18269), never from the state after the fact.
-    let mut ev = Context::new();
-    let buffer_id = ev.buffers.create_buffer("*redisplay-race*");
-    assert!(ev.buffers.switch_current(buffer_id));
-    let frame_id = ev.frames.create_frame("F1", 80, 25, buffer_id);
-    ev.frames.select_frame(frame_id);
+    let mut ev = crate::test_utils::new_context();
+    let buffer_id = ev.edit.buffers.create_buffer("*redisplay-race*");
+    assert!(ev.edit.buffers.switch_current(buffer_id));
+    let frame_id = ev.frame_manager_mut().create_frame("F1", 80, 25, buffer_id);
+    ev.frame_manager_mut().select_frame(frame_id);
 
     // A "process filter" that appends to the displayed buffer while the frame
     // is being laid out.
     let painted = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
     let painted_in_cb = painted.clone();
     ev.redisplay_fn = Some(Box::new(move |ev: &mut Context| {
-        let current = ev.buffers.current_buffer_id().expect("current buffer");
-        painted_in_cb
-            .borrow_mut()
-            .push(ev.buffers.get(current).expect("buffer").buffer_string());
+        let current = ev.edit.buffers.current_buffer_id().expect("current buffer");
+        painted_in_cb.borrow_mut().push(
+            ev.edit
+                .buffers
+                .get(current)
+                .expect("buffer")
+                .buffer_string(),
+        );
         // Output arrives mid-paint: it is NOT part of the frame just drawn.
-        ev.buffers.insert_lisp_string_into_buffer(
+        ev.edit.buffers.insert_lisp_string_into_buffer(
             current,
             &neovm_value::heap_types::LispString::from_utf8("late output\n"),
         );
@@ -26622,7 +27064,7 @@ fn a_buffer_change_during_redisplay_is_not_recorded_as_already_displayed() {
 #[test]
 fn command_loop_exit_classifies_thrown_value_by_type_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     // GNU `recursive_edit_1' (keyboard.c:749-758) dispatches on the thrown
     // value's type, in this order: EQ t, then STRINGP, then FUNCTIONP.
@@ -26670,7 +27112,7 @@ fn command_loop_exit_classifies_thrown_value_by_type_like_gnu() {
 #[test]
 fn kill_emacs_abandons_unwind_protect_cleanup_forms_like_gnus_noreturn_exit() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let flow = eval
         .eval_str(
@@ -26708,7 +27150,7 @@ fn kill_emacs_abandons_unwind_protect_cleanup_forms_like_gnus_noreturn_exit() {
 #[test]
 fn kill_emacs_abandons_nested_unwind_protect_cleanups() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let flow = eval
         .eval_str(
@@ -26743,7 +27185,7 @@ fn kill_emacs_abandons_nested_unwind_protect_cleanups() {
 #[test]
 fn kill_emacs_still_restores_dynamic_bindings_while_abandoning_cleanup_forms() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     eval.eval_str("(progn (setq l203-var 'outer-value) (setq l203-witness nil))")
         .expect("seed the dynamic variable and the cleanup witness");
@@ -26787,7 +27229,7 @@ fn kill_emacs_still_restores_dynamic_bindings_while_abandoning_cleanup_forms() {
 #[test]
 fn kill_emacs_hook_still_runs_its_own_unwind_protect_cleanups() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     eval.eval_str(
         "(progn
@@ -26840,7 +27282,7 @@ fn jit_cached_leaf_fixture(ev: &mut Context, name: &str) -> Value {
     f.ops = vec![Op::Constant(0), Op::Constant(1), Op::Add, Op::Return];
     f.constants = vec![Value::make_int(40), Value::make_int(2)].into();
     f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
-    f.jit_runtime().set_hot_for_test();
+    jit_mark_hot_for_test(&f);
     let fv = Value::make_bytecode(f);
     crate::emacs_core::builtins::builtin_fset(ev, vec![Value::symbol(name), fv])
         .expect("fset fixture");
@@ -26865,7 +27307,7 @@ fn jit_cached_leaf_fixture(ev: &mut Context, name: &str) -> Value {
 #[test]
 fn jit_first_gc_keeps_compiled_leaves() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let fv = jit_cached_leaf_fixture(&mut ev, "jit-first-gc-probe-fn");
     let (before, _) = crate::emacs_core::jit::cache::compiled_cache_probe();
 
@@ -26894,7 +27336,7 @@ fn jit_first_gc_keeps_compiled_leaves() {
 #[test]
 fn jit_heap_swap_clears_compiled_leaves() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let _fv = jit_cached_leaf_fixture(&mut ev, "jit-heap-swap-probe-fn");
     assert!(crate::emacs_core::jit::cache::compiled_cache_probe().0 >= 1);
 
@@ -26912,7 +27354,9 @@ fn jit_heap_swap_clears_compiled_leaves() {
         "no reloc root may be traced from a cleared cache"
     );
     // Restore the evaluator's own heap before it is dropped.
-    neovm_value::tagged::gc::set_tagged_heap(&mut ev.tagged_heap);
+    // SAFETY: test-only owner-thread heap restore through the non-swappable
+    // mutable accessor contract; the view is used in place and dropped here.
+    neovm_value::tagged::gc::set_tagged_heap(&mut **unsafe { ev.tagged_heap_mut() });
 }
 /// A `make-closure` PROTOTYPE shaped like `byte-compile-make-closure`'s: the
 /// first `placeholders` constant slots hold the symbols `V0..`, patched per
@@ -26956,10 +27400,7 @@ fn jit_make_closure(proto: Value, vars: &[Value]) -> Value {
 
 #[cfg(feature = "jit")]
 fn jit_compiled_id(v: Value) -> Option<u64> {
-    v.get_bytecode_data()
-        .expect("bytecode")
-        .jit_runtime()
-        .compiled_id()
+    jit_compiled_id_for_test(v.get_bytecode_data().expect("bytecode"))
 }
 
 /// `make-closure` instances of one prototype share ONE tiering state and ONE
@@ -26971,11 +27412,12 @@ fn jit_compiled_id(v: Value) -> Option<u64> {
 fn jit_make_closure_instances_share_one_leaf_and_read_their_own_captures() {
     // Asserts what a tier-up installs by the call that triggered it: the
     // deterministic split, whatever `NEOVM_JIT_BG` the suite runs under.
-    let _bg_mode =
-        crate::emacs_core::jit::bg::TestModeScope::enter(crate::emacs_core::jit::bg::BgMode::Sync);
+    let _bg_mode = neovm_eval::test_support::authority::enter_test_mode_for_test(
+        crate::emacs_core::jit::BgMode::Sync,
+    );
     crate::test_utils::init_test_tracing();
     use crate::emacs_core::bytecode::opcode::Op;
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let proto = jit_closure_prototype(vec![Op::Constant(0), Op::Return], 1, vec![]);
     let a = jit_make_closure(proto, &[Value::make_int(11)]);
     let b = jit_make_closure(proto, &[Value::make_int(22)]);
@@ -26987,20 +27429,17 @@ fn jit_make_closure_instances_share_one_leaf_and_read_their_own_captures() {
         crate::emacs_core::builtins::builtin_fset(&mut ev, vec![Value::symbol(name), v])
             .expect("fset");
     }
-    let rt_a = a.get_bytecode_data().expect("bytecode").jit_runtime();
+    let a_bc = a.get_bytecode_data().expect("bytecode");
     assert_eq!(
-        rt_a.patched_prefix(),
+        jit_patched_prefix_for_test(a_bc),
         1,
         "make-closure records its patch width"
     );
     // Heat is shared: warming ONE instance warms the source.
-    rt_a.set_hot_for_test();
-    assert!(
-        b.get_bytecode_data()
-            .expect("bytecode")
-            .jit_runtime()
-            .is_hot()
-    );
+    jit_mark_hot_for_test(a_bc);
+    assert!(jit_is_hot_for_test(
+        b.get_bytecode_data().expect("bytecode")
+    ));
 
     let before = crate::emacs_core::jit::cache::compiled_cache_probe().0;
     assert_eq!(
@@ -27040,22 +27479,19 @@ fn jit_make_closure_instances_share_one_leaf_and_read_their_own_captures() {
 fn jit_make_closure_widening_evicts_leaf_compiled_under_narrower_prefix() {
     // Asserts what a tier-up installs by the call that triggered it: the
     // deterministic split, whatever `NEOVM_JIT_BG` the suite runs under.
-    let _bg_mode =
-        crate::emacs_core::jit::bg::TestModeScope::enter(crate::emacs_core::jit::bg::BgMode::Sync);
+    let _bg_mode = neovm_eval::test_support::authority::enter_test_mode_for_test(
+        crate::emacs_core::jit::BgMode::Sync,
+    );
     crate::test_utils::init_test_tracing();
     use crate::emacs_core::bytecode::opcode::Op;
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let proto = jit_closure_prototype(vec![Op::Constant(0), Op::Return], 1, vec![]);
     crate::emacs_core::builtins::builtin_fset(
         &mut ev,
         vec![Value::symbol("jit-widen-proto"), proto],
     )
     .expect("fset");
-    proto
-        .get_bytecode_data()
-        .expect("bytecode")
-        .jit_runtime()
-        .set_hot_for_test();
+    jit_mark_hot_for_test(proto.get_bytecode_data().expect("bytecode"));
     // The prototype itself, called as a plain function, returns the placeholder.
     assert_eq!(
         ev.funcall_general_untraced(proto, vec![]).unwrap(),
@@ -27070,10 +27506,7 @@ fn jit_make_closure_widening_evicts_leaf_compiled_under_narrower_prefix() {
     crate::emacs_core::builtins::builtin_fset(&mut ev, vec![Value::symbol("jit-widen-inst"), inst])
         .expect("fset");
     assert_eq!(
-        inst.get_bytecode_data()
-            .expect("bytecode")
-            .jit_runtime()
-            .patched_prefix(),
+        jit_patched_prefix_for_test(inst.get_bytecode_data().expect("bytecode")),
         1
     );
     assert_eq!(
@@ -27100,13 +27533,14 @@ fn jit_make_closure_widening_evicts_leaf_compiled_under_narrower_prefix() {
 fn jit_make_closure_captured_callee_is_not_speculated_across_instances() {
     // Asserts what a tier-up installs by the call that triggered it: the
     // deterministic split, whatever `NEOVM_JIT_BG` the suite runs under.
-    let _bg_mode =
-        crate::emacs_core::jit::bg::TestModeScope::enter(crate::emacs_core::jit::bg::BgMode::Sync);
+    let _bg_mode = neovm_eval::test_support::authority::enter_test_mode_for_test(
+        crate::emacs_core::jit::BgMode::Sync,
+    );
     crate::test_utils::init_test_tracing();
     use crate::emacs_core::bytecode::opcode::Op;
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     // Call-dominated body: lift the profitability gate so it tiers at all.
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
     let mk_const = |n: i64| {
         jit_closure_prototype(
             vec![Op::Constant(0), Op::Return],
@@ -27128,10 +27562,7 @@ fn jit_make_closure_captured_callee_is_not_speculated_across_instances() {
         .expect("fset");
     crate::emacs_core::builtins::builtin_fset(&mut ev, vec![Value::symbol("jit-cap-b"), b])
         .expect("fset");
-    a.get_bytecode_data()
-        .expect("bytecode")
-        .jit_runtime()
-        .set_hot_for_test();
+    jit_mark_hot_for_test(a.get_bytecode_data().expect("bytecode"));
     assert_eq!(
         ev.funcall_general_untraced(a, vec![]).unwrap(),
         Value::make_int(100)
@@ -27149,7 +27580,7 @@ fn jit_make_closure_captured_callee_is_not_speculated_across_instances() {
         ev.funcall_general_untraced(a, vec![]).unwrap(),
         Value::make_int(100)
     );
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(true);
+    neovm_eval::test_support::authority::force_profit_gate_for_test(true);
 }
 
 /// `gc-cons-threshold` is a forwarded int; a plain `setq` of it must be honored
@@ -27198,7 +27629,7 @@ fn gc_cons_threshold_setq_is_honored_like_gnu() {
 }
 #[test]
 fn lisp_navigation_intent_boundary_records_typed_window_and_frame_scope() {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let buffer = ev
         .buffer_manager()
         .current_buffer()
@@ -27219,13 +27650,13 @@ fn lisp_navigation_intent_boundary_records_typed_window_and_frame_scope() {
         .expect("record selected-frame intent");
 
     assert_eq!(
-        ev.frame_manager()
+        ev.frame_manager_mut()
             .pending_window_navigation_intent(window)
             .map(|intent| intent.direction()),
         Some(neomacs_display_protocol::TransitionDirection::Backward)
     );
     assert_eq!(
-        ev.frame_manager()
+        ev.frame_manager_mut()
             .pending_frame_navigation_intent(frame)
             .map(|intent| intent.direction()),
         Some(neomacs_display_protocol::TransitionDirection::Forward)
@@ -27292,9 +27723,10 @@ fn make_closure_instances_share_the_deferred_gnu_decode() {
 /// buffer, so its multibyteness decides how a raw byte reaches the screen.
 #[test]
 fn echo_area_buffer_multibyteness_follows_unibyte_display_via_language_environment() {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.ensure_echo_area_buffers();
     let id = ev
+        .edit
         .buffers
         .find_buffer_by_name(" *Echo Area 0*")
         .expect("echo-area buffer should exist");
@@ -27304,7 +27736,8 @@ fn echo_area_buffer_multibyteness_follows_unibyte_display_via_language_environme
     let unibyte = crate::emacs_core::builtins::plain_str_to_lisp_string("plain ascii", false);
     ev.set_current_message(Some(unibyte));
     assert!(
-        ev.buffers
+        ev.edit
+            .buffers
             .get(id)
             .expect("echo buffer live")
             .get_multibyte(),
@@ -27316,7 +27749,8 @@ fn echo_area_buffer_multibyteness_follows_unibyte_display_via_language_environme
     let multibyte = crate::emacs_core::builtins::plain_str_to_lisp_string("café", true);
     ev.set_current_message(Some(multibyte));
     assert!(
-        ev.buffers
+        ev.edit
+            .buffers
             .get(id)
             .expect("echo buffer live")
             .get_multibyte(),
@@ -27324,14 +27758,15 @@ fn echo_area_buffer_multibyteness_follows_unibyte_display_via_language_environme
     );
 
     // Only this variable can make it unibyte, and only for a unibyte message.
-    ev.obarray.set_symbol_value(
+    ev.obarray_mut().set_symbol_value(
         "unibyte-display-via-language-environment",
         neovm_value::value::Value::T,
     );
     let unibyte = crate::emacs_core::builtins::plain_str_to_lisp_string("plain ascii", false);
     ev.set_current_message(Some(unibyte));
     assert!(
-        !ev.buffers
+        !ev.edit
+            .buffers
             .get(id)
             .expect("echo buffer live")
             .get_multibyte(),
@@ -27343,7 +27778,8 @@ fn echo_area_buffer_multibyteness_follows_unibyte_display_via_language_environme
     let multibyte = crate::emacs_core::builtins::plain_str_to_lisp_string("café", true);
     ev.set_current_message(Some(multibyte));
     assert!(
-        ev.buffers
+        ev.edit
+            .buffers
             .get(id)
             .expect("echo buffer live")
             .get_multibyte(),
@@ -27372,7 +27808,7 @@ fn echo_area_buffer_multibyteness_follows_unibyte_display_via_language_environme
 /// so the field never saw the conversion the buffer got.
 #[test]
 fn current_message_is_the_text_the_echo_buffer_holds_like_gnu() {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.ensure_echo_area_buffers();
 
     for (label, text) in [
@@ -27402,7 +27838,7 @@ fn current_message_is_the_text_the_echo_buffer_holds_like_gnu() {
 #[test]
 fn let_of_a_plain_symbol_restores_the_old_value_and_unboundness() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let bound = format_eval_result(&ev.eval_str(
         "(progn (setq specbind-plain-v 1) (list (let ((specbind-plain-v 2)) specbind-plain-v) specbind-plain-v))",
     ));
@@ -27418,7 +27854,7 @@ fn let_of_a_plain_symbol_restores_the_old_value_and_unboundness() {
 #[test]
 fn let_of_a_variable_alias_binds_its_target() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let result = format_eval_result(&ev.eval_str(
         "(progn (defvar specbind-alias-target 1) (defvaralias 'specbind-alias 'specbind-alias-target) \
          (list (let ((specbind-alias 2)) (list specbind-alias specbind-alias-target)) specbind-alias specbind-alias-target))",
@@ -27431,7 +27867,7 @@ fn let_of_a_variable_alias_binds_its_target() {
 #[test]
 fn let_of_a_plain_symbol_runs_variable_watchers() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let result = format_eval_result(&ev.eval_str(
         "(progn (setq specbind-watched-v 1) (setq specbind-watch-log nil) \
          (add-variable-watcher 'specbind-watched-v (lambda (_s n op _w) (setq specbind-watch-log (cons (list n op) specbind-watch-log)))) \
@@ -27445,7 +27881,7 @@ fn let_of_a_plain_symbol_runs_variable_watchers() {
 #[test]
 fn nested_plain_lets_unwind_to_their_old_values() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let result = format_eval_result(&ev.eval_str(
         "(progn (setq unwind-a 1 unwind-b 10) \
          (list (let ((unwind-a 2) (unwind-b 20)) (let ((unwind-a 3)) (list unwind-a unwind-b))) unwind-a unwind-b))",
@@ -27458,7 +27894,7 @@ fn nested_plain_lets_unwind_to_their_old_values() {
 #[test]
 fn let_inside_unwind_protect_restores_before_the_cleanup_runs() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let result = format_eval_result(&ev.eval_str(
         "(progn (setq unwind-p 1) (setq unwind-seen nil) \
          (unwind-protect (let ((unwind-p 2)) unwind-p) (setq unwind-seen unwind-p)) \
@@ -27475,7 +27911,7 @@ fn let_inside_unwind_protect_restores_before_the_cleanup_runs() {
 #[test]
 fn forwarded_globals_read_the_same_through_the_leaf_and_the_full_walk() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let probe = r#"(list (integerp gc-cons-threshold)
                          (progn (setq gc-cons-threshold 654321) gc-cons-threshold)
                          (default-value 'gc-cons-threshold)
@@ -27498,7 +27934,7 @@ fn forwarded_globals_read_the_same_through_the_leaf_and_the_full_walk() {
 #[test]
 fn forwarded_globals_keep_alias_and_buffer_local_semantics() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     assert_eq!(
         format_eval_result(&ev.eval_str(
             "(progn (defvaralias 'fwd-leaf-alias 'gc-cons-threshold)
@@ -27528,7 +27964,7 @@ fn forwarded_globals_keep_alias_and_buffer_local_semantics() {
 #[test]
 fn cached_throw_on_input_tracks_every_write_path() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let agrees = |ev: &Context, where_: &str| {
         let obarray = ev
             .obarray()
@@ -27645,14 +28081,14 @@ fn redefining_a_function_is_visible_to_the_next_interpreted_call() {
 #[test]
 fn a_speculated_call_caches_a_bit_op_inlining_callee_and_sees_its_redefinition() {
     crate::test_utils::init_test_tracing();
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    crate::emacs_core::jit::compile::force_inline_arith_for_test(true);
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
+    neovm_eval::test_support::authority::force_inline_arith_for_test(true);
     use crate::emacs_core::bytecode::ByteCodeFunction;
     use crate::emacs_core::bytecode::opcode::Op;
     use neovm_value::intern::SymId;
     use neovm_value::value::LambdaParams;
     use std::sync::atomic::Ordering;
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let lambda = |ops: Vec<Op>, constants: Vec<Value>| {
         let mut f = ByteCodeFunction::new(LambdaParams {
             // SAFETY: test placeholder id, never resolved (peer seal N8).
@@ -27664,7 +28100,7 @@ fn a_speculated_call_caches_a_bit_op_inlining_callee_and_sees_its_redefinition()
         f.ops = ops;
         f.constants = constants.into();
         f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
-        f.jit_runtime().set_hot_for_test();
+        jit_mark_hot_for_test(&f);
         Value::make_bytecode(f)
     };
     // (lambda (x) (if x (logand x 255) (logand x 255))): two blocks, so the
@@ -27687,7 +28123,7 @@ fn a_speculated_call_caches_a_bit_op_inlining_callee_and_sees_its_redefinition()
         vec![Value::symbol("logand"), Value::make_int(255)],
     );
     let callee_id = neovm_value::intern::intern("jit-bitop-callee");
-    ev.obarray.set_symbol_function_id(callee_id, callee);
+    ev.obarray_mut().set_symbol_function_id(callee_id, callee);
     // (lambda (x) (jit-bitop-callee x))
     let caller = lambda(
         vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return],
@@ -27701,7 +28137,7 @@ fn a_speculated_call_caches_a_bit_op_inlining_callee_and_sees_its_redefinition()
             Value::make_int(44)
         );
     }
-    let fast = || crate::emacs_core::jit::compile::SPEC_FAST_CALL_COUNT.load(Ordering::Relaxed);
+    let fast = || compile::spec_fast_call_count_for_test();
     let before = fast();
     assert_eq!(
         ev.funcall_general_untraced(caller, arg.clone()).unwrap(),
@@ -27709,7 +28145,7 @@ fn a_speculated_call_caches_a_bit_op_inlining_callee_and_sees_its_redefinition()
     );
     assert!(fast() > before, "the call runs the cached callee leaf");
     let logand = ev
-        .obarray
+        .obarray()
         .symbol_function_id(neovm_value::intern::intern("logand"))
         .expect("logand");
     ev.eval_str("(fset 'logand (lambda (_a _b) 'redefined))")
@@ -27718,7 +28154,7 @@ fn a_speculated_call_caches_a_bit_op_inlining_callee_and_sees_its_redefinition()
         ev.funcall_general_untraced(caller, arg.clone()).unwrap(),
         Value::symbol("redefined")
     );
-    ev.obarray
+    ev.obarray_mut()
         .set_symbol_function_id(neovm_value::intern::intern("logand"), logand);
     assert_eq!(
         ev.funcall_general_untraced(caller, arg.clone()).unwrap(),
@@ -27736,7 +28172,7 @@ fn a_speculated_call_caches_a_bit_op_inlining_callee_and_sees_its_redefinition()
         }
         other => panic!("(logand '(1) 255) must signal: {other:?}"),
     }
-    crate::emacs_core::jit::compile::force_inline_arith_for_test(false);
+    neovm_eval::test_support::authority::force_inline_arith_for_test(false);
 }
 
 /// A native call into a compiled callee with `&optional` slots or a `&rest`
@@ -27750,12 +28186,11 @@ fn native_calls_marshal_optional_and_rest_arguments() {
     crate::test_utils::init_test_tracing();
     use crate::emacs_core::bytecode::ByteCodeFunction;
     use crate::emacs_core::bytecode::opcode::Op;
-    use crate::emacs_core::bytecode::vm::APPLY_NATIVE_CALLS;
     use crate::emacs_core::print::print_value;
     use neovm_value::intern::SymId;
     use neovm_value::value::LambdaParams;
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
+    let mut ev = crate::test_utils::new_context();
     // A callee that lists its slots: `(list SLOT...)`.
     let callee = |required: u32, optional: u32, rest: bool| {
         let slots = required + optional + u32::from(rest);
@@ -27776,7 +28211,7 @@ fn native_calls_marshal_optional_and_rest_arguments() {
         f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(
             usize::try_from(slots + 1).expect("test frame fits host"),
         );
-        f.jit_runtime().set_hot_for_test();
+        jit_mark_hot_for_test(&f);
         let v = Value::make_bytecode(f);
         crate::emacs_core::eval::push_scratch_gc_root(v);
         (v, required as usize, optional as usize, rest)
@@ -27806,7 +28241,7 @@ fn native_calls_marshal_optional_and_rest_arguments() {
     ];
     caller.constants = vec![Value::symbol("apply"), Value::make_int(1)].into();
     caller.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
-    caller.jit_runtime().set_hot_for_test();
+    jit_mark_hot_for_test(&caller);
     let caller = Value::make_bytecode(caller);
     crate::emacs_core::eval::push_scratch_gc_root(caller);
     let run = |ev: &mut Context, f: Value, nargs: usize| {
@@ -27832,9 +28267,10 @@ fn native_calls_marshal_optional_and_rest_arguments() {
     for &(f, required, optional, rest) in &shapes {
         for nargs in 1..=20 {
             let accepted = nargs >= required && (rest || nargs <= required + optional);
-            let before = APPLY_NATIVE_CALLS.with(|c| c.get());
+            let before = crate::emacs_core::bytecode::vm::apply_native_calls_for_test();
             let got = run(&mut ev, f, nargs);
-            let ran_native = APPLY_NATIVE_CALLS.with(|c| c.get()) - before;
+            let ran_native =
+                crate::emacs_core::bytecode::vm::apply_native_calls_for_test() - before;
             let shape = format!("({required} req, {optional} opt, rest {rest}) with {nargs}");
             if !accepted {
                 assert_eq!(got, "signal wrong-number-of-arguments", "{shape}");
@@ -27870,17 +28306,17 @@ fn native_calls_marshal_optional_and_rest_arguments() {
 fn jit_apply_enters_a_compiled_callee_natively() {
     // Asserts what a tier-up installs by the call that triggered it: the
     // deterministic split, whatever `NEOVM_JIT_BG` the suite runs under.
-    let _bg_mode =
-        crate::emacs_core::jit::bg::TestModeScope::enter(crate::emacs_core::jit::bg::BgMode::Sync);
+    let _bg_mode = neovm_eval::test_support::authority::enter_test_mode_for_test(
+        crate::emacs_core::jit::BgMode::Sync,
+    );
     crate::test_utils::init_test_tracing();
     use crate::emacs_core::bytecode::ByteCodeFunction;
     use crate::emacs_core::bytecode::opcode::Op;
-    use crate::emacs_core::bytecode::vm::APPLY_NATIVE_CALLS;
     use crate::emacs_core::print::print_value;
     use neovm_value::intern::SymId;
     use neovm_value::value::LambdaParams;
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
+    let mut ev = crate::test_utils::new_context();
     let callee = |required: u32, optional: u32, rest: bool, ops: Vec<Op>| {
         let mut f = ByteCodeFunction::new(LambdaParams {
             // SAFETY: test placeholder id, never resolved (peer seal N8).
@@ -27897,7 +28333,7 @@ fn jit_apply_enters_a_compiled_callee_natively() {
         f.lexical = true;
         f.ops = ops;
         f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
-        f.jit_runtime().set_hot_for_test();
+        jit_mark_hot_for_test(&f);
         let v = Value::make_bytecode(f);
         crate::emacs_core::eval::push_scratch_gc_root(v);
         v
@@ -27947,7 +28383,7 @@ fn jit_apply_enters_a_compiled_callee_natively() {
     ];
     caller.constants = vec![Value::symbol("apply"), Value::make_int(1)].into();
     caller.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
-    caller.jit_runtime().set_hot_for_test();
+    jit_mark_hot_for_test(&caller);
     let caller = Value::make_bytecode(caller);
     crate::emacs_core::eval::push_scratch_gc_root(caller);
     let run = |ev: &mut Context, f: Value, list: &str| {
@@ -27970,30 +28406,36 @@ fn jit_apply_enters_a_compiled_callee_natively() {
             let _ = run(&mut ev, f, "nil");
         }
     }
-    let before = APPLY_NATIVE_CALLS.with(|c| c.get());
+    let before = crate::emacs_core::bytecode::vm::apply_native_calls_for_test();
     assert_eq!(run(&mut ev, fixed, "'(2 3)"), "(1 2 3)");
     assert_eq!(run(&mut ev, optional, "'(2)"), "(1 2)");
     assert_eq!(run(&mut ev, optional, "nil"), "(1 nil)");
     assert_eq!(run(&mut ev, rest, "'(2 3 4)"), "(1 2 3 4)");
     assert_eq!(run(&mut ev, rest, "nil"), "(1)");
     assert_eq!(
-        APPLY_NATIVE_CALLS.with(|c| c.get()) - before,
+        crate::emacs_core::bytecode::vm::apply_native_calls_for_test() - before,
         5,
         "all five ran natively"
     );
     // The builtin path, with its own answers.
-    let before = APPLY_NATIVE_CALLS.with(|c| c.get());
+    let before = crate::emacs_core::bytecode::vm::apply_native_calls_for_test();
     assert!(run(&mut ev, fixed, "'(2)").starts_with("signal wrong-number-of-arguments"));
     assert_eq!(
         run(&mut ev, rest, "'(2 . 3)"),
         "signal wrong-type-argument [\"listp\", \"3\"]"
     );
     assert_eq!(run(&mut ev, Value::symbol("list"), "'(2 3)"), "(1 2 3)");
-    assert_eq!(APPLY_NATIVE_CALLS.with(|c| c.get()), before);
+    assert_eq!(
+        crate::emacs_core::bytecode::vm::apply_native_calls_for_test(),
+        before
+    );
     ev.eval_str("(fset 'apply (lambda (&rest _) 'redefined))")
         .expect("redefine");
     assert_eq!(run(&mut ev, fixed, "'(2 3)"), "redefined");
-    assert_eq!(APPLY_NATIVE_CALLS.with(|c| c.get()), before);
+    assert_eq!(
+        crate::emacs_core::bytecode::vm::apply_native_calls_for_test(),
+        before
+    );
 }
 
 /// An interpreted call whose evaluated arguments are too many for the
@@ -28003,7 +28445,7 @@ fn jit_apply_enters_a_compiled_callee_natively() {
 #[test]
 fn an_interpreted_call_with_an_oversized_argument_span_evaluates_and_releases_it() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let before = eval.backtrace_args_stack_len_for_test();
     let value = eval
         .eval_str(
@@ -28030,7 +28472,7 @@ fn an_interpreted_call_with_an_oversized_argument_span_evaluates_and_releases_it
 #[test]
 fn a_begbuf_anchored_search_matches_only_at_the_start_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let value = eval
         .eval_str(
             r#"(let ((buf (get-buffer-create " *begbuf*")))
@@ -28064,7 +28506,7 @@ fn a_begbuf_anchored_search_matches_only_at_the_start_like_gnu() {
 #[test]
 fn a_lexical_closure_call_binds_its_formals_like_gnu_funcall_lambda() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.set_lexical_binding(true);
     let value = eval
         .eval_str(
@@ -28100,7 +28542,7 @@ fn a_lexical_closure_call_binds_its_formals_like_gnu_funcall_lambda() {
 #[test]
 fn let_roots_its_init_values_on_the_operand_stack_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.set_lexical_binding(true);
     eval.eval_str("(defvar me-d 0)").expect("defvar");
     let before = eval.bc_buf.len();
@@ -28131,7 +28573,7 @@ fn let_roots_its_init_values_on_the_operand_stack_like_gnu() {
 #[test]
 fn a_let_init_value_survives_a_collection_in_a_later_init_form() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.set_lexical_binding(true);
     let value = eval
         .eval_str(
@@ -28158,7 +28600,7 @@ fn a_let_init_value_survives_a_collection_in_a_later_init_form() {
 #[test]
 fn interpreted_calls_of_rest_builtins_dispatch_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let value = eval
         .eval_str(
             r#"(list (+ 1 2 3 4 5 6 7 8 9 10)
@@ -28188,7 +28630,7 @@ fn interpreted_calls_of_rest_builtins_dispatch_like_gnu() {
 #[test]
 fn deep_interpreted_recursion_through_builtins_reaches_gnus_nesting_limit() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.set_lexical_binding(true);
     let value = eval
         .eval_str(
@@ -28215,7 +28657,7 @@ fn deep_interpreted_recursion_through_builtins_reaches_gnus_nesting_limit() {
 #[test]
 fn a_signal_enters_the_debugger_once_with_the_innermost_binding_live() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.set_lexical_binding(true);
     eval.eval_str("(defvar mb-v 0)").expect("defvar");
     let value = eval
@@ -28370,8 +28812,8 @@ fn inlined_tier_a_buffer_reads_answer_like_gnu() {
 #[test]
 fn the_inline_tier_a_read_engages_and_still_matches_the_interpreter() {
     crate::test_utils::init_test_tracing();
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str("(insert \"abc\\ndef\")").unwrap();
     ev.eval_str("(goto-char 2)").unwrap();
 
@@ -28379,10 +28821,7 @@ fn the_inline_tier_a_read_engages_and_still_matches_the_interpreter() {
     // lowering must not pay for it), so the engagement assertion is
     // debug-only, exactly like the other CBSym fastpath counters above.
     #[cfg(debug_assertions)]
-    let emitted = || {
-        crate::emacs_core::jit::compile::lowering::INLINE_CBSYM_READ_EMITTED
-            .load(std::sync::atomic::Ordering::Relaxed)
-    };
+    let emitted = || crate::emacs_core::jit::compile::inline_cbsym_read_emitted_for_test();
     #[cfg(debug_assertions)]
     let before = emitted();
 
@@ -28507,7 +28946,7 @@ fn native_input_progress_waits_through_command_hooks_and_finalization() {
         Ok(Value::NIL)
     }
     let (mut ev, global_map) = command_loop_error_test_context();
-    ev.noninteractive = false;
+    neovm_eval::test_support::authority::set_noninteractive_for_test(&mut ev, false);
     ev.register_subr(SubrSpec::new(
         "neo-input-progress-probe",
         NativeFn::ContextVec(probe),
@@ -28523,25 +28962,25 @@ fn native_input_progress_waits_through_command_hooks_and_finalization() {
     .unwrap();
     let stream = neomacs_display_protocol::input_progress::InputStream::default();
     let receipt = stream.issue().unwrap();
-    let frame = ev.frames.selected_frame().unwrap().id.0;
-    let tx = crate::host_input::HostInputPublisher::install(&mut ev);
+    let frame = ev.frame_manager().selected_frame().unwrap().id.0;
+    let tx = neovm_system::emacs_core::host_input::HostInputPublisher::install(&mut ev);
 
-    tx.send(crate::keyboard::InputEvent::Tracked {
+    tx.send(crate::emacs_core::eval::keyboard::InputEvent::Tracked {
         receipt: receipt.clone(),
-        event: Box::new(crate::keyboard::InputEvent::KeyPress {
-            key: crate::keyboard::KeyEvent::char('q'),
+        event: Box::new(crate::emacs_core::eval::keyboard::InputEvent::KeyPress {
+            key: crate::emacs_core::eval::keyboard::KeyEvent::char('q'),
             emacs_frame_id: frame,
         }),
     })
     .unwrap();
-    ev.command_loop.running = true;
+    ev.command_loop_mut().running = true;
     ev.recursive_edit_inner().unwrap();
     assert!(receipt.acknowledged_by(&ev.input_progress.checkpoint()));
 }
 
 #[test]
 fn native_input_progress_completion_requires_a_fresh_presentation() {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let stream = neomacs_display_protocol::input_progress::InputStream::default();
     let command = ev.input_progress.begin_command();
     ev.input_progress.consumed(stream.issue().unwrap());
@@ -28558,7 +28997,7 @@ fn native_input_progress_completion_requires_a_fresh_presentation() {
 #[test]
 fn fontset_changes_invalidate_redisplay_skip_signature() {
     let _policy = legacy_redisplay_fixture_policy();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let calls = Rc::new(RefCell::new(0usize));
     let observed = Rc::clone(&calls);
     ev.redisplay_fn = Some(Box::new(move |_ev: &mut Context| {
@@ -28614,18 +29053,19 @@ fn current_buffer_scope_finish_watcher_panic_restores_popped_binding_and_roots()
         }
         Ok(Value::NIL)
     }
-    let mut ctx = Context::new();
-    let original = ctx.buffers.current_buffer_id().unwrap();
-    let other = ctx.buffers.create_buffer("scope-finish-watcher-other");
+    let mut ctx = crate::test_utils::new_context();
+    let original = ctx.edit.buffers.current_buffer_id().unwrap();
+    let other = ctx.edit.buffers.create_buffer("scope-finish-watcher-other");
     let symbol = intern("scope-finish-watcher-value");
-    ctx.obarray.set_symbol_value_id(symbol, Value::fixnum(10));
+    ctx.obarray_mut()
+        .set_symbol_value_id(symbol, Value::fixnum(10));
     ctx.register_subr(SubrSpec::new(
         "scope-finish-watcher-panic",
         NativeFn::ContextVec(panic_during_unlet),
         SubrArity::new(4, Some(4)),
     ));
-    let depth = ctx.specpdl.len();
-    let root_depth = ctx.vm_root_frames.len();
+    let depth = ctx.specpdl().len();
+    let root_depth = ctx.vm_root_frames_len_for_test();
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut scope = CurrentBufferScope::enter(&mut ctx);
         scope
@@ -28648,14 +29088,14 @@ fn current_buffer_scope_finish_watcher_panic_restores_popped_binding_and_roots()
     }));
     assert!(outcome.is_err());
     assert_eq!(
-        ctx.obarray.symbol_value_id_or_nil(symbol),
+        ctx.obarray().symbol_value_id_or_nil(symbol),
         Value::fixnum(10),
         "a popped Let must remain owned while its watcher can panic"
     );
-    assert_eq!(ctx.buffers.current_buffer_id(), Some(original));
-    assert_eq!(ctx.specpdl.len(), depth);
-    assert_eq!(ctx.vm_root_frames.len(), root_depth);
-    assert!(!ctx.active_variable_watchers.contains(&symbol));
+    assert_eq!(ctx.edit.buffers.current_buffer_id(), Some(original));
+    assert_eq!(ctx.specpdl().len(), depth);
+    assert_eq!(ctx.vm_root_frames_len_for_test(), root_depth);
+    assert!(!ctx.variable_watched_for_test(symbol));
 }
 
 /// Rust watcher panic must release temporary unwind roots and reinstate GNU's
@@ -28672,10 +29112,11 @@ fn unbind_watcher_panic_restores_quit_and_vm_roots() {
         }
         Ok(Value::NIL)
     }
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let symbol = intern("unwind-roots-independent-value");
-    let depth = ctx.specpdl.len();
-    ctx.obarray.set_symbol_value_id(symbol, Value::fixnum(10));
+    let depth = ctx.specpdl().len();
+    ctx.obarray_mut()
+        .set_symbol_value_id(symbol, Value::fixnum(10));
     ctx.try_specbind(symbol, Value::fixnum(20)).unwrap();
     ctx.register_subr(SubrSpec::new(
         "unwind-roots-independent-watcher",
@@ -28690,8 +29131,8 @@ fn unbind_watcher_panic_restores_quit_and_vm_roots() {
         ],
     )
     .unwrap();
-    let frame_count = ctx.vm_root_frames.len();
-    let root_count = ctx.vm_root_frames.last().map(|frame| frame.roots.len());
+    let frame_count = ctx.vm_root_frames_len_for_test();
+    let root_count = ctx.vm_root_frames_last_roots_len_for_test();
     let pending = Value::fixnum(7);
     ctx.set_quit_flag_value(pending);
     let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -28699,11 +29140,8 @@ fn unbind_watcher_panic_restores_quit_and_vm_roots() {
     }));
     assert!(caught.is_err());
     assert_eq!(ctx.quit_flag_value(), pending);
-    assert_eq!(ctx.vm_root_frames.len(), frame_count);
-    assert_eq!(
-        ctx.vm_root_frames.last().map(|frame| frame.roots.len()),
-        root_count
-    );
+    assert_eq!(ctx.vm_root_frames_len_for_test(), frame_count);
+    assert_eq!(ctx.vm_root_frames_last_roots_len_for_test(), root_count);
 }
 
 #[cfg(test)]

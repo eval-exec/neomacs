@@ -160,7 +160,8 @@ const GC_DEFAULT_THRESHOLD_BYTES: usize = 100_000 * std::mem::size_of::<usize>()
 const GC_THRESHOLD_FLOOR_BYTES: usize = GC_DEFAULT_THRESHOLD_BYTES / 10;
 /// Bound peak arena growth while startup configs deliberately defer Lisp GC.
 /// The host releases the ceiling after its bounded startup settling window.
-const GC_STARTUP_THRESHOLD_CEILING_BYTES: usize = 4 * 1024 * 1024;
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+pub(crate) const GC_STARTUP_THRESHOLD_CEILING_BYTES: usize = 4 * 1024 * 1024;
 const GC_HI_THRESHOLD_BYTES: usize = (i64::MAX as usize) / 2;
 const GC_PERCENT_SCALE: u64 = 1_000_000;
 /// Live-proportional adaptive trigger (`effective_gc_threshold_bytes`): do not
@@ -583,7 +584,8 @@ impl RedisplaySignature {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct RedisplayFrameSignature {
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+pub(crate) struct RedisplayFrameSignature {
     layout: crate::emacs_core::eval::data::window_state::FrameLayoutInputState,
     selected_window: u64,
     window_state_change: bool,
@@ -610,6 +612,28 @@ struct RedisplayBufferSignature {
 }
 
 pub(crate) use subr_abi::SubrEntry;
+
+impl RedisplaySignature {
+    /// Copied frame half of the signature (C4; plain metadata type).
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    pub(crate) fn frame_for_test(&self) -> Option<RedisplayFrameSignature> {
+        self.frame.clone()
+    }
+}
+
+impl RedisplayBufferSignature {
+    /// Copied buffer-layout modified tick for the re-homed redisplay tests.
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    pub(crate) fn layout_modified_tick_for_test(&self) -> i64 {
+        self.layout.modified_tick
+    }
+
+    /// Copied overlay modified tick (C4).
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    pub(crate) fn layout_overlay_modified_tick_for_test(&self) -> i64 {
+        self.layout.overlay_modified_tick
+    }
+}
 
 thread_local! {
     // Static subrs are encoded directly from `SymId`, so the registry should
@@ -1451,6 +1475,7 @@ pub struct NativeUnwindToken {
 /// owned argument stack, so this type never imposes a semantic limit.
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) struct BytecodeBacktraceSpan(usize);
 
 impl BytecodeBacktraceSpan {
@@ -1485,7 +1510,8 @@ impl BytecodeBacktraceSpan {
 
 /// Decoded view of the one-word backtrace argument descriptor.
 #[derive(Clone, Copy, Debug)]
-enum BacktraceArgsView {
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+pub(crate) enum BacktraceArgsView {
     Unevalled(Value),
     Evaluated0,
     Evaluated(usize),
@@ -1503,6 +1529,7 @@ enum BacktraceArgsView {
 /// invalid descriptor unconstructable outside this module.
 #[repr(transparent)]
 #[derive(Clone, Copy)]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) struct BacktraceArgs(usize);
 
 impl BacktraceArgs {
@@ -1664,6 +1691,7 @@ const _: () = {
 #[must_use = "a pushed bytecode backtrace frame must be consumed by a matching pop"]
 #[repr(transparent)]
 #[derive(Debug)]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) struct BytecodeBacktraceFrame(usize);
 
 impl BytecodeBacktraceFrame {
@@ -1736,13 +1764,13 @@ impl BytecodeBacktraceFrame {
         Self::new(frame_specpdl_base - 1, owns_args)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn base_for_test(&self) -> usize {
         self.base()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn word_for_test(&self) -> usize {
         self.0
@@ -1761,6 +1789,7 @@ const _: () =
 /// frame some other way without a token, and it cannot drop the token without
 /// tripping `BytecodeBacktraceFrame`'s own `#[must_use]`.
 #[must_use = "a refused fast pop leaves the frame on the specpdl owing a debugger entry"]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) enum FastBytecodePop {
     /// The frame is gone: GNU's `specpdl_ptr--`.
     Popped,
@@ -1787,13 +1816,15 @@ pub(crate) struct ThreadDynamicBindingToken {
 /// This is intentionally a separate closed enum: the fast pop below cannot
 /// accidentally admit a new `SpecBinding` variant with an owned Rust payload.
 #[derive(Clone, Copy)]
-enum TrivialSpecBindingPop {
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+pub(crate) enum TrivialSpecBindingPop {
     NoOwnedArgs,
     BacktraceArgs(BacktraceArgs),
 }
 
 #[inline(always)]
-fn trivial_spec_binding_pop(binding: &SpecBinding) -> Option<TrivialSpecBindingPop> {
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+pub(crate) fn trivial_spec_binding_pop(binding: &SpecBinding) -> Option<TrivialSpecBindingPop> {
     match binding {
         SpecBinding::GcRoot { .. }
         | SpecBinding::Nop
@@ -1847,6 +1878,9 @@ pub(crate) struct PendingSafeFuncall {
     pub(crate) args: LispArgVec,
 }
 
+#[cfg(any(test, feature = "test-support"))]
+pub type LispArgVec = SmallVec<[Value; 8]>;
+#[cfg(not(any(test, feature = "test-support")))]
 pub(crate) type LispArgVec = SmallVec<[Value; 8]>;
 type LetBindingVec = SmallVec<[(SymId, Value); 8]>;
 
@@ -1861,7 +1895,8 @@ mod timer_timestamp;
 pub use timer_timestamp::GnuTimerTimestamp;
 
 #[derive(Clone, Debug)]
-enum NamedCallTarget {
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+pub(crate) enum NamedCallTarget {
     Obarray(Value),
     Subr(Value),
     Void,
@@ -1882,9 +1917,9 @@ enum NamedAutoloadCallStep {
 }
 
 #[derive(Clone, Debug)]
-struct NamedCallCacheEntry {
-    function_epoch: u64,
-    target: NamedCallTarget,
+pub(crate) struct NamedCallCacheEntry {
+    pub(crate) function_epoch: u64,
+    pub(crate) target: NamedCallTarget,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -2032,7 +2067,8 @@ fn buffer_undo_list_symbol() -> SymId {
     *SYMBOL.get_or_init(|| intern("buffer-undo-list"))
 }
 
-fn macroexp_dynvars_symbol() -> SymId {
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+pub(crate) fn macroexp_dynvars_symbol() -> SymId {
     static SYMBOL: OnceLock<SymId> = OnceLock::new();
     *SYMBOL.get_or_init(|| intern("macroexp--dynvars"))
 }
@@ -2329,6 +2365,7 @@ fn add_feature_value_in_state(
 }
 
 /// Limit for stored recent input events to match GNU Emacs: 300 entries.
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) const RECENT_INPUT_EVENT_LIMIT: usize = 300;
 
 #[derive(Clone, Copy)]
@@ -2888,6 +2925,7 @@ pub enum ConditionFrame {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, EnumString, IntoStaticStr)]
 #[strum(serialize_all = "kebab-case")]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) enum ConditionControlSymbol {
     Debug,
 }
@@ -2898,14 +2936,15 @@ impl ConditionControlSymbol {
         value.as_bare_symbol_name()?.parse().ok()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn name(self) -> &'static str {
         self.into()
     }
 }
 
-fn condition_value_contains_debug(value: &Value) -> bool {
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+pub(crate) fn condition_value_contains_debug(value: &Value) -> bool {
     match value.kind() {
         ValueKind::Symbol(_) => {
             ConditionControlSymbol::from_lisp_value(value) == Some(ConditionControlSymbol::Debug)
@@ -3358,7 +3397,7 @@ pub struct Context {
     /// Keyed by symbol id; entries are validated against the obarray's
     /// `function_epoch` so that any `defalias` / `fset` / autoload
     /// installation immediately invalidates stale lookups.
-    named_call_cache: FxHashMap<SymId, NamedCallCacheEntry>,
+    pub(crate) named_call_cache: FxHashMap<SymId, NamedCallCacheEntry>,
     macro_perf_stats: WorldView<MacroPerfStats>,
     /// User-defined fringe bitmaps registered via `define-fringe-bitmap`.
     /// GC-safe: holds no raw `Value`s (bits are `Vec<u16>`, faces are names).
@@ -3683,7 +3722,7 @@ pub struct Context {
     /// One-shot runtime flag set by file pdump loads.  GNU keeps this as
     /// pdumper runtime state, not as a public obarray symbol.
     pub(crate) after_pdump_load_hook_pending: bool,
-    noninteractive: bool,
+    pub(crate) noninteractive: bool,
     /// When true, `symbolp`/`eq`/hash operations transparently unwrap
     /// symbol-with-pos objects. Bound to `t` by the byte-compiler.
     #[doc(hidden)]
@@ -4378,7 +4417,7 @@ impl Drop for GcInhibitGuard<'_> {
 /// unwinds cannot leave the depth stuck nonzero — which would permanently
 /// disable `throw-on-input` once panics become catchable. Same shape as
 /// [`GcInhibitGuard`].
-struct UnwindCleanupGuard<'a>(&'a mut Context);
+pub(crate) struct UnwindCleanupGuard<'a>(&'a mut Context);
 
 impl<'a> UnwindCleanupGuard<'a> {
     #[doc(hidden)]
@@ -5101,10 +5140,66 @@ impl Context {
             && self.depth == 0
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn condition_stack_depth_for_test(&self) -> usize {
         self.condition_stack.len()
+    }
+
+    /// Copied observer for the re-homed eval tests (P1 CLASSES C4: reads).
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    pub(crate) fn vm_root_frames_len_for_test(&self) -> usize {
+        self.vm_root_frames.len()
+    }
+
+    /// Copied first root of the newest VM root frame (never a frame borrow).
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    pub(crate) fn vm_root_frames_last_first_root_for_test(&self) -> Option<Value> {
+        self.vm_root_frames
+            .last()
+            .and_then(|frame| frame.roots.first().copied())
+    }
+
+    /// Copied last VM root frame's root count (C4/N4: never a frame borrow).
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    pub(crate) fn vm_root_frames_last_roots_len_for_test(&self) -> Option<usize> {
+        self.vm_root_frames.last().map(|frame| frame.roots.len())
+    }
+
+    /// Copied eval-depth limit observer (C4).
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    pub(crate) fn max_depth_for_test(&self) -> usize {
+        self.max_depth
+    }
+
+    /// Copied display-variable change counter observer (C4/N2).
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    pub(crate) fn display_var_change_count_for_test(&self) -> u64 {
+        self.display_var_change_count
+    }
+
+    /// Copied internal interpreter environment symbol (C4).
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    pub(crate) fn internal_interpreter_environment_symbol_for_test(&self) -> SymId {
+        self.internal_interpreter_environment_symbol
+    }
+
+    /// Copied variable-watcher membership predicate (C4/N2: the set stays private).
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    pub(crate) fn variable_watched_for_test(&self, sym: SymId) -> bool {
+        self.active_variable_watchers.contains(&sym)
+    }
+
+    /// Copied GC runtime memory-full predicate (C4/N2: the cache stays private).
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    pub(crate) fn gc_runtime_memory_full_for_test(&self) -> bool {
+        self.gc_runtime_settings_cache.memory_full.is_full()
+    }
+
+    /// Copied unwind-cleanup depth observer (C4).
+    #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+    pub(crate) fn unwind_cleanup_depth_for_test(&self) -> usize {
+        self.unwind_cleanup_depth
     }
 
     #[doc(hidden)]
@@ -7725,6 +7820,7 @@ pub(crate) fn default_toplevel_value_in_state(
 }
 
 /// `(default-toplevel-value SYMBOL)`.
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) fn default_toplevel_value(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_args("default-toplevel-value", &args, 1)?;
     let symbol = SymId::from_value(ctx, args[0])?;
@@ -8848,6 +8944,9 @@ pub mod lifecycle;
 pub mod perf;
 pub mod process_hooks;
 mod thread_local_roots;
+#[cfg(any(test, feature = "test-support"))]
+pub use thread_local_roots::{collect_thread_local_gc_roots, for_each_thread_local_root_source};
+#[cfg(not(any(test, feature = "test-support")))]
 use thread_local_roots::{collect_thread_local_gc_roots, for_each_thread_local_root_source};
 mod hash_test_gc_inhibit;
 
@@ -8928,9 +9027,11 @@ pub(crate) use cconv_shape::{
 pub(crate) use cconv_trust::{
     EXCLUDED_CALLEES, TRUSTED_LISP, TRUSTED_VARIABLES, TrustRefusal, TrustedVariableRole,
 };
+#[cfg(any(test, feature = "test-support"))]
+pub use tier_i::TierIMode;
 #[cfg(test)]
 pub(crate) use tier_i::{
-    TierIEvent, TierIMode, parse_tier_i_knob, parse_tier_i_lazy_frames, parse_tier_i_threshold,
+    TierIEvent, parse_tier_i_knob, parse_tier_i_lazy_frames, parse_tier_i_threshold,
 };
 #[cfg(test)]
 pub(crate) use var_fast::{
@@ -8977,10 +9078,6 @@ mod form_head_cache;
 mod tree_walk;
 use dispatch_class::{CallTarget, EvalDispatch, FormHead};
 pub(crate) use form_head_cache::FormHeadCache;
-
-#[cfg(test)]
-#[path = "tests/eval_test.rs"]
-mod tests;
 
 #[cfg(test)]
 #[path = "tests/saved_state_scope_test.rs"]

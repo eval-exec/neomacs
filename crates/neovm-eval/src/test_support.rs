@@ -399,6 +399,176 @@ pub mod authority {
             neovm_text::emacs_core::treesit::LineColCache::from_parts(line, col, bytepos),
         );
     }
+
+    /// Fence delegate: force the JIT profitability gate override. The
+    /// original writes a thread-local test override, so it is fence-only
+    /// (no static/Cell behind a VIS route).
+    pub fn force_profit_gate_for_test(on: bool) {
+        crate::emacs_core::jit::compile::force_profit_gate_for_test(on)
+    }
+
+    /// Fence delegates for the JIT tiering test knobs (writes to the
+    /// function's runtime state; no &mut Runtime escapes).
+    #[cfg(feature = "jit")]
+    pub fn jit_mark_hot_for_test(function: &crate::emacs_core::bytecode::ByteCodeFunction) {
+        use crate::emacs_core::jit::RuntimeStateTieringExt;
+        crate::emacs_core::bytecode::ByteCodeFunctionExt::jit_runtime(function).set_hot_for_test()
+    }
+
+    #[cfg(feature = "jit")]
+    pub fn jit_mark_cold_for_test(function: &crate::emacs_core::bytecode::ByteCodeFunction) {
+        use crate::emacs_core::jit::RuntimeStateTieringExt;
+        crate::emacs_core::bytecode::ByteCodeFunctionExt::jit_runtime(function).set_cold_for_test()
+    }
+
+    #[cfg(feature = "jit")]
+    pub fn jit_compiled_id_or_assign_for_test(
+        function: &crate::emacs_core::bytecode::ByteCodeFunction,
+    ) -> u64 {
+        use crate::emacs_core::jit::RuntimeStateTieringExt;
+        crate::emacs_core::bytecode::ByteCodeFunctionExt::jit_runtime(function)
+            .compiled_id_or_assign()
+    }
+
+    /// Fence delegate for the pending-timer service (runs Lisp callbacks;
+    /// state-changing, so it is fence-only).
+    pub fn service_pending_timers_for_test(
+        ctx: &mut crate::emacs_core::eval::Context,
+    ) -> Result<(), neovm_value::error::Flow> {
+        crate::emacs_core::eval::hooks_proof::wait::service_timers_without_redisplay(ctx)
+    }
+
+    // ---- eval_test re-home providers (P1-CLASSES-ALL-CRATES; peer 19:17Z
+    // early feedback applied: reads copy out, writes are FENCE). ----
+
+    /// FENCE delegate: value-side Tier-0 pin write (N2/N3; the Atomic stays in
+    /// value and is never handed out).
+    pub fn set_force_interpret_for_test(state: &crate::emacs_core::jit::RuntimeState, on: bool) {
+        neovm_value::test_support::authority::set_force_interpret_for_test(state, on);
+    }
+
+    /// Copied JIT tiering reads (C4: values copy out; no runtime reference
+    /// escapes the call).
+    #[cfg(feature = "jit")]
+    pub fn jit_patched_prefix_for_test(
+        function: &crate::emacs_core::bytecode::ByteCodeFunction,
+    ) -> usize {
+        use crate::emacs_core::jit::RuntimeStateTieringExt;
+        crate::emacs_core::bytecode::ByteCodeFunctionExt::jit_runtime(function).patched_prefix()
+    }
+
+    #[cfg(feature = "jit")]
+    pub fn jit_is_hot_for_test(function: &crate::emacs_core::bytecode::ByteCodeFunction) -> bool {
+        use crate::emacs_core::jit::RuntimeStateTieringExt;
+        crate::emacs_core::bytecode::ByteCodeFunctionExt::jit_runtime(function).is_hot()
+    }
+
+    #[cfg(feature = "jit")]
+    pub fn jit_compiled_id_for_test(
+        function: &crate::emacs_core::bytecode::ByteCodeFunction,
+    ) -> Option<u64> {
+        use crate::emacs_core::jit::RuntimeStateTieringExt;
+        crate::emacs_core::bytecode::ByteCodeFunctionExt::jit_runtime(function).compiled_id()
+    }
+
+    /// Data-only audited legacy value write on the Context's obarray view
+    /// (N3 FENCE).
+    ///
+    /// # Safety
+    /// `write` must perform only the data-only effects audited on
+    /// `ObarrayView::with_legacy_value_write`: no Lisp, no function-cell,
+    /// descriptor, storage-identity or generation mutation, and no raw or
+    /// interior mutable authority may escape or overlap another phase.
+    pub unsafe fn with_legacy_value_write_for_test<R>(
+        ctx: &mut crate::emacs_core::eval::Context,
+        write: impl for<'manager> FnOnce(&'manager mut neovm_value::symbol::Obarray) -> R,
+    ) -> R {
+        // SAFETY: the caller upholds the audited data-only contract; the
+        // exclusive Context borrow keeps the sole view phase non-overlapping.
+        unsafe { ctx.obarray.with_legacy_value_write(write) }
+    }
+
+    /// FENCE delegate: enter the panic-safe unwind-cleanup scope (C3 write).
+    #[allow(private_interfaces)]
+    pub fn enter_unwind_cleanup_guard_for_test(
+        ctx: &mut crate::emacs_core::eval::Context,
+    ) -> crate::emacs_core::eval::UnwindCleanupGuard<'_> {
+        crate::emacs_core::eval::UnwindCleanupGuard::enter(ctx)
+    }
+
+    /// FENCE delegate: Tier-I test policy writes (N2).
+    pub fn configure_tier_i_for_test(
+        ctx: &mut crate::emacs_core::eval::Context,
+        mode: crate::emacs_core::eval::TierIMode,
+        threshold: u32,
+    ) {
+        ctx.tier_i.set_mode(mode);
+        ctx.tier_i.set_threshold(threshold);
+    }
+
+    /// FENCE delegate: plant a stale named-call cache entry (dispatch-cache
+    /// write; the entry type and the map stay private).
+    pub fn plant_stale_named_call_cache_entry_for_test(
+        ctx: &mut crate::emacs_core::eval::Context,
+        sym: SymId,
+    ) {
+        let function_epoch = ctx.obarray().function_epoch();
+        ctx.named_call_cache.insert(
+            sym,
+            crate::emacs_core::eval::NamedCallCacheEntry {
+                function_epoch,
+                target: crate::emacs_core::eval::NamedCallTarget::Void,
+            },
+        );
+    }
+
+    /// FENCE delegates for the JIT force knobs (thread-local test overrides;
+    /// N2: the writes go through the fence, no static/Cell is exposed).
+    #[cfg(feature = "jit")]
+    pub fn force_inline_for_test(on: Option<bool>) {
+        crate::emacs_core::jit::inline::force_inline_for_test(on)
+    }
+
+    #[cfg(feature = "jit")]
+    pub fn force_inline_predicates_for_test(on: Option<bool>) {
+        crate::emacs_core::jit::compile::force_inline_predicates_for_test(on)
+    }
+
+    #[cfg(feature = "jit")]
+    pub fn force_inline_arith_for_test(on: bool) {
+        crate::emacs_core::jit::compile::force_inline_arith_for_test(on)
+    }
+
+    #[cfg(feature = "jit")]
+    pub fn force_profit_defer_for_test(factor: Option<u32>) {
+        crate::emacs_core::jit::force_profit_defer_for_test(factor)
+    }
+
+    /// FENCE delegate: set the eval-depth limit for the re-homed test (N2/N3
+    /// write; the field stays private and the read copies out).
+    pub fn set_max_depth_for_test(ctx: &mut crate::emacs_core::eval::Context, max_depth: usize) {
+        ctx.max_depth = max_depth;
+    }
+
+    /// FENCE delegate: set the noninteractive flag for the re-homed test (N2
+    /// write; the field stays private).
+    pub fn set_noninteractive_for_test(
+        ctx: &mut crate::emacs_core::eval::Context,
+        noninteractive: bool,
+    ) {
+        ctx.noninteractive = noninteractive;
+    }
+
+    /// FENCE delegate: arm the JIT background-compile test mode (mode-arming
+    /// guard constructor; N2 writes a thread-local override). `BgMode` is the
+    /// VIS plain enum; the scope type stays private.
+    #[cfg(feature = "jit")]
+    #[allow(private_interfaces)]
+    pub fn enter_test_mode_for_test(
+        mode: crate::emacs_core::jit::BgMode,
+    ) -> crate::emacs_core::jit::bg::TestModeScope {
+        crate::emacs_core::jit::bg::TestModeScope::enter(mode)
+    }
 }
 
 /// Test-support `aset` over a caller-owned Bare argument slice (K1 fence-ask

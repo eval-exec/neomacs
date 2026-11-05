@@ -4,7 +4,7 @@ use crate::emacs_core::bytecode::function_slots::FunctionParamsExt as _;
 use crate::emacs_core::bytecode::function_slots::StackParamShapeExt as _;
 use crate::emacs_core::bytecode::opcode::OpDisasmExt as _;
 use std::sync::OnceLock;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::function_slots::{FunctionParams, StackDepth};
@@ -33,11 +33,12 @@ pub(crate) fn eager_gnu_bytecode() -> bool {
     })
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 static LAZY_GNU_DECODE_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 /// Test-only: how many deferred GNU decodes ran on any thread so far.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) fn lazy_gnu_decode_count_for_test() -> usize {
     LAZY_GNU_DECODE_COUNT.load(Ordering::Relaxed)
 }
@@ -61,7 +62,7 @@ fn decode_lazy_gnu_code<'a, 'l>(
     // raw_bytes and verifier_inputs.
     unsafe {
         lazy.decoded_or_init_with(|| {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             LAZY_GNU_DECODE_COUNT.fetch_add(1, Ordering::Relaxed);
             // The published pool length lets `seal_ops` prove `Constant`
             // indices without lending the immutable Lisp constants mutably

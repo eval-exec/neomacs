@@ -29,3 +29,10 @@ pub fn prepare_and_activate_display_presentation_for_test(
 pub fn replace_redisplay_cache_for_test(frame: &mut Frame, snapshots: Vec<WindowDisplaySnapshot>) {
     replace_redisplay_cache_free(frame, snapshots);
 }
+
+/// FENCE (jitcall eval_test re-home, peer 20:55Z): thread-local redisplay
+/// idle-skip override (test-mode write). The override itself stays private to
+/// its defining module; this delegate is the signed AUTHORITY row route.
+pub fn set_redisplay_idle_skip_for_test(enabled: Option<bool>) {
+    crate::emacs_core::xdisp::set_redisplay_idle_skip_for_test(enabled);
+}

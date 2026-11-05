@@ -4235,6 +4235,8 @@ mod leaf;
 pub use leaf::*;
 
 pub(crate) mod lowering;
+#[cfg(all(debug_assertions, any(test, feature = "test-support")))]
+pub use lowering::inline_cbsym_read_emitted_for_test;
 pub use lowering::*;
 
 mod shims;

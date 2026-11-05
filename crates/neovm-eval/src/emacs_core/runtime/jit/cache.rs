@@ -2064,7 +2064,8 @@ pub(crate) fn osr_leaf_ptr_for_test(
 }
 
 /// Test-only: is a compiled leaf currently cached for `id` on this thread?
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) fn is_compiled_for_test(id: u64) -> bool {
     COMPILED.with(|c| c.borrow().get(id).and_then(CacheEntry::live_leaf).is_some())
 }
@@ -2284,7 +2285,8 @@ pub(crate) fn collect_jit_reloc_gc_roots_for_heap(roots: &mut Vec<Value>, heap_i
     });
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) fn collect_jit_reloc_gc_roots(roots: &mut Vec<Value>) {
     let heap_id = neovm_value::tagged::gc::current_tagged_heap_identity().unwrap_or(0);
     collect_jit_reloc_gc_roots_for_heap(roots, heap_id);
@@ -2295,6 +2297,7 @@ pub(crate) fn collect_jit_reloc_gc_roots(roots: &mut Vec<Value>) {
 /// The slots include the retired leaves' (the walk roots them too); the
 /// entry count stays the cache's own. Read-only; called once per handshake
 /// OUTSIDE the timed pause window.
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) fn compiled_cache_probe() -> (usize, usize) {
     COMPILED.with(|c| {
         let cache = c.borrow();

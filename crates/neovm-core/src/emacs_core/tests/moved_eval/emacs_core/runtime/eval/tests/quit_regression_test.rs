@@ -145,10 +145,10 @@ fn maybe_quit_promotes_pending_frontend_input_for_while_no_input() {
     let mut ctx = runtime_startup_context();
     ctx.set_variable("noninteractive", Value::NIL);
 
-    let tx = crate::host_input::HostInputPublisher::install(&mut ctx);
+    let tx = neovm_system::emacs_core::host_input::HostInputPublisher::install(&mut ctx);
 
-    tx.send(crate::keyboard::InputEvent::key_press(
-        crate::keyboard::KeyEvent::char('l'),
+    tx.send(crate::emacs_core::eval::keyboard::InputEvent::key_press(
+        crate::emacs_core::eval::keyboard::KeyEvent::char('l'),
     ))
     .expect("queue ordinary frontend input");
 

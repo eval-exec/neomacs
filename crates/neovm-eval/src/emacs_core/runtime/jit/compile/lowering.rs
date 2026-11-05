@@ -1419,6 +1419,14 @@ pub(crate) static STRING_ASET_INLINE_EMITTED: std::sync::atomic::AtomicUsize =
 pub(crate) static INLINE_CBSYM_READ_EMITTED: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 
+/// Copied read observer for the re-homed eval test (C4/N2: the static stays
+/// private and only the value copies out).
+#[cfg(debug_assertions)]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+pub(crate) fn inline_cbsym_read_emitted_for_test() -> usize {
+    INLINE_CBSYM_READ_EMITTED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 fn emit_inline_cbsym_read(
     fb: &mut FunctionBuilder,
     rt: &RtCtx,

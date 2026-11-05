@@ -1,6 +1,7 @@
 use super::*;
-use crate::emacs_core::eval::keyboard::{InputEvent, KeyEvent, ReadKeySequenceOptions};
+use crate::emacs_core::eval::keyboard::{InputEvent, KeyEvent};
 use crate::test_utils::input_wait::InputGateOwner;
+use neovm_value::system_vocab::input::ReadKeySequenceOptions;
 
 #[derive(Clone, Copy, Debug)]
 enum InputRead {
@@ -23,10 +24,10 @@ fn input_after_idle_timer_wakes_wait(read: InputRead) {
     crate::test_utils::init_test_tracing();
     let _policy = legacy_redisplay_fixture_policy();
     let mut ev = runtime_startup_context();
-    let scratch = ev.buffers.create_buffer("*input-wakeup*");
-    ev.buffers.set_current(scratch);
-    let frame = ev.frames.create_frame("F1", 80, 24, scratch);
-    assert!(ev.frames.select_frame(frame));
+    let scratch = ev.edit.buffers.create_buffer("*input-wakeup*");
+    ev.edit.buffers.set_current(scratch);
+    let frame = ev.frame_manager_mut().create_frame("F1", 80, 24, scratch);
+    assert!(ev.frame_manager_mut().select_frame(frame));
     // Change the displayed buffer so redisplay cannot skip the gate callback
     // merely because its visible-state signature is unchanged. Clear timers
     // again after insertion: GNU undo amalgamation can schedule its own timer.
@@ -55,7 +56,7 @@ fn input_after_idle_timer_wakes_wait(read: InputRead) {
         if context.eval_symbol("input-wake-idle-fired").ok() == Some(Value::symbol("done")) {
             if let Some((gate_tx, published_rx)) = gate.take() {
                 context
-                    .processes
+                    .processes_mut()
                     .before_next_backend_wait_for_test(move |entry| {
                         let timeout = entry.requested_timeout();
                         assert!(

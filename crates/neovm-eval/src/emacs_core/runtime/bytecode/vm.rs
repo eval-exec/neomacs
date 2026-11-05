@@ -2535,7 +2535,7 @@ static MODULO_ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new(); // '%
 static NUMEQ_ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new(); // '='
 static APPLY_ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new(); // 'apply'
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     /// `apply` calls `Vm::call_apply_native` ran natively.
     pub(crate) static APPLY_NATIVE_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -2544,6 +2544,14 @@ thread_local! {
     /// name its Rust-local spread buffer.
     pub(crate) static APPLY_CALLEE_FRAME_BORROWS: std::cell::Cell<Option<bool>> =
         const { std::cell::Cell::new(None) };
+}
+
+/// Copied read observer for the re-homed eval test (C4/N2: the thread-local
+/// counter stays private and only the value copies out).
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+pub(crate) fn apply_native_calls_for_test() -> usize {
+    APPLY_NATIVE_CALLS.with(|calls| calls.get())
 }
 
 /// Where a native callee's backtrace frame finds its arguments
@@ -8092,7 +8100,7 @@ impl<'a> Vm<'a> {
         if !leaf.accepts(count) {
             return None;
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         APPLY_NATIVE_CALLS.with(|calls| calls.set(calls.get() + 1));
         let bt_count = ctx.specpdl.len();
         // SAFETY: `args_ptr` addresses `nargs` valid words for the whole call.

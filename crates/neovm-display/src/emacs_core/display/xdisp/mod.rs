@@ -7809,14 +7809,14 @@ fn live_window_display_context_for(
     }))
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     static REDISPLAY_IDLE_SKIP_OVERRIDE: std::cell::Cell<Option<bool>> =
         const { std::cell::Cell::new(None) };
 }
 
 /// Force `NEOMACS_REDISPLAY_IDLE_SKIP` on this thread (tests only).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn set_redisplay_idle_skip_for_test(enabled: Option<bool>) {
     REDISPLAY_IDLE_SKIP_OVERRIDE.with(|cell| cell.set(enabled));
 }

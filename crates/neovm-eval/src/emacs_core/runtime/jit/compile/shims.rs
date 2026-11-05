@@ -248,6 +248,62 @@ pub(crate) static CBSYM_SPEC_FAST_COUNT: AtomicU64 = AtomicU64::new(0);
 #[cfg(debug_assertions)]
 pub(crate) static CBSYM_SPEC_GENERIC_COUNT: AtomicU64 = AtomicU64::new(0);
 
+// Copied read observers for the re-homed eval tests (P1-CLASSES-ALL-CRATES
+// C4/N2: the counters stay private; only the value copies out).
+#[cfg(any(test, debug_assertions))]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+pub(crate) fn spec_call_count_for_test() -> u64 {
+    SPEC_CALL_COUNT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[cfg(any(test, debug_assertions))]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+pub(crate) fn spec_fast_call_count_for_test() -> u64 {
+    SPEC_FAST_CALL_COUNT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[cfg(any(test, debug_assertions))]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+pub(crate) fn spec_shim_fast_count_for_test() -> u64 {
+    SPEC_SHIM_FAST_COUNT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[cfg(debug_assertions)]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+pub(crate) fn subr_spec_count_for_test() -> u64 {
+    SUBR_SPEC_COUNT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[cfg(debug_assertions)]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+pub(crate) fn subr_spec_fast_count_for_test() -> u64 {
+    SUBR_SPEC_FAST_COUNT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[cfg(debug_assertions)]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+pub(crate) fn subr_spec_generic_count_for_test() -> u64 {
+    SUBR_SPEC_GENERIC_COUNT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[cfg(debug_assertions)]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+pub(crate) fn cbsym_spec_count_for_test() -> u64 {
+    CBSYM_SPEC_COUNT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[cfg(debug_assertions)]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+pub(crate) fn cbsym_spec_fast_count_for_test() -> u64 {
+    CBSYM_SPEC_FAST_COUNT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[cfg(debug_assertions)]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+pub(crate) fn cbsym_spec_generic_count_for_test() -> u64 {
+    CBSYM_SPEC_GENERIC_COUNT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Take the `Flow` stashed by a shim that returned [`STATUS_SIGNAL`].
 ///
 /// A panic contained at a shim boundary ([`jit_shim_contain!`]) wins over a

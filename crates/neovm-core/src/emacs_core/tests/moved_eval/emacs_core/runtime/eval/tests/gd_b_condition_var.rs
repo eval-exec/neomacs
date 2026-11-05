@@ -5,11 +5,11 @@ use super::{Context, format_eval_result, runtime_startup_context};
 
 fn eval_condition_var(source: &str, lexical: bool) -> String {
     crate::test_utils::init_test_tracing();
-    let mut context = Context::new();
+    let mut context = crate::test_utils::new_context();
     context.set_lexical_binding(lexical);
-    let specpdl_base = context.specpdl.len();
+    let specpdl_base = context.specpdl().len();
     let result = format_eval_result(&context.eval_str(source));
-    assert_eq!(context.specpdl.len(), specpdl_base);
+    assert_eq!(context.specpdl().len(), specpdl_base);
     result
 }
 
@@ -117,7 +117,7 @@ fn special_condition_var_lexical_binding_is_restored_after_handler_throw() {
 fn compiled_special_condition_var_closures_survive_both_handler_kinds() {
     crate::test_utils::init_test_tracing();
     let mut context = runtime_startup_context();
-    let specpdl_base = context.specpdl.len();
+    let specpdl_base = context.specpdl().len();
     let result = context.eval_str(
         r#"(progn
   (defvar gd-b5-special 'global)
@@ -143,5 +143,5 @@ fn compiled_special_condition_var_closures_survive_both_handler_kinds() {
         format_eval_result(&result),
         "OK (((caught error) global) (42 global) global)"
     );
-    assert_eq!(context.specpdl.len(), specpdl_base);
+    assert_eq!(context.specpdl().len(), specpdl_base);
 }

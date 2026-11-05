@@ -214,7 +214,7 @@ pub(crate) fn named_inline_tier_eligible(
         || crate::emacs_core::jit::retier_heat().is_some_and(|at| source.jit_runtime().heat() >= at)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     /// Per-thread override for the profitability gate, set by tests that need to
     /// compile a deliberately call-dominated body to exercise the call/spec
@@ -224,7 +224,7 @@ thread_local! {
 }
 
 /// Force the profitability gate on/off on the current thread (tests only).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn force_profit_gate_for_test(on: bool) {
     PROFIT_GATE_TEST_OVERRIDE.with(|c| c.set(Some(on)));
 }
@@ -345,7 +345,7 @@ pub(crate) fn jit_inline_predicates_on() -> bool {
     })
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 std::thread_local! {
     static INLINE_PREDICATES_TEST_OVERRIDE: std::cell::Cell<Option<bool>> =
         const { std::cell::Cell::new(None) };
@@ -354,7 +354,7 @@ std::thread_local! {
 /// Force `NEOVM_JIT_INLINE_PREDICATES` on/off on the current thread (tests
 /// only). Read at compile time by the lowering, so a test compiles the same
 /// body once under each mode.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn force_inline_predicates_for_test(on: Option<bool>) {
     INLINE_PREDICATES_TEST_OVERRIDE.with(|c| c.set(on));
 }
@@ -873,13 +873,13 @@ pub(crate) fn jit_leaf_selected(name: &str) -> bool {
     .is_none_or(|only| only.iter().any(|n| n == name))
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 std::thread_local! {
     static INLINE_ARITH_TEST_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
 }
 
 /// Force Level-B inline-arith on/off on the current thread (tests only).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn force_inline_arith_for_test(on: bool) {
     INLINE_ARITH_TEST_OVERRIDE.with(|c| c.set(Some(on)));
 }

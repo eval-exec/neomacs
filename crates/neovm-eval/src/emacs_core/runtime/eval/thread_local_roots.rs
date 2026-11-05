@@ -9,7 +9,8 @@ use super::Value;
 /// walks the Evaluator struct and its sub-managers).  This function calls each
 /// module's `collect_*_gc_roots` helper to ensure those Values are marked as
 /// live during garbage collection.
-pub(super) fn collect_thread_local_gc_roots(
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+pub(crate) fn collect_thread_local_gc_roots(
     roots: &mut Vec<(Value, &'static str)>,
     heap_id: usize,
     collection_epoch: usize,
@@ -40,7 +41,8 @@ pub(super) fn collect_thread_local_gc_roots(
 /// destination and instrumentation; the source callback only appends Values.
 /// Parking supplies its retained Vec and never needs per-group scratch.
 #[inline(always)]
-pub(super) fn for_each_thread_local_root_source(
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+pub(crate) fn for_each_thread_local_root_source(
     heap_id: usize,
     collection_epoch: usize,
     scan: neovm_value::tagged::gc::CacheRootScan,

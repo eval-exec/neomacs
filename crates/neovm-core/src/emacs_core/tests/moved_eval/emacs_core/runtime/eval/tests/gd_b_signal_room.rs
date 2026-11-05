@@ -5,7 +5,7 @@ use super::gd_b_native::{RawCallTestPolicy, assert_native_frames_warmed};
 
 #[test]
 fn depth_limit_signal_hook_has_reserved_evaluator_room() {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str(
         "(defvar gd-b-depth-seen nil)
          (setq signal-hook-function
@@ -19,7 +19,7 @@ fn depth_limit_signal_hook_has_reserved_evaluator_room() {
     ev.depth = 0;
     assert!(result.is_err());
     assert_eq!(ev.eval_str("gd-b-depth-seen").unwrap(), Value::fixnum(120));
-    assert_eq!(ev.max_depth, 100);
+    assert_eq!(ev.max_depth_for_test(), 100);
     assert_eq!(
         ev.eval_str("lisp-eval-depth-reserve").unwrap(),
         Value::fixnum(200)
@@ -33,7 +33,7 @@ fn depth_limit_signal_hook_has_reserved_evaluator_room() {
                    (list max-lisp-eval-depth lisp-eval-depth-reserve))))",
     )
     .unwrap();
-    let handler = ev.obarray.symbol_function("gd-b-depth-handler").unwrap();
+    let handler = ev.obarray().symbol_function("gd-b-depth-handler").unwrap();
     ev.push_condition_frame(ConditionFrame::HandlerBind {
         conditions: Value::symbol("error"),
         handler,
@@ -50,7 +50,7 @@ fn depth_limit_signal_hook_has_reserved_evaluator_room() {
         format_eval_result(&ev.eval_str("gd-b-depth-seen")),
         "OK (300 0)"
     );
-    assert_eq!(ev.max_depth, 100);
+    assert_eq!(ev.max_depth_for_test(), 100);
     assert_eq!(
         ev.eval_str("lisp-eval-depth-reserve").unwrap(),
         Value::fixnum(200)
@@ -69,7 +69,7 @@ fn depth_limit_signal_hook_has_reserved_evaluator_room() {
         crate::emacs_core::print::print_value(&result.unwrap()),
         "(300 0)"
     );
-    assert_eq!(ev.max_depth, 100);
+    assert_eq!(ev.max_depth_for_test(), 100);
     assert_eq!(
         ev.eval_str("lisp-eval-depth-reserve").unwrap(),
         Value::fixnum(200)
@@ -78,7 +78,7 @@ fn depth_limit_signal_hook_has_reserved_evaluator_room() {
 
 #[test]
 fn nested_signal_hook_replacement_restores_evaluator_reserve() {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str(
         "(defvar gd-b-depth-count 0)
          (setq signal-hook-function
@@ -88,12 +88,12 @@ fn nested_signal_hook_replacement_restores_evaluator_reserve() {
     )
     .unwrap();
     ev.set_variable("max-lisp-eval-depth", Value::fixnum(100));
-    let spec_base = ev.specpdl.len();
+    let spec_base = ev.specpdl().len();
     ev.depth = 100;
     let result = ev.dispatch_signal_flow_cold(signal("error", vec![Value::string("depth")]));
     assert_eq!(ev.depth, 100);
-    assert_eq!(ev.max_depth, 100);
-    assert_eq!(ev.specpdl.len(), spec_base);
+    assert_eq!(ev.max_depth_for_test(), 100);
+    assert_eq!(ev.specpdl().len(), spec_base);
     assert!(matches!(
         result.kinded(),
         Err(FlowKind::Signal(sig)) if sig.symbol_name() == "file-error"
@@ -109,7 +109,7 @@ fn nested_signal_hook_replacement_restores_evaluator_reserve() {
 
 #[test]
 fn signal_hook_throw_restores_evaluator_reserve() {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str(
         "(setq signal-hook-function
                (lambda (_kind _data) (throw 'gd-b-hook-exit 'escaped)))",
@@ -120,12 +120,12 @@ fn signal_hook_throw_restores_evaluator_reserve() {
         resume: ResumeTarget::InterpreterCatch,
     });
     ev.set_variable("max-lisp-eval-depth", Value::fixnum(100));
-    let spec_base = ev.specpdl.len();
+    let spec_base = ev.specpdl().len();
     ev.depth = 100;
     let result = ev.dispatch_signal_flow_cold(signal("error", vec![Value::string("depth")]));
     assert_eq!(ev.depth, 100);
-    assert_eq!(ev.max_depth, 100);
-    assert_eq!(ev.specpdl.len(), spec_base);
+    assert_eq!(ev.max_depth_for_test(), 100);
+    assert_eq!(ev.specpdl().len(), spec_base);
     assert!(matches!(
         result.kinded(),
         Err(FlowKind::Throw(thrown))
@@ -143,7 +143,7 @@ fn signal_hook_throw_restores_evaluator_reserve() {
 
 #[test]
 fn signal_hook_limit_change_returns_current_excess_to_reserve() {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str(
         "(setq signal-hook-function
                (lambda (_kind _data)
@@ -155,7 +155,7 @@ fn signal_hook_limit_change_returns_current_excess_to_reserve() {
     let result = ev.dispatch_signal_flow_cold(signal("error", vec![Value::string("depth")]));
     assert!(result.is_err());
     assert_eq!(ev.depth, 100);
-    assert_eq!(ev.max_depth, 100);
+    assert_eq!(ev.max_depth_for_test(), 100);
     ev.depth = 0;
     ev.set_variable("signal-hook-function", Value::NIL);
     assert_eq!(
@@ -170,7 +170,7 @@ fn signal_hook_limit_change_returns_current_excess_to_reserve() {
 
 #[test]
 fn localized_signal_depth_reserve_updates_the_current_binding_without_watchers() {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str(
         "(defvar gd-b-reserve-writes nil)
          (set (make-local-variable 'max-lisp-eval-depth) 100)
@@ -194,7 +194,7 @@ fn localized_signal_depth_reserve_updates_the_current_binding_without_watchers()
         crate::emacs_core::print::print_value(&result.unwrap()),
         "(250 50 nil)"
     );
-    assert_eq!(ev.max_depth, 100);
+    assert_eq!(ev.max_depth_for_test(), 100);
     assert_eq!(
         format_eval_result(
             &ev.eval_str("(list max-lisp-eval-depth lisp-eval-depth-reserve gd-b-reserve-writes)")
@@ -205,7 +205,7 @@ fn localized_signal_depth_reserve_updates_the_current_binding_without_watchers()
 
 #[test]
 fn localized_signal_depth_restore_uses_the_buffer_selected_by_the_hook() {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str(
         "(defvar gd-b-reserve-source (get-buffer-create \" *gd-b-reserve-source*\"))
          (defvar gd-b-reserve-target (get-buffer-create \" *gd-b-reserve-target*\"))
@@ -230,7 +230,7 @@ fn localized_signal_depth_restore_uses_the_buffer_selected_by_the_hook() {
     let result = ev.dispatch_signal_flow_cold(signal("error", vec![Value::string("depth")]));
     assert!(result.is_err());
     assert_eq!(ev.depth, 100);
-    assert_eq!(ev.max_depth, 100);
+    assert_eq!(ev.max_depth_for_test(), 100);
     ev.depth = 0;
     ev.set_variable("signal-hook-function", Value::NIL);
     assert_eq!(
@@ -294,7 +294,7 @@ fn compiled_no_borrow_signal_hook_reads_current_localized_reserve_without_watche
     ev.eval_str("(set-buffer gd-b-no-borrow-target)").unwrap();
     let state = (
         ev.depth,
-        ev.specpdl.len(),
+        ev.specpdl().len(),
         ev.condition_stack.len(),
         ev.bc_buf.len(),
     );
@@ -317,7 +317,7 @@ fn compiled_no_borrow_signal_hook_reads_current_localized_reserve_without_watche
     assert_eq!(
         (
             ev.depth,
-            ev.specpdl.len(),
+            ev.specpdl().len(),
             ev.condition_stack.len(),
             ev.bc_buf.len(),
         ),

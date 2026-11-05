@@ -1870,7 +1870,8 @@ impl RootSeedBreakdown {
     }
 
     /// Count for a named group (0 if absent) — test/probe convenience.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn group_count(&self, name: &str) -> usize {
         self.groups
             .iter()

@@ -3,7 +3,7 @@
 use crate::emacs_core::{eval::Context, print::print_value};
 
 fn answer(source: &str) -> String {
-    let mut context = Context::new();
+    let mut context = crate::test_utils::new_context();
     print_value(
         &context
             .eval_str(source)
@@ -74,7 +74,7 @@ fn p6_reader_accepts_negative_argument_descriptor() {
 #[test]
 fn p6_dynamic_formals_root_detached_cursor_through_watcher_gc() {
     crate::test_utils::init_test_tracing();
-    let mut context = Context::new();
+    let mut context = crate::test_utils::new_context();
     let collections_before = context.gc_count;
     let result = context
         .eval_str(

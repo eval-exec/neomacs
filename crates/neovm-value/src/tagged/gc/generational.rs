@@ -548,7 +548,8 @@ impl TaggedHeap {
     }
 
     /// Whether OWNER's GEN1 card is dirty (false without a card table).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn owner_card_is_dirty_for_test(&self, owner: TaggedValue) -> bool {
         Self::owner_card_addr(owner).is_some_and(|addr| self.owner_card_is_dirty(addr))
     }
