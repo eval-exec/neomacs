@@ -1,5 +1,12 @@
 //! Per-opcode callback order/cache identity: public GNU parity is tested separately.
 
+use neovm_value::tagged::SymbolMode;
+use rustc_hash::FxHashMap;
+use std::collections::HashSet;
+use regex_automata::{MatchKind, Span};
+use smallvec::SmallVec;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
 use neovm_value::value::Value;
 use neovm_eval::emacs_core::eval::Context;
 use neovm_edit::buffer::syntax_class::SyntaxClass;

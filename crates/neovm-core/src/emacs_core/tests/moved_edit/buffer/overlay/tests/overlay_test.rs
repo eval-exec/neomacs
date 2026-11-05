@@ -1,3 +1,18 @@
+use std::cell::{Cell, RefCell};
+use std::cmp::Ordering;
+use std::collections::{BTreeMap, BinaryHeap};
+use std::rc::Rc;
+use neovm_value::error::Flow;
+use neovm_value::gc_trace::GcTrace;
+use neovm_value::heap_types::OverlayData;
+use neovm_value::plist;
+use neovm_value::value::scratch_bridge::{
+    push_scratch_gc_root, restore_scratch_gc_roots, save_scratch_gc_roots,
+};
+        use std::hash::Hasher;
+    use neovm_value::value::ValueKind;
+    use std::hash::Hasher;
+
 use neovm_value::value::Value;
 use neovm_value::heap_types::byte_positions::EmacsByteRange;
 use neovm_value::heap_types::byte_positions::EmacsBytePos;

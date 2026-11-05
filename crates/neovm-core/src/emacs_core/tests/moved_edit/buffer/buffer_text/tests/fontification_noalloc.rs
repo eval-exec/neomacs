@@ -1,3 +1,10 @@
+use std::cell::{Cell, OnceCell, RefCell};
+use std::collections::{HashMap, HashSet};
+use std::fmt;
+use std::rc::Rc;
+use neovm_value::gc_trace::GcTrace;
+use line_index::LineIndexRole;
+
 use neovm_value::value::positions::CharPos0;
 use neovm_value::value::Value;
 use neovm_value::heap_types::byte_positions::EmacsByteRange;

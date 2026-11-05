@@ -1,3 +1,8 @@
+use neovm_text::emacs_core::coding::EolConversion;
+use neovm_value::error::FlowKind;
+use neovm_value::value::{Value, get_string_text_properties_for_value};
+    use neovm_value::value::Value;
+
 use neovm_eval::emacs_core::eval::Context;
 use super::*;
 

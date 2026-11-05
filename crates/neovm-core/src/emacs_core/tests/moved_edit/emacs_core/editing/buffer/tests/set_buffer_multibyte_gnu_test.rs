@@ -4,6 +4,8 @@
 //! pair into two eight-bit characters (`buffer.c:2881`, `allow_8bit` false).
 //! The numbers below are what GNU Emacs 31.1 printed for the same buffers.
 
+use neovm_value::value::Value;
+
 use neovm_eval::emacs_core::eval::Context;
 use crate::emacs_core::format_eval_result;
 

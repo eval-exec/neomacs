@@ -1,3 +1,12 @@
+use neovm_edit::buffer::{BufferId, BufferManager, EmacsByteRange};
+use neovm_edit::emacs_core::edit_host::EditHost;
+use neovm_edit::emacs_core::position::LispRegionArgs;
+use neovm_value::error::LispCondition;
+use neovm_value::error::{EvalResult, Flow, expect_args, expect_max_args, signal};
+use neovm_value::value::ValueKind;
+    use quick_xml::Reader;
+    use quick_xml::events::Event;
+
 use neovm_value::value::Value;
 use neovm_eval::emacs_core::eval::Context;
 use neovm_text::emacs_core::xml::*;

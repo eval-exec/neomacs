@@ -1,3 +1,10 @@
+use neovm_value::error::EvalResult;
+use neovm_value::error::LispCondition;
+use neovm_value::error::{Flow, signal};
+use neovm_value::error::{expect_max_args, expect_min_args};
+use neovm_value::gc_trace::GcTrace;
+use neovm_value::value::ValueKind;
+
 use neovm_value::value::Value;
 use neovm_value::heap_types::LispString;
 use neovm_eval::emacs_core::eval::Context;

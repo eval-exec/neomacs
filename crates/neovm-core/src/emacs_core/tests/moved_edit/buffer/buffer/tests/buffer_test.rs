@@ -1,3 +1,18 @@
+use std::cell::{RefCell, UnsafeCell};
+use std::collections::{HashMap, HashSet};
+use std::fmt;
+use std::marker::PhantomData;
+use std::mem;
+use std::ops::Deref;
+use std::ptr::NonNull;
+use std::sync::OnceLock;
+use neovm_edit::emacs_core::display_metrics::WindowId;
+use neovm_value::cold_retained::ColdWorldLease;
+use neovm_value::gc_trace::GcTrace;
+use neovm_value::symbol::SetInternalAlist;
+use rustc_hash::FxHashMap;
+    use std::sync::OnceLock;
+
 use neovm_value::value::text_props::ObjectIntervalRun;
 use neovm_value::value::positions::CharPos0;
 use neovm_value::value::Value;

@@ -5,6 +5,10 @@
 //! cache layers off and the legacy safe-position index bypassed. These are
 //! differential cache tests; they do not assert independent GNU expectations.
 
+use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
+
 use std::cell::Cell;
 use neovm_value::value::positions::CharPos0;
 use neovm_value::value::Value;
