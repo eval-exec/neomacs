@@ -26,6 +26,24 @@ pub struct MutatorPermit<'era> {
     pub(super) _unshared: PhantomData<Cell<()>>,
 }
 
+impl MutatorPermit<'_> {
+    /// Peer-signed MEMQ-TAIL-SHAPES (3): copied cancellation fact.
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn cancelled_start_for_test(&self) -> bool {
+        self.entry
+            .cancelled_start
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Peer-signed MEMQ-TAIL-SHAPES (3): copied entry phase (Copy enum).
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn entry_phase_for_test(&self) -> super::EntryPhase {
+        self.entry.state.lock().unwrap().phase
+    }
+}
+
 impl std::fmt::Debug for MutatorPermit<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("MutatorPermit")

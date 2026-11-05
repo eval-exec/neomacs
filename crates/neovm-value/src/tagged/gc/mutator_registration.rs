@@ -211,6 +211,7 @@ impl MutatorKey {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) enum EntryPhase {
     Frozen,
     Starting,
