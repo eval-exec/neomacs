@@ -25,7 +25,10 @@
 //! `#[doc(hidden)]` items and items gated by `cfg(test)`/
 //! `cfg(feature = "test-support")` are excluded (other classes). A test-gated
 //! `mod` declaration also removes the whole file it names, even when the file
-//! name does not look like a test; an ungated route to the same file wins.
+//! name does not look like a test; an ungated route to the same file wins. A
+//! test-gated struct or union gates its fields too: the test arm of a
+//! cfg-split struct pair declares `pub` fields for cross-crate test access,
+//! which is not production surface.
 //! Test files (`.../tests/...`, `tests.rs`, `*_test.rs`) are excluded. Use
 //! globs and macro-generated items are not scanned; the API projector is not
 //! a live gate, so plain `pub use` is enforced here. Duplicate identical
@@ -443,6 +446,12 @@ fn walk(items: &[Item], modules: &mut Vec<String>, out: &mut Vec<(&'static str, 
                 }
             }
             Item::Struct(item) => {
+                // A cfg-gated struct's fields are gated with it: the test arm
+                // of a cfg-split struct pair declares `pub` fields for
+                // cross-crate test access, which is not production surface.
+                if test_gated(&item.attrs) {
+                    continue;
+                }
                 push_row(
                     out,
                     modules,
@@ -464,6 +473,9 @@ fn walk(items: &[Item], modules: &mut Vec<String>, out: &mut Vec<(&'static str, 
                 &item.attrs,
             ),
             Item::Union(item) => {
+                if test_gated(&item.attrs) {
+                    continue;
+                }
                 push_row(
                     out,
                     modules,
@@ -949,6 +961,42 @@ pub use crate::S as TestS;
                 !has(forbidden),
                 "{forbidden} must not be production surface"
             );
+        }
+    }
+
+    #[test]
+    fn cfg_split_struct_arms_do_not_leak_test_fields() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = dir.path().join("crates/neovm-value/src");
+        std::fs::create_dir_all(&src).expect("src dir");
+        std::fs::write(
+            src.join("lib.rs"),
+            r#"
+#[cfg(not(any(test, feature = "test-support")))]
+pub struct Split {
+    pub visible: u8,
+    hidden: u8,
+}
+#[cfg(any(test, feature = "test-support"))]
+pub struct Split {
+    pub leaked_for_tests: u8,
+}
+#[cfg(test)]
+pub struct TestOnly {
+    pub leaked_entirely: u8,
+}
+"#,
+        )
+        .expect("lib");
+        let rows = plain_pub_rows(dir.path(), "neovm-value").expect("surface");
+        let items: Vec<&str> = rows.iter().map(|row| row.2.as_str()).collect();
+        assert!(items.contains(&"Split field visible"));
+        for forbidden in [
+            "Split field leaked_for_tests",
+            "TestOnly field leaked_entirely",
+            "struct TestOnly",
+        ] {
+            assert!(!items.contains(&forbidden), "{forbidden} is test-gated");
         }
     }
 }
