@@ -4313,6 +4313,7 @@ dependencies = [
  "neomacs-test-env",
  "neomacs-test-oracle",
  "neomacs-video-model",
+ "neovm-display",
  "neovm-display-identity",
  "neovm-edit",
  "neovm-eval",
@@ -4332,7 +4333,6 @@ dependencies = [
  "quick-xml 0.41.0",
  "regex",
  "regex-automata",
- "rodio",
  "rusqlite",
  "rustc-hash 2.1.3",
  "rustix 1.1.4",
@@ -4368,6 +4368,28 @@ dependencies = [
  "whoami",
  "windows-sys 0.61.2",
  "x509-parser",
+]
+
+[[package]]
+name = "neovm-display"
+version = "0.0.20"
+dependencies = [
+ "enum-map",
+ "neomacs-display-protocol",
+ "neomacs-video-model",
+ "neovm-edit",
+ "neovm-eval",
+ "neovm-text",
+ "neovm-value",
+ "num_enum",
+ "regex",
+ "rodio",
+ "rustc-hash 2.1.3",
+ "smallvec",
+ "static_assertions",
+ "strum",
+ "thiserror 2.0.20",
+ "tracing",
 ]
 
 [[package]]

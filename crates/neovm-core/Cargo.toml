@@ -11,6 +11,7 @@ description = "Core runtime structures for NeoVM"
 autotests = false
 
 [dependencies]
+neovm-display = { path = "../neovm-display" }
 neovm-eval = { path = "../neovm-eval", default-features = false }
 neovm-text = { path = "../neovm-text" }
 neovm-edit = { path = "../neovm-edit" }
@@ -82,7 +83,6 @@ rusqlite = { workspace = true, optional = true }
 quick-xml.workspace = true
 tl.workspace = true
 htmlize.workspace = true
-rodio = { version = "0.20", optional = true }
 # Cranelift JIT backend — optional, enabled by the `jit` feature. The workspace
 # owns this API-coupled release train so its crates can only move together.
 cranelift-codegen = { workspace = true, optional = true }
@@ -125,12 +125,12 @@ dbus = { version = "0.9", default-features = false }
 [features]
 default = ["jit", "sqlite"]
 # Diagnostic inventory walks and JSONL records; absent from ordinary builds.
-gc-memory-telemetry = ["dep:serde_json", "neovm-value/gc-memory-telemetry", "neovm-eval/gc-memory-telemetry"]
+gc-memory-telemetry = ["dep:serde_json", "neovm-value/gc-memory-telemetry", "neovm-eval/gc-memory-telemetry", "neovm-display/gc-memory-telemetry"]
 sqlite = ["dep:rusqlite", "neovm-value/sqlite", "neovm-eval/sqlite"]
 # Static-link the crate's bundled libdbus instead of pkg-config `dbus-1`.
 # Production/Nix builds leave this off and use the system library.
 dbus-vendored = ["dbus/vendored"]
-sound = ["rodio"]
+sound = ["neovm-display/sound"]
 # Set by `neomacs`'s `webview` feature.  `build.rs` turns it into
 # `cfg(neomacs_have_wkwebview)` on macOS, which is what decides whether
 # `xwidget-internal` is provided: the evaluator cannot see
@@ -146,10 +146,10 @@ desktop-font-settings = ["neovm-eval/desktop-font-settings"]
 # MARKER_DEBUG) because it is O(scan) -- the exact per-char work the cache exists
 # to skip -- so it must not tax ordinary debug/test builds. Enable it in a
 # dedicated validation run.
-display-stop-validate = ["neovm-edit/display-stop-validate"]
+display-stop-validate = ["neovm-edit/display-stop-validate", "neovm-display/display-stop-validate"]
 # Numeric redisplay policy injection for dependent crate fixtures only.
 # Dev-dependencies opt in; shipping builds retain process-once selectors.
-redisplay-test-policy = ["neovm-eval/redisplay-test-policy"]
+redisplay-test-policy = ["neovm-eval/redisplay-test-policy", "neovm-display/redisplay-test-policy"]
 # Tiered JIT execution subsystem (src/emacs_core/runtime/jit/ +
 # runtime/bytecode/ELISP_VM_MODERNIZATION.md). DEFAULT-ON (see `default` above): the
 # baseline JIT ships enabled. Toggle it at runtime with `NEOVM_JIT=0` (no
@@ -163,6 +163,7 @@ jit = [
     "dep:object",
     "dep:cranelift-native",
     "neovm-value/jit",
+    "neovm-display/jit",
     "neovm-eval/jit",
     "neovm-text/jit",
     "neovm-edit/jit",

@@ -63,61 +63,36 @@ pub(crate) mod system_entries;
 pub mod textprop_entries;
 
 // Display model, redisplay, and graphical/terminal surfaces.
-#[path = "display/chrome_dirty/mod.rs"]
-pub mod chrome_dirty;
-#[path = "display/display/mod.rs"]
-pub mod display;
-#[path = "display/display_host/mod.rs"]
-pub mod display_host;
+pub use neovm_display::emacs_core::chrome_dirty;
+pub use neovm_display::emacs_core::display;
+pub use neovm_display::emacs_core::display_host;
 // The display-property decode moved into the eval manifest (stage-4 K2
 // display_prop TD); the historical emacs_core path stays as a re-export for
 // the display engine and window input code above eval.
 pub use crate::emacs_core::eval::data::display_spec;
-#[path = "display/display_when/mod.rs"]
-pub mod display_when;
-#[path = "display/dispnew/mod.rs"]
-pub mod dispnew;
+pub use neovm_display::emacs_core::display_when;
+pub use neovm_display::emacs_core::dispnew;
+pub use neovm_display::emacs_core::effect_profile;
+pub use neovm_display::emacs_core::font;
+pub use neovm_display::emacs_core::fontset;
+pub use neovm_display::emacs_core::frame;
+pub use neovm_display::emacs_core::frame_vars;
+pub use neovm_display::emacs_core::hscroll;
+pub use neovm_display::emacs_core::image;
+pub use neovm_display::emacs_core::image_catalog;
+pub use neovm_display::emacs_core::image_path;
+pub use neovm_display::emacs_core::invisibility;
+pub(crate) use neovm_display::emacs_core::menu;
+pub use neovm_display::emacs_core::neo;
+pub use neovm_display::emacs_core::shader_surface;
+pub(crate) use neovm_display::emacs_core::sound;
+pub use neovm_display::emacs_core::terminal;
+pub use neovm_display::emacs_core::video;
+pub use neovm_display::emacs_core::window_cmds;
+pub use neovm_display::emacs_core::xdisp;
+pub use neovm_display::emacs_core::xfaces;
+pub use neovm_display::emacs_core::xwidget;
 pub use neovm_edit::emacs_core::edit_host;
-#[path = "display/effect_profile/mod.rs"]
-pub mod effect_profile;
-#[path = "display/font/mod.rs"]
-pub mod font;
-#[path = "display/fontset/mod.rs"]
-pub mod fontset;
-#[path = "display/frame/mod.rs"]
-pub mod frame;
-#[path = "display/frame_vars/mod.rs"]
-pub mod frame_vars;
-#[path = "display/hscroll/mod.rs"]
-pub mod hscroll;
-#[path = "display/image/mod.rs"]
-pub mod image;
-#[path = "display/image_catalog/mod.rs"]
-pub mod image_catalog;
-#[path = "display/image_path/mod.rs"]
-pub mod image_path;
-#[path = "display/invisibility/mod.rs"]
-pub mod invisibility;
-#[path = "display/menu/mod.rs"]
-pub(crate) mod menu;
-#[path = "display/neo/mod.rs"]
-pub mod neo;
-#[path = "display/shader_surface/mod.rs"]
-pub mod shader_surface;
-#[path = "display/sound/mod.rs"]
-pub(crate) mod sound;
-#[path = "display/terminal/mod.rs"]
-pub mod terminal;
-#[path = "display/video/mod.rs"]
-pub mod video;
-#[path = "display/window_cmds/mod.rs"]
-pub mod window_cmds;
-#[path = "display/xdisp/mod.rs"]
-pub mod xdisp;
-#[path = "display/xfaces/mod.rs"]
-pub mod xfaces;
-#[path = "display/xwidget/mod.rs"]
-pub mod xwidget;
 
 // Editor state and editing operations.
 pub use neovm_edit::emacs_core::bookmark;
@@ -428,9 +403,6 @@ mod layout_test;
 mod runtime_string_guard_test;
 
 #[cfg(test)]
-#[path = "display/shader_surface/tests/runtime_test.rs"]
-mod shader_surface_test;
-#[cfg(test)]
 #[path = "tests/architecture/split_cfg_test_guard_test.rs"]
 mod split_cfg_test_guard_test;
 #[cfg(test)]
@@ -455,15 +427,6 @@ mod symbol_redirect_regression_test;
 #[cfg(test)]
 #[path = "system/tls/tests/runtime_test.rs"]
 mod tls_test;
-#[cfg(test)]
-#[path = "display/video/tests/runtime_test.rs"]
-mod video_test;
-#[cfg(test)]
-#[path = "display/window_cmds/tests/window_system_preload_test.rs"]
-mod window_system_preload_test;
-#[cfg(test)]
-#[path = "display/xwidget/tests/runtime_test.rs"]
-mod xwidget_test;
 
 // Moved down with the evaluator (stage-4 W5/E13); the historical
 // `crate::emacs_core::MenuBarPopupAnchor` path stays as a re-export.

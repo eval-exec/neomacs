@@ -1,0 +1,34 @@
+[package]
+name = "neovm-display"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Display, window, face and image layer extracted from neovm-core"
+
+[features]
+default = ["jit"]
+jit = ["neovm-value/jit", "neovm-edit/jit", "neovm-text/jit", "neovm-eval/jit"]
+sound = ["dep:rodio"]
+redisplay-test-policy = ["neovm-eval/redisplay-test-policy"]
+display-stop-validate = ["neovm-edit/display-stop-validate"]
+gc-memory-telemetry = []
+
+[dependencies]
+rodio = { version = "0.20", optional = true }
+neovm-value = { path = "../neovm-value" }
+neovm-edit = { path = "../neovm-edit" }
+neovm-text = { path = "../neovm-text" }
+neovm-eval = { path = "../neovm-eval" }
+enum-map.workspace = true
+neomacs-display-protocol.workspace = true
+neomacs-video-model.workspace = true
+num_enum.workspace = true
+regex.workspace = true
+rustc-hash.workspace = true
+smallvec.workspace = true
+static_assertions.workspace = true
+strum.workspace = true
+thiserror.workspace = true
+tracing.workspace = true

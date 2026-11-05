@@ -1,9 +1,9 @@
+pub use neovm_display::display_evaluation;
 pub use neovm_edit::buffer;
 pub(crate) use neovm_text::code_conversion_workspace;
-pub mod display_evaluation;
 pub mod emacs_core;
+pub use neovm_display::face;
 pub use neovm_text::encoding;
-pub mod face;
 // Frontend input vocabulary and state moved into the eval manifest (stage-4
 // W2/E6b); the historical crate-root paths stay as re-exports for every
 // in-crate and frontend-crate user.
@@ -17,12 +17,12 @@ pub use neovm_value::heap_types;
 #[cfg(test)]
 #[path = "../core_test_facades/heap_types.rs"]
 pub mod heap_types;
-pub use crate::emacs_core::host_input;
-pub use neovm_eval::host_effect;
-#[cfg(test)]
-mod image_identity;
 pub use crate::emacs_core::eval::keyboard;
 pub(crate) use crate::emacs_core::eval::keyboard_input;
+pub use crate::emacs_core::host_input;
+#[cfg(test)]
+pub(crate) use neovm_display::image_identity;
+pub use neovm_eval::host_effect;
 pub use neovm_value::logging;
 #[cfg(not(test))]
 pub use neovm_value::tagged;
@@ -64,8 +64,8 @@ pub(crate) use neovm_value::time_core;
 // The native C error message template (GNU doprnt's translation surface)
 // lives in the value crate: the edit layer's M3c host method takes it
 // directly, below the coding layer that resolves the quoting style.
+pub use neovm_display::window;
 pub(crate) use neovm_value::errors;
-pub mod window;
 
 // Curated facade: the front door for consumers of the Lisp engine. The
 // full module tree stays reachable for specialized needs; these are the
