@@ -4,6 +4,7 @@
 use super::*;
 use crate::emacs_core::eval::Context;
 use crate::tagged::gc::ProofEra as ParallelHeapEra;
+use crate::tagged::gc::mutator_registration::era_fixtures::EraFixtureExt;
 use crate::tagged::transport::SharedRoot;
 use crate::tagged::value::TaggedValue as Value;
 use std::collections::HashSet;
@@ -83,7 +84,12 @@ fn endgame(era: &ParallelHeapEra<'_>, owner: &mut Mutator<'_>, roots: &[SharedRo
     owner.enter_native(roots).unwrap();
     let mut stopped = retry(|| era.stop());
     retry_registration(|| era.return_cons_storage(&stopped));
-    retry(|| era.collect_stopped(&mut stopped));
+    retry(|| {
+        era.collect_stopped(
+            &mut stopped,
+            crate::emacs_core::eval::Baton::collect_parallel_world_roots,
+        )
+    });
     complete(stopped);
     owner.leave_native().unwrap();
 }
@@ -201,7 +207,12 @@ fn publish_at_stop_returns_unhanded_suffix_exactly() {
         );
         let mut stopped = retry(|| era.stop());
         retry_registration(|| era.return_cons_storage(&stopped));
-        retry(|| era.collect_stopped(&mut stopped));
+        retry(|| {
+            era.collect_stopped(
+                &mut stopped,
+                crate::emacs_core::eval::Baton::collect_parallel_world_roots,
+            )
+        });
         // After resume the next carve works and stays disjoint from the
         // published live cell. The resumed catalog must be stopped and
         // returned once more before this era can finish.
@@ -217,7 +228,12 @@ fn publish_at_stop_returns_unhanded_suffix_exactly() {
         owner.enter_native(&[head.clone(), second.clone()]).unwrap();
         let mut stopped = retry(|| era.stop());
         retry_registration(|| era.return_cons_storage(&stopped));
-        retry(|| era.collect_stopped(&mut stopped));
+        retry(|| {
+            era.collect_stopped(
+                &mut stopped,
+                crate::emacs_core::eval::Baton::collect_parallel_world_roots,
+            )
+        });
         complete(stopped);
         owner.leave_native().unwrap();
         drop((head, second));
@@ -292,7 +308,12 @@ fn two_owners_carve_disjoint_exclusive_tails() {
             assert_eq!(unique.len(), 400, "no two owners carved one cell");
             let mut stopped = retry(|| era.stop());
             retry_registration(|| era.return_cons_storage(&stopped));
-            retry(|| era.collect_stopped(&mut stopped));
+            retry(|| {
+                era.collect_stopped(
+                    &mut stopped,
+                    crate::emacs_core::eval::Baton::collect_parallel_world_roots,
+                )
+            });
             complete(stopped);
             drop(go_rx);
             for _ in 0..2 {

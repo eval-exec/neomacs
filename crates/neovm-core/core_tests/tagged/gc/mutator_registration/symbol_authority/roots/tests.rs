@@ -3,6 +3,7 @@ use crate::emacs_core::eval::Context;
 use crate::emacs_core::intern::{intern, intern_uninterned};
 use crate::emacs_core::symbol::ObarraySymbolCellSkipGuard;
 use crate::tagged::gc::ProofEra as ParallelHeapEra;
+use crate::tagged::gc::mutator_registration::era_fixtures::EraFixtureExt;
 use std::cell::RefCell;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -173,7 +174,7 @@ fn root_families(backing: PlainSymbolBacking) {
                 // Adversarial existing serial policy: the keeper must ignore it.
                 // The guard restores the original policy even on an assertion.
                 let skip = ObarraySymbolCellSkipGuard::new();
-                let keeper = era.core.keeper.as_ref().unwrap();
+                let keeper = era.keeper_for_test().unwrap();
                 let designator = keeper.keeper_designator().unwrap();
                 let mut cells = Vec::new();
                 let mut projections = Vec::new();
@@ -210,7 +211,12 @@ fn root_families(backing: PlainSymbolBacking) {
                         }
                     })
                     .collect();
-                let report = era.collect_stopped(&mut stopped).unwrap();
+                let report = era
+                    .collect_stopped(
+                        &mut stopped,
+                        crate::emacs_core::eval::Baton::collect_parallel_world_roots,
+                    )
+                    .unwrap();
                 let live = era
                     .with_stopped_heap_for_test(&stopped, |heap| {
                         expected
@@ -304,7 +310,7 @@ fn p3sym_c6_keeper_nonzero_word_refuses_before_copy_and_recovers() {
         let mut observations = Vec::new();
         {
             let symbols = stopped.symbols().unwrap();
-            let keeper = era.core.keeper.as_ref().unwrap();
+            let keeper = era.keeper_for_test().unwrap();
             let designator = keeper.keeper_designator().unwrap();
             for occupancy in [AuthorityOccupancy::Reader, AuthorityOccupancy::Writer] {
                 let guard = OccupiedWord::new(&era.registry().symbols.word, occupancy);
@@ -339,8 +345,8 @@ fn p3sym_c6_keeper_foreign_world_and_backing_refuse_before_copy() {
         let observations = Context::with_test_symbol_era(|inner, _| {
             let mut inner_stop = inner.stop().unwrap();
             let inner_symbols = inner_stop.symbols().unwrap();
-            let outer_keeper = outer.core.keeper.as_ref().unwrap();
-            let inner_keeper = inner.core.keeper.as_ref().unwrap();
+            let outer_keeper = outer.keeper_for_test().unwrap();
+            let inner_keeper = inner.keeper_for_test().unwrap();
             let outer_designator = outer_keeper.keeper_designator().unwrap();
             let inner_designator = inner_keeper.keeper_designator().unwrap();
             let mut out = vec![TaggedValue::T];

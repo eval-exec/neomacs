@@ -2,6 +2,7 @@
 use super::*;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::intern::intern;
+use crate::tagged::gc::mutator_registration::era_fixtures::EraFixtureExt;
 use crate::tagged::gc::mutator_registration::symbol_functions::retry::{
     self as contention, Deadline, Retry, retry_owned,
 };

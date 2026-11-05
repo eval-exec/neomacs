@@ -162,6 +162,20 @@ impl Baton {
         Arc::as_ptr(&self.world) as usize
     }
 
+    /// Test-only adoption of a serially built, retained World. The symbol
+    /// fixture builds the World and keeps the sole retention itself; this
+    /// constructor never escapes its defining module tree.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn from_test_world_parts(
+        retention: neovm_value::tagged::gc::FacadeEpochRetention,
+        world: Arc<World>,
+    ) -> Self {
+        Self {
+            _retention: retention,
+            world,
+        }
+    }
+
     /// A further owner's views of the World, starting in CURRENT. Only the
     /// holder may build them (point 2, checked in debug builds).
     #[doc(hidden)]

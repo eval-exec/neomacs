@@ -450,7 +450,12 @@ fn open_round<'era>(
 /// owners resume allocating.
 fn finish_round(era: &ParallelHeapEra<'_>, stopped: AllStopped<'_>) {
     let mut stopped = stopped;
-    let report = retry_rv(|| era.collect_stopped(&mut stopped));
+    let report = retry_rv(|| {
+        era.collect_stopped(
+            &mut stopped,
+            crate::emacs_core::eval::Baton::collect_parallel_world_roots,
+        )
+    });
     assert!(report.major, "extent rounds collect a major cycle");
     retry_reg(|| era.resume_cons_storage(&stopped));
     complete(stopped);
@@ -465,7 +470,12 @@ fn closing_round(era: &ParallelHeapEra<'_>, next_epoch: &mut u64) {
     assert_eq!(epoch, *next_epoch, "collection epochs stay strictly +1");
     *next_epoch += 1;
     retry_reg(|| era.return_cons_storage(&stopped));
-    let report = retry_rv(|| era.collect_stopped(&mut stopped));
+    let report = retry_rv(|| {
+        era.collect_stopped(
+            &mut stopped,
+            crate::emacs_core::eval::Baton::collect_parallel_world_roots,
+        )
+    });
     assert!(report.major, "the closing round collects a major cycle");
     complete(stopped);
 }

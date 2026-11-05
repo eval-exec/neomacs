@@ -2,6 +2,7 @@
 #![cfg(not(feature = "gc-memory-telemetry"))]
 use crate::emacs_core::eval::Context;
 use crate::tagged::gc::alloc_region::RegionStats;
+use crate::tagged::gc::mutator_registration::era_fixtures::EraFixtureExt;
 use crate::tagged::gc::{RunSlice, SliceRoot, TaggedHeap};
 use crate::tagged::header::ConsCell;
 use crate::tagged::transport::SharedRoot;
@@ -111,30 +112,30 @@ fn sim(shape: &str, n: usize) {
             // setup still owns its serial, non-admitted allocator. The marker
             // must never run after the fixture freezes/adopts that heap.
             let heap = &mut *context.tagged_heap;
-            heap.gc_threshold = usize::MAX;
+            heap.set_gc_threshold_for_test(usize::MAX);
             assert!(
                 !heap.threads_admitted(),
                 "Sim marker uses the sole allocator"
             );
             let initial = heap.allocated_count();
-            let fresh_before = heap.region_stats.cons_from_fresh_block;
+            let fresh_before = heap.region_stats_for_test().cons_from_fresh_block;
             let mut head = Value::NIL;
             let mut warm = 0;
             for _ in 0..MAX_WARM {
                 head = heap.alloc_cons(Value::fixnum(CAR), head);
                 warm += 1;
-                if heap.region_stats.cons_from_fresh_block > fresh_before {
+                if heap.region_stats_for_test().cons_from_fresh_block > fresh_before {
                     break;
                 }
             }
             assert!(warm < MAX_WARM, "warmup reaches a new actual fresh region");
-            let remaining =
-                (heap.jit.cons_lim.get() - heap.jit.cons_cur.get()) / size_of::<ConsCell>();
+            let remaining = (heap.jit_cons_window_for_test().1 - heap.jit_cons_window_for_test().0)
+                / size_of::<ConsCell>();
             assert!(remaining >= 127, "fresh maximum region after one warm cell");
-            let before = Counts::of(&heap.region_stats);
+            let before = Counts::of(&heap.region_stats_for_test());
             let gen1 = heap.generational_enabled();
             head = r2_cons_micro_sim_loop(heap, Value::fixnum(CAR), head, n);
-            let delta = Counts::of(&heap.region_stats).since(before);
+            let delta = Counts::of(&heap.region_stats_for_test()).since(before);
             if shape == "resident" {
                 assert_eq!(delta.refills, 0);
                 assert_eq!(delta.granted, 0);
@@ -153,7 +154,12 @@ fn sim(shape: &str, n: usize) {
             // serial arm. The real major drains canonical legacy young work;
             // cleanup and verification are entirely outside the marker.
             let mut stopped = era.stop().unwrap();
-            let report = era.collect_stopped(&mut stopped).unwrap();
+            let report = era
+                .collect_stopped(
+                    &mut stopped,
+                    crate::emacs_core::eval::Baton::collect_parallel_world_roots,
+                )
+                .unwrap();
             assert!(report.major);
             assert_eq!(report.frozen_owners, 0);
             era.with_stopped_heap_for_test(&stopped, |heap| {
@@ -174,7 +180,7 @@ fn sim(shape: &str, n: usize) {
 fn local(shape: &str, n: usize) {
     Context::with_test_collection_era(
         |context| {
-            context.tagged_heap.gc_threshold = usize::MAX;
+            context.tagged_heap.set_gc_threshold_for_test(usize::MAX);
             let gen1 = context.tagged_heap.generational_enabled();
             // SAFETY: immediate values are live on this sole serial heap.
             let car = unsafe { SharedRoot::new(&context.tagged_heap, Value::fixnum(CAR)) };
@@ -192,9 +198,9 @@ fn local(shape: &str, n: usize) {
                 let mut run = owner.run_access().unwrap();
                 let car = run.root_slot(&car_root).unwrap();
                 let head = run.root_slot(&nil_root).unwrap();
-                assert_eq!(run.state().region_stats.cons_from_fresh_block, 0);
-                let bank_len = run.state().root_scratch.len();
-                let bank_capacity = run.state().root_scratch.capacity();
+                assert_eq!(run.region_stats_for_test().cons_from_fresh_block, 0);
+                let bank_len = run.root_bank_for_test().0;
+                let bank_capacity = run.root_bank_for_test().1;
                 // Entry validation, cold binding and one alias clone precede
                 // both warmup and the measured marker. The wrapper retains
                 // the actual guard and closes it after the marker returns.
@@ -226,14 +232,14 @@ fn local(shape: &str, n: usize) {
                         (warm, delta)
                     })
                     .unwrap();
-                assert_eq!(run.state().root_scratch.len(), bank_len);
-                assert_eq!(run.state().root_scratch.capacity(), bank_capacity);
+                assert_eq!(run.root_bank_for_test().0, bank_len);
+                assert_eq!(run.root_bank_for_test().1, bank_capacity);
                 let word = head.word_for_test(&run);
                 assert!(
                     run.cons_region_for_test().is_none(),
                     "slice wrapper closed its region"
                 );
-                assert_eq!(run.state().hot.allocated_count, warm + n);
+                assert_eq!(run.allocated_count_for_test(), warm + n);
                 (word, warm, delta, (bank_len, bank_capacity))
             };
             // No per-cons SharedRoot protected this graph. Its canonical
@@ -242,7 +248,11 @@ fn local(shape: &str, n: usize) {
             owner.enter_native(&[]).unwrap();
             let mut stopped = era.stop().unwrap();
             era.return_cons_storage(&stopped).unwrap();
-            era.collect_stopped(&mut stopped).unwrap();
+            era.collect_stopped(
+                &mut stopped,
+                crate::emacs_core::eval::Baton::collect_parallel_world_roots,
+            )
+            .unwrap();
             era.with_stopped_heap_for_test(&stopped, |heap| {
                 verify_list(heap, Value::from_bits(head_word), warm + n);
             })

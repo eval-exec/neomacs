@@ -54,4 +54,96 @@ pub mod authority {
     /// `ProofEraFinishFailure` with this World's keeper.
     pub type WorldProofEraFinishFailure<'heap> =
         neovm_value::test_support::authority::ProofEraFinishFailure<'heap, Baton>;
+
+    /// B1: the twelve symbol-fixture entry points stay in eval's gated
+    /// `symbol_fixture` body; these delegators are the only cross-crate route.
+    pub fn with_test_symbol_era<R>(
+        body: impl for<'heap> FnOnce(WorldProofEra<'heap>, SymId) -> R,
+    ) -> R {
+        Context::with_test_symbol_era(body)
+    }
+
+    pub fn try_with_test_symbol_era<R>(
+        body: impl for<'heap> FnOnce(WorldProofEra<'heap>, SymId) -> R,
+    ) -> Result<R, RegistrationError> {
+        Context::try_with_test_symbol_era(body)
+    }
+
+    pub fn try_with_test_symbol_backing_init_era<R>(
+        kind: PlainSymbolBacking,
+        init: impl FnOnce(&mut Obarray, SymId),
+        body: impl for<'heap> FnOnce(WorldProofEra<'heap>, SymId) -> R,
+    ) -> Result<R, RegistrationError> {
+        Context::try_with_test_symbol_backing_init_era(kind, init, body)
+    }
+
+    pub fn with_test_symbol_backing_era<R>(
+        kind: PlainSymbolBacking,
+        body: impl for<'heap> FnOnce(WorldProofEra<'heap>, SymId) -> R,
+    ) -> R {
+        Context::with_test_symbol_backing_era(kind, body)
+    }
+
+    pub fn with_test_symbol_backings_era<R>(
+        kinds: &[PlainSymbolBacking],
+        body: impl for<'heap> FnOnce(WorldProofEra<'heap>, Vec<SymId>) -> R,
+    ) -> R {
+        Context::with_test_symbol_backings_era(kinds, body)
+    }
+
+    pub fn with_test_symbol_functions_era<R>(
+        kind: PlainSymbolBacking,
+        body: impl for<'heap> FnOnce(WorldProofEra<'heap>, Vec<SymId>) -> R,
+    ) -> R {
+        Context::with_test_symbol_functions_era(kind, body)
+    }
+
+    pub fn with_test_symbol_functions_init_era<R>(
+        kind: PlainSymbolBacking,
+        init: impl FnOnce(&mut Obarray, &[SymId]),
+        body: impl for<'heap> FnOnce(WorldProofEra<'heap>, Vec<SymId>) -> R,
+    ) -> R {
+        Context::with_test_symbol_functions_init_era(kind, init, body)
+    }
+
+    pub fn with_test_symbol_name_inputs_era<R>(
+        kind: PlainSymbolBacking,
+        spelling: &str,
+        body: impl for<'heap> FnOnce(WorldProofEra<'heap>, Vec<SymId>) -> R,
+    ) -> R {
+        Context::with_test_symbol_name_inputs_era(kind, spelling, body)
+    }
+
+    pub fn with_test_symbol_name_inputs_init_era<R>(
+        kind: PlainSymbolBacking,
+        spelling: &str,
+        init: impl FnOnce(&mut Obarray, &[SymId]),
+        body: impl for<'heap> FnOnce(WorldProofEra<'heap>, Vec<SymId>) -> R,
+    ) -> R {
+        Context::with_test_symbol_name_inputs_init_era(kind, spelling, init, body)
+    }
+
+    pub fn with_test_symbol_intern_race_era<R>(
+        kind: PlainSymbolBacking,
+        spellings: &[String],
+        body: impl for<'heap> FnOnce(WorldProofEra<'heap>, Vec<SymId>) -> R,
+    ) -> R {
+        Context::with_test_symbol_intern_race_era(kind, spellings, body)
+    }
+
+    pub fn with_test_symbol_backings_init_era<R>(
+        kinds: &[PlainSymbolBacking],
+        init: impl FnOnce(&mut Obarray, &[SymId]),
+        body: impl for<'heap> FnOnce(WorldProofEra<'heap>, Vec<SymId>) -> R,
+    ) -> R {
+        Context::with_test_symbol_backings_init_era(kinds, init, body)
+    }
+
+    pub fn try_with_test_symbol_backings_init_era<R>(
+        kinds: &[PlainSymbolBacking],
+        init: impl FnOnce(&mut Obarray, &[SymId]),
+        body: impl for<'heap> FnOnce(WorldProofEra<'heap>, Vec<SymId>) -> R,
+    ) -> Result<R, RegistrationError> {
+        Context::try_with_test_symbol_backings_init_era(kinds, init, body)
+    }
 }

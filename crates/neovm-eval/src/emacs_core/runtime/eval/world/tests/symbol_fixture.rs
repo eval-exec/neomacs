@@ -3,8 +3,8 @@ use super::*;
 
 impl Context {
     #[doc(hidden)]
-    pub fn with_test_symbol_era<R>(
-        body: impl for<'heap> FnOnce(neovm_value::tagged::gc::ProofEra<'heap>, SymId) -> R,
+    pub(crate) fn with_test_symbol_era<R>(
+        body: impl for<'heap> FnOnce(crate::test_support::authority::WorldProofEra<'heap>, SymId) -> R,
     ) -> R {
         Self::with_test_symbol_backing_era(
             neovm_value::tagged::gc::PlainSymbolBacking::Unprojected,
@@ -15,8 +15,8 @@ impl Context {
     /// Observe the real rooted-admission result without converting its typed
     /// refusal to a setup panic. Refused ownership is released before return.
     #[doc(hidden)]
-    pub fn try_with_test_symbol_era<R>(
-        body: impl for<'heap> FnOnce(neovm_value::tagged::gc::ProofEra<'heap>, SymId) -> R,
+    pub(crate) fn try_with_test_symbol_era<R>(
+        body: impl for<'heap> FnOnce(crate::test_support::authority::WorldProofEra<'heap>, SymId) -> R,
     ) -> Result<R, neovm_value::tagged::gc::RegistrationError> {
         Self::try_with_test_symbol_backings_init_era(
             &[neovm_value::tagged::gc::PlainSymbolBacking::Unprojected],
@@ -28,10 +28,10 @@ impl Context {
     /// Typed-refusal variant for one serially seeded Plain/projected symbol.
     /// Initialization ends before the proof era; no mutable World escapes.
     #[doc(hidden)]
-    pub fn try_with_test_symbol_backing_init_era<R>(
+    pub(crate) fn try_with_test_symbol_backing_init_era<R>(
         kind: neovm_value::tagged::gc::PlainSymbolBacking,
         init: impl FnOnce(&mut Obarray, SymId),
-        body: impl for<'heap> FnOnce(neovm_value::tagged::gc::ProofEra<'heap>, SymId) -> R,
+        body: impl for<'heap> FnOnce(crate::test_support::authority::WorldProofEra<'heap>, SymId) -> R,
     ) -> Result<R, neovm_value::tagged::gc::RegistrationError> {
         Self::try_with_test_symbol_backings_init_era(
             &[kind],
@@ -43,9 +43,9 @@ impl Context {
     /// C3 setup only: the same small World, optionally projected before the
     /// era exists. No production cell accessor changes and no setup collection.
     #[doc(hidden)]
-    pub fn with_test_symbol_backing_era<R>(
+    pub(crate) fn with_test_symbol_backing_era<R>(
         kind: neovm_value::tagged::gc::PlainSymbolBacking,
-        body: impl for<'heap> FnOnce(neovm_value::tagged::gc::ProofEra<'heap>, SymId) -> R,
+        body: impl for<'heap> FnOnce(crate::test_support::authority::WorldProofEra<'heap>, SymId) -> R,
     ) -> R {
         Self::with_test_symbol_backings_era(&[kind], |era, ids| body(era, ids[0]))
     }
@@ -53,9 +53,12 @@ impl Context {
     /// All names, spine slots and projection plans are created serially before
     /// the era exists. Running tests can only access these existing symbols.
     #[doc(hidden)]
-    pub fn with_test_symbol_backings_era<R>(
+    pub(crate) fn with_test_symbol_backings_era<R>(
         kinds: &[neovm_value::tagged::gc::PlainSymbolBacking],
-        body: impl for<'heap> FnOnce(neovm_value::tagged::gc::ProofEra<'heap>, Vec<SymId>) -> R,
+        body: impl for<'heap> FnOnce(
+            crate::test_support::authority::WorldProofEra<'heap>,
+            Vec<SymId>,
+        ) -> R,
     ) -> R {
         Self::with_test_symbol_backings_init_era(kinds, |_, _| {}, body)
     }
@@ -64,9 +67,12 @@ impl Context {
     /// by the sole serial setup owner. The matching value homes provide
     /// rooted input operands through the already-qualified C3 read API.
     #[doc(hidden)]
-    pub fn with_test_symbol_functions_era<R>(
+    pub(crate) fn with_test_symbol_functions_era<R>(
         kind: neovm_value::tagged::gc::PlainSymbolBacking,
-        body: impl for<'heap> FnOnce(neovm_value::tagged::gc::ProofEra<'heap>, Vec<SymId>) -> R,
+        body: impl for<'heap> FnOnce(
+            crate::test_support::authority::WorldProofEra<'heap>,
+            Vec<SymId>,
+        ) -> R,
     ) -> R {
         Self::with_test_symbol_functions_init_era(kind, |_, _| {}, body)
     }
@@ -74,10 +80,13 @@ impl Context {
     /// A fixture may change initial binding states while this setup still
     /// exclusively owns the actual Obarray. The callback ends before the era.
     #[doc(hidden)]
-    pub fn with_test_symbol_functions_init_era<R>(
+    pub(crate) fn with_test_symbol_functions_init_era<R>(
         kind: neovm_value::tagged::gc::PlainSymbolBacking,
         init: impl FnOnce(&mut Obarray, &[SymId]),
-        body: impl for<'heap> FnOnce(neovm_value::tagged::gc::ProofEra<'heap>, Vec<SymId>) -> R,
+        body: impl for<'heap> FnOnce(
+            crate::test_support::authority::WorldProofEra<'heap>,
+            Vec<SymId>,
+        ) -> R,
     ) -> R {
         Self::with_test_symbol_backings_init_era(
             &[kind, kind],
@@ -100,20 +109,26 @@ impl Context {
     /// copied from existing plain cells through the qualified rooted value API.
     /// No string allocation, raw name word or mutable heap view enters the era.
     #[doc(hidden)]
-    pub fn with_test_symbol_name_inputs_era<R>(
+    pub(crate) fn with_test_symbol_name_inputs_era<R>(
         kind: neovm_value::tagged::gc::PlainSymbolBacking,
         spelling: &str,
-        body: impl for<'heap> FnOnce(neovm_value::tagged::gc::ProofEra<'heap>, Vec<SymId>) -> R,
+        body: impl for<'heap> FnOnce(
+            crate::test_support::authority::WorldProofEra<'heap>,
+            Vec<SymId>,
+        ) -> R,
     ) -> R {
         Self::with_test_symbol_name_inputs_init_era(kind, spelling, |_, _| {}, body)
     }
 
     #[doc(hidden)]
-    pub fn with_test_symbol_name_inputs_init_era<R>(
+    pub(crate) fn with_test_symbol_name_inputs_init_era<R>(
         kind: neovm_value::tagged::gc::PlainSymbolBacking,
         spelling: &str,
         init: impl FnOnce(&mut Obarray, &[SymId]),
-        body: impl for<'heap> FnOnce(neovm_value::tagged::gc::ProofEra<'heap>, Vec<SymId>) -> R,
+        body: impl for<'heap> FnOnce(
+            crate::test_support::authority::WorldProofEra<'heap>,
+            Vec<SymId>,
+        ) -> R,
     ) -> R {
         use neovm_value::tagged::gc::PlainSymbolBacking;
         Self::with_test_symbol_backings_init_era(
@@ -135,10 +150,13 @@ impl Context {
     /// existing plain holders. Registry gaps are issued only AFTER those
     /// World slots exist, so intern itself must grow the retained spine/sides.
     #[doc(hidden)]
-    pub fn with_test_symbol_intern_race_era<R>(
+    pub(crate) fn with_test_symbol_intern_race_era<R>(
         kind: neovm_value::tagged::gc::PlainSymbolBacking,
         spellings: &[String],
-        body: impl for<'heap> FnOnce(neovm_value::tagged::gc::ProofEra<'heap>, Vec<SymId>) -> R,
+        body: impl for<'heap> FnOnce(
+            crate::test_support::authority::WorldProofEra<'heap>,
+            Vec<SymId>,
+        ) -> R,
     ) -> R {
         let mut kinds =
             vec![neovm_value::tagged::gc::PlainSymbolBacking::Unprojected; spellings.len() + 1];
@@ -150,8 +168,8 @@ impl Context {
                     obarray.seed_value_id(id, TaggedValue::string(spelling));
                 }
                 let mut id = neovm_value::intern::intern_uninterned("p3sym-c5-native-gap");
-                let target = (u64::from(id.0) / 4096 + 2) * 4096 + 17;
-                while u64::from(id.0) + 1 < target {
+                let target = (u64::from(id.to_raw()) / 4096 + 2) * 4096 + 17;
+                while u64::from(id.to_raw()) + 1 < target {
                     id = neovm_value::intern::intern_uninterned("p3sym-c5-native-gap");
                 }
             },
@@ -160,22 +178,28 @@ impl Context {
     }
 
     #[doc(hidden)]
-    pub fn with_test_symbol_backings_init_era<R>(
+    pub(crate) fn with_test_symbol_backings_init_era<R>(
         kinds: &[neovm_value::tagged::gc::PlainSymbolBacking],
         init: impl FnOnce(&mut Obarray, &[SymId]),
-        body: impl for<'heap> FnOnce(neovm_value::tagged::gc::ProofEra<'heap>, Vec<SymId>) -> R,
+        body: impl for<'heap> FnOnce(
+            crate::test_support::authority::WorldProofEra<'heap>,
+            Vec<SymId>,
+        ) -> R,
     ) -> R {
         Self::try_with_test_symbol_backings_init_era(kinds, init, body)
             .unwrap_or_else(|reason| panic!("minimal symbol fixture admission: {reason:?}"))
     }
 
     #[doc(hidden)]
-    pub fn try_with_test_symbol_backings_init_era<R>(
+    pub(crate) fn try_with_test_symbol_backings_init_era<R>(
         kinds: &[neovm_value::tagged::gc::PlainSymbolBacking],
         init: impl FnOnce(&mut Obarray, &[SymId]),
-        body: impl for<'heap> FnOnce(neovm_value::tagged::gc::ProofEra<'heap>, Vec<SymId>) -> R,
+        body: impl for<'heap> FnOnce(
+            crate::test_support::authority::WorldProofEra<'heap>,
+            Vec<SymId>,
+        ) -> R,
     ) -> Result<R, neovm_value::tagged::gc::RegistrationError> {
-        use neovm_value::tagged::gc::{AliasableBox, ProofEra as ParallelHeapEra, TaggedHeap};
+        use neovm_value::tagged::gc::{AliasableBox, TaggedHeap};
 
         let heap = AliasableBox::new(TaggedHeap::new());
         // Manager construction can allocate; install only the owning root.
@@ -207,7 +231,7 @@ impl Context {
             macro_perf_stats: MacroPerfStats::default(),
             buffers: BufferManager::new_world_parts(),
             global: crate::emacs_core::eval::global_state::GlobalState::fresh(
-                crate::keyboard::CommandLoop::new(),
+                crate::emacs_core::eval::keyboard::CommandLoop::new(),
             ),
         }
         .build();
@@ -235,10 +259,7 @@ impl Context {
         let retention = exclusion.retain().unwrap();
         drop(exclusion);
         world.baton_holder.set(Some(std::thread::current().id()));
-        let keeper = Baton {
-            _retention: retention,
-            world,
-        };
+        let keeper = Baton::from_test_world_parts(retention, world);
         // SAFETY: same original heap root, no collector/reference remains
         // from the preceding short exclusion extent.
         let collector = unsafe { (*heap).drain_to_quiescent(|_| {}) }.unwrap();
@@ -254,15 +275,25 @@ impl Context {
                 FrozenFunctionRoots::Quiescent,
             )
         };
-        let era = match ParallelHeapEra::admit_rooted(collector, keeper, frozen) {
+        // SAFETY: the fixture built this World and holds its sole retention;
+        // the prepare callback derives the original keeper's retained epoch
+        // and backing at the lower collector's unchanged preparation point.
+        let era = match unsafe {
+            neovm_value::test_support::authority::admit_rooted_for_test(
+                collector,
+                keeper,
+                frozen,
+                crate::emacs_core::eval::world::era::prepare_keeper_backing,
+            )
+        } {
             Ok(era) => era,
             Err(failure) => {
-                let reason = failure.reason;
+                let (reason, collector, keeper) = failure.into_parts();
                 // Admission returned both exclusive authorities. Release the
                 // collector before its World keeper, then let ready tear down
                 // the retained World. No owner, root home or lease was issued.
-                drop(failure.collector);
-                drop(failure.keeper);
+                drop(collector);
+                drop(keeper);
                 return Err(reason);
             }
         };

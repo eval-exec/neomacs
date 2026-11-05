@@ -361,7 +361,10 @@ impl Context {
 #[path = "tests/parallel_roots_test.rs"]
 mod tests;
 
-#[cfg(test)]
+// Variant B (peer 07:3xZ): the symbol fixture stays in eval, gated so a
+// test-support dependency build compiles it; its entry points are reachable
+// only through `crate::test_support::authority`.
+#[cfg(any(test, feature = "test-support"))]
 #[path = "tests/symbol_fixture.rs"]
 mod symbol_fixture;
 

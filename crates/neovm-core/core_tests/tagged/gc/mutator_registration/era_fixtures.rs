@@ -57,6 +57,73 @@ pub trait EraFixtureExt {
             Vec<neovm_value::tagged::transport::SharedRoot>,
         ) -> R,
     ) -> R;
+
+    /// B1 delegators: the symbol-fixture body lives in eval; these call the
+    /// only cross-crate route, `neovm_eval::test_support::authority`.
+    fn with_test_symbol_era<R>(body: impl for<'heap> FnOnce(WorldProofEra<'heap>, SymId) -> R)
+    -> R;
+
+    fn try_with_test_symbol_era<R>(
+        body: impl for<'heap> FnOnce(WorldProofEra<'heap>, SymId) -> R,
+    ) -> Result<R, RegistrationError>;
+
+    fn try_with_test_symbol_backing_init_era<R>(
+        kind: PlainSymbolBacking,
+        init: impl FnOnce(&mut Obarray, SymId),
+        body: impl for<'heap> FnOnce(WorldProofEra<'heap>, SymId) -> R,
+    ) -> Result<R, RegistrationError>;
+
+    fn with_test_symbol_backing_era<R>(
+        kind: PlainSymbolBacking,
+        body: impl for<'heap> FnOnce(WorldProofEra<'heap>, SymId) -> R,
+    ) -> R;
+
+    fn with_test_symbol_backings_era<R>(
+        kinds: &[PlainSymbolBacking],
+        body: impl for<'heap> FnOnce(WorldProofEra<'heap>, Vec<SymId>) -> R,
+    ) -> R;
+
+    fn with_test_symbol_functions_era<R>(
+        kind: PlainSymbolBacking,
+        body: impl for<'heap> FnOnce(WorldProofEra<'heap>, Vec<SymId>) -> R,
+    ) -> R;
+
+    fn with_test_symbol_functions_init_era<R>(
+        kind: PlainSymbolBacking,
+        init: impl FnOnce(&mut Obarray, &[SymId]),
+        body: impl for<'heap> FnOnce(WorldProofEra<'heap>, Vec<SymId>) -> R,
+    ) -> R;
+
+    fn with_test_symbol_name_inputs_era<R>(
+        kind: PlainSymbolBacking,
+        spelling: &str,
+        body: impl for<'heap> FnOnce(WorldProofEra<'heap>, Vec<SymId>) -> R,
+    ) -> R;
+
+    fn with_test_symbol_name_inputs_init_era<R>(
+        kind: PlainSymbolBacking,
+        spelling: &str,
+        init: impl FnOnce(&mut Obarray, &[SymId]),
+        body: impl for<'heap> FnOnce(WorldProofEra<'heap>, Vec<SymId>) -> R,
+    ) -> R;
+
+    fn with_test_symbol_intern_race_era<R>(
+        kind: PlainSymbolBacking,
+        spellings: &[String],
+        body: impl for<'heap> FnOnce(WorldProofEra<'heap>, Vec<SymId>) -> R,
+    ) -> R;
+
+    fn with_test_symbol_backings_init_era<R>(
+        kinds: &[PlainSymbolBacking],
+        init: impl FnOnce(&mut Obarray, &[SymId]),
+        body: impl for<'heap> FnOnce(WorldProofEra<'heap>, Vec<SymId>) -> R,
+    ) -> R;
+
+    fn try_with_test_symbol_backings_init_era<R>(
+        kinds: &[PlainSymbolBacking],
+        init: impl FnOnce(&mut Obarray, &[SymId]),
+        body: impl for<'heap> FnOnce(WorldProofEra<'heap>, Vec<SymId>) -> R,
+    ) -> Result<R, RegistrationError>;
 }
 
 /// GNU's default weak window table is outside A5; no Lisp/window API executes
@@ -254,5 +321,99 @@ impl EraFixtureExt for Context {
         }
         .unwrap_or_else(|_| panic!("rooted fixture era"));
         f(era, roots)
+    }
+
+    fn with_test_symbol_era<R>(
+        body: impl for<'heap> FnOnce(WorldProofEra<'heap>, SymId) -> R,
+    ) -> R {
+        neovm_eval::test_support::authority::with_test_symbol_era(body)
+    }
+
+    fn try_with_test_symbol_era<R>(
+        body: impl for<'heap> FnOnce(WorldProofEra<'heap>, SymId) -> R,
+    ) -> Result<R, RegistrationError> {
+        neovm_eval::test_support::authority::try_with_test_symbol_era(body)
+    }
+
+    fn try_with_test_symbol_backing_init_era<R>(
+        kind: PlainSymbolBacking,
+        init: impl FnOnce(&mut Obarray, SymId),
+        body: impl for<'heap> FnOnce(WorldProofEra<'heap>, SymId) -> R,
+    ) -> Result<R, RegistrationError> {
+        neovm_eval::test_support::authority::try_with_test_symbol_backing_init_era(kind, init, body)
+    }
+
+    fn with_test_symbol_backing_era<R>(
+        kind: PlainSymbolBacking,
+        body: impl for<'heap> FnOnce(WorldProofEra<'heap>, SymId) -> R,
+    ) -> R {
+        neovm_eval::test_support::authority::with_test_symbol_backing_era(kind, body)
+    }
+
+    fn with_test_symbol_backings_era<R>(
+        kinds: &[PlainSymbolBacking],
+        body: impl for<'heap> FnOnce(WorldProofEra<'heap>, Vec<SymId>) -> R,
+    ) -> R {
+        neovm_eval::test_support::authority::with_test_symbol_backings_era(kinds, body)
+    }
+
+    fn with_test_symbol_functions_era<R>(
+        kind: PlainSymbolBacking,
+        body: impl for<'heap> FnOnce(WorldProofEra<'heap>, Vec<SymId>) -> R,
+    ) -> R {
+        neovm_eval::test_support::authority::with_test_symbol_functions_era(kind, body)
+    }
+
+    fn with_test_symbol_functions_init_era<R>(
+        kind: PlainSymbolBacking,
+        init: impl FnOnce(&mut Obarray, &[SymId]),
+        body: impl for<'heap> FnOnce(WorldProofEra<'heap>, Vec<SymId>) -> R,
+    ) -> R {
+        neovm_eval::test_support::authority::with_test_symbol_functions_init_era(kind, init, body)
+    }
+
+    fn with_test_symbol_name_inputs_era<R>(
+        kind: PlainSymbolBacking,
+        spelling: &str,
+        body: impl for<'heap> FnOnce(WorldProofEra<'heap>, Vec<SymId>) -> R,
+    ) -> R {
+        neovm_eval::test_support::authority::with_test_symbol_name_inputs_era(kind, spelling, body)
+    }
+
+    fn with_test_symbol_name_inputs_init_era<R>(
+        kind: PlainSymbolBacking,
+        spelling: &str,
+        init: impl FnOnce(&mut Obarray, &[SymId]),
+        body: impl for<'heap> FnOnce(WorldProofEra<'heap>, Vec<SymId>) -> R,
+    ) -> R {
+        neovm_eval::test_support::authority::with_test_symbol_name_inputs_init_era(
+            kind, spelling, init, body,
+        )
+    }
+
+    fn with_test_symbol_intern_race_era<R>(
+        kind: PlainSymbolBacking,
+        spellings: &[String],
+        body: impl for<'heap> FnOnce(WorldProofEra<'heap>, Vec<SymId>) -> R,
+    ) -> R {
+        neovm_eval::test_support::authority::with_test_symbol_intern_race_era(kind, spellings, body)
+    }
+
+    fn with_test_symbol_backings_init_era<R>(
+        kinds: &[PlainSymbolBacking],
+        init: impl FnOnce(&mut Obarray, &[SymId]),
+        body: impl for<'heap> FnOnce(WorldProofEra<'heap>, Vec<SymId>) -> R,
+    ) -> R {
+        neovm_eval::test_support::authority::with_test_symbol_backings_init_era(kinds, init, body)
+    }
+
+    fn try_with_test_symbol_backings_init_era<R>(
+        kinds: &[PlainSymbolBacking],
+        init: impl FnOnce(&mut Obarray, &[SymId]),
+        body: impl for<'heap> FnOnce(WorldProofEra<'heap>, Vec<SymId>) -> R,
+    ) -> Result<R, RegistrationError> {
+        neovm_eval::test_support::authority::try_with_test_symbol_backings_init_era(
+            kinds, init, body,
+        )
     }
 }
