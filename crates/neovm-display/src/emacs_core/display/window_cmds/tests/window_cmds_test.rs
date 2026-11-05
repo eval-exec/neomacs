@@ -1,4 +1,3 @@
-use crate::emacs_core::DisplayHost;
 use crate::emacs_core::window_cmds::{FrameDomain, SplitWindowSide, WindowDomain};
 use crate::face::{FontSlant, FontWeight, FontWidth};
 use crate::test_utils::{runtime_startup_context, runtime_startup_eval_all};
@@ -6,6 +5,7 @@ use crate::window::DisplayFrameTestExt;
 use crate::window::{FrameFullscreen, FrameParam};
 use neovm_edit::buffer::{EmacsBytePos, LispCharPos1};
 use neovm_eval::emacs_core::eval::Context;
+use neovm_eval::emacs_core::eval::DisplayHost;
 use neovm_eval::emacs_core::eval::GuiFrameHostRequest;
 use neovm_eval::emacs_core::eval::{FontPxProbeResult, GuiFrameHostSize, ResolvedFrameFont};
 use neovm_eval::emacs_core::print::format_eval_result;
@@ -982,7 +982,7 @@ fn window_old_buffer_reports_the_recorded_buffer_after_a_change_epoch() {
         .collect::<Vec<_>>();
     assert_eq!(before[0], "OK nil", "no epoch has been recorded yet");
 
-    neovm_eval::emacs_core::builtins::run_redisplay_window_change_hooks(&mut ev)
+    neovm_eval::emacs_core::eval::lifecycle::run_redisplay_window_change_hooks(&mut ev)
         .expect("window change hooks");
 
     let after = ev
@@ -1030,7 +1030,7 @@ fn window_old_buffer_survives_a_same_epoch_configuration_round_trip() {
     let _ = ev.eval_str_each("(selected-window)");
 
     // Open an epoch so the window has a real record to restore.
-    neovm_eval::emacs_core::builtins::run_redisplay_window_change_hooks(&mut ev)
+    neovm_eval::emacs_core::eval::lifecycle::run_redisplay_window_change_hooks(&mut ev)
         .expect("window change hooks");
     let recorded = ev
         .eval_str_each("(bufferp (window-old-buffer (selected-window)))")

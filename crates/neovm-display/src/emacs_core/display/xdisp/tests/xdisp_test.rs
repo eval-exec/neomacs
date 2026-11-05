@@ -1997,7 +1997,7 @@ fn line_pixel_height_gui_context(
     Context,
     crate::window::FrameId,
     crate::window::WindowId,
-    crate::buffer::BufferId,
+    neovm_edit::buffer::BufferId,
 ) {
     let mut ev = crate::emacs_core::Context::new();
     let buf = ev.buffers.create_buffer("*lph*");
@@ -2038,7 +2038,7 @@ fn commit_line_pixel_height_snapshot(
     ev: &mut Context,
     fid: crate::window::FrameId,
     wid: crate::window::WindowId,
-    buf: crate::buffer::BufferId,
+    buf: neovm_edit::buffer::BufferId,
 ) {
     crate::emacs_core::window_cmds::remember_selected_window_point_in_state(
         &mut ev.frames,
