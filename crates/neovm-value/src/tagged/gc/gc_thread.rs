@@ -1669,7 +1669,7 @@ pub fn set_tagged_heap_root(root: std::ptr::NonNull<TaggedHeap>) {
 /// AliasableBox root and install with `set_tagged_heap_root` (use TestHeap).
 /// Restrict this legacy surface to unit-test builds while that inventory is
 /// migrated; no production or integration-test caller can use it.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn set_tagged_heap(heap: &mut TaggedHeap) {
     if !tagged_heap_is_current(heap) {
         super::super::collection_reads::reset_recent_reads_for_heap_installation();

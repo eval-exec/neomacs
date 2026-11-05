@@ -2164,11 +2164,12 @@ thread_local! {
     static NAME_CANONICAL_SYMBOL_CACHE: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     static RESOLVE_SYM_LISP_STRING_REGISTRY_READS: RefCell<usize> = const { RefCell::new(0) };
-    static INTERN_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    static INTERN_CALL_NAMES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    pub(crate) static INTERN_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(crate) static INTERN_CALL_NAMES: RefCell<Vec<String>> =
+        const { RefCell::new(Vec::new()) };
     static EXACT_SYMBOL_NAME_VALUE_PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static MATERIALIZED_SYMBOL_NAME_VALUE_PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -2218,20 +2219,20 @@ pub(crate) fn resolve_sym_lisp_string_registry_reads() -> usize {
     RESOLVE_SYM_LISP_STRING_REGISTRY_READS.with(|reads| *reads.borrow())
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub fn reset_intern_calls() {
     INTERN_CALLS.set(0);
     INTERN_CALL_NAMES.with(|names| names.borrow_mut().clear());
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub fn intern_calls() -> usize {
     INTERN_CALLS.get()
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub fn intern_call_names() -> Vec<String> {
     INTERN_CALL_NAMES.with(|names| names.borrow().clone())

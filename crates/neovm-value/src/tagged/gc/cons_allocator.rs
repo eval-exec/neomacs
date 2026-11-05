@@ -897,7 +897,7 @@ impl AllocatorState {
             .collect()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn free_heads(&self) -> Vec<*mut ConsCell> {
         self.slots
             .iter()
@@ -1228,7 +1228,7 @@ impl ConsAllocator {
         self.with_state(|state, _mode| state.free_counts())
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn free_heads(&self) -> Vec<*mut ConsCell> {
         self.with_state(|state, _mode| state.free_heads())
     }
@@ -1419,7 +1419,7 @@ impl SharedConsAllocator<'_> {
         self.with_state(|state, _mode| state.free_counts())
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn free_heads(&self) -> Vec<*mut ConsCell> {
         self.with_state(|state, _mode| state.free_heads())
     }

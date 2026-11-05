@@ -989,7 +989,7 @@ pub struct Obarray {
     symbols: SymbolChunks,
     /// Test-only visibility into logical symbol-table access. Kept per
     /// obarray so parallel tests cannot contaminate one another's counts.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     symbol_slot_read_count: std::sync::atomic::AtomicUsize,
     global_member_count: usize,
     /// Canonical function clock and debugger descriptor, addressed together by
@@ -1694,7 +1694,7 @@ impl Clone for Obarray {
         }
         Self {
             symbols,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             symbol_slot_read_count: std::sync::atomic::AtomicUsize::new(0),
             global_member_count: self.global_member_count,
             // Clone re-leaks stateful forwarders, so its canonical descriptor
@@ -1745,21 +1745,21 @@ impl Obarray {
 
     #[inline(always)]
     fn slot(&self, id: SymId) -> Option<&LispSymbol> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         self.symbol_slot_read_count
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         // `get` already folds presence (empty slots read as `None`).
         self.symbols.get(Self::slot_index(id))
     }
 
-    #[cfg(test)]
-    pub(crate) fn reset_symbol_slot_read_count(&self) {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn reset_symbol_slot_read_count(&self) {
         self.symbol_slot_read_count
             .store(0, std::sync::atomic::Ordering::Relaxed);
     }
 
-    #[cfg(test)]
-    pub(crate) fn symbol_slot_read_count(&self) -> usize {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn symbol_slot_read_count(&self) -> usize {
         self.symbol_slot_read_count
             .load(std::sync::atomic::Ordering::Relaxed)
     }
@@ -2002,7 +2002,7 @@ impl Obarray {
     pub fn new() -> Self {
         let mut ob = Self {
             symbols: SymbolChunks::new(),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             symbol_slot_read_count: std::sync::atomic::AtomicUsize::new(0),
             global_member_count: 0,
             dispatch_cells: CanonicalDispatchCells::new(FunctionEpoch(0)),
@@ -5014,7 +5014,7 @@ impl Obarray {
 
         let mut ob = Self {
             symbols: slots,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             symbol_slot_read_count: std::sync::atomic::AtomicUsize::new(0),
             global_member_count: 0,
             dispatch_cells: CanonicalDispatchCells::new(FunctionEpoch(function_epoch)),
@@ -5182,6 +5182,53 @@ impl Obarray {
         id: SymId,
     ) -> Option<Value> {
         self.canonical_value_in_buffer_id(CanonicalAccess::TEST, buf, id)
+    }
+    pub fn value_without_buffer(&self, name: &str) -> BufferlessValue {
+        self.canonical_value_without_buffer(CanonicalAccess::TEST, name)
+    }
+    pub fn value_without_buffer_id(&self, id: SymId) -> BufferlessValue {
+        self.canonical_value_without_buffer_id(CanonicalAccess::TEST, id)
+    }
+    pub fn find_symbol_value(&self, id: SymId) -> Option<Value> {
+        self.canonical_find_value(CanonicalAccess::TEST, id)
+    }
+    pub fn default_value_id_copied(&self, id: SymId) -> Option<Value> {
+        self.canonical_default_value(CanonicalAccess::TEST, id)
+    }
+    pub fn boundp(&self, name: &str) -> bool {
+        self.canonical_boundp(CanonicalAccess::TEST, name)
+    }
+    pub fn boundp_id(&self, id: SymId) -> bool {
+        self.canonical_boundp_id(CanonicalAccess::TEST, id)
+    }
+    pub fn set_symbol_value(&mut self, name: &str, value: Value) {
+        self.set_canonical_value_by_name(CanonicalAccess::TEST, name, value);
+    }
+    pub fn set_symbol_value_id(&mut self, id: SymId, value: Value) {
+        self.set_canonical_value(CanonicalAccess::TEST, id, value);
+    }
+    pub fn makunbound(&mut self, name: &str) {
+        self.makunbound_canonical_by_name(CanonicalAccess::TEST, name);
+    }
+    pub fn makunbound_id(&mut self, id: SymId) {
+        self.makunbound_canonical(CanonicalAccess::TEST, id);
+    }
+}
+
+/// Additive test-support surface (peer A1) for upper-crate tests: the
+/// pre-`CanonicalAccess` spellings that do not name edit-layer buffers.
+/// Compiled for a dependency build with `feature = "test-support"` and not
+/// for value's own test build, which keeps the full test-only block above.
+#[cfg(all(feature = "test-support", not(test)))]
+impl Obarray {
+    pub fn symbol_value_copied(&self, name: &str) -> Option<Value> {
+        self.canonical_value_by_name(CanonicalAccess::TEST, name)
+    }
+    pub fn symbol_value_id_copied(&self, id: SymId) -> Option<Value> {
+        self.canonical_value(CanonicalAccess::TEST, id)
+    }
+    pub fn symbol_value_id_or_nil(&self, id: SymId) -> Value {
+        self.canonical_value_or_nil(CanonicalAccess::TEST, id)
     }
     pub fn value_without_buffer(&self, name: &str) -> BufferlessValue {
         self.canonical_value_without_buffer(CanonicalAccess::TEST, name)

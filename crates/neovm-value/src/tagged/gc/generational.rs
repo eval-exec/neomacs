@@ -530,8 +530,8 @@ impl TaggedHeap {
         self.generational.old_objects = ptr;
     }
 
-    #[cfg(test)]
-    pub(crate) fn value_is_old_for_test(&self, value: TaggedValue) -> bool {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn value_is_old_for_test(&self, value: TaggedValue) -> bool {
         if let Some((trailer, index)) = self.old_cons_trailer(value) {
             trailer.is_old(index)
         } else {

@@ -35,7 +35,8 @@ impl CanonicalAccess {
     /// The owner-aware `Context` API's own access to canonical storage: the
     /// dormant answer, or the canonical half of an owner-first rule.
     pub const ROUTED: Self = Self { _sealed: () };
-    /// Tests, which set up and inspect canonical storage.
-    #[cfg(test)]
+    /// Tests and the test-support surface, which set up and inspect
+    /// canonical storage.
+    #[cfg(any(test, feature = "test-support"))]
     pub const TEST: Self = Self { _sealed: () };
 }

@@ -2451,8 +2451,8 @@ impl TaggedHeap {
     /// Test-only allocated ownership, including conses in a surviving block.
     /// A freed cons in such a block still passes the geometric oracle, so
     /// exclude nodes in the intrusive free list without reading their payload.
-    #[cfg(test)]
-    pub(crate) fn owns_heap_value_for_test(&self, value: TaggedValue) -> bool {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn owns_heap_value_for_test(&self, value: TaggedValue) -> bool {
         if value.is_cons() {
             if self.old_cons_trailer(value).is_none() {
                 return false;

@@ -2786,8 +2786,8 @@ impl Clone for TextPropertyTable {
 
 /// `(start, end, plist pairs)` of one interval, as
 /// [`TextPropertyTable::interval_plist_runs_for_test`] reports it.
-#[cfg(test)]
-type IntervalPlistRun = (usize, usize, Vec<(Value, Value)>);
+#[cfg(any(test, feature = "test-support"))]
+pub type IntervalPlistRun = (usize, usize, Vec<(Value, Value)>);
 
 #[cfg(feature = "gc-memory-telemetry")]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -3883,8 +3883,8 @@ impl TextPropertyTable {
 
     /// Test hook: every bit-set interval is covered by the cached range list
     /// when that list is valid, and the any-flag agrees with the tree.
-    #[cfg(test)]
-    pub(crate) fn debug_syntax_caches_consistent(&self) -> Result<(), String> {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn debug_syntax_caches_consistent(&self) -> Result<(), String> {
         use std::sync::atomic::Ordering;
         let actual: Vec<(usize, usize)> = self
             .intervals
@@ -5235,8 +5235,8 @@ impl TextPropertyTable {
     }
 
     /// `(start, end, plist pairs)` of every interval, empty ones included.
-    #[cfg(test)]
-    pub(crate) fn interval_plist_runs_for_test(&self) -> Vec<IntervalPlistRun> {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn interval_plist_runs_for_test(&self) -> Vec<IntervalPlistRun> {
         self.intervals
             .runs()
             .into_iter()
