@@ -43,9 +43,9 @@
 //!    emacs.c line ordering against the numbers screened from GNU's `main`.
 //!    An empty table fails that test rather than passing it vacuously.
 
-use crate::Value;
 use neovm_edit::emacs_core::edit_host::EditHost;
 use neovm_eval::emacs_core::eval::Context;
+use neovm_value::value::Value;
 
 /// A compile-time constant GNU assigns to a Lisp variable in an `init_*`
 /// body.

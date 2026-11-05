@@ -12,8 +12,8 @@
 //!   that is merely well-formed but never applied still fails.
 
 use super::{CallGuard, Derived, Establishes, PostImageInit, ResetValue, apply_post_image_init};
-use crate::Value;
 use crate::emacs_core::value::list_to_vec;
+use neovm_value::value::Value;
 
 /// A Lisp string as UTF-8, for comparing paths in assertions.
 fn text(v: Value) -> String {
