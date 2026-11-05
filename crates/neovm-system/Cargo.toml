@@ -11,8 +11,17 @@ description = "Host system services (files, processes, time, IPC) extracted from
 default = ["jit", "sqlite"]
 jit = ["neovm-value/jit", "neovm-edit/jit", "neovm-text/jit", "neovm-eval/jit"]
 sqlite = ["dep:rusqlite", "neovm-eval/sqlite"]
+# Static-link the bundled libdbus instead of pkg-config `dbus-1` (the
+# detection in build.rs turns this into cfg(neomacs_have_dbus)).
+dbus-vendored = ["dbus/vendored"]
+# Test-only helpers (P1 post-split test-support pass).  Reachable only from a
+# dev edge; never in default or a product feature.
+test-support = ["neovm-value/test-support", "neovm-text/test-support", "neovm-eval/test-support", "dep:visibility"]
 
 [dependencies]
+# B3 TEST-SUPPORT-VIS: pub only in the test-support build; product visibility
+# is unchanged (peer-signed mechanism V1-V6).
+visibility = { version = "0.1.1", optional = true }
 neovm-value = { path = "../neovm-value" }
 neovm-edit = { path = "../neovm-edit" }
 neovm-text = { path = "../neovm-text" }
@@ -47,3 +56,18 @@ tree-sitter.workspace = true
 webpki-roots.workspace = true
 windows-sys.workspace = true
 x509-parser.workspace = true
+
+[build-dependencies]
+# dbus-1 detection for the moved dbusbind transport (see build.rs).
+pkg-config.workspace = true
+
+[dev-dependencies]
+# Downward test-only edge: the crate's own tests use the value-level helpers
+# through src/test_utils.rs.  Not a product dependency.
+neovm-value = { path = "../neovm-value", features = ["test-support"] }
+# The re-homed process/wait tests name eval's test-support surface (wait gates,
+# process-state metadata).  Downward, test-only.
+neovm-eval = { path = "../neovm-eval", features = ["test-support"] }
+# Feature unification: value/test-support adds CacheRootScan::Snapshot, so the
+# text consumer must compile with its matching test-support arm.
+neovm-text = { path = "../neovm-text", features = ["test-support"] }

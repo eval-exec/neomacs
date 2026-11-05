@@ -9,6 +9,7 @@ description = "Editor and buffer storage extracted from neovm-core"
 
 [features]
 default = ["jit"]
+test-support = ["neovm-value/test-support"]
 display-stop-validate = []
 jit = ["neovm-value/jit"]
 # Numeric redisplay policy injection for dependent fixtures (stage-4 W5/E13:

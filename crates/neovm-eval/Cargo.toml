@@ -14,7 +14,7 @@ default = ["jit"]
 # (B3, peer ruling 02:2xZ): named items keep their production visibility and
 # gain `visibility::make(pub)` only in this build; the provider features
 # forward downward so the whole lower graph is in the same test mode.
-test-support = ["neovm-value/test-support", "neovm-text/test-support", "dep:visibility"]
+test-support = ["neovm-value/test-support", "neovm-text/test-support", "neovm-edit/test-support", "dep:visibility"]
 contract-fixtures = []
 desktop-font-settings = []
 gc-memory-telemetry = []
@@ -25,6 +25,9 @@ sqlite = []
 vm-profile = []
 
 [dependencies]
+# B3 TEST-SUPPORT-VIS: pub only in the test-support build; product visibility
+# is unchanged.  Test-provider defs are annotated by exact rustc def span.
+visibility = { version = "0.1.1", optional = true }
 neovm-value = { path = "../neovm-value" }
 neovm-edit = { path = "../neovm-edit" }
 neovm-text = { path = "../neovm-text" }

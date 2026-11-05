@@ -11,7 +11,7 @@ description = "Core runtime structures for NeoVM"
 autotests = false
 
 [dependencies]
-neovm-system = { path = "../neovm-system" }
+neovm-system = { path = "../neovm-system", default-features = false }
 neovm-display = { path = "../neovm-display" }
 neovm-eval = { path = "../neovm-eval", default-features = false }
 neovm-text = { path = "../neovm-text" }
@@ -127,10 +127,12 @@ dbus = { version = "0.9", default-features = false }
 default = ["jit", "sqlite"]
 # Diagnostic inventory walks and JSONL records; absent from ordinary builds.
 gc-memory-telemetry = ["dep:serde_json", "neovm-value/gc-memory-telemetry", "neovm-eval/gc-memory-telemetry", "neovm-display/gc-memory-telemetry"]
-sqlite = ["dep:rusqlite", "neovm-value/sqlite", "neovm-eval/sqlite"]
+sqlite = ["dep:rusqlite", "neovm-value/sqlite", "neovm-eval/sqlite", "neovm-system/sqlite"]
 # Static-link the crate's bundled libdbus instead of pkg-config `dbus-1`.
-# Production/Nix builds leave this off and use the system library.
-dbus-vendored = ["dbus/vendored"]
+# Production/Nix builds leave this off and use the system library.  The
+# transport (and its dbus dependency) lives in neovm-system since stage 6,
+# so the switch must reach that crate's feature and build script.
+dbus-vendored = ["dbus/vendored", "neovm-system/dbus-vendored"]
 sound = ["neovm-display/sound"]
 # Set by `neomacs`'s `webview` feature.  `build.rs` turns it into
 # `cfg(neomacs_have_wkwebview)` on macOS, which is what decides whether
@@ -202,6 +204,11 @@ neovm-text = { path = "../neovm-text", features = ["test-support"] }
 # TEST-SUPPORT-DESIGN.md rev 2: core's moved_* tests consume the lower
 # crates' feature-gated test surfaces (downward enablement from above).
 neovm-eval = { path = "../neovm-eval", default-features = false, features = ["test-support", "redisplay-test-policy"] }
+# P1 test-support pass: system's Context-booting tests are re-homed into
+# core's test tree (TEST-SUPPORT-DESIGN §1a option A) and reach the
+# feature-gated system fixtures through this dev-only edge.  The normal
+# dependency above stays feature-free for product builds.
+neovm-system = { path = "../neovm-system", features = ["test-support"] }
 toml.workspace = true
 serde_json.workspace = true
 static_assertions.workspace = true
