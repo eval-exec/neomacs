@@ -80,21 +80,6 @@ pub use crate::tagged::gc::mutator_registration::test_fences::{
     reset_catalog_waits_for_test,
 };
 
-/// Public route for the peer-approved MEMQ-TAIL-SHAPES (5) copied catalog-waits
-/// observer. `cons_storage` stays a private module, so without this re-export
-/// the A'-widened item has no cross-crate path. Same item and rows as
-/// `tagged::gc::cons_storage::catalog_waits_for_test` / `CatalogWaitsSnapshot`
-/// (VIS-VALUE rows); this re-export adds no widening.
-#[cfg(feature = "test-support")]
-#[doc(hidden)]
-pub use crate::tagged::gc::mutator_registration::test_fences::{
-    CatalogWaitsSnapshot, catalog_waits_for_test,
-};
-#[cfg(not(feature = "test-support"))]
-pub(crate) use crate::tagged::gc::mutator_registration::test_fences::{
-    CatalogWaitsSnapshot, catalog_waits_for_test,
-};
-
 /// Peer-signed MEMQ-TAIL-SHAPES (b): closure-scoped stopped-tables install.
 /// The scope is non-swappable; the authority-word seam is on the scope and is
 /// reachable only inside this closure.
