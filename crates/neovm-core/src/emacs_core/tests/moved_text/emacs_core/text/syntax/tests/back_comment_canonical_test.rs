@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::sync::{LazyLock, Mutex};
 
 use crate::emacs_core::print::print_value;
-use neovm_eval::emacs_core::eval::case_tables::canon;
+use neovm_text::emacs_core::syntax::parse_cache::canon;
 use neovm_text::emacs_core::syntax::CommentEndEscapePolicy;
 use neovm_text::emacs_core::syntax::SyntaxProperties;
 use neovm_text::emacs_core::syntax::SyntaxTable;
