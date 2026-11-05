@@ -296,7 +296,7 @@ static_assertions::assert_not_impl_any!(ConsCatalog: Clone, Copy);
 
 /// Test-only accounting of catalog-mutex wait time on the cold grant/close
 /// refill paths, for the A8 contention rows. Never compiled into images.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Default)]
 pub(crate) struct CatalogWaits {
     pub(crate) grant_calls: std::sync::atomic::AtomicU64,
@@ -307,7 +307,7 @@ pub(crate) struct CatalogWaits {
     pub(crate) close_max_ns: std::sync::atomic::AtomicU64,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) static CATALOG_WAITS: CatalogWaits = CatalogWaits {
     grant_calls: std::sync::atomic::AtomicU64::new(0),
     grant_ns: std::sync::atomic::AtomicU64::new(0),
@@ -317,13 +317,60 @@ pub(crate) static CATALOG_WAITS: CatalogWaits = CatalogWaits {
     close_max_ns: std::sync::atomic::AtomicU64::new(0),
 };
 
-#[cfg(test)]
+/// Peer-approved MEMQ-TAIL-SHAPES (5) + 21:25Z (ii): plain Copy snapshot of
+/// the catalog-wait counters, read with Acquire loads. No Atomic, Cell or
+/// reference inside; public fields are fine on this NEW returned type (N1).
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) struct CatalogWaitsSnapshot {
+    pub grant_calls: u64,
+    pub grant_ns: u64,
+    pub grant_max_ns: u64,
+    pub close_calls: u64,
+    pub close_ns: u64,
+    pub close_max_ns: u64,
+}
+
+/// Copied observer for the A8 contention rows (N2; CATALOG_WAITS stays
+/// private).
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn catalog_waits_for_test() -> CatalogWaitsSnapshot {
+    use std::sync::atomic::Ordering::Acquire;
+    CatalogWaitsSnapshot {
+        grant_calls: CATALOG_WAITS.grant_calls.load(Acquire),
+        grant_ns: CATALOG_WAITS.grant_ns.load(Acquire),
+        grant_max_ns: CATALOG_WAITS.grant_max_ns.load(Acquire),
+        close_calls: CATALOG_WAITS.close_calls.load(Acquire),
+        close_ns: CATALOG_WAITS.close_ns.load(Acquire),
+        close_max_ns: CATALOG_WAITS.close_max_ns.load(Acquire),
+    }
+}
+
+/// Counter reset for the A8 driver: a WRITE, so an unsafe FENCE (N2/C3).
+///
+/// # Safety
+/// The caller has exclusive use of the profiling counters (serial probe); no
+/// other thread records or reads them concurrently.
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) unsafe fn reset_catalog_waits_for_test() {
+    use std::sync::atomic::Ordering::Relaxed;
+    CATALOG_WAITS.grant_calls.store(0, Relaxed);
+    CATALOG_WAITS.grant_ns.store(0, Relaxed);
+    CATALOG_WAITS.grant_max_ns.store(0, Relaxed);
+    CATALOG_WAITS.close_calls.store(0, Relaxed);
+    CATALOG_WAITS.close_ns.store(0, Relaxed);
+    CATALOG_WAITS.close_max_ns.store(0, Relaxed);
+}
+
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) enum CatalogOp {
     Grant,
     Close,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn test_catalog_wait(start: std::time::Instant, op: CatalogOp) {
     use std::sync::atomic::Ordering::Relaxed;
     let nanos = start.elapsed().as_nanos() as u64;
@@ -594,10 +641,10 @@ impl ConsCatalog {
         if !(1..=MAX_GRANT).contains(&want) {
             return Err(RegistrationError::Capacity);
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         let catalog_wait = std::time::Instant::now();
         let mut gate = self.lock()?;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         test_catalog_wait(catalog_wait, CatalogOp::Grant);
         let state = gate.as_mut().ok_or(RegistrationError::Publication)?;
         state
@@ -708,10 +755,10 @@ impl ConsCatalog {
             if owner != region.owner {
                 return Err(RegistrationError::WrongOwner);
             }
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             let catalog_wait = std::time::Instant::now();
             let mut gate = self.lock()?;
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             test_catalog_wait(catalog_wait, CatalogOp::Close);
             let state = gate.as_mut().ok_or(RegistrationError::Publication)?;
             if !region.active || state.active_regions == 0 {
@@ -826,10 +873,10 @@ impl ConsCatalog {
         if !(1..=TAIL_BATCH_CELLS).contains(&want) {
             return Err(RegistrationError::Capacity);
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         let catalog_wait = std::time::Instant::now();
         let mut gate = self.lock()?;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         test_catalog_wait(catalog_wait, CatalogOp::Grant);
         let state = gate.as_mut().ok_or(RegistrationError::Publication)?;
         state
@@ -980,10 +1027,10 @@ impl ConsCatalog {
         if owner.heap_identity() != self.heap {
             return Err(RegistrationError::WrongHeap);
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         let catalog_wait = std::time::Instant::now();
         let mut gate = self.lock()?;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         test_catalog_wait(catalog_wait, CatalogOp::Close);
         let state = gate.as_mut().ok_or(RegistrationError::Publication)?;
         let mut refunded = 0;

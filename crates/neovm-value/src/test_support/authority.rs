@@ -72,9 +72,30 @@ pub fn global(error: &crate::tagged::gc::mutator_registration::GlobalError) -> R
 /// stay restricted; the module is crate-visible, so this re-export is their
 /// only public path.
 pub use crate::tagged::gc::mutator_registration::test_fences::{
-    AdmissionProbeGuard, AdmissionProbeState, begin_restore_retry_for_test,
-    poison_registry_for_test,
+    AdmissionProbeGuard, AdmissionProbeState, AuthorityProbeGuard, AuthorityProbeState,
+    KeeperTableScope, begin_restore_retry_for_test, poison_registry_for_test,
+    reset_catalog_waits_for_test,
 };
+
+/// Peer-signed MEMQ-TAIL-SHAPES (b): closure-scoped stopped-tables install.
+/// The scope is non-swappable; the authority-word seam is on the scope and is
+/// reachable only inside this closure.
+///
+/// # Safety
+/// `stopped` must be a real stop of `era` (or an unsafe fence mint); the body
+/// must not resume owners; no other collector-table installation may be live.
+#[doc(hidden)]
+pub unsafe fn with_stopped_tables_for_test<'a, 'era, R, K: crate::tagged::gc::EraKeeper>(
+    era: &'a crate::tagged::gc::ProofEra<'_, K>,
+    stopped: &'a crate::tagged::gc::AllStopped<'era>,
+    body: impl FnOnce(&mut KeeperTableScope<'_, 'era>) -> R,
+) -> R {
+    unsafe {
+        crate::tagged::gc::mutator_registration::test_fences::with_stopped_tables_for_test(
+            era, stopped, body,
+        )
+    }
+}
 
 /// Peer-signed 18:40Z shape (a): the typed scoped admission-word seam.
 /// CAS-installs the probe state from the quiescent OUT word; the returned

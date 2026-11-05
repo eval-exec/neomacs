@@ -971,8 +971,10 @@ mod slice_tests;
 
 #[cfg(test)]
 mod a8_latency;
-#[cfg(test)]
+#[cfg(all(test, not(feature = "test-support")))]
 mod a8_probes;
+#[cfg(feature = "test-support")]
+pub mod a8_probes;
 #[cfg(test)]
 mod restricted_lisp;
 

@@ -13,28 +13,40 @@ use std::time::Instant;
 mod suppression;
 pub(crate) use suppression::suppress;
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) const REQUEST_PUBLISHED: u8 = 1;
 /// `publish_roots` entered (owner woke and holds its run-closed state).
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) const PUBLISH_ENTERED: u8 = 2;
 /// `validate_publication` returned: regions confirmed closed.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) const REGION_CLOSED: u8 = 3;
 /// Root batch reserved and the GC image published (host allocation done).
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) const HOSTALLOC_DONE: u8 = 4;
 /// `Mode::Stopped`/`NativeStopped` committed under the control mutex.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) const ACK_COMMITTED: u8 = 5;
 /// `Mode::NativeStopped` committed (an extent entry, not a round ACK).
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) const NATIVE_ACK: u8 = 12;
 /// Keeper finished enumerating every owner's roots plus World heads.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) const ROOT_CENSUS_DONE: u8 = 6;
 /// `collect_stopped` returned: mark and sweep finished.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) const MARK_SWEEP_DONE: u8 = 7;
 /// Keeper `complete` finished draining into resume handoff.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) const KEEPER_COMPLETED: u8 = 8;
 /// One owner reached `Mode::Running` again.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) const OWNER_RUNNING: u8 = 9;
 /// The native extent body returned on its owner thread.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) const NATIVE_RETURNED: u8 = 10;
 /// The returning owner is `Running` again (permission granted).
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) const NATIVE_PERMITTED: u8 = 11;
 /// A slice admission backed out: the phase word was not admissible, so the
 /// owner refused without running (cold backout branch only; the admitted
@@ -42,6 +54,7 @@ pub(crate) const NATIVE_PERMITTED: u8 = 11;
 pub(crate) const ADMISSION_BACKOUT: u8 = 13;
 
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct ProbeEvent {
     pub kind: u8,
     pub epoch: u64,
@@ -54,6 +67,7 @@ static START: Mutex<Option<Instant>> = Mutex::new(None);
 static EVENTS: Mutex<Vec<ProbeEvent>> = Mutex::new(Vec::new());
 static NATIVE_SEQ: AtomicU64 = AtomicU64::new(0);
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn enable() {
     *START.lock().unwrap_or_else(|poison| poison.into_inner()) = Some(Instant::now());
     EVENTS
@@ -64,10 +78,12 @@ pub(crate) fn enable() {
     ENABLED.store(true, Ordering::SeqCst);
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn disable() {
     ENABLED.store(false, Ordering::SeqCst);
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn take_events() -> Vec<ProbeEvent> {
     EVENTS
         .lock()
@@ -87,6 +103,7 @@ pub(crate) fn native_seq() -> u64 {
 }
 
 #[inline(always)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn mark(kind: u8, epoch: u64, owner: u64) {
     if !ENABLED.load(Ordering::Relaxed) {
         return;
@@ -112,6 +129,7 @@ pub(crate) fn mark(kind: u8, epoch: u64, owner: u64) {
 }
 
 /// ns cost of one disabled and one recording probe call, for the report.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn overhead_ns(iterations: usize) -> (f64, f64) {
     let disabled = Instant::now();
     for _ in 0..iterations {

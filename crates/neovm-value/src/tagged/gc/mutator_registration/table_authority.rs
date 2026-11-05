@@ -41,7 +41,7 @@ fn owner_gc_ptr(owner: &mut Mutator<'_>) -> *mut MutatorGcState {
         })
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) use super::authority_word::WRITER;
 pub(crate) use super::authority_word::{
     quiescent, reader_enter, reader_exit, writer_enter, writer_exit,
