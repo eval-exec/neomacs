@@ -50,10 +50,11 @@ pub(super) struct SymbolSidecar {
     era: NonZeroU64,
     pub(super) functions: functions::write::FunctionState,
     pub(super) tables: super::super::symbol_table::publication::PublishedSymbolTables,
-    #[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
     table_commit_fault: Mutex<TableCommitFault>,
 }
 impl SymbolSidecar {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn new(
         backing: SymbolBacking,
         era: NonZeroU64,

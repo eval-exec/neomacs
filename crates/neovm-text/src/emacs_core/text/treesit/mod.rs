@@ -331,6 +331,7 @@ impl SourceByteRange {
     }
 }
 
+#[cfg(not(any(test, feature = "test-support")))]
 #[doc(hidden)]
 pub struct ParserEntry {
     pub(crate) value: Value,
@@ -338,6 +339,23 @@ pub struct ParserEntry {
     pub(crate) root_buffer_id: BufferId,
     pub(crate) language: SymId,
     pub(crate) tag: Value,
+    pub(crate) parser: Parser,
+    pub(crate) tree: Option<ParsedTree>,
+    pub(crate) freshness: ParserFreshness,
+    pub(crate) generation: u64,
+    pub(crate) need_to_gc_buffer: bool,
+    pub(crate) deleted: bool,
+    pub(crate) tracking_linecol: bool,
+    pub(crate) last_changed_ranges: Vec<SourceByteRange>,
+}
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub struct ParserEntry {
+    pub value: Value,
+    pub(crate) orig_buffer_id: BufferId,
+    pub(crate) root_buffer_id: BufferId,
+    pub(crate) language: SymId,
+    pub tag: Value,
     pub(crate) parser: Parser,
     pub(crate) tree: Option<ParsedTree>,
     pub(crate) freshness: ParserFreshness,

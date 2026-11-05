@@ -30,7 +30,6 @@ use strum::IntoStaticStr;
 
 mod raw_plist_lookup;
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Lisp variables that control native text-property resolution.
 ///
 /// GNU keeps these in predeclared `V...`/`Q...` globals.  A closed Rust enum
@@ -40,6 +39,7 @@ mod raw_plist_lookup;
 /// cache slot in the exhaustive match below.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, IntoStaticStr)]
 #[strum(serialize_all = "kebab-case")]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum TextPropertyControlVariable {
     CharPropertyAliasAlist,
     DefaultTextProperties,
@@ -590,13 +590,13 @@ impl<'a> CharPropertyResolver<'a> {
     }
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// The property carrier determines whether GNU's text defaults are eligible.
 /// Text and overlay callers share direct/category/alias precedence, but only
 /// text consults `default-text-properties` (GNU intervals.c:1741-1742).
 /// This carries no mutator state and may be shared across threads.
 #[derive(Clone, Copy, Debug)]
 #[cfg_attr(test, derive(strum::EnumIter))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 enum CharPropertyCarrier {
     Text,
     Overlay,
@@ -1953,7 +1953,8 @@ fn put_text_property_in_buffer_byte_range(
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// (get-text-property POS PROP &optional OBJECT)
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_get_text_property<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     neovm_value::error::expect_args_range("get-text-property", &args, 2, 3)?;
     let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
@@ -2439,7 +2440,8 @@ pub fn builtin_get_char_property_with_window_lookup<
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// (add-text-properties BEG END PROPS &optional OBJECT)
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_add_text_properties<H: EditHost>(
     host: &mut H,
     args: Vec<Value>,
@@ -2986,7 +2988,8 @@ impl StringTextPropertyTarget {
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// (remove-list-of-text-properties BEG END LIST &optional OBJECT)
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_remove_list_of_text_properties<H: EditHost>(
     host: &mut H,
     args: Vec<Value>,
@@ -3097,7 +3100,8 @@ pub(crate) fn builtin_remove_list_of_text_properties_in_buffers(
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// (text-properties-at POS &optional OBJECT)
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_text_properties_at<H: EditHost>(
     host: &mut H,
     args: Vec<Value>,
@@ -3583,7 +3587,8 @@ pub fn emacs_byte_pos_of_preceding_char(buf: &Buffer, byte_pos: EmacsBytePos) ->
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// (previous-single-property-change POS PROP &optional OBJECT LIMIT)
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_previous_single_property_change<H: EditHost>(
     host: &mut H,
     args: Vec<Value>,
@@ -3962,7 +3967,8 @@ pub(crate) fn builtin_text_property_any_in_state<'a, Vars: EditVariableRead<'a>>
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// (text-property-not-all BEG END PROP VAL &optional OBJECT)
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_text_property_not_all<H: EditHost>(
     host: &mut H,
     args: Vec<Value>,

@@ -121,6 +121,7 @@ const _: () = {
 };
 
 impl TracedWord {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// `value`'s word, when the collector traces it from a root.
     pub(super) fn of(value: TaggedValue) -> Option<Self> {
         let traced =

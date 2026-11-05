@@ -585,7 +585,8 @@ impl<'a, R> OverlayPropertySweep<'a, R>
 where
     R: OverlayPropertyResolver,
 {
-    #[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn new(
         overlays: &'a OverlayList,
         bounds: EmacsByteRange,
@@ -847,7 +848,8 @@ impl OverlayList {
     }
 
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    #[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn interval_index_height(&self) -> usize {
         self.index.interval_height()
     }
@@ -1239,12 +1241,13 @@ impl OverlayList {
         active
     }
 
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// Create a bounded monotonic property sweep for redisplay.
     ///
     /// Unlike an exact at-point extent query, this initializes active overlays
     /// once at `bounds.start()` and streams endpoint groups in ascending order.
-    #[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn overlay_property_sweep<R>(
         &self,
         bounds: EmacsByteRange,

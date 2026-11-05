@@ -10,7 +10,6 @@ pub struct TextExtent {
     emacs_bytes: EmacsByteLen,
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Signed logical size change produced by a structural text edit.
 ///
 /// GNU edit code updates char and byte coordinates together (`PT` with
@@ -18,6 +17,7 @@ pub struct TextExtent {
 /// delta typed prevents replacement paths from shifting only one coordinate
 /// space when the byte and character lengths differ.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(in crate::buffer) struct TextExtentDelta {
     chars: CharDelta,
     emacs_bytes: EmacsByteDelta,
@@ -96,7 +96,8 @@ impl TextExtent {
         Self { chars, emacs_bytes }
     }
 
-    #[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(in crate::buffer) const fn from_usize(chars: usize, emacs_bytes: usize) -> Self {
         Self {
             chars: CharLen::new(chars),
@@ -366,7 +367,8 @@ impl TextTransposition {
         Self { first, second }
     }
 
-    #[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     #[allow(clippy::too_many_arguments)]
     pub const fn from_usize(
         start1_byte: usize,

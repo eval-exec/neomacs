@@ -378,7 +378,6 @@ impl DecodeEolResolution {
     }
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// The end-of-line type a conversion actually runs with.
 ///
 /// GNU's `eol_type` slot may hold a VECTOR of the three subsidiaries, which is
@@ -388,6 +387,7 @@ impl DecodeEolResolution {
 /// is what remains after the resolution, so an unresolved eol type cannot reach
 /// a byte transformation: there is no `Undecided` variant to pass.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum ResolvedEol {
     /// `Qunix`: `decode_eol` returns immediately (src/coding.c:6765).
     Unix,
@@ -861,17 +861,20 @@ fn check_symbol_hook_arg(value: &Value, mode: SymbolMode) -> Result<Option<SymId
 // CodingSystemInfo
 // ---------------------------------------------------------------------------
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Information about a single coding system.
 /// Reserved `int_properties` keys carrying a coding system's ISO-2022
 /// designation/flags data. `int_properties` is pdump-serialized but not
 /// surfaced by `coding-system-plist`, and these out-of-range keys cannot
 /// collide with any integer a `coding-system-put` would use.
 const ISO2022_KEY_INITIAL: i64 = i64::MIN;
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
+#[cfg(not(any(test, feature = "test-support")))]
 const ISO2022_KEY_REQUEST: i64 = i64::MIN + 1;
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
+#[cfg(any(test, feature = "test-support"))]
+pub const ISO2022_KEY_REQUEST: i64 = i64::MIN + 1;
+#[cfg(not(any(test, feature = "test-support")))]
 const ISO2022_KEY_FLAGS: i64 = i64::MIN + 2;
+#[cfg(any(test, feature = "test-support"))]
+pub const ISO2022_KEY_FLAGS: i64 = i64::MIN + 2;
 const ISO2022_KEY_REG_USAGE: i64 = i64::MIN + 3;
 /// Reserved int_properties key holding the verbatim define-coding-system plist
 /// (arg 11), used to reproduce GNU's stored plist order in coding-system-plist.
@@ -893,6 +896,7 @@ const CCL_KEY_VALIDS: i64 = i64::MIN + 8;
 /// coding system. These are the three type-specific attributes GNU's
 /// `define-coding-system` passes after the common coding attributes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct CclCodingSpec {
     pub(crate) decoder: Value,
     pub(crate) encoder: Value,
@@ -3938,8 +3942,10 @@ enum CodingCat {
     Undecided,
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
+#[cfg(not(any(test, feature = "test-support")))]
 const CODING_CAT_MAX: usize = 21;
+#[cfg(any(test, feature = "test-support"))]
+pub const CODING_CAT_MAX: usize = 21;
 const CODING_CAT_RAW_TEXT: usize = CodingCat::RawText as usize;
 
 /// Map a category symbol name (`:category` value) to the enum index.
@@ -4949,12 +4955,23 @@ fn detect_iso_2022(bytes: &[u8], head_ascii: usize, multibytep: bool, di: &mut D
     false
 }
 
+#[cfg(not(any(test, feature = "test-support")))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// GNU's two detection globals, `coding_priorities` and `coding_categories`
 /// (src/coding.c:586, :590), coupled to the bound charset coding's byte grammar.
 /// Reporting and decoding build the same runtime bindings before scanning.
 struct CodingDetectionBindings {
     priorities: Vec<usize>,
+    systems: [Option<SymId>; CODING_CAT_MAX],
+    charset: Option<CharsetDetectionPlan>,
+}
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+/// GNU's two detection globals, `coding_priorities` and `coding_categories`
+/// (src/coding.c:586, :590), coupled to the bound charset coding's byte grammar.
+/// Reporting and decoding build the same runtime bindings before scanning.
+pub struct CodingDetectionBindings {
+    pub priorities: Vec<usize>,
     systems: [Option<SymId>; CODING_CAT_MAX],
     charset: Option<CharsetDetectionPlan>,
 }

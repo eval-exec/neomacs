@@ -432,13 +432,13 @@ fn expect_int(value: &Value) -> Result<i64, Flow> {
 // Builtins (evaluator-dependent)
 // ===========================================================================
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// (bookmark-set NAME &optional NO-OVERWRITE) -> nil
 ///
 /// In batch/non-file buffers GNU Emacs signals:
 ///   (error "Buffer not visiting a file or directory")
 /// This implementation mirrors that behavior.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_bookmark_set<H: crate::emacs_core::edit_host::EditHost>(
     host: &mut H,
     args: Vec<Value>,
@@ -676,7 +676,8 @@ pub(crate) fn builtin_bookmark_rename<H: crate::emacs_core::edit_host::EditHost>
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// (bookmark-all-names) -> list of bookmark names (sorted)
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_bookmark_all_names<H: crate::emacs_core::edit_host::EditHost>(
     host: &mut H,
     args: Vec<Value>,
@@ -695,7 +696,8 @@ pub(crate) fn builtin_bookmark_all_names<H: crate::emacs_core::edit_host::EditHo
 /// (bookmark-get-filename BOOKMARK) -> filename string or nil
 ///
 /// BOOKMARK may be a bookmark name or a bookmark record alist.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_bookmark_get_filename<H: crate::emacs_core::edit_host::EditHost>(
     host: &mut H,
     args: Vec<Value>,
@@ -720,7 +722,8 @@ pub(crate) fn builtin_bookmark_get_filename<H: crate::emacs_core::edit_host::Edi
 /// (bookmark-get-position BOOKMARK) -> integer position or nil
 ///
 /// BOOKMARK may be a bookmark name or a bookmark record alist.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_bookmark_get_position<H: crate::emacs_core::edit_host::EditHost>(
     host: &mut H,
     args: Vec<Value>,
@@ -744,7 +747,8 @@ pub(crate) fn builtin_bookmark_get_position<H: crate::emacs_core::edit_host::Edi
 /// (bookmark-get-annotation BOOKMARK) -> annotation string or nil
 ///
 /// BOOKMARK may be a bookmark name or a bookmark record alist.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_bookmark_get_annotation<H: crate::emacs_core::edit_host::EditHost>(
     host: &mut H,
     args: Vec<Value>,
@@ -769,7 +773,8 @@ pub(crate) fn builtin_bookmark_get_annotation<H: crate::emacs_core::edit_host::E
 /// (bookmark-set-annotation BOOKMARK ANNOTATION) -> annotation string or nil
 ///
 /// BOOKMARK is a bookmark name.  If missing, returns nil.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_bookmark_set_annotation<H: crate::emacs_core::edit_host::EditHost>(
     host: &mut H,
     args: Vec<Value>,

@@ -19,7 +19,8 @@ impl TextMetrics {
         emacs_bytes: EmacsByteLen::ZERO,
     };
 
-    #[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(in crate::buffer) const fn from_usize(chars: usize, emacs_bytes: usize) -> Self {
         Self {
             chars: CharLen::new(chars),

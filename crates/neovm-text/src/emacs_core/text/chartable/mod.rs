@@ -193,7 +193,6 @@ pub fn builtin_char_table_p(args: Vec<Value>) -> EvalResult {
     expect_args("char-table-p", &args, 1)?;
     Ok(Value::bool_val(is_char_table(&args[0])))
 }
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(set-char-table-range CHAR-TABLE RANGE VALUE)` -- set entries.
 ///
 /// RANGE may be:
@@ -201,6 +200,7 @@ pub fn builtin_char_table_p(args: Vec<Value>) -> EvalResult {
 /// - a cons `(MIN . MAX)` -- set all characters MIN..=MAX
 /// - `nil` -- set the default value
 /// - `t` -- set all character entries while leaving the default slot alone
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_set_char_table_range(
     args: Vec<Value>,
     style: Option<TextQuotingStyle>,
@@ -446,7 +446,6 @@ pub fn builtin_set_char_table_parent(args: Vec<Value>) -> EvalResult {
     crate::emacs_core::substrate_hooks::note_char_table_layout_mutation();
     Ok(*parent)
 }
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(map-char-table FUNCTION CHAR-TABLE)` -- call FUNCTION for each
 /// entry with a non-nil value.  FUNCTION receives `(KEY VALUE)` where
 /// KEY is either a character (integer) or a cons `(FROM . TO)` for ranges.
@@ -455,7 +454,8 @@ pub fn builtin_set_char_table_parent(args: Vec<Value>) -> EvalResult {
 /// retains those keys, later internal mutations are observable.  Mirror that
 /// behavior instead of materializing fresh range objects.
 /// Returns nil.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn for_each_char_table_mapping(
     table: &Value,
     f: impl FnMut(Value, Value) -> Result<(), Flow>,
@@ -479,7 +479,8 @@ pub fn builtin_map_char_table<H: TextHost>(eval: &mut H, args: Vec<Value>) -> Ev
     Ok(Value::NIL)
 }
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn optimize_char_table(table: &Value, test: OptimizeCharTableTest) -> Result<(), Flow> {
     optimize_char_table_with_symbols(table, test, SymbolMode::Bare)
 }
@@ -540,13 +541,13 @@ fn invalid_unicode_property_table() -> Flow {
         vec![Value::string("Invalid Unicode property table")],
     )
 }
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(get-unicode-property-internal CHAR-TABLE CH)`.
 ///
 /// This mirrors GNU's C fast path for Unicode property tables: `CHAR-TABLE`
 /// must have purpose `char-code-property-table` and five extra slots; a fixnum
 /// decoder in extra slot 1 selects the built-in run-length decoder.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_get_unicode_property_internal(args: Vec<Value>) -> EvalResult {
     builtin_get_unicode_property_internal_with_symbols(args, SymbolMode::Bare)
 }
@@ -596,13 +597,13 @@ fn encode_uniprop_value_character(value: Value) -> Result<Value, Flow> {
         _ => Err(wrong_type("integerp", &value)),
     }
 }
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Encode VALUE as an element of TABLE that uses run-length compression.
 ///
 /// Mirrors GNU's `uniprop_encode_value_run_length` (chartab.c): the value must
 /// already appear in the value vector (extra slot 4); a value not found signals
 /// `(wrong-type-argument "Unicode property value" VALUE)`.  The stored element
 /// is the fixnum index into the value vector.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn encode_uniprop_value_run_length(
     table: Value,
     value: Value,
@@ -653,13 +654,13 @@ fn encode_uniprop_value_numeric(
     set_char_table_extra_slot(&table, 4, Value::vector(value_table));
     Ok(Value::fixnum(index as i64))
 }
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(put-unicode-property-internal CHAR-TABLE CH VALUE)`.
 ///
 /// Mirrors GNU's `Fput_unicode_property_internal` (chartab.c): validate and
 /// encode VALUE via the table's encoder (selected by extra slot 2), then store
 /// the encoded element with `CHAR_TABLE_SET`.  Returns nil.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_put_unicode_property_internal(args: Vec<Value>) -> EvalResult {
     builtin_put_unicode_property_internal_with_symbols(args, SymbolMode::Bare)
 }

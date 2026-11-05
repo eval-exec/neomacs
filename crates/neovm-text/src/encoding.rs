@@ -1436,7 +1436,6 @@ fn is_byte_preserving_coding_system(coding_system: &str) -> bool {
     )
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// The byte sequence a coding operation consumes from a Lisp string.
 ///
 /// A unibyte string already stores exactly the bytes GNU's `SDATA` exposes, so
@@ -1446,6 +1445,7 @@ fn is_byte_preserving_coding_system(coding_system: &str) -> bool {
 /// exactly the copy the result object needs and nothing for detection,
 /// length-only or read-only consumers.
 #[derive(Debug)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum CodingSourceBytes<'a> {
     /// The string's own payload: nothing was copied.
     Borrowed(&'a [u8]),
@@ -2490,7 +2490,6 @@ impl DecodeSink {
     }
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// GNU's `eol_dos`, which every decoder computes for itself at the top rather
 /// than leaving to `decode_eol`:
 ///
@@ -2510,6 +2509,7 @@ impl DecodeSink {
 /// (src/coding.c:7481), so the name the decoder is handed no longer carries the
 /// subsidiary.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 enum DosEolLookahead {
     /// The coding system's eol type is `dos` and `inhibit-eol-conversion' is
     /// nil, so a trailing CR waits for the next read.
@@ -2663,11 +2663,20 @@ fn invalid_code(unit: &mut UnitReader<'_>, sink: &mut DecodeSink) -> Result<(), 
     Ok(())
 }
 
+#[cfg(not(any(test, feature = "test-support")))]
 /// What one decoder produced: the characters, their `(charset NAME)` runs, and
 /// GNU's `coding->consumed`.
 pub(crate) struct DecodedSource {
     bytes: Vec<u8>,
     runs: Vec<StringTextPropertyRun>,
+    consumed: SourceConsumed,
+}
+#[cfg(any(test, feature = "test-support"))]
+/// What one decoder produced: the characters, their `(charset NAME)` runs, and
+/// GNU's `coding->consumed`.
+pub struct DecodedSource {
+    pub bytes: Vec<u8>,
+    pub runs: Vec<StringTextPropertyRun>,
     consumed: SourceConsumed,
 }
 
@@ -3206,7 +3215,6 @@ fn encode_via_sjis(s: &neovm_value::heap_types::LispString, charsets: &[SymId]) 
     out
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Decode Shift-JIS bytes: ASCII, half-width katakana (0xA1-0xDF), and the
 /// two-byte JISX0208 sequences (`SJIS_TO_JIS`); other bytes become eight-bit raw.
 /// GNU `decode_coding_sjis` (src/coding.c:4560-4625).
@@ -3214,6 +3222,7 @@ fn encode_via_sjis(s: &neovm_value::heap_types::LispString, charsets: &[SymId]) 
 /// A Shift-JIS lead byte is followed by `ONE_MORE_BYTE (c1)` (:4586), so a
 /// lead byte that ends the source stops the decoder at `src_base` -- which is
 /// the whole reason this function reports what it consumed.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn decode_via_sjis(bytes: &[u8], charsets: &[SymId], eol: DosEolLookahead) -> DecodedSource {
     let kana = charsets[1];
     let kanji = charsets[2];
@@ -4028,6 +4037,7 @@ fn encode_via_emacs_mule_legacy(s: &neovm_value::heap_types::LispString) -> Vec<
     out
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// GNU keeps the ordered Mule charset list for the entire encode. This view
 /// belongs to this conversion's mutator and resolves candidate maps lazily;
 /// the loop runs no Lisp, so the registry cannot change beneath its fallback
@@ -4617,6 +4627,7 @@ fn decode_via_iso2022(
     })
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Resolve `undecided` / `prefer-utf-8` to a concrete coding system by
 /// inspecting the byte pattern, mirroring GNU's `detect_coding`: walk the
 /// configured detection categories in priority order and return the first
@@ -6014,7 +6025,8 @@ pub fn builtin_multibyte_string_p_1<H: crate::emacs_core::text_host::TextHost>(
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(unibyte-string-p STRING)` -> t or nil
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_unibyte_string_p(args: Vec<Value>) -> EvalResult {
     expect_args("unibyte-string-p", &args, 1)?;
     match args[0].kind() {
@@ -6023,7 +6035,6 @@ pub(crate) fn builtin_unibyte_string_p(args: Vec<Value>) -> EvalResult {
     }
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(encode-coding-string STRING CODING-SYSTEM)` -> string, with end-of-line
 /// conversion ENABLED.
 ///
@@ -6032,7 +6043,8 @@ pub(crate) fn builtin_unibyte_string_p(args: Vec<Value>) -> EvalResult {
 /// decided what `inhibit-eol-conversion' holds without asking.  Production code
 /// reaches the codec through `builtin_encode_coding_string_with_known`, which
 /// cannot be called without saying.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_encode_coding_string(args: Vec<Value>) -> EvalResult {
     builtin_encode_coding_string_with_known(
         args,
@@ -6097,7 +6109,8 @@ pub(crate) fn builtin_encode_coding_string_with_known(
 /// `(decode-coding-string STRING CODING-SYSTEM)` -> string, with end-of-line
 /// conversion ENABLED.  Test-only; see
 /// [`builtin_encode_coding_string`] for why it is `#[cfg(test)]`.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_decode_coding_string(args: Vec<Value>) -> EvalResult {
     builtin_decode_coding_string_with_known(
         args,

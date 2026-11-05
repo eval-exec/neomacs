@@ -124,10 +124,11 @@ const MODE_VERIFY: u8 = 3;
 
 static MODE: AtomicU8 = AtomicU8::new(MODE_UNREAD);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// Test override of `NEOVM_SYNTAX_PARSE_CACHE`.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) static MODE_OVERRIDE: std::cell::Cell<Option<ParseCacheMode>> =
         const { std::cell::Cell::new(None) };
 }
@@ -345,10 +346,11 @@ fn from_filter_bit(from_char: usize) -> u64 {
 static CHUNK: AtomicUsize = AtomicUsize::new(0);
 static MIN_SPAN: AtomicUsize = AtomicUsize::new(0);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// Test override of the chunk and the minimum span.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) static GEOMETRY_OVERRIDE: std::cell::Cell<Option<(usize, usize)>> =
         const { std::cell::Cell::new(None) };
 }
@@ -405,6 +407,7 @@ const MAX_RESULTS: usize = 4;
 // Statistics
 // ---------------------------------------------------------------------------
 
+#[cfg(not(any(test, feature = "test-support")))]
 /// What the cache did, per thread (the evaluator's).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ParseCacheStats {
@@ -442,6 +445,44 @@ pub(crate) struct ParseCacheStats {
     /// Back-comment lossage queries resumed from a warm canonical state.
     pub(crate) canon_back_comments: u64,
 }
+#[cfg(any(test, feature = "test-support"))]
+/// What the cache did, per thread (the evaluator's).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ParseCacheStats {
+    /// Queries that reached the cache (every `parse-partial-sexp` with the
+    /// knob on that runs no `syntax-propertize`).
+    pub queries: u64,
+    /// Answered from an exact memo.
+    pub exact: u64,
+    /// Resumed from a recorded loop state.
+    pub resumes: u64,
+    /// Characters the resumes did not scan.
+    pub skipped_chars: u64,
+    /// Scanned from FROM and recorded.
+    pub recorded: u64,
+    /// Scanned from FROM, too short to record, no run for the key.
+    pub short: u64,
+    /// Not cached: properties resolve through Lisp structure no note sees.
+    pub bypassed: u64,
+    /// Answers compared with a plain scan (`verify`), and the mismatches.
+    pub verified: u64,
+    pub mismatches: u64,
+    /// Reuses refused because a descriptor cons had changed.
+    pub descriptor_changes: u64,
+    /// Queries answered by the canonical run, absolute or by state agreement.
+    pub canon_absolute: u64,
+    pub canon_adopted: u64,
+    /// Failed FROM agreement or completed attempts without live synchronization.
+    pub canon_declined: u64,
+    /// Characters skipped through canonical snapshots.
+    pub canon_skipped_chars: u64,
+    /// Existing canonical runs replaced because the environment changed.
+    pub canon_resets: u64,
+    /// Queries that matched a later complete canonical loop state.
+    pub canon_synced: u64,
+    /// Back-comment lossage queries resumed from a warm canonical state.
+    pub canon_back_comments: u64,
+}
 
 thread_local! {
     static STATS: std::cell::Cell<ParseCacheStats> = const {
@@ -477,13 +518,15 @@ pub(crate) fn parse_cache_stats() -> ParseCacheStats {
 }
 
 /// `verify` mismatches in this process.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn parse_cache_mismatches() -> u64 {
     MISMATCHES.load(Ordering::Relaxed)
 }
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn reset_parse_cache_stats() {
     STATS.with(|cell| cell.set(ParseCacheStats::default()));
 }

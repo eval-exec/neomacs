@@ -531,7 +531,8 @@ pub fn builtin_make_category_table(args: Vec<Value>) -> EvalResult {
 }
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_copy_category_table(args: Vec<Value>) -> EvalResult {
     builtin_copy_category_table_with_symbols(args, SymbolMode::Bare)
 }

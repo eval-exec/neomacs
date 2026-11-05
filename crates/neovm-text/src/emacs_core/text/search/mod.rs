@@ -735,7 +735,7 @@ pub fn compute_buffer_replacement_lisp_string(
 /// Test-only: production `replace-regexp-in-string` is the subr.el Lisp
 /// definition (which goes through the syntax-carrying `string-match`
 /// builtin); this Rust port survives for its unit tests.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn replace_regexp_in_string_lisp<F>(
     args: &[Value],

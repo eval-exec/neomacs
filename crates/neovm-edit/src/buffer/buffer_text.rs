@@ -540,8 +540,13 @@ mod source_authority;
 pub mod source_authority;
 pub use source_authority::{BufferSourceAuthority, BufferSourceReadLease};
 
+#[cfg(not(any(test, feature = "test-support")))]
 pub struct BufferText {
     storage: Rc<RefCell<BufferTextStorage>>,
+}
+#[cfg(any(test, feature = "test-support"))]
+pub struct BufferText {
+    pub storage: Rc<RefCell<BufferTextStorage>>,
 }
 
 impl Clone for BufferText {
@@ -829,6 +834,7 @@ impl BufferText {
         )
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn edit_range_for_emacs_byte_range(
         &self,
         byte_range: EmacsByteRange,
@@ -1960,7 +1966,8 @@ impl BufferText {
     }
 
     /// Test hook: see `TextPropertyTable::debug_syntax_caches_consistent`.
-    #[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn debug_syntax_caches_consistent(&self) -> Result<(), String> {
         self.storage
             .borrow()

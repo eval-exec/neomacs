@@ -511,7 +511,8 @@ impl BufferManager {
         })
     }
 
-    #[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub fn replace_buffer_region_lisp_string(
         &mut self,
         id: BufferId,

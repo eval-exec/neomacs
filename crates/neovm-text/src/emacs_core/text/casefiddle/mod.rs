@@ -1003,7 +1003,8 @@ pub fn capitalize_with_word_pred(
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Pure form (used by tests); word boundaries follow the standard syntax table.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_capitalize(args: Vec<Value>) -> EvalResult {
     capitalize_with_word_pred(
         args,
@@ -1058,7 +1059,8 @@ pub fn upcase_initials_with_word_pred(
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Pure form (used by tests); word boundaries follow the standard syntax table.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_upcase_initials(args: Vec<Value>) -> EvalResult {
     upcase_initials_with_word_pred(
         args,

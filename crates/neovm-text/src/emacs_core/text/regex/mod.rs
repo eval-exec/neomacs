@@ -57,7 +57,6 @@ use neovm_value::heap_types::{GnuStringCharPos, LispString};
 
 #[doc(hidden)]
 pub const REPLACE_MATCH_SUBEXP_MISSING: &str = "replace-match subexpression does not exist";
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 const GNU_SEARCH_REGS_BASE_CAPACITY: usize = 7;
 // Compiled-pattern LRU caches. GNU's `regexp_cache` (search.c) holds 20 entries
 // and that suffices there because GNU compiles a pattern into a cheap 256-byte
@@ -75,8 +74,10 @@ const LISP_REGEX_PATTERN_CACHE_SIZE: usize = 128;
 // during `string-match` (`regex-emacs.c:5201`). A standalone string has no
 // matching buffer byte address, so pass an unreachable point to the translated
 // matcher instead of treating the START argument as point.
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
+#[cfg(not(any(test, feature = "test-support")))]
 const STRING_MATCH_AT_DOT_UNREACHABLE: usize = usize::MAX;
+#[cfg(any(test, feature = "test-support"))]
+pub const STRING_MATCH_AT_DOT_UNREACHABLE: usize = usize::MAX;
 
 /// Failure while applying a Lisp-visible regexp as a boolean predicate.
 ///
@@ -84,6 +85,7 @@ const STRING_MATCH_AT_DOT_UNREACHABLE: usize = usize::MAX;
 /// exposing errors from an implementation-specific native regexp dialect.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[doc(hidden)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub enum EmacsRegexpError {
     Compile(String),
     MatcherOverflow,
@@ -622,6 +624,7 @@ impl RegexTargetKey {
 
 const _: () = assert!(std::mem::size_of::<RegexTargetKey>() == std::mem::size_of::<bool>());
 
+#[cfg(not(any(test, feature = "test-support")))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Entry of [`LISP_REGEX_PATTERN_CACHE`]; target_key includes symbol policy.
 struct LispRegexPatternCacheEntry {
@@ -633,6 +636,19 @@ struct LispRegexPatternCacheEntry {
     pattern: Vec<u8>,
     syntax_key: Option<SyntaxCacheKey>,
     compiled: Rc<CompiledPattern>,
+}
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+/// Entry of [`LISP_REGEX_PATTERN_CACHE`]; target_key includes symbol policy.
+pub struct LispRegexPatternCacheEntry {
+    posix: bool,
+    case_fold: bool,
+    translation_key: Option<usize>,
+    pattern_multibyte: bool,
+    target_key: RegexTargetKey,
+    pattern: Vec<u8>,
+    syntax_key: Option<SyntaxCacheKey>,
+    pub compiled: Rc<CompiledPattern>,
 }
 
 // Gate the exact entry footprint against its prior shape in the core build.
@@ -878,13 +894,13 @@ enum LispRegisterSource {
     RetainedString,
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Private, zero-based Emacs-byte ranges returned by the regexp engine.
 ///
 /// Keeping this outside `MatchDataKind` makes it impossible to publish raw
 /// registers accidentally.  It is consumed by a source-specific conversion
 /// before a search success crosses the regex module's interface.
 #[derive(Clone, Debug, Default)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 struct EngineMatchData {
     groups: smallvec::SmallVec<[Option<EmacsByteRange>; GNU_SEARCH_REGS_BASE_CAPACITY]>,
 }
@@ -1625,13 +1641,13 @@ impl MatchData {
         result
     }
 
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// Return a group's endpoints as zero-based character offsets into its
     /// source text, regardless of the Lisp-visible coordinate convention.
     ///
     /// String registers are already zero-based. Buffer registers are stored as
     /// one-based Lisp positions and are converted here, keeping that convention
     /// out of replacement and extraction code.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn group_zero_based_char_range(&self, index: usize) -> Option<CharRange> {
         match &self.kind {
             MatchDataKind::StringChars { groups, .. } => groups
@@ -2440,7 +2456,8 @@ fn pattern_for_compile(pattern: &LispString) -> LispString {
 }
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn compile_search_pattern(
     pattern: &LispString,
     case_fold: bool,
@@ -2448,7 +2465,6 @@ fn compile_search_pattern(
     compile_search_pattern_with_posix(pattern, case_fold, false, &DefaultSyntaxLookup)
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Compile PATTERN for a `posix-*` search builtin.
 ///
 /// GNU's `posix-looking-at`, `posix-search-forward`, `posix-search-backward`,
@@ -2465,6 +2481,7 @@ fn compile_search_pattern(
 /// POSIX semantics must go through this helper. The pattern cache is
 /// keyed on `(posix, case_fold, pattern)` so a non-POSIX entry never
 /// satisfies a POSIX request or vice versa.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn compile_search_pattern_with_posix(
     pattern: &LispString,
     case_fold: bool,
@@ -3363,7 +3380,8 @@ fn literal_rfind_emacs_bytes(
 }
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn next_search_char_boundary(text: &[u8], pos: usize) -> Option<usize> {
     if pos >= text.len() {
         return None;
@@ -3615,7 +3633,6 @@ pub fn treesit_predicate_match_lisp(
     Ok(found.is_some())
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Search forward from point for a literal string PATTERN.
 ///
 /// If found, returns the end of match as the point position the caller should
@@ -3626,7 +3643,8 @@ pub fn treesit_predicate_match_lisp(
 /// `bound` optionally limits the search to positions <= bound.
 /// [`search_forward_into`] with its registers published into a
 /// [`BufferSearchSuccess`].
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn search_forward(
     buf: &mut Buffer,
     pattern: &neovm_value::heap_types::LispString,
@@ -3640,7 +3658,8 @@ pub(crate) fn search_forward(
 }
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn search_forward_into(
     buf: &mut Buffer,
     pattern: &neovm_value::heap_types::LispString,
@@ -3720,14 +3739,14 @@ pub fn search_forward_into_with_symbols(
     }
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Search backward from point for a literal string PATTERN.
 ///
 /// If found, returns the beginning of match as the point position the caller
 /// should apply.
 /// [`search_backward_into`] with its registers published into a
 /// [`BufferSearchSuccess`].
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn search_backward(
     buf: &mut Buffer,
     pattern: &neovm_value::heap_types::LispString,
@@ -3741,7 +3760,8 @@ pub(crate) fn search_backward(
 }
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn search_backward_into(
     buf: &mut Buffer,
     pattern: &neovm_value::heap_types::LispString,
@@ -3856,13 +3876,13 @@ fn coerce_pattern_to_buffer_bytes(
     })
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Search forward from point for a regex PATTERN.
 ///
 /// If found, returns the end of match as the point position the caller should
 /// apply.
 /// Updates match data with capture groups.
 #[allow(dead_code)] // crate-private raw search seam exercised by unit tests
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn re_search_forward(
     buf: &mut Buffer,
     pattern: &neovm_value::heap_types::LispString,
@@ -3946,13 +3966,13 @@ pub(crate) fn re_search_forward_with_posix(
     }
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Search backward from point for a regex PATTERN.
 ///
 /// If found, returns the beginning of match as the point position the caller
 /// should apply.
 /// Updates match data with capture groups.
 #[allow(dead_code)] // crate-private raw search seam exercised by unit tests
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn re_search_backward(
     buf: &mut Buffer,
     pattern: &neovm_value::heap_types::LispString,
@@ -4042,12 +4062,13 @@ pub(crate) fn re_search_backward_with_posix(
     }
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Build the case-fold translate table for a search in `buf`: the buffer's
 /// case-canon table (GNU's search `trt`) when a custom `set-case-syntax-pair`
 /// table is installed, else `None` so the engine's fast hardwired folding is
 /// used. Mirrors GNU search.c installing `BVAR (current_buffer, case_canon_table)`.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn buffer_search_translation(
     buf: &Buffer,
     case_fold: bool,

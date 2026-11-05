@@ -43,7 +43,6 @@ fn next_visible_line_start<H: EditHost>(
     Ok(Some(step))
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Why a screen line ended.
 ///
 /// GNU's goal-column walk (`move_it_in_display_line_to` with `MOVE_TO_X`) may
@@ -80,6 +79,7 @@ fn next_visible_line_start<H: EditHost>(
 /// * whether the boundary itself is a goal-column stop, which is the
 ///   measurement above and is answered by `Edge` alone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 enum ScreenLineEnd {
     /// A newline terminated the row.  The newline is itself a position on the
     /// row -- it draws nothing, so it sits one column past the last glyph.
@@ -180,10 +180,17 @@ impl ScreenLineEnd {
     }
 }
 
+#[cfg(not(any(test, feature = "test-support")))]
 #[derive(Clone, Copy, Debug)]
 struct ScreenLineStep {
     next: EmacsBytePos,
     end: ScreenLineEnd,
+}
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Clone, Copy, Debug)]
+pub struct ScreenLineStep {
+    pub next: EmacsBytePos,
+    pub end: ScreenLineEnd,
 }
 
 impl ScreenLineStep {
@@ -1645,10 +1652,19 @@ struct ColumnScan {
     previous_code: Option<u32>,
 }
 
+#[cfg(not(any(test, feature = "test-support")))]
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct DisplayAdvance {
     pub(crate) next_byte: usize,
     pub(crate) width: usize,
+    pub(crate) hard_newline: bool,
+    pub(crate) unbreakable_wide: bool,
+}
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Clone, Copy, Debug)]
+pub struct DisplayAdvance {
+    pub next_byte: usize,
+    pub width: usize,
     pub(crate) hard_newline: bool,
     pub(crate) unbreakable_wide: bool,
 }
@@ -1707,7 +1723,6 @@ fn raw_unibyte_display_width(byte: u8) -> usize {
 /// properties at all, at the price of an occasional redundant recompute.
 const DISPLAY_STOP_CHAR_CAP: usize = 100;
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Per-scan cache of the next byte position at which a display-relevant property
 /// (`invisible`, `display`, `composition`, or any overlay) could change, so the
 /// per-char display scanner runs the three expensive property probes only at a
@@ -1716,6 +1731,7 @@ const DISPLAY_STOP_CHAR_CAP: usize = 100;
 /// `SyntaxPropRange` in syntax.rs: construct one fresh per forward scan so it
 /// never observes a mid-scan edit (screen-line motion is read-only; font-lock
 /// and syntax-propertize ran earlier).
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct DisplayStopCache {
     recompute_at: std::cell::Cell<usize>,
 }

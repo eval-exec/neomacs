@@ -82,7 +82,8 @@ static_assertions::assert_not_impl_any!(HashTableScanSnapshot: Clone);
 
 impl HashTableScanSnapshot {
     /// An unbound snapshot for protocol tests that never install it in a heap.
-    #[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn new() -> Self {
         Self::with_capacity(0, 0)
     }

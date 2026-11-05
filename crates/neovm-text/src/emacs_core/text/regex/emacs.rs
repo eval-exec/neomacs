@@ -44,7 +44,6 @@ type RegisterScratch = Vec<Option<usize>>;
 // Phase 1: Opcodes and Data Structures
 // ---------------------------------------------------------------------------
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Bytecode opcodes for the compiled regex pattern.
 ///
 /// Translated from `re_opcode_t` enum in regex-emacs.c (lines 202-337).
@@ -64,6 +63,7 @@ type RegisterScratch = Vec<Option<usize>>;
 /// GNU reference at the top of this file.**
 #[derive(Debug, Clone, Copy, PartialEq, Eq, strum::FromRepr, strum::VariantArray)]
 #[repr(u8)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum RegexOp {
     /// No operation (padding/alignment). GNU `no_op` = 0.
     NoOp = 0,
@@ -227,6 +227,7 @@ impl RegexOp {
 // Compiled Pattern
 // ---------------------------------------------------------------------------
 
+#[cfg(not(any(test, feature = "test-support")))]
 /// A compiled regex pattern — the output of `regex_compile()`.
 ///
 /// Mirrors GNU's `struct re_pattern_buffer` from regex-emacs.h.
@@ -404,6 +405,184 @@ pub struct CompiledPattern {
     /// lazily by the searches that use it; a clone starts cold.
     pub(crate) dfa: dfa::DfaCell,
 }
+#[cfg(any(test, feature = "test-support"))]
+/// A compiled regex pattern — the output of `regex_compile()`.
+///
+/// Mirrors GNU's `struct re_pattern_buffer` from regex-emacs.h.
+/// Bytecode and its seal are private to the compiler/matcher module: callers
+/// cannot modify the bytes or forge the seal. Matching borrows the bytes
+/// immutably; cloned patterns retain the same validated bytes and seal.
+/// Threading assumption: each evaluator owns its pattern cache; the existing
+/// interior-mutable search caches do not permit concurrent shared mutation.
+#[derive(Clone)]
+#[doc(hidden)]
+pub struct CompiledPattern {
+    /// Bytecode buffer.
+    pub buffer: Vec<u8>,
+
+    /// Number of subexpressions (groups).
+    pub re_nsub: usize,
+
+    /// Fast rejection map: fastmap[c] is true if the pattern can start
+    /// with byte c.  Used by `re_search` to skip non-matching positions.
+    pub fastmap: [bool; 256],
+
+    /// The fastmap a case-folded search over MULTIBYTE text consults, indexed
+    /// by the leading code of the TRANSLATED character (GNU `re_search_2`).
+    /// It differs from `fastmap` only for a leading multibyte literal: its
+    /// characters are stored translated, so the one leading code of the
+    /// stored character is the only candidate, where `fastmap` -- indexed by
+    /// a translated BYTE -- has to admit every non-ASCII leading byte.
+    pub fastmap_translated: [bool; 256],
+
+    /// Whether the fastmap is valid (needs recomputation after compile).
+    pub fastmap_accurate: bool,
+
+    /// The tiny ASCII candidate set used by memchr, derived on first use.
+    /// Rebuilt with the fastmap, including syntax-table recomputation.
+    sparse_ascii_fastmap: std::cell::OnceCell<Option<SparseAsciiFastmap>>,
+
+    /// How a case-folded search finds its next candidate: `TRANSLATE` folded
+    /// into the fastmap once, per text representation (see
+    /// [`CompiledPattern::folded_scan`]).  Rebuilt with the fastmap.
+    folded_scans: FoldedScans,
+
+    /// A two-character folded literal scanned by its ASCII suffix. Derived
+    /// only when `NEOVM_REGEX_SUFFIX_LITERAL` is on at compile time.
+    suffix_literal: Option<suffix_literal::SuffixLiteral>,
+
+    /// True if the pattern was compiled for POSIX backtracking.
+    pub posix: bool,
+
+    /// True if the source regexp string was multibyte.
+    pub multibyte: bool,
+
+    /// True if the current search target is multibyte.
+    pub target_multibyte: bool,
+
+    /// True if the pattern can match the empty string.
+    pub can_be_null: bool,
+
+    /// True if matching this pattern consults the syntax table at MATCH
+    /// time (`\b \B \< \> \_< \_> \w \W \sC \SC` and POSIX classes).
+    ///
+    /// This is informational only: the matcher resolves per-character
+    /// syntax through the `SyntaxLookup` passed to each `re_match` call,
+    /// so the compiled bytecode itself stays table-independent.  In
+    /// particular it does NOT disable the search fastmap — GNU gates the
+    /// fastmap skip solely on `fastmap_accurate && !can_be_null`
+    /// (regex-emacs.c:3483 `if (fastmap && startpos < total_size &&
+    /// !bufp->can_be_null)`), and syntax-dependent *leading* atoms
+    /// (`\w`, `\sC`) set `can_be_null` via `analyze_first` instead.
+    pub uses_syntax: bool,
+
+    /// True if the compiled artifacts hardcode syntax-table CONTENT, so
+    /// the pattern is only valid for the syntax table it was compiled
+    /// against and the compile cache must key such entries by table.
+    ///
+    /// Mirrors GNU `re_pattern_buffer.used_syntax` (regex-emacs.h:112),
+    /// which is set only for `[[:space:]]` / `[[:word:]]` inside a
+    /// charset (regex-emacs.c:2096-2101: "In most cases the matching
+    /// rule for char classes only uses the syntax table for multibyte
+    /// chars ... SPACE and WORD are the two exceptions") and makes
+    /// `search.c:compile_pattern` key the cache entry by
+    /// `BVAR (current_buffer, syntax_table)`.
+    ///
+    /// In neomacs the charset MATCH path re-derives ASCII class
+    /// membership per call from the active table, so only the FASTMAP
+    /// bakes table content (see `compile_fastmap`); the caching rule is
+    /// the same.
+    pub used_syntax: bool,
+
+    /// Character translation table for case-folding.
+    ///
+    /// GNU stores the active case-canon char-table in `re_pattern_buffer.translate`.
+    /// Keep the same shape at the matcher boundary: literal compilation and input
+    /// matching both call through this translator, with a 256-entry byte fast path
+    /// only for fastmap/bitmap operations.
+    pub translate: Option<CaseTranslation>,
+
+    /// Multibyte (non-ASCII) character ranges for Charset/CharsetNot opcodes.
+    /// Key = bytecode position of the Charset/CharsetNot opcode.
+    /// Value = list of inclusive (start_char, end_char) character ranges.
+    pub multibyte_charsets: FxHashMap<usize, Vec<(char, char)>>,
+
+    /// Per-charset POSIX character class flags.
+    ///
+    /// GNU stores POSIX classes in the charset range-table bits
+    /// (`regex-emacs.c:re_wctype_to_bit`) and checks `re_iswctype`
+    /// while executing the charset.  The ASCII bitmap remains the fast path,
+    /// but these bits preserve the runtime predicate for multibyte characters
+    /// and for syntax-table-sensitive classes such as `word` and `space`.
+    /// Fx-hashed: probed per charset op while matching (57K probes per
+    /// five org font-lock operations); SipHash on a `usize` key was 1.7M Ir/op.
+    pub charset_class_bits: FxHashMap<usize, u32>,
+
+    /// True if the pattern used a non-greedy optional `??`.  Set at the sole
+    /// `??` emit site, which produces GNU's `on_failure_jump` + `jump` shape
+    /// (regex-emacs.c:2009-2015; no keep-string jump).  It keeps the pattern
+    /// off the Pike VM (see [`compute_pike_eligible`]), whose priority order
+    /// for that skip-first split has not been validated.
+    pub has_nongreedy_optional: bool,
+
+    /// True if this pattern is eligible for the non-backtracking Pike VM
+    /// fast path (see [`pike_match`]).  Computed once at compile time by
+    /// [`compute_pike_eligible`]: the bytecode must contain no
+    /// backreference (`Duplicate`), no interval-counter op
+    /// (`SucceedN`/`JumpN`/`SetNumberAt` from `\{n,m\}`), and the pattern
+    /// must not be POSIX-longest — every remaining op is simulated
+    /// byte-exactly by the Pike VM.  Ineligible patterns fall back to the
+    /// backtracker with identical output.
+    pub pike_eligible: bool,
+
+    /// True once [`validate_sealed_buffer`] proved every opcode byte valid,
+    /// every operand span in-bounds, and every jump target on an op
+    /// boundary — the backtracker then dispatches with unchecked fetches
+    /// (the seal-then-trust protocol the bytecode VM uses for `seal_ops`).
+    /// False (e.g. a hand-assembled test buffer) keeps the checked loop.
+    buffer_sealed: bool,
+
+    /// The rewind view of the bytecode, for the engines that step every
+    /// thread one position at a time (the Pike VM, the existence DFA): see
+    /// [`RewindView`].  Computed for every pattern at compile time.
+    pub rewind: RewindView,
+
+    /// Multi-literal SIMD prefilter that AUGMENTS (never replaces) the
+    /// backtracker's search skip loop.  When `Some`, `re_search`'s forward
+    /// path uses `regex-automata`'s `Prefilter` (memchr / Teddy /
+    /// Aho-Corasick, auto-selected) to jump straight to the next position
+    /// whose text provably contains a required match literal, instead of the
+    /// single-byte fastmap scan.  The backtracker still verifies every
+    /// candidate, so the ONLY correctness requirement is that the literals be
+    /// SOUND: every match must contain one of them at `LiteralPrefilter.offset`
+    /// bytes from the match start (see `build_literal_prefilter`).  `None` when
+    /// no such literal set could be proven (fall back to the fastmap — always
+    /// correct).  A case-folded pattern gets the ASCII case variants of its
+    /// literals, used only while its translation folds nothing non-ASCII into
+    /// ASCII (see [`fold_prefix_literals`]).  Never set for patterns whose
+    /// only required literals are single bytes (the fastmap's memchr already
+    /// handles those).
+    ///
+    /// Built on first use by a search long enough to use it
+    /// ([`CompiledPattern::literal_prefilter`]): most compiled patterns only
+    /// ever match short strings, and building the scanner cost the byte
+    /// compiler 6M instructions per file for 100 patterns that never
+    /// searched a buffer.
+    pub prefilter: std::cell::OnceCell<Option<LiteralPrefilter>>,
+
+    /// Immutable whole-literal codes for bounded folded searches (CL2 knob).
+    short_literal: Option<short_literal::Literal>,
+
+    /// The zero-width anchor every path from the start meets before it
+    /// consumes anything ([`start_anchor`]), when that is more than the first
+    /// opcode shows (`\(?:^a\|^b\)`).  Computed only under
+    /// `NEOVM_REGEX_ANCHOR_ALT` ([`anchor_alt_enabled`]); `None` otherwise.
+    pub start_anchor: StartAnchor,
+
+    /// The existence DFA's slot (`NEOVM_REGEX_DFA`, [`dfa::DfaCell`]): built
+    /// lazily by the searches that use it; a clone starts cold.
+    pub dfa: dfa::DfaCell,
+}
 
 /// Bytes of text below which a forward search does not build a pattern's
 /// literal prefilter (it still uses one already built).
@@ -411,7 +590,8 @@ const PREFILTER_MIN_BUILD_SPAN: usize = 256;
 
 impl CompiledPattern {
     /// Inspect compiler output without allowing a caller to invalidate its seal.
-    #[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn bytecode(&self) -> &[u8] {
         &self.buffer
     }
@@ -538,6 +718,7 @@ impl WideTranslationMemo {
         }
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn translate(&self, table: &neovm_value::value::Value, c: u32, mode: SymbolMode) -> u32 {
         let tick = crate::emacs_core::chartable::char_table_write_tick();
         if self.tick.get() != tick {
@@ -684,7 +865,6 @@ enum CharTableWalk {
     OnlyIfWalked,
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Bytes a search must span before it walks a case-canon char-table to learn
 /// its [`AsciiPreimage`].  The walk visits every slot of the table (the
 /// standard canon table covers all of Unicode's case pairs), which the
@@ -695,6 +875,7 @@ const CHAR_TABLE_WALK_MIN_SPAN: usize = 16 * 1024;
 thread_local! {
     /// The last char-table walked by [`char_table_folds_into_ascii`]:
     /// `(table bits, char-table write tick, folds)`.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     static CHAR_TABLE_ASCII_FOLD: std::cell::Cell<Option<(usize, u64, bool)>> =
         const { std::cell::Cell::new(None) };
 }
@@ -776,7 +957,9 @@ impl CaseTranslation {
     /// it cannot outlive the table the way an identity-keyed cache could.
     /// `standard()` above already applied the same lesson to the constant
     /// table; this path was simply missed.
-    #[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn from_char_table(table: neovm_value::value::Value) -> Self {
         Self::from_char_table_with_symbols(table, SymbolMode::Bare)
     }
@@ -1205,7 +1388,8 @@ thread_local! {
     pub(crate) static PIKE_FALLBACK_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn pike_fallback_count() -> u64 {
     PIKE_FALLBACK_COUNT.with(|c| c.get())
 }
@@ -1217,7 +1401,8 @@ thread_local! {
     static MATCHER_ENTRY_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn matcher_entry_count() -> u64 {
     MATCHER_ENTRY_COUNT.with(|c| c.get())
 }
@@ -1250,7 +1435,8 @@ fn note_fail_stack_push(depth: usize, d: usize) {
 }
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn take_fail_stack_probe() -> FailStackProbe {
     FAIL_STACK_PROBE.with(|probe| probe.replace(FailStackProbe::default()))
 }
@@ -1433,7 +1619,6 @@ struct CompileStackEntry {
     group_bytecode_start: usize,
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Compile an Emacs regex pattern into bytecode.
 ///
 /// This is the main entry point, equivalent to GNU's `regex_compile()`.
@@ -1446,6 +1631,7 @@ struct CompileStackEntry {
 /// # Returns
 /// A `CompiledPattern` with bytecode ready for the matcher.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn regex_compile(
     pattern: &str,
     posix: bool,
@@ -3962,7 +4148,6 @@ fn compile_interval(
 // Executes compiled bytecode against input text with backtracking.
 // ---------------------------------------------------------------------------
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Context for syntax-table and category-table queries during matching.
 ///
 /// The matcher queries the syntax table to implement `\w`, `\b`, `\sC`, etc.
@@ -3978,6 +4163,7 @@ fn compile_interval(
 /// on `modify-syntax-entry`: bumping it strands every entry baked
 /// against the old table contents.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum SyntaxCacheKey {
     /// The immutable built-in standard mapping (`DefaultSyntaxLookup`).
     Standard,
@@ -5141,13 +5327,13 @@ fn match_anychar_at(
     Some(buf_len)
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Match ONE character of an `Exactn` literal at literal byte offset
 /// `lit_off` against the input char at `d`.  Returns `(pattern_advance,
 /// text_advance)` on success.  Mirrors one iteration of the `Exactn` arm's
 /// inner loop, including the unibyte/multibyte + case-fold subtleties.
 #[inline]
 #[allow(clippy::too_many_arguments)] // mirrors the backtracker's Exactn arm state
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn match_exactn_char_at(
     lit: &[u8],
     lit_off: usize,
@@ -5220,7 +5406,6 @@ fn match_exactn_char_at(
     }
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `Charset` / `CharsetNot`: match the char at `d` against the bitmap +
 /// range-table + POSIX class bits of the charset opcode at
 /// `charset_op_pos`.  Returns consumed byte length on success.  Mirrors
@@ -5232,6 +5417,7 @@ fn match_exactn_char_at(
 /// ~67 Ir per test, on millions of tests per workload.
 #[allow(clippy::too_many_arguments)] // mirrors GNU execute_charset's inputs
 #[inline(always)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn match_charset_at(
     pattern: &CompiledPattern,
     charset_op_pos: usize,
@@ -5702,7 +5888,6 @@ fn assert_sym_end(text: &[u8], d: usize, target_multibyte: bool, syntax: &MatchS
     prev_sym && !curr_sym
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Zero-width syntax assertions and their GNU match-limit protocol.
 ///
 /// GNU's `wordbeg` and `symbeg` opcodes use the ordinary `PREFETCH`, so
@@ -5711,6 +5896,7 @@ fn assert_sym_end(text: &[u8], d: usize, target_multibyte: bool, syntax: &MatchS
 /// character).  Keeping that distinction in one exhaustive enum evaluator
 /// prevents the backtracking and Pike engines from choosing independently.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum SyntaxAssertion {
     WordBoundary,
     NotWordBoundary,
@@ -5759,7 +5945,6 @@ fn evaluate_syntax_assertion(
     }
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Match a compiled pattern against input text.
 ///
 /// This is the core matching function, equivalent to GNU's `re_match_2_internal`.
@@ -5775,6 +5960,7 @@ fn evaluate_syntax_assertion(
 /// # Returns
 /// * `Some(end_pos)` if matched — end position of the match
 /// * `None` if no match
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn re_match(
     pattern: &CompiledPattern,
     text: &[u8],
@@ -8789,7 +8975,6 @@ fn apply_fusion(bytecode: &mut [u8], p: usize, run: &FusibleRun) {
     }
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Recompute the fastmap of an already-compiled pattern against a
 /// (possibly buffer-local) syntax table.
 ///
@@ -8801,6 +8986,7 @@ fn apply_fusion(bytecode: &mut [u8], p: usize, run: &FusibleRun) {
 /// table content; the front-end cache calls this to rebuild the
 /// fastmap for the active table before caching a `used_syntax` entry
 /// under that table's key.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn recompute_fastmap(pattern: &mut CompiledPattern, syntax: &dyn SyntaxLookup) {
     compile_fastmap(pattern, syntax);
 }
@@ -9308,7 +9494,6 @@ const FOLDED_VARIANT_CAPS: [usize; 4] = [16, 8, 4, 2];
 /// most 128.
 const FOLDED_VARIANTS_MAX: usize = 64;
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Replace each required prefix literal of a case-folded pattern by every
 /// byte string a match can start with.
 ///
@@ -9325,6 +9510,7 @@ const FOLDED_VARIANTS_MAX: usize = 64;
 /// non-ASCII byte, or holds an ASCII byte no character translates to.
 #[cold]
 #[inline(never)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn fold_prefix_literals(table: &CaseTranslation, literals: &[Vec<u8>]) -> Option<Vec<Vec<u8>>> {
     let mut preimage: [SmallVec<[u8; 2]>; 0x80] = std::array::from_fn(|_| SmallVec::new());
     for y in 0..0x80u8 {
@@ -9513,13 +9699,13 @@ fn fastmap_force_disabled() -> bool {
     SEARCH_OPTIMIZATION_OVERRIDE.with(|slot| slot.get() == SearchOptimizationOverride::Disabled)
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Run `f` with the fastmap AND prefilter search-skips disabled, so
 /// `re_search` scans every position through the pure backtracker/Pike matcher.
 /// This is the ORACLE for the prefilter differential fuzzer: comparing it
 /// against the normal (prefilter-enabled) search proves the prefilter never
 /// changes match results. The previous policy is restored even if `f` unwinds.
 #[cfg(any(test, feature = "fuzzing"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn with_fastmap_disabled<R>(f: impl FnOnce() -> R) -> R {
     let _guard = neovm_value::tls_scope::TlsScope::new(
         &SEARCH_OPTIMIZATION_OVERRIDE,
@@ -9818,7 +10004,6 @@ pub(crate) fn start_anchor(bytecode: &[u8]) -> StartAnchor {
     }
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Search for a match of the compiled pattern in text.
 ///
 /// Equivalent to GNU's `re_search_2()` operating on a single
@@ -9848,6 +10033,7 @@ pub(crate) fn start_anchor(bytecode: &[u8]) -> StartAnchor {
 /// # Returns
 /// * `Some((match_start, registers))` if found
 /// * `None` if no match
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn re_search(
     pattern: &CompiledPattern,
     text: &[u8],

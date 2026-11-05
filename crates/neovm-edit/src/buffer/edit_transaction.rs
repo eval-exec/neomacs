@@ -322,6 +322,7 @@ impl Buffer {
         string
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(in crate::buffer) fn delete_text_plan_for_range(
         &self,
         range: TextEditRange,

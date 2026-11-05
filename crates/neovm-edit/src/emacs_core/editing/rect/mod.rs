@@ -250,14 +250,14 @@ fn delete_extract_rectangle_from_text(
 // Eval-dependent builtins
 // ---------------------------------------------------------------------------
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(extract-rectangle-line STARTCOL ENDCOL &optional LINE)` -- extract one
 /// line of a rectangle as a string.
 ///
 /// Compatibility behavior:
 /// - with optional LINE, returns substring between STARTCOL and ENDCOL
 /// - without LINE, returns an empty string (legacy stub path)
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_extract_rectangle_line(args: Vec<Value>) -> EvalResult {
     expect_min_args("extract-rectangle-line", &args, 2)?;
     expect_max_args("extract-rectangle-line", &args, 3)?;

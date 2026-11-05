@@ -476,7 +476,8 @@ impl BufferText {
     }
 
     /// Whether this text holds an index now (tests).
-    #[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn has_line_index_for_test(&self) -> bool {
         self.storage.borrow().text_index.borrow().is_some()
     }

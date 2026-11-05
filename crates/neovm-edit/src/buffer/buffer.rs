@@ -79,13 +79,15 @@ fn note_local_var_alist_entry_probe() {
 fn note_local_var_alist_entry_probe() {}
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn reset_local_var_alist_entry_probes() {
     LOCAL_VAR_ALIST_ENTRY_PROBES.set(0);
 }
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn local_var_alist_entry_probes() -> u64 {
     LOCAL_VAR_ALIST_ENTRY_PROBES.get()
 }
@@ -3219,12 +3221,15 @@ impl Buffer {
     }
 
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    #[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn shares_text_storage_with(&self, other: &Self) -> bool {
         self.text.shares_storage_with(&other.text)
     }
 
-    #[cfg(test)]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+#[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn replace_text_snapshot_for_test(
         &mut self,
         snapshot: BufferTextBytesSnapshot,
@@ -3500,8 +3505,10 @@ impl Buffer {
         self.text.get_property_run_at_char_pos(pos, name)
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// Test hook: see `TextPropertyTable::debug_syntax_caches_consistent`.
-    #[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn debug_syntax_caches_consistent(&self) -> Result<(), String> {
         self.text.debug_syntax_caches_consistent()
     }
@@ -3844,7 +3851,9 @@ impl Buffer {
             .text_props_object_interval_runs(self.total_char_len())
     }
 
-    #[cfg(test)]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+#[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn text_props_intervals_snapshot_for_test(
         &self,
     ) -> Vec<super::text_props::PropertyInterval> {
@@ -3853,7 +3862,8 @@ impl Buffer {
 
     /// Raw test fixture replacement: bypasses byte/property edit publication.
     /// This is outside the motion source-authority revision contract.
-    #[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn replace_text_props_for_test(&mut self, props: TextPropertyTable) {
         self.text.text_props_replace(props);
     }
@@ -4014,7 +4024,8 @@ impl Buffer {
     }
 
     /// Whether this buffer's text holds a line index now (tests).
-    #[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn has_line_index_for_test(&self) -> bool {
         self.text.has_line_index_for_test()
     }
@@ -4439,7 +4450,8 @@ impl Buffer {
     }
 
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    #[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn marker_chain_len(&self) -> usize {
         self.text.chain_walk_collect().len()
     }
@@ -4449,12 +4461,14 @@ impl Buffer {
     /// Chain ORDER is how "did this operation re-chain the marker?" becomes
     /// observable: a re-splice always lands at the head. Marker identity is
     /// the `MarkerObj` pointer, so tests compare these instead of ids.
-    #[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn marker_chain_ptrs(&self) -> Vec<*mut neovm_value::tagged::header::MarkerObj> {
         self.text.chain_walk_collect()
     }
 
-    #[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) unsafe fn marker_chain_contains_raw_for_test(
         &self,
         targets: [*mut neovm_value::tagged::header::MarkerObj; 3],
@@ -4623,13 +4637,15 @@ impl Buffer {
 
     /// Test-facing: this buffer's own modtime cell, to assert an indirect
     /// buffer follows the base the manager owns rather than a copy.
-    #[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(in crate::buffer) fn share_modtime_cell(&self) -> BaseVisitedFileModtime {
         self.modtime.share_own()
     }
 
     /// Test-facing counterpart of [`Self::share_modtime_cell`].
-    #[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(in crate::buffer) fn follows_modtime_cell_of(&self, base: &BaseVisitedFileModtime) -> bool {
         self.modtime.follows(base)
     }
@@ -5675,7 +5691,8 @@ pub mod jit_layout {
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// Byte offsets of the slot vector's data pointer and length, within the
     /// `Vec` itself. `None` if they cannot be identified unambiguously.
-    #[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn slots_vec_offsets() -> Option<(usize, usize)> {
         static OFFSETS: OnceLock<Option<(usize, usize)>> = OnceLock::new();
         *OFFSETS.get_or_init(|| {
@@ -5701,7 +5718,8 @@ pub mod jit_layout {
     /// `(tag offset, payload offset, the tag value that means `None`)` for
     /// `Option<BufferId>`. `BufferId` wraps a `u64` and so has no niche: the
     /// option is two words whose order std does not fix.
-    #[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn current_option_layout() -> Option<(usize, usize, u64)> {
         static LAYOUT: OnceLock<Option<(usize, usize, u64)>> = OnceLock::new();
         *LAYOUT.get_or_init(|| {
@@ -5728,7 +5746,8 @@ pub mod jit_layout {
 
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// The direct selection designator read by generated code.
-    #[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn current_buffer_ptr_via_projection(
         manager: &BufferManager,
     ) -> Option<*const Buffer> {
@@ -5748,7 +5767,8 @@ pub mod jit_layout {
     /// The current allocation independently reached through the storage slab.
     /// Test-only: compares the direct generated projection with canonical
     /// storage and `BufferManager::current_buffer`.
-    #[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn current_buffer_ptr_via_walk(manager: &BufferManager) -> Option<*const Buffer> {
         let (tag_off, payload_off, none_tag) = current_option_layout()?;
         let (ptr_off, len_off) = slots_vec_offsets()?;
@@ -5930,7 +5950,6 @@ pub struct BufferStorage {
     saved_point_before_command: SavedPointBeforeCommand,
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Cold ownership is separate from the common hot storage pointer.
 ///
 /// `Leased` carries the two World-backed states as one variant: a live
@@ -5939,6 +5958,7 @@ pub struct BufferStorage {
 /// [`ColdWorldLease`] — allocation lifetime only; edit never sees the
 /// World.
 #[deny(clippy::wildcard_enum_match_arm)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 enum BufferBacking {
     Standalone(Box<UnsafeCell<BufferStorage>>),
     Leased {
@@ -6383,8 +6403,9 @@ impl BufferManager {
 
     /// Reinitialize a minimal runtime without detaching its World allocation.
     /// This cold constructor phase runs before Lisp or manager views escape.
-    #[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
     #[cold]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn reset_for_minimal_runtime(&mut self) {
         let (storage, selection) = Self::new_world_parts().into_parts();
         // Retire the designator before assignment drops the former slab.
@@ -6417,7 +6438,8 @@ impl BufferManager {
 
     /// Consume independent storage at the closed World construction boundary.
     /// An installed World view cannot surrender another owner's allocation.
-    #[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn into_world_parts(
         self,
     ) -> Result<(Box<UnsafeCell<BufferStorage>>, BufferSelection), Self> {

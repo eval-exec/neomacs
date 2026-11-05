@@ -1325,6 +1325,7 @@ impl OverlayIndex {
             .records_strictly_within_reverse(bounds, property_filter)
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn overlay_properties_changed(&mut self, overlay: Value) {
         if let Some(endpoints) = self.endpoints.get_mut() {
             endpoints.refresh_overlay_property_mask(overlay);

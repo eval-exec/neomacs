@@ -83,11 +83,19 @@ fn char_pos_to_lisp_i64(char_pos: usize) -> i64 {
     CharPos0::new(char_pos).to_lisp().as_i64()
 }
 
+#[cfg(not(any(test, feature = "test-support")))]
 #[derive(Clone, Copy)]
 struct BufferSyntaxChar {
     ch: char,
     start: EmacsBytePos,
     end: EmacsBytePos,
+}
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Clone, Copy)]
+pub struct BufferSyntaxChar {
+    pub ch: char,
+    pub start: EmacsBytePos,
+    pub end: EmacsBytePos,
 }
 
 #[inline]
@@ -1214,7 +1222,6 @@ impl<'a> WordChars<'a> {
     }
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Forward-only character cursor for `parse-partial-sexp`.
 ///
 /// Unlike [`BufferChars`], this cursor does not preserve a logical index or a
@@ -1230,6 +1237,7 @@ impl<'a> WordChars<'a> {
 /// equivalent.  Sharing that machinery would couple this flat hot cursor back
 /// to the general cursor's `Option`-encoded window and random-access state,
 /// whose removal is the measured optimization.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 struct ParseBufferChars<'a> {
     buf: &'a Buffer,
     byte_pos: EmacsBytePos,
@@ -1244,6 +1252,7 @@ impl<'a> ParseBufferChars<'a> {
         Self::at_emacs_byte(buf, buffer_char_to_emacs_byte_pos(buf, start))
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// A cursor at a known Emacs byte position (a resumed scan's loop top),
     /// skipping the char->byte conversion.
     fn at_emacs_byte(buf: &'a Buffer, byte_pos: EmacsBytePos) -> Self {
@@ -3069,7 +3078,8 @@ fn ensure_standard_syntax_table_object() -> EvalResult {
 }
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn current_buffer_syntax_table_object_in_buffers(
     buffers: &mut BufferManager,
 ) -> Result<Value, Flow> {
@@ -3146,6 +3156,7 @@ thread_local! {
         const { std::cell::RefCell::new([ParseSyntaxEntry::WHITESPACE; 128]) };
 }
 
+#[cfg(not(any(test, feature = "test-support")))]
 /// The parser never consults a syntax entry's matching character.  Keeping its
 /// flat ASCII classifier to exactly the two fields the transition loop reads
 /// avoids copying and retaining a 1 KiB `[SyntaxEntry; 128]` in the parser's
@@ -3154,6 +3165,17 @@ thread_local! {
 #[repr(C)]
 struct ParseSyntaxEntry {
     class: SyntaxClass,
+    flags: SyntaxFlags,
+}
+#[cfg(any(test, feature = "test-support"))]
+/// The parser never consults a syntax entry's matching character.  Keeping its
+/// flat ASCII classifier to exactly the two fields the transition loop reads
+/// avoids copying and retaining a 1 KiB `[SyntaxEntry; 128]` in the parser's
+/// already-large stack frame.
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub struct ParseSyntaxEntry {
+    pub class: SyntaxClass,
     flags: SyntaxFlags,
 }
 
@@ -3349,13 +3371,15 @@ fn record_syntax_table_decode() {
 fn record_syntax_table_decode() {}
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn reset_syntax_table_decodes_for_test() {
     SYNTAX_TABLE_DECODES.with(|n| n.set(0));
 }
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn syntax_table_decodes_for_test() -> usize {
     SYNTAX_TABLE_DECODES.with(Cell::get)
 }
@@ -3408,7 +3432,9 @@ impl<'a> SyntaxProperties<'a> {
     /// char-addressed ones through [`SyntaxPropRange`], both of which cache
     /// this resolution; the uncached form is the reference the byte-run
     /// cache is checked against.
-    #[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn syntax_table_prop_at_emacs_byte(
         self,
         buf: &Buffer,
@@ -3463,7 +3489,7 @@ impl PropRunCells {
     }
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
+#[cfg(not(any(test, feature = "test-support")))]
 /// Per-scan `syntax-table` property cache for the scanners that address text by
 /// EMACS BYTE position: the regexp matcher, `forward-comment`, and
 /// `backward-prefix-chars`.
@@ -3479,6 +3505,7 @@ impl PropRunCells {
 ///
 /// Same single-scan lifetime, and so the same invariant: no Lisp runs during a
 /// scan, so neither the intervals nor the resolver's snapshot can move under it.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct SyntaxPropByteRun<'a> {
     run: PropRunCells,
     /// Lazily-filled ASCII syntax-entry memo, same contract as
@@ -3486,6 +3513,33 @@ pub(crate) struct SyntaxPropByteRun<'a> {
     /// syntax classes, `forward-comment`) previously paid the full
     /// chartable walk for EVERY character examined.
     ascii: [Cell<Option<SyntaxEntry>>; 128],
+    ascii_table: Cell<usize>,
+    props: SyntaxProperties<'a>,
+}
+#[cfg(any(test, feature = "test-support"))]
+/// Per-scan `syntax-table` property cache for the scanners that address text by
+/// EMACS BYTE position: the regexp matcher, `forward-comment`, and
+/// `backward-prefix-chars`.
+///
+/// GNU's `gl_state` serves these scanners too -- `RE_SETUP_SYNTAX_TABLE_FOR_OBJECT`
+/// (src/syntax.c:277) arms the same machinery the sexp scanner uses -- so until
+/// this existed they were the only scanners doing a fresh interval lookup, and a
+/// byte->char conversion, for every character examined. Caching the run in BYTE
+/// coordinates is what removes the conversion: the byte<->char mapping is
+/// monotonic, so an interval's char run `[s, e)` is exactly the byte run
+/// `[byte(s), byte(e))`, and a hit becomes the same two integer compares the
+/// char-addressed cache does.
+///
+/// Same single-scan lifetime, and so the same invariant: no Lisp runs during a
+/// scan, so neither the intervals nor the resolver's snapshot can move under it.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub struct SyntaxPropByteRun<'a> {
+    run: PropRunCells,
+    /// Lazily-filled ASCII syntax-entry memo, same contract as
+    /// [`SyntaxPropRange::ascii`]: the byte-addressed scanners (regexp
+    /// syntax classes, `forward-comment`) previously paid the full
+    /// chartable walk for EVERY character examined.
+    pub ascii: [Cell<Option<SyntaxEntry>>; 128],
     ascii_table: Cell<usize>,
     props: SyntaxProperties<'a>,
 }
@@ -3756,7 +3810,6 @@ impl StringSyntaxPositionError {
 
 static_assertions::assert_impl_all!(StringSyntaxPositionError: Send, Sync, Copy);
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Per-match `syntax-table` property cache for a regexp over a STRING object.
 ///
 /// GNU arms the same `gl_state` for a string as for a buffer
@@ -3770,6 +3823,7 @@ static_assertions::assert_impl_all!(StringSyntaxPositionError: Send, Sync, Copy)
 /// A supplied nonidentity count requires GNU's signed logical run instead,
 /// including its first lookup and later interval errors when no tree exists.
 /// Ignoring syntax properties skips both lookup modes, as GNU does.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct StringSyntaxPropByteRun<'a> {
     run: PropRunCells,
     source: Option<StringPropSource<'a>>,
@@ -3796,7 +3850,8 @@ impl std::fmt::Debug for StringSyntaxPropByteRun<'_> {
 
 impl<'a> StringSyntaxPropByteRun<'a> {
     /// Legacy Rust-owned lookup used by coordinate-contract tests.
-    #[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn new(
         props: SyntaxProperties<'a>,
         string: &'a LispString,
@@ -3805,6 +3860,7 @@ impl<'a> StringSyntaxPropByteRun<'a> {
         Self::for_source(props, StringSyntaxPositionSource::owned(string), intervals)
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// Heap syntax reads use their object identity/cache before checking GNU's
     /// logical run. A supplied count is a proof distinction, never a recount.
     pub(crate) fn for_source(
@@ -3889,6 +3945,7 @@ impl<'a> StringSyntaxPropByteRun<'a> {
         }
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// The matcher frontend must check this before exposing success/match data,
     /// including when the matcher returns no match. GNU signals during lookup.
     #[inline]
@@ -3914,6 +3971,7 @@ impl<'a> StringSyntaxPropByteRun<'a> {
         }
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// The resolved `syntax-table` property at a byte offset into the string,
     /// served from the cached run when possible.
     #[inline]
@@ -4183,7 +4241,7 @@ fn supplied_boundary_syntax(
     request.with_classes(before, after)
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
+#[cfg(not(any(test, feature = "test-support")))]
 /// Per-scan cache of the `syntax-table` text-property run, mirroring GNU
 /// `syntax.c` `gl_state` (`b_property`/`e_property` plus the current value).
 /// A scan reads the property once per char, but it is almost always nil over
@@ -4193,6 +4251,7 @@ fn supplied_boundary_syntax(
 /// char-indexed scan needs no conversion at all on a hit.  Created fresh per
 /// scan, so it never observes a mid-scan property edit (syntax-propertize runs
 /// before the scan).
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 struct SyntaxPropRange<'a> {
     /// Run over which the `syntax-table` property is known constant, held as
     /// separate `Cell`s rather than one `RefCell<Option<..>>`.
@@ -4277,6 +4336,101 @@ struct SyntaxPropRange<'a> {
     /// Written once per property run, never per character.
     descriptors: Option<RefCell<DescriptorLog>>,
 }
+#[cfg(any(test, feature = "test-support"))]
+/// Per-scan cache of the `syntax-table` text-property run, mirroring GNU
+/// `syntax.c` `gl_state` (`b_property`/`e_property` plus the current value).
+/// A scan reads the property once per char, but it is almost always nil over
+/// long runs, so caching the `[start, end)` char range turns a per-char
+/// interval lookup (and its byte->char) into a plain range check, refetching
+/// only when the scan leaves the run.  Indexed by char position so a
+/// char-indexed scan needs no conversion at all on a hit.  Created fresh per
+/// scan, so it never observes a mid-scan property edit (syntax-propertize runs
+/// before the scan).
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub struct SyntaxPropRange<'a> {
+    /// Run over which the `syntax-table` property is known constant, held as
+    /// separate `Cell`s rather than one `RefCell<Option<..>>`.
+    ///
+    /// This is consulted PER CHARACTER whenever `parse-sexp-lookup-properties`
+    /// is on, which elisp-mode sets, so it sits under
+    /// `effective_syntax_entry_for_abs_char` -- 11.11% of self time on a
+    /// per-keystroke profile. GNU's equivalent is two compares on globals,
+    /// inlined (`syntax.h`):
+    ///
+    ///     if (parse_sexp_lookup_properties && charpos >= gl_state.e_property)
+    ///       update_syntax_table_forward (charpos, gl_state.object);
+    ///
+    /// A `RefCell` cannot match that: every hit paid a borrow-flag load,
+    /// increment and decrement on top of the comparison. Plain `Cell`s make the
+    /// in-run case two integer compares plus one `Copy` load, with no borrow
+    /// bookkeeping -- `Value` and `Option<Value>` are both `Copy`.
+    ///
+    /// `run_start == run_end == 0` is the natural empty state (no `pos`
+    /// satisfies `start <= pos && pos < end`), so no reserved sentinel value is
+    /// needed. Mirrors GNU's `gl_state.b_property` / `e_property`.
+    run: PropRunCells,
+    /// Lazily-filled memo of the 128 ASCII syntax entries for the table this
+    /// scan runs under (GNU `SYNTAX_ENTRY` on the char-table's `ascii` slot,
+    /// minus the per-char cons decode).
+    ///
+    /// Filled ON MISS rather than precomputed: font-lock drives
+    /// `parse-partial-sexp`/`syntax-ppss` with many SHORT ranges, and eagerly
+    /// building all 128 entries charged 128 `ct_lookup`s to a scan that might
+    /// step over three characters. Per-char fill is strictly less work than the
+    /// uncached path for every scan length -- a scan touching k distinct ASCII
+    /// chars pays k decodes instead of one per character stepped.
+    ///
+    /// Lifetime is a single scan, which is exactly the table-immutability
+    /// invariant the property-run cache above already relies on, so no
+    /// mutation-epoch check is needed (and none would be sound: `aset` on a
+    /// syntax char-table bypasses `note_syntax_table_mutation`).
+    ///
+    /// Memo of the ASCII syntax entries, filled ON MISS.
+    ///
+    /// Lazy rather than precomputed: font-lock drives `parse-partial-sexp` /
+    /// `syntax-ppss` over many SHORT ranges, and eagerly building all 128
+    /// entries charged 128 `ct_lookup`s to a scan that might step over three
+    /// characters. Per-char fill is strictly less work at every scan length --
+    /// a scan touching k distinct ASCII chars pays k decodes, not one per
+    /// character stepped, and not 128 up front.
+    ///
+    /// Available to EVERY scanner, which is what the measurements favour even
+    /// though a font-lock profile puts `parse_state_from_range` at 6.01% of
+    /// self time and each other scanner near 0.1%. Three narrower variants
+    /// were built and measured against this one on the same corpus:
+    ///
+    /// | variant                                   | elisp edit |
+    /// |-------------------------------------------|-----------:|
+    /// | this one                                  |   -5.95%   |
+    /// | thread-local generation-stamped scratch   |   -4.96%   |
+    /// | boxed, after a 64-lookup threshold        |   -3.82%   |
+    /// | boxed, `parse_state_from_range` only      |   -3.08%   |
+    ///
+    /// The narrower ones gave up editing latency for nothing: all four showed
+    /// the same ~+0.35% on byte-compile despite differing structurally, and a
+    /// byte-compile profile contains none of this path (it is interpreter
+    /// bound, 27.5% VM run_loop), so that delta is build-to-build variation
+    /// rather than a memo cost. Do not "optimize" this into one of them
+    /// without re-measuring all four workloads.
+    ///
+    /// Lifetime is a single scan, which is exactly the table-immutability
+    /// invariant the property-run cache above already relies on, so no
+    /// mutation-epoch check is needed -- and none would be sound, since `aset`
+    /// on a syntax char-table bypasses `note_syntax_table_mutation`.
+    pub ascii: [Cell<Option<SyntaxEntry>>; 128],
+    /// Identity of the chartable `ascii` was filled against, so a cache reused
+    /// across tables cannot serve entries from the wrong one.
+    ascii_table: Cell<usize>,
+    /// Where the property comes from, so a cached run and the resolution that
+    /// produced it cannot come from different sources. Last so the run fields
+    /// above, which every scanned character reads, keep the front of the
+    /// struct.
+    props: SyntaxProperties<'a>,
+    /// The property values this scan read, for a scan the parse cache
+    /// records (its validation dictionary); `None` for every other scan.
+    /// Written once per property run, never per character.
+    descriptors: Option<RefCell<DescriptorLog>>,
+}
 
 /// The `syntax-table` property values a recording scan read: what a cached
 /// loop state depends on besides text, table and property positions.
@@ -4296,10 +4450,12 @@ pub(super) struct DescriptorLog {
     pub(super) unvalidatable_from: Option<usize>,
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Distinct descriptors one run validates (elisp buffers have two to four:
 /// `string-to-syntax` results are constants of the propertize function).
-pub(super) const DESCRIPTOR_LOG_CAP: usize = 32;
+#[cfg(not(any(test, feature = "test-support")))]
+const DESCRIPTOR_LOG_CAP: usize = 32;
+#[cfg(any(test, feature = "test-support"))]
+pub const DESCRIPTOR_LOG_CAP: usize = 32;
 
 impl DescriptorLog {
     fn note(&mut self, pos: usize, value: Value) {
@@ -4982,12 +5138,13 @@ pub(crate) fn builtin_syntax_table_p(args: Vec<Value>) -> EvalResult {
     builtin_syntax_table_p_with_symbols(args, neovm_value::tagged::SymbolMode::Bare)
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(syntax-table)` — return the current buffer syntax table.
 ///
 /// Returns the buffer-local syntax-table object, defaulting to the standard
 /// syntax-table object.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_syntax_table<H: TextHost>(eval: &mut H, args: Vec<Value>) -> EvalResult {
     neovm_value::error::expect_args("syntax-table", &args, 0)?;
     builtin_syntax_table_0(eval)
@@ -5002,12 +5159,13 @@ pub fn builtin_syntax_table_0<H: TextHost>(eval: &mut H) -> EvalResult {
     builtin_syntax_table_in_buffers_with_symbols(eval.buffers_mut(), &args, mode)
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(set-syntax-table TABLE)` — install TABLE for current buffer and return it.
 ///
 /// NeoVM currently stores syntax behavior on `Buffer.syntax_table` internals;
 /// this installs the exposed syntax-table object for compatibility and returns it.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_set_syntax_table<H: TextHost>(eval: &mut H, args: Vec<Value>) -> EvalResult {
     neovm_value::error::expect_args("set-syntax-table", &args, 1)?;
     let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
@@ -5036,7 +5194,8 @@ pub fn builtin_modify_syntax_entry<H: TextHost>(eval: &mut H, args: Vec<Value>) 
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(char-syntax CHAR)` — return the syntax class designator char.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_char_syntax<H: TextHost>(eval: &mut H, args: Vec<Value>) -> EvalResult {
     neovm_value::error::expect_args("char-syntax", &args, 1)?;
     let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
@@ -5808,11 +5967,12 @@ fn back_comment_safe_chunk() -> usize {
     1024
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// Test hooks: bypass the safe-position index entirely; override the
     /// chunk; count re-parses that started after BEGV.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) static BACK_COMMENT_SAFE_BYPASS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) static BACK_COMMENT_SAFE_CHUNK_OVERRIDE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -6541,7 +6701,8 @@ pub(crate) fn builtin_backward_sexp<H: TextHost>(eval: &mut H, args: Vec<Value>)
 /// `(scan-lists FROM COUNT DEPTH)` — scan across balanced expressions.
 ///
 /// This uses the same core scanner as `forward-sexp`/`backward-sexp`.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_scan_lists<H: TextHost>(ctx: &mut H, args: Vec<Value>) -> EvalResult {
     neovm_value::error::expect_args("scan-lists", &args, 3)?;
     let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
@@ -6687,7 +6848,8 @@ pub fn builtin_scan_lists_3<H: TextHost>(
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(scan-sexps FROM COUNT)` — scan over COUNT sexps from FROM.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_scan_sexps<H: TextHost>(ctx: &mut H, args: Vec<Value>) -> EvalResult {
     neovm_value::error::expect_args("scan-sexps", &args, 2)?;
     let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
@@ -7476,7 +7638,8 @@ fn clamped_parse_range(buf: &Buffer, from: i64, to: i64) -> (usize, usize) {
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(parse-partial-sexp FROM TO &optional TARGETDEPTH STOPBEFORE STATE COMMENTSTOP)`
 /// Baseline parser-state implementation for structural Lisp motion/state queries.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_parse_partial_sexp<H: TextHost>(
     eval: &mut H,
     args: Vec<Value>,
@@ -7676,7 +7839,8 @@ fn lisp_pos_to_byte(buf: &Buffer, pos: LispCharPos1) -> EmacsBytePos {
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(skip-syntax-forward SYNTAX &optional LIMIT)` — skip forward over chars
 /// matching the given syntax classes.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_skip_syntax_forward<H: TextHost>(
     eval: &mut H,
     args: Vec<Value>,
@@ -7914,10 +8078,11 @@ fn expect_skip_syntax_args(
 // ===========================================================================
 // Tests
 // ===========================================================================
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// Test hook: byte-addressed `syntax-table` run refills.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) static SYNTAX_BYTE_RUN_REFILLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 

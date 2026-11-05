@@ -1292,8 +1292,10 @@ impl LispValueVec {
     pub fn jit_slice_offsets() -> Option<(usize, usize)> {
         static OFFSETS: std::sync::OnceLock<Option<(usize, usize)>> = std::sync::OnceLock::new();
         *OFFSETS.get_or_init(|| {
-            #[cfg_attr(feature = "test-support", visibility::make(pub))]
+            #[cfg(not(any(test, feature = "test-support")))]
             const WORD: usize = std::mem::size_of::<usize>();
+            #[cfg(any(test, feature = "test-support"))]
+            pub const WORD: usize = std::mem::size_of::<usize>();
             let words = std::mem::size_of::<LispValueVec>() / WORD;
             let read = |v: &LispValueVec| -> Vec<usize> {
                 let base = v as *const LispValueVec as *const usize;
@@ -1616,6 +1618,7 @@ impl VectorScanSnapshot {
         self.entries.push(entry);
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// Number of captured vector backings (diagnostic).
     #[inline]
     pub(crate) fn len(&self) -> usize {

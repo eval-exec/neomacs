@@ -1415,12 +1415,13 @@ pub(super) fn read_symbol_children<const MAJOR: bool>(
 #[path = "tests/cell_test.rs"]
 mod tests;
 #[cfg(any(test, feature = "test-support"))]
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[path = "tests/cell_test.rs"]
 pub mod tests;
 
 impl DumpedSymbolFlags {
     #[doc(hidden)]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub fn new(
         trapped_write: SymbolTrappedWrite,
         interned: SymbolInterned,

@@ -229,12 +229,13 @@ fn expect_char(value: &Value) -> Result<char, Flow> {
 // Builtins
 // ---------------------------------------------------------------------------
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(case-table-p OBJ)` -- return t if OBJ is a case table.
 ///
 /// A case table is a char-table with `case-table` sub-type and 3 extra slots
 /// (upcase, canonicalize, equivalences).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_case_table_p(args: Vec<Value>) -> EvalResult {
     builtin_case_table_p_with_symbols(args, SymbolMode::Bare)
 }
@@ -244,13 +245,13 @@ pub(crate) fn builtin_case_table_p_with_symbols(args: Vec<Value>, mode: SymbolMo
     Ok(Value::bool_val(is_case_table_with_symbols(&args[0], mode)))
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(downcase CHAR)` -- convert a character to lowercase.
 ///
 /// If the argument is an integer or character, returns the lowercase version
 /// using the standard ASCII case table. Characters outside A-Z are returned
 /// unchanged.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_downcase_char(args: Vec<Value>) -> EvalResult {
     expect_args("downcase", &args, 1)?;
     let c = expect_char(&args[0])?;
@@ -325,14 +326,14 @@ fn make_standard_case_table_value() -> Value {
     down
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Build a custom case table equal to the standard ASCII table but with one
 /// extra uppercase/lowercase pair installed, exactly as Lisp's
 /// `(set-case-syntax-pair UC LC (copy-case-table (standard-case-table)))`
 /// does (`lisp/case-table.el`): downcase[UC]=LC, downcase[LC]=LC, upcase[UC]=UC,
 /// upcase[LC]=UC. The canon/eqv extras are left nil so they are recomputed from
 /// the down/up tables by `ensure_case_table_derived_slots` (GNU `set_case_table`).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn make_case_table_with_pair(uc: i64, lc: i64) -> Value {
     let mut downcase_pairs = Vec::with_capacity(128);
     let mut upcase_pairs = Vec::with_capacity(128);
@@ -428,7 +429,6 @@ pub fn current_case_table_for_buffer_in_state_with_symbols(
     Ok(fallback)
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// The case-fold canon char-table to use as the search translate table for a
 /// search in `buf` -- GNU's `BVAR (current_buffer, case_canon_table)` used as
 /// the search `trt`. Returns `None` when `buf` uses the standard case table
@@ -436,6 +436,7 @@ pub fn current_case_table_for_buffer_in_state_with_symbols(
 /// Unicode folding; returns `Some(canon)` only when a custom
 /// `set-case-syntax-pair` table is installed, so a custom pair (e.g. `[`/`]`)
 /// folds during search just as `char-equal` already does.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn buffer_case_canon_table(buf: &neovm_edit::buffer::Buffer) -> Option<Value> {
     buffer_case_canon_table_with_symbols(buf, SymbolMode::Bare)
 }

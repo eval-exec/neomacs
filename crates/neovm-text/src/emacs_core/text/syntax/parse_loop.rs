@@ -27,7 +27,7 @@
 
 use super::*;
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
+#[cfg(not(any(test, feature = "test-support")))]
 /// The loop-carried state of a scan at a loop top: everything the iterations
 /// after it read.
 ///
@@ -35,6 +35,7 @@ use super::*;
 /// the flat ASCII classifier, the memoized property-free run end) are not part
 /// of it: each is rebuilt on resume and answers identically by construction.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) struct LoopState {
     /// Absolute 0-based position of the character about to be scanned.
     pub(super) char_pos: usize,
@@ -48,6 +49,29 @@ pub(super) struct LoopState {
     /// the first iteration of a fresh scan, so it is `None` at every later
     /// loop top.
     pub(super) comment_resume: Option<CommentResumeSyntax>,
+}
+#[cfg(any(test, feature = "test-support"))]
+/// The loop-carried state of a scan at a loop top: everything the iterations
+/// after it read.
+///
+/// The per-scan caches the loop also keeps (the `syntax-table` property run,
+/// the flat ASCII classifier, the memoized property-free run end) are not part
+/// of it: each is rebuilt on resume and answers identically by construction.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub struct LoopState {
+    /// Absolute 0-based position of the character about to be scanned.
+    pub char_pos: usize,
+    /// Its Emacs byte position.
+    pub byte_pos: EmacsBytePos,
+    pub(super) pps: PartialParseState,
+    /// Start of the symbol or word run still being scanned (GNU's pending
+    /// `curlevel->last` before `symdone`).
+    pub(super) atom_start: Option<i64>,
+    /// GNU `forw_comment`'s `prev_syntax` for a resumed comment. Consumed by
+    /// the first iteration of a fresh scan, so it is `None` at every later
+    /// loop top.
+    pub comment_resume: Option<CommentResumeSyntax>,
 }
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -85,6 +109,7 @@ pub(super) enum ScanEnd {
     Paused(LoopState),
 }
 
+#[cfg(not(any(test, feature = "test-support")))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// A finished scan: the finalized state and where the scan stopped.
 pub(super) struct ScanFinish {
@@ -95,11 +120,32 @@ pub(super) struct ScanFinish {
     /// loop consumed. A peek reads only the character that starts here.
     pub(super) cursor_byte: EmacsBytePos,
 }
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+/// A finished scan: the finalized state and where the scan stopped.
+pub struct ScanFinish {
+    pub state: PartialParseState,
+    /// The Lisp position the scan stopped at (point after `parse-partial-sexp`).
+    pub stop: i64,
+    /// Where the character cursor ended: one past the last character the
+    /// loop consumed. A peek reads only the character that starts here.
+    pub(super) cursor_byte: EmacsBytePos,
+}
 
+#[cfg(not(any(test, feature = "test-support")))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// A loop top as a [`ScanMode`] sees it.
 pub(super) struct LoopTop<'a> {
     pub(super) char_pos: usize,
+    pub(super) byte_pos: EmacsBytePos,
+    pub(super) pps: &'a PartialParseState,
+    pub(super) atom_start: Option<i64>,
+}
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+/// A loop top as a [`ScanMode`] sees it.
+pub struct LoopTop<'a> {
+    pub char_pos: usize,
     pub(super) byte_pos: EmacsBytePos,
     pub(super) pps: &'a PartialParseState,
     pub(super) atom_start: Option<i64>,
@@ -201,13 +247,13 @@ impl ScanMode for SafePositionRecorder<'_> {
     }
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Run the scan loop from `entry` to `to_char` (absolute, 0-based, already
 /// clamped to the accessible region by the caller).
 ///
 /// `from_char <= to_char` for a fresh entry; a resume is only ever made at a
 /// loop top strictly before `to_char`.
 #[allow(clippy::too_many_arguments)] // mirrors GNU `scan_sexps_forward`'s parameters
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) fn run_parse_loop<M: ScanMode>(
     buf: &Buffer,
     table: &SyntaxTable,

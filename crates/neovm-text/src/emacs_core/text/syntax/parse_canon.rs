@@ -106,10 +106,11 @@ const CANON_VERIFY: u8 = 3;
 
 static CANON_MODE: AtomicU8 = AtomicU8::new(CANON_UNREAD);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// Test override of `NEOVM_SYNTAX_PARSE_CACHE_L2`.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) static CANON_MODE_OVERRIDE: Cell<Option<CanonMode>> = const { Cell::new(None) };
 }
 

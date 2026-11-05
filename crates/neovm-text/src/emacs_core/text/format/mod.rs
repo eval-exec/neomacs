@@ -29,6 +29,7 @@ pub fn require_string(_name: &str, val: &Value) -> Result<String, Flow> {
 // format-time-string
 // ---------------------------------------------------------------------------
 
+#[cfg(not(any(test, feature = "test-support")))]
 /// Broken-down time fields computed from a Unix timestamp.
 #[doc(hidden)]
 pub struct BrokenDownTime {
@@ -39,6 +40,19 @@ pub struct BrokenDownTime {
     minute: u32,  // 0..=59
     second: u32,  // 0..=60 (leap second)
     weekday: u32, // 0=Sunday .. 6=Saturday
+    yearday: u32, // 0..=365
+}
+#[cfg(any(test, feature = "test-support"))]
+/// Broken-down time fields computed from a Unix timestamp.
+#[doc(hidden)]
+pub struct BrokenDownTime {
+    pub year: i64,
+    pub month: u32,   // 1..=12
+    pub day: u32,     // 1..=31
+    pub hour: u32,    // 0..=23
+    pub minute: u32,  // 0..=59
+    pub second: u32,  // 0..=60 (leap second)
+    pub weekday: u32, // 0=Sunday .. 6=Saturday
     yearday: u32, // 0..=365
 }
 

@@ -636,6 +636,7 @@ impl GapBuffer {
         ));
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn delete_measured_range(&mut self, range: TextEditRange) {
         let start = range.byte_start().get();
         let end = range.byte_end().get();

@@ -6,11 +6,19 @@ use crate::buffer::Buffer;
 use std::cell::{Ref, RefCell};
 use std::rc::{Rc, Weak};
 
+#[cfg(not(any(test, feature = "test-support")))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SourceRevision {
     content_epoch: u64,
     all_properties: u64,
+}
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SourceRevision {
+    pub content_epoch: u64,
+    pub all_properties: u64,
 }
 
 impl SourceRevision {
@@ -22,6 +30,7 @@ impl SourceRevision {
     }
 }
 
+#[cfg(not(any(test, feature = "test-support")))]
 /// Motion-observation authority for one mutator's shared live text owner.
 /// This owns no inner byte/property storage or Lisp Value, adds no edit work,
 /// and is not a root/lifetime certificate for nested Lisp dependencies.
@@ -29,6 +38,15 @@ impl SourceRevision {
 pub struct BufferSourceAuthority {
     owner: Weak<RefCell<BufferTextStorage>>,
     revision: SourceRevision,
+}
+#[cfg(any(test, feature = "test-support"))]
+/// Motion-observation authority for one mutator's shared live text owner.
+/// This owns no inner byte/property storage or Lisp Value, adds no edit work,
+/// and is not a root/lifetime certificate for nested Lisp dependencies.
+#[derive(Clone, Debug)]
+pub struct BufferSourceAuthority {
+    pub owner: Weak<RefCell<BufferTextStorage>>,
+    pub revision: SourceRevision,
 }
 
 /// Short read phase only; do not retain across Lisp, edits or safepoints.

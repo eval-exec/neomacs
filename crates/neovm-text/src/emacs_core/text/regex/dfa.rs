@@ -187,6 +187,7 @@ impl std::ops::BitOrAssign for Assertions {
     }
 }
 
+#[cfg(not(any(test, feature = "test-support")))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// The NFA of one pattern: its consuming positions and their tests, walked
 /// over the rewind view.
@@ -210,6 +211,31 @@ pub(crate) struct Nfa {
     /// `syntax-table` property can change a character's class or an
     /// assertion's answer, and the DFA reads syntax where the matcher does.
     pub(crate) reads_syntax: bool,
+}
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+/// The NFA of one pattern: its consuming positions and their tests, walked
+/// over the rewind view.
+#[derive(Debug)]
+pub struct Nfa {
+    /// The rewind view (keep-string loops rewritten; same length and opcode
+    /// positions as `CompiledPattern::buffer`, whose side tables it shares).
+    pub bytecode: Box<[u8]>,
+    pub positions: Vec<Position>,
+    pub predicates: Vec<Predicate>,
+    /// `kernel_item(pc, lit_off)` of each position, to its index.
+    position_of: FxHashMap<KernelItem, u16>,
+    pub(crate) assertions: Assertions,
+    /// Opcodes that push onto the backtracker's fail stack (the overflow
+    /// bound, [`super::fail_stack_may_overflow`]).
+    pub push_sites: usize,
+    /// Whether the pattern tests categories (`\cC`), which the class tables
+    /// then depend on.
+    pub(crate) uses_categories: bool,
+    /// Whether some predicate or assertion reads the syntax table: then a
+    /// `syntax-table` property can change a character's class or an
+    /// assertion's answer, and the DFA reads syntax where the matcher does.
+    pub reads_syntax: bool,
 }
 
 /// Decide whether `pattern` can have an existence DFA.
@@ -467,13 +493,13 @@ impl Nfa {
         }
     }
 
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// The epsilon closure of `items` at the text position `at`: the
     /// consuming positions it reaches, appended to `out` (unsorted, no
     /// duplicates), and whether it reaches the end of the pattern (a match
     /// ending at `at`).  Zero-width assertions are the matcher's own tests at
     /// the real position, so the closure is exactly the set of configurations
     /// the backtracker can reach from `items` at `at` without consuming.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn closure(
         &self,
         items: &[KernelItem],
@@ -636,13 +662,15 @@ impl Facts {
     /// No character: the position is the start of the text (only ever a
     /// PREVIOUS-character fact).
     pub(crate) const EDGE: Self = Self(1 << 0);
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// The character is a newline (`^` after it, `$` before it).
     pub(crate) const NEWLINE: Self = Self(1 << 1);
     /// Word syntax (`\b \B \< \>`).
     pub(crate) const WORD: Self = Self(1 << 2);
     /// Word or symbol syntax (`\_< \_>`).
-    pub(crate) const WORD_OR_SYMBOL: Self = Self(1 << 3);
+    #[cfg(not(any(test, feature = "test-support")))]
+    const WORD_OR_SYMBOL: Self = Self(1 << 3);
+    #[cfg(any(test, feature = "test-support"))]
+    pub const WORD_OR_SYMBOL: Self = Self(1 << 3);
     /// The current character is word/symbol syntax for GNU symbol assertions.
     /// Unibyte input uses its raw byte here, unlike the promoted previous fact.
     /// This bit belongs to a class, never a predecessor state.
@@ -662,6 +690,7 @@ impl Facts {
     /// never cached (like a pair-dependent one).
     pub(crate) const NON_HEAD_PREV: Self = Self(1 << 6);
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) const fn empty() -> Self {
         Self(0)
     }
@@ -763,7 +792,6 @@ impl ClassKey {
     }
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// A syntax lookup that answers every position from the base table.  The
 /// memoized classes are computed through it, so they are functions of the
 /// character alone; they serve only positions where no `syntax-table`
@@ -771,6 +799,7 @@ impl ClassKey {
 /// table is the answer.  A character inside a property run is classified
 /// through the real lookup at its position
 /// ([`CharClasses::class_at_position`]).
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct BaseTableView<'a>(pub(crate) &'a dyn SyntaxLookup);
 
 impl SyntaxLookup for BaseTableView<'_> {
@@ -911,7 +940,6 @@ impl Nfa {
     }
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `byte_class` value of a byte whose class is not known yet (or, for the
 /// bytes of a non-ASCII character of multibyte text, is never kept there).
 pub(crate) const UNKNOWN_CLASS: u8 = 0xFF;
@@ -928,14 +956,18 @@ const POSITIONAL_EMPTY: (u32, PositionalSyntaxFacts, u8) = (
     },
     0,
 );
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `byte_facts` value of a byte whose facts are not known yet (facts use
 /// the low six bits).
+#[cfg(not(any(test, feature = "test-support")))]
 const NO_FACTS: u8 = 0xFF;
+#[cfg(any(test, feature = "test-support"))]
+pub const NO_FACTS: u8 = 0xFF;
 
+#[cfg(not(any(test, feature = "test-support")))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// What the character-to-class maps of one pattern are valid for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct ClassContext {
     /// The tables behind the syntax lookup, when the classes read it.
     lookup: Option<LookupClassKey>,
@@ -943,6 +975,20 @@ pub(crate) struct ClassContext {
     /// syntax or category table, or a case table's non-ASCII translations),
     /// else 0.  The tick moves with every char-table write and allocation.
     tick: u64,
+    target_multibyte: bool,
+}
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+/// What the character-to-class maps of one pattern are valid for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub struct ClassContext {
+    /// The tables behind the syntax lookup, when the classes read it.
+    lookup: Option<LookupClassKey>,
+    /// `char_table_write_tick` when the classes read a char-table (the
+    /// syntax or category table, or a case table's non-ASCII translations),
+    /// else 0.  The tick moves with every char-table write and allocation.
+    pub tick: u64,
     target_multibyte: bool,
 }
 
@@ -1034,13 +1080,14 @@ struct PositionalSyntaxFacts {
 // The extra current-character distinction must not enlarge the property memo.
 static_assertions::assert_eq_size!((u32, PositionalSyntaxFacts, u8), (u32, u8, u8));
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
+#[cfg(not(any(test, feature = "test-support")))]
 /// The classes of one pattern and the character-to-class maps.
 ///
 /// Class ids name [`ClassKey`]s, which do not depend on the search context,
 /// so a context change (another syntax table, a char-table write) only
 /// empties the maps from characters to ids; the DFA's transitions, keyed by
 /// class id, stay valid.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct CharClasses {
     /// Class of each byte: every byte of unibyte text, ASCII of multibyte.
     pub(crate) byte_class: [u8; 256],
@@ -1059,6 +1106,33 @@ pub(crate) struct CharClasses {
     mask: Facts,
     /// Context changes that emptied the maps.
     pub(crate) resets: u64,
+}
+#[cfg(any(test, feature = "test-support"))]
+/// The classes of one pattern and the character-to-class maps.
+///
+/// Class ids name [`ClassKey`]s, which do not depend on the search context,
+/// so a context change (another syntax table, a char-table write) only
+/// empties the maps from characters to ids; the DFA's transitions, keyed by
+/// class id, stay valid.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub struct CharClasses {
+    /// Class of each byte: every byte of unibyte text, ASCII of multibyte.
+    pub byte_class: [u8; 256],
+    /// Direct-mapped `(character code, class)` memo for the other characters.
+    wide: Box<[(u32, u8)]>,
+    /// Direct-mapped `(character code, syntax facts there, class)` memo for
+    /// characters inside `syntax-table` property runs.
+    positional: Box<[(u32, PositionalSyntaxFacts, u8)]>,
+    /// The facts of each tabled byte's character ([`NO_FACTS`]: not known
+    /// yet), for the character before a candidate, which the DFA need not
+    /// have classified.
+    byte_facts: [u8; 256],
+    keys: Vec<ClassKey>,
+    ids: FxHashMap<ClassKey, u8>,
+    context: Option<ClassContext>,
+    mask: Facts,
+    /// Context changes that emptied the maps.
+    pub resets: u64,
 }
 
 impl CharClasses {
@@ -1118,6 +1192,7 @@ impl CharClasses {
         Ok(id)
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// The class and byte length of the character at `d` (`d < text.len()`),
     /// from the maps or computed now.
     pub(crate) fn class_at(
@@ -1267,22 +1342,27 @@ pub(crate) enum Exists {
     Unknown,
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Transition-table entries below the stride are sentinels; real entries are
 /// row offsets, `(state index + 1) * stride`.
 const UNKNOWN: u32 = 0;
 const DEAD: u32 = 1;
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
+#[cfg(not(any(test, feature = "test-support")))]
 const MATCH: u32 = 2;
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
+#[cfg(any(test, feature = "test-support"))]
+pub const MATCH: u32 = 2;
 /// The transition depends on the character pair (two word constituents, one
 /// above U+00FF): computed at every use, never cached.
+#[cfg(not(any(test, feature = "test-support")))]
 const SLOW: u32 = 3;
+#[cfg(any(test, feature = "test-support"))]
+pub const SLOW: u32 = 3;
 const MIN_STRIDE_SHIFT: u32 = 3;
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// The cache is cleared at the next candidate once it holds this many bytes.
+#[cfg(not(any(test, feature = "test-support")))]
 const MEMORY_CAP: usize = 64 * 1024;
+#[cfg(any(test, feature = "test-support"))]
+pub const MEMORY_CAP: usize = 64 * 1024;
 /// Within one candidate the cache may grow to this before the candidate is
 /// left undecided.
 const MEMORY_HARD_CAP: usize = 4 * MEMORY_CAP;
@@ -1294,6 +1374,7 @@ const CACHED_PREFIX_BYTES: usize = 8;
 /// A DFA state: the NFA kernel (where threads resume, before the closure)
 /// and the facts about the character before the position.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 struct StateKey {
     kernel: Box<[KernelItem]>,
     prev: Facts,
@@ -1348,6 +1429,7 @@ pub(crate) enum DfaGaveUp {
     StateExplosion,
 }
 
+#[cfg(not(any(test, feature = "test-support")))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// The anchored existence DFA of one pattern (see the module docs).
 pub(crate) struct ExistenceDfa {
@@ -1374,6 +1456,34 @@ pub(crate) struct ExistenceDfa {
     has_at_dot: bool,
     pub(crate) counters: DfaCounters,
     gave_up: Option<DfaGaveUp>,
+}
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+/// The anchored existence DFA of one pattern (see the module docs).
+pub struct ExistenceDfa {
+    nfa: Nfa,
+    pub classes: CharClasses,
+    /// Facts a state keeps about the previous character: the class facts
+    /// plus [`Facts::EDGE`] when some assertion tests the text start.
+    prev_mask: Facts,
+    pub stride_shift: u32,
+    pub trans: Vec<u32>,
+    states: Vec<StateKey>,
+    state_ids: FxHashMap<StateKey, u32>,
+    /// Start state index + 1 per previous-character facts (0: not built).
+    pub start: [u32; 32],
+    scratch: ClosureScratch,
+    positions: Vec<u16>,
+    kernel: Vec<KernelItem>,
+    pub memory: usize,
+    clears_this_search: u32,
+    pub search: SearchSyntax,
+    /// A property-free input stretch this search has looked up.
+    pub plain: std::ops::Range<usize>,
+    /// Whether the pattern tests point (`\=`).
+    has_at_dot: bool,
+    pub counters: DfaCounters,
+    pub gave_up: Option<DfaGaveUp>,
 }
 
 impl ExistenceDfa {
@@ -1413,11 +1523,13 @@ impl ExistenceDfa {
         dfa
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn nfa(&self) -> &Nfa {
         &self.nfa
     }
 
-    #[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn classes_mut(&mut self) -> &mut CharClasses {
         &mut self.classes
     }
@@ -1427,6 +1539,7 @@ impl ExistenceDfa {
         self.gave_up
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// Start a search of `pattern` under `syntax`: per-search limits reset,
     /// and what the lookup means for the DFA is read once.  Every
     /// [`Self::anchored_exists`] until the next call must pass the same
@@ -1632,13 +1745,13 @@ impl ExistenceDfa {
         accept
     }
 
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// Can a match of `pattern` start at `p` and end by `stop`?  The same
     /// question the backtracker answers at the candidate, without registers.
     /// Inlined into the out-of-line [`DfaLease::candidate`]: a rejection the
     /// cached loop settles costs one call from `re_search`.
     #[inline]
     #[allow(clippy::too_many_arguments)]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn anchored_exists(
         &mut self,
         pattern: &CompiledPattern,
@@ -1807,8 +1920,10 @@ impl ExistenceDfa {
         None
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// The one-step subset is kept explicit in the cache guard tests.
-    #[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn cached_first_step_dead(
         &self,
         pattern: &CompiledPattern,
@@ -2425,7 +2540,8 @@ pub(crate) fn dfa_stats() -> DfaStats {
 }
 
 /// Reset this thread's filter counters (tests).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn reset_dfa_stats() {
     STATS.with(|cell| *cell.borrow_mut() = DfaStats::default());
 }
@@ -2455,6 +2571,7 @@ const BYPASS_YES_PERCENT: u32 = 60;
 /// Searches a holiday lasts before the DFA is probed again.
 const BYPASS_HOLIDAY: u32 = 256;
 
+#[cfg(not(any(test, feature = "test-support")))]
 /// A pattern's DFA, with its adaptive-bypass window.
 pub(crate) struct LiveDfa {
     pub(crate) dfa: ExistenceDfa,
@@ -2462,6 +2579,17 @@ pub(crate) struct LiveDfa {
     /// fail-stack overflow ([`fail_stack_overflow_free_span`]).
     overflow_free_span: usize,
     decisions: u32,
+    yes: u32,
+    holiday: u32,
+}
+#[cfg(any(test, feature = "test-support"))]
+/// A pattern's DFA, with its adaptive-bypass window.
+pub struct LiveDfa {
+    pub dfa: ExistenceDfa,
+    /// A rejection that consumed fewer bytes than this cannot hide a
+    /// fail-stack overflow ([`fail_stack_overflow_free_span`]).
+    pub overflow_free_span: usize,
+    pub decisions: u32,
     yes: u32,
     holiday: u32,
 }
@@ -2575,6 +2703,7 @@ impl ColdSearchHeat {
     }
 }
 
+#[cfg(not(any(test, feature = "test-support")))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// One search's hold on its pattern's DFA slot.
 pub(crate) struct DfaLease<'p> {
@@ -2584,6 +2713,18 @@ pub(crate) struct DfaLease<'p> {
     /// added to [`DfaStats`] when the lease is dropped.
     counters_before: Option<DfaCounters>,
     skipped: u64,
+    overflow_guarded: u64,
+}
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+/// One search's hold on its pattern's DFA slot.
+pub struct DfaLease<'p> {
+    pub slot: RefMut<'p, DfaSlot>,
+    mode: DfaMode,
+    /// The live DFA's counters when this search began using it; the delta is
+    /// added to [`DfaStats`] when the lease is dropped.
+    counters_before: Option<DfaCounters>,
+    pub skipped: u64,
     overflow_guarded: u64,
 }
 

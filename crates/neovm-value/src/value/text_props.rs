@@ -2147,6 +2147,7 @@ impl IntervalTree {
         self.live_plists(node.right, f);
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn runs(&self) -> Vec<IntervalRun> {
         let mut runs = Vec::new();
         self.push_runs(self.root, CharPos0::ZERO, &mut runs);

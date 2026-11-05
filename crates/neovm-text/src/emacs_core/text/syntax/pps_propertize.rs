@@ -44,10 +44,11 @@ const KNOB_OFF: u8 = 2;
 
 static PPS_PROPERTIZE: AtomicU8 = AtomicU8::new(KNOB_UNREAD);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// Test override of `NEOVM_PPS_PROPERTIZE`.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) static PPS_PROPERTIZE_OVERRIDE: Cell<Option<bool>> = const { Cell::new(None) };
 }
 

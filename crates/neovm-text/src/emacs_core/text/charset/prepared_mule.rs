@@ -6,7 +6,6 @@
 
 use super::*;
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// A scalar encoder resolved for one conversion. Each mutator owns its view;
 /// its map data is immutable and may be shared through Arc. It holds no Lisp
 /// values and adds no process or thread-local registry cache.
@@ -17,6 +16,7 @@ use super::*;
 /// must run no Lisp callbacks while this view is held, so its owning mutator's
 /// registry cannot be redefined between preparation and the fallback lookup.
 /// Independent mutators use their own existing runtime registries and views.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct CharsetEncoder {
     kind: CharsetEncoderKind,
 }
@@ -35,7 +35,8 @@ enum CharsetLookup {
 }
 
 impl CharsetEncoder {
-    #[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn new(name: SymId) -> Self {
         Self::prepare(CharsetLookup::Name(name))
     }
@@ -88,7 +89,6 @@ struct MuleCandidate {
     encoder: Option<CharsetEncoder>,
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// The current Mule charset list, privately owned by one conversion's mutator.
 /// This view contains physical definition identities and numeric metadata,
 /// never GC-managed Values. A physical identity is a stable registry key, like
@@ -97,6 +97,7 @@ struct MuleCandidate {
 /// No Lisp runs inside the conversion; the next call takes a new view and sees
 /// charset definitions, redefinitions, aliases and priority changes. No new
 /// shared mutable structure or TLS cache is introduced for concurrent mutators.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct EmacsMuleEncoder {
     candidates: Vec<MuleCandidate>,
 }

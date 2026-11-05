@@ -149,13 +149,13 @@ pub(crate) fn seams() -> &'static SyntaxSeams {
         .expect("syntax substrate seams are installed at evaluator construction")
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// A buffer's syntax table as the edit layer sees it.
 ///
 /// The table is an opaque char-table handle owned by the value layer;
 /// classification is the text layer's installed query.  `Copy`, so the
 /// skip-char loops hold it without a borrow.
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct SyntaxTableView {
     chartable: Value,
 }
