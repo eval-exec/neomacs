@@ -1,4 +1,4 @@
-use neovm_core::host_input::HostInputPublisher;
+use neovm_system::emacs_core::host_input::HostInputPublisher;
 
 fn extract_connection(publisher: &HostInputPublisher) {
     let _connection = &publisher.connection;

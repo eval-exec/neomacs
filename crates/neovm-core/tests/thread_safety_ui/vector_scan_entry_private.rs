@@ -1,4 +1,4 @@
-use neovm_core::tagged::header::VectorScanEntry;
+use neovm_value::tagged::header::VectorScanEntry;
 
 fn main() {
     let _entry = VectorScanEntry::Owned {

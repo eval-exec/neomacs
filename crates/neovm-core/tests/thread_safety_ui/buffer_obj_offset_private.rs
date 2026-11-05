@@ -1,4 +1,4 @@
-use neovm_core::emacs_core::forward::LispBufferObjFwd;
+use neovm_value::forward::LispBufferObjFwd;
 
 // A per-buffer forwarder's raw slot offset is private to the forward module:
 // a thread projection's header carries a marker no buffer has, so a slot is

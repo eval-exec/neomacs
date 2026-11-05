@@ -1,4 +1,4 @@
-use neovm_core::emacs_core::bytecode::ByteCodeFunction;
+use neovm_value::tagged::bytecode::chunk::ByteCodeFunction;
 
 fn attach(function: &mut ByteCodeFunction) {
     function.runtime = None;

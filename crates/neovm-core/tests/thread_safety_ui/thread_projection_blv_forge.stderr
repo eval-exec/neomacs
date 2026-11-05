@@ -1,8 +1,8 @@
 error[E0624]: associated function `new` is private
- --> tests/thread_safety_ui/thread_projection_blv_forge.rs:6:76
+ --> tests/thread_safety_ui/thread_projection_blv_forge.rs:6:65
   |
-6 |     CanonicalArm::Localized(neovm_core::emacs_core::forward::CanonicalBlv::new(blv))
-  |                                                                            ^^^ private associated function
+6 |     CanonicalArm::Localized(neovm_value::forward::CanonicalBlv::new(blv))
+  |                                                                 ^^^ private associated function
   |
  ::: $WORKSPACE/crates/neovm-value/src/forward/thread_projection.rs
   |

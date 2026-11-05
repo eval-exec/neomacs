@@ -1,4 +1,4 @@
-error[E0616]: field `runtime` of struct `ByteCodeFunction` is private
+error[E0616]: field `runtime` of struct `neovm_value::tagged::bytecode::chunk::ByteCodeFunction` is private
  --> tests/thread_safety_ui/runtime_attach_private.rs:4:14
   |
 4 |     function.runtime = None;

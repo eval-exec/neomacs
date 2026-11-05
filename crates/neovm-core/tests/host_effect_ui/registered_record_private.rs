@@ -1,4 +1,4 @@
-use neovm_core::host_effect::contracts;
+use neovm_eval::host_effect::contracts;
 
 use contracts::contract_fixture::with_fixture;
 
