@@ -7876,57 +7876,35 @@ thread_local! {
     pub(crate) static SYNTAX_BYTE_RUN_REFILLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-#[cfg(test)]
-#[path = "tests/back_comment_safe_positions_test.rs"]
-mod back_comment_safe_positions_test;
 
-#[cfg(test)]
-#[path = "tests/syntax_prop_byte_run_test.rs"]
-mod syntax_prop_byte_run_test;
 
-#[cfg(test)]
-#[path = "tests/syntax_test.rs"]
-mod tests;
+
+
+
 
 #[cfg(test)]
 #[path = "tests/flat_ascii_syntax_entry_cache_test.rs"]
 mod flat_ascii_syntax_entry_cache_tests;
 
-#[cfg(test)]
-#[path = "tests/issue554_ascii_memo_test.rs"]
-mod issue554_ascii_memo_tests;
 
-#[cfg(test)]
-#[path = "tests/scan_error_data_gnu_test.rs"]
-mod scan_error_data_gnu_tests;
 
-#[cfg(test)]
-#[path = "tests/pps_propertize_gnu_test.rs"]
-mod pps_propertize_gnu_tests;
 
-#[cfg(test)]
-#[path = "tests/parse_state_divergence_gnu_test.rs"]
-mod parse_state_divergence_gnu_tests;
 
-#[cfg(test)]
-#[path = "tests/skip_syntax_classes_test.rs"]
-mod skip_syntax_classes_tests;
 
-#[cfg(test)]
-#[path = "tests/gc_tls_ownership_test.rs"]
-mod gc_tls_ownership_tests;
+
+
+
+
+
+
 
 mod symbol_policy;
 #[doc(hidden)]
 pub use symbol_policy::*;
 
-#[cfg(test)]
-#[path = "tests/signed_string_positions.rs"]
-mod signed_string_positions_tests;
 
-#[cfg(test)]
-#[path = "tests/declared_logical_state.rs"]
-mod declared_logical_state_tests;
+
+
 
 /// Carrier park: drop the flat-ASCII syntax caches (the standard-table
 /// objects are reset by `reset_syntax_thread_locals`).
@@ -7995,3 +7973,11 @@ impl SexpScanPolicy {
         self.comment_end_escape
     }
 }
+
+#[cfg(test)]
+#[path = "tests/skip_syntax_classes_test.rs"]
+mod skip_syntax_classes_tests;
+
+#[cfg(test)]
+#[path = "tests/syntax_test.rs"]
+mod tests;

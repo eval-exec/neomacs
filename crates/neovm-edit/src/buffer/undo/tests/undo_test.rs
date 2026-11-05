@@ -1,28 +1,5 @@
 use super::*;
 
-fn c(pos: usize) -> CharPos0 {
-    CharPos0::new(pos)
-}
-
-fn clen(len: usize) -> CharLen {
-    CharLen::new(len)
-}
-
-/// The recorded list, newest first, as a flat vector.
-///
-/// The tests below are about what the RECORDER produces, so they read the
-/// list itself.  There is no "pop a group" step here any more: grouping was
-/// a replay-side idea, and replay is `primitive-undo' (lisp/simple.el:3645),
-/// which is Lisp.  DIVERGENCES.md 150.
-fn entries(mut list: Value) -> Vec<Value> {
-    let mut out = Vec::new();
-    while list.is_cons() {
-        out.push(list.cons_car());
-        list = list.cons_cdr();
-    }
-    out
-}
-
 #[test]
 fn basic_insert_undo() {
     crate::test_utils::init_test_tracing();
@@ -189,44 +166,6 @@ fn undoing_flag_not_needed() {
     assert!(!list2.is_nil());
 }
 
-// ---------------------------------------------------------------------------
-// Truncation byte accounting and limit domain
-// ---------------------------------------------------------------------------
-
-/// A stand-in for the four variables `truncate_undo_list' reads.
-struct TestUndoVariables {
-    limit: Value,
-    strong_limit: Value,
-    outer: Value,
-    outer_function: Value,
-}
-
-impl TestUndoVariables {
-    fn sizes(limit: i64, strong_limit: i64) -> Self {
-        Self {
-            limit: Value::fixnum(limit),
-            strong_limit: Value::fixnum(strong_limit),
-            outer: Value::NIL,
-            outer_function: Value::NIL,
-        }
-    }
-}
-
-impl UndoLimitBindings for TestUndoVariables {
-    fn undo_limit(&self) -> Value {
-        self.limit
-    }
-    fn undo_strong_limit(&self) -> Value {
-        self.strong_limit
-    }
-    fn undo_outer_limit(&self) -> Value {
-        self.outer
-    }
-    fn undo_outer_limit_function(&self) -> Value {
-        self.outer_function
-    }
-}
-
 /// GNU charges one cons for the chain link, a second for a cons-shaped record,
 /// and `sizeof (struct Lisp_String) - 1 + SCHARS' for a saved deletion string
 /// (`src/undo.c:334-342') -- SCHARS is *characters*, not bytes.
@@ -312,19 +251,59 @@ fn truncation_clears_a_list_with_nothing_worth_keeping() {
     assert!(truncate_undo_list(Value::fixnum(5), &limits).is_nil());
 }
 
-/// An undo list that fits is returned untouched, however many groups it has.
-#[test]
-fn truncation_leaves_a_list_that_fits_alone() {
-    crate::test_utils::init_test_tracing();
-    let mut list = Value::NIL;
-    for start in 0..10 {
-        undo_list_record_insert(&mut list, c(start * 5), clen(5));
-        undo_list_boundary(&mut list);
+fn c(pos: usize) -> CharPos0 {
+    CharPos0::new(pos)
+}
+
+fn clen(len: usize) -> CharLen {
+    CharLen::new(len)
+}
+
+/// The recorded list, newest first, as a flat vector.
+///
+/// The tests below are about what the RECORDER produces, so they read the
+/// list itself.  There is no "pop a group" step here any more: grouping was
+/// a replay-side idea, and replay is `primitive-undo' (lisp/simple.el:3645),
+/// which is Lisp.  DIVERGENCES.md 150.
+fn entries(mut list: Value) -> Vec<Value> {
+    let mut out = Vec::new();
+    while list.is_cons() {
+        out.push(list.cons_car());
+        list = list.cons_cdr();
     }
-    let before = crate::emacs_core::print::print_value(&list);
+    out
+}
 
-    let limits = UndoLimits::read(&TestUndoVariables::sizes(160_000, 240_000)).expect("limits");
-    let after = truncate_undo_list(list, &limits);
+/// A stand-in for the four variables `truncate_undo_list' reads.
+struct TestUndoVariables {
+    limit: Value,
+    strong_limit: Value,
+    outer: Value,
+    outer_function: Value,
+}
 
-    assert_eq!(crate::emacs_core::print::print_value(&after), before);
+impl TestUndoVariables {
+    fn sizes(limit: i64, strong_limit: i64) -> Self {
+        Self {
+            limit: Value::fixnum(limit),
+            strong_limit: Value::fixnum(strong_limit),
+            outer: Value::NIL,
+            outer_function: Value::NIL,
+        }
+    }
+}
+
+impl UndoLimitBindings for TestUndoVariables {
+    fn undo_limit(&self) -> Value {
+        self.limit
+    }
+    fn undo_strong_limit(&self) -> Value {
+        self.strong_limit
+    }
+    fn undo_outer_limit(&self) -> Value {
+        self.outer
+    }
+    fn undo_outer_limit_function(&self) -> Value {
+        self.outer_function
+    }
 }

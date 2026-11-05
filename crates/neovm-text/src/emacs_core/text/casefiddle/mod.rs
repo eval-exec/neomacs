@@ -1386,13 +1386,9 @@ pub fn builtin_char_resolve_modifiers(args: Vec<Value>) -> EvalResult {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
-#[cfg(test)]
-#[path = "tests/casefiddle_test.rs"]
-mod tests;
 
-#[cfg(test)]
-#[path = "tests/casing_types.rs"]
-mod casing_types;
+
+
 
 #[doc(hidden)]
 impl CasedRegion {
@@ -1429,3 +1425,11 @@ impl CasingChangedSpan {
         self.new_len
     }
 }
+
+#[cfg(test)]
+#[path = "tests/casefiddle_test.rs"]
+mod tests;
+
+#[cfg(test)]
+#[path = "tests/casing_types.rs"]
+mod casing_types;

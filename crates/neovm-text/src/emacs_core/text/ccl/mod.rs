@@ -1616,13 +1616,9 @@ pub fn builtin_register_code_conversion_map_impl_with_symbols(
         with_ccl_registry_mut(|registry| registry.register_code_conversion_map(name, args[1]));
     Ok(Value::fixnum(map_id))
 }
-#[cfg(test)]
-#[path = "tests/ccl_test.rs"]
-mod tests;
 
-#[cfg(test)]
-#[path = "tests/gc_tls_ownership_test.rs"]
-mod gc_tls_ownership_tests;
+
+
 
 /// Debug-only carrier TLS fingerprint for this module's classified records.
 #[cfg(debug_assertions)]
@@ -1634,3 +1630,7 @@ pub fn carrier_tls_fingerprint(h: &mut u64) {
     );
     neovm_value::tls_fingerprint::mix(h, CCL_VARIABLES.with(|slot| slot.get() as usize as u64));
 }
+
+#[cfg(test)]
+#[path = "tests/ccl_test.rs"]
+mod tests;

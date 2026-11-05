@@ -708,9 +708,9 @@ pub use neovm_value::boolvec::{
 #[cfg(test)]
 #[path = "tests/collection_lookup_capture_test.rs"]
 mod collection_lookup_capture;
-#[cfg(test)]
-#[path = "tests/positioned_purpose_test.rs"]
-mod positioned_purpose;
+
+
+
 #[cfg(test)]
 #[path = "tests/chartable_test.rs"]
 mod tests;

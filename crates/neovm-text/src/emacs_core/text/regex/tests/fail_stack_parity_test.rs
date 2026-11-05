@@ -7,38 +7,6 @@
 
 use super::*;
 
-/// GNU `(and (string-match PATTERN TEXT) (match-data t))` over ASCII text,
-/// plus whether the search stopped on the fail-stack limit.
-fn string_match(pattern: &str, text: &str) -> (Option<Vec<i64>>, bool) {
-    let compiled = regex_compile(pattern, false, false).expect("pattern compiles");
-    let syntax = DefaultSyntaxLookup;
-    let _ = take_matcher_overflow();
-    let found = re_search(
-        &compiled,
-        text.as_bytes(),
-        0,
-        text.len() as isize,
-        &syntax,
-        0,
-    );
-    let overflow = take_matcher_overflow();
-    (found.map(|(_, registers)| match_data(&registers)), overflow)
-}
-
-/// Registers as GNU's `match-data` lists them: trailing unset groups dropped.
-fn match_data(registers: &MatchRegisters) -> Vec<i64> {
-    let mut data: Vec<i64> = registers
-        .start
-        .iter()
-        .zip(&registers.end)
-        .flat_map(|(&start, &end)| [start, end])
-        .collect();
-    while data.len() > 2 && data[data.len() - 1] < 0 && data[data.len() - 2] < 0 {
-        data.truncate(data.len() - 2);
-    }
-    data
-}
-
 #[test]
 fn nongreedy_loops_over_nullable_bodies_match_like_gnu() {
     crate::test_utils::init_test_tracing();
@@ -132,36 +100,6 @@ fn pike_fallback_keeps_gnu_fail_stack_overflow() {
     assert!(!overflow);
 }
 
-#[test]
-fn nullable_nongreedy_loop_answers_nil_from_lisp() {
-    let mut ev = crate::emacs_core::eval::Context::new();
-    let caught = ev
-        .eval_str(
-            "(list (condition-case err (string-match \"\\\\(a\\\\|\\\\)+?x\" \"aaaay\") \
-                     (error err)) \
-                   (string-match \"\\\\(?:a?\\\\)*?b\" \"aaaac\"))",
-        )
-        .expect("condition-case evaluates");
-    assert_eq!(crate::emacs_core::print::print_value(&caught), "(nil nil)");
-}
-
-#[test]
-fn pike_fallback_overflow_signals_the_gnu_error_from_lisp() {
-    let mut ev = crate::emacs_core::eval::Context::new();
-    let caught = ev
-        .eval_str(
-            "(condition-case err \
-                 (string-match \"x\\\\(?:a\\\\|b\\\\)*c\" \
-                               (concat \"x\" (apply #'concat (make-list 100000 \"ab\")))) \
-               (error err))",
-        )
-        .expect("condition-case evaluates");
-    assert_eq!(
-        crate::emacs_core::print::print_value(&caught),
-        "(error \"Stack overflow in regexp matcher\")"
-    );
-}
-
 /// The bound behind the D7 fix: a backtracker path's fail stack never holds
 /// more than `2 * push sites` entries per position it pushed at.  Measured
 /// over random patterns with nested and nullable loops, including the
@@ -230,6 +168,38 @@ fn fail_stack_depth_stays_within_the_overflow_bound() {
         "fail-stack depth per push site and position"
     );
     assert!(measured > 50_000, "too few measured runs: {measured}");
+}
+
+/// GNU `(and (string-match PATTERN TEXT) (match-data t))` over ASCII text,
+/// plus whether the search stopped on the fail-stack limit.
+fn string_match(pattern: &str, text: &str) -> (Option<Vec<i64>>, bool) {
+    let compiled = regex_compile(pattern, false, false).expect("pattern compiles");
+    let syntax = DefaultSyntaxLookup;
+    let _ = take_matcher_overflow();
+    let found = re_search(
+        &compiled,
+        text.as_bytes(),
+        0,
+        text.len() as isize,
+        &syntax,
+        0,
+    );
+    let overflow = take_matcher_overflow();
+    (found.map(|(_, registers)| match_data(&registers)), overflow)
+}
+
+/// Registers as GNU's `match-data` lists them: trailing unset groups dropped.
+fn match_data(registers: &MatchRegisters) -> Vec<i64> {
+    let mut data: Vec<i64> = registers
+        .start
+        .iter()
+        .zip(&registers.end)
+        .flat_map(|(&start, &end)| [start, end])
+        .collect();
+    while data.len() > 2 && data[data.len() - 1] < 0 && data[data.len() - 2] < 0 {
+        data.truncate(data.len() - 2);
+    }
+    data
 }
 
 struct BoundRng(u64);

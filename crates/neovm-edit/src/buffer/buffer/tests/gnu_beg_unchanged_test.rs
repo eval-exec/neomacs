@@ -5,13 +5,6 @@
 
 use super::*;
 
-fn bytes(buf: &Buffer, start: usize, end: usize) -> crate::buffer::EmacsByteRange {
-    crate::buffer::EmacsByteRange::new(
-        crate::buffer::EmacsBytePos::new(byte_pos_for_char(buf, start)),
-        crate::buffer::EmacsBytePos::new(byte_pos_for_char(buf, end)),
-    )
-}
-
 #[test]
 fn nothing_changed_has_no_gnu_prefix() {
     let buf = buf_with_text("aaaa\nbbbb\n");
@@ -51,4 +44,11 @@ fn an_empty_property_range_is_not_a_gnu_change() {
     buf.reset_unchanged_region();
     buf.note_changed_property_region(bytes(&buf, 10, 10));
     assert_eq!(buf.gnu_beg_unchanged(), Some(10));
+}
+
+fn bytes(buf: &Buffer, start: usize, end: usize) -> crate::buffer::EmacsByteRange {
+    crate::buffer::EmacsByteRange::new(
+        crate::buffer::EmacsBytePos::new(byte_pos_for_char(buf, start)),
+        crate::buffer::EmacsBytePos::new(byte_pos_for_char(buf, end)),
+    )
 }

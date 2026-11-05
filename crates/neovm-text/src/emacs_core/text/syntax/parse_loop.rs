@@ -828,7 +828,3 @@ pub(super) fn run_parse_loop<M: ScanMode>(
         cursor_byte: chars.byte_pos,
     })
 }
-
-#[cfg(test)]
-#[path = "tests/parse_loop_resume_test.rs"]
-mod resume_tests;

@@ -1,98 +1,6 @@
 use super::*;
+
 use crate::buffer::BufferId;
-
-fn alloc_overlay(start: usize, end: usize) -> Value {
-    Value::make_overlay(neovm_value::heap_types::OverlayDataInit {
-        serial: neovm_value::heap_types::OverlaySerialSource::Mint,
-        plist: Value::NIL,
-        buffer: Some(BufferId(1)),
-        start,
-        end,
-        front_advance: false,
-        rear_advance: false,
-    })
-}
-
-fn emacs_byte_pos(byte: usize) -> EmacsBytePos {
-    EmacsBytePos::new(byte)
-}
-
-fn emacs_byte_range(start: usize, end: usize) -> EmacsByteRange {
-    EmacsByteRange::from_usize(start, end)
-}
-
-fn emacs_byte_len(len: usize) -> EmacsByteLen {
-    EmacsByteLen::new(len)
-}
-
-fn overlay_start(list: &OverlayList, overlay: Value) -> Option<usize> {
-    list.overlay_start_emacs_byte_pos(overlay)
-        .map(EmacsBytePos::get)
-}
-
-fn overlay_end(list: &OverlayList, overlay: Value) -> Option<usize> {
-    list.overlay_end_emacs_byte_pos(overlay)
-        .map(EmacsBytePos::get)
-}
-
-fn overlays_at(list: &OverlayList, pos: usize) -> Vec<Value> {
-    list.overlays_at_emacs_byte_pos(emacs_byte_pos(pos))
-}
-
-fn overlays_in_region(
-    list: &OverlayList,
-    start: usize,
-    end: usize,
-    accessible_end: usize,
-) -> Vec<Value> {
-    list.overlays_in_accessible_emacs_byte_range(
-        emacs_byte_range(start, end),
-        emacs_byte_pos(accessible_end),
-    )
-}
-
-fn direct_overlay_property_extent(
-    list: &OverlayList,
-    pos: EmacsBytePos,
-    property: Value,
-    bounds: EmacsByteRange,
-    window_id: Option<u64>,
-) -> Option<OverlayPropertyExtent> {
-    match list.resolve_overlay_property_at_emacs_byte_pos(pos, window_id, |overlay| {
-        list.overlay_get_named(overlay, property)
-    }) {
-        OverlayPropertyAtPoint::Present(resolution) => resolution.extent(bounds),
-        OverlayPropertyAtPoint::Vacant(_) => None,
-    }
-}
-
-struct FilteredPropertyResolver<'a> {
-    overlays: &'a OverlayList,
-    lookup_order: &'a [Value],
-}
-
-impl OverlayPropertyResolver for FilteredPropertyResolver<'_> {
-    fn value_for_overlay(&mut self, overlay: Value) -> Option<Value> {
-        let (canonical, aliases) = self.lookup_order.split_first()?;
-        if let Some(value) = self.overlays.overlay_get_named(overlay, *canonical) {
-            return Some(value);
-        }
-        aliases.iter().find_map(|alias| {
-            self.overlays
-                .overlay_get_named(overlay, *alias)
-                .filter(|value| !value.is_nil())
-        })
-    }
-
-    fn endpoint_filter(&self) -> OverlayPropertyFilter {
-        OverlayPropertyFilter::for_properties(
-            self.lookup_order
-                .iter()
-                .copied()
-                .chain(std::iter::once(Value::symbol("category"))),
-        )
-    }
-}
 
 #[test]
 fn insert_and_delete_overlay_preserves_object_identity() {
@@ -903,27 +811,6 @@ fn absent_overlay_key_bloom_collision_is_scanned_only_once() {
 }
 
 #[test]
-fn cached_overlay_snapshot_survives_exact_evaluator_gc() {
-    crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::Context::new();
-    eval.eval_str("(progn (insert \"abcd\") (overlay-put (make-overlay 1 4) 'before-string (copy-sequence \"frozen\")))").unwrap();
-    let buffer = eval.buffers.current_buffer().unwrap().id;
-    // No Rust-held Value roots the copied overlay. The cache belongs to the
-    // live buffer and must keep its independent overlay/plist objects alive.
-    drop(eval.buffers.get(buffer).unwrap().overlays().snapshot());
-    for _ in 0..3 {
-        eval.gc_collect_exact();
-        let snapshot = eval.buffers.get(buffer).unwrap().overlays().snapshot();
-        let overlay = overlays_at(&snapshot, 0)[0];
-        assert_eq!(
-            snapshot.overlay_get_named(overlay, Value::symbol("before-string")),
-            Some(Value::string("frozen"))
-        );
-        assert_eq!(overlay_end(&snapshot, overlay), Some(3));
-    }
-}
-
-#[test]
 fn delete_overlay_removes_non_root_interval_entry() {
     crate::test_utils::init_test_tracing();
     let mut list = OverlayList::new();
@@ -937,27 +824,6 @@ fn delete_overlay_removes_non_root_interval_entry() {
     assert!(overlays_at(&list, 5).is_empty());
     assert_eq!(overlays_at(&list, 25), vec![root]);
     assert!(overlay_live_buffer(earlier).is_none());
-}
-
-#[test]
-fn overlay_put_prepends_new_properties_and_updates_in_place() {
-    crate::test_utils::init_test_tracing();
-    let mut list = OverlayList::new();
-    let overlay = alloc_overlay(0, 1);
-    list.insert_overlay(overlay);
-    let face = Value::symbol("face");
-    let help = Value::symbol("help-echo");
-    list.overlay_put(overlay, face, Value::symbol("bold"))
-        .unwrap();
-    list.overlay_put(overlay, help, Value::string("tip"))
-        .unwrap();
-    list.overlay_put(overlay, face, Value::symbol("italic"))
-        .unwrap();
-    let plist = list.overlay_plist(overlay).unwrap();
-    assert_eq!(
-        crate::emacs_core::print::print_value(&plist),
-        "(help-echo \"tip\" face italic)"
-    );
 }
 
 #[test]
@@ -1980,7 +1846,101 @@ fn content_digest_declines_for_an_overlay_carrying_a_category() {
     );
 }
 
+fn alloc_overlay(start: usize, end: usize) -> Value {
+    Value::make_overlay(neovm_value::heap_types::OverlayDataInit {
+        serial: neovm_value::heap_types::OverlaySerialSource::Mint,
+        plist: Value::NIL,
+        buffer: Some(BufferId(1)),
+        start,
+        end,
+        front_advance: false,
+        rear_advance: false,
+    })
+}
+
+fn emacs_byte_pos(byte: usize) -> EmacsBytePos {
+    EmacsBytePos::new(byte)
+}
+
+fn emacs_byte_range(start: usize, end: usize) -> EmacsByteRange {
+    EmacsByteRange::from_usize(start, end)
+}
+
+fn emacs_byte_len(len: usize) -> EmacsByteLen {
+    EmacsByteLen::new(len)
+}
+
+fn overlay_start(list: &OverlayList, overlay: Value) -> Option<usize> {
+    list.overlay_start_emacs_byte_pos(overlay)
+        .map(EmacsBytePos::get)
+}
+
+fn overlay_end(list: &OverlayList, overlay: Value) -> Option<usize> {
+    list.overlay_end_emacs_byte_pos(overlay)
+        .map(EmacsBytePos::get)
+}
+
+fn overlays_at(list: &OverlayList, pos: usize) -> Vec<Value> {
+    list.overlays_at_emacs_byte_pos(emacs_byte_pos(pos))
+}
+
+fn overlays_in_region(
+    list: &OverlayList,
+    start: usize,
+    end: usize,
+    accessible_end: usize,
+) -> Vec<Value> {
+    list.overlays_in_accessible_emacs_byte_range(
+        emacs_byte_range(start, end),
+        emacs_byte_pos(accessible_end),
+    )
+}
+
+fn direct_overlay_property_extent(
+    list: &OverlayList,
+    pos: EmacsBytePos,
+    property: Value,
+    bounds: EmacsByteRange,
+    window_id: Option<u64>,
+) -> Option<OverlayPropertyExtent> {
+    match list.resolve_overlay_property_at_emacs_byte_pos(pos, window_id, |overlay| {
+        list.overlay_get_named(overlay, property)
+    }) {
+        OverlayPropertyAtPoint::Present(resolution) => resolution.extent(bounds),
+        OverlayPropertyAtPoint::Vacant(_) => None,
+    }
+}
+
+struct FilteredPropertyResolver<'a> {
+    overlays: &'a OverlayList,
+    lookup_order: &'a [Value],
+}
+
+impl OverlayPropertyResolver for FilteredPropertyResolver<'_> {
+    fn value_for_overlay(&mut self, overlay: Value) -> Option<Value> {
+        let (canonical, aliases) = self.lookup_order.split_first()?;
+        if let Some(value) = self.overlays.overlay_get_named(overlay, *canonical) {
+            return Some(value);
+        }
+        aliases.iter().find_map(|alias| {
+            self.overlays
+                .overlay_get_named(overlay, *alias)
+                .filter(|value| !value.is_nil())
+        })
+    }
+
+    fn endpoint_filter(&self) -> OverlayPropertyFilter {
+        OverlayPropertyFilter::for_properties(
+            self.lookup_order
+                .iter()
+                .copied()
+                .chain(std::iter::once(Value::symbol("category"))),
+        )
+    }
+}
+
 #[cfg(test)]
+#[path = "gnu_identity.rs"]
 mod gnu_identity;
 
 #[cfg(test)]

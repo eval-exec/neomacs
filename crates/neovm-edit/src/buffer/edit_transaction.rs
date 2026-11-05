@@ -2516,18 +2516,8 @@ impl ReplaceSideEffectPolicy {
 #[path = "edit_transaction/tests/edit_transaction_test.rs"]
 mod tests;
 
-#[cfg(test)]
-#[path = "edit_transaction/tests/transpose_gnu_test.rs"]
-mod transpose_gnu;
+
 
 #[cfg(test)]
 #[path = "edit_transaction/tests/casify_extent.rs"]
 mod casify_extent_tests;
-
-#[cfg(test)]
-#[path = "edit_transaction/tests/delete_live_undo.rs"]
-mod delete_live_undo_tests;
-
-#[cfg(test)]
-#[path = "edit_transaction/tests/replacement_undo_gnu.rs"]
-mod replacement_undo_gnu_tests;

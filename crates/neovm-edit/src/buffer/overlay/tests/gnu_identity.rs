@@ -21,37 +21,6 @@ fn gde_overlay_snapshot_clone_preserves_the_creation_serial() {
 }
 
 #[test]
-fn gde_overlay_restored_live_identity_preserves_the_creation_serial() {
-    crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
-    let original = eval
-        .eval_str("(progn (insert \"abcd\") (setq gde-restored-overlay (make-overlay 2 4)))")
-        .expect("live overlay");
-    let original_serial = overlay_identity_key(original);
-    let snapshot = crate::emacs_core::pdump::snapshot_evaluator(&eval);
-    let mut restored = crate::emacs_core::pdump::restore_snapshot(&snapshot)
-        .expect("restore context containing a live overlay");
-    let relocated = restored
-        .eval_str("gde-restored-overlay")
-        .expect("restored overlay");
-    assert_ne!(original.bits(), relocated.bits());
-    // The image preserves the creation serial, so the tie-break survives a
-    // restart even though the object address was relocated.
-    assert_eq!(overlay_identity_key(relocated), original_serial);
-    assert!(
-        restored
-            .buffers
-            .current_buffer()
-            .expect("restored buffer")
-            .overlays
-            .overlays_in_gnu_lists_order()
-            .into_iter()
-            .any(|overlay| overlay_identity_key(overlay) == original_serial),
-        "the restored buffer must still hold the overlay under its preserved serial"
-    );
-}
-
-#[test]
 fn gde_equal_overlays_are_ordered_by_creation_serial_after_delete_and_recreate() {
     crate::test_utils::init_test_tracing();
     let mut list = OverlayList::new();

@@ -3921,9 +3921,7 @@ mod tests;
 #[path = "tests/buffer_text_chain_test.rs"]
 mod chain_test;
 
-#[cfg(test)]
-#[path = "buffer_text/tests/fontification_noalloc.rs"]
-mod fontification_noalloc_tests;
+
 
 #[doc(hidden)]
 impl SyntaxSafePositions {
@@ -3968,3 +3966,7 @@ impl SyntaxSafeKey {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "buffer_text/tests/fontification_noalloc.rs"]
+mod fontification_noalloc_tests;

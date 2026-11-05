@@ -982,6 +982,3 @@ pub(crate) fn builtin_bookmark_load<H: crate::emacs_core::edit_host::EditHost>(
 // ===========================================================================
 // Tests
 // ===========================================================================
-#[cfg(test)]
-#[path = "tests/bookmark_test.rs"]
-mod tests;

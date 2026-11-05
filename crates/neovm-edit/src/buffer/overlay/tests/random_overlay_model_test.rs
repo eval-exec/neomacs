@@ -1,213 +1,7 @@
 //! Deterministic overlay mutation model and fixed GNU ordering checks.
 //! The vector model checks semantics, not B+ shape, allocation sizes or time.
+
 use super::*;
-
-#[derive(Clone, Copy)]
-struct ModelOverlay {
-    value: Value,
-    owner: usize,
-    start: usize,
-    end: usize,
-    front: bool,
-    rear: bool,
-    priority: i64,
-}
-
-fn next_random(state: &mut u64) -> u64 {
-    *state = state
-        .wrapping_mul(6_364_136_223_846_793_005)
-        .wrapping_add(1_442_695_040_888_963_407);
-    *state
-}
-
-fn identity_set(values: impl IntoIterator<Item = Value>) -> Vec<usize> {
-    let mut values: Vec<_> = values.into_iter().map(Value::bits).collect();
-    values.sort_unstable();
-    values
-}
-
-fn make_model_overlay(
-    lists: &mut [OverlayList; 2],
-    slot: usize,
-    owner: usize,
-    start: usize,
-    end: usize,
-    bits: u64,
-) -> ModelOverlay {
-    let value = alloc_overlay(start, end);
-    let _ = value.with_overlay_data_mut(|data| {
-        data.buffer = Some(BufferId(owner as u64 + 1));
-    });
-    let front = bits & 1 != 0;
-    let rear = bits & 2 != 0;
-    // Unique primary priorities make the independent numeric order total.
-    // Mix explicit nil, integer and cons priorities without modeling GNU's
-    // intentionally nontransitive equal-priority/nesting comparator here.
-    let priority = if slot == 0 { 0 } else { slot as i64 * 2 - 127 };
-    let property = if slot == 0 {
-        Value::NIL
-    } else if slot % 2 == 0 {
-        Value::cons(Value::fixnum(priority), Value::fixnum(slot as i64))
-    } else {
-        Value::fixnum(priority)
-    };
-    lists[owner].insert_overlay(value);
-    lists[owner].set_front_advance(value, front);
-    lists[owner].set_rear_advance(value, rear);
-    lists[owner]
-        .overlay_put(value, Value::symbol("priority"), property)
-        .unwrap();
-    ModelOverlay {
-        value,
-        owner,
-        start,
-        end,
-        front,
-        rear,
-        priority,
-    }
-}
-
-fn check_model(lists: &[OverlayList; 2], model: &[Option<ModelOverlay>], step: usize) {
-    for (owner, list) in lists.iter().enumerate() {
-        let live: Vec<_> = model
-            .iter()
-            .flatten()
-            .filter(|entry| entry.owner == owner)
-            .collect();
-        assert_eq!(
-            list.len(),
-            live.len(),
-            "membership count: step {step}, owner {owner}"
-        );
-        list.index.assert_invariants();
-        // This assertion is a membership set, not a fabricated GNU topology
-        // oracle. Fixed GNU fixtures below retain their exact vector order.
-        assert_eq!(
-            identity_set(list.overlays_in_gnu_lists_order()),
-            identity_set(live.iter().map(|entry| entry.value)),
-            "lists membership: step {step}, owner {owner}"
-        );
-        for entry in &live {
-            assert_eq!(
-                overlay_start(list, entry.value),
-                Some(entry.start),
-                "start: step {step}"
-            );
-            assert_eq!(
-                overlay_end(list, entry.value),
-                Some(entry.end),
-                "end: step {step}"
-            );
-            let data = entry.value.as_overlay_data().unwrap();
-            assert_eq!(
-                data.buffer,
-                Some(BufferId(owner as u64 + 1)),
-                "owner: step {step}"
-            );
-            assert_eq!(
-                (data.front_advance, data.rear_advance),
-                (entry.front, entry.rear)
-            );
-        }
-        let points: Vec<usize> = if step % 257 == 0 {
-            (0..=128).collect()
-        } else {
-            vec![0, 8, step.wrapping_mul(17) % 96, 64, 128]
-        };
-        for point in points {
-            let expected: Vec<_> = live
-                .iter()
-                .filter(|entry| entry.start <= point && point < entry.end)
-                .map(|entry| entry.value)
-                .collect();
-            let actual = overlays_at(list, point);
-            assert_eq!(
-                identity_set(actual.iter().copied()),
-                identity_set(expected),
-                "at: step {step}, owner {owner}, point {point}"
-            );
-            let mut sorted = actual;
-            list.sort_overlay_ids_by_priority_desc(&mut sorted);
-            let mut priority_expected: Vec<_> = live
-                .iter()
-                .filter(|entry| entry.start <= point && point < entry.end)
-                .collect();
-            priority_expected.sort_by_key(|entry| std::cmp::Reverse(entry.priority));
-            assert_eq!(
-                sorted.iter().copied().map(Value::bits).collect::<Vec<_>>(),
-                priority_expected
-                    .iter()
-                    .map(|entry| entry.value.bits())
-                    .collect::<Vec<_>>(),
-                "priority: step {step}, owner {owner}, point {point}"
-            );
-            let next = live
-                .iter()
-                .flat_map(|entry| [entry.start, entry.end])
-                .filter(|boundary| *boundary > point)
-                .min();
-            let previous = live
-                .iter()
-                .flat_map(|entry| [entry.start, entry.end])
-                .filter(|boundary| *boundary < point)
-                .max();
-            assert_eq!(
-                list.next_boundary_after_emacs_byte_pos(emacs_byte_pos(point))
-                    .map(EmacsBytePos::get),
-                next,
-                "next: step {step}, point {point}"
-            );
-            assert_eq!(
-                list.previous_boundary_before_emacs_byte_pos(emacs_byte_pos(point))
-                    .map(EmacsBytePos::get),
-                previous,
-                "previous: step {step}, point {point}"
-            );
-        }
-        // Independent half-open region model, with GNU's empty-overlay and
-        // accessible-end exceptions. Do not call production overlap helpers.
-        for (start, end, accessible_end) in
-            [(0, 128, 128), (8, 8, 128), (16, 32, 128), (16, 32, 32)]
-        {
-            let expected = live
-                .iter()
-                .filter(|entry| {
-                    if entry.start == entry.end {
-                        entry.start == start
-                            || (start < entry.start && entry.start < end)
-                            || (entry.start == end && end == accessible_end)
-                    } else if start == end {
-                        entry.start < start && start < entry.end
-                    } else {
-                        entry.start < end && entry.end > start
-                    }
-                })
-                .map(|entry| entry.value);
-            assert_eq!(
-                identity_set(overlays_in_region(list, start, end, accessible_end)),
-                identity_set(expected),
-                "in: step {step}, owner {owner}, range {start}..{end}"
-            );
-        }
-        if step % 257 == 0 {
-            let first = overlays_at(list, 8);
-            let second = overlays_at(list, 32);
-            let mut first_iter = list.iter_overlays_at_emacs_byte_pos(emacs_byte_pos(8));
-            let mut second_iter = list.iter_overlays_at_emacs_byte_pos(emacs_byte_pos(32));
-            for index in 0..=first.len().max(second.len()) {
-                assert_eq!(
-                    first_iter.next().map(Value::bits),
-                    first.get(index).copied().map(Value::bits)
-                );
-                assert_eq!(
-                    second_iter.next().map(Value::bits),
-                    second.get(index).copied().map(Value::bits)
-                );
-            }
-        }
-    }
-}
 
 #[test]
 fn overlay_make_move_delete_matches_bruteforce_10000_operations() {
@@ -405,4 +199,211 @@ fn overlay_equal_start_forced_order_survives_move_delete_and_refill() {
     list.insert_overlay(replacement);
     assert_eq!(overlays_at(&list, 3), vec![replacement]);
     list.index.assert_invariants();
+}
+
+#[derive(Clone, Copy)]
+struct ModelOverlay {
+    value: Value,
+    owner: usize,
+    start: usize,
+    end: usize,
+    front: bool,
+    rear: bool,
+    priority: i64,
+}
+
+fn next_random(state: &mut u64) -> u64 {
+    *state = state
+        .wrapping_mul(6_364_136_223_846_793_005)
+        .wrapping_add(1_442_695_040_888_963_407);
+    *state
+}
+
+fn make_model_overlay(
+    lists: &mut [OverlayList; 2],
+    slot: usize,
+    owner: usize,
+    start: usize,
+    end: usize,
+    bits: u64,
+) -> ModelOverlay {
+    let value = alloc_overlay(start, end);
+    let _ = value.with_overlay_data_mut(|data| {
+        data.buffer = Some(BufferId(owner as u64 + 1));
+    });
+    let front = bits & 1 != 0;
+    let rear = bits & 2 != 0;
+    // Unique primary priorities make the independent numeric order total.
+    // Mix explicit nil, integer and cons priorities without modeling GNU's
+    // intentionally nontransitive equal-priority/nesting comparator here.
+    let priority = if slot == 0 { 0 } else { slot as i64 * 2 - 127 };
+    let property = if slot == 0 {
+        Value::NIL
+    } else if slot % 2 == 0 {
+        Value::cons(Value::fixnum(priority), Value::fixnum(slot as i64))
+    } else {
+        Value::fixnum(priority)
+    };
+    lists[owner].insert_overlay(value);
+    lists[owner].set_front_advance(value, front);
+    lists[owner].set_rear_advance(value, rear);
+    lists[owner]
+        .overlay_put(value, Value::symbol("priority"), property)
+        .unwrap();
+    ModelOverlay {
+        value,
+        owner,
+        start,
+        end,
+        front,
+        rear,
+        priority,
+    }
+}
+
+fn check_model(lists: &[OverlayList; 2], model: &[Option<ModelOverlay>], step: usize) {
+    for (owner, list) in lists.iter().enumerate() {
+        let live: Vec<_> = model
+            .iter()
+            .flatten()
+            .filter(|entry| entry.owner == owner)
+            .collect();
+        assert_eq!(
+            list.len(),
+            live.len(),
+            "membership count: step {step}, owner {owner}"
+        );
+        list.index.assert_invariants();
+        // This assertion is a membership set, not a fabricated GNU topology
+        // oracle. Fixed GNU fixtures below retain their exact vector order.
+        assert_eq!(
+            identity_set(list.overlays_in_gnu_lists_order()),
+            identity_set(live.iter().map(|entry| entry.value)),
+            "lists membership: step {step}, owner {owner}"
+        );
+        for entry in &live {
+            assert_eq!(
+                overlay_start(list, entry.value),
+                Some(entry.start),
+                "start: step {step}"
+            );
+            assert_eq!(
+                overlay_end(list, entry.value),
+                Some(entry.end),
+                "end: step {step}"
+            );
+            let data = entry.value.as_overlay_data().unwrap();
+            assert_eq!(
+                data.buffer,
+                Some(BufferId(owner as u64 + 1)),
+                "owner: step {step}"
+            );
+            assert_eq!(
+                (data.front_advance, data.rear_advance),
+                (entry.front, entry.rear)
+            );
+        }
+        let points: Vec<usize> = if step % 257 == 0 {
+            (0..=128).collect()
+        } else {
+            vec![0, 8, step.wrapping_mul(17) % 96, 64, 128]
+        };
+        for point in points {
+            let expected: Vec<_> = live
+                .iter()
+                .filter(|entry| entry.start <= point && point < entry.end)
+                .map(|entry| entry.value)
+                .collect();
+            let actual = overlays_at(list, point);
+            assert_eq!(
+                identity_set(actual.iter().copied()),
+                identity_set(expected),
+                "at: step {step}, owner {owner}, point {point}"
+            );
+            let mut sorted = actual;
+            list.sort_overlay_ids_by_priority_desc(&mut sorted);
+            let mut priority_expected: Vec<_> = live
+                .iter()
+                .filter(|entry| entry.start <= point && point < entry.end)
+                .collect();
+            priority_expected.sort_by_key(|entry| std::cmp::Reverse(entry.priority));
+            assert_eq!(
+                sorted.iter().copied().map(Value::bits).collect::<Vec<_>>(),
+                priority_expected
+                    .iter()
+                    .map(|entry| entry.value.bits())
+                    .collect::<Vec<_>>(),
+                "priority: step {step}, owner {owner}, point {point}"
+            );
+            let next = live
+                .iter()
+                .flat_map(|entry| [entry.start, entry.end])
+                .filter(|boundary| *boundary > point)
+                .min();
+            let previous = live
+                .iter()
+                .flat_map(|entry| [entry.start, entry.end])
+                .filter(|boundary| *boundary < point)
+                .max();
+            assert_eq!(
+                list.next_boundary_after_emacs_byte_pos(emacs_byte_pos(point))
+                    .map(EmacsBytePos::get),
+                next,
+                "next: step {step}, point {point}"
+            );
+            assert_eq!(
+                list.previous_boundary_before_emacs_byte_pos(emacs_byte_pos(point))
+                    .map(EmacsBytePos::get),
+                previous,
+                "previous: step {step}, point {point}"
+            );
+        }
+        // Independent half-open region model, with GNU's empty-overlay and
+        // accessible-end exceptions. Do not call production overlap helpers.
+        for (start, end, accessible_end) in
+            [(0, 128, 128), (8, 8, 128), (16, 32, 128), (16, 32, 32)]
+        {
+            let expected = live
+                .iter()
+                .filter(|entry| {
+                    if entry.start == entry.end {
+                        entry.start == start
+                            || (start < entry.start && entry.start < end)
+                            || (entry.start == end && end == accessible_end)
+                    } else if start == end {
+                        entry.start < start && start < entry.end
+                    } else {
+                        entry.start < end && entry.end > start
+                    }
+                })
+                .map(|entry| entry.value);
+            assert_eq!(
+                identity_set(overlays_in_region(list, start, end, accessible_end)),
+                identity_set(expected),
+                "in: step {step}, owner {owner}, range {start}..{end}"
+            );
+        }
+        if step % 257 == 0 {
+            let first = overlays_at(list, 8);
+            let second = overlays_at(list, 32);
+            let mut first_iter = list.iter_overlays_at_emacs_byte_pos(emacs_byte_pos(8));
+            let mut second_iter = list.iter_overlays_at_emacs_byte_pos(emacs_byte_pos(32));
+            for index in 0..=first.len().max(second.len()) {
+                assert_eq!(
+                    first_iter.next().map(Value::bits),
+                    first.get(index).copied().map(Value::bits)
+                );
+                assert_eq!(
+                    second_iter.next().map(Value::bits),
+                    second.get(index).copied().map(Value::bits)
+                );
+            }
+        }
+    }
+}
+
+fn identity_set(values: impl IntoIterator<Item = Value>) -> Vec<usize> {
+    let mut values: Vec<_> = values.into_iter().map(Value::bits).collect();
+    values.sort_unstable();
+    values
 }

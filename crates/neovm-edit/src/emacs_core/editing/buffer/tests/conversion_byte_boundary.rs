@@ -1,5 +1,7 @@
 use super::super::lisp_string_advance_byte_to_boundary;
+
 use neovm_value::emacs_char;
+
 use neovm_value::heap_types::LispString;
 
 #[test]

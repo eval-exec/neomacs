@@ -5,3 +5,6 @@
 
 pub mod buffer;
 pub mod emacs_core;
+
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_utils;

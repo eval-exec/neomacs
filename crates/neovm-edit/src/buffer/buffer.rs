@@ -8695,13 +8695,9 @@ impl GcTrace for BufferManager {
 // Tests
 // ===========================================================================
 
-#[cfg(test)]
-#[path = "buffer/tests/buffer_test.rs"]
-mod tests;
 
-#[cfg(test)]
-#[path = "buffer/tests/world_storage_test.rs"]
-mod world_storage_tests;
+
+
 
 // Cold proof-1 collector projection; no change to the serial root walk.
 #[path = "parallel_roots.rs"]
@@ -8820,3 +8816,11 @@ impl ModeLineNumberAnchor {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "buffer/tests/buffer_test.rs"]
+mod tests;
+
+#[cfg(test)]
+#[path = "buffer/tests/world_storage_test.rs"]
+mod world_storage_tests;

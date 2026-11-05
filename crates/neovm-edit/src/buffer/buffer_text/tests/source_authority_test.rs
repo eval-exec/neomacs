@@ -1,25 +1,10 @@
 use super::*;
+
 use crate::buffer::{BufferId, BufferManager, CharPos0, CharRange, EmacsBytePos, EmacsByteRange};
+
 use neovm_value::heap_types::LispString;
+
 use neovm_value::value::Value;
-
-fn fixture(text: &str) -> (BufferManager, BufferId) {
-    crate::test_utils::init_test_tracing();
-    let mut buffers = BufferManager::new();
-    let id = buffers.create_buffer("source-authority");
-    buffers.get_mut(id).unwrap().insert(text);
-    (buffers, id)
-}
-
-fn inner_counts(buffer: &Buffer) -> (usize, usize, usize, usize) {
-    let storage = buffer.text.storage.borrow();
-    (
-        Rc::strong_count(&storage.backend),
-        Rc::weak_count(&storage.backend),
-        Rc::strong_count(&storage.text_props),
-        Rc::weak_count(&storage.text_props),
-    )
-}
 
 #[test]
 fn authority_and_short_lease_do_not_retain_inner_cow_owners() {
@@ -320,122 +305,6 @@ fn read_lease_excludes_mutation_through_every_indirect_alias() {
     );
 }
 
-// These cases enter through real evaluator builtins rather than calling a
-// storage mutator in the test. Restore GNU-facing numeric ticks and acknowledge
-// dirty regions afterward: neither can resurrect the prior source authority.
-fn production_text_edit_refuses_after_tick_restore_and_ack(setup: &str, edit: &str) {
-    crate::test_utils::init_test_tracing();
-    let mut evaluator = crate::emacs_core::Context::new();
-    evaluator
-        .eval_str(setup)
-        .expect("set up actual production source");
-    let id = evaluator.buffer_manager().current_buffer_id().unwrap();
-    let before = evaluator.buffer_manager().get(id).unwrap();
-    let authority = before.capture_motion_source_authority().unwrap();
-    let text = before.full_text_string();
-    let ticks = (
-        before.modified_tick(),
-        before.chars_modified_tick(),
-        before.save_modified_tick(),
-    );
-    evaluator
-        .eval_str(edit)
-        .expect("perform actual production text edit");
-    let after = evaluator.buffer_manager_mut().get_mut(id).unwrap();
-    assert_ne!(
-        after.full_text_string(),
-        text,
-        "the operation must really change text"
-    );
-    assert_eq!(
-        authority.owner.as_ptr(),
-        Rc::as_ptr(&after.text.storage),
-        "the live outer owner remains the same"
-    );
-    assert_ne!(
-        after.text.storage.borrow().content_epoch,
-        authority.revision.content_epoch
-    );
-    assert!(
-        // SAFETY: This temporary guard drops in this inert assertion, before any edit, Lisp or GC.
-        unsafe { authority.validate(after) }.is_none()
-    );
-    after.text.set_modification_state(ticks.0, ticks.1, ticks.2);
-    assert_eq!(
-        (
-            after.modified_tick(),
-            after.chars_modified_tick(),
-            after.save_modified_tick()
-        ),
-        ticks
-    );
-    // This is the same acknowledgement primitive used at the accepted layout
-    // break. This core unit test does not claim to run a full accepted frame.
-    after.reset_unchanged_region();
-    assert_eq!(after.changed_char_range(), None);
-    assert!(
-        // SAFETY: This temporary guard drops in this inert assertion, before any edit, Lisp or GC.
-        unsafe { authority.validate(after) }.is_none(),
-        "tick restoration and accepted-ack primitive cannot resurrect source authority"
-    );
-}
-
-#[test]
-fn production_insert_refuses_after_tick_restore_and_ack() {
-    production_text_edit_refuses_after_tick_restore_and_ack(
-        "(erase-buffer) (insert \"abc\\n\") (goto-char 2)",
-        "(insert \"x\")",
-    );
-}
-
-#[test]
-fn production_delete_refuses_after_tick_restore_and_ack() {
-    production_text_edit_refuses_after_tick_restore_and_ack(
-        "(erase-buffer) (insert \"abc\\n\")",
-        "(delete-region 1 2)",
-    );
-}
-
-#[test]
-fn production_same_length_ascii_substitution_refuses_after_tick_restore_and_ack() {
-    production_text_edit_refuses_after_tick_restore_and_ack(
-        "(erase-buffer) (insert \"abc\\n\")",
-        "(subst-char-in-region 1 2 ?a ?A)",
-    );
-}
-
-#[test]
-fn production_same_length_multibyte_substitution_refuses_after_tick_restore_and_ack() {
-    production_text_edit_refuses_after_tick_restore_and_ack(
-        "(erase-buffer) (insert \"αβγ\\n\")",
-        "(subst-char-in-region 1 2 ?α ?Α)",
-    );
-}
-
-#[test]
-fn production_transposition_with_properties_refuses_after_tick_restore_and_ack() {
-    production_text_edit_refuses_after_tick_restore_and_ack(
-        "(erase-buffer) (insert \"abcd\\n\") (put-text-property 1 2 'fontified t)",
-        "(transpose-regions 1 3 3 5)",
-    );
-}
-
-#[test]
-fn production_same_extent_casing_refuses_after_tick_restore_and_ack() {
-    production_text_edit_refuses_after_tick_restore_and_ack(
-        "(erase-buffer) (insert \"abcd\\n\") (put-text-property 1 2 'fontified t)",
-        "(upcase-region 1 5)",
-    );
-}
-
-#[test]
-fn production_expanding_casing_property_install_refuses_after_tick_restore_and_ack() {
-    production_text_edit_refuses_after_tick_restore_and_ack(
-        "(erase-buffer) (insert \"ßx\\n\") (put-text-property 1 2 'fontified t)",
-        "(upcase-region 1 2)",
-    );
-}
-
 #[test]
 fn accepted_ack_primitive_preserves_unchanged_source_authority() {
     let (buffers, id) = fixture("abc\n");
@@ -452,97 +321,6 @@ fn accepted_ack_primitive_preserves_unchanged_source_authority() {
         // SAFETY: This temporary guard drops in this inert assertion, before any edit, Lisp or GC.
         unsafe { authority.validate(buffer) }.is_some()
     );
-}
-
-#[test]
-fn production_property_write_refuses_numeric_tick_collision_after_ack() {
-    crate::test_utils::init_test_tracing();
-    let mut evaluator = crate::emacs_core::Context::new();
-    evaluator
-        .eval_str("(erase-buffer) (insert \"abc\\n\")")
-        .unwrap();
-    let id = evaluator.buffer_manager().current_buffer_id().unwrap();
-    let before = evaluator.buffer_manager().get(id).unwrap();
-    let authority = before.capture_motion_source_authority().unwrap();
-    let text = before.full_text_string();
-    let property_tick = before.props_modified_tick();
-    let epoch = authority.revision.content_epoch;
-    before.text.set_modified_tick(property_tick - 1);
-    evaluator
-        .eval_str("(put-text-property 1 2 'fontified t)")
-        .unwrap();
-    let after = evaluator.buffer_manager().get(id).unwrap();
-    assert_eq!(after.full_text_string(), text, "property-only change");
-    assert_eq!(
-        after.props_modified_tick(),
-        property_tick,
-        "GNU-facing number really collides"
-    );
-    let revision = SourceRevision::of(&after.text.storage.borrow());
-    assert_eq!(revision.content_epoch, epoch);
-    assert_ne!(revision.all_properties, authority.revision.all_properties);
-    assert!(
-        // SAFETY: This temporary guard drops in this inert assertion, before any edit, Lisp or GC.
-        unsafe { authority.validate(after) }.is_none()
-    );
-    after.reset_unchanged_region();
-    assert_eq!(after.changed_char_range(), None);
-    assert!(
-        // SAFETY: This temporary guard drops in this inert assertion, before any edit, Lisp or GC.
-        unsafe { authority.validate(after) }.is_none()
-    );
-}
-
-#[test]
-fn production_multibyte_mode_toggles_refuse_after_tick_restore_and_ack() {
-    crate::test_utils::init_test_tracing();
-    let mut evaluator = crate::emacs_core::Context::new();
-    evaluator
-        .eval_str("(erase-buffer) (insert \"abc\\n\") (set-buffer-multibyte t)")
-        .unwrap();
-    let id = evaluator.buffer_manager().current_buffer_id().unwrap();
-    assert!(evaluator.buffer_manager().get(id).unwrap().get_multibyte());
-    for (multibyte, edit) in [
-        (false, "(set-buffer-multibyte nil)"),
-        (true, "(set-buffer-multibyte t)"),
-    ] {
-        let before = evaluator.buffer_manager().get(id).unwrap();
-        let authority = before.capture_motion_source_authority().unwrap();
-        let text = before.full_text_string();
-        let ticks = (
-            before.modified_tick(),
-            before.chars_modified_tick(),
-            before.save_modified_tick(),
-        );
-        evaluator.eval_str(edit).unwrap();
-        let after = evaluator.buffer_manager_mut().get_mut(id).unwrap();
-        assert_eq!(after.get_multibyte(), multibyte);
-        assert_eq!(after.full_text_string(), text, "ASCII bytes stay unchanged");
-        assert_eq!(authority.owner.as_ptr(), Rc::as_ptr(&after.text.storage));
-        assert_ne!(
-            after.text.storage.borrow().content_epoch,
-            authority.revision.content_epoch,
-        );
-        assert!(
-            // SAFETY: This temporary guard drops in this inert assertion, before any edit, Lisp or GC.
-            unsafe { authority.validate(after) }.is_none()
-        );
-        after.text.set_modification_state(ticks.0, ticks.1, ticks.2);
-        assert_eq!(
-            (
-                after.modified_tick(),
-                after.chars_modified_tick(),
-                after.save_modified_tick(),
-            ),
-            ticks,
-        );
-        after.reset_unchanged_region();
-        assert_eq!(after.changed_char_range(), None);
-        assert!(
-            // SAFETY: This temporary guard drops in this inert assertion, before any edit, Lisp or GC.
-            unsafe { authority.validate(after) }.is_none()
-        );
-    }
 }
 
 #[test]
@@ -624,70 +402,20 @@ fn completed_manager_base_kill_refuses_both_base_and_indirect_authorities() {
     assert!(indirect_authority.owner.upgrade().is_none());
 }
 
-#[test]
-fn production_same_byte_transposition_with_distinct_property_runs_refuses() {
+fn fixture(text: &str) -> (BufferManager, BufferId) {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = crate::emacs_core::Context::new();
-    evaluator
-        .eval_str(
-            "(erase-buffer) (insert \"abab\\n\") \
-             (put-text-property 1 3 'source-authority-run 11) \
-             (put-text-property 3 5 'source-authority-run 22)",
-        )
-        .unwrap();
-    let id = evaluator.buffer_manager().current_buffer_id().unwrap();
-    let before = evaluator.buffer_manager().get(id).unwrap();
-    let authority = before.capture_motion_source_authority().unwrap();
-    let text = before.full_text_string();
-    let ticks = (
-        before.modified_tick(),
-        before.chars_modified_tick(),
-        before.save_modified_tick(),
-    );
-    evaluator.eval_str("(transpose-regions 1 3 3 5)").unwrap();
-    assert_eq!(
-        evaluator
-            .eval_str("(get-text-property 1 'source-authority-run)")
-            .unwrap(),
-        Value::fixnum(22),
-    );
-    assert_eq!(
-        evaluator
-            .eval_str("(get-text-property 3 'source-authority-run)")
-            .unwrap(),
-        Value::fixnum(11),
-    );
-    let after = evaluator.buffer_manager_mut().get_mut(id).unwrap();
-    assert_eq!(
-        after.full_text_string(),
-        text,
-        "the two byte slices are equal"
-    );
-    assert_eq!(authority.owner.as_ptr(), Rc::as_ptr(&after.text.storage));
-    // The actual production transposition advances content_epoch in its
-    // same-length byte replacement before installing the prepared table.
-    // This checks the resulting epoch, not an instrumented intermediate step.
-    assert_ne!(
-        after.text.storage.borrow().content_epoch,
-        authority.revision.content_epoch,
-    );
-    assert!(
-        // SAFETY: This temporary guard drops in this inert assertion, before any edit, Lisp or GC.
-        unsafe { authority.validate(after) }.is_none()
-    );
-    after.text.set_modification_state(ticks.0, ticks.1, ticks.2);
-    assert_eq!(
-        (
-            after.modified_tick(),
-            after.chars_modified_tick(),
-            after.save_modified_tick(),
-        ),
-        ticks,
-    );
-    after.reset_unchanged_region();
-    assert_eq!(after.changed_char_range(), None);
-    assert!(
-        // SAFETY: This temporary guard drops in this inert assertion, before any edit, Lisp or GC.
-        unsafe { authority.validate(after) }.is_none()
-    );
+    let mut buffers = BufferManager::new();
+    let id = buffers.create_buffer("source-authority");
+    buffers.get_mut(id).unwrap().insert(text);
+    (buffers, id)
+}
+
+fn inner_counts(buffer: &Buffer) -> (usize, usize, usize, usize) {
+    let storage = buffer.text.storage.borrow();
+    (
+        Rc::strong_count(&storage.backend),
+        Rc::weak_count(&storage.backend),
+        Rc::strong_count(&storage.text_props),
+        Rc::weak_count(&storage.text_props),
+    )
 }

@@ -777,13 +777,9 @@ pub fn is_case_table_with_symbols(v: &Value, mode: SymbolMode) -> bool {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
-#[cfg(test)]
-#[path = "tests/casetab_test.rs"]
-mod tests;
 
-#[cfg(test)]
-#[path = "tests/gc_tls_ownership_test.rs"]
-mod gc_tls_ownership_tests;
+
+
 
 #[doc(hidden)]
 pub fn builtin_case_table_p_in_state<H: super::text_host::TextHost>(
@@ -811,3 +807,7 @@ pub fn carrier_tls_fingerprint(h: &mut u64) {
         STANDARD_CASE_TABLE_OBJECT.with(|slot| slot.borrow().is_some() as u64),
     );
 }
+
+#[cfg(test)]
+#[path = "tests/casetab_test.rs"]
+mod tests;

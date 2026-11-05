@@ -2108,9 +2108,7 @@ impl GcTrace for OverlayList {
     }
 }
 
-#[cfg(test)]
-#[path = "overlay/tests/overlay_test.rs"]
-mod tests;
+
 
 /// Fold a Lisp value into `hasher` by CONTENT, following conses and strings.
 ///
@@ -2262,3 +2260,7 @@ impl OverlayModificationHook {
         self.overlay
     }
 }
+
+#[cfg(test)]
+#[path = "overlay/tests/overlay_test.rs"]
+mod tests;

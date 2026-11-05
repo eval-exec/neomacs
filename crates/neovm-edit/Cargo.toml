@@ -15,6 +15,7 @@ jit = ["neovm-value/jit"]
 # Numeric redisplay policy injection for dependent fixtures (stage-4 W5/E13:
 # the evaluator re-exports the guard, so the feature must reach this crate).
 redisplay-test-policy = []
+test-support = ["neovm-value/test-support", "dep:visibility"]
 
 [dependencies]
 neovm-value = { path = "../neovm-value" }
@@ -30,3 +31,7 @@ strum.workspace = true
 sysinfo.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+visibility = { version = "0.1.1", optional = true }
+
+[dev-dependencies]
+neovm-value = { path = "../neovm-value", features = ["test-support"] }

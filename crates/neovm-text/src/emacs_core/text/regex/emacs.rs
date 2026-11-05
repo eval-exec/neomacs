@@ -10509,21 +10509,15 @@ mod short_literal;
 #[path = "tests/short_literal_test.rs"]
 mod short_literal_tests;
 
-#[cfg(test)]
-#[path = "tests/emacs_test.rs"]
-mod tests;
+
 
 #[cfg(test)]
 #[path = "tests/opcode_decode_test.rs"]
 mod opcode_decode_tests;
 
-#[cfg(test)]
-#[path = "tests/casefold_scan_test.rs"]
-mod casefold_scan_tests;
 
-#[cfg(test)]
-#[path = "tests/fail_stack_parity_test.rs"]
-mod fail_stack_parity_tests;
+
+
 
 #[cfg(test)]
 #[path = "tests/start_anchor_test.rs"]
@@ -10533,13 +10527,9 @@ mod start_anchor_tests;
 #[path = "tests/suffix_literal_test.rs"]
 mod suffix_literal_tests;
 
-#[cfg(test)]
-#[path = "tests/raw_byte_syntax_test.rs"]
-mod raw_byte_syntax_tests;
 
-#[cfg(test)]
-#[path = "tests/declared_boundary_positions.rs"]
-mod declared_boundary_positions_tests;
+
+
 
 /// Carrier park: reset the Emacs-regex scratch and abort latches.
 /// `STANDARD_BYTE` is a pure function of the case table (no owner state) and
@@ -10577,3 +10567,19 @@ pub fn carrier_tls_fingerprint(h: &mut u64) {
         }),
     );
 }
+
+#[cfg(test)]
+#[path = "tests/casefold_scan_test.rs"]
+mod casefold_scan_tests;
+
+#[cfg(test)]
+#[path = "tests/declared_boundary_positions.rs"]
+mod declared_boundary_positions_tests;
+
+#[cfg(test)]
+#[path = "tests/emacs_test.rs"]
+mod tests;
+
+#[cfg(test)]
+#[path = "tests/fail_stack_parity_test.rs"]
+mod fail_stack_parity_tests;

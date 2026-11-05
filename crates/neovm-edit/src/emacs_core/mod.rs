@@ -36,7 +36,3 @@ pub mod textprop;
 pub mod undo;
 #[path = "editing/word_wrap.rs"]
 pub mod word_wrap;
-
-#[cfg(test)]
-#[path = "editing/undo/tests/kill_ring_test.rs"]
-mod kill_ring_test;

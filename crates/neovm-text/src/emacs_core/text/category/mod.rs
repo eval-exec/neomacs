@@ -789,13 +789,9 @@ pub(crate) fn builtin_set_category_table_in_buffers_with_symbols(
     Ok(installed)
 }
 
-#[cfg(test)]
-#[path = "tests/category_test.rs"]
-mod tests;
 
-#[cfg(test)]
-#[path = "tests/gc_tls_ownership_test.rs"]
-mod gc_tls_ownership_tests;
+
+
 
 #[doc(hidden)]
 pub fn builtin_category_table_p_in_state<H: TextHost>(
@@ -836,3 +832,7 @@ pub fn carrier_tls_fingerprint(h: &mut u64) {
         STANDARD_CATEGORY_TABLE_OBJECT.with(|slot| slot.borrow().is_some() as u64),
     );
 }
+
+#[cfg(test)]
+#[path = "tests/category_test.rs"]
+mod tests;

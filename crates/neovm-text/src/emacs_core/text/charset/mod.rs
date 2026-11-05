@@ -3108,17 +3108,11 @@ fn classify_string_charsets(ls: &neovm_value::heap_types::LispString) -> Vec<&'s
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
-#[cfg(test)]
-#[path = "tests/charset_test.rs"]
-mod tests;
 
-#[cfg(test)]
-#[path = "tests/gc_tls_ownership_test.rs"]
-mod gc_tls_ownership_tests;
 
-#[cfg(test)]
-#[path = "tests/positioned_dispatch_test.rs"]
-mod positioned_dispatch_tests;
+
+
+
 
 /// Carrier park: forget the installed registry handle (a plain store). The
 /// World's registry stays alive through its Contexts; the idle carrier keeps
@@ -3147,3 +3141,7 @@ pub fn carrier_tls_fingerprint(h: &mut u64) {
     // architecture test covers its classification.
     neovm_value::tls_fingerprint::mix(h, 0);
 }
+
+#[cfg(test)]
+#[path = "tests/charset_test.rs"]
+mod tests;

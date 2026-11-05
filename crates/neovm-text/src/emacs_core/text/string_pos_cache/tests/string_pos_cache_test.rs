@@ -1,32 +1,10 @@
 use neovm_value::emacs_char;
-use neovm_value::heap_types::LispString;
-use neovm_value::string_pos_cache::*;
-use neovm_value::value::Value;
 
-/// A multibyte string mixing 1- to 4-byte characters and raw bytes.
-fn mixed_bytes(seed: u64, chars: usize) -> Vec<u8> {
-    let mut state = seed;
-    let mut next = || {
-        state = state
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
-        (state >> 33) as u32
-    };
-    let mut bytes = Vec::new();
-    for _ in 0..chars {
-        let code = match next() % 6 {
-            0 | 1 => b'a' as u32 + next() % 26,
-            2 => 0x430 + next() % 32,   // Cyrillic, 2 bytes
-            3 => 0x3042 + next() % 80,  // Hiragana, 3 bytes
-            4 => 0x1F600 + next() % 64, // emoji, 4 bytes
-            _ => emacs_char::byte8_to_char(0x80 + (next() % 128) as u8), // raw byte
-        };
-        let mut buf = [0u8; emacs_char::MAX_MULTIBYTE_LENGTH];
-        let len = emacs_char::char_string(code, &mut buf);
-        bytes.extend_from_slice(&buf[..len]);
-    }
-    bytes
-}
+use neovm_value::heap_types::LispString;
+
+use neovm_value::string_pos_cache::*;
+
+use neovm_value::value::Value;
 
 #[test]
 fn cached_conversions_agree_with_a_scan_from_the_start() {
@@ -153,41 +131,27 @@ fn clear_string_invalidates_cached_pair_after_shape_change() {
     );
 }
 
-#[test]
-fn never_stores_while_the_notification_hook_is_uninstalled() {
-    crate::test_utils::init_test_tracing();
-    // No Context is constructed in this process, and the hook is published
-    // only by the evaluator's one-time seams, so the cache must refuse to
-    // fill. A mutation that therefore skipped notification cannot leave a
-    // stale entry behind.
-    assert!(
-        !neovm_value::heap_types::string_bytes_changed_hook_installed(),
-        "this test needs a process with no evaluator-constructed hook"
-    );
-    reset_string_pos_cache();
-    let value = Value::heap_string(LispString::from_emacs_bytes("aжжb".as_bytes().to_vec()));
-    let original_ptr = value.as_lisp_string().expect("string").as_bytes().as_ptr();
-    let original_sbytes = value.as_lisp_string().expect("string").sbytes();
-    // This conversion would normally fill the cache; it must compute uncached.
-    assert_eq!(
-        string_char_to_byte(value, value.as_lisp_string().unwrap(), 2),
-        3
-    );
-    assert!(
-        cached_pair(value, value.as_lisp_string().unwrap()).is_none(),
-        "the cache must not store while the byte-mutation hook is uninstalled"
-    );
-    // The same object, SBYTES and data pointer, different character
-    // boundaries: a stored pair would now be stale.
-    value.with_lisp_string_mut(|string| {
-        string.mutate_bytes(|bytes| {
-            bytes.clear();
-            bytes.extend_from_slice("жaжb".as_bytes());
-        })
-    });
-    let changed = value.as_lisp_string().expect("string");
-    assert_eq!(changed.as_bytes().as_ptr(), original_ptr);
-    assert_eq!(changed.sbytes(), original_sbytes);
-    assert_eq!(string_char_to_byte(value, changed, 1), 2);
-    assert!(cached_pair(value, changed).is_none());
+/// A multibyte string mixing 1- to 4-byte characters and raw bytes.
+fn mixed_bytes(seed: u64, chars: usize) -> Vec<u8> {
+    let mut state = seed;
+    let mut next = || {
+        state = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        (state >> 33) as u32
+    };
+    let mut bytes = Vec::new();
+    for _ in 0..chars {
+        let code = match next() % 6 {
+            0 | 1 => b'a' as u32 + next() % 26,
+            2 => 0x430 + next() % 32,   // Cyrillic, 2 bytes
+            3 => 0x3042 + next() % 80,  // Hiragana, 3 bytes
+            4 => 0x1F600 + next() % 64, // emoji, 4 bytes
+            _ => emacs_char::byte8_to_char(0x80 + (next() % 128) as u8), // raw byte
+        };
+        let mut buf = [0u8; emacs_char::MAX_MULTIBYTE_LENGTH];
+        let len = emacs_char::char_string(code, &mut buf);
+        bytes.extend_from_slice(&buf[..len]);
+    }
+    bytes
 }

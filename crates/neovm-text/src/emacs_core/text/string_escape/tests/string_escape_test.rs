@@ -1,17 +1,4 @@
 use super::*;
-use crate::emacs_core::print::PrintOptions;
-use crate::emacs_core::print::string_format::format_lisp_string_bytes_inner;
-
-// Test-only helpers that restore the default-options ergonomics of the
-// deleted format_lisp_string / format_lisp_string_bytes shims.
-fn format_lisp_string_with_options_default(s: &str) -> String {
-    String::from_utf8_lossy(&format_lisp_string_bytes_inner(s, &PrintOptions::default()))
-        .into_owned()
-}
-
-fn format_lisp_string_bytes_default(s: &str) -> Vec<u8> {
-    format_lisp_string_bytes_inner(s, &PrintOptions::default())
-}
 
 #[test]
 fn passes_through_control_chars_by_default() {
@@ -166,4 +153,13 @@ fn nerd_font_pua_glyphs_are_not_unibyte_sentinels_issue_131() {
     let unibyte = bytes_to_unibyte_storage_string(&[0x80, 0xFF]);
     assert!(storage_string_contains_unibyte_bytes(&unibyte));
     assert_eq!(decode_storage_char_codes(&unibyte, false), vec![0x80, 0xFF]);
+}
+
+fn format_lisp_string_with_options_default(s: &str) -> String {
+    String::from_utf8_lossy(&format_lisp_string_bytes_inner(s, &PrintOptions::default()))
+        .into_owned()
+}
+
+fn format_lisp_string_bytes_default(s: &str) -> Vec<u8> {
+    format_lisp_string_bytes_inner(s, &PrintOptions::default())
 }

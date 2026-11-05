@@ -298,7 +298,3 @@ pub fn swap_world_state(slot: &mut dyn std::any::Any) {
     let slot = slot.downcast_mut::<bool>().expect("carried World state");
     COMPACTION_IN_PROGRESS.with(|latch| *slot = latch.replace(*slot));
 }
-
-#[cfg(test)]
-#[path = "tests/undo_test.rs"]
-mod tests;

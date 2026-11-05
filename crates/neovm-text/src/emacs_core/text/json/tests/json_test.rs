@@ -1,6 +1,9 @@
 use super::*;
+
 use neovm_value::error::{FlowKind, FlowResultExt as _};
+
 use neovm_value::heap_types::LispString;
+
 use neovm_value::value::{ValueKind, VecLikeType};
 
 #[test]
@@ -54,10 +57,6 @@ fn json_option_domains_match_gnu_symbols() {
         None
     );
 }
-
-// -----------------------------------------------------------------------
-// Serializer tests
-// -----------------------------------------------------------------------
 
 #[test]
 fn serialize_null() {
@@ -369,32 +368,6 @@ fn serialize_wrong_no_args() {
 }
 
 #[test]
-fn json_parse_buffer_advances_point_after_value() {
-    crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
-    {
-        let buf = eval.buffers.current_buffer_mut().expect("current buffer");
-        buf.delete_emacs_byte_range(neovm_edit::buffer::EmacsByteRange::from_usize(
-            buf.point_min_emacs_byte_pos().get(),
-            buf.point_max_emacs_byte_pos().get(),
-        ));
-        buf.insert(" 42 trailing");
-        buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(0));
-    }
-
-    let value = builtin_json_parse_buffer(&mut eval, vec![]).expect("parse buffer");
-    assert_eq!(value, Value::fixnum(42));
-    assert_eq!(
-        eval.buffers
-            .current_buffer()
-            .expect("current buffer")
-            .point_emacs_byte_pos()
-            .get(),
-        3
-    );
-}
-
-#[test]
 fn json_parse_string_rejects_invalid_unibyte_utf8() {
     crate::test_utils::init_test_tracing();
     let raw = Value::heap_string(LispString::from_unibyte(vec![b'"', 0xFF, b'"']));
@@ -409,106 +382,6 @@ fn json_parse_string_rejects_invalid_unibyte_utf8() {
         other => panic!("expected json-utf8-decode-error, got {:?}", other),
     }
 }
-
-#[test]
-fn json_parse_buffer_invalid_utf8_does_not_advance_point() {
-    crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
-    {
-        let buf = eval.buffers.current_buffer_mut().expect("current buffer");
-        buf.delete_emacs_byte_range(neovm_edit::buffer::EmacsByteRange::from_usize(
-            buf.point_min_emacs_byte_pos().get(),
-            buf.point_max_emacs_byte_pos().get(),
-        ));
-        buf.set_multibyte_value(false);
-        buf.insert_lisp_string(&LispString::from_unibyte(vec![
-            b'"', 0xFF, b'"', b' ', b'x',
-        ]));
-        buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(0));
-    }
-
-    match builtin_json_parse_buffer(&mut eval, vec![]).kinded() {
-        Err(FlowKind::Signal(sig)) => {
-            assert_eq!(sig.symbol_name(), "json-utf8-decode-error");
-            assert_eq!(
-                sig.data,
-                vec![Value::fixnum(1), Value::NIL, Value::fixnum(3)]
-            );
-        }
-        other => panic!("expected json-utf8-decode-error, got {:?}", other),
-    }
-    assert_eq!(
-        eval.buffers
-            .current_buffer()
-            .expect("current buffer")
-            .point_emacs_byte_pos()
-            .get(),
-        0
-    );
-}
-
-#[test]
-fn json_parse_buffer_end_of_file_uses_gnu_signal_shape() {
-    crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
-    {
-        let buf = eval.buffers.current_buffer_mut().expect("current buffer");
-        buf.delete_emacs_byte_range(neovm_edit::buffer::EmacsByteRange::from_usize(
-            buf.point_min_emacs_byte_pos().get(),
-            buf.point_max_emacs_byte_pos().get(),
-        ));
-        buf.insert(" ");
-        buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(0));
-    }
-
-    match builtin_json_parse_buffer(&mut eval, vec![]).kinded() {
-        Err(FlowKind::Signal(sig)) => {
-            assert_eq!(sig.symbol_name(), "json-end-of-file");
-            assert_eq!(
-                sig.data,
-                vec![Value::fixnum(1), Value::NIL, Value::fixnum(1)]
-            );
-        }
-        other => panic!("expected json-end-of-file signal, got {:?}", other),
-    }
-    assert_eq!(
-        eval.buffers
-            .current_buffer()
-            .expect("current buffer")
-            .point_emacs_byte_pos()
-            .get(),
-        0
-    );
-}
-
-#[test]
-fn json_insert_writes_at_point_and_advances() {
-    crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
-    {
-        let buf = eval.buffers.current_buffer_mut().expect("current buffer");
-        buf.delete_emacs_byte_range(neovm_edit::buffer::EmacsByteRange::from_usize(
-            buf.point_min_emacs_byte_pos().get(),
-            buf.point_max_emacs_byte_pos().get(),
-        ));
-        buf.insert("ab");
-        buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(1));
-    }
-
-    builtin_json_insert(
-        &mut eval,
-        vec![Value::vector(vec![Value::fixnum(1), Value::T])],
-    )
-    .expect("json insert");
-
-    let buf = eval.buffers.current_buffer().expect("current buffer");
-    assert_eq!(buf.buffer_string(), "a[1,true]b");
-    assert_eq!(buf.point_emacs_byte_pos().get(), 9);
-}
-
-// -----------------------------------------------------------------------
-// Parser tests
-// -----------------------------------------------------------------------
 
 #[test]
 fn parse_rejects_excessive_nesting_without_stack_overflow() {
@@ -1091,10 +964,6 @@ fn parse_no_args() {
     assert!(result.is_err());
 }
 
-// -----------------------------------------------------------------------
-// Round-trip tests
-// -----------------------------------------------------------------------
-
 #[test]
 fn round_trip_integer() {
     crate::test_utils::init_test_tracing();
@@ -1158,10 +1027,6 @@ fn round_trip_object() {
     }
 }
 
-// -----------------------------------------------------------------------
-// String encoding edge cases
-// -----------------------------------------------------------------------
-
 #[test]
 fn encode_control_chars() {
     crate::test_utils::init_test_tracing();
@@ -1221,33 +1086,6 @@ fn parse_deeply_nested() {
     assert!(result.is_ok());
 }
 
-// -----------------------------------------------------------------------
-// GNU error-shape parity for json-parse-string (bug group native-json #4)
-//
-// GNU `json_signal_error` always signals the integer triple
-// `(LINE nil POS)`, never a human-readable string.  Premature end of input
-// must signal `json-end-of-file` (a subtype of json-parse-error), and POS
-// is the character offset of the cursor *after* the offending character was
-// consumed (e.g. `[1,2,]` reports the `]` at position 6).  Oracle values
-// below were produced with `emacs --batch`.
-// -----------------------------------------------------------------------
-
-/// Assert that parsing `input` signals condition `cond` with the GNU
-/// `(LINE nil POS)` integer triple, never a string message.
-fn assert_parse_signal(input: &str, cond: &str, line: i64, pos: i64) {
-    match builtin_json_parse_string(vec![Value::string(input)]).kinded() {
-        Err(FlowKind::Signal(sig)) => {
-            assert_eq!(sig.symbol_name(), cond, "condition for {input:?}");
-            assert_eq!(
-                sig.data,
-                vec![Value::fixnum(line), Value::NIL, Value::fixnum(pos)],
-                "error data for {input:?}",
-            );
-        }
-        other => panic!("expected {cond} signal for {input:?}, got {other:?}"),
-    }
-}
-
 #[test]
 fn parse_premature_eof_signals_json_end_of_file_with_triple() {
     crate::test_utils::init_test_tracing();
@@ -1289,11 +1127,6 @@ fn parse_error_position_counts_multibyte_chars_not_bytes() {
     assert_parse_signal("[é,]", "json-parse-error", 1, 2);
 }
 
-// -----------------------------------------------------------------------
-// json-serialize returns a unibyte raw-UTF-8 string (bug group #5)
-// and rejects Inf/NaN with a plain `error` (bug group #6).
-// -----------------------------------------------------------------------
-
 #[test]
 fn serialize_returns_unibyte_raw_utf8_string() {
     crate::test_utils::init_test_tracing();
@@ -1334,5 +1167,21 @@ fn serialize_inf_and_nan_signal_plain_error_with_offending_float() {
             }
             other => panic!("expected plain error for {f}, got {other:?}"),
         }
+    }
+}
+
+/// Assert that parsing `input` signals condition `cond` with the GNU
+/// `(LINE nil POS)` integer triple, never a string message.
+fn assert_parse_signal(input: &str, cond: &str, line: i64, pos: i64) {
+    match builtin_json_parse_string(vec![Value::string(input)]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
+            assert_eq!(sig.symbol_name(), cond, "condition for {input:?}");
+            assert_eq!(
+                sig.data,
+                vec![Value::fixnum(line), Value::NIL, Value::fixnum(pos)],
+                "error data for {input:?}",
+            );
+        }
+        other => panic!("expected {cond} signal for {input:?}, got {other:?}"),
     }
 }

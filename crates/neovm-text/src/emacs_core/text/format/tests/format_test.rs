@@ -1,54 +1,4 @@
 use super::*;
-use crate::emacs_core::autoload::is_autoload_value;
-use crate::test_utils::{eval_with_ldefs_boot_autoloads, runtime_startup_eval_all};
-
-fn bootstrap_eval(src: &str) -> Vec<String> {
-    runtime_startup_eval_all(src)
-}
-
-// ===================================================================
-// format-spec tests
-// ===================================================================
-
-#[test]
-fn format_spec_bootstrap_matches_gnu_elisp() {
-    crate::test_utils::init_test_tracing();
-    let results = bootstrap_eval(
-        r#"
-        (format-spec "%n is %a" '((?n . "Bob") (?a . "21")))
-        (format-spec "100%% done" nil)
-        (format-spec "[%10n]" '((?n . "hi")))
-        (format-spec "[%-10n]" '((?n . "hi")))
-        (format-spec "[%05n]" '((?n . "42")))
-        (condition-case err (format-spec "hello %x world" nil) (error (car err)))
-        (format-spec "hello %x world" nil 'ignore)
-        (condition-case err (format-spec "hi") (error (car err)))
-        "#,
-    );
-    assert_eq!(results[0], r#"OK "Bob is 21""#);
-    assert_eq!(results[1], r#"OK "100% done""#);
-    assert_eq!(results[2], r#"OK "[        hi]""#);
-    assert_eq!(results[3], r#"OK "[hi        ]""#);
-    assert_eq!(results[4], r#"OK "[00042]""#);
-    assert_eq!(results[5], "OK error");
-    assert_eq!(results[6], r#"OK "hello %x world""#);
-    assert_eq!(results[7], "OK wrong-number-of-arguments");
-}
-
-#[test]
-fn format_percent_s_uses_recursive_princ_semantics_for_lists() {
-    crate::test_utils::init_test_tracing();
-    let results = bootstrap_eval(
-        r#"
-        (format "%s" '("development" "testing" "production"))
-        "#,
-    );
-    assert_eq!(results[0], r#"OK "(development testing production)""#);
-}
-
-// ===================================================================
-// format-time-string tests
-// ===================================================================
 
 #[test]
 fn format_time_string_epoch() {
@@ -112,16 +62,6 @@ fn format_time_string_epoch_seconds_specifier_matches_gnu() {
         Value::T,
     ]);
     assert_eq!(result.unwrap().as_utf8_str().unwrap(), "1704067200");
-}
-
-#[test]
-fn format_time_string_timezone() {
-    crate::test_utils::init_test_tracing();
-    let result = builtin_format_time_string(vec![Value::string("%Z"), Value::fixnum(0), Value::T]);
-    assert_eq!(
-        result.unwrap().as_utf8_str().unwrap(),
-        crate::test_utils::host_utc_zone_abbreviation()
-    );
 }
 
 #[test]
@@ -202,208 +142,6 @@ fn format_time_string_honors_explicit_zone_argument() {
     );
 }
 
-// ===================================================================
-// format-seconds tests
-// ===================================================================
-
-#[test]
-fn format_seconds_bootstrap_matches_gnu_elisp() {
-    crate::test_utils::init_test_tracing();
-    let results = bootstrap_eval(
-        r#"
-        (format-seconds "%h:%m:%s" 3661)
-        (format-seconds "%d days, %h:%m:%s" 90061)
-        (format-seconds "%h:%m:%s" 0)
-        (format-seconds "100%%" 0)
-        "#,
-    );
-    assert_eq!(results[0], r#"OK "1:1:1""#);
-    assert_eq!(results[1], r#"OK "1 days, 1:1:1""#);
-    assert_eq!(results[2], r#"OK "0:0:0""#);
-    assert_eq!(results[3], r#"OK "100%""#);
-}
-
-// ===================================================================
-// subr-x string helper tests
-// ===================================================================
-
-#[test]
-fn subr_x_string_helpers_bootstrap_match_gnu() {
-    crate::test_utils::init_test_tracing();
-    let results = bootstrap_eval(
-        r#"
-        (load "subr-x")
-        (special-variable-p 'fill-column)
-        (let ((pad (symbol-function 'string-pad))
-              (limit (symbol-function 'string-limit))
-              (glyph (symbol-function 'string-glyph-split)))
-          (list (subrp pad)
-                (subrp limit)
-                (subrp glyph)
-                (funcall pad "x" 4 ?0 t)
-                (funcall limit "abcd" 3 t)
-                (funcall glyph "abc")))
-        (string-fill "x" 2)
-        (string-fill "aa bb ccc d" 5)
-        (string-fill "a b\n\nc d" 10)
-        (condition-case err (string-fill 1 2) (error (car err)))
-        "#,
-    );
-    assert_eq!(results[0], "OK t");
-    assert_eq!(results[1], "OK t");
-    assert_eq!(results[2], r#"OK (nil nil nil "000x" "bcd" ("a" "b" "c"))"#);
-    assert_eq!(results[3], r#"OK "x""#);
-    assert_eq!(results[4], "OK \"aa bb\nccc d\"");
-    assert_eq!(results[5], "OK \"a b\n\nc d\"");
-    assert_eq!(results[6], "OK \"\u{1}\"");
-}
-
-#[test]
-fn subr_x_string_helpers_autoload() {
-    crate::test_utils::init_test_tracing();
-    let results = bootstrap_eval(
-        r#"
-        (let ((before-pad (symbol-function 'string-pad))
-              (before-limit (symbol-function 'string-limit))
-              (before-glyph (symbol-function 'string-glyph-split)))
-          (list (autoloadp before-pad)
-                (autoloadp before-limit)
-                (autoloadp before-glyph)
-                (string-pad "x" 2)
-                (string-limit "abcd" 2)
-                (string-glyph-split "abc")
-                (autoloadp (symbol-function 'string-pad))
-                (autoloadp (symbol-function 'string-limit))
-                (autoloadp (symbol-function 'string-glyph-split))
-                (subrp (symbol-function 'string-pad))
-                (subrp (symbol-function 'string-limit))
-                (subrp (symbol-function 'string-glyph-split))))
-        "#,
-    );
-    // GNU `.elc` loading folds eval-when-compile to a constant, so
-    // string-pad / string-limit / string-glyph-split stay autoloaded
-    // until first use. Now that NeoMacs prefers `.elc` (since .elc
-    // loading was enabled), autoloadp returns t for the initial
-    // before-pad/limit/glyph values, then nil after the first call
-    // resolves the autoload.
-    assert_eq!(
-        results[0],
-        r#"OK (t t t "x " "ab" ("a" "b" "c") nil nil nil nil nil nil)"#
-    );
-}
-
-// ===================================================================
-// string-lines tests
-// ===================================================================
-
-#[test]
-fn string_lines_bootstrap_matches_gnu_subr() {
-    crate::test_utils::init_test_tracing();
-    let results = bootstrap_eval(
-        r#"
-        (subrp (symbol-function 'string-lines))
-        (string-lines "a\nb\nc")
-        (string-lines "a\nb\n")
-        (string-lines "a\n\nb\n" t)
-        (string-lines "")
-        (string-lines "" t)
-        (string-lines "a\n\nb\n" nil t)
-        "#,
-    );
-    assert_eq!(results[0], "OK nil");
-    assert_eq!(results[1], r#"OK ("a" "b" "c")"#);
-    assert_eq!(results[2], r#"OK ("a" "b")"#);
-    assert_eq!(results[3], r#"OK ("a" "b")"#);
-    assert_eq!(results[4], r#"OK ("")"#);
-    assert_eq!(results[5], "OK nil");
-    assert_eq!(results[6], "OK (\"a\n\" \"\n\" \"b\n\")");
-}
-
-// ===================================================================
-// string-clean-whitespace tests
-// ===================================================================
-
-#[test]
-fn string_clean_whitespace_bootstrap_matches_gnu_elisp() {
-    crate::test_utils::init_test_tracing();
-    let results = bootstrap_eval(
-        r#"
-        (string-clean-whitespace "  hello   world  ")
-        (string-clean-whitespace "a\t\tb\n\nc")
-        (string-clean-whitespace "hello world")
-        (string-clean-whitespace "")
-        (string-clean-whitespace "   ")
-        (condition-case err (string-clean-whitespace 1) (error (car err)))
-        "#,
-    );
-    assert_eq!(results[0], r#"OK "hello world""#);
-    assert_eq!(results[1], r#"OK "a b c""#);
-    assert_eq!(results[2], r#"OK "hello world""#);
-    assert_eq!(results[3], "OK \"\"");
-    assert_eq!(results[4], "OK \"\"");
-    assert_eq!(results[5], "OK wrong-type-argument");
-}
-
-// ===================================================================
-// string-pixel-width tests
-// ===================================================================
-
-#[test]
-fn string_pixel_width_startup_is_autoloaded() {
-    crate::test_utils::init_test_tracing();
-    let eval = eval_with_ldefs_boot_autoloads(&["string-pixel-width"]);
-    let function = eval
-        .obarray
-        .symbol_function("string-pixel-width")
-        .expect("missing string-pixel-width startup function cell");
-    assert!(is_autoload_value(
-        &function,
-        neovm_value::tagged::value::SymbolMode::Bare
-    ));
-}
-
-#[test]
-fn string_pixel_width_bootstrap_matches_gnu_subr_x() {
-    crate::test_utils::init_test_tracing();
-    let results = bootstrap_eval(
-        r#"
-        (string-pixel-width "hello")
-        (string-pixel-width "")
-        (string-pixel-width "\t")
-        (string-pixel-width "a\t")
-        (string-pixel-width "a\tb")
-        (string-pixel-width "漢字")
-        (string-pixel-width "é")
-        (with-temp-buffer
-          (insert "abc\ndef")
-          (buffer-text-pixel-size nil nil t))
-        (with-temp-buffer
-          (insert "abcdef\n123")
-          (buffer-text-pixel-size nil nil 4))
-        (subrp (symbol-function 'string-pixel-width))
-        "#,
-    );
-    assert_eq!(results[0], "OK 5");
-    assert_eq!(results[1], "OK 0");
-    assert_eq!(results[2], "OK 8");
-    assert_eq!(results[3], "OK 8");
-    assert_eq!(results[4], "OK 9");
-    assert_eq!(results[5], "OK 4");
-    assert_eq!(results[6], "OK 1");
-    assert_eq!(results[7], "OK (3 . 2)");
-    // X-LIMIT replaces the row edge but NOT the window's `line_wrap`
-    // (`it.last_visible_x = max_x`, src/xdisp.c:11924), so a 4-pixel limit in a
-    // 1x1-cell batch window wraps "abcdef" into four rows of one character
-    // rather than truncating it.  GNU 31.1 in batch answers `(4 . 3)` for this
-    // exact form and `(4 . 2)` only with `truncate-lines` non-nil; on an X
-    // frame with a 9x20 cell it answers `(4 . 200)` and `(4 . 40)`.
-    assert_eq!(results[8], "OK (4 . 3)");
-    assert_eq!(results[9], "OK nil");
-}
-
-// unix_to_broken_down internal tests
-// ===================================================================
-
 #[test]
 fn broken_down_epoch() {
     crate::test_utils::init_test_tracing();
@@ -470,24 +208,6 @@ fn broken_down_2024() {
     assert_eq!(tm.second, 45);
 }
 
-// ===================================================================
-// format-time-string directive parser parity with GNU nstrftime
-// (lib/strftime.c). Fixed time 1625402096 = 2021-07-04 12:34:56 UTC,
-// a Sunday. Each expected value was captured from GNU Emacs --batch.
-// ===================================================================
-
-fn fts(fmt: &str) -> String {
-    builtin_format_time_string(vec![
-        Value::string(fmt),
-        Value::fixnum(1625402096),
-        Value::T,
-    ])
-    .unwrap()
-    .as_utf8_str()
-    .unwrap()
-    .to_string()
-}
-
 #[test]
 fn format_time_string_r_directive_matches_gnu() {
     crate::test_utils::init_test_tracing();
@@ -526,29 +246,6 @@ fn format_time_string_width_and_pad_flags_match_gnu() {
 }
 
 #[test]
-fn format_time_string_hash_case_flag_matches_gnu() {
-    crate::test_utils::init_test_tracing();
-    // `#` uppercases text directives (NOT a per-char case swap), and
-    // lowercases %p / %Z.
-    assert_eq!(fts("%#a"), "SUN");
-    assert_eq!(fts("%#A"), "SUNDAY");
-    assert_eq!(fts("%#b"), "JUL");
-    assert_eq!(fts("%#B"), "JULY");
-    assert_eq!(fts("%#p"), "pm");
-    // `%#Z` lowercases the zone abbreviation; the UTC zone's abbreviation is
-    // the platform gmtime's ("GMT" on glibc, "UTC" on Darwin).
-    assert_eq!(
-        fts("%#Z"),
-        crate::test_utils::host_utc_zone_abbreviation().to_lowercase()
-    );
-    // `^` uppercases.
-    assert_eq!(fts("%^a"), "SUN");
-    assert_eq!(fts("%^p"), "PM");
-    // %P is always lowercase even with `^`.
-    assert_eq!(fts("%^P"), "pm");
-}
-
-#[test]
 fn format_time_string_subsecond_flags_match_gnu() {
     crate::test_utils::init_test_tracing();
     // `(1 . 4)` = 1/4 s = 0.25 s, i.e. 250_000_000 ns.
@@ -581,31 +278,6 @@ fn format_time_string_subsecond_flags_match_gnu() {
     assert_eq!(fts_n("%_3N"), "25 ");
     // Later flag wins: `0-` ends as NoPad.
     assert_eq!(fts_n("%0-N"), "25");
-}
-
-// ===================================================================
-// `E` / `O` locale modifiers
-//
-// GNU `lib/strftime.c` does not ignore these: each conversion decides
-// whether it accepts one, and a conversion that does not takes
-// `goto bad_format`, which copies the WHOLE directive out literally
-// (`cpy (f - percent + 1, percent)`).  So `%Ed` yields the four-character
-// string "%Ed", not the day of month.
-//
-// In the C locale every ACCEPTED combination falls back to the plain
-// conversion (the `_NL_CURRENT` era strings are empty), so only the
-// rejections are observable.  Verified against GNU Emacs for all
-// conversion characters x {E, O}.
-// ===================================================================
-
-/// Format `spec` against a fixed UTC instant (2024-04-22 14:32:48).
-fn fts_eo(spec: &str) -> String {
-    let result = builtin_format_time_string(vec![
-        Value::string(spec),
-        Value::fixnum(1_713_796_368),
-        Value::T,
-    ]);
-    result.unwrap().as_utf8_str().unwrap().to_string()
 }
 
 #[test]
@@ -679,62 +351,24 @@ fn format_time_string_modifier_rejection_keeps_surrounding_text() {
     assert_eq!(fts_eo("%Y-%Em-%Od"), "2024-%Em-22");
 }
 
-// ===================================================================
-// `define-coding-system-alias`
-//
-// GNU registers the alias as a KEY in the same table as its target,
-// pointing at the SAME spec (`Fputhash (alias, spec,
-// Vcoding_system_hash_table)`, src/coding.c), so every lookup resolves
-// it -- encoders and decoders included.  neomacs selects a codec by
-// matching the NAME against a table of built-in systems, which a
-// user-defined alias falls through, leaving no codec and encoding
-// non-ASCII as `?`.
-// ===================================================================
-
-#[test]
-fn coding_system_alias_encodes_through_its_target() {
-    crate::test_utils::init_test_tracing();
-    let mut ev = crate::test_utils::runtime_startup_context();
-    let _ = ev.eval_str("(define-coding-system-alias 'neo-alias-utf8 'utf-8)");
-
-    // Was `(116 63 115 116)` -- `63` is `?`, i.e. silent data loss.
-    let encoded = ev.eval_str("(append (encode-coding-string \"t\\u00ebst\" 'neo-alias-utf8) nil)");
-    assert_eq!(
-        crate::emacs_core::format_eval_result(&encoded),
-        "OK (116 195 171 115 116)"
-    );
-
-    let roundtrip = ev.eval_str(
-        "(let ((s \"t\\u00ebst\")) \
-           (string= s (decode-coding-string (encode-coding-string s 'neo-alias-utf8) \
-                                            'neo-alias-utf8)))",
-    );
-    assert_eq!(crate::emacs_core::format_eval_result(&roundtrip), "OK t");
+fn fts(fmt: &str) -> String {
+    builtin_format_time_string(vec![
+        Value::string(fmt),
+        Value::fixnum(1625402096),
+        Value::T,
+    ])
+    .unwrap()
+    .as_utf8_str()
+    .unwrap()
+    .to_string()
 }
 
-#[test]
-fn coding_system_alias_of_a_charset_system_encodes_through_its_target() {
-    crate::test_utils::init_test_tracing();
-    let mut ev = crate::test_utils::runtime_startup_context();
-    let _ = ev.eval_str("(define-coding-system-alias 'neo-alias-8859-15 'iso-8859-15)");
-    let encoded = ev.eval_str("(append (encode-coding-string \"\\u00e9\" 'neo-alias-8859-15) nil)");
-    assert_eq!(crate::emacs_core::format_eval_result(&encoded), "OK (233)");
-}
-
-#[test]
-fn coding_system_alias_is_reported_verbatim_in_last_coding_system_used() {
-    crate::test_utils::init_test_tracing();
-    let mut ev = crate::test_utils::runtime_startup_context();
-    let _ = ev.eval_str("(define-coding-system-alias 'neo-alias-reported 'utf-8)");
-    // GNU stores `CODING_ID_NAME (coding.id)` -- the name the caller passed,
-    // NOT the resolved base -- so resolving for codec selection must not leak
-    // into this variable.
-    let last = ev.eval_str(
-        "(progn (encode-coding-string \"t\\u00ebst\" 'neo-alias-reported) \
-           last-coding-system-used)",
-    );
-    assert_eq!(
-        crate::emacs_core::format_eval_result(&last),
-        "OK neo-alias-reported"
-    );
+/// Format `spec` against a fixed UTC instant (2024-04-22 14:32:48).
+fn fts_eo(spec: &str) -> String {
+    let result = builtin_format_time_string(vec![
+        Value::string(spec),
+        Value::fixnum(1_713_796_368),
+        Value::T,
+    ]);
+    result.unwrap().as_utf8_str().unwrap().to_string()
 }

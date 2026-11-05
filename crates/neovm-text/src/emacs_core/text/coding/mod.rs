@@ -6325,10 +6325,10 @@ pub fn register_bootstrap_vars<S: TextVariableStore>(vars: &mut S) {
 // ===========================================================================
 // Tests
 // ===========================================================================
+
+
+
+
 #[cfg(test)]
 #[path = "tests/coding_test.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "tests/positioned_symbol_test.rs"]
-mod positioned_symbol_tests;

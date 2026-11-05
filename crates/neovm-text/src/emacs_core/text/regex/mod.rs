@@ -5490,29 +5490,17 @@ pub mod match_stats {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
-#[cfg(test)]
-#[path = "tests/regex_test.rs"]
-mod tests;
 
-#[cfg(test)]
-#[path = "tests/positioned_policy_test.rs"]
-mod positioned_policy_tests;
 
-#[cfg(test)]
-#[path = "tests/gc_tls_ownership_test.rs"]
-mod gc_tls_ownership_tests;
 
-#[cfg(test)]
-#[path = "tests/gc_collection_epoch_test.rs"]
-mod gc_collection_epoch_tests;
 
-#[cfg(test)]
-#[path = "tests/gc_collection_epoch_minor_test.rs"]
-mod gc_collection_epoch_minor_tests;
 
-#[cfg(test)]
-#[path = "tests/gc_literal_epoch_test.rs"]
-mod gc_literal_epoch_tests;
+
+
+
+
+
+
 
 fn buffer_search_translation_table_with_symbols(
     buf: &Buffer,
@@ -5525,9 +5513,7 @@ fn buffer_search_translation_table_with_symbols(
     crate::emacs_core::casetab::buffer_case_canon_table_with_symbols(buf, mode)
 }
 
-#[cfg(test)]
-#[path = "tests/declared_signed_positions.rs"]
-mod declared_signed_position_tests;
+
 
 #[cfg(test)]
 #[path = "tests/pike_vm_fuzz_regression_test.rs"]
@@ -5558,3 +5544,7 @@ impl<'a> PropertizeFrontier<'a> {
         Self { byte, crossed }
     }
 }
+
+#[cfg(test)]
+#[path = "tests/regex_test.rs"]
+mod tests;

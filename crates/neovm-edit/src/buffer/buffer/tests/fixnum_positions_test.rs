@@ -2,7 +2,9 @@
 //! range check; the result must equal their checked Lisp positions.
 
 use super::*;
+
 use crate::buffer::{EmacsBytePos, EmacsByteRange};
+
 use neovm_value::tagged::value::Fixnum;
 
 #[test]

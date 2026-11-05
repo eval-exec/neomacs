@@ -5077,9 +5077,7 @@ pub(crate) fn builtin_overlay_properties_in_buffers(
     )
 }
 
-#[cfg(test)]
-#[path = "tests/buffer_test.rs"]
-mod tests;
+
 
 #[doc(hidden)]
 impl ReplaceRegionChangeRun {
@@ -5112,3 +5110,7 @@ impl InsertPiece {
         &self.text
     }
 }
+
+#[cfg(test)]
+#[path = "tests/buffer_test.rs"]
+mod tests;

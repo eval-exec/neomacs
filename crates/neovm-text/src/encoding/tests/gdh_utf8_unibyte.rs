@@ -12,10 +12,6 @@
 
 use super::encode_lisp_string;
 
-fn unibyte(bytes: &[u8]) -> neovm_value::heap_types::LispString {
-    neovm_value::heap_types::LispString::from_unibyte(bytes.to_vec())
-}
-
 #[test]
 fn utf8_family_consumes_unibyte_c0_c1_pairs_like_gnu() {
     crate::test_utils::init_test_tracing();
@@ -128,4 +124,8 @@ fn utf8_bulk_encoding_matches_consumed_emacs_characters() {
     );
     let multibyte = neovm_value::heap_types::LispString::from_emacs_bytes(canonical);
     assert_eq!(encode_utf8_plain(&multibyte), reference(&multibyte));
+}
+
+fn unibyte(bytes: &[u8]) -> neovm_value::heap_types::LispString {
+    neovm_value::heap_types::LispString::from_unibyte(bytes.to_vec())
 }

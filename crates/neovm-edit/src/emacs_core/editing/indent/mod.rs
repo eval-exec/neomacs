@@ -3582,13 +3582,9 @@ pub fn line_number_display_width<H: EditHost>(host: &mut H, args: &[Value]) -> E
     }
 }
 
-#[cfg(test)]
-#[path = "tests/indent_test.rs"]
-mod tests;
 
-#[cfg(test)]
-#[path = "tests/scan_policy_test.rs"]
-mod scan_policy_tests;
+
+
 
 /// Carrier park: drop the last-known-column memo.
 #[doc(hidden)]
@@ -3621,3 +3617,7 @@ impl ScreenLineMotionScan {
         self.last_occupied_target
     }
 }
+
+#[cfg(test)]
+#[path = "tests/indent_test.rs"]
+mod tests;

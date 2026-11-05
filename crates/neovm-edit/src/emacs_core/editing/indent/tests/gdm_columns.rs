@@ -1,4 +1,5 @@
 //! Focused invariant tests for GNU's indentation scan policy.
+
 use super::super::*;
 
 #[test]

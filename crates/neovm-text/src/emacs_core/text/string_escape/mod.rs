@@ -127,6 +127,8 @@ pub(crate) fn display_width_emacs(data: &[u8], is_multibyte: bool) -> usize {
     }
 }
 
+
+
 #[cfg(test)]
 #[path = "tests/string_escape_test.rs"]
 mod tests;
