@@ -18,7 +18,9 @@
 //! 4. **TA2 authority fence**: `test_support::authority` may be named only
 //!    from `crates/neovm-core/core_tests/**`, never from `src/**`, including
 //!    aliases and glob imports, across every workspace member and target.
-//!    Only the actual value-layer authority definition is exempt.
+//!    Only the actual value-layer authority definition is exempt, plus the
+//!    B2 exception: a src file whose EVERY module route is test-support-gated
+//!    may name a LOWER crate's fence through a resolved value alias.
 //!
 //! All scans are fail-closed: unparseable sources, missing tables, malformed
 //! rows and any occurrence not accounted for by an allowed site fail.
@@ -30,7 +32,7 @@ use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 
 use super::architecture_production_source_roots::workspace_root as shared_workspace_root;
-use syn::{Expr, Item, UseTree};
+use syn::{Attribute, Expr, Item, UseTree};
 
 const PC1_TABLE: &str = include_str!("pc1_hot_path_methods.tsv");
 const PC2_TABLE: &str = include_str!("pc2_hook_seams.tsv");
@@ -3583,6 +3585,197 @@ fn ta2_authority_submodules(
     Ok(())
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum Ta2CfgTruth {
+    True,
+    False,
+    Unknown,
+}
+
+fn ta2_cfg_truth(meta: &syn::Meta) -> Ta2CfgTruth {
+    match meta {
+        syn::Meta::Path(path) if path.is_ident("test") => Ta2CfgTruth::False,
+        syn::Meta::NameValue(value) if value.path.is_ident("feature") => {
+            if let syn::Expr::Lit(expr) = &value.value {
+                if let syn::Lit::Str(name) = &expr.lit {
+                    if name.value() == "test-support" {
+                        return Ta2CfgTruth::False;
+                    }
+                }
+            }
+            Ta2CfgTruth::Unknown
+        }
+        syn::Meta::List(list) if list.path.is_ident("not") => {
+            match list.parse_args::<syn::Meta>() {
+                Ok(inner) => match ta2_cfg_truth(&inner) {
+                    Ta2CfgTruth::True => Ta2CfgTruth::False,
+                    Ta2CfgTruth::False => Ta2CfgTruth::True,
+                    Ta2CfgTruth::Unknown => Ta2CfgTruth::Unknown,
+                },
+                Err(_) => Ta2CfgTruth::Unknown,
+            }
+        }
+        syn::Meta::List(list) if list.path.is_ident("any") || list.path.is_ident("all") => {
+            let any = list.path.is_ident("any");
+            match list.parse_args_with(
+                syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+            ) {
+                Ok(metas) => {
+                    let mut unknown = false;
+                    for meta in &metas {
+                        match ta2_cfg_truth(meta) {
+                            Ta2CfgTruth::True if any => return Ta2CfgTruth::True,
+                            Ta2CfgTruth::False if !any => return Ta2CfgTruth::False,
+                            Ta2CfgTruth::Unknown => unknown = true,
+                            _ => {}
+                        }
+                    }
+                    if unknown {
+                        Ta2CfgTruth::Unknown
+                    } else if any {
+                        Ta2CfgTruth::False
+                    } else {
+                        Ta2CfgTruth::True
+                    }
+                }
+                Err(_) => Ta2CfgTruth::Unknown,
+            }
+        }
+        _ => Ta2CfgTruth::Unknown,
+    }
+}
+
+fn ta2_test_gated(attrs: &[Attribute]) -> bool {
+    attrs.iter().any(|attr| {
+        attr.path().is_ident("cfg")
+            && attr
+                .parse_args::<syn::Meta>()
+                .map(|meta| ta2_cfg_truth(&meta) == Ta2CfgTruth::False)
+                .unwrap_or(false)
+    })
+}
+
+fn ta2_path_attr(attrs: &[Attribute]) -> Option<PathBuf> {
+    for attr in attrs {
+        if !attr.path().is_ident("path") {
+            continue;
+        }
+        if let syn::Meta::NameValue(value) = &attr.meta {
+            if let syn::Expr::Lit(expr) = &value.value {
+                if let syn::Lit::Str(text) = &expr.lit {
+                    return Some(PathBuf::from(text.value()));
+                }
+            }
+        }
+    }
+    None
+}
+
+fn ta2_module_dir(file: &Path) -> PathBuf {
+    let parent = file.parent().unwrap_or_else(|| Path::new(""));
+    match file.file_name().and_then(|name| name.to_str()) {
+        Some("lib.rs") | Some("main.rs") | Some("mod.rs") => parent.to_path_buf(),
+        Some(name) => parent.join(name.strip_suffix(".rs").unwrap_or(name)),
+        None => parent.to_path_buf(),
+    }
+}
+
+fn ta2_module_file(dir: &Path, name: &str) -> Option<PathBuf> {
+    let flat = dir.join(format!("{name}.rs"));
+    if flat.is_file() {
+        return Some(flat);
+    }
+    let nested = dir.join(name).join("mod.rs");
+    if nested.is_file() {
+        return Some(nested);
+    }
+    None
+}
+
+/// Map every `src/**` file reached from the crate root to whether EVERY module
+/// route to it is test-gated. An ungated route wins. This is the B2 rule's
+/// "every route" test.
+fn ta2_gated_route_files(member_root: &Path) -> Result<BTreeMap<PathBuf, bool>, String> {
+    let src = member_root.join("src");
+    let root = if src.join("lib.rs").is_file() {
+        src.join("lib.rs")
+    } else if src.join("main.rs").is_file() {
+        src.join("main.rs")
+    } else {
+        return Ok(BTreeMap::new());
+    };
+    let mut map = BTreeMap::new();
+    ta2_walk_route_file(&root, false, &mut map)?;
+    Ok(map)
+}
+
+fn ta2_walk_route_file(
+    file: &Path,
+    gated: bool,
+    map: &mut BTreeMap<PathBuf, bool>,
+) -> Result<(), String> {
+    let key = file
+        .canonicalize()
+        .map_err(|error| format!("{}: {error}", file.display()))?;
+    match map.get(&key).copied() {
+        Some(previous) if previous == gated => return Ok(()),
+        Some(false) => return Ok(()),
+        Some(true) => {
+            map.insert(key, false);
+        }
+        None => {
+            map.insert(key, gated);
+        }
+    }
+    let (_, parsed) = parse_file(file)?;
+    ta2_walk_route_items(
+        &parsed.items,
+        gated,
+        file.parent().unwrap_or_else(|| Path::new("")),
+        &ta2_module_dir(file),
+        true,
+        map,
+    )
+}
+
+fn ta2_walk_route_items(
+    items: &[Item],
+    gated: bool,
+    file_dir: &Path,
+    module_dir: &Path,
+    top_level: bool,
+    map: &mut BTreeMap<PathBuf, bool>,
+) -> Result<(), String> {
+    for item in items {
+        let Item::Mod(module) = item else { continue };
+        let declaration_gated = gated || ta2_test_gated(&module.attrs);
+        if let Some((_, inner)) = &module.content {
+            ta2_walk_route_items(
+                inner,
+                declaration_gated,
+                file_dir,
+                &module_dir.join(module.ident.to_string()),
+                false,
+                map,
+            )?;
+            continue;
+        }
+        let target = match ta2_path_attr(&module.attrs) {
+            Some(path) => {
+                let base = if top_level { file_dir } else { module_dir };
+                Some(base.join(path))
+            }
+            None => ta2_module_file(module_dir, &module.ident.to_string()),
+        };
+        if let Some(target) = target {
+            if target.is_file() {
+                ta2_walk_route_file(&target, declaration_gated, map)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 fn ta2_definitions(sources: &[GuardSource]) -> Result<Ta2Definitions, String> {
     let roots: BTreeSet<_> = sources
         .iter()
@@ -3744,6 +3937,9 @@ struct Ta2Visitor<'a> {
     file: &'a Path,
     roots: BTreeSet<String>,
     definition_line: Option<usize>,
+    /// B2: the file's every module route is test-support-gated, so it may name
+    /// a LOWER crate's fence through a resolved value alias.
+    gated_fence_ok: bool,
     violations: Vec<String>,
     value_scopes: Vec<BTreeSet<String>>,
 }
@@ -3803,7 +3999,14 @@ impl Ta2Visitor<'_> {
     fn check_path(&mut self, names: &[String], span: Span) {
         if let Some(index) = names.iter().position(|s| s == "test_support") {
             if names[index + 1..].iter().any(|s| s == "authority") {
-                self.reject(span, "TA2_AUTHORITY_REFERENCE", "authority references are restricted to core_tests and the resolved defining module");
+                // B2: a fully test-support-gated src file may name a LOWER
+                // crate's fence; the first segment must resolve through a
+                // value alias, never through this crate's own `crate`/`self`.
+                let lower_fence = self.gated_fence_ok
+                    && names.first().is_some_and(|name| self.roots.contains(name));
+                if !lower_fence {
+                    self.reject(span, "TA2_AUTHORITY_REFERENCE", "authority references are restricted to core_tests and the resolved defining module");
+                }
             }
         } else if names.iter().any(|s| s == "authority") {
             self.reject(
@@ -4069,6 +4272,20 @@ pub(crate) fn scan_authority_workspace(workspace: &Path) -> Result<(), Vec<Strin
     let sources = discover_sources(workspace).map_err(|error| vec![error])?;
     let definitions = ta2_definitions(&sources).map_err(|error| vec![error])?;
     let mut violations = Vec::new();
+    // B2: a src file's every module route must be test-support-gated before it
+    // may name a lower crate's fence. Compute the route map once per member.
+    let mut gated_routes: BTreeMap<PathBuf, BTreeMap<PathBuf, bool>> = BTreeMap::new();
+    for source in &sources {
+        if gated_routes.contains_key(&source.member_root) {
+            continue;
+        }
+        match ta2_gated_route_files(&source.member_root) {
+            Ok(map) => {
+                gated_routes.insert(source.member_root.clone(), map);
+            }
+            Err(error) => violations.push(error),
+        }
+    }
     for source in &sources {
         let path = match source.path.canonicalize() {
             Ok(path) => path,
@@ -4118,10 +4335,16 @@ pub(crate) fn scan_authority_workspace(workspace: &Path) -> Result<(), Vec<Strin
         let definition_line = definitions.declaration.as_ref().and_then(|(file, line)| {
             (file == &path && source.package == "neovm-value").then_some(*line)
         });
+        let fully_gated = gated_routes
+            .get(&source.member_root)
+            .and_then(|map| map.get(&path).copied())
+            .unwrap_or(false);
+        let gated_fence_ok = fully_gated && source.package != "neovm-value";
         let mut visitor = Ta2Visitor {
             file: &path,
             roots,
             definition_line,
+            gated_fence_ok,
             violations: Vec::new(),
             value_scopes: Vec::new(),
         };
@@ -4281,5 +4504,42 @@ fn architecture_ta2_guard_self_test() {
     assert!(
         scan_authority_workspace(root).is_ok(),
         "TA2_RESTORED_DEFINITION_SIBLING"
+    );
+    // B2: a src file whose EVERY module route is test-support-gated may name
+    // a LOWER crate's fence through a resolved value alias.
+    let core_lib = root.join("core/src/lib.rs");
+    let core_lib_original = std::fs::read_to_string(&core_lib).unwrap();
+    let gated_probe = root.join("core/src/gated_fence_probe.rs");
+    let gated_declaration = format!(
+        "{core_lib_original}\n#[cfg(any(test, feature = \"test-support\"))]\npub mod gated_fence_probe;\n"
+    );
+    std::fs::write(&core_lib, &gated_declaration).unwrap();
+    std::fs::write(&gated_probe, "use neovm_value::test_support::authority;\n").unwrap();
+    assert!(
+        scan_authority_workspace(root).is_ok(),
+        "TA2_GATED_LOWER_FENCE"
+    );
+    // (i) an ungated route makes the same file production src: red.
+    std::fs::write(
+        &core_lib,
+        format!("{core_lib_original}\npub mod gated_fence_probe;\n"),
+    )
+    .unwrap();
+    assert!(
+        scan_authority_workspace(root).is_err(),
+        "TA2_MUTATION_UNGATED_FENCE"
+    );
+    // A gated file may not name its OWN crate's fence.
+    std::fs::write(&core_lib, &gated_declaration).unwrap();
+    std::fs::write(&gated_probe, "use crate::test_support::authority;\n").unwrap();
+    assert!(
+        scan_authority_workspace(root).is_err(),
+        "TA2_MUTATION_OWN_FENCE"
+    );
+    std::fs::write(&core_lib, &core_lib_original).unwrap();
+    std::fs::remove_file(&gated_probe).unwrap();
+    assert!(
+        scan_authority_workspace(root).is_ok(),
+        "TA2_RESTORED_GATED_FENCE"
     );
 }
