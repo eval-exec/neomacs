@@ -4667,6 +4667,7 @@ impl TextPropertyTable {
         self.adjust_for_insert_raw(pos, len);
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn adjust_for_insert_raw(&mut self, pos: CharPos0, len: CharLen) {
         self.mutation_tick += 1;
         if len.is_empty() {
@@ -5224,7 +5225,17 @@ impl TextPropertyTable {
             .map(|(_, id)| self.intervals.nodes[id.0].plist)
     }
 
-    #[cfg(test)]
+    /// Test-support view of the syntax property range cache.  The field
+    /// cannot take `visibility::make` (attribute macros are rejected on
+    /// fields), so this accessor is the TEST-SUPPORT-VIS A1-shaped row.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn syntax_prop_ranges_for_test(
+        &self,
+    ) -> &std::sync::Mutex<(u64, Vec<(CharPos0, CharPos0)>)> {
+        &self.syntax_prop_ranges
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn assert_tree_invariants_for_test(&self) {
         self.intervals.assert_invariants_for_test();
     }
