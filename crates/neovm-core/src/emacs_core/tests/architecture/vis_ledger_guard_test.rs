@@ -2142,6 +2142,12 @@ fn expansion_resolve_module(from: &[String], path: &[String]) -> Option<Vec<Stri
 struct ModExports {
     own: BTreeSet<String>,
     globs: Vec<Vec<String>>,
+    /// Peer 15:0xZ alias case: `pub use module::Item as Alias` makes `Item`
+    /// root-public under a different leaf, even though the exported name set
+    /// only carries `Alias`. Record `(origin module, item)` so the mod-row
+    /// expansion can accept an already-public item that is re-exported under
+    /// an alias.
+    origins: Vec<(Vec<String>, String)>,
 }
 
 /// Resolve a module declaration's file and the directory its own child
@@ -2172,20 +2178,45 @@ fn expansion_module_target(
     Some((file, dir.join(name)))
 }
 
+/// The production root-public surface of one crate: exported names plus the
+/// `(origin module, item)` pairs behind those names. Peer 15:0xZ: an item
+/// re-exported as `pub use module::Item as Alias` is root-public even though
+/// the exported NAME set carries only `Alias`, so alias-aware coverage matches
+/// the origin pair against the widened module instead of the leaf name.
+#[derive(Default)]
+struct ProductionSurface {
+    names: BTreeSet<String>,
+    origins: BTreeSet<(Vec<String>, String)>,
+    /// Source file of every module (inline modules share their parent file),
+    /// so a re-export can be resolved to the file that defines the item.
+    module_files: BTreeMap<Vec<String>, String>,
+    /// Every module's re-export origins (private modules included), used to
+    /// follow same-name `pub use` chains to the defining module.
+    reexports: BTreeMap<Vec<String>, Vec<(Vec<String>, String)>>,
+}
+
 /// LEAD 12:3xZ: a VIS `mod` row is a blanket widening -- every pub item the
 /// module makes reachable becomes test-support surface. Build the crate's
-/// production-public name set (declared pub items, pub re-export leaves and
+/// production-public surface (declared pub items, pub re-export leaves and
 /// glob contents, and pub inherent methods on public types, through module
 /// chains whose declarations are all `pub`), so a mod row can require each
 /// newly reachable item to be root-public already or rowed.
-fn production_public_names(workspace: &Path, crate_dir: &str) -> Result<BTreeSet<String>, String> {
+fn production_public_surface(
+    workspace: &Path,
+    crate_dir: &str,
+) -> Result<ProductionSurface, String> {
+    #[allow(clippy::too_many_arguments)]
     fn build(
         items: &[syn::Item],
         segments: Vec<String>,
         dir: &Path,
         file_dir: &Path,
         is_public: bool,
+        workspace: &Path,
+        module_file: &str,
         modules: &mut BTreeMap<Vec<String>, ModExports>,
+        module_files: &mut BTreeMap<Vec<String>, String>,
+        reexports: &mut BTreeMap<Vec<String>, Vec<(Vec<String>, String)>>,
         public_modules: &mut Vec<Vec<String>>,
         visited: &mut BTreeSet<PathBuf>,
     ) -> Result<(), String> {
@@ -2217,8 +2248,18 @@ fn production_public_names(workspace: &Path, crate_dir: &str) -> Result<BTreeSet
                     for (path, alias, glob) in leaves {
                         if glob {
                             exports.globs.push(path);
-                        } else if let Some(name) = alias.or_else(|| path.last().cloned()) {
-                            exports.own.insert(name);
+                        } else {
+                            // The exported NAME may be an alias; the ORIGIN
+                            // (module path + item) is what the alias-aware
+                            // coverage check matches against a widened module.
+                            if let Some((name, module)) = path.split_last()
+                                && let Some(resolved) = expansion_resolve_module(&segments, module)
+                            {
+                                exports.origins.push((resolved, name.clone()));
+                            }
+                            if let Some(name) = alias.or_else(|| path.last().cloned()) {
+                                exports.own.insert(name);
+                            }
                         }
                     }
                 }
@@ -2273,6 +2314,8 @@ fn production_public_names(workspace: &Path, crate_dir: &str) -> Result<BTreeSet
         if is_public {
             public_modules.push(segments.clone());
         }
+        module_files.insert(segments.clone(), module_file.to_owned());
+        reexports.insert(segments.clone(), exports.origins.clone());
         modules.insert(segments, exports);
         for (items, child_segments, inline_dir, child_public) in inline {
             build(
@@ -2281,7 +2324,11 @@ fn production_public_names(workspace: &Path, crate_dir: &str) -> Result<BTreeSet
                 &inline_dir,
                 &inline_dir,
                 child_public,
+                workspace,
+                module_file,
                 modules,
+                module_files,
+                reexports,
                 public_modules,
                 visited,
             )?;
@@ -2297,13 +2344,22 @@ fn production_public_names(workspace: &Path, crate_dir: &str) -> Result<BTreeSet
             let ast = syn::parse_file(&text)
                 .map_err(|error| format!("{}: {error}", canonical.display()))?;
             let child_file_dir = canonical.parent().unwrap_or(&child_dir);
+            let child_relative = canonical
+                .strip_prefix(workspace)
+                .map_err(|_| format!("{} is outside the workspace", canonical.display()))?
+                .to_string_lossy()
+                .replace('\\', "/");
             build(
                 &ast.items,
                 child_segments,
                 &child_dir,
                 child_file_dir,
                 child_public,
+                workspace,
+                &child_relative,
                 modules,
+                module_files,
+                reexports,
                 public_modules,
                 visited,
             )?;
@@ -2335,8 +2391,37 @@ fn production_public_names(workspace: &Path, crate_dir: &str) -> Result<BTreeSet
         memo.insert(segments.to_vec(), names.clone());
         names
     }
+    /// Origin pairs of the names a public module re-exports, including glob
+    /// chains, mirroring `exports_of`.
+    fn origins_of(
+        segments: &[String],
+        modules: &BTreeMap<Vec<String>, ModExports>,
+        memo: &mut BTreeMap<Vec<String>, BTreeSet<(Vec<String>, String)>>,
+        stack: &mut BTreeSet<Vec<String>>,
+    ) -> BTreeSet<(Vec<String>, String)> {
+        if let Some(origins) = memo.get(segments) {
+            return origins.clone();
+        }
+        let Some(data) = modules.get(segments) else {
+            return BTreeSet::new();
+        };
+        if !stack.insert(segments.to_vec()) {
+            return BTreeSet::new();
+        }
+        let mut origins: BTreeSet<(Vec<String>, String)> = data.origins.iter().cloned().collect();
+        for glob in &data.globs {
+            if let Some(target) = expansion_resolve_module(segments, glob) {
+                origins.extend(origins_of(&target, modules, memo, stack));
+            }
+        }
+        stack.remove(segments);
+        memo.insert(segments.to_vec(), origins.clone());
+        origins
+    }
     let src = workspace.join("crates").join(crate_dir).join("src");
     let mut modules = BTreeMap::new();
+    let mut module_files = BTreeMap::new();
+    let mut reexports = BTreeMap::new();
     let mut public_modules = Vec::new();
     let mut visited = BTreeSet::new();
     for root in ["lib.rs", "main.rs"] {
@@ -2350,6 +2435,11 @@ fn production_public_names(workspace: &Path, crate_dir: &str) -> Result<BTreeSet
         if !visited.insert(canonical.clone()) {
             continue;
         }
+        let relative = canonical
+            .strip_prefix(workspace)
+            .map_err(|_| format!("{} is outside the workspace", canonical.display()))?
+            .to_string_lossy()
+            .replace('\\', "/");
         let text = read(&canonical)?;
         let ast =
             syn::parse_file(&text).map_err(|error| format!("{}: {error}", canonical.display()))?;
@@ -2361,13 +2451,19 @@ fn production_public_names(workspace: &Path, crate_dir: &str) -> Result<BTreeSet
             &dir,
             file_dir,
             true,
+            workspace,
+            &relative,
             &mut modules,
+            &mut module_files,
+            &mut reexports,
             &mut public_modules,
             &mut visited,
         )?;
     }
     let mut memo = BTreeMap::new();
     let mut names = BTreeSet::new();
+    let mut origins_memo = BTreeMap::new();
+    let mut origins = BTreeSet::new();
     for segments in &public_modules {
         names.extend(exports_of(
             segments,
@@ -2375,24 +2471,107 @@ fn production_public_names(workspace: &Path, crate_dir: &str) -> Result<BTreeSet
             &mut memo,
             &mut BTreeSet::new(),
         ));
+        origins.extend(origins_of(
+            segments,
+            &modules,
+            &mut origins_memo,
+            &mut BTreeSet::new(),
+        ));
     }
-    Ok(names)
+    Ok(ProductionSurface {
+        names,
+        origins,
+        module_files,
+        reexports,
+    })
 }
 
+/// Follow `pub use` chains to the file that actually defines `item` in
+/// `module` (same-name re-export routes such as FunctionOpKind's
+/// `pub use functions::FunctionOpKind;`).
+fn resolved_definition_file(
+    module: &[String],
+    item: &str,
+    surface: &ProductionSurface,
+    visited: &mut BTreeSet<(Vec<String>, String)>,
+) -> Option<String> {
+    let key = (module.to_vec(), item.to_owned());
+    if !visited.insert(key) {
+        return None;
+    }
+    if let Some(list) = surface.reexports.get(module) {
+        for (next, next_item) in list {
+            if next_item == item
+                && let Some(file) = resolved_definition_file(next, item, surface, visited)
+            {
+                return Some(file);
+            }
+        }
+    }
+    surface.module_files.get(module).cloned()
+}
+
+/// A re-export inside a widened module is acceptable when the item it
+/// re-exports is already production-public (under any alias) or has its own
+/// VIS/AUTHORITY row at its defining file; the route adds a spelling, not an
+/// item.
+fn use_leaf_covered(
+    source_item: &str,
+    origin_module: &[String],
+    surface: &ProductionSurface,
+    vis_rows: &[VisRow],
+    authority: &[AuthRow],
+) -> bool {
+    if surface
+        .origins
+        .contains(&(origin_module.to_vec(), source_item.to_owned()))
+    {
+        return true;
+    }
+    let Some(file) =
+        resolved_definition_file(origin_module, source_item, surface, &mut BTreeSet::new())
+    else {
+        return false;
+    };
+    let vis_hit = vis_rows.iter().any(|row| {
+        row.kind != "mod"
+            && row.file.as_str() == file.as_str()
+            && (row.item == source_item || row.item.ends_with(&format!("::{source_item}")))
+    });
+    if vis_hit {
+        return true;
+    }
+    authority.iter().any(|row| {
+        row.defining_file.as_str() == file.as_str()
+            && (row.item == source_item || row.item.ends_with(&format!("::{source_item}")))
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
 fn expansion_covered(
     identity: &str,
     owner: Option<&str>,
     relative: &str,
-    public_names: &BTreeSet<String>,
+    segments: &[String],
+    surface: &ProductionSurface,
     declared_types: &BTreeSet<String>,
     vis_rows: &[VisRow],
     authority: &[AuthRow],
 ) -> bool {
-    if public_names.contains(identity) {
+    if surface.names.contains(identity) {
+        return true;
+    }
+    // Peer 15:0xZ: an item re-exported production-public under an alias is
+    // already public surface; the widened module path does not expose a new
+    // item. Match the origin pair, not the exported leaf name.
+    if surface
+        .origins
+        .contains(&(segments.to_vec(), identity.to_owned()))
+    {
         return true;
     }
     if let Some(owner) = owner {
-        if public_names.contains(owner) || declared_types.contains(owner) {
+        if surface.names.contains(owner) || declared_types.contains(owner) {
             return true;
         }
     }
@@ -2413,10 +2592,11 @@ fn expansion_covered(
 #[allow(clippy::too_many_arguments)]
 fn expand_module_items(
     items: &[syn::Item],
+    segments: &[String],
     dir: &Path,
     relative: &str,
     workspace: &Path,
-    public_names: &BTreeSet<String>,
+    surface: &ProductionSurface,
     vis_rows: &[VisRow],
     authority: &[AuthRow],
     declared: &mut BTreeSet<String>,
@@ -2434,12 +2614,15 @@ fn expand_module_items(
                 }
                 if let Some((_, inner)) = &module.content {
                     let inline_dir = dir.join(module.ident.to_string());
+                    let mut child_segments = segments.to_vec();
+                    child_segments.push(module.ident.to_string());
                     expand_module_items(
                         inner,
+                        &child_segments,
                         &inline_dir,
                         relative,
                         workspace,
-                        public_names,
+                        surface,
                         vis_rows,
                         authority,
                         declared,
@@ -2463,12 +2646,15 @@ fn expand_module_items(
                         .to_string_lossy()
                         .replace('\\', "/");
                     let child_dir = auth_module_dir(&canonical);
+                    let mut child_segments = segments.to_vec();
+                    child_segments.push(module.ident.to_string());
                     expand_module_items(
                         &ast.items,
+                        &child_segments,
                         &child_dir,
                         &child_relative,
                         workspace,
-                        public_names,
+                        surface,
                         vis_rows,
                         authority,
                         declared,
@@ -2481,13 +2667,7 @@ fn expand_module_items(
             syn::Item::Fn(item) if matches!(item.vis, syn::Visibility::Public(_)) => {
                 let identity = item.sig.ident.to_string();
                 if !expansion_covered(
-                    &identity,
-                    None,
-                    relative,
-                    public_names,
-                    declared,
-                    vis_rows,
-                    authority,
+                    &identity, None, relative, segments, surface, declared, vis_rows, authority,
                 ) {
                     missing.push(format!("{relative}:{identity}"));
                 }
@@ -2496,13 +2676,7 @@ fn expand_module_items(
                 let identity = item.ident.to_string();
                 declared.insert(identity.clone());
                 if !expansion_covered(
-                    &identity,
-                    None,
-                    relative,
-                    public_names,
-                    declared,
-                    vis_rows,
-                    authority,
+                    &identity, None, relative, segments, surface, declared, vis_rows, authority,
                 ) {
                     missing.push(format!("{relative}:{identity}"));
                 }
@@ -2511,13 +2685,7 @@ fn expand_module_items(
                 let identity = item.ident.to_string();
                 declared.insert(identity.clone());
                 if !expansion_covered(
-                    &identity,
-                    None,
-                    relative,
-                    public_names,
-                    declared,
-                    vis_rows,
-                    authority,
+                    &identity, None, relative, segments, surface, declared, vis_rows, authority,
                 ) {
                     missing.push(format!("{relative}:{identity}"));
                 }
@@ -2526,13 +2694,7 @@ fn expand_module_items(
                 let identity = item.ident.to_string();
                 declared.insert(identity.clone());
                 if !expansion_covered(
-                    &identity,
-                    None,
-                    relative,
-                    public_names,
-                    declared,
-                    vis_rows,
-                    authority,
+                    &identity, None, relative, segments, surface, declared, vis_rows, authority,
                 ) {
                     missing.push(format!("{relative}:{identity}"));
                 }
@@ -2541,13 +2703,7 @@ fn expand_module_items(
                 let identity = item.ident.to_string();
                 declared.insert(identity.clone());
                 if !expansion_covered(
-                    &identity,
-                    None,
-                    relative,
-                    public_names,
-                    declared,
-                    vis_rows,
-                    authority,
+                    &identity, None, relative, segments, surface, declared, vis_rows, authority,
                 ) {
                     missing.push(format!("{relative}:{identity}"));
                 }
@@ -2556,13 +2712,7 @@ fn expand_module_items(
                 let identity = item.ident.to_string();
                 declared.insert(identity.clone());
                 if !expansion_covered(
-                    &identity,
-                    None,
-                    relative,
-                    public_names,
-                    declared,
-                    vis_rows,
-                    authority,
+                    &identity, None, relative, segments, surface, declared, vis_rows, authority,
                 ) {
                     missing.push(format!("{relative}:{identity}"));
                 }
@@ -2570,13 +2720,7 @@ fn expand_module_items(
             syn::Item::Const(item) if matches!(item.vis, syn::Visibility::Public(_)) => {
                 let identity = item.ident.to_string();
                 if !expansion_covered(
-                    &identity,
-                    None,
-                    relative,
-                    public_names,
-                    declared,
-                    vis_rows,
-                    authority,
+                    &identity, None, relative, segments, surface, declared, vis_rows, authority,
                 ) {
                     missing.push(format!("{relative}:{identity}"));
                 }
@@ -2584,13 +2728,7 @@ fn expand_module_items(
             syn::Item::Static(item) if matches!(item.vis, syn::Visibility::Public(_)) => {
                 let identity = item.ident.to_string();
                 if !expansion_covered(
-                    &identity,
-                    None,
-                    relative,
-                    public_names,
-                    declared,
-                    vis_rows,
-                    authority,
+                    &identity, None, relative, segments, surface, declared, vis_rows, authority,
                 ) {
                     missing.push(format!("{relative}:{identity}"));
                 }
@@ -2629,18 +2767,28 @@ fn expand_module_items(
                         ));
                         continue;
                     }
-                    if let Some(identity) = alias.or_else(|| path.last().cloned()) {
-                        if !expansion_covered(
-                            &identity,
-                            None,
-                            relative,
-                            public_names,
-                            declared,
+                    let Some(identity) = alias.or_else(|| path.last().cloned()) else {
+                        continue;
+                    };
+                    // A re-export route whose SOURCE item is already public or
+                    // rowed adds a spelling, not an item: resolve the origin
+                    // through same-name `pub use` chains and accept it.
+                    if let Some((source_item, module_path)) = path.split_last()
+                        && let Some(origin_module) = expansion_resolve_module(segments, module_path)
+                        && use_leaf_covered(
+                            source_item,
+                            &origin_module,
+                            surface,
                             vis_rows,
                             authority,
-                        ) {
-                            missing.push(format!("{relative}:{identity}"));
-                        }
+                        )
+                    {
+                        continue;
+                    }
+                    if !expansion_covered(
+                        &identity, None, relative, segments, surface, declared, vis_rows, authority,
+                    ) {
+                        missing.push(format!("{relative}:{identity}"));
                     }
                 }
             }
@@ -2659,17 +2807,17 @@ fn expanded_mod_rows_violation(
     rows: &[VisRow],
     authority: &[AuthRow],
 ) -> Result<(), String> {
-    let mut public_cache: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut public_cache: BTreeMap<String, ProductionSurface> = BTreeMap::new();
     let mut failures = Vec::new();
     for row in rows.iter().filter(|row| row.kind == "mod") {
-        let public_names = match public_cache.get(&row.crate_dir) {
-            Some(names) => names.clone(),
-            None => {
-                let names = production_public_names(workspace, &row.crate_dir)?;
-                public_cache.insert(row.crate_dir.clone(), names.clone());
-                names
-            }
-        };
+        if !public_cache.contains_key(&row.crate_dir) {
+            let surface = production_public_surface(workspace, &row.crate_dir)?;
+            public_cache.insert(row.crate_dir.clone(), surface);
+        }
+        let surface = public_cache
+            .get(&row.crate_dir)
+            .expect("production surface inserted above");
+        let segments: Vec<String> = row.item.split("::").map(str::to_owned).collect();
         let declaring = workspace.join(&row.file);
         let dir = auth_module_dir(&declaring);
         let name = row.item.rsplit("::").next().unwrap_or(&row.item);
@@ -2714,10 +2862,11 @@ fn expanded_mod_rows_violation(
                 let inline_dir = dir.join(name);
                 expand_module_items(
                     inner,
+                    &segments,
                     &inline_dir,
                     &row.file,
                     workspace,
-                    &public_names,
+                    surface,
                     rows,
                     authority,
                     &mut declared,
@@ -2770,10 +2919,11 @@ fn expanded_mod_rows_violation(
             visited.insert(canonical);
             expand_module_items(
                 &ast.items,
+                &segments,
                 &child_dir,
                 &relative,
                 workspace,
-                &public_names,
+                surface,
                 rows,
                 authority,
                 &mut declared,
@@ -2786,14 +2936,15 @@ fn expanded_mod_rows_violation(
             // A pub method on a type that is neither public on a production
             // path nor declared pub in the widened subtree is not publicly
             // reachable: the widening cannot expose it by name.
-            if !public_names.contains(&owner) && !declared.contains(&owner) {
+            if !surface.names.contains(&owner) && !declared.contains(&owner) {
                 continue;
             }
             if !expansion_covered(
                 &identity,
                 Some(&owner),
                 &relative,
-                &public_names,
+                &segments,
+                surface,
                 &declared,
                 rows,
                 authority,
@@ -3541,6 +3692,63 @@ fn mod_row_expansion_requires_a_row_for_each_new_pub_item() {
     )
     .expect("gc");
     assert!(expanded_mod_rows_violation(dir.path(), &[inert], &[]).is_ok());
+}
+
+/// Peer 15:0xZ alias case: `pub use module::Item as Alias` makes `Item`
+/// root-public in production, so a mod row widening `module` does not expose
+/// a new item and needs no extra row. An unaliased pub item stays red, and an
+/// alias confined to a private module is not a root-public path.
+#[test]
+fn mod_row_expansion_accepts_an_aliased_root_public_item() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let src = dir.path().join("crates/neovm-value/src");
+    std::fs::create_dir_all(src.join("intern")).expect("intern dir");
+    std::fs::create_dir_all(src.join("hidden")).expect("hidden dir");
+    std::fs::write(src.join("lib.rs"), "pub mod intern;\nmod hidden;\n").expect("lib");
+    let intern = "pub use well_known::{FIRST_ID as FIRST_WELL_KNOWN_SYM_ID};\n\
+                  #[cfg(not(feature = \"test-support\"))]\nmod well_known;\n\
+                  #[cfg(feature = \"test-support\")]\npub mod well_known;\n";
+    std::fs::write(src.join("intern/mod.rs"), intern).expect("intern mod");
+    std::fs::write(
+        src.join("intern/well_known.rs"),
+        "pub const FIRST_ID: u32 = 3;\npub const UNALIASED: u32 = 4;\npub const HIDDEN_ALIASED: u32 = 5;\n",
+    )
+    .expect("well_known");
+    // Re-exported only inside a private module: not a production-public path.
+    std::fs::write(
+        src.join("hidden/mod.rs"),
+        "pub use crate::intern::well_known::HIDDEN_ALIASED as HIDDEN_ALIAS;\n",
+    )
+    .expect("hidden mod");
+    let mod_row = || VisRow {
+        crate_dir: "neovm-value".to_owned(),
+        item: "intern::well_known".to_owned(),
+        kind: "mod".to_owned(),
+        file: "crates/neovm-value/src/intern/mod.rs".to_owned(),
+        tests: Vec::new(),
+    };
+    let item_row = |item: &str| VisRow {
+        crate_dir: "neovm-value".to_owned(),
+        item: item.to_owned(),
+        kind: "const".to_owned(),
+        file: "crates/neovm-value/src/intern/well_known.rs".to_owned(),
+        tests: Vec::new(),
+    };
+    let error = expanded_mod_rows_violation(dir.path(), &[mod_row()], &[])
+        .expect_err("unaliased and privately aliased items");
+    assert!(
+        !error.contains("FIRST_ID"),
+        "aliased root-public item must be accepted: {error}"
+    );
+    assert!(error.contains("UNALIASED"), "{error}");
+    assert!(error.contains("HIDDEN_ALIASED"), "{error}");
+    // Rows for the two unaliased items close the expansion.
+    let rows = vec![
+        mod_row(),
+        item_row("intern::well_known::UNALIASED"),
+        item_row("intern::well_known::HIDDEN_ALIASED"),
+    ];
+    assert!(expanded_mod_rows_violation(dir.path(), &rows, &[]).is_ok());
 }
 
 #[test]
