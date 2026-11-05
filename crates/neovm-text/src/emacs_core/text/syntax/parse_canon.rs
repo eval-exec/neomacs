@@ -200,6 +200,7 @@ impl CanonicalRun {
     }
 
     /// Where the run's knowledge ends: its last state, or BEGV.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn frontier(&self) -> usize {
         self.snaps.last().map_or(self.env.begv, CanonSnap::pos)
     }
