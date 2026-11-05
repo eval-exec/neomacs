@@ -19,7 +19,20 @@ fn settled_point(
         .expect("a settled projection maps every finite point")
 }
 
-use super::*;
+use crate::emacs_core::eval::data::command_loop::{
+    KeyEchoState, KeyboardRuntime, PrefixArg, PresentedInteractions, PresentedMouseArea,
+    PresentedMouseObservation, PresentedMouseTarget,
+};
+use crate::emacs_core::eval::protocol::tty_host::TERMINAL_ID;
+use crate::emacs_core::eval::*;
+use crate::emacs_core::keyboard::{self, CommandLoopHost, builtin_input_pending_p};
+use crate::emacs_core::load_boot::create_bootstrap_evaluator_cached;
+use crate::host_input::HostInputPublisher;
+use crate::keyboard::*;
+use crate::window::{DisplayFrameExt, DisplayFrameManagerExt};
+use neovm_value::error::{EvalResult, Flow};
+use neovm_value::system_vocab::input::TtyInputDecoding;
+use neovm_value::value::Value;
 
 /// Prefix help preserves shift translation established by an earlier event.
 #[test]
@@ -59,7 +72,7 @@ fn prefix_help_key_reader_preserves_events_without_running_the_command() {
 
 #[test]
 fn gc_preserves_parked_keyboard_prompt_interval_plists() {
-    let mut ctx = crate::emacs_core::Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let prompt = ctx
         .eval_str("(propertize \"Key: \" 'face '(prompt-face))")
         .unwrap()
@@ -69,26 +82,32 @@ fn gc_preserves_parked_keyboard_prompt_interval_plists() {
     let mut plists = Vec::new();
     prompt.intervals().for_each_root(|root| plists.push(root));
     assert!(!plists.is_empty());
-    let original_terminal = ctx.command_loop.keyboard.active_terminal_id;
-    ctx.command_loop.keyboard.kboard.key_echo_state = KeyEchoState::Immediate {
-        prompt: Some(prompt),
-    };
-    ctx.command_loop
+    let original_terminal = ctx.command_loop().keyboard.active_terminal_id();
+    neovm_eval::test_support::authority::set_key_echo_state_for_test(
+        &mut ctx,
+        KeyEchoState::Immediate {
+            prompt: Some(prompt),
+        },
+    );
+    ctx.command_loop_mut()
         .keyboard
         .select_terminal(original_terminal + 1);
     for _ in 0..3 {
         ctx.gc_collect_exact();
         for &plist in &plists {
             assert!(
-                ctx.tagged_heap.owns_heap_value_for_test(plist),
+                ctx.tagged_heap().owns_heap_value_for_test(plist),
                 "parked keyboard retained a reclaimed prompt interval plist"
             );
         }
     }
-    ctx.command_loop.keyboard.select_terminal(original_terminal);
+    ctx.command_loop_mut()
+        .keyboard
+        .select_terminal(original_terminal);
+    let key_echo = ctx.command_loop().keyboard.kboard.key_echo_state_copied();
     let KeyEchoState::Immediate {
         prompt: Some(prompt),
-    } = &ctx.command_loop.keyboard.kboard.key_echo_state
+    } = key_echo
     else {
         panic!("restoring the keyboard lost its prompt");
     };
@@ -104,7 +123,7 @@ fn gc_preserves_parked_keyboard_prompt_interval_plists() {
 
 #[test]
 fn discrete_scroll_preserves_horizontal_direction_and_multiple_steps() {
-    let mut eval = crate::emacs_core::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let buffer = eval.buffer_manager_mut().create_buffer("wheel-steps");
     let frame = eval
         .frame_manager_mut()
@@ -135,7 +154,7 @@ fn discrete_scroll_preserves_horizontal_direction_and_multiple_steps() {
 
 #[test]
 fn invalid_or_empty_wheel_motion_does_not_dispatch_a_command() {
-    let mut eval = crate::emacs_core::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let buffer = eval.buffer_manager_mut().create_buffer("wheel-invalid");
     let frame = eval
         .frame_manager_mut()
@@ -160,7 +179,7 @@ fn invalid_or_empty_wheel_motion_does_not_dispatch_a_command() {
 
 #[test]
 fn precise_scroll_is_a_lisp_wheel_command_with_pixel_payload() {
-    let mut eval = crate::emacs_core::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let buffer = eval.buffer_manager_mut().create_buffer("precise-wheel");
     let frame = eval
         .frame_manager_mut()
@@ -189,7 +208,7 @@ fn precise_scroll_is_a_lisp_wheel_command_with_pixel_payload() {
 
 #[test]
 fn help_prefix_echo_faces_semantic_key_bindings() {
-    let mut eval = crate::emacs_core::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.assign("help-char", Value::fixnum(8));
     eval.assign("help-event-list", Value::list(vec![Value::symbol("help")]));
 
@@ -234,7 +253,7 @@ fn help_prefix_echo_faces_semantic_key_bindings() {
 /// GNU never shows at that point (the TUI quoted-insert parity tests).
 #[test]
 fn pending_key_echo_drops_the_start_decoration_when_the_next_key_arrives() {
-    let mut eval = crate::emacs_core::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.assign("help-char", Value::fixnum(8));
     eval.assign("help-event-list", Value::list(vec![Value::symbol("help")]));
     eval.assign("echo-keystrokes-help", Value::T);
@@ -289,7 +308,7 @@ fn presented_interactions_retain_exact_posn_string_until_retirement() {
 
 #[test]
 fn presented_pointer_preserves_phase_and_installs_snapshot_posn_string() {
-    let mut eval = crate::emacs_core::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let buffer = eval.buffer_manager_mut().create_buffer("presented-pointer");
     let frame = eval
         .frame_manager_mut()
@@ -358,7 +377,7 @@ fn presented_tab_line_hit_joins_renderer_string_index_with_rooted_lisp_value() {
         PresentedHitQuery, PresentedHitRegion, PresentedRegionKind, PresentedStringPosition, Rect,
     };
 
-    let mut eval = crate::emacs_core::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let buffer = eval
         .buffer_manager_mut()
         .create_buffer("presented-tab-line-hit");
@@ -415,27 +434,27 @@ fn presented_tab_line_hit_joins_renderer_string_index_with_rooted_lisp_value() {
     {
         let frame = eval.frame_manager_mut().get_mut(frame_id).unwrap();
         frame.set_window_system(Some(Value::symbol("neo")));
-        frame
-            .prepare_and_activate_display_presentation_for_test(
-                presentation,
-                vec![WindowDisplaySnapshot {
-                    point_rows: None,
-                    window_id,
-                    regions,
-                    regions_materialized: true,
-                    tab_line_height: 16,
-                    chrome_strings: vec![PresentedWindowChromeString::new(
-                        PresentedWindowChromeArea::TabLine,
-                        string_id,
-                        shared_text.clone(),
-                    )]
-                    .into(),
-                    ..Default::default()
-                }],
-            )
-            .unwrap();
+        neovm_display::test_support::authority::prepare_and_activate_display_presentation_for_test(
+            frame,
+            presentation,
+            vec![WindowDisplaySnapshot {
+                point_rows: None,
+                window_id,
+                regions,
+                regions_materialized: true,
+                tab_line_height: 16,
+                chrome_strings: vec![PresentedWindowChromeString::new(
+                    PresentedWindowChromeArea::TabLine,
+                    string_id,
+                    shared_text.clone(),
+                )]
+                .into(),
+                ..Default::default()
+            }],
+        )
+        .unwrap();
     }
-    eval.command_loop
+    eval.command_loop_mut()
         .keyboard
         .kboard
         .presented_mouse_observation = Some(PresentedMouseObservation {
@@ -455,7 +474,7 @@ fn presented_tab_line_hit_joins_renderer_string_index_with_rooted_lisp_value() {
 
 #[test]
 fn presented_region_drives_exact_gnu_mouse_position_and_rejects_stale_observation() {
-    let mut eval = crate::emacs_core::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let buffer = eval.buffer_manager_mut().create_buffer("presented-region");
     eval.buffer_manager_mut().set_current(buffer);
     eval.buffer_manager_mut()
@@ -483,44 +502,42 @@ fn presented_region_drives_exact_gnu_mouse_position_and_rejects_stale_observatio
     {
         let frame = eval.frame_manager_mut().get_mut(frame_id).unwrap();
         frame.set_window_system(Some(Value::symbol("neo")));
-        frame
-            .prepare_and_activate_display_presentation_for_test(
-                crate::window::geometry::PresentationId::new(1),
-                vec![crate::window::WindowDisplaySnapshot {
-                    point_rows: None,
-                    window_id,
-                    regions: crate::window::PresentedWindowRegions {
-                        outer: neomacs_display_protocol::types::Rect::new(10.0, 5.0, 180.0, 90.0),
-                        text_body: neomacs_display_protocol::types::Rect::new(
-                            20.0, 10.0, 160.0, 70.0,
-                        ),
-                        mode_line: Some(neomacs_display_protocol::types::Rect::new(
-                            10.0, 80.0, 180.0, 15.0,
-                        )),
-                        ..Default::default()
-                    },
-                    regions_materialized: true,
-                    points: vec![crate::window::DisplayPointSnapshot {
-                        role: crate::window::DisplayPointRole::Glyph,
-                        // Poison the legacy coordinate lookup; the transported
-                        // renderer hit below owns position 7.
-                        buffer_pos: neovm_edit::buffer::LispCharPos1::new(1),
-                        x: 0,
-                        y: 5,
-                        width: 8,
-                        height: 16,
-                        row: 3,
-                        col: 4,
-                    }],
-                    body_rows: vec![crate::window::PresentedBodyRowSnapshot {
-                        output_row: 3,
-                        body_row: 0,
-                        body_y: 0,
-                    }],
+        neovm_display::test_support::authority::prepare_and_activate_display_presentation_for_test(
+            frame,
+            crate::window::geometry::PresentationId::new(1),
+            vec![crate::window::WindowDisplaySnapshot {
+                point_rows: None,
+                window_id,
+                regions: crate::window::PresentedWindowRegions {
+                    outer: neomacs_display_protocol::types::Rect::new(10.0, 5.0, 180.0, 90.0),
+                    text_body: neomacs_display_protocol::types::Rect::new(20.0, 10.0, 160.0, 70.0),
+                    mode_line: Some(neomacs_display_protocol::types::Rect::new(
+                        10.0, 80.0, 180.0, 15.0,
+                    )),
                     ..Default::default()
+                },
+                regions_materialized: true,
+                points: vec![crate::window::DisplayPointSnapshot {
+                    role: crate::window::DisplayPointRole::Glyph,
+                    // Poison the legacy coordinate lookup; the transported
+                    // renderer hit below owns position 7.
+                    buffer_pos: neovm_edit::buffer::LispCharPos1::new(1),
+                    x: 0,
+                    y: 5,
+                    width: 8,
+                    height: 16,
+                    row: 3,
+                    col: 4,
                 }],
-            )
-            .unwrap();
+                body_rows: vec![crate::window::PresentedBodyRowSnapshot {
+                    output_row: 3,
+                    body_row: 0,
+                    body_y: 0,
+                }],
+                ..Default::default()
+            }],
+        )
+        .unwrap();
     }
     let protocol_window = neomacs_display_protocol::DisplayWindowId::new(window_id.0 as i64);
     let hit = neomacs_display_protocol::PresentedHitIndex::from_parts(
@@ -568,7 +585,7 @@ fn presented_region_drives_exact_gnu_mouse_position_and_rejects_stale_observatio
         frame_id,
     );
     assert_eq!(
-        eval.command_loop
+        eval.command_loop()
             .keyboard
             .kboard
             .presented_mouse_observation
@@ -605,7 +622,7 @@ fn presented_region_drives_exact_gnu_mouse_position_and_rejects_stale_observatio
 
     eval.queue_mouse_help_echo_update(Some(frame_id), 22, 12);
     let help = eval
-        .command_loop
+        .command_loop()
         .keyboard
         .kboard
         .last_help_echo_event
@@ -683,7 +700,7 @@ fn presented_region_drives_exact_gnu_mouse_position_and_rejects_stale_observatio
         "a right divider reports `right-divider`, not `vertical-line`"
     );
 
-    eval.command_loop
+    eval.command_loop_mut()
         .keyboard
         .kboard
         .presented_mouse_observation = None;
@@ -713,7 +730,7 @@ fn presented_region_drives_exact_gnu_mouse_position_and_rejects_stale_observatio
 
 /// A GUI frame whose active presentation has a text body and a right divider.
 fn frame_with_a_divider() -> (crate::emacs_core::Context, crate::window::FrameId, u64) {
-    let mut eval = crate::emacs_core::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let buffer = eval.buffer_manager_mut().create_buffer("window-edge-drag");
     eval.buffer_manager_mut().set_current(buffer);
     let frame_id = eval
@@ -727,24 +744,22 @@ fn frame_with_a_divider() -> (crate::emacs_core::Context, crate::window::FrameId
     {
         let frame = eval.frame_manager_mut().get_mut(frame_id).unwrap();
         frame.set_window_system(Some(Value::symbol("neo")));
-        frame
-            .prepare_and_activate_display_presentation_for_test(
-                crate::window::geometry::PresentationId::new(1),
-                vec![crate::window::WindowDisplaySnapshot {
-                    point_rows: None,
-                    window_id,
-                    regions: crate::window::PresentedWindowRegions {
-                        outer: neomacs_display_protocol::types::Rect::new(10.0, 5.0, 180.0, 90.0),
-                        text_body: neomacs_display_protocol::types::Rect::new(
-                            20.0, 10.0, 160.0, 70.0,
-                        ),
-                        ..Default::default()
-                    },
-                    regions_materialized: true,
+        neovm_display::test_support::authority::prepare_and_activate_display_presentation_for_test(
+            frame,
+            crate::window::geometry::PresentationId::new(1),
+            vec![crate::window::WindowDisplaySnapshot {
+                point_rows: None,
+                window_id,
+                regions: crate::window::PresentedWindowRegions {
+                    outer: neomacs_display_protocol::types::Rect::new(10.0, 5.0, 180.0, 90.0),
+                    text_body: neomacs_display_protocol::types::Rect::new(20.0, 10.0, 160.0, 70.0),
                     ..Default::default()
-                }],
-            )
-            .unwrap();
+                },
+                regions_materialized: true,
+                ..Default::default()
+            }],
+        )
+        .unwrap();
     }
     (eval, frame_id, window_id.0)
 }
@@ -852,7 +867,7 @@ fn feed(
         },
         other => other,
     };
-    eval.command_loop
+    eval.command_loop_mut()
         .keyboard
         .pending_input_events
         .push_back(event);
@@ -1006,7 +1021,7 @@ fn a_press_whose_observation_describes_another_point_opens_no_drag() {
 }
 
 fn presented_pointer_fixture() -> (crate::emacs_core::Context, crate::window::FrameId, u64, u32) {
-    let mut eval = crate::emacs_core::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let buffer = eval.buffer_manager_mut().create_buffer("presented-pointer");
     let frame = eval
         .frame_manager_mut()
@@ -1025,7 +1040,7 @@ fn presented_pointer_fixture() -> (crate::emacs_core::Context, crate::window::Fr
 #[test]
 fn pointer_before_retirement_resolves_before_snapshot_is_released() {
     let (mut eval, frame, presentation, interaction) = presented_pointer_fixture();
-    eval.command_loop
+    eval.command_loop_mut()
         .keyboard
         .pending_input_events
         .push_back(InputEvent::PresentedPointer {
@@ -1037,7 +1052,7 @@ fn pointer_before_retirement_resolves_before_snapshot_is_released() {
             y: 8.0,
             emacs_frame_id: frame.0,
         });
-    eval.command_loop
+    eval.command_loop_mut()
         .keyboard
         .pending_input_events
         .push_back(InputEvent::PresentationRetired { presentation });
@@ -1060,8 +1075,7 @@ fn pointer_before_retirement_resolves_before_snapshot_is_released() {
     );
 
     assert_eq!(
-        crate::emacs_core::eval::keyboard::builtin_input_pending_p(&mut eval, vec![])
-            .expect("retirement service"),
+        builtin_input_pending_p(&mut eval, vec![]).expect("retirement service"),
         Value::NIL
     );
     assert_eq!(
@@ -1073,11 +1087,11 @@ fn pointer_before_retirement_resolves_before_snapshot_is_released() {
 #[test]
 fn retirement_before_pointer_rejects_stale_hit_without_reordering_key() {
     let (mut eval, frame, presentation, interaction) = presented_pointer_fixture();
-    eval.command_loop
+    eval.command_loop_mut()
         .keyboard
         .pending_input_events
         .push_back(InputEvent::PresentationRetired { presentation });
-    eval.command_loop
+    eval.command_loop_mut()
         .keyboard
         .pending_input_events
         .push_back(InputEvent::PresentedPointer {
@@ -1089,7 +1103,7 @@ fn retirement_before_pointer_rejects_stale_hit_without_reordering_key() {
             y: 8.0,
             emacs_frame_id: frame.0,
         });
-    eval.command_loop
+    eval.command_loop_mut()
         .keyboard
         .pending_input_events
         .push_back(InputEvent::key_press(KeyEvent::char('k')));
@@ -1112,26 +1126,26 @@ fn layout_invalidation_forces_redisplay_when_evaluator_signature_is_unchanged() 
     let _policy = crate::emacs_core::eval::RedisplayHookPolicyGuard::legacy();
     let redisplays = std::rc::Rc::new(std::cell::Cell::new(0));
     let observed = std::rc::Rc::clone(&redisplays);
-    let mut eval = crate::emacs_core::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.redisplay_fn = Some(Box::new(move |_| observed.set(observed.get() + 1)));
 
     eval.redisplay().expect("redisplay");
     eval.redisplay().expect("redisplay");
     assert_eq!(redisplays.get(), 1, "unchanged redisplay should be skipped");
 
-    eval.command_loop
+    eval.command_loop_mut()
         .keyboard
         .pending_input_events
         .push_back(InputEvent::LayoutInvalidated);
     let effects = eval.service_leading_internal_frontend_events();
-    assert!(effects.redisplay_needed);
+    assert!(effects.redisplay_needed_copied());
     eval.redisplay().expect("redisplay");
     assert_eq!(redisplays.get(), 2);
 }
 
 #[test]
 fn presentation_activation_event_atomically_exposes_prepared_geometry() {
-    let mut eval = crate::emacs_core::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let buffer = eval.buffer_manager_mut().create_buffer("activation-event");
     let frame_id = eval
         .frame_manager_mut()
@@ -1143,7 +1157,7 @@ fn presentation_activation_event_atomically_exposes_prepared_geometry() {
         .prepare_live_window_presentation(presentation, Vec::new())
         .expect("prepare presentation");
 
-    eval.command_loop
+    eval.command_loop_mut()
         .keyboard
         .pending_input_events
         .push_back(InputEvent::PresentationActivated {
@@ -1156,7 +1170,7 @@ fn presentation_activation_event_atomically_exposes_prepared_geometry() {
     assert_eq!(frame.active_presentation(), Some(presentation));
     assert!(!frame.is_display_presentation_prepared(presentation));
 
-    eval.command_loop
+    eval.command_loop_mut()
         .keyboard
         .pending_input_events
         .push_back(InputEvent::PresentationRetired {
@@ -1174,7 +1188,7 @@ fn presentation_activation_event_atomically_exposes_prepared_geometry() {
 
 #[test]
 fn presentation_discard_event_removes_only_prepared_geometry() {
-    let mut eval = crate::emacs_core::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let buffer = eval.buffer_manager_mut().create_buffer("discard-event");
     let frame_id = eval
         .frame_manager_mut()
@@ -1199,7 +1213,7 @@ fn presentation_discard_event_removes_only_prepared_geometry() {
         },
     );
 
-    eval.command_loop
+    eval.command_loop_mut()
         .keyboard
         .pending_input_events
         .push_back(InputEvent::PresentationDiscarded {
@@ -1343,7 +1357,7 @@ fn keyboard_runtime_preserves_kboard_state_per_terminal() {
     runtime.set_input_decode_map(Value::symbol("secondary-map"));
     runtime.unread_event(Value::fixnum(2));
 
-    runtime.select_terminal(crate::emacs_core::terminal::pure::TERMINAL_ID);
+    runtime.select_terminal(TERMINAL_ID);
     assert_eq!(
         runtime.input_decode_map(),
         Value::symbol("primary-map"),
@@ -1375,7 +1389,7 @@ fn keyboard_runtime_polls_parked_kboards_after_active_one() {
     runtime.unread_event(Value::fixnum(2));
     runtime.select_terminal(9);
     runtime.unread_event(Value::fixnum(3));
-    runtime.select_terminal(crate::emacs_core::terminal::pure::TERMINAL_ID);
+    runtime.select_terminal(TERMINAL_ID);
 
     assert_eq!(runtime.read_key_event(), Some(Value::fixnum(1)));
     assert_eq!(
@@ -1399,7 +1413,7 @@ fn keyboard_runtime_reports_pending_input_across_parked_kboards() {
     let mut runtime = KeyboardRuntime::new();
     runtime.select_terminal(9);
     runtime.unread_event(Value::fixnum(99));
-    runtime.select_terminal(crate::emacs_core::terminal::pure::TERMINAL_ID);
+    runtime.select_terminal(TERMINAL_ID);
 
     assert!(
         runtime.has_pending_kboard_input(),
@@ -1920,8 +1934,7 @@ fn read_key_sequence_with_timeout_returns_nil_like_gnu() {
     // exactly the batch shape.
     crate::test_utils::init_test_tracing();
     // with-timeout is timer.el lisp, so this needs the bootstrapped runtime.
-    let mut eval =
-        crate::emacs_core::load::create_bootstrap_evaluator_cached().expect("bootstrap evaluator");
+    let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap evaluator");
     let result = eval
         .eval_str_each(
             "(condition-case e
@@ -1947,7 +1960,7 @@ fn fresh_character_events_go_through_keyboard_translate_table_like_gnu() {
     // key-translates C-h to DEL (lisp/simple.el:11178), so the 0x08 the
     // Backspace key sends must arrive as 127 (DIVERGENCES.md entry 67).
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     // No table: the event passes through unchanged.
     assert_eq!(
@@ -2012,7 +2025,7 @@ fn presented_mouse_position_over_the_inactive_echo_area_reports_the_mini_windows
         PresentedHitRegion, PresentedRegionKind, PresentedTextPosition, Rect,
     };
 
-    let mut eval = crate::emacs_core::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let buffer = eval.buffer_manager_mut().create_buffer("echo-area-posn");
     let frame_id = eval
         .frame_manager_mut()
@@ -2094,7 +2107,7 @@ fn presented_mouse_position_over_the_inactive_echo_area_reports_the_mini_windows
         586.0,
     )))
     .unwrap();
-    eval.command_loop
+    eval.command_loop_mut()
         .keyboard
         .kboard
         .presented_mouse_observation = Some(PresentedMouseObservation {
@@ -2131,7 +2144,7 @@ fn geometry_only_echo_area_hit_cannot_publish_live_minibuffer_help_echo() {
         PresentedHitRegion, PresentedRegionKind, PresentedTextPosition, Rect,
     };
 
-    let mut eval = crate::emacs_core::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let buffer = eval.buffer_manager_mut().create_buffer("echo-help-frame");
     let frame_id = eval
         .frame_manager_mut()
@@ -2216,7 +2229,7 @@ fn geometry_only_echo_area_hit_cannot_publish_live_minibuffer_help_echo() {
         112.0,
     )))
     .unwrap();
-    eval.command_loop
+    eval.command_loop_mut()
         .keyboard
         .kboard
         .presented_mouse_observation = Some(PresentedMouseObservation {
@@ -2382,7 +2395,7 @@ fn alt_transport_cooks_the_alt_bit_like_gnu() {
     )
     .expect("A-x transport event");
     let value = event.to_emacs_event_value();
-    let expected = crate::emacs_core::eval::keyboard::pure::KEY_CHAR_ALT | ('x' as i64);
+    let expected = keyboard::pure::KEY_CHAR_ALT | ('x' as i64);
     assert_eq!(
         value,
         Value::fixnum(expected),
@@ -2404,7 +2417,7 @@ fn alt_transport_cooks_the_alt_bit_like_gnu() {
 
 #[test]
 fn display_idle_maintenance_yields_to_input_and_avoids_nested_or_timed_reads() {
-    let mut eval = crate::emacs_core::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let calls = std::rc::Rc::new(std::cell::Cell::new(0));
     let observed = calls.clone();
     eval.display_idle_maintenance_fn = Some(Box::new(move |_| {
@@ -2428,7 +2441,7 @@ fn display_idle_maintenance_yields_to_input_and_avoids_nested_or_timed_reads() {
             .is_some()
     );
     assert_eq!(calls.get(), 1);
-    let sender = crate::emacs_core::eval::host_input::HostInputPublisher::install(&mut eval);
+    let sender = HostInputPublisher::install(&mut eval);
 
     sender
         .send(InputEvent::Focus {
@@ -2487,39 +2500,39 @@ fn character_and_keysym_transport_keep_colliding_values_distinct() {
 // GNU keyboard.c starts/stops idle only for an unbounded read (no end_time).
 #[test]
 fn timed_read_preserves_existing_idle_epoch_at_immediate_timeout() {
-    let mut eval = crate::emacs_core::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.timer_start_idle();
-    let epoch = eval.command_loop.idle_start_time;
+    let epoch = eval.command_loop().idle_start_time_for_test();
     assert!(epoch.is_some());
     assert_eq!(
         eval.read_char_with_timeout(Some(std::time::Duration::ZERO))
             .unwrap(),
         None
     );
-    assert_eq!(eval.command_loop.idle_start_time, epoch);
+    assert_eq!(eval.command_loop().idle_start_time_for_test(), epoch);
 }
 
 #[test]
 fn timed_read_preserves_existing_idle_epoch_after_wait_timeout() {
-    let mut eval = crate::emacs_core::Context::new();
-    let _sender = crate::emacs_core::eval::host_input::HostInputPublisher::install(&mut eval);
+    let mut eval = crate::test_utils::new_context();
+    let _sender = HostInputPublisher::install(&mut eval);
 
     eval.timer_start_idle();
-    let epoch = eval.command_loop.idle_start_time;
+    let epoch = eval.command_loop().idle_start_time_for_test();
     assert_eq!(
         eval.read_char_with_timeout(Some(std::time::Duration::from_millis(5)))
             .unwrap(),
         None
     );
-    assert_eq!(eval.command_loop.idle_start_time, epoch);
+    assert_eq!(eval.command_loop().idle_start_time_for_test(), epoch);
 }
 
 #[test]
 fn timed_read_preserves_existing_idle_epoch_when_input_arrives() {
-    let mut eval = crate::emacs_core::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.timer_start_idle();
-    let epoch = eval.command_loop.idle_start_time;
-    eval.command_loop
+    let epoch = eval.command_loop().idle_start_time_for_test();
+    eval.command_loop_mut()
         .keyboard
         .pending_input_events
         .push_back(InputEvent::key_press(KeyEvent::char('x')));
@@ -2528,25 +2541,25 @@ fn timed_read_preserves_existing_idle_epoch_when_input_arrives() {
             .unwrap(),
         Some(Value::fixnum('x' as i64))
     );
-    assert_eq!(eval.command_loop.idle_start_time, epoch);
+    assert_eq!(eval.command_loop().idle_start_time_for_test(), epoch);
 }
 
 #[test]
 fn timed_read_does_not_start_idle_epoch() {
-    let mut eval = crate::emacs_core::Context::new();
+    let mut eval = crate::test_utils::new_context();
     assert_eq!(
         eval.read_char_with_timeout(Some(std::time::Duration::ZERO))
             .unwrap(),
         None
     );
-    assert!(eval.command_loop.idle_start_time.is_none());
+    assert!(eval.command_loop().idle_start_time_for_test().is_none());
 }
 
 #[test]
 fn unbounded_read_stops_idle_epoch_when_input_arrives() {
-    let mut eval = crate::emacs_core::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.timer_start_idle();
-    eval.command_loop
+    eval.command_loop_mut()
         .keyboard
         .pending_input_events
         .push_back(InputEvent::key_press(KeyEvent::char('x')));
@@ -2554,16 +2567,20 @@ fn unbounded_read_stops_idle_epoch_when_input_arrives() {
         eval.read_char_with_timeout(None).unwrap(),
         Some(Value::fixnum('x' as i64))
     );
-    assert!(eval.command_loop.idle_start_time.is_none());
+    assert!(eval.command_loop().idle_start_time_for_test().is_none());
 }
 
 #[test]
 fn timed_read_does_not_resume_previous_idle_epoch_for_ignored_mouse_motion() {
-    let mut eval = crate::emacs_core::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.timer_start_idle();
     eval.timer_stop_idle();
-    assert!(eval.command_loop.last_idle_start_time.is_some());
-    eval.command_loop
+    assert!(
+        eval.command_loop()
+            .last_idle_start_time_for_test()
+            .is_some()
+    );
+    eval.command_loop_mut()
         .keyboard
         .pending_input_events
         .push_back(InputEvent::MouseMove {
@@ -2577,13 +2594,13 @@ fn timed_read_does_not_resume_previous_idle_epoch_for_ignored_mouse_motion() {
             .unwrap(),
         None
     );
-    assert!(eval.command_loop.idle_start_time.is_none());
+    assert!(eval.command_loop().idle_start_time_for_test().is_none());
 }
 
 #[test]
 fn timed_read_preserves_idle_epoch_while_servicing_async_special_input() {
     let _policy = crate::emacs_core::eval::RedisplayHookPolicyGuard::legacy();
-    let mut eval = crate::emacs_core::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.eval_str(
         r#"(setq vm-test-surface-error nil
                 neomacs-surface-error-functions
@@ -2591,7 +2608,7 @@ fn timed_read_preserves_idle_epoch_while_servicing_async_special_input() {
                         (setq vm-test-surface-error (list id error)))))"#,
     )
     .expect("install observable surface-error hook");
-    let sender = crate::emacs_core::eval::host_input::HostInputPublisher::install(&mut eval);
+    let sender = HostInputPublisher::install(&mut eval);
     let _sender_keepalive = sender.clone();
 
     let (release, released) = crossbeam_channel::bounded(0);
@@ -2624,7 +2641,7 @@ fn timed_read_preserves_idle_epoch_while_servicing_async_special_input() {
         }
     }));
     eval.timer_start_idle();
-    let epoch = eval.command_loop.idle_start_time;
+    let epoch = eval.command_loop().idle_start_time_for_test();
     let result = eval.read_char_with_timeout(Some(std::time::Duration::from_secs(1)));
     worker.join().expect("async input worker finishes");
     assert_eq!(result.unwrap(), Some(Value::fixnum('x' as i64)));
@@ -2634,13 +2651,13 @@ fn timed_read_preserves_idle_epoch_while_servicing_async_special_input() {
         Value::T,
         "the special event must invoke its Lisp handler with the delivered arguments",
     );
-    assert_eq!(eval.command_loop.idle_start_time, epoch);
+    assert_eq!(eval.command_loop().idle_start_time_for_test(), epoch);
 }
 
 #[test]
 fn timed_read_expired_deadline_still_runs_preliminary_redisplay() {
     let _policy = crate::emacs_core::eval::RedisplayHookPolicyGuard::legacy();
-    let mut eval = crate::emacs_core::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let calls = std::rc::Rc::new(std::cell::Cell::new(0));
     let observed = std::rc::Rc::clone(&calls);
     eval.redisplay_fn = Some(Box::new(move |_| observed.set(observed.get() + 1)));
@@ -2658,7 +2675,7 @@ fn timed_read_expired_deadline_still_runs_preliminary_redisplay() {
 #[test]
 fn timed_read_expired_deadline_services_preliminary_redisplay_input() {
     let _policy = crate::emacs_core::eval::RedisplayHookPolicyGuard::legacy();
-    let mut eval = crate::emacs_core::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.eval_str(
         r#"(setq vm-test-surface-error nil
                 neomacs-surface-error-functions
@@ -2667,15 +2684,16 @@ fn timed_read_expired_deadline_services_preliminary_redisplay_input() {
     )
     .unwrap();
     eval.redisplay_fn = Some(Box::new(move |eval| {
-        eval.command_loop.keyboard.pending_input_events.push_back(
-            InputEvent::SurfaceCreateFailed {
+        eval.command_loop_mut()
+            .keyboard
+            .pending_input_events
+            .push_back(InputEvent::SurfaceCreateFailed {
                 id: 7,
                 error: "expired read".into(),
-            },
-        );
+            });
     }));
     eval.timer_start_idle();
-    let epoch = eval.command_loop.idle_start_time;
+    let epoch = eval.command_loop().idle_start_time_for_test();
     assert_eq!(
         eval.read_char_with_timeout(Some(std::time::Duration::ZERO))
             .unwrap(),
@@ -2687,15 +2705,15 @@ fn timed_read_expired_deadline_services_preliminary_redisplay_input() {
         Value::T,
         "input-wait service must handle the redisplay event before timeout"
     );
-    assert_eq!(eval.command_loop.idle_start_time, epoch);
+    assert_eq!(eval.command_loop().idle_start_time_for_test(), epoch);
 }
 
 #[test]
 fn timed_read_expired_deadline_pending_input_skips_preliminary_redisplay() {
     let _policy = crate::emacs_core::eval::RedisplayHookPolicyGuard::legacy();
-    let mut eval = crate::emacs_core::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.redisplay_fn = Some(Box::new(|_| panic!("pending input must preempt redisplay")));
-    eval.command_loop
+    eval.command_loop_mut()
         .keyboard
         .pending_input_events
         .push_back(InputEvent::key_press(KeyEvent::char('x')));
@@ -2709,7 +2727,7 @@ fn timed_read_expired_deadline_pending_input_skips_preliminary_redisplay() {
 #[test]
 fn timed_read_expired_deadline_respects_inhibit_redisplay() {
     let _policy = crate::emacs_core::eval::RedisplayHookPolicyGuard::legacy();
-    let mut eval = crate::emacs_core::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.eval_str("(setq inhibit-redisplay t)").unwrap();
     eval.redisplay_fn = Some(Box::new(|_| panic!("redisplay must remain inhibited")));
     assert_eq!(
@@ -2722,21 +2740,22 @@ fn timed_read_expired_deadline_respects_inhibit_redisplay() {
 #[test]
 fn timed_read_preserves_idle_epoch_during_preliminary_redisplay_service() {
     let _policy = crate::emacs_core::eval::RedisplayHookPolicyGuard::legacy();
-    let mut eval = crate::emacs_core::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let queued = std::rc::Rc::new(std::cell::Cell::new(false));
     let observed = std::rc::Rc::clone(&queued);
     eval.redisplay_fn = Some(Box::new(move |eval| {
         if !observed.replace(true) {
-            eval.command_loop.keyboard.pending_input_events.push_back(
-                InputEvent::SurfaceCreateFailed {
+            eval.command_loop_mut()
+                .keyboard
+                .pending_input_events
+                .push_back(InputEvent::SurfaceCreateFailed {
                     id: 0,
                     error: "redisplay test failure".into(),
-                },
-            );
+                });
         }
     }));
     eval.timer_start_idle();
-    let epoch = eval.command_loop.idle_start_time;
+    let epoch = eval.command_loop().idle_start_time_for_test();
     assert_eq!(
         eval.read_char_with_timeout(Some(std::time::Duration::from_millis(5)))
             .unwrap(),
@@ -2746,7 +2765,7 @@ fn timed_read_preserves_idle_epoch_during_preliminary_redisplay_service() {
         queued.get(),
         "redisplay must enqueue the special event after the initial input drain"
     );
-    assert_eq!(eval.command_loop.idle_start_time, epoch);
+    assert_eq!(eval.command_loop().idle_start_time_for_test(), epoch);
 }
 fn mouse_left_press(
     eval: &mut crate::emacs_core::eval::Context,

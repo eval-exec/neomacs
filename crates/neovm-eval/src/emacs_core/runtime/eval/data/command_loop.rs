@@ -199,6 +199,7 @@ impl PrefixArg {
 /// old cells and immediately rebuilds the complete pending key sequence.  A
 /// closed state keeps that lifecycle distinct from ordinary Lisp messages.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum KeyEchoState {
     #[default]
     Inactive,
@@ -424,6 +425,14 @@ pub(crate) enum MouseEventPayload {
 }
 
 impl KBoard {
+    /// Copied key-echo state for the re-homed keyboard oracle; the KBoard
+    /// field stays private (N1).
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn key_echo_state_copied(&self) -> KeyEchoState {
+        self.key_echo_state.clone()
+    }
+
     pub fn new() -> Self {
         Self {
             tty_input_decoder: KeyboardInputDecoder::default(),
@@ -1299,6 +1308,20 @@ pub struct CommandLoop {
 }
 
 impl CommandLoop {
+    /// Copied idle epoch observers for the re-homed keyboard oracle; the
+    /// fields stay private (N1).
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn idle_start_time_for_test(&self) -> Option<std::time::Instant> {
+        self.idle_start_time
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn last_idle_start_time_for_test(&self) -> Option<std::time::Instant> {
+        self.last_idle_start_time
+    }
+
     pub fn new() -> Self {
         Self {
             keyboard: KeyboardRuntime::new(),

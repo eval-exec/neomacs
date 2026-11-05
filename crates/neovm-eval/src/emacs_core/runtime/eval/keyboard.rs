@@ -4134,7 +4134,7 @@ impl crate::emacs_core::eval::Context {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn handle_read_char_input_event(
         &mut self,
@@ -7056,7 +7056,11 @@ pub fn parse_interactive_spec(spec: &str) -> Vec<InteractiveCode> {
     codes
 }
 
-fn key_sequence_translation_events(translation: Value, mode: SymbolMode) -> Option<Vec<Value>> {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn key_sequence_translation_events(
+    translation: Value,
+    mode: SymbolMode,
+) -> Option<Vec<Value>> {
     if translation.is_nil() || translation.is_fixnum() {
         return None;
     }
@@ -7079,6 +7083,5 @@ fn key_sequence_translation_events(translation: Value, mode: SymbolMode) -> Opti
 // Tests
 // ===========================================================================
 
-#[cfg(test)]
-#[path = "keyboard/tests/keyboard_test.rs"]
-mod tests;
+// keyboard_test.rs and its gnu-oracle/extended-keysyms/frame-focus subfiles
+// moved to core moved_eval (option-A re-home); eval keeps no test module here.

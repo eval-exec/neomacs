@@ -346,6 +346,17 @@ pub mod authority {
         crate::emacs_core::bytecode::ByteCodeFunctionExt::seal_hand_assembled_ops(function)
     }
 
+    /// Typed key-echo state write for the re-homed keyboard oracle. The
+    /// KBoard field stays private (N1); this fence is the only cross-crate
+    /// route and exposes no manager view.
+    #[allow(private_interfaces)]
+    pub fn set_key_echo_state_for_test(
+        context: &mut Context,
+        state: crate::emacs_core::eval::data::command_loop::KeyEchoState,
+    ) {
+        context.command_loop_mut().keyboard.kboard.key_echo_state = state;
+    }
+
     /// P1-CLASSES-ALL-CRATES FENCE (peer 17:50Z autoload pilot): replace a
     /// Context's autoload manager with an owned manager.  The manager lives in a
     /// WorldView and holds heap Values, so N3 forbids exposing `&mut`/`&`; this

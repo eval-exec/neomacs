@@ -155,6 +155,13 @@ pub struct InternalEventEffects {
 }
 
 impl InternalEventEffects {
+    /// Copied redisplay-needed observer for the re-homed keyboard oracle.
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn redisplay_needed_copied(&self) -> bool {
+        self.redisplay_needed
+    }
+
     #[doc(hidden)]
     pub fn merge(self, other: Self) -> Self {
         Self {
