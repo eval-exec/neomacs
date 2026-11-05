@@ -4476,8 +4476,8 @@ dependencies = [
  "tree-sitter",
  "tree-sitter-language",
  "unicode_names2",
- "whoami",
  "visibility",
+ "whoami",
  "windows-sys 0.61.2",
 ]
 

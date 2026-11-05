@@ -87,3 +87,6 @@ visibility = { version = "0.1.1", optional = true }
 [dev-dependencies]
 # Downward-only: shared value test helpers for this crate's own unit tests.
 neovm-value = { path = "../neovm-value", features = ["test-support"] }
+# value's test-support exposes CacheRootScan::Snapshot, so text must compile
+# its matching arm in the same test build (A1 consumer gate, downward only).
+neovm-text = { path = "../neovm-text", features = ["test-support"] }
