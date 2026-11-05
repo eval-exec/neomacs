@@ -62,6 +62,9 @@ pub struct PropertyInterval {
     /// Snapshot map for the interval plist.
     pub properties: HashMap<Value, Value>,
     /// Property keys in GNU plist order, newest first.
+    #[cfg(feature = "test-support")]
+    pub key_order: Vec<Value>,
+    #[cfg(not(feature = "test-support"))]
     pub(crate) key_order: Vec<Value>,
 }
 

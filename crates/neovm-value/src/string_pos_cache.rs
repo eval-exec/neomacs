@@ -26,11 +26,29 @@ use crate::value::Value;
 #[derive(Clone, Copy, Debug)]
 #[doc(hidden)]
 pub struct Entry {
+    #[cfg(feature = "test-support")]
+    pub string: Value,
+    #[cfg(not(feature = "test-support"))]
     string: Value,
+    #[cfg(feature = "test-support")]
+    pub data: *const u8,
+    #[cfg(not(feature = "test-support"))]
     data: *const u8,
+    #[cfg(feature = "test-support")]
+    pub sbytes: usize,
+    #[cfg(not(feature = "test-support"))]
     sbytes: usize,
+    #[cfg(feature = "test-support")]
+    pub epoch: u64,
+    #[cfg(not(feature = "test-support"))]
     epoch: u64,
+    #[cfg(feature = "test-support")]
+    pub char_pos: GnuStringCharPos,
+    #[cfg(not(feature = "test-support"))]
     char_pos: GnuStringCharPos,
+    #[cfg(feature = "test-support")]
+    pub byte_pos: usize,
+    #[cfg(not(feature = "test-support"))]
     byte_pos: usize,
 }
 
