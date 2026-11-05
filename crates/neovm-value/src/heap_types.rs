@@ -128,6 +128,9 @@ pub struct LispString {
     /// denotes borrowed mapped/static bytes. The logical length comes from
     /// `size`/`size_byte`, so this one word is enough to reconstruct the Vec
     /// for mutation or drop without a separately allocated storage sidecar.
+    #[cfg(feature = "test-support")]
+    pub storage_capacity: usize,
+    #[cfg(not(feature = "test-support"))]
     storage_capacity: usize,
 }
 

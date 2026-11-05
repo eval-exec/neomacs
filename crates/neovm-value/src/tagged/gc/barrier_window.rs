@@ -140,6 +140,7 @@ pub struct CompiledObservationGate {
 }
 
 impl CompiledObservationGate {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) const NONE: Self = Self {
         observed: [BarrierWindow::NONE; 2],
         excluded: None,
@@ -150,6 +151,7 @@ impl CompiledObservationGate {
 
 impl BarrierWindow {
     /// No owner is covered.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) const NONE: Self = Self { lo: 0, len: 0 };
     /// Every owner is covered (heap addresses are 8-aligned, so the one
     /// address `usize::MAX` this leaves out is never an owner).
