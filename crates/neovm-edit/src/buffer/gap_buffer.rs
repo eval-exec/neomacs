@@ -931,6 +931,7 @@ impl GapBuffer {
         self.position_anchors.set(ring);
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn move_gap_to(&mut self, pos: usize) {
         assert!(
             pos <= self.len(),

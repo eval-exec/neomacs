@@ -647,6 +647,7 @@ impl CharsetRegistry {
         }
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn register(&mut self, info: CharsetInfo) {
         self.register_inner(info, true);
     }
@@ -1689,6 +1690,7 @@ struct FastCharsetDecode {
 
 impl CharsetDecoder {
     /// How many bytes one character of this charset occupies.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn dimension(&self) -> usize {
         self.dimension
     }
@@ -1697,6 +1699,7 @@ impl CharsetDecoder {
     /// and how many bytes it consumed -- the same contract as
     /// [`charset_decode_char_from_bytes`], which this replaces at call sites
     /// that can resolve once.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn decode_from_bytes(&self, bytes: &[u8]) -> Option<(i64, usize)> {
         if bytes.len() < self.dimension {
             return None;

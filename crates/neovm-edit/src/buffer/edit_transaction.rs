@@ -406,6 +406,7 @@ impl Buffer {
     /// GNU `del_range_2` records deletion undo before marker adjustment and
     /// storage mutation. The plan owns the measured range and optional deleted
     /// text; undo-only marker metadata is read from the live chain at commit.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(in crate::buffer) fn execute_delete_text_plan(
         &mut self,
         plan: DeleteTextPlan,

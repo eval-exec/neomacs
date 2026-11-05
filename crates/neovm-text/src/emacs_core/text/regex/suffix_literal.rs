@@ -123,6 +123,7 @@ pub(super) fn derive(pattern: &CompiledPattern, on: bool) -> Option<SuffixLitera
 
 impl SuffixLiteral {
     #[inline]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn search(
         &self,
         pattern: &CompiledPattern,

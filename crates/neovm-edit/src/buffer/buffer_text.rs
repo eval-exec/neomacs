@@ -264,6 +264,7 @@ impl SingleBytePositionSpan {
     }
 }
 
+#[cfg(not(any(test, feature = "test-support")))]
 struct BufferTextStorage {
     metrics: TextMetrics,
     /// Copy-on-write text bytes, the same pattern as `text_props`. Under
@@ -322,6 +323,102 @@ struct BufferTextStorage {
     /// Internal (non-Lisp-visible) anchor positions populated on long scans.
     /// Invalidated wholesale when the content epoch advances.
     anchor_cache: RefCell<Vec<TextPositionAnchor>>,
+    /// Content epoch at which the anchor_cache is valid.
+    /// Mismatch triggers a wholesale clear on next read.
+    anchor_cache_key: Cell<u64>,
+    /// Round-robin replacement cursor for the anchor ring.
+    anchor_cache_cursor: Cell<usize>,
+    /// Memo ring for `syntax_prop_free_run_end_at_char_pos` (see its doc).
+    syntax_run_memo: RefCell<[SyntaxRunMemoEntry; 4]>,
+    syntax_run_memo_cursor: Cell<usize>,
+    /// Byte-coordinate run memo for the byte-addressed syntax scanners.
+    syntax_byte_run_memo: RefCell<[SyntaxByteRunMemoEntry; 4]>,
+    syntax_byte_run_memo_cursor: Cell<usize>,
+    /// Char-coordinate resolved-run memo for the parse loop's prop cache.
+    syntax_char_run_memo: RefCell<[SyntaxCharRunMemoEntry; 4]>,
+    syntax_char_run_memo_cursor: Cell<usize>,
+    /// Safe restart positions for `back_comment`'s forward re-parse (see
+    /// [`SyntaxSafePositions`]). Per storage, so indirect buffers share it
+    /// and `buffer-swap-text` carries it with the text it describes.
+    syntax_safe_positions: RefCell<SyntaxSafePositions>,
+    /// The text line index (`NEOVM_TEXT_LINE_INDEX`, see `line_index`):
+    /// `None` until a line query on large enough live text builds it.
+    /// Outside the shared `backend`; a snapshot shares the `Rc`.
+    text_index: RefCell<Option<Rc<TextLineIndex>>>,
+    /// Set by a snapshot that would have used an index this live text did
+    /// not have; the live text builds one at its next snapshot. Shared by a
+    /// live text and its snapshots; created only while the knob is on.
+    text_index_demand: OnceCell<Rc<Cell<bool>>>,
+    line_index_role: LineIndexRole,
+    /// Identity of and invalidation notes for the syntax parse cache whose
+    /// recorded runs live in the text layer (P3.4, stage-3 C7). Outside the
+    /// copy-on-write backend: a snapshot starts with a fresh identity and no
+    /// notes (P3.0 §3.9).
+    syntax_cache: SyntaxCacheState,
+    /// Per-buffer GNU clip_changed witness. Indirect buffers share this heap
+    /// allocation but retain distinct restrictions. No Buffer/JIT layout change.
+    /// Kept after existing fields to avoid intentionally displacing hot fields.
+    mode_line_clipped: HashSet<BufferId>,
+}
+#[cfg(any(test, feature = "test-support"))]
+pub struct BufferTextStorage {
+    metrics: TextMetrics,
+    /// Copy-on-write text bytes, the same pattern as `text_props`. Under
+    /// `NEOMACS_TEXT_SNAPSHOT=share` a layout snapshot shares them with an
+    /// `Rc` bump; every mutation goes through [`backend_mut`], which copies
+    /// only while a snapshot still holds the old bytes (counted by
+    /// `text_snapshot::buffer_text_cow_copies`). `Rc` has no `DerefMut`, so
+    /// the compiler forces every mutation site through that one function.
+    backend: Rc<TextBackend>,
+    content_epoch: u64,
+    virtual_gap: GapCompatState,
+    modified_tick: i64,
+    chars_modified_tick: i64,
+    /// Tracks `modified_tick` at the last text-PROPERTY change (GNU has no
+    /// direct analog; mirrors `chars_modified_tick` for char edits). Lets
+    /// redisplay distinguish "appearance changed" (face/display/invisible
+    /// props) from "text changed" without conflating the two. Bumped only via
+    /// [`BufferText::record_text_property_modification`].
+    props_modified_tick: i64,
+    /// GNU `BEG_UNCHANGED` analog (incremental-layout Phase 3, spec §6): the
+    /// number of chars at the buffer START that are unchanged since the last
+    /// redisplay ack. `i64::MAX` means "fully unchanged" (no edit since reset).
+    /// Composed by `min` across edits; survives position shifts because it is a
+    /// COUNT from the end, not an absolute position.
+    beg_unchanged: i64,
+    /// GNU `END_UNCHANGED` analog: chars at the buffer END unchanged since ack.
+    end_unchanged: i64,
+    /// The start of the earliest TEXT-PROPERTY change since the ack, as a
+    /// char count from the buffer start (`i64::MAX` = none). GNU records a
+    /// property change over `[b, e)` as starting one char EARLIER
+    /// (`modify_text_properties` runs `BUF_COMPUTE_UNCHANGED (buf, b - 1, e)`,
+    /// textprop.c:87), and that one char is what makes a jit-lock
+    /// `fontified nil` write from the start of the line fail
+    /// `text_outside_line_unchanged_p` -- i.e. what decides whether GNU's
+    /// one-line optimization redraws the mode line. `beg_unchanged` above
+    /// deliberately does not apply the shift (the layout engine widens by its
+    /// own box-topology lookbehind); this field lets the mode-line gate
+    /// reproduce GNU's accounting exactly.
+    prop_beg_unchanged: i64,
+    save_modified_tick: i64,
+    /// Copy-on-write text-property table. Shared via `Rc` so a layout snapshot
+    /// (`BufferText::clone` / `Buffer::text_snapshot`, taken every redisplay)
+    /// is O(1) instead of deep-copying the whole interval tree per frame.
+    /// Mutations go through `Rc::make_mut`, which copies only while a snapshot
+    /// still holds the old table -- and snapshots are dropped before the next
+    /// mutation, so it copies ~never. Because you cannot obtain `&mut
+    /// TextPropertyTable` from `&Rc<_>` except via `make_mut`, the compiler
+    /// forces every mutation site to opt in; no site can silently share-mutate.
+    text_props: Rc<TextPropertyTable>,
+    /// Head of the intrusive per-buffer marker chain (GNU `buffer->own_text.markers`).
+    /// Authoritative since T6; the parallel `Vec<MarkerEntry>` was deleted in T7.
+    markers_head: *mut neovm_value::tagged::header::MarkerObj,
+    /// Interior-mutable last-query cache for char↔byte conversion.
+    pos_cache: Cell<PositionCache>,
+    single_byte_span: Cell<SingleBytePositionSpan>,
+    /// Internal (non-Lisp-visible) anchor positions populated on long scans.
+    /// Invalidated wholesale when the content epoch advances.
+    pub anchor_cache: RefCell<Vec<TextPositionAnchor>>,
     /// Content epoch at which the anchor_cache is valid.
     /// Mismatch triggers a wholesale clear on next read.
     anchor_cache_key: Cell<u64>,
@@ -1339,6 +1436,7 @@ impl BufferText {
         count
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn insert_measured_emacs_bytes(
         &mut self,
         pos: EmacsBytePos,
@@ -1360,6 +1458,7 @@ impl BufferText {
         }
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn delete_measured_range(&mut self, range: TextEditRange) {
         if range.is_empty() {
             return;
@@ -3443,6 +3542,7 @@ impl BufferText {
 
     /// Convert a valid character-boundary byte position without growing the
     /// position-anchor vector. The caller owns byte-boundary validation.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn emacs_byte_pos_to_char_pos_no_alloc(&self, target: EmacsBytePos) -> CharPos0 {
         self.storage
             .borrow()

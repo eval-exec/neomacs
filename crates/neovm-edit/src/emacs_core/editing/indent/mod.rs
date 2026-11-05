@@ -1737,6 +1737,7 @@ pub(crate) struct DisplayStopCache {
 }
 
 impl DisplayStopCache {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn new() -> Self {
         // recompute_at = 0 forces the first call (at any byte >= 0) to probe.
         Self {
@@ -1794,6 +1795,7 @@ impl DisplayStopProp {
 
     /// The text-property name whose value-change bounds this property's run
     /// (what `next_display_stop` watches).
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn key(self) -> &'static str {
         match self {
             Self::Invisible => "invisible",

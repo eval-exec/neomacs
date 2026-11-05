@@ -1278,6 +1278,7 @@ impl BeforeChangeSpecialFunction {
         value == Value::symbol(self.name())
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn name(self) -> &'static str {
         self.into()
     }

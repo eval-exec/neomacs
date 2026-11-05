@@ -4624,6 +4624,7 @@ impl Buffer {
     /// The returned [`FirstChangeModtime`] is the only thing the undo recorder
     /// accepts, and this is its only source, so no call site can record the
     /// current buffer's own modtime instead.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(in crate::buffer) fn first_change_modtime(&self) -> FirstChangeModtime {
         self.modtime.for_first_change()
     }
@@ -5813,6 +5814,7 @@ impl LiveBuffers {
     fn contains_key(&self, id: &BufferId) -> bool {
         self.get(id).is_some()
     }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn len(&self) -> usize {
         self.live
     }
@@ -6558,6 +6560,7 @@ impl BufferManager {
             .any(|buffer| buffer.base_buffer == Some(id))
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn swap_buffer_text(
         &mut self,
         current_id: BufferId,
@@ -8286,6 +8289,7 @@ impl BufferManager {
         })
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn generate_new_buffer_name_ignoring_with_random(
         &self,
         base: &str,

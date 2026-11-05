@@ -187,7 +187,7 @@ impl TextLineIndexConfig {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     static CONFIG_OVERRIDE: std::cell::Cell<Option<TextLineIndexConfig>> =
         const { std::cell::Cell::new(None) };
@@ -195,7 +195,7 @@ thread_local! {
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Run F with the index settings forced to CONFIG on this thread.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn with_text_line_index_config<R>(
     config: TextLineIndexConfig,
     f: impl FnOnce() -> R,

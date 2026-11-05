@@ -79,10 +79,12 @@ pub(crate) enum BookmarkRecordKey {
 
 #[cfg(any(test, feature = "test-support"))]
 impl BookmarkRecordKey {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn from_lisp_value(value: &Value) -> Option<Self> {
         value.as_bare_symbol_name()?.parse().ok()
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn name(self) -> &'static str {
         self.into()
     }

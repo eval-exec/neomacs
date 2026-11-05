@@ -140,6 +140,7 @@ impl RopeTextBackend {
         TextBackendDebugLayout::Rope(self.metrics())
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn len(&self) -> usize {
         self.metrics().emacs_bytes_usize()
     }
@@ -341,6 +342,7 @@ impl RopeTextBackend {
         self.contiguous_slice(start, end).map(f)
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(in crate::buffer) fn insert_measured_emacs_bytes(
         &mut self,
         pos: EmacsBytePos,
@@ -376,6 +378,7 @@ impl RopeTextBackend {
         self.root = self.merge_adjacent(merged, right);
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(in crate::buffer) fn delete_measured_range(&mut self, range: TextEditRange) {
         let start = range.byte_start().get();
         let end = range.byte_end().get();

@@ -47,6 +47,7 @@ pub(crate) enum TextPropertyControlVariable {
 }
 
 impl TextPropertyControlVariable {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn name(self) -> &'static str {
         self.into()
     }
@@ -317,6 +318,7 @@ fn plist_get_value(plist: Value, prop: Value) -> Option<Value> {
     raw_plist_lookup::get(plist, prop)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn plist_slice_get_value(plist: &[(Value, Value)], prop: Value) -> Option<Value> {
     plist
         .iter()
@@ -603,6 +605,7 @@ enum CharPropertyCarrier {
 }
 static_assertions::assert_impl_all!(CharPropertyCarrier: Send, Sync);
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn lookup_char_property_from_direct<'a, F, Vars: EditVariableRead<'a>>(
     vars: Vars,
     buffers: &BufferManager,
@@ -2105,6 +2108,7 @@ impl BufferPropertyLookupDomain {
         }
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn contains(self, buf: &Buffer, pos: LispCharPos1) -> bool {
         match self {
             Self::Accessible => {

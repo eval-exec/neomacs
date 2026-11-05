@@ -767,6 +767,7 @@ pub(crate) enum AsciiPreimage {
 
 impl CaseTranslation {
     /// Cached translators retain their Lisp table through the regexp root group.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn symbol_mode(&self) -> SymbolMode {
         self.symbol_mode
     }
@@ -786,6 +787,7 @@ impl CaseTranslation {
     /// it is memoized by the write tick, and every search asks again.  Asking
     /// fills the ASCII slots of the byte memo.
     #[inline]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn ascii_preimage(&self) -> AsciiPreimage {
         self.ascii_preimage_for(CharTableWalk::Allowed)
     }
@@ -916,6 +918,7 @@ fn char_table_folds_into_ascii(
 }
 
 impl CaseTranslation {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn standard() -> Self {
         // The canonicalization of bytes 0..256 is a constant
         // (`downcase_char_code_emacs_compat`), but a case-insensitive regex is
@@ -963,6 +966,7 @@ impl CaseTranslation {
         Self::from_char_table_with_symbols(table, SymbolMode::Bare)
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn from_char_table_with_symbols(table: Value, mode: SymbolMode) -> Self {
         Self {
             byte: std::array::from_fn(|_| std::cell::Cell::new(CASE_TRANSLATION_UNFILLED)),
@@ -996,6 +1000,7 @@ impl CaseTranslation {
     /// Inline for the codes below 256 (the per-byte search scans and the
     /// matcher ask for these constantly); the rest go out of line.
     #[inline]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn translate(&self, c: u32) -> u32 {
         if let Some(translated) = self.byte_slot(c as usize) {
             return translated;
@@ -1489,10 +1494,10 @@ fn force_pike() -> bool {
     false
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Run `f` with one regex routing policy, restoring the previous policy even
 /// when `f` unwinds.
 #[cfg(any(test, feature = "fuzzing"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn with_regex_engine_override<R>(
     engine: RegexEngineOverride,
     f: impl FnOnce() -> R,
@@ -1637,6 +1642,7 @@ pub(crate) fn regex_compile(
     regex_compile_lisp(&pattern, posix, case_fold)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn regex_compile_lisp(
     pattern: &neovm_value::heap_types::LispString,
     posix: bool,
@@ -1646,6 +1652,7 @@ pub(crate) fn regex_compile_lisp(
     regex_compile_lisp_with_translation(pattern, posix, translation)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn regex_compile_lisp_with_translation(
     pattern: &neovm_value::heap_types::LispString,
     posix: bool,
@@ -3214,6 +3221,7 @@ enum PosixCharClassKind {
 }
 
 impl PosixCharClassKind {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn name(self) -> Option<&'static str> {
         match self {
             Self::Word => Some("word"),
@@ -4482,9 +4490,11 @@ impl BoundarySyntaxRequest {
     pub(crate) const fn current_byte(self) -> neovm_edit::buffer::EmacsBytePos {
         self.current_byte
     }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) const fn previous(self) -> Option<BoundarySyntaxCharacter> {
         self.previous
     }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) const fn current(self) -> Option<BoundarySyntaxCharacter> {
         self.current
     }
@@ -4508,6 +4518,7 @@ impl BoundarySyntaxRequest {
     /// GNU opcode lookup order and short-circuiting, with no source conversion
     /// or capability query added to ordinary boundaries.
     #[inline]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn physical_lookup<T: SyntaxLookup + ?Sized>(
         self,
         lookup: &T,
@@ -4579,9 +4590,11 @@ pub(crate) struct BoundarySyntaxClasses {
 }
 
 impl BoundarySyntaxClasses {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) const fn previous(self) -> Option<(emacs_char::EmacsChar, SyntaxClass)> {
         self.previous
     }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) const fn current(self) -> Option<(emacs_char::EmacsChar, SyntaxClass)> {
         self.current
     }
@@ -4598,11 +4611,11 @@ pub(crate) enum BoundarySyntaxMode {
     Supplied,
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Bind the lookup to its coordinate plan for one synchronous invocation.
 /// This borrowed pair never enters a persistent compiled-pattern cache.
 /// Threading: a mutator-local borrow of the original, thread-confined lookup.
 #[derive(Clone, Copy)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct MatchSyntax<'a> {
     lookup: &'a dyn SyntaxLookup,
     boundary_mode: BoundarySyntaxMode,
@@ -4631,6 +4644,7 @@ impl<'a> MatchSyntax<'a> {
     }
 
     #[inline]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn new(lookup: &'a dyn SyntaxLookup) -> Self {
         Self {
             lookup,
@@ -4771,10 +4785,10 @@ pub(crate) enum LookupClassKey {
     Tables { syntax: usize, category: usize },
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Default syntax lookup — uses GNU's standard syntax-table definitions.
 /// This is used when no buffer-specific syntax table is available
 /// (e.g. in unit tests or string-only matching).
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct DefaultSyntaxLookup;
 
 /// Syntax lookup backed by a buffer's actual syntax table.
@@ -6177,6 +6191,7 @@ fn pike_fallback_into(
 /// failure-point opcode (a fused literal or charset loop pushes the frames of
 /// its own `on_failure_jump`) and `start_memory`'s register save.  Interval
 /// counters push too; patterns with them never reach the callers.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn fail_stack_push_sites(bytecode: &[u8]) -> usize {
     let mut sites = 0usize;
     let mut pc = 0usize;
@@ -6218,6 +6233,7 @@ pub(crate) fn fail_stack_may_overflow(bytecode: &[u8], consumed: usize) -> bool 
 
 /// [`fail_stack_may_overflow`] with the push sites already counted.
 #[inline]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn fail_stack_may_overflow_with(push_sites: usize, consumed: usize) -> bool {
     consumed
         .saturating_add(1)
@@ -6229,6 +6245,7 @@ pub(crate) fn fail_stack_may_overflow_with(push_sites: usize, consumed: usize) -
 /// The consumed spans that cannot overflow, as one bound: for every
 /// `consumed`, `consumed < fail_stack_overflow_free_span(push_sites)` exactly
 /// when `!fail_stack_may_overflow_with(push_sites, consumed)`.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn fail_stack_overflow_free_span(push_sites: usize) -> usize {
     match push_sites.checked_mul(2) {
         Some(0) => usize::MAX,
@@ -6255,6 +6272,7 @@ fn pike_match_into(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn re_match_internal(
     scratch: &mut MatchScratch,
     pattern: &CompiledPattern,
@@ -7760,6 +7778,7 @@ struct PikeOutcome {
 
 /// Anchored leftmost-greedy match of an eligible pattern starting exactly at
 /// `pos`.  Byte-exact with `re_match_internal` for `pike_eligible` patterns.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn pike_match(
     pattern: &CompiledPattern,
     text: &[u8],
@@ -8242,6 +8261,7 @@ fn goto_fail_nastyloop(
 /// loop-free program points forward, so the program is a left-to-right
 /// DAG and the sum of every consuming opcode bounds any path through it.
 /// `exactn` counts bytes, which only overestimates its character count.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn pattern_max_match_chars(pattern: &CompiledPattern) -> Option<usize> {
     const CAP: usize = 512;
     let bytecode = &pattern.buffer;
@@ -9716,11 +9736,11 @@ fn fastmap_force_disabled() -> bool {
     false
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Build every scanner a search derives lazily from `pattern`, as the first
 /// search long enough to use them would.  The differential checker calls this
 /// so a short generated text still exercises the optimized scans.
 #[cfg(any(test, feature = "fuzzing"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn build_search_optimizations(pattern: &CompiledPattern) {
     let _ = pattern.literal_prefilter();
     if let Some(table) = pattern.translate.as_ref() {
@@ -9900,10 +9920,10 @@ thread_local! {
     static ANCHOR_ALT_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Run `f` with `NEOVM_REGEX_ANCHOR_ALT` forced to `on` on this thread.  It is
 /// read when a pattern compiles, so compile inside `f`.
 #[cfg(any(test, feature = "fuzzing"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn with_anchor_alt<R>(on: bool, f: impl FnOnce() -> R) -> R {
     let _guard = neovm_value::tls_scope::TlsScope::new(&ANCHOR_ALT_OVERRIDE, Some(on));
     f()

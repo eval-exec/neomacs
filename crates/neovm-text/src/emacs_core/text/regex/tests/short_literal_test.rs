@@ -4,6 +4,7 @@ use super::*;
 
 type CapturedMatch = Option<(usize, Vec<i64>, Vec<i64>)>;
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn search(
     optimized: bool,
     expression: &str,

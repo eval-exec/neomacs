@@ -1047,6 +1047,7 @@ pub struct CodingSystemInfo {
 }
 
 impl CodingSystemInfo {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn new(name: &str, coding_type: &str, mnemonic: char, eol_type: EolType) -> Self {
         Self {
             name: intern(name),
@@ -1533,6 +1534,7 @@ impl CodingSystemManager {
     }
 
     /// Register a coding system.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn register(&mut self, info: CodingSystemInfo) {
         self.invalidate_lookup_cache();
         let name = info.name;
@@ -4646,6 +4648,7 @@ struct CharsetDetectionPlan {
 }
 
 impl CharsetDetectionPlan {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn for_coding_system(mgr: &CodingSystemManager, name: SymId, mode: SymbolMode) -> Option<Self> {
         let resolved = canonical_runtime_name(mgr, resolve_sym(name))?;
         let charsets = coding_system_charset_list_syms(mgr, &resolved, mode)?;

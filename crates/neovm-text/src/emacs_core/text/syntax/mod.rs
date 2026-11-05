@@ -233,7 +233,8 @@ impl SyntaxPurposeSymbol {
         value.as_bare_symbol_name()?.parse().ok()
     }
 
-    #[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn name(self) -> &'static str {
         self.into()
     }
@@ -614,6 +615,7 @@ fn syntax_runtime_string(value: &Value) -> Result<String, Flow> {
 /// for bare syntax codes, but deliberately allocates fresh objects for the
 /// standard table's string-quote and escape entries.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 enum LispSyntaxObjectReuse {
     CanonicalBare,
     Fresh,
@@ -1292,6 +1294,7 @@ impl<'a> ParseBufferChars<'a> {
     /// Decode the next character without consuming it.  Used only to classify
     /// the second half of a possible two-character comment marker.
     #[inline(always)]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn peek(&mut self) -> char {
         let pos = self.byte_pos.get();
         let offset = pos.wrapping_sub(self.window_start);
@@ -2124,6 +2127,7 @@ enum IgnoredSkip {
 }
 
 impl IgnoredSkip {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn position(self) -> usize {
         match self {
             IgnoredSkip::At(pos) | IgnoredSkip::UnterminatedComment(pos) => pos,
@@ -3541,6 +3545,7 @@ pub struct SyntaxPropByteRun<'a> {
 }
 
 impl<'a> SyntaxPropByteRun<'a> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn new(props: SyntaxProperties<'a>) -> Self {
         let run = match props {
             SyntaxProperties::Ignore | SyntaxProperties::PositionedIgnore => {
@@ -3579,6 +3584,7 @@ impl<'a> SyntaxPropByteRun<'a> {
     /// the run a regexp syntax read at `byte_pos` would load, so a caller can
     /// classify the stretch by the table alone (the existence DFA).
     /// `usize::MAX` for a scan that ignores properties.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn property_free_until(&self, buf: &Buffer, byte_pos: EmacsBytePos) -> usize {
         match self.syntax_table_prop_at_emacs_byte(buf, byte_pos) {
             Some(_) => byte_pos.get(),
@@ -3613,6 +3619,7 @@ impl<'a> SyntaxPropByteRun<'a> {
     /// The resolved `syntax-table` property at an Emacs byte position, served
     /// from the cached run when possible.
     #[inline]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn syntax_table_prop_at_emacs_byte(
         &self,
         buf: &Buffer,
@@ -3752,6 +3759,7 @@ impl<'a> StringSyntaxPositionSource<'a> {
         }
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn byte_to_gnu_char_pos(self, byte_pos: usize) -> GnuStringCharPos {
         match self.kind {
             StringSyntaxPositionSourceKind::Heap { value, string } => {
@@ -3795,7 +3803,8 @@ pub enum StringSyntaxPositionError {
 }
 
 impl StringSyntaxPositionError {
-    #[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) const fn position(self) -> Option<GnuStringCharPos> {
         match self {
             Self::OutOfRange { position } => Some(position),
@@ -3953,6 +3962,7 @@ impl<'a> StringSyntaxPropByteRun<'a> {
     /// `syntax-table` property, or `byte_pos` itself when one applies there
     /// (see [`SyntaxPropByteRun::property_free_until`]).  `usize::MAX` for a
     /// string with no properties to read.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn property_free_until(&self, byte_pos: usize) -> usize {
         match &self.position_mode {
             StringSyntaxPositionMode::Computed => {}
@@ -4477,6 +4487,7 @@ impl DescriptorLog {
 }
 
 impl<'a> SyntaxPropRange<'a> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn new(props: SyntaxProperties<'a>) -> Self {
         let run = match props {
             SyntaxProperties::Ignore | SyntaxProperties::PositionedIgnore => {
@@ -6646,6 +6657,7 @@ pub(crate) fn builtin_forward_sexp<H: TextHost>(eval: &mut H, args: Vec<Value>) 
 /// `(backward-sexp &optional COUNT)` — move point backward over COUNT balanced
 /// expressions.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_backward_sexp<H: TextHost>(eval: &mut H, args: Vec<Value>) -> EvalResult {
     let count = if args.is_empty() || args[0].is_nil() {
         1i64
@@ -7303,6 +7315,7 @@ impl PartialParseState {
         }
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn from_oldstate(oldstate: Option<&Value>) -> Self {
         let mut state = Self::new();
         let Some(oldstate) = oldstate else {

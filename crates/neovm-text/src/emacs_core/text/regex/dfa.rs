@@ -129,6 +129,7 @@ pub(crate) enum Predicate {
     Category { category: u8, negate: bool },
 }
 
+#[cfg(not(any(test, feature = "test-support")))]
 /// One consuming position of the NFA.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Position {
@@ -138,6 +139,19 @@ pub(crate) struct Position {
     pub(crate) lit_off: u8,
     /// Index into [`Nfa::predicates`].
     pub(crate) predicate: u16,
+    /// Where the thread resumes after the character is consumed.
+    pub(crate) next: KernelItem,
+}
+#[cfg(any(test, feature = "test-support"))]
+/// One consuming position of the NFA.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Position {
+    /// The consuming opcode.
+    pub(crate) pc: u32,
+    /// Byte offset of the pattern character within an `exactn` literal.
+    pub(crate) lit_off: u8,
+    /// Index into [`Nfa::predicates`].
+    pub predicate: u16,
     /// Where the thread resumes after the character is consumed.
     pub(crate) next: KernelItem,
 }
@@ -164,6 +178,7 @@ impl Assertions {
     }
 
     #[inline]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) const fn contains(self, other: Self) -> bool {
         self.0 & other.0 == other.0
     }
@@ -267,6 +282,7 @@ pub(crate) fn dfa_eligibility(pattern: &CompiledPattern) -> Result<(), DfaInelig
 
 impl Nfa {
     /// Build the NFA of an eligible pattern (see [`dfa_eligibility`]).
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn build(pattern: &CompiledPattern) -> Result<Self, DfaIneligible> {
         dfa_eligibility(pattern)?;
         let code = pattern
@@ -663,9 +679,15 @@ impl Facts {
     /// PREVIOUS-character fact).
     pub(crate) const EDGE: Self = Self(1 << 0);
     /// The character is a newline (`^` after it, `$` before it).
+    #[cfg(not(any(test, feature = "test-support")))]
     pub(crate) const NEWLINE: Self = Self(1 << 1);
+    #[cfg(any(test, feature = "test-support"))]
+    pub const NEWLINE: Self = Self(1 << 1);
     /// Word syntax (`\b \B \< \>`).
+    #[cfg(not(any(test, feature = "test-support")))]
     pub(crate) const WORD: Self = Self(1 << 2);
+    #[cfg(any(test, feature = "test-support"))]
+    pub const WORD: Self = Self(1 << 2);
     /// Word or symbol syntax (`\_< \_>`).
     #[cfg(not(any(test, feature = "test-support")))]
     const WORD_OR_SYMBOL: Self = Self(1 << 3);
@@ -674,12 +696,18 @@ impl Facts {
     /// The current character is word/symbol syntax for GNU symbol assertions.
     /// Unibyte input uses its raw byte here, unlike the promoted previous fact.
     /// This bit belongs to a class, never a predecessor state.
+    #[cfg(not(any(test, feature = "test-support")))]
     pub(crate) const CURRENT_WORD_OR_SYMBOL: Self = Self(1 << 5);
+    #[cfg(any(test, feature = "test-support"))]
+    pub const CURRENT_WORD_OR_SYMBOL: Self = Self(1 << 5);
     /// A word constituent above U+00FF.  Between two word constituents GNU's
     /// `WORD_BOUNDARY_P` consults scripts and categories unless both are at
     /// or below U+00FF (`WordBoundaryLookup::boundary_between`), so such a
     /// pair decides `\b` per character pair, never per class.
+    #[cfg(not(any(test, feature = "test-support")))]
     pub(crate) const WIDE_WORD: Self = Self(1 << 4);
+    #[cfg(any(test, feature = "test-support"))]
+    pub const WIDE_WORD: Self = Self(1 << 4);
     /// The state's previous character begins with a continuation byte, which
     /// is not a character head (GNU `CHAR_HEAD_P`, character.h:283): the
     /// previous-character scan (`GET_CHAR_BEFORE_2`, regex-emacs.c:67)
@@ -696,6 +724,7 @@ impl Facts {
     }
 
     #[inline]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) const fn contains(self, other: Self) -> bool {
         self.0 & other.0 == other.0
     }
@@ -942,7 +971,10 @@ impl Nfa {
 
 /// `byte_class` value of a byte whose class is not known yet (or, for the
 /// bytes of a non-ASCII character of multibyte text, is never kept there).
+#[cfg(not(any(test, feature = "test-support")))]
 pub(crate) const UNKNOWN_CLASS: u8 = 0xFF;
+#[cfg(any(test, feature = "test-support"))]
+pub const UNKNOWN_CLASS: u8 = 0xFF;
 /// Class ids are `u8` below [`UNKNOWN_CLASS`].
 pub(crate) const MAX_CLASSES: usize = UNKNOWN_CLASS as usize;
 const WIDE_SLOTS: usize = 512;
@@ -1085,7 +1117,6 @@ static_assertions::assert_eq_size!((u32, PositionalSyntaxFacts, u8), (u32, u8, u
 /// so a context change (another syntax table, a char-table write) only
 /// empties the maps from characters to ids; the DFA's transitions, keyed by
 /// class id, stay valid.
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct CharClasses {
     /// Class of each byte: every byte of unibyte text, ASCII of multibyte.
     pub(crate) byte_class: [u8; 256],
@@ -1112,7 +1143,6 @@ pub(crate) struct CharClasses {
 /// so a context change (another syntax table, a char-table write) only
 /// empties the maps from characters to ids; the DFA's transitions, keyed by
 /// class id, stay valid.
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub struct CharClasses {
     /// Class of each byte: every byte of unibyte text, ASCII of multibyte.
     pub byte_class: [u8; 256],
@@ -1124,7 +1154,7 @@ pub struct CharClasses {
     /// The facts of each tabled byte's character ([`NO_FACTS`]: not known
     /// yet), for the character before a candidate, which the DFA need not
     /// have classified.
-    byte_facts: [u8; 256],
+    pub byte_facts: [u8; 256],
     keys: Vec<ClassKey>,
     ids: FxHashMap<ClassKey, u8>,
     context: Option<ClassContext>,
@@ -1134,6 +1164,7 @@ pub struct CharClasses {
 }
 
 impl CharClasses {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn new(mask: Facts) -> Self {
         Self {
             byte_class: [UNKNOWN_CLASS; 256],
@@ -1149,6 +1180,7 @@ impl CharClasses {
     }
 
     /// Make the maps valid for a search in `context`.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn sync(&mut self, context: ClassContext) {
         if self.context == Some(context) {
             return;
@@ -1164,6 +1196,7 @@ impl CharClasses {
     }
 
     #[inline]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn key(&self, class: u8) -> &ClassKey {
         &self.keys[class as usize]
     }
@@ -1173,10 +1206,12 @@ impl CharClasses {
         self.keys[class as usize].facts
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn len(&self) -> usize {
         self.keys.len()
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn intern(&mut self, key: ClassKey) -> Result<u8, TooManyClasses> {
         if let Some(&id) = self.ids.get(&key) {
             return Ok(id);
@@ -1378,6 +1413,7 @@ struct StateKey {
     prev: Facts,
 }
 
+#[cfg(not(any(test, feature = "test-support")))]
 /// Counters of one DFA (reported under `NEOVM_REGEX_DFA_STATS`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct DfaCounters {
@@ -1397,7 +1433,28 @@ pub(crate) struct DfaCounters {
     /// at or past the lazy `syntax-propertize` frontier.
     pub(crate) frontier_unknown: u64,
 }
+#[cfg(any(test, feature = "test-support"))]
+/// Counters of one DFA (reported under `NEOVM_REGEX_DFA_STATS`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DfaCounters {
+    pub(crate) yes: u64,
+    pub no: u64,
+    pub(crate) unknown: u64,
+    pub states: u64,
+    pub clears: u64,
+    pub slow_transitions: u64,
+    pub bytes: u64,
+    /// Characters classified at their position, inside a `syntax-table`
+    /// property run.
+    pub positional_chars: u64,
+    /// Property-free stretches looked up (`plain_syntax_until`).
+    pub(crate) plain_runs: u64,
+    /// Candidates left to the matcher because the DFA would have read syntax
+    /// at or past the lazy `syntax-propertize` frontier.
+    pub frontier_unknown: u64,
+}
 
+#[cfg(not(any(test, feature = "test-support")))]
 /// What a search's syntax lookup means for the DFA, fixed for the search.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SearchSyntax {
@@ -1409,6 +1466,19 @@ struct SearchSyntax {
     /// `syntax-propertize` (`usize::MAX`: none).  A candidate the DFA cannot
     /// decide below it is left to the matcher.
     read_limit: usize,
+}
+#[cfg(any(test, feature = "test-support"))]
+/// What a search's syntax lookup means for the DFA, fixed for the search.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SearchSyntax {
+    /// The pattern reads syntax and `syntax-table` properties may apply: the
+    /// cached loop stops at property runs, and syntax is read through the
+    /// real lookup at the real position.
+    pub positional: bool,
+    /// The first input position whose syntax the matcher records for lazy
+    /// `syntax-propertize` (`usize::MAX`: none).  A candidate the DFA cannot
+    /// decide below it is left to the matcher.
+    pub read_limit: usize,
 }
 
 impl SearchSyntax {
@@ -1485,6 +1555,7 @@ pub struct ExistenceDfa {
 }
 
 impl ExistenceDfa {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn new(nfa: Nfa) -> Self {
         let mask = nfa.fact_mask();
         let reads_edge = nfa.assertions.intersects(
@@ -1533,6 +1604,7 @@ impl ExistenceDfa {
     }
 
     /// Why this DFA stopped deciding for good, if it did.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn gave_up(&self) -> Option<DfaGaveUp> {
         self.gave_up
     }
@@ -1573,6 +1645,7 @@ impl ExistenceDfa {
     }
 
     /// Drop every state and transition, keeping the NFA and the classes.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn clear_states(&mut self) {
         self.states.clear();
         self.state_ids.clear();
@@ -1814,6 +1887,7 @@ impl ExistenceDfa {
     /// clears those maps; the context-independent transitions remain valid.
     #[inline]
     #[allow(clippy::too_many_arguments)]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn cached_prefix_rejection(
         &self,
         pattern: &CompiledPattern,
@@ -2340,6 +2414,7 @@ thread_local! {
 
 /// Run `f` with the cold-path knob forced to `on` on this thread.
 #[cfg(any(test, feature = "fuzzing"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn with_cold_path<R>(on: bool, f: impl FnOnce() -> R) -> R {
     struct Guard(Option<bool>);
     impl Drop for Guard {
@@ -2559,7 +2634,10 @@ fn register_stats_report() {
 }
 
 /// Failed matcher entries a pattern's search sees before it builds a DFA.
+#[cfg(not(any(test, feature = "test-support")))]
 const COLD_THRESHOLD: u32 = 16;
+#[cfg(any(test, feature = "test-support"))]
+pub const COLD_THRESHOLD: u32 = 16;
 /// Decisions per adaptive-bypass window.
 const BYPASS_WINDOW: u32 = 64;
 /// A window in which more than this share (percent) of the verdicts are
@@ -2647,13 +2725,15 @@ impl Clone for DfaCell {
 
 impl DfaCell {
     /// The slot, for tests.
-    #[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn slot(&self) -> std::cell::Ref<'_, DfaSlot> {
         self.slot.borrow()
     }
 
     /// Whether initialization has published a non-cold slot.
     #[inline]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn initialized(&self) -> bool {
         self.initialized.load(std::sync::atomic::Ordering::Acquire)
     }
@@ -2797,6 +2877,7 @@ impl<'p> DfaLease<'p> {
     /// syntax where the matcher does, and leaves a candidate that reaches the
     /// frontier to the matcher, which records the read.
     #[inline(never)]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn acquire(
         pattern: &'p CompiledPattern,
         syntax: &dyn SyntaxLookup,
@@ -2878,6 +2959,7 @@ impl<'p> DfaLease<'p> {
     /// Select the inline path once for a search that actually has a lease.
     /// Verify keeps its anchored probe and always runs the matcher too.
     #[inline]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn inline_first_step_enabled(&self) -> bool {
         self.mode == DfaMode::On && first_step_enabled()
     }
@@ -2889,6 +2971,7 @@ impl<'p> DfaLease<'p> {
     /// Context maps have already been synchronized by `acquire` or `build`;
     /// the cache lookup reads no Lisp state and calls no syntax lookup.
     #[inline]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn try_inline_first_step_skip(
         &mut self,
         pattern: &CompiledPattern,
@@ -2931,6 +3014,7 @@ impl<'p> DfaLease<'p> {
     /// Returns what `re_match_candidate_in` would, with its side effects.
     #[inline(never)]
     #[allow(clippy::too_many_arguments)]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn candidate<const FIRST_STEP: bool>(
         &mut self,
         scratch: &mut MatchScratch,
@@ -3125,10 +3209,10 @@ impl<'p> DfaLease<'p> {
     }
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Build `pattern`'s DFA now, skipping the cold phase, so a short
 /// differential case exercises the filter.
 #[cfg(any(test, feature = "fuzzing"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn prime(
     pattern: &CompiledPattern,
     syntax: &dyn SyntaxLookup,

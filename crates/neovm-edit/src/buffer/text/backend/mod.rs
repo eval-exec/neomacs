@@ -279,6 +279,7 @@ impl TextBackend {
         dispatch_backend_ref!(self, storage => PhysicalTextBackend::with_contiguous_emacs_byte_range(storage, range, f))
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(in crate::buffer) fn insert_measured_emacs_bytes(
         &mut self,
         pos: EmacsBytePos,
@@ -288,6 +289,7 @@ impl TextBackend {
         dispatch_backend_mut!(self, storage => PhysicalTextBackend::insert_measured_emacs_bytes(storage, pos, bytes, extent));
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(in crate::buffer) fn delete_measured_range(&mut self, range: TextEditRange) {
         dispatch_backend_mut!(self, storage => PhysicalTextBackend::delete_measured_range(storage, range));
     }

@@ -330,6 +330,7 @@ impl<'a> SyntaxProperties<'a> {
         }
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn symbol_mode(self) -> SymbolMode {
         match self {
             Self::PositionedIgnore | Self::PositionedHonor(_) => SymbolMode::Positioned,

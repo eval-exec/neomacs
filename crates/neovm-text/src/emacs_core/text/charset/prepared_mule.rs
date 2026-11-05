@@ -70,6 +70,7 @@ impl CharsetEncoder {
     }
 
     #[inline]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn encode_char(&self, ch: i64) -> Option<i64> {
         match &self.kind {
             CharsetEncoderKind::Map(map) => map.as_ref()?.char_to_code.get(&ch).copied(),
@@ -156,6 +157,7 @@ impl EmacsMuleEncoder {
     /// dimension and scalar code. Unlike the legacy id-sort approximation,
     /// priority changes may select any member, including deprecated JIS-1978.
     #[inline]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn encode_char(&mut self, ch: i64) -> Option<(i64, i64, i64)> {
         self.candidates.iter_mut().find_map(|candidate| {
             let encoder = candidate

@@ -57,7 +57,10 @@ use neovm_value::heap_types::{GnuStringCharPos, LispString};
 
 #[doc(hidden)]
 pub const REPLACE_MATCH_SUBEXP_MISSING: &str = "replace-match subexpression does not exist";
+#[cfg(not(any(test, feature = "test-support")))]
 const GNU_SEARCH_REGS_BASE_CAPACITY: usize = 7;
+#[cfg(any(test, feature = "test-support"))]
+pub const GNU_SEARCH_REGS_BASE_CAPACITY: usize = 7;
 // Compiled-pattern LRU caches. GNU's `regexp_cache` (search.c) holds 20 entries
 // and that suffices there because GNU compiles a pattern into a cheap 256-byte
 // fastmap. neomacs compiles into a `regex_automata` Teddy prefilter, which is far
@@ -1755,6 +1758,7 @@ impl EngineMatchData {
             .extend(std::iter::repeat_with(|| None).take(GNU_SEARCH_REGS_BASE_CAPACITY - 1));
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn new(groups: MatchGroupVec) -> Self {
         Self {
             groups: groups

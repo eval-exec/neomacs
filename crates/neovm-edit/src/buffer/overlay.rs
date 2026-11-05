@@ -2161,6 +2161,7 @@ impl DisplayOverlayProperties {
     /// Symbol ids are NOT cached across calls: a pdump load replaces the
     /// interner, and a stale id here would silently classify every key as
     /// unrendered.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn intern() -> Self {
         Self {
             rendered: [

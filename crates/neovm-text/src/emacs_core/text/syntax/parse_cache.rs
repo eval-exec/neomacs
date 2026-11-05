@@ -1016,10 +1016,10 @@ impl SyntaxParseCache {
     }
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// The scan mode of a query the cache records: loop-top states on the chunk
 /// grid past what the run has, the last loop top before TO, and the property
 /// values read.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 struct Record {
     /// Loop tops at or below this are not taken (FROM, or the resume point).
     floor: usize,
@@ -1035,6 +1035,7 @@ struct Record {
 }
 
 impl Record {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn new(floor: usize, grid_frontier: usize, to_char: usize) -> Self {
         let chunk = chunk_chars();
         Self {
@@ -1409,6 +1410,7 @@ pub(super) fn parse_partial_sexp_cached(
 /// State is owned by this query; no cache borrow spans the scan and no Lisp
 /// runs. Shared-text mutators require the outer text-access synchronization
 /// described by `canon::back_comment_finish`.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) fn back_comment_canonical_state(
     buf: &Buffer,
     table: &SyntaxTable,

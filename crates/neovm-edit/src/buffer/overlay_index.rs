@@ -441,7 +441,8 @@ impl EndpointBPlusTree {
         self.records.assert_invariants();
     }
 
-    #[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn len(&self) -> usize {
         self.records.len()
     }
@@ -1186,6 +1187,7 @@ impl OverlayIndex {
         self.endpoints = OnceLock::new();
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn contains(&self, overlay: Value) -> bool {
         self.intervals.read().contains(overlay)
     }
@@ -1197,6 +1199,7 @@ impl OverlayIndex {
             .range_by_identity(OverlayIdentity::of(overlay))
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn len(&self) -> usize {
         self.intervals.read().len()
     }

@@ -53,6 +53,7 @@ impl GapTextBackend {
         }
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn len(&self) -> usize {
         self.gap.len()
     }
@@ -210,6 +211,7 @@ impl GapTextBackend {
         self.gap.with_contiguous_emacs_byte_range(range, f)
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(in crate::buffer) fn insert_measured_emacs_bytes(
         &mut self,
         pos: EmacsBytePos,
@@ -219,6 +221,7 @@ impl GapTextBackend {
         self.gap.insert_measured_emacs_bytes(pos, bytes, extent);
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(in crate::buffer) fn delete_measured_range(&mut self, range: TextEditRange) {
         self.gap.delete_measured_range(range);
     }

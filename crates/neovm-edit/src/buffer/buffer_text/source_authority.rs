@@ -22,6 +22,7 @@ pub struct SourceRevision {
 }
 
 impl SourceRevision {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn of(source: &BufferTextStorage) -> Self {
         Self {
             content_epoch: source.content_epoch,

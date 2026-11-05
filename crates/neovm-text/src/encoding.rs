@@ -971,6 +971,7 @@ impl SingleByteCharset {
         }
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn encode_char(self, code: u32) -> Option<u8> {
         match self {
             Self::Iso8859_1 => (code <= 0xFF).then_some(code as u8),
@@ -1463,6 +1464,7 @@ impl<'a> CodingSourceBytes<'a> {
     }
 
     #[inline]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn len(&self) -> usize {
         self.as_bytes().len()
     }
