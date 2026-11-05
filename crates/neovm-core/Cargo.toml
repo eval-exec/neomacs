@@ -210,6 +210,9 @@ neovm-eval = { path = "../neovm-eval", default-features = false, features = ["te
 # feature-gated system fixtures through this dev-only edge.  The normal
 # dependency above stays feature-free for product builds.
 neovm-system = { path = "../neovm-system", features = ["test-support"] }
+# The moved edit textprop oracle drives display's test-support terminal hook;
+# this downward dev edge enables that surface only in core's test build.
+neovm-display = { path = "../neovm-display", features = ["test-support"] }
 toml.workspace = true
 serde_json.workspace = true
 static_assertions.workspace = true
