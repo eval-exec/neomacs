@@ -2806,3 +2806,619 @@ fn authority_items_have_rows_and_existing_defining_files() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// LEAD 10:2xZ: every AUTHORITY item's public path set is EXACTLY {fence_path}.
+/// The fence is the sole public route. This check fails on:
+///   1. a public `use` (including a glob) outside the fence definition that
+///      re-exports the fence item, the fence module, or one of its ancestors;
+///   2. an item defined outside the fence whose ORIGINAL path is publicly
+///      reachable (every module on the chain is public and the item is pub).
+/// Production `src/**` only; test trees and cfg(test)/#[test] items are not
+/// public surface. Resolution covers the fence crate name (and `use ... as`
+/// aliases of it) plus `crate`/`self`/`super` inside the fence crate itself.
+// ---------------------------------------------------------------------------
+
+struct AuthRow {
+    crate_name: String,
+    item: String,
+    defining_file: String,
+    fence_path: String,
+}
+
+fn auth_rows(workspace: &Path) -> Vec<AuthRow> {
+    let path = workspace.join(ARCHITECTURE_DIR).join("AUTHORITY-ITEMS.tsv");
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+    let mut rows = Vec::new();
+    for (index, line) in text.lines().enumerate().skip(1) {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let fields: Vec<&str> = line.split('\t').collect();
+        assert_eq!(
+            fields.len(),
+            8,
+            "AUTHORITY-ITEMS.tsv line {} has {} columns",
+            index + 2,
+            fields.len()
+        );
+        rows.push(AuthRow {
+            crate_name: fields[0].to_owned(),
+            item: fields[1].to_owned(),
+            defining_file: fields[3].to_owned(),
+            fence_path: fields[4].to_owned(),
+        });
+    }
+    rows
+}
+
+fn auth_leaf(item: &str) -> &str {
+    item.rsplit("::").next().unwrap_or(item)
+}
+
+fn auth_expected(row: &AuthRow) -> String {
+    let leaf = auth_leaf(&row.item);
+    if row.fence_path.ends_with(&format!("::{leaf}")) || row.fence_path == leaf {
+        row.fence_path.clone()
+    } else {
+        format!("{}::{leaf}", row.fence_path)
+    }
+}
+
+/// The two signed fence definition files and their fence module path,
+/// relative to the crate root (the eval authority module is inline).
+fn auth_fence_file(crate_name: &str) -> Option<(&'static str, &'static [&'static str])> {
+    match crate_name {
+        "neovm-value" => Some((
+            "crates/neovm-value/src/test_support/authority.rs",
+            &["test_support", "authority"],
+        )),
+        "neovm-eval" => Some((
+            "crates/neovm-eval/src/test_support.rs",
+            &["test_support", "authority"],
+        )),
+        _ => None,
+    }
+}
+
+fn auth_path_attr(attrs: &[syn::Attribute]) -> Option<PathBuf> {
+    for attr in attrs {
+        if !attr.path().is_ident("path") {
+            continue;
+        }
+        if let syn::Meta::NameValue(value) = &attr.meta {
+            if let syn::Expr::Lit(expr) = &value.value {
+                if let syn::Lit::Str(text) = &expr.lit {
+                    return Some(PathBuf::from(text.value()));
+                }
+            }
+        }
+    }
+    None
+}
+
+fn auth_module_dir(file: &Path) -> PathBuf {
+    let parent = file.parent().unwrap_or_else(|| Path::new(""));
+    match file.file_name().and_then(|name| name.to_str()) {
+        Some("lib.rs") | Some("main.rs") | Some("mod.rs") => parent.to_path_buf(),
+        Some(name) => parent.join(name.strip_suffix(".rs").unwrap_or(name)),
+        None => parent.to_path_buf(),
+    }
+}
+
+fn auth_module_file(dir: &Path, name: &str) -> Option<PathBuf> {
+    let flat = dir.join(format!("{name}.rs"));
+    if flat.is_file() {
+        return Some(flat);
+    }
+    let nested = dir.join(name).join("mod.rs");
+    if nested.is_file() {
+        return Some(nested);
+    }
+    None
+}
+
+/// File -> (module segments relative to the crate root, every module on the
+/// chain is `pub`). Inline modules do not overwrite their file's own entry.
+fn auth_collect_modules(
+    file: &Path,
+    segments: Vec<String>,
+    public: bool,
+    map: &mut BTreeMap<PathBuf, (Vec<String>, bool)>,
+) -> Result<(), String> {
+    let canonical = file
+        .canonicalize()
+        .map_err(|error| format!("{}: {error}", file.display()))?;
+    let text = read(&canonical)?;
+    let ast = syn::parse_file(&text)
+        .map_err(|error| format!("AUTHORITY_PATHS {}: {error}", canonical.display()))?;
+    map.entry(canonical.clone())
+        .or_insert((segments.clone(), public));
+    fn walk(
+        items: &[syn::Item],
+        file: &Path,
+        segments: &[String],
+        public: bool,
+        map: &mut BTreeMap<PathBuf, (Vec<String>, bool)>,
+    ) -> Result<(), String> {
+        for item in items {
+            let syn::Item::Mod(module) = item else {
+                continue;
+            };
+            let mut child = segments.to_vec();
+            child.push(module.ident.to_string());
+            let child_public = public && matches!(module.vis, syn::Visibility::Public(_));
+            if let Some((_, inner)) = &module.content {
+                walk(inner, file, &child, child_public, map)?;
+            } else {
+                let dir = auth_module_dir(file);
+                let target = match auth_path_attr(&module.attrs) {
+                    Some(path) => file.parent().unwrap_or_else(|| Path::new("")).join(path),
+                    None => match auth_module_file(&dir, &module.ident.to_string()) {
+                        Some(target) => target,
+                        None => continue,
+                    },
+                };
+                if target.is_file() {
+                    auth_collect_modules(&target, child, child_public, map)?;
+                }
+            }
+        }
+        Ok(())
+    }
+    walk(&ast.items, &canonical, &segments, public, map)?;
+    Ok(())
+}
+
+fn auth_use_leaves(
+    tree: &syn::UseTree,
+    prefix: &mut Vec<String>,
+    out: &mut Vec<(Vec<String>, Option<String>, bool)>,
+) {
+    match tree {
+        syn::UseTree::Path(path) => {
+            prefix.push(path.ident.to_string());
+            auth_use_leaves(&path.tree, prefix, out);
+            prefix.pop();
+        }
+        syn::UseTree::Name(name) => {
+            let mut path = prefix.clone();
+            path.push(name.ident.to_string());
+            out.push((path, None, false));
+        }
+        syn::UseTree::Rename(rename) => {
+            let mut path = prefix.clone();
+            path.push(rename.ident.to_string());
+            out.push((path, Some(rename.rename.to_string()), false));
+        }
+        syn::UseTree::Glob(_) => out.push((prefix.clone(), None, true)),
+        syn::UseTree::Group(group) => {
+            for tree in &group.items {
+                auth_use_leaves(tree, prefix, out);
+            }
+        }
+    }
+}
+
+fn auth_test_gated(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|attr| {
+        attr.path().is_ident("test")
+            || (attr.path().is_ident("cfg")
+                && attr
+                    .meta
+                    .require_list()
+                    .map(|list| {
+                        list.tokens.clone().into_iter().any(
+                            |token| matches!(token, proc_macro2::TokenTree::Ident(id) if id == "test"),
+                        )
+                    })
+                    .unwrap_or(false))
+    })
+}
+
+/// True when the file (at any inline depth) declares or re-exports `leaf`
+/// publicly. The fence file is the one place where the item must be public.
+fn auth_declares_public(file: &Path, leaf: &str) -> Result<bool, String> {
+    let text = read(file)?;
+    let ast = syn::parse_file(&text)
+        .map_err(|error| format!("AUTHORITY_PATHS {}: {error}", file.display()))?;
+    fn items_declare(items: &[syn::Item], leaf: &str) -> bool {
+        items.iter().any(|item| {
+            let public = match item {
+                syn::Item::Fn(item) => {
+                    item.sig.ident == leaf && matches!(item.vis, syn::Visibility::Public(_))
+                }
+                syn::Item::Type(item) => {
+                    item.ident == leaf && matches!(item.vis, syn::Visibility::Public(_))
+                }
+                syn::Item::Struct(item) => {
+                    item.ident == leaf && matches!(item.vis, syn::Visibility::Public(_))
+                }
+                syn::Item::Enum(item) => {
+                    item.ident == leaf && matches!(item.vis, syn::Visibility::Public(_))
+                }
+                syn::Item::Const(item) => {
+                    item.ident == leaf && matches!(item.vis, syn::Visibility::Public(_))
+                }
+                syn::Item::Static(item) => {
+                    item.ident == leaf && matches!(item.vis, syn::Visibility::Public(_))
+                }
+                syn::Item::Use(item) => {
+                    let mut leaves = Vec::new();
+                    auth_use_leaves(&item.tree, &mut Vec::new(), &mut leaves);
+                    matches!(item.vis, syn::Visibility::Public(_))
+                        && leaves.iter().any(|(path, alias, glob)| {
+                            !glob
+                                && (alias.as_deref() == Some(leaf)
+                                    || path.last().is_some_and(|name| name == leaf))
+                        })
+                }
+                syn::Item::Mod(module) => {
+                    matches!(module.vis, syn::Visibility::Public(_))
+                        && module
+                            .content
+                            .as_ref()
+                            .is_some_and(|(_, inner)| items_declare(inner, leaf))
+                }
+                _ => false,
+            };
+            public
+        })
+    }
+    Ok(items_declare(&ast.items, leaf))
+}
+
+fn auth_public_use_violation(
+    workspace: &Path,
+    rows: &[AuthRow],
+    fence_maps: &BTreeMap<String, BTreeMap<PathBuf, (Vec<String>, bool)>>,
+) -> Result<(), String> {
+    let fences: BTreeMap<String, (Vec<String>, PathBuf)> = rows
+        .iter()
+        .map(|row| {
+            let (file, module) = auth_fence_file(&row.crate_name).unwrap_or_else(|| {
+                panic!("AUTHORITY_PATHS unknown fence crate {}", row.crate_name)
+            });
+            (
+                row.crate_name.clone(),
+                (
+                    module.iter().map(|segment| segment.to_string()).collect(),
+                    workspace.join(file),
+                ),
+            )
+        })
+        .collect();
+    for crate_name in [
+        "neovm-value",
+        "neovm-edit",
+        "neovm-text",
+        "neovm-eval",
+        "neovm-display",
+        "neovm-system",
+        "neovm-core",
+    ] {
+        let src = workspace.join("crates").join(crate_name).join("src");
+        if !src.is_dir() {
+            continue;
+        }
+        let mut files = Vec::new();
+        walk_files(&src, &mut files)?;
+        let map = fence_maps.get(crate_name);
+        for path in files {
+            if path.extension().is_none_or(|extension| extension != "rs") || is_test_path(&path) {
+                continue;
+            }
+            let canonical = path
+                .canonicalize()
+                .map_err(|error| format!("AUTHORITY_PATHS {}: {error}", path.display()))?;
+            let text = read(&canonical)?;
+            let ast = syn::parse_file(&text)
+                .map_err(|error| format!("AUTHORITY_PATHS {}: {error}", canonical.display()))?;
+            let file_module = map
+                .and_then(|map| map.get(&canonical))
+                .map(|(segments, _)| segments.clone())
+                .unwrap_or_default();
+            let mut aliases: BTreeMap<String, String> = BTreeMap::new();
+            for item in &ast.items {
+                let syn::Item::Use(item) = item else { continue };
+                let mut leaves = Vec::new();
+                auth_use_leaves(&item.tree, &mut Vec::new(), &mut leaves);
+                for (path, alias, glob) in leaves {
+                    if glob || alias.is_none() || path.len() != 1 {
+                        continue;
+                    }
+                    let Some(fence) = fences.keys().find(|name| name.replace('-', "_") == path[0])
+                    else {
+                        continue;
+                    };
+                    aliases.insert(alias.unwrap(), fence.clone());
+                }
+            }
+            fn scan(
+                items: &[syn::Item],
+                rows: &[AuthRow],
+                crate_name: &str,
+                file_module: &[String],
+                aliases: &BTreeMap<String, String>,
+                fences: &BTreeMap<String, (Vec<String>, PathBuf)>,
+                canonical: &Path,
+                relative: &str,
+            ) -> Result<(), String> {
+                for item in items {
+                    match item {
+                        syn::Item::Mod(module) => {
+                            if auth_test_gated(&module.attrs) {
+                                continue;
+                            }
+                            if let Some((_, inner)) = &module.content {
+                                scan(
+                                    inner,
+                                    rows,
+                                    crate_name,
+                                    file_module,
+                                    aliases,
+                                    fences,
+                                    canonical,
+                                    relative,
+                                )?;
+                            }
+                        }
+                        syn::Item::Use(item) => {
+                            if !matches!(item.vis, syn::Visibility::Public(_))
+                                || auth_test_gated(&item.attrs)
+                            {
+                                continue;
+                            }
+                            let mut leaves = Vec::new();
+                            auth_use_leaves(&item.tree, &mut Vec::new(), &mut leaves);
+                            for (path, _alias, glob) in leaves {
+                                let Some(first) = path.first() else { continue };
+                                let mut fence_name: Option<String> = None;
+                                let mut rest: Vec<String> = Vec::new();
+                                if let Some(fence) =
+                                    fences.keys().find(|name| name.replace('-', "_") == *first)
+                                {
+                                    fence_name = Some(fence.clone());
+                                    rest = path[1..].to_vec();
+                                } else if let Some(fence) = aliases.get(first) {
+                                    fence_name = Some(fence.clone());
+                                    rest = path[1..].to_vec();
+                                } else if matches!(first.as_str(), "crate" | "self" | "super") {
+                                    let Some(fence) =
+                                        fences.keys().find(|name| name.as_str() == crate_name)
+                                    else {
+                                        continue;
+                                    };
+                                    let mut base = file_module.to_vec();
+                                    let mut index = 0;
+                                    while index < path.len()
+                                        && matches!(
+                                            path[index].as_str(),
+                                            "super" | "self" | "crate"
+                                        )
+                                    {
+                                        match path[index].as_str() {
+                                            "crate" => base.clear(),
+                                            "super" => {
+                                                base.pop();
+                                            }
+                                            _ => {}
+                                        }
+                                        index += 1;
+                                    }
+                                    base.extend_from_slice(&path[index..]);
+                                    fence_name = Some(fence.clone());
+                                    rest = base;
+                                }
+                                let Some(fence_name) = fence_name else {
+                                    continue;
+                                };
+                                let Some((fence_module, fence_file)) = fences.get(&fence_name)
+                                else {
+                                    continue;
+                                };
+                                if canonical == fence_file.as_path() {
+                                    continue;
+                                }
+                                // A named import re-exports exactly `rest` (the
+                                // imported module or item); a glob re-exports
+                                // the contents of the module `rest`.
+                                let exposes_module = fence_module.starts_with(&rest);
+                                let exposes_item = !glob
+                                    && rest.len() == fence_module.len() + 1
+                                    && rest.starts_with(fence_module)
+                                    && rest.last().is_some_and(|leaf| {
+                                        rows.iter().any(|row| {
+                                            row.crate_name == fence_name
+                                                && auth_leaf(&row.item) == leaf.as_str()
+                                        })
+                                    });
+                                if exposes_module || exposes_item {
+                                    return Err(format!(
+                                        "AUTHORITY_PATHS {relative}: public use `{}` adds a route to the {fence_name} fence beyond its signed fence_path",
+                                        std::iter::once(first.clone())
+                                            .chain(rest.iter().cloned())
+                                            .chain(if glob { Some("*".to_owned()) } else { None })
+                                            .collect::<Vec<_>>()
+                                            .join("::")
+                                    ));
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                Ok(())
+            }
+            let relative = path
+                .strip_prefix(workspace)
+                .map_err(|_| format!("{} is outside the workspace", path.display()))?
+                .to_string_lossy()
+                .replace('\\', "/");
+            scan(
+                &ast.items,
+                rows,
+                crate_name,
+                &file_module,
+                &aliases,
+                &fences,
+                &canonical,
+                &relative,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn authority_public_paths_violation(workspace: &Path, rows: &[AuthRow]) -> Result<(), String> {
+    let mut fence_maps: BTreeMap<String, BTreeMap<PathBuf, (Vec<String>, bool)>> = BTreeMap::new();
+    for crate_name in rows
+        .iter()
+        .map(|row| row.crate_name.clone())
+        .collect::<BTreeSet<_>>()
+    {
+        let (fence_file, _) = auth_fence_file(&crate_name)
+            .unwrap_or_else(|| panic!("AUTHORITY_PATHS unknown fence crate {crate_name}"));
+        let lib = workspace
+            .join("crates")
+            .join(&crate_name)
+            .join("src")
+            .join("lib.rs");
+        let mut map = BTreeMap::new();
+        auth_collect_modules(&lib, Vec::new(), true, &mut map)?;
+        let fence = workspace
+            .join(fence_file)
+            .canonicalize()
+            .map_err(|error| format!("AUTHORITY_PATHS {fence_file}: {error}"))?;
+        for row in rows.iter().filter(|row| row.crate_name == crate_name) {
+            let expected = auth_expected(row);
+            let leaf = auth_leaf(&row.item);
+            let (_, module) = auth_fence_file(&crate_name).unwrap();
+            let module: Vec<String> = module.iter().map(|segment| segment.to_string()).collect();
+            let fence_public = map
+                .iter()
+                .find(|(_, (segments, _))| *segments == module)
+                .map(|(_, (_, public))| *public)
+                .or_else(|| map.get(&fence).map(|(_, public)| *public))
+                .unwrap_or(false);
+            if !fence_public {
+                return Err(format!(
+                    "AUTHORITY_PATHS {expected}: the fence module is not publicly reachable"
+                ));
+            }
+            if !auth_declares_public(&fence, leaf)? {
+                return Err(format!(
+                    "AUTHORITY_PATHS {expected}: the fence does not declare {leaf:?} publicly"
+                ));
+            }
+            let defining = workspace
+                .join(&row.defining_file)
+                .canonicalize()
+                .map_err(|error| format!("AUTHORITY_PATHS {}: {error}", row.defining_file))?;
+            if defining != fence {
+                if let Some((segments, true)) = map.get(&defining) {
+                    if auth_declares_public(&defining, leaf)? {
+                        let mut original = crate_name.replace('-', "_");
+                        for segment in segments {
+                            original.push_str("::");
+                            original.push_str(segment);
+                        }
+                        original.push_str("::");
+                        original.push_str(leaf);
+                        return Err(format!(
+                            "AUTHORITY_PATHS {expected}: the defining item is also publicly reachable at {original}"
+                        ));
+                    }
+                }
+            }
+        }
+        fence_maps.insert(crate_name, map);
+    }
+    auth_public_use_violation(workspace, rows, &fence_maps)
+}
+
+#[test]
+fn authority_items_have_exactly_the_fence_public_path() {
+    let workspace = workspace_root();
+    let rows = auth_rows(&workspace);
+    assert!(!rows.is_empty(), "AUTHORITY-ITEMS.tsv has no rows");
+    authority_public_paths_violation(&workspace, &rows).unwrap_or_else(|error| panic!("{error}"));
+}
+
+#[test]
+fn authority_public_paths_mutations() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let value_src = dir.path().join("crates/neovm-value/src");
+    let core_src = dir.path().join("crates/neovm-core/src");
+    std::fs::create_dir_all(value_src.join("test_support")).expect("value src");
+    std::fs::create_dir_all(&core_src).expect("core src");
+    std::fs::write(
+        value_src.join("lib.rs"),
+        "pub mod test_support;\npub(crate) mod original;\n",
+    )
+    .expect("lib");
+    std::fs::write(value_src.join("test_support.rs"), "pub mod authority;\n").expect("support");
+    std::fs::write(
+        value_src.join("test_support/authority.rs"),
+        "pub fn mark() { crate::original::mark(); }\n",
+    )
+    .expect("fence");
+    std::fs::write(value_src.join("original.rs"), "pub(crate) fn mark() {}\n").expect("original");
+    std::fs::write(core_src.join("lib.rs"), "pub mod route;\n").expect("core lib");
+    let rows = vec![AuthRow {
+        crate_name: "neovm-value".to_owned(),
+        item: "mark".to_owned(),
+        defining_file: "crates/neovm-value/src/original.rs".to_owned(),
+        fence_path: "neovm_value::test_support::authority::mark".to_owned(),
+    }];
+    assert!(authority_public_paths_violation(dir.path(), &rows).is_ok());
+    let route = core_src.join("route.rs");
+    std::fs::write(
+        &route,
+        "pub use neovm_value::test_support::authority::mark;\n",
+    )
+    .expect("route");
+    let error = authority_public_paths_violation(dir.path(), &rows).expect_err("item route");
+    assert!(
+        error.contains("AUTHORITY_PATHS") && error.contains("route.rs"),
+        "{error}"
+    );
+    std::fs::write(&route, "pub use neovm_value::test_support::authority::*;\n").expect("route");
+    assert!(authority_public_paths_violation(dir.path(), &rows).is_err());
+    std::fs::write(&route, "pub use neovm_value::test_support::authority;\n").expect("route");
+    assert!(authority_public_paths_violation(dir.path(), &rows).is_err());
+    std::fs::write(&route, "pub use neovm_value::value::*;\n").expect("route");
+    assert!(authority_public_paths_violation(dir.path(), &rows).is_ok());
+    std::fs::remove_file(&route).expect("route");
+    std::fs::write(core_src.join("lib.rs"), "").expect("core lib");
+    // A same-crate sibling re-export is another public route.
+    std::fs::write(
+        value_src.join("route.rs"),
+        "pub use crate::test_support::authority::mark;\n",
+    )
+    .expect("value route");
+    std::fs::write(
+        value_src.join("lib.rs"),
+        "pub mod test_support;\npub mod route;\npub(crate) mod original;\n",
+    )
+    .expect("lib");
+    assert!(authority_public_paths_violation(dir.path(), &rows).is_err());
+    // The original path becoming public is a violation even without a re-export.
+    std::fs::remove_file(value_src.join("route.rs")).expect("route");
+    std::fs::write(
+        value_src.join("lib.rs"),
+        "pub mod test_support;\npub mod original;\n",
+    )
+    .expect("lib");
+    std::fs::write(value_src.join("original.rs"), "pub fn mark() {}\n").expect("original");
+    let error = authority_public_paths_violation(dir.path(), &rows).expect_err("original public");
+    assert!(error.contains("publicly reachable at"), "{error}");
+    std::fs::write(
+        value_src.join("lib.rs"),
+        "pub mod test_support;\npub(crate) mod original;\n",
+    )
+    .expect("lib");
+    std::fs::write(value_src.join("original.rs"), "pub(crate) fn mark() {}\n").expect("original");
+    assert!(authority_public_paths_violation(dir.path(), &rows).is_ok());
+}
