@@ -2684,3 +2684,4 @@ crates/neovm-value/src/value/text_props.rs	struct	struct PropertyInterval
 crates/neovm-value/src/value/text_props.rs	struct	struct TextPropertiesRef
 crates/neovm-value/src/value/text_props.rs	struct	struct TextPropertyTable
 crates/neovm-value/src/value/text_props.rs	trait	trait CasingInsertionPolicy
+crates/neovm-value/src/tagged/gc.rs	use	use gc_thread::*

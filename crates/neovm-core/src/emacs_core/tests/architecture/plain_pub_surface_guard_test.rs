@@ -21,7 +21,10 @@
 //!
 //! The surface is conservative: every declaration with plain `pub` in a
 //! production `.rs` file, including named struct/union fields, inherent impl
-//! items and `pub use` re-exports (identity: file, use-tree leaf, rename).
+//! items and `pub use` re-exports (identity: file, use-tree leaf, rename; a
+//! glob statement is one row `use <path>::*`, so a new glob re-export is
+//! visible as growth and the item identities behind it stay with their
+//! defining crate's scan).
 //! `#[doc(hidden)]` items and items gated by `cfg(test)`/
 //! `cfg(feature = "test-support")` are excluded (other classes). A test-gated
 //! `mod` declaration also removes the whole file it names, even when the file
@@ -29,11 +32,11 @@
 //! test-gated struct or union gates its fields too: the test arm of a
 //! cfg-split struct pair declares `pub` fields for cross-crate test access,
 //! which is not production surface.
-//! Test files (`.../tests/...`, `tests.rs`, `*_test.rs`) are excluded. Use
-//! globs and macro-generated items are not scanned; the API projector is not
-//! a live gate, so plain `pub use` is enforced here. Duplicate identical
-//! identities in one file collapse into one row; reordering or duplication is
-//! not growth.
+//! Test files (`.../tests/...`, `tests.rs`, `*_test.rs`) are excluded.
+//! Macro-generated items are not scanned; the API projector is not a live
+//! gate, so plain `pub use` (including one row per glob statement) is
+//! enforced here. Duplicate identical identities in one file collapse into
+//! one row; reordering or duplication is not growth.
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -351,27 +354,42 @@ fn push_field(
 /// A plain `pub use` re-export is production surface too: it exposes the
 /// source item under the re-export's name. Identity is (file, use-tree leaf,
 /// rename), so `pub use a::Bar` and `pub use b::Bar as Baz` are two rows.
-/// Globs have no leaf identity and stay with the API projector.
+/// FX-1 (peer 05:45Z): one identity per glob statement. A glob re-export has
+/// no leaf identity, so the row is the written module path: a NEW glob such as
+/// `pub use neovm_value::x::*;` is visible as growth. Item identities behind
+/// the glob still belong to their defining crate's scan.
 fn push_use(out: &mut Vec<(&'static str, String)>, item: &syn::ItemUse) {
     if !is_plain(&item.vis, &item.attrs) {
         return;
     }
-    fn expand(tree: &syn::UseTree, out: &mut Vec<(&'static str, String)>) {
+    fn expand(
+        tree: &syn::UseTree,
+        prefix: &mut Vec<String>,
+        out: &mut Vec<(&'static str, String)>,
+    ) {
         match tree {
-            syn::UseTree::Path(path) => expand(&path.tree, out),
+            syn::UseTree::Path(path) => {
+                prefix.push(path.ident.to_string());
+                expand(&path.tree, prefix, out);
+                prefix.pop();
+            }
             syn::UseTree::Name(name) => out.push(("use", format!("use {}", name.ident))),
             syn::UseTree::Rename(rename) => {
                 out.push(("use", format!("use {} as {}", rename.ident, rename.rename)))
             }
-            syn::UseTree::Glob(_) => {}
+            syn::UseTree::Glob(_) => {
+                if !prefix.is_empty() {
+                    out.push(("use", format!("use {}::*", prefix.join("::"))));
+                }
+            }
             syn::UseTree::Group(group) => {
                 for tree in &group.items {
-                    expand(tree, out);
+                    expand(tree, prefix, out);
                 }
             }
         }
     }
-    expand(&item.tree, out);
+    expand(&item.tree, &mut Vec::new(), out);
 }
 
 fn impl_type_last(ty: &syn::Type) -> Option<String> {
@@ -936,10 +954,15 @@ pub mod hidden {
 pub use crate::S;
 pub use crate::S as PublicS;
 pub use crate::*;
+pub use crate::nested::{inner::*, Named};
 #[doc(hidden)]
 pub use crate::S as HiddenS;
+#[doc(hidden)]
+pub use crate::hidden::*;
 #[cfg(test)]
 pub use crate::S as TestS;
+#[cfg(test)]
+pub use crate::test_only::*;
 "#,
         )
         .expect("reexports");
@@ -956,12 +979,40 @@ pub use crate::S as TestS;
         };
         assert!(has("use S"), "{use_rows:?}");
         assert!(has("use S as PublicS"), "{use_rows:?}");
-        for forbidden in ["use S as HiddenS", "use S as TestS"] {
+        // FX-1: one row per glob statement, carrying the written module path.
+        assert!(has("use crate::*"), "{use_rows:?}");
+        assert!(has("use crate::nested::inner::*"), "{use_rows:?}");
+        assert!(has("use Named"), "{use_rows:?}");
+        for forbidden in [
+            "use S as HiddenS",
+            "use hidden::*",
+            "use crate::hidden::*",
+            "use S as TestS",
+            "use crate::test_only::*",
+        ] {
             assert!(
                 !has(forbidden),
                 "{forbidden} must not be production surface"
             );
         }
+    }
+
+    #[test]
+    fn a_new_glob_statement_is_visible_growth() {
+        // FX-1: a new glob re-export is a review point even though its leaves
+        // stay with the defining crate's scan.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = dir.path().join("crates/neovm-value/src");
+        std::fs::create_dir_all(&src).expect("src dir");
+        std::fs::write(src.join("lib.rs"), "pub use crate::wide::*;\n").expect("lib");
+        let scanned = plain_pub_rows(dir.path(), "neovm-value").expect("surface");
+        let error = check_surface(&scanned, &BTreeSet::new()).expect_err("new glob");
+        assert!(
+            error.contains("B3_PLAIN_PUB_GROWTH") && error.contains("use crate::wide::*"),
+            "{error}"
+        );
+        let reviewed: BTreeSet<Row> = scanned.clone();
+        assert!(check_surface(&scanned, &reviewed).is_ok());
     }
 
     #[test]
