@@ -1972,14 +1972,7 @@ fn visibility_make_sites(workspace: &Path) -> Result<Vec<(String, String)>, Stri
                 if !line.contains("visibility::make(pub)") {
                     continue;
                 }
-                let mut found = None;
-                for next in lines.iter().skip(index + 1).take(6) {
-                    if let Some(name) = declaration_name(next) {
-                        found = Some(name);
-                        break;
-                    }
-                }
-                let name = found.ok_or_else(|| {
+                let name = declaration_after(&lines, index).ok_or_else(|| {
                     format!(
                         "{relative}:{}: visibility::make(pub) without a declaration to name",
                         index + 1
@@ -1990,6 +1983,32 @@ fn visibility_make_sites(workspace: &Path) -> Result<Vec<(String, String)>, Stri
         }
     }
     Ok(sites)
+}
+
+/// Name the declaration a `visibility::make(pub)` attribute applies to. A
+/// single-line re-export names its first imported item (matching the old
+/// text scan); a multi-line `use module::{` group names its first local
+/// name, not whatever declaration follows the group.
+fn declaration_after(lines: &[&str], attr_index: usize) -> Option<String> {
+    let mut use_group = false;
+    for next in lines.iter().skip(attr_index + 1).take(10) {
+        if let Some(name) = declaration_name(next) {
+            return Some(name);
+        }
+        let trimmed = next.trim_start();
+        if use_group {
+            if trimmed.starts_with('}') {
+                continue;
+            }
+            if let Some(name) = declaration_ident(trimmed) {
+                return Some(name);
+            }
+        }
+        if trimmed.ends_with('{') && (trimmed.starts_with("use ") || trimmed.contains(" use ")) {
+            use_group = true;
+        }
+    }
+    None
 }
 
 fn declaration_ident(text: &str) -> Option<String> {
@@ -3522,6 +3541,26 @@ fn mod_row_expansion_requires_a_row_for_each_new_pub_item() {
     )
     .expect("gc");
     assert!(expanded_mod_rows_violation(dir.path(), &[inert], &[]).is_ok());
+}
+
+#[test]
+fn visibility_make_multiline_use_group_is_named_by_its_first_import() {
+    // A multi-line `pub(crate) use module::{ ... }` group must not be
+    // attributed to whatever declaration follows the group.
+    let lines = [
+        "    #[cfg_attr(feature = \"test-support\", visibility::make(pub))]",
+        "    pub(crate) use module::{",
+        "        FirstTrait, SecondTrait,",
+        "    };",
+        "    pub(super) mod next_item;",
+    ];
+    assert_eq!(declaration_after(&lines, 0), Some("FirstTrait".to_owned()));
+    // The single-line convention is unchanged: the first imported name.
+    let lines = [
+        "#[cfg_attr(feature = \"test-support\", visibility::make(pub))]",
+        "pub(crate) use module::{First, Second};",
+    ];
+    assert_eq!(declaration_after(&lines, 0), Some("First".to_owned()));
 }
 
 /// B3 AUTHORITY-ITEMS guard (peer ruling 07:3xZ): every row has the signed
