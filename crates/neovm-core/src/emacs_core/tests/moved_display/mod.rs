@@ -53,3 +53,11 @@ mod core_hook_restore_test;
 #[cfg(test)]
 #[path = "window_cmds_runtime_eval_test.rs"]
 mod window_cmds_runtime_eval_test;
+
+#[cfg(test)]
+#[path = "xdisp_runtime_eval_test.rs"]
+mod xdisp_runtime_eval_test;
+
+#[cfg(test)]
+#[path = "image_lisp_playback_test.rs"]
+mod image_lisp_playback_test;
