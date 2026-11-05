@@ -459,6 +459,10 @@ mod architecture_layering_guard_test;
 mod architecture_moving_set;
 
 #[cfg(test)]
+#[path = "tests/architecture/plain_pub_surface_guard_test.rs"]
+mod architecture_plain_pub_surface_guard_test;
+
+#[cfg(test)]
 #[path = "tests/architecture/production_source_roots.rs"]
 mod architecture_production_source_roots;
 
