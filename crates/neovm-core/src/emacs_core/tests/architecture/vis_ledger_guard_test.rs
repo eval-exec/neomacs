@@ -3069,6 +3069,241 @@ fn auth_declares_public(file: &Path, leaf: &str) -> Result<bool, String> {
     Ok(items_declare(&ast.items, leaf))
 }
 
+/// Resolve a Rust path written in `from_module` to (module segments, item
+/// leaf). Handles `crate`/`neovm_value` roots, `self` and leading `super`.
+fn auth_resolve_path(from_module: &[String], path: &[String]) -> Option<(Vec<String>, String)> {
+    let (first, rest) = path.split_first()?;
+    let mut base = match first.as_str() {
+        "crate" | "neovm_value" => Vec::new(),
+        "self" => from_module.to_vec(),
+        "super" => {
+            let mut base = from_module.to_vec();
+            base.pop()?;
+            base
+        }
+        _ => from_module.to_vec(),
+    };
+    let mut index = 0;
+    while index < rest.len() && rest[index] == "super" {
+        base.pop()?;
+        index += 1;
+    }
+    let item = rest.last()?.to_string();
+    let mut module = base;
+    module.extend(rest[..rest.len() - 1].iter().cloned());
+    Some((module, item))
+}
+
+/// Every crate-local name by which a fence type alias target is known along
+/// alias/`pub use` chains, e.g. fence `ProofEra` -> tagged::gc `ProofEra` ->
+/// wrappers `ProofEra` / `GenericProofEra` / evaluator `WorldProofEra`.
+/// The signed defining file's inherent-impl owner must be one of these names.
+fn auth_alias_chain_names(
+    workspace: &Path,
+    map: &BTreeMap<PathBuf, (Vec<String>, bool)>,
+    from_module: &[String],
+    ty: &syn::Type,
+) -> Result<BTreeSet<String>, String> {
+    fn walk(
+        workspace: &Path,
+        map: &BTreeMap<PathBuf, (Vec<String>, bool)>,
+        module: &[String],
+        name: &str,
+        names: &mut BTreeSet<String>,
+        seen: &mut BTreeSet<(String, String)>,
+        depth: usize,
+    ) -> Result<(), String> {
+        if depth > 16 {
+            return Err(format!(
+                "AUTHORITY_PATHS alias target chain is too deep at {name}"
+            ));
+        }
+        if !seen.insert((module.join("::"), name.to_string())) {
+            return Ok(());
+        }
+        names.insert(name.to_string());
+        let Some((file, _)) = auth_module_entry(map, module) else {
+            return Ok(());
+        };
+        let text = read(file)?;
+        let ast = syn::parse_file(&text)
+            .map_err(|error| format!("AUTHORITY_PATHS {}: {error}", file.display()))?;
+        for item in &ast.items {
+            match item {
+                syn::Item::Struct(item) if item.ident == name => return Ok(()),
+                syn::Item::Enum(item) if item.ident == name => return Ok(()),
+                syn::Item::Union(item) if item.ident == name => return Ok(()),
+                syn::Item::Type(item) if item.ident == name => {
+                    if let syn::Type::Path(path) = &*item.ty {
+                        if path.qself.is_none() {
+                            let segments: Vec<String> = path
+                                .path
+                                .segments
+                                .iter()
+                                .map(|segment| segment.ident.to_string())
+                                .collect();
+                            if let Some((target_module, target)) =
+                                auth_resolve_path(module, &segments)
+                            {
+                                walk(
+                                    workspace,
+                                    map,
+                                    &target_module,
+                                    &target,
+                                    names,
+                                    seen,
+                                    depth + 1,
+                                )?;
+                            }
+                        }
+                    }
+                    return Ok(());
+                }
+                syn::Item::Use(item) => {
+                    let mut leaves = Vec::new();
+                    auth_use_leaves(&item.tree, &mut Vec::new(), &mut leaves);
+                    for (path, alias, glob) in leaves {
+                        if glob {
+                            continue;
+                        }
+                        let matches = alias.as_deref() == Some(name)
+                            || (alias.is_none() && path.last().is_some_and(|leaf| leaf == name));
+                        if !matches {
+                            continue;
+                        }
+                        if let Some((target_module, target)) = auth_resolve_path(module, &path) {
+                            walk(
+                                workspace,
+                                map,
+                                &target_module,
+                                &target,
+                                names,
+                                seen,
+                                depth + 1,
+                            )?;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+    let mut names = BTreeSet::new();
+    let mut seen = BTreeSet::new();
+    if let syn::Type::Path(path) = ty {
+        if path.qself.is_none() {
+            let segments: Vec<String> = path
+                .path
+                .segments
+                .iter()
+                .map(|segment| segment.ident.to_string())
+                .collect();
+            if let Some((module, name)) = auth_resolve_path(from_module, &segments) {
+                walk(workspace, map, &module, &name, &mut names, &mut seen, 0)?;
+            }
+        }
+    }
+    Ok(names)
+}
+
+/// Method-aware fence rule (gapsurvey 2026-11-05): a signed row whose
+/// fence_path traverses a fence-declared type alias names a method, not a
+/// literal item in the fence file. Such a row is valid when the fence
+/// declares the owner as a PUBLIC type alias AND the signed defining file
+/// exposes the method as a `pub` inherent method on the alias's target type
+/// name -- resolved through the crate's alias and `pub use` chains, so an
+/// alias to an alias to the concrete type still matches. An undeclared or
+/// private alias, an unresolvable target name, or a non-public method keeps
+/// the row red.
+fn auth_alias_method_is_fenced(
+    workspace: &Path,
+    fence: &Path,
+    fence_module: &[String],
+    map: &BTreeMap<PathBuf, (Vec<String>, bool)>,
+    defining_file: &str,
+    item: &str,
+) -> Result<bool, String> {
+    let Some((owner, method)) = item.rsplit_once("::") else {
+        return Ok(false);
+    };
+    let fence_text = read(fence)?;
+    let fence_ast = syn::parse_file(&fence_text)
+        .map_err(|error| format!("AUTHORITY_PATHS {}: {error}", fence.display()))?;
+    let mut targets = BTreeSet::new();
+    for item in &fence_ast.items {
+        let syn::Item::Type(alias) = item else {
+            continue;
+        };
+        if alias.ident == owner && matches!(alias.vis, syn::Visibility::Public(_)) {
+            targets.extend(auth_alias_chain_names(
+                workspace,
+                map,
+                fence_module,
+                &alias.ty,
+            )?);
+        }
+    }
+    if targets.is_empty() {
+        return Ok(false);
+    }
+    let targets: Vec<String> = targets.into_iter().collect();
+    let defining = workspace.join(defining_file);
+    auth_file_pub_inherent_method(&defining, &targets, method)
+}
+
+/// True when `file` declares `pub fn method` in an inherent impl whose
+/// self-type is named by `targets` (any alias-chain spelling).
+fn auth_file_pub_inherent_method(
+    file: &Path,
+    targets: &[String],
+    method: &str,
+) -> Result<bool, String> {
+    let text = read(file)?;
+    let ast = syn::parse_file(&text)
+        .map_err(|error| format!("AUTHORITY_PATHS {}: {error}", file.display()))?;
+    fn public_method(items: &[syn::Item], targets: &[String], method: &str) -> bool {
+        items.iter().any(|item| match item {
+            syn::Item::Impl(block) if block.trait_.is_none() => {
+                let owner = match &*block.self_ty {
+                    syn::Type::Path(path) => path
+                        .path
+                        .segments
+                        .last()
+                        .map(|segment| segment.ident.to_string()),
+                    _ => None,
+                };
+                owner.is_some_and(|owner| targets.contains(&owner))
+                    && block.items.iter().any(|item| {
+                        matches!(
+                            item,
+                            syn::ImplItem::Fn(function)
+                                if function.sig.ident == method
+                                    && matches!(function.vis, syn::Visibility::Public(_))
+                        )
+                    })
+            }
+            syn::Item::Mod(module) => module
+                .content
+                .as_ref()
+                .is_some_and(|(_, inner)| public_method(inner, targets, method)),
+            _ => false,
+        })
+    }
+    Ok(public_method(&ast.items, targets, method))
+}
+
+/// The source file for a crate-relative module path and whether the module
+/// chain is fully public.
+fn auth_module_entry<'a>(
+    map: &'a BTreeMap<PathBuf, (Vec<String>, bool)>,
+    segments: &[String],
+) -> Option<(&'a PathBuf, bool)> {
+    map.iter()
+        .find(|(_, (path, _))| path.as_slice() == segments)
+        .map(|(file, (_, public))| (file, *public))
+}
+
 fn auth_public_use_violation(
     workspace: &Path,
     rows: &[AuthRow],
@@ -3294,23 +3529,105 @@ fn authority_public_paths_violation(workspace: &Path, rows: &[AuthRow]) -> Resul
         for row in rows.iter().filter(|row| row.crate_name == crate_name) {
             let expected = auth_expected(row);
             let leaf = auth_leaf(&row.item);
-            let (_, module) = auth_fence_file(&crate_name).unwrap();
-            let module: Vec<String> = module.iter().map(|segment| segment.to_string()).collect();
-            let fence_public = map
-                .iter()
-                .find(|(_, (segments, _))| *segments == module)
-                .map(|(_, (_, public))| *public)
-                .or_else(|| map.get(&fence).map(|(_, public)| *public))
-                .unwrap_or(false);
-            if !fence_public {
+            let crate_root_name = crate_name.replace('-', "_");
+            if !expected.ends_with(&row.item) {
                 return Err(format!(
-                    "AUTHORITY_PATHS {expected}: the fence module is not publicly reachable"
+                    "AUTHORITY_PATHS {expected}: row item {:?} is not the signed path tail",
+                    row.item
                 ));
             }
-            if !auth_declares_public(&fence, leaf)? {
-                return Err(format!(
-                    "AUTHORITY_PATHS {expected}: the fence does not declare {leaf:?} publicly"
-                ));
+            let rest: Vec<String> = expected
+                .strip_prefix(&format!("{crate_root_name}::"))
+                .ok_or_else(|| {
+                    format!("AUTHORITY_PATHS {expected}: the path must start at the crate root")
+                })?
+                .split("::")
+                .map(str::to_string)
+                .collect();
+            let (_, module) = auth_fence_file(&crate_name).unwrap();
+            let module: Vec<String> = module.iter().map(|segment| segment.to_string()).collect();
+            let in_fence = rest.len() > module.len() && rest[..module.len()] == module[..];
+            if in_fence {
+                let fence_public = map
+                    .iter()
+                    .find(|(_, (segments, _))| *segments == module)
+                    .map(|(_, (_, public))| *public)
+                    .or_else(|| map.get(&fence).map(|(_, public)| *public))
+                    .unwrap_or(false);
+                if !fence_public {
+                    return Err(format!(
+                        "AUTHORITY_PATHS {expected}: the fence module is not publicly reachable"
+                    ));
+                }
+                if !auth_declares_public(&fence, leaf)?
+                    && !auth_alias_method_is_fenced(
+                        &workspace,
+                        &fence,
+                        &module,
+                        &map,
+                        &row.defining_file,
+                        &row.item,
+                    )?
+                {
+                    return Err(format!(
+                        "AUTHORITY_PATHS {expected}: the fence does not declare {leaf:?} publicly"
+                    ));
+                }
+            } else {
+                // Original-path row: the item is public at its own module path
+                // (item-level `#[doc(hidden)] pub`), so the signed path is
+                // verified against that module instead of the fence file, and
+                // the fence must not expose the item as a second route.
+                let item_parts: Vec<&str> = row.item.split("::").collect();
+                let method_row = item_parts.len() >= 2;
+                let owner = if method_row {
+                    item_parts[item_parts.len() - 2]
+                } else {
+                    leaf
+                };
+                let prefix_len = rest
+                    .len()
+                    .checked_sub(if method_row { 2 } else { 1 })
+                    .ok_or_else(|| {
+                        format!("AUTHORITY_PATHS {expected}: the signed path is too short")
+                    })?;
+                let module_segments = &rest[..prefix_len];
+                let Some((module_file, module_public)) = auth_module_entry(&map, module_segments)
+                else {
+                    return Err(format!(
+                        "AUTHORITY_PATHS {expected}: no source module for {}",
+                        module_segments.join("::")
+                    ));
+                };
+                if !module_public {
+                    return Err(format!(
+                        "AUTHORITY_PATHS {expected}: the module chain is not publicly reachable"
+                    ));
+                }
+                if !auth_declares_public(module_file, owner)? {
+                    return Err(format!(
+                        "AUTHORITY_PATHS {expected}: {} does not publicly expose {owner:?}",
+                        module_file.display()
+                    ));
+                }
+                if method_row
+                    && !auth_file_pub_inherent_method(
+                        &workspace.join(&row.defining_file),
+                        &[owner.to_string()],
+                        leaf,
+                    )?
+                {
+                    return Err(format!(
+                        "AUTHORITY_PATHS {expected}: the defining file does not expose {owner}::{leaf} as a pub inherent method"
+                    ));
+                }
+                if auth_declares_public(&fence, leaf)?
+                    || (method_row && auth_declares_public(&fence, owner)?)
+                {
+                    return Err(format!(
+                        "AUTHORITY_PATHS {expected}: the authority fence also exposes the item, so the signed path is not exclusive"
+                    ));
+                }
             }
             let defining = workspace
                 .join(&row.defining_file)
@@ -3421,4 +3738,145 @@ fn authority_public_paths_mutations() {
     .expect("lib");
     std::fs::write(value_src.join("original.rs"), "pub(crate) fn mark() {}\n").expect("original");
     assert!(authority_public_paths_violation(dir.path(), &rows).is_ok());
+}
+
+#[test]
+fn authority_alias_method_rows_are_method_aware() {
+    // A signed row may name a method reached through a fence-declared public
+    // type alias (`authority::Owner::method`): the fence declares the alias,
+    // and the method is a pub inherent method of the aliased type in the
+    // row's signed defining file.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let value_src = dir.path().join("crates/neovm-value/src");
+    let core_src = dir.path().join("crates/neovm-core/src");
+    std::fs::create_dir_all(value_src.join("test_support")).expect("value src");
+    std::fs::create_dir_all(&core_src).expect("core src");
+    std::fs::write(
+        value_src.join("lib.rs"),
+        "pub mod test_support;\npub(crate) mod original;\n",
+    )
+    .expect("lib");
+    std::fs::write(value_src.join("test_support.rs"), "pub mod authority;\n").expect("support");
+    std::fs::write(
+        value_src.join("test_support/authority.rs"),
+        "pub type Owner<'a> = crate::original::Owner<'a>;\n",
+    )
+    .expect("fence");
+    std::fs::write(
+        value_src.join("original.rs"),
+        "pub struct Owner<'a>(&'a ());\nimpl<'a> Owner<'a> {\n    pub fn method(&self) {}\n}\n",
+    )
+    .expect("original");
+    std::fs::write(core_src.join("lib.rs"), "").expect("core lib");
+    let rows = vec![AuthRow {
+        crate_name: "neovm-value".to_owned(),
+        item: "Owner::method".to_owned(),
+        defining_file: "crates/neovm-value/src/original.rs".to_owned(),
+        fence_path: "neovm_value::test_support::authority::Owner::method".to_owned(),
+    }];
+    assert!(authority_public_paths_violation(dir.path(), &rows).is_ok());
+    // A private method is not a public path.
+    std::fs::write(
+        value_src.join("original.rs"),
+        "pub struct Owner<'a>(&'a ());\nimpl<'a> Owner<'a> {\n    fn method(&self) {}\n}\n",
+    )
+    .expect("private method");
+    let error = authority_public_paths_violation(dir.path(), &rows).expect_err("private method");
+    assert!(error.contains("does not declare"), "{error}");
+    // An undeclared alias leaves the leaf undeclared in the fence.
+    std::fs::write(
+        value_src.join("test_support/authority.rs"),
+        "pub type Other<'a> = crate::original::Owner<'a>;\n",
+    )
+    .expect("undeclared alias");
+    assert!(authority_public_paths_violation(dir.path(), &rows).is_err());
+    // A private alias is not a public path either.
+    std::fs::write(
+        value_src.join("test_support/authority.rs"),
+        "type Owner<'a> = crate::original::Owner<'a>;\n",
+    )
+    .expect("private alias");
+    assert!(authority_public_paths_violation(dir.path(), &rows).is_err());
+    // An alias whose target name has no such public method is red even when
+    // the defining file has one on a different type name.
+    std::fs::write(
+        value_src.join("test_support/authority.rs"),
+        "pub type Owner<'a> = crate::original::Absent<'a>;\n",
+    )
+    .expect("wrong target");
+    std::fs::write(
+        value_src.join("original.rs"),
+        "pub struct Owner<'a>(&'a ());\nimpl<'a> Owner<'a> {\n    pub fn method(&self) {}\n}\n",
+    )
+    .expect("original");
+    assert!(authority_public_paths_violation(dir.path(), &rows).is_err());
+    // Original-path method rows (item-level `#[doc(hidden)] pub` at the
+    // defining module path): the module chain must be public, the module must
+    // publicly expose the owner, and the defining file must expose the pub
+    // inherent method. The fence must stay a non-route.
+    std::fs::write(
+        value_src.join("lib.rs"),
+        "pub mod tagged;\npub mod test_support;\npub(crate) mod original;\n",
+    )
+    .expect("lib");
+    std::fs::create_dir_all(value_src.join("tagged")).expect("tagged dir");
+    std::fs::write(value_src.join("tagged.rs"), "pub mod gc;\n").expect("tagged");
+    std::fs::write(
+        value_src.join("tagged/gc.rs"),
+        "pub use crate::original::Owner;\n",
+    )
+    .expect("gc");
+    std::fs::write(value_src.join("test_support.rs"), "pub mod authority;\n").expect("support");
+    std::fs::write(value_src.join("test_support/authority.rs"), "").expect("fence");
+    std::fs::write(
+        value_src.join("original.rs"),
+        "pub struct Owner;\nimpl Owner {\n    pub fn method(&self) {}\n}\n",
+    )
+    .expect("original");
+    let original_rows = vec![AuthRow {
+        crate_name: "neovm-value".to_owned(),
+        item: "Owner::method".to_owned(),
+        defining_file: "crates/neovm-value/src/original.rs".to_owned(),
+        fence_path: "neovm_value::tagged::gc::Owner::method".to_owned(),
+    }];
+    assert!(authority_public_paths_violation(dir.path(), &original_rows).is_ok());
+    // A non-public method is not a public path.
+    std::fs::write(
+        value_src.join("original.rs"),
+        "pub struct Owner;\nimpl Owner {\n    fn method(&self) {}\n}\n",
+    )
+    .expect("private method");
+    assert!(authority_public_paths_violation(dir.path(), &original_rows).is_err());
+    // The module must publicly expose the owner, not merely the private file.
+    std::fs::write(
+        value_src.join("original.rs"),
+        "pub struct Owner;\nimpl Owner {\n    pub fn method(&self) {}\n}\n",
+    )
+    .expect("original");
+    std::fs::write(value_src.join("tagged/gc.rs"), "").expect("gc");
+    assert!(authority_public_paths_violation(dir.path(), &original_rows).is_err());
+    // The module chain itself must be public.
+    std::fs::write(
+        value_src.join("tagged/gc.rs"),
+        "pub use crate::original::Owner;\n",
+    )
+    .expect("gc");
+    std::fs::write(
+        value_src.join("lib.rs"),
+        "pub(crate) mod tagged;\npub mod test_support;\npub(crate) mod original;\n",
+    )
+    .expect("lib");
+    assert!(authority_public_paths_violation(dir.path(), &original_rows).is_err());
+    // The authority fence must not expose the item as a second route.
+    std::fs::write(
+        value_src.join("lib.rs"),
+        "pub mod tagged;\npub mod test_support;\npub(crate) mod original;\n",
+    )
+    .expect("lib");
+    std::fs::write(
+        value_src.join("test_support/authority.rs"),
+        "pub use crate::original::Owner;\n",
+    )
+    .expect("fence route");
+    assert!(authority_public_paths_violation(dir.path(), &original_rows).is_err());
 }
