@@ -5,7 +5,7 @@
 //! JIT's Context ABI.
 
 use super::Context;
-use crate::emacs_core::process::NativeConnectObservationSlot;
+use crate::emacs_core::eval::data::process_state::NativeConnectObservationSlot;
 use neovm_text::emacs_core::regex::MatchData;
 use std::mem::{offset_of, size_of};
 

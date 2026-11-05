@@ -91,11 +91,15 @@ fn many_deferred_pipe_children_share_one_native_reaper_and_join() {
             .expect("child is blocked waiting for private stdin");
         assert_eq!(ready, [b'r']);
         pids.push(child.id());
-        let mut owner = super::reap::ChildOwnership::of_pipe_child(
-            crate::emacs_core::callproc::SpawnedChild::from_std(child),
-        );
+        let mut owner =
+            neovm_eval::emacs_core::eval::data::process_state::ChildOwnership::of_pipe_child(
+                crate::emacs_core::callproc::SpawnedChild::from_std(child),
+            );
         owner.defer_reaping();
-        assert!(matches!(owner, super::reap::ChildOwnership::Deferred));
+        assert!(matches!(
+            owner,
+            neovm_eval::emacs_core::eval::data::process_state::ChildOwnership::Deferred
+        ));
     }
     for &pid in &pids {
         assert!(super::reap::deferred_child_is_owned_for_test(pid));

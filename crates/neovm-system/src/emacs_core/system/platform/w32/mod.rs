@@ -10,7 +10,13 @@
 pub(crate) mod filesystem;
 #[cfg(windows)]
 pub(crate) use neovm_value::system_vocab::w32_security as security;
+#[cfg(not(feature = "test-support"))]
 mod shell;
+// TEST-SUPPORT-VIS: core's re-homed w32 tests call the pure URL-rewrite
+// helper; the module path is public only in the test-support build and the
+// helper itself is widened below.
+#[cfg(feature = "test-support")]
+pub mod shell;
 #[cfg(windows)]
 pub(crate) use shell::w32_shell_execute;
 #[cfg(windows)]

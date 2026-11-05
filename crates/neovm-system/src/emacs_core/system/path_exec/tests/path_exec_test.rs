@@ -4,6 +4,7 @@
 //! does not name is a script whose binary will not find its own dump.
 
 use super::*;
+use std::path::{Path, PathBuf};
 use tempfile::tempdir;
 
 /// GNU's macOS bundle: `ns_applibexecdir=${ns_appdir}/Contents/MacOS/libexec`

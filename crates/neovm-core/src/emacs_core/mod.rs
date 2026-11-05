@@ -366,7 +366,6 @@ pub(crate) use neovm_value::string_pos_cache;
 
 // Cross-subsystem and externally-shaped regression suites retain the
 // `emacs_core` lexical parent while living beside the subsystem they cover.
-#[cfg(test)]
 #[path = "tests/compat_regressions/mod.rs"]
 pub mod compat_regressions;
 #[cfg(test)]
@@ -384,6 +383,10 @@ mod gnu_subr_surface_test;
 #[cfg(test)]
 #[path = "tests/architecture/layout_test.rs"]
 mod layout_test;
+#[cfg(test)]
+#[cfg(test)]
+#[path = "tests/moved_system/mod.rs"]
+mod moved_system;
 #[cfg(test)]
 #[path = "tests/architecture/runtime_string_guard_test.rs"]
 mod runtime_string_guard_test;

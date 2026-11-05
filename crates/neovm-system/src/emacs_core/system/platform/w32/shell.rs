@@ -17,6 +17,7 @@ use super::*;
 /// plain file names first. Only `file:///X:/...` and `file:///X:\...` are
 /// rewritten; URLs without a drive letter are passed through unchanged.
 #[allow(dead_code)] // only the Windows entry point calls this in non-test builds
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn rewrite_file_url_document(document: &str) -> &str {
     const FILE_URL_PREFIX: &str = "file:///";
 

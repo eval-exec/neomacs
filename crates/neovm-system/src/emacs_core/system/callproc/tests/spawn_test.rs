@@ -197,7 +197,7 @@ fn exit_wake_fd_becomes_readable_when_the_child_exits() {
         .spawn()
         .expect("spawn cat");
     assert!(child.try_wait().expect("try_wait").is_none());
-    let exit = child.exit_wake_fd().expect("pidfd for an unreaped child");
+    let exit = super::exit_wake_fd(&child).expect("pidfd for an unreaped child");
     assert_eq!(poll(exit.as_raw_fd(), 0), 0, "cat is still running");
     drop(child.stdin.take());
     assert_eq!(poll(exit.as_raw_fd(), 10_000), 1, "exit wakes the poll");
