@@ -4091,6 +4091,10 @@ fn auth_fence_file(crate_name: &str) -> Option<(&'static str, &'static [&'static
             "crates/neovm-eval/src/test_support.rs",
             &["test_support", "authority"],
         )),
+        "neovm-edit" => Some((
+            "crates/neovm-edit/src/test_support/authority.rs",
+            &["test_support", "authority"],
+        )),
         // The display fence is the cfg-gated trait surface on `window`: the
         // three signed rows' paths are `neovm_display::window::DisplayFrameExt
         // ::<method>`, defined in window/display_ext.rs. The fence module is
