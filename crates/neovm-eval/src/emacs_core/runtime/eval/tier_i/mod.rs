@@ -341,6 +341,21 @@ impl TierIEvent {
     ];
 }
 
+// Peer 23:20Z condition: prove `ALL` is exactly declaration order. EnumCount
+// fixes the length, but a duplicate-plus-missing pair would still fit it;
+// `count()` indexes by discriminant, so such a pair would silently shift
+// report() output.
+const _: () = {
+    let mut i = 0;
+    while i < TierIEvent::ALL.len() {
+        assert!(
+            TierIEvent::ALL[i] as usize == i,
+            "TierIEvent::ALL must follow declaration order without duplicates"
+        );
+        i += 1;
+    }
+};
+
 /// Counts per [`TierIEvent`].
 #[derive(Clone, Debug, Default)]
 #[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
