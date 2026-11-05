@@ -71,11 +71,24 @@ pub mod keyboard_input;
 pub(crate) mod world;
 #[doc(hidden)]
 pub use world::ObarrayView;
+// TEST-SUPPORT-VIS row: re-homed tests above eval name the era keeper; the
+// proof era itself follows value's provider batch.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub use world::Baton;
 pub use world::{ContextShutdownError, ObarrayWriteAccess, OutstandingWorldViews, WorldEra};
 pub(crate) use world::{OwnedRootRegistryView, WorldSlot, WorldView};
 
 pub(crate) mod subr_abi;
-use subr_abi::{SubrFn, SubrObj, SubrValueExt};
+// TEST-SUPPORT-VIS row: re-homed doc tests call TaggedValue::subr through the
+// eval-local canonical factory; the product build keeps the crate-private
+// spelling.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub use subr_abi::SubrValueExt;
+#[cfg(not(any(test, feature = "test-support")))]
+use subr_abi::SubrValueExt;
+use subr_abi::{SubrFn, SubrObj};
 
 mod callback;
 mod command_error;
@@ -1023,6 +1036,7 @@ struct ExecutingKbdMacroRuntimeScope {
 /// more faithful than adding a Rust enum discriminant.
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct SavedBindingValue(Value);
 
 impl SavedBindingValue {
@@ -1066,6 +1080,7 @@ impl SavedBindingValue {
 /// second word for `Option<BufferId>`.
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct SavedBufferId(Option<std::num::NonZeroU64>);
 
 impl SavedBufferId {
@@ -2508,8 +2523,9 @@ impl ResolvedOpenedFont {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[allow(clippy::too_many_arguments)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn test_resolved_opened_font(
     family: &str,
     foundry: Option<&str>,
@@ -3356,7 +3372,11 @@ pub struct Context {
     pub(crate) cached_system_name: WorldSlot<Value>,
     /// Lexical environment: flat cons alist mirroring GNU Emacs's
     /// `Vinternal_interpreter_environment`.
+    #[cfg(not(feature = "test-support"))]
     pub(crate) lexenv: Value,
+    /// TEST-SUPPORT-VIS row: moved tests save/restore the lexical environment.
+    #[cfg(feature = "test-support")]
+    pub lexenv: Value,
     pub(crate) quit_flag: Value,
     pub inhibit_quit: Value,
     /// `throw-on-input`'s value, cached beside the two flags it is polled
@@ -3522,11 +3542,21 @@ pub struct Context {
     /// Maximum recursion depth.
     pub(crate) max_depth: usize,
     /// Total number of GC collections performed.
+    #[cfg(not(feature = "test-support"))]
     pub(crate) gc_count: u64,
+    /// Total number of GC collections performed.
+    #[cfg(feature = "test-support")]
+    pub gc_count: u64,
+
     /// Last thread that activated this Context, for cold cache invalidation.
     last_activation_thread: Option<std::thread::ThreadId>,
     /// Nested depth of explicit GC inhibition scopes.
+    #[cfg(not(feature = "test-support"))]
     pub(crate) gc_inhibit_depth: usize,
+    /// Nested depth of explicit GC inhibition scopes.
+    #[cfg(feature = "test-support")]
+    pub gc_inhibit_depth: usize,
+
     /// Mirror of `jit_root_stack.as_mut_ptr()`, republished on growth; read by
     /// generated code via a compile-time field offset.
     pub(crate) jit_root_stack_ptr: *mut Value,
@@ -3662,7 +3692,12 @@ pub struct Context {
     /// True while the command loop is blocked waiting for external input.
     pub(crate) waiting_for_user_input: bool,
     /// Set when allocation crosses the GC threshold; cleared by `gc_collect`.
+    #[cfg(not(feature = "test-support"))]
     pub(crate) gc_pending: bool,
+    /// Set when allocation crosses the GC threshold; cleared by `gc_collect`.
+    #[cfg(feature = "test-support")]
+    pub gc_pending: bool,
+
     /// True while the mutator-side collection driver
     /// (`gc_collect_from_current_roots_impl`) is on the stack. Set and cleared
     /// INLINE, deliberately not via a Drop guard: a panic that unwinds out of
@@ -3672,7 +3707,12 @@ pub struct Context {
     /// would erase exactly the evidence the detector exists to preserve.
     pub(crate) gc_driver_active: bool,
     /// Stress-test mode: force GC at every safe point regardless of threshold.
+    #[cfg(not(feature = "test-support"))]
     pub(crate) gc_stress: bool,
+    /// Stress-test mode: force GC at every safe point regardless of threshold.
+    #[cfg(feature = "test-support")]
+    pub gc_stress: bool,
+
     compiler_function_overrides_active: bool,
     /// When true, collect detailed timing counters for macro/eager-load paths.
     macro_perf_enabled: bool,
@@ -4725,7 +4765,7 @@ impl Context {
 
     /// Test-only view of the cached `throw-on-input`, so a test can assert the
     /// cache still agrees with the obarray after each write path.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn cached_throw_on_input_for_test(&self) -> Value {
         self.throw_on_input

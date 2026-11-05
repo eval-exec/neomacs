@@ -20,7 +20,7 @@ trait ObarrayTestAccess {
     fn makunbound_id(&mut self, id: SymId);
 }
 
-impl ObarrayTestAccess for neovm_eval::emacs_core::eval::world::ObarrayView {
+impl ObarrayTestAccess for neovm_eval::emacs_core::eval::ObarrayView {
     fn symbol_value_copied(&self, name: &str) -> Option<Value> {
         self.canonical_value_by_name(CanonicalAccess::STORAGE, name)
     }

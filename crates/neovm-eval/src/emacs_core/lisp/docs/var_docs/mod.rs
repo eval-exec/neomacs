@@ -59,7 +59,10 @@
 use std::marker::PhantomData;
 use std::sync::OnceLock;
 
+#[cfg(not(feature = "test-support"))]
 pub(crate) mod gnu_table;
+#[cfg(feature = "test-support")]
+pub mod gnu_table;
 
 // ---------------------------------------------------------------------------
 // The `etc/DOC` stand-in, in GNU's own record format
@@ -98,6 +101,7 @@ static DOC_IMAGE: OnceLock<DocImage> = OnceLock::new();
 
 /// The image, built once per process on the first `Snarf-documentation`
 /// (`lisp/loadup.el:448`) and read from afterwards.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn doc_image() -> &'static DocImage {
     DOC_IMAGE.get_or_init(DocImage::build)
 }
@@ -244,6 +248,7 @@ const _: () = {
 /// [`DocImage::text_at`].  So [`SnarfedDoc`] now yields a position and is
 /// consumed doing it.
 #[inline]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn lookup(variable: SnarfedVariable<'_>) -> Option<SnarfedDoc<'_>> {
     let index = gnu_table::GNU_VAR_DOCS
         .iter()
@@ -328,6 +333,7 @@ impl SnarfedDoc<'_> {
 /// It is not reachable from this table: no C `DEFVAR` name is on
 /// `custom-delayed-init-variables`, which is exactly why the 751/130 split
 /// above has no exceptions.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct SnarfedVariable<'a> {
     name: &'a str,
 }

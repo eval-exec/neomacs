@@ -38,12 +38,12 @@ mod function_write_hooks;
 mod green_owner;
 mod slot;
 mod sole_owner;
+#[allow(unused_imports)]
+pub use green_owner::Baton;
 #[cfg(test)]
 pub(crate) use green_owner::OwnedProofProjection;
 #[allow(unused_imports)]
-pub(crate) use green_owner::{
-    Baton, FrozenLegacyRoots, OwnedParallelError, OwnedParallelProjection,
-};
+pub(crate) use green_owner::{FrozenLegacyRoots, OwnedParallelError, OwnedParallelProjection};
 pub(crate) use slot::WorldSlot;
 pub(crate) use sole_owner::{
     PublishedSoleOwnerDriver, SoleOwnerDriver, SoleOwnerRegistration, SoleOwnerVm,
@@ -581,7 +581,7 @@ impl ObarrayView {
     }
 
     /// Test the actual descriptor identity, not just two equal Boolean values.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn admission_matches_canonical(&self) -> bool {
         // SAFETY: this shared borrow excludes both manager writers and header

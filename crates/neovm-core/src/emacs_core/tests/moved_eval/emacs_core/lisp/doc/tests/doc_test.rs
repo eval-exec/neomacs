@@ -1,10 +1,10 @@
 use crate::emacs_core::Context;
 use crate::emacs_core::builtins::builtin_documentation_stringp;
-use crate::emacs_core::eval::subr_abi::SubrValueExt;
 use crate::test_utils::{
     load_minimal_gnu_help_runtime, runtime_startup_context, runtime_startup_eval_all,
 };
 use neovm_eval::emacs_core::doc::*;
+use neovm_eval::emacs_core::eval::SubrValueExt;
 use neovm_value::error::EvalError;
 use neovm_value::error::{FlowKind, FlowResultExt as _};
 use neovm_value::intern::intern;

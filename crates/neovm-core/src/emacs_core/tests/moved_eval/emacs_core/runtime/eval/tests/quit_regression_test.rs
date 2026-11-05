@@ -18,6 +18,7 @@
 
 use crate::emacs_core::eval::Context;
 use crate::test_utils::runtime_startup_context;
+use neovm_display::window::display_ext::DisplayFrameManagerExt;
 use neovm_eval::emacs_core::data::test_support::default_value_by_id;
 use neovm_value::error::FlowResultExt;
 use neovm_value::value::Value;
@@ -433,7 +434,7 @@ fn discard_specpdl_rejected_forwarded_value_keeps_valid_storage() {
     // A BUFFER_OBJFWD integer lives in the buffer default rather than the
     // descriptor, and is read through the GNU default-value storage seam.
     assert_eq!(
-        crate::emacs_core::data::default_value_by_id(&ctx, symbol),
+        neovm_eval::emacs_core::data::test_support::default_value_by_id(&ctx, symbol),
         Some(Value::fixnum(5))
     );
     ctx.discard_specpdl_to(count);
@@ -571,6 +572,7 @@ fn current_buffer_scope_same_target_panic_discards_bindings_without_restoring_st
             .unwrap();
         scope
             .context()
+            .edit
             .buffers
             .goto_buffer_emacs_byte_pos(original, EmacsBytePos::new(2))
             .unwrap();
@@ -580,6 +582,7 @@ fn current_buffer_scope_same_target_panic_discards_bindings_without_restoring_st
             .unwrap();
         scope
             .context()
+            .edit
             .buffers
             .goto_buffer_emacs_byte_pos(other, EmacsBytePos::new(1))
             .unwrap();
@@ -634,6 +637,7 @@ fn excursion_scope_panic_recovery_does_not_seed_standard_case_table() {
             let mut scope = ExcursionScope::enter(&mut ctx);
             scope
                 .context()
+                .edit
                 .buffers
                 .goto_buffer_emacs_byte_pos(original, EmacsBytePos::new(3))
                 .unwrap();
@@ -780,9 +784,9 @@ fn discard_local_binding_does_not_allocate_ambient_buffer_wrapper() {
     let mut owner = crate::test_utils::new_context();
     owner.setup_thread_locals();
     // Give this Context an identity not present in the second Context's heap.
-    let _ = owner.buffers.create_buffer("local-drop-first");
-    let _ = owner.buffers.create_buffer("local-drop-second");
-    let buffer = owner.buffers.create_buffer("local-drop-owner");
+    let _ = owner.edit.buffers.create_buffer("local-drop-first");
+    let _ = owner.edit.buffers.create_buffer("local-drop-second");
+    let buffer = owner.edit.buffers.create_buffer("local-drop-owner");
     owner
         .set_current_buffer_unrecorded(buffer)
         .expect("live buffer");
@@ -848,7 +852,7 @@ fn discard_local_binding_keeps_existing_void_cell_without_lisp_allocation() {
     use neovm_value::intern::intern;
     let mut owner = crate::test_utils::new_context();
     owner.setup_thread_locals();
-    let buffer = owner.buffers.current_buffer_id().expect("buffer");
+    let buffer = owner.edit.buffers.current_buffer_id().expect("buffer");
     let symbol = intern("local-drop-void-cell");
     crate::emacs_core::custom::builtin_make_local_variable(
         &mut owner,

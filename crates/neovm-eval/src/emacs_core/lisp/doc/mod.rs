@@ -297,6 +297,7 @@ fn documentation_result_from_raw_doc(
     Ok(DocumentationOutcome::Value(value))
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn resolve_documentation_function_value(
     obarray: &neovm_value::symbol::Obarray,
     function: Value,
@@ -822,6 +823,7 @@ pub(crate) fn load_lazy_doc_string(
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn startup_doc_quote_style_display(doc: &str) -> String {
     let mut out = String::with_capacity(doc.len());
     let mut backtick_open = false;
@@ -1026,6 +1028,7 @@ fn documentation_property_plan(
 ///   Lisp-level escape hatch for preloaded `custom-initialize-delay`
 ///   defcustoms (`lisp/custom.el:142-161`), and ledger 173 measured that no C
 ///   `DEFVAR` name is on `custom-delayed-init-variables`.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn snarf_variable_documentation(obarray: &mut neovm_value::symbol::Obarray) -> usize {
     let mut installed: Vec<(neovm_value::intern::SymId, i64)> = Vec::new();
     for (name, _) in super::var_docs::gnu_table::GNU_VAR_DOCS {
