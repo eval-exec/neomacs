@@ -4,6 +4,9 @@
 //! The module is `pub(crate)`; `neovm_value::test_support::authority` is the
 //! only public re-export path, so a compile-fail fixture that names an
 //! original item keeps failing. Each item has one AUTHORITY-ITEMS row.
+//! The module also carries two VIS re-exports (the catalog-waits observer fn
+//! and its snapshot type); each public route site has a TEST-SUPPORT-VIS
+//! `use` row, and no second fn definition exists.
 
 use super::Mutator;
 use super::rendezvous::{RendezvousError, ResumeGcImage};
@@ -32,20 +35,19 @@ pub fn begin_restore_retry_for_test<'owner, 'era>(
 
 /// Name and public route for the peer-approved MEMQ-TAIL-SHAPES (5) copied
 /// catalog-waits observer. `cons_storage` is a private module, so without this
-/// bridge the A'-widened item has no cross-crate path. Same item and rows as
-/// `tagged::gc::cons_storage::catalog_waits_for_test` / `CatalogWaitsSnapshot`
-/// (VIS-VALUE rows); no widening is added here. The item is A' (pub only under
-/// the test-support feature), so the arms keep value's own cfg(test) build
-/// legal: its not(feature) path is crate-visible only.
+/// re-export the A'-widened items have no cross-crate path. Same items and
+/// rows as `tagged::gc::cons_storage::{catalog_waits_for_test,
+/// CatalogWaitsSnapshot}` (VIS-VALUE rows); nothing is widened here.
+///
+/// The re-export is cfg-split because the A' widening only exists in the
+/// test-support build: in value's own cfg(test) build both items are still
+/// `pub(crate)`, and a `pub use` of them would be E0365. Both arms name the
+/// same items, so there is exactly ONE definition of each (no second fn) —
+/// peer 23:01Z condition (a) on the catalog route.
 #[cfg(feature = "test-support")]
-pub use super::super::cons_storage::CatalogWaitsSnapshot;
+pub use super::super::cons_storage::{CatalogWaitsSnapshot, catalog_waits_for_test};
 #[cfg(not(feature = "test-support"))]
-pub(crate) use super::super::cons_storage::CatalogWaitsSnapshot;
-
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
-pub(crate) fn catalog_waits_for_test() -> CatalogWaitsSnapshot {
-    super::super::cons_storage::catalog_waits_for_test()
-}
+pub(crate) use super::super::cons_storage::{CatalogWaitsSnapshot, catalog_waits_for_test};
 
 /// Peer-signed 18:40Z shape (a): typed scoped seam over the owner-private
 /// admission word. Exactly the two states the probe stores.

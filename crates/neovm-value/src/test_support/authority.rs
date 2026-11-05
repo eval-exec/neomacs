@@ -2,10 +2,13 @@
 //!
 //! This module may be named only from `crates/neovm-core/core_tests/**`; the
 //! architecture TA2 guard rejects every `src/**` or `tests/**` reference.
-//! Each item here is one row of `AUTHORITY-ITEMS.tsv`, signed before code.
-//! The fence re-exports existing drivers and hooks with their bodies and
+//! Each FENCE item here is one row of `AUTHORITY-ITEMS.tsv`, signed before
+//! code. The fence re-exports existing drivers and hooks with their bodies and
 //! contracts unchanged, and never widens an original path, so a compile-fail
-//! fixture that names the original item keeps failing.
+//! fixture that names the original item keeps failing. This module also
+//! carries VIS re-exports (the catalog-waits observer fn and its snapshot
+//! type): those are TEST-SUPPORT-VIS rows, not AUTHORITY rows, and each public
+//! route site has its own `use` row (peer 23:01Z condition (a)).
 //!
 //! Row 1: `mark_collection_observed` (existing GC observation driver).
 
@@ -111,6 +114,15 @@ pub unsafe fn with_stopped_tables_for_test<'a, 'era, R, K: crate::tagged::gc::Er
         )
     }
 }
+/// Public route for the peer-approved MEMQ-TAIL-SHAPES (5) copied catalog-waits
+/// observer. `cons_storage` stays a private module, so without this re-export
+/// the A'-widened item has no cross-crate path. Same item and rows as
+/// `tagged::gc::cons_storage::catalog_waits_for_test` / `CatalogWaitsSnapshot`
+/// (VIS-VALUE rows); this re-export adds no widening.
+#[doc(hidden)]
+pub use crate::tagged::gc::mutator_registration::test_fences::{
+    CatalogWaitsSnapshot, catalog_waits_for_test,
+};
 
 /// Peer-signed 18:40Z shape (a): the typed scoped admission-word seam.
 /// CAS-installs the probe state from the quiescent OUT word; the returned
