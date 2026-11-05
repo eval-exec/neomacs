@@ -1,0 +1,2 @@
+crate	item	kind	defining_file	fence_path	tests	reason
+neovm-value	mark_collection_observed	fn	crates/neovm-value/src/tagged/gc/collection_observed.rs	neovm_value::test_support::authority::mark_collection_observed	crates/neovm-core/core_tests/heap_types/tests/clear_string_in_place_test.rs	SIGNED (peer 05:5xZ-b): R6 TA2 row 1; existing GC observation driver re-exported unchanged; the original path stays pub(crate)/unsafe-contract-by-privacy; fixes the dangling core_tests import already on main
