@@ -283,3 +283,63 @@ fn raw_unibyte_setter_and_snapshot_restore_keep_exact_informational_names() {
     );
     assert_eq!(family(restored.iter().next().unwrap()), Some("A\u{FFFD}B"));
 }
+
+fn encoded_entry(family: &str, encoding: &str) -> FontSpecEntry {
+    FontSpecEntry::Font(StoredFontSpec {
+        family: Some(intern(family)),
+        registry: None,
+        lang: None,
+        weight: None,
+        slant: None,
+        width: None,
+        definition: Some(FontDefinitionMetadata {
+            encoding: intern(encoding),
+            repertory: None,
+        }),
+    })
+}
+
+/// Detached workers see the same charset-priority order as the evaluator's
+/// lookups.  Non-preferred encodings keep their definition order, and an
+/// `ExplicitNone` stop and everything after it stay in place.
+#[test]
+fn shared_capture_follows_the_preferred_charsets() {
+    let mut data = FontsetData::default();
+    for entry in [
+        encoded_entry("gb", "chinese-gb2312"),
+        encoded_entry("big5", "big5"),
+        encoded_entry("jis", "japanese-jisx0208"),
+        FontSpecEntry::ExplicitNone,
+        encoded_entry("after-stop", "japanese-jisx0208"),
+    ] {
+        data.update_target(
+            FontsetTarget::Range('月' as u32, '月' as u32),
+            entry,
+            FontsetAddMode::Append,
+        );
+    }
+    let order = |data: &FontsetData| -> Vec<Option<String>> {
+        CapturedFontsetChain::from_data(revision(), data, '月')
+            .iter()
+            .map(|entry| family(entry).map(str::to_owned))
+            .collect()
+    };
+    let names = |names: &[&str]| -> Vec<Option<String>> {
+        names
+            .iter()
+            .map(|name| (*name != "STOP").then(|| (*name).to_owned()))
+            .collect()
+    };
+
+    publish_charset_preference(&[intern("japanese-jisx0208"), intern("japanese-jisx0212")]);
+    assert_eq!(
+        order(&data),
+        names(&["jis", "gb", "big5", "STOP", "after-stop"])
+    );
+
+    publish_charset_preference(&[intern("chinese-gb2312")]);
+    assert_eq!(
+        order(&data),
+        names(&["gb", "big5", "jis", "STOP", "after-stop"])
+    );
+}
