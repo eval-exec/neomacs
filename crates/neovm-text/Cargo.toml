@@ -13,7 +13,7 @@ jit = ["neovm-value/jit", "neovm-edit/jit"]
 perf-probes = []
 # TEST-SUPPORT-DESIGN rev 2 rule 5/7: the consumer above value forwards the
 # provider's feature and gates the variant matches it introduces.
-test-support = ["neovm-value/test-support", "dep:visibility"]
+test-support = ["neovm-value/test-support", "neovm-edit/test-support", "dep:visibility"]
 
 [dependencies]
 neovm-value = { path = "../neovm-value" }

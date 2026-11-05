@@ -51,7 +51,7 @@ fn deep_clone_has_independent_buffers_and_current_selection() {
     assert_eq!(original.current_buffer_id(), Some(first));
     assert_eq!(
         original
-            .get(&second)
+            .get(second)
             .unwrap()
             .buffer_local_value("p0-clone-only"),
         None
