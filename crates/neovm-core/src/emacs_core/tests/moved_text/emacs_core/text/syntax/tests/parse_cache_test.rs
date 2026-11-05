@@ -27,6 +27,8 @@ use neovm_edit::buffer::syntax_cache::Invalidation;
 use crate::emacs_core::print::print_value;
 
 use neovm_text::emacs_core::syntax::parse_cache::*;
+use neovm_text::emacs_core::syntax::DESCRIPTOR_LOG_CAP;
+use neovm_text::emacs_core::syntax::parse_cache::MAX_RUNS;
 
 #[test]
 fn cached_answers_equal_plain_scans_under_every_change() {

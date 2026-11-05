@@ -33,6 +33,7 @@ use neovm_value::value::Value;
 use neovm_eval::emacs_core::eval::Context;
 use crate::emacs_core::syntax_entries::builtin_forward_comment;
 use neovm_text::emacs_core::syntax::*;
+use neovm_text::emacs_core::syntax::BACK_COMMENT_SAFE_REPARSES;
 
 #[test]
 fn safe_position_restarts_answer_exactly_as_the_parse_from_begv() {

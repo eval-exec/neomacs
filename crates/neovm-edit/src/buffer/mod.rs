@@ -44,7 +44,10 @@ pub use buffer::{
     LabeledRestrictionLabel, LineIndexBuild, MarkerRef, SavedLabeledRestrictions,
     SavedRestrictionKind, SavedRestrictionState,
 };
+#[cfg(not(any(test, feature = "test-support")))]
 pub(crate) use buffer_text::BufferText;
+#[cfg(any(test, feature = "test-support"))]
+pub use buffer_text::BufferText;
 pub use buffer_text::{BufferSourceAuthority, BufferSourceReadLease};
 pub use edit_runtime::EditRuntime;
 pub use edit_transaction::TranspositionAnchorPolicy;

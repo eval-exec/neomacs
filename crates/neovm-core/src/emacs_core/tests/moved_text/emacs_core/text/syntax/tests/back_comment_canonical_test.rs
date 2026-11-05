@@ -23,6 +23,9 @@ use neovm_eval::emacs_core::eval::case_tables::canon;
 use crate::emacs_core::print::print_value;
 
 use neovm_text::emacs_core::syntax::parse_cache::*;
+use neovm_text::emacs_core::syntax::BACK_COMMENT_SAFE_BYPASS;
+use neovm_text::emacs_core::syntax::BACK_COMMENT_SAFE_REPARSES;
+use neovm_text::emacs_core::syntax::parse_loop::LoopState;
 
 /// Mixed strings, comment styles, nesting, fences, overlaps and escaped ends.
 /// Every position includes the middle of each two-character delimiter.

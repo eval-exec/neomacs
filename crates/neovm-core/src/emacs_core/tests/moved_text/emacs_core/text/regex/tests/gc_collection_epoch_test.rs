@@ -27,6 +27,7 @@ use crate::emacs_core::eval::Context;
 use neovm_text::emacs_core::regex::*;
 
 use neovm_value::value::Value;
+use neovm_text::emacs_core::regex_emacs::DefaultSyntaxLookup;
 
 #[test]
 fn gc_collection_epoch_regex_activation_discards_swept_search_syntax() {

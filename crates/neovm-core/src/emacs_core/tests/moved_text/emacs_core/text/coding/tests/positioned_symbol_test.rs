@@ -21,6 +21,7 @@ use crate::emacs_core::intern;
 use neovm_text::emacs_core::coding::*;
 
 use neovm_value::error::FlowKind;
+use neovm_text::emacs_core::coding::ISO2022_KEY_INITIAL;
 
 #[test]
 fn positioned_coding_predicate_and_check_preserve_policy_and_operand() {

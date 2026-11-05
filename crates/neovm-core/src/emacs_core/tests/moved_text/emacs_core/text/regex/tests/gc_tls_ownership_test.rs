@@ -22,6 +22,7 @@ use crate::emacs_core::eval::Context;
 use neovm_text::emacs_core::regex::*;
 
 use neovm_value::value::Value;
+use neovm_text::emacs_core::regex_emacs::DefaultSyntaxLookup;
 
 #[test]
 fn gc_tls_ownership_regex_compiled_translation_keeps_its_table_alive() {

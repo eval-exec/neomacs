@@ -14,7 +14,7 @@ use neovm_value::heap_registry::{HeapRegistryHandle, HeapRegistrySlot};
     use neovm_value::emacs_char;
 
 use neovm_value::value::Value;
-use crate::emacs_core::intern;
+use neovm_value::intern::intern;
 use crate::emacs_core::eval::Context;
 
 use neovm_text::emacs_core::charset::*;

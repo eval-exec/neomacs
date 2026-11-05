@@ -16,11 +16,17 @@ pub struct TextExtent {
 /// `PT_BYTE`, marker `charpos` with `bytepos`, and so on).  Keeping the signed
 /// delta typed prevents replacement paths from shifting only one coordinate
 /// space when the byte and character lengths differ.
+#[cfg(not(any(test, feature = "test-support")))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(in crate::buffer) struct TextExtentDelta {
     chars: CharDelta,
     emacs_bytes: EmacsByteDelta,
+}
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TextExtentDelta {
+    pub chars: CharDelta,
+    pub emacs_bytes: EmacsByteDelta,
 }
 
 /// Insertion point plus the text size known by the caller.

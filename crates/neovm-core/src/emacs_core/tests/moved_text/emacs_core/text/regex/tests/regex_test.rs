@@ -19,7 +19,6 @@ use neovm_text::emacs_core::regex_emacs::{
 
 use neovm_value::value::positions::CharRange;
 use neovm_value::heap_types::byte_positions::EmacsBytePos;
-use neovm_text::emacs_core::regex_emacs;
 use neovm_text::emacs_core::regex::replace_match_buffer;
 use neovm_eval::emacs_core::eval::Context;
 use neovm_edit::buffer::{Buffer, BufferId, BufferTextBackendKind, EmacsByteRange};

@@ -14,9 +14,9 @@ use neovm_value::emacs_char::{GNU_DEFAULT_WIDE_RANGES, ZERO_WIDTH_RANGES};
     use std::borrow::Cow;
 use neovm_value::error::{EvalResult, signal};
     use neovm_text::emacs_core::coding::IsoFlag;
-    use neovm_text::emacs_core::charset::{charset_encode_char, charset_iso2022_designation};
     use neovm_text::emacs_core::charset::{
-        charset_by_iso_final, charset_decode_char, charset_iso2022_designation,
+        charset_by_iso_final, charset_decode_char, charset_encode_char,
+        charset_iso2022_designation,
     };
 
 use neovm_value::strings_core::lisp_string_char_codes;

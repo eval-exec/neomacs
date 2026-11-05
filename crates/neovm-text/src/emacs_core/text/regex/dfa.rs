@@ -804,6 +804,7 @@ impl Nfa {
     }
 }
 
+#[cfg(not(any(test, feature = "test-support")))]
 /// The class of a character: the set of predicates that accept it, and its
 /// facts.  Two characters with the same key are indistinguishable to the
 /// pattern, so the DFA steps them with one transition.
@@ -811,6 +812,15 @@ impl Nfa {
 pub(crate) struct ClassKey {
     accepts: SmallVec<[u64; 2]>,
     pub(crate) facts: Facts,
+}
+#[cfg(any(test, feature = "test-support"))]
+/// The class of a character: the set of predicates that accept it, and its
+/// facts.  Two characters with the same key are indistinguishable to the
+/// pattern, so the DFA steps them with one transition.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ClassKey {
+    accepts: SmallVec<[u64; 2]>,
+    pub facts: Facts,
 }
 
 impl ClassKey {
@@ -2524,6 +2534,7 @@ fn stats_on() -> bool {
     cfg!(any(test, feature = "fuzzing")) || STATS_ON.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+#[cfg(not(any(test, feature = "test-support")))]
 /// Counters of the candidate filter on this thread (the regexp engine runs
 /// on the Lisp thread), reported at exit under `NEOVM_REGEX_DFA_STATS=1`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -2561,6 +2572,45 @@ pub(crate) struct DfaStats {
     pub(crate) verify_bad_no: u64,
     /// Verify mode: an acceptance the matcher contradicted.
     pub(crate) verify_bad_yes: u64,
+}
+#[cfg(any(test, feature = "test-support"))]
+/// Counters of the candidate filter on this thread (the regexp engine runs
+/// on the Lisp thread), reported at exit under `NEOVM_REGEX_DFA_STATS=1`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DfaStats {
+    /// Searches that used a lease.
+    pub searches: u64,
+    /// Searches of a pattern that reads syntax under a lookup where
+    /// `syntax-table` properties may apply (the DFA splits its scan at
+    /// property runs).
+    pub positional: u64,
+    /// Searches whose lazy `syntax-propertize` frontier lies within the
+    /// positions they can read (candidates reaching it go to the matcher).
+    pub frontier: u64,
+    /// Searches in an adaptive-bypass holiday.
+    pub holiday_off: u64,
+    pub builds: u64,
+    pub(crate) ineligible: u64,
+    pub(crate) gave_up: u64,
+    pub yes: u64,
+    pub no: u64,
+    pub(crate) unknown: u64,
+    /// Rejections the fail-stack bound refused to act on.
+    pub overflow_guarded: u64,
+    /// Candidates skipped: matcher entries saved.
+    pub skipped: u64,
+    pub context_resets: u64,
+    pub(crate) states: u64,
+    pub(crate) clears: u64,
+    pub(crate) slow_transitions: u64,
+    pub(crate) bytes: u64,
+    pub positional_chars: u64,
+    pub plain_runs: u64,
+    pub frontier_unknown: u64,
+    /// Verify mode: a rejection the matcher contradicted (a missed match).
+    pub verify_bad_no: u64,
+    /// Verify mode: an acceptance the matcher contradicted.
+    pub verify_bad_yes: u64,
 }
 
 thread_local! {
@@ -2694,6 +2744,7 @@ pub(crate) enum DfaSlot {
     Disabled(#[allow(dead_code)] DfaGaveUp),
 }
 
+#[cfg(not(any(test, feature = "test-support")))]
 /// `CompiledPattern`'s DFA slot. A clone starts cold: the DFA's caches
 /// belong to one pattern object.
 ///
@@ -2705,6 +2756,20 @@ pub(crate) enum DfaSlot {
 /// Re-entrant searches still fall back when the slot is borrowed.
 pub(crate) struct DfaCell {
     slot: RefCell<DfaSlot>,
+    initialized: std::sync::atomic::AtomicBool,
+}
+#[cfg(any(test, feature = "test-support"))]
+/// `CompiledPattern`'s DFA slot. A clone starts cold: the DFA's caches
+/// belong to one pattern object.
+///
+/// Threading: compiled patterns and their `RefCell` slots are mutator-owned,
+/// not `Sync`; another mutator cannot borrow or mutate this slot concurrently.
+/// The atomic is an advisory publication hint, not permission to share the slot:
+/// Release publishes a fully initialized non-cold slot, and Acquire reads it
+/// before trying the existing checked borrow. A false hint runs the matcher.
+/// Re-entrant searches still fall back when the slot is borrowed.
+pub struct DfaCell {
+    pub slot: RefCell<DfaSlot>,
     initialized: std::sync::atomic::AtomicBool,
 }
 

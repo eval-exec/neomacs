@@ -19,6 +19,8 @@ use neovm_text::emacs_core::regex_emacs::SyntaxLookup;
 use neovm_text::emacs_core::regex_emacs;
 use neovm_eval::emacs_core::eval::Context;
 use neovm_text::emacs_core::regex::*;
+use neovm_text::emacs_core::regex_emacs::DefaultSyntaxLookup;
+use neovm_text::emacs_core::regex_emacs::SyntaxCacheKey;
 
 #[test]
 fn positioned_compiled_regex_reuses_its_policy_and_keeps_distinct_match_results() {

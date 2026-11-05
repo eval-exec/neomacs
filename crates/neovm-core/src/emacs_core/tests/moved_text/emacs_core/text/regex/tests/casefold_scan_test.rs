@@ -21,6 +21,8 @@ use crate::fuzz_support::{
 };
 
 use neovm_text::emacs_core::regex_emacs::*;
+use neovm_text::emacs_core::regex_emacs::dfa;
+use neovm_text::emacs_core::regex_emacs::CHAR_TABLE_WALK_MIN_SPAN;
 
 /// `AsciiPreimage::AsciiOnly` is a claim about every character code: the
 /// standard translation keeps ASCII in ASCII and non-ASCII out of it.  The

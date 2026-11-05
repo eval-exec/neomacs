@@ -22,6 +22,8 @@ use neovm_eval::emacs_core::eval::Context;
 use neovm_edit::buffer::BufferId;
 
 use neovm_edit::buffer::overlay::*;
+use neovm_value::heap_types::overlay_storage::instrumentation::endpoint_search_node_visit_count;
+use neovm_value::heap_types::overlay_storage::instrumentation::reset_endpoint_search_node_visit_count;
 
 #[test]
 fn monotonic_overlay_insertion_keeps_interval_index_logarithmic() {

@@ -14,6 +14,7 @@ use neovm_value::value::Value;
 use neovm_eval::emacs_core::eval::Context;
 use neovm_edit::buffer::syntax_class::SyntaxClass;
 use neovm_text::emacs_core::regex_emacs::*;
+use neovm_text::emacs_core::regex_emacs::dfa;
 
 use neovm_text::emacs_core::syntax::{
     StringSyntaxPositionError, StringSyntaxPositionSource, SyntaxProperties, SyntaxTable,
