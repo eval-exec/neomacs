@@ -22,10 +22,17 @@ impl ActualMode {
 
     #[doc(hidden)]
     pub fn configure(self, context: &mut Context) {
-        context.tagged_heap.set_generational_enabled(match self {
-            Self::Gen0 => false,
-            Self::Gen1 => true,
-        });
+        // SAFETY: serial fixture setup; no young-generation objects or
+        // remembered-set state exist under the new mode.
+        unsafe {
+            neovm_value::test_support::authority::set_generational_enabled_for_test(
+                &mut context.tagged_heap,
+                match self {
+                    Self::Gen0 => false,
+                    Self::Gen1 => true,
+                },
+            )
+        };
     }
 }
 

@@ -30,7 +30,14 @@ fn ready() -> (Context, FrameId, RestoreTerminal) {
     let restore = RestoreTerminal;
     context.gc_stress = false;
     // These receipts require GEN1, independently of the test runner's policy.
-    context.tagged_heap.set_generational_enabled(true);
+    // SAFETY: serial fixture setup; no young-generation objects or
+    // remembered-set state exist under the new mode.
+    unsafe {
+        neovm_value::test_support::authority::set_generational_enabled_for_test(
+            &mut context.tagged_heap,
+            true,
+        )
+    };
     context.tagged_heap.set_gc_threshold(usize::MAX);
     context.gc_collect_exact();
     pure::configure_terminal_runtime(tty_config());

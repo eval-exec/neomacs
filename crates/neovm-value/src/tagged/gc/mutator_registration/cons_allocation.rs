@@ -144,8 +144,14 @@ impl RunAccess<'_, '_> {
     }
 
     /// One cold batch grant attempt, for protocol tests.
-    #[cfg(test)]
-    pub(crate) fn cons_probe_tail_batch_for_test(&mut self) -> Result<(), RegistrationError> {
+    ///
+    /// # Safety
+    /// The caller owns the granted batch (or drops the tails) before any
+    /// further allocation or barrier-relevant write.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) unsafe fn cons_probe_tail_batch_for_test(
+        &mut self,
+    ) -> Result<(), RegistrationError> {
         let state = self.cons_state();
         state.check_boundary()?;
         let mut tails = state.registry.cons_catalog.grant_tail_batch(
@@ -159,8 +165,12 @@ impl RunAccess<'_, '_> {
 
     /// Drop every held tail without publishing: the failure path a lost or
     /// panicked owner takes. The catalog must refuse to serve afterwards.
-    #[cfg(test)]
-    pub(crate) fn cons_drop_tails_for_test(&mut self) {
+    ///
+    /// # Safety
+    /// The caller must expect no further storage work from this owner; the
+    /// catalog refuses afterwards.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) unsafe fn cons_drop_tails_for_test(&mut self) {
         let local = self.owner.local.as_mut().expect("resident owner state");
         local.cons_tails.clear();
     }

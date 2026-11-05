@@ -437,3 +437,28 @@ pub unsafe fn begin_collection_for_test(heap: &mut crate::tagged::gc::TaggedHeap
     // SAFETY: the caller upholds the quiescent-heap contract above.
     unsafe { heap.begin_collection() }
 }
+
+/// Value-FENCE row (C1 write): one cold batch grant attempt for the relocated
+/// cons protocol tests. Both the fence and the original are unsafe.
+///
+/// # Safety
+/// The caller owns the granted batch (or drops the tails) before any further
+/// allocation or barrier-relevant write.
+pub unsafe fn cons_probe_tail_batch_for_test(
+    run: &mut crate::tagged::gc::mutator_registration::RunAccess<'_, '_>,
+) -> Result<(), crate::tagged::gc::RegistrationError> {
+    // SAFETY: the caller upholds the granted-batch contract above.
+    unsafe { run.cons_probe_tail_batch_for_test() }
+}
+
+/// Value-FENCE row (C1 write): drops every held tail without publishing; the
+/// catalog refuses afterwards. Both the fence and the original are unsafe.
+///
+/// # Safety
+/// The caller must expect no further storage work from this owner.
+pub unsafe fn cons_drop_tails_for_test(
+    run: &mut crate::tagged::gc::mutator_registration::RunAccess<'_, '_>,
+) {
+    // SAFETY: the caller upholds the no-further-storage-work contract above.
+    unsafe { run.cons_drop_tails_for_test() }
+}

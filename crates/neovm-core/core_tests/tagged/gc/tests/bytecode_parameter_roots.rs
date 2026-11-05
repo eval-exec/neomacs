@@ -66,7 +66,9 @@ fn collect(heap: &mut TaggedHeap, owner: TaggedValue, collection: Collection) {
 fn independent_parameter_child_survives(collection: Collection) {
     crate::test_utils::init_test_tracing();
     let mut heap = TaggedHeap::new();
-    heap.set_generational_enabled(true);
+    // SAFETY: serial fixture setup; no young-generation objects or
+    // remembered-set state exist under the new mode.
+    unsafe { neovm_value::test_support::authority::set_generational_enabled_for_test(&mut heap, true) };
     heap.publish_barrier_window();
     set_tagged_heap(&mut heap);
     let roots = ScratchRoots::new();

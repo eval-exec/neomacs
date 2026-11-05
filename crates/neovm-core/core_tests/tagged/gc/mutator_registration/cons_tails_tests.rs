@@ -373,10 +373,19 @@ fn dropped_unpublished_tail_poisons_the_catalog() {
         let mut owner = activate(era.register(1817, 8).unwrap(), era.heap_identity(), 1817);
         {
             let mut run = owner.run_access().unwrap();
-            run.cons_probe_tail_batch_for_test().unwrap();
-            run.cons_drop_tails_for_test();
+            // SAFETY: the caller owns the granted batch, then drops the tails
+            // before any further allocation or barrier-relevant write.
+            unsafe {
+                neovm_value::test_support::authority::cons_probe_tail_batch_for_test(&mut run)
+                    .unwrap();
+                neovm_value::test_support::authority::cons_drop_tails_for_test(&mut run);
+            }
             assert_eq!(
-                run.cons_probe_tail_batch_for_test(),
+                // SAFETY: the caller owns the granted batch before any further
+                // allocation or barrier-relevant write.
+                unsafe {
+                    neovm_value::test_support::authority::cons_probe_tail_batch_for_test(&mut run)
+                },
                 Err(RegistrationError::Poisoned)
             );
         }
