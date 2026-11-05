@@ -3,8 +3,7 @@
 use super::gc::{HeapWriteKind, HeapWriteRecord};
 use super::header::*;
 use super::value::*;
-use crate::intern::{SymId, intern, intern_uninterned};
-use crate::test_utils::SubrValueExt;
+use crate::intern::{SymId, intern};
 
 #[test]
 fn nil_is_zero() {
@@ -231,32 +230,6 @@ fn keyword_is_symbol() {
     assert!(kw.is_bare_symbol()); // keywords are symbols
     assert_eq!(kw.as_bare_symbol_id(), Some(SymId(99)));
     // as_keyword_id delegates to as_symbol_id for keyword-named symbols
-}
-
-#[test]
-fn subr_is_gnu_shaped_vectorlike() {
-    crate::test_utils::init_test_tracing();
-    let sym = intern("tagged-subr-test");
-    let subr = TaggedValue::subr(sym);
-    assert!(subr.is_subr());
-    assert_eq!(subr.tag(), 0b101);
-    assert_eq!(subr.veclike_type(), Some(VecLikeType::Subr));
-    assert_eq!(subr.as_subr_id(), Some(sym));
-}
-
-#[test]
-fn subr_object_resolves_by_public_name() {
-    crate::test_utils::init_test_tracing();
-
-    let canonical = intern("car");
-    let canonical_subr = TaggedValue::subr(canonical);
-
-    assert_eq!(canonical_subr.as_subr_id(), Some(canonical));
-
-    let uninterned = intern_uninterned("car");
-    let uninterned_subr = TaggedValue::subr(uninterned);
-    assert_eq!(uninterned_subr.as_subr_id(), Some(canonical));
-    assert_eq!(canonical_subr.bits(), uninterned_subr.bits());
 }
 
 #[test]

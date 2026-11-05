@@ -1,13 +1,14 @@
 //! Core-owned half of the historical `tagged::tests` module (Prep D C split, R7a).
 //!
-//! The three tests that call the upper `Context`/bytecode boundary moved here
-//! with unchanged assertions. The remaining lower-only tagged tests stay in
+//! The tests that call the upper `Context`/bytecode/subr-factory boundary moved
+//! here with unchanged assertions. The remaining lower-only tagged tests stay in
 //! `neovm-value`. After the surface accessor relocation, `tagged/gc.rs` is a
 //! 2990-line facade, so `gc_root_stays_a_facade_after_the_domain_split` keeps
 //! its 3000-line ceiling and assertion; only the file path resolves to the
 //! value crate.
-use crate::emacs_core::intern::intern;
-use crate::tagged::header::SubrDispatchKind;
+use crate::emacs_core::eval::SubrValueExt;
+use crate::emacs_core::intern::{intern, intern_uninterned};
+use crate::tagged::header::{SubrDispatchKind, VecLikeType};
 use crate::tagged::value::TaggedValue;
 
 #[test]
@@ -32,6 +33,32 @@ fn subr_dispatch_kind_from_global_table() {
     assert_eq!(car_entry.dispatch_kind, SubrDispatchKind::Builtin);
     assert_eq!(if_entry.dispatch_kind, SubrDispatchKind::SpecialForm);
     assert_eq!(throw_entry.dispatch_kind, SubrDispatchKind::ContextCallable);
+}
+
+#[test]
+fn subr_is_gnu_shaped_vectorlike() {
+    crate::test_utils::init_test_tracing();
+    let sym = intern("tagged-subr-test");
+    let subr = TaggedValue::subr(sym);
+    assert!(subr.is_subr());
+    assert_eq!(subr.tag(), 0b101);
+    assert_eq!(subr.veclike_type(), Some(VecLikeType::Subr));
+    assert_eq!(subr.as_subr_id(), Some(sym));
+}
+
+#[test]
+fn subr_object_resolves_by_public_name() {
+    crate::test_utils::init_test_tracing();
+
+    let canonical = intern("car");
+    let canonical_subr = TaggedValue::subr(canonical);
+
+    assert_eq!(canonical_subr.as_subr_id(), Some(canonical));
+
+    let uninterned = intern_uninterned("car");
+    let uninterned_subr = TaggedValue::subr(uninterned);
+    assert_eq!(uninterned_subr.as_subr_id(), Some(canonical));
+    assert_eq!(canonical_subr.bits(), uninterned_subr.bits());
 }
 
 // ---------------------------------------------------------------------------
