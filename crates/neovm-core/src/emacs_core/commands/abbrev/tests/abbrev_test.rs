@@ -1,4 +1,5 @@
 use super::*;
+use crate::emacs_core::eval::data::abbrev::{Abbrev, AbbrevManager, AbbrevTable};
 use crate::heap_types::LispString;
 
 // -----------------------------------------------------------------------
@@ -629,6 +630,7 @@ fn test_insert_abbrev_table_description_writes_buffer_text() {
     builtin_insert_abbrev_table_description(&mut eval, vec![Value::symbol("test-table")]).unwrap();
 
     let rendered = eval
+        .edit
         .buffers
         .current_buffer()
         .expect("current buffer")

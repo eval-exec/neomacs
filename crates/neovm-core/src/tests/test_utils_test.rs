@@ -107,7 +107,7 @@ pub fn load_minimal_gnu_backquote_runtime(eval: &mut Context) {
         "load-path",
         Value::list(bootstrap_load_path_entries(&lisp_dir)),
     );
-    let load_path = get_load_path(eval.variables(), eval.buffers.current_buffer());
+    let load_path = get_load_path(eval.variables(), eval.edit.buffers.current_buffer());
     for name in &[
         "emacs-lisp/debug-early",
         "emacs-lisp/byte-run",
@@ -125,7 +125,7 @@ pub fn load_gnu_macroexp_runtime(eval: &mut Context) {
     if eval.obarray().symbol_function("macroexp-progn").is_some() {
         return;
     }
-    let load_path = get_load_path(eval.variables(), eval.buffers.current_buffer());
+    let load_path = get_load_path(eval.variables(), eval.edit.buffers.current_buffer());
     for name in &["emacs-lisp/macroexp", "emacs-lisp/pcase"] {
         let path = find_required_lisp_file(name, &load_path);
         load_file(eval, &path).unwrap_or_else(|err| panic!("load {name}: {err:?}"));
@@ -418,7 +418,7 @@ pub fn load_gnu_elisp_syntax_table_runtime(eval: &mut Context) {
 /// full `loadup.el` startup.
 pub fn load_minimal_gnu_help_runtime(eval: &mut Context) {
     load_minimal_gnu_backquote_runtime(eval);
-    let load_path = get_load_path(eval.variables(), eval.buffers.current_buffer());
+    let load_path = get_load_path(eval.variables(), eval.edit.buffers.current_buffer());
     for name in &[
         "keymap",
         "widget",

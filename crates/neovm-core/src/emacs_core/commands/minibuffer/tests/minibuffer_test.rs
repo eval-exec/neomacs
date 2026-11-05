@@ -60,7 +60,11 @@ fn minibuffer_copied_properties_have_only_manager_roots() {
         let mut probes = Vec::new();
         eval.minibuffers()
             .add_to_history_lisp(history, text(&mut probes, key), 8);
-        let buffer = eval.buffers.current_buffer_id().expect("current buffer");
+        let buffer = eval
+            .edit
+            .buffers
+            .current_buffer_id()
+            .expect("current buffer");
         let state = eval
             .minibuffers()
             .read_from_minibuffer_lisp(buffer, &text(&mut probes, key), None, None)
@@ -260,17 +264,17 @@ fn normalize_symbol_reader_default_uses_list_head_and_symbol_name() {
 fn normalize_buffer_reader_default_uses_list_head_and_live_buffer_name() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
-    let buf_id = eval.buffers.create_buffer(" minibuffer-default ");
+    let buf_id = eval.edit.buffers.create_buffer(" minibuffer-default ");
 
     assert_eq!(
         normalize_buffer_reader_default(
-            &eval.buffers,
+            &eval.edit.buffers,
             Value::list(vec![Value::make_buffer(buf_id), Value::string("fallback")]),
         ),
         Value::string(" minibuffer-default ")
     );
     assert_eq!(
-        normalize_buffer_reader_default(&eval.buffers, Value::make_buffer(buf_id)),
+        normalize_buffer_reader_default(&eval.edit.buffers, Value::make_buffer(buf_id)),
         Value::string(" minibuffer-default ")
     );
 }
@@ -279,10 +283,10 @@ fn normalize_buffer_reader_default_uses_list_head_and_live_buffer_name() {
 fn read_buffer_completing_args_use_live_buffer_names_and_normalized_default() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
-    let buf_id = eval.buffers.create_buffer(" target-buffer ");
+    let buf_id = eval.edit.buffers.create_buffer(" target-buffer ");
     let args = read_buffer_completing_args(
         eval.variables(),
-        &eval.buffers,
+        &eval.edit.buffers,
         &[
             Value::string("Buffer: "),
             Value::list(vec![Value::make_buffer(buf_id), Value::string("fallback")]),
@@ -302,12 +306,12 @@ fn read_buffer_completing_args_use_live_buffer_names_and_normalized_default() {
 fn read_buffer_completing_args_formats_default_prompt_like_gnu() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
-    eval.obarray()
+    eval.obarray_mut()
         .set_symbol_value("minibuffer-default-prompt-format", Value::string(" [%s]"));
 
     let with_default = read_buffer_completing_args(
         eval.variables(),
-        &eval.buffers,
+        &eval.edit.buffers,
         &[
             Value::string("Switch to buffer: "),
             Value::string("*Messages*"),
@@ -320,14 +324,14 @@ fn read_buffer_completing_args_formats_default_prompt_like_gnu() {
 
     let without_default = read_buffer_completing_args(
         eval.variables(),
-        &eval.buffers,
+        &eval.edit.buffers,
         &[Value::string("Switch to buffer: "), Value::NIL],
     );
     assert_eq!(without_default[0], Value::string("Switch to buffer: "));
 
     let empty_default = read_buffer_completing_args(
         eval.variables(),
-        &eval.buffers,
+        &eval.edit.buffers,
         &[Value::string("Switch to buffer: "), Value::string("")],
     );
     assert_eq!(empty_default[0], Value::string("Switch to buffer: "));
@@ -1187,16 +1191,16 @@ fn builtin_minibufferp_returns_nil() {
 fn eval_minibuffer_runtime_state_tracks_active_prompt_and_contents() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
-    let minibuf_id = eval.buffers.create_buffer(" *Minibuf-1*");
+    let minibuf_id = eval.edit.buffers.create_buffer(" *Minibuf-1*");
     crate::emacs_core::minibuffer::install_minibuffer_buffer_text(
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         minibuf_id,
         &crate::heap_types::LispString::from_utf8("Prompt: "),
         Some(&crate::heap_types::LispString::from_utf8("value")),
         crate::emacs_core::minibuffer::default_minibuffer_prompt_properties(),
     );
-    eval.buffers.set_current(minibuf_id);
-    eval.minibuffers()
+    eval.edit.buffers.set_current(minibuf_id);
+    eval.minibuffers_mut()
         .read_from_minibuffer(minibuf_id, "Prompt: ", Some("value"), None)
         .expect("enter minibuffer");
 
@@ -1242,17 +1246,17 @@ fn eval_minibuffer_runtime_state_tracks_active_prompt_and_contents() {
 fn eval_minibuffer_runtime_state_preserves_raw_unibyte_prompt_and_contents() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
-    let minibuf_id = eval.buffers.create_buffer(" *Minibuf-raw*");
+    let minibuf_id = eval.edit.buffers.create_buffer(" *Minibuf-raw*");
     let raw_prompt = crate::heap_types::LispString::from_unibyte(vec![0xFF, b':', b' ']);
     crate::emacs_core::minibuffer::install_minibuffer_buffer_text(
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         minibuf_id,
         &raw_prompt,
         Some(&crate::heap_types::LispString::from_utf8("value")),
         crate::emacs_core::minibuffer::default_minibuffer_prompt_properties(),
     );
-    eval.buffers.set_current(minibuf_id);
-    eval.minibuffers()
+    eval.edit.buffers.set_current(minibuf_id);
+    eval.minibuffers_mut()
         .read_from_minibuffer_lisp(
             minibuf_id,
             &raw_prompt,
@@ -1272,15 +1276,19 @@ fn eval_minibuffer_runtime_state_preserves_raw_unibyte_prompt_and_contents() {
 fn install_minibuffer_buffer_text_applies_gnu_prompt_properties() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
-    let minibuf_id = eval.buffers.create_buffer(" *Minibuf-props*");
+    let minibuf_id = eval.edit.buffers.create_buffer(" *Minibuf-props*");
     let prompt_end = crate::emacs_core::minibuffer::install_minibuffer_buffer_text(
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         minibuf_id,
         &crate::heap_types::LispString::from_utf8("Prompt: "),
         Some(&crate::heap_types::LispString::from_utf8("value")),
         crate::emacs_core::minibuffer::default_minibuffer_prompt_properties(),
     );
-    let buf = eval.buffers.get(minibuf_id).expect("minibuffer buffer");
+    let buf = eval
+        .edit
+        .buffers
+        .get(minibuf_id)
+        .expect("minibuffer buffer");
 
     assert_eq!(
         prompt_end,
@@ -1331,23 +1339,27 @@ fn install_minibuffer_buffer_text_applies_gnu_prompt_properties() {
 fn builtin_minibuffer_prompt_end_falls_back_to_point_min_without_prompt_field() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
-    let minibuf_id = eval.buffers.create_buffer(" *Minibuf-1*");
+    let minibuf_id = eval.edit.buffers.create_buffer(" *Minibuf-1*");
     {
         let prompt_end = crate::emacs_core::minibuffer::install_minibuffer_buffer_text(
-            &mut eval.buffers,
+            &mut eval.edit.buffers,
             minibuf_id,
             &crate::heap_types::LispString::from_utf8("Prompt: "),
             Some(&crate::heap_types::LispString::from_utf8("vm-mini")),
             crate::emacs_core::minibuffer::default_minibuffer_prompt_properties(),
         );
-        let buf = eval.buffers.get_mut(minibuf_id).expect("minibuffer buffer");
+        let buf = eval
+            .edit
+            .buffers
+            .get_mut(minibuf_id)
+            .expect("minibuffer buffer");
         let _ = buf.text_props_remove_property_in_emacs_byte_range(
             crate::buffer::EmacsByteRange::new(crate::buffer::EmacsBytePos::new(0), prompt_end),
             Value::symbol("field"),
         );
     }
-    eval.buffers.set_current(minibuf_id);
-    eval.minibuffers()
+    eval.edit.buffers.set_current(minibuf_id);
+    eval.minibuffers_mut()
         .read_from_minibuffer(minibuf_id, "Prompt: ", Some("vm-mini"), None)
         .expect("enter minibuffer");
 
@@ -1367,10 +1379,10 @@ fn builtin_minibuffer_prompt_end_falls_back_to_point_min_without_prompt_field() 
 fn install_minibuffer_buffer_text_reuses_existing_buffer_via_buffer_edit_pipeline() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
-    let minibuf_id = eval.buffers.create_buffer(" *Minibuf-reinstall*");
+    let minibuf_id = eval.edit.buffers.create_buffer(" *Minibuf-reinstall*");
 
     let first_prompt_end = crate::emacs_core::minibuffer::install_minibuffer_buffer_text(
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         minibuf_id,
         &crate::heap_types::LispString::from_utf8("Prompt: "),
         Some(&crate::heap_types::LispString::from_utf8("stale")),
@@ -1381,7 +1393,8 @@ fn install_minibuffer_buffer_text_reuses_existing_buffer_via_buffer_edit_pipelin
         crate::buffer::EmacsBytePos::new("Prompt: ".len())
     );
     assert_eq!(
-        eval.buffers
+        eval.edit
+            .buffers
             .get(minibuf_id)
             .expect("minibuffer buffer")
             .point_emacs_byte_pos()
@@ -1390,7 +1403,7 @@ fn install_minibuffer_buffer_text_reuses_existing_buffer_via_buffer_edit_pipelin
     );
 
     let second_prompt_end = crate::emacs_core::minibuffer::install_minibuffer_buffer_text(
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         minibuf_id,
         &crate::heap_types::LispString::from_utf8("Switch to buffer: "),
         Some(&crate::heap_types::LispString::from_utf8("*Messages*")),
@@ -1401,7 +1414,11 @@ fn install_minibuffer_buffer_text_reuses_existing_buffer_via_buffer_edit_pipelin
         second_prompt_end,
         crate::buffer::EmacsBytePos::new("Switch to buffer: ".len())
     );
-    let buf = eval.buffers.get(minibuf_id).expect("minibuffer buffer");
+    let buf = eval
+        .edit
+        .buffers
+        .get(minibuf_id)
+        .expect("minibuffer buffer");
     assert_eq!(buf.buffer_string(), "Switch to buffer: *Messages*");
     assert_eq!(
         buf.point_emacs_byte_pos().get(),
@@ -1537,7 +1554,8 @@ fn builtin_exit_recursive_edit_rejects_args() {
 fn builtin_minibuffer_contents_returns_current_buffer_text() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
-    eval.buffers
+    eval.edit
+        .buffers
         .current_buffer_mut()
         .expect("scratch buffer")
         .insert("probe");
@@ -1550,7 +1568,11 @@ fn builtin_minibuffer_contents_respects_narrowing_in_current_buffer() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
     {
-        let buf = eval.buffers.current_buffer_mut().expect("scratch buffer");
+        let buf = eval
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("scratch buffer");
         buf.insert("012345");
         buf.narrow_to_emacs_byte_range(crate::buffer::EmacsByteRange::from_usize(1, 4));
     }
@@ -1565,12 +1587,18 @@ fn builtin_minibuffer_contents_respects_narrowing_in_current_buffer() {
 fn builtin_minibuffer_contents_no_properties_drops_properties_from_current_buffer_text() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
-    let buffer_id = eval.buffers.current_buffer_id().expect("scratch buffer");
-    eval.buffers
+    let buffer_id = eval
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("scratch buffer");
+    eval.edit
+        .buffers
         .current_buffer_mut()
         .expect("scratch buffer")
         .insert("probe");
-    eval.buffers
+    eval.edit
+        .buffers
         .put_buffer_text_property_in_emacs_byte_range(
             buffer_id,
             crate::buffer::EmacsByteRange::from_usize(0, 5),
@@ -1900,23 +1928,23 @@ fn completion_candidate_keeps_the_global_obarray_scan_compact() {
 fn completion_state_reads_use_predeclared_symbols() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
-    eval.obarray()
+    eval.obarray_mut()
         .set_symbol_value("completion-ignore-case", Value::T);
-    eval.obarray().set_symbol_value(
+    eval.obarray_mut().set_symbol_value(
         "completion-regexp-list",
         Value::list(vec![Value::string("neo")]),
     );
 
-    assert!(completion_ignore_case(eval.variables(), &eval.buffers));
+    assert!(completion_ignore_case(eval.variables(), &eval.edit.buffers));
     assert_eq!(
-        completion_regexp_lisp_list(eval.variables(), &eval.buffers),
+        completion_regexp_lisp_list(eval.variables(), &eval.edit.buffers),
         vec![LispString::from_unibyte(b"neo".to_vec())]
     );
 
     crate::emacs_core::intern::reset_intern_calls();
-    assert!(completion_ignore_case(eval.variables(), &eval.buffers));
+    assert!(completion_ignore_case(eval.variables(), &eval.edit.buffers));
     assert_eq!(
-        completion_regexp_lisp_list(eval.variables(), &eval.buffers),
+        completion_regexp_lisp_list(eval.variables(), &eval.edit.buffers),
         vec![LispString::from_unibyte(b"neo".to_vec())]
     );
     assert_eq!(

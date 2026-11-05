@@ -3843,7 +3843,7 @@ fn where_is_indexed_command_remapping(
     }
     ensure_where_is_reverse_index(eval, keymaps);
     #[cfg(test)]
-    eval.interactive()
+    eval.interactive_mut()
         .note_where_is_reverse_index_remapping_lookup();
     eval.interactive()
         .cached_where_is_reverse_index(keymaps)

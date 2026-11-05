@@ -1658,7 +1658,7 @@ fn call_interactively_state_resolution_defers_motion_but_handles_noarg_cases() {
         plan_call_interactively_for_test(&mut ev, &[Value::symbol("forward-char")])
             .expect("plan builtin default interactive command");
     let builtin_resolution = unsafe {
-        let buffers = &mut ev.buffers;
+        let buffers = &mut ev.edit.buffers;
         let custom = &ev.custom;
         let specpdl = ev.specpdl().as_slice();
         // SAFETY: this split-state resolver handles only native string-code/
@@ -1688,7 +1688,7 @@ fn call_interactively_state_resolution_defers_motion_but_handles_noarg_cases() {
     let mut lambda_plan =
         plan_call_interactively_for_test(&mut ev, &[lambda]).expect("plan interactive lambda");
     let (_, lambda_args) = unsafe {
-        let buffers = &mut ev.buffers;
+        let buffers = &mut ev.edit.buffers;
         let custom = &ev.custom;
         let specpdl = ev.specpdl().as_slice();
         // SAFETY: this split-state resolver handles only native string-code/
@@ -1721,7 +1721,7 @@ fn call_interactively_state_resolution_defers_prompting_specs_to_eval() {
     let mut plan =
         plan_call_interactively_for_test(&mut ev, &[lambda]).expect("plan prompting lambda");
     let resolved = unsafe {
-        let buffers = &mut ev.buffers;
+        let buffers = &mut ev.edit.buffers;
         let custom = &ev.custom;
         let specpdl = ev.specpdl().as_slice();
         // SAFETY: this split-state resolver handles only native string-code/
@@ -1749,12 +1749,14 @@ fn call_interactively_state_resolution_handles_simple_string_codes_without_eval(
     let mut ev = crate::test_utils::new_context();
     ev.obarray()
         .set_symbol_value("current-prefix-arg", Value::list(vec![Value::fixnum(4)]));
-    let current = ev.buffers.current_buffer_id().expect("current buffer");
-    let _ = ev.buffers.replace_buffer_contents(current, "abcd");
+    let current = ev.edit.buffers.current_buffer_id().expect("current buffer");
+    let _ = ev.edit.buffers.replace_buffer_contents(current, "abcd");
     let _ = ev
+        .edit
         .buffers
         .goto_buffer_emacs_byte_pos(current, crate::buffer::EmacsBytePos::new(2));
     let _ = ev
+        .edit
         .buffers
         .set_buffer_mark_emacs_byte_pos(current, crate::buffer::EmacsBytePos::new(1));
 
@@ -1774,7 +1776,7 @@ fn call_interactively_state_resolution_handles_simple_string_codes_without_eval(
     )
     .expect("plan simple string-code lambda");
     let (_, args) = unsafe {
-        let buffers = &mut ev.buffers;
+        let buffers = &mut ev.edit.buffers;
         let custom = &ev.custom;
         let specpdl = ev.specpdl().as_slice();
         // SAFETY: this split-state resolver handles only native string-code/
@@ -1814,9 +1816,10 @@ fn call_interactively_state_resolution_handles_simple_string_codes_without_eval(
 fn call_interactively_state_resolution_defers_shift_selection_without_effects() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
-    let current = ev.buffers.current_buffer_id().expect("current buffer");
-    let _ = ev.buffers.replace_buffer_contents(current, "abcd");
+    let current = ev.edit.buffers.current_buffer_id().expect("current buffer");
+    let _ = ev.edit.buffers.replace_buffer_contents(current, "abcd");
     let _ = ev
+        .edit
         .buffers
         .goto_buffer_emacs_byte_pos(current, crate::buffer::EmacsBytePos::new(2));
     ev.obarray()
@@ -1829,7 +1832,7 @@ fn call_interactively_state_resolution_defers_shift_selection_without_effects() 
     let mut plan =
         plan_call_interactively_for_test(&mut ev, &[lambda]).expect("plan shift-selection lambda");
     let resolution = unsafe {
-        let buffers = &mut ev.buffers;
+        let buffers = &mut ev.edit.buffers;
         let custom = &ev.custom;
         let specpdl = ev.specpdl().as_slice();
         // SAFETY: this split-state resolver handles only native string-code/
@@ -1850,7 +1853,7 @@ fn call_interactively_state_resolution_defers_shift_selection_without_effects() 
     .expect("resolve shift-selection args");
     assert!(resolution.is_none());
 
-    let buf = ev.buffers.current_buffer().expect("current buffer");
+    let buf = ev.edit.buffers.current_buffer().expect("current buffer");
     assert_eq!(buf.mark_emacs_byte_pos().map(|pos| pos.get()), None);
     assert_eq!(buf.get_buffer_local("mark-active"), Some(Value::NIL));
 }
@@ -1865,7 +1868,7 @@ fn call_interactively_state_resolution_handles_optional_coding_without_prefix() 
     let mut plan =
         plan_call_interactively_for_test(&mut ev, &[lambda]).expect("plan optional coding lambda");
     let (_, args) = unsafe {
-        let buffers = &mut ev.buffers;
+        let buffers = &mut ev.edit.buffers;
         let custom = &ev.custom;
         let specpdl = ev.specpdl().as_slice();
         // SAFETY: this split-state resolver handles only native string-code/
@@ -1892,12 +1895,14 @@ fn call_interactively_state_resolution_handles_optional_coding_without_prefix() 
 fn interactive_lambda_r_capital_spec_uses_use_region_p_semantics() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
-    let current = ev.buffers.current_buffer_id().expect("current buffer");
-    let _ = ev.buffers.replace_buffer_contents(current, "abcd");
+    let current = ev.edit.buffers.current_buffer_id().expect("current buffer");
+    let _ = ev.edit.buffers.replace_buffer_contents(current, "abcd");
     let _ = ev
+        .edit
         .buffers
         .goto_buffer_emacs_byte_pos(current, crate::buffer::EmacsBytePos::new(2));
     let _ = ev
+        .edit
         .buffers
         .set_buffer_mark_emacs_byte_pos(current, crate::buffer::EmacsBytePos::new(1));
 

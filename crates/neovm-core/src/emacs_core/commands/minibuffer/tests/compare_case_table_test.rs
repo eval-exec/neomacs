@@ -45,8 +45,11 @@ fn completion_compare_case_table_custom_equality() {
 #[test]
 fn completion_compare_case_table_unibyte_buffer() {
     let mut ctx = context_with_mappings(&[(0xe9, 0xc9)]);
-    let id = ctx.buffers.current_buffer_id().unwrap();
-    ctx.buffers.set_buffer_multibyte_flag(id, false).unwrap();
+    let id = ctx.edit.buffers.current_buffer_id().unwrap();
+    ctx.edit
+        .buffers
+        .set_buffer_multibyte_flag(id, false)
+        .unwrap();
     let string = LispString::from_utf8("é");
     let prefix = CompletionPrefix::from_lisp_string(&string);
     let completion = CompletionText::LispObject(Value::string("É"));

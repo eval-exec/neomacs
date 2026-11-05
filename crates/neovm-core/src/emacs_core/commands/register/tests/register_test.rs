@@ -1,5 +1,6 @@
 use super::*;
 use crate::buffer::{BufferId, LispCharPos1};
+use crate::emacs_core::eval::data::register::RegisterManager;
 use crate::heap_types::LispString;
 
 #[test]
@@ -108,7 +109,7 @@ fn register_copied_properties_have_only_manager_roots() {
     assert_eq!(eval.gc_count, completed + 1);
     check_live(&eval);
 
-    eval.registers().clear_all();
+    eval.registers_mut().clear_all();
     eval.gc_collect_exact();
     for Probe(bits) in probes {
         assert!(
@@ -429,20 +430,28 @@ fn test_builtin_point_to_register_stores_marker() {
     use super::super::eval::Context;
 
     let mut eval = crate::test_utils::new_context();
-    let current_buffer_id = eval.buffers.current_buffer().expect("current buffer").id;
+    let current_buffer_id = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id;
 
     builtin_point_to_register(&mut eval, vec![Value::char('p')]).expect("point-to-register");
 
     let stored = builtin_get_register(&mut eval, vec![Value::char('p')]).expect("get-register");
     assert!(stored.is_marker());
     assert_eq!(
-        crate::emacs_core::marker::builtin_marker_buffer_in_buffers(&eval.buffers, &[stored])
+        crate::emacs_core::marker::builtin_marker_buffer_in_buffers(&eval.edit.buffers, &[stored])
             .expect("marker-buffer"),
         Value::make_buffer(current_buffer_id)
     );
     assert_eq!(
-        crate::emacs_core::marker::builtin_marker_position_in_buffers(&eval.buffers, &[stored])
-            .expect("marker-position"),
+        crate::emacs_core::marker::builtin_marker_position_in_buffers(
+            &eval.edit.buffers,
+            &[stored]
+        )
+        .expect("marker-position"),
         Value::fixnum(1)
     );
 }
@@ -454,7 +463,11 @@ fn test_builtin_point_to_register_stores_lisp_char_position() {
 
     let mut eval = crate::test_utils::new_context();
     {
-        let buffer = eval.buffers.current_buffer_mut().expect("current buffer");
+        let buffer = eval
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
         buffer.insert("\u{20AC}x");
         buffer.goto_emacs_byte_pos(crate::buffer::EmacsBytePos::new("\u{20AC}".len()));
         assert_eq!(buffer.point_lisp_char_pos().as_i64(), 2);
@@ -465,8 +478,11 @@ fn test_builtin_point_to_register_stores_lisp_char_position() {
     let stored = builtin_get_register(&mut eval, vec![Value::char('p')]).expect("get-register");
     assert!(stored.is_marker());
     assert_eq!(
-        crate::emacs_core::marker::builtin_marker_position_in_buffers(&eval.buffers, &[stored])
-            .expect("marker-position"),
+        crate::emacs_core::marker::builtin_marker_position_in_buffers(
+            &eval.edit.buffers,
+            &[stored]
+        )
+        .expect("marker-position"),
         Value::fixnum(2)
     );
 }
