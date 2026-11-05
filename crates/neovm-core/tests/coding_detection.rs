@@ -1,5 +1,5 @@
 //! Coding detection follows the active language environment and coding priority.
-use neovm_core::emacs_core::load::create_bootstrap_evaluator_cached;
+use neovm_core::emacs_core::load_boot::create_bootstrap_evaluator_cached;
 
 #[test]
 fn chinese_gb_detects_gbk_extension_bytes_in_strings_and_regions() {

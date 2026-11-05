@@ -6,9 +6,8 @@ use std::sync::OnceLock;
 use neomacs_test_env::{CanonicalEnvironment, CanonicalProfile, PinnedCommand, bounded_temp_dir};
 
 use neovm_core::emacs_core::format_eval_result_with_eval;
-use neovm_core::emacs_core::load::{
-    apply_runtime_startup_state, create_bootstrap_evaluator_cached,
-};
+use neovm_core::emacs_core::load::apply_runtime_startup_state;
+use neovm_core::emacs_core::load_boot::create_bootstrap_evaluator_cached;
 use neovm_core::emacs_core::pdump;
 
 thread_local! {
@@ -217,7 +216,11 @@ pub fn run_neovm_eval(form: &str) -> Result<String, String> {
         let snapshot = template
             .as_ref()
             .ok_or_else(|| "NeoVM runtime template unavailable".to_string())?;
-        pdump::restore_snapshot(snapshot).map_err(|e| format!("NeoVM runtime clone failed: {e}"))
+        pdump::restore_snapshot(
+            snapshot,
+            neovm_core::emacs_core::eval_hook_installers::install_eval_hooks(),
+        )
+        .map_err(|e| format!("NeoVM runtime clone failed: {e}"))
     })?;
     eval.set_lexical_binding(true);
     let result = eval.eval_str(form);

@@ -1,5 +1,5 @@
 //! Coding selection preserves the repertoire of decoded Emacs characters.
-use neovm_core::emacs_core::load::create_bootstrap_evaluator_cached;
+use neovm_core::emacs_core::load_boot::create_bootstrap_evaluator_cached;
 
 #[test]
 fn shift_jis_internal_character_is_safe_without_becoming_unicode() {

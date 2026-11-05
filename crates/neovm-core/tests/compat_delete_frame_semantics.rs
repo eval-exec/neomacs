@@ -2,6 +2,7 @@ use crate::common;
 
 use common::run_oracle_eval;
 use neovm_core::emacs_core::{Context, format_eval_result};
+use neovm_core::window::DisplayFrameManagerExt;
 
 fn run_neovm_eval_minimal_with_frame(form: &str) -> Result<String, String> {
     let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();

@@ -1,8 +1,8 @@
 use neovm_core::buffer::BufferId;
 use neovm_core::emacs_core::{Context, Value, format_eval_result};
 use neovm_core::window::{
-    FrameManager, PresentedWindowRegions, SplitDirection, SplitPlacement, Window,
-    WindowDisplaySnapshot,
+    DisplayFrameExt, DisplayFrameManagerExt, FrameManager, PresentedWindowRegions, SplitDirection,
+    SplitPlacement, Window, WindowDisplaySnapshot,
 };
 
 fn publish_selected_gui_window_regions(

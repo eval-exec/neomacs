@@ -1,7 +1,7 @@
 use neovm_core::emacs_core::eval::VariableView;
 use neovm_core::emacs_core::symbol::CanonicalAccess;
 use neovm_core::emacs_core::{
-    Context, format_eval_result_bytes_with_eval, print::print_value, symbol::Obarray, value_reader,
+    format_eval_result_bytes_with_eval, print::print_value, symbol::Obarray, value_reader,
 };
 use std::fs;
 use std::io::{self, Write};
@@ -31,7 +31,7 @@ fn main() {
         }
     };
 
-    let mut evaluator = Context::new();
+    let mut evaluator = neovm_core::emacs_core::eval_hook_installers::new_context();
     let stdout = io::stdout();
     let mut out = io::BufWriter::new(stdout.lock());
     for (index, form) in forms.iter().enumerate() {

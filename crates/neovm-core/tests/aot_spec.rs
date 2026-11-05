@@ -34,7 +34,10 @@ fn aot_spec_cross_session_arm_disarm_and_fast_from_call_1() {
         std::env::set_var("NEOVM_AOT", "force");
         std::env::set_var("NEOVM_AOT_DIR", dir.path());
     }
-    let r = neovm_core::emacs_core::jit::aot::testkit_spec_aot_selftest(dir.path());
+    let r = neovm_core::emacs_core::jit::aot::testkit_spec_aot_selftest(
+        dir.path(),
+        neovm_core::emacs_core::eval_hook_installers::install_eval_hooks(),
+    );
     unsafe {
         std::env::remove_var("NEOVM_AOT");
         std::env::remove_var("NEOVM_AOT_DIR");

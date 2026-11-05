@@ -71,9 +71,8 @@ fn main() {
 mod linux {
     use super::TARGET_STACK;
     use neovm_core::emacs_core::format_eval_result_with_eval;
-    use neovm_core::emacs_core::load::{
-        apply_runtime_startup_state, create_bootstrap_evaluator_cached,
-    };
+    use neovm_core::emacs_core::load::apply_runtime_startup_state;
+    use neovm_core::emacs_core::load_boot::create_bootstrap_evaluator_cached;
     use std::os::unix::process::{CommandExt, ExitStatusExt};
     use std::process::Command;
 
