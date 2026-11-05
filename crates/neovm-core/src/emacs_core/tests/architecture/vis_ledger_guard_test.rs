@@ -2842,6 +2842,14 @@ fn expanded_mod_rows_violation(
         let declaring = workspace.join(&row.file);
         let dir = auth_module_dir(&declaring);
         let name = row.item.rsplit("::").next().unwrap_or(&row.item);
+        // A file-module row may name the module's own source file: for a
+        // file module the defining file and the module are the same file.
+        // The historical spelling names the parent that declares the module;
+        // both must expand the same pub surface.
+        let self_file = declaring
+            .file_name()
+            .and_then(|file| file.to_str())
+            .is_some_and(|file| file == format!("{name}.rs"));
         let declaring_text = read(&declaring)?;
         let declaring_ast = syn::parse_file(&declaring_text)
             .map_err(|error| format!("{}: {error}", declaring.display()))?;
@@ -2870,60 +2878,65 @@ fn expanded_mod_rows_violation(
         let mut missing = Vec::new();
         let mut visited = BTreeSet::new();
         let mut target: Option<(PathBuf, PathBuf)> = None;
-        match declaration {
-            Some(module) if module.content.is_some() => {
-                // An inline module row (`#[cfg_attr(feature =
-                // "test-support", visibility::make(pub))] #[cfg(test)] mod
-                // tests { .. }`). A module not compiled in the test-support
-                // build is inert and needs no expansion.
-                if expansion_gated(&module.attrs) {
-                    continue;
+        if self_file {
+            target = Some((declaring.clone(), auth_module_dir(&declaring)));
+        }
+        if target.is_none() {
+            match declaration {
+                Some(module) if module.content.is_some() => {
+                    // An inline module row (`#[cfg_attr(feature =
+                    // "test-support", visibility::make(pub))] #[cfg(test)] mod
+                    // tests { .. }`). A module not compiled in the test-support
+                    // build is inert and needs no expansion.
+                    if expansion_gated(&module.attrs) {
+                        continue;
+                    }
+                    let (_, inner) = module.content.as_ref().expect("checked above");
+                    let inline_dir = dir.join(name);
+                    expand_module_items(
+                        inner,
+                        &segments,
+                        &inline_dir,
+                        &row.file,
+                        workspace,
+                        surface,
+                        rows,
+                        authority,
+                        &mut declared,
+                        &mut pending_methods,
+                        &mut missing,
+                        &mut visited,
+                    )?;
                 }
-                let (_, inner) = module.content.as_ref().expect("checked above");
-                let inline_dir = dir.join(name);
-                expand_module_items(
-                    inner,
-                    &segments,
-                    &inline_dir,
-                    &row.file,
-                    workspace,
-                    surface,
-                    rows,
-                    authority,
-                    &mut declared,
-                    &mut pending_methods,
-                    &mut missing,
-                    &mut visited,
-                )?;
-            }
-            Some(module) => {
-                if expansion_gated(&module.attrs) {
-                    continue;
-                }
-                let declaring_dir = declaring.parent().unwrap_or(&dir);
-                match expansion_module_target(module, &dir, declaring_dir) {
-                    Some(found) => target = Some(found),
-                    None => {
-                        failures.push(format!(
+                Some(module) => {
+                    if expansion_gated(&module.attrs) {
+                        continue;
+                    }
+                    let declaring_dir = declaring.parent().unwrap_or(&dir);
+                    match expansion_module_target(module, &dir, declaring_dir) {
+                        Some(found) => target = Some(found),
+                        None => {
+                            failures.push(format!(
                             "mod row {} does not resolve to a module under {} (the kind must name the widened item's actual kind)",
                             row.item,
                             dir.display()
                         ));
-                        continue;
+                            continue;
+                        }
                     }
                 }
-            }
-            None => match auth_module_file(&dir, name) {
-                Some(file) => target = Some((file, dir.join(name))),
-                None => {
-                    failures.push(format!(
+                None => match auth_module_file(&dir, name) {
+                    Some(file) => target = Some((file, dir.join(name))),
+                    None => {
+                        failures.push(format!(
                         "mod row {} does not resolve to a module under {} (the kind must name the widened item's actual kind)",
                         row.item,
                         dir.display()
                     ));
-                    continue;
-                }
-            },
+                        continue;
+                    }
+                },
+            }
         }
         if let Some((module_file, child_dir)) = target {
             let text = read(&module_file)?;
@@ -3723,6 +3736,27 @@ fn mod_row_expansion_requires_a_row_for_each_new_pub_item() {
         item_row("gc::facade::new_public_fn", "fn"),
     ];
     assert!(expanded_mod_rows_violation(dir.path(), &rows, &[]).is_ok());
+    // A file-module row may name the module's own defining file instead of
+    // the parent that declares it; the same pub surface is expanded.
+    let self_file_row = VisRow {
+        crate_dir: "neovm-value".to_owned(),
+        item: "gc::facade".to_owned(),
+        kind: "mod".to_owned(),
+        file: "crates/neovm-value/src/gc/facade.rs".to_owned(),
+        tests: Vec::new(),
+    };
+    let self_rows = vec![
+        self_file_row,
+        item_row("gc::facade::Unrowed", "struct"),
+        item_row("gc::facade::new_public_fn", "fn"),
+    ];
+    assert!(expanded_mod_rows_violation(dir.path(), &self_rows, &[]).is_ok());
+    let error = expanded_mod_rows_violation(dir.path(), &self_rows[..1], &[])
+        .expect_err("a self-file mod row still expands its pub items");
+    assert!(
+        error.contains("Unrowed") && error.contains("new_public_fn"),
+        "{error}"
+    );
     // A NEW pub item added to the module goes red without its own row.
     std::fs::write(
         &facade,
