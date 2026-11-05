@@ -89,3 +89,8 @@ neovm-value = { path = "../neovm-value", features = ["test-support"] }
 # value's test-support exposes CacheRootScan::Snapshot, so text must compile
 # its matching arm in the same test build (A1 consumer gate, downward only).
 neovm-text = { path = "../neovm-text", features = ["test-support"] }
+# The A' gate on fence-routed items is cfg(any(test, feature = "test-support"))
+# to match the fence module's cfg (peer P1-HOOKS-2). The optional `visibility`
+# dependency is tied to the test-support feature, so this dev-dependency makes
+# the attribute macro resolvable in this crate's own cfg(test) build too.
+visibility = "0.1.1"

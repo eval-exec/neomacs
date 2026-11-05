@@ -272,12 +272,14 @@ mod tests;
 /// [`SubrObj`] mirrors its directly observable GNU object metadata; the table
 /// retains Rust-only dispatch data and the complete interactive spec.
 ///
-/// P1-SUBR (peer 15:2xZ; peer 16:xxZ mandatory change): the item is
-/// `pub(crate)` with a test-support `visibility::make(pub)` (the WorldSlot
-/// pattern), so the eval authority fence remains its only public path;
-/// every field stays `pub(crate)` and no field is widened.
+/// P1-SUBR (peer 15:2xZ; peer 16:xxZ mandatory change; peer P1-HOOKS-2 gate
+/// fix): the item is `pub(crate)` with a test-support `visibility::make(pub)`
+/// (the WorldSlot pattern), so the eval authority fence remains its only
+/// public path; every field stays `pub(crate)` and no field is widened. The
+/// visibility gate matches the fence module's `cfg(any(test, feature))`, so
+/// eval's own cfg(test) build does not re-export a private item (E0365).
 #[derive(Clone, Copy)]
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) struct SubrEntry {
     pub(crate) function: Option<SubrFn>,
     pub(crate) min_args: u16,
