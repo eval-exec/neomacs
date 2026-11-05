@@ -1992,7 +1992,7 @@ fn every_doc_image_record_round_trips_through_its_position() {
             id,
             name,
         )
-        .and_then(neovm_eval::emacs_core::var_docs::lookup) else {
+        .and_then(neovm_eval::emacs_core::var_docs::lookup_for_test) else {
             continue;
         };
         let position = found.position();

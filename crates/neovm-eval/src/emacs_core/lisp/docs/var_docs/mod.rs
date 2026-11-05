@@ -248,7 +248,15 @@ const _: () = {
 /// [`DocImage::text_at`].  So [`SnarfedDoc`] now yields a position and is
 /// consumed doing it.
 #[inline]
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
+/// A1 test-support row (option A): the VIS class cannot widen `lookup` because
+/// a promotion-ledger row uses the same leaf name; this accessor keeps the
+/// moved doc test's call shape.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub fn lookup_for_test(variable: SnarfedVariable<'_>) -> Option<SnarfedDoc<'_>> {
+    lookup(variable)
+}
+
 pub(crate) fn lookup(variable: SnarfedVariable<'_>) -> Option<SnarfedDoc<'_>> {
     let index = gnu_table::GNU_VAR_DOCS
         .iter()
@@ -272,6 +280,7 @@ pub(crate) fn lookup(variable: SnarfedVariable<'_>) -> Option<SnarfedDoc<'_>> {
 /// (`lisp/loadup.el:251` writes, `:476` overwrites) and the one this port had
 /// backwards.
 #[derive(Debug)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct SnarfedDoc<'a> {
     position: usize,
     gate: PhantomData<SnarfedVariable<'a>>,
