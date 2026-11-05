@@ -207,7 +207,7 @@ pub(crate) fn set_concurrent_claims_for_test(on: Option<bool>) {
 }
 
 /// Nestable test scope; restore the prior thread-local policy on unwind too.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn with_concurrent_claims_for_test<R>(on: bool, f: impl FnOnce() -> R) -> R {
     struct RestoreClaims(Option<bool>);
     impl Drop for RestoreClaims {
