@@ -206,11 +206,11 @@ fn observed_string_keeps_exact_mark_and_compiled_invalidation_without_window_geo
     let _mode = ObservedMode::begin();
     let mut context = crate::test_utils::new_context();
     context.gc_stress = false;
-    context.tagged_heap.set_gc_threshold(usize::MAX);
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    unsafe { context.tagged_heap_mut() }.set_gc_threshold(usize::MAX);
     context.setup_thread_locals();
-    let owner = context
-        .tagged_heap
-        .alloc_string(LispString::from_utf8("abc"));
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    let owner = unsafe { context.tagged_heap_mut() }.alloc_string(LispString::from_utf8("abc"));
     let (_, reads) = capture(|| assert_eq!(owner.as_str_owned().unwrap(), "abc"));
     let reads = reads.expect("the retained string supplies a real certificate");
     assert!(collection_observed_metadata(owner.bits()));

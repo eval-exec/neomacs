@@ -4,7 +4,7 @@ use neovm_value::value::Value;
 
 fn roots_for(ctx: &Context) -> Vec<Value> {
     let mut roots = Vec::new();
-    collect_in_flight_flow_gc_roots(&mut roots, ctx.tagged_heap.identity());
+    collect_in_flight_flow_gc_roots(&mut roots, ctx.tagged_heap().identity());
     roots
 }
 

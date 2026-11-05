@@ -173,7 +173,7 @@ fn hash_user_guard_restores_after_rust_unwind() {
 fn hash_user_guard_accounts_gc_maybe_countdown_and_threshold_changes() {
     let (mut context, table) = fixture();
     let hi_threshold = (i64::MAX as usize) / 2;
-    assert!(context.tagged_heap.gc_threshold() < hi_threshold);
+    assert!(context.tagged_heap().gc_threshold() < hi_threshold);
     with_user_test_guard(&mut context, table, |context| {
         let bytes = context.tagged_heap.bytes_since_gc_exact();
         let initial = inhibited_user_test_since_gc(context, bytes).unwrap();
@@ -287,7 +287,7 @@ fn hash_user_guard_preserves_live_settings_fallback_after_nested_exit() {
 fn hash_user_guard_keeps_gc_binding_projection_current() {
     let (mut context, table) = fixture();
     let initial = context.gc_threshold();
-    let scope = context.specpdl.len();
+    let scope = context.specpdl().len();
     context
         .try_specbind(
             crate::emacs_core::intern::intern("gc-cons-threshold"),
@@ -324,7 +324,7 @@ fn hash_user_guard_refreshes_dynamic_let_gc_threshold() {
     let (mut context, table) = fixture();
     let bound_threshold = Value::MOST_POSITIVE_FIXNUM as usize;
     assert!(context.gc_threshold() < bound_threshold);
-    let scope = context.specpdl.len();
+    let scope = context.specpdl().len();
     // The same specbind operations used by a Lisp dynamic `let`: a binding
     // updates the forwarded variable while the collector's projection can
     // remain stale. The callback must preserve the live setting in its entry

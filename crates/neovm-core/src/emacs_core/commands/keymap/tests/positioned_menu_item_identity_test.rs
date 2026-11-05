@@ -6,9 +6,9 @@ fn positioned_menu_keys_deduplicate_and_reorder_by_eq_policy() {
     let mut ctx = crate::test_utils::new_context();
     let first = Value::symbol("issue554-menu-first");
     let second = Value::symbol("issue554-menu-second");
-    let positioned = ctx
-        .tagged_heap
-        .alloc_symbol_with_pos(first, Value::fixnum(0));
+    let positioned =
+        // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+        unsafe { ctx.tagged_heap_mut() }.alloc_symbol_with_pos(first, Value::fixnum(0));
     ctx.set_variable("menu-bar-final-items", Value::list(vec![positioned]));
     let original = vec![(first, "First".to_string()), (second, "Second".to_string())];
     let mut items = original.clone();

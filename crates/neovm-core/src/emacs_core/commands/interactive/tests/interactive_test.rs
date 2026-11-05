@@ -1660,7 +1660,7 @@ fn call_interactively_state_resolution_defers_motion_but_handles_noarg_cases() {
     let builtin_resolution = unsafe {
         let buffers = &mut ev.buffers;
         let custom = &ev.custom;
-        let specpdl = ev.specpdl.as_slice();
+        let specpdl = ev.specpdl().as_slice();
         // SAFETY: this split-state resolver handles only native string-code/
         // no-argument cases; Lisp/prompting cases are deferred. Its writes are
         // buffer/runtime Values, not function or canonical descriptor metadata.
@@ -1690,7 +1690,7 @@ fn call_interactively_state_resolution_defers_motion_but_handles_noarg_cases() {
     let (_, lambda_args) = unsafe {
         let buffers = &mut ev.buffers;
         let custom = &ev.custom;
-        let specpdl = ev.specpdl.as_slice();
+        let specpdl = ev.specpdl().as_slice();
         // SAFETY: this split-state resolver handles only native string-code/
         // no-argument cases; Lisp/prompting cases are deferred. Its writes are
         // buffer/runtime Values, not function or canonical descriptor metadata.
@@ -1723,7 +1723,7 @@ fn call_interactively_state_resolution_defers_prompting_specs_to_eval() {
     let resolved = unsafe {
         let buffers = &mut ev.buffers;
         let custom = &ev.custom;
-        let specpdl = ev.specpdl.as_slice();
+        let specpdl = ev.specpdl().as_slice();
         // SAFETY: this split-state resolver handles only native string-code/
         // no-argument cases; Lisp/prompting cases are deferred. Its writes are
         // buffer/runtime Values, not function or canonical descriptor metadata.
@@ -1776,7 +1776,7 @@ fn call_interactively_state_resolution_handles_simple_string_codes_without_eval(
     let (_, args) = unsafe {
         let buffers = &mut ev.buffers;
         let custom = &ev.custom;
-        let specpdl = ev.specpdl.as_slice();
+        let specpdl = ev.specpdl().as_slice();
         // SAFETY: this split-state resolver handles only native string-code/
         // no-argument cases; Lisp/prompting cases are deferred. Its writes are
         // buffer/runtime Values, not function or canonical descriptor metadata.
@@ -1831,7 +1831,7 @@ fn call_interactively_state_resolution_defers_shift_selection_without_effects() 
     let resolution = unsafe {
         let buffers = &mut ev.buffers;
         let custom = &ev.custom;
-        let specpdl = ev.specpdl.as_slice();
+        let specpdl = ev.specpdl().as_slice();
         // SAFETY: this split-state resolver handles only native string-code/
         // no-argument cases; Lisp/prompting cases are deferred. Its writes are
         // buffer/runtime Values, not function or canonical descriptor metadata.
@@ -1867,7 +1867,7 @@ fn call_interactively_state_resolution_handles_optional_coding_without_prefix() 
     let (_, args) = unsafe {
         let buffers = &mut ev.buffers;
         let custom = &ev.custom;
-        let specpdl = ev.specpdl.as_slice();
+        let specpdl = ev.specpdl().as_slice();
         // SAFETY: this split-state resolver handles only native string-code/
         // no-argument cases; Lisp/prompting cases are deferred. Its writes are
         // buffer/runtime Values, not function or canonical descriptor metadata.

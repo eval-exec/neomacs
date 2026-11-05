@@ -32,7 +32,8 @@ fn gethash_puthash_remhash_match_gnu() {
 fn small_table_scans_decline_under_symbols_with_pos() {
     let mut ctx = crate::test_utils::new_context();
     let sym = Value::from_sym_id(intern("small-scan-positioned"));
-    let positioned = ctx.tagged_heap.alloc_symbol_with_pos(sym, Value::fixnum(3));
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    let positioned = unsafe { ctx.tagged_heap_mut() }.alloc_symbol_with_pos(sym, Value::fixnum(3));
     for test in [HashTableTest::Eq, HashTableTest::Eql] {
         let mut storage = HashTableStorage::default();
         storage.insert(

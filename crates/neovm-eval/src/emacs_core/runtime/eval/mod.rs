@@ -3126,11 +3126,7 @@ pub struct Context {
     /// Pending GNU display ownership and private transaction state. Each
     /// exclusively borrowed Context owns it; never a process/TLS Lisp cache.
     #[doc(hidden)]
-    #[cfg(not(feature = "test-support"))]
     pub(crate) gnu_redisplay_hooks: redisplay_hooks::RedisplayHookOwnership,
-    #[cfg(feature = "test-support")]
-    #[doc(hidden)]
-    pub gnu_redisplay_hooks: redisplay_hooks::RedisplayHookOwnership,
     /// Cached Lisp-visible GC tuning variables used on every safe point.
     ///
     /// GNU updates its low-level GC tuning state when the watched variables
@@ -3183,11 +3179,7 @@ pub struct Context {
     /// Specpdl — special binding stack that writes directly to the obarray.
     /// Matches GNU Emacs's specpdl design.
     #[doc(hidden)]
-    #[cfg(not(feature = "test-support"))]
     pub(crate) specpdl: Vec<SpecBinding>,
-    #[cfg(feature = "test-support")]
-    #[doc(hidden)]
-    pub specpdl: Vec<SpecBinding>,
     /// Binding stacks parked while a nested simulated thread runs. GNU owns a
     /// separate specpdl per thread; keeping suspended stacks out of the active
     /// `specpdl` gives the single-threaded runtime the same isolation while
@@ -3324,11 +3316,7 @@ pub struct Context {
     pub(crate) owned_roots: OwnedRootRegistryView,
     /// Tagged pointer heap — sole GC and allocator.
     #[doc(hidden)]
-    #[cfg(not(feature = "test-support"))]
     pub(crate) tagged_heap: WorldView<neovm_value::tagged::gc::TaggedHeap>,
-    #[cfg(feature = "test-support")]
-    #[doc(hidden)]
-    pub tagged_heap: WorldView<neovm_value::tagged::gc::TaggedHeap>,
     /// The obarray — unified symbol table with value cells, function cells, plists.
     pub(crate) obarray: ObarrayView,
     /// `runtime_binding_has_projection`'s membership as a bitset over symbol
@@ -3647,11 +3635,7 @@ pub struct Context {
     /// with the same size, alignment and niche, so no Context offset moves.
     /// Thread-confined like the Context: only this owner mutates the slab.
     #[doc(hidden)]
-    #[cfg(not(feature = "test-support"))]
     pub(crate) owner: owner_bindings::OwnerSlot,
-    #[cfg(feature = "test-support")]
-    #[doc(hidden)]
-    pub owner: owner_bindings::OwnerSlot,
     /// The function epoch at which `apply` was last found to be the builtin
     /// with compiler overrides inactive (`Vm::call_apply_native`). Genuine
     /// calls must recheck after advice, redefinition or an overrides toggle.
@@ -5350,7 +5334,7 @@ impl Context {
     /// R-b (PC11-F f1): the dynamic-binding stack (read).
     #[doc(hidden)]
     #[inline(always)]
-    pub fn specpdl(&self) -> &[SpecBinding] {
+    pub fn specpdl(&self) -> &Vec<SpecBinding> {
         &self.specpdl
     }
 

@@ -222,14 +222,14 @@ fn gdl_eval_error_memory_round_trip_keeps_original_binding_through_clone_and_gc(
     let error = original_error.clone();
     drop(original_error);
     let mut roots = Vec::new();
-    collect_in_flight_flow_gc_roots(&mut roots, ctx.tagged_heap.identity());
+    collect_in_flight_flow_gc_roots(&mut roots, ctx.tagged_heap().identity());
     assert!(
         roots.iter().any(|root| root.bits() == binding.bits()),
         "the public error clone must pin the original memory descriptor"
     );
     ctx.gc_collect_exact();
     for value in [binding, tail, vector] {
-        assert!(ctx.tagged_heap.owns_heap_value_for_test(value));
+        assert!(ctx.tagged_heap().owns_heap_value_for_test(value));
     }
 
     let back = flow_from_eval_error(error);
@@ -244,8 +244,8 @@ fn gdl_eval_error_memory_round_trip_keeps_original_binding_through_clone_and_gc(
     assert_eq!(signal.selected_resume, Some(target));
     assert!(signal.search_complete);
     ctx.gc_collect_exact();
-    assert!(ctx.tagged_heap.owns_heap_value_for_test(binding));
-    assert!(ctx.tagged_heap.owns_heap_value_for_test(vector));
+    assert!(ctx.tagged_heap().owns_heap_value_for_test(binding));
+    assert!(ctx.tagged_heap().owns_heap_value_for_test(vector));
     assert_eq!(binding.cons_car().as_bare_symbol_id(), Some(symbol));
     assert_eq!(tail.cons_cdr(), Value::fixnum(99));
     assert_eq!(vector.as_vector_data().unwrap()[0], Value::fixnum(7));

@@ -44,7 +44,7 @@ fn gc_tls_ownership_regex_compiled_translation_keeps_its_table_alive() {
     // A hash-table is boxed: the ownership probe never dereferences its
     // payload and can safely detect that exact GC freed the cached child.
     assert!(
-        ctx.tagged_heap.owns_heap_value_for_test(payload),
+        ctx.tagged_heap().owns_heap_value_for_test(payload),
         "compiled regexp cache failed to root its case translation char-table"
     );
     assert_eq!(
@@ -105,7 +105,7 @@ fn gc_tls_ownership_regex_literal_translation_keeps_its_table_alive() {
         .unwrap();
     ctx.gc_collect_exact();
     assert!(
-        ctx.tagged_heap.owns_heap_value_for_test(payload),
+        ctx.tagged_heap().owns_heap_value_for_test(payload),
         "literal regexp cache failed to root its case translation char-table"
     );
     assert_eq!(translation.translate(b'[' as u32), b']' as u32);
@@ -166,7 +166,7 @@ fn assert_cached_syntax_table_lives(owner: SyntaxCacheOwner) {
         .unwrap();
     ctx.gc_collect_exact();
     assert!(
-        ctx.tagged_heap.owns_heap_value_for_test(payload),
+        ctx.tagged_heap().owns_heap_value_for_test(payload),
         "compiled syntax cache kept table identity bits while exact GC freed that table"
     );
 }

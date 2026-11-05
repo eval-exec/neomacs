@@ -330,7 +330,7 @@ fn discard_specpdl_restores_bindings_without_lisp_callbacks() {
     ctx.obarray_mut()
         .set_symbol_value_id(symbol, Value::fixnum(10));
     ctx.obarray_mut().set_symbol_value_id(sentinel, Value::NIL);
-    let count = ctx.specpdl.len();
+    let count = ctx.specpdl().len();
     ctx.try_specbind(symbol, Value::fixnum(20)).expect("bind");
     let cleanup = Value::list(vec![
         Value::symbol("setq"),
@@ -347,9 +347,11 @@ fn discard_specpdl_restores_bindings_without_lisp_callbacks() {
         vec![Value::from_sym_id(symbol), watcher],
     )
     .expect("register trapped watcher");
-    ctx.specpdl.push(SpecBinding::UnwindProtect {
+    let lexenv = ctx.lexenv;
+    // SAFETY: test-only owner-thread binding-stack writes; each push is matched by a recorded-depth discard/truncate on the same path (including the panic-recovery path under test), and the Vec is never replaced or moved.
+    unsafe { ctx.specpdl_mut() }.push(SpecBinding::UnwindProtect {
         forms: Value::list(vec![cleanup]),
-        lexenv: ctx.lexenv,
+        lexenv,
     });
     ctx.discard_specpdl_to(count);
     assert_eq!(
@@ -357,7 +359,7 @@ fn discard_specpdl_restores_bindings_without_lisp_callbacks() {
         Value::fixnum(10)
     );
     assert_eq!(ctx.obarray().symbol_value_id_or_nil(sentinel), Value::NIL);
-    assert_eq!(ctx.specpdl.len(), count);
+    assert_eq!(ctx.specpdl().len(), count);
 }
 
 /// The fallback publishes restored buffer identity into the mutator's thread
@@ -374,7 +376,7 @@ fn discard_specpdl_restores_buffer_default_and_runtime_cache() {
         .current_buffer_id()
         .expect("current buffer");
     let other = ctx.edit.buffers.create_buffer("discard-other-buffer");
-    let count = ctx.specpdl.len();
+    let count = ctx.specpdl().len();
     let truncate_lines = intern("truncate-lines");
     let saved_default = ctx
         .edit
@@ -386,7 +388,8 @@ fn discard_specpdl_restores_buffer_default_and_runtime_cache() {
         .expect("bind default");
     ctx.try_specbind(intern("throw-on-input"), Value::symbol("discard-tag"))
         .expect("bind cache");
-    ctx.specpdl.push(SpecBinding::SaveCurrentBuffer {
+    // SAFETY: test-only owner-thread binding-stack writes; each push is matched by a recorded-depth discard/truncate on the same path (including the panic-recovery path under test), and the Vec is never replaced or moved.
+    unsafe { ctx.specpdl_mut() }.push(SpecBinding::SaveCurrentBuffer {
         buffer_id: original,
     });
     ctx.switch_current_buffer(other)
@@ -422,10 +425,11 @@ fn discard_specpdl_rejected_forwarded_value_keeps_valid_storage() {
 
     let mut ctx = crate::test_utils::new_context();
     let symbol = intern("undo-limit");
-    let count = ctx.specpdl.len();
+    let count = ctx.specpdl().len();
     ctx.try_specbind(symbol, Value::fixnum(5))
         .expect("bind integer forwarder");
-    ctx.specpdl.push(SpecBinding::LetDefault {
+    // SAFETY: test-only owner-thread binding-stack writes; each push is matched by a recorded-depth discard/truncate on the same path (including the panic-recovery path under test), and the Vec is never replaced or moved.
+    unsafe { ctx.specpdl_mut() }.push(SpecBinding::LetDefault {
         sym_id: symbol,
         old_value: SavedBindingValue::from_plain(Value::string("invalid saved integer")),
         buffer_id: SavedBufferId::from_option(None),
@@ -451,7 +455,7 @@ fn current_buffer_scope_restores_on_signal_and_rust_unwind() {
     let mut ctx = crate::test_utils::new_context();
     let original = ctx.edit.buffers.current_buffer_id().unwrap();
     let other = ctx.edit.buffers.create_buffer("scope-other");
-    let depth = ctx.specpdl.len();
+    let depth = ctx.specpdl().len();
     let mut scope = CurrentBufferScope::enter(&mut ctx);
     scope
         .context()
@@ -473,7 +477,7 @@ fn current_buffer_scope_restores_on_signal_and_rust_unwind() {
     }));
     assert!(recovered.is_err());
     assert_eq!(ctx.edit.buffers.current_buffer_id(), Some(original));
-    assert_eq!(ctx.specpdl.len(), depth);
+    assert_eq!(ctx.specpdl().len(), depth);
 }
 
 #[test]
@@ -482,9 +486,9 @@ fn current_buffer_scope_same_target_avoids_a_specpdl_entry() {
     use crate::emacs_core::eval::CurrentBufferScope;
     let mut ctx = crate::test_utils::new_context();
     let original = ctx.edit.buffers.current_buffer_id().unwrap();
-    let depth = ctx.specpdl.len();
+    let depth = ctx.specpdl().len();
     let mut scope = CurrentBufferScope::for_buffer(&mut ctx, original).unwrap();
-    assert_eq!(scope.context().specpdl.len(), depth);
+    assert_eq!(scope.context().specpdl().len(), depth);
     scope.finish(Ok(Value::NIL)).unwrap();
 }
 
@@ -509,8 +513,9 @@ fn discard_specpdl_noncurrent_local_restores_current_runtime_projection() {
         .set_buffer_local_property_by_sym_id(other, symbol, Value::T)
         .unwrap();
     ctx.publish_runtime_binding_write_by_resolved_id(symbol, current_tag);
-    let depth = ctx.specpdl.len();
-    ctx.specpdl.push(SpecBinding::LetLocal {
+    let depth = ctx.specpdl().len();
+    // SAFETY: test-only owner-thread binding-stack writes; each push is matched by a recorded-depth discard/truncate on the same path (including the panic-recovery path under test), and the Vec is never replaced or moved.
+    unsafe { ctx.specpdl_mut() }.push(SpecBinding::LetLocal {
         sym_id: symbol,
         old_value: other_tag,
         buffer_id: other,
@@ -533,7 +538,7 @@ fn discard_specpdl_runtime_projection_ignores_lexical_shadow() {
     use neovm_value::intern::intern;
     let mut ctx = crate::test_utils::new_context();
     let symbol = intern("throw-on-input");
-    let depth = ctx.specpdl.len();
+    let depth = ctx.specpdl().len();
     ctx.try_specbind(symbol, Value::symbol("discard-dynamic-tag"))
         .unwrap();
     let lexical_tag = Value::symbol("discard-lexical-tag");
@@ -567,10 +572,10 @@ fn current_buffer_scope_same_target_panic_discards_bindings_without_restoring_st
     let symbol = intern("scope-same-target-child-binding");
     ctx.obarray_view_mut()
         .set_symbol_value_id(symbol, Value::fixnum(7));
-    let depth = ctx.specpdl.len();
+    let depth = ctx.specpdl().len();
     let recovered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut scope = CurrentBufferScope::for_buffer(&mut ctx, original).unwrap();
-        assert_eq!(scope.context().specpdl.len(), depth);
+        assert_eq!(scope.context().specpdl().len(), depth);
         scope
             .context()
             .try_specbind(symbol, Value::fixnum(9))
@@ -594,7 +599,7 @@ fn current_buffer_scope_same_target_panic_discards_bindings_without_restoring_st
         panic!("contained same-target scope panic");
     }));
     assert!(recovered.is_err());
-    assert_eq!(ctx.specpdl.len(), depth);
+    assert_eq!(ctx.specpdl().len(), depth);
     assert_eq!(
         ctx.obarray().symbol_value_id_copied(symbol),
         Some(Value::fixnum(7))
@@ -636,7 +641,7 @@ fn excursion_scope_panic_recovery_does_not_seed_standard_case_table() {
             .goto_buffer_emacs_byte_pos(original, EmacsBytePos::new(1))
             .unwrap();
         let symbol = intern("neovm--standard-case-table-object");
-        let count = ctx.specpdl.len();
+        let count = ctx.specpdl().len();
         let mut allocations_before_drop = None;
         let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let mut scope = ExcursionScope::enter(&mut ctx);
@@ -659,11 +664,11 @@ fn excursion_scope_panic_recovery_does_not_seed_standard_case_table() {
             }
             // Capture after the scope's point marker and normal buffer switch
             // have allocated. Only fallback work is measured below.
-            allocations_before_drop = Some(scope.context().tagged_heap.allocated_count());
+            allocations_before_drop = Some(scope.context().tagged_heap().allocated_count());
             panic!("contained panic after removing the lazy standard table");
         }));
         assert!(caught.is_err());
-        assert_eq!(ctx.specpdl.len(), count);
+        assert_eq!(ctx.specpdl().len(), count);
         assert_eq!(ctx.edit.buffers.current_buffer_id(), Some(original));
         assert_eq!(
             ctx.threads()
@@ -684,7 +689,7 @@ fn excursion_scope_panic_recovery_does_not_seed_standard_case_table() {
             "Drop must preserve an absent or invalid standard-case symbol"
         );
         assert_eq!(
-            Some(ctx.tagged_heap.allocated_count()),
+            Some(ctx.tagged_heap().allocated_count()),
             allocations_before_drop,
             "lazy table allocation must not occur during saved-state recovery"
         );
@@ -724,10 +729,10 @@ fn excursion_scope_without_current_buffer_discards_child_binding_on_panic() {
     let symbol = intern("empty-excursion-scope-value");
     ctx.obarray_view_mut()
         .set_symbol_value_id(symbol, Value::fixnum(10));
-    let count = ctx.specpdl.len();
+    let count = ctx.specpdl().len();
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut scope = ExcursionScope::enter(&mut ctx);
-        assert_eq!(scope.context().specpdl.len(), count);
+        assert_eq!(scope.context().specpdl().len(), count);
         scope
             .context()
             .try_specbind(symbol, Value::fixnum(20))
@@ -739,7 +744,7 @@ fn excursion_scope_without_current_buffer_discards_child_binding_on_panic() {
         ctx.obarray().symbol_value_id_or_nil(symbol),
         Value::fixnum(10)
     );
-    assert_eq!(ctx.specpdl.len(), count);
+    assert_eq!(ctx.specpdl().len(), count);
     assert_eq!(ctx.edit.buffers.current_buffer_id(), None);
 }
 
@@ -755,10 +760,10 @@ fn restriction_scope_without_current_buffer_discards_child_binding_on_panic() {
     let symbol = intern("empty-restriction-scope-value");
     ctx.obarray_view_mut()
         .set_symbol_value_id(symbol, Value::fixnum(10));
-    let count = ctx.specpdl.len();
+    let count = ctx.specpdl().len();
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut scope = RestrictionScope::enter(&mut ctx);
-        assert_eq!(scope.context().specpdl.len(), count);
+        assert_eq!(scope.context().specpdl().len(), count);
         scope
             .context()
             .try_specbind(symbol, Value::fixnum(20))
@@ -770,7 +775,7 @@ fn restriction_scope_without_current_buffer_discards_child_binding_on_panic() {
         ctx.obarray().symbol_value_id_or_nil(symbol),
         Value::fixnum(10)
     );
-    assert_eq!(ctx.specpdl.len(), count);
+    assert_eq!(ctx.specpdl().len(), count);
     assert_eq!(ctx.edit.buffers.current_buffer_id(), None);
 }
 
@@ -782,9 +787,9 @@ fn current_buffer_scope_failed_setup_finishes_owned_boundary() {
     let original = ctx.edit.buffers.current_buffer_id().unwrap();
     let target = ctx.edit.buffers.create_buffer("scope-deleted-setup-target");
     assert!(ctx.edit.buffers.kill_buffer(target));
-    let count = ctx.specpdl.len();
+    let count = ctx.specpdl().len();
     assert!(CurrentBufferScope::for_buffer(&mut ctx, target).is_err());
-    assert_eq!(ctx.specpdl.len(), count);
+    assert_eq!(ctx.specpdl().len(), count);
     assert_eq!(ctx.edit.buffers.current_buffer_id(), Some(original));
 }
 
@@ -809,7 +814,7 @@ fn discard_local_binding_does_not_allocate_ambient_buffer_wrapper() {
         &vec![Value::from_sym_id(symbol)],
     )
     .expect("localized existing cell");
-    let count = owner.specpdl.len();
+    let count = owner.specpdl().len();
     owner
         .try_specbind(symbol, Value::fixnum(20))
         .expect("bind local");
@@ -825,9 +830,9 @@ fn discard_local_binding_does_not_allocate_ambient_buffer_wrapper() {
     );
     let mut ambient = crate::test_utils::new_context();
     ambient.setup_thread_locals();
-    let before = ambient.tagged_heap.bytes_since_gc_exact();
+    let before = ambient.tagged_heap().bytes_since_gc_exact();
     owner.discard_specpdl_to(count);
-    let after = ambient.tagged_heap.bytes_since_gc_exact();
+    let after = ambient.tagged_heap().bytes_since_gc_exact();
     owner.setup_thread_locals();
     assert_eq!(
         after, before,
@@ -841,7 +846,7 @@ fn discard_local_binding_does_not_allocate_ambient_buffer_wrapper() {
             .and_then(|buffer| buffer.get_buffer_local_by_sym_id(symbol)),
         Some(Value::fixnum(10))
     );
-    assert_eq!(owner.specpdl.len(), count);
+    assert_eq!(owner.specpdl().len(), count);
     assert_eq!(
         owner
             .edit
@@ -874,13 +879,13 @@ fn discard_local_binding_keeps_existing_void_cell_without_lisp_allocation() {
         &vec![Value::from_sym_id(symbol)],
     )
     .expect("void localized cell");
-    let count = owner.specpdl.len();
+    let count = owner.specpdl().len();
     owner
         .try_specbind(symbol, Value::fixnum(20))
         .expect("bind local");
-    let before = owner.tagged_heap.bytes_since_gc_exact();
+    let before = owner.tagged_heap().bytes_since_gc_exact();
     owner.discard_specpdl_to(count);
-    assert_eq!(owner.tagged_heap.bytes_since_gc_exact(), before);
+    assert_eq!(owner.tagged_heap().bytes_since_gc_exact(), before);
     assert!(
         owner
             .edit
@@ -923,12 +928,13 @@ fn panic_recovery_unbound_forwarded_binding_keeps_builtin_storage() {
     ctx.obarray_view_mut().install_objfwd(object, obj_fwd);
     // Force publication to use actual storage after refusing the saved void.
     ctx.publish_runtime_binding_write_by_resolved_id(object, Value::NIL);
-    let count = ctx.specpdl.len();
-    let allocated = ctx.tagged_heap.bytes_since_gc_exact();
+    let count = ctx.specpdl().len();
+    let allocated = ctx.tagged_heap().bytes_since_gc_exact();
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut scope = CurrentBufferScope::enter(&mut ctx);
         for symbol in [boolean, object] {
-            scope.context().specpdl.push(SpecBinding::Let {
+            // SAFETY: test-only owner-thread binding-stack writes; each push is matched by a recorded-depth discard/truncate on the same path (including the panic-recovery path under test), and the Vec is never replaced or moved.
+            unsafe { scope.context().specpdl_mut() }.push(SpecBinding::Let {
                 sym_id: symbol,
                 old_value: SavedBindingValue::from_plain(Value::UNBOUND),
             });
@@ -941,8 +947,8 @@ fn panic_recovery_unbound_forwarded_binding_keeps_builtin_storage() {
     assert_eq!(ctx.obarray().symbol_value_id_or_nil(boolean), Value::NIL);
     assert_eq!(ctx.obarray().symbol_value_id_or_nil(object), retained);
     assert_eq!(ctx.cached_throw_on_input_for_test(), retained);
-    assert_eq!(ctx.specpdl.len(), count);
-    assert_eq!(ctx.tagged_heap.bytes_since_gc_exact(), allocated);
+    assert_eq!(ctx.specpdl().len(), count);
+    assert_eq!(ctx.tagged_heap().bytes_since_gc_exact(), allocated);
 }
 
 /// The same builtin refusal applies after make_blv keeps its forwarder
@@ -980,12 +986,13 @@ fn panic_recovery_unbound_localized_builtin_keeps_cells_and_projection() {
         (blv.defcell.get(), blv.valcell.get())
     });
     ctx.publish_runtime_binding_write_by_resolved_id(object, Value::NIL);
-    let count = ctx.specpdl.len();
-    let allocated = ctx.tagged_heap.bytes_since_gc_exact();
+    let count = ctx.specpdl().len();
+    let allocated = ctx.tagged_heap().bytes_since_gc_exact();
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut scope = CurrentBufferScope::enter(&mut ctx);
         for symbol in [boolean, object] {
-            scope.context().specpdl.push(SpecBinding::LetDefault {
+            // SAFETY: test-only owner-thread binding-stack writes; each push is matched by a recorded-depth discard/truncate on the same path (including the panic-recovery path under test), and the Vec is never replaced or moved.
+            unsafe { scope.context().specpdl_mut() }.push(SpecBinding::LetDefault {
                 sym_id: symbol,
                 old_value: SavedBindingValue::from_plain(Value::UNBOUND),
                 buffer_id: SavedBufferId::from_option(None),
@@ -1009,6 +1016,6 @@ fn panic_recovery_unbound_localized_builtin_keeps_cells_and_projection() {
     assert!(!bool_fwd.get());
     assert_eq!(obj_fwd.get(), retained);
     assert_eq!(ctx.cached_throw_on_input_for_test(), retained);
-    assert_eq!(ctx.specpdl.len(), count);
-    assert_eq!(ctx.tagged_heap.bytes_since_gc_exact(), allocated);
+    assert_eq!(ctx.specpdl().len(), count);
+    assert_eq!(ctx.tagged_heap().bytes_since_gc_exact(), allocated);
 }

@@ -53,9 +53,9 @@ fn issue554_cloned_owned_throw_roundtrip_preserves_policy_and_roots() {
     for policy in [SymbolMode::Bare, SymbolMode::Positioned] {
         let mut ctx = crate::test_utils::new_context();
         let bare_tag = Value::symbol("issue554-cloned-throw-tag");
-        let tag = ctx
-            .tagged_heap
-            .alloc_symbol_with_pos(bare_tag, Value::fixnum(5));
+        let tag =
+            // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+            unsafe { ctx.tagged_heap_mut() }.alloc_symbol_with_pos(bare_tag, Value::fixnum(5));
         let payload = Value::vector(vec![Value::fixnum(7)]);
         let owned = map_flow(Flow::throw_with_symbols(tag, payload, policy));
         let cloned = owned.clone();
@@ -64,7 +64,7 @@ fn issue554_cloned_owned_throw_roundtrip_preserves_policy_and_roots() {
         // equality. Collection has only the cloned owned error's pin here.
         ctx.set_variable("symbols-with-pos-enabled", Value::NIL);
         let mut roots = Vec::new();
-        collect_in_flight_flow_gc_roots(&mut roots, ctx.tagged_heap.identity());
+        collect_in_flight_flow_gc_roots(&mut roots, ctx.tagged_heap().identity());
         assert!(roots.iter().any(|root| root.bits() == tag.bits()));
         assert!(roots.iter().any(|root| root.bits() == payload.bits()));
         ctx.gc_collect_exact();
@@ -84,7 +84,7 @@ fn issue554_cloned_owned_throw_roundtrip_preserves_policy_and_roots() {
         assert_eq!(thrown.tag.as_symbol_with_pos_sym(), Some(bare_tag));
         drop(roundtrip);
         let mut roots = Vec::new();
-        collect_in_flight_flow_gc_roots(&mut roots, ctx.tagged_heap.identity());
+        collect_in_flight_flow_gc_roots(&mut roots, ctx.tagged_heap().identity());
         assert!(roots.iter().all(|root| root.bits() != tag.bits()));
         assert!(roots.iter().all(|root| root.bits() != payload.bits()));
     }

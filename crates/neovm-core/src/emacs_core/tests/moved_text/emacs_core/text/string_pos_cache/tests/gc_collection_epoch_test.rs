@@ -12,10 +12,10 @@ use neovm_value::tagged::gc::{CONS_BLOCK_CELLS, TaggedHeap, set_tagged_heap};
 #[test]
 fn gc_collection_epoch_string_pos_activation_discards_swept_source_entry() {
     let mut context = crate::test_utils::new_context();
-    let heap_identity = context.tagged_heap.identity();
+    let heap_identity = context.tagged_heap().identity();
     let string = populate_cache(&mut context);
     let mut context = collect_with_uncovered_cache(context, string);
-    assert_eq!(context.tagged_heap.identity(), heap_identity);
+    assert_eq!(context.tagged_heap().identity(), heap_identity);
     // The restored cache has the same heap identity but an uncovered epoch.
     // Activation must reject its reclaimed string before offering a root.
     assert!(CACHE.with(Cell::get).is_some());
@@ -33,7 +33,7 @@ fn gc_collection_epoch_string_pos_root_scan_discards_swept_source_entry() {
     let string = populate_cache(&mut context);
     let mut context = collect_with_uncovered_cache(context, string);
     assert!(neovm_value::tagged::gc::tagged_heap_is_current(
-        &context.tagged_heap
+        &context.tagged_heap()
     ));
     assert!(CACHE.with(Cell::get).is_some());
     // No explicit activation: the collector's already-active fast path skips
@@ -41,8 +41,8 @@ fn gc_collection_epoch_string_pos_root_scan_discards_swept_source_entry() {
     let mut roots = Vec::new();
     collect_string_pos_cache_gc_roots(
         &mut roots,
-        context.tagged_heap.identity(),
-        context.tagged_heap.gc_collections(),
+        context.tagged_heap().identity(),
+        context.tagged_heap().gc_collections(),
         neovm_value::tagged::gc::CacheRootScan::Collection,
     );
     assert!(
@@ -66,7 +66,7 @@ fn gc_collection_epoch_string_pos_thread_change_activation_invalidates_changed_l
     );
     let original_data = string.as_lisp_string().unwrap().as_bytes().as_ptr() as usize;
     let original_sbytes = string.as_lisp_string().unwrap().sbytes();
-    let initial_epoch = context.tagged_heap.gc_collections();
+    let initial_epoch = context.tagged_heap().gc_collections();
     let stale = UncoveredStringPosCache::take();
     string.with_lisp_string_mut(|string| {
         string.mutate_bytes(|bytes| bytes.copy_from_slice("жaλb".as_bytes()));
@@ -75,10 +75,10 @@ fn gc_collection_epoch_string_pos_thread_change_activation_invalidates_changed_l
     assert_eq!(changed.as_bytes().as_ptr() as usize, original_data);
     assert_eq!(changed.sbytes(), original_sbytes);
     stale.restore();
-    assert_eq!(context.tagged_heap.gc_collections(), initial_epoch);
+    assert_eq!(context.tagged_heap().gc_collections(), initial_epoch);
     // A different mutator has its own byte-mutation epoch. Exercise the
     // activation's explicit thread-change input against the restored epoch.
-    activate_string_pos_cache(context.tagged_heap.identity(), initial_epoch, false, true);
+    activate_string_pos_cache(context.tagged_heap().identity(), initial_epoch, false, true);
     assert_eq!(
         string_char_to_byte(string, string.as_lisp_string().unwrap(), 1),
         2,
@@ -149,9 +149,9 @@ fn gc_collection_epoch_string_pos_exact_collections_keep_warm_entry() {
     let string = populate_cache(&mut context);
     let before = CACHE.with(Cell::get).unwrap();
     for _ in 0..3 {
-        let completed = context.tagged_heap.gc_collections();
+        let completed = context.tagged_heap().gc_collections();
         context.gc_collect_exact();
-        assert_eq!(context.tagged_heap.gc_collections(), completed + 1);
+        assert_eq!(context.tagged_heap().gc_collections(), completed + 1);
         // Check before activation and before conversion can refill the entry.
         assert_warm_entry(string, before);
         context.setup_thread_locals();
@@ -166,17 +166,17 @@ fn gc_collection_epoch_string_pos_concurrent_collections_keep_warm_entry() {
     let string = populate_cache(&mut context);
     let before = CACHE.with(Cell::get).unwrap();
     for _ in 0..3 {
-        let completed = context.tagged_heap.gc_collections();
+        let completed = context.tagged_heap().gc_collections();
         start_concurrent_cycle(&mut context);
         context.setup_thread_locals();
         assert_warm_entry(string, before);
         start_deferred_sweep(&mut context);
-        assert_eq!(context.tagged_heap.gc_collections(), completed);
+        assert_eq!(context.tagged_heap().gc_collections(), completed);
         context.setup_thread_locals();
         assert_warm_entry(string, before);
         context.gc_safe_point();
-        assert!(!context.tagged_heap.sweep_in_progress());
-        assert_eq!(context.tagged_heap.gc_collections(), completed + 1);
+        assert!(!context.tagged_heap().sweep_in_progress());
+        assert_eq!(context.tagged_heap().gc_collections(), completed + 1);
         context.setup_thread_locals();
         assert_warm_entry(string, before);
     }
@@ -225,7 +225,7 @@ impl UncoveredStringPosCache {
 pub(super) fn populate_cache(context: &mut Context) -> Value {
     context.setup_thread_locals();
     let string = Value::string("aжλb");
-    assert!(context.tagged_heap.owns_heap_value_for_test(string));
+    assert!(context.tagged_heap().owns_heap_value_for_test(string));
     assert_eq!(
         string_char_to_byte(string, string.as_lisp_string().unwrap(), 2),
         3
@@ -235,12 +235,12 @@ pub(super) fn populate_cache(context: &mut Context) -> Value {
 }
 
 fn collect_with_uncovered_cache(mut context: Context, string: Value) -> Context {
-    let initial_epoch = context.tagged_heap.gc_collections();
+    let initial_epoch = context.tagged_heap().gc_collections();
     let stale = UncoveredStringPosCache::take();
     context.gc_collect_exact();
-    assert!(context.tagged_heap.gc_collections() > initial_epoch);
+    assert!(context.tagged_heap().gc_collections() > initial_epoch);
     assert!(
-        !context.tagged_heap.owns_heap_value_for_test(string),
+        !context.tagged_heap().owns_heap_value_for_test(string),
         "an uncovered collection must sweep the saved cache's string"
     );
     stale.restore();
@@ -313,17 +313,19 @@ pub(super) fn assert_warm_entry(string: Value, before: Entry) {
 }
 
 fn start_concurrent_cycle(context: &mut Context) {
-    context.tagged_heap.set_gc_threshold(1);
-    context.tagged_heap.alloc_cons(Value::NIL, Value::NIL);
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    unsafe { context.tagged_heap_mut() }.set_gc_threshold(1);
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    unsafe { context.tagged_heap_mut() }.alloc_cons(Value::NIL, Value::NIL);
     context.gc_safe_point();
-    assert!(context.tagged_heap.concurrent_mark_running());
-    assert!(context.tagged_heap.mark_in_progress());
+    assert!(context.tagged_heap().concurrent_mark_running());
+    assert!(context.tagged_heap().mark_in_progress());
 }
 
 fn start_deferred_sweep(context: &mut Context) {
     for _ in 0..100_000 {
         context.gc_safe_point();
-        if context.tagged_heap.sweep_in_progress() {
+        if context.tagged_heap().sweep_in_progress() {
             return;
         }
         std::thread::yield_now();
@@ -339,7 +341,7 @@ fn non_generational_context() -> Context {
     unsafe { std::env::set_var("NEOVM_GC_GENERATIONAL", "0") };
     let mut context = crate::test_utils::new_context();
     context.gc_stress = false;
-    assert!(!context.tagged_heap.generational_enabled());
+    assert!(!context.tagged_heap().generational_enabled());
     assert!(!context.gc_stress);
     context
 }
@@ -354,13 +356,13 @@ fn assert_foreign_cycle_discards_entry(phase: ForeignPhase) {
     let mut context = non_generational_context();
     context.gc_collect_exact();
     let string = populate_cache(&mut context);
-    let completed = context.tagged_heap.gc_collections();
+    let completed = context.tagged_heap().gc_collections();
     let stale = UncoveredStringPosCache::take();
     start_concurrent_cycle(&mut context);
     if matches!(phase, ForeignPhase::Sweep) {
         start_deferred_sweep(&mut context);
     }
-    assert_eq!(context.tagged_heap.gc_collections(), completed);
+    assert_eq!(context.tagged_heap().gc_collections(), completed);
     stale.restore();
     assert_eq!(CACHE.with(Cell::get).unwrap().string.bits(), string.bits());
     context.setup_thread_locals();

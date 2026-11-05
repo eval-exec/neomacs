@@ -26,7 +26,7 @@ fn gc_tls_ownership_category_new_heap_reset_drops_old_values() {
         roots(&next)
             .iter()
             .all(|value| !value.is_heap_object()
-                || next.tagged_heap.owns_heap_value_for_test(*value)),
+                || next.tagged_heap().owns_heap_value_for_test(*value)),
         "new-heap reset retained a value from the dropped heap"
     );
     next.gc_collect_exact();
@@ -46,13 +46,13 @@ fn gc_tls_ownership_category_excludes_another_live_heap() {
         roots(&first)
             .iter()
             .all(|value| !value.is_heap_object()
-                || first.tagged_heap.owns_heap_value_for_test(*value)),
+                || first.tagged_heap().owns_heap_value_for_test(*value)),
         "GC roots contain a value belonging to another live Context"
     );
     first.gc_collect_exact();
     second.setup_thread_locals();
     second.gc_collect_exact();
-    assert!(second.tagged_heap.owns_heap_value_for_test(value));
+    assert!(second.tagged_heap().owns_heap_value_for_test(value));
 }
 
 fn populate(_ctx: &mut Context) -> Value {
@@ -61,6 +61,6 @@ fn populate(_ctx: &mut Context) -> Value {
 
 fn roots(ctx: &Context) -> Vec<Value> {
     let mut roots = Vec::new();
-    collect_category_gc_roots(&mut roots, ctx.tagged_heap.identity());
+    collect_category_gc_roots(&mut roots, ctx.tagged_heap().identity());
     roots
 }

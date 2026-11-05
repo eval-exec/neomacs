@@ -32,8 +32,8 @@ fn issue554_ascii_memo_shares_entries_across_symbol_policies() {
     context
         .eval_str("(progn (erase-buffer) (insert (make-string 128 ?a)))")
         .unwrap();
-    let purpose = context
-        .tagged_heap
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    let purpose = unsafe { context.tagged_heap_mut() }
         .alloc_symbol_with_pos(Value::symbol("char-code-property-table"), Value::fixnum(0));
     let whitespace = syntax_entry_to_value(&SyntaxEntry::simple(SyntaxClass::Whitespace));
     let word = syntax_entry_to_value(&SyntaxEntry::simple(SyntaxClass::Word));

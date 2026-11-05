@@ -15,8 +15,8 @@ use neovm_value::tagged::SymbolMode;
 #[test]
 fn issue554_positioned_pure_coding_fallbacks_honor_explicit_policy() {
     let mut ctx = crate::test_utils::new_context();
-    let coding = ctx
-        .tagged_heap
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    let coding = unsafe { ctx.tagged_heap_mut() }
         .alloc_symbol_with_pos(Value::symbol("utf-8-unix"), Value::fixnum(4));
     for mode in [SymbolMode::Bare, SymbolMode::Positioned] {
         for encode in [false, true] {

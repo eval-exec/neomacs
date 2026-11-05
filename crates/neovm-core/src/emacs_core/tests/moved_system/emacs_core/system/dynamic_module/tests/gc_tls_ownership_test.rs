@@ -47,7 +47,7 @@ impl Drop for GlobalReference {
 fn roots_for(ctx: &Context) -> Vec<Value> {
     let mut roots = Vec::new();
     collect_dynamic_module_registry_gc_roots(&ctx.dynamic_module_registry, &mut roots);
-    collect_dynamic_module_gc_roots(&mut roots, ctx.tagged_heap.identity());
+    collect_dynamic_module_gc_roots(&mut roots, ctx.tagged_heap().identity());
     roots
 }
 
@@ -89,7 +89,7 @@ fn gc_tls_ownership_module_global_refs_preserve_each_live_heap() {
     assert!(
         roots_for(&second)
             .iter()
-            .all(|root| second.tagged_heap.owns_heap_value_for_test(*root)),
+            .all(|root| second.tagged_heap().owns_heap_value_for_test(*root)),
         "module global references from the first Context are roots of the second heap"
     );
     second.gc_collect_exact();
@@ -121,7 +121,7 @@ fn gc_tls_ownership_module_active_environment_excludes_another_live_heap() {
     assert!(
         roots_for(&second)
             .iter()
-            .all(|root| second.tagged_heap.owns_heap_value_for_test(*root)),
+            .all(|root| second.tagged_heap().owns_heap_value_for_test(*root)),
         "an active module arena belongs to the first heap"
     );
     second.gc_collect_exact();

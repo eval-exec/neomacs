@@ -339,14 +339,15 @@ fn module_guard_re_raises_on_poisoned_gc_locks_without_ctx() {
 #[test]
 fn contain_lisp_panics_restores_boundary_state() {
     let mut ev = crate::emacs_core::eval_hook_installers::new_context();
-    let spec0 = ev.specpdl.len();
+    let spec0 = ev.specpdl().len();
     let cond0 = ev.condition_stack.len();
     let bc0 = ev.bc_buf.len();
     let depth0 = ev.depth;
     let roots0 = neovm_eval::emacs_core::eval::save_scratch_gc_roots();
 
     let result: Result<Value, Flow> = contain_lisp_panics(&mut ev, |ctx| {
-        ctx.specpdl.push(SpecBinding::Nop);
+        // SAFETY: test-only owner-thread binding-stack writes; each push is matched by a recorded-depth discard/truncate on the same path (including the panic-recovery path under test), and the Vec is never replaced or moved.
+        unsafe { ctx.specpdl_mut() }.push(SpecBinding::Nop);
         ctx.push_condition_frame(ConditionFrame::Catch {
             tag: Value::symbol("neovm-test-tag"),
             resume: ResumeTarget::InterpreterCatch,
@@ -370,7 +371,7 @@ fn contain_lisp_panics_restores_boundary_state() {
         message.contains("neomacs internal error") && message.contains("boundary-dirt-probe"),
         "unexpected message: {message}"
     );
-    assert_eq!(ev.specpdl.len(), spec0);
+    assert_eq!(ev.specpdl().len(), spec0);
     assert_eq!(ev.condition_stack.len(), cond0);
     assert_eq!(ev.bc_buf.len(), bc0);
     assert_eq!(ev.depth, depth0);
@@ -396,7 +397,7 @@ fn contain_lisp_panics_re_raises_when_gc_driver_was_active() {
     let payload = caught.expect_err("the panic must be re-raised, not contained");
     assert_eq!(panic_message(&*payload), "must-flee");
     ev.gc_driver_active = false;
-    assert_eq!(ev.specpdl.len(), 0);
+    assert_eq!(ev.specpdl().len(), 0);
 }
 
 /// End-to-end over the real dispatch: a panicking module function becomes
@@ -427,7 +428,7 @@ fn module_function_panic_is_condition_case_error_and_evaluator_survives() {
         }
     });
 
-    let spec0 = ev.specpdl.len();
+    let spec0 = ev.specpdl().len();
     let caught = ev
         .eval_str("(condition-case err (neovm-test--panicking-module-fn) (error (car (cdr err))))")
         .expect("condition-case must catch the contained panic");
@@ -438,7 +439,7 @@ fn module_function_panic_is_condition_case_error_and_evaluator_survives() {
         "unexpected message: {message}"
     );
 
-    assert_eq!(ev.specpdl.len(), spec0, "specpdl must be balanced");
+    assert_eq!(ev.specpdl().len(), spec0, "specpdl must be balanced");
     assert_eq!(ev.gc_inhibit_depth, 0, "GC inhibition must be balanced");
     let sum = ev.eval_str("(+ 1 2)").expect("evaluator must still work");
     assert_eq!(sum, Value::fixnum(3));

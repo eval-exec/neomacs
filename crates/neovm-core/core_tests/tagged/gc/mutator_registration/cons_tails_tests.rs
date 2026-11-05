@@ -99,10 +99,10 @@ fn roots(context: &mut Context) -> ([SharedRoot; 2], SharedRoot) {
     unsafe {
         (
             [
-                SharedRoot::new(&context.tagged_heap, Value::fixnum(1801)),
-                SharedRoot::new(&context.tagged_heap, Value::fixnum(1802)),
+                SharedRoot::new(&context.tagged_heap(), Value::fixnum(1801)),
+                SharedRoot::new(&context.tagged_heap(), Value::fixnum(1802)),
             ],
-            SharedRoot::new(&context.tagged_heap, Value::NIL),
+            SharedRoot::new(&context.tagged_heap(), Value::NIL),
         )
     }
 }

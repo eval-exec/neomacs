@@ -7,12 +7,10 @@ fn plist_capture_keeps_positioned_key_and_property_dependencies() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
     let bare = Value::symbol("plist-capture-positioned-property");
-    let key = eval
-        .tagged_heap
-        .alloc_symbol_with_pos(bare, Value::fixnum(3));
-    let prop = eval
-        .tagged_heap
-        .alloc_symbol_with_pos(bare, Value::fixnum(7));
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    let key = unsafe { eval.tagged_heap_mut() }.alloc_symbol_with_pos(bare, Value::fixnum(3));
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    let prop = unsafe { eval.tagged_heap_mut() }.alloc_symbol_with_pos(bare, Value::fixnum(7));
     let plist = Value::list(vec![key, Value::fixnum(11)]);
 
     for source in [key, prop] {
@@ -32,16 +30,14 @@ fn plist_capture_replacement_still_invalidates_the_query() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
     let bare = Value::symbol("plist-capture-replacement");
-    let key = eval
-        .tagged_heap
-        .alloc_symbol_with_pos(bare, Value::fixnum(3));
-    let prop = eval
-        .tagged_heap
-        .alloc_symbol_with_pos(bare, Value::fixnum(7));
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    let key = unsafe { eval.tagged_heap_mut() }.alloc_symbol_with_pos(bare, Value::fixnum(3));
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    let prop = unsafe { eval.tagged_heap_mut() }.alloc_symbol_with_pos(bare, Value::fixnum(7));
     let bare_value = Value::symbol("plist-capture-replaced-value");
-    let old_value = eval
-        .tagged_heap
-        .alloc_symbol_with_pos(bare_value, Value::fixnum(11));
+    let old_value =
+        // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+        unsafe { eval.tagged_heap_mut() }.alloc_symbol_with_pos(bare_value, Value::fixnum(11));
     let plist = Value::list(vec![key, old_value]);
     let (answer, reads) = capture(|| plist_get_swp(plist, &prop, true));
     assert_eq!(answer, Some(old_value));

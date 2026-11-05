@@ -55,12 +55,10 @@ fn raw_plist_literal_absent_nil_duplicate_and_malformed_results() {
 fn raw_plist_keeps_exact_positioned_key_identity() {
     let mut eval = context();
     let bare = Value::symbol("raw-plist-positioned-key");
-    let stored = eval
-        .tagged_heap
-        .alloc_symbol_with_pos(bare, Value::fixnum(3));
-    let distinct = eval
-        .tagged_heap
-        .alloc_symbol_with_pos(bare, Value::fixnum(7));
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    let stored = unsafe { eval.tagged_heap_mut() }.alloc_symbol_with_pos(bare, Value::fixnum(3));
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    let distinct = unsafe { eval.tagged_heap_mut() }.alloc_symbol_with_pos(bare, Value::fixnum(7));
     let plist = Value::list(vec![stored, Value::fixnum(10)]);
     assert_eq!(get(plist, stored), Some(Value::fixnum(10)));
     assert_eq!(get(plist, distinct), None);

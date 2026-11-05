@@ -38,7 +38,8 @@ fn rectangle_copied_properties_have_only_manager_roots() {
     let mut eval = crate::test_utils::new_context();
     eval.gc_stress = false;
     eval.gc_collect_exact();
-    eval.tagged_heap.set_gc_threshold(usize::MAX);
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    unsafe { eval.tagged_heap_mut() }.set_gc_threshold(usize::MAX);
     let property = Value::symbol("rectangle-owner-only");
     let probes = eval.with_gc_inhibited(|eval| {
         let mut probes = Vec::new();
@@ -66,7 +67,7 @@ fn rectangle_copied_properties_have_only_manager_roots() {
         // line, proving that the remaining visit still retains its graph.
         for Probe(bits) in probes.iter().rev() {
             assert!(
-                eval.tagged_heap.retains_veclike(Value::from_bits(*bits)),
+                eval.tagged_heap().retains_veclike(Value::from_bits(*bits)),
                 "rectangle-only property vector was reclaimed"
             );
         }
@@ -89,20 +90,23 @@ fn rectangle_copied_properties_have_only_manager_roots() {
         }
     };
     let completed = eval.gc_count;
-    if eval.tagged_heap.generational_enabled() {
-        assert!(eval.tagged_heap.should_run_minor(false, false));
+    if eval.tagged_heap().generational_enabled() {
+        assert!(eval.tagged_heap().should_run_minor(false, false));
         eval.gc_pending = true;
         eval.gc_safe_point_exact();
-        assert!(eval.tagged_heap.sweep_in_progress(), "expected minor sweep");
-        assert!(!eval.tagged_heap.concurrent_mark_running());
+        assert!(
+            eval.tagged_heap().sweep_in_progress(),
+            "expected minor sweep"
+        );
+        assert!(!eval.tagged_heap().concurrent_mark_running());
         for _ in 0..10_000 {
-            if !eval.tagged_heap.sweep_in_progress() {
+            if !eval.tagged_heap().sweep_in_progress() {
                 break;
             }
             eval.gc_safe_point_exact();
         }
-        assert!(!eval.tagged_heap.sweep_in_progress());
-        assert!(!eval.tagged_heap.mark_in_progress());
+        assert!(!eval.tagged_heap().sweep_in_progress());
+        assert!(!eval.tagged_heap().mark_in_progress());
     } else {
         eval.gc_collect_exact();
     }
@@ -117,7 +121,7 @@ fn rectangle_copied_properties_have_only_manager_roots() {
     eval.gc_collect_exact();
     for Probe(bits) in probes {
         assert!(
-            !eval.tagged_heap.retains_veclike(Value::from_bits(bits)),
+            !eval.tagged_heap().retains_veclike(Value::from_bits(bits)),
             "retired rectangle graph remained permanently rooted"
         );
     }

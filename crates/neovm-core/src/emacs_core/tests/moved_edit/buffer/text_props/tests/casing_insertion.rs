@@ -19,9 +19,9 @@ use neovm_value::value::positions::CharRange;
 fn category_front_stickiness_respects_positioned_symbol_equality() {
     let mut ctx = crate::test_utils::new_context();
     let roots = CasingPropertyRoots::new();
-    let positioned_t = ctx
-        .tagged_heap
-        .alloc_symbol_with_pos(Value::T, Value::fixnum(77));
+    let positioned_t =
+        // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+        unsafe { ctx.tagged_heap_mut() }.alloc_symbol_with_pos(Value::T, Value::fixnum(77));
     roots.root(positioned_t);
     let face = Value::symbol("face");
     let bold = Value::symbol("bold");

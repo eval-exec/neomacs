@@ -19,12 +19,12 @@ fn gc_tls_ownership_symbol_names_are_rooted_only_in_their_heap() {
     let name = materialize_symbol_name_value(id);
     let mut second = crate::emacs_core::eval_hook_installers::new_context();
     let mut roots = Vec::new();
-    collect_symbol_name_gc_roots(&mut roots, second.tagged_heap.identity());
+    collect_symbol_name_gc_roots(&mut roots, second.tagged_heap().identity());
     assert!(roots.iter().all(|root| root.bits() != name.bits()));
     second.gc_collect_exact();
     first.setup_thread_locals();
     let mut roots = Vec::new();
-    collect_symbol_name_gc_roots(&mut roots, first.tagged_heap.identity());
+    collect_symbol_name_gc_roots(&mut roots, first.tagged_heap().identity());
     assert!(roots.iter().any(|root| root.bits() == name.bits()));
     first.gc_collect_exact();
     assert_eq!(name.as_utf8_str(), Some("gc-tls-name"));
@@ -72,7 +72,7 @@ fn gc_tls_ownership_visible_name_cache_revalidates_after_heap_drop() {
     };
     let mut next = crate::emacs_core::eval_hook_installers::new_context();
     let own = materialize_symbol_name_value(id);
-    assert!(next.tagged_heap.owns_heap_value_for_test(own));
+    assert!(next.tagged_heap().owns_heap_value_for_test(own));
     assert!(
         matches!(resolve_lisp_visible_symbol_name(id), LispVisibleSymbolName::LispObject(value) if value.bits() == own.bits())
     );

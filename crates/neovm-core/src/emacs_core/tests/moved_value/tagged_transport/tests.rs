@@ -335,21 +335,21 @@ fn context_root_walk_includes_shared_roots() {
     // heap. Context collections include its shared-root table, and the
     // Context stays alive until the root has retired and its value is unused.
     let root = unsafe { SharedRoot::from_current_heap(text) }.expect("Context installs its heap");
-    assert_eq!(root.heap_identity(), context.tagged_heap.heap_identity());
+    assert_eq!(root.heap_identity(), context.tagged_heap().heap_identity());
     let holder = std::thread::spawn(move || root);
     let root = holder.join().expect("holder returns the root");
     for _ in 0..3 {
         context.gc_collect_exact();
-        assert!(context.tagged_heap.owns_heap_value_for_test(text));
+        assert!(context.tagged_heap().owns_heap_value_for_test(text));
     }
     let local = root
-        .materialize(&context.tagged_heap)
+        .materialize(&context.tagged_heap())
         .expect("same heap")
         .value();
     assert_eq!(local.as_str_owned().as_deref(), Some("context-shared-root"));
     drop(root);
     context.gc_collect_exact();
-    assert!(!context.tagged_heap.owns_heap_value_for_test(text));
+    assert!(!context.tagged_heap().owns_heap_value_for_test(text));
 }
 
 #[test]
@@ -358,7 +358,7 @@ fn one_batch_lease_keeps_all_children_until_foreign_thread_retirement() {
     context.setup_thread_locals();
     let left = TaggedValue::string("batch-left");
     let right = TaggedValue::string("batch-right");
-    let identity = context.tagged_heap.heap_identity();
+    let identity = context.tagged_heap().heap_identity();
     let before = cell_census(identity).0;
     // SAFETY: both children were just allocated by this installed evaluator.
     // Context collections trace shared roots, and it outlives every lease.
@@ -394,14 +394,14 @@ fn one_batch_lease_keeps_all_children_until_foreign_thread_retirement() {
     barrier.wait();
     for _ in 0..3 {
         context.gc_collect_exact();
-        assert!(context.tagged_heap.owns_heap_value_for_test(left));
-        assert!(context.tagged_heap.owns_heap_value_for_test(right));
+        assert!(context.tagged_heap().owns_heap_value_for_test(left));
+        assert!(context.tagged_heap().owns_heap_value_for_test(right));
     }
     barrier.wait();
     holder.join().unwrap();
     context.gc_collect_exact();
-    assert!(!context.tagged_heap.owns_heap_value_for_test(left));
-    assert!(!context.tagged_heap.owns_heap_value_for_test(right));
+    assert!(!context.tagged_heap().owns_heap_value_for_test(left));
+    assert!(!context.tagged_heap().owns_heap_value_for_test(right));
 }
 
 #[test]
@@ -456,7 +456,7 @@ fn window_snapshot_coalesces_all_areas_and_reuses_its_single_lease() {
     let mode_leaf = TaggedValue::string("mode leaf");
     let header = TaggedValue::string("header flattened");
     let tab = TaggedValue::string("tab flattened");
-    let identity = context.tagged_heap.heap_identity();
+    let identity = context.tagged_heap().heap_identity();
     let before = cell_census(identity).0;
     // SAFETY: all four values were allocated by this installed evaluator.
     // Its collections trace shared roots, and it outlives these snapshots.
@@ -512,7 +512,7 @@ fn window_snapshot_coalesces_all_areas_and_reuses_its_single_lease() {
     assert!(sources[0].object().shares_backing_root(&retained_lease));
     context.gc_collect_exact();
     for child in [mode, mode_leaf, header, tab] {
-        assert!(context.tagged_heap.owns_heap_value_for_test(child));
+        assert!(context.tagged_heap().owns_heap_value_for_test(child));
     }
 }
 

@@ -800,11 +800,11 @@ fn positioned_tls_credentials_and_plist_keys_follow_symbol_policy() {
     // GNU gnutls.c:2021 CHECK_SYMBOL and 2036 plist_get/EQ.
     use neovm_value::tagged::value::SymbolMode;
     let mut ctx = crate::emacs_core::eval_hook_installers::new_context();
-    let credential = ctx
-        .tagged_heap
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    let credential = unsafe { ctx.tagged_heap_mut() }
         .alloc_symbol_with_pos(Value::symbol("gnutls-x509pki"), Value::fixnum(4));
-    let hostname = ctx
-        .tagged_heap
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    let hostname = unsafe { ctx.tagged_heap_mut() }
         .alloc_symbol_with_pos(Value::keyword(":hostname"), Value::fixnum(5));
     let proplist = Value::list(vec![hostname, Value::string("example.org")]);
     assert!(parse_gnutls_boot_parameters(credential, proplist, SymbolMode::Bare).is_err());
@@ -823,14 +823,14 @@ fn positioned_gnutls_status_and_algorithm_operands_follow_symbol_policy() {
     use crate::emacs_core::gnutls_entries::{builtin_gnutls_errorp, builtin_gnutls_hash_digest};
     use neovm_value::tagged::value::SymbolMode;
     let mut ctx = crate::emacs_core::eval_hook_installers::new_context();
-    let again = ctx
-        .tagged_heap
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    let again = unsafe { ctx.tagged_heap_mut() }
         .alloc_symbol_with_pos(Value::symbol("gnutls-e-again"), Value::fixnum(4));
-    let warning = ctx
-        .tagged_heap
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    let warning = unsafe { ctx.tagged_heap_mut() }
         .alloc_symbol_with_pos(Value::keyword(":expired"), Value::fixnum(5));
-    let algorithm = ctx
-        .tagged_heap
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    let algorithm = unsafe { ctx.tagged_heap_mut() }
         .alloc_symbol_with_pos(Value::symbol("SHA256"), Value::fixnum(6));
     assert_eq!(
         builtin_gnutls_errorp(vec![again], SymbolMode::Bare).unwrap(),

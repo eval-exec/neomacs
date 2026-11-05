@@ -96,13 +96,13 @@ fn gc_collection_epoch_regex_same_thread_exact_keeps_warm_entries() {
     ctx.gc_collect_exact();
     ctx.setup_thread_locals();
     let warm = WarmRegexCaches::new(&mut ctx);
-    let completed = ctx.tagged_heap.gc_collections();
+    let completed = ctx.tagged_heap().gc_collections();
     for _ in 0..3 {
         ctx.gc_collect_exact();
         ctx.setup_thread_locals();
         warm.assert_present_and_hit(&ctx);
     }
-    assert_eq!(ctx.tagged_heap.gc_collections(), completed + 3);
+    assert_eq!(ctx.tagged_heap().gc_collections(), completed + 3);
 }
 
 #[test]
@@ -111,7 +111,7 @@ fn gc_collection_epoch_regex_same_thread_concurrent_keeps_warm_entries() {
     ctx.gc_collect_exact();
     ctx.setup_thread_locals();
     let warm = WarmRegexCaches::new(&mut ctx);
-    let completed = ctx.tagged_heap.gc_collections();
+    let completed = ctx.tagged_heap().gc_collections();
     for _ in 0..3 {
         start_public_concurrent_cycle(&mut ctx);
         ctx.setup_thread_locals();
@@ -120,16 +120,16 @@ fn gc_collection_epoch_regex_same_thread_concurrent_keeps_warm_entries() {
         ctx.setup_thread_locals();
         warm.assert_present_and_hit(&ctx);
         for _ in 0..20_000 {
-            if !ctx.tagged_heap.sweep_in_progress() {
+            if !ctx.tagged_heap().sweep_in_progress() {
                 break;
             }
             ctx.gc_safe_point();
         }
-        assert!(!ctx.tagged_heap.sweep_in_progress());
+        assert!(!ctx.tagged_heap().sweep_in_progress());
         ctx.setup_thread_locals();
         warm.assert_present_and_hit(&ctx);
     }
-    assert_eq!(ctx.tagged_heap.gc_collections(), completed + 3);
+    assert_eq!(ctx.tagged_heap().gc_collections(), completed + 3);
 }
 
 #[test]
@@ -138,13 +138,13 @@ fn gc_collection_epoch_regex_exact_after_older_sweep_keeps_warm_entries() {
     ctx.gc_collect_exact();
     ctx.setup_thread_locals();
     let warm = WarmRegexCaches::new(&mut ctx);
-    let completed = ctx.tagged_heap.gc_collections();
+    let completed = ctx.tagged_heap().gc_collections();
     start_public_concurrent_cycle(&mut ctx);
     drive_public_cycle_until_sweeping(&mut ctx);
     // Exact GC drains the older sweep before enumerating a new collection's
     // roots. The root seam must use the newly completed count for that seed.
     ctx.gc_collect_exact();
-    assert_eq!(ctx.tagged_heap.gc_collections(), completed + 2);
+    assert_eq!(ctx.tagged_heap().gc_collections(), completed + 2);
     ctx.setup_thread_locals();
     warm.assert_present_and_hit(&ctx);
 }
@@ -181,7 +181,7 @@ fn non_generational_context() -> Context {
     unsafe { std::env::set_var("NEOVM_GC_GENERATIONAL", "0") };
     let mut ctx = crate::test_utils::new_context();
     ctx.gc_stress = false;
-    assert!(!ctx.tagged_heap.generational_enabled());
+    assert!(!ctx.tagged_heap().generational_enabled());
     assert!(!ctx.gc_stress);
     ctx
 }
@@ -192,23 +192,24 @@ fn assert_uncovered_cache_discards_swept_roots(owner: CacheOwner, synchronize_at
     let mut ctx = crate::test_utils::new_context();
     // Build the cache fixture without safe-point collections of Rust locals.
     ctx.gc_inhibit_depth += 1;
-    let identity = ctx.tagged_heap.identity();
+    let identity = ctx.tagged_heap().identity();
     let (table, payload) = populate_cache(&mut ctx, owner);
     ctx.gc_inhibit_depth -= 1;
     let stale = UncoveredRegexCaches::take();
     ctx.gc_collect_exact();
     stale.restore();
-    assert_eq!(ctx.tagged_heap.identity(), identity);
+    assert_eq!(ctx.tagged_heap().identity(), identity);
     // Box ownership checks inspect the allocation registry, never the freed
     // char-table/hash-table memory. Exact collection must have swept both.
-    assert!(!ctx.tagged_heap.owns_heap_value_for_test(table));
-    assert!(!ctx.tagged_heap.owns_heap_value_for_test(payload));
+    assert!(!ctx.tagged_heap().owns_heap_value_for_test(table));
+    assert!(!ctx.tagged_heap().owns_heap_value_for_test(payload));
     match synchronize_at {
         SynchronizeAt::Activation => ctx.setup_thread_locals(),
         SynchronizeAt::RootEnumeration => {
             // Install the relocated heap pointer without activating regexp
             // caches: root enumeration must independently reject an old epoch.
-            neovm_value::tagged::gc::set_tagged_heap(&mut ctx.tagged_heap);
+            // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+            neovm_value::tagged::gc::set_tagged_heap(unsafe { ctx.tagged_heap_mut() });
         }
     }
     // Compare tagged words before GC can dereference a stale root. On the
@@ -216,8 +217,8 @@ fn assert_uncovered_cache_discards_swept_roots(owner: CacheOwner, synchronize_at
     let mut roots = Vec::new();
     collect_regex_gc_roots(
         &mut roots,
-        ctx.tagged_heap.identity(),
-        ctx.tagged_heap.gc_collections(),
+        ctx.tagged_heap().identity(),
+        ctx.tagged_heap().gc_collections(),
         neovm_value::tagged::gc::CacheRootScan::Collection,
     );
     assert!(
@@ -355,7 +356,7 @@ impl WarmRegexCaches {
         // Guard all cache-held tables before compiled or literal lookups.
         // The minor liveness fixture also detaches the literal case table.
         for table in self.cache_tables() {
-            assert!(ctx.tagged_heap.owns_heap_value_for_test(table));
+            assert!(ctx.tagged_heap().owns_heap_value_for_test(table));
         }
         let pattern = LispString::from_utf8("[[:word:]]+");
         let CompiledSearchPattern::Emacs(search) =
@@ -407,7 +408,7 @@ impl WarmRegexCaches {
         // Guard every table dereference, including the syntax lookup's raw
         // identity and the literal translator's non-ASCII table lookup.
         for table in self.cache_tables() {
-            assert!(ctx.tagged_heap.owns_heap_value_for_test(table));
+            assert!(ctx.tagged_heap().owns_heap_value_for_test(table));
         }
         for compiled in [&self.search, &self.lisp_syntax] {
             let (start, regs) = regex_emacs::re_search(compiled, b".@.", 0, 3, &self.syntax, 0)
@@ -439,25 +440,25 @@ impl WarmRegexCaches {
 
 fn start_public_concurrent_cycle(ctx: &mut Context) {
     // The completed bootstrap makes the public safe-point path concurrent.
-    assert!(!ctx.tagged_heap.generational_enabled());
-    assert!(ctx.tagged_heap.should_run_concurrent());
+    assert!(!ctx.tagged_heap().generational_enabled());
+    assert!(ctx.tagged_heap().should_run_concurrent());
     for i in 0..20_000u64 {
-        ctx.tagged_heap
-            .alloc_bignum(malachite::integer::Integer::from(
-                (1u128 << 100) + i as u128,
-            ));
+        // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+        unsafe { ctx.tagged_heap_mut() }.alloc_bignum(malachite::integer::Integer::from(
+            (1u128 << 100) + i as u128,
+        ));
     }
     ctx.set_gc_threshold(1);
     ctx.gc_safe_point();
-    assert!(ctx.tagged_heap.concurrent_mark_running());
-    assert!(ctx.tagged_heap.mark_in_progress());
+    assert!(ctx.tagged_heap().concurrent_mark_running());
+    assert!(ctx.tagged_heap().mark_in_progress());
     // Avoid the allocation cap and a second cycle while observing/draining it.
     ctx.set_gc_threshold(usize::MAX);
 }
 
 fn drive_public_cycle_until_sweeping(ctx: &mut Context) {
     for _ in 0..20_000 {
-        if ctx.tagged_heap.sweep_in_progress() {
+        if ctx.tagged_heap().sweep_in_progress() {
             return;
         }
         ctx.gc_safe_point();
@@ -477,15 +478,15 @@ fn assert_foreign_in_progress_activation_clears(phase: ForeignCollectionPhase) {
     ctx.gc_collect_exact();
     ctx.setup_thread_locals();
     let _warm = WarmRegexCaches::new(&mut ctx);
-    let completed = ctx.tagged_heap.gc_collections();
+    let completed = ctx.tagged_heap().gc_collections();
     let stale = UncoveredRegexCaches::take();
     start_public_concurrent_cycle(&mut ctx);
     if matches!(phase, ForeignCollectionPhase::Sweeping) {
         drive_public_cycle_until_sweeping(&mut ctx);
     }
     stale.restore();
-    assert_eq!(ctx.tagged_heap.gc_collections(), completed);
-    assert!(ctx.tagged_heap.mark_in_progress() || ctx.tagged_heap.sweep_in_progress());
+    assert_eq!(ctx.tagged_heap().gc_collections(), completed);
+    assert!(ctx.tagged_heap().mark_in_progress() || ctx.tagged_heap().sweep_in_progress());
     ctx.setup_thread_locals();
     assert!(SEARCH_PATTERN_CACHE.with(|cache| cache.borrow().is_empty()));
     assert!(LISP_REGEX_PATTERN_CACHE.with(|cache| cache.borrow().is_empty()));
@@ -630,11 +631,11 @@ fn regex_roots(ctx: &Context) -> Vec<Value> {
     let mut roots = Vec::new();
     collect_regex_gc_roots(
         &mut roots,
-        ctx.tagged_heap.identity(),
-        ctx.tagged_heap.gc_collections(),
+        ctx.tagged_heap().identity(),
+        ctx.tagged_heap().gc_collections(),
         neovm_value::tagged::gc::CacheRootScan::Snapshot {
-            collection_in_progress: ctx.tagged_heap.mark_in_progress()
-                || ctx.tagged_heap.sweep_in_progress(),
+            collection_in_progress: ctx.tagged_heap().mark_in_progress()
+                || ctx.tagged_heap().sweep_in_progress(),
         },
     );
     roots

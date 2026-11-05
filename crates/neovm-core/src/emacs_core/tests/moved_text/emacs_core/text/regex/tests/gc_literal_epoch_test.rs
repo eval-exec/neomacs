@@ -61,8 +61,9 @@ fn gc_collection_epoch_literal_translation_discards_memo_before_address_reuse() 
 
     let stale = UncoveredRegexCaches::take();
     ctx.gc_collect_exact();
-    assert!(!ctx.tagged_heap.owns_heap_value_for_test(old_canon));
-    ctx.tagged_heap.set_gc_threshold(usize::MAX);
+    assert!(!ctx.tagged_heap().owns_heap_value_for_test(old_canon));
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    unsafe { ctx.tagged_heap_mut() }.set_gc_threshold(usize::MAX);
 
     // Allocate on the freeing thread so ordinary allocators can reuse
     // its char-table free list. No safe point occurs in this loop.
@@ -130,7 +131,7 @@ fn gc_collection_epoch_literal_translation_discards_memo_before_address_reuse() 
         "activation retained the literal translation memo after a foreign collection"
     );
     if let Some(canon) = reused_canon {
-        assert!(ctx.tagged_heap.owns_heap_value_for_test(canon));
+        assert!(ctx.tagged_heap().owns_heap_value_for_test(canon));
         assert_eq!(
             buffer_search_translation(ctx.edit.buffers.current_buffer().unwrap(), true)
                 .unwrap()

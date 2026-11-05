@@ -25,7 +25,8 @@ use std::rc::Rc;
 #[test]
 fn positioned_compiled_regex_reuses_its_policy_and_keeps_distinct_match_results() {
     let mut context = crate::test_utils::new_context();
-    let purpose = context.tagged_heap.alloc_symbol_with_pos(
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    let purpose = unsafe { context.tagged_heap_mut() }.alloc_symbol_with_pos(
         neovm_value::value::Value::symbol("char-code-property-table"),
         neovm_value::value::Value::fixnum(0),
     );

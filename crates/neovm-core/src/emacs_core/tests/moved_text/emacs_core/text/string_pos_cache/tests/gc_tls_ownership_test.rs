@@ -15,7 +15,7 @@ fn gc_tls_ownership_string_pos_cache_new_heap_reset_drops_old_values() {
         roots(&next)
             .iter()
             .all(|value| !value.is_heap_object()
-                || next.tagged_heap.owns_heap_value_for_test(*value)),
+                || next.tagged_heap().owns_heap_value_for_test(*value)),
         "new-heap reset retained a value from the dropped heap"
     );
     next.gc_collect_exact();
@@ -35,7 +35,7 @@ fn gc_tls_ownership_string_pos_cache_excludes_another_live_heap() {
         roots(&first)
             .iter()
             .all(|value| !value.is_heap_object()
-                || first.tagged_heap.owns_heap_value_for_test(*value)),
+                || first.tagged_heap().owns_heap_value_for_test(*value)),
         "GC roots contain a value belonging to another live Context"
     );
     first.gc_collect_exact();
@@ -46,7 +46,7 @@ fn gc_tls_ownership_string_pos_cache_excludes_another_live_heap() {
     );
     second.gc_collect_exact();
     assert!(
-        !second.tagged_heap.owns_heap_value_for_test(value),
+        !second.tagged_heap().owns_heap_value_for_test(value),
         "an evicted cache entry kept its otherwise unreachable string alive"
     );
 }
@@ -61,11 +61,11 @@ fn roots(ctx: &Context) -> Vec<Value> {
     let mut roots = Vec::new();
     collect_string_pos_cache_gc_roots(
         &mut roots,
-        ctx.tagged_heap.identity(),
-        ctx.tagged_heap.gc_collections(),
+        ctx.tagged_heap().identity(),
+        ctx.tagged_heap().gc_collections(),
         neovm_value::tagged::gc::CacheRootScan::Snapshot {
-            collection_in_progress: ctx.tagged_heap.mark_in_progress()
-                || ctx.tagged_heap.sweep_in_progress(),
+            collection_in_progress: ctx.tagged_heap().mark_in_progress()
+                || ctx.tagged_heap().sweep_in_progress(),
         },
     );
     roots

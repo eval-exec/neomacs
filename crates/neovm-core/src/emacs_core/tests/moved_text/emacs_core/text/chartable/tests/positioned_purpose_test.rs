@@ -99,8 +99,8 @@ fn positioned_char_table_purpose_controls_compressed_lookup() {
 #[test]
 fn positioned_unicode_property_alist_and_encoder_follow_eq_policy() {
     let mut context = crate::test_utils::new_context();
-    let key = context
-        .tagged_heap
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    let key = unsafe { context.tagged_heap_mut() }
         .alloc_symbol_with_pos(Value::symbol("general-category"), Value::fixnum(0));
     let cell = Value::cons(key, Value::fixnum(7));
     let list = Value::list(vec![cell]);
@@ -127,8 +127,8 @@ fn positioned_unicode_property_alist_and_encoder_follow_eq_policy() {
 }
 
 fn positioned_purpose(context: &mut Context) -> Value {
-    context
-        .tagged_heap
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    unsafe { context.tagged_heap_mut() }
         .alloc_symbol_with_pos(Value::symbol("char-code-property-table"), Value::fixnum(0))
 }
 

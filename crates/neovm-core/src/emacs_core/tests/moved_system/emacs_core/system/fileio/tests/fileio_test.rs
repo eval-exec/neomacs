@@ -7819,13 +7819,13 @@ fn decoding_panic_cleans_dynamic_suffix_and_roots_but_keeps_inverse_state() {
         NativeFn::ContextVec(p410_panicking_format_decode),
         SubrArity::new(3, Some(3)),
     ));
-    let original_count = eval.specpdl.len();
+    let original_count = eval.specpdl().len();
     let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _ = run_after_insert_file_pipeline(&mut eval, source, false, false, 3);
     }));
     assert!(panicked.is_err());
     assert_eq!(
-        eval.specpdl.len(),
+        eval.specpdl().len(),
         original_count,
         "bindings and saved undo root must retire"
     );
@@ -7860,7 +7860,7 @@ fn decoding_panic_cleans_dynamic_suffix_and_roots_but_keeps_inverse_state() {
     );
     eval.gc_collect_exact();
     assert!(
-        !eval.tagged_heap.owns_heap_value_for_test(old_undo),
+        !eval.tagged_heap().owns_heap_value_for_test(old_undo),
         "retired undo snapshot must not leak a GC root"
     );
 }

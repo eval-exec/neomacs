@@ -111,7 +111,9 @@ fn sim(shape: &str, n: usize) {
             // Use the SAME collected World heap as the local arm, while this
             // setup still owns its serial, non-admitted allocator. The marker
             // must never run after the fixture freezes/adopts that heap.
-            let heap = &mut *context.tagged_heap;
+            // SAFETY: test-only owner-thread heap setup through the
+            // non-swappable accessor contract; the view is used in place.
+            let heap = unsafe { &mut *context.tagged_heap_mut() };
             heap.set_gc_threshold_for_test(usize::MAX);
             assert!(
                 !heap.threads_admitted(),
@@ -180,11 +182,13 @@ fn sim(shape: &str, n: usize) {
 fn local(shape: &str, n: usize) {
     Context::with_test_collection_era(
         |context| {
-            context.tagged_heap.set_gc_threshold_for_test(usize::MAX);
-            let gen1 = context.tagged_heap.generational_enabled();
+            // SAFETY: test-only owner-thread heap policy write through the
+            // non-swappable accessor contract; the view is used in place.
+            unsafe { context.tagged_heap_mut() }.set_gc_threshold_for_test(usize::MAX);
+            let gen1 = context.tagged_heap().generational_enabled();
             // SAFETY: immediate values are live on this sole serial heap.
-            let car = unsafe { SharedRoot::new(&context.tagged_heap, Value::fixnum(CAR)) };
-            let nil = unsafe { SharedRoot::new(&context.tagged_heap, Value::NIL) };
+            let car = unsafe { SharedRoot::new(context.tagged_heap(), Value::fixnum(CAR)) };
+            let nil = unsafe { SharedRoot::new(context.tagged_heap(), Value::NIL) };
             (car, nil, gen1)
         },
         |era, (car_root, nil_root, gen1)| {

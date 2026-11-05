@@ -350,8 +350,8 @@ fn positioned_coding_iso_descriptors_and_quoting_style_honor_mode() {
 }
 
 fn positioned(ctx: &mut Context, name: &str) -> Value {
-    ctx.tagged_heap
-        .alloc_symbol_with_pos(Value::symbol(name), Value::fixnum(11))
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    unsafe { ctx.tagged_heap_mut() }.alloc_symbol_with_pos(Value::symbol(name), Value::fixnum(11))
 }
 
 fn wrong_symbol_operand(result: EvalResult, operand: Value) {

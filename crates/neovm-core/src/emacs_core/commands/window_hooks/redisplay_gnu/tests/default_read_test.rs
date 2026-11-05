@@ -51,8 +51,8 @@ fn void_default_signals_after_callback_and_records_on_unwind() {
         .is_none(),
         "the ordinary fixture variable must have a void default"
     );
-    eval.gnu_redisplay_hooks.frame_window_change.insert(frame);
-    let bindings = eval.specpdl.len();
+    eval.gnu_redisplay_hooks().frame_window_change.insert(frame);
+    let bindings = eval.specpdl().len();
 
     // Probe the shared reader/walker and change-pass guard, rather than
     // claiming a forwarded window hook can be made void. GNU window.c:
@@ -108,23 +108,23 @@ fn void_default_signals_after_callback_and_records_on_unwind() {
             .old_selected_window,
         Some(selected_window)
     );
-    assert_eq!(eval.gnu_redisplay_hooks.old_selected_frame, Some(frame));
+    assert_eq!(eval.gnu_redisplay_hooks().old_selected_frame, Some(frame));
     assert_eq!(
-        eval.gnu_redisplay_hooks.old_selected_window,
+        eval.gnu_redisplay_hooks().old_selected_window,
         Some(selected_window)
     );
     assert!(
-        eval.gnu_redisplay_hooks
+        eval.gnu_redisplay_hooks()
             .dimensions
             .contains_key(&selected_window)
     );
     assert!(
         !eval
-            .gnu_redisplay_hooks
+            .gnu_redisplay_hooks()
             .frame_window_change
             .contains(&frame)
     );
-    assert_eq!(eval.specpdl.len(), bindings);
+    assert_eq!(eval.specpdl().len(), bindings);
     assert_eq!(
         eval.obarray().symbol_value_copied("inhibit-redisplay"),
         Some(Value::NIL)

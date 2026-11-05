@@ -812,9 +812,10 @@ fn garbage_collect_maybe_collects_when_factor_scaled_threshold_exceeded() {
 
     // Allocate under a huge threshold so nothing auto-collects mid-eval;
     // `bytes_since_gc` (GNU's `since_gc`) accumulates deterministically.
-    eval.tagged_heap.set_gc_threshold(usize::MAX);
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    unsafe { eval.tagged_heap_mut() }.set_gc_threshold(usize::MAX);
     eval.eval_str_each("(setq gc-maybe-probe (make-list 256 'x))");
-    let since_gc = eval.tagged_heap.bytes_since_gc();
+    let since_gc = eval.tagged_heap().bytes_since_gc();
     assert!(
         since_gc > 0,
         "allocation should have advanced bytes_since_gc"
@@ -822,7 +823,7 @@ fn garbage_collect_maybe_collects_when_factor_scaled_threshold_exceeded() {
 
     // Below the (still-huge) threshold, the FACTOR-scaled check does not trip:
     // no collection happens and the result is nil.
-    let collections_before = eval.tagged_heap.gc_collections();
+    let collections_before = eval.tagged_heap().gc_collections();
     let out = crate::emacs_core::builtins::builtin_garbage_collect_maybe(
         &mut eval,
         vec![Value::fixnum(1)],
@@ -830,7 +831,7 @@ fn garbage_collect_maybe_collects_when_factor_scaled_threshold_exceeded() {
     .unwrap();
     assert_eq!(out, Value::NIL, "since_gc below gc_threshold => no collect");
     assert_eq!(
-        eval.tagged_heap.gc_collections(),
+        eval.tagged_heap().gc_collections(),
         collections_before,
         "no GC cycle should have run"
     );
@@ -838,7 +839,8 @@ fn garbage_collect_maybe_collects_when_factor_scaled_threshold_exceeded() {
     // Drop the threshold below what we consed. Now FACTOR 1 exceeds
     // `gc_threshold / 1`, so garbage-collect-maybe runs a real collection
     // (a new GC cycle completes) and returns t.
-    eval.tagged_heap.set_gc_threshold(1);
+    // SAFETY: test-only owner-thread heap setup through the non-swappable mutable accessor contract; the view is used in place for allocation/policy and is never swapped or moved across Worlds.
+    unsafe { eval.tagged_heap_mut() }.set_gc_threshold(1);
     let out = crate::emacs_core::builtins::builtin_garbage_collect_maybe(
         &mut eval,
         vec![Value::fixnum(1)],
@@ -846,7 +848,7 @@ fn garbage_collect_maybe_collects_when_factor_scaled_threshold_exceeded() {
     .unwrap();
     assert_eq!(out, Value::T, "FACTOR 1 past the threshold must collect");
     assert!(
-        eval.tagged_heap.gc_collections() > collections_before,
+        eval.tagged_heap().gc_collections() > collections_before,
         "garbage-collect-maybe should have driven a real collection"
     );
 }
