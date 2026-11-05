@@ -4930,14 +4930,14 @@ impl Obarray {
     }
 
     /// Test-support: the address of the canonical dispatch cells as a copied
-    /// `usize`, at the original `ptr::eq` deref depth (the 17:2xZ identity
-    /// rule). The layout tests compare this address with the jit-layout
-    /// designator built from the same containing allocation; no reference to
-    /// the interior-mutable cells escapes.
+    /// `usize` scalar via `ptr::addr()`, at the original `ptr::eq` deref depth
+    /// (the 17:2xZ identity rule). The layout tests compare this address with
+    /// the jit-layout designator built from the same containing allocation; no
+    /// reference to the interior-mutable cells escapes.
     #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn dispatch_cells_address_for_test(&self) -> usize {
-        std::ptr::from_ref(&self.dispatch_cells) as usize
+        std::ptr::from_ref(&self.dispatch_cells).addr()
     }
 
     /// Read the publication clock while this obarray is exclusively owned.

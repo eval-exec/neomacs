@@ -17,7 +17,7 @@ fn canonical_pair_layout_reaches_the_same_clock_and_descriptor_slots() {
             .cast::<CanonicalDispatchCells>()
     };
     assert_eq!(
-        pair as *const CanonicalDispatchCells as usize,
+        std::ptr::from_ref(pair).addr(),
         obarray.dispatch_cells_address_for_test()
     );
     assert_eq!(
@@ -63,15 +63,25 @@ fn canonical_pair_tracks_function_writes_and_restored_clocks() {
 #[test]
 fn canonical_pair_pointer_from_allocation_root_survives_cold_replacement() {
     let storage = Box::new(UnsafeCell::new(
-        Obarray::from_dump(Vec::new(), Vec::new(), Vec::new(), 7).expect("empty dump restores"),
+        Obarray::from_dump(Vec::new(), Vec::new(), Vec::new(), 6).expect("empty dump restores"),
     ));
     let manager = storage.get();
-    // SAFETY: the designator comes directly from the final UnsafeCell allocation
-    // root, not a temporary field reference; storage owns its lifetime.
-    let cells_address = unsafe { &*manager }.dispatch_cells_address_for_test();
-    let cells = NonNull::new(cells_address as *mut CanonicalDispatchCells)
-        .expect("live allocation subfield");
-    // SAFETY: the construction phase precedes this canonical read.
+    // SAFETY: the designator is derived from the final UnsafeCell allocation
+    // root through the containing type's layout constant, so no temporary
+    // reference to the interior-mutable manager is created; storage owns the
+    // allocation for the whole test.
+    let cells = NonNull::new(unsafe {
+        manager
+            .cast::<u8>()
+            .add(OBARRAY_DISPATCH_CELLS_OFFSET)
+            .cast::<CanonicalDispatchCells>()
+    })
+    .expect("live allocation subfield");
+    let id = intern("world-canonical-cold-replacement");
+    // SAFETY: one owner, short exclusive write phase, no canonical reader is
+    // live. The real writer moves the restored clock from 6 to 7.
+    unsafe { (&mut *manager).set_symbol_function_id(id, Value::fixnum(41)) };
+    // SAFETY: the completed mutable write phase precedes this canonical read.
     assert_eq!(unsafe { cells.as_ref() }.function_epoch(), 7);
     // SAFETY: cold full replacement retains the allocation and field address;
     // no generated symbol pointer or manager reference remains active.
