@@ -187,16 +187,28 @@ enum CfgTruth {
     Unknown,
 }
 
-/// `test = false`, `feature = "test-support" = false`: only a predicate that
-/// is definitively false marks a test-only arm.
-fn cfg_truth(meta: &syn::Meta) -> CfgTruth {
+/// Evaluate a cfg predicate with the two knobs this guard varies: whether
+/// `test` is enabled and whether `feature = "test-support"` is enabled. Only
+/// a predicate that is definitively false marks an arm out of scope for the
+/// chosen environment.
+fn cfg_truth_with(meta: &syn::Meta, test: bool, test_support: bool) -> CfgTruth {
     match meta {
-        syn::Meta::Path(path) if path.is_ident("test") => CfgTruth::False,
+        syn::Meta::Path(path) if path.is_ident("test") => {
+            if test {
+                CfgTruth::True
+            } else {
+                CfgTruth::False
+            }
+        }
         syn::Meta::NameValue(value) if value.path.is_ident("feature") => {
             if let syn::Expr::Lit(expr) = &value.value {
                 if let syn::Lit::Str(name) = &expr.lit {
                     if name.value() == "test-support" {
-                        return CfgTruth::False;
+                        return if test_support {
+                            CfgTruth::True
+                        } else {
+                            CfgTruth::False
+                        };
                     }
                 }
             }
@@ -204,7 +216,7 @@ fn cfg_truth(meta: &syn::Meta) -> CfgTruth {
         }
         syn::Meta::List(list) if list.path.is_ident("not") => {
             match list.parse_args::<syn::Meta>() {
-                Ok(inner) => match cfg_truth(&inner) {
+                Ok(inner) => match cfg_truth_with(&inner, test, test_support) {
                     CfgTruth::True => CfgTruth::False,
                     CfgTruth::False => CfgTruth::True,
                     CfgTruth::Unknown => CfgTruth::Unknown,
@@ -220,7 +232,7 @@ fn cfg_truth(meta: &syn::Meta) -> CfgTruth {
                 Ok(metas) => {
                     let mut unknown = false;
                     for meta in &metas {
-                        match cfg_truth(meta) {
+                        match cfg_truth_with(meta, test, test_support) {
                             CfgTruth::True if any => return CfgTruth::True,
                             CfgTruth::False if !any => return CfgTruth::False,
                             CfgTruth::Unknown => unknown = true,
@@ -240,6 +252,32 @@ fn cfg_truth(meta: &syn::Meta) -> CfgTruth {
         }
         _ => CfgTruth::Unknown,
     }
+}
+
+/// `test = false`, `feature = "test-support" = false`: only a predicate that
+/// is definitively false marks a test-only arm.
+fn cfg_truth(meta: &syn::Meta) -> CfgTruth {
+    cfg_truth_with(meta, false, false)
+}
+
+/// The test-support build (`test = false`, `feature = "test-support" = true`),
+/// the only build in which a cfg-split `pub mod` arm exists. Used by the
+/// mod-row expansion to decide which nested items are actually compiled there.
+fn cfg_truth_test_support(meta: &syn::Meta) -> CfgTruth {
+    cfg_truth_with(meta, false, true)
+}
+
+fn expansion_gated(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|attr| {
+        if attr.path().is_ident("test") {
+            return true;
+        }
+        attr.path().is_ident("cfg")
+            && attr
+                .parse_args::<syn::Meta>()
+                .map(|meta| cfg_truth_test_support(&meta) == CfgTruth::False)
+                .unwrap_or(false)
+    })
 }
 
 fn test_gated(attrs: &[syn::Attribute]) -> bool {
@@ -2054,6 +2092,715 @@ fn check_visibility_coverage(workspace: &Path, ledgers: &[VisRow]) -> Result<(),
     Ok(())
 }
 
+/// Resolve a full module path written in `from` (a glob target), keeping
+/// every segment: `crate`/`neovm_value` roots, `self` and leading `super`.
+fn expansion_resolve_module(from: &[String], path: &[String]) -> Option<Vec<String>> {
+    let mut base;
+    let mut index = 0;
+    match path.first()?.as_str() {
+        "crate" | "neovm_value" => {
+            base = Vec::new();
+            index = 1;
+        }
+        "self" => {
+            base = from.to_vec();
+            index = 1;
+        }
+        "super" => {
+            base = from.to_vec();
+            while index < path.len() && path[index] == "super" {
+                base.pop()?;
+                index += 1;
+            }
+        }
+        _ => base = from.to_vec(),
+    }
+    base.extend(path[index..].iter().cloned());
+    Some(base)
+}
+
+#[derive(Default)]
+struct ModExports {
+    own: BTreeSet<String>,
+    globs: Vec<Vec<String>>,
+}
+
+/// Resolve a module declaration's file and the directory its own child
+/// modules live in. An explicit `#[path]` is relative to the declaring file's
+/// directory and its children resolve beside the referenced file; otherwise
+/// the standard `name.rs` / `name/mod.rs` lookup under the module's child
+/// directory applies.
+fn expansion_module_target(
+    module: &syn::ItemMod,
+    dir: &Path,
+    file_dir: &Path,
+) -> Option<(PathBuf, PathBuf)> {
+    for attr in &module.attrs {
+        if attr.path().is_ident("path") {
+            if let syn::Meta::NameValue(value) = &attr.meta {
+                if let syn::Expr::Lit(expr) = &value.value {
+                    if let syn::Lit::Str(text) = &expr.lit {
+                        let file = file_dir.join(text.value());
+                        let child_dir = file.parent().unwrap_or(dir).to_path_buf();
+                        return Some((file, child_dir));
+                    }
+                }
+            }
+        }
+    }
+    let name = module.ident.to_string();
+    let file = auth_module_file(dir, &name)?;
+    Some((file, dir.join(name)))
+}
+
+/// LEAD 12:3xZ: a VIS `mod` row is a blanket widening -- every pub item the
+/// module makes reachable becomes test-support surface. Build the crate's
+/// production-public name set (declared pub items, pub re-export leaves and
+/// glob contents, and pub inherent methods on public types, through module
+/// chains whose declarations are all `pub`), so a mod row can require each
+/// newly reachable item to be root-public already or rowed.
+fn production_public_names(workspace: &Path, crate_dir: &str) -> Result<BTreeSet<String>, String> {
+    fn build(
+        items: &[syn::Item],
+        segments: Vec<String>,
+        dir: &Path,
+        file_dir: &Path,
+        is_public: bool,
+        modules: &mut BTreeMap<Vec<String>, ModExports>,
+        public_modules: &mut Vec<Vec<String>>,
+        visited: &mut BTreeSet<PathBuf>,
+    ) -> Result<(), String> {
+        let mut exports = ModExports::default();
+        let mut nested = Vec::new();
+        let mut inline = Vec::new();
+        for item in items {
+            match item {
+                syn::Item::Mod(module) => {
+                    if test_gated(&module.attrs) {
+                        continue;
+                    }
+                    let child_public =
+                        is_public && matches!(module.vis, syn::Visibility::Public(_));
+                    let mut child_segments = segments.clone();
+                    child_segments.push(module.ident.to_string());
+                    if let Some((_, inner)) = &module.content {
+                        let inline_dir = dir.join(module.ident.to_string());
+                        inline.push((inner, child_segments, inline_dir, child_public));
+                    } else if let Some((file, child_dir)) =
+                        expansion_module_target(module, dir, file_dir)
+                    {
+                        nested.push((file, child_dir, child_segments, child_public));
+                    }
+                }
+                syn::Item::Use(item) if matches!(item.vis, syn::Visibility::Public(_)) => {
+                    let mut leaves = Vec::new();
+                    auth_use_leaves(&item.tree, &mut Vec::new(), &mut leaves);
+                    for (path, alias, glob) in leaves {
+                        if glob {
+                            exports.globs.push(path);
+                        } else if let Some(name) = alias.or_else(|| path.last().cloned()) {
+                            exports.own.insert(name);
+                        }
+                    }
+                }
+                syn::Item::Fn(item) if matches!(item.vis, syn::Visibility::Public(_)) => {
+                    exports.own.insert(item.sig.ident.to_string());
+                }
+                syn::Item::Struct(item) if matches!(item.vis, syn::Visibility::Public(_)) => {
+                    exports.own.insert(item.ident.to_string());
+                }
+                syn::Item::Enum(item) if matches!(item.vis, syn::Visibility::Public(_)) => {
+                    exports.own.insert(item.ident.to_string());
+                }
+                syn::Item::Union(item) if matches!(item.vis, syn::Visibility::Public(_)) => {
+                    exports.own.insert(item.ident.to_string());
+                }
+                syn::Item::Trait(item) if matches!(item.vis, syn::Visibility::Public(_)) => {
+                    exports.own.insert(item.ident.to_string());
+                }
+                syn::Item::Type(item) if matches!(item.vis, syn::Visibility::Public(_)) => {
+                    exports.own.insert(item.ident.to_string());
+                }
+                syn::Item::Const(item) if matches!(item.vis, syn::Visibility::Public(_)) => {
+                    exports.own.insert(item.ident.to_string());
+                }
+                syn::Item::Static(item) if matches!(item.vis, syn::Visibility::Public(_)) => {
+                    exports.own.insert(item.ident.to_string());
+                }
+                syn::Item::Impl(block) if block.trait_.is_none() => {
+                    let owner = match &*block.self_ty {
+                        syn::Type::Path(path) => path
+                            .path
+                            .segments
+                            .last()
+                            .map(|segment| segment.ident.to_string()),
+                        _ => None,
+                    };
+                    if let Some(owner) = owner {
+                        for member in &block.items {
+                            if let syn::ImplItem::Fn(function) = member {
+                                if matches!(function.vis, syn::Visibility::Public(_)) {
+                                    exports
+                                        .own
+                                        .insert(format!("{owner}::{}", function.sig.ident));
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        if is_public {
+            public_modules.push(segments.clone());
+        }
+        modules.insert(segments, exports);
+        for (items, child_segments, inline_dir, child_public) in inline {
+            build(
+                items,
+                child_segments,
+                &inline_dir,
+                &inline_dir,
+                child_public,
+                modules,
+                public_modules,
+                visited,
+            )?;
+        }
+        for (file, child_dir, child_segments, child_public) in nested {
+            let canonical = file
+                .canonicalize()
+                .map_err(|error| format!("{}: {error}", file.display()))?;
+            if !visited.insert(canonical.clone()) {
+                continue;
+            }
+            let text = read(&canonical)?;
+            let ast = syn::parse_file(&text)
+                .map_err(|error| format!("{}: {error}", canonical.display()))?;
+            let child_file_dir = canonical.parent().unwrap_or(&child_dir);
+            build(
+                &ast.items,
+                child_segments,
+                &child_dir,
+                child_file_dir,
+                child_public,
+                modules,
+                public_modules,
+                visited,
+            )?;
+        }
+        Ok(())
+    }
+    fn exports_of(
+        segments: &[String],
+        modules: &BTreeMap<Vec<String>, ModExports>,
+        memo: &mut BTreeMap<Vec<String>, BTreeSet<String>>,
+        stack: &mut BTreeSet<Vec<String>>,
+    ) -> BTreeSet<String> {
+        if let Some(names) = memo.get(segments) {
+            return names.clone();
+        }
+        let Some(data) = modules.get(segments) else {
+            return BTreeSet::new();
+        };
+        if !stack.insert(segments.to_vec()) {
+            return BTreeSet::new();
+        }
+        let mut names = data.own.clone();
+        for glob in &data.globs {
+            if let Some(target) = expansion_resolve_module(segments, glob) {
+                names.extend(exports_of(&target, modules, memo, stack));
+            }
+        }
+        stack.remove(segments);
+        memo.insert(segments.to_vec(), names.clone());
+        names
+    }
+    let src = workspace.join("crates").join(crate_dir).join("src");
+    let mut modules = BTreeMap::new();
+    let mut public_modules = Vec::new();
+    let mut visited = BTreeSet::new();
+    for root in ["lib.rs", "main.rs"] {
+        let path = src.join(root);
+        if !path.is_file() {
+            continue;
+        }
+        let canonical = path
+            .canonicalize()
+            .map_err(|error| format!("{}: {error}", path.display()))?;
+        if !visited.insert(canonical.clone()) {
+            continue;
+        }
+        let text = read(&canonical)?;
+        let ast =
+            syn::parse_file(&text).map_err(|error| format!("{}: {error}", canonical.display()))?;
+        let dir = auth_module_dir(&canonical);
+        let file_dir = canonical.parent().unwrap_or(&dir);
+        build(
+            &ast.items,
+            Vec::new(),
+            &dir,
+            file_dir,
+            true,
+            &mut modules,
+            &mut public_modules,
+            &mut visited,
+        )?;
+    }
+    let mut memo = BTreeMap::new();
+    let mut names = BTreeSet::new();
+    for segments in &public_modules {
+        names.extend(exports_of(
+            segments,
+            &modules,
+            &mut memo,
+            &mut BTreeSet::new(),
+        ));
+    }
+    Ok(names)
+}
+
+fn expansion_covered(
+    identity: &str,
+    owner: Option<&str>,
+    relative: &str,
+    public_names: &BTreeSet<String>,
+    declared_types: &BTreeSet<String>,
+    vis_rows: &[VisRow],
+    authority: &[AuthRow],
+) -> bool {
+    if public_names.contains(identity) {
+        return true;
+    }
+    if let Some(owner) = owner {
+        if public_names.contains(owner) || declared_types.contains(owner) {
+            return true;
+        }
+    }
+    let vis_hit = vis_rows.iter().any(|row| {
+        row.kind != "mod"
+            && row.file == relative
+            && (row.item == identity || row.item.ends_with(&format!("::{identity}")))
+    });
+    if vis_hit {
+        return true;
+    }
+    authority.iter().any(|row| {
+        row.defining_file == relative
+            && (row.item == identity || row.item.ends_with(&format!("::{identity}")))
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn expand_module_items(
+    items: &[syn::Item],
+    dir: &Path,
+    relative: &str,
+    workspace: &Path,
+    public_names: &BTreeSet<String>,
+    vis_rows: &[VisRow],
+    authority: &[AuthRow],
+    declared: &mut BTreeSet<String>,
+    pending_methods: &mut Vec<(String, String, String)>,
+    missing: &mut Vec<String>,
+    visited: &mut BTreeSet<PathBuf>,
+) -> Result<(), String> {
+    for item in items {
+        match item {
+            syn::Item::Mod(module) => {
+                if expansion_gated(&module.attrs)
+                    || !matches!(module.vis, syn::Visibility::Public(_))
+                {
+                    continue;
+                }
+                if let Some((_, inner)) = &module.content {
+                    let inline_dir = dir.join(module.ident.to_string());
+                    expand_module_items(
+                        inner,
+                        &inline_dir,
+                        relative,
+                        workspace,
+                        public_names,
+                        vis_rows,
+                        authority,
+                        declared,
+                        pending_methods,
+                        missing,
+                        visited,
+                    )?;
+                } else if let Some(target) = auth_module_file(dir, &module.ident.to_string()) {
+                    let canonical = target
+                        .canonicalize()
+                        .map_err(|error| format!("{}: {error}", target.display()))?;
+                    if !visited.insert(canonical.clone()) {
+                        continue;
+                    }
+                    let text = read(&canonical)?;
+                    let ast = syn::parse_file(&text)
+                        .map_err(|error| format!("{}: {error}", canonical.display()))?;
+                    let child_relative = canonical
+                        .strip_prefix(workspace)
+                        .map_err(|_| format!("{} is outside the workspace", canonical.display()))?
+                        .to_string_lossy()
+                        .replace('\\', "/");
+                    let child_dir = auth_module_dir(&canonical);
+                    expand_module_items(
+                        &ast.items,
+                        &child_dir,
+                        &child_relative,
+                        workspace,
+                        public_names,
+                        vis_rows,
+                        authority,
+                        declared,
+                        pending_methods,
+                        missing,
+                        visited,
+                    )?;
+                }
+            }
+            syn::Item::Fn(item) if matches!(item.vis, syn::Visibility::Public(_)) => {
+                let identity = item.sig.ident.to_string();
+                if !expansion_covered(
+                    &identity,
+                    None,
+                    relative,
+                    public_names,
+                    declared,
+                    vis_rows,
+                    authority,
+                ) {
+                    missing.push(format!("{relative}:{identity}"));
+                }
+            }
+            syn::Item::Struct(item) if matches!(item.vis, syn::Visibility::Public(_)) => {
+                let identity = item.ident.to_string();
+                declared.insert(identity.clone());
+                if !expansion_covered(
+                    &identity,
+                    None,
+                    relative,
+                    public_names,
+                    declared,
+                    vis_rows,
+                    authority,
+                ) {
+                    missing.push(format!("{relative}:{identity}"));
+                }
+            }
+            syn::Item::Enum(item) if matches!(item.vis, syn::Visibility::Public(_)) => {
+                let identity = item.ident.to_string();
+                declared.insert(identity.clone());
+                if !expansion_covered(
+                    &identity,
+                    None,
+                    relative,
+                    public_names,
+                    declared,
+                    vis_rows,
+                    authority,
+                ) {
+                    missing.push(format!("{relative}:{identity}"));
+                }
+            }
+            syn::Item::Union(item) if matches!(item.vis, syn::Visibility::Public(_)) => {
+                let identity = item.ident.to_string();
+                declared.insert(identity.clone());
+                if !expansion_covered(
+                    &identity,
+                    None,
+                    relative,
+                    public_names,
+                    declared,
+                    vis_rows,
+                    authority,
+                ) {
+                    missing.push(format!("{relative}:{identity}"));
+                }
+            }
+            syn::Item::Trait(item) if matches!(item.vis, syn::Visibility::Public(_)) => {
+                let identity = item.ident.to_string();
+                declared.insert(identity.clone());
+                if !expansion_covered(
+                    &identity,
+                    None,
+                    relative,
+                    public_names,
+                    declared,
+                    vis_rows,
+                    authority,
+                ) {
+                    missing.push(format!("{relative}:{identity}"));
+                }
+            }
+            syn::Item::Type(item) if matches!(item.vis, syn::Visibility::Public(_)) => {
+                let identity = item.ident.to_string();
+                declared.insert(identity.clone());
+                if !expansion_covered(
+                    &identity,
+                    None,
+                    relative,
+                    public_names,
+                    declared,
+                    vis_rows,
+                    authority,
+                ) {
+                    missing.push(format!("{relative}:{identity}"));
+                }
+            }
+            syn::Item::Const(item) if matches!(item.vis, syn::Visibility::Public(_)) => {
+                let identity = item.ident.to_string();
+                if !expansion_covered(
+                    &identity,
+                    None,
+                    relative,
+                    public_names,
+                    declared,
+                    vis_rows,
+                    authority,
+                ) {
+                    missing.push(format!("{relative}:{identity}"));
+                }
+            }
+            syn::Item::Static(item) if matches!(item.vis, syn::Visibility::Public(_)) => {
+                let identity = item.ident.to_string();
+                if !expansion_covered(
+                    &identity,
+                    None,
+                    relative,
+                    public_names,
+                    declared,
+                    vis_rows,
+                    authority,
+                ) {
+                    missing.push(format!("{relative}:{identity}"));
+                }
+            }
+            syn::Item::Impl(block) if block.trait_.is_none() => {
+                let owner = match &*block.self_ty {
+                    syn::Type::Path(path) => path
+                        .path
+                        .segments
+                        .last()
+                        .map(|segment| segment.ident.to_string()),
+                    _ => None,
+                };
+                if let Some(owner) = owner {
+                    for member in &block.items {
+                        if let syn::ImplItem::Fn(function) = member {
+                            if matches!(function.vis, syn::Visibility::Public(_)) {
+                                pending_methods.push((
+                                    format!("{owner}::{}", function.sig.ident),
+                                    owner.clone(),
+                                    relative.to_string(),
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+            syn::Item::Use(item) if matches!(item.vis, syn::Visibility::Public(_)) => {
+                let mut leaves = Vec::new();
+                auth_use_leaves(&item.tree, &mut Vec::new(), &mut leaves);
+                for (path, alias, glob) in leaves {
+                    if glob {
+                        missing.push(format!(
+                            "{relative}: pub use glob {}::* requires review",
+                            path.join("::")
+                        ));
+                        continue;
+                    }
+                    if let Some(identity) = alias.or_else(|| path.last().cloned()) {
+                        if !expansion_covered(
+                            &identity,
+                            None,
+                            relative,
+                            public_names,
+                            declared,
+                            vis_rows,
+                            authority,
+                        ) {
+                            missing.push(format!("{relative}:{identity}"));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// LEAD 12:3xZ: expand every VIS `mod` row to the pub items it makes reachable
+/// and require each to be root-public already or covered by its own VIS or
+/// AUTHORITY row. A blanket mod widening with an unrowed new pub item fails
+/// closed.
+fn expanded_mod_rows_violation(
+    workspace: &Path,
+    rows: &[VisRow],
+    authority: &[AuthRow],
+) -> Result<(), String> {
+    let mut public_cache: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut failures = Vec::new();
+    for row in rows.iter().filter(|row| row.kind == "mod") {
+        let public_names = match public_cache.get(&row.crate_dir) {
+            Some(names) => names.clone(),
+            None => {
+                let names = production_public_names(workspace, &row.crate_dir)?;
+                public_cache.insert(row.crate_dir.clone(), names.clone());
+                names
+            }
+        };
+        let declaring = workspace.join(&row.file);
+        let dir = auth_module_dir(&declaring);
+        let name = row.item.rsplit("::").next().unwrap_or(&row.item);
+        let declaring_text = read(&declaring)?;
+        let declaring_ast = syn::parse_file(&declaring_text)
+            .map_err(|error| format!("{}: {error}", declaring.display()))?;
+        let declarations: Vec<&syn::ItemMod> = declaring_ast
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                syn::Item::Mod(module) if module.ident == name => Some(module),
+                _ => None,
+            })
+            .collect();
+        // A cfg-split module has one declaration per arm; expand the arm
+        // that is actually compiled in the test-support build (the widened
+        // one), not the production arm that is definitively false there.
+        let declaration = declarations
+            .iter()
+            .copied()
+            .find(|module| !expansion_gated(&module.attrs));
+        if declaration.is_none() && !declarations.is_empty() {
+            // Every arm is test-build-only (e.g. `#[cfg(test)] mod tests`):
+            // inert in the test-support build, no expansion.
+            continue;
+        }
+        let mut declared = BTreeSet::new();
+        let mut pending_methods = Vec::new();
+        let mut missing = Vec::new();
+        let mut visited = BTreeSet::new();
+        let mut target: Option<(PathBuf, PathBuf)> = None;
+        match declaration {
+            Some(module) if module.content.is_some() => {
+                // An inline module row (`#[cfg_attr(feature =
+                // "test-support", visibility::make(pub))] #[cfg(test)] mod
+                // tests { .. }`). A module not compiled in the test-support
+                // build is inert and needs no expansion.
+                if expansion_gated(&module.attrs) {
+                    continue;
+                }
+                let (_, inner) = module.content.as_ref().expect("checked above");
+                let inline_dir = dir.join(name);
+                expand_module_items(
+                    inner,
+                    &inline_dir,
+                    &row.file,
+                    workspace,
+                    &public_names,
+                    rows,
+                    authority,
+                    &mut declared,
+                    &mut pending_methods,
+                    &mut missing,
+                    &mut visited,
+                )?;
+            }
+            Some(module) => {
+                if expansion_gated(&module.attrs) {
+                    continue;
+                }
+                let declaring_dir = declaring.parent().unwrap_or(&dir);
+                match expansion_module_target(module, &dir, declaring_dir) {
+                    Some(found) => target = Some(found),
+                    None => {
+                        failures.push(format!(
+                            "mod row {} does not resolve to a module under {} (the kind must name the widened item's actual kind)",
+                            row.item,
+                            dir.display()
+                        ));
+                        continue;
+                    }
+                }
+            }
+            None => match auth_module_file(&dir, name) {
+                Some(file) => target = Some((file, dir.join(name))),
+                None => {
+                    failures.push(format!(
+                        "mod row {} does not resolve to a module under {} (the kind must name the widened item's actual kind)",
+                        row.item,
+                        dir.display()
+                    ));
+                    continue;
+                }
+            },
+        }
+        if let Some((module_file, child_dir)) = target {
+            let text = read(&module_file)?;
+            let ast = syn::parse_file(&text)
+                .map_err(|error| format!("{}: {error}", module_file.display()))?;
+            let canonical = module_file
+                .canonicalize()
+                .map_err(|error| format!("{}: {error}", module_file.display()))?;
+            let relative = canonical
+                .strip_prefix(workspace)
+                .map_err(|_| format!("{} is outside the workspace", module_file.display()))?
+                .to_string_lossy()
+                .replace('\\', "/");
+            visited.insert(canonical);
+            expand_module_items(
+                &ast.items,
+                &child_dir,
+                &relative,
+                workspace,
+                &public_names,
+                rows,
+                authority,
+                &mut declared,
+                &mut pending_methods,
+                &mut missing,
+                &mut visited,
+            )?;
+        }
+        for (identity, owner, relative) in pending_methods {
+            // A pub method on a type that is neither public on a production
+            // path nor declared pub in the widened subtree is not publicly
+            // reachable: the widening cannot expose it by name.
+            if !public_names.contains(&owner) && !declared.contains(&owner) {
+                continue;
+            }
+            if !expansion_covered(
+                &identity,
+                Some(&owner),
+                &relative,
+                &public_names,
+                &declared,
+                rows,
+                authority,
+            ) {
+                missing.push(format!("{relative}:{identity}"));
+            }
+        }
+        if !missing.is_empty() {
+            failures.push(format!(
+                "mod row {} is a blanket widening; each pub item it makes reachable needs a root-public path or its own VIS/AUTHORITY row: {}",
+                row.item,
+                missing.join(", ")
+            ));
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "TEST-SUPPORT-VIS: {} mod-row expansion failure(s): {}",
+            failures.len(),
+            failures.join(" | ")
+        ))
+    }
+}
+
 fn validate(workspace: &Path) -> Result<(), String> {
     let architecture = workspace.join(ARCHITECTURE_DIR);
     let mut ledger_paths = Vec::new();
@@ -2107,7 +2854,11 @@ fn validate(workspace: &Path) -> Result<(), String> {
         all_rows.extend(rows);
     }
     check_cfg_split_arm_identity(workspace, &all_rows)?;
-    check_visibility_coverage(workspace, &all_rows)
+    check_visibility_coverage(workspace, &all_rows)?;
+    if all_rows.iter().any(|row| row.kind == "mod") {
+        expanded_mod_rows_violation(workspace, &all_rows, &auth_rows(workspace))?;
+    }
+    Ok(())
 }
 
 #[test]
@@ -2691,6 +3442,86 @@ pub struct Tuple(pub u8);
         };
         assert!(check_cfg_split_arm_identity(dir.path(), &[row]).is_ok());
     }
+}
+
+/// LEAD 12:3xZ: a VIS `mod` row is a blanket widening. The expansion must
+/// flag a pub item added to the module without its own VIS/AUTHORITY row,
+/// while an item that is already public on a production path is accepted.
+#[test]
+fn mod_row_expansion_requires_a_row_for_each_new_pub_item() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let src = dir.path().join("crates/neovm-value/src");
+    std::fs::create_dir_all(src.join("gc")).expect("src");
+    std::fs::write(src.join("lib.rs"), "pub mod gc;\n").expect("lib");
+    let gc = "pub use facade::Published;\n\
+              #[cfg(not(feature = \"test-support\"))]\nmod facade;\n\
+              #[cfg(feature = \"test-support\")]\npub mod facade;\n";
+    std::fs::write(src.join("gc.rs"), gc).expect("gc");
+    let facade = src.join("gc/facade.rs");
+    std::fs::write(
+        &facade,
+        "pub struct Published;\npub struct Unrowed;\npub fn new_public_fn() {}\nimpl Published {\n    pub fn method(&self) {}\n}\n",
+    )
+    .expect("facade");
+    let mod_row = || VisRow {
+        crate_dir: "neovm-value".to_owned(),
+        item: "gc::facade".to_owned(),
+        kind: "mod".to_owned(),
+        file: "crates/neovm-value/src/gc.rs".to_owned(),
+        tests: Vec::new(),
+    };
+    let item_row = |item: &str, kind: &str| VisRow {
+        crate_dir: "neovm-value".to_owned(),
+        item: item.to_owned(),
+        kind: kind.to_owned(),
+        file: "crates/neovm-value/src/gc/facade.rs".to_owned(),
+        tests: Vec::new(),
+    };
+    let error =
+        expanded_mod_rows_violation(dir.path(), &[mod_row()], &[]).expect_err("unrowed pub items");
+    assert!(
+        error.contains("Unrowed") && error.contains("new_public_fn"),
+        "{error}"
+    );
+    assert!(!error.contains("Published"), "root-public item: {error}");
+    let rows = vec![
+        mod_row(),
+        item_row("gc::facade::Unrowed", "struct"),
+        item_row("gc::facade::new_public_fn", "fn"),
+    ];
+    assert!(expanded_mod_rows_violation(dir.path(), &rows, &[]).is_ok());
+    // A NEW pub item added to the module goes red without its own row.
+    std::fs::write(
+        &facade,
+        "pub struct Published;\npub struct Unrowed;\npub fn new_public_fn() {}\npub fn blanket_bypass() {}\nimpl Published {\n    pub fn method(&self) {}\n}\n",
+    )
+    .expect("facade");
+    let error = expanded_mod_rows_violation(dir.path(), &rows, &[]).expect_err("new pub item");
+    assert!(error.contains("blanket_bypass"), "{error}");
+    // An AUTHORITY row also covers an item.
+    let authority = vec![AuthRow {
+        crate_name: "neovm-value".to_owned(),
+        item: "blanket_bypass".to_owned(),
+        defining_file: "crates/neovm-value/src/gc/facade.rs".to_owned(),
+        fence_path: "neovm_value::test_support::authority::blanket_bypass".to_owned(),
+    }];
+    assert!(expanded_mod_rows_violation(dir.path(), &rows, &authority).is_ok());
+    // A test-gated inline module row is inert: no expansion, no failure.
+    let inert = VisRow {
+        crate_dir: "neovm-value".to_owned(),
+        item: "gc::inert".to_owned(),
+        kind: "mod".to_owned(),
+        file: "crates/neovm-value/src/gc.rs".to_owned(),
+        tests: Vec::new(),
+    };
+    std::fs::write(
+        src.join("gc.rs"),
+        format!(
+            "{gc}#[cfg(test)]\n#[cfg_attr(feature = \"test-support\", visibility::make(pub))]\nmod inert {{ pub fn test_only() {{}} }}\n"
+        ),
+    )
+    .expect("gc");
+    assert!(expanded_mod_rows_violation(dir.path(), &[inert], &[]).is_ok());
 }
 
 /// B3 AUTHORITY-ITEMS guard (peer ruling 07:3xZ): every row has the signed
