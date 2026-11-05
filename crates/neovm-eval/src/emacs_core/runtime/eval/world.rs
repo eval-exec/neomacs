@@ -381,6 +381,19 @@ impl fmt::Debug for ObarrayView {
             .finish_non_exhaustive()
     }
 }
+/// TEST-SUPPORT-VIS row: moved tests mutate the owning manager through the
+/// view (the same sole-owner assumption ObarrayWriteAccess's closed
+/// operations already make). Absent from every product build.
+#[cfg(any(test, feature = "test-support"))]
+impl std::ops::DerefMut for ObarrayView {
+    #[inline(always)]
+    fn deref_mut(&mut self) -> &mut Obarray {
+        // SAFETY: the exclusive borrow of this view covers the manager phase;
+        // no manager reference escapes the borrow.
+        unsafe { self.ptr.as_mut() }
+    }
+}
+
 impl Deref for ObarrayView {
     type Target = Obarray;
     #[inline(always)]
@@ -511,6 +524,15 @@ impl Deref for ObarrayWriteAccess<'_> {
     type Target = Obarray;
     #[inline(always)]
     fn deref(&self) -> &Obarray {
+        self.view
+    }
+}
+/// TEST-SUPPORT-VIS row: moved tests write through the adapter; the impl is
+/// absent from every product build.
+#[cfg(any(test, feature = "test-support"))]
+impl std::ops::DerefMut for ObarrayWriteAccess<'_> {
+    #[inline(always)]
+    fn deref_mut(&mut self) -> &mut Obarray {
         self.view
     }
 }

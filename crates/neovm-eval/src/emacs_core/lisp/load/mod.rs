@@ -2574,11 +2574,28 @@ impl CompiledFreshness {
 /// needs, and a caller handed only a path re-derives them or, far more often,
 /// does not.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct StaleBytecode {
+    #[cfg(not(feature = "test-support"))]
     pub(crate) compiled: PathBuf,
+    /// TEST-SUPPORT-VIS row: moved stale-bytecode oracle reads the record.
+    #[cfg(feature = "test-support")]
+    pub compiled: PathBuf,
+    #[cfg(not(feature = "test-support"))]
     pub(crate) source: PathBuf,
+    /// TEST-SUPPORT-VIS row: moved stale-bytecode oracle reads the record.
+    #[cfg(feature = "test-support")]
+    pub source: PathBuf,
+    #[cfg(not(feature = "test-support"))]
     pub(crate) compiled_mtime: SystemTime,
+    /// TEST-SUPPORT-VIS row: moved stale-bytecode oracle reads the record.
+    #[cfg(feature = "test-support")]
+    pub compiled_mtime: SystemTime,
+    #[cfg(not(feature = "test-support"))]
     pub(crate) source_mtime: SystemTime,
+    /// TEST-SUPPORT-VIS row: moved stale-bytecode oracle reads the record.
+    #[cfg(feature = "test-support")]
+    pub source_mtime: SystemTime,
 }
 
 /// Every `.elc` under ROOT whose `.el` is strictly newer.
@@ -2589,6 +2606,7 @@ pub(crate) struct StaleBytecode {
 /// each one's mtime.  Those rows have existed all along; until ledger 202
 /// nothing asked them this question, which is ledger 173's law in a new place
 /// -- except that here the rows were written and the predicate was missing.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn stale_lisp_bytecode(root: &Path) -> Vec<StaleBytecode> {
     let mut files = Vec::new();
     collect_bootstrap_source_files(root, &mut files);
@@ -2727,7 +2745,8 @@ pub fn announce_shipped_editor_process() {
 /// `cargo nextest run` gives every test its own process and this would not be
 /// needed; the project mandates nextest, and this exists so that a `cargo test`
 /// run is not silently order-dependent anyway.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn withdraw_shipped_editor_announcement() {
     SHIPPED_EDITOR_PROCESS.store(false, std::sync::atomic::Ordering::Relaxed);
 }
@@ -6143,6 +6162,15 @@ fn refuse_stale_lisp_bytecode(lisp_dir: &Path) {
 pub(crate) const LOADUP_DUMP_BRANCH_SEEDED_VARIABLES: &[&str] =
     &["inhibit-load-charset-map", "load-prefer-newer"];
 
+/// A1 test-support row: the guard cannot name a bare `const` under
+/// `visibility::make`, so the moved loadup oracle reads the table through
+/// this accessor.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub fn loadup_dump_branch_seeded_variables() -> &'static [&'static str] {
+    LOADUP_DUMP_BRANCH_SEEDED_VARIABLES
+}
+
 /// Seed the statements `lisp/loadup.el` runs only under `dump-mode`.
 ///
 /// Preload-only construction runs loadup with `dump-mode' nil, while an
@@ -6162,6 +6190,7 @@ pub(crate) const LOADUP_DUMP_BRANCH_SEEDED_VARIABLES: &[&str] =
 /// `makunbound` -- instead of a Rust copy of it, and lands the image on GNU's
 /// measured answer: `emacs -Q --batch` reports `load-prefer-newer` nil,
 /// `standard-value` nil, `load--prefer-newer` unbound.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn seed_loadup_dump_branch_state(eval: &mut super::eval::Context) {
     // loadup.el:115 saves the pre-dump value before :116 overwrites it.
     let previous = eval

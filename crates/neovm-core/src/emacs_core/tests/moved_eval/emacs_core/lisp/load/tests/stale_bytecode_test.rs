@@ -36,8 +36,8 @@
 //! Ledger 202.
 
 use neovm_eval::emacs_core::load::{
-    LOADUP_DUMP_BRANCH_SEEDED_VARIABLES, StaleBytecodePolicy, seed_loadup_dump_branch_state,
-    stale_lisp_bytecode,
+    StaleBytecodePolicy, loadup_dump_branch_seeded_variables, seed_loadup_dump_branch_state,
+    stale_lisp_bytecode, withdraw_shipped_editor_announcement,
 };
 use neovm_value::value::Value;
 
@@ -269,7 +269,7 @@ fn the_image_build_seeds_every_statement_of_loadups_dump_branch() {
     let mut eval = crate::test_utils::new_context();
     seed_loadup_dump_branch_state(&mut eval);
 
-    for name in LOADUP_DUMP_BRANCH_SEEDED_VARIABLES {
+    for name in loadup_dump_branch_seeded_variables() {
         assert_eq!(
             eval.obarray().symbol_value_copied(name),
             Some(Value::T),
@@ -278,7 +278,7 @@ fn the_image_build_seeds_every_statement_of_loadups_dump_branch() {
         );
     }
     assert!(
-        LOADUP_DUMP_BRANCH_SEEDED_VARIABLES.contains(&"load-prefer-newer"),
+        loadup_dump_branch_seeded_variables().contains(&"load-prefer-newer"),
         "load-prefer-newer is the statement that keeps stale bytecode out of \
          the image (Bug#17629); dropping it from the list would restore the \
          defect silently"

@@ -12,6 +12,7 @@
 // Variables don't have an `(fn ARGS)' suffix -- only DEFUNs do.
 
 #[rustfmt::skip]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) static GNU_VAR_DOCS: &[(&str, &str)] = &[
     (r#"abbrev-mode"#, r#"Non-nil if Abbrev mode is enabled.
 Use the command `abbrev-mode' to change the value of this variable in

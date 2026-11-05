@@ -18,7 +18,7 @@
 
 use crate::emacs_core::eval::Context;
 use crate::test_utils::runtime_startup_context;
-use neovm_display::window::display_ext::DisplayFrameManagerExt;
+use neovm_display::window::DisplayFrameManagerExt;
 use neovm_eval::emacs_core::data::test_support::default_value_by_id;
 use neovm_value::error::FlowResultExt;
 use neovm_value::value::Value;
@@ -802,6 +802,7 @@ fn discard_local_binding_does_not_allocate_ambient_buffer_wrapper() {
         .try_specbind(symbol, Value::fixnum(20))
         .expect("bind local");
     let binding_cell = owner
+        .edit
         .buffers
         .get(buffer)
         .and_then(|buffer| buffer.local_variable_binding_cell(symbol))
@@ -822,6 +823,7 @@ fn discard_local_binding_does_not_allocate_ambient_buffer_wrapper() {
     );
     assert_eq!(
         owner
+            .edit
             .buffers
             .get(buffer)
             .and_then(|buffer| buffer.get_buffer_local_by_sym_id(symbol)),
@@ -830,6 +832,7 @@ fn discard_local_binding_does_not_allocate_ambient_buffer_wrapper() {
     assert_eq!(owner.specpdl.len(), count);
     assert_eq!(
         owner
+            .edit
             .buffers
             .get(buffer)
             .and_then(|buffer| buffer.local_variable_binding_cell(symbol)),
@@ -868,6 +871,7 @@ fn discard_local_binding_keeps_existing_void_cell_without_lisp_allocation() {
     assert_eq!(owner.tagged_heap.bytes_since_gc_exact(), before);
     assert!(
         owner
+            .edit
             .buffers
             .get(buffer)
             .expect("live buffer")
@@ -876,6 +880,7 @@ fn discard_local_binding_keeps_existing_void_cell_without_lisp_allocation() {
     );
     assert!(
         owner
+            .edit
             .buffers
             .get(buffer)
             .expect("live buffer")
