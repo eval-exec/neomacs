@@ -4,7 +4,7 @@ error[E0624]: associated function `from_registered` is private
 5 |     let _constructor = RegisteredRootRef::<MessageArguments>::from_registered;
   |                                                               ^^^^^^^^^^^^^^^ private associated function
   |
- ::: src/host_effect/contracts.rs
+ ::: $WORKSPACE/crates/neovm-eval/src/host_effect/contracts.rs
   |
   |     pub(crate) unsafe fn from_registered(key: HostRequestKey, record: RootRecordId) -> Self {
   |     --------------------------------------------------------------------------------------- private associated function defined here

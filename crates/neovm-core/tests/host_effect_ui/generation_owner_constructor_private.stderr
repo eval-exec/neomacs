@@ -4,7 +4,7 @@ error[E0624]: associated function `from_owner_id` is private
 5 |     let _forged = HostRequestGeneration::from_owner_id(NonZeroU64::MIN);
   |                                          ^^^^^^^^^^^^^ private associated function
   |
- ::: src/host_effect/contracts.rs
+ ::: $WORKSPACE/crates/neovm-eval/src/host_effect/contracts.rs
   |
   |             pub(crate) const fn from_owner_id(id: NonZeroU64) -> Self { Self(id) }
   |             --------------------------------------------------------- private associated function defined here
