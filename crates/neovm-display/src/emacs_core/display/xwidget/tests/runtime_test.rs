@@ -1,11 +1,13 @@
-use super::eval::{Context, DisplayHost, GuiFrameHostRequest, XwidgetScriptRequestId};
-use super::intern::resolve_sym;
-use super::value::{Value, eq_value, list_to_vec};
 use neomacs_display_protocol::WebViewId;
 use neovm_eval::emacs_core::eval::keyboard::{
     FrontendLoadPhase, FrontendWebProcessFailure, FrontendWebValue, FrontendWebViewEvent,
 };
+use neovm_eval::emacs_core::eval::{
+    Context, DisplayHost, GuiFrameHostRequest, XwidgetScriptRequestId,
+};
 use neovm_value::heap_types::LispString;
+use neovm_value::intern::resolve_sym;
+use neovm_value::value::{Value, eq_value, list_to_vec};
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -284,7 +286,7 @@ fn make_xwidget_accepts_only_gnu_webkit_type() {
     let err = ctx
         .eval_str(r#"(make-xwidget 'video "Title" 10 20)"#)
         .expect_err("GNU make-xwidget accepts only webkit");
-    let super::error::EvalError::Signal { symbol, data, .. } = err else {
+    let neovm_value::error::EvalError::Signal { symbol, data, .. } = err else {
         panic!("make-xwidget should signal error");
     };
     assert_eq!(resolve_sym(symbol), "error");
@@ -299,7 +301,7 @@ fn make_xwidget_requires_interned_gnu_webkit_symbol() {
     let err = ctx
         .eval_str(r#"(make-xwidget (make-symbol "webkit") "Title" 10 20)"#)
         .expect_err("GNU make-xwidget compares against Qwebkit by identity");
-    let super::error::EvalError::Signal { symbol, data, .. } = err else {
+    let neovm_value::error::EvalError::Signal { symbol, data, .. } = err else {
         panic!("make-xwidget should signal error");
     };
     assert_eq!(resolve_sym(symbol), "error");

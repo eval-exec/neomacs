@@ -6,6 +6,9 @@ use super::*;
 use crate::window::DisplayFrameTestExt;
 use neomacs_display_protocol::TransitionDirection;
 use neovm_edit::buffer::{CharLen, EmacsByteLen};
+use neovm_value::display_vocab::SourcePreloadWindowRetirementRefusal;
+use neovm_value::heap_types::byte_positions::EmacsBytePos;
+use std::sync::Arc;
 
 #[cfg(test)]
 #[path = "point_rows_query_test.rs"]
@@ -183,8 +186,9 @@ fn prepared_presentation_publishes_one_atomic_window_redisplay_output() {
 
 #[test]
 fn snapshot_window_geometry_keeps_pixel_spaces_and_cell_origin_distinct() {
-    use super::geometry::{Column, Line, PresentationGeometry, PresentationId};
+    use super::geometry::{PresentationGeometry, PresentationId};
     use neomacs_display_protocol::types::Rect as TransportRect;
+    use neovm_eval::emacs_core::eval::data::window_state::{Column, Line};
 
     let mut window = Window::new_leaf(
         WindowId(11),

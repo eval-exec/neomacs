@@ -6,6 +6,7 @@ use crate::emacs_core::font::*;
 use crate::face::{Color, FaceAttrValue, FaceHeight};
 use crate::window::{FRAME_ID_BASE, FrameId, FrameParam};
 use neovm_edit::buffer::{Buffer, CharPos0, CharRange};
+use neovm_eval::emacs_core::eval::data::face_registry::FIRST_DYNAMIC_FACE_ID;
 use neovm_eval::emacs_core::eval::{
     Context, DisplayHost, FontPxProbeResult, GuiFrameHostRequest, ResolvedFontMatch,
     ResolvedFrameFont,

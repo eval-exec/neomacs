@@ -60,6 +60,7 @@ fn every_presented_region_either_names_a_window_part_or_is_a_frame_bar() {
     }
 }
 use super::*;
+use neovm_edit::emacs_core::display_metrics::Rect;
 
 /// An 80x22 terminal window with a mode line, laid out below a one-line
 /// menu bar: the geometry every probe in `scripts/below-content-audit.el`

@@ -402,6 +402,7 @@ pub fn default_value(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
 /// fallback. The mutable default lives in `BufferManager::buffer_defaults`, so
 /// binding/thread-switch code must use this projection rather than reading the
 /// static descriptor directly.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn default_value_by_id(ctx: &Context, resolved: SymId) -> Option<Value> {
     // The default this owner binds, if it binds one (GNU's `default_value`
     // reads the running thread's binding).

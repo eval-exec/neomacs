@@ -110,7 +110,7 @@ fn p3sym_c5_mode_line_held_identity_survives_fresh_intern_growth_child() {
     }
     const NAME: &str = "p3sym-c5-held-pass";
     let oracle: Vec<_> = include_str!(
-        "../../../../tagged/gc/mutator_registration/symbol_intern_pass_oracle.expected"
+        "../../../../../../neovm-value/src/tagged/gc/mutator_registration/symbol_intern_pass_oracle.expected"
     )
     .lines()
     .collect();

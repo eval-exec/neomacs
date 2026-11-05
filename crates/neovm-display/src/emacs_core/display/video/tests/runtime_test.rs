@@ -1,7 +1,5 @@
 //! Lisp-visible video session tests.
 
-use super::eval::{Context, DisplayHost, GuiFrameHostRequest};
-use super::value::Value;
 use super::video::{VideoDisplayReference, parse_video_display_reference};
 use neomacs_display_protocol::VideoId;
 use neomacs_video_model::{
@@ -10,6 +8,8 @@ use neomacs_video_model::{
     VideoOpenRequest, VideoPresentationPath, VideoSessionDiagnostics, VideoSessionState,
     VideoSurfacePoolDiagnostics, VideoSurfacePoolRole,
 };
+use neovm_eval::emacs_core::eval::{Context, DisplayHost, GuiFrameHostRequest};
+use neovm_value::value::Value;
 use std::sync::{Arc, Mutex};
 
 const STUB_VIDEO_ID: VideoId = VideoId::new(42);

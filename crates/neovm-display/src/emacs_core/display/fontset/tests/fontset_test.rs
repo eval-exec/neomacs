@@ -636,7 +636,7 @@ fn fontset_registry_pdump_uses_lisp_string_names_and_loads_legacy_strings() {
         ],
         generation: 11,
     };
-    neovm_eval::emacs_core::pdump::convert::load_fontset_registry(&legacy_dump);
+    neovm_eval::test_support::authority::load_fontset_registry_for_test(&legacy_dump);
 
     let restored = snapshot_fontset_registry();
     let legacy_name_lisp = fontset_name_lisp_string(&legacy_name);

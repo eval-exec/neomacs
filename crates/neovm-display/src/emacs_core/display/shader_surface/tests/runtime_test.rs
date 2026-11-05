@@ -5,10 +5,12 @@
 //! `DisplayHost::destroy_shader_surface` from the GC sweep's
 //! pending-destroy drain instead of leaking the GPU texture until exit.
 
-use super::eval::{Context, DisplayHost, GuiFrameHostRequest, ShaderSurfaceCreateRequest};
-use super::value::Value;
 use neomacs_display_protocol::VideoId;
 use neomacs_video_model::VideoOpenRequest;
+use neovm_eval::emacs_core::eval::{
+    Context, DisplayHost, GuiFrameHostRequest, ShaderSurfaceCreateRequest,
+};
+use neovm_value::value::Value;
 use std::sync::{Arc, Mutex};
 
 const STUB_SURFACE_ID: u32 = 42;
@@ -202,11 +204,14 @@ fn video_channel_reuses_an_opaque_video_handle() {
 
     let surfaces = host.surfaces.lock().expect("surface host requests");
     let channel0 = surfaces.last().and_then(|request| match &request.content {
-        super::eval::ShaderSurfaceContent::Shader { channel0, .. } => *channel0,
-        super::eval::ShaderSurfaceContent::Pixels { .. } => None,
+        neovm_eval::emacs_core::eval::ShaderSurfaceContent::Shader { channel0, .. } => *channel0,
+        neovm_eval::emacs_core::eval::ShaderSurfaceContent::Pixels { .. } => None,
     });
     assert_eq!(
         channel0,
-        Some((super::eval::SurfaceChannelKind::Video, STUB_VIDEO_ID.get()))
+        Some((
+            neovm_eval::emacs_core::eval::SurfaceChannelKind::Video,
+            STUB_VIDEO_ID.get()
+        ))
     );
 }

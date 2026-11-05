@@ -1,6 +1,10 @@
 //! Iterator diets preserve the full legacy decoded stream and exact lengths.
 
 use super::*;
+use crate::window::{DisplayPointRole, DisplayPointSnapshot};
+use neovm_eval::emacs_core::eval::data::point_rows::{PointRowsIterOrder, WindowDisplayPointIter};
+use neovm_eval::emacs_core::eval::data::window_state::PointRowIterMode;
+use neovm_value::value::positions::LispCharPos1;
 use std::iter::FusedIterator;
 
 fn point(pos: i64, row: i64, col: i64, x: i64, role: DisplayPointRole) -> DisplayPointSnapshot {

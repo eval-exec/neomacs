@@ -44,7 +44,7 @@ fn native_character_table_initialization_refuses_borrowed_inputs() {
     let before = eval
         .window_layout_attempt_freshness(frame, window, buffer)
         .unwrap();
-    crate::window::display::note_char_table_layout_mutation();
+    crate::window::note_char_table_layout_mutation();
     let after = eval
         .window_layout_attempt_freshness_after_span(&before, WindowLayoutLispAdmission::NativeOnly)
         .unwrap();

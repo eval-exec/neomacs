@@ -1,8 +1,10 @@
 use super::*;
+use crate::window::WindowDisplaySnapshot;
 use crate::window::{
     DisplayPointRole, DisplayPointRow, DisplayPointRows, DisplayPointSnapshot, DisplayRowSnapshot,
     PresentedBodyRowSnapshot, WindowCursorKind, WindowCursorPos, WindowCursorSnapshot,
 };
+use neovm_eval::emacs_core::eval::data::window_state::{GeometryPositionsMode, PresentationCursor};
 use std::sync::Arc;
 
 fn point(pos: i64, row: i64, col: i64, x: i64) -> DisplayPointSnapshot {

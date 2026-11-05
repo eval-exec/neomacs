@@ -1,4 +1,5 @@
 use super::*;
+use neovm_value::value::Value;
 #[test]
 fn gnu_frame_alpha_components() {
     assert_eq!(component(Value::fixnum(1), 1.0).unwrap(), 0.01);

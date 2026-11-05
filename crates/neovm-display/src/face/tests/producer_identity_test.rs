@@ -4,6 +4,7 @@ use neovm_value::intern::{
     intern, intern_calls, intern_lisp_string, intern_uninterned, is_canonical_id,
     reset_intern_calls, unintern_canonical_id,
 };
+use neovm_value::value::ProducerSymbolName;
 
 struct ScratchRoots(usize);
 

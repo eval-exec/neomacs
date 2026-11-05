@@ -619,7 +619,8 @@ impl Eq for DisplayPointRows {}
 
 /// Owned numeric traversal state over immutable shared cell arrays. A live
 /// borrow prevents producer mutation; concurrent readers share no cursor state.
-enum PointRowsIterOrder {
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) enum PointRowsIterOrder {
     Merge {
         heap: BinaryHeap<Reverse<(i64, usize, usize)>>,
     },
@@ -679,6 +680,7 @@ impl Iterator for DisplayPointRowsIter<'_> {
 impl ExactSizeIterator for DisplayPointRowsIter<'_> {}
 impl std::iter::FusedIterator for DisplayPointRowsIter<'_> {}
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum WindowDisplayPointIter<'a> {
     Flat(std::iter::Cloned<std::slice::Iter<'a, DisplayPointSnapshot>>),
     Rows(DisplayPointRowsIter<'a>),

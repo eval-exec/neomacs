@@ -382,6 +382,7 @@ fn message_echo_result(
 /// batch is not silent -- it prints a bare newline unless the cursor is in the
 /// echo area, and that is what makes each keystroke of a keyboard macro visible
 /// on stderr, since the command loop clears the echo area per iteration.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn stderr_message_ends_with_newline(
     message_is_string: bool,
     cursor_in_echo_area: bool,

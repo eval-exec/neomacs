@@ -22,7 +22,7 @@ fn nonmarking_and_signaling_fontifiers_remain_lisp_boundaries() {
         assert!(outcome.entered_callbacks());
         assert!(!outcome.requires_layout_retry());
         assert_eq!(
-            super::super::super::print::print_value(
+            neovm_eval::emacs_core::print::print_value(
                 &eval.eval_str("fontification-test-calls").unwrap()
             ),
             "(1)"

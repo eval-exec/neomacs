@@ -150,7 +150,7 @@ fn face_change_walks_only_frames_whose_realizations_stay_valid() {
 
 #[test]
 fn default_realization_binding_restores_after_lisp_error() {
-    let mut context = super::super::super::eval::Context::new();
+    let mut context = neovm_eval::emacs_core::eval::Context::new();
     context.set_variable("inhibit-redisplay", Value::NIL);
     let mut scope = RealizationBinding::enter(&mut context, "inhibit-redisplay", Value::T)
         .expect("ordinary special variable accepts its binding");
@@ -171,7 +171,7 @@ fn default_realization_binding_restores_after_lisp_error() {
 
 #[test]
 fn default_realization_binding_drop_restores_native_state() {
-    let mut context = super::super::super::eval::Context::new();
+    let mut context = neovm_eval::emacs_core::eval::Context::new();
     context.set_variable("inhibit-redisplay", Value::fixnum(7));
     {
         let _scope = RealizationBinding::enter(&mut context, "inhibit-redisplay", Value::T)
@@ -223,7 +223,7 @@ fn foreground_underline_symbol_does_not_become_a_color_name() {
 
 #[test]
 fn initial_terminal_faces_hide_creation_colors_and_restore_owners() {
-    let mut context = super::super::super::eval::Context::new();
+    let mut context = neovm_eval::emacs_core::eval::Context::new();
     let frame = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut context);
     let foreground = Value::string("#123456");
     let background = Value::string("#654321");

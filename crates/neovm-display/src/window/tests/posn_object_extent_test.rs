@@ -1,10 +1,14 @@
 use super::*;
+use crate::window::WindowDisplaySnapshot;
 use crate::window::{
     DisplayPointRole, DisplayPointRow, DisplayPointSnapshot, PointCell, PresentedBodyRowSnapshot,
     WindowId,
 };
+use neomacs_display_protocol::glyph_matrix::GlyphArea;
+use neomacs_display_protocol::posn_object_extent::PosnObjectExtent;
 use neomacs_display_protocol::posn_object_extent::{PosnMatrixRow, PosnMatrixSnapshot};
 use neovm_edit::buffer::LispCharPos1;
+use std::ffi::OsStr;
 use std::sync::Arc;
 
 fn point(row: i64, col: i64, role: DisplayPointRole) -> DisplayPointSnapshot {

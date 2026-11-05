@@ -1480,6 +1480,7 @@ pub enum DisplayPointRowsMode {
 
 /// Process-wide numeric policy published by OnceLock; readers share no cursor or Lisp state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum PointRowIterMode {
     Off,
     On,
@@ -1514,6 +1515,7 @@ pub(crate) enum Cells {
 }
 
 #[derive(Clone)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum PointOrder {
     /// Emission order already satisfies the exact stable index key. This proof
     /// belongs to immutable row data and needs no allocated permutation.
@@ -5307,6 +5309,7 @@ pub enum GeometryError {
 /// Numeric process-wide mode published by OnceLock; safe to copy across threads.
 /// Contains no Lisp values, live window references, or mutable evaluator state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum GeometryPositionsMode {
     Off,
     On,

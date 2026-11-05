@@ -1,4 +1,6 @@
 use super::*;
+use crate::window::{DisplayPointRole, DisplayPointSnapshot};
+use neovm_value::value::positions::LispCharPos1;
 
 fn point(pos: i64, row: i64, col: i64, x: i64, y: i64) -> DisplayPointSnapshot {
     DisplayPointSnapshot {

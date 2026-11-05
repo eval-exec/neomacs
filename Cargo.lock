@@ -4376,6 +4376,8 @@ name = "neovm-display"
 version = "0.0.20"
 dependencies = [
  "enum-map",
+ "libc",
+ "malachite",
  "neomacs-display-protocol",
  "neomacs-video-model",
  "neovm-edit",
@@ -4389,6 +4391,7 @@ dependencies = [
  "smallvec",
  "static_assertions",
  "strum",
+ "tempfile",
  "thiserror 2.0.20",
  "tracing",
 ]

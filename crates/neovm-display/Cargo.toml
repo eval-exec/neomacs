@@ -44,3 +44,11 @@ neovm-value = { path = "../neovm-value", features = ["test-support"] }
 # Consumer gate: value's test-support widens CacheRootScan::Snapshot, so the
 # text regex arm that matches it must be compiled in the same test graph.
 neovm-text = { path = "../neovm-text", features = ["test-support"] }
+# Downward eval test-support edge: the re-homed display oracles reach the
+# signed eval A-prime fixtures (pdump converters, point-row modes, font
+# fixtures) through lower-crate rows.
+neovm-eval = { path = "../neovm-eval", features = ["test-support", "redisplay-test-policy"] }
+# Display unit tests use GNU oracle and tempfile fixtures directly.
+tempfile.workspace = true
+libc.workspace = true
+malachite.workspace = true

@@ -261,10 +261,11 @@ fn face_table_pdump_preserves_lisp_owned_attrs() {
     assert!(dump.face_table.faces.is_empty());
 
     let mut decoder = neovm_eval::emacs_core::pdump::convert::LoadDecoder::new(&dump.tagged_heap);
-    neovm_eval::emacs_core::pdump::convert::load_symbol_table(&dump.symbol_table).expect("remap");
+    neovm_eval::test_support::authority::load_symbol_table_for_test(&dump.symbol_table)
+        .expect("remap");
     let restored =
         neovm_eval::emacs_core::pdump::convert::load_face_table(&mut decoder, &dump.face_table);
-    neovm_eval::emacs_core::pdump::convert::finish_load_interner();
+    neovm_eval::test_support::authority::finish_load_interner_for_test();
     let restored_face = restored.get("pdump-face").expect("restored face");
     assert!(
         restored_face

@@ -4555,6 +4555,7 @@ fn dump_font_spec_entry(entry: FontSpecEntry) -> DumpFontSpecEntry {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn dump_fontset_registry() -> DumpFontsetRegistry {
     let snapshot = crate::emacs_core::eval::lifecycle::fontset_registry_snapshot();
     DumpFontsetRegistry {
@@ -4888,6 +4889,7 @@ pub(crate) fn dump_watcher_list(
 // --- Top-level dump ---
 
 /// Snapshot a live evaluator without resetting its process-local history.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn dump_evaluator(eval: &Context) -> DumpContextState {
     dump_evaluator_for_session(eval, DumpSession::LiveSnapshot)
 }
@@ -7175,6 +7177,7 @@ fn load_face(decoder: &mut LoadDecoder, df: &DumpFace) -> Face {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn load_face_table(decoder: &mut LoadDecoder, dft: &DumpFaceTable) -> FaceTable {
     if !dft.face_ids.is_empty() {
         FaceTable::from_dump_sym_ids(

@@ -620,6 +620,31 @@ pub mod authority {
         let mut guard = crate::emacs_core::eval::GcInhibitGuard::enter(context);
         body(guard.context())
     }
+
+    /// P1-HOOKS-2 write rule: `load_symbol_table` interns the dump's names and
+    /// installs the thread-local PDUMP_LOAD_*_REMAP tables. That is a
+    /// logic-state write of names and remaps, not GC/heap memory, so the
+    /// cross-crate route is a SAFE fence and the converter stays pub(crate).
+    pub fn load_symbol_table_for_test(
+        table: &crate::emacs_core::pdump::types::DumpSymbolTable,
+    ) -> Result<(), crate::emacs_core::pdump::DumpError> {
+        crate::emacs_core::pdump::convert::load_symbol_table(table)
+    }
+
+    /// P1-HOOKS-2 write rule: installs the dumped fontset snapshot into the
+    /// fontset registry (logic-state write; safe fence, converter stays
+    /// pub(crate)).
+    pub fn load_fontset_registry_for_test(
+        dfr: &crate::emacs_core::pdump::types::DumpFontsetRegistry,
+    ) {
+        crate::emacs_core::pdump::convert::load_fontset_registry(dfr)
+    }
+
+    /// P1-HOOKS-2 write rule: clears the thread-local PDUMP_LOAD_* remaps
+    /// (logic-state write; safe fence, converter stays pub(crate)).
+    pub fn finish_load_interner_for_test() {
+        crate::emacs_core::pdump::convert::finish_load_interner();
+    }
 }
 
 /// Test-support `aset` over a caller-owned Bare argument slice (K1 fence-ask

@@ -14,7 +14,6 @@ mod popup_idle_redisplay;
 mod resources_test;
 
 use super::*;
-use crate::EvalError;
 use crate::emacs_core::dispnew::pure::{
     builtin_internal_show_cursor, builtin_internal_show_cursor_p, builtin_open_termscript,
     builtin_redraw_frame, builtin_send_string_to_terminal, reset_dispnew_thread_locals,
@@ -28,6 +27,7 @@ use crate::emacs_core::terminal::pure::{
 };
 use neomacs_display_protocol::SelectionOwner;
 use neovm_eval::emacs_core::eval::{DisplayHost, GuiFrameHostRequest, PopupMenuRequest};
+use neovm_value::error::EvalError;
 use neovm_value::intern::resolve_sym;
 use std::fs;
 use std::sync::{Arc, Mutex};
@@ -4306,8 +4306,8 @@ fn x_popup_menu_interactive_keymap_returns_selected_event() {
     let hidden = Arc::clone(&host.hidden);
     eval.set_display_host(Box::new(host));
 
-    let menu = crate::emacs_core::keymap::make_sparse_list_keymap();
-    crate::emacs_core::keymap::list_keymap_define(
+    let menu = neovm_eval::emacs_core::eval::keymap_lookup::make_sparse_list_keymap();
+    neovm_eval::emacs_core::eval::keymap_lookup::list_keymap_define(
         menu,
         Value::symbol("open"),
         Value::cons(Value::string("Open"), Value::T),
@@ -4342,14 +4342,14 @@ fn x_popup_menu_interactive_keymap_returns_selected_event() {
 #[test]
 fn old_style_menu_help_keeps_the_real_submenu_definition() {
     let mut eval = Context::new();
-    let submenu = crate::emacs_core::keymap::make_sparse_list_keymap();
+    let submenu = neovm_eval::emacs_core::eval::keymap_lookup::make_sparse_list_keymap();
     let definition = Value::cons(
         Value::string("Parent"),
         Value::cons(Value::string("Open child choices"), submenu),
     );
 
-    let menu = crate::emacs_core::keymap::make_sparse_list_keymap();
-    crate::emacs_core::keymap::list_keymap_define(
+    let menu = neovm_eval::emacs_core::eval::keymap_lookup::make_sparse_list_keymap();
+    neovm_eval::emacs_core::eval::keymap_lookup::list_keymap_define(
         menu,
         Value::symbol("parent"),
         definition,
@@ -4394,8 +4394,8 @@ fn x_popup_menu_publishes_selected_item_help_and_keeps_it_after_teardown() {
         "Previous menu help",
     )));
 
-    let menu = crate::emacs_core::keymap::make_sparse_list_keymap();
-    crate::emacs_core::keymap::list_keymap_define(
+    let menu = neovm_eval::emacs_core::eval::keymap_lookup::make_sparse_list_keymap();
+    neovm_eval::emacs_core::eval::keymap_lookup::list_keymap_define(
         menu,
         Value::symbol("open"),
         Value::list(vec![
@@ -4407,7 +4407,7 @@ fn x_popup_menu_publishes_selected_item_help_and_keeps_it_after_teardown() {
         ]),
         neovm_value::tagged::SymbolMode::Bare,
     );
-    crate::emacs_core::keymap::list_keymap_define(
+    neovm_eval::emacs_core::eval::keymap_lookup::list_keymap_define(
         menu,
         Value::symbol("plain"),
         Value::list(vec![
@@ -4544,16 +4544,16 @@ fn x_popup_menu_interactive_keymap_collapses_submenu_on_tty() {
     let shown = Arc::clone(&host.shown);
     eval.set_display_host(Box::new(host));
 
-    let submenu = crate::emacs_core::keymap::make_sparse_list_keymap();
-    crate::emacs_core::keymap::list_keymap_define(
+    let submenu = neovm_eval::emacs_core::eval::keymap_lookup::make_sparse_list_keymap();
+    neovm_eval::emacs_core::eval::keymap_lookup::list_keymap_define(
         submenu,
         Value::symbol("visual-line-mode"),
         Value::cons(Value::string("Visual Line Mode"), Value::T),
         neovm_value::tagged::SymbolMode::Bare,
     );
 
-    let menu = crate::emacs_core::keymap::make_sparse_list_keymap();
-    crate::emacs_core::keymap::list_keymap_define(
+    let menu = neovm_eval::emacs_core::eval::keymap_lookup::make_sparse_list_keymap();
+    neovm_eval::emacs_core::eval::keymap_lookup::list_keymap_define(
         menu,
         Value::symbol("line-wrapping"),
         Value::cons(Value::string("Line Wrapping in this Buffer"), submenu),
@@ -4600,16 +4600,16 @@ fn x_popup_menu_interactive_submenu_selection_returns_full_event_path() {
 
     eval.set_display_host(Box::new(RecordingPopupHost::default()));
 
-    let submenu = crate::emacs_core::keymap::make_sparse_list_keymap();
-    crate::emacs_core::keymap::list_keymap_define(
+    let submenu = neovm_eval::emacs_core::eval::keymap_lookup::make_sparse_list_keymap();
+    neovm_eval::emacs_core::eval::keymap_lookup::list_keymap_define(
         submenu,
         Value::symbol("visual-line-mode"),
         Value::cons(Value::string("Visual Line Mode"), Value::T),
         neovm_value::tagged::SymbolMode::Bare,
     );
 
-    let menu = crate::emacs_core::keymap::make_sparse_list_keymap();
-    crate::emacs_core::keymap::list_keymap_define(
+    let menu = neovm_eval::emacs_core::eval::keymap_lookup::make_sparse_list_keymap();
+    neovm_eval::emacs_core::eval::keymap_lookup::list_keymap_define(
         menu,
         Value::symbol("line-wrapping"),
         Value::cons(Value::string("Line Wrapping in this Buffer"), submenu),
@@ -4646,8 +4646,9 @@ fn x_popup_menu_interactive_ignores_tty_mouse_navigation() {
 
     eval.set_display_host(Box::new(RecordingPopupHost::default()));
 
-    let tty_menu_navigation_map = crate::emacs_core::keymap::make_sparse_list_keymap();
-    crate::emacs_core::keymap::list_keymap_define(
+    let tty_menu_navigation_map =
+        neovm_eval::emacs_core::eval::keymap_lookup::make_sparse_list_keymap();
+    neovm_eval::emacs_core::eval::keymap_lookup::list_keymap_define(
         tty_menu_navigation_map,
         Value::symbol("mouse-movement"),
         Value::symbol("tty-menu-select"),
@@ -4656,8 +4657,8 @@ fn x_popup_menu_interactive_ignores_tty_mouse_navigation() {
     eval.set_variable("tty-menu-navigation-map", tty_menu_navigation_map);
     eval.set_variable("track-mouse", Value::T);
 
-    let menu = crate::emacs_core::keymap::make_sparse_list_keymap();
-    crate::emacs_core::keymap::list_keymap_define(
+    let menu = neovm_eval::emacs_core::eval::keymap_lookup::make_sparse_list_keymap();
+    neovm_eval::emacs_core::eval::keymap_lookup::list_keymap_define(
         menu,
         Value::symbol("first"),
         Value::cons(Value::string("First"), Value::T),
@@ -4699,14 +4700,14 @@ fn x_popup_menu_interactive_keyboard_select_roots_selected_event() {
 
     eval.set_display_host(Box::new(RecordingPopupHost::default()));
 
-    let menu = crate::emacs_core::keymap::make_sparse_list_keymap();
-    crate::emacs_core::keymap::list_keymap_define(
+    let menu = neovm_eval::emacs_core::eval::keymap_lookup::make_sparse_list_keymap();
+    neovm_eval::emacs_core::eval::keymap_lookup::list_keymap_define(
         menu,
         Value::symbol("second"),
         Value::cons(Value::string("Second"), Value::T),
         neovm_value::tagged::SymbolMode::Bare,
     );
-    crate::emacs_core::keymap::list_keymap_define(
+    neovm_eval::emacs_core::eval::keymap_lookup::list_keymap_define(
         menu,
         Value::symbol("first"),
         Value::cons(Value::string("First"), Value::T),
@@ -4748,8 +4749,8 @@ fn x_popup_menu_interactive_cancel_returns_nil() {
 
     eval.set_display_host(Box::new(RecordingPopupHost::default()));
 
-    let menu = crate::emacs_core::keymap::make_sparse_list_keymap();
-    crate::emacs_core::keymap::list_keymap_define(
+    let menu = neovm_eval::emacs_core::eval::keymap_lookup::make_sparse_list_keymap();
+    neovm_eval::emacs_core::eval::keymap_lookup::list_keymap_define(
         menu,
         Value::symbol("open"),
         Value::cons(Value::string("Open"), Value::T),
@@ -4789,8 +4790,8 @@ fn x_popup_menu_interactive_menu_bar_position_anchors_below_menu_bar() {
     let shown = Arc::clone(&host.shown);
     eval.set_display_host(Box::new(host));
 
-    let menu = crate::emacs_core::keymap::make_sparse_list_keymap();
-    crate::emacs_core::keymap::list_keymap_define(
+    let menu = neovm_eval::emacs_core::eval::keymap_lookup::make_sparse_list_keymap();
+    neovm_eval::emacs_core::eval::keymap_lookup::list_keymap_define(
         menu,
         Value::symbol("open"),
         Value::cons(Value::string("Open"), Value::T),
@@ -4861,8 +4862,8 @@ fn x_popup_menu_interactive_menu_bar_position_uses_pending_native_anchor() {
         height: 18,
     });
 
-    let menu = crate::emacs_core::keymap::make_sparse_list_keymap();
-    crate::emacs_core::keymap::list_keymap_define(
+    let menu = neovm_eval::emacs_core::eval::keymap_lookup::make_sparse_list_keymap();
+    neovm_eval::emacs_core::eval::keymap_lookup::list_keymap_define(
         menu,
         Value::symbol("open"),
         Value::cons(Value::string("Open"), Value::T),
@@ -4912,23 +4913,23 @@ fn x_popup_menu_interactive_menu_bar_right_returns_next_menu_position() {
 
     eval.set_display_host(Box::new(RecordingPopupHost::default()));
 
-    let menu_bar = crate::emacs_core::keymap::make_sparse_list_keymap();
-    let file_menu = crate::emacs_core::keymap::make_sparse_list_keymap();
-    let help_menu = crate::emacs_core::keymap::make_sparse_list_keymap();
-    let global_map = crate::emacs_core::keymap::make_sparse_list_keymap();
-    crate::emacs_core::keymap::list_keymap_define(
+    let menu_bar = neovm_eval::emacs_core::eval::keymap_lookup::make_sparse_list_keymap();
+    let file_menu = neovm_eval::emacs_core::eval::keymap_lookup::make_sparse_list_keymap();
+    let help_menu = neovm_eval::emacs_core::eval::keymap_lookup::make_sparse_list_keymap();
+    let global_map = neovm_eval::emacs_core::eval::keymap_lookup::make_sparse_list_keymap();
+    neovm_eval::emacs_core::eval::keymap_lookup::list_keymap_define(
         menu_bar,
         Value::symbol("help-menu"),
         Value::cons(Value::string("Help"), help_menu),
         neovm_value::tagged::SymbolMode::Bare,
     );
-    crate::emacs_core::keymap::list_keymap_define(
+    neovm_eval::emacs_core::eval::keymap_lookup::list_keymap_define(
         menu_bar,
         Value::symbol("file"),
         Value::cons(Value::string("File"), file_menu),
         neovm_value::tagged::SymbolMode::Bare,
     );
-    crate::emacs_core::keymap::list_keymap_define(
+    neovm_eval::emacs_core::eval::keymap_lookup::list_keymap_define(
         global_map,
         Value::symbol("menu-bar"),
         menu_bar,
@@ -4941,7 +4942,7 @@ fn x_popup_menu_interactive_menu_bar_right_returns_next_menu_position() {
         Value::list(vec![Value::symbol("help-menu")]),
     );
 
-    crate::emacs_core::keymap::list_keymap_define(
+    neovm_eval::emacs_core::eval::keymap_lookup::list_keymap_define(
         file_menu,
         Value::symbol("open"),
         Value::cons(Value::string("Open"), Value::T),
@@ -4986,8 +4987,8 @@ fn x_popup_menu_preserves_heading_click_queued_before_old_cancellation() {
     let tx = crate::host_input::HostInputPublisher::install(&mut eval);
 
     eval.set_display_host(Box::new(RecordingPopupHost::default()));
-    let menu = crate::emacs_core::keymap::make_sparse_list_keymap();
-    crate::emacs_core::keymap::list_keymap_define(
+    let menu = neovm_eval::emacs_core::eval::keymap_lookup::make_sparse_list_keymap();
+    neovm_eval::emacs_core::eval::keymap_lookup::list_keymap_define(
         menu,
         Value::symbol("entry"),
         Value::cons(Value::string("Entry"), Value::T),

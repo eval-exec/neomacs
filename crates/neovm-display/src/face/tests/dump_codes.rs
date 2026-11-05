@@ -1,4 +1,5 @@
 use super::*;
+use neovm_value::display_vocab::FontWeight;
 use strum::IntoEnumIterator;
 
 #[test]

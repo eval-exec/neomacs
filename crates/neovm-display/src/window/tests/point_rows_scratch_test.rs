@@ -1,5 +1,8 @@
 //! Freezing must preserve stable indexes and immutable ownership across reuse.
 use super::*;
+use crate::window::{DisplayPointRole, DisplayPointSnapshot};
+use neovm_eval::emacs_core::eval::data::window_state::PointOrder;
+use neovm_value::value::positions::LispCharPos1;
 
 fn point(pos: i64, col: i64, x: i64) -> DisplayPointSnapshot {
     DisplayPointSnapshot {
