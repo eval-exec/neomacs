@@ -82,3 +82,15 @@ mod emacs_core_lisp_native_builtins_tests_builtins_test_rs;
 #[cfg(test)]
 #[path = "emacs_core/runtime/eval/keyboard/tests/help_echo_substitution.rs"]
 mod emacs_core_runtime_eval_keyboard_tests_help_echo_substitution_rs;
+
+#[cfg(test)]
+#[path = "emacs_core/runtime/eval/keyboard/tests/gnu_help_echo_direct_oracle.rs"]
+mod emacs_core_runtime_eval_keyboard_tests_gnu_help_echo_direct_oracle_rs;
+
+#[cfg(test)]
+#[path = "emacs_core/runtime/eval/keyboard/tests/gnu_read_timer_redisplay_oracle.rs"]
+mod emacs_core_runtime_eval_keyboard_tests_gnu_read_timer_redisplay_oracle_rs;
+
+#[cfg(test)]
+#[path = "emacs_core/runtime/eval/keyboard/tests/gnu_timed_read_redisplay_oracle.rs"]
+mod emacs_core_runtime_eval_keyboard_tests_gnu_timed_read_redisplay_oracle_rs;

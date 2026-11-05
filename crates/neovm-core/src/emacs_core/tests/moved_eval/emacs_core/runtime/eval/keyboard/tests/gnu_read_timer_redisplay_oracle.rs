@@ -144,7 +144,7 @@ fn assert_gnu_oracle(form: &str, fixture_name: &str, fixture: &str) {
     let gnu = String::from_utf8(output.stdout.clone()).expect("GNU UTF-8 stdout");
     let expected = if std::env::var("UPDATE_EXPECT").as_deref() == Ok("1") {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("src/emacs_core/runtime/eval/keyboard/tests")
+            .join("src/emacs_core/tests/moved_eval/emacs_core/runtime/eval/keyboard/tests")
             .join(fixture_name);
         if std::fs::read(&path).ok().as_deref() != Some(output.stdout.as_slice()) {
             std::fs::write(&path, &output.stdout).expect("refresh exclusively from GNU stdout");

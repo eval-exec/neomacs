@@ -2,7 +2,7 @@
 //! GNU keyboard.c:2221-2228 inspects character zero only when nonempty;
 //! keyboard.c:3346-3358 dispatches a help-echo event through show_help_echo.
 //! The fixture is refreshed exclusively from GNU stdout with UPDATE_EXPECT=1.
-use super::*;
+use neovm_value::value::Value;
 
 const GNU_HELP_ECHO_FORM: &str = r#"(progn
   (unless (string= emacs-version "31.1")
@@ -131,7 +131,7 @@ fn gnu_help_echo_substitution_direct_helper_matches_actual_event_path() {
     let actual_gnu = String::from_utf8(output.stdout.clone()).expect("GNU oracle UTF-8 stdout");
     let expected = if std::env::var("UPDATE_EXPECT").as_deref() == Ok("1") {
         let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("src/emacs_core/runtime/eval/keyboard/tests/gnu_help_echo_substitution.expected");
+            .join("src/emacs_core/tests/moved_eval/emacs_core/runtime/eval/keyboard/tests/gnu_help_echo_substitution.expected");
         // Never write a NeoVM result to the oracle fixture.
         std::fs::write(&fixture, &output.stdout).expect("refresh fixture exclusively from GNU");
         std::fs::read_to_string(fixture).expect("read freshly written GNU fixture")
