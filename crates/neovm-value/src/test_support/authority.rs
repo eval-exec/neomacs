@@ -47,6 +47,29 @@ pub use crate::tagged::gc::mutator_registration::retry::{
 #[doc(hidden)]
 pub use crate::tagged::gc::mutator_registration::symbol_functions::retry::rendezvous;
 
+/// Fence delegates for the re-homed root-slot tests (peer-signed rows): the
+/// registry poison hook and the REGWAIT-GAP restore-retry begin. The originals
+/// stay restricted; the module is crate-visible, so this re-export is their
+/// only public path.
+pub use crate::tagged::gc::mutator_registration::test_fences::{
+    begin_restore_retry_for_test, poison_registry_for_test,
+};
+
+/// Fence delegate for the deterministic host-side root-table contention
+/// scope. The original stays `cfg(any(test, feature = "test-support"))`
+/// `pub(crate)`, so this delegate is its only cross-crate route.
+pub fn with_root_table_lock_for_test(heap: crate::tagged::gc::HeapIdentity, op: impl FnOnce()) {
+    crate::tagged::transport::with_root_table_lock_for_test(heap, op)
+}
+
+/// Typed fence hook (AUTHORITY row): exhaust the owner's root-slot
+/// generation to force the overflow refusal path. There is deliberately no
+/// general generation setter; the state field stays private.
+#[cfg(any(test, feature = "test-support"))]
+pub fn exhaust_root_slot_generation_for_test(run: &mut crate::tagged::gc::RunAccess<'_, '_>) {
+    run.exhaust_root_slot_generation_for_test();
+}
+
 /// # Safety
 /// prepare must return the original retained keeper's epoch and backing,
 /// without executing Lisp, resuming owners, or leaking a manager reference.

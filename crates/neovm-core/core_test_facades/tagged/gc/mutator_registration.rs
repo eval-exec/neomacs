@@ -26,3 +26,7 @@ mod native_extent_tests;
 #[cfg(test)]
 #[path = "../../../core_tests/tagged/gc/mutator_registration/era_fixtures.rs"]
 pub(crate) mod era_fixtures;
+
+#[cfg(test)]
+#[path = "../../../core_tests/tagged/gc/mutator_registration/root_slot_tests.rs"]
+mod root_slot_tests;

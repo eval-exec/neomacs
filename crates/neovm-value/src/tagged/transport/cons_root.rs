@@ -132,7 +132,8 @@ impl<'owner, 'era> RunAccess<'owner, 'era> {
 }
 
 impl SharedRoot {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn cons_word_for_test(&self) -> usize {
         self.word()
     }

@@ -520,6 +520,24 @@ impl PublishedGcImage {
         }
     }
 
+    /// VIS row: copied count of the image's root words (the value
+    /// `summary().root_words` returns) for the re-homed root-slot tests.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn root_words_for_test(&self) -> usize {
+        self.facts.roots.len()
+    }
+
+    /// VIS row: copied bits of every word `visit_logs` yields, in the same
+    /// order, for the re-homed root-slot tests.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn log_value_bits_for_test(&self) -> Vec<usize> {
+        let mut out = Vec::new();
+        self.visit_logs(|word| out.push(word.value().bits()));
+        out
+    }
+
     /// Complete read-only work census, including families that cannot be
     /// represented as MarkWord. This does not perform a collector fold.
     pub(in crate::tagged::gc) fn visit_work(&self, mut visitor: impl FnMut(PublishedGcWork<'_>)) {

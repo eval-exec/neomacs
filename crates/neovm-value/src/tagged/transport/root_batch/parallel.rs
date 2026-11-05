@@ -380,10 +380,12 @@ pub(crate) struct ParallelRootBatchReader<'read> {
 }
 
 impl ParallelRootBatchReader<'_> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn append_words(&self, out: &mut Vec<usize>) {
         out.extend_from_slice(&self.payload.words[..self.payload.used]);
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn finish(mut self) -> Result<(), ParallelRootBatchError> {
         self.control
             .readers

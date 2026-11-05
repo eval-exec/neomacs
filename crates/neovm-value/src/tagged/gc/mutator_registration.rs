@@ -22,6 +22,8 @@ mod construction;
 mod execution;
 #[cfg(feature = "test-support")]
 pub mod execution;
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) mod test_fences;
 pub(crate) use execution::EraCoreExecutionExt;
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) use symbol_authority::{
@@ -957,8 +959,6 @@ mod collection_scalar_tests;
 
 #[cfg(test)]
 mod cons_allocation_tests;
-#[cfg(test)]
-mod root_slot_tests;
 
 #[cfg(test)]
 mod slice_tests;

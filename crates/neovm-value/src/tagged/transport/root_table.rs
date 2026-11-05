@@ -423,7 +423,7 @@ pub fn collect_shared_root_gc_roots(heap: &TaggedHeap, out: &mut Vec<TaggedValue
 }
 
 /// Deterministic host-side contention, without sharing a heap or Lisp words.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn with_root_table_lock_for_test(heap: HeapIdentity, op: impl FnOnce()) {
     let table = existing_table(heap).expect("fixture owns a root table");
     let _cells = table.lock();

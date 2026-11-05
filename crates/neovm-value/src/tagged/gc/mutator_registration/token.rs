@@ -525,9 +525,51 @@ impl<'era> Mutator<'era> {
     }
 }
 
+/// Copied owner-GC census for the re-homed root-slot tests. Every field is a
+/// copy; the owner state and the root bank stay internal.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OwnerGcSnapshot {
+    pub allocated_count: usize,
+    pub bytes_since_gc: usize,
+    pub memory_use_counts: [u64; crate::tagged::gc::MEMORY_USE_COUNT_LEN],
+    pub root_words: Vec<usize>,
+    pub root_capacity: usize,
+    pub root_slot_generation: u64,
+}
+
 impl RunAccess<'_, '_> {
     pub(in crate::tagged::gc) fn state(&mut self) -> &mut OwnerGcState {
         self.owner.local.as_mut().expect("resident owner state")
+    }
+
+    /// VIS row: copied owner-GC census for the re-homed root-slot tests.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn owner_gc_snapshot_for_test(&mut self) -> OwnerGcSnapshot {
+        let state = self.state();
+        OwnerGcSnapshot {
+            allocated_count: state.hot.allocated_count,
+            bytes_since_gc: state.hot.bytes_since_gc,
+            memory_use_counts: state.hot.memory_use_counts,
+            root_words: state
+                .root_scratch
+                .iter()
+                .map(|w| w.value().bits())
+                .collect(),
+            root_capacity: state.root_scratch.capacity(),
+            root_slot_generation: state.root_slot_generation,
+        }
+    }
+
+    /// Fence hook (AUTHORITY row): exhausts the owner's root-slot generation
+    /// to force the overflow refusal path. There is deliberately no general
+    /// generation setter; the state field itself stays private.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub(crate) fn exhaust_root_slot_generation_for_test(&mut self) {
+        self.state().root_slot_generation = u64::MAX;
     }
 
     /// Era follow-up row (peer 10:5xZ item 3): copied owner region-statistics

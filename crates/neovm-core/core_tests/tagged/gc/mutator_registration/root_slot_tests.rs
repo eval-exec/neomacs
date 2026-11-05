@@ -2,9 +2,14 @@
 #![cfg(not(feature = "gc-memory-telemetry"))]
 use super::*;
 use crate::emacs_core::eval::Context;
-use crate::tagged::gc::ProofEra as ParallelHeapEra;
-use crate::tagged::transport::{SharedRoot, with_root_table_lock_for_test};
+use crate::tagged::gc::mutator_registration::era_fixtures::EraFixtureExt;
+use crate::tagged::transport::SharedRoot;
 use crate::tagged::value::TaggedValue as Value;
+use neovm_eval::test_support::authority::WorldProofEra as ParallelHeapEra;
+use neovm_value::test_support::authority::{
+    begin_restore_retry_for_test, exhaust_root_slot_generation_for_test, poison_registry_for_test,
+    with_root_table_lock_for_test,
+};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 use std::thread;
@@ -14,8 +19,8 @@ fn seeds(context: &mut Context) -> (SharedRoot, SharedRoot) {
     // SAFETY: these immediate values are live on this serial source heap.
     unsafe {
         (
-            SharedRoot::new(&context.tagged_heap, Value::fixnum(8123)),
-            SharedRoot::new(&context.tagged_heap, Value::NIL),
+            SharedRoot::new(context.tagged_heap(), Value::fixnum(8123)),
+            SharedRoot::new(context.tagged_heap(), Value::NIL),
         )
     }
 }
@@ -44,7 +49,11 @@ fn finish_owners<const N: usize>(era: &ParallelHeapEra<'_>, mut owners: [Mutator
     }
     let mut stopped = era.stop().unwrap();
     era.return_cons_storage(&stopped).unwrap();
-    era.collect_stopped(&mut stopped).unwrap();
+    era.collect_stopped(
+        &mut stopped,
+        neovm_eval::test_support::authority::baton_collect_parallel_world_roots,
+    )
+    .unwrap();
     complete(stopped);
     for owner in owners {
         owner.retire_rooted(&[]).unwrap();
@@ -67,18 +76,14 @@ struct Snapshot {
 }
 fn snapshot(run: &mut RunAccess<'_, '_>) -> Snapshot {
     let region = run.cons_region_for_test();
-    let local = run.state();
+    let local = run.owner_gc_snapshot_for_test();
     Snapshot {
-        allocated: local.hot.allocated_count,
-        bytes: local.hot.bytes_since_gc,
-        memory: local.hot.memory_use_counts.to_vec(),
+        allocated: local.allocated_count,
+        bytes: local.bytes_since_gc,
+        memory: local.memory_use_counts.to_vec(),
         region,
-        roots: local
-            .root_scratch
-            .iter()
-            .map(|w| w.value().bits())
-            .collect(),
-        capacity: local.root_scratch.capacity(),
+        roots: local.root_words,
+        capacity: local.root_capacity,
         generation: local.root_slot_generation,
     }
 }
@@ -112,19 +117,25 @@ fn local_chain_is_rooted_only_by_its_image_across_two_collections_then_clear_rec
                 let mut stopped = era.stop().unwrap();
                 era.return_cons_storage(&stopped).unwrap();
                 stopped
-                    .with_owner_image(owner.key(), |image| {
-                        assert_eq!(image.summary().root_words, 3);
-                        let mut roots = Vec::new();
-                        image.visit_logs(|word| roots.push(word.value().bits()));
+                    .with_owner_image_for_test(owner.key(), |image| {
+                        assert_eq!(image.root_words_for_test(), 3);
+                        let roots = image.log_value_bits_for_test();
                         assert!(roots.contains(words.last().unwrap()));
                     })
                     .unwrap();
-                era.collect_stopped(&mut stopped).unwrap();
+                era.collect_stopped(
+                    &mut stopped,
+                    neovm_eval::test_support::authority::baton_collect_parallel_world_roots,
+                )
+                .unwrap();
                 era.with_stopped_heap_for_test(&stopped, |heap| {
                     for &word in &words {
-                        assert!(heap.owns_heap_value_for_test(Value::from_bits(word)));
+                        // SAFETY: `word` is a tagged word copied from this
+                        // stopped heap's own root census.
+                        assert!(heap.owns_heap_value_for_test(unsafe { Value::from_bits(word) }));
                     }
-                    let mut cursor = Value::from_bits(*words.last().unwrap());
+                    // SAFETY: the same live tagged words from this stopped heap.
+                    let mut cursor = unsafe { Value::from_bits(*words.last().unwrap()) };
                     for _ in 0..words.len() {
                         // SAFETY: the exact stopped heap has just traced this
                         // complete graph from the owner's sole local census.
@@ -143,7 +154,7 @@ fn local_chain_is_rooted_only_by_its_image_across_two_collections_then_clear_rec
                 owner.leave_native().unwrap();
                 with_run(&mut owner, |run| {
                     assert_eq!(tail.word_for_test(run), *words.last().unwrap());
-                    assert_eq!(run.state().root_scratch.len(), 3);
+                    assert_eq!(run.root_bank_for_test().0, 3);
                 });
             }
             with_run(&mut owner, |run| run.clear_root_slots().unwrap());
@@ -154,10 +165,12 @@ fn local_chain_is_rooted_only_by_its_image_across_two_collections_then_clear_rec
         |context, words| {
             context.gc_collect_exact();
             for word in words {
+                // SAFETY: `word` is a tagged word copied from this
+                // Context's own heap census.
                 assert!(
                     !context
-                        .tagged_heap
-                        .owns_heap_value_for_test(Value::from_bits(word))
+                        .tagged_heap()
+                        .owns_heap_value_for_test(unsafe { Value::from_bits(word) })
                 );
             }
         },
@@ -169,12 +182,13 @@ fn local_cons_does_not_wait_for_the_shared_root_table_lock() {
     Context::with_test_collection_era(
         |context| {
             let input = seeds(context);
-            let value = context
-                .tagged_heap
-                .alloc_cons(Value::fixnum(99), Value::NIL);
+            // SAFETY: the serial setup is this Context's sole owner and runs
+            // no collection or callback through the view.
+            let value =
+                unsafe { context.tagged_heap_mut() }.alloc_cons(Value::fixnum(99), Value::NIL);
             // SAFETY: the serial setup keeps this root/table alive throughout
             // the lock witness; it is not an operand or result of local cons.
-            let anchor = unsafe { SharedRoot::new(&context.tagged_heap, value) };
+            let anchor = unsafe { SharedRoot::new(context.tagged_heap(), value) };
             (input, anchor)
         },
         |era, ((car, nil), anchor)| {
@@ -325,13 +339,14 @@ fn slots_of_another_owner_on_the_same_heap_cannot_be_inputs_or_destination() {
 fn dropped_and_forgotten_slot_handles_remain_roots_until_explicit_clear() {
     Context::with_test_collection_era(
         |context| {
-            let graph = context
-                .tagged_heap
-                .alloc_cons(Value::fixnum(567), Value::NIL);
+            // SAFETY: the serial setup is this Context's sole owner and runs
+            // no collection or callback through the view.
+            let graph =
+                unsafe { context.tagged_heap_mut() }.alloc_cons(Value::fixnum(567), Value::NIL);
             let word = graph.bits();
             // SAFETY: fresh live setup graph from this serial heap.
             (
-                unsafe { SharedRoot::new(&context.tagged_heap, graph) },
+                unsafe { SharedRoot::new(context.tagged_heap(), graph) },
                 word,
             )
         },
@@ -341,15 +356,21 @@ fn dropped_and_forgotten_slot_handles_remain_roots_until_explicit_clear() {
             with_run(&mut owner, |run| {
                 drop(run.root_slot(&source).unwrap());
                 std::mem::forget(run.root_slot(&source).unwrap());
-                assert_eq!(run.state().root_scratch.len(), 2);
+                assert_eq!(run.root_bank_for_test().0, 2);
             });
             drop(source);
             owner.enter_native(&[]).unwrap();
             let mut stopped = era.stop().unwrap();
             era.return_cons_storage(&stopped).unwrap();
-            era.collect_stopped(&mut stopped).unwrap();
+            era.collect_stopped(
+                &mut stopped,
+                neovm_eval::test_support::authority::baton_collect_parallel_world_roots,
+            )
+            .unwrap();
             era.with_stopped_heap_for_test(&stopped, |heap| {
-                assert!(heap.owns_heap_value_for_test(Value::from_bits(word)));
+                // SAFETY: `word` is a tagged word copied from this stopped
+                // heap's own root census.
+                assert!(heap.owns_heap_value_for_test(unsafe { Value::from_bits(word) }));
             })
             .unwrap();
             complete(stopped);
@@ -357,9 +378,15 @@ fn dropped_and_forgotten_slot_handles_remain_roots_until_explicit_clear() {
             with_run(&mut owner, |run| run.clear_root_slots().unwrap());
             owner.enter_native(&[]).unwrap();
             let mut stopped = era.stop().unwrap();
-            era.collect_stopped(&mut stopped).unwrap();
+            era.collect_stopped(
+                &mut stopped,
+                neovm_eval::test_support::authority::baton_collect_parallel_world_roots,
+            )
+            .unwrap();
             era.with_stopped_heap_for_test(&stopped, |heap| {
-                assert!(!heap.owns_heap_value_for_test(Value::from_bits(word)));
+                // SAFETY: `word` is a tagged word copied from this stopped
+                // heap's own root census.
+                assert!(!heap.owns_heap_value_for_test(unsafe { Value::from_bits(word) }));
             })
             .unwrap();
             complete(stopped);
@@ -376,7 +403,7 @@ fn exhausted_slot_generation_preserves_the_original_census_and_refuses_finish() 
         let mut owner = owner(&era, 1817, 2);
         with_run(&mut owner, |run| {
             // Seed the real overflow boundary before handles are issued.
-            run.state().root_slot_generation = u64::MAX;
+            exhaust_root_slot_generation_for_test(run);
             let a = run.root_slot(&car).unwrap();
             let d = run.root_slot(&nil).unwrap();
             let before = snapshot(run);
@@ -388,14 +415,18 @@ fn exhausted_slot_generation_preserves_the_original_census_and_refuses_finish() 
         owner.enter_native(&[]).unwrap();
         let mut stopped = era.stop().unwrap();
         era.return_cons_storage(&stopped).unwrap();
-        era.collect_stopped(&mut stopped).unwrap();
+        era.collect_stopped(
+            &mut stopped,
+            neovm_eval::test_support::authority::baton_collect_parallel_world_roots,
+        )
+        .unwrap();
         complete(stopped);
         owner.retire_rooted(&[]).unwrap();
         let failure = match era.finish() {
             Err(failure) => failure,
             Ok(_) => panic!("generation exhaustion must not discard the retained root census"),
         };
-        assert_eq!(failure.reason, RegistrationError::PendingRoots);
+        assert_eq!(failure.reason(), RegistrationError::PendingRoots);
         drop(failure); // Conservatively retain; no artificial generation repair.
     });
 }
@@ -486,11 +517,11 @@ fn two_owner_local_slot_allocator_stress() {
             .recv_timeout(Duration::from_secs(30))
             .expect("local-slot actor boundary")
     }
-    struct Abort<'a>(&'a Registry);
-    impl Drop for Abort<'_> {
+    struct Abort<'a, 'heap>(&'a ParallelHeapEra<'heap>);
+    impl Drop for Abort<'_, '_> {
         fn drop(&mut self) {
             if thread::panicking() {
-                self.0.poison();
+                poison_registry_for_test(self.0);
             }
         }
     }
@@ -505,7 +536,7 @@ fn two_owner_local_slot_allocator_stress() {
         let (ready_tx, ready_rx) = mpsc::channel();
         let (result_tx, result_rx) = mpsc::channel();
         thread::scope(|scope| {
-            let _abort = Abort(era.registry());
+            let _abort = Abort(&era);
             let mut commands = Vec::new();
             for (index, mut permit) in permits.into_iter().enumerate() {
                 let ready = ready_tx.clone();
@@ -561,7 +592,7 @@ fn two_owner_local_slot_allocator_stress() {
                         results.send((index, phase, owner.key(), head)).unwrap();
                         let epoch = retry(|| owner.wait_request());
                         retry(|| owner.acknowledge(epoch, &[]));
-                        let mut image = owner.begin_restore_retry(false).unwrap();
+                        let mut image = begin_restore_retry_for_test(&mut owner, false).unwrap();
                         let deadline = Instant::now() + Duration::from_secs(30);
                         loop {
                             match image.apply() {
@@ -613,8 +644,8 @@ fn two_owner_local_slot_allocator_stress() {
                 for &(_, observed_phase, key, _) in &responses {
                     assert_eq!(observed_phase, phase);
                     retry(|| {
-                        stopped.with_owner_image(key, |image| {
-                            assert_eq!(image.summary().root_words, 3)
+                        stopped.with_owner_image_for_test(key, |image| {
+                            assert_eq!(image.root_words_for_test(), 3)
                         })
                     });
                     retry(|| {
@@ -626,12 +657,20 @@ fn two_owner_local_slot_allocator_stress() {
                         })
                     });
                 }
-                assert!(retry(|| era.collect_stopped(&mut stopped)).major);
+                assert!(
+                    retry(|| era.collect_stopped(
+                        &mut stopped,
+                        neovm_eval::test_support::authority::baton_collect_parallel_world_roots
+                    ))
+                    .major
+                );
                 retry(|| {
                     era.with_stopped_heap_for_test(&stopped, |heap| {
                         let mut addresses = HashSet::new();
                         for &(_, _, _, head) in &responses {
-                            let mut cursor = Value::from_bits(head);
+                            // SAFETY: `head` is an owner chain head copied out
+                            // of this stopped heap's own publication.
+                            let mut cursor = unsafe { Value::from_bits(head) };
                             for _ in 0..(phase + 1) * PER_OWNER {
                                 assert!(heap.owns_heap_value_for_test(cursor));
                                 assert!(
@@ -683,20 +722,26 @@ fn cloned_operand_alias_loads_before_in_place_result_and_is_stale_after_clear() 
         });
         let mut alias = head.clone();
         let word = with_run(&mut owner, |run| {
-            let capacity = run.state().root_scratch.capacity();
+            let capacity = run.root_bank_for_test().1;
             for _ in 0..260 {
                 run.cons_into(&a, &alias, &mut head).unwrap();
             }
-            assert_eq!(run.state().root_scratch.len(), 2);
-            assert_eq!(run.state().root_scratch.capacity(), capacity);
+            assert_eq!(run.root_bank_for_test().0, 2);
+            assert_eq!(run.root_bank_for_test().1, capacity);
             head.word_for_test(run)
         });
         owner.enter_native(&[]).unwrap();
         let mut stopped = era.stop().unwrap();
         era.return_cons_storage(&stopped).unwrap();
-        era.collect_stopped(&mut stopped).unwrap();
+        era.collect_stopped(
+            &mut stopped,
+            neovm_eval::test_support::authority::baton_collect_parallel_world_roots,
+        )
+        .unwrap();
         era.with_stopped_heap_for_test(&stopped, |heap| {
-            let mut cursor = Value::from_bits(word);
+            // SAFETY: `word` is a tagged word copied from this stopped heap's
+            // own root census.
+            let mut cursor = unsafe { Value::from_bits(word) };
             for _ in 0..260 {
                 assert!(heap.owns_heap_value_for_test(cursor));
                 // SAFETY: exact stopped authority just traced this initialized

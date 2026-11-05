@@ -268,6 +268,7 @@ impl<'era> AllStopped<'era> {
             .map_err(registration_error)
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn with_root_reader<R>(
         &self,
         key: MutatorKey,
@@ -305,6 +306,30 @@ impl<'era> AllStopped<'era> {
         let entry = self.entry(key)?;
         let mut state = entry_state(&entry)?;
         let image = state.image.as_mut().ok_or(RendezvousError::Publication)?;
+        let mut attempt = CallbackAttempt {
+            registry: self.registry,
+            finished: false,
+        };
+        let result = body(image);
+        attempt.finished = true;
+        if self.registry.park.poisoned.load(Ordering::Acquire) {
+            return Err(RendezvousError::Poisoned);
+        }
+        Ok(result)
+    }
+
+    /// VIS row: shared-borrow stopped-owner image observation for the re-homed
+    /// root-slot tests. The mutable image never leaves the crate.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn with_owner_image_for_test<R>(
+        &self,
+        key: MutatorKey,
+        body: impl FnOnce(&PublishedGcImage) -> R,
+    ) -> Result<R, RendezvousError> {
+        let entry = self.entry(key)?;
+        let mut state = entry_state(&entry)?;
+        let image = state.image.as_ref().ok_or(RendezvousError::Publication)?;
         let mut attempt = CallbackAttempt {
             registry: self.registry,
             finished: false,

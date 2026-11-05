@@ -68,7 +68,7 @@ impl<'era> Mutator<'era> {
         })
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(in crate::tagged::gc::mutator_registration) fn begin_restore_retry(
         &mut self,
         native: bool,
