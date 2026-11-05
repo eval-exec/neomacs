@@ -1,10 +1,28 @@
 use neovm_text::emacs_core::coding::EolConversion;
-
 use neovm_text::encoding::*;
-
 use neovm_value::error::FlowKind;
-
 use neovm_value::value::{Value, get_string_text_properties_for_value};
+
+// The three coding entry points, with end-of-line conversion ENABLED.
+//
+// Entry 143 made `inhibit-eol-conversion' a REQUIRED parameter of every
+// resolution, because GNU reads a process-wide C global (src/coding.c:12022)
+// that cannot exist here.  These shims shadow the production spellings for the
+// whole fixture file, so the fixtures below read as they always did and the
+// answer they assume -- the variable's own initial value, src/coding.c:12027 --
+// is stated once, here, instead of once per assertion.
+
+fn encode_string(s: &str, coding_system: &str) -> Vec<u8> {
+    super::encode_string(s, coding_system, EolConversion::Enabled)
+}
+
+fn decode_bytes(bytes: &[u8], coding_system: &str) -> String {
+    super::decode_bytes(bytes, coding_system, EolConversion::Enabled)
+}
+
+fn encode_lisp_string(s: &neovm_value::heap_types::LispString, coding_system: &str) -> Vec<u8> {
+    super::encode_lisp_string(s, coding_system, EolConversion::Enabled)
+}
 
 /// The coding entry points consume GNU `SDATA`: a unibyte string's payload is
 /// already the source byte sequence, so the source-bytes view must borrow it
@@ -46,11 +64,149 @@ fn coding_source_bytes_borrows_unibyte_payload_and_materializes_byte8() {
 }
 
 #[test]
+fn ascii_width() {
+    crate::test_utils::init_test_tracing();
+    assert_eq!(char_width('a'), 1);
+    assert_eq!(char_width(' '), 1);
+    assert_eq!(char_width('Z'), 1);
+}
+
+#[test]
+fn cjk_width() {
+    crate::test_utils::init_test_tracing();
+    assert_eq!(char_width('中'), 2);
+    assert_eq!(char_width('日'), 2);
+    assert_eq!(char_width('あ'), 2);
+    assert_eq!(char_width('ア'), 2);
+}
+
+#[test]
+fn gnu_default_emoji_symbol_widths() {
+    crate::test_utils::init_test_tracing();
+    assert_eq!(char_width('\u{2603}'), 1);
+    assert_eq!(char_width('\u{2615}'), 2);
+    assert_eq!(char_width('\u{263A}'), 1);
+}
+
+#[test]
+fn control_char_width() {
+    crate::test_utils::init_test_tracing();
+    assert_eq!(char_width('\0'), 2);
+    assert_eq!(char_width('\x01'), 2); // ^A
+    assert_eq!(char_width('\n'), 0);
+    assert_eq!(char_width('\x7f'), 2); // ^?
+    assert_eq!(char_width('\u{0080}'), 4);
+    assert_eq!(char_width('\u{009f}'), 4);
+}
+
+#[test]
+fn string_width_mixed() {
+    crate::test_utils::init_test_tracing();
+    assert_eq!(string_width("hello"), 5);
+    assert_eq!(string_width("中文"), 4);
+    assert_eq!(string_width("hi中"), 4);
+}
+
+#[test]
 fn builtin_string_bytes_counts_utf8_length() {
     crate::test_utils::init_test_tracing();
     let mut ctx = Context::new();
     let result = builtin_string_bytes_1(&mut ctx, Value::string("Aé中")).unwrap();
     assert_eq!(result, Value::fixnum(6));
+}
+
+#[test]
+fn builtin_char_displayable_p_matches_oracle_bounds_and_types() {
+    crate::test_utils::init_test_tracing();
+    assert_eq!(
+        builtin_char_displayable_p(vec![Value::fixnum('a' as i64)]).unwrap(),
+        Value::T
+    );
+    assert_eq!(
+        builtin_char_displayable_p(vec![Value::fixnum(0x00E9)]).unwrap(),
+        Value::symbol("unicode")
+    );
+    assert_eq!(
+        builtin_char_displayable_p(vec![Value::fixnum(0x11_0000)]).unwrap(),
+        Value::NIL
+    );
+
+    let overflow = builtin_char_displayable_p(vec![Value::fixnum(0x40_0000)])
+        .expect_err("overflow char code should signal wrong-type-argument characterp");
+    match overflow.into_kind() {
+        FlowKind::Signal(sig) => {
+            assert_eq!(sig.symbol_name(), "wrong-type-argument");
+            assert_eq!(
+                sig.data,
+                vec![Value::symbol("characterp"), Value::fixnum(0x40_0000)]
+            );
+        }
+        other => panic!("expected signal, got: {other:?}"),
+    }
+
+    let non_number = builtin_char_displayable_p(vec![Value::symbol("x")])
+        .expect_err("non-number should signal number-or-marker-p");
+    match non_number.into_kind() {
+        FlowKind::Signal(sig) => {
+            assert_eq!(sig.symbol_name(), "wrong-type-argument");
+            assert_eq!(
+                sig.data,
+                vec![Value::symbol("number-or-marker-p"), Value::symbol("x")]
+            );
+        }
+        other => panic!("expected signal, got: {other:?}"),
+    }
+}
+
+#[test]
+fn builtin_char_width_matches_oracle_control_and_bounds() {
+    crate::test_utils::init_test_tracing();
+    assert_eq!(
+        builtin_char_width(vec![Value::fixnum(0)]).unwrap(),
+        Value::fixnum(2)
+    );
+    assert_eq!(
+        builtin_char_width(vec![Value::fixnum(9)]).unwrap(),
+        Value::fixnum(8)
+    );
+    assert_eq!(
+        builtin_char_width(vec![Value::fixnum(10)]).unwrap(),
+        Value::fixnum(0)
+    );
+    assert_eq!(
+        builtin_char_width(vec![Value::fixnum(0x80)]).unwrap(),
+        Value::fixnum(4)
+    );
+    assert_eq!(
+        builtin_char_width(vec![Value::fixnum(0x11_0000)]).unwrap(),
+        Value::fixnum(1)
+    );
+
+    let negative = builtin_char_width(vec![Value::fixnum(-1)])
+        .expect_err("negative character code should signal");
+    match negative.into_kind() {
+        FlowKind::Signal(sig) => {
+            assert_eq!(sig.symbol_name(), "wrong-type-argument");
+            assert_eq!(
+                sig.data,
+                vec![Value::symbol("characterp"), Value::fixnum(-1)]
+            );
+        }
+        other => panic!("expected signal, got: {other:?}"),
+    }
+
+    let overflow = builtin_char_width(vec![Value::fixnum(0x40_0000)])
+        .expect_err("overflow character code should signal");
+    match overflow.into_kind() {
+        FlowKind::Signal(sig) => {
+            assert_eq!(sig.symbol_name(), "wrong-type-argument");
+            assert_eq!(
+                sig.data,
+                vec![Value::symbol("characterp"), Value::fixnum(0x40_0000)]
+            );
+        }
+        other => panic!("expected signal, got: {other:?}"),
+    }
 }
 
 #[test]
@@ -77,6 +233,76 @@ fn builtin_char_or_string_p_respects_character_bounds() {
         builtin_char_or_string_p_1(&mut ctx, Value::symbol("x")).unwrap(),
         Value::NIL
     );
+}
+
+#[test]
+fn builtin_max_char_optional_unicode_matches_oracle() {
+    crate::test_utils::init_test_tracing();
+    assert_eq!(builtin_max_char(vec![]).unwrap(), Value::fixnum(0x3F_FFFF));
+    assert_eq!(
+        builtin_max_char(vec![Value::NIL]).unwrap(),
+        Value::fixnum(0x3F_FFFF)
+    );
+    assert_eq!(
+        builtin_max_char(vec![Value::T]).unwrap(),
+        Value::fixnum(0x10_FFFF)
+    );
+    assert_eq!(
+        builtin_max_char(vec![Value::symbol("foo")]).unwrap(),
+        Value::fixnum(0x10_FFFF)
+    );
+
+    let wrong_arity = builtin_max_char(vec![Value::fixnum(1), Value::fixnum(2)])
+        .expect_err("max-char should reject more than one argument");
+    match wrong_arity.into_kind() {
+        FlowKind::Signal(sig) => {
+            assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
+            assert_eq!(sig.data, vec![Value::symbol("max-char"), Value::fixnum(2)]);
+        }
+        other => panic!("expected signal, got: {other:?}"),
+    }
+}
+
+#[test]
+fn builtin_coding_string_helpers_enforce_max_arity() {
+    crate::test_utils::init_test_tracing();
+    let encode_over = builtin_encode_coding_string(vec![
+        Value::string("a"),
+        Value::symbol("utf-8"),
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+    ])
+    .expect_err("encode-coding-string should reject more than four arguments");
+    match encode_over.into_kind() {
+        FlowKind::Signal(sig) => {
+            assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
+            assert_eq!(
+                sig.data,
+                vec![Value::symbol("encode-coding-string"), Value::fixnum(5)]
+            );
+        }
+        other => panic!("expected signal, got: {other:?}"),
+    }
+
+    let decode_over = builtin_decode_coding_string(vec![
+        Value::string("a"),
+        Value::symbol("utf-8"),
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+    ])
+    .expect_err("decode-coding-string should reject more than four arguments");
+    match decode_over.into_kind() {
+        FlowKind::Signal(sig) => {
+            assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
+            assert_eq!(
+                sig.data,
+                vec![Value::symbol("decode-coding-string"), Value::fixnum(5)]
+            );
+        }
+        other => panic!("expected signal, got: {other:?}"),
+    }
 }
 
 #[test]
@@ -235,6 +461,35 @@ fn decode_coding_string_rejects_out_of_range_five_byte_utf8_emacs_sequence_as_ra
 }
 
 #[test]
+fn encode_coding_string_extracts_multibyte_byte8_chars_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"Hello ");
+    let mut char_buf = [0u8; neovm_value::emacs_char::MAX_MULTIBYTE_LENGTH];
+    for byte in [0xC3, 0xA9] {
+        let len = neovm_value::emacs_char::char_string(
+            neovm_value::emacs_char::byte8_to_char(byte),
+            &mut char_buf,
+        );
+        bytes.extend_from_slice(&char_buf[..len]);
+    }
+    let source = Value::heap_string(neovm_value::heap_types::LispString::from_emacs_bytes(bytes));
+
+    for coding in ["utf-8", "utf-8-emacs", "raw-text", "no-conversion"] {
+        let encoded = builtin_encode_coding_string(vec![source, Value::symbol(coding)])
+            .expect("encode-coding-string should evaluate");
+        let ls = encoded
+            .as_lisp_string()
+            .expect("encode-coding-string should return a string");
+        assert_eq!(ls.as_bytes(), b"Hello \xC3\xA9", "{coding}");
+        assert!(
+            !ls.is_multibyte(),
+            "{coding} result should be a unibyte byte string"
+        );
+    }
+}
+
+#[test]
 fn decode_coding_string_extracts_multibyte_byte8_source_bytes_like_gnu() {
     crate::test_utils::init_test_tracing();
     let mut bytes = Vec::new();
@@ -259,6 +514,78 @@ fn decode_coding_string_extracts_multibyte_byte8_source_bytes_like_gnu() {
     );
     assert_eq!(ls.schars(), 1);
     assert_eq!(ls.as_bytes(), "é".as_bytes());
+}
+
+#[test]
+fn nil_coding_string_respects_nocopy_identity() {
+    crate::test_utils::init_test_tracing();
+    let source = Value::string("abc");
+
+    let encoded_copy =
+        builtin_encode_coding_string(vec![source, Value::NIL, Value::NIL]).expect("nil coding");
+    assert_eq!(encoded_copy.as_utf8_str(), Some("abc"));
+    assert!(!neovm_value::value::eq_value(&source, &encoded_copy));
+
+    let encoded_nocopy =
+        builtin_encode_coding_string(vec![source, Value::NIL, Value::T]).expect("nil coding");
+    assert!(neovm_value::value::eq_value(&source, &encoded_nocopy));
+
+    let decoded_copy =
+        builtin_decode_coding_string(vec![source, Value::NIL, Value::NIL]).expect("nil coding");
+    assert_eq!(decoded_copy.as_utf8_str(), Some("abc"));
+    assert!(!neovm_value::value::eq_value(&source, &decoded_copy));
+
+    let decoded_nocopy =
+        builtin_decode_coding_string(vec![source, Value::NIL, Value::T]).expect("nil coding");
+    assert!(neovm_value::value::eq_value(&source, &decoded_nocopy));
+}
+
+#[test]
+fn ascii_coding_string_respects_nocopy_fast_path_identity() {
+    crate::test_utils::init_test_tracing();
+    let source = Value::string("abc");
+
+    let encoded_copy =
+        builtin_encode_coding_string(vec![source, Value::symbol("utf-8"), Value::NIL])
+            .expect("utf-8 encode");
+    assert_eq!(encoded_copy.as_utf8_str(), Some("abc"));
+    assert!(!neovm_value::value::eq_value(&source, &encoded_copy));
+
+    let encoded_nocopy =
+        builtin_encode_coding_string(vec![source, Value::symbol("utf-8"), Value::T])
+            .expect("utf-8 encode");
+    assert!(neovm_value::value::eq_value(&source, &encoded_nocopy));
+
+    let decoded_copy =
+        builtin_decode_coding_string(vec![source, Value::symbol("utf-8"), Value::NIL])
+            .expect("utf-8 decode");
+    assert_eq!(decoded_copy.as_utf8_str(), Some("abc"));
+    assert!(!neovm_value::value::eq_value(&source, &decoded_copy));
+
+    let decoded_nocopy =
+        builtin_decode_coding_string(vec![source, Value::symbol("utf-8"), Value::T])
+            .expect("utf-8 decode");
+    assert!(neovm_value::value::eq_value(&source, &decoded_nocopy));
+}
+
+#[test]
+fn ascii_coding_string_nocopy_allocates_when_eol_conversion_needed() {
+    crate::test_utils::init_test_tracing();
+    let encode_source = Value::string("a\nb");
+    let encoded =
+        builtin_encode_coding_string(vec![encode_source, Value::symbol("utf-8-dos"), Value::T])
+            .expect("utf-8-dos encode");
+    assert_eq!(encoded.as_lisp_string().unwrap().as_bytes(), b"a\r\nb");
+    assert!(!neovm_value::value::eq_value(&encode_source, &encoded));
+
+    let decode_source = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(
+        b"a\r\nb".to_vec(),
+    ));
+    let decoded =
+        builtin_decode_coding_string(vec![decode_source, Value::symbol("utf-8-dos"), Value::T])
+            .expect("utf-8-dos decode");
+    assert_eq!(decoded.as_utf8_str(), Some("a\nb"));
+    assert!(!neovm_value::value::eq_value(&decode_source, &decoded));
 }
 
 #[test]
@@ -333,6 +660,20 @@ fn decode_coding_string_buffer_destination_inserts_without_moving_point() {
 }
 
 #[test]
+fn builtin_coding_string_helpers_accept_iso_8859_15_alias() {
+    crate::test_utils::init_test_tracing();
+    let encoded =
+        builtin_encode_coding_string(vec![Value::string("abc"), Value::symbol("iso-8859-15")])
+            .expect("iso-8859-15 should be accepted as a known coding system");
+    assert_eq!(encoded.as_utf8_str(), Some("abc"));
+
+    let decoded =
+        builtin_decode_coding_string(vec![Value::string("abc"), Value::symbol("iso-8859-15")])
+            .expect("iso-8859-15 should be accepted as a known coding system");
+    assert_eq!(decoded.as_utf8_str(), Some("abc"));
+}
+
+#[test]
 fn decode_iso_8859_15_attaches_its_source_charset_property() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new();
@@ -362,6 +703,124 @@ fn decode_iso_8859_15_attaches_its_source_charset_property() {
 }
 
 #[test]
+fn encode_lisp_string_emacs_internal_uses_utf8_emacs_alias() {
+    crate::test_utils::init_test_tracing();
+    let text = neovm_value::heap_types::LispString::from_utf8("abc\n");
+
+    assert_eq!(encode_lisp_string(&text, "emacs-internal"), b"abc\n");
+    assert_eq!(encode_lisp_string(&text, "emacs-internal-dos"), b"abc\r\n");
+}
+
+#[test]
+fn builtin_coding_string_helpers_accept_iso_8859_9_alias() {
+    crate::test_utils::init_test_tracing();
+    let encoded =
+        builtin_encode_coding_string(vec![Value::string("abc"), Value::symbol("iso-8859-9")])
+            .expect("iso-8859-9 should be accepted as a known coding system");
+    assert_eq!(encoded.as_utf8_str(), Some("abc"));
+
+    let decoded =
+        builtin_decode_coding_string(vec![Value::string("abc"), Value::symbol("iso-8859-9")])
+            .expect("iso-8859-9 should be accepted as a known coding system");
+    assert_eq!(decoded.as_utf8_str(), Some("abc"));
+}
+
+#[test]
+fn decode_latin1_attaches_charset_text_property() {
+    crate::test_utils::init_test_tracing();
+    let encoded = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![
+        0xE9,
+    ]));
+    let decoded = builtin_decode_coding_string(vec![encoded, Value::symbol("latin-1")])
+        .expect("latin-1 decode should succeed");
+    if !decoded.is_string() {
+        panic!("decode-coding-string should return a string");
+    };
+    let props = get_string_text_properties_for_value(decoded)
+        .expect("decoded string should be propertized");
+    assert_eq!(props.len(), 1);
+    assert_eq!(props[0].start, 0);
+    assert_eq!(props[0].end, 1);
+    assert_eq!(
+        props[0].plist,
+        Value::list(vec![Value::symbol("charset"), Value::symbol("iso-8859-1")])
+    );
+}
+
+#[test]
+fn decode_latin1_charset_property_spans_ascii_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let encoded = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![
+        b'A', 0xE9, b'B',
+    ]));
+    let decoded = builtin_decode_coding_string(vec![encoded, Value::symbol("latin-1")])
+        .expect("latin-1 decode should succeed");
+
+    assert_eq!(
+        decoded.as_lisp_string().and_then(|s| s.as_utf8_str()),
+        Some("AéB")
+    );
+    let props = get_string_text_properties_for_value(decoded)
+        .expect("decoded Latin-1 string should be propertized");
+    assert_eq!(props.len(), 1);
+    assert_eq!(props[0].start, 0);
+    assert_eq!(props[0].end, 3);
+    assert_eq!(
+        props[0].plist,
+        Value::list(vec![Value::symbol("charset"), Value::symbol("iso-8859-1")])
+    );
+}
+
+#[test]
+fn encode_no_conversion_preserves_unibyte_storage_bytes() {
+    crate::test_utils::init_test_tracing();
+    let source = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![
+        0xE9,
+    ]));
+    let encoded =
+        builtin_encode_coding_string(vec![source, Value::symbol("no-conversion")]).unwrap();
+    if !encoded.is_string() {
+        panic!("encode-coding-string should return a string");
+    };
+    assert!(!encoded.string_is_multibyte());
+    let ls = encoded.as_lisp_string().unwrap();
+    assert_eq!(ls.as_bytes(), &[0xE9]);
+}
+
+#[test]
+fn decode_no_conversion_returns_unibyte_bytes_for_non_ascii_input() {
+    crate::test_utils::init_test_tracing();
+    let encoded =
+        builtin_encode_coding_string(vec![Value::string("é"), Value::symbol("no-conversion")])
+            .expect("encoding should succeed");
+    let decoded =
+        builtin_decode_coding_string(vec![encoded, Value::symbol("no-conversion")]).unwrap();
+    if !decoded.is_string() {
+        panic!("decode-coding-string should return a string");
+    };
+    assert!(!decoded.string_is_multibyte());
+    let ls = decoded.as_lisp_string().unwrap();
+    assert_eq!(ls.as_bytes(), &[0xC3, 0xA9]);
+}
+
+#[test]
+fn decode_byte_preserving_ascii_uses_multibyte_fast_path() {
+    crate::test_utils::init_test_tracing();
+    for coding in ["binary", "no-conversion", "raw-text"] {
+        let source = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(
+            b"Hello".to_vec(),
+        ));
+        let decoded =
+            builtin_decode_coding_string(vec![source, Value::symbol(coding)]).expect("decode");
+        assert!(
+            decoded.string_is_multibyte(),
+            "{coding} should decode ASCII as multibyte"
+        );
+        assert_eq!(decoded.as_lisp_string().unwrap().as_bytes(), b"Hello");
+    }
+}
+
+#[test]
 fn char_byte_conversion() {
     crate::test_utils::init_test_tracing();
     let s = "hello中文";
@@ -369,6 +828,22 @@ fn char_byte_conversion() {
     assert_eq!(char_to_byte_pos(s, 6), 8); // '中' is 3 bytes
     assert_eq!(byte_to_char_pos(s, 5), 5);
     assert_eq!(byte_to_char_pos(s, 8), 6);
+}
+
+#[test]
+fn encoding_utf8() {
+    crate::test_utils::init_test_tracing();
+    let bytes = encode_string("hello", "utf-8");
+    assert_eq!(bytes, b"hello");
+    let decoded = decode_bytes(b"hello", "utf-8");
+    assert_eq!(decoded, "hello");
+}
+
+#[test]
+fn encoding_utf8_with_signature_consumes_leading_bom() {
+    crate::test_utils::init_test_tracing();
+    let decoded = decode_bytes(b"\xEF\xBB\xBF;;; fixture\n", "utf-8-with-signature-unix");
+    assert_eq!(decoded, ";;; fixture\n");
 }
 
 #[test]
@@ -411,6 +886,41 @@ fn encoding_utf16_gnu_compatible_signatures_and_endianness() {
         .as_lisp_string()
         .expect("encode-coding-string should return a string");
     assert_eq!(encoded_string.as_bytes(), &[0xfe, 0xff, 0x00, 0x61]);
+}
+
+#[test]
+fn encoding_utf8_dos_applies_eol_conversion() {
+    crate::test_utils::init_test_tracing();
+    let bytes = encode_string("a\nb", "utf-8-dos");
+    assert_eq!(bytes, b"a\r\nb");
+    let decoded = decode_bytes(b"a\r\nb", "utf-8-dos");
+    assert_eq!(decoded, "a\nb");
+}
+
+#[test]
+fn raw_text_dos_preserves_bytes_but_converts_eol() {
+    crate::test_utils::init_test_tracing();
+    let encoded =
+        builtin_encode_coding_string(vec![Value::string("a\nb"), Value::symbol("raw-text-dos")])
+            .unwrap();
+    if !encoded.is_string() {
+        panic!("encode-coding-string should return a string");
+    };
+    let ls = encoded.as_lisp_string().unwrap();
+    assert_eq!(ls.as_bytes(), b"a\r\nb");
+
+    let decoded = builtin_decode_coding_string(vec![
+        Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(
+            b"a\r\nb".to_vec(),
+        )),
+        Value::symbol("raw-text-dos"),
+    ])
+    .unwrap();
+    if !decoded.is_string() {
+        panic!("decode-coding-string should return a string");
+    };
+    let ls = decoded.as_lisp_string().unwrap();
+    assert_eq!(ls.as_bytes(), b"a\nb");
 }
 
 #[test]
@@ -571,6 +1081,145 @@ fn undecided_write_encoding_preserves_bytes_and_converts_eol() {
 }
 
 #[test]
+fn encoding_latin1() {
+    crate::test_utils::init_test_tracing();
+    let bytes = encode_string("café", "latin-1");
+    assert_eq!(bytes.len(), 4); // é maps to 0xe9
+    let decoded = decode_bytes(&[0x63, 0x61, 0x66, 0xe9], "latin-1");
+    assert_eq!(decoded, "café");
+}
+
+#[test]
+fn encoding_big5_decodes_generated_leim_dictionary_bytes_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    assert_eq!(decode_bytes(&[0xa4, 0x40], "big5"), "\u{4e00}");
+    assert_eq!(decode_bytes(&[0xa4, 0x40], "chinese-big5-unix"), "\u{4e00}");
+    assert_eq!(decode_bytes(&[0xa4, 0x40], "cp950"), "\u{4e00}");
+    assert_eq!(
+        decode_bytes(&[0xa4, 0x40, b'\r', b'\n'], "big5-dos"),
+        "一\n"
+    );
+    assert_eq!(encode_string("一", "big5"), vec![0xa4, 0x40]);
+    assert_eq!(encode_string("一", "chinese-big5-unix"), vec![0xa4, 0x40]);
+}
+
+#[test]
+fn encoding_gb2312_decodes_generated_leim_dictionary_bytes_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    assert_eq!(decode_bytes(&[0xd2, 0xbb], "cn-gb-2312"), "一");
+    assert_eq!(decode_bytes(&[0xd2, 0xbb], "chinese-iso-8bit-unix"), "一");
+    assert_eq!(
+        decode_bytes(&[0xd2, 0xbb, b'\r', b'\n'], "gb2312-dos"),
+        "一\n"
+    );
+    assert_eq!(encode_string("一", "cn-gb-2312"), vec![0xd2, 0xbb]);
+    assert_eq!(
+        encode_string("一", "chinese-iso-8bit-unix"),
+        vec![0xd2, 0xbb]
+    );
+}
+
+#[test]
+fn decode_coding_string_big5_marks_charset_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let decoded = builtin_decode_coding_string(vec![
+        Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![
+            0xa4, 0x40,
+        ])),
+        Value::symbol("chinese-big5-unix"),
+    ])
+    .expect("decode-coding-string chinese-big5-unix should succeed");
+
+    assert_eq!(
+        decoded.as_lisp_string().and_then(|s| s.as_utf8_str()),
+        Some("一")
+    );
+    let props = get_string_text_properties_for_value(decoded)
+        .expect("decoded Big5 string should be propertized");
+    assert_eq!(props.len(), 1);
+    assert_eq!(props[0].start, 0);
+    assert_eq!(props[0].end, 1);
+    assert_eq!(
+        props[0].plist,
+        Value::list(vec![Value::symbol("charset"), Value::symbol("big5")])
+    );
+}
+
+#[test]
+fn decode_coding_string_gb2312_marks_charset_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let decoded = builtin_decode_coding_string(vec![
+        Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![
+            0xd2, 0xbb,
+        ])),
+        Value::symbol("cn-gb-2312-unix"),
+    ])
+    .expect("decode-coding-string cn-gb-2312-unix should succeed");
+
+    assert_eq!(
+        decoded.as_lisp_string().and_then(|s| s.as_utf8_str()),
+        Some("一")
+    );
+    let props = get_string_text_properties_for_value(decoded)
+        .expect("decoded GB2312 string should be propertized");
+    assert_eq!(props.len(), 1);
+    assert_eq!(props[0].start, 0);
+    assert_eq!(props[0].end, 1);
+    assert_eq!(
+        props[0].plist,
+        Value::list(vec![
+            Value::symbol("charset"),
+            Value::symbol("chinese-gb2312"),
+        ])
+    );
+}
+
+#[test]
+fn decode_coding_string_gb2312_extends_charset_after_first_non_ascii_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let decoded = builtin_decode_coding_string(vec![
+        Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![
+            b'A', 0xd2, 0xbb, b'B',
+        ])),
+        Value::symbol("cn-gb-2312-unix"),
+    ])
+    .expect("decode-coding-string cn-gb-2312-unix should succeed");
+
+    assert_eq!(
+        decoded.as_lisp_string().and_then(|s| s.as_utf8_str()),
+        Some("A一B")
+    );
+    let props = get_string_text_properties_for_value(decoded)
+        .expect("decoded GB2312 string should be propertized");
+    assert_eq!(props.len(), 1);
+    assert_eq!(props[0].start, 1);
+    assert_eq!(props[0].end, 3);
+    assert_eq!(
+        props[0].plist,
+        Value::list(vec![
+            Value::symbol("charset"),
+            Value::symbol("chinese-gb2312"),
+        ])
+    );
+}
+
+#[test]
+fn glyphless_display() {
+    crate::test_utils::init_test_tracing();
+    assert_eq!(glyphless_char_display('\x01'), "^A");
+    assert_eq!(glyphless_char_display('\x7f'), "^?");
+    assert_eq!(glyphless_char_display('\u{FEFF}'), "\\uFEFF");
+}
+
+#[test]
+fn multibyte_detection() {
+    crate::test_utils::init_test_tracing();
+    assert!(!is_multibyte_string("hello"));
+    assert!(is_multibyte_string("héllo"));
+    assert!(is_multibyte_string("中文"));
+}
+
+#[test]
 fn multibyte_detection_treats_unibyte_storage_as_unibyte() {
     crate::test_utils::init_test_tracing();
     assert!(!is_multibyte_string("abc"));
@@ -603,6 +1252,68 @@ fn builtin_multibyte_string_p_matches_oracle_non_string_and_unibyte_storage() {
         builtin_multibyte_string_p_1(&mut ctx, Value::fixnum(1)).unwrap(),
         Value::NIL
     );
+}
+
+#[test]
+fn builtin_unibyte_string_p_basics() {
+    crate::test_utils::init_test_tracing();
+    assert_eq!(
+        builtin_unibyte_string_p(vec![Value::string("hello")]).unwrap(),
+        Value::T
+    );
+    assert_eq!(
+        builtin_unibyte_string_p(vec![Value::string("héllo")]).unwrap(),
+        Value::NIL
+    );
+}
+
+#[test]
+fn builtin_unibyte_string_p_errors() {
+    crate::test_utils::init_test_tracing();
+    // Wrong arity signals error.
+    assert!(builtin_unibyte_string_p(vec![]).is_err());
+    // Non-string arg returns nil (type predicates don't error on wrong type).
+    assert_eq!(
+        builtin_unibyte_string_p(vec![Value::fixnum(1)]).unwrap(),
+        Value::NIL
+    );
+}
+
+#[test]
+fn printable_check() {
+    crate::test_utils::init_test_tracing();
+    assert!(is_printable('a'));
+    assert!(is_printable('中'));
+    assert!(!is_printable('\x00'));
+    assert!(!is_printable('\x7f'));
+}
+
+// ===========================================================================
+// decode-coding-string charset text property for ISO-2022 / EUC / Shift-JIS
+// (bug 13).  GNU's `decode_coding_iso_2022` annotates each decoded run with the
+// source charset (`(charset CHARSET)`).  The pure decoders now emit those runs;
+// here we drive them directly with deterministic OFFSET charsets so the result
+// is reproducible in the bare test registry.
+// ===========================================================================
+
+/// Register a deterministic dim-2 ISO-2022 charset (`test-jis`, ISO final 'B',
+/// OFFSET method) so `charset_decode_char` maps a 2-byte code to a non-ASCII
+/// char and `charset_iso2022_designation` recognizes the `$B` designation.
+fn register_test_jis() -> neovm_value::intern::SymId {
+    use neovm_value::value::Value;
+    let mut args = vec![Value::NIL; 17];
+    args[0] = Value::symbol("test-jis");
+    args[1] = Value::fixnum(2);
+    args[2] = Value::vector(vec![
+        Value::fixnum(33),
+        Value::fixnum(126),
+        Value::fixnum(33),
+        Value::fixnum(126),
+    ]);
+    args[5] = Value::fixnum(66); // ISO final 'B'
+    args[11] = Value::fixnum(0x10000); // code-offset -> decoded chars are non-ASCII
+    neovm_text::emacs_core::charset::builtin_define_charset_internal(args).unwrap();
+    neovm_value::intern::intern("test-jis")
 }
 
 #[test]
@@ -654,6 +1365,80 @@ fn undecided_decode_uses_the_shared_iso_2022_detector() {
         ),
         Some(neovm_value::intern::intern("iso-2022-7bit"))
     );
+}
+
+fn charset_prop(charset: &str) -> Value {
+    Value::list(vec![Value::symbol("charset"), Value::symbol(charset)])
+}
+
+#[test]
+fn decode_iso2022_attaches_charset_property_for_designated_charset() {
+    crate::test_utils::init_test_tracing();
+    use neovm_value::intern::intern;
+    register_test_jis();
+    let ascii = intern("ascii");
+    // 7-bit ISO-2022 with escape designations (iso-2022-7bit profile).
+    let spec = neovm_text::emacs_core::coding::Iso2022Spec {
+        initial: [Some(ascii), None, None, None],
+        request: vec![],
+        reg_usage: (0, 1),
+        flags: enumflags2::BitFlags::from_flag(neovm_text::emacs_core::coding::IsoFlag::SevenBits)
+            | neovm_text::emacs_core::coding::IsoFlag::Designation,
+    };
+    // "X" + ESC$B designation + two dim-2 chars + ESC(B (ascii) + "Y".
+    let decoded = decode_via_iso2022(
+        b"X\x1b$B$3$s\x1b(BY",
+        &spec,
+        &mut Iso2022DecodeState::default(),
+        DosEolLookahead::NotRequired,
+    );
+    let (bytes, runs) = (decoded.bytes, decoded.runs);
+    let text = neovm_value::emacs_char::to_utf8_lossy(&bytes);
+    // X + 2 kanji + Y == 4 chars.  The run starts at the first kanji and runs
+    // to the end of the text: re-designating G0 back to `ascii` does not close
+    // it, because GNU's `decode_coding_iso_2022` only moves `last_id` for a
+    // non-ASCII charset.  GNU Emacs 31 decoding the same bytes returns
+    // `#("XこんY" 1 4 (charset japanese-jisx0208))`.
+    assert_eq!(text.chars().count(), 4);
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].start, 1);
+    assert_eq!(runs[0].end, 4);
+    assert_eq!(runs[0].plist, charset_prop("test-jis"));
+}
+
+#[test]
+fn iso2022_encoding_boundary_controls_final_ascii_reset() {
+    crate::test_utils::init_test_tracing();
+    use neovm_value::intern::intern;
+
+    let jis = register_test_jis();
+    let spec = neovm_text::emacs_core::coding::Iso2022Spec {
+        initial: [Some(intern("ascii")), None, None, None],
+        request: vec![],
+        reg_usage: (0, 1),
+        flags: enumflags2::BitFlags::from_flag(neovm_text::emacs_core::coding::IsoFlag::SevenBits)
+            | neovm_text::emacs_core::coding::IsoFlag::Designation
+            | neovm_text::emacs_core::coding::IsoFlag::AsciiAtEol,
+    };
+    let source = neovm_value::heap_types::LispString::from_utf8("\u{10000}");
+
+    let complete = encode_via_iso2022(
+        &source,
+        &spec,
+        &[intern("ascii"), jis],
+        EncodingBoundary::CompleteText,
+        &mut CodingEncoderState::default(),
+    );
+    let file_region = encode_via_iso2022(
+        &source,
+        &spec,
+        &[intern("ascii"), jis],
+        EncodingBoundary::FileRegion,
+        &mut CodingEncoderState::default(),
+    );
+
+    assert_eq!(complete, b"\x1b$B!!\x1b(B");
+    assert_eq!(file_region, b"\x1b$B!!");
 }
 
 #[test]
@@ -717,6 +1502,33 @@ fn ccl_coding_system_executes_registered_identity_program() {
 }
 
 #[test]
+fn decode_euc_attaches_charset_property() {
+    crate::test_utils::init_test_tracing();
+    let jis = register_test_jis();
+    // EUC profile: G1 = test-jis, decoded from GR (high-bit) bytes.
+    let spec = neovm_text::emacs_core::coding::Iso2022Spec {
+        initial: [
+            Some(neovm_value::intern::intern("ascii")),
+            Some(jis),
+            None,
+            None,
+        ],
+        request: vec![],
+        reg_usage: (0, 1),
+        flags: enumflags2::BitFlags::empty(),
+    };
+    // ASCII 'A' then one GR character (0xA4 0xB3 -> GL 0x24 0x33).
+    let decoded = decode_via_euc(b"A\xA4\xB3", &spec, DosEolLookahead::NotRequired);
+    let (bytes, runs) = (decoded.bytes, decoded.runs);
+    let text = neovm_value::emacs_char::to_utf8_lossy(&bytes);
+    assert_eq!(text.chars().count(), 2);
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].start, 1);
+    assert_eq!(runs[0].end, 2);
+    assert_eq!(runs[0].plist, charset_prop("test-jis"));
+}
+
+#[test]
 fn decode_sjis_attaches_charset_property() {
     crate::test_utils::init_test_tracing();
     use neovm_value::intern::intern;
@@ -748,6 +1560,89 @@ fn decode_sjis_attaches_charset_property() {
 }
 
 #[test]
+fn decode_sjis_charset_runs_absorb_ascii_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    use neovm_value::intern::intern;
+    // GNU's `decode_coding_sjis` only moves `last_id`/`last_offset` for a
+    // non-ASCII charset, so ASCII characters never close the run being
+    // accumulated.  A run ends only where the next *different* non-ASCII
+    // charset starts, or at the end of the decoded text - trailing ASCII
+    // included.  Real GNU Emacs 31 decoding the equivalent Shift-JIS bytes
+    // produces exactly three runs:
+    //
+    //   #("ABあCDｱｲEFいGH" 2 5 (charset japanese-jisx0208)
+    //                      5 9 (charset katakana-jisx0201)
+    //                      9 12 (charset japanese-jisx0208))
+    let mut kana_args = vec![Value::NIL; 17];
+    kana_args[0] = Value::symbol("test-katakana");
+    kana_args[1] = Value::fixnum(1);
+    kana_args[2] = Value::vector(vec![Value::fixnum(33), Value::fixnum(126)]);
+    kana_args[11] = Value::fixnum(0x20000);
+    neovm_text::emacs_core::charset::builtin_define_charset_internal(kana_args).unwrap();
+    let jis = register_test_jis();
+    let charsets = vec![intern("ascii"), intern("test-katakana"), jis];
+
+    let kanji_one = jis_to_sjis(0x2433);
+    let kanji_two = jis_to_sjis(0x2434);
+    let input = vec![
+        b'A',
+        b'B',
+        kanji_one.0,
+        kanji_one.1,
+        b'C',
+        b'D',
+        0xA1,
+        0xA2,
+        b'E',
+        b'F',
+        kanji_two.0,
+        kanji_two.1,
+        b'G',
+        b'H',
+    ];
+    let decoded = decode_via_sjis(&input, &charsets, DosEolLookahead::NotRequired);
+    let (bytes, runs) = (decoded.bytes, decoded.runs);
+    let text = neovm_value::emacs_char::to_utf8_lossy(&bytes);
+    assert_eq!(text.chars().count(), 12);
+
+    assert_eq!(runs.len(), 3);
+    // The first kanji run swallows the following "CD" and stops where the
+    // katakana charset takes over.
+    assert_eq!((runs[0].start, runs[0].end), (2, 5));
+    assert_eq!(runs[0].plist, charset_prop("test-jis"));
+    // The katakana run swallows the following "EF".
+    assert_eq!((runs[1].start, runs[1].end), (5, 9));
+    assert_eq!(runs[1].plist, charset_prop("test-katakana"));
+    // The final kanji run reaches the end of the text, trailing "GH" included.
+    assert_eq!((runs[2].start, runs[2].end), (9, 12));
+    assert_eq!(runs[2].plist, charset_prop("test-jis"));
+}
+
+// ---------------------------------------------------------------------------
+// fix8 GROUP=coding bugs (1c), (7), (8): encode/decode-coding-region routing,
+// in-place point restoration, and the alias stored in last-coding-system-used.
+// ---------------------------------------------------------------------------
+
+fn fmt(eval: &mut crate::emacs_core::Context, src: &str) -> String {
+    crate::emacs_core::format_eval_result(&eval.eval_str(src))
+}
+
+/// `Context::new()` is bare (no `with-temp-buffer`); seed the current buffer.
+fn fmt_buf(eval: &mut crate::emacs_core::Context, seed: &str, expr: &str) -> String {
+    let src = format!("(progn (erase-buffer) (insert {seed}) {expr})");
+    crate::emacs_core::format_eval_result(&eval.eval_str(&src))
+}
+
+// Bug (1c): encode-coding-region for a charset/ISO-2022-type coding (cn-gb-2312,
+// like euc-jp/shift_jis/iso-2022-jp) used to drop the non-ASCII text: the region
+// path called `encode_lisp_string` directly, which only knows the UTF-8 /
+// single-byte / Big5 families and silently dropped every CJK character (its
+// `push_encoded` had an empty `_ => {}` arm). The region path now routes through
+// the same context-aware codec the string functions use, so region == string.
+// (euc-jp/shift_jis/chinese-gbk need external charset maps not loaded in the bare
+// `Context::new()`; cn-gb-2312's table is built in, so it exercises the same
+// dropped path here and the full set is re-verified on the release binary.)
+#[test]
 fn encode_coding_region_charset_coding_matches_string_path() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new();
@@ -772,6 +1667,10 @@ fn encode_coding_region_charset_coding_matches_string_path() {
     );
 }
 
+// Bug (1c) decode side: decode-coding-region for a charset-type coding must also
+// route through the working decoder. It decodes the two GB2312 bytes back to the
+// single character 一, with the same `(charset chinese-gb2312)` text property GNU
+// attaches; the old region path garbled them into raw eight-bit characters.
 #[test]
 fn decode_coding_region_charset_coding_decodes_and_marks_charset() {
     crate::test_utils::init_test_tracing();
@@ -797,6 +1696,9 @@ fn decode_coding_region_charset_coding_decodes_and_marks_charset() {
     );
 }
 
+// Bug (7): decode/encode-coding-region used to leave point at the region END.
+// GNU restores point: before the region it is unchanged, interior point moves to
+// the region START, point at/after the end shifts by the size delta.
 #[test]
 fn coding_region_restores_point_like_gnu() {
     crate::test_utils::init_test_tracing();
@@ -839,6 +1741,8 @@ fn coding_region_restores_point_like_gnu() {
     );
 }
 
+// Bug (7), partial region: point before the region is unchanged; point after the
+// region shifts by the produced-vs-original size delta (here 0).
 #[test]
 fn coding_region_restores_point_for_partial_region() {
     crate::test_utils::init_test_tracing();
@@ -872,6 +1776,8 @@ fn coding_region_restores_point_for_partial_region() {
     );
 }
 
+// Bug (8): last-coding-system-used must store the coding system AS PASSED (the
+// alias), not its resolved base. utf-8 (its own base) is the control.
 #[test]
 fn last_coding_system_used_stores_passed_alias() {
     crate::test_utils::init_test_tracing();
@@ -1942,48 +2848,9 @@ fn iso_2022_honours_a_shift_only_when_its_flag_is_set_like_gnu() {
     );
 }
 
-fn encode_string(s: &str, coding_system: &str) -> Vec<u8> {
-    super::encode_string(s, coding_system, EolConversion::Enabled)
-}
-
-fn decode_bytes(bytes: &[u8], coding_system: &str) -> String {
-    super::decode_bytes(bytes, coding_system, EolConversion::Enabled)
-}
-
-/// Register a deterministic dim-2 ISO-2022 charset (`test-jis`, ISO final 'B',
-/// OFFSET method) so `charset_decode_char` maps a 2-byte code to a non-ASCII
-/// char and `charset_iso2022_designation` recognizes the `$B` designation.
-fn register_test_jis() -> neovm_value::intern::SymId {
-    use neovm_value::value::Value;
-    let mut args = vec![Value::NIL; 17];
-    args[0] = Value::symbol("test-jis");
-    args[1] = Value::fixnum(2);
-    args[2] = Value::vector(vec![
-        Value::fixnum(33),
-        Value::fixnum(126),
-        Value::fixnum(33),
-        Value::fixnum(126),
-    ]);
-    args[5] = Value::fixnum(66); // ISO final 'B'
-    args[11] = Value::fixnum(0x10000); // code-offset -> decoded chars are non-ASCII
-    neovm_text::emacs_core::charset::builtin_define_charset_internal(args).unwrap();
-    neovm_value::intern::intern("test-jis")
-}
-
-fn charset_prop(charset: &str) -> Value {
-    Value::list(vec![Value::symbol("charset"), Value::symbol(charset)])
-}
-
-fn fmt(eval: &mut crate::emacs_core::Context, src: &str) -> String {
-    crate::emacs_core::format_eval_result(&eval.eval_str(src))
-}
-
-/// `Context::new()` is bare (no `with-temp-buffer`); seed the current buffer.
-fn fmt_buf(eval: &mut crate::emacs_core::Context, seed: &str, expr: &str) -> String {
-    let src = format!("(progn (erase-buffer) (insert {seed}) {expr})");
-    crate::emacs_core::format_eval_result(&eval.eval_str(&src))
-}
-
+#[cfg(test)]
+#[path = "gdh_utf8_unibyte.rs"]
+mod gdh_utf8_unibyte;
 #[cfg(test)]
 #[path = "prepared_mule_test.rs"]
 mod prepared_mule;

@@ -1,14 +1,110 @@
 //! Per-opcode callback order/cache identity: public GNU parity is tested separately.
-
 use neovm_text::emacs_core::regex_emacs::*;
-
 use neovm_text::emacs_core::syntax::{
     StringSyntaxPositionError, StringSyntaxPositionSource, SyntaxProperties, SyntaxTable,
 };
-
 use neovm_value::heap_types::{GnuDeclaredCharacterCount, GnuStringCharPos, LispString};
-
 use std::cell::RefCell;
+
+fn request(kind: SyntaxAssertion, before: char, after: char) -> BoundarySyntaxRequest {
+    BoundarySyntaxRequest {
+        kind,
+        current_byte: neovm_edit::buffer::EmacsBytePos::new(3),
+        previous: Some(BoundarySyntaxCharacter {
+            character: neovm_value::emacs_char::EmacsChar::from_code_unchecked(before as u32),
+            byte_position: neovm_edit::buffer::EmacsBytePos::new(2),
+        }),
+        current: Some(BoundarySyntaxCharacter {
+            character: neovm_value::emacs_char::EmacsChar::from_code_unchecked(after as u32),
+            byte_position: neovm_edit::buffer::EmacsBytePos::new(3),
+        }),
+    }
+}
+
+#[derive(Default)]
+struct PhysicalReads(RefCell<Vec<usize>>);
+impl SyntaxLookup for PhysicalReads {
+    fn char_syntax(&self, c: char) -> SyntaxClass {
+        match c {
+            '!' => SyntaxClass::Punctuation,
+            '_' => SyntaxClass::Symbol,
+            _ => SyntaxClass::Word,
+        }
+    }
+    fn char_syntax_at(&self, c: char, pos: usize) -> SyntaxClass {
+        self.0.borrow_mut().push(pos);
+        self.char_syntax(c)
+    }
+    fn char_has_category(&self, _: char, _: u8) -> bool {
+        false
+    }
+    fn cache_key(&self) -> SyntaxCacheKey {
+        SyntaxCacheKey::Standard
+    }
+}
+
+#[test]
+fn ordinary_boundary_pair_keeps_physical_lookup_order_and_short_circuit() {
+    let lookup = PhysicalReads::default();
+    let classes = lookup.boundary_syntax_at(request(SyntaxAssertion::WordBoundary, 'c', 'd'));
+    assert_eq!(*lookup.0.borrow(), [2, 3]);
+    assert_eq!(
+        classes.previous(),
+        Some((
+            neovm_value::emacs_char::EmacsChar::from_code_unchecked('c' as u32),
+            SyntaxClass::Word
+        ))
+    );
+    assert_eq!(
+        classes.current(),
+        Some((
+            neovm_value::emacs_char::EmacsChar::from_code_unchecked('d' as u32),
+            SyntaxClass::Word
+        ))
+    );
+    lookup.0.borrow_mut().clear();
+    lookup.boundary_syntax_at(request(SyntaxAssertion::WordBeginning, 'c', '!'));
+    assert_eq!(*lookup.0.borrow(), [3]);
+    lookup.0.borrow_mut().clear();
+    lookup.boundary_syntax_at(request(SyntaxAssertion::WordEnd, '!', 'd'));
+    assert_eq!(*lookup.0.borrow(), [2]);
+}
+
+#[test]
+fn ordinary_symbol_boundaries_follow_gnu_lookup_order_and_short_circuit() {
+    // GNU regex-emacs.c:5111-5130 reads current first for symbeg,
+    // while :5147-5170 reads previous first for symend. A non-symbol
+    // constituent fails before the other neighbour's syntax is read.
+    let lookup = PhysicalReads::default();
+    lookup.boundary_syntax_at(request(SyntaxAssertion::SymbolBeginning, 'c', '!'));
+    assert_eq!(*lookup.0.borrow(), [3]);
+    lookup.0.borrow_mut().clear();
+    lookup.boundary_syntax_at(request(SyntaxAssertion::SymbolBeginning, 'c', 'd'));
+    assert_eq!(*lookup.0.borrow(), [3, 2]);
+    lookup.0.borrow_mut().clear();
+    lookup.boundary_syntax_at(request(SyntaxAssertion::SymbolBeginning, '!', '_'));
+    assert_eq!(*lookup.0.borrow(), [3, 2]);
+    lookup.0.borrow_mut().clear();
+    lookup.boundary_syntax_at(request(SyntaxAssertion::SymbolEnd, '!', 'd'));
+    assert_eq!(*lookup.0.borrow(), [2]);
+    lookup.0.borrow_mut().clear();
+    lookup.boundary_syntax_at(request(SyntaxAssertion::SymbolEnd, '_', '!'));
+    assert_eq!(*lookup.0.borrow(), [2, 3]);
+    lookup.0.borrow_mut().clear();
+    let at_beginning = BoundarySyntaxRequest {
+        previous: None,
+        ..request(SyntaxAssertion::SymbolEnd, 'c', 'd')
+    };
+    lookup.boundary_syntax_at(at_beginning);
+    assert!(lookup.0.borrow().is_empty());
+}
+
+fn supplied(bytes: &[u8]) -> Value {
+    Value::heap_string(LispString::from_emacs_bytes_with_declared_chars(
+        bytes.to_vec(),
+        GnuDeclaredCharacterCount::try_from(2).expect("bounded test metadata"),
+    ))
+}
 
 #[test]
 fn supplied_boundary_converts_current_once_before_previous_logical_lookup() {
@@ -81,26 +177,10 @@ fn supplied_symbol_beginning_skips_invalid_previous_after_nonword_current() {
     neovm_value::string_pos_cache::reset_string_pos_cache();
 }
 
-fn request(kind: SyntaxAssertion, before: char, after: char) -> BoundarySyntaxRequest {
-    BoundarySyntaxRequest {
-        kind,
-        current_byte: neovm_edit::buffer::EmacsBytePos::new(3),
-        previous: Some(BoundarySyntaxCharacter {
-            character: neovm_value::emacs_char::EmacsChar::from_code_unchecked(before as u32),
-            byte_position: neovm_edit::buffer::EmacsBytePos::new(2),
-        }),
-        current: Some(BoundarySyntaxCharacter {
-            character: neovm_value::emacs_char::EmacsChar::from_code_unchecked(after as u32),
-            byte_position: neovm_edit::buffer::EmacsBytePos::new(3),
-        }),
-    }
-}
-
-fn supplied(bytes: &[u8]) -> Value {
-    Value::heap_string(LispString::from_emacs_bytes_with_declared_chars(
-        bytes.to_vec(),
-        GnuDeclaredCharacterCount::try_from(2).expect("bounded test metadata"),
-    ))
+struct PlanReads {
+    mode: BoundarySyntaxMode,
+    selections: std::cell::Cell<usize>,
+    callbacks: std::cell::Cell<usize>,
 }
 
 impl PlanReads {
@@ -141,31 +221,69 @@ impl SyntaxLookup for PlanReads {
     }
 }
 
-impl SyntaxLookup for PhysicalReads {
-    fn char_syntax(&self, c: char) -> SyntaxClass {
-        match c {
-            '!' => SyntaxClass::Punctuation,
-            '_' => SyntaxClass::Symbol,
-            _ => SyntaxClass::Word,
+#[test]
+fn invocation_boundary_plan_selects_once_across_search_candidates_and_engines() {
+    // The probe's callback has physical semantics, but a supplied-mode probe
+    // records that the selected route continues through the existing callback.
+    // Real supplied coordinates/cache/errors are protected by the tests above.
+    for mode in [BoundarySyntaxMode::Physical, BoundarySyntaxMode::Supplied] {
+        let pattern = regex_compile("\\_<\\w\\_>", false, false).unwrap();
+        let text = b"aa bb q";
+        for dfa_mode in [dfa::DfaMode::Off, dfa::DfaMode::Verify] {
+            let lookup = PlanReads::new(mode);
+            dfa::prime(&pattern, &lookup).unwrap();
+            let found = dfa::with_dfa_mode(dfa_mode, || {
+                re_search(&pattern, text, 0, text.len() as isize, &lookup, 0)
+            });
+            assert_eq!(found.map(|(start, _)| start), Some(6));
+            assert_eq!(lookup.selections.get(), 1, "{mode:?} {dfa_mode:?}");
+            match mode {
+                BoundarySyntaxMode::Physical => assert_eq!(lookup.callbacks.get(), 0),
+                BoundarySyntaxMode::Supplied => assert!(lookup.callbacks.get() > 1),
+            }
+        }
+        let lookup = PlanReads::new(mode);
+        assert!(pike_match(&pattern, text, 6, text.len(), &lookup, 0).is_some());
+        assert_eq!(lookup.selections.get(), 1);
+        match mode {
+            BoundarySyntaxMode::Physical => assert_eq!(lookup.callbacks.get(), 0),
+            BoundarySyntaxMode::Supplied => assert_eq!(lookup.callbacks.get(), 2),
+        }
+        let lookup = PlanReads::new(mode);
+        assert!(re_match(&pattern, text, 6, text.len(), &lookup, 0).is_some());
+        assert_eq!(lookup.selections.get(), 1);
+        match mode {
+            BoundarySyntaxMode::Physical => assert_eq!(lookup.callbacks.get(), 0),
+            BoundarySyntaxMode::Supplied => assert_eq!(lookup.callbacks.get(), 2),
         }
     }
-    fn char_syntax_at(&self, c: char, pos: usize) -> SyntaxClass {
-        self.0.borrow_mut().push(pos);
-        self.char_syntax(c)
-    }
-    fn char_has_category(&self, _: char, _: u8) -> bool {
-        false
-    }
-    fn cache_key(&self) -> SyntaxCacheKey {
-        SyntaxCacheKey::Standard
-    }
 }
 
-struct PlanReads {
-    mode: BoundarySyntaxMode,
-    selections: std::cell::Cell<usize>,
-    callbacks: std::cell::Cell<usize>,
+#[test]
+fn syntax_free_patterns_do_not_query_boundary_coordinates() {
+    let pattern = regex_compile("q", false, false).unwrap();
+    assert!(!pattern.uses_syntax);
+    let lookup = PlanReads::new(BoundarySyntaxMode::Supplied);
+    assert!(re_search(&pattern, b"aaq", 0, 3, &lookup, 0).is_some());
+    assert!(re_match(&pattern, b"q", 0, 1, &lookup, 0).is_some());
+    assert!(pike_match(&pattern, b"q", 0, 1, &lookup, 0).is_some());
+    assert_eq!(lookup.selections.get(), 0);
+    assert_eq!(lookup.callbacks.get(), 0);
 }
 
-#[derive(Default)]
-struct PhysicalReads(RefCell<Vec<usize>>);
+#[test]
+fn physical_match_plan_keeps_symbol_lookup_order_and_short_circuit() {
+    let lookup = PhysicalReads::default();
+    let plan = MatchSyntax::new(&lookup);
+    re_boundary_syntax(SyntaxAssertion::SymbolBeginning, b"c!", 1, true, &plan);
+    assert_eq!(*lookup.0.borrow(), [1]);
+    lookup.0.borrow_mut().clear();
+    re_boundary_syntax(SyntaxAssertion::SymbolBeginning, b"cd", 1, true, &plan);
+    assert_eq!(*lookup.0.borrow(), [1, 0]);
+    lookup.0.borrow_mut().clear();
+    re_boundary_syntax(SyntaxAssertion::SymbolEnd, b"!c", 1, true, &plan);
+    assert_eq!(*lookup.0.borrow(), [0]);
+    lookup.0.borrow_mut().clear();
+    re_boundary_syntax(SyntaxAssertion::SymbolEnd, b"_!", 1, true, &plan);
+    assert_eq!(*lookup.0.borrow(), [0, 1]);
+}

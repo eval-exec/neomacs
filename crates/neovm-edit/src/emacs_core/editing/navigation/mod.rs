@@ -1493,8 +1493,3 @@ pub fn builtin_region_end(buffers: &BufferManager, args: Vec<Value>) -> EvalResu
 // ===========================================================================
 // Tests
 // ===========================================================================
-
-
-#[cfg(test)]
-#[path = "tests/navigation_test.rs"]
-mod tests;

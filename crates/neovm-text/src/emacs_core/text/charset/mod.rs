@@ -3141,7 +3141,3 @@ pub fn carrier_tls_fingerprint(h: &mut u64) {
     // architecture test covers its classification.
     neovm_value::tls_fingerprint::mix(h, 0);
 }
-
-#[cfg(test)]
-#[path = "tests/charset_test.rs"]
-mod tests;

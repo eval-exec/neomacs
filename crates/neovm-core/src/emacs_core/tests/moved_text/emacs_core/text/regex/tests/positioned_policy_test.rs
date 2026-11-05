@@ -1,5 +1,22 @@
 use neovm_text::emacs_core::regex::*;
 
+struct PolicySyntax(SymbolMode);
+
+impl SyntaxLookup for PolicySyntax {
+    fn symbol_mode(&self) -> SymbolMode {
+        self.0
+    }
+    fn char_syntax(&self, c: char) -> neovm_text::emacs_core::syntax::SyntaxClass {
+        DefaultSyntaxLookup.char_syntax(c)
+    }
+    fn char_has_category(&self, c: char, cat: u8) -> bool {
+        DefaultSyntaxLookup.char_has_category(c, cat)
+    }
+    fn cache_key(&self) -> SyntaxCacheKey {
+        SyntaxCacheKey::Standard
+    }
+}
+
 #[test]
 fn positioned_compiled_regex_reuses_its_policy_and_keeps_distinct_match_results() {
     let mut context = Context::new();
@@ -92,21 +109,4 @@ fn literal_translation_cache_reuses_only_the_requested_symbol_policy() {
     let restored = buffer_search_translation_with_symbols(buffer, true, SymbolMode::Bare).unwrap();
     assert_eq!(restored.symbol_mode(), SymbolMode::Bare);
     assert!(!Rc::ptr_eq(&positioned, &restored));
-}
-
-struct PolicySyntax(SymbolMode);
-
-impl SyntaxLookup for PolicySyntax {
-    fn symbol_mode(&self) -> SymbolMode {
-        self.0
-    }
-    fn char_syntax(&self, c: char) -> neovm_text::emacs_core::syntax::SyntaxClass {
-        DefaultSyntaxLookup.char_syntax(c)
-    }
-    fn char_has_category(&self, c: char, cat: u8) -> bool {
-        DefaultSyntaxLookup.char_has_category(c, cat)
-    }
-    fn cache_key(&self) -> SyntaxCacheKey {
-        SyntaxCacheKey::Standard
-    }
 }

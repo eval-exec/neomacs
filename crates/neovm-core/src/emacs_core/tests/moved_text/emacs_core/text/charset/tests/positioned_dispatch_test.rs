@@ -1,6 +1,27 @@
 //! Exercise the registered Lisp dispatcher, not just charset helper adapters.
-
 use neovm_text::emacs_core::{eval::Context, print::print_value};
+
+fn answer(source: &str) -> String {
+    let mut context = Context::new();
+    print_value(
+        &context
+            .eval_str(source)
+            .expect("positioned charset dispatch"),
+    )
+}
+
+fn pair_form(call: &str, name: &str, positioned: bool, nonsymbol: bool) -> String {
+    let argument = if nonsymbol {
+        "42".to_owned()
+    } else if positioned {
+        format!("(position-symbol '{name} 0)")
+    } else {
+        format!("'{name}")
+    };
+    format!(
+        "(mapcar (lambda (enabled)\n           (let* ((symbols-with-pos-enabled t) (arg {argument}))\n             (let ((symbols-with-pos-enabled enabled))\n               (condition-case err {call}\n                 (wrong-type-argument (car (cdr err))))))) '(nil t))"
+    )
+}
 
 #[test]
 fn positioned_charset_dispatch_priority() {
@@ -73,26 +94,4 @@ fn positioned_charset_dispatch_alias() {
         answer(&pair_form(call, "ascii", false, true)),
         "(charsetp charsetp)"
     );
-}
-
-fn answer(source: &str) -> String {
-    let mut context = Context::new();
-    print_value(
-        &context
-            .eval_str(source)
-            .expect("positioned charset dispatch"),
-    )
-}
-
-fn pair_form(call: &str, name: &str, positioned: bool, nonsymbol: bool) -> String {
-    let argument = if nonsymbol {
-        "42".to_owned()
-    } else if positioned {
-        format!("(position-symbol '{name} 0)")
-    } else {
-        format!("'{name}")
-    };
-    format!(
-        "(mapcar (lambda (enabled)\n           (let* ((symbols-with-pos-enabled t) (arg {argument}))\n             (let ((symbols-with-pos-enabled enabled))\n               (condition-case err {call}\n                 (wrong-type-argument (car (cdr err))))))) '(nil t))"
-    )
 }

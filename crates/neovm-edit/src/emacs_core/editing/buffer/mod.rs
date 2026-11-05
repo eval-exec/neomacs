@@ -5110,7 +5110,3 @@ impl InsertPiece {
         &self.text
     }
 }
-
-#[cfg(test)]
-#[path = "tests/buffer_test.rs"]
-mod tests;

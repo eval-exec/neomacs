@@ -340,9 +340,3 @@ impl CasingInsertionPolicy for CasingPropertyContext<'_> {
         Ok(InsertionInheritance::Boundary(merged))
     }
 }
-
-
-
-#[cfg(test)]
-#[path = "tests/casing_insertion.rs"]
-mod tests;

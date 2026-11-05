@@ -3617,7 +3617,3 @@ impl ScreenLineMotionScan {
         self.last_occupied_target
     }
 }
-
-#[cfg(test)]
-#[path = "tests/indent_test.rs"]
-mod tests;

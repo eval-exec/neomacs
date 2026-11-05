@@ -1,12 +1,192 @@
-use crate::emacs_core::eval::Context;
-
+use super::super::eval::Context;
 use neovm_value::error::FlowKind;
-
+fn test_ob() -> neovm_value::symbol::Obarray {
+    neovm_value::symbol::Obarray::new()
+}
 use crate::test_utils::runtime_startup_eval_all;
-
 use neovm_edit::emacs_core::indent::*;
-
 use std::fs;
+
+fn bootstrap_eval_all(src: &str) -> Vec<String> {
+    runtime_startup_eval_all(src)
+}
+
+fn eval_first_form_after_marker(eval: &mut Context, source: &str, marker: &str) {
+    let start = source
+        .find(marker)
+        .unwrap_or_else(|| panic!("missing GNU simple.el marker: {marker}"));
+    let (form, _) = crate::emacs_core::value_reader::read_one(
+        &source[start..],
+        0,
+        crate::emacs_core::eval::VariableView::canonical(
+            neovm_value::symbol::CanonicalAccess::TEST,
+            &test_ob(),
+        ),
+    )
+    .unwrap_or_else(|err| panic!("parse GNU simple.el from {marker} failed: {:?}", err))
+    .unwrap_or_else(|| panic!("no GNU simple.el form found after marker: {marker}"));
+    eval.eval_form(form)
+        .unwrap_or_else(|err| panic!("evaluate GNU simple.el form {marker} failed: {:?}", err));
+}
+
+/// Install minimal `defun`/`defmacro`/`when`/`unless` shims so a bare
+/// evaluator can evaluate forms extracted from GNU `.el` source files.
+/// Also installs a minimal `with-temp-buffer` macro because many GNU
+/// elisp helpers (`back-to-indentation`, `indent-region`, etc.) used
+/// by these tests are wrapped in `(with-temp-buffer ...)` blocks.
+fn install_bare_elisp_shims(ev: &mut Context) {
+    let shims = r#"
+;; `subr.el' creates these five with `defalias'; GNU has no C version of any
+;; of them (lisp/subr.el:71 and :2277-2280), so a bare evaluator standing in
+;; for a loaded one has to be given the same aliases subr.el gives it.
+;; DIVERGENCES.md 148.
+(defalias 'not #'null)
+(defalias 'string= #'string-equal)
+(defalias 'string< #'string-lessp)
+(defalias 'string> #'string-greaterp)
+(defalias 'move-marker #'set-marker)
+(defalias 'defun (cons 'macro #'(lambda (name arglist &rest body)
+  (list 'defalias (list 'quote name) (cons 'function (list (cons 'lambda (cons arglist body))))))))
+(defalias 'defmacro (cons 'macro #'(lambda (name arglist &rest body)
+  (list 'defalias (list 'quote name)
+        (list 'cons ''macro (cons 'function (list (cons 'lambda (cons arglist body)))))))))
+(defalias 'when (cons 'macro #'(lambda (cond &rest body)
+  (list 'if cond (cons 'progn body)))))
+(defalias 'unless (cons 'macro #'(lambda (cond &rest body)
+  (cons 'if (cons cond (cons nil body))))))
+(defalias 'with-temp-buffer (cons 'macro #'(lambda (&rest body)
+  ;; Minimal shim — uses get-buffer-create with a fixed unique name.
+  ;; Sufficient for the bare-shim indent tests, which don't nest
+  ;; with-temp-buffer calls.
+  (list 'let
+        (list (list 'vm-temp-buf
+                    (list 'get-buffer-create " *vm-shim-temp*" t)))
+        (list 'unwind-protect
+              (list 'save-current-buffer
+                    (list 'set-buffer 'vm-temp-buf)
+                    (list 'erase-buffer)
+                    (cons 'progn body))
+              (list 'kill-buffer 'vm-temp-buf))))))
+"#;
+    ev.eval_str(shims).expect("install bare elisp shims");
+}
+
+fn gnu_simple_indent_eval() -> Context {
+    let project_root = crate::test_utils::workspace_root();
+    let simple_path = project_root.join("lisp/simple.el");
+    let simple_source = fs::read_to_string(&simple_path).expect("read GNU simple.el");
+
+    let mut ev = Context::new();
+    install_bare_elisp_shims(&mut ev);
+    ev.set_lexical_binding(true);
+    eval_first_form_after_marker(&mut ev, &simple_source, "(defun back-to-indentation ()");
+    ev
+}
+
+fn gnu_indent_el_eval() -> Context {
+    let project_root = crate::test_utils::workspace_root();
+    let indent_path = project_root.join("lisp/indent.el");
+    let indent_source = fs::read_to_string(&indent_path).expect("read GNU indent.el");
+    let simple_path = project_root.join("lisp/simple.el");
+    let simple_source = fs::read_to_string(&simple_path).expect("read GNU simple.el");
+    let subr_path = project_root.join("lisp/subr.el");
+    let subr_source = fs::read_to_string(&subr_path).expect("read GNU subr.el");
+    let syntax_path = project_root.join("lisp/emacs-lisp/syntax.el");
+    let syntax_source = fs::read_to_string(&syntax_path).expect("read GNU syntax.el");
+
+    let mut ev = Context::new();
+    install_bare_elisp_shims(&mut ev);
+    ev.set_lexical_binding(true);
+    ev.eval_str(
+        r#"
+        (setq fill-prefix nil)
+        (setq abbrev-mode nil)
+        (defvar tab-always-indent t)
+        (defvar tab-first-completion nil)
+        (fset 'use-region-p (lambda () nil))
+        (fset 'make-progress-reporter (lambda (&rest _args) nil))
+        (fset 'progress-reporter-update (lambda (&rest _args) nil))
+        (fset 'progress-reporter-done (lambda (&rest _args) nil))
+        "#,
+    )
+    .expect("eval progress reporter stubs");
+    eval_first_form_after_marker(
+        &mut ev,
+        &syntax_source,
+        "(defvar syntax-propertize-function nil",
+    );
+    eval_first_form_after_marker(&mut ev, &syntax_source, "(defun syntax-propertize (pos)");
+    eval_first_form_after_marker(&mut ev, &indent_source, "(defvar indent-line-function ");
+    eval_first_form_after_marker(
+        &mut ev,
+        &indent_source,
+        "(defvar indent-line-ignored-functions ",
+    );
+    eval_first_form_after_marker(
+        &mut ev,
+        &indent_source,
+        "(defun indent-according-to-mode (&optional inhibit-widen)",
+    );
+    eval_first_form_after_marker(
+        &mut ev,
+        &indent_source,
+        "(defun indent--default-inside-comment ()",
+    );
+    eval_first_form_after_marker(
+        &mut ev,
+        &simple_source,
+        "(defun delete-horizontal-space (&optional backward-only)",
+    );
+    eval_first_form_after_marker(
+        &mut ev,
+        &simple_source,
+        "(defun delete-space--internal (chars backward-only)",
+    );
+    eval_first_form_after_marker(&mut ev, &subr_source, "(defun cadr (x)");
+    eval_first_form_after_marker(&mut ev, &subr_source, "(defun last (list &optional n)");
+    eval_first_form_after_marker(&mut ev, &indent_source, "(defun indent-line-to (column)");
+    eval_first_form_after_marker(
+        &mut ev,
+        &indent_source,
+        "(defun indent--funcall-widened (func)",
+    );
+    eval_first_form_after_marker(&mut ev, &indent_source, "(defun insert-tab (&optional arg)");
+    eval_first_form_after_marker(
+        &mut ev,
+        &indent_source,
+        "(defun indent-next-tab-stop (column &optional prev)",
+    );
+    eval_first_form_after_marker(&mut ev, &indent_source, "(defun tab-to-tab-stop ()");
+    eval_first_form_after_marker(
+        &mut ev,
+        &indent_source,
+        "(defun indent-region-line-by-line (start end)",
+    );
+    eval_first_form_after_marker(
+        &mut ev,
+        &indent_source,
+        "(defvar indent-region-function #'indent-region-line-by-line",
+    );
+    eval_first_form_after_marker(
+        &mut ev,
+        &indent_source,
+        "(defun indent-region (start end &optional column)",
+    );
+    eval_first_form_after_marker(&mut ev, &indent_source, "(defun indent-relative (&optional");
+    eval_first_form_after_marker(
+        &mut ev,
+        &indent_source,
+        "(defun indent-for-tab-command (&optional arg)",
+    );
+    ev
+}
+
+fn eval_all(ev: &mut Context, src: &str) -> Vec<String> {
+    ev.eval_str_each(src)
+        .iter()
+        .map(super::super::format_eval_result)
+        .collect()
+}
 
 #[test]
 fn eval_column_and_indentation_subset() {
@@ -55,7 +235,7 @@ fn current_column_and_move_to_column_treat_invisible_text_as_zero_width() {
         )
         .expect("invisible column scan");
     assert_eq!(
-        crate::emacs_core::print::print_value(&value),
+        super::super::print::print_value(&value),
         "((4 0 0 0 0 0 0) (10 0 10))"
     );
 }
@@ -135,7 +315,7 @@ fn backward_vertical_motion_reaches_buffer_start_with_hidden_prefix() {
         .expect("backward motion past a hidden buffer prefix");
     // GNU Emacs 31.1, src/indent.c:vmotion: reaching BEGV preserves
     // the position reached and the actual row count, even if BEGV is hidden.
-    assert_eq!(crate::emacs_core::print::print_value(&value), "(-50 1)");
+    assert_eq!(super::super::print::print_value(&value), "(-50 1)");
 }
 
 #[test]
@@ -166,7 +346,7 @@ fn backward_vertical_motion_counts_hidden_prefix_rows_with_narrowing() {
     // GNU Emacs 31.1: a partially hidden first line still occupies a row;
     // whole hidden lines do not. Narrowing changes the accessible boundary.
     assert_eq!(
-        crate::emacs_core::print::print_value(&value),
+        super::super::print::print_value(&value),
         "((-50 1) (-40 81) (-40 1) (-40 1) (-30 81))"
     );
 }
@@ -187,7 +367,7 @@ fn vertical_motion_skips_ellipsis_bearing_invisible_runs() {
                   (progn (goto-char 1) (list (vertical-motion 2) (point)))))"#,
         )
         .expect("ellipsis-bearing invisible vertical motion");
-    assert_eq!(crate::emacs_core::print::print_value(&value), "((1 22) (2 27))");
+    assert_eq!(super::super::print::print_value(&value), "((1 22) (2 27))");
 }
 
 #[test]
@@ -596,6 +776,39 @@ fn indent_to_rejects_non_integer() {
 }
 
 #[test]
+fn init_indent_vars_sets_defaults() {
+    crate::test_utils::init_test_tracing();
+    let mut obarray = neovm_value::symbol::Obarray::new();
+    init_indent_vars(&mut obarray);
+
+    assert_eq!(
+        obarray.symbol_value_copied("tab-width").unwrap().as_int(),
+        Some(8)
+    );
+    // `indent-tabs-mode' is a GNU `DEFVAR_BOOL' (`src/indent.c:2575') that
+    // `bindings.el:1048' then makes buffer-local, so it is declared by
+    // `defvar_bool::GNU_BOOL_VARIABLES' rather than here.
+    assert_eq!(
+        obarray
+            .symbol_value_copied("standard-indent")
+            .unwrap()
+            .as_int(),
+        Some(4)
+    );
+    assert!(
+        obarray
+            .symbol_value_copied("tab-stop-list")
+            .unwrap()
+            .is_nil()
+    );
+
+    // All should be special (dynamically bound)
+    assert!(obarray.is_special("tab-width"));
+    assert!(obarray.is_special("standard-indent"));
+    assert!(obarray.is_special("tab-stop-list"));
+}
+
+#[test]
 fn indent_for_tab_command_inserts_tab() {
     crate::test_utils::init_test_tracing();
     let mut ev = gnu_indent_el_eval();
@@ -625,7 +838,7 @@ fn eval_indent_to_inserts_padding_and_returns_column() {
                    (current-column)))"#,
         )
         .expect("first indent-to");
-    assert_eq!(crate::emacs_core::print::print_value(&first), "(6 6 6)");
+    assert_eq!(super::super::print::print_value(&first), "(6 6 6)");
 
     let second = ev
         .eval_str(
@@ -635,7 +848,7 @@ fn eval_indent_to_inserts_padding_and_returns_column() {
                    (current-column)))"#,
         )
         .expect("second indent-to");
-    assert_eq!(crate::emacs_core::print::print_value(&second), "(0 5 5)");
+    assert_eq!(super::super::print::print_value(&second), "(0 5 5)");
 }
 
 #[test]
@@ -654,7 +867,7 @@ fn eval_indent_to_inherits_text_properties() {
         )
         .expect("eval");
     assert_eq!(
-        crate::emacs_core::print::print_value(&value),
+        super::super::print::print_value(&value),
         r#"#("abc       :tag:" 0 10 (p 1))"#
     );
 }
@@ -679,7 +892,7 @@ fn eval_move_to_column_force_inherits_text_properties_in_both_insertion_branches
         )
         .expect("move-to-column force property inheritance");
     assert_eq!(
-        crate::emacs_core::print::print_value(&value),
+        super::super::print::print_value(&value),
         r#"(#("x    " 0 5 (:time "STAMP")) #("x       z" 0 8 (:time "STAMP")))"#
     );
 }
@@ -702,7 +915,7 @@ fn eval_move_to_column_force_honors_category_rear_nonsticky() {
         )
         .expect("move-to-column category rear-nonsticky boundary");
     assert_eq!(
-        crate::emacs_core::print::print_value(&value),
+        super::super::print::print_value(&value),
         r#"("x  " t nil nil)"#
     );
 }
@@ -781,7 +994,7 @@ fn indent_for_tab_command_normalizes_leading_whitespace_at_point() {
              (list (indent-for-tab-command) (point) (append (buffer-string) nil)))"#,
         )
         .expect("eval");
-    let printed = crate::emacs_core::print::print_value(&value);
+    let printed = super::super::print::print_value(&value);
     assert_eq!(printed, "(nil 2 (9 120))");
 }
 
@@ -800,8 +1013,13 @@ fn save_restriction_restores_full_buffer_after_widen_insert() {
              (append (buffer-string) nil))"#,
         )
         .expect("eval");
-    assert_eq!(crate::emacs_core::print::print_value(&value), "(9 120)");
+    assert_eq!(super::super::print::print_value(&value), "(9 120)");
 }
+
+// ---------------------------------------------------------------------------
+// `(space ...)` and overlay `display` column width (GNU `check_display_width`).
+// Expected values verified byte-exact against GNU Emacs 31.0.50 --batch.
+// ---------------------------------------------------------------------------
 
 #[test]
 fn current_column_counts_display_space_width() {
@@ -816,7 +1034,7 @@ fn current_column_counts_display_space_width() {
                  (list (current-column) (progn (goto-char 3) (current-column))))"#,
         )
         .expect("eval");
-    assert_eq!(crate::emacs_core::print::print_value(&v), "(7 6)");
+    assert_eq!(super::super::print::print_value(&v), "(7 6)");
 }
 
 #[test]
@@ -832,7 +1050,7 @@ fn current_column_counts_display_space_align_to() {
                  (list (current-column) (progn (goto-char 2) (current-column))))"#,
         )
         .expect("eval");
-    assert_eq!(crate::emacs_core::print::print_value(&v), "(11 1)");
+    assert_eq!(super::super::print::print_value(&v), "(11 1)");
 }
 
 #[test]
@@ -848,7 +1066,7 @@ fn current_column_counts_display_space_relative_width() {
                  (list (current-column) (progn (goto-char 2) (current-column))))"#,
         )
         .expect("eval");
-    assert_eq!(crate::emacs_core::print::print_value(&v), "(4 1)");
+    assert_eq!(super::super::print::print_value(&v), "(4 1)");
 }
 
 #[test]
@@ -865,7 +1083,7 @@ fn current_column_counts_display_image_as_tty_placeholder() {
                  (current-column))"#,
         )
         .expect("eval");
-    assert_eq!(crate::emacs_core::print::print_value(&v), "5");
+    assert_eq!(super::super::print::print_value(&v), "5");
 }
 
 #[test]
@@ -881,7 +1099,7 @@ fn current_column_counts_display_slice_as_tty_placeholder() {
                        (progn (goto-char 5) (current-column))))"#,
         )
         .expect("eval");
-    assert_eq!(crate::emacs_core::print::print_value(&v), "(4 2)");
+    assert_eq!(super::super::print::print_value(&v), "(4 2)");
 }
 
 #[test]
@@ -897,7 +1115,7 @@ fn current_column_float_width_is_not_honored_but_float_align_is() {
                  (current-column))"#,
         )
         .expect("eval");
-    assert_eq!(crate::emacs_core::print::print_value(&v), "3");
+    assert_eq!(super::super::print::print_value(&v), "3");
     // GNU: a float `:align-to` IS honored -> round(7.6)=8, 8-1=7 -> col 8, c -> 9.
     let v = ev
         .eval_str(
@@ -907,7 +1125,7 @@ fn current_column_float_width_is_not_honored_but_float_align_is() {
                  (current-column))"#,
         )
         .expect("eval");
-    assert_eq!(crate::emacs_core::print::print_value(&v), "9");
+    assert_eq!(super::super::print::print_value(&v), "9");
 }
 
 #[test]
@@ -925,7 +1143,7 @@ fn move_to_column_stops_at_display_space_run_end() {
                  (point))"#,
         )
         .expect("eval");
-    assert_eq!(crate::emacs_core::print::print_value(&v), "3");
+    assert_eq!(super::super::print::print_value(&v), "3");
 }
 
 #[test]
@@ -941,7 +1159,7 @@ fn current_column_counts_overlay_display_string() {
                  (list (current-column) (progn (goto-char 2) (current-column))))"#,
         )
         .expect("eval");
-    assert_eq!(crate::emacs_core::print::print_value(&v), "(4 1)");
+    assert_eq!(super::super::print::print_value(&v), "(4 1)");
 }
 
 #[test]
@@ -959,7 +1177,54 @@ fn move_to_column_stops_at_overlay_display_run_end() {
                        (progn (move-to-column 5) (point))))"#,
         )
         .expect("eval");
-    assert_eq!(crate::emacs_core::print::print_value(&v), "(3 5)");
+    assert_eq!(super::super::print::print_value(&v), "(3 5)");
+}
+
+// ---------------------------------------------------------------------------
+// Ledger 216: the horizontal origin
+// ---------------------------------------------------------------------------
+
+/// GNU reaches a `vertical-motion` goal column at `first_x + to_x`
+/// (`src/indent.c:2540`), `first_x` being `it.first_visible_x` (`:2321`), i.e.
+/// the hscroll.  The scanner in `indent.rs` counts columns from the LINE start,
+/// so the window-relative goal has to be moved into that space.
+///
+/// The table is GNU Emacs 31.0.90's own, 80x24 pty, `truncate-lines' t, a line
+/// starting at 202 (`scripts/l216-hscroll-origin-probe.el`, PARTA): at hscroll
+/// 5 the goals 0 / 10 / 40 / 79 answer 207 / 217 / 247 / 286, every one
+/// `202 + hscroll + goal`.
+#[test]
+fn a_goal_column_is_window_relative_and_the_walk_is_line_relative() {
+    let unscrolled = ScreenLineExtent {
+        first_visible_col: 0,
+        last_visible_col: 79,
+    };
+    let scrolled = ScreenLineExtent {
+        first_visible_col: 5,
+        last_visible_col: 84,
+    };
+    for goal in [0, 10, 40, 79] {
+        assert_eq!(unscrolled.goal_col_in_line_space(goal), goal);
+        assert_eq!(scrolled.goal_col_in_line_space(goal), goal + 5);
+    }
+    // GNU clamps a negative COLS to the row start, not to a negative column.
+    assert_eq!(scrolled.goal_col_in_line_space(-3), 5);
+    // The edge is the OTHER term and is not the goal's business: a goal past
+    // it stays past it, and the walk clamps.
+    assert_eq!(scrolled.goal_col_in_line_space(200), 205);
+}
+
+/// GNU's WORD_WRAP goal backtrack lives in `move_it_in_display_line`
+/// (`src/xdisp.c:10859-10888`), the CALLER of the walk, and applies only to a
+/// row the walk left by continuation.  Measured, GNU Emacs 31.0.90, 80x24 pty,
+/// one 300-character line of `x' with no wrap opportunity in it
+/// (`tmp/l216/wrapgoal-gnu-cold.txt`): goal 80 answers 80 with `word-wrap' nil
+/// and 79 with it t, while goal 79 answers 80 under both.
+#[test]
+fn only_word_wrap_backs_a_goal_off_the_row_edge() {
+    assert!(LineWrap::Truncate.goal_stops_at_row_edge());
+    assert!(LineWrap::WindowWrap.goal_stops_at_row_edge());
+    assert!(!LineWrap::WordWrap.goal_stops_at_row_edge());
 }
 
 /// A per-character display scan must resolve its well-known symbol names once,
@@ -1028,188 +1293,6 @@ fn display_advance_interns_no_symbols_per_character() {
         neovm_value::intern::intern_call_names(),
     );
 }
-
-fn bootstrap_eval_all(src: &str) -> Vec<String> {
-    runtime_startup_eval_all(src)
-}
-
-fn gnu_simple_indent_eval() -> Context {
-    let project_root = crate::test_utils::workspace_root();
-    let simple_path = project_root.join("lisp/simple.el");
-    let simple_source = fs::read_to_string(&simple_path).expect("read GNU simple.el");
-
-    let mut ev = Context::new();
-    install_bare_elisp_shims(&mut ev);
-    ev.set_lexical_binding(true);
-    eval_first_form_after_marker(&mut ev, &simple_source, "(defun back-to-indentation ()");
-    ev
-}
-
-fn gnu_indent_el_eval() -> Context {
-    let project_root = crate::test_utils::workspace_root();
-    let indent_path = project_root.join("lisp/indent.el");
-    let indent_source = fs::read_to_string(&indent_path).expect("read GNU indent.el");
-    let simple_path = project_root.join("lisp/simple.el");
-    let simple_source = fs::read_to_string(&simple_path).expect("read GNU simple.el");
-    let subr_path = project_root.join("lisp/subr.el");
-    let subr_source = fs::read_to_string(&subr_path).expect("read GNU subr.el");
-    let syntax_path = project_root.join("lisp/emacs-lisp/syntax.el");
-    let syntax_source = fs::read_to_string(&syntax_path).expect("read GNU syntax.el");
-
-    let mut ev = Context::new();
-    install_bare_elisp_shims(&mut ev);
-    ev.set_lexical_binding(true);
-    ev.eval_str(
-        r#"
-        (setq fill-prefix nil)
-        (setq abbrev-mode nil)
-        (defvar tab-always-indent t)
-        (defvar tab-first-completion nil)
-        (fset 'use-region-p (lambda () nil))
-        (fset 'make-progress-reporter (lambda (&rest _args) nil))
-        (fset 'progress-reporter-update (lambda (&rest _args) nil))
-        (fset 'progress-reporter-done (lambda (&rest _args) nil))
-        "#,
-    )
-    .expect("eval progress reporter stubs");
-    eval_first_form_after_marker(
-        &mut ev,
-        &syntax_source,
-        "(defvar syntax-propertize-function nil",
-    );
-    eval_first_form_after_marker(&mut ev, &syntax_source, "(defun syntax-propertize (pos)");
-    eval_first_form_after_marker(&mut ev, &indent_source, "(defvar indent-line-function ");
-    eval_first_form_after_marker(
-        &mut ev,
-        &indent_source,
-        "(defvar indent-line-ignored-functions ",
-    );
-    eval_first_form_after_marker(
-        &mut ev,
-        &indent_source,
-        "(defun indent-according-to-mode (&optional inhibit-widen)",
-    );
-    eval_first_form_after_marker(
-        &mut ev,
-        &indent_source,
-        "(defun indent--default-inside-comment ()",
-    );
-    eval_first_form_after_marker(
-        &mut ev,
-        &simple_source,
-        "(defun delete-horizontal-space (&optional backward-only)",
-    );
-    eval_first_form_after_marker(
-        &mut ev,
-        &simple_source,
-        "(defun delete-space--internal (chars backward-only)",
-    );
-    eval_first_form_after_marker(&mut ev, &subr_source, "(defun cadr (x)");
-    eval_first_form_after_marker(&mut ev, &subr_source, "(defun last (list &optional n)");
-    eval_first_form_after_marker(&mut ev, &indent_source, "(defun indent-line-to (column)");
-    eval_first_form_after_marker(
-        &mut ev,
-        &indent_source,
-        "(defun indent--funcall-widened (func)",
-    );
-    eval_first_form_after_marker(&mut ev, &indent_source, "(defun insert-tab (&optional arg)");
-    eval_first_form_after_marker(
-        &mut ev,
-        &indent_source,
-        "(defun indent-next-tab-stop (column &optional prev)",
-    );
-    eval_first_form_after_marker(&mut ev, &indent_source, "(defun tab-to-tab-stop ()");
-    eval_first_form_after_marker(
-        &mut ev,
-        &indent_source,
-        "(defun indent-region-line-by-line (start end)",
-    );
-    eval_first_form_after_marker(
-        &mut ev,
-        &indent_source,
-        "(defvar indent-region-function #'indent-region-line-by-line",
-    );
-    eval_first_form_after_marker(
-        &mut ev,
-        &indent_source,
-        "(defun indent-region (start end &optional column)",
-    );
-    eval_first_form_after_marker(&mut ev, &indent_source, "(defun indent-relative (&optional");
-    eval_first_form_after_marker(
-        &mut ev,
-        &indent_source,
-        "(defun indent-for-tab-command (&optional arg)",
-    );
-    ev
-}
-
-fn eval_all(ev: &mut Context, src: &str) -> Vec<String> {
-    ev.eval_str_each(src)
-        .iter()
-        .map(super::super::format_eval_result)
-        .collect()
-}
-
-fn eval_first_form_after_marker(eval: &mut Context, source: &str, marker: &str) {
-    let start = source
-        .find(marker)
-        .unwrap_or_else(|| panic!("missing GNU simple.el marker: {marker}"));
-    let (form, _) = crate::emacs_core::value_reader::read_one(
-        &source[start..],
-        0,
-        crate::emacs_core::eval::VariableView::canonical(
-            neovm_value::symbol::CanonicalAccess::TEST,
-            &test_ob(),
-        ),
-    )
-    .unwrap_or_else(|err| panic!("parse GNU simple.el from {marker} failed: {:?}", err))
-    .unwrap_or_else(|| panic!("no GNU simple.el form found after marker: {marker}"));
-    eval.eval_form(form)
-        .unwrap_or_else(|err| panic!("evaluate GNU simple.el form {marker} failed: {:?}", err));
-}
-
-/// Install minimal `defun`/`defmacro`/`when`/`unless` shims so a bare
-/// evaluator can evaluate forms extracted from GNU `.el` source files.
-/// Also installs a minimal `with-temp-buffer` macro because many GNU
-/// elisp helpers (`back-to-indentation`, `indent-region`, etc.) used
-/// by these tests are wrapped in `(with-temp-buffer ...)` blocks.
-fn install_bare_elisp_shims(ev: &mut Context) {
-    let shims = r#"
-;; `subr.el' creates these five with `defalias'; GNU has no C version of any
-;; of them (lisp/subr.el:71 and :2277-2280), so a bare evaluator standing in
-;; for a loaded one has to be given the same aliases subr.el gives it.
-;; DIVERGENCES.md 148.
-(defalias 'not #'null)
-(defalias 'string= #'string-equal)
-(defalias 'string< #'string-lessp)
-(defalias 'string> #'string-greaterp)
-(defalias 'move-marker #'set-marker)
-(defalias 'defun (cons 'macro #'(lambda (name arglist &rest body)
-  (list 'defalias (list 'quote name) (cons 'function (list (cons 'lambda (cons arglist body))))))))
-(defalias 'defmacro (cons 'macro #'(lambda (name arglist &rest body)
-  (list 'defalias (list 'quote name)
-        (list 'cons ''macro (cons 'function (list (cons 'lambda (cons arglist body)))))))))
-(defalias 'when (cons 'macro #'(lambda (cond &rest body)
-  (list 'if cond (cons 'progn body)))))
-(defalias 'unless (cons 'macro #'(lambda (cond &rest body)
-  (cons 'if (cons cond (cons nil body))))))
-(defalias 'with-temp-buffer (cons 'macro #'(lambda (&rest body)
-  ;; Minimal shim — uses get-buffer-create with a fixed unique name.
-  ;; Sufficient for the bare-shim indent tests, which don't nest
-  ;; with-temp-buffer calls.
-  (list 'let
-        (list (list 'vm-temp-buf
-                    (list 'get-buffer-create " *vm-shim-temp*" t)))
-        (list 'unwind-protect
-              (list 'save-current-buffer
-                    (list 'set-buffer 'vm-temp-buf)
-                    (list 'erase-buffer)
-                    (cons 'progn body))
-              (list 'kill-buffer 'vm-temp-buf))))))
-"#;
-    ev.eval_str(shims).expect("install bare elisp shims");
-}
-
-fn test_ob() -> neovm_value::symbol::Obarray {
-    neovm_value::symbol::Obarray::new()
-}
+#[cfg(test)]
+#[path = "gdm_columns.rs"]
+mod gdm_columns;

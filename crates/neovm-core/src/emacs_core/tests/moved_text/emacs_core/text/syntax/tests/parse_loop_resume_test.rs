@@ -14,8 +14,263 @@
 //!   with (the mid-step `syntax-propertize` pause) answers the same.
 
 use super::super::*;
-
 use neovm_text::emacs_core::syntax::*;
+
+struct Rng(u64);
+impl Rng {
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        self.0
+    }
+    fn below(&mut self, n: usize) -> usize {
+        (self.next() % n as u64) as usize
+    }
+}
+
+/// Every loop top, as a resumable state.
+struct RecordAll {
+    tops: Vec<LoopState>,
+}
+
+impl ScanMode for RecordAll {
+    const ACTIVE: bool = true;
+    fn first_target(&self) -> usize {
+        0
+    }
+    fn at_loop_top(&mut self, top: LoopTop<'_>) -> TopAction {
+        self.tops.push(top.to_state());
+        TopAction::Continue(top.char_pos + 1)
+    }
+}
+
+/// Pause at the loop top at or after `at`.
+struct PauseAt {
+    at: usize,
+}
+
+impl ScanMode for PauseAt {
+    const ACTIVE: bool = true;
+    fn first_target(&self) -> usize {
+        self.at
+    }
+    fn at_loop_top(&mut self, _top: LoopTop<'_>) -> TopAction {
+        TopAction::Pause
+    }
+}
+
+/// A plain scan that accepts a first-character syntax override.
+struct Overriding;
+
+impl ScanMode for Overriding {
+    const ACTIVE: bool = false;
+    const OVERRIDE: bool = true;
+    fn at_loop_top(&mut self, _top: LoopTop<'_>) -> TopAction {
+        TopAction::Continue(usize::MAX)
+    }
+}
+
+const TOKENS: &[&str] = &[
+    "/*",
+    "*/",
+    "//",
+    "\n",
+    "'",
+    "\"",
+    "\\",
+    "(*",
+    "*)",
+    "{-",
+    "-}",
+    "!",
+    "|",
+    "#",
+    "%",
+    "(",
+    ")",
+    "[",
+    "]",
+    ";",
+    "it's",
+    "a\\(b",
+    "é",
+    "?\\(",
+    "\"a\\\"b\"",
+];
+
+fn random_text(rng: &mut Rng, max_tokens: usize) -> String {
+    let mut out = String::new();
+    for _ in 0..rng.below(max_tokens + 1) {
+        if rng.below(3) == 0 {
+            for _ in 0..rng.below(4) + 1 {
+                out.push([' ', 'a', 'x', 'é', '_', '\''][rng.below(6)]);
+            }
+        } else {
+            out.push_str(TOKENS[rng.below(TOKENS.len())]);
+        }
+    }
+    out
+}
+
+fn modify(eval: &mut crate::emacs_core::eval::Context, ch: char, descriptor: &str) {
+    builtin_modify_syntax_entry(
+        eval,
+        vec![Value::fixnum(ch as i64), Value::string(descriptor)],
+    )
+    .expect("modify-syntax-entry");
+}
+
+/// Five fixed dialects, then random descriptors with random comment flags.
+fn install_table(eval: &mut crate::emacs_core::eval::Context, kind: usize, rng: &mut Rng) {
+    for ch in [
+        '/', '*', '\\', '\'', '"', '!', '#', '%', '(', ')', '{', '-', '}', '|', '\n', ';', '[',
+        ']', '?',
+    ] {
+        modify(eval, ch, ".");
+    }
+    modify(eval, '\\', "\\");
+    modify(eval, '"', "\"");
+    modify(eval, '(', "()");
+    modify(eval, ')', ")(");
+    modify(eval, '[', "(]");
+    modify(eval, ']', ")[");
+    match kind {
+        0 => {
+            modify(eval, '/', ". 124b");
+            modify(eval, '*', ". 23");
+            modify(eval, '\n', "> b");
+            modify(eval, '\'', "\"");
+        }
+        1 => {
+            modify(eval, ';', "<");
+            modify(eval, '\n', ">");
+            modify(eval, '\'', "'");
+            modify(eval, '?', "_ p");
+        }
+        2 => {
+            modify(eval, '(', "()1n");
+            modify(eval, ')', ")(4n");
+            modify(eval, '*', ". 23n");
+            modify(eval, '{', "(}1n");
+            modify(eval, '}', "){4n");
+            modify(eval, '-', ". 23n");
+        }
+        3 => {
+            modify(eval, '!', "!");
+            modify(eval, '|', "|");
+            modify(eval, '/', ". 124b");
+            modify(eval, '*', ". 23");
+        }
+        4 => {
+            modify(eval, '#', "< 3");
+            modify(eval, '%', ". 4");
+            modify(eval, '\n', ">");
+        }
+        _ => {
+            const CLASSES: &[&str] = &[
+                ".", "w", "_", "(", ")", "\"", "\\", "/", "'", "<", ">", "!", "|", " ",
+            ];
+            const FLAGS: &[&str] = &[
+                "", "1", "2", "3", "4", "b", "c", "n", "p", "14", "23", "124b", "23n",
+            ];
+            for ch in ['/', '*', '#', '%', '-', '!', '|', ';', '\'', '\n', '?'] {
+                let class = CLASSES[rng.below(CLASSES.len())];
+                let flags = FLAGS[rng.below(FLAGS.len())];
+                let descriptor = match class {
+                    "(" => format!("(){flags}"),
+                    ")" => format!(")({flags}"),
+                    _ => format!("{class} {flags}"),
+                };
+                modify(eval, ch, &descriptor);
+            }
+        }
+    }
+}
+
+fn set_text(eval: &mut crate::emacs_core::eval::Context, text: &str) {
+    let buf = eval
+        .edit
+        .buffers
+        .current_buffer_mut()
+        .expect("current buffer");
+    buf.widen();
+    buf.delete_emacs_byte_range(neovm_edit::buffer::EmacsByteRange::from_usize(
+        buf.point_min_emacs_byte_pos().get(),
+        buf.point_max_emacs_byte_pos().get(),
+    ));
+    buf.insert(text);
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Opts {
+    target_depth: Option<i64>,
+    stop_before: bool,
+    commentstop: CommentStopMode,
+}
+
+fn random_opts(rng: &mut Rng) -> Opts {
+    Opts {
+        target_depth: [None, None, None, Some(-1), Some(0), Some(1), Some(2)][rng.below(7)],
+        stop_before: rng.below(5) == 0,
+        commentstop: [
+            CommentStopMode::None,
+            CommentStopMode::None,
+            CommentStopMode::Comment,
+            CommentStopMode::SyntaxTable,
+        ][rng.below(4)],
+    }
+}
+
+/// One scan of the current buffer under the context's own environment.
+fn scan<M: ScanMode>(
+    eval: &crate::emacs_core::eval::Context,
+    entry: Entry,
+    to_char: usize,
+    opts: Opts,
+    mode: &mut M,
+) -> ScanEnd {
+    let buf = eval.edit.buffers.current_buffer().expect("current buffer");
+    let table = SyntaxTable::for_buffer(buf);
+    let honor = parse_sexp_lookup_properties_enabled(eval);
+    let props = SyntaxProperties::for_scan(honor, eval.variables(), &eval.edit.buffers);
+    let escape_policy = CommentEndEscapePolicy::for_context(eval);
+    run_parse_loop(
+        buf,
+        &table,
+        entry,
+        to_char,
+        opts.target_depth,
+        opts.stop_before,
+        opts.commentstop,
+        props,
+        escape_policy,
+        mode,
+    )
+}
+
+fn finished(end: ScanEnd) -> (PartialParseState, i64) {
+    match end {
+        ScanEnd::Finished(finish) => (finish.state, finish.stop),
+        ScanEnd::Paused(at) => panic!("unexpected pause at {}", at.char_pos),
+    }
+}
+
+/// The syntax the loop reads the character at `at` with, computed the slow
+/// way (no flat table, fresh property cache).
+fn syntax_at(
+    eval: &crate::emacs_core::eval::Context,
+    at: &LoopState,
+) -> (SyntaxClass, SyntaxFlags) {
+    let buf = eval.edit.buffers.current_buffer().expect("current buffer");
+    let table = SyntaxTable::for_buffer(buf);
+    let honor = parse_sexp_lookup_properties_enabled(eval);
+    let props = SyntaxProperties::for_scan(honor, eval.variables(), &eval.edit.buffers);
+    let prop_cache = SyntaxPropRange::new(props);
+    let ch = ParseBufferChars::at_emacs_byte(buf, at.byte_pos).peek();
+    let entry = effective_syntax_entry_for_abs_char(buf, &table, ch, at.char_pos, &prop_cache);
+    (entry.class, entry.flags)
+}
 
 #[test]
 fn a_scan_resumed_at_any_loop_top_answers_as_the_uninterrupted_scan() {
@@ -215,261 +470,4 @@ fn a_scan_resumed_at_any_loop_top_answers_as_the_uninterrupted_scan() {
         first_top_pauses_in_comment > 10,
         "pauses that carried a comment-resume syntax: {first_top_pauses_in_comment}"
     );
-}
-
-struct Rng(u64);
-
-impl Rng {
-    fn next(&mut self) -> u64 {
-        self.0 ^= self.0 << 13;
-        self.0 ^= self.0 >> 7;
-        self.0 ^= self.0 << 17;
-        self.0
-    }
-    fn below(&mut self, n: usize) -> usize {
-        (self.next() % n as u64) as usize
-    }
-}
-
-/// Every loop top, as a resumable state.
-struct RecordAll {
-    tops: Vec<LoopState>,
-}
-
-impl ScanMode for RecordAll {
-    const ACTIVE: bool = true;
-    fn first_target(&self) -> usize {
-        0
-    }
-    fn at_loop_top(&mut self, top: LoopTop<'_>) -> TopAction {
-        self.tops.push(top.to_state());
-        TopAction::Continue(top.char_pos + 1)
-    }
-}
-
-/// Pause at the loop top at or after `at`.
-struct PauseAt {
-    at: usize,
-}
-
-impl ScanMode for PauseAt {
-    const ACTIVE: bool = true;
-    fn first_target(&self) -> usize {
-        self.at
-    }
-    fn at_loop_top(&mut self, _top: LoopTop<'_>) -> TopAction {
-        TopAction::Pause
-    }
-}
-
-/// A plain scan that accepts a first-character syntax override.
-struct Overriding;
-
-impl ScanMode for Overriding {
-    const ACTIVE: bool = false;
-    const OVERRIDE: bool = true;
-    fn at_loop_top(&mut self, _top: LoopTop<'_>) -> TopAction {
-        TopAction::Continue(usize::MAX)
-    }
-}
-
-fn random_text(rng: &mut Rng, max_tokens: usize) -> String {
-    let mut out = String::new();
-    for _ in 0..rng.below(max_tokens + 1) {
-        if rng.below(3) == 0 {
-            for _ in 0..rng.below(4) + 1 {
-                out.push([' ', 'a', 'x', 'é', '_', '\''][rng.below(6)]);
-            }
-        } else {
-            out.push_str(TOKENS[rng.below(TOKENS.len())]);
-        }
-    }
-    out
-}
-
-/// Five fixed dialects, then random descriptors with random comment flags.
-fn install_table(eval: &mut crate::emacs_core::eval::Context, kind: usize, rng: &mut Rng) {
-    for ch in [
-        '/', '*', '\\', '\'', '"', '!', '#', '%', '(', ')', '{', '-', '}', '|', '\n', ';', '[',
-        ']', '?',
-    ] {
-        modify(eval, ch, ".");
-    }
-    modify(eval, '\\', "\\");
-    modify(eval, '"', "\"");
-    modify(eval, '(', "()");
-    modify(eval, ')', ")(");
-    modify(eval, '[', "(]");
-    modify(eval, ']', ")[");
-    match kind {
-        0 => {
-            modify(eval, '/', ". 124b");
-            modify(eval, '*', ". 23");
-            modify(eval, '\n', "> b");
-            modify(eval, '\'', "\"");
-        }
-        1 => {
-            modify(eval, ';', "<");
-            modify(eval, '\n', ">");
-            modify(eval, '\'', "'");
-            modify(eval, '?', "_ p");
-        }
-        2 => {
-            modify(eval, '(', "()1n");
-            modify(eval, ')', ")(4n");
-            modify(eval, '*', ". 23n");
-            modify(eval, '{', "(}1n");
-            modify(eval, '}', "){4n");
-            modify(eval, '-', ". 23n");
-        }
-        3 => {
-            modify(eval, '!', "!");
-            modify(eval, '|', "|");
-            modify(eval, '/', ". 124b");
-            modify(eval, '*', ". 23");
-        }
-        4 => {
-            modify(eval, '#', "< 3");
-            modify(eval, '%', ". 4");
-            modify(eval, '\n', ">");
-        }
-        _ => {
-            const CLASSES: &[&str] = &[
-                ".", "w", "_", "(", ")", "\"", "\\", "/", "'", "<", ">", "!", "|", " ",
-            ];
-            const FLAGS: &[&str] = &[
-                "", "1", "2", "3", "4", "b", "c", "n", "p", "14", "23", "124b", "23n",
-            ];
-            for ch in ['/', '*', '#', '%', '-', '!', '|', ';', '\'', '\n', '?'] {
-                let class = CLASSES[rng.below(CLASSES.len())];
-                let flags = FLAGS[rng.below(FLAGS.len())];
-                let descriptor = match class {
-                    "(" => format!("(){flags}"),
-                    ")" => format!(")({flags}"),
-                    _ => format!("{class} {flags}"),
-                };
-                modify(eval, ch, &descriptor);
-            }
-        }
-    }
-}
-
-fn set_text(eval: &mut crate::emacs_core::eval::Context, text: &str) {
-    let buf = eval
-        .edit
-        .buffers
-        .current_buffer_mut()
-        .expect("current buffer");
-    buf.widen();
-    buf.delete_emacs_byte_range(neovm_edit::buffer::EmacsByteRange::from_usize(
-        buf.point_min_emacs_byte_pos().get(),
-        buf.point_max_emacs_byte_pos().get(),
-    ));
-    buf.insert(text);
-}
-
-fn random_opts(rng: &mut Rng) -> Opts {
-    Opts {
-        target_depth: [None, None, None, Some(-1), Some(0), Some(1), Some(2)][rng.below(7)],
-        stop_before: rng.below(5) == 0,
-        commentstop: [
-            CommentStopMode::None,
-            CommentStopMode::None,
-            CommentStopMode::Comment,
-            CommentStopMode::SyntaxTable,
-        ][rng.below(4)],
-    }
-}
-
-/// One scan of the current buffer under the context's own environment.
-fn scan<M: ScanMode>(
-    eval: &crate::emacs_core::eval::Context,
-    entry: Entry,
-    to_char: usize,
-    opts: Opts,
-    mode: &mut M,
-) -> ScanEnd {
-    let buf = eval.edit.buffers.current_buffer().expect("current buffer");
-    let table = SyntaxTable::for_buffer(buf);
-    let honor = parse_sexp_lookup_properties_enabled(eval);
-    let props = SyntaxProperties::for_scan(honor, eval.variables(), &eval.edit.buffers);
-    let escape_policy = CommentEndEscapePolicy::for_context(eval);
-    run_parse_loop(
-        buf,
-        &table,
-        entry,
-        to_char,
-        opts.target_depth,
-        opts.stop_before,
-        opts.commentstop,
-        props,
-        escape_policy,
-        mode,
-    )
-}
-
-fn finished(end: ScanEnd) -> (PartialParseState, i64) {
-    match end {
-        ScanEnd::Finished(finish) => (finish.state, finish.stop),
-        ScanEnd::Paused(at) => panic!("unexpected pause at {}", at.char_pos),
-    }
-}
-
-/// The syntax the loop reads the character at `at` with, computed the slow
-/// way (no flat table, fresh property cache).
-fn syntax_at(
-    eval: &crate::emacs_core::eval::Context,
-    at: &LoopState,
-) -> (SyntaxClass, SyntaxFlags) {
-    let buf = eval.edit.buffers.current_buffer().expect("current buffer");
-    let table = SyntaxTable::for_buffer(buf);
-    let honor = parse_sexp_lookup_properties_enabled(eval);
-    let props = SyntaxProperties::for_scan(honor, eval.variables(), &eval.edit.buffers);
-    let prop_cache = SyntaxPropRange::new(props);
-    let ch = ParseBufferChars::at_emacs_byte(buf, at.byte_pos).peek();
-    let entry = effective_syntax_entry_for_abs_char(buf, &table, ch, at.char_pos, &prop_cache);
-    (entry.class, entry.flags)
-}
-
-const TOKENS: &[&str] = &[
-    "/*",
-    "*/",
-    "//",
-    "\n",
-    "'",
-    "\"",
-    "\\",
-    "(*",
-    "*)",
-    "{-",
-    "-}",
-    "!",
-    "|",
-    "#",
-    "%",
-    "(",
-    ")",
-    "[",
-    "]",
-    ";",
-    "it's",
-    "a\\(b",
-    "é",
-    "?\\(",
-    "\"a\\\"b\"",
-];
-
-fn modify(eval: &mut crate::emacs_core::eval::Context, ch: char, descriptor: &str) {
-    builtin_modify_syntax_entry(
-        eval,
-        vec![Value::fixnum(ch as i64), Value::string(descriptor)],
-    )
-    .expect("modify-syntax-entry");
-}
-
-#[derive(Clone, Copy, Debug)]
-struct Opts {
-    target_depth: Option<i64>,
-    stop_before: bool,
-    commentstop: CommentStopMode,
 }

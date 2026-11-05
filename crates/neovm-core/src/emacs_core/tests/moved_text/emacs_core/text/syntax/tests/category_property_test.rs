@@ -17,6 +17,18 @@
 //!     so `default-text-properties` reaches a character with some other
 //!     property on it and not one with a bare plist.
 
+fn eval(src: &str) -> String {
+    crate::test_utils::init_test_tracing();
+    crate::test_utils::runtime_startup_eval_one(src)
+}
+
+/// Preamble defining the CC Mode `c-use-category` shape: a symbol carrying the
+/// paren syntax on its own plist, applied to text through `category`.
+const CATEGORY_SYMBOLS: &str = r#"
+  (put 'p12-open 'syntax-table '(4 . ?>))
+  (put 'p12-close 'syntax-table '(5 . ?<))
+"#;
+
 #[test]
 fn forward_sexp_resolves_syntax_through_a_category_property() {
     let result = eval(&format!(
@@ -305,15 +317,3 @@ fn properties_are_ignored_when_parse_sexp_lookup_properties_is_nil() {
     ));
     assert_eq!(result, "OK 2");
 }
-
-fn eval(src: &str) -> String {
-    crate::test_utils::init_test_tracing();
-    crate::test_utils::runtime_startup_eval_one(src)
-}
-
-/// Preamble defining the CC Mode `c-use-category` shape: a symbol carrying the
-/// paren syntax on its own plist, applied to text through `category`.
-const CATEGORY_SYMBOLS: &str = r#"
-  (put 'p12-open 'syntax-table '(4 . ?>))
-  (put 'p12-close 'syntax-table '(5 . ?<))
-"#;

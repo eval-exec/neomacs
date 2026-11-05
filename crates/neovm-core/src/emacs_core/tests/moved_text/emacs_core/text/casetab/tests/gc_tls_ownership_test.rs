@@ -1,6 +1,16 @@
 use crate::emacs_core::eval::Context;
-
 use neovm_text::emacs_core::casetab::*;
+
+fn populate(ctx: &mut Context) -> Value {
+    let table = builtin_standard_case_table(ctx, vec![]).unwrap();
+    builtin_set_standard_case_table(ctx, vec![table]).unwrap()
+}
+
+fn roots(ctx: &Context) -> Vec<Value> {
+    let mut roots = Vec::new();
+    collect_casetab_gc_roots(&mut roots, ctx.tagged_heap.identity());
+    roots
+}
 
 #[test]
 fn gc_tls_ownership_casetab_new_heap_reset_drops_old_values() {
@@ -71,15 +81,4 @@ fn gc_tls_ownership_casetab_activation_preserves_explicit_cache_semantics() {
             .any(|root| root.bits() == standard.bits())
     );
     first.gc_collect_exact();
-}
-
-fn populate(ctx: &mut Context) -> Value {
-    let table = builtin_standard_case_table(ctx, vec![]).unwrap();
-    builtin_set_standard_case_table(ctx, vec![table]).unwrap()
-}
-
-fn roots(ctx: &Context) -> Vec<Value> {
-    let mut roots = Vec::new();
-    collect_casetab_gc_roots(&mut roots, ctx.tagged_heap.identity());
-    roots
 }

@@ -1,6 +1,20 @@
 use crate::emacs_core::eval::Context;
-
 use neovm_text::emacs_core::ccl::*;
+
+fn populate(_ctx: &mut Context) -> Value {
+    let program = Value::vector(vec![Value::fixnum(0); 3]);
+    builtin_register_ccl_program_impl(vec![Value::symbol("gc-tls-owned-ccl"), program]).unwrap();
+    let map = Value::vector(vec![Value::fixnum(42)]);
+    builtin_register_code_conversion_map_impl(vec![Value::symbol("gc-tls-owned-map"), map])
+        .unwrap();
+    program
+}
+
+fn roots(ctx: &Context) -> Vec<Value> {
+    let mut roots = Vec::new();
+    collect_ccl_gc_roots(&mut roots, ctx.tagged_heap.identity());
+    roots
+}
 
 #[test]
 fn gc_tls_ownership_ccl_new_heap_reset_drops_old_values() {
@@ -104,19 +118,4 @@ fn gc_tls_ownership_ccl_registries_collect_on_independent_owner_threads() {
     populate(&mut second);
     second.gc_collect_exact();
     worker.join().unwrap();
-}
-
-fn populate(_ctx: &mut Context) -> Value {
-    let program = Value::vector(vec![Value::fixnum(0); 3]);
-    builtin_register_ccl_program_impl(vec![Value::symbol("gc-tls-owned-ccl"), program]).unwrap();
-    let map = Value::vector(vec![Value::fixnum(42)]);
-    builtin_register_code_conversion_map_impl(vec![Value::symbol("gc-tls-owned-map"), map])
-        .unwrap();
-    program
-}
-
-fn roots(ctx: &Context) -> Vec<Value> {
-    let mut roots = Vec::new();
-    collect_ccl_gc_roots(&mut roots, ctx.tagged_heap.identity());
-    roots
 }

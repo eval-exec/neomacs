@@ -3966,7 +3966,3 @@ impl SyntaxSafeKey {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "buffer_text/tests/fontification_noalloc.rs"]
-mod fontification_noalloc_tests;

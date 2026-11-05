@@ -287,8 +287,3 @@ pub(crate) fn builtin_extract_rectangle_line(args: Vec<Value>) -> EvalResult {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
-
-
-#[cfg(test)]
-#[path = "tests/rect_test.rs"]
-mod tests;

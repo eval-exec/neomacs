@@ -42,21 +42,3 @@ pub mod treesit;
 pub mod xml;
 #[path = "text/zlib/mod.rs"]
 pub mod zlib;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-#[cfg(test)]
-#[path = "text/string_pos_cache/tests/string_pos_cache_test.rs"]
-mod string_pos_cache_test;

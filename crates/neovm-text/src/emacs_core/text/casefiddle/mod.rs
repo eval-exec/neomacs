@@ -1425,11 +1425,3 @@ impl CasingChangedSpan {
         self.new_len
     }
 }
-
-#[cfg(test)]
-#[path = "tests/casefiddle_test.rs"]
-mod tests;
-
-#[cfg(test)]
-#[path = "tests/casing_types.rs"]
-mod casing_types;

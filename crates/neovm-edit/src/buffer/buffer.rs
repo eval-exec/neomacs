@@ -8816,11 +8816,3 @@ impl ModeLineNumberAnchor {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "buffer/tests/buffer_test.rs"]
-mod tests;
-
-#[cfg(test)]
-#[path = "buffer/tests/world_storage_test.rs"]
-mod world_storage_tests;

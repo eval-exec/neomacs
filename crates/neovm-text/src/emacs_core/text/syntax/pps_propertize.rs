@@ -364,9 +364,3 @@ pub(super) fn parse_partial_sexp_propertizing<H: crate::emacs_core::text_host::T
         }
     }
 }
-
-
-
-#[cfg(test)]
-#[path = "tests/pps_propertize_knob_test.rs"]
-mod knob_tests;

@@ -6,6 +6,36 @@
 
 use crate::emacs_core::format_eval_result;
 
+fn convert(bytes: &str, flag: &str, point: i64) -> String {
+    let mut eval = Context::new();
+    format_eval_result(&eval.eval_str(&format!(
+        r#"(progn
+             (erase-buffer)
+             (set-buffer-multibyte t)
+             (set-buffer-multibyte nil)
+             (insert (unibyte-string {bytes}))
+             (if (and (> (point-max) 1) (< {point} (point-max)))
+                 (put-text-property 1 {point} 'gdh 'yes))
+             (goto-char {point})
+             (let ((m (point-marker))
+                   (ov (if (> (point-max) 1) (make-overlay 1 (point-max)) nil)))
+               (let ((ret (set-buffer-multibyte {flag})))
+                 (list ret
+                       enable-multibyte-characters
+                       (point)
+                       (position-bytes (point))
+                       (point-max)
+                       (position-bytes (point-max))
+                       (buffer-size)
+                       (append (buffer-string) nil)
+                       (marker-position m)
+                       (and ov (overlay-start ov))
+                       (and ov (overlay-end ov))
+                       (get-text-property 1 'gdh)
+                       (car buffer-undo-list)))))"#
+    )))
+}
+
 #[test]
 fn flag_t_splits_c0_80_and_keeps_utf8() {
     crate::test_utils::init_test_tracing();
@@ -83,34 +113,4 @@ fn non_nil_on_an_already_multibyte_buffer_is_a_noop() {
                    (append (buffer-string) nil)))"#,
     ));
     assert_eq!(rendered, "OK (foo t 2 (233))");
-}
-
-fn convert(bytes: &str, flag: &str, point: i64) -> String {
-    let mut eval = Context::new();
-    format_eval_result(&eval.eval_str(&format!(
-        r#"(progn
-             (erase-buffer)
-             (set-buffer-multibyte t)
-             (set-buffer-multibyte nil)
-             (insert (unibyte-string {bytes}))
-             (if (and (> (point-max) 1) (< {point} (point-max)))
-                 (put-text-property 1 {point} 'gdh 'yes))
-             (goto-char {point})
-             (let ((m (point-marker))
-                   (ov (if (> (point-max) 1) (make-overlay 1 (point-max)) nil)))
-               (let ((ret (set-buffer-multibyte {flag})))
-                 (list ret
-                       enable-multibyte-characters
-                       (point)
-                       (position-bytes (point))
-                       (point-max)
-                       (position-bytes (point-max))
-                       (buffer-size)
-                       (append (buffer-string) nil)
-                       (marker-position m)
-                       (and ov (overlay-start ov))
-                       (and ov (overlay-end ov))
-                       (get-text-property 1 'gdh)
-                       (car buffer-undo-list)))))"#
-    )))
 }

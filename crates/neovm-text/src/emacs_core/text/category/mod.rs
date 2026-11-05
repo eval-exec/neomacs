@@ -832,7 +832,3 @@ pub fn carrier_tls_fingerprint(h: &mut u64) {
         STANDARD_CATEGORY_TABLE_OBJECT.with(|slot| slot.borrow().is_some() as u64),
     );
 }
-
-#[cfg(test)]
-#[path = "tests/category_test.rs"]
-mod tests;

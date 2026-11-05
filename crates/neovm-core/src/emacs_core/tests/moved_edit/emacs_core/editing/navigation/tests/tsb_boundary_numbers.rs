@@ -1,5 +1,4 @@
 //! Expectations captured from GNU Emacs 31.1 through sandbox-run.sh.
-
 #[test]
 fn tsb_backward_char_keeps_the_negated_count_out_of_lisp_values() {
     let form = r#"(with-temp-buffer

@@ -1,20 +1,17 @@
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
-
 use crate::emacs_core::bytecode::opcode::Op;
-
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
-
 use crate::emacs_core::format_eval_result;
-
 use crate::test_utils::{
     eval_with_ldefs_boot_autoloads, runtime_startup_context, runtime_startup_eval_all,
 };
-
-use crate::emacs_core::autoload::is_autoload_value;
-
+use neovm_edit::emacs_core::autoload::is_autoload_value;
 use neovm_edit::emacs_core::rect::*;
-
 use std::fs;
+
+fn bootstrap_eval_all(src: &str) -> Vec<String> {
+    runtime_startup_eval_all(src)
+}
 
 #[test]
 fn rectangle_copied_properties_have_only_manager_roots() {
@@ -113,6 +110,20 @@ fn rectangle_copied_properties_have_only_manager_roots() {
 }
 
 #[test]
+fn rectangle_state_default() {
+    crate::test_utils::init_test_tracing();
+    let state = RectangleState::new();
+    assert!(state.killed.is_empty());
+}
+
+#[test]
+fn rectangle_state_default_trait() {
+    crate::test_utils::init_test_tracing();
+    let state = RectangleState::default();
+    assert!(state.killed.is_empty());
+}
+
+#[test]
 fn extract_rectangle_startup_is_autoloaded() {
     crate::test_utils::init_test_tracing();
     let eval = eval_with_ldefs_boot_autoloads(&["extract-rectangle"]);
@@ -136,6 +147,94 @@ fn extract_rectangle_loads_from_gnu_rect_el() {
                    (subrp (symbol-function 'extract-rectangle))))"#,
     );
     assert_eq!(result[0], r#"OK (("a" "1") nil)"#);
+}
+
+#[test]
+fn extract_rectangle_line_returns_string() {
+    crate::test_utils::init_test_tracing();
+    let result = builtin_extract_rectangle_line(vec![Value::fixnum(1), Value::fixnum(3)]).unwrap();
+    assert_eq!(result.as_utf8_str(), Some(""));
+}
+
+#[test]
+fn extract_rectangle_line_with_line_argument() {
+    crate::test_utils::init_test_tracing();
+    let result = builtin_extract_rectangle_line(vec![
+        Value::fixnum(1),
+        Value::fixnum(3),
+        Value::string("abcdef"),
+    ])
+    .unwrap();
+    assert_eq!(result.as_utf8_str(), Some("bc"));
+}
+
+#[test]
+fn extract_rectangle_line_swapped_columns() {
+    crate::test_utils::init_test_tracing();
+    let result = builtin_extract_rectangle_line(vec![
+        Value::fixnum(3),
+        Value::fixnum(1),
+        Value::string("abcdef"),
+    ])
+    .unwrap();
+    assert_eq!(result.as_utf8_str(), Some("bc"));
+}
+
+#[test]
+fn extract_rectangle_line_preserves_raw_unibyte_bytes() {
+    crate::test_utils::init_test_tracing();
+    let result = builtin_extract_rectangle_line(vec![
+        Value::fixnum(0),
+        Value::fixnum(2),
+        Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![
+            0xFF, b'A', b'B',
+        ])),
+    ])
+    .unwrap();
+    let string = result
+        .as_lisp_string()
+        .expect("extract-rectangle-line should return a LispString");
+    assert!(!string.is_multibyte());
+    assert_eq!(string.as_bytes(), &[0xFF, b'A']);
+}
+
+#[test]
+fn extract_rectangle_line_negative_column_errors() {
+    crate::test_utils::init_test_tracing();
+    assert!(
+        builtin_extract_rectangle_line(vec![
+            Value::fixnum(-1),
+            Value::fixnum(1),
+            Value::string("abc"),
+        ])
+        .is_err()
+    );
+}
+
+#[test]
+fn extract_rectangle_line_validates_args() {
+    crate::test_utils::init_test_tracing();
+    assert!(builtin_extract_rectangle_line(vec![]).is_err());
+    assert!(builtin_extract_rectangle_line(vec![Value::fixnum(1)]).is_err());
+    assert!(
+        builtin_extract_rectangle_line(vec![Value::fixnum(1), Value::fixnum(2), Value::fixnum(3)])
+            .is_err()
+    );
+}
+
+#[test]
+fn delete_extract_rectangle_from_text_preserves_raw_unibyte_bytes() {
+    crate::test_utils::init_test_tracing();
+    let source =
+        neovm_value::heap_types::LispString::from_unibyte(vec![0xFF, b'A', b'\n', 0xFE, b'B']);
+    let (extracted, rewritten) = delete_extract_rectangle_from_text(&source, 0, 1, 0, 1);
+
+    assert_eq!(extracted.len(), 2);
+    assert_eq!(extracted[0].as_bytes(), &[0xFF]);
+    assert_eq!(extracted[1].as_bytes(), &[0xFE]);
+    assert!(!extracted[0].is_multibyte());
+    assert!(!rewritten.is_multibyte());
+    assert_eq!(rewritten.as_bytes(), b"A\nB");
 }
 
 #[test]
@@ -562,8 +661,4 @@ fn replace_rectangle_uses_runtime_alias_behavior() {
                    (symbol-function 'replace-rectangle)))"#,
     );
     assert_eq!(result[0], r#"OK ("ZZbcdef|ZZ23456|" 11 string-rectangle)"#);
-}
-
-fn bootstrap_eval_all(src: &str) -> Vec<String> {
-    runtime_startup_eval_all(src)
 }

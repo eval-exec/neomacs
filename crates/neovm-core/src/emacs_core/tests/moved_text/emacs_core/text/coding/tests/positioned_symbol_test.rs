@@ -1,6 +1,21 @@
 use neovm_text::emacs_core::coding::*;
-
 use neovm_value::error::FlowKind;
+
+fn positioned(ctx: &mut Context, name: &str) -> Value {
+    ctx.tagged_heap
+        .alloc_symbol_with_pos(Value::symbol(name), Value::fixnum(11))
+}
+
+fn wrong_symbol_operand(result: EvalResult, operand: Value) {
+    let error = result.expect_err("disabled positioned symbols must fail CHECK_SYMBOL");
+    match error.into_kind() {
+        FlowKind::Signal(signal) => {
+            assert_eq!(signal.symbol_name(), "wrong-type-argument");
+            assert_eq!(signal.data, vec![Value::symbol("symbolp"), operand]);
+        }
+        other => panic!("expected symbolp condition, got {other:?}"),
+    }
+}
 
 #[test]
 fn positioned_coding_predicate_and_check_preserve_policy_and_operand() {
@@ -133,6 +148,30 @@ fn positioned_coding_property_keys_and_hook_values_honor_mode() {
             hook,
         );
     }
+}
+
+fn definition(
+    name: Value,
+    coding_type: Value,
+    charset: Value,
+    hook: Value,
+    eol: Value,
+) -> Vec<Value> {
+    vec![
+        name,
+        Value::fixnum(i64::from(b'U')),
+        coding_type,
+        Value::list(vec![charset]),
+        Value::T,
+        Value::NIL,
+        Value::NIL,
+        hook,
+        hook,
+        Value::fixnum(i64::from(b'?')),
+        Value::NIL,
+        Value::NIL,
+        eol,
+    ]
 }
 
 #[test]
@@ -314,44 +353,4 @@ fn positioned_coding_iso_descriptors_and_quoting_style_honor_mode() {
         TextQuotingStyle::from_symbol_value(style, SymbolMode::Bare),
         None
     );
-}
-
-fn positioned(ctx: &mut Context, name: &str) -> Value {
-    ctx.tagged_heap
-        .alloc_symbol_with_pos(Value::symbol(name), Value::fixnum(11))
-}
-
-fn wrong_symbol_operand(result: EvalResult, operand: Value) {
-    let error = result.expect_err("disabled positioned symbols must fail CHECK_SYMBOL");
-    match error.into_kind() {
-        FlowKind::Signal(signal) => {
-            assert_eq!(signal.symbol_name(), "wrong-type-argument");
-            assert_eq!(signal.data, vec![Value::symbol("symbolp"), operand]);
-        }
-        other => panic!("expected symbolp condition, got {other:?}"),
-    }
-}
-
-fn definition(
-    name: Value,
-    coding_type: Value,
-    charset: Value,
-    hook: Value,
-    eol: Value,
-) -> Vec<Value> {
-    vec![
-        name,
-        Value::fixnum(i64::from(b'U')),
-        coding_type,
-        Value::list(vec![charset]),
-        Value::T,
-        Value::NIL,
-        Value::NIL,
-        hook,
-        hook,
-        Value::fixnum(i64::from(b'?')),
-        Value::NIL,
-        Value::NIL,
-        eol,
-    ]
 }

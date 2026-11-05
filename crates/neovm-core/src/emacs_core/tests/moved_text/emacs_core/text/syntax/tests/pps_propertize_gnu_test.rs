@@ -2,7 +2,6 @@
 //! run in process against the answers GNU 31.1 gave there
 //! (`NEOVM_ORACLE_MODE=refresh UPDATE_EXPECT=1`): `parse-partial-sexp` runs
 //! `syntax-propertize` where GNU's scan does (U0.7, P3.4 C0d).
-
 use crate::test_utils::{oracle_expect_transcript, runtime_startup_eval_one};
 
 /// An emacs-lisp-mode buffer: a scan from BEGV propertizes chunk by chunk

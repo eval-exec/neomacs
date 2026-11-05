@@ -830,8 +830,3 @@ fn emit_tz_offset(result: &mut String, flags: &DirectiveFlags, offset_secs: i64,
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
-
-
-#[cfg(test)]
-#[path = "tests/format_test.rs"]
-mod tests;

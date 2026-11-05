@@ -6299,7 +6299,3 @@ impl<'a> RuntimeCodingMetadata<'a> {
         self.eol_type
     }
 }
-
-#[cfg(test)]
-#[path = "encoding/tests/encoding_test.rs"]
-mod tests;

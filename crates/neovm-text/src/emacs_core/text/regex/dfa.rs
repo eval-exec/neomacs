@@ -3006,7 +3006,3 @@ pub(crate) fn reset_carrier_tls() {
 pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
     neovm_value::tls_fingerprint::mix_debug(h, STATS.with(|slot| format!("{:?}", slot.borrow())));
 }
-
-#[cfg(test)]
-#[path = "tests/dfa_test.rs"]
-mod tests;

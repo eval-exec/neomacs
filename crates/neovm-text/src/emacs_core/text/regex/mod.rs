@@ -5544,7 +5544,3 @@ impl<'a> PropertizeFrontier<'a> {
         Self { byte, crossed }
     }
 }
-
-#[cfg(test)]
-#[path = "tests/regex_test.rs"]
-mod tests;

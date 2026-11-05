@@ -1,8 +1,15 @@
 use neovm_edit::buffer::CharRange;
-
 use neovm_text::emacs_core::syntax::*;
-
 use neovm_value::heap_types::{GnuDeclaredCharacterCount, GnuStringCharPos};
+
+fn with_intervals(string: &mut LispString, count: usize) {
+    string.intervals_mut().put_property_for_object_char_len(
+        CharRange::new(CharPos0::ZERO, CharPos0::new(count)),
+        CharLen::new(count),
+        Value::symbol("face"),
+        Value::symbol("bold"),
+    );
+}
 
 #[test]
 fn signed_property_coordinate_is_retained_as_a_typed_diagnostic() {
@@ -80,13 +87,4 @@ fn ordinary_property_and_ignore_controls_have_no_coordinate_diagnostic() {
     );
     assert_eq!(ignoring.property_free_until(usize::MAX - 1), usize::MAX);
     assert_eq!(ignoring.position_error(), None);
-}
-
-fn with_intervals(string: &mut LispString, count: usize) {
-    string.intervals_mut().put_property_for_object_char_len(
-        CharRange::new(CharPos0::ZERO, CharPos0::new(count)),
-        CharLen::new(count),
-        Value::symbol("face"),
-        Value::symbol("bold"),
-    );
 }

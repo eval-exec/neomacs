@@ -2260,7 +2260,3 @@ impl OverlayModificationHook {
         self.overlay
     }
 }
-
-#[cfg(test)]
-#[path = "overlay/tests/overlay_test.rs"]
-mod tests;

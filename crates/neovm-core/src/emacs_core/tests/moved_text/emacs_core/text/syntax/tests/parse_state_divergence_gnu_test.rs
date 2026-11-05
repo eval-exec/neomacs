@@ -2,7 +2,6 @@
 //! the answers GNU 31.1 gave in `neovm-oracle-tests` `syntax/parse_state.rs`
 //! (`NEOVM_ORACLE_MODE=refresh UPDATE_EXPECT=1`). Each pin fails on purpose
 //! once Neomacs answers like GNU.
-
 use crate::test_utils::{oracle_expect_transcript, runtime_startup_eval_one};
 
 /// KNOWN DIVERGENCE, pinned (`neovm-oracle-tests` `syntax/parse_state.rs`

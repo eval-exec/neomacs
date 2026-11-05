@@ -1,7 +1,5 @@
 use neovm_edit::emacs_core::undo::*;
 
-use crate::emacs_core::eval::Context;
-
 /// `primitive-undo` is Lisp, and only Lisp.
 ///
 /// GNU's `syms_of_undo` (src/undo.c:423-490) has exactly one `defsubr`,
@@ -18,17 +16,17 @@ use crate::emacs_core::eval::Context;
 #[test]
 fn primitive_undo_is_lisp_only_like_gnu() {
     crate::test_utils::init_test_tracing();
-    use crate::emacs_core::eval::Context;
+    use super::super::eval::Context;
 
     // Before any Lisp is loaded: `undo-boundary' answers (GNU has it in C),
     // `primitive-undo' does not (GNU has no C version).
     let mut bare = Context::new();
     assert_eq!(
-        crate::emacs_core::print::print_value(&bare.eval_str("(fboundp 'undo-boundary)").unwrap()),
+        super::super::print::print_value(&bare.eval_str("(fboundp 'undo-boundary)").unwrap()),
         "t"
     );
     assert_eq!(
-        crate::emacs_core::print::print_value(&bare.eval_str("(fboundp 'primitive-undo)").unwrap()),
+        super::super::print::print_value(&bare.eval_str("(fboundp 'primitive-undo)").unwrap()),
         "nil"
     );
 
@@ -212,7 +210,7 @@ fn test_undo_boundary_no_args() {
 #[test]
 fn test_undo_boundary_eval_inserts_boundary_marker() {
     crate::test_utils::init_test_tracing();
-    use crate::emacs_core::eval::Context;
+    use super::super::eval::Context;
 
     let mut eval = Context::new();
     {
@@ -394,6 +392,13 @@ fn undo_replays_the_recorded_entries_like_gnu() {
     );
 }
 
+/// Return the printed form of the current buffer's `buffer-undo-list` in a bare
+/// `Context` (whose default `buffer-undo-list` is nil = enabled).
+fn undo_list_after(eval: &mut super::super::eval::Context) -> String {
+    let value = eval.eval_str("buffer-undo-list").expect("buffer-undo-list");
+    super::super::print::print_value(&value)
+}
+
 /// GNU `record_first_change` (undo.c:64,210) pushes `(t . MODTIME)` whenever
 /// the buffer transitions clean->modified, i.e. on every edit while
 /// `MODIFF <= SAVE_MODIFF`.  `(set-buffer-modified-p nil)` resets
@@ -409,7 +414,7 @@ fn undo_replays_the_recorded_entries_like_gnu() {
 #[test]
 fn first_change_marker_rearmed_after_set_modified_nil() {
     crate::test_utils::init_test_tracing();
-    use crate::emacs_core::eval::Context;
+    use super::super::eval::Context;
     let mut eval = Context::new();
     eval.eval_str("(insert \"0123456789\")").unwrap();
     eval.eval_str("(set-buffer-modified-p nil)").unwrap();
@@ -432,7 +437,7 @@ fn first_change_marker_rearmed_after_set_modified_nil() {
 #[test]
 fn first_change_marker_recorded_once_per_modified_run() {
     crate::test_utils::init_test_tracing();
-    use crate::emacs_core::eval::Context;
+    use super::super::eval::Context;
     let mut eval = Context::new();
     eval.eval_str("(insert \"0123456789\")").unwrap();
     eval.eval_str("(set-buffer-modified-p nil)").unwrap();
@@ -451,7 +456,7 @@ fn first_change_marker_recorded_once_per_modified_run() {
 #[test]
 fn first_change_marker_rearmed_on_each_clean_transition() {
     crate::test_utils::init_test_tracing();
-    use crate::emacs_core::eval::Context;
+    use super::super::eval::Context;
     let mut eval = Context::new();
     eval.eval_str("(insert \"0123456789\")").unwrap();
     eval.eval_str("(set-buffer-modified-p nil)").unwrap();
@@ -566,7 +571,7 @@ fn a_minibuffer_read_adds_no_undo_boundary_to_previously_changed_buffers() {
 #[test]
 fn first_change_marker_records_the_visited_file_modtime_like_gnu() {
     crate::test_utils::init_test_tracing();
-    use crate::emacs_core::eval::Context;
+    use super::super::eval::Context;
     let mut eval = Context::new();
     let unique = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -589,7 +594,7 @@ fn first_change_marker_records_the_visited_file_modtime_like_gnu() {
                                    (visited-file-modtime))))"#,
         file.to_string_lossy()
     );
-    let rendered = crate::emacs_core::print::print_value(&eval.eval_str(&form).expect("eval"));
+    let rendered = super::super::print::print_value(&eval.eval_str(&form).expect("eval"));
     assert!(
         rendered.ends_with(":matches t)"),
         "the first-change datum must be the buffer's visited-file modtime: {rendered}"
@@ -627,7 +632,7 @@ fn first_change_marker_records_the_visited_file_modtime_like_gnu() {
 #[test]
 fn first_change_in_an_indirect_buffer_records_its_base_buffers_modtime() {
     crate::test_utils::init_test_tracing();
-    use crate::emacs_core::eval::Context;
+    use super::super::eval::Context;
     let mut eval = Context::new();
 
     let form = r#"(let ((base (get-buffer-create "base-145")))
@@ -643,7 +648,7 @@ fn first_change_in_an_indirect_buffer_records_its_base_buffers_modtime() {
              (insert "X")
              (list :recorded (cdr (assq t buffer-undo-list))
                    :own-modtime (visited-file-modtime)))"#;
-    let rendered = crate::emacs_core::print::print_value(&eval.eval_str(form).expect("eval"));
+    let rendered = super::super::print::print_value(&eval.eval_str(form).expect("eval"));
     assert_eq!(
         rendered, "(:recorded (25000 1000 0 0) :own-modtime (1 2 3 0))",
         "the first-change entry must hold the BASE buffer's modtime, not the \
@@ -661,7 +666,7 @@ fn first_change_in_an_indirect_buffer_records_its_base_buffers_modtime() {
 #[test]
 fn a_visited_file_that_does_not_exist_records_minus_one() {
     crate::test_utils::init_test_tracing();
-    use crate::emacs_core::eval::Context;
+    use super::super::eval::Context;
     let mut eval = Context::new();
 
     let form = r#"(progn
@@ -674,7 +679,7 @@ fn a_visited_file_that_does_not_exist_records_minus_one() {
              (list :own-modtime (visited-file-modtime)
                    :recorded (cdr (assq t buffer-undo-list))
                    :verify (verify-visited-file-modtime (current-buffer))))"#;
-    let rendered = crate::emacs_core::print::print_value(&eval.eval_str(form).expect("eval"));
+    let rendered = super::super::print::print_value(&eval.eval_str(form).expect("eval"));
     assert_eq!(
         rendered, "(:own-modtime -1 :recorded -1 :verify t)",
         "a nonexistent visited file is GNU's -1 modtime, and it still verifies \
@@ -704,7 +709,7 @@ fn a_visited_file_that_does_not_exist_records_minus_one() {
 #[test]
 fn record_point_runs_before_the_first_change_sentinel_like_gnu() {
     crate::test_utils::init_test_tracing();
-    use crate::emacs_core::eval::Context;
+    use super::super::eval::Context;
     let mut eval = Context::new();
     let unique = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -731,7 +736,7 @@ fn record_point_runs_before_the_first_change_sentinel_like_gnu() {
                    :length (length buffer-undo-list)))"#,
         file.to_string_lossy()
     );
-    let rendered = crate::emacs_core::print::print_value(&eval.eval_str(&form).expect("eval"));
+    let rendered = super::super::print::print_value(&eval.eval_str(&form).expect("eval"));
     assert_eq!(
         rendered, "(:newest (7 . 8) :point-entry 1 :first-change t :length 3)",
         "the point entry belongs between the change and the first-change sentinel"
@@ -739,6 +744,30 @@ fn record_point_runs_before_the_first_change_sentinel_like_gnu() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Full-runtime helper: the three pins below need the real command loop,
+/// because what they are about is a variable the command loop binds.
+fn undo_bootstrap_eval_one(src: &str) -> String {
+    crate::test_utils::runtime_startup_eval_all(src)
+        .into_iter()
+        .next()
+        .expect("at least one form")
+}
+
+/// Open a buffer that `execute-kbd-macro' can actually type into.
+///
+/// `execute-kbd-macro' reaches the buffer of the *selected window*, so making
+/// the buffer merely current is not enough.
+const UNDO_TYPING_PRELUDE: &str = r#"
+(defun neo-undo-pin-open (col)
+  (let ((buffer (generate-new-buffer "*undo-pin*")))
+    (set-window-buffer (selected-window) buffer)
+    (set-buffer buffer)
+    (text-mode)
+    (buffer-enable-undo)
+    (setq fill-column col)
+    buffer))
+"#;
 
 /// GNU `recursive_edit_1' (src/keyboard.c:747) specbinds
 /// `undo-auto--undoably-changed-buffers' to nil ONCE, at the recursive-edit
@@ -824,6 +853,62 @@ fn auto_fill_typing_then_undo_takes_back_only_the_last_command_group() {
         result,
         "OK (\"aaaa bbbb cccc dddd\neeee \" \"aaaa bbbb cccc dddd e\" 22)"
     );
+}
+
+// ===========================================================================
+// GC-time undo-list truncation
+//
+// GNU truncates undo lists from `garbage_collect' (`src/alloc.c:5797-5800'),
+// which walks every live buffer through `compact_buffer'
+// (`src/buffer.c:1854-1885') into `truncate_undo_list' (`src/undo.c:289-419').
+// `Fundo_boundary' (`src/undo.c:251-282') never truncates.
+//
+// Every expected value below was measured by running the same fixture under
+// GNU Emacs 31.0.90 `--batch'.
+// ===========================================================================
+
+use crate::emacs_core::eval::Context;
+
+/// GROUPS one-entry undo groups in a buffer whose own `undo-limit' and
+/// `undo-strong-limit' are LIMIT and STRONG.
+fn undo_limit_fixture(eval: &mut Context, name: &str, limit: i64, strong: i64, groups: usize) {
+    let src = format!(
+        r#"(progn
+             (set-buffer (get-buffer-create "{name}"))
+             (buffer-enable-undo)
+             (setq buffer-undo-list nil)
+             (make-local-variable 'undo-limit)
+             (make-local-variable 'undo-strong-limit)
+             (setq undo-limit {limit})
+             (setq undo-strong-limit {strong})
+             (setq neo-undo-probe-i 0)
+             (while (< neo-undo-probe-i {groups})
+               (insert "hello")
+               (undo-boundary)
+               (setq neo-undo-probe-i (1+ neo-undo-probe-i))))"#
+    );
+    eval.eval_str(&src).expect("undo limit fixture");
+}
+
+fn printed_undo_list(eval: &mut Context, name: &str) -> String {
+    let value = eval
+        .eval_str(&format!(
+            r#"(buffer-local-value 'buffer-undo-list (get-buffer "{name}"))"#
+        ))
+        .expect("read buffer-undo-list");
+    crate::emacs_core::print::print_value(&value)
+}
+
+fn undo_list_length(eval: &mut Context, name: &str) -> i64 {
+    let value = eval
+        .eval_str(&format!(
+            r#"(length (buffer-local-value 'buffer-undo-list (get-buffer "{name}")))"#
+        ))
+        .expect("length of buffer-undo-list");
+    match value.kind() {
+        ValueKind::Fixnum(n) => n,
+        other => panic!("length returned {other:?}"),
+    }
 }
 
 /// GNU truncates at GC, never at `undo-boundary'.
@@ -1240,77 +1325,4 @@ fn undo_boundary_records_its_cause_only_on_the_path_gnu_takes() {
             "OK explicit".to_string(),
         ]
     );
-}
-
-/// Return the printed form of the current buffer's `buffer-undo-list` in a bare
-/// `Context` (whose default `buffer-undo-list` is nil = enabled).
-fn undo_list_after(eval: &mut crate::emacs_core::eval::Context) -> String {
-    let value = eval.eval_str("buffer-undo-list").expect("buffer-undo-list");
-    crate::emacs_core::print::print_value(&value)
-}
-
-/// Full-runtime helper: the three pins below need the real command loop,
-/// because what they are about is a variable the command loop binds.
-fn undo_bootstrap_eval_one(src: &str) -> String {
-    crate::test_utils::runtime_startup_eval_all(src)
-        .into_iter()
-        .next()
-        .expect("at least one form")
-}
-
-/// Open a buffer that `execute-kbd-macro' can actually type into.
-///
-/// `execute-kbd-macro' reaches the buffer of the *selected window*, so making
-/// the buffer merely current is not enough.
-const UNDO_TYPING_PRELUDE: &str = r#"
-(defun neo-undo-pin-open (col)
-  (let ((buffer (generate-new-buffer "*undo-pin*")))
-    (set-window-buffer (selected-window) buffer)
-    (set-buffer buffer)
-    (text-mode)
-    (buffer-enable-undo)
-    (setq fill-column col)
-    buffer))
-"#;
-
-/// GROUPS one-entry undo groups in a buffer whose own `undo-limit' and
-/// `undo-strong-limit' are LIMIT and STRONG.
-fn undo_limit_fixture(eval: &mut Context, name: &str, limit: i64, strong: i64, groups: usize) {
-    let src = format!(
-        r#"(progn
-             (set-buffer (get-buffer-create "{name}"))
-             (buffer-enable-undo)
-             (setq buffer-undo-list nil)
-             (make-local-variable 'undo-limit)
-             (make-local-variable 'undo-strong-limit)
-             (setq undo-limit {limit})
-             (setq undo-strong-limit {strong})
-             (setq neo-undo-probe-i 0)
-             (while (< neo-undo-probe-i {groups})
-               (insert "hello")
-               (undo-boundary)
-               (setq neo-undo-probe-i (1+ neo-undo-probe-i))))"#
-    );
-    eval.eval_str(&src).expect("undo limit fixture");
-}
-
-fn printed_undo_list(eval: &mut Context, name: &str) -> String {
-    let value = eval
-        .eval_str(&format!(
-            r#"(buffer-local-value 'buffer-undo-list (get-buffer "{name}"))"#
-        ))
-        .expect("read buffer-undo-list");
-    crate::emacs_core::print::print_value(&value)
-}
-
-fn undo_list_length(eval: &mut Context, name: &str) -> i64 {
-    let value = eval
-        .eval_str(&format!(
-            r#"(length (buffer-local-value 'buffer-undo-list (get-buffer "{name}")))"#
-        ))
-        .expect("length of buffer-undo-list");
-    match value.kind() {
-        ValueKind::Fixnum(n) => n,
-        other => panic!("length returned {other:?}"),
-    }
 }

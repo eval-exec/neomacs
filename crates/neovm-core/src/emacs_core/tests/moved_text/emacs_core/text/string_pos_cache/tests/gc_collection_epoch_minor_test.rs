@@ -1,85 +1,11 @@
 //! String-position root coverage through real generational minor collections.
 
 use crate::emacs_core::eval::Context;
-
 use neovm_value::string_pos_cache::*;
 
 use super::string_pos_cache_gc_epoch_test::{
     UncoveredStringPosCache, assert_warm_entry, populate_cache,
 };
-
-#[test]
-fn gc_collection_epoch_string_pos_minor_collections_keep_warm_entry() {
-    let mut context = generational_context();
-    let string = cache_young_string(&mut context);
-    let before = CACHE.with(Cell::get).unwrap();
-    let initial_completed = context.tagged_heap.gc_collections();
-    for _ in 0..3 {
-        let completed = start_minor(&mut context);
-        assert_owned_warm_entry(&context, string, before);
-        context.setup_thread_locals();
-        assert_owned_warm_entry(&context, string, before);
-        finish_minor(&mut context, completed);
-        // Check before activation or conversion could refill a missing entry.
-        assert_owned_warm_entry(&context, string, before);
-        context.setup_thread_locals();
-        assert_owned_warm_entry(&context, string, before);
-    }
-    assert_eq!(context.tagged_heap.gc_collections(), initial_completed + 3);
-}
-
-#[test]
-fn gc_collection_epoch_string_pos_minor_sweep_activation_keeps_warm_entry() {
-    let mut context = generational_context();
-    let string = cache_young_string(&mut context);
-    let before = CACHE.with(Cell::get).unwrap();
-    let completed = start_minor(&mut context);
-    context.setup_thread_locals();
-    assert!(context.tagged_heap.sweep_in_progress());
-    assert_eq!(context.tagged_heap.gc_collections(), completed);
-    assert_owned_warm_entry(&context, string, before);
-    finish_minor(&mut context, completed);
-    assert_owned_warm_entry(&context, string, before);
-}
-
-#[test]
-fn gc_collection_epoch_string_pos_minor_activation_discards_swept_source_entry() {
-    let mut context = generational_context();
-    let heap_identity = context.tagged_heap.identity();
-    let string = cache_young_string(&mut context);
-    let (mut context, completed) =
-        collect_minor_with_uncovered_cache(context, string, ReturnAt::Completed);
-    assert_eq!(context.tagged_heap.identity(), heap_identity);
-    assert_eq!(context.tagged_heap.gc_collections(), completed + 1);
-    assert!(!context.tagged_heap.owns_heap_value_for_test(string));
-    // Only compare identity bits after the destination reclaimed the string.
-    assert_eq!(CACHE.with(Cell::get).unwrap().string.bits(), string.bits());
-    context.setup_thread_locals();
-    assert!(
-        CACHE.with(Cell::get).is_none(),
-        "activation retained a source entry reclaimed by a destination minor"
-    );
-}
-
-#[test]
-fn gc_collection_epoch_string_pos_minor_sweep_foreign_activation_discards_entry() {
-    let mut context = generational_context();
-    let string = cache_young_string(&mut context);
-    let (mut context, completed) =
-        collect_minor_with_uncovered_cache(context, string, ReturnAt::Sweeping);
-    assert!(context.tagged_heap.sweep_in_progress());
-    assert!(!context.tagged_heap.mark_in_progress());
-    assert!(!context.tagged_heap.concurrent_mark_running());
-    assert_eq!(context.tagged_heap.gc_collections(), completed);
-    assert_eq!(CACHE.with(Cell::get).unwrap().string.bits(), string.bits());
-    context.setup_thread_locals();
-    assert!(
-        CACHE.with(Cell::get).is_none(),
-        "an uncovered destination minor sweep retained the source entry"
-    );
-    finish_minor(&mut context, completed);
-    assert!(!context.tagged_heap.owns_heap_value_for_test(string));
-}
 
 fn generational_context() -> Context {
     // Nextest isolates tests in separate processes. Set the constructor knob
@@ -169,6 +95,40 @@ fn assert_owned_warm_entry(context: &Context, string: Value, before: Entry) {
     );
 }
 
+#[test]
+fn gc_collection_epoch_string_pos_minor_collections_keep_warm_entry() {
+    let mut context = generational_context();
+    let string = cache_young_string(&mut context);
+    let before = CACHE.with(Cell::get).unwrap();
+    let initial_completed = context.tagged_heap.gc_collections();
+    for _ in 0..3 {
+        let completed = start_minor(&mut context);
+        assert_owned_warm_entry(&context, string, before);
+        context.setup_thread_locals();
+        assert_owned_warm_entry(&context, string, before);
+        finish_minor(&mut context, completed);
+        // Check before activation or conversion could refill a missing entry.
+        assert_owned_warm_entry(&context, string, before);
+        context.setup_thread_locals();
+        assert_owned_warm_entry(&context, string, before);
+    }
+    assert_eq!(context.tagged_heap.gc_collections(), initial_completed + 3);
+}
+
+#[test]
+fn gc_collection_epoch_string_pos_minor_sweep_activation_keeps_warm_entry() {
+    let mut context = generational_context();
+    let string = cache_young_string(&mut context);
+    let before = CACHE.with(Cell::get).unwrap();
+    let completed = start_minor(&mut context);
+    context.setup_thread_locals();
+    assert!(context.tagged_heap.sweep_in_progress());
+    assert_eq!(context.tagged_heap.gc_collections(), completed);
+    assert_owned_warm_entry(&context, string, before);
+    finish_minor(&mut context, completed);
+    assert_owned_warm_entry(&context, string, before);
+}
+
 #[derive(Clone, Copy)]
 enum ReturnAt {
     Completed,
@@ -192,4 +152,43 @@ fn collect_minor_with_uncovered_cache(
     }
     stale.restore();
     (context, completed)
+}
+
+#[test]
+fn gc_collection_epoch_string_pos_minor_activation_discards_swept_source_entry() {
+    let mut context = generational_context();
+    let heap_identity = context.tagged_heap.identity();
+    let string = cache_young_string(&mut context);
+    let (mut context, completed) =
+        collect_minor_with_uncovered_cache(context, string, ReturnAt::Completed);
+    assert_eq!(context.tagged_heap.identity(), heap_identity);
+    assert_eq!(context.tagged_heap.gc_collections(), completed + 1);
+    assert!(!context.tagged_heap.owns_heap_value_for_test(string));
+    // Only compare identity bits after the destination reclaimed the string.
+    assert_eq!(CACHE.with(Cell::get).unwrap().string.bits(), string.bits());
+    context.setup_thread_locals();
+    assert!(
+        CACHE.with(Cell::get).is_none(),
+        "activation retained a source entry reclaimed by a destination minor"
+    );
+}
+
+#[test]
+fn gc_collection_epoch_string_pos_minor_sweep_foreign_activation_discards_entry() {
+    let mut context = generational_context();
+    let string = cache_young_string(&mut context);
+    let (mut context, completed) =
+        collect_minor_with_uncovered_cache(context, string, ReturnAt::Sweeping);
+    assert!(context.tagged_heap.sweep_in_progress());
+    assert!(!context.tagged_heap.mark_in_progress());
+    assert!(!context.tagged_heap.concurrent_mark_running());
+    assert_eq!(context.tagged_heap.gc_collections(), completed);
+    assert_eq!(CACHE.with(Cell::get).unwrap().string.bits(), string.bits());
+    context.setup_thread_locals();
+    assert!(
+        CACHE.with(Cell::get).is_none(),
+        "an uncovered destination minor sweep retained the source entry"
+    );
+    finish_minor(&mut context, completed);
+    assert!(!context.tagged_heap.owns_heap_value_for_test(string));
 }

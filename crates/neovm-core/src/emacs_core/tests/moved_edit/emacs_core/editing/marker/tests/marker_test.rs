@@ -1,8 +1,53 @@
 use neovm_edit::buffer::{EmacsByteRange, LispCharPos1};
-
 use neovm_edit::emacs_core::marker::*;
 
+// Test helpers keep Context alive in a thread_local so the heap
+// objects in the returned Value survive until the next call.
+// Previously the bare `let mut eval = ...; builtin(&mut eval, args)`
+// pattern dropped the Context at end of block, destroying the
+// tagged heap and leaving the returned Value pointing at freed
+// memory.
 use std::cell::RefCell;
+thread_local! {
+    static MARKER_TEST_CTX: RefCell<Option<Box<super::super::eval::Context>>> =
+        const { RefCell::new(None) };
+}
+
+fn call_marker_position(args: Vec<Value>) -> EvalResult {
+    MARKER_TEST_CTX.with(|slot| {
+        let mut ctx = Box::new(Context::new());
+        let result = builtin_marker_position_in_buffers(&ctx.edit.buffers, &args);
+        *slot.borrow_mut() = Some(ctx);
+        result
+    })
+}
+
+fn call_marker_buffer(args: Vec<Value>) -> EvalResult {
+    MARKER_TEST_CTX.with(|slot| {
+        let mut ctx = Box::new(Context::new());
+        let result = builtin_marker_buffer_in_buffers(&ctx.edit.buffers, &args);
+        *slot.borrow_mut() = Some(ctx);
+        result
+    })
+}
+
+fn call_set_marker_insertion_type(args: Vec<Value>) -> EvalResult {
+    MARKER_TEST_CTX.with(|slot| {
+        let mut ctx = Box::new(Context::new());
+        let result = builtin_set_marker_insertion_type_in_buffers(&mut ctx.edit.buffers, args);
+        *slot.borrow_mut() = Some(ctx);
+        result
+    })
+}
+
+fn call_copy_marker(args: Vec<Value>) -> EvalResult {
+    MARKER_TEST_CTX.with(|slot| {
+        let mut ctx = Box::new(Context::new());
+        let result = builtin_copy_marker_in_buffers(&mut ctx.edit.buffers, &args);
+        *slot.borrow_mut() = Some(ctx);
+        result
+    })
+}
 
 #[test]
 fn make_marker_creates_heap_marker() {
@@ -18,6 +63,14 @@ fn make_marker_empty() {
     assert!(is_marker(&m));
     assert!(marker_position_value(&m).is_nil());
     assert!(marker_buffer_value(&m).is_nil());
+}
+
+#[test]
+fn is_marker_rejects_non_markers() {
+    crate::test_utils::init_test_tracing();
+    assert!(!is_marker(&Value::NIL));
+    assert!(!is_marker(&Value::fixnum(42)));
+    assert!(!is_marker(&Value::vector(vec![Value::fixnum(1)])));
 }
 
 #[test]
@@ -134,6 +187,12 @@ fn builtin_copy_marker_from_integer_clips_like_set_marker() {
             .expect("copy marker after point-max");
     assert_eq!(marker_position_value(&after_max), Value::fixnum(4));
 }
+
+// `builtin_move_marker_matches_set_marker_behavior' is gone with the subr it
+// called.  GNU has no DEFUN `move-marker'; `lisp/subr.el:2280' aliases it to
+// `set-marker', so the behaviour is asked of the loaded runtime in
+// `move_marker_is_the_set_marker_alias_like_gnu'
+// (`builtins/lisp_only_predicates_and_aliases_test.rs').  DIVERGENCES.md 148.
 
 #[test]
 fn builtin_make_marker_returns_empty() {
@@ -450,45 +509,4 @@ fn set_marker_insertion_type_writes_the_bit_the_chain_reads() {
         observed,
         "OK ((nil nil 5) (t t 6) (nil nil 5) (t t 6) (born-t t 5) (now-nil nil) (detached t nil))"
     );
-}
-
-thread_local! {
-    static MARKER_TEST_CTX: RefCell<Option<Box<crate::emacs_core::eval::Context>>> =
-        const { RefCell::new(None) };
-}
-
-fn call_marker_position(args: Vec<Value>) -> EvalResult {
-    MARKER_TEST_CTX.with(|slot| {
-        let mut ctx = Box::new(Context::new());
-        let result = builtin_marker_position_in_buffers(&ctx.edit.buffers, &args);
-        *slot.borrow_mut() = Some(ctx);
-        result
-    })
-}
-
-fn call_marker_buffer(args: Vec<Value>) -> EvalResult {
-    MARKER_TEST_CTX.with(|slot| {
-        let mut ctx = Box::new(Context::new());
-        let result = builtin_marker_buffer_in_buffers(&ctx.edit.buffers, &args);
-        *slot.borrow_mut() = Some(ctx);
-        result
-    })
-}
-
-fn call_set_marker_insertion_type(args: Vec<Value>) -> EvalResult {
-    MARKER_TEST_CTX.with(|slot| {
-        let mut ctx = Box::new(Context::new());
-        let result = builtin_set_marker_insertion_type_in_buffers(&mut ctx.edit.buffers, args);
-        *slot.borrow_mut() = Some(ctx);
-        result
-    })
-}
-
-fn call_copy_marker(args: Vec<Value>) -> EvalResult {
-    MARKER_TEST_CTX.with(|slot| {
-        let mut ctx = Box::new(Context::new());
-        let result = builtin_copy_marker_in_buffers(&mut ctx.edit.buffers, &args);
-        *slot.borrow_mut() = Some(ctx);
-        result
-    })
 }

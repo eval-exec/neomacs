@@ -20,7 +20,7 @@ fn gde_review_overlay_lists_full_region_intersection() {
 (delete-region 4 7)
 (mapcar (lambda (o) (overlay-get o 'tag)) (car (overlay-lists)))))"#,
     );
-    let actual = crate::emacs_core::format_eval_result_with_eval(&eval, &result);
+    let actual = neovm_edit::emacs_core::format_eval_result_with_eval(&eval, &result);
     // This expectation was generated directly from GNU Emacs 31.1.
     assert_eq!(
         actual,

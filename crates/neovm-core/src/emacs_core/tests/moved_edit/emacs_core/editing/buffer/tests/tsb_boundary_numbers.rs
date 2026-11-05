@@ -1,5 +1,4 @@
 //! Expectations captured from GNU Emacs 31.1 through sandbox-run.sh.
-
 #[test]
 fn tsb_constrain_to_field_validates_lazy_property_probe_positions() {
     let form = r#"(with-temp-buffer

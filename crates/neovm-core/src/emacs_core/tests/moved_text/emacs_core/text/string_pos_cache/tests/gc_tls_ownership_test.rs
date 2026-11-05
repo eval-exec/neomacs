@@ -1,6 +1,25 @@
 use crate::emacs_core::eval::Context;
-
 use neovm_value::string_pos_cache::*;
+
+fn populate(_ctx: &mut Context) -> Value {
+    let string = Value::string("aжb");
+    string_char_to_byte(string, string.as_lisp_string().unwrap(), 2);
+    string
+}
+
+fn roots(ctx: &Context) -> Vec<Value> {
+    let mut roots = Vec::new();
+    collect_string_pos_cache_gc_roots(
+        &mut roots,
+        ctx.tagged_heap.identity(),
+        ctx.tagged_heap.gc_collections(),
+        neovm_value::tagged::gc::CacheRootScan::Snapshot {
+            collection_in_progress: ctx.tagged_heap.mark_in_progress()
+                || ctx.tagged_heap.sweep_in_progress(),
+        },
+    );
+    roots
+}
 
 #[test]
 fn gc_tls_ownership_string_pos_cache_new_heap_reset_drops_old_values() {
@@ -48,24 +67,4 @@ fn gc_tls_ownership_string_pos_cache_excludes_another_live_heap() {
         !second.tagged_heap.owns_heap_value_for_test(value),
         "an evicted cache entry kept its otherwise unreachable string alive"
     );
-}
-
-fn populate(_ctx: &mut Context) -> Value {
-    let string = Value::string("aжb");
-    string_char_to_byte(string, string.as_lisp_string().unwrap(), 2);
-    string
-}
-
-fn roots(ctx: &Context) -> Vec<Value> {
-    let mut roots = Vec::new();
-    collect_string_pos_cache_gc_roots(
-        &mut roots,
-        ctx.tagged_heap.identity(),
-        ctx.tagged_heap.gc_collections(),
-        neovm_value::tagged::gc::CacheRootScan::Snapshot {
-            collection_in_progress: ctx.tagged_heap.mark_in_progress()
-                || ctx.tagged_heap.sweep_in_progress(),
-        },
-    );
-    roots
 }

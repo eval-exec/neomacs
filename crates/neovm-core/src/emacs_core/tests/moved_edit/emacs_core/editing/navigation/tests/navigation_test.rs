@@ -1,14 +1,170 @@
-use crate::emacs_core::eval::Context;
-
+use super::super::eval::Context;
 use neovm_value::error::FlowKind;
-
+fn test_ob() -> neovm_value::symbol::Obarray {
+    neovm_value::symbol::Obarray::new()
+}
 use crate::test_utils::runtime_startup_context;
-
 use malachite::integer::Integer;
-
 use neovm_value::value::{Value, ValueKind};
-
 use std::fs;
+
+/// Helper: create an evaluator, insert text, and position point.
+fn eval_with_text(text: &str) -> Context {
+    let mut ev = Context::new();
+    {
+        let buf = ev.edit.buffers.current_buffer_mut().unwrap();
+        buf.insert(text);
+        // Point is now at the end. Reset to beginning.
+        buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(0));
+    }
+    ev
+}
+
+fn eval_with_unibyte_bytes(bytes: &[u8]) -> Context {
+    let mut ev = Context::new();
+    let storage = neovm_edit::emacs_core::string_escape::bytes_to_unibyte_storage_string(bytes);
+    {
+        let buf = ev.edit.buffers.current_buffer_mut().unwrap();
+        buf.set_multibyte_value(false);
+        buf.insert(&storage);
+        buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(0));
+    }
+    ev
+}
+
+fn gnu_simple_line_eval_with_unibyte_bytes(bytes: &[u8]) -> Context {
+    let mut ev = gnu_simple_line_eval();
+    let storage = neovm_edit::emacs_core::string_escape::bytes_to_unibyte_storage_string(bytes);
+    {
+        let buf = ev.edit.buffers.current_buffer_mut().unwrap();
+        buf.set_multibyte_value(false);
+        buf.insert(&storage);
+        buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(0));
+    }
+    ev
+}
+
+fn bootstrap_eval_with_text(text: &str) -> Context {
+    let mut ev = runtime_startup_context();
+    {
+        let buf = ev.edit.buffers.current_buffer_mut().unwrap();
+        buf.insert(text);
+        buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(0));
+    }
+    ev
+}
+
+fn eval_first_form_after_marker(eval: &mut Context, source: &str, marker: &str) {
+    let start = source
+        .find(marker)
+        .unwrap_or_else(|| panic!("missing GNU simple.el marker: {marker}"));
+    let (form, _) = crate::emacs_core::value_reader::read_one(
+        &source[start..],
+        0,
+        crate::emacs_core::eval::VariableView::canonical(
+            neovm_value::symbol::CanonicalAccess::TEST,
+            &test_ob(),
+        ),
+    )
+    .unwrap_or_else(|err| panic!("parse GNU simple.el from {marker} failed: {:?}", err))
+    .unwrap_or_else(|| panic!("no GNU simple.el form found after marker: {marker}"));
+    eval.eval_form(form)
+        .unwrap_or_else(|err| panic!("evaluate GNU simple.el form {marker} failed: {:?}", err));
+}
+
+/// Install minimal `defun`/`defmacro`/`when`/`unless` shims so a bare
+/// evaluator can evaluate forms extracted from GNU `.el` source files.
+fn install_bare_elisp_shims(ev: &mut Context) {
+    let shims = r#"
+;; `subr.el' creates these five with `defalias'; GNU has no C version of any
+;; of them (lisp/subr.el:71 and :2277-2280), so a bare evaluator standing in
+;; for a loaded one has to be given the same aliases subr.el gives it.
+;; DIVERGENCES.md 148.
+(defalias 'not #'null)
+(defalias 'string= #'string-equal)
+(defalias 'string< #'string-lessp)
+(defalias 'string> #'string-greaterp)
+(defalias 'move-marker #'set-marker)
+(defalias 'defun (cons 'macro #'(lambda (name arglist &rest body)
+  (list 'defalias (list 'quote name) (cons 'function (list (cons 'lambda (cons arglist body))))))))
+(defalias 'defmacro (cons 'macro #'(lambda (name arglist &rest body)
+  (list 'defalias (list 'quote name)
+        (list 'cons ''macro (cons 'function (list (cons 'lambda (cons arglist body)))))))))
+(defalias 'when (cons 'macro #'(lambda (cond &rest body)
+  (list 'if cond (cons 'progn body)))))
+(defalias 'unless (cons 'macro #'(lambda (cond &rest body)
+  (cons 'if (cons cond (cons nil body))))))
+"#;
+    ev.eval_str(shims).expect("install bare elisp shims");
+}
+
+fn gnu_simple_line_eval() -> Context {
+    let project_root = crate::test_utils::workspace_root();
+    let simple_path = project_root.join("lisp/simple.el");
+    let subr_path = project_root.join("lisp/subr.el");
+    let simple_source = fs::read_to_string(&simple_path)
+        .expect("read GNU simple.el")
+        .replace(
+            "(with-suppressed-warnings ((obsolete inhibit-point-motion-hooks))",
+            "(progn",
+        )
+        .replace("(called-interactively-p 'interactive)", "nil");
+    let subr_source = fs::read_to_string(&subr_path)
+        .expect("read GNU subr.el")
+        .replace(
+            "(defsubst buffer-narrowed-p ()",
+            "(defun buffer-narrowed-p ()",
+        );
+
+    let mut ev = Context::new();
+    install_bare_elisp_shims(&mut ev);
+    ev.set_lexical_binding(true);
+    eval_first_form_after_marker(&mut ev, &subr_source, "(defun zerop (number)");
+    eval_first_form_after_marker(&mut ev, &subr_source, "(defun buffer-narrowed-p ()");
+    for marker in [
+        "(defun count-lines (start end &optional ignore-invisible-lines)",
+        "(defun beginning-of-buffer (&optional arg)",
+        "(defun end-of-buffer (&optional arg)",
+        "(defun goto-line (line &optional buffer relative interactive)",
+        "(defun next-line (&optional arg try-vscroll)",
+        "(defun previous-line (&optional arg try-vscroll)",
+        "(defun line-move (arg &optional noerror _to-end try-vscroll)",
+        "(defun line-move-1 (arg &optional noerror _to-end)",
+        "(defun line-move-finish (column opoint forward &optional not-ipmh)",
+        "(defun line-move-to-column (col)",
+    ] {
+        eval_first_form_after_marker(&mut ev, &simple_source, marker);
+    }
+    eval_str(
+        &mut ev,
+        "(setq next-line-add-newlines nil
+               track-eol nil
+               goal-column nil
+               temporary-goal-column 0
+               selective-display nil
+               widen-automatically nil
+               line-move-ignore-invisible t
+               line-move-visual t)",
+    );
+    ev
+}
+
+/// Evaluate an Elisp string and return the result Value.
+fn eval_str(ev: &mut Context, src: &str) -> Value {
+    ev.eval_str(src).unwrap()
+}
+
+/// Evaluate and expect an integer result.
+fn eval_int(ev: &mut Context, src: &str) -> i64 {
+    match eval_str(ev, src).kind() {
+        ValueKind::Fixnum(n) => n,
+        _other => panic!("expected Int, got {:?}", eval_str(ev, src)),
+    }
+}
+
+// -----------------------------------------------------------------------
+// Position predicates
+// -----------------------------------------------------------------------
 
 #[test]
 fn test_bobp_at_beginning() {
@@ -96,6 +252,10 @@ fn test_eolp_not_at_eol() {
     let val = eval_str(&mut ev, "(eolp)");
     assert!(val.is_nil());
 }
+
+// -----------------------------------------------------------------------
+// Line operations
+// -----------------------------------------------------------------------
 
 #[test]
 fn test_line_beginning_position() {
@@ -501,6 +661,10 @@ fn bootstrap_goto_line_matches_simple_el() {
     );
 }
 
+// -----------------------------------------------------------------------
+// Character movement
+// -----------------------------------------------------------------------
+
 #[test]
 fn test_forward_char() {
     crate::test_utils::init_test_tracing();
@@ -527,6 +691,36 @@ fn test_forward_char_default() {
     eval_str(&mut ev, "(forward-char)");
     let pos = eval_int(&mut ev, "(point)");
     assert_eq!(pos, 2);
+}
+
+#[test]
+fn skip_char_class_codes_match_gnu_re_wctype_t() {
+    crate::test_utils::init_test_tracing();
+    let expected = [
+        (super::SkipCharClass::Alnum, "alnum", 1),
+        (super::SkipCharClass::Alpha, "alpha", 2),
+        (super::SkipCharClass::Word, "word", 3),
+        (super::SkipCharClass::Graph, "graph", 4),
+        (super::SkipCharClass::Print, "print", 5),
+        (super::SkipCharClass::Lower, "lower", 6),
+        (super::SkipCharClass::Upper, "upper", 7),
+        (super::SkipCharClass::Punct, "punct", 8),
+        (super::SkipCharClass::Cntrl, "cntrl", 9),
+        (super::SkipCharClass::Digit, "digit", 10),
+        (super::SkipCharClass::Xdigit, "xdigit", 11),
+        (super::SkipCharClass::Blank, "blank", 12),
+        (super::SkipCharClass::Space, "space", 13),
+        (super::SkipCharClass::Multibyte, "multibyte", 14),
+        (super::SkipCharClass::Nonascii, "nonascii", 15),
+        (super::SkipCharClass::Ascii, "ascii", 16),
+        (super::SkipCharClass::Unibyte, "unibyte", 17),
+    ];
+
+    for (class, name, gnu_code) in expected {
+        assert_eq!(u8::from(class), gnu_code);
+        assert_eq!(name.parse::<super::SkipCharClass>(), Ok(class));
+    }
+    assert!("Alpha".parse::<super::SkipCharClass>().is_err());
 }
 
 #[test]
@@ -599,6 +793,10 @@ fn skip_chars_forward_line_scans_do_not_rescan_from_buffer_start() {
         "skip-chars-forward should count scanned chars directly like GNU, elapsed={elapsed:?}"
     );
 }
+
+// -----------------------------------------------------------------------
+// Mark and region
+// -----------------------------------------------------------------------
 
 #[test]
 fn test_push_mark_and_mark() {
@@ -692,7 +890,7 @@ fn test_use_region_p_is_available_after_bootstrap() {
         .symbol_function("use-region-p")
         .expect("missing use-region-p startup function cell");
     assert!(
-        !crate::emacs_core::autoload::is_autoload_value(
+        !neovm_edit::emacs_core::autoload::is_autoload_value(
             &function,
             neovm_value::tagged::value::SymbolMode::Bare
         ),
@@ -842,6 +1040,10 @@ fn test_use_region_p_honors_buffer_local_mark_active_when_global_is_nil() {
     assert!(active.is_truthy());
 }
 
+// -----------------------------------------------------------------------
+// Edge cases
+// -----------------------------------------------------------------------
+
 #[test]
 fn test_empty_buffer_predicates() {
     crate::test_utils::init_test_tracing();
@@ -968,167 +1170,8 @@ fn test_forward_char_honors_narrowing_beginning() {
     assert_eq!(pos, 3);
 }
 
-/// Helper: create an evaluator, insert text, and position point.
-fn eval_with_text(text: &str) -> Context {
-    let mut ev = Context::new();
-    {
-        let buf = ev.edit.buffers.current_buffer_mut().unwrap();
-        buf.insert(text);
-        // Point is now at the end. Reset to beginning.
-        buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(0));
-    }
-    ev
-}
-
-fn eval_with_unibyte_bytes(bytes: &[u8]) -> Context {
-    let mut ev = Context::new();
-    let storage = neovm_edit::emacs_core::string_escape::bytes_to_unibyte_storage_string(bytes);
-    {
-        let buf = ev.edit.buffers.current_buffer_mut().unwrap();
-        buf.set_multibyte_value(false);
-        buf.insert(&storage);
-        buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(0));
-    }
-    ev
-}
-
-fn gnu_simple_line_eval_with_unibyte_bytes(bytes: &[u8]) -> Context {
-    let mut ev = gnu_simple_line_eval();
-    let storage = neovm_edit::emacs_core::string_escape::bytes_to_unibyte_storage_string(bytes);
-    {
-        let buf = ev.edit.buffers.current_buffer_mut().unwrap();
-        buf.set_multibyte_value(false);
-        buf.insert(&storage);
-        buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(0));
-    }
-    ev
-}
-
-fn bootstrap_eval_with_text(text: &str) -> Context {
-    let mut ev = runtime_startup_context();
-    {
-        let buf = ev.edit.buffers.current_buffer_mut().unwrap();
-        buf.insert(text);
-        buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(0));
-    }
-    ev
-}
-
-fn gnu_simple_line_eval() -> Context {
-    let project_root = crate::test_utils::workspace_root();
-    let simple_path = project_root.join("lisp/simple.el");
-    let subr_path = project_root.join("lisp/subr.el");
-    let simple_source = fs::read_to_string(&simple_path)
-        .expect("read GNU simple.el")
-        .replace(
-            "(with-suppressed-warnings ((obsolete inhibit-point-motion-hooks))",
-            "(progn",
-        )
-        .replace("(called-interactively-p 'interactive)", "nil");
-    let subr_source = fs::read_to_string(&subr_path)
-        .expect("read GNU subr.el")
-        .replace(
-            "(defsubst buffer-narrowed-p ()",
-            "(defun buffer-narrowed-p ()",
-        );
-
-    let mut ev = Context::new();
-    install_bare_elisp_shims(&mut ev);
-    ev.set_lexical_binding(true);
-    eval_first_form_after_marker(&mut ev, &subr_source, "(defun zerop (number)");
-    eval_first_form_after_marker(&mut ev, &subr_source, "(defun buffer-narrowed-p ()");
-    for marker in [
-        "(defun count-lines (start end &optional ignore-invisible-lines)",
-        "(defun beginning-of-buffer (&optional arg)",
-        "(defun end-of-buffer (&optional arg)",
-        "(defun goto-line (line &optional buffer relative interactive)",
-        "(defun next-line (&optional arg try-vscroll)",
-        "(defun previous-line (&optional arg try-vscroll)",
-        "(defun line-move (arg &optional noerror _to-end try-vscroll)",
-        "(defun line-move-1 (arg &optional noerror _to-end)",
-        "(defun line-move-finish (column opoint forward &optional not-ipmh)",
-        "(defun line-move-to-column (col)",
-    ] {
-        eval_first_form_after_marker(&mut ev, &simple_source, marker);
-    }
-    eval_str(
-        &mut ev,
-        "(setq next-line-add-newlines nil
-               track-eol nil
-               goal-column nil
-               temporary-goal-column 0
-               selective-display nil
-               widen-automatically nil
-               line-move-ignore-invisible t
-               line-move-visual t)",
-    );
-    ev
-}
-
-/// Evaluate an Elisp string and return the result Value.
-fn eval_str(ev: &mut Context, src: &str) -> Value {
-    ev.eval_str(src).unwrap()
-}
-
-/// Evaluate and expect an integer result.
-fn eval_int(ev: &mut Context, src: &str) -> i64 {
-    match eval_str(ev, src).kind() {
-        ValueKind::Fixnum(n) => n,
-        _other => panic!("expected Int, got {:?}", eval_str(ev, src)),
-    }
-}
-
-fn eval_first_form_after_marker(eval: &mut Context, source: &str, marker: &str) {
-    let start = source
-        .find(marker)
-        .unwrap_or_else(|| panic!("missing GNU simple.el marker: {marker}"));
-    let (form, _) = crate::emacs_core::value_reader::read_one(
-        &source[start..],
-        0,
-        crate::emacs_core::eval::VariableView::canonical(
-            neovm_value::symbol::CanonicalAccess::TEST,
-            &test_ob(),
-        ),
-    )
-    .unwrap_or_else(|err| panic!("parse GNU simple.el from {marker} failed: {:?}", err))
-    .unwrap_or_else(|| panic!("no GNU simple.el form found after marker: {marker}"));
-    eval.eval_form(form)
-        .unwrap_or_else(|err| panic!("evaluate GNU simple.el form {marker} failed: {:?}", err));
-}
-
-/// Install minimal `defun`/`defmacro`/`when`/`unless` shims so a bare
-/// evaluator can evaluate forms extracted from GNU `.el` source files.
-fn install_bare_elisp_shims(ev: &mut Context) {
-    let shims = r#"
-;; `subr.el' creates these five with `defalias'; GNU has no C version of any
-;; of them (lisp/subr.el:71 and :2277-2280), so a bare evaluator standing in
-;; for a loaded one has to be given the same aliases subr.el gives it.
-;; DIVERGENCES.md 148.
-(defalias 'not #'null)
-(defalias 'string= #'string-equal)
-(defalias 'string< #'string-lessp)
-(defalias 'string> #'string-greaterp)
-(defalias 'move-marker #'set-marker)
-(defalias 'defun (cons 'macro #'(lambda (name arglist &rest body)
-  (list 'defalias (list 'quote name) (cons 'function (list (cons 'lambda (cons arglist body))))))))
-(defalias 'defmacro (cons 'macro #'(lambda (name arglist &rest body)
-  (list 'defalias (list 'quote name)
-        (list 'cons ''macro (cons 'function (list (cons 'lambda (cons arglist body)))))))))
-(defalias 'when (cons 'macro #'(lambda (cond &rest body)
-  (list 'if cond (cons 'progn body)))))
-(defalias 'unless (cons 'macro #'(lambda (cond &rest body)
-  (cons 'if (cons cond (cons nil body))))))
-"#;
-    ev.eval_str(shims).expect("install bare elisp shims");
-}
-
-fn test_ob() -> neovm_value::symbol::Obarray {
-    neovm_value::symbol::Obarray::new()
-}
-
 #[path = "line_index_test.rs"]
 mod line_index;
-
 #[path = "selective_display_gnu_test.rs"]
 mod selective_display_gnu;
 

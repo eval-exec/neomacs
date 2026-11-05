@@ -100,9 +100,3 @@ impl std::fmt::Debug for BufferSourceReadLease<'_> {
             .finish_non_exhaustive()
     }
 }
-
-
-
-#[cfg(test)]
-#[path = "tests/source_authority_test.rs"]
-mod tests;

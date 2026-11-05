@@ -1,5 +1,4 @@
 use neovm_text::emacs_core::syntax::*;
-
 use neovm_value::tagged::SymbolMode;
 
 #[test]

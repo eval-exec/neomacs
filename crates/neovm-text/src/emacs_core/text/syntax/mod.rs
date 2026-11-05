@@ -7973,11 +7973,3 @@ impl SexpScanPolicy {
         self.comment_end_escape
     }
 }
-
-#[cfg(test)]
-#[path = "tests/skip_syntax_classes_test.rs"]
-mod skip_syntax_classes_tests;
-
-#[cfg(test)]
-#[path = "tests/syntax_test.rs"]
-mod tests;

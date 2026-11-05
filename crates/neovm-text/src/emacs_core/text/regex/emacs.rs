@@ -10567,19 +10567,3 @@ pub fn carrier_tls_fingerprint(h: &mut u64) {
         }),
     );
 }
-
-#[cfg(test)]
-#[path = "tests/casefold_scan_test.rs"]
-mod casefold_scan_tests;
-
-#[cfg(test)]
-#[path = "tests/declared_boundary_positions.rs"]
-mod declared_boundary_positions_tests;
-
-#[cfg(test)]
-#[path = "tests/emacs_test.rs"]
-mod tests;
-
-#[cfg(test)]
-#[path = "tests/fail_stack_parity_test.rs"]
-mod fail_stack_parity_tests;

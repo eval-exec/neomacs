@@ -1,6 +1,12 @@
 //! Signed GNU positions from entirely initialized declared-count names.
-
 use neovm_text::emacs_core::regex::*;
+
+fn declared_source() -> neovm_value::heap_types::LispString {
+    neovm_value::heap_types::LispString::from_emacs_bytes_with_declared_chars(
+        b"abcde".to_vec(),
+        neovm_value::heap_types::GnuDeclaredCharacterCount::try_from(0_i128).expect("zero count"),
+    )
+}
 
 #[test]
 fn declared_regex_keeps_negative_return_and_end_registers() {
@@ -70,11 +76,4 @@ fn declared_regex_negative_start_is_not_a_participating_group() {
         -2
     );
     assert!(data.as_ref().expect("data").lisp_group(0).is_none());
-}
-
-fn declared_source() -> neovm_value::heap_types::LispString {
-    neovm_value::heap_types::LispString::from_emacs_bytes_with_declared_chars(
-        b"abcde".to_vec(),
-        neovm_value::heap_types::GnuDeclaredCharacterCount::try_from(0_i128).expect("zero count"),
-    )
 }

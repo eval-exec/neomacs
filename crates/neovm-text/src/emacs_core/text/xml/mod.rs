@@ -1233,9 +1233,3 @@ pub fn builtin_libxml_parse_xml_region<H: EditHost>(host: &mut H, args: Vec<Valu
         None => Ok(Value::NIL),
     }
 }
-
-
-
-#[cfg(test)]
-#[path = "tests/xml_test.rs"]
-mod tests;

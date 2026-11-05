@@ -1630,7 +1630,3 @@ pub fn carrier_tls_fingerprint(h: &mut u64) {
     );
     neovm_value::tls_fingerprint::mix(h, CCL_VARIABLES.with(|slot| slot.get() as usize as u64));
 }
-
-#[cfg(test)]
-#[path = "tests/ccl_test.rs"]
-mod tests;

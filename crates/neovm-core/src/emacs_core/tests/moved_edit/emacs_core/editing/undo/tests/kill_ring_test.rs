@@ -1,6 +1,53 @@
 use neovm_edit::emacs_core::{Context, format_eval_result};
-
+fn test_ob() -> neovm_value::symbol::Obarray {
+    neovm_value::symbol::Obarray::new()
+}
 use crate::test_utils::{runtime_startup_eval_all, runtime_startup_eval_one};
+
+fn eval_one(src: &str) -> String {
+    let mut ev = Context::new();
+    let result = ev.eval_str(src);
+    format_eval_result(&result)
+}
+
+fn eval_all(src: &str) -> Vec<String> {
+    let mut ev = Context::new();
+    let forms = crate::emacs_core::value_reader::read_all(
+        src,
+        crate::emacs_core::eval::VariableView::canonical(
+            neovm_value::symbol::CanonicalAccess::TEST,
+            &test_ob(),
+        ),
+    )
+    .expect("parse");
+    // Root all parsed forms across the eval loop. The Vec<Value>
+    // lives on the malloc heap and is invisible to conservative
+    // stack scanning; without rooting, any intervening GC reclaims
+    // the cons cells in the unrooted forms vec.
+    let roots = ev.save_specpdl_roots();
+    for form in &forms {
+        ev.push_specpdl_root(*form);
+    }
+    let result = forms
+        .iter()
+        .map(|form| {
+            let result = ev.eval_form(*form);
+            format_eval_result(&result)
+        })
+        .collect();
+    ev.restore_specpdl_roots(roots);
+    result
+}
+
+fn bootstrap_eval_one(src: &str) -> String {
+    runtime_startup_eval_one(src)
+}
+
+fn bootstrap_eval_all(src: &str) -> Vec<String> {
+    runtime_startup_eval_all(src)
+}
+
+// -- kill/yank tests loaded from GNU simple.el --
 
 #[test]
 fn bootstrap_kill_ring_commands_are_not_rust_subrs() {
@@ -117,6 +164,8 @@ fn bootstrap_current_kill_pointer_rules_match_simple_el() {
     assert_eq!(results[2], r#"OK ("c" "a" "c")"#);
 }
 
+// -- region copy/cut tests loaded from GNU simple.el --
+
 #[test]
 fn bootstrap_region_copy_cut_ops_match_simple_el() {
     crate::test_utils::init_test_tracing();
@@ -147,6 +196,8 @@ fn bootstrap_region_copy_cut_ops_match_simple_el() {
     assert_eq!(results[1], r#"OK ("hello world" "hello")"#);
     assert_eq!(results[2], r#"OK ("hello world" "hello")"#);
 }
+
+// -- line/word kill tests loaded from GNU simple.el --
 
 #[test]
 fn bootstrap_line_and_word_kill_ops_match_simple_el() {
@@ -229,6 +280,8 @@ fn bootstrap_line_and_word_kill_arity_checks_match_simple_el() {
     assert_eq!(results[6], "OK (wrong-number-of-arguments (1 . 1) 0)");
 }
 
+// -- yank tests --
+
 #[test]
 fn bootstrap_yank_ops_match_simple_el() {
     crate::test_utils::init_test_tracing();
@@ -271,6 +324,8 @@ fn bootstrap_yank_and_yank_pop_arity_checks_match_simple_el() {
     assert_eq!(results[2], "OK (wrong-number-of-arguments (0 . 1) 2)");
     assert_eq!(results[3], "OK (wrong-number-of-arguments (0 . 1) 3)");
 }
+
+// -- yank-pop tests --
 
 #[test]
 fn yank_pop_basic() {
@@ -316,6 +371,8 @@ fn yank_pop_without_region_errors() {
     assert!(results[2].contains("wrong-type-argument"));
 }
 
+// -- downcase-region tests --
+
 #[test]
 fn downcase_region_basic() {
     crate::test_utils::init_test_tracing();
@@ -337,6 +394,8 @@ fn downcase_region_unicode_kelvin_preserved() {
     );
     assert_eq!(results[2], r#"OK "K""#);
 }
+
+// -- upcase-region tests --
 
 #[test]
 fn upcase_region_basic() {
@@ -381,6 +440,8 @@ fn upcase_region_unicode_edge_preserved() {
     );
     assert_eq!(results[2], r#"OK "ꟍ""#);
 }
+
+// -- capitalize-region tests --
 
 #[test]
 fn capitalize_region_basic() {
@@ -484,6 +545,8 @@ fn upcase_region_noncontiguous_uses_region_extract_bounds() {
     assert_eq!(results[3], r#"OK "aBCde""#);
 }
 
+// -- downcase-word tests --
+
 #[test]
 fn downcase_word_basic() {
     crate::test_utils::init_test_tracing();
@@ -520,6 +583,8 @@ fn downcase_word_unicode_extended_preserved() {
     assert_eq!(results[3], r#"OK "𐵐""#);
 }
 
+// -- upcase-word tests --
+
 #[test]
 fn upcase_word_basic() {
     crate::test_utils::init_test_tracing();
@@ -555,6 +620,8 @@ fn upcase_word_unicode_extended_preserved() {
     );
     assert_eq!(results[3], r#"OK "𐵰""#);
 }
+
+// -- capitalize-word tests --
 
 #[test]
 fn capitalize_word_basic() {
@@ -604,6 +671,8 @@ fn capitalize_word_unicode_greek_small_alpha_ypogegrammeni_titlecase() {
     assert_eq!(results[3], r#"OK "ᾈ""#);
 }
 
+// -- transpose-chars tests --
+
 #[test]
 fn transpose_chars_basic() {
     crate::test_utils::init_test_tracing();
@@ -627,6 +696,8 @@ fn transpose_chars_at_end() {
     // Point is at end (3), should swap 'b' and 'c'.
     assert_eq!(results[2], r#"OK "acb""#);
 }
+
+// -- transpose-lines tests --
 
 #[test]
 fn transpose_lines_basic() {
@@ -688,6 +759,8 @@ fn transpose_lines_negative_errors() {
     assert!(result.starts_with("ERR (error"));
 }
 
+// -- transpose-words tests --
+
 #[test]
 fn transpose_words_basic() {
     crate::test_utils::init_test_tracing();
@@ -711,6 +784,8 @@ fn transpose_words_not_enough_words_errors() {
     );
     assert!(result.starts_with("ERR"));
 }
+
+// -- transpose-sexps tests --
 
 #[test]
 fn transpose_sexps_basic() {
@@ -736,6 +811,8 @@ fn transpose_sexps_at_bob_advances_without_swapping() {
     assert_eq!(results[3], r#"OK ("(aa) (bb)" 5)"#);
 }
 
+// -- transpose-sentences tests --
+
 #[test]
 fn transpose_sentences_basic() {
     crate::test_utils::init_test_tracing();
@@ -759,6 +836,8 @@ fn transpose_sentences_with_single_space_signals_end_of_buffer() {
     );
     assert!(result.starts_with("ERR (end-of-buffer"));
 }
+
+// -- transpose-paragraphs tests --
 
 #[test]
 fn transpose_paragraphs_basic() {
@@ -785,6 +864,8 @@ fn transpose_paragraphs_backward_from_eob() {
     );
     assert_eq!(result, "OK (\"A\n\nC\nB\n\" 5)");
 }
+
+// -- indent-line-to tests --
 
 #[test]
 fn indent_line_to_basic() {
@@ -826,6 +907,8 @@ fn indent_line_to_returns_column() {
     assert_eq!(results[0], r#"OK (4 4 "    hi")"#);
     assert_eq!(results[1], "OK nil");
 }
+
+// -- indent-to tests --
 
 #[test]
 fn indent_to_basic() {
@@ -872,6 +955,8 @@ fn indent_to_minimum_requires_fixnump() {
     assert_eq!(results[2], "OK (wrong-type-argument fixnump t)");
     assert_eq!(results[3], r#"OK (wrong-type-argument fixnump "x")"#);
 }
+
+// -- newline tests --
 
 #[test]
 fn newline_basic() {
@@ -944,6 +1029,8 @@ fn newline_and_indent_rejects_too_many_args() {
     assert_eq!(results[1], "OK (wrong-number-of-arguments (0 . 1) 3)");
 }
 
+// -- newline-and-indent tests --
+
 #[test]
 fn newline_and_indent_basic() {
     crate::test_utils::init_test_tracing();
@@ -978,6 +1065,8 @@ fn newline_and_indent_normalizes_surrounding_whitespace() {
     assert_eq!(results[0], "OK (nil 2 \"\nx\")");
     assert_eq!(results[1], "OK (nil 3 \"a\nb\")");
 }
+
+// -- open-line tests --
 
 #[test]
 fn open_line_keeps_point_before_inserted_newlines() {
@@ -1042,6 +1131,8 @@ fn open_line_count_coercion_contract() {
     assert_eq!(results[3], "OK (2 (97 10 98))");
 }
 
+// -- delete-horizontal-space tests --
+
 #[test]
 fn delete_horizontal_space_deletes_both_sides() {
     crate::test_utils::init_test_tracing();
@@ -1065,6 +1156,8 @@ fn delete_horizontal_space_backward_only() {
     );
     assert_eq!(results[3], r#"OK ("a  b" 2)"#);
 }
+
+// -- just-one-space tests --
 
 #[test]
 fn just_one_space_default() {
@@ -1126,6 +1219,8 @@ fn just_one_space_argument_contract_subset() {
     assert_eq!(results[5], "OK (4 (97 32 32 98))");
 }
 
+// -- delete-indentation tests --
+
 #[test]
 fn delete_indentation_basic() {
     crate::test_utils::init_test_tracing();
@@ -1171,6 +1266,8 @@ fn delete_indentation_rejects_too_many_args() {
     assert_eq!(results[1], "OK (wrong-number-of-arguments (0 . 3) 4)");
 }
 
+// -- tab-to-tab-stop tests --
+
 #[test]
 fn tab_to_tab_stop_basic() {
     crate::test_utils::init_test_tracing();
@@ -1202,6 +1299,8 @@ fn tab_to_tab_stop_returns_reached_column() {
     assert_eq!(results[0], "OK (0 8 8 \"\t\")");
     assert_eq!(results[1], "OK (3 8 8 \"abc\t\")");
 }
+
+// -- indent-rigidly tests --
 
 #[test]
 fn indent_rigidly_forward() {
@@ -1255,6 +1354,8 @@ fn indent_rigidly_argument_contract_subset() {
     assert_eq!(results[6], r#"OK " a""#);
 }
 
+// -- wrong args tests --
+
 #[test]
 fn kill_new_wrong_type() {
     crate::test_utils::init_test_tracing();
@@ -1281,51 +1382,4 @@ fn transpose_chars_wrong_args() {
     crate::test_utils::init_test_tracing();
     let result = eval_one("(transpose-chars)");
     assert!(result.starts_with("ERR"));
-}
-
-fn eval_one(src: &str) -> String {
-    let mut ev = Context::new();
-    let result = ev.eval_str(src);
-    format_eval_result(&result)
-}
-
-fn eval_all(src: &str) -> Vec<String> {
-    let mut ev = Context::new();
-    let forms = crate::emacs_core::value_reader::read_all(
-        src,
-        crate::emacs_core::eval::VariableView::canonical(
-            neovm_value::symbol::CanonicalAccess::TEST,
-            &test_ob(),
-        ),
-    )
-    .expect("parse");
-    // Root all parsed forms across the eval loop. The Vec<Value>
-    // lives on the malloc heap and is invisible to conservative
-    // stack scanning; without rooting, any intervening GC reclaims
-    // the cons cells in the unrooted forms vec.
-    let roots = ev.save_specpdl_roots();
-    for form in &forms {
-        ev.push_specpdl_root(*form);
-    }
-    let result = forms
-        .iter()
-        .map(|form| {
-            let result = ev.eval_form(*form);
-            format_eval_result(&result)
-        })
-        .collect();
-    ev.restore_specpdl_roots(roots);
-    result
-}
-
-fn bootstrap_eval_one(src: &str) -> String {
-    runtime_startup_eval_one(src)
-}
-
-fn bootstrap_eval_all(src: &str) -> Vec<String> {
-    runtime_startup_eval_all(src)
-}
-
-fn test_ob() -> neovm_value::symbol::Obarray {
-    neovm_value::symbol::Obarray::new()
 }

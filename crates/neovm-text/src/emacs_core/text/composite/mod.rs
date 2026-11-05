@@ -1716,9 +1716,3 @@ pub fn swap_world_state(slot: &mut dyn std::any::Any) {
         .expect("carried World state");
     COMPOSITION_REGISTRY.with(|registry| std::mem::swap(&mut *registry.borrow_mut(), slot));
 }
-
-
-
-#[cfg(test)]
-#[path = "tests/composite_test.rs"]
-mod tests;
