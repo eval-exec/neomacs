@@ -7,11 +7,14 @@ use crate::emacs_core::eval::{Context, RedisplayHookPolicyGuard};
 fn fixture() -> (Context, crate::window::FrameId, crate::window::WindowId) {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
-    let root = eval.buffers.current_buffer_id().expect("root buffer");
+    let root = eval
+        .buffer_manager()
+        .current_buffer_id()
+        .expect("root buffer");
     let frame_id = eval
-        .frame_manager()
+        .frame_manager_mut()
         .create_frame("config-mini", 80, 25, root);
-    let frame = eval.frame_manager().get_mut(frame_id).expect("frame");
+    let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
     frame.char_width = 1.0;
     frame.char_height = 1.0;
     frame.shrink_mini_window();
@@ -26,7 +29,7 @@ fn fixture() -> (Context, crate::window::FrameId, crate::window::WindowId) {
         "inhibit-redisplay",
         "inhibit-quit",
     ] {
-        eval.obarray().set_symbol_value(name, Value::NIL);
+        eval.obarray_mut().set_symbol_value(name, Value::NIL);
     }
     // A real callback requests window_change_record; dimensions alone do not.
     eval.eval_str("(setq window-state-change-functions (list (lambda (_frame) nil)))")
@@ -42,7 +45,7 @@ fn capture(eval: &mut Context) {
 }
 
 fn buffer_callbacks(eval: &mut Context, buffer: crate::buffer::BufferId) {
-    eval.buffers.set_current(buffer);
+    eval.buffer_manager_mut().set_current(buffer);
     eval.eval_str(
         "(progn (setq d5-buffer-calls nil)
          (set (make-local-variable 'window-buffer-change-functions)
@@ -57,32 +60,34 @@ fn gnu_dont_set_miniwindow_restores_geometry_after_sizing_transfer() {
     let _policy = RedisplayHookPolicyGuard::gnu();
     let (mut eval, frame_id, mini_id) = fixture();
     capture(&mut eval);
-    let live = eval.buffers.create_buffer(" *live-mini-source*");
-    eval.buffers
+    let live = eval
+        .buffer_manager_mut()
+        .create_buffer(" *live-mini-source*");
+    eval.buffer_manager_mut()
         .get_mut(live)
         .expect("live buffer")
         .insert("abcde");
     {
-        let window = eval
-            .frame_manager()
+        let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+        let window = frames
             .get_mut(frame_id)
             .expect("frame")
             .find_window_mut(mini_id)
             .expect("mini");
         window.set_buffer(live);
-        crate::window::window_markers::attach_window_position_markers(&mut eval.buffers, window);
+        crate::window::window_markers::attach_window_position_markers(buffers, window);
         crate::window::window_markers::set_window_start_with_marker(
-            &mut eval.buffers,
+            buffers,
             window,
             LispCharPos1::new(2),
         );
         crate::window::window_markers::set_window_point_with_marker(
-            &mut eval.buffers,
+            buffers,
             window,
             LispCharPos1::new(4),
         );
     }
-    let frame = eval.frame_manager().get_mut(frame_id).expect("frame");
+    let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
     let plan = frame.plan_mini_window_resize(3.0, 3.0).expect("grow plan");
     frame.apply_mini_window_resize(plan);
     // The sizing callback transfers before committing the requested shrink.
@@ -196,14 +201,14 @@ fn gnu_configuration_across_record_notifies_actual_outgoing_and_restored_buffers
         .expect("original");
     buffer_callbacks(&mut eval, original);
     capture(&mut eval);
-    let outgoing = eval.buffers.create_buffer("outgoing");
+    let outgoing = eval.buffer_manager_mut().create_buffer("outgoing");
     buffer_callbacks(&mut eval, outgoing);
-    eval.obarray()
+    eval.obarray_mut()
         .set_symbol_value("d5-outgoing", Value::make_buffer(outgoing));
     eval.eval_str("(set-window-buffer nil d5-outgoing)")
         .expect("switch window");
     run_redisplay_window_change_hooks(&mut eval).expect("record actual outgoing");
-    eval.obarray()
+    eval.obarray_mut()
         .set_symbol_value("d5-buffer-calls", Value::NIL);
     eval.eval_str("(set-window-configuration d5-config)")
         .expect("restore original");
@@ -216,7 +221,7 @@ fn gnu_configuration_across_record_notifies_actual_outgoing_and_restored_buffers
     assert_eq!(names.len(), 2, "old and new local hooks run once each");
     assert_eq!(
         names[0],
-        eval.buffers
+        eval.buffer_manager()
             .get(original)
             .expect("original buffer")
             .name_value()

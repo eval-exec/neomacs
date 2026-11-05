@@ -4,10 +4,8 @@ use super::*;
 fn void_default_signals_after_callback_and_records_on_unwind() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
-    let frame = crate::emacs_core::window_cmds::ensure_selected_frame_id_in_state(
-        &mut eval.frame_manager(),
-        &mut eval.buffers,
-    );
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let frame = crate::emacs_core::window_cmds::ensure_selected_frame_id_in_state(frames, buffers);
     let selected_window = eval
         .frame_manager()
         .get(frame)
@@ -27,14 +25,14 @@ fn void_default_signals_after_callback_and_records_on_unwind() {
         "window-state-change-hook",
         "inhibit-redisplay",
     ] {
-        eval.obarray().set_symbol_value(name, Value::NIL);
+        eval.obarray_mut().set_symbol_value(name, Value::NIL);
     }
-    eval.obarray()
+    eval.obarray_mut()
         .set_symbol_value("d5-default-hook-calls", Value::fixnum(0));
     let callback = eval
         .eval_str("(lambda (_frame) (setq d5-default-hook-calls (1+ d5-default-hook-calls)))")
         .expect("callback lambda");
-    eval.obarray().set_symbol_value(
+    eval.obarray_mut().set_symbol_value(
         "window-buffer-change-functions",
         Value::cons(callback, Value::NIL),
     );
@@ -42,16 +40,18 @@ fn void_default_signals_after_callback_and_records_on_unwind() {
     // 1799-1808). Use an ordinary Lisp variable to exercise the same generic
     // default reader without manufacturing an invalid built-in value cell.
     let void_hook = "d5-void-default-hook";
-    eval.obarray().makunbound(void_hook);
+    eval.obarray_mut().makunbound(void_hook);
     assert!(
-        crate::emacs_core::data::default_value_by_id(
+        neovm_eval::emacs_core::data::test_support::default_value_by_id(
             &eval,
             crate::emacs_core::intern::intern(void_hook),
         )
         .is_none(),
         "the ordinary fixture variable must have a void default"
     );
-    eval.gnu_redisplay_hooks().frame_window_change.insert(frame);
+    eval.gnu_redisplay_hooks_mut()
+        .frame_window_change
+        .insert(frame);
     let bindings = eval.specpdl().len();
 
     // Probe the shared reader/walker and change-pass guard, rather than

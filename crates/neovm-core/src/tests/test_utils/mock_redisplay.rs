@@ -6,6 +6,7 @@
 //! Lisp values are cached globally or in thread-local storage.
 
 use crate::emacs_core::Context;
+use crate::window::DisplayFrameExt;
 use crate::window::{PresentedWindowRegions, WindowDisplaySnapshot};
 use neomacs_display_protocol::types::Rect;
 
@@ -39,7 +40,7 @@ pub fn accept_all_frames(eval: &mut Context) {
         let presentation =
             crate::window::geometry::PresentationId::new(eval.begin_interaction_presentation());
         let frame = eval
-            .frame_manager()
+            .frame_manager_mut()
             .get_mut(frame_id)
             .expect("live mock frame");
         frame
@@ -55,7 +56,7 @@ pub fn accept_all_frames(eval: &mut Context) {
                 .all(|&window| frame.redisplay_snapshot(window).is_some())
         );
         for buffer in buffers {
-            eval.buffers
+            eval.buffer_manager()
                 .get(buffer)
                 .expect("displayed mock buffer")
                 .reset_unchanged_region();
