@@ -659,7 +659,6 @@ fn ct_lookup_ascii_cached(mut obj: &crate::tagged::header::CharTableObj, ch: i64
 // lookup seam, so it needs no runtime policy argument. Semantic callers still
 // pass their captured SymbolMode through the same lookup body.
 trait CtLookupPolicy: Copy {
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn symbol_mode(self) -> SymbolMode;
 }
 impl CtLookupPolicy for SymbolMode {
