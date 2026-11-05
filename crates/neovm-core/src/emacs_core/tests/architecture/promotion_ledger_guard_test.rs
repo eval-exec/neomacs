@@ -569,6 +569,10 @@ struct Surface<'a> {
     workspace: &'a Path,
     candidates: Vec<Candidate>,
     visited: BTreeMap<PathBuf, String>,
+    /// Files reachable only through a definitively test-only `mod`
+    /// declaration: not production code, not scanned, and skipped by the
+    /// unmapped-file fail-closed pass.
+    gated_files: BTreeSet<PathBuf>,
     uses: Vec<UseSite>,
     modules: BTreeSet<String>,
     accounted: BTreeSet<(PathBuf, usize)>,
@@ -621,6 +625,96 @@ fn use_leaves(
     }
 }
 
+/// B3-d: the attribute list of a top-level item, for the production gate.
+fn item_attrs(item: &syn::Item) -> &[syn::Attribute] {
+    match item {
+        syn::Item::Const(item) => &item.attrs,
+        syn::Item::Enum(item) => &item.attrs,
+        syn::Item::ExternCrate(item) => &item.attrs,
+        syn::Item::Fn(item) => &item.attrs,
+        syn::Item::ForeignMod(item) => &item.attrs,
+        syn::Item::Impl(item) => &item.attrs,
+        syn::Item::Macro(item) => &item.attrs,
+        syn::Item::Mod(item) => &item.attrs,
+        syn::Item::Static(item) => &item.attrs,
+        syn::Item::Struct(item) => &item.attrs,
+        syn::Item::Trait(item) => &item.attrs,
+        syn::Item::TraitAlias(item) => &item.attrs,
+        syn::Item::Type(item) => &item.attrs,
+        syn::Item::Union(item) => &item.attrs,
+        syn::Item::Use(item) => &item.attrs,
+        _ => &[],
+    }
+}
+
+fn trait_item_attrs(item: &syn::TraitItem) -> &[syn::Attribute] {
+    match item {
+        syn::TraitItem::Const(item) => &item.attrs,
+        syn::TraitItem::Fn(item) => &item.attrs,
+        syn::TraitItem::Type(item) => &item.attrs,
+        syn::TraitItem::Macro(item) => &item.attrs,
+        _ => &[],
+    }
+}
+
+fn impl_item_attrs(item: &syn::ImplItem) -> &[syn::Attribute] {
+    match item {
+        syn::ImplItem::Const(item) => &item.attrs,
+        syn::ImplItem::Fn(item) => &item.attrs,
+        syn::ImplItem::Type(item) => &item.attrs,
+        syn::ImplItem::Macro(item) => &item.attrs,
+        _ => &[],
+    }
+}
+
+/// Resolve a non-inline module declaration's file path(s). Returns whether a
+/// `#[path]` attribute supplied the location; the child directory of such a
+/// module is derived beside the referenced file.
+fn module_paths(
+    module: &syn::ItemMod,
+    dir: &Path,
+    path_base: &Path,
+) -> Result<(Vec<PathBuf>, bool), String> {
+    let mut paths = Vec::new();
+    let mut path_attr = false;
+    for attr in &module.attrs {
+        if attr.path().is_ident("path") {
+            let syn::Meta::NameValue(meta) = &attr.meta else {
+                return Err("B3_SOURCE module path".into());
+            };
+            let syn::Expr::Lit(expr) = &meta.value else {
+                return Err("B3_SOURCE module path expression".into());
+            };
+            let syn::Lit::Str(value) = &expr.lit else {
+                return Err("B3_SOURCE module path string".into());
+            };
+            paths.push(path_base.join(value.value()));
+            path_attr = true;
+        }
+        if attr.path().is_ident("cfg_attr") {
+            let args = attr
+                .parse_args_with(
+                    syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+                )
+                .map_err(|e| format!("B3_SOURCE cfg_attr: {e}"))?;
+            if args.iter().skip(1).any(|meta| meta.path().is_ident("path")) {
+                return Err("B3_SOURCE conditional module path requires review".into());
+            }
+        }
+    }
+    if paths.is_empty() {
+        let name = module.ident.to_string();
+        paths = [
+            dir.join(format!("{name}.rs")),
+            dir.join(&name).join("mod.rs"),
+        ]
+        .into_iter()
+        .filter(|path| path.is_file())
+        .collect();
+    }
+    Ok((paths, path_attr))
+}
+
 impl Surface<'_> {
     fn relative(&self, file: &Path) -> Result<String, String> {
         Ok(file
@@ -665,6 +759,99 @@ impl Surface<'_> {
             }
         }
         Ok(())
+    }
+    /// B3-d: account the doc(hidden) attributes inside a skipped test-only
+    /// item so the file's hidden-metadata pass still proves every hidden
+    /// attribute belongs to a scanned or explicitly test-only item.
+    fn account_gated_with(
+        &mut self,
+        file: &Path,
+        visit: impl FnOnce(&mut HiddenAttrs),
+    ) -> Result<(), String> {
+        let mut hidden = HiddenAttrs::default();
+        visit(&mut hidden);
+        if !hidden.errors.is_empty() {
+            return Err(hidden.errors.join("\n"));
+        }
+        for line in hidden.lines {
+            self.accounted.insert((file.to_path_buf(), line));
+        }
+        Ok(())
+    }
+    /// B3-d: collect every file reachable only through a test-gated module
+    /// declaration so the unmapped-file fail-closed pass skips test-only code.
+    fn collect_gated_module(
+        &mut self,
+        module: &syn::ItemMod,
+        dir: &Path,
+        path_base: &Path,
+    ) -> Result<(), String> {
+        if let Some((_, items)) = &module.content {
+            let inline_dir = dir.join(module.ident.to_string());
+            return self.collect_gated_items(items, &inline_dir, &inline_dir);
+        }
+        let (paths, path_attr) = module_paths(module, dir, path_base)?;
+        if paths.len() != 1 {
+            return Err(format!(
+                "B3_SOURCE unresolved test-only module {}",
+                module.ident
+            ));
+        }
+        self.collect_gated_file(&paths[0], path_attr, dir)
+    }
+    fn collect_gated_items(
+        &mut self,
+        items: &[syn::Item],
+        dir: &Path,
+        path_base: &Path,
+    ) -> Result<(), String> {
+        for item in items {
+            let syn::Item::Mod(module) = item else {
+                continue;
+            };
+            if let Some((_, inner)) = &module.content {
+                let inline_dir = dir.join(module.ident.to_string());
+                self.collect_gated_items(inner, &inline_dir, &inline_dir)?;
+            } else {
+                let (paths, path_attr) = module_paths(module, dir, path_base)?;
+                if paths.len() != 1 {
+                    return Err(format!(
+                        "B3_SOURCE unresolved test-only module {}",
+                        module.ident
+                    ));
+                }
+                self.collect_gated_file(&paths[0], path_attr, dir)?;
+            }
+        }
+        Ok(())
+    }
+    fn collect_gated_file(
+        &mut self,
+        file: &Path,
+        path_attr: bool,
+        parent_dir: &Path,
+    ) -> Result<(), String> {
+        let canonical = file
+            .canonicalize()
+            .map_err(|e| format!("B3_SOURCE {}: {e}", file.display()))?;
+        if !self.gated_files.insert(canonical.clone()) {
+            return Ok(());
+        }
+        let text = read(&canonical)?;
+        let ast = syn::parse_file(&text)
+            .map_err(|e| format!("B3_SOURCE {}: {e}", canonical.display()))?;
+        let child_dir = if path_attr
+            || canonical.file_name().and_then(|name| name.to_str()) == Some("mod.rs")
+        {
+            canonical.parent().unwrap_or(parent_dir).to_path_buf()
+        } else {
+            canonical.with_extension("")
+        };
+        self.collect_gated_items(
+            &ast.items,
+            &child_dir,
+            canonical.parent().unwrap_or(parent_dir),
+        )
     }
     fn reject_hidden(&self, attrs: &[syn::Attribute], what: &str) -> Result<(), String> {
         if doc_hidden(attrs)? {
@@ -799,6 +986,18 @@ impl Surface<'_> {
     ) -> Result<(), String> {
         self.modules.insert(module.into());
         for item in items {
+            // B3-d: PROMOTION records PRODUCTION promotions only. An item
+            // whose cfg is definitively FALSE in the production environment is
+            // test-only: it is not a candidate, its doc(hidden) metadata is
+            // accounted so the file's hidden pass stays meaningful, and a
+            // test-only module's files are not scanned at all.
+            if production_gated(item_attrs(item)) {
+                self.account_gated_with(file, |hidden| hidden.visit_item(item))?;
+                if let syn::Item::Mod(module) = item {
+                    self.collect_gated_module(module, dir, path_base)?;
+                }
+                continue;
+            }
             match item {
                 syn::Item::Fn(f) => self.record(
                     file,
@@ -824,7 +1023,11 @@ impl Surface<'_> {
                         SourceKind::Struct,
                     )?;
                     for field in &s.fields {
-                        self.reject_hidden(&field.attrs, "field")?;
+                        if production_gated(&field.attrs) {
+                            self.account_gated_with(file, |hidden| hidden.visit_field(field))?;
+                        } else {
+                            self.reject_hidden(&field.attrs, "field")?;
+                        }
                     }
                 }
                 syn::Item::Enum(e) => {
@@ -838,9 +1041,17 @@ impl Surface<'_> {
                         SourceKind::Enum,
                     )?;
                     for variant in &e.variants {
+                        if production_gated(&variant.attrs) {
+                            self.account_gated_with(file, |hidden| hidden.visit_variant(variant))?;
+                            continue;
+                        }
                         self.reject_hidden(&variant.attrs, "variant")?;
                         for field in &variant.fields {
-                            self.reject_hidden(&field.attrs, "field")?;
+                            if production_gated(&field.attrs) {
+                                self.account_gated_with(file, |hidden| hidden.visit_field(field))?;
+                            } else {
+                                self.reject_hidden(&field.attrs, "field")?;
+                            }
                         }
                     }
                 }
@@ -855,7 +1066,11 @@ impl Surface<'_> {
                         SourceKind::Union,
                     )?;
                     for field in &u.fields.named {
-                        self.reject_hidden(&field.attrs, "field")?;
+                        if production_gated(&field.attrs) {
+                            self.account_gated_with(file, |hidden| hidden.visit_field(field))?;
+                        } else {
+                            self.reject_hidden(&field.attrs, "field")?;
+                        }
                     }
                 }
                 syn::Item::Type(t) => self.record(
@@ -887,6 +1102,12 @@ impl Surface<'_> {
                         SourceKind::Trait,
                     )?;
                     for member in &t.items {
+                        if production_gated(trait_item_attrs(member)) {
+                            self.account_gated_with(file, |hidden| {
+                                hidden.visit_trait_item(member)
+                            })?;
+                            continue;
+                        }
                         match member {
                             syn::TraitItem::Fn(f) => {
                                 self.reject_hidden(&f.attrs, "trait member")?
@@ -910,6 +1131,10 @@ impl Surface<'_> {
                 }
                 syn::Item::Impl(i) => {
                     for member in &i.items {
+                        if production_gated(impl_item_attrs(member)) {
+                            self.account_gated_with(file, |hidden| hidden.visit_impl_item(member))?;
+                            continue;
+                        }
                         match member {
                             syn::ImplItem::Fn(f) => {
                                 if i.trait_.is_some() {
@@ -1000,38 +1225,7 @@ impl Surface<'_> {
                     if let Some((_, items)) = &m.content {
                         self.items(items, file, &child, &directory, &directory)?;
                     } else {
-                        let mut paths = Vec::new();
-                        for attr in &m.attrs {
-                            if attr.path().is_ident("path") {
-                                let syn::Meta::NameValue(meta) = &attr.meta else {
-                                    return Err("B3_SOURCE module path".into());
-                                };
-                                let syn::Expr::Lit(expr) = &meta.value else {
-                                    return Err("B3_SOURCE module path expression".into());
-                                };
-                                let syn::Lit::Str(value) = &expr.lit else {
-                                    return Err("B3_SOURCE module path string".into());
-                                };
-                                paths.push(path_base.join(value.value()));
-                            }
-                            if attr.path().is_ident("cfg_attr") {
-                                let args = attr.parse_args_with(syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated).map_err(|e| format!("B3_SOURCE cfg_attr: {e}"))?;
-                                if args.iter().skip(1).any(|meta| meta.path().is_ident("path")) {
-                                    return Err(
-                                        "B3_SOURCE conditional module path requires review".into(),
-                                    );
-                                }
-                            }
-                        }
-                        if paths.is_empty() {
-                            paths = [
-                                dir.join(format!("{}.rs", m.ident)),
-                                directory.join("mod.rs"),
-                            ]
-                            .into_iter()
-                            .filter(|p| p.is_file())
-                            .collect();
-                        }
+                        let (paths, _) = module_paths(m, dir, path_base)?;
                         if paths.len() != 1 {
                             return Err(format!("B3_SOURCE unresolved module {child}"));
                         }
@@ -1225,6 +1419,7 @@ fn source_rows(workspace: &Path) -> Result<Vec<Candidate>, String> {
         workspace: &workspace,
         candidates: Vec::new(),
         visited: BTreeMap::new(),
+        gated_files: BTreeSet::new(),
         uses: Vec::new(),
         modules: BTreeSet::new(),
         accounted: BTreeSet::new(),
@@ -1252,6 +1447,11 @@ fn source_rows(workspace: &Path) -> Result<Vec<Candidate>, String> {
     all_rs(&value, &mut files)?;
     for file in files {
         let path = file.canonicalize().map_err(|e| e.to_string())?;
+        // B3-d: a file reachable only through a test-only module declaration
+        // is not production code; it is not an unmapped-module failure.
+        if surface.gated_files.contains(&path) {
+            continue;
+        }
         if !surface.visited.contains_key(&path) {
             let text = read(&path)?;
             let ast =
@@ -1631,6 +1831,86 @@ fn architecture_pc11_mutation_ledger_and_hidden_source_are_bijective() {
     assert!(red.contains("unlisted"), "{red}");
     std::fs::write(source.join("lib.rs"), promoted).unwrap();
     assert!(equal_rows(&ledger, &source_rows(dir.path()).unwrap()).is_ok());
+}
+
+#[test]
+fn architecture_mutation_b3d_promotion_is_production_only() {
+    // B3-d: PROMOTION ledgers hold PRODUCTION promotions only. The scan
+    // routes by cfg in the production environment (test=false,
+    // feature "test-support"=false): a production `#[cfg(not(test))]` item is
+    // required, while `#[cfg(test)]` and `#[cfg(any(test, feature =
+    // "test-support"))]` items and test-only module files are out of scope.
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("crates/neovm-value/src");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(
+        source.join("lib.rs"),
+        "#[doc(hidden)]\npub fn prod_row() {}\n\
+         #[cfg(not(test))]\n#[doc(hidden)]\npub fn prod_arm() {}\n\
+         #[cfg(test)]\n#[doc(hidden)]\npub fn test_only() {}\n\
+         #[cfg(any(test, feature = \"test-support\"))]\n#[doc(hidden)]\npub fn test_support_only() {}\n\
+         #[cfg(not(test))]\nmod prodmod;\n\
+         #[cfg(test)]\nmod testmod;\n",
+    )
+    .unwrap();
+    std::fs::write(
+        source.join("prodmod.rs"),
+        "#[doc(hidden)]\npub fn hidden_prod_item() {}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        source.join("testmod.rs"),
+        "#[doc(hidden)]\npub fn hidden_test_item() {}\n",
+    )
+    .unwrap();
+    let header = "item\tkind\told_vis\tfile:line\tmodule\treason\n";
+    let row = |item: &str, file: &str| {
+        format!("{header}{item}\tfn\tpub(crate)\tcrates/neovm-value/src/{file}:1\tm\tbulk\n")
+    };
+    let rows = |items: &[(&str, &str)]| {
+        let mut text = header.to_string();
+        for (item, file) in items {
+            text.push_str(&format!(
+                "{item}\tfn\tpub(crate)\tcrates/neovm-value/src/{file}:1\tm\tbulk\n"
+            ));
+        }
+        text
+    };
+    let production = [
+        ("neovm_value::prod_row", "lib.rs"),
+        ("neovm_value::prod_arm", "lib.rs"),
+        ("hidden_prod_item", "prodmod.rs"),
+    ];
+    let ledger_text = rows(&production);
+    let ledger_rows = ledger(&ledger_text).unwrap();
+    // The gated test items and the gated module file are not scanned and not
+    // required, while both production arms are.
+    equal_rows(&ledger_rows, &source_rows(dir.path()).unwrap())
+        .unwrap_or_else(|error| panic!("B3_D PRODUCTION ROUTING: {error}"));
+    // A ledger row for a test-only item is red: it is not production surface.
+    for (item, file) in [
+        ("neovm_value::test_only", "lib.rs"),
+        ("neovm_value::test_support_only", "lib.rs"),
+        ("neovm_value::hidden_test_item", "testmod.rs"),
+    ] {
+        let flagged = ledger(&row(item, file)).unwrap();
+        let red = equal_rows(&flagged, &source_rows(dir.path()).unwrap()).unwrap_err();
+        assert!(
+            red.contains("B3_LEDGER_SOURCE_MISMATCH")
+                && red.contains(item.rsplit("::").next().unwrap()),
+            "{error}",
+            error = red
+        );
+    }
+    // Removing a production row is red: production surface must stay listed.
+    for keep in [
+        vec![production[0], production[1]],
+        vec![production[0], production[2]],
+    ] {
+        let flagged = ledger(&rows(&keep)).unwrap();
+        let red = equal_rows(&flagged, &source_rows(dir.path()).unwrap()).unwrap_err();
+        assert!(red.contains("unlisted public hidden definition"), "{red}");
+    }
 }
 
 #[test]
@@ -2369,7 +2649,12 @@ fn cfg_value(meta: &syn::Meta) -> CfgValue {
     }
 }
 
-fn pc2_gated(attrs: &[syn::Attribute]) -> bool {
+/// True when an item is test-only in the production scan environment
+/// (`test`=false, `feature = "test-support"`=false): `#[test]` itself, or a
+/// `#[cfg(...)]` that is definitively FALSE there. Used by both the PC2
+/// caller scan (PC2-G) and the B3 PROMOTION scanner (B3-d), so both route by
+/// the same production predicate.
+fn production_gated(attrs: &[syn::Attribute]) -> bool {
     attrs.iter().any(|attr| {
         if attr.path().is_ident("test") {
             return true;
@@ -2397,7 +2682,7 @@ struct Pc2Scan<'a> {
 
 impl<'ast> Visit<'ast> for Pc2Scan<'_> {
     fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
-        if pc2_gated(&item.attrs) {
+        if production_gated(&item.attrs) {
             return;
         }
         self.stack.push(item.sig.ident.to_string());
@@ -2405,7 +2690,7 @@ impl<'ast> Visit<'ast> for Pc2Scan<'_> {
         self.stack.pop();
     }
     fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
-        if pc2_gated(&item.attrs) {
+        if production_gated(&item.attrs) {
             return;
         }
         self.stack.push(item.sig.ident.to_string());
@@ -2413,7 +2698,7 @@ impl<'ast> Visit<'ast> for Pc2Scan<'_> {
         self.stack.pop();
     }
     fn visit_item_mod(&mut self, module: &'ast syn::ItemMod) {
-        if pc2_gated(&module.attrs) {
+        if production_gated(&module.attrs) {
             return;
         }
         visit::visit_item_mod(self, module);
@@ -2580,7 +2865,7 @@ fn pc2_walk_module_items(
         // `mod r#if;` names the plain file `if.rs`; strip the raw prefix.
         let ident = module.ident.to_string();
         let name = ident.strip_prefix("r#").unwrap_or(&ident).to_string();
-        if pc2_gated(&module.attrs) {
+        if production_gated(&module.attrs) {
             // cfg(test)/(test-support)-only subtree: not production, no scan.
             continue;
         }

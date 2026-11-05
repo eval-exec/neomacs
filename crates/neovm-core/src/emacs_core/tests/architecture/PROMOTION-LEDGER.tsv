@@ -69,7 +69,6 @@ FIXNUM_CHECK_VALUE	const	pub(crate)	crates/neovm-value/src/tagged/value.rs:144	t
 FIXNUM_SHIFT	const	pub(crate)	crates/neovm-value/src/tagged/value.rs:146	tagged::value	pc1-d: DATA seal privacy ledger 17f6ac250b; callers bytecode/vm.rs jit/opt/passes/fold.rs
 FLOAT_SLOT_BYTES	const	pub(crate)	crates/neovm-value/src/tagged/gc/jit_state.rs:94	tagged::gc	bulk
 FLOAT_VALUE_OFFSET	const	pub(crate)	crates/neovm-value/src/tagged/header.rs:844	tagged::header	bulk
-FakeImage	struct	pub(crate)	crates/neovm-value/src/tagged/gc/tests/fake_image.rs:16	tagged::gc::fake_image	bulk
 Fixnum	struct	pub(crate)	crates/neovm-value/src/tagged/value.rs:40	tagged::value	bulk
 FixnumRangeError	enum	pub(crate)	crates/neovm-value/src/tagged/value.rs:43	tagged::value	bulk
 FormalBinding	enum	pub(crate)	crates/neovm-value/src/tagged/bytecode/function_slots.rs:54	tagged::bytecode::function_slots	bulk
@@ -220,7 +219,6 @@ SymbolNameQuery	struct	pub(crate)	crates/neovm-value/src/intern/mod.rs:421	emacs
 SymbolPlistSnapshot	enum	pub(crate)	crates/neovm-value/src/symbol/mod.rs:1039	emacs_core::symbol	bulk
 SymbolSlotIndex	struct	pub(crate)	crates/neovm-value/src/tagged/gc/symbol_table.rs:24	tagged::gc::symbol_table	bulk
 SymbolWriteToken	struct	pub(crate)	crates/neovm-value/src/tagged/gc/mutator_registration/symbol_authority/globals.rs:31	tagged::gc	seal-type: TOKEN privacy ledger 17f6ac250b; fields private, no new ctor; guard rows in SEAL-GUARD-ROWS-gapsurvey.tsv; caller world/function_write_hooks.rs
-SyntheticConcurrentBarrier	struct	pub(crate)	crates/neovm-value/src/tagged/gc/tests/test_heap.rs:14	tagged::gc	bulk
 TABLE_ADDRESSES_OFFSET	const	pub(crate)	crates/neovm-value/src/tagged/gc/symbol_table/abi.rs:40	tagged::gc::symbol_table::abi	pc1-d: DATA privacy row; caller jit/parallel/native.rs:367-372
 TABLE_ADDRESS_STRIDE	const	pub(crate)	crates/neovm-value/src/tagged/gc/symbol_table/abi.rs:44	tagged::gc::symbol_table::abi	pc1-d: DATA privacy row; caller jit/parallel/native.rs:367-372
 TABLE_CHUNK_COUNT_OFFSET	const	pub(crate)	crates/neovm-value/src/tagged/gc/symbol_table/abi.rs:32	tagged::gc::symbol_table::abi	pc1-d: DATA privacy row; caller jit/parallel/native.rs:367-372
@@ -275,7 +273,6 @@ builtin_sxhash_equal_including_properties_with_mode	fn	pub(crate)	crates/neovm-v
 builtin_sxhash_equal_with_mode	fn	pub(crate)	crates/neovm-value/src/hashtab/mod.rs:805	emacs_core::hashtab	bulk
 bump_char_table_write_tick	fn	pub(crate)	crates/neovm-value/src/value/mod.rs:109	emacs_core::value	bulk
 byte_positions	mod	pub(crate)	crates/neovm-value/src/heap_types.rs:8	heap_types	module-gate: signed DATA module row (prepc ledger.tsv:266); contents plain + supplement-DATA; no PC2 tables
-bytecode_data_access_count	fn	pub(crate)	crates/neovm-value/src/value/mod.rs:350	emacs_core::value	bulk
 canonical_symbol_for_name	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:1821	emacs_core::intern	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/runtime/eval/mod.rs:7080:56
 card_tag_filter_on	fn	pub(crate)	crates/neovm-value/src/tagged/gc/knobs.rs:172	tagged::gc	pc1-d: DATA seal privacy ledger 17f6ac250b; caller jit/compile/heap_inline.rs
 card_tag_filter_on::gc_reexport	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2799	tagged::gc	pc1-d use-line: origin knobs.rs row (card_tag_filter_on); caller jit/compile/heap_inline.rs:312
@@ -288,7 +285,6 @@ clear_tagged_heap_root_if_installed	fn	pub(crate)	crates/neovm-value/src/tagged/
 collect_in_flight_registry_gc_roots	fn	pub(crate)	crates/neovm-value/src/error/mod.rs:811	emacs_core::error	bulk
 collect_shared_root_gc_roots	fn	pub(crate)	crates/neovm-value/src/tagged/transport/root_table.rs:400	tagged::transport	bulk
 collection_observation_epoch	fn	pub(crate)	crates/neovm-value/src/tagged/gc/collection_observed.rs:53	tagged::gc	bulk
-collector_is_registered	fn	pub(crate)	crates/neovm-value/src/tagged/gc/gc_thread.rs:558	tagged::gc	bulk
 compiled_journal_mode	fn	pub(crate)	crates/neovm-value/src/tagged/collection_reads/compiled_journal.rs:17	tagged::collection_reads	bulk
 compiled_observation_gate	fn	pub(crate)	crates/neovm-value/src/tagged/collection_reads.rs:852	tagged::collection_reads	bulk
 compiled_observation_window	fn	pub(crate)	crates/neovm-value/src/tagged/collection_reads.rs:836	tagged::collection_reads	bulk
@@ -302,10 +298,7 @@ current_write_tracking_enabled	fn	pub(crate)	crates/neovm-value/src/tagged/gc.rs
 debug_assert_no_heap_mut_closure	fn	pub(crate)	crates/neovm-value/src/tagged/mutate.rs:104	tagged::mutate	bulk
 emacs_hash_char_array	fn	pub(crate)	crates/neovm-value/src/hashtab/mod.rs:155	emacs_core::hashtab	bulk
 emacs_sxhash_obj_with_fallback	fn	pub(crate)	crates/neovm-value/src/hashtab/mod.rs:200	emacs_core::hashtab	bulk
-endpoint_search_node_visit_count	fn	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/tests/instrumentation.rs:70	heap_types::overlay_storage::instrumentation	bulk
-endpoint_search_summary_shift_count	fn	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/tests/instrumentation.rs:89	heap_types::overlay_storage::instrumentation	bulk
 equal_value_inner	fn	pub(crate)	crates/neovm-value/src/value/mod.rs:4662	emacs_core::value	bulk
-eval_error_formatter_installed	fn	pub(crate)	crates/neovm-value/src/error/format_hook.rs:30	emacs_core::error::format_hook	bulk
 expect_args	fn	pub(crate)	crates/neovm-value/src/error/mod.rs:1161	emacs_core::error	bulk
 expect_args_range	fn	pub(crate)	crates/neovm-value/src/error/mod.rs:1191	emacs_core::error	bulk
 expect_fixnum	fn	pub(crate)	crates/neovm-value/src/error/mod.rs:1213	emacs_core::error	bulk
@@ -318,7 +311,6 @@ finish_slot_store_in_store	unsafe fn	pub(crate)	crates/neovm-value/src/tagged/mu
 flow_from_eval_error	fn	pub(crate)	crates/neovm-value/src/error/mod.rs:137	emacs_core::error	bulk
 format_symbol_name_for_diagnostic	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:162	emacs_core::intern	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/lisp/load/mod.rs:5:21
 fresh_bytecode_source_id	fn	pub(crate)	crates/neovm-value/src/tagged/bytecode/chunk.rs:241	tagged::bytecode::chunk	pc1-d: DATA ledger-supplement:202; caller runtime/bytecode/chunk.rs:20
-function_cell_lookup_count	fn	pub(crate)	crates/neovm-value/src/symbol/mod.rs:183	emacs_core::symbol	bulk
 CanonicalHofSeed	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:50	tagged::gc	module-facade: privacy module row FACADE REQUIRED; 8 named re-exports (all pre-move pub, vis unchanged); core paths updated callback.rs:3 world/function_write_hooks.rs:10 parallel/hof.rs:4
 CompilerActivity	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:50	tagged::gc	module-facade: privacy module row FACADE REQUIRED; 8 named re-exports (all pre-move pub, vis unchanged); core paths updated callback.rs:3 world/function_write_hooks.rs:10 parallel/hof.rs:4
 FunctionWriteHooks	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:50	tagged::gc	module-facade: privacy module row FACADE REQUIRED; 8 named re-exports (all pre-move pub, vis unchanged); core paths updated callback.rs:3 world/function_write_hooks.rs:10 parallel/hof.rs:4
@@ -331,12 +323,9 @@ has_collection_observations	fn	pub(crate)	crates/neovm-value/src/tagged/gc/colle
 hash_key_to_visible_value	fn	pub(crate)	crates/neovm-value/src/hashtab/mod.rs:101	emacs_core::hashtab	bulk
 hash_test_parity_enabled	fn	pub(crate)	crates/neovm-value/src/hashtab/mod.rs:50	emacs_core::hashtab	bulk
 heap_types::threading	mod	pub(crate)	crates/neovm-value/src/heap_types.rs:10	heap_types	module-gate per PEER-RULING-CORE-RESIDUAL B; pub-item receipt in notify-gapsurvey-core-batch2.md
-hoist_reads	fn	pub(crate)	crates/neovm-value/src/tagged/collection_reads.rs:74	tagged::collection_reads	bulk
 install_sqlite_obj_finalizer	fn	pub(crate)	crates/neovm-value/src/tagged/header/sqlite_finalizer.rs:25	tagged::header::sqlite_finalizer	pc2 per ruling: publish identity-cell (&'static SqliteObjFinalizer); module stays pub(crate); adapter system/sqlite/mod.rs installs &CANONICAL_SQLITE_FINALIZER
 install_static_subr_objects	fn	pub(crate)	crates/neovm-value/src/tagged/value.rs:357	tagged::value	pc1-d: DATA seal privacy ledger 17f6ac250b; caller eval/green/bootstrap.rs
 install_string_bytes_changed_hook::root_reexport	reexport	(new)	crates/neovm-value/src/lib.rs:57	crate root	pc2 root pub use line in the ONE lib.rs PC2 section
-intern_call_names	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:2186	emacs_core::intern	bulk
-intern_calls	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:2181	emacs_core::intern	bulk
 is_active	fn	pub(crate)	crates/neovm-value/src/tagged/collection_reads.rs:92	tagged::collection_reads	bulk
 is_bool_vector	use	pub(crate)	crates/neovm-value/src/boolvec/mod.rs:279	emacs_core::boolvec	bulk
 is_keyword_id	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:1751	emacs_core::intern	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/runtime/eval/mod.rs:35:22
@@ -360,44 +349,22 @@ mix	fn	pub(crate)	crates/neovm-value/src/tls_fingerprint.rs:15	tls_fingerprint	b
 mix_debug	fn	pub(crate)	crates/neovm-value/src/tls_fingerprint.rs:21	tls_fingerprint	bulk
 neovm_jit_unobserved_collection_owner	fn	pub(crate)	crates/neovm-value/src/tagged/gc/barrier_window.rs:485	tagged::gc	bulk
 note_blv_alist_structural_mutation	fn	pub(crate)	crates/neovm-value/src/symbol/mod.rs:461	emacs_core::symbol	bulk
-note_bytecode_data_access	fn	pub(crate)	crates/neovm-value/src/value/mod.rs:358	emacs_core::value	bulk
 note_root_overwrite	fn	pub(crate)	crates/neovm-value/src/tagged/gc/gc_thread.rs:2391	tagged::gc	pc1-d: DATA seal privacy ledger 17f6ac250b; widened by pc11 generator glob-fix pass, re-cited to its DATA seal
 ordered	mod	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/mod.rs:8	heap_types::overlay_storage	module-gate: ruling condition 'module-gate ordered if the path needs it'; overlay_bplus.rs:2 glob + overlay_index.rs:19 named imports
-overlay_full_enumeration_visit_count	fn	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/tests/instrumentation.rs:108	heap_types::overlay_storage::instrumentation	bulk
-overlay_iterator_frame_push_count	fn	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/tests/instrumentation.rs:32	heap_types::overlay_storage::instrumentation	bulk
-overlay_shift_node_visit_count	fn	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/tests/instrumentation.rs:51	heap_types::overlay_storage::instrumentation	bulk
 overlay_storage	mod	pub(crate)	crates/neovm-value/src/heap_types.rs:10	heap_types	module-gate: signed DATA module row (ledger.tsv:271); 8 pub types all supplement-DATA; ordered+instrumentation stay pub(crate)
-overlays_at_node_visit_count	fn	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/tests/instrumentation.rs:13	heap_types::overlay_storage::instrumentation	bulk
 parallel	mod	pub(crate)	crates/neovm-value/src/symbol/mod.rs:36	emacs_core::symbol	module-gate: signed core residual; existing public PlainSymbolBacking plain B1 enum and sealed KeeperWorldDesignator; no hook table/installer; upper eval/world/era.rs:20 and world/green_owner.rs:110
 park_carrier_tls	fn	pub(crate)	crates/neovm-value/src/error/mod.rs:1252	emacs_core::error	bulk
-plain_value_slot_visits	fn	pub(crate)	crates/neovm-value/src/symbol/mod.rs:173	emacs_core::symbol	bulk
 prepare_thread_symbol_caches	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:2237	emacs_core::intern	bulk
 property_revision_world_state_placeholder	use	pub(crate)	crates/neovm-value/src/symbol/mod.rs:44	emacs_core::symbol	n13 carried DATA: signed N13/PC10; sole upper crates/neovm-core/src/emacs_core/runtime/eval/green/carried.rs:72; unchanged paired TLS swap/placeholder body; guard=CARRIERS-derived carried.rs-only
 publication	mod	pub(crate)	crates/neovm-value/src/tagged/gc/symbol_table.rs:10	tagged::gc::symbol_table	module-gate: only pub item is PublicationView (pc1-d below)
 reads_need_observation	fn	pub(crate)	crates/neovm-value/src/tagged/collection_reads.rs:83	tagged::collection_reads	bulk
-record_endpoint_search_node_visit	fn	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/tests/instrumentation.rs:75	heap_types::overlay_storage::instrumentation	bulk
-record_endpoint_search_summary_shift	fn	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/tests/instrumentation.rs:94	heap_types::overlay_storage::instrumentation	bulk
-record_overlay_full_enumeration_visit	fn	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/tests/instrumentation.rs:113	heap_types::overlay_storage::instrumentation	bulk
-record_overlay_iterator_frame_push	fn	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/tests/instrumentation.rs:37	heap_types::overlay_storage::instrumentation	bulk
-record_overlay_shift_node_visit	fn	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/tests/instrumentation.rs:56	heap_types::overlay_storage::instrumentation	bulk
-record_overlays_at_node_visit	fn	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/tests/instrumentation.rs:18	heap_types::overlay_storage::instrumentation	bulk
 record_projected_write_in_store	fn	pub(crate)	crates/neovm-value/src/tagged/collection_reads.rs:748	tagged::collection_reads	bulk
 reduce_emacs_uint_to_hash_hash	fn	pub(crate)	crates/neovm-value/src/hashtab/mod.rs:362	emacs_core::hashtab	bulk
 register_dbus_error	fn	pub(crate)	crates/neovm-value/src/errors/mod.rs:675	emacs_core::errors	pc1-d DATA N14: signed peer ruling; mutable Obarray setup unchanged
 reserve_projection_scope	fn	pub(crate)	crates/neovm-value/src/symbol/projection.rs:74	emacs_core::symbol	bulk
 reserved_values	use	pub(crate)	crates/neovm-value/src/alloc/mod.rs:93	emacs_core::alloc	bulk
-reset_bytecode_data_access_count	fn	pub(crate)	crates/neovm-value/src/value/mod.rs:338	emacs_core::value	bulk
 reset_carrier_tls	fn	pub(crate)	crates/neovm-value/src/tagged/gc/gc_thread.rs:2615	tagged::gc	pc1-d: DATA seal privacy ledger 17f6ac250b; widened by pc11 generator glob-fix pass, re-cited to its DATA seal
 reset_current_subrs	fn	pub(crate)	crates/neovm-value/src/tagged/value.rs:109	tagged::value	bulk
-reset_endpoint_search_node_visit_count	fn	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/tests/instrumentation.rs:65	heap_types::overlay_storage::instrumentation	bulk
-reset_endpoint_search_summary_shift_count	fn	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/tests/instrumentation.rs:84	heap_types::overlay_storage::instrumentation	bulk
-reset_function_cell_lookup_count	fn	pub(crate)	crates/neovm-value/src/symbol/mod.rs:163	emacs_core::symbol	bulk
-reset_intern_calls	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:2175	emacs_core::intern	bulk
-reset_overlay_full_enumeration_visit_count	fn	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/tests/instrumentation.rs:103	heap_types::overlay_storage::instrumentation	bulk
-reset_overlay_iterator_frame_push_count	fn	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/tests/instrumentation.rs:27	heap_types::overlay_storage::instrumentation	bulk
-reset_overlay_shift_node_visit_count	fn	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/tests/instrumentation.rs:46	heap_types::overlay_storage::instrumentation	bulk
-reset_overlays_at_node_visit_count	fn	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/tests/instrumentation.rs:8	heap_types::overlay_storage::instrumentation	bulk
-reset_plain_value_slot_visits	fn	pub(crate)	crates/neovm-value/src/symbol/mod.rs:168	emacs_core::symbol	bulk
 resolve_lisp_visible_symbol_name	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:1920	emacs_core::intern	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/commands/minibuffer/mod.rs:1966:40
 resolve_name	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:1810	emacs_core::intern	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/runtime/jit/aot.rs:5104:64
 resolve_name_lisp_string	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:1818	emacs_core::intern	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/runtime/jit/stats.rs:1045:52
@@ -412,7 +379,6 @@ signal_with_data	fn	pub(crate)	crates/neovm-value/src/error/mod.rs:1037	emacs_co
 snapshot_static_subr_objects	fn	pub(crate)	crates/neovm-value/src/tagged/value.rs:335	tagged::value	bulk
 SqliteObjFinalizer	reexport	(new)	crates/neovm-value/src/lib.rs:64	crate root	pc2 root pub use line; SqliteObjFinalizer decl already pub+doc(hidden) (no promotion)
 install_sqlite_obj_finalizer	reexport	(new)	crates/neovm-value/src/lib.rs:64	crate root	pc2 root pub use line; SqliteObjFinalizer decl already pub+doc(hidden) (no promotion)
-sqlite_obj_finalizer_installed	fn	pub(crate)	crates/neovm-value/src/tagged/header/sqlite_finalizer.rs:27	tagged::header::sqlite_finalizer	bulk
 string_bytes_changed_hook_installed	fn	pub(crate)	crates/neovm-value/src/heap_types.rs:66	heap_types	bulk
 swap_property_revision_world_state	use	pub(crate)	crates/neovm-value/src/symbol/mod.rs:43	emacs_core::symbol	n13 carried DATA: signed N13/PC10; sole upper crates/neovm-core/src/emacs_core/runtime/eval/green/carried.rs:73; unchanged paired TLS swap/placeholder body; guard=CARRIERS-derived carried.rs-only
 swap_world_state	fn	pub(crate)	crates/neovm-value/src/tagged/collection_reads.rs:1073	tagged::collection_reads	bulk
@@ -992,9 +958,6 @@ CondVarId::native_key	method	pub(restricted)	crates/neovm-value/src/heap_types/t
 ParallelHeapEra::collect_stopped_with	method	pub(restricted)	crates/neovm-value/src/tagged/gc/mutator_registration/wrappers.rs:267	tagged::gc::mutator_registration	A10/SEAL wrapper macro: pub unsafe, Safety verbatim, core world/era.rs callers
 ParallelHeapEra::collect_stopped_minor_with	method	pub(restricted)	crates/neovm-value/src/tagged/gc/mutator_registration/wrappers.rs:287	tagged::gc::mutator_registration	A10/SEAL wrapper macro: pub unsafe, Safety verbatim, core world/era.rs callers
 ParallelHeapEra::finish	method	pub(restricted)	crates/neovm-value/src/tagged/gc/mutator_registration/wrappers.rs:341	tagged::gc::mutator_registration	A10/SEAL wrapper macro: safe pub, core world/parallel_admission.rs caller
-ProofEra::collect_stopped_with	method	pub(restricted)	crates/neovm-value/src/tagged/gc/mutator_registration/wrappers.rs:267	tagged::gc::mutator_registration	A10/SEAL wrapper macro: pub unsafe, Safety verbatim, core world/era.rs callers
-ProofEra::collect_stopped_minor_with	method	pub(restricted)	crates/neovm-value/src/tagged/gc/mutator_registration/wrappers.rs:287	tagged::gc::mutator_registration	A10/SEAL wrapper macro: pub unsafe, Safety verbatim, core world/era.rs callers
-ProofEra::finish	method	pub(restricted)	crates/neovm-value/src/tagged/gc/mutator_registration/wrappers.rs:341	tagged::gc::mutator_registration	A10/SEAL wrapper macro: safe pub, core world/parallel_admission.rs caller
 Gen1AdmissionFailure	type	pub(restricted)	crates/neovm-value/src/tagged/gc/gen1_admission.rs:14	tagged::gc	SEAL (batch 2): type pub(doc hidden), fields stay private
 Gen1AdmissionFailure::reason	field-accessor	pub(restricted)	crates/neovm-value/src/tagged/gc/gen1_admission.rs:22	tagged::gc	SEAL (batch 2): Copy reason getter; caller factory.rs
 Gen1AdmissionFailure::into_parts	field-accessor	pub(restricted)	crates/neovm-value/src/tagged/gc/gen1_admission.rs:27	tagged::gc	SEAL (batch 2): consuming (reason, collector); caller factory.rs
@@ -1009,8 +972,6 @@ ByteCodeFunction::reset_to_deferred_gnu	field-accessor	pub(restricted)	crates/ne
 ByteCodeFunction::clear_lazy_gnu_code	field-accessor	pub(restricted)	crates/neovm-value/src/tagged/bytecode/chunk.rs:744	tagged::bytecode	SEAL (batch 2): safe lazy-cell clear; core chunk.rs restore site
 EraFinishFailure	type	pub(crate)	crates/neovm-value/src/tagged/gc/mutator_registration/wrappers.rs:31	tagged::gc::mutator_registration::wrappers	SEAL (batch 2 finish): pub doc hidden, fields stay private
 EraFinishFailure::reason	field-accessor	pub(crate)	crates/neovm-value/src/tagged/gc/mutator_registration/wrappers.rs:31	tagged::gc::mutator_registration::wrappers	SEAL (batch 2 finish): Copy reason getter; caller core world/parallel_admission.rs
-ProofEraFinishFailure	type	pub(crate)	crates/neovm-value/src/tagged/gc/mutator_registration/wrappers.rs:37	tagged::gc::mutator_registration::wrappers	SEAL (batch 2 finish, cfg(test)): pub doc hidden, fields stay private
-ProofEraFinishFailure::reason	field-accessor	pub(crate)	crates/neovm-value/src/tagged/gc/mutator_registration/wrappers.rs:37	tagged::gc::mutator_registration::wrappers	SEAL (batch 2 finish, cfg(test)): Copy reason getter
 IterativeArgRange::accepts	field-accessor	pub(crate)	crates/neovm-value/src/tagged/bytecode/chunk.rs:307	tagged::bytecode	PC1-D (batch 2): read-only admission range test
 StackProof::switch_target	field-accessor	pub(crate)	crates/neovm-value/src/tagged/bytecode/decode_data.rs:40	tagged::bytecode	PC1-D (batch 2): read-only proof projection
 StackProof::proves_depth	field-accessor	pub(crate)	crates/neovm-value/src/tagged/bytecode/decode_data.rs:50	tagged::bytecode	PC1-D (batch 2): read-only proof projection
@@ -1080,7 +1041,6 @@ assq_swp_exact	fn	private	crates/neovm-value/src/list_scan.rs:669	list_scan	stag
 Entry	struct	private	crates/neovm-value/src/string_pos_cache.rs:28	string_pos_cache	stage-3 C12: cache representation named by the re-homed TLS-ownership regression children (they pin the entry across heap swaps)
 cached_pair	fn	private	crates/neovm-value/src/string_pos_cache.rs:155	string_pos_cache	stage-3 C12: cache probe asserted by the re-homed regression children
 reset_string_pos_cache	fn	pub(crate)	crates/neovm-value/src/string_pos_cache.rs:60	string_pos_cache	stage-3 C12: pdump/eval/reset callers keep the historical emacs_core::string_pos_cache path
-install_notification_hook_for_test	fn	pub(crate)	crates/neovm-value/src/string_pos_cache.rs:74	string_pos_cache	stage-3 C12: cfg gate widened to any(test, test-support) so core test builds keep installing the production stamp
 activate_string_pos_cache	fn	pub(crate)	crates/neovm-value/src/string_pos_cache.rs:90	string_pos_cache	stage-3 C12: gc_pacing activation keeps its caller path
 collect_string_pos_cache_gc_roots	fn	pub(crate)	crates/neovm-value/src/string_pos_cache.rs:111	string_pos_cache	stage-3 C12: thread_local_roots enumeration keeps its caller path
 string_char_to_byte	fn	pub(crate)	crates/neovm-value/src/string_pos_cache.rs:191	string_pos_cache	stage-3 C12: the substring/concat cores and the aref/search readers convert below the text layer
@@ -1181,14 +1141,11 @@ builtin_char_table_subtype	fn	pub(crate)	crates/neovm-value/src/chartab.rs:694	c
 AsyncAttention	struct	pub(crate)	crates/neovm-value/src/quit.rs:45	quit	stage-3b T4.1 plain row: asynchronous attention word type; its doc(hidden) methods are signed individually
 AsyncAttention::addr	method	pub(crate)	crates/neovm-value/src/quit.rs:95	quit	stage-3b T4.1 signed exact-caller row: JIT lowering paths bake the word address
 AsyncAttention::raise	method	pub(crate)	crates/neovm-value/src/quit.rs:70	quit	stage-3b T4.1 signed exact-caller row: profiler watchdog + OS-signal bridge raise AsyncSource bits
-AsyncAttention::raised_quit_requests_for_test	method	(new accessor)	crates/neovm-value/src/quit.rs:102	quit	stage-3b T4.1 test_only row: core quit-request tests read the raised-request count
 AsyncAttention::take	method	pub(crate)	crates/neovm-value/src/quit.rs:79	quit	stage-3b T4.1 signed exact-caller row: profiler drain + OS-signal drain take AsyncSource bits
 QuitRequest::clear	method	pub(crate)	crates/neovm-value/src/quit.rs:177	quit	stage-3b T4.1 signed exact-caller row: Context::maybe_quit_slow clear path
 QuitRequest::is_requested	method	pub(crate)	crates/neovm-value/src/quit.rs:152	quit	stage-3b T4.1 signed exact-caller row: quit_pending reader + core quit-request tests
 QuitRequest::take	method	pub(crate)	crates/neovm-value/src/quit.rs:161	quit	stage-3b T4.1 signed exact-caller row: Context::maybe_quit_slow
-clear_quit_requested_for_test	fn	(new fn)	crates/neovm-value/src/quit.rs:276	quit	stage-3b T4.1 test_only row: CCL/DFA engine tests clear the thread slot
 clear_quit_requested_tls	fn	(new fn)	crates/neovm-value/src/quit.rs:241	quit	stage-3b T4.1 signed exact-caller row: carrier park (eval::park_carrier_tls)
-install_quit_requested_for_test	fn	(new fn)	crates/neovm-value/src/quit.rs:265	quit	stage-3b T4.1 test_only row: CCL/DFA engine tests install a pending request without a Context
 install_quit_requested_tls	fn	(new fn)	crates/neovm-value/src/quit.rs:233	quit	stage-3b T4.1 signed exact-caller row: Context::setup_thread_locals_inner (gc_pacing.rs)
 mix_quit_requested_tls_fingerprint	fn	(new fn)	crates/neovm-value/src/quit.rs:250	quit	stage-3b T4.1 signed exact-caller row: eval::carrier_tls_fingerprint (same slot)
 HeapRegistryHandle	struct	pub(crate)	crates/neovm-value/src/heap_registry/mod.rs:15	heap_registry	stage-3b T3: Context-owned semantic registry substrate moved below the evaluator; core re-exports it through the emacs_core facade
@@ -1212,55 +1169,17 @@ HeapRegistrySlot::borrow	method	pub(crate)	crates/neovm-value/src/heap_registry/
 HeapRegistrySlot::borrow_mut	method	pub(crate)	crates/neovm-value/src/heap_registry/mod.rs:228	heap_registry	stage-3b T3: plain row — moved verbatim with the module
 builtin_frontend_on	fn	pub(crate)	crates/neovm-value/src/builtin_frontend.rs:60	builtin_frontend	stage-3b T5 frontend-service row: process-global U2.8 knob reader named by the text regex/syntax engines; core eval keeps a re-export alias
 parse_builtin_frontend_knob	fn	pub(crate)	crates/neovm-value/src/builtin_frontend.rs:26	builtin_frontend	stage-3b T5 plain row: knob-value parser; core eval re-export used by the builtin-vars tests
-set_builtin_frontend_for_test	fn	(new fn)	crates/neovm-value/src/builtin_frontend.rs:52	builtin_frontend	stage-3b T5 test_only row: cfg(any(test, feature=test-support)) thread-local knob override
 save_scratch_gc_roots	fn	(new)	crates/neovm-value/src/value/scratch_bridge.rs:69	value::scratch_bridge	R-c T1 K1: #[doc(hidden)] value scratch-root hook bridge; caller crates neovm-value (chartab/text_props/plist_core), neovm-edit (buffer undo/overlay), neovm-text (composite), core moved_edit/moved_text test tree; the evaluator keeps its own TLS wrappers for upper callers
 push_scratch_gc_root	fn	(new)	crates/neovm-value/src/value/scratch_bridge.rs:80	value::scratch_bridge	R-c T1 K1: #[doc(hidden)] value scratch-root hook bridge; caller crates neovm-value (chartab/text_props/plist_core), neovm-edit (buffer undo/overlay), neovm-text (composite), core moved_edit/moved_text test tree; the evaluator keeps its own TLS wrappers for upper callers
 restore_scratch_gc_roots	fn	(new)	crates/neovm-value/src/value/scratch_bridge.rs:91	value::scratch_bridge	R-c T1 K1: #[doc(hidden)] value scratch-root hook bridge; caller crates neovm-value (chartab/text_props/plist_core), neovm-edit (buffer undo/overlay), neovm-text (composite), core moved_edit/moved_text test tree; the evaluator keeps its own TLS wrappers for upper callers
-TaggedHeap::set_gc_threshold_for_test	method	(new fn)	crates/neovm-value/src/tagged/gc.rs:1378	tagged::gc	peer 10:5xZ era follow-up item 5 test_only row: safe pacing setter for the re-homed cons fixtures (assigns exactly, no override flag)
-TaggedHeap::jit_cons_window_for_test	method	(new accessor)	crates/neovm-value/src/tagged/gc.rs:1386	tagged::gc	peer 10:5xZ era follow-up item 4 test_only row: copied (cur, lim) JIT cons-window observer; JitHeapState fields stay private
-TaggedHeap::region_stats_for_test	method	(new accessor)	crates/neovm-value/src/tagged/gc.rs:1393	tagged::gc	peer 10:5xZ era follow-up item 4 test_only row: copied RegionStats snapshot (Copy); no heap field widening
-CatalogSnapshot	struct	(new)	crates/neovm-value/src/tagged/gc/cons_storage.rs:1040	tagged::gc::cons_storage	peer 10:5xZ era follow-up item 1 test_only row: copied counts/addresses snapshot returned by the proof-era catalog entry; never a storage borrow
-RunAccess::cons_region_for_test	method	(new accessor)	crates/neovm-value/src/tagged/gc/mutator_registration/cons_allocation.rs:105	tagged::gc::mutator_registration::cons_allocation	peer 10:5xZ era follow-up item 2 test_only row: copied cons-region bounds; the catalog region borrow stays internal
-ProofEra::registry	method	(new accessor)	crates/neovm-value/src/tagged/gc/mutator_registration/wrappers.rs:200	tagged::gc::mutator_registration::wrappers	peer 10:5xZ era follow-up item 1 test_only row: read borrow of the retained registry; no EraCore field widening
-ProofEra::with_stopped_heap_for_test	method	(new fn)	crates/neovm-value/src/tagged/gc/mutator_registration/wrappers.rs:205	tagged::gc::mutator_registration::wrappers	peer 10:5xZ era follow-up item 1 test_only row: borrow-scoped stopped-heap observation; the heap reference cannot escape
-ProofEra::keeper_for_test	method	(new accessor)	crates/neovm-value/src/tagged/gc/mutator_registration/wrappers.rs:216	tagged::gc::mutator_registration::wrappers	peer 10:5xZ era follow-up item 3 test_only row: read-only keeper accessor replacing any core-field widening
-ProofEra::collect_stopped	method	(new fn)	crates/neovm-value/src/tagged/gc/mutator_registration/wrappers.rs:224	tagged::gc::mutator_registration::wrappers	peer 10:5xZ era follow-up item 1 test_only row: major collection forwarder with the original EraCore signature
-ProofEra::collect_stopped_minor	method	(new fn)	crates/neovm-value/src/tagged/gc/mutator_registration/wrappers.rs:240	tagged::gc::mutator_registration::wrappers	peer 10:5xZ era follow-up item 1 test_only row: minor collection forwarder with the original EraCore signature
-ProofEra::cons_catalog_snapshot_for_test	method	(new accessor)	crates/neovm-value/src/tagged/gc/mutator_registration/wrappers.rs:262	tagged::gc::mutator_registration::wrappers	peer 10:5xZ era follow-up item 1 test_only row: copied cons-catalog snapshot
-ProofEra::prepare_hof_builtin	method	(new fn)	crates/neovm-value/src/tagged/gc/mutator_registration/wrappers.rs:456	tagged::gc::mutator_registration::wrappers	peer 10:5xZ era follow-up item 1 test_only row: moved out of the era_operations macro; production era entry stays pub(crate)
-ProofEra::prepare_unary_function_symbol	method	(new fn)	crates/neovm-value/src/tagged/gc/mutator_registration/wrappers.rs:465	tagged::gc::mutator_registration::wrappers	peer 10:5xZ era follow-up item 1 test_only row: moved out of the era_operations macro; production era entry stays pub(crate)
-OwnerRootSlot::word_for_test	method	(new accessor)	crates/neovm-value/src/tagged/gc/mutator_registration/root_slot.rs:54	tagged::gc::mutator_registration::root_slot	peer 10:5xZ item 2 (08:38Z amendment) test_only row: copied root word read; the handle still validates against the live RunAccess
-RunSlice::remaining_for_test	method	(new accessor)	crates/neovm-value/src/tagged/gc/mutator_registration/run_slice.rs:245	tagged::gc::mutator_registration::run_slice	peer 10:5xZ era follow-up item 2 test_only row: copied remaining-cell count
-RunSlice::stats_for_test	method	(new accessor)	crates/neovm-value/src/tagged/gc/mutator_registration/run_slice.rs:254	tagged::gc::mutator_registration::run_slice	peer 10:5xZ era follow-up item 2 test_only row: copied run statistics
 AllStopped::trace	method	(new fn)	crates/neovm-value/src/tagged/gc/mutator_registration/rendezvous/keeper.rs:228	tagged::gc::mutator_registration::rendezvous::keeper	peer 10:5xZ era follow-up item 1 test_only row: item-level doc(hidden) pub with the original signature; still validates registry identity and root census
 KeeperSymbols::check_symbol_backing	method	(new fn)	crates/neovm-value/src/tagged/gc/mutator_registration/symbol_authority/roots.rs:9	tagged::gc::mutator_registration::symbol_authority::roots	peer 10:5xZ era follow-up item 1 test_only row: item-level doc(hidden) pub; the receiver still requires a real AllStopped loan
-GenericProofEra::admit_plain_symbol	method	(new fn)	crates/neovm-value/src/tagged/gc/mutator_registration/symbol_authority.rs:138	tagged::gc::mutator_registration::symbol_authority	peer 10:5xZ era follow-up item 1 test_only row: feature-only proof-era serial symbol admission; the evaluator's one-parameter alias impl stays cfg(test)
-RunAccess::region_stats_for_test	method	(new accessor)	crates/neovm-value/src/tagged/gc/mutator_registration/token.rs:537	tagged::gc::mutator_registration::token	peer 10:5xZ era follow-up item 4 test_only row: copied owner region-stats read for run.state().region_stats; OwnerGcState stays internal
-RunAccess::root_bank_for_test	method	(new accessor)	crates/neovm-value/src/tagged/gc/mutator_registration/token.rs:545	tagged::gc::mutator_registration::token	peer 10:5xZ era follow-up item 4 test_only row: copied root-bank (len, capacity); the bank itself stays internal
-RunAccess::allocated_count_for_test	method	(new accessor)	crates/neovm-value/src/tagged/gc/mutator_registration/token.rs:554	tagged::gc::mutator_registration::token	peer 10:5xZ era follow-up item 4 test_only row: copied owner allocation count; the owner GC state stays internal
-ProofEra	struct	(new)	crates/neovm-value/src/tagged/gc/mutator_registration/wrappers.rs:30	tagged::gc::mutator_registration::wrappers	peer 10:1xZ Option B' test_only row: proof-era type, item-level doc(hidden) pub inside the private chain; the fence alias is the sole public path
-GenericProofEra::symbol_word_for_test	method	(new accessor)	crates/neovm-value/src/tagged/gc/mutator_registration/symbol_authority/occupancy.rs:51	tagged::gc::mutator_registration::symbol_authority	LEAD 11:5xZ fence-only observer test_only row: read-only symbol authority word; private fields stay private
-GenericProofEra::check_symbol_backing_for_test	method	(new accessor)	crates/neovm-value/src/tagged/gc/mutator_registration/symbol_authority.rs:180	tagged::gc::mutator_registration::symbol_authority	LEAD 11:5xZ fence-only observer test_only row: retained-backing check; private SymbolBacking stays internal
-GenericProofEra::check_root_designators_for_test	method	(new accessor)	crates/neovm-value/src/tagged/gc/mutator_registration/symbol_authority.rs:189	tagged::gc::mutator_registration::symbol_authority	LEAD 11:5xZ fence-only observer test_only row: keeper designator check against the retained backing
-SymbolWordOccupancy	enum	(new)	crates/neovm-value/src/tagged/gc/mutator_registration/symbol_authority/occupancy.rs:15	tagged::gc::mutator_registration::symbol_authority::occupancy	peer 09:2xZ fence-only occupancy enum test_only row
-OccupiedSymbolWord	struct	(new)	crates/neovm-value/src/tagged/gc/mutator_registration/symbol_authority/occupancy.rs:24	tagged::gc::mutator_registration::symbol_authority::occupancy	peer 09:2xZ fence-only RAII occupancy guard test_only row
-GenericProofEra::occupy_symbol_word_for_test	method	(new accessor)	crates/neovm-value/src/tagged/gc/mutator_registration/symbol_authority/occupancy.rs:58	tagged::gc::mutator_registration::symbol_authority::occupancy	peer 09:2xZ fence-only occupancy entry test_only row
-RunAccess::occupy_symbol_word_for_test	method	(new accessor)	crates/neovm-value/src/tagged/gc/mutator_registration/symbol_authority/occupancy.rs:70	tagged::gc::mutator_registration::symbol_authority::occupancy	peer 09:2xZ fence-only owner-side occupancy twin test_only row
 SPIN_WAIT	const	(new const)	crates/neovm-value/src/tagged/gc/mutator_registration/retry.rs:6	tagged::gc::mutator_registration::retry	REGWAIT-GAP fence-only retry const test_only row
 Deadline	struct	(new)	crates/neovm-value/src/tagged/gc/mutator_registration/retry.rs:11	tagged::gc::mutator_registration::retry	REGWAIT-GAP fence-only retry type test_only row
 Deadline::contention	method	(new accessor)	crates/neovm-value/src/tagged/gc/mutator_registration/retry.rs:15	tagged::gc::mutator_registration::retry	REGWAIT-GAP fence-only deadline constructor test_only row
 Retry	enum	(new)	crates/neovm-value/src/tagged/gc/mutator_registration/retry.rs:39	tagged::gc::mutator_registration::retry	REGWAIT-GAP fence-only retry enum test_only row
 retry	fn	(new fn)	crates/neovm-value/src/tagged/gc/mutator_registration/retry.rs:45	tagged::gc::mutator_registration::retry	REGWAIT-GAP fence-only retry driver test_only row
 retry_owned	fn	(new fn)	crates/neovm-value/src/tagged/gc/mutator_registration/retry.rs:64	tagged::gc::mutator_registration::retry	REGWAIT-GAP fence-only owning retry driver test_only row
-rendezvous	fn	(new fn)	crates/neovm-value/src/tagged/gc/mutator_registration/symbol_functions/retry.rs:56	tagged::gc::mutator_registration::symbol_functions::retry	REGWAIT-GAP fence-only rendezvous classification test_only row
-OccupiedSymbolWord	use	(new)	crates/neovm-value/src/test_support/authority.rs:37	test_support::authority	fence-only re-export of OccupiedSymbolWord test_only row
-SymbolWordOccupancy	use	(new)	crates/neovm-value/src/test_support/authority.rs:37	test_support::authority	fence-only re-export of SymbolWordOccupancy test_only row
-Deadline	use	(new)	crates/neovm-value/src/test_support/authority.rs:37	test_support::authority	fence-only re-export of Deadline test_only row
-Retry	use	(new)	crates/neovm-value/src/test_support/authority.rs:37	test_support::authority	fence-only re-export of Retry test_only row
-SPIN_WAIT	use	(new)	crates/neovm-value/src/test_support/authority.rs:37	test_support::authority	fence-only re-export of SPIN_WAIT test_only row
-retry	use	(new)	crates/neovm-value/src/test_support/authority.rs:37	test_support::authority	fence-only re-export of retry test_only row
-retry_owned	use	(new)	crates/neovm-value/src/test_support/authority.rs:37	test_support::authority	fence-only re-export of retry_owned test_only row
-rendezvous	use	(new)	crates/neovm-value/src/test_support/authority.rs:37	test_support::authority	fence-only re-export of rendezvous test_only row
 AdmissionPlanCell	reexport	pub(crate)	crates/neovm-value/src/symbol/mod.rs:75	neovm_value::symbol	bulk (source bijection reconciliation)
 AliasableBox	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2804	neovm_value::tagged::gc	bulk (source bijection reconciliation)
 ArenaLayoutStats	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2817	neovm_value::tagged::gc	bulk (source bijection reconciliation)
@@ -1390,5 +1309,4 @@ reset_carrier_tls	fn	pub(crate)	crates/neovm-value/src/tagged/collection_reads.r
 reset_carrier_tls	fn	pub(crate)	crates/neovm-value/src/tagged/value.rs:1483	neovm_value::tagged::value	bulk (source bijection reconciliation)
 swap_world_state	fn	pub(crate)	crates/neovm-value/src/value/mod.rs:5916	neovm_value::value	bulk (source bijection reconciliation)
 with_static_subr_entry_read	reexport	pub(crate)	crates/neovm-value/src/tagged/value.rs:168	neovm_value::tagged::value	bulk (source bijection reconciliation)
-with_static_subr_entry_write	reexport	pub(crate)	crates/neovm-value/src/tagged/value.rs:171	neovm_value::tagged::value	bulk (source bijection reconciliation)
 world_state_placeholder	fn	pub(crate)	crates/neovm-value/src/value/mod.rs:5910	neovm_value::value	bulk (source bijection reconciliation)
