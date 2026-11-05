@@ -2228,32 +2228,32 @@ fn pc2_declaration(items: &[syn::Item], target: &Pc2Target) -> bool {
 
 /// Does the pc2 method declaration take `self`? Only then can method-call
 /// syntax call it (LEAD 11:1xZ); associated functions are path-call-only.
-fn pc2_method_takes_self(items: &[syn::Item], target: &Pc2Target) -> bool {
+/// PC2-F (peer 09:11Z): a lookup miss is an error, not a silent `false` --
+/// `pc2_declaration` already required the declaration, so an unresolved
+/// receiver would otherwise disable method-call matching fail-open.
+fn pc2_method_takes_self(items: &[syn::Item], target: &Pc2Target) -> Result<bool, String> {
     fn takes_self(inputs: &syn::punctuated::Punctuated<syn::FnArg, syn::Token![,]>) -> bool {
         inputs
             .first()
             .is_some_and(|argument| matches!(argument, syn::FnArg::Receiver(_)))
     }
-    fn find(items: &[syn::Item], target: &Pc2Target) -> Option<bool> {
+    fn find(items: &[syn::Item], owner: &str, name: &str) -> Option<bool> {
         for item in items {
             match item {
                 syn::Item::Mod(module) => {
                     if let Some((_, inner)) = &module.content {
-                        if let Some(found) = find(inner, target) {
+                        if let Some(found) = find(inner, owner, name) {
                             return Some(found);
                         }
                     }
                 }
                 syn::Item::Impl(block) => {
-                    let Pc2Target::Method { owner, name } = target else {
-                        continue;
-                    };
                     let owner_matches = match &*block.self_ty {
                         syn::Type::Path(path) => path
                             .path
                             .segments
                             .last()
-                            .is_some_and(|segment| segment.ident == *owner),
+                            .is_some_and(|segment| segment.ident == owner),
                         _ => false,
                     };
                     if !owner_matches {
@@ -2261,7 +2261,7 @@ fn pc2_method_takes_self(items: &[syn::Item], target: &Pc2Target) -> bool {
                     }
                     for item in &block.items {
                         if let syn::ImplItem::Fn(item) = item {
-                            if item.sig.ident == *name {
+                            if item.sig.ident == name {
                                 return Some(takes_self(&item.sig.inputs));
                             }
                         }
@@ -2272,7 +2272,101 @@ fn pc2_method_takes_self(items: &[syn::Item], target: &Pc2Target) -> bool {
         }
         None
     }
-    find(items, target).unwrap_or(false)
+    let Pc2Target::Method { owner, name } = target else {
+        return Ok(false);
+    };
+    find(items, owner, name).ok_or_else(|| {
+        format!(
+            "B3_PC2_UNRESOLVED_METHOD: {owner}::{name} has no inherent declaration to resolve its receiver"
+        )
+    })
+}
+
+/// PC2-G (peer 09:11Z): evaluate a cfg predicate in the production scan
+/// environment -- `test` is false and `feature = "test-support"` is false.
+/// `#[cfg(not(test))]` is a PRODUCTION arm and must stay scanned; only a
+/// predicate that is definitively FALSE removes an item or module. Unknown
+/// predicates stay in scope, and an unknown operand makes any/all unknown
+/// rather than silently excluding code.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CfgValue {
+    True,
+    False,
+    Unknown,
+}
+
+fn cfg_value(meta: &syn::Meta) -> CfgValue {
+    match meta {
+        syn::Meta::Path(path) => {
+            if path.is_ident("test") {
+                CfgValue::False
+            } else {
+                CfgValue::Unknown
+            }
+        }
+        syn::Meta::NameValue(value) => {
+            if value.path.is_ident("feature") {
+                if let syn::Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Str(feature),
+                    ..
+                }) = &value.value
+                {
+                    if feature.value() == "test-support" {
+                        return CfgValue::False;
+                    }
+                }
+            }
+            CfgValue::Unknown
+        }
+        syn::Meta::List(list) => {
+            if list.path.is_ident("not") {
+                return match list.parse_args::<syn::Meta>() {
+                    Ok(inner) => match cfg_value(&inner) {
+                        CfgValue::True => CfgValue::False,
+                        CfgValue::False => CfgValue::True,
+                        CfgValue::Unknown => CfgValue::Unknown,
+                    },
+                    Err(_) => CfgValue::Unknown,
+                };
+            }
+            let Ok(items) = list.parse_args_with(
+                syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+            ) else {
+                return CfgValue::Unknown;
+            };
+            if list.path.is_ident("any") {
+                let mut unknown = false;
+                for item in &items {
+                    match cfg_value(item) {
+                        CfgValue::True => return CfgValue::True,
+                        CfgValue::False => {}
+                        CfgValue::Unknown => unknown = true,
+                    }
+                }
+                return if unknown {
+                    CfgValue::Unknown
+                } else {
+                    CfgValue::False
+                };
+            }
+            if list.path.is_ident("all") {
+                let mut unknown = false;
+                for item in &items {
+                    match cfg_value(item) {
+                        CfgValue::False => return CfgValue::False,
+                        CfgValue::True => {}
+                        CfgValue::Unknown => unknown = true,
+                    }
+                }
+                return if unknown {
+                    CfgValue::Unknown
+                } else {
+                    CfgValue::True
+                };
+            }
+            CfgValue::Unknown
+        }
+    }
 }
 
 fn pc2_gated(attrs: &[syn::Attribute]) -> bool {
@@ -2283,14 +2377,8 @@ fn pc2_gated(attrs: &[syn::Attribute]) -> bool {
         if !attr.path().is_ident("cfg") {
             return false;
         }
-        attr.meta
-            .require_list()
-            .map(|list| {
-                list.tokens
-                    .clone()
-                    .into_iter()
-                    .any(|token| matches!(token, proc_macro2::TokenTree::Ident(id) if id == "test"))
-            })
+        attr.parse_args::<syn::Meta>()
+            .map(|meta| cfg_value(&meta) == CfgValue::False)
             .unwrap_or(false)
     })
 }
@@ -2356,6 +2444,54 @@ impl<'ast> Visit<'ast> for Pc2Scan<'_> {
         }
         visit::visit_expr_method_call(self, call);
     }
+    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+        if macro_tokens_mention_call(&mac.tokens, self.target, self.method_calls) {
+            self.references.push(self.stack.last().cloned());
+        }
+        visit::visit_macro(self, mac);
+    }
+}
+
+/// PC2-M (peer 09:11Z): syn's Visit never enters macro token streams, so a
+/// path or method call written inside a macro invocation or a macro_rules!
+/// body is otherwise invisible. Scan the tokens name-only for a call shape --
+/// the target identifier followed by a parenthesized group, with method-call
+/// syntax `.name(...)` accepted only when the row's declaration takes self.
+/// A hit is attributed to the enclosing function, which is the same
+/// fail-closed name-only over-approximation the AST arms use.
+fn macro_tokens_mention_call(
+    stream: &proc_macro2::TokenStream,
+    target: &Pc2Target,
+    method_calls: bool,
+) -> bool {
+    let tokens: Vec<_> = stream.clone().into_iter().collect();
+    for (index, token) in tokens.iter().enumerate() {
+        if let proc_macro2::TokenTree::Ident(ident) = token {
+            let called = matches!(
+                tokens.get(index + 1),
+                Some(proc_macro2::TokenTree::Group(group))
+                    if group.delimiter() == proc_macro2::Delimiter::Parenthesis
+            );
+            if called {
+                let preceded_by_dot = index > 0
+                    && matches!(
+                        &tokens[index - 1],
+                        proc_macro2::TokenTree::Punct(punct) if punct.as_char() == '.'
+                    );
+                let name_matches = *ident == target.name()
+                    || (method_calls && target.method_form().is_some_and(|name| *ident == name));
+                if name_matches && (method_calls || !preceded_by_dot) {
+                    return true;
+                }
+            }
+        }
+        if let proc_macro2::TokenTree::Group(group) = token {
+            if macro_tokens_mention_call(&group.stream(), target, method_calls) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Every workspace member's production `src/**`. Consumers outside the seven
@@ -2391,40 +2527,201 @@ fn pc2_workspace_members(workspace: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(out)
 }
 
-fn pc2_source_files(workspace: &Path) -> Result<Vec<PathBuf>, String> {
-    fn walk(directory: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
-        for entry in std::fs::read_dir(directory).map_err(|e| e.to_string())? {
-            let entry = entry.map_err(|e| e.to_string())?;
-            let path = entry.path();
-            let kind = entry.file_type().map_err(|e| e.to_string())?;
-            if kind.is_dir() {
-                let name = path.file_name().and_then(|name| name.to_str());
-                if name == Some("tests") || name == Some("core_tests") {
-                    continue;
+/// PC2-T (peer 09:11Z): production source files come from the module tree, not
+/// from a directory sweep with a tests.rs/*_test.rs filename heuristic. The
+/// walker starts at each crate root (lib.rs, main.rs, src/bin/*) and follows
+/// `mod` declarations, carrying the evaluated cfg gate of every ancestor: a
+/// subtree whose gate is definitively FALSE is excluded as test-only, while a
+/// production `#[cfg(not(test))]` arm stays in scope. Files without a module
+/// root are not compiled production code and are not scanned; a member with
+/// source files but no root fails closed instead of silently scanning nothing.
+fn pc2_walk_module_file(
+    file: &Path,
+    child_dir: &Path,
+    excluded: bool,
+    visited: &mut BTreeSet<PathBuf>,
+    excluded_files: &mut BTreeSet<PathBuf>,
+) -> Result<(), String> {
+    let canonical = file
+        .canonicalize()
+        .map_err(|error| format!("B3_PC2_SOURCE {}: {error}", file.display()))?;
+    if !visited.insert(canonical.clone()) {
+        if excluded {
+            excluded_files.insert(canonical);
+        }
+        return Ok(());
+    }
+    if excluded {
+        // A definitively test-only subtree is not production code: it is not
+        // scanned, so its own module declarations do not need resolution.
+        excluded_files.insert(canonical);
+        return Ok(());
+    }
+    let text = read(&canonical)?;
+    let ast = syn::parse_file(&text)
+        .map_err(|error| format!("B3_PC2_PARSE {}: {error}", canonical.display()))?;
+    let parent = canonical
+        .parent()
+        .ok_or("B3_PC2_SOURCE module file without parent")?;
+    pc2_walk_module_items(&ast.items, child_dir, parent, visited, excluded_files)
+}
+
+fn pc2_walk_module_items(
+    items: &[syn::Item],
+    dir: &Path,
+    path_base: &Path,
+    visited: &mut BTreeSet<PathBuf>,
+    excluded_files: &mut BTreeSet<PathBuf>,
+) -> Result<(), String> {
+    for item in items {
+        let syn::Item::Mod(module) = item else {
+            continue;
+        };
+        // `mod r#if;` names the plain file `if.rs`; strip the raw prefix.
+        let ident = module.ident.to_string();
+        let name = ident.strip_prefix("r#").unwrap_or(&ident).to_string();
+        if pc2_gated(&module.attrs) {
+            // cfg(test)/(test-support)-only subtree: not production, no scan.
+            continue;
+        }
+        if let Some((_, inner)) = &module.content {
+            let inline_dir = dir.join(&name);
+            pc2_walk_module_items(inner, &inline_dir, &inline_dir, visited, excluded_files)?;
+            continue;
+        }
+        let mut paths = Vec::new();
+        let mut path_attr = false;
+        for attr in &module.attrs {
+            if attr.path().is_ident("path") {
+                let syn::Meta::NameValue(meta) = &attr.meta else {
+                    return Err(format!("B3_PC2_SOURCE {name}: module path metadata"));
+                };
+                let syn::Expr::Lit(expr) = &meta.value else {
+                    return Err(format!("B3_PC2_SOURCE {name}: module path expression"));
+                };
+                let syn::Lit::Str(value) = &expr.lit else {
+                    return Err(format!("B3_PC2_SOURCE {name}: module path string"));
+                };
+                paths.push(path_base.join(value.value()));
+                path_attr = true;
+            }
+            if attr.path().is_ident("cfg_attr") {
+                let args = attr
+                    .parse_args_with(
+                        syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+                    )
+                    .map_err(|error| format!("B3_PC2_SOURCE {name}: cfg_attr: {error}"))?;
+                if args.iter().skip(1).any(|meta| meta.path().is_ident("path")) {
+                    return Err(format!(
+                        "B3_PC2_SOURCE {name}: conditional module path requires review"
+                    ));
                 }
-                walk(&path, files)?;
-            } else if kind.is_file() && path.extension().is_some_and(|extension| extension == "rs")
-            {
-                // Test-gated source files are not production call sites.
-                let name = path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or("");
-                if name == "tests.rs" || name.ends_with("_test.rs") || name.ends_with("_tests.rs") {
-                    continue;
-                }
-                files.push(path);
             }
         }
-        Ok(())
+        if paths.is_empty() {
+            paths = [
+                dir.join(format!("{name}.rs")),
+                dir.join(&name).join("mod.rs"),
+            ]
+            .into_iter()
+            .filter(|path| path.is_file())
+            .collect();
+        }
+        if paths.len() != 1 {
+            return Err(format!(
+                "B3_PC2_SOURCE unresolved module {name} in {}",
+                dir.display()
+            ));
+        }
+        // A #[path] module's children resolve beside the referenced file; a
+        // default module's children live under the module-name directory.
+        let next_dir = if path_attr {
+            paths[0]
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| dir.to_path_buf())
+        } else {
+            dir.join(&name)
+        };
+        pc2_walk_module_file(&paths[0], &next_dir, false, visited, excluded_files)?;
     }
+    Ok(())
+}
+
+fn pc2_source_files(workspace: &Path) -> Result<Vec<PathBuf>, String> {
     let mut files = Vec::new();
     for member in pc2_workspace_members(workspace)? {
         let src = member.join("src");
-        if src.is_dir() {
-            walk(&src, &mut files)?;
+        if !src.is_dir() {
+            continue;
         }
+        let mut roots = Vec::new();
+        for name in ["lib.rs", "main.rs"] {
+            let root = src.join(name);
+            if root.is_file() {
+                roots.push(root);
+            }
+        }
+        let bins = src.join("bin");
+        if bins.is_dir() {
+            let mut entries: Vec<_> = std::fs::read_dir(&bins)
+                .map_err(|error| error.to_string())?
+                .map(|entry| entry.map_err(|error| error.to_string()))
+                .collect::<Result<_, _>>()?;
+            entries.sort_by_key(|entry| entry.path());
+            for entry in entries {
+                let path = entry.path();
+                if entry
+                    .file_type()
+                    .map_err(|error| error.to_string())?
+                    .is_file()
+                    && path.extension().is_some_and(|extension| extension == "rs")
+                {
+                    roots.push(path);
+                } else if entry
+                    .file_type()
+                    .map_err(|error| error.to_string())?
+                    .is_dir()
+                    && path.join("main.rs").is_file()
+                {
+                    roots.push(path.join("main.rs"));
+                }
+            }
+        }
+        if roots.is_empty() {
+            let has_source = std::fs::read_dir(&src)
+                .map_err(|error| error.to_string())?
+                .any(|entry| {
+                    entry
+                        .map(|entry| {
+                            entry
+                                .path()
+                                .extension()
+                                .is_some_and(|extension| extension == "rs")
+                        })
+                        .unwrap_or(false)
+                });
+            if has_source {
+                return Err(format!(
+                    "B3_PC2_SOURCE member {} has source files but no lib.rs/main.rs root",
+                    member.display()
+                ));
+            }
+            continue;
+        }
+        let mut visited = BTreeSet::new();
+        let mut excluded_files = BTreeSet::new();
+        for root in &roots {
+            let child_dir = root.parent().unwrap_or(src.as_path()).to_path_buf();
+            pc2_walk_module_file(root, &child_dir, false, &mut visited, &mut excluded_files)?;
+        }
+        files.extend(
+            visited
+                .into_iter()
+                .filter(|file| !excluded_files.contains(file)),
+        );
     }
+    files.sort();
     Ok(files)
 }
 
@@ -2482,7 +2779,7 @@ fn pc2_rows_violation(
                 index + 2
             ));
         }
-        let method_calls = pc2_method_takes_self(&ast.items, &target);
+        let method_calls = pc2_method_takes_self(&ast.items, &target)?;
         let mut unnamed = BTreeSet::new();
         for file in &files {
             let Ok(relative) = file.strip_prefix(workspace) else {
@@ -2617,10 +2914,14 @@ fn pc2_fixture_workspace() -> tempfile::TempDir {
 }
 
 #[test]
-#[test]
 fn architecture_mutation_pc2_unnamed_call_site_is_rejected() {
     let dir = pc2_fixture_workspace();
     let src = dir.path().join("crates/neovm-value/src");
+    std::fs::write(
+        src.join("lib.rs"),
+        "pub mod installer_mod;\npub mod probe;\n",
+    )
+    .unwrap();
     std::fs::write(src.join("installer_mod.rs"), "pub fn installer() {}\n").unwrap();
     std::fs::write(
         src.join("probe.rs"),
@@ -2674,15 +2975,16 @@ fn architecture_mutation_pc2_method_call_site_is_rejected() {
     let dir = pc2_fixture_workspace();
     let value_src = dir.path().join("crates/neovm-value/src");
     let core_src = dir.path().join("crates/neovm-core/src");
+    std::fs::write(value_src.join("lib.rs"), "pub mod owner_mod;\n").unwrap();
     std::fs::write(
         value_src.join("owner_mod.rs"),
-        "pub struct Owner;\nimpl Owner {\n    pub fn attach(&mut self, _r: u8) {}\n}\n",
+        "pub struct Owner;\nimpl Owner {\n    pub fn attach(&mut self, _r: u8) -> bool { true }\n}\n",
     )
     .unwrap();
     std::fs::write(core_src.join("lib.rs"), "pub mod probe;\n").unwrap();
     std::fs::write(
         core_src.join("probe.rs"),
-        "use neovm_value::owner_mod::Owner;\nfn named_caller(owner: &mut Owner) { owner.attach(1); }\nfn secret_caller(owner: &mut Owner) { owner.attach(2); }\n",
+        "use neovm_value::owner_mod::Owner;\nfn named_caller(owner: &mut Owner) { owner.attach(1); }\nfn secret_caller(owner: &mut Owner) { owner.attach(2); }\nfn macro_caller(owner: &mut Owner) { debug_assert!(owner.attach(3)); }\n",
     )
     .unwrap();
     let header = "item\tkind\told_vis\tfile:line\tmodule\treason\n";
@@ -2699,14 +3001,16 @@ fn architecture_mutation_pc2_method_call_site_is_rejected() {
     )
     .expect_err("unnamed method call");
     assert!(
-        error.contains("B3_PC2_UNNAMED_CALL_SITE") && error.contains("secret_caller"),
+        error.contains("B3_PC2_UNNAMED_CALL_SITE")
+            && error.contains("secret_caller")
+            && error.contains("macro_caller"),
         "{error}"
     );
     assert!(
         pc2_rows_violation(
             dir.path(),
             "PROMOTION-LEDGER-X.tsv",
-            &row("exact callers named_caller and secret_caller"),
+            &row("exact callers named_caller and secret_caller and macro_caller"),
             &[],
         )
         .is_ok()
@@ -2723,6 +3027,92 @@ fn architecture_mutation_pc2_method_call_site_is_rejected() {
             dir.path(),
             "PROMOTION-LEDGER-X.tsv",
             &row("exact caller named_caller only"),
+            &[],
+        )
+        .is_ok()
+    );
+    // PC2-F: a receiver that cannot be resolved from the declaring file is an
+    // error, not a silent path-call-only downgrade.
+    let items = syn::parse_file("pub struct Owner;\nimpl Owner {\n    pub fn other(&self) {}\n}\n")
+        .unwrap()
+        .items;
+    let error = pc2_method_takes_self(&items, &pc2_target("Owner::attach", "x.rs")).unwrap_err();
+    assert!(error.contains("B3_PC2_UNRESOLVED_METHOD"), "{error}");
+    assert_eq!(
+        pc2_method_takes_self(&items, &pc2_target("free_function", "x.rs")).unwrap(),
+        false
+    );
+}
+
+#[test]
+fn architecture_mutation_pc2_cfg_and_module_walk_are_fail_closed() {
+    // PC2-G: #[cfg(not(test))] is production and must be scanned; #[cfg(test)]
+    // is not. PC2-T: the module-tree walker replaces the tests.rs filename
+    // heuristic, so an ungated file named tests.rs is production while a
+    // cfg(test)-gated module with any name is excluded. PC2-M: a call written
+    // inside macro tokens is a call site.
+    let dir = pc2_fixture_workspace();
+    let value_src = dir.path().join("crates/neovm-value/src");
+    let core_src = dir.path().join("crates/neovm-core/src");
+    std::fs::write(value_src.join("lib.rs"), "pub mod installer_mod;\n").unwrap();
+    std::fs::write(
+        value_src.join("installer_mod.rs"),
+        "pub fn installer() {}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        core_src.join("lib.rs"),
+        "pub mod probe;\npub mod tests;\n#[cfg(test)]\npub mod gated;\n#[cfg(not(test))]\npub mod production;\n",
+    )
+    .unwrap();
+    std::fs::write(
+        core_src.join("probe.rs"),
+        "fn named_caller() { neovm_value::installer_mod::installer(); }\nfn macro_path_caller() { debug_assert!(neovm_value::installer_mod::installer()); }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        core_src.join("tests.rs"),
+        "fn walker_caller() { neovm_value::installer_mod::installer(); }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        core_src.join("gated.rs"),
+        "fn gated_caller() { neovm_value::installer_mod::installer(); }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        core_src.join("production.rs"),
+        "fn cfg_caller() { neovm_value::installer_mod::installer(); }\n",
+    )
+    .unwrap();
+    let header = "item\tkind\told_vis\tfile:line\tmodule\treason\n";
+    let row = |reason: &str| {
+        format!(
+            "{header}installer\tpc2\t-\tcrates/neovm-value/src/installer_mod.rs:1\tm\t{reason}\n"
+        )
+    };
+    let error = pc2_rows_violation(
+        dir.path(),
+        "PROMOTION-LEDGER-X.tsv",
+        &row("exact caller named_caller"),
+        &[],
+    )
+    .expect_err("unnamed production call sites");
+    assert!(error.contains("B3_PC2_UNNAMED_CALL_SITE"), "{error}");
+    assert!(error.contains("macro_path_caller"), "macro tokens: {error}");
+    assert!(error.contains("walker_caller"), "tests.rs walker: {error}");
+    assert!(error.contains("cfg_caller"), "cfg(not(test)) arm: {error}");
+    assert!(
+        !error.contains("gated_caller"),
+        "cfg(test) module must be excluded: {error}"
+    );
+    assert!(
+        pc2_rows_violation(
+            dir.path(),
+            "PROMOTION-LEDGER-X.tsv",
+            &row(
+                "exact callers named_caller and macro_path_caller and walker_caller and cfg_caller"
+            ),
             &[],
         )
         .is_ok()
