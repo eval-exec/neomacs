@@ -13,11 +13,11 @@ use std::cell::Cell;
 use std::collections::VecDeque;
 use std::sync::OnceLock;
 
-use neovm_value::value::buffer_vocab::BufferId;
-use neovm_value::heap_types::byte_positions::EmacsByteRange;
-use neovm_value::heap_types::byte_positions::EmacsBytePos;
-use neovm_edit::emacs_core::display_metrics::LineWrap;
 use crate::emacs_core::eval::Context;
+use neovm_edit::emacs_core::display_metrics::LineWrap;
+use neovm_value::heap_types::byte_positions::EmacsBytePos;
+use neovm_value::heap_types::byte_positions::EmacsByteRange;
+use neovm_value::value::buffer_vocab::BufferId;
 
 use neovm_edit::emacs_core::indent::*;
 

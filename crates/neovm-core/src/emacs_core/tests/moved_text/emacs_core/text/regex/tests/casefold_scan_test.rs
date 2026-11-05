@@ -6,23 +6,23 @@
 
 use super::*;
 
-use neovm_value::tagged::SymbolMode;
-use rustc_hash::FxHashMap;
-use std::collections::HashSet;
 use neovm_text::emacs_core::syntax::SyntaxClass;
+use neovm_value::tagged::SymbolMode;
 use regex_automata::{MatchKind, Span};
+use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
-    use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::collections::HashSet;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use neovm_value::value::Value;
-use neovm_value::emacs_char;
 use crate::fuzz_support::{
     RegexCase, RegexCheck, RegexDifferential, SearchTarget, check_regex_differential,
 };
+use neovm_value::emacs_char;
+use neovm_value::value::Value;
 
-use neovm_text::emacs_core::regex_emacs::*;
-use neovm_text::emacs_core::regex_emacs::dfa;
 use neovm_text::emacs_core::regex_emacs::CHAR_TABLE_WALK_MIN_SPAN;
+use neovm_text::emacs_core::regex_emacs::dfa;
+use neovm_text::emacs_core::regex_emacs::*;
 
 /// `AsciiPreimage::AsciiOnly` is a claim about every character code: the
 /// standard translation keeps ASCII in ASCII and non-ASCII out of it.  The

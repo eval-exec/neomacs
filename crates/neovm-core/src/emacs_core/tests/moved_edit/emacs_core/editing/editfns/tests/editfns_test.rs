@@ -2,26 +2,26 @@ use super::*;
 
 use neovm_edit::buffer::overlay::OverlayModificationHook;
 use neovm_edit::emacs_core::edit_host::EditVariableRead;
+use neovm_value::chartab::{builtin_char_table_subtype, ct_lookup_with_symbols, is_char_table};
+use neovm_value::emacs_char;
+use neovm_value::emacs_char::{
+    MAX_CHAR, MAX_MULTIBYTE_LENGTH, byte8_to_char, char_string, chars_in_multibyte,
+    string_char_advance,
+};
 use neovm_value::error::LispCondition;
 use neovm_value::error::{EvalResult, Flow, signal};
 use neovm_value::heap_types::LispString;
+use neovm_value::symbol::{SymbolRedirect, SymbolTrappedWrite};
 use neovm_value::value::ValueKind;
 use std::ffi::CStr;
 use strum::IntoStaticStr;
-    use neovm_value::symbol::{SymbolRedirect, SymbolTrappedWrite};
-    use neovm_value::emacs_char;
-    use neovm_value::chartab::{builtin_char_table_subtype, ct_lookup_with_symbols, is_char_table};
-    use neovm_value::emacs_char::{
-        MAX_CHAR, MAX_MULTIBYTE_LENGTH, byte8_to_char, char_string, chars_in_multibyte,
-        string_char_advance,
-    };
 
-use neovm_value::value::positions::CharLen;
-use neovm_value::value::Value;
-use neovm_value::value::OrderedRuntimeBindingMap;
-use neovm_value::heap_types::byte_positions::EmacsByteRange;
-use neovm_eval::emacs_core::eval::Context;
 use malachite::integer::Integer;
+use neovm_eval::emacs_core::eval::Context;
+use neovm_value::heap_types::byte_positions::EmacsByteRange;
+use neovm_value::value::OrderedRuntimeBindingMap;
+use neovm_value::value::Value;
+use neovm_value::value::positions::CharLen;
 
 use neovm_edit::emacs_core::editfns::*;
 
@@ -30,9 +30,9 @@ use crate::emacs_core::identity_commands::{
     builtin_user_real_uid, builtin_user_uid,
 };
 
-use neovm_value::error::{expect_args, expect_max_args, expect_min_args};
 use neovm_system::emacs_core::callproc::new_child_command_calls_for_test;
 use neovm_system::emacs_core::callproc::reset_new_child_command_calls_for_test;
+use neovm_value::error::{expect_args, expect_max_args, expect_min_args};
 
 #[test]
 fn inhibited_buffer_changes_preserve_pending_mark_deactivation() {
@@ -495,7 +495,9 @@ fn buffer_substring_no_properties_reports_the_right_length_for_multibyte_text() 
         let got = neovm_eval::emacs_core::print::format_eval_result(&ev.eval_str(expr));
         // `length` walks the string's own character count, so it disagrees
         // with the bytes exactly when the cached count is wrong.
-        let len = neovm_eval::emacs_core::print::format_eval_result(&ev.eval_str(&format!("(length {expr})")));
+        let len = neovm_eval::emacs_core::print::format_eval_result(
+            &ev.eval_str(&format!("(length {expr})")),
+        );
         let via_chars = neovm_eval::emacs_core::print::format_eval_result(
             &ev.eval_str(&format!("(length (append {expr} nil))")),
         );

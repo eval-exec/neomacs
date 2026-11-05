@@ -590,7 +590,7 @@ const PREFILTER_MIN_BUILD_SPAN: usize = 256;
 
 impl CompiledPattern {
     /// Inspect compiler output without allowing a caller to invalidate its seal.
-#[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn bytecode(&self) -> &[u8] {
         &self.buffer
@@ -963,7 +963,7 @@ impl CaseTranslation {
     /// it cannot outlive the table the way an identity-keyed cache could.
     /// `standard()` above already applied the same lesson to the constant
     /// table; this path was simply missed.
-#[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn from_char_table(table: neovm_value::value::Value) -> Self {
         Self::from_char_table_with_symbols(table, SymbolMode::Bare)
@@ -10764,15 +10764,9 @@ mod short_literal;
 #[path = "tests/short_literal_test.rs"]
 mod short_literal_tests;
 
-
-
 #[cfg(test)]
 #[path = "tests/opcode_decode_test.rs"]
 mod opcode_decode_tests;
-
-
-
-
 
 #[cfg(test)]
 #[path = "tests/start_anchor_test.rs"]
@@ -10781,10 +10775,6 @@ mod start_anchor_tests;
 #[cfg(test)]
 #[path = "tests/suffix_literal_test.rs"]
 mod suffix_literal_tests;
-
-
-
-
 
 /// Carrier park: reset the Emacs-regex scratch and abort latches.
 /// `STANDARD_BYTE` is a pure function of the case table (no owner state) and
@@ -10822,8 +10812,6 @@ pub fn carrier_tls_fingerprint(h: &mut u64) {
         }),
     );
 }
-
-
 
 #[cfg(test)]
 #[path = "tests/emacs_test.rs"]

@@ -1229,10 +1229,11 @@ pub(crate) fn builtin_replace_regexp_in_string(
 
     let fixedcase = args.get(3).is_some_and(|v| v.is_truthy());
     let literal = args.get(4).is_some_and(|v| v.is_truthy());
-    let (_parsed_start, subexp) = neovm_text::emacs_core::search::parse_replace_regexp_subexp_start(
-        &args,
-        neovm_text::emacs_core::search::expect_lisp_string(&args[2])?,
-    )?;
+    let (_parsed_start, subexp) =
+        neovm_text::emacs_core::search::parse_replace_regexp_subexp_start(
+            &args,
+            neovm_text::emacs_core::search::expect_lisp_string(&args[2])?,
+        )?;
 
     if args[1].is_string() {
         let replacement = neovm_text::emacs_core::search::expect_lisp_string(&args[1])?.clone();

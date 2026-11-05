@@ -1633,9 +1633,6 @@ pub fn builtin_register_code_conversion_map_impl_with_symbols(
     Ok(Value::fixnum(map_id))
 }
 
-
-
-
 /// Debug-only carrier TLS fingerprint for this module's classified records.
 #[cfg(debug_assertions)]
 #[doc(hidden)]

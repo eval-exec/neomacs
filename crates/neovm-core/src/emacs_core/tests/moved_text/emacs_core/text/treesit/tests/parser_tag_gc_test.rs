@@ -2,16 +2,16 @@
 
 use std::mem;
 
+use neovm_value::intern::SymId;
 use std::collections::{BTreeMap, HashMap};
 use std::mem::MaybeUninit;
 use std::ops::Range;
 use std::ptr::NonNull;
 use tree_sitter::{InputEdit, Language, Parser, Point, Query, QueryError, Tree, ffi};
-use neovm_value::intern::SymId;
 
-use neovm_value::value::buffer_vocab::BufferId;
-use neovm_value::value::Value;
 use super::*;
+use neovm_value::value::Value;
+use neovm_value::value::buffer_vocab::BufferId;
 
 use neovm_value::intern::intern_uninterned;
 

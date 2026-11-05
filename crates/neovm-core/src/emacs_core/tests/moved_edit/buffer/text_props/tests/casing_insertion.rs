@@ -8,12 +8,12 @@ use neovm_edit::emacs_core::textprop::{
 use neovm_value::error::{Flow, LispCondition, signal};
 use neovm_value::symbol::Obarray;
 
-use neovm_value::value::positions::CharRange;
-use neovm_value::value::positions::CharPos0;
-use neovm_value::value::positions::CharLen;
-use neovm_value::value::Value;
-use neovm_eval::emacs_core::eval::Context;
 use neovm_edit::buffer::text_props::*;
+use neovm_eval::emacs_core::eval::Context;
+use neovm_value::value::Value;
+use neovm_value::value::positions::CharLen;
+use neovm_value::value::positions::CharPos0;
+use neovm_value::value::positions::CharRange;
 
 #[test]
 fn category_front_stickiness_respects_positioned_symbol_equality() {

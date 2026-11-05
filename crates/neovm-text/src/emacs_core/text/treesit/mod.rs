@@ -1125,7 +1125,6 @@ impl TreeSitterManager {
 #[path = "tests/treesit_test.rs"]
 mod tests;
 
-
 fn parser_point_at(
     buffer: &Buffer,
     visible_start: EmacsBytePos,

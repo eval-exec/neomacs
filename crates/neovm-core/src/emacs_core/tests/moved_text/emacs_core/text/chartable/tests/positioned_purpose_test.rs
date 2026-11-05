@@ -1,18 +1,18 @@
 use super::*;
 
-use neovm_text::emacs_core::coding::{TextQuotingStyle, effective_text_quoting_style};
 use neovm_edit::emacs_core::edit_host::EditVariableRead;
+use neovm_text::emacs_core::coding::{TextQuotingStyle, effective_text_quoting_style};
 use neovm_value::error::LispCondition;
 use neovm_value::error::{expect_args, expect_max_args, expect_min_args};
 use neovm_value::intern::{SymId, intern};
 
-use neovm_value::value::Value;
-use neovm_value::tagged::value::SymbolMode;
-use neovm_value::error::EvalResult;
-use neovm_value::chartab::set_char_table_contents;
-use neovm_value::chartab::assq_cell_eq;
 use neovm_eval::emacs_core::eval::Context;
 use neovm_text::emacs_core::chartable::*;
+use neovm_value::chartab::assq_cell_eq;
+use neovm_value::chartab::set_char_table_contents;
+use neovm_value::error::EvalResult;
+use neovm_value::tagged::value::SymbolMode;
+use neovm_value::value::Value;
 
 #[test]
 fn positioned_char_table_purpose_classification_follows_mode_and_preserves_value() {

@@ -1,17 +1,17 @@
-use neovm_edit::emacs_core::edit_host::{EditHost, EditVariableRead};
-use std::time::Instant;
-use neovm_value::error::{
-    EvalResult, Flow, LispCondition, TakeCount, expect_args, expect_args_range, expect_fixnum,
-    expect_max_args, expect_min_args, signal,
-};
+use neovm_edit::buffer::text_props::PropertyNamePresence::DefinitelyAbsent;
 use neovm_edit::buffer::{
     Buffer, BufferId, BufferManager, CharLen, CharPos0, CharRange, EmacsByteLen, EmacsBytePos,
     EmacsByteRange, LispBytePos1, LispCharPos1, TextChange, TextEditRange, TextExtent,
 };
+use neovm_edit::emacs_core::edit_host::{EditHost, EditVariableRead};
 use neovm_value::emacs_char::EmacsChar;
+use neovm_value::emacs_char::{bytes_by_char_head, char_byte8_head_p, str_as_multibyte_span};
+use neovm_value::error::{
+    EvalResult, Flow, LispCondition, TakeCount, expect_args, expect_args_range, expect_fixnum,
+    expect_max_args, expect_min_args, signal,
+};
 use neovm_value::tagged::value::SymbolMode;
-    use neovm_edit::buffer::text_props::PropertyNamePresence::DefinitelyAbsent;
-    use neovm_value::emacs_char::{bytes_by_char_head, char_byte8_head_p, str_as_multibyte_span};
+use std::time::Instant;
 
 use neovm_eval::emacs_core::eval::Context;
 use neovm_eval::emacs_core::print::format_eval_result;

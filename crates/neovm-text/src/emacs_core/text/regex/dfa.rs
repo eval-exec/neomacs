@@ -1610,7 +1610,7 @@ impl ExistenceDfa {
         &self.nfa
     }
 
-#[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn classes_mut(&mut self) -> &mut CharClasses {
         &mut self.classes
@@ -2006,7 +2006,7 @@ impl ExistenceDfa {
     }
 
     /// The one-step subset is kept explicit in the cache guard tests.
-#[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn cached_first_step_dead(
         &self,
@@ -2793,7 +2793,7 @@ impl Clone for DfaCell {
 
 impl DfaCell {
     /// The slot, for tests.
-#[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn slot(&self) -> std::cell::Ref<'_, DfaSlot> {
         self.slot.borrow()
@@ -3313,8 +3313,6 @@ impl LiveDfa {
         }
     }
 }
-
-
 
 /// Carrier park: reset the DFA filter counters.
 pub(crate) fn reset_carrier_tls() {

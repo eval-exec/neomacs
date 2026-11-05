@@ -3352,13 +3352,13 @@ impl Buffer {
         self.text.backend_kind()
     }
 
-#[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn shares_text_storage_with(&self, other: &Self) -> bool {
         self.text.shares_storage_with(&other.text)
     }
 
-#[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn replace_text_snapshot_for_test(
         &mut self,
@@ -3636,7 +3636,7 @@ impl Buffer {
     }
 
     /// Test hook: see `TextPropertyTable::debug_syntax_caches_consistent`.
-#[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn debug_syntax_caches_consistent(&self) -> Result<(), String> {
         self.text.debug_syntax_caches_consistent()
@@ -3980,7 +3980,7 @@ impl Buffer {
             .text_props_object_interval_runs(self.total_char_len())
     }
 
-#[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn text_props_intervals_snapshot_for_test(
         &self,
@@ -3990,7 +3990,7 @@ impl Buffer {
 
     /// Raw test fixture replacement: bypasses byte/property edit publication.
     /// This is outside the motion source-authority revision contract.
-#[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn replace_text_props_for_test(&mut self, props: TextPropertyTable) {
         self.text.text_props_replace(props);
@@ -4152,7 +4152,7 @@ impl Buffer {
     }
 
     /// Whether this buffer's text holds a line index now (tests).
-#[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn has_line_index_for_test(&self) -> bool {
         self.text.has_line_index_for_test()
@@ -4577,7 +4577,7 @@ impl Buffer {
         self.text.marker_chain_anchor_of(marker.as_ptr())
     }
 
-#[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn marker_chain_len(&self) -> usize {
         self.text.chain_walk_collect().len()
@@ -4588,13 +4588,13 @@ impl Buffer {
     /// Chain ORDER is how "did this operation re-chain the marker?" becomes
     /// observable: a re-splice always lands at the head. Marker identity is
     /// the `MarkerObj` pointer, so tests compare these instead of ids.
-#[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn marker_chain_ptrs(&self) -> Vec<*mut neovm_value::tagged::header::MarkerObj> {
         self.text.chain_walk_collect()
     }
 
-#[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) unsafe fn marker_chain_contains_raw_for_test(
         &self,
@@ -4765,14 +4765,14 @@ impl Buffer {
 
     /// Test-facing: this buffer's own modtime cell, to assert an indirect
     /// buffer follows the base the manager owns rather than a copy.
-#[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(in crate::buffer) fn share_modtime_cell(&self) -> BaseVisitedFileModtime {
         self.modtime.share_own()
     }
 
     /// Test-facing counterpart of [`Self::share_modtime_cell`].
-#[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(in crate::buffer) fn follows_modtime_cell_of(&self, base: &BaseVisitedFileModtime) -> bool {
         self.modtime.follows(base)
@@ -5818,7 +5818,7 @@ pub mod jit_layout {
 
     /// Byte offsets of the slot vector's data pointer and length, within the
     /// `Vec` itself. `None` if they cannot be identified unambiguously.
-#[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn slots_vec_offsets() -> Option<(usize, usize)> {
         static OFFSETS: OnceLock<Option<(usize, usize)>> = OnceLock::new();
@@ -5844,7 +5844,7 @@ pub mod jit_layout {
     /// `(tag offset, payload offset, the tag value that means `None`)` for
     /// `Option<BufferId>`. `BufferId` wraps a `u64` and so has no niche: the
     /// option is two words whose order std does not fix.
-#[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn current_option_layout() -> Option<(usize, usize, u64)> {
         static LAYOUT: OnceLock<Option<(usize, usize, u64)>> = OnceLock::new();
@@ -5871,7 +5871,7 @@ pub mod jit_layout {
     }
 
     /// The direct selection designator read by generated code.
-#[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn current_buffer_ptr_via_projection(
         manager: &BufferManager,
@@ -5891,7 +5891,7 @@ pub mod jit_layout {
     /// The current allocation independently reached through the storage slab.
     /// Test-only: compares the direct generated projection with canonical
     /// storage and `BufferManager::current_buffer`.
-#[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn current_buffer_ptr_via_walk(manager: &BufferManager) -> Option<*const Buffer> {
         let (tag_off, payload_off, none_tag) = current_option_layout()?;
@@ -6546,7 +6546,7 @@ impl BufferManager {
 
     /// Reinitialize a minimal runtime without detaching its World allocation.
     /// This cold constructor phase runs before Lisp or manager views escape.
-#[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "test-support"))]
     #[cold]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn reset_for_minimal_runtime(&mut self) {
@@ -6581,7 +6581,7 @@ impl BufferManager {
 
     /// Consume independent storage at the closed World construction boundary.
     /// An installed World view cannot surrender another owner's allocation.
-#[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn into_world_parts(
         self,
@@ -8872,10 +8872,6 @@ impl GcTrace for BufferManager {
 // ===========================================================================
 // Tests
 // ===========================================================================
-
-
-
-
 
 // Cold proof-1 collector projection; no change to the serial root walk.
 #[path = "parallel_roots.rs"]

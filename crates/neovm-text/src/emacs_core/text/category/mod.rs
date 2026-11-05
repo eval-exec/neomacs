@@ -790,10 +790,6 @@ pub(crate) fn builtin_set_category_table_in_buffers_with_symbols(
     Ok(installed)
 }
 
-
-
-
-
 #[doc(hidden)]
 pub fn builtin_category_table_p_in_state<H: TextHost>(
     host: &mut H,

@@ -233,7 +233,7 @@ impl SyntaxPurposeSymbol {
         value.as_bare_symbol_name()?.parse().ok()
     }
 
-#[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn name(self) -> &'static str {
         self.into()
@@ -3433,7 +3433,7 @@ impl<'a> SyntaxProperties<'a> {
     /// char-addressed ones through [`SyntaxPropRange`], both of which cache
     /// this resolution; the uncached form is the reference the byte-run
     /// cache is checked against.
-#[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn syntax_table_prop_at_emacs_byte(
         self,
@@ -3803,7 +3803,7 @@ pub enum StringSyntaxPositionError {
 }
 
 impl StringSyntaxPositionError {
-#[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) const fn position(self) -> Option<GnuStringCharPos> {
         match self {
@@ -3855,7 +3855,7 @@ impl std::fmt::Debug for StringSyntaxPropByteRun<'_> {
 
 impl<'a> StringSyntaxPropByteRun<'a> {
     /// Legacy Rust-owned lookup used by coordinate-contract tests.
-#[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn new(
         props: SyntaxProperties<'a>,
@@ -8086,35 +8086,13 @@ thread_local! {
     pub(crate) static SYNTAX_BYTE_RUN_REFILLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-
-
-
-
-
-
 #[cfg(test)]
 #[path = "tests/flat_ascii_syntax_entry_cache_test.rs"]
 mod flat_ascii_syntax_entry_cache_tests;
 
-
-
-
-
-
-
-
-
-
-
-
-
 mod symbol_policy;
 #[doc(hidden)]
 pub use symbol_policy::*;
-
-
-
-
 
 /// Carrier park: drop the flat-ASCII syntax caches (the standard-table
 /// objects are reset by `reset_syntax_thread_locals`).

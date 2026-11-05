@@ -595,7 +595,7 @@ impl<'a, R> OverlayPropertySweep<'a, R>
 where
     R: OverlayPropertyResolver,
 {
-#[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn new(
         overlays: &'a OverlayList,
@@ -857,7 +857,7 @@ impl OverlayList {
         }
     }
 
-#[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn interval_index_height(&self) -> usize {
         self.index.interval_height()
@@ -1254,7 +1254,7 @@ impl OverlayList {
     ///
     /// Unlike an exact at-point extent query, this initializes active overlays
     /// once at `bounds.start()` and streams endpoint groups in ascending order.
-#[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn overlay_property_sweep<R>(
         &self,
@@ -2123,8 +2123,6 @@ impl GcTrace for OverlayList {
         }
     }
 }
-
-
 
 /// Fold a Lisp value into `hasher` by CONTENT, following conses and strings.
 ///

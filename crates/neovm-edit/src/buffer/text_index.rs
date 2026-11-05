@@ -128,7 +128,7 @@ impl TextLineIndexConfig {
 
     /// Settings that make every buffer and every query use the index, with
     /// chunks of CHUNK_BYTES: what tests and verify soaks want.
-#[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) const fn eager(mode: TextLineIndexMode, chunk_bytes: usize) -> Self {
         Self {

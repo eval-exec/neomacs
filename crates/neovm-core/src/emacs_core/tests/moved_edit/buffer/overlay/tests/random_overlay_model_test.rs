@@ -3,9 +3,9 @@
 
 use neovm_edit::buffer::BufferId;
 
-use neovm_value::value::Value;
-use neovm_value::heap_types::byte_positions::EmacsBytePos;
 use super::*;
+use neovm_value::heap_types::byte_positions::EmacsBytePos;
+use neovm_value::value::Value;
 
 #[test]
 fn overlay_make_move_delete_matches_bruteforce_10000_operations() {

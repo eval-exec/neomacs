@@ -3,15 +3,15 @@ use super::*;
 use neovm_value::error::LispCondition;
 use neovm_value::error::{expect_args, expect_args_range};
 
-use neovm_value::value::Value;
-use neovm_value::error::EvalResult;
-use neovm_eval::emacs_core::eval::Context;
 use neovm_edit::buffer::{EmacsByteRange, LispCharPos1};
+use neovm_eval::emacs_core::eval::Context;
+use neovm_value::error::EvalResult;
+use neovm_value::value::Value;
 
 use neovm_edit::emacs_core::marker::*;
 
-use std::cell::RefCell;
 use crate::emacs_core::moved_edit::emacs_core::marker::builtin_marker_position;
+use std::cell::RefCell;
 
 #[test]
 fn make_marker_creates_heap_marker() {
@@ -303,7 +303,10 @@ fn set_marker_uses_live_source_marker_position_after_insertions() {
              (marker-position dst))"#,
         )
         .expect("evaluation succeeds");
-    assert_eq!(neovm_eval::emacs_core::print::format_eval_result(&Ok(result)), "OK 5");
+    assert_eq!(
+        neovm_eval::emacs_core::print::format_eval_result(&Ok(result)),
+        "OK 5"
+    );
 }
 
 /// `set-marker` into the buffer the marker is ALREADY in must not touch the

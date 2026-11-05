@@ -1,8 +1,8 @@
-use std::sync::Arc;
-use neovm_value::value::Value;
-use neovm_value::intern::SymId;
 use super::*;
 use neovm_text::emacs_core::charset::prepared_mule::EmacsMuleEncoder;
+use neovm_value::intern::SymId;
+use neovm_value::value::Value;
+use std::sync::Arc;
 
 #[test]
 fn prepared_mule_scalar_preserves_subset_and_superset_rules() {

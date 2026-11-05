@@ -1,27 +1,26 @@
 use super::*;
 use std::fmt;
 
-use neovm_text::emacs_core::text_host::TextHost;
-use neovm_value::error::LispCondition;
-use neovm_value::error::{expect_args, expect_args_range, expect_min_args};
 use encoding_rs::{BIG5, GBK};
 use neovm_edit::buffer::{EmacsBytePos, EmacsByteRange, LispCharPos1, TextPositionAnchor};
 use neovm_edit::emacs_core::display_metrics::display_glyph_character;
+use neovm_text::emacs_core::charset::{
+    charset_by_iso_final, charset_decode_char, charset_encode_char, charset_iso2022_designation,
+};
+use neovm_text::emacs_core::chartable::{builtin_set_char_table_range, make_char_table_value};
+use neovm_text::emacs_core::coding::EolType;
+use neovm_text::emacs_core::coding::IsoFlag;
+use neovm_text::emacs_core::coding::ResolvedEol;
+use neovm_text::emacs_core::text_host::TextHost;
 use neovm_value::emacs_char::{GNU_DEFAULT_WIDE_RANGES, ZERO_WIDTH_RANGES};
-    use neovm_text::emacs_core::chartable::{builtin_set_char_table_range, make_char_table_value};
-    use neovm_text::emacs_core::coding::EolType;
-    use neovm_text::emacs_core::coding::ResolvedEol;
-    use std::borrow::Cow;
+use neovm_value::error::LispCondition;
 use neovm_value::error::{EvalResult, signal};
-    use neovm_text::emacs_core::coding::IsoFlag;
-    use neovm_text::emacs_core::charset::{
-        charset_by_iso_final, charset_decode_char, charset_encode_char,
-        charset_iso2022_designation,
-    };
+use neovm_value::error::{expect_args, expect_args_range, expect_min_args};
+use std::borrow::Cow;
 
-use neovm_value::strings_core::lisp_string_char_codes;
 use neovm_eval::emacs_core::eval::Context;
 use neovm_text::emacs_core::coding::EolConversion;
+use neovm_value::strings_core::lisp_string_char_codes;
 
 use neovm_text::encoding::*;
 

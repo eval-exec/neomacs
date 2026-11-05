@@ -7,8 +7,11 @@ mod declared_logical_state_tests;
 mod gc_tls_ownership_tests;
 #[path = "../text/syntax/tests/issue554_ascii_memo_test.rs"]
 mod issue554_ascii_memo_tests;
+pub mod parse_cache;
+pub mod parse_loop;
 #[path = "../text/syntax/tests/parse_state_divergence_gnu_test.rs"]
 mod parse_state_divergence_gnu_tests;
+pub mod pps_propertize;
 #[path = "../text/syntax/tests/pps_propertize_gnu_test.rs"]
 mod pps_propertize_gnu_tests;
 #[path = "../text/syntax/tests/scan_error_data_gnu_test.rs"]
@@ -21,6 +24,3 @@ mod skip_syntax_classes_tests;
 mod syntax_prop_byte_run_test;
 #[path = "../text/syntax/tests/syntax_test.rs"]
 mod tests;
-pub mod parse_cache;
-pub mod parse_loop;
-pub mod pps_propertize;

@@ -784,9 +784,6 @@ pub fn is_case_table_with_symbols(v: &Value, mode: SymbolMode) -> bool {
 // Tests
 // ---------------------------------------------------------------------------
 
-
-
-
 #[doc(hidden)]
 pub fn builtin_case_table_p_in_state<H: super::text_host::TextHost>(
     eval: &mut H,

@@ -659,8 +659,7 @@ fn make_syntax_table_returns_syntax_char_table() {
     let table = builtin_make_syntax_table(vec![]).unwrap();
     let is_ct = crate::emacs_core::chartable::builtin_char_table_p(vec![table]).unwrap();
     assert_eq!(is_ct, Value::T);
-    let subtype =
-        crate::emacs_core::chartable::builtin_char_table_subtype(vec![table]).unwrap();
+    let subtype = crate::emacs_core::chartable::builtin_char_table_subtype(vec![table]).unwrap();
     assert_eq!(subtype, Value::symbol("syntax-table"));
 }
 
@@ -682,8 +681,7 @@ fn standard_syntax_table_returns_char_table() {
     let table = builtin_standard_syntax_table(vec![]).unwrap();
     let is_ct = crate::emacs_core::chartable::builtin_char_table_p(vec![table]).unwrap();
     assert_eq!(is_ct, Value::T);
-    let subtype =
-        crate::emacs_core::chartable::builtin_char_table_subtype(vec![table]).unwrap();
+    let subtype = crate::emacs_core::chartable::builtin_char_table_subtype(vec![table]).unwrap();
     assert_eq!(subtype, Value::symbol("syntax-table"));
 }
 
@@ -695,8 +693,7 @@ fn copy_syntax_table_returns_fresh_syntax_table() {
 
     let is_ct = crate::emacs_core::chartable::builtin_char_table_p(vec![copied]).unwrap();
     assert_eq!(is_ct, Value::T);
-    let subtype =
-        crate::emacs_core::chartable::builtin_char_table_subtype(vec![copied]).unwrap();
+    let subtype = crate::emacs_core::chartable::builtin_char_table_subtype(vec![copied]).unwrap();
     assert_eq!(subtype, Value::symbol("syntax-table"));
 
     assert!(
@@ -704,8 +701,7 @@ fn copy_syntax_table_returns_fresh_syntax_table() {
         "expected fresh allocation, got identity-equal"
     );
 
-    let parent =
-        crate::emacs_core::chartable::builtin_char_table_parent(vec![copied]).unwrap();
+    let parent = crate::emacs_core::chartable::builtin_char_table_parent(vec![copied]).unwrap();
     assert!(
         crate::emacs_core::chartable::builtin_char_table_p(vec![parent])
             .unwrap()

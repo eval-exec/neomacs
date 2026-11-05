@@ -5,10 +5,10 @@ use neovm_edit::buffer::{CharRange, LispCharPos1};
 use neovm_value::heap_types::{LispString, OverlayDataInit};
 use neovm_value::value::ValueKind;
 
-use neovm_value::value::Value;
-use neovm_value::heap_types::byte_positions::EmacsByteRange;
-use neovm_value::heap_types::byte_positions::EmacsBytePos;
 use super::*;
+use neovm_value::heap_types::byte_positions::EmacsBytePos;
+use neovm_value::heap_types::byte_positions::EmacsByteRange;
+use neovm_value::value::Value;
 
 use crate::emacs_core::Context;
 

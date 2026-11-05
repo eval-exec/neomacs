@@ -1,25 +1,25 @@
 use super::*;
 
-use std::cell::{Cell, RefCell};
-use std::cmp::Ordering;
-use std::collections::{BTreeMap, BinaryHeap};
-use std::rc::Rc;
 use neovm_value::error::Flow;
 use neovm_value::gc_trace::GcTrace;
 use neovm_value::heap_types::OverlayData;
 use neovm_value::plist;
+use neovm_value::value::ValueKind;
 use neovm_value::value::scratch_bridge::{
     push_scratch_gc_root, restore_scratch_gc_roots, save_scratch_gc_roots,
 };
-        use std::hash::Hasher;
-    use neovm_value::value::ValueKind;
+use std::cell::{Cell, RefCell};
+use std::cmp::Ordering;
+use std::collections::{BTreeMap, BinaryHeap};
+use std::hash::Hasher;
+use std::rc::Rc;
 
-use neovm_value::value::Value;
-use neovm_value::heap_types::byte_positions::EmacsByteRange;
-use neovm_value::heap_types::byte_positions::EmacsBytePos;
-use neovm_value::heap_types::byte_positions::EmacsByteLen;
-use neovm_eval::emacs_core::eval::Context;
 use neovm_edit::buffer::BufferId;
+use neovm_eval::emacs_core::eval::Context;
+use neovm_value::heap_types::byte_positions::EmacsByteLen;
+use neovm_value::heap_types::byte_positions::EmacsBytePos;
+use neovm_value::heap_types::byte_positions::EmacsByteRange;
+use neovm_value::value::Value;
 
 use neovm_edit::buffer::overlay::*;
 use neovm_value::heap_types::overlay_storage::instrumentation::endpoint_search_node_visit_count;

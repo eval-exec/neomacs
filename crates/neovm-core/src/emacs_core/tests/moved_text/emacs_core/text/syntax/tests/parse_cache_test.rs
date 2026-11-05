@@ -9,27 +9,27 @@
 //! and point, must equal the uncached scan's; the cache must actually serve
 //! (exact answers and resumes), and each invalidation path must be taken.
 
-use neovm_text::emacs_core::syntax::BufferSyntaxParseCache;
 use super::*;
+use neovm_text::emacs_core::syntax::BufferSyntaxParseCache;
 use std::collections::BTreeMap;
 
-use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::sync::{LazyLock, Mutex};
 
-use neovm_value::value::list_to_vec;
-use neovm_value::value::Value;
-use neovm_text::emacs_core::syntax::builtin_parse_partial_sexp_6;
-use neovm_text::emacs_core::syntax::builtin_modify_syntax_entry;
-use neovm_eval::host_effect::contracts::Record;
-use neovm_eval::emacs_core::eval::case_tables::canon;
-use neovm_eval::emacs_core::eval::Context;
-use neovm_edit::buffer::syntax_cache::Invalidation;
 use crate::emacs_core::print::print_value;
+use neovm_edit::buffer::syntax_cache::Invalidation;
+use neovm_eval::emacs_core::eval::Context;
+use neovm_eval::emacs_core::eval::case_tables::canon;
+use neovm_eval::host_effect::contracts::Record;
+use neovm_text::emacs_core::syntax::builtin_modify_syntax_entry;
+use neovm_text::emacs_core::syntax::builtin_parse_partial_sexp_6;
+use neovm_value::value::Value;
+use neovm_value::value::list_to_vec;
 
-use neovm_text::emacs_core::syntax::parse_cache::*;
 use neovm_text::emacs_core::syntax::DESCRIPTOR_LOG_CAP;
 use neovm_text::emacs_core::syntax::parse_cache::MAX_RUNS;
+use neovm_text::emacs_core::syntax::parse_cache::*;
 
 #[test]
 fn cached_answers_equal_plain_scans_under_every_change() {

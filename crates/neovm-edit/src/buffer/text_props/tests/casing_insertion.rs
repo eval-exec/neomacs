@@ -251,8 +251,7 @@ fn casing_insertion_preserves_interior_and_resolves_boundary_stickiness() {
         obarray: &obarray,
         controls: controls(cycle),
     });
-    let expansion =
-        crate::buffer::CasifyExpansion::new(CharPos0::new(1), CharLen::new(2)).unwrap();
+    let expansion = crate::buffer::CasifyExpansion::new(CharPos0::new(1), CharLen::new(2)).unwrap();
     let old_end = buffer.point_max_anchor();
     assert!(
         buffer

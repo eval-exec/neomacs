@@ -1,8 +1,8 @@
 //! Coding conversion CHECK_SYMBOL and EQ retain positioned-symbol policy.
 
 use neovm_text::emacs_core::coding::EolConversion;
+use neovm_value::intern::intern;
 use neovm_value::value::{Value, get_string_text_properties_for_value};
-    use neovm_value::intern::intern;
 
 use super::*;
 

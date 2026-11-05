@@ -2065,7 +2065,7 @@ impl BufferText {
     }
 
     /// Test hook: see `TextPropertyTable::debug_syntax_caches_consistent`.
-#[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn debug_syntax_caches_consistent(&self) -> Result<(), String> {
         self.storage
@@ -4034,8 +4034,6 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/buffer_text_chain_test.rs"]
 mod chain_test;
-
-
 
 #[doc(hidden)]
 impl SyntaxSafePositions {

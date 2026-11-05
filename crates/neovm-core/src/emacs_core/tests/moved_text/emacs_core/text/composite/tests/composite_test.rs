@@ -1,7 +1,8 @@
 use super::*;
 
-use neovm_text::emacs_core::text_host::TextHost;
 use neomacs_display_protocol::glyph_matrix::{TerminalComposition, TerminalCompositionCell};
+use neovm_text::emacs_core::text_host::TextHost;
+use neovm_value::emacs_char::UnicodeCategory;
 use neovm_value::error::LispCondition;
 use neovm_value::error::{EvalResult, Flow, signal};
 use neovm_value::error::{expect_args, expect_args_range, expect_max_args};
@@ -10,12 +11,11 @@ use neovm_value::value::scratch_bridge::{
     push_scratch_gc_root, restore_scratch_gc_roots, save_scratch_gc_roots,
 };
 use unicode_general_category::GeneralCategory;
-    use neovm_value::emacs_char::UnicodeCategory;
 
-use neovm_value::value::list_to_vec;
-use neovm_value::value::Value;
-use neovm_eval::emacs_core::eval::Context;
 use neovm_edit::buffer::CharPos0;
+use neovm_eval::emacs_core::eval::Context;
+use neovm_value::value::Value;
+use neovm_value::value::list_to_vec;
 
 use neovm_text::emacs_core::composite::*;
 
@@ -1051,13 +1051,14 @@ fn visible_scan_fast_path_matches_the_full_scan() {
         .expect("current buffer")
         .id();
 
-    let spans = |eval: &crate::emacs_core::eval::Context, fast: bool, first: usize, budget: usize| {
-        fast_path::set_override(Some(fast));
-        let buffer = eval.edit.buffers.get(buffer_id).expect("buffer");
-        let spans = buffer.automatic_composition_spans_visible(table, first, budget);
-        fast_path::set_override(None);
-        spans.as_ref().clone()
-    };
+    let spans =
+        |eval: &crate::emacs_core::eval::Context, fast: bool, first: usize, budget: usize| {
+            fast_path::set_override(Some(fast));
+            let buffer = eval.edit.buffers.get(buffer_id).expect("buffer");
+            let spans = buffer.automatic_composition_spans_visible(table, first, budget);
+            fast_path::set_override(None);
+            spans.as_ref().clone()
+        };
     let check = |eval: &crate::emacs_core::eval::Context, what: &str| {
         let chars = eval
             .edit

@@ -7,11 +7,11 @@ use neovm_value::error::{EvalResult, Flow, signal};
 use neovm_value::heap_types::LispString;
 use neovm_value::value::ValueKind;
 
-use neovm_value::value::Value;
-use neovm_eval::emacs_core::eval::Context;
-use crate::emacs_core::casefiddle_entries::builtin_upcase_region;
 use crate::emacs_core::casefiddle_entries::builtin_capitalize_word;
+use crate::emacs_core::casefiddle_entries::builtin_upcase_region;
+use neovm_eval::emacs_core::eval::Context;
 use neovm_text::emacs_core::casefiddle::*;
+use neovm_value::value::Value;
 
 #[test]
 fn capitalize_string_basic() {

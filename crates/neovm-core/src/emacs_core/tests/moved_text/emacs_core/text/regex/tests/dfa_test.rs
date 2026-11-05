@@ -7,12 +7,12 @@ use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use std::cell::{RefCell, RefMut};
 
-use neovm_value::emacs_char;
-use neovm_text::emacs_core::regex_emacs::SyntaxLookup;
-use neovm_text::emacs_core::regex_emacs::CompiledPattern;
-use neovm_eval::emacs_core::subr::leaf::UNKNOWN;
 use neovm_eval::emacs_core::eval::Context;
+use neovm_eval::emacs_core::subr::leaf::UNKNOWN;
 use neovm_text::emacs_core::regex::*;
+use neovm_text::emacs_core::regex_emacs::CompiledPattern;
+use neovm_text::emacs_core::regex_emacs::SyntaxLookup;
+use neovm_value::emacs_char;
 
 use neovm_text::emacs_core::regex_emacs::{
     DefaultSyntaxLookup, fail_stack_push_sites, re_match, regex_compile,
@@ -35,13 +35,13 @@ use neovm_text::emacs_core::regex_emacs::{
 
 use neovm_text::emacs_core::regex_emacs::{matcher_entry_count, re_search};
 
-use neovm_text::emacs_core::regex_emacs::fail_stack_overflow_free_span;
-use neovm_text::emacs_core::regex_emacs::re_text_char;
-use neovm_text::emacs_core::regex_emacs::MatchSyntax;
-use neovm_text::emacs_core::regex_emacs::RegexOp;
 use crate::fuzz_support::{
     RegexCase, RegexCheck, RegexDifferential, SearchTarget, check_regex_differential,
 };
+use neovm_text::emacs_core::regex_emacs::MatchSyntax;
+use neovm_text::emacs_core::regex_emacs::RegexOp;
+use neovm_text::emacs_core::regex_emacs::fail_stack_overflow_free_span;
+use neovm_text::emacs_core::regex_emacs::re_text_char;
 
 #[test]
 fn closure_follows_both_edges_of_every_split() {

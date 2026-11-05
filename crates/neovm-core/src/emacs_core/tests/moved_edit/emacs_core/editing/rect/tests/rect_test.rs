@@ -7,10 +7,10 @@ use neovm_value::error::{expect_max_args, expect_min_args};
 use neovm_value::gc_trace::GcTrace;
 use neovm_value::value::ValueKind;
 
-use neovm_value::value::Value;
-use neovm_value::heap_types::LispString;
-use neovm_eval::emacs_core::eval::Context;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use neovm_eval::emacs_core::eval::Context;
+use neovm_value::heap_types::LispString;
+use neovm_value::value::Value;
 
 use crate::emacs_core::bytecode::opcode::Op;
 

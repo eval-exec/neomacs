@@ -6274,8 +6274,6 @@ pub fn builtin_max_char(args: Vec<Value>) -> EvalResult {
 // Tests
 // ===========================================================================
 
-
-
 #[doc(hidden)]
 impl EncodedTextBytes {
     #[doc(hidden)]

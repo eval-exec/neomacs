@@ -1,15 +1,15 @@
 use super::*;
 
-use neovm_text::emacs_core::coding::{TextQuotingStyle, effective_text_quoting_style};
-use neovm_value::tagged::SymbolMode;
 use neovm_edit::emacs_core::edit_host::EditVariableRead;
+use neovm_text::emacs_core::coding::{TextQuotingStyle, effective_text_quoting_style};
 use neovm_value::error::LispCondition;
 use neovm_value::error::{expect_args, expect_max_args, expect_min_args};
+use neovm_value::tagged::SymbolMode;
 
-use neovm_value::value::Value;
-use neovm_value::error::EvalResult;
-use neovm_value::chartab::ct_resolved_entries;
 use crate::emacs_core::chartable_entries::builtin_unicode_property_table_internal;
+use neovm_value::chartab::ct_resolved_entries;
+use neovm_value::error::EvalResult;
+use neovm_value::value::Value;
 
 use crate::emacs_core::eval::Context;
 
@@ -1310,9 +1310,11 @@ fn format_percent_s_prints_unicode_property_table_as_gnu_char_table() {
     )
     .unwrap();
 
-    let formatted =
-        neovm_eval::emacs_core::builtins::builtin_format_slice(&mut eval, &[Value::string("%S"), table])
-            .unwrap();
+    let formatted = neovm_eval::emacs_core::builtins::builtin_format_slice(
+        &mut eval,
+        &[Value::string("%S"), table],
+    )
+    .unwrap();
     let rendered = formatted.as_runtime_string_owned().unwrap();
     assert!(rendered.starts_with("#^[nil nil char-code-property-table"));
     assert!(rendered.contains("#^^[1 0"));

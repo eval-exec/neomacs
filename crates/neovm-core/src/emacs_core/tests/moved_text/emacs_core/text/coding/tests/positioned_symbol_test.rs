@@ -9,19 +9,19 @@ use neovm_value::heap_types::LispString;
 use neovm_value::intern::WellKnown;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use std::collections::{HashMap, HashSet};
+use std::ptr;
 use strum::{EnumString, IntoStaticStr};
-    use std::ptr;
 
-use neovm_value::value::list_to_vec;
-use neovm_value::value::Value;
-use neovm_value::tagged::value::SymbolMode;
-use neovm_value::error::EvalResult;
 use neovm_eval::emacs_core::eval::Context;
-use neovm_value::intern::intern;
 use neovm_text::emacs_core::coding::*;
+use neovm_value::error::EvalResult;
+use neovm_value::intern::intern;
+use neovm_value::tagged::value::SymbolMode;
+use neovm_value::value::Value;
+use neovm_value::value::list_to_vec;
 
-use neovm_value::error::FlowKind;
 use neovm_text::emacs_core::coding::ISO2022_KEY_INITIAL;
+use neovm_value::error::FlowKind;
 
 #[test]
 fn positioned_coding_predicate_and_check_preserve_policy_and_operand() {

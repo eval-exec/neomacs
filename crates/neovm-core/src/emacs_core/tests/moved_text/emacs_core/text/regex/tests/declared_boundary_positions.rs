@@ -4,17 +4,17 @@ use super::*;
 use std::cell::Cell;
 
 use neovm_value::tagged::SymbolMode;
-use rustc_hash::FxHashMap;
-use std::collections::HashSet;
 use regex_automata::{MatchKind, Span};
+use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
-    use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::collections::HashSet;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use neovm_value::value::Value;
-use neovm_eval::emacs_core::eval::Context;
 use neovm_edit::buffer::syntax_class::SyntaxClass;
-use neovm_text::emacs_core::regex_emacs::*;
+use neovm_eval::emacs_core::eval::Context;
 use neovm_text::emacs_core::regex_emacs::dfa;
+use neovm_text::emacs_core::regex_emacs::*;
+use neovm_value::value::Value;
 
 use neovm_text::emacs_core::syntax::{
     StringSyntaxPositionError, StringSyntaxPositionSource, SyntaxProperties, SyntaxTable,

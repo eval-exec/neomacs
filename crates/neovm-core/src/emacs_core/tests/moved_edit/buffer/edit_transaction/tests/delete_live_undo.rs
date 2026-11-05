@@ -13,8 +13,8 @@ use neovm_edit::buffer::{
 };
 use neovm_value::heap_types::LispString;
 
-use neovm_value::value::Value;
 use crate::emacs_core::print::print_value;
+use neovm_value::value::Value;
 
 use neovm_edit::buffer::*;
 

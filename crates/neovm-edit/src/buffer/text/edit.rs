@@ -102,7 +102,7 @@ impl TextExtent {
         Self { chars, emacs_bytes }
     }
 
-#[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(in crate::buffer) const fn from_usize(chars: usize, emacs_bytes: usize) -> Self {
         Self {
@@ -373,7 +373,7 @@ impl TextTransposition {
         Self { first, second }
     }
 
-#[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     #[allow(clippy::too_many_arguments)]
     pub const fn from_usize(

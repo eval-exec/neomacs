@@ -116,7 +116,7 @@ where
         }
     }
 
-#[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn len(&self) -> usize {
         self.by_identity.len()

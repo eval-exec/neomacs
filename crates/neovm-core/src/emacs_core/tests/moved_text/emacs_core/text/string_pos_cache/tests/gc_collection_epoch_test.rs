@@ -1,9 +1,9 @@
 use std::time::Instant;
 
-use std::cell::Cell;
-use neovm_value::value::Value;
-use neovm_value::heap_types::GnuStringCharPos;
 use crate::emacs_core::eval::Context;
+use neovm_value::heap_types::GnuStringCharPos;
+use neovm_value::value::Value;
+use std::cell::Cell;
 
 use neovm_value::string_pos_cache::*;
 

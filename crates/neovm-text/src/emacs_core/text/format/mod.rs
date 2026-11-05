@@ -53,7 +53,7 @@ pub struct BrokenDownTime {
     pub minute: u32,  // 0..=59
     pub second: u32,  // 0..=60 (leap second)
     pub weekday: u32, // 0=Sunday .. 6=Saturday
-    yearday: u32, // 0..=365
+    yearday: u32,     // 0..=365
 }
 
 /// Whether a year is a leap year (Gregorian).

@@ -2366,9 +2366,7 @@ fn insert_unbound_categories_matches_gnu_booted_order() {
 #[test]
 fn eol_resolution_requires_being_told_about_inhibit_eol_conversion() {
     crate::test_utils::init_test_tracing();
-    use crate::emacs_core::coding::{
-        DecodeEolResolution, EolConversion, EolType, ResolvedEol,
-    };
+    use crate::emacs_core::coding::{DecodeEolResolution, EolConversion, EolType, ResolvedEol};
 
     let crlf = b"a\r\nb\r\n";
     let cr = b"a\rb\r";

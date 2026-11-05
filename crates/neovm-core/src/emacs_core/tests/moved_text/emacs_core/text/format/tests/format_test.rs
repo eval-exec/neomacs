@@ -3,11 +3,11 @@ use std::fmt;
 
 use neovm_value::error::LispCondition;
 use neovm_value::error::{Flow, signal};
-    use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use neovm_value::value::Value;
-use crate::emacs_core::format_time_entries::builtin_format_time_string;
 use crate::emacs_core::autoload::is_autoload_value;
+use crate::emacs_core::format_time_entries::builtin_format_time_string;
+use neovm_value::value::Value;
 
 use crate::test_utils::{eval_with_ldefs_boot_autoloads, runtime_startup_eval_all};
 
@@ -630,7 +630,10 @@ fn coding_system_alias_encodes_through_its_target() {
            (string= s (decode-coding-string (encode-coding-string s 'neo-alias-utf8) \
                                             'neo-alias-utf8)))",
     );
-    assert_eq!(neovm_eval::emacs_core::print::format_eval_result(&roundtrip), "OK t");
+    assert_eq!(
+        neovm_eval::emacs_core::print::format_eval_result(&roundtrip),
+        "OK t"
+    );
 }
 
 #[test]
@@ -639,7 +642,10 @@ fn coding_system_alias_of_a_charset_system_encodes_through_its_target() {
     let mut ev = crate::test_utils::runtime_startup_context();
     let _ = ev.eval_str("(define-coding-system-alias 'neo-alias-8859-15 'iso-8859-15)");
     let encoded = ev.eval_str("(append (encode-coding-string \"\\u00e9\" 'neo-alias-8859-15) nil)");
-    assert_eq!(neovm_eval::emacs_core::print::format_eval_result(&encoded), "OK (233)");
+    assert_eq!(
+        neovm_eval::emacs_core::print::format_eval_result(&encoded),
+        "OK (233)"
+    );
 }
 
 #[test]

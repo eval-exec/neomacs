@@ -5,10 +5,10 @@ use neovm_value::value::scratch_bridge::{
     push_scratch_gc_root, restore_scratch_gc_roots, save_scratch_gc_roots,
 };
 
-use neovm_value::value::positions::CharPos0;
-use neovm_value::value::positions::CharLen;
-use neovm_value::value::Value;
 use neovm_edit::buffer::undo::*;
+use neovm_value::value::Value;
+use neovm_value::value::positions::CharLen;
+use neovm_value::value::positions::CharPos0;
 
 /// The limits can only come from the variables: a `undo-limit' holding
 /// something GNU's `DEFVAR_INT' slot could never hold (`src/data.c:1475-1483'

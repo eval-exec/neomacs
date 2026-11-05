@@ -1,21 +1,21 @@
 use super::*;
 
-use neovm_text::emacs_core::text_host::TextHost;
 use neovm_edit::buffer::{EmacsBytePos, LispCharPos1};
+use neovm_text::emacs_core::charset::prepared_mule::CharsetEncoder;
+use neovm_text::emacs_core::text_host::TextHost;
+use neovm_value::emacs_char;
 use neovm_value::error::LispCondition;
 use neovm_value::error::{EvalResult, Flow, signal};
 use neovm_value::error::{expect_args, expect_max_args, expect_min_args};
+use neovm_value::heap_registry::{HeapRegistryHandle, HeapRegistrySlot};
 use neovm_value::tagged::value::SymbolMode;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, RwLock};
-use neovm_text::emacs_core::charset::prepared_mule::CharsetEncoder;
-use neovm_value::heap_registry::{HeapRegistryHandle, HeapRegistrySlot};
-    use neovm_value::emacs_char;
 
-use neovm_value::value::Value;
-use neovm_value::intern::intern;
 use crate::emacs_core::eval::Context;
+use neovm_value::intern::intern;
+use neovm_value::value::Value;
 
 use neovm_text::emacs_core::charset::*;
 

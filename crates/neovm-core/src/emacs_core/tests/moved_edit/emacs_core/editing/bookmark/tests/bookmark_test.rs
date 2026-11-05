@@ -5,15 +5,15 @@ use std::path::PathBuf;
 use neovm_value::error::LispCondition;
 use neovm_value::error::expect_args;
 use neovm_value::error::expect_min_args;
-use std::fs;
-use std::time::{SystemTime, UNIX_EPOCH};
 use neovm_value::error::{EvalResult, Flow, signal};
 use neovm_value::gc_trace::GcTrace;
+use std::fs;
+use std::time::{SystemTime, UNIX_EPOCH};
 use strum::{EnumString, IntoStaticStr};
 
-use std::collections::HashMap;
-use neovm_value::value::Value;
 use neovm_edit::buffer::LispCharPos1;
+use neovm_value::value::Value;
+use std::collections::HashMap;
 
 use neovm_edit::emacs_core::bookmark::*;
 
@@ -168,7 +168,6 @@ fn bookmark_lookup_projection_preserves_semantic_name_properties() {
 
 #[test]
 fn bookmark_copied_properties_have_only_manager_roots() {
-
     struct Probe(usize);
     fn text(probes: &mut Vec<Probe>, property: Value, mut text: LispString) -> LispString {
         let payload = Value::vector(vec![Value::fixnum(probes.len() as i64)]);

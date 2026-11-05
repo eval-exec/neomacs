@@ -1,5 +1,5 @@
-use std::time::Instant;
 use std::time::Duration;
+use std::time::Instant;
 
 use neovm_edit::buffer::syntax_class::{SyntaxClass, SyntaxTableView};
 use neovm_edit::buffer::{

@@ -91,7 +91,7 @@ impl SavedPointBeforeCommand {
     }
 
     /// True when both handles name the same editor-global cell.
-#[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn shares_cell_with(&self, other: &Self) -> bool {
         Rc::ptr_eq(&self.cell, &other.cell)

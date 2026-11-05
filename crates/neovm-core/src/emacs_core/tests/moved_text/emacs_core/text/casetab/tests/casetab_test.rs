@@ -1,5 +1,6 @@
 use super::*;
 
+use neovm_edit::buffer::buffer::BUFFER_SLOT_CASE_TABLE;
 use neovm_value::error::LispCondition;
 use neovm_value::error::expect_args;
 use neovm_value::error::{EvalResult, Flow, signal};
@@ -7,16 +8,15 @@ use neovm_value::intern::{SymId, intern};
 use neovm_value::tagged::SymbolMode;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-    use neovm_edit::buffer::buffer::BUFFER_SLOT_CASE_TABLE;
 
-use neovm_value::value::Value;
-use neovm_eval::emacs_core::eval::Context;
-use crate::emacs_core::casetab_entries::builtin_standard_case_table;
-use crate::emacs_core::casetab_entries::builtin_set_standard_case_table;
-use crate::emacs_core::casetab_entries::builtin_set_case_table;
-use crate::emacs_core::casetab_entries::builtin_current_case_table;
 use crate::emacs_core::casefiddle_entries::builtin_upcase_region;
+use crate::emacs_core::casetab_entries::builtin_current_case_table;
+use crate::emacs_core::casetab_entries::builtin_set_case_table;
+use crate::emacs_core::casetab_entries::builtin_set_standard_case_table;
+use crate::emacs_core::casetab_entries::builtin_standard_case_table;
+use neovm_eval::emacs_core::eval::Context;
 use neovm_text::emacs_core::casetab::*;
+use neovm_value::value::Value;
 
 #[test]
 fn manager_upcase_string() {
@@ -280,13 +280,21 @@ fn custom_case_table_makes_char_equal_case_fold() {
     // case-fold-search t, (char-equal ?x ?Y) => t. GNU oracle: t.
     let mut ev = ctx_with_pair('x' as i64, 'Y' as i64);
     ev.set_variable("case-fold-search", Value::T);
-    let r = neovm_eval::emacs_core::builtins::builtin_char_equal_2(&mut ev, Value::char('x'), Value::char('Y'))
+    let r = neovm_eval::emacs_core::builtins::builtin_char_equal_2(
+        &mut ev,
+        Value::char('x'),
+        Value::char('Y'),
+    )
     .unwrap();
     assert!(r.is_t(), "expected t, got {r:?}");
 
     // case-fold-search nil: exact match only.
     ev.set_variable("case-fold-search", Value::NIL);
-    let r = neovm_eval::emacs_core::builtins::builtin_char_equal_2(&mut ev, Value::char('x'), Value::char('Y'))
+    let r = neovm_eval::emacs_core::builtins::builtin_char_equal_2(
+        &mut ev,
+        Value::char('x'),
+        Value::char('Y'),
+    )
     .unwrap();
     assert!(r.is_nil(), "expected nil, got {r:?}");
 }
@@ -304,16 +312,25 @@ fn standard_case_table_path_is_byte_identical() {
             .unwrap();
     assert_eq!(down.as_int(), Some('a' as i64));
     // Non-ASCII Unicode casing still works (é <-> É).
-    let up =
-        neovm_eval::emacs_core::builtins::builtin_upcase_in_state_1(&mut ev, Value::string("héllo"))
-            .unwrap();
+    let up = neovm_eval::emacs_core::builtins::builtin_upcase_in_state_1(
+        &mut ev,
+        Value::string("héllo"),
+    )
+    .unwrap();
     assert_eq!(up.as_utf8_str(), Some("HÉLLO"));
-    let down = neovm_eval::emacs_core::builtins::builtin_downcase_in_state_1(&mut ev, Value::string("HÉLLO"))
+    let down = neovm_eval::emacs_core::builtins::builtin_downcase_in_state_1(
+        &mut ev,
+        Value::string("HÉLLO"),
+    )
     .unwrap();
     assert_eq!(down.as_utf8_str(), Some("héllo"));
     // char-equal still case-folds with the standard table.
     ev.set_variable("case-fold-search", Value::T);
-    let r = neovm_eval::emacs_core::builtins::builtin_char_equal_2(&mut ev, Value::char('a'), Value::char('A'))
+    let r = neovm_eval::emacs_core::builtins::builtin_char_equal_2(
+        &mut ev,
+        Value::char('a'),
+        Value::char('A'),
+    )
     .unwrap();
     assert!(r.is_t());
 }

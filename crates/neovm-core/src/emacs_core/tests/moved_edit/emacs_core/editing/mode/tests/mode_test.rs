@@ -1,12 +1,12 @@
 use super::*;
 
-use std::collections::HashMap;
 use neovm_value::gc_trace::GcTrace;
 use neovm_value::intern::SymId;
+use std::collections::HashMap;
 
-use neovm_value::value::Value;
-use neovm_value::heap_types::LispString;
 use neovm_edit::emacs_core::mode::*;
+use neovm_value::heap_types::LispString;
+use neovm_value::value::Value;
 
 use neovm_value::intern::{intern, resolve_sym};
 

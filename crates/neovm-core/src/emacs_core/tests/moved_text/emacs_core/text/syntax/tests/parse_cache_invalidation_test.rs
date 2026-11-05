@@ -5,13 +5,13 @@
 
 use super::*;
 
-use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::sync::{LazyLock, Mutex};
 
-use neovm_eval::emacs_core::eval::Context;
 use neovm_edit::buffer::syntax_cache::Invalidation;
 use neovm_edit::buffer::syntax_cache::SyntaxMutationNotes;
+use neovm_eval::emacs_core::eval::Context;
 
 use neovm_text::emacs_core::syntax::parse_cache::*;
 

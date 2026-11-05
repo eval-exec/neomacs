@@ -21,10 +21,10 @@ use std::cell::Cell;
 use std::collections::VecDeque;
 use std::sync::OnceLock;
 
-use neovm_value::value::list_to_vec;
-use neovm_value::value::Value;
-use neovm_eval::emacs_core::print::format_eval_result;
 use crate::emacs_core::eval::Context;
+use neovm_eval::emacs_core::print::format_eval_result;
+use neovm_value::value::Value;
+use neovm_value::value::list_to_vec;
 
 use neovm_value::error::FlowKind;
 
@@ -213,7 +213,10 @@ fn vertical_motion_skips_ellipsis_bearing_invisible_runs() {
                   (progn (goto-char 1) (list (vertical-motion 2) (point)))))"#,
         )
         .expect("ellipsis-bearing invisible vertical motion");
-    assert_eq!(crate::emacs_core::print::print_value(&value), "((1 22) (2 27))");
+    assert_eq!(
+        crate::emacs_core::print::print_value(&value),
+        "((1 22) (2 27))"
+    );
 }
 
 #[test]

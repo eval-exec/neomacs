@@ -1,5 +1,5 @@
-use neovm_value::value::Value;
 use super::*;
+use neovm_value::value::Value;
 
 #[test]
 fn empty_narrowing_hides_text_properties_and_keeps_overlay_carriers() {

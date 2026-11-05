@@ -1,6 +1,6 @@
 use super::*;
 
-    use neovm_value::emacs_char;
+use neovm_value::emacs_char;
 
 use crate::emacs_core::print::PrintOptions;
 

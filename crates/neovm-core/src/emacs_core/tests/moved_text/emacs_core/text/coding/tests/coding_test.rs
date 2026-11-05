@@ -12,14 +12,14 @@ use neovm_value::intern::WellKnown;
 use neovm_value::tagged::value::SymbolMode;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use std::collections::{HashMap, HashSet};
+use std::ptr;
 use strum::{EnumString, IntoStaticStr};
-    use std::ptr;
 
-use neovm_value::value::list_to_vec;
-use neovm_value::value::Value;
-use neovm_value::intern::SymId;
 use neovm_eval::emacs_core::eval::Context;
 use neovm_text::emacs_core::coding::*;
+use neovm_value::intern::SymId;
+use neovm_value::value::Value;
+use neovm_value::value::list_to_vec;
 
 use neovm_value::error::{FlowKind, FlowResultExt as _};
 

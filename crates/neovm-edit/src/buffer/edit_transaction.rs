@@ -2520,8 +2520,6 @@ impl ReplaceSideEffectPolicy {
 #[path = "edit_transaction/tests/edit_transaction_test.rs"]
 mod tests;
 
-
-
 #[cfg(test)]
 #[path = "edit_transaction/tests/casify_extent.rs"]
 mod casify_extent_tests;

@@ -35,7 +35,7 @@ enum CharsetLookup {
 }
 
 impl CharsetEncoder {
-#[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn new(name: SymId) -> Self {
         Self::prepare(CharsetLookup::Name(name))

@@ -1,11 +1,11 @@
 use crate::emacs_core::edit_host::{EditHost, EditVariableRead};
 
-#[cfg(test)]
-use std::time::Instant;
 use neovm_value::error::{
     EvalResult, Flow, LispCondition, TakeCount, expect_args, expect_args_range, expect_fixnum,
     expect_max_args, expect_min_args, signal,
 };
+#[cfg(test)]
+use std::time::Instant;
 
 // ===========================================================================
 // Buffer operations (require evaluator for BufferManager access)
@@ -5081,8 +5081,6 @@ pub(crate) fn builtin_overlay_properties_in_buffers(
         SymbolMode::Bare,
     )
 }
-
-
 
 #[doc(hidden)]
 impl ReplaceRegionChangeRun {

@@ -5549,17 +5549,6 @@ pub mod match_stats {
 // Tests
 // ---------------------------------------------------------------------------
 
-
-
-
-
-
-
-
-
-
-
-
 fn buffer_search_translation_table_with_symbols(
     buf: &Buffer,
     case_fold: bool,
@@ -5570,9 +5559,6 @@ fn buffer_search_translation_table_with_symbols(
     }
     crate::emacs_core::casetab::buffer_case_canon_table_with_symbols(buf, mode)
 }
-
-
-
 
 /// Debug-only carrier TLS fingerprint for this module's classified records.
 #[cfg(debug_assertions)]

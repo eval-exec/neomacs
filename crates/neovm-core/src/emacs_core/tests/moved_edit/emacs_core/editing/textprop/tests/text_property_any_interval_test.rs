@@ -1,24 +1,24 @@
 //! GNU-derived semantic coverage for the immutable text-property-any scan.
 //! Expected results were captured with GNU Emacs 31.1 in the lane sandbox.
 
-use neovm_edit::emacs_core::edit_host::{EditHost, EditVariableRead};
-use neovm_value::error::LispCondition;
-use neovm_value::error::{EvalResult, Flow, signal};
-use neovm_value::error::{expect_max_args, expect_min_args};
-use neovm_value::intern::{NIL_SYM_ID, T_SYM_ID};
-use neovm_value::symbol::CanonicalAccess;
-use neovm_value::symbol::Obarray;
 use neovm_edit::buffer::{
     Buffer, BufferId, BufferManager, CharLen, CharPos0, CharRange, EmacsBytePos, EmacsByteRange,
     LispCharPos1,
 };
 use neovm_edit::emacs_core::display_metrics::WindowId;
+use neovm_edit::emacs_core::edit_host::{EditHost, EditVariableRead};
+use neovm_value::error::LispCondition;
+use neovm_value::error::{EvalResult, Flow, signal};
+use neovm_value::error::{expect_max_args, expect_min_args};
 use neovm_value::intern::SymId;
 use neovm_value::intern::WellKnown;
+use neovm_value::intern::{NIL_SYM_ID, T_SYM_ID};
+use neovm_value::symbol::CanonicalAccess;
+use neovm_value::symbol::Obarray;
 use neovm_value::tagged::value::SymbolMode;
 use std::collections::{HashMap, HashSet};
+use std::sync::OnceLock;
 use strum::IntoStaticStr;
-        use std::sync::OnceLock;
 
 #[test]
 fn text_property_any_interval_buffer_encodings_and_dense_boundaries() {

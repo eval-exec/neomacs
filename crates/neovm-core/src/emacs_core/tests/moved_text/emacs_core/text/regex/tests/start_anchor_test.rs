@@ -1,14 +1,14 @@
 //! P3.3 Stage 0 (`NEOVM_REGEX_ANCHOR_ALT`): a pattern whose every
 //! alternative begins with `^` searches line starts only.
 
-use neovm_value::tagged::SymbolMode;
-use rustc_hash::FxHashMap;
-use std::collections::HashSet;
 use neovm_text::emacs_core::syntax::SyntaxClass;
+use neovm_value::tagged::SymbolMode;
 use neovm_value::{emacs_char, value::Value};
 use regex_automata::{MatchKind, Span};
+use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
-    use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::collections::HashSet;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use super::*;
 

@@ -3605,10 +3605,6 @@ pub fn line_number_display_width<H: EditHost>(host: &mut H, args: &[Value]) -> E
     }
 }
 
-
-
-
-
 /// Carrier park: drop the last-known-column memo.
 #[doc(hidden)]
 pub fn reset_carrier_tls() {

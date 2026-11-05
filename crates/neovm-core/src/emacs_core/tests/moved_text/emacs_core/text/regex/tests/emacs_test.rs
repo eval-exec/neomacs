@@ -1,17 +1,17 @@
 use super::*;
 
 use neovm_value::tagged::SymbolMode;
-use rustc_hash::FxHashMap;
-use std::collections::HashSet;
 use regex_automata::{MatchKind, Span};
+use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
-    use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::collections::HashSet;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use neovm_value::value::Value;
-use neovm_edit::buffer::syntax_class::SyntaxClass;
 use crate::fuzz_support::{
     RegexCase, RegexCheck, RegexDifferential, SearchTarget, check_regex_differential,
 };
+use neovm_edit::buffer::syntax_class::SyntaxClass;
+use neovm_value::value::Value;
 
 use neovm_text::emacs_core::regex_emacs::*;
 
@@ -116,12 +116,18 @@ fn prepared_regexp_scoped_gc_preserves_compiled_and_callback_paths() {
   (prepared-regexp-scoped-gc))"#,
     );
     let expected = "OK ((3 nil) (2 nil) (3 nil) (5 t))";
-    assert_eq!(neovm_eval::emacs_core::print::format_eval_result(&warm), expected);
+    assert_eq!(
+        neovm_eval::emacs_core::print::format_eval_result(&warm),
+        expected
+    );
     eval.gc_stress = true;
     let before = eval.gc_count;
     let result = eval.eval_str("(prepared-regexp-scoped-gc)");
     let collections = eval.gc_count - before;
-    assert_eq!(neovm_eval::emacs_core::print::format_eval_result(&result), expected);
+    assert_eq!(
+        neovm_eval::emacs_core::print::format_eval_result(&result),
+        expected
+    );
     // One explicit callback collection alone must not satisfy the test.
     assert!(collections > 1, "expected automatic stress collections");
     eprintln!("prepared-regexp scoped stress collections: {collections}");
@@ -1925,12 +1931,18 @@ fn search_entries_preserve_fresh_arguments_across_callback_gc() {
         "OK ((5 5 t (4 5 buffer)) (5 5 t (5 6 buffer)) ",
         "(5 5 t (4 5 buffer)) (5 5 t (5 6 buffer)))",
     );
-    assert_eq!(neovm_eval::emacs_core::print::format_eval_result(&warm), expected);
+    assert_eq!(
+        neovm_eval::emacs_core::print::format_eval_result(&warm),
+        expected
+    );
     eval.gc_stress = true;
     let before = eval.gc_count;
     let result = eval.eval_str("(fixed-search-scoped-gc)");
     let collections = eval.gc_count - before;
-    assert_eq!(neovm_eval::emacs_core::print::format_eval_result(&result), expected);
+    assert_eq!(
+        neovm_eval::emacs_core::print::format_eval_result(&result),
+        expected
+    );
     assert!(
         collections > 4,
         "expected automatic collections beyond four callbacks"

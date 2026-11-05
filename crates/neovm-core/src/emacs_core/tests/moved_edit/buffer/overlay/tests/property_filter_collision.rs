@@ -1,6 +1,6 @@
-use neovm_value::value::Value;
-use neovm_value::heap_types::byte_positions::EmacsByteRange;
 use super::*;
+use neovm_value::heap_types::byte_positions::EmacsByteRange;
+use neovm_value::value::Value;
 
 #[test]
 fn colliding_property_signatures_keep_filtered_sweeps_and_extents_exact() {

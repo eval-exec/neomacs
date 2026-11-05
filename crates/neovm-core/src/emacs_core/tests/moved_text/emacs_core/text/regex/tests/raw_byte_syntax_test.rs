@@ -1,13 +1,13 @@
 //! GNU full-code syntax, category and script lookups for raw-byte regexp input.
 
-use neovm_value::tagged::SymbolMode;
-use rustc_hash::FxHashMap;
-use std::collections::HashSet;
 use neovm_text::emacs_core::syntax::SyntaxClass;
+use neovm_value::tagged::SymbolMode;
 use neovm_value::{emacs_char, value::Value};
 use regex_automata::{MatchKind, Span};
+use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
-    use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::collections::HashSet;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 
 #[test]
 fn regexp_raw_byte_word_preserves_byte8_syntax_key() {

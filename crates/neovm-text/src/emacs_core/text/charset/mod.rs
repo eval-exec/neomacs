@@ -804,7 +804,7 @@ impl CharsetRegistry {
     }
 
     /// Return the list of all charset names (unordered).
-#[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub fn names(&self) -> Vec<String> {
         self.charsets
@@ -3211,11 +3211,6 @@ fn classify_string_charsets(ls: &neovm_value::heap_types::LispString) -> Vec<&'s
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
-
-
-
-
-
 
 /// Carrier park: forget the installed registry handle (a plain store). The
 /// World's registry stays alive through its Contexts; the idle carrier keeps

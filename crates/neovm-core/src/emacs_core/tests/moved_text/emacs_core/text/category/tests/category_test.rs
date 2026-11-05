@@ -1,17 +1,17 @@
 use super::*;
 
+use neovm_edit::buffer::buffer::BUFFER_SLOT_CATEGORY_TABLE;
+use neovm_text::emacs_core::text_host::TextHost;
+use neovm_value::boolvec::{self, BoolVectorView};
 use neovm_value::error::LispCondition;
+use neovm_value::error::{EvalResult, Flow, signal};
 use neovm_value::error::{expect_args, expect_max_args, expect_min_args};
 use neovm_value::tagged::SymbolMode;
 use std::cell::{Cell, RefCell};
-use neovm_text::emacs_core::text_host::TextHost;
-use neovm_value::boolvec::{self, BoolVectorView};
-use neovm_value::error::{EvalResult, Flow, signal};
-    use neovm_edit::buffer::buffer::BUFFER_SLOT_CATEGORY_TABLE;
 
-use neovm_value::value::Value;
 use neovm_eval::emacs_core::eval::Context;
 use neovm_text::emacs_core::category::*;
+use neovm_value::value::Value;
 
 use neovm_value::error::FlowKind;
 

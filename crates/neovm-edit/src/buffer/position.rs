@@ -143,7 +143,7 @@ impl TextPositionAnchor {
         }
     }
 
-#[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(in crate::buffer) const fn from_usize(char_pos: usize, emacs_byte_pos: usize) -> Self {
         Self {

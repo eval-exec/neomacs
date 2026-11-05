@@ -1395,9 +1395,6 @@ pub fn builtin_char_resolve_modifiers(args: Vec<Value>) -> EvalResult {
 // Tests
 // ---------------------------------------------------------------------------
 
-
-
-
 #[doc(hidden)]
 impl CasedRegion {
     #[doc(hidden)]
