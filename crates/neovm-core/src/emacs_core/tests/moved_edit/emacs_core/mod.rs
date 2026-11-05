@@ -11,3 +11,4 @@ pub mod navigation;
 pub mod rect;
 pub mod textprop;
 pub mod undo;
+pub use neovm_eval::emacs_core::print::format_eval_result;

@@ -303,7 +303,7 @@ impl WarmRegexCaches {
             None,
         )
         .unwrap();
-        crate::emacs_core::commands::casetab_entries::builtin_set_case_table(ctx, vec![custom]).unwrap();
+        crate::emacs_core::casetab_entries::builtin_set_case_table(ctx, vec![custom]).unwrap();
         let literal_translation =
             buffer_search_translation(ctx.edit.buffers.current_buffer().unwrap(), true).unwrap();
         ctx.gc_inhibit_depth -= 1;
@@ -599,7 +599,7 @@ fn populate_cache(ctx: &mut Context, owner: CacheOwner) -> (Value, Value) {
                 None,
             )
             .unwrap();
-            crate::emacs_core::commands::casetab_entries::builtin_set_case_table(ctx, vec![custom]).unwrap();
+            crate::emacs_core::casetab_entries::builtin_set_case_table(ctx, vec![custom]).unwrap();
             let buffer = ctx.edit.buffers.current_buffer().unwrap();
             let table = neovm_text::emacs_core::casetab::buffer_case_canon_table(buffer).unwrap();
             assert_eq!(

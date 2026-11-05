@@ -91,7 +91,7 @@ fn gc_tls_ownership_regex_literal_translation_keeps_its_table_alive() {
         None,
     )
     .unwrap();
-    crate::emacs_core::commands::casetab_entries::builtin_set_case_table(&mut ctx, vec![custom]).unwrap();
+    crate::emacs_core::casetab_entries::builtin_set_case_table(&mut ctx, vec![custom]).unwrap();
     let buffer = ctx.edit.buffers.current_buffer().unwrap();
     let table = neovm_text::emacs_core::casetab::buffer_case_canon_table(buffer).unwrap();
     let translation = buffer_search_translation(buffer, true).unwrap();

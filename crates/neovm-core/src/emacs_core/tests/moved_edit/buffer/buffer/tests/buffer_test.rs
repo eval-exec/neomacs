@@ -1,4 +1,5 @@
 use super::*;
+use neovm_value::intern::intern;
 use std::rc::Rc;
 use std::sync::atomic::Ordering;
 

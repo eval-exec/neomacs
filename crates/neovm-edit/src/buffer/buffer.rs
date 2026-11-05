@@ -2348,6 +2348,7 @@ pub struct BufferDumpParts {
 // Buffer
 // ---------------------------------------------------------------------------
 
+#[cfg(not(any(test, feature = "test-support")))]
 /// A single text buffer with point, mark, narrowing, markers, and local vars.
 #[derive(Clone)]
 pub struct Buffer {
@@ -2483,6 +2484,139 @@ pub struct Buffer {
     /// buffer supersedes the point saved for every other one -- see
     /// [`SavedPointBeforeCommand`].
     pub(crate) saved_point_before_command: SavedPointBeforeCommand,
+}
+#[cfg(any(test, feature = "test-support"))]
+/// A single text buffer with point, mark, narrowing, markers, and local vars.
+#[derive(Clone)]
+pub struct Buffer {
+    /// Mode-line line-number anchor (GNU w->base_line_pos/base_line_number,
+    /// xdisp.c:29486-29620, held per BUFFER here): the accessible-region
+    /// origin plus a recently displayed line start, so `%l` counts newlines
+    /// only from the anchor instead of from BUF_BEGV. Validity is checked
+    /// against both the restriction and the unchanged-region accumulator (the
+    /// BEG_UNCHANGED analog) at each use.
+    pub(crate) line_number_anchor: std::cell::Cell<Option<ModeLineNumberAnchor>>,
+    /// Unique identifier.
+    pub id: BufferId,
+    /// Buffer name (e.g. `"*scratch*"`). Mirrors GNU `struct buffer.name_`.
+    pub(crate) name: Value,
+    /// Buffer name before the last rename, or before death after kill.
+    /// Mirrors GNU `struct buffer.last_name_` and `BVAR (buf, last_name)`.
+    pub(crate) last_name: Value,
+    /// Base buffer when this is an indirect buffer.
+    pub base_buffer: Option<BufferId>,
+    /// The underlying text storage.
+    pub text: BufferText,
+    /// Point — paired character and Emacs-byte cursor position.
+    pub(crate) point: TextPositionAnchor,
+    /// GNU `BVAR(buf, mark)` — a real Lisp_Marker.  This IS the mark;
+    /// there are no separate mark position fields (matching GNU's design).
+    /// The marker tracks its own position through the chain; read it via
+    /// `mark_byte()` / `mark_char()` / `mark()`. The reference is a GC root:
+    /// `BufferManager`'s trace synthesizes its `Value`.
+    pub mark_marker: MarkerRef,
+    /// Beginning of accessible (narrowed) portion, inclusive.
+    pub(crate) accessible_start: TextPositionAnchor,
+    /// End of accessible (narrowed) portion, exclusive.
+    pub(crate) accessible_end: TextPositionAnchor,
+    /// GNU `BUF_AUTOSAVE_MODIFF`: recent auto-save state is
+    /// `save_modiff < autosave_modified_tick`.
+    pub(crate) autosave_modified_tick: i64,
+    /// GNU `last_window_start`: start position of the most recently
+    /// disconnected window that showed this buffer.
+    pub(crate) last_window_start: LispCharPos1,
+    /// GNU `last_selected_window`: most recently selected live window showing
+    /// this buffer, when known.
+    pub(crate) last_selected_window: Option<WindowId>,
+    /// GNU `inhibit_buffer_hooks`: suppress buffer lifecycle hooks for
+    /// temporary/internal buffers.
+    pub(crate) inhibit_buffer_hooks: bool,
+    /// GNU-style noncurrent PT/BEGV/ZV markers for buffers that share text.
+    pub state_markers: Option<BufferStateMarkers>,
+    /// `local_var_alist` — list of `(SYMBOL . VALUE)` per-buffer
+    /// bindings for `SYMBOL_LOCALIZED` variables. Mirrors GNU
+    /// `BVAR(buffer, local_var_alist)` (`buffer.h:362`). This is
+    /// the single source of truth for all Lisp-side per-buffer
+    /// bindings that are not slot-backed (FORWARDED) and not the
+    /// special buffer-undo-list (which has its own SharedUndoState).
+    local_var_alist: LocalVariableBindings,
+    /// `BVAR(buffer, keymap)` — the buffer's local keymap
+    /// (`buffer.h:385`). `Value::NIL` when no local keymap is set.
+    pub(crate) keymap: neovm_value::value::Value,
+    /// GNU `b->modtime` (`src/buffer.h:645-655`) plus the `b->base_buffer`
+    /// link `record_first_change` follows to read it (`src/undo.c:213-214`).
+    /// Reached only through [`Self::visited_file_modtime`],
+    /// [`Self::set_visited_file_modtime`] and
+    /// [`Self::first_change_modtime`], which are GNU's three readers.
+    modtime: VisitedFileModtimeSlot,
+    /// File size in bytes when `modtime` was captured.
+    pub(crate) modtime_size: Option<i64>,
+    /// `BUFFER_OBJFWD` slot table — per-buffer storage for variables
+    /// that are forwarded into the C-side `struct buffer` in GNU.
+    /// Mirrors the union of GNU's `Lisp_Object` slot fields in
+    /// `buffer.h:319-462`. Indexed by [`neovm_value::forward::LispBufferObjFwd::offset`].
+    ///
+    /// Phase 8a of the symbol-redirect refactor adds the slot table.
+    /// Phase 8b will migrate the hardcoded fields ([`Self::file_name`],
+    /// [`Self::auto_save_file_name`], [`Self::read_only`],
+    /// [`Self::multibyte`]) into slots and remove the duplicates.
+    pub slots: [neovm_value::value::Value; BUFFER_SLOT_COUNT],
+    /// Per-slot "is buffer-local in this buffer" bitmap. Bit `N` is
+    /// set when this buffer has its own local value for the slot at
+    /// offset `N`. Mirrors GNU `b->local_flags[]` (`buffer.h:646`,
+    /// `char[MAX_PER_BUFFER_VARS]`); we use a `u64` bitmap because
+    /// `BUFFER_SLOT_COUNT == 64`.
+    ///
+    /// **Semantics** (mirrors `set_internal` SYMBOL_FORWARDED arm at
+    /// `data.c:1764-1791`):
+    /// - Always-local slots (`local_flags_idx == -1`) ignore this
+    ///   bitmap entirely; the slot is authoritative.
+    /// - Conditional slots (`local_flags_idx >= 0`): a read returns
+    ///   `slots[N]` iff bit `N` is set, otherwise the global default
+    ///   from `Context::buffer_defaults[N]`. A write sets the bit
+    ///   and writes the slot.
+    ///
+    /// Phase 10D wires the bitmap up; Phase 10A-C only used the
+    /// always-local arm.
+    pub(crate) local_flags: u64,
+    /// Overlays attached to the buffer.
+    pub overlays: OverlayList,
+    /// GNU `BUF_OVERLAY_MODIFF`: incremented when live overlay ranges or
+    /// properties change so redisplay observes overlay-only UI updates.
+    pub(crate) overlay_modified_tick: i64,
+    /// Memo for [`Self::overlay_content_digest`], keyed on the overlay tick.
+    /// Not part of the buffer's identity: it is derived state, so clones and
+    /// dumps may leave it empty and it recomputes on demand.
+    pub(crate) overlay_digest_cache: std::cell::Cell<Option<(i64, u64)>>,
+    /// Derived native wrap rules with mutator-local collection dependencies.
+    /// No Lisp objects are retained; dumps start with an empty cache.
+    pub(crate) word_wrap_policy_cache:
+        std::cell::RefCell<Option<std::rc::Rc<crate::emacs_core::word_wrap::CachedWordWrapPolicy>>>,
+    /// Memo for [`Self::automatic_composition_spans`], keyed on everything
+    /// the scan reads. Derived state: clones and dumps may leave it empty and
+    /// it recomputes on demand.
+    pub(crate) automatic_composition_cache: std::cell::RefCell<
+        Option<(
+            AutomaticCompositionKey,
+            std::rc::Rc<Vec<super::composition::AutomaticCompositionSpan>>,
+        )>,
+    >,
+    /// Memo of the visible-range scan (`NEOMACS_COMPOSITION_FASTPATH`).
+    pub(crate) automatic_composition_visible_cache: std::cell::RefCell<
+        Option<(
+            AutomaticCompositionVisibleKey,
+            std::rc::Rc<Vec<super::composition::AutomaticCompositionSpan>>,
+        )>,
+    >,
+    /// Shared undo owner for this text.
+    pub undo_state: SharedUndoState,
+    /// Handle on the editor's ONE saved point-before-command-or-undo, GNU's
+    /// `point_before_last_command_or_undo` / `buffer_before_last_command_or_undo`
+    /// globals (src/keyboard.c:232-233).  Every buffer a `BufferManager` owns
+    /// holds a clone of the same cell, so a command-loop iteration in one
+    /// buffer supersedes the point saved for every other one -- see
+    /// [`SavedPointBeforeCommand`].
+    pub saved_point_before_command: SavedPointBeforeCommand,
 }
 
 /// Stand-in digest for an overlay set that cannot be content-addressed. Mixed
@@ -5889,6 +6023,7 @@ impl LiveBuffers {
     }
 }
 
+#[cfg(not(any(test, feature = "test-support")))]
 /// A current-buffer selection and a stable view of editor buffer storage.
 ///
 /// A runtime World owns the storage allocation. Standalone managers and
@@ -5904,6 +6039,23 @@ pub struct BufferManager {
     /// Points into a stable live-buffer allocation, or is null for no selection.
     current_ptr: Option<NonNull<Buffer>>,
     backing: BufferBacking,
+}
+#[cfg(any(test, feature = "test-support"))]
+/// A current-buffer selection and a stable view of editor buffer storage.
+///
+/// A runtime World owns the storage allocation. Standalone managers and
+/// detached clones own their storage here; cloning always copies buffers.
+/// No second mutable view or thread-switch authority is created by this type.
+#[repr(C)]
+pub struct BufferManager {
+    pub storage_ptr: NonNull<BufferStorage>,
+    /// Written only by `set_current_id`, along with the raw id and pointer.
+    current: Option<BufferId>,
+    /// Zero means there is no current buffer; real ids begin at one.
+    pub current_raw: u64,
+    /// Points into a stable live-buffer allocation, or is null for no selection.
+    current_ptr: Option<NonNull<Buffer>>,
+    pub backing: BufferBacking,
 }
 
 /// Stable editor-owned storage behind a BufferManager view.

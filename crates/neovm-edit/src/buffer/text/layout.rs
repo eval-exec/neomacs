@@ -1,9 +1,15 @@
 use crate::buffer::position::{CharLen, CharPos0, EmacsByteLen, EmacsBytePos};
 use crate::buffer::text::TextMetrics;
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
+#[cfg(not(any(test, feature = "test-support")))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(in crate::buffer) struct GapCompatState {
+    pos: CharPos0,
+    byte_len: EmacsByteLen,
+}
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GapCompatState {
     pos: CharPos0,
     byte_len: EmacsByteLen,
 }

@@ -23,7 +23,10 @@ pub(in crate::buffer) use emacs_bytes::{
 pub use kind::BufferTextBackendKind;
 #[doc(hidden)]
 pub use kind::ImplementedBufferTextBackendKind;
+#[cfg(not(any(test, feature = "test-support")))]
 pub(in crate::buffer) use layout::GapCompatState;
+#[cfg(any(test, feature = "test-support"))]
+pub use layout::GapCompatState;
 #[cfg(test)]
 pub(in crate::buffer) use layout::{GapDebugLayout, TextBackendDebugLayout};
 pub use metrics::TextMetrics;

@@ -200,8 +200,18 @@ pub(crate) use neovm_value::heap_types::overlay_storage::instrumentation::{
     reset_overlay_full_enumeration_visit_count,
 };
 
+#[cfg(not(any(test, feature = "test-support")))]
 pub struct OverlayList {
     index: OverlayIndex,
+    snapshot: RefCell<Option<OverlaySnapshot>>,
+    // Permanent symbol identities only: no additional Lisp roots. A small
+    // negative cache prevents Bloom collisions from causing full scans on
+    // every redisplay. Membership and property writes clear it with snapshots.
+    absent_properties: Cell<[Option<neovm_value::intern::SymId>; 8]>,
+}
+#[cfg(any(test, feature = "test-support"))]
+pub struct OverlayList {
+    pub index: OverlayIndex,
     snapshot: RefCell<Option<OverlaySnapshot>>,
     // Permanent symbol identities only: no additional Lisp roots. A small
     // negative cache prevents Bloom collisions from causing full scans on

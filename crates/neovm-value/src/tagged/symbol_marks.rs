@@ -51,7 +51,6 @@ impl SymbolMarkBits {
         true
     }
 
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// Whether `id` was marked this cycle.
     #[inline]
     pub(crate) fn contains(&self, id: SymId) -> bool {
@@ -70,6 +69,11 @@ impl SymbolMarkBits {
     }
 }
 
+#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "symbol_marks/tests/symbol_marks_test.rs"]
 mod tests;
+#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
+#[path = "symbol_marks/tests/symbol_marks_test.rs"]
+pub mod tests;

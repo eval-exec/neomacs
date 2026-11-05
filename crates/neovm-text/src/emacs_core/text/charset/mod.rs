@@ -386,6 +386,7 @@ pub struct CharsetInfo {
     pub plist: Vec<(SymId, Value)>,
 }
 
+#[cfg(not(any(test, feature = "test-support")))]
 /// Registry of known charsets, keyed by name.
 #[doc(hidden)]
 pub struct CharsetRegistry {
@@ -426,6 +427,45 @@ pub struct CharsetRegistry {
     /// holds charset ids, so re-pointing an alias later does not change which
     /// charsets are preferred.
     preferred_identities: Vec<SymId>,
+    /// Next auto-assigned charset ID.
+    next_id: i64,
+}
+#[cfg(any(test, feature = "test-support"))]
+/// Registry of known charsets, keyed by name.
+#[doc(hidden)]
+pub struct CharsetRegistry {
+    // Keyed by SymId: small, dense, and probed twice per decoded or
+    // encoded character, so the hash is the fast one.
+    pub charsets: rustc_hash::FxHashMap<SymId, CharsetInfo>,
+    /// Aliases mapping an alias name to its canonical charset name. Aliases
+    /// resolve to the target dynamically (like GNU `define-charset-alias`), so
+    /// later mutations of the target's plist (e.g. characters.el setting
+    /// `preferred-coding-system`) are visible through the alias.
+    aliases: rustc_hash::FxHashMap<SymId, SymId>,
+    /// Priority-ordered list of charset names.
+    pub priority: Vec<SymId>,
+    /// GNU's ordered charset-ID list, represented by stable physical
+    /// definition keys. Alias lookup may replace a public name's meaning but
+    /// never changes an existing identity in this list. This private mirror
+    /// serves only Mule ordering; the public priority-list behavior is kept
+    /// separate. Its existing per-mutator registry owns these plain symbol
+    /// IDs and snapshots/restores them with its own runtime state.
+    priority_identities: Vec<SymId>,
+    /// GNU's `Vemacs_mule_charset_list`: new Mule definitions append, while
+    /// `set-charset-priority` reorders its existing members. This can differ
+    /// from `priority` after an ordinary definition follows a supplementary
+    /// charset. The existing runtime registry owns this plain symbol-id list;
+    /// each mutator snapshots/restores its own registry and encoding views
+    /// borrow no shared mutable state or GC-managed Values.
+    emacs_mule_order: Vec<SymId>,
+    /// Index into `priority` of the first *non-preferred* charset, mirroring
+    /// GNU's `Vcharset_non_preferred_head` (charset.c:85). When `char_charset`
+    /// walks `priority` for a Unicode character (`<= MAX_UNICODE_CHAR`) and
+    /// crosses this boundary without a match, it returns the `unicode` parent
+    /// charset (charset.c:1990-1993) instead of continuing into the
+    /// non-preferred subset charsets (`unicode-bmp`, `latin-iso8859-1`, ...).
+    /// `None` means the boundary is the end of the list (GNU's `Qnil`).
+    non_preferred_head: Option<usize>,
     /// Next auto-assigned charset ID.
     next_id: i64,
 }
