@@ -2604,6 +2604,7 @@ impl Buffer {
     /// with its own saved point can never observe that a command in another
     /// buffer superseded it.  Production callers pass
     /// `BufferManager::saved_point_before_command`.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn new(
         id: BufferId,
         name: Value,
@@ -2662,6 +2663,7 @@ impl Buffer {
         )
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn new_with_text_backend_kind(
         id: BufferId,
         name: Value,

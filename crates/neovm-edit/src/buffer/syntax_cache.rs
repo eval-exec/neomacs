@@ -36,6 +36,7 @@ pub enum Invalidation {
 /// The invalidation notes a `BufferTextStorage` leaves for the syntax parse
 /// cache.  Plain values: no `Value`, no borrow, nothing to trace.
 #[derive(Clone, Copy, Debug, Default)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct SyntaxMutationNotes {
     /// Lowest Emacs byte position whose text changed since the last drain.
     dirty_byte: Option<usize>,

@@ -1,10 +1,5 @@
 use super::*;
 
-use crate::emacs_core::identity_commands::{
-    builtin_file_group_gid, builtin_file_user_uid, builtin_group_gid, builtin_group_real_gid,
-    builtin_user_real_uid, builtin_user_uid,
-};
-
 use malachite::integer::Integer;
 
 use neovm_value::error::{expect_args, expect_max_args, expect_min_args};
