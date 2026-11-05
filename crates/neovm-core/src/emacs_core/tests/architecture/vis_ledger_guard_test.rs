@@ -5105,7 +5105,6 @@ fn authority_public_paths_violation(workspace: &Path, rows: &[AuthRow]) -> Resul
 }
 
 #[test]
-#[test]
 fn authority_rejects_a_pub_trait_method_named_like_a_signed_item() {
     let dir = tempfile::tempdir().expect("tempdir");
     let src = dir.path().join("crates/neovm-value/src");
@@ -5153,6 +5152,7 @@ fn authority_rejects_a_pub_trait_method_named_like_a_signed_item() {
     assert!(error.contains("frobnicate"), "{error}");
 }
 
+#[test]
 fn authority_items_have_exactly_the_fence_public_path() {
     let workspace = workspace_root();
     let rows = auth_rows(&workspace);
