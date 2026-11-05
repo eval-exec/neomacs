@@ -347,7 +347,7 @@ impl HostInputPublisher {
             None => InputWake::ChannelFallback,
         };
         let (publisher, receiver) = Self::channel_with_session(wake, Some(session));
-        context.input_rx = HostInputReceiver::from_receiver(receiver);
+        context.attach_input_receiver(HostInputReceiver::from_receiver(receiver));
         publisher
     }
 

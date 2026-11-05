@@ -75,7 +75,7 @@ pub(crate) fn builtin_set_standard_case_table(
     cache_standard_case_table_object(args[0]);
     ctx.cached_standard_case_table = Some(args[0]);
     ctx.green_set_standard_case_table(args[0]);
-    cache_standard_case_table_heap(ctx.tagged_heap.identity());
+    cache_standard_case_table_heap(ctx.tagged_heap().identity());
     let table = args[0];
     ensure_case_table_derived_slots_with_symbols(table, mode)?;
     ctx.store_variable(standard_case_table_object_symbol_id(), table);

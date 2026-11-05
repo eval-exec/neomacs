@@ -373,7 +373,7 @@ impl XdispContextExt for neovm_eval::emacs_core::eval::Context {
         // reads the hook (GNU `run_window_scroll_functions` runs with the
         // window's buffer current).
         let window = Value::make_window(window_id.0);
-        let specpdl_count = self.specpdl.len();
+        let specpdl_count = self.specpdl().len();
         if let Err(flow) = self.try_specbind_or_unwind_to(
             specpdl_count,
             ModeLineSymbol::InhibitRedisplay.id(),
@@ -9127,7 +9127,7 @@ fn call_fontification_functions_at<O: FontificationDemandObserver>(
     let arg = Value::fixnum(pos);
     ctx.push_specpdl_root(arg);
 
-    let binding_count = ctx.specpdl.len();
+    let binding_count = ctx.specpdl().len();
     if let Err(flow) = ctx.try_specbind_or_unwind_to(binding_count, hook_sym, Value::NIL) {
         let rendered = neovm_eval::emacs_core::print::format_flow_with_eval(ctx, &flow);
         tracing::warn!(
@@ -9144,7 +9144,7 @@ fn call_fontification_functions_at<O: FontificationDemandObserver>(
     // aborting the redisplay pass.  Do the same per function so one broken
     // hook cannot prevent later hooks from running.
     for function in functions {
-        let call_count = ctx.specpdl.len();
+        let call_count = ctx.specpdl().len();
         if let Err(flow) = ctx.try_specbind_or_unwind_to(
             call_count,
             ModeLineSymbol::InhibitRedisplay.id(),

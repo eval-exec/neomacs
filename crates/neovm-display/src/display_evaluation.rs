@@ -41,7 +41,7 @@ impl DisplayEvaluationContextExt for Context {
             (window.id(), window.buffer_id()?)
         };
         let saved_buffer_id = self.buffer_manager().current_buffer_id();
-        let count = self.specpdl.len();
+        let count = self.specpdl().len();
         let mut guard = FrameDisplayContextGuard {
             context: self,
             saved_buffer_id,
@@ -92,7 +92,7 @@ impl FrameDisplayContextGuard<'_> {
     /// panic falls through to `Drop`, which replays the remaining suffix
     /// storage-only.
     fn finish<R>(mut self, result: R) -> R {
-        if self.context.specpdl.len() > self.count {
+        if self.context.specpdl().len() > self.count {
             self.context.unbind_to(self.count);
         }
         self.restore_context();

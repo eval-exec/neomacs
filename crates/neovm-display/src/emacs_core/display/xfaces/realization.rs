@@ -117,9 +117,9 @@ pub(crate) fn record_face_change_for(
     scope: FaceChangeScope<'_>,
     face: Option<&str>,
 ) {
-    let previous = context.face_change_count;
-    context.face_change_count += 1;
-    let current = context.face_change_count;
+    let previous = context.face_change_count();
+    *context.face_change_count_mut() += 1;
+    let current = context.face_change_count();
     if !crate::face::realization::enabled() {
         return;
     }
@@ -345,7 +345,7 @@ impl<'a> RealizationBinding<'a> {
         variable: &str,
         value: Value,
     ) -> Result<Self, Flow> {
-        let depth = context.specpdl.len();
+        let depth = context.specpdl().len();
         let mut binding = Self {
             context,
             depth: Some(depth),
@@ -475,7 +475,7 @@ impl XfacesRealizationContextExt for neovm_eval::emacs_core::eval::Context {
     ) -> bool {
         self.frame_manager()
             .get(frame)
-            .and_then(|owner| owner.face_realization.table(self.face_change_count))
+            .and_then(|owner| owner.face_realization.table(self.face_change_count()))
             .is_some_and(|table| table.shares_definitions_with(source))
     }
 
@@ -525,7 +525,7 @@ impl XfacesRealizationContextExt for neovm_eval::emacs_core::eval::Context {
     fn cached_display_face_for_frame(&self, frame: FrameId, attributes: &Face) -> Option<Face> {
         let cache = &self.frame_manager().get(frame)?.face_realization;
         cache
-            .generation_matches(self.face_change_count)
+            .generation_matches(self.face_change_count())
             .then(|| cache.lookup(attributes))
             .flatten()
             .cloned()
@@ -544,7 +544,7 @@ impl XfacesRealizationContextExt for neovm_eval::emacs_core::eval::Context {
             return CachedFaceSlot::Unavailable;
         };
         let cache = &frame.face_realization;
-        if cache.generation_matches(self.face_change_count) {
+        if cache.generation_matches(self.face_change_count()) {
             cache.lookup_slot(attributes)
         } else {
             CachedFaceSlot::Unavailable
@@ -561,7 +561,7 @@ impl XfacesRealizationContextExt for neovm_eval::emacs_core::eval::Context {
         let role = name.parse::<BasicFace>().ok()?;
         let cache = &self.frame_manager().get(frame)?.face_realization;
         cache
-            .generation_matches(self.face_change_count)
+            .generation_matches(self.face_change_count())
             .then(|| cache.basic(role))
             .flatten()
             .cloned()
@@ -597,7 +597,7 @@ impl XfacesRealizationContextExt for neovm_eval::emacs_core::eval::Context {
             && let Some(realized) = self.frame_manager().get(frame).and_then(|frame| {
                 frame
                     .face_realization
-                    .generation_matches(self.face_change_count)
+                    .generation_matches(self.face_change_count())
                     .then(|| frame.face_realization.lookup(attributes))
                     .flatten()
             })
@@ -623,7 +623,7 @@ impl XfacesRealizationContextExt for neovm_eval::emacs_core::eval::Context {
         let source_table = self
             .frame_manager()
             .get(frame)
-            .and_then(|owner| owner.face_realization.table(self.face_change_count))
+            .and_then(|owner| owner.face_realization.table(self.face_change_count()))
             .cloned();
         let _source_roots = source_table
             .as_ref()
@@ -651,7 +651,7 @@ impl XfacesRealizationContextExt for neovm_eval::emacs_core::eval::Context {
         if let Some(spec) = &attributes.color_specifications.background {
             realized.background = map_color(self, frame, spec)?;
         }
-        let current = self.face_change_count;
+        let current = self.face_change_count();
         if let Some(epoch) = &realization_epoch
             && let Some(owner) = self.frame_manager_mut().get_mut(frame)
             && owner.face_realization.generation_matches(current)
@@ -701,7 +701,7 @@ pub(crate) fn prepare_runtime_faces_result(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     frame: FrameId,
 ) -> Result<bool, Flow> {
-    let generation = eval.face_change_count;
+    let generation = eval.face_change_count();
     if let Some(table) = eval
         .frame_manager()
         .get(frame)

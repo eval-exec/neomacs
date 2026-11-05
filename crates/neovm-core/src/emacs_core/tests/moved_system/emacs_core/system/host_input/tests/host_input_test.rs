@@ -376,11 +376,11 @@ fn only_final_publisher_drop_wakes_after_sender_disconnect_and_buffered_tail() {
 fn installing_host_input_preserves_running_state_until_explicit_activation() {
     let mut context = crate::emacs_core::eval_hook_installers::new_context();
     let running = context.command_loop().running;
-    assert!(context.input_rx.as_ref().is_none());
+    assert!(context.input_rx().as_ref().is_none());
 
     let _publisher = HostInputPublisher::install(&mut context);
 
-    assert!(context.input_rx.as_ref().is_some());
+    assert!(context.input_rx().as_ref().is_some());
     assert_eq!(context.command_loop().running, running);
     context.init_input_system();
     assert!(context.command_loop().running);
@@ -392,7 +392,7 @@ fn context_host_input_connection_is_unbounded() {
     let _publisher = HostInputPublisher::install(&mut context);
     assert_eq!(
         context
-            .input_rx
+            .input_rx()
             .as_ref()
             .expect("context-owned host receiver")
             .capacity(),
@@ -724,10 +724,10 @@ fn public_late_host_install_wakes_the_old_armed_select_before_the_first_key() {
         .expect("native Green readiness before host installation");
     let old_registration = old_select.arm().expect("old idle wait arm");
     assert!(old_registration.poll().is_none());
-    assert!(context.input_rx.as_ref().is_none());
+    assert!(context.input_rx().as_ref().is_none());
 
     let publisher = HostInputPublisher::install(&mut context);
-    assert!(context.input_rx.as_ref().is_some());
+    assert!(context.input_rx().as_ref().is_some());
     assert_eq!(
         old_registration.poll(),
         Some(ControlWakeOutcome::ControlReady(ControlNudge::HostAttached))
@@ -760,7 +760,7 @@ fn negative_drop_only_install_nudge_leaves_old_select_unready_until_a_key() {
     // Exact source mutation: install's canonical constructor still publishes
     // the same session and receiver; only announce_install is omitted.
     let publisher = HostInputPublisher::connect(&mut context);
-    assert!(context.input_rx.as_ref().is_some());
+    assert!(context.input_rx().as_ref().is_some());
     assert!(old_registration.poll().is_none());
     assert!(
         !old_select.wait_registered(&old_registration, Instant::now()),

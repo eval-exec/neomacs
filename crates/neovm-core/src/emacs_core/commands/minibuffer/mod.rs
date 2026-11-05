@@ -413,7 +413,7 @@ fn execute_read_buffer_plan(
     builtin_read_buffer_in_runtime(eval, args)?;
 
     // GNU binds this around both the override and completion paths.
-    let specpdl_count = eval.specpdl.len();
+    let specpdl_count = eval.specpdl().len();
     let ignore_case = eval.visible_variable_value_or_nil("read-buffer-completion-ignore-case");
     eval.try_specbind_or_unwind_to(
         specpdl_count,

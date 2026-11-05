@@ -338,7 +338,7 @@ mod tests {
             .expect("native wait backend");
         assert!(
             matches!(
-                context.input_rx.as_ref().expect("receiver").try_recv(),
+                context.input_rx().as_ref().expect("receiver").try_recv(),
                 Err(crossbeam_channel::TryRecvError::Empty)
             ),
             "zero service poll must not authorize input"
@@ -389,7 +389,7 @@ mod tests {
         );
         assert!(
             matches!(
-                context.input_rx.as_ref().expect("receiver").try_recv(),
+                context.input_rx().as_ref().expect("receiver").try_recv(),
                 Err(crossbeam_channel::TryRecvError::Empty)
             ),
             "no normal input without a witness"
@@ -414,7 +414,7 @@ mod tests {
         assert!(matches!(outcome, GateOutcome::Cancelled));
         assert!(!context.quit_requested.is_requested());
         assert!(matches!(
-            context.input_rx.as_ref().expect("receiver").try_recv(),
+            context.input_rx().as_ref().expect("receiver").try_recv(),
             Err(crossbeam_channel::TryRecvError::Empty)
         ));
         drop(gate);

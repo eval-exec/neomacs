@@ -321,7 +321,7 @@ pub(crate) fn builtin_kill_buffer(
         .buffers
         .kill_buffer_collect(id)
         .ok_or_else(|| signal("error", vec![Value::string("Buffer does not exist")]))?;
-    if !eval.owner.is_dormant() {
+    if !eval.owner().is_dormant() {
         eval.owner_buffers_killed(&killed_ids);
     }
 

@@ -1435,7 +1435,7 @@ fn with_default_directory_binding(
     directory: &LispString,
     f: impl FnOnce(&mut Context) -> EvalResult,
 ) -> EvalResult {
-    let count = eval.specpdl.len();
+    let count = eval.specpdl().len();
     eval.try_specbind_or_unwind_to(
         count,
         intern("default-directory"),

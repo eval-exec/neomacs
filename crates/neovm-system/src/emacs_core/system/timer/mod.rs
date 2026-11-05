@@ -283,7 +283,7 @@ impl TimerContextExt for neovm_eval::emacs_core::eval::Context {
     ) -> Result<(), Flow> {
         let saved_current_buffer = self.edit.buffers.current_buffer_id();
         let saved_deactivate_mark = self.eval_symbol("deactivate-mark").unwrap_or(Value::NIL);
-        let specpdl_count = self.specpdl.len();
+        let specpdl_count = self.specpdl().len();
 
         let gc_roots = self.save_specpdl_roots();
         self.push_specpdl_root(callback);

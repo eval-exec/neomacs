@@ -282,7 +282,7 @@ pub(crate) fn run_redisplay_window_change_hooks(
     // Any hook function that calls `redisplay` (directly or indirectly)
     // would otherwise re-enter here and infinitely recurse. The specpdl
     // entry is popped when we return, restoring the previous value.
-    let specpdl_count = eval.specpdl.len();
+    let specpdl_count = eval.specpdl().len();
     eval.try_specbind_or_unwind_to(specpdl_count, INHIBIT_REDISPLAY.id(), Value::T)?;
 
     let result = run_redisplay_window_change_hooks_inner(eval);

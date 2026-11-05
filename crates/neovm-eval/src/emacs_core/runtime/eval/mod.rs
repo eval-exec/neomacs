@@ -3126,6 +3126,10 @@ pub struct Context {
     /// Pending GNU display ownership and private transaction state. Each
     /// exclusively borrowed Context owns it; never a process/TLS Lisp cache.
     #[doc(hidden)]
+    #[cfg(not(feature = "test-support"))]
+    pub(crate) gnu_redisplay_hooks: redisplay_hooks::RedisplayHookOwnership,
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
     pub gnu_redisplay_hooks: redisplay_hooks::RedisplayHookOwnership,
     /// Cached Lisp-visible GC tuning variables used on every safe point.
     ///
@@ -3172,12 +3176,16 @@ pub struct Context {
     /// Host-input receiving owner. Only HostInputPublisher can attach a queue
     /// paired with this Context's process wait backend.
     #[doc(hidden)]
-    pub input_rx: crate::emacs_core::eval::host_input::HostInputReceiver,
+    pub(crate) input_rx: crate::emacs_core::eval::host_input::HostInputReceiver,
     /// Tasks queued from other threads (e.g. the diagnostics server) to run on
     /// the Lisp thread at a safe point. Drained in the `read_char` loop.
     eval_task_rx: Option<crossbeam_channel::Receiver<EvalThreadTask>>,
     /// Specpdl — special binding stack that writes directly to the obarray.
     /// Matches GNU Emacs's specpdl design.
+    #[doc(hidden)]
+    #[cfg(not(feature = "test-support"))]
+    pub(crate) specpdl: Vec<SpecBinding>,
+    #[cfg(feature = "test-support")]
     #[doc(hidden)]
     pub specpdl: Vec<SpecBinding>,
     /// Binding stacks parked while a nested simulated thread runs. GNU owns a
@@ -3315,6 +3323,10 @@ pub struct Context {
     pub(crate) integer_width_context: super::builtins::IntegerWidthContext,
     pub(crate) owned_roots: OwnedRootRegistryView,
     /// Tagged pointer heap — sole GC and allocator.
+    #[doc(hidden)]
+    #[cfg(not(feature = "test-support"))]
+    pub(crate) tagged_heap: WorldView<neovm_value::tagged::gc::TaggedHeap>,
+    #[cfg(feature = "test-support")]
     #[doc(hidden)]
     pub tagged_heap: WorldView<neovm_value::tagged::gc::TaggedHeap>,
     /// The obarray — unified symbol table with value cells, function cells, plists.
@@ -3535,7 +3547,7 @@ pub struct Context {
     /// Incremented when any face attribute changes; layout engine uses
     /// this to invalidate its resolved face cache.
     #[doc(hidden)]
-    pub face_change_count: u64,
+    pub(crate) face_change_count: u64,
     /// Incremented when any display-affecting buffer-local/global variable is
     /// set (truncate-lines, bidi-*, ctl-arrow, buffer-display-table,
     /// buffer-invisibility-spec, fill-column-indicator, overlay-arrow,
@@ -3544,7 +3556,7 @@ pub struct Context {
     /// a full rebuild (adversarial-review fix). Rare event → a global counter
     /// (over-invalidating all windows) is acceptable and simpler than per-var keys.
     #[doc(hidden)]
-    pub display_var_change_count: u64,
+    pub(crate) display_var_change_count: u64,
     /// Explicit redisplay invalidation generation, used for state that GNU
     /// marks with update_mode_lines/window redisplay flags.
     ///
@@ -3634,6 +3646,10 @@ pub struct Context {
     /// step 2), or none. It occupies the former reserved opcode-epoch word,
     /// with the same size, alignment and niche, so no Context offset moves.
     /// Thread-confined like the Context: only this owner mutates the slab.
+    #[doc(hidden)]
+    #[cfg(not(feature = "test-support"))]
+    pub(crate) owner: owner_bindings::OwnerSlot,
+    #[cfg(feature = "test-support")]
     #[doc(hidden)]
     pub owner: owner_bindings::OwnerSlot,
     /// The function epoch at which `apply` was last found to be the builtin
@@ -5279,9 +5295,19 @@ impl Context {
     /// R-b (PC11-F f2): mutable tagged-heap view, for fixture setup that
     /// allocates (`alloc_cons`) or sets heap policy. Live callers are the
     /// re-homed value era fixtures.
+    ///
+    /// # Safety
+    ///
+    /// The caller must be the owning thread of this Context's World. The view
+    /// must only be used for in-place heap operations through its `DerefMut`
+    /// target; it must never be replaced, swapped with another Context's view,
+    /// or moved across Worlds (the view carries its World's retention lease,
+    /// so swapping would leave the pointer paired with the wrong lease).
     #[doc(hidden)]
     #[inline(always)]
-    pub fn tagged_heap_mut(&mut self) -> &mut WorldView<neovm_value::tagged::gc::TaggedHeap> {
+    pub unsafe fn tagged_heap_mut(
+        &mut self,
+    ) -> &mut WorldView<neovm_value::tagged::gc::TaggedHeap> {
         &mut self.tagged_heap
     }
 
@@ -5299,6 +5325,89 @@ impl Context {
     #[inline(always)]
     pub fn edit_mut(&mut self) -> &mut neovm_edit::buffer::EditRuntime {
         &mut self.edit
+    }
+
+    /// R-b (PC11-F f1): the thread-projection binding authority (read).
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn owner(&self) -> &owner_bindings::OwnerSlot {
+        &self.owner
+    }
+
+    /// R-b (PC11-F f2/f3): mutable owner authority.
+    ///
+    /// # Safety
+    ///
+    /// The caller must be the Context's owner thread holding its World Baton.
+    /// The slot must not be swapped, replaced or moved to another Context;
+    /// only the existing binding write paths may use it.
+    #[doc(hidden)]
+    #[inline(always)]
+    pub unsafe fn owner_mut(&mut self) -> &mut owner_bindings::OwnerSlot {
+        &mut self.owner
+    }
+
+    /// R-b (PC11-F f1): the dynamic-binding stack (read).
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn specpdl(&self) -> &[SpecBinding] {
+        &self.specpdl
+    }
+
+    /// R-b (PC11-F f2): raw dynamic-binding-stack writes.
+    ///
+    /// # Safety
+    ///
+    /// The caller must be the owner thread and must keep the stack balanced
+    /// (every push has its matching truncate/pop on the same path); the Vec
+    /// must not be replaced or moved to another Context.
+    #[doc(hidden)]
+    #[inline(always)]
+    pub unsafe fn specpdl_mut(&mut self) -> &mut Vec<SpecBinding> {
+        &mut self.specpdl
+    }
+
+    /// R-b (PC11-F f1): the published host input receiver.
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn input_rx(&self) -> &crate::emacs_core::eval::host_input::HostInputReceiver {
+        &self.input_rx
+    }
+
+    /// R-b: attach the receiver paired with this Context's process wait
+    /// backend. The publisher service is the only installer; a receiver from
+    /// another context would break the pairing.
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn attach_input_receiver(
+        &mut self,
+        receiver: crate::emacs_core::eval::host_input::HostInputReceiver,
+    ) {
+        self.input_rx = receiver;
+    }
+
+    /// R-b (PC11-F f1): owner-carried redisplay-hook ownership (read).
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn gnu_redisplay_hooks(&self) -> &redisplay_hooks::RedisplayHookOwnership {
+        &self.gnu_redisplay_hooks
+    }
+
+    /// R-b (PC11-F f2, signed): the existing core redisplay writers mutate the
+    /// owner-carried hook ownership in place (dimensions, window-change set,
+    /// old selected window). `owner_carried` remains the only swap site.
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn gnu_redisplay_hooks_mut(&mut self) -> &mut redisplay_hooks::RedisplayHookOwnership {
+        &mut self.gnu_redisplay_hooks
+    }
+
+    /// R-b (PC11-F f2, signed): the existing display writers bump or reset the
+    /// face-change counter.
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn face_change_count_mut(&mut self) -> &mut u64 {
+        &mut self.face_change_count
     }
 
     /// Access the obarray's view capability (phase-scoped writes that must go

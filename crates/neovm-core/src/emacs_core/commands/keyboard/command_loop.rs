@@ -124,7 +124,7 @@ impl CommandLoopHost for Context {
         // different: GNU still runs `top-level`/`normal-top-level` and lets
         // `read_char` terminate the loop via noninteractive EOF, even when
         // there is no input channel at all.
-        if self.input_rx.as_ref().is_none() && !self.command_loop_noninteractive() {
+        if self.input_rx().as_ref().is_none() && !self.command_loop_noninteractive() {
             tracing::info!("recursive_edit_inner: no input receiver, returning immediately");
             return Ok(Value::NIL);
         }
@@ -149,7 +149,7 @@ impl CommandLoopHost for Context {
         // `command_loop`, outside `command_loop_2`'s error/restart boundary.
         // Keeping them here also leaves execute-kbd-macro free to borrow its
         // caller's dynamic environment, as GNU macros.c does.
-        let specpdl_count = self.specpdl.len();
+        let specpdl_count = self.specpdl().len();
         let result = (|| -> EvalResult {
             self.try_specbind_or_unwind_to(
                 specpdl_count,
@@ -622,7 +622,7 @@ impl CommandLoopHost for Context {
             // `sleep-for` / `accept-process-output` run as commands (outside
             // this binding) and bind no `inhibit-quit`, so their waits stay
             // interruptible by C-g — the sleep-for quit fix is preserved.
-            let read_specpdl_count = self.specpdl.len();
+            let read_specpdl_count = self.specpdl().len();
             self.try_specbind_or_unwind_to(
                 read_specpdl_count,
                 CommandLoopSymbol::InhibitQuit.id(),
@@ -1301,12 +1301,12 @@ impl CommandLoopHost for Context {
             .join(" ")
     }
 
-    #[tracing::instrument(skip_all, fields(depth = self.command_loop().recursive_depth, has_input = self.input_rx.as_ref().is_some()))]
+    #[tracing::instrument(skip_all, fields(depth = self.command_loop().recursive_depth, has_input = self.input_rx().as_ref().is_some()))]
     fn recursive_edit_inner(&mut self) -> EvalResult {
         self.run_exit_wrapped_command_loop(true)
     }
 
-    #[tracing::instrument(skip_all, fields(depth = self.command_loop().recursive_depth, has_input = self.input_rx.as_ref().is_some()))]
+    #[tracing::instrument(skip_all, fields(depth = self.command_loop().recursive_depth, has_input = self.input_rx().as_ref().is_some()))]
     fn minibuffer_command_loop_inner(&mut self) -> EvalResult {
         self.run_exit_wrapped_command_loop(false)
     }

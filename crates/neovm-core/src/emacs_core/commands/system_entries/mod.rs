@@ -174,17 +174,17 @@ pub(crate) fn builtin_dump_emacs_portable(
     // (GNU likewise runs pending finalizers before dumping), and each run can
     // drop the last reference to further finalizers, so keep collecting until
     // the live-finalizer registry stops shrinking.
-    let mut live_finalizers = ctx.tagged_heap.live_finalizer_count();
+    let mut live_finalizers = ctx.tagged_heap().live_finalizer_count();
     while live_finalizers > 0 {
         ctx.gc_collect_exact();
-        let remaining = ctx.tagged_heap.live_finalizer_count();
+        let remaining = ctx.tagged_heap().live_finalizer_count();
         if remaining >= live_finalizers {
             break; // fixpoint: the survivors are genuinely reachable
         }
         live_finalizers = remaining;
     }
     debug_assert!(
-        !ctx.tagged_heap.has_pending_doomed_finalizers(),
+        !ctx.tagged_heap().has_pending_doomed_finalizers(),
         "gc_collect_exact drains and runs the doomed-finalizer queue"
     );
     if live_finalizers > 0 {

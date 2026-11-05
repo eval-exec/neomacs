@@ -227,7 +227,7 @@ fn help_text(ctx: &mut Context, value: Value) -> Result<Option<String>, Flow> {
 /// GNU evaluates menu forms dynamically with ordinary redisplay inhibited.
 /// Its ordinary error/quit distinction is applied at this single seam.
 fn property(ctx: &mut Context, form: Value) -> EvalResult {
-    let count = ctx.specpdl.len();
+    let count = ctx.specpdl().len();
     ctx.try_specbind(neovm_value::intern::intern("inhibit-redisplay"), Value::T)?;
     let guarded = Value::list(vec![
         Value::symbol("condition-case"),

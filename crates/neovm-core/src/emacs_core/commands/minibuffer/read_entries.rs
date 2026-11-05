@@ -1271,7 +1271,7 @@ pub(crate) fn finish_yes_or_no_p_in_eval(eval: &mut Context, args: &[Value]) -> 
     // `exit-minibuffer`, but those assignments belong to the nested command
     // context.  Keeping the boundary in the specpdl means every return path --
     // success, quit, signal, or future retry error -- restores the caller.
-    let specpdl_count = eval.specpdl.len();
+    let specpdl_count = eval.specpdl().len();
     let caller = eval.eval_symbol("real-this-command").unwrap_or(Value::NIL);
     eval.try_specbind_or_unwind_to(specpdl_count, intern("real-this-command"), caller)?;
     let result = finish_yes_or_no_p_with_minibuffer(args, |minibuffer_args| {
@@ -1466,7 +1466,7 @@ fn read_coding_system_via_completing_read(
     // GNU `specbind`s `completion-ignore-case` to t around the call; use the
     // specpdl so the binding is unwound even when `completing-read' signals
     // (e.g. end-of-file on empty stdin in batch mode).
-    let count = eval.specpdl.len();
+    let count = eval.specpdl().len();
     eval.try_specbind_or_unwind_to(count, intern("completion-ignore-case"), Value::T)?;
     let val = builtin_completing_read(eval, completing_args);
     let val = eval.unbind_to_with_result(count, val)?;

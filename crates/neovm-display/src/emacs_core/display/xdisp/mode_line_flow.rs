@@ -34,7 +34,7 @@ pub(super) fn eval_form(
     }
     // GNU xdisp.c dsafe__call binds these before installing its Qt condition
     // handler, even for Fformat_mode_line. Binding failures stay outside it.
-    let count = eval.specpdl.len();
+    let count = eval.specpdl().len();
     eval.try_specbind_or_unwind_to(count, ModeLineSymbol::InhibitRedisplay.id(), Value::T)?;
     eval.try_specbind_or_unwind_to(count, ModeLineSymbol::InhibitQuit.id(), Value::T)?;
     let condition_stack_base = eval.condition_stack_len();

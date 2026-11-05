@@ -537,7 +537,7 @@ pub(crate) fn builtin_read_key(eval: &mut Context, args: Vec<Value>) -> EvalResu
     }
 
     // 2. Interactive mode: block on input channel
-    if eval.input_rx.as_ref().is_some() {
+    if eval.input_rx().as_ref().is_some() {
         let event = eval.read_char()?;
         eval.record_nonmenu_input_event(event);
         eval.set_read_command_keys(vec![event]);

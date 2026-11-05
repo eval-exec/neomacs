@@ -84,8 +84,8 @@ fn record_frames(eval: &mut crate::emacs_core::eval::Context) {
             frame.window_state_change = false;
         }
     }
-    eval.gnu_redisplay_hooks.dimensions = dimensions;
-    eval.gnu_redisplay_hooks.frame_window_change.clear();
+    eval.gnu_redisplay_hooks_mut().dimensions = dimensions;
+    eval.gnu_redisplay_hooks_mut().frame_window_change.clear();
 }
 
 fn finish_record(eval: &mut crate::emacs_core::eval::Context, record: bool) {
@@ -180,14 +180,14 @@ fn selection_changed(
         return false;
     };
     (frame_selected_change
-        && (eval.gnu_redisplay_hooks.old_selected_window == Some(window)
+        && (eval.gnu_redisplay_hooks().old_selected_window == Some(window)
             || eval.gnu_selected_window() == Some(window)))
         || (frame_selected_window_change
             && (frame.old_selected_window == Some(window) || frame.selected_window == window))
 }
 
 pub(super) fn run(eval: &mut crate::emacs_core::eval::Context) -> EvalResult {
-    let count = eval.specpdl.len();
+    let count = eval.specpdl().len();
     let mut pass = ChangePass {
         eval,
         record: false,
@@ -210,7 +210,7 @@ fn run_inner(pass: &mut ChangePass<'_>) -> EvalResult {
         .frame_manager()
         .selected_frame()
         .map(|frame| frame.id)
-        != pass.eval.gnu_redisplay_hooks.old_selected_frame;
+        != pass.eval.gnu_redisplay_hooks().old_selected_frame;
     let mut run_state_hook = false;
 
     for frame_id in pass.eval.gnu_frame_order() {
@@ -228,18 +228,18 @@ fn run_inner(pass: &mut ChangePass<'_>) -> EvalResult {
         }
         let frame_window_change = pass
             .eval
-            .gnu_redisplay_hooks
+            .gnu_redisplay_hooks()
             .frame_window_change
             .contains(&frame_id)
             || pass.eval.gnu_window_order(frame_id).iter().any(|window| {
                 !pass
                     .eval
-                    .gnu_redisplay_hooks
+                    .gnu_redisplay_hooks()
                     .dimensions
                     .contains_key(window)
             });
         let frame_selected_change = selected_frame_change
-            && (pass.eval.gnu_redisplay_hooks.old_selected_frame == Some(frame_id)
+            && (pass.eval.gnu_redisplay_hooks().old_selected_frame == Some(frame_id)
                 || pass
                     .eval
                     .frame_manager()
@@ -279,7 +279,7 @@ fn run_inner(pass: &mut ChangePass<'_>) -> EvalResult {
                     || window_dimensions(pass.eval, frame_id, window_id)
                         != pass
                             .eval
-                            .gnu_redisplay_hooks
+                            .gnu_redisplay_hooks()
                             .dimensions
                             .get(&window_id)
                             .copied());

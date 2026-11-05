@@ -5202,7 +5202,7 @@ fn replace_accessible_portion_for_insert_file_contents(
     // match the file.  Keep the binding scoped to the actual replacement:
     // byte-identical reads above remain true no-ops, including for variable
     // watchers.
-    let specpdl_count = eval.specpdl.len();
+    let specpdl_count = eval.specpdl().len();
     if hide_visited_file_name_during_replace {
         eval.try_specbind_or_unwind_to(specpdl_count, intern("buffer-file-name"), Value::NIL)?;
     }
@@ -5436,7 +5436,7 @@ fn run_after_insert_file_pipeline(
             )
         })
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    let specpdl_count = eval.specpdl.len();
+    let specpdl_count = eval.specpdl().len();
     eval.try_specbind_or_unwind_to(
         specpdl_count,
         intern("inhibit-point-motion-hooks"),

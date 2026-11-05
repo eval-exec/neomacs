@@ -48,13 +48,19 @@ pub(crate) fn builtin_replace_region_contents(
     // point are restored afterwards.  (This SOURCE form is deprecated in GNU.)
     let mut source = args[2];
     if crate::emacs_core::builtins::types::builtin_functionp_1(eval, source)?.is_truthy() {
-        let count = eval.specpdl.len();
+        let count = eval.specpdl().len();
         eval.record_save_excursion();
         if let Some(state) = eval.edit.buffers.save_current_restriction_state() {
-            eval.specpdl
-                .push(crate::emacs_core::eval::SpecBinding::save_restriction(
-                    state,
-                ));
+            // SAFETY: this is the owner thread. The binding is pushed inside the
+            // `save-excursion` form this code emits below, so the matching
+            // unwinding pops exactly this entry; no early return escapes the
+            // form, and the Vec is never replaced or moved.
+            unsafe {
+                eval.specpdl_mut()
+                    .push(crate::emacs_core::eval::SpecBinding::save_restriction(
+                        state,
+                    ));
+            }
         }
         let narrow_result =
             builtin_narrow_to_region(eval, vec![Value::fixnum(start), Value::fixnum(end)])

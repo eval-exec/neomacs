@@ -282,7 +282,7 @@ impl DisplayWhenContextExt for Context {
         if symbol_mode.unwrap(form).is_t() {
             return Ok(true);
         }
-        let count = self.specpdl.len();
+        let count = self.specpdl().len();
         let result = (|| {
             // GNU evaluates a display `when` form under these fixed
             // bindings (`Qinhibit_redisplay`, `Qinhibit_quit`,

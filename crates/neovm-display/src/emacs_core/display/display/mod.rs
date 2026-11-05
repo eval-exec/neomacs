@@ -1858,7 +1858,7 @@ struct NativePopupSession<'menu> {
 
 impl NativePopupSession<'_> {
     fn run(mut self, ctx: &mut Context) -> EvalResult {
-        let specpdl_count = ctx.specpdl.len();
+        let specpdl_count = ctx.specpdl().len();
         for event in self.events {
             ctx.push_specpdl_root(*event);
         }
@@ -1913,7 +1913,7 @@ impl NativePopupSession<'_> {
 pub fn builtin_x_popup_dialog(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
     validate_x_popup_dialog_args(&args)?;
 
-    if ctx.input_rx.as_ref().is_none() {
+    if ctx.input_rx().as_ref().is_none() {
         tracing::info!("x-popup-dialog interactive: no input receiver");
         return Ok(Value::NIL);
     }
@@ -1991,7 +1991,7 @@ fn x_popup_menu_interactive(ctx: &mut Context, position: Value, menu: Value) -> 
         tracing::info!("x-popup-menu interactive: menu has no entries");
         return Ok(Value::NIL);
     }
-    if ctx.input_rx.as_ref().is_none() {
+    if ctx.input_rx().as_ref().is_none() {
         tracing::info!("x-popup-menu interactive: no input receiver");
         return Ok(Value::NIL);
     }
@@ -2064,7 +2064,7 @@ fn x_popup_menu_interactive(ctx: &mut Context, position: Value, menu: Value) -> 
 /// `keyboard-quit`, and its `cmd_error` echoes "Quit".
 /// Read navigation in the selected buffer and root its values across unwinding.
 fn read_popup_menu_key_sequence(ctx: &mut Context) -> Result<(Vec<Value>, Value), Flow> {
-    let count = ctx.specpdl.len();
+    let count = ctx.specpdl().len();
     ctx.try_specbind_or_unwind_to(count, neovm_value::intern::intern("inhibit-quit"), Value::T)?;
     // GNU read_menu_command, like the command loop, follows a buffer
     // displayed by an asynchronous callback before resolving its first key.
@@ -2578,7 +2578,7 @@ pub fn builtin_x_popup_menu(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
     let position = args[0];
     let menu = args[1];
 
-    if ctx.display_host.is_some() && ctx.input_rx.as_ref().is_some() && !position.is_nil() {
+    if ctx.display_host.is_some() && ctx.input_rx().as_ref().is_some() && !position.is_nil() {
         let map = neovm_eval::emacs_core::eval::keymap_lookup::get_keymap_in_runtime(
             ctx, &menu, false, true,
         )?;
