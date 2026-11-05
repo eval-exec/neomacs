@@ -274,15 +274,15 @@ fn symbol_has_modifier_prefix_cases() {
 #[test]
 fn positioned_keyboard_events_and_lucid_modifiers_follow_symbol_policy() {
     // GNU keymap.c:2341 and keyboard.c:7850,7862,7882 use SYMBOLP.
-    let mut ctx = crate::emacs_core::Context::new();
-    let left = ctx
-        .tagged_heap
+    let mut ctx = crate::test_utils::new_context();
+    // SAFETY: the test owns this heap and no collection is running; tagged_heap_mut is the RB2-1 test accessor.
+    let left = unsafe { ctx.tagged_heap_mut() }
         .alloc_symbol_with_pos(Value::symbol("left"), Value::fixnum(4));
-    let control = ctx
-        .tagged_heap
+    // SAFETY: the test owns this heap and no collection is running; tagged_heap_mut is the RB2-1 test accessor.
+    let control = unsafe { ctx.tagged_heap_mut() }
         .alloc_symbol_with_pos(Value::symbol("control"), Value::fixnum(5));
-    let base = ctx
-        .tagged_heap
+    // SAFETY: the test owns this heap and no collection is running; tagged_heap_mut is the RB2-1 test accessor.
+    let base = unsafe { ctx.tagged_heap_mut() }
         .alloc_symbol_with_pos(Value::symbol("a"), Value::fixnum(6));
     assert!(describe_single_key_value(&left, false, SymbolMode::Bare).is_err());
     assert_eq!(

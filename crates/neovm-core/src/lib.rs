@@ -30,6 +30,9 @@ pub mod symbol;
 #[cfg(not(test))]
 pub use neovm_value::tagged;
 #[cfg(test)]
+#[path = "../core_test_facades/keyboard_pure.rs"]
+pub mod keyboard_pure;
+#[cfg(test)]
 #[path = "../core_test_facades/tagged.rs"]
 pub mod tagged;
 #[cfg(test)]

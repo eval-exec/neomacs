@@ -172,6 +172,7 @@ fn push_emacs_char(out: &mut Vec<u8>, code: EmacsChar) {
     out.extend_from_slice(&buf[..len]);
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn describe_int_key(code: i64) -> Result<Vec<u8>, Flow> {
     let mods = code & KEY_CHAR_MOD_MASK;
     let base = code & !KEY_CHAR_MOD_MASK;
@@ -711,9 +712,6 @@ pub fn register_bootstrap_vars(obarray: &mut crate::symbol::Obarray) {
     obarray.seed_value("emulation-mode-map-alists", Value::NIL);
     obarray.make_special("emulation-mode-map-alists");
 }
-#[cfg(test)]
-#[path = "keyboard_pure/tests/pure_test.rs"]
-mod tests;
 
 /// One mouse button as GNU event code maps it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
