@@ -85,20 +85,20 @@ fn a_buffer_keeps_its_own_max_lisp_eval_depth_after_another_raises_it() {
 fn making_max_lisp_eval_depth_buffer_local_sets_the_obarray_flag() {
     let mut eval = ev();
     assert!(
-        !eval.obarray().max_lisp_eval_depth_localized(),
+        !eval.obarray().max_lisp_eval_depth_localized,
         "a fresh obarray has no buffer-local max-lisp-eval-depth"
     );
     eval.eval_str("(setq max-lisp-eval-depth 1500)")
         .expect("global set");
     eval.eval_str("max-lisp-eval-depth").expect("global read");
     assert!(
-        !eval.obarray().max_lisp_eval_depth_localized(),
+        !eval.obarray().max_lisp_eval_depth_localized,
         "a global set and a read must not send every call down the slow path"
     );
     let form = in_fresh_buffer("(set (make-local-variable 'max-lisp-eval-depth) 90)");
     eval.eval_str(&form).expect("buffer-local set");
     assert!(
-        eval.obarray().max_lisp_eval_depth_localized(),
+        eval.obarray().max_lisp_eval_depth_localized,
         "once localized, the guard has to consult the buffer on every call"
     );
 }
@@ -280,7 +280,7 @@ fn read_minibuffer_restore_windows_reads_the_buffer_local_binding_like_gnu() {
         "OK (nil t)"
     );
     assert!(
-        !crate::emacs_core::minibuffer::read_entries::minibuffer_restore_windows_requested(&eval),
+        !crate::emacs_core::reader::minibuffer_restore_windows_requested(&eval),
         "the reader must ask the current buffer, as GNU's swapped-in bool does"
     );
 }

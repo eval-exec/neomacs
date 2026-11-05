@@ -8,7 +8,7 @@ use crate::emacs_core::{Context, Value, print_value_bytes_with_eval, print_value
 fn list_prints_buffers_with_names_in_eval_context() -> Result<(), EvalError> {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
-    let stale = Value::make_buffer(eval.buffer_manager_mut().create_buffer("stale-win-buf"));
+    let stale = Value::make_buffer(eval.buffers.create_buffer("stale-win-buf"));
     eval.set_variable("vm-stale-win-buf", stale);
     let value = eval.eval_str(
         "(let ((b vm-stale-win-buf)

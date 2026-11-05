@@ -36,18 +36,24 @@ fn canonical_pair_layout_reaches_the_same_clock_and_descriptor_slots() {
 fn canonical_pair_tracks_function_writes_and_restored_clocks() {
     let mut obarray = Obarray::new();
     let id = intern("world-canonical-function-clock");
-    let before = obarray.function_epoch();
+    let before = obarray.dispatch_cells.function_epoch();
     obarray.set_symbol_function_id(id, Value::fixnum(41));
     let written = obarray.function_epoch();
     assert!(written > before);
-    assert_eq!(obarray.function_epoch(), written);
+    assert_eq!(obarray.dispatch_cells.function_epoch(), written);
     obarray.invalidate_all_function_bindings(FunctionEpochBump::InternalCellWrite);
-    assert_eq!(obarray.function_epoch(), obarray.function_epoch());
+    assert_eq!(
+        obarray.dispatch_cells.function_epoch(),
+        obarray.function_epoch()
+    );
     let clone = obarray.clone();
-    assert_eq!(clone.function_epoch(), obarray.function_epoch());
+    assert_eq!(
+        clone.dispatch_cells.function_epoch(),
+        obarray.function_epoch()
+    );
     let restored =
         Obarray::from_dump(Vec::new(), Vec::new(), Vec::new(), 777).expect("empty dump restores");
-    assert_eq!(restored.function_epoch(), 777);
+    assert_eq!(restored.dispatch_cells.function_epoch(), 777);
     assert!(restored.dispatch_cells.debug_on_next_call_armed_fast());
 }
 
@@ -83,7 +89,7 @@ fn canonical_pair_preserves_completed_writer_updates_after_rust_panic() {
         panic!("permitted canonical-writer panic");
     }));
     assert!(result.is_err());
-    assert_eq!(obarray.function_epoch(), 17);
+    assert_eq!(obarray.dispatch_cells.function_epoch(), 17);
 }
 
 #[test]
