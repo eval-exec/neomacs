@@ -1,6 +1,22 @@
+use super::architecture_production_source_roots::production_file;
+
+/// Read the named `emacs_core` source through the shared production roots.
+/// The paths below are the pre-split ones relative to `src/emacs_core/`; the
+/// owning crate is resolved at run time so moved files stay covered (RULE 19).
+fn read_source(path: &str) -> String {
+    let resolved = if let Some(relative) = path.strip_prefix("../../../neovm-value/src/") {
+        format!("neovm-value/src/{relative}")
+    } else {
+        format!("src/emacs_core/{path}")
+    };
+    let file = production_file(&resolved);
+    std::fs::read_to_string(&file)
+        .unwrap_or_else(|error| panic!("read {}: {error}", file.display()))
+}
+
 macro_rules! source_files {
     ($($path:literal),+ $(,)?) => {
-        [$(($path, include_str!(concat!("../../", $path)))),+]
+        [$(($path, read_source($path))),+]
     };
 }
 

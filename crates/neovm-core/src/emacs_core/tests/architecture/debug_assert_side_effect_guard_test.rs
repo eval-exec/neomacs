@@ -15,10 +15,10 @@
 //! `enqueue_`, ...), is a violation. The fix is always the same: perform the
 //! call in a `let`, then assert on the result.
 
-use std::path::{Path, PathBuf};
-
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use syn::visit::{self, Visit};
+
+use super::architecture_production_source_roots::production_source_files;
 
 /// Container, cell, lock, channel, iterator and atomic methods that change the
 /// receiver's (or a shared) state.
@@ -114,17 +114,6 @@ fn is_state_changing(name: &str) -> bool {
 
 const DEBUG_ASSERTIONS: &[&str] = &["debug_assert", "debug_assert_eq", "debug_assert_ne"];
 
-fn source_files(directory: &Path, files: &mut Vec<PathBuf>) {
-    for entry in std::fs::read_dir(directory).expect("read source directory") {
-        let path = entry.expect("source entry").path();
-        if path.is_dir() {
-            source_files(&path, files);
-        } else if path.extension().is_some_and(|extension| extension == "rs") {
-            files.push(path);
-        }
-    }
-}
-
 /// `.name(` sequences in `tokens`, recursively through every group.
 fn state_changing_calls(tokens: TokenStream, found: &mut Vec<(String, usize)>) {
     let trees: Vec<TokenTree> = tokens.into_iter().collect();
@@ -174,24 +163,17 @@ impl<'ast> Visit<'ast> for DebugAssertionScan<'_> {
 
 #[test]
 fn debug_assertions_never_change_state() {
-    let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let mut files = Vec::new();
-    source_files(&crate_root.join("src"), &mut files);
-    files.sort();
+    let files = production_source_files();
     assert!(
         files.len() > 500,
-        "the scan found only {} source files; check the crate root",
+        "the scan found only {} source files; check the production source roots",
         files.len()
     );
     let mut violations = Vec::new();
     for file in &files {
-        let relative = file
-            .strip_prefix(crate_root)
-            .expect("source file is inside the crate")
-            .to_string_lossy()
-            .replace('\\', "/");
-        let source = std::fs::read_to_string(file)
-            .unwrap_or_else(|error| panic!("read {}: {error}", file.display()));
+        let relative = file.workspace_relative();
+        let source = std::fs::read_to_string(&file.path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", file.path.display()));
         let parsed =
             syn::parse_file(&source).unwrap_or_else(|error| panic!("parse {relative}: {error}"));
         let mut scan = DebugAssertionScan {

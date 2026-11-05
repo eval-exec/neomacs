@@ -28,17 +28,15 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
+
+use super::architecture_production_source_roots::workspace_root as shared_workspace_root;
 use syn::{Expr, Item, UseTree};
 
 const PC1_TABLE: &str = include_str!("pc1_hot_path_methods.tsv");
 const PC2_TABLE: &str = include_str!("pc2_hook_seams.tsv");
 
 fn workspace_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .expect("crates/neovm-core is two levels below the workspace root")
-        .to_path_buf()
+    shared_workspace_root()
 }
 
 // ---------------------------------------------------------------------------

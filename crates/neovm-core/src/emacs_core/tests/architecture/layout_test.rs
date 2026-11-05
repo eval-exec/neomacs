@@ -1,11 +1,87 @@
 use std::path::{Path, PathBuf};
 use syn::{Attribute, Expr, Item, ItemMod, Lit, Meta};
 
+use super::architecture_production_source_roots::{
+    production_file, production_source_files, production_source_roots,
+};
+
+/// Every `emacs_core` domain the split left in any crate. The pre-split tree
+/// had the eight historical domains plus the `builtins`, `composite`, `data`
+/// and `indent` directories that stayed in core; the moved domains now live in
+/// the crate that owns them, and each crate may publish only these names at
+/// its `emacs_core` root.
 const DOMAINS: &[&str] = &[
-    "commands", "display", "editing", "lisp", "runtime", "system", "tests", "text",
+    "builtins",
+    "commands",
+    "composite",
+    "data",
+    "display",
+    "editing",
+    "indent",
+    "lisp",
+    "runtime",
+    "system",
+    "tests",
+    "text",
 ];
-fn emacs_core_root() -> PathBuf {
-    neomacs_infra::crate_root!().join("src/emacs_core")
+
+/// Loose `*.rs` files allowed directly below an `emacs_core` root. Core keeps
+/// the typed boot-proof installers (E3a) beside its facade; every extracted
+/// crate exposes only `mod.rs`.
+const CORE_ROOT_FILES: &[&str] = &[
+    "eval_hook_installers.rs",
+    "input_hooks.rs",
+    "lifecycle_hooks.rs",
+    "load_boot.rs",
+    "mod.rs",
+    "process_hooks.rs",
+];
+const LOWER_CRATE_ROOT_FILES: &[&str] = &["mod.rs"];
+
+/// Every `<crate>/src/emacs_core` directory, with its crate directory name.
+fn emacs_core_roots() -> Vec<(String, PathBuf)> {
+    production_source_roots()
+        .into_iter()
+        .map(|root| {
+            let emacs_core = root.src.join("emacs_core");
+            (root.crate_dir, emacs_core)
+        })
+        .filter(|(_, root)| root.is_dir())
+        .collect()
+}
+
+fn allowed_root_files(crate_dir: &str) -> &'static [&'static str] {
+    if crate_dir == "neovm-core" {
+        CORE_ROOT_FILES
+    } else {
+        LOWER_CRATE_ROOT_FILES
+    }
+}
+
+/// Loose `*.rs` files that are reviewed single-file subsystems at a domain
+/// root: the C14 declaration manifests that stay beside their declarations in
+/// core, and the pure vocabulary modules the type-down waves placed in the
+/// lowest crate that can own them. Any other loose file belongs to a
+/// subsystem directory.
+const DOMAIN_ROOT_FILES: &[(&str, &str, &str)] = &[
+    ("neovm-core", "builtins", "subrs.rs"),
+    ("neovm-core", "composite", "subrs.rs"),
+    ("neovm-core", "data", "subrs.rs"),
+    ("neovm-core", "indent", "subrs.rs"),
+    ("neovm-edit", "editing", "display_metrics.rs"),
+    ("neovm-edit", "editing", "file_name.rs"),
+    ("neovm-edit", "editing", "redisplay_policy.rs"),
+    ("neovm-edit", "editing", "word_wrap.rs"),
+    ("neovm-system", "system", "host_input.rs"),
+    ("neovm-text", "text", "substrate_hooks.rs"),
+];
+
+fn allowed_domain_root_file(crate_dir: &str, domain: &str, name: &str) -> bool {
+    DOMAIN_ROOT_FILES
+        .iter()
+        .any(|(crate_name, domain_name, file_name)| {
+            *crate_name == crate_dir && *domain_name == domain && *file_name == name
+        })
 }
 
 fn unexpected_root_domains(root: &Path) -> Vec<String> {
@@ -134,77 +210,101 @@ fn has_misplaced_test_syntax(syntax: &syn::File) -> bool {
 
 #[test]
 fn emacs_core_root_is_a_facade_over_domain_directories() {
-    let root = emacs_core_root();
-    let mut root_files = std::fs::read_dir(&root)
-        .expect("read emacs_core root")
-        .filter_map(Result::ok)
-        .filter(|entry| {
-            let path = entry.path();
-            path.is_file() && path.extension().is_some_and(|ext| ext == "rs")
-        })
-        .map(|entry| entry.file_name().to_string_lossy().into_owned())
-        .collect::<Vec<_>>();
-    root_files.sort();
+    let roots = emacs_core_roots();
+    for (crate_dir, root) in &roots {
+        let mut root_files = std::fs::read_dir(root)
+            .expect("read emacs_core root")
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                let path = entry.path();
+                path.is_file() && path.extension().is_some_and(|ext| ext == "rs")
+            })
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        root_files.sort();
 
-    assert_eq!(
-        root_files,
-        ["mod.rs"],
-        "emacs_core root is a stable facade; put subsystem files in their owning directory"
-    );
+        let expected = allowed_root_files(crate_dir)
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            root_files, expected,
+            "{crate_dir}/src/emacs_core root is a stable facade; put subsystem files in \
+             their owning directory"
+        );
 
-    assert_eq!(
-        unexpected_root_domains(&root),
-        Vec::<String>::new(),
-        "emacs_core contains unrecognized root domains; add subsystems below one of DOMAINS"
-    );
+        assert_eq!(
+            unexpected_root_domains(root),
+            Vec::<String>::new(),
+            "{crate_dir}/src/emacs_core contains unrecognized root domains; add subsystems \
+             below one of DOMAINS"
+        );
+    }
 
     for domain in DOMAINS {
         assert!(
-            root.join(domain).is_dir(),
-            "emacs_core domain directory is missing: {domain}"
+            roots.iter().any(|(_, root)| root.join(domain).is_dir()),
+            "emacs_core domain directory is missing from every crate: {domain}"
         );
     }
 }
 
 #[test]
 fn production_domains_contain_subsystem_directories_not_loose_rust_files() {
-    let root = emacs_core_root();
+    for (crate_dir, root) in emacs_core_roots() {
+        for domain in DOMAINS.iter().copied().filter(|domain| *domain != "tests") {
+            let directory = root.join(domain);
+            if !directory.is_dir() {
+                continue;
+            }
+            let loose_rust_files = std::fs::read_dir(&directory)
+                .unwrap_or_else(|error| panic!("read {crate_dir}/emacs_core/{domain}: {error}"))
+                .filter_map(Result::ok)
+                .map(|entry| entry.path())
+                .filter(|path| path.is_file() && path.extension().is_some_and(|ext| ext == "rs"))
+                .filter(|path| {
+                    let name = path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or_default();
+                    !allowed_domain_root_file(&crate_dir, domain, name)
+                })
+                .collect::<Vec<_>>();
 
-    for domain in DOMAINS.iter().copied().filter(|domain| *domain != "tests") {
-        let loose_rust_files = std::fs::read_dir(root.join(domain))
-            .unwrap_or_else(|error| panic!("read emacs_core/{domain}: {error}"))
-            .filter_map(Result::ok)
-            .map(|entry| entry.path())
-            .filter(|path| path.is_file() && path.extension().is_some_and(|ext| ext == "rs"))
-            .collect::<Vec<_>>();
-
-        assert!(
-            loose_rust_files.is_empty(),
-            "emacs_core/{domain} contains loose Rust files: {loose_rust_files:?}; every subsystem owns a directory"
-        );
+            assert!(
+                loose_rust_files.is_empty(),
+                "{crate_dir}/src/emacs_core/{domain} contains loose Rust files: \
+                 {loose_rust_files:?}; every subsystem owns a directory"
+            );
+        }
     }
 }
 
 #[test]
 fn out_of_line_subsystem_tests_live_in_tests_directories() {
-    let root = emacs_core_root();
-    let mut rust_files = Vec::new();
-    rust_files_below(&root, &mut rust_files);
-
-    let mut misplaced = rust_files
-        .into_iter()
-        .filter_map(|path| {
-            let relative = path.strip_prefix(&root).expect("path below emacs_core");
-            if is_test_source(relative) {
-                return None;
+    let mut misplaced = Vec::new();
+    for (crate_dir, root) in emacs_core_roots() {
+        let mut rust_files = Vec::new();
+        rust_files_below(&root, &mut rust_files);
+        for path in rust_files {
+            let relative = path
+                .strip_prefix(&root)
+                .expect("path below emacs_core")
+                .to_path_buf();
+            if is_test_source(&relative) {
+                continue;
             }
-            let stem = relative.file_stem()?.to_string_lossy();
+            let Some(stem) = relative.file_stem().map(|stem| stem.to_string_lossy()) else {
+                continue;
+            };
             let test_shaped_name =
                 stem == "tests" || stem.ends_with("_test") || stem.ends_with("_tests");
             let syntax = parsed_rust_file(&path);
-            (test_shaped_name || has_misplaced_test_syntax(&syntax)).then(|| relative.to_path_buf())
-        })
-        .collect::<Vec<_>>();
+            if test_shaped_name || has_misplaced_test_syntax(&syntax) {
+                misplaced.push(format!("{crate_dir}/{}", relative.display()));
+            }
+        }
+    }
     misplaced.sort();
 
     assert!(
@@ -319,7 +419,6 @@ fn bytecode_obj_is_only_named_by_its_chokepoints() {
         }
     }
 
-    let src_root = neomacs_infra::crate_root!().join("src");
     let allowed_exact = [
         "tagged/header.rs",
         "tagged/gc.rs",
@@ -347,26 +446,23 @@ fn bytecode_obj_is_only_named_by_its_chokepoints() {
     ];
     let allowed_prefix = "emacs_core/runtime/pdump/";
 
-    let mut files = Vec::new();
-    rust_files_below(&src_root, &mut files);
     let mut violations = Vec::new();
-    for path in files {
-        let relative = path
-            .strip_prefix(&src_root)
-            .expect("under src root")
-            .to_string_lossy()
-            .replace('\\', "/");
+    for file in production_source_files() {
+        let relative = file.relative;
         if allowed_exact.contains(&relative.as_str())
             || relative.starts_with(allowed_prefix)
             || is_test_source(Path::new(&relative))
         {
             continue;
         }
-        let parsed = parsed_rust_file(&path);
+        let parsed = parsed_rust_file(&file.path);
         let mut finder = IdentFinder { hits: 0 };
         finder.visit_file(&parsed);
         if finder.hits > 0 {
-            violations.push(format!("{relative} ({} mentions)", finder.hits));
+            violations.push(format!(
+                "{}/src/{relative} ({} mentions)",
+                file.crate_dir, finder.hits
+            ));
         }
     }
     assert!(
@@ -389,7 +485,7 @@ fn bytecode_obj_is_only_named_by_its_chokepoints() {
 #[test]
 fn eval_mod_stays_a_facade_after_the_domain_split() {
     const CEILING: usize = 8_000;
-    let path = emacs_core_root().join("runtime/eval/mod.rs");
+    let path = production_file("src/emacs_core/runtime/eval/mod.rs");
     let lines = std::fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
         .lines()
@@ -410,7 +506,7 @@ fn eval_mod_stays_a_facade_after_the_domain_split() {
 #[test]
 fn process_mod_stays_a_facade_after_the_domain_split() {
     const CEILING: usize = 1_500;
-    let path = emacs_core_root().join("system/process/mod.rs");
+    let path = production_file("src/emacs_core/system/process/mod.rs");
     let lines = std::fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
         .lines()
@@ -435,7 +531,7 @@ fn process_mod_stays_a_facade_after_the_domain_split() {
 #[test]
 fn jit_compile_stays_an_orchestrator_after_the_domain_split() {
     const CEILING: usize = 5_000;
-    let path = emacs_core_root().join("runtime/jit/compile.rs");
+    let path = production_file("src/emacs_core/runtime/jit/compile.rs");
     let lines = std::fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
         .lines()

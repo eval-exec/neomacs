@@ -56,7 +56,8 @@ use super::architecture_moving_set as moving_set;
 /// traits, so the row is now zero. Any new illegal impl fails immediately and
 /// every removed one must lower this number in the same commit.
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+
+use super::architecture_production_source_roots::production_source_files;
 use std::sync::OnceLock;
 use syn::spanned::Spanned;
 use syn::{Item, Type};
@@ -99,126 +100,23 @@ const PINNED_MOVED_NAMES: &[&str] = &["OpenedFontMetrics", "GenericProofEra", "W
 fn moving_prefixes() -> &'static [String] {
     static PREFIXES: OnceLock<Vec<String>> = OnceLock::new();
     PREFIXES.get_or_init(|| {
-        let source_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let mut prefixes = Vec::new();
-        let library = read_declaration_file(&source_root.join("lib.rs"));
-        collect_member_prefixes(
-            &library.items,
-            "",
-            &source_root,
-            moving_set::is_bottom_peer_name,
-            &mut prefixes,
-        );
-        let emacs_core = read_declaration_file(&source_root.join("emacs_core/mod.rs"));
-        collect_member_prefixes(
-            &emacs_core.items,
-            "emacs_core",
-            &source_root,
-            moving_set::is_g0_member,
-            &mut prefixes,
-        );
-        prefixes.push(moving_crate_prefix().to_owned());
-        prefixes
+        // Every extracted crate is part of the moving set. A file below one of
+        // these prefixes is a lower-crate file: its own impls are legal and a
+        // type it defines is a moved type for upper-impl classification.
+        moving_set::MOVING_CRATES
+            .iter()
+            .map(|name| format!("{}/", name.replace('_', "-")))
+            .collect()
     })
 }
 
-fn moving_crate_prefix() -> &'static str {
-    static PREFIX: OnceLock<String> = OnceLock::new();
-    PREFIX.get_or_init(|| format!("{}/", moving_set::MOVING_CRATE.replace('_', "-")))
-}
-
-fn read_declaration_file(path: &Path) -> syn::File {
-    let source = std::fs::read_to_string(path)
-        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
-    syn::parse_file(&source).unwrap_or_else(|error| panic!("parse {}: {error}", path.display()))
-}
-
-/// Record the physical prefix of every declaration whose module name the move
-/// manifest rule includes. `#[path = "..."]` is resolved relative to the
-/// declaring file's directory (both files parsed here live at or below the
-/// crate root); a bare `mod name;` picks `name.rs` when that file exists and
-/// `name/` otherwise. A `mod.rs` declaration names the directory that
-/// contains it.
-fn collect_member_prefixes(
-    items: &[Item],
-    directory: &str,
-    source_root: &Path,
-    wanted: fn(&str) -> bool,
-    prefixes: &mut Vec<String>,
-) {
-    for item in items {
-        let Item::Mod(module) = item else {
-            continue;
-        };
-        let name = module.ident.to_string();
-        if !wanted(&name) {
-            continue;
-        }
-        let declared_path = module.attrs.iter().find_map(|attribute| {
-            if !attribute.path().is_ident("path") {
-                return None;
-            }
-            let syn::Meta::NameValue(value) = &attribute.meta else {
-                return None;
-            };
-            let syn::Expr::Lit(value) = &value.value else {
-                return None;
-            };
-            let syn::Lit::Str(path) = &value.lit else {
-                return None;
-            };
-            Some(path.value())
-        });
-        let relative = match declared_path {
-            Some(path) => join_declared(directory, &path),
-            None => {
-                let file = join_declared(directory, &format!("{name}.rs"));
-                if source_root.join(&file).is_file() {
-                    file
-                } else {
-                    format!("{}/", join_declared(directory, &name))
-                }
-            }
-        };
-        if let Some(module_directory) = relative.strip_suffix("mod.rs") {
-            let module_directory = module_directory.trim_end_matches('/');
-            if !module_directory.is_empty() {
-                prefixes.push(format!("{module_directory}/"));
-            }
-        } else if relative.ends_with(".rs") {
-            prefixes.push(relative);
-        } else {
-            prefixes.push(format!("{}/", relative.trim_end_matches('/')));
-        }
-    }
-}
-
-fn join_declared(directory: &str, path: &str) -> String {
-    if directory.is_empty() {
-        path.to_string()
-    } else {
-        format!("{directory}/{path}")
-    }
-}
-
-/// Mechanical moving-set membership for a source path relative to
-/// `crates/neovm-core/src` (forward slashes), or a sibling-crate path under
-/// the `neovm-value/` prefix.
+/// Mechanical moving-set membership for a workspace-relative source path
+/// (`<crate>/src/...`): a file belongs to the moving set when its crate is one
+/// of the extracted crates.
 fn is_moving_path(relative: &str) -> bool {
     moving_prefixes()
         .iter()
         .any(|prefix| relative.starts_with(prefix))
-}
-
-fn source_files(directory: &Path, files: &mut Vec<PathBuf>) {
-    for entry in std::fs::read_dir(directory).expect("read source directory") {
-        let path = entry.expect("source entry").path();
-        if path.is_dir() {
-            source_files(&path, files);
-        } else if path.extension().is_some_and(|extension| extension == "rs") {
-            files.push(path);
-        }
-    }
 }
 
 fn base_ident(ty: &Type) -> Option<String> {
@@ -558,59 +456,20 @@ fn render_violations(violations: &[Violation]) -> String {
 
 #[test]
 fn coherence_upper_impl_ratchet_equals_remaining_allowed() {
-    let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let source_root = crate_root.join("src");
-    let mut files = Vec::new();
-    source_files(&source_root, &mut files);
-    files.sort();
-    assert!(
-        files.len() > 500,
-        "the scan found only {} source files; check the crate root",
-        files.len()
-    );
-
     let mut parsed = Vec::new();
-    for file in &files {
-        let relative = file
-            .strip_prefix(&source_root)
-            .expect("source file is inside src")
-            .to_string_lossy()
-            .replace('\\', "/");
-        let source = std::fs::read_to_string(file)
-            .unwrap_or_else(|error| panic!("read {}: {error}", file.display()));
+    for file in production_source_files() {
+        let relative = file.workspace_relative();
+        let source = std::fs::read_to_string(&file.path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", file.path.display()));
         let syntax =
             syn::parse_file(&source).unwrap_or_else(|error| panic!("parse {relative}: {error}"));
         parsed.push((relative, syntax));
     }
-
-    // The destination crate is part of the derived moving set from N5 on.
-    // Scan it when present so an upper impl on a type defined there counts;
-    // impls inside the crate are skipped as lower-crate impls.
-    let sibling_root = crate_root
-        .parent()
-        .expect("crate directory")
-        .join("neovm-value")
-        .join("src");
-    if sibling_root.is_dir() {
-        let mut sibling_files = Vec::new();
-        source_files(&sibling_root, &mut sibling_files);
-        sibling_files.sort();
-        for file in &sibling_files {
-            let relative = format!(
-                "{}{}",
-                moving_crate_prefix(),
-                file.strip_prefix(&sibling_root)
-                    .expect("sibling source file is inside src")
-                    .to_string_lossy()
-                    .replace('\\', "/")
-            );
-            let source = std::fs::read_to_string(file)
-                .unwrap_or_else(|error| panic!("read {}: {error}", file.display()));
-            let syntax = syn::parse_file(&source)
-                .unwrap_or_else(|error| panic!("parse {relative}: {error}"));
-            parsed.push((relative, syntax));
-        }
-    }
+    assert!(
+        parsed.len() > 500,
+        "the scan found only {} source files; check the production roots",
+        parsed.len()
+    );
 
     let moving = parsed
         .iter()
@@ -621,9 +480,10 @@ fn coherence_upper_impl_ratchet_equals_remaining_allowed() {
         "the derived moving set has only {moving} files; check the module paths"
     );
     assert!(
-        parsed
-            .iter()
-            .any(|(relative, _)| relative == "tls_fingerprint.rs" && is_moving_path(relative)),
+        parsed.iter().any(
+            |(relative, _)| relative == "neovm-value/src/tls_fingerprint.rs"
+                && is_moving_path(relative)
+        ),
         "the bottom-peer fingerprint module is part of the move"
     );
 

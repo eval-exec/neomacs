@@ -36,8 +36,8 @@
 //! Extending the attribute subset also requires comparing all protected
 //! pre-LTO bodies and inline trees, plus the level-3 callee-attribute check.
 
+use super::architecture_production_source_roots::production_file;
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
 
 const LIST: &str = include_str!("protected_inline_boundary.list");
 
@@ -176,7 +176,7 @@ fn entries() -> Vec<Entry> {
 }
 
 fn read_source(file: &str) -> Vec<String> {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join(file);
+    let path = production_file(&format!("src/{file}"));
     source_lines(
         &std::fs::read_to_string(&path)
             .unwrap_or_else(|error| panic!("read {}: {error}", path.display())),

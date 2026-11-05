@@ -9,7 +9,10 @@ use syn::ext::IdentExt;
 use syn::visit::{self, Visit};
 use syn::{Attribute, Expr, Item, ItemMod, Lit, Meta};
 
-use super::architecture_moving_set::{is_bottom_peer_name, is_g0_member, is_moving_crate};
+use super::architecture_moving_set::{
+    BOTTOM_PEER_MODULES, G0_MEMBERS, is_bottom_peer_name, is_g0_member, is_moving_crate,
+};
+use super::architecture_production_source_roots::production_source_roots;
 
 /// Whether a cfg predicate can be true with `test` disabled. Other cfg values
 /// vary across production builds, so both possibilities remain in the scan.
@@ -440,6 +443,15 @@ impl ProductionWalker {
         self.source = previous_source;
         self.module_directory = previous_module;
         self.path_directory = previous_path;
+    }
+
+    /// Walk `path` as if its module were declared at `logical_path`. The
+    /// extracted crates are seeded this way: their physical `lib.rs` no longer
+    /// names the historical root modules (and the value crate renamed them).
+    fn file_with_logical(&mut self, path: &Path, logical_path: Vec<String>) {
+        let previous = std::mem::replace(&mut self.logical_path, logical_path);
+        self.file(path);
+        self.logical_path = previous;
     }
 
     fn discover_module(&mut self) {
@@ -994,8 +1006,8 @@ fn include_path(expression: &Expr) -> Option<String> {
     }
 }
 
-fn production_sites(root: &Path) -> (ModuleIndex, Sites) {
-    let mut walker = ProductionWalker {
+fn new_walker() -> ProductionWalker {
+    ProductionWalker {
         phase: ScanPhase::Discover,
         source: PathBuf::new(),
         module_directory: PathBuf::new(),
@@ -1004,8 +1016,86 @@ fn production_sites(root: &Path) -> (ModuleIndex, Sites) {
         index: ModuleIndex::default(),
         exports: Vec::new(),
         sites: BTreeMap::new(),
-    };
-    walker.file(&root.join("lib.rs"));
+    }
+}
+
+/// Physical entry file for a module root in `src` (`name/mod.rs` or
+/// `name.rs`).
+fn module_entry(src: &Path, name: &str) -> Option<PathBuf> {
+    let directory = src.join(name).join("mod.rs");
+    if directory.is_file() {
+        return Some(directory);
+    }
+    let file = src.join(format!("{name}.rs"));
+    file.is_file().then_some(file)
+}
+
+/// The extracted crates keep their historical module names below `src/`, so
+/// each historical root is seeded explicitly with the logical path the
+/// pre-split ratchet used. The value crate moved G0 members out of
+/// `emacs_core` and the bottom peers to its crate root; the other crates kept
+/// the `emacs_core/<member>` and crate-root layouts verbatim.
+fn moved_crate_seeds() -> Vec<(PathBuf, Vec<String>)> {
+    fn push(seeds: &mut Vec<(PathBuf, Vec<String>)>, src: &Path, prefix: &[&str], name: &str) {
+        if let Some(entry) = module_entry(src, name) {
+            let mut logical: Vec<String> = prefix.iter().map(|part| (*part).to_owned()).collect();
+            logical.push(name.to_owned());
+            seeds.push((entry, logical));
+        }
+    }
+    let mut seeds = Vec::new();
+    for root in production_source_roots() {
+        let src = root.src;
+        match root.crate_dir.as_str() {
+            "neovm-core" => {}
+            "neovm-display-identity" => {
+                // Below the value crate; it names no upper item.
+            }
+            "neovm-value" => {
+                for name in G0_MEMBERS {
+                    push(&mut seeds, &src, &["emacs_core"], name);
+                }
+                for name in BOTTOM_PEER_MODULES {
+                    push(&mut seeds, &src, &[], name);
+                }
+            }
+            "neovm-edit" => {
+                push(&mut seeds, &src, &[], "emacs_core");
+                push(&mut seeds, &src, &[], "buffer");
+            }
+            "neovm-text" => {
+                push(&mut seeds, &src, &[], "emacs_core");
+                push(&mut seeds, &src, &[], "code_conversion_workspace");
+                push(&mut seeds, &src, &[], "encoding");
+            }
+            "neovm-eval" => {
+                push(&mut seeds, &src, &[], "emacs_core");
+                push(&mut seeds, &src, &[], "host_effect");
+            }
+            "neovm-display" => {
+                push(&mut seeds, &src, &[], "emacs_core");
+                push(&mut seeds, &src, &[], "display_evaluation");
+                push(&mut seeds, &src, &[], "face");
+                push(&mut seeds, &src, &[], "image_identity");
+                push(&mut seeds, &src, &[], "window");
+            }
+            "neovm-system" => {
+                push(&mut seeds, &src, &[], "emacs_core");
+            }
+            other => panic!("unclassified moving crate {other}"),
+        }
+    }
+    seeds.sort();
+    seeds
+}
+
+/// Finish a scan: resolve the facade re-exports, then walk every production
+/// root in reference mode.
+fn finalize_walker(
+    mut walker: ProductionWalker,
+    library_roots: &[PathBuf],
+    seeds: &[(PathBuf, Vec<String>)],
+) -> (ModuleIndex, Sites) {
     for (module, mut path, name) in std::mem::take(&mut walker.exports) {
         let crate_qualified = path.first().is_some_and(|part| part == "crate");
         if crate_qualified {
@@ -1041,8 +1131,39 @@ fn production_sites(root: &Path) -> (ModuleIndex, Sites) {
         }
     }
     walker.phase = ScanPhase::References;
-    walker.file(&root.join("lib.rs"));
+    for root in library_roots {
+        walker.file(&root.join("lib.rs"));
+    }
+    for (path, logical_path) in seeds {
+        walker.file_with_logical(path, logical_path.clone());
+    }
     (walker.index, walker.sites)
+}
+
+/// The fixture form: one crate tree rooted at `root`.
+fn production_sites(root: &Path) -> (ModuleIndex, Sites) {
+    let mut walker = new_walker();
+    walker.file(&root.join("lib.rs"));
+    let libraries = vec![root.to_path_buf()];
+    finalize_walker(walker, &libraries, &[])
+}
+
+/// The production form: the core tree plus every extracted crate seeded at its
+/// historical module roots (RULE 19 scanner re-root).
+fn production_sites_across_crates() -> (ModuleIndex, Sites) {
+    let roots = production_source_roots();
+    let core = roots
+        .iter()
+        .find(|root| root.crate_dir == "neovm-core")
+        .expect("core production root");
+    let seeds = moved_crate_seeds();
+    let mut walker = new_walker();
+    walker.file(&core.src.join("lib.rs"));
+    for (path, logical_path) in &seeds {
+        walker.file_with_logical(path, logical_path.clone());
+    }
+    let libraries = vec![core.src.clone()];
+    finalize_walker(walker, &libraries, &seeds)
 }
 
 fn parse_ceilings(text: &str, index: &ModuleIndex) -> Ceilings {
@@ -1166,10 +1287,14 @@ fn assert_production_ceilings(root: &Path, sites: &Sites, ceilings: &Ceilings) {
 
 #[test]
 fn production_layering_counts_can_only_decrease() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
-    let (index, sites) = production_sites(&root);
+    let roots = production_source_roots();
+    let core = roots
+        .iter()
+        .find(|root| root.crate_dir == "neovm-core")
+        .expect("core production root");
+    let (index, sites) = production_sites_across_crates();
     let ceilings = parse_ceilings(include_str!("layering_ceilings.list"), &index);
-    assert_production_ceilings(&root, &sites, &ceilings);
+    assert_production_ceilings(&core.src, &sites, &ceilings);
 }
 
 #[cfg(test)]

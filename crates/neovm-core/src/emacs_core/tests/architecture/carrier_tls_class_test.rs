@@ -8,6 +8,8 @@
 
 use std::path::Path;
 
+use super::architecture_production_source_roots::crates_dir as workspace_crates_dir;
+
 #[derive(Clone, Copy, Debug)]
 #[allow(dead_code)]
 enum TlsClass {
@@ -314,11 +316,9 @@ fn is_test_only_block(before: &str) -> bool {
 }
 
 fn scanned_tls_names() -> Vec<(String, String)> {
-    let crates = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("crates directory");
+    let crates = workspace_crates_dir();
     let mut found = Vec::new();
-    visit(crates, crates, &mut found);
+    visit(&crates, &crates, &mut found);
     found.sort();
     found
 }
@@ -537,10 +537,7 @@ const DEFERRED_STEPS_OUTSIDE_THE_TABLE: &[(&str, &str)] = &[
 ];
 
 fn crates_dir() -> std::path::PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("crates directory")
-        .to_path_buf()
+    workspace_crates_dir()
 }
 
 fn simple_string_after<'a>(text: &'a str, mut at: usize) -> Option<&'a str> {

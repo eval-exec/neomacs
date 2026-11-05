@@ -13,9 +13,11 @@
 //! `..._forged.rs`).
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use syn::visit::{self, Visit};
+
+use super::architecture_production_source_roots::production_source_files;
 
 struct Installer {
     name: &'static str,
@@ -230,37 +232,18 @@ fn installer_calls(path: &Path) -> Vec<CallSite> {
     scan.hits
 }
 
-/// Every production `*.rs` under `src/`, excluding `tests/` directories.
-fn sources(root: &Path, out: &mut Vec<PathBuf>) {
-    for entry in std::fs::read_dir(root).expect("read source directory") {
-        let path = entry.expect("source entry").path();
-        if path.is_dir() {
-            if path.file_name().and_then(|name| name.to_str()) == Some("tests") {
-                continue;
-            }
-            sources(&path, out);
-        } else if path.extension().and_then(|extension| extension.to_str()) == Some("rs") {
-            out.push(path);
-        }
-    }
-}
-
 #[test]
 fn the_value_display_hook_installs_only_at_its_two_seams() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
-    let mut files = Vec::new();
-    sources(&root, &mut files);
     let mut actual: BTreeMap<&str, Vec<(String, Option<String>, usize)>> = BTreeMap::new();
-    for path in files {
-        let hits = installer_calls(&path);
+    for file in production_source_files() {
+        if file.relative.split('/').any(|part| part == "tests") {
+            continue;
+        }
+        let hits = installer_calls(&file.path);
         if hits.is_empty() {
             continue;
         }
-        let relative = path
-            .strip_prefix(&root)
-            .expect("source lives under src")
-            .to_string_lossy()
-            .replace('\\', "/");
+        let relative = file.relative;
         for hit in hits {
             let installer = INSTALLERS
                 .iter()

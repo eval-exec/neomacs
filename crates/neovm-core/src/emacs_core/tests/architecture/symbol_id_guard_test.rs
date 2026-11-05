@@ -20,9 +20,20 @@
 //! `&str` PARAMETER, so the count pin below covers the other half: any new
 //! resolver call site in the VM has to be argued for.
 
+use super::architecture_production_source_roots::production_file;
+
+/// Read the named `emacs_core` source through the shared production roots.
+/// The paths below are the pre-split ones relative to `src/emacs_core/`; the
+/// owning crate is resolved at run time so moved files stay covered (RULE 19).
+fn read_source(path: &str) -> String {
+    let file = production_file(&format!("src/emacs_core/{path}"));
+    std::fs::read_to_string(&file)
+        .unwrap_or_else(|error| panic!("read {}: {error}", file.display()))
+}
+
 macro_rules! hot_dispatch_sources {
     ($($path:literal),+ $(,)?) => {
-        [$(($path, include_str!(concat!("../../", $path)))),+]
+        [$(($path, read_source($path))),+]
     };
 }
 
@@ -30,7 +41,7 @@ macro_rules! hot_dispatch_sources {
 /// A cold path may legitimately resolve a name (charset and coding-system
 /// setup do), which is why this is scoped rather than crate-wide -- a lint
 /// that fires on correct code gets switched off.
-fn hot_dispatch_files() -> [(&'static str, &'static str); 4] {
+fn hot_dispatch_files() -> [(&'static str, String); 4] {
     hot_dispatch_sources![
         "runtime/bytecode/vm.rs",
         "runtime/eval/apply.rs",
@@ -70,7 +81,8 @@ fn only_the_vm_special_fallback_round_trips_an_id_through_its_name() {
     //
     // Pinned as a count rather than forbidden outright so that adding a second
     // one is a deliberate act with a test to update, not an accident.
-    let (path, source) = hot_dispatch_files()[0];
+    let files = hot_dispatch_files();
+    let (path, source) = (&files[0].0, &files[0].1);
     let round_trips = source
         .matches(concat!("dispatch_vm_builtin(resolve_", "sym("))
         .count();
@@ -95,7 +107,8 @@ fn the_vm_resolves_a_builtin_name_on_exactly_one_path() {
     // documented as the cold entry for callers that genuinely only have a name.
     // Matched in the `Self::`-qualified form so the definition and the doc
     // comments that name it do not count.
-    let (path, source) = hot_dispatch_files()[0];
+    let files = hot_dispatch_files();
+    let (path, source) = (&files[0].0, &files[0].1);
     let uses = source
         .matches(concat!("Self::builtin_name", "_id("))
         .count();

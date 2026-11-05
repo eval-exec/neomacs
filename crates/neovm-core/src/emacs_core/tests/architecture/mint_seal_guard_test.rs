@@ -18,24 +18,21 @@
 //! Reuse the plist seam's code-only scanner so comments, literals and
 //! test-gated items obey the same scanning rule.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use super::{code_only, find_all, source_files, test_gated_ranges};
+use super::super::architecture_production_source_roots::{
+    production_file, production_source_files,
+};
+use super::{code_only, find_all, test_gated_ranges};
 
 const SEAM_CONSTRUCT: &str = "src/emacs_core/runtime/eval/construct.rs";
 const SEAM_PUMP_RECONSTRUCT: &str = "src/emacs_core/runtime/eval/pdump_reconstruct.rs";
 const CARRIED: &str = "src/emacs_core/runtime/eval/green/carried.rs";
 
-fn source_root() -> PathBuf {
-    // This file lives at src/emacs_core/tests/architecture/.
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("src")
-}
-
 fn production_rust_files() -> Vec<PathBuf> {
-    let mut files = Vec::new();
-    source_files(&source_root(), &mut files);
-    files
+    production_source_files()
         .into_iter()
+        .map(|file| file.path)
         .filter(|path| {
             let text = path.to_string_lossy();
             !text.contains("/tests/") && !text.contains("/test_")
@@ -136,7 +133,7 @@ fn n11_stub_walker_callers_are_exactly_the_gc_phases() {
 
 #[test]
 fn n13_carried_world_state_pairs_are_referenced_only_from_carried() {
-    let carried_path = source_root().join(CARRIED.strip_prefix("src/").expect("src-prefixed"));
+    let carried_path = production_file(CARRIED);
     let carried_source =
         std::fs::read_to_string(&carried_path).expect("read eval/green/carried.rs");
     let carriers_table = carried_source

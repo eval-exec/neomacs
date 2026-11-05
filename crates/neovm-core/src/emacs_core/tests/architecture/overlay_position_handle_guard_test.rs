@@ -1,9 +1,10 @@
 //! The lower read handle has no public mint. Its crate-private construction is
 //! reserved for Buffer's existing attachment operation.
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use syn::visit::{self, Visit};
 
-use super::{code_only, source_files, test_gated_ranges};
+use super::super::architecture_production_source_roots::production_source_files;
+use super::{code_only, test_gated_ranges};
 
 const OWNER: &str = "src/buffer/overlay_index.rs";
 const MINT: &str = "set_overlay_position_handle";
@@ -62,21 +63,17 @@ fn permitted(path: &Path, function: &str) -> bool {
 }
 #[test]
 fn overlay_position_handle_mint_is_only_the_buffer_attachment() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let mut files = Vec::new();
-    source_files(&root.join("src"), &mut files);
     let mut seen = 0;
-    for file in files {
-        let relative = file.strip_prefix(&root).unwrap();
-        if relative.components().any(|c| c.as_os_str() == "tests") {
+    for file in production_source_files() {
+        if file.relative.split('/').any(|part| part == "tests") {
             continue;
         }
-        let source = std::fs::read_to_string(&file).unwrap();
+        let relative = file.legacy();
+        let source = std::fs::read_to_string(&file.path).unwrap();
         for (function, line) in production_calls(&source) {
             assert!(
-                permitted(relative, &function),
-                "unapproved overlay handle mint: {}:{line} {function}",
-                relative.display()
+                permitted(Path::new(&relative), &function),
+                "unapproved overlay handle mint: {relative}:{line} {function}"
             );
             seen += 1;
         }

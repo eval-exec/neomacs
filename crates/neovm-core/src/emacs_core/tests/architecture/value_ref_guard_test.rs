@@ -16,6 +16,8 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+
+use super::architecture_production_source_roots::crates_dir;
 use syn::parse::Parser;
 use syn::visit::{self, Visit};
 use syn::{Attribute, Meta};
@@ -585,10 +587,7 @@ fn assert_no_borrowed_readers(workspace_crates: &Path, survey: &Survey) {
 
 #[test]
 fn value_reference_readers_are_absent_from_shipping_code() {
-    let workspace_crates = neomacs_infra::crate_root!()
-        .parent()
-        .expect("the crate sits in the workspace's crates directory")
-        .to_path_buf();
+    let workspace_crates = crates_dir();
     assert_no_borrowed_readers(&workspace_crates, &production_sites(&workspace_crates));
 }
 

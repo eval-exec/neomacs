@@ -13,6 +13,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use syn::visit::{self, Visit};
+
+use super::architecture_production_source_roots::{
+    production_file, production_source_roots, workspace_root,
+};
 use syn::{
     Attribute, Expr, GenericArgument, Item, Lit, Meta, PathArguments, Type, UseTree, Visibility,
 };
@@ -1216,8 +1220,10 @@ impl<'ast> Visit<'ast> for Publication {
 fn binding_publication_uses_existing_context_projection() {
     // Set/VarSet/VarBind/Unbind and their JIT shims remain permitted unchanged.
     // Only the actual native effect receiver is certified here.
-    let source = include_str!("../../runtime/eval/mod.rs");
-    let file = syn::parse_file(source).expect("parse evaluator");
+    let path = production_file("src/emacs_core/runtime/eval/mod.rs");
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+    let file = syn::parse_file(&source).expect("parse evaluator");
     let method = file
         .items
         .iter()
@@ -1240,7 +1246,7 @@ fn binding_publication_uses_existing_context_projection() {
         "binding publication must invoke the setter on the alias bound from self.display_host; a void setter may use FIFO one-way publication, result/error operations remain synchronous"
     );
     assert!(
-        scan("neovm-core/src/emacs_core/runtime/eval/mod.rs", source).is_empty(),
+        scan("neovm-core/src/emacs_core/runtime/eval/mod.rs", &source).is_empty(),
         "binding publication acquired explicit native backing outside its projection"
     );
 }
@@ -1598,8 +1604,16 @@ impl<'ast> Visit<'ast> for RealWaitPermitMints {
 
 #[test]
 fn real_wait_permit_is_minted_only_inside_the_physical_native_executor() {
-    let root = neomacs_infra::crate_root!().canonicalize().unwrap();
-    let mut pending = crate_roots(&root);
+    // The permit type lives in the extracted host-effect tree. Seed the module
+    // walk from every production source root so the scan follows the split
+    // instead of stopping at core's re-export (RULE 19).
+    let root = workspace_root().canonicalize().expect("workspace root");
+    let mut pending = Vec::new();
+    for source_root in production_source_roots() {
+        pending.extend(crate_roots(
+            source_root.src.parent().expect("crate source parent"),
+        ));
+    }
     let mut seen = BTreeSet::new();
     let mut mints = Vec::new();
     while let Some(file) = pending.pop() {
@@ -1623,7 +1637,7 @@ fn real_wait_permit_is_minted_only_inside_the_physical_native_executor() {
     assert_eq!(
         mints,
         vec![(
-            "src/host_effect/wake/native_wait.rs".to_owned(),
+            "crates/neovm-eval/src/host_effect/wake/native_wait.rs".to_owned(),
             "BlockingNativeWait".to_owned(),
             "execute".to_owned(),
         )],

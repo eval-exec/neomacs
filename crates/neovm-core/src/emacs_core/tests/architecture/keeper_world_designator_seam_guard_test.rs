@@ -5,9 +5,10 @@
 //! not attempt Rust alias resolution. Reuse the plist seam's code-only scanner
 //! so comments, literals and test-only items obey the same scanning rule.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use super::{code_only, find_all, source_files, test_gated_ranges};
+use super::super::architecture_production_source_roots::production_source_files;
+use super::{code_only, find_all, test_gated_ranges};
 
 const OWNER: &str = "src/emacs_core/runtime/eval/world";
 
@@ -71,26 +72,24 @@ fn owner_allows(relative: &Path) -> bool {
 }
 
 fn assert_world_owner_constructor(constructor: Constructor) {
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let mut files = Vec::new();
-    source_files(&manifest.join("src"), &mut files);
-    assert!(files.len() > 100, "guard must scan the whole crate source");
+    let files = production_source_files();
+    assert!(
+        files.len() > 100,
+        "guard must scan every production source tree"
+    );
     let mut constructors = Vec::new();
-    for path in files {
-        let relative = path.strip_prefix(&manifest).expect("crate source path");
-        if relative
-            .components()
-            .any(|component| component.as_os_str() == "tests")
-        {
+    for file in files {
+        if file.relative.split('/').any(|part| part == "tests") {
             continue;
         }
-        let source = std::fs::read_to_string(&path).expect("read source file");
+        let relative = file.legacy();
+        let source = std::fs::read_to_string(&file.path).expect("read source file");
         let code = code_only(&source);
         for offset in production_sites(&source, constructor) {
             let line = code[..offset].matches('\n').count() + 1;
-            let site = format!("{}:{line}", relative.display());
+            let site = format!("{relative}:{line}");
             assert!(
-                owner_allows(relative),
+                owner_allows(Path::new(&relative)),
                 "{}::new outside the eval World owner: {site}",
                 constructor.name()
             );

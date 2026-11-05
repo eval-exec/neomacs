@@ -2,6 +2,7 @@
 //! configuration. Follow module declarations rather than guessing from file
 //! names: a production module named `tests` must still be checked.
 
+use super::architecture_production_source_roots::production_source_roots;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use syn::ext::IdentExt;
@@ -362,10 +363,44 @@ fn assert_production_ceiling(root: &Path, sites: &BTreeMap<PathBuf, usize>) {
     );
 }
 
+/// Production sites across every extracted source tree, keyed by
+/// workspace-relative path. The pre-split guard walked the single core module
+/// graph; the split moved most of that graph into the lower crates, so the
+/// ceiling covers all of them or it would silently stop counting.
+fn all_production_sites(symbol: &'static str) -> BTreeMap<String, usize> {
+    let mut sites = BTreeMap::new();
+    for root in production_source_roots() {
+        for (path, count) in production_sites_for(&root.src, symbol) {
+            let relative = path
+                .strip_prefix(&root.src)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            *sites
+                .entry(format!("{}/src/{relative}", root.crate_dir))
+                .or_insert(0) += count;
+        }
+    }
+    sites
+}
+
+fn assert_total_ceiling(sites: &BTreeMap<String, usize>) {
+    let count = sites.values().sum::<usize>();
+    let locations = sites
+        .iter()
+        .map(|(path, count)| format!("{path}: {count}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        count <= TRANSMUTE_CEILING,
+        "{count} production transmute sites exceed the ceiling {TRANSMUTE_CEILING}. \
+         Decode enums with TryFromPrimitive or FromRepr; this ceiling may only decrease.\n{locations}"
+    );
+}
+
 #[test]
 fn production_transmute_count_can_only_decrease() {
-    let root = neomacs_infra::crate_root!().join("src");
-    assert_production_ceiling(&root, &production_sites(&root));
+    assert_total_ceiling(&all_production_sites("transmute"));
 }
 
 #[test]
@@ -442,8 +477,7 @@ fn transmute_guard_rejects_aliases_that_hide_conversions() {
 
 #[test]
 fn production_heap_installers_use_the_allocation_root() {
-    let root = neomacs_infra::crate_root!().join("src");
-    let sites = production_sites_for(&root, "set_tagged_heap");
+    let sites = all_production_sites("set_tagged_heap");
     assert!(
         sites.is_empty(),
         "production must install TLS from the allocation root: {sites:?}"

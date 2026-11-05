@@ -1,7 +1,8 @@
 //! PC8: exact registry mint/getter owners across the value/core boundary.
 
-use std::path::{Path, PathBuf};
 use syn::visit::{self, Visit};
+
+use super::architecture_production_source_roots::production_source_files;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum RegistryEntry {
@@ -184,19 +185,6 @@ fn registry_sites(file: &str, source: &str) -> Vec<RegistrySite> {
     scan.sites
 }
 
-fn product_sources(root: &Path, files: &mut Vec<PathBuf>) {
-    for entry in std::fs::read_dir(root).expect("read product source directory") {
-        let path = entry.expect("source entry").path();
-        if path.is_dir() {
-            if path.file_name().and_then(|name| name.to_str()) != Some("tests") {
-                product_sources(&path, files);
-            }
-        } else if path.extension().and_then(|extension| extension.to_str()) == Some("rs") {
-            files.push(path);
-        }
-    }
-}
-
 fn expected_sites() -> Vec<RegistrySite> {
     [
         (
@@ -223,12 +211,12 @@ fn expected_sites() -> Vec<RegistrySite> {
         ),
         (
             RegistryEntry::CheckedGetter,
-            "neovm-core/src/emacs_core/runtime/eval/construct.rs",
+            "neovm-eval/src/emacs_core/runtime/eval/construct.rs",
             "RegistryHandles::current",
         ),
         (
             RegistryEntry::CheckedGetter,
-            "neovm-core/src/emacs_core/runtime/eval/pdump_reconstruct.rs",
+            "neovm-eval/src/emacs_core/runtime/eval/pdump_reconstruct.rs",
             "Context::from_dump",
         ),
     ]
@@ -254,24 +242,20 @@ fn validate_sites(mut actual: Vec<RegistrySite>) -> Result<(), Vec<RegistrySite>
 
 #[test]
 fn actual_registry_mints_and_getters_have_exact_product_owners() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("workspace crates directory")
-        .to_owned();
-    let mut files = Vec::new();
-    product_sources(&root.join("neovm-core/src"), &mut files);
-    product_sources(&root.join("neovm-value/src"), &mut files);
     let mut actual = Vec::new();
-    for file in files {
-        let source = std::fs::read_to_string(&file).expect("read actual product source");
+    for file in production_source_files() {
+        if !matches!(
+            file.crate_dir.as_str(),
+            "neovm-core" | "neovm-value" | "neovm-eval"
+        ) || file.relative.split('/').any(|part| part == "tests")
+        {
+            continue;
+        }
+        let source = std::fs::read_to_string(&file.path).expect("read actual product source");
         if source.contains("InFlightRegistryHandle")
             || source.contains("current_in_flight_registry_handle")
         {
-            let relative = file.strip_prefix(&root).expect("source under root");
-            actual.extend(registry_sites(
-                relative.to_str().expect("source path is UTF-8"),
-                &source,
-            ));
+            actual.extend(registry_sites(&file.workspace_relative(), &source));
         }
     }
     assert_eq!(
@@ -313,7 +297,7 @@ fn source_guard_detects_getter_in_the_wrong_registry_handles_method() {
     let source = "impl RegistryHandles { \
         fn of() { current_in_flight_registry_handle(); } }";
     let sites = registry_sites(
-        "neovm-core/src/emacs_core/runtime/eval/construct.rs",
+        "neovm-eval/src/emacs_core/runtime/eval/construct.rs",
         source,
     );
     assert_eq!(sites.len(), 1);

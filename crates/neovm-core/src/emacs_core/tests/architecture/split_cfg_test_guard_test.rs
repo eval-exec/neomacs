@@ -26,6 +26,8 @@
 
 use std::path::{Path, PathBuf};
 
+use super::architecture_production_source_roots::production_source_root;
+
 const MANIFEST: &str = include_str!("moved_production_files.tsv");
 const EXPECTED_FILES: usize = 182;
 
@@ -693,12 +695,8 @@ fn architecture_cfg_test_guard_self_test() {
 
 #[test]
 fn architecture_moved_production_has_no_bare_cfg_test() {
-    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let core_src = manifest_dir.join("src");
-    let value_src = manifest_dir
-        .parent()
-        .expect("crates/neovm-core has a parent")
-        .join("neovm-value/src");
+    let core_src = production_source_root("neovm-core").src;
+    let value_src = production_source_root("neovm-value").src;
     let mut rows = 0usize;
     let mut violations = Vec::new();
     for line in MANIFEST.lines() {

@@ -2,7 +2,8 @@
 # Checked by tests/architecture/inline_boundary_test.rs; extending it requires pre-LTO body, inline-tree
 # and level-3 callee-contract comparisons, followed by the lead's fat-build A/B.
 #
-# Columns (TAB separated): kind, file (relative to crates/neovm-core/src), item, reach, # reason
+# Columns (TAB separated): kind, file (pre-split crate-src-relative; resolved across the
+# extracted crates through production_source_roots()), item, reach, # reason
 #   kind   always  inlined into a protected function in the reference build: #[inline(always)]
 #          never   called out of line from a protected function: #[inline(never)]
 #          exempt  reached, but not pinnable without re-tuning other call sites, or
