@@ -2,9 +2,11 @@ use super::*;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::intern::{intern, intern_uninterned};
 use crate::emacs_core::symbol::ObarraySymbolCellSkipGuard;
-use crate::tagged::gc::ProofEra as ParallelHeapEra;
 use crate::tagged::gc::mutator_registration::era_fixtures::EraFixtureExt;
+use crate::tagged::gc::{CollectionReport, RegistrationError};
+use neovm_eval::test_support::authority::WorldProofEra as ParallelHeapEra;
 use std::cell::RefCell;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ObjectIdentity(usize);
@@ -39,7 +41,9 @@ enum RootPresence {
 }
 impl RootPresence {
     fn in_words(root: &ExpectedRoot, words: &[TaggedValue]) -> Self {
-        if words.contains(&TaggedValue::from_bits(root.identity.0)) {
+        // SAFETY: identity words are copied from a live TaggedValue earlier in
+        // this test harness and are only compared, never dereferenced.
+        if words.contains(&unsafe { TaggedValue::from_bits(root.identity.0) }) {
             Self::Present
         } else {
             Self::Absent
@@ -150,7 +154,8 @@ fn root_families(backing: PlainSymbolBacking) {
                 "P3SYM_C6_KEEPER_WITNESS serial_cell_omission_detected_parallel_scan_must_reseed"
             );
             for root in roots.iter() {
-                let value = TaggedValue::from_bits(root.identity.0);
+                // SAFETY: same copied identity word; compared only.
+                let value = unsafe { TaggedValue::from_bits(root.identity.0) };
                 assert!(serial_full.contains(&value));
                 match root.family {
                     RootFamily::Localized
@@ -222,9 +227,10 @@ fn root_families(backing: PlainSymbolBacking) {
                         expected
                             .iter()
                             .map(|root| {
-                                if heap.owns_heap_value_for_test(TaggedValue::from_bits(
-                                    root.identity.0,
-                                )) {
+                                // SAFETY: same copied identity word, compared only.
+                                if heap.owns_heap_value_for_test(unsafe {
+                                    TaggedValue::from_bits(root.identity.0)
+                                }) {
                                     RootLiveness::Live
                                 } else {
                                     RootLiveness::Reclaimed
@@ -287,12 +293,18 @@ enum AuthorityOccupancy {
 struct OccupiedWord<'a>(&'a AtomicU64);
 impl<'a> OccupiedWord<'a> {
     fn new(word: &'a AtomicU64, mode: AuthorityOccupancy) -> Self {
-        assert!(word::quiescent(word));
+        // Same predicate as the authority word's quiescent(): no reader and no
+        // writer occupies the word.
+        assert_eq!(
+            word.load(Ordering::Acquire),
+            0,
+            "authority word must be quiescent"
+        );
         let occupied = match mode {
             AuthorityOccupancy::Reader => 1,
-            AuthorityOccupancy::Writer => {
-                crate::tagged::gc::mutator_registration::authority_word::WRITER
-            }
+            // The protocol's writer sentinel (the high bit); the test stores
+            // exactly the value authority_word::WRITER uses.
+            AuthorityOccupancy::Writer => 1 << 63,
         };
         word.store(occupied, Ordering::Release);
         Self(word)
@@ -313,7 +325,7 @@ fn p3sym_c6_keeper_nonzero_word_refuses_before_copy_and_recovers() {
             let keeper = era.keeper_for_test().unwrap();
             let designator = keeper.keeper_designator().unwrap();
             for occupancy in [AuthorityOccupancy::Reader, AuthorityOccupancy::Writer] {
-                let guard = OccupiedWord::new(&era.registry().symbols.word, occupancy);
+                let guard = OccupiedWord::new(era.symbol_word_for_test(), occupancy);
                 let mut out = vec![TaggedValue::T];
                 let cell_result = symbols.append_current_symbol_roots(&designator, &mut out);
                 let projection_result =
@@ -353,13 +365,8 @@ fn p3sym_c6_keeper_foreign_world_and_backing_refuse_before_copy() {
             let cells = outer_symbols.append_current_symbol_roots(&inner_designator, &mut out);
             let projections =
                 inner_symbols.append_current_projection_roots(&outer_designator, &mut out);
-            let backing = outer_symbols
-                .check_symbol_backing(&inner.registry().symbols.backing, &outer_designator);
-            let designators = inner
-                .registry()
-                .symbols
-                .backing
-                .check_root_designators(outer_designator.obarray(), outer_designator.projections());
+            let backing = inner.check_symbol_backing_for_test(&outer_symbols, &outer_designator);
+            let designators = inner.check_root_designators_for_test(&outer_designator);
             drop(inner_symbols);
             inner_stop.trace(|_, _| Ok(())).unwrap();
             inner_stop.complete().unwrap();
