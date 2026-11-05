@@ -16,9 +16,13 @@
 use super::error::{EvalResult, Flow, signal};
 use super::intern::resolve_sym;
 use super::value::*;
+// Split-era path restoration for the in-module test tree: the historical
+// glob re-exported the value aliases; keep the public name crate-internal.
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_max_args, expect_min_args};
 use crate::emacs_core::keyboard::CommandLoopHost;
+#[allow(unused_imports)]
+pub(crate) use neovm_value::heap_types::LispString;
 use std::collections::HashSet;
 
 // ---------------------------------------------------------------------------

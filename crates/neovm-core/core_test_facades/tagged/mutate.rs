@@ -21,6 +21,9 @@ pub use neovm_value::heap_types::LispMarker;
 pub use neovm_value::heap_types::LispString;
 pub use neovm_value::value::LispHashTable;
 
+// Public-path restoration for the relocated core_tests files.
+pub use neovm_value::tagged::mutate::with_bytecode_data_mut_for_test;
+
 #[cfg(test)]
 #[path = "../../core_tests/tagged/gc/tests/heap_mut_closure_test.rs"]
 mod gc_heap_mut_closure_tests;
