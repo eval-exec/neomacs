@@ -16,6 +16,10 @@ pub use neovm_value::value::Value;
 
 pub use neovm_value::boolvec::*;
 
+// Public-path restoration for the relocated core_tests files.
+pub use neovm_value::error::EvalResult;
+pub use neovm_value::tagged::header::BoolVectorObj;
+
 #[cfg(test)]
 #[path = "../../core_tests/emacs_core/text/boolvec/tests/boolvec_test.rs"]
 mod tests;

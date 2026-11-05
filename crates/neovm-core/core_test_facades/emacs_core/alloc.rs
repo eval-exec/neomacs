@@ -16,6 +16,9 @@ pub use neovm_value::value::Value;
 
 pub use neovm_value::alloc::*;
 
+// Public-path restoration for the relocated core_tests files.
+pub use neovm_value::symbol::Obarray;
+
 #[cfg(test)]
 #[path = "../../core_tests/emacs_core/runtime/alloc/tests/alloc_test.rs"]
 mod tests;

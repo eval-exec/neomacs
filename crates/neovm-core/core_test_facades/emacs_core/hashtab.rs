@@ -11,6 +11,12 @@ pub use neovm_value::hashtab::*;
 #[path = "hashtab/user_test_guard.rs"]
 pub mod user_test_guard;
 
+// Public-path restoration for the relocated core_tests files.
+pub use neovm_value::value::HashKey;
+pub use neovm_value::value::HashTableTest;
+pub use neovm_value::value::eq_value;
+pub use neovm_value::value::list_to_vec;
+
 #[cfg(test)]
 #[path = "../../core_tests/emacs_core/runtime/hashtab/tests/bignum_sxhash_test.rs"]
 mod bignum_sxhash_tests;

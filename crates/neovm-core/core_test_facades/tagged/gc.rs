@@ -27,6 +27,12 @@ pub mod mark_sweep;
 #[path = "gc/mutator_registration.rs"]
 pub mod mutator_registration;
 
+// Public-path restoration for the relocated core_tests files.
+pub use neovm_value::tagged::header::CHAR_TABLE_TOP_SLOTS;
+pub use neovm_value::tagged::header::VecLikeHeader;
+pub use neovm_value::tagged::header::VecLikeType;
+pub use neovm_value::value::HashTableWeakness;
+
 #[cfg(test)]
 #[path = "../../core_tests/tagged/gc/tests/chartable_contract_test.rs"]
 mod chartable_contract_tests;

@@ -8,6 +8,9 @@
 
 pub use neovm_value::tagged::gc::barrier_window::*;
 
+// Public-path restoration for the relocated core_tests files.
+pub use neovm_value::tagged::gc::TaggedHeap;
+
 #[cfg(test)]
 #[path = "../../../core_tests/tagged/gc/tests/barrier_window_layout.rs"]
 mod layout_tests;

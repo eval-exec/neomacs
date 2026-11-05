@@ -16,6 +16,9 @@ pub use neovm_value::value::Value;
 
 pub use neovm_value::symbol::*;
 
+// Public-path restoration for the relocated core_tests files.
+pub use neovm_value::intern;
+
 #[cfg(test)]
 #[path = "../../core_tests/emacs_core/runtime/symbol/tests/buffer_local_global_read_test.rs"]
 mod buffer_local_global_read_tests;

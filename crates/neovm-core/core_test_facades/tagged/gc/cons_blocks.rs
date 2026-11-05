@@ -16,6 +16,9 @@ pub use neovm_value::value::Value;
 
 pub use neovm_value::tagged::gc::cons_blocks::*;
 
+// Public-path restoration for the relocated core_tests files.
+pub use neovm_value::tagged::header::ConsCell;
+
 #[cfg(test)]
 #[path = "../../../core_tests/tagged/gc/tests/cons_minor_test.rs"]
 mod cons_minor_tests;

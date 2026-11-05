@@ -16,6 +16,10 @@ pub use neovm_value::value::Value;
 
 pub use neovm_value::tagged::gc::mutator_registration::symbol_authority::functions::hof::*;
 
+// Public-path restoration for the relocated core_tests files.
+pub use neovm_value::intern::SymId;
+pub use neovm_value::symbol::parallel::PlainSymbolBacking;
+
 #[cfg(test)]
 #[path = "../../../../../../core_tests/tagged/gc/mutator_registration/symbol_authority/functions/hof/tests.rs"]
 mod tests;

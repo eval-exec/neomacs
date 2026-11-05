@@ -8,6 +8,13 @@
 
 pub use neovm_value::tagged::gc::arena_pages::*;
 
+// Public-path restoration for the relocated core_tests files.
+pub use neovm_value::tagged::header::FloatObj;
+pub use neovm_value::tagged::header::GcHeader;
+pub use neovm_value::tagged::header::HeapObjectKind;
+pub use neovm_value::tagged::header::MarkParity;
+pub use neovm_value::tagged::header::UNMARKED_AT_REST;
+
 #[cfg(test)]
 #[path = "../../../core_tests/tagged/gc/tests/arena_minor_test.rs"]
 mod arena_minor_tests;

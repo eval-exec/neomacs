@@ -8,6 +8,9 @@
 
 pub use neovm_value::tagged::gc::mutator_registration::execution::read::*;
 
+// Public-path restoration for the relocated core_tests files.
+pub use neovm_value::tagged::gc::symbol_table::SymbolSlotIndex;
+
 #[cfg(test)]
 #[path = "../../../../../core_tests/tagged/gc/mutator_registration/execution/read/tests/cell_test.rs"]
 mod tests;

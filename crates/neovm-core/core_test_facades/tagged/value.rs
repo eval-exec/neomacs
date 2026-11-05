@@ -8,6 +8,9 @@
 
 pub use neovm_value::tagged::value::*;
 
+// Public-path restoration for the relocated core_tests files.
+pub use neovm_value::tagged::header::VecLikeType;
+
 #[cfg(test)]
 #[path = "../../core_tests/tagged/value/tests/gc_tls_ownership_test.rs"]
 mod gc_tls_ownership_tests;
