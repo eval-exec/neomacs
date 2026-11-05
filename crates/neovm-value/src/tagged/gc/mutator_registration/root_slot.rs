@@ -21,7 +21,19 @@ static_assertions::assert_impl_all!(OwnerRootSlot<'static>: Clone);
 static_assertions::assert_not_impl_any!(OwnerRootSlot<'static>: Send, Sync, Copy);
 
 impl OwnerRootSlot<'_> {
+    /// Value-FENCE hook (C1): a forged-index copy of this root home for the
+    /// relocated transition fixtures. Callers go through
+    /// neovm_value::test_support::authority::owner_root_slot_with_index_for_test.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn with_index_for_test(&self, index: usize) -> Self {
+        Self {
+            index,
+            ..self.clone()
+        }
+    }
+
     #[inline]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn check(&self, run: &RunAccess<'_, '_>) -> Result<(), RegistrationError> {
         let local = run.owner.local.as_ref().expect("resident owner roots");
         self.check_binding(

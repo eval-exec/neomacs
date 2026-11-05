@@ -303,3 +303,66 @@ pub fn set_arm(
 pub fn force_fn_stamps_for_test(on: Option<bool>) {
     crate::symbol::force_fn_stamps_for_test(on);
 }
+
+/// Value-FENCE row (C1/C3): assertion-only plant of a same-heap immediate
+/// into the original owner's root scratch slot for the relocated
+/// symbol_globals transition fixtures.
+///
+/// # Safety
+/// `value` must be an immediate (fixnum, nil or t) allocated in this owner's
+/// heap, `root` must name one of this owner's rooted slots, and the owner must
+/// be exclusively borrowed by `run`.
+pub unsafe fn plant_scalar_root_for_test(
+    run: &mut crate::tagged::gc::mutator_registration::RunAccess<'_, '_>,
+    root: &crate::tagged::gc::mutator_registration::OwnerRootSlot<'_>,
+    value: crate::tagged::value::TaggedValue,
+) {
+    run.plant_scalar_root_for_test(root, value);
+}
+
+/// Value-FENCE row (REGWAIT-GAP): retrying activation for the relocated
+/// symbol_globals history fixtures; the same Busy-retry loop as the in-crate
+/// test helper and no new authority.
+pub fn activate_retry_for_test<'era>(
+    mut permit: crate::tagged::gc::mutator_registration::MutatorPermit<'era>,
+    heap: crate::tagged::gc::HeapIdentity,
+    owner: u64,
+) -> crate::tagged::gc::mutator_registration::Mutator<'era> {
+    loop {
+        match permit.activate(heap, owner) {
+            Ok(token) => return token,
+            Err(failed) if failed.reason == crate::tagged::gc::RegistrationError::Busy => {
+                permit = failed.into_permit();
+                std::thread::yield_now();
+            }
+            Err(failed) => panic!("activation failed: {failed:?}"),
+        }
+    }
+}
+
+/// Value-FENCE row (REGWAIT-GAP): retrying retirement for the same fixtures.
+pub fn finish_retry_for_test(
+    mut token: crate::tagged::gc::mutator_registration::Mutator<'_>,
+    epoch: std::num::NonZeroU64,
+) {
+    loop {
+        match token.finish(epoch) {
+            Ok(()) => return,
+            Err(failed) if failed.reason == crate::tagged::gc::RegistrationError::Busy => {
+                token = failed.into_owner();
+                std::thread::yield_now();
+            }
+            Err(failed) => panic!("retirement failed: {failed:?}"),
+        }
+    }
+}
+
+/// Value-FENCE row (C1): a forged-index copy of a root home for the relocated
+/// transition fixtures. Safe: every use still goes through the keeper's
+/// binding check, so an invalid index can only be refused.
+pub fn owner_root_slot_with_index_for_test<'era>(
+    root: &crate::tagged::gc::mutator_registration::OwnerRootSlot<'era>,
+    index: usize,
+) -> crate::tagged::gc::mutator_registration::OwnerRootSlot<'era> {
+    root.with_index_for_test(index)
+}

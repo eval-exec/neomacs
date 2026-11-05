@@ -572,6 +572,20 @@ impl RunAccess<'_, '_> {
         self.state().root_slot_generation = u64::MAX;
     }
 
+    /// Value-FENCE hook (class C3): assertion-only plant of a same-heap
+    /// immediate into this owner's root scratch slot. Callers go through
+    /// neovm_value::test_support::authority::plant_scalar_root_for_test.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub(crate) fn plant_scalar_root_for_test(
+        &mut self,
+        root: &OwnerRootSlot<'_>,
+        value: crate::tagged::value::TaggedValue,
+    ) {
+        self.owner.local.as_mut().unwrap().root_scratch[root.index] =
+            crate::tagged::gc::mark_word::MarkWord::of(value);
+    }
+
     /// Era follow-up row (peer 10:5xZ item 3): copied owner region-statistics
     /// snapshot. The owner state itself stays internal.
     #[cfg(any(test, feature = "test-support"))]

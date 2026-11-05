@@ -86,7 +86,10 @@ mod symbol_diagnostics;
 #[cfg(any(test, feature = "test-support"))]
 pub mod symbol_functions;
 #[cfg(test)]
+#[cfg(not(feature = "test-support"))]
 mod symbol_globals;
+#[cfg(feature = "test-support")]
+pub mod symbol_globals;
 #[cfg(test)]
 mod symbol_intern;
 #[cfg(test)]

@@ -1,15 +1,19 @@
 //! Small, deterministic fixtures also suitable for Miri (no timed stress).
 use super::tests::{fixture_case, oracle};
 use super::*;
-use crate::tagged::gc::mark_word::MarkWord;
 use crate::tagged::gc::{PlainSymbolBacking, RegistrationError};
 use crate::tagged::value::TaggedValue as Value;
+use neovm_value::test_support::authority::{
+    owner_root_slot_with_index_for_test, plant_scalar_root_for_test,
+};
 
 fn immediate(run: &mut RunAccess<'_, '_>, root: &OwnerRootSlot<'_>, value: Value) {
     assert!(value.is_fixnum() || value.is_nil() || value.is_t());
     root.check(run).unwrap();
     // Assertion-only planting of same-heap scalar input; no raw heap pointer.
-    run.owner.local.as_mut().unwrap().root_scratch[root.index] = MarkWord::of(value);
+    // SAFETY: `value` is an immediate from this owner's heap and `root` names
+    // one of its rooted homes; the owner is exclusively borrowed by `run`.
+    unsafe { plant_scalar_root_for_test(run, root, value) };
 }
 
 #[test]
@@ -39,7 +43,7 @@ fn p3sym_c3_nil_void_and_first_projected_assignment() {
             );
             run.sym_boundp_into(handle, dst).unwrap();
             assert_eq!(dst.word_for_test(run), Value::NIL.bits());
-            let before_issue = run.owner.local.as_ref().unwrap().hot.bytes_since_gc;
+            let before_issue = run.owner_gc_snapshot_for_test().bytes_since_gc;
             immediate(run, src, Value::NIL);
             run.sym_set_into(handle, src, dst).unwrap();
             assert_eq!(dst.word_for_test(run), Value::NIL.bits());
@@ -47,7 +51,7 @@ fn p3sym_c3_nil_void_and_first_projected_assignment() {
                 // Serial VOID setup reserved a page and issued-list capacity.
                 // Materialization reuses them, so no new storage is charged.
                 assert_eq!(
-                    run.owner.local.as_ref().unwrap().hot.bytes_since_gc,
+                    run.owner_gc_snapshot_for_test().bytes_since_gc,
                     before_issue,
                     "first VOID assignment reuses already reserved storage"
                 );
@@ -101,14 +105,14 @@ fn p3sym_c3_invalid_and_cleared_homes_refuse_before_access() {
     fixture_case(
         PlainSymbolBacking::Unprojected,
         |run, handle, src, dst, _| {
-            let mut invalid = dst.clone();
-            invalid.index = usize::MAX;
+            let mut invalid = owner_root_slot_with_index_for_test(dst, usize::MAX);
             assert_eq!(
                 run.sym_value_into(handle, &mut invalid),
                 Err(GlobalError::Authority(RegistrationError::StaleRegistration))
             );
-            run.owner.local.as_mut().unwrap().root_scratch[src.index] =
-                MarkWord::of(Value::UNBOUND);
+            // SAFETY: UNBOUND is an immediate; `src` names this owner's home
+            // and the owner is exclusively borrowed by `run`.
+            unsafe { plant_scalar_root_for_test(run, src, Value::UNBOUND) };
             assert_eq!(
                 run.sym_set_into(handle, src, dst),
                 Err(GlobalError::Authority(RegistrationError::Publication))

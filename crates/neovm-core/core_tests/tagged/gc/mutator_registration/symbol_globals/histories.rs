@@ -1,9 +1,11 @@
 //! Native finite-attempt histories on real existing World symbols. No timers.
 use super::*;
 use crate::emacs_core::eval::Context;
+use crate::tagged::gc::mutator_registration::era_fixtures::EraFixtureExt;
 use crate::tagged::gc::{PlainSymbolBacking, RegistrationError};
 use crate::tagged::transport::SharedRoot;
 use crate::tagged::value::TaggedValue as Value;
+use neovm_value::test_support::authority::{activate_retry_for_test, finish_retry_for_test};
 use std::num::NonZeroU64;
 
 #[derive(Debug)]
@@ -62,11 +64,8 @@ fn p3sym_c3_two_to_four_owner_real_global_histories() {
                         for (index, permit) in permits.into_iter().enumerate() {
                             let (roots, ready, done) = (&roots, &ready, &done);
                             jobs.push(scope.spawn(move || {
-                                let mut owner = super::super::tests::activate_retry(
-                                    permit,
-                                    heap,
-                                    index as u64 + 1,
-                                );
+                                let mut owner =
+                                    activate_retry_for_test(permit, heap, index as u64 + 1);
                                 ready.wait();
                                 let mut row = Row {
                                     answer: None,
@@ -116,7 +115,7 @@ fn p3sym_c3_two_to_four_owner_real_global_histories() {
                                     }
                                     run.clear_root_slots().unwrap();
                                 }
-                                super::super::tests::finish_retry(owner, NonZeroU64::MIN);
+                                finish_retry_for_test(owner, NonZeroU64::MIN);
                                 row
                             }));
                         }

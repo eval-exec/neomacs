@@ -1,13 +1,14 @@
 //! Real retained-World primitive twins; RAII cleanup runs for every outcome.
 use super::*;
 use crate::emacs_core::eval::Context;
-use crate::intern::SymId;
+use crate::emacs_core::intern::SymId;
 use crate::tagged::gc::PlainSymbolBacking;
+use crate::tagged::gc::mutator_registration::era_fixtures::EraFixtureExt;
 use crate::tagged::transport::SharedRoot;
 use crate::tagged::value::TaggedValue as Value;
 
 pub(super) fn oracle() -> Vec<&'static str> {
-    let lines: Vec<_> = include_str!("../symbol_globals_oracle.expected")
+    let lines: Vec<_> = include_str!("../../../../../../neovm-value/src/tagged/gc/mutator_registration/symbol_globals_oracle.expected")
         .lines()
         .collect();
     assert_eq!(lines.len(), 16, "GNU 31.1 C3 fixture row count");
@@ -126,7 +127,8 @@ fn primitive_case(op: GlobalOp, kind: PlainSymbolBacking) {
             GlobalOp::Makunbound { .. } => run.sym_makunbound_into(handle, dst),
         }
         .expect("sealed global primitive");
-        let value = Value::from_bits(dst.word_for_test(run));
+        // SAFETY: the word comes from this heap's own census.
+        let value = unsafe { Value::from_bits(dst.word_for_test(run)) };
         let (printed, expected) = match op {
             GlobalOp::Value { .. } => (crate::emacs_core::print_value(&value), oracle()[0]),
             GlobalOp::Set { .. } => (crate::emacs_core::print_value(&value), oracle()[1]),
@@ -144,7 +146,10 @@ fn primitive_case(op: GlobalOp, kind: PlainSymbolBacking) {
         if matches!(op, GlobalOp::Set { .. }) {
             run.sym_value_into(handle, dst).unwrap();
             assert_eq!(
-                crate::emacs_core::print_value(&Value::from_bits(dst.word_for_test(run))),
+                // SAFETY: the word comes from this heap's own census.
+                crate::emacs_core::print_value(&unsafe {
+                    Value::from_bits(dst.word_for_test(run))
+                }),
                 oracle()[1]
             );
         }
@@ -228,7 +233,9 @@ primitive!(
 
 #[test]
 fn p3sym_c3_surface_is_slot_to_slot() {
-    let api = include_str!("../symbol_globals.rs");
+    let api = include_str!(
+        "../../../../../../neovm-value/src/tagged/gc/mutator_registration/symbol_globals.rs"
+    );
     for forbidden in [
         "-> Value",
         "-> TaggedValue",
@@ -241,9 +248,12 @@ fn p3sym_c3_surface_is_slot_to_slot() {
             "C3 preparation exports {forbidden}"
         );
     }
-    let parent = include_str!("../../mutator_registration.rs");
+    let parent =
+        include_str!("../../../../../../neovm-value/src/tagged/gc/mutator_registration.rs");
     assert!(parent.contains("#[cfg(test)]\nmod symbol_globals;"));
-    let production = include_str!("../symbol_authority/globals.rs");
+    let production = include_str!(
+        "../../../../../../neovm-value/src/tagged/gc/mutator_registration/symbol_authority/globals.rs"
+    );
     for forbidden in [
         "-> Value",
         "-> TaggedValue",
