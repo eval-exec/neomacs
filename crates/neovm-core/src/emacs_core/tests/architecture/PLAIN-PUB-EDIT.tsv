@@ -491,6 +491,13 @@ crates/neovm-edit/src/buffer/buffer.rs	struct	struct MarkerRef
 crates/neovm-edit/src/buffer/buffer.rs	struct	struct OutermostRestrictionResetState
 crates/neovm-edit/src/buffer/buffer.rs	struct	struct SavedLabeledRestrictions
 crates/neovm-edit/src/buffer/buffer.rs	struct	struct SavedRestrictionState
+crates/neovm-edit/src/buffer/buffer.rs	use	use BUFFER_SLOT_COUNT
+crates/neovm-edit/src/buffer/buffer.rs	use	use BufferId
+crates/neovm-edit/src/buffer/buffer.rs	use	use BufferLocalView
+crates/neovm-edit/src/buffer/buffer.rs	use	use BufferSlot
+crates/neovm-edit/src/buffer/buffer.rs	use	use BufferSlotMeta
+crates/neovm-edit/src/buffer/buffer.rs	use	use BufferSlotPredicate
+crates/neovm-edit/src/buffer/buffer.rs	use	use BufferSlotPredicateError
 crates/neovm-edit/src/buffer/buffer_text.rs	fn	fn impl BufferText::backend_kind
 crates/neovm-edit/src/buffer/buffer_text.rs	fn	fn impl BufferText::byte_at_emacs_byte_pos
 crates/neovm-edit/src/buffer/buffer_text.rs	fn	fn impl BufferText::chain_walk_nodes
@@ -594,6 +601,8 @@ crates/neovm-edit/src/buffer/buffer_text.rs	fn	fn impl SyntaxSafePositions::poin
 crates/neovm-edit/src/buffer/buffer_text.rs	fn	fn impl SyntaxSafePositions::points_mut
 crates/neovm-edit/src/buffer/buffer_text.rs	fn	fn impl SyntaxSafePositions::set_key
 crates/neovm-edit/src/buffer/buffer_text.rs	struct	struct BufferText
+crates/neovm-edit/src/buffer/buffer_text.rs	use	use BufferSourceAuthority
+crates/neovm-edit/src/buffer/buffer_text.rs	use	use BufferSourceReadLease
 crates/neovm-edit/src/buffer/buffer_text/source_authority.rs	fn	fn impl Buffer::capture_motion_source_authority
 crates/neovm-edit/src/buffer/buffer_text/source_authority.rs	fn	fn impl BufferSourceAuthority::validate
 crates/neovm-edit/src/buffer/buffer_text/source_authority.rs	struct	struct BufferSourceAuthority
@@ -681,6 +690,67 @@ crates/neovm-edit/src/buffer/mod.rs	mod	mod text_props
 crates/neovm-edit/src/buffer/mod.rs	mod	mod text_snapshot
 crates/neovm-edit/src/buffer/mod.rs	mod	mod undo
 crates/neovm-edit/src/buffer/mod.rs	mod	mod visited_file_modtime
+crates/neovm-edit/src/buffer/mod.rs	use	use AccessibleCharRange
+crates/neovm-edit/src/buffer/mod.rs	use	use AccessibleEmacsByteRange
+crates/neovm-edit/src/buffer/mod.rs	use	use Buffer
+crates/neovm-edit/src/buffer/mod.rs	use	use BufferId
+crates/neovm-edit/src/buffer/mod.rs	use	use BufferManager
+crates/neovm-edit/src/buffer/mod.rs	use	use BufferSourceAuthority
+crates/neovm-edit/src/buffer/mod.rs	use	use BufferSourceReadLease
+crates/neovm-edit/src/buffer/mod.rs	use	use BufferTextBackendKind
+crates/neovm-edit/src/buffer/mod.rs	use	use BufferTextSnapshot
+crates/neovm-edit/src/buffer/mod.rs	use	use CharLen
+crates/neovm-edit/src/buffer/mod.rs	use	use CharPos0
+crates/neovm-edit/src/buffer/mod.rs	use	use CharRange
+crates/neovm-edit/src/buffer/mod.rs	use	use DisplayColumn
+crates/neovm-edit/src/buffer/mod.rs	use	use EditRuntime
+crates/neovm-edit/src/buffer/mod.rs	use	use EmacsByteLen
+crates/neovm-edit/src/buffer/mod.rs	use	use EmacsBytePos
+crates/neovm-edit/src/buffer/mod.rs	use	use EmacsByteRange
+crates/neovm-edit/src/buffer/mod.rs	use	use FirstChangeModtime
+crates/neovm-edit/src/buffer/mod.rs	use	use FullBufferLispCharRange
+crates/neovm-edit/src/buffer/mod.rs	use	use InsertionType
+crates/neovm-edit/src/buffer/mod.rs	use	use LabeledRestriction
+crates/neovm-edit/src/buffer/mod.rs	use	use LabeledRestrictionLabel
+crates/neovm-edit/src/buffer/mod.rs	use	use LineIndexBuild
+crates/neovm-edit/src/buffer/mod.rs	use	use LispBytePos1
+crates/neovm-edit/src/buffer/mod.rs	use	use LispCharPos1
+crates/neovm-edit/src/buffer/mod.rs	use	use MarkerRef
+crates/neovm-edit/src/buffer/mod.rs	use	use ObjectIntervalPlistRun
+crates/neovm-edit/src/buffer/mod.rs	use	use ObjectIntervalRun
+crates/neovm-edit/src/buffer/mod.rs	use	use OuterUndoLimit
+crates/neovm-edit/src/buffer/mod.rs	use	use Overlay
+crates/neovm-edit/src/buffer/mod.rs	use	use OverlayList
+crates/neovm-edit/src/buffer/mod.rs	use	use SavedLabeledRestrictions
+crates/neovm-edit/src/buffer/mod.rs	use	use SavedPointBeforeCommand
+crates/neovm-edit/src/buffer/mod.rs	use	use SavedRestrictionKind
+crates/neovm-edit/src/buffer/mod.rs	use	use SavedRestrictionState
+crates/neovm-edit/src/buffer/mod.rs	use	use SharedUndoState
+crates/neovm-edit/src/buffer/mod.rs	use	use TextChange
+crates/neovm-edit/src/buffer/mod.rs	use	use TextEditRange
+crates/neovm-edit/src/buffer/mod.rs	use	use TextExtent
+crates/neovm-edit/src/buffer/mod.rs	use	use TextInsertion
+crates/neovm-edit/src/buffer/mod.rs	use	use TextMetrics
+crates/neovm-edit/src/buffer/mod.rs	use	use TextPositionAnchor
+crates/neovm-edit/src/buffer/mod.rs	use	use TextPropertyTable
+crates/neovm-edit/src/buffer/mod.rs	use	use TextReplacement
+crates/neovm-edit/src/buffer/mod.rs	use	use TextTransposition
+crates/neovm-edit/src/buffer/mod.rs	use	use TranspositionAnchorPolicy
+crates/neovm-edit/src/buffer/mod.rs	use	use UndoLimitBindings
+crates/neovm-edit/src/buffer/mod.rs	use	use UndoLimits
+crates/neovm-edit/src/buffer/mod.rs	use	use UndoRecording
+crates/neovm-edit/src/buffer/mod.rs	use	use VisitedFileModtime
+crates/neovm-edit/src/buffer/mod.rs	use	use VisitedFileModtimeSlot
+crates/neovm-edit/src/buffer/mod.rs	use	use truncate_undo_list
+crates/neovm-edit/src/buffer/mod.rs	use	use undo_first_group_bytes
+crates/neovm-edit/src/buffer/mod.rs	use	use undo_list_boundary
+crates/neovm-edit/src/buffer/mod.rs	use	use undo_list_has_trailing_boundary
+crates/neovm-edit/src/buffer/mod.rs	use	use undo_list_is_disabled
+crates/neovm-edit/src/buffer/mod.rs	use	use undo_list_record_delete
+crates/neovm-edit/src/buffer/mod.rs	use	use undo_list_record_first_change
+crates/neovm-edit/src/buffer/mod.rs	use	use undo_list_record_insert
+crates/neovm-edit/src/buffer/mod.rs	use	use undo_list_record_point
+crates/neovm-edit/src/buffer/mod.rs	use	use undo_list_record_property_change
 crates/neovm-edit/src/buffer/overlay.rs	enum	enum OverlayPropertyAtPoint
 crates/neovm-edit/src/buffer/overlay.rs	field	OverlayPositionRemap field new_begin
 crates/neovm-edit/src/buffer/overlay.rs	field	OverlayPositionRemap field old_begin
@@ -770,6 +840,7 @@ crates/neovm-edit/src/buffer/overlay.rs	trait	trait OverlayPropertyResolver
 crates/neovm-edit/src/buffer/overlay.rs	type	type Overlay
 crates/neovm-edit/src/buffer/overlay.rs	type	type OverlayPriorityLookup
 crates/neovm-edit/src/buffer/overlay.rs	type	type OverlayPropertyLookup
+crates/neovm-edit/src/buffer/overlay.rs	use	use OverlayPropertyFilter
 crates/neovm-edit/src/buffer/overlay_index.rs	fn	fn impl OverlayPropertyFilter::for_properties
 crates/neovm-edit/src/buffer/overlay_index.rs	fn	fn impl OverlayPropertyFilter::unfiltered
 crates/neovm-edit/src/buffer/overlay_index.rs	struct	struct OverlayPropertyFilter
@@ -836,6 +907,14 @@ crates/neovm-edit/src/buffer/position.rs	trait	trait LispCharPos1BufferExt
 crates/neovm-edit/src/buffer/position.rs	type	type BytePos
 crates/neovm-edit/src/buffer/position.rs	type	type CharPos
 crates/neovm-edit/src/buffer/position.rs	type	type LispPos
+crates/neovm-edit/src/buffer/position.rs	use	use CharLen
+crates/neovm-edit/src/buffer/position.rs	use	use CharPos0
+crates/neovm-edit/src/buffer/position.rs	use	use CharRange
+crates/neovm-edit/src/buffer/position.rs	use	use EmacsByteLen
+crates/neovm-edit/src/buffer/position.rs	use	use EmacsBytePos
+crates/neovm-edit/src/buffer/position.rs	use	use EmacsByteRange
+crates/neovm-edit/src/buffer/position.rs	use	use LispBytePos1
+crates/neovm-edit/src/buffer/position.rs	use	use LispCharPos1
 crates/neovm-edit/src/buffer/shared.rs	fn	fn impl SavedPointBeforeCommand::new_editor_global
 crates/neovm-edit/src/buffer/shared.rs	fn	fn impl SharedUndoState::compacted_modified_tick
 crates/neovm-edit/src/buffer/shared.rs	fn	fn impl SharedUndoState::from_parts
@@ -963,6 +1042,14 @@ crates/neovm-edit/src/buffer/text/metrics.rs	fn	fn impl TextMetrics::from_extent
 crates/neovm-edit/src/buffer/text/metrics.rs	fn	fn impl TextMetrics::from_lengths
 crates/neovm-edit/src/buffer/text/metrics.rs	fn	fn impl TextMetrics::is_empty
 crates/neovm-edit/src/buffer/text/metrics.rs	struct	struct TextMetrics
+crates/neovm-edit/src/buffer/text/mod.rs	use	use BufferTextBackendKind
+crates/neovm-edit/src/buffer/text/mod.rs	use	use TextChange
+crates/neovm-edit/src/buffer/text/mod.rs	use	use TextEditRange
+crates/neovm-edit/src/buffer/text/mod.rs	use	use TextExtent
+crates/neovm-edit/src/buffer/text/mod.rs	use	use TextInsertion
+crates/neovm-edit/src/buffer/text/mod.rs	use	use TextMetrics
+crates/neovm-edit/src/buffer/text/mod.rs	use	use TextReplacement
+crates/neovm-edit/src/buffer/text/mod.rs	use	use TextTransposition
 crates/neovm-edit/src/buffer/text_index.rs	fn	fn text_line_index_mismatches
 crates/neovm-edit/src/buffer/text_snapshot.rs	enum	enum TextSnapshotMode
 crates/neovm-edit/src/buffer/text_snapshot.rs	fn	fn buffer_text_cow_copies

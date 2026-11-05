@@ -102,6 +102,7 @@ crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	fn	fn runtime_startup_evaluato
 crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	fn	fn set_no_site_lisp
 crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	struct	struct BootstrapError
 crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	struct	struct LoadupDumpInvocation
+crates/neovm-eval/src/emacs_core/lisp/load/mod.rs	use	use image_data_directory
 crates/neovm-eval/src/emacs_core/lisp/lread/mod.rs	field	ModuleSuffixes field primary
 crates/neovm-eval/src/emacs_core/lisp/lread/mod.rs	field	ModuleSuffixes field secondary
 crates/neovm-eval/src/emacs_core/lisp/native/builtins/cons_list.rs	fn	fn lambda_to_closure_vector
@@ -143,6 +144,12 @@ crates/neovm-eval/src/emacs_core/lisp/native/builtins/hooks.rs	field	WindowConfi
 crates/neovm-eval/src/emacs_core/lisp/native/builtins/hooks.rs	field	WindowConfigurationSnapshot field selected_window
 crates/neovm-eval/src/emacs_core/lisp/native/builtins/hooks.rs	field	WindowConfigurationSnapshot field tree
 crates/neovm-eval/src/emacs_core/lisp/native/builtins/misc_pure.rs	fn	fn impl Context::add_to_log
+crates/neovm-eval/src/emacs_core/lisp/native/builtins/mod.rs	use	use NeomacsMonitorInfo
+crates/neovm-eval/src/emacs_core/lisp/native/builtins/mod.rs	use	use lambda_params_to_value
+crates/neovm-eval/src/emacs_core/lisp/native/builtins/mod.rs	use	use lambda_to_closure_vector
+crates/neovm-eval/src/emacs_core/lisp/native/builtins/mod.rs	use	use neomacs_monitor_info_snapshot
+crates/neovm-eval/src/emacs_core/lisp/native/builtins/mod.rs	use	use parse_lambda_params_from_value
+crates/neovm-eval/src/emacs_core/lisp/native/builtins/mod.rs	use	use set_neomacs_monitor_info
 crates/neovm-eval/src/emacs_core/lisp/native/builtins/strings.rs	field	FormatPropSpan field arg_char_len
 crates/neovm-eval/src/emacs_core/lisp/native/builtins/strings.rs	field	FormatPropSpan field result_char_end
 crates/neovm-eval/src/emacs_core/lisp/native/builtins/strings.rs	field	FormatPropSpan field result_char_start
@@ -270,6 +277,13 @@ crates/neovm-eval/src/emacs_core/lisp/print/mod.rs	fn	fn print_value_with_buffer
 crates/neovm-eval/src/emacs_core/lisp/print/mod.rs	fn	fn print_value_with_options
 crates/neovm-eval/src/emacs_core/lisp/print/mod.rs	struct	struct PrintCircleState
 crates/neovm-eval/src/emacs_core/lisp/print/mod.rs	struct	struct PrintOptions
+crates/neovm-eval/src/emacs_core/lisp/print/mod.rs	use	use format_eval_result
+crates/neovm-eval/src/emacs_core/lisp/print/mod.rs	use	use format_eval_result_bytes_with_eval
+crates/neovm-eval/src/emacs_core/lisp/print/mod.rs	use	use format_eval_result_with_eval
+crates/neovm-eval/src/emacs_core/lisp/print/mod.rs	use	use map_flow
+crates/neovm-eval/src/emacs_core/lisp/print/mod.rs	use	use print_value_bytes_escaped_with_eval
+crates/neovm-eval/src/emacs_core/lisp/print/mod.rs	use	use print_value_bytes_with_eval
+crates/neovm-eval/src/emacs_core/lisp/print/mod.rs	use	use print_value_with_eval
 crates/neovm-eval/src/emacs_core/lisp/provide_coupled_vars/mod.rs	enum	enum CoupledFeature
 crates/neovm-eval/src/emacs_core/lisp/provide_coupled_vars/mod.rs	enum	enum HereDecision
 crates/neovm-eval/src/emacs_core/lisp/provide_coupled_vars/mod.rs	field	ProvideCoupledVariable field features
@@ -345,6 +359,18 @@ crates/neovm-eval/src/emacs_core/mod.rs	mod	mod subr_info
 crates/neovm-eval/src/emacs_core/mod.rs	mod	mod threads
 crates/neovm-eval/src/emacs_core/mod.rs	mod	mod value_reader
 crates/neovm-eval/src/emacs_core/mod.rs	mod	mod var_docs
+crates/neovm-eval/src/emacs_core/mod.rs	use	use Context
+crates/neovm-eval/src/emacs_core/mod.rs	use	use format_eval_result
+crates/neovm-eval/src/emacs_core/mod.rs	use	use format_eval_result_bytes_with_eval
+crates/neovm-eval/src/emacs_core/mod.rs	use	use format_eval_result_with_eval
+crates/neovm-eval/src/emacs_core/mod.rs	use	use print_value
+crates/neovm-eval/src/emacs_core/mod.rs	use	use print_value_bytes
+crates/neovm-eval/src/emacs_core/mod.rs	use	use print_value_bytes_with_eval
+crates/neovm-eval/src/emacs_core/mod.rs	use	use print_value_with_buffers
+crates/neovm-eval/src/emacs_core/mod.rs	use	use print_value_with_eval
+crates/neovm-eval/src/emacs_core/runtime/bytecode/chunk.rs	use	use ByteCodeFunction
+crates/neovm-eval/src/emacs_core/runtime/bytecode/chunk.rs	use	use ByteCodeStructuralPart
+crates/neovm-eval/src/emacs_core/runtime/bytecode/chunk.rs	use	use GnuByteOffsetMapEntry
 crates/neovm-eval/src/emacs_core/runtime/bytecode/decode.rs	enum	enum DecodeError
 crates/neovm-eval/src/emacs_core/runtime/bytecode/decode.rs	fn	fn decode_gnu_bytecode
 crates/neovm-eval/src/emacs_core/runtime/bytecode/decode.rs	fn	fn decode_gnu_bytecode_for_published_pool
@@ -368,11 +394,39 @@ crates/neovm-eval/src/emacs_core/runtime/bytecode/function_slots.rs	struct	struc
 crates/neovm-eval/src/emacs_core/runtime/bytecode/function_slots.rs	struct	struct CompiledSlots
 crates/neovm-eval/src/emacs_core/runtime/bytecode/function_slots.rs	struct	struct ConstantsVector
 crates/neovm-eval/src/emacs_core/runtime/bytecode/function_slots.rs	struct	struct UnibyteCode
+crates/neovm-eval/src/emacs_core/runtime/bytecode/function_slots.rs	use	use ArgTemplate
+crates/neovm-eval/src/emacs_core/runtime/bytecode/function_slots.rs	use	use BytecodeSlotError
+crates/neovm-eval/src/emacs_core/runtime/bytecode/function_slots.rs	use	use DynamicArglist
+crates/neovm-eval/src/emacs_core/runtime/bytecode/function_slots.rs	use	use FunctionParams
+crates/neovm-eval/src/emacs_core/runtime/bytecode/function_slots.rs	use	use ParamShapeError
+crates/neovm-eval/src/emacs_core/runtime/bytecode/function_slots.rs	use	use RestSlot
+crates/neovm-eval/src/emacs_core/runtime/bytecode/function_slots.rs	use	use StackDepth
+crates/neovm-eval/src/emacs_core/runtime/bytecode/function_slots.rs	use	use StackDepthError
+crates/neovm-eval/src/emacs_core/runtime/bytecode/function_slots.rs	use	use StackParamShape
 crates/neovm-eval/src/emacs_core/runtime/bytecode/mod.rs	mod	mod chunk
 crates/neovm-eval/src/emacs_core/runtime/bytecode/mod.rs	mod	mod decode
 crates/neovm-eval/src/emacs_core/runtime/bytecode/mod.rs	mod	mod function_slots
 crates/neovm-eval/src/emacs_core/runtime/bytecode/mod.rs	mod	mod opcode
 crates/neovm-eval/src/emacs_core/runtime/bytecode/mod.rs	mod	mod vm
+crates/neovm-eval/src/emacs_core/runtime/bytecode/mod.rs	use	use ArgTemplate
+crates/neovm-eval/src/emacs_core/runtime/bytecode/mod.rs	use	use ByteCodeFunction
+crates/neovm-eval/src/emacs_core/runtime/bytecode/mod.rs	use	use ByteCodeStructuralPart
+crates/neovm-eval/src/emacs_core/runtime/bytecode/mod.rs	use	use BytecodeSlotError
+crates/neovm-eval/src/emacs_core/runtime/bytecode/mod.rs	use	use BytecodeSlotOrigin
+crates/neovm-eval/src/emacs_core/runtime/bytecode/mod.rs	use	use BytecodeString
+crates/neovm-eval/src/emacs_core/runtime/bytecode/mod.rs	use	use CompiledSlots
+crates/neovm-eval/src/emacs_core/runtime/bytecode/mod.rs	use	use ConstantsVector
+crates/neovm-eval/src/emacs_core/runtime/bytecode/mod.rs	use	use DynamicArglist
+crates/neovm-eval/src/emacs_core/runtime/bytecode/mod.rs	use	use FunctionParams
+crates/neovm-eval/src/emacs_core/runtime/bytecode/mod.rs	use	use Op
+crates/neovm-eval/src/emacs_core/runtime/bytecode/mod.rs	use	use ParamShapeError
+crates/neovm-eval/src/emacs_core/runtime/bytecode/mod.rs	use	use RestSlot
+crates/neovm-eval/src/emacs_core/runtime/bytecode/mod.rs	use	use StackDepth
+crates/neovm-eval/src/emacs_core/runtime/bytecode/mod.rs	use	use StackDepthError
+crates/neovm-eval/src/emacs_core/runtime/bytecode/mod.rs	use	use StackParamShape
+crates/neovm-eval/src/emacs_core/runtime/bytecode/mod.rs	use	use UnibyteCode
+crates/neovm-eval/src/emacs_core/runtime/bytecode/mod.rs	use	use Vm
+crates/neovm-eval/src/emacs_core/runtime/bytecode/opcode.rs	use	use Op
 crates/neovm-eval/src/emacs_core/runtime/bytecode/value_api.rs	trait	trait TaggedValueBytecodeExt
 crates/neovm-eval/src/emacs_core/runtime/bytecode/vm.rs	fn	fn impl Vm::get_depth
 crates/neovm-eval/src/emacs_core/runtime/bytecode/vm.rs	fn	fn impl Vm::set_depth
@@ -449,6 +503,7 @@ crates/neovm-eval/src/emacs_core/runtime/defvar_bool/mod.rs	fn	fn apply_post_mai
 crates/neovm-eval/src/emacs_core/runtime/defvar_bool/mod.rs	fn	fn register_bootstrap_vars
 crates/neovm-eval/src/emacs_core/runtime/defvar_bool/mod.rs	static	static GNU_BOOL_VARIABLES
 crates/neovm-eval/src/emacs_core/runtime/defvar_bool/mod.rs	struct	struct GnuBoolVariable
+crates/neovm-eval/src/emacs_core/runtime/defvar_bool/mod.rs	use	use ByteBooleanVars
 crates/neovm-eval/src/emacs_core/runtime/defvar_object/mod.rs	enum	enum Adoption
 crates/neovm-eval/src/emacs_core/runtime/defvar_object/mod.rs	enum	enum GnuObjectForward
 crates/neovm-eval/src/emacs_core/runtime/defvar_object/mod.rs	enum	enum GnuSpecialness
@@ -782,6 +837,7 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/display_spec/mod.rs	fn	fn imp
 crates/neovm-eval/src/emacs_core/runtime/eval/data/display_spec/mod.rs	fn	fn impl DisplaySpecKind::replaces_text
 crates/neovm-eval/src/emacs_core/runtime/eval/data/display_spec/mod.rs	struct	struct DisplayMarginSpec
 crates/neovm-eval/src/emacs_core/runtime/eval/data/display_spec/mod.rs	struct	struct DisplayPropertySpecs
+crates/neovm-eval/src/emacs_core/runtime/eval/data/display_spec/mod.rs	use	use DisplaySpaceKey
 crates/neovm-eval/src/emacs_core/runtime/eval/data/dynamic_module_registry.rs	field	emacs_value_tag field v
 crates/neovm-eval/src/emacs_core/runtime/eval/data/dynamic_module_registry.rs	fn	fn collect_dynamic_module_registry_gc_roots
 crates/neovm-eval/src/emacs_core/runtime/eval/data/dynamic_module_registry.rs	fn	fn current_dynamic_module_registry_handle
@@ -936,6 +992,10 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/face.rs	struct	struct LispFac
 crates/neovm-eval/src/emacs_core/runtime/eval/data/face.rs	struct	struct RealizedColor
 crates/neovm-eval/src/emacs_core/runtime/eval/data/face.rs	struct	struct Underline
 crates/neovm-eval/src/emacs_core/runtime/eval/data/face.rs	type	type Color
+crates/neovm-eval/src/emacs_core/runtime/eval/data/face.rs	use	use FontSlant
+crates/neovm-eval/src/emacs_core/runtime/eval/data/face.rs	use	use FontWeight
+crates/neovm-eval/src/emacs_core/runtime/eval/data/face.rs	use	use FontWidth
+crates/neovm-eval/src/emacs_core/runtime/eval/data/face.rs	use	use LFaceAttr
 crates/neovm-eval/src/emacs_core/runtime/eval/data/face_registry.rs	const	const FIRST_DYNAMIC_FACE_ID
 crates/neovm-eval/src/emacs_core/runtime/eval/data/face_registry.rs	field	FaceAttrState field created_face_ids
 crates/neovm-eval/src/emacs_core/runtime/eval/data/face_registry.rs	field	FaceAttrState field created_lisp_faces
@@ -1141,6 +1201,11 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/point_rows.rs	fn	fn impl Disp
 crates/neovm-eval/src/emacs_core/runtime/eval/data/point_rows.rs	fn	fn impl DisplayPointRows::row
 crates/neovm-eval/src/emacs_core/runtime/eval/data/point_rows.rs	fn	fn impl DisplayPointRowsMode::enabled
 crates/neovm-eval/src/emacs_core/runtime/eval/data/point_rows.rs	struct	struct DisplayPointRowsIter
+crates/neovm-eval/src/emacs_core/runtime/eval/data/point_rows.rs	use	use DisplayPointRow
+crates/neovm-eval/src/emacs_core/runtime/eval/data/point_rows.rs	use	use DisplayPointRowIter
+crates/neovm-eval/src/emacs_core/runtime/eval/data/point_rows.rs	use	use DisplayPointRows
+crates/neovm-eval/src/emacs_core/runtime/eval/data/point_rows.rs	use	use DisplayPointRowsMode
+crates/neovm-eval/src/emacs_core/runtime/eval/data/point_rows.rs	use	use PointCell
 crates/neovm-eval/src/emacs_core/runtime/eval/data/posn_object_extent.rs	fn	fn impl Frame::posn_object_extent_mode
 crates/neovm-eval/src/emacs_core/runtime/eval/data/posn_object_extent.rs	fn	fn impl Frame::set_posn_object_extent_mode_for_test
 crates/neovm-eval/src/emacs_core/runtime/eval/data/posn_object_extent.rs	fn	fn impl FrameManager::posn_object_extent_mode
@@ -1151,6 +1216,8 @@ crates/neovm-eval/src/emacs_core/runtime/eval/data/posn_object_extent.rs	fn	fn i
 crates/neovm-eval/src/emacs_core/runtime/eval/data/posn_object_extent.rs	fn	fn posn_object_extent_mode
 crates/neovm-eval/src/emacs_core/runtime/eval/data/posn_object_extent.rs	fn	fn retained_posn_extent
 crates/neovm-eval/src/emacs_core/runtime/eval/data/posn_object_extent.rs	fn	fn window_part_of_region
+crates/neovm-eval/src/emacs_core/runtime/eval/data/posn_object_extent.rs	use	use PosnObjectExtent
+crates/neovm-eval/src/emacs_core/runtime/eval/data/posn_object_extent.rs	use	use PosnObjectExtentMode
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_spawn.rs	enum	enum ChildBackend
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_spawn.rs	enum	enum ChildStdio
 crates/neovm-eval/src/emacs_core/runtime/eval/data/process_spawn.rs	field	SpawnedChild field backend
@@ -2531,6 +2598,24 @@ crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	fn	fn render_modifiers
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	struct	struct KeyEvent
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	struct	struct KeySequence
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	struct	struct Modifiers
+crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	use	use CommandLoop
+crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	use	use KBoard
+crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	use	use KeyboardRuntime
+crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	use	use LastMouseClick
+crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	use	use MouseButton
+crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	use	use MousePixelPositionState
+crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	use	use MousePressState
+crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	use	use NonmacroInputEvent
+crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	use	use PrefixArg
+crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	use	use PresentedInteractions
+crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	use	use PresentedMouseArea
+crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	use	use PresentedMouseObservation
+crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	use	use PresentedMouseTarget
+crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	use	use ReadKeySequenceState
+crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	use	use native_key_android
+crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	use	use native_key_macos
+crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	use	use native_key_ohos
+crates/neovm-eval/src/emacs_core/runtime/eval/keyboard.rs	use	use native_key_windows
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard/keysym.rs	fn	fn native_key_android
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard/keysym.rs	fn	fn native_key_macos
 crates/neovm-eval/src/emacs_core/runtime/eval/keyboard/keysym.rs	fn	fn native_key_ohos
@@ -3038,6 +3123,35 @@ crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	type	type DaemonNotifier
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	type	type EvalThreadTask
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	type	type OtfSideCapability
 crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	type	type PopupMenuEntry
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use CarrierTlsReset
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use ContextShutdownError
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use DisplayHost
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use FontOpeningSize
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use FrameFontRequest
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use FrameFontSize
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use GraphicalFaceAttribute
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use ObarrayWriteAccess
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use OutstandingWorldViews
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use QuitRequest
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use RedisplayHookPolicyGuard
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use RedisplayMiniGeometryRequest
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use RedisplayMiniGeometrySource
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use RedisplayMiniPreparationFailure
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use RowsDependencyMetadata
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use RowsObservationEpoch
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use RowsObservationRefusal
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use ShutdownRequest
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use TerminalCreateRequest
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use TerminalDisplayTarget
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use TerminalFloatPlacement
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use TerminalGridSize
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use TerminalId
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use VariableStore
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use VariableView
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use WorldEra
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use XwidgetScriptRequestId
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use raise_main_stack_rlimit
+crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs	use	use register_carrier_tls_reset
 crates/neovm-eval/src/emacs_core/runtime/eval/native_stack.rs	fn	fn raise_main_stack_rlimit
 crates/neovm-eval/src/emacs_core/runtime/eval/parallel_entry/capability.rs	fn	fn impl OwnerState::native
 crates/neovm-eval/src/emacs_core/runtime/eval/parallel_entry/capability.rs	fn	fn impl OwnerState::parallel
@@ -3171,6 +3285,10 @@ crates/neovm-eval/src/emacs_core/runtime/eval/protocol.rs	struct	struct Terminal
 crates/neovm-eval/src/emacs_core/runtime/eval/protocol.rs	struct	struct TerminalGridSize
 crates/neovm-eval/src/emacs_core/runtime/eval/protocol.rs	struct	struct TerminalId
 crates/neovm-eval/src/emacs_core/runtime/eval/protocol.rs	trait	trait DisplayHost
+crates/neovm-eval/src/emacs_core/runtime/eval/protocol.rs	use	use InertRowsHostAuthority
+crates/neovm-eval/src/emacs_core/runtime/eval/protocol.rs	use	use SystemFontName
+crates/neovm-eval/src/emacs_core/runtime/eval/protocol.rs	use	use SystemFontRole
+crates/neovm-eval/src/emacs_core/runtime/eval/protocol.rs	use	use SystemFonts
 crates/neovm-eval/src/emacs_core/runtime/eval/protocol/image_catalog.rs	enum	enum ImageAnimationInvalidation
 crates/neovm-eval/src/emacs_core/runtime/eval/protocol/image_catalog.rs	enum	enum ImageDataSource
 crates/neovm-eval/src/emacs_core/runtime/eval/protocol/image_catalog.rs	enum	enum ImageInvalidation
@@ -3360,6 +3478,8 @@ crates/neovm-eval/src/emacs_core/runtime/eval/world.rs	fn	fn impl ObarrayWriteAc
 crates/neovm-eval/src/emacs_core/runtime/eval/world.rs	fn	fn impl ObarrayWriteAccess::replace_symbol_plist_id
 crates/neovm-eval/src/emacs_core/runtime/eval/world.rs	struct	struct ObarrayWriteAccess
 crates/neovm-eval/src/emacs_core/runtime/eval/world.rs	struct	struct OutstandingWorldViews
+crates/neovm-eval/src/emacs_core/runtime/eval/world.rs	use	use Baton
+crates/neovm-eval/src/emacs_core/runtime/eval/world.rs	use	use WorldEra
 crates/neovm-eval/src/emacs_core/runtime/eval/world/era.rs	type	type WorldEra
 crates/neovm-eval/src/emacs_core/runtime/eval/world/green_owner.rs	struct	struct Baton
 crates/neovm-eval/src/emacs_core/runtime/eval/world/parallel_admission/factory.rs	trait	sealed::trait Sealed
@@ -3433,6 +3553,7 @@ crates/neovm-eval/src/emacs_core/runtime/jit/compile/array_profile.rs	fn	fn neov
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/calls.rs	field	NamedBuiltinCall field effects
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/calls.rs	field	NamedBuiltinCall field fast_effects
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/calls.rs	field	NamedBuiltinCall field kind
+crates/neovm-eval/src/emacs_core/runtime/jit/compile/calls.rs	use	use Effects
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/collection_journal.rs	fn	fn neovm_jit_string_collection_write
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/dispatch.rs	const	const VALUE_SHIM_SIGNAL
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/dispatch.rs	fn	fn neovm_jit_aref
@@ -3572,6 +3693,8 @@ crates/neovm-eval/src/emacs_core/runtime/jit/compile/shims.rs	fn	fn neovm_jit_va
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/shims.rs	fn	fn neovm_jit_varset
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/shims.rs	fn	fn neovm_jit_varset_collection
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/shims.rs	fn	fn take_pending_flow
+crates/neovm-eval/src/emacs_core/runtime/jit/compile/shims.rs	use	use neovm_jit_sqrt_binding_valid
+crates/neovm-eval/src/emacs_core/runtime/jit/compile/shims.rs	use	use neovm_jit_t2_record_array_use
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/sqrt_binding.rs	fn	fn neovm_jit_sqrt_binding_valid
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/t2_profile.rs	fn	fn neovm_jit_t2_apply_use_prof
 crates/neovm-eval/src/emacs_core/runtime/jit/compile/t2_profile.rs	fn	fn neovm_jit_t2_call_feedback_census
@@ -3623,6 +3746,7 @@ crates/neovm-eval/src/emacs_core/runtime/jit/mir.rs	struct	struct MirBlockId
 crates/neovm-eval/src/emacs_core/runtime/jit/mir.rs	struct	struct MirFunction
 crates/neovm-eval/src/emacs_core/runtime/jit/mir.rs	struct	struct MirInst
 crates/neovm-eval/src/emacs_core/runtime/jit/mir.rs	struct	struct MirValue
+crates/neovm-eval/src/emacs_core/runtime/jit/mir.rs	use	use Effects as Effect
 crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	enum	enum Plan
 crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	enum	enum ReoptLevel
 crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	enum	enum Tier
@@ -3650,6 +3774,15 @@ crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	mod	mod inline
 crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	mod	mod mir
 crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	mod	mod reopt
 crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	mod	mod stats
+crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	use	use CallFeedback
+crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	use	use FeedbackVec
+crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	use	use NumericFeedback
+crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	use	use Runtime
+crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	use	use RuntimeState
+crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	use	use note_seam_interp_fallback
+crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	use	use set_compiled_id_word
+crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	use	use set_leaf_slot_word
+crates/neovm-eval/src/emacs_core/runtime/jit/mod.rs	use	use try_run_compiled
 crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	BlockData field cold
 crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	BlockData field insts
 crates/neovm-eval/src/emacs_core/runtime/jit/opt/ir.rs	field	BlockData field loop_header

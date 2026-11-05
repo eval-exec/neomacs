@@ -187,6 +187,8 @@ crates/neovm-value/src/emacs_char/data.rs	fn	fn case_fold_match_len
 crates/neovm-value/src/emacs_char/data.rs	fn	fn decode_declared_multibyte_char
 crates/neovm-value/src/emacs_char/data.rs	fn	fn decode_file_multibyte_char
 crates/neovm-value/src/emacs_char/data.rs	fn	fn unibyte_case_fold_match_len
+crates/neovm-value/src/emacs_char/data.rs	use	use GNU_DEFAULT_WIDE_RANGES
+crates/neovm-value/src/emacs_char/data.rs	use	use ZERO_WIDTH_RANGES
 crates/neovm-value/src/emacs_char/mod.rs	const	const CANCEL_TAG
 crates/neovm-value/src/emacs_char/mod.rs	const	const CHAR_ALT
 crates/neovm-value/src/emacs_char/mod.rs	const	const CHAR_CTL
@@ -294,6 +296,7 @@ crates/neovm-value/src/emacs_char/mod.rs	fn	fn upcase_char_code_emacs_compat
 crates/neovm-value/src/emacs_char/mod.rs	fn	fn utf8_to_emacs
 crates/neovm-value/src/emacs_char/mod.rs	struct	struct EmacsChar
 crates/neovm-value/src/emacs_char/mod.rs	struct	struct MultibyteParseMetrics
+crates/neovm-value/src/emacs_char/mod.rs	use	use char_width
 crates/neovm-value/src/error/flow_word.rs	fn	fn impl Flow::as_signal
 crates/neovm-value/src/error/flow_word.rs	fn	fn impl Flow::as_signal_mut
 crates/neovm-value/src/error/flow_word.rs	fn	fn impl Flow::as_thread_blocked
@@ -330,18 +333,9 @@ crates/neovm-value/src/error/mod.rs	struct	struct SignalData
 crates/neovm-value/src/error/mod.rs	struct	struct ThreadBlockedData
 crates/neovm-value/src/error/mod.rs	struct	struct ThrowData
 crates/neovm-value/src/error/mod.rs	trait	trait FlowResultExt
-crates/neovm-value/src/error/registry_support.rs	field	RegistryState field free
-crates/neovm-value/src/error/registry_support.rs	field	RegistryState field live
-crates/neovm-value/src/error/registry_support.rs	field	RegistryState field total
-crates/neovm-value/src/error/registry_support.rs	fn	fn claim_existing_registry_slot_for_test
-crates/neovm-value/src/error/registry_support.rs	fn	fn current_in_flight_registry_observer_for_test
-crates/neovm-value/src/error/registry_support.rs	fn	fn existing_pin_registry_slot_for_test
-crates/neovm-value/src/error/registry_support.rs	fn	fn impl InFlightRegistryObserver::free_list_for_test
-crates/neovm-value/src/error/registry_support.rs	fn	fn impl InFlightRegistryObserver::registry_state_for_test
-crates/neovm-value/src/error/registry_support.rs	fn	fn impl InFlightRegistryObserver::same_registry
-crates/neovm-value/src/error/registry_support.rs	struct	struct InFlightRegistryObserver
-crates/neovm-value/src/error/registry_support.rs	struct	struct InFlightSlotId
-crates/neovm-value/src/error/registry_support.rs	struct	struct RegistryState
+crates/neovm-value/src/error/mod.rs	use	use Flow
+crates/neovm-value/src/error/mod.rs	use	use is_signal_result
+crates/neovm-value/src/error/mod.rs	use	use with_signal_result
 crates/neovm-value/src/errors/mod.rs	fn	fn impl ErrorRegistry::conditions_for
 crates/neovm-value/src/errors/mod.rs	fn	fn impl ErrorRegistry::conditions_for_sym
 crates/neovm-value/src/errors/mod.rs	fn	fn impl ErrorRegistry::define_error
@@ -410,6 +404,14 @@ crates/neovm-value/src/forward/mod.rs	struct	struct LispObjFwd
 crates/neovm-value/src/forward/mod.rs	struct	struct UncheckedSlotIndex
 crates/neovm-value/src/forward/mod.rs	trait	sealed::trait Sealed
 crates/neovm-value/src/forward/mod.rs	trait	trait FwdDescriptor
+crates/neovm-value/src/forward/mod.rs	use	use BuiltinForwarder
+crates/neovm-value/src/forward/mod.rs	use	use CanonicalArm
+crates/neovm-value/src/forward/mod.rs	use	use CanonicalBlv
+crates/neovm-value/src/forward/mod.rs	use	use ProjectionCapacityError
+crates/neovm-value/src/forward/mod.rs	use	use THREAD_PROJECTION_OFFSET
+crates/neovm-value/src/forward/mod.rs	use	use ThreadProjectionDescriptor
+crates/neovm-value/src/forward/mod.rs	use	use ThreadProjectionTable
+crates/neovm-value/src/forward/mod.rs	use	use TlsIndex
 crates/neovm-value/src/forward/thread_projection.rs	const	const THREAD_PROJECTION_OFFSET
 crates/neovm-value/src/forward/thread_projection.rs	const	const impl TlsIndex::VOID
 crates/neovm-value/src/forward/thread_projection.rs	enum	enum CanonicalArm
@@ -430,6 +432,7 @@ crates/neovm-value/src/forward/thread_projection.rs	struct	struct ThreadProjecti
 crates/neovm-value/src/forward/thread_projection.rs	struct	struct ThreadProjectionTable
 crates/neovm-value/src/forward/thread_projection.rs	struct	struct TlsIndex
 crates/neovm-value/src/gc_trace.rs	trait	trait GcTrace
+crates/neovm-value/src/hashtab/mod.rs	use	use inhibited_user_test_since_gc
 crates/neovm-value/src/hashtab/user_test_guard.rs	fn	fn inhibited_user_test_since_gc
 crates/neovm-value/src/heap_types.rs	const	const impl MarkerBuffer::DETACHED
 crates/neovm-value/src/heap_types.rs	const	const impl MarkerLink::NONE
@@ -581,6 +584,9 @@ crates/neovm-value/src/intern/mod.rs	fn	fn try_resolve_sym_lisp_string
 crates/neovm-value/src/intern/mod.rs	struct	struct NameId
 crates/neovm-value/src/intern/mod.rs	struct	struct StringInterner
 crates/neovm-value/src/intern/mod.rs	struct	struct SymId
+crates/neovm-value/src/intern/mod.rs	use	use FIRST_ID as FIRST_WELL_KNOWN_SYM_ID
+crates/neovm-value/src/intern/mod.rs	use	use NAMES as WELL_KNOWN_NAMES
+crates/neovm-value/src/intern/mod.rs	use	use WellKnown
 crates/neovm-value/src/intern/well_known.rs	const	const FIRST_ID
 crates/neovm-value/src/keyboard_pure.rs	const	const KEY_CHAR_ALT
 crates/neovm-value/src/keyboard_pure.rs	const	const KEY_CHAR_CODE_MASK
@@ -645,6 +651,18 @@ crates/neovm-value/src/lib.rs	mod	mod time_core
 crates/neovm-value/src/lib.rs	mod	mod tls_fingerprint
 crates/neovm-value/src/lib.rs	mod	mod tls_scope
 crates/neovm-value/src/lib.rs	mod	mod value
+crates/neovm-value/src/lib.rs	use	use BytecodeSemantics
+crates/neovm-value/src/lib.rs	use	use EvalErrorFormatter
+crates/neovm-value/src/lib.rs	use	use FunctionCellObserver
+crates/neovm-value/src/lib.rs	use	use FunctionEpochMoveSink
+crates/neovm-value/src/lib.rs	use	use HookInstallError
+crates/neovm-value/src/lib.rs	use	use HookInstallStatus
+crates/neovm-value/src/lib.rs	use	use ScratchRootHooks
+crates/neovm-value/src/lib.rs	use	use install_bytecode_semantics
+crates/neovm-value/src/lib.rs	use	use install_eval_error_formatter
+crates/neovm-value/src/lib.rs	use	use install_function_cell_observer
+crates/neovm-value/src/lib.rs	use	use install_function_epoch_move_sink
+crates/neovm-value/src/lib.rs	use	use install_scratch_root_hooks
 crates/neovm-value/src/logging.rs	enum	enum LogTarget
 crates/neovm-value/src/logging.rs	fn	fn init
 crates/neovm-value/src/logging.rs	fn	fn init_for_tests
@@ -653,6 +671,12 @@ crates/neovm-value/src/minibuffer_state.rs	enum	enum MinibufferEntryLevel
 crates/neovm-value/src/minibuffer_state.rs	fn	fn impl MinibufferEntryLevel::from_depth
 crates/neovm-value/src/plist/mod.rs	fn	fn plist_check
 crates/neovm-value/src/plist/mod.rs	fn	fn plist_member
+crates/neovm-value/src/plist/mod.rs	use	use SafeTailGuard
+crates/neovm-value/src/plist/mod.rs	use	use TailCycleCheck
+crates/neovm-value/src/plist/mod.rs	use	use plist_get
+crates/neovm-value/src/plist/mod.rs	use	use plist_get_swp
+crates/neovm-value/src/plist/mod.rs	use	use plist_put
+crates/neovm-value/src/plist/mod.rs	use	use plist_put_swp
 crates/neovm-value/src/prefix.rs	fn	fn prefix_numeric_value
 crates/neovm-value/src/quit.rs	enum	enum AsyncSource
 crates/neovm-value/src/quit.rs	fn	fn impl AsyncAttention::is_raised
@@ -843,6 +867,13 @@ crates/neovm-value/src/symbol/mod.rs	fn	fn impl SymbolTrappedWrite::gnu_code
 crates/neovm-value/src/symbol/mod.rs	fn	fn let_shadows_buffer_binding_p
 crates/neovm-value/src/symbol/mod.rs	struct	struct LispBufferLocalValue
 crates/neovm-value/src/symbol/mod.rs	struct	struct Obarray
+crates/neovm-value/src/symbol/mod.rs	use	use CanonicalAccess
+crates/neovm-value/src/symbol/mod.rs	use	use FunctionCellObserver
+crates/neovm-value/src/symbol/mod.rs	use	use LispSymbol
+crates/neovm-value/src/symbol/mod.rs	use	use RevealedProjection
+crates/neovm-value/src/symbol/mod.rs	use	use SymbolFlags
+crates/neovm-value/src/symbol/mod.rs	use	use SymbolPropertyRevision
+crates/neovm-value/src/symbol/mod.rs	use	use enter_projection_scope
 crates/neovm-value/src/symbol/parallel.rs	enum	enum PlainSymbolBacking
 crates/neovm-value/src/symbol/parallel.rs	fn	fn impl SymbolBacking::new
 crates/neovm-value/src/symbol/parallel/keeper.rs	fn	fn impl KeeperWorldDesignator::new
@@ -1048,6 +1079,67 @@ crates/neovm-value/src/tagged/gc.rs	fn	fn impl TaggedHeap::write_tracking_mode
 crates/neovm-value/src/tagged/gc.rs	mod	mod memory_telemetry
 crates/neovm-value/src/tagged/gc.rs	struct	struct HeapWriteRecord
 crates/neovm-value/src/tagged/gc.rs	struct	struct TaggedHeap
+crates/neovm-value/src/tagged/gc.rs	use	use AllStopped
+crates/neovm-value/src/tagged/gc.rs	use	use AllStoppedFailure
+crates/neovm-value/src/tagged/gc.rs	use	use CollectionError
+crates/neovm-value/src/tagged/gc.rs	use	use CollectionReport
+crates/neovm-value/src/tagged/gc.rs	use	use CollectorQuiescenceError
+crates/neovm-value/src/tagged/gc.rs	use	use ConcurrentMarkAdmissionError
+crates/neovm-value/src/tagged/gc.rs	use	use ConcurrentMarkCapture
+crates/neovm-value/src/tagged/gc.rs	use	use ConcurrentMarkPermit
+crates/neovm-value/src/tagged/gc.rs	use	use FacadeEpochRetention
+crates/neovm-value/src/tagged/gc.rs	use	use FacadeMarkExclusion
+crates/neovm-value/src/tagged/gc.rs	use	use FacadeMarkExclusionError
+crates/neovm-value/src/tagged/gc.rs	use	use FunctionActivation
+crates/neovm-value/src/tagged/gc.rs	use	use FunctionCallCache
+crates/neovm-value/src/tagged/gc.rs	use	use FunctionError
+crates/neovm-value/src/tagged/gc.rs	use	use FunctionSelection
+crates/neovm-value/src/tagged/gc.rs	use	use FunctionStep
+crates/neovm-value/src/tagged/gc.rs	use	use Gen1Admission
+crates/neovm-value/src/tagged/gc.rs	use	use Gen1AdmissionError
+crates/neovm-value/src/tagged/gc.rs	use	use GlobalError
+crates/neovm-value/src/tagged/gc.rs	use	use HeapIdentity
+crates/neovm-value/src/tagged/gc.rs	use	use InitialInternError
+crates/neovm-value/src/tagged/gc.rs	use	use KeeperSymbols
+crates/neovm-value/src/tagged/gc.rs	use	use KeeperTableMut
+crates/neovm-value/src/tagged/gc.rs	use	use MarkFinishError
+crates/neovm-value/src/tagged/gc.rs	use	use MinorCollectionError
+crates/neovm-value/src/tagged/gc.rs	use	use Mode
+crates/neovm-value/src/tagged/gc.rs	use	use Mutator
+crates/neovm-value/src/tagged/gc.rs	use	use MutatorEntry
+crates/neovm-value/src/tagged/gc.rs	use	use MutatorFinishFailure
+crates/neovm-value/src/tagged/gc.rs	use	use MutatorKey
+crates/neovm-value/src/tagged/gc.rs	use	use MutatorPermit
+crates/neovm-value/src/tagged/gc.rs	use	use MutatorStartFailure
+crates/neovm-value/src/tagged/gc.rs	use	use NativeReturn
+crates/neovm-value/src/tagged/gc.rs	use	use NativeRoots
+crates/neovm-value/src/tagged/gc.rs	use	use OwnerPublication
+crates/neovm-value/src/tagged/gc.rs	use	use OwnerRootSlot
+crates/neovm-value/src/tagged/gc.rs	use	use ParallelExecutionAdmission
+crates/neovm-value/src/tagged/gc.rs	use	use ParallelHeapEra
+crates/neovm-value/src/tagged/gc.rs	use	use Phase
+crates/neovm-value/src/tagged/gc.rs	use	use PlainSymbolBacking
+crates/neovm-value/src/tagged/gc.rs	use	use QuiescentCollector
+crates/neovm-value/src/tagged/gc.rs	use	use RegistrationCensus
+crates/neovm-value/src/tagged/gc.rs	use	use RegistrationError
+crates/neovm-value/src/tagged/gc.rs	use	use Rendezvous
+crates/neovm-value/src/tagged/gc.rs	use	use RendezvousError
+crates/neovm-value/src/tagged/gc.rs	use	use Request
+crates/neovm-value/src/tagged/gc.rs	use	use ResumeGcImage
+crates/neovm-value/src/tagged/gc.rs	use	use ResumeGcImageFailure
+crates/neovm-value/src/tagged/gc.rs	use	use RootedRetireFailure
+crates/neovm-value/src/tagged/gc.rs	use	use RunAccess
+crates/neovm-value/src/tagged/gc.rs	use	use RunSlice
+crates/neovm-value/src/tagged/gc.rs	use	use SealedTableAccess
+crates/neovm-value/src/tagged/gc.rs	use	use SliceRoot
+crates/neovm-value/src/tagged/gc.rs	use	use Snapshot
+crates/neovm-value/src/tagged/gc.rs	use	use StoppedSummaries
+crates/neovm-value/src/tagged/gc.rs	use	use SymbolHandle
+crates/neovm-value/src/tagged/gc.rs	use	use SymbolMut
+crates/neovm-value/src/tagged/gc.rs	use	use SymbolRef
+crates/neovm-value/src/tagged/gc.rs	use	use TableMut
+crates/neovm-value/src/tagged/gc.rs	use	use TableRef
+crates/neovm-value/src/tagged/gc.rs	use	use YoungWorkerLoan
 crates/neovm-value/src/tagged/gc/allocation.rs	fn	fn impl TaggedHeap::alloc_bignum
 crates/neovm-value/src/tagged/gc/allocation.rs	fn	fn impl TaggedHeap::alloc_bool_vector
 crates/neovm-value/src/tagged/gc/allocation.rs	fn	fn impl TaggedHeap::alloc_buffer
@@ -1292,10 +1384,52 @@ crates/neovm-value/src/tagged/gc/mutator_registration.rs	fn	fn impl MutatorKey::
 crates/neovm-value/src/tagged/gc/mutator_registration.rs	fn	fn impl MutatorKey::owner
 crates/neovm-value/src/tagged/gc/mutator_registration.rs	struct	struct MutatorEntry
 crates/neovm-value/src/tagged/gc/mutator_registration.rs	struct	struct MutatorKey
-crates/neovm-value/src/tagged/gc/mutator_registration/a8_probes.rs	field	ProbeEvent field epoch
-crates/neovm-value/src/tagged/gc/mutator_registration/a8_probes.rs	field	ProbeEvent field kind
-crates/neovm-value/src/tagged/gc/mutator_registration/a8_probes.rs	field	ProbeEvent field nanos
-crates/neovm-value/src/tagged/gc/mutator_registration/a8_probes.rs	field	ProbeEvent field owner
+crates/neovm-value/src/tagged/gc/mutator_registration.rs	use	use AllStopped
+crates/neovm-value/src/tagged/gc/mutator_registration.rs	use	use AllStoppedFailure
+crates/neovm-value/src/tagged/gc/mutator_registration.rs	use	use CollectionError
+crates/neovm-value/src/tagged/gc/mutator_registration.rs	use	use CollectionReport
+crates/neovm-value/src/tagged/gc/mutator_registration.rs	use	use FunctionActivation
+crates/neovm-value/src/tagged/gc/mutator_registration.rs	use	use FunctionCallCache
+crates/neovm-value/src/tagged/gc/mutator_registration.rs	use	use FunctionError
+crates/neovm-value/src/tagged/gc/mutator_registration.rs	use	use FunctionSelection
+crates/neovm-value/src/tagged/gc/mutator_registration.rs	use	use FunctionStep
+crates/neovm-value/src/tagged/gc/mutator_registration.rs	use	use GlobalError
+crates/neovm-value/src/tagged/gc/mutator_registration.rs	use	use InitialInternError
+crates/neovm-value/src/tagged/gc/mutator_registration.rs	use	use KeeperSymbols
+crates/neovm-value/src/tagged/gc/mutator_registration.rs	use	use KeeperTableMut
+crates/neovm-value/src/tagged/gc/mutator_registration.rs	use	use MinorCollectionError
+crates/neovm-value/src/tagged/gc/mutator_registration.rs	use	use Mode
+crates/neovm-value/src/tagged/gc/mutator_registration.rs	use	use Mutator
+crates/neovm-value/src/tagged/gc/mutator_registration.rs	use	use MutatorFinishFailure
+crates/neovm-value/src/tagged/gc/mutator_registration.rs	use	use MutatorPermit
+crates/neovm-value/src/tagged/gc/mutator_registration.rs	use	use MutatorStartFailure
+crates/neovm-value/src/tagged/gc/mutator_registration.rs	use	use NativeReturn
+crates/neovm-value/src/tagged/gc/mutator_registration.rs	use	use NativeRoots
+crates/neovm-value/src/tagged/gc/mutator_registration.rs	use	use OwnerPublication
+crates/neovm-value/src/tagged/gc/mutator_registration.rs	use	use OwnerRootSlot
+crates/neovm-value/src/tagged/gc/mutator_registration.rs	use	use ParallelExecutionAdmission
+crates/neovm-value/src/tagged/gc/mutator_registration.rs	use	use ParallelHeapEra
+crates/neovm-value/src/tagged/gc/mutator_registration.rs	use	use Phase
+crates/neovm-value/src/tagged/gc/mutator_registration.rs	use	use PlainSymbolBacking
+crates/neovm-value/src/tagged/gc/mutator_registration.rs	use	use RegistrationCensus
+crates/neovm-value/src/tagged/gc/mutator_registration.rs	use	use Rendezvous
+crates/neovm-value/src/tagged/gc/mutator_registration.rs	use	use RendezvousError
+crates/neovm-value/src/tagged/gc/mutator_registration.rs	use	use Request
+crates/neovm-value/src/tagged/gc/mutator_registration.rs	use	use ResumeGcImage
+crates/neovm-value/src/tagged/gc/mutator_registration.rs	use	use ResumeGcImageFailure
+crates/neovm-value/src/tagged/gc/mutator_registration.rs	use	use RootedRetireFailure
+crates/neovm-value/src/tagged/gc/mutator_registration.rs	use	use RunAccess
+crates/neovm-value/src/tagged/gc/mutator_registration.rs	use	use RunSlice
+crates/neovm-value/src/tagged/gc/mutator_registration.rs	use	use SealedTableAccess
+crates/neovm-value/src/tagged/gc/mutator_registration.rs	use	use SliceRoot
+crates/neovm-value/src/tagged/gc/mutator_registration.rs	use	use Snapshot
+crates/neovm-value/src/tagged/gc/mutator_registration.rs	use	use StoppedSummaries
+crates/neovm-value/src/tagged/gc/mutator_registration.rs	use	use SymbolHandle
+crates/neovm-value/src/tagged/gc/mutator_registration.rs	use	use SymbolMut
+crates/neovm-value/src/tagged/gc/mutator_registration.rs	use	use SymbolRef
+crates/neovm-value/src/tagged/gc/mutator_registration.rs	use	use TableMut
+crates/neovm-value/src/tagged/gc/mutator_registration.rs	use	use TableRef
+crates/neovm-value/src/tagged/gc/mutator_registration.rs	use	use YoungWorkerLoan
 crates/neovm-value/src/tagged/gc/mutator_registration/collection.rs	enum	enum MinorCollectionError
 crates/neovm-value/src/tagged/gc/mutator_registration/collection.rs	field	CollectionReport field allocated_count
 crates/neovm-value/src/tagged/gc/mutator_registration/collection.rs	field	CollectionReport field cycle
@@ -1354,6 +1488,14 @@ crates/neovm-value/src/tagged/gc/mutator_registration/rendezvous/mod.rs	fn	fn im
 crates/neovm-value/src/tagged/gc/mutator_registration/rendezvous/mod.rs	fn	fn impl Rendezvous::snapshot
 crates/neovm-value/src/tagged/gc/mutator_registration/rendezvous/mod.rs	struct	struct Rendezvous
 crates/neovm-value/src/tagged/gc/mutator_registration/rendezvous/mod.rs	struct	struct Snapshot
+crates/neovm-value/src/tagged/gc/mutator_registration/rendezvous/mod.rs	use	use AllStopped
+crates/neovm-value/src/tagged/gc/mutator_registration/rendezvous/mod.rs	use	use AllStoppedFailure
+crates/neovm-value/src/tagged/gc/mutator_registration/rendezvous/mod.rs	use	use Mode
+crates/neovm-value/src/tagged/gc/mutator_registration/rendezvous/mod.rs	use	use Phase
+crates/neovm-value/src/tagged/gc/mutator_registration/rendezvous/mod.rs	use	use Request
+crates/neovm-value/src/tagged/gc/mutator_registration/rendezvous/mod.rs	use	use ResumeGcImage
+crates/neovm-value/src/tagged/gc/mutator_registration/rendezvous/mod.rs	use	use ResumeGcImageFailure
+crates/neovm-value/src/tagged/gc/mutator_registration/rendezvous/mod.rs	use	use RootedRetireFailure
 crates/neovm-value/src/tagged/gc/mutator_registration/rendezvous/owner.rs	field	RootedRetireFailure field reason
 crates/neovm-value/src/tagged/gc/mutator_registration/rendezvous/owner.rs	fn	fn impl Mutator::acknowledge
 crates/neovm-value/src/tagged/gc/mutator_registration/rendezvous/owner.rs	fn	fn impl Mutator::enter_native
@@ -1418,9 +1560,21 @@ crates/neovm-value/src/tagged/gc/mutator_registration/symbol_authority.rs	struct
 crates/neovm-value/src/tagged/gc/mutator_registration/symbol_authority.rs	struct	struct SymbolHandle
 crates/neovm-value/src/tagged/gc/mutator_registration/symbol_authority.rs	struct	struct SymbolMut
 crates/neovm-value/src/tagged/gc/mutator_registration/symbol_authority.rs	struct	struct SymbolRef
+crates/neovm-value/src/tagged/gc/mutator_registration/symbol_authority.rs	use	use FunctionActivation
+crates/neovm-value/src/tagged/gc/mutator_registration/symbol_authority.rs	use	use FunctionCallCache
+crates/neovm-value/src/tagged/gc/mutator_registration/symbol_authority.rs	use	use FunctionError
+crates/neovm-value/src/tagged/gc/mutator_registration/symbol_authority.rs	use	use FunctionSelection
+crates/neovm-value/src/tagged/gc/mutator_registration/symbol_authority.rs	use	use FunctionStep
+crates/neovm-value/src/tagged/gc/mutator_registration/symbol_authority.rs	use	use GlobalError
+crates/neovm-value/src/tagged/gc/mutator_registration/symbol_authority.rs	use	use InitialInternError
+crates/neovm-value/src/tagged/gc/mutator_registration/symbol_authority.rs	use	use PlainSymbolBacking
 crates/neovm-value/src/tagged/gc/mutator_registration/symbol_authority/functions.rs	enum	enum FunctionError
 crates/neovm-value/src/tagged/gc/mutator_registration/symbol_authority/functions.rs	fn	fn impl RunAccess::sym_fboundp_into
 crates/neovm-value/src/tagged/gc/mutator_registration/symbol_authority/functions.rs	fn	fn impl RunAccess::sym_function_into
+crates/neovm-value/src/tagged/gc/mutator_registration/symbol_authority/functions.rs	use	use FunctionActivation
+crates/neovm-value/src/tagged/gc/mutator_registration/symbol_authority/functions.rs	use	use FunctionCallCache
+crates/neovm-value/src/tagged/gc/mutator_registration/symbol_authority/functions.rs	use	use FunctionSelection
+crates/neovm-value/src/tagged/gc/mutator_registration/symbol_authority/functions.rs	use	use FunctionStep
 crates/neovm-value/src/tagged/gc/mutator_registration/symbol_authority/functions/call.rs	enum	enum FunctionSelection
 crates/neovm-value/src/tagged/gc/mutator_registration/symbol_authority/functions/call.rs	enum	enum FunctionStep
 crates/neovm-value/src/tagged/gc/mutator_registration/symbol_authority/functions/call.rs	fn	fn impl FunctionActivation::clear
@@ -1770,6 +1924,8 @@ crates/neovm-value/src/tagged/header.rs	struct	struct XwidgetObj
 crates/neovm-value/src/tagged/header.rs	struct	struct XwidgetViewObj
 crates/neovm-value/src/tagged/header.rs	type	type EmacsFinalizer
 crates/neovm-value/src/tagged/header.rs	union	union ConsCdrOrNext
+crates/neovm-value/src/tagged/header.rs	use	use AtomicTaggedValue
+crates/neovm-value/src/tagged/header.rs	use	use OwnedValueVec
 crates/neovm-value/src/tagged/header/atomic_value.rs	fn	fn impl AtomicTaggedValue::get
 crates/neovm-value/src/tagged/header/atomic_value.rs	fn	fn impl AtomicTaggedValue::load_atomic
 crates/neovm-value/src/tagged/header/atomic_value.rs	fn	fn impl AtomicTaggedValue::new
@@ -1785,6 +1941,7 @@ crates/neovm-value/src/tagged/mod.rs	mod	mod mutate
 crates/neovm-value/src/tagged/mod.rs	mod	mod symbol_marks
 crates/neovm-value/src/tagged/mod.rs	mod	mod transport
 crates/neovm-value/src/tagged/mod.rs	mod	mod value
+crates/neovm-value/src/tagged/mod.rs	use	use SymbolMode
 crates/neovm-value/src/tagged/mutate.rs	fn	fn impl LispCollectionRevision::current
 crates/neovm-value/src/tagged/mutate.rs	fn	fn install_bytecode_slot_object
 crates/neovm-value/src/tagged/mutate.rs	fn	fn replace_closure_slots
@@ -1808,6 +1965,8 @@ crates/neovm-value/src/tagged/mutate.rs	fn	fn with_vector_data_mut
 crates/neovm-value/src/tagged/mutate.rs	fn	fn with_xwidget_mut
 crates/neovm-value/src/tagged/mutate.rs	fn	fn with_xwidget_view_mut
 crates/neovm-value/src/tagged/mutate.rs	struct	struct LispCollectionRevision
+crates/neovm-value/src/tagged/mutate.rs	use	use CharTableWrite
+crates/neovm-value/src/tagged/mutate.rs	use	use SubCharTableWrite
 crates/neovm-value/src/tagged/mutate/chartable.rs	fn	fn impl CharTableWrite::copy_contents
 crates/neovm-value/src/tagged/mutate/chartable.rs	fn	fn impl CharTableWrite::copy_extras
 crates/neovm-value/src/tagged/mutate/chartable.rs	fn	fn impl CharTableWrite::fill_contents
@@ -1852,6 +2011,21 @@ crates/neovm-value/src/tagged/transport/immediate.rs	enum	enum NotImmediate
 crates/neovm-value/src/tagged/transport/immediate.rs	fn	fn impl ImmediateValue::fixnum
 crates/neovm-value/src/tagged/transport/immediate.rs	fn	fn impl ImmediateValue::value
 crates/neovm-value/src/tagged/transport/immediate.rs	struct	struct ImmediateValue
+crates/neovm-value/src/tagged/transport/mod.rs	use	use FinalizedRootBatch
+crates/neovm-value/src/tagged/transport/mod.rs	use	use ImmediateValue
+crates/neovm-value/src/tagged/transport/mod.rs	use	use LocalRoot
+crates/neovm-value/src/tagged/transport/mod.rs	use	use NotImmediate
+crates/neovm-value/src/tagged/transport/mod.rs	use	use PreparedRootBatch
+crates/neovm-value/src/tagged/transport/mod.rs	use	use RetiredRootBatch
+crates/neovm-value/src/tagged/transport/mod.rs	use	use RootBatchError
+crates/neovm-value/src/tagged/transport/mod.rs	use	use RootBatchFinalizeFailure
+crates/neovm-value/src/tagged/transport/mod.rs	use	use RootBatchFinishFailure
+crates/neovm-value/src/tagged/transport/mod.rs	use	use RootBatchLease
+crates/neovm-value/src/tagged/transport/mod.rs	use	use RootBatchPublishFailure
+crates/neovm-value/src/tagged/transport/mod.rs	use	use RootBatchReader
+crates/neovm-value/src/tagged/transport/mod.rs	use	use RootedSlot
+crates/neovm-value/src/tagged/transport/mod.rs	use	use SharedRoot
+crates/neovm-value/src/tagged/transport/mod.rs	use	use SharedRootError
 crates/neovm-value/src/tagged/transport/root_batch.rs	enum	enum RootBatchError
 crates/neovm-value/src/tagged/transport/root_batch.rs	fn	fn impl RetiredRootBatch::heap_identity
 crates/neovm-value/src/tagged/transport/root_batch.rs	fn	fn impl RetiredRootBatch::root_count
@@ -1887,6 +2061,7 @@ crates/neovm-value/src/tagged/transport/shared_root.rs	fn	fn impl SharedRoot::ne
 crates/neovm-value/src/tagged/transport/shared_root.rs	fn	fn impl SharedRoot::shares_backing_root
 crates/neovm-value/src/tagged/transport/shared_root.rs	struct	struct LocalRoot
 crates/neovm-value/src/tagged/transport/shared_root.rs	struct	struct SharedRoot
+crates/neovm-value/src/tagged/transport/shared_root.rs	use	use RootedSlot
 crates/neovm-value/src/tagged/value.rs	const	const impl TaggedValue::DEAD
 crates/neovm-value/src/tagged/value.rs	const	const impl TaggedValue::MOST_NEGATIVE_FIXNUM
 crates/neovm-value/src/tagged/value.rs	const	const impl TaggedValue::MOST_POSITIVE_FIXNUM
@@ -1991,19 +2166,6 @@ crates/neovm-value/src/tagged/value.rs	fn	fn mint_static_subr_objects
 crates/neovm-value/src/tagged/value.rs	fn	fn update_static_subr_object_entry
 crates/neovm-value/src/tagged/value.rs	struct	struct TaggedValue
 crates/neovm-value/src/tagged/value.rs	trait	trait CanonicalSubrFactory
-crates/neovm-value/src/test_support.rs	fn	fn heap_types__LispString__borrowed_alias
-crates/neovm-value/src/test_support.rs	fn	fn heap_types__LispString__character_count_kind
-crates/neovm-value/src/test_support.rs	fn	fn heap_types__LispString__data_ptr
-crates/neovm-value/src/test_support.rs	fn	fn heap_types__LispString__from_borrowed_bytes
-crates/neovm-value/src/test_support.rs	fn	fn heap_types__LispString__has_owned_storage
-crates/neovm-value/src/test_support.rs	fn	fn heap_types__LispString__has_trailing_nul
-crates/neovm-value/src/test_support.rs	fn	fn heap_types__LispString__owned_capacity
-crates/neovm-value/src/test_support.rs	fn	fn heap_types__LispString__size
-crates/neovm-value/src/test_support.rs	fn	fn tagged__header__GcHeader__collection_observed
-crates/neovm-value/src/test_utils.rs	fn	fn cargo_workspace_root
-crates/neovm-value/src/test_utils.rs	fn	fn init_test_tracing
-crates/neovm-value/src/test_utils.rs	fn	fn nextest_workspace_root
-crates/neovm-value/src/test_utils.rs	fn	fn workspace_root
 crates/neovm-value/src/time_core.rs	field	DecodedLispTime field th
 crates/neovm-value/src/time_core.rs	field	ParsedTime field exact_ticks_hz
 crates/neovm-value/src/time_core.rs	field	ParsedTime field form
@@ -2382,6 +2544,8 @@ crates/neovm-value/src/value/mod.rs	struct	struct OrderedSymMap
 crates/neovm-value/src/value/mod.rs	struct	struct StringTextPropertyRun
 crates/neovm-value/src/value/mod.rs	trait	trait IntoSymbol
 crates/neovm-value/src/value/mod.rs	type	type Value
+crates/neovm-value/src/value/mod.rs	use	use ValueKind
+crates/neovm-value/src/value/mod.rs	use	use VecLikeType
 crates/neovm-value/src/value/positions.rs	const	const impl CharLen::ZERO
 crates/neovm-value/src/value/positions.rs	const	const impl CharPos0::ZERO
 crates/neovm-value/src/value/positions.rs	const	const impl LispCharPos1::ONE
@@ -2414,6 +2578,11 @@ crates/neovm-value/src/value/positions.rs	struct	struct CharLen
 crates/neovm-value/src/value/positions.rs	struct	struct CharPos0
 crates/neovm-value/src/value/positions.rs	struct	struct CharRange
 crates/neovm-value/src/value/positions.rs	struct	struct LispCharPos1
+crates/neovm-value/src/value/positions.rs	use	use EmacsByteLen
+crates/neovm-value/src/value/positions.rs	use	use EmacsBytePos
+crates/neovm-value/src/value/positions.rs	use	use EmacsBytePositionView
+crates/neovm-value/src/value/positions.rs	use	use EmacsByteRange
+crates/neovm-value/src/value/positions.rs	use	use LispBytePos1
 crates/neovm-value/src/value/scratch_bridge.rs	fn	fn impl ScratchRootHooks::new
 crates/neovm-value/src/value/scratch_bridge.rs	fn	fn install_scratch_root_hooks
 crates/neovm-value/src/value/scratch_bridge.rs	fn	fn push_scratch_gc_root

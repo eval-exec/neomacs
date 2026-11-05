@@ -91,6 +91,8 @@ crates/neovm-text/src/emacs_core/text/charset/mod.rs	fn	fn impl CharsetRegistry:
 crates/neovm-text/src/emacs_core/text/charset/mod.rs	fn	fn impl CharsetRegistry::priority_list
 crates/neovm-text/src/emacs_core/text/charset/mod.rs	fn	fn impl CharsetRegistry::set_plist
 crates/neovm-text/src/emacs_core/text/charset/mod.rs	fn	fn impl CharsetRegistry::set_priority
+crates/neovm-text/src/emacs_core/text/chartable/mod.rs	use	use ct_ref
+crates/neovm-text/src/emacs_core/text/chartable/mod.rs	use	use ct_set_single
 crates/neovm-text/src/emacs_core/text/coding/mod.rs	enum	enum EolConversion
 crates/neovm-text/src/emacs_core/text/coding/mod.rs	enum	enum EolType
 crates/neovm-text/src/emacs_core/text/coding/mod.rs	enum	enum IsoFlag
@@ -156,6 +158,10 @@ crates/neovm-text/src/emacs_core/text/composite/mod.rs	fn	fn register_bootstrap_
 crates/neovm-text/src/emacs_core/text/composite/mod.rs	fn	fn take_bytes_scanned
 crates/neovm-text/src/emacs_core/text/composite/mod.rs	struct	struct AutomaticCompositionRules
 crates/neovm-text/src/emacs_core/text/composite/mod.rs	struct	struct CompositionDisplayText
+crates/neovm-text/src/emacs_core/text/composite/mod.rs	use	use AutomaticCompositionSpan
+crates/neovm-text/src/emacs_core/text/composite/mod.rs	use	use BYTES_SCANNED
+crates/neovm-text/src/emacs_core/text/composite/mod.rs	use	use MAX_AUTO_COMPOSITION_LOOKBACK
+crates/neovm-text/src/emacs_core/text/composite/mod.rs	use	use fast_path
 crates/neovm-text/src/emacs_core/text/host/mod.rs	trait	trait RawTextVariableView
 crates/neovm-text/src/emacs_core/text/host/mod.rs	trait	trait TextHost
 crates/neovm-text/src/emacs_core/text/host/mod.rs	trait	trait TextVariableStore
@@ -252,6 +258,7 @@ crates/neovm-text/src/emacs_core/text/syntax/mod.rs	fn	fn syntax_entry_to_value
 crates/neovm-text/src/emacs_core/text/syntax/mod.rs	struct	struct SyntaxEntry
 crates/neovm-text/src/emacs_core/text/syntax/mod.rs	struct	struct SyntaxFlags
 crates/neovm-text/src/emacs_core/text/syntax/mod.rs	struct	struct SyntaxTable
+crates/neovm-text/src/emacs_core/text/syntax/mod.rs	use	use SyntaxClass
 crates/neovm-text/src/encoding.rs	enum	enum CodingEncoderState
 crates/neovm-text/src/encoding.rs	fn	fn byte_to_char_pos
 crates/neovm-text/src/encoding.rs	fn	fn char_to_byte_pos
@@ -265,6 +272,7 @@ crates/neovm-text/src/encoding.rs	fn	fn string_width
 crates/neovm-text/src/encoding.rs	struct	struct CodingDecoderState
 crates/neovm-text/src/encoding.rs	struct	struct Iso2022EncodeState
 crates/neovm-text/src/encoding.rs	struct	struct RuntimeCodingSystem
+crates/neovm-text/src/encoding.rs	use	use char_width
 crates/neovm-text/src/lib.rs	mod	mod code_conversion_workspace
 crates/neovm-text/src/lib.rs	mod	mod emacs_core
 crates/neovm-text/src/lib.rs	mod	mod encoding

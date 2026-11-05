@@ -20,14 +20,18 @@
 //!   need no baseline edit, so R-a/R-b style narrowing never blocks.
 //!
 //! The surface is conservative: every declaration with plain `pub` in a
-//! production `.rs` file, including named struct/union fields and inherent
-//! impl items. `#[doc(hidden)]` items and items gated by
-//! `cfg(test)`/`cfg(feature = "test-support")` are excluded (other classes).
-//! Test files (`.../tests/...`, `tests.rs`, `*_test.rs`) are excluded.
-//! `pub use` re-exports and macro-generated items are not scanned; the API
-//! projector covers those separately. Duplicate identical identities in one
-//! file collapse into one row; reordering or duplication is not growth.
-use std::collections::BTreeSet;
+//! production `.rs` file, including named struct/union fields, inherent impl
+//! items and `pub use` re-exports (identity: file, use-tree leaf, rename).
+//! `#[doc(hidden)]` items and items gated by `cfg(test)`/
+//! `cfg(feature = "test-support")` are excluded (other classes). A test-gated
+//! `mod` declaration also removes the whole file it names, even when the file
+//! name does not look like a test; an ungated route to the same file wins.
+//! Test files (`.../tests/...`, `tests.rs`, `*_test.rs`) are excluded. Use
+//! globs and macro-generated items are not scanned; the API projector is not
+//! a live gate, so plain `pub use` is enforced here. Duplicate identical
+//! identities in one file collapse into one row; reordering or duplication is
+//! not growth.
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -181,6 +185,129 @@ fn is_plain(vis: &Visibility, attrs: &[Attribute]) -> bool {
     matches!(vis, Visibility::Public(_)) && !test_gated(attrs) && !doc_hidden(attrs)
 }
 
+fn path_attr(attrs: &[Attribute]) -> Option<PathBuf> {
+    for attr in attrs {
+        if !attr.path().is_ident("path") {
+            continue;
+        }
+        if let syn::Meta::NameValue(value) = &attr.meta {
+            if let syn::Expr::Lit(expr) = &value.value {
+                if let syn::Lit::Str(text) = &expr.lit {
+                    return Some(PathBuf::from(text.value()));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// The directory Rust resolves out-of-line `mod` declarations from, given the
+/// file that is itself a module: `src/lib.rs` -> `src`; `src/x/mod.rs` ->
+/// `src/x`; `src/x.rs` -> `src/x`.
+fn module_dir_for(file: &Path) -> PathBuf {
+    let parent = file.parent().unwrap_or_else(|| Path::new(""));
+    match file.file_name().and_then(|name| name.to_str()) {
+        Some("lib.rs") | Some("main.rs") | Some("mod.rs") => parent.to_path_buf(),
+        Some(name) => parent.join(name.strip_suffix(".rs").unwrap_or(name)),
+        None => parent.to_path_buf(),
+    }
+}
+
+fn module_file(dir: &Path, name: &str) -> Option<PathBuf> {
+    let candidate = dir.join(format!("{name}.rs"));
+    if candidate.is_file() {
+        return Some(candidate);
+    }
+    let candidate = dir.join(name).join("mod.rs");
+    if candidate.is_file() {
+        return Some(candidate);
+    }
+    None
+}
+
+/// Mark every file reached from the crate root only through a test-gated
+/// (`cfg(test)` / `cfg(feature = "test-support")`) module declaration. A file
+/// reached by at least one ungated route is production. The per-file
+/// `is_test_path` heuristic cannot see a test-gated module whose file has a
+/// different name (for example `error/registry_support.rs`).
+fn gated_files(src: &Path) -> Result<BTreeMap<PathBuf, bool>, String> {
+    let mut gated = BTreeMap::new();
+    let root = if src.join("lib.rs").is_file() {
+        src.join("lib.rs")
+    } else if src.join("main.rs").is_file() {
+        src.join("main.rs")
+    } else {
+        return Ok(gated);
+    };
+    visit_source_file(&root, false, &mut gated)?;
+    Ok(gated)
+}
+
+fn visit_source_file(
+    file: &Path,
+    gated: bool,
+    out: &mut BTreeMap<PathBuf, bool>,
+) -> Result<(), String> {
+    match out.get(file).copied() {
+        Some(previous) if previous == gated => return Ok(()),
+        Some(false) => return Ok(()),
+        Some(true) => {
+            out.insert(file.to_path_buf(), false);
+        }
+        None => {
+            out.insert(file.to_path_buf(), gated);
+        }
+    }
+    if is_test_path(file) {
+        return Ok(());
+    }
+    let source = read(file)?;
+    let parsed =
+        syn::parse_file(&source).map_err(|error| format!("{}: {error}", file.display()))?;
+    visit_module_items(
+        &parsed.items,
+        gated,
+        file.parent().unwrap_or_else(|| Path::new("")),
+        &module_dir_for(file),
+        true,
+        out,
+    )
+}
+
+fn visit_module_items(
+    items: &[Item],
+    gated: bool,
+    file_dir: &Path,
+    module_dir: &Path,
+    top_level: bool,
+    out: &mut BTreeMap<PathBuf, bool>,
+) -> Result<(), String> {
+    for item in items {
+        let Item::Mod(module) = item else {
+            continue;
+        };
+        let declaration_gated = gated || test_gated(&module.attrs);
+        if let Some((_, inner)) = &module.content {
+            let inner_dir = module_dir.join(module.ident.to_string());
+            visit_module_items(inner, declaration_gated, file_dir, &inner_dir, false, out)?;
+            continue;
+        }
+        let target = match path_attr(&module.attrs) {
+            Some(path) => {
+                let base = if top_level { file_dir } else { module_dir };
+                Some(base.join(path))
+            }
+            None => module_file(module_dir, &module.ident.to_string()),
+        };
+        if let Some(target) = target {
+            if target.is_file() {
+                visit_source_file(&target, declaration_gated, out)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 fn prefix(modules: &[String]) -> String {
     if modules.is_empty() {
         String::new()
@@ -216,6 +343,32 @@ fn push_field(
         return;
     };
     out.push(("field", format!("{}{owner} field {name}", prefix(modules))));
+}
+
+/// A plain `pub use` re-export is production surface too: it exposes the
+/// source item under the re-export's name. Identity is (file, use-tree leaf,
+/// rename), so `pub use a::Bar` and `pub use b::Bar as Baz` are two rows.
+/// Globs have no leaf identity and stay with the API projector.
+fn push_use(out: &mut Vec<(&'static str, String)>, item: &syn::ItemUse) {
+    if !is_plain(&item.vis, &item.attrs) {
+        return;
+    }
+    fn expand(tree: &syn::UseTree, out: &mut Vec<(&'static str, String)>) {
+        match tree {
+            syn::UseTree::Path(path) => expand(&path.tree, out),
+            syn::UseTree::Name(name) => out.push(("use", format!("use {}", name.ident))),
+            syn::UseTree::Rename(rename) => {
+                out.push(("use", format!("use {} as {}", rename.ident, rename.rename)))
+            }
+            syn::UseTree::Glob(_) => {}
+            syn::UseTree::Group(group) => {
+                for tree in &group.items {
+                    expand(tree, out);
+                }
+            }
+        }
+    }
+    expand(&item.tree, out);
 }
 
 fn impl_type_last(ty: &syn::Type) -> Option<String> {
@@ -371,6 +524,7 @@ fn walk(items: &[Item], modules: &mut Vec<String>, out: &mut Vec<(&'static str, 
                 &item.vis,
                 &item.attrs,
             ),
+            Item::Use(item) => push_use(out, item),
             Item::Impl(item) => walk_impl(item, modules, out),
             _ => {}
         }
@@ -379,11 +533,15 @@ fn walk(items: &[Item], modules: &mut Vec<String>, out: &mut Vec<(&'static str, 
 
 fn plain_pub_rows(workspace: &Path, crate_dir: &str) -> Result<BTreeSet<Row>, String> {
     let src = workspace.join("crates").join(crate_dir).join("src");
+    let gated = gated_files(&src)?;
     let mut files = Vec::new();
     walk_files(&src, &mut files)?;
     let mut rows = BTreeSet::new();
     for path in files {
         if path.extension().is_none_or(|extension| extension != "rs") || is_test_path(&path) {
+            continue;
+        }
+        if gated.get(&path).copied().unwrap_or(false) {
             continue;
         }
         let relative = path
@@ -689,5 +847,108 @@ impl S {
         );
         assert!(at_most(10, 10).is_ok());
         assert!(at_most(11, 10).is_err());
+    }
+
+    #[test]
+    fn test_gated_module_declarations_gate_their_whole_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = dir.path().join("crates/neovm-value/src");
+        std::fs::create_dir_all(src.join("hidden")).expect("hidden dir");
+        std::fs::write(
+            src.join("lib.rs"),
+            r#"
+pub mod production;
+#[cfg(feature = "test-support")]
+pub mod support;
+#[cfg(any(test, feature = "test-support"))]
+pub mod live_helpers;
+#[cfg(test)]
+#[path = "gated_by_path.rs"]
+pub mod renamed;
+#[cfg(test)]
+pub mod hidden {
+    pub mod deeper;
+}
+"#,
+        )
+        .expect("lib");
+        std::fs::write(src.join("production.rs"), "pub fn visible() {}\n").expect("production");
+        std::fs::write(src.join("support.rs"), "pub fn support_only() {}\n").expect("support");
+        std::fs::write(src.join("live_helpers.rs"), "pub fn helper_only() {}\n").expect("helpers");
+        std::fs::write(src.join("gated_by_path.rs"), "pub fn path_only() {}\n").expect("path");
+        std::fs::write(src.join("hidden/deeper.rs"), "pub fn deep_only() {}\n").expect("deeper");
+        let rows = plain_pub_rows(dir.path(), "neovm-value").expect("surface");
+        let items: Vec<&str> = rows.iter().map(|row| row.2.as_str()).collect();
+        assert!(items.contains(&"fn visible"));
+        assert!(items.contains(&"mod production"));
+        for forbidden in [
+            "fn support_only",
+            "fn helper_only",
+            "fn path_only",
+            "fn deep_only",
+        ] {
+            assert!(
+                !items.contains(&forbidden),
+                "{forbidden} must be test-gated"
+            );
+        }
+        for forbidden in ["mod support", "mod live_helpers", "mod renamed"] {
+            assert!(
+                !items.contains(&forbidden),
+                "{forbidden} is a test-only arm"
+            );
+        }
+    }
+
+    #[test]
+    fn an_ungated_route_keeps_a_shared_file_in_the_surface() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = dir.path().join("crates/neovm-value/src");
+        std::fs::create_dir_all(&src).expect("src dir");
+        std::fs::write(
+            src.join("lib.rs"),
+            "pub mod plain;\n#[cfg(test)]\npub mod plain;\n",
+        )
+        .expect("lib");
+        std::fs::write(src.join("plain.rs"), "pub fn shared() {}\n").expect("plain");
+        let rows = plain_pub_rows(dir.path(), "neovm-value").expect("surface");
+        assert!(rows.iter().any(|row| row.2 == "fn shared"));
+    }
+
+    #[test]
+    fn plain_pub_use_reexports_are_part_of_the_surface() {
+        let dir = sample_workspace();
+        std::fs::write(
+            dir.path().join("crates/neovm-value/src/reexports.rs"),
+            r#"
+pub use crate::S;
+pub use crate::S as PublicS;
+pub use crate::*;
+#[doc(hidden)]
+pub use crate::S as HiddenS;
+#[cfg(test)]
+pub use crate::S as TestS;
+"#,
+        )
+        .expect("reexports");
+        let rows = plain_pub_rows(dir.path(), "neovm-value").expect("surface");
+        let use_rows: Vec<(&str, &str)> = rows
+            .iter()
+            .filter(|row| row.1 == "use")
+            .map(|row| (row.0.as_str(), row.2.as_str()))
+            .collect();
+        let has = |item: &str| {
+            use_rows
+                .iter()
+                .any(|(file, row)| file.ends_with("reexports.rs") && *row == item)
+        };
+        assert!(has("use S"), "{use_rows:?}");
+        assert!(has("use S as PublicS"), "{use_rows:?}");
+        for forbidden in ["use S as HiddenS", "use S as TestS"] {
+            assert!(
+                !has(forbidden),
+                "{forbidden} must not be production surface"
+            );
+        }
     }
 }

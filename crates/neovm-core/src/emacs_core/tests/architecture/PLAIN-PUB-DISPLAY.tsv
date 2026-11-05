@@ -1,10 +1,36 @@
 file	kind	item
+crates/neovm-display/src/emacs_core/display/chrome_dirty/mod.rs	use	use ChromeDirty
 crates/neovm-display/src/emacs_core/display/display/desktop.rs	field	DesktopExtent field height
 crates/neovm-display/src/emacs_core/display/display/desktop.rs	field	DesktopExtent field width
 crates/neovm-display/src/emacs_core/display/display/desktop.rs	fn	fn impl DesktopExtent::from_monitors
 crates/neovm-display/src/emacs_core/display/display/mod.rs	fn	fn gui_window_system_symbol
 crates/neovm-display/src/emacs_core/display/display/mod.rs	fn	fn reset_display_thread_locals
 crates/neovm-display/src/emacs_core/display/display_host/mod.rs	fn	fn frame_font_request_from_name
+crates/neovm-display/src/emacs_core/display/display_host/mod.rs	use	use AvailableFontFamilyName
+crates/neovm-display/src/emacs_core/display/display_host/mod.rs	use	use DisplayHost
+crates/neovm-display/src/emacs_core/display/display_host/mod.rs	use	use FontCoverage
+crates/neovm-display/src/emacs_core/display/display_host/mod.rs	use	use FontCoverageRequest
+crates/neovm-display/src/emacs_core/display/display_host/mod.rs	use	use FontCoverageTarget
+crates/neovm-display/src/emacs_core/display/display_host/mod.rs	use	use FontEntityHandle
+crates/neovm-display/src/emacs_core/display/display_host/mod.rs	use	use FontOpeningSize
+crates/neovm-display/src/emacs_core/display/display_host/mod.rs	use	use FontResolveRequest
+crates/neovm-display/src/emacs_core/display/display_host/mod.rs	use	use FrameFontRequest
+crates/neovm-display/src/emacs_core/display/display_host/mod.rs	use	use FrameFontSize
+crates/neovm-display/src/emacs_core/display/display_host/mod.rs	use	use GraphicalFaceAttribute
+crates/neovm-display/src/emacs_core/display/display_host/mod.rs	use	use GuiResourceQuery
+crates/neovm-display/src/emacs_core/display/display_host/mod.rs	use	use InertRowsHostAuthority
+crates/neovm-display/src/emacs_core/display/display_host/mod.rs	use	use InitialGuiFrameDefaults
+crates/neovm-display/src/emacs_core/display/display_host/mod.rs	use	use PositiveFontScalar
+crates/neovm-display/src/emacs_core/display/display_host/mod.rs	use	use SelectionOwner
+crates/neovm-display/src/emacs_core/display/display_host/mod.rs	use	use SystemFontName
+crates/neovm-display/src/emacs_core/display/display_host/mod.rs	use	use SystemFontRole
+crates/neovm-display/src/emacs_core/display/display_host/mod.rs	use	use SystemFonts
+crates/neovm-display/src/emacs_core/display/display_host/mod.rs	use	use TerminalCreateRequest
+crates/neovm-display/src/emacs_core/display/display_host/mod.rs	use	use TerminalDisplayTarget
+crates/neovm-display/src/emacs_core/display/display_host/mod.rs	use	use TerminalFloatPlacement
+crates/neovm-display/src/emacs_core/display/display_host/mod.rs	use	use TerminalGridSize
+crates/neovm-display/src/emacs_core/display/display_host/mod.rs	use	use TerminalId
+crates/neovm-display/src/emacs_core/display/display_host/mod.rs	use	use XwidgetScriptRequestId
 crates/neovm-display/src/emacs_core/display/display_host/rows_authority.rs	fn	fn impl InertRowsHostAuthority::for_type
 crates/neovm-display/src/emacs_core/display/display_host/rows_authority.rs	struct	struct ActualHostType
 crates/neovm-display/src/emacs_core/display/display_host/rows_authority.rs	struct	struct InertRowsHostAuthority
@@ -37,6 +63,12 @@ crates/neovm-display/src/emacs_core/display/font/mod.rs	fn	fn opened_font_from_r
 crates/neovm-display/src/emacs_core/display/font/mod.rs	fn	fn public_frame_font_parameter_value
 crates/neovm-display/src/emacs_core/display/font/mod.rs	fn	fn seed_live_frame_default_face_from_font_parameter
 crates/neovm-display/src/emacs_core/display/font/mod.rs	struct	struct FrozenFontFamilies
+crates/neovm-display/src/emacs_core/display/font/mod.rs	use	use FONT_ENTITY_TAG
+crates/neovm-display/src/emacs_core/display/font/mod.rs	use	use FONT_OBJECT_TAG
+crates/neovm-display/src/emacs_core/display/font/mod.rs	use	use FONT_SPEC_TAG
+crates/neovm-display/src/emacs_core/display/font/mod.rs	use	use FontShapeFn
+crates/neovm-display/src/emacs_core/display/font/mod.rs	use	use GstringShapeCacheKey
+crates/neovm-display/src/emacs_core/display/font/mod.rs	use	use GstringShapeOutcome
 crates/neovm-display/src/emacs_core/display/fontset/mod.rs	const	const DEFAULT_FONTSET_ALIAS
 crates/neovm-display/src/emacs_core/display/fontset/mod.rs	const	const DEFAULT_FONTSET_NAME
 crates/neovm-display/src/emacs_core/display/fontset/mod.rs	fn	fn bounded_entries_for_char
@@ -46,6 +78,17 @@ crates/neovm-display/src/emacs_core/display/fontset/mod.rs	fn	fn matching_entrie
 crates/neovm-display/src/emacs_core/display/fontset/mod.rs	fn	fn matching_entries_for_fontset
 crates/neovm-display/src/emacs_core/display/fontset/mod.rs	fn	fn repertory_target_ranges
 crates/neovm-display/src/emacs_core/display/fontset/mod.rs	fn	fn symbol_script_ranges
+crates/neovm-display/src/emacs_core/display/fontset/mod.rs	use	use CapturedFontsetChain
+crates/neovm-display/src/emacs_core/display/fontset/mod.rs	use	use FontDefinitionMetadata
+crates/neovm-display/src/emacs_core/display/fontset/mod.rs	use	use FontRepertory
+crates/neovm-display/src/emacs_core/display/fontset/mod.rs	use	use FontSelectionRevision
+crates/neovm-display/src/emacs_core/display/fontset/mod.rs	use	use FontSpecEntry
+crates/neovm-display/src/emacs_core/display/fontset/mod.rs	use	use FontsetCaptureError
+crates/neovm-display/src/emacs_core/display/fontset/mod.rs	use	use FontsetRenderingEntry
+crates/neovm-display/src/emacs_core/display/fontset/mod.rs	use	use FontsetRenderingSpec
+crates/neovm-display/src/emacs_core/display/fontset/mod.rs	use	use StoredFontSpec
+crates/neovm-display/src/emacs_core/display/fontset/mod.rs	use	use capture_default_fontset_chain
+crates/neovm-display/src/emacs_core/display/fontset/mod.rs	use	use native_font_name
 crates/neovm-display/src/emacs_core/display/fontset/native_policy.rs	enum	enum FontsetCaptureError
 crates/neovm-display/src/emacs_core/display/fontset/native_policy.rs	enum	enum FontsetRenderingEntry
 crates/neovm-display/src/emacs_core/display/fontset/native_policy.rs	field	FontsetRenderingSpec field family
@@ -85,6 +128,7 @@ crates/neovm-display/src/emacs_core/display/image/mod.rs	fn	fn impl ImageSpecKey
 crates/neovm-display/src/emacs_core/display/image/mod.rs	fn	fn impl ImageTransform::name
 crates/neovm-display/src/emacs_core/display/image/mod.rs	fn	fn impl ImageTransform::value
 crates/neovm-display/src/emacs_core/display/image/mod.rs	fn	fn is_image_spec
+crates/neovm-display/src/emacs_core/display/image/mod.rs	use	use ImageType
 crates/neovm-display/src/emacs_core/display/image_catalog/mod.rs	enum	enum ImageDefaultScale
 crates/neovm-display/src/emacs_core/display/image_catalog/mod.rs	enum	enum ImageScalePolicy
 crates/neovm-display/src/emacs_core/display/image_catalog/mod.rs	fn	fn image_scale_environment
@@ -98,11 +142,54 @@ crates/neovm-display/src/emacs_core/display/image_catalog/mod.rs	fn	fn impl Imag
 crates/neovm-display/src/emacs_core/display/image_catalog/mod.rs	fn	fn numeric_image_scale
 crates/neovm-display/src/emacs_core/display/image_catalog/mod.rs	struct	struct ImageScaleEnvironment
 crates/neovm-display/src/emacs_core/display/image_catalog/mod.rs	struct	struct ImageScaleFactor
+crates/neovm-display/src/emacs_core/display/image_catalog/mod.rs	use	use AxisSize
+crates/neovm-display/src/emacs_core/display/image_catalog/mod.rs	use	use EncodedBytes
+crates/neovm-display/src/emacs_core/display/image_catalog/mod.rs	use	use FailedImage
+crates/neovm-display/src/emacs_core/display/image_catalog/mod.rs	use	use ImageAnimationInvalidation
+crates/neovm-display/src/emacs_core/display/image_catalog/mod.rs	use	use ImageAnimationPolicy
+crates/neovm-display/src/emacs_core/display/image_catalog/mod.rs	use	use ImageBaseUri
+crates/neovm-display/src/emacs_core/display/image_catalog/mod.rs	use	use ImageCatalog
+crates/neovm-display/src/emacs_core/display/image_catalog/mod.rs	use	use ImageColorContext
+crates/neovm-display/src/emacs_core/display/image_catalog/mod.rs	use	use ImageDataSource
+crates/neovm-display/src/emacs_core/display/image_catalog/mod.rs	use	use ImageDiagnosticSubject
+crates/neovm-display/src/emacs_core/display/image_catalog/mod.rs	use	use ImageEmbeddedMetadata
+crates/neovm-display/src/emacs_core/display/image_catalog/mod.rs	use	use ImageFileName
+crates/neovm-display/src/emacs_core/display/image_catalog/mod.rs	use	use ImageFormatName
+crates/neovm-display/src/emacs_core/display/image_catalog/mod.rs	use	use ImageFrameDelay
+crates/neovm-display/src/emacs_core/display/image_catalog/mod.rs	use	use ImageFrameIndex
+crates/neovm-display/src/emacs_core/display/image_catalog/mod.rs	use	use ImageHeuristicMask
+crates/neovm-display/src/emacs_core/display/image_catalog/mod.rs	use	use ImageId
+crates/neovm-display/src/emacs_core/display/image_catalog/mod.rs	use	use ImageInvalidation
+crates/neovm-display/src/emacs_core/display/image_catalog/mod.rs	use	use ImageInvalidationResult
+crates/neovm-display/src/emacs_core/display/image_catalog/mod.rs	use	use ImageLayoutExtent
+crates/neovm-display/src/emacs_core/display/image_catalog/mod.rs	use	use ImageLoadAttempt
+crates/neovm-display/src/emacs_core/display/image_catalog/mod.rs	use	use ImageLoadIdentity
+crates/neovm-display/src/emacs_core/display/image_catalog/mod.rs	use	use ImageLoadToken
+crates/neovm-display/src/emacs_core/display/image_catalog/mod.rs	use	use ImageLookup
+crates/neovm-display/src/emacs_core/display/image_catalog/mod.rs	use	use ImageMaskKind
+crates/neovm-display/src/emacs_core/display/image_catalog/mod.rs	use	use ImageMaskPolicy
+crates/neovm-display/src/emacs_core/display/image_catalog/mod.rs	use	use ImageNativeExtent
+crates/neovm-display/src/emacs_core/display/image_catalog/mod.rs	use	use ImagePlacement
+crates/neovm-display/src/emacs_core/display/image_catalog/mod.rs	use	use ImageRealization as ResolvedImageRealization
+crates/neovm-display/src/emacs_core/display/image_catalog/mod.rs	use	use ImageReportedExtent
+crates/neovm-display/src/emacs_core/display/image_catalog/mod.rs	use	use ImageResolveRequest
+crates/neovm-display/src/emacs_core/display/image_catalog/mod.rs	use	use ImageResolveSource
+crates/neovm-display/src/emacs_core/display/image_catalog/mod.rs	use	use ImageRotation
+crates/neovm-display/src/emacs_core/display/image_catalog/mod.rs	use	use ImageSizeLimit
+crates/neovm-display/src/emacs_core/display/image_catalog/mod.rs	use	use ImageSizeSpec
+crates/neovm-display/src/emacs_core/display/image_catalog/mod.rs	use	use ImageSpecIdentity
+crates/neovm-display/src/emacs_core/display/image_catalog/mod.rs	use	use ImageStateEvent
+crates/neovm-display/src/emacs_core/display/image_catalog/mod.rs	use	use OversizedImage
+crates/neovm-display/src/emacs_core/display/image_catalog/mod.rs	use	use PendingImage
+crates/neovm-display/src/emacs_core/display/image_catalog/mod.rs	use	use ReadyImage
+crates/neovm-display/src/emacs_core/display/image_catalog/mod.rs	use	use ResolvedImageMetadata
 crates/neovm-display/src/emacs_core/display/image_path/mod.rs	enum	enum ImageFileRequest
 crates/neovm-display/src/emacs_core/display/image_path/mod.rs	fn	fn impl ImageFileRequest::cache_key
 crates/neovm-display/src/emacs_core/display/image_path/mod.rs	fn	fn impl ImageFileRequest::classify
 crates/neovm-display/src/emacs_core/display/image_path/mod.rs	fn	fn impl ImageFileRequest::needs_off_thread
 crates/neovm-display/src/emacs_core/display/image_path/mod.rs	fn	fn impl ImageFileRequest::resolve
+crates/neovm-display/src/emacs_core/display/invisibility/mod.rs	use	use Invisibility
+crates/neovm-display/src/emacs_core/display/invisibility/mod.rs	use	use text_prop_means_invisible
 crates/neovm-display/src/emacs_core/display/menu/shortcuts.rs	field	Hints field explicit
 crates/neovm-display/src/emacs_core/display/menu/shortcuts.rs	field	Hints field sequence
 crates/neovm-display/src/emacs_core/display/neo/mod.rs	mod	mod scroll
@@ -121,6 +208,13 @@ crates/neovm-display/src/emacs_core/display/terminal/pure.rs	fn	fn ensure_termin
 crates/neovm-display/src/emacs_core/display/terminal/pure.rs	fn	fn reset_terminal_host
 crates/neovm-display/src/emacs_core/display/terminal/pure.rs	fn	fn reset_terminal_runtime
 crates/neovm-display/src/emacs_core/display/terminal/pure.rs	fn	fn set_terminal_host
+crates/neovm-display/src/emacs_core/display/terminal/pure.rs	use	use OpenedTtyFrameHost
+crates/neovm-display/src/emacs_core/display/terminal/pure.rs	use	use TerminalHost
+crates/neovm-display/src/emacs_core/display/terminal/pure.rs	use	use TerminalRuntimeConfig
+crates/neovm-display/src/emacs_core/display/terminal/pure.rs	use	use TtyFrameHostFactory
+crates/neovm-display/src/emacs_core/display/terminal/pure.rs	use	use TtyFrameOpenRequest
+crates/neovm-display/src/emacs_core/display/terminal/pure.rs	use	use TtyFrameSize
+crates/neovm-display/src/emacs_core/display/terminal/pure.rs	use	use TtyTerminalConfig
 crates/neovm-display/src/emacs_core/display/video/mod.rs	enum	enum VideoDisplayReference
 crates/neovm-display/src/emacs_core/display/video/mod.rs	fn	fn parse_video_display_reference
 crates/neovm-display/src/emacs_core/display/xdisp/fontification_demand.rs	enum	enum RedisplayFontificationWitness
@@ -154,6 +248,14 @@ crates/neovm-display/src/emacs_core/display/xdisp/mod.rs	fn	fn try_format_frame_
 crates/neovm-display/src/emacs_core/display/xdisp/mod.rs	fn	fn try_format_mode_line_for_display_with_sources
 crates/neovm-display/src/emacs_core/display/xdisp/mod.rs	struct	struct ModeLineDisplayOutput
 crates/neovm-display/src/emacs_core/display/xdisp/mod.rs	struct	struct ModeLineDisplaySourceSpan
+crates/neovm-display/src/emacs_core/display/xdisp/mod.rs	use	use RedisplayFontificationCoverage
+crates/neovm-display/src/emacs_core/display/xdisp/mod.rs	use	use RedisplayFontificationDemand
+crates/neovm-display/src/emacs_core/display/xdisp/mod.rs	use	use RedisplayFontificationWitness
+crates/neovm-display/src/emacs_core/display/xdisp/mod.rs	use	use SnapshotFormat
+crates/neovm-display/src/emacs_core/display/xdisp/mod.rs	use	use SnapshotRequest
+crates/neovm-display/src/emacs_core/display/xdisp/mod.rs	use	use SnapshotTarget
+crates/neovm-display/src/emacs_core/display/xdisp/mod.rs	use	use column_spec_consumed
+crates/neovm-display/src/emacs_core/display/xdisp/mod.rs	use	use reset_column_spec_consumed
 crates/neovm-display/src/emacs_core/display/xdisp/mode_line_target.rs	trait	sealed::trait Sealed
 crates/neovm-display/src/emacs_core/display/xdisp/motion/pixels.rs	field	BackwardPixelExtent field height
 crates/neovm-display/src/emacs_core/display/xdisp/motion/pixels.rs	field	BackwardPixelExtent field start
@@ -202,8 +304,13 @@ crates/neovm-display/src/emacs_core/mod.rs	mod	mod xdisp
 crates/neovm-display/src/emacs_core/mod.rs	mod	mod xfaces
 crates/neovm-display/src/emacs_core/mod.rs	mod	mod xwidget
 crates/neovm-display/src/face.rs	mod	mod realization
+crates/neovm-display/src/face.rs	use	use FaceRemapEntry
+crates/neovm-display/src/face.rs	use	use FaceRemapping
 crates/neovm-display/src/face/realization.rs	fn	fn basic_face_names
 crates/neovm-display/src/face/realization.rs	fn	fn frame_is_tty_target
+crates/neovm-display/src/face/realization.rs	use	use BasicFace
+crates/neovm-display/src/face/realization.rs	use	use CachedFaceSlot
+crates/neovm-display/src/face/realization.rs	use	use enabled
 crates/neovm-display/src/face/remapping.rs	enum	enum FaceRemapEntry
 crates/neovm-display/src/face/remapping.rs	fn	fn impl FaceRemapping::from_lisp
 crates/neovm-display/src/face/remapping.rs	fn	fn impl FaceRemapping::get
@@ -244,6 +351,8 @@ crates/neovm-display/src/window/display_ext.rs	trait	trait DisplayFrameExt
 crates/neovm-display/src/window/display_ext.rs	trait	trait DisplayFrameManagerExt
 crates/neovm-display/src/window/display_ext.rs	trait	trait DisplayWindowExt
 crates/neovm-display/src/window/display_ext.rs	trait	trait DisplayWindowTreeExt
+crates/neovm-display/src/window/display_identity.rs	use	use FrameDisplayIdentity
+crates/neovm-display/src/window/display_table_input.rs	use	use LayoutDisplayTableInput
 crates/neovm-display/src/window/frame_params.rs	const	const GNU_FRAME_PARAMS
 crates/neovm-display/src/window/frame_params.rs	const	const GNU_FRAME_PARAM_COUNT
 crates/neovm-display/src/window/frame_params.rs	enum	enum CursorTypeSymbol
@@ -257,6 +366,9 @@ crates/neovm-display/src/window/frame_params.rs	fn	fn impl FrameToolBarPosition:
 crates/neovm-display/src/window/frame_params.rs	fn	fn impl FrameToolBarPosition::name
 crates/neovm-display/src/window/frame_params.rs	fn	fn impl FrameZGroup::from_symbol_value
 crates/neovm-display/src/window/frame_params.rs	fn	fn impl FrameZGroup::name
+crates/neovm-display/src/window/frame_params.rs	use	use FrameFullscreen
+crates/neovm-display/src/window/frame_params.rs	use	use FrameParam
+crates/neovm-display/src/window/frame_params.rs	use	use FrameParamKey
 crates/neovm-display/src/window/geometry.rs	enum	enum AnchorEdge
 crates/neovm-display/src/window/geometry.rs	enum	enum GeometryQueryError
 crates/neovm-display/src/window/geometry.rs	enum	enum PresentationPrepareError
@@ -318,6 +430,21 @@ crates/neovm-display/src/window/geometry.rs	struct	struct WindowRegionBoundsQuer
 crates/neovm-display/src/window/geometry.rs	trait	query_seal::trait Sealed
 crates/neovm-display/src/window/geometry.rs	trait	trait DisplayGeometryExt
 crates/neovm-display/src/window/geometry.rs	trait	trait GeometryQuery
+crates/neovm-display/src/window/geometry.rs	use	use CellOrigin
+crates/neovm-display/src/window/geometry.rs	use	use FrameLogicalSpace
+crates/neovm-display/src/window/geometry.rs	use	use GeometryError
+crates/neovm-display/src/window/geometry.rs	use	use LogicalPx
+crates/neovm-display/src/window/geometry.rs	use	use PixelPoint
+crates/neovm-display/src/window/geometry.rs	use	use PixelRect
+crates/neovm-display/src/window/geometry.rs	use	use PresentationActivateError
+crates/neovm-display/src/window/geometry.rs	use	use PresentationFrame
+crates/neovm-display/src/window/geometry.rs	use	use PresentationGeometry
+crates/neovm-display/src/window/geometry.rs	use	use PresentationId
+crates/neovm-display/src/window/geometry.rs	use	use PresentationWindow
+crates/neovm-display/src/window/geometry.rs	use	use WindowBodySpace
+crates/neovm-display/src/window/geometry.rs	use	use WindowLocalSpace
+crates/neovm-display/src/window/geometry.rs	use	use WindowRegions
+crates/neovm-display/src/window/invisibility_input.rs	use	use LayoutInvisibilityInput
 crates/neovm-display/src/window/mod.rs	const	const DEFAULT_TOOL_BAR_BUTTON_MARGIN
 crates/neovm-display/src/window/mod.rs	const	const DEFAULT_TOOL_BAR_BUTTON_RELIEF
 crates/neovm-display/src/window/mod.rs	const	const DEFAULT_TOOL_BAR_IMAGE_HEIGHT
@@ -364,8 +491,164 @@ crates/neovm-display/src/window/mod.rs	struct	struct RenderFrameTree
 crates/neovm-display/src/window/mod.rs	struct	struct WindowEndAttempt
 crates/neovm-display/src/window/mod.rs	struct	struct WindowLayoutAttemptFreshness
 crates/neovm-display/src/window/mod.rs	struct	struct WindowOutputUpdate
+crates/neovm-display/src/window/mod.rs	use	use AttachedWindowPositionMarkers
+crates/neovm-display/src/window/mod.rs	use	use BodyRedisplayRevision
+crates/neovm-display/src/window/mod.rs	use	use BufferLayoutInputState
+crates/neovm-display/src/window/mod.rs	use	use ChangeStamp
+crates/neovm-display/src/window/mod.rs	use	use CharTableLayoutRevision
+crates/neovm-display/src/window/mod.rs	use	use ChromeLineHit
+crates/neovm-display/src/window/mod.rs	use	use CombinationLimit
+crates/neovm-display/src/window/mod.rs	use	use CompletedEobOverlayMotionExtent
+crates/neovm-display/src/window/mod.rs	use	use CursorTypeSymbol
+crates/neovm-display/src/window/mod.rs	use	use DeleteOutcome
+crates/neovm-display/src/window/mod.rs	use	use DeleteResize
+crates/neovm-display/src/window/mod.rs	use	use DeletedWindowRecord
+crates/neovm-display/src/window/mod.rs	use	use DisplayFrameExt
+crates/neovm-display/src/window/mod.rs	use	use DisplayFrameManagerExt
+crates/neovm-display/src/window/mod.rs	use	use DisplayPointRow
+crates/neovm-display/src/window/mod.rs	use	use DisplayPointRowIter
+crates/neovm-display/src/window/mod.rs	use	use DisplayPointRows
+crates/neovm-display/src/window/mod.rs	use	use DisplayPointRowsIter
+crates/neovm-display/src/window/mod.rs	use	use DisplayPointRowsMode
+crates/neovm-display/src/window/mod.rs	use	use DisplayPointSnapshot
+crates/neovm-display/src/window/mod.rs	use	use DisplayRowEndSource
+crates/neovm-display/src/window/mod.rs	use	use DisplayRowSnapshot
+crates/neovm-display/src/window/mod.rs	use	use DisplayWindowExt
+crates/neovm-display/src/window/mod.rs	use	use DisplayWindowTreeExt
+crates/neovm-display/src/window/mod.rs	use	use EobOverlayMotionCoverage
+crates/neovm-display/src/window/mod.rs	use	use FRAME_ID_BASE
+crates/neovm-display/src/window/mod.rs	use	use ForcedBodyRedisplay
+crates/neovm-display/src/window/mod.rs	use	use Frame
+crates/neovm-display/src/window/mod.rs	use	use FrameCoordinateHit
+crates/neovm-display/src/window/mod.rs	use	use FrameDeletion
+crates/neovm-display/src/window/mod.rs	use	use FrameDeletionSelectionPolicy
+crates/neovm-display/src/window/mod.rs	use	use FrameDisplayIdentity
+crates/neovm-display/src/window/mod.rs	use	use FrameFocusTracking
+crates/neovm-display/src/window/mod.rs	use	use FrameFullscreen
+crates/neovm-display/src/window/mod.rs	use	use FrameId
+crates/neovm-display/src/window/mod.rs	use	use FrameLayoutInputState
+crates/neovm-display/src/window/mod.rs	use	use FrameManager
+crates/neovm-display/src/window/mod.rs	use	use FrameParam
+crates/neovm-display/src/window/mod.rs	use	use FrameParamKey
+crates/neovm-display/src/window/mod.rs	use	use FrameToolBarPosition
+crates/neovm-display/src/window/mod.rs	use	use FrameVisibility
+crates/neovm-display/src/window/mod.rs	use	use FrameWindowHookRecord
+crates/neovm-display/src/window/mod.rs	use	use FrameZGroup
+crates/neovm-display/src/window/mod.rs	use	use FringeBitmapIndex
+crates/neovm-display/src/window/mod.rs	use	use GNU_FRAME_PARAMS
+crates/neovm-display/src/window/mod.rs	use	use GNU_FRAME_PARAM_COUNT
+crates/neovm-display/src/window/mod.rs	use	use GUI_SCROLL_BAR_DEFAULT_WIDTH_PX
+crates/neovm-display/src/window/mod.rs	use	use GuiBarPresentation
+crates/neovm-display/src/window/mod.rs	use	use GuiFrameGeometryHints
+crates/neovm-display/src/window/mod.rs	use	use HorizontalScrollBarType
+crates/neovm-display/src/window/mod.rs	use	use LayoutDisplayTableInput
+crates/neovm-display/src/window/mod.rs	use	use LayoutInvisibilityInput
+crates/neovm-display/src/window/mod.rs	use	use LayoutPrefixInputs
+crates/neovm-display/src/window/mod.rs	use	use MatrixRow0
+crates/neovm-display/src/window/mod.rs	use	use MiniWindowResize
+crates/neovm-display/src/window/mod.rs	use	use ModeLineBase
+crates/neovm-display/src/window/mod.rs	use	use NavigationIntentToken
+crates/neovm-display/src/window/mod.rs	use	use NewTotalUpdate
+crates/neovm-display/src/window/mod.rs	use	use ParentSeal
+crates/neovm-display/src/window/mod.rs	use	use PendingGuiResize
+crates/neovm-display/src/window/mod.rs	use	use PointCell
+crates/neovm-display/src/window/mod.rs	use	use PosnArea
+crates/neovm-display/src/window/mod.rs	use	use PosnObjectExtentMode
+crates/neovm-display/src/window/mod.rs	use	use PosnPointRole as DisplayPointRole
+crates/neovm-display/src/window/mod.rs	use	use PreparedMiniResizeOutcome
+crates/neovm-display/src/window/mod.rs	use	use PresentedBodyRowSnapshot
+crates/neovm-display/src/window/mod.rs	use	use PresentedWindowChromeArea
+crates/neovm-display/src/window/mod.rs	use	use PresentedWindowChromeString
+crates/neovm-display/src/window/mod.rs	use	use PresentedWindowChromeStrings
+crates/neovm-display/src/window/mod.rs	use	use PresentedWindowRegions
+crates/neovm-display/src/window/mod.rs	use	use Rect
+crates/neovm-display/src/window/mod.rs	use	use RenderFrameVisibility
+crates/neovm-display/src/window/mod.rs	use	use RowFringeBitmaps
+crates/neovm-display/src/window/mod.rs	use	use RowOverlayArrowBitmap
+crates/neovm-display/src/window/mod.rs	use	use ScrollMargin
+crates/neovm-display/src/window/mod.rs	use	use SelectedFrameAfterDeletion
+crates/neovm-display/src/window/mod.rs	use	use SplitAttachment
+crates/neovm-display/src/window/mod.rs	use	use SplitDirection
+crates/neovm-display/src/window/mod.rs	use	use TextAreaCoordinate
+crates/neovm-display/src/window/mod.rs	use	use VerticalScrollBarType
+crates/neovm-display/src/window/mod.rs	use	use Window
+crates/neovm-display/src/window/mod.rs	use	use WindowBufferDisplayDefaults
+crates/neovm-display/src/window/mod.rs	use	use WindowCellDimensions
+crates/neovm-display/src/window/mod.rs	use	use WindowChromeLine
+crates/neovm-display/src/window/mod.rs	use	use WindowChromePresence
+crates/neovm-display/src/window/mod.rs	use	use WindowCoordinate
+crates/neovm-display/src/window/mod.rs	use	use WindowCursorKind
+crates/neovm-display/src/window/mod.rs	use	use WindowCursorPos
+crates/neovm-display/src/window/mod.rs	use	use WindowCursorSnapshot
+crates/neovm-display/src/window/mod.rs	use	use WindowDisplaySnapshot
+crates/neovm-display/src/window/mod.rs	use	use WindowDisplaySnapshotFreshness
+crates/neovm-display/src/window/mod.rs	use	use WindowDisplayState
+crates/neovm-display/src/window/mod.rs	use	use WindowEndRecord
+crates/neovm-display/src/window/mod.rs	use	use WindowEndState
+crates/neovm-display/src/window/mod.rs	use	use WindowFringeDefaults
+crates/neovm-display/src/window/mod.rs	use	use WindowHistoryState
+crates/neovm-display/src/window/mod.rs	use	use WindowHookSnapshot
+crates/neovm-display/src/window/mod.rs	use	use WindowId
+crates/neovm-display/src/window/mod.rs	use	use WindowLayoutInputState
+crates/neovm-display/src/window/mod.rs	use	use WindowLayoutQuery
+crates/neovm-display/src/window/mod.rs	use	use WindowLayoutQueryFailure
+crates/neovm-display/src/window/mod.rs	use	use WindowLayoutQueryOutcome
+crates/neovm-display/src/window/mod.rs	use	use WindowLayoutQueryScope
+crates/neovm-display/src/window/mod.rs	use	use WindowLayoutVariable
+crates/neovm-display/src/window/mod.rs	use	use WindowMargins
+crates/neovm-display/src/window/mod.rs	use	use WindowOldPointMarker
+crates/neovm-display/src/window/mod.rs	use	use WindowPart
+crates/neovm-display/src/window/mod.rs	use	use WindowPartGeometry
+crates/neovm-display/src/window/mod.rs	use	use WindowPixelStage
+crates/neovm-display/src/window/mod.rs	use	use WindowPointMarker
+crates/neovm-display/src/window/mod.rs	use	use WindowPositionMarkerState
+crates/neovm-display/src/window/mod.rs	use	use WindowPresentationSnapshot
+crates/neovm-display/src/window/mod.rs	use	use WindowRedisplayOutput
+crates/neovm-display/src/window/mod.rs	use	use WindowRedisplayState
+crates/neovm-display/src/window/mod.rs	use	use WindowScrollBarDefaults
+crates/neovm-display/src/window/mod.rs	use	use WindowScrollBarGeometry
+crates/neovm-display/src/window/mod.rs	use	use WindowSnapshotRowAtY
+crates/neovm-display/src/window/mod.rs	use	use WindowStartCommit
+crates/neovm-display/src/window/mod.rs	use	use WindowStartMarker
+crates/neovm-display/src/window/mod.rs	use	use WindowTotal
+crates/neovm-display/src/window/mod.rs	use	use WindowTree
+crates/neovm-display/src/window/mod.rs	use	use WindowTreePath
+crates/neovm-display/src/window/mod.rs	use	use WindowVisibleBufferSpan
+crates/neovm-display/src/window/mod.rs	use	use WordWrapCategories
+crates/neovm-display/src/window/mod.rs	use	use WordWrapDirection
+crates/neovm-display/src/window/mod.rs	use	use WordWrapMode
+crates/neovm-display/src/window/mod.rs	use	use WordWrapOpportunity
+crates/neovm-display/src/window/mod.rs	use	use WordWrapPolicy
+crates/neovm-display/src/window/mod.rs	use	use current_char_table_layout_revision
+crates/neovm-display/src/window/mod.rs	use	use display_point_rows_mode
+crates/neovm-display/src/window/mod.rs	use	use is_valid_horizontal_scroll_bar_value
+crates/neovm-display/src/window/mod.rs	use	use is_valid_vertical_scroll_bar_value
+crates/neovm-display/src/window/mod.rs	use	use posn_object_extent_mode
+crates/neovm-display/src/window/mod.rs	use	use resolve_window_scroll_bar_geometry
+crates/neovm-display/src/window/mod.rs	use	use retained_posn_extent
+crates/neovm-display/src/window/mod.rs	use	use word_wrap_policy_for_buffer
+crates/neovm-display/src/window/part.rs	use	use PosnArea
+crates/neovm-display/src/window/part.rs	use	use TextAreaCoordinate
+crates/neovm-display/src/window/part.rs	use	use WindowChromeLine
+crates/neovm-display/src/window/part.rs	use	use WindowCoordinate
+crates/neovm-display/src/window/part.rs	use	use WindowPart
+crates/neovm-display/src/window/part.rs	use	use WindowPartGeometry
+crates/neovm-display/src/window/part.rs	use	use window_part_of_region
+crates/neovm-display/src/window/point_rows.rs	use	use DisplayPointRow
+crates/neovm-display/src/window/point_rows.rs	use	use DisplayPointRowIter
+crates/neovm-display/src/window/point_rows.rs	use	use DisplayPointRows
+crates/neovm-display/src/window/point_rows.rs	use	use DisplayPointRowsIter
+crates/neovm-display/src/window/point_rows.rs	use	use DisplayPointRowsMode
+crates/neovm-display/src/window/point_rows.rs	use	use PointCell
+crates/neovm-display/src/window/point_rows.rs	use	use display_point_rows_mode
+crates/neovm-display/src/window/posn_object_extent.rs	use	use PosnObjectExtentMode
+crates/neovm-display/src/window/posn_object_extent.rs	use	use force_posn_object_extent_for_test
+crates/neovm-display/src/window/posn_object_extent.rs	use	use posn_object_extent_mode
+crates/neovm-display/src/window/posn_object_extent.rs	use	use retained_posn_extent
 crates/neovm-display/src/window/scroll_bar.rs	fn	fn is_valid_horizontal_scroll_bar_value
 crates/neovm-display/src/window/scroll_bar.rs	fn	fn is_valid_vertical_scroll_bar_value
+crates/neovm-display/src/window/scroll_bar.rs	use	use HorizontalScrollBarType
+crates/neovm-display/src/window/scroll_bar.rs	use	use VerticalScrollBarType
 crates/neovm-display/src/window/scroll_margin.rs	const	const impl ScrollMargin::DEFAULT_MAXIMUM_FRACTION
 crates/neovm-display/src/window/scroll_margin.rs	fn	fn impl ScrollMargin::from_lisp_values
 crates/neovm-display/src/window/scroll_margin.rs	fn	fn impl ScrollMargin::is_zero
@@ -391,3 +674,6 @@ crates/neovm-display/src/window/split.rs	fn	fn impl SplitAttachment::decide
 crates/neovm-display/src/window/split.rs	fn	fn impl SplitAttachment::new_parent_seal
 crates/neovm-display/src/window/split.rs	fn	fn impl SplitAttachment::reuses_parent
 crates/neovm-display/src/window/split.rs	type	type ParentCombination
+crates/neovm-display/src/window/tty_posn_current.rs	use	use TtyCurrentMatrixAuthority
+crates/neovm-display/src/window/tty_posn_current.rs	use	use TtyMatrixAllocation
+crates/neovm-display/src/window/word_wrap.rs	use	use word_wrap_policy_for_buffer
