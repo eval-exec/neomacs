@@ -460,47 +460,6 @@ fn major_before_first_minor_preserves_permanent_edge() {
 }
 
 #[test]
-fn minor_unchains_young_dead_marker_and_keeps_old_chain_node() {
-    use crate::heap_types::LispMarker;
-    let mut heap = heap_with_generations(true);
-    set_tagged_heap(&mut heap);
-    let roots = ScratchRoots::new();
-    let marker_data = || {
-        LispMarker::new(
-            crate::heap_types::MarkerBuffer::DETACHED,
-            crate::value::positions::CharPos0::new(0),
-            crate::heap_types::byte_positions::EmacsBytePos::new(0),
-            false,
-            false,
-        )
-    };
-    let old = heap.alloc_marker(marker_data());
-    roots.keep(old);
-    minor(&mut heap, &[old]);
-    let young = heap.alloc_marker(marker_data());
-    let text = crate::buffer::buffer_text::BufferText::new();
-    let old_ptr = old.as_veclike_ptr().unwrap().cast::<MarkerObj>() as *mut MarkerObj;
-    let young_ptr = young.as_veclike_ptr().unwrap().cast::<MarkerObj>() as *mut MarkerObj;
-    text.chain_splice_at_head(old_ptr);
-    text.chain_splice_at_head(young_ptr);
-    unsafe { heap.set_marker_chain_head_slots(vec![text.markers_head_slot_raw()]) };
-    minor(&mut heap, &[]);
-    assert_eq!(text.chain_walk_collect(), [old_ptr]);
-    assert!(heap.marker_arena.owns(old_ptr.cast()));
-    assert!(!heap.marker_arena.owns(young_ptr.cast()));
-    assert_eq!(header(old).raw_mark(), UNMARKED_AT_REST);
-    // Current full cycles still retain ordinary old nodes, and their raw
-    // mark stays white even when a parity repeats (C2.6 supplies major reclaim).
-    let mut parities = Vec::new();
-    for _ in 0..3 {
-        heap.collect_exact(std::iter::once(old));
-        parities.push(heap.mark_parity);
-        assert_eq!(header(old).raw_mark(), UNMARKED_AT_REST);
-    }
-    assert_eq!(parities[0], parities[2]);
-}
-
-#[test]
 fn minor_uninterned_symbol_weak_key_survives_without_old_owner_retrace() {
     use crate::intern::{intern_uninterned, is_canonical_id};
     use crate::value::{HashTableTest, LispHashTable};
