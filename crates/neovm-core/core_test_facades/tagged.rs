@@ -14,6 +14,8 @@ pub mod collection_reads;
 pub mod gc;
 #[path = "tagged/mutate.rs"]
 pub mod mutate;
+#[path = "tagged/transport.rs"]
+pub mod transport;
 #[path = "tagged/value.rs"]
 pub mod value;
 

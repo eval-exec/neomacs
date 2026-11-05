@@ -2,9 +2,14 @@
 //! actual stop/owner authority is exercised by rendezvous's integration tests.
 use super::*;
 use crate::emacs_core::eval::Context;
-use crate::tagged::gc::ProofEra as ParallelHeapEra;
-use crate::tagged::transport::SharedRoot;
-use crate::tagged::transport::root_table::with_root_table_lock_for_test;
+use crate::tagged::gc::mutator_registration::era_fixtures::EraFixtureExt;
+use crate::tagged::transport::{RootBatchError, SharedRoot};
+use neovm_eval::test_support::authority::WorldProofEra as ParallelHeapEra;
+use neovm_value::test_support::authority::{
+    owner_root_admission_for_test, stopped_root_admission_for_test, test_root_epoch_retention,
+    with_root_table_lock_for_test,
+};
+use std::num::NonZeroU64;
 
 fn identity(
     era: &ParallelHeapEra<'_>,
@@ -22,7 +27,7 @@ fn reserve(
     id: ParallelRootIdentity,
     capacity: usize,
 ) -> PreparedParallelRootBatch {
-    PreparedParallelRootBatch::reserve(id, era.test_root_epoch_retention(), capacity).unwrap()
+    PreparedParallelRootBatch::reserve(id, test_root_epoch_retention(era), capacity).unwrap()
 }
 fn publish(
     era: &ParallelHeapEra<'_>,
@@ -30,7 +35,7 @@ fn publish(
     roots: &[SharedRoot],
 ) -> ParallelRootBatchLease {
     reserve(era, id, roots.len())
-        .publish(&OwnerRootAdmission::for_test(id, roots))
+        .publish(&owner_root_admission_for_test(id, roots))
         .unwrap()
 }
 fn finish(era: ParallelHeapEra<'_>) {
@@ -55,7 +60,8 @@ fn real_root_payload_crosses_thread_without_heap_view_and_retires() {
         assert_eq!(lease.root_count(), 4);
         assert_eq!(lease.word_count(), 4);
         let lease = std::thread::spawn(move || {
-            let admission = StoppedRootAdmission::for_test(id, 3);
+            // SAFETY: the caller holds the stopped world for this exact identity/epoch; no other owner resumes while the witness lives.
+            let admission = unsafe { stopped_root_admission_for_test(id, 3) };
             let first = lease.reader(&admission).unwrap();
             let second = lease.reader(&admission).unwrap();
             let mut copied = Vec::new();
@@ -87,19 +93,19 @@ fn publish_checks_owner_generation_epoch_before_filling_and_allows_retry() {
             ParallelRootIdentity::new(id.key(), id.publication_generation(), 5),
         ];
         let mut prepared = reserve(&era, id, roots.len());
-        let opaque_address = prepared.payload.words.as_ptr();
+        let opaque_address = prepared.payload_words_address_for_test();
         for wrong in alternatives {
             let failure = prepared
-                .publish(&OwnerRootAdmission::for_test(wrong, &roots))
+                .publish(&owner_root_admission_for_test(wrong, &roots))
                 .unwrap_err();
             assert!(matches!(failure.error(), ParallelRootBatchError::Identity));
             (prepared, _) = failure.into_parts();
-            assert_eq!(prepared.payload.used, 0);
-            assert_eq!(prepared.prepared.payload.used, 0);
-            assert_eq!(prepared.payload.words.as_ptr(), opaque_address);
+            assert_eq!(prepared.payload_used_for_test(), 0);
+            assert_eq!(prepared.inner_payload_used_for_test(), 0);
+            assert_eq!(prepared.payload_words_address_for_test(), opaque_address);
         }
         let lease = prepared
-            .publish(&OwnerRootAdmission::for_test(id, &roots))
+            .publish(&owner_root_admission_for_test(id, &roots))
             .unwrap();
         lease.try_finish().unwrap();
         drop(roots);
@@ -113,7 +119,7 @@ fn capacity_failure_keeps_reserved_payload_and_can_publish_smaller_snapshot() {
         let id = identity(&era, 54, 1, 1);
         let prepared = reserve(&era, id, 2);
         let failure = prepared
-            .publish(&OwnerRootAdmission::for_test(id, &roots))
+            .publish(&owner_root_admission_for_test(id, &roots))
             .unwrap_err();
         assert!(matches!(
             failure.error(),
@@ -123,9 +129,9 @@ fn capacity_failure_keeps_reserved_payload_and_can_publish_smaller_snapshot() {
             })
         ));
         let (prepared, _) = failure.into_parts();
-        assert_eq!(prepared.payload.used, 0);
+        assert_eq!(prepared.payload_used_for_test(), 0);
         let lease = prepared
-            .publish(&OwnerRootAdmission::for_test(id, &roots[..2]))
+            .publish(&owner_root_admission_for_test(id, &roots[..2]))
             .unwrap();
         assert_eq!(lease.root_count(), 2);
         assert_eq!(lease.word_count(), 2);
@@ -141,16 +147,16 @@ fn foreign_root_failure_keeps_reservation_for_correct_heap_retry() {
         Context::with_test_rooted_mutator_era(|other_era, other_roots| {
             let id = identity(&era, 55, 1, 1);
             let failure = reserve(&era, id, 4)
-                .publish(&OwnerRootAdmission::for_test(id, &other_roots))
+                .publish(&owner_root_admission_for_test(id, &other_roots))
                 .unwrap_err();
             assert!(matches!(
                 failure.error(),
                 ParallelRootBatchError::Transport(RootBatchError::ForeignHeap { .. })
             ));
             let (prepared, _) = failure.into_parts();
-            assert_eq!(prepared.payload.used, 0);
+            assert_eq!(prepared.payload_used_for_test(), 0);
             prepared
-                .publish(&OwnerRootAdmission::for_test(id, &roots))
+                .publish(&owner_root_admission_for_test(id, &roots))
                 .unwrap()
                 .try_finish()
                 .unwrap();
@@ -173,19 +179,22 @@ fn stopped_admission_requires_exact_identity_and_covering_nonzero_epoch() {
             ParallelRootIdentity::new(id.key(), NonZeroU64::new(8).unwrap(), 8),
             ParallelRootIdentity::new(id.key(), id.publication_generation(), 7),
         ] {
-            let admission = StoppedRootAdmission::for_test(wrong, 9);
+            // SAFETY: the caller holds the stopped world for this exact identity/epoch; no other owner resumes while the witness lives.
+            let admission = unsafe { stopped_root_admission_for_test(wrong, 9) };
             assert!(matches!(
                 lease.reader(&admission),
                 Err(ParallelRootBatchError::Identity)
             ));
         }
         for current in [0, 7] {
-            let admission = StoppedRootAdmission::for_test(id, current);
+            // SAFETY: the caller holds the stopped world for this exact identity/epoch; no other owner resumes while the witness lives.
+            let admission = unsafe { stopped_root_admission_for_test(id, current) };
             assert!(
                 matches!(lease.reader(&admission), Err(ParallelRootBatchError::StopEpoch { publication: 8, current: actual }) if actual == current)
             );
         }
-        let admission = StoppedRootAdmission::for_test(id, 9);
+        // SAFETY: the caller holds the stopped world for this exact identity/epoch; no other owner resumes while the witness lives.
+        let admission = unsafe { stopped_root_admission_for_test(id, 9) };
         lease.reader(&admission).unwrap().finish().unwrap();
         lease.try_finish().unwrap();
         drop(roots);
@@ -199,7 +208,8 @@ fn native_epoch_zero_snapshot_covers_consecutive_stops() {
         let id = identity(&era, 58, 1, 0);
         let lease = publish(&era, id, &roots);
         for epoch in [1, 2] {
-            let admission = StoppedRootAdmission::for_test(id, epoch);
+            // SAFETY: the caller holds the stopped world for this exact identity/epoch; no other owner resumes while the witness lives.
+            let admission = unsafe { stopped_root_admission_for_test(id, epoch) };
             let reader = lease.reader(&admission).unwrap();
             let mut words = Vec::new();
             reader.append_words(&mut words);
@@ -224,7 +234,7 @@ fn busy_retirement_returns_same_payload_without_closing_or_losing_roots() {
     Context::with_test_rooted_mutator_era(|era, roots| {
         let id = identity(&era, 59, 1, 1);
         let mut lease = Some(publish(&era, id, &roots));
-        let payload_address = Arc::as_ptr(&lease.as_ref().unwrap().payload);
+        let payload_address = lease.as_ref().unwrap().payload_address_for_test();
         with_root_table_lock_for_test(era.heap_identity(), || {
             let failure = lease.take().unwrap().try_finish().unwrap_err();
             assert!(matches!(
@@ -235,7 +245,7 @@ fn busy_retirement_returns_same_payload_without_closing_or_losing_roots() {
         });
         let lease = lease.unwrap();
         assert_eq!(lease.identity(), id);
-        assert_eq!(Arc::as_ptr(&lease.payload), payload_address);
+        assert_eq!(lease.payload_address_for_test(), payload_address);
         assert_eq!(lease.root_count(), 4);
         lease.validate_no_readers().unwrap();
         lease.try_finish().unwrap();
@@ -249,7 +259,8 @@ fn abandoned_reader_blocks_retirement_and_preserves_closing_scan() {
     Context::with_test_rooted_mutator_era(|era, roots| {
         let id = identity(&era, 60, 1, 1);
         let lease = publish(&era, id, &roots);
-        let admission = StoppedRootAdmission::for_test(id, 1);
+        // SAFETY: the caller holds the stopped world for this exact identity/epoch; no other owner resumes while the witness lives.
+        let admission = unsafe { stopped_root_admission_for_test(id, 1) };
         drop(lease.reader(&admission).unwrap());
         outstanding(&lease.validate_no_readers().unwrap_err(), 0, 1);
         let failure = lease.try_finish().unwrap_err();
@@ -280,7 +291,8 @@ fn forgotten_reader_cannot_disappear_from_retirement_census() {
     Context::with_test_rooted_mutator_era(|era, roots| {
         let id = identity(&era, 61, 1, 1);
         let lease = publish(&era, id, &roots);
-        let admission = StoppedRootAdmission::for_test(id, 1);
+        // SAFETY: the caller holds the stopped world for this exact identity/epoch; no other owner resumes while the witness lives.
+        let admission = unsafe { stopped_root_admission_for_test(id, 1) };
         std::mem::forget(lease.reader(&admission).unwrap());
         outstanding(&lease.validate_no_readers().unwrap_err(), 1, 0);
         let failure = lease.try_finish().unwrap_err();

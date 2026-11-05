@@ -21,7 +21,11 @@ use crate::tagged::gc::{
 use crate::tagged::value::TaggedValue;
 
 #[allow(dead_code)] // A4 has only synthetic consumers; real tracing follows in A5.
+#[cfg(not(feature = "test-support"))]
 mod parallel;
+#[allow(dead_code)] // A4 has only synthetic consumers; real tracing follows in A5.
+#[cfg(feature = "test-support")]
+pub mod parallel;
 pub(crate) use parallel::{
     ParallelRootBatchError, ParallelRootBatchLease, ParallelRootBatchReader, ParallelRootIdentity,
     PreparedParallelRootBatch,

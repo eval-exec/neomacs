@@ -12,6 +12,7 @@ use crate::tagged::gc::{MutatorKey, OwnerRootAdmission, StoppedRootAdmission};
 /// Metadata, not authority. The key includes World, heap and registration
 /// identity. Publication epoch may be zero for native entry before any request.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct ParallelRootIdentity {
     key: MutatorKey,
     publication_generation: NonZeroU64,
@@ -19,6 +20,7 @@ pub(crate) struct ParallelRootIdentity {
 }
 
 impl ParallelRootIdentity {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn new(
         key: MutatorKey,
         publication_generation: NonZeroU64,
@@ -31,6 +33,8 @@ impl ParallelRootIdentity {
         }
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+
     pub(crate) fn key(self) -> MutatorKey {
         self.key
     }
@@ -38,6 +42,8 @@ impl ParallelRootIdentity {
     pub(crate) fn heap_identity(self) -> HeapIdentity {
         self.key.heap_identity()
     }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
 
     pub(crate) fn publication_generation(self) -> NonZeroU64 {
         self.publication_generation
@@ -51,6 +57,7 @@ impl ParallelRootIdentity {
 /// Parallel admission failures are separate from the legacy error enum: adding
 /// variants there can change niche/layout decisions in dormant callers.
 #[derive(Debug, thiserror::Error)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum ParallelRootBatchError {
     #[error(transparent)]
     Transport(#[from] RootBatchError),
@@ -71,6 +78,7 @@ struct ParallelRootPayload {
 /// storage is confined to the original owner, just like the serial reservation.
 #[derive(Debug)]
 #[must_use = "publish with the original owner's witness or cancel the reservation"]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct PreparedParallelRootBatch {
     identity: ParallelRootIdentity,
     prepared: PreparedRootBatch,
@@ -78,8 +86,28 @@ pub(crate) struct PreparedParallelRootBatch {
 }
 
 impl PreparedParallelRootBatch {
+    /// Copied observer: the filled payload's used words (plain usize).
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn payload_used_for_test(&self) -> usize {
+        self.payload.used
+    }
+
+    /// Copied observer: the retained payload buffer's address.
+    /// Identity only; never rebuild a pointer from it.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn payload_words_address_for_test(&self) -> usize {
+        self.payload.words.as_ptr().addr()
+    }
+
+    /// Copied observer: the inner serial reservation's used words.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn inner_payload_used_for_test(&self) -> usize {
+        self.prepared.payload.used
+    }
+
     #[cold]
     #[inline(never)]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn reserve(
         identity: ParallelRootIdentity,
         epoch: FacadeEpochRetention,
@@ -141,6 +169,7 @@ impl PreparedParallelRootBatch {
 
     #[cold]
     #[inline(never)]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn publish(
         mut self,
         admission: &OwnerRootAdmission<'_>,
@@ -243,6 +272,7 @@ impl PreparedParallelRootBatch {
 /// This carries no heap reference and is safe to place in the canonical entry.
 #[derive(Debug)]
 #[must_use = "explicit retirement retains roots on every refused attempt"]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct ParallelRootBatchLease {
     identity: ParallelRootIdentity,
     lease: RootBatchLease,
@@ -250,13 +280,25 @@ pub(crate) struct ParallelRootBatchLease {
 }
 
 impl ParallelRootBatchLease {
+    /// Copied observer: the shared payload allocation's address.
+    /// Identity only; never rebuild a pointer from it.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn payload_address_for_test(&self) -> usize {
+        Arc::as_ptr(&self.payload).addr()
+    }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn identity(&self) -> ParallelRootIdentity {
         self.identity
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+
     pub(crate) fn word_count(&self) -> usize {
         self.payload.used
     }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
 
     pub(crate) fn root_count(&self) -> usize {
         self.lease.root_count()
@@ -264,6 +306,7 @@ impl ParallelRootBatchLease {
 
     #[cold]
     #[inline(never)]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn reader<'read>(
         &'read self,
         admission: &'read StoppedRootAdmission<'_>,
@@ -318,6 +361,7 @@ impl ParallelRootBatchLease {
 
     /// Required even when a reader was forgotten and its Rust borrow ended.
     /// This is only an obligation census, never permission to resume by itself.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn validate_no_readers(&self) -> Result<(), ParallelRootBatchError> {
         let ownership = self
             .lease
@@ -343,6 +387,7 @@ impl ParallelRootBatchLease {
     /// Failure returns this exact identity and payload for retry/retention.
     #[cold]
     #[inline(never)]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn try_finish(self) -> Result<RetiredRootBatch, ParallelRootBatchFinishFailure> {
         let Self {
             identity,
@@ -425,9 +470,12 @@ pub(crate) struct ParallelRootBatchPublishFailure {
 }
 
 impl ParallelRootBatchPublishFailure {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn error(&self) -> &ParallelRootBatchError {
         &self.error
     }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
 
     pub(crate) fn into_parts(self) -> (PreparedParallelRootBatch, ParallelRootBatchError) {
         (self.prepared, self.error)
@@ -442,9 +490,12 @@ pub(crate) struct ParallelRootBatchFinishFailure {
 }
 
 impl ParallelRootBatchFinishFailure {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn error(&self) -> &ParallelRootBatchError {
         &self.error
     }
+
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
 
     pub(crate) fn into_parts(self) -> (ParallelRootBatchLease, ParallelRootBatchError) {
         (self.lease, self.error)
@@ -458,6 +509,3 @@ static_assertions::assert_impl_all!(ParallelRootBatchError: Send, Sync, std::err
 static_assertions::assert_not_impl_any!(PreparedParallelRootBatch: Send, Sync, Clone, Copy);
 static_assertions::assert_not_impl_any!(ParallelRootBatchLease: Clone, Copy);
 static_assertions::assert_not_impl_any!(ParallelRootBatchReader<'static>: Send, Sync, Clone, Copy);
-
-#[cfg(test)]
-mod tests;

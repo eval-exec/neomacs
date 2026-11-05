@@ -77,7 +77,7 @@ pub(crate) struct OwnerRootAdmission<'a> {
     _thread: PhantomData<Rc<()>>,
 }
 impl<'a> OwnerRootAdmission<'a> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn for_test(identity: ParallelRootIdentity, roots: &'a [SharedRoot]) -> Self {
         Self {
             identity,
@@ -101,8 +101,12 @@ pub(crate) struct StoppedRootAdmission<'a> {
     pub(super) _thread: PhantomData<Rc<()>>,
 }
 impl StoppedRootAdmission<'_> {
-    #[cfg(test)]
-    pub(crate) fn for_test(identity: ParallelRootIdentity, epoch: u64) -> Self {
+    /// # Safety
+    /// The returned witness gates stopped-world root reads: the caller must
+    /// hold the stopped `AllStopped` world for this exact identity and epoch,
+    /// and no other owner may resume while the witness lives.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) unsafe fn for_test(identity: ParallelRootIdentity, epoch: u64) -> Self {
         Self {
             identity,
             epoch,

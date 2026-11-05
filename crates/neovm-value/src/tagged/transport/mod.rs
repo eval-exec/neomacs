@@ -10,7 +10,10 @@
 //! Collector-internal work queues use their own collector word instead.
 
 mod immediate;
+#[cfg(not(feature = "test-support"))]
 mod root_batch;
+#[cfg(feature = "test-support")]
+pub mod root_batch;
 mod root_table;
 mod shared_root;
 

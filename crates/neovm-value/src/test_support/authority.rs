@@ -213,3 +213,39 @@ pub unsafe fn take_satb_shared_for_test(
     // SAFETY: the caller upholds the serial-fixture contract above.
     unsafe { heap.take_satb_shared_for_test() }
 }
+/// Value-FENCE row (Ruling P1-VALUE-CLASSES C1): owner-side admission witness
+/// constructor for the relocated parallel transport tests. The witness is
+/// metadata only and the original method stays crate-internal.
+pub fn owner_root_admission_for_test<'a>(
+    identity: crate::tagged::transport::ParallelRootIdentity,
+    roots: &'a [crate::tagged::transport::SharedRoot],
+) -> crate::tagged::gc::mutator_registration::OwnerRootAdmission<'a> {
+    crate::tagged::gc::mutator_registration::OwnerRootAdmission::for_test(identity, roots)
+}
+
+/// Value-FENCE row (Ruling P1-VALUE-CLASSES C1): stopped-side witness
+/// constructor. The original method stays crate-internal.
+///
+/// # Safety
+/// The returned witness gates stopped-world root reads: the caller must hold
+/// the stopped `AllStopped` world for this exact identity and epoch, and no
+/// other owner may resume while the witness lives.
+pub unsafe fn stopped_root_admission_for_test<'a>(
+    identity: crate::tagged::transport::ParallelRootIdentity,
+    epoch: u64,
+) -> crate::tagged::gc::mutator_registration::StoppedRootAdmission<'a> {
+    // SAFETY: the caller upholds the identical stopped-world contract above.
+    unsafe {
+        crate::tagged::gc::mutator_registration::StoppedRootAdmission::for_test(identity, epoch)
+    }
+}
+
+/// Value-FENCE row (peer 17:27:27Z C1 TOKEN): the epoch-retention mints a
+/// `FacadeEpochRetention` token (it retains exclusion through the final
+/// publication or reader obligation), so it is fenced rather than VIS. Safe:
+/// a retention only delays; it cannot unsound anything.
+pub fn test_root_epoch_retention<'heap, K: crate::tagged::gc::EraKeeper>(
+    era: &ProofEra<'heap, K>,
+) -> crate::tagged::gc::FacadeEpochRetention {
+    era.test_root_epoch_retention()
+}
