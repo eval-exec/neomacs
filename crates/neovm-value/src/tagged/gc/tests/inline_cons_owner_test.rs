@@ -171,7 +171,8 @@ fn cons_cursor_barrier_open_region_does_not_bypass_satb_window() {
             let mut heap = heap_with_chunk_map(chunk_map);
             // Arming after allocation would close the region. Allocate after
             // arming so the owner window and cursor proof are both eligible.
-            heap.set_concurrent_active_for_test(true);
+            // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+            unsafe { heap.set_concurrent_active_for_test(true) };
             let child = cons(&mut heap);
             let owner = heap.alloc_cons(child, TaggedValue::NIL);
             let (cursor, _) = heap.cons_region_for_test();
@@ -179,8 +180,10 @@ fn cons_cursor_barrier_open_region_does_not_bypass_satb_window() {
             assert_eq!(block_base(cursor), block_base(address(owner)));
             assert!(set_cons_car(owner, immediate));
             assert_eq!(owner.cons_car(), immediate);
-            assert!(heap.take_satb_shared_for_test().contains(&child));
-            heap.set_concurrent_active_for_test(false);
+            // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+            assert!(unsafe { heap.take_satb_shared_for_test() }.contains(&child));
+            // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+            unsafe { heap.set_concurrent_active_for_test(false) };
         }
     }
 }

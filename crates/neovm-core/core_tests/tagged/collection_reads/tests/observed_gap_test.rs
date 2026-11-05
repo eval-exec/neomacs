@@ -14,6 +14,9 @@ use crate::heap_types::LispString;
 use crate::tagged::gc::{BarrierWindow, neovm_jit_unobserved_collection_owner, set_tagged_heap};
 use crate::tagged::header::{ConsCdrWord, ConsCell, ConsWord};
 use crate::tagged::value::TAG_MASK;
+use neovm_value::test_support::authority::{
+    set_concurrent_active_for_test, take_satb_shared_for_test,
+};
 
 struct ObservedMode;
 
@@ -45,10 +48,11 @@ fn context() -> Context {
     }
     let _restore = RestoreGeneration(std::env::var_os("NEOVM_GC_GENERATIONAL"));
     unsafe { std::env::set_var("NEOVM_GC_GENERATIONAL", "0") };
-    let mut context = Context::new();
+    let mut context = crate::test_utils::new_context();
     context.gc_stress = false;
-    context.tagged_heap.set_gc_threshold(usize::MAX);
-    assert!(!context.tagged_heap.generational_enabled());
+    // SAFETY: serial test setup; the WorldView is used in place and never swapped.
+    unsafe { context.tagged_heap_mut() }.set_gc_threshold(usize::MAX);
+    assert!(!context.tagged_heap().generational_enabled());
     context
 }
 
@@ -58,9 +62,8 @@ fn address(owner: TaggedValue) -> usize {
 
 fn rooted_cons_triplet(context: &mut Context) -> [TaggedValue; 3] {
     let mut owners = std::array::from_fn(|_| {
-        context
-            .tagged_heap
-            .alloc_cons(TaggedValue::make_int(97), TaggedValue::NIL)
+        // SAFETY: serial test setup; the WorldView is used in place and never swapped.
+        unsafe { context.tagged_heap_mut() }.alloc_cons(TaggedValue::make_int(97), TaggedValue::NIL)
     });
     owners.sort_unstable_by_key(|owner| address(*owner));
     assert!(address(owners[0]) < address(owners[1]));
@@ -86,19 +89,19 @@ fn exclude_middle(context: &Context, owners: [TaggedValue; 3]) -> BarrierWindow 
     let certificate = certificate.expect("the observed endpoints are coherent");
     assert!(certificate.unchanged());
     assert!(!is_observed(target.bits()));
-    let hull = context.tagged_heap.jit_barrier_window_for_test();
+    let hull = context.tagged_heap().jit_barrier_window_for_test();
     assert!(hull.covers(address(target)));
     assert_eq!(
         neovm_jit_unobserved_collection_owner(target.bits() as i64),
         1
     );
     let gap = compiled_observation_gate(BarrierWindow::NONE)
-        .excluded
+        .excluded_for_test()
         .expect("the target lies in a locally empty interval");
     assert!(gap.covers(address(target)));
     assert!(!gap.covers(address(left)));
     assert!(!gap.covers(address(right)));
-    let published = context.tagged_heap.jit_barrier_window_for_test();
+    let published = context.tagged_heap().jit_barrier_window_for_test();
     // One native arc cannot exclude an interior hole and the hull exterior
     // together. Retain the proved hole without admitting any exterior owner.
     assert!(hull.contains_window(published));
@@ -112,9 +115,8 @@ fn observed_exterior_refusal_does_not_block_later_interior_cons_gap() {
     let _mode = ObservedMode::begin();
     let mut context = context();
     let mut owners: [TaggedValue; 4] = std::array::from_fn(|_| {
-        context
-            .tagged_heap
-            .alloc_cons(TaggedValue::make_int(97), TaggedValue::NIL)
+        // SAFETY: serial test setup; the WorldView is used in place and never swapped.
+        unsafe { context.tagged_heap_mut() }.alloc_cons(TaggedValue::make_int(97), TaggedValue::NIL)
     });
     owners.sort_unstable_by_key(|owner| address(*owner));
     for pair in owners.windows(2) {
@@ -125,19 +127,19 @@ fn observed_exterior_refusal_does_not_block_later_interior_cons_gap() {
     }
     let [exterior, left, interior, right] = owners;
     assert_eq!(
-        context.tagged_heap.collection_dump_window(),
+        context.tagged_heap().collection_dump_window(),
         BarrierWindow::NONE
     );
     let (_, endpoints) = capture(|| (left.cons_car(), right.cons_car()));
     let endpoints = endpoints.expect("the retained live endpoints surround only the interior cell");
-    let hull = context.tagged_heap.jit_barrier_window_for_test();
+    let hull = context.tagged_heap().jit_barrier_window_for_test();
     assert!(hull.covers(address(left)) && hull.covers(address(right)));
     assert!(hull.covers(address(interior)));
     assert!(!hull.covers(address(exterior)));
     assert!(!is_observed(exterior.bits()) && !is_observed(interior.bits()));
     assert!(
         compiled_observation_gate(BarrierWindow::NONE)
-            .excluded
+            .excluded_for_test()
             .is_none()
     );
 
@@ -151,10 +153,10 @@ fn observed_exterior_refusal_does_not_block_later_interior_cons_gap() {
     );
     assert!(
         compiled_observation_gate(BarrierWindow::NONE)
-            .excluded
+            .excluded_for_test()
             .is_none()
     );
-    assert_eq!(context.tagged_heap.jit_barrier_window_for_test(), hull);
+    assert_eq!(context.tagged_heap().jit_barrier_window_for_test(), hull);
 
     assert_eq!(
         neovm_jit_unobserved_collection_owner(interior.bits() as i64),
@@ -162,13 +164,13 @@ fn observed_exterior_refusal_does_not_block_later_interior_cons_gap() {
         "the first useful interior refusal must still learn its interval",
     );
     let gap = compiled_observation_gate(BarrierWindow::NONE)
-        .excluded
+        .excluded_for_test()
         .expect("the interior cell lies in a locally empty interval");
     assert!(gap.covers(address(interior)));
     for owner in [exterior, left, right] {
         assert!(!gap.covers(address(owner)));
     }
-    let published = context.tagged_heap.jit_barrier_window_for_test();
+    let published = context.tagged_heap().jit_barrier_window_for_test();
     assert!(hull.contains_window(published));
     assert!(!published.covers(address(exterior)));
     assert!(published.covers(address(left)) && published.covers(address(right)));
@@ -196,12 +198,12 @@ fn observed_unobserved_cons_gap_closes_before_a_new_certificate() {
     assert!(reads.unchanged());
     assert!(
         compiled_observation_gate(BarrierWindow::NONE)
-            .excluded
+            .excluded_for_test()
             .is_none()
     );
     assert!(
         context
-            .tagged_heap
+            .tagged_heap()
             .jit_barrier_window_for_test()
             .covers(address(target))
     );
@@ -236,14 +238,14 @@ fn observed_gc_pruning_preserves_empty_gap_and_live_certificate() {
     context.push_specpdl_root(left);
     context.push_specpdl_root(target);
     context.gc_collect_exact();
-    assert!(context.tagged_heap.owns_heap_value_for_test(left));
-    assert!(context.tagged_heap.owns_heap_value_for_test(target));
-    assert!(!context.tagged_heap.owns_heap_value_for_test(right));
+    assert!(context.tagged_heap().owns_heap_value_for_test(left));
+    assert!(context.tagged_heap().owns_heap_value_for_test(target));
+    assert!(!context.tagged_heap().owns_heap_value_for_test(right));
     assert_eq!(
-        compiled_observation_gate(BarrierWindow::NONE).excluded,
+        compiled_observation_gate(BarrierWindow::NONE).excluded_for_test(),
         Some(gap)
     );
-    let published = context.tagged_heap.jit_barrier_window_for_test();
+    let published = context.tagged_heap().jit_barrier_window_for_test();
     assert!(published.covers(address(left)));
     assert!(!published.covers(address(target)));
     assert!(reads.unchanged());
@@ -260,33 +262,41 @@ fn observed_heap_switch_dump_change_discards_empty_gap() {
     let _mode = ObservedMode::begin();
     let mut first = context();
     let mut second = context();
-    set_tagged_heap(&mut first.tagged_heap);
+    // SAFETY: serial test setup; the WorldView is used in place and never swapped.
+    set_tagged_heap(unsafe { first.tagged_heap_mut() });
     let owners = rooted_cons_triplet(&mut first);
     exclude_middle(&first, owners);
     let (_, reads) = capture(|| owners[0].cons_car());
     let reads = reads.expect("the first heap's owner remains retained");
 
-    set_tagged_heap(&mut second.tagged_heap);
+    // SAFETY: serial test setup; the WorldView is used in place and never swapped.
+    set_tagged_heap(unsafe { second.tagged_heap_mut() });
     // This valid writable image allocation outlives both heaps, as an actual
     // pdump mapping does. No fabricated header or non-object address is used.
     let image = Box::leak(Box::new(ConsCell {
         car: ConsWord::new(TaggedValue::make_int(7)),
         cdr_or_next: ConsCdrWord::new(TaggedValue::NIL),
     }));
-    unsafe { second.tagged_heap.register_mapped_cons_range(image, 1) };
-    let dump = second.tagged_heap.collection_dump_window();
+    // SAFETY: serial test setup; the WorldView is used in place and never swapped.
+    unsafe { unsafe { second.tagged_heap_mut() }.register_mapped_cons_range(image, 1) };
+    let dump = second.tagged_heap().collection_dump_window();
     assert_ne!(dump, BarrierWindow::NONE);
-    assert!(compiled_observation_gate(dump).excluded.is_none());
+    assert!(
+        compiled_observation_gate(dump)
+            .excluded_for_test()
+            .is_none()
+    );
     assert!(
         second
-            .tagged_heap
+            .tagged_heap()
             .jit_barrier_window_for_test()
             .covers(image as *mut ConsCell as usize)
     );
-    set_tagged_heap(&mut first.tagged_heap);
+    // SAFETY: serial test setup; the WorldView is used in place and never swapped.
+    set_tagged_heap(unsafe { first.tagged_heap_mut() });
     assert!(
         compiled_observation_gate(BarrierWindow::NONE)
-            .excluded
+            .excluded_for_test()
             .is_none()
     );
     assert!(reads.unchanged());
@@ -301,16 +311,18 @@ fn observed_concurrent_barrier_overrides_empty_gap() {
     let mut context = context();
     let owners = rooted_cons_triplet(&mut context);
     let target = owners[1];
-    let old_child = context
-        .tagged_heap
-        .alloc_cons(TaggedValue::make_int(7), TaggedValue::NIL);
+    // SAFETY: serial test setup; the WorldView is used in place and never swapped.
+    let old_child =
+        unsafe { context.tagged_heap_mut() }.alloc_cons(TaggedValue::make_int(7), TaggedValue::NIL);
     context.push_specpdl_root(old_child);
     target.set_car(old_child);
     let gap = exclude_middle(&context, owners);
-    let hull = context.tagged_heap.jit_barrier_window_for_test();
-    context.tagged_heap.set_concurrent_active_for_test(true);
+    let hull = context.tagged_heap().jit_barrier_window_for_test();
+    // SAFETY: serial test setup (same view contract); no concurrent marker has
+    // been launched on this heap and none can run during the call.
+    unsafe { set_concurrent_active_for_test(context.tagged_heap_mut(), true) };
     assert_eq!(
-        context.tagged_heap.jit_barrier_window_for_test(),
+        context.tagged_heap().jit_barrier_window_for_test(),
         BarrierWindow::ALL
     );
     assert_eq!(
@@ -319,17 +331,18 @@ fn observed_concurrent_barrier_overrides_empty_gap() {
     );
     native_setcar(&mut context, target, TaggedValue::NIL);
     assert!(
-        context
-            .tagged_heap
-            .take_satb_shared_for_test()
-            .contains(&old_child)
+        // SAFETY: serial test setup (same view contract); the SATB handoff
+        // belongs to this serial fixture and no marker can drain it.
+        unsafe { take_satb_shared_for_test(context.tagged_heap_mut()) }.contains(&old_child)
     );
-    context.tagged_heap.set_concurrent_active_for_test(false);
+    // SAFETY: serial test setup (same view contract); no concurrent marker has
+    // been launched on this heap and none can run during the call.
+    unsafe { set_concurrent_active_for_test(context.tagged_heap_mut(), false) };
     assert_eq!(
-        compiled_observation_gate(BarrierWindow::NONE).excluded,
+        compiled_observation_gate(BarrierWindow::NONE).excluded_for_test(),
         Some(gap)
     );
-    assert!(hull.contains_window(context.tagged_heap.jit_barrier_window_for_test()));
+    assert!(hull.contains_window(context.tagged_heap().jit_barrier_window_for_test()));
 }
 
 #[test]
@@ -344,11 +357,11 @@ fn observed_tracking_refusal_keeps_full_setter_and_reopens_gap_after_disarm() {
     let endpoints = endpoints.expect("retained endpoint observations");
     assert!(!is_observed(target.bits()));
 
-    context
-        .tagged_heap
+    // SAFETY: serial test setup; the WorldView is used in place and never swapped.
+    unsafe { context.tagged_heap_mut() }
         .set_write_tracking_mode(WriteTrackingMode::OwnersAndRecords);
     assert_eq!(
-        context.tagged_heap.jit_barrier_window_for_test(),
+        context.tagged_heap().jit_barrier_window_for_test(),
         BarrierWindow::ALL
     );
     assert_eq!(
@@ -356,24 +369,23 @@ fn observed_tracking_refusal_keeps_full_setter_and_reopens_gap_after_disarm() {
         0
     );
     native_setcar(&mut context, target, TaggedValue::make_int(12));
-    assert!(context.tagged_heap.is_dirty_owner(target));
+    assert!(context.tagged_heap().is_dirty_owner(target));
     assert!(
         compiled_observation_gate(BarrierWindow::NONE)
-            .excluded
+            .excluded_for_test()
             .is_none()
     );
     assert!(endpoints.unchanged());
 
-    context
-        .tagged_heap
-        .set_write_tracking_mode(WriteTrackingMode::Disabled);
+    // SAFETY: serial test setup; the WorldView is used in place and never swapped.
+    unsafe { context.tagged_heap_mut() }.set_write_tracking_mode(WriteTrackingMode::Disabled);
     assert_eq!(
         neovm_jit_unobserved_collection_owner(target.bits() as i64),
         1
     );
     assert!(
         compiled_observation_gate(BarrierWindow::NONE)
-            .excluded
+            .excluded_for_test()
             .is_some_and(|gap| gap.covers(address(target)))
     );
     let (value, current) = capture(|| target.cons_car());
@@ -390,12 +402,10 @@ fn observed_cons_gap_retains_vector_and_string_dependencies() {
     let _mode = ObservedMode::begin();
     let mut context = context();
     let [cons, target, right] = rooted_cons_triplet(&mut context);
-    let vector = context
-        .tagged_heap
-        .alloc_vector(vec![TaggedValue::make_int(8)]);
-    let string = context
-        .tagged_heap
-        .alloc_string(LispString::from_utf8("abc"));
+    // SAFETY: serial test setup; the WorldView is used in place and never swapped.
+    let vector = unsafe { context.tagged_heap_mut() }.alloc_vector(vec![TaggedValue::make_int(8)]);
+    // SAFETY: serial test setup; the WorldView is used in place and never swapped.
+    let string = unsafe { context.tagged_heap_mut() }.alloc_string(LispString::from_utf8("abc"));
     for owner in [vector, string] {
         context.push_specpdl_root(owner);
     }
@@ -411,10 +421,10 @@ fn observed_cons_gap_retains_vector_and_string_dependencies() {
         1
     );
     let gap = compiled_observation_gate(BarrierWindow::NONE)
-        .excluded
+        .excluded_for_test()
         .expect("empty target interval");
     assert!(gap.covers(address(target)));
-    let published = context.tagged_heap.jit_barrier_window_for_test();
+    let published = context.tagged_heap().jit_barrier_window_for_test();
     for owner in [cons, right, vector] {
         assert!(!gap.covers(address(owner)));
         assert!(published.covers(address(owner)));
@@ -441,9 +451,9 @@ fn observed_mode_transition_republishes_an_off_capture_dependency() {
     crate::test_utils::init_test_tracing();
     let _mode = ObservedMode::begin();
     let mut context = context();
-    let owner = context
-        .tagged_heap
-        .alloc_cons(TaggedValue::make_int(7), TaggedValue::NIL);
+    // SAFETY: serial test setup; the WorldView is used in place and never swapped.
+    let owner =
+        unsafe { context.tagged_heap_mut() }.alloc_cons(TaggedValue::make_int(7), TaggedValue::NIL);
     context.push_specpdl_root(owner);
     force_compiled_journal_for_test(Some(CompiledJournalMode::Off));
     let (_, reads) = capture(|| {
@@ -474,17 +484,15 @@ fn observed_interior_cons_refinement_preserves_growth_vector_and_record_gate() {
 
     // The three cells share one allocation block. New array owners cannot
     // occupy either empty cell interval, and the initial hull rejects them.
-    let vector = context
-        .tagged_heap
-        .alloc_vector(vec![TaggedValue::make_int(31)]);
-    let record = context
-        .tagged_heap
-        .alloc_record(vec![TaggedValue::make_int(41)]);
+    // SAFETY: serial test setup; the WorldView is used in place and never swapped.
+    let vector = unsafe { context.tagged_heap_mut() }.alloc_vector(vec![TaggedValue::make_int(31)]);
+    // SAFETY: serial test setup; the WorldView is used in place and never swapped.
+    let record = unsafe { context.tagged_heap_mut() }.alloc_record(vec![TaggedValue::make_int(41)]);
     for owner in [vector, record] {
         context.push_specpdl_root(owner);
         assert!(!is_observed(owner.bits()));
     }
-    let hull = context.tagged_heap.jit_barrier_window_for_test();
+    let hull = context.tagged_heap().jit_barrier_window_for_test();
     assert!(hull.covers(address(target)));
     for owner in [vector, record] {
         assert!(
@@ -495,7 +503,7 @@ fn observed_interior_cons_refinement_preserves_growth_vector_and_record_gate() {
 
     let revision = LispCollectionRevision::current();
     native_setcar(&mut context, target, TaggedValue::make_int(12));
-    let published = context.tagged_heap.jit_barrier_window_for_test();
+    let published = context.tagged_heap().jit_barrier_window_for_test();
     for owner in [vector, record] {
         assert!(
             !published.covers(address(owner)),
@@ -518,11 +526,11 @@ fn observed_alternating_interior_and_growth_cons_stores_do_not_expand_hull_gate(
     let [left, target, right] = rooted_cons_triplet(&mut context);
     let (_, endpoints) = capture(|| (left.cons_car(), right.cons_car()));
     let endpoints = endpoints.expect("retained endpoints surround the old cell");
-    let growth = context
-        .tagged_heap
+    // SAFETY: serial test setup; the WorldView is used in place and never swapped.
+    let growth = unsafe { context.tagged_heap_mut() }
         .alloc_cons(TaggedValue::make_int(31), TaggedValue::NIL);
     context.push_specpdl_root(growth);
-    let hull = context.tagged_heap.jit_barrier_window_for_test();
+    let hull = context.tagged_heap().jit_barrier_window_for_test();
     assert!(hull.covers(address(target)));
     assert!(
         !hull.covers(address(growth)),
@@ -534,12 +542,12 @@ fn observed_alternating_interior_and_growth_cons_stores_do_not_expand_hull_gate(
         let value = TaggedValue::make_int(value);
         native_setcar(&mut context, target, value);
         let exclusion = compiled_observation_gate(BarrierWindow::NONE)
-            .excluded
+            .excluded_for_test()
             .expect("the first old-cell refusal retains its empty interval");
         assert!(exclusion.covers(address(target)));
         assert!(
             !context
-                .tagged_heap
+                .tagged_heap()
                 .jit_barrier_window_for_test()
                 .covers(address(growth)),
             "an old-cell store must not send the next fresh-cell store into the shim"
@@ -552,13 +560,13 @@ fn observed_alternating_interior_and_growth_cons_stores_do_not_expand_hull_gate(
             value.bits() as i64
         );
         assert_eq!(
-            compiled_observation_gate(BarrierWindow::NONE).excluded,
+            compiled_observation_gate(BarrierWindow::NONE).excluded_for_test(),
             Some(exclusion),
             "a disjoint stale refusal cannot replace the retained interval"
         );
         assert!(
             !context
-                .tagged_heap
+                .tagged_heap()
                 .jit_barrier_window_for_test()
                 .covers(address(growth)),
             "alternating empty regions must not republish a larger native gate"

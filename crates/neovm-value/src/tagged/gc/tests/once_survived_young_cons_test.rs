@@ -163,17 +163,20 @@ fn once_survived_young_cons_still_logs_an_open_window_preimage() {
         let owner = heap.alloc_cons(child, TaggedValue::NIL);
         let base = block_base(owner);
         model_once_survived_young(&mut heap, owner);
-        heap.set_concurrent_active_for_test(true);
+        // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+        unsafe { heap.set_concurrent_active_for_test(true) };
         let reopened = heap.alloc_cons(TaggedValue::fixnum(19), TaggedValue::NIL);
         assert_eq!(block_base(reopened), base);
         assert!(heap.region_book.no_old_cons_block_contains(address(owner)));
         assert!(set_cons_car(owner, TaggedValue::fixnum(23)));
-        assert!(heap.take_satb_shared_for_test().contains(&child));
+        // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+        assert!(unsafe { heap.take_satb_shared_for_test() }.contains(&child));
         assert!(!heap.cons_age_is_old_for_test(owner));
         assert!(
             heap.cons_blocks[heap.cons_block_index_by_base[&base]].is_marked_ptr(owner.xcons_ptr())
         );
         assert_eq!(owner.cons_car(), TaggedValue::fixnum(23));
-        heap.set_concurrent_active_for_test(false);
+        // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+        unsafe { heap.set_concurrent_active_for_test(false) };
     }
 }

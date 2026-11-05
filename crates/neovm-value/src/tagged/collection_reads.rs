@@ -836,8 +836,10 @@ mod compiled_journal;
 mod observed_envelope;
 #[cfg(feature = "test-support")]
 pub mod observed_envelope;
-#[cfg(test)]
+#[cfg(all(test, not(feature = "test-support")))]
 pub(crate) use compiled_journal::force_compiled_journal_for_test;
+#[cfg(feature = "test-support")]
+pub use compiled_journal::force_compiled_journal_for_test;
 #[doc(hidden)]
 pub use compiled_journal::{CompiledJournalMode, compiled_journal_mode, is_observed};
 
@@ -1099,10 +1101,6 @@ mod lazy_window_tests;
 #[cfg(all(test, feature = "jit"))]
 #[path = "collection_reads/tests/observed_epoch_test.rs"]
 mod observed_epoch_tests;
-
-#[cfg(all(test, feature = "jit"))]
-#[path = "collection_reads/tests/observed_gap_test.rs"]
-mod observed_gap_tests;
 
 #[cfg(all(test, feature = "jit"))]
 #[path = "collection_reads/tests/observed_collisions_test.rs"]

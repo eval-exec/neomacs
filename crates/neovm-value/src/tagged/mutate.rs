@@ -40,7 +40,8 @@ impl LispCollectionRevision {
     }
 
     /// Exact mutation count for regression tests, including sequence wrap.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn steps_since_for_test(self, earlier: Self) -> u64 {
         self.0.wrapping_sub(earlier.0)
     }

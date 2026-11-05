@@ -185,3 +185,31 @@ pub fn restore_function_epoch_for_test(
 ) {
     obarray.restore_function_epoch_raw(snapshot.0);
 }
+/// Value-FENCE row (peer 16:44:46Z): typed serial-fixture hook arming or
+/// disarming the concurrent SATB barrier without a GC thread. The original
+/// method is `pub(crate) unsafe fn`; this delegate keeps its contract.
+///
+/// # Safety
+/// No concurrent marker has been launched on this heap and none can run
+/// during the call (serial synthetic fixture only). `on = false` disables the
+/// SATB barrier, so a live marker would miss and free reachable objects.
+#[cfg(any(test, feature = "test-support"))]
+pub unsafe fn set_concurrent_active_for_test(heap: &mut crate::tagged::gc::TaggedHeap, on: bool) {
+    // SAFETY: the caller upholds the serial-fixture contract above.
+    unsafe { heap.set_concurrent_active_for_test(on) }
+}
+
+/// Value-FENCE row (peer 16:44:46Z): typed serial-fixture hook consuming the
+/// published SATB handoff. The original method is `pub(crate) unsafe fn`.
+///
+/// # Safety
+/// No concurrent marker has been launched on this heap and none can run
+/// during the call; the published SATB handoff belongs to this serial
+/// synthetic fixture and is consumed exactly once.
+#[cfg(any(test, feature = "test-support"))]
+pub unsafe fn take_satb_shared_for_test(
+    heap: &mut crate::tagged::gc::TaggedHeap,
+) -> Vec<crate::tagged::value::TaggedValue> {
+    // SAFETY: the caller upholds the serial-fixture contract above.
+    unsafe { heap.take_satb_shared_for_test() }
+}

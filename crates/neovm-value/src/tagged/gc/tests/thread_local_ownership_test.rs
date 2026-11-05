@@ -191,20 +191,23 @@ fn gc_tls_hash_activation_is_local_to_each_installed_mutator() {
         };
         heap.set_concurrent_hash_snapshot(Some(Arc::new(snapshot)));
         set_tagged_heap(&mut heap);
-        heap.set_concurrent_active_for_test(true);
+        // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+        unsafe { heap.set_concurrent_active_for_test(true) };
         assert!(concurrent_hash_mutation_active());
         ready.send(()).expect("hash activation parent dropped");
         released
             .recv_timeout(Duration::from_secs(10))
             .expect("hash activation parent did not release worker");
         assert!(concurrent_hash_mutation_active());
-        heap.set_concurrent_active_for_test(false);
+        // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+        unsafe { heap.set_concurrent_active_for_test(false) };
         drop(heap);
         assert!(!concurrent_hash_mutation_active());
     });
     let mut heap = heap_with_hash_claims(false);
     set_tagged_heap(&mut heap);
-    heap.set_concurrent_active_for_test(true);
+    // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+    unsafe { heap.set_concurrent_active_for_test(true) };
     started
         .recv_timeout(Duration::from_secs(10))
         .expect("hash activation worker did not start");
@@ -220,6 +223,7 @@ fn gc_tls_hash_activation_is_local_to_each_installed_mutator() {
         .join()
         .expect("mutator-local hash activation worker failed");
     assert!(!concurrent_hash_mutation_active());
-    heap.set_concurrent_active_for_test(false);
+    // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+    unsafe { heap.set_concurrent_active_for_test(false) };
     drop(heap);
 }

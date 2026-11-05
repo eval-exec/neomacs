@@ -66,7 +66,8 @@ impl JitHeapState {
     }
 
     /// The window compiled code currently tests.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn barrier_window(&self) -> BarrierWindow {
         BarrierWindow::from_lo_len(self.barrier_lo.get(), self.barrier_len.get())
     }

@@ -112,10 +112,12 @@ fn cons_allocation_is_black_only_while_sweeping_or_marking() {
     assert!(is_black(&heap, during_sweep));
     heap.set_sweep_in_progress_for_test(false);
 
-    heap.set_concurrent_active_for_test(true);
+    // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+    unsafe { heap.set_concurrent_active_for_test(true) };
     let during_mark = heap.alloc_cons(TaggedValue::NIL, TaggedValue::NIL);
     assert!(is_black(&heap, during_mark));
-    heap.set_concurrent_active_for_test(false);
+    // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+    unsafe { heap.set_concurrent_active_for_test(false) };
 
     let after = heap.alloc_cons(TaggedValue::NIL, TaggedValue::NIL);
     assert!(!is_black(&heap, after));
@@ -266,9 +268,11 @@ fn list_from_slice_is_black_only_while_sweeping_or_marking() {
             .all(|c| is_black(&heap, *c))
     );
 
-    heap.set_concurrent_active_for_test(true);
+    // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+    unsafe { heap.set_concurrent_active_for_test(true) };
     let during_mark = heap.list_from_slice(&elements);
-    heap.set_concurrent_active_for_test(false);
+    // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+    unsafe { heap.set_concurrent_active_for_test(false) };
     assert!(
         cells(&heap, during_mark)
             .iter()

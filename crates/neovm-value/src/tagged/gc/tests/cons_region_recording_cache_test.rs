@@ -318,7 +318,8 @@ fn recording_cache_black_grants_log_only_handed_prefixes_and_refund_marks() {
     let mut heap = new_heap();
     heap.begin_collection();
     heap.mark_in_progress = true;
-    heap.set_concurrent_active_for_test(true);
+    // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+    unsafe { heap.set_concurrent_active_for_test(true) };
     let before = counts(&heap);
     let cells: Vec<_> = (0..2 * CONS_REGION_MAX_CELLS + 1)
         .map(|index| heap.alloc_cons(TaggedValue::fixnum(index as i64), TaggedValue::NIL))
@@ -370,7 +371,8 @@ fn recording_cache_black_grants_log_only_handed_prefixes_and_refund_marks() {
         RegionBook::recorded_cons_age(heap.region_book.cons_block_and_color, block),
         None
     );
-    heap.set_concurrent_active_for_test(false);
+    // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+    unsafe { heap.set_concurrent_active_for_test(false) };
     heap.complete_collection();
     heap.finish_incremental_sweep_now();
     assert!(

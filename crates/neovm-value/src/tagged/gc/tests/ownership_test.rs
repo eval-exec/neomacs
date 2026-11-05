@@ -2819,7 +2819,8 @@ fn satb_barrier_on_growing_hash_table_is_linear_not_quadratic() {
     // Arm the SATB barrier exactly as `launch_concurrent_mark` does, but
     // WITHOUT the GC thread, so `satb_shared` is never drained and its length
     // measures the cumulative SATB push volume deterministically.
-    heap.set_concurrent_active_for_test(true);
+    // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+    unsafe { heap.set_concurrent_active_for_test(true) };
 
     const N: i64 = 50_000;
     for i in 0..N {
@@ -2836,7 +2837,8 @@ fn satb_barrier_on_growing_hash_table_is_linear_not_quadratic() {
     let satb_len = heap.satb_words_for_test().len();
 
     // Disarm before dropping the heap so no later mutation hits the barrier.
-    heap.set_concurrent_active_for_test(false);
+    // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+    unsafe { heap.set_concurrent_active_for_test(false) };
 
     // O(n) bound. The full pre-image is snapshotted at most a small constant
     // number of times across the whole cycle (ideally once), so the
@@ -3216,7 +3218,8 @@ fn write_barrier_caches_skip_only_writes_with_nothing_to_record() {
     // Concurrent mark: an owner's first write logs its pre-image, the rest
     // of the cycle's writes by it have nothing to add.
     let arm = |heap: &mut TaggedHeap, on: bool| {
-        heap.set_concurrent_active_for_test(on);
+        // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+        unsafe { heap.set_concurrent_active_for_test(on) };
     };
     arm(&mut heap, true);
     let before = calls();
@@ -3233,7 +3236,8 @@ fn write_barrier_caches_skip_only_writes_with_nothing_to_record() {
     arm(&mut heap, false);
 
     // The next cycle logs the owner's pre-image again.
-    drop(heap.take_satb_shared_for_test());
+    // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+    drop(unsafe { heap.take_satb_shared_for_test() });
     heap.begin_collection();
     heap.seed_root(root);
     heap.seed_root(young);
@@ -3273,14 +3277,16 @@ fn a_plain_variable_store_logs_its_pre_image_only_while_marking() {
     assert!(ob.set_plain_untrapped_value_id(sym, second));
     assert!(heap.satb_words_for_test().is_empty(), "no mark, no log");
 
-    heap.set_concurrent_active_for_test(true);
+    // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+    unsafe { heap.set_concurrent_active_for_test(true) };
     let stored = ob.set_plain_untrapped_value_id(sym, TaggedValue::fixnum(3));
     let logged: Vec<usize> = heap
         .satb_words_for_test()
         .iter()
         .map(|value| value.bits())
         .collect();
-    heap.set_concurrent_active_for_test(false);
+    // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+    unsafe { heap.set_concurrent_active_for_test(false) };
 
     assert!(stored);
     assert_eq!(logged, vec![second.bits()], "the overwritten value");
@@ -3311,14 +3317,16 @@ fn a_specbind_swap_logs_its_pre_image_only_while_marking() {
     assert_eq!(old.map(|v| v.bits()), Some(first.bits()));
     assert!(heap.satb_words_for_test().is_empty(), "no mark, no log");
 
-    heap.set_concurrent_active_for_test(true);
+    // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+    unsafe { heap.set_concurrent_active_for_test(true) };
     let old = ob.swap_plain_untrapped_value_id(sym, TaggedValue::fixnum(3));
     let logged: Vec<usize> = heap
         .satb_words_for_test()
         .iter()
         .map(|value| value.bits())
         .collect();
-    heap.set_concurrent_active_for_test(false);
+    // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+    unsafe { heap.set_concurrent_active_for_test(false) };
 
     assert_eq!(old.map(|v| v.bits()), Some(second.bits()));
     assert_eq!(logged, vec![second.bits()], "the overwritten value");

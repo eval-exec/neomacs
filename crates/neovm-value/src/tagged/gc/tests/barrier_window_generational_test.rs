@@ -67,9 +67,11 @@ fn generational_cons_protocol_window_preserves_disabled_window_transitions() {
         heap.extend_dump_span(4096, 4096);
         let span = BarrierWindow::span(4096, 8192);
         assert_published_windows(&heap, span);
-        heap.set_concurrent_active_for_test(true);
+        // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+        unsafe { heap.set_concurrent_active_for_test(true) };
         assert_published_windows(&heap, BarrierWindow::ALL);
-        heap.set_concurrent_active_for_test(false);
+        // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+        unsafe { heap.set_concurrent_active_for_test(false) };
         assert_published_windows(&heap, span);
         heap.set_write_tracking_mode(WriteTrackingMode::OwnersAndRecords);
         assert_published_windows(&heap, BarrierWindow::ALL);
@@ -137,10 +139,13 @@ fn generational_cons_protocol_window_marks_symbols_and_keeps_preimages() {
     // Concurrent marking must still record an immediate overwrite's old
     // child, even though generation-only stores reject that new value.
     owner.set_car(owner);
-    heap.set_concurrent_active_for_test(true);
+    // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+    unsafe { heap.set_concurrent_active_for_test(true) };
     owner.set_car(TaggedValue::fixnum(2));
-    assert!(heap.take_satb_shared_for_test().contains(&owner));
-    heap.set_concurrent_active_for_test(false);
+    // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+    assert!(unsafe { heap.take_satb_shared_for_test() }.contains(&owner));
+    // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+    unsafe { heap.set_concurrent_active_for_test(false) };
 }
 
 #[test]
@@ -193,8 +198,11 @@ fn generational_cold_cons_reject_preserves_real_window_immediate_writes() {
     mapped.set_car(TaggedValue::fixnum(10));
     assert_eq!(BARRIER_SLOW_CALLS.with(Cell::get), before + 1);
     mapped.set_car(young);
-    heap.set_concurrent_active_for_test(true);
+    // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+    unsafe { heap.set_concurrent_active_for_test(true) };
     mapped.set_car(TaggedValue::fixnum(11));
-    assert!(heap.take_satb_shared_for_test().contains(&young));
-    heap.set_concurrent_active_for_test(false);
+    // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+    assert!(unsafe { heap.take_satb_shared_for_test() }.contains(&young));
+    // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+    unsafe { heap.set_concurrent_active_for_test(false) };
 }

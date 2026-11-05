@@ -31,10 +31,14 @@ impl<'a> SyntheticConcurrentBarrier<'a> {
             _thread: std::marker::PhantomData,
         };
         guard.context.tagged_heap.mark_in_progress = true;
-        guard
-            .context
-            .tagged_heap
-            .set_concurrent_active_for_test(true);
+        // SAFETY: serial test heap; no concurrent marker has been launched and
+        // none can run during the call.
+        unsafe {
+            guard
+                .context
+                .tagged_heap
+                .set_concurrent_active_for_test(true)
+        };
         guard
     }
 
@@ -45,9 +49,13 @@ impl<'a> SyntheticConcurrentBarrier<'a> {
 
 impl Drop for SyntheticConcurrentBarrier<'_> {
     fn drop(&mut self) {
-        self.context
-            .tagged_heap
-            .set_concurrent_active_for_test(false);
+        // SAFETY: serial test heap; no concurrent marker has been launched and
+        // none can run during the call.
+        unsafe {
+            self.context
+                .tagged_heap
+                .set_concurrent_active_for_test(false)
+        };
         self.context.tagged_heap.mark_in_progress = false;
     }
 }

@@ -158,12 +158,15 @@ fn canonical_valid_certificate_does_not_skip_satb_preimages() {
         for immediate in [TaggedValue::fixnum(71), TaggedValue::char('λ')] {
             let mut heap = installed_heap(chunk_map);
             let child = heap.alloc_cons(TaggedValue::T, TaggedValue::NIL);
-            heap.set_concurrent_active_for_test(true);
+            // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+            unsafe { heap.set_concurrent_active_for_test(true) };
             let owner = heap.alloc_cons(child, TaggedValue::NIL);
             assert!(heap.region_book.no_old_cons_block_contains(address(owner)));
             assert!(set_cons_car(owner, immediate));
-            assert!(heap.take_satb_shared_for_test().contains(&child));
-            heap.set_concurrent_active_for_test(false);
+            // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+            assert!(unsafe { heap.take_satb_shared_for_test() }.contains(&child));
+            // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+            unsafe { heap.set_concurrent_active_for_test(false) };
         }
     }
 }

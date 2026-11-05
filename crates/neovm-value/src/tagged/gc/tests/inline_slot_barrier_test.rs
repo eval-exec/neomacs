@@ -100,19 +100,22 @@ fn inline_slot_immediate_overwrites_capture_cons_and_vector_satb_preimages() {
             let vector_child = heap.alloc_cons(TaggedValue::T, TaggedValue::NIL);
             let cons = heap.alloc_cons(car_child, cdr_child);
             let vector = heap.alloc_vector(vec![vector_child]);
-            heap.set_concurrent_active_for_test(true);
+            // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+            unsafe { heap.set_concurrent_active_for_test(true) };
 
             assert!(set_cons_car(cons, value));
             assert!(set_cons_cdr(cons, value));
             assert!(set_vector_slot(vector, 0, value));
-            let preimages = heap.take_satb_shared_for_test();
+            // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+            let preimages = unsafe { heap.take_satb_shared_for_test() };
             for child in [car_child, cdr_child, vector_child] {
                 assert!(
                     preimages.contains(&child),
                     "lost {child:?}, GEN1={generational}"
                 );
             }
-            heap.set_concurrent_active_for_test(false);
+            // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+            unsafe { heap.set_concurrent_active_for_test(false) };
         }
     }
 }
@@ -203,12 +206,15 @@ fn inline_slot_heap_switch_rederives_generation_and_real_window_obligations() {
     set_tagged_heap(&mut generational);
     let child = generational.alloc_cons(TaggedValue::T, TaggedValue::NIL);
     assert!(set_cons_car(cons, child));
-    generational.set_concurrent_active_for_test(true);
+    // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+    unsafe { generational.set_concurrent_active_for_test(true) };
     set_tagged_heap(&mut legacy);
     set_tagged_heap(&mut generational);
     assert!(set_cons_car(cons, TaggedValue::fixnum(59)));
-    assert!(generational.take_satb_shared_for_test().contains(&child));
-    generational.set_concurrent_active_for_test(false);
+    // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+    assert!(unsafe { generational.take_satb_shared_for_test() }.contains(&child));
+    // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+    unsafe { generational.set_concurrent_active_for_test(false) };
 }
 
 #[test]

@@ -213,15 +213,18 @@ fn a_concurrent_mark_matches_the_old_gate_for_every_owner() {
     let mut heap = legacy_gate_heap();
     set_tagged_heap(&mut heap);
     let owners = partitioned_heap_owners(&mut heap);
-    heap.set_concurrent_active_for_test(true);
+    // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+    unsafe { heap.set_concurrent_active_for_test(true) };
     assert_eq!(published_barrier_window(), BarrierWindow::ALL);
     check_every_owner(&mut heap, &owners);
-    heap.set_concurrent_active_for_test(false);
+    // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+    unsafe { heap.set_concurrent_active_for_test(false) };
     assert_eq!(
         published_barrier_window(),
         BarrierWindow::span(heap.dump_addr_lo, heap.dump_addr_hi)
     );
-    drop(heap.take_satb_shared_for_test());
+    // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+    drop(unsafe { heap.take_satb_shared_for_test() });
 }
 
 /// Owner tracking on: every heap write is recorded, owner and all.
@@ -444,8 +447,10 @@ fn compiled_code_and_rust_stores_see_the_same_window() {
     same(&heap, "tracking on");
     heap.set_write_tracking_mode(WriteTrackingMode::Disabled);
     same(&heap, "tracking off");
-    heap.set_concurrent_active_for_test(true);
+    // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+    unsafe { heap.set_concurrent_active_for_test(true) };
     same(&heap, "marking");
-    heap.set_concurrent_active_for_test(false);
+    // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+    unsafe { heap.set_concurrent_active_for_test(false) };
     same(&heap, "not marking");
 }

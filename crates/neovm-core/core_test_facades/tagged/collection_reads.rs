@@ -8,5 +8,16 @@
 
 pub use neovm_value::tagged::collection_reads::*;
 
+// Split-era test prelude: the historical parent module imported these two
+// names privately (the value layer's aliases), so the moved module's glob
+// cannot carry them into the relocated `use super::*` test file. Re-export
+// both in the cfg(test)-only wrapper; production paths are untouched.
+pub use neovm_value::tagged::mutate::LispCollectionRevision;
+pub use neovm_value::tagged::value::TaggedValue;
+
 #[path = "collection_reads/observed_envelope.rs"]
 pub mod observed_envelope;
+
+#[cfg(feature = "jit")]
+#[path = "../../core_tests/tagged/collection_reads/tests/observed_gap_test.rs"]
+mod observed_gap_tests;

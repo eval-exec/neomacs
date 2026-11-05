@@ -37,13 +37,14 @@ pub fn compiled_journal_mode() -> CompiledJournalMode {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     /// Scalar policy only; every mutator retains its own existing journal.
     static TEST_MODE: std::cell::Cell<Option<CompiledJournalMode>> = const { std::cell::Cell::new(None) };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn force_compiled_journal_for_test(mode: Option<CompiledJournalMode>) {
     TEST_MODE.with(|setting| setting.set(mode));
     // An Off capture may populate RECENT without publishing a sticky mark.

@@ -147,6 +147,14 @@ impl CompiledObservationGate {
         single_cons: 0,
         slots: [BarrierWindow::NONE; 2],
     };
+
+    /// VIS row: copied exclusion window for the moved observed-gap tests.
+    /// `BarrierWindow` is plain `Copy` data; the field itself stays private.
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn excluded_for_test(&self) -> Option<BarrierWindow> {
+        self.excluded
+    }
 }
 
 impl BarrierWindow {
@@ -155,6 +163,7 @@ impl BarrierWindow {
     pub(crate) const NONE: Self = Self { lo: 0, len: 0 };
     /// Every owner is covered (heap addresses are 8-aligned, so the one
     /// address `usize::MAX` this leaves out is never an owner).
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) const ALL: Self = Self {
         lo: 0,
         len: usize::MAX,
@@ -175,6 +184,7 @@ impl BarrierWindow {
     }
 
     /// Whether an owner at `addr` must take the out-of-line barrier.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     #[inline(always)]
     pub(crate) fn covers(self, addr: usize) -> bool {
         addr.wrapping_sub(self.lo) < self.len
@@ -183,6 +193,7 @@ impl BarrierWindow {
     /// Whether every address in `other` is already covered by this arc.
     /// Checking lengths first keeps the subtraction below non-wrapping;
     /// the relative start still uses the native wrapping-address geometry.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn contains_window(self, other: Self) -> bool {
         other.len == 0
             || (other.len <= self.len && other.lo.wrapping_sub(self.lo) <= self.len - other.len)
@@ -245,6 +256,7 @@ impl TaggedHeap {
 
     /// The actual dump span, even while ordinary GC tracking requires ALL.
     /// Observation classification must not use an old TLS protocol mirror.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn collection_dump_window(&self) -> BarrierWindow {
         if self.partition_dump {
             BarrierWindow::span(self.dump_addr_lo, self.dump_addr_hi)
@@ -452,8 +464,14 @@ impl TaggedHeap {
     /// thread (so nothing drains `satb_shared`). Tests used to flip the heap
     /// flag and its thread-local mirror by hand, which would now leave the
     /// barrier window stale and test the old gate.
-    #[cfg(test)]
-    pub(crate) fn set_concurrent_active_for_test(&mut self, on: bool) {
+    ///
+    /// # Safety
+    /// No concurrent marker has been launched on this heap and none can run
+    /// during the call (serial synthetic fixture only). `on = false` disables
+    /// the SATB barrier, so a live marker would miss and free reachable
+    /// objects.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) unsafe fn set_concurrent_active_for_test(&mut self, on: bool) {
         self.close_alloc_regions();
         self.concurrent_mark_running = on;
         TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.set(on));
@@ -578,21 +596,6 @@ pub(crate) fn current_collection_dump_window() -> BarrierWindow {
 
 #[cfg(test)]
 impl TaggedHeap {
-    /// Synthetic no-worker fixtures only: publish the current owner's partial
-    /// through the ordinary owner API, then consume the published handoff.
-    /// This hook never bypasses the production stopped-world partial-drain key.
-    pub(crate) fn take_satb_shared_for_test(&mut self) -> Vec<TaggedValue> {
-        let (mutator, handoff) = self.satb_parts();
-        mutator.satb.publish_partial(handoff).unwrap();
-        handoff
-            .take_all()
-            .unwrap()
-            .into_iter()
-            .flat_map(satb::SatbChunk::into_words)
-            .map(MarkWord::value)
-            .collect()
-    }
-
     /// Read the current synthetic fixture's words without consuming them.
     pub(super) fn satb_words_for_test(&self) -> Vec<TaggedValue> {
         let mut words = self.satb_handoff.snapshot_words_for_test().unwrap();
@@ -635,8 +638,34 @@ impl TaggedHeap {
                         .any(|value| value.bits() == owner.bits())
                 }))
     }
+}
+
+/// Hooks needed by the relocated core observed-gap tests (A' VIS rows):
+/// available in the test-support dependency build as well as unit tests.
+#[cfg(any(test, feature = "test-support"))]
+impl TaggedHeap {
+    /// Synthetic no-worker fixtures only: publish the current owner's partial
+    /// through the ordinary owner API, then consume the published handoff.
+    /// This hook never bypasses the production stopped-world partial-drain key.
+    ///
+    /// # Safety
+    /// No concurrent marker has been launched on this heap and none can run
+    /// during the call; the published SATB handoff belongs to this serial
+    /// synthetic fixture and is consumed exactly once.
+    pub(crate) unsafe fn take_satb_shared_for_test(&mut self) -> Vec<TaggedValue> {
+        let (mutator, handoff) = self.satb_parts();
+        mutator.satb.publish_partial(handoff).unwrap();
+        handoff
+            .take_all()
+            .unwrap()
+            .into_iter()
+            .flat_map(satb::SatbChunk::into_words)
+            .map(MarkWord::value)
+            .collect()
+    }
 
     /// Test hook: the window compiled code tests (`JitHeapState`).
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn jit_barrier_window_for_test(&self) -> BarrierWindow {
         self.jit.barrier_window()
     }

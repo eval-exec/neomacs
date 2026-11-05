@@ -282,7 +282,8 @@ fn black_follows_the_region_across_the_phase_flags() {
         "the unused tail is unmarked at close"
     );
 
-    heap.set_concurrent_active_for_test(true);
+    // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+    unsafe { heap.set_concurrent_active_for_test(true) };
     let during_mark = heap.list_from_slice(&[TaggedValue::fixnum(1); 1000]);
     let mut cursor = during_mark;
     while !cursor.is_nil() {
@@ -292,7 +293,8 @@ fn black_follows_the_region_across_the_phase_flags() {
         );
         cursor = unsafe { (*cursor.as_cons_ptr().unwrap()).cdr() };
     }
-    heap.set_concurrent_active_for_test(false);
+    // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+    unsafe { heap.set_concurrent_active_for_test(false) };
 
     let after = cons(&mut heap, 2);
     assert!(!is_black(&heap, after));

@@ -363,7 +363,8 @@ fn major_symbol_raw_interval_choke_points_retain_plists_once_and_ignore_nil_gaps
         );
         assert!(heap.current_mutator_gc().major_symbol_preimages.is_empty());
         phase.stop_synthetic(&mut heap);
-        let retained = heap.take_satb_shared_for_test();
+        // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+        let retained = unsafe { heap.take_satb_shared_for_test() };
         heap.gray_queue.extend(retained);
         heap.incremental_drain_all();
         assert!(heap.marked_symbols.contains(id(key)));

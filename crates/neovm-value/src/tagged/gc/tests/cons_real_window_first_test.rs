@@ -70,7 +70,8 @@ fn cons_real_window_first_pointer_overwrites_capture_preimages_with_open_young_r
     for generational in [false, true] {
         for chunk_map in [false, true] {
             let mut heap = installed_heap(generational, chunk_map);
-            heap.set_concurrent_active_for_test(true);
+            // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+            unsafe { heap.set_concurrent_active_for_test(true) };
             let old_car = heap.alloc_cons(TaggedValue::fixnum(101), TaggedValue::NIL);
             let old_cdr = heap.alloc_cons(TaggedValue::fixnum(103), TaggedValue::NIL);
             let new_car = heap.alloc_cons(TaggedValue::fixnum(107), TaggedValue::NIL);
@@ -88,10 +89,12 @@ fn cons_real_window_first_pointer_overwrites_capture_preimages_with_open_young_r
             assert_eq!(slow_calls(), before + 2);
             assert_eq!(owner.cons_car(), new_car);
             assert_eq!(owner.cons_cdr(), new_cdr);
-            let preimages = heap.take_satb_shared_for_test();
+            // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+            let preimages = unsafe { heap.take_satb_shared_for_test() };
             assert!(preimages.contains(&old_car));
             assert!(preimages.contains(&old_cdr));
-            heap.set_concurrent_active_for_test(false);
+            // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
+            unsafe { heap.set_concurrent_active_for_test(false) };
             assert_mirrors(&heap);
         }
     }
