@@ -69,7 +69,7 @@ pub(super) fn initialize() {
     LazyLock::force(&CONFIG);
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[inline]
 #[doc(hidden)]
 pub fn hoist_reads() -> bool {
@@ -667,7 +667,8 @@ fn record_observation(
 
 /// Ordered protocol evidence for native/interpreter parity tests. Identities
 /// remain words; taking this snapshot does not observe or dereference owners.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn journal_since_for_test(start: LispCollectionRevision) -> Option<Vec<usize>> {
     with_store(|store| {
         let count = store.sequence().wrapping_sub(start.sequence());

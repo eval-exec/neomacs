@@ -64,7 +64,8 @@ pub(crate) fn reset_buffer_local_value_lookup_probes() {
     BUFFER_LOCAL_VALUE_LOOKUP_PROBES.set(0);
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn buffer_local_value_lookup_probes() -> u64 {
     BUFFER_LOCAL_VALUE_LOOKUP_PROBES.get()
 }

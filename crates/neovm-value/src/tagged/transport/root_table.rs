@@ -393,7 +393,8 @@ fn existing_table(heap: HeapIdentity) -> Option<Arc<RootTable>> {
 }
 
 /// Inspect metadata lifetime after the heap itself has gone away.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn root_table_is_alive_for_test(heap: HeapIdentity) -> bool {
     existing_table(heap).is_some()
 }

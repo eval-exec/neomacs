@@ -53,7 +53,7 @@ pub unsafe fn install_eval_error_formatter(
 }
 
 /// Whether the formatter hook has been installed (test-only observation).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub fn eval_error_formatter_installed() -> bool {
     EVAL_ERROR_FORMATTER.get().is_some()

@@ -1397,7 +1397,7 @@ pub use data::decode_file_multibyte_char;
 #[doc(hidden)]
 pub use data::unibyte_case_fold_match_len;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     static POSITION_CONVERSION_SCAN_STEPS: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
@@ -1413,7 +1413,8 @@ pub(crate) fn reset_position_conversion_scan_steps_for_test() {
     POSITION_CONVERSION_SCAN_STEPS.with(|steps| steps.set(0));
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn position_conversion_scan_steps_for_test() -> usize {
     POSITION_CONVERSION_SCAN_STEPS.with(std::cell::Cell::get)
 }

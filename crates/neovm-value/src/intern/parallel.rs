@@ -86,7 +86,8 @@ pub(crate) fn with_registry_writer_for_test(body: impl FnOnce()) {
     body();
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn identity_census_for_test() -> (u64, usize) {
     let registry = global_symbol_registry().read();
     (symbol_registry_epoch_value(), registry.symbols.len())
@@ -94,7 +95,8 @@ pub(crate) fn identity_census_for_test() -> (u64, usize) {
 
 /// Scalar observations of exact root identity; never materialize a name or
 /// install a heap scope while a parallel era is live.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn name_publication_for_test(
     heap: crate::tagged::gc::HeapIdentity,
     id: SymId,

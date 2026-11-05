@@ -154,11 +154,11 @@ impl std::error::Error for ObarrayRestoreError {}
 use crate::heap_types::LispString;
 use crate::tagged::header::AtomicTaggedValue;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use std::cell::Cell;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     static FUNCTION_CELL_LOOKUP_COUNT: Cell<usize> = const { Cell::new(0) };
     /// Slot visits made by the plain-value store paths, so a test can pin
@@ -178,7 +178,7 @@ pub fn reset_plain_value_slot_visits() {
     PLAIN_VALUE_SLOT_VISITS.with(|count| count.set(0));
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub fn plain_value_slot_visits() -> usize {
     PLAIN_VALUE_SLOT_VISITS.with(Cell::get)

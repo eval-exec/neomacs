@@ -39,7 +39,13 @@ fn array_fn(op: ArrayOp) -> ByteCodeFunction {
         ArrayOp::Aset => 3,
     };
     let mut function = ByteCodeFunction::new(LambdaParams {
-        required: (1..=nargs).map(neovm_value::intern::SymId).collect(),
+        required: (1..=nargs)
+            .map(|id| {
+                // SAFETY: fixture ids are packed into bytecode descriptors and compared,
+                // never resolved against the interner vocabulary.
+                unsafe { neovm_value::intern::SymId::from_raw(id) }
+            })
+            .collect(),
         optional: Vec::new(),
         rest: None,
     });

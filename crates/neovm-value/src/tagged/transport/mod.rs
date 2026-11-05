@@ -14,6 +14,9 @@ mod immediate;
 mod root_batch;
 #[cfg(feature = "test-support")]
 pub mod root_batch;
+#[cfg(feature = "test-support")]
+pub mod root_table;
+#[cfg(not(feature = "test-support"))]
 mod root_table;
 mod shared_root;
 

@@ -28,7 +28,7 @@ use super::{Value, eq_value, equal_value};
 use crate::error::{Flow, LispCondition, signal};
 use crate::gc_trace::GcTrace;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     static INTERVAL_BALANCE_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -38,7 +38,8 @@ pub(crate) fn reset_interval_balance_calls_for_test() {
     INTERVAL_BALANCE_CALLS.with(|calls| calls.set(0));
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn interval_balance_calls_for_test() -> usize {
     INTERVAL_BALANCE_CALLS.with(std::cell::Cell::get)
 }
@@ -2754,7 +2755,7 @@ fn clip_char_pos_for_delete(pos: CharPos0, range: CharRange, del_len: CharLen) -
 // A copy is invisible to every correctness assertion -- the copy holds the
 // same intervals -- so the only way to pin "this primitive reads the tree
 // instead of duplicating it" is to count the duplications.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     static TABLE_CLONES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -2764,7 +2765,8 @@ pub(crate) fn reset_text_property_table_clones_for_test() {
     TABLE_CLONES.with(|c| c.set(0));
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn text_property_table_clones_for_test() -> usize {
     TABLE_CLONES.with(std::cell::Cell::get)
 }

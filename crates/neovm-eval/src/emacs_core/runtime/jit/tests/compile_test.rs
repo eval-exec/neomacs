@@ -8548,7 +8548,13 @@ fn generic_arith_fn(
     let mut f = nullary();
     f.lexical = true;
     let mut params = f.params.named().expect("named fixture parameters").clone();
-    params.required = (1..=nargs as u32).map(neovm_value::intern::SymId).collect();
+    params.required = (1..=nargs as u32)
+        .map(|id| {
+            // SAFETY: fixture ids are packed into bytecode descriptors and compared,
+            // never resolved against the interner vocabulary.
+            unsafe { neovm_value::intern::SymId::from_raw(id) }
+        })
+        .collect();
     f.params = params.into();
     f.ops = if nargs == 2 {
         vec![Op::StackRef(1), Op::StackRef(1), op, Op::Return]
@@ -8689,7 +8695,13 @@ fn a_generic_site_result_is_not_a_known_fixnum_across_a_block_edge() {
     let mut f = nullary();
     f.lexical = true;
     let mut params = f.params.named().expect("named fixture parameters").clone();
-    params.required = (1..=3).map(neovm_value::intern::SymId).collect();
+    params.required = (1..=3)
+        .map(|id| {
+            // SAFETY: fixture ids are packed into bytecode descriptors and compared,
+            // never resolved against the interner vocabulary.
+            unsafe { neovm_value::intern::SymId::from_raw(id) }
+        })
+        .collect();
     f.params = params.into();
     f.ops = vec![
         Op::StackRef(2),  // 0: a        [a b c a]
@@ -8770,7 +8782,13 @@ fn a_generic_arith_signal_is_caught_by_a_leaf_local_handler() {
     let mut f = nullary();
     f.lexical = true;
     let mut params = f.params.named().expect("named fixture parameters").clone();
-    params.required = (1..=2).map(neovm_value::intern::SymId).collect();
+    params.required = (1..=2)
+        .map(|id| {
+            // SAFETY: fixture ids are packed into bytecode descriptors and compared,
+            // never resolved against the interner vocabulary.
+            unsafe { neovm_value::intern::SymId::from_raw(id) }
+        })
+        .collect();
     f.params = params.into();
     f.ops = vec![
         Op::PushConditionCase(6), // 0
@@ -8819,7 +8837,13 @@ fn generic_arith_fallbacks_keep_the_residual_rooted() {
     let mut f = nullary();
     f.lexical = true;
     let mut params = f.params.named().expect("named fixture parameters").clone();
-    params.required = (1..=2).map(neovm_value::intern::SymId).collect();
+    params.required = (1..=2)
+        .map(|id| {
+            // SAFETY: fixture ids are packed into bytecode descriptors and compared,
+            // never resolved against the interner vocabulary.
+            unsafe { neovm_value::intern::SymId::from_raw(id) }
+        })
+        .collect();
     f.params = params.into();
     f.ops = vec![
         Op::Constant(0), // [a b 1]
@@ -8873,7 +8897,13 @@ fn a_generic_arith_signal_hook_that_collects_keeps_the_residual_alive() {
     let mut f = nullary();
     f.lexical = true;
     let mut params = f.params.named().expect("named fixture parameters").clone();
-    params.required = (1..=2).map(neovm_value::intern::SymId).collect();
+    params.required = (1..=2)
+        .map(|id| {
+            // SAFETY: fixture ids are packed into bytecode descriptors and compared,
+            // never resolved against the interner vocabulary.
+            unsafe { neovm_value::intern::SymId::from_raw(id) }
+        })
+        .collect();
     f.params = params.into();
     f.ops = vec![
         Op::Constant(0),          // 0  [a b 1]

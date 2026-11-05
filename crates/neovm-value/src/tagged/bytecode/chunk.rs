@@ -21,7 +21,7 @@ use super::{LambdaParams, Value};
 #[cfg(feature = "jit")]
 use super::Runtime;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Debug)]
@@ -270,7 +270,7 @@ pub struct ByteCodeFunction {
     pub(crate) lazy_gnu_code: Option<std::sync::Arc<LazyGnuCode>>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 static BYTECODE_FUNCTION_CLONE_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 #[cfg(test)]
@@ -285,7 +285,8 @@ pub(crate) fn note_bytecode_function_clone_for_test() {
     BYTECODE_FUNCTION_CLONE_COUNT.fetch_add(1, Ordering::Relaxed);
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn bytecode_function_clone_count_for_test() -> usize {
     BYTECODE_FUNCTION_CLONE_COUNT.load(Ordering::Relaxed)
 }

@@ -10,6 +10,9 @@
 //! more closely: a symbol is an object with a name, not just "slot N in the
 //! string interner".
 
+#[cfg(feature = "test-support")]
+pub mod parallel;
+#[cfg(not(feature = "test-support"))]
 pub(crate) mod parallel;
 pub(crate) mod shared;
 #[cfg(not(feature = "test-support"))]

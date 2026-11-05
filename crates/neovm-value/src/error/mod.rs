@@ -15,6 +15,9 @@ use crate::value::{Value, ValueKind};
 use strum::IntoStaticStr;
 
 mod bytecode_backtrace;
+#[cfg(feature = "test-support")]
+pub mod format_hook;
+#[cfg(not(feature = "test-support"))]
 pub(crate) mod format_hook;
 use bytecode_backtrace::BytecodeErrorBacktrace;
 #[doc(hidden)]

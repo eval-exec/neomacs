@@ -15,7 +15,13 @@ use neovm_value::value::LambdaParams;
 
 fn lexical_fn(nargs: u32, ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
     let mut f = ByteCodeFunction::new(LambdaParams {
-        required: (1..=nargs).map(neovm_value::intern::SymId).collect(),
+        required: (1..=nargs)
+            .map(|id| {
+                // SAFETY: fixture ids are packed into bytecode descriptors and compared,
+                // never resolved against the interner vocabulary.
+                unsafe { neovm_value::intern::SymId::from_raw(id) }
+            })
+            .collect(),
         optional: Vec::new(),
         rest: None,
     });

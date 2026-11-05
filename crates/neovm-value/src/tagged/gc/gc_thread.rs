@@ -555,7 +555,7 @@ pub(super) fn retire_collector(heap: HeapIdentity) -> Option<RetiredCollector> {
 }
 
 /// Whether `heap` has a live collector.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub fn collector_is_registered(heap: HeapIdentity) -> bool {
     matches!(collectors().get(&heap), Some(CollectorHandle::Thread(_)))
@@ -1923,11 +1923,12 @@ pub fn current_heap_generational_enabled() -> bool {
 
 /// Compiler-only regression instrumentation, absent from production. This
 /// counts mode captures, not mutator GC events or cached heap state.
-#[cfg(all(test, debug_assertions, feature = "jit"))]
+#[cfg(all(any(test, feature = "test-support"), debug_assertions, feature = "jit"))]
 static HEAP_GENERATIONAL_MODE_READS: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 
-#[cfg(all(test, debug_assertions, feature = "jit"))]
+#[cfg(all(any(test, feature = "test-support"), debug_assertions, feature = "jit"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn heap_generational_mode_reads_for_test() -> usize {
     HEAP_GENERATIONAL_MODE_READS.load(std::sync::atomic::Ordering::Relaxed)
 }

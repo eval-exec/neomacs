@@ -329,7 +329,13 @@ fn gen0_native_two_store_leaf_closes_only_the_first_read_owner() {
     });
     let endpoints = endpoints.expect("all endpoint owners remain rooted");
     let mut function = ByteCodeFunction::new(LambdaParams {
-        required: (1..=3).map(neovm_value::intern::SymId).collect(),
+        required: (1..=3)
+            .map(|id| {
+                // SAFETY: fixture ids are packed into bytecode descriptors and compared,
+                // never resolved against the interner vocabulary.
+                unsafe { neovm_value::intern::SymId::from_raw(id) }
+            })
+            .collect(),
         optional: Vec::new(),
         rest: None,
     });
