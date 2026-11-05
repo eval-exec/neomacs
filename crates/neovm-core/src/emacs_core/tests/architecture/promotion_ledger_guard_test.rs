@@ -106,16 +106,23 @@ enum Kind {
     Function,
     Method,
     FieldAccessor,
+    Field,
     Const,
     Struct,
     Enum,
+    Union,
     Type,
     Module,
     Use,
+    Glob,
     Reexport,
     UnsafeFunction,
     Trait,
     ConstFunction,
+    Def,
+    Static,
+    Pc2,
+    Seal,
     MacroRules,
 }
 
@@ -125,16 +132,23 @@ impl Kind {
             "fn" => Ok(Self::Function),
             "method" => Ok(Self::Method),
             "field-accessor" => Ok(Self::FieldAccessor),
+            "field" => Ok(Self::Field),
             "const" => Ok(Self::Const),
             "struct" => Ok(Self::Struct),
             "enum" => Ok(Self::Enum),
+            "union" => Ok(Self::Union),
             "type" => Ok(Self::Type),
             "mod" => Ok(Self::Module),
             "use" => Ok(Self::Use),
+            "glob" => Ok(Self::Glob),
             "reexport" => Ok(Self::Reexport),
             "unsafe fn" => Ok(Self::UnsafeFunction),
             "trait" => Ok(Self::Trait),
             "const fn" => Ok(Self::ConstFunction),
+            "def" => Ok(Self::Def),
+            "static" => Ok(Self::Static),
+            "pc2" => Ok(Self::Pc2),
+            "seal" => Ok(Self::Seal),
             "macro_rules" => Ok(Self::MacroRules),
             _ => Err(format!("B3_UNKNOWN_KIND {text:?}")),
         }
@@ -177,6 +191,9 @@ fn ledger(text: &str) -> Result<Vec<LedgerRow>, String> {
             .ok_or("B3_LEDGER missing source line")?;
         if span.is_empty() {
             return Err("B3_LEDGER missing line annotation".into());
+        }
+        if !span.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Err(format!("B3_LEDGER non-numeric line annotation {span:?}"));
         }
         if Path::new(file).is_absolute()
             || Path::new(file)
@@ -1404,6 +1421,110 @@ fn read_ledger_family(prefix: &str) -> Vec<(String, String)> {
     out
 }
 
+// ---------------------------------------------------------------------------
+// B3 field rows (LEAD 09:0xZ / 10:1xZ): every `field` promotion row names
+// `Struct.field`, and that field must exist on the named struct/union/enum in
+// the defining file. The old guard had no `field` kind at all, so the whole
+// PC11 ceiling test failed at parse.
+// ---------------------------------------------------------------------------
+
+fn fields_named(
+    items: &[syn::Item],
+    owner: &str,
+    field: &str,
+    owners: &mut usize,
+    found: &mut bool,
+) {
+    for item in items {
+        match item {
+            syn::Item::Mod(module) => {
+                if let Some((_, inner)) = &module.content {
+                    fields_named(inner, owner, field, owners, found);
+                }
+            }
+            syn::Item::Struct(item) if item.ident == owner => {
+                *owners += 1;
+                *found |= item
+                    .fields
+                    .iter()
+                    .filter_map(|field| field.ident.as_ref())
+                    .any(|ident| ident == field);
+            }
+            syn::Item::Union(item) if item.ident == owner => {
+                *owners += 1;
+                *found |= item
+                    .fields
+                    .named
+                    .iter()
+                    .filter_map(|field| field.ident.as_ref())
+                    .any(|ident| ident == field);
+            }
+            syn::Item::Enum(item) if item.ident == owner => {
+                *owners += 1;
+                *found |= item
+                    .variants
+                    .iter()
+                    .flat_map(|variant| variant.fields.iter())
+                    .filter_map(|field| field.ident.as_ref())
+                    .any(|ident| ident == field);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn field_rows_violation(workspace: &Path, ledger_name: &str, text: &str) -> Result<(), String> {
+    for (index, line) in text.lines().enumerate().skip(1) {
+        let fields: Vec<&str> = line.split('\t').collect();
+        if fields.len() != 6 || fields[1] != "field" {
+            continue;
+        }
+        let item = fields[0];
+        let Some((owner, field)) = item.split_once('.') else {
+            return Err(format!(
+                "B3_FIELD_UNNAMED_STRUCT: {ledger_name} line {}: field row {item:?} must spell Struct.field",
+                index + 2
+            ));
+        };
+        if owner.is_empty() || field.is_empty() || field.contains('.') {
+            return Err(format!(
+                "B3_FIELD_SHAPE: {ledger_name} line {}: field row {item:?} must spell exactly Struct.field",
+                index + 2
+            ));
+        }
+        let file = fields[3]
+            .rsplit_once(':')
+            .map(|(file, _)| file)
+            .ok_or_else(|| {
+                format!(
+                    "B3_FIELD_SHAPE: {ledger_name} line {}: missing file:line",
+                    index + 2
+                )
+            })?;
+        let path = workspace.join(file);
+        let source = std::fs::read_to_string(&path)
+            .map_err(|error| format!("B3_FIELD_READ {file}: {error}"))?;
+        let ast =
+            syn::parse_file(&source).map_err(|error| format!("B3_FIELD_PARSE {file}: {error}"))?;
+        let mut owners = 0usize;
+        let mut found = false;
+        fields_named(&ast.items, owner, field, &mut owners, &mut found);
+        if owners == 0 {
+            return Err(format!(
+                "B3_FIELD_MISSING_STRUCT: {ledger_name} line {}: {owner:?} is not declared in {file}",
+                index + 2
+            ));
+        }
+        if !found {
+            return Err(format!(
+                "B3_FIELD_MISSING_FIELD: {ledger_name} line {}: {owner:?} in {file} has no field {field:?}",
+                index + 2
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[test]
 fn architecture_seal_mint_items_are_never_ledger_rows() {
     let promotions = read_ledger_family("PROMOTION-LEDGER");
@@ -1441,4 +1562,506 @@ fn architecture_mutation_seal_mint_row_is_rejected() {
             .unwrap_err()
             .contains("B3_SEAL_MINT_ROW")
     );
+}
+
+// ---------------------------------------------------------------------------
+// B3 pc2 rows (LEAD 10:0xZ / 10:1xZ): each pc2 row names the exact callers of
+// its installer/table, and those named callers are the ONLY production call
+// sites. Test-only call sites are out of scope (the PC2 table tracks its own
+// signed test seams).
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Pc2Target {
+    Name { name: String, qualifier: String },
+    Method { owner: String, name: String },
+}
+
+impl Pc2Target {
+    fn name(&self) -> &str {
+        match self {
+            Self::Name { name, .. } | Self::Method { name, .. } => name,
+        }
+    }
+    fn matches(&self, segments: &[String], file: &str, defining_file: &str) -> bool {
+        match self {
+            Self::Name { name, qualifier } => {
+                segments.last().is_some_and(|segment| segment == name)
+                    && (file == defining_file
+                        || segments[..segments.len().saturating_sub(1)]
+                            .iter()
+                            .any(|segment| segment == qualifier))
+            }
+            Self::Method { owner, name } => {
+                segments.last().is_some_and(|segment| segment == name)
+                    && segments[..segments.len().saturating_sub(1)]
+                        .iter()
+                        .any(|segment| segment == owner)
+            }
+        }
+    }
+}
+
+fn pc2_target(item: &str, defining_file: &str) -> Pc2Target {
+    if let Some((owner, name)) = item.rsplit_once("::") {
+        return Pc2Target::Method {
+            owner: owner.to_string(),
+            name: name.to_string(),
+        };
+    }
+    let path = Path::new(defining_file);
+    let qualifier = if path.file_name().and_then(|name| name.to_str()) == Some("mod.rs") {
+        path.parent()
+            .and_then(|parent| parent.file_name())
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_string()
+    } else {
+        path.file_stem()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_string()
+    };
+    Pc2Target::Name {
+        name: item.to_string(),
+        qualifier,
+    }
+}
+
+struct Pc2Seam {
+    installer: String,
+    adapter: Option<String>,
+    seams: Vec<(String, String)>,
+}
+
+impl Pc2Seam {
+    fn covers(&self, target: &Pc2Target) -> bool {
+        self.installer == target.name() || self.adapter.as_deref() == Some(target.name())
+    }
+    fn allows(&self, file: &str, function: Option<&str>) -> bool {
+        self.seams.iter().any(|(seam_file, seam_function)| {
+            file.ends_with(seam_file.trim_start_matches('/'))
+                && function.is_some_and(|function| {
+                    seam_function
+                        .rsplit("::")
+                        .next()
+                        .is_some_and(|seam| seam == function)
+                })
+        })
+    }
+}
+
+fn pc2_seams(workspace: &Path) -> Result<Vec<Pc2Seam>, String> {
+    let path =
+        workspace.join("crates/neovm-core/src/emacs_core/tests/architecture/pc2_hook_seams.tsv");
+    let text = read(&path)?;
+    let mut seams = Vec::new();
+    for line in text.lines().skip(1) {
+        let fields: Vec<&str> = line.split('\t').collect();
+        if fields.len() != 5 || fields[0] == "kind" {
+            continue;
+        }
+        let last = |path: &str| path.rsplit("::").next().unwrap_or(path).to_string();
+        let installer = last(fields[2]);
+        let adapter = (fields[3] != "-").then(|| last(fields[3]));
+        let seam_sites = if fields[4] == "-" {
+            Vec::new()
+        } else {
+            fields[4]
+                .split(';')
+                .filter_map(|seam| seam.rsplit_once(':'))
+                .map(|(file, function)| (file.to_string(), function.to_string()))
+                .collect()
+        };
+        seams.push(Pc2Seam {
+            installer,
+            adapter,
+            seams: seam_sites,
+        });
+    }
+    Ok(seams)
+}
+
+fn pc2_declaration(items: &[syn::Item], target: &Pc2Target) -> bool {
+    items.iter().any(|item| match item {
+        syn::Item::Mod(module) => module
+            .content
+            .as_ref()
+            .is_some_and(|(_, items)| pc2_declaration(items, target)),
+        syn::Item::Fn(item) => match target {
+            Pc2Target::Name { name, .. } => item.sig.ident == *name,
+            Pc2Target::Method { .. } => false,
+        },
+        syn::Item::Static(item) => match target {
+            Pc2Target::Name { name, .. } => item.ident == *name,
+            Pc2Target::Method { .. } => false,
+        },
+        syn::Item::Const(item) => match target {
+            Pc2Target::Name { name, .. } => item.ident == *name,
+            Pc2Target::Method { .. } => false,
+        },
+        syn::Item::Struct(item) => match target {
+            Pc2Target::Name { name, .. } => item.ident == *name,
+            Pc2Target::Method { .. } => false,
+        },
+        syn::Item::Impl(block) => match target {
+            Pc2Target::Method { owner, name } => {
+                let owner_matches = match &*block.self_ty {
+                    syn::Type::Path(path) => path
+                        .path
+                        .segments
+                        .last()
+                        .is_some_and(|segment| segment.ident == *owner),
+                    _ => false,
+                };
+                owner_matches
+                    && block.items.iter().any(
+                        |item| matches!(item, syn::ImplItem::Fn(item) if item.sig.ident == *name),
+                    )
+            }
+            Pc2Target::Name { .. } => false,
+        },
+        _ => false,
+    })
+}
+
+fn pc2_gated(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|attr| {
+        if attr.path().is_ident("test") {
+            return true;
+        }
+        if !attr.path().is_ident("cfg") {
+            return false;
+        }
+        attr.meta
+            .require_list()
+            .map(|list| {
+                list.tokens
+                    .clone()
+                    .into_iter()
+                    .any(|token| matches!(token, proc_macro2::TokenTree::Ident(id) if id == "test"))
+            })
+            .unwrap_or(false)
+    })
+}
+
+struct Pc2Scan<'a> {
+    target: &'a Pc2Target,
+    defining_file: &'a str,
+    file: &'a str,
+    stack: Vec<String>,
+    references: Vec<Option<String>>,
+}
+
+impl<'ast> Visit<'ast> for Pc2Scan<'_> {
+    fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
+        if pc2_gated(&item.attrs) {
+            return;
+        }
+        self.stack.push(item.sig.ident.to_string());
+        visit::visit_item_fn(self, item);
+        self.stack.pop();
+    }
+    fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
+        if pc2_gated(&item.attrs) {
+            return;
+        }
+        self.stack.push(item.sig.ident.to_string());
+        visit::visit_impl_item_fn(self, item);
+        self.stack.pop();
+    }
+    fn visit_item_mod(&mut self, module: &'ast syn::ItemMod) {
+        if pc2_gated(&module.attrs) {
+            return;
+        }
+        visit::visit_item_mod(self, module);
+    }
+    fn visit_expr_path(&mut self, path: &'ast syn::ExprPath) {
+        let segments: Vec<String> = path
+            .path
+            .segments
+            .iter()
+            .map(|segment| segment.ident.to_string())
+            .collect();
+        if self
+            .target
+            .matches(&segments, self.file, self.defining_file)
+        {
+            self.references.push(self.stack.last().cloned());
+        }
+        visit::visit_expr_path(self, path);
+    }
+}
+
+fn pc2_source_files(workspace: &Path) -> Result<Vec<PathBuf>, String> {
+    fn walk(directory: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
+        for entry in std::fs::read_dir(directory).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let path = entry.path();
+            let kind = entry.file_type().map_err(|e| e.to_string())?;
+            if kind.is_dir() {
+                let name = path.file_name().and_then(|name| name.to_str());
+                if name == Some("tests") || name == Some("core_tests") {
+                    continue;
+                }
+                walk(&path, files)?;
+            } else if kind.is_file() && path.extension().is_some_and(|extension| extension == "rs")
+            {
+                files.push(path);
+            }
+        }
+        Ok(())
+    }
+    let mut files = Vec::new();
+    for crate_dir in [
+        "neovm-value",
+        "neovm-edit",
+        "neovm-text",
+        "neovm-eval",
+        "neovm-display",
+        "neovm-system",
+        "neovm-core",
+    ] {
+        let src = workspace.join("crates").join(crate_dir).join("src");
+        if src.is_dir() {
+            walk(&src, &mut files)?;
+        }
+    }
+    Ok(files)
+}
+
+fn pc2_reason_names_file(reason: &str, file: &str) -> bool {
+    if reason.contains(file) {
+        return true;
+    }
+    if let Some((_, suffix)) = file.split_once("/src/") {
+        if reason.contains(suffix) {
+            return true;
+        }
+    }
+    let path = Path::new(file);
+    let stem = path
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    if stem == "mod" {
+        path.parent()
+            .and_then(|parent| parent.file_name())
+            .and_then(|name| name.to_str())
+            .is_some_and(|parent| reason.contains(parent))
+    } else {
+        !stem.is_empty() && stem != "lib" && reason.contains(stem)
+    }
+}
+
+fn pc2_rows_violation(
+    workspace: &Path,
+    ledger_name: &str,
+    text: &str,
+    seams: &[Pc2Seam],
+) -> Result<(), String> {
+    let files = pc2_source_files(workspace)?;
+    for (index, line) in text.lines().enumerate().skip(1) {
+        let fields: Vec<&str> = line.split('\t').collect();
+        if fields.len() != 6 || fields[1] != "pc2" {
+            continue;
+        }
+        let item = fields[0];
+        let (defining_file, _) = fields[3].rsplit_once(':').ok_or_else(|| {
+            format!(
+                "B3_PC2_SHAPE: {ledger_name} line {}: missing file:line",
+                index + 2
+            )
+        })?;
+        let reason = fields[5];
+        let target = pc2_target(item, defining_file);
+        let source = read(&workspace.join(defining_file))?;
+        let ast = syn::parse_file(&source)
+            .map_err(|error| format!("B3_PC2_PARSE {defining_file}: {error}"))?;
+        if !pc2_declaration(&ast.items, &target) {
+            return Err(format!(
+                "B3_PC2_MISSING_DECLARATION: {ledger_name} line {}: {item:?} is not declared in {defining_file}",
+                index + 2
+            ));
+        }
+        let mut unnamed = BTreeSet::new();
+        for file in &files {
+            let Ok(relative) = file.strip_prefix(workspace) else {
+                continue;
+            };
+            let relative = relative.to_string_lossy().replace('\\', "/");
+            let text = match std::fs::read_to_string(file) {
+                Ok(text) => text,
+                Err(_) => continue,
+            };
+            if !text.contains(target.name()) {
+                continue;
+            }
+            let ast = syn::parse_file(&text)
+                .map_err(|error| format!("B3_PC2_PARSE {relative}: {error}"))?;
+            let mut scan = Pc2Scan {
+                target: &target,
+                defining_file,
+                file: &relative,
+                stack: Vec::new(),
+                references: Vec::new(),
+            };
+            scan.visit_file(&ast);
+            for function in scan.references {
+                if relative == defining_file {
+                    continue;
+                }
+                let named_file = pc2_reason_names_file(reason, &relative);
+                let named_function = function
+                    .as_deref()
+                    .is_some_and(|function| reason.contains(function));
+                let named_seam = seams
+                    .iter()
+                    .filter(|seam| seam.covers(&target))
+                    .any(|seam| seam.allows(&relative, function.as_deref()));
+                if !(named_file || named_function || named_seam) {
+                    unnamed.insert(format!(
+                        "{relative}:{}",
+                        function.as_deref().unwrap_or("<item>")
+                    ));
+                }
+            }
+        }
+        if !unnamed.is_empty() {
+            return Err(format!(
+                "B3_PC2_UNNAMED_CALL_SITE: {ledger_name} line {}: {item:?} has call sites the row does not name: {}",
+                index + 2,
+                unnamed.into_iter().collect::<Vec<_>>().join(", ")
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn architecture_pc11_field_rows_name_real_struct_fields() {
+    let workspace = root();
+    for (name, text) in read_ledger_family("PROMOTION-LEDGER") {
+        field_rows_violation(&workspace, &name, &text).unwrap_or_else(|error| panic!("{error}"));
+    }
+}
+
+#[test]
+fn architecture_mutation_field_rows_reject_missing_struct_and_field() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = "crates/neovm-value/src/lib.rs";
+    std::fs::create_dir_all(dir.path().join("crates/neovm-value/src")).unwrap();
+    std::fs::write(
+        dir.path().join(file),
+        "pub struct Thing { pub visible: u8 }\n",
+    )
+    .unwrap();
+    let header = "item\tkind\told_vis\tfile:line\tmodule\treason\n";
+    let row = |item: &str| format!("{header}{item}\tfield\tprivate\t{file}:1\tm\treason\n");
+    assert!(
+        field_rows_violation(dir.path(), "PROMOTION-LEDGER-X.tsv", &row("Thing.visible")).is_ok()
+    );
+    let error = field_rows_violation(dir.path(), "PROMOTION-LEDGER-X.tsv", &row("Thing.absent"))
+        .expect_err("missing field");
+    assert!(error.contains("B3_FIELD_MISSING_FIELD"), "{error}");
+    let error = field_rows_violation(dir.path(), "PROMOTION-LEDGER-X.tsv", &row("Absent.visible"))
+        .expect_err("missing struct");
+    assert!(error.contains("B3_FIELD_MISSING_STRUCT"), "{error}");
+    let error = field_rows_violation(dir.path(), "PROMOTION-LEDGER-X.tsv", &row("visible"))
+        .expect_err("unnamed struct");
+    assert!(error.contains("B3_FIELD_UNNAMED_STRUCT"), "{error}");
+    // A type declared in an inline module is still in the defining file.
+    std::fs::write(
+        dir.path().join(file),
+        "mod nested { pub struct Deep { pub inner: u8 } }\n",
+    )
+    .unwrap();
+    assert!(field_rows_violation(dir.path(), "PROMOTION-LEDGER-X.tsv", &row("Deep.inner")).is_ok());
+}
+
+#[test]
+fn architecture_pc11_pc2_rows_name_all_call_sites() {
+    let workspace = root();
+    let seams = pc2_seams(&workspace).unwrap_or_else(|error| panic!("{error}"));
+    for (name, text) in read_ledger_family("PROMOTION-LEDGER") {
+        pc2_rows_violation(&workspace, &name, &text, &seams)
+            .unwrap_or_else(|error| panic!("{error}"));
+    }
+}
+
+#[test]
+fn architecture_mutation_pc2_unnamed_call_site_is_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("crates/neovm-value/src");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(src.join("installer_mod.rs"), "pub fn installer() {}\n").unwrap();
+    std::fs::write(
+        src.join("probe.rs"),
+        "fn named_caller() { crate::installer_mod::installer(); }\nfn secret_caller() { crate::installer_mod::installer(); }\n",
+    )
+    .unwrap();
+    let header = "item\tkind\told_vis\tfile:line\tmodule\treason\n";
+    let row = |reason: &str| {
+        format!(
+            "{header}installer\tpc2\t-\tcrates/neovm-value/src/installer_mod.rs:1\tm\t{reason}\n"
+        )
+    };
+    let error = pc2_rows_violation(
+        dir.path(),
+        "PROMOTION-LEDGER-X.tsv",
+        &row("exact caller named_caller only"),
+        &[],
+    )
+    .expect_err("unnamed call site");
+    assert!(
+        error.contains("B3_PC2_UNNAMED_CALL_SITE") && error.contains("secret_caller"),
+        "{error}"
+    );
+    assert!(
+        pc2_rows_violation(
+            dir.path(),
+            "PROMOTION-LEDGER-X.tsv",
+            &row("exact callers named_caller and secret_caller"),
+            &[],
+        )
+        .is_ok()
+    );
+    // A row for a missing declaration is red.
+    std::fs::write(
+        src.join("probe.rs"),
+        "fn named_caller() { crate::installer_mod::installer(); }\n",
+    )
+    .unwrap();
+    let missing = format!(
+        "{header}absent\tpc2\t-\tcrates/neovm-value/src/installer_mod.rs:1\tm\texact caller named_caller\n"
+    );
+    let error = pc2_rows_violation(dir.path(), "PROMOTION-LEDGER-X.tsv", &missing, &[])
+        .expect_err("missing declaration");
+    assert!(error.contains("B3_PC2_MISSING_DECLARATION"), "{error}");
+}
+
+#[test]
+fn architecture_pc11_every_promotion_ledger_parses() {
+    for (name, text) in read_ledger_family("PROMOTION-LEDGER") {
+        ledger(&text).unwrap_or_else(|error| panic!("{name}: {error}"));
+    }
+}
+
+#[test]
+fn architecture_mutation_promotion_kinds_are_exact() {
+    let header = "item\tkind\told_vis\tfile:line\tmodule\treason\n";
+    let ok = format!(
+        "{header}Thing.field\tfield\tprivate\tcrates/x/src/a.rs:1\tm\tr\n\
+         P\tpc2\t-\tcrates/x/src/a.rs:2\tm\tr\n\
+         D\tdef\tpub(crate)\tcrates/x/src/a.rs:3\tm\tr\n\
+         G\tglob\tpub(crate)\tcrates/x/src/a.rs:4\tm\tr\n\
+         S\tstatic\tprivate\tcrates/x/src/a.rs:5\tm\tr\n\
+         U\tunion\tprivate\tcrates/x/src/a.rs:6\tm\tr\n\
+         TheSeal\tseal\t-\tcrates/x/src/a.rs:7\tm\tr\n"
+    );
+    assert_eq!(ledger(&ok).unwrap().len(), 7);
+    let bad = ok.replace("\tpc2\t", "\tbogus\t");
+    assert!(ledger(&bad).unwrap_err().contains("B3_UNKNOWN_KIND"));
+    let bad = ok.replace(":5\t", ":five\t");
+    assert!(ledger(&bad).unwrap_err().contains("non-numeric line"));
 }
