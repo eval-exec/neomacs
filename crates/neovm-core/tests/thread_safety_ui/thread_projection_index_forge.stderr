@@ -5,7 +5,7 @@ error[E0423]: cannot initialize a tuple struct which contains private fields
   |                   ^^^^^^^^
   |
 note: constructor is not visible here due to private fields
- --> src/emacs_core/runtime/forward/thread_projection.rs
+ --> $WORKSPACE/crates/neovm-value/src/forward/thread_projection.rs
   |
   | pub struct TlsIndex(NonZeroU32);
   |                     ^^^^^^^^^^ private field

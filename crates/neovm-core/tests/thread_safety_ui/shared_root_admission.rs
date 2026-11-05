@@ -1,4 +1,3 @@
-use neovm_core::emacs_core::Context;
 use neovm_core::tagged::gc::TaggedHeap;
 use neovm_core::tagged::transport::SharedRoot;
 use neovm_core::tagged::value::TaggedValue;

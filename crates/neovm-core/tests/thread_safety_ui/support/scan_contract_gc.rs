@@ -6,7 +6,7 @@
 
 use std::marker::PhantomData;
 
-#[path = "../../../src/tagged/gc/scan_contract.rs"]
+#[path = "../../../../neovm-value/src/tagged/gc/scan_contract.rs"]
 pub mod scan_contract;
 
 #[derive(Default)]

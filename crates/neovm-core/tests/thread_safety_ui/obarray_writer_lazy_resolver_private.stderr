@@ -4,10 +4,10 @@ error[E0624]: method `debug_on_next_call_bool_fwd` is private
 5 |       let _descriptor = (*writer).debug_on_next_call_bool_fwd(id);
   |                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^ private method
   |
- ::: src/emacs_core/runtime/symbol/mod.rs
+ ::: $WORKSPACE/crates/neovm-value/src/symbol/mod.rs
   |
   | /     pub(crate) fn debug_on_next_call_bool_fwd(
   | |         &mut self,
   | |         id: SymId,
-  | |     ) -> Option<&'static crate::emacs_core::forward::LispBoolFwd> {
-  | |_________________________________________________________________- private method defined here
+  | |     ) -> Option<&'static crate::forward::LispBoolFwd> {
+  | |_____________________________________________________- private method defined here

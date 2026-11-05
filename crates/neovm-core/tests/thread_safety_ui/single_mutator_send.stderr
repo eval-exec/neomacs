@@ -1,18 +1,26 @@
 error[E0599]: the associated function or constant `check` exists for struct `ThreadTransfer<SingleMutatorWorld<'static>>`, but its trait bounds were not satisfied
   --> tests/thread_safety_ui/single_mutator_send.rs:10:67
    |
-10 |     ThreadTransfer::<scan_contract::SingleMutatorWorld<'static>>::check();
-   |                                                                   ^^^^^ associated function or constant cannot be called on `ThreadTransfer<SingleMutatorWorld<'static>>` due to unsatisfied trait bounds
+10 |       ThreadTransfer::<scan_contract::SingleMutatorWorld<'static>>::check();
+   |                                                                     ^^^^^ associated function or constant cannot be called on `ThreadTransfer<SingleMutatorWorld<'static>>` due to unsatisfied trait bounds
    |
-  ::: tests/thread_safety_ui/support/../../../src/tagged/gc/scan_contract.rs
+  ::: tests/thread_safety_ui/support/../../../../neovm-value/src/tagged/gc/scan_contract.rs
    |
-   | pub(crate) struct SingleMutatorWorld<'h> {
-   | ---------------------------------------- doesn't satisfy `SingleMutatorWorld<'static>: Send`
+   |   pub struct SingleMutatorWorld<'h> {
+   |   --------------------------------- doesn't satisfy `SingleMutatorWorld<'static>: Send`
+   |
+  ::: $RUST/alloc/src/rc.rs
+   |
+   | / pub struct Rc<
+   | |     T: ?Sized,
+   | |     #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global,
+   | | > {
+   | |_- doesn't satisfy `Rc<()>: Send`
    |
   ::: tests/thread_safety_ui/support/thread_bounds.rs
    |
-   | pub struct ThreadTransfer<T>(PhantomData<T>);
-   | ---------------------------- associated function or constant `check` not found for this struct
+   |   pub struct ThreadTransfer<T>(PhantomData<T>);
+   |   ---------------------------- associated function or constant `check` not found for this struct
    |
    = note: the following trait bounds were not satisfied:
            `Rc<()>: Send`

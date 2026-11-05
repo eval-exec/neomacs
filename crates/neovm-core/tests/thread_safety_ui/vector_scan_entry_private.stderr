@@ -5,7 +5,7 @@ error[E0603]: enum `VectorScanEntry` is private
   |                                 ^^^^^^^^^^^^^^^ private enum
   |
 note: the enum `VectorScanEntry` is defined here
- --> src/tagged/header.rs
+ --> $WORKSPACE/crates/neovm-value/src/tagged/header.rs
   |
   | pub(crate) enum VectorScanEntry {
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

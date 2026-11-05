@@ -9,7 +9,7 @@ error[E0382]: borrow of moved value: `heap`
   |     ^^^^ value borrowed here after move
   |
 note: `gc::concurrent::<impl TaggedHeap>::shutdown` takes ownership of the receiver `self`, which moves `heap`
- --> src/tagged/gc/concurrent.rs
+ --> $WORKSPACE/crates/neovm-value/src/tagged/gc/concurrent.rs
   |
   |     pub fn shutdown(mut self) -> Result<(), MarkFinishError> {
   |                         ^^^^

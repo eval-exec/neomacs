@@ -1,4 +1,4 @@
-error[E0133]: call to unsafe function `neovm_core::emacs_core::jit::contract_fixture::set_leaf_slot_word` is unsafe and requires unsafe block
+error[E0133]: call to unsafe function `neovm_core::emacs_core::builtins::jit_runtime::set_leaf_slot_word` is unsafe and requires unsafe block
  --> tests/thread_safety_ui/leaf_slot_writer_safe_call.rs:5:5
   |
 5 |     set_leaf_slot_word(&*runtime, 0, 0);

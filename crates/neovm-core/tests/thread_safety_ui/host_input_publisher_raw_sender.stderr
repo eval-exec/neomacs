@@ -5,7 +5,7 @@ error[E0599]: no method named `sender` found for reference `&HostInputPublisher`
   |                             ^^^^^^
   |
 help: there is a method `send` with a similar name, but with different arguments
- --> src/host_input.rs
+ --> $WORKSPACE/crates/neovm-system/src/emacs_core/system/host_input.rs
   |
   |     pub fn send(&self, event: InputEvent) -> Result<(), HostInputPublishError> {
   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

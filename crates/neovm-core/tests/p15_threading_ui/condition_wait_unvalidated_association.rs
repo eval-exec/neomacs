@@ -6,7 +6,7 @@ mod actual_condition_neighbors;
 use actual_condition_neighbors::{
     ConditionId, MutexId, ThreadKey, Wait, api, emacs_core, heap_types,
 };
-#[path = "../../src/emacs_core/runtime/eval/green/condition_wait.rs"]
+#[path = "../../../neovm-eval/src/emacs_core/runtime/eval/green/condition_wait.rs"]
 mod condition_wait;
 
 fn unchecked_wait(

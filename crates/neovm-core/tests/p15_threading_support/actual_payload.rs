@@ -66,5 +66,5 @@ pub(crate) mod tagged {
     }
 }
 
-#[path = "../../src/heap_types/threading.rs"]
+#[path = "../../../neovm-value/src/heap_types/threading.rs"]
 pub(crate) mod threading;

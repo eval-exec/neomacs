@@ -5,7 +5,7 @@ error[E0603]: module `world` is private
   |                                   ^^^^^ private module
   |
 note: the module `world` is defined here
- --> src/emacs_core/runtime/eval/mod.rs
+ --> $WORKSPACE/crates/neovm-eval/src/emacs_core/runtime/eval/mod.rs
   |
   | pub(crate) mod world;
   | ^^^^^^^^^^^^^^^^^^^^

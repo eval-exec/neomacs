@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-#[path = "../../src/emacs_core/runtime/eval/parallel_entry/capability.rs"]
+#[path = "../../../neovm-eval/src/emacs_core/runtime/eval/parallel_entry/capability.rs"]
 mod capability;
 use capability::*;
 
