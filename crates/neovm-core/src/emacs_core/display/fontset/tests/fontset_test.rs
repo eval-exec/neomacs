@@ -908,11 +908,13 @@ fn an_encoding_spelled_as_a_charset_alias_ranks_like_its_charset() {
         Value::symbol("iso-8859-1"),
     ])
     .expect("re-point the alias");
-    crate::emacs_core::charset::builtin_set_charset_priority(vec![Value::symbol("iso-8859-1")])
+    // With the alias resolved at lookup time, the entry would now be
+    // `iso-8859-1`, as non-preferred as the other, and keep definition order.
+    crate::emacs_core::charset::builtin_set_charset_priority(vec![Value::symbol("unicode-bmp")])
         .expect("set-charset-priority");
     assert_eq!(
         registry_names(&matching_entries_for_char('é')),
-        ["iso8859-1", "iso10646-1"]
+        ["iso10646-1", "iso8859-1"]
     );
 }
 

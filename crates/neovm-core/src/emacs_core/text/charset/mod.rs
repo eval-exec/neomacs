@@ -384,6 +384,11 @@ pub(crate) struct CharsetRegistry {
     /// non-preferred subset charsets (`unicode-bmp`, `latin-iso8859-1`, ...).
     /// `None` means the boundary is the end of the list (GNU's `Qnil`).
     non_preferred_head: Option<usize>,
+    /// The preferred charsets (`priority` up to `non_preferred_head`) by
+    /// canonical name, captured when the priority is set.  GNU's ordered list
+    /// holds charset ids, so re-pointing an alias later does not change which
+    /// charsets are preferred.
+    preferred_identities: Vec<SymId>,
     /// Next auto-assigned charset ID.
     next_id: i64,
 }
@@ -407,6 +412,7 @@ impl CharsetRegistry {
             priority_identities: Vec::new(),
             emacs_mule_order: Vec::new(),
             non_preferred_head: None,
+            preferred_identities: Vec::new(),
             next_id: 256, // start above the Emacs built-in range
         };
         reg.init_standard_charsets(materialize_plists);
@@ -419,6 +425,7 @@ impl CharsetRegistry {
         // `set-language-environment` / `set-charset-priority` override this at
         // runtime (e.g. the UTF-8 environment moves `unicode-bmp` to the front).
         reg.non_preferred_head = Some(1);
+        reg.capture_preferred_identities();
         reg
     }
 
@@ -731,14 +738,14 @@ impl CharsetRegistry {
         &self.priority
     }
 
-    /// The preferred charsets, GNU's `Vcharset_ordered_list` up to
+    /// Capture the preferred charsets, GNU's `Vcharset_ordered_list` up to
     /// `Vcharset_non_preferred_head`, by canonical name.
-    fn preferred_charsets(&self) -> Vec<SymId> {
+    fn capture_preferred_identities(&mut self) {
         let end = self.non_preferred_head.unwrap_or(self.priority.len());
-        self.priority[..end.min(self.priority.len())]
+        self.preferred_identities = self.priority[..end.min(self.priority.len())]
             .iter()
             .map(|&name| self.resolve_name(name))
-            .collect()
+            .collect();
     }
 
     /// Classify a character into the highest-priority charset that contains it,
@@ -830,6 +837,7 @@ impl CharsetRegistry {
         }
 
         self.priority = reordered;
+        self.capture_preferred_identities();
         // GNU sorts existing Mule-list membership into the newly chosen
         // global order (charset.c:2201-2219); a priority change never adds a
         // charset that was absent from the Mule list.
@@ -1025,8 +1033,10 @@ impl CharsetRegistry {
             priority_identities: snapshot.priority_identities.unwrap_or_default(),
             emacs_mule_order: snapshot.emacs_mule_order,
             non_preferred_head: snapshot.non_preferred_head,
+            preferred_identities: Vec::new(),
             next_id: snapshot.next_id,
         };
+        registry.capture_preferred_identities();
         if legacy_identities {
             // Old snapshots stored public names, including materialized
             // aliases. Resolve those once into physical definition identities;
@@ -1229,11 +1239,13 @@ pub(crate) fn warm_carrier_charset_registry() {
 
 /// Give fontset lookups this thread's current charset preference.  GNU
 /// reorders fontset entries whenever `charset_ordered_list_tick` changes, so
-/// this runs where the order changes (`set-charset-priority`, `define-charset`,
+/// this runs where the preferred charsets change (`set-charset-priority` and
 /// dump restore), not when a context is created or activated: another context
-/// must not replace the editor's language-environment order.
+/// must not replace the editor's language-environment order.  Defining a
+/// charset never changes them, since they are captured when the priority is
+/// set.
 fn publish_charset_preference() {
-    let preferred = CHARSET_REGISTRY.with(|slot| slot.borrow().preferred_charsets());
+    let preferred = CHARSET_REGISTRY.with(|slot| slot.borrow().preferred_identities.clone());
     crate::emacs_core::fontset::publish_charset_preference(preferred);
 }
 
@@ -2678,8 +2690,6 @@ fn builtin_define_charset_internal_with_symbols(args: Vec<Value>, mode: SymbolMo
         };
         reg.register(info);
     });
-    // GNU's `Fdefine_charset_internal` bumps `charset_ordered_list_tick`.
-    publish_charset_preference();
 
     Ok(Value::NIL)
 }
