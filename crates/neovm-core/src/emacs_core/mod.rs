@@ -546,3 +546,15 @@ mod architecture_subr_storage_boundary_test;
 #[cfg(test)]
 #[path = "tests/architecture/promotion_ledger_guard_test.rs"]
 mod architecture_promotion_ledger_guard_test;
+
+#[cfg(test)]
+#[path = "tests/moved_value/mod.rs"]
+mod moved_value;
+
+#[cfg(test)]
+#[path = "tests/moved_text/mod.rs"]
+mod moved_text;
+
+#[cfg(test)]
+#[path = "tests/moved_edit/mod.rs"]
+mod moved_edit;
