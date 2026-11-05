@@ -1533,7 +1533,15 @@ fn check_row(
     let source = read(&definition)?;
     let segments: Vec<&str> = row.item.split("::").collect();
     let leaf = segments.last().copied().unwrap_or_default();
-    if !source.contains(leaf) {
+    // A self-file mod row names the module's own source file (the spelling
+    // accepted for the expansion): the file IS the module, so the textual
+    // leaf check does not apply.
+    let self_file_mod = row.kind == "mod"
+        && Path::new(&row.file)
+            .file_name()
+            .and_then(|file| file.to_str())
+            .is_some_and(|file| file == format!("{leaf}.rs"));
+    if !source.contains(leaf) && !self_file_mod {
         return Err(format!(
             "{what}: `{leaf}` does not occur in the defining file"
         ));
@@ -4095,14 +4103,12 @@ fn auth_fence_file(crate_name: &str) -> Option<(&'static str, &'static [&'static
             "crates/neovm-edit/src/test_support/authority.rs",
             &["test_support", "authority"],
         )),
-        // The display fence is the cfg-gated trait surface on `window`: the
-        // three signed rows' paths are `neovm_display::window::DisplayFrameExt
-        // ::<method>`, defined in window/display_ext.rs. The fence module is
-        // the `window` module itself (the trait re-export is not a second
-        // route: the signed paths name the trait's methods, not the trait).
+        // The display fence is its signed test_support::authority module
+        // (peer 19:36Z follow-up): the three DisplayFrameExt test fixtures
+        // route through delegates there.
         "neovm-display" => Some((
-            "crates/neovm-display/src/window/display_ext.rs",
-            &["window"],
+            "crates/neovm-display/src/test_support/authority.rs",
+            &["test_support", "authority"],
         )),
         _ => None,
     }
@@ -4765,16 +4771,6 @@ fn auth_public_use_violation(
                                     continue;
                                 };
                                 if canonical == fence_file.as_path() {
-                                    continue;
-                                }
-                                // The display fence IS the cfg-gated public
-                                // trait surface (an original-path fence):
-                                // there is no separate private original to
-                                // protect, and re-exporting the production
-                                // window module is the crate's normal public
-                                // architecture. Exclusivity applies to the
-                                // test_support-module fences (value/eval).
-                                if fence_name == "neovm-display" {
                                     continue;
                                 }
                                 // A named import re-exports exactly `rest` (the
