@@ -1425,7 +1425,10 @@ fn bytecode_instance_reads_back_as_the_prototype_with_its_own_pool() {
     assert_eq!(i.closure_slot_count, p.closure_slot_count);
     assert_eq!(i.extra_slots, p.extra_slots);
     #[cfg(feature = "jit")]
-    assert!(std::ptr::eq(&**i.jit_runtime(), &**p.jit_runtime()));
+    assert_eq!(
+        i.jit_runtime_identity_for_test(),
+        p.jit_runtime_identity_for_test()
+    );
     assert_eq!(i.lazy_gnu_code.is_some(), p.lazy_gnu_code.is_some());
 
     // The instance survives on its own, and the prototype's sweep leaves

@@ -717,6 +717,20 @@ impl ByteCodeFunction {
     pub fn runtime(&self) -> &Option<Runtime> {
         &self.runtime
     }
+    /// Copied identity of the SHARED JIT runtime state for the value
+    /// arena-reuse test. Identity only; never rebuild a pointer from it.
+    #[cfg(all(feature = "jit", any(test, feature = "test-support")))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn jit_runtime_identity_for_test(&self) -> usize {
+        std::sync::Arc::as_ptr(
+            &self
+                .runtime
+                .as_ref()
+                .expect("jit runtime on a materialized function")
+                .shared,
+        )
+        .addr()
+    }
     #[cfg(feature = "jit")]
     #[doc(hidden)]
     pub const RUNTIME_OFFSET: usize = core::mem::offset_of!(Self, runtime);
