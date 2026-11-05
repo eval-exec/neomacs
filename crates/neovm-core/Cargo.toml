@@ -198,6 +198,8 @@ neovm-value = { workspace = true, features = ["test-support"] }
 # The moved re-homes need text's feature-gated CacheRootScan match to compile
 # in the core-test graph (TEST-SUPPORT-DESIGN rev 2 consumer gate).
 neovm-text = { path = "../neovm-text", features = ["test-support"] }
+# The same rule for the evaluator's test-only subr-batch census.
+neovm-eval = { path = "../neovm-eval", default-features = false, features = ["test-support"] }
 toml.workspace = true
 serde_json.workspace = true
 static_assertions.workspace = true

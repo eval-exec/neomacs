@@ -9,6 +9,8 @@ description = "Evaluator and Lisp runtime extracted from neovm-core"
 
 [features]
 default = ["jit"]
+# Test-only accessors for cross-crate architecture probes (peer ruling A2).
+test-support = []
 contract-fixtures = []
 desktop-font-settings = []
 gc-memory-telemetry = []

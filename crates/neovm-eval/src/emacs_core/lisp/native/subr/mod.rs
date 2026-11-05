@@ -86,7 +86,7 @@ macro_rules! world_registry {
 }
 pub(crate) use world_registry;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     static INSTALLED_SUBR_BATCHES: std::cell::RefCell<Vec<&'static str>> = const {
         std::cell::RefCell::new(Vec::new())
@@ -492,9 +492,9 @@ const fn const_str_eq(a: &str, b: &str) -> bool {
 /// `subrs.rs` fails compilation instead of relying on a Rust-source parser.
 #[derive(Clone, Copy)]
 pub struct SubrBatch {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     source_file: &'static str,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     owner: &'static str,
     specs: &'static [SubrSpec],
 }
@@ -510,27 +510,27 @@ impl SubrBatch {
         assert!(!owner.is_empty(), "a subr catalog must have an owner");
         assert!(!specs.is_empty(), "a subr catalog must not be empty");
         Self {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             source_file,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             owner,
             specs,
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub const fn source_file(self) -> &'static str {
         self.source_file
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub const fn owner(self) -> &'static str {
         self.owner
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub const fn specs(self) -> &'static [SubrSpec] {
         self.specs
@@ -538,19 +538,21 @@ impl SubrBatch {
 
     #[doc(hidden)]
     pub fn install(self, ctx: &mut crate::emacs_core::eval::Context) {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         INSTALLED_SUBR_BATCHES.with(|installed| installed.borrow_mut().push(self.owner));
         ctx.register_subrs(self.specs);
     }
 }
 
-#[cfg(test)]
-pub(crate) fn reset_installed_subr_batches() {
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub fn reset_installed_subr_batches() {
     INSTALLED_SUBR_BATCHES.with(|installed| installed.borrow_mut().clear());
 }
 
-#[cfg(test)]
-pub(crate) fn take_installed_subr_batches() -> Vec<&'static str> {
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub fn take_installed_subr_batches() -> Vec<&'static str> {
     INSTALLED_SUBR_BATCHES.with(|installed| std::mem::take(&mut *installed.borrow_mut()))
 }
 

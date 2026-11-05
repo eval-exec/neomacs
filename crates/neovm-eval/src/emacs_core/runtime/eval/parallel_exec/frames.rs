@@ -22,7 +22,8 @@ use std::num::NonZeroU32;
 /// executor publishes. The names are exactly that roster so stage 1 plugs the
 /// owner publication in without a second vocabulary.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum RootGroup {
+#[doc(hidden)]
+pub enum RootGroup {
     VmFrames,
     EvalTemp,
     Bc,
@@ -635,7 +636,8 @@ impl FrameRoots for SlotRecord {
 /// The detachable frame kinds the arena can hold. The architecture test pins
 /// this enumeration against the actual `*Frame` structs in this file.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum FrameKind {
+#[doc(hidden)]
+pub enum FrameKind {
     Interp,
     Vm,
 }

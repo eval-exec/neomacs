@@ -17,7 +17,8 @@
 
 pub(crate) mod dispatch;
 pub(crate) mod effective;
-pub(crate) mod frames;
+#[doc(hidden)]
+pub mod frames;
 
 #[cfg(test)]
 #[path = "tests/dispatch_test.rs"]

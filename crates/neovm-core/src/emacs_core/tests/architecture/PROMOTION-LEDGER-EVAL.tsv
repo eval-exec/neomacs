@@ -4910,3 +4910,5 @@ DisplayServiceHooks	struct	private	crates/neovm-eval/src/emacs_core/runtime/eval
 FileNotifyHostQueries	struct	private	crates/neovm-eval/src/emacs_core/runtime/eval/hooks_proof.rs:107	emacs_core::runtime::eval::hooks_proof	stage-4 W5/E13 PC2 (peer 21:0xZ): cold file-notify host query table
 HOOKS_INSTALLED	static	private	crates/neovm-eval/src/emacs_core/runtime/eval/hooks_proof.rs:176	emacs_core::runtime::eval::hooks_proof	stage-4 W5/E13 SEAL (peer 21:0xZ): process-once proof latch
 INSTALLED_SET	static	private	crates/neovm-eval/src/emacs_core/runtime/eval/hooks_proof.rs:219	emacs_core::runtime::eval::hooks_proof	stage-4 W5/E13 PC2 (peer 21:0xZ): process-once canonical set latch
+FrameKind	enum	pub(crate)	crates/neovm-eval/src/emacs_core/runtime/eval/parallel_exec/frames.rs:640	emacs_core::runtime::eval::parallel_exec::frames	RULE 19 scanner re-root: core layout scanner names the dormant substrate enums
+RootGroup	enum	pub(crate)	crates/neovm-eval/src/emacs_core/runtime/eval/parallel_exec/frames.rs:26	emacs_core::runtime::eval::parallel_exec::frames	RULE 19 scanner re-root: core layout scanner names the dormant substrate enums
