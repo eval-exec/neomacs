@@ -3095,22 +3095,28 @@ pub struct Context {
     /// `current-global-map`, active key lookup, and legacy `global-set-key`.
     selected_global_map: WorldSlot<crate::emacs_core::eval::keymap_lookup::SelectedGlobalMap>,
     /// Current echo-area message text, mirroring GNU `current-message`.
+    #[doc(hidden)]
     pub current_message: WorldSlot<Option<neovm_value::heap_types::LispString>>,
     /// GNU `echo_buffer[2]`, held by identity rather than by name.
     pub(crate) echo_area_buffers: WorldSlot<EchoAreaBuffers>,
     /// Window that was selected when the active minibuffer session began.
+    #[doc(hidden)]
     pub minibuffer_selected_window:
         WorldSlot<Option<neovm_edit::emacs_core::display_metrics::WindowId>>,
     /// Currently active minibuffer window, if any.
+    #[doc(hidden)]
     pub active_minibuffer_window:
         WorldSlot<Option<neovm_edit::emacs_core::display_metrics::WindowId>>,
     /// Thread manager — cooperative threading primitives.
+    #[doc(hidden)]
     pub threads: WorldSlot<ThreadManager>,
     /// Command loop state — event queue, prefix args, kbd macros, quit flag.
     /// Used by the interactive command loop (recursive-edit → command_loop).
+    #[doc(hidden)]
     pub command_loop: WorldSlot<crate::emacs_core::eval::data::command_loop::CommandLoop>,
     /// Consecutive graphical scroll commands retain a pixel goal, not a
     /// possibly clipped buffer column. Owned exclusively by this VM.
+    #[doc(hidden)]
     pub scroll_goal: Option<crate::emacs_core::eval::data::window_state::ScrollGoal>,
     /// Source identity for the display-facing `face_table` derived from a
     /// frame's authoritative Lisp face specifications.  Equal identity means
@@ -3118,6 +3124,7 @@ pub struct Context {
     materialized_face_table_source: WorldSlot<Option<(neovm_value::display_vocab::FrameId, u64)>>,
     /// Pending GNU display ownership and private transaction state. Each
     /// exclusively borrowed Context owns it; never a process/TLS Lisp cache.
+    #[doc(hidden)]
     pub gnu_redisplay_hooks: redisplay_hooks::RedisplayHookOwnership,
     /// Cached Lisp-visible GC tuning variables used on every safe point.
     ///
@@ -3130,6 +3137,7 @@ pub struct Context {
     /// Rooted so the dumped startup state's runtime closure hook remains live.
     interpreted_closure_filter_fn: Option<Value>,
     pub(crate) in_flight_registry: neovm_value::error::InFlightRegistryHandle,
+    #[doc(hidden)]
     pub cached_standard_case_table: Option<Value>,
     /// Edit-owned runtime state: the buffer manager and the insdel
     /// change-combining state. Embedded by value so field access stays one
@@ -3144,8 +3152,10 @@ pub struct Context {
     /// graph, so the frontend installs this typed seam. Taking the callback
     /// while invoking it is tracked explicitly: recursive/exclusively-borrowed
     /// queries report `LayoutBusy` instead of silently returning stale state.
+    #[doc(hidden)]
     pub window_layout_query_adapter: WindowLayoutQueryAdapter,
     /// Native anchor for the next Lisp-driven menu-bar popup.
+    #[doc(hidden)]
     pub pending_menu_bar_popup_anchor: Option<super::MenuBarPopupAnchor>,
     /// Reusable scratch-buffer lifecycle shared by code-conversion entry
     /// points. This is transient runtime state, like GNU's
@@ -3157,15 +3167,18 @@ pub struct Context {
     /// inputs changed.
     last_redisplay_signature: WorldSlot<Option<RedisplaySignature>>,
     /// Match data from the last successful search/match operation.
+    #[doc(hidden)]
     pub match_data: Option<MatchData>,
     /// Host-input receiving owner. Only HostInputPublisher can attach a queue
     /// paired with this Context's process wait backend.
+    #[doc(hidden)]
     pub input_rx: crate::emacs_core::eval::host_input::HostInputReceiver,
     /// Tasks queued from other threads (e.g. the diagnostics server) to run on
     /// the Lisp thread at a safe point. Drained in the `read_char` loop.
     eval_task_rx: Option<crossbeam_channel::Receiver<EvalThreadTask>>,
     /// Specpdl — special binding stack that writes directly to the obarray.
     /// Matches GNU Emacs's specpdl design.
+    #[doc(hidden)]
     pub specpdl: Vec<SpecBinding>,
     /// Binding stacks parked while a nested simulated thread runs. GNU owns a
     /// separate specpdl per thread; keeping suspended stacks out of the active
@@ -3190,12 +3203,15 @@ pub struct Context {
     pub(crate) bookmarks: WorldSlot<BookmarkManager>,
     /// TEST-SUPPORT-VIS row: moved pdump/bookmark tests read the manager slot.
     #[cfg(feature = "test-support")]
+    #[doc(hidden)]
     pub bookmarks: WorldSlot<BookmarkManager>,
     /// Rectangle state — stores the last killed rectangle for yank-rectangle.
     pub(crate) rectangle: WorldSlot<RectangleState>,
     /// Interactive command registry — tracks interactive commands.
+    #[doc(hidden)]
     pub interactive: WorldSlot<InteractiveRegistry>,
     /// Minibuffer runtime state — active minibuffer stack, prompt metadata, and history.
+    #[doc(hidden)]
     pub minibuffers: WorldSlot<MinibufferManager>,
     /// Mode registry — major/minor modes.
     pub(crate) modes: WorldSlot<ModeRegistry>,
@@ -3204,6 +3220,7 @@ pub struct Context {
     pub(crate) kmacro: WorldSlot<KmacroManager>,
     /// Desired visual configuration.  Lisp updates this snapshot atomically;
     /// attaching or rebuilding a display replays it as authoritative state.
+    #[doc(hidden)]
     pub visual_config: neomacs_display_protocol::VisualConfig,
     /// Active VM-local root frames. Mirrors GNU's model more closely than a
     /// single save/truncate side vector by keeping VM dynamic roots in explicit
@@ -3232,6 +3249,7 @@ pub struct Context {
     #[cfg(not(feature = "test-support"))]
     pub(crate) bc_buf: Vec<Value>,
     #[cfg(feature = "test-support")]
+    #[doc(hidden)]
     pub bc_buf: Vec<Value>,
     /// JIT residual-root window stack: generated code stores the operand-stack
     /// values live across a GC-capable shim call into `[top..top+N)` slots of
@@ -3250,6 +3268,7 @@ pub struct Context {
     #[cfg(not(feature = "test-support"))]
     pub(crate) condition_stack: Vec<ConditionFrame>,
     #[cfg(feature = "test-support")]
+    #[doc(hidden)]
     pub condition_stack: Vec<ConditionFrame>,
     /// GNU `pending_funcalls` equivalent for internal no-Lisp teardown paths.
     pub(crate) pending_safe_funcalls: WorldSlot<Vec<PendingSafeFuncall>>,
@@ -3275,9 +3294,12 @@ pub struct Context {
     /// loop's error log.  Only populated when debug-level tracing is active, so
     /// it costs nothing in production.  Taken (cleared) when logged.  See
     /// `dispatch_signal` and `command_loop_2`.
+    #[doc(hidden)]
     pub last_uncaught_signal_backtrace: Option<String>,
+    #[doc(hidden)]
     pub daemon: WorldSlot<Option<DaemonState>>,
     /// Process manager — owns all tracked processes.
+    #[doc(hidden)]
     pub processes: WorldSlot<ProcessManager>,
     /// Abbreviation manager — text abbreviation expansion.
     pub(crate) abbrevs: WorldSlot<AbbrevManager>,
@@ -3297,8 +3319,10 @@ pub struct Context {
     pub(crate) integer_width_context: super::builtins::IntegerWidthContext,
     pub(crate) owned_roots: OwnedRootRegistryView,
     /// Tagged pointer heap — sole GC and allocator.
+    #[doc(hidden)]
     pub tagged_heap: WorldView<neovm_value::tagged::gc::TaggedHeap>,
     /// The obarray — unified symbol table with value cells, function cells, plists.
+    #[doc(hidden)]
     pub obarray: ObarrayView,
     /// `runtime_binding_has_projection`'s membership as a bitset over symbol
     /// ids (see `runtime_projection_mask_for`).
@@ -3306,6 +3330,7 @@ pub struct Context {
     /// Features list (for require/provide).
     pub(crate) features: WorldView<Vec<SymId>>,
     /// GNU xwidget runtime state: internal model/view lists and id counter.
+    #[doc(hidden)]
     pub xwidgets: WorldSlot<xwidget::XwidgetState>,
     /// Network manager — owns network connections, filters, and sentinels.
     /// Variable watcher list — callbacks on variable changes.
@@ -3317,6 +3342,7 @@ pub struct Context {
     /// notification while a watcher callback mutates the same symbol.
     pub(crate) active_variable_watchers: WorldView<HashSet<SymId>>,
     /// Register manager — quick storage and retrieval of text, positions, etc.
+    #[doc(hidden)]
     pub registers: WorldSlot<RegisterManager>,
     /// Autoload manager — deferred function loading.
     pub(crate) autoloads: WorldView<AutoloadManager>,
@@ -3324,6 +3350,7 @@ pub struct Context {
     /// and compiled queries backing `treesit-*` builtins.
     pub(crate) treesit: WorldView<neovm_text::emacs_core::treesit::TreeSitterManager>,
     /// Frame manager — owns all frames and windows.
+    #[doc(hidden)]
     pub frames: WorldView<FrameManager>,
     /// Cross-thread quit signal. The input-bridge thread flips this to
     /// `true` when it observes a `quit-char` keystroke; the evaluator
@@ -3340,11 +3367,14 @@ pub struct Context {
     /// composition_gstring_put_cache/lookup_cache, src/composite.c): keyed
     /// by the gstring header's font family + pixel size + characters, valued
     /// by the shaped gstring with its ID slot assigned.
+    #[doc(hidden)]
     pub gstring_shape_cache:
         WorldSlot<HashMap<neovm_value::display_vocab::GstringShapeCacheKey, Value>>,
     /// Coding system manager — encoding/decoding registry.
+    #[doc(hidden)]
     pub coding_systems: WorldView<CodingSystemManager>,
     /// Face table — global registry of named face definitions.
+    #[doc(hidden)]
     pub face_table: WorldSlot<FaceTable>,
     pub input_progress: neomacs_display_protocol::input_progress::InputProgress,
     body_redisplay_by_window: FxHashMap<WindowId, u64>,
@@ -3375,6 +3405,7 @@ pub struct Context {
     #[cfg(not(feature = "test-support"))]
     pub(crate) dynamic_module_registry: data::dynamic_module_registry::DynamicModuleRegistryHandle,
     #[cfg(feature = "test-support")]
+    #[doc(hidden)]
     pub dynamic_module_registry: data::dynamic_module_registry::DynamicModuleRegistryHandle,
     /// Mmap-backed pdump image that owns any mapped heap payloads borrowed by
     /// this evaluator's Lisp objects.
@@ -3395,8 +3426,10 @@ pub struct Context {
     pub(crate) lexenv: Value,
     /// TEST-SUPPORT-VIS row: moved tests save/restore the lexical environment.
     #[cfg(feature = "test-support")]
+    #[doc(hidden)]
     pub lexenv: Value,
     pub(crate) quit_flag: Value,
+    #[doc(hidden)]
     pub inhibit_quit: Value,
     /// `throw-on-input`'s value, cached beside the two flags it is polled
     /// with.  GNU's `QUIT` reads C globals; reading this one out of the
@@ -3508,9 +3541,11 @@ pub struct Context {
     /// Frontend-owned opener for additional text terminals requested by
     /// `make-terminal-frame`. The VM owns identities; platform code owns the
     /// device, raw-mode, input, renderer, and lifecycle resources.
+    #[doc(hidden)]
     pub tty_frame_host_factory: Option<Box<dyn TtyFrameHostFactory>>,
     /// Incremented when any face attribute changes; layout engine uses
     /// this to invalidate its resolved face cache.
+    #[doc(hidden)]
     pub face_change_count: u64,
     /// Incremented when any display-affecting buffer-local/global variable is
     /// set (truncate-lines, bidi-*, ctl-arrow, buffer-display-table,
@@ -3519,6 +3554,7 @@ pub struct Context {
     /// overlay tick, so the incremental fast paths key on this counter to force
     /// a full rebuild (adversarial-review fix). Rare event → a global counter
     /// (over-invalidating all windows) is acceptable and simpler than per-var keys.
+    #[doc(hidden)]
     pub display_var_change_count: u64,
     /// Explicit redisplay invalidation generation, used for state that GNU
     /// marks with update_mode_lines/window redisplay flags.
@@ -3558,6 +3594,7 @@ pub struct Context {
     #[cfg(not(feature = "test-support"))]
     pub(crate) depth: usize,
     #[cfg(feature = "test-support")]
+    #[doc(hidden)]
     pub depth: usize,
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
     eval_counter: u64,
@@ -3568,6 +3605,7 @@ pub struct Context {
     pub(crate) gc_count: u64,
     /// Total number of GC collections performed.
     #[cfg(feature = "test-support")]
+    #[doc(hidden)]
     pub gc_count: u64,
 
     /// Last thread that activated this Context, for cold cache invalidation.
@@ -3577,6 +3615,7 @@ pub struct Context {
     pub(crate) gc_inhibit_depth: usize,
     /// Nested depth of explicit GC inhibition scopes.
     #[cfg(feature = "test-support")]
+    #[doc(hidden)]
     pub gc_inhibit_depth: usize,
 
     /// Mirror of `jit_root_stack.as_mut_ptr()`, republished on growth; read by
@@ -3606,6 +3645,7 @@ pub struct Context {
     /// step 2), or none. It occupies the former reserved opcode-epoch word,
     /// with the same size, alignment and niche, so no Context offset moves.
     /// Thread-confined like the Context: only this owner mutates the slab.
+    #[doc(hidden)]
     pub owner: owner_bindings::OwnerSlot,
     /// The function epoch at which `apply` was last found to be the builtin
     /// with compiler overrides inactive (`Vm::call_apply_native`). Genuine
@@ -3642,6 +3682,7 @@ pub struct Context {
     /// identities cached here to avoid repeated name interning/lookups.
     quit_flag_symbol: SymId,
     inhibit_quit_symbol: SymId,
+    #[doc(hidden)]
     pub throw_on_input_symbol: SymId,
     kill_emacs_symbol: SymId,
     /// The attention word (`attention.rs`): one bit per input a safe point
@@ -3655,6 +3696,7 @@ pub struct Context {
     symbols_with_pos_enabled_symbol: SymId,
     print_symbols_bare_symbol: SymId,
     /// Uninterned, identity-only Lisp token for the active load stream.
+    #[doc(hidden)]
     pub load_read_stream_token: LoadReadStreamToken,
     /// Redirected debugging output stream. Mirrors GNU print.c's
     /// `redirect-debugging-output` redirection target for writes through
@@ -3675,6 +3717,7 @@ pub struct Context {
     noninteractive: bool,
     /// When true, `symbolp`/`eq`/hash operations transparently unwrap
     /// symbol-with-pos objects. Bound to `t` by the byte-compiler.
+    #[doc(hidden)]
     pub symbols_with_pos_enabled: bool,
     /// When true, the printer outputs bare symbol names for symbol-with-pos.
     pub(crate) print_symbols_bare: bool,
@@ -3696,6 +3739,7 @@ pub struct Context {
     /// the same post-command point and consume it in the redisplay layout pass
     /// so a `grow-only` echo window shrinks back to fit a shorter (even
     /// non-empty) message once the command finishes with no active minibuffer.
+    #[doc(hidden)]
     pub echo_area_resize_exact_pending: bool,
     /// True after print output has selected the current echo area buffer.
     ///
@@ -3706,6 +3750,7 @@ pub struct Context {
     #[allow(dead_code)]
     _reserved_message_buf_print: bool,
     /// First shutdown entry owns the hooks; the request is published after them.
+    #[doc(hidden)]
     pub shutdown_in_progress: bool,
     /// Batch-compatible input-mode interrupt flag for `current-input-mode`.
     /// Reserve for the World's value (plan-3w.md section 3).
@@ -3718,6 +3763,7 @@ pub struct Context {
     pub(crate) gc_pending: bool,
     /// Set when allocation crosses the GC threshold; cleared by `gc_collect`.
     #[cfg(feature = "test-support")]
+    #[doc(hidden)]
     pub gc_pending: bool,
 
     /// True while the mutator-side collection driver
@@ -3737,12 +3783,14 @@ pub struct Context {
     #[cfg(not(feature = "test-support"))]
     pub(crate) gc_driver_active: bool,
     #[cfg(feature = "test-support")]
+    #[doc(hidden)]
     pub gc_driver_active: bool,
     /// Stress-test mode: force GC at every safe point regardless of threshold.
     #[cfg(not(feature = "test-support"))]
     pub(crate) gc_stress: bool,
     /// Stress-test mode: force GC at every safe point regardless of threshold.
     #[cfg(feature = "test-support")]
+    #[doc(hidden)]
     pub gc_stress: bool,
 
     compiler_function_overrides_active: bool,
@@ -3753,10 +3801,12 @@ pub struct Context {
     /// Native construction state, never serialized. Unlike an ordinary
     /// runtime redump, loadup must omit build-only environment derivatives.
     /// Use trailing padding to preserve the pinned Context field offsets.
+    #[doc(hidden)]
     pub loadup_dump_mode: Option<super::load::LoadupDumpMode>,
     /// GNU `dispnew.c`'s static `frame_and_buffer_state`: the internal state
     /// vector used by `(frame-or-buffer-changed-p)` when VARIABLE is nil.
     /// Appended after the pinned layout; only the Context size grows.
+    #[doc(hidden)]
     pub frame_and_buffer_state: Option<Value>,
 }
 
