@@ -4,7 +4,7 @@ use neovm_value::emacs_char;
 
 use crate::emacs_core::print::PrintOptions;
 
-use crate::emacs_core::print::string_format::format_lisp_string_bytes_inner;
+use crate::emacs_core::print::format_lisp_string_bytes_inner;
 
 use neovm_text::emacs_core::string_escape::*;
 

@@ -2387,6 +2387,7 @@ pub(crate) fn builtin_string_match_with_state(
 }
 
 /// Context-dependent `string-match`: updates match data on the evaluator.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_string_match(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
@@ -3184,6 +3185,7 @@ fn expect_match_data_position_in_manager(
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_match_data(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     neovm_value::error::expect_args_range("match-data", &args, 0, 3)?;
     let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
@@ -3389,6 +3391,7 @@ fn reseat_match_data_markers(
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_set_match_data(
     eval: &mut super::eval::Context,
     args: Vec<Value>,

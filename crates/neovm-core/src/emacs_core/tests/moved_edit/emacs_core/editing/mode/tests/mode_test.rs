@@ -127,7 +127,7 @@ fn mode_copied_properties_have_only_manager_roots() {
         );
         // Public registrations retain the copies; no buffer, function cell,
         // Lisp variable or explicit root aliases their property graphs.
-        *eval.modes = registry;
+        *eval.modes_mut() = registry;
         probes
     });
     let check_live = |eval: &Context| {
@@ -147,7 +147,7 @@ fn mode_copied_properties_have_only_manager_roots() {
             );
         }
         assert_eq!(
-            eval.modes
+            eval.modes()
                 .get_major_mode_def("owned-mode")
                 .expect("retained major mode")
                 .pretty_name
@@ -187,7 +187,7 @@ fn mode_copied_properties_have_only_manager_roots() {
     assert_eq!(eval.gc_count, completed + 1);
     check_live(&eval);
 
-    *eval.modes = ModeRegistry::new();
+    *eval.modes_mut() = ModeRegistry::new();
     eval.gc_collect_exact();
     for Probe(bits) in probes {
         assert!(

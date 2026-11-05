@@ -8,10 +8,10 @@ use smallvec::SmallVec;
 use std::cell::{RefCell, RefMut};
 
 use neovm_eval::emacs_core::eval::Context;
-use neovm_eval::emacs_core::subr::leaf::UNKNOWN;
 use neovm_text::emacs_core::regex::*;
 use neovm_text::emacs_core::regex_emacs::CompiledPattern;
 use neovm_text::emacs_core::regex_emacs::SyntaxLookup;
+use neovm_text::emacs_core::regex_emacs::dfa::UNKNOWN;
 use neovm_value::emacs_char;
 
 use neovm_text::emacs_core::regex_emacs::{

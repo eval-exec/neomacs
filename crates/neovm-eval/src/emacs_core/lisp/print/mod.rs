@@ -23,6 +23,11 @@ pub use error_format::{
 
 pub(crate) mod string_format;
 
+/// Test-support re-export of the private string-literal formatter (peer
+/// ruling 15:45Z); the module itself stays private.
+#[cfg(feature = "test-support")]
+pub use string_format::format_lisp_string_bytes_inner;
+
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodePolicyExt;
 use std::cell::{Cell, RefCell};

@@ -7,7 +7,7 @@ use neovm_value::error::{expect_max_args, expect_min_args};
 use neovm_value::gc_trace::GcTrace;
 use neovm_value::value::ValueKind;
 
-use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::bytecode::executable_ops_for_test;
 use neovm_eval::emacs_core::eval::Context;
 use neovm_value::heap_types::LispString;
 use neovm_value::value::Value;
@@ -59,7 +59,7 @@ fn rectangle_copied_properties_have_only_manager_roots() {
         }
         // The World owns native restored copies independently of the Lisp
         // killed-rectangle variable, buffers, explicit roots or caller values.
-        *eval.rectangle = RectangleState { killed: lines };
+        *eval.rectangle_mut() = RectangleState { killed: lines };
         probes
     });
     let check_live = |eval: &Context| {
@@ -80,7 +80,7 @@ fn rectangle_copied_properties_have_only_manager_roots() {
                 &[Value::fixnum(index as i64)]
             );
             assert_eq!(
-                eval.rectangle.killed[index]
+                eval.rectangle().killed[index]
                     .intervals()
                     .get_property_at_char_pos(CharPos0::ZERO, property)
                     .expect("retained rectangle property")
@@ -117,7 +117,7 @@ fn rectangle_copied_properties_have_only_manager_roots() {
     assert_eq!(eval.gc_count, completed + 1);
     check_live(&eval);
 
-    *eval.rectangle = RectangleState::new();
+    *eval.rectangle_mut() = RectangleState::new();
     eval.gc_collect_exact();
     for Probe(bits) in probes {
         assert!(
@@ -387,7 +387,7 @@ fn yank_rectangle_loaded_function_is_simple_bytecode_call() {
             vec![Some("killed-rectangle"), Some("insert-rectangle")]
         );
         assert_eq!(
-            bytecode.executable_ops(),
+            executable_ops_for_test(bytecode),
             vec![Op::Constant(1), Op::VarRef(0), Op::Call(1), Op::Return]
         );
     }

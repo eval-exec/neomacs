@@ -198,6 +198,7 @@ pub(crate) fn format_lisp_string_bytes_inner_emacs(
 /// This delegates to the new Emacs-byte-based formatter via a simple UTF-8 →
 /// Emacs encoding pass (for pure Unicode text this is a no-op).
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn format_lisp_string_bytes_inner(s: &str, options: &PrintOptions) -> Vec<u8> {
     if storage_has_special_units(s) {
         use neovm_value::emacs_char;

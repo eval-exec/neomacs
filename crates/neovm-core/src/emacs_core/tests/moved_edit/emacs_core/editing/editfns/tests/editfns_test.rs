@@ -173,7 +173,7 @@ fn combine_after_change_still_updates_treesit_linecol_cache() {
         .buffers
         .insert_into_buffer(current, "abcdef")
         .expect("insert test text");
-    eval.treesit.set_linecol_cache(
+    eval.treesit_mut().set_linecol_cache(
         current,
         neovm_text::emacs_core::treesit::LineColCache {
             line: 3,
@@ -188,7 +188,7 @@ fn combine_after_change_still_updates_treesit_linecol_cache() {
         .expect("after-change signal");
 
     let cache = eval
-        .treesit
+        .treesit()
         .linecol_cache(current)
         .expect("linecol cache should remain installed");
     assert_eq!((cache.line, cache.col, cache.bytepos), (1, 1, 0));

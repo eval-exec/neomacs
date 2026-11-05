@@ -34,3 +34,12 @@ pub use function_slots::{
 };
 pub use opcode::Op;
 pub use vm::Vm;
+
+/// Test-support reader for the immutable executable op list of a compiled
+/// function. Returns an OWNED copy; `ByteCodeFunctionExt` stays crate-private
+/// (peer ruling 15:45Z).
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) fn executable_ops_for_test(f: &ByteCodeFunction) -> Vec<Op> {
+    f.executable_ops().to_vec()
+}

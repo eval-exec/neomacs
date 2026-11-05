@@ -1390,7 +1390,10 @@ pub(crate) enum Exists {
 
 /// Transition-table entries below the stride are sentinels; real entries are
 /// row offsets, `(state index + 1) * stride`.
+#[cfg(not(any(test, feature = "test-support")))]
 const UNKNOWN: u32 = 0;
+#[cfg(any(test, feature = "test-support"))]
+pub const UNKNOWN: u32 = 0;
 const DEAD: u32 = 1;
 #[cfg(not(any(test, feature = "test-support")))]
 const MATCH: u32 = 2;

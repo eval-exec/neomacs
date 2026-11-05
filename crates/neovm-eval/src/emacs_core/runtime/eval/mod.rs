@@ -5710,6 +5710,44 @@ impl Context {
         &mut self.bookmarks
     }
 
+    #[inline]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn treesit(&self) -> &neovm_text::emacs_core::treesit::TreeSitterManager {
+        &self.treesit
+    }
+
+    #[inline]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn treesit_mut(
+        &mut self,
+    ) -> &mut neovm_text::emacs_core::treesit::TreeSitterManager {
+        &mut self.treesit
+    }
+
+    #[inline]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn modes(&self) -> &ModeRegistry {
+        &self.modes
+    }
+
+    #[inline]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn modes_mut(&mut self) -> &mut ModeRegistry {
+        &mut self.modes
+    }
+
+    #[inline]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn rectangle(&self) -> &RectangleState {
+        &self.rectangle
+    }
+
+    #[inline]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn rectangle_mut(&mut self) -> &mut RectangleState {
+        &mut self.rectangle
+    }
+
     #[doc(hidden)]
     #[inline]
     pub fn daemon(&self) -> &Option<DaemonState> {

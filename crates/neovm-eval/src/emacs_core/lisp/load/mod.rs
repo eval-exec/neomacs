@@ -207,6 +207,7 @@ pub(crate) fn decode_emacs_utf8_source_lisp(
     neovm_text::encoding::decode_bytes_to_lisp_string(bytes, "utf-8-emacs", eol_conversion)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn decode_emacs_utf8(bytes: &[u8]) -> String {
     fn push_extended_char_or_escape(out: &mut String, code: u32) {
         if out.ends_with('?') {
