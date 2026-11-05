@@ -44,10 +44,7 @@ pub use green_owner::Baton;
 pub(crate) use green_owner::OwnedProofProjection;
 #[allow(unused_imports)]
 pub(crate) use green_owner::{FrozenLegacyRoots, OwnedParallelError, OwnedParallelProjection};
-#[cfg(not(feature = "test-support"))]
 pub(crate) use slot::WorldSlot;
-#[cfg(feature = "test-support")]
-pub use slot::WorldSlot;
 pub(crate) use sole_owner::{
     PublishedSoleOwnerDriver, SoleOwnerDriver, SoleOwnerRegistration, SoleOwnerVm,
 };

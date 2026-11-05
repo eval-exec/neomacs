@@ -77,16 +77,11 @@ pub(crate) mod world;
 pub use world::ObarrayView;
 #[doc(hidden)]
 pub use world::ObarrayViewMut;
-// TEST-SUPPORT-VIS rows: re-homed tests above eval name the era keeper and
-// the World-slot type of a widened Context field; the proof era itself
-// follows value's provider batch.
+// TEST-SUPPORT-VIS row: re-homed tests above eval name the era keeper; the
+// proof era itself follows value's provider batch.
 #[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub use world::Baton;
-#[cfg(feature = "test-support")]
-#[doc(hidden)]
-pub use world::WorldSlot;
-#[cfg(not(feature = "test-support"))]
 pub(crate) use world::WorldSlot;
 pub use world::{ContextShutdownError, ObarrayWriteAccess, OutstandingWorldViews, WorldEra};
 pub(crate) use world::{OwnedRootRegistryView, WorldView};
@@ -3199,12 +3194,7 @@ pub struct Context {
     /// not by this Vec (which GC does not trace).
     pub(crate) load_read_cursors: Vec<LoadReadCursor>,
     /// Bookmark manager — persistent named positions.
-    #[cfg(not(feature = "test-support"))]
     pub(crate) bookmarks: WorldSlot<BookmarkManager>,
-    /// TEST-SUPPORT-VIS row: moved pdump/bookmark tests read the manager slot.
-    #[cfg(feature = "test-support")]
-    #[doc(hidden)]
-    pub bookmarks: WorldSlot<BookmarkManager>,
     /// Rectangle state — stores the last killed rectangle for yank-rectangle.
     pub(crate) rectangle: WorldSlot<RectangleState>,
     /// Interactive command registry — tracks interactive commands.
@@ -5716,6 +5706,18 @@ impl Context {
     #[inline]
     pub fn minibuffers_mut(&mut self) -> &mut MinibufferManager {
         &mut self.minibuffers
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn bookmarks(&self) -> &BookmarkManager {
+        &self.bookmarks
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn bookmarks_mut(&mut self) -> &mut BookmarkManager {
+        &mut self.bookmarks
     }
 
     #[doc(hidden)]

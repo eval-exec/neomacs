@@ -70,8 +70,8 @@ fn bookmark_lookup_key_cannot_retain_input_properties() {
         }
         // Exercise the real World's restore boundary with independent plain
         // records. Only the derived keys could retain these property graphs.
-        *eval.bookmarks = BookmarkManager::from_dump(bookmarks, Vec::new());
-        assert_eq!(eval.bookmarks.dump_bookmarks().len(), 3);
+        *eval.bookmarks_mut() = BookmarkManager::from_dump(bookmarks, Vec::new());
+        assert_eq!(eval.bookmarks().dump_bookmarks().len(), 3);
         probes
     });
     let check_dropped = |eval: &Context| {
@@ -83,10 +83,10 @@ fn bookmark_lookup_key_cannot_retain_input_properties() {
                 "bookmark key input-only property remained rooted"
             );
         }
-        for (key, record) in eval.bookmarks.dump_bookmarks() {
+        for (key, record) in eval.bookmarks().dump_bookmarks() {
             assert!(!key.as_lisp_string().has_intervals());
             assert_eq!(*key, BookmarkKey::from_lisp_string(&record.name));
-            assert!(eval.bookmarks.get(&record.name).is_some());
+            assert!(eval.bookmarks().get(&record.name).is_some());
         }
     };
     let completed = eval.gc_count;
@@ -223,7 +223,8 @@ fn bookmark_copied_properties_have_only_manager_roots() {
         // Imported recents need not alias any record. Use a distinct graph so
         // an incomplete visitor cannot pass by relying on record-name aliases.
         let recent = text(&mut probes, property, bm_str("independent-recent-é"));
-        *eval.bookmarks = BookmarkManager::from_dump(HashMap::from([(key, record)]), vec![recent]);
+        *eval.bookmarks_mut() =
+            BookmarkManager::from_dump(HashMap::from([(key, record)]), vec![recent]);
         assert_eq!(probes.len(), 7);
         probes
     });
@@ -245,7 +246,7 @@ fn bookmark_copied_properties_have_only_manager_roots() {
             );
         }
         let record = eval
-            .bookmarks
+            .bookmarks()
             .get(&bm_str("root-record-é"))
             .expect("retained bookmark");
         assert_eq!(
@@ -260,7 +261,7 @@ fn bookmark_copied_properties_have_only_manager_roots() {
             probes[4].0
         );
         assert_eq!(
-            eval.bookmarks.recent_names()[0]
+            eval.bookmarks().recent_names()[0]
                 .intervals()
                 .get_property_at_char_pos(CharPos0::ZERO, property)
                 .expect("retained independent recent property")
@@ -296,7 +297,7 @@ fn bookmark_copied_properties_have_only_manager_roots() {
     assert_eq!(eval.gc_count, completed + 1);
     check_live(&eval);
 
-    *eval.bookmarks = BookmarkManager::new();
+    *eval.bookmarks_mut() = BookmarkManager::new();
     eval.gc_collect_exact();
     for Probe(bits) in probes {
         assert!(
@@ -632,7 +633,7 @@ fn test_builtin_bookmark_delete() {
     let result = builtin_bookmark_delete(&mut eval, vec![Value::string("del-me")]);
     assert!(result.is_ok());
     assert!(result.unwrap().is_nil());
-    assert!(eval.bookmarks.get(&bm_str("del-me")).is_none());
+    assert!(eval.bookmarks().get(&bm_str("del-me")).is_none());
 
     // Delete again -> nil (not found).
     let result = builtin_bookmark_delete(&mut eval, vec![Value::string("del-me")]);
@@ -659,10 +660,10 @@ fn test_builtin_bookmark_delete_accepts_raw_unibyte_name() {
     let raw_name = Value::heap_string(LispString::from_unibyte(vec![0xFF]));
 
     builtin_bookmark_set(&mut eval, vec![raw_name]).expect("set raw bookmark");
-    assert_eq!(eval.bookmarks.all_names().len(), 1);
+    assert_eq!(eval.bookmarks().all_names().len(), 1);
 
     builtin_bookmark_delete(&mut eval, vec![raw_name]).expect("delete raw bookmark");
-    assert!(eval.bookmarks.all_names().is_empty());
+    assert!(eval.bookmarks().all_names().is_empty());
 }
 
 #[test]
@@ -682,8 +683,8 @@ fn test_builtin_bookmark_rename() {
     assert!(result.is_ok());
 
     // Old name gone, new name exists.
-    assert!(eval.bookmarks.get(&bm_str("old-name")).is_none());
-    assert!(eval.bookmarks.get(&bm_str("new-name")).is_some());
+    assert!(eval.bookmarks().get(&bm_str("old-name")).is_none());
+    assert!(eval.bookmarks().get(&bm_str("new-name")).is_some());
 }
 
 #[test]
@@ -728,8 +729,8 @@ fn test_builtin_bookmark_rename_permissive_designators() {
         vec![Value::string("old-name"), Value::string("new-name")],
     );
     assert!(rename_ok.is_ok());
-    assert!(eval.bookmarks.get(&bm_str("old-name")).is_none());
-    assert!(eval.bookmarks.get(&bm_str("new-name")).is_some());
+    assert!(eval.bookmarks().get(&bm_str("old-name")).is_none());
+    assert!(eval.bookmarks().get(&bm_str("new-name")).is_some());
 }
 
 #[test]
@@ -923,9 +924,9 @@ fn bookmark_save_load_preserves_raw_unibyte_file_path() {
         "bookmark file was not written to the raw-byte path {os_path:?}"
     );
 
-    *eval.bookmarks = BookmarkManager::new();
+    *eval.bookmarks_mut() = BookmarkManager::new();
     builtin_bookmark_load(&mut eval, vec![path_val]).expect("load from raw path");
-    assert!(eval.bookmarks.get(&bm_str("raw-bm")).is_some());
+    assert!(eval.bookmarks().get(&bm_str("raw-bm")).is_some());
 
     let _ = std::fs::remove_file(&os_path);
 }
@@ -951,7 +952,7 @@ fn test_builtin_bookmark_save_load() {
     assert!(result.unwrap().is_nil());
 
     // Clear and load
-    *eval.bookmarks = BookmarkManager::new();
+    *eval.bookmarks_mut() = BookmarkManager::new();
     let result = builtin_bookmark_load(&mut eval, vec![Value::string(save_file.to_string())]);
     assert!(result.is_ok());
     let load_message = result.unwrap();
@@ -961,13 +962,13 @@ fn test_builtin_bookmark_save_load() {
     );
 
     // Verify restored bookmark payloads.
-    let bm1 = eval.bookmarks.get(&bm_str("bm1")).expect("bm1 restored");
+    let bm1 = eval.bookmarks().get(&bm_str("bm1")).expect("bm1 restored");
     assert_eq!(
         bm_runtime(bm1.filename.as_ref()).as_deref(),
         Some("/file1.el")
     );
 
-    let bm2 = eval.bookmarks.get(&bm_str("bm2")).expect("bm2 restored");
+    let bm2 = eval.bookmarks().get(&bm_str("bm2")).expect("bm2 restored");
     assert_eq!(
         bm_runtime(bm2.filename.as_ref()).as_deref(),
         Some("/file2.el")
