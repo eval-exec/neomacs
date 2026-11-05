@@ -110,6 +110,16 @@ struct FixtureNames {
     use_leaves: BTreeSet<String>,
 }
 
+/// A type name that can flow into a field access, as written in the fixture.
+#[derive(Clone, Debug)]
+enum TypeCandidate {
+    /// A type path, for example `Context` or `crate::eval::Context`.
+    Path(Vec<String>),
+    /// The base expression's type cannot be determined; the field arm treats
+    /// this as ambiguous and fail-closed.
+    Unknown,
+}
+
 /// One fixture or compiler golden's naming context. Resolution is per file:
 /// a bare word must resolve to the item *there*, never through an import in
 /// another fixture.
@@ -127,6 +137,16 @@ struct FixtureScope {
     words: Vec<(String, bool)>,
     /// Qualified `A::B::C` chains, as written.
     chains: Vec<Vec<String>>,
+    /// Named-field reads (`.field`): field name -> candidate base types. The
+    /// base type is resolved as far as the fixture's own annotations and
+    /// initializers allow; anything else stays `Unknown` (fail-closed).
+    field_reads: Vec<(String, Vec<TypeCandidate>)>,
+    /// Type paths used in struct literals (`S { .. }`) and struct patterns
+    /// (`let S { .. }`).
+    struct_uses: Vec<Vec<String>>,
+    /// Textual `.field` mentions (method calls excluded). Compiler goldens and
+    /// unparseable files use this fail-closed view.
+    field_mentions: BTreeSet<String>,
     /// Compiler goldens render library generic parameters as bare words
     /// (`SubrObj::<Entry>`); such an occurrence does not reference an item
     /// named `Entry`.
@@ -336,6 +356,218 @@ impl<'ast> Visit<'ast> for BindingCollector {
     }
 }
 
+fn path_segments(path: &syn::Path) -> Vec<String> {
+    path.segments
+        .iter()
+        .map(|segment| segment.ident.to_string())
+        .collect()
+}
+
+/// The `.field` mentions in a source text. `.name(` is a method call, not a
+/// field read; Rust fixtures have already had comments and literals blanked.
+fn field_mentions(source: &str) -> BTreeSet<String> {
+    let bytes = source.as_bytes();
+    let mut mentions = BTreeSet::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'.'
+            || !bytes
+                .get(index + 1)
+                .is_some_and(|byte| is_ident_start(*byte))
+        {
+            index += 1;
+            continue;
+        }
+        let start = index + 1;
+        let mut end = start;
+        while end < bytes.len() && is_ident_byte(bytes[end]) {
+            end += 1;
+        }
+        let mut after = end;
+        while bytes
+            .get(after)
+            .is_some_and(|byte| byte.is_ascii_whitespace())
+        {
+            after += 1;
+        }
+        if bytes.get(after) != Some(&b'(') {
+            mentions.insert(source[start..end].to_owned());
+        }
+        index = end;
+    }
+    mentions
+}
+
+/// Resolve the type of a field-access base as far as local annotations and
+/// initializers allow. Field reads in fixtures are privacy probes: a base
+/// whose type cannot be determined stays ambiguous (fail-closed).
+#[derive(Default)]
+struct FieldCollector {
+    types: BTreeMap<String, Vec<TypeCandidate>>,
+    self_type: Option<Vec<String>>,
+    field_reads: Vec<(String, Vec<TypeCandidate>)>,
+    struct_uses: Vec<Vec<String>>,
+}
+
+impl FieldCollector {
+    fn add_type(&mut self, name: String, candidates: &[TypeCandidate]) {
+        let entry = self.types.entry(name).or_default();
+        if candidates.is_empty() {
+            entry.push(TypeCandidate::Unknown);
+        } else {
+            entry.extend(candidates.iter().cloned());
+        }
+    }
+
+    fn bind_pattern(&mut self, pattern: &syn::Pat, candidates: &[TypeCandidate]) {
+        match pattern {
+            syn::Pat::Ident(_) => {
+                for name in pattern_idents(pattern) {
+                    self.add_type(name, candidates);
+                }
+            }
+            syn::Pat::Type(typed) => {
+                let candidates = self.type_candidates(&typed.ty);
+                self.bind_pattern(&typed.pat, &candidates);
+            }
+            _ => {
+                // A compound pattern binds fields/elements whose own types are
+                // not modelled; keep them ambiguous.
+                for name in pattern_idents(pattern) {
+                    self.add_type(name, &[TypeCandidate::Unknown]);
+                }
+            }
+        }
+    }
+
+    fn type_candidates(&self, ty: &syn::Type) -> Vec<TypeCandidate> {
+        match ty {
+            syn::Type::Path(path) => {
+                let segments = path_segments(&path.path);
+                if segments.len() == 1 && segments[0] == "Self" {
+                    return match &self.self_type {
+                        Some(ty) => vec![TypeCandidate::Path(ty.clone())],
+                        None => vec![TypeCandidate::Unknown],
+                    };
+                }
+                vec![TypeCandidate::Path(segments)]
+            }
+            syn::Type::Reference(reference) => self.type_candidates(&reference.elem),
+            syn::Type::Paren(paren) => self.type_candidates(&paren.elem),
+            syn::Type::Group(group) => self.type_candidates(&group.elem),
+            _ => vec![TypeCandidate::Unknown],
+        }
+    }
+
+    fn expr_candidates(&self, expression: &syn::Expr) -> Vec<TypeCandidate> {
+        match expression {
+            syn::Expr::Path(path) => {
+                let segments = path_segments(&path.path);
+                if segments.len() == 1 {
+                    if segments[0] == "self" || segments[0] == "Self" {
+                        return match &self.self_type {
+                            Some(ty) => vec![TypeCandidate::Path(ty.clone())],
+                            None => vec![TypeCandidate::Unknown],
+                        };
+                    }
+                    self.types
+                        .get(&segments[0])
+                        .cloned()
+                        .unwrap_or_else(|| vec![TypeCandidate::Unknown])
+                } else {
+                    // A multi-segment path in expression position is a const
+                    // or associated item; its type is not modelled.
+                    vec![TypeCandidate::Unknown]
+                }
+            }
+            syn::Expr::Struct(expression) => {
+                vec![TypeCandidate::Path(path_segments(&expression.path))]
+            }
+            syn::Expr::Reference(reference) => self.expr_candidates(&reference.expr),
+            syn::Expr::Paren(paren) => self.expr_candidates(&paren.expr),
+            syn::Expr::Group(group) => self.expr_candidates(&group.expr),
+            syn::Expr::Cast(cast) => self.type_candidates(&cast.ty),
+            syn::Expr::Try(try_block) => self.expr_candidates(&try_block.expr),
+            syn::Expr::Await(await_expression) => self.expr_candidates(&await_expression.base),
+            syn::Expr::Call(call) => {
+                // `S::default()` / `S::new(..)` name the type in their
+                // prefix; a free function's return type is unknown.
+                if let syn::Expr::Path(path) = call.func.as_ref() {
+                    let segments = path_segments(&path.path);
+                    if segments.len() >= 2 {
+                        return vec![TypeCandidate::Path(segments[..segments.len() - 1].to_vec())];
+                    }
+                }
+                vec![TypeCandidate::Unknown]
+            }
+            _ => vec![TypeCandidate::Unknown],
+        }
+    }
+}
+
+fn pattern_idents(pattern: &syn::Pat) -> Vec<String> {
+    #[derive(Default)]
+    struct Idents(Vec<String>);
+    impl<'ast> Visit<'ast> for Idents {
+        fn visit_pat_ident(&mut self, pattern: &'ast syn::PatIdent) {
+            self.0.push(pattern.ident.to_string());
+            visit::visit_pat_ident(self, pattern);
+        }
+    }
+    let mut idents = Idents::default();
+    idents.visit_pat(pattern);
+    idents.0
+}
+
+impl<'ast> Visit<'ast> for FieldCollector {
+    fn visit_item_impl(&mut self, item: &'ast syn::ItemImpl) {
+        let previous = self.self_type.clone();
+        if let syn::Type::Path(path) = &*item.self_ty {
+            self.self_type = Some(path_segments(&path.path));
+        }
+        visit::visit_item_impl(self, item);
+        self.self_type = previous;
+    }
+    fn visit_fn_arg(&mut self, argument: &'ast syn::FnArg) {
+        if let syn::FnArg::Typed(typed) = argument {
+            let candidates = self.type_candidates(&typed.ty);
+            self.bind_pattern(&typed.pat, &candidates);
+        }
+        visit::visit_fn_arg(self, argument);
+    }
+    fn visit_pat_type(&mut self, pattern: &'ast syn::PatType) {
+        let candidates = self.type_candidates(&pattern.ty);
+        self.bind_pattern(&pattern.pat, &candidates);
+        visit::visit_pat_type(self, pattern);
+    }
+    fn visit_local(&mut self, local: &'ast syn::Local) {
+        let candidates = match &local.pat {
+            syn::Pat::Type(typed) => self.type_candidates(&typed.ty),
+            _ => match &local.init {
+                Some(init) => self.expr_candidates(&init.expr),
+                None => vec![TypeCandidate::Unknown],
+            },
+        };
+        self.bind_pattern(&local.pat, &candidates);
+        visit::visit_local(self, local);
+    }
+    fn visit_expr_field(&mut self, field: &'ast syn::ExprField) {
+        if let syn::Member::Named(name) = &field.member {
+            let candidates = self.expr_candidates(&field.base);
+            self.field_reads.push((name.to_string(), candidates));
+        }
+        visit::visit_expr_field(self, field);
+    }
+    fn visit_expr_struct(&mut self, expression: &'ast syn::ExprStruct) {
+        self.struct_uses.push(path_segments(&expression.path));
+        visit::visit_expr_struct(self, expression);
+    }
+    fn visit_pat_struct(&mut self, pattern: &'ast syn::PatStruct) {
+        self.struct_uses.push(path_segments(&pattern.path));
+        visit::visit_pat_struct(self, pattern);
+    }
+}
+
 /// Reference-position identifiers and qualified chains. A path component
 /// (`A::B`), a field/method name (`value.entry`) or an import prefix is not a
 /// standalone reference. The flag is true when the identifier sits inside a
@@ -459,6 +691,9 @@ fn fixture_scope(label: String, source: &str, rust: bool, generic_exempt: bool) 
         bindings: BTreeSet::new(),
         words,
         chains,
+        field_reads: Vec::new(),
+        struct_uses: Vec::new(),
+        field_mentions: field_mentions(&code),
         generic_exempt,
         broad: None,
     };
@@ -472,6 +707,10 @@ fn fixture_scope(label: String, source: &str, rust: bool, generic_exempt: bool) 
                 let mut bindings = BindingCollector::default();
                 bindings.visit_file(&file);
                 scope.bindings = bindings.names;
+                let mut fields = FieldCollector::default();
+                fields.visit_file(&file);
+                scope.field_reads = fields.field_reads;
+                scope.struct_uses = fields.struct_uses;
             }
             Err(_) => {
                 let mut broad = FixtureNames::default();
@@ -599,6 +838,179 @@ fn word_names_item(scope: &FixtureScope, word: &str, item: &[&str]) -> bool {
     }
 }
 
+/// Whether a type path written in a fixture names the row's struct, using the
+/// same per-file resolution as item rows.
+fn type_path_names_struct(scope: &FixtureScope, path: &[String], parent: &[&str]) -> bool {
+    if path.is_empty() {
+        return true;
+    }
+    if path.len() == 1 {
+        return word_names_item(scope, &path[0], parent);
+    }
+    path_ends_with(path, parent) || item_suffix_matches(path, parent)
+}
+
+/// The named fields declared for `struct_name` in a row's defining file, one
+/// set per declaration (cfg arms deduplicate by name). A missing or unnamed
+/// struct is an error: a field row must name a struct whose field set is
+/// decidable.
+struct DeclaredStructs<'a> {
+    name: &'a str,
+    fields: Vec<BTreeSet<String>>,
+}
+
+impl<'ast> Visit<'ast> for DeclaredStructs<'_> {
+    fn visit_item_struct(&mut self, item: &'ast syn::ItemStruct) {
+        if item.ident == self.name {
+            let mut names = BTreeSet::new();
+            let mut unnamed = false;
+            for field in &item.fields {
+                match &field.ident {
+                    Some(ident) => {
+                        names.insert(ident.to_string());
+                    }
+                    None => unnamed = true,
+                }
+            }
+            if !unnamed && !names.is_empty() {
+                self.fields.push(names);
+            }
+        }
+        visit::visit_item_struct(self, item);
+    }
+}
+
+fn declared_struct_fields(
+    source: &str,
+    struct_name: &str,
+) -> Result<Vec<BTreeSet<String>>, String> {
+    let file = syn::parse_file(source)
+        .map_err(|error| format!("field row defining file does not parse: {error}"))?;
+    let mut structs = DeclaredStructs {
+        name: struct_name,
+        fields: Vec::new(),
+    };
+    structs.visit_file(&file);
+    if structs.fields.is_empty() {
+        return Err(format!(
+            "field row names no named-field struct `{struct_name}` in its defining file"
+        ));
+    }
+    Ok(structs.fields)
+}
+
+/// The field arm of V1 (peer ruling 04:2xZ). Field visibility cannot change a
+/// struct's trait impls, so merely naming the type is not a hit. A field row
+/// `S::f` is a hit iff a fixture
+/// (a) reads `.f` on a base that can resolve to `S` (ambiguous -> hit), or
+/// (b) constructs/destructures `S` while every field of `S` is widened.
+fn field_hit(
+    fixtures: &[FixtureScope],
+    parent: &[&str],
+    field: &str,
+    declared: &[BTreeSet<String>],
+    widened: &BTreeSet<String>,
+) -> Option<String> {
+    let parent_item = parent.join("::");
+    let fully_widened = declared
+        .iter()
+        .any(|fields| !fields.is_empty() && fields.is_subset(widened));
+    for scope in fixtures {
+        if let Some(broad) = &scope.broad {
+            if scope.field_mentions.contains(field)
+                && lexical_hit(&parent_item, "struct", broad).is_some()
+            {
+                return Some(format!(
+                    "{}: `.{}` mentions the row's struct in an unparseable file",
+                    scope.label, field
+                ));
+            }
+            continue;
+        }
+        if scope.generic_exempt {
+            // A compiler golden cannot resolve a base type from its text.
+            // Require both the `.field` mention and a resolved reference to
+            // the struct.
+            if scope.field_mentions.contains(field)
+                && names_in_fixtures(&parent_item, "struct", std::slice::from_ref(scope)).is_some()
+            {
+                return Some(format!(
+                    "{}: `.{}` on the row's struct in a compiler golden",
+                    scope.label, field
+                ));
+            }
+            continue;
+        }
+        let mut observed = false;
+        for (read, candidates) in &scope.field_reads {
+            if read != field {
+                continue;
+            }
+            observed = true;
+            for candidate in candidates {
+                match candidate {
+                    TypeCandidate::Path(path) => {
+                        if type_path_names_struct(scope, path, parent) {
+                            return Some(format!(
+                                "{}: `.{field}` read on a base that resolves to the row's struct",
+                                scope.label
+                            ));
+                        }
+                    }
+                    TypeCandidate::Unknown => {
+                        return Some(format!(
+                            "{}: `.{field}` read on an unresolved base (fail-closed)",
+                            scope.label
+                        ));
+                    }
+                }
+            }
+        }
+        if !observed && scope.field_mentions.contains(field) {
+            // Not an analyzable field read: a macro token stream or attribute.
+            return Some(format!(
+                "{}: `.{}` text cannot be analyzed (fail-closed)",
+                scope.label, field
+            ));
+        }
+        if fully_widened {
+            for path in &scope.struct_uses {
+                if type_path_names_struct(scope, path, parent) {
+                    return Some(format!(
+                        "{}: constructs or destructures the row's struct while every field is widened",
+                        scope.label
+                    ));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Decide a field row against the fixture corpus. The caller supplies the
+/// row's defining source, already read by the row checks.
+fn field_row_fixture_hit(
+    row: &VisRow,
+    source: &str,
+    fixtures: &[FixtureScope],
+    widened: &BTreeMap<String, BTreeSet<String>>,
+) -> Result<Option<String>, String> {
+    let Some((parent_item, field)) = row.item.rsplit_once("::") else {
+        return Err(format!(
+            "{} field {}: item has no parent type",
+            row.crate_dir, row.item
+        ));
+    };
+    let parent: Vec<&str> = parent_item.split("::").collect();
+    let struct_name = parent
+        .last()
+        .copied()
+        .ok_or_else(|| format!("{} field {}: empty parent type", row.crate_dir, row.item))?;
+    let declared = declared_struct_fields(source, struct_name)?;
+    let widened = widened.get(parent_item).cloned().unwrap_or_default();
+    Ok(field_hit(fixtures, &parent, field, &declared, &widened))
+}
+
 /// The lexical fallback for a file that does not parse.
 fn lexical_hit(item: &str, kind: &str, names: &FixtureNames) -> Option<String> {
     let segments: Vec<&str> = item.split("::").collect();
@@ -633,6 +1045,11 @@ fn lexical_hit(item: &str, kind: &str, names: &FixtureNames) -> Option<String> {
 /// resolves to the item there. Unparseable files keep the lexical fallback,
 /// fail-closed.
 fn names_in_fixtures(item: &str, kind: &str, fixtures: &[FixtureScope]) -> Option<String> {
+    // Field rows use the separate field arm (peer ruling 04:2xZ): naming the
+    // type is not a hit, so the item-path rule does not apply to them.
+    if kind == "field" {
+        return None;
+    }
     let segments: Vec<&str> = item.split("::").collect();
     let leaf = *segments.last()?;
     for scope in fixtures {
@@ -811,6 +1228,7 @@ fn check_row(
     row: &VisRow,
     fixtures: &[FixtureScope],
     authority: &BTreeSet<String>,
+    widened: &BTreeMap<String, BTreeSet<String>>,
 ) -> Result<(), String> {
     let what = format!("{} {} {}", row.crate_dir, row.kind, row.item);
     if !VIS_CRATES.contains(&row.crate_dir.as_str()) {
@@ -871,7 +1289,12 @@ fn check_row(
             return Err(format!("{what}: named test file is missing: {test}"));
         }
     }
-    if let Some(why) = names_in_fixtures(&row.item, &row.kind, fixtures) {
+    let fixture_hit = if row.kind == "field" {
+        field_row_fixture_hit(row, &source, fixtures, widened)?
+    } else {
+        names_in_fixtures(&row.item, &row.kind, fixtures)
+    };
+    if let Some(why) = fixture_hit {
         return Err(format!("{what}: V1 forbids widening this item: {why}"));
     }
     if let Some(why) = names_authority_item(&row.item, authority) {
@@ -926,6 +1349,15 @@ fn visibility_make_sites(workspace: &Path) -> Result<Vec<(String, String)>, Stri
     Ok(sites)
 }
 
+fn declaration_ident(text: &str) -> Option<String> {
+    let name: String = text
+        .trim_start()
+        .chars()
+        .take_while(|character| character.is_alphanumeric() || *character == '_')
+        .collect();
+    if name.is_empty() { None } else { Some(name) }
+}
+
 fn declaration_name(line: &str) -> Option<String> {
     let mut rest = line.trim_start();
     // Skip visibility prefixes (`pub`, `pub(crate)`, `pub(in path)`, ...).
@@ -935,10 +1367,23 @@ fn declaration_name(line: &str) -> Option<String> {
         let close = after_pub.find(')')?;
         rest = after_pub[close + 1..].trim_start();
     }
-    // Skip item qualifiers in any order: `const`, `async`, `unsafe`, `default`.
+    // `const` is a qualifier only when it introduces a function; otherwise it
+    // is the item itself (`const NONE: Self`).
+    if let Some(after_const) = rest.strip_prefix("const ") {
+        let tail = after_const.trim_start();
+        if !tail.starts_with("fn ")
+            && !tail.starts_with("unsafe ")
+            && !tail.starts_with("async ")
+            && !tail.starts_with("extern ")
+        {
+            return declaration_ident(tail);
+        }
+    }
+    // Skip item qualifiers in any order: `const`, `async`, `unsafe`, `default`,
+    // `extern`.
     loop {
         let mut advanced = false;
-        for qualifier in ["const ", "async ", "unsafe ", "default "] {
+        for qualifier in ["const ", "async ", "unsafe ", "default ", "extern "] {
             if let Some(tail) = rest.strip_prefix(qualifier) {
                 rest = tail.trim_start();
                 advanced = true;
@@ -952,12 +1397,7 @@ fn declaration_name(line: &str) -> Option<String> {
         "fn ", "struct ", "enum ", "union ", "trait ", "type ", "static ", "mod ",
     ] {
         if let Some(tail) = rest.strip_prefix(keyword) {
-            let name: String = tail
-                .trim_start()
-                .chars()
-                .take_while(|character| character.is_alphanumeric() || *character == '_')
-                .collect();
-            if !name.is_empty() {
+            if let Some(name) = declaration_ident(tail) {
                 return Some(name);
             }
         }
@@ -997,7 +1437,7 @@ fn validate(workspace: &Path) -> Result<(), String> {
     }
     let fixtures = fixture_scopes(workspace)?;
     let authority = authority_items(workspace)?;
-    let mut all_rows = Vec::new();
+    let mut ledgers = Vec::new();
     for path in ledger_paths {
         let stem = path
             .file_stem()
@@ -1019,8 +1459,28 @@ fn validate(workspace: &Path) -> Result<(), String> {
                 rows.len()
             ));
         }
+        ledgers.push(rows);
+    }
+    // The field arm needs the complete widened-field set across every ledger:
+    // construction/destructuring is only a hit when EVERY field of the struct
+    // is widened.
+    let mut widened: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for rows in &ledgers {
+        for row in rows {
+            if row.kind == "field" {
+                if let Some((parent, field)) = row.item.rsplit_once("::") {
+                    widened
+                        .entry(parent.to_owned())
+                        .or_default()
+                        .insert(field.to_owned());
+                }
+            }
+        }
+    }
+    let mut all_rows = Vec::new();
+    for rows in ledgers {
         for row in &rows {
-            check_row(workspace, row, &fixtures, &authority)?;
+            check_row(workspace, row, &fixtures, &authority, &widened)?;
         }
         all_rows.extend(rows);
     }
@@ -1052,8 +1512,10 @@ mod tests {
             "use neovm_core::error::SignalData;",
         ]);
         assert!(names_in_fixtures("error::InFlightRootPin", "struct", &fixtures).is_some());
+        // Field rows no longer use the item-path rule (peer ruling 04:2xZ);
+        // the field arm decides them from `.field` reads and construction.
         assert!(
-            names_in_fixtures("error::InFlightRootPin::registry", "field", &fixtures).is_some()
+            names_in_fixtures("error::InFlightRootPin::registry", "field", &fixtures).is_none()
         );
         assert!(names_in_fixtures("error::SignalData", "struct", &fixtures).is_some());
     }
@@ -1142,6 +1604,125 @@ mod tests {
         )];
         assert!(
             names_in_fixtures("emacs_core::syntax::parse_loop::Entry", "struct", &golden).is_none()
+        );
+    }
+
+    #[test]
+    fn v1_field_read_mutation_red_then_restored_green() {
+        let declared = vec![BTreeSet::from(["storage".to_owned()])];
+        let widened = BTreeSet::from(["storage".to_owned()]);
+        let parent = ["heap_types", "LispString"];
+        let read = scopes(&[
+            "use neovm_value::heap_types::LispString;\nfn f(s: &LispString) { let _ = s.storage; }",
+        ]);
+        let error = field_hit(&read, &parent, "storage", &declared, &widened)
+            .expect("a planted field read must be refused");
+        eprintln!("MUTATION RED: {error}");
+        let restored =
+            scopes(&["use neovm_value::heap_types::LispString;\nfn f(s: &LispString) {}"]);
+        assert!(field_hit(&restored, &parent, "storage", &declared, &widened).is_none());
+        eprintln!("RESTORED GREEN: no field read");
+        // A read through a different type does not name this struct's field.
+        let other =
+            scopes(&["struct Other { storage: usize }\nfn f(s: &Other) { let _ = s.storage; }"]);
+        assert!(field_hit(&other, &parent, "storage", &declared, &widened).is_none());
+    }
+
+    #[test]
+    fn v1_field_read_on_an_unresolved_base_fails_closed() {
+        let declared = vec![BTreeSet::from(["storage".to_owned()])];
+        let widened = BTreeSet::from(["storage".to_owned()]);
+        let unresolved = scopes(&["fn f() { let x = make(); let _ = x.storage; }"]);
+        assert!(
+            field_hit(
+                &unresolved,
+                &["heap_types", "LispString"],
+                "storage",
+                &declared,
+                &widened
+            )
+            .is_some()
+        );
+    }
+
+    #[test]
+    fn v1_field_construction_requires_every_field() {
+        let parent = ["error", "InFlightRootPin"];
+        let declared = vec![BTreeSet::from(["registry".to_owned(), "slot".to_owned()])];
+        let every = BTreeSet::from(["registry".to_owned(), "slot".to_owned()]);
+        let partial = BTreeSet::from(["registry".to_owned()]);
+        let literal = scopes(&["use neovm_value::error::InFlightRootPin;\n\
+             fn f() { let _ = InFlightRootPin { registry: todo!(), slot: 0 }; }"]);
+        assert!(field_hit(&literal, &parent, "registry", &declared, &every).is_some());
+        assert!(field_hit(&literal, &parent, "registry", &declared, &partial).is_none());
+        let pattern = scopes(&["use neovm_value::error::InFlightRootPin;\n\
+             fn f(p: InFlightRootPin) { let InFlightRootPin { registry, slot } = p; }"]);
+        assert!(field_hit(&pattern, &parent, "slot", &declared, &every).is_some());
+        // Naming the type without constructing or reading it is not a hit.
+        let named =
+            scopes(&["use neovm_value::error::InFlightRootPin;\nfn f(_: InFlightRootPin) {}"]);
+        assert!(field_hit(&named, &parent, "registry", &declared, &every).is_none());
+    }
+
+    #[test]
+    fn v1_field_golden_needs_both_the_read_and_the_struct() {
+        let declared = vec![BTreeSet::from(["size".to_owned()])];
+        let widened = BTreeSet::from(["size".to_owned()]);
+        let both = vec![fixture_scope(
+            "golden.stderr".to_owned(),
+            "error: field `size` of `heap_types::LispString` is private\n  | s.size",
+            false,
+            true,
+        )];
+        assert!(
+            field_hit(
+                &both,
+                &["heap_types", "LispString"],
+                "size",
+                &declared,
+                &widened
+            )
+            .is_some()
+        );
+        let read_only = vec![fixture_scope(
+            "golden.stderr".to_owned(),
+            "error: cannot read `.size` here",
+            false,
+            true,
+        )];
+        assert!(
+            field_hit(
+                &read_only,
+                &["heap_types", "LispString"],
+                "size",
+                &declared,
+                &widened
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn v1_declaration_names_cover_consts_and_const_fns() {
+        assert_eq!(
+            declaration_name("    pub(crate) const NONE: Self = Self {"),
+            Some("NONE".to_owned())
+        );
+        assert_eq!(
+            declaration_name("    #[cfg_attr(feature = \"test-support\", visibility::make(pub))]"),
+            None
+        );
+        assert_eq!(
+            declaration_name("pub const fn helper() {}"),
+            Some("helper".to_owned())
+        );
+        assert_eq!(
+            declaration_name("pub(crate) fn foo() {}"),
+            Some("foo".to_owned())
+        );
+        assert_eq!(
+            declaration_name("pub static COUNTER: usize = 0;"),
+            Some("COUNTER".to_owned())
         );
     }
 
