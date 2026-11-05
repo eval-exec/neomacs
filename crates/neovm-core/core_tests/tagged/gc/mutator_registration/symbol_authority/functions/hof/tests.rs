@@ -1,6 +1,6 @@
 //! Actual canonical builtins and reader-held private callback root transfer.
 use super::*;
-use crate::emacs_core::eval::{Context, SubrEntry, register_global_subr_entry};
+use crate::emacs_core::eval::Context;
 use crate::emacs_core::intern::intern;
 use crate::tagged::gc::mutator_registration::era_fixtures::EraFixtureExt;
 use crate::tagged::gc::mutator_registration::{RunAccessHofExt, RunAccessUnaryExt};
@@ -11,6 +11,9 @@ use crate::tagged::gc::{
 };
 use crate::tagged::header::SubrDispatchKind;
 use crate::test_utils::SubrValueExt;
+use neovm_eval::test_support::authority::{
+    SubrEntry, SubrEntryChange, register_global_subr_entry, with_subr_entry_change,
+};
 use neovm_value::test_support::authority::{Deadline, Retry, rendezvous, retry_owned};
 use std::num::{NonZeroU32, NonZeroU64};
 use std::ops::ControlFlow;
@@ -464,15 +467,19 @@ fn nmjit_n4_hof_preparation_refuses_re_registered_implementation() {
         }
         let _restore = Restore(id, builtin(HofOperation::Mapc));
         let mut registration = builtin(HofOperation::Mapc);
-        match changed {
-            ChangedRegistration::Body => {
-                registration.function = builtin(HofOperation::Mapcar).function
+        registration = match changed {
+            ChangedRegistration::Body => with_subr_entry_change(
+                registration,
+                SubrEntryChange::BodyFrom(HofOperation::Mapcar),
+            ),
+            ChangedRegistration::Arity => {
+                with_subr_entry_change(registration, SubrEntryChange::MinArgs(1))
             }
-            ChangedRegistration::Arity => registration.min_args = 1,
-            ChangedRegistration::Dispatch => {
-                registration.dispatch_kind = SubrDispatchKind::ContextCallable
-            }
-        }
+            ChangedRegistration::Dispatch => with_subr_entry_change(
+                registration,
+                SubrEntryChange::DispatchKind(SubrDispatchKind::ContextCallable),
+            ),
+        };
         register_global_subr_entry(id, registration);
         let outcome = Context::try_with_test_symbol_backing_init_era(
             PlainSymbolBacking::Unprojected,

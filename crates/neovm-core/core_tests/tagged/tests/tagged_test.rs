@@ -10,6 +10,7 @@ use crate::emacs_core::eval::SubrValueExt;
 use crate::emacs_core::intern::{intern, intern_uninterned};
 use crate::tagged::header::{SubrDispatchKind, VecLikeType};
 use crate::tagged::value::TaggedValue;
+use neovm_eval::test_support::authority::{lookup_global_subr_entry, subr_entry_dispatch_kind};
 
 #[test]
 fn subr_dispatch_kind_from_global_table() {
@@ -24,15 +25,22 @@ fn subr_dispatch_kind_from_global_table() {
     let if_id = intern("if");
     let throw_id = intern("throw");
 
-    let car_entry =
-        crate::emacs_core::eval::lookup_global_subr_entry(car_id).expect("car registered");
-    let if_entry = crate::emacs_core::eval::lookup_global_subr_entry(if_id).expect("if registered");
-    let throw_entry =
-        crate::emacs_core::eval::lookup_global_subr_entry(throw_id).expect("throw registered");
+    let car_entry = lookup_global_subr_entry(car_id).expect("car registered");
+    let if_entry = lookup_global_subr_entry(if_id).expect("if registered");
+    let throw_entry = lookup_global_subr_entry(throw_id).expect("throw registered");
 
-    assert_eq!(car_entry.dispatch_kind, SubrDispatchKind::Builtin);
-    assert_eq!(if_entry.dispatch_kind, SubrDispatchKind::SpecialForm);
-    assert_eq!(throw_entry.dispatch_kind, SubrDispatchKind::ContextCallable);
+    assert_eq!(
+        subr_entry_dispatch_kind(&car_entry),
+        SubrDispatchKind::Builtin
+    );
+    assert_eq!(
+        subr_entry_dispatch_kind(&if_entry),
+        SubrDispatchKind::SpecialForm
+    );
+    assert_eq!(
+        subr_entry_dispatch_kind(&throw_entry),
+        SubrDispatchKind::ContextCallable
+    );
 }
 
 #[test]
