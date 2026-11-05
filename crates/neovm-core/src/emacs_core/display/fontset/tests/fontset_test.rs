@@ -863,3 +863,42 @@ fn rendering_tries_fontset_entries_in_charset_priority_order() {
     );
     assert_eq!(registry_names(&patterns), ["iso8859-1", "iso10646-1"]);
 }
+
+/// GNU compares charset ids, so an encoding written as a charset alias in
+/// `font-encoding-alist` ranks like the charset it names.
+#[test]
+fn an_encoding_spelled_as_a_charset_alias_ranks_like_its_charset() {
+    crate::test_utils::init_test_tracing();
+    reset_fontset_registry();
+    reset_charset_registry();
+    crate::emacs_core::charset::builtin_define_charset_alias(vec![
+        Value::symbol("neomacs-test-bmp"),
+        Value::symbol("unicode-bmp"),
+    ])
+    .expect("define-charset-alias");
+    let encodings = Value::list(vec![
+        Value::cons(Value::string("iso8859-1"), Value::symbol("iso-8859-1")),
+        Value::cons(
+            Value::string("iso10646-1"),
+            Value::symbol("neomacs-test-bmp"),
+        ),
+    ]);
+    for registry in ["iso8859-1", "iso10646-1"] {
+        set_fontset_font(
+            &Value::T,
+            &Value::fixnum('é' as i64),
+            &Value::cons(Value::NIL, Value::string(registry)),
+            Some(&Value::symbol("append")),
+            None,
+            None,
+            Some(&encodings),
+        )
+        .expect("install a registry entry");
+    }
+    crate::emacs_core::charset::builtin_set_charset_priority(vec![Value::symbol("unicode-bmp")])
+        .expect("set-charset-priority");
+    assert_eq!(
+        registry_names(&matching_entries_for_char('é')),
+        ["iso10646-1", "iso8859-1"]
+    );
+}
