@@ -4113,9 +4113,9 @@ fn vm_frame_native_metrics_sync_pending_resize_events() {
             frame.height = 640;
             frame.set_parameter(Value::symbol("window-system"), Value::symbol("x"));
 
-            let tx = crate::host_input::HostInputPublisher::install(eval);
+            let tx = crate::emacs_core::eval::host_input::HostInputPublisher::install(eval);
 
-            tx.send(crate::keyboard::InputEvent::Resize {
+            tx.send(crate::emacs_core::eval::keyboard::InputEvent::Resize {
                 width: 1400,
                 height: 1600,
                 scale_factor: 1.0,
@@ -4306,14 +4306,14 @@ fn vm_x_create_frame_syncs_pending_resize_before_adopting_opening_gui_frame() {
                 }
             }
             eval.set_variable("terminal-frame", Value::make_frame(fid.0));
-            let tx = crate::host_input::HostInputPublisher::install(eval);
+            let tx = crate::emacs_core::eval::host_input::HostInputPublisher::install(eval);
 
-            tx.send(crate::keyboard::InputEvent::Focus {
+            tx.send(crate::emacs_core::eval::keyboard::InputEvent::Focus {
                 focused: true,
                 emacs_frame_id: 0,
             })
             .expect("queue focus");
-            tx.send(crate::keyboard::InputEvent::Resize {
+            tx.send(crate::emacs_core::eval::keyboard::InputEvent::Resize {
                 width: 1500,
                 height: 1900,
                 scale_factor: 1.0,

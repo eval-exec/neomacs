@@ -608,9 +608,9 @@ impl Drop for SavedNativeScratch {
 #[test]
 fn late_host_input_native_wait_preserves_live_worker_bindings_cleanup_and_roots() {
     use super::super::scheduler::MainNativeWaitEvent;
+    use crate::emacs_core::eval::host_input::HostInputPublisher;
+    use crate::emacs_core::eval::keyboard::{InputEvent, KeyEvent};
     use crate::emacs_core::eval::{push_scratch_gc_roots, save_scratch_gc_roots};
-    use crate::host_input::HostInputPublisher;
-    use crate::keyboard::{InputEvent, KeyEvent};
     let mut main = green();
     let main_os = std::thread::current().id();
     main.eval_str("(defvar s2-main-cleanup 0) (setq s2-main-worker (make-thread (lambda () (let ((s2-service-binding 37)) (unwind-protect (s2-main-native-worker) (setq s2-main-cleanup (1+ s2-main-cleanup))))))) (thread-yield)").unwrap();

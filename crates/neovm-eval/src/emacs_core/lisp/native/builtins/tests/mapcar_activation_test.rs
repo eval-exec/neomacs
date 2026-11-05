@@ -1,7 +1,9 @@
 //! Mapping activation specialization preserves the existing callback protocol.
 
 #[doc(hidden)]
-pub use super::{MapCallee, builtin_mapc_2, builtin_mapcan, builtin_mapcar_2, builtin_mapconcat};
+pub(crate) use super::{
+    MapCallee, builtin_mapc_2, builtin_mapcan, builtin_mapcar_2, builtin_mapconcat,
+};
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::bytecode::{ByteCodeFunction, Op};

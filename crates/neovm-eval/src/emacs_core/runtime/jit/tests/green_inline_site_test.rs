@@ -618,9 +618,9 @@ fn throw_on_input_interrupts_compiled_green_intrinsic_loop() {
     context.set_lexical_binding(true);
     let source = Value::make_bytecode(intrinsic_loop());
     let _root = context.retain_gc_roots([source]);
-    let tx = crate::host_input::HostInputPublisher::install(&mut context);
-    tx.send(crate::keyboard::InputEvent::key_press(
-        crate::keyboard::KeyEvent::char('l'),
+    let tx = crate::emacs_core::eval::host_input::HostInputPublisher::install(&mut context);
+    tx.send(crate::emacs_core::eval::keyboard::InputEvent::key_press(
+        crate::emacs_core::eval::keyboard::KeyEvent::char('l'),
     ))
     .expect("queue ordinary frontend input");
     let sentinel = Value::symbol("green-inline-throw-tag");

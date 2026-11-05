@@ -1,5 +1,5 @@
 #[doc(hidden)]
-pub use super::{FixedMin2, NativeFn, NoEvalPolicy, SubrArity, SubrSpec, no_eval_policy};
+pub(crate) use super::{FixedMin2, NativeFn, NoEvalPolicy, SubrArity, SubrSpec, no_eval_policy};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::eval::subr_abi::SubrFn;
 use neovm_value::intern::intern;

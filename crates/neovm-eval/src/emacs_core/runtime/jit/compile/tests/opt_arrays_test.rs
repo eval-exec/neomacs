@@ -17,7 +17,7 @@ use crate::emacs_core::eval::{
 use crate::emacs_core::jit::feedback::arrays::RuntimeStateArraysExt;
 use crate::emacs_core::jit::opt::passes::{array_reads, range};
 #[doc(hidden)]
-pub use crate::emacs_core::jit::opt::{
+pub(crate) use crate::emacs_core::jit::opt::{
     build, eval, ir,
     types::{Range, TypeSet},
 };

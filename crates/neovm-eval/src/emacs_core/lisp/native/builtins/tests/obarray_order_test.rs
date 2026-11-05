@@ -3,7 +3,7 @@
 //! ascending, newest symbol first inside a bucket.
 
 #[doc(hidden)]
-pub use super::symbols::{
+pub(crate) use super::symbols::{
     GNU_INITIAL_OBARRAY_SIZE, global_obarray_symbol_ids_in_bucket_order, obarray_hash_lisp_string,
 };
 use crate::emacs_core::Context;

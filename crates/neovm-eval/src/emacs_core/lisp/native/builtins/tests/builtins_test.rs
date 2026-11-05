@@ -9134,7 +9134,7 @@ fn bootstrap_runtime_set_match_data_restores_multibyte_buffer_positions_like_gnu
 fn replace_match_after_set_match_data_uses_gnu_buffer_char_positions() {
     crate::test_utils::init_test_tracing();
     #[doc(hidden)]
-    pub use crate::emacs_core::builtins::search::{
+    use crate::emacs_core::builtins::search::{
         builtin_match_data, builtin_replace_match, builtin_search_forward, builtin_set_match_data,
     };
     use crate::emacs_core::eval::Context;

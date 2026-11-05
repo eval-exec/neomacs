@@ -3,7 +3,7 @@
 use super::*;
 use crate::emacs_core::bytecode::Op;
 #[doc(hidden)]
-pub use crate::emacs_core::jit::opt::{
+pub(crate) use crate::emacs_core::jit::opt::{
     ir::*,
     mem::{AliasClass, Effects},
     types::TypeSet,

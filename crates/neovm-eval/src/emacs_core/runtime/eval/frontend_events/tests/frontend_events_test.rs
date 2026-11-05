@@ -128,17 +128,17 @@ fn assert_policy(
 
 #[test]
 fn every_transport_variant_has_locked_down_semantics() {
-    use crate::keyboard::{KeyEvent, Modifiers, MouseButton};
+    use crate::emacs_core::eval::keyboard::{KeyEvent, Modifiers, MouseButton};
 
     let command_events = [
         InputEvent::raw_tty_bytes(vec![0x1b], 0),
         InputEvent::TtyByte {
             byte: b'k',
-            target: crate::keyboard::TtyInputTarget::SelectedFrame,
+            target: crate::emacs_core::eval::keyboard::TtyInputTarget::SelectedFrame,
         },
         InputEvent::TtyCharacter {
             character: neovm_value::emacs_char::EmacsChar::from_char('k'),
-            target: crate::keyboard::TtyInputTarget::SelectedFrame,
+            target: crate::emacs_core::eval::keyboard::TtyInputTarget::SelectedFrame,
         },
         InputEvent::key_press(KeyEvent::char('k')),
         InputEvent::MousePress {

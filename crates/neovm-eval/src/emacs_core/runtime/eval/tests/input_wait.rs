@@ -1,5 +1,5 @@
 use super::*;
-use crate::keyboard::{InputEvent, KeyEvent, ReadKeySequenceOptions};
+use crate::emacs_core::eval::keyboard::{InputEvent, KeyEvent, ReadKeySequenceOptions};
 use crate::test_utils::input_wait::InputGateOwner;
 
 #[derive(Clone, Copy, Debug)]

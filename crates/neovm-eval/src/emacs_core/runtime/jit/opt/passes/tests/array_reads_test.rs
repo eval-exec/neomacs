@@ -10,7 +10,7 @@ use crate::emacs_core::bytecode::{ByteCodeFunction, Op};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::jit::compile::{analyze_cfg, compile_pipeline_tests::function};
 #[doc(hidden)]
-pub use crate::emacs_core::jit::opt::{
+pub(crate) use crate::emacs_core::jit::opt::{
     build,
     mem::{AliasClass, Effects},
     types::{Range, TypeSet},

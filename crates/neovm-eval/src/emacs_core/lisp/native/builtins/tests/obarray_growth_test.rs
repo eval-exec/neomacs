@@ -17,7 +17,7 @@
 //! has drifted (or is ignored) shows up here as a vector that never doubled.
 
 #[doc(hidden)]
-pub use super::{
+pub(crate) use super::{
     builtin_intern_fn, builtin_obarray_clear, intern_soft_impl, obarray_len,
     obarray_symbol_count_for_test,
 };

@@ -3,7 +3,7 @@
 
 use super::*;
 #[doc(hidden)]
-pub use crate::emacs_core::jit::opt::{
+pub(crate) use crate::emacs_core::jit::opt::{
     mem::{AliasClass, Effects},
     types::{Range, TypeSet},
 };

@@ -6,7 +6,7 @@ use super::{
     Context, EVAL_STACK_RED_ZONE, STACK_GROWTH_PROBE_INTERVAL, STACK_GROWTH_PROBE_START_DEPTH,
 };
 #[doc(hidden)]
-pub use crate::emacs_core::builtins::higher_order::{
+pub(crate) use crate::emacs_core::builtins::higher_order::{
     SortPredicate, SortRuntime, builtin_sort_slice,
 };
 use neovm_value::tagged::collection_reads::capture;

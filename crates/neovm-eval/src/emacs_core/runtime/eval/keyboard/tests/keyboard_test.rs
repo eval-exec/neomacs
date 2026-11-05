@@ -1060,7 +1060,7 @@ fn pointer_before_retirement_resolves_before_snapshot_is_released() {
     );
 
     assert_eq!(
-        crate::emacs_core::keyboard::builtin_input_pending_p(&mut eval, vec![])
+        crate::emacs_core::eval::keyboard::builtin_input_pending_p(&mut eval, vec![])
             .expect("retirement service"),
         Value::NIL
     );
@@ -2376,23 +2376,28 @@ fn keysym_to_key_event_synthesizes_a_name_for_an_unnamed_keysym() {
 /// `A-x' (KEY_CHAR_ALT | ?x), never plain text.
 #[test]
 fn alt_transport_cooks_the_alt_bit_like_gnu() {
-    let event = crate::keyboard::keysym_to_key_event('x' as u32, crate::keyboard::RENDER_ALT_MASK)
-        .expect("A-x transport event");
+    let event = crate::emacs_core::eval::keyboard::keysym_to_key_event(
+        'x' as u32,
+        crate::emacs_core::eval::keyboard::RENDER_ALT_MASK,
+    )
+    .expect("A-x transport event");
     let value = event.to_emacs_event_value();
-    let expected = crate::emacs_core::keyboard::pure::KEY_CHAR_ALT | ('x' as i64);
+    let expected = crate::emacs_core::eval::keyboard::pure::KEY_CHAR_ALT | ('x' as i64);
     assert_eq!(
         value,
         Value::fixnum(expected),
         "Option cooked to alt must arrive as A-x"
     );
     assert_eq!(
-        crate::keyboard::KeyEvent::to_description(&crate::keyboard::KeyEvent::char_with_mods(
-            'x',
-            crate::keyboard::Modifiers {
-                alt: true,
-                ..Default::default()
-            },
-        )),
+        crate::emacs_core::eval::keyboard::KeyEvent::to_description(
+            &crate::emacs_core::eval::keyboard::KeyEvent::char_with_mods(
+                'x',
+                crate::emacs_core::eval::keyboard::Modifiers {
+                    alt: true,
+                    ..Default::default()
+                },
+            )
+        ),
         "A-x"
     );
 }
@@ -2423,7 +2428,7 @@ fn display_idle_maintenance_yields_to_input_and_avoids_nested_or_timed_reads() {
             .is_some()
     );
     assert_eq!(calls.get(), 1);
-    let sender = crate::host_input::HostInputPublisher::install(&mut eval);
+    let sender = crate::emacs_core::eval::host_input::HostInputPublisher::install(&mut eval);
 
     sender
         .send(InputEvent::Focus {
@@ -2497,7 +2502,7 @@ fn timed_read_preserves_existing_idle_epoch_at_immediate_timeout() {
 #[test]
 fn timed_read_preserves_existing_idle_epoch_after_wait_timeout() {
     let mut eval = crate::emacs_core::Context::new();
-    let _sender = crate::host_input::HostInputPublisher::install(&mut eval);
+    let _sender = crate::emacs_core::eval::host_input::HostInputPublisher::install(&mut eval);
 
     eval.timer_start_idle();
     let epoch = eval.command_loop.idle_start_time;
@@ -2586,7 +2591,7 @@ fn timed_read_preserves_idle_epoch_while_servicing_async_special_input() {
                         (setq vm-test-surface-error (list id error)))))"#,
     )
     .expect("install observable surface-error hook");
-    let sender = crate::host_input::HostInputPublisher::install(&mut eval);
+    let sender = crate::emacs_core::eval::host_input::HostInputPublisher::install(&mut eval);
     let _sender_keepalive = sender.clone();
 
     let (release, released) = crossbeam_channel::bounded(0);

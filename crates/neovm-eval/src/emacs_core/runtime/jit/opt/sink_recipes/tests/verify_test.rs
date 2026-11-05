@@ -15,7 +15,7 @@ use crate::emacs_core::eval::{
     Context, push_scratch_gc_roots, restore_scratch_gc_roots, save_scratch_gc_roots,
 };
 #[doc(hidden)]
-pub use crate::emacs_core::jit::opt::{
+pub(crate) use crate::emacs_core::jit::opt::{
     build::{BuildInput, build},
     eval::{Inputs, Outcome, evaluate},
     ir::*,

@@ -103,7 +103,8 @@ fn recursive_edit_entry_and_unwind_refresh_all_mode_lines() {
                 neovm_value::tagged::SymbolMode::Bare,
             )
             .unwrap();
-            let sender = crate::host_input::HostInputPublisher::install(&mut eval);
+            let sender =
+                crate::emacs_core::eval::host_input::HostInputPublisher::install(&mut eval);
             drop(sender);
 
             eval.command_loop.running = true;

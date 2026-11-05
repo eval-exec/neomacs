@@ -251,7 +251,7 @@ fn p15_mailbox_main_event_alone_retains_completed_sender_until_consumption() {
         .pending_input_events
         .pop_visible_front()
         .unwrap();
-    let crate::keyboard::InputEvent::ThreadEvent {
+    let crate::emacs_core::eval::keyboard::InputEvent::ThreadEvent {
         sender: queued_sender,
         error_symbol,
         data: queued_data,

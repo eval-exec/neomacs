@@ -53,7 +53,7 @@ fn extended_keysym_transport_reaches_the_bound_command() {
     )
     .unwrap();
     let frame = eval.frame_manager().selected_frame().unwrap().id.0;
-    let sender = crate::host_input::HostInputPublisher::install(&mut eval);
+    let sender = crate::emacs_core::eval::host_input::HostInputPublisher::install(&mut eval);
 
     for (keysym, name) in REPORTED_KEYS {
         eval.eval_str(&format!(
@@ -105,7 +105,7 @@ fn extended_keysym_transport_retains_command_modifiers() {
     )
     .unwrap();
     let frame = eval.frame_manager().selected_frame().unwrap().id.0;
-    let sender = crate::host_input::HostInputPublisher::install(&mut eval);
+    let sender = crate::emacs_core::eval::host_input::HostInputPublisher::install(&mut eval);
 
     sender
         .send(

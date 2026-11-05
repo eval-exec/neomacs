@@ -54,7 +54,8 @@ impl FocusFixture {
 
     #[doc(hidden)]
     pub fn deliver(&mut self, events: Vec<InputEvent>) {
-        let sender = crate::host_input::HostInputPublisher::install(&mut self.eval);
+        let sender =
+            crate::emacs_core::eval::host_input::HostInputPublisher::install(&mut self.eval);
         for event in events {
             sender.send(event).unwrap();
         }

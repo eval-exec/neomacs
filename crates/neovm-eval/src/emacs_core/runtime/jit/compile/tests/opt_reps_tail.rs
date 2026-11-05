@@ -17,7 +17,7 @@ use crate::emacs_core::jit::compile::{
     publish_numeric_feedback_vec,
 };
 #[doc(hidden)]
-pub use crate::emacs_core::jit::opt::{
+pub(crate) use crate::emacs_core::jit::opt::{
     build::{BuildInput, build},
     mem::{AliasClass, Effects},
     native_verify_observer::{self, Calls, NativeRegion},
