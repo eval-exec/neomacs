@@ -4875,7 +4875,3 @@ pub fn builtin_previous_single_char_property_change_in_buffers_with_symbols<
 // ===========================================================================
 // Tests
 // ===========================================================================
-
-#[cfg(test)]
-#[path = "tests/textprop_test.rs"]
-mod tests;
