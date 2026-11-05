@@ -758,9 +758,12 @@ fn frame_set_was_invisible_returns_new_state() {
 #[test]
 fn frame_bottom_divider_width_rejects_non_frame_designator() {
     crate::test_utils::init_test_tracing();
-    let err =
-        crate::emacs_core::builtins::builtin_frame_bottom_divider_width(vec![Value::fixnum(0)])
-            .unwrap_err();
+    let mut eval = crate::test_utils::new_context();
+    let err = crate::emacs_core::builtins::builtin_frame_bottom_divider_width(
+        &mut eval,
+        vec![Value::fixnum(0)],
+    )
+    .unwrap_err();
     match err.into_kind() {
         FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected signal, got {other:?}"),
@@ -1051,7 +1054,9 @@ fn interactive_form_for_a_c_subr_returns_interactive_list() {
 #[test]
 fn lock_file_requires_string_argument() {
     crate::test_utils::init_test_tracing();
-    let err = crate::emacs_core::builtins::builtin_lock_file(vec![Value::NIL]).unwrap_err();
+    let mut eval = crate::test_utils::new_context();
+    let err =
+        crate::emacs_core::builtins::builtin_lock_file(&mut eval, vec![Value::NIL]).unwrap_err();
     match err.into_kind() {
         FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected signal, got {other:?}"),
@@ -1061,7 +1066,9 @@ fn lock_file_requires_string_argument() {
 #[test]
 fn unlock_file_requires_string_argument() {
     crate::test_utils::init_test_tracing();
-    let err = crate::emacs_core::builtins::builtin_unlock_file(vec![Value::NIL]).unwrap_err();
+    let mut eval = crate::test_utils::new_context();
+    let err =
+        crate::emacs_core::builtins::builtin_unlock_file(&mut eval, vec![Value::NIL]).unwrap_err();
     match err.into_kind() {
         FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected signal, got {other:?}"),
@@ -1087,9 +1094,12 @@ fn inotify_add_watch_requires_string_path_argument() {
 #[test]
 fn window_bottom_divider_width_rejects_non_window_designator() {
     crate::test_utils::init_test_tracing();
-    let err =
-        crate::emacs_core::builtins::builtin_window_bottom_divider_width(vec![Value::fixnum(1)])
-            .unwrap_err();
+    let mut eval = crate::test_utils::new_context();
+    let err = crate::emacs_core::builtins::builtin_window_bottom_divider_width(
+        &mut eval,
+        vec![Value::fixnum(1)],
+    )
+    .unwrap_err();
     match err.into_kind() {
         FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");

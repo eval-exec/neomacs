@@ -7,7 +7,8 @@ fn test_ob() -> crate::emacs_core::symbol::Obarray {
     crate::emacs_core::symbol::Obarray::new()
 }
 use crate::emacs_core::keymap::make_list_keymap;
-use crate::emacs_core::load::{apply_runtime_startup_state, create_bootstrap_evaluator_cached};
+use crate::emacs_core::load::apply_runtime_startup_state;
+use crate::emacs_core::load_boot::create_bootstrap_evaluator_cached;
 use crate::emacs_core::subr::{NativeFn, SubrArity, SubrSpec};
 use crate::emacs_core::value::{ValueKind, VecLikeType};
 use crate::emacs_core::{Context, format_eval_result};
@@ -968,7 +969,7 @@ fn eval_expression_is_real_lisp_function_after_bootstrap() {
     let mut ev = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut ev).expect("runtime startup state");
     let function = ev
-        .obarray
+        .obarray()
         .symbol_function("eval-expression")
         .expect("missing eval-expression bootstrapped function cell");
     assert!(!crate::emacs_core::autoload::is_autoload_value(
@@ -1084,7 +1085,7 @@ fn abbrev_mode_is_real_lisp_function_after_bootstrap() {
     let mut ev = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut ev).expect("runtime startup state");
     let function = ev
-        .obarray
+        .obarray()
         .symbol_function("abbrev-mode")
         .expect("missing abbrev-mode bootstrapped function cell");
     assert!(!crate::emacs_core::autoload::is_autoload_value(
@@ -1162,7 +1163,7 @@ fn simple_commands_are_real_lisp_functions_after_bootstrap() {
         "process-menu-mode",
     ] {
         let function = ev
-            .obarray
+            .obarray()
             .symbol_function(name)
             .unwrap_or_else(|| panic!("missing {name} startup function cell"));
         assert!(
@@ -1193,7 +1194,7 @@ fn replace_commands_are_real_lisp_functions_after_bootstrap() {
         "replace-string",
     ] {
         let function = ev
-            .obarray
+            .obarray()
             .symbol_function(name)
             .unwrap_or_else(|| panic!("missing {name} startup function cell"));
         assert!(
@@ -1216,7 +1217,7 @@ fn subr_key_binding_commands_are_real_lisp_functions_after_bootstrap() {
     apply_runtime_startup_state(&mut ev).expect("runtime startup state");
     for name in ["global-set-key", "local-set-key"] {
         let function = ev
-            .obarray
+            .obarray()
             .symbol_function(name)
             .unwrap_or_else(|| panic!("missing {name} startup function cell"));
         assert!(
@@ -1242,7 +1243,7 @@ fn env_command_is_real_lisp_function_after_bootstrap() {
     let mut ev = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut ev).expect("runtime startup state");
     let function = ev
-        .obarray
+        .obarray()
         .symbol_function("setenv")
         .expect("missing setenv bootstrapped function cell");
     assert!(!crate::emacs_core::autoload::is_autoload_value(
@@ -1260,7 +1261,7 @@ fn files_command_is_real_lisp_function_after_bootstrap() {
     let mut ev = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut ev).expect("runtime startup state");
     let function = ev
-        .obarray
+        .obarray()
         .symbol_function("load-file")
         .expect("missing load-file bootstrapped function cell");
     assert!(!crate::emacs_core::autoload::is_autoload_value(
@@ -1281,7 +1282,7 @@ fn regexp_search_aliases_are_available_after_bootstrap() {
     apply_runtime_startup_state(&mut ev).expect("runtime startup state");
     for name in ["search-forward-regexp", "search-backward-regexp"] {
         let function = ev
-            .obarray
+            .obarray()
             .symbol_function(name)
             .unwrap_or_else(|| panic!("missing {name} startup function cell"));
         assert!(
@@ -1315,7 +1316,7 @@ fn mode_and_mark_commands_are_real_lisp_functions_after_bootstrap() {
     apply_runtime_startup_state(&mut ev).expect("runtime startup state");
     for name in ["auto-composition-mode", "set-mark-command"] {
         let function = ev
-            .obarray
+            .obarray()
             .symbol_function(name)
             .unwrap_or_else(|| panic!("missing {name} startup function cell"));
         assert!(
@@ -1337,7 +1338,7 @@ fn count_matches_is_real_lisp_function_after_bootstrap() {
     let mut ev = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut ev).expect("runtime startup state");
     let function = ev
-        .obarray
+        .obarray()
         .symbol_function("count-matches")
         .expect("missing count-matches bootstrapped function cell");
     assert!(!crate::emacs_core::autoload::is_autoload_value(
@@ -1424,7 +1425,7 @@ fn remove_hook_is_available_after_bootstrap() {
     let mut ev = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut ev).expect("runtime startup state");
     let function = ev
-        .obarray
+        .obarray()
         .symbol_function("remove-hook")
         .expect("missing remove-hook startup function cell");
     assert!(
@@ -1520,7 +1521,7 @@ fn commandp_true_for_loaded_lisp_commands_after_bootstrap() {
         "yank-pop",
     ] {
         let function = ev
-            .obarray
+            .obarray()
             .symbol_function(name)
             .unwrap_or_else(|| panic!("missing {name} startup function cell"));
         assert!(
@@ -3067,7 +3068,7 @@ fn describe_key_briefly_is_real_lisp_function_after_bootstrap() {
     let mut ev = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut ev).expect("runtime startup state");
     let function = ev
-        .obarray
+        .obarray()
         .symbol_function("describe-key-briefly")
         .expect("missing describe-key-briefly bootstrapped function cell");
     assert!(!crate::emacs_core::autoload::is_autoload_value(

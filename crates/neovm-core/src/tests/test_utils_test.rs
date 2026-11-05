@@ -13,9 +13,10 @@ fn test_ob() -> crate::emacs_core::symbol::Obarray {
     crate::emacs_core::symbol::Obarray::new()
 }
 use crate::emacs_core::load::{
-    apply_ldefs_boot_autoloads_for_names, bootstrap_load_path_entries,
-    create_runtime_startup_evaluator_cached, find_file_in_load_path, get_load_path, load_file,
+    apply_ldefs_boot_autoloads_for_names, bootstrap_load_path_entries, find_file_in_load_path,
+    get_load_path, load_file,
 };
+use crate::emacs_core::load_boot::create_runtime_startup_evaluator_cached;
 use crate::emacs_core::value::Value;
 use crate::emacs_core::{Context, format_eval_result};
 use crate::heap_types::LispString;

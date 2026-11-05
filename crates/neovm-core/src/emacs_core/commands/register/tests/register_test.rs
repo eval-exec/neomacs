@@ -50,19 +50,20 @@ fn register_copied_properties_have_only_manager_roots() {
             RegisterContent::KbdMacro(vec![payload(&mut probes), payload(&mut probes)]),
         );
         manager.set('n', RegisterContent::Number(42));
-        *eval.registers() = manager;
+        *eval.registers_mut() = manager;
         probes
     });
     let check_live = |eval: &Context| {
         for Probe(bits) in &probes {
             assert!(
-                eval.tagged_heap().retains_veclike(Value::from_bits(*bits)),
+                eval.tagged_heap()
+                    .retains_veclike(unsafe { Value::from_bits(*bits) }),
                 "register-only property vector was reclaimed"
             );
         }
         for (index, Probe(bits)) in probes.iter().enumerate() {
             assert_eq!(
-                Value::from_bits(*bits)
+                unsafe { Value::from_bits(*bits) }
                     .as_vector_data()
                     .expect("live register property vector")
                     .as_slice(),
@@ -113,7 +114,9 @@ fn register_copied_properties_have_only_manager_roots() {
     eval.gc_collect_exact();
     for Probe(bits) in probes {
         assert!(
-            !eval.tagged_heap().retains_veclike(Value::from_bits(bits)),
+            !eval
+                .tagged_heap()
+                .retains_veclike(unsafe { Value::from_bits(bits) }),
             "retired register graph remained permanently rooted"
         );
     }
