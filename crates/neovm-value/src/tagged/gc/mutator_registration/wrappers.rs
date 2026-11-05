@@ -64,6 +64,30 @@ impl<'heap, K: EraKeeper> ProofEraFinishFailure<'heap, K> {
     pub fn reason(&self) -> RegistrationError {
         self.reason
     }
+
+    /// SEAL: copied retained-authority facts (C4 copy; the backing objects
+    /// never escape). Exactly the three `is_some` facts the lifecycle
+    /// refusal tests read, so no keeper/collector/registry handle crosses.
+    #[inline]
+    #[doc(hidden)]
+    pub fn retained_for_test(&self) -> RetainedAuthority {
+        RetainedAuthority {
+            keeper: self.era.core.keeper.is_some(),
+            collector: self.era.core.collector.borrow().is_some(),
+            registry: self.era.core.registry.is_some(),
+        }
+    }
+}
+
+/// Copied retained-authority facts of a finish refusal (peer-signed 18:40Z
+/// shape (c)): plain Copy bools only.
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[doc(hidden)]
+pub struct RetainedAuthority {
+    pub keeper: bool,
+    pub collector: bool,
+    pub registry: bool,
 }
 
 impl<'heap, K: EraKeeper> ParallelHeapEra<'heap, K> {

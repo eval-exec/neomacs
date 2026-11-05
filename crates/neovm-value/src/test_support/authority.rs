@@ -46,14 +46,51 @@ pub use crate::tagged::gc::mutator_registration::retry::{
 };
 #[doc(hidden)]
 pub use crate::tagged::gc::mutator_registration::symbol_functions::retry::rendezvous;
+/// Fence-only registration-wait CLASSIFIERS (REGWAIT-GAP, peer-signed
+/// 18:40Z): pure error-to-Retry mappings the retry drivers take as their
+/// third argument. The originals stay crate-private; this fence is their
+/// only public route.
+#[doc(hidden)]
+pub fn registration(error: &crate::tagged::gc::mutator_registration::RegistrationError) -> Retry {
+    crate::tagged::gc::mutator_registration::symbol_functions::retry::registration(error)
+}
+
+#[doc(hidden)]
+pub fn initial_intern(
+    error: &crate::tagged::gc::mutator_registration::InitialInternError,
+) -> Retry {
+    crate::tagged::gc::mutator_registration::symbol_functions::retry::initial_intern(error)
+}
+
+#[doc(hidden)]
+pub fn global(error: &crate::tagged::gc::mutator_registration::GlobalError) -> Retry {
+    crate::tagged::gc::mutator_registration::symbol_functions::retry::global(error)
+}
 
 /// Fence delegates for the re-homed root-slot tests (peer-signed rows): the
 /// registry poison hook and the REGWAIT-GAP restore-retry begin. The originals
 /// stay restricted; the module is crate-visible, so this re-export is their
 /// only public path.
 pub use crate::tagged::gc::mutator_registration::test_fences::{
-    begin_restore_retry_for_test, poison_registry_for_test,
+    AdmissionProbeGuard, AdmissionProbeState, begin_restore_retry_for_test,
+    poison_registry_for_test,
 };
+
+/// Peer-signed 18:40Z shape (a): the typed scoped admission-word seam.
+/// CAS-installs the probe state from the quiescent OUT word; the returned
+/// `#[must_use]` guard restores the prior word on drop. `AdmissionWord` and
+/// the entry field stay private.
+///
+/// # Safety
+/// no collector or catalog transition other than the one under test observes
+/// this permit while the guard lives
+#[doc(hidden)]
+pub unsafe fn hold_admission_for_test<'a>(
+    permit: &'a crate::tagged::gc::mutator_registration::MutatorPermit<'_>,
+    state: AdmissionProbeState,
+) -> AdmissionProbeGuard<'a> {
+    permit.hold_admission_for_test(state)
+}
 
 /// Fence delegate for the deterministic host-side root-table contention
 /// scope. The original stays `cfg(any(test, feature = "test-support"))`

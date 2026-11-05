@@ -52,6 +52,9 @@ use crate::emacs_core::eval::world::{
 pub(crate) use wrappers::EraFinishFailure;
 pub use wrappers::ParallelHeapEra;
 #[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub use wrappers::RetainedAuthority;
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) use wrappers::{
     ProofEra as GenericProofEra, ProofEraFinishFailure as GenericProofEraFinishFailure,
 };

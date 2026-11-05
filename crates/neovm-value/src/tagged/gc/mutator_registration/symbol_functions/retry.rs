@@ -4,7 +4,7 @@ use super::super::{
     FunctionError, GlobalError, InitialInternError, RegistrationError, RendezvousError,
 };
 
-pub(in super::super) fn registration(error: &RegistrationError) -> Retry {
+pub(crate) fn registration(error: &RegistrationError) -> Retry {
     match error {
         RegistrationError::Busy => Retry::Busy,
         RegistrationError::WrongHeap
@@ -24,7 +24,7 @@ pub(in super::super) fn registration(error: &RegistrationError) -> Retry {
     }
 }
 
-pub(in super::super) fn initial_intern(error: &InitialInternError) -> Retry {
+pub(crate) fn initial_intern(error: &InitialInternError) -> Retry {
     match error {
         InitialInternError::Authority(error) => registration(error),
         InitialInternError::ExpectedString
@@ -33,7 +33,7 @@ pub(in super::super) fn initial_intern(error: &InitialInternError) -> Retry {
     }
 }
 
-pub(in super::super) fn global(error: &GlobalError) -> Retry {
+pub(crate) fn global(error: &GlobalError) -> Retry {
     match error {
         GlobalError::Authority(error) => registration(error),
         GlobalError::VoidVariable => Retry::Refuse,

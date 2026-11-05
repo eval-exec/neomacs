@@ -29,3 +29,65 @@ pub fn begin_restore_retry_for_test<'owner, 'era>(
 ) -> Result<ResumeGcImage<'owner, 'era>, RendezvousError> {
     owner.begin_restore_retry(native)
 }
+
+/// Peer-signed 18:40Z shape (a): typed scoped seam over the owner-private
+/// admission word. Exactly the two states the probe stores.
+pub enum AdmissionProbeState {
+    InSlice(u32),
+    Out,
+}
+
+impl AdmissionProbeState {
+    fn word(self) -> u64 {
+        match self {
+            Self::InSlice(epoch) => super::admission::AdmissionWord::in_slice(epoch as u64),
+            Self::Out => super::admission::AdmissionWord::OUT,
+        }
+    }
+}
+
+/// Restore-on-drop guard for [`MutatorPermit::hold_admission_for_test`]:
+/// stores the PRIOR (quiescent) word back, so the deliberately inconsistent
+/// state cannot outlive the tested transition.
+#[must_use = "the guard restores the permit's prior admission word on drop"]
+pub struct AdmissionProbeGuard<'a> {
+    entry: &'a std::sync::Arc<super::MutatorEntry>,
+    prior: u64,
+}
+
+impl Drop for AdmissionProbeGuard<'_> {
+    fn drop(&mut self) {
+        self.entry
+            .admission
+            .store(self.prior, std::sync::atomic::Ordering::Release);
+    }
+}
+
+impl super::MutatorPermit<'_> {
+    /// CAS-install a probe state from the current quiescent OUT word and
+    /// return the restore-on-drop guard.
+    ///
+    /// # Safety
+    /// No collector or catalog transition other than the one under test may
+    /// observe this permit while the guard lives.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) unsafe fn hold_admission_for_test(
+        &self,
+        state: AdmissionProbeState,
+    ) -> AdmissionProbeGuard<'_> {
+        let prior = self
+            .entry
+            .admission
+            .compare_exchange(
+                super::admission::AdmissionWord::OUT,
+                state.word(),
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
+            )
+            .expect("admission probe requires a quiescent OUT word");
+        AdmissionProbeGuard {
+            entry: &self.entry,
+            prior,
+        }
+    }
+}
