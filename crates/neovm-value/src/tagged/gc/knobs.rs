@@ -133,7 +133,7 @@ pub(crate) fn vec_scan_mode() -> VecScanMode {
 /// Frozen process policy for U3.5. Capture once in the heap and mark job,
 /// rather than reading the environment on an edge or a mutation.
 pub(crate) fn concurrent_claims_on() -> bool {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if let Some(on) = CONCURRENT_CLAIMS_OVERRIDE.with(|c| c.get()) {
         return on;
     }
