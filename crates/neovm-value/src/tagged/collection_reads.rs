@@ -832,7 +832,10 @@ pub(crate) use store_state::{
 };
 
 mod compiled_journal;
+#[cfg(not(feature = "test-support"))]
 mod observed_envelope;
+#[cfg(feature = "test-support")]
+pub mod observed_envelope;
 #[cfg(test)]
 pub(crate) use compiled_journal::force_compiled_journal_for_test;
 #[doc(hidden)]

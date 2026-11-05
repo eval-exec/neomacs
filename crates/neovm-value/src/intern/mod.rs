@@ -12,7 +12,10 @@
 
 pub(crate) mod parallel;
 pub(crate) mod shared;
+#[cfg(not(feature = "test-support"))]
 mod well_known;
+#[cfg(feature = "test-support")]
+pub mod well_known;
 pub use well_known::{FIRST_ID as FIRST_WELL_KNOWN_SYM_ID, NAMES as WELL_KNOWN_NAMES, WellKnown};
 
 use hashbrown::HashMap;

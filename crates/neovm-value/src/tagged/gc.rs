@@ -2689,7 +2689,10 @@ mod record_arena_tests;
 mod allocation;
 
 mod collector_tables;
+#[cfg(not(feature = "test-support"))]
 mod mark_sweep;
+#[cfg(feature = "test-support")]
+pub mod mark_sweep;
 
 #[cfg(feature = "gc-memory-telemetry")]
 mod memory_inventory;
@@ -2779,7 +2782,10 @@ mod test_heap;
 #[doc(hidden)]
 pub use test_heap::{SyntheticConcurrentBarrier, TestHeap};
 
+#[cfg(not(feature = "test-support"))]
 mod arena_pages;
+#[cfg(feature = "test-support")]
+pub mod arena_pages;
 #[doc(hidden)]
 pub use arena_pages::*;
 

@@ -53,7 +53,10 @@ pub fn hash_test_parity_enabled() -> bool {
     *HASH_TEST_PARITY
 }
 
+#[cfg(not(feature = "test-support"))]
 mod user_test_guard;
+#[cfg(feature = "test-support")]
+pub mod user_test_guard;
 #[doc(hidden)]
 pub use user_test_guard::gc_threshold_integer_fallback;
 pub use user_test_guard::inhibited_user_test_since_gc;
