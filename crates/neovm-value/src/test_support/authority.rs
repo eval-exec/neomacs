@@ -77,6 +77,16 @@ pub use crate::tagged::gc::mutator_registration::test_fences::{
     reset_catalog_waits_for_test,
 };
 
+/// Public route for the peer-approved MEMQ-TAIL-SHAPES (5) copied catalog-waits
+/// observer. `cons_storage` stays a private module, so without this re-export
+/// the A'-widened item has no cross-crate path. Same item and rows as
+/// `tagged::gc::cons_storage::catalog_waits_for_test` / `CatalogWaitsSnapshot`
+/// (VIS-VALUE rows); this re-export adds no widening.
+#[doc(hidden)]
+pub use crate::tagged::gc::mutator_registration::test_fences::{
+    CatalogWaitsSnapshot, catalog_waits_for_test,
+};
+
 /// Peer-signed MEMQ-TAIL-SHAPES (b): closure-scoped stopped-tables install.
 /// The scope is non-swappable; the authority-word seam is on the scope and is
 /// reachable only inside this closure.
@@ -111,6 +121,62 @@ pub unsafe fn hold_admission_for_test<'a>(
     state: AdmissionProbeState,
 ) -> AdmissionProbeGuard<'a> {
     permit.hold_admission_for_test(state)
+}
+
+/// C1 FENCE for the re-homed lifecycle tests: mint this owner's young worker
+/// loan through the signed delegate. The original method stays `pub(crate)`;
+/// the returned `YoungWorkerLoan` is already the public token type. The test
+/// deliberately forgets the loan to exercise the refusal path.
+pub fn take_young_loan_for_test<'era>(
+    owner: &mut crate::tagged::gc::mutator_registration::Mutator<'era>,
+) -> Result<
+    crate::tagged::gc::mutator_registration::YoungWorkerLoan<'era>,
+    crate::tagged::gc::mutator_registration::RegistrationError,
+> {
+    owner.take_young_loan()
+}
+
+/// Value-FENCE delegates (class C3) for the re-homed lifecycle tests: typed
+/// seeds into the owner's GC run state. The originals stay `pub(crate)
+/// unsafe`; these delegates are their only cross-crate route (no A' on the
+/// originals).
+///
+/// # Safety
+/// The caller is the owner thread of this exclusive run access, no collection
+/// or GC transition runs concurrently, and every seeded value is a same-heap
+/// immediate (or remains reachable from the world roots).
+#[doc(hidden)]
+pub unsafe fn push_root_scratch_for_test(
+    run: &mut crate::tagged::gc::mutator_registration::RunAccess<'_, '_>,
+    value: crate::tagged::value::TaggedValue,
+) {
+    unsafe { run.push_root_scratch_for_test(value) }
+}
+
+/// Sibling of [`push_root_scratch_for_test`]; same class and contract.
+///
+/// # Safety
+/// Same owner-exclusive serial-fixture contract as
+/// [`push_root_scratch_for_test`].
+#[doc(hidden)]
+pub unsafe fn set_promoted_since_major_for_test(
+    run: &mut crate::tagged::gc::mutator_registration::RunAccess<'_, '_>,
+    promoted: usize,
+) {
+    unsafe { run.set_promoted_since_major_for_test(promoted) }
+}
+
+/// Sibling of [`push_root_scratch_for_test`]; same class and contract.
+///
+/// # Safety
+/// Same owner-exclusive serial-fixture contract as
+/// [`push_root_scratch_for_test`].
+#[doc(hidden)]
+pub unsafe fn push_remset_for_test(
+    run: &mut crate::tagged::gc::mutator_registration::RunAccess<'_, '_>,
+    value: crate::tagged::value::TaggedValue,
+) {
+    unsafe { run.push_remset_for_test(value) }
 }
 
 /// Fence delegate for the deterministic host-side root-table contention

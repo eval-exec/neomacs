@@ -74,6 +74,16 @@ impl<'era> MutatorPermit<'era> {
         self.entry.key
     }
 
+    /// Entry handle for the re-homed lifecycle tests (C4 VIS): the same
+    /// `Arc<MutatorEntry>` that `Mutator::entry` already returns publicly, so
+    /// a test can observe a forgotten permit's entry through the copied
+    /// observers. The entry's fields stay private (N1).
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn entry_for_test(&self) -> Arc<MutatorEntry> {
+        Arc::clone(&self.entry)
+    }
+
     #[cold]
     #[inline(never)]
     pub fn activate(
@@ -627,6 +637,51 @@ impl RunAccess<'_, '_> {
     #[doc(hidden)]
     pub fn allocated_count_for_test(&mut self) -> usize {
         self.state().hot.allocated_count
+    }
+
+    /// Value-FENCE hook (class C3): seed one rooted mark word into this
+    /// owner's root scratch. Callers go through
+    /// `neovm_value::test_support::authority::push_root_scratch_for_test`.
+    ///
+    /// # Safety
+    /// The caller is the owner thread of this exclusive run access, no
+    /// collection or GC transition runs concurrently, and every seeded value
+    /// is a same-heap immediate (or remains reachable from the world roots).
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub(crate) unsafe fn push_root_scratch_for_test(
+        &mut self,
+        value: crate::tagged::value::TaggedValue,
+    ) {
+        self.state()
+            .root_scratch
+            .push(crate::tagged::gc::mark_word::MarkWord::of(value));
+    }
+
+    /// Value-FENCE hook (class C3): seed the generation-pacing promoted
+    /// counter. Callers go through
+    /// `neovm_value::test_support::authority::set_promoted_since_major_for_test`.
+    ///
+    /// # Safety
+    /// Same owner-exclusive serial-fixture contract as
+    /// [`Self::push_root_scratch_for_test`].
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub(crate) unsafe fn set_promoted_since_major_for_test(&mut self, promoted: usize) {
+        self.state().hot.pacing.promoted_since_major = promoted;
+    }
+
+    /// Value-FENCE hook (class C3): seed one remembered-set entry. Callers go
+    /// through `neovm_value::test_support::authority::push_remset_for_test`.
+    ///
+    /// # Safety
+    /// Same owner-exclusive serial-fixture contract as
+    /// [`Self::push_root_scratch_for_test`]; the seeded value must be a
+    /// same-heap immediate.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub(crate) unsafe fn push_remset_for_test(&mut self, value: crate::tagged::value::TaggedValue) {
+        self.state().hot.remset.push(value);
     }
 }
 

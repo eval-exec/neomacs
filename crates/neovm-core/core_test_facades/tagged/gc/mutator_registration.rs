@@ -32,3 +32,10 @@ pub(crate) mod era_fixtures;
 #[cfg(test)]
 #[path = "../../../core_tests/tagged/gc/mutator_registration/root_slot_tests.rs"]
 mod root_slot_tests;
+
+/// MEMQ-TAIL-SHAPES (3): the lifecycle refusal tests re-homed out of value.
+/// The value fields stay private; the tests use the copied entry observers and
+/// the three C3 seed fences (`test_support::authority`).
+#[cfg(test)]
+#[path = "../../../core_tests/tagged/gc/mutator_registration/lifecycle_tests.rs"]
+mod lifecycle_tests;

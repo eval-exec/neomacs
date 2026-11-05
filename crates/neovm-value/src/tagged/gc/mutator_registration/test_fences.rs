@@ -30,6 +30,17 @@ pub fn begin_restore_retry_for_test<'owner, 'era>(
     owner.begin_restore_retry(native)
 }
 
+/// Name and public route for the peer-approved MEMQ-TAIL-SHAPES (5) copied
+/// catalog-waits observer. `cons_storage` is a private module, so without this
+/// bridge the A'-widened item has no cross-crate path. Same item and rows as
+/// `tagged::gc::cons_storage::catalog_waits_for_test` / `CatalogWaitsSnapshot`
+/// (VIS-VALUE rows); no widening is added here.
+pub use super::super::cons_storage::CatalogWaitsSnapshot;
+
+pub fn catalog_waits_for_test() -> CatalogWaitsSnapshot {
+    super::super::cons_storage::catalog_waits_for_test()
+}
+
 /// Peer-signed 18:40Z shape (a): typed scoped seam over the owner-private
 /// admission word. Exactly the two states the probe stores.
 pub enum AdmissionProbeState {

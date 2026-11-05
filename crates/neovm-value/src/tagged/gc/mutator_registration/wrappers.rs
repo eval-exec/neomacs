@@ -77,6 +77,18 @@ impl<'heap, K: EraKeeper> ProofEraFinishFailure<'heap, K> {
             registry: self.era.core.registry.is_some(),
         }
     }
+
+    /// Copied fact for the re-homed leaked-summary-guard test (C4 VIS): the
+    /// era registry gate is still held, so `try_lock` would report
+    /// `WouldBlock`. The guard and the registry never cross.
+    #[inline]
+    #[doc(hidden)]
+    pub fn registry_gate_held_for_test(&self) -> bool {
+        matches!(
+            self.era.registry().gate.state.try_lock(),
+            Err(std::sync::TryLockError::WouldBlock)
+        )
+    }
 }
 
 /// Copied retained-authority facts of a finish refusal (peer-signed 18:40Z

@@ -268,6 +268,43 @@ impl MutatorEntry {
     pub fn key(&self) -> MutatorKey {
         self.key
     }
+
+    /// Copied cancellation fact for the re-homed lifecycle tests (C4 VIS).
+    /// The entry field stays private (N1).
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn cancelled_start_for_test(&self) -> bool {
+        self.cancelled_start.load(Ordering::Acquire)
+    }
+
+    /// Copied entry phase for the re-homed lifecycle tests (C4 VIS). Takes the
+    /// entry mutex once; the state payload never leaves.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn phase_for_test(&self) -> EntryPhase {
+        self.state.lock().unwrap().phase
+    }
+
+    /// Copied published-image root census for the re-homed lifecycle tests
+    /// (C4 VIS): `None` when no image is published, otherwise the image's
+    /// root-word count.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn image_root_words_for_test(&self) -> Option<usize> {
+        self.state
+            .lock()
+            .unwrap()
+            .image
+            .as_ref()
+            .map(|image| image.root_words_for_test())
+    }
+
+    /// Copied worker-loan flag for the re-homed lifecycle tests (C4 VIS).
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn worker_loan_for_test(&self) -> bool {
+        self.state.lock().unwrap().worker_loan
+    }
 }
 
 struct RegistryState {
@@ -954,8 +991,6 @@ static_assertions::assert_impl_all!(MutatorKey: Send, Sync, Copy);
 mod collection_tests;
 #[cfg(test)]
 mod image_tests;
-#[cfg(test)]
-mod lifecycle_tests;
 #[cfg(test)]
 mod peer_young_collection_tests;
 #[cfg(test)]

@@ -151,6 +151,30 @@ impl<'era> StoppedSummaries<'era> {
         Ok(total)
     }
 
+    /// Copied observer for the re-homed leaked-view test (C4 VIS): walk the
+    /// view's work families and report the visit count through a plain
+    /// `FnMut()`. The `MutatorKey` and `PublishedGcWork` never cross.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn visit_work_count_for_test(
+        &self,
+        mut visit: impl FnMut(),
+    ) -> Result<(), RegistrationError> {
+        self.visit_work(|_, _| visit())
+    }
+
+    /// Copied observer for the re-homed leaked-view test (C4 VIS): the
+    /// young-log lookup outcome for an entry, with the log and the private
+    /// young id kept inside value.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn with_young_entry_for_test(
+        &mut self,
+        entry: &MutatorEntry,
+    ) -> Result<(), RegistrationError> {
+        self.with_young(entry.key, entry.young, |_| ())
+    }
+
     /// Borrow every work family from the same census without consuming a
     /// snapshot twice or silently skipping a retained retiring registration.
     pub(in crate::tagged::gc) fn visit_work(
