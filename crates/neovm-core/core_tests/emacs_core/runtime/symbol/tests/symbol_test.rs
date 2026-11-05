@@ -1,7 +1,7 @@
 use super::super::intern::intern;
 use super::*;
-use crate::emacs_core::eval::subr_abi::SubrValueExt;
 use crate::emacs_core::intern::resolve_sym;
+use neovm_eval::emacs_core::eval::SubrValueExt;
 
 #[test]
 fn set_internal_bind_codes_match_gnu_set_internal_bind() {

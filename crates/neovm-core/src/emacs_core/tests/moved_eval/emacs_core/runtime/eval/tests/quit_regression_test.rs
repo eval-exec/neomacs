@@ -261,7 +261,7 @@ fn single_keyboard_quit_does_not_leave_pending_quit_request() {
     ev.edit.buffers.set_current(scratch);
     let frame = ev.frame_manager_mut().create_frame("F1", 80, 24, scratch);
     assert!(
-        ev.frame_manager().select_frame(frame),
+        ev.frame_manager_mut().select_frame(frame),
         "need a selected frame"
     );
 
@@ -275,7 +275,7 @@ fn single_keyboard_quit_does_not_leave_pending_quit_request() {
 
     // Exactly what the input bridge does for one C-g: queue the cooked
     // C-g event (fixnum 7) AND raise the cross-thread quit-request atomic.
-    ev.command_loop()
+    ev.command_loop_mut()
         .keyboard
         .kboard
         .unread_events
@@ -807,7 +807,7 @@ fn discard_local_binding_does_not_allocate_ambient_buffer_wrapper() {
         .expect("live buffer");
     let symbol = intern("local-drop-existing-cell");
     owner
-        .obarray()
+        .obarray_mut()
         .set_symbol_value_id(symbol, Value::fixnum(10));
     crate::emacs_core::custom::builtin_make_local_variable(
         &mut owner,

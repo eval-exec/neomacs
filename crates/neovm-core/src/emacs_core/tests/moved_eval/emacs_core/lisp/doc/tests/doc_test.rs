@@ -1930,7 +1930,7 @@ fn snarf_documentation_overwrites_a_docstring_already_on_the_plist() {
     crate::test_utils::init_test_tracing();
     let mut evaluator = crate::test_utils::new_context();
     evaluator
-        .obarray()
+        .obarray_mut()
         .put_property(
             "indent-tabs-mode",
             "variable-documentation",

@@ -10,7 +10,10 @@ fn table_ids_names_and_registry_identities_agree() {
     let _ctx = crate::test_utils::new_context();
     for (index, variant) in WellKnown::VARIANTS.iter().copied().enumerate() {
         assert_eq!(variant.name(), WELL_KNOWN_NAMES[index]);
-        assert_eq!(variant.id().0, FIRST_WELL_KNOWN_SYM_ID + index as u32);
+        assert_eq!(
+            variant.id().to_raw(),
+            FIRST_WELL_KNOWN_SYM_ID + index as u32
+        );
         assert_eq!(resolve_sym(variant.id()), variant.name());
         assert!(is_canonical_id(variant.id()));
         assert_eq!(lookup_interned(variant.name()), Some(variant.id()));

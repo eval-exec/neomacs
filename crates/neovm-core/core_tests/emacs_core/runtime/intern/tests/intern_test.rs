@@ -21,7 +21,7 @@ fn atom_only_symbol_name_materializes_one_lisp_object_per_heap() {
         "GNU Fsymbol_name returns the symbol's one stored name object"
     );
 
-    crate::emacs_core::builtins::collections::builtin_aset(vec![
+    neovm_eval::test_support::builtin_aset_args_bare(&[
         first,
         crate::value::Value::fixnum(0),
         crate::value::Value::fixnum('X' as i64),

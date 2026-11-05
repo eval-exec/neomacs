@@ -1,5 +1,6 @@
 //! The grouped cells remain canonical through construction, writes and cold
 //! replacement. Borrow-model controls live in tmp/codex/p0s1/model.
+use super::super::intern::intern;
 use super::*;
 use std::cell::UnsafeCell;
 use std::ptr::NonNull;

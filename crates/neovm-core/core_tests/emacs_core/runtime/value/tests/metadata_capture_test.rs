@@ -1,11 +1,11 @@
 use crate::emacs_core::builtins::symbols::{symbol_id, symbol_id_checked};
 use crate::emacs_core::builtins::types::record_type_of;
-use crate::emacs_core::eval::subr_abi::SubrValueExt;
 use crate::emacs_core::intern::intern;
 use crate::emacs_core::value::{Value, eq_value_swp};
 use crate::tagged::collection_reads::capture;
 use crate::tagged::gc::with_tagged_heap;
 use crate::tagged::mutate::LispCollectionRevision;
+use neovm_eval::emacs_core::eval::SubrValueExt;
 
 fn check_identity_dependency(source: Value, read: impl FnOnce()) {
     let unrelated = Value::cons(Value::NIL, Value::NIL);
