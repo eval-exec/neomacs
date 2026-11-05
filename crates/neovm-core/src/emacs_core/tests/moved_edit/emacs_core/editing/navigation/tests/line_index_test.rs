@@ -6,7 +6,7 @@
 
 use super::*;
 
-use neovm_value::prefix::tests::Rng;
+use super::line_index_rng::Rng;
 
 use neovm_edit::buffer::text_index::{
     TextLineIndexConfig, TextLineIndexMode, with_text_line_index_config,

@@ -1171,6 +1171,9 @@ fn test_ob() -> neovm_value::symbol::Obarray {
     neovm_value::symbol::Obarray::new()
 }
 
+#[path = "line_index_rng.rs"]
+pub(crate) mod line_index_rng;
+
 #[path = "line_index_test.rs"]
 mod line_index;
 
