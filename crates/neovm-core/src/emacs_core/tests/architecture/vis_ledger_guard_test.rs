@@ -4024,9 +4024,17 @@ fn auth_collect_modules(
             let syn::Item::Mod(module) = item else {
                 continue;
             };
+            // Test-support build view: skip arms that are not compiled with
+            // test = false / feature = "test-support", and count a
+            // `visibility::make(pub)` widening as a public module.
+            if auth_cfg_inactive(&module.attrs) {
+                continue;
+            }
             let mut child = segments.to_vec();
             child.push(module.ident.to_string());
-            let child_public = public && matches!(module.vis, syn::Visibility::Public(_));
+            let widened = auth_test_support_widened(&module.attrs);
+            let child_public =
+                public && (matches!(module.vis, syn::Visibility::Public(_)) || widened);
             if let Some((_, inner)) = &module.content {
                 walk(inner, file, &child, child_public, map)?;
             } else {
@@ -4092,6 +4100,39 @@ fn auth_test_gated(attrs: &[syn::Attribute]) -> bool {
                         )
                     })
                     .unwrap_or(false))
+    })
+}
+
+/// True when the declaration is not compiled in the test-support build
+/// (test = false, `feature = "test-support"` = true). Peer 15:4xZ: the
+/// AUTHORITY-PATHS reachability walk must use the TEST-SUPPORT build, so that
+/// a test-support mod-row route is visible as a public path.
+fn auth_cfg_inactive(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|attr| {
+        attr.path().is_ident("cfg")
+            && attr
+                .parse_args::<syn::Meta>()
+                .map(|meta| cfg_truth_test_support(&meta) == CfgTruth::False)
+                .unwrap_or(false)
+    })
+}
+
+/// True when `#[cfg_attr(feature = "test-support", visibility::make(pub))]`
+/// widens the declaration in the test-support build (a VIS mod-row widening).
+fn auth_test_support_widened(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|attr| {
+        attr.path().is_ident("cfg_attr")
+            && attr
+                .meta
+                .require_list()
+                .map(|list| {
+                    let text = list.tokens.to_string();
+                    text.contains("test-support")
+                        && text.contains("visibility")
+                        && text.contains("make")
+                        && text.contains("pub")
+                })
+                .unwrap_or(false)
     })
 }
 
@@ -4491,11 +4532,12 @@ fn auth_public_use_violation(
                 fences: &BTreeMap<String, (Vec<String>, PathBuf)>,
                 canonical: &Path,
                 relative: &str,
+                file_reachable: bool,
             ) -> Result<(), String> {
                 for item in items {
                     match item {
                         syn::Item::Mod(module) => {
-                            if auth_test_gated(&module.attrs) {
+                            if auth_cfg_inactive(&module.attrs) {
                                 continue;
                             }
                             if let Some((_, inner)) = &module.content {
@@ -4508,12 +4550,13 @@ fn auth_public_use_violation(
                                     fences,
                                     canonical,
                                     relative,
+                                    file_reachable,
                                 )?;
                             }
                         }
                         syn::Item::Use(item) => {
                             if !matches!(item.vis, syn::Visibility::Public(_))
-                                || auth_test_gated(&item.attrs)
+                                || auth_cfg_inactive(&item.attrs)
                             {
                                 continue;
                             }
@@ -4582,8 +4625,16 @@ fn auth_public_use_violation(
                                         })
                                     });
                                 if exposes_module || exposes_item {
+                                    // Peer 15:4xZ: only a route that is
+                                    // actually reachable in the test-support
+                                    // build is a second path. A re-export in a
+                                    // module that stays private in that build
+                                    // is not a public route.
+                                    if !file_reachable {
+                                        continue;
+                                    }
                                     return Err(format!(
-                                        "AUTHORITY_PATHS {relative}: public use `{}` adds a route to the {fence_name} fence beyond its signed fence_path",
+                                        "B3_AUTHORITY second route: AUTHORITY_PATHS {relative}: public use `{}` adds a route to the {fence_name} fence beyond its signed fence_path",
                                         std::iter::once(first.clone())
                                             .chain(rest.iter().cloned())
                                             .chain(if glob { Some("*".to_owned()) } else { None })
@@ -4603,6 +4654,13 @@ fn auth_public_use_violation(
                 .map_err(|_| format!("{} is outside the workspace", path.display()))?
                 .to_string_lossy()
                 .replace('\\', "/");
+            // Reachability in the TEST-SUPPORT build. When the walk has no
+            // entry for the file (crate without AUTHORITY rows), stay
+            // fail-closed and treat the route as reachable.
+            let file_reachable = map
+                .and_then(|map| map.get(&canonical))
+                .map(|(_, public)| *public)
+                .unwrap_or(true);
             scan(
                 &ast.items,
                 rows,
@@ -4612,6 +4670,7 @@ fn auth_public_use_violation(
                 &fences,
                 &canonical,
                 &relative,
+                file_reachable,
             )?;
         }
     }
@@ -4849,6 +4908,60 @@ fn authority_public_paths_mutations() {
     )
     .expect("lib");
     std::fs::write(value_src.join("original.rs"), "pub(crate) fn mark() {}\n").expect("original");
+    assert!(authority_public_paths_violation(dir.path(), &rows).is_ok());
+}
+
+/// Peer 15:4xZ pre-P2 condition: a test-support mod-row route must not become
+/// a second public path to an AUTHORITY (fence-only) item. AUTHORITY-PATHS
+/// computes reachability in the test-support build (test = false, feature
+/// test-support = true), so a `visibility::make(pub)` widened module's
+/// re-export of the fence item is a second route and goes red with
+/// B3_AUTHORITY; the same re-export in a module that stays private in that
+/// build is not a public route.
+#[test]
+fn authority_mod_row_route_is_a_second_path() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let value_src = dir.path().join("crates/neovm-value/src");
+    std::fs::create_dir_all(value_src.join("test_support")).expect("value src");
+    std::fs::write(
+        value_src.join("lib.rs"),
+        "pub mod test_support;\npub(crate) mod original;\npub(crate) mod widened;\n",
+    )
+    .expect("lib");
+    std::fs::write(value_src.join("test_support.rs"), "pub mod authority;\n").expect("support");
+    std::fs::write(
+        value_src.join("test_support/authority.rs"),
+        "pub fn mark() { crate::original::mark(); }\n",
+    )
+    .expect("fence");
+    std::fs::write(value_src.join("original.rs"), "pub(crate) fn mark() {}\n").expect("original");
+    let widened = value_src.join("widened.rs");
+    std::fs::write(&widened, "pub use crate::test_support::authority::mark;\n").expect("widened");
+    let rows = vec![AuthRow {
+        crate_name: "neovm-value".to_owned(),
+        item: "mark".to_owned(),
+        defining_file: "crates/neovm-value/src/original.rs".to_owned(),
+        fence_path: "neovm_value::test_support::authority::mark".to_owned(),
+    }];
+    // The module is private in every build: the re-export is not a public
+    // route, so the fence keeps its single signed path.
+    assert!(authority_public_paths_violation(dir.path(), &rows).is_ok());
+    // A VIS mod-row widening makes the module public in the TEST-SUPPORT
+    // build; the same re-export is then a second public path to the
+    // fence-only item and must go red.
+    std::fs::write(
+        value_src.join("lib.rs"),
+        "#[cfg_attr(feature = \"test-support\", visibility::make(pub))]\n\
+         pub(crate) mod widened;\npub mod test_support;\npub(crate) mod original;\n",
+    )
+    .expect("lib");
+    let error = authority_public_paths_violation(dir.path(), &rows).expect_err("second route");
+    assert!(
+        error.contains("B3_AUTHORITY") && error.contains("second route"),
+        "{error}"
+    );
+    // Removing the route closes it again even with the widening in place.
+    std::fs::write(&widened, "").expect("widened");
     assert!(authority_public_paths_violation(dir.path(), &rows).is_ok());
 }
 
