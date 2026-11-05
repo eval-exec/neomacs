@@ -175,6 +175,7 @@ impl CanonSnap {
     }
 }
 
+#[cfg(not(any(test, feature = "test-support")))]
 /// The canonical run of one environment. See the module documentation.
 /// Owned by the current mutator-confined `BufferTextStorage`. Cache borrows
 /// serialize access within that owner; future shared storage/table/descriptor
@@ -184,6 +185,20 @@ pub(super) struct CanonicalRun {
     pub(super) env: EnvKey,
     /// Ascending, strictly after BEGV.
     pub(super) snaps: Vec<CanonSnap>,
+    /// The last state taken on the chunk grid (BEGV when none).
+    grid_frontier: usize,
+    pub(super) descriptors: Vec<Descriptor>,
+}
+#[cfg(any(test, feature = "test-support"))]
+/// The canonical run of one environment. See the module documentation.
+/// Owned by the current mutator-confined `BufferTextStorage`. Cache borrows
+/// serialize access within that owner; future shared storage/table/descriptor
+/// writers require outer synchronization as described in the module docs.
+#[derive(Debug)]
+pub struct CanonicalRun {
+    pub(super) env: EnvKey,
+    /// Ascending, strictly after BEGV.
+    pub snaps: Vec<CanonSnap>,
     /// The last state taken on the chunk grid (BEGV when none).
     grid_frontier: usize,
     pub(super) descriptors: Vec<Descriptor>,

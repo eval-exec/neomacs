@@ -728,10 +728,27 @@ impl Descriptor {
     }
 }
 
+#[cfg(not(any(test, feature = "test-support")))]
 /// Recorded scans that share one key.
 #[derive(Debug)]
 struct ParseRun {
     key: RunKey,
+    /// Loop-top states strictly after FROM, ascending by position (and so by
+    /// byte).
+    snaps: Vec<LoopState>,
+    /// The position of the last state recorded on the chunk grid (FROM when
+    /// none): the next grid state is a chunk after it.
+    grid_frontier: usize,
+    /// Oldest first.
+    results: Vec<ExactResult>,
+    descriptors: Vec<Descriptor>,
+    last_used: u64,
+}
+#[cfg(any(test, feature = "test-support"))]
+/// Recorded scans that share one key.
+#[derive(Debug)]
+pub struct ParseRun {
+    pub key: RunKey,
     /// Loop-top states strictly after FROM, ascending by position (and so by
     /// byte).
     snaps: Vec<LoopState>,
