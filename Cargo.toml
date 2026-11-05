@@ -23,6 +23,7 @@ members = [
     "crates/neomacs-video-model",
     "crates/neomacs-webview",
     "crates/neovm-core",
+    "crates/neovm-system",
     "crates/neovm-display",
     "crates/neovm-eval",
     "crates/neovm-text",

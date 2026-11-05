@@ -11,6 +11,7 @@ description = "Core runtime structures for NeoVM"
 autotests = false
 
 [dependencies]
+neovm-system = { path = "../neovm-system" }
 neovm-display = { path = "../neovm-display" }
 neovm-eval = { path = "../neovm-eval", default-features = false }
 neovm-text = { path = "../neovm-text" }
@@ -163,6 +164,7 @@ jit = [
     "dep:object",
     "dep:cranelift-native",
     "neovm-value/jit",
+    "neovm-system/jit",
     "neovm-display/jit",
     "neovm-eval/jit",
     "neovm-text/jit",

@@ -1,0 +1,7638 @@
+//! File I/O primitives for the Elisp VM.
+//!
+//! Provides path manipulation, file predicates, read/write operations,
+//! directory operations, and file attribute queries.
+
+use crate::emacs_core::timefns::{TimestampError, UnixTimestamp};
+use neovm_eval::emacs_core::eval::VariableView;
+use neovm_value::error::LispCondition;
+use neovm_value::error::{expect_args, expect_fixnum, expect_max_args, expect_min_args};
+use std::collections::{HashMap, VecDeque};
+#[cfg(unix)]
+use std::ffi::CString;
+use std::fs;
+use std::io::{ErrorKind, Seek, SeekFrom, Write};
+#[cfg(unix)]
+use std::os::unix::ffi::OsStrExt;
+use std::path::{Path, PathBuf};
+use std::sync::Once;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use neovm_edit::buffer::{
+    BufferId, CharPos0, EmacsByteLen, EmacsBytePos, EmacsByteRange, LispCharPos1,
+    TextPositionAnchor, VisitedFileModtime, text_props::TextPropertyTable,
+};
+use neovm_value::heap_types::LispString;
+
+use neovm_eval::emacs_core::eval::Context;
+use neovm_value::error::{EvalResult, Flow, signal};
+use neovm_value::intern::WellKnown;
+use neovm_value::intern::{intern, resolve_sym};
+use neovm_value::value::{
+    OrderedRuntimeBindingMap, Value, ValueKind, VecLikeType, eq_value, list_to_vec,
+};
+
+// The pure file-name expansion and file-coding helpers moved to eval data
+// (stage-4 K2 oracleb batch 4); the names the remaining system callers use
+// resolve through these re-exports.
+pub use neovm_eval::emacs_core::eval::data::file_coding::{
+    WriteCodingFallback, coding_system_value_to_name, decode_file_name_lisp,
+    resolve_write_coding_system_symbol,
+};
+pub(crate) use neovm_eval::emacs_core::eval::data::file_name_expand::{
+    current_user_home_bytes, expand_file_name_with_home, expand_user_home_prefix_bytes,
+    home_env_bytes,
+};
+pub use neovm_eval::emacs_core::eval::data::file_name_expand::{
+    expand_file_name, file_name_absolute_p,
+};
+
+#[cfg(unix)]
+pub(crate) mod directory_stream;
+
+// ===========================================================================
+// Path operations (pure, no evaluator needed)
+// ===========================================================================
+
+/// Byte-native `expand-file-name` core.
+///
+/// Operates on Emacs internal-encoding bytes so raw eight-bit file-name bytes
+/// survive byte-exactly (GNU keeps file names as Lisp strings; on Unix
+/// ENCODE_FILE / DECODE_FILE are byte-identity).  Path manipulation is
+/// ASCII-structural (`/`, `~`, `.`); non-ASCII byte8 multibyte sequences are
+/// non-special and pass through untouched.  This mirrors
+/// `expand_file_name_with_home_inner` but never round-trips through a
+/// storage-`&str`.
+fn expand_file_name_bytes_with_home(
+    name: &[u8],
+    default_dir: Option<&[u8]>,
+    home_override: Option<&[u8]>,
+    expand_default_dir: bool,
+) -> Vec<u8> {
+    #[cfg(windows)]
+    let name_normalized: Vec<u8> = name
+        .iter()
+        .map(|&b| if b == b'\\' { b'/' } else { b })
+        .collect();
+    #[cfg(windows)]
+    let name: &[u8] = &name_normalized;
+    #[cfg(windows)]
+    let default_dir_normalized: Option<Vec<u8>> = default_dir.map(|dir| {
+        dir.iter()
+            .map(|&b| if b == b'\\' { b'/' } else { b })
+            .collect()
+    });
+    #[cfg(windows)]
+    let default_dir: Option<&[u8]> = default_dir_normalized.as_deref();
+
+    // Handle ~ expansion
+    let expanded: Vec<u8> = if name.starts_with(b"~/") {
+        let mut out = Vec::new();
+        if let Some(home) = home_override {
+            out.extend_from_slice(home);
+        } else if let Some(home) = home_env_bytes() {
+            out.extend_from_slice(&home);
+        } else {
+            out.push(b'~');
+        }
+        out.extend_from_slice(&name[1..]);
+        out
+    } else if name == b"~" {
+        if let Some(home) = home_override {
+            home.to_vec()
+        } else if let Some(home) = home_env_bytes() {
+            home
+        } else {
+            name.to_vec()
+        }
+    } else if let Some((home, rest)) = expand_user_home_prefix_bytes(name) {
+        let mut out = home;
+        out.extend_from_slice(rest);
+        out
+    } else {
+        name.to_vec()
+    };
+
+    let preserve_trailing_slash = expanded.last() == Some(&b'/');
+
+    // If already absolute, just clean it up.
+    if file_name_absolute_bytes_p(&expanded) {
+        let mut cleaned = clean_path_bytes(&expanded);
+        if preserve_trailing_slash && cleaned.last() != Some(&b'/') {
+            cleaned.push(b'/');
+        }
+        return cleaned;
+    }
+
+    // Resolve relative to default_dir or cwd
+    let base: Vec<u8> = if let Some(dir) = default_dir {
+        if expand_default_dir {
+            expand_file_name_bytes_with_home(dir, None, home_override, true)
+        } else {
+            dir.to_vec()
+        }
+    } else {
+        current_dir_bytes()
+    };
+
+    if expanded.is_empty() {
+        let mut cleaned = clean_path_bytes(&base);
+        trim_trailing_slashes_except_roots_bytes(&mut cleaned);
+        return cleaned;
+    }
+
+    let joined = join_file_name_bytes(&base, &expanded);
+    let mut cleaned = clean_path_bytes(&joined);
+    if preserve_trailing_slash && cleaned.last() != Some(&b'/') {
+        cleaned.push(b'/');
+    }
+    cleaned
+}
+
+/// Raw bytes of the current working directory, byte-exact on Unix.
+fn current_dir_bytes() -> Vec<u8> {
+    match std::env::current_dir() {
+        Ok(dir) => {
+            #[cfg(unix)]
+            {
+                dir.as_os_str().as_bytes().to_vec()
+            }
+            #[cfg(not(unix))]
+            {
+                dir.to_string_lossy().into_owned().into_bytes()
+            }
+        }
+        Err(_) => b"/".to_vec(),
+    }
+}
+
+/// Byte-native twin of `join_file_name`.
+fn join_file_name_bytes(base: &[u8], name: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(base.len() + 1 + name.len());
+    out.extend_from_slice(base);
+    if base.last() != Some(&b'/') {
+        out.push(b'/');
+    }
+    out.extend_from_slice(name);
+    out
+}
+
+/// Byte-native twin of `trim_trailing_slashes_except_roots`.
+fn trim_trailing_slashes_except_roots_bytes(path: &mut Vec<u8>) {
+    while path.len() > 1
+        && path.last() == Some(&b'/')
+        && !(path.len() == 2 && path.starts_with(b"//"))
+    {
+        path.pop();
+    }
+}
+
+/// Byte-native twin of `clean_path`.  Resolves `.`/`..` as a spelling-preserving
+/// byte pass (no filesystem / symlink resolution), preserving the leading `//`
+/// root marker and the POSIX superroot spelling exactly like the `&str` version.
+fn clean_path_bytes(bytes: &[u8]) -> Vec<u8> {
+    // One byte of room for the NUL the result's Lisp string appends.
+    let mut out = Vec::with_capacity(bytes.len() + 1);
+    let mut p = 0;
+
+    while p < bytes.len() {
+        if bytes[p] != b'/' {
+            out.push(bytes[p]);
+            p += 1;
+        } else if p + 1 < bytes.len()
+            && bytes[p + 1] == b'.'
+            && (p + 2 == bytes.len() || bytes[p + 2] == b'/')
+        {
+            if out.is_empty() && p + 2 == bytes.len() {
+                out.push(b'/');
+            }
+            p += 2;
+        } else if p + 2 < bytes.len()
+            && bytes[p + 1] == b'.'
+            && bytes[p + 2] == b'.'
+            && !out.is_empty()
+            && (p + 3 == bytes.len() || bytes[p + 3] == b'/')
+        {
+            let mut previous_sep = out.len();
+            while previous_sep > 0 {
+                previous_sep -= 1;
+                if out[previous_sep] == b'/' {
+                    break;
+                }
+            }
+
+            if previous_sep == 0 && out.first() == Some(&b'/') && p + 3 == bytes.len() {
+                out.truncate(1);
+            } else {
+                out.truncate(previous_sep);
+            }
+            p += 3;
+        } else if p + 1 < bytes.len()
+            && bytes[p + 1] == b'/'
+            && (p != 0 || (p + 2 < bytes.len() && bytes[p + 2] == b'/'))
+        {
+            p += 1;
+        } else {
+            out.push(bytes[p]);
+            p += 1;
+        }
+    }
+
+    out
+}
+
+/// Convert a Lisp file-name string to an OS path at the real filesystem boundary.
+///
+/// The implementation lives in the edit layer, which owns the value-layer
+/// string type this conversion binds; the system layer re-exports it.
+pub use neovm_edit::emacs_core::file_name::lisp_file_name_to_path_buf;
+
+use neovm_edit::emacs_core::edit_host::EditHost;
+use neovm_text::emacs_core::text_host::TextHost;
+pub use neovm_value::system_vocab::file_names::substitute_in_file_name;
+use neovm_value::system_vocab::file_names::{
+    embedded_absfilename_start, trim_embedded_absfilename_bytes,
+};
+pub use neovm_value::system_vocab::file_names::{
+    file_name_absolute_bytes_p, host_path_to_lisp_file_name_string, path_to_lisp_file_name,
+    substitute_in_file_name_lisp,
+};
+
+fn canonicalize_with_missing_suffix(path: &Path) -> PathBuf {
+    if let Ok(canon) = fs::canonicalize(path) {
+        return canon;
+    }
+
+    let mut prefix = path.to_path_buf();
+    let mut suffix = VecDeque::new();
+    loop {
+        if let Ok(canon_prefix) = fs::canonicalize(&prefix) {
+            let mut resolved = canon_prefix;
+            for part in suffix {
+                resolved.push(part);
+            }
+            return resolved;
+        }
+
+        let Some(name) = prefix.file_name().map(|s| s.to_os_string()) else {
+            break;
+        };
+        suffix.push_front(name);
+        if !prefix.pop() {
+            break;
+        }
+    }
+
+    path.to_path_buf()
+}
+
+/// Resolve FILENAME to a true name, preserving trailing slash marker semantics.
+pub fn file_truename(filename: &str, default_dir: Option<&str>) -> String {
+    let expanded = expand_file_name(filename, default_dir);
+    let preserve_trailing_slash = expanded.ends_with('/');
+    let mut resolved = canonicalize_with_missing_suffix(Path::new(&expanded))
+        .to_string_lossy()
+        .into_owned();
+
+    if preserve_trailing_slash && resolved != "/" && !resolved.ends_with('/') {
+        resolved.push('/');
+    }
+
+    resolved
+}
+
+#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+fn file_truename_lisp_inner(
+    filename: &neovm_value::heap_types::LispString,
+    default_dir: &neovm_value::heap_types::LispString,
+    remaining_links: &mut i64,
+    prev_dirs: &mut HashMap<Vec<u8>, neovm_value::heap_types::LispString>,
+) -> Result<neovm_value::heap_types::LispString, Flow> {
+    let filename = lisp_file_name_normalize_directory_separators(filename);
+    let default_dir = lisp_file_name_normalize_directory_separators(default_dir);
+    let mut filename = if lisp_file_name_absolute_system_p(&filename) {
+        filename
+    } else {
+        expand_file_name_lisp(&filename, Some(&default_dir))
+    };
+
+    loop {
+        *remaining_links -= 1;
+        if *remaining_links < 0 {
+            return Err(signal(
+                "error",
+                vec![Value::string(format!(
+                    "Apparent cycle of symbolic links for {}",
+                    neovm_value::emacs_char::to_utf8_lossy(filename.as_bytes())
+                ))],
+            ));
+        }
+
+        let mut dir = lisp_file_name_directory(&filename).unwrap_or_else(|| default_dir.clone());
+        let dirfile = lisp_directory_file_name(&dir);
+        if !lisp_string_runtime_eq(&dir, &dirfile) {
+            let dir_key = dir.as_bytes().to_vec();
+            if let Some(cached) = prev_dirs.get(&dir_key).cloned() {
+                dir = cached;
+            } else {
+                let new = lisp_file_name_as_directory(&file_truename_lisp_inner(
+                    &dirfile,
+                    &default_dir,
+                    remaining_links,
+                    prev_dirs,
+                )?);
+                prev_dirs.insert(dir_key, new.clone());
+                dir = new;
+            }
+        }
+
+        let filename_no_dir = lisp_file_name_nondirectory(&filename);
+        if lisp_file_name_is_ascii_text(&filename_no_dir, b"..") {
+            let parent = lisp_directory_file_name(&dir);
+            return Ok(match lisp_file_name_directory(&parent) {
+                Some(parent_dir) => lisp_directory_file_name(&parent_dir),
+                None => parent,
+            });
+        }
+        if lisp_file_name_is_ascii_text(&filename_no_dir, b".") {
+            return Ok(lisp_directory_file_name(&dir));
+        }
+
+        filename = concat_file_name_lisp(&dir, &filename_no_dir);
+        match file_symlink_target_lisp(&filename) {
+            Some(target) => {
+                filename = lisp_files_splice_dirname_file(&dir, &target);
+            }
+            None => return Ok(filename),
+        }
+    }
+}
+
+#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+fn file_truename_lisp(
+    filename: &neovm_value::heap_types::LispString,
+    default_dir: Option<&neovm_value::heap_types::LispString>,
+) -> Result<neovm_value::heap_types::LispString, Flow> {
+    let default_dir = default_dir
+        .cloned()
+        .unwrap_or_else(fallback_root_default_directory);
+    let mut remaining_links = 100;
+    let mut prev_dirs = HashMap::new();
+    file_truename_lisp_inner(filename, &default_dir, &mut remaining_links, &mut prev_dirs)
+}
+
+/// Return the directory part of FILENAME, or None if there is no directory part.
+/// Like Emacs `file-name-directory`: includes the trailing slash.
+pub fn file_name_directory(filename: &str) -> Option<String> {
+    // Emacs: if the filename ends with /, the whole thing is the directory part
+    if filename
+        .as_bytes()
+        .last()
+        .is_some_and(|&byte| file_name_directory_separator_byte(byte))
+    {
+        return if filename.is_empty() {
+            None
+        } else {
+            Some(filename.to_string())
+        };
+    }
+    // Find the last /
+    filename
+        .bytes()
+        .rposition(file_name_directory_separator_byte)
+        .map(|pos| filename[..=pos].to_string())
+}
+
+/// Return the non-directory part of FILENAME.
+/// Like Emacs `file-name-nondirectory`.
+pub fn file_name_nondirectory(filename: &str) -> String {
+    // Emacs: if the filename ends with /, return ""
+    if filename
+        .as_bytes()
+        .last()
+        .is_some_and(|&byte| file_name_directory_separator_byte(byte))
+    {
+        return String::new();
+    }
+    match filename
+        .bytes()
+        .rposition(file_name_directory_separator_byte)
+    {
+        Some(pos) => filename[pos + 1..].to_string(),
+        None => filename.to_string(),
+    }
+}
+
+/// Return the extension of FILENAME.
+/// When PERIOD is nil, returns extension without the leading dot, or nil if missing.
+/// Return FILENAME as a directory name (must end in `/`).
+/// Like Emacs `file-name-as-directory`.
+pub fn file_name_as_directory(filename: &str) -> String {
+    if filename.is_empty() {
+        "./".to_string()
+    } else if filename.ends_with('/') {
+        filename.to_string()
+    } else {
+        format!("{filename}/")
+    }
+}
+
+/// Return directory FILENAME in file-name form (without trailing slash).
+/// Like Emacs `directory-file-name`.
+pub fn directory_file_name(filename: &str) -> String {
+    if filename.is_empty() {
+        return String::new();
+    }
+
+    // Emacs keeps exactly two leading slashes as a distinct root marker.
+    if filename.bytes().all(|b| b == b'/') {
+        return if filename.len() == 2 {
+            "//".to_string()
+        } else {
+            "/".to_string()
+        };
+    }
+
+    filename.trim_end_matches('/').to_string()
+}
+
+/// Concatenate file name components with separator insertion between
+/// non-empty components, skipping empty components.
+/// Like Emacs `file-name-concat` after filtering nil/empty args.
+pub fn file_name_concat(parts: &[&str]) -> String {
+    let mut iter = parts.iter().copied().filter(|s| !s.is_empty());
+    let Some(first) = iter.next() else {
+        return String::new();
+    };
+
+    let mut out = first.to_string();
+    for part in iter {
+        if !out.ends_with('/') {
+            out.push('/');
+        }
+        out.push_str(part);
+    }
+    out
+}
+
+/// Return true if NAME is a directory name (ends with a directory separator).
+pub fn directory_name_p(name: &str) -> bool {
+    name.as_bytes()
+        .last()
+        .is_some_and(|&byte| file_name_directory_separator_byte(byte))
+}
+
+fn file_name_directory_separator_byte(byte: u8) -> bool {
+    #[cfg(windows)]
+    {
+        byte == b'/' || byte == b'\\'
+    }
+    #[cfg(not(windows))]
+    {
+        byte == b'/'
+    }
+}
+
+static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
+static DEFAULT_FILE_MODE_MASK: AtomicU32 = AtomicU32::new(0o022);
+static DEFAULT_FILE_MODE_MASK_INIT: Once = Once::new();
+
+fn init_default_file_mode_mask() {
+    DEFAULT_FILE_MODE_MASK_INIT.call_once(|| {
+        #[cfg(unix)]
+        unsafe {
+            let old = libc::umask(0);
+            libc::umask(old);
+            DEFAULT_FILE_MODE_MASK.store(old as u32, Ordering::Relaxed);
+        }
+    });
+}
+
+// ===========================================================================
+// File predicates (pure)
+// ===========================================================================
+
+/// Return true if FILENAME exists (file, directory, symlink, etc.).
+pub fn file_exists_p(filename: &str) -> bool {
+    Path::new(filename).exists()
+}
+
+/// Return true if FILENAME is readable.
+pub fn file_readable_p(filename: &str) -> bool {
+    file_readable_path(Path::new(filename))
+}
+
+/// Return true if FILENAME is writable.
+pub fn file_writable_p(filename: &str) -> bool {
+    file_writable_path(Path::new(filename))
+}
+
+/// Return true if FILENAME is an accessible directory.
+pub fn file_accessible_directory_p(filename: &str) -> bool {
+    let path = Path::new(filename);
+    if !path.is_dir() {
+        return false;
+    }
+
+    #[cfg(unix)]
+    {
+        let Ok(c_path) = CString::new(filename) else {
+            return false;
+        };
+        let mode = libc::R_OK | libc::X_OK;
+        unsafe { libc::access(c_path.as_ptr(), mode) == 0 }
+    }
+
+    #[cfg(not(unix))]
+    {
+        return fs::read_dir(path).is_ok();
+    }
+}
+
+/// Return true if FILENAME is executable by the current process.
+pub fn file_executable_p(filename: &str) -> bool {
+    #[cfg(unix)]
+    {
+        let Ok(c_path) = CString::new(filename) else {
+            return false;
+        };
+        unsafe { libc::access(c_path.as_ptr(), libc::X_OK) == 0 }
+    }
+
+    #[cfg(not(unix))]
+    {
+        return Path::new(filename).exists();
+    }
+}
+
+/// Return true if FILENAME is currently locked by Emacs lockfiles.
+///
+/// NeoVM currently does not implement lockfile probing, so this returns nil.
+pub fn file_locked_p(_filename: &neovm_value::heap_types::LispString) -> bool {
+    false
+}
+
+/// Return filesystem capacity information for PATH.
+///
+/// The tuple layout matches Emacs `file-system-info`:
+/// `(TOTAL-BYTES FREE-BYTES AVAILABLE-BYTES)`.
+fn file_system_info_path(path: &Path) -> std::io::Result<(i64, i64, i64)> {
+    #[cfg(unix)]
+    {
+        fn saturating_i64(v: u128) -> i64 {
+            if v > i64::MAX as u128 {
+                i64::MAX
+            } else {
+                v as i64
+            }
+        }
+
+        let c_path = path_to_cstring(path).map_err(|_| {
+            std::io::Error::new(ErrorKind::InvalidInput, "embedded NUL in file name")
+        })?;
+        let mut stats: libc::statvfs = unsafe { std::mem::zeroed() };
+        if unsafe { libc::statvfs(c_path.as_ptr(), &mut stats as *mut libc::statvfs) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+
+        let block_size = if stats.f_frsize > 0 {
+            stats.f_frsize as u128
+        } else {
+            stats.f_bsize as u128
+        };
+        let total = (stats.f_blocks as u128) * block_size;
+        let free = (stats.f_bfree as u128) * block_size;
+        let available = (stats.f_bavail as u128) * block_size;
+        Ok((
+            saturating_i64(total),
+            saturating_i64(free),
+            saturating_i64(available),
+        ))
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        Ok((0, 0, 0))
+    }
+}
+
+/// Return true if FILENAME is a directory.
+pub fn file_directory_p(filename: &str) -> bool {
+    Path::new(filename).is_dir()
+}
+
+/// Return true if FILENAME is a regular file.
+pub fn file_regular_p(filename: &str) -> bool {
+    Path::new(filename).is_file()
+}
+
+/// Return true if FILENAME is a symbolic link.
+/// Return true if FILENAME is a symbolic link. Used by predicates that
+/// only need a yes/no answer (e.g. internal helpers); the public
+/// `file-symlink-p` builtin returns the link target instead.
+pub fn file_symlink_p(filename: &str) -> bool {
+    match fs::symlink_metadata(filename) {
+        Ok(meta) => meta.file_type().is_symlink(),
+        Err(_) => false,
+    }
+}
+
+/// Return the symbolic link target of FILENAME as a String, mirroring
+/// GNU Emacs `Ffile_symlink_p` (`fileio.c:3160`):
+///
+///   "Return non-nil if file FILENAME is the name of a symbolic link.
+///    The value is the link target, as a string.
+///    Return nil if FILENAME does not exist or is not a symbolic link,
+///    or there was trouble determining whether the file is a symbolic link.
+///    This function does not check whether the link target exists."
+///
+/// The returned target is whatever the OS `readlink` syscall produces;
+/// it may be relative.  We do NOT canonicalize it (GNU's
+/// `emacs_readlinkat` likewise does not).
+pub fn file_symlink_target(filename: &str) -> Option<String> {
+    let meta = fs::symlink_metadata(filename).ok()?;
+    if !meta.file_type().is_symlink() {
+        return None;
+    }
+    fs::read_link(filename)
+        .ok()
+        .map(|p| p.to_string_lossy().into_owned())
+}
+
+pub fn file_symlink_target_lisp(
+    filename: &neovm_value::heap_types::LispString,
+) -> Option<neovm_value::heap_types::LispString> {
+    let path = lisp_file_name_to_path_buf(filename);
+    let meta = fs::symlink_metadata(&path).ok()?;
+    if !meta.file_type().is_symlink() {
+        return None;
+    }
+    fs::read_link(&path)
+        .ok()
+        .map(|target| path_to_lisp_file_name(&target))
+}
+
+/// Return true if FILENAME is on a case-insensitive filesystem.
+pub fn file_name_case_insensitive_p(filename: &str) -> bool {
+    file_name_case_insensitive_path(Path::new(filename))
+}
+
+/// Return true if FILE1 has a newer modification time than FILE2.
+pub fn file_newer_than_file_p(file1: &str, file2: &str) -> bool {
+    let meta1 = match fs::metadata(file1) {
+        Ok(meta) => meta,
+        Err(_) => return false,
+    };
+    let meta2 = match fs::metadata(file2) {
+        Ok(meta) => meta,
+        Err(_) => return true,
+    };
+
+    let mtime1 = match meta1.modified() {
+        Ok(time) => time,
+        Err(_) => return false,
+    };
+    let mtime2 = match meta2.modified() {
+        Ok(time) => time,
+        Err(_) => return true,
+    };
+    mtime1 > mtime2
+}
+
+fn file_newer_than_file_path(file1: &Path, file2: &Path) -> bool {
+    let meta1 = match fs::metadata(file1) {
+        Ok(meta) => meta,
+        Err(_) => return false,
+    };
+    let meta2 = match fs::metadata(file2) {
+        Ok(meta) => meta,
+        Err(_) => return true,
+    };
+
+    let mtime1 = match meta1.modified() {
+        Ok(time) => time,
+        Err(_) => return false,
+    };
+    let mtime2 = match meta2.modified() {
+        Ok(time) => time,
+        Err(_) => return true,
+    };
+    mtime1 > mtime2
+}
+
+// ===========================================================================
+// File I/O operations
+// ===========================================================================
+
+/// Read the contents of FILENAME as a UTF-8 string.
+pub fn read_file_contents(filename: &str) -> std::io::Result<String> {
+    fs::read_to_string(filename)
+}
+
+/// Write CONTENT to FILENAME, optionally appending.
+pub fn write_string_to_file(content: &str, filename: &str, append: bool) -> std::io::Result<()> {
+    let mode = if append {
+        FileWriteMode::Append
+    } else {
+        FileWriteMode::Truncate
+    };
+    let file = write_bytes_to_file_with_mode(
+        content.as_bytes(),
+        Path::new(filename),
+        mode,
+        DEFAULT_FILE_CREATION_MODE,
+    )?;
+    drop(file);
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum FileWriteMode {
+    Truncate,
+    Append,
+    Seek(u64),
+    /// `O_WRONLY | O_CREAT | O_EXCL` — used by `write-region` when MUSTBENEW is
+    /// `excl`.  Fails with `ErrorKind::AlreadyExists` (EEXIST) if the file
+    /// already exists, matching GNU's `open_flags |= O_EXCL`.
+    Excl,
+}
+
+/// The three meanings GNU assigns to `write-region`'s VISIT argument.
+///
+/// GNU always retains a `visit_file` for locking and completion messages, but
+/// only `t` and strings make the current buffer visit that file.  A different
+/// non-nil value requests a quiet, non-visiting write.  Keeping those states
+/// distinct prevents the reporting path from being accidentally coupled to
+/// the buffer-visiting path.
+enum WriteRegionVisit {
+    ReportOnly(LispString),
+    Visit(LispString),
+    Quiet(LispString),
+}
+
+impl WriteRegionVisit {
+    fn from_lisp(eval: &Context, argument: Value, output_file: &LispString) -> Self {
+        if argument.is_t() {
+            Self::Visit(output_file.clone())
+        } else if let Some(visit_file) = argument.as_lisp_string() {
+            Self::Visit(resolve_filename_lisp_for_eval(eval, visit_file))
+        } else if argument.is_nil() {
+            Self::ReportOnly(output_file.clone())
+        } else {
+            Self::Quiet(output_file.clone())
+        }
+    }
+
+    pub fn file_name(&self) -> &LispString {
+        match self {
+            Self::ReportOnly(file) | Self::Visit(file) | Self::Quiet(file) => file,
+        }
+    }
+
+    fn visited_file(&self) -> Option<&LispString> {
+        match self {
+            Self::Visit(file) => Some(file),
+            Self::ReportOnly(_) | Self::Quiet(_) => None,
+        }
+    }
+
+    fn reports_completion(&self) -> bool {
+        match self {
+            Self::ReportOnly(_) | Self::Visit(_) => true,
+            Self::Quiet(_) => false,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum WriteRegionCompletion {
+    Wrote,
+    AddedTo,
+    Updated,
+}
+
+impl WriteRegionCompletion {
+    fn from_append_argument(append: Value) -> Self {
+        if append.is_number() {
+            Self::Updated
+        } else if append.is_truthy() {
+            Self::AddedTo
+        } else {
+            Self::Wrote
+        }
+    }
+
+    fn message_format(self) -> &'static str {
+        match self {
+            Self::Wrote => "Wrote %s",
+            Self::AddedTo => "Added to %s",
+            Self::Updated => "Updated %s",
+        }
+    }
+}
+
+/// The permission bits GNU `write_region` passes to open(2) for an ordinary
+/// write (`mode = auto_saving ? auto_save_mode_bits : 0666`,
+/// src/fileio.c:5645).  The process umask still applies.
+const DEFAULT_FILE_CREATION_MODE: u32 = 0o666;
+
+/// Write raw bytes to a file, returning the open `File` handle so the caller
+/// can optionally `sync_all()` before the handle is dropped.
+///
+/// CREATION_MODE is the permission argument of open(2): the umask masks it,
+/// and it only matters when this write creates the file, since an existing
+/// file keeps its modes.  GNU's MS-DOS/Windows build ignores the computed
+/// bits (`mode = S_IREAD | S_IWRITE`, src/fileio.c:5642-5646), which is the
+/// platform default there.
+fn write_bytes_to_file_with_mode(
+    content: &[u8],
+    filename: &Path,
+    mode: FileWriteMode,
+    creation_mode: u32,
+) -> std::io::Result<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(creation_mode);
+    }
+    #[cfg(not(unix))]
+    let _ = creation_mode;
+    match mode {
+        FileWriteMode::Truncate => {
+            options.create(true).truncate(true);
+        }
+        FileWriteMode::Append => {
+            options.create(true).append(true);
+        }
+        FileWriteMode::Seek(_) => {
+            options.create(true);
+        }
+        FileWriteMode::Excl => {
+            // `create_new` maps to O_CREAT | O_EXCL.
+            options.create_new(true);
+        }
+    }
+    let mut file = options.open(filename)?;
+    if let FileWriteMode::Seek(offset) = mode {
+        file.seek(SeekFrom::Start(offset))?;
+    }
+    file.write_all(content)?;
+    Ok(file)
+}
+
+// ===========================================================================
+// Directory operations
+// ===========================================================================
+
+#[cfg(not(unix))]
+fn read_directory_names_lisp(
+    dir: &neovm_value::heap_types::LispString,
+) -> Result<Vec<neovm_value::heap_types::LispString>, DirectoryFilesError> {
+    let entries =
+        fs::read_dir(lisp_file_name_to_path_buf(dir)).map_err(|e| DirectoryFilesError::Io {
+            action: "Opening directory",
+            err: e,
+        })?;
+    let mut names = vec![
+        neovm_value::heap_types::LispString::from_unibyte(b".".to_vec()),
+        neovm_value::heap_types::LispString::from_unibyte(b"..".to_vec()),
+    ];
+    for entry in entries {
+        let entry = entry.map_err(|e| DirectoryFilesError::Io {
+            action: "Reading directory entry",
+            err: e,
+        })?;
+        // Keep the host entry bytes intact here.  Public directory primitives
+        // apply GNU's DECODE_FILE step before matching or returning names.
+        names.push(path_to_lisp_file_name(Path::new(&entry.file_name())));
+    }
+    Ok(names)
+}
+
+/// A directory scan owns its stream and filename for this invocation only.
+/// Unix keeps native dot positions; other platforms preserve their host reader.
+pub struct DirectoryNameSource {
+    directory: LispString,
+    #[cfg(unix)]
+    stream: directory_stream::DirectoryStream,
+    #[cfg(not(unix))]
+    names: std::vec::IntoIter<LispString>,
+}
+impl DirectoryNameSource {
+    pub fn open(directory: &LispString) -> Result<Self, Flow> {
+        #[cfg(unix)]
+        let stream =
+            directory_stream::DirectoryStream::open(&lisp_file_name_to_path_buf(directory))
+                .map_err(|error| {
+                    let (action, err) = error.into_parts();
+                    signal_file_action_error_value(
+                        err,
+                        action,
+                        Value::heap_string(directory.clone()),
+                    )
+                })?;
+        #[cfg(not(unix))]
+        let names = read_directory_names_lisp(directory)
+            .map_err(|err| signal_directory_files_error(err, directory))?
+            .into_iter();
+        Ok(Self {
+            directory: directory.clone(),
+            #[cfg(unix)]
+            stream,
+            #[cfg(not(unix))]
+            names,
+        })
+    }
+    pub fn next_name(&mut self, ctx: &mut Context) -> Result<Option<LispString>, Flow> {
+        #[cfg(unix)]
+        {
+            self.stream
+                .next_name(|| ctx.maybe_quit())
+                .map_err(|err| match err {
+                    directory_stream::DirectoryNextError::Quit(flow) => flow,
+                    directory_stream::DirectoryNextError::Io(err) => {
+                        signal_file_action_error_value(
+                            err,
+                            "Reading directory",
+                            Value::heap_string(self.directory.clone()),
+                        )
+                    }
+                })
+        }
+        #[cfg(not(unix))]
+        {
+            Ok(self.names.next())
+        }
+    }
+}
+
+#[derive(Debug)]
+enum DirectoryFilesError {
+    Flow(Flow),
+    #[cfg(not(unix))]
+    Io {
+        action: &'static str,
+        err: std::io::Error,
+    },
+    InvalidRegexp(String),
+    MatchSyntax(neovm_eval::emacs_core::builtins::search::FastStringMatchError),
+}
+
+#[cfg(test)]
+fn directory_files(
+    dir: &neovm_value::heap_types::LispString,
+    full: bool,
+    match_regex: Option<&neovm_value::heap_types::LispString>,
+    nosort: bool,
+    count: Option<usize>,
+) -> Result<Vec<neovm_value::heap_types::LispString>, DirectoryFilesError> {
+    let mut eval = crate::emacs_core::eval_hook_installers::new_context();
+    let syntax =
+        neovm_eval::emacs_core::builtins::search::FastStringMatchSyntax::for_current_buffer(&eval);
+    directory_files_with_decoder(
+        &mut eval,
+        dir,
+        full,
+        match_regex,
+        nosort,
+        count,
+        syntax,
+        |_, bytes| neovm_value::heap_types::LispString::from_unibyte(bytes.to_vec()),
+    )
+}
+
+#[allow(clippy::too_many_arguments)] // match-time state stays explicit at the GNU-regexp boundary
+fn directory_files_with_decoder(
+    ctx: &mut Context,
+    dir: &neovm_value::heap_types::LispString,
+    full: bool,
+    match_regex: Option<&neovm_value::heap_types::LispString>,
+    nosort: bool,
+    count: Option<usize>,
+    syntax: neovm_eval::emacs_core::builtins::search::FastStringMatchSyntax,
+    decode_name: impl Fn(&Context, &[u8]) -> neovm_value::heap_types::LispString,
+) -> Result<Vec<neovm_value::heap_types::LispString>, DirectoryFilesError> {
+    let mut names = DirectoryNameSource::open(dir).map_err(DirectoryFilesError::Flow)?;
+
+    // Emacs builds this list via `cons` while scanning readdir output.
+    // That makes NOSORT results reverse the traversal order and applies COUNT
+    // before sort.
+    let mut result = VecDeque::new();
+    let mut remaining = count.unwrap_or(usize::MAX);
+    let dir_with_slash = lisp_file_name_as_directory(dir);
+
+    while let Some(raw_name) = names.next_name(ctx).map_err(DirectoryFilesError::Flow)? {
+        let name = decode_name(ctx, raw_name.as_bytes());
+        ctx.maybe_quit().map_err(DirectoryFilesError::Flow)?;
+        if let Some(pattern) = match_regex {
+            let matched = syntax
+                .search(
+                    ctx.variables(),
+                    &ctx.edit.buffers,
+                    pattern,
+                    &name,
+                    neovm_text::emacs_core::regex::SearchedString::Owned(name.clone()),
+                    0,
+                    false,
+                )
+                .map_err(|error| match error {
+                    neovm_eval::emacs_core::builtins::search::FastStringMatchError::Regexp(msg) => {
+                        DirectoryFilesError::InvalidRegexp(format!(
+                            "Invalid regexp \"{}\": {}",
+                            neovm_value::emacs_char::to_utf8_lossy(pattern.as_bytes()),
+                            msg
+                        ))
+                    }
+                    error => DirectoryFilesError::MatchSyntax(error),
+                })?;
+            if matched.is_none() {
+                continue;
+            }
+        }
+
+        // GNU dired.c:248 opens first and checks COUNT after matching (351).
+        if remaining == 0 {
+            break;
+        }
+        if full {
+            result.push_front(concat_file_name_lisp(&dir_with_slash, &name));
+        } else {
+            result.push_front(name);
+        }
+
+        if remaining != usize::MAX {
+            remaining -= 1;
+        }
+    }
+
+    let mut result: Vec<neovm_value::heap_types::LispString> = result.into_iter().collect();
+    if !nosort {
+        result.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
+    }
+    Ok(result)
+}
+
+/// Create directory DIR.  If PARENTS is true, create parent directories as needed.
+pub fn make_directory(dir: &str, parents: bool) -> std::io::Result<()> {
+    if parents {
+        fs::create_dir_all(dir)
+    } else {
+        fs::create_dir(dir)
+    }
+}
+
+// ===========================================================================
+// File management
+// ===========================================================================
+
+/// Delete FILENAME.
+pub fn delete_file(filename: &str) -> std::io::Result<()> {
+    unlink_file_path(Path::new(filename))
+}
+
+/// The portable entry point for Emacs `unlink' semantics.
+///
+/// Windows needs an explicit policy boundary because Rust's standard-library
+/// deletion intentionally bypasses the read-only attribute, whereas GNU
+/// clears that attribute first and exposes the change to file notifications.
+fn unlink_file_path(path: &Path) -> std::io::Result<()> {
+    std::cfg_select! {
+        windows => crate::emacs_core::w32::filesystem::unlink(path),
+        _ => fs::remove_file(path),
+    }
+}
+
+/// Rename file FROM to TO.
+pub fn rename_file(from: &str, to: &str) -> std::io::Result<()> {
+    rename_path_with_cross_device_fallback(Path::new(from), Path::new(to), true, |from, to| {
+        fs::rename(from, to)
+    })
+}
+
+fn is_cross_device_rename_error(err: &std::io::Error) -> bool {
+    #[cfg(unix)]
+    {
+        err.raw_os_error() == Some(libc::EXDEV)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = err;
+        false
+    }
+}
+
+fn rename_path_with_cross_device_fallback<F>(
+    from_path: &Path,
+    to_path: &Path,
+    ok_if_exists: bool,
+    rename: F,
+) -> std::io::Result<()>
+where
+    F: FnOnce(&Path, &Path) -> std::io::Result<()>,
+{
+    match rename(from_path, to_path) {
+        Ok(()) => Ok(()),
+        Err(err) if is_cross_device_rename_error(&err) => {
+            rename_regular_file_by_copy_delete(from_path, to_path, ok_if_exists)
+        }
+        Err(err) => Err(err),
+    }
+}
+
+fn rename_regular_file_by_copy_delete(
+    from_path: &Path,
+    to_path: &Path,
+    ok_if_exists: bool,
+) -> std::io::Result<()> {
+    let from_meta = fs::symlink_metadata(from_path)?;
+
+    if fs::symlink_metadata(to_path).is_ok() && !ok_if_exists {
+        return Err(std::io::Error::from(ErrorKind::AlreadyExists));
+    }
+
+    // GNU `Frename_file`'s EXDEV fallback (fileio.c) honors the source type:
+    // a directory is `copy-directory`'d then `delete-directory`'d, a symlink is
+    // recreated, a regular file is `copy-file`'d. Mirror that so a
+    // cross-filesystem move — e.g. magit trashing an untracked directory to
+    // ~/.local/share/Trash (#189) — succeeds instead of re-raising EXDEV.
+    let from_type = from_meta.file_type();
+    if from_type.is_symlink() {
+        copy_symlink(from_path, to_path)?;
+        fs::remove_file(from_path)
+    } else if from_type.is_dir() {
+        copy_dir_recursive(from_path, to_path)?;
+        fs::remove_dir_all(from_path)
+    } else {
+        fs::copy(from_path, to_path)?;
+        fs::set_permissions(to_path, from_meta.permissions())?;
+        fs::remove_file(from_path)
+    }
+}
+
+/// Recreate the symlink at `to_path` pointing at the same target as the symlink
+/// at `from_path` (for the cross-device rename fallback).
+fn copy_symlink(from_path: &Path, to_path: &Path) -> std::io::Result<()> {
+    let target = fs::read_link(from_path)?;
+    if fs::symlink_metadata(to_path).is_ok() {
+        let _ = fs::remove_file(to_path).or_else(|_| fs::remove_dir_all(to_path));
+    }
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&target, to_path)
+    }
+    #[cfg(windows)]
+    {
+        if fs::metadata(from_path).map(|m| m.is_dir()).unwrap_or(false) {
+            std::os::windows::fs::symlink_dir(&target, to_path)
+        } else {
+            std::os::windows::fs::symlink_file(&target, to_path)
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = target;
+        Err(std::io::Error::from(ErrorKind::Unsupported))
+    }
+}
+
+/// Recursively copy directory `from` to `to`, preserving directory permissions,
+/// recreating symlinks, and copying regular files — the cross-device rename
+/// fallback's stand-in for GNU's `copy-directory`.
+fn copy_dir_recursive(from: &Path, to: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(to)?;
+    if let Ok(meta) = fs::metadata(from) {
+        let _ = fs::set_permissions(to, meta.permissions());
+    }
+    for entry in fs::read_dir(from)? {
+        let entry = entry?;
+        let src = entry.path();
+        let dst = to.join(entry.file_name());
+        let file_type = entry.file_type()?;
+        if file_type.is_symlink() {
+            copy_symlink(&src, &dst)?;
+        } else if file_type.is_dir() {
+            copy_dir_recursive(&src, &dst)?;
+        } else {
+            fs::copy(&src, &dst)?;
+        }
+    }
+    Ok(())
+}
+
+/// Copy file FROM to TO.
+pub fn copy_file(from: &str, to: &str) -> std::io::Result<()> {
+    fs::copy(from, to).map(|_| ())
+}
+
+/// Create an additional name (hard link) from OLDNAME to NEWNAME.
+pub fn add_name_to_file(oldname: &str, newname: &str) -> std::io::Result<()> {
+    fs::hard_link(oldname, newname)
+}
+
+// ===========================================================================
+// File attributes
+// ===========================================================================
+
+/// Metadata about a file.
+#[derive(Debug, Clone)]
+pub struct FileAttributes {
+    pub size: u64,
+    pub nlinks: u64,
+    pub is_dir: bool,
+    pub is_symlink: bool,
+    pub modified: Option<f64>, // seconds since epoch
+    pub modes: u32,
+}
+
+/// Return file attributes for FILENAME, or None if the file doesn't exist.
+pub fn file_attributes(filename: &str) -> Option<FileAttributes> {
+    let meta = fs::metadata(filename).ok()?;
+    let symlink_meta = fs::symlink_metadata(filename).ok();
+
+    let modified = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs_f64());
+
+    #[cfg(unix)]
+    let modes = {
+        use std::os::unix::fs::PermissionsExt;
+        meta.permissions().mode()
+    };
+    #[cfg(not(unix))]
+    let modes = if meta.permissions().readonly() {
+        0o444
+    } else {
+        0o644
+    };
+
+    #[cfg(unix)]
+    let nlinks = {
+        use std::os::unix::fs::MetadataExt;
+        meta.nlink()
+    };
+    #[cfg(not(unix))]
+    let nlinks = 1;
+
+    Some(FileAttributes {
+        size: meta.len(),
+        nlinks,
+        is_dir: meta.is_dir(),
+        is_symlink: symlink_meta.is_some_and(|m| m.file_type().is_symlink()),
+        modified,
+        modes,
+    })
+}
+
+// ===========================================================================
+// Builtin wrappers — pure (no evaluator needed)
+// ===========================================================================
+
+fn expect_lisp_string_strict(value: &Value) -> Result<neovm_value::heap_types::LispString, Flow> {
+    match value.kind() {
+        ValueKind::String => Ok(value
+            .as_lisp_string()
+            .expect("ValueKind::String must carry LispString payload")
+            .clone()),
+        _other => Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("stringp"), *value],
+        )),
+    }
+}
+
+fn expect_lisp_filename_string_strict(
+    value: &Value,
+) -> Result<neovm_value::heap_types::LispString, Flow> {
+    let string = expect_lisp_string_strict(value)?;
+    if string.as_bytes().contains(&0) {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("filenamep"), *value],
+        ));
+    }
+    Ok(string)
+}
+
+fn file_name_lisp_from_bytes(
+    bytes: Vec<u8>,
+    multibyte: bool,
+) -> neovm_value::heap_types::LispString {
+    if multibyte {
+        neovm_value::heap_types::LispString::from_emacs_bytes(bytes)
+    } else {
+        neovm_value::heap_types::LispString::from_unibyte(bytes)
+    }
+}
+
+fn empty_file_name_lisp_string() -> neovm_value::heap_types::LispString {
+    neovm_value::heap_types::LispString::from_unibyte(Vec::new())
+}
+
+fn fallback_root_default_directory() -> neovm_value::heap_types::LispString {
+    neovm_value::heap_types::LispString::from_utf8("/")
+}
+
+fn invalid_file_name_handler_result() -> Flow {
+    signal(
+        "error",
+        vec![Value::string(
+            "Invalid handler in ‘file-name-handler-alist’",
+        )],
+    )
+}
+
+fn file_name_handler_string_or_nil(result: Value) -> Value {
+    if result.is_string() {
+        result
+    } else {
+        Value::NIL
+    }
+}
+
+fn file_name_handler_string_or_error(result: Value) -> EvalResult {
+    if result.is_string() {
+        Ok(result)
+    } else {
+        Err(invalid_file_name_handler_result())
+    }
+}
+
+fn expand_file_name_result_multibyte(
+    name: &neovm_value::heap_types::LispString,
+    default_directory: &neovm_value::heap_types::LispString,
+) -> bool {
+    let mut multibyte = name.is_multibyte();
+    let defdir_multibyte = default_directory.is_multibyte();
+    if multibyte != defdir_multibyte {
+        if multibyte {
+            if name.is_ascii() || !default_directory.is_ascii() {
+                multibyte = false;
+            }
+        } else if name.is_ascii() {
+            multibyte = true;
+        }
+    }
+    multibyte
+}
+
+fn file_name_concat_result_multibyte(parts: &[&neovm_value::heap_types::LispString]) -> bool {
+    let any_multibyte = parts.iter().any(|part| part.is_multibyte());
+    let any_unibyte_non_ascii = parts
+        .iter()
+        .any(|part| !part.is_multibyte() && !part.is_ascii());
+    any_multibyte && !any_unibyte_non_ascii
+}
+
+fn concat_file_name_lisp(
+    left: &neovm_value::heap_types::LispString,
+    right: &neovm_value::heap_types::LispString,
+) -> neovm_value::heap_types::LispString {
+    let mut bytes = Vec::with_capacity(left.as_bytes().len() + right.as_bytes().len());
+    bytes.extend_from_slice(left.as_bytes());
+    bytes.extend_from_slice(right.as_bytes());
+    file_name_lisp_from_bytes(bytes, file_name_concat_result_multibyte(&[left, right]))
+}
+
+/// `file-name-concat` over Lisp file names, preserving raw file-name bytes
+/// (skips empty components and inserts `/` separators, like the &str
+/// `file_name_concat` but without the storage-String round-trip).
+fn file_name_concat_lisp(
+    parts: &[&neovm_value::heap_types::LispString],
+) -> neovm_value::heap_types::LispString {
+    let non_empty: Vec<&neovm_value::heap_types::LispString> = parts
+        .iter()
+        .copied()
+        .filter(|part| !part.as_bytes().is_empty())
+        .collect();
+    let Some((first, rest)) = non_empty.split_first() else {
+        return empty_file_name_lisp_string();
+    };
+    let mut out = first.as_bytes().to_vec();
+    for part in rest {
+        if out.last() != Some(&b'/') {
+            out.push(b'/');
+        }
+        out.extend_from_slice(part.as_bytes());
+    }
+    file_name_lisp_from_bytes(out, file_name_concat_result_multibyte(&non_empty))
+}
+
+fn lisp_file_name_directory(
+    filename: &neovm_value::heap_types::LispString,
+) -> Option<neovm_value::heap_types::LispString> {
+    let bytes = filename.as_bytes();
+    if bytes
+        .last()
+        .is_some_and(|&byte| file_name_directory_separator_byte(byte))
+    {
+        return (!bytes.is_empty())
+            .then(|| lisp_file_name_normalize_directory_separators(filename));
+    }
+    if let Some(pos) = bytes
+        .iter()
+        .rposition(|&byte| file_name_directory_separator_byte(byte))
+    {
+        return Some(lisp_file_name_normalize_directory_separators(
+            &file_name_lisp_from_bytes(bytes[..=pos].to_vec(), filename.is_multibyte()),
+        ));
+    }
+    // GNU `file_name_directory` (fileio.c) treats the drive `:` as a directory
+    // boundary under DOS_NT: the directory of a drive-relative name (`c:` or
+    // `c:foo`, with no slash) is the drive `c:`, so it never returns nil for one.
+    // Without this, walking such a path up to the bare drive -- e.g.
+    // `org-persist--check-write-access`'s parent loop -- evaluates
+    // `(directory-file-name (file-name-directory "c:"))` and signals
+    // `wrong-type-argument stringp,nil`, which broke byte-compiling org on
+    // Windows.  Mirrors the windows drive branch already in
+    // `lisp_directory_file_name`.
+    #[cfg(windows)]
+    if matches!(bytes, [drive, b':', ..] if drive.is_ascii_alphabetic()) {
+        return Some(file_name_lisp_from_bytes(
+            bytes[..2].to_vec(),
+            filename.is_multibyte(),
+        ));
+    }
+    None
+}
+
+#[cfg(windows)]
+fn lisp_file_name_normalize_directory_separators(
+    filename: &neovm_value::heap_types::LispString,
+) -> neovm_value::heap_types::LispString {
+    if !filename.as_bytes().contains(&b'\\') {
+        return filename.clone();
+    }
+    let mut bytes = filename.as_bytes().to_vec();
+    for byte in &mut bytes {
+        if *byte == b'\\' {
+            *byte = b'/';
+        }
+    }
+    file_name_lisp_from_bytes(bytes, filename.is_multibyte())
+}
+
+#[cfg(not(windows))]
+fn lisp_file_name_normalize_directory_separators(
+    filename: &neovm_value::heap_types::LispString,
+) -> neovm_value::heap_types::LispString {
+    filename.clone()
+}
+
+fn lisp_file_name_nondirectory(
+    filename: &neovm_value::heap_types::LispString,
+) -> neovm_value::heap_types::LispString {
+    let bytes = filename.as_bytes();
+    if bytes
+        .last()
+        .is_some_and(|&byte| file_name_directory_separator_byte(byte))
+    {
+        return file_name_lisp_from_bytes(Vec::new(), filename.is_multibyte());
+    }
+    match bytes
+        .iter()
+        .rposition(|&byte| file_name_directory_separator_byte(byte))
+    {
+        Some(pos) => file_name_lisp_from_bytes(bytes[pos + 1..].to_vec(), filename.is_multibyte()),
+        None => filename.clone(),
+    }
+}
+
+fn lisp_file_name_as_directory(
+    filename: &neovm_value::heap_types::LispString,
+) -> neovm_value::heap_types::LispString {
+    if filename.as_bytes().is_empty() {
+        return file_name_lisp_from_bytes(b"./".to_vec(), filename.is_multibyte());
+    }
+    if filename.as_bytes().ends_with(b"/") {
+        return filename.clone();
+    }
+    let mut bytes = filename.as_bytes().to_vec();
+    bytes.push(b'/');
+    file_name_lisp_from_bytes(bytes, filename.is_multibyte())
+}
+
+fn lisp_directory_file_name(
+    filename: &neovm_value::heap_types::LispString,
+) -> neovm_value::heap_types::LispString {
+    let bytes = filename.as_bytes();
+    if bytes.is_empty() {
+        return filename.clone();
+    }
+    #[cfg(windows)]
+    if matches!(bytes, [drive, b':', b'/', rest @ ..]
+        if drive.is_ascii_alphabetic() && rest.iter().all(|&byte| byte == b'/'))
+    {
+        return file_name_lisp_from_bytes(bytes[..3].to_vec(), filename.is_multibyte());
+    }
+    if bytes.iter().all(|&byte| byte == b'/') {
+        return if bytes.len() == 2 {
+            filename.clone()
+        } else {
+            file_name_lisp_from_bytes(vec![b'/'], filename.is_multibyte())
+        };
+    }
+    let trimmed_len = bytes
+        .iter()
+        .rposition(|&byte| byte != b'/')
+        .map_or(0, |pos| pos + 1);
+    file_name_lisp_from_bytes(bytes[..trimmed_len].to_vec(), filename.is_multibyte())
+}
+
+pub fn expand_file_name_lisp(
+    name: &neovm_value::heap_types::LispString,
+    default_directory: Option<&neovm_value::heap_types::LispString>,
+) -> neovm_value::heap_types::LispString {
+    expand_file_name_lisp_with_home(name, default_directory, None)
+}
+
+/// Byte-faithful file-name expansion with an explicit HOME snapshot.
+///
+/// Process executable lookup uses this form because GNU `openp` expands every
+/// search candidate through `Fexpand_file_name`, whose `~` resolution observes
+/// the dynamically bound Lisp `process-environment`, not Rust's host
+/// environment.  Keeping HOME explicit also prevents callers from growing
+/// their own partial tilde-expansion rules.
+pub(crate) fn expand_file_name_lisp_with_home(
+    name: &neovm_value::heap_types::LispString,
+    default_directory: Option<&neovm_value::heap_types::LispString>,
+    home_directory: Option<&[u8]>,
+) -> neovm_value::heap_types::LispString {
+    let default_directory = default_directory
+        .cloned()
+        .unwrap_or_else(fallback_root_default_directory);
+    // Operate on the Emacs-internal-encoding bytes, like the rest of the
+    // `_lisp` file-name family, so raw eight-bit file-name bytes round-trip
+    // byte-exactly (no storage-String detour).
+    let result = expand_file_name_bytes_with_home(
+        name.as_bytes(),
+        Some(default_directory.as_bytes()),
+        home_directory,
+        true,
+    );
+    file_name_lisp_from_bytes(
+        result,
+        expand_file_name_result_multibyte(name, &default_directory),
+    )
+}
+
+/// HOME for `expand-file-name`, as Emacs-internal-encoding bytes to feed the
+/// byte-native expansion core without a storage-String detour.
+pub(crate) fn home_directory_for_expand_file_name(eval: &Context) -> Option<Vec<u8>> {
+    // GNU `get_homedir`: the HOME environment variable, else the current user's
+    // home directory (passwd entry on Unix, OS-derived on Windows). Without the
+    // fallback, a session with HOME unset -- e.g. a minimal Windows build env,
+    // where GNU relies on `init_environment` having set HOME -- leaves `~`
+    // unexpanded, so `directory-files "~"` fails at startup.
+    let environment = eval.visible_variable_value_or_nil("process-environment");
+    if let super::environment::EnvironmentLookup::Value(value) =
+        super::environment::lookup_environment_list(&LispString::from_utf8("HOME"), environment)
+        && let Some(home) = eval.lisp_string(value)
+    {
+        return Some(home.as_bytes().to_vec());
+    }
+    current_user_home_bytes()
+}
+
+#[cfg(windows)]
+fn lisp_file_name_absolute_system_p(filename: &neovm_value::heap_types::LispString) -> bool {
+    let bytes = filename.as_bytes();
+    // A tilde-prefixed name is "absolute" per `file-name-absolute-p` but still
+    // needs ~-expansion (cf. GNU `file_name_absolute_no_tilde_p`). If we treat it
+    // as already-resolved, `resolve_filename_lisp_in_state` returns `~` verbatim,
+    // so e.g. `directory-files "~"` (startup.el's init-file probe) opens a literal
+    // "~" and fails with "Opening directory ~". Exclude tilde, matching the Unix
+    // branch (which only treats a leading `/` as system-absolute).
+    bytes.first() != Some(&b'~') && file_name_absolute_bytes_p(bytes)
+}
+
+#[cfg(not(windows))]
+fn lisp_file_name_absolute_system_p(filename: &neovm_value::heap_types::LispString) -> bool {
+    filename.as_bytes().first() == Some(&b'/')
+}
+
+#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+fn lisp_string_runtime_eq(
+    left: &neovm_value::heap_types::LispString,
+    right: &neovm_value::heap_types::LispString,
+) -> bool {
+    left.as_bytes() == right.as_bytes()
+}
+
+fn lisp_file_name_is_ascii_text(
+    filename: &neovm_value::heap_types::LispString,
+    text: &[u8],
+) -> bool {
+    filename.as_bytes() == text
+}
+
+fn lisp_directory_name_p(filename: &neovm_value::heap_types::LispString) -> bool {
+    filename.as_bytes().last() == Some(&b'/')
+}
+
+fn lisp_string_strip_ascii_prefix(
+    value: &neovm_value::heap_types::LispString,
+    prefix: &[u8],
+) -> Option<neovm_value::heap_types::LispString> {
+    let rest = value.as_bytes().strip_prefix(prefix)?;
+    Some(if value.is_multibyte() {
+        neovm_value::heap_types::LispString::from_emacs_bytes(rest.to_vec())
+    } else {
+        neovm_value::heap_types::LispString::from_unibyte(rest.to_vec())
+    })
+}
+
+fn wrap_ascii_around_lisp_string(
+    value: &neovm_value::heap_types::LispString,
+    prefix: &[u8],
+    suffix: &[u8],
+) -> neovm_value::heap_types::LispString {
+    let mut bytes = Vec::with_capacity(prefix.len() + value.as_bytes().len() + suffix.len());
+    bytes.extend_from_slice(prefix);
+    bytes.extend_from_slice(value.as_bytes());
+    bytes.extend_from_slice(suffix);
+    file_name_lisp_from_bytes(bytes, value.is_multibyte())
+}
+
+fn expand_cp_target_lisp_for_eval(
+    eval: &Context,
+    file: &neovm_value::heap_types::LispString,
+    newname: &neovm_value::heap_types::LispString,
+) -> neovm_value::heap_types::LispString {
+    if lisp_directory_name_p(newname) {
+        let resolved_dir = resolve_filename_lisp_for_eval(eval, newname);
+        expand_file_name_lisp(&lisp_file_name_nondirectory(file), Some(&resolved_dir))
+    } else {
+        resolve_filename_lisp_for_eval(eval, newname)
+    }
+}
+
+fn expand_and_dir_to_file_lisp_for_eval(
+    eval: &Context,
+    filename: &neovm_value::heap_types::LispString,
+) -> neovm_value::heap_types::LispString {
+    let absname = resolve_filename_lisp_for_eval(eval, filename);
+    if absname.sbytes() > 1 && lisp_directory_name_p(&absname) {
+        lisp_directory_file_name(&absname)
+    } else {
+        absname
+    }
+}
+
+fn expand_file_name_lisp_for_file_predicate(
+    eval: &mut Context,
+    filename: &neovm_value::heap_types::LispString,
+) -> Result<neovm_value::heap_types::LispString, Flow> {
+    let expanded =
+        builtin_expand_file_name(eval, vec![Value::heap_string(filename.clone()), Value::NIL])?;
+    expect_lisp_filename_string_strict(&expanded)
+}
+
+fn expand_and_dir_to_file_lisp_for_file_predicate(
+    eval: &mut Context,
+    filename: &neovm_value::heap_types::LispString,
+) -> Result<neovm_value::heap_types::LispString, Flow> {
+    let absname = expand_file_name_lisp_for_file_predicate(eval, filename)?;
+    if absname.sbytes() > 1 && lisp_directory_name_p(&absname) {
+        let value = builtin_directory_file_name(eval, vec![Value::heap_string(absname)])?;
+        expect_lisp_filename_string_strict(&value)
+    } else {
+        Ok(absname)
+    }
+}
+
+#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+fn lisp_files_splice_dirname_file(
+    dirname: &neovm_value::heap_types::LispString,
+    file: &neovm_value::heap_types::LispString,
+) -> neovm_value::heap_types::LispString {
+    if lisp_file_name_absolute_system_p(file) {
+        file.clone()
+    } else {
+        concat_file_name_lisp(dirname, file)
+    }
+}
+
+#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+fn expect_temp_prefix(value: &Value) -> Result<neovm_value::heap_types::LispString, Flow> {
+    match value.kind() {
+        ValueKind::String => Ok(value
+            .as_lisp_string()
+            .expect("ValueKind::String must carry LispString payload")
+            .clone()),
+        ValueKind::Nil | ValueKind::Cons | ValueKind::Veclike(VecLikeType::Vector) => Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("stringp"), *value],
+        )),
+        _other => Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("sequencep"), *value],
+        )),
+    }
+}
+
+fn parse_timestamp_arg(value: &Value) -> Result<UnixTimestamp, Flow> {
+    UnixTimestamp::try_from(value)
+}
+
+fn representable_file_timestamp(time: std::time::SystemTime) -> Option<UnixTimestamp> {
+    match UnixTimestamp::try_from(time) {
+        Ok(timestamp) => Some(timestamp),
+        Err(TimestampError::OutOfRange) => None,
+    }
+}
+
+#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+fn validate_file_truename_counter(counter: &Value) -> Result<(), Flow> {
+    if counter.is_nil() {
+        return Ok(());
+    }
+    if !counter.is_list() {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("listp"), *counter],
+        ));
+    }
+    if counter.is_cons() {
+        let first = counter.cons_car();
+        // Mirrors GNU `NUMBERP` which accepts bignums in addition
+        // to fixnums and floats.
+        if !(first.is_number() || first.as_char().is_some()) {
+            return Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("number-or-marker-p"), first],
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+fn temporary_file_directory_for_eval(
+    eval: &Context,
+) -> Option<neovm_value::heap_types::LispString> {
+    let val = eval.variable_value_by_name("temporary-file-directory")?;
+    val.as_lisp_string().cloned()
+}
+
+#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+fn make_temp_file_impl(
+    eval: &neovm_eval::emacs_core::eval::Context,
+    temp_dir: &neovm_value::heap_types::LispString,
+    prefix: &neovm_value::heap_types::LispString,
+    dir_flag: bool,
+    suffix: &neovm_value::heap_types::LispString,
+    text: Option<&[u8]>,
+) -> Result<neovm_value::heap_types::LispString, Flow> {
+    let absolute_prefix = temp_file_absolute_prefix(temp_dir, prefix);
+    make_temp_file_internal_impl(
+        eval,
+        &absolute_prefix,
+        TempCreateKind::from_dir_flag(dir_flag),
+        suffix,
+        text,
+    )
+}
+
+#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+fn temp_file_absolute_prefix(
+    temp_dir: &neovm_value::heap_types::LispString,
+    prefix: &neovm_value::heap_types::LispString,
+) -> neovm_value::heap_types::LispString {
+    // A non-absolute PREFIX is resolved against `temporary-file-directory`;
+    // `lisp_file_name_to_path_buf().is_absolute()` mirrors the old
+    // `Path::new(prefix).is_absolute()` check while keeping raw bytes intact.
+    if lisp_file_name_to_path_buf(prefix).is_absolute() {
+        prefix.clone()
+    } else {
+        lisp_file_name_as_directory(temp_dir).concat(prefix)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum TempCreateKind {
+    File,
+    Directory,
+    NoCreate,
+}
+
+impl TempCreateKind {
+    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    fn from_dir_flag(dir_flag: bool) -> Self {
+        if dir_flag {
+            Self::Directory
+        } else {
+            Self::File
+        }
+    }
+
+    fn error_action(self) -> &'static str {
+        match self {
+            Self::File => "Creating file with prefix",
+            Self::Directory => "Creating directory with prefix",
+            Self::NoCreate => "Creating file name with prefix",
+        }
+    }
+}
+
+/// Build the `OpenOptions` used to create a temporary file exclusively.
+///
+/// GNU's `make-temp-file-internal` (src/fileio.c) calls gnulib `gen_tempname`
+/// (lib/tempname.c), whose `try_file` opens with
+/// `open(..., O_RDWR | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR)`, i.e. mode 0600
+/// before umask.  The docstring guarantees the file is "created with access
+/// mode bits that limit access to the current user."  On Unix we replicate the
+/// explicit 0600 mode so the resulting file is private (subject to umask, just
+/// like GNU); other platforms keep the libstd default.
+fn private_temp_file_open_options() -> fs::OpenOptions {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options
+}
+
+/// Create a temporary directory with GNU's private mode bits.
+///
+/// gnulib `gen_tempname` `try_dir` calls `mkdir(..., S_IRWXU)`, i.e. mode 0700
+/// before umask.  On Unix we mirror that explicit 0700 mode; other platforms
+/// fall back to `fs::create_dir`.
+fn create_private_temp_dir(path: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        fs::DirBuilder::new().mode(0o700).create(path)
+    }
+    #[cfg(not(unix))]
+    {
+        fs::create_dir(path)
+    }
+}
+
+fn make_temp_file_internal_impl(
+    eval: &neovm_eval::emacs_core::eval::Context,
+    prefix: &neovm_value::heap_types::LispString,
+    kind: TempCreateKind,
+    suffix: &neovm_value::heap_types::LispString,
+    text: Option<&[u8]>,
+) -> Result<neovm_value::heap_types::LispString, Flow> {
+    const TEMP_FILE_ATTEMPTS: usize = 62 * 62 * 62;
+
+    // GNU `Fmake_temp_file_internal` first ENCODE_FILEs PREFIX and SUFFIX, so
+    // the on-disk name is built from file-name bytes.  Mirror that: encode both
+    // to unibyte file-name bytes, build the candidate, and DECODE_FILE the
+    // chosen name before returning so a non-ASCII PREFIX comes back multibyte.
+    let file_name_coding =
+        coding_system_value_to_name(&eval.visible_variable_value_or_nil("file-name-coding-system"))
+            .or_else(|| {
+                coding_system_value_to_name(
+                    &eval.visible_variable_value_or_nil("default-file-name-coding-system"),
+                )
+            });
+    let eol_conversion = eval.eol_conversion();
+    let encode_file =
+        |s: &neovm_value::heap_types::LispString| -> neovm_value::heap_types::LispString {
+            match &file_name_coding {
+                Some(name) => neovm_value::heap_types::LispString::from_unibyte(
+                    neovm_text::encoding::encode_lisp_string(s, name, eol_conversion),
+                ),
+                None => neovm_value::heap_types::LispString::from_unibyte(s.as_bytes().to_vec()),
+            }
+        };
+    let encoded_prefix = encode_file(prefix);
+    let encoded_suffix = encode_file(suffix);
+
+    for _ in 0..TEMP_FILE_ATTEMPTS {
+        // GNU `Fmake_temp_file_internal` builds PREFIX + "XXXXXX" + SUFFIX as the
+        // candidate name; keep the raw file-name bytes intact (the random nonce
+        // is ASCII) instead of round-tripping through a UTF-8 String.
+        let nonce =
+            neovm_value::heap_types::LispString::from_unibyte(make_temp_name_suffix().into_bytes());
+        let candidate = encoded_prefix.concat(&nonce).concat(&encoded_suffix);
+        let candidate_path = lisp_file_name_to_path_buf(&candidate);
+        let candidate_display = neovm_value::emacs_char::to_utf8_lossy(candidate.as_bytes());
+
+        // GNU `val = DECODE_FILE (val)` (fileio.c:809): the returned name is the
+        // *decoded* multibyte string, so a non-ASCII PREFIX round-trips back to
+        // its char form rather than leaking raw file-name bytes.
+        match kind {
+            TempCreateKind::Directory => match create_private_temp_dir(&candidate_path) {
+                Ok(()) => {
+                    return Ok(decode_file_name_lisp(eval, candidate.as_bytes()));
+                }
+                Err(err) if err.kind() == ErrorKind::AlreadyExists => continue,
+                Err(err) => {
+                    return Err(signal_file_io_path(
+                        err,
+                        kind.error_action(),
+                        &candidate_display,
+                    ));
+                }
+            },
+            TempCreateKind::File => match private_temp_file_open_options().open(&candidate_path) {
+                Ok(mut file) => {
+                    if let Some(contents) = text {
+                        file.write_all(contents).map_err(|err| {
+                            signal_file_io_path(err, "Writing to", &candidate_display)
+                        })?;
+                    }
+                    return Ok(decode_file_name_lisp(eval, candidate.as_bytes()));
+                }
+                Err(err) if err.kind() == ErrorKind::AlreadyExists => continue,
+                Err(err) => {
+                    return Err(signal_file_io_path(
+                        err,
+                        kind.error_action(),
+                        &candidate_display,
+                    ));
+                }
+            },
+            TempCreateKind::NoCreate => match fs::symlink_metadata(&candidate_path) {
+                Ok(_) => continue,
+                Err(err) if err.kind() == ErrorKind::NotFound => {
+                    return Ok(decode_file_name_lisp(eval, candidate.as_bytes()));
+                }
+                Err(err) => {
+                    return Err(signal_file_io_path(
+                        err,
+                        kind.error_action(),
+                        &candidate_display,
+                    ));
+                }
+            },
+        }
+    }
+
+    Err(signal(
+        LispCondition::FileError,
+        vec![Value::string("Cannot create temporary file")],
+    ))
+}
+
+pub fn builtin_make_temp_file_internal(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args("make-temp-file-internal", &args, 4)?;
+    let prefix = expect_lisp_string_strict(&args[0])?;
+    let suffix = expect_lisp_string_strict(&args[2])?;
+    let kind = if args[1].is_nil() {
+        TempCreateKind::File
+    } else if args[1].as_int() == Some(0) {
+        TempCreateKind::NoCreate
+    } else {
+        TempCreateKind::Directory
+    };
+    let text = if args[3].is_string() {
+        args[3].as_lisp_string().cloned()
+    } else {
+        None
+    };
+    let path = make_temp_file_internal_impl(
+        eval,
+        &prefix,
+        kind,
+        &suffix,
+        text.as_ref().map(|t| t.as_bytes()),
+    )?;
+    Ok(Value::heap_string(path))
+}
+
+#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+fn split_nearby_temp_prefix(
+    prefix: &neovm_value::heap_types::LispString,
+) -> Option<(
+    neovm_value::heap_types::LispString,
+    neovm_value::heap_types::LispString,
+)> {
+    let path = lisp_file_name_to_path_buf(prefix);
+    if !path.is_absolute() {
+        return None;
+    }
+    let file_name = path.file_name()?;
+    if file_name.is_empty() {
+        return None;
+    }
+    let parent = path.parent()?;
+    if parent.as_os_str().is_empty() || parent == Path::new(".") {
+        return None;
+    }
+    Some((
+        path_to_lisp_file_name(parent),
+        path_to_lisp_file_name(Path::new(file_name)),
+    ))
+}
+
+fn make_temp_name_suffix() -> String {
+    const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    let nonce = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as u64;
+    let mut value = now ^ nonce.rotate_left(7);
+    let mut out = [b'a'; 6];
+    for slot in &mut out {
+        let idx = (value % ALPHABET.len() as u64) as usize;
+        *slot = ALPHABET[idx];
+        value = value / ALPHABET.len() as u64 + 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// `(expand-file-name NAME &optional DEFAULT-DIRECTORY)` — falls back
+/// to dynamic `default-directory` when DEFAULT-DIRECTORY is omitted
+/// or nil.
+pub fn builtin_expand_file_name(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    expect_min_args("expand-file-name", &args, 1)?;
+    if args.len() > 2 {
+        return Err(signal(
+            LispCondition::WrongNumberOfArguments,
+            vec![
+                Value::symbol("expand-file-name"),
+                Value::fixnum(args.len() as i64),
+            ],
+        ));
+    }
+    let name_lisp = expect_lisp_filename_string_strict(&args[0])?;
+    let default_arg = args.get(1).copied().unwrap_or(Value::NIL);
+    let operation = Value::symbol("expand-file-name");
+    let name_handler = find_file_name_handler_lisp_for_eval(eval, &name_lisp, operation);
+    if !name_handler.is_nil() {
+        let result = eval.funcall_general(
+            name_handler,
+            vec![operation, Value::heap_string(name_lisp), default_arg],
+        )?;
+        return file_name_handler_string_or_error(result);
+    }
+
+    let default_dir_value = if let Some(arg) = args.get(1) {
+        match arg.kind() {
+            ValueKind::Nil => implicit_default_directory_value_for_expand_file_name(eval)?,
+            ValueKind::String => *arg,
+            _ => Value::heap_string(fallback_root_default_directory()),
+        }
+    } else {
+        implicit_default_directory_value_for_expand_file_name(eval)?
+    };
+    let default_dir_lisp = expect_lisp_filename_string_strict(&default_dir_value)?;
+    // GNU's `Fexpand_file_name` guards this recursion with object identity.
+    // The allocator canonicalizes empty strings per storage kind just like GNU,
+    // so the ordinary `eq` operation covers the empty-name case too.
+    let default_dir_eq_name = eq_value(&default_dir_value, &args[0]);
+    let default_handler = find_file_name_handler_lisp_for_eval(eval, &default_dir_lisp, operation);
+    if !default_handler.is_nil() {
+        let result = eval.funcall_general(
+            default_handler,
+            vec![operation, Value::heap_string(name_lisp), default_dir_value],
+        )?;
+        return file_name_handler_string_or_error(result);
+    }
+
+    let default_dir_lisp =
+        if !lisp_file_name_absolute_system_p(&default_dir_lisp) && !default_dir_eq_name {
+            let expanded = builtin_expand_file_name(eval, vec![default_dir_value, Value::NIL])?;
+            expect_lisp_filename_string_strict(&expanded)?
+        } else {
+            default_dir_lisp
+        };
+    let default_handler = find_file_name_handler_lisp_for_eval(eval, &default_dir_lisp, operation);
+    if !default_handler.is_nil() {
+        let result = eval.funcall_general(
+            default_handler,
+            vec![
+                operation,
+                Value::heap_string(name_lisp),
+                Value::heap_string(default_dir_lisp),
+            ],
+        )?;
+        return file_name_handler_string_or_error(result);
+    }
+
+    let home_dir = home_directory_for_expand_file_name(eval);
+    // Expand on Emacs-internal-encoding bytes so raw eight-bit file-name bytes
+    // survive byte-exactly (no storage-String round-trip).
+    let result = expand_file_name_bytes_with_home(
+        name_lisp.as_bytes(),
+        Some(default_dir_lisp.as_bytes()),
+        home_dir.as_deref(),
+        false,
+    );
+    let result_multibyte = expand_file_name_result_multibyte(&name_lisp, &default_dir_lisp);
+    Ok(Value::heap_string(file_name_lisp_from_bytes(
+        result,
+        result_multibyte,
+    )))
+}
+
+/// (make-temp-name PREFIX) -> string
+pub fn builtin_make_temp_name(
+    eval: &neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args("make-temp-name", &args, 1)?;
+    let prefix = expect_lisp_string_strict(&args[0])?;
+    let path = make_temp_file_internal_impl(
+        eval,
+        &prefix,
+        TempCreateKind::NoCreate,
+        &empty_file_name_lisp_string(),
+        None,
+    )?;
+    Ok(Value::heap_string(path))
+}
+
+/// (next-read-file-uses-dialog-p) -> nil
+pub fn builtin_next_read_file_uses_dialog_p(args: Vec<Value>) -> EvalResult {
+    expect_args("next-read-file-uses-dialog-p", &args, 0)?;
+    Ok(Value::NIL)
+}
+
+/// (unhandled-file-name-directory FILENAME) -> directory string
+pub(crate) fn builtin_unhandled_file_name_directory(args: Vec<Value>) -> EvalResult {
+    expect_args("unhandled-file-name-directory", &args, 1)?;
+    let filename = expect_lisp_string_strict(&args[0])?;
+    Ok(Value::heap_string(lisp_file_name_as_directory(&filename)))
+}
+
+/// (unhandled-file-name-directory FILENAME) -> directory string
+pub fn builtin_unhandled_file_name_directory_eval(
+    eval: &mut Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args("unhandled-file-name-directory", &args, 1)?;
+    if let Some(result) = dispatch_file_handler(eval, "unhandled-file-name-directory", &args)? {
+        return Ok(file_name_handler_string_or_nil(result));
+    }
+    builtin_unhandled_file_name_directory(args)
+}
+
+/// Context-aware variant of `make-temp-file` that honors dynamic
+/// `temporary-file-directory`.
+#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+pub(crate) fn builtin_make_temp_file(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    expect_min_args("make-temp-file", &args, 1)?;
+    if args.len() > 4 {
+        return Err(signal(
+            LispCondition::WrongNumberOfArguments,
+            vec![
+                Value::symbol("make-temp-file"),
+                Value::fixnum(args.len() as i64),
+            ],
+        ));
+    }
+
+    let prefix = expect_temp_prefix(&args[0])?;
+    let dir_flag = args.get(1).is_some_and(|value| value.is_truthy());
+    let suffix = match args.get(2) {
+        None => empty_file_name_lisp_string(),
+        Some(v) if v.is_nil() => empty_file_name_lisp_string(),
+        Some(value) => expect_lisp_string_strict(value)?,
+    };
+    let text = match args.get(3) {
+        None => None,
+        Some(v) if v.is_nil() => None,
+        Some(v) if v.is_string() => v.as_lisp_string().cloned(),
+        Some(_) => None,
+    };
+    let temp_dir = temporary_file_directory_for_eval(eval)
+        .unwrap_or_else(|| path_to_lisp_file_name(&std::env::temp_dir()));
+
+    let path = make_temp_file_impl(
+        eval,
+        &temp_dir,
+        &prefix,
+        dir_flag,
+        &suffix,
+        text.as_ref().map(|t| t.as_bytes()),
+    )?;
+    Ok(Value::heap_string(path))
+}
+
+/// Context-aware variant of `make-nearby-temp-file` that resolves relative
+/// directory-containing prefixes against dynamic/default `default-directory`
+/// and honors dynamic `temporary-file-directory` fallback.
+#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+pub(crate) fn builtin_make_nearby_temp_file(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    expect_min_args("make-nearby-temp-file", &args, 1)?;
+    if args.len() > 3 {
+        return Err(signal(
+            LispCondition::WrongNumberOfArguments,
+            vec![
+                Value::symbol("make-nearby-temp-file"),
+                Value::fixnum(args.len() as i64),
+            ],
+        ));
+    }
+
+    let prefix = expect_temp_prefix(&args[0])?;
+    let dir_flag = args.get(1).is_some_and(|value| value.is_truthy());
+    let suffix = match args.get(2) {
+        None => empty_file_name_lisp_string(),
+        Some(v) if v.is_nil() => empty_file_name_lisp_string(),
+        Some(value) => expect_lisp_string_strict(value)?,
+    };
+    let fallback_temp_dir = temporary_file_directory_for_eval(eval)
+        .unwrap_or_else(|| path_to_lisp_file_name(&std::env::temp_dir()));
+    let (temp_dir, file_prefix) =
+        split_nearby_temp_prefix(&prefix).unwrap_or_else(|| (fallback_temp_dir, prefix.clone()));
+
+    let path = make_temp_file_impl(eval, &temp_dir, &file_prefix, dir_flag, &suffix, None)?;
+    Ok(Value::heap_string(path))
+}
+
+/// `(file-truename FILENAME)` — resolves FILENAME against
+/// dynamic/default `default-directory` and follows symlinks.
+#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+pub(crate) fn builtin_file_truename(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    if let Some(result) = dispatch_file_handler(eval, "file-truename", &args)? {
+        return Ok(result);
+    }
+    expect_min_args("file-truename", &args, 1)?;
+    if args.len() > 3 {
+        return Err(signal(
+            LispCondition::WrongNumberOfArguments,
+            vec![
+                Value::symbol("file-truename"),
+                Value::fixnum(args.len() as i64),
+            ],
+        ));
+    }
+
+    let filename = expect_lisp_string_strict(&args[0])?;
+    if let Some(counter) = args.get(1) {
+        validate_file_truename_counter(counter)?;
+    }
+
+    let default_dir = default_directory_lisp_for_eval(eval);
+    Ok(Value::heap_string(file_truename_lisp(
+        &filename,
+        default_dir.as_ref(),
+    )?))
+}
+
+/// (file-name-directory FILENAME) -> string or nil
+pub fn builtin_file_name_directory(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    if let Some(result) = dispatch_file_handler(eval, "file-name-directory", &args)? {
+        return Ok(file_name_handler_string_or_nil(result));
+    }
+    expect_args("file-name-directory", &args, 1)?;
+    let filename = expect_lisp_string_strict(&args[0])?;
+    match lisp_file_name_directory(&filename) {
+        Some(dir) => Ok(Value::heap_string(dir)),
+        None => Ok(Value::NIL),
+    }
+}
+
+/// (file-name-nondirectory FILENAME) -> string
+pub fn builtin_file_name_nondirectory(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    if let Some(result) = dispatch_file_handler(eval, "file-name-nondirectory", &args)? {
+        return file_name_handler_string_or_error(result);
+    }
+    expect_args("file-name-nondirectory", &args, 1)?;
+    let filename = expect_lisp_string_strict(&args[0])?;
+    Ok(Value::heap_string(lisp_file_name_nondirectory(&filename)))
+}
+
+/// (file-name-as-directory FILENAME) -> string
+pub fn builtin_file_name_as_directory(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    if let Some(result) = dispatch_file_handler(eval, "file-name-as-directory", &args)? {
+        return file_name_handler_string_or_error(result);
+    }
+    expect_args("file-name-as-directory", &args, 1)?;
+    let filename = expect_lisp_string_strict(&args[0])?;
+    Ok(Value::heap_string(lisp_file_name_as_directory(&filename)))
+}
+
+/// (directory-file-name FILENAME) -> string
+pub fn builtin_directory_file_name(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    if let Some(result) = dispatch_file_handler(eval, "directory-file-name", &args)? {
+        return file_name_handler_string_or_error(result);
+    }
+    expect_args("directory-file-name", &args, 1)?;
+    let filename = expect_lisp_string_strict(&args[0])?;
+    Ok(Value::heap_string(lisp_directory_file_name(&filename)))
+}
+
+/// (file-name-concat DIRECTORY &rest COMPONENTS) -> string
+pub fn builtin_file_name_concat(args: Vec<Value>) -> EvalResult {
+    expect_min_args("file-name-concat", &args, 1)?;
+
+    let mut parts: Vec<neovm_value::heap_types::LispString> = Vec::new();
+    for value in args {
+        match value.kind() {
+            ValueKind::Nil => {}
+            ValueKind::String => {
+                let s = value
+                    .as_lisp_string()
+                    .expect("ValueKind::String must carry LispString payload")
+                    .clone();
+                if !s.as_bytes().is_empty() {
+                    parts.push(s);
+                }
+            }
+            _other => {
+                return Err(signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("stringp"), value],
+                ));
+            }
+        }
+    }
+
+    let refs: Vec<&neovm_value::heap_types::LispString> = parts.iter().collect();
+    Ok(Value::heap_string(file_name_concat_lisp(&refs)))
+}
+
+/// (file-name-absolute-p FILENAME) -> t or nil
+pub fn builtin_file_name_absolute_p(args: Vec<Value>) -> EvalResult {
+    expect_args("file-name-absolute-p", &args, 1)?;
+    let filename = expect_lisp_string_strict(&args[0])?;
+    Ok(Value::bool_val(file_name_absolute_bytes_p(
+        filename.as_bytes(),
+    )))
+}
+
+/// (directory-name-p NAME) -> t or nil
+pub fn builtin_directory_name_p(args: Vec<Value>) -> EvalResult {
+    expect_args("directory-name-p", &args, 1)?;
+    let name = expect_lisp_string_strict(&args[0])?;
+    Ok(Value::bool_val(name.as_bytes().last().is_some_and(
+        |&byte| file_name_directory_separator_byte(byte),
+    )))
+}
+
+/// (substitute-in-file-name FILENAME) -> string
+pub fn builtin_substitute_in_file_name(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    expect_args("substitute-in-file-name", &args, 1)?;
+    let filename = expect_lisp_string_strict(&args[0])?;
+
+    if let Some(result) = dispatch_file_handler(eval, "substitute-in-file-name", &args)? {
+        return file_name_handler_string_or_error(result);
+    }
+
+    if let Some(idx) = embedded_absfilename_start(filename.as_bytes()) {
+        let suffix =
+            file_name_lisp_from_bytes(filename.as_bytes()[idx..].to_vec(), filename.is_multibyte());
+        return builtin_substitute_in_file_name(eval, vec![Value::heap_string(suffix)]);
+    }
+
+    let mut result = args[0];
+    if eval
+        .obarray()
+        .symbol_function("substitute-env-in-file-name")
+        .is_some()
+    {
+        result =
+            eval.funcall_general(Value::symbol("substitute-env-in-file-name"), vec![args[0]])?;
+        expect_lisp_string_strict(&result)?;
+    }
+
+    let result_string = result
+        .as_lisp_string()
+        .expect("substitute-in-file-name result was checked as a string");
+    if let Some(idx) = embedded_absfilename_start(result_string.as_bytes()) {
+        let trimmed = trim_embedded_absfilename_bytes(result_string.as_bytes()[idx..].to_vec());
+        Ok(Value::heap_string(file_name_lisp_from_bytes(
+            trimmed,
+            result_string.is_multibyte(),
+        )))
+    } else {
+        Ok(result)
+    }
+}
+
+/// GNU's `BVAR (current_buffer, directory)` -- `default-directory` is
+/// `DEFVAR_PER_BUFFER` (`src/buffer.c:5392`), so there is no global to fall
+/// back to. The obarray fallback this used to end with could never fire: the
+/// name is installed as a `LispFwdType::BufferObj` forwarder, whose buffer-less
+/// `load()` is `None` by construction. Ledger 196.
+pub fn default_directory_lisp_in_state(
+    vars: VariableView<'_>,
+    _dynamic: &[OrderedRuntimeBindingMap],
+    buffers: &neovm_edit::buffer::BufferManager,
+) -> Option<neovm_value::heap_types::LispString> {
+    vars.value_in_buffer_by_name(buffers.current_buffer(), "default-directory")
+        .and_then(|val| val.as_lisp_string().cloned())
+}
+
+#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+fn default_directory_lisp_for_eval(eval: &Context) -> Option<neovm_value::heap_types::LispString> {
+    default_directory_lisp_in_state(eval.variables(), &[], &eval.edit.buffers)
+}
+
+fn raw_default_directory_value_for_eval(eval: &Context) -> Option<Value> {
+    eval.variables()
+        .value_in_buffer_by_name(eval.edit.buffers.current_buffer(), "default-directory")
+}
+
+fn invocation_directory_absolute_value_for_eval(eval: &Context) -> Option<Value> {
+    let value = eval.variable_value_by_name("invocation-directory")?;
+    let filename = value.as_lisp_string()?;
+    if lisp_file_name_absolute_system_p(filename) {
+        Some(value)
+    } else {
+        None
+    }
+}
+
+fn implicit_default_directory_value_for_expand_file_name(eval: &mut Context) -> EvalResult {
+    let Some(value) = raw_default_directory_value_for_eval(eval) else {
+        return Ok(Value::heap_string(fallback_root_default_directory()));
+    };
+    if value.is_nil() {
+        return Ok(Value::heap_string(fallback_root_default_directory()));
+    }
+    let filename = eval.lisp_string(value).ok_or_else(|| {
+        signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("stringp"), value],
+        )
+    })?;
+    if lisp_file_name_absolute_system_p(filename) {
+        return Ok(value);
+    }
+    let absdir = invocation_directory_absolute_value_for_eval(eval)
+        .unwrap_or_else(|| Value::heap_string(fallback_root_default_directory()));
+    builtin_expand_file_name(eval, vec![value, absdir])
+}
+
+pub fn resolve_filename_lisp_in_state(
+    vars: VariableView<'_>,
+    dynamic: &[OrderedRuntimeBindingMap],
+    buffers: &neovm_edit::buffer::BufferManager,
+    filename: &neovm_value::heap_types::LispString,
+) -> neovm_value::heap_types::LispString {
+    if lisp_file_name_absolute_system_p(filename) {
+        return filename.clone();
+    }
+    let default_dir = default_directory_lisp_in_state(vars, dynamic, buffers)
+        .unwrap_or_else(fallback_root_default_directory);
+    expand_file_name_lisp(filename, Some(&default_dir))
+}
+
+pub fn resolve_filename_lisp_for_eval(
+    eval: &Context,
+    filename: &neovm_value::heap_types::LispString,
+) -> neovm_value::heap_types::LispString {
+    resolve_filename_lisp_in_state(eval.variables(), &[], &eval.edit.buffers, filename)
+}
+
+fn file_error_symbol(kind: ErrorKind) -> &'static str {
+    match kind {
+        ErrorKind::NotFound => "file-missing",
+        ErrorKind::AlreadyExists => "file-already-exists",
+        ErrorKind::PermissionDenied => "permission-denied",
+        _ => "file-error",
+    }
+}
+
+/// GNU's `emacs_strerror`, now defined once in `emacs_core::errno`.
+///
+/// This module used to carry its own copy -- as did `system/process`,
+/// `lisp/native/fns` and the file-notify adapters, four copies of the same
+/// eight lines. The one below is a thin alias so this file's errno-keyed
+/// branches read the way they did.
+fn errno_strerror(errno: i32) -> String {
+    crate::emacs_core::errno::emacs_strerror(errno)
+}
+
+/// Best-effort errno for a `std::io::Error` lacking a raw OS code, used so the
+/// errno-keyed branches of [`get_file_errno_data`] still classify correctly.
+fn errno_for_kind(kind: ErrorKind) -> i32 {
+    match kind {
+        ErrorKind::NotFound => libc::ENOENT,
+        ErrorKind::AlreadyExists => libc::EEXIST,
+        ErrorKind::PermissionDenied => libc::EACCES,
+        _ => libc::EIO,
+    }
+}
+
+/// Faithful port of GNU `get_file_errno_data` + `report_file_errno`
+/// (`src/fileio.c`).  Signals a `file-error`-family condition whose DATA
+/// matches GNU exactly:
+///
+/// * `STRERROR` is the bare libc `strerror` text (no Rust "(os error N)").
+/// * For `EEXIST` the DATA is `(file-already-exists STRERROR . NAME)` — the
+///   ACTION string is *omitted* (GNU's `Fcons (Qfile_already_exists, errdata)`).
+/// * Otherwise the DATA is `(SYMBOL ACTION STRERROR . NAME)` where SYMBOL is
+///   `file-missing` (ENOENT), `permission-denied` (EACCES), else `file-error`.
+///
+/// `name_items` holds the flat NAME tail GNU would carry: one filename, or the
+/// two-element `(file newname)` list.  Each element is appended verbatim.
+fn get_file_errno_data(err: &std::io::Error, action: &str, name_items: Vec<Value>) -> Flow {
+    let errno = err
+        .raw_os_error()
+        .unwrap_or_else(|| errno_for_kind(err.kind()));
+    let strerror = errno_strerror(errno);
+    if errno == libc::EEXIST {
+        // `(file-already-exists STRERROR . NAME)` — no ACTION prefix.
+        let mut data = vec![Value::string(strerror)];
+        data.extend(name_items);
+        signal(LispCondition::FileAlreadyExists, data)
+    } else {
+        let symbol = match errno {
+            libc::ENOENT => "file-missing",
+            libc::EACCES => "permission-denied",
+            _ => "file-error",
+        };
+        let mut data = vec![Value::string(action), Value::string(strerror)];
+        data.extend(name_items);
+        signal(symbol, data)
+    }
+}
+
+fn signal_file_io_error(err: std::io::Error, context: String) -> Flow {
+    let symbol = file_error_symbol(err.kind());
+    signal(symbol, vec![Value::string(format!("{context}: {err}"))])
+}
+
+fn signal_file_io_path(err: std::io::Error, action: &str, path: &str) -> Flow {
+    signal_file_io_error(err, format!("{action} {path}"))
+}
+
+fn signal_directory_files_error(
+    err: DirectoryFilesError,
+    dir: &neovm_value::heap_types::LispString,
+) -> Flow {
+    match err {
+        #[cfg(not(unix))]
+        DirectoryFilesError::Io { action, err } => {
+            signal_file_action_error_value(err, action, Value::heap_string(dir.clone()))
+        }
+        DirectoryFilesError::Flow(flow) => flow,
+        DirectoryFilesError::InvalidRegexp(msg) => {
+            signal(LispCondition::InvalidRegexp, vec![Value::string(msg)])
+        }
+        DirectoryFilesError::MatchSyntax(error) => error.into_signal(),
+    }
+}
+
+pub fn signal_file_action_error_value(err: std::io::Error, action: &str, path: Value) -> Flow {
+    get_file_errno_data(&err, action, vec![path])
+}
+
+fn signal_file_action_error_pair_values(
+    err: std::io::Error,
+    action: &str,
+    left: Value,
+    right: Value,
+) -> Flow {
+    get_file_errno_data(&err, action, vec![left, right])
+}
+
+fn signal_existing_path_value(path: &Path, value: Value) -> Flow {
+    if fs::symlink_metadata(path)
+        .map(|metadata| metadata.is_dir())
+        .unwrap_or(false)
+    {
+        signal(
+            LispCondition::FileError,
+            vec![Value::string("File is a directory"), value],
+        )
+    } else {
+        signal(
+            LispCondition::FileAlreadyExists,
+            vec![Value::string("File already exists"), value],
+        )
+    }
+}
+
+/// Faithful port of GNU `barf_or_query_if_file_exists` (`src/fileio.c`).
+///
+/// If FILENAME exists (or `known_to_exist` is set), either signal a
+/// `file-already-exists` error or interactively ask the user whether to
+/// proceed.  Mirrors the C control flow exactly:
+///
+/// * A directory at FILENAME always signals `file-error` with
+///   "File is a directory".
+/// * Non-interactive (`interactive == false`): signal `file-already-exists`
+///   with the message "File already exists".
+/// * Interactive: format the prompt
+///   `"File <name> already exists; <querystring> anyway? "` and dispatch it
+///   through `y-or-n-p` (when `quick`) or `yes-or-no-p`.  A negative answer
+///   signals `file-already-exists` ("File already exists"); a positive answer
+///   returns `Ok(())` so the caller proceeds to overwrite.
+///
+/// `absname` is the already-expanded filename (GNU calls this with the result
+/// of `Fexpand_file_name`).  We keep it as a `LispString` so non-UTF-8
+/// filenames are reproduced byte-for-byte in the prompt and the error data.
+fn barf_or_query_if_file_exists(
+    eval: &mut Context,
+    absname: &LispString,
+    known_to_exist: bool,
+    querystring: &str,
+    interactive: bool,
+    quick: bool,
+) -> Result<(), Flow> {
+    let path = lisp_file_name_to_path_buf(absname);
+    let absname_value = Value::heap_string(absname.clone());
+
+    // `! known_to_exist && stat(...) == 0` in GNU: probe the file with a
+    // non-symlink-following stat so a dangling symlink still counts as
+    // existing, and so a directory is reported distinctly.
+    let mut exists = known_to_exist;
+    if !known_to_exist && let Ok(metadata) = fs::symlink_metadata(&path) {
+        if metadata.is_dir() {
+            return Err(signal(
+                LispCondition::FileError,
+                vec![Value::string("File is a directory"), absname_value],
+            ));
+        }
+        exists = true;
+    }
+
+    if !exists {
+        return Ok(());
+    }
+
+    if !interactive {
+        return Err(signal(
+            LispCondition::FileAlreadyExists,
+            vec![Value::string("File already exists"), absname_value],
+        ));
+    }
+
+    // GNU: AUTO_STRING (format, "File %s already exists; %s anyway? ")
+    //      tem = CALLN (Fformat, format, absname, build_string (querystring));
+    // `y-or-n-p` / `yes-or-no-p` append the "(y or n) " / "(yes or no) "
+    // suffix themselves, so we only build the leading sentence here.
+    let mut prompt_bytes = b"File ".to_vec();
+    prompt_bytes.extend_from_slice(absname.as_bytes());
+    prompt_bytes.extend_from_slice(b" already exists; ");
+    prompt_bytes.extend_from_slice(querystring.as_bytes());
+    prompt_bytes.extend_from_slice(b" anyway? ");
+    let prompt = if absname.is_multibyte() {
+        Value::heap_string(LispString::from_emacs_bytes(prompt_bytes))
+    } else {
+        Value::heap_string(LispString::from_unibyte(prompt_bytes))
+    };
+
+    let answer = if quick {
+        eval.apply(Value::symbol("y-or-n-p"), vec![prompt])?
+    } else {
+        eval.apply(Value::symbol("yes-or-no-p"), vec![prompt])?
+    };
+
+    if answer.is_nil() {
+        return Err(signal(
+            LispCondition::FileAlreadyExists,
+            vec![Value::string("File already exists"), absname_value],
+        ));
+    }
+
+    Ok(())
+}
+
+fn maybe_dispatch_resolved_file_handler(
+    eval: &mut Context,
+    operation_name: &str,
+    first_lookup: Option<&neovm_value::heap_types::LispString>,
+    second_lookup: Option<&neovm_value::heap_types::LispString>,
+    mut call_args: Vec<Value>,
+) -> Result<Option<Value>, Flow> {
+    let operation_sym = Value::symbol(operation_name);
+    if let Some(first) = first_lookup {
+        let handler = find_file_name_handler_lisp_for_eval(eval, first, operation_sym);
+        if !handler.is_nil() {
+            call_args.insert(0, operation_sym);
+            return Ok(Some(eval.funcall_general(handler, call_args)?));
+        }
+    }
+    if let Some(second) = second_lookup {
+        let handler = find_file_name_handler_lisp_for_eval(eval, second, operation_sym);
+        if !handler.is_nil() {
+            call_args.insert(0, operation_sym);
+            return Ok(Some(eval.funcall_general(handler, call_args)?));
+        }
+    }
+    Ok(None)
+}
+
+fn dispatch_expanded_file_handler(
+    eval: &mut Context,
+    operation_name: &str,
+    filename: &neovm_value::heap_types::LispString,
+) -> Result<Option<Value>, Flow> {
+    maybe_dispatch_resolved_file_handler(
+        eval,
+        operation_name,
+        Some(filename),
+        None,
+        vec![Value::heap_string(filename.clone())],
+    )
+}
+
+#[cfg(unix)]
+fn path_to_cstring(path: &Path) -> Result<CString, std::ffi::NulError> {
+    CString::new(path.as_os_str().as_bytes())
+}
+
+fn file_exists_path(path: &Path) -> bool {
+    path.exists()
+}
+
+fn file_readable_path(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        let Ok(c_path) = path_to_cstring(path) else {
+            return false;
+        };
+        unsafe { libc::access(c_path.as_ptr(), libc::R_OK) == 0 }
+    }
+
+    #[cfg(not(unix))]
+    {
+        // GNU's Windows faccessat(R_OK) checks file attributes, so directories
+        // are readable even though opening them as regular files fails.
+        fs::metadata(path).is_ok()
+    }
+}
+
+fn file_writable_path(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        let Ok(c_path) = path_to_cstring(path) else {
+            return false;
+        };
+        if unsafe { libc::access(c_path.as_ptr(), libc::W_OK) == 0 } {
+            return true;
+        }
+        if std::io::Error::last_os_error().kind() != ErrorKind::NotFound {
+            return false;
+        }
+        let Some(parent) = path.parent() else {
+            return false;
+        };
+        let Ok(c_parent) = path_to_cstring(parent) else {
+            return false;
+        };
+        let mode = libc::W_OK | libc::X_OK;
+        unsafe { libc::access(c_parent.as_ptr(), mode) == 0 }
+    }
+
+    #[cfg(not(unix))]
+    {
+        match fs::metadata(path) {
+            // GNU's Windows faccessat(W_OK) is an attribute query: content
+            // writability is denied only by FILE_ATTRIBUTE_READONLY.  In
+            // particular, a directory must not be opened as a regular file.
+            Ok(metadata) => !metadata.permissions().readonly(),
+            // If FILENAME does not exist, GNU asks whether its parent is a
+            // directory.  The parent's read-only attribute does not control
+            // whether entries can be created within a Windows directory.
+            Err(err) if err.kind() == ErrorKind::NotFound => {
+                path.parent().is_some_and(Path::is_dir)
+            }
+            Err(_) => false,
+        }
+    }
+}
+
+pub(crate) fn file_accessible_directory_path(path: &Path) -> bool {
+    if !path.is_dir() {
+        return false;
+    }
+
+    #[cfg(unix)]
+    {
+        let Ok(c_path) = path_to_cstring(path) else {
+            return false;
+        };
+        let mode = libc::R_OK | libc::X_OK;
+        unsafe { libc::access(c_path.as_ptr(), mode) == 0 }
+    }
+
+    #[cfg(not(unix))]
+    {
+        fs::read_dir(path).is_ok()
+    }
+}
+
+fn file_executable_path(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        let Ok(c_path) = path_to_cstring(path) else {
+            return false;
+        };
+        unsafe { libc::access(c_path.as_ptr(), libc::X_OK) == 0 }
+    }
+
+    #[cfg(not(unix))]
+    {
+        path.exists()
+    }
+}
+
+fn access_file_path(path: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        let c_path = path_to_cstring(path).map_err(|err| {
+            std::io::Error::new(
+                ErrorKind::InvalidInput,
+                format!("embedded NUL in file name: {err}"),
+            )
+        })?;
+        if unsafe { libc::access(c_path.as_ptr(), libc::R_OK) == 0 } {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        fs::File::open(path).map(|_| ())
+    }
+}
+
+fn file_directory_path(path: &Path) -> bool {
+    path.is_dir()
+}
+
+fn file_regular_path(path: &Path) -> bool {
+    path.is_file()
+}
+
+/// GNU `file_name_case_insensitive_err` (src/fileio.c:2647-2686).
+///
+/// `Some(true)`/`Some(false)` are GNU's `-1`/`0` answers; `None` is GNU's
+/// `1`, "no answer for this path, climb to the parent and ask again".
+#[cfg(target_vendor = "apple")]
+fn file_name_case_insensitive_probe(path: &Path) -> Option<bool> {
+    use std::os::unix::ffi::OsStrExt;
+    let c_path = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
+    // SAFETY: `c_path` is a valid NUL-terminated path and pathconf only reads
+    // it.
+    let result = unsafe { libc::pathconf(c_path.as_ptr(), libc::_PC_CASE_SENSITIVE) };
+    if result >= 0 {
+        // GNU: `return - (res == 0)` -- 0 means case-insensitive.
+        return Some(result == 0);
+    }
+    if std::io::Error::last_os_error().raw_os_error() == Some(libc::EINVAL) {
+        // The file system could not answer; GNU assumes case-sensitivity on
+        // macOS when the probe is inconclusive.
+        Some(false)
+    } else {
+        None
+    }
+}
+
+/// GNU's platform fallback when the C library cannot answer:
+/// case-sensitive on every non-DOS system, insensitive on Windows.
+#[cfg(not(target_vendor = "apple"))]
+fn file_name_case_insensitive_probe(_path: &Path) -> Option<bool> {
+    Some(cfg!(windows))
+}
+
+fn file_name_case_insensitive_path(path: &Path) -> bool {
+    let mut probe = path.to_path_buf();
+    loop {
+        match file_name_case_insensitive_probe(&probe) {
+            Some(answer) => return answer,
+            None => {
+                let Some(parent) = case_probe_parent(&probe) else {
+                    return false;
+                };
+                if parent == probe {
+                    return false;
+                }
+                probe = parent;
+            }
+        }
+    }
+}
+
+/// GNU `Ffile_name_directory` (src/fileio.c) as the case probe's climb uses
+/// it: the directory part of `path`, keeping its trailing separator.
+///
+/// A name that already ends in a separator IS its own directory part, so GNU
+/// returns it unchanged and `file-name-case-insensitive-p`'s climb stops on
+/// its `parent == filename` guard.  This is observable: on Darwin a missing
+/// path reached through a directory form answers nil, while the same path
+/// without the trailing separator climbs to the existing parent and answers
+/// that filesystem's case behavior.
+#[cfg(target_vendor = "apple")]
+fn case_probe_parent(path: &Path) -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+    let bytes = path.as_os_str().as_bytes();
+    if bytes.is_empty() {
+        return None;
+    }
+    if bytes.last() == Some(&b'/') {
+        // The filesystem root is its own directory part; report no parent so
+        // the caller's fixed-point guard terminates the climb.
+        return path.parent().map(|_| path.to_path_buf());
+    }
+    let separator = bytes.iter().rposition(|byte| *byte == b'/')?;
+    Some(PathBuf::from(std::ffi::OsStr::from_bytes(
+        &bytes[..separator + 1],
+    )))
+}
+
+/// The non-Apple probe always answers (GNU compiles the climb only with
+/// `_PC_CASE_INSENSITIVE`/`_PC_CASE_SENSITIVE`, i.e. Cygwin and macOS), so the
+/// parent step is unreachable there.
+#[cfg(not(target_vendor = "apple"))]
+fn case_probe_parent(_path: &Path) -> Option<PathBuf> {
+    None
+}
+
+fn file_modes_path(path: &Path, nofollow: bool) -> Option<u32> {
+    stat_file_modes(path, nofollow).ok()
+}
+
+/// The mode bits `file_modes_path` reports, keeping the error of a failed
+/// stat for callers that, like GNU, tell its errno values apart.
+fn stat_file_modes(path: &Path, nofollow: bool) -> std::io::Result<u32> {
+    let meta = if nofollow {
+        fs::symlink_metadata(path)?
+    } else {
+        fs::metadata(path)?
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        Ok(meta.permissions().mode() & 0o7777)
+    }
+    #[cfg(not(unix))]
+    {
+        Ok(if meta.permissions().readonly() {
+            0o444
+        } else {
+            0o644
+        })
+    }
+}
+
+fn set_file_modes_path(path: &Path, mode: i64, nofollow: bool) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if nofollow {
+            let c_path = path_to_cstring(path).map_err(|err| {
+                std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    format!("embedded NUL in file name: {err}"),
+                )
+            })?;
+            let result = unsafe {
+                libc::fchmodat(
+                    libc::AT_FDCWD,
+                    c_path.as_ptr(),
+                    (mode as libc::mode_t) & 0o7777,
+                    libc::AT_SYMLINK_NOFOLLOW,
+                )
+            };
+            if result == 0 {
+                Ok(())
+            } else {
+                Err(std::io::Error::last_os_error())
+            }
+        } else {
+            fs::set_permissions(path, fs::Permissions::from_mode((mode as u32) & 0o7777))
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = nofollow;
+        let mut perms = fs::metadata(path)?.permissions();
+        let writable = (mode & 0o222) != 0;
+        perms.set_readonly(!writable);
+        fs::set_permissions(path, perms)
+    }
+}
+
+#[cfg(not(unix))]
+fn build_file_times(timestamp: Option<UnixTimestamp>) -> std::io::Result<std::fs::FileTimes> {
+    let t = match timestamp {
+        Some(timestamp) => std::time::SystemTime::try_from(timestamp)
+            .map_err(|error| std::io::Error::new(ErrorKind::InvalidInput, error))?,
+        None => std::time::SystemTime::now(),
+    };
+    Ok(std::fs::FileTimes::new().set_accessed(t).set_modified(t))
+}
+
+/// Whether timestamp updates follow a symbolic link or update the link itself.
+///
+/// This immutable policy contains no Lisp values, handles, or mutator state.
+/// It can be copied between threads and shared by concurrent callers; the
+/// filesystem operation itself retains the platform's existing semantics.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FileTimeSymlinks {
+    Follow,
+    NoFollow,
+}
+
+static_assertions::assert_impl_all!(FileTimeSymlinks: Send, Sync);
+
+impl From<Value> for FileTimeSymlinks {
+    fn from(flag: Value) -> Self {
+        if flag.is_nil() {
+            Self::Follow
+        } else {
+            Self::NoFollow
+        }
+    }
+}
+
+fn set_file_times_path(
+    path: &Path,
+    timestamp: Option<UnixTimestamp>,
+    symlinks: FileTimeSymlinks,
+) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE,
+            FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_WRITE_ATTRIBUTES,
+        };
+
+        // GNU's w32 utimensat replacement requests metadata write access,
+        // not GENERIC_WRITE (src/w32.c:5998-6034).  That distinction lets
+        // `set-file-times' work on a read-only file without racing another
+        // observer by temporarily changing its attributes.  OpenOptionsExt is
+        // a safe wrapper around the same CreateFileW contract.
+        let flags = match symlinks {
+            FileTimeSymlinks::Follow => FILE_FLAG_BACKUP_SEMANTICS,
+            FileTimeSymlinks::NoFollow => FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+        };
+        let file = fs::OpenOptions::new()
+            .access_mode(FILE_WRITE_ATTRIBUTES)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .custom_flags(flags)
+            .open(path)?;
+        return file.set_times(build_file_times(timestamp)?);
+    }
+
+    #[cfg(unix)]
+    {
+        let c_path = path_to_cstring(path).map_err(|_| {
+            std::io::Error::new(ErrorKind::InvalidInput, "embedded NUL in file name")
+        })?;
+
+        let mut ts = [
+            libc::timespec {
+                tv_sec: 0,
+                tv_nsec: 0,
+            },
+            libc::timespec {
+                tv_sec: 0,
+                tv_nsec: 0,
+            },
+        ];
+        if let Some(timestamp) = timestamp {
+            let secs = timestamp.seconds();
+            let nanos = timestamp.nanoseconds();
+            ts[0].tv_sec = libc::time_t::try_from(secs)
+                .map_err(|error| std::io::Error::new(ErrorKind::InvalidInput, error))?;
+            ts[1].tv_sec = ts[0].tv_sec;
+            ts[0].tv_nsec = nanos as libc::c_long;
+            ts[1].tv_nsec = nanos as libc::c_long;
+        } else {
+            ts[0].tv_nsec = libc::UTIME_NOW as libc::c_long;
+            ts[1].tv_nsec = libc::UTIME_NOW as libc::c_long;
+        }
+        // SAFETY: c_path is NUL-terminated, ts has two initialized entries,
+        // and both borrowed arrays remain alive through the syscall.
+        let result = unsafe {
+            libc::utimensat(
+                libc::AT_FDCWD,
+                c_path.as_ptr(),
+                ts.as_ptr(),
+                match symlinks {
+                    FileTimeSymlinks::Follow => 0,
+                    FileTimeSymlinks::NoFollow => libc::AT_SYMLINK_NOFOLLOW,
+                },
+            )
+        };
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        match symlinks {
+            FileTimeSymlinks::Follow => {
+                let file = fs::OpenOptions::new().write(true).open(path)?;
+                file.set_times(build_file_times(timestamp)?)
+            }
+            FileTimeSymlinks::NoFollow => Err(std::io::Error::new(
+                ErrorKind::Unsupported,
+                "nofollow set-file-times is unsupported on this platform",
+            )),
+        }
+    }
+}
+
+#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+fn delete_file_compat(filename: &str) -> Result<(), Flow> {
+    match delete_file(filename) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(signal_file_io_path(err, "Deleting", filename)),
+    }
+}
+
+fn delete_file_compat_path(path: &Path, path_value: Value) -> Result<(), Flow> {
+    match unlink_file_path(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(signal_file_action_error_value(err, "Deleting", path_value)),
+    }
+}
+
+/// `(access-file FILENAME STRING)`
+pub fn builtin_access_file(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    expect_args("access-file", &args, 2)?;
+    expect_lisp_string_strict(&args[0])?;
+    let expanded = builtin_expand_file_name(eval, vec![args[0], Value::NIL])?;
+    let resolved = expect_lisp_filename_string_strict(&expanded)?;
+    // The STRING argument is a human-readable operation description (ASCII).
+    let operation = expect_lisp_string_strict(&args[1])?;
+    let operation = neovm_value::emacs_char::to_utf8_lossy(operation.as_bytes());
+    if let Some(result) = maybe_dispatch_resolved_file_handler(
+        eval,
+        "access-file",
+        Some(&resolved),
+        None,
+        vec![Value::heap_string(resolved.clone()), args[1]],
+    )? {
+        return Ok(result);
+    }
+    let path = lisp_file_name_to_path_buf(&resolved);
+    match access_file_path(&path) {
+        Ok(_) => Ok(Value::NIL),
+        Err(err) => Err(signal_file_action_error_value(err, &operation, args[0])),
+    }
+}
+
+/// Context-aware variant of `file-exists-p` that resolves relative paths
+/// against dynamic/default `default-directory`.
+pub fn builtin_file_exists_p(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    expect_args("file-exists-p", &args, 1)?;
+    let filename = expect_lisp_string_strict(&args[0])?;
+    let filename = expand_file_name_lisp_for_file_predicate(eval, &filename)?;
+    if let Some(result) = dispatch_expanded_file_handler(eval, "file-exists-p", &filename)? {
+        return Ok(result);
+    }
+    Ok(Value::bool_val(file_exists_path(
+        &lisp_file_name_to_path_buf(&filename),
+    )))
+}
+
+/// `(file-readable-p FILENAME)` — resolves FILENAME against
+/// dynamic/default `default-directory`.
+pub fn builtin_file_readable_p(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    expect_args("file-readable-p", &args, 1)?;
+    let filename = expect_lisp_string_strict(&args[0])?;
+    let filename = expand_file_name_lisp_for_file_predicate(eval, &filename)?;
+    if let Some(result) = dispatch_expanded_file_handler(eval, "file-readable-p", &filename)? {
+        return Ok(result);
+    }
+    Ok(Value::bool_val(file_readable_path(
+        &lisp_file_name_to_path_buf(&filename),
+    )))
+}
+
+/// `(file-writable-p FILENAME)`
+pub fn builtin_file_writable_p(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    expect_args("file-writable-p", &args, 1)?;
+    let filename = expect_lisp_string_strict(&args[0])?;
+    let filename = expand_file_name_lisp_for_file_predicate(eval, &filename)?;
+    if let Some(result) = dispatch_expanded_file_handler(eval, "file-writable-p", &filename)? {
+        return Ok(result);
+    }
+    Ok(Value::bool_val(file_writable_path(
+        &lisp_file_name_to_path_buf(&filename),
+    )))
+}
+
+/// `(file-accessible-directory-p FILENAME)`
+pub fn builtin_file_accessible_directory_p(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    expect_args("file-accessible-directory-p", &args, 1)?;
+    let filename = expect_lisp_string_strict(&args[0])?;
+    let filename = expand_file_name_lisp_for_file_predicate(eval, &filename)?;
+    if let Some(result) =
+        dispatch_expanded_file_handler(eval, "file-accessible-directory-p", &filename)?
+    {
+        return Ok(result);
+    }
+    Ok(Value::bool_val(file_accessible_directory_path(
+        &lisp_file_name_to_path_buf(&filename),
+    )))
+}
+
+/// `(file-executable-p FILENAME)`
+pub fn builtin_file_executable_p(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    expect_args("file-executable-p", &args, 1)?;
+    let filename = expect_lisp_string_strict(&args[0])?;
+    let filename = expand_file_name_lisp_for_file_predicate(eval, &filename)?;
+    if let Some(result) = dispatch_expanded_file_handler(eval, "file-executable-p", &filename)? {
+        return Ok(result);
+    }
+    Ok(Value::bool_val(file_executable_path(
+        &lisp_file_name_to_path_buf(&filename),
+    )))
+}
+
+/// GNU's `USE_ACL` is fixed when the C library is probed: macOS libSystem
+/// provides the POSIX.1e entry points (`acl_get_file`, `acl_to_text`,
+/// `acl_set_file`), while the Linux oracle reference GNU is built without
+/// libacl and compiles the whole `#if USE_ACL` body out of `Ffile_acl`
+/// (src/fileio.c:3541-3577) and `Fset_file_acl` (src/fileio.c:3597-3631).
+/// The enum records which body this host's GNU reference has, so the no-ACL
+/// branch is a property of the platform, not a silent stub.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AclSupport {
+    /// GNU's no-ACL build: arity only, then nil.
+    Absent,
+    /// macOS libSystem ACL calls, the `HAVE_ACL_SET_FILE` arm.
+    Native,
+}
+
+const ACL_SUPPORT: AclSupport = if cfg!(target_vendor = "apple") {
+    AclSupport::Native
+} else {
+    AclSupport::Absent
+};
+
+/// `(file-acl FILENAME)` — GNU `src/fileio.c:Ffile_acl`.
+///
+/// On a no-ACL build the function only has the DEFUN arity contract and then
+/// returns nil: FILENAME is neither type-checked nor expanded and no file-name
+/// handler runs.  A native-ACL build expands FILENAME first (so a non-string
+/// signals `wrong-type-argument`), dispatches the file-name handler, then asks
+/// the C library for the extended ACL and returns its textual form.
+pub fn builtin_file_acl(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    expect_args("file-acl", &args, 1)?;
+    if ACL_SUPPORT == AclSupport::Absent {
+        return Ok(Value::NIL);
+    }
+    let filename = expect_lisp_string_strict(&args[0])?;
+    let absname = expand_and_dir_to_file_lisp_for_file_predicate(eval, &filename)?;
+    if let Some(result) = dispatch_expanded_file_handler(eval, "file-acl", &absname)? {
+        return Ok(result);
+    }
+    native_file_acl(&absname)
+}
+
+/// `(set-file-acl FILENAME ACL-STRING)` — GNU `src/fileio.c:Fset_file_acl`.
+///
+/// The no-ACL build returns nil after the arity check.  The native build
+/// expands FILENAME (type-checking it), dispatches the handler, then converts
+/// ACL-STRING to an ACL and applies it.
+pub fn builtin_set_file_acl(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    expect_args("set-file-acl", &args, 2)?;
+    if ACL_SUPPORT == AclSupport::Absent {
+        return Ok(Value::NIL);
+    }
+    let filename = expect_lisp_string_strict(&args[0])?;
+    // GNU uses `Fexpand_file_name`, not `expand_and_dir_to_file`, here.
+    let absname = expand_file_name_lisp_for_file_predicate(eval, &filename)?;
+    if let Some(result) = dispatch_expanded_file_handler(eval, "set-file-acl", &absname)? {
+        return Ok(result);
+    }
+    native_set_file_acl(&absname, &args[1])
+}
+
+/// GNU `lib/acl-errno-valid.c:acl_errno_valid`: does ERRNUM mean the system
+/// supports ACLs at all?  EBUSY/EINVAL/ENOSYS/ENOTSUP/EOPNOTSUPP describe a
+/// mount or platform without ACLs; ENOENT joins them on Apple.
+#[cfg(target_vendor = "apple")]
+fn acl_errno_valid(errno: i32) -> bool {
+    if matches!(
+        errno,
+        libc::EBUSY | libc::EINVAL | libc::ENOSYS | libc::EOPNOTSUPP
+    ) {
+        return false;
+    }
+    if errno == libc::ENOENT {
+        return false;
+    }
+    if libc::ENOTSUP != libc::EOPNOTSUPP && errno == libc::ENOTSUP {
+        return false;
+    }
+    true
+}
+
+/// GNU `USE_ACL` is absent here, so the body is compile-time unreachable.
+#[cfg(not(target_vendor = "apple"))]
+fn native_file_acl(_filename: &LispString) -> EvalResult {
+    Ok(Value::NIL)
+}
+
+#[cfg(not(target_vendor = "apple"))]
+fn native_set_file_acl(_filename: &LispString, _acl_string: &Value) -> EvalResult {
+    Ok(Value::NIL)
+}
+
+/// The Apple `HAVE_ACL_SET_FILE` arm of `Ffile_acl`.
+///
+/// macOS exposes extended (NFSv4-style) ACLs through `ACL_TYPE_EXTENDED`;
+/// `acl_get_file` fails with ENOENT for a file that simply has no extended
+/// entries, which GNU maps to nil.
+#[cfg(target_vendor = "apple")]
+fn native_file_acl(filename: &LispString) -> EvalResult {
+    let encoded = acl_c_string(&lisp_file_name_to_path_buf(filename));
+    // SAFETY: `encoded` is a valid C string; the returned ACL is freed below.
+    let acl = unsafe { apple_acl::acl_get_file(encoded.as_ptr(), apple_acl::ACL_TYPE_EXTENDED) };
+    if acl.is_null() {
+        let error = std::io::Error::last_os_error();
+        let errno = error.raw_os_error().unwrap_or(0);
+        if errno == libc::ENOENT || errno == libc::ENOTDIR || !acl_errno_valid(errno) {
+            return Ok(Value::NIL);
+        }
+        return Err(get_file_errno_data(
+            &error,
+            "Getting ACLs",
+            vec![Value::heap_string(filename.clone())],
+        ));
+    }
+    let mut length: isize = 0;
+    // SAFETY: `acl` is live; `length` is an out-parameter.
+    let text = unsafe { apple_acl::acl_to_text(acl, &raw mut length) };
+    if text.is_null() {
+        let error = std::io::Error::last_os_error();
+        // GNU captures errno before acl_free (src/fileio.c:3564-3568).
+        unsafe { apple_acl::acl_free(acl) };
+        return Err(get_file_errno_data(
+            &error,
+            "Getting ACLs",
+            vec![Value::heap_string(filename.clone())],
+        ));
+    }
+    // SAFETY: acl_to_text returned a NUL-terminated buffer of `length` bytes;
+    // it is copied before both allocations are freed.
+    let bytes = unsafe { CStr::from_ptr(text) }.to_bytes().to_vec();
+    unsafe {
+        apple_acl::acl_free(text as *mut std::ffi::c_void);
+        apple_acl::acl_free(acl);
+    }
+    Ok(Value::make_string(
+        String::from_utf8_lossy(&bytes).into_owned(),
+    ))
+}
+
+/// The Apple `HAVE_ACL_SET_FILE` arm of `Fset_file_acl`.
+#[cfg(target_vendor = "apple")]
+fn native_set_file_acl(filename: &LispString, acl_string: &Value) -> EvalResult {
+    let ValueKind::String = acl_string.kind() else {
+        return Ok(Value::NIL);
+    };
+    let text = acl_string
+        .as_lisp_string()
+        .expect("ValueKind::String must carry LispString payload");
+    let c_text = acl_c_string_bytes(text.as_bytes());
+    // SAFETY: `c_text` is a valid C string.
+    let acl = unsafe { apple_acl::acl_from_text(c_text.as_ptr()) };
+    if acl.is_null() {
+        let error = std::io::Error::last_os_error();
+        let errno = error.raw_os_error().unwrap_or(0);
+        if !acl_errno_valid(errno) {
+            return Ok(Value::NIL);
+        }
+        return Err(get_file_errno_data(
+            &error,
+            "Converting ACL",
+            vec![Value::heap_string(filename.clone())],
+        ));
+    }
+    let encoded = acl_c_string(&lisp_file_name_to_path_buf(filename));
+    // SAFETY: both arguments are valid; the ACL is freed afterwards.
+    let fail =
+        unsafe { apple_acl::acl_set_file(encoded.as_ptr(), apple_acl::ACL_TYPE_ACCESS, acl) } != 0;
+    unsafe { apple_acl::acl_free(acl) };
+    if fail {
+        // GNU reads errno after acl_free (src/fileio.c:3625-3628).
+        let error = std::io::Error::last_os_error();
+        let errno = error.raw_os_error().unwrap_or(0);
+        if !acl_errno_valid(errno) {
+            return Ok(Value::NIL);
+        }
+        return Err(get_file_errno_data(
+            &error,
+            "Setting ACL",
+            vec![Value::heap_string(filename.clone())],
+        ));
+    }
+    Ok(Value::T)
+}
+
+/// GNU passes `SSDATA (ENCODE_FILE (absname))` to the ACL calls: a C string,
+/// so an embedded NUL ends the name.
+#[cfg(target_vendor = "apple")]
+fn acl_c_string(path: &Path) -> CString {
+    acl_c_string_bytes(path.as_os_str().as_bytes())
+}
+
+#[cfg(target_vendor = "apple")]
+fn acl_c_string_bytes(bytes: &[u8]) -> CString {
+    let end = bytes
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(bytes.len());
+    CString::new(&bytes[..end]).expect("the prefix before a NUL contains no NUL")
+}
+
+/// The macOS libSystem ACL entry points GNU links through `-lacl` on other
+/// systems; on Apple they live in libSystem.
+#[cfg(target_vendor = "apple")]
+mod apple_acl {
+    use std::ffi::{c_char, c_int, c_void};
+
+    /// `sys/acl.h`: extended ACL entries, the type GNU requests for
+    /// `file-acl` (`HAVE_ACL_TYPE_EXTENDED`).
+    pub(super) const ACL_TYPE_EXTENDED: c_int = 0x0000_0100;
+    /// `sys/acl.h`: access ACL, the type GNU applies in `set-file-acl`.
+    pub(super) const ACL_TYPE_ACCESS: c_int = 0x0000_0000;
+
+    /// `acl_t` (`struct __acl *`).
+    pub(super) type Acl = *mut c_void;
+
+    unsafe extern "C" {
+        pub(super) fn acl_get_file(path: *const c_char, acl_type: c_int) -> Acl;
+        pub(super) fn acl_to_text(acl: Acl, len_p: *mut isize) -> *mut c_char;
+        pub(super) fn acl_from_text(text: *const c_char) -> Acl;
+        pub(super) fn acl_set_file(path: *const c_char, acl_type: c_int, acl: Acl) -> c_int;
+        pub(super) fn acl_free(obj: *mut c_void) -> c_int;
+    }
+}
+
+/// `(file-locked-p FILENAME)`
+#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+pub fn builtin_file_locked_p(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    if let Some(result) = dispatch_file_handler(eval, "file-locked-p", &args)? {
+        return Ok(result);
+    }
+    expect_args("file-locked-p", &args, 1)?;
+    let filename = expect_lisp_string_strict(&args[0])?;
+    let filename = resolve_filename_lisp_for_eval(eval, &filename);
+    Ok(Value::bool_val(file_locked_p(&filename)))
+}
+
+/// `(file-selinux-context FILENAME)` — stub returning a four-element
+/// nil list, matching GNU's "no SELinux on this system" shape.
+pub fn builtin_file_selinux_context(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    if let Some(result) = dispatch_file_handler(eval, "file-selinux-context", &args)? {
+        return Ok(result);
+    }
+    expect_args("file-selinux-context", &args, 1)?;
+    let filename = expect_lisp_string_strict(&args[0])?;
+    let _filename = resolve_filename_lisp_for_eval(eval, &filename);
+    Ok(Value::list(vec![
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+    ]))
+}
+
+/// `(set-file-selinux-context FILENAME CONTEXT)` — set a file SELinux context,
+/// or return nil when SELinux support is unavailable.
+///
+/// GNU `src/fileio.c:Fset_file_selinux_context` expands FILENAME and dispatches
+/// file-name handlers before the `HAVE_LIBSELINUX` implementation block.  In a
+/// no-SELinux build, native local files fall through to nil, but handlers still
+/// observe the expanded filename and original context argument.
+pub fn builtin_set_file_selinux_context(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    expect_args("set-file-selinux-context", &args, 2)?;
+    let filename = expect_lisp_string_strict(&args[0])?;
+    let absname = builtin_expand_file_name(eval, vec![Value::heap_string(filename), Value::NIL])?;
+    let absname = expect_lisp_filename_string_strict(&absname)?;
+    if let Some(result) = maybe_dispatch_resolved_file_handler(
+        eval,
+        "set-file-selinux-context",
+        Some(&absname),
+        None,
+        vec![Value::heap_string(absname.clone()), args[1]],
+    )? {
+        return Ok(result);
+    }
+    Ok(Value::NIL)
+}
+
+/// `(file-system-info FILENAME)`
+pub fn builtin_file_system_info(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    if let Some(result) = dispatch_file_handler(eval, "file-system-info", &args)? {
+        return Ok(result);
+    }
+    expect_args("file-system-info", &args, 1)?;
+    let filename = expect_lisp_string_strict(&args[0])?;
+    let filename = resolve_filename_lisp_for_eval(eval, &filename);
+    let (total, free, avail) = file_system_info_path(&lisp_file_name_to_path_buf(&filename))
+        .map_err(|err| {
+            signal_file_action_error_value(
+                err,
+                "Getting file system info",
+                Value::heap_string(filename),
+            )
+        })?;
+    Ok(Value::list(vec![
+        Value::fixnum(total),
+        Value::fixnum(free),
+        Value::fixnum(avail),
+    ]))
+}
+
+/// `(file-directory-p FILENAME)`
+pub fn builtin_file_directory_p(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    expect_args("file-directory-p", &args, 1)?;
+    let filename = expand_and_dir_to_file_lisp_for_file_predicate(
+        eval,
+        &expect_lisp_string_strict(&args[0])?,
+    )?;
+    if let Some(result) = dispatch_expanded_file_handler(eval, "file-directory-p", &filename)? {
+        return Ok(result);
+    }
+    Ok(Value::bool_val(file_directory_path(
+        &lisp_file_name_to_path_buf(&filename),
+    )))
+}
+
+/// Context-aware variant of `file-regular-p` that resolves relative paths
+/// against dynamic/default `default-directory`.
+/// `(file-regular-p FILENAME)`
+pub fn builtin_file_regular_p(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    expect_args("file-regular-p", &args, 1)?;
+    let filename = expand_and_dir_to_file_lisp_for_file_predicate(
+        eval,
+        &expect_lisp_string_strict(&args[0])?,
+    )?;
+    if let Some(result) = dispatch_expanded_file_handler(eval, "file-regular-p", &filename)? {
+        return Ok(result);
+    }
+    Ok(Value::bool_val(file_regular_path(
+        &lisp_file_name_to_path_buf(&filename),
+    )))
+}
+
+/// `(file-symlink-p FILENAME)`
+///
+/// Mirrors GNU `Ffile_symlink_p` (`src/fileio.c:3160`): returns the
+/// link target as a string when FILENAME is a symbolic link, nil
+/// otherwise. Previously this returned `Value::bool_val(...)` (audit
+/// §10.3) which was a data-type bug — code that uses the result as a
+/// path was always broken because it got `t` instead of a string.
+pub fn builtin_file_symlink_p(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    expect_args("file-symlink-p", &args, 1)?;
+    let filename = expect_lisp_string_strict(&args[0])?;
+    let filename = expand_file_name_lisp_for_file_predicate(eval, &filename)?;
+    if let Some(result) = dispatch_expanded_file_handler(eval, "file-symlink-p", &filename)? {
+        return Ok(result);
+    }
+    Ok(match file_symlink_target_lisp(&filename) {
+        Some(target) => Value::heap_string(target),
+        None => Value::NIL,
+    })
+}
+
+/// `(file-name-case-insensitive-p FILENAME)`
+pub fn builtin_file_name_case_insensitive_p(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    expect_args("file-name-case-insensitive-p", &args, 1)?;
+    expect_lisp_string_strict(&args[0])?;
+    let expanded = builtin_expand_file_name(eval, vec![args[0], Value::NIL])?;
+    let filename = expect_lisp_filename_string_strict(&expanded)?;
+    if let Some(result) =
+        dispatch_expanded_file_handler(eval, "file-name-case-insensitive-p", &filename)?
+    {
+        return Ok(result);
+    }
+    Ok(Value::bool_val(file_name_case_insensitive_path(
+        &lisp_file_name_to_path_buf(&filename),
+    )))
+}
+
+/// `(file-newer-than-file-p FILE1 FILE2)`
+pub fn builtin_file_newer_than_file_p(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    expect_args("file-newer-than-file-p", &args, 2)?;
+    let file1 = expand_and_dir_to_file_lisp_for_eval(eval, &expect_lisp_string_strict(&args[0])?);
+    let file2 = expand_and_dir_to_file_lisp_for_eval(eval, &expect_lisp_string_strict(&args[1])?);
+    if let Some(result) = maybe_dispatch_resolved_file_handler(
+        eval,
+        "file-newer-than-file-p",
+        Some(&file1),
+        Some(&file2),
+        vec![
+            Value::heap_string(file1.clone()),
+            Value::heap_string(file2.clone()),
+        ],
+    )? {
+        return Ok(result);
+    }
+    Ok(Value::bool_val(file_newer_than_file_path(
+        &lisp_file_name_to_path_buf(&file1),
+        &lisp_file_name_to_path_buf(&file2),
+    )))
+}
+
+/// `(file-modes FILENAME &optional FLAG)` — returns the file's
+/// mode bits as an integer, or nil if FILENAME is missing.
+pub fn builtin_file_modes(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    expect_min_args("file-modes", &args, 1)?;
+    if args.len() > 2 {
+        return Err(signal(
+            LispCondition::WrongNumberOfArguments,
+            vec![
+                Value::symbol("file-modes"),
+                Value::fixnum(args.len() as i64),
+            ],
+        ));
+    }
+    let filename = expect_lisp_string_strict(&args[0])?;
+    let flag = args.get(1).copied().unwrap_or(Value::NIL);
+    let nofollow = !flag.is_nil();
+    let absname = expand_and_dir_to_file_lisp_for_file_predicate(eval, &filename)?;
+    let operation = Value::symbol("file-modes");
+    let handler = find_file_name_handler_lisp_for_eval(eval, &absname, operation);
+    if !handler.is_nil() {
+        return eval.funcall_general(handler, vec![operation, Value::heap_string(absname), flag]);
+    }
+    match file_modes_path(&lisp_file_name_to_path_buf(&absname), nofollow) {
+        Some(mode) => Ok(Value::fixnum(mode as i64)),
+        None => Ok(Value::NIL),
+    }
+}
+
+/// `(set-file-modes FILENAME MODE &optional FLAG)`
+pub fn builtin_set_file_modes(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    expect_min_args("set-file-modes", &args, 2)?;
+    if args.len() > 3 {
+        return Err(signal(
+            LispCondition::WrongNumberOfArguments,
+            vec![
+                Value::symbol("set-file-modes"),
+                Value::fixnum(args.len() as i64),
+            ],
+        ));
+    }
+    let mode = expect_fixnum(&args[1])?;
+    let flag = args.get(2).copied().unwrap_or(Value::NIL);
+    let nofollow = !flag.is_nil();
+    let expanded = builtin_expand_file_name(eval, vec![args[0], Value::NIL])?;
+    let absname = expect_lisp_filename_string_strict(&expanded)?;
+    let operation = Value::symbol("set-file-modes");
+    let handler = find_file_name_handler_lisp_for_eval(eval, &absname, operation);
+    if !handler.is_nil() {
+        return eval.funcall_general(
+            handler,
+            vec![operation, Value::heap_string(absname), args[1], flag],
+        );
+    }
+    set_file_modes_path(&lisp_file_name_to_path_buf(&absname), mode, nofollow).map_err(|err| {
+        signal_file_action_error_value(err, "Doing chmod", Value::heap_string(absname))
+    })?;
+    Ok(Value::NIL)
+}
+
+/// `(set-file-times FILENAME &optional TIME FLAG)`
+pub fn builtin_set_file_times(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    expect_min_args("set-file-times", &args, 1)?;
+    if args.len() > 3 {
+        return Err(signal(
+            LispCondition::WrongNumberOfArguments,
+            vec![
+                Value::symbol("set-file-times"),
+                Value::fixnum(args.len() as i64),
+            ],
+        ));
+    }
+    let symlinks = FileTimeSymlinks::from(args.get(2).copied().unwrap_or(Value::NIL));
+    let timestamp_arg = args.get(1).copied().unwrap_or(Value::NIL);
+    let flag_arg = args.get(2).copied().unwrap_or(Value::NIL);
+    let timestamp = if !timestamp_arg.is_nil() {
+        Some(parse_timestamp_arg(&timestamp_arg)?)
+    } else {
+        None
+    };
+    let filename = builtin_expand_file_name(eval, vec![args[0], Value::NIL])?;
+    let filename = expect_lisp_filename_string_strict(&filename)?;
+    let handler_args = vec![
+        Value::heap_string(filename.clone()),
+        timestamp_arg,
+        flag_arg,
+    ];
+    if let Some(result) = maybe_dispatch_resolved_file_handler(
+        eval,
+        "set-file-times",
+        Some(&filename),
+        None,
+        handler_args,
+    )? {
+        return Ok(result);
+    }
+    set_file_times_path(&lisp_file_name_to_path_buf(&filename), timestamp, symlinks).map_err(
+        |err| {
+            signal_file_action_error_value(err, "Setting file times", Value::heap_string(filename))
+        },
+    )?;
+    Ok(Value::T)
+}
+
+/// GNU `decode_buffer` (src/buffer.c): nil (or an omitted argument) means the
+/// current buffer, anything else must be a live buffer.
+///
+/// This returns the decided [`neovm_edit::buffer::BufferId`] rather than merely
+/// validating the argument: a validate-only signature lets a caller type-check
+/// BUF and then silently operate on the current buffer instead, which is
+/// exactly how `verify-visited-file-modtime` came to ignore its argument.
+fn decode_buffer_arg_in_state(
+    buffers: &neovm_edit::buffer::BufferManager,
+    arg: Option<&Value>,
+) -> Result<neovm_edit::buffer::BufferId, Flow> {
+    let wrong_type = |bufferish: &Value| {
+        signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("bufferp"), *bufferish],
+        )
+    };
+    match arg {
+        None => current_buffer_id_or_error(buffers),
+        Some(bufferish) => match bufferish.kind() {
+            ValueKind::Nil => current_buffer_id_or_error(buffers),
+            ValueKind::Veclike(VecLikeType::Buffer) => bufferish
+                .as_buffer_id()
+                .filter(|id| buffers.get(*id).is_some())
+                .ok_or_else(|| wrong_type(bufferish)),
+            _ => Err(wrong_type(bufferish)),
+        },
+    }
+}
+
+fn validate_set_visited_file_modtime_arg(arg: &Value) -> Result<(), Flow> {
+    match arg.kind() {
+        // GNU Lisp uses `(set-visited-file-modtime 0)` via
+        // `clear-visited-file-modtime` during `set-visited-file-name`
+        // and `write-file`, so integer flags are valid inputs here.
+        ValueKind::Fixnum(_) => Ok(()),
+        ValueKind::String => Err(signal(
+            "error",
+            vec![Value::string("Invalid time specification")],
+        )),
+        ValueKind::Float | ValueKind::Cons => Ok(()),
+        _ => Err(signal(
+            "error",
+            vec![Value::string("Invalid time specification")],
+        )),
+    }
+}
+
+/// `(visited-file-modtime)` — return the buffer's recorded modtime.
+pub fn builtin_visited_file_modtime(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    expect_max_args("visited-file-modtime", &args, 0)?;
+    let buf = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    // GNU `Fvisited_file_modtime` is exactly
+    // `buffer_visited_file_modtime (current_buffer)` (`src/fileio.c:6165-6175`),
+    // the same function `record_first_change` stores in its `(t . TIME)` undo
+    // entry -- so the two must stay one implementation or `primitive-undo`
+    // could never match them.
+    Ok(buf.visited_file_modtime_value())
+}
+
+/// `(verify-visited-file-modtime &optional BUFFER)` — check if file
+/// on disk matches the buffer's recorded modtime.
+pub fn builtin_verify_visited_file_modtime(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    expect_max_args("verify-visited-file-modtime", &args, 1)?;
+    // GNU fileio.c:6129 `decode_buffer (buf)`: BUF, not the current buffer,
+    // is the one whose recorded modtime is compared.  filelock.c:605 passes
+    // the buffer that visits the file being locked, which need not be current.
+    let buffer_id = decode_buffer_arg_in_state(&eval.edit.buffers, args.first())?;
+    let buf = eval
+        .edit
+        .buffers
+        .get(buffer_id)
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    let recorded = buf.visited_file_modtime();
+    // GNU fileio.c:6135: `if (!STRINGP (BVAR (b, filename))) return Qt;` — a
+    // buffer that visits no file always matches.
+    let Some(file_name) = buf.file_name_lisp_string() else {
+        return Ok(Value::T);
+    };
+    // GNU fileio.c:6136: `if (b->modtime.tv_nsec == UNKNOWN_MODTIME_NSECS)
+    // return Qt;` — a buffer with no recorded time never complains.
+    if recorded == VisitedFileModtime::Unknown {
+        return Ok(Value::T);
+    }
+    // GNU fileio.c:6138-6143: the handler is asked BEFORE the stat, on the
+    // buffer's own `BVAR (b, filename)` rather than an expanded copy, and its
+    // answer is returned verbatim.  That order is what makes the primitive
+    // usable at all for a remote buffer: the visited name is not a path on this
+    // filesystem, so the `emacs_fstatat` below can only fail, and the buffer
+    // would report "changed" from the moment it was visited.  TRAMP's own
+    // answer is `tramp-handle-verify-visited-file-modtime`
+    // (lisp/net/tramp.el:5938-5967), which compares the recorded time against
+    // the REMOTE attributes with a two-second tolerance.
+    let operation = Value::symbol("verify-visited-file-modtime");
+    let handler = find_file_name_handler_lisp_for_eval(eval, file_name, operation);
+    if !handler.is_nil() {
+        return eval.funcall_general(handler, vec![operation, Value::make_buffer(buffer_id)]);
+    }
+    // Issue #131: encode the visited file name to its real OS path bytes via the
+    // filesystem-boundary helper, not the PUA-sentinel storage string, so a
+    // non-UTF-8 file name still stats the right file.
+    let path = lisp_file_name_to_path_buf(file_name);
+    // GNU fileio.c:6145-6148: the disk side is `get_stat_mtime` when the stat
+    // succeeds and `time_error_value (errno)` when it does not — so a buffer
+    // that recorded "this file does not exist" still matches while the file is
+    // still missing, and stops matching the moment it appears.
+    let (disk_modtime, disk_size) = match std::fs::metadata(&path) {
+        Ok(meta) => {
+            let modtime = match meta.modified() {
+                Ok(mtime) => match UnixTimestamp::try_from(mtime) {
+                    Ok(timestamp) => VisitedFileModtime::Known {
+                        sec: timestamp.seconds(),
+                        nsec: timestamp.nanoseconds() as i32,
+                    },
+                    Err(TimestampError::OutOfRange) => VisitedFileModtime::Unknown,
+                },
+                Err(_) => VisitedFileModtime::Unknown,
+            };
+            (modtime, Some(meta.len() as i64))
+        }
+        Err(err) => (VisitedFileModtime::from_open_error(&err), None),
+    };
+    // GNU fileio.c:6149-6153: `timespec_cmp (mtime, b->modtime) == 0
+    // && (b->modtime_size < 0 || st.st_size == b->modtime_size)`.  An
+    // unrecorded size means "do not check the size", not "the size is -1".
+    let size_matches = match (buf.modtime_size(), disk_size) {
+        (None, _) => true,
+        (Some(recorded_size), Some(size)) => recorded_size == size,
+        (Some(_), None) => false,
+    };
+    Ok(Value::bool(disk_modtime == recorded && size_matches))
+}
+
+/// `(set-visited-file-modtime &optional TIME-LIST)` — set buffer's
+/// modtime from the file on disk or from explicit timestamp.
+pub fn builtin_set_visited_file_modtime(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    expect_max_args("set-visited-file-modtime", &args, 1)?;
+
+    if let Some(arg) = args.first()
+        && !arg.is_nil()
+    {
+        // Explicit timestamp argument.
+        validate_set_visited_file_modtime_arg(arg)?;
+        // GNU `Fset_visited_file_modtime' (src/fileio.c:6188-6198): an integer
+        // is a "flag", and the accepted flags are exactly the two values
+        // `visited-file-modtime' can return that are not timestamps --
+        // `check_integer_range (time_flag, -1, 0)` then
+        // `make_timespec (0, UNKNOWN_MODTIME_NSECS - flag)`.  0 is the unknown
+        // sentinel (this is how `clear-visited-file-modtime' works) and -1 is
+        // "the visited file does not exist"; anything else is out of range.
+        // Any other time form is decoded (including the 4-element
+        // (HIGH LOW USEC PSEC) list) into one (sec, nsec) via
+        // `lisp_time_argument', rather than taking elements 0 and 1 as raw
+        // seconds and nanoseconds.
+        let modtime = match arg.as_fixnum() {
+            Some(flag) => VisitedFileModtime::from_lisp_flag(flag).ok_or_else(|| {
+                signal(
+                    LispCondition::ArgsOutOfRange,
+                    vec![*arg, Value::fixnum(-1), Value::fixnum(0)],
+                )
+            })?,
+            None => {
+                let (sec, nsec) = crate::emacs_core::timefns::time_value_seconds_and_nanos(arg)?;
+                VisitedFileModtime::Known {
+                    sec,
+                    nsec: nsec as i32,
+                }
+            }
+        };
+        let buf = eval
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        buf.set_visited_file_modtime(modtime);
+        // GNU: `current_buffer->modtime_size = -1;` — an explicitly given time
+        // says nothing about the file's size.
+        buf.set_modtime_size(None);
+        return Ok(Value::NIL);
+    }
+
+    // No arg — stat the visited file.  GNU (src/fileio.c:6202-6203) refuses
+    // here rather than expanding a nil file name: an indirect buffer visits no
+    // file of its own, and this error is half of the same change that made
+    // `record_first_change' read the BASE buffer's modtime (Bug#56397).
+    let current_buffer_is_indirect = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .is_some_and(|buf| buf.base_buffer().is_some());
+    if current_buffer_is_indirect {
+        return Err(signal(
+            "error",
+            vec![Value::string(
+                "An indirect buffer does not have a visited file",
+            )],
+        ));
+    }
+    let file_name = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .and_then(|b| b.file_name_lisp_string());
+    let Some(file_name) = file_name else {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("stringp"), Value::NIL],
+        ));
+    };
+    // GNU fileio.c:6209-6216: expand the buffer's file name, then ask the
+    // handler BEFORE stat'ing, and return its answer -- "the handler can find
+    // the file name the same way we did".  This is the writing half of the same
+    // rule `verify-visited-file-modtime` obeys above, and a remote buffer needs
+    // both: only the handler can reach the file, so without this the buffer
+    // keeps whatever `insert-file-contents` left it -- here the wall clock at
+    // visit time.  The gap between that and the file's own mtime grows with
+    // however long the connection took to open, and once it exceeds TRAMP's
+    // two-second tolerance (lisp/net/tramp.el:5962) the buffer reports
+    // "changed" and the first edit dies in
+    // `ask-user-about-supersession-threat`.
+    let expanded = builtin_expand_file_name(
+        eval,
+        vec![Value::heap_string(file_name.clone()), Value::NIL],
+    )?;
+    let expanded = expect_lisp_filename_string_strict(&expanded)?;
+    let operation = Value::symbol("set-visited-file-modtime");
+    let handler = find_file_name_handler_lisp_for_eval(eval, &expanded, operation);
+    if !handler.is_nil() {
+        return eval.funcall_general(handler, vec![operation, Value::NIL]);
+    }
+    let path = lisp_file_name_to_path_buf(&expanded);
+    if let Ok(meta) = std::fs::metadata(&path) {
+        let buf = eval
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        if let Ok(mtime) = meta.modified()
+            && let Some(timestamp) = representable_file_timestamp(mtime)
+        {
+            buf.set_visited_file_modtime(VisitedFileModtime::Known {
+                sec: timestamp.seconds(),
+                nsec: timestamp.nanoseconds() as i32,
+            });
+            buf.set_modtime_size(Some(meta.len() as i64));
+        }
+    }
+    Ok(Value::NIL)
+}
+
+/// (set-default-file-modes MODE) -> nil
+pub fn builtin_set_default_file_modes(args: Vec<Value>) -> EvalResult {
+    expect_args("set-default-file-modes", &args, 1)?;
+    init_default_file_mode_mask();
+    let mode = expect_fixnum(&args[0])?;
+    let new_mask = (!mode) & 0o777;
+    #[cfg(unix)]
+    unsafe {
+        libc::umask(new_mask as libc::mode_t);
+    }
+    DEFAULT_FILE_MODE_MASK.store(new_mask as u32, Ordering::Relaxed);
+    Ok(Value::NIL)
+}
+
+/// (default-file-modes) -> integer
+pub fn builtin_default_file_modes(args: Vec<Value>) -> EvalResult {
+    expect_args("default-file-modes", &args, 0)?;
+    init_default_file_mode_mask();
+    let mask = DEFAULT_FILE_MODE_MASK.load(Ordering::Relaxed) as i64;
+    Ok(Value::fixnum((!mask) & 0o777))
+}
+
+/// Context-aware variant of `delete-file` that resolves relative paths
+/// against dynamic/default `default-directory`.
+#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+pub(crate) fn builtin_delete_file(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    expect_min_args("delete-file", &args, 1)?;
+    if args.len() > 2 {
+        return Err(signal(
+            LispCondition::WrongNumberOfArguments,
+            vec![
+                Value::symbol("delete-file"),
+                Value::fixnum(args.len() as i64),
+            ],
+        ));
+    }
+    expect_lisp_string_strict(&args[0])?;
+    let resolved = match expand_file_operation(eval, "delete-file", &args, 2)? {
+        ExpandedFileOperation::Handled(result) => return Ok(result),
+        ExpandedFileOperation::Local { expanded_filename } => {
+            expect_lisp_filename_string_strict(&expanded_filename)?
+        }
+    };
+    delete_file_compat_path(
+        &lisp_file_name_to_path_buf(&resolved),
+        Value::heap_string(resolved),
+    )?;
+    Ok(Value::NIL)
+}
+
+/// `(delete-file-internal FILENAME)` — internal primitive used by
+/// the elisp `delete-file` wrapper.
+pub fn builtin_delete_file_internal(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    if let Some(result) = dispatch_file_handler(eval, "delete-file", &args)? {
+        return Ok(result);
+    }
+    expect_args("delete-file-internal", &args, 1)?;
+    let filename = expect_lisp_string_strict(&args[0])?;
+    let resolved = resolve_filename_lisp_for_eval(eval, &filename);
+    delete_file_compat_path(
+        &lisp_file_name_to_path_buf(&resolved),
+        Value::heap_string(resolved),
+    )?;
+    Ok(Value::NIL)
+}
+
+/// `(delete-directory-internal DIRECTORY)`
+pub fn builtin_delete_directory_internal(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    expect_args("delete-directory-internal", &args, 1)?;
+    let directory = expect_lisp_string_strict(&args[0])?;
+    let resolved = lisp_directory_file_name(&resolve_filename_lisp_for_eval(eval, &directory));
+    fs::remove_dir(lisp_file_name_to_path_buf(&resolved)).map_err(|err| {
+        signal_file_action_error_value(err, "Removing directory", Value::heap_string(resolved))
+    })?;
+    Ok(Value::NIL)
+}
+
+/// Context-aware variant of `delete-directory` that resolves relative paths
+/// against dynamic/default `default-directory`.
+#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+pub(crate) fn builtin_delete_directory(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    if let Some(result) = dispatch_file_handler(eval, "delete-directory", &args)? {
+        return Ok(result);
+    }
+    expect_min_args("delete-directory", &args, 1)?;
+    if args.len() > 3 {
+        return Err(signal(
+            LispCondition::WrongNumberOfArguments,
+            vec![
+                Value::symbol("delete-directory"),
+                Value::fixnum(args.len() as i64),
+            ],
+        ));
+    }
+    let directory = expect_lisp_string_strict(&args[0])?;
+    let directory = lisp_directory_file_name(&resolve_filename_lisp_for_eval(eval, &directory));
+    let recursive = args.get(1).is_some_and(|value| value.is_truthy());
+    let result = if recursive {
+        fs::remove_dir_all(lisp_file_name_to_path_buf(&directory))
+    } else {
+        fs::remove_dir(lisp_file_name_to_path_buf(&directory))
+    };
+    result.map_err(|err| {
+        signal_file_action_error_value(err, "Removing directory", Value::heap_string(directory))
+    })?;
+    Ok(Value::NIL)
+}
+
+/// `(make-symbolic-link TARGET LINKNAME &optional OK-IF-EXISTS)`
+pub fn builtin_make_symbolic_link(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    expect_min_args("make-symbolic-link", &args, 2)?;
+    if args.len() > 3 {
+        return Err(signal(
+            LispCondition::WrongNumberOfArguments,
+            vec![
+                Value::symbol("make-symbolic-link"),
+                Value::fixnum(args.len() as i64),
+            ],
+        ));
+    }
+    let mut target = expect_lisp_string_strict(&args[0])?;
+    if matches!(
+        args.get(2).map(|value| value.kind()),
+        Some(ValueKind::Fixnum(_))
+    ) {
+        if lisp_file_name_is_ascii_text(&target, b"~") || target.as_bytes().starts_with(b"~/") {
+            target = expand_file_name_lisp(&target, None);
+        } else if let Some(stripped) = lisp_string_strip_ascii_prefix(&target, b"/:") {
+            target = stripped;
+        }
+    }
+    let linkname_arg = expect_lisp_string_strict(&args[1])?;
+    let linkname = expand_cp_target_lisp_for_eval(eval, &target, &linkname_arg);
+    let mut handler_args = Vec::with_capacity(args.len());
+    handler_args.push(Value::heap_string(target.clone()));
+    handler_args.push(Value::heap_string(linkname.clone()));
+    if let Some(extra) = args.get(2) {
+        handler_args.push(*extra);
+    }
+    if let Some(result) = maybe_dispatch_resolved_file_handler(
+        eval,
+        "make-symbolic-link",
+        None,
+        Some(&linkname),
+        handler_args,
+    )? {
+        return Ok(result);
+    }
+    let ok_if_exists = args.get(2).is_some_and(|value| value.is_truthy());
+    let link_path = lisp_file_name_to_path_buf(&linkname);
+
+    #[cfg(unix)]
+    {
+        if fs::symlink_metadata(&link_path).is_ok() {
+            if !ok_if_exists {
+                return Err(signal_existing_path_value(
+                    &link_path,
+                    Value::heap_string(linkname.clone()),
+                ));
+            }
+            fs::remove_file(&link_path).map_err(|err| {
+                signal_file_action_error_value(
+                    err,
+                    "Removing old name",
+                    Value::heap_string(linkname.clone()),
+                )
+            })?;
+        }
+        std::os::unix::fs::symlink(lisp_file_name_to_path_buf(&target), &link_path).map_err(
+            |err| {
+                signal_file_action_error_pair_values(
+                    err,
+                    "Making symbolic link",
+                    Value::heap_string(target),
+                    Value::heap_string(linkname),
+                )
+            },
+        )?;
+        Ok(Value::NIL)
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = (target, linkname, ok_if_exists);
+        Err(signal(
+            LispCondition::FileError,
+            vec![Value::string(
+                "Symbolic links are unsupported on this platform",
+            )],
+        ))
+    }
+}
+
+/// `(rename-file FROM TO &optional OK-IF-EXISTS)`
+pub fn builtin_rename_file(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    expect_min_args("rename-file", &args, 2)?;
+    if args.len() > 3 {
+        return Err(signal(
+            LispCondition::WrongNumberOfArguments,
+            vec![
+                Value::symbol("rename-file"),
+                Value::fixnum(args.len() as i64),
+            ],
+        ));
+    }
+    // GNU `Frename_file` expands FROM, applies `directory-file-name` to it (both
+    // dispatch their magic handlers), then expands NEWNAME, before the
+    // rename-file handler.
+    let from_expanded = builtin_expand_file_name(eval, vec![args[0], Value::NIL])?;
+    let from = resolve_filename_lisp_for_eval(eval, &expect_lisp_string_strict(&from_expanded)?);
+    let from_dfn = builtin_directory_file_name(eval, vec![Value::heap_string(from.clone())])?;
+    let to_expanded = builtin_expand_file_name(eval, vec![args[1], Value::NIL])?;
+    let to = expand_cp_target_lisp_for_eval(
+        eval,
+        &expect_lisp_string_strict(&from_dfn)?,
+        &expect_lisp_string_strict(&to_expanded)?,
+    );
+    let mut handler_args = Vec::with_capacity(3);
+    handler_args.push(Value::heap_string(from.clone()));
+    handler_args.push(Value::heap_string(to.clone()));
+    if let Some(extra) = args.get(2) {
+        handler_args.push(*extra);
+    }
+    // rename-file arity 3 (FILE NEWNAME OK-IF-ALREADY-EXISTS).
+    while handler_args.len() < 3 {
+        handler_args.push(Value::NIL);
+    }
+    if let Some(result) = maybe_dispatch_resolved_file_handler(
+        eval,
+        "rename-file",
+        Some(&from),
+        Some(&to),
+        handler_args,
+    )? {
+        return Ok(result);
+    }
+    let ok_if_exists = args.get(2).is_some_and(|value| value.is_truthy());
+    let to_path = lisp_file_name_to_path_buf(&to);
+    if fs::symlink_metadata(&to_path).is_ok() && !ok_if_exists {
+        return Err(signal_existing_path_value(
+            &to_path,
+            Value::heap_string(to.clone()),
+        ));
+    }
+    let from_path = lisp_file_name_to_path_buf(&from);
+    rename_path_with_cross_device_fallback(&from_path, &to_path, ok_if_exists, |from, to| {
+        fs::rename(from, to)
+    })
+    .map_err(|err| {
+        signal_file_action_error_pair_values(
+            err,
+            "Renaming",
+            Value::heap_string(from),
+            Value::heap_string(to),
+        )
+    })?;
+    Ok(Value::NIL)
+}
+
+/// Timestamp behavior requested by `copy-file`'s KEEP-TIME argument.
+///
+/// Keeping this as policy rather than a platform boolean prevents the native
+/// copy primitive from silently deciding Lisp semantics.  In particular,
+/// Windows CopyFileW preserves modification times by default while Unix copy
+/// loops do not.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CopyTimestampPolicy {
+    Refresh,
+    Preserve,
+}
+
+impl CopyTimestampPolicy {
+    fn from_keep_time(value: Option<&Value>) -> Self {
+        if value.is_some_and(|value| value.is_truthy()) {
+            Self::Preserve
+        } else {
+            Self::Refresh
+        }
+    }
+
+    fn apply(self, source: &fs::Metadata, destination: &Path) -> std::io::Result<()> {
+        std::cfg_select! {
+            windows => {
+                let _ = source;
+                match self {
+                    // CopyFileW already preserves the source modification time.
+                    Self::Preserve => Ok(()),
+                    // GNU w32_copy_file explicitly counters CopyFileW's default
+                    // when KEEP-TIME is nil (src/w32.c:6982-7029).
+                    Self::Refresh => {
+                        set_file_times_path(destination, None, FileTimeSymlinks::Follow)
+                    }
+                }
+            }
+            _ => {
+                match self {
+                    // Writing the destination naturally refreshes its mtime.
+                    Self::Refresh => Ok(()),
+                    Self::Preserve => {
+                        let times = fs::FileTimes::new()
+                            .set_accessed(source.accessed()?)
+                            .set_modified(source.modified()?);
+                        fs::File::open(destination)?.set_times(times)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// `(copy-file FROM TO &optional OK-IF-EXISTS KEEP-TIME PRESERVE-UID-GID PRESERVE-PERMISSIONS)`
+pub fn builtin_copy_file(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    expect_min_args("copy-file", &args, 2)?;
+    if args.len() > 6 {
+        return Err(signal(
+            LispCondition::WrongNumberOfArguments,
+            vec![Value::symbol("copy-file"), Value::fixnum(args.len() as i64)],
+        ));
+    }
+    // GNU `Fcopy_file` runs `Fexpand_file_name` on both FROM and TO first,
+    // dispatching the expand-file-name magic handler before the copy-file one.
+    let from_expanded = builtin_expand_file_name(eval, vec![args[0], Value::NIL])?;
+    let to_expanded = builtin_expand_file_name(eval, vec![args[1], Value::NIL])?;
+    let from = resolve_filename_lisp_for_eval(eval, &expect_lisp_string_strict(&from_expanded)?);
+    let to = expand_cp_target_lisp_for_eval(eval, &from, &expect_lisp_string_strict(&to_expanded)?);
+    let mut handler_args = Vec::with_capacity(6);
+    handler_args.push(Value::heap_string(from.clone()));
+    handler_args.push(Value::heap_string(to.clone()));
+    handler_args.extend_from_slice(&args[2..]);
+    // copy-file arity 6 (FROM TO OK-IF-EXISTS KEEP-TIME PRESERVE-UID-GID PRESERVE-PERMISSIONS).
+    while handler_args.len() < 6 {
+        handler_args.push(Value::NIL);
+    }
+    if let Some(result) = maybe_dispatch_resolved_file_handler(
+        eval,
+        "copy-file",
+        Some(&from),
+        Some(&to),
+        handler_args,
+    )? {
+        return Ok(result);
+    }
+    let ok_if_exists = args.get(2).is_some_and(|value| value.is_truthy());
+    let timestamp_policy = CopyTimestampPolicy::from_keep_time(args.get(3));
+    let from_path = lisp_file_name_to_path_buf(&from);
+    let to_path = lisp_file_name_to_path_buf(&to);
+
+    // GNU opens the input first; a failure here is reported as
+    // `report_file_error ("Opening input file", file)` — only the source
+    // filename, before the destination is even considered (fileio.c:2346).
+    let from_meta = fs::metadata(&from_path).map_err(|err| {
+        signal_file_action_error_value(err, "Opening input file", Value::heap_string(from.clone()))
+    })?;
+
+    let dest_exists = fs::symlink_metadata(&to_path).is_ok();
+    if dest_exists && !ok_if_exists {
+        return Err(signal_existing_path_value(
+            &to_path,
+            Value::heap_string(to.clone()),
+        ));
+    }
+
+    // GNU's `already_exists` path: after reopening the destination it compares
+    // the input/output `st_dev`+`st_ino` and, when equal, signals
+    // `report_file_errno ("Input and output files are the same",
+    //  list2 (file, newname), 0)` — errno 0, so the message text is the
+    // platform C library's `strerror (0)` (fileio.c:2396-2403), not a fixed
+    // string.
+    #[cfg(unix)]
+    if dest_exists {
+        use std::os::unix::fs::MetadataExt;
+        if let Ok(to_meta) = fs::metadata(&to_path)
+            && from_meta.dev() == to_meta.dev()
+            && from_meta.ino() == to_meta.ino()
+        {
+            return Err(get_file_errno_data(
+                &std::io::Error::from_raw_os_error(0),
+                "Input and output files are the same",
+                vec![
+                    Value::heap_string(from.clone()),
+                    Value::heap_string(to.clone()),
+                ],
+            ));
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = &from_meta;
+
+    fs::copy(&from_path, &to_path).map_err(|err| {
+        signal_file_action_error_pair_values(
+            err,
+            "Copying",
+            Value::heap_string(from.clone()),
+            Value::heap_string(to.clone()),
+        )
+    })?;
+    timestamp_policy.apply(&from_meta, &to_path).map_err(|_| {
+        signal(
+            LispCondition::FileDateError,
+            vec![
+                Value::string("Cannot set file date"),
+                Value::heap_string(to),
+            ],
+        )
+    })?;
+    Ok(Value::NIL)
+}
+
+/// `(add-name-to-file OLDNAME NEWNAME &optional OK-IF-EXISTS)`
+pub fn builtin_add_name_to_file(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    expect_min_args("add-name-to-file", &args, 2)?;
+    if args.len() > 3 {
+        return Err(signal(
+            LispCondition::WrongNumberOfArguments,
+            vec![
+                Value::symbol("add-name-to-file"),
+                Value::fixnum(args.len() as i64),
+            ],
+        ));
+    }
+    let oldname = resolve_filename_lisp_for_eval(eval, &expect_lisp_string_strict(&args[0])?);
+    let newname =
+        expand_cp_target_lisp_for_eval(eval, &oldname, &expect_lisp_string_strict(&args[1])?);
+    let mut handler_args = Vec::with_capacity(args.len());
+    handler_args.push(Value::heap_string(oldname.clone()));
+    handler_args.push(Value::heap_string(newname.clone()));
+    if let Some(extra) = args.get(2) {
+        handler_args.push(*extra);
+    }
+    if let Some(result) = maybe_dispatch_resolved_file_handler(
+        eval,
+        "add-name-to-file",
+        Some(&oldname),
+        Some(&newname),
+        handler_args,
+    )? {
+        return Ok(result);
+    }
+    let ok_if_exists = args.get(2).is_some_and(|value| value.is_truthy());
+    let newname_path = lisp_file_name_to_path_buf(&newname);
+    if fs::symlink_metadata(&newname_path).is_ok() {
+        if !ok_if_exists {
+            return Err(signal_existing_path_value(
+                &newname_path,
+                Value::heap_string(newname.clone()),
+            ));
+        }
+        fs::remove_file(&newname_path).map_err(|err| {
+            signal_file_action_error_value(
+                err,
+                "Removing old name",
+                Value::heap_string(newname.clone()),
+            )
+        })?;
+    }
+    fs::hard_link(lisp_file_name_to_path_buf(&oldname), &newname_path).map_err(|err| {
+        signal_file_action_error_pair_values(
+            err,
+            "Adding new name",
+            Value::heap_string(oldname),
+            Value::heap_string(newname),
+        )
+    })?;
+    Ok(Value::NIL)
+}
+
+/// `(make-directory-internal DIRECTORY)` — internal primitive for the
+/// elisp `make-directory` wrapper. GNU dispatches the handler at the
+/// `make-directory` level via Qmake_directory; we mirror that so
+/// callers that go through the internal entry point still see the
+/// handler.
+pub fn builtin_make_directory_internal(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    if let Some(result) = dispatch_file_handler(eval, "make-directory", &args)? {
+        return Ok(result);
+    }
+    expect_args("make-directory-internal", &args, 1)?;
+    let dir = expect_lisp_string_strict(&args[0])?;
+    let resolved = resolve_filename_lisp_for_eval(eval, &dir);
+    fs::create_dir(lisp_file_name_to_path_buf(&resolved)).map_err(|e| {
+        signal_file_action_error_value(e, "Creating directory", Value::heap_string(resolved))
+    })?;
+    Ok(Value::NIL)
+}
+
+/// `(find-file-name-handler FILENAME OPERATION)` — public elisp
+/// surface for the [`find_file_name_handler`] dispatch helper.
+pub fn builtin_find_file_name_handler(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    expect_args("find-file-name-handler", &args, 2)?;
+    let filename = match args[0].kind() {
+        ValueKind::String => args[0]
+            .as_lisp_string()
+            .expect("ValueKind::String must carry LispString payload"),
+        _ => {
+            return Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("stringp"), args[0]],
+            ));
+        }
+    };
+    let operation = args[1];
+    Ok(find_file_name_handler_lisp_for_eval(
+        eval, filename, operation,
+    ))
+}
+
+/// The symbols `find-file-name-handler` consults on every call -- once per
+/// `exec-path` directory in each `call-process` -- interned once. They are
+/// core symbols, so their ids are stable across a pdump load.
+struct FileNameHandlerSymbols {
+    handler_alist: neovm_value::intern::SymId,
+    inhibit_operation: neovm_value::intern::SymId,
+    inhibit_handlers: neovm_value::intern::SymId,
+    operations: neovm_value::intern::SymId,
+}
+
+fn file_name_handler_symbols() -> &'static FileNameHandlerSymbols {
+    static SYMS: std::sync::OnceLock<FileNameHandlerSymbols> = std::sync::OnceLock::new();
+    SYMS.get_or_init(|| FileNameHandlerSymbols {
+        handler_alist: intern("file-name-handler-alist"),
+        inhibit_operation: intern("inhibit-file-name-operation"),
+        inhibit_handlers: intern("inhibit-file-name-handlers"),
+        operations: intern("operations"),
+    })
+}
+
+/// Walk `file-name-handler-alist` looking for a handler matching FILENAME
+/// for OPERATION. Mirrors GNU `Ffind_file_name_handler`
+/// (`src/fileio.c:371`).
+///
+/// The alist is a list of `(REGEXP . HANDLER)` cons cells. For each
+/// matching entry the highest match position wins (using `>` not `>=`,
+/// so the *first* match at any given position is preferred). When
+/// `OPERATION` equals `inhibit-file-name-operation`, handlers listed
+/// in `inhibit-file-name-handlers` are skipped — that is how a handler
+/// can call standard primitives without recursing into itself.
+///
+/// If a handler symbol carries a non-nil `'operations` property, the
+/// handler is only used when `OPERATION` is in that list. This lets
+/// handlers declare a restricted operation set without writing
+/// trampolines for everything else.
+///
+/// The three variables are read as GNU reads its C variables: the dynamic
+/// value, never a lexical binding of the same name.
+pub fn find_file_name_handler_lisp_for_eval(
+    eval: &Context,
+    filename: &neovm_value::heap_types::LispString,
+    operation: Value,
+) -> Value {
+    find_file_name_handler_lisp_with_values(
+        eval.variables(),
+        &eval.edit.buffers,
+        neovm_eval::emacs_core::builtins::search::FastStringMatchSyntax::for_current_buffer(eval),
+        filename,
+        operation,
+        eval.special_variable_value_by_id(file_name_handler_symbols().handler_alist),
+        eval.special_variable_value_by_id(file_name_handler_symbols().inhibit_operation),
+        eval.special_variable_value_by_id(file_name_handler_symbols().inhibit_handlers),
+    )
+}
+
+#[allow(clippy::too_many_arguments)] // match-time state stays explicit at the GNU-regexp boundary
+fn find_file_name_handler_lisp_with_values(
+    vars: VariableView<'_>,
+    buffers: &neovm_edit::buffer::BufferManager,
+    syntax: neovm_eval::emacs_core::builtins::search::FastStringMatchSyntax,
+    filename: &neovm_value::heap_types::LispString,
+    operation: Value,
+    handler_alist: Option<Value>,
+    inhibit_operation: Option<Value>,
+    inhibit_handlers: Option<Value>,
+) -> Value {
+    let obarray = vars.obarray();
+    // Read the alist. If unbound or non-list, no handlers apply.
+    let alist = match handler_alist {
+        Some(v) if v.is_cons() => v,
+        _ => return Value::NIL,
+    };
+    // Compute the inhibit list lazily — only consulted when operation
+    // matches inhibit-file-name-operation. GNU's test is a bare `EQ`, so a
+    // nil OPERATION is inhibited while the variable is nil too.
+    let mut inhibited: Option<Value> = None;
+    if let Some(inh_op) = inhibit_operation
+        && neovm_value::value::eq_value(&inh_op, &operation)
+    {
+        inhibited = inhibit_handlers;
+    }
+
+    // Walk the alist exactly like GNU's loop, picking the entry with
+    // the strictly-greatest match position.
+    let mut best: Value = Value::NIL;
+    let mut best_pos: Option<neovm_edit::buffer::EmacsBytePos> = None;
+    let mut cursor = alist;
+    while cursor.is_cons() {
+        let entry = cursor.cons_car();
+        cursor = cursor.cons_cdr();
+        if !entry.is_cons() {
+            continue;
+        }
+        let regexp_val = entry.cons_car();
+        let handler = entry.cons_cdr();
+        let Some(regexp) = regexp_val.as_lisp_string() else {
+            continue;
+        };
+
+        // If the handler is a symbol with a non-nil `operations`
+        // property, restrict to listed operations. Mirrors GNU's
+        // `Fget (handler, Qoperations)` check at fileio.c:409.
+        if let Some(handler_sym) = handler.as_bare_symbol_id() {
+            let ops_sym = file_name_handler_symbols().operations;
+            if let Some(ops) = obarray
+                .get_property_id(handler_sym, ops_sym)
+                .filter(|v| !v.is_nil())
+            {
+                let mut op_cursor = ops;
+                let mut found = false;
+                while op_cursor.is_cons() {
+                    if neovm_value::value::eq_value(&op_cursor.cons_car(), &operation) {
+                        found = true;
+                        break;
+                    }
+                    op_cursor = op_cursor.cons_cdr();
+                }
+                if !found {
+                    continue;
+                }
+            }
+        }
+
+        // Match the regexp against the filename. GNU `fast_string_match_internal`
+        // matches the string by pointer and publishes no match registers, so
+        // this borrows the filename instead of copying it into an owned
+        // `SearchedString` for every handler entry.
+        let match_pos = match syntax.search_start(vars, buffers, regexp, filename, 0, false) {
+            Ok(Some(byte_start)) => byte_start,
+            _ => continue,
+        };
+
+        if best_pos.is_none_or(|best| match_pos > best) {
+            // Skip if this handler is inhibited for the current operation.
+            if let Some(inh) = inhibited {
+                let mut inh_cursor = inh;
+                let mut skip = false;
+                while inh_cursor.is_cons() {
+                    if neovm_value::value::eq_value(&inh_cursor.cons_car(), &handler) {
+                        skip = true;
+                        break;
+                    }
+                    inh_cursor = inh_cursor.cons_cdr();
+                }
+                if skip {
+                    continue;
+                }
+            }
+            best = handler;
+            best_pos = Some(match_pos);
+        }
+    }
+    best
+}
+
+/// Convenience for builtins that have an `eval` context. Looks up a
+/// handler for `(filename, operation)` and, if one is installed,
+/// invokes it as `(funcall handler operation arg1 arg2 ...)` and
+/// returns the result wrapped in `Some`. Returns `None` if no handler
+/// matched, in which case the caller should fall back to its native
+/// implementation.
+///
+/// `operation_name` is the symbol the handler will receive as its
+/// first argument (e.g. `"file-exists-p"`). It must match the GNU
+/// operation symbol exactly.
+pub fn dispatch_file_handler(
+    eval: &mut Context,
+    operation_name: &str,
+    args: &[Value],
+) -> Result<Option<Value>, neovm_value::error::Flow> {
+    // Every operation we wire up takes the filename in args[0]. Two-
+    // argument file ops (copy-file, rename-file, add-name-to-file,
+    // make-symbolic-link) need to consult the handler for *both*
+    // names; those have a separate helper below.
+    let Some(first) = args.first() else {
+        return Ok(None);
+    };
+    let Some(filename) = eval.lisp_string(*first) else {
+        return Ok(None);
+    };
+    let operation_sym = Value::symbol(operation_name);
+    let handler = find_file_name_handler_lisp_for_eval(eval, filename, operation_sym);
+    if handler.is_nil() {
+        return Ok(None);
+    }
+    // Build (operation arg1 arg2 ...) and funcall the handler.
+    let mut call_args = Vec::with_capacity(args.len() + 1);
+    call_args.push(operation_sym);
+    call_args.extend_from_slice(args);
+    let result = eval.funcall_general(handler, call_args)?;
+    Ok(Some(result))
+}
+
+/// Result of GNU's expand-then-dispatch preamble for a single-filename file
+/// operation.  The local arm owns the expanded filename so a caller cannot
+/// accidentally resume with its original, unresolved argument after handler
+/// lookup says no.
+pub enum ExpandedFileOperation {
+    Handled(Value),
+    Local { expanded_filename: Value },
+}
+
+/// Mirror GNU's per-operation preamble: run `Fexpand_file_name` first (which
+/// can dispatch the expand-file-name magic handler), then invoke the operation
+/// handler with the expanded name and its full DEFUN arglist padded to `arity`.
+pub fn expand_file_operation(
+    eval: &mut Context,
+    operation_name: &str,
+    args: &[Value],
+    arity: usize,
+) -> Result<ExpandedFileOperation, neovm_value::error::Flow> {
+    let first = args
+        .first()
+        .expect("file operation arity must be validated before expansion");
+    debug_assert!(first.as_lisp_string().is_some());
+    let expanded = builtin_expand_file_name(eval, vec![*first, Value::NIL])?;
+    let mut call = Vec::with_capacity(arity.max(args.len()));
+    call.push(expanded);
+    call.extend_from_slice(&args[1..]);
+    while call.len() < arity {
+        call.push(Value::NIL);
+    }
+    Ok(
+        if let Some(result) = dispatch_file_handler(eval, operation_name, &call)? {
+            ExpandedFileOperation::Handled(result)
+        } else {
+            ExpandedFileOperation::Local {
+                expanded_filename: expanded,
+            }
+        },
+    )
+}
+
+/// `(directory-files DIRECTORY &optional FULL MATCH NOSORT COUNT)`
+pub fn builtin_directory_files(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    expect_min_args("directory-files", &args, 1)?;
+    if args.len() > 5 {
+        return Err(signal(
+            LispCondition::WrongNumberOfArguments,
+            vec![
+                Value::symbol("directory-files"),
+                Value::fixnum(args.len() as i64),
+            ],
+        ));
+    }
+    expect_lisp_string_strict(&args[0])?;
+    let dir = match expand_file_operation(eval, "directory-files", &args, 5)? {
+        ExpandedFileOperation::Handled(result) => return Ok(result),
+        ExpandedFileOperation::Local { expanded_filename } => {
+            expect_lisp_filename_string_strict(&expanded_filename)?
+        }
+    };
+    let full = args.get(1).is_some_and(|v| v.is_truthy());
+    let match_pattern = if let Some(val) = args.get(2) {
+        if val.is_truthy() {
+            Some(expect_lisp_string_strict(val)?)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let nosort = args.get(3).is_some_and(|v| v.is_truthy());
+    let count = if let Some(val) = args.get(4) {
+        match val.kind() {
+            ValueKind::Nil => None,
+            ValueKind::Fixnum(n) if n >= 0 => Some(n as usize),
+            _other => {
+                return Err(signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("wholenump"), *val],
+                ));
+            }
+        }
+    } else {
+        None
+    };
+
+    let syntax =
+        neovm_eval::emacs_core::builtins::search::FastStringMatchSyntax::for_current_buffer(eval);
+    let files = directory_files_with_decoder(
+        eval,
+        &dir,
+        full,
+        match_pattern.as_ref(),
+        nosort,
+        count,
+        syntax,
+        decode_file_name_lisp,
+    )
+    .map_err(|e| signal_directory_files_error(e, &dir))?;
+    Ok(Value::list(
+        files.into_iter().map(Value::heap_string).collect(),
+    ))
+}
+
+// ===========================================================================
+// Context-dependent builtins
+// ===========================================================================
+
+fn expect_int(value: &Value) -> Result<i64, Flow> {
+    match value.kind() {
+        ValueKind::Fixnum(n) => Ok(n),
+        _other => Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("integerp"), *value],
+        )),
+    }
+}
+
+fn expect_file_offset(value: &Value) -> Result<i64, Flow> {
+    let offset = expect_int(value)?;
+    if offset < 0 {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("file-offset"), *value],
+        ));
+    }
+    Ok(offset)
+}
+
+fn current_buffer_id_or_error(
+    buffers: &neovm_edit::buffer::BufferManager,
+) -> Result<neovm_edit::buffer::BufferId, Flow> {
+    buffers
+        .current_buffer_id()
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))
+}
+
+fn emacs_char_boundary(bytes: &[u8], byte_pos: usize, multibyte: bool) -> bool {
+    if byte_pos > bytes.len() {
+        return false;
+    }
+    if !multibyte || byte_pos == 0 || byte_pos == bytes.len() {
+        return true;
+    }
+    neovm_value::emacs_char::char_head_p(bytes[byte_pos])
+}
+
+fn previous_emacs_char_boundary(bytes: &[u8], mut byte_pos: usize, multibyte: bool) -> usize {
+    byte_pos = byte_pos.min(bytes.len());
+    while byte_pos > 0 && !emacs_char_boundary(bytes, byte_pos, multibyte) {
+        byte_pos -= 1;
+    }
+    byte_pos
+}
+
+fn common_replacement_prefix_bytes(
+    old_bytes: &[u8],
+    old_multibyte: bool,
+    new_bytes: &[u8],
+    new_multibyte: bool,
+) -> usize {
+    let mut prefix = 0usize;
+    let limit = old_bytes.len().min(new_bytes.len());
+    while prefix < limit && old_bytes[prefix] == new_bytes[prefix] {
+        prefix += 1;
+    }
+    let old_prefix = previous_emacs_char_boundary(old_bytes, prefix, old_multibyte);
+    let new_prefix = previous_emacs_char_boundary(new_bytes, prefix, new_multibyte);
+    old_prefix.min(new_prefix)
+}
+
+fn common_replacement_suffix_bytes(
+    old_bytes: &[u8],
+    old_multibyte: bool,
+    new_bytes: &[u8],
+    new_multibyte: bool,
+    prefix: usize,
+) -> usize {
+    let old_tail_limit = old_bytes.len().saturating_sub(prefix);
+    let new_tail_limit = new_bytes.len().saturating_sub(prefix);
+    let mut suffix = 0usize;
+    let limit = old_tail_limit.min(new_tail_limit);
+    while suffix < limit
+        && old_bytes[old_bytes.len() - suffix - 1] == new_bytes[new_bytes.len() - suffix - 1]
+    {
+        suffix += 1;
+    }
+    while suffix > 0
+        && (!emacs_char_boundary(old_bytes, old_bytes.len() - suffix, old_multibyte)
+            || !emacs_char_boundary(new_bytes, new_bytes.len() - suffix, new_multibyte))
+    {
+        suffix -= 1;
+    }
+    suffix
+}
+
+fn char_count_for_lisp_string_byte_prefix(text: &LispString, byte_pos: usize) -> usize {
+    if text.is_multibyte() {
+        neovm_value::emacs_char::byte_to_char_pos(text.as_bytes(), byte_pos)
+    } else {
+        byte_pos
+    }
+}
+
+fn restore_point_after_file_replace(
+    buffers: &mut neovm_edit::buffer::BufferManager,
+    current_id: neovm_edit::buffer::BufferId,
+    saved_point_char: usize,
+    same_at_start_char: usize,
+    same_at_end_char: usize,
+    inserted_chars: usize,
+) -> Result<(), Flow> {
+    let new_point_char = if saved_point_char <= same_at_start_char {
+        saved_point_char
+    } else if saved_point_char <= same_at_end_char {
+        let old_size = same_at_end_char.saturating_sub(same_at_start_char);
+        if old_size == 0 {
+            same_at_start_char
+        } else {
+            same_at_start_char
+                + ((inserted_chars as f64 / old_size as f64)
+                    * (saved_point_char - same_at_start_char) as f64) as usize
+        }
+    } else {
+        saved_point_char
+            .saturating_add(inserted_chars)
+            .saturating_sub(same_at_end_char.saturating_sub(same_at_start_char))
+    };
+    let point = {
+        let buf = buffers
+            .get(current_id)
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        let point_char = CharPos0::new(new_point_char).min(buf.total_char_end_pos());
+        TextPositionAnchor::new(
+            point_char,
+            buf.char_pos_to_emacs_byte_pos_clamped(point_char),
+        )
+    };
+    buffers
+        .set_buffer_point_anchor(current_id, point)
+        .map(|_| ())
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))
+}
+
+fn signal_and_delete_file_replace_region(
+    eval: &mut Context,
+    current_id: neovm_edit::buffer::BufferId,
+    byte_range: EmacsByteRange,
+    signal_hooks: bool,
+) -> Result<(), Flow> {
+    if byte_range.is_empty() {
+        return Ok(());
+    }
+    let change = neovm_edit::emacs_core::editfns::text_change_for_deletion_in_manager(
+        &eval.edit.buffers,
+        current_id,
+        byte_range,
+    )?;
+    if signal_hooks {
+        neovm_edit::emacs_core::editfns::signal_before_text_change(eval, change)?;
+    }
+    eval.edit
+        .buffers
+        .delete_buffer_measured_region(current_id, change.old_range())
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    if signal_hooks {
+        neovm_edit::emacs_core::editfns::signal_after_text_change(eval, change)?;
+    }
+    Ok(())
+}
+
+fn signal_and_insert_file_replace_text(
+    eval: &mut Context,
+    current_id: neovm_edit::buffer::BufferId,
+    byte_pos: EmacsBytePos,
+    text: &LispString,
+    signal_hooks: bool,
+) -> Result<(), Flow> {
+    if text.is_empty() {
+        return Ok(());
+    }
+    eval.edit
+        .buffers
+        .goto_buffer_emacs_byte_pos(current_id, byte_pos)
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    let change =
+        neovm_edit::emacs_core::editfns::text_change_for_lisp_string_replacement_in_manager(
+            &eval.edit.buffers,
+            current_id,
+            EmacsByteRange::from_start_len(byte_pos, EmacsByteLen::ZERO),
+            text,
+        )?;
+    if signal_hooks {
+        neovm_edit::emacs_core::editfns::signal_before_text_change(eval, change)?;
+    }
+    eval.edit
+        .buffers
+        // GNU's `insert-file-contents' REPLACE path performs a deletion and
+        // then an ordinary insertion (`insert_from_buffer`), not one atomic
+        // `adjust_markers_for_replace` edit.  Markers collapsed to the insert
+        // position by the deletion must therefore honor their insertion type.
+        .insert_lisp_string_into_buffer(current_id, text)
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    if signal_hooks {
+        neovm_edit::emacs_core::editfns::signal_after_text_change(eval, change)?;
+    }
+    Ok(())
+}
+
+/// Returns the *net* number of characters inserted after eliding the
+/// unchanged head/tail affixes, matching GNU's final `inserted = PT - temp`
+/// in the REPLACE branch of `Finsert_file_contents` (fileio.c).  When the new
+/// text is byte-identical to the accessible buffer text this is 0.
+fn replace_accessible_portion_for_insert_file_contents(
+    eval: &mut Context,
+    current_id: neovm_edit::buffer::BufferId,
+    text: &LispString,
+    signal_hooks: bool,
+    hide_visited_file_name_during_replace: bool,
+) -> Result<i64, Flow> {
+    let (
+        accessible_range,
+        accessible_start_char,
+        accessible_end_char,
+        old_point_char,
+        old_multibyte,
+        old_text,
+    ) = {
+        let buf = eval
+            .edit
+            .buffers
+            .get(current_id)
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        let accessible = buf.accessible_emacs_byte_region();
+        let range = accessible.range();
+        let edit_range = buf.edit_range_for_emacs_byte_range(range);
+        (
+            range,
+            edit_range.char_start().get(),
+            edit_range.char_end().get(),
+            buf.point_char_pos().get(),
+            buf.get_multibyte(),
+            buf.buffer_substring_lisp_string_range(range),
+        )
+    };
+    let old_bytes = old_text.as_bytes();
+    let new_bytes = text.as_bytes();
+    let prefix =
+        common_replacement_prefix_bytes(old_bytes, old_multibyte, new_bytes, text.is_multibyte());
+    let suffix = common_replacement_suffix_bytes(
+        old_bytes,
+        old_multibyte,
+        new_bytes,
+        text.is_multibyte(),
+        prefix,
+    );
+
+    if prefix == old_bytes.len() && prefix == new_bytes.len() {
+        restore_point_after_file_replace(
+            &mut eval.edit.buffers,
+            current_id,
+            old_point_char,
+            accessible_start_char + char_count_for_lisp_string_byte_prefix(&old_text, prefix),
+            accessible_end_char - char_count_for_lisp_string_byte_prefix(&old_text, suffix),
+            text.schars(),
+        )?;
+        // Byte-identical content: GNU elides both affixes entirely, so the
+        // net inserted count reported by `(FILE INSERTED)` is 0.
+        return Ok(0);
+    }
+
+    let delete_range = EmacsByteRange::new(
+        accessible_range.start().add_len(EmacsByteLen::new(prefix)),
+        accessible_range
+            .end()
+            .saturating_sub_len(EmacsByteLen::new(suffix)),
+    );
+    let insert_start = prefix;
+    let insert_end = new_bytes.len() - suffix;
+    let insert_text = text.slice(insert_start, insert_end).ok_or_else(|| {
+        signal(
+            "error",
+            vec![Value::string("Invalid replacement text slice")],
+        )
+    })?;
+    let same_at_start_char =
+        accessible_start_char + char_count_for_lisp_string_byte_prefix(&old_text, prefix);
+    let same_at_end_char =
+        accessible_end_char - char_count_for_lisp_string_byte_prefix(&old_text, suffix);
+    let inserted_chars = insert_text.schars();
+
+    // GNU `Finsert_file_contents' temporarily binds `buffer-file-name' to nil
+    // while a VISIT+REPLACE mutates an unnarrowed buffer.  Change preparation
+    // otherwise treats the stale visited modtime as a user edit and asks about
+    // a supersession threat, even though this mutation is making the buffer
+    // match the file.  Keep the binding scoped to the actual replacement:
+    // byte-identical reads above remain true no-ops, including for variable
+    // watchers.
+    let specpdl_count = eval.specpdl.len();
+    if hide_visited_file_name_during_replace {
+        eval.try_specbind_or_unwind_to(specpdl_count, intern("buffer-file-name"), Value::NIL)?;
+    }
+    let replace_result = (|| -> Result<i64, Flow> {
+        signal_and_delete_file_replace_region(eval, current_id, delete_range, signal_hooks)?;
+        signal_and_insert_file_replace_text(
+            eval,
+            current_id,
+            delete_range.start(),
+            &insert_text,
+            signal_hooks,
+        )?;
+        restore_point_after_file_replace(
+            &mut eval.edit.buffers,
+            current_id,
+            old_point_char,
+            same_at_start_char,
+            same_at_end_char,
+            inserted_chars,
+        )?;
+        Ok(inserted_chars as i64)
+    })();
+    finish_inserted_count_scope(eval, specpdl_count, replace_result)
+}
+
+fn finish_inserted_count_scope(
+    eval: &mut Context,
+    specpdl_count: usize,
+    result: Result<i64, Flow>,
+) -> Result<i64, Flow> {
+    match result {
+        Ok(inserted) => eval
+            .unbind_to_with_result(specpdl_count, Ok(Value::NIL))
+            .map(|_| inserted),
+        Err(flow) => match eval.unbind_to_with_result(specpdl_count, Err(flow)) {
+            Err(flow) => Err(flow),
+            Ok(_) => unreachable!("unwinding an error cannot produce a value"),
+        },
+    }
+}
+
+/// Inserts CONTENTS into the current buffer.  For a REPLACE request this
+/// returns `Some(net)` — the affix-elided net inserted char count GNU reports
+/// in `(FILE INSERTED)` — and `None` for a plain insert, where the caller keeps
+/// the full decoded char count.
+fn insert_file_contents_into_current_buffer_in_state(
+    eval: &mut Context,
+    current_id: neovm_edit::buffer::BufferId,
+    contents: &LispString,
+    replace_requested: bool,
+    signal_hooks: bool,
+    hide_visited_file_name_during_replace: bool,
+) -> Result<Option<i64>, Flow> {
+    if replace_requested {
+        replace_accessible_portion_for_insert_file_contents(
+            eval,
+            current_id,
+            contents,
+            signal_hooks,
+            hide_visited_file_name_during_replace,
+        )
+        .map(Some)
+    } else {
+        // GNU Emacs: insert-file-contents inserts text at point but does NOT
+        // advance point past the inserted text (unlike regular `insert`).
+        // It calls TEMP_SET_PT_BOTH(BEG, BEG_BYTE) to keep point at the
+        // beginning of the inserted region.
+        let pt_before = eval
+            .edit
+            .buffers
+            .get(current_id)
+            .map(|b| b.point_anchor())
+            .unwrap_or_else(|| TextPositionAnchor::new(CharPos0::ZERO, EmacsBytePos::ZERO));
+        let change =
+            neovm_edit::emacs_core::editfns::text_change_for_lisp_string_replacement_in_manager(
+                &eval.edit.buffers,
+                current_id,
+                EmacsByteRange::from_start_len(pt_before.emacs_byte_pos(), EmacsByteLen::ZERO),
+                contents,
+            )?;
+        if signal_hooks && !contents.is_empty() {
+            neovm_edit::emacs_core::editfns::signal_before_text_change(eval, change)?;
+        }
+        eval.edit
+            .buffers
+            .insert_lisp_string_into_buffer(current_id, contents)
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        if signal_hooks && !contents.is_empty() {
+            neovm_edit::emacs_core::editfns::signal_after_text_change(eval, change)?;
+        }
+        // Restore point to before the insertion (matching GNU).
+        let _ = eval
+            .edit
+            .buffers
+            .set_buffer_point_anchor(current_id, pt_before);
+        Ok(None)
+    }
+}
+
+fn expect_inserted_char_count(value: &Value) -> Result<i64, Flow> {
+    let inserted = expect_int(value)?;
+    if inserted < 0 {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("integer-or-marker-p"), *value],
+        ));
+    }
+    Ok(inserted)
+}
+
+/// INSERTED as GNU takes it from a file name handler's value
+/// (src/fileio.c:4168-4170): N from `(FILE N)` when N is a fixnum in
+/// `[0, ZV - PT]`; 0 otherwise.  jka-compr, for one, reports a count that
+/// can exceed `ZV - PT`, and then gets no `format-decode` or hooks.
+fn handler_reported_inserted_chars(buf: &neovm_edit::buffer::Buffer, handler_result: Value) -> i64 {
+    let count = if handler_result.is_cons() && handler_result.cons_cdr().is_cons() {
+        handler_result.cons_cdr().cons_car().as_fixnum()
+    } else {
+        None
+    };
+    let room = buf
+        .point_max_char_pos()
+        .saturating_offset_from(buf.point_char_pos())
+        .get();
+    match (count, i64::try_from(room)) {
+        (Some(count), Ok(room)) if (0..=room).contains(&count) => count,
+        _ => 0,
+    }
+}
+
+/// The rest of `insert-file-contents` once a file name handler has done the
+/// reading.  GNU's handler branch does `goto handled` (src/fileio.c:4163-4171)
+/// rather than returning, so the handler's insertion still gets the VISIT
+/// bookkeeping (:5148-5169), `after-insert-file-set-coding`, `format-decode`
+/// and `after-insert-file-functions` (:5174-5306).  No coding system was
+/// decided here, so `last-coding-system-used` stays whatever the handler left
+/// (:5171-5172).  The handler's own value is returned unless it is nil
+/// (:5331-5332).
+fn finish_handled_insert_file_contents(
+    eval: &mut Context,
+    filename: &neovm_value::heap_types::LispString,
+    handler_result: Value,
+    visit: bool,
+    replace_requested: bool,
+    empty_undo_list_p: bool,
+) -> EvalResult {
+    // GNU continues with whatever buffer is current after the handler.
+    let current_id = current_buffer_id_or_error(&eval.edit.buffers)?;
+    let inserted = handler_reported_inserted_chars(
+        eval.edit
+            .buffers
+            .get(current_id)
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?,
+        handler_result,
+    );
+
+    if visit {
+        if empty_undo_list_p {
+            let _ = eval
+                .edit
+                .buffers
+                .configure_buffer_undo_list(current_id, Value::NIL);
+        }
+        // SAVE_MODIFF = MODIFF; BUF_AUTOSAVE_MODIFF = MODIFF;
+        // save_length = Z - BEG (:5160-5162).  The modtime, file name and
+        // lock are left to the handler (:5153-5158 and :5163-5168 only run
+        // without one).
+        let _ = eval
+            .edit
+            .buffers
+            .set_buffer_modified_flag(current_id, false);
+        let _ = eval.edit.buffers.set_buffer_auto_saved(current_id);
+        if let Some(buf) = eval.edit.buffers.get_mut(current_id) {
+            let size = i64::try_from(buf.total_char_len().get()).unwrap_or(i64::MAX);
+            buf.set_buffer_local("buffer-saved-size", Value::fixnum(size));
+        }
+    }
+
+    let roots = eval.save_specpdl_roots();
+    eval.push_specpdl_root(handler_result);
+    let pipeline_result =
+        run_after_insert_file_pipeline(eval, current_id, visit, replace_requested, inserted);
+    eval.restore_specpdl_roots(roots);
+    let inserted = pipeline_result?;
+
+    if handler_result.is_nil() {
+        Ok(Value::list(vec![
+            Value::heap_string(filename.clone()),
+            Value::fixnum(inserted),
+        ]))
+    } else {
+        Ok(handler_result)
+    }
+}
+
+fn run_after_insert_file_pipeline(
+    eval: &mut Context,
+    current_id: neovm_edit::buffer::BufferId,
+    visit: bool,
+    replace_requested: bool,
+    inserted_chars: i64,
+) -> Result<i64, Flow> {
+    let visit_value = if visit { Value::T } else { Value::NIL };
+    let mut inserted = inserted_chars;
+
+    if eval.obarray.fboundp("after-insert-file-set-coding") {
+        let result = eval.funcall_general(
+            Value::symbol("after-insert-file-set-coding"),
+            vec![Value::fixnum(inserted), visit_value],
+        )?;
+        if !result.is_nil() {
+            inserted = expect_inserted_char_count(&result)?;
+        }
+    }
+
+    if inserted <= 0 || !eval.obarray.fboundp("format-decode") {
+        return Ok(inserted);
+    }
+
+    let (saved_point, accessible_start, chars_modiff_before) = eval
+        .edit
+        .buffers
+        .get(current_id)
+        .map(|buf| {
+            let accessible = buf.accessible_emacs_byte_region();
+            (
+                buf.point_anchor(),
+                accessible.start(),
+                buf.chars_modified_tick(),
+            )
+        })
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    let specpdl_count = eval.specpdl.len();
+    eval.try_specbind_or_unwind_to(
+        specpdl_count,
+        intern("inhibit-point-motion-hooks"),
+        Value::T,
+    )?;
+    eval.try_specbind_or_unwind_to(
+        specpdl_count,
+        intern("inhibit-modification-hooks"),
+        Value::T,
+    )?;
+    // GNU saves the undo list and `bset_undo_list (current_buffer, Qt)`
+    // (fileio.c:5198-5199); only the normal path puts it back (:5288-5303).
+    // A signal from `format-decode` or `after-insert-file-functions` leaves
+    // undo disabled, and it is not a `let`, so nothing unwinds it (P4.10).
+    let saved_undo_list = eval
+        .edit
+        .buffers
+        .get(current_id)
+        .map(neovm_edit::buffer::Buffer::get_undo_list);
+    if let Some(buf) = eval.edit.buffers.get_mut(current_id) {
+        buf.set_undo_list(Value::T);
+    }
+    let undo_root = eval.save_specpdl_roots();
+    if let Some(saved) = saved_undo_list {
+        eval.push_specpdl_root(saved);
+    }
+
+    let pipeline_result =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<i64, Flow> {
+            if replace_requested {
+                eval.edit
+                    .buffers
+                    .goto_buffer_emacs_byte_pos(current_id, accessible_start)
+                    .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+            }
+
+            let format_result = eval.funcall_general(
+                Value::symbol("format-decode"),
+                vec![Value::NIL, Value::fixnum(inserted), visit_value],
+            )?;
+            if !format_result.is_nil() {
+                inserted = expect_inserted_char_count(&format_result)?;
+            }
+
+            let hook_sym = intern("after-insert-file-functions");
+            let hook_value = eval.visible_variable_value_or_nil("after-insert-file-functions");
+            let hook_functions =
+                neovm_eval::emacs_core::hook_runtime::collect_hook_functions_in_state(
+                    eval, hook_sym, hook_value, true,
+                );
+            if !hook_functions.is_empty() {
+                let gc_roots = eval.save_specpdl_roots();
+                for func in &hook_functions {
+                    eval.push_specpdl_root(*func);
+                }
+                eval.push_specpdl_root(Value::fixnum(inserted));
+                let hook_result = (|| -> Result<i64, Flow> {
+                    let mut inserted_now = inserted;
+                    for function in &hook_functions {
+                        let result = eval.apply(*function, vec![Value::fixnum(inserted_now)])?;
+                        if !result.is_nil() {
+                            inserted_now = expect_inserted_char_count(&result)?;
+                        }
+                    }
+                    Ok(inserted_now)
+                })();
+                eval.restore_specpdl_roots(gc_roots);
+                inserted = hook_result?;
+            }
+
+            Ok(inserted)
+        }));
+
+    // A Rust panic crossing the decode/hooks callbacks must not leave the
+    // dynamic suffix or the undo snapshot rooted (P4.11). GNU has no unwind
+    // here (fileio.c:5198-5199 saves undo and only the normal path restores
+    // it, :5288-5303), so the cleanup is storage-only and leaves exactly
+    // what GNU's signal path leaves: the callback's selected buffer and the
+    // disabled undo list.
+    let pipeline_result = match pipeline_result {
+        Ok(result) => result,
+        Err(panic) => {
+            eval.restore_specpdl_roots(undo_root);
+            eval.discard_specpdl_to(specpdl_count);
+            std::panic::resume_unwind(panic);
+        }
+    };
+
+    eval.restore_specpdl_roots(undo_root);
+    if pipeline_result.is_err() {
+        // GNU has no unwind here: a buffer the hooks selected stays current.
+        return finish_inserted_count_scope(eval, specpdl_count, pipeline_result);
+    }
+    if let (Some(saved), Some(buf)) = (saved_undo_list, eval.edit.buffers.get_mut(current_id)) {
+        buf.set_undo_list(saved);
+    }
+    eval.restore_current_buffer_if_live(current_id);
+    let chars_modiff_after = eval
+        .edit
+        .buffers
+        .get(current_id)
+        .map(|buf| buf.chars_modified_tick())
+        .unwrap_or(chars_modiff_before + 1);
+    if replace_requested && chars_modiff_after == chars_modiff_before {
+        let _ = eval
+            .edit
+            .buffers
+            .set_buffer_point_anchor(current_id, saved_point);
+    }
+    finish_inserted_count_scope(eval, specpdl_count, pipeline_result)
+}
+
+/// A position in the character stream consumed by GNU's `a_write`.
+///
+/// Keeping this distinct from byte offsets prevents multibyte annotations from
+/// being placed using storage coordinates.  GNU annotation positions are
+/// 1-based buffer character positions, including the region end boundary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct WriteAnnotationPosition(LispCharPos1);
+
+/// The callback result that contributed an annotation.  GNU merges a newer
+/// callback's whole list before an older list when their positions tie.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct WriteAnnotationBatch(usize);
+
+/// Stable order inside one callback result.  This is intentionally a distinct
+/// type from `WriteAnnotationBatch`: reversing batches must never reverse the
+/// annotations within a batch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct WriteAnnotationBatchIndex(usize);
+
+#[derive(Clone)]
+enum WriteAnnotationPayload {
+    Text(LispString),
+    /// GNU consumes a non-string annotation at its position but emits no text
+    /// (`a_write`, src/fileio.c:6013-6021).
+    NoText,
+}
+
+#[derive(Clone)]
+struct WriteAnnotation {
+    position: WriteAnnotationPosition,
+    payload: WriteAnnotationPayload,
+    batch: WriteAnnotationBatch,
+    batch_index: WriteAnnotationBatchIndex,
+    original_pair: Value,
+}
+
+#[derive(Default)]
+struct WriteAnnotationStream {
+    entries: Vec<WriteAnnotation>,
+    next_batch: usize,
+}
+
+impl WriteAnnotationStream {
+    fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    fn as_lisp_list(&self) -> Value {
+        let pairs: Vec<Value> = self
+            .entries
+            .iter()
+            .map(|annotation| annotation.original_pair)
+            .collect();
+        Value::list(pairs)
+    }
+
+    fn merge_callback_result(&mut self, result: Value) -> Result<(), Flow> {
+        let pairs = list_to_vec(&result).ok_or_else(|| {
+            signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("listp"), result],
+            )
+        })?;
+
+        let batch = WriteAnnotationBatch(self.next_batch);
+        self.next_batch += 1;
+        for (batch_index, pair) in pairs.into_iter().enumerate() {
+            if !pair.is_cons() {
+                return Err(signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("consp"), pair],
+                ));
+            }
+            let position_value = pair.cons_car();
+            let position = position_value.as_fixnum().ok_or_else(|| {
+                signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("integerp"), position_value],
+                )
+            })?;
+            let payload_value = pair.cons_cdr();
+            let payload = payload_value
+                .as_lisp_string()
+                .cloned()
+                .map(WriteAnnotationPayload::Text)
+                .unwrap_or(WriteAnnotationPayload::NoText);
+            self.entries.push(WriteAnnotation {
+                position: WriteAnnotationPosition(LispCharPos1::new(position)),
+                payload,
+                batch,
+                batch_index: WriteAnnotationBatchIndex(batch_index),
+                original_pair: pair,
+            });
+        }
+
+        self.entries.sort_by(|left, right| {
+            left.position
+                .cmp(&right.position)
+                .then_with(|| right.batch.cmp(&left.batch))
+                .then_with(|| left.batch_index.cmp(&right.batch_index))
+        });
+        Ok(())
+    }
+
+    fn intersperse(
+        &self,
+        source: &LispString,
+        source_start: LispCharPos1,
+        source_end: LispCharPos1,
+    ) -> LispString {
+        let mut output = source
+            .slice(0, 0)
+            .expect("an empty Lisp string prefix is always in bounds");
+        let mut source_char_cursor = 0usize;
+        let source_start = source_start.as_i64();
+        let source_end = source_end.as_i64();
+
+        for annotation in &self.entries {
+            let position = annotation.position.0.as_i64();
+            if position < source_start || position > source_end {
+                continue;
+            }
+            let annotation_char_offset = usize::try_from(position - source_start)
+                .expect("an in-range annotation offset is nonnegative")
+                .min(source.schars());
+            let byte_start = source.char_to_byte_pos(source_char_cursor);
+            let byte_end = source.char_to_byte_pos(annotation_char_offset);
+            let source_piece = source
+                .slice(byte_start, byte_end)
+                .expect("character-derived Lisp string slice is in bounds");
+            output = output.concat(&source_piece);
+            if let WriteAnnotationPayload::Text(text) = &annotation.payload {
+                output = output.concat(text);
+            }
+            source_char_cursor = annotation_char_offset;
+        }
+
+        let byte_start = source.char_to_byte_pos(source_char_cursor);
+        let source_tail = source
+            .slice(byte_start, source.sbytes())
+            .expect("Lisp string tail is in bounds");
+        output.concat(&source_tail)
+    }
+}
+
+/// The mutually exclusive sources accepted by `write-region`.
+///
+/// GNU intentionally skips annotation callbacks when START is a string.  This
+/// enum makes that rule exhaustive: only `BufferRegion` can enter annotation
+/// collection, while `Literal` carries its already-complete content.
+enum WriteRegionSource {
+    Literal {
+        content: LispString,
+        coding_buffer: BufferId,
+    },
+    BufferRegion {
+        buffer: BufferId,
+        start: LispCharPos1,
+        end: LispCharPos1,
+    },
+}
+
+impl WriteRegionSource {
+    fn buffer_region(
+        buffers: &neovm_edit::buffer::BufferManager,
+        buffer: BufferId,
+        start: Value,
+        end: Value,
+    ) -> Result<Self, Flow> {
+        let buf = buffers
+            .get(buffer)
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        let byte_range = if start.is_nil() {
+            buf.accessible_emacs_byte_range()
+        } else {
+            neovm_edit::emacs_core::position::LispRegionArgs::from_values(buffers, start, end)?
+                .accessible_byte_range(buf)?
+        };
+        Ok(Self::BufferRegion {
+            buffer,
+            start: buf.emacs_byte_pos_to_lisp_char_pos(byte_range.start()),
+            end: buf.emacs_byte_pos_to_lisp_char_pos(byte_range.end()),
+        })
+    }
+
+    fn whole_accessible_buffer(
+        buffers: &neovm_edit::buffer::BufferManager,
+        buffer: BufferId,
+    ) -> Result<Self, Flow> {
+        let buf = buffers
+            .get(buffer)
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        Ok(Self::BufferRegion {
+            buffer,
+            start: buf.point_min_lisp_char_pos(),
+            end: buf.point_max_lisp_char_pos(),
+        })
+    }
+
+    fn content(&self, buffers: &neovm_edit::buffer::BufferManager) -> Result<LispString, Flow> {
+        match self {
+            Self::Literal { content, .. } => Ok(content.clone()),
+            Self::BufferRegion { buffer, start, end } => {
+                let buf = buffers
+                    .get(*buffer)
+                    .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+                Ok(buf.buffer_substring_lisp_string_range(EmacsByteRange::new(
+                    buf.lisp_pos_to_accessible_emacs_byte_pos(*start),
+                    buf.lisp_pos_to_accessible_emacs_byte_pos(*end),
+                )))
+            }
+        }
+    }
+
+    fn coding_buffer(&self) -> BufferId {
+        match self {
+            Self::Literal { coding_buffer, .. } => *coding_buffer,
+            Self::BufferRegion { buffer, .. } => *buffer,
+        }
+    }
+
+    fn coding_bounds(&self) -> (Value, Value) {
+        match self {
+            Self::Literal { content, .. } => (Value::heap_string(content.clone()), Value::NIL),
+            Self::BufferRegion { start, end, .. } => {
+                (Value::fixnum(start.as_i64()), Value::fixnum(end.as_i64()))
+            }
+        }
+    }
+
+    fn apply_annotations(
+        &self,
+        buffers: &neovm_edit::buffer::BufferManager,
+        annotations: &WriteAnnotationStream,
+    ) -> Result<LispString, Flow> {
+        let content = self.content(buffers)?;
+        match self {
+            Self::Literal { .. } => Ok(content),
+            Self::BufferRegion { start, end, .. } => {
+                Ok(annotations.intersperse(&content, *start, *end))
+            }
+        }
+    }
+}
+
+struct PreparedWriteRegion {
+    content: LispString,
+    source: WriteRegionSource,
+    original_buffer: BufferId,
+    annotation_buffers: Vec<BufferId>,
+}
+
+impl PreparedWriteRegion {
+    fn run_post_annotation_functions(
+        &self,
+        eval: &mut neovm_eval::emacs_core::eval::Context,
+    ) -> Result<(), Flow> {
+        let result = (|| {
+            // GNU conses each newly selected annotation buffer onto the front,
+            // so cleanup visits the most recent buffer first and the original
+            // buffer last (`src/fileio.c:5804-5819`).
+            for buffer in self.annotation_buffers.iter().rev().copied() {
+                if eval.edit.buffers.get(buffer).is_none() {
+                    continue;
+                }
+                eval.switch_current_buffer(buffer)?;
+                let function =
+                    eval.visible_variable_value_or_nil("write-region-post-annotation-function");
+                if neovm_eval::emacs_core::builtins::value_is_function(eval, function) {
+                    let _ = eval.apply(function, vec![])?;
+                }
+            }
+            Ok(())
+        })();
+        eval.restore_current_buffer_if_live(self.original_buffer);
+        result
+    }
+}
+
+fn prepare_write_region(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    original_buffer: BufferId,
+    start: Value,
+    end: Value,
+) -> Result<PreparedWriteRegion, Flow> {
+    let mut annotation_buffers = vec![original_buffer];
+    if let Some(content) = start.as_lisp_string().cloned() {
+        return Ok(PreparedWriteRegion {
+            content: content.clone(),
+            source: WriteRegionSource::Literal {
+                content,
+                coding_buffer: original_buffer,
+            },
+            original_buffer,
+            annotation_buffers,
+        });
+    }
+
+    let mut source =
+        WriteRegionSource::buffer_region(&eval.edit.buffers, original_buffer, start, end)?;
+    let mut callback_start = start;
+    let mut callback_end = end;
+    let hook_sym = intern("write-region-annotate-functions");
+    let hook_value = eval.visible_variable_value_or_nil("write-region-annotate-functions");
+    let functions = neovm_eval::emacs_core::hook_runtime::collect_hook_functions_in_state(
+        eval, hook_sym, hook_value, true,
+    );
+    let root_scope = eval.save_specpdl_roots();
+    eval.push_specpdl_root(Value::list(functions.clone()));
+    let mut annotations = WriteAnnotationStream::default();
+
+    let collection_result = (|| -> Result<(), Flow> {
+        for function in functions {
+            eval.set_variable(
+                "write-region-annotations-so-far",
+                annotations.as_lisp_list(),
+            );
+            let buffer_before = current_buffer_id_or_error(&eval.edit.buffers)?;
+            let result = eval.apply(function, vec![callback_start, callback_end])?;
+            eval.push_specpdl_root(result);
+            let buffer_after = current_buffer_id_or_error(&eval.edit.buffers)?;
+            if buffer_after != buffer_before {
+                annotation_buffers.push(buffer_after);
+                source =
+                    WriteRegionSource::whole_accessible_buffer(&eval.edit.buffers, buffer_after)?;
+                let buf = eval
+                    .edit
+                    .buffers
+                    .get(buffer_after)
+                    .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+                callback_start = Value::from_fixnum(buf.point_min_position().into());
+                callback_end = Value::from_fixnum(buf.point_max_position().into());
+                annotations.clear();
+            }
+            annotations.merge_callback_result(result)?;
+        }
+        Ok(())
+    })();
+    if let Err(error) = collection_result {
+        eval.restore_specpdl_roots(root_scope);
+        // GNU's only unwind here is `build_annotations_unwind`, which resets
+        // `write-region-annotation-buffers` and does not select a buffer:
+        // a buffer an annotation function selected before signaling stays
+        // current (fileio.c:5596-5600, P4.10).
+        return Err(error);
+    }
+    let content = source.apply_annotations(&eval.edit.buffers, &annotations)?;
+    eval.restore_specpdl_roots(root_scope);
+
+    Ok(PreparedWriteRegion {
+        content,
+        source,
+        original_buffer,
+        annotation_buffers,
+    })
+}
+
+struct DecodedFileContents {
+    text: LispString,
+    coding: String,
+}
+
+impl DecodedFileContents {
+    fn from_lisp_string(text: LispString, coding: String) -> Self {
+        Self { text, coding }
+    }
+
+    fn text(&self) -> &LispString {
+        &self.text
+    }
+
+    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+    fn text_properties(&self) -> Option<&TextPropertyTable> {
+        let table = self.text().intervals().as_table()?;
+        if table.is_empty() { None } else { Some(table) }
+    }
+
+    fn char_count(&self) -> i64 {
+        self.text().schars() as i64
+    }
+}
+
+fn has_utf8_signature(bytes: &[u8]) -> bool {
+    bytes.starts_with(&[0xEF, 0xBB, 0xBF])
+}
+
+fn decode_insert_file_contents(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    bytes: &[u8],
+    multibyte: bool,
+    coding_system_for_read: Option<&str>,
+) -> Result<DecodedFileContents, Flow> {
+    if !multibyte {
+        return Ok(DecodedFileContents::from_lisp_string(
+            LispString::from_unibyte(bytes.to_vec()),
+            "no-conversion".to_string(),
+        ));
+    }
+
+    // No end-of-line detection here.  GNU does it once, in `decode_eol`
+    // (src/coding.c:6783-6806), inside the decoder every consumer shares -- and
+    // it does it on the DECODED text with a whole-text bitmask, not on a
+    // three-terminator prefix of the raw bytes.  A second, prefix-based
+    // detection in this function answered a different question than the decoder
+    // would: measured under GNU 31.0.90, a file holding
+    // `a\r\nb\r\nc\r\nd\r\ne\nf` reads back with every CR intact and
+    // `buffer-file-coding-system' `undecided-unix', because the fifth, bare LF
+    // makes the text mixed; the prefix scan stopped at the third CR LF and
+    // called the file DOS.
+    let coding =
+        match coding_system_for_read.filter(|coding| !coding.is_empty() && *coding != "nil") {
+            Some(coding) => coding.to_string(),
+            // A bare test context does not load the Lisp BOM recognizer used by
+            // `set-auto-coding-function`; keep the same observable fallback.
+            None if has_utf8_signature(bytes) => "utf-8-with-signature".to_string(),
+            // GNU uses the ordinary undecided category engine here, including
+            // while `load-with-code-conversion` binds set-auto-coding-for-load.
+            None => "undecided".to_string(),
+        };
+
+    let decoded = neovm_text::encoding::decode_file_bytes_in_context(eval, bytes, &coding)?;
+    let (text, coding_system) = decoded.into_parts();
+    Ok(DecodedFileContents::from_lisp_string(
+        text,
+        resolve_sym(coding_system).to_owned(),
+    ))
+}
+
+/// Which source decided the coding system `insert-file-contents` decodes with.
+///
+/// GNU consults exactly these, in exactly this order, and stops at the first
+/// that answers: `coding-system-for-read` (src/fileio.c:4317-4318), then
+/// `set-auto-coding-function` (src/fileio.c:4401-4402 for a non-empty buffer,
+/// :5051-5055 for the empty-buffer path), then `file-coding-system-alist` via
+/// `find-operation-coding-system` (src/fileio.c:4411-4420, :5057-5066), and
+/// finally plain `undecided` (src/fileio.c:4423-4424).
+///
+/// The ladder is a value rather than a chain of `Option::or` calls so that
+/// every rung is named: a new source cannot be spliced in without choosing
+/// where it sits, and a dropped rung is a missing match arm rather than a
+/// silently shorter chain.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ReadCodingDecision {
+    /// `coding-system-for-read` was non-nil and wins outright.
+    ForRead(String),
+    /// `set-auto-coding-function` found a `coding:` cookie, an
+    /// `auto-coding-alist` entry or an `auto-coding-functions` hit.
+    AutoCoding(String),
+    /// `file-coding-system-alist` matched the file name.
+    FileNameAlist(String),
+    /// Nothing decided; the undecided category engine detects.
+    Undecided,
+}
+
+impl ReadCodingDecision {
+    /// The coding-system name to decode with, or `None` for `undecided`.
+    fn coding_system(&self) -> Option<&str> {
+        match self {
+            Self::ForRead(name) | Self::AutoCoding(name) | Self::FileNameAlist(name) => Some(name),
+            Self::Undecided => None,
+        }
+    }
+}
+
+/// Ask `file-coding-system-alist` (through `find-operation-coding-system`)
+/// which coding system this file name asks for, mirroring GNU's
+/// `CALLN (Ffind_operation_coding_system, Qinsert_file_contents, ...)`
+/// (src/fileio.c:4415-4419, :5061-5065) including its `XCAR` of a cons answer.
+fn decide_file_name_coding_for_insert_file_contents(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    filename: neovm_value::heap_types::LispString,
+    visit: Value,
+    beg: Value,
+    end: Value,
+    replace: Value,
+) -> Result<Option<String>, Flow> {
+    let answer = neovm_eval::emacs_core::builtins::builtin_find_operation_coding_system(
+        eval,
+        vec![
+            Value::symbol("insert-file-contents"),
+            Value::heap_string(filename),
+            visit,
+            beg,
+            end,
+            replace,
+        ],
+    )?;
+    let decoding = if answer.is_cons() {
+        answer.cons_car()
+    } else {
+        answer
+    };
+    auto_coding_system_name(eval, decoding)
+}
+
+fn decide_auto_coding_for_insert_file_contents(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    filename: neovm_value::heap_types::LispString,
+    bytes: &[u8],
+) -> Result<Option<String>, Flow> {
+    let function = eval.visible_variable_value_or_nil("set-auto-coding-function");
+    if function.is_nil() || bytes.is_empty() {
+        return Ok(None);
+    }
+
+    let saved_current = eval.edit.buffers.current_buffer_id();
+    let work_buffer = eval
+        .edit
+        .buffers
+        .find_buffer_by_name(" *code-converting-work*")
+        .unwrap_or_else(|| eval.edit.buffers.create_buffer(" *code-converting-work*"));
+    let restore_and_finish = |eval: &mut neovm_eval::emacs_core::eval::Context,
+                              result: EvalResult| {
+        if let Some(saved) = saved_current {
+            eval.restore_current_buffer_if_live(saved);
+        }
+        result
+    };
+
+    eval.set_current_buffer_unrecorded(work_buffer)?;
+    let old_range = eval
+        .edit
+        .buffers
+        .get(work_buffer)
+        .map(|buf| buf.full_emacs_byte_range())
+        .unwrap_or(EmacsByteRange::EMPTY);
+    if !old_range.is_empty() {
+        eval.edit
+            .buffers
+            .delete_buffer_emacs_byte_range(work_buffer, old_range)
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    }
+    eval.edit
+        .buffers
+        .set_buffer_multibyte_flag(work_buffer, false)
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    let raw = neovm_value::heap_types::LispString::from_unibyte(bytes.to_vec());
+    eval.edit
+        .buffers
+        .insert_lisp_string_into_buffer(work_buffer, &raw)
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    let _ = eval
+        .edit
+        .buffers
+        .goto_buffer_emacs_byte_pos(work_buffer, EmacsBytePos::new(0));
+
+    let result = eval.apply(
+        function,
+        vec![
+            Value::heap_string(filename),
+            Value::fixnum(bytes.len() as i64),
+        ],
+    );
+    let value = restore_and_finish(eval, result)?;
+    auto_coding_system_name(eval, value)
+}
+
+fn auto_coding_system_name(
+    eval: &neovm_eval::emacs_core::eval::Context,
+    value: Value,
+) -> Result<Option<String>, Flow> {
+    let symbol_mode = eval.symbol_mode();
+    // `nil` is GNU's "I did not decide" answer (`NILP (coding_system)`,
+    // src/fileio.c:4411, :5057), not a coding-system name.  `nil` is a symbol
+    // here, so without this guard it would come back as the name "nil" and
+    // read as a decision.
+    if value.is_nil() {
+        return Ok(None);
+    }
+    let Some(name) = value
+        .as_symbol_name(symbol_mode)
+        .map(str::to_owned)
+        .or_else(|| {
+            value
+                .as_lisp_string()
+                .map(|ls| neovm_value::emacs_char::to_utf8_lossy(ls.as_bytes()))
+        })
+    else {
+        return Ok(None);
+    };
+    if eval.coding_systems.is_known_or_derived(&name) {
+        Ok(Some(name))
+    } else {
+        Ok(None)
+    }
+}
+
+fn restore_empty_buffer_after_auto_coding_probe(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    buffer_id: neovm_edit::buffer::BufferId,
+    saved_multibyte: bool,
+    saved_undo_list: Value,
+) {
+    if eval.edit.buffers.get(buffer_id).is_none() {
+        return;
+    }
+    let _ = eval.set_current_buffer_unrecorded(buffer_id);
+    if let Some(buf) = eval.edit.buffers.get_mut(buffer_id) {
+        buf.set_undo_list(Value::T);
+    }
+    let delete_range = eval
+        .edit
+        .buffers
+        .get(buffer_id)
+        .map(|buf| buf.full_emacs_byte_range())
+        .unwrap_or(EmacsByteRange::EMPTY);
+    if !delete_range.is_empty() {
+        let _ = eval
+            .edit
+            .buffers
+            .delete_buffer_emacs_byte_range(buffer_id, delete_range);
+    }
+    let _ = eval
+        .edit
+        .buffers
+        .set_buffer_multibyte_flag(buffer_id, saved_multibyte);
+    if let Some(buf) = eval.edit.buffers.get_mut(buffer_id) {
+        buf.set_undo_list(saved_undo_list);
+    }
+    let _ = eval
+        .edit
+        .buffers
+        .goto_buffer_emacs_byte_pos(buffer_id, EmacsBytePos::new(0));
+}
+
+/// The bytes GNU shows `set-auto-coding-function`: the whole file when it is
+/// at most 4 KiB, else its first 1 KiB followed by its tail from
+/// `max(len - 3 KiB, 4 KiB)` (fileio.c `Finsert_file_contents`).
+pub(crate) fn auto_coding_probe_bytes(bytes: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+    const HEAD_READ: usize = 4 * 1024;
+    const HEAD_KEEP: usize = 1024;
+    const TAIL: usize = 3 * 1024;
+    if bytes.len() <= HEAD_READ {
+        return std::borrow::Cow::Borrowed(bytes);
+    }
+    let tail_start = bytes.len().saturating_sub(TAIL).max(HEAD_READ);
+    let mut probe = Vec::with_capacity(HEAD_KEEP + (bytes.len() - tail_start));
+    probe.extend_from_slice(&bytes[..HEAD_KEEP]);
+    probe.extend_from_slice(&bytes[tail_start..]);
+    std::borrow::Cow::Owned(probe)
+}
+
+fn decide_auto_coding_for_empty_insert_file_contents(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    filename: neovm_value::heap_types::LispString,
+    bytes: &[u8],
+    current_id: neovm_edit::buffer::BufferId,
+) -> Result<Option<String>, Flow> {
+    let function = eval.visible_variable_value_or_nil("set-auto-coding-function");
+    if function.is_nil() || bytes.is_empty() {
+        return Ok(None);
+    }
+
+    let (saved_multibyte, saved_undo_list) = {
+        let buf = eval
+            .edit
+            .buffers
+            .get(current_id)
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        (buf.get_multibyte(), buf.get_undo_list())
+    };
+
+    eval.set_current_buffer_unrecorded(current_id)?;
+    eval.edit
+        .buffers
+        .set_buffer_multibyte_flag(current_id, false)
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    if let Some(buf) = eval.edit.buffers.get_mut(current_id) {
+        buf.set_undo_list(Value::T);
+    }
+    // GNU probes the HEAD and TAIL only (fileio.c `Finsert_file_contents`,
+    // "Assume that the 1 KiB and 3 KiB for heading and tailing respectively
+    // are sufficient"): it reads up to 4 KiB, and when the file continues it
+    // keeps the first 1 KiB of that and appends the last ~3 KiB read from
+    // max(end - 3 KiB, 4 KiB), then hands `set-auto-coding-function` that
+    // concatenation and its length. Inserting the whole file here made
+    // insert-file-contents 6x GNU on an 876 KB org journal, and taxed every
+    // source .el load at startup the same way.
+    let probe = auto_coding_probe_bytes(bytes);
+    let raw = neovm_value::heap_types::LispString::from_unibyte(probe.to_vec());
+    eval.edit
+        .buffers
+        .insert_lisp_string_into_buffer(current_id, &raw)
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    let _ = eval
+        .edit
+        .buffers
+        .goto_buffer_emacs_byte_pos(current_id, EmacsBytePos::new(0));
+
+    let result = eval.apply(
+        function,
+        vec![
+            Value::heap_string(filename),
+            Value::fixnum(probe.len() as i64),
+        ],
+    );
+    let value = match result {
+        Ok(value) => {
+            restore_empty_buffer_after_auto_coding_probe(
+                eval,
+                current_id,
+                saved_multibyte,
+                saved_undo_list,
+            );
+            value
+        }
+        Err(flow) => {
+            restore_empty_buffer_after_auto_coding_probe(
+                eval,
+                current_id,
+                saved_multibyte,
+                saved_undo_list,
+            );
+            return Err(flow);
+        }
+    };
+    auto_coding_system_name(eval, value)
+}
+
+/// `(insert-file-contents FILENAME &optional VISIT BEG END REPLACE)`
+///
+/// Read file FILENAME and insert its contents into the current buffer
+/// at point. Returns a list of `(FILENAME LENGTH)`. Mirrors GNU's
+/// `Finsert_file_contents` (`src/fileio.c`).
+pub fn builtin_insert_file_contents(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_min_args("insert-file-contents", &args, 1)?;
+    expect_max_args("insert-file-contents", &args, 5)?;
+
+    let visit = args.get(1).is_some_and(|v| v.is_truthy());
+    let replace_requested = args.get(4).is_some_and(|v| !v.is_nil());
+    // GNU decides this on entry (src/fileio.c:4125-4127), before a file name
+    // handler gets to insert anything into the buffer.
+    let empty_undo_list_p = eval
+        .edit
+        .buffers
+        .current_buffer()
+        .is_some_and(|buf| visit && buf.get_undo_list().is_nil() && buf.is_text_empty());
+
+    // GNU refuses these before expanding the name or calling a file name
+    // handler (src/fileio.c:4143-4147).
+    {
+        let current_id = current_buffer_id_or_error(&eval.edit.buffers)?;
+        let buf = eval
+            .edit
+            .buffers
+            .get(current_id)
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        if visit && buf.base_buffer().is_some() {
+            return Err(signal(
+                "error",
+                vec![Value::string(
+                    "Cannot do file visiting in an indirect buffer",
+                )],
+            ));
+        }
+        if neovm_edit::emacs_core::editfns::buffer_read_only_active_in_state(
+            eval.variables(),
+            &[],
+            buf,
+        ) {
+            return Err(signal(
+                LispCondition::BufferReadOnly,
+                vec![Value::make_buffer(current_id)],
+            ));
+        }
+    }
+
+    let coding_val = eval.visible_variable_value_or_nil("coding-system-for-read");
+    let coding_system_for_read: Option<String> = match coding_val.kind() {
+        ValueKind::Nil => None,
+        ValueKind::Symbol(id) => Some(resolve_sym(id).to_owned()),
+        // Coding-system names are ASCII protocol identifiers; decode lossily.
+        ValueKind::String => coding_val
+            .as_lisp_string()
+            .map(|ls| neovm_value::emacs_char::to_utf8_lossy(ls.as_bytes())),
+        _ => None,
+    };
+    // GNU `Finsert_file_contents` runs `Fexpand_file_name` on the filename
+    // first (dispatching the expand-file-name magic handler) before looking up
+    // the insert-file-contents handler.
+    let expanded = builtin_expand_file_name(eval, vec![args[0], Value::NIL])?;
+    let resolved = resolve_filename_lisp_for_eval(eval, &expect_lisp_string_strict(&expanded)?);
+    let mut handler_args = Vec::with_capacity(5);
+    handler_args.push(Value::heap_string(resolved.clone()));
+    handler_args.extend_from_slice(&args[1..]);
+    // GNU calls the handler with the operation's full arglist (optional args
+    // default to nil): insert-file-contents has arity 5.
+    while handler_args.len() < 5 {
+        handler_args.push(Value::NIL);
+    }
+    if let Some(result) = maybe_dispatch_resolved_file_handler(
+        eval,
+        "insert-file-contents",
+        Some(&resolved),
+        None,
+        handler_args,
+    )? {
+        return finish_handled_insert_file_contents(
+            eval,
+            &resolved,
+            result,
+            visit,
+            replace_requested,
+            empty_undo_list_p,
+        );
+    }
+
+    let current_id = current_buffer_id_or_error(&eval.edit.buffers)?;
+    {
+        let buf = eval
+            .edit
+            .buffers
+            .get(current_id)
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        if visit
+            && (!args.get(2).is_none_or(|v| v.is_nil()) || !args.get(3).is_none_or(|v| v.is_nil()))
+        {
+            return Err(signal(
+                "error",
+                vec![Value::string("Attempt to visit less than an entire file")],
+            ));
+        }
+        if visit && !replace_requested && !buf.is_text_empty() {
+            return Err(signal(
+                "error",
+                vec![Value::string(
+                    "Cannot do file visiting in a non-empty buffer",
+                )],
+            ));
+        }
+    }
+
+    let contents_bytes = match fs::read(lisp_file_name_to_path_buf(&resolved)) {
+        Ok(contents) => contents,
+        Err(err) => {
+            if visit {
+                let _ = eval
+                    .edit
+                    .buffers
+                    .set_buffer_file_name(current_id, Value::heap_string(resolved.clone()));
+                let _ = eval
+                    .edit
+                    .buffers
+                    .set_buffer_modified_flag(current_id, false);
+                // GNU src/fileio.c:4194-4208: a file it was told to VISIT but
+                // could not open still records a modtime --
+                // `mtime = time_error_value (save_errno)` -- and only signals
+                // after storing it (src/fileio.c:5307-5313).  That is why
+                // `find-file' of a NEW file leaves `visited-file-modtime' at
+                // -1 rather than 0, and why the first change to that buffer
+                // records `(t . -1)'.
+                if let Some(buf) = eval.edit.buffers.get_mut(current_id) {
+                    buf.set_visited_file_modtime(VisitedFileModtime::from_open_error(&err));
+                    buf.set_modtime_size(None);
+                }
+                if empty_undo_list_p {
+                    let _ = eval
+                        .edit
+                        .buffers
+                        .configure_buffer_undo_list(current_id, Value::NIL);
+                }
+            }
+            return Err(signal_file_action_error_value(
+                err,
+                "Opening input file",
+                Value::heap_string(resolved.clone()),
+            ));
+        }
+    };
+    let file_len = contents_bytes.len() as i64;
+
+    let begin = if args.get(2).is_some_and(|v| !v.is_nil()) {
+        expect_file_offset(args.get(2).expect("checked above"))?
+    } else {
+        0
+    };
+    let mut end_off = if args.get(3).is_some_and(|v| !v.is_nil()) {
+        expect_file_offset(args.get(3).expect("checked above"))?
+    } else {
+        file_len
+    };
+
+    if begin > file_len {
+        return Err(signal(
+            LispCondition::FileError,
+            vec![
+                Value::string("Read error"),
+                Value::string("Bad address"),
+                Value::heap_string(resolved.clone()),
+            ],
+        ));
+    }
+    if end_off > file_len {
+        end_off = file_len;
+    }
+    if end_off < begin {
+        end_off = begin;
+    }
+
+    let slice = &contents_bytes[begin as usize..end_off as usize];
+    let multibyte = eval
+        .edit
+        .buffers
+        .get(current_id)
+        .map(|buffer| buffer.get_multibyte())
+        .unwrap_or(true);
+    let current_buffer_was_empty = eval
+        .edit
+        .buffers
+        .get(current_id)
+        .is_some_and(|buffer| buffer.is_text_empty());
+    // GNU's decision ladder, in GNU's order (src/fileio.c:4317-4424 for a
+    // non-empty buffer, :5023-5075 for the empty-buffer path).
+    let decision = match coding_system_for_read.clone() {
+        Some(name) => ReadCodingDecision::ForRead(name),
+        None if !multibyte => ReadCodingDecision::Undecided,
+        None => {
+            let auto = if current_buffer_was_empty {
+                decide_auto_coding_for_empty_insert_file_contents(
+                    eval,
+                    resolved.clone(),
+                    slice,
+                    current_id,
+                )?
+            } else {
+                decide_auto_coding_for_insert_file_contents(eval, resolved.clone(), slice)?
+            };
+            match auto {
+                Some(name) => ReadCodingDecision::AutoCoding(name),
+                None => {
+                    // GNU passes REPLACE through on the non-empty-buffer path
+                    // and nil on the empty-buffer one (src/fileio.c:4417 vs
+                    // :5063).
+                    let replace_arg = if current_buffer_was_empty {
+                        Value::NIL
+                    } else {
+                        args.get(4).copied().unwrap_or(Value::NIL)
+                    };
+                    match decide_file_name_coding_for_insert_file_contents(
+                        eval,
+                        resolved.clone(),
+                        args.get(1).copied().unwrap_or(Value::NIL),
+                        args.get(2).copied().unwrap_or(Value::NIL),
+                        args.get(3).copied().unwrap_or(Value::NIL),
+                        replace_arg,
+                    )? {
+                        Some(name) => ReadCodingDecision::FileNameAlist(name),
+                        None => ReadCodingDecision::Undecided,
+                    }
+                }
+            }
+        }
+    };
+    let contents = decode_insert_file_contents(eval, slice, multibyte, decision.coding_system())?;
+    let decoded_char_count = contents.char_count();
+
+    let signal_change_hooks = !visit || replace_requested;
+    let hide_visited_file_name_during_replace = visit
+        && replace_requested
+        && eval.edit.buffers.get(current_id).is_some_and(|buffer| {
+            buffer.full_emacs_byte_range() == buffer.accessible_emacs_byte_range()
+        });
+    // GNU's REPLACE branch reports only the *net* inserted chars (the unchanged
+    // head/tail affixes are elided); a plain insert reports the full decoded
+    // char count.  Re-reading byte-identical content under REPLACE therefore
+    // yields `(FILE 0)`, not `(FILE FULL-COUNT)`.
+    let net_inserted = insert_file_contents_into_current_buffer_in_state(
+        eval,
+        current_id,
+        contents.text(),
+        replace_requested,
+        signal_change_hooks,
+        hide_visited_file_name_during_replace,
+    )?;
+    let base_inserted_count = net_inserted.unwrap_or(decoded_char_count);
+
+    // GNU `insert-file-contents' sets `last-coding-system-used' before
+    // `after-insert-file-set-coding' derives `buffer-file-coding-system'.
+    eval.set_variable("last-coding-system-used", Value::symbol(&contents.coding));
+
+    let inserted_char_count = run_after_insert_file_pipeline(
+        eval,
+        current_id,
+        visit,
+        replace_requested,
+        base_inserted_count,
+    )?;
+
+    if visit {
+        let _ = eval
+            .edit
+            .buffers
+            .set_buffer_file_name(current_id, Value::heap_string(resolved.clone()));
+        let _ = eval
+            .edit
+            .buffers
+            .set_buffer_modified_flag(current_id, false);
+        // Store file modification time (GNU: insert-file-contents stores
+        // current_buffer->modtime = mtime; current_buffer->modtime_size = st_size).
+        if let Ok(meta) = std::fs::metadata(lisp_file_name_to_path_buf(&resolved))
+            && let Ok(mtime) = meta.modified()
+            && let Some(timestamp) = representable_file_timestamp(mtime)
+        {
+            if let Some(buf) = eval.edit.buffers.get_mut(current_id) {
+                buf.set_visited_file_modtime(VisitedFileModtime::Known {
+                    sec: timestamp.seconds(),
+                    nsec: timestamp.nanoseconds() as i32,
+                });
+                buf.set_modtime_size(Some(meta.len() as i64));
+            }
+        }
+        if empty_undo_list_p {
+            let _ = eval
+                .edit
+                .buffers
+                .configure_buffer_undo_list(current_id, Value::NIL);
+        }
+    }
+
+    let value = Value::list(vec![
+        Value::heap_string(resolved),
+        Value::fixnum(inserted_char_count),
+    ]);
+
+    Ok(value)
+}
+
+/// GNU's `coding-system-require-warning` for one write.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WriteCodingWarning {
+    /// Use a bound `coding-system-for-write` as-is.
+    Silent,
+    /// Confirm it with `select-safe-coding-system-function`.
+    Confirm,
+}
+
+/// The installed `select-safe-coding-system-function`, if any.
+///
+/// Carrying the symbol in the `Present` variant makes "call the selector"
+/// unrepresentable without a callable target.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WriteCodingSelector {
+    Absent,
+    Present(neovm_value::intern::SymId),
+}
+
+/// A coding-system value read from a buffer slot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CodingValue {
+    /// Lisp nil.
+    Unset,
+    /// A coding-system symbol.
+    Coding(neovm_value::intern::SymId),
+}
+
+/// How `buffer-file-coding-system` is bound for this buffer.
+///
+/// GNU distinguishes a buffer-local binding from the inherited default with
+/// `Flocal_variable_p`; a local nil is still a local binding.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BufferCodingSlot {
+    /// No buffer-local binding; the value is inherited from the default.
+    Inherited(CodingValue),
+    /// A buffer-local binding exists (its value may be nil).
+    Local(CodingValue),
+}
+
+impl BufferCodingSlot {
+    /// The coding GNU's `val` starts from, or `fallback` for nil (Neo's
+    /// platform default; GNU keeps nil and decides it in the selector).
+    fn chosen(self, fallback: neovm_value::intern::SymId) -> neovm_value::intern::SymId {
+        match self {
+            BufferCodingSlot::Inherited(CodingValue::Coding(coding))
+            | BufferCodingSlot::Local(CodingValue::Coding(coding)) => coding,
+            BufferCodingSlot::Inherited(CodingValue::Unset)
+            | BufferCodingSlot::Local(CodingValue::Unset) => fallback,
+        }
+    }
+}
+
+/// GNU `enable-multibyte-characters` for this buffer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BufferMultibyte {
+    Multibyte,
+    Unibyte,
+}
+
+/// Why GNU's `choose_write_coding_system` forces raw-text output.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ForceRawTextReason {
+    /// src/fileio.c:5389-5393: `enable-multibyte-characters` is nil and
+    /// `buffer-file-coding-system` is nil or not buffer-local.
+    UnibyteBufferWithoutLocalCoding,
+    /// src/fileio.c:5416-5423: the selected coding's type is `raw_text`.
+    RawTextCodingType,
+}
+
+/// GNU's `!using_default_coding` end-of-line inheritance
+/// (src/fileio.c:5437-5443), applied before the raw-text conversion.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BufferDefaultEol {
+    /// The chosen coding came from the buffer default itself
+    /// (`using_default_coding`), or that default is nil: no step.
+    Settled,
+    /// Inherit PARENT's concrete end-of-line type when the chosen coding has
+    /// none.
+    InheritFrom(neovm_value::intern::SymId),
+}
+
+/// What one `choose_write_coding_system` call must do next.
+///
+/// Computed once from [`WriteCodingInput`]; the write path then matches it
+/// exhaustively to run the selector and/or `raw_text_coding_system`
+/// (src/fileio.c:5450).  Variants that call the selector carry its symbol, so
+/// a selector call without a callable selector does not typecheck.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WriteCodingChoice {
+    /// `coding-system-for-write` is used as-is.
+    BoundDirect(neovm_value::intern::SymId),
+    /// `coding-system-for-write` is confirmed with `(t CODING)`.
+    BoundConfirmed {
+        coding: neovm_value::intern::SymId,
+        selector: neovm_value::intern::SymId,
+    },
+    /// The selector is skipped and CODING is converted with
+    /// `raw_text_coding_system`.
+    ForcedRawText {
+        reason: ForceRawTextReason,
+        coding: neovm_value::intern::SymId,
+        eol: BufferDefaultEol,
+    },
+    /// CODING is used directly.
+    Selected {
+        coding: neovm_value::intern::SymId,
+        eol: BufferDefaultEol,
+    },
+    /// The selector is asked with CODING as its default.
+    SelectWithDefault {
+        coding: neovm_value::intern::SymId,
+        selector: neovm_value::intern::SymId,
+        eol: BufferDefaultEol,
+    },
+}
+
+/// Where the buffer path's coding came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WriteCodingSource {
+    /// `coding-system-for-write` is bound.
+    Bound {
+        coding: neovm_value::intern::SymId,
+        warning: WriteCodingWarning,
+    },
+    /// The buffer's `buffer-file-coding-system` supplies CHOSEN.
+    Buffer {
+        chosen: neovm_value::intern::SymId,
+        class: neovm_text::emacs_core::coding::WriteCodingClass,
+    },
+}
+
+/// The evaluator-independent inputs of GNU's decision.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct WriteCodingInput {
+    source: WriteCodingSource,
+    selector: WriteCodingSelector,
+    multibyte: BufferMultibyte,
+    slot: BufferCodingSlot,
+    /// GNU `BVAR (&buffer_defaults, buffer_file_coding_system)`.
+    buffer_default: CodingValue,
+}
+
+/// GNU `choose_write_coding_system`'s decision table as one exhaustive match
+/// (src/fileio.c:5383-5450).
+fn decide_write_coding(input: WriteCodingInput) -> WriteCodingChoice {
+    match input.source {
+        WriteCodingSource::Bound { coding, warning } => match (warning, input.selector) {
+            (WriteCodingWarning::Silent, _) => WriteCodingChoice::BoundDirect(coding),
+            (WriteCodingWarning::Confirm, WriteCodingSelector::Absent) => {
+                WriteCodingChoice::BoundDirect(coding)
+            }
+            (WriteCodingWarning::Confirm, WriteCodingSelector::Present(selector)) => {
+                WriteCodingChoice::BoundConfirmed { coding, selector }
+            }
+        },
+        WriteCodingSource::Buffer { chosen, class } => {
+            // GNU's `using_default_coding` is set only when a nil
+            // `buffer-file-coding-system` was replaced by the buffer default.
+            let using_default = match input.slot {
+                BufferCodingSlot::Inherited(_) | BufferCodingSlot::Local(CodingValue::Unset) => {
+                    true
+                }
+                BufferCodingSlot::Local(CodingValue::Coding(_)) => false,
+            };
+            let eol = match (using_default, input.buffer_default) {
+                (false, CodingValue::Coding(parent)) => BufferDefaultEol::InheritFrom(parent),
+                (true, _) | (false, CodingValue::Unset) => BufferDefaultEol::Settled,
+            };
+            // (a) unibyte with no usable local coding, then (b) a raw-text
+            // coding type on the chosen value.
+            let forced = match (input.multibyte, input.slot) {
+                (BufferMultibyte::Unibyte, BufferCodingSlot::Inherited(_))
+                | (BufferMultibyte::Unibyte, BufferCodingSlot::Local(CodingValue::Unset)) => {
+                    Some(ForceRawTextReason::UnibyteBufferWithoutLocalCoding)
+                }
+                (BufferMultibyte::Unibyte, BufferCodingSlot::Local(CodingValue::Coding(_)))
+                | (BufferMultibyte::Multibyte, BufferCodingSlot::Inherited(_))
+                | (BufferMultibyte::Multibyte, BufferCodingSlot::Local(_)) => None,
+            }
+            .or(match class {
+                neovm_text::emacs_core::coding::WriteCodingClass::RawText => {
+                    Some(ForceRawTextReason::RawTextCodingType)
+                }
+                neovm_text::emacs_core::coding::WriteCodingClass::Selectable => None,
+            });
+            match forced {
+                Some(reason) => WriteCodingChoice::ForcedRawText {
+                    reason,
+                    coding: chosen,
+                    eol,
+                },
+                None => match input.selector {
+                    WriteCodingSelector::Present(selector) => {
+                        WriteCodingChoice::SelectWithDefault {
+                            coding: chosen,
+                            selector,
+                            eol,
+                        }
+                    }
+                    WriteCodingSelector::Absent => WriteCodingChoice::Selected {
+                        coding: chosen,
+                        eol,
+                    },
+                },
+            }
+        }
+    }
+}
+
+/// GNU's `!using_default_coding` step: inherit the buffer default's concrete
+/// end-of-line type when the chosen coding does not fix one.
+fn inherit_buffer_default_eol(
+    mgr: &neovm_text::emacs_core::coding::CodingSystemManager,
+    coding: neovm_value::intern::SymId,
+    eol: BufferDefaultEol,
+) -> neovm_value::intern::SymId {
+    match eol {
+        BufferDefaultEol::Settled => coding,
+        BufferDefaultEol::InheritFrom(parent) => {
+            neovm_text::emacs_core::coding::coding_inherit_eol_type(
+                mgr,
+                coding,
+                neovm_text::emacs_core::coding::EolParent::Coding(parent),
+            )
+        }
+    }
+}
+
+// GNU DEFVAR `Vbuffer_file_coding_system`: every write-region coding decision
+// reads it; the spelling is a fixed DEFSYM id, not a per-read intern.
+static BUFFER_FILE_CODING_SYSTEM: WellKnown = WellKnown::BufferFileCodingSystem;
+
+fn select_write_region_coding_system(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    buffer_id: neovm_edit::buffer::BufferId,
+    from: Value,
+    to: Value,
+    filename: Value,
+) -> Result<neovm_text::encoding::RuntimeCodingSystem, Flow> {
+    let symbol_mode = eval.symbol_mode();
+    let fallback = resolve_write_coding_system_symbol(eval, buffer_id, WriteCodingFallback::Utf8);
+    // GNU `choose_write_coding_system': a bound `coding-system-for-write' is
+    // used as is, and only confirmed with the selector -- restricted to it,
+    // `(t CODING)' -- when `coding-system-require-warning' asks for that.
+    // Asking the selector anyway scanned every character of the text for
+    // every candidate coding system on each write.
+    let for_write =
+        coding_system_value_to_name(&eval.visible_variable_value_or_nil("coding-system-for-write"));
+    let require_warning = eval
+        .visible_variable_value_or_nil("coding-system-require-warning")
+        .is_truthy();
+    // Every choice ends in GNU's `coding_inherit_eol_type (val, Qnil)': an
+    // alias resolves to its coding system and an undecided end-of-line type
+    // becomes the system's, which `last-coding-system-used' then reports
+    // (`utf-8' -> `utf-8-unix', `latin-1' -> `iso-latin-1-unix').
+    let finish = |eval: &neovm_eval::emacs_core::eval::Context,
+                  symbol: neovm_value::intern::SymId| {
+        let resolved = neovm_text::emacs_core::coding::coding_inherit_eol_type_unix(
+            &eval.coding_systems,
+            Value::from_sym_id(symbol),
+            eval.symbol_mode(),
+        );
+        neovm_text::encoding::RuntimeCodingSystem::from_symbol(
+            resolved.as_symbol_id(symbol_mode).unwrap_or(symbol),
+        )
+    };
+    let selector = eval.visible_variable_value_or_nil("select-safe-coding-system-function");
+    let selector = match selector.as_symbol_id(symbol_mode) {
+        Some(id) if eval.obarray().fboundp_id(id) => WriteCodingSelector::Present(id),
+        _ => WriteCodingSelector::Absent,
+    };
+    let warning = match require_warning {
+        true => WriteCodingWarning::Confirm,
+        false => WriteCodingWarning::Silent,
+    };
+    // GNU reads the buffer slot with BVAR and asks Flocal_variable_p whether
+    // it is buffer-local; the inherited default alone does not count.
+    let slot_value = eval
+        .edit
+        .buffers
+        .get(buffer_id)
+        .and_then(|buf| buf.buffer_local_value("buffer-file-coding-system"))
+        .and_then(|value| coding_system_value_to_name(&value))
+        .map(|name| CodingValue::Coding(intern(&name)))
+        .unwrap_or(CodingValue::Unset);
+    let slot = match eval
+        .edit
+        .buffers
+        .get(buffer_id)
+        .is_some_and(|buf| buf.has_buffer_local_by_sym_id(BUFFER_FILE_CODING_SYSTEM.id()))
+    {
+        true => BufferCodingSlot::Local(slot_value),
+        false => BufferCodingSlot::Inherited(slot_value),
+    };
+    let multibyte = match eval
+        .edit
+        .buffers
+        .get(buffer_id)
+        .is_some_and(|buf| buf.get_multibyte())
+    {
+        true => BufferMultibyte::Multibyte,
+        false => BufferMultibyte::Unibyte,
+    };
+    let buffer_default = eval
+        .buffer_default_value_fixed(&BUFFER_FILE_CODING_SYSTEM)
+        .and_then(|value| coding_system_value_to_name(&value))
+        .map(|name| CodingValue::Coding(intern(&name)))
+        .unwrap_or(CodingValue::Unset);
+    let source = match for_write.as_deref() {
+        Some(bound) => WriteCodingSource::Bound {
+            coding: intern(bound),
+            warning,
+        },
+        None => {
+            let chosen = slot.chosen(fallback);
+            WriteCodingSource::Buffer {
+                chosen,
+                class: neovm_text::emacs_core::coding::classify_write_coding(
+                    &eval.coding_systems,
+                    resolve_sym(chosen),
+                ),
+            }
+        }
+    };
+    let choice = decide_write_coding(WriteCodingInput {
+        source,
+        selector,
+        multibyte,
+        slot,
+        buffer_default,
+    });
+    // GNU `choose_write_coding_system` delegates a non-raw selection to
+    // `select-safe-coding-system-function`.  Among other safety checks, the
+    // Lisp selector calls `find-auto-coding` on the exact region, so a
+    // `coding:` declaration in generated Lisp takes precedence over the
+    // inherited platform default.  A bound coding is confirmed with the
+    // restricted `(t CODING)` default; a buffer-default selection passes
+    // CODING itself as the default.  A forced raw-text selection skips the
+    // selector and is converted by `raw_text_coding_system` (fileio.c:5450).
+    let (selected, selected_eol) = match choice {
+        WriteCodingChoice::BoundDirect(coding) => return Ok(finish(eval, coding)),
+        WriteCodingChoice::Selected { coding, eol } => {
+            let coding = inherit_buffer_default_eol(&eval.coding_systems, coding, eol);
+            return Ok(finish(eval, coding));
+        }
+        WriteCodingChoice::ForcedRawText { coding, eol, .. } => {
+            let coding = inherit_buffer_default_eol(&eval.coding_systems, coding, eol);
+            let raw = neovm_text::emacs_core::coding::raw_text_coding_system(
+                &eval.coding_systems,
+                coding,
+            );
+            return Ok(finish(eval, raw));
+        }
+        WriteCodingChoice::BoundConfirmed { coding, selector } => (
+            eval.funcall_general(
+                Value::from_sym_id(selector),
+                vec![
+                    from,
+                    to,
+                    Value::list(vec![Value::T, Value::symbol(coding)]),
+                    Value::NIL,
+                    filename,
+                ],
+            )?,
+            BufferDefaultEol::Settled,
+        ),
+        WriteCodingChoice::SelectWithDefault {
+            coding,
+            selector,
+            eol,
+        } => (
+            eval.funcall_general(
+                Value::from_sym_id(selector),
+                vec![from, to, Value::symbol(coding), Value::NIL, filename],
+            )?,
+            eol,
+        ),
+    };
+    let selected_id = selected
+        .as_symbol_id(symbol_mode)
+        .ok_or_else(|| signal(LispCondition::CodingSystemError, vec![selected]))?;
+    let selected_name = resolve_sym(selected_id);
+    if !eval.coding_systems.is_known_or_derived(selected_name) {
+        return Err(signal(LispCondition::CodingSystemError, vec![selected]));
+    }
+    let selected_id = inherit_buffer_default_eol(&eval.coding_systems, selected_id, selected_eol);
+    Ok(finish(eval, selected_id))
+}
+
+/// `(write-region START END FILENAME &optional APPEND VISIT LOCKNAME MUSTBENEW)`
+///
+/// Write the region between START and END to FILENAME. If START is
+/// nil, writes the entire buffer. Mirrors GNU `Fwrite_region`
+/// (`src/fileio.c`).
+pub fn builtin_write_region(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
+    expect_min_args("write-region", &args, 3)?;
+    expect_max_args("write-region", &args, 7)?;
+    // GNU `Fwrite_region` runs `Fexpand_file_name` on FILENAME first, dispatching
+    // the expand-file-name magic handler before the write-region handler.
+    let expanded = builtin_expand_file_name(eval, vec![args[2], Value::NIL])?;
+    let resolved = resolve_filename_lisp_for_eval(eval, &expect_lisp_string_strict(&expanded)?);
+    let visit_argument = args.get(4).copied().unwrap_or(Value::NIL);
+    let visit = WriteRegionVisit::from_lisp(eval, visit_argument, &resolved);
+    let default_lock_name = visit.file_name().clone();
+
+    // GNU `Fwrite_region`, immediately after `Fexpand_file_name` and before the
+    // file-name-handler dispatch:
+    //
+    //   if (!NILP (mustbenew) && !EQ (mustbenew, Qexcl))
+    //     barf_or_query_if_file_exists (filename, false, "overwrite", true, true);
+    //
+    // `excl` is handled later via the `O_EXCL` open flag (it produces an
+    // EEXIST -> `file-already-exists` error at write time); every other
+    // non-nil MUSTBENEW asks for interactive confirmation here.
+    let mustbenew = args.get(6).copied().unwrap_or(Value::NIL);
+    let mustbenew_is_excl = mustbenew
+        .as_symbol_name(symbol_mode)
+        .is_some_and(|name| name == "excl");
+    if !mustbenew.is_nil() && !mustbenew_is_excl {
+        barf_or_query_if_file_exists(eval, &resolved, false, "overwrite", true, true)?;
+    }
+
+    let op = Value::symbol("write-region");
+    let handler = find_file_name_handler_lisp_for_eval(eval, &resolved, op);
+    if !handler.is_nil() {
+        // GNU calls the handler with the full arglist
+        // (START END FILENAME APPEND VISIT LOCKNAME MUSTBENEW), defaulting
+        // LOCKNAME to FILENAME.
+        let mut call_args = Vec::with_capacity(8);
+        call_args.push(op);
+        call_args.extend_from_slice(&args);
+        while call_args.len() < 8 {
+            call_args.push(Value::NIL);
+        }
+        call_args[3] = Value::heap_string(resolved.clone());
+        if call_args[6].is_nil() {
+            call_args[6] = Value::heap_string(default_lock_name.clone());
+        }
+        return eval.funcall_general(handler, call_args);
+    }
+    if handler.is_nil()
+        && let Some(visit_arg) = args.get(4).and_then(|value| eval.lisp_string(*value))
+    {
+        let visit_handler = find_file_name_handler_lisp_for_eval(eval, visit_arg, op);
+        if !visit_handler.is_nil() {
+            let mut call_args = Vec::with_capacity(args.len() + 1);
+            call_args.push(op);
+            call_args.extend_from_slice(&args);
+            while call_args.len() < 8 {
+                call_args.push(Value::NIL);
+            }
+            call_args[3] = Value::heap_string(resolved.clone());
+            if call_args[6].is_nil() {
+                call_args[6] = Value::heap_string(default_lock_name.clone());
+            }
+            return eval.funcall_general(visit_handler, call_args);
+        }
+    }
+
+    // GNU `write_region` (fileio.c:5582-5594): once no handler took the
+    // operation, save the current buffer's restriction, drop its labeled
+    // restrictions and, for START = nil, widen. Every exit restores the
+    // saved restriction, an annotation function's signal included; the
+    // current buffer is deliberately NOT restored (GNU leaves a buffer an
+    // annotation function selected current when it signals).
+    let mut restriction = neovm_eval::emacs_core::eval::RestrictionScope::enter(eval);
+    let result = write_region_without_handler(
+        restriction.context(),
+        &args,
+        resolved,
+        visit,
+        default_lock_name,
+        mustbenew_is_excl,
+    );
+    restriction.finish(result)
+}
+
+/// The native half of `write-region`, run inside the caller's
+/// `RestrictionScope`.
+fn write_region_without_handler(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: &[Value],
+    resolved: LispString,
+    visit: WriteRegionVisit,
+    default_lock_name: LispString,
+    mustbenew_is_excl: bool,
+) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
+    if let Some(current) = eval.edit.buffers.current_buffer_id() {
+        let _ = eval.edit.buffers.clear_buffer_labeled_restrictions(current);
+        if args[0].is_nil() {
+            neovm_edit::emacs_core::buffer::builtin_widen_0(eval)?;
+        }
+    }
+    let resolved_path = lisp_file_name_to_path_buf(&resolved);
+    // GNU `Fwrite_region`:
+    //   open_flags |= EQ (mustbenew, Qexcl) ? O_EXCL
+    //               : !NILP (append) ? 0 : O_TRUNC;
+    // `excl` forces an exclusive create (O_EXCL) that takes precedence over
+    // APPEND; a pre-existing file then yields EEXIST -> `file-already-exists`.
+    let append_mode = if mustbenew_is_excl {
+        FileWriteMode::Excl
+    } else {
+        match args.get(3) {
+            Some(value) if value.is_fixnum() || value.is_char() => {
+                FileWriteMode::Seek(expect_file_offset(value)? as u64)
+            }
+            Some(value) if value.is_truthy() => FileWriteMode::Append,
+            _ => FileWriteMode::Truncate,
+        }
+    };
+    let current_id = current_buffer_id_or_error(&eval.edit.buffers)?;
+
+    if visit.visited_file().is_some() {
+        let buf = eval
+            .edit
+            .buffers
+            .get(current_id)
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        if buf.base_buffer().is_some() {
+            return Err(signal(
+                "error",
+                vec![Value::string(
+                    "Cannot do file visiting in an indirect buffer",
+                )],
+            ));
+        }
+    }
+
+    // GNU builds annotations before coding-system selection and before opening
+    // the destination (`src/fileio.c:5596-5627`).  The resulting plan owns the
+    // exact source choice and already-interspersed character stream.
+    let prepared = prepare_write_region(
+        eval,
+        current_id,
+        args[0],
+        args.get(1).copied().unwrap_or(Value::NIL),
+    )?;
+    let content = prepared.content.clone();
+
+    // GNU `Fwrite_region` runs the chosen coding system through
+    // `Fcheck_coding_system`; an explicit but unknown `coding-system-for-write`
+    // (e.g. `utf-8-sig`) signals `coding-system-error` before anything is
+    // written.  Validate it here so we don't silently produce an empty file.
+    let coding_for_write = eval.visible_variable_value_or_nil("coding-system-for-write");
+    if !coding_for_write.is_nil()
+        && let Some(name) = coding_for_write.as_symbol_name(symbol_mode)
+        && name != "nil"
+        && !eval.coding_systems.is_known_or_derived(name)
+    {
+        return Err(signal(
+            LispCondition::CodingSystemError,
+            vec![coding_for_write],
+        ));
+    }
+
+    let (coding_from, coding_to) = prepared.source.coding_bounds();
+
+    // --- Encode using GNU's complete write-coding selection protocol. ---
+    // The Lisp selector detects content declarations such as the
+    // `utf-8-emacs-unix` trailer emitted for generated Lisp files.
+    let coding_system = select_write_region_coding_system(
+        eval,
+        prepared.source.coding_buffer(),
+        coding_from,
+        coding_to,
+        Value::heap_string(resolved.clone()),
+    )?;
+    let encoded =
+        neovm_text::encoding::encode_file_region_in_context(eval, content, coding_system)?;
+
+    // GNU `write_region' locks LOCKNAME after coding-system selection and
+    // keeps that lock scoped to the native open/write/close operation.  The
+    // buffer may already own the lock from its first modification; re-locking
+    // our own file is intentionally idempotent.
+    let lock_name = match args.get(5) {
+        Some(value) if !value.is_nil() => {
+            resolve_filename_lisp_for_eval(eval, &expect_lisp_string_strict(value)?)
+        }
+        _ => default_lock_name,
+    };
+    super::filelock::lock_file(eval, &lock_name)?;
+
+    // --- Write encoded bytes and handle fsync ---
+    let write_result = (|| {
+        let file = write_bytes_to_file_with_mode(
+            encoded.bytes(),
+            &resolved_path,
+            append_mode,
+            DEFAULT_FILE_CREATION_MODE,
+        )
+        .map_err(|err| {
+            // GNU `Fwrite_region` reports *any* open failure via
+            // `report_file_errno ("Opening output file", filename, open_errno)`
+            // (fileio.c:5656) — the action is always "Opening output file",
+            // never "Writing to" (which GNU reserves for `a_write` errors).
+            // `get_file_errno_data` then handles errno specially: a MUSTBENEW
+            // =`excl` collision is EEXIST -> `(file-already-exists "File exists"
+            // FILENAME)` (action omitted), ENOENT -> `file-missing`, etc.
+            signal_file_action_error_value(
+                err,
+                "Opening output file",
+                Value::heap_string(resolved.clone()),
+            )
+        })?;
+
+        // fsync after write unless write-region-inhibit-fsync is non-nil.
+        let inhibit_fsync = eval
+            .visible_variable_value_or_nil("write-region-inhibit-fsync")
+            .is_truthy();
+        if !inhibit_fsync {
+            file.sync_all().map_err(|err| {
+                signal_file_action_error_value(
+                    err,
+                    "Writing to",
+                    Value::heap_string(resolved.clone()),
+                )
+            })?;
+        }
+        drop(file);
+
+        let visiting_modtime = if visit.visited_file().is_some() {
+            let meta = std::fs::metadata(&resolved_path).map_err(|err| {
+                signal_file_action_error_value(
+                    err,
+                    "Writing to",
+                    Value::heap_string(resolved.clone()),
+                )
+            })?;
+            let mtime = meta.modified().map_err(|err| {
+                signal_file_action_error_value(
+                    err,
+                    "Writing to",
+                    Value::heap_string(resolved.clone()),
+                )
+            })?;
+            let timestamp =
+                UnixTimestamp::try_from(mtime).map_err(|TimestampError::OutOfRange| {
+                    crate::emacs_core::timefns::time_error_overflow()
+                })?;
+            Some((
+                timestamp.seconds(),
+                timestamp.nanoseconds() as i32,
+                meta.len() as i64,
+            ))
+        } else {
+            None
+        };
+        Ok::<_, Flow>(visiting_modtime)
+    })();
+
+    // GNU runs the post-annotation callback after the native write and before
+    // unwinding back to the original buffer (`src/fileio.c:5804-5823`).  An
+    // open error occurs before that phase and therefore skips the callback.
+    let post_annotation_result = if write_result.is_ok() {
+        prepared.run_post_annotation_functions(eval)
+    } else {
+        eval.restore_current_buffer_if_live(current_id);
+        Ok(())
+    };
+
+    // Always attempt the matching unlock, including write and annotation
+    // cleanup errors. Preserve the primary write error first, then the post
+    // annotation error, if cleanup also fails.
+    let unlock_result = super::filelock::unlock_file(eval, &lock_name);
+    let visiting_modtime = match (write_result, post_annotation_result, unlock_result) {
+        (Err(write_error), _, _) => return Err(write_error),
+        (Ok(_), Err(annotation_error), _) => return Err(annotation_error),
+        (Ok(_), Ok(_), Err(unlock_error)) => return Err(unlock_error),
+        (Ok(visiting_modtime), Ok(_), Ok(_)) => visiting_modtime,
+    };
+
+    if let Some(visit_path) = visit.visited_file().cloned() {
+        let _ = eval
+            .edit
+            .buffers
+            .set_buffer_file_name(current_id, Value::heap_string(visit_path));
+        let _ = eval
+            .edit
+            .buffers
+            .set_buffer_modified_flag(current_id, false);
+        if let Some((sec, nsec, size)) = visiting_modtime
+            && let Some(buf) = eval.edit.buffers.get_mut(current_id)
+        {
+            buf.set_visited_file_modtime(VisitedFileModtime::Known { sec, nsec });
+            buf.set_modtime_size(Some(size));
+        }
+    }
+
+    eval.set_variable(
+        "last-coding-system-used",
+        Value::symbol(encoded.coding_system()),
+    );
+    if visit.reports_completion() && !eval.noninteractive() {
+        let completion =
+            WriteRegionCompletion::from_append_argument(args.get(3).copied().unwrap_or(Value::NIL));
+        neovm_eval::emacs_core::builtins::builtin_message(
+            eval,
+            &[
+                Value::string(completion.message_format()),
+                Value::heap_string(visit.file_name().clone()),
+            ],
+        )?;
+    }
+    Ok(Value::NIL)
+}
+
+/// (find-file-noselect FILENAME &optional NOWARN RAWFILE) -> buffer
+///
+/// Read file FILENAME into a buffer and return the buffer.
+/// If a buffer visiting FILENAME already exists, return it.
+/// Does not select the buffer.
+#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+pub(crate) fn builtin_find_file_noselect(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_min_args("find-file-noselect", &args, 1)?;
+    expect_max_args("find-file-noselect", &args, 4)?;
+    let abs_path = resolve_filename_lisp_for_eval(eval, &expect_lisp_string_strict(&args[0])?);
+    let abs_path_buf = lisp_file_name_to_path_buf(&abs_path);
+    let rawfile = args.get(2).is_some_and(|value| !value.is_nil());
+
+    // Check if there's already a buffer visiting this file
+    for buf_id in eval.edit.buffers.buffer_list() {
+        if let Some(buf) = eval.edit.buffers.get(buf_id)
+            && buf
+                .file_name_value()
+                .as_lisp_string()
+                .is_some_and(|name| name == &abs_path)
+        {
+            return Ok(Value::make_buffer(buf_id));
+        }
+    }
+
+    // Derive buffer name from file name.  Buffer names are display strings, so
+    // a lossy decode of the file-name bytes is acceptable here.
+    let buf_name =
+        neovm_value::emacs_char::to_utf8_lossy(lisp_file_name_nondirectory(&abs_path).as_bytes());
+    let unique_name = eval.edit.buffers.generate_new_buffer_name(&buf_name);
+    let buf_id = eval.edit.buffers.create_buffer(&unique_name);
+
+    let saved_current = eval.edit.buffers.current_buffer_id();
+    let open_result = (|| -> EvalResult {
+        eval.switch_current_buffer(buf_id)?;
+
+        let visit_error = if file_exists_path(&abs_path_buf) {
+            builtin_insert_file_contents(
+                eval,
+                vec![Value::heap_string(abs_path.clone()), Value::T],
+            )?;
+            let _ = eval
+                .edit
+                .buffers
+                .goto_buffer_emacs_byte_pos(buf_id, EmacsBytePos::new(0));
+            Value::NIL
+        } else {
+            Value::T
+        };
+
+        let _ = eval
+            .edit
+            .buffers
+            .set_buffer_file_name(buf_id, Value::heap_string(abs_path.clone()));
+        let truename = file_truename_lisp(&abs_path, None)?;
+        let _ = eval
+            .edit
+            .buffers
+            .set_buffer_file_truename(buf_id, Value::heap_string(truename));
+        if let Some(default_directory) = lisp_file_name_directory(&abs_path) {
+            let _ = eval.edit.buffers.set_buffer_local_property(
+                buf_id,
+                "default-directory",
+                Value::heap_string(default_directory),
+            );
+        }
+        let _ = eval.edit.buffers.set_buffer_modified_flag(buf_id, false);
+
+        // GNU `find-file-noselect-1` routes normal visits through
+        // `after-find-file`, which applies major-mode detection,
+        // file-local variables, and `find-file-hook`. Plain
+        // `Context::new()` test evaluators don't load that Lisp yet,
+        // so only call it when the runtime has it installed.
+        if !rawfile && eval.obarray().symbol_function("after-find-file").is_some() {
+            let warn = Value::bool_val(args.get(1).is_none_or(|value| value.is_nil()));
+            let _ =
+                eval.funcall_general(Value::symbol("after-find-file"), vec![visit_error, warn])?;
+        }
+
+        Ok(Value::make_buffer(buf_id))
+    })();
+
+    if let Some(prev_id) = saved_current {
+        eval.restore_current_buffer_if_live(prev_id);
+    }
+
+    open_result
+}
+
+// ===========================================================================
+// Auto-save support
+// ===========================================================================
+
+// `make-auto-save-file-name' is not here.  GNU has no C version: it is
+// `(defun make-auto-save-file-name () ...)' at lisp/files.el:7699, over
+// `auto-save-file-name-transforms', and it only RETURNS a name -- setting
+// `buffer-auto-save-file-name' is `auto-save-mode's job (lisp/files.el),
+// and C only reads the field (`BVAR (b, auto_save_file_name)',
+// src/fileio.c:6406-6408), which is also the gate Fdo_auto_save applies
+// to every buffer.  do-auto-save therefore never names a buffer.
+
+/// The permission bits GNU `auto_save_1` (src/fileio.c:6249-6273) stores in
+/// `auto_save_mode_bits`, which `write_region` then passes to open(2) for
+/// the auto-save file.
+///
+/// They are the visited file's modes plus owner read/write ("make sure we can
+/// overwrite it later"), so an auto-save file never grants more access than
+/// the file it backs up.  A buffer without a visited file, or whose visited
+/// file does not exist yet, gets the ordinary 0666.  The umask still applies,
+/// and an auto-save file that already exists keeps its own modes.
+fn auto_save_creation_mode(
+    eval: &mut super::eval::Context,
+    visited_file: Option<&LispString>,
+) -> Result<u32, Flow> {
+    let Some(visited_file) = visited_file else {
+        return Ok(DEFAULT_FILE_CREATION_MODE);
+    };
+    // `emacs_fstatat (AT_FDCWD, filename, &st, 0)`, which follows symlinks.
+    let modes = match stat_file_modes(&lisp_file_name_to_path_buf(visited_file), false) {
+        Ok(modes) => Some(i64::from(modes)),
+        // "Remote files don't cooperate with fstatat": GNU then asks
+        // `file-modes`, and keeps 0666 unless the answer is a fixnum.
+        Err(_) => auto_save_file_modes(eval, visited_file)?,
+    };
+    Ok(modes.map_or(DEFAULT_FILE_CREATION_MODE, |modes| {
+        ((modes | 0o600) & 0o777) as u32
+    }))
+}
+
+/// GNU `Ffile_modes (filename, Qnil)` (src/fileio.c:3644-3664), as
+/// `auto_save_1` calls it: the file name handler's answer when there is one,
+/// otherwise a stat that follows symlinks.
+///
+/// A failed stat is nil only for ENOENT and ENOTDIR; any other errno (EACCES,
+/// ELOOP...) signals (`file_metadata_errno`, src/fileio.c:325-336), and
+/// `Fdo_auto_save` then writes nothing for that buffer.  This port's
+/// `file-modes` answers nil for every failed stat, so it cannot be called
+/// here: an unreadable private file would get a 0666 auto-save file.
+fn auto_save_file_modes(
+    eval: &mut super::eval::Context,
+    visited_file: &LispString,
+) -> Result<Option<i64>, Flow> {
+    let absname = expand_and_dir_to_file_lisp_for_file_predicate(eval, visited_file)?;
+    let operation = Value::symbol("file-modes");
+    let handler = find_file_name_handler_lisp_for_eval(eval, &absname, operation);
+    if !handler.is_nil() {
+        let modes = eval.funcall_general(
+            handler,
+            vec![operation, Value::heap_string(absname), Value::NIL],
+        )?;
+        return Ok(modes.as_fixnum());
+    }
+    match stat_file_modes(&lisp_file_name_to_path_buf(&absname), false) {
+        Ok(modes) => Ok(Some(i64::from(modes))),
+        Err(err) if matches!(err.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory) => {
+            Ok(None)
+        }
+        Err(err) => Err(signal_file_action_error_value(
+            err,
+            "Getting attributes",
+            Value::heap_string(absname),
+        )),
+    }
+}
+
+/// GNU `auto_save_1` (src/fileio.c:6249-6273), run with BUF_ID current:
+/// compute the auto-save file's modes, then write the buffer to TARGET.
+///
+/// The text is copied only after the modes are known, as GNU's
+/// `write_region` reads the buffer only once `auto_save_1` has asked for
+/// them.  A `file-modes` or `expand-file-name` handler may edit the buffer
+/// meanwhile, and the file must hold the text whose modification tick
+/// `do-auto-save` then records as auto-saved.
+fn auto_save_1(
+    eval: &mut super::eval::Context,
+    buf_id: crate::buffer::BufferId,
+    visited_file: Option<&LispString>,
+    target: &LispString,
+) -> Result<(), Flow> {
+    let creation_mode = auto_save_creation_mode(eval, visited_file)?;
+    // A handler that killed the buffer leaves nothing to write.
+    let Some(buf) = eval.edit.buffers.get(buf_id) else {
+        return Ok(());
+    };
+    let mut content = Vec::new();
+    buf.copy_emacs_byte_range_to(buf.full_emacs_byte_range(), &mut content);
+    write_bytes_to_file_with_mode(
+        &content,
+        &lisp_file_name_to_path_buf(target),
+        FileWriteMode::Truncate,
+        creation_mode,
+    )
+    .map_err(|err| {
+        // The same report as `write-region`'s: GNU's `write_region` signals
+        // `("Opening output file" ...)` when open(2) fails
+        // (src/fileio.c:5656).
+        signal_file_action_error_value(
+            err,
+            "Opening output file",
+            Value::heap_string(target.clone()),
+        )
+    })?;
+    Ok(())
+}
+
+/// GNU `auto_save_error` (src/fileio.c:6233-6245), the handler
+/// `Fdo_auto_save` gives `internal_condition_case`: ring the bell, then
+/// display the error as an `auto-save` warning of level `:error`, "Auto-saving
+/// BUFFER: MESSAGE", where BUFFER is the current buffer, the one being
+/// auto-saved.  An error raised by the warning itself escapes `do-auto-save`,
+/// as in GNU.
+///
+/// `display-warning` is Lisp, autoloaded from warnings.el as in GNU.  A bare
+/// `Context` that has not loaded the Lisp layer has no way to display it, and
+/// drops the report.
+fn auto_save_error(eval: &mut super::eval::Context, flow: &Flow) -> Result<(), Flow> {
+    let Some(sig) = flow.as_signal() else {
+        return Ok(());
+    };
+    // `ring_bell (XFRAME (selected_frame))`.
+    let _ = crate::emacs_core::builtins::dispatch_builtin(eval, "ding", vec![]);
+    if !eval.obarray.fboundp("display-warning") {
+        return Ok(());
+    }
+    // The error object and the message are fresh heap values that must
+    // survive the allocations of `error-message-string` and `format`.
+    let roots = eval.save_specpdl_roots();
+    let result = (|| {
+        let error_data = crate::emacs_core::error::make_signal_binding_value(sig);
+        eval.push_specpdl_root(error_data);
+        let error_message =
+            crate::emacs_core::print::builtin_error_message_string(eval, vec![error_data])?;
+        eval.push_specpdl_root(error_message);
+        let format_string = Value::string("Auto-saving %s: %s");
+        eval.push_specpdl_root(format_string);
+        let buffer_name = eval
+            .buffers
+            .current_buffer()
+            .map_or(Value::NIL, |buf| buf.name_value());
+        let message = crate::emacs_core::builtins::builtin_format(
+            eval,
+            vec![format_string, buffer_name, error_message],
+        )?;
+        eval.funcall_general(
+            Value::symbol("display-warning"),
+            vec![Value::symbol("auto-save"), message, Value::symbol(":error")],
+        )?;
+        Ok(())
+    })();
+    eval.restore_specpdl_roots(roots);
+    result
+}
+
+/// `(do-auto-save &optional NO-MESSAGE CURRENT)` -> nil
+///
+/// Auto-save all buffers that need it.
+/// If NO-MESSAGE is non-nil, suppress the "Auto-saving..." message.
+/// If CURRENT is non-nil, only auto-save the current buffer.
+pub fn builtin_do_auto_save(
+    eval: &mut neovm_eval::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_min_args("do-auto-save", &args, 0)?;
+    expect_max_args("do-auto-save", &args, 2)?;
+
+    let _no_message = args.first().is_some_and(|v| v.is_truthy());
+    let current_only = args.get(1).is_some_and(|v| v.is_truthy());
+    // GNU's `old`: the buffer current on entry, before `auto-save-hook`.
+    let old_buffer = eval.edit.buffers.current_buffer_id();
+
+    // GNU `Fdo_auto_save` runs this before inspecting or snapshotting any
+    // buffer, so edits made by the hook belong to this auto-save pass.  Use
+    // the same safe named-hook boundary as the command loop: one broken hook
+    // is reported and removed without suppressing the remaining functions.
+    // `auto-save-hook` is a fixed GNU DEFSYM; this save path runs per
+    // auto-save and previously re-interned the spelling.
+    static AUTO_SAVE_HOOK: WellKnown = WellKnown::AutoSaveHook;
+    eval.safe_run_hook_if_bound(AUTO_SAVE_HOOK.id())?;
+
+    let auto_save_visited = eval
+        .variable_value_by_name("auto-save-visited-file-name")
+        .is_some_and(|v| v.is_truthy());
+
+    // Collect buffer ids to process
+    let buffer_ids: Vec<neovm_edit::buffer::BufferId> = if current_only {
+        eval.edit.buffers.current_buffer_id().into_iter().collect()
+    } else {
+        eval.edit.buffers.buffer_list()
+    };
+
+    for buf_id in buffer_ids {
+        // Gather info from the buffer (immutable borrow)
+        let (auto_save_name, file_name) = {
+            let Some(buf) = eval.edit.buffers.get(buf_id) else {
+                continue;
+            };
+
+            // Skip internal buffers (name starts with space)
+            if buf.name_starts_with_space() {
+                continue;
+            }
+
+            // Skip indirect buffers
+            if buf.base_buffer().is_some() {
+                continue;
+            }
+
+            // Check buffer-saved-size: if negative, auto-save is disabled for
+            // this buffer
+            if let Some(saved_size_val) = buf.get_buffer_local("buffer-saved-size")
+                && let Some(n) = saved_size_val.as_fixnum()
+                && n < 0
+            {
+                continue;
+            }
+
+            // Buffer must be modified since last auto-save
+            // (modified_tick > autosave_modified_tick means unsaved changes)
+            if buf.autosave_modified_tick() >= buf.modified_tick() {
+                continue;
+            }
+
+            // Buffer must actually be modified
+            if !buf.is_modified() {
+                continue;
+            }
+
+            // GNU fileio.c:6408 gates every buffer on
+            // `STRINGP (BVAR (b, auto_save_file_name))' before anything
+            // else: a buffer with no auto-save name is skipped -- never
+            // written, and never NAMED here.  Naming is `auto-save-mode's
+            // job (lisp/files.el); do-auto-save only reads the field.  The
+            // Rust subr used to invent `#*buffer*#' names for file-less
+            // buffers (DIVERGENCES.md 152), which made buffer-modified-p
+            // answer `autosaved' where GNU answers t.
+            let auto_name = buf.auto_save_file_name_lisp_string().cloned();
+            if auto_name.is_none() {
+                continue;
+            }
+            let visit_name = buf.file_name_lisp_string().cloned();
+            (auto_name, visit_name)
+        };
+
+        // Determine which file to write to
+        let target = if auto_save_visited {
+            // Save to visited file if auto-save-visited-file-name is set
+            file_name.clone()
+        } else {
+            auto_save_name.clone()
+        };
+
+        let Some(target_path) = target else {
+            // GNU's gate above already required STRINGP (auto_save_file_name);
+            // only `auto-save-visited-file-name' can make the target nil
+            // here (no visited file), and GNU skips that buffer too.
+            continue;
+        };
+
+        // GNU makes the buffer current, runs `auto_save_1` under
+        // `internal_condition_case (auto_save_1, Qt, auto_save_error)`, marks
+        // the buffer auto-saved whether or not that succeeded, and selects
+        // OLD again (`set_buffer_internal`, src/fileio.c:6453 and 6478-6482).
+        // A `file-modes` handler therefore runs in the buffer being
+        // auto-saved.  An error while reading the visited file's modes (a
+        // stat failing with EACCES, a handler signaling) or while writing
+        // abandons this buffer's write and is reported as a warning; the pass
+        // goes on with the next buffer, and this one is not retried before
+        // its next change.
+        eval.set_current_buffer_unrecorded(buf_id)?;
+        let result = match auto_save_1(eval, buf_id, file_name.as_ref(), &target_path) {
+            Err(flow) if flow.is_signal() => auto_save_error(eval, &flow),
+            other => other,
+        };
+        if result.is_ok() {
+            let _ = eval.edit.buffers.set_buffer_auto_saved(buf_id);
+            if let Some(buf) = eval.edit.buffers.get_mut(buf_id) {
+                let saved_size = buf.total_emacs_byte_len().get() as i64;
+                buf.set_buffer_local("buffer-saved-size", Value::fixnum(saved_size));
+            }
+        }
+        if let Some(old_buffer) = old_buffer {
+            eval.restore_current_buffer_if_live(old_buffer);
+        }
+        result?;
+    }
+
+    // GNU `Fdo_auto_save` ends with `record_auto_save`, regardless of whether
+    // any buffer needed writing. Keeping the record at the primitive boundary
+    // also makes direct Lisp calls and idle-triggered calls obey the same
+    // "new input is required before another automatic pass" invariant.
+    eval.command_loop.last_auto_save_input_events = eval.num_nonmacro_input_events();
+
+    Ok(Value::NIL)
+}
+
+// ===========================================================================
+// Bootstrap variables
+// ===========================================================================
+
+pub fn register_bootstrap_vars(obarray: &mut neovm_value::symbol::Obarray) {
+    let temporary_file_directory = std::env::temp_dir().to_string_lossy().to_string();
+    obarray.seed_value("file-name-coding-system", Value::NIL);
+    obarray.make_special("file-name-coding-system");
+    obarray.seed_value("default-file-name-coding-system", Value::NIL);
+    obarray.make_special("default-file-name-coding-system");
+    obarray.seed_value("set-auto-coding-for-load", Value::NIL);
+    obarray.seed_value("file-name-handler-alist", Value::NIL);
+    obarray.make_special("file-name-handler-alist");
+    // fileio.c:6856-6944 DEFVAR_LISP cluster, all initialized to nil.
+    obarray.define_special_variable("set-auto-coding-function", Value::NIL);
+    obarray.define_c_hook_variable("after-insert-file-functions");
+    obarray.define_c_hook_variable("write-region-annotate-functions");
+    obarray.define_special_variable("write-region-post-annotation-function", Value::NIL);
+    obarray.define_special_variable("write-region-annotations-so-far", Value::NIL);
+    obarray.seed_value("inhibit-file-name-handlers", Value::NIL);
+    obarray.make_special("inhibit-file-name-handlers");
+    obarray.seed_value("inhibit-file-name-operation", Value::NIL);
+    obarray.make_special("inhibit-file-name-operation");
+    obarray.seed_value("directory-abbrev-alist", Value::NIL);
+    obarray.seed_value("auto-save-list-file-name", Value::NIL);
+    obarray.make_special("auto-save-list-file-name");
+    obarray.seed_value("auto-save-list-file-prefix", Value::NIL);
+    obarray.seed_value("auto-save-visited-file-name", Value::NIL);
+    // fileio.c:6944 DEFVAR_LISP, init nil.
+    obarray.define_special_variable("auto-save-include-big-deletions", Value::NIL);
+    obarray.seed_value("small-temporary-file-directory", Value::NIL);
+    obarray.seed_value("auto-save-file-name-transforms", Value::NIL);
+    obarray.seed_value(
+        "temporary-file-directory",
+        Value::string(temporary_file_directory),
+    );
+    obarray.make_special("temporary-file-directory");
+
+    // Backup-related variables
+    obarray.seed_value("make-backup-files", Value::T);
+    obarray.seed_value("backup-inhibited", Value::NIL);
+    obarray.seed_value("version-control", Value::NIL);
+    obarray.seed_value("backup-directory-alist", Value::NIL);
+    // files.el: defvar for vc-hooks.el and locate-dominating-file
+    obarray.seed_value(
+        "locate-dominating-stop-dir-regexp",
+        Value::string(r"\`\(?:[\\/][\\/][^\\/]+[\\/]\|/\(?:net\|afs\|\.\.\.\)/\)\'"),
+    );
+}
+
+// ===========================================================================
+// Tests
+// ===========================================================================
+#[cfg(test)]
+#[path = "tests/fileio_test.rs"]
+mod tests;
+
+#[cfg(test)]
+#[path = "tests/fix8_test.rs"]
+mod fix8_tests;

@@ -276,62 +276,38 @@ pub mod value;
 pub use neovm_eval::emacs_core::value_reader;
 
 // Host integration, files, processes, networking, and platform support.
-#[path = "system/platform/c_features/mod.rs"]
-pub mod c_features;
-#[path = "system/callproc/mod.rs"]
-pub mod callproc;
-#[path = "system/platform/cus_start_platform_vars/mod.rs"]
-pub mod cus_start_platform_vars;
-#[path = "system/dbusbind/mod.rs"]
-pub(crate) mod dbusbind;
-#[path = "system/dynamic_module/mod.rs"]
-pub mod dynamic_module;
-#[path = "system/environment/mod.rs"]
-pub(crate) mod environment;
+pub use neovm_system::emacs_core::c_features;
+pub use neovm_system::emacs_core::callproc;
+pub use neovm_system::emacs_core::cus_start_platform_vars;
+pub(crate) use neovm_system::emacs_core::dbusbind;
+pub use neovm_system::emacs_core::dynamic_module;
+pub(crate) use neovm_system::emacs_core::environment;
 /// GNU's errno-to-text boundary ([`errno::emacs_strerror`]).  Not a mirror
 /// module -- there is no GNU `src/errno.c`; the function it ports lives in
 /// `src/emacs.c`.  See the module docs for why the text cannot be Rust's
 /// `io::Error` Display.
-#[path = "system/errno/mod.rs"]
-pub mod errno;
+pub use neovm_system::emacs_core::errno;
 #[path = "eval_hook_installers.rs"]
 pub mod eval_hook_installers;
-#[path = "system/fileio/mod.rs"]
-pub mod fileio;
-#[path = "system/filelock/mod.rs"]
-pub mod filelock;
-#[path = "system/host_input.rs"]
-pub mod host_input;
+pub use neovm_system::emacs_core::fileio;
+pub use neovm_system::emacs_core::filelock;
+pub use neovm_system::emacs_core::host_input;
 #[path = "load_boot.rs"]
 pub mod load_boot;
-#[path = "system/network/mod.rs"]
-pub mod network;
-#[path = "system/os_signal/mod.rs"]
-pub(crate) mod os_signal;
-#[path = "system/path_exec/mod.rs"]
-pub mod path_exec;
-#[path = "system/perf_trace/mod.rs"]
-pub mod perf_trace;
-#[path = "system/platform/platform_facts.rs"]
-pub(crate) mod platform_facts;
-#[path = "system/post_image_init/mod.rs"]
-pub(crate) mod post_image_init;
-#[path = "system/process/mod.rs"]
-pub mod process;
-#[path = "system/shell_file_name/mod.rs"]
-pub(crate) mod shell_file_name;
-#[path = "system/sqlite/mod.rs"]
-pub(crate) mod sqlite;
-#[path = "system/timefns/mod.rs"]
-pub mod timefns;
-#[path = "system/timer/mod.rs"]
-pub mod timer;
-#[path = "system/tls/mod.rs"]
-pub(crate) mod tls;
-#[path = "system/platform/w32/mod.rs"]
-pub(crate) mod w32;
-#[path = "system/wait/mod.rs"]
-pub(crate) mod wait;
+pub use neovm_system::emacs_core::network;
+pub(crate) use neovm_system::emacs_core::os_signal;
+pub use neovm_system::emacs_core::path_exec;
+pub use neovm_system::emacs_core::perf_trace;
+pub(crate) use neovm_system::emacs_core::platform_facts;
+pub(crate) use neovm_system::emacs_core::post_image_init;
+pub use neovm_system::emacs_core::process;
+pub(crate) use neovm_system::emacs_core::shell_file_name;
+pub(crate) use neovm_system::emacs_core::sqlite;
+pub use neovm_system::emacs_core::timefns;
+pub use neovm_system::emacs_core::timer;
+pub(crate) use neovm_system::emacs_core::tls;
+pub(crate) use neovm_system::emacs_core::w32;
+pub(crate) use neovm_system::emacs_core::wait;
 
 // Character representation, coding, syntax, search, and structured text.
 #[cfg(not(test))]
@@ -378,9 +354,6 @@ pub(crate) use neovm_value::string_pos_cache;
 // Cross-subsystem and externally-shaped regression suites retain the
 // `emacs_core` lexical parent while living beside the subsystem they cover.
 #[cfg(test)]
-#[path = "system/platform/c_features/tests/surface_test.rs"]
-mod c_features_test;
-#[cfg(test)]
 #[path = "tests/compat_regressions/mod.rs"]
 pub mod compat_regressions;
 #[cfg(test)]
@@ -424,9 +397,6 @@ mod symbol_plist_regression_test;
 #[cfg(test)]
 #[path = "../../core_tests/emacs_core/runtime/symbol/tests/redirect_regression_test.rs"]
 mod symbol_redirect_regression_test;
-#[cfg(test)]
-#[path = "system/tls/tests/runtime_test.rs"]
-mod tls_test;
 
 // Moved down with the evaluator (stage-4 W5/E13); the historical
 // `crate::emacs_core::MenuBarPopupAnchor` path stays as a re-export.

@@ -1,0 +1,49 @@
+[package]
+name = "neovm-system"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Host system services (files, processes, time, IPC) extracted from neovm-core"
+
+[features]
+default = ["jit", "sqlite"]
+jit = ["neovm-value/jit", "neovm-edit/jit", "neovm-text/jit", "neovm-eval/jit"]
+sqlite = ["dep:rusqlite", "neovm-eval/sqlite"]
+
+[dependencies]
+neovm-value = { path = "../neovm-value" }
+neovm-edit = { path = "../neovm-edit" }
+neovm-text = { path = "../neovm-text" }
+neovm-eval = { path = "../neovm-eval" }
+base64.workspace = true
+crossbeam-channel.workspace = true
+dbus = { version = "0.9", default-features = false }
+dns-lookup.workspace = true
+errno.workspace = true
+libc.workspace = true
+libloading.workspace = true
+malachite.workspace = true
+network-interface.workspace = true
+num_enum.workspace = true
+os_pipe.workspace = true
+polling.workspace = true
+portable-pty.workspace = true
+regex.workspace = true
+rusqlite = { workspace = true, optional = true }
+rustc-hash.workspace = true
+rustix.workspace = true
+rustls.workspace = true
+rustls-pki-types.workspace = true
+socket2.workspace = true
+static_assertions.workspace = true
+strum.workspace = true
+sysinfo.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tree-sitter.workspace = true
+webpki-roots.workspace = true
+windows-sys.workspace = true
+x509-parser.workspace = true
