@@ -71,29 +71,37 @@ pub struct EvalHookSet {
 /// evaluator's input loop (never per bytecode step).
 #[derive(Clone, Copy)]
 pub struct WaitServiceHooks {
+    #[doc(hidden)]
     pub service_input_pending_with_timers: fn(&mut Context) -> Result<(), Flow>,
+    #[doc(hidden)]
     pub service_read_char_preliminary_redisplay:
         fn(&mut Context, keyboard::IdleTransitionPolicy) -> Result<(), Flow>,
+    #[doc(hidden)]
     pub service_timers_without_redisplay: fn(&mut Context) -> Result<(), Flow>,
+    #[doc(hidden)]
     pub wait_for_command_input_with_idle_policy:
         fn(
             &mut Context,
             Option<Instant>,
             keyboard::IdleTransitionPolicy,
         ) -> Result<input_hooks::CommandInputWaitOutcome, Flow>,
+    #[doc(hidden)]
     pub wait_for_resize_ack_until: fn(&mut Context, Instant) -> Result<bool, Flow>,
 }
 
 /// Timer-deadline upcalls, read once per input-wait decision.
 #[derive(Clone, Copy)]
 pub struct TimerServiceHooks {
+    #[doc(hidden)]
     pub next_ordinary_gnu_timer_timeout_before: fn(&Context) -> Option<Duration>,
+    #[doc(hidden)]
     pub next_idle_gnu_timer_timeout: fn(&Context) -> Option<Duration>,
 }
 
 /// Frontend host-event upcalls, per frontend event.
 #[derive(Clone, Copy)]
 pub struct FrontendServiceHooks {
+    #[doc(hidden)]
     pub apply_xwidget_frontend_event:
         fn(&mut Context, &keyboard::FrontendWebViewEvent) -> Result<bool, Flow>,
 }
@@ -101,10 +109,13 @@ pub struct FrontendServiceHooks {
 /// Display scheduling queries, per redisplay / command boundary.
 #[derive(Clone, Copy)]
 pub struct DisplayServiceHooks {
+    #[doc(hidden)]
     pub compositor_scrolling_enabled:
         fn(&Context, neovm_edit::emacs_core::display_metrics::WindowId) -> bool,
+    #[doc(hidden)]
     pub permits_compositor_pixel_scroll:
         fn(&Context, neovm_edit::emacs_core::display_metrics::WindowId) -> bool,
+    #[doc(hidden)]
     pub redisplay_buffer_layout_inputs: fn(
         &Context,
         neovm_edit::buffer::BufferId,
