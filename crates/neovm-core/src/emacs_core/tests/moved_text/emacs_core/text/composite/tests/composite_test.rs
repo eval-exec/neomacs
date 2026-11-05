@@ -1,6 +1,7 @@
 use super::*;
 
 use neomacs_display_protocol::glyph_matrix::{TerminalComposition, TerminalCompositionCell};
+use neovm_display::window::DisplayFrameManagerExt;
 use neovm_text::emacs_core::text_host::TextHost;
 use neovm_value::emacs_char::UnicodeCategory;
 use neovm_value::error::LispCondition;

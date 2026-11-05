@@ -8245,6 +8245,10 @@ mod coherence_hooks_tests;
 #[path = "tests/issue554_function_policy.rs"]
 mod issue554_function_policy;
 
+#[cfg(test)]
+#[path = "tests/minimal_vm_buffer_storage_test.rs"]
+mod minimal_vm_buffer_storage_test;
+
 mod rows_observation;
 pub use rows_observation::{RowsDependencyMetadata, RowsObservationEpoch, RowsObservationRefusal};
 

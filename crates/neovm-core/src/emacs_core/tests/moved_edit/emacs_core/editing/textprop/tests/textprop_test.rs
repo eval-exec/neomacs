@@ -1,5 +1,6 @@
 use super::*;
 
+use neovm_display::window::DisplayFrameManagerExt;
 use neovm_edit::emacs_core::display_metrics::WindowId;
 use neovm_edit::emacs_core::edit_host::{EditHost, EditVariableRead};
 use neovm_value::error::LispCondition;

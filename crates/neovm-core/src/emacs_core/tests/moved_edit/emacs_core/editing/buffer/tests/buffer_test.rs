@@ -1,3 +1,4 @@
+use neovm_display::window::DisplayFrameManagerExt;
 use neovm_edit::buffer::text_props::PropertyNamePresence::DefinitelyAbsent;
 use neovm_edit::buffer::{
     Buffer, BufferId, BufferManager, CharLen, CharPos0, CharRange, EmacsByteLen, EmacsBytePos,

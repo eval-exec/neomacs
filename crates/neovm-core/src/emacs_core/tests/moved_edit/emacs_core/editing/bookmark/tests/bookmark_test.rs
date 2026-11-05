@@ -76,7 +76,9 @@ fn bookmark_lookup_key_cannot_retain_input_properties() {
     let check_dropped = |eval: &Context| {
         for DroppedProperty(bits) in &probes {
             assert!(
-                !eval.tagged_heap.retains_veclike(Value::from_bits(*bits)),
+                !eval
+                    .tagged_heap
+                    .retains_veclike(unsafe { Value::from_bits(*bits) }),
                 "bookmark key input-only property remained rooted"
             );
         }
@@ -168,6 +170,8 @@ fn bookmark_lookup_projection_preserves_semantic_name_properties() {
 
 #[test]
 fn bookmark_copied_properties_have_only_manager_roots() {
+    use crate::emacs_core::Context;
+
     struct Probe(usize);
     fn text(probes: &mut Vec<Probe>, property: Value, mut text: LispString) -> LispString {
         let payload = Value::vector(vec![Value::fixnum(probes.len() as i64)]);
@@ -221,13 +225,14 @@ fn bookmark_copied_properties_have_only_manager_roots() {
     let check_live = |eval: &Context| {
         for Probe(bits) in &probes {
             assert!(
-                eval.tagged_heap.retains_veclike(Value::from_bits(*bits)),
+                eval.tagged_heap
+                    .retains_veclike(unsafe { Value::from_bits(*bits) }),
                 "bookmark-only property vector was reclaimed"
             );
         }
         for (index, Probe(bits)) in probes.iter().enumerate() {
             assert_eq!(
-                Value::from_bits(*bits)
+                (unsafe { Value::from_bits(*bits) })
                     .as_vector_data()
                     .expect("live bookmark property vector")
                     .as_slice(),
@@ -287,7 +292,9 @@ fn bookmark_copied_properties_have_only_manager_roots() {
     eval.gc_collect_exact();
     for Probe(bits) in probes {
         assert!(
-            !eval.tagged_heap.retains_veclike(Value::from_bits(bits)),
+            !eval
+                .tagged_heap
+                .retains_veclike(unsafe { Value::from_bits(bits) }),
             "retired bookmark graph remained permanently rooted"
         );
     }

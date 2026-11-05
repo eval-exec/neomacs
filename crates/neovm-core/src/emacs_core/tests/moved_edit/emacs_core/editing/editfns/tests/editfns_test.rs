@@ -101,7 +101,7 @@ fn file_group_gid_matches_group_gid() {
 #[test]
 fn process_identity_queries_do_not_construct_child_commands() {
     crate::test_utils::init_test_tracing();
-    crate::emacs_core::callproc::reset_new_child_command_calls_for_test();
+    reset_new_child_command_calls_for_test();
 
     builtin_user_uid(vec![]).expect("user-uid should succeed");
     builtin_user_real_uid(vec![]).expect("user-real-uid should succeed");
@@ -111,7 +111,7 @@ fn process_identity_queries_do_not_construct_child_commands() {
     builtin_file_group_gid(vec![]).expect("file-group-gid should succeed");
 
     assert_eq!(
-        crate::emacs_core::callproc::new_child_command_calls_for_test(),
+        new_child_command_calls_for_test(),
         0,
         "credential queries are host syscalls, not subprocess operations"
     );
@@ -192,7 +192,7 @@ fn combine_after_change_still_updates_treesit_linecol_cache() {
         .linecol_cache(current)
         .expect("linecol cache should remain installed");
     assert_eq!((cache.line, cache.col, cache.bytepos), (1, 1, 0));
-    assert_eq!(eval.combine_after_change_list.len(), 1);
+    assert_eq!(eval.edit.combine_after_change_list().len(), 1);
 }
 
 #[test]

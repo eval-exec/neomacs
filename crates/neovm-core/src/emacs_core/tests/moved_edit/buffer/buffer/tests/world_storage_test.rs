@@ -169,17 +169,6 @@ fn owned_parts_adapter_rejects_both_runtime_and_detached_world_views() {
 }
 
 #[test]
-fn minimal_runtime_keeps_buffers_in_its_world_allocation() {
-    let context = Context::new_minimal_vm_harness();
-    assert!(matches!(
-        context.edit.buffers.backing,
-        BufferBacking::Leased { detached: None, .. }
-    ));
-    assert_selection_matches_storage(&context.edit.buffers);
-    assert_eq!(context.edit.buffers.buffer_list().len(), 1);
-}
-
-#[test]
 fn cold_reset_retires_selection_and_preserves_the_storage_address() {
     let mut context = crate::test_utils::new_context();
     let pointer = context.edit.buffers.storage_ptr;
