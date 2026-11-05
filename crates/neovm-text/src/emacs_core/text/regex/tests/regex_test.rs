@@ -1664,3 +1664,135 @@ struct MatchDataSnapshot {
     searched_buffer: Option<BufferId>,
     searched_string_is_some: bool,
 }
+
+/// Reference implementation for the literal searchers: the exact
+/// sliding-window shapes the linear-time versions replaced.
+#[cfg(test)]
+mod literal_search_linear_equivalence {
+    use super::*;
+
+    fn naive_find(text: &[u8], needle: &[u8], fold: bool) -> Option<usize> {
+        if needle.is_empty() {
+            return Some(0);
+        }
+        if needle.len() > text.len() {
+            return None;
+        }
+        text.windows(needle.len()).position(|w| {
+            if fold {
+                w.iter()
+                    .zip(needle.iter())
+                    .all(|(l, r)| l.eq_ignore_ascii_case(r))
+            } else {
+                w == needle
+            }
+        })
+    }
+
+    fn naive_rfind(text: &[u8], needle: &[u8], fold: bool) -> Option<usize> {
+        if needle.is_empty() {
+            return Some(text.len());
+        }
+        if needle.len() > text.len() {
+            return None;
+        }
+        text.windows(needle.len()).rposition(|w| {
+            if fold {
+                w.iter()
+                    .zip(needle.iter())
+                    .all(|(l, r)| l.eq_ignore_ascii_case(r))
+            } else {
+                w == needle
+            }
+        })
+    }
+
+    fn check(text: &[u8], needle: &[u8]) {
+        for fold in [false, true] {
+            let want_find = naive_find(text, needle, fold);
+            let want_rfind = naive_rfind(text, needle, fold);
+            let got_find =
+                literal_find_emacs_bytes(text, needle, false, fold).map(|group| group.start);
+            let got_rfind =
+                literal_rfind_emacs_bytes(text, needle, false, fold).map(|group| group.start);
+            // The unibyte fold path routes through the Emacs case table for
+            // non-ASCII bytes; restrict fold equivalence checks to ASCII
+            // needles, where the searcher takes the linear folded path.
+            if !fold || needle.is_ascii() {
+                assert_eq!(
+                    got_find, want_find,
+                    "find text={text:?} needle={needle:?} fold={fold}"
+                );
+                assert_eq!(
+                    got_rfind, want_rfind,
+                    "rfind text={text:?} needle={needle:?} fold={fold}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn adversarial_repetitive_inputs_match_naive_reference() {
+        crate::test_utils::init_test_tracing();
+        // Classic quadratic killers: long runs of one byte with a needle
+        // that almost matches at every position.
+        let long_a = vec![b'a'; 4096];
+        let mut needle_ab = vec![b'a'; 63];
+        needle_ab.push(b'b');
+        check(&long_a, &needle_ab);
+
+        let mut text_ab = long_a.clone();
+        text_ab.extend_from_slice(&needle_ab);
+        check(&text_ab, &needle_ab);
+
+        // Period-2 repetition with a mismatching tail.
+        let abab: Vec<u8> = std::iter::repeat_n([b'a', b'b'], 1024).flatten().collect();
+        let mut needle_abac: Vec<u8> = std::iter::repeat_n([b'a', b'b'], 16).flatten().collect();
+        needle_abac.push(b'a');
+        needle_abac.push(b'c');
+        check(&abab, &needle_abac);
+    }
+
+    #[test]
+    fn case_fold_and_boundary_cases_match_naive_reference() {
+        crate::test_utils::init_test_tracing();
+        check(b"", b"");
+        check(b"", b"x");
+        check(b"x", b"");
+        check(b"HELLO world HeLLo", b"hello");
+        check(b"HELLO world HeLLo", b"HELLO");
+        check(b"aAaAaAaAaAaAaAaAb", b"AAAAb");
+        // Raw non-ASCII bytes in the haystack with an ASCII needle: fold
+        // comparison must never treat 0x80+ bytes as ASCII letters.
+        check(b"\xC3\xA9caf\xC3\xA9 CAFE cafe", b"cafe");
+        check(b"\xFFcafe\xFF", b"CAFE");
+        // Needle exactly at start / end.
+        check(b"needle in haystack", b"needle");
+        check(b"in haystack needle", b"needle");
+    }
+
+    #[test]
+    fn randomized_small_cases_match_naive_reference() {
+        crate::test_utils::init_test_tracing();
+        // Deterministic xorshift; small alphabet maximizes near-matches.
+        let mut state = 0x9E3779B97F4A7C15u64;
+        let mut next = move || {
+            state ^= state >> 12;
+            state ^= state << 25;
+            state ^= state >> 27;
+            state = state.wrapping_mul(0x2545F4914F6CDD1D);
+            state
+        };
+        for _ in 0..400 {
+            let text_len = (next() % 48) as usize;
+            let needle_len = (next() % 8) as usize;
+            let text: Vec<u8> = (0..text_len)
+                .map(|_| b"aAbB"[(next() % 4) as usize])
+                .collect();
+            let needle: Vec<u8> = (0..needle_len)
+                .map(|_| b"aAbB"[(next() % 4) as usize])
+                .collect();
+            check(&text, &needle);
+        }
+    }
+}
