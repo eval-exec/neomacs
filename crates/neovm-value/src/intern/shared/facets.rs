@@ -82,11 +82,6 @@ const _: () = assert!(std::mem::size_of::<HeapVisibleName>() == 8);
 static_assertions::assert_impl_all!(HeapVisibleNames: Send, Sync);
 static_assertions::assert_impl_all!(ReaderTemplates: Send, Sync);
 
-#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "tests/facets.rs"]
 mod tests;
-#[cfg(any(test, feature = "test-support"))]
-#[cfg(test)]
-#[path = "tests/facets.rs"]
-pub mod tests;

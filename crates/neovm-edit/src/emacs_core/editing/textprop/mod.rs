@@ -1951,7 +1951,6 @@ fn put_text_property_in_buffer_byte_range(
     Value::NIL
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// (get-text-property POS PROP &optional OBJECT)
 #[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -2438,7 +2437,6 @@ pub fn builtin_get_char_property_with_window_lookup<
     ))
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// (add-text-properties BEG END PROPS &optional OBJECT)
 #[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -2986,7 +2984,6 @@ impl StringTextPropertyTarget {
     }
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// (remove-list-of-text-properties BEG END LIST &optional OBJECT)
 #[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -3098,7 +3095,6 @@ pub(crate) fn builtin_remove_list_of_text_properties_in_buffers(
     Ok(Value::T)
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// (text-properties-at POS &optional OBJECT)
 #[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -3585,7 +3581,6 @@ pub fn emacs_byte_pos_of_preceding_char(buf: &Buffer, byte_pos: EmacsBytePos) ->
     EmacsBytePos::new(buffer_char_to_byte_pos(buf, prev_char))
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// (previous-single-property-change POS PROP &optional OBJECT LIMIT)
 #[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -3965,7 +3960,6 @@ pub(crate) fn builtin_text_property_any_in_state<'a, Vars: EditVariableRead<'a>>
     Ok(first.map_or(Value::NIL, |pos| Value::fixnum(pos.to_lisp().as_i64())))
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// (text-property-not-all BEG END PROP VAL &optional OBJECT)
 #[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]

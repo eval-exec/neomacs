@@ -19,14 +19,9 @@ pub mod transport;
 pub mod value;
 pub use value::SymbolMode;
 
-#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "tests/tagged_test.rs"]
 mod tests;
-#[cfg(any(test, feature = "test-support"))]
-#[cfg(test)]
-#[path = "tests/tagged_test.rs"]
-pub mod tests;
 
 #[cfg(test)]
 #[path = "tests/pdump_image_test.rs"]

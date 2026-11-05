@@ -23,13 +23,13 @@ pub(crate) struct CharsetEncoder {
 
 enum CharsetEncoderKind {
     Map(Option<Arc<CharsetMapData>>),
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     Registry(SymId),
     Member(SymId),
 }
 
 enum CharsetLookup {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     Name(SymId),
     Member(SymId),
 }
@@ -49,7 +49,7 @@ impl CharsetEncoder {
         let kind = CHARSET_REGISTRY.with(|slot| {
             let registry = slot.borrow();
             let (name, fallback) = match lookup {
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-support"))]
                 CharsetLookup::Name(name) => {
                     let name = registry.resolve_name(name);
                     (name, CharsetEncoderKind::Registry(name))
@@ -73,7 +73,7 @@ impl CharsetEncoder {
     pub(crate) fn encode_char(&self, ch: i64) -> Option<i64> {
         match &self.kind {
             CharsetEncoderKind::Map(map) => map.as_ref()?.char_to_code.get(&ch).copied(),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             CharsetEncoderKind::Registry(name) => charset_encode_char(*name, ch),
             CharsetEncoderKind::Member(identity) => {
                 CHARSET_REGISTRY.with(|slot| slot.borrow().encode_member_char(*identity, ch))

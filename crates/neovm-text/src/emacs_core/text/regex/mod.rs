@@ -2455,7 +2455,6 @@ fn pattern_for_compile(pattern: &LispString) -> LispString {
     }
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn compile_search_pattern(
@@ -3379,7 +3378,6 @@ fn literal_rfind_emacs_bytes(
     )
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn next_search_char_boundary(text: &[u8], pos: usize) -> Option<usize> {
@@ -3657,7 +3655,6 @@ pub(crate) fn search_forward(
     Ok(point.map(|point| BufferSearchSuccess::new(buf, point, regs.into_engine_match_data())))
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn search_forward_into(
@@ -3759,7 +3756,6 @@ pub(crate) fn search_backward(
     Ok(point.map(|point| BufferSearchSuccess::new(buf, point, regs.into_engine_match_data())))
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn search_backward_into(
@@ -4067,7 +4063,6 @@ pub(crate) fn re_search_backward_with_posix(
 /// table is installed, else `None` so the engine's fast hardwired folding is
 /// used. Mirrors GNU search.c installing `BVAR (current_buffer, case_canon_table)`.
 #[cfg(any(test, feature = "test-support"))]
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn buffer_search_translation(
     buf: &Buffer,
@@ -4746,7 +4741,8 @@ pub(crate) fn string_match_full_with_case_fold_source_lisp_posix(
 /// Engine-test convenience: see
 /// [`string_match_full_with_case_fold_source_lisp`] for why this
 /// [`DefaultSyntaxLookup`] bypass is test-only.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn string_match_full_with_case_fold_source_lisp_pattern_posix(
     pattern: &LispString,
     string: &neovm_value::heap_types::LispString,
@@ -4769,7 +4765,8 @@ pub(crate) fn string_match_full_with_case_fold_source_lisp_pattern_posix(
     )
 }
 
-#[cfg(test)] // production match-data callers commit through StringSearchSuccess
+#[cfg(any(test, feature = "test-support"))] // production match-data callers commit through StringSearchSuccess
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[allow(clippy::too_many_arguments)] // matching options remain explicit at the GNU-regexp boundary
 pub(crate) fn string_match_full_with_case_fold_source_lisp_pattern_posix_syntax(
     pattern: &LispString,
@@ -5595,11 +5592,6 @@ impl<'a> PropertizeFrontier<'a> {
     }
 }
 
-#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "tests/regex_test.rs"]
 mod tests;
-#[cfg(any(test, feature = "test-support"))]
-#[cfg(test)]
-#[path = "tests/regex_test.rs"]
-pub mod tests;

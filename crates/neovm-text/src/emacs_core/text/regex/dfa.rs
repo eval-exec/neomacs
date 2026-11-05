@@ -964,7 +964,6 @@ const NO_FACTS: u8 = 0xFF;
 pub const NO_FACTS: u8 = 0xFF;
 
 #[cfg(not(any(test, feature = "test-support")))]
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// What the character-to-class maps of one pattern are valid for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -978,7 +977,6 @@ pub(crate) struct ClassContext {
     target_multibyte: bool,
 }
 #[cfg(any(test, feature = "test-support"))]
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// What the character-to-class maps of one pattern are valid for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -1920,7 +1918,6 @@ impl ExistenceDfa {
         None
     }
 
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// The one-step subset is kept explicit in the cache guard tests.
 #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -2782,7 +2779,7 @@ fn classic_candidate(
     point: usize,
     regs: &mut MatchRegisters,
 ) -> Option<usize> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     super::MATCHER_ENTRY_COUNT.with(|c| c.set(c.get() + 1));
     re_match_candidate_in(scratch, pattern, text, pos, stop, syntax, point, regs)
 }
@@ -3178,11 +3175,6 @@ pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
     neovm_value::tls_fingerprint::mix_debug(h, STATS.with(|slot| format!("{:?}", slot.borrow())));
 }
 
-#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "tests/dfa_test.rs"]
 mod tests;
-#[cfg(any(test, feature = "test-support"))]
-#[cfg(test)]
-#[path = "tests/dfa_test.rs"]
-pub mod tests;

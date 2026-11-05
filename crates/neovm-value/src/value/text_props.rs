@@ -5632,14 +5632,9 @@ impl TextPropertyTable {
 // Tests
 // ===========================================================================
 
-#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "text_props/tests/text_props_test.rs"]
 mod tests;
-#[cfg(any(test, feature = "test-support"))]
-#[cfg(test)]
-#[path = "text_props/tests/text_props_test.rs"]
-pub mod tests;
 
 #[cfg(test)]
 #[path = "text_props/tests/bounded_absent_property_test.rs"]

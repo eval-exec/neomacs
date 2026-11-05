@@ -126,7 +126,6 @@ static MODE: AtomicU8 = AtomicU8::new(MODE_UNREAD);
 
 #[cfg(any(test, feature = "test-support"))]
 thread_local! {
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// Test override of `NEOVM_SYNTAX_PARSE_CACHE`.
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) static MODE_OVERRIDE: std::cell::Cell<Option<ParseCacheMode>> =
@@ -348,7 +347,6 @@ static MIN_SPAN: AtomicUsize = AtomicUsize::new(0);
 
 #[cfg(any(test, feature = "test-support"))]
 thread_local! {
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// Test override of the chunk and the minimum span.
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) static GEOMETRY_OVERRIDE: std::cell::Cell<Option<(usize, usize)>> =
@@ -524,7 +522,6 @@ pub(crate) fn parse_cache_mismatches() -> u64 {
     MISMATCHES.load(Ordering::Relaxed)
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn reset_parse_cache_stats() {

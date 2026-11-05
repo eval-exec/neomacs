@@ -272,7 +272,8 @@ impl VisitedFileModtimeSlot {
 
     /// True when this slot follows the cell `base` names.  Test-facing: it is
     /// how "the link is live" is stated without reaching into private fields.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn follows(&self, base: &BaseVisitedFileModtime) -> bool {
         self.base
             .as_ref()
@@ -280,11 +281,6 @@ impl VisitedFileModtimeSlot {
     }
 }
 
-#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "visited_file_modtime/tests/visited_file_modtime_test.rs"]
 mod tests;
-#[cfg(any(test, feature = "test-support"))]
-#[cfg(test)]
-#[path = "visited_file_modtime/tests/visited_file_modtime_test.rs"]
-pub mod tests;

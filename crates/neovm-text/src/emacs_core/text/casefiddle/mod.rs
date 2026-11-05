@@ -1001,7 +1001,6 @@ pub fn capitalize_with_word_pred(
     }
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Pure form (used by tests); word boundaries follow the standard syntax table.
 #[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -1057,7 +1056,6 @@ pub fn upcase_initials_with_word_pred(
     }
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Pure form (used by tests); word boundaries follow the standard syntax table.
 #[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -1436,14 +1434,9 @@ impl CasingChangedSpan {
     }
 }
 
-#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "tests/casefiddle_test.rs"]
 mod tests;
-#[cfg(any(test, feature = "test-support"))]
-#[cfg(test)]
-#[path = "tests/casefiddle_test.rs"]
-pub mod tests;
 
 #[cfg(test)]
 #[path = "tests/casing_types.rs"]

@@ -3139,7 +3139,7 @@ impl BufferText {
 
     /// Walk the chain from head to tail, collecting raw pointers in order.
     /// Test-only helper.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn chain_walk_collect(&self) -> Vec<*mut neovm_value::tagged::header::MarkerObj> {
         let storage = self.storage.borrow();
         let mut out = Vec::new();
@@ -3927,14 +3927,9 @@ fn scan_backward_bytes(
     cp.saturating_sub_len(CharLen::new(starts + usize::from(inside_char)))
 }
 
-#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "buffer_text/tests/buffer_text_test.rs"]
 mod tests;
-#[cfg(any(test, feature = "test-support"))]
-#[cfg(test)]
-#[path = "buffer_text/tests/buffer_text_test.rs"]
-pub mod tests;
 
 #[cfg(test)]
 #[path = "tests/buffer_text_chain_test.rs"]

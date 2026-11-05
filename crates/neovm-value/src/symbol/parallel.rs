@@ -205,14 +205,9 @@ impl SymbolBacking {
     }
 }
 
-#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "tests/parallel_test.rs"]
 mod tests;
-#[cfg(any(test, feature = "test-support"))]
-#[cfg(test)]
-#[path = "tests/parallel_test.rs"]
-pub mod tests;
 
 impl SymbolBacking {
     /// # Safety

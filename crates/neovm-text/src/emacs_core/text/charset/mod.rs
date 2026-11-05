@@ -1731,7 +1731,6 @@ pub(crate) fn registered_charset_names() -> Vec<SymId> {
     CHARSET_REGISTRY.with(|slot| slot.borrow().charsets.keys().copied().collect())
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(min_code, max_code, dimension)` for the sweep's range.
 #[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -2061,7 +2060,6 @@ fn parse_superset_spec(value: &Value, mode: SymbolMode) -> Option<Vec<(SymId, i6
 // Pure builtins (Vec<Value> -> EvalResult)
 // ---------------------------------------------------------------------------
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(charsetp OBJECT)` -- return t if OBJECT names a known charset.
 #[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -2083,7 +2081,6 @@ fn builtin_charsetp_with_symbols(args: Vec<Value>, mode: SymbolMode) -> EvalResu
     Ok(Value::bool_val(found))
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(charset-list)` -- return charset symbols in priority order.
 #[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -2099,7 +2096,6 @@ pub(crate) fn builtin_charset_list(args: Vec<Value>) -> EvalResult {
     Ok(Value::list(names))
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(unibyte-charset)` -- return the charset used for unibyte strings.
 #[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -2133,7 +2129,6 @@ pub fn builtin_charset_priority_list(args: Vec<Value>) -> EvalResult {
     })
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(set-charset-priority &rest CHARSETS)` -- set charset detection priority.
 #[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -2288,7 +2283,6 @@ pub fn builtin_split_char(args: Vec<Value>) -> EvalResult {
     Ok(Value::list(elems))
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(charset-plist CHARSET)` -- return property list for CHARSET.
 #[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -2322,7 +2316,6 @@ fn builtin_charset_plist_with_symbols(args: Vec<Value>, mode: SymbolMode) -> Eva
     })
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(charset-id-internal &optional CHARSET)` -- return internal charset id.
 #[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -2549,7 +2542,6 @@ fn expect_make_char_code_byte(value: &Value) -> Result<i64, Flow> {
     }
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(make-char CHARSET &optional CODE1 CODE2 CODE3 CODE4)` -- return a
 /// character at the charset position codes.
 #[cfg(any(test, feature = "test-support"))]
@@ -2869,7 +2861,6 @@ pub fn builtin_get_unused_iso_final_char(args: Vec<Value>) -> EvalResult {
     Ok(Value::fixnum(final_char))
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(declare-equiv-charset DIMENSION CHARS CH CHARSET)` -- declare an
 /// equivalent charset mapping tuple.
 #[cfg(any(test, feature = "test-support"))]
@@ -2911,7 +2902,6 @@ fn builtin_declare_equiv_charset_with_symbols(args: Vec<Value>, mode: SymbolMode
     Ok(Value::NIL)
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(define-charset-alias ALIAS CHARSET)` -- add ALIAS for CHARSET.
 #[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -2971,7 +2961,6 @@ pub fn builtin_find_charset_string(args: Vec<Value>) -> EvalResult {
 /// a charset-specific code-point to an Emacs internal character code.
 #[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_decode_char(args: Vec<Value>) -> EvalResult {
     builtin_decode_char_with_symbols(args, SymbolMode::Bare)
 }
@@ -2997,7 +2986,6 @@ fn builtin_decode_char_with_symbols(args: Vec<Value>, mode: SymbolMode) -> EvalR
 /// character code back to a charset-specific code-point.
 #[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_encode_char(args: Vec<Value>) -> EvalResult {
     builtin_encode_char_with_symbols(args, SymbolMode::Bare)
 }
@@ -3017,7 +3005,6 @@ fn builtin_encode_char_with_symbols(args: Vec<Value>, mode: SymbolMode) -> EvalR
     Ok(encoded.map_or(Value::NIL, Value::fixnum))
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(unify-charset CHARSET &optional UNIFY-MAP DEUNIFY)` -- toggle Unicode
 /// unification for an offset charset.
 #[cfg(any(test, feature = "test-support"))]

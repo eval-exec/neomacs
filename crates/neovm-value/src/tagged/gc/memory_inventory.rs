@@ -950,11 +950,6 @@ fn bytecode_payload_with_text_properties(object: &ByteCodeObj) -> PayloadLayout 
     payload
 }
 
-#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "tests/memory_inventory_test.rs"]
 mod tests;
-#[cfg(any(test, feature = "test-support"))]
-#[cfg(test)]
-#[path = "tests/memory_inventory_test.rs"]
-pub mod tests;

@@ -23,7 +23,7 @@ use super::position::{
     EmacsByteLen, EmacsBytePos, EmacsByteRange, FullBufferLispCharRange, LispCharPos1,
     TextPositionAnchor,
 };
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub use super::text::BufferTextBytesSnapshot;
 #[doc(hidden)]
@@ -38,7 +38,7 @@ use super::overlay::OverlayList;
 use super::shared::{SavedPointBeforeCommand, SharedUndoState};
 use super::text_props::{ObjectIntervalRun, TextPropertyTable};
 use super::undo;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use super::visited_file_modtime::BaseVisitedFileModtime;
 use super::visited_file_modtime::{FirstChangeModtime, VisitedFileModtime, VisitedFileModtimeSlot};
 use crate::emacs_core::display_metrics::WindowId;
@@ -49,7 +49,7 @@ use neovm_value::symbol::SetInternalAlist;
 use neovm_value::value::{RuntimeBindingValue, Value, ValueKind, eq_value};
 use rustc_hash::FxHashMap;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     static BUFFER_LOCAL_VALUE_LOOKUP_PROBES: std::cell::Cell<u64> = const {
         std::cell::Cell::new(0)
@@ -69,23 +69,21 @@ pub(crate) fn buffer_local_value_lookup_probes() -> u64 {
     BUFFER_LOCAL_VALUE_LOOKUP_PROBES.get()
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn note_local_var_alist_entry_probe() {
     LOCAL_VAR_ALIST_ENTRY_PROBES.set(LOCAL_VAR_ALIST_ENTRY_PROBES.get().saturating_add(1));
 }
 
-#[cfg(not(test))]
+#[cfg(not(any(test, feature = "test-support")))]
 #[inline(always)]
 fn note_local_var_alist_entry_probe() {}
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn reset_local_var_alist_entry_probes() {
     LOCAL_VAR_ALIST_ENTRY_PROBES.set(0);
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn local_var_alist_entry_probes() -> u64 {
@@ -3220,14 +3218,12 @@ impl Buffer {
         self.text.backend_kind()
     }
 
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn shares_text_storage_with(&self, other: &Self) -> bool {
         self.text.shares_storage_with(&other.text)
     }
 
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn replace_text_snapshot_for_test(
@@ -3505,7 +3501,6 @@ impl Buffer {
         self.text.get_property_run_at_char_pos(pos, name)
     }
 
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// Test hook: see `TextPropertyTable::debug_syntax_caches_consistent`.
 #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -3851,7 +3846,6 @@ impl Buffer {
             .text_props_object_interval_runs(self.total_char_len())
     }
 
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn text_props_intervals_snapshot_for_test(
@@ -4449,7 +4443,6 @@ impl Buffer {
         self.text.marker_chain_anchor_of(marker.as_ptr())
     }
 
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn marker_chain_len(&self) -> usize {
@@ -5628,10 +5621,10 @@ struct LiveBuffers {
 /// the caller then emits nothing and keeps the shim.
 #[doc(hidden)]
 pub mod jit_layout {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     use super::LiveBuffers;
     use super::{Buffer, BufferId, BufferManager, BufferStorage};
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     use std::sync::OnceLock;
 
     /// `Option<Box<Buffer>>` is a single niche-optimised pointer word, so a
@@ -5667,10 +5660,10 @@ pub mod jit_layout {
     pub const BUFFER_MANAGER_CURRENT_RAW_OFFSET: usize =
         std::mem::offset_of!(BufferManager, current_raw);
     const _: () = assert!(std::mem::size_of::<BufferId>() == std::mem::size_of::<u64>());
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) const LIVE_BUFFERS_SLOTS_OFFSET: usize = std::mem::offset_of!(LiveBuffers, slots);
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn find_unique(words: &[usize], want: usize) -> Option<usize> {
         let mut hits = words.iter().enumerate().filter(|&(_, &w)| w == want);
         let (index, _) = hits.next()?;
@@ -5679,7 +5672,7 @@ pub mod jit_layout {
         hits.next().is_none().then_some(index * WORD)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn read_words<T>(value: &T) -> Vec<usize> {
         let base = std::ptr::from_ref(value).cast::<usize>();
         // SAFETY: reads whole words inside `value`.
@@ -5688,7 +5681,6 @@ pub mod jit_layout {
             .collect()
     }
 
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// Byte offsets of the slot vector's data pointer and length, within the
     /// `Vec` itself. `None` if they cannot be identified unambiguously.
 #[cfg(any(test, feature = "test-support"))]
@@ -5714,7 +5706,6 @@ pub mod jit_layout {
         })
     }
 
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// `(tag offset, payload offset, the tag value that means `None`)` for
     /// `Option<BufferId>`. `BufferId` wraps a `u64` and so has no niche: the
     /// option is two words whose order std does not fix.
@@ -5744,7 +5735,6 @@ pub mod jit_layout {
         })
     }
 
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// The direct selection designator read by generated code.
 #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -5763,7 +5753,6 @@ pub mod jit_layout {
         (!ptr.is_null()).then_some(ptr)
     }
 
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// The current allocation independently reached through the storage slab.
     /// Test-only: compares the direct generated projection with canonical
     /// storage and `BufferManager::current_buffer`.
@@ -8850,14 +8839,9 @@ impl ModeLineNumberAnchor {
     }
 }
 
-#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "buffer/tests/buffer_test.rs"]
 mod tests;
-#[cfg(any(test, feature = "test-support"))]
-#[cfg(test)]
-#[path = "buffer/tests/buffer_test.rs"]
-pub mod tests;
 
 #[cfg(test)]
 #[path = "buffer/tests/world_storage_test.rs"]

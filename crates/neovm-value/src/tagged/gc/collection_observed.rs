@@ -348,14 +348,9 @@ fn with_collection_observed_registry_locked<R>(f: impl FnOnce() -> R) -> R {
     observation_radix::with_insertion_locked(f)
 }
 
-#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "tests/collection_observed_test.rs"]
 mod tests;
-#[cfg(any(test, feature = "test-support"))]
-#[cfg(test)]
-#[path = "tests/collection_observed_test.rs"]
-pub mod tests;
 
 #[cfg(test)]
 #[path = "tests/collection_observed_registry_test.rs"]

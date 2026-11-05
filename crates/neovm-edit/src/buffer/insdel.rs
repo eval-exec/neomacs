@@ -12,7 +12,7 @@ use crate::buffer::edit_transaction::{
     SharedTextEditOutcome, TranspositionAnchorPolicy, TranspositionStoragePlan,
     convert_lisp_string_for_buffer_mode,
 };
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use crate::buffer::position::EmacsByteLen;
 use crate::buffer::{
     CharRange, EmacsBytePos, EmacsByteRange, TextEditRange, TextExtent, TextInsertion,

@@ -963,11 +963,6 @@ fn cut_chunks(
     chunks
 }
 
-#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "text_index/tests/text_index_test.rs"]
 pub(crate) mod tests;
-#[cfg(any(test, feature = "test-support"))]
-#[cfg(test)]
-#[path = "text_index/tests/text_index_test.rs"]
-pub mod tests;

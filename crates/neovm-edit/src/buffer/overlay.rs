@@ -847,7 +847,6 @@ impl OverlayList {
         }
     }
 
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn interval_index_height(&self) -> usize {
@@ -1246,7 +1245,6 @@ impl OverlayList {
     /// Unlike an exact at-point extent query, this initializes active overlays
     /// once at `bounds.start()` and streams endpoint groups in ascending order.
 #[cfg(any(test, feature = "test-support"))]
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn overlay_property_sweep<R>(
         &self,
@@ -2269,11 +2267,6 @@ impl OverlayModificationHook {
     }
 }
 
-#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "overlay/tests/overlay_test.rs"]
 mod tests;
-#[cfg(any(test, feature = "test-support"))]
-#[cfg(test)]
-#[path = "overlay/tests/overlay_test.rs"]
-pub mod tests;

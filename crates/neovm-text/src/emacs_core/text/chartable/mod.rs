@@ -478,7 +478,6 @@ pub fn builtin_map_char_table<H: TextHost>(eval: &mut H, args: Vec<Value>) -> Ev
     )?;
     Ok(Value::NIL)
 }
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn optimize_char_table(table: &Value, test: OptimizeCharTableTest) -> Result<(), Flow> {
@@ -718,11 +717,6 @@ pub use neovm_value::boolvec::{
 #[path = "tests/collection_lookup_capture_test.rs"]
 mod collection_lookup_capture;
 
-#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "tests/chartable_test.rs"]
 mod tests;
-#[cfg(any(test, feature = "test-support"))]
-#[cfg(test)]
-#[path = "tests/chartable_test.rs"]
-pub mod tests;

@@ -50,11 +50,10 @@ pub(super) struct SymbolSidecar {
     era: NonZeroU64,
     pub(super) functions: functions::write::FunctionState,
     pub(super) tables: super::super::symbol_table::publication::PublishedSymbolTables,
-#[cfg(any(test, feature = "test-support"))]
+    #[cfg(test)]
     table_commit_fault: Mutex<TableCommitFault>,
 }
 impl SymbolSidecar {
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn new(
         backing: SymbolBacking,
         era: NonZeroU64,
@@ -331,9 +330,5 @@ static_assertions::assert_not_impl_any!(SymbolRef<'static, 'static, 'static>: Se
 static_assertions::assert_not_impl_any!(SymbolMut<'static, 'static, 'static>: Send, Sync, Clone, Copy);
 static_assertions::assert_not_impl_any!(KeeperSymbols<'static>: Send, Sync, Clone, Copy);
 
-#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 mod tests;
-#[cfg(any(test, feature = "test-support"))]
-#[cfg(test)]
-pub mod tests;

@@ -744,11 +744,6 @@ pub fn builtin_mark_marker(buffers: &mut BufferManager, args: Vec<Value>) -> Eva
 // Tests
 // ---------------------------------------------------------------------------
 
-#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "tests/marker_test.rs"]
 mod tests;
-#[cfg(any(test, feature = "test-support"))]
-#[cfg(test)]
-#[path = "tests/marker_test.rs"]
-pub mod tests;

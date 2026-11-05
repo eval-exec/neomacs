@@ -381,14 +381,9 @@ fn include(bounds: &mut (usize, usize), address: usize) {
     bounds.1 = bounds.1.max(address + 1);
 }
 
-#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "tests/observed_reclamation.rs"]
 mod tests;
-#[cfg(any(test, feature = "test-support"))]
-#[cfg(test)]
-#[path = "tests/observed_reclamation.rs"]
-pub mod tests;
 
 #[cfg(test)]
 #[path = "tests/observed_disjoint_refinement.rs"]

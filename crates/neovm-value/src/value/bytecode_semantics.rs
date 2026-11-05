@@ -139,11 +139,6 @@ pub(crate) fn bytecode_semantics() -> &'static BytecodeSemantics {
         .expect("bytecode semantics are installed before any byte-code value exists")
 }
 
-#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "bytecode_semantics/tests.rs"]
 mod tests;
-#[cfg(any(test, feature = "test-support"))]
-#[cfg(test)]
-#[path = "bytecode_semantics/tests.rs"]
-pub mod tests;

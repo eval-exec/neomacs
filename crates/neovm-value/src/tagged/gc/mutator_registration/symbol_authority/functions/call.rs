@@ -8,11 +8,10 @@ pub struct FunctionCallCache<'era> {
     home: OwnerRootSlot<'era>,
     symbol: Option<SymbolHandle>,
     observed_epoch: Option<u64>,
-#[cfg(any(test, feature = "test-support"))]
+    #[cfg(test)]
     counts: (usize, usize, usize), // successful refills, resyncs, equal hits
 }
 impl<'era> FunctionCallCache<'era> {
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub fn new(run: &mut RunAccess<'_, 'era>) -> Result<Self, FunctionError> {
         check_run(run)?;
         Ok(Self {

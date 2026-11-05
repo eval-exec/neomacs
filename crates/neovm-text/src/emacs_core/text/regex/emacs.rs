@@ -959,7 +959,6 @@ impl CaseTranslation {
     /// table; this path was simply missed.
 #[cfg(any(test, feature = "test-support"))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn from_char_table(table: neovm_value::value::Value) -> Self {
         Self::from_char_table_with_symbols(table, SymbolMode::Bare)
     }
@@ -1383,31 +1382,29 @@ thread_local! {
     static PIKE_FALLBACK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     pub(crate) static PIKE_FALLBACK_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn pike_fallback_count() -> u64 {
     PIKE_FALLBACK_COUNT.with(|c| c.get())
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     /// Matcher entries made by `re_search`'s candidate scans, for tests that
     /// check how many candidates a scan leaves to the matcher.
     static MATCHER_ENTRY_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn matcher_entry_count() -> u64 {
     MATCHER_ENTRY_COUNT.with(|c| c.get())
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     /// The deepest fail stack (frames plus undo entries) any backtracker run
     /// reached, and the furthest position at which it pushed, since the last
@@ -1417,14 +1414,14 @@ thread_local! {
         const { std::cell::Cell::new(FailStackProbe { max_depth: 0, max_push_pos: 0 }) };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct FailStackProbe {
-    pub(crate) max_depth: usize,
-    pub(crate) max_push_pos: usize,
+pub struct FailStackProbe {
+    pub max_depth: usize,
+    pub max_push_pos: usize,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn note_fail_stack_push(depth: usize, d: usize) {
     FAIL_STACK_PROBE.with(|probe| {
         let mut seen = probe.get();
@@ -1434,7 +1431,6 @@ fn note_fail_stack_push(depth: usize, d: usize) {
     });
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn take_fail_stack_probe() -> FailStackProbe {
@@ -1443,7 +1439,7 @@ pub(crate) fn take_fail_stack_probe() -> FailStackProbe {
 
 fn set_pike_fallback() {
     PIKE_FALLBACK.with(|f| f.set(true));
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     PIKE_FALLBACK_COUNT.with(|c| c.set(c.get() + 1));
 }
 
@@ -6469,7 +6465,7 @@ fn re_match_loop<const SEALED: bool>(
                 resume: FailureResume($resume),
                 input: $input,
             });
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             note_fail_stack_push(frames.len() + undo.len(), d);
         };
     }
@@ -10148,7 +10144,7 @@ pub(crate) fn re_search(
         ($pos:expr, $stop:expr) => {{
             let found = match dfa_lease.as_mut() {
                 None => {
-                    #[cfg(test)]
+                    #[cfg(any(test, feature = "test-support"))]
                     MATCHER_ENTRY_COUNT.with(|c| c.set(c.get() + 1));
                     re_match_candidate_in(
                         scratch, pattern, text, $pos, $stop, syntax, point, &mut regs,
@@ -10806,14 +10802,9 @@ pub fn carrier_tls_fingerprint(h: &mut u64) {
 
 
 
-#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "tests/emacs_test.rs"]
 mod tests;
-#[cfg(any(test, feature = "test-support"))]
-#[cfg(test)]
-#[path = "tests/emacs_test.rs"]
-pub mod tests;
 
 #[cfg(test)]
 #[path = "tests/fail_stack_parity_test.rs"]

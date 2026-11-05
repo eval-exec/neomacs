@@ -1985,14 +1985,9 @@ impl TaggedHeap {
 #[cfg(test)]
 #[path = "tests/parallel_young_test.rs"]
 mod parallel_young_tests;
-#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "tests/cons_allocator_test.rs"]
 mod tests;
-#[cfg(any(test, feature = "test-support"))]
-#[cfg(test)]
-#[path = "tests/cons_allocator_test.rs"]
-pub mod tests;
 
 #[cfg(test)]
 #[path = "tests/cons_allocator_carve_age_test.rs"]

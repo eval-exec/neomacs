@@ -1347,7 +1347,6 @@ pub(crate) fn execute_compiled_ccl_with_symbols(
 // Pure builtins
 // ---------------------------------------------------------------------------
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// (ccl-program-p OBJECT) -> nil
 /// This accepts program objects that match the minimum CCL header shape used by Emacs.
 #[cfg(any(test, feature = "test-support"))]
@@ -1369,7 +1368,6 @@ pub fn builtin_ccl_program_p_impl_with_symbols(args: Vec<Value>, mode: SymbolMod
 /// Runs a program that does not read or write. Register results are written
 /// back into the 8-element vector.
 #[cfg(any(test, feature = "test-support"))]
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_ccl_execute_impl(args: Vec<Value>) -> EvalResult {
     builtin_ccl_execute_impl_with_symbols(args, SymbolMode::Bare)
@@ -1547,7 +1545,6 @@ pub fn builtin_ccl_execute_on_string_impl_with_symbols(
     Ok(ccl_output_string(execution.output, unibyte))
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// (register-ccl-program NAME CCL-PROG) -> nil
 /// Stub: accepts and discards the CCL program registration.
 #[cfg(any(test, feature = "test-support"))]
@@ -1592,7 +1589,6 @@ pub fn builtin_register_ccl_program_impl_with_symbols(
     Ok(Value::fixnum(program_id))
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// (register-code-conversion-map SYMBOL MAP) -> nil
 /// Stub: accepts and discards the code conversion map.
 #[cfg(any(test, feature = "test-support"))]

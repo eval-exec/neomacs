@@ -458,9 +458,5 @@ static_assertions::assert_not_impl_any!(PreparedParallelRootBatch: Send, Sync, C
 static_assertions::assert_not_impl_any!(ParallelRootBatchLease: Clone, Copy);
 static_assertions::assert_not_impl_any!(ParallelRootBatchReader<'static>: Send, Sync, Clone, Copy);
 
-#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 mod tests;
-#[cfg(any(test, feature = "test-support"))]
-#[cfg(test)]
-pub mod tests;

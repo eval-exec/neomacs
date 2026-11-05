@@ -202,11 +202,6 @@ static_assertions::assert_eq_size!(TableSpan<SymId>, u32);
 static_assertions::assert_eq_size!(TableSpan<NameId>, u32);
 static_assertions::assert_eq_size!(CanonicalSlot, u32);
 
-#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "tests/pages.rs"]
 mod tests;
-#[cfg(any(test, feature = "test-support"))]
-#[cfg(test)]
-#[path = "tests/pages.rs"]
-pub mod tests;

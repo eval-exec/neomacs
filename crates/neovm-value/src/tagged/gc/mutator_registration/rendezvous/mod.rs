@@ -335,9 +335,5 @@ static_assertions::assert_impl_all!(Rendezvous<'static>:Send,Sync,Clone,Copy);
 static_assertions::assert_not_impl_any!(OwnerRootAdmission<'static>:Send,Sync,Clone,Copy);
 static_assertions::assert_not_impl_any!(StoppedRootAdmission<'static>:Send,Sync,Clone,Copy);
 
-#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 mod tests;
-#[cfg(any(test, feature = "test-support"))]
-#[cfg(test)]
-pub mod tests;

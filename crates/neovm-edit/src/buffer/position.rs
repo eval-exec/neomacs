@@ -502,11 +502,6 @@ pub type CharPos = CharPos0;
 pub type BytePos = EmacsBytePos;
 pub type LispPos = LispCharPos1;
 
-#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "position/tests/position_test.rs"]
 mod tests;
-#[cfg(any(test, feature = "test-support"))]
-#[cfg(test)]
-#[path = "position/tests/position_test.rs"]
-pub mod tests;

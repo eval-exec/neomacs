@@ -11,12 +11,11 @@
 //! vm-compat batches. Remaining edge drift is tracked and locked by
 //! oracle corpora.
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use neovm_value::error::EvalResult;
 use neovm_value::error::LispCondition;
 use neovm_value::error::{Flow, signal};
-#[cfg(test)]
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use neovm_value::error::{expect_max_args, expect_min_args};
 use neovm_value::gc_trace::GcTrace;
 use neovm_value::heap_types::LispString;
@@ -37,7 +36,7 @@ fn expect_int(value: &Value) -> Result<i64, Flow> {
         )),
     }
 }
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn expect_string(value: &Value) -> Result<LispString, Flow> {
     match value.kind() {
         ValueKind::String => Ok(value

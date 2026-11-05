@@ -14,7 +14,7 @@
 //! - `bookmark-load` -- deserialize bookmarks from a string
 
 use neovm_value::error::LispCondition;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use neovm_value::error::expect_args;
 use neovm_value::error::expect_min_args;
 use std::collections::HashMap;
@@ -26,7 +26,7 @@ use neovm_value::error::{EvalResult, Flow, signal};
 use neovm_value::gc_trace::GcTrace;
 use neovm_value::heap_types::LispString;
 use neovm_value::value::{Value, ValueKind};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use strum::{EnumString, IntoStaticStr};
 
 // ---------------------------------------------------------------------------
@@ -68,7 +68,7 @@ pub struct BookmarkManager {
 }
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, EnumString, IntoStaticStr)]
 #[strum(serialize_all = "kebab-case")]
 pub(crate) enum BookmarkRecordKey {
@@ -77,7 +77,7 @@ pub(crate) enum BookmarkRecordKey {
     Annotation,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl BookmarkRecordKey {
     fn from_lisp_value(value: &Value) -> Option<Self> {
         value.as_bare_symbol_name()?.parse().ok()
@@ -88,7 +88,7 @@ impl BookmarkRecordKey {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn bookmark_record_prop(record: &Value, key: BookmarkRecordKey) -> Option<Option<Value>> {
     let items = neovm_value::value::list_to_vec(record)?;
     for item in items {
@@ -674,7 +674,6 @@ pub(crate) fn builtin_bookmark_rename<H: crate::emacs_core::edit_host::EditHost>
     ))
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// (bookmark-all-names) -> list of bookmark names (sorted)
 #[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -692,7 +691,6 @@ pub(crate) fn builtin_bookmark_all_names<H: crate::emacs_core::edit_host::EditHo
     Ok(Value::list(names))
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// (bookmark-get-filename BOOKMARK) -> filename string or nil
 ///
 /// BOOKMARK may be a bookmark name or a bookmark record alist.
@@ -718,7 +716,6 @@ pub(crate) fn builtin_bookmark_get_filename<H: crate::emacs_core::edit_host::Edi
     Ok(filename)
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// (bookmark-get-position BOOKMARK) -> integer position or nil
 ///
 /// BOOKMARK may be a bookmark name or a bookmark record alist.
@@ -743,7 +740,6 @@ pub(crate) fn builtin_bookmark_get_position<H: crate::emacs_core::edit_host::Edi
     Ok(position)
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// (bookmark-get-annotation BOOKMARK) -> annotation string or nil
 ///
 /// BOOKMARK may be a bookmark name or a bookmark record alist.
@@ -769,7 +765,6 @@ pub(crate) fn builtin_bookmark_get_annotation<H: crate::emacs_core::edit_host::E
     Ok(annotation)
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// (bookmark-set-annotation BOOKMARK ANNOTATION) -> annotation string or nil
 ///
 /// BOOKMARK is a bookmark name.  If missing, returns nil.

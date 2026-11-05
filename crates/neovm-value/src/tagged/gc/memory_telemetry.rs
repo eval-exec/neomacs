@@ -318,11 +318,6 @@ pub(super) fn observe(heap: &TaggedHeap, phase: Phase) {
     }
 }
 
-#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "tests/memory_telemetry_test.rs"]
 mod tests;
-#[cfg(any(test, feature = "test-support"))]
-#[cfg(test)]
-#[path = "tests/memory_telemetry_test.rs"]
-pub mod tests;

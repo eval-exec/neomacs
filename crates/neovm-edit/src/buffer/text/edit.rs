@@ -509,7 +509,7 @@ impl TextEditRange {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub const fn from_usize(
         byte_start: usize,
         byte_end: usize,
@@ -619,11 +619,6 @@ const fn transpose_half_open_position(
     }
 }
 
-#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "edit/tests/edit_test.rs"]
 mod tests;
-#[cfg(any(test, feature = "test-support"))]
-#[cfg(test)]
-#[path = "edit/tests/edit_test.rs"]
-pub mod tests;

@@ -175,11 +175,6 @@ fn prepare_work_buffer(
         .expect("newly acquired code-conversion buffer must be live");
 }
 
-#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "code_conversion_workspace/tests/code_conversion_workspace_test.rs"]
 mod tests;
-#[cfg(any(test, feature = "test-support"))]
-#[cfg(test)]
-#[path = "code_conversion_workspace/tests/code_conversion_workspace_test.rs"]
-pub mod tests;

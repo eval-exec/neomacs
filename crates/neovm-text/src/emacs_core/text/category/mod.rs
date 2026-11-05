@@ -530,7 +530,6 @@ pub fn builtin_make_category_table(args: Vec<Value>) -> EvalResult {
     make_category_table_object()
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_copy_category_table(args: Vec<Value>) -> EvalResult {
@@ -835,11 +834,6 @@ pub fn carrier_tls_fingerprint(h: &mut u64) {
     );
 }
 
-#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "tests/category_test.rs"]
 mod tests;
-#[cfg(any(test, feature = "test-support"))]
-#[cfg(test)]
-#[path = "tests/category_test.rs"]
-pub mod tests;

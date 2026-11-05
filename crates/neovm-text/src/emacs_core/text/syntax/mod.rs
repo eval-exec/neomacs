@@ -3077,7 +3077,6 @@ fn ensure_standard_syntax_table_object() -> EvalResult {
     })
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn current_buffer_syntax_table_object_in_buffers(
@@ -3357,27 +3356,25 @@ fn syntax_entry_from_syntax_property(prop: Value, ch: char) -> Option<SyntaxEntr
 // Counts every decode, not just memo misses -- counting misses alone would
 // read zero both when the memo works perfectly and when it never materializes.
 // Mirrors the position-conversion scan counter in `emacs_char`.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     static SYNTAX_TABLE_DECODES: Cell<usize> = const { Cell::new(0) };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn record_syntax_table_decode() {
     SYNTAX_TABLE_DECODES.with(|n| n.set(n.get() + 1));
 }
 
-#[cfg(not(test))]
+#[cfg(not(any(test, feature = "test-support")))]
 fn record_syntax_table_decode() {}
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn reset_syntax_table_decodes_for_test() {
     SYNTAX_TABLE_DECODES.with(|n| n.set(0));
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn syntax_table_decodes_for_test() -> usize {
@@ -3433,7 +3430,6 @@ impl<'a> SyntaxProperties<'a> {
     /// this resolution; the uncached form is the reference the byte-run
     /// cache is checked against.
 #[cfg(any(test, feature = "test-support"))]
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn syntax_table_prop_at_emacs_byte(
         self,
@@ -5144,7 +5140,6 @@ pub(crate) fn builtin_syntax_table_p(args: Vec<Value>) -> EvalResult {
 /// syntax-table object.
 #[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_syntax_table<H: TextHost>(eval: &mut H, args: Vec<Value>) -> EvalResult {
     neovm_value::error::expect_args("syntax-table", &args, 0)?;
     builtin_syntax_table_0(eval)
@@ -5164,7 +5159,6 @@ pub fn builtin_syntax_table_0<H: TextHost>(eval: &mut H) -> EvalResult {
 /// NeoVM currently stores syntax behavior on `Buffer.syntax_table` internals;
 /// this installs the exposed syntax-table object for compatibility and returns it.
 #[cfg(any(test, feature = "test-support"))]
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_set_syntax_table<H: TextHost>(eval: &mut H, args: Vec<Value>) -> EvalResult {
     neovm_value::error::expect_args("set-syntax-table", &args, 1)?;
@@ -5192,7 +5186,6 @@ pub fn builtin_modify_syntax_entry<H: TextHost>(eval: &mut H, args: Vec<Value>) 
     modify_syntax_entry_in_buffers_with_symbols(eval.buffers_mut(), &args, mode)
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(char-syntax CHAR)` — return the syntax class designator char.
 #[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -5969,7 +5962,6 @@ fn back_comment_safe_chunk() -> usize {
 
 #[cfg(any(test, feature = "test-support"))]
 thread_local! {
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// Test hooks: bypass the safe-position index entirely; override the
     /// chunk; count re-parses that started after BEGV.
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -6697,7 +6689,6 @@ pub(crate) fn builtin_backward_sexp<H: TextHost>(eval: &mut H, args: Vec<Value>)
     Ok(Value::NIL)
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(scan-lists FROM COUNT DEPTH)` — scan across balanced expressions.
 ///
 /// This uses the same core scanner as `forward-sexp`/`backward-sexp`.
@@ -6846,7 +6837,6 @@ pub fn builtin_scan_lists_3<H: TextHost>(
     }
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(scan-sexps FROM COUNT)` — scan over COUNT sexps from FROM.
 #[cfg(any(test, feature = "test-support"))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
@@ -7635,7 +7625,6 @@ fn clamped_parse_range(buf: &Buffer, from: i64, to: i64) -> (usize, usize) {
     (from_char, to_char)
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(parse-partial-sexp FROM TO &optional TARGETDEPTH STOPBEFORE STATE COMMENTSTOP)`
 /// Baseline parser-state implementation for structural Lisp motion/state queries.
 #[cfg(any(test, feature = "test-support"))]
@@ -7836,7 +7825,6 @@ fn lisp_pos_to_byte(buf: &Buffer, pos: LispCharPos1) -> EmacsBytePos {
     buf.lisp_pos_to_accessible_emacs_byte_pos(pos)
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(skip-syntax-forward SYNTAX &optional LIMIT)` — skip forward over chars
 /// matching the given syntax classes.
 #[cfg(any(test, feature = "test-support"))]
@@ -8080,7 +8068,6 @@ fn expect_skip_syntax_args(
 // ===========================================================================
 #[cfg(any(test, feature = "test-support"))]
 thread_local! {
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// Test hook: byte-addressed `syntax-table` run refills.
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) static SYNTAX_BYTE_RUN_REFILLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -8188,11 +8175,6 @@ impl SexpScanPolicy {
 #[path = "tests/skip_syntax_classes_test.rs"]
 mod skip_syntax_classes_tests;
 
-#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "tests/syntax_test.rs"]
 mod tests;
-#[cfg(any(test, feature = "test-support"))]
-#[cfg(test)]
-#[path = "tests/syntax_test.rs"]
-pub mod tests;
