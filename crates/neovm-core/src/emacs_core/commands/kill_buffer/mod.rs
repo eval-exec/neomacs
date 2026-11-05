@@ -301,7 +301,7 @@ pub(crate) fn builtin_kill_buffer(
         .collect_killed_buffer_ids(id)
         .ok_or_else(|| signal("error", vec![Value::string("Buffer does not exist")]))?;
     {
-        let (buffers, obarray_view) = eval.buffers_and_obarray_view_mut();
+        let (buffers, mut obarray_view) = eval.buffers_and_obarray_view_mut();
         // SAFETY: killed-buffer retirement only resets buffer/BLV value
         // caches and reads properties. All process/Lisp callbacks finished
         // above; no function or canonical descriptor writer runs in this phase.

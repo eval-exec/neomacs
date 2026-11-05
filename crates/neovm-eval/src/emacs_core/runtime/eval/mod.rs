@@ -71,6 +71,8 @@ pub mod keyboard_input;
 pub(crate) mod world;
 #[doc(hidden)]
 pub use world::ObarrayView;
+#[doc(hidden)]
+pub use world::ObarrayViewMut;
 // TEST-SUPPORT-VIS rows: re-homed tests above eval name the era keeper and
 // the World-slot type of a widened Context field; the proof era itself
 // follows value's provider batch.
@@ -5270,11 +5272,15 @@ impl Context {
         &self.obarray
     }
 
-    /// Mutable view capability for phase-scoped writes.
+    /// Non-swappable mutable view capability for phase-scoped writes.
+    ///
+    /// The capability forwards the audited `&mut self` operations but never
+    /// yields `&mut ObarrayView`, so safe code cannot `mem::swap` two
+    /// Contexts' views and cross-link their Worlds.
     #[doc(hidden)]
     #[inline(always)]
-    pub fn obarray_view_mut(&mut self) -> &mut ObarrayView {
-        &mut self.obarray
+    pub fn obarray_view_mut(&mut self) -> ObarrayViewMut<'_> {
+        ObarrayViewMut::new(&mut self.obarray)
     }
 
     /// Resolve a fringe-bitmap symbol value to its registry index and data.
@@ -5681,14 +5687,6 @@ impl Context {
 
     #[doc(hidden)]
     #[inline]
-    pub fn gstring_shape_cache(
-        &self,
-    ) -> &std::collections::HashMap<neovm_value::display_vocab::GstringShapeCacheKey, Value> {
-        &self.gstring_shape_cache
-    }
-
-    #[doc(hidden)]
-    #[inline]
     pub fn gstring_shape_cache_mut(
         &mut self,
     ) -> &mut std::collections::HashMap<neovm_value::display_vocab::GstringShapeCacheKey, Value>
@@ -5772,10 +5770,15 @@ impl Context {
     }
 
     /// Split borrow: the buffer manager mutably and the obarray view mutably.
+    ///
+    /// The view half is the non-swappable [`ObarrayViewMut`] capability.
     #[doc(hidden)]
     #[inline]
-    pub fn buffers_and_obarray_view_mut(&mut self) -> (&mut BufferManager, &mut ObarrayView) {
-        (&mut self.edit.buffers, &mut self.obarray)
+    pub fn buffers_and_obarray_view_mut(&mut self) -> (&mut BufferManager, ObarrayViewMut<'_>) {
+        (
+            &mut self.edit.buffers,
+            ObarrayViewMut::new(&mut self.obarray),
+        )
     }
 
     /// Split borrow: the obarray and owner bindings by shared reference, and

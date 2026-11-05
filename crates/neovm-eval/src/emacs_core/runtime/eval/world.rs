@@ -798,6 +798,59 @@ impl ObarrayWriteAccess<'_> {
     }
 }
 
+/// A non-swappable exclusive capability over the World's obarray view.
+///
+/// `ObarrayView` embeds the World's manager, dispatch and lease pointers.
+/// Handing out `&mut ObarrayView` to safe code lets it `mem::swap` two
+/// Contexts' views and cross-link their Worlds, which is UB. This capability
+/// forwards the audited `&mut self` operations callers need, but it never
+/// yields `&mut ObarrayView` and implements no `DerefMut`, so the view value
+/// cannot be swapped, replaced or moved out by safe code.
+#[doc(hidden)]
+#[must_use]
+pub struct ObarrayViewMut<'ctx> {
+    view: &'ctx mut ObarrayView,
+}
+static_assertions::assert_not_impl_any!(ObarrayViewMut<'static>: Send, Sync, Copy, Clone);
+impl<'ctx> ObarrayViewMut<'ctx> {
+    #[inline(always)]
+    pub(crate) fn new(view: &'ctx mut ObarrayView) -> Self {
+        Self { view }
+    }
+}
+impl std::ops::Deref for ObarrayViewMut<'_> {
+    type Target = ObarrayView;
+    #[inline(always)]
+    fn deref(&self) -> &ObarrayView {
+        &*self.view
+    }
+}
+impl ObarrayViewMut<'_> {
+    /// Run the audited legacy value-write phase through this capability.
+    ///
+    /// # Safety
+    ///
+    /// The caller supplies a nonescaping, data-only effect; the capability's
+    /// exclusive borrow covers the manager phase.
+    #[doc(hidden)]
+    #[inline(always)]
+    pub unsafe fn with_legacy_value_write<R>(
+        &mut self,
+        write: impl for<'manager> FnOnce(&'manager mut Obarray) -> R,
+    ) -> R {
+        // SAFETY: forwarded contract; the exclusive borrow of this
+        // capability covers the nonescaping manager phase.
+        unsafe { self.view.with_legacy_value_write(write) }
+    }
+
+    /// Localize storage, preserving the stable forwarded descriptor identity.
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn make_symbol_localized(&mut self, id: SymId, default: Value) {
+        ObarrayView::make_symbol_localized(self.view, id, default);
+    }
+}
+
 // An explicit sealed list, not a generic safe mutable-manager escape. Adding a
 // new Obarray writer does not automatically expose it on an owning view. The
 // compiler rejects its use until its data/dispatch effect is classified here.
@@ -851,6 +904,19 @@ macro_rules! obarray_method_proxies {
                 }
             )*
         }
+        impl ObarrayViewMut<'_> {
+            $(
+                $(#[$attr])*
+                #[doc(hidden)]
+                #[inline(always)]
+                $visibility fn $name(&mut self, $($arg: $ty),*) $(-> $result)? {
+                    // Call the view's audited operation explicitly; the
+                    // capability has no DerefMut, so an unqualified call could
+                    // not fall through to the raw manager.
+                    ObarrayView::$name(self.view, $($arg),*)
+                }
+            )*
+        }
     };
 }
 
@@ -895,7 +961,7 @@ obarray_method_proxies! {
     pub fn for_each_value_cell_mut(f: impl FnMut(&mut Value));
     #[cfg(test)]
     pub fn makunbound(name: &str);
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn makunbound_id(id: SymId);
     pub fn makunbound_canonical_by_name(access: CanonicalAccess,
             name: &str,

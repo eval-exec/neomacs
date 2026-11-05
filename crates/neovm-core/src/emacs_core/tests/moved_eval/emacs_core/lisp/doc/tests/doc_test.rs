@@ -33,7 +33,7 @@ fn snarfed_context() -> Context {
         // SAFETY: this DOC fixture scan only reads bound metadata and writes
         // documentation properties; it cannot call Lisp, collect, replace
         // storage, publish dispatch metadata or return an interior reference.
-        eval.obarray()
+        eval.obarray_view_mut()
             .with_legacy_value_write(neovm_eval::emacs_core::doc::snarf_variable_documentation)
     };
     eval
@@ -1908,7 +1908,7 @@ fn snarfing_the_doc_image_interns_nothing() {
         // documentation properties; it cannot call Lisp, collect, replace
         // storage, publish dispatch metadata or return an interior reference.
         evaluator
-            .obarray()
+            .obarray_view_mut()
             .with_legacy_value_write(neovm_eval::emacs_core::doc::snarf_variable_documentation)
     };
     assert!(installed > 700, "installed {installed} records");
@@ -1943,7 +1943,7 @@ fn snarf_documentation_overwrites_a_docstring_already_on_the_plist() {
         // documentation properties; it cannot call Lisp, collect, replace
         // storage, publish dispatch metadata or return an interior reference.
         evaluator
-            .obarray()
+            .obarray_view_mut()
             .with_legacy_value_write(neovm_eval::emacs_core::doc::snarf_variable_documentation)
     };
 

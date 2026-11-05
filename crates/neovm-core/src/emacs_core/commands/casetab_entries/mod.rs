@@ -101,7 +101,7 @@ fn current_case_table_for_context(
     ctx: &mut crate::emacs_core::eval::Context,
     mode: SymbolMode,
 ) -> Result<Value, Flow> {
-    let (buffers, obarray_view) = ctx.buffers_and_obarray_view_mut();
+    let (buffers, mut obarray_view) = ctx.buffers_and_obarray_view_mut();
     // SAFETY: this noncalling phase selects/seeds case-table Values and buffer
     // slots, without changing function/debugger metadata or escaping a loan.
     unsafe {
