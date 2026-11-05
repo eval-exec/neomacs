@@ -4900,6 +4900,16 @@ impl Obarray {
         self.dispatch_cells.function_epoch.load(Ordering::Acquire)
     }
 
+    /// Test-support: read the publication clock through the private canonical
+    /// dispatch cell. [`Obarray::function_epoch`] loads that cell's atomic
+    /// directly, so this keeps the `CanonicalDispatchCells` accessor as a
+    /// distinct read path for tests that compare the two.
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn dispatch_cells_function_epoch_for_test(&self) -> u64 {
+        self.dispatch_cells.function_epoch()
+    }
+
     /// Read the publication clock while this obarray is exclusively owned.
     /// The mutable borrow excludes concurrent clock readers as well as writers;
     /// independent mutators may own separate obarrays (clones have fresh clocks).

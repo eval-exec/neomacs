@@ -16,11 +16,15 @@ fn depth(table: Value) -> u8 {
 /// The accounting entry point is context-free so the hash-table module does
 /// not name the evaluator; supply its Context pieces here.
 fn inhibited_user_test_since_gc(context: &mut Context, bytes_since_gc: usize) -> Option<i128> {
-    super::inhibited_user_test_since_gc(
-        context.user_test_gc_accounting_pointer(),
-        bytes_since_gc,
-        |accounting| context.user_test_gc_entry_threshold(accounting),
-    )
+    // SAFETY: the context is the sole owner and the accounting pointer is
+    // read only for the duration of this call.
+    unsafe {
+        super::inhibited_user_test_since_gc(
+            context.user_test_gc_accounting_pointer(),
+            bytes_since_gc,
+            |accounting| context.user_test_gc_entry_threshold(accounting),
+        )
+    }
 }
 
 fn fixture() -> (Context, Value) {
@@ -278,7 +282,7 @@ fn hash_user_guard_preserves_live_settings_fallback_after_nested_exit() {
     assert_eq!(
         context
             .capture_user_test_gc_accounting()
-            .entry_threshold_bytes,
+            .entry_threshold_bytes(),
         2_097_152
     );
 }
