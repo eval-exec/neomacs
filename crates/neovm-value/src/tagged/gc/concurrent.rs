@@ -112,6 +112,7 @@ impl TaggedHeap {
 
     /// Legacy unit-test adapter; production enters through the exclusive loan.
     #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn arm_first_cycle_concurrent(&mut self) {
         // SAFETY: these direct GC fixtures own the heap and admit their
         // serialized start before spawning any worker or publishing a job.
@@ -247,6 +248,7 @@ impl TaggedHeap {
     /// Direct unit-test starts release the loan between seeding statements.
     /// The matching launch adapter validates this heap's begun phase again.
     #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn concurrent_begin(&mut self) {
         // SAFETY: the unit-test owner excludes all heap/obarray/TLS writers
         // at this start. Tests that install TLS retain that same owner until
@@ -257,6 +259,7 @@ impl TaggedHeap {
     }
 
     #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn launch_concurrent_mark(&mut self) {
         // SAFETY: this is the same direct-fixture serialized owner admitted
         // by concurrent_begin, after its root seeding and before any worker
