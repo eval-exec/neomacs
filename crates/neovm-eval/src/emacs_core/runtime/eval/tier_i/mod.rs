@@ -95,7 +95,7 @@
 use super::*;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
-use strum::{EnumCount, IntoEnumIterator};
+use strum::EnumCount;
 
 mod compile;
 mod exec;
@@ -194,6 +194,7 @@ const THRESHOLD_UNREAD: u32 = u32::MAX;
 static TIER_I_THRESHOLD: AtomicU32 = AtomicU32::new(THRESHOLD_UNREAD);
 
 /// The mode a value of `NEOVM_TIER_I` selects.
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) fn parse_tier_i_knob(value: Option<&str>) -> TierIMode {
     let Some(value) = value.map(str::trim) else {
         return TierIMode::Off;
@@ -279,10 +280,9 @@ fn tier_i_threshold_from_env() -> u32 {
 // ---------------------------------------------------------------------------
 
 /// One thing that happened on the tiered call path.
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, strum::EnumCount, strum::EnumIter, strum::IntoStaticStr,
-)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, strum::EnumCount, strum::IntoStaticStr)]
 #[strum(serialize_all = "kebab-case")]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) enum TierIEvent {
     /// An interpreted closure body started (lexical or dynamic).
     Call,
@@ -319,8 +319,31 @@ pub(crate) enum TierIEvent {
     HeatCleared,
 }
 
+impl TierIEvent {
+    /// Every variant in declaration order. `report` iterates this instead of
+    /// a derived iterator so the enum can be published under test-support
+    /// without leaking a crate-private iterator type (E0446).
+    pub(crate) const ALL: [TierIEvent; TierIEvent::COUNT] = [
+        Self::Call,
+        Self::Compiled,
+        Self::CompileRefused,
+        Self::CompileCapped,
+        Self::Run,
+        Self::RefuseThreads,
+        Self::RefuseArglist,
+        Self::RefuseFormals,
+        Self::Untrusted,
+        Self::Island,
+        Self::AliasCall,
+        Self::LazyLeaf,
+        Self::LazyLeafSignal,
+        Self::HeatCleared,
+    ];
+}
+
 /// Counts per [`TierIEvent`].
 #[derive(Clone, Debug, Default)]
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
 pub(crate) struct TierIStats {
     counts: [u64; TierIEvent::COUNT],
 }
@@ -342,7 +365,7 @@ impl TierIStats {
     #[doc(hidden)]
     pub fn report(&self) -> String {
         let mut out = String::from("tier-i:");
-        for event in TierIEvent::iter() {
+        for event in TierIEvent::ALL {
             let n = self.count(event);
             if n != 0 {
                 let name: &'static str = event.into();
@@ -417,7 +440,7 @@ impl TierI {
         self.lazy_frames
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn set_lazy_frames(&mut self, on: bool) {
         self.lazy_frames = on;
@@ -434,7 +457,7 @@ impl TierI {
         self.mode
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn stats(&self) -> &TierIStats {
         &self.stats
@@ -453,7 +476,7 @@ impl TierI {
     }
 
     /// Forget everything (a test resetting its context).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn clear_for_test(&mut self) {
         self.entries.clear();
@@ -660,7 +683,7 @@ impl Context {
     }
 
     /// The compiled tree of the function NAME's body, when it is compiled.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn tier_i_describe_function(&self, name: &str) -> Option<String> {
         let cell = self.obarray.symbol_function_id(intern(name))?;

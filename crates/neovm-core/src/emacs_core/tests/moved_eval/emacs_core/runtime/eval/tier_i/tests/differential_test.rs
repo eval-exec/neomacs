@@ -4,7 +4,11 @@
 //! `on` mode, and compiled code must actually have run.
 
 use crate::emacs_core::eval::{Context, TierIEvent, TierIMode};
-use crate::emacs_core::format_eval_result;
+use crate::emacs_core::print::format_eval_result;
+use neovm_eval::test_support::authority::{
+    clear_tier_i_for_test, configure_tier_i_for_test, set_tier_i_lazy_frames_for_test,
+    tier_i_stats_for_test,
+};
 use neovm_value::value::Value;
 
 /// Evaluate every form of SRC in a fresh runtime context in MODE (lazy
@@ -16,10 +20,9 @@ fn run(mode: TierIMode, src: &str) -> (Vec<String>, Context) {
 
 fn run_with(mode: TierIMode, lazy_frames: bool, src: &str) -> (Vec<String>, Context) {
     let mut eval = crate::test_utils::runtime_startup_context();
-    eval.tier_i.set_mode(mode);
-    eval.tier_i.set_threshold(1);
-    eval.tier_i.set_lazy_frames(lazy_frames);
-    eval.tier_i.clear_for_test();
+    configure_tier_i_for_test(&mut eval, mode, 1);
+    set_tier_i_lazy_frames_for_test(&mut eval, lazy_frames);
+    clear_tier_i_for_test(&mut eval);
     let forms = crate::emacs_core::value_reader::read_all(src, eval.variables())
         .expect("parse the program");
     let roots = eval.save_specpdl_roots();
@@ -55,9 +58,9 @@ fn assert_same(src: &str) -> Context {
         "eager frames differ from the tree walker for:\n{src}"
     );
     assert!(
-        eval.tier_i.stats().count(TierIEvent::Run) > 0,
+        tier_i_stats_for_test(&eval).count(TierIEvent::Run) > 0,
         "no compiled body ran: {}",
-        eval.tier_i.stats().report()
+        tier_i_stats_for_test(&eval).report()
     );
     eval
 }
@@ -94,7 +97,7 @@ fn every_mirrored_special_form() {
 (list (ti-sf 7) (ti-sf 7) (ti-sf 0))
 "#,
     );
-    assert!(eval.tier_i.stats().count(TierIEvent::Compiled) >= 2);
+    assert!(tier_i_stats_for_test(&eval).count(TierIEvent::Compiled) >= 2);
 }
 
 #[test]
@@ -215,9 +218,9 @@ fn calls_through_function_aliases() {
 "#,
     );
     assert!(
-        eval.tier_i.stats().count(TierIEvent::AliasCall) > 10,
+        tier_i_stats_for_test(&eval).count(TierIEvent::AliasCall) > 10,
         "{}",
-        eval.tier_i.stats().report()
+        tier_i_stats_for_test(&eval).report()
     );
 }
 
@@ -259,7 +262,7 @@ fn lazy_leaf_frames_appear_when_a_leaf_signals() {
       (ti-res (make-hash-table :weakness 'key) t))
 "#,
     );
-    let stats = eval.tier_i.stats();
+    let stats = tier_i_stats_for_test(&eval);
     assert!(stats.count(TierIEvent::LazyLeaf) > 10, "{}", stats.report());
     assert!(
         stats.count(TierIEvent::LazyLeafSignal) >= 6,
@@ -323,7 +326,7 @@ fn backtrace_frames_inside_compiled_forms() {
 (list (ti-bt-frame 5) (ti-bt-frame 6))
 "#,
     );
-    assert!(eval.tier_i.stats().count(TierIEvent::Run) >= 4);
+    assert!(tier_i_stats_for_test(&eval).count(TierIEvent::Run) >= 4);
 }
 
 #[test]
@@ -531,7 +534,7 @@ fn threads_turn_tiered_code_off() {
 (list (ti-thr 4) (ti-thr 5))
 "#,
     );
-    assert!(eval.tier_i.stats().count(TierIEvent::RefuseThreads) > 0);
+    assert!(tier_i_stats_for_test(&eval).count(TierIEvent::RefuseThreads) > 0);
 }
 
 #[test]
@@ -550,7 +553,7 @@ fn verify_catches_nothing_on_a_loop_heavy_body() {
 "#,
     );
     assert_eq!(last(&results), "OK (1500 1500)");
-    assert!(eval.tier_i.stats().count(TierIEvent::Run) >= 2);
+    assert!(tier_i_stats_for_test(&eval).count(TierIEvent::Run) >= 2);
     let _ = Value::NIL;
 }
 

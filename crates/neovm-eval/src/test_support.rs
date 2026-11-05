@@ -537,6 +537,43 @@ pub mod authority {
         ctx.tier_i.set_threshold(threshold);
     }
 
+    /// FENCE delegate: Tier-I mode write that keeps the ambient threshold
+    /// (N2; the field stays private).
+    pub fn set_tier_i_mode_for_test(
+        ctx: &mut crate::emacs_core::eval::Context,
+        mode: crate::emacs_core::eval::TierIMode,
+    ) {
+        ctx.tier_i.set_mode(mode);
+    }
+
+    /// FENCE delegate: zero the Tier-I counters between relocated tests (N2
+    /// reset; the TierI state and its maps stay private).
+    pub fn clear_tier_i_for_test(ctx: &mut crate::emacs_core::eval::Context) {
+        ctx.tier_i.clear_for_test();
+    }
+
+    /// FENCE delegate: Tier-I lazy-frame policy write (N2; the field stays
+    /// private).
+    pub fn set_tier_i_lazy_frames_for_test(ctx: &mut crate::emacs_core::eval::Context, on: bool) {
+        ctx.tier_i.set_lazy_frames(on);
+    }
+
+    /// FENCE delegate: copied Tier-I counter snapshot for the relocated
+    /// assertions (C4 read; no borrow of the private TierI state escapes).
+    pub fn tier_i_stats_for_test(
+        ctx: &crate::emacs_core::eval::Context,
+    ) -> crate::emacs_core::eval::TierIStats {
+        ctx.tier_i.stats().clone()
+    }
+
+    /// FENCE delegate: copied Tier-I mode for the relocated knob test (C4
+    /// read).
+    pub fn tier_i_mode_for_test(
+        ctx: &crate::emacs_core::eval::Context,
+    ) -> crate::emacs_core::eval::TierIMode {
+        ctx.tier_i.mode()
+    }
+
     /// FENCE delegate: plant a stale named-call cache entry (dispatch-cache
     /// write; the entry type and the map stay private).
     pub fn plant_stale_named_call_cache_entry_for_test(

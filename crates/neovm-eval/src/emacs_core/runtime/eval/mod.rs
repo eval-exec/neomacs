@@ -9069,10 +9069,15 @@ pub(crate) use cconv_trust::{
 };
 #[cfg(any(test, feature = "test-support"))]
 pub use tier_i::TierIMode;
-#[cfg(test)]
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub use tier_i::{TierIEvent, TierIStats, parse_tier_i_knob};
+#[cfg(all(test, not(feature = "test-support")))]
 pub(crate) use tier_i::{
-    TierIEvent, parse_tier_i_knob, parse_tier_i_lazy_frames, parse_tier_i_threshold,
+    TierIEvent, TierIStats, parse_tier_i_knob, parse_tier_i_lazy_frames, parse_tier_i_threshold,
 };
+#[cfg(all(test, feature = "test-support"))]
+pub(crate) use tier_i::{parse_tier_i_lazy_frames, parse_tier_i_threshold};
 #[cfg(test)]
 pub(crate) use var_fast::{
     VarCacheEvent, VarCacheTier, parse_var_cache_knob, reset_var_cache_events,

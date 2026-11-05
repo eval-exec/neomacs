@@ -2,12 +2,14 @@
 //! `analyze` mode never runs compiled code.
 
 use crate::emacs_core::eval::{Context, TierIEvent, TierIMode};
+use neovm_eval::test_support::authority::{
+    clear_tier_i_for_test, configure_tier_i_for_test, tier_i_stats_for_test,
+};
 
 fn context(mode: TierIMode, threshold: u32) -> Context {
     let mut eval = crate::test_utils::runtime_startup_context();
-    eval.tier_i.set_mode(mode);
-    eval.tier_i.set_threshold(threshold);
-    eval.tier_i.clear_for_test();
+    configure_tier_i_for_test(&mut eval, mode, threshold);
+    clear_tier_i_for_test(&mut eval);
     eval
 }
 
@@ -52,7 +54,7 @@ fn golden_scopes_slots_and_islands() {
          !(lambda (z) (list z a)) \
          (call ti-a-undefined a@4.0))"
     );
-    let stats = eval.tier_i.stats();
+    let stats = tier_i_stats_for_test(&eval);
     assert_eq!(stats.count(TierIEvent::Run), 0, "analyze never runs code");
     assert!(stats.count(TierIEvent::Compiled) >= 1, "{}", stats.report());
 }

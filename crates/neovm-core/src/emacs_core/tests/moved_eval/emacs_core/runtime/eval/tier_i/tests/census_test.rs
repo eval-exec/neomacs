@@ -1,11 +1,14 @@
 //! T0: the census of interpreted closure calls.
 
 use crate::emacs_core::eval::{Context, TierIEvent, TierIMode};
+use neovm_eval::test_support::authority::{
+    clear_tier_i_for_test, set_tier_i_mode_for_test, tier_i_stats_for_test,
+};
 
 fn context(mode: TierIMode) -> Context {
     let mut eval = crate::test_utils::runtime_startup_context();
-    eval.tier_i.set_mode(mode);
-    eval.tier_i.clear_for_test();
+    set_tier_i_mode_for_test(&mut eval, mode);
+    clear_tier_i_for_test(&mut eval);
     eval
 }
 
@@ -42,7 +45,7 @@ fn census_counts_calls_and_names_the_hottest_bodies() {
     );
     assert!(lines[big].contains("       20 calls"), "{report}");
     assert!(lines[small].contains("       50 calls"), "{report}");
-    let stats = eval.tier_i.stats();
+    let stats = tier_i_stats_for_test(&eval);
     assert!(stats.count(TierIEvent::Call) >= 70, "{}", stats.report());
 }
 
@@ -54,5 +57,5 @@ fn off_counts_nothing() {
         &mut eval,
         "(progn (defun ti-c-off (x) x) (dotimes (_ 5) (ti-c-off 1)))",
     );
-    assert_eq!(eval.tier_i.stats().count(TierIEvent::Call), 0);
+    assert_eq!(tier_i_stats_for_test(&eval).count(TierIEvent::Call), 0);
 }

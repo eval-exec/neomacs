@@ -5,6 +5,9 @@
 
 use crate::emacs_core::eval::{Context, TierIEvent, TierIMode};
 use crate::emacs_core::print::print_value;
+use neovm_eval::test_support::authority::{
+    clear_tier_i_for_test, configure_tier_i_for_test, tier_i_stats_for_test,
+};
 
 const LOAD: &str = "(let ((load-suffixes '(\".el\")))
   (dolist (lib '(\"emacs-lisp/pcase\" \"emacs-lisp/cl-seq\" \"emacs-lisp/cl-extra\"
@@ -37,9 +40,8 @@ const WORK: &str = r#"(let ((acc nil))
 
 fn context(mode: TierIMode) -> Context {
     let mut eval = crate::test_utils::runtime_startup_context();
-    eval.tier_i.set_mode(mode);
-    eval.tier_i.set_threshold(1);
-    eval.tier_i.clear_for_test();
+    configure_tier_i_for_test(&mut eval, mode, 1);
+    clear_tier_i_for_test(&mut eval);
     eval
 }
 
@@ -60,7 +62,7 @@ fn soak_on_gnu_sources_prints_what_the_tree_walker_prints() {
     let mut verify = context(TierIMode::Verify);
     printed(&mut verify, LOAD);
     assert_eq!(printed(&mut verify, WORK), expected);
-    let stats = verify.tier_i.stats();
+    let stats = tier_i_stats_for_test(&verify);
     tracing::info!("tier-i soak: {}", stats.report());
     assert!(stats.count(TierIEvent::Run) > 1000, "{}", stats.report());
     assert!(
@@ -90,10 +92,14 @@ fn tier_i_bench_workload() {
         .and_then(|n| n.parse().ok())
         .unwrap_or(1);
     let mut eval = context(mode);
-    eval.tier_i.set_threshold(2);
+    configure_tier_i_for_test(&mut eval, mode, 2);
     printed(&mut eval, LOAD);
     for _ in 0..rounds {
         printed(&mut eval, WORK);
     }
-    tracing::info!("tier-i bench: {:?} {}", mode, eval.tier_i.stats().report());
+    tracing::info!(
+        "tier-i bench: {:?} {}",
+        mode,
+        tier_i_stats_for_test(&eval).report()
+    );
 }

@@ -135,3 +135,22 @@ mod emacs_core_runtime_eval_keyboard_tests_keyboard_test_rs;
 #[cfg(test)]
 #[path = "emacs_core/runtime/eval/tests/idle_redisplay_test.rs"]
 mod emacs_core_runtime_eval_tests_idle_redisplay_test_rs;
+
+// Tier-I Context suites re-homed byte-identically except API drift (the
+// private tier_i state is reached through the signed eval test-support
+// fences; the context-free parser tests stay in eval).
+#[cfg(test)]
+#[path = "emacs_core/runtime/eval/tier_i/tests/analyzer_test.rs"]
+mod emacs_core_runtime_eval_tier_i_tests_analyzer_test_rs;
+#[cfg(test)]
+#[path = "emacs_core/runtime/eval/tier_i/tests/census_test.rs"]
+mod emacs_core_runtime_eval_tier_i_tests_census_test_rs;
+#[cfg(test)]
+#[path = "emacs_core/runtime/eval/tier_i/tests/differential_test.rs"]
+mod emacs_core_runtime_eval_tier_i_tests_differential_test_rs;
+#[cfg(test)]
+#[path = "emacs_core/runtime/eval/tier_i/tests/knob_fresh_context_test.rs"]
+mod emacs_core_runtime_eval_tier_i_tests_knob_fresh_context_test_rs;
+#[cfg(test)]
+#[path = "emacs_core/runtime/eval/tier_i/tests/soak_test.rs"]
+mod emacs_core_runtime_eval_tier_i_tests_soak_test_rs;
