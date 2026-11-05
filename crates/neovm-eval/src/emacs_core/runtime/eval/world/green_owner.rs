@@ -155,6 +155,13 @@ impl Baton {
         self._retention.retain()
     }
 
+    /// The retained World identity as a copied scalar. Never clones the Arc;
+    /// holding the token neither retains nor frees the World.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn world_identity_ptr(&self) -> usize {
+        Arc::as_ptr(&self.world) as usize
+    }
+
     /// A further owner's views of the World, starting in CURRENT. Only the
     /// holder may build them (point 2, checked in debug builds).
     #[doc(hidden)]
