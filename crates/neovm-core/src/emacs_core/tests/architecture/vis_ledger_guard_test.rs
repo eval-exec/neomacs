@@ -1678,6 +1678,228 @@ fn collect_cfg_split_sites(items: &[syn::Item], file: &str, out: &mut Vec<(Strin
     }
 }
 
+fn item_attrs(item: &syn::Item) -> &[syn::Attribute] {
+    match item {
+        syn::Item::Struct(item) => &item.attrs,
+        syn::Item::Union(item) => &item.attrs,
+        syn::Item::Enum(item) => &item.attrs,
+        _ => &[],
+    }
+}
+
+fn item_ident(item: &syn::Item) -> Option<&syn::Ident> {
+    match item {
+        syn::Item::Struct(item) => Some(&item.ident),
+        syn::Item::Union(item) => Some(&item.ident),
+        syn::Item::Enum(item) => Some(&item.ident),
+        _ => None,
+    }
+}
+
+fn normalize_cfg_attrs(attrs: &mut Vec<syn::Attribute>) {
+    attrs.retain(|attr| !attr.path().is_ident("cfg"));
+}
+
+/// CS-1 arm identity: drop the arm-selecting cfg attrs and every visibility
+/// token, keeping derives, repr, docs, field order/names/types and all other
+/// attrs intact for an exact AST comparison.
+fn normalize_cfg_split_arm(item: &mut syn::Item) {
+    match item {
+        syn::Item::Struct(item) => {
+            normalize_cfg_attrs(&mut item.attrs);
+            item.vis = syn::Visibility::Inherited;
+            for field in &mut item.fields {
+                normalize_cfg_attrs(&mut field.attrs);
+                field.vis = syn::Visibility::Inherited;
+            }
+        }
+        syn::Item::Union(item) => {
+            normalize_cfg_attrs(&mut item.attrs);
+            item.vis = syn::Visibility::Inherited;
+            for field in &mut item.fields.named {
+                normalize_cfg_attrs(&mut field.attrs);
+                field.vis = syn::Visibility::Inherited;
+            }
+        }
+        syn::Item::Enum(item) => {
+            normalize_cfg_attrs(&mut item.attrs);
+            item.vis = syn::Visibility::Inherited;
+            for variant in &mut item.variants {
+                normalize_cfg_attrs(&mut variant.attrs);
+                for field in &mut variant.fields {
+                    normalize_cfg_attrs(&mut field.attrs);
+                    field.vis = syn::Visibility::Inherited;
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn named_field_list(item: &syn::Item) -> Option<Vec<&syn::Field>> {
+    match item {
+        syn::Item::Struct(item) => Some(item.fields.iter().collect()),
+        syn::Item::Union(item) => Some(item.fields.named.iter().collect()),
+        _ => None,
+    }
+}
+
+fn widened_fields(production: &syn::Item, test: &syn::Item) -> Result<Vec<String>, String> {
+    let (Some(production), Some(test)) = (named_field_list(production), named_field_list(test))
+    else {
+        return Ok(Vec::new());
+    };
+    if production.len() != test.len() {
+        return Err("cfg-split arm field counts differ".to_owned());
+    }
+    let mut widened = Vec::new();
+    for (production, test) in production.iter().zip(&test) {
+        let production_public = matches!(production.vis, syn::Visibility::Public(_));
+        let test_public = matches!(test.vis, syn::Visibility::Public(_));
+        if production_public || !test_public {
+            continue;
+        }
+        let Some(name) = &test.ident else {
+            return Err("cfg-split arm widens an unnamed field".to_owned());
+        };
+        widened.push(name.to_string());
+    }
+    Ok(widened)
+}
+
+fn row_names_field(row: &VisRow, struct_name: &str, field: &str) -> bool {
+    let segments: Vec<&str> = row.item.split("::").collect();
+    segments.len() >= 2
+        && segments[segments.len() - 2] == struct_name
+        && segments[segments.len() - 1] == field
+}
+
+fn check_cfg_split_item_group(
+    file: &str,
+    name: &str,
+    arms: &[&syn::Item],
+    ledgers: &[VisRow],
+) -> Result<(), String> {
+    let tests: Vec<&syn::Item> = arms
+        .iter()
+        .copied()
+        .filter(|item| test_gated(item_attrs(item)))
+        .collect();
+    let productions: Vec<&syn::Item> = arms
+        .iter()
+        .copied()
+        .filter(|item| !test_gated(item_attrs(item)))
+        .collect();
+    if tests.is_empty() || productions.is_empty() {
+        return Ok(());
+    }
+    for test in &tests {
+        for production in &productions {
+            let mut test_arm = (*test).clone();
+            let mut production_arm = (*production).clone();
+            normalize_cfg_split_arm(&mut test_arm);
+            normalize_cfg_split_arm(&mut production_arm);
+            if test_arm != production_arm {
+                return Err(format!(
+                    "{file}: cfg-split arms of `{name}` are not token-identical except visibility"
+                ));
+            }
+        }
+    }
+    let Some(test) = tests.first() else {
+        return Ok(());
+    };
+    let mut widened = BTreeSet::new();
+    for production in &productions {
+        widened.extend(widened_fields(production, test)?);
+    }
+    for field in widened {
+        let rows: Vec<&VisRow> = ledgers
+            .iter()
+            .filter(|row| {
+                row.kind == "field" && row.file == file && row_names_field(row, name, &field)
+            })
+            .collect();
+        match rows.len() {
+            1 => {}
+            0 => {
+                return Err(format!(
+                    "{file}: cfg-split arm widens field `{name}::{field}` with no TEST-SUPPORT-VIS row"
+                ));
+            }
+            _ => {
+                return Err(format!(
+                    "{file}: cfg-split field `{name}::{field}` has more than one TEST-SUPPORT-VIS row"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn check_cfg_split_items(
+    items: &[syn::Item],
+    file: &str,
+    ledgers: &[VisRow],
+) -> Result<(), String> {
+    let mut groups: BTreeMap<(String, String), Vec<&syn::Item>> = BTreeMap::new();
+    for item in items {
+        match item {
+            syn::Item::Mod(module) => {
+                if let Some((_, inner)) = &module.content {
+                    check_cfg_split_items(inner, file, ledgers)?;
+                }
+            }
+            syn::Item::Struct(_) | syn::Item::Union(_) | syn::Item::Enum(_) => {
+                let kind = match item {
+                    syn::Item::Struct(_) => "struct",
+                    syn::Item::Union(_) => "union",
+                    _ => "enum",
+                };
+                if let Some(ident) = item_ident(item) {
+                    groups
+                        .entry((kind.to_owned(), ident.to_string()))
+                        .or_default()
+                        .push(item);
+                }
+            }
+            _ => {}
+        }
+    }
+    for ((_kind, name), arms) in groups {
+        if arms.len() > 1 {
+            check_cfg_split_item_group(file, &name, &arms, ledgers)?;
+        }
+    }
+    Ok(())
+}
+
+/// CS-1: every cfg(not(X))/cfg(X) struct/union/enum pair must be
+/// token-identical except visibility, and every widened field must have
+/// exactly one VIS row (peer finding 06:27Z).
+fn check_cfg_split_arm_identity(workspace: &Path, ledgers: &[VisRow]) -> Result<(), String> {
+    for crate_dir in VIS_CRATES {
+        let src = workspace.join("crates").join(crate_dir).join("src");
+        let mut files = Vec::new();
+        walk_files(&src, &mut files)?;
+        for path in files {
+            if path.extension().is_none_or(|extension| extension != "rs") || is_test_path(&path) {
+                continue;
+            }
+            let relative = path
+                .strip_prefix(workspace)
+                .map_err(|_| format!("{} is outside the workspace", path.display()))?
+                .to_string_lossy()
+                .replace('\\', "/");
+            let source = read(&path)?;
+            let parsed =
+                syn::parse_file(&source).map_err(|error| format!("{relative}: {error}"))?;
+            check_cfg_split_items(&parsed.items, &relative, ledgers)?;
+        }
+    }
+    Ok(())
+}
+
 fn visibility_make_sites(workspace: &Path) -> Result<Vec<(String, String)>, String> {
     let mut sites = Vec::new();
     for crate_dir in VIS_CRATES {
@@ -1857,6 +2079,7 @@ fn validate(workspace: &Path) -> Result<(), String> {
         }
         all_rows.extend(rows);
     }
+    check_cfg_split_arm_identity(workspace, &all_rows)?;
     check_visibility_coverage(workspace, &all_rows)
 }
 
@@ -2297,6 +2520,73 @@ pub enum Mode {
             tests: Vec::new(),
         };
         assert!(check_visibility_coverage(dir.path(), &[row]).is_ok());
+    }
+
+    fn cs1_workspace(source: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = dir.path().join("crates/neovm-value/src");
+        std::fs::create_dir_all(&src).expect("src");
+        std::fs::write(src.join("split.rs"), source).expect("split");
+        dir
+    }
+
+    const CS1_BASELINE: &str = r#"
+#[cfg(not(feature = "test-support"))]
+pub(crate) struct Split {
+    pub(crate) visible: u8,
+    pub(crate) widened: u8,
+}
+#[cfg(feature = "test-support")]
+pub struct Split {
+    pub(crate) visible: u8,
+    pub widened: u8,
+}
+"#;
+
+    #[test]
+    fn cfg_split_arm_identity_accepts_identical_arms_and_ledgered_fields() {
+        let dir = cs1_workspace(CS1_BASELINE);
+        let file = "crates/neovm-value/src/split.rs".to_owned();
+        let rows = vec![field_row("neovm-value", "Split::widened", &file)];
+        assert!(check_cfg_split_arm_identity(dir.path(), &rows).is_ok());
+    }
+
+    #[test]
+    fn cfg_split_arm_identity_rejects_a_field_reorder() {
+        let mutated = CS1_BASELINE.replace(
+            "    pub(crate) visible: u8,\n    pub widened: u8,",
+            "    pub widened: u8,\n    pub(crate) visible: u8,",
+        );
+        assert_ne!(mutated, CS1_BASELINE, "mutation applied");
+        let dir = cs1_workspace(&mutated);
+        let file = "crates/neovm-value/src/split.rs".to_owned();
+        let rows = vec![field_row("neovm-value", "Split::widened", &file)];
+        let error = check_cfg_split_arm_identity(dir.path(), &rows).expect_err("reorder");
+        assert!(error.contains("not token-identical"), "{error}");
+        eprintln!("MUTATION RED: {error}");
+    }
+
+    #[test]
+    fn cfg_split_arm_identity_rejects_an_added_derive() {
+        let mutated = CS1_BASELINE.replace(
+            "#[cfg(feature = \"test-support\")]\npub struct Split {",
+            "#[cfg(feature = \"test-support\")]\n#[derive(Clone)]\npub struct Split {",
+        );
+        assert_ne!(mutated, CS1_BASELINE, "mutation applied");
+        let dir = cs1_workspace(&mutated);
+        let file = "crates/neovm-value/src/split.rs".to_owned();
+        let rows = vec![field_row("neovm-value", "Split::widened", &file)];
+        let error = check_cfg_split_arm_identity(dir.path(), &rows).expect_err("derive");
+        assert!(error.contains("not token-identical"), "{error}");
+        eprintln!("MUTATION RED: {error}");
+    }
+
+    #[test]
+    fn cfg_split_arm_identity_rejects_an_unledgered_widened_field() {
+        let dir = cs1_workspace(CS1_BASELINE);
+        let error = check_cfg_split_arm_identity(dir.path(), &[]).expect_err("unledgered");
+        assert!(error.contains("no TEST-SUPPORT-VIS row"), "{error}");
+        eprintln!("MUTATION RED: {error}");
     }
 }
 
