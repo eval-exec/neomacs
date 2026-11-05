@@ -5329,8 +5329,15 @@ impl Context {
 
     /// Test-support: typed replacement of the autoload manager; the only
     /// cross-crate write route (the authority fence delegates here).
+    ///
+    /// # Safety
+    ///
+    /// Every `Value` stored in `manager` must have been allocated in this
+    /// context's heap, and no collection may have run since those values were
+    /// last rooted. The caller transfers sole ownership of `manager` to
+    /// `self`; the replaced manager is dropped.
     #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn replace_autoloads_raw(
+    pub(crate) unsafe fn replace_autoloads_raw(
         &mut self,
         manager: crate::emacs_core::autoload::AutoloadManager,
     ) {

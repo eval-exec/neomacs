@@ -76,7 +76,10 @@ fn autoload_copied_properties_have_only_manager_roots() {
         );
         // No obarray function cell, Lisp variable, buffer or explicit root
         // aliases these copies. The real World manager is their sole owner.
-        neovm_eval::test_support::authority::replace_autoloads_for_test(eval, manager);
+        // SAFETY: every Value in `manager` was allocated in this context's
+        // heap inside this GC-inhibited phase, so no collection has run since
+        // they were allocated; the manager becomes the World's sole root.
+        unsafe { neovm_eval::test_support::authority::replace_autoloads_for_test(eval, manager) };
         probes
     });
     let check_live = |eval: &Context| {
@@ -139,10 +142,14 @@ fn autoload_copied_properties_have_only_manager_roots() {
     assert_eq!(eval.gc_count, completed + 1);
     check_live(&eval);
 
-    neovm_eval::test_support::authority::replace_autoloads_for_test(
-        &mut eval,
-        AutoloadManager::new(),
-    );
+    // SAFETY: the replacement manager is empty and owns no heap Values, so it
+    // cannot alias or resurrect anything in this context's heap.
+    unsafe {
+        neovm_eval::test_support::authority::replace_autoloads_for_test(
+            &mut eval,
+            AutoloadManager::new(),
+        )
+    };
     eval.gc_collect_exact();
     for bits in probes {
         assert!(

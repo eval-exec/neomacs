@@ -350,11 +350,19 @@ pub mod authority {
     /// Context's autoload manager with an owned manager.  The manager lives in a
     /// WorldView and holds heap Values, so N3 forbids exposing `&mut`/`&`; this
     /// typed replacement is the only cross-crate write route.
-    pub fn replace_autoloads_for_test(
+    ///
+    /// # Safety
+    ///
+    /// Every `Value` stored in `manager` must have been allocated in
+    /// `context`'s heap, and no collection may have run since those values
+    /// were last rooted. After the call `context` is their sole owner.
+    pub unsafe fn replace_autoloads_for_test(
         context: &mut crate::emacs_core::Context,
         manager: crate::emacs_core::autoload::AutoloadManager,
     ) {
-        context.replace_autoloads_raw(manager);
+        // SAFETY: the caller upholds the value-ownership contract above; the
+        // raw helper has the identical contract and stays crate-private.
+        unsafe { context.replace_autoloads_raw(manager) };
     }
 }
 
