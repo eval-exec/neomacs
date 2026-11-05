@@ -27,8 +27,10 @@
 //! class can land before the provider batches. Production surface is never
 //! read or widened here.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+
+use syn::visit::{self, Visit};
 
 use super::architecture_plist_head_seam_guard_test::code_only;
 use super::architecture_production_source_roots::workspace_root;
@@ -98,11 +100,39 @@ struct VisRow {
     tests: Vec<String>,
 }
 
+/// The original lexical corpus. It remains the fallback for a fixture that
+/// does not parse: macro-generated or otherwise unresolvable names must stay
+/// fail-closed, so those files keep the broad matcher.
 #[derive(Default)]
 struct FixtureNames {
     words: BTreeSet<String>,
     qualified: BTreeSet<String>,
     use_leaves: BTreeSet<String>,
+}
+
+/// One fixture or compiler golden's naming context. Resolution is per file:
+/// a bare word must resolve to the item *there*, never through an import in
+/// another fixture.
+struct FixtureScope {
+    label: String,
+    /// `use path::Name [as Alias];` bindings: local name -> the named path.
+    imports: Vec<(String, Vec<String>)>,
+    /// `use module::*;` module paths.
+    globs: Vec<Vec<String>>,
+    /// Type-namespace names declared in this file (items and generic type
+    /// parameters). A bare word with one of these names resolves locally.
+    bindings: BTreeSet<String>,
+    /// Reference-position identifiers, flagged when the occurrence sits in a
+    /// generic bracket of a compiler golden.
+    words: Vec<(String, bool)>,
+    /// Qualified `A::B::C` chains, as written.
+    chains: Vec<Vec<String>>,
+    /// Compiler goldens render library generic parameters as bare words
+    /// (`SubrObj::<Entry>`); such an occurrence does not reference an item
+    /// named `Entry`.
+    generic_exempt: bool,
+    /// An unparseable file keeps the lexical matcher, fail-closed.
+    broad: Option<FixtureNames>,
 }
 
 fn read(path: &Path) -> Result<String, String> {
@@ -203,56 +233,450 @@ fn collect_fixture_names(source: &str, names: &mut FixtureNames) {
     }
 }
 
-fn fixture_names(workspace: &Path) -> Result<FixtureNames, String> {
+#[derive(Default)]
+struct UseCollector {
+    imports: Vec<(String, Vec<String>)>,
+    globs: Vec<Vec<String>>,
+}
+
+fn collect_use_tree(
+    tree: &syn::UseTree,
+    prefix: &mut Vec<String>,
+    imports: &mut Vec<(String, Vec<String>)>,
+    globs: &mut Vec<Vec<String>>,
+) {
+    match tree {
+        syn::UseTree::Path(path) => {
+            prefix.push(path.ident.to_string());
+            collect_use_tree(&path.tree, prefix, imports, globs);
+            prefix.pop();
+        }
+        syn::UseTree::Name(name) => {
+            let local = name.ident.to_string();
+            if local == "self" {
+                if let Some(last) = prefix.last() {
+                    imports.push((last.clone(), prefix.clone()));
+                }
+            } else {
+                let mut full = prefix.clone();
+                full.push(local.clone());
+                imports.push((local, full));
+            }
+        }
+        syn::UseTree::Rename(rename) => {
+            let mut full = prefix.clone();
+            full.push(rename.ident.to_string());
+            imports.push((rename.rename.to_string(), full));
+        }
+        syn::UseTree::Glob(_) => {
+            if !prefix.is_empty() {
+                globs.push(prefix.clone());
+            }
+        }
+        syn::UseTree::Group(group) => {
+            for item in &group.items {
+                collect_use_tree(item, prefix, imports, globs);
+            }
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for UseCollector {
+    fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
+        collect_use_tree(
+            &item.tree,
+            &mut Vec::new(),
+            &mut self.imports,
+            &mut self.globs,
+        );
+    }
+}
+
+#[derive(Default)]
+struct BindingCollector {
+    names: BTreeSet<String>,
+}
+
+impl<'ast> Visit<'ast> for BindingCollector {
+    fn visit_item_struct(&mut self, item: &'ast syn::ItemStruct) {
+        self.names.insert(item.ident.to_string());
+        visit::visit_item_struct(self, item);
+    }
+    fn visit_item_enum(&mut self, item: &'ast syn::ItemEnum) {
+        self.names.insert(item.ident.to_string());
+        visit::visit_item_enum(self, item);
+    }
+    fn visit_item_union(&mut self, item: &'ast syn::ItemUnion) {
+        self.names.insert(item.ident.to_string());
+        visit::visit_item_union(self, item);
+    }
+    fn visit_item_trait(&mut self, item: &'ast syn::ItemTrait) {
+        self.names.insert(item.ident.to_string());
+        visit::visit_item_trait(self, item);
+    }
+    fn visit_item_type(&mut self, item: &'ast syn::ItemType) {
+        self.names.insert(item.ident.to_string());
+        visit::visit_item_type(self, item);
+    }
+    fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
+        self.names.insert(item.ident.to_string());
+        visit::visit_item_mod(self, item);
+    }
+    fn visit_item_extern_crate(&mut self, item: &'ast syn::ItemExternCrate) {
+        self.names.insert(item.ident.to_string());
+        visit::visit_item_extern_crate(self, item);
+    }
+    fn visit_generics(&mut self, generics: &'ast syn::Generics) {
+        for parameter in &generics.params {
+            if let syn::GenericParam::Type(parameter) = parameter {
+                self.names.insert(parameter.ident.to_string());
+            }
+        }
+        visit::visit_generics(self, generics);
+    }
+}
+
+/// Reference-position identifiers and qualified chains. A path component
+/// (`A::B`), a field/method name (`value.entry`) or an import prefix is not a
+/// standalone reference. The flag is true when the identifier sits inside a
+/// generic bracket; the matcher trusts that flag only for compiler goldens.
+fn lexical_names(source: &str) -> (Vec<(String, bool)>, Vec<Vec<String>>) {
+    fn generic_bracket(source: &str, at: usize) -> bool {
+        let bytes = source.as_bytes();
+        let mut index = at + 1;
+        while bytes
+            .get(index)
+            .is_some_and(|byte| byte.is_ascii_whitespace())
+        {
+            index += 1;
+        }
+        if bytes.get(index) == Some(&b'\'') {
+            return true;
+        }
+        if !bytes.get(index).is_some_and(|byte| is_ident_start(*byte)) {
+            return false;
+        }
+        while bytes.get(index).is_some_and(|byte| is_ident_byte(*byte)) {
+            index += 1;
+        }
+        while bytes
+            .get(index)
+            .is_some_and(|byte| byte.is_ascii_whitespace())
+        {
+            index += 1;
+        }
+        matches!(bytes.get(index), Some(b':' | b',' | b'>' | b'<' | b'='))
+    }
+
+    let bytes = source.as_bytes();
+    let mut words = Vec::new();
+    let mut chains = Vec::new();
+    let mut depth = 0usize;
+    let mut previous: Option<u8> = None;
+    let mut before_previous: Option<u8> = None;
+    let mut index = 0;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if byte == b'<' {
+            if generic_bracket(source, index) {
+                depth += 1;
+            }
+            before_previous = previous;
+            previous = Some(byte);
+            index += 1;
+            continue;
+        }
+        if byte == b'>' {
+            if previous != Some(b'-') && depth > 0 {
+                depth -= 1;
+            }
+            before_previous = previous;
+            previous = Some(byte);
+            index += 1;
+            continue;
+        }
+        if !is_ident_start(byte) {
+            if !byte.is_ascii_whitespace() {
+                before_previous = previous;
+                previous = Some(byte);
+            }
+            index += 1;
+            continue;
+        }
+        let start = index;
+        while index < bytes.len() && is_ident_byte(bytes[index]) {
+            index += 1;
+        }
+        let root = &source[start..index];
+        // `A::B` components and `value.entry` names are not standalone
+        // references; a single `:` (a type annotation) is not path syntax.
+        let component =
+            (previous == Some(b':') && before_previous == Some(b':')) || previous == Some(b'.');
+        let mut chain = vec![root.to_owned()];
+        let mut end = index;
+        while bytes.get(end) == Some(&b':') && bytes.get(end + 1) == Some(&b':') {
+            let mut next = end + 2;
+            while bytes
+                .get(next)
+                .is_some_and(|byte| byte.is_ascii_whitespace())
+            {
+                next += 1;
+            }
+            if next >= bytes.len() || !is_ident_start(bytes[next]) {
+                break;
+            }
+            let piece_start = next;
+            while next < bytes.len() && is_ident_byte(bytes[next]) {
+                next += 1;
+            }
+            chain.push(source[piece_start..next].to_owned());
+            end = next;
+        }
+        if !component {
+            words.push((root.to_owned(), depth > 0));
+        }
+        if chain.len() > 1 {
+            chains.push(chain);
+        }
+        index = end.max(index);
+        before_previous = previous;
+        previous = bytes.get(index.saturating_sub(1)).copied();
+    }
+    (words, chains)
+}
+
+fn fixture_scope(label: String, source: &str, rust: bool, generic_exempt: bool) -> FixtureScope {
+    let code = if rust {
+        code_only(source)
+    } else {
+        source.to_owned()
+    };
+    let (words, chains) = lexical_names(&code);
+    let mut scope = FixtureScope {
+        label,
+        imports: Vec::new(),
+        globs: Vec::new(),
+        bindings: BTreeSet::new(),
+        words,
+        chains,
+        generic_exempt,
+        broad: None,
+    };
+    if rust {
+        match syn::parse_file(&code) {
+            Ok(file) => {
+                let mut uses = UseCollector::default();
+                uses.visit_file(&file);
+                scope.imports = uses.imports;
+                scope.globs = uses.globs;
+                let mut bindings = BindingCollector::default();
+                bindings.visit_file(&file);
+                scope.bindings = bindings.names;
+            }
+            Err(_) => {
+                let mut broad = FixtureNames::default();
+                collect_fixture_names(&code, &mut broad);
+                scope.broad = Some(broad);
+            }
+        }
+    }
+    scope
+}
+
+fn fixture_scopes(workspace: &Path) -> Result<Vec<FixtureScope>, String> {
     let tests = workspace.join("crates/neovm-core/tests");
-    let mut names = FixtureNames::default();
     let mut rust_files = Vec::new();
     for dir in FIXTURE_DIRS {
         walk_files(&tests.join(dir), &mut rust_files)?;
     }
+    let mut scopes = Vec::new();
+    let mut fixture_index: BTreeMap<PathBuf, usize> = BTreeMap::new();
     for path in rust_files {
-        if path.extension().is_some_and(|extension| extension == "rs") {
-            collect_fixture_names(&code_only(&read(&path)?), &mut names);
+        if !path.extension().is_some_and(|extension| extension == "rs") {
+            continue;
         }
+        let source = read(&path)?;
+        let label = path
+            .strip_prefix(workspace)
+            .unwrap_or(&path)
+            .display()
+            .to_string();
+        fixture_index.insert(path, scopes.len());
+        scopes.push(fixture_scope(label, &source, true, false));
     }
     let mut all_files = Vec::new();
     walk_files(&tests, &mut all_files)?;
     for path in all_files {
-        if path
+        if !path
             .extension()
             .is_some_and(|extension| extension == "stderr")
         {
-            collect_fixture_names(&read(&path)?, &mut names);
+            continue;
         }
+        let source = read(&path)?;
+        let label = path
+            .strip_prefix(workspace)
+            .unwrap_or(&path)
+            .display()
+            .to_string();
+        let mut scope = fixture_scope(label, &source, false, true);
+        let sibling = path.with_extension("rs");
+        if let Some(index) = fixture_index.get(&sibling) {
+            let paired = &scopes[*index];
+            scope.imports.clone_from(&paired.imports);
+            scope.globs.clone_from(&paired.globs);
+            scope.bindings.clone_from(&paired.bindings);
+        }
+        scopes.push(scope);
     }
-    Ok(names)
+    Ok(scopes)
 }
 
-/// Whether any qualified suffix of `item` (length >= 2) appears as a chain in
-/// the fixtures, or a type-shaped leaf appears as a bare word.
-fn names_in_fixtures(item: &str, kind: &str, fixtures: &FixtureNames) -> Option<String> {
+fn path_ends_with(path: &[String], item: &[&str]) -> bool {
+    path.len() >= item.len()
+        && path[path.len() - item.len()..]
+            .iter()
+            .zip(item)
+            .all(|(word, expected)| word == expected)
+}
+
+fn item_suffix_matches(chain: &[String], item: &[&str]) -> bool {
+    (2..=item.len().min(4)).any(|suffix_len| {
+        chain.len() >= suffix_len
+            && chain[chain.len() - suffix_len..]
+                .iter()
+                .zip(&item[item.len() - suffix_len..])
+                .all(|(word, expected)| word == expected)
+    })
+}
+
+fn resolve_chain(chain: &[String], imports: &[(String, Vec<String>)]) -> Vec<String> {
+    let Some(root) = chain.first() else {
+        return Vec::new();
+    };
+    let Some((_, path)) = imports.iter().find(|(local, _)| local == root) else {
+        return chain.to_vec();
+    };
+    let mut resolved = path.clone();
+    resolved.extend_from_slice(&chain[1..]);
+    resolved
+}
+
+fn glob_covers_item_module(glob: &[String], item: &[&str]) -> bool {
+    let parent = &item[..item.len().saturating_sub(1)];
+    !glob.is_empty() && !parent.is_empty() && path_ends_with(glob, parent)
+}
+
+/// Whether a reference-position `word` can name `item` in `scope`.
+fn word_names_item(scope: &FixtureScope, word: &str, item: &[&str]) -> bool {
+    let explicit: Vec<&Vec<String>> = scope
+        .imports
+        .iter()
+        .filter(|(local, _)| local == word)
+        .map(|(_, path)| path)
+        .collect();
+    match explicit.as_slice() {
+        // A single local import resolves the bare name, here or elsewhere.
+        [path] => path_ends_with(path, item),
+        // Two imports of one name are already ambiguous.
+        [_, _, ..] => true,
+        [] => {
+            if scope
+                .globs
+                .iter()
+                .any(|glob| glob_covers_item_module(glob, item))
+            {
+                // A glob of the item's module could supply the name.
+                return true;
+            }
+            if scope.bindings.contains(word) {
+                return false;
+            }
+            // No import and no local binding: the name is unresolvable here.
+            // The class stays fail-closed.
+            true
+        }
+    }
+}
+
+/// The lexical fallback for a file that does not parse.
+fn lexical_hit(item: &str, kind: &str, names: &FixtureNames) -> Option<String> {
     let segments: Vec<&str> = item.split("::").collect();
     let leaf = *segments.last()?;
     match kind {
         "struct" | "enum" | "union" | "trait" | "type" => {
-            if fixtures.words.contains(leaf) || fixtures.use_leaves.contains(leaf) {
-                return Some(format!("type name `{leaf}` appears in a fixture/golden"));
+            if names.words.contains(leaf) || names.use_leaves.contains(leaf) {
+                return Some(format!("type name `{leaf}` appears in the file"));
             }
         }
         "mod" => {
-            if fixtures.use_leaves.contains(leaf) {
-                return Some(format!("module `{leaf}` is imported by a fixture"));
+            if names.use_leaves.contains(leaf) {
+                return Some(format!("module `{leaf}` is imported by the file"));
             }
         }
         _ => {}
     }
     for suffix_len in 2..=segments.len().min(4) {
         let suffix = segments[segments.len() - suffix_len..].join("::");
-        for chain in &fixtures.qualified {
+        for chain in &names.qualified {
             if chain == &suffix || chain.ends_with(&format!("::{suffix}")) {
+                return Some(format!("qualified name `{suffix}` appears as `{chain}`"));
+            }
+        }
+    }
+    None
+}
+
+/// Whether any fixture or golden resolves a name to `item`. A type name is
+/// matched only through resolution in its own file: an explicit `use` of the
+/// item, a glob of the item's module, a qualified path, or a bare word that
+/// resolves to the item there. Unparseable files keep the lexical fallback,
+/// fail-closed.
+fn names_in_fixtures(item: &str, kind: &str, fixtures: &[FixtureScope]) -> Option<String> {
+    let segments: Vec<&str> = item.split("::").collect();
+    let leaf = *segments.last()?;
+    for scope in fixtures {
+        if let Some(broad) = &scope.broad {
+            if let Some(why) = lexical_hit(item, kind, broad) {
+                return Some(format!("{}: {why}", scope.label));
+            }
+            continue;
+        }
+        for (_, path) in &scope.imports {
+            if path_ends_with(path, &segments) {
                 return Some(format!(
-                    "qualified name `{suffix}` appears in a fixture/golden as `{chain}`"
+                    "{}: `use {}` names the item",
+                    scope.label,
+                    path.join("::")
                 ));
+            }
+        }
+        if matches!(kind, "struct" | "enum" | "union" | "trait" | "type") {
+            for (word, generic) in &scope.words {
+                if word != leaf {
+                    continue;
+                }
+                if scope.generic_exempt && *generic {
+                    continue;
+                }
+                if word_names_item(scope, word, &segments) {
+                    return Some(format!(
+                        "{}: bare `{word}` resolves to the item",
+                        scope.label
+                    ));
+                }
+            }
+        }
+        if kind != "mod" {
+            for chain in &scope.chains {
+                let resolved = resolve_chain(chain, &scope.imports);
+                if item_suffix_matches(&resolved, &segments) {
+                    return Some(format!(
+                        "{}: qualified name `{}` resolves to the item",
+                        scope.label,
+                        resolved.join("::")
+                    ));
+                }
             }
         }
     }
@@ -385,7 +809,7 @@ fn parse_ledger(path: &Path, text: &str) -> Result<Vec<VisRow>, String> {
 fn check_row(
     workspace: &Path,
     row: &VisRow,
-    fixtures: &FixtureNames,
+    fixtures: &[FixtureScope],
     authority: &BTreeSet<String>,
 ) -> Result<(), String> {
     let what = format!("{} {} {}", row.crate_dir, row.kind, row.item);
@@ -571,7 +995,7 @@ fn validate(workspace: &Path) -> Result<(), String> {
     if ledger_paths.is_empty() {
         return Ok(());
     }
-    let fixtures = fixture_names(workspace)?;
+    let fixtures = fixture_scopes(workspace)?;
     let authority = authority_items(workspace)?;
     let mut all_rows = Vec::new();
     for path in ledger_paths {
@@ -613,17 +1037,17 @@ fn test_support_vis_ledgers_obey_the_signed_class() {
 mod tests {
     use super::*;
 
-    fn names(sources: &[&str]) -> FixtureNames {
-        let mut names = FixtureNames::default();
-        for source in sources {
-            collect_fixture_names(&code_only(source), &mut names);
-        }
-        names
+    fn scopes(sources: &[&str]) -> Vec<FixtureScope> {
+        sources
+            .iter()
+            .enumerate()
+            .map(|(index, source)| fixture_scope(format!("fixture{index}.rs"), source, true, false))
+            .collect()
     }
 
     #[test]
     fn v1_rejects_type_names_and_qualified_chains() {
-        let fixtures = names(&[
+        let fixtures = scopes(&[
             "fn f(pin: &InFlightRootPin) { let _ = InFlightRootPin::registry; }",
             "use neovm_core::error::SignalData;",
         ]);
@@ -636,7 +1060,7 @@ mod tests {
 
     #[test]
     fn v1_ignores_bare_generic_field_and_method_words() {
-        let fixtures = names(&["fn f(v: &mut Vec<u8>) { v.push(1); let x = v.len(); }"]);
+        let fixtures = scopes(&["fn f(v: &mut Vec<u8>) { v.push(1); let x = v.len(); }"]);
         assert!(names_in_fixtures("error::ThrowData::new", "fn", &fixtures).is_none());
         assert!(
             names_in_fixtures(
@@ -653,10 +1077,78 @@ mod tests {
 
     #[test]
     fn v1_ignores_comments() {
-        let fixtures = names(&["// InFlightRootPin::registry is private\nfn f() {}"]);
+        let fixtures = scopes(&["// InFlightRootPin::registry is private\nfn f() {}"]);
         assert!(
             names_in_fixtures("error::InFlightRootPin::registry", "field", &fixtures).is_none()
         );
+    }
+
+    #[test]
+    fn v1_planted_import_turns_the_check_red_then_restores_green() {
+        let planted =
+            scopes(&["use neovm_text::emacs_core::syntax::parse_loop::Entry;\nfn f(_: Entry) {}"]);
+        let error = names_in_fixtures("emacs_core::syntax::parse_loop::Entry", "struct", &planted)
+            .expect("a planted import of the item must be refused");
+        eprintln!("MUTATION RED: {error}");
+        let restored = scopes(&["enum Entry { A }\nfn f(_: Entry) {}"]);
+        assert!(
+            names_in_fixtures("emacs_core::syntax::parse_loop::Entry", "struct", &restored)
+                .is_none()
+        );
+        eprintln!("RESTORED GREEN: local Entry resolves locally");
+    }
+
+    #[test]
+    fn v1_resolves_bare_names_and_globs_in_their_own_file() {
+        // A glob of the item's module is ambiguous and stays fail-closed.
+        let glob =
+            scopes(&["use neovm_text::emacs_core::syntax::parse_loop::*;\nfn f(_: Entry) {}"]);
+        assert!(
+            names_in_fixtures("emacs_core::syntax::parse_loop::Entry", "struct", &glob).is_some()
+        );
+        // An aliased module chain resolves to the item.
+        let alias = scopes(&[
+            "use neovm_text::emacs_core::syntax::parse_loop as pl;\nfn f(_: pl::Entry) {}",
+        ]);
+        assert!(
+            names_in_fixtures("emacs_core::syntax::parse_loop::Entry", "struct", &alias).is_some()
+        );
+        // Another item's qualified path with the same leaf is not this item.
+        let other = scopes(&["fn f() { let _ = CanonicalArm::Plain; }"]);
+        assert!(
+            names_in_fixtures("emacs_core::syntax::parse_loop::Plain", "struct", &other).is_none()
+        );
+        // A local import that resolves elsewhere is not this item.
+        let elsewhere = scopes(&["use other::Entry;\nfn f(_: Entry) {}"]);
+        assert!(
+            names_in_fixtures(
+                "emacs_core::syntax::parse_loop::Entry",
+                "struct",
+                &elsewhere
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn v1_golden_generic_parameters_are_not_item_references() {
+        let golden = vec![fixture_scope(
+            "golden.stderr".to_owned(),
+            "note: required by a bound in `SubrObj`\n\
+             | pub struct SubrObj<Entry: Copy + 'static> {\n\
+             error: call to `SubrObj::<Entry>::new_unchecked` is unsafe",
+            false,
+            true,
+        )];
+        assert!(
+            names_in_fixtures("emacs_core::syntax::parse_loop::Entry", "struct", &golden).is_none()
+        );
+    }
+
+    #[test]
+    fn v1_unparseable_files_keep_the_lexical_fallback() {
+        let broken = scopes(&["not rust {{{ InFlightRootPin {"]);
+        assert!(names_in_fixtures("error::InFlightRootPin", "struct", &broken).is_some());
     }
 
     #[test]
