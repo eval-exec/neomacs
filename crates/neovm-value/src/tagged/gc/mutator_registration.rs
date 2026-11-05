@@ -1005,8 +1005,6 @@ mod cons_allocation_tests;
 #[cfg(test)]
 mod slice_tests;
 
-#[cfg(test)]
-mod a8_latency;
 #[cfg(all(test, not(feature = "test-support")))]
 mod a8_probes;
 #[cfg(feature = "test-support")]

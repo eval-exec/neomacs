@@ -14,11 +14,14 @@
 #![cfg(not(feature = "gc-memory-telemetry"))]
 
 use super::a8_probes::{self, ProbeEvent};
-use super::{AllStopped, HeapIdentity, Mutator, MutatorPermit, RegistrationError, RendezvousError};
-use crate::emacs_core::eval::Context;
-use crate::tagged::gc::cons_storage::CATALOG_WAITS;
+use super::{AllStopped, Mutator, MutatorPermit, RegistrationError, RendezvousError, RunAccess};
+use crate::tagged::gc::HeapIdentity;
 use crate::tagged::transport::SharedRoot;
 use crate::tagged::value::TaggedValue;
+use neovm_eval::test_support::authority::admit_owned_proof_parallel_for_test;
+use neovm_value::test_support::authority::{
+    begin_restore_retry_for_test, catalog_waits_for_test, reset_catalog_waits_for_test,
+};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -55,7 +58,7 @@ fn retry_reg<T>(mut op: impl FnMut() -> Result<T, RegistrationError>) -> T {
 
 fn with_run<'era, R>(
     owner: &mut Mutator<'era>,
-    body: impl FnOnce(&mut super::RunAccess<'_, 'era>) -> Result<R, RegistrationError>,
+    body: impl FnOnce(&mut RunAccess<'_, 'era>) -> Result<R, RegistrationError>,
 ) -> Result<R, RegistrationError> {
     let deadline = Instant::now() + SPIN_WAIT;
     loop {
@@ -86,7 +89,7 @@ enum ChurnOutcome<R> {
 fn with_run_or_collect<'era, R>(
     owner: &mut Mutator<'era>,
     rx: &Receiver<OwnerSignal>,
-    body: impl FnOnce(&mut super::RunAccess<'_, 'era>) -> Result<R, RegistrationError>,
+    body: impl FnOnce(&mut RunAccess<'_, 'era>) -> Result<R, RegistrationError>,
 ) -> Result<ChurnOutcome<R>, RegistrationError> {
     let deadline = Instant::now() + SPIN_WAIT;
     loop {
@@ -126,8 +129,7 @@ fn activate<'era>(mut permit: MutatorPermit<'era>, heap: HeapIdentity, id: u64) 
 }
 
 fn restore(owner: &mut Mutator<'_>) {
-    let mut image = owner
-        .begin_restore_retry(false)
+    let mut image = begin_restore_retry_for_test(owner, false)
         .unwrap_or_else(|error| panic!("restore: {error:?}"));
     let deadline = Instant::now() + SPIN_WAIT;
     loop {
@@ -595,24 +597,20 @@ struct ScenarioResult {
 }
 
 fn reset_catalog_waits() {
-    use std::sync::atomic::Ordering::Relaxed;
-    CATALOG_WAITS.grant_calls.store(0, Relaxed);
-    CATALOG_WAITS.grant_ns.store(0, Relaxed);
-    CATALOG_WAITS.grant_max_ns.store(0, Relaxed);
-    CATALOG_WAITS.close_calls.store(0, Relaxed);
-    CATALOG_WAITS.close_ns.store(0, Relaxed);
-    CATALOG_WAITS.close_max_ns.store(0, Relaxed);
+    // SAFETY: the A8 driver is the serial probe for these counters; no other
+    // thread records or reads them while a scenario is measured.
+    unsafe { reset_catalog_waits_for_test() }
 }
 
 fn read_catalog_waits() -> (u64, u64, u64, u64, u64, u64) {
-    use std::sync::atomic::Ordering::Relaxed;
+    let waits = catalog_waits_for_test();
     (
-        CATALOG_WAITS.grant_calls.load(Relaxed),
-        CATALOG_WAITS.grant_ns.load(Relaxed),
-        CATALOG_WAITS.grant_max_ns.load(Relaxed),
-        CATALOG_WAITS.close_calls.load(Relaxed),
-        CATALOG_WAITS.close_ns.load(Relaxed),
-        CATALOG_WAITS.close_max_ns.load(Relaxed),
+        waits.grant_calls,
+        waits.grant_ns,
+        waits.grant_max_ns,
+        waits.close_calls,
+        waits.close_ns,
+        waits.close_max_ns,
     )
 }
 
@@ -666,179 +664,188 @@ fn drive_scenario(
     native: Option<(usize, bool)>,
     rounds: usize,
 ) -> Vec<u64> {
-    let mut context = Context::new();
+    let mut context = crate::test_utils::new_context();
     // SAFETY: nil and a fixnum are immediates of this Context's heap.
-    let nil = unsafe { SharedRoot::new(&context.tagged_heap, TaggedValue::NIL) };
-    let one = unsafe { SharedRoot::new(&context.tagged_heap, TaggedValue::fixnum(1)) };
+    let nil = unsafe { SharedRoot::new(&context.tagged_heap(), TaggedValue::NIL) };
+    let one = unsafe { SharedRoot::new(&context.tagged_heap(), TaggedValue::fixnum(1)) };
     let mut epochs = Vec::new();
-    context
-        .admit_owned_proof_parallel(|projection| {
-            let era = projection.era();
-            era.start_cons_storage()
-                .unwrap_or_else(|error| panic!("cons catalog: {error:?}"));
+    admit_owned_proof_parallel_for_test(&mut context, |projection| {
+        let era = projection.era();
+        era.start_cons_storage()
+            .unwrap_or_else(|error| panic!("cons catalog: {error:?}"));
 
-            let mut txs = Vec::new();
-            let mut activated_rxs = Vec::new();
-            let mut resumed_rxs = Vec::new();
-            // The era handle itself is not Sync; threads capture only the
-            // Copy heap identity, exactly as the A7 fixtures do.
-            let heap = era.heap_identity();
-            thread::scope(|scope| {
-                for id in 1..=ackers {
-                    let permit = retry_reg(|| era.register(id as u64, 4));
-                    let (tx, rx) = channel::<OwnerSignal>();
-                    let (activated_tx, activated_rx) = channel::<()>();
-                    let (resumed_tx, resumed_rx) = channel::<()>();
-                    let nil = nil.clone();
-                    let one = one.clone();
+        let mut txs = Vec::new();
+        let mut activated_rxs = Vec::new();
+        let mut resumed_rxs = Vec::new();
+        // The era handle itself is not Sync; threads capture only the
+        // Copy heap identity, exactly as the A7 fixtures do.
+        let heap = era.heap_identity();
+        thread::scope(|scope| {
+            for id in 1..=ackers {
+                let permit = retry_reg(|| era.register(id as u64, 4));
+                let (tx, rx) = channel::<OwnerSignal>();
+                let (activated_tx, activated_rx) = channel::<()>();
+                let (resumed_tx, resumed_rx) = channel::<()>();
+                let nil = nil.clone();
+                let one = one.clone();
+                scope.spawn(move || {
+                    acking_owner(
+                        permit,
+                        heap,
+                        id as u64,
+                        &nil,
+                        &one,
+                        kind,
+                        rx,
+                        activated_tx,
+                        resumed_tx,
+                    );
+                });
+                txs.push(tx);
+                activated_rxs.push(activated_rx);
+                resumed_rxs.push(resumed_rx);
+            }
+            let mut wake_blocked: Option<Sender<()>> = None;
+            let mut blocked_returned: Option<Receiver<u64>> = None;
+            let mut round_armed: Option<Receiver<()>> = None;
+            let mut round_wake: Option<Sender<()>> = None;
+            let mut round_returned: Option<Receiver<()>> = None;
+            if let Some((retained, per_round)) = native {
+                let id = (ackers + 1) as u64;
+                let permit = retry_reg(|| era.register(id, 4));
+                let nil = nil.clone();
+                let one = one.clone();
+                let (activated_tx, activated_rx) = channel::<()>();
+                if per_round {
+                    let (armed_tx, armed_rx) = channel::<()>();
+                    let (wake_tx, wake_rx) = channel::<()>();
+                    let (returned_tx, returned_rx) = channel::<()>();
                     scope.spawn(move || {
-                        acking_owner(
+                        native_round_owner(
                             permit,
                             heap,
-                            id as u64,
+                            id,
                             &nil,
                             &one,
-                            kind,
-                            rx,
+                            retained,
+                            rounds,
                             activated_tx,
-                            resumed_tx,
+                            armed_tx,
+                            wake_rx,
+                            returned_tx,
                         );
                     });
-                    txs.push(tx);
                     activated_rxs.push(activated_rx);
-                    resumed_rxs.push(resumed_rx);
+                    round_armed = Some(armed_rx);
+                    round_wake = Some(wake_tx);
+                    round_returned = Some(returned_rx);
+                } else {
+                    let (wake_tx, wake_rx) = channel::<()>();
+                    let (returned_tx, returned_rx) = channel::<u64>();
+                    scope.spawn(move || {
+                        native_blocked_owner(
+                            permit,
+                            heap,
+                            id,
+                            &nil,
+                            &one,
+                            retained,
+                            activated_tx,
+                            wake_rx,
+                            returned_tx,
+                        );
+                    });
+                    activated_rxs.push(activated_rx);
+                    wake_blocked = Some(wake_tx);
+                    blocked_returned = Some(returned_rx);
                 }
-                let mut wake_blocked: Option<Sender<()>> = None;
-                let mut blocked_returned: Option<Receiver<u64>> = None;
-                let mut round_armed: Option<Receiver<()>> = None;
-                let mut round_wake: Option<Sender<()>> = None;
-                let mut round_returned: Option<Receiver<()>> = None;
-                if let Some((retained, per_round)) = native {
-                    let id = (ackers + 1) as u64;
-                    let permit = retry_reg(|| era.register(id, 4));
-                    let nil = nil.clone();
-                    let one = one.clone();
-                    let (activated_tx, activated_rx) = channel::<()>();
-                    if per_round {
-                        let (armed_tx, armed_rx) = channel::<()>();
-                        let (wake_tx, wake_rx) = channel::<()>();
-                        let (returned_tx, returned_rx) = channel::<()>();
-                        scope.spawn(move || {
-                            native_round_owner(
-                                permit,
-                                heap,
-                                id,
-                                &nil,
-                                &one,
-                                retained,
-                                rounds,
-                                activated_tx,
-                                armed_tx,
-                                wake_rx,
-                                returned_tx,
-                            );
-                        });
-                        activated_rxs.push(activated_rx);
-                        round_armed = Some(armed_rx);
-                        round_wake = Some(wake_tx);
-                        round_returned = Some(returned_rx);
-                    } else {
-                        let (wake_tx, wake_rx) = channel::<()>();
-                        let (returned_tx, returned_rx) = channel::<u64>();
-                        scope.spawn(move || {
-                            native_blocked_owner(
-                                permit,
-                                heap,
-                                id,
-                                &nil,
-                                &one,
-                                retained,
-                                activated_tx,
-                                wake_rx,
-                                returned_tx,
-                            );
-                        });
-                        activated_rxs.push(activated_rx);
-                        wake_blocked = Some(wake_tx);
-                        blocked_returned = Some(returned_rx);
-                    }
-                }
-                // Gate on full membership before the first round (see the
-                // StartingStopped pairing note on the A7 fixtures).
-                for activated_rx in &activated_rxs {
-                    recv(activated_rx);
-                }
+            }
+            // Gate on full membership before the first round (see the
+            // StartingStopped pairing note on the A7 fixtures).
+            for activated_rx in &activated_rxs {
+                recv(activated_rx);
+            }
 
-                let mut next_epoch = 1u64;
-                for _ in 0..rounds {
-                    if let Some(armed) = &round_armed {
-                        // The re-entering native owner must be inside its
-                        // extent before the request is published.
-                        recv(armed);
-                    }
-                    for tx in &txs {
-                        tx.send(OwnerSignal::Collect)
-                            .unwrap_or_else(|_| panic!("collect channel closed"));
-                    }
-                    let stopped = retry_rv(|| era.stop());
-                    let epoch = stopped.epoch().get();
-                    assert_eq!(epoch, next_epoch, "collection epochs stay strictly +1");
-                    next_epoch += 1;
-                    epochs.push(epoch);
-                    retry_reg(|| era.return_cons_storage(&stopped));
-                    let mut stopped_mut = stopped;
-                    let report = retry_rv(|| era.collect_stopped(&mut stopped_mut));
-                    assert!(report.major, "latency rounds collect a major cycle");
-                    if let Some(wake) = &round_wake {
-                        // Wake the extent owner while the round is still open:
-                        // its return must wait out this stop.
-                        wake.send(())
-                            .unwrap_or_else(|_| panic!("native wake channel closed"));
-                    }
-                    retry_reg(|| era.resume_cons_storage(&stopped_mut));
-                    complete(stopped_mut);
-                    for resumed_rx in &resumed_rxs {
-                        recv(resumed_rx);
-                    }
-                    if let Some(returned) = &round_returned {
-                        recv(returned);
-                    }
+            let mut next_epoch = 1u64;
+            for _ in 0..rounds {
+                if let Some(armed) = &round_armed {
+                    // The re-entering native owner must be inside its
+                    // extent before the request is published.
+                    recv(armed);
                 }
-
                 for tx in &txs {
-                    tx.send(OwnerSignal::Finish)
-                        .unwrap_or_else(|_| panic!("finish channel closed"));
+                    tx.send(OwnerSignal::Collect)
+                        .unwrap_or_else(|_| panic!("collect channel closed"));
                 }
-                if let Some(wake) = &wake_blocked {
+                let stopped = retry_rv(|| era.stop());
+                let epoch = stopped.epoch().get();
+                assert_eq!(epoch, next_epoch, "collection epochs stay strictly +1");
+                next_epoch += 1;
+                epochs.push(epoch);
+                retry_reg(|| era.return_cons_storage(&stopped));
+                let mut stopped_mut = stopped;
+                let report = retry_rv(|| {
+                    era.collect_stopped(
+                        &mut stopped_mut,
+                        neovm_eval::test_support::authority::baton_collect_parallel_world_roots,
+                    )
+                });
+                assert!(report.major, "latency rounds collect a major cycle");
+                if let Some(wake) = &round_wake {
+                    // Wake the extent owner while the round is still open:
+                    // its return must wait out this stop.
                     wake.send(())
                         .unwrap_or_else(|_| panic!("native wake channel closed"));
-                    if let Some(returned) = &blocked_returned {
-                        let epoch = recv(returned);
-                        assert!(
-                            epoch <= next_epoch - 1,
-                            "blocked owner applied a real image ({epoch})"
-                        );
-                    }
                 }
-                // Closing round: every owner is NativeStopped or retiring, so
-                // the stop counts their publications without an ACK.
-                let mut stopped = retry_rv(|| era.stop());
-                assert_eq!(
-                    stopped.epoch().get(),
-                    next_epoch,
-                    "closing epoch stays strictly +1"
-                );
-                retry_reg(|| era.return_cons_storage(&stopped));
-                let report = retry_rv(|| era.collect_stopped(&mut stopped));
-                assert!(report.major, "the closing round collects a major cycle");
-                complete(stopped);
+                retry_reg(|| era.resume_cons_storage(&stopped_mut));
+                complete(stopped_mut);
+                for resumed_rx in &resumed_rxs {
+                    recv(resumed_rx);
+                }
+                if let Some(returned) = &round_returned {
+                    recv(returned);
+                }
+            }
+
+            for tx in &txs {
+                tx.send(OwnerSignal::Finish)
+                    .unwrap_or_else(|_| panic!("finish channel closed"));
+            }
+            if let Some(wake) = &wake_blocked {
+                wake.send(())
+                    .unwrap_or_else(|_| panic!("native wake channel closed"));
+                if let Some(returned) = &blocked_returned {
+                    let epoch = recv(returned);
+                    assert!(
+                        epoch <= next_epoch - 1,
+                        "blocked owner applied a real image ({epoch})"
+                    );
+                }
+            }
+            // Closing round: every owner is NativeStopped or retiring, so
+            // the stop counts their publications without an ACK.
+            let mut stopped = retry_rv(|| era.stop());
+            assert_eq!(
+                stopped.epoch().get(),
+                next_epoch,
+                "closing epoch stays strictly +1"
+            );
+            retry_reg(|| era.return_cons_storage(&stopped));
+            let report = retry_rv(|| {
+                era.collect_stopped(
+                    &mut stopped,
+                    neovm_eval::test_support::authority::baton_collect_parallel_world_roots,
+                )
             });
-            let (collector, keeper) = projection
-                .finish()
-                .unwrap_or_else(|error| panic!("finish: {error:?}"));
-            (collector, keeper, ())
-        })
-        .unwrap_or_else(|error| panic!("admit: {error:?}"));
+            assert!(report.major, "the closing round collects a major cycle");
+            complete(stopped);
+        });
+        let (collector, keeper) = projection
+            .finish()
+            .unwrap_or_else(|error| panic!("finish: {error:?}"));
+        (collector, keeper, ())
+    })
+    .unwrap_or_else(|error| panic!("admit: {error:?}"));
     epochs
 }
 

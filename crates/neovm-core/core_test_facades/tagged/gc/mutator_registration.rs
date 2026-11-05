@@ -39,3 +39,13 @@ mod root_slot_tests;
 #[cfg(test)]
 #[path = "../../../core_tests/tagged/gc/mutator_registration/lifecycle_tests.rs"]
 mod lifecycle_tests;
+
+/// MEMQ-TAIL-SHAPES (5): the A8 cold-latency driver re-homed out of value
+/// (its Context fixture is eval-level). It reads the signed a8_probes module
+/// (cfg-split `pub mod` in value's test-support build), the
+/// `test_support::authority` catalog-waits snapshot/reset, the REGWAIT
+/// restore fence and the peer-22:11Z owned-proof admission fence. The file
+/// keeps its own `#![cfg(not(feature = "gc-memory-telemetry"))]` gate.
+#[cfg(test)]
+#[path = "../../../core_tests/tagged/gc/mutator_registration/a8_latency.rs"]
+mod a8_latency;
