@@ -196,16 +196,58 @@ impl<'heap, K: EraKeeper> ProofEra<'heap, K> {
         .map(|(core, witness)| Self { core, witness })
     }
 
-    pub(super) fn registry(&self) -> &Registry {
+    #[doc(hidden)]
+    pub fn registry(&self) -> &Registry {
         self.core.registry()
     }
 
-    pub(crate) fn with_stopped_heap_for_test<R>(
+    #[doc(hidden)]
+    pub fn with_stopped_heap_for_test<R>(
         &self,
         stopped: &AllStopped<'_>,
         body: impl for<'h> FnOnce(&'h super::super::TaggedHeap) -> R,
     ) -> Result<R, CollectionError> {
         self.core.with_stopped_heap_for_test(stopped, body)
+    }
+
+    /// Era follow-up row (peer 10:5xZ item 3): read-only keeper accessor for
+    /// the re-homed fixtures. No `core` field widening.
+    #[doc(hidden)]
+    pub fn keeper_for_test(&self) -> Option<&K> {
+        self.core.keeper.as_ref()
+    }
+
+    /// Era follow-up row (peer 10:5xZ item 1): the erased-root major
+    /// collection entry, forwarded with the original signature. The caller
+    /// supplies the complete World root walk, exactly as `EraCore` requires.
+    #[doc(hidden)]
+    pub fn collect_stopped(
+        &self,
+        stopped: &mut AllStopped<'_>,
+        roots: impl FnOnce(
+            &K,
+            &mut AllStopped<'_>,
+            &mut Vec<crate::tagged::value::TaggedValue>,
+        )
+            -> Result<Vec<*mut *mut crate::tagged::header::MarkerObj>, RendezvousError>,
+    ) -> Result<CollectionReport, CollectionError> {
+        self.core.collect_stopped(stopped, roots)
+    }
+
+    /// Era follow-up row (peer 10:5xZ item 1): the rooted minor collection
+    /// entry, forwarded with the original signature.
+    #[doc(hidden)]
+    pub fn collect_stopped_minor(
+        &self,
+        stopped: &mut AllStopped<'_>,
+        roots: impl FnOnce(
+            &K,
+            &mut AllStopped<'_>,
+            &mut Vec<crate::tagged::value::TaggedValue>,
+        )
+            -> Result<Vec<*mut *mut crate::tagged::header::MarkerObj>, RendezvousError>,
+    ) -> Result<CollectionReport, MinorCollectionError> {
+        self.core.collect_stopped_minor(stopped, roots)
     }
 
     pub(crate) fn shutdown_admission_stopped_for_test(
@@ -215,8 +257,9 @@ impl<'heap, K: EraKeeper> ProofEra<'heap, K> {
         self.core.shutdown_admission_stopped_for_test(stopped)
     }
 
-    #[cfg(test)]
-    pub(super) fn cons_catalog_snapshot_for_test(
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn cons_catalog_snapshot_for_test(
         &self,
     ) -> Result<super::super::cons_storage::CatalogSnapshot, RegistrationError> {
         self.core.cons_catalog_snapshot_for_test()
@@ -339,21 +382,6 @@ macro_rules! era_operations {
                 self.core.prepare_function_symbol(key)
             }
 
-            pub(crate) fn prepare_hof_builtin(
-                &self,
-                operation: super::super::function_write_hooks::HofOperation,
-                key: &SymbolHandle,
-            ) -> Result<symbol_authority::PreparedHofBuiltin, FunctionError> {
-                self.core.prepare_hof_builtin(operation, key)
-            }
-
-            pub(crate) fn prepare_unary_function_symbol(
-                &self,
-                key: &SymbolHandle,
-            ) -> Result<symbol_authority::PreparedUnaryFunction, FunctionError> {
-                self.core.prepare_unary_function_symbol(key)
-            }
-
             pub fn try_stop(&self) -> Result<Option<AllStopped<'_>>, RendezvousError> {
                 self.core.try_stop()
             }
@@ -399,6 +427,48 @@ macro_rules! era_operations {
 era_operations!(ParallelHeapEra, EraFinishFailure);
 #[cfg(any(test, feature = "test-support"))]
 era_operations!(ProofEra, ProofEraFinishFailure);
+
+// The two preparation entries stay crate-private on the production era and
+// become item-level `#[doc(hidden)] pub` on the proof era only (peer 10:5xZ
+// era follow-up rows). The proof era's methods are reachable only through
+// `neovm_value::test_support::authority::ProofEra`; the production era keeps
+// its pre-existing `pub(crate)` surface.
+impl<'heap, K: EraKeeper> ParallelHeapEra<'heap, K> {
+    pub(crate) fn prepare_hof_builtin(
+        &self,
+        operation: super::super::function_write_hooks::HofOperation,
+        key: &SymbolHandle,
+    ) -> Result<symbol_authority::PreparedHofBuiltin, FunctionError> {
+        self.core.prepare_hof_builtin(operation, key)
+    }
+
+    pub(crate) fn prepare_unary_function_symbol(
+        &self,
+        key: &SymbolHandle,
+    ) -> Result<symbol_authority::PreparedUnaryFunction, FunctionError> {
+        self.core.prepare_unary_function_symbol(key)
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl<'heap, K: EraKeeper> ProofEra<'heap, K> {
+    #[doc(hidden)]
+    pub fn prepare_hof_builtin(
+        &self,
+        operation: super::super::function_write_hooks::HofOperation,
+        key: &SymbolHandle,
+    ) -> Result<symbol_authority::PreparedHofBuiltin, FunctionError> {
+        self.core.prepare_hof_builtin(operation, key)
+    }
+
+    #[doc(hidden)]
+    pub fn prepare_unary_function_symbol(
+        &self,
+        key: &SymbolHandle,
+    ) -> Result<symbol_authority::PreparedUnaryFunction, FunctionError> {
+        self.core.prepare_unary_function_symbol(key)
+    }
+}
 
 #[cfg(test)]
 static_assertions::assert_not_impl_any!(ParallelHeapEra<'static, super::Baton>: Send, Sync, Clone, Copy);

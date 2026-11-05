@@ -1370,6 +1370,30 @@ impl TaggedHeap {
         self.gc_threshold
     }
 
+    /// Era follow-up row (peer 10:5xZ item 3): safe pacing knob for the
+    /// re-homed fixtures. Assigns the threshold exactly and deliberately does
+    /// not arm the runtime override flag, matching the former field write.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn set_gc_threshold_for_test(&mut self, threshold: usize) {
+        self.gc_threshold = threshold;
+    }
+
+    /// Era follow-up row: copied read observer over the JIT cons window.
+    /// The heap-local state stays private; callers see only the pair.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn jit_cons_window_for_test(&self) -> (usize, usize) {
+        (self.jit.cons_cur.get(), self.jit.cons_lim.get())
+    }
+
+    /// Era follow-up row: copied snapshot of the heap's region statistics.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn region_stats_for_test(&self) -> RegionStats {
+        self.region_stats
+    }
+
     pub fn set_gc_threshold(&mut self, threshold: usize) {
         self.gc_threshold = threshold.max(1);
         self.gc_threshold_overridden = true;
@@ -2863,9 +2887,14 @@ pub(crate) use mutator_registration::{
 };
 
 mod alloc_region;
+use alloc_region::RegionBook;
+#[cfg(not(feature = "test-support"))]
+use alloc_region::RegionStats;
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub use alloc_region::RegionStats;
 #[cfg(test)]
 use alloc_region::{CONS_REGION_MAX_CELLS, ConsRegionSource, FLOAT_REGION_MAX_SLOTS};
-use alloc_region::{RegionBook, RegionStats};
 #[cfg(test)]
 pub(crate) use barrier_window::published_barrier_window;
 #[cfg_attr(not(feature = "jit"), allow(unused_imports))]

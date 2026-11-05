@@ -181,19 +181,63 @@ impl RegionBook {
 /// source refilled, how long the runs were, how many were short (fewer than
 /// 8 cells: a fragmented free list makes nearly every allocation a refill),
 /// and how many regions closed with an unused tail.
+// Production keeps the historical crate-private surface. The test-support
+// dependency build needs a nameable, readable copy for the fence observers,
+// so the declaration is cfg-split exactly like the ledgered field pairs.
+#[cfg(not(feature = "test-support"))]
+#[doc(hidden)]
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct RegionStats {
-    pub(crate) cons_refills: u64,
-    pub(crate) cons_cells_granted: u64,
-    pub(crate) cons_short_runs: u64,
-    pub(crate) cons_from_free_list: u64,
-    pub(crate) cons_from_block_tail: u64,
-    pub(crate) cons_from_fresh_block: u64,
-    pub(crate) cons_tail_closes: u64,
-    pub(crate) float_refills: u64,
-    pub(crate) float_slots_granted: u64,
-    pub(crate) float_short_runs: u64,
-    pub(crate) float_tail_closes: u64,
+    #[doc(hidden)]
+    pub cons_refills: u64,
+    #[doc(hidden)]
+    pub cons_cells_granted: u64,
+    #[doc(hidden)]
+    pub cons_short_runs: u64,
+    #[doc(hidden)]
+    pub cons_from_free_list: u64,
+    #[doc(hidden)]
+    pub cons_from_block_tail: u64,
+    #[doc(hidden)]
+    pub cons_from_fresh_block: u64,
+    #[doc(hidden)]
+    pub cons_tail_closes: u64,
+    #[doc(hidden)]
+    pub float_refills: u64,
+    #[doc(hidden)]
+    pub float_slots_granted: u64,
+    #[doc(hidden)]
+    pub float_short_runs: u64,
+    #[doc(hidden)]
+    pub float_tail_closes: u64,
+}
+
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RegionStats {
+    #[doc(hidden)]
+    pub cons_refills: u64,
+    #[doc(hidden)]
+    pub cons_cells_granted: u64,
+    #[doc(hidden)]
+    pub cons_short_runs: u64,
+    #[doc(hidden)]
+    pub cons_from_free_list: u64,
+    #[doc(hidden)]
+    pub cons_from_block_tail: u64,
+    #[doc(hidden)]
+    pub cons_from_fresh_block: u64,
+    #[doc(hidden)]
+    pub cons_tail_closes: u64,
+    #[doc(hidden)]
+    pub float_refills: u64,
+    #[doc(hidden)]
+    pub float_slots_granted: u64,
+    #[doc(hidden)]
+    pub float_short_runs: u64,
+    #[doc(hidden)]
+    pub float_tail_closes: u64,
 }
 
 impl TaggedHeap {

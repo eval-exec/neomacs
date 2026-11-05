@@ -146,6 +146,18 @@ impl ProofEra<'_> {
     }
 }
 
+// Era follow-up row (peer 10:5xZ item 1): the value crate is a dependency in
+// the test-support build, where the cfg(test) impl above is absent and the
+// evaluator's one-parameter alias is unavailable. The generic proof-era impl
+// serves the fence alias; consumers still call `era.admit_plain_symbol(..)`.
+#[cfg(all(feature = "test-support", not(test)))]
+impl<K: EraKeeper> GenericProofEra<'_, K> {
+    #[doc(hidden)]
+    pub fn admit_plain_symbol(&self, symbol: SymId) -> Result<SymbolHandle, RegistrationError> {
+        self.core.admit_plain_symbol(symbol)
+    }
+}
+
 impl<K: EraKeeper> EraCore<'_, K> {
     /// Serial keeper admission only, before ANY participant is registered.
     /// Unsupported/absent cells refuse without creating or redirecting them.

@@ -84,7 +84,7 @@ impl CatalogRegion {
         self.source
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn bounds_for_test(&self) -> (usize, usize, usize) {
         // SAFETY: the exclusive run includes every cell through total.
         let end = unsafe { self.first.as_ptr().add(self.total) };
@@ -250,7 +250,7 @@ struct CatalogState {
     mark_parity: MarkParity,
     /// Detect replacement of the inert shell's unique placeholder allocator.
     placeholder: usize,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     source_grants: [usize; 3],
 }
 // SAFETY: ownership of block allocations moves with this state; raw pointers
@@ -479,7 +479,7 @@ impl ConsCatalog {
             non_cons_object_addrs: std::mem::take(&mut heap.non_cons_object_addrs),
             mark_parity: heap.mark_parity,
             placeholder,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             source_grants: [0; 3],
         };
         *gate = Some(state);
@@ -1034,21 +1034,22 @@ impl ConsCatalog {
     }
 }
 /// Counts/addresses only; never an unlocked storage borrow.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
 #[derive(Debug, PartialEq, Eq)]
-pub(super) struct CatalogSnapshot {
-    pub(super) installed: bool,
-    pub(super) blocks: Vec<(usize, usize)>,
-    pub(super) metadata_coherent: bool,
-    pub(super) free_count: usize,
-    pub(super) active_regions: usize,
-    pub(super) live_count: usize,
+pub struct CatalogSnapshot {
+    pub installed: bool,
+    pub blocks: Vec<(usize, usize)>,
+    pub metadata_coherent: bool,
+    pub free_count: usize,
+    pub active_regions: usize,
+    pub live_count: usize,
     /// Free-list, existing-tail, fresh-block grants, respectively.
-    pub(super) source_grants: [usize; 3],
+    pub source_grants: [usize; 3],
     /// Whether young-log carving records for this installed catalog.
-    pub(super) generational: bool,
+    pub generational: bool,
 }
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl ConsCatalog {
     pub(super) fn snapshot_for_test(&self) -> Result<CatalogSnapshot, RegistrationError> {
         let gate = self.lock()?;

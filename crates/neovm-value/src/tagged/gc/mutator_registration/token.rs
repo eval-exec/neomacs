@@ -529,6 +529,31 @@ impl RunAccess<'_, '_> {
     pub(in crate::tagged::gc) fn state(&mut self) -> &mut OwnerGcState {
         self.owner.local.as_mut().expect("resident owner state")
     }
+
+    /// Era follow-up row (peer 10:5xZ item 3): copied owner region-statistics
+    /// snapshot. The owner state itself stays internal.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn region_stats_for_test(&mut self) -> super::super::alloc_region::RegionStats {
+        self.state().region_stats
+    }
+
+    /// Era follow-up row: copied root-bank shape `(len, capacity)`. The bank
+    /// itself stays internal; callers cannot push, clear or borrow it.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn root_bank_for_test(&mut self) -> (usize, usize) {
+        let state = self.state();
+        (state.root_scratch.len(), state.root_scratch.capacity())
+    }
+
+    /// Era follow-up row: copied owner allocation count. The owner GC state
+    /// itself stays internal.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn allocated_count_for_test(&mut self) -> usize {
+        self.state().hot.allocated_count
+    }
 }
 
 impl Drop for Mutator<'_> {

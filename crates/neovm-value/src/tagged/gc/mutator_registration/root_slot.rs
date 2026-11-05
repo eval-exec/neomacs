@@ -49,8 +49,9 @@ impl OwnerRootSlot<'_> {
         Ok(())
     }
 
-    #[cfg(test)]
-    pub(super) fn word_for_test(&self, run: &RunAccess<'_, '_>) -> usize {
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn word_for_test(&self, run: &RunAccess<'_, '_>) -> usize {
         self.check(run).unwrap();
         run.owner.local.as_ref().unwrap().root_scratch[self.index]
             .value()

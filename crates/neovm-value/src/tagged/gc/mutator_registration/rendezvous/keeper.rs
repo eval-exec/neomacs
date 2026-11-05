@@ -224,7 +224,8 @@ impl<'era> AllStopped<'era> {
         verify_stopped(self.registry, gate)
     }
 
-    pub(in crate::tagged::gc) fn trace<R>(
+    #[doc(hidden)]
+    pub fn trace<R>(
         &mut self,
         body: impl for<'stop> FnOnce(
             &'stop AllStopped<'era>,

@@ -240,16 +240,18 @@ impl<'brand> RunSlice<'brand, '_> {
         Ok(())
     }
 
-    #[cfg(test)]
-    pub(super) fn remaining_for_test(&self) -> usize {
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn remaining_for_test(&self) -> usize {
         if !self.cursor_live {
             return 0;
         }
         unsafe { self.limit.offset_from(self.cursor) as usize }
     }
 
-    #[cfg(test)]
-    pub(super) fn stats_for_test(&self) -> super::super::alloc_region::RegionStats {
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn stats_for_test(&self) -> super::super::alloc_region::RegionStats {
         self.allocation.stats.clone()
     }
 }

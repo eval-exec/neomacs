@@ -100,8 +100,9 @@ impl RunAccess<'_, '_> {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn cons_region_for_test(&self) -> Option<(usize, usize, usize)> {
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn cons_region_for_test(&self) -> Option<(usize, usize, usize)> {
         self.owner
             .local
             .as_ref()?

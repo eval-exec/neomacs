@@ -5,7 +5,8 @@ use crate::tagged::value::TaggedValue;
 impl KeeperSymbols<'_> {
     /// Check the exact sidecar and original World roots before dereferencing
     /// storage. A heap address alone is not a World/obarray identity.
-    pub(crate) fn check_symbol_backing(
+    #[doc(hidden)]
+    pub fn check_symbol_backing(
         &self,
         backing: &SymbolBacking,
         keeper: &KeeperWorldDesignator<'_>,
