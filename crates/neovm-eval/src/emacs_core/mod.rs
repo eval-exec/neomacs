@@ -93,15 +93,3 @@ pub struct MenuBarPopupAnchor {
     pub width: i64,
     pub height: i64,
 }
-
-#[cfg(test)]
-#[path = "lisp/provide_coupled_vars/tests/runtime_surface_test.rs"]
-mod provide_coupled_vars_test;
-
-#[cfg(test)]
-#[path = "runtime/eval/tests/quit_regression_test.rs"]
-mod quit_regression_test;
-
-#[cfg(test)]
-#[path = "lisp/load/tests/stale_bytecode_test.rs"]
-mod stale_bytecode_test;

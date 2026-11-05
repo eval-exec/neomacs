@@ -18,6 +18,7 @@
 
 use crate::emacs_core::eval::Context;
 use crate::test_utils::runtime_startup_context;
+use neovm_eval::emacs_core::data::test_support::default_value_by_id;
 use neovm_value::error::FlowResultExt;
 use neovm_value::value::Value;
 
@@ -26,7 +27,7 @@ use neovm_value::value::Value;
 #[test]
 fn bytecode_while_polls_quit_flag() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
 
     // Compile a bytecode that loops forever via a backward branch.
     // We use the top-level compiler path to get a real bytecode object.
@@ -104,7 +105,7 @@ fn bytecode_setq_quit_flag_prevents_following_call() {
 #[test]
 fn quit_requested_atomic_is_drained_into_flag() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
 
     // Confirm baseline: `Vquit_flag` starts nil.
     assert!(ctx.quit_flag_value().is_nil());
@@ -176,7 +177,7 @@ fn maybe_quit_promotes_pending_frontend_input_for_while_no_input() {
 #[test]
 fn regex_search_promotes_quit_to_signal() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
 
     // Set up a buffer with content so `re-search-forward` has somewhere
     // to search.
@@ -207,7 +208,7 @@ fn regex_search_promotes_quit_to_signal() {
 #[test]
 fn unbind_to_suppresses_quit_during_unwind_protect_cleanup() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
 
     // Run an unwind-protect whose BODY signals quit. GNU semantics:
     // the CLEANUP must run to completion with quit suppressed, then
@@ -255,8 +256,8 @@ fn unbind_to_suppresses_quit_during_unwind_protect_cleanup() {
 fn single_keyboard_quit_does_not_leave_pending_quit_request() {
     crate::test_utils::init_test_tracing();
     let mut ev = runtime_startup_context();
-    let scratch = ev.buffers.create_buffer("*quit-finding3*");
-    ev.buffers.set_current(scratch);
+    let scratch = ev.edit.buffers.create_buffer("*quit-finding3*");
+    ev.edit.buffers.set_current(scratch);
     let frame = ev.frames.create_frame("F1", 80, 24, scratch);
     assert!(ev.frames.select_frame(frame), "need a selected frame");
 
@@ -319,7 +320,7 @@ fn discard_specpdl_restores_bindings_without_lisp_callbacks() {
     use crate::emacs_core::eval::SpecBinding;
     use neovm_value::intern::intern;
 
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let symbol = intern("discard-saved-binding");
     let sentinel = intern("discard-callback-ran");
     ctx.obarray_mut()
@@ -362,12 +363,17 @@ fn discard_specpdl_restores_buffer_default_and_runtime_cache() {
     use crate::emacs_core::eval::SpecBinding;
     use neovm_value::intern::intern;
 
-    let mut ctx = Context::new();
-    let original = ctx.buffers.current_buffer_id().expect("current buffer");
-    let other = ctx.buffers.create_buffer("discard-other-buffer");
+    let mut ctx = crate::test_utils::new_context();
+    let original = ctx
+        .edit
+        .buffers
+        .current_buffer_id()
+        .expect("current buffer");
+    let other = ctx.edit.buffers.create_buffer("discard-other-buffer");
     let count = ctx.specpdl.len();
     let truncate_lines = intern("truncate-lines");
     let saved_default = ctx
+        .edit
         .buffers
         .get(original)
         .unwrap()
@@ -382,14 +388,15 @@ fn discard_specpdl_restores_buffer_default_and_runtime_cache() {
     ctx.switch_current_buffer(other)
         .expect("select other buffer");
     ctx.discard_specpdl_to(count);
-    assert_eq!(ctx.buffers.current_buffer_id(), Some(original));
+    assert_eq!(ctx.edit.buffers.current_buffer_id(), Some(original));
     assert_eq!(
         ctx.threads
             .thread_current_buffer(ctx.threads.current_thread_id()),
         Some(original)
     );
     assert_eq!(
-        ctx.buffers
+        ctx.edit
+            .buffers
             .get(original)
             .unwrap()
             .buffer_local_value("truncate-lines"),
@@ -409,7 +416,7 @@ fn discard_specpdl_rejected_forwarded_value_keeps_valid_storage() {
     use crate::emacs_core::eval::{SavedBindingValue, SavedBufferId, SpecBinding};
     use neovm_value::intern::intern;
 
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let symbol = intern("undo-limit");
     let count = ctx.specpdl.len();
     ctx.try_specbind(symbol, Value::fixnum(5))
@@ -437,9 +444,9 @@ fn current_buffer_scope_restores_on_signal_and_rust_unwind() {
     #[doc(hidden)]
     use crate::emacs_core::eval::CurrentBufferScope;
     use neovm_value::error::{LispCondition, signal};
-    let mut ctx = Context::new();
-    let original = ctx.buffers.current_buffer_id().unwrap();
-    let other = ctx.buffers.create_buffer("scope-other");
+    let mut ctx = crate::test_utils::new_context();
+    let original = ctx.edit.buffers.current_buffer_id().unwrap();
+    let other = ctx.edit.buffers.create_buffer("scope-other");
     let depth = ctx.specpdl.len();
     let mut scope = CurrentBufferScope::enter(&mut ctx);
     scope
@@ -451,7 +458,7 @@ fn current_buffer_scope_restores_on_signal_and_rust_unwind() {
             .finish(Err(signal(LispCondition::Error, vec![])))
             .is_err()
     );
-    assert_eq!(ctx.buffers.current_buffer_id(), Some(original));
+    assert_eq!(ctx.edit.buffers.current_buffer_id(), Some(original));
     let recovered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut scope = CurrentBufferScope::enter(&mut ctx);
         scope
@@ -461,7 +468,7 @@ fn current_buffer_scope_restores_on_signal_and_rust_unwind() {
         panic!("contained test panic");
     }));
     assert!(recovered.is_err());
-    assert_eq!(ctx.buffers.current_buffer_id(), Some(original));
+    assert_eq!(ctx.edit.buffers.current_buffer_id(), Some(original));
     assert_eq!(ctx.specpdl.len(), depth);
 }
 
@@ -469,8 +476,8 @@ fn current_buffer_scope_restores_on_signal_and_rust_unwind() {
 fn current_buffer_scope_same_target_avoids_a_specpdl_entry() {
     #[doc(hidden)]
     use crate::emacs_core::eval::CurrentBufferScope;
-    let mut ctx = Context::new();
-    let original = ctx.buffers.current_buffer_id().unwrap();
+    let mut ctx = crate::test_utils::new_context();
+    let original = ctx.edit.buffers.current_buffer_id().unwrap();
     let depth = ctx.specpdl.len();
     let mut scope = CurrentBufferScope::for_buffer(&mut ctx, original).unwrap();
     assert_eq!(scope.context().specpdl.len(), depth);
@@ -481,17 +488,19 @@ fn current_buffer_scope_same_target_avoids_a_specpdl_entry() {
 fn discard_specpdl_noncurrent_local_restores_current_runtime_projection() {
     use crate::emacs_core::eval::SpecBinding;
     use neovm_value::intern::intern;
-    let mut ctx = Context::new();
-    let original = ctx.buffers.current_buffer_id().unwrap();
-    let other = ctx.buffers.create_buffer("discard-projection-other");
+    let mut ctx = crate::test_utils::new_context();
+    let original = ctx.edit.buffers.current_buffer_id().unwrap();
+    let other = ctx.edit.buffers.create_buffer("discard-projection-other");
     let symbol = intern("throw-on-input");
     let current_tag = Value::symbol("discard-current-tag");
     let other_tag = Value::symbol("discard-other-tag");
     ctx.obarray.make_buffer_local("throw-on-input", false);
-    ctx.buffers
+    ctx.edit
+        .buffers
         .set_buffer_local_property_by_sym_id(original, symbol, current_tag)
         .unwrap();
-    ctx.buffers
+    ctx.edit
+        .buffers
         .set_buffer_local_property_by_sym_id(other, symbol, Value::T)
         .unwrap();
     ctx.publish_runtime_binding_write_by_resolved_id(symbol, current_tag);
@@ -503,20 +512,21 @@ fn discard_specpdl_noncurrent_local_restores_current_runtime_projection() {
     });
     ctx.discard_specpdl_to(depth);
     assert_eq!(
-        ctx.buffers
+        ctx.edit
+            .buffers
             .get(other)
             .unwrap()
             .get_buffer_local_by_sym_id(symbol),
         Some(other_tag)
     );
     assert_eq!(ctx.cached_throw_on_input_for_test(), current_tag);
-    assert_eq!(ctx.buffers.current_buffer_id(), Some(original));
+    assert_eq!(ctx.edit.buffers.current_buffer_id(), Some(original));
 }
 
 #[test]
 fn discard_specpdl_runtime_projection_ignores_lexical_shadow() {
     use neovm_value::intern::intern;
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let symbol = intern("throw-on-input");
     let depth = ctx.specpdl.len();
     ctx.try_specbind(symbol, Value::symbol("discard-dynamic-tag"))
@@ -538,13 +548,17 @@ fn current_buffer_scope_same_target_panic_discards_bindings_without_restoring_st
     use crate::emacs_core::eval::CurrentBufferScope;
     use neovm_edit::buffer::EmacsBytePos;
     use neovm_value::intern::intern;
-    let mut ctx = Context::new();
-    let original = ctx.buffers.current_buffer_id().unwrap();
-    let other = ctx.buffers.create_buffer("scope-same-target-selected");
-    ctx.buffers
+    let mut ctx = crate::test_utils::new_context();
+    let original = ctx.edit.buffers.current_buffer_id().unwrap();
+    let other = ctx.edit.buffers.create_buffer("scope-same-target-selected");
+    ctx.edit
+        .buffers
         .replace_buffer_contents(original, "abcd")
         .unwrap();
-    ctx.buffers.replace_buffer_contents(other, "efgh").unwrap();
+    ctx.edit
+        .buffers
+        .replace_buffer_contents(other, "efgh")
+        .unwrap();
     let symbol = intern("scope-same-target-child-binding");
     ctx.obarray.set_symbol_value_id(symbol, Value::fixnum(7));
     let depth = ctx.specpdl.len();
@@ -577,13 +591,17 @@ fn current_buffer_scope_same_target_panic_discards_bindings_without_restoring_st
         ctx.obarray.symbol_value_id_copied(symbol),
         Some(Value::fixnum(7))
     );
-    assert_eq!(ctx.buffers.current_buffer_id(), Some(other));
+    assert_eq!(ctx.edit.buffers.current_buffer_id(), Some(other));
     assert_eq!(
-        ctx.buffers.get(original).unwrap().point_emacs_byte_pos(),
+        ctx.edit
+            .buffers
+            .get(original)
+            .unwrap()
+            .point_emacs_byte_pos(),
         EmacsBytePos::new(2)
     );
     assert_eq!(
-        ctx.buffers.get(other).unwrap().point_emacs_byte_pos(),
+        ctx.edit.buffers.get(other).unwrap().point_emacs_byte_pos(),
         EmacsBytePos::new(1)
     );
 }
@@ -598,13 +616,15 @@ fn excursion_scope_panic_recovery_does_not_seed_standard_case_table() {
     use neovm_value::intern::intern;
 
     for saved_symbol in [None, Some(Value::fixnum(99))] {
-        let mut ctx = Context::new();
-        let original = ctx.buffers.current_buffer_id().unwrap();
-        let other = ctx.buffers.create_buffer("scope-panic-no-table-seed");
-        ctx.buffers
+        let mut ctx = crate::test_utils::new_context();
+        let original = ctx.edit.buffers.current_buffer_id().unwrap();
+        let other = ctx.edit.buffers.create_buffer("scope-panic-no-table-seed");
+        ctx.edit
+            .buffers
             .replace_buffer_contents(original, "abcd")
             .unwrap();
-        ctx.buffers
+        ctx.edit
+            .buffers
             .goto_buffer_emacs_byte_pos(original, EmacsBytePos::new(1))
             .unwrap();
         let symbol = intern("neovm--standard-case-table-object");
@@ -632,14 +652,18 @@ fn excursion_scope_panic_recovery_does_not_seed_standard_case_table() {
         }));
         assert!(caught.is_err());
         assert_eq!(ctx.specpdl.len(), count);
-        assert_eq!(ctx.buffers.current_buffer_id(), Some(original));
+        assert_eq!(ctx.edit.buffers.current_buffer_id(), Some(original));
         assert_eq!(
             ctx.threads
                 .thread_current_buffer(ctx.threads.current_thread_id()),
             Some(original)
         );
         assert_eq!(
-            ctx.buffers.get(original).unwrap().point_emacs_byte_pos(),
+            ctx.edit
+                .buffers
+                .get(original)
+                .unwrap()
+                .point_emacs_byte_pos(),
             EmacsBytePos::new(1)
         );
         assert_eq!(
@@ -661,9 +685,9 @@ fn excursion_scope_normal_finish_retains_standard_case_table_seeding() {
     #[doc(hidden)]
     use crate::emacs_core::eval::ExcursionScope;
     use neovm_value::intern::intern;
-    let mut ctx = Context::new();
-    let original = ctx.buffers.current_buffer_id().unwrap();
-    let other = ctx.buffers.create_buffer("scope-normal-table-seed");
+    let mut ctx = crate::test_utils::new_context();
+    let original = ctx.edit.buffers.current_buffer_id().unwrap();
+    let other = ctx.edit.buffers.create_buffer("scope-normal-table-seed");
     let symbol = intern("neovm--standard-case-table-object");
     let mut scope = ExcursionScope::enter(&mut ctx);
     scope
@@ -672,7 +696,7 @@ fn excursion_scope_normal_finish_retains_standard_case_table_seeding() {
         .unwrap();
     scope.context().obarray.makunbound_id(symbol);
     assert!(scope.finish(Ok(Value::NIL)).is_ok());
-    assert_eq!(ctx.buffers.current_buffer_id(), Some(original));
+    assert_eq!(ctx.edit.buffers.current_buffer_id(), Some(original));
     assert!(ctx.obarray.symbol_value_id_copied(symbol).is_some());
 }
 
@@ -681,10 +705,10 @@ fn excursion_scope_without_current_buffer_discards_child_binding_on_panic() {
     #[doc(hidden)]
     use crate::emacs_core::eval::ExcursionScope;
     use neovm_value::intern::intern;
-    let mut ctx = Context::new();
-    let current = ctx.buffers.current_buffer_id().unwrap();
-    assert!(ctx.buffers.kill_buffer(current));
-    assert_eq!(ctx.buffers.current_buffer_id(), None);
+    let mut ctx = crate::test_utils::new_context();
+    let current = ctx.edit.buffers.current_buffer_id().unwrap();
+    assert!(ctx.edit.buffers.kill_buffer(current));
+    assert_eq!(ctx.edit.buffers.current_buffer_id(), None);
     let symbol = intern("empty-excursion-scope-value");
     ctx.obarray.set_symbol_value_id(symbol, Value::fixnum(10));
     let count = ctx.specpdl.len();
@@ -703,7 +727,7 @@ fn excursion_scope_without_current_buffer_discards_child_binding_on_panic() {
         Value::fixnum(10)
     );
     assert_eq!(ctx.specpdl.len(), count);
-    assert_eq!(ctx.buffers.current_buffer_id(), None);
+    assert_eq!(ctx.edit.buffers.current_buffer_id(), None);
 }
 
 #[test]
@@ -711,10 +735,10 @@ fn restriction_scope_without_current_buffer_discards_child_binding_on_panic() {
     #[doc(hidden)]
     use crate::emacs_core::eval::RestrictionScope;
     use neovm_value::intern::intern;
-    let mut ctx = Context::new();
-    let current = ctx.buffers.current_buffer_id().unwrap();
-    assert!(ctx.buffers.kill_buffer(current));
-    assert_eq!(ctx.buffers.current_buffer_id(), None);
+    let mut ctx = crate::test_utils::new_context();
+    let current = ctx.edit.buffers.current_buffer_id().unwrap();
+    assert!(ctx.edit.buffers.kill_buffer(current));
+    assert_eq!(ctx.edit.buffers.current_buffer_id(), None);
     let symbol = intern("empty-restriction-scope-value");
     ctx.obarray.set_symbol_value_id(symbol, Value::fixnum(10));
     let count = ctx.specpdl.len();
@@ -733,27 +757,27 @@ fn restriction_scope_without_current_buffer_discards_child_binding_on_panic() {
         Value::fixnum(10)
     );
     assert_eq!(ctx.specpdl.len(), count);
-    assert_eq!(ctx.buffers.current_buffer_id(), None);
+    assert_eq!(ctx.edit.buffers.current_buffer_id(), None);
 }
 
 #[test]
 fn current_buffer_scope_failed_setup_finishes_owned_boundary() {
     #[doc(hidden)]
     use crate::emacs_core::eval::CurrentBufferScope;
-    let mut ctx = Context::new();
-    let original = ctx.buffers.current_buffer_id().unwrap();
-    let target = ctx.buffers.create_buffer("scope-deleted-setup-target");
-    assert!(ctx.buffers.kill_buffer(target));
+    let mut ctx = crate::test_utils::new_context();
+    let original = ctx.edit.buffers.current_buffer_id().unwrap();
+    let target = ctx.edit.buffers.create_buffer("scope-deleted-setup-target");
+    assert!(ctx.edit.buffers.kill_buffer(target));
     let count = ctx.specpdl.len();
     assert!(CurrentBufferScope::for_buffer(&mut ctx, target).is_err());
     assert_eq!(ctx.specpdl.len(), count);
-    assert_eq!(ctx.buffers.current_buffer_id(), Some(original));
+    assert_eq!(ctx.edit.buffers.current_buffer_id(), Some(original));
 }
 
 #[test]
 fn discard_local_binding_does_not_allocate_ambient_buffer_wrapper() {
     use neovm_value::intern::intern;
-    let mut owner = Context::new();
+    let mut owner = crate::test_utils::new_context();
     owner.setup_thread_locals();
     // Give this Context an identity not present in the second Context's heap.
     let _ = owner.buffers.create_buffer("local-drop-first");
@@ -782,7 +806,7 @@ fn discard_local_binding_does_not_allocate_ambient_buffer_wrapper() {
         owner.obarray.blv(symbol).unwrap().valcell.get(),
         binding_cell
     );
-    let mut ambient = Context::new();
+    let mut ambient = crate::test_utils::new_context();
     ambient.setup_thread_locals();
     let before = ambient.tagged_heap.bytes_since_gc_exact();
     owner.discard_specpdl_to(count);
@@ -822,7 +846,7 @@ fn discard_local_binding_does_not_allocate_ambient_buffer_wrapper() {
 #[test]
 fn discard_local_binding_keeps_existing_void_cell_without_lisp_allocation() {
     use neovm_value::intern::intern;
-    let mut owner = Context::new();
+    let mut owner = crate::test_utils::new_context();
     owner.setup_thread_locals();
     let buffer = owner.buffers.current_buffer_id().expect("buffer");
     let symbol = intern("local-drop-void-cell");
@@ -867,7 +891,7 @@ fn panic_recovery_unbound_forwarded_binding_keeps_builtin_storage() {
     use neovm_value::forward::{alloc_boolfwd, alloc_objfwd};
     use neovm_value::intern::intern;
 
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     ctx.setup_thread_locals();
     let boolean = intern("discard-void-bool-forwarder");
     let bool_fwd = alloc_boolfwd(false);
@@ -911,7 +935,7 @@ fn panic_recovery_unbound_localized_builtin_keeps_cells_and_projection() {
     use neovm_value::forward::{alloc_boolfwd, alloc_objfwd};
     use neovm_value::intern::intern;
 
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     ctx.setup_thread_locals();
     let boolean = intern("discard-void-localized-bool-forwarder");
     let bool_fwd = alloc_boolfwd(false);

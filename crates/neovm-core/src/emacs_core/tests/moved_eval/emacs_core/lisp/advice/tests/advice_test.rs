@@ -1,4 +1,4 @@
-use super::*;
+use neovm_eval::emacs_core::advice::*;
 use neovm_value::error::FlowKind;
 use neovm_value::intern::intern;
 use neovm_value::value::Value;
@@ -238,7 +238,7 @@ fn get_watchers_returns_callbacks_in_registration_order() {
 #[test]
 fn builtin_get_variable_watchers_tracks_runtime_registry() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     builtin_add_variable_watcher(
         &mut eval,
         vec![Value::symbol("vm-watched-var"), Value::symbol("watch-a")],
@@ -280,8 +280,8 @@ fn builtin_get_variable_watchers_tracks_runtime_registry() {
 #[test]
 fn variable_watcher_builtins_follow_runtime_alias_resolution() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
-    super::super::builtins::builtin_defvaralias(
+    let mut eval = crate::test_utils::new_context();
+    neovm_eval::emacs_core::builtins::builtin_defvaralias(
         &mut eval,
         vec![
             Value::symbol("vm-watch-alias"),
@@ -323,7 +323,7 @@ fn variable_watcher_builtins_follow_runtime_alias_resolution() {
 #[test]
 fn remove_variable_watcher_accepts_non_symbol_callbacks() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let callback = Value::make_lambda(LambdaData {
         params: LambdaParams {
             required: vec![

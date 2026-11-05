@@ -1144,9 +1144,6 @@ pub fn builtin_snarf_documentation(
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
-#[cfg(test)]
-#[path = "tests/doc_test.rs"]
-mod tests;
 
 #[cfg(test)]
 #[path = "tests/lazy_doc_test.rs"]

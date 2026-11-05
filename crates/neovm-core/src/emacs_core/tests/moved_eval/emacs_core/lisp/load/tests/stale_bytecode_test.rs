@@ -35,7 +35,7 @@
 //!
 //! Ledger 202.
 
-use super::load::{
+use neovm_eval::emacs_core::load::load::{
     LOADUP_DUMP_BRANCH_SEEDED_VARIABLES, StaleBytecodePolicy, seed_loadup_dump_branch_state,
     stale_lisp_bytecode,
 };
@@ -208,8 +208,9 @@ fn loading_bytecode_older_than_its_source_says_so_the_way_gnu_does() {
         -60,
     );
 
-    let mut eval = super::eval::Context::new();
-    super::load::load_file(&mut eval, &fixture.root.join("probe.elc")).expect("load fixture");
+    let mut eval = crate::test_utils::new_context();
+    neovm_eval::emacs_core::load::load::load_file(&mut eval, &fixture.root.join("probe.elc"))
+        .expect("load fixture");
 
     // `*Messages*` and not `(current-message)`: this build faithfully takes
     // GNU's batch branch, where `message3` logs to `*Messages*` and prints to
@@ -217,10 +218,12 @@ fn loading_bytecode_older_than_its_source_says_so_the_way_gnu_does() {
     // `current-message` -- stays empty (`xdisp.c` `message3_frame_nolog`,
     // `FRAME_INITIAL_P`).  `message_dolog` runs unconditionally.
     let messages_id = eval
+        .edit
         .buffers
         .find_buffer_by_name("*Messages*")
         .expect("a stale .elc load must have logged something");
     let message = eval
+        .edit
         .buffers
         .get(messages_id)
         .expect("*Messages* live")
@@ -263,7 +266,7 @@ fn loading_bytecode_older_than_its_source_says_so_the_way_gnu_does() {
 #[test]
 fn the_image_build_seeds_every_statement_of_loadups_dump_branch() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     seed_loadup_dump_branch_state(&mut eval);
 
     for name in LOADUP_DUMP_BRANCH_SEEDED_VARIABLES {
@@ -349,7 +352,7 @@ fn an_mtime_tie_under_prefer_newer_keeps_the_bytecode_as_gnu_does() {
     let load_path = vec![neovm_value::heap_types::LispString::from_utf8(
         fixture.root.to_string_lossy().as_ref(),
     )];
-    let chosen = super::load::find_file_in_load_path_with_flags(
+    let chosen = neovm_eval::emacs_core::load::load::find_file_in_load_path_with_flags(
         "tied", &load_path, false, false, /* prefer_newer */ true,
     )
     .expect("the fixture is on the load path");
@@ -452,10 +455,11 @@ fn the_test_harness_refuses_a_stale_tree_and_a_user_build_only_warns() {
 #[test]
 fn a_process_that_never_announced_itself_a_shipped_editor_refuses() {
     crate::test_utils::init_test_tracing();
-    let expected = match std::env::var_os(super::load::ALLOW_STALE_BYTECODE_ENV) {
-        Some(value) if !value.is_empty() => StaleBytecodePolicy::Warn,
-        _ => StaleBytecodePolicy::Refuse,
-    };
+    let expected =
+        match std::env::var_os(neovm_eval::emacs_core::load::load::ALLOW_STALE_BYTECODE_ENV) {
+            Some(value) if !value.is_empty() => StaleBytecodePolicy::Warn,
+            _ => StaleBytecodePolicy::Refuse,
+        };
     assert_eq!(
         StaleBytecodePolicy::for_this_process(),
         expected,
@@ -594,9 +598,9 @@ fn announcing_a_shipped_editor_downgrades_the_refusal_to_gnus_warning() {
         StaleBytecodePolicy::for_announcement(false),
         "this test binary is not a shipped editor"
     );
-    super::load::announce_shipped_editor_process();
+    neovm_eval::emacs_core::load::load::announce_shipped_editor_process();
     let announced = StaleBytecodePolicy::for_this_process();
-    super::load::withdraw_shipped_editor_announcement();
+    neovm_eval::emacs_core::load::load::withdraw_shipped_editor_announcement();
     assert_eq!(
         announced,
         StaleBytecodePolicy::Warn,

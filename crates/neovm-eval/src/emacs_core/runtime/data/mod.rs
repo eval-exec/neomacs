@@ -452,3 +452,18 @@ pub(crate) fn default_value_in_state(
 #[cfg(test)]
 #[path = "tests/data_test.rs"]
 mod tests;
+
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub mod test_support {
+    // A1 rows (post-split option A, peer sign-off batch): additive accessors
+    // for tests re-homed into core. No product visibility change.
+    use super::{Context, SymId};
+
+    pub fn default_value_by_id(
+        ctx: &Context,
+        resolved: SymId,
+    ) -> Option<neovm_value::value::Value> {
+        super::default_value_by_id(ctx, resolved)
+    }
+}

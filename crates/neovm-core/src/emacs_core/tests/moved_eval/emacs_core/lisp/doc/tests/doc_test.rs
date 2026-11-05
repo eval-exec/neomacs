@@ -1,12 +1,16 @@
-use super::*;
 use crate::emacs_core::Context;
 use crate::emacs_core::builtins::builtin_documentation_stringp;
 use crate::emacs_core::eval::subr_abi::SubrValueExt;
 use crate::test_utils::{
     load_minimal_gnu_help_runtime, runtime_startup_context, runtime_startup_eval_all,
 };
+use neovm_eval::emacs_core::doc::*;
 use neovm_value::error::EvalError;
 use neovm_value::error::{FlowKind, FlowResultExt as _};
+use neovm_value::intern::intern;
+use neovm_value::value::LambdaData;
+use neovm_value::value::LambdaParams;
+use neovm_value::value::Value;
 
 fn bootstrap_eval_all(src: &str) -> Vec<String> {
     runtime_startup_eval_all(src)
@@ -24,13 +28,13 @@ fn bootstrap_eval_all(src: &str) -> Vec<String> {
 /// consulted its DOC stand-in lazily on every query, which is a fallback and
 /// therefore answered in a state where GNU answers nothing.
 fn snarfed_context() -> Context {
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     unsafe {
         // SAFETY: this DOC fixture scan only reads bound metadata and writes
         // documentation properties; it cannot call Lisp, collect, replace
         // storage, publish dispatch metadata or return an interior reference.
         eval.obarray
-            .with_legacy_value_write(super::snarf_variable_documentation)
+            .with_legacy_value_write(neovm_eval::emacs_core::doc::snarf_variable_documentation)
     };
     eval
 }
@@ -38,7 +42,7 @@ fn snarfed_context() -> Context {
 #[test]
 fn raw_documentation_property_does_not_require_substitute_command_keys() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.obarray_mut()
         .put_property(
             "vm-doc-prop",
@@ -61,7 +65,7 @@ fn raw_documentation_property_does_not_require_substitute_command_keys() {
 #[test]
 fn runtime_documentation_property_uses_gnu_substitute_command_keys() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     load_minimal_gnu_help_runtime(&mut eval);
     eval.obarray_mut()
         .put_property(
@@ -89,7 +93,7 @@ fn runtime_documentation_property_uses_gnu_substitute_command_keys() {
 #[test]
 fn documentation_preserves_uninterned_autoload_symbol_identity() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     load_minimal_gnu_help_runtime(&mut eval);
     let sym = eval
         .eval_str(r#"(make-symbol "neo-auto")"#)
@@ -118,7 +122,7 @@ fn documentation_preserves_uninterned_autoload_symbol_identity() {
 #[test]
 fn documentation_accepts_symbol_with_pos_when_enabled_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = eval
         .eval_str(
             r#"(let ((symbols-with-pos-enabled t))
@@ -131,7 +135,7 @@ fn documentation_accepts_symbol_with_pos_when_enabled_like_gnu() {
 #[test]
 fn documentation_rejects_symbol_with_pos_when_disabled_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let err = eval
         .eval_str(
             r#"(let ((symbols-with-pos-enabled nil))
@@ -158,7 +162,7 @@ fn documentation_rejects_symbol_with_pos_when_disabled_like_gnu() {
 #[test]
 fn documentation_property_returns_nil() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = builtin_documentation_property(
         &mut eval,
         vec![
@@ -173,7 +177,7 @@ fn documentation_property_returns_nil() {
 #[test]
 fn documentation_property_with_raw() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = builtin_documentation_property(
         &mut eval,
         vec![
@@ -189,7 +193,7 @@ fn documentation_property_with_raw() {
 #[test]
 fn documentation_property_wrong_type() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = builtin_documentation_property(
         &mut eval,
         vec![Value::fixnum(42), Value::symbol("variable-documentation")],
@@ -200,7 +204,7 @@ fn documentation_property_wrong_type() {
 #[test]
 fn documentation_property_wrong_arity() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = builtin_documentation_property(&mut eval, vec![Value::symbol("foo")]);
     assert!(result.is_err());
 }
@@ -212,7 +216,7 @@ fn documentation_property_wrong_arity() {
 #[test]
 fn snarf_documentation_returns_nil() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     let result = builtin_snarf_documentation(&mut evaluator, vec![Value::string("DOC")]);
     assert!(result.is_ok());
     assert!(result.unwrap().is_nil());
@@ -221,7 +225,7 @@ fn snarf_documentation_returns_nil() {
 #[test]
 fn snarf_documentation_wrong_type() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     let result = builtin_snarf_documentation(&mut evaluator, vec![Value::fixnum(42)]);
     assert!(result.is_err());
 }
@@ -229,7 +233,7 @@ fn snarf_documentation_wrong_type() {
 #[test]
 fn snarf_documentation_empty_path_errors() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     let result = builtin_snarf_documentation(&mut evaluator, vec![Value::string("")]);
     match result.kinded() {
         Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "error"),
@@ -240,7 +244,7 @@ fn snarf_documentation_empty_path_errors() {
 #[test]
 fn snarf_documentation_parent_dir_path_errors() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     let result = builtin_snarf_documentation(&mut evaluator, vec![Value::string("../")]);
     match result.kinded() {
         Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "error"),
@@ -251,7 +255,7 @@ fn snarf_documentation_parent_dir_path_errors() {
 #[test]
 fn snarf_documentation_single_dot_path_errors() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     let result = builtin_snarf_documentation(&mut evaluator, vec![Value::string(".")]);
     match result.kinded() {
         Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "error"),
@@ -262,7 +266,7 @@ fn snarf_documentation_single_dot_path_errors() {
 #[test]
 fn snarf_documentation_root_path_errors() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     let result = builtin_snarf_documentation(&mut evaluator, vec![Value::string("/")]);
     match result.kinded() {
         Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "error"),
@@ -273,7 +277,7 @@ fn snarf_documentation_root_path_errors() {
 #[test]
 fn snarf_documentation_doc_dir_path_file_error() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     let result = builtin_snarf_documentation(&mut evaluator, vec![Value::string("DOC/")]);
     match result.kinded() {
         Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "file-error"),
@@ -284,7 +288,7 @@ fn snarf_documentation_doc_dir_path_file_error() {
 #[test]
 fn snarf_documentation_doc_subpath_file_error() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     let result = builtin_snarf_documentation(&mut evaluator, vec![Value::string("DOC/a")]);
     match result.kinded() {
         Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "file-error"),
@@ -295,7 +299,7 @@ fn snarf_documentation_doc_subpath_file_error() {
 #[test]
 fn snarf_documentation_missing_path_errors() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     let result =
         builtin_snarf_documentation(&mut evaluator, vec![Value::string("NO_SUCH_DOC_FILE")]);
     match result.kinded() {
@@ -307,7 +311,7 @@ fn snarf_documentation_missing_path_errors() {
 #[test]
 fn snarf_documentation_missing_dir_path_errors() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     let result =
         builtin_snarf_documentation(&mut evaluator, vec![Value::string("NO_SUCH_DOC_DIR/")]);
     match result.kinded() {
@@ -319,7 +323,7 @@ fn snarf_documentation_missing_dir_path_errors() {
 #[test]
 fn snarf_documentation_wrong_arity() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     let result = builtin_snarf_documentation(&mut evaluator, vec![]);
     assert!(result.is_err());
 }
@@ -386,7 +390,7 @@ fn help_function_arglist_loaded_wrong_arity_matches_gnu() {
 #[test]
 fn documentation_lambda_with_docstring() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
 
     // Set up a lambda with a docstring in the function cell.
     let lambda = Value::make_lambda(LambdaData {
@@ -409,7 +413,7 @@ fn documentation_lambda_with_docstring() {
 #[test]
 fn documentation_lambda_no_docstring() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
 
     let lambda = Value::make_lambda(LambdaData {
         params: LambdaParams::simple(vec![]),
@@ -429,7 +433,7 @@ fn documentation_lambda_no_docstring() {
 #[test]
 fn documentation_substitutes_command_keys_unless_raw() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     // `(documentation 'foo)` calls `substitute-command-keys` on the
     // raw doc when RAW is nil. That function lives in `lisp/help.el`,
     // not in C/Rust, so the test must load enough of the GNU runtime
@@ -463,7 +467,7 @@ fn documentation_substitutes_command_keys_unless_raw() {
 #[test]
 fn documentation_lambda_preserves_raw_unibyte_docstring() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
 
     let raw_doc = neovm_value::heap_types::LispString::from_unibyte(vec![0xFF, b'X']);
     let lambda = Value::make_lambda(LambdaData {
@@ -485,7 +489,7 @@ fn documentation_lambda_preserves_raw_unibyte_docstring() {
 #[test]
 fn documentation_unbound_function() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     let result = builtin_documentation(&mut evaluator, vec![Value::symbol("nonexistent")]);
     assert!(result.is_err());
 }
@@ -493,7 +497,7 @@ fn documentation_unbound_function() {
 #[test]
 fn documentation_subr() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     evaluator
         .obarray
         .set_symbol_function("plus", Value::subr(intern("+")));
@@ -506,7 +510,7 @@ fn documentation_subr() {
 #[test]
 fn documentation_car_subr_uses_oracle_text_shape() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     evaluator
         .obarray
         .set_symbol_function("car", Value::subr(intern("car")));
@@ -522,7 +526,7 @@ fn documentation_car_subr_uses_oracle_text_shape() {
 #[test]
 fn documentation_if_special_form_uses_oracle_text_shape() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     evaluator
         .obarray
         .set_symbol_function("if", Value::subr(intern("if")));
@@ -538,9 +542,9 @@ fn documentation_if_special_form_uses_oracle_text_shape() {
 #[test]
 fn documentation_core_subr_stubs_use_oracle_first_line_shapes() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     // The shim now stores raw grave-quoted text matching GNU's actual
-    // DEFUN doc: comments. With bare `Context::new()' there's no
+    // DEFUN doc: comments. With bare `crate::test_utils::new_context()' there's no
     // substitute-command-keys yet, so the prefix is checked against
     // the raw form. Once help.el loads,
     // `substitute-command-keys' will rewrite the quotes per
@@ -601,7 +605,7 @@ fn documentation_core_subr_stubs_use_oracle_first_line_shapes() {
 #[test]
 fn documentation_symbol_alias_to_builtin_returns_docstring() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     evaluator
         .obarray
         .set_symbol_function("alias-builtin", Value::symbol("car"));
@@ -618,7 +622,7 @@ fn documentation_symbol_alias_to_builtin_returns_docstring() {
 #[test]
 fn documentation_prefers_function_documentation_property() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     evaluator
         .obarray
         .set_symbol_function("doc-prop", Value::fixnum(7));
@@ -638,7 +642,7 @@ fn documentation_prefers_function_documentation_property() {
 #[test]
 fn documentation_prefers_uninterned_symbol_function_documentation_property() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
 
     let result = evaluator
         .eval_str(
@@ -655,7 +659,7 @@ fn documentation_prefers_uninterned_symbol_function_documentation_property() {
 #[test]
 fn documentation_integer_function_documentation_property_returns_nil() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     evaluator
         .obarray
         .set_symbol_function("doc-prop", Value::fixnum(7));
@@ -671,7 +675,7 @@ fn documentation_integer_function_documentation_property_returns_nil() {
 #[test]
 fn documentation_list_function_documentation_property_is_evaluated() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     evaluator
         .obarray
         .set_symbol_function("doc-prop", Value::fixnum(7));
@@ -691,7 +695,7 @@ fn documentation_list_function_documentation_property_is_evaluated() {
 #[test]
 fn documentation_symbol_function_documentation_property_is_evaluated() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     evaluator
         .obarray
         .set_symbol_function("doc-prop", Value::fixnum(7));
@@ -707,7 +711,7 @@ fn documentation_symbol_function_documentation_property_is_evaluated() {
 #[test]
 fn documentation_vector_function_documentation_property_is_evaluated() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     evaluator
         .obarray
         .set_symbol_function("doc-prop", Value::fixnum(7));
@@ -727,7 +731,7 @@ fn documentation_vector_function_documentation_property_is_evaluated() {
 #[test]
 fn documentation_unbound_symbol_function_documentation_property_errors() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     evaluator
         .obarray
         .set_symbol_function("doc-prop", Value::fixnum(7));
@@ -750,7 +754,7 @@ fn documentation_unbound_symbol_function_documentation_property_errors() {
 #[test]
 fn documentation_invalid_form_function_documentation_property_errors() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     evaluator
         .obarray
         .set_symbol_function("doc-prop", Value::fixnum(7));
@@ -773,7 +777,7 @@ fn documentation_invalid_form_function_documentation_property_errors() {
 #[test]
 fn documentation_quoted_lambda_docstring() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     let quoted = Value::list(vec![
         Value::symbol("lambda"),
         Value::list(vec![Value::symbol("x")]),
@@ -788,7 +792,7 @@ fn documentation_quoted_lambda_docstring() {
 #[test]
 fn documentation_quoted_lambda_without_docstring_returns_nil() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     let quoted = Value::list(vec![
         Value::symbol("lambda"),
         Value::list(vec![Value::symbol("x")]),
@@ -802,7 +806,7 @@ fn documentation_quoted_lambda_without_docstring_returns_nil() {
 #[test]
 fn documentation_vector_designator_returns_keyboard_macro_doc() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     let result =
         builtin_documentation(&mut evaluator, vec![Value::vector(vec![Value::fixnum(1)])]).unwrap();
     assert_eq!(result.as_utf8_str(), Some("Keyboard macro."));
@@ -811,7 +815,7 @@ fn documentation_vector_designator_returns_keyboard_macro_doc() {
 #[test]
 fn documentation_string_designator_returns_keyboard_macro_doc() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     let result = builtin_documentation(&mut evaluator, vec![Value::string("abc")]).unwrap();
     assert_eq!(result.as_utf8_str(), Some("Keyboard macro."));
 }
@@ -819,7 +823,7 @@ fn documentation_string_designator_returns_keyboard_macro_doc() {
 #[test]
 fn documentation_quoted_macro_payload_matches_oracle_shape() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     let quoted = Value::list(vec![
         Value::symbol("macro"),
         Value::list(vec![Value::symbol("x")]),
@@ -847,7 +851,7 @@ fn documentation_quoted_macro_payload_matches_oracle_shape() {
 #[test]
 fn documentation_empty_quoted_macro_errors_void_function_nil() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     let quoted = Value::list(vec![Value::symbol("macro")]);
 
     let result = builtin_documentation(&mut evaluator, vec![quoted]);
@@ -863,7 +867,7 @@ fn documentation_empty_quoted_macro_errors_void_function_nil() {
 #[test]
 fn documentation_non_symbol_non_function_errors_invalid_function() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     let result = builtin_documentation(
         &mut evaluator,
         vec![Value::list(vec![Value::fixnum(1), Value::fixnum(2)])],
@@ -874,7 +878,7 @@ fn documentation_non_symbol_non_function_errors_invalid_function() {
 #[test]
 fn documentation_wrong_arity() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     let result = builtin_documentation(&mut evaluator, vec![]);
     assert!(result.is_err());
 }
@@ -899,7 +903,7 @@ fn startup_doc_quote_style_display_handles_backtick_pairs() {
 #[test]
 fn documentation_property_eval_returns_string_property() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     evaluator
         .obarray
         .put_property("doc-sym", "variable-documentation", Value::string("doc"))
@@ -919,7 +923,7 @@ fn documentation_property_eval_returns_string_property() {
 #[test]
 fn documentation_property_eval_substitutes_command_keys_unless_raw() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     // See `documentation_substitutes_command_keys_unless_raw' for why
     // help.el must be loaded before exercising the substitute path.
     crate::test_utils::load_minimal_gnu_help_runtime(&mut evaluator);
@@ -964,7 +968,7 @@ fn documentation_property_eval_substitutes_command_keys_unless_raw() {
 #[test]
 fn documentation_property_eval_integer_property_returns_nil() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     evaluator
         .obarray
         .put_property("doc-sym", "variable-documentation", Value::fixnum(7))
@@ -1003,7 +1007,7 @@ fn documentation_property_eval_reads_compiled_doc_ref() {
     let path = std::env::temp_dir().join(format!("{unique}.elc"));
     std::fs::write(&path, b"#@11 compiled doc\x1f").expect("write doc fixture");
 
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     evaluator
         .obarray
         .put_property(
@@ -1159,7 +1163,7 @@ fn documentation_property_eval_ctl_x_4_map_raw_keeps_the_markup_display_renders(
 #[test]
 fn documentation_property_eval_ctl_x_4_map_is_nil_before_subr_el_defines_it() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     assert!(
         !evaluator.obarray().boundp_id(intern("ctl-x-4-map")),
         "a bare Context has not loaded lisp/subr.el, so the name is unbound"
@@ -1447,7 +1451,7 @@ fn documentation_property_eval_load_suffixes_integer_property_returns_string() {
 #[test]
 fn documentation_property_eval_native_comp_eln_load_path_is_nil_when_unbound() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
 
     let id = neovm_value::intern::intern("native-comp-eln-load-path");
     assert!(
@@ -1574,7 +1578,7 @@ fn documentation_property_eval_debug_on_error_integer_property_returns_string() 
 #[test]
 fn documentation_property_eval_list_property_is_evaluated() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     evaluator
         .obarray
         .put_property(
@@ -1598,7 +1602,7 @@ fn documentation_property_eval_list_property_is_evaluated() {
 #[test]
 fn documentation_property_eval_symbol_property_is_evaluated() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     evaluator
         .obarray
         .put_property("doc-sym", "variable-documentation", Value::symbol("t"))
@@ -1618,7 +1622,7 @@ fn documentation_property_eval_symbol_property_is_evaluated() {
 #[test]
 fn documentation_property_eval_vector_property_is_evaluated() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     evaluator
         .obarray
         .put_property(
@@ -1642,7 +1646,7 @@ fn documentation_property_eval_vector_property_is_evaluated() {
 #[test]
 fn documentation_property_eval_unbound_symbol_property_errors() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     evaluator
         .obarray
         .put_property(
@@ -1668,7 +1672,7 @@ fn documentation_property_eval_unbound_symbol_property_errors() {
 #[test]
 fn documentation_property_eval_invalid_form_property_errors() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     evaluator
         .obarray
         .put_property(
@@ -1694,7 +1698,7 @@ fn documentation_property_eval_invalid_form_property_errors() {
 #[test]
 fn documentation_property_eval_non_symbol_prop_returns_nil() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     evaluator
         .obarray
         .put_property("doc-sym", "x", Value::string("v"))
@@ -1711,7 +1715,7 @@ fn documentation_property_eval_non_symbol_prop_returns_nil() {
 #[test]
 fn documentation_property_eval_accepts_non_symbol_prop_when_present() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
 
     let result = evaluator
         .eval_str(
@@ -1727,7 +1731,7 @@ fn documentation_property_eval_accepts_non_symbol_prop_when_present() {
 #[test]
 fn documentation_property_eval_non_symbol_target_errors() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     let result = builtin_documentation_property(
         &mut evaluator,
         vec![Value::fixnum(1), Value::symbol("variable-documentation")],
@@ -1793,7 +1797,7 @@ fn every_variable_the_doc_image_documents_answers_out_of_the_doc_image() {
     let mut bound = 0_usize;
     let mut installed = 0_usize;
     let mut answered_from_lisp: Vec<&str> = Vec::new();
-    for (name, _) in super::super::var_docs::gnu_table::GNU_VAR_DOCS {
+    for (name, _) in neovm_eval::emacs_core::var_docs::gnu_table::GNU_VAR_DOCS {
         let Some(id) = neovm_value::intern::lookup_interned(name) else {
             continue;
         };
@@ -1889,7 +1893,7 @@ fn the_snarf_leaves_no_documentation_on_a_variable_the_image_does_not_bind() {
 #[test]
 fn snarfing_the_doc_image_interns_nothing() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     let before = evaluator.obarray().len();
     let installed = unsafe {
         // SAFETY: this DOC fixture scan only reads bound metadata and writes
@@ -1897,7 +1901,7 @@ fn snarfing_the_doc_image_interns_nothing() {
         // storage, publish dispatch metadata or return an interior reference.
         evaluator
             .obarray
-            .with_legacy_value_write(super::snarf_variable_documentation)
+            .with_legacy_value_write(neovm_eval::emacs_core::doc::snarf_variable_documentation)
     };
     assert!(installed > 700, "installed {installed} records");
     assert_eq!(evaluator.obarray().len(), before);
@@ -1916,7 +1920,7 @@ fn snarfing_the_doc_image_interns_nothing() {
 #[test]
 fn snarf_documentation_overwrites_a_docstring_already_on_the_plist() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     evaluator
         .obarray
         .put_property(
@@ -1932,7 +1936,7 @@ fn snarf_documentation_overwrites_a_docstring_already_on_the_plist() {
         // storage, publish dispatch metadata or return an interior reference.
         evaluator
             .obarray
-            .with_legacy_value_write(super::snarf_variable_documentation)
+            .with_legacy_value_write(neovm_eval::emacs_core::doc::snarf_variable_documentation)
     };
 
     let result = builtin_documentation_property(
@@ -1961,7 +1965,7 @@ fn snarf_documentation_overwrites_a_docstring_already_on_the_plist() {
 #[test]
 fn a_position_that_does_not_point_at_a_doc_record_answers_nil() {
     crate::test_utils::init_test_tracing();
-    let image = super::super::var_docs::doc_image();
+    let image = neovm_eval::emacs_core::var_docs::doc_image();
     assert!(image.text_at(0).is_none());
     assert!(image.text_at(7).is_none());
     assert!(image.text_at(-1).is_none());
@@ -1973,14 +1977,14 @@ fn a_position_that_does_not_point_at_a_doc_record_answers_nil() {
 #[test]
 fn every_doc_image_record_round_trips_through_its_position() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = super::super::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     let obarray = &mut evaluator.obarray;
     let mut checked = 0_usize;
-    for (name, doc) in super::super::var_docs::gnu_table::GNU_VAR_DOCS {
+    for (name, doc) in neovm_eval::emacs_core::var_docs::gnu_table::GNU_VAR_DOCS {
         let Some(id) = neovm_value::intern::lookup_interned(name) else {
             continue;
         };
-        let Some(found) = super::super::var_docs::SnarfedVariable::if_bound_in(
+        let Some(found) = neovm_eval::emacs_core::var_docs::SnarfedVariable::if_bound_in(
             crate::emacs_core::eval::VariableView::canonical(
                 neovm_value::symbol::CanonicalAccess::TEST,
                 obarray,
@@ -1988,12 +1992,12 @@ fn every_doc_image_record_round_trips_through_its_position() {
             id,
             name,
         )
-        .and_then(super::super::var_docs::lookup) else {
+        .and_then(neovm_eval::emacs_core::var_docs::lookup) else {
             continue;
         };
         let position = found.position();
         assert_eq!(
-            super::super::var_docs::doc_image().text_at(position),
+            neovm_eval::emacs_core::var_docs::doc_image().text_at(position),
             Some(*doc),
             "record for {name} at position {position}"
         );
