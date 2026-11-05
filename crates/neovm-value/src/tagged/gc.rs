@@ -2597,7 +2597,7 @@ impl TaggedHeap {
             }
             self.all_objects = gc_header;
             self.note_black_born(gc_header);
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             alloc_probe::record(gc_header, self.non_cons_object_addrs.len());
         }
     }
@@ -2612,8 +2612,11 @@ impl TaggedHeap {
 /// `perf-probes` feature), so production builds carry zero instrumentation.
 /// Global statics are correct here because nextest runs each probe in its own
 /// process, so the counters observe exactly one workload.
-#[cfg(test)]
-pub(crate) mod alloc_probe;
+// Test-only module: it is absent from production builds, so its own
+// visibility can be `pub` without widening any production surface. The
+// moved load allocation-profile oracle (core perf-probes) is the consumer.
+#[cfg(any(test, feature = "test-support"))]
+pub mod alloc_probe;
 
 #[cfg(test)]
 #[path = "gc/tests/layout_stats_test.rs"]

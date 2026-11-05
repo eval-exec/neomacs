@@ -420,6 +420,7 @@ pub(crate) fn run_named_hooks<R: HookRuntime>(
     Ok(Value::NIL)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn run_named_hook_with_args<R: HookRuntime>(
     runtime: &mut R,
     args: &[Value],

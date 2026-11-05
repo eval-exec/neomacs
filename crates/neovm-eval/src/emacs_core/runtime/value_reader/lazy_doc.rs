@@ -127,6 +127,7 @@ struct SavedDocBlock {
 /// GNU `saved_strings` (`src/lread.c:3445-3485`): the two most recent `#@`
 /// blocks skipped while `load-force-doc-strings` was non-nil.
 #[derive(Default)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct SavedDocBlocks {
     slots: [Option<SavedDocBlock>; 2],
 }

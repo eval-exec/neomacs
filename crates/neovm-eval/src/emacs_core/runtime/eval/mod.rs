@@ -5089,7 +5089,7 @@ impl Context {
         self.form_head_cache.clear();
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn top_level_eval_state_is_clean(&self) -> bool {
         let clean_lexenv = self.lexenv.is_nil()
@@ -5658,6 +5658,67 @@ impl Context {
     #[inline]
     pub fn threads(&self) -> &ThreadManager {
         &self.threads
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    #[inline]
+    pub fn features(&self) -> &[SymId] {
+        &self.features
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    #[inline]
+    pub fn require_stack(&self) -> &[SymId] {
+        &self.require_stack
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    #[inline]
+    pub fn loads_in_progress(&self) -> &[neovm_value::heap_types::LispString] {
+        &self.loads_in_progress
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    #[inline]
+    pub fn cached_system_name(&self) -> Value {
+        *self.cached_system_name
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub(crate) fn create_thread_for_test(
+        &mut self,
+        function: Value,
+        name: crate::emacs_core::threads::ThreadName,
+    ) {
+        self.threads
+            .try_create_thread(function, name)
+            .expect("test identity issuance");
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub(crate) fn insert_feature_for_test(&mut self, index: usize, feature: SymId) {
+        self.features.insert(index, feature);
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub(crate) fn push_require_stack_for_test(&mut self, sym: SymId) {
+        self.require_stack.push(sym);
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub(crate) fn push_loads_in_progress_for_test(
+        &mut self,
+        value: neovm_value::heap_types::LispString,
+    ) {
+        self.loads_in_progress.push(value);
     }
 
     #[doc(hidden)]

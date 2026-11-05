@@ -619,7 +619,7 @@ pub(crate) fn finish_read_from_minibuffer_in_eval(
     finish_read_from_minibuffer_in_eval_with_setup(eval, args, |_| Ok(Value::NIL))
 }
 
-fn finish_read_from_minibuffer_in_eval_with_setup(
+pub(crate) fn finish_read_from_minibuffer_in_eval_with_setup(
     eval: &mut Context,
     args: &[Value],
     run_before_setup_hook: impl FnMut(&mut Context) -> EvalResult,
@@ -1178,7 +1178,7 @@ pub(crate) fn finish_completing_read_in_vm_runtime(
 ///   confirm    → confirm
 ///   confirm-after-completion → confirm-after-completion
 ///   function / other non-t, non-nil → unchanged
-fn completion_confirm_from_require_match(require_match: Value) -> Value {
+pub(crate) fn completion_confirm_from_require_match(require_match: Value) -> Value {
     match RequireMatchSymbol::from_lisp_value(require_match) {
         Some(RequireMatchSymbol::T) => Value::NIL,
         Some(RequireMatchSymbol::Confirm | RequireMatchSymbol::ConfirmAfterCompletion) => {

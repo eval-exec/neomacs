@@ -107,7 +107,7 @@ impl TaggedHeap {
             (*ptr).header.set_marked(self.mark_parity);
         }
         self.note_black_born(ptr.cast());
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(unsafe { Self::string_object_bytes(&*ptr) });
@@ -153,7 +153,7 @@ impl TaggedHeap {
         // SAFETY: a reserved slot of an owned float page whose header the
         // region wrote; only the value is left.
         unsafe { std::ptr::addr_of_mut!((*ptr).value).write(value) };
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
         unsafe { TaggedValue::from_float_ptr(ptr) }
     }
@@ -195,7 +195,7 @@ impl TaggedHeap {
             "page vector allocated twice (bitmap/registry out of sync)"
         );
         self.note_black_born(ptr.cast());
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(
@@ -333,7 +333,7 @@ impl TaggedHeap {
             (*ptr).header.gc.set_marked(self.mark_parity);
         }
         self.note_black_born(ptr.cast());
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(unsafe { Self::lambda_object_bytes(&*ptr) });
@@ -366,7 +366,7 @@ impl TaggedHeap {
             (*ptr).header.gc.set_marked(self.mark_parity);
         }
         self.note_black_born(ptr.cast());
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(unsafe { Self::macro_object_bytes(&*ptr) });
@@ -670,7 +670,7 @@ impl TaggedHeap {
             (*ptr).header.gc.set_marked(self.mark_parity);
         }
         self.note_black_born(ptr.cast());
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(unsafe { Self::bytecode_object_bytes(&*ptr) });
@@ -780,7 +780,7 @@ impl TaggedHeap {
             (*ptr).header.gc.set_marked(self.mark_parity);
         }
         self.note_black_born(ptr.cast());
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(unsafe { Self::bytecode_object_bytes(&*ptr) });
@@ -852,7 +852,7 @@ impl TaggedHeap {
             (*ptr).header.gc.set_marked(self.mark_parity);
         }
         self.note_black_born(ptr.cast());
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(unsafe { Self::record_object_bytes(&*ptr) });
@@ -913,7 +913,7 @@ impl TaggedHeap {
             (*ptr).header.gc.set_marked(self.mark_parity);
         }
         self.note_black_born(ptr.cast());
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<MarkerObj>());
@@ -965,7 +965,7 @@ impl TaggedHeap {
             );
         }
         self.note_black_born(ptr.cast());
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
         self.current_mutator_gc_mut().allocated_count += 1;
         // Pacing unchanged: the 56-byte object, as for the boxed bignum. GNU
@@ -1000,7 +1000,7 @@ impl TaggedHeap {
             (*ptr).header.gc.set_marked(self.mark_parity);
         }
         self.note_black_born(ptr.cast());
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<SymbolWithPosObj>());

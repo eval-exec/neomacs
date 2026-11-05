@@ -504,6 +504,7 @@ pub fn builtin_garbage_collect(eval: &mut super::eval::Context, args: Vec<Value>
     super::builtins_extra::builtin_garbage_collect_stats()
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_load(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     expect_min_args("load", &args, 1)?;
     if let Some(result) =

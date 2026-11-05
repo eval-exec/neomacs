@@ -172,7 +172,7 @@ pub(crate) fn record(header: *const GcHeader, addr_set_len: usize) {
 }
 
 /// Zero every counter (start of a probe's measured phase).
-pub(crate) fn reset() {
+pub fn reset() {
     for row in &COUNTS {
         for cell in row {
             cell.store(0, Ordering::Relaxed);
@@ -199,7 +199,7 @@ pub(crate) fn fixed_size(kind: usize) -> usize {
 
 /// Render the per-kind allocation table: count, total bytes, fixed
 /// (arena-resident) struct size, and the total-bytes histogram row.
-pub(crate) fn report() -> String {
+pub fn report() -> String {
     let mut out = String::new();
     out.push_str(&format!(
         "{:<14} {:>10} {:>13} {:>6}  {}\n",

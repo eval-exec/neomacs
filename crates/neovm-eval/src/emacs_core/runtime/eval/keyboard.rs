@@ -3015,7 +3015,7 @@ impl crate::emacs_core::eval::Context {
         Ok(self.has_frontend_input(query))
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn service_wait_request_special_input_events(
         &mut self,

@@ -224,10 +224,10 @@ pub trait DisplayFrameExt {
 
     fn window_at(&self, px: f32, py: f32) -> Option<WindowId>;
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn commit_redisplay_cache_for_test(&mut self, snapshots: Vec<WindowDisplaySnapshot>);
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn prepare_and_activate_display_presentation_for_test(
         &mut self,
         presentation: geometry::PresentationId,
@@ -276,7 +276,7 @@ pub trait DisplayFrameExt {
         publications: &[WindowPresentationSnapshot],
     );
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn replace_redisplay_cache_for_test(&mut self, snapshots: Vec<WindowDisplaySnapshot>);
 
     fn tty_posn_live_margins_clear(&self) -> bool;
@@ -904,7 +904,7 @@ impl DisplayFrameExt for Frame {
 
     /// Test fixture for installing a completed redisplay and replaying its live
     /// output state. Production redisplay uses the presentation transaction.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn commit_redisplay_cache_for_test(&mut self, snapshots: Vec<WindowDisplaySnapshot>) {
         let generation = self
             .presentation_state
@@ -920,7 +920,7 @@ impl DisplayFrameExt for Frame {
     }
 
     /// Test fixture for the synchronous prepare/activate lifecycle.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn prepare_and_activate_display_presentation_for_test(
         &mut self,
         presentation: geometry::PresentationId,
@@ -1112,7 +1112,7 @@ impl DisplayFrameExt for Frame {
 
     /// Test fixture for replacing only the latest redisplay cache, without
     /// mutating live cursor/output state.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn replace_redisplay_cache_for_test(&mut self, snapshots: Vec<WindowDisplaySnapshot>) {
         self.redisplay_cache = snapshots
             .into_iter()

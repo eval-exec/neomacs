@@ -152,6 +152,7 @@ pub fn read_one_with_source_multibyte(
 ///
 /// This is intentionally separate from the unibyte string API above.  GNU
 /// decodes file input but preserves each byte of unibyte Lisp objects.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn read_one_from_encoded_file_bytes<'a>(
     input: &'a [u8],
     start: usize,
@@ -221,6 +222,7 @@ pub(crate) use callable::read_from_callable;
 
 mod lazy_doc;
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) use lazy_doc::SavedDocBlocks;
 use lazy_doc::{LazyDocPolicy, LazyDocRef, LiveLoadFileName};
 

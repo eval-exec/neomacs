@@ -213,6 +213,37 @@ pub mod authority {
         context.capture_parallel_legacy_roots(keeper)
     }
 
+    /// P1-CLASSES-ALL-CRATES r2 (N3/N5): typed thread-creation fence for the
+    /// re-homed load oracle. The ThreadManager (heap Values, id issuer) never
+    /// leaves eval; the test gets only this typed operation.
+    pub fn create_thread_for_test(
+        context: &mut Context,
+        function: neovm_value::value::Value,
+        name: crate::emacs_core::threads::ThreadName,
+    ) {
+        context.create_thread_for_test(function, name)
+    }
+
+    /// r2 (N3/N5): typed feature-insert fence for the re-homed load oracle.
+    /// `Vec<SymId>` is plain owned data, so the delegate mutates it in place.
+    pub fn feature_insert_for_test(context: &mut Context, index: usize, feature: SymId) {
+        context.insert_feature_for_test(index, feature)
+    }
+
+    /// r2 (N3/N5): typed require-stack push fence for the re-homed load oracle.
+    pub fn require_stack_push_for_test(context: &mut Context, sym: SymId) {
+        context.push_require_stack_for_test(sym)
+    }
+
+    /// r2 (N3/N5): typed loads-in-progress push fence for the re-homed load
+    /// oracle. The vector is plain owned data; no manager view escapes.
+    pub fn loads_in_progress_push_for_test(
+        context: &mut Context,
+        value: neovm_value::heap_types::LispString,
+    ) {
+        context.push_loads_in_progress_for_test(value)
+    }
+
     /// Delegate for `Baton::keeper_designator`.
     pub fn baton_keeper_designator(
         baton: &Baton,

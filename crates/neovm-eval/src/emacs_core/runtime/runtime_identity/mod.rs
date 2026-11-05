@@ -479,10 +479,12 @@ fn refresh_system_name_from(eval: &mut Context, name: String) {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn refresh_system_name(eval: &mut Context) {
     refresh_system_name_from(eval, normalized_system_name());
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn install(eval: &mut Context) {
     RuntimeIdentity::capture().install(eval);
 }

@@ -542,6 +542,7 @@ fn compiled_doc_prefix_is_valid(prefix: &[u8]) -> bool {
 /// `src/doc.c:128-131`, `src/lread.c:3506-3509`); `unsigned_abs` makes that
 /// conversion total for every fixnum, including `i64::MIN`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct DocBytePosition(u64);
 
 impl DocBytePosition {

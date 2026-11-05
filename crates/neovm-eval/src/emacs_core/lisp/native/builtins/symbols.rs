@@ -945,6 +945,7 @@ pub fn builtin_fmakunbound(eval: &mut super::eval::Context, args: Vec<Value>) ->
     Ok(args[0])
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_get(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     expect_args("get", &args, 2)?;
     builtin_get_2(eval, args[0], args[1])
@@ -1000,6 +1001,7 @@ pub fn symbol_property_get(
     Ok((sym, property))
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_put(
     ctx: &mut crate::emacs_core::eval::Context,
     args: Vec<Value>,

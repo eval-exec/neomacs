@@ -1,12 +1,34 @@
-use super::*;
 use crate::emacs_core::eval::VariableView;
+use crate::emacs_core::keyboard::CommandLoopHost;
+use crate::emacs_core::load::*;
+use crate::emacs_core::load_boot::{
+    create_bootstrap_evaluator, create_bootstrap_evaluator_cached,
+    create_bootstrap_evaluator_cached_at_path, create_bootstrap_evaluator_cached_with_features,
+    create_bootstrap_evaluator_with_features, create_runtime_startup_evaluator_at_path,
+    load_from_dump, load_runtime_image_with_features,
+    load_runtime_image_with_features_for_executable,
+};
+use crate::emacs_core::print::map_flow;
 use crate::host_input::HostInputPublisher;
-use neovm_value::error::{FlowRef, FlowResultExt as _};
+use crate::test_utils::*;
+use crate::window::{DisplayFrameExt, DisplayFrameManagerExt};
+use neovm_edit::emacs_core::edit_host::EditHost;
+use neovm_eval::test_support::authority::{
+    create_thread_for_test, feature_insert_for_test, loads_in_progress_push_for_test,
+    require_stack_push_for_test,
+};
+use neovm_value::error::{EvalError, Flow, FlowRef, FlowResultExt as _};
+use neovm_value::runtime_root::{
+    compile_time_project_root, is_runtime_root, runtime_project_root,
+    runtime_project_root_from_paths, runtime_root_candidates,
+};
 use neovm_value::symbol::CanonicalAccess;
+use std::path::Path;
 fn test_ob() -> neovm_value::symbol::Obarray {
     neovm_value::symbol::Obarray::new()
 }
 use crate::emacs_core::eval::Context;
+use crate::emacs_core::eval::data::minibuffer_entry::MinibufferManagerExt;
 use crate::emacs_core::fontset::{
     DEFAULT_FONTSET_NAME, FontSpecEntry, matching_entries_for_fontset,
 };
@@ -46,8 +68,8 @@ use tempfile::tempdir;
 /// '(signal (quote quit) nil)'` exits 255. Neomacs mirrors that gate, so the
 /// harness must not run these loops as `--batch`.
 fn simulate_active_top_level_command_loop(eval: &mut Context) {
-    eval.command_loop.recursive_depth = 1;
-    eval.command_loop.running = true;
+    eval.command_loop_mut().recursive_depth = 1;
+    eval.command_loop_mut().running = true;
     eval.set_variable("noninteractive", Value::NIL);
     // The session-ending key for tests that inspect window/buffer state after
     // the loop: exhausting the input channel is a display disconnect, which
@@ -68,7 +90,7 @@ fn queue_end_of_session_key(tx: &HostInputPublisher) {
 #[test]
 fn load_name_equal_matches_lisp_equal_without_tagged_heap_allocation() {
     crate::test_utils::init_test_tracing();
-    let _eval = Context::new();
+    let _eval = crate::test_utils::new_context();
     let unibyte = neovm_value::heap_types::LispString::from_unibyte(b"same-name.el".to_vec());
     let multibyte = neovm_value::heap_types::LispString::from_utf8("same-name.el");
     let different = neovm_value::heap_types::LispString::from_unibyte(b"other-name.el".to_vec());
@@ -109,7 +131,7 @@ fn load_error_formatting_preserves_unibyte_symbol_encoding() {
 #[test]
 fn load_error_formatting_handles_raw_unibyte_signal_names() {
     crate::test_utils::init_test_tracing();
-    let eval = Context::new();
+    let eval = crate::test_utils::new_context();
     let name = neovm_value::heap_types::LispString::from_unibyte(vec![0xff]);
     let symbol = neovm_value::intern::intern_lisp_string(&name);
     let error = EvalError::signal(symbol, Vec::new(), None);
@@ -121,7 +143,7 @@ fn load_error_formatting_handles_raw_unibyte_signal_names() {
 fn isolated_runtime_bootstrap_eval() -> Context {
     let dump_path = test_bootstrap_cache_path("advice-stack-minibuffer-partial");
     if dump_path.exists()
-        && let Ok(eval) = crate::emacs_core::pdump::load_from_dump(&dump_path)
+        && let Ok(eval) = crate::emacs_core::load_boot::load_from_dump(&dump_path)
     {
         return eval;
     }
@@ -343,7 +365,7 @@ fn finalized_load_path_for_role(root: &Path, role: RuntimeImageRole) -> Vec<Stri
     std::fs::create_dir_all(root.join("lisp")).expect("create lisp dir");
     std::fs::create_dir_all(root.join("site-lisp")).expect("create site-lisp dir");
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     finalize_cached_bootstrap_eval(&mut eval, root, role).expect("finalize cached bootstrap eval");
     let load_path = eval
         .obarray()
@@ -423,7 +445,7 @@ fn no_site_lisp_suppresses_the_site_lisp_directories_in_a_final_image() {
 #[test]
 fn startup_environment_snapshot_is_independent_from_process_policy() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     crate::emacs_core::environment::install_host_environment_snapshot(&mut eval);
 
@@ -450,7 +472,7 @@ fn startup_environment_snapshot_is_independent_from_process_policy() {
 
 #[test]
 fn stale_preloaded_face_doc_ref_restore_is_idempotent() {
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let face = Value::symbol("blink-matching-paren-offscreen");
     let prop = Value::symbol("face-documentation");
     crate::emacs_core::builtins::builtin_put(
@@ -492,7 +514,7 @@ fn stale_preloaded_face_doc_ref_restore_is_idempotent() {
 }
 
 fn load_neomacs_gui_term_layer_for_test(eval: &mut Context) {
-    let load_path = get_load_path(eval.variables(), eval.buffers.current_buffer());
+    let load_path = get_load_path(eval.variables(), eval.edit.buffers.current_buffer());
     for library in ["term/common-win", "term/neo-win"] {
         let path = find_file_in_load_path(library, &load_path)
             .unwrap_or_else(|| panic!("find {library} in load-path"));
@@ -521,7 +543,7 @@ fn copy_source_fixture(dir: &std::path::Path, rel: &str) -> PathBuf {
 #[test]
 fn active_catch_throw_is_not_logged_as_load_form_failure() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let tag = Value::symbol("input");
     let err = EvalError::uncaught_throw(tag, Value::T);
 
@@ -565,7 +587,7 @@ fn load_binds_standard_input_so_read_consumes_the_next_top_level_form() {
     )
     .expect("write load file");
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     load_file(&mut eval, &path).expect("load must not signal end-of-file (issue #179)");
 
     let consumed = eval
@@ -594,7 +616,7 @@ fn load_interns_read_symbols_in_global_obarray() {
     let path = dir.path().join("reader-obarray-load.el");
     fs::write(&path, "'load-reader-obarray-side-effect\n").expect("write load file");
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     load_file(&mut eval, &path).expect("load file");
 
     assert!(
@@ -607,11 +629,11 @@ fn load_interns_read_symbols_in_global_obarray() {
 #[test]
 fn loaded_source_paths_accepts_raw_unibyte_load_history_entries() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let raw_path = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(
         b"/tmp/\xFF.el".to_vec(),
     ));
-    eval.obarray.set_symbol_value(
+    eval.obarray_mut().set_symbol_value(
         "load-history",
         Value::list(vec![Value::cons(raw_path, Value::NIL)]),
     );
@@ -660,7 +682,7 @@ fn cached_bootstrap_evaluator_clears_top_level_eval_state() {
 #[test]
 fn dump_emacs_portable_writes_reloadable_snapshot() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.set_variable("dump-portable-test-var", Value::fixnum(42));
 
     let dir = tempdir().expect("dump tempdir");
@@ -671,7 +693,7 @@ fn dump_emacs_portable_writes_reloadable_snapshot() {
     )
     .expect("dump-emacs-portable should succeed");
 
-    let loaded = crate::emacs_core::pdump::load_from_dump(&dump_path)
+    let loaded = crate::emacs_core::load_boot::load_from_dump(&dump_path)
         .expect("reloading dumped snapshot should succeed");
     assert_eq!(
         loaded
@@ -684,7 +706,7 @@ fn dump_emacs_portable_writes_reloadable_snapshot() {
 #[test]
 fn dump_emacs_portable_overwrites_existing_target() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let dir = tempdir().expect("dump tempdir");
     let dump_path = dir.path().join("portable-overwrite-test.pdump");
 
@@ -702,7 +724,7 @@ fn dump_emacs_portable_overwrites_existing_target() {
     )
     .expect("second dump-emacs-portable should overwrite");
 
-    let loaded = crate::emacs_core::pdump::load_from_dump(&dump_path)
+    let loaded = crate::emacs_core::load_boot::load_from_dump(&dump_path)
         .expect("reloading overwritten snapshot should succeed");
     assert_eq!(
         loaded
@@ -715,7 +737,7 @@ fn dump_emacs_portable_overwrites_existing_target() {
 #[test]
 fn dump_emacs_portable_expands_relative_target_against_default_directory() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let dir = tempdir().expect("dump tempdir");
     let default_dir = dir.path().join("default-dir");
     std::fs::create_dir_all(&default_dir).expect("create default-directory");
@@ -737,7 +759,7 @@ fn dump_emacs_portable_expands_relative_target_against_default_directory() {
         "dump-emacs-portable should expand relative names against default-directory"
     );
 
-    let loaded = crate::emacs_core::pdump::load_from_dump(&dump_path)
+    let loaded = crate::emacs_core::load_boot::load_from_dump(&dump_path)
         .expect("reloading relative dump snapshot should succeed");
     assert_eq!(
         loaded
@@ -750,7 +772,7 @@ fn dump_emacs_portable_expands_relative_target_against_default_directory() {
 #[test]
 fn dump_emacs_portable_requires_batch_mode() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.set_variable("noninteractive", Value::NIL);
 
     let err = crate::emacs_core::system_entries::builtin_dump_emacs_portable(
@@ -778,8 +800,9 @@ fn dump_emacs_portable_requires_batch_mode() {
 #[test]
 fn dump_emacs_portable_rejects_other_live_lisp_threads() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
-    eval.threads.create_thread(
+    let mut eval = crate::test_utils::new_context();
+    create_thread_for_test(
+        &mut eval,
         Value::NIL,
         crate::emacs_core::threads::ThreadName::from_lisp(Value::string("worker"))
             .expect("a string is a valid NAME"),
@@ -810,7 +833,7 @@ fn dump_emacs_portable_rejects_other_live_lisp_threads() {
 #[test]
 fn dump_emacs_portable_signals_error_for_live_finalizer() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let dir = tempdir().expect("dump tempdir");
     let dump_path = dir.path().join("portable-finalizer-live-test.pdump");
 
@@ -846,7 +869,7 @@ fn dump_emacs_portable_signals_error_for_live_finalizer() {
 #[test]
 fn dump_emacs_portable_succeeds_after_finalizer_is_collected() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let dir = tempdir().expect("dump tempdir");
     let dump_path = dir.path().join("portable-finalizer-collected-test.pdump");
 
@@ -871,7 +894,7 @@ fn dump_emacs_portable_succeeds_after_finalizer_is_collected() {
     )
     .expect("dump-emacs-portable should succeed once the finalizer is collected");
 
-    let loaded = crate::emacs_core::pdump::load_from_dump(&dump_path)
+    let loaded = crate::emacs_core::load_boot::load_from_dump(&dump_path)
         .expect("reloading the post-finalizer snapshot should succeed");
     assert_eq!(
         loaded.obarray().symbol_value_copied("dump-finalizer-ran"),
@@ -882,7 +905,7 @@ fn dump_emacs_portable_succeeds_after_finalizer_is_collected() {
 #[test]
 fn dump_emacs_portable_runs_pending_finalizers_before_dumping() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let dir = tempdir().expect("dump tempdir");
     let dump_path = dir.path().join("portable-finalizer-pending-test.pdump");
 
@@ -909,9 +932,9 @@ fn dump_emacs_portable_runs_pending_finalizers_before_dumping() {
 #[test]
 fn raw_source_bootstrap_starts_without_extra_function_cells() {
     crate::test_utils::init_test_tracing();
-    let eval = Context::new();
+    let eval = crate::test_utils::new_context();
     assert!(
-        eval.obarray
+        eval.obarray()
             .symbol_function_id(intern("eval-and-compile"))
             .is_none()
     );
@@ -928,7 +951,7 @@ fn raw_source_bootstrap_starts_without_extra_function_cells() {
         "wholenump",
     ] {
         assert!(
-            eval.obarray.symbol_function_id(intern(name)).is_none(),
+            eval.obarray().symbol_function_id(intern(name)).is_none(),
             "{name} should come from GNU Lisp, not Rust source bootstrap"
         );
     }
@@ -943,7 +966,7 @@ fn raw_source_debug_early_and_byte_run_define_eval_and_compile_without_shim() {
     let debug_early = copy_source_fixture(&temp_root, "emacs-lisp/debug-early.el");
     let byte_run = copy_source_fixture(&temp_root, "emacs-lisp/byte-run.el");
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.set_variable(
         "load-path",
         Value::list(vec![
@@ -967,7 +990,7 @@ fn raw_source_debug_early_and_byte_run_define_eval_and_compile_without_shim() {
     }
 
     let eval_and_compile = eval
-        .obarray
+        .obarray()
         .symbol_function_id(intern("eval-and-compile"))
         .expect("GNU byte-run should define eval-and-compile");
     assert!(definition_is_macroish(eval_and_compile));
@@ -976,7 +999,7 @@ fn raw_source_debug_early_and_byte_run_define_eval_and_compile_without_shim() {
 #[test]
 fn raw_context_does_not_seed_gnu_string_helper_cells() {
     crate::test_utils::init_test_tracing();
-    let eval = Context::new();
+    let eval = crate::test_utils::new_context();
 
     for name in [
         "string-blank-p",
@@ -987,7 +1010,7 @@ fn raw_context_does_not_seed_gnu_string_helper_cells() {
         "string-chop-newline",
     ] {
         assert!(
-            eval.obarray.symbol_function_id(intern(name)).is_none(),
+            eval.obarray().symbol_function_id(intern(name)).is_none(),
             "{name} should come from GNU Lisp bootstrap files, not Context::new"
         );
     }
@@ -996,7 +1019,7 @@ fn raw_context_does_not_seed_gnu_string_helper_cells() {
 #[test]
 fn raw_context_seeds_gnu_callproc_program_name_variables() {
     crate::test_utils::init_test_tracing();
-    let eval = Context::new();
+    let eval = crate::test_utils::new_context();
 
     for (name, expected) in [
         ("ctags-program-name", "ctags"),
@@ -1008,11 +1031,11 @@ fn raw_context_seeds_gnu_callproc_program_name_variables() {
         ("rcs2log-program-name", "rcs2log"),
     ] {
         let value = eval
-            .obarray
+            .obarray()
             .symbol_value_copied(name)
             .unwrap_or_else(|| panic!("{name} should be preloaded like GNU callproc.c"));
         assert_eq!(value.as_runtime_string_owned().as_deref(), Some(expected));
-        assert!(eval.obarray.is_special(name), "{name} should be special");
+        assert!(eval.obarray().is_special(name), "{name} should be special");
     }
 }
 
@@ -1033,7 +1056,7 @@ fn gnu_bootstrap_files_define_string_helpers_without_rust_shims() {
         "string-chop-newline",
     ] {
         let function = eval
-            .obarray
+            .obarray()
             .symbol_function(name)
             .unwrap_or_else(|| panic!("{name} should be installed by GNU ldefs-boot"));
         assert!(
@@ -1054,7 +1077,7 @@ fn gnu_subr_x_string_chop_newline_loads_without_rust_builtin() {
     //   GNU `ldefs-boot.el` owns the autoload cell.
     // - this test proves the real implementation comes from loaded GNU
     //   `subr-x.el`, not from a Rust builtin.
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     crate::test_utils::load_minimal_gnu_help_runtime(&mut eval);
     let project_root = crate::test_utils::workspace_root();
     let lisp_dir = project_root.join("lisp");
@@ -1062,7 +1085,7 @@ fn gnu_subr_x_string_chop_newline_loads_without_rust_builtin() {
         "load-path",
         Value::list(bootstrap_load_path_entries(&lisp_dir)),
     );
-    let load_path = get_load_path(eval.variables(), eval.buffers.current_buffer());
+    let load_path = get_load_path(eval.variables(), eval.edit.buffers.current_buffer());
     let bindings_path =
         bootstrap_fixture_path(&load_path, "bindings", true).expect("bindings fixture path");
     load_file(&mut eval, &bindings_path).unwrap_or_else(|err| {
@@ -1126,7 +1149,7 @@ fn gnu_subr_x_string_chop_newline_loads_without_rust_builtin() {
 fn load_bindings_source_survives_gc_stress_after_custom_runtime() {
     crate::test_utils::init_test_tracing();
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     crate::test_utils::load_minimal_gnu_help_runtime(&mut eval);
 
     let project_root = crate::test_utils::workspace_root();
@@ -1136,9 +1159,9 @@ fn load_bindings_source_survives_gc_stress_after_custom_runtime() {
         Value::list(bootstrap_load_path_entries(&lisp_dir)),
     );
     eval.gc_stress = true;
-    eval.tagged_heap.set_gc_threshold(1);
+    unsafe { eval.tagged_heap_mut() }.set_gc_threshold(1);
 
-    let load_path = get_load_path(eval.variables(), eval.buffers.current_buffer());
+    let load_path = get_load_path(eval.variables(), eval.edit.buffers.current_buffer());
     let bindings_path =
         bootstrap_fixture_path(&load_path, "bindings", false).expect("bindings.el fixture path");
     load_file(&mut eval, &bindings_path).unwrap_or_else(|err| {
@@ -1180,10 +1203,10 @@ fn load_bindings_source_survives_gc_stress_after_custom_runtime() {
 fn obsolete_function_alias_metadata_survives_gc_stress_after_help_runtime() {
     crate::test_utils::init_test_tracing();
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     crate::test_utils::load_minimal_gnu_help_runtime(&mut eval);
     eval.gc_stress = true;
-    eval.tagged_heap.set_gc_threshold(1);
+    unsafe { eval.tagged_heap_mut() }.set_gc_threshold(1);
 
     let result = eval
         .eval_str(
@@ -1209,10 +1232,10 @@ fn obsolete_function_alias_metadata_survives_gc_stress_after_help_runtime() {
 fn bindings_split_source_survives_gc_stress_after_help_runtime() {
     crate::test_utils::init_test_tracing();
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     crate::test_utils::load_minimal_gnu_help_runtime(&mut eval);
     eval.gc_stress = true;
-    eval.tagged_heap.set_gc_threshold(1);
+    unsafe { eval.tagged_heap_mut() }.set_gc_threshold(1);
 
     let path = source_bootstrap_path("bindings.el");
     let content = std::fs::read_to_string(&path).expect("read bindings.el");
@@ -1266,7 +1289,7 @@ fn gnu_subr_el_defines_wholenump_without_rust_shim() {
     crate::test_utils::init_test_tracing();
     let eval = partial_bootstrap_eval_until("keymap", true);
     assert_eq!(
-        eval.obarray.symbol_function("wholenump"),
+        eval.obarray().symbol_function("wholenump"),
         Some(Value::symbol("natnump"))
     );
 }
@@ -1276,7 +1299,7 @@ fn load_subr_survives_exact_post_form_gc_after_byte_run() {
     crate::test_utils::init_test_tracing();
     let project_root = crate::test_utils::workspace_root();
     let lisp_dir = project_root.join("lisp");
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let mut load_path_entries = Vec::new();
     for subdir in ["", "emacs-lisp"] {
@@ -1294,7 +1317,7 @@ fn load_subr_survives_exact_post_form_gc_after_byte_run() {
     eval.set_variable("purify-flag", Value::NIL);
     eval.set_variable("max-lisp-eval-depth", Value::fixnum(1600));
 
-    let load_path = get_load_path(eval.variables(), eval.buffers.current_buffer());
+    let load_path = get_load_path(eval.variables(), eval.edit.buffers.current_buffer());
     for name in &[
         "emacs-lisp/debug-early",
         "emacs-lisp/byte-run",
@@ -1315,9 +1338,9 @@ fn load_subr_survives_exact_post_form_gc_after_byte_run() {
 #[test]
 fn raw_context_does_not_prebind_frame_creation_function() {
     crate::test_utils::init_test_tracing();
-    let eval = Context::new();
+    let eval = crate::test_utils::new_context();
     assert!(
-        eval.obarray
+        eval.obarray()
             .symbol_value_copied("frame-creation-function")
             .is_none(),
         "frame-creation-function should come from GNU frame.el/cl-generic bootstrap, not Context::new"
@@ -1327,10 +1350,10 @@ fn raw_context_does_not_prebind_frame_creation_function() {
 #[test]
 fn gnu_help_el_defines_substitute_command_keys_without_rust_shim() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     load_minimal_gnu_help_runtime(&mut eval);
     let function = eval
-        .obarray
+        .obarray()
         .symbol_function("substitute-command-keys")
         .expect("help.el should define substitute-command-keys");
     assert!(!crate::emacs_core::autoload::is_autoload_value(
@@ -1342,10 +1365,10 @@ fn gnu_help_el_defines_substitute_command_keys_without_rust_shim() {
 #[test]
 fn raw_context_does_not_seed_window_size_alias_cells() {
     crate::test_utils::init_test_tracing();
-    let eval = Context::new();
+    let eval = crate::test_utils::new_context();
     for name in ["window-height", "window-width"] {
         assert!(
-            eval.obarray.symbol_function_id(intern(name)).is_none(),
+            eval.obarray().symbol_function_id(intern(name)).is_none(),
             "{name} should come from GNU window.el, not Context::new"
         );
     }
@@ -1356,11 +1379,11 @@ fn gnu_window_el_defines_window_size_aliases() {
     crate::test_utils::init_test_tracing();
     let eval = partial_bootstrap_eval_until("files", true);
     assert_eq!(
-        eval.obarray.symbol_function("window-height"),
+        eval.obarray().symbol_function("window-height"),
         Some(Value::symbol("window-total-height"))
     );
     assert_eq!(
-        eval.obarray.symbol_function("window-width"),
+        eval.obarray().symbol_function("window-width"),
         Some(Value::symbol("window-body-width"))
     );
 }
@@ -1512,7 +1535,7 @@ fn runtime_image_loader_falls_back_to_fingerprinted_candidate_when_primary_is_mi
     let dump_path =
         fingerprinted_runtime_image_path_for_executable(&executable, RuntimeImageRole::Final);
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.set_variable("runtime-image-candidate-test-var", Value::fixnum(42));
     crate::emacs_core::pdump::dump_to_file(&eval, &dump_path)
         .expect("write fingerprinted runtime image");
@@ -1541,7 +1564,7 @@ fn runtime_image_loader_stops_on_primary_fingerprint_mismatch() {
     let fallback =
         fingerprinted_runtime_image_path_for_executable(&executable, RuntimeImageRole::Final);
 
-    let mut stale = Context::new();
+    let mut stale = crate::test_utils::new_context();
     stale.set_variable("runtime-image-candidate-test-var", Value::fixnum(1));
     crate::emacs_core::pdump::dump_to_file(&stale, &primary).expect("write primary runtime image");
     let mut primary_bytes = fs::read(&primary).expect("read primary runtime image");
@@ -1549,7 +1572,7 @@ fn runtime_image_loader_stops_on_primary_fingerprint_mismatch() {
     primary_bytes[fingerprint_start] ^= 0x01;
     fs::write(&primary, primary_bytes).expect("corrupt primary fingerprint");
 
-    let mut fresh = Context::new();
+    let mut fresh = crate::test_utils::new_context();
     fresh.set_variable("runtime-image-candidate-test-var", Value::fixnum(2));
     crate::emacs_core::pdump::dump_to_file(&fresh, &fallback)
         .expect("write fallback runtime image");
@@ -1590,7 +1613,7 @@ fn runtime_image_loader_stops_on_primary_fingerprint_mismatch() {
 #[test]
 fn after_pdump_load_hook_runs_after_finalize_and_only_once() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let setup = crate::emacs_core::value_reader::read_all(
         "(progn
            (setq compat-pdump-hook-fired nil)
@@ -1611,7 +1634,7 @@ fn after_pdump_load_hook_runs_after_finalize_and_only_once() {
     crate::emacs_core::pdump::dump_to_file(&eval, &dump_path).expect("dump should succeed");
     drop(eval);
 
-    let mut loaded = crate::emacs_core::pdump::load_from_dump(&dump_path).expect("load dump");
+    let mut loaded = crate::emacs_core::load_boot::load_from_dump(&dump_path).expect("load dump");
     assert_eq!(
         loaded
             .obarray()
@@ -1657,7 +1680,7 @@ fn after_pdump_load_hook_runs_after_finalize_and_only_once() {
 #[test]
 fn finalize_cached_bootstrap_eval_strips_transient_compile_features() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     for feature in TRANSIENT_RUNTIME_FEATURES {
         eval.provide_value(Value::symbol(feature), None)
             .expect("provide transient feature");
@@ -1672,7 +1695,7 @@ fn finalize_cached_bootstrap_eval_strips_transient_compile_features() {
 
     for feature in TRANSIENT_RUNTIME_FEATURES {
         assert!(
-            !eval.features.contains(&intern(feature)),
+            !eval.features().contains(&intern(feature)),
             "{feature} should not stay provided in finalized bootstrap runtime"
         );
     }
@@ -1681,7 +1704,7 @@ fn finalize_cached_bootstrap_eval_strips_transient_compile_features() {
 #[test]
 fn load_file_stops_immediately_on_kill_emacs() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let dir = tempdir().expect("tempdir");
     let file = dir.path().join("kill-emacs-stop.el");
     fs::write(
@@ -1718,7 +1741,7 @@ fn load_file_stops_immediately_on_kill_emacs() {
 
 #[test]
 fn context_seeds_pdumper_fingerprint() {
-    let eval = Context::new();
+    let eval = crate::test_utils::new_context();
     assert_eq!(
         eval.obarray().symbol_value_copied("pdumper-fingerprint"),
         Some(Value::string(crate::emacs_core::pdump::fingerprint_hex()))
@@ -1727,7 +1750,7 @@ fn context_seeds_pdumper_fingerprint() {
 
 #[test]
 fn dump_loadup_invocation_seeds_pre_startup_command_line_state() {
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     apply_loadup_invocation(
         &mut eval,
         &LoadupInvocation::Dump(LoadupDumpInvocation::new(
@@ -1776,7 +1799,7 @@ fn dump_loadup_invocation_seeds_pre_startup_command_line_state() {
 
 #[test]
 fn preload_only_loadup_invocation_has_no_session_command_line_surface() {
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     apply_loadup_invocation(&mut eval, &LoadupInvocation::PreloadOnly);
 
     assert_eq!(
@@ -2022,12 +2045,15 @@ fn format_eval_error(eval: &Context, err: &EvalError) -> String {
             let mut items = Vec::with_capacity(data.len() + 1);
             items.push(Value::symbol(resolve_sym(*symbol)));
             items.extend(data.iter().copied());
-            crate::emacs_core::print::print_value_with_buffers(&Value::list(items), &eval.buffers)
+            crate::emacs_core::print::print_value_with_buffers(
+                &Value::list(items),
+                &eval.edit.buffers,
+            )
         }
         EvalError::UncaughtThrow { tag, value, .. } => format!(
             "(throw {} {})",
-            crate::emacs_core::print::print_value_with_buffers(tag, &eval.buffers),
-            crate::emacs_core::print::print_value_with_buffers(value, &eval.buffers),
+            crate::emacs_core::print::print_value_with_buffers(tag, &eval.edit.buffers),
+            crate::emacs_core::print::print_value_with_buffers(value, &eval.edit.buffers),
         ),
         EvalError::Shutdown(request) => format!("(kill-emacs {})", request.exit_code),
     }
@@ -2044,7 +2070,7 @@ fn partial_bootstrap_eval_until(stop_before: &str, prefer_compiled: bool) -> Con
         lisp_dir.display()
     );
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.set_variable(
         "load-path",
         Value::list(bootstrap_load_path_entries(&lisp_dir)),
@@ -2093,7 +2119,7 @@ fn partial_bootstrap_eval_until(stop_before: &str, prefer_compiled: bool) -> Con
         let _ = eval.eval_str_each(stub);
     }
 
-    let load_path = get_load_path(eval.variables(), eval.buffers.current_buffer());
+    let load_path = get_load_path(eval.variables(), eval.edit.buffers.current_buffer());
     for name in BOOTSTRAP_LOAD_SEQUENCE {
         if *name == stop_before {
             break;
@@ -2143,7 +2169,7 @@ fn build_pre_macroexp_reload_eval() -> Context {
         lisp_dir.display()
     );
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let subdirs = ["", "emacs-lisp"];
     let mut load_path_entries = Vec::new();
     for sub in &subdirs {
@@ -2165,7 +2191,7 @@ fn build_pre_macroexp_reload_eval() -> Context {
         Value::list(vec![Value::symbol("skip")]),
     );
 
-    let load_path = get_load_path(eval.variables(), eval.buffers.current_buffer());
+    let load_path = get_load_path(eval.variables(), eval.edit.buffers.current_buffer());
     for name in &[
         "emacs-lisp/debug-early",
         "emacs-lisp/byte-run",
@@ -2199,7 +2225,7 @@ fn build_pre_macroexp_reload_eval() -> Context {
 
 fn minimal_eager_macroexpand_eval() -> Context {
     let mut eval = build_pre_macroexp_reload_eval();
-    let load_path = get_load_path(eval.variables(), eval.buffers.current_buffer());
+    let load_path = get_load_path(eval.variables(), eval.edit.buffers.current_buffer());
     let macroexp_path = bootstrap_fixture_path(&load_path, "emacs-lisp/macroexp", false)
         .expect("macroexp source fixture path");
     load_file(&mut eval, &macroexp_path).unwrap_or_else(|err| {
@@ -2221,7 +2247,7 @@ fn minimal_eager_macroexpand_eval() -> Context {
 #[test]
 fn eager_macroexpand_gate_matches_gnu_without_pcase_backquote_expander() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.eval_str(
         "(defalias 'internal-macroexpand-for-load
            (lambda (form _full-p) form))",
@@ -2699,7 +2725,7 @@ fn bootstrap_cache_parallel_stale_repair_is_safe() {
     let dump_path = dir.path().join("parallel-bootstrap-stale.pdump");
     let exe = std::env::current_exe().expect("current test binary");
 
-    crate::emacs_core::pdump::dump_to_file(&Context::new(), &dump_path)
+    crate::emacs_core::pdump::dump_to_file(&crate::test_utils::new_context(), &dump_path)
         .expect("write seed bootstrap cache");
     let mut stale_bytes = fs::read(&dump_path).expect("read initial bootstrap cache");
     stale_bytes[12] ^= 0x01;
@@ -2922,20 +2948,20 @@ fn runtime_source_bootstrap_surface_tracks_icons_owned_surface() {
     let state =
         runtime_source_bootstrap_surface_state(&project_root).expect("runtime source surface");
 
-    assert!(state.function_names.contains("define-icon"));
-    assert!(state.function_names.contains("icon-string"));
-    assert!(state.function_names.contains("describe-icon"));
-    assert!(state.variable_names.contains("icon-preference"));
-    assert!(state.variable_names.contains("icon"));
-    assert!(state.variable_names.contains("icon-button"));
-    assert!(state.face_names.contains("icon"));
-    assert!(state.face_names.contains("icon-button"));
+    assert!(state.function_names().contains("define-icon"));
+    assert!(state.function_names().contains("icon-string"));
+    assert!(state.function_names().contains("describe-icon"));
+    assert!(state.variable_names().contains("icon-preference"));
+    assert!(state.variable_names().contains("icon"));
+    assert!(state.variable_names().contains("icon-button"));
+    assert!(state.face_names().contains("icon"));
+    assert!(state.face_names().contains("icon-button"));
     assert!(
         state
-            .property_keys
+            .property_keys()
             .contains(&(String::from("button"), String::from("icon--properties")))
     );
-    assert!(state.features.contains("icons"));
+    assert!(state.features().contains("icons"));
 }
 
 #[test]
@@ -3001,7 +3027,7 @@ fn bootstrap_runtime_require_uses_live_features_variable_when_internal_cache_is_
         create_bootstrap_evaluator_cached_with_features(&["x", "neomacs"]).expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
 
-    eval.features.insert(0, intern("cl-lib"));
+    feature_insert_for_test(&mut eval, 0, intern("cl-lib"));
 
     let rendered = eval_rendered(
         &mut eval,
@@ -3202,11 +3228,11 @@ fn bootstrap_runtime_cached_gui_surface_clears_transient_loader_state() {
     let eval = create_bootstrap_evaluator_cached_with_features(&["x", "neomacs"])
         .expect("bootstrap evaluator");
     assert!(
-        eval.require_stack.is_empty(),
+        eval.require_stack().is_empty(),
         "require_stack leaked from bootstrap"
     );
     assert!(
-        eval.loads_in_progress.is_empty(),
+        eval.loads_in_progress().is_empty(),
         "loads_in_progress leaked from bootstrap"
     );
 }
@@ -3217,7 +3243,7 @@ fn bootstrap_runtime_cached_gui_surface_restores_window_system_surface() {
     let mut eval = create_bootstrap_evaluator_cached_with_features(&["x", "neomacs"])
         .expect("bootstrap evaluator");
     assert!(
-        eval.frames.frame_list().is_empty(),
+        eval.frame_manager().frame_list().is_empty(),
         "cached GUI bootstrap should not synthesize a fallback frame before host bootstrap"
     );
     let rendered = eval_rendered(
@@ -3230,7 +3256,7 @@ fn bootstrap_runtime_cached_gui_surface_restores_window_system_surface() {
     );
     assert_eq!(rendered, "OK (neo neo t 16777216 true-color)");
     assert!(
-        eval.frames.frame_list().is_empty(),
+        eval.frame_manager().frame_list().is_empty(),
         "display queries should not synthesize a fallback frame before host bootstrap"
     );
     assert_gnu_runtime_window_sequence_after_preload(&mut eval);
@@ -3238,35 +3264,51 @@ fn bootstrap_runtime_cached_gui_surface_restores_window_system_surface() {
 
 fn assert_gnu_runtime_window_sequence_after_preload(eval: &mut Context) -> crate::window::WindowId {
     use crate::window::{SplitDirection, SplitPlacement};
-    let frame_id = crate::emacs_core::window_cmds::seed_batch_startup_frame_in_state(
-        &mut eval.frames,
-        &mut eval.buffers,
-    );
-    let frame = eval.frames.get(frame_id).expect("initial runtime frame");
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let frame_id =
+        crate::emacs_core::window_cmds::seed_batch_startup_frame_in_state(frames, buffers);
+    let frame = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("initial runtime frame");
     let root = frame.selected_window;
     let mini = frame.minibuffer_window.expect("runtime minibuffer");
-    assert_eq!(eval.frames.window_sequence_number(root).to_string(), "1");
-    assert_eq!(eval.frames.window_sequence_number(mini).to_string(), "2");
+    assert_eq!(
+        eval.frame_manager()
+            .window_sequence_number(root)
+            .to_string(),
+        "1"
+    );
+    assert_eq!(
+        eval.frame_manager()
+            .window_sequence_number(mini)
+            .to_string(),
+        "2"
+    );
     let scratch = eval
+        .edit
         .buffers
         .find_buffer_by_name("*scratch*")
         .expect("scratch");
-    let additional = eval.frames.create_frame("F2", 80, 25, scratch);
-    let second = eval.frames.get(additional).expect("additional frame");
+    let additional = eval.frame_manager_mut().create_frame("F2", 80, 25, scratch);
+    let second = eval
+        .frame_manager()
+        .get(additional)
+        .expect("additional frame");
     assert_eq!(
-        eval.frames
+        eval.frame_manager()
             .window_sequence_number(second.selected_window)
             .to_string(),
         "3"
     );
     assert_eq!(
-        eval.frames
+        eval.frame_manager()
             .window_sequence_number(second.minibuffer_window.expect("additional minibuffer"))
             .to_string(),
         "4"
     );
     let split = eval
-        .frames
+        .frame_manager_mut()
         .split_window(
             frame_id,
             root,
@@ -3276,7 +3318,12 @@ fn assert_gnu_runtime_window_sequence_after_preload(eval: &mut Context) -> crate
             SplitPlacement::AfterTarget,
         )
         .expect("split runtime root");
-    assert_eq!(eval.frames.window_sequence_number(split).to_string(), "6");
+    assert_eq!(
+        eval.frame_manager()
+            .window_sequence_number(split)
+            .to_string(),
+        "6"
+    );
     root
 }
 
@@ -3288,21 +3335,29 @@ fn bootstrap_runtime_source_preload_retires_window_sequences_without_reusing_ide
     activate_runtime_evaluator(&mut eval, RuntimeImageRole::Final)
         .expect("activate source runtime");
     assert!(
-        eval.frames.frame_list().is_empty(),
+        eval.frame_manager().frame_list().is_empty(),
         "source preload must leave host frame creation to startup"
     );
     // The source preloader's root was #1. Its escaped native handle remains
     // dead after the runtime root is created, as GNU's nilled dump object does.
     let retired = Value::make_window(1);
     eval.set_variable("source-preload-retired-window", retired);
-    assert!(!eval.frames.is_live_window_id(crate::window::WindowId(1)));
+    assert!(
+        !eval
+            .frame_manager()
+            .is_live_window_id(crate::window::WindowId(1))
+    );
     let root = assert_gnu_runtime_window_sequence_after_preload(&mut eval);
     assert_ne!(
         retired.as_window_id(),
         Some(root.0),
         "preload identity must not alias the runtime root"
     );
-    assert!(!eval.frames.is_live_window_id(crate::window::WindowId(1)));
+    assert!(
+        !eval
+            .frame_manager()
+            .is_live_window_id(crate::window::WindowId(1))
+    );
     assert_eq!(
         eval_rendered(
             &mut eval,
@@ -3426,7 +3481,7 @@ fn bootstrap_runtime_preserves_gnu_global_prefix_links() {
 fn pdump_roundtrip_preserves_gnu_prefix_keymap_links() {
     crate::test_utils::init_test_tracing();
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.eval_str(
         r#"(progn
              (setq esc-map (make-sparse-keymap "ESC-prefix"))
@@ -3451,7 +3506,7 @@ fn pdump_roundtrip_preserves_gnu_prefix_keymap_links() {
     drop(eval);
 
     let mut loaded =
-        crate::emacs_core::pdump::load_from_dump(&dump_path).expect("load should succeed");
+        crate::emacs_core::load_boot::load_from_dump(&dump_path).expect("load should succeed");
     let rendered = eval_rendered(
         &mut loaded,
         r#"(list
@@ -3500,7 +3555,7 @@ fn pdump_roundtrip_preserves_partial_bootstrap_subr_prefix_maps() {
     crate::emacs_core::pdump::dump_to_file(&eval, &dump_path).expect("dump should succeed");
 
     let mut loaded =
-        crate::emacs_core::pdump::load_from_dump(&dump_path).expect("load should succeed");
+        crate::emacs_core::load_boot::load_from_dump(&dump_path).expect("load should succeed");
     let rendered = eval_rendered(
         &mut loaded,
         r#"(list
@@ -3658,9 +3713,9 @@ fn bootstrap_minibuffer_complete_and_exit_accepts_exact_must_match_input() {
     crate::test_utils::init_test_tracing();
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
-    let minibuf_id = eval.buffers.create_buffer(" *Minibuf-exact*");
+    let minibuf_id = eval.edit.buffers.create_buffer(" *Minibuf-exact*");
     crate::emacs_core::minibuffer::install_minibuffer_buffer_text(
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         minibuf_id,
         &neovm_value::heap_types::LispString::from_utf8("Insert buffer: "),
         Some(&neovm_value::heap_types::LispString::from_utf8(
@@ -3668,8 +3723,8 @@ fn bootstrap_minibuffer_complete_and_exit_accepts_exact_must_match_input() {
         )),
         crate::emacs_core::minibuffer::default_minibuffer_prompt_properties(),
     );
-    eval.buffers.set_current(minibuf_id);
-    eval.minibuffers
+    eval.edit.buffers.set_current(minibuf_id);
+    eval.minibuffers_mut()
         .read_from_minibuffer(
             minibuf_id,
             "Insert buffer: ",
@@ -3698,14 +3753,17 @@ fn bootstrap_completing_read_multiple_accepts_exact_must_match_input() {
     crate::test_utils::init_test_tracing();
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
-    let scratch = eval.buffers.create_buffer("*crm-exact-target*");
-    eval.buffers.set_current(scratch);
+    let scratch = eval.edit.buffers.create_buffer("*crm-exact-target*");
+    eval.edit.buffers.set_current(scratch);
     let frame_id = eval
-        .frames
+        .frame_manager()
         .selected_frame()
         .map(|frame| frame.id)
-        .unwrap_or_else(|| eval.frames.create_frame("F1", 960, 640, scratch));
-    assert!(eval.frames.select_frame(frame_id));
+        .unwrap_or_else(|| {
+            eval.frame_manager_mut()
+                .create_frame("F1", 960, 640, scratch)
+        });
+    assert!(eval.frame_manager_mut().select_frame(frame_id));
     eval.eval_str("(require 'crm)").expect("load crm");
 
     let tx = HostInputPublisher::install(&mut eval);
@@ -3721,7 +3779,7 @@ fn bootstrap_completing_read_multiple_accepts_exact_must_match_input() {
     .expect("queue RET");
     drop(tx);
 
-    eval.command_loop.running = true;
+    eval.command_loop_mut().running = true;
 
     let rendered = format_eval_result(&eval.eval_str(
         r#"(completing-read-multiple
@@ -3902,18 +3960,23 @@ fn bootstrap_runtime_execute_extended_command_exits_minibuffer_on_ret() {
     let tx = HostInputPublisher::install(&mut eval);
     drop(tx);
 
-    eval.command_loop.running = true;
+    eval.command_loop_mut().running = true;
 
     for ch in "neo-ret-probe".chars() {
-        eval.command_loop
+        eval.command_loop_mut()
             .keyboard
             .kboard
             .unread_events
             .push_back(Value::fixnum(ch as i64));
     }
-    eval.command_loop.keyboard.kboard.unread_events.push_back(
-        crate::keyboard::KeyEvent::named(crate::keyboard::NamedKey::Return).to_emacs_event_value(),
-    );
+    eval.command_loop_mut()
+        .keyboard
+        .kboard
+        .unread_events
+        .push_back(
+            crate::keyboard::KeyEvent::named(crate::keyboard::NamedKey::Return)
+                .to_emacs_event_value(),
+        );
 
     let result = eval
         .apply(Value::symbol("execute-extended-command"), vec![Value::NIL])
@@ -3939,11 +4002,13 @@ fn bootstrap_runtime_command_loop_executes_meta_x_command_on_ret() {
     init_test_tracing();
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
-    let scratch = eval.buffers.create_buffer("*m-x-target*");
-    eval.buffers.set_current(scratch);
-    let frame_id = eval.frames.create_frame("F1", 960, 640, scratch);
+    let scratch = eval.edit.buffers.create_buffer("*m-x-target*");
+    eval.edit.buffers.set_current(scratch);
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("F1", 960, 640, scratch);
     assert!(
-        eval.frames.select_frame(frame_id),
+        eval.frame_manager_mut().select_frame(frame_id),
         "runtime command-loop test should have a selected frame"
     );
 
@@ -3992,14 +4057,17 @@ fn bootstrap_runtime_rejected_nested_mx_leaves_outer_mx_usable() {
     init_test_tracing();
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
-    let scratch = eval.buffers.create_buffer("*nested-m-x-recovery*");
-    eval.buffers.set_current(scratch);
-    eval.buffers
+    let scratch = eval.edit.buffers.create_buffer("*nested-m-x-recovery*");
+    eval.edit.buffers.set_current(scratch);
+    eval.edit
+        .buffers
         .get_mut(scratch)
         .expect("scratch buffer")
         .insert("ab");
-    let frame_id = eval.frames.create_frame("F1", 960, 640, scratch);
-    assert!(eval.frames.select_frame(frame_id));
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("F1", 960, 640, scratch);
+    assert!(eval.frame_manager_mut().select_frame(frame_id));
 
     eval.eval_str(
         r#"(progn
@@ -4044,7 +4112,7 @@ fn bootstrap_runtime_rejected_nested_mx_leaves_outer_mx_usable() {
     send(crate::keyboard::KeyEvent::char('q')).expect("queue command-loop exit key");
     drop(tx);
 
-    eval.command_loop.running = true;
+    eval.command_loop_mut().running = true;
     let result = command_loop_end_value(
         eval.recursive_edit_inner(),
         "rejected nested M-x must not corrupt the outer command loop",
@@ -4064,14 +4132,20 @@ fn bootstrap_runtime_read_only_local_default_binding_handles_character_input() {
     init_test_tracing();
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
-    let scratch = eval.buffers.create_buffer("*read-only-default-binding*");
-    eval.buffers.set_current(scratch);
-    eval.buffers
+    let scratch = eval
+        .edit
+        .buffers
+        .create_buffer("*read-only-default-binding*");
+    eval.edit.buffers.set_current(scratch);
+    eval.edit
+        .buffers
         .get_mut(scratch)
         .expect("read-only target buffer")
         .insert("terminal finished");
-    let frame_id = eval.frames.create_frame("F1", 960, 640, scratch);
-    assert!(eval.frames.select_frame(frame_id));
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("F1", 960, 640, scratch);
+    assert!(eval.frame_manager_mut().select_frame(frame_id));
 
     eval.eval_str(
         r#"(progn
@@ -4094,7 +4168,7 @@ fn bootstrap_runtime_read_only_local_default_binding_handles_character_input() {
     .expect("queue catch-all character");
     drop(tx);
 
-    eval.command_loop.running = true;
+    eval.command_loop_mut().running = true;
 
     let result = command_loop_end_value(
         eval.recursive_edit_inner(),
@@ -4130,11 +4204,13 @@ fn bootstrap_runtime_command_loop_executes_help_describe_function_on_ret() {
     init_test_tracing();
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
-    let scratch = eval.buffers.create_buffer("*help-f-target*");
-    eval.buffers.set_current(scratch);
-    let frame_id = eval.frames.create_frame("F1", 960, 640, scratch);
+    let scratch = eval.edit.buffers.create_buffer("*help-f-target*");
+    eval.edit.buffers.set_current(scratch);
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("F1", 960, 640, scratch);
     assert!(
-        eval.frames.select_frame(frame_id),
+        eval.frame_manager_mut().select_frame(frame_id),
         "runtime command-loop help test should have a selected frame"
     );
 
@@ -4186,7 +4262,7 @@ fn bootstrap_runtime_command_loop_executes_help_describe_function_on_ret() {
     .expect("queue RET");
     drop(tx);
 
-    eval.command_loop.running = true;
+    eval.command_loop_mut().running = true;
 
     let result = command_loop_end_value(
         eval.recursive_edit_inner(),
@@ -4210,10 +4286,12 @@ fn bootstrap_runtime_command_loop_meta_s_o_opens_clean_occur_prompt_from_input_r
     init_test_tracing();
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
-    let scratch = eval.buffers.create_buffer("*occur-keyboard-probe*");
-    eval.buffers.set_current(scratch);
-    let frame_id = eval.frames.create_frame("F1", 960, 640, scratch);
-    assert!(eval.frames.select_frame(frame_id));
+    let scratch = eval.edit.buffers.create_buffer("*occur-keyboard-probe*");
+    eval.edit.buffers.set_current(scratch);
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("F1", 960, 640, scratch);
+    assert!(eval.frame_manager_mut().select_frame(frame_id));
 
     eval.eval_str(
         r#"(progn
@@ -4268,10 +4346,12 @@ fn bootstrap_runtime_command_loop_meta_x_ret_opens_clean_nested_grep_prompt_from
     init_test_tracing();
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
-    let scratch = eval.buffers.create_buffer("*grep-keyboard-probe*");
-    eval.buffers.set_current(scratch);
-    let frame_id = eval.frames.create_frame("F1", 960, 640, scratch);
-    assert!(eval.frames.select_frame(frame_id));
+    let scratch = eval.edit.buffers.create_buffer("*grep-keyboard-probe*");
+    eval.edit.buffers.set_current(scratch);
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("F1", 960, 640, scratch);
+    assert!(eval.frame_manager_mut().select_frame(frame_id));
 
     eval.eval_str(
         r#"(progn
@@ -4332,10 +4412,12 @@ fn bootstrap_runtime_mx_eager_completion_services_printable_input_before_quit() 
     init_test_tracing();
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
-    let scratch = eval.buffers.create_buffer("*mx-eager-input-probe*");
-    eval.buffers.set_current(scratch);
-    let frame_id = eval.frames.create_frame("F1", 960, 640, scratch);
-    assert!(eval.frames.select_frame(frame_id));
+    let scratch = eval.edit.buffers.create_buffer("*mx-eager-input-probe*");
+    eval.edit.buffers.set_current(scratch);
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("F1", 960, 640, scratch);
+    assert!(eval.frame_manager_mut().select_frame(frame_id));
 
     eval.eval_str(
         r#"(progn
@@ -4366,6 +4448,7 @@ fn bootstrap_runtime_mx_eager_completion_services_printable_input_before_quit() 
     let (printable_seen_tx, printable_seen_rx) = std::sync::mpsc::sync_channel(1);
     eval.redisplay_fn = Some(Box::new(move |eval: &mut Context| {
         if let Some(text) = eval
+            .edit
             .buffers
             .current_buffer()
             .map(|buffer| buffer.buffer_string())
@@ -4446,11 +4529,16 @@ fn bootstrap_runtime_read_key_after_two_minibuffers_consumes_fresh_key() {
     init_test_tracing();
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
-    let scratch = eval.buffers.create_buffer("*read-key-after-minibuffers*");
-    eval.buffers.set_current(scratch);
-    let frame_id = eval.frames.create_frame("F1", 960, 640, scratch);
+    let scratch = eval
+        .edit
+        .buffers
+        .create_buffer("*read-key-after-minibuffers*");
+    eval.edit.buffers.set_current(scratch);
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("F1", 960, 640, scratch);
     assert!(
-        eval.frames.select_frame(frame_id),
+        eval.frame_manager_mut().select_frame(frame_id),
         "runtime command-loop read-key test should have a selected frame"
     );
 
@@ -4542,11 +4630,13 @@ fn bootstrap_runtime_minibuffer_read_restores_outer_this_command_keys() {
     init_test_tracing();
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
-    let scratch = eval.buffers.create_buffer("*minibuf-tck-restore*");
-    eval.buffers.set_current(scratch);
-    let frame_id = eval.frames.create_frame("F1", 960, 640, scratch);
+    let scratch = eval.edit.buffers.create_buffer("*minibuf-tck-restore*");
+    eval.edit.buffers.set_current(scratch);
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("F1", 960, 640, scratch);
     assert!(
-        eval.frames.select_frame(frame_id),
+        eval.frame_manager_mut().select_frame(frame_id),
         "minibuffer this-command-keys restore test should have a selected frame"
     );
 
@@ -4612,15 +4702,15 @@ fn bootstrap_runtime_minibuffer_read_restores_outer_this_command_keys() {
     // The invoking key sequence must be restored after the minibuffer read,
     // exactly as GNU `read_minibuf_unwind` restores `this_command_keys`.
     assert_eq!(
-        crate::emacs_core::print::print_value_with_buffers(&after, &eval.buffers),
-        crate::emacs_core::print::print_value_with_buffers(&before, &eval.buffers),
+        crate::emacs_core::print::print_value_with_buffers(&after, &eval.edit.buffers),
+        crate::emacs_core::print::print_value_with_buffers(&before, &eval.edit.buffers),
         "this-command-keys must be restored to the invoking [C-c t] after the \
          minibuffer read, not left as the minibuffer's terminating RET"
     );
     // And it must specifically NOT be the lone RET ([13]) the minibuffer's
     // own command loop committed when it exited.
     assert_ne!(
-        crate::emacs_core::print::print_value_with_buffers(&after, &eval.buffers),
+        crate::emacs_core::print::print_value_with_buffers(&after, &eval.edit.buffers),
         "[13]",
         "this-command-keys must not be the minibuffer's terminating RET"
     );
@@ -4643,11 +4733,13 @@ fn bootstrap_runtime_window_close_routes_through_handle_delete_frame() {
                          #'neo--log-delete-frame-advice))"#,
     );
 
-    let scratch = eval.buffers.create_buffer("*close-frame-target*");
-    eval.buffers.set_current(scratch);
-    let frame_id = eval.frames.create_frame("F1", 960, 640, scratch);
+    let scratch = eval.edit.buffers.create_buffer("*close-frame-target*");
+    eval.edit.buffers.set_current(scratch);
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("F1", 960, 640, scratch);
     assert!(
-        eval.frames.select_frame(frame_id),
+        eval.frame_manager_mut().select_frame(frame_id),
         "new runtime frame should become selectable"
     );
 
@@ -4959,10 +5051,15 @@ fn bootstrap_runtime_local_function_key_map_does_not_shadow_bound_meta_sequence(
     eval.eval_str(r#"(define-key local-function-key-map (kbd "ESC x") [?x])"#)
         .expect("install conflicting function-key translation");
 
-    eval.command_loop.keyboard.kboard.unread_events.push_back(
-        crate::keyboard::KeyEvent::named(crate::keyboard::NamedKey::Escape).to_emacs_event_value(),
-    );
-    eval.command_loop
+    eval.command_loop_mut()
+        .keyboard
+        .kboard
+        .unread_events
+        .push_back(
+            crate::keyboard::KeyEvent::named(crate::keyboard::NamedKey::Escape)
+                .to_emacs_event_value(),
+        );
+    eval.command_loop_mut()
         .keyboard
         .kboard
         .unread_events
@@ -5011,10 +5108,14 @@ fn bootstrap_runtime_read_key_sequence_follows_meta_x_command() {
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
 
-    eval.command_loop.keyboard.kboard.unread_events.push_back(
-        crate::keyboard::KeyEvent::char_with_mods('x', crate::keyboard::Modifiers::meta())
-            .to_emacs_event_value(),
-    );
+    eval.command_loop_mut()
+        .keyboard
+        .kboard
+        .unread_events
+        .push_back(
+            crate::keyboard::KeyEvent::char_with_mods('x', crate::keyboard::Modifiers::meta())
+                .to_emacs_event_value(),
+        );
 
     let (keys, binding) = eval.read_key_sequence().expect("read M-x sequence");
     assert_eq!(keys, vec![Value::fixnum(134_217_848)]);
@@ -5033,7 +5134,7 @@ fn bootstrap_runtime_read_key_sequence_follows_meta_binding_in_prefix_map() {
         crate::keyboard::KeyEvent::char_with_mods('w', crate::keyboard::Modifiers::meta())
             .to_emacs_event_value(),
     ] {
-        eval.command_loop
+        eval.command_loop_mut()
             .keyboard
             .kboard
             .unread_events
@@ -5064,7 +5165,7 @@ fn bootstrap_runtime_read_key_sequence_follows_escape_meta_prefix_in_prefix_map(
         Value::fixnum(27),
         Value::fixnum('w' as i64),
     ] {
-        eval.command_loop
+        eval.command_loop_mut()
             .keyboard
             .kboard
             .unread_events
@@ -5119,12 +5220,12 @@ fn bootstrap_runtime_read_key_sequence_follows_help_command_keymap_prefix() {
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
 
-    eval.command_loop
+    eval.command_loop_mut()
         .keyboard
         .kboard
         .unread_events
         .push_back(Value::fixnum(8));
-    eval.command_loop
+    eval.command_loop_mut()
         .keyboard
         .kboard
         .unread_events
@@ -5141,12 +5242,12 @@ fn bootstrap_runtime_read_key_sequence_follows_help_describe_function_binding() 
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
 
-    eval.command_loop
+    eval.command_loop_mut()
         .keyboard
         .kboard
         .unread_events
         .push_back(Value::fixnum(8));
-    eval.command_loop
+    eval.command_loop_mut()
         .keyboard
         .kboard
         .unread_events
@@ -5388,11 +5489,13 @@ fn bootstrap_runtime_save_some_buffers_space_saves_modified_file() {
 
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
-    let scratch = eval.buffers.create_buffer("*save-some-target*");
-    eval.buffers.set_current(scratch);
-    let frame_id = eval.frames.create_frame("F1", 960, 640, scratch);
+    let scratch = eval.edit.buffers.create_buffer("*save-some-target*");
+    eval.edit.buffers.set_current(scratch);
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("F1", 960, 640, scratch);
     assert!(
-        eval.frames.select_frame(frame_id),
+        eval.frame_manager_mut().select_frame(frame_id),
         "runtime save-some-buffers test should have a selected frame"
     );
 
@@ -5491,10 +5594,12 @@ fn bootstrap_runtime_command_loop_sets_last_nonmenu_event_for_keyboard_invocatio
     init_test_tracing();
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
-    let scratch = eval.buffers.create_buffer("*last-nonmenu-target*");
-    eval.buffers.set_current(scratch);
-    let frame_id = eval.frames.create_frame("F1", 960, 640, scratch);
-    assert!(eval.frames.select_frame(frame_id));
+    let scratch = eval.edit.buffers.create_buffer("*last-nonmenu-target*");
+    eval.edit.buffers.set_current(scratch);
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("F1", 960, 640, scratch);
+    assert!(eval.frame_manager_mut().select_frame(frame_id));
 
     eval.eval_str(
         r#"(progn
@@ -5555,10 +5660,12 @@ fn bootstrap_runtime_command_loop_disabled_command_consumes_space_reply_once() {
     init_test_tracing();
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
-    let scratch = eval.buffers.create_buffer("*disabled-command-target*");
-    eval.buffers.set_current(scratch);
-    let frame_id = eval.frames.create_frame("F1", 960, 640, scratch);
-    assert!(eval.frames.select_frame(frame_id));
+    let scratch = eval.edit.buffers.create_buffer("*disabled-command-target*");
+    eval.edit.buffers.set_current(scratch);
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("F1", 960, 640, scratch);
+    assert!(eval.frame_manager_mut().select_frame(frame_id));
 
     eval.eval_str(
         r#"(progn
@@ -5621,13 +5728,22 @@ fn bootstrap_runtime_gui_disabled_command_n_cancels_with_new_help_window() {
     init_test_tracing();
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
-    let scratch = eval.buffers.create_buffer("*disabled-command-gui-target*");
-    eval.buffers.set_current(scratch);
-    let frame_id = eval.frames.create_frame("F1", 960, 640, scratch);
-    assert!(eval.frames.select_frame(frame_id));
-    let selected_window = eval.frames.get(frame_id).expect("frame").selected_window;
+    let scratch = eval
+        .edit
+        .buffers
+        .create_buffer("*disabled-command-gui-target*");
+    eval.edit.buffers.set_current(scratch);
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("F1", 960, 640, scratch);
+    assert!(eval.frame_manager_mut().select_frame(frame_id));
+    let selected_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
     {
-        let frame = eval.frames.get_mut(frame_id).expect("frame");
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
         frame.set_window_system(Some(Value::symbol("neo")));
         frame
             .prepare_and_activate_display_presentation_for_test(
@@ -5689,10 +5805,12 @@ fn bootstrap_runtime_disabled_narrow_to_region_uses_live_region_after_space_repl
     init_test_tracing();
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
-    let scratch = eval.buffers.create_buffer("*disabled-narrow-target*");
-    eval.buffers.set_current(scratch);
-    let frame_id = eval.frames.create_frame("F1", 960, 640, scratch);
-    assert!(eval.frames.select_frame(frame_id));
+    let scratch = eval.edit.buffers.create_buffer("*disabled-narrow-target*");
+    eval.edit.buffers.set_current(scratch);
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("F1", 960, 640, scratch);
+    assert!(eval.frame_manager_mut().select_frame(frame_id));
 
     eval.eval_str(
         r#"(progn
@@ -5738,10 +5856,15 @@ fn bootstrap_runtime_command_loop_universal_argument_prefix_reaches_following_co
     init_test_tracing();
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
-    let scratch = eval.buffers.create_buffer("*universal-argument-target*");
-    eval.buffers.set_current(scratch);
-    let frame_id = eval.frames.create_frame("F1", 960, 640, scratch);
-    assert!(eval.frames.select_frame(frame_id));
+    let scratch = eval
+        .edit
+        .buffers
+        .create_buffer("*universal-argument-target*");
+    eval.edit.buffers.set_current(scratch);
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("F1", 960, 640, scratch);
+    assert!(eval.frame_manager_mut().select_frame(frame_id));
 
     eval.eval_str(
         r#"(progn
@@ -5789,11 +5912,14 @@ fn bootstrap_runtime_command_loop_raw_universal_argument_reaches_form_interactiv
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
     let scratch = eval
+        .edit
         .buffers
         .create_buffer("*raw-universal-argument-target*");
-    eval.buffers.set_current(scratch);
-    let frame_id = eval.frames.create_frame("F1", 960, 640, scratch);
-    assert!(eval.frames.select_frame(frame_id));
+    eval.edit.buffers.set_current(scratch);
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("F1", 960, 640, scratch);
+    assert!(eval.frame_manager_mut().select_frame(frame_id));
 
     eval.eval_str(
         r#"(progn
@@ -5837,10 +5963,15 @@ fn bootstrap_runtime_minibuffer_restores_raw_universal_argument_for_form_interac
     init_test_tracing();
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
-    let scratch = eval.buffers.create_buffer("*raw-prefix-minibuffer-target*");
-    eval.buffers.set_current(scratch);
-    let frame_id = eval.frames.create_frame("F1", 960, 640, scratch);
-    assert!(eval.frames.select_frame(frame_id));
+    let scratch = eval
+        .edit
+        .buffers
+        .create_buffer("*raw-prefix-minibuffer-target*");
+    eval.edit.buffers.set_current(scratch);
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("F1", 960, 640, scratch);
+    assert!(eval.frame_manager_mut().select_frame(frame_id));
 
     eval.eval_str(
         r#"(progn
@@ -5898,11 +6029,14 @@ fn bootstrap_runtime_read_from_minibuffer_binds_requested_history_variable_and_p
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
     let scratch = eval
+        .edit
         .buffers
         .create_buffer("*read-expression-history-target*");
-    eval.buffers.set_current(scratch);
-    let frame_id = eval.frames.create_frame("F1", 960, 640, scratch);
-    assert!(eval.frames.select_frame(frame_id));
+    eval.edit.buffers.set_current(scratch);
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("F1", 960, 640, scratch);
+    assert!(eval.frame_manager_mut().select_frame(frame_id));
 
     eval.eval_str(
         r#"(progn
@@ -5971,11 +6105,14 @@ fn bootstrap_runtime_completing_read_persists_requested_history_variable() {
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
     let scratch = eval
+        .edit
         .buffers
         .create_buffer("*completing-read-history-target*");
-    eval.buffers.set_current(scratch);
-    let frame_id = eval.frames.create_frame("F1", 960, 640, scratch);
-    assert!(eval.frames.select_frame(frame_id));
+    eval.edit.buffers.set_current(scratch);
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("F1", 960, 640, scratch);
+    assert!(eval.frame_manager_mut().select_frame(frame_id));
 
     eval.eval_str(
         r#"(progn
@@ -6033,10 +6170,15 @@ fn bootstrap_runtime_read_extended_command_recall_uses_extended_command_history(
     init_test_tracing();
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
-    let scratch = eval.buffers.create_buffer("*read-extended-command-target*");
-    eval.buffers.set_current(scratch);
-    let frame_id = eval.frames.create_frame("F1", 960, 640, scratch);
-    assert!(eval.frames.select_frame(frame_id));
+    let scratch = eval
+        .edit
+        .buffers
+        .create_buffer("*read-extended-command-target*");
+    eval.edit.buffers.set_current(scratch);
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("F1", 960, 640, scratch);
+    assert!(eval.frame_manager_mut().select_frame(frame_id));
 
     eval.eval_str(
         r#"(progn
@@ -6104,11 +6246,13 @@ fn bootstrap_runtime_command_loop_meta_p_recalls_mx_history_with_numeric_positio
     init_test_tracing();
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
-    let scratch = eval.buffers.create_buffer("*m-x-history-target*");
-    eval.buffers.set_current(scratch);
-    let frame_id = eval.frames.create_frame("F1", 960, 640, scratch);
+    let scratch = eval.edit.buffers.create_buffer("*m-x-history-target*");
+    eval.edit.buffers.set_current(scratch);
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("F1", 960, 640, scratch);
     assert!(
-        eval.frames.select_frame(frame_id),
+        eval.frame_manager_mut().select_frame(frame_id),
         "runtime command-loop history test should have a selected frame"
     );
 
@@ -6197,11 +6341,16 @@ fn bootstrap_runtime_command_loop_meta_p_recalls_calendar_after_quit() {
     init_test_tracing();
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
-    let scratch = eval.buffers.create_buffer("*m-x-calendar-history-target*");
-    eval.buffers.set_current(scratch);
-    let frame_id = eval.frames.create_frame("F1", 960, 640, scratch);
+    let scratch = eval
+        .edit
+        .buffers
+        .create_buffer("*m-x-calendar-history-target*");
+    eval.edit.buffers.set_current(scratch);
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("F1", 960, 640, scratch);
     assert!(
-        eval.frames.select_frame(frame_id),
+        eval.frame_manager_mut().select_frame(frame_id),
         "runtime command-loop calendar history test should have a selected frame"
     );
 
@@ -6313,17 +6462,20 @@ fn bootstrap_runtime_previous_history_element_recalls_read_expression_history_en
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
     let scratch = eval
+        .edit
         .buffers
         .find_buffer_by_name("*scratch*")
-        .unwrap_or_else(|| eval.buffers.create_buffer("*scratch*"));
-    eval.buffers.set_current(scratch);
-    let frame_id = eval.frames.create_frame("F1", 960, 640, scratch);
-    assert!(eval.frames.select_frame(frame_id));
+        .unwrap_or_else(|| eval.edit.buffers.create_buffer("*scratch*"));
+    eval.edit.buffers.set_current(scratch);
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("F1", 960, 640, scratch);
+    assert!(eval.frame_manager_mut().select_frame(frame_id));
 
     let tx = HostInputPublisher::install(&mut eval);
     drop(tx);
 
-    eval.command_loop.running = true;
+    eval.command_loop_mut().running = true;
 
     let rendered = eval_rendered(
         &mut eval,
@@ -6359,12 +6511,15 @@ fn bootstrap_runtime_disabled_command_from_visited_file_restores_single_selected
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
     let scratch = eval
+        .edit
         .buffers
         .find_buffer_by_name("*scratch*")
-        .unwrap_or_else(|| eval.buffers.create_buffer("*scratch*"));
-    eval.buffers.set_current(scratch);
-    let frame_id = eval.frames.create_frame("F1", 960, 640, scratch);
-    assert!(eval.frames.select_frame(frame_id));
+        .unwrap_or_else(|| eval.edit.buffers.create_buffer("*scratch*"));
+    eval.edit.buffers.set_current(scratch);
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("F1", 960, 640, scratch);
+    assert!(eval.frame_manager_mut().select_frame(frame_id));
 
     eval.eval_str(&format!(
         r#"(progn
@@ -6430,12 +6585,15 @@ fn bootstrap_runtime_display_buffer_pop_up_window_records_quit_restore_window_me
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
     let scratch = eval
+        .edit
         .buffers
         .find_buffer_by_name("*scratch*")
-        .unwrap_or_else(|| eval.buffers.create_buffer("*scratch*"));
-    eval.buffers.set_current(scratch);
-    let frame_id = eval.frames.create_frame("F1", 960, 640, scratch);
-    assert!(eval.frames.select_frame(frame_id));
+        .unwrap_or_else(|| eval.edit.buffers.create_buffer("*scratch*"));
+    eval.edit.buffers.set_current(scratch);
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("F1", 960, 640, scratch);
+    assert!(eval.frame_manager_mut().select_frame(frame_id));
 
     let observed = eval_rendered(
         &mut eval,
@@ -6458,12 +6616,15 @@ fn bootstrap_runtime_kill_buffer_quit_windows_deletes_pop_up_help_window() {
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
     let scratch = eval
+        .edit
         .buffers
         .find_buffer_by_name("*scratch*")
-        .unwrap_or_else(|| eval.buffers.create_buffer("*scratch*"));
-    eval.buffers.set_current(scratch);
-    let frame_id = eval.frames.create_frame("F1", 960, 640, scratch);
-    assert!(eval.frames.select_frame(frame_id));
+        .unwrap_or_else(|| eval.edit.buffers.create_buffer("*scratch*"));
+    eval.edit.buffers.set_current(scratch);
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("F1", 960, 640, scratch);
+    assert!(eval.frame_manager_mut().select_frame(frame_id));
 
     let observed = eval_rendered(
         &mut eval,
@@ -6494,10 +6655,12 @@ fn bootstrap_runtime_cx_s_space_saves_typed_edit_from_command_loop() {
 
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
-    let scratch = eval.buffers.create_buffer("*save-some-typed-target*");
-    eval.buffers.set_current(scratch);
-    let frame_id = eval.frames.create_frame("F1", 960, 640, scratch);
-    assert!(eval.frames.select_frame(frame_id));
+    let scratch = eval.edit.buffers.create_buffer("*save-some-typed-target*");
+    eval.edit.buffers.set_current(scratch);
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("F1", 960, 640, scratch);
+    assert!(eval.frame_manager_mut().select_frame(frame_id));
 
     let path_literal = format!("{:?}", file_path.to_string_lossy());
     eval.eval_str(&format!(
@@ -6576,6 +6739,7 @@ fn bootstrap_runtime_cx_s_space_saves_typed_edit_from_command_loop() {
         .eval_symbol("neo-save-some-typed-finish")
         .expect("typed finish var should exist");
     let modified = eval
+        .edit
         .buffers
         .current_buffer()
         .expect("current buffer after typed save-some")
@@ -6601,11 +6765,13 @@ fn bootstrap_runtime_command_loop_logs_help_route_for_ch_f() {
     init_test_tracing();
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
-    let scratch = eval.buffers.create_buffer("*help-f-route-target*");
-    eval.buffers.set_current(scratch);
-    let frame_id = eval.frames.create_frame("F1", 960, 640, scratch);
+    let scratch = eval.edit.buffers.create_buffer("*help-f-route-target*");
+    eval.edit.buffers.set_current(scratch);
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("F1", 960, 640, scratch);
     assert!(
-        eval.frames.select_frame(frame_id),
+        eval.frame_manager_mut().select_frame(frame_id),
         "runtime command-loop help route test should have a selected frame"
     );
 
@@ -6643,7 +6809,7 @@ fn bootstrap_runtime_command_loop_logs_help_route_for_ch_f() {
     .expect("queue RET");
     drop(tx);
 
-    eval.command_loop.running = true;
+    eval.command_loop_mut().running = true;
 
     let _ = eval.recursive_edit_inner();
     assert_eq!(
@@ -6665,11 +6831,13 @@ fn bootstrap_runtime_command_loop_logs_help_route_for_ch_b() {
     init_test_tracing();
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
-    let scratch = eval.buffers.create_buffer("*help-b-route-target*");
-    eval.buffers.set_current(scratch);
-    let frame_id = eval.frames.create_frame("F1", 960, 640, scratch);
+    let scratch = eval.edit.buffers.create_buffer("*help-b-route-target*");
+    eval.edit.buffers.set_current(scratch);
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("F1", 960, 640, scratch);
     assert!(
-        eval.frames.select_frame(frame_id),
+        eval.frame_manager_mut().select_frame(frame_id),
         "runtime command-loop help route test should have a selected frame"
     );
 
@@ -6699,7 +6867,7 @@ fn bootstrap_runtime_command_loop_logs_help_route_for_ch_b() {
     .expect("queue b");
     drop(tx);
 
-    eval.command_loop.running = true;
+    eval.command_loop_mut().running = true;
 
     let _ = eval.recursive_edit_inner();
     assert_eq!(
@@ -6721,10 +6889,12 @@ fn bootstrap_runtime_command_loop_traces_describe_function_body_for_ch_f() {
     init_test_tracing();
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
-    let scratch = eval.buffers.create_buffer("*help-f-trace-target*");
-    eval.buffers.set_current(scratch);
-    let frame_id = eval.frames.create_frame("F1", 960, 640, scratch);
-    assert!(eval.frames.select_frame(frame_id));
+    let scratch = eval.edit.buffers.create_buffer("*help-f-trace-target*");
+    eval.edit.buffers.set_current(scratch);
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("F1", 960, 640, scratch);
+    assert!(eval.frame_manager_mut().select_frame(frame_id));
 
     let _ = eval.eval_str_each(
         r#"(progn
@@ -6764,7 +6934,7 @@ fn bootstrap_runtime_command_loop_traces_describe_function_body_for_ch_f() {
     .expect("queue RET");
     drop(tx);
 
-    eval.command_loop.running = true;
+    eval.command_loop_mut().running = true;
     let result = command_loop_end_value(
         eval.recursive_edit_inner(),
         "command loop should exit via trace advice",
@@ -6890,7 +7060,7 @@ fn bootstrap_runtime_cl_defstruct_entry_point_works() {
 #[test]
 fn runtime_interpreted_closure_filter_requires_explicit_runtime_binding() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.set_lexical_binding(true);
     eval.eval_str("(setq neovm--hook-count 0)")
         .expect("initialize hook count");
@@ -6909,7 +7079,7 @@ fn runtime_interpreted_closure_filter_requires_explicit_runtime_binding() {
 #[test]
 fn runtime_interpreted_closure_filter_honors_explicit_runtime_binding() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.set_lexical_binding(true);
     eval.eval_str(
         r#"
@@ -7124,7 +7294,7 @@ pub(super) fn eval_rendered(eval: &mut Context, form: &str) -> String {
     match eval.eval_str(form) {
         Ok(value) => format!(
             "OK {}",
-            crate::emacs_core::print::print_value_with_buffers(&value, &eval.buffers)
+            crate::emacs_core::print::print_value_with_buffers(&value, &eval.edit.buffers)
         ),
         Err(err) => format!("ERR {}", format_eval_error(eval, &err)),
     }
@@ -7652,18 +7822,23 @@ fn bootstrap_runtime_call_interactively_autoloaded_describe_function_reads_promp
     let tx = HostInputPublisher::install(&mut eval);
     drop(tx);
 
-    eval.command_loop.running = true;
+    eval.command_loop_mut().running = true;
 
     for ch in "find-file".chars() {
-        eval.command_loop
+        eval.command_loop_mut()
             .keyboard
             .kboard
             .unread_events
             .push_back(Value::fixnum(ch as i64));
     }
-    eval.command_loop.keyboard.kboard.unread_events.push_back(
-        crate::keyboard::KeyEvent::named(crate::keyboard::NamedKey::Return).to_emacs_event_value(),
-    );
+    eval.command_loop_mut()
+        .keyboard
+        .kboard
+        .unread_events
+        .push_back(
+            crate::keyboard::KeyEvent::named(crate::keyboard::NamedKey::Return)
+                .to_emacs_event_value(),
+        );
 
     let result = eval
         .apply(
@@ -7702,18 +7877,23 @@ fn bootstrap_runtime_command_execute_autoloaded_describe_function_reads_prompt()
     let tx = HostInputPublisher::install(&mut eval);
     drop(tx);
 
-    eval.command_loop.running = true;
+    eval.command_loop_mut().running = true;
 
     for ch in "find-file".chars() {
-        eval.command_loop
+        eval.command_loop_mut()
             .keyboard
             .kboard
             .unread_events
             .push_back(Value::fixnum(ch as i64));
     }
-    eval.command_loop.keyboard.kboard.unread_events.push_back(
-        crate::keyboard::KeyEvent::named(crate::keyboard::NamedKey::Return).to_emacs_event_value(),
-    );
+    eval.command_loop_mut()
+        .keyboard
+        .kboard
+        .unread_events
+        .push_back(
+            crate::keyboard::KeyEvent::named(crate::keyboard::NamedKey::Return)
+                .to_emacs_event_value(),
+        );
 
     let result = eval
         .apply(
@@ -7752,18 +7932,23 @@ fn bootstrap_runtime_command_execute_rename_buffer_reads_gnu_interactive_form() 
     let tx = HostInputPublisher::install(&mut eval);
     drop(tx);
 
-    eval.command_loop.running = true;
+    eval.command_loop_mut().running = true;
 
     for ch in "renamed-scratch".chars() {
-        eval.command_loop
+        eval.command_loop_mut()
             .keyboard
             .kboard
             .unread_events
             .push_back(Value::fixnum(ch as i64));
     }
-    eval.command_loop.keyboard.kboard.unread_events.push_back(
-        crate::keyboard::KeyEvent::named(crate::keyboard::NamedKey::Return).to_emacs_event_value(),
-    );
+    eval.command_loop_mut()
+        .keyboard
+        .kboard
+        .unread_events
+        .push_back(
+            crate::keyboard::KeyEvent::named(crate::keyboard::NamedKey::Return)
+                .to_emacs_event_value(),
+        );
 
     let result = eval
         .apply(
@@ -7801,18 +7986,23 @@ fn bootstrap_runtime_command_execute_goto_line_records_command_history_for_repea
     let tx = HostInputPublisher::install(&mut eval);
     drop(tx);
 
-    eval.command_loop.running = true;
+    eval.command_loop_mut().running = true;
 
     for ch in "2".chars() {
-        eval.command_loop
+        eval.command_loop_mut()
             .keyboard
             .kboard
             .unread_events
             .push_back(Value::fixnum(ch as i64));
     }
-    eval.command_loop.keyboard.kboard.unread_events.push_back(
-        crate::keyboard::KeyEvent::named(crate::keyboard::NamedKey::Return).to_emacs_event_value(),
-    );
+    eval.command_loop_mut()
+        .keyboard
+        .kboard
+        .unread_events
+        .push_back(
+            crate::keyboard::KeyEvent::named(crate::keyboard::NamedKey::Return)
+                .to_emacs_event_value(),
+        );
 
     let result = eval
         .apply(
@@ -7854,7 +8044,7 @@ fn bootstrap_runtime_command_execute_goto_line_installs_gnu_prompt_text() {
     let tx = HostInputPublisher::install(&mut eval);
     drop(tx);
 
-    eval.command_loop.running = true;
+    eval.command_loop_mut().running = true;
 
     let rendered = eval_rendered(
         &mut eval,
@@ -7893,7 +8083,7 @@ fn bootstrap_runtime_repeat_complex_command_reads_gnu_redo_form_from_command_his
     let tx = HostInputPublisher::install(&mut eval);
     drop(tx);
 
-    eval.command_loop.running = true;
+    eval.command_loop_mut().running = true;
 
     let rendered = eval_rendered(
         &mut eval,
@@ -7933,7 +8123,7 @@ fn bootstrap_runtime_occur_installs_clean_gnu_prompt_text() {
     let tx = HostInputPublisher::install(&mut eval);
     drop(tx);
 
-    eval.command_loop.running = true;
+    eval.command_loop_mut().running = true;
 
     let rendered = eval_rendered(
         &mut eval,
@@ -7978,7 +8168,7 @@ fn bootstrap_runtime_grep_installs_clean_gnu_prompt_text_and_default_command() {
     let tx = HostInputPublisher::install(&mut eval);
     drop(tx);
 
-    eval.command_loop.running = true;
+    eval.command_loop_mut().running = true;
 
     let rendered = eval_rendered(
         &mut eval,
@@ -8022,7 +8212,7 @@ fn bootstrap_runtime_read_buffer_to_switch_ret_uses_other_buffer_default() {
     .expect("queue RET");
     drop(tx);
 
-    eval.command_loop.running = true;
+    eval.command_loop_mut().running = true;
 
     let result = eval
         .apply(
@@ -8089,7 +8279,7 @@ fn bootstrap_runtime_read_buffer_to_switch_tab_completes_existing_buffer() {
     .expect("queue RET");
     drop(tx);
 
-    eval.command_loop.running = true;
+    eval.command_loop_mut().running = true;
 
     let result = eval
         .apply(
@@ -8120,7 +8310,7 @@ fn call_interactively_switch_to_buffer_does_not_redisplay_between_argument_read_
     assert_eq!(setup, "OK \"*scratch*\"");
 
     let frame_id = eval
-        .frames
+        .frame_manager()
         .selected_frame()
         .map(|frame| frame.id)
         .expect("selected frame");
@@ -8129,11 +8319,11 @@ fn call_interactively_switch_to_buffer_does_not_redisplay_between_argument_read_
     eval.redisplay_fn = Some(Box::new(move |eval: &mut Context| {
         if eval.active_minibuffer_window_id().is_none() {
             let name = eval
-                .frames
+                .frame_manager()
                 .get(frame_id)
                 .and_then(|frame| frame.selected_window())
                 .and_then(|window| window.buffer_id())
-                .and_then(|buffer| eval.buffers.get(buffer))
+                .and_then(|buffer| eval.edit.buffers.get(buffer))
                 .map(|buffer| buffer.name_runtime_string_owned())
                 .unwrap_or_else(|| "<missing>".to_string());
             observed_in_redisplay
@@ -8160,7 +8350,7 @@ fn call_interactively_switch_to_buffer_does_not_redisplay_between_argument_read_
     .expect("queue RET");
     drop(tx);
 
-    eval.command_loop.running = true;
+    eval.command_loop_mut().running = true;
 
     eval.apply(
         Value::symbol("call-interactively"),
@@ -8177,11 +8367,11 @@ fn call_interactively_switch_to_buffer_does_not_redisplay_between_argument_read_
         "GNU does not redisplay the restored caller between interactive argument acquisition and target invocation"
     );
     assert_eq!(
-        eval.frames
+        eval.frame_manager()
             .get(frame_id)
             .and_then(|frame| frame.selected_window())
             .and_then(|window| window.buffer_id())
-            .and_then(|buffer| eval.buffers.get(buffer))
+            .and_then(|buffer| eval.edit.buffers.get(buffer))
             .map(|buffer| buffer.name_runtime_string_owned())
             .as_deref(),
         Some("buffer-completion-target.txt"),
@@ -8223,18 +8413,21 @@ fn bootstrap_runtime_command_loop_cx_b_uses_recent_file_buffer_as_second_default
     fs::write(&file_path, "buffer completion body\n").expect("write test file");
 
     let scratch = eval
+        .edit
         .buffers
         .find_buffer_by_name("*scratch*")
         .expect("scratch buffer");
-    eval.buffers.set_current(scratch);
-    let frame_id = eval.frames.create_frame("F1", 960, 640, scratch);
+    eval.edit.buffers.set_current(scratch);
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("F1", 960, 640, scratch);
     assert!(
-        eval.frames.select_frame(frame_id),
+        eval.frame_manager_mut().select_frame(frame_id),
         "runtime command-loop switch-buffer test should have a selected frame"
     );
-    for fid in eval.frames.frame_list() {
+    for fid in eval.frame_manager().frame_list() {
         if fid != frame_id
-            && let Some(frame) = eval.frames.get_mut(fid)
+            && let Some(frame) = eval.frame_manager_mut().get_mut(fid)
         {
             frame.visibility = crate::window::FrameVisibility::Invisible;
         }
@@ -8344,7 +8537,7 @@ fn bootstrap_runtime_call_interactively_autoloaded_describe_function_reads_promp
     .expect("queue RET");
     drop(tx);
 
-    eval.command_loop.running = true;
+    eval.command_loop_mut().running = true;
 
     let result = eval
         .apply(
@@ -8393,7 +8586,7 @@ fn bootstrap_runtime_command_execute_autoloaded_describe_function_reads_prompt_f
     .expect("queue RET");
     drop(tx);
 
-    eval.command_loop.running = true;
+    eval.command_loop_mut().running = true;
 
     let result = eval
         .apply(
@@ -8430,11 +8623,14 @@ fn bootstrap_runtime_call_interactively_describe_function_with_outer_command_sta
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
 
     let scratch = eval
+        .edit
         .buffers
         .create_buffer("*describe-function-state-target*");
-    eval.buffers.set_current(scratch);
-    let frame_id = eval.frames.create_frame("F1", 960, 640, scratch);
-    assert!(eval.frames.select_frame(frame_id));
+    eval.edit.buffers.set_current(scratch);
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("F1", 960, 640, scratch);
+    assert!(eval.frame_manager_mut().select_frame(frame_id));
 
     let tx = HostInputPublisher::install(&mut eval);
     for ch in "find-file".chars() {
@@ -8449,7 +8645,7 @@ fn bootstrap_runtime_call_interactively_describe_function_with_outer_command_sta
     .expect("queue RET");
     drop(tx);
 
-    eval.command_loop.running = true;
+    eval.command_loop_mut().running = true;
     let help_keys = vec![Value::fixnum(8), Value::fixnum('f' as i64)];
     eval.set_command_key_sequences(help_keys.clone(), help_keys);
     eval.assign("this-command", Value::symbol("describe-function"));
@@ -8584,16 +8780,24 @@ fn bootstrap_runtime_eieio_core_starts_as_gnu_autoload_state() {
 fn runtime_startup_state_preserves_gui_frame_metrics() {
     crate::test_utils::init_test_tracing();
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
-    let scratch = eval.buffers.create_buffer("*scratch*");
-    let fid = eval.frames.create_frame("F1", 960, 640, scratch);
-    let frame_before = eval.frames.get(fid).expect("bootstrap frame should exist");
+    let scratch = eval.edit.buffers.create_buffer("*scratch*");
+    let fid = eval
+        .frame_manager_mut()
+        .create_frame("F1", 960, 640, scratch);
+    let frame_before = eval
+        .frame_manager()
+        .get(fid)
+        .expect("bootstrap frame should exist");
     let expected_char_width = frame_before.char_width;
     let expected_char_height = frame_before.char_height;
     let expected_font_pixel_size = frame_before.font_pixel_size;
 
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
 
-    let frame_after = eval.frames.get(fid).expect("runtime frame should exist");
+    let frame_after = eval
+        .frame_manager()
+        .get(fid)
+        .expect("runtime frame should exist");
     assert_eq!(frame_after.char_width, expected_char_width);
     assert_eq!(frame_after.char_height, expected_char_height);
     assert_eq!(frame_after.font_pixel_size, expected_font_pixel_size);
@@ -8800,7 +9004,7 @@ fn profile_single_bootstrap_file_load() {
     let lisp_dir = project_root.join("lisp");
 
     let mut eval = partial_bootstrap_eval_until(&stop_before, prefer_compiled);
-    let load_path = get_load_path(eval.variables(), eval.buffers.current_buffer());
+    let load_path = get_load_path(eval.variables(), eval.edit.buffers.current_buffer());
     let path = bootstrap_fixture_path(&load_path, &target, prefer_compiled)
         .unwrap_or_else(|| panic!("bootstrap file not found: {target}"));
     let path = if std::env::var("NEOVM_PROFILE_BOOTSTRAP_DISABLE_NEOBC").as_deref() == Ok("1") {
@@ -9125,7 +9329,7 @@ fn builtin_load_accepts_raw_unibyte_absolute_filename_values() {
         // APFS rejects the name inside the syscall; GNU's `load` reports the
         // failed search (src/lread.c:1228) rather than creating a file under
         // a substituted name.
-        let mut eval = super::super::eval::Context::new();
+        let mut eval = crate::test_utils::new_context();
         let value = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(
             path_bytes.clone(),
         ));
@@ -9137,7 +9341,7 @@ fn builtin_load_accepts_raw_unibyte_absolute_filename_values() {
 
     fs::write(&raw_path, "(setq vm-load-absolute-raw-ran t)\n").expect("write fixture");
 
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let value = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(
         path_bytes,
     ));
@@ -9173,7 +9377,7 @@ fn builtin_load_resolves_raw_unibyte_load_path_entries() {
         // The load-path entry cannot exist on this file system.  GNU's openp
         // opens `DIR/probe' (+ suffixes) directly, so the failure is EILSEQ
         // and the reported name is the argument the caller asked to load.
-        let mut eval = super::super::eval::Context::new();
+        let mut eval = crate::test_utils::new_context();
         eval.set_variable(
             "load-path",
             Value::list(vec![Value::heap_string(raw_path_entry(dir_bytes.clone()))]),
@@ -9190,7 +9394,7 @@ fn builtin_load_resolves_raw_unibyte_load_path_entries() {
     let file = raw_dir.join("probe.el");
     fs::write(&file, "(setq vm-load-raw-load-path-ran t)\n").expect("write fixture");
 
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.set_variable(
         "load-path",
         Value::list(vec![Value::heap_string(raw_path_entry(dir_bytes))]),
@@ -9234,7 +9438,7 @@ fn builtin_load_substitutes_environment_variables_before_search() {
         // name when the raw-byte path cannot be opened.
         let mut expected = dir_bytes.clone();
         expected.extend_from_slice(b"/probe");
-        let mut eval = super::super::eval::Context::new();
+        let mut eval = crate::test_utils::new_context();
         let flow = crate::emacs_core::builtins::builtin_load(
             &mut eval,
             vec![Value::string(format!("${env_name}/probe"))],
@@ -9249,7 +9453,7 @@ fn builtin_load_substitutes_environment_variables_before_search() {
     let file = raw_dir.join("probe.el");
     fs::write(&file, "(setq vm-load-env-ran t)\n").expect("write fixture");
 
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let loaded = crate::emacs_core::builtins::builtin_load(
         &mut eval,
         vec![Value::string(format!("${env_name}/probe"))],
@@ -9270,7 +9474,7 @@ fn builtin_load_substitutes_environment_variables_before_search() {
 #[test]
 fn builtin_load_dispatches_file_name_handlers_before_search() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     assert_eq!(
         eval_rendered(
             &mut eval,
@@ -9355,7 +9559,7 @@ fn builtin_load_honors_bare_live_representation_suffix() {
     )
     .expect("write represented Lisp source");
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.set_variable(
         "load-path",
         Value::list(vec![Value::heap_string(runtime_path_entry(
@@ -9391,7 +9595,7 @@ fn builtin_load_rejects_non_string_live_suffix_entries() {
     )
     .expect("write Lisp source");
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.set_variable(
         "load-path",
         Value::list(vec![Value::heap_string(runtime_path_entry(
@@ -9434,7 +9638,7 @@ fn builtin_load_does_not_try_bare_name_when_representation_suffixes_are_nil() {
     )
     .expect("write bare Lisp source");
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.set_variable(
         "load-path",
         Value::list(vec![Value::heap_string(runtime_path_entry(
@@ -9467,7 +9671,7 @@ fn builtin_load_finds_representation_of_already_suffixed_name() {
     )
     .expect("write represented Lisp source");
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.set_variable(
         "load-path",
         Value::list(vec![Value::heap_string(runtime_path_entry(
@@ -9507,7 +9711,7 @@ fn builtin_load_must_suffix_accepts_exact_name_with_directory() {
     fs::write(&source, "(setq vm-directory-qualified-probe-ran t)\n")
         .expect("write directory-qualified Lisp source");
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let loaded = crate::emacs_core::builtins::builtin_load(
         &mut eval,
         vec![
@@ -9535,7 +9739,7 @@ fn builtin_load_nosuffix_does_not_read_live_suffix_variables() {
     let source = dir.path().join("nosuffix-probe");
     fs::write(&source, "(setq vm-nosuffix-probe-ran t)\n").expect("write exact-name Lisp source");
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.set_variable("load-suffixes", Value::symbol("not-a-list"));
     eval.set_variable("load-file-rep-suffixes", Value::symbol("not-a-list"));
     let loaded = crate::emacs_core::builtins::builtin_load(
@@ -9613,9 +9817,9 @@ fn collect_loaddefs_autoload_args_preserves_raw_unibyte_file_name() {
     let mut state = LoaddefsSurfaceState::default();
     collect_loaddefs_autoload_args(form, None, None, &mut state);
 
-    assert_eq!(state.names.len(), 1);
-    assert_eq!(state.autoload_args.len(), 1);
-    let file = state.autoload_args[0][1]
+    assert_eq!(state.names().len(), 1);
+    assert_eq!(state.autoload_args().len(), 1);
+    let file = state.autoload_args()[0][1]
         .as_lisp_string()
         .expect("autoload file should stay a LispString");
     assert!(!file.is_multibyte());
@@ -9686,7 +9890,7 @@ fn require_expands_tilde_load_path_entries_before_later_directories() {
         Value::heap_string(runtime_path_entry(elpa.to_string_lossy().as_ref())),
     ]);
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.set_variable("load-path", load_path);
     eval.require_value(Value::symbol("vm-shadowed-require"), None, None)
         .expect("require should load the earlier tilde-expanded directory");
@@ -9716,7 +9920,7 @@ fn require_preserves_buffer_match_data_on_success_and_error() {
     )
     .expect("write failing require fixture");
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.set_variable(
         "load-path",
         Value::list(vec![Value::string(
@@ -9815,7 +10019,7 @@ fn load_file_records_load_history() {
     let file = dir.join("probe.el");
     fs::write(&file, "(setq vm-load-history-probe t)\n").expect("write fixture");
 
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let loaded = load_file(&mut eval, &file).expect("load file");
     assert_eq!(loaded, Value::T);
 
@@ -9867,7 +10071,7 @@ fn load_file_records_gnu_style_defalias_provide_and_require_history_items() {
     )
     .expect("write main fixture");
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let loaded = load_file(&mut eval, &main).expect("load file");
     assert_eq!(loaded, Value::T);
 
@@ -9931,7 +10135,7 @@ fn builtin_load_uses_hist_file_name_when_purify_flag_is_set() {
     )
     .expect("write fixture");
 
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.set_variable(
         "load-path",
         Value::list(vec![Value::string(dir.to_string_lossy().to_string())]),
@@ -9998,7 +10202,7 @@ fn builtin_load_records_preloaded_files_only_while_purifying() {
 
     let load_path = Value::list(vec![Value::string(dir.to_string_lossy().to_string())]);
 
-    let mut purifying = super::super::eval::Context::new();
+    let mut purifying = crate::test_utils::new_context();
     purifying.set_variable("load-path", load_path);
     purifying.set_variable("purify-flag", Value::T);
     crate::emacs_core::builtins::builtin_load(&mut purifying, vec![Value::string("probe")])
@@ -10014,7 +10218,7 @@ fn builtin_load_records_preloaded_files_only_while_purifying() {
         "a dumping load records the requested name, never an absolute path"
     );
 
-    let mut plain = super::super::eval::Context::new();
+    let mut plain = crate::test_utils::new_context();
     plain.set_variable("load-path", load_path);
     plain.set_variable("purify-flag", Value::NIL);
     crate::emacs_core::builtins::builtin_load(&mut plain, vec![Value::string("probe")])
@@ -10066,7 +10270,7 @@ fn require_records_the_requested_feature_name_not_the_found_path() {
     )
     .expect("write fixture");
 
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.set_variable(
         "load-path",
         Value::list(vec![Value::string(dir.to_string_lossy().to_string())]),
@@ -10117,7 +10321,7 @@ fn builtin_load_prepends_history_entry_and_preserves_existing_tail() {
     let file = dir.join("probe.el");
     fs::write(&file, "(setq vm-load-history-tail-probe t)\n").expect("write fixture");
 
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let old_history = Value::list(vec![Value::list(vec![
         Value::string("/tmp/older.el"),
         Value::symbol("vm-older-probe"),
@@ -10158,8 +10362,8 @@ fn load_file_exact_gc_roots_load_history_and_after_load_filename() {
     let file = dir.join("probe.el");
     fs::write(&file, "(setq vm-load-history-probe t)\n").expect("write fixture");
 
-    let mut eval = super::super::eval::Context::new();
-    eval.tagged_heap.set_gc_threshold(1);
+    let mut eval = crate::test_utils::new_context();
+    unsafe { eval.tagged_heap_mut() }.set_gc_threshold(1);
 
     eval.eval_str(
         "(progn
@@ -10202,7 +10406,7 @@ fn load_file_exact_gc_roots_load_history_and_after_load_filename() {
 #[test]
 fn ensure_startup_compat_variables_backfills_xfaces_bootstrap_state() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     // GNU data.c:1799-1808 refuses unbinding forwarded built-ins, including
     // the face table (xfaces.c:7618-7622). A normal nil assignment represents
     // incomplete face state and exercises the table repair branch instead.
@@ -10441,7 +10645,7 @@ fn runtime_identity_functions_respect_lisp_owned_host_and_user_values() {
 #[test]
 fn runtime_identity_replaces_image_owned_user_full_name() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let stale = Value::string("pdump-build-user-that-cannot-be-the-runtime-user");
     eval.set_variable("user-full-name", stale);
 
@@ -10457,7 +10661,7 @@ fn runtime_identity_replaces_image_owned_user_full_name() {
 #[test]
 fn runtime_identity_replaces_image_owned_operating_system_release() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let stale = Value::string("pdump-build-kernel-that-cannot-be-the-runtime-kernel");
     eval.set_variable("operating-system-release", stale);
 
@@ -10492,7 +10696,7 @@ fn nested_load_restores_parent_load_file_name() {
     .expect("write parent fixture");
     fs::write(&child, "(setq vm-child-seen load-file-name)\n").expect("write child fixture");
 
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let loaded = load_file(&mut eval, &parent).expect("load parent fixture");
     assert_eq!(loaded, Value::T);
 
@@ -10551,7 +10755,7 @@ fn nested_load_exact_gc_preserves_reader_load_file_name() {
     )
     .expect("write child fixture");
 
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.gc_stress = true;
 
     let loaded = load_file(&mut eval, &parent).expect("load nested fixture under exact gc");
@@ -10592,7 +10796,7 @@ fn load_replaces_t_user_init_file_with_found_filename() {
     let file = temp.path().join("init.el");
     fs::write(&file, "(setq vm-user-init-file-seen user-init-file)\n").expect("write fixture");
 
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.set_variable(
         "load-path",
         Value::list(vec![Value::heap_string(
@@ -10629,7 +10833,7 @@ fn after_load_error_formatting_handles_raw_unibyte_signal_names() {
     let file = temp.path().join("after-load-raw-signal.el");
     fs::write(&file, "(setq vm-after-load-raw-signal-file-loaded t)\n").expect("write fixture");
 
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.eval_str(
         r##"(fset 'do-after-load-evaluation
                (lambda (_file)
@@ -10666,7 +10870,7 @@ fn load_file_binds_load_true_file_name_and_current_load_list() {
     )
     .expect("write fixture");
 
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let old_load_true_file = eval.obarray().symbol_value_copied("load-true-file-name");
     let old_current_load_list = eval.obarray().symbol_value_copied("current-load-list");
 
@@ -10734,7 +10938,7 @@ fn load_file_semantics_accept_raw_unibyte_filename_values() {
         // On a file system that cannot store the raw-byte name, GNU's own
         // `(load RAW ...)' answers (file-missing "Cannot open load file" ...);
         // measured with GNU 31.1 on macOS.
-        let mut eval = super::super::eval::Context::new();
+        let mut eval = crate::test_utils::new_context();
         let value = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(
             path_bytes.clone(),
         ));
@@ -10746,7 +10950,7 @@ fn load_file_semantics_accept_raw_unibyte_filename_values() {
 
     fs::write(&raw_path, "(setq vm-load-file-raw-ran t)\n").expect("write fixture");
 
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let value = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(
         path_bytes,
     ));
@@ -10780,7 +10984,7 @@ fn load_file_accepts_shebang_and_honors_second_line_lexical_binding_cookie() {
     )
     .expect("write shebang fixture");
 
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let loaded = load_file(&mut eval, &file).expect("load shebang fixture");
     assert_eq!(loaded, Value::T);
     assert_eq!(
@@ -10820,7 +11024,7 @@ fn load_file_does_not_enable_lexical_binding_from_non_cookie_second_line_text() 
     )
     .expect("write shebang non-cookie fixture");
 
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let loaded = load_file(&mut eval, &file).expect("load shebang non-cookie fixture");
     assert_eq!(loaded, Value::T);
     assert_eq!(
@@ -10855,7 +11059,7 @@ fn autoload_load_preserves_callers_dynamic_lexical_binding() {
     )
     .expect("write autoload lexical-binding fixture");
 
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.set_lexical_binding(true);
 
     let dir_lisp = dir
@@ -10923,7 +11127,7 @@ fn nested_source_load_preserves_current_buffer_local_lexical_binding() {
     )
     .expect("write dynamic parent fixture");
 
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     load_file(&mut eval, &parent).expect("load parent fixture");
     let loaded = eval
         .obarray()
@@ -10953,7 +11157,7 @@ fn load_file_accepts_utf8_bom_prefixed_source() {
     )
     .expect("write bom fixture");
 
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let loaded = load_file(&mut eval, &file).expect("load bom fixture");
     assert_eq!(loaded, Value::T);
     assert_eq!(
@@ -10985,7 +11189,7 @@ fn load_file_preserves_literal_carriage_return_inside_string() {
     )
     .expect("write carriage-return string fixture");
 
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let loaded = load_file(&mut eval, &file).expect("load carriage-return string fixture");
     assert_eq!(loaded, Value::T);
     let value = eval
@@ -11018,7 +11222,7 @@ fn load_file_normalizes_crlf_source_before_reading_forms() {
     )
     .expect("write crlf source fixture");
 
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let loaded = load_file(&mut eval, &file).expect("load crlf source fixture");
     assert_eq!(loaded, Value::T);
     assert_eq!(
@@ -11047,7 +11251,7 @@ fn load_file_reads_utf8_emacs_extended_char_literals() {
     )
     .expect("write utf-8-emacs source fixture");
 
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let loaded = load_file(&mut eval, &file).expect("load utf-8-emacs source fixture");
     assert_eq!(loaded, Value::T);
     assert_eq!(
@@ -11148,7 +11352,7 @@ fn load_file_single_line_shebang_signals_end_of_file() {
     let file = dir.join("probe.el");
     fs::write(&file, "#!/usr/bin/env emacs --script").expect("write shebang-only fixture");
 
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let err = load_file(&mut eval, &file).expect_err("shebang-only source should signal EOF");
     match err {
         EvalError::Signal { symbol, data, .. } => {
@@ -11199,7 +11403,7 @@ fn load_elc_preserves_unicode_symbol_identity() {
         "(defconst n-白 \"#ffffff\")\n(defconst n-蠟白 \"#FEF8DE\")\n",
     )
     .unwrap();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     load_file(&mut eval, &compiled).expect("load Unicode constants");
     assert_eq!(
         format_eval_result(&eval.eval_str("(list n-白 n-蠟白)")),
@@ -11217,7 +11421,7 @@ fn load_elc_decodes_characters_but_skips_docstring_bytes() {
     bytes.extend_from_slice("(setq probe (list ?白 \"é\" \"白\" ".as_bytes());
     bytes.extend_from_slice(b"\"\xff\" \"\xc3\" \"\xc3(\" \"\xf8\x88\x80\x80\x80\"))\n");
     fs::write(&compiled, bytes).unwrap();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     load_file(&mut eval, &compiled).expect("load mixed encoded file");
     // Verified with GNU source_file_get: valid multibyte runs are decoded,
     // malformed runs preserve their bytes, including the following '('.
@@ -11246,7 +11450,7 @@ fn load_elc_is_supported() {
     // Write a minimal .elc with valid Elisp content (no magic header — just a setq).
     fs::write(&compiled, "(setq vm-elc-loaded t)\n").expect("write compiled fixture");
 
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = load_file(&mut eval, &compiled);
     assert!(
         result.is_ok(),
@@ -11279,7 +11483,7 @@ fn load_elc_preserves_unibyte_reader_literals() {
     content.extend_from_slice(b")\n");
     fs::write(&compiled, content).expect("write compiled fixture");
 
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     load_file(&mut eval, &compiled).expect("load unibyte .elc fixture");
 
     let raw = eval
@@ -11312,7 +11516,7 @@ fn load_elc_gz_is_rejected() {
     let compiled = dir.join("probe.elc.gz");
     fs::write(&compiled, "gzipped-data").expect("write compiled fixture");
 
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let err = load_file(&mut eval, &compiled).expect_err("load should reject .elc.gz");
     match err {
         EvalError::Signal { symbol, .. } => assert_eq!(resolve_sym(symbol), "error"),
@@ -11334,7 +11538,7 @@ fn load_module_suffix_dispatches_to_dynamic_module_loader() {
     let module = dir.join(format!("probe{}", std::env::consts::DLL_SUFFIX));
     fs::write(&module, "not-a-dynamic-library").expect("write module fixture");
 
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let err = load_file(&mut eval, &module).expect_err("load should call module loader");
     match err {
         EvalError::Signal { symbol, .. } => assert_eq!(resolve_sym(symbol), "module-open-failed"),
@@ -11378,7 +11582,7 @@ fn load_elc_gz_is_explicitly_unsupported() {
     let compiled = dir.join("probe.elc.gz");
     fs::write(&compiled, "compiled-data").expect("write compiled fixture");
 
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let err = load_file(&mut eval, &compiled).expect_err("load should reject .elc.gz");
     match err {
         EvalError::Signal { symbol, .. } => assert_eq!(resolve_sym(symbol), "error"),
@@ -11770,7 +11974,7 @@ fn source_cl_lib_loads_after_early_gv_without_bootstrap_gv_stubs() {
 fn compiled_cl_preloaded_loads_after_faces() {
     crate::test_utils::init_test_tracing();
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap evaluator");
-    let load_path = get_load_path(eval.variables(), eval.buffers.current_buffer());
+    let load_path = get_load_path(eval.variables(), eval.edit.buffers.current_buffer());
     let path = bootstrap_fixture_path(&load_path, "emacs-lisp/cl-preloaded", true)
         .expect("compiled cl-preloaded fixture path");
 
@@ -11808,7 +12012,7 @@ fn compiled_custom_declare_face_call_before_faces_succeeds() {
 fn source_cycle_spacing_form_loads_after_bootstrap_prefix() {
     crate::test_utils::init_test_tracing();
     let mut eval = partial_bootstrap_eval_until("simple", false);
-    let load_path = get_load_path(eval.variables(), eval.buffers.current_buffer());
+    let load_path = get_load_path(eval.variables(), eval.edit.buffers.current_buffer());
     let path = bootstrap_fixture_path(&load_path, "simple", false).expect("simple.el path");
     let content = std::fs::read_to_string(&path).expect("read simple.el");
     let forms = crate::emacs_core::value_reader::read_all(
@@ -11993,8 +12197,11 @@ fn partial_bootstrap_source_load_restores_current_buffer_after_eval_buffer_switc
         Value::symbol("load-with-code-conversion"),
     );
 
-    let caller = eval.buffers.create_buffer("*load-current-buffer-caller*");
-    eval.buffers.set_current(caller);
+    let caller = eval
+        .edit
+        .buffers
+        .create_buffer("*load-current-buffer-caller*");
+    eval.edit.buffers.set_current(caller);
 
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("source-load-current-buffer.el");
@@ -12008,7 +12215,7 @@ fn partial_bootstrap_source_load_restores_current_buffer_after_eval_buffer_switc
     let result = load_file(&mut eval, &path);
 
     assert_eq!(format_eval_result(&result), "OK t");
-    assert_eq!(eval.buffers.current_buffer_id(), Some(caller));
+    assert_eq!(eval.edit.buffers.current_buffer_id(), Some(caller));
 }
 
 #[test]
@@ -12020,8 +12227,8 @@ fn partial_bootstrap_load_with_code_conversion_preserves_current_buffer_local_le
         Value::symbol("load-with-code-conversion"),
     );
 
-    let caller = eval.buffers.create_buffer(" *Compiler Input*");
-    eval.buffers.set_current(caller);
+    let caller = eval.edit.buffers.create_buffer(" *Compiler Input*");
+    eval.edit.buffers.set_current(caller);
     eval.eval_str("(set (make-local-variable 'lexical-binding) t)")
         .expect("install caller buffer-local lexical-binding");
     let before = eval
@@ -12043,7 +12250,7 @@ fn partial_bootstrap_load_with_code_conversion_preserves_current_buffer_local_le
 
     let result = load_file(&mut eval, &path);
     assert_eq!(format_eval_result(&result), "OK t");
-    assert_eq!(eval.buffers.current_buffer_id(), Some(caller));
+    assert_eq!(eval.edit.buffers.current_buffer_id(), Some(caller));
 
     let after = eval
         .eval_str(
@@ -12083,7 +12290,7 @@ fn partial_bootstrap_looking_back_matches_empty_suffix_at_line_end() {
 fn compiled_characters_loads_after_case_table() {
     crate::test_utils::init_test_tracing();
     let mut eval = partial_bootstrap_eval_until("international/characters", true);
-    let load_path = get_load_path(eval.variables(), eval.buffers.current_buffer());
+    let load_path = get_load_path(eval.variables(), eval.edit.buffers.current_buffer());
     let path = bootstrap_fixture_path(&load_path, "international/characters", true)
         .expect("compiled international/characters fixture path");
 
@@ -12100,7 +12307,7 @@ fn compiled_characters_loads_after_case_table() {
 fn source_characters_loads_after_generated_charprop() {
     crate::test_utils::init_test_tracing();
     let mut eval = partial_bootstrap_eval_until("international/characters", false);
-    let load_path = get_load_path(eval.variables(), eval.buffers.current_buffer());
+    let load_path = get_load_path(eval.variables(), eval.edit.buffers.current_buffer());
     let Some(charprop) = bootstrap_fixture_path(&load_path, "international/charprop", false) else {
         return;
     };
@@ -12127,7 +12334,7 @@ fn source_characters_loads_after_generated_charprop() {
 fn set_case_syntax_preserves_outer_lexical_c_after_charprop() {
     crate::test_utils::init_test_tracing();
     let mut eval = partial_bootstrap_eval_until("international/characters", false);
-    let load_path = get_load_path(eval.variables(), eval.buffers.current_buffer());
+    let load_path = get_load_path(eval.variables(), eval.edit.buffers.current_buffer());
     let Some(charprop) = bootstrap_fixture_path(&load_path, "international/charprop", false) else {
         return;
     };
@@ -12174,7 +12381,7 @@ fn source_chinese_loads_after_composite() {
     crate::test_utils::init_test_tracing();
 
     let mut eval = partial_bootstrap_eval_until("language/chinese", false);
-    let load_path = get_load_path(eval.variables(), eval.buffers.current_buffer());
+    let load_path = get_load_path(eval.variables(), eval.edit.buffers.current_buffer());
     let path = bootstrap_fixture_path(&load_path, "language/chinese", false)
         .expect("source language/chinese fixture path");
 
@@ -12309,7 +12516,7 @@ fn bootstrap_load_sequence_includes_gnu_x_term_layer_after_tool_bar() {
 fn partial_bootstrap_fill_delete_newlines_matches_gnu_trailing_space_behavior() {
     crate::test_utils::init_test_tracing();
     let mut eval = partial_bootstrap_eval_until("tool-bar", false);
-    let load_path = get_load_path(eval.variables(), eval.buffers.current_buffer());
+    let load_path = get_load_path(eval.variables(), eval.edit.buffers.current_buffer());
     let fill_path =
         bootstrap_fixture_path(&load_path, "textmodes/fill", false).expect("fill fixture path");
     load_file(&mut eval, &fill_path).unwrap_or_else(|err| {
@@ -12344,7 +12551,7 @@ fn bootstrap_tool_bar_mode_comes_from_gnu_mode_macro_path() {
     tracing::info!("tool-bar probe: begin partial bootstrap");
     let mut eval = partial_bootstrap_eval_until("tool-bar", false);
     tracing::info!("tool-bar probe: partial bootstrap complete");
-    let load_path = get_load_path(eval.variables(), eval.buffers.current_buffer());
+    let load_path = get_load_path(eval.variables(), eval.edit.buffers.current_buffer());
     let easy_mmode_path = bootstrap_fixture_path(&load_path, "emacs-lisp/easy-mmode", false)
         .expect("easy-mmode fixture path");
     tracing::info!("tool-bar probe: loading {}", easy_mmode_path.display());
@@ -13272,7 +13479,8 @@ conveniently adding tool bar items."
                 format_eval_error(&eval, &err)
             )
         });
-        let rendered = crate::emacs_core::print::print_value_with_buffers(&value, &eval.buffers);
+        let rendered =
+            crate::emacs_core::print::print_value_with_buffers(&value, &eval.edit.buffers);
         tracing::info!("tool-bar probe: helper {} => {}", label, rendered);
     }
     tracing::info!("tool-bar probe: macroexpand form 1");
@@ -13366,9 +13574,9 @@ conveniently adding tool bar items."
 #[test]
 fn evaluator_bootstrap_binds_default_frame_scroll_bars_like_gnu_frame_c() {
     crate::test_utils::init_test_tracing();
-    let eval = Context::new();
+    let eval = crate::test_utils::new_context();
     assert_eq!(
-        eval.obarray
+        eval.obarray()
             .symbol_value_copied("default-frame-scroll-bars"),
         Some(Value::symbol("right"))
     );
@@ -13478,7 +13686,7 @@ fn pdump_roundtrip_preserves_advice_remove_member_lifecycle() {
     drop(eval);
 
     let mut loaded =
-        crate::emacs_core::pdump::load_from_dump(&dump_path).expect("load should succeed");
+        crate::emacs_core::load_boot::load_from_dump(&dump_path).expect("load should succeed");
     ensure_startup_compat_variables(&mut loaded, &project_root);
     apply_runtime_startup_state(&mut loaded).expect("runtime startup after load");
 
@@ -13554,7 +13762,7 @@ fn pdump_roundtrip_preserves_advice_remove_member_lifecycle() {
         let value = loaded.eval_str(form).expect("evaluate step");
         if let Some(expected) = expected {
             let rendered =
-                crate::emacs_core::print::print_value_with_buffers(&value, &loaded.buffers);
+                crate::emacs_core::print::print_value_with_buffers(&value, &loaded.edit.buffers);
             assert_eq!(rendered, expected, "unexpected result at step {label}");
         }
     }
@@ -13574,7 +13782,7 @@ fn pdump_roundtrip_evaluates_full_advice_remove_member_form() {
     drop(eval);
 
     let mut loaded =
-        crate::emacs_core::pdump::load_from_dump(&dump_path).expect("load should succeed");
+        crate::emacs_core::load_boot::load_from_dump(&dump_path).expect("load should succeed");
     ensure_startup_compat_variables(&mut loaded, &project_root);
     apply_runtime_startup_state(&mut loaded).expect("runtime startup after load");
 
@@ -13598,7 +13806,7 @@ fn pdump_roundtrip_evaluates_full_advice_remove_member_form() {
         (fmakunbound 'neovm--adv-tgt3)
         (fmakunbound 'neovm--adv-fn3a)
         (fmakunbound 'neovm--adv-fn3b)))"#).expect("evaluate full form");
-    let rendered = crate::emacs_core::print::print_value_with_buffers(&value, &loaded.buffers);
+    let rendered = crate::emacs_core::print::print_value_with_buffers(&value, &loaded.edit.buffers);
     assert_eq!(rendered, "(nil t t nil t nil)");
 }
 
@@ -13634,7 +13842,7 @@ fn cached_bootstrap_reload_evaluates_full_advice_remove_member_form() {
     apply_runtime_startup_state(&mut fresh).expect("fresh runtime startup");
     let fresh_value = fresh.eval_str(form_source).expect("fresh form eval");
     assert_eq!(
-        crate::emacs_core::print::print_value_with_buffers(&fresh_value, &fresh.buffers),
+        crate::emacs_core::print::print_value_with_buffers(&fresh_value, &fresh.edit.buffers),
         "(nil t t nil t nil)"
     );
     drop(fresh);
@@ -13644,7 +13852,7 @@ fn cached_bootstrap_reload_evaluates_full_advice_remove_member_form() {
     apply_runtime_startup_state(&mut loaded).expect("loaded runtime startup");
     let loaded_value = loaded.eval_str(form_source).expect("loaded form eval");
     assert_eq!(
-        crate::emacs_core::print::print_value_with_buffers(&loaded_value, &loaded.buffers),
+        crate::emacs_core::print::print_value_with_buffers(&loaded_value, &loaded.edit.buffers),
         "(nil t t nil t nil)"
     );
 }
@@ -13694,7 +13902,7 @@ fn runtime_startup_state_matches_char_syntax_comprehensive_form() {
         )
         .expect("evaluate char syntax comprehensive probe");
     assert_eq!(
-        crate::emacs_core::print::print_value_with_buffers(&result, &eval.buffers),
+        crate::emacs_core::print::print_value_with_buffers(&result, &eval.edit.buffers),
         "(119 119 119 119 95 32 32 62 40 41 40 41 95 95 95 39 60 34 95 95 95 95 39 (119 119 119 40))"
     );
 }
@@ -14422,7 +14630,7 @@ fn macroexpand_all_pcase_terminates() {
     let project_root = crate::test_utils::workspace_root();
     let lisp_dir = project_root.join("lisp");
     assert!(lisp_dir.is_dir());
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let subdirs = ["", "emacs-lisp"];
     let mut load_path_entries = Vec::new();
     for sub in &subdirs {
@@ -14440,7 +14648,7 @@ fn macroexpand_all_pcase_terminates() {
     eval.set_variable("purify-flag", Value::NIL);
     eval.set_variable("max-lisp-eval-depth", Value::fixnum(1600));
 
-    let load_path = get_load_path(eval.variables(), eval.buffers.current_buffer());
+    let load_path = get_load_path(eval.variables(), eval.edit.buffers.current_buffer());
     let load_and_report =
         |eval: &mut crate::emacs_core::eval::Context,
          name: &str,
@@ -14517,7 +14725,7 @@ fn macroexp_eager_reload_preserves_symbol_identity() {
     let lisp_dir = project_root.join("lisp");
     assert!(lisp_dir.is_dir());
 
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let subdirs = ["", "emacs-lisp"];
     let mut load_path_entries = Vec::new();
     for sub in &subdirs {
@@ -14538,7 +14746,7 @@ fn macroexp_eager_reload_preserves_symbol_identity() {
         Value::list(vec![Value::symbol("skip")]),
     );
 
-    let load_path = get_load_path(eval.variables(), eval.buffers.current_buffer());
+    let load_path = get_load_path(eval.variables(), eval.edit.buffers.current_buffer());
     let load = |eval: &mut crate::emacs_core::eval::Context, name: &str| {
         let path = find_file_in_load_path(name, &load_path).expect(name);
         load_file(eval, &path).unwrap_or_else(|e| panic!("failed to load {name}: {e:?}"));
@@ -14632,7 +14840,7 @@ fn eager_expand_toplevel_forms_keeps_recursive_progn_forms_alive_under_exact_gc(
         &mut |ctx, _original, form, _requires_eager_replay| {
             expanded.push(crate::emacs_core::print::print_value_with_buffers(
                 &form,
-                &ctx.buffers,
+                &ctx.edit.buffers,
             ));
             let scope = ctx.save_specpdl_roots();
             ctx.push_specpdl_root(form);
@@ -14664,7 +14872,7 @@ fn function_get_only_exposes_cxxr_compiler_macro_on_cxxr_symbols() {
     let lisp_dir = project_root.join("lisp");
     assert!(lisp_dir.is_dir());
 
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let mut load_path_entries = Vec::new();
     for sub in ["", "emacs-lisp"] {
         let dir = if sub.is_empty() {
@@ -14678,7 +14886,7 @@ fn function_get_only_exposes_cxxr_compiler_macro_on_cxxr_symbols() {
     }
     eval.set_variable("load-path", Value::list(load_path_entries));
 
-    let load_path = get_load_path(eval.variables(), eval.buffers.current_buffer());
+    let load_path = get_load_path(eval.variables(), eval.edit.buffers.current_buffer());
     for name in &[
         "emacs-lisp/debug-early",
         "emacs-lisp/byte-run",
@@ -14710,7 +14918,7 @@ fn pcase_integer_literal_pattern() {
     let project_root = crate::test_utils::workspace_root();
     let lisp_dir = project_root.join("lisp");
     assert!(lisp_dir.is_dir());
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let subdirs = ["", "emacs-lisp"];
     let mut load_path_entries = Vec::new();
     for sub in &subdirs {
@@ -14728,7 +14936,7 @@ fn pcase_integer_literal_pattern() {
     eval.set_variable("purify-flag", Value::NIL);
     eval.set_variable("max-lisp-eval-depth", Value::fixnum(1600));
 
-    let load_path = get_load_path(eval.variables(), eval.buffers.current_buffer());
+    let load_path = get_load_path(eval.variables(), eval.edit.buffers.current_buffer());
     let load_and_report =
         |eval: &mut crate::emacs_core::eval::Context,
          name: &str,
@@ -14857,7 +15065,7 @@ fn key_parse_modifier_bits() {
         return;
     }
 
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     // Set up load-path
     let subdirs = ["", "emacs-lisp"];
@@ -14877,7 +15085,7 @@ fn key_parse_modifier_bits() {
     eval.set_variable("purify-flag", Value::NIL);
 
     // Load the minimum bootstrap: debug-early, byte-run, backquote, subr, keymap
-    let load_path = get_load_path(eval.variables(), eval.buffers.current_buffer());
+    let load_path = get_load_path(eval.variables(), eval.edit.buffers.current_buffer());
     for name in &[
         "emacs-lisp/debug-early",
         "emacs-lisp/byte-run",
@@ -15159,7 +15367,7 @@ fn bootstrap_macroexpand_functions_are_compiled() {
 fn bootstrap_load_uniquify_after_float_sup() {
     crate::test_utils::init_test_tracing();
     let mut eval = partial_bootstrap_eval_until("uniquify", true);
-    let load_path = get_load_path(eval.variables(), eval.buffers.current_buffer());
+    let load_path = get_load_path(eval.variables(), eval.edit.buffers.current_buffer());
     let path = bootstrap_fixture_path(&load_path, "uniquify", true)
         .expect("bootstrap file not found: uniquify");
     load_file(&mut eval, &path).unwrap_or_else(|err| {
@@ -15232,7 +15440,7 @@ fn bootstrap_pcase_complex_and_pred_guard() {
 #[test]
 fn runtime_finalize_resets_gensym_counter_like_gnu_dump() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.set_variable("gensym-counter", Value::fixnum(62));
     finalize_cached_bootstrap_eval(
         &mut eval,
@@ -15251,7 +15459,7 @@ fn runtime_finalize_resets_gensym_counter_like_gnu_dump() {
 #[test]
 fn runtime_cleanup_preserves_symbols_referenced_by_live_values() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let symbol_id = intern("choice");
     let symbol = Value::from_sym_id(symbol_id);
     let live_value = Value::list(vec![symbol]);
@@ -15605,10 +15813,9 @@ impl FingerprintTree {
 
     #[doc(hidden)]
     pub fn content_hashes_during(&self, body: impl FnOnce()) -> usize {
-        use std::sync::atomic::Ordering;
-        let before = BOOTSTRAP_CONTENT_FINGERPRINT_CALLS.load(Ordering::Relaxed);
+        let before = bootstrap_content_fingerprint_calls();
         body();
-        BOOTSTRAP_CONTENT_FINGERPRINT_CALLS.load(Ordering::Relaxed) - before
+        bootstrap_content_fingerprint_calls() - before
     }
 
     #[doc(hidden)]
@@ -15834,7 +16041,7 @@ fn load_source_eol_detection_matches_the_shared_decoder() {
 #[test]
 fn runtime_loader_state_reset_matches_gnu_init_lread() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     // The state a dump taken during `-l loadup` carries.
     eval.set_variable("values", Value::list(vec![Value::fixnum(1)]));
@@ -15845,11 +16052,11 @@ fn runtime_loader_state_reset_matches_gnu_init_lread() {
         Value::string("/build/lisp/loadup.el"),
     );
     eval.set_variable("standard-input", Value::NIL);
-    eval.loads_in_progress
-        .push(neovm_value::heap_types::LispString::from_utf8(
-            "/build/lisp/loadup.el",
-        ));
-    eval.require_stack.push(intern("cl-lib"));
+    loads_in_progress_push_for_test(
+        &mut eval,
+        neovm_value::heap_types::LispString::from_utf8("/build/lisp/loadup.el"),
+    );
+    require_stack_push_for_test(&mut eval, intern("cl-lib"));
 
     clear_runtime_loader_state(&mut eval);
 
@@ -15866,8 +16073,8 @@ fn runtime_loader_state_reset_matches_gnu_init_lread() {
             "GNU init_lread resets `{name}'"
         );
     }
-    assert!(eval.loads_in_progress.is_empty());
-    assert!(eval.require_stack.is_empty());
+    assert!(eval.loads_in_progress().is_empty());
+    assert!(eval.require_stack().is_empty());
 }
 
 /// Each shipped layout must resolve to its own tree through
@@ -16023,7 +16230,7 @@ fn runtime_image_loads_from_path_exec_when_nothing_sits_beside_the_executable() 
     fs::create_dir_all(&libexec).expect("stage bundle libexec");
     let executable = macos.join("neomacs");
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.set_variable("path-exec-runtime-image-test-var", Value::fixnum(218));
     crate::emacs_core::pdump::dump_to_file(
         &eval,
@@ -16056,7 +16263,7 @@ fn final_runtime_image_activation_restores_the_gnu_eval_depth() {
     let executable = dir.path().join("neomacs");
     let image = dir.path().join(RuntimeImageRole::Final.image_file_name());
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.set_variable("max-lisp-eval-depth", Value::fixnum(4200));
     crate::emacs_core::pdump::dump_to_file(&eval, &image).expect("write final runtime image");
 
@@ -16110,7 +16317,7 @@ fn test_bootstrap_cache_paths_are_keyed_by_the_lisp_source_fingerprint() {
 
 #[test]
 fn dump_loadup_build_details_default_preserves_owned_hostname() {
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let host = eval.eval_str("(system-name)").expect("owned system name");
     assert!(host.is_string());
     let invocation = LoadupDumpInvocation::new(LoadupDumpMode::Pdump, vec![]);
@@ -16125,7 +16332,7 @@ fn dump_loadup_build_details_default_preserves_owned_hostname() {
 
 #[test]
 fn dump_loadup_build_details_omit_survives_hostname_refresh() {
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let host = eval.eval_str("(system-name)").expect("owned system name");
     assert!(host.is_string());
     // Ordinary user data is not a target of the startup policy.
@@ -16143,7 +16350,7 @@ fn dump_loadup_build_details_omit_survives_hostname_refresh() {
         Some(Value::NIL)
     );
     assert_eq!(
-        eval.cached_system_name.bits(),
+        eval.cached_system_name().bits(),
         host.bits(),
         "the owned hostname cache must not become nil"
     );
@@ -16164,7 +16371,7 @@ fn dump_loadup_build_details_omit_survives_hostname_refresh() {
 
 #[test]
 fn build_details_include_preserves_explicit_hostname_override() {
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.set_variable("system-name", Value::NIL);
     BuildDetails::Include.apply(&mut eval);
     assert!(
