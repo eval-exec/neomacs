@@ -66,17 +66,19 @@ fn child_exit_status_retained() -> std::io::Result<bool> {
     Ok(action.sa_sigaction != libc::SIG_IGN && action.sa_flags & libc::SA_NOCLDWAIT == 0)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     static NEW_CHILD_COMMAND_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn reset_new_child_command_calls_for_test() {
     NEW_CHILD_COMMAND_CALLS.with(|calls| calls.set(0));
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn new_child_command_calls_for_test() -> usize {
     NEW_CHILD_COMMAND_CALLS.with(std::cell::Cell::get)
 }
@@ -1502,6 +1504,7 @@ fn builtin_call_process_region_impl(
     Ok(call_process_status_value(output.status))
 }
 
+#[doc(hidden)]
 pub fn builtin_call_process(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
@@ -1666,6 +1669,7 @@ pub(crate) fn builtin_process_lines_handling_status(
     Ok(lines)
 }
 
+#[doc(hidden)]
 pub fn builtin_call_process_region(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
