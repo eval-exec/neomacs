@@ -10,7 +10,7 @@ use crate::tagged::SymbolMode;
 
 #[test]
 fn issue554_memory_signal_binding_requires_explicit_symbol_policy() {
-    let mut context = Context::new();
+    let mut context = crate::test_utils::new_context();
     let original = context
         .eval_str("(cons (position-symbol 'error 17) '(policy-payload . 99))")
         .unwrap();
@@ -32,7 +32,7 @@ fn issue554_memory_signal_binding_requires_explicit_symbol_policy() {
 
 #[test]
 fn issue554_positioned_memory_descriptor_roundtrip_keeps_original_and_roots() {
-    let mut context = Context::new();
+    let mut context = crate::test_utils::new_context();
     let original = context
         .eval_str("(cons (position-symbol 'error 17) (cons (vector 7) 99))")
         .unwrap();
@@ -64,7 +64,7 @@ fn issue554_positioned_memory_descriptor_roundtrip_keeps_original_and_roots() {
 #[test]
 fn issue554_allocation_failure_reads_live_context_symbol_policy() {
     for enabled in [false, true] {
-        let mut context = Context::new();
+        let mut context = crate::test_utils::new_context();
         let original = context
             .eval_str("(setq memory-signal-data (cons (position-symbol 'error 17) '(policy-payload . 99)))")
             .unwrap();
@@ -99,7 +99,7 @@ fn issue554_allocation_failure_reads_live_context_symbol_policy() {
 
 #[test]
 fn issue554_noncons_memory_descriptor_keeps_ordinary_raw_payload_in_both_modes() {
-    let _context = Context::new();
+    let _context = crate::test_utils::new_context();
     for mode in [SymbolMode::Bare, SymbolMode::Positioned] {
         let value = Value::fixnum(42);
         let flow = memory_signal_from_binding_value(value, mode);

@@ -13,7 +13,7 @@ fn decode_code(bytes: &[u8]) -> (u32, usize) {
 
 #[test]
 fn declared_string_character_access_is_bounded_and_count_driven() {
-    let _ctx = Context::new();
+    let _ctx = crate::test_utils::new_context();
     // Preserve GNU lead arithmetic within the character domain.
     // The two extra zeros below are the bounded emulator tail policy,
     // not a claim that GNU initialized bytes past its terminator.
@@ -36,7 +36,7 @@ fn declared_string_character_access_is_bounded_and_count_driven() {
 
 #[test]
 fn declared_string_iteration_honors_character_limit_and_virtual_zero_tail() {
-    let _ctx = Context::new();
+    let _ctx = crate::test_utils::new_context();
     let longer = LispString::from_dump(b"ab".to_vec(), 4, 2);
     assert_eq!(
         builtins::lisp_string_char_codes(&longer),
@@ -55,7 +55,7 @@ fn declared_string_iteration_honors_character_limit_and_virtual_zero_tail() {
 
 #[test]
 fn declared_string_aset_rejects_a_character_without_physical_storage() {
-    let _ctx = Context::new();
+    let _ctx = crate::test_utils::new_context();
     let value = Value::heap_string(LispString::from_dump(b"ab".to_vec(), 5, 2));
     let error = builtins::aset_string_replacement(&value, &Value::fixnum(2), &Value::fixnum(65))
         .expect_err("logical index cannot authorize a physical out-of-bounds write");

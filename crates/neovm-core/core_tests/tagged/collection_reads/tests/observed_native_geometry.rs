@@ -204,7 +204,7 @@ fn observed_window_geometry_includes_cons_vector_and_record_owners() {
 fn observed_string_keeps_exact_mark_and_compiled_invalidation_without_window_geometry() {
     crate::test_utils::init_test_tracing();
     let _mode = ObservedMode::begin();
-    let mut context = crate::emacs_core::eval::Context::new();
+    let mut context = crate::test_utils::new_context();
     context.gc_stress = false;
     context.tagged_heap.set_gc_threshold(usize::MAX);
     context.setup_thread_locals();

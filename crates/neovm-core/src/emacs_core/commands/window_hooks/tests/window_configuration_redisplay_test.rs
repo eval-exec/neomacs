@@ -6,7 +6,7 @@ use crate::emacs_core::eval::{Context, RedisplayHookPolicyGuard};
 
 fn fixture() -> (Context, crate::window::FrameId, crate::window::WindowId) {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let root = eval.buffers.current_buffer_id().expect("root buffer");
     let frame_id = eval.frames.create_frame("config-mini", 80, 25, root);
     let frame = eval.frames.get_mut(frame_id).expect("frame");

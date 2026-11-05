@@ -49,7 +49,7 @@ fn register_bootstrap_vars_matches_gnu_alloc_defaults() {
 #[test]
 fn evaluator_binds_alloc_bootstrap_vars() {
     crate::test_utils::init_test_tracing();
-    let eval = Context::new();
+    let eval = crate::test_utils::new_context();
     let obarray = eval.obarray();
 
     assert_eq!(obarray.symbol_value_copied("memory-full"), Some(Value::NIL));

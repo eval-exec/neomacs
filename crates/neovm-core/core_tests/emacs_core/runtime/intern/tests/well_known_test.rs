@@ -7,7 +7,7 @@ use super::super::{
 
 #[test]
 fn table_ids_names_and_registry_identities_agree() {
-    let _ctx = crate::emacs_core::Context::new();
+    let _ctx = crate::test_utils::new_context();
     for (index, variant) in WellKnown::VARIANTS.iter().copied().enumerate() {
         assert_eq!(variant.name(), WELL_KNOWN_NAMES[index]);
         assert_eq!(variant.id().0, FIRST_WELL_KNOWN_SYM_ID + index as u32);
@@ -20,7 +20,7 @@ fn table_ids_names_and_registry_identities_agree() {
 
 #[test]
 fn table_identity_matches_the_string_constructor() {
-    let _ctx = crate::emacs_core::Context::new();
+    let _ctx = crate::test_utils::new_context();
     for variant in WellKnown::VARIANTS.iter().copied() {
         let fixed = crate::emacs_core::Value::symbol(variant);
         let text = crate::emacs_core::Value::symbol(variant.name());
@@ -66,7 +66,7 @@ fn unintern_keeps_the_well_known_identity_while_lisp_reinterns() {
     }
 
     use crate::emacs_core::Value;
-    let mut ctx = crate::emacs_core::Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let symbol = WellKnown::ModeLine;
     let original = symbol.id();
     ctx.assign_by_id(original, Value::fixnum(42));
@@ -110,7 +110,7 @@ fn unintern_keeps_the_well_known_identity_while_lisp_reinterns() {
 /// membership from the table constructor.
 #[test]
 fn initial_obarray_contains_every_table_symbol_like_gnu_defsym() {
-    let mut ctx = crate::emacs_core::Context::new();
+    let mut ctx = crate::test_utils::new_context();
     for variant in WellKnown::VARIANTS.iter().copied() {
         assert!(
             ctx.obarray().is_global_member(variant.id()),

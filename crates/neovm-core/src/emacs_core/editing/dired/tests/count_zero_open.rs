@@ -13,7 +13,7 @@ fn zero_count_opens_the_directory_and_checks_matching_entries() {
     let missing = dir.path().join("missing");
     let file = dir.path().join("file");
     std::fs::write(&file, b"").unwrap();
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     for (path, symbol) in [(&missing, "file-missing"), (&file, "file-error")] {
         for attributes in [false, true] {
             let mut args = vec![

@@ -148,7 +148,7 @@ fn on_heap<R>(
 }
 
 fn admitted(body: impl FnOnce(&ParallelHeapEra, &SharedRoot, &SharedRoot)) {
-    let mut context = Context::new();
+    let mut context = crate::test_utils::new_context();
     // SAFETY: nil and a fixnum are immediates of this Context's heap.
     let nil = unsafe { SharedRoot::new(&context.tagged_heap, TaggedValue::NIL) };
     let one = unsafe { SharedRoot::new(&context.tagged_heap, TaggedValue::fixnum(1)) };

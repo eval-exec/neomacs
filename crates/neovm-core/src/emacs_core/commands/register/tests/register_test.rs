@@ -27,7 +27,7 @@ fn register_copied_properties_have_only_manager_roots() {
     }
 
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.gc_stress = false;
     eval.gc_collect_exact();
     eval.tagged_heap.set_gc_threshold(usize::MAX);
@@ -298,7 +298,7 @@ fn test_builtin_copy_and_insert() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     // copy-to-register
     let result = builtin_copy_to_register(
@@ -323,7 +323,7 @@ fn test_builtin_number_and_increment() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     // number-to-register
     let result = builtin_number_to_register(&mut eval, vec![Value::fixnum(10), Value::char('n')]);
@@ -349,7 +349,7 @@ fn test_builtin_increment_empty_register() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     // Incrementing empty register starts from 0
     let result = builtin_increment_register(&mut eval, vec![Value::fixnum(7), Value::char('e')]);
@@ -365,7 +365,7 @@ fn test_builtin_set_and_get_register() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     // Set string
     let result = builtin_set_register(
@@ -392,7 +392,7 @@ fn test_builtin_view_register() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     // Empty register
     let result = builtin_view_register(&mut eval, vec![Value::char('v')]);
@@ -424,7 +424,7 @@ fn test_builtin_point_to_register_stores_marker() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let current_buffer_id = eval.buffers.current_buffer().expect("current buffer").id;
 
     builtin_point_to_register(&mut eval, vec![Value::char('p')]).expect("point-to-register");
@@ -448,7 +448,7 @@ fn test_builtin_point_to_register_stores_lisp_char_position() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
         let buffer = eval.buffers.current_buffer_mut().expect("current buffer");
         buffer.insert("\u{20AC}x");
@@ -472,7 +472,7 @@ fn test_builtin_register_to_string() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     // Empty register => nil
     let empty = builtin_register_to_string(&mut eval, vec![Value::char('r')]).unwrap();
@@ -489,7 +489,7 @@ fn rectangle_and_file_registers_preserve_raw_unibyte_strings() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.registers.set(
         'r',
         RegisterContent::Rectangle(vec![
@@ -523,7 +523,7 @@ fn test_wrong_arg_count() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     // copy-to-register needs at least 2 args
     let result = builtin_copy_to_register(&mut eval, vec![Value::char('a')]);
@@ -539,7 +539,7 @@ fn register_text_preserves_raw_unibyte_payload() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let raw = Value::heap_string(LispString::from_unibyte(vec![0xFF]));
 
     builtin_set_register(&mut eval, vec![Value::char('r'), raw]).unwrap();

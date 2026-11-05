@@ -34,7 +34,7 @@ fn issue554_throw_policy_survives_real_load_and_flag_unbinding() {
             format!(";;; -*- lexical-binding: nil -*-\n{source}\n"),
         )
         .expect("write exclusively owned fixture");
-        let mut ctx = Context::new();
+        let mut ctx = crate::test_utils::new_context();
         let path = print_value(&Value::string(file.to_str().expect("UTF-8 fixture path")));
         let form = format!(
             "(let ((symbols-with-pos-enabled nil))
@@ -51,7 +51,7 @@ fn issue554_throw_policy_survives_real_load_and_flag_unbinding() {
 #[test]
 fn issue554_cloned_owned_throw_roundtrip_preserves_policy_and_roots() {
     for policy in [SymbolMode::Bare, SymbolMode::Positioned] {
-        let mut ctx = Context::new();
+        let mut ctx = crate::test_utils::new_context();
         let bare_tag = Value::symbol("issue554-cloned-throw-tag");
         let tag = ctx
             .tagged_heap
@@ -117,7 +117,7 @@ fn issue554_throw_policy_survives_bytecode_loader_frame() {
             "(no-catch nil)",
         ),
     ] {
-        let mut ctx = Context::new();
+        let mut ctx = crate::test_utils::new_context();
         ctx.eval_str(&format!("(fset 'issue554-loaded-form '(lambda () {body}))"))
             .expect("interpreted loaded form");
         let mut shim = ByteCodeFunction::new(LambdaParams::simple(vec![]));

@@ -9,7 +9,7 @@ use crate::emacs_core::eval::Context;
 use crate::emacs_core::value::Value;
 
 fn make_ctx() -> Context {
-    Context::new()
+    crate::test_utils::new_context()
 }
 
 fn eval(ctx: &mut Context, src: &str) -> Value {

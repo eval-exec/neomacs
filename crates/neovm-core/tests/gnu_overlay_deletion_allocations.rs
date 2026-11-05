@@ -39,7 +39,7 @@ static ALLOCATOR: CountedSystem = CountedSystem;
 
 #[test]
 fn gde_review_equal_start_delete_has_no_ordering_scratch_allocations() {
-    let _context = Context::new();
+    let _context = neovm_core::emacs_core::eval_hook_installers::new_context();
     let mut list = OverlayList::new();
     for _ in 0..2 {
         list.insert_overlay(Value::make_overlay(OverlayDataInit {

@@ -11,7 +11,7 @@ fn ls(text: &str) -> LispString {
 #[test]
 fn completion_directory_preserves_spelling_without_properties() {
     crate::test_utils::init_test_tracing();
-    let _eval = crate::emacs_core::eval::Context::new();
+    let _eval = crate::test_utils::new_context();
     for mut text in [
         LispString::from_utf8("dir-字-é"),
         LispString::from_unibyte(vec![0xff, b'A']),
@@ -49,7 +49,7 @@ fn minibuffer_copied_properties_have_only_manager_roots() {
     }
 
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.gc_stress = false;
     eval.gc_collect_exact();
     eval.tagged_heap.set_gc_threshold(usize::MAX);
@@ -192,7 +192,7 @@ fn gotoh(eval: &mut crate::emacs_core::eval::Context, pat: &str, str: &str) -> O
 #[test]
 fn flex_cost_gotoh_matches_gnu_31() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     // Reference values captured from GNU Emacs 31.0.90 batch.
     assert_eq!(gotoh(&mut eval, "foo", "foobar"), Some(vec![0, 0, 1, 2]));
     assert_eq!(gotoh(&mut eval, "foo", "barfoo"), Some(vec![5, 3, 4, 5]));
@@ -211,7 +211,7 @@ fn flex_cost_gotoh_matches_gnu_31() {
 #[test]
 fn flex_cost_gotoh_honors_completion_ignore_case() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     // Case-sensitive: "FOO" is not a subsequence of "foobar" -> nil.
     assert_eq!(gotoh(&mut eval, "FOO", "foobar"), None);
     // With completion-ignore-case, it matches like the lowercase form.
@@ -255,7 +255,7 @@ fn normalize_symbol_reader_default_uses_list_head_and_symbol_name() {
 #[test]
 fn normalize_buffer_reader_default_uses_list_head_and_live_buffer_name() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let buf_id = eval.buffers.create_buffer(" minibuffer-default ");
 
     assert_eq!(
@@ -274,7 +274,7 @@ fn normalize_buffer_reader_default_uses_list_head_and_live_buffer_name() {
 #[test]
 fn read_buffer_completing_args_use_live_buffer_names_and_normalized_default() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let buf_id = eval.buffers.create_buffer(" target-buffer ");
     let args = read_buffer_completing_args(
         eval.variables(),
@@ -297,7 +297,7 @@ fn read_buffer_completing_args_use_live_buffer_names_and_normalized_default() {
 #[test]
 fn read_buffer_completing_args_formats_default_prompt_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.obarray
         .set_symbol_value("minibuffer-default-prompt-format", Value::string(" [%s]"));
 
@@ -614,7 +614,7 @@ fn recursive_depth_limit() {
 #[test]
 fn exit_recursive_edit_rejects_top_level_command_loop_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.command_loop.recursive_depth = 1;
 
     let result = builtin_exit_recursive_edit(&mut eval, vec![]);
@@ -633,7 +633,7 @@ fn exit_recursive_edit_rejects_top_level_command_loop_like_gnu() {
 #[test]
 fn abort_recursive_edit_rejects_top_level_command_loop_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.command_loop.recursive_depth = 1;
 
     let result = builtin_abort_recursive_edit(&mut eval, vec![]);
@@ -841,7 +841,7 @@ fn alist_completion() {
 fn builtin_try_completion_unique_exact() {
     crate::test_utils::init_test_tracing();
     // Exact unique match should return t.
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let coll = Value::list(vec![Value::string("unique"), Value::string("other")]);
     let result = builtin_try_completion(&mut eval, vec![Value::string("unique"), coll]).unwrap();
     assert!(result.is_t());
@@ -850,7 +850,7 @@ fn builtin_try_completion_unique_exact() {
 #[test]
 fn builtin_try_completion_common_prefix() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let coll = Value::list(vec![Value::string("application"), Value::string("apple")]);
     let result = builtin_try_completion(&mut eval, vec![Value::string("app"), coll]).unwrap();
     assert!(result.as_utf8_str().unwrap() == "appl");
@@ -862,7 +862,7 @@ fn builtin_try_completion_ignore_case_matches_gnu_bestmatch_case() {
     // Faithful to GNU `Ftry_completion` (src/minibuf.c): with
     // completion-ignore-case the returned value carries the case pattern of
     // the candidate GNU selects as `bestmatch', not simply the first match.
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.assign("completion-ignore-case", Value::T);
 
     // (try-completion "A" '("abc" "ABC" "abd")) => "AB"  (GNU oracle).
@@ -899,7 +899,7 @@ fn builtin_try_completion_ignore_case_matches_gnu_bestmatch_case() {
 #[test]
 fn builtin_try_completion_ignore_case_all_completions_lengths() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.assign("completion-ignore-case", Value::T);
     let coll = || {
         Value::list(vec![
@@ -923,7 +923,7 @@ fn builtin_try_completion_ignore_case_all_completions_lengths() {
 #[test]
 fn builtin_try_completion_no_match() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let coll = Value::list(vec![Value::string("foo"), Value::string("bar")]);
     let result = builtin_try_completion(&mut eval, vec![Value::string("zzz"), coll]).unwrap();
     assert!(result.is_nil());
@@ -932,7 +932,7 @@ fn builtin_try_completion_no_match() {
 #[test]
 fn builtin_try_completion_handles_raw_unibyte_candidates_without_panicking() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let raw = Value::heap_string(crate::heap_types::LispString::from_unibyte(vec![0xFF]));
     let coll = Value::list(vec![raw]);
     let result = builtin_try_completion(&mut eval, vec![Value::string(""), coll]);
@@ -942,7 +942,7 @@ fn builtin_try_completion_handles_raw_unibyte_candidates_without_panicking() {
 #[test]
 fn builtin_try_completion_accepts_gnu_obarray_objects() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let obarray = Value::obarray(3);
     let buckets = vec![
         Value::NIL,
@@ -959,7 +959,7 @@ fn builtin_try_completion_accepts_gnu_obarray_objects() {
 #[test]
 fn builtin_try_completion_rejects_more_than_three_args() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let coll = Value::list(vec![Value::string("a")]);
     let result = builtin_try_completion(
         &mut eval,
@@ -979,7 +979,7 @@ fn builtin_try_completion_rejects_more_than_three_args() {
 #[test]
 fn builtin_all_completions_returns_list() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let coll = Value::list(vec![
         Value::string("apple"),
         Value::string("application"),
@@ -993,7 +993,7 @@ fn builtin_all_completions_returns_list() {
 #[test]
 fn builtin_all_completions_rejects_more_than_three_args() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let coll = Value::list(vec![Value::string("a")]);
     let result = builtin_all_completions(
         &mut eval,
@@ -1013,7 +1013,7 @@ fn builtin_all_completions_rejects_more_than_three_args() {
 #[test]
 fn builtin_test_completion_match() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let coll = Value::list(vec![Value::string("alpha"), Value::string("beta")]);
     let result = builtin_test_completion(&mut eval, vec![Value::string("alpha"), coll]).unwrap();
     assert!(result.is_t());
@@ -1022,7 +1022,7 @@ fn builtin_test_completion_match() {
 #[test]
 fn builtin_test_completion_no_match() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let coll = Value::list(vec![Value::string("alpha"), Value::string("beta")]);
     let result = builtin_test_completion(&mut eval, vec![Value::string("alp"), coll]).unwrap();
     assert!(result.is_nil());
@@ -1031,7 +1031,7 @@ fn builtin_test_completion_no_match() {
 #[test]
 fn builtin_test_completion_rejects_more_than_three_args() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let coll = Value::list(vec![Value::string("a")]);
     let result = builtin_test_completion(
         &mut eval,
@@ -1051,7 +1051,7 @@ fn builtin_test_completion_rejects_more_than_three_args() {
 #[test]
 fn builtin_try_completion_returns_raw_unibyte_common_prefix() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let input = Value::heap_string(LispString::from_unibyte(vec![0xFF]));
     let coll = Value::list(vec![
         Value::heap_string(LispString::from_unibyte(vec![0xFF, b'A'])),
@@ -1070,7 +1070,7 @@ fn builtin_try_completion_returns_raw_unibyte_common_prefix() {
 #[test]
 fn builtin_all_completions_preserves_raw_unibyte_candidates() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let input = Value::heap_string(LispString::from_unibyte(vec![0xFF]));
     let coll = Value::list(vec![
         Value::heap_string(LispString::from_unibyte(vec![0xFF, b'A'])),
@@ -1097,7 +1097,7 @@ fn builtin_all_completions_preserves_raw_unibyte_candidates() {
 #[test]
 fn builtin_all_completions_honors_raw_unibyte_completion_regexps() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.obarray.set_symbol_value(
         "completion-regexp-list",
         Value::list(vec![Value::heap_string(LispString::from_unibyte(vec![
@@ -1124,7 +1124,7 @@ fn builtin_all_completions_honors_raw_unibyte_completion_regexps() {
 #[test]
 fn builtin_all_completions_completion_regexps_fold_when_completion_ignore_case() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.obarray
         .set_symbol_value("completion-ignore-case", Value::T);
     eval.obarray.set_symbol_value(
@@ -1146,7 +1146,7 @@ fn builtin_all_completions_completion_regexps_fold_when_completion_ignore_case()
 #[test]
 fn builtin_all_completions_signals_invalid_completion_regexp() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.obarray.set_symbol_value(
         "completion-regexp-list",
         Value::list(vec![Value::string("[")]),
@@ -1182,7 +1182,7 @@ fn builtin_minibufferp_returns_nil() {
 #[test]
 fn eval_minibuffer_runtime_state_tracks_active_prompt_and_contents() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let minibuf_id = eval.buffers.create_buffer(" *Minibuf-1*");
     crate::emacs_core::minibuffer::install_minibuffer_buffer_text(
         &mut eval.buffers,
@@ -1237,7 +1237,7 @@ fn eval_minibuffer_runtime_state_tracks_active_prompt_and_contents() {
 #[test]
 fn eval_minibuffer_runtime_state_preserves_raw_unibyte_prompt_and_contents() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let minibuf_id = eval.buffers.create_buffer(" *Minibuf-raw*");
     let raw_prompt = crate::heap_types::LispString::from_unibyte(vec![0xFF, b':', b' ']);
     crate::emacs_core::minibuffer::install_minibuffer_buffer_text(
@@ -1267,7 +1267,7 @@ fn eval_minibuffer_runtime_state_preserves_raw_unibyte_prompt_and_contents() {
 #[test]
 fn install_minibuffer_buffer_text_applies_gnu_prompt_properties() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let minibuf_id = eval.buffers.create_buffer(" *Minibuf-props*");
     let prompt_end = crate::emacs_core::minibuffer::install_minibuffer_buffer_text(
         &mut eval.buffers,
@@ -1326,7 +1326,7 @@ fn install_minibuffer_buffer_text_applies_gnu_prompt_properties() {
 #[test]
 fn builtin_minibuffer_prompt_end_falls_back_to_point_min_without_prompt_field() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let minibuf_id = eval.buffers.create_buffer(" *Minibuf-1*");
     {
         let prompt_end = crate::emacs_core::minibuffer::install_minibuffer_buffer_text(
@@ -1362,7 +1362,7 @@ fn builtin_minibuffer_prompt_end_falls_back_to_point_min_without_prompt_field() 
 #[test]
 fn install_minibuffer_buffer_text_reuses_existing_buffer_via_buffer_edit_pipeline() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let minibuf_id = eval.buffers.create_buffer(" *Minibuf-reinstall*");
 
     let first_prompt_end = crate::emacs_core::minibuffer::install_minibuffer_buffer_text(
@@ -1445,7 +1445,7 @@ fn builtin_minibufferp_rejects_more_than_two_args() {
 #[test]
 fn builtin_recursive_edit_returns_nil() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = builtin_recursive_edit(&mut eval, vec![]).unwrap();
     assert!(result.is_nil());
 }
@@ -1453,7 +1453,7 @@ fn builtin_recursive_edit_returns_nil() {
 #[test]
 fn builtin_recursive_edit_rejects_args() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = builtin_recursive_edit(&mut eval, vec![Value::NIL]);
     assert!(if matches!(
         result.kinded_ref(),
@@ -1469,7 +1469,7 @@ fn builtin_recursive_edit_rejects_args() {
 #[test]
 fn builtin_top_level_throws_top_level_tag() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = builtin_top_level(&mut eval, vec![]);
     // top-level now throws 'top-level to exit all recursive edits
     // (mirrors GNU Emacs keyboard.c:1187 Ftop_level).
@@ -1483,7 +1483,7 @@ fn builtin_top_level_throws_top_level_tag() {
 #[test]
 fn builtin_top_level_rejects_args() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = builtin_top_level(&mut eval, vec![Value::NIL]);
     assert!(if matches!(
         result.kinded_ref(),
@@ -1499,7 +1499,7 @@ fn builtin_top_level_rejects_args() {
 #[test]
 fn builtin_exit_recursive_edit_signals_user_error() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = builtin_exit_recursive_edit(&mut eval, vec![]);
     // Not in a recursive edit → user-error
     assert!(if matches!(
@@ -1516,7 +1516,7 @@ fn builtin_exit_recursive_edit_signals_user_error() {
 #[test]
 fn builtin_exit_recursive_edit_rejects_args() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = builtin_exit_recursive_edit(&mut eval, vec![Value::NIL]);
     assert!(if matches!(
         result.kinded_ref(),
@@ -1532,7 +1532,7 @@ fn builtin_exit_recursive_edit_rejects_args() {
 #[test]
 fn builtin_minibuffer_contents_returns_current_buffer_text() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.buffers
         .current_buffer_mut()
         .expect("scratch buffer")
@@ -1544,7 +1544,7 @@ fn builtin_minibuffer_contents_returns_current_buffer_text() {
 #[test]
 fn builtin_minibuffer_contents_respects_narrowing_in_current_buffer() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
         let buf = eval.buffers.current_buffer_mut().expect("scratch buffer");
         buf.insert("012345");
@@ -1560,7 +1560,7 @@ fn builtin_minibuffer_contents_respects_narrowing_in_current_buffer() {
 #[test]
 fn builtin_minibuffer_contents_no_properties_drops_properties_from_current_buffer_text() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let buffer_id = eval.buffers.current_buffer_id().expect("scratch buffer");
     eval.buffers
         .current_buffer_mut()
@@ -1591,7 +1591,7 @@ fn builtin_minibuffer_contents_no_properties_drops_properties_from_current_buffe
 #[test]
 fn builtin_minibuffer_contents_no_properties_rejects_args() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = builtin_minibuffer_contents_no_properties_ctx(&mut eval, vec![Value::NIL]);
     assert!(if matches!(
         result.kinded_ref(),
@@ -1607,7 +1607,7 @@ fn builtin_minibuffer_contents_no_properties_rejects_args() {
 #[test]
 fn builtin_exit_minibuffer_throws_exit_tag() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = builtin_exit_minibuffer(&mut eval, vec![]);
     assert!(matches!(
         result.kinded_ref(),
@@ -1651,7 +1651,7 @@ fn builtin_abort_minibuffers_rejects_args() {
 #[test]
 fn builtin_abort_recursive_edit_signals_user_error() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = builtin_abort_recursive_edit(&mut eval, vec![]);
     // Not in a recursive edit → user-error
     assert!(if matches!(
@@ -1668,7 +1668,7 @@ fn builtin_abort_recursive_edit_signals_user_error() {
 #[test]
 fn builtin_abort_recursive_edit_rejects_args() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = builtin_abort_recursive_edit(&mut eval, vec![Value::NIL]);
     assert!(if matches!(
         result.kinded_ref(),
@@ -1684,7 +1684,7 @@ fn builtin_abort_recursive_edit_rejects_args() {
 #[test]
 fn builtin_read_buffer_signals_end_of_file() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = builtin_read_buffer(
         &mut eval,
         vec![Value::string("Buffer: "), Value::string("*scratch*")],
@@ -1703,7 +1703,7 @@ fn builtin_read_buffer_signals_end_of_file() {
 #[test]
 fn builtin_read_buffer_rejects_more_than_four_args() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = builtin_read_buffer(
         &mut eval,
         vec![
@@ -1728,7 +1728,7 @@ fn builtin_read_buffer_rejects_more_than_four_args() {
 #[test]
 fn builtin_read_command_rejects_more_than_two_args() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = builtin_read_command(
         &mut eval,
         vec![Value::string("Command: "), Value::NIL, Value::NIL],
@@ -1747,7 +1747,7 @@ fn builtin_read_command_rejects_more_than_two_args() {
 #[test]
 fn builtin_read_variable_rejects_more_than_two_args() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = builtin_read_variable(
         &mut eval,
         vec![Value::string("Variable: "), Value::NIL, Value::NIL],
@@ -1809,7 +1809,7 @@ fn value_to_string_list_from_vector() {
 #[test]
 fn symbol_completion_observes_the_lisp_visible_mutated_name() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = eval
         .eval_str(
             r##"(let* ((symbol (make-symbol "foo"))
@@ -1841,7 +1841,7 @@ fn symbol_completion_observes_the_lisp_visible_mutated_name() {
 #[test]
 fn atom_backed_completion_returns_the_symbols_materialized_name_object() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.obarray
         .intern("atom-backed-completion-name-identity-probe");
 
@@ -1866,7 +1866,7 @@ fn atom_backed_completion_returns_the_symbols_materialized_name_object() {
 #[test]
 fn global_obarray_completion_has_no_pre_candidate_staging_collections() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     crate::emacs_core::builtins::symbols::reset_global_obarray_symbol_value_materializations();
     eval.eval_str(r##"(all-completions "global-obarray-stage-probe" obarray)"##)
@@ -1895,7 +1895,7 @@ fn completion_candidate_keeps_the_global_obarray_scan_compact() {
 #[test]
 fn completion_state_reads_use_predeclared_symbols() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.obarray
         .set_symbol_value("completion-ignore-case", Value::T);
     eval.obarray.set_symbol_value(
@@ -1929,7 +1929,7 @@ fn completion_state_reads_use_predeclared_symbols() {
 #[test]
 fn repeated_mx_completion_does_not_intern_during_candidate_scan() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let obarray = eval
         .obarray
         .symbol_value_copied("obarray")
@@ -1961,7 +1961,7 @@ fn repeated_mx_completion_does_not_intern_during_candidate_scan() {
 #[test]
 fn obarray_completion_uses_gnu_commandp_primitive_dispatch() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = eval
         .eval_str(
             r##"(let ((old (symbol-function 'commandp))
@@ -1996,7 +1996,7 @@ fn obarray_completion_uses_gnu_commandp_primitive_dispatch() {
 #[test]
 fn completion_regexp_list_reads_current_buffer_syntax_table() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.eval_str("(set-syntax-table (copy-syntax-table (standard-syntax-table)))")
         .expect("set-syntax-table");
     eval.eval_str("(modify-syntax-entry ?z \" \")")
@@ -2043,7 +2043,7 @@ fn completion_regexp_list_reads_current_buffer_syntax_table() {
 #[test]
 fn completion_regexp_list_reads_candidate_syntax_table_properties() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let out = eval
         .eval_str(
             r#"(let ((cand (copy-sequence "zzz"))

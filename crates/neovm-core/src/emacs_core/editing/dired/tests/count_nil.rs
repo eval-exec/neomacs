@@ -12,7 +12,7 @@ fn directory_files_accepts_nil_count_and_forwarded_optional_count() {
     let dir = fixture();
     std::fs::write(dir.path().join("entry"), b"").unwrap();
     let path = Value::string(dir.path().to_str().unwrap());
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let omitted = builtin_directory_files(&mut ctx, vec![path]).unwrap();
     let explicit = builtin_directory_files(
         &mut ctx,

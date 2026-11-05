@@ -356,7 +356,7 @@ fn make_bool_vector_and_bool_vector_build_packed_bool_vectors() {
 
 /// Evaluate `src` in a fresh evaluator and print the result.
 fn eval_printed(src: &str) -> String {
-    let mut ctx = crate::emacs_core::eval::Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let value = ctx.eval_str(src).unwrap_or_else(|e| panic!("{src}: {e:?}"));
     crate::emacs_core::print::print_value(&value)
 }

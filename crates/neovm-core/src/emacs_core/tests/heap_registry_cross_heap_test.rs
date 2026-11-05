@@ -8,7 +8,7 @@ use crate::emacs_core::heap_registry::{HeapRegistryHandle, HeapRegistrySlot};
 
 #[test]
 fn gc_tls_ownership_heap_registry_same_heap_reset_preserves_context_handle() {
-    let _ctx = Context::new();
+    let _ctx = crate::test_utils::new_context();
     let slot = HeapRegistrySlot::new(String::from("first"));
     let owned = slot.current();
     slot.reset(String::from("reset"));
@@ -21,10 +21,10 @@ fn gc_tls_ownership_heap_registry_same_heap_reset_preserves_context_handle() {
 
 #[test]
 fn gc_tls_ownership_heap_registry_new_heap_reset_preserves_old_context_state() {
-    let first = Context::new();
+    let first = crate::test_utils::new_context();
     let slot = HeapRegistrySlot::new(String::from("first"));
     let owned = slot.current();
-    let second = Context::new();
+    let second = crate::test_utils::new_context();
     slot.reset(String::from("second"));
     assert_eq!(owned.heap_identity(), first.tagged_heap.identity());
     assert_eq!(

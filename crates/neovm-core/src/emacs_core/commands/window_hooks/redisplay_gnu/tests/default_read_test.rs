@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn void_default_signals_after_callback_and_records_on_unwind() {
     crate::test_utils::init_test_tracing();
-    let mut eval = super::super::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let frame = crate::emacs_core::window_cmds::ensure_selected_frame_id_in_state(
         &mut eval.frames,
         &mut eval.buffers,

@@ -4,7 +4,7 @@ use crate::emacs_core::eval::Context;
 #[test]
 fn equal_compares_char_tables_by_gnu_pseudovector_slots() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = eval
         .eval_str(
             r#"
@@ -62,7 +62,7 @@ fn equal_compares_char_tables_by_gnu_pseudovector_slots() {
 #[test]
 fn equal_char_tables_share_hashes_and_equal_hash_table_keys() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = eval
         .eval_str(
             r#"
@@ -92,7 +92,7 @@ fn equal_on_circular_structures_matches_gnu_cycle_semantics() {
     // cons-loop tortoise-hare that used to error on circular structures; goes
     // through the lisp `equal` (try_equal_value_inner), not the bool equal_value.
     crate::test_utils::init_test_tracing();
-    let mut ev = crate::emacs_core::Context::new();
+    let mut ev = crate::test_utils::new_context();
     // (form, expected truthy)
     let cases: [(&str, bool); 5] = [
         // two separate self-circular lists, equal cars -> t
@@ -150,7 +150,7 @@ fn equal_on_circular_structures_matches_gnu_cycle_semantics() {
 #[test]
 fn equal_compares_byte_code_functions_element_wise_like_gnu_closures() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = eval
         .eval_str(
             r#"

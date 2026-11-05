@@ -3,7 +3,7 @@ use super::{GnuDeclaredCharacterCount, LispString};
 #[test]
 fn declared_character_midpoint_chooses_backward_payload_boundary() {
     crate::test_utils::init_test_tracing();
-    let _context = crate::emacs_core::eval::Context::new();
+    let _context = crate::test_utils::new_context();
     let text = LispString::from_emacs_bytes_with_declared_chars(
         "béa".as_bytes().to_vec(),
         GnuDeclaredCharacterCount::try_from(2).expect("test metadata"),

@@ -35,7 +35,7 @@ fn kmacro_copied_properties_have_only_manager_roots() {
         LispString::from_utf8("é %d"),
         LispString::from_unibyte(vec![0x80, b' ', b'%', b'd']),
     ] {
-        let mut eval = Context::new();
+        let mut eval = crate::test_utils::new_context();
         eval.gc_stress = false;
         eval.gc_collect_exact();
         eval.tagged_heap.set_gc_threshold(usize::MAX);
@@ -136,7 +136,7 @@ fn new_manager_defaults() {
 #[test]
 fn keyboard_runtime_finalize_and_cancel_match_gnu_macro_boundary_shape() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     builtin_start_kbd_macro(&mut eval, vec![]).expect("start");
     assert!(eval.command_loop.keyboard.kboard.defining_kbd_macro);
@@ -176,7 +176,7 @@ fn keyboard_runtime_finalize_and_cancel_match_gnu_macro_boundary_shape() {
 #[test]
 fn start_and_end_kbd_macro_publish_gnu_status_messages() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.assign("noninteractive", Value::NIL);
 
     builtin_start_kbd_macro(&mut eval, vec![]).expect("start macro");
@@ -195,7 +195,7 @@ fn start_and_end_kbd_macro_publish_gnu_status_messages() {
 #[test]
 fn macro_ring_pushes_previous_keyboard_runtime_macro() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     builtin_start_kbd_macro(&mut eval, vec![]).expect("start first");
     builtin_store_kbd_macro_event(&mut eval, vec![Value::char('a')]).expect("store a");
@@ -284,7 +284,7 @@ fn test_start_and_end_macro() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     // Start recording
     let result = builtin_start_kbd_macro(&mut eval, vec![]);
@@ -328,7 +328,7 @@ fn test_start_kbd_macro_builtin_contract() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     // Arity contract.  Only the upper bound is checked in the function body:
     // `start-kbd-macro` is registered `(1 . 2)` -- GNU's
@@ -373,7 +373,7 @@ fn test_start_with_append() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     // Record a macro
     let _ = builtin_start_kbd_macro(&mut eval, vec![]);
@@ -399,7 +399,7 @@ fn test_start_with_append_reexecutes_last_macro_when_no_exec_is_nil() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let _ = eval.eval_str_each(
         "(progn
            (setq kmacro-append-count 0)
@@ -456,7 +456,7 @@ fn test_start_with_append_real_key_macro_reexecutes_via_command_loop_and_marks_a
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let _ = eval.eval_str_each(
         r#"(progn
              (setq kmacro-append-real-count 0)
@@ -499,7 +499,7 @@ fn test_start_with_append_no_exec_skips_reexecution() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let _ = eval.eval_str_each(
         "(progn
            (setq kmacro-no-exec-count 0)
@@ -528,7 +528,7 @@ fn test_call_last_macro_no_macro() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     // No macro defined -- should error
     let result = builtin_call_last_kbd_macro(&mut eval, vec![]);
@@ -540,7 +540,7 @@ fn test_store_event_wrong_args() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     // Wrong arg count
     let result = builtin_store_kbd_macro_event(&mut eval, vec![]);
@@ -552,7 +552,7 @@ fn test_execute_kbd_macro_restores_outer_execution_state() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let outer = vec![Value::char('o'), Value::char('u')];
     eval.begin_executing_kbd_macro_runtime(outer.clone());
     eval.command_loop.keyboard.kboard.kbd_macro_index = 1;
@@ -579,7 +579,7 @@ fn test_execute_kbd_macro_restores_outer_execution_state() {
 #[test]
 fn test_execute_kbd_macro_real_key_events_use_command_loop_dispatch() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let results = eval.eval_str_each(
         r#"(progn
              (setq kmacro-command-loop-count 0)
@@ -605,7 +605,7 @@ fn test_execute_kbd_macro_real_key_events_use_command_loop_dispatch() {
 #[test]
 fn execute_kbd_macro_remaps_once_and_records_the_keymap_binding() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let results = eval.eval_str_each(
         r#"(progn
              (fset 'command-execute
@@ -708,7 +708,7 @@ fn execute_kbd_macro_leaves_last_nonmenu_event_nil_like_gnu() {
 #[test]
 fn exhausted_kbd_macro_iteration_finalizes_echo_at_key_reader_boundary() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.begin_executing_kbd_macro_runtime(Vec::new());
     eval.eval_str(
         r##"(progn
@@ -738,7 +738,7 @@ fn exhausted_kbd_macro_iteration_finalizes_echo_at_key_reader_boundary() {
 #[test]
 fn execute_kbd_macro_continues_in_recursive_minibuffer_command_loop() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let results = eval.eval_str_each(
         r#"(progn
              (setq kmacro-minibuffer-events nil
@@ -794,7 +794,7 @@ fn execute_kbd_macro_continues_in_recursive_minibuffer_command_loop() {
 #[test]
 fn test_execute_kbd_macro_publishes_raw_event_before_menu_filter() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let results = eval.eval_str_each(
         r#"(progn
              (setq kmacro-menu-filter-observations nil
@@ -836,7 +836,7 @@ fn test_execute_kbd_macro_publishes_raw_event_before_menu_filter() {
 #[test]
 fn test_execute_kbd_macro_symbol_events_use_command_loop_dispatch() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let results = eval.eval_str_each(
         r#"(progn
              (setq kmacro-symbol-event-count 0)
@@ -861,7 +861,7 @@ fn test_execute_kbd_macro_symbol_events_use_command_loop_dispatch() {
 #[test]
 fn test_execute_kbd_macro_named_symbol_uses_function_indirection_chain() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let results = eval.eval_str_each(
         r#"(progn
              (setq kmacro-named-symbol-count 0)
@@ -886,7 +886,7 @@ fn test_call_last_kbd_macro_raw_prefix_repeats_real_key_macro() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let _ = eval.eval_str_each(
         r#"(progn
              (setq kmacro-call-last-count 0)
@@ -917,7 +917,7 @@ fn test_call_last_kbd_macro_raw_prefix_repeats_real_key_macro() {
 #[test]
 fn test_call_last_kbd_macro_symbol_events_use_command_loop_dispatch() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let _ = eval.eval_str_each(
         r#"(progn
              (setq kmacro-call-last-symbol-count 0)
@@ -958,7 +958,7 @@ fn test_execute_kbd_macro_zero_count_uses_loopfunc_for_real_key_macro() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let _ = eval.eval_str_each(
         r#"(progn
              (setq kmacro-loop-count 0)
@@ -1003,7 +1003,7 @@ fn test_end_kbd_macro_repeat_executes_remaining_iterations() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let _ = eval.eval_str_each(
         r#"(progn
              (setq kmacro-end-repeat-count 0)
@@ -1035,7 +1035,7 @@ fn test_end_kbd_macro_repeat_executes_remaining_iterations() {
 #[test]
 fn test_execute_kbd_macro_runs_termination_hook_after_restoring_runtime_state() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let _ = eval.eval_str_each(
         r#"(progn
              (setq kmacro-term-ok nil)
@@ -1068,7 +1068,7 @@ fn test_execute_kbd_macro_runs_termination_hook_after_restoring_runtime_state() 
 #[test]
 fn test_execute_kbd_macro_runs_termination_hook_after_error() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let _ = eval.eval_str_each(
         r#"(progn
              (setq kmacro-error-term-ok nil)
@@ -1104,7 +1104,7 @@ fn test_execute_kbd_macro_runs_termination_hook_after_error() {
 #[test]
 fn test_call_last_kbd_macro_preserves_gnu_real_this_command_shape() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let _ = eval.eval_str_each(
         r#"(progn
              (setq kmacro-call-last-term-ok nil)
@@ -1143,7 +1143,7 @@ fn test_last_kbd_macro_builtin() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     assert_eq!(
         builtin_last_kbd_macro(&mut eval, vec![]).unwrap(),
@@ -1189,7 +1189,7 @@ fn test_kmacro_builtin_arity_contracts() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     assert_eq!(
         builtin_start_kbd_macro(&mut eval, vec![Value::NIL, Value::NIL]).unwrap(),
@@ -1220,7 +1220,7 @@ fn test_name_last_kbd_macro() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     // No macro -- should error
     let result = builtin_name_last_kbd_macro(&mut eval, vec![Value::symbol("my-macro")]);
@@ -1254,7 +1254,7 @@ fn test_name_last_kbd_macro_wrong_type() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let result = builtin_name_last_kbd_macro(&mut eval, vec![Value::fixnum(42)]);
     assert!(result.is_err());
@@ -1303,7 +1303,7 @@ fn test_kbd_macro_query_loaded_arity_matches_gnu() {
 #[test]
 fn test_resolve_macro_events_vector() {
     crate::test_utils::init_test_tracing();
-    let eval = Context::new();
+    let eval = crate::test_utils::new_context();
     let v = Value::vector(vec![Value::char('a'), Value::char('b')]);
     let events = resolve_macro_events(&eval, &v).unwrap();
     assert_eq!(events.len(), 2);
@@ -1312,7 +1312,7 @@ fn test_resolve_macro_events_vector() {
 #[test]
 fn test_resolve_macro_events_string() {
     crate::test_utils::init_test_tracing();
-    let eval = Context::new();
+    let eval = crate::test_utils::new_context();
     let s = Value::string("hello");
     let events = resolve_macro_events(&eval, &s).unwrap();
     assert_eq!(events.len(), 5);
@@ -1325,7 +1325,7 @@ fn test_resolve_macro_events_string() {
 #[test]
 fn test_resolve_macro_events_symbol_function_chain() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.obarray_mut().set_symbol_function(
         "kmacro-target",
         Value::vector(vec![Value::char('x'), Value::char('y')]),
@@ -1340,7 +1340,7 @@ fn test_resolve_macro_events_symbol_function_chain() {
 #[test]
 fn test_resolve_macro_events_list_errors_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let eval = Context::new();
+    let eval = crate::test_utils::new_context();
     let list = Value::list(vec![Value::char('x'), Value::char('y')]);
     let result = resolve_macro_events(&eval, &list);
     let Err(FlowKind::Signal(sig)) = result.kinded() else {
@@ -1356,7 +1356,7 @@ fn test_resolve_macro_events_list_errors_like_gnu() {
 #[test]
 fn test_resolve_macro_events_wrong_type() {
     crate::test_utils::init_test_tracing();
-    let eval = Context::new();
+    let eval = crate::test_utils::new_context();
     let result = resolve_macro_events(&eval, &Value::fixnum(42));
     let Err(FlowKind::Signal(sig)) = result.kinded() else {
         panic!("expected signal for non-macro value");

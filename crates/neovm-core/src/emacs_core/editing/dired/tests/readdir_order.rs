@@ -32,7 +32,7 @@ fn directory_attributes_count_and_completions_preserve_host_dot_positions() {
         std::fs::write(dir.path().join(name), b"").unwrap();
     }
     let names = host_names(dir.path());
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let directory = Value::string(dir.path().to_str().unwrap());
     let attrs = builtin_directory_files_and_attributes(
         &mut ctx,

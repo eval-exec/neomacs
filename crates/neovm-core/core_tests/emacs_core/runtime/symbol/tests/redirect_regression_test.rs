@@ -1,7 +1,7 @@
 //! Regression tests gating the Phase 10 SymbolValue deletion refactor.
 //! Every test here must pass on every phase of the refactor.
 //!
-//! Context: uses `Context::new()` (full builtins, no Lisp-macro bootstrap).
+//! Context: uses `crate::test_utils::new_context()` (full builtins, no Lisp-macro bootstrap).
 //! Where GNU subr.el macros (with-temp-buffer, setq-default) would be needed,
 //! equivalent builtin-only forms are substituted:
 //!   - `with-temp-buffer BODY` → `(save-current-buffer (set-buffer BUF) (unwind-protect BODY (kill-buffer BUF)))`
@@ -13,7 +13,7 @@ use crate::emacs_core::eval::Context;
 use crate::emacs_core::value::Value;
 
 fn make_ctx() -> Context {
-    Context::new()
+    crate::test_utils::new_context()
 }
 
 fn eval(ctx: &mut Context, src: &str) -> Value {

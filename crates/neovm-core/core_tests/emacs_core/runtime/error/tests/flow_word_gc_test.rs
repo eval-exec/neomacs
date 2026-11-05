@@ -6,7 +6,7 @@ use crate::emacs_core::value::Value;
 
 fn check_lisp_invariant(source: &str) {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.gc_stress = true;
     let result = eval.eval_str(source).expect("unwind invariant evaluates");
     assert_eq!(result, Value::T, "the Lisp invariant must remain true");
@@ -92,7 +92,7 @@ fn cleanup_throw_replaces_outer_signal() {
 #[test]
 fn kill_emacs_inside_condition_case_is_not_caught() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let error = eval
         .eval_str(
             r#"

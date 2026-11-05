@@ -4,7 +4,7 @@ use crate::emacs_core::intern::{intern, resolve_sym};
 #[test]
 fn displayed_string_keymap_precedes_buffer_position_maps() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let buffer_id = eval.buffers.current_buffer().expect("current buffer").id;
     let frame_id = eval
         .frames
@@ -64,7 +64,7 @@ fn displayed_string_keymap_precedes_buffer_position_maps() {
 #[test]
 fn chrome_string_without_maps_preserves_tab_line_but_clears_mode_line_maps() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let buffer_id = eval.buffers.current_buffer().expect("current buffer").id;
     let buffer_local_map = make_sparse_list_keymap();
     eval.buffers
@@ -1507,7 +1507,7 @@ fn composed_keymap_nil_member_does_not_shadow_later_member() {
 #[test]
 fn event_position_past_point_max_falls_back_to_the_buffer_local_map() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let buffer_id = eval.buffers.current_buffer().expect("current buffer").id;
     let point_max = eval
         .buffers
@@ -1558,7 +1558,7 @@ fn event_position_past_point_max_falls_back_to_the_buffer_local_map() {
 #[test]
 fn event_position_outside_narrowing_clips_before_full_buffer_property_lookup() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.eval_str(r#"(insert "abcdef")"#)
         .expect("seed current buffer");
     let buffer_id = eval.buffers.current_buffer().expect("current buffer").id;
@@ -1605,7 +1605,7 @@ fn event_position_outside_narrowing_clips_before_full_buffer_property_lookup() {
 #[test]
 fn event_position_before_narrowing_inherits_map_from_preceding_full_buffer_char() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.eval_str(r#"(insert "abcdef")"#)
         .expect("seed current buffer");
     let buffer_id = eval.buffers.current_buffer().expect("current buffer").id;
@@ -1719,7 +1719,7 @@ fn composed_keymap_member_searches_its_parent_chain_from_the_root() {
 #[test]
 fn filter_resolved_prefix_binding_merges_with_parent_keymap() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let result = eval
         .eval_str(

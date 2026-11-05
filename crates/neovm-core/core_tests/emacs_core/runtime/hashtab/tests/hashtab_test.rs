@@ -308,7 +308,7 @@ fn sxhash_float_matches_oracle_fixnum_values() {
 #[test]
 fn unintern_with_nil_obarray_targets_initial_obarray() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.obarray_mut().intern("vm-unintern-single");
     assert!(eval.obarray().intern_soft("vm-unintern-single").is_some());
 
@@ -327,7 +327,7 @@ fn unintern_with_nil_obarray_targets_initial_obarray() {
 #[test]
 fn unintern_symbol_argument_removes_only_the_exact_symbol() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let name = "vm-unintern-exact-symbol";
     let canonical = intern(name);
     let uninterned = intern_uninterned(name);
@@ -350,7 +350,7 @@ fn unintern_symbol_argument_removes_only_the_exact_symbol() {
 #[test]
 fn intern_after_unintern_allocates_fresh_symbol_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let name = "vm-unintern-fresh-symbol-after-remove";
     let original = eval
         .obarray_mut()
@@ -373,7 +373,7 @@ fn intern_after_unintern_allocates_fresh_symbol_like_gnu() {
 #[test]
 fn unintern_missing_string_does_not_intern_new_canonical_symbol() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let missing = "vm-unintern-missing-6f20e7c2-c0d2-4d63-b337-93ac7fe9a6bd";
     assert!(lookup_interned(missing).is_none());
 
@@ -978,7 +978,7 @@ fn internal_hash_table_introspection_type_errors() {
 #[test]
 fn unintern_requires_obarray_argument() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = crate::emacs_core::eval::Context::new();
+    let mut ctx = crate::test_utils::new_context();
 
     // One-argument call: GNU signals wrong-number-of-arguments.
     let one_arg = ctx
@@ -1010,7 +1010,7 @@ fn unintern_requires_obarray_argument() {
 #[test]
 fn clrhash_returns_the_hash_table_not_nil() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = crate::emacs_core::eval::Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let result = ctx
         .eval_str("(let ((h (make-hash-table))) (puthash 'a 1 h) (eq (clrhash h) h))")
         .expect("clrhash should evaluate");
@@ -1028,7 +1028,7 @@ fn clrhash_returns_the_hash_table_not_nil() {
 #[test]
 fn remhash_dispatches_user_defined_test() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = crate::emacs_core::eval::Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let result = ctx
         .eval_str(
             r#"(progn
@@ -1059,7 +1059,7 @@ fn remhash_dispatches_user_defined_test() {
 #[test]
 fn remhash_default_equal_test_still_works() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = crate::emacs_core::eval::Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let result = ctx
         .eval_str(
             r#"(let ((h (make-hash-table :test 'equal)))
@@ -1080,7 +1080,7 @@ fn remhash_default_equal_test_still_works() {
 #[test]
 fn remhash_default_eq_eql_tests_still_work() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = crate::emacs_core::eval::Context::new();
+    let mut ctx = crate::test_utils::new_context();
 
     let eq_result = ctx
         .eval_str(
@@ -1163,7 +1163,7 @@ fn pending_dump_entries_hydrate_at_first_access() {
 #[test]
 fn unintern_constant_symbols_preserves_custom_obarray_namesakes() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = crate::emacs_core::eval::Context::new();
+    let mut ctx = crate::test_utils::new_context();
     for name in ["nil", "t"] {
         let form = format!(
             r#"(let* ((ob (make-vector 31 0))
@@ -1195,7 +1195,7 @@ fn unintern_constant_symbols_preserves_custom_obarray_namesakes() {
 #[test]
 fn unintern_name_lookup_ignores_the_multibyte_flag_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = crate::emacs_core::eval::Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let result = ctx
         .eval_str(
             r#"(let* ((ob (make-vector 31 0))

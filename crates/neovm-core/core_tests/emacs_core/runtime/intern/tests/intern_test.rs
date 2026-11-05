@@ -7,7 +7,7 @@ use super::*;
 #[test]
 fn atom_only_symbol_name_materializes_one_lisp_object_per_heap() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let symbol = crate::value::Value::from_sym_id(intern("atom-only-symbol-name-identity-probe"));
 
     let first = crate::emacs_core::builtins::misc_pure::builtin_symbol_name_1(&mut eval, symbol)

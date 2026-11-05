@@ -24,7 +24,7 @@ use crate::emacs_core::format_eval_result;
 
 fn ev() -> Context {
     crate::test_utils::init_test_tracing();
-    Context::new()
+    crate::test_utils::new_context()
 }
 
 /// `with-temp-buffer` / `setq-local` are Lisp macros a bare [`Context`] has not

@@ -310,7 +310,7 @@ fn rassoc_improper_tail_reports_original_alist_like_gnu() {
 #[test]
 fn external_debugging_rejects_negative_fixnum() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let err = crate::emacs_core::builtins::builtin_external_debugging_output(
         &mut eval,
         vec![Value::fixnum(-1)],
@@ -336,7 +336,7 @@ fn debugging_output_test_file() -> tempfile::NamedTempFile {
 #[test]
 fn redirect_debugging_output_captures_external_debugging_output() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let output = debugging_output_test_file();
     let path = output.path();
     let path_value = Value::string(path.to_string_lossy().as_ref());
@@ -369,7 +369,7 @@ fn redirect_debugging_output_captures_external_debugging_output() {
 #[test]
 fn prin1_external_debugging_output_preserves_nested_unibyte_bytes_with_print_circle_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.obarray
         .set_symbol_value("locale-coding-system", Value::symbol("utf-8-unix"));
     eval.obarray.set_symbol_value("print-circle", Value::T);
@@ -429,7 +429,7 @@ fn custom_hash_table_test_closures_are_gc_roots() {
     // referenced and the next custom-test gethash/puthash called a freed
     // function (use-after-free). The collector must now surface both closures.
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.eval_str(
         "(define-hash-table-test 'gc-rooting-regression \
            (lambda (a b) (equal a b)) \
@@ -455,7 +455,7 @@ fn weak_key_hash_table_drops_entry_when_key_unreachable() {
     // entry once its key is no longer reachable from anywhere else. The key here
     // (a fresh cons) lives only inside the table.
     crate::test_utils::init_test_tracing();
-    let mut ev = crate::emacs_core::Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str(
         "(progn \
            (setq gc-weak-ht (make-hash-table :test 'equal :weakness 'key)) \
@@ -485,7 +485,7 @@ fn weak_key_hash_table_keeps_entry_when_key_reachable() {
     // The mirror case: while the key is reachable (held by a global), the
     // weak-key entry must survive.
     crate::test_utils::init_test_tracing();
-    let mut ev = crate::emacs_core::Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str(
         "(progn \
            (setq gc-live-key (list 'gc-live-probe)) \
@@ -509,7 +509,7 @@ fn weak_value_hash_table_drops_entry_when_value_unreachable() {
     // :weakness 'value drops the entry once the VALUE is unreachable, regardless
     // of the (reachable, interned) key.
     crate::test_utils::init_test_tracing();
-    let mut ev = crate::emacs_core::Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str(
         "(progn \
            (setq gc-wv-ht (make-hash-table :test 'eq :weakness 'value)) \
@@ -533,7 +533,7 @@ fn weak_key_hash_table_keeps_entry_for_same_sequence_eval_args() {
     // subr arguments remain visible to conservative GC until the surrounding
     // Fprogn returns.
     crate::test_utils::init_test_tracing();
-    let mut ev = crate::emacs_core::Context::new();
+    let mut ev = crate::test_utils::new_context();
     assert_eq!(
         ev.eval_str(
             "(let ((ht (make-hash-table :test 'eq :weakness 'key))) \
@@ -554,7 +554,7 @@ fn weak_key_hash_table_keeps_entry_for_same_sequence_eval_args() {
 #[test]
 fn weak_key_hash_table_keeps_let_star_temp_across_an_intervening_call() {
     crate::test_utils::init_test_tracing();
-    let mut ev = crate::emacs_core::Context::new();
+    let mut ev = crate::test_utils::new_context();
     assert_eq!(
         ev.eval_str(
             "(let ((ht (make-hash-table :test 'eq :weakness 'key))) \
@@ -578,7 +578,7 @@ fn weak_key_hash_table_keeps_let_star_temp_across_an_intervening_call() {
 #[test]
 fn weak_key_hash_table_empty_let_clears_previous_let_residue() {
     crate::test_utils::init_test_tracing();
-    let mut ev = crate::emacs_core::Context::new();
+    let mut ev = crate::test_utils::new_context();
     assert_eq!(
         ev.eval_str(
             "(let ((ht (make-hash-table :test 'eq :weakness 'key))) \
@@ -600,7 +600,7 @@ fn weak_key_hash_table_empty_let_clears_previous_let_residue() {
 #[test]
 fn weak_key_hash_table_nested_let_in_let_star_init_clears_residue() {
     crate::test_utils::init_test_tracing();
-    let mut ev = crate::emacs_core::Context::new();
+    let mut ev = crate::test_utils::new_context();
     assert_eq!(
         ev.eval_str(
             "(let ((ht (make-hash-table :test 'eq :weakness 'key))) \
@@ -621,7 +621,7 @@ fn weak_key_hash_table_drops_entry_after_inner_sequence_returns() {
     // The same temporary key is no longer kept once the inner Fprogn frame has
     // returned before GC runs in the outer sequence.
     crate::test_utils::init_test_tracing();
-    let mut ev = crate::emacs_core::Context::new();
+    let mut ev = crate::test_utils::new_context();
     assert_eq!(
         ev.eval_str(
             "(let ((ht (make-hash-table :test 'eq :weakness 'key))) \
@@ -640,7 +640,7 @@ fn weak_key_hash_table_keeps_entry_for_active_let_init_temp() {
     // GNU Flet keeps its SAFE_ALLOCA temps array until SAFE_FREE_UNBIND_TO,
     // after the body and dynamic/lexical unbinding complete.
     crate::test_utils::init_test_tracing();
-    let mut ev = crate::emacs_core::Context::new();
+    let mut ev = crate::test_utils::new_context();
     assert_eq!(
         ev.eval_str(
             "(let ((ht (make-hash-table :test 'eq :weakness 'key))) \
@@ -661,7 +661,7 @@ fn weak_key_hash_table_let_star_temp_matches_gnu_last_value_only() {
     // GNU FletX has a single `val` local, so a one-binding let* keeps OBJ, but
     // a later binding overwrites that transient root before the body.
     crate::test_utils::init_test_tracing();
-    let mut ev = crate::emacs_core::Context::new();
+    let mut ev = crate::test_utils::new_context();
     assert_eq!(
         ev.eval_str(
             "(let ((ht (make-hash-table :test 'eq :weakness 'key))) \
@@ -696,7 +696,7 @@ fn non_weak_hash_table_keeps_entry_after_gc() {
     // Control: a non-weak table traces its entries, so an entry with an
     // otherwise-unreachable key survives.
     crate::test_utils::init_test_tracing();
-    let mut ev = crate::emacs_core::Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str(
         "(progn \
            (setq gc-strong-ht (make-hash-table :test 'equal)) \
@@ -729,7 +729,7 @@ fn face_attributes_as_vector_shape() {
 #[test]
 fn frame_face_hash_table_uses_eq_test() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let out = crate::emacs_core::xfaces::builtin_frame_face_hash_table(&mut eval, vec![]).unwrap();
     if !out.is_hash_table() {
         panic!("expected hash table");
@@ -769,7 +769,7 @@ fn frame_bottom_divider_width_rejects_non_frame_designator() {
 #[test]
 fn frame_scale_factor_defaults_to_one_float() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let out = crate::emacs_core::frame::builtin_frame_scale_factor(&mut eval, vec![]).unwrap();
     assert_eq!(out, Value::make_float(1.0));
 }
@@ -777,7 +777,7 @@ fn frame_scale_factor_defaults_to_one_float() {
 #[test]
 fn garbage_collect_maybe_requires_whole_number() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let err = crate::emacs_core::builtins::builtin_garbage_collect_maybe(&mut eval, vec![Value::T])
         .unwrap_err();
     match err.into_kind() {
@@ -799,7 +799,7 @@ fn garbage_collect_maybe_requires_whole_number() {
 #[test]
 fn garbage_collect_maybe_collects_when_factor_scaled_threshold_exceeded() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     // FACTOR 0 never collects: GNU requires `FACTOR >= 1`.
     let out = crate::emacs_core::builtins::builtin_garbage_collect_maybe(
@@ -878,7 +878,7 @@ fn gnutls_peer_status_warning_describe_rejects_non_symbol() {
 #[test]
 fn dynamic_library_alist_is_gnu_bound_nil_variable() {
     crate::test_utils::init_test_tracing();
-    let mut ev = crate::emacs_core::Context::new();
+    let mut ev = crate::test_utils::new_context();
     let out = ev
         .eval_str(
             "(list (boundp 'dynamic-library-alist) \
@@ -901,7 +901,7 @@ fn inotify_valid_p_returns_nil() {
 #[cfg(target_os = "linux")]
 fn inotify_watch_lifecycle() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let watch = crate::emacs_core::builtins::inotify_add_watch(
         &mut eval,
         vec![Value::string("."), Value::NIL, Value::symbol("ignore")],
@@ -929,7 +929,7 @@ fn inotify_rm_watch_invalid_descriptor_signals() {
 #[test]
 fn gnutls_bye_requires_process() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let err =
         crate::emacs_core::process::builtin_gnutls_bye(&mut eval, vec![Value::NIL, Value::NIL])
             .unwrap_err();
@@ -1012,7 +1012,7 @@ fn gnutls_symmetric_encrypt_requires_gnutls_support() {
 #[test]
 fn handle_switch_frame_accepts_switch_frame_event_and_rejects_nil() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let out = eval
         .eval_str("(handle-switch-frame (list 'switch-frame (selected-frame)))")
         .expect("switch-frame event should be accepted");
@@ -1027,7 +1027,7 @@ fn handle_switch_frame_accepts_switch_frame_event_and_rejects_nil() {
 #[test]
 fn interactive_form_for_a_c_subr_returns_interactive_list() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::Context::new();
+    let mut eval = crate::test_utils::new_context();
     // `make-local-variable' is DEFUN'ed with an intspec (src/data.c); this
     // used to ask about `ignore', which is lisp/subr.el:501 and has no subr
     // (DIVERGENCES.md 152).
@@ -1069,7 +1069,7 @@ fn unlock_file_requires_string_argument() {
 #[cfg(target_os = "linux")]
 fn inotify_add_watch_requires_string_path_argument() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let err = crate::emacs_core::builtins::inotify_add_watch(
         &mut eval,
         vec![Value::NIL, Value::NIL, Value::NIL],
@@ -1106,7 +1106,7 @@ fn treesit_available_p_reports_runtime_support() {
 #[test]
 fn treesit_query_compile_validates_arity() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let err =
         crate::emacs_core::builtins::builtin_treesit_query_compile(&mut eval, vec![Value::NIL])
             .unwrap_err();
@@ -1126,7 +1126,7 @@ fn internal_stack_stats_returns_nil() {
 #[test]
 fn internal_labeled_narrow_to_region_validates_arity() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let err = crate::emacs_core::builtins::builtin_internal_labeled_narrow_to_region(
         &mut eval,
         vec![Value::NIL, Value::NIL],

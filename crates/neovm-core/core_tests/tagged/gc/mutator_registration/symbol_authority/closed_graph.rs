@@ -88,7 +88,7 @@ mod tests {
 
     #[test]
     fn p3sym_c3_import_gate_checks_transitive_payloads_and_cycles() {
-        let mut context = Context::new();
+        let mut context = crate::test_utils::new_context();
         let graph = context.eval_str("'(1 (2 . 3))").unwrap();
         assert!(closed_graph([graph], 32));
         assert!(!closed_graph([graph], 1));

@@ -222,7 +222,7 @@ fn define_error_too_many_args() {
 #[test]
 fn builtin_signal_basic() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let args = vec![Value::symbol("void-variable"), Value::NIL];
     let result = builtin_signal(&mut eval, args);
     assert!(result.is_err());
@@ -238,7 +238,7 @@ fn builtin_signal_basic() {
 #[test]
 fn builtin_signal_with_data() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let data_list = Value::list(vec![Value::symbol("x")]);
     let args = vec![Value::symbol("void-variable"), data_list];
     let result = builtin_signal(&mut eval, args);
@@ -254,7 +254,7 @@ fn builtin_signal_with_data() {
 #[test]
 fn builtin_signal_atom_preserves_raw_payload() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = builtin_signal(&mut eval, vec![Value::symbol("error"), Value::fixnum(1)]);
     match result.kinded() {
         Err(FlowKind::Signal(sig)) => {
@@ -269,7 +269,7 @@ fn builtin_signal_atom_preserves_raw_payload() {
 #[test]
 fn condition_case_preserves_raw_signal_binding_shape() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let value = eval
         .eval_str("(condition-case err (signal 'error 1) (error err))")
         .expect("condition-case should catch signal");
@@ -279,7 +279,7 @@ fn condition_case_preserves_raw_signal_binding_shape() {
 #[test]
 fn condition_case_preserves_proper_signal_data_identity_like_gnu_fsignal() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let value = eval
         .eval_str(
             "(let ((data (list :keys (list \"unknown\"))))\
@@ -294,7 +294,7 @@ fn condition_case_preserves_proper_signal_data_identity_like_gnu_fsignal() {
 #[test]
 fn builtin_signal_wrong_arity() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = builtin_signal(&mut eval, vec![Value::symbol("error")]);
     assert!(result.is_err());
 }
@@ -302,7 +302,7 @@ fn builtin_signal_wrong_arity() {
 #[test]
 fn builtin_signal_non_symbol() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = builtin_signal(&mut eval, vec![Value::fixnum(42), Value::NIL]);
     assert!(result.is_err());
 }
@@ -310,7 +310,7 @@ fn builtin_signal_non_symbol() {
 #[test]
 fn builtin_error_message_string_basic() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = crate::emacs_core::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     init_runtime_errors(&mut evaluator);
 
     // (error-message-string '(void-variable x))
@@ -327,7 +327,7 @@ fn builtin_error_message_string_basic() {
 #[test]
 fn builtin_error_message_string_no_data() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = crate::emacs_core::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     init_runtime_errors(&mut evaluator);
 
     // (error-message-string '(arith-error))
@@ -341,7 +341,7 @@ fn builtin_error_message_string_no_data() {
 #[test]
 fn builtin_error_message_string_void_function_typography() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = crate::emacs_core::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     init_runtime_errors(&mut evaluator);
 
     let err_data = Value::list(vec![Value::symbol("void-function"), Value::symbol("x")]);
@@ -357,7 +357,7 @@ fn builtin_error_message_string_void_function_typography() {
 #[test]
 fn builtin_error_message_string_unknown() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = crate::emacs_core::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
 
     // Unknown condition symbols are treated as peculiar errors.
     let err_data = Value::list(vec![Value::symbol("mystery-error")]);
@@ -383,7 +383,7 @@ fn builtin_error_message_string_unknown() {
 #[test]
 fn builtin_error_message_string_no_payload_specials() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = crate::emacs_core::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     init_runtime_errors(&mut evaluator);
 
     let error_no_payload = Value::list(vec![Value::symbol("error")]);
@@ -400,7 +400,7 @@ fn builtin_error_message_string_no_payload_specials() {
 #[test]
 fn builtin_error_message_string_quit_conditions_are_printable_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = crate::emacs_core::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     init_runtime_errors(&mut evaluator);
 
     let quit_no_payload = Value::list(vec![Value::symbol("quit")]);
@@ -423,7 +423,7 @@ fn builtin_error_message_string_quit_conditions_are_printable_like_gnu() {
 #[test]
 fn builtin_error_message_string_message_only_symbol_is_printable_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = crate::emacs_core::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     evaluator
         .obarray
         .put_property(
@@ -445,7 +445,7 @@ fn builtin_error_message_string_message_only_symbol_is_printable_like_gnu() {
 #[test]
 fn builtin_error_message_string_error_with_string_payload() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = crate::emacs_core::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     init_runtime_errors(&mut evaluator);
 
     let err_data = Value::list(vec![Value::symbol("error"), Value::string("abc")]);
@@ -458,7 +458,7 @@ fn builtin_error_message_string_error_with_string_payload() {
 #[test]
 fn builtin_error_message_string_error_with_string_and_extra() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = crate::emacs_core::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     init_runtime_errors(&mut evaluator);
 
     let err_data = Value::list(vec![
@@ -475,7 +475,7 @@ fn builtin_error_message_string_error_with_string_and_extra() {
 #[test]
 fn builtin_error_message_string_ignores_dotted_error_data_tails() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = crate::emacs_core::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     init_runtime_errors(&mut evaluator);
     // SAFETY: this fixture publishes only error properties using the same
     // noncalling native property path; neither canonical dispatch word changes.
@@ -533,7 +533,7 @@ fn builtin_error_message_string_ignores_dotted_error_data_tails() {
 #[test]
 fn builtin_error_message_string_user_error_variants() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = crate::emacs_core::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     init_runtime_errors(&mut evaluator);
 
     let with_string = Value::list(vec![
@@ -561,7 +561,7 @@ fn builtin_error_message_string_user_error_variants() {
 #[test]
 fn builtin_error_message_string_file_error_string_payload() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = crate::emacs_core::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     init_runtime_errors(&mut evaluator);
 
     let err_data = Value::list(vec![
@@ -578,7 +578,7 @@ fn builtin_error_message_string_file_error_string_payload() {
 #[test]
 fn builtin_error_message_string_file_missing_string_payload() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = crate::emacs_core::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     init_runtime_errors(&mut evaluator);
 
     let err_data = Value::list(vec![
@@ -599,7 +599,7 @@ fn builtin_error_message_string_file_missing_string_payload() {
 #[test]
 fn builtin_error_message_string_escapes_raw_unibyte_payload_in_multibyte_buffer_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = crate::emacs_core::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     init_runtime_errors(&mut evaluator);
 
     let raw = Value::heap_string(crate::heap_types::LispString::from_unibyte(vec![0xFF]));
@@ -616,7 +616,7 @@ fn builtin_error_message_string_escapes_raw_unibyte_payload_in_multibyte_buffer_
 #[test]
 fn builtin_error_message_string_peculiar_error_paths() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = crate::emacs_core::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     init_runtime_errors(&mut evaluator);
 
     let error_single = Value::list(vec![Value::symbol("error"), Value::fixnum(1)]);
@@ -717,7 +717,7 @@ fn builtin_error_message_string_peculiar_error_paths() {
 #[test]
 fn builtin_error_message_string_end_of_file_does_not_quote_string_payload() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = crate::emacs_core::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     init_runtime_errors(&mut evaluator);
 
     let err_data = Value::list(vec![
@@ -751,7 +751,7 @@ fn error_message_string_end_of_file_prints_live_buffer_name_like_gnu() {
 #[test]
 fn builtin_error_message_string_args_out_of_range_uses_base_message() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = crate::emacs_core::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     init_runtime_errors(&mut evaluator);
 
     let err_data = Value::list(vec![
@@ -770,7 +770,7 @@ fn builtin_error_message_string_args_out_of_range_uses_base_message() {
 #[test]
 fn builtin_error_message_string_formats_buffer_handles_with_names() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = crate::emacs_core::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     init_runtime_errors(&mut evaluator);
 
     let live_id = evaluator.buffers.create_buffer("*ems-live*");
@@ -804,7 +804,7 @@ fn builtin_error_message_string_formats_buffer_handles_with_names() {
 #[test]
 fn builtin_error_message_string_formats_mutex_and_condvar_handles() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = crate::emacs_core::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     init_runtime_errors(&mut evaluator);
 
     let mutex =
@@ -851,7 +851,7 @@ fn builtin_error_message_string_formats_mutex_and_condvar_handles() {
 #[test]
 fn builtin_error_message_string_formats_thread_handles() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = crate::emacs_core::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     init_runtime_errors(&mut evaluator);
 
     let thread = super::super::threads::builtin_current_thread(&mut evaluator, vec![])
@@ -875,7 +875,7 @@ fn builtin_error_message_string_formats_thread_handles() {
 #[test]
 fn builtin_error_message_string_formats_terminal_handles() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = crate::emacs_core::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     init_runtime_errors(&mut evaluator);
 
     let terminals = super::super::terminal::pure::builtin_terminal_list(vec![])
@@ -903,7 +903,7 @@ fn builtin_error_message_string_formats_terminal_handles() {
 #[test]
 fn builtin_error_message_string_formats_frame_and_window_handles() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = crate::emacs_core::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     init_runtime_errors(&mut evaluator);
 
     let frame = super::super::frame::builtin_selected_frame(&mut evaluator, vec![])
@@ -944,7 +944,7 @@ fn builtin_error_message_string_formats_frame_and_window_handles() {
 #[test]
 fn builtin_error_message_string_not_cons() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = crate::emacs_core::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
 
     // Non-list input signals wrong-type-argument (listp VALUE).
     let result = builtin_error_message_string(&mut evaluator, vec![Value::fixnum(42)]);
@@ -961,7 +961,7 @@ fn builtin_error_message_string_not_cons() {
 #[test]
 fn builtin_error_message_string_symbol_input_is_wrong_type() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = crate::emacs_core::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
 
     let result = builtin_error_message_string(&mut evaluator, vec![Value::symbol("foo")]);
     assert!(result.is_err());
@@ -987,7 +987,7 @@ fn builtin_error_message_string_symbol_input_is_wrong_type() {
 #[test]
 fn builtin_error_message_string_wrong_arity() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = crate::emacs_core::eval::Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     let result = builtin_error_message_string(&mut evaluator, vec![]);
     assert!(result.is_err());
 }
@@ -999,7 +999,7 @@ fn builtin_error_message_string_wrong_arity() {
 /// `Context`, so we install the `error-conditions`/`error-message` plist
 /// directly with `put` — exactly what `define-error` does internally.
 fn resignal_eval(src: &str) -> String {
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.eval_str(
         r#"(progn
              (put 'scan-error 'error-conditions '(scan-error error))

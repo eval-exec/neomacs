@@ -27,7 +27,7 @@ fn abbrev_copied_properties_have_only_manager_roots() {
     }
 
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.gc_stress = false;
     eval.gc_collect_exact();
     eval.tagged_heap.set_gc_threshold(usize::MAX);
@@ -369,7 +369,7 @@ fn test_make_abbrev_table_and_predicate() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     // make-abbrev-table creates an abbrev table
     let table = builtin_make_abbrev_table(&mut eval, vec![]).unwrap();
@@ -397,7 +397,7 @@ fn test_define_abbrev_and_lookup() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let table = builtin_make_abbrev_table(&mut eval, vec![]).unwrap();
 
@@ -463,7 +463,7 @@ fn define_abbrev_system_force_matches_gnu_overwrite_and_storage() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let table = builtin_make_abbrev_table(&mut eval, vec![]).unwrap();
 
     builtin_define_abbrev(
@@ -532,7 +532,7 @@ fn test_clear_abbrev_table() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let table = builtin_make_abbrev_table(&mut eval, vec![]).unwrap();
 
@@ -569,7 +569,7 @@ fn test_abbrev_get_put() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let table = builtin_make_abbrev_table(&mut eval, vec![]).unwrap();
 
@@ -587,7 +587,7 @@ fn test_define_abbrev_table_and_lookup() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     // define-abbrev-table creates a named table
     builtin_define_abbrev_table(&mut eval, vec![Value::symbol("test-table"), Value::NIL]).unwrap();
@@ -603,7 +603,7 @@ fn test_insert_abbrev_table_description_writes_buffer_text() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     builtin_define_abbrev_table(&mut eval, vec![Value::symbol("test-table"), Value::NIL]).unwrap();
 
     let table = eval
@@ -640,7 +640,7 @@ fn test_abbrev_tables_do_not_share_symbol_cells() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let table_a = builtin_make_abbrev_table(&mut eval, vec![]).unwrap();
     let table_b = builtin_make_abbrev_table(&mut eval, vec![]).unwrap();
 
@@ -666,7 +666,7 @@ fn test_define_abbrev_preserves_raw_unibyte_expansion() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let table = builtin_make_abbrev_table(&mut eval, vec![]).unwrap();
     let raw = Value::heap_string(LispString::from_unibyte(vec![0xFF]));
 
@@ -683,7 +683,7 @@ fn test_abbrev_table_properties_are_table_local() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let table_a = builtin_make_abbrev_table(
         &mut eval,
         vec![Value::list(vec![Value::keyword(":case-fixed"), Value::T])],
@@ -704,7 +704,7 @@ fn test_wrong_arg_count() {
     crate::test_utils::init_test_tracing();
     use super::super::eval::Context;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     // expand-abbrev needs exactly 0 args
     let result = builtin_expand_abbrev(&mut eval, vec![Value::string("t")]);

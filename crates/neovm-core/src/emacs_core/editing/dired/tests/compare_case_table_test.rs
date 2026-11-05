@@ -5,7 +5,7 @@ use crate::emacs_core::{casetab, chartable};
 
 fn context_with_mapping(mapped: u32, multibyte: bool) -> Context {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let standard = casetab::builtin_standard_case_table(&mut ctx, vec![]).unwrap();
     let table = chartable::copy_char_table(standard).unwrap();
     let up = chartable::copy_char_table(table.as_char_table_obj().unwrap().extras.as_slice()[0])

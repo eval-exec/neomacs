@@ -17,7 +17,7 @@ fn subr_dispatch_kind_from_global_table() {
     // not on heap SubrObj instances. This test verifies that after
     // a Context is created (which registers builtins), the dispatch
     // kinds can be looked up from the global table.
-    let _ctx = crate::emacs_core::eval::Context::new();
+    let _ctx = crate::test_utils::new_context();
 
     let car_id = intern("car");
     let if_id = intern("if");

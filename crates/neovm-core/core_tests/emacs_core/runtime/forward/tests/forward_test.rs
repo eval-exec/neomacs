@@ -19,7 +19,7 @@ fn lisp_fwd_type_codes_match_gnu_lisp_fwd_type() {
 
 #[test]
 fn selected_keyboard_parked_heap_values_survive_gc_and_clone_independently() {
-    let mut eval = crate::emacs_core::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let id = crate::emacs_core::intern::intern("window-system");
     let keyboard = eval
         .obarray

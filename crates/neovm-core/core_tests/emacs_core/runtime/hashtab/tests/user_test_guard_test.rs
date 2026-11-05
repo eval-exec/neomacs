@@ -25,7 +25,7 @@ fn inhibited_user_test_since_gc(context: &mut Context, bytes_since_gc: usize) ->
 
 fn fixture() -> (Context, Value) {
     crate::test_utils::init_test_tracing();
-    let mut context = Context::new();
+    let mut context = crate::test_utils::new_context();
     let table = context
         .eval_str(
             r#"(progn

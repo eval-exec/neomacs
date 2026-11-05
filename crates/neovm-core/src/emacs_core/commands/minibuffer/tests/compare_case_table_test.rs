@@ -6,7 +6,7 @@ use crate::heap_types::LispString;
 
 fn context_with_mappings(mappings: &[(u32, u32)]) -> Context {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let standard = casetab::builtin_standard_case_table(&mut ctx, vec![]).unwrap();
     let table = chartable::copy_char_table(standard).unwrap();
     let up = chartable::copy_char_table(table.as_char_table_obj().unwrap().extras.as_slice()[0])

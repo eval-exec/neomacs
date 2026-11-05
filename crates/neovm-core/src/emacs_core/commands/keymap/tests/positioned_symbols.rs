@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn issue554_positioned_keymap_markers_follow_symbol_mode() {
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let marker = ctx
         .tagged_heap
         .alloc_symbol_with_pos(Value::symbol("keymap"), Value::fixnum(0));
@@ -25,7 +25,7 @@ fn issue554_positioned_keymap_markers_follow_symbol_mode() {
 
 #[test]
 fn issue554_positioned_keymap_events_match_and_update_canonical_symbols() {
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let event = Value::symbol("f5");
     let positioned = ctx
         .tagged_heap
@@ -50,7 +50,7 @@ fn issue554_positioned_keymap_events_match_and_update_canonical_symbols() {
 
 #[test]
 fn issue554_positioned_keymap_designators_resolve_function_cells() {
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let map = make_sparse_list_keymap();
     let alias = Value::symbol("issue554-keymap-alias");
     let positioned = ctx
@@ -69,7 +69,7 @@ fn issue554_positioned_keymap_designators_resolve_function_cells() {
 
 #[test]
 fn issue554_positioned_minor_mode_alists_use_assq_identity() {
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let key = Value::symbol("issue554-mode");
     let positioned = ctx.tagged_heap.alloc_symbol_with_pos(key, Value::fixnum(0));
     let map = make_sparse_list_keymap();

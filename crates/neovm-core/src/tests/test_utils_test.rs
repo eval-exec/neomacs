@@ -538,7 +538,7 @@ fn is_named_defun_value(form: &Value, name: &str) -> bool {
 /// Create a bare evaluator with GNU `ldefs-boot.el` autoload cells restored
 /// for the named symbols and a bootstrap-compatible `load-path`.
 pub fn eval_with_ldefs_boot_autoloads(names: &[&str]) -> Context {
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let project_root = workspace_root();
     let lisp_dir = project_root.join("lisp");
     eval.set_variable(
@@ -711,6 +711,13 @@ pub(crate) fn with_legacy_gc<T>(create: impl FnOnce() -> T) -> T {
     create()
 }
 
+/// Create a bare (non-bootstrap) evaluator with the real canonical hook set
+/// installed through the one core boot facade (E3a). The only legal bare
+/// constructor for tests; never a local mint.
+pub fn new_context() -> Context {
+    crate::emacs_core::eval_hook_installers::new_context()
+}
+
 /// Create a cached runtime-startup evaluator for tests that need the full
 /// GNU bootstrap surface.
 pub fn runtime_startup_context() -> Context {
@@ -837,7 +844,7 @@ mod tests {
         // rest of the run.
         unsafe { std::env::set_var("NEXTEST_WORKSPACE_ROOT", probe.path()) };
 
-        let mut eval = Context::new();
+        let mut eval = new_context();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             load_minimal_gnu_backquote_runtime(&mut eval);
         }));

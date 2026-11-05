@@ -5,7 +5,7 @@ use crate::tagged::{collection_reads::capture, mutate::LispCollectionRevision};
 #[test]
 fn plist_capture_keeps_positioned_key_and_property_dependencies() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let bare = Value::symbol("plist-capture-positioned-property");
     let key = eval
         .tagged_heap
@@ -30,7 +30,7 @@ fn plist_capture_keeps_positioned_key_and_property_dependencies() {
 #[test]
 fn plist_capture_replacement_still_invalidates_the_query() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let bare = Value::symbol("plist-capture-replacement");
     let key = eval
         .tagged_heap

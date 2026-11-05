@@ -3,7 +3,7 @@ use neovm_core::emacs_core::format_eval_result;
 
 #[test]
 fn compat_source_bootstrap_macro_surface_is_minimal() {
-    let mut eval = Context::new();
+    let mut eval = neovm_core::emacs_core::eval_hook_installers::new_context();
     eval.set_lexical_binding(true);
 
     let result = eval.eval_str(

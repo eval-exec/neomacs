@@ -5,7 +5,7 @@ use crate::emacs_core::intern::intern;
 
 #[test]
 fn gethash_puthash_remhash_match_gnu() {
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     // Expectation taken from GNU Emacs 31.0.90 --batch.
     let result = eval
         .eval_str(
@@ -30,7 +30,7 @@ fn gethash_puthash_remhash_match_gnu() {
 /// which no bit comparison sees: the scan must decline.
 #[test]
 fn small_table_scans_decline_under_symbols_with_pos() {
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let sym = Value::from_sym_id(intern("small-scan-positioned"));
     let positioned = ctx.tagged_heap.alloc_symbol_with_pos(sym, Value::fixnum(3));
     for test in [HashTableTest::Eq, HashTableTest::Eql] {
@@ -58,8 +58,8 @@ fn small_table_scans_decline_under_symbols_with_pos() {
 /// decides.  What must never happen is a key failing to find its own entry.
 #[test]
 fn sampled_string_hashing_still_finds_every_key() {
-    let mut eval = Context::new();
-    // Only special forms and subrs: `Context::new()` is bare, so `push`
+    let mut eval = crate::test_utils::new_context();
+    // Only special forms and subrs: `crate::test_utils::new_context()` is bare, so `push`
     // and `dolist` (subr.el macros) are not available here.
     let program = r#"(let ((h (make-hash-table :test 'equal))
                           (pre (make-string 5000 ?a))

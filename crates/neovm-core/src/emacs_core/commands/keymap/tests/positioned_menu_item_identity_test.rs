@@ -3,7 +3,7 @@ use crate::emacs_core::eval::Context;
 
 #[test]
 fn positioned_menu_keys_deduplicate_and_reorder_by_eq_policy() {
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let first = Value::symbol("issue554-menu-first");
     let second = Value::symbol("issue554-menu-second");
     let positioned = ctx

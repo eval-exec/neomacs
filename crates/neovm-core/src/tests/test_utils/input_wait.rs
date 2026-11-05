@@ -320,7 +320,7 @@ mod tests {
 
     #[test]
     fn zero_service_poll_retains_gate_until_positive_input_wait() {
-        let mut context = Context::new();
+        let mut context = crate::test_utils::new_context();
         let input_owner = InputGateOwner::install(&mut context);
         let (gate, publication) =
             input_owner.gate(vec![InputEvent::key_press(KeyEvent::char('x'))]);
@@ -360,7 +360,7 @@ mod tests {
 
     #[test]
     fn missing_gate_cancels_without_publishing_the_normal_key() {
-        let mut context = Context::new();
+        let mut context = crate::test_utils::new_context();
         let input_owner = InputGateOwner::install(&mut context);
         let (gate, publication) =
             input_owner.gate(vec![InputEvent::key_press(KeyEvent::char('x'))]);
@@ -389,7 +389,7 @@ mod tests {
 
     #[test]
     fn dropping_publication_cancels_its_waiting_producer_without_input() {
-        let mut context = Context::new();
+        let mut context = crate::test_utils::new_context();
         let input_owner = InputGateOwner::install(&mut context);
         let (gate, mut publication) =
             input_owner.gate(vec![InputEvent::key_press(KeyEvent::char('x'))]);

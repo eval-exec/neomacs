@@ -1033,7 +1033,7 @@ fn clone_obarray_deep_copies_blvs() {
 #[test]
 fn uninterned_keyword_and_nil_names_are_not_canonical_constants() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let nil_id = crate::emacs_core::intern::intern_uninterned("nil");
     let kw_id = crate::emacs_core::intern::intern_uninterned(":vm-k");
 

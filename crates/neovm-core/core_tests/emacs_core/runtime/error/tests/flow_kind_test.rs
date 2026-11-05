@@ -32,7 +32,7 @@ fn every_kind() -> Vec<Flow> {
 #[test]
 fn every_kind_round_trips_through_from_kind_and_into_kind() {
     crate::test_utils::init_test_tracing();
-    let _eval = Context::new();
+    let _eval = crate::test_utils::new_context();
     for flow in every_kind() {
         let before = format!("{flow:?}");
         let back = Flow::from_kind(flow.into_kind());
@@ -43,7 +43,7 @@ fn every_kind_round_trips_through_from_kind_and_into_kind() {
 #[test]
 fn debug_text_matches_the_owned_enum() {
     crate::test_utils::init_test_tracing();
-    let _eval = Context::new();
+    let _eval = crate::test_utils::new_context();
     for flow in every_kind() {
         assert_eq!(
             format!("{flow:?}"),
@@ -66,7 +66,7 @@ fn debug_text_matches_the_owned_enum() {
 #[test]
 fn borrowed_view_and_accessors_agree_with_the_owned_variant() {
     crate::test_utils::init_test_tracing();
-    let _eval = Context::new();
+    let _eval = crate::test_utils::new_context();
     for flow in every_kind() {
         let view = flow.kind();
         match flow.clone().into_kind() {
@@ -121,7 +121,7 @@ fn borrowed_view_and_accessors_agree_with_the_owned_variant() {
 #[test]
 fn as_signal_mut_edits_the_payload_in_place() {
     crate::test_utils::init_test_tracing();
-    let _eval = Context::new();
+    let _eval = crate::test_utils::new_context();
     let mut flow = signal(LispCondition::Error, vec![Value::fixnum(7)]);
     flow.as_signal_mut().expect("a signal").search_complete = true;
     let FlowKind::Signal(sig) = flow.into_kind() else {
@@ -136,7 +136,7 @@ fn as_signal_mut_edits_the_payload_in_place() {
 #[test]
 fn signal_boxed_rewraps_a_taken_payload() {
     crate::test_utils::init_test_tracing();
-    let _eval = Context::new();
+    let _eval = crate::test_utils::new_context();
     let flow = signal(LispCondition::WrongTypeArgument, vec![Value::fixnum(1)]);
     let before = format!("{flow:?}");
     let FlowKind::Signal(sig) = flow.into_kind() else {
@@ -148,7 +148,7 @@ fn signal_boxed_rewraps_a_taken_payload() {
 #[test]
 fn result_views_expose_the_kind_on_the_error_side() {
     crate::test_utils::init_test_tracing();
-    let _eval = Context::new();
+    let _eval = crate::test_utils::new_context();
     let ok: Result<i64, Flow> = Ok(5);
     assert!(matches!(ok.kinded_ref(), Ok(&5)));
     assert!(matches!(ok.kinded(), Ok(5)));
@@ -167,7 +167,7 @@ fn result_views_expose_the_kind_on_the_error_side() {
 #[test]
 fn eval_error_round_trip_per_kind() {
     crate::test_utils::init_test_tracing();
-    let _eval = Context::new();
+    let _eval = crate::test_utils::new_context();
     let signal_error = map_flow(signal(LispCondition::Error, vec![Value::fixnum(1)]));
     let back = flow_from_eval_error(signal_error);
     assert!(back.is_signal());
@@ -198,7 +198,7 @@ fn gdl_eval_error_memory_round_trip_keeps_original_binding_through_clone_and_gc(
     use crate::emacs_core::eval::ResumeTarget;
 
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     // This descriptor is not stored in a Lisp variable. Only the in-flight
     // signal owns a collector-visible root for its original cons.
     let binding = ctx
@@ -256,7 +256,7 @@ fn gdl_eval_error_round_trip_keeps_hook_suppression() {
     use super::{SignalDelivery, signal_suppressed};
 
     crate::test_utils::init_test_tracing();
-    let _ctx = Context::new();
+    let _ctx = crate::test_utils::new_context();
     let back = flow_from_eval_error(map_flow(signal_suppressed(
         LispCondition::Error,
         vec![Value::fixnum(2)],
@@ -274,7 +274,7 @@ fn gdl_eval_error_round_trip_keeps_completed_handler_selection() {
     use crate::emacs_core::eval::ResumeTarget;
 
     crate::test_utils::init_test_tracing();
-    let _ctx = Context::new();
+    let _ctx = crate::test_utils::new_context();
     for mut flow in [
         signal(LispCondition::Error, vec![Value::fixnum(3)]),
         signal_suppressed(LispCondition::Error, vec![Value::fixnum(4)]),
@@ -308,7 +308,7 @@ fn gdl_eval_error_public_signal_constructor_starts_ordinary_unselected() {
     use super::SignalDelivery;
 
     crate::test_utils::init_test_tracing();
-    let _ctx = Context::new();
+    let _ctx = crate::test_utils::new_context();
     let back = flow_from_eval_error(EvalError::signal(
         Value::symbol("error").as_bare_symbol_id().unwrap(),
         vec![Value::fixnum(5)],

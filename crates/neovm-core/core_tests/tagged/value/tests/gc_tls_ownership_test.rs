@@ -6,13 +6,13 @@ use crate::test_utils::SubrValueExt;
 #[test]
 fn gc_tls_ownership_static_subrs_outlive_contexts_without_gc_roots() {
     let original = {
-        let mut first = Context::new();
+        let mut first = crate::test_utils::new_context();
         let value = <TaggedValue as SubrValueExt>::subr_from_sym_id(intern("car"));
         first.gc_collect_exact();
         assert_eq!(value.veclike_type(), Some(VecLikeType::Subr));
         value
     };
-    let mut next = Context::new();
+    let mut next = crate::test_utils::new_context();
     let value = <TaggedValue as SubrValueExt>::subr_from_sym_id(intern("car"));
     assert_eq!(value.bits(), original.bits());
     next.gc_collect_exact();

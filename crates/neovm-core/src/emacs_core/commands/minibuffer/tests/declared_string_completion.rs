@@ -4,7 +4,7 @@ use crate::heap_types::GnuDeclaredCharacterCount;
 #[test]
 fn completion_iterator_honors_declared_count_with_bounded_tails() {
     crate::test_utils::init_test_tracing();
-    let _context = crate::emacs_core::eval::Context::new();
+    let _context = crate::test_utils::new_context();
     let declared = LispString::from_emacs_bytes_with_declared_chars(
         vec![b'b', 0xc3, 0xa9],
         GnuDeclaredCharacterCount::try_from(1i128).unwrap(),

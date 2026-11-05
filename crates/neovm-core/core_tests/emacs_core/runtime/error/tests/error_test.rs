@@ -7,7 +7,7 @@ use crate::emacs_core::{Context, Value, print_value_bytes_with_eval, print_value
 #[test]
 fn list_prints_buffers_with_names_in_eval_context() -> Result<(), EvalError> {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let stale = Value::make_buffer(eval.buffers.create_buffer("stale-win-buf"));
     eval.set_variable("vm-stale-win-buf", stale);
     let value = eval.eval_str(
@@ -56,7 +56,7 @@ fn eval_context_printer_renders_killed_buffer_handles() -> Result<(), EvalError>
 #[test]
 fn diagnostic_flow_formatter_renders_signal_strings() {
     crate::test_utils::init_test_tracing();
-    let eval = Context::new();
+    let eval = crate::test_utils::new_context();
     let flow = signal(
         LispCondition::FileMissing,
         vec![
@@ -75,7 +75,7 @@ fn diagnostic_flow_formatter_renders_signal_strings() {
 #[test]
 fn eval_context_printer_renders_mutex_handles_consistently() -> Result<(), EvalError> {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let value = eval.eval_str(r#"(make-mutex "error-printer-mutex")"#)?;
     let printed = print_value_with_eval(&eval, &value);
 
@@ -91,7 +91,7 @@ fn eval_context_printer_renders_mutex_handles_consistently() -> Result<(), EvalE
 #[test]
 fn eval_context_printer_renders_condvar_handles_consistently() -> Result<(), EvalError> {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let value = eval.eval_str(
         r#"(let ((m (make-mutex "error-printer-mutex")))
            (make-condition-variable m "error-printer-condvar"))"#,
@@ -110,7 +110,7 @@ fn eval_context_printer_renders_condvar_handles_consistently() -> Result<(), Eva
 #[test]
 fn eval_context_printer_renders_frame_window_handles_consistently() -> Result<(), EvalError> {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let value = eval.eval_str("(list (selected-frame) (selected-window))")?;
     let printed = print_value_with_eval(&eval, &value);
 
@@ -127,7 +127,7 @@ fn eval_context_printer_renders_frame_window_handles_consistently() -> Result<()
 #[test]
 fn eval_context_printer_renders_window_handles_with_buffer_names() -> Result<(), EvalError> {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let value = eval.eval_str(
         "(list (selected-window)
                (condition-case err (frame-terminal (selected-window)) (error err))
@@ -148,7 +148,7 @@ fn eval_context_printer_renders_window_handles_with_buffer_names() -> Result<(),
 #[test]
 fn eval_context_printer_renders_terminal_thread_handles_consistently() -> Result<(), EvalError> {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let value = eval.eval_str("(list (car (terminal-list)) (current-thread))")?;
     let printed = print_value_with_eval(&eval, &value);
 
@@ -191,7 +191,7 @@ fn eval_context_printer_matches_gnu_backquote_shorthand_rules() {
     //   => "`(a ,x)"
     // The reader-shorthand form is the canonical print of the
     // (` (a (, x))) form, *not* the verbatim escaped one.
-    let eval = Context::new();
+    let eval = crate::test_utils::new_context();
     let raw_unquote = Value::list(vec![Value::symbol(","), Value::symbol("x")]);
     let nested = Value::list(vec![
         Value::symbol("`"),
@@ -207,7 +207,7 @@ fn eval_context_printer_matches_gnu_backquote_shorthand_rules() {
 #[test]
 fn eval_context_printer_handles_default_circular_vector_backreference() {
     crate::test_utils::init_test_tracing();
-    let eval = Context::new();
+    let eval = crate::test_utils::new_context();
     let vector = Value::vector(vec![Value::NIL]);
     assert!(vector.set_vector_slot(0, vector));
 
@@ -218,7 +218,7 @@ fn eval_context_printer_handles_default_circular_vector_backreference() {
 #[test]
 fn eval_context_printer_handles_default_circular_cons_backreference() {
     crate::test_utils::init_test_tracing();
-    let eval = Context::new();
+    let eval = crate::test_utils::new_context();
     let cell = Value::cons(Value::NIL, Value::NIL);
     cell.set_cdr(cell);
 
@@ -232,7 +232,7 @@ fn minibuffer_quit_does_not_take_down_a_noninteractive_session() {
     // GNU's `command-error-default-function` guards its
     // stderr-then-kill-emacs branch with `!is_minibuffer_quit`
     // (keyboard.c:1064).  A plain `quit' still takes that branch.
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.set_variable("noninteractive", Value::T);
 
     let minibuffer_quit = Value::list(vec![Value::symbol("minibuffer-quit")]);
@@ -267,7 +267,7 @@ fn batch_fatal_report_and_nested_shutdown_share_first_entry_hook_ownership() {
             restart: true,
         },
     ] {
-        let mut eval = Context::new();
+        let mut eval = crate::test_utils::new_context();
         eval.set_variable("noninteractive", Value::T);
         eval.eval_str(
             "(setq shutdown-count 0 shutdown-continued nil shutdown-later nil \
@@ -323,7 +323,7 @@ fn batch_fatal_report_and_nested_shutdown_share_first_entry_hook_ownership() {
 #[test]
 fn raw_condition_inheriting_minibuffer_quit_does_not_take_down_session() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.set_variable("noninteractive", Value::T);
     let condition = crate::emacs_core::intern::intern_lisp_string(
         &crate::heap_types::LispString::from_unibyte(vec![0xff]),
@@ -369,7 +369,7 @@ fn raw_condition_inheriting_minibuffer_quit_does_not_take_down_session() {
 #[test]
 fn in_flight_signal_payload_survives_a_collection() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let flow = crate::emacs_core::error::signal_with_data(
         LispCondition::Error,
@@ -404,7 +404,7 @@ fn in_flight_signal_payload_survives_a_collection() {
 #[test]
 fn condition_case_binding_value_survives_a_collection() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let flow = crate::emacs_core::error::signal_with_data(
         LispCondition::Error,
@@ -442,7 +442,7 @@ fn condition_case_binding_value_survives_a_collection() {
 #[test]
 fn in_flight_throw_payload_survives_a_collection() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let flow = Flow::throw(
         Value::symbol("neovm-throw-probe"),
@@ -479,7 +479,7 @@ fn in_flight_throw_payload_survives_a_collection() {
 #[test]
 fn in_flight_thread_blocked_payload_survives_a_collection() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let flow = Flow::thread_blocked(
         Value::list(vec![Value::string("blocker datum")]),
@@ -521,7 +521,7 @@ fn in_flight_thread_blocked_payload_survives_a_collection() {
 #[test]
 fn eval_error_signal_payload_survives_a_collection() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     // `map_flow` consumes the `Flow`, so the flow's own pin is gone by the
     // time this returns: only the `EvalError`'s pin can keep the payload.
@@ -548,7 +548,7 @@ fn eval_error_signal_payload_survives_a_collection() {
 #[test]
 fn eval_error_uncaught_throw_payload_survives_a_collection() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let err = crate::emacs_core::print::map_flow(Flow::throw(
         Value::symbol("neovm-boundary-throw"),

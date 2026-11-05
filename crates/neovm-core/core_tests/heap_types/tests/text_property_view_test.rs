@@ -86,7 +86,7 @@ fn clearing_an_attached_table_restores_the_empty_state() {
 
 #[test]
 fn string_property_copies_and_empty_concat_keep_properties_and_revision_ticks() {
-    let mut eval = Box::new(Context::new());
+    let mut eval = Box::new(crate::test_utils::new_context());
     eval.setup_thread_locals();
     {
         let face = Value::symbol("face");

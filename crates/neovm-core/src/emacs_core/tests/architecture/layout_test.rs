@@ -277,7 +277,7 @@ fn localized_subr_architecture_is_derived_from_the_compiled_catalog() {
         .collect::<Vec<_>>();
 
     crate::emacs_core::subr::reset_installed_subr_batches();
-    let _ctx = crate::emacs_core::eval::Context::new();
+    let _ctx = crate::test_utils::new_context();
     let actual_startup_order = crate::emacs_core::subr::take_installed_subr_batches();
     assert_eq!(
         actual_startup_order, expected_startup_order,
