@@ -16,7 +16,7 @@ use crate::emacs_core::bytecode::opcode::Op;
 
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 
-use crate::emacs_core::format_eval_result;
+use neovm_eval::emacs_core::print::format_eval_result;
 
 use crate::test_utils::{
     eval_with_ldefs_boot_autoloads, runtime_startup_context, runtime_startup_eval_all,

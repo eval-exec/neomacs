@@ -23,7 +23,7 @@ fn gde_review_deletion_bulk_and_middle_order() {
 (mapcar (lambda (o) (overlay-get o 'tag)) (car (overlay-lists)))) out)))))
 (nreverse out))"#,
     );
-    let actual = crate::emacs_core::format_eval_result_with_eval(&eval, &result);
+    let actual = neovm_eval::emacs_core::print::format_eval_result_with_eval(&eval, &result);
     // This expectation was generated directly from GNU Emacs 31.1.
     assert_eq!(
         actual,

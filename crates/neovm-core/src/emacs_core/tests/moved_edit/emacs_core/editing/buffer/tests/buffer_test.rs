@@ -14,7 +14,7 @@ use neovm_value::tagged::value::SymbolMode;
     use neovm_value::emacs_char::{bytes_by_char_head, char_byte8_head_p, str_as_multibyte_span};
 
 use neovm_eval::emacs_core::eval::Context;
-use crate::emacs_core::format_eval_result;
+use neovm_eval::emacs_core::print::format_eval_result;
 
 use neovm_value::value::Value;
 

@@ -621,7 +621,7 @@ fn coding_system_alias_encodes_through_its_target() {
     // Was `(116 63 115 116)` -- `63` is `?`, i.e. silent data loss.
     let encoded = ev.eval_str("(append (encode-coding-string \"t\\u00ebst\" 'neo-alias-utf8) nil)");
     assert_eq!(
-        crate::emacs_core::format_eval_result(&encoded),
+        neovm_eval::emacs_core::print::format_eval_result(&encoded),
         "OK (116 195 171 115 116)"
     );
 
@@ -630,7 +630,7 @@ fn coding_system_alias_encodes_through_its_target() {
            (string= s (decode-coding-string (encode-coding-string s 'neo-alias-utf8) \
                                             'neo-alias-utf8)))",
     );
-    assert_eq!(crate::emacs_core::format_eval_result(&roundtrip), "OK t");
+    assert_eq!(neovm_eval::emacs_core::print::format_eval_result(&roundtrip), "OK t");
 }
 
 #[test]
@@ -639,7 +639,7 @@ fn coding_system_alias_of_a_charset_system_encodes_through_its_target() {
     let mut ev = crate::test_utils::runtime_startup_context();
     let _ = ev.eval_str("(define-coding-system-alias 'neo-alias-8859-15 'iso-8859-15)");
     let encoded = ev.eval_str("(append (encode-coding-string \"\\u00e9\" 'neo-alias-8859-15) nil)");
-    assert_eq!(crate::emacs_core::format_eval_result(&encoded), "OK (233)");
+    assert_eq!(neovm_eval::emacs_core::print::format_eval_result(&encoded), "OK (233)");
 }
 
 #[test]
@@ -655,7 +655,7 @@ fn coding_system_alias_is_reported_verbatim_in_last_coding_system_used() {
            last-coding-system-used)",
     );
     assert_eq!(
-        crate::emacs_core::format_eval_result(&last),
+        neovm_eval::emacs_core::print::format_eval_result(&last),
         "OK neo-alias-reported"
     );
 }

@@ -44,7 +44,7 @@ fn gc_collection_epoch_literal_translation_discards_memo_before_address_reuse() 
         None,
     )
     .unwrap();
-    neovm_text::emacs_core::casetab::builtin_set_case_table(&mut ctx, vec![old_case]).unwrap();
+    crate::emacs_core::commands::casetab_entries::builtin_set_case_table(&mut ctx, vec![old_case]).unwrap();
     let old_canon = neovm_text::emacs_core::casetab::buffer_case_canon_table(
         ctx.edit.buffers.current_buffer().unwrap(),
     )
@@ -95,7 +95,7 @@ fn gc_collection_epoch_literal_translation_discards_memo_before_address_reuse() 
             canon,
         ])
         .unwrap();
-        neovm_text::emacs_core::casetab::builtin_set_case_table(&mut ctx, vec![case]).unwrap();
+        crate::emacs_core::commands::casetab_entries::builtin_set_case_table(&mut ctx, vec![case]).unwrap();
         assert_eq!(
             neovm_text::emacs_core::casetab::buffer_case_canon_table(
                 ctx.edit.buffers.current_buffer().unwrap()

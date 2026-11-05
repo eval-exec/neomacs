@@ -31,7 +31,7 @@ fn coding_defvar_lisp_variables_are_special_like_gnu() {
     let mut eval = crate::test_utils::new_context();
 
     assert_eq!(
-        crate::emacs_core::format_eval_result(&eval.eval_str(
+        neovm_eval::emacs_core::print::format_eval_result(&eval.eval_str(
             "(list (special-variable-p 'coding-system-for-read)
                    (let ((coding-system-for-read 'chinese-big5-unix))
                      (symbol-value 'coding-system-for-read))
@@ -946,12 +946,12 @@ fn detect_highest_with_front(front: Option<CodingCat>) -> String {
 }
 
 fn fmt(eval: &mut crate::emacs_core::eval::Context, src: &str) -> String {
-    crate::emacs_core::format_eval_result(&eval.eval_str(src))
+    neovm_eval::emacs_core::print::format_eval_result(&eval.eval_str(src))
 }
 
 /// `crate::test_utils::new_context()` is bare (no `with-temp-buffer` macro), so seed the current
 /// buffer directly: erase it, insert `seed`, then evaluate `expr`.
 fn fmt_buf(eval: &mut crate::emacs_core::eval::Context, seed: &str, expr: &str) -> String {
     let src = format!("(progn (erase-buffer) (insert {seed}) {expr})");
-    crate::emacs_core::format_eval_result(&eval.eval_str(&src))
+    neovm_eval::emacs_core::print::format_eval_result(&eval.eval_str(&src))
 }

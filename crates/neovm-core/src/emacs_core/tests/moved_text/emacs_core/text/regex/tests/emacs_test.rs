@@ -116,12 +116,12 @@ fn prepared_regexp_scoped_gc_preserves_compiled_and_callback_paths() {
   (prepared-regexp-scoped-gc))"#,
     );
     let expected = "OK ((3 nil) (2 nil) (3 nil) (5 t))";
-    assert_eq!(crate::emacs_core::format_eval_result(&warm), expected);
+    assert_eq!(neovm_eval::emacs_core::print::format_eval_result(&warm), expected);
     eval.gc_stress = true;
     let before = eval.gc_count;
     let result = eval.eval_str("(prepared-regexp-scoped-gc)");
     let collections = eval.gc_count - before;
-    assert_eq!(crate::emacs_core::format_eval_result(&result), expected);
+    assert_eq!(neovm_eval::emacs_core::print::format_eval_result(&result), expected);
     // One explicit callback collection alone must not satisfy the test.
     assert!(collections > 1, "expected automatic stress collections");
     eprintln!("prepared-regexp scoped stress collections: {collections}");
@@ -1925,12 +1925,12 @@ fn search_entries_preserve_fresh_arguments_across_callback_gc() {
         "OK ((5 5 t (4 5 buffer)) (5 5 t (5 6 buffer)) ",
         "(5 5 t (4 5 buffer)) (5 5 t (5 6 buffer)))",
     );
-    assert_eq!(crate::emacs_core::format_eval_result(&warm), expected);
+    assert_eq!(neovm_eval::emacs_core::print::format_eval_result(&warm), expected);
     eval.gc_stress = true;
     let before = eval.gc_count;
     let result = eval.eval_str("(fixed-search-scoped-gc)");
     let collections = eval.gc_count - before;
-    assert_eq!(crate::emacs_core::format_eval_result(&result), expected);
+    assert_eq!(neovm_eval::emacs_core::print::format_eval_result(&result), expected);
     assert!(
         collections > 4,
         "expected automatic collections beyond four callbacks"

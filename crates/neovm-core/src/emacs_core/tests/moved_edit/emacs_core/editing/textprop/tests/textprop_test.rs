@@ -3093,7 +3093,7 @@ fn get_pos_property_resolves_window_object_to_buffer() {
     let results = eval
         .eval_str_each("(get-pos-property 2 'face (selected-window))")
         .into_iter()
-        .map(|r| crate::emacs_core::format_eval_result(&r))
+        .map(|r| neovm_eval::emacs_core::print::format_eval_result(&r))
         .collect::<Vec<_>>();
     assert_eq!(results, vec!["OK bold".to_string()]);
 }
@@ -3113,7 +3113,7 @@ fn next_single_char_property_change_resolves_window_object_to_buffer() {
     let results = eval
         .eval_str_each("(next-single-char-property-change 1 'face (selected-window))")
         .into_iter()
-        .map(|r| crate::emacs_core::format_eval_result(&r))
+        .map(|r| neovm_eval::emacs_core::print::format_eval_result(&r))
         .collect::<Vec<_>>();
     assert_eq!(results, vec!["OK 6".to_string()]);
 }
@@ -3131,7 +3131,7 @@ fn previous_single_char_property_change_resolves_window_object_to_buffer() {
     let results = eval
         .eval_str_each("(previous-single-char-property-change 11 'face (selected-window))")
         .into_iter()
-        .map(|r| crate::emacs_core::format_eval_result(&r))
+        .map(|r| neovm_eval::emacs_core::print::format_eval_result(&r))
         .collect::<Vec<_>>();
     assert_eq!(results, vec!["OK 6".to_string()]);
 }
@@ -3153,7 +3153,7 @@ fn previous_property_change_out_of_range_signal_uses_gnu_point_range_payload() {
                (previous-property-change 500 "abc")"#,
         )
         .into_iter()
-        .map(|r| crate::emacs_core::format_eval_result(&r))
+        .map(|r| neovm_eval::emacs_core::print::format_eval_result(&r))
         .collect::<Vec<_>>();
     assert_eq!(
         results,
@@ -3197,7 +3197,7 @@ fn get_pos_property_validates_position_through_its_stickiness_reads() {
                (get-pos-property 6 'face)"#,
         )
         .into_iter()
-        .map(|r| crate::emacs_core::format_eval_result(&r))
+        .map(|r| neovm_eval::emacs_core::print::format_eval_result(&r))
         .collect::<Vec<_>>();
     assert_eq!(
         results,
@@ -3241,7 +3241,7 @@ fn get_pos_property_validates_against_the_accessible_portion() {
                (get-pos-property 9 'face)"#,
         )
         .into_iter()
-        .map(|r| crate::emacs_core::format_eval_result(&r))
+        .map(|r| neovm_eval::emacs_core::print::format_eval_result(&r))
         .collect::<Vec<_>>();
     assert_eq!(
         results,

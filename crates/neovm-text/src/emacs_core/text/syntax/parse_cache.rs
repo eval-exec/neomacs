@@ -395,7 +395,10 @@ fn read_knob_usize(cell: &AtomicUsize, name: &'static str, default: usize, min: 
 }
 
 /// Runs kept per buffer text (least recently used goes first).
+#[cfg(not(any(test, feature = "test-support")))]
 const MAX_RUNS: usize = 8;
+#[cfg(any(test, feature = "test-support"))]
+pub const MAX_RUNS: usize = 8;
 /// Loop-top states kept per run.
 const MAX_SNAPSHOTS: usize = 1024;
 /// Exact answers kept per run.

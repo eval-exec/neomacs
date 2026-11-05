@@ -3,6 +3,7 @@
 //! (`NEOVM_ORACLE_MODE=refresh UPDATE_EXPECT=1`). Each pin fails on purpose
 //! once Neomacs answers like GNU.
 
+use neovm_text::emacs_core::syntax::LispSyntaxObjectReuse;
 use neovm_value::emacs_char::EmacsChar;
 use neovm_value::error::LispCondition;
 use neovm_value::symbol::CanonicalAccess;

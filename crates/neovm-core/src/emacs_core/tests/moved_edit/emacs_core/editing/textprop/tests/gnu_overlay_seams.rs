@@ -20,7 +20,7 @@ fn gde_overlay_cycle_and_property_filtering() {
                     (and winner (overlay-get winner 'tag))) out)))
     (list (mapcar (lambda (ov) (overlay-get ov 'tag)) (overlays-at 5)) (nreverse out))))"#,
     );
-    let actual = crate::emacs_core::format_eval_result_with_eval(&eval, &result);
+    let actual = neovm_eval::emacs_core::print::format_eval_result_with_eval(&eval, &result);
     let expected = r#"OK ((a b c) ((nil c c c) (a c c c) (b a a a) (c b b b)))"#;
     assert_eq!(actual, expected);
 }
@@ -38,7 +38,7 @@ fn gde_overlay_nontransitive_sorted_queries() {
 (list (mapcar (lambda (o) (overlay-get o 'tag)) (overlays-at 5 t))
 (mapcar (lambda (o) (overlay-get o 'tag)) (overlays-at 5)))))"#,
     );
-    let actual = crate::emacs_core::format_eval_result_with_eval(&eval, &result);
+    let actual = neovm_eval::emacs_core::print::format_eval_result_with_eval(&eval, &result);
     let expected = r#"OK ((c b a) (a b c))"#;
     assert_eq!(actual, expected);
 }
@@ -63,7 +63,7 @@ fn gde_overlay_collapsed_start_query_order() {
 (mapcar (lambda (o) (overlay-get o 'tag)) (car (overlay-lists)))) out))))
 (nreverse out))"#,
     );
-    let actual = crate::emacs_core::format_eval_result_with_eval(&eval, &result);
+    let actual = neovm_eval::emacs_core::print::format_eval_result_with_eval(&eval, &result);
     let expected = r#"OK (((c a b) (c a b) (c a b)) ((c a b) (c a b) (c a b)) ((c a b) (c a b) (c a b)) ((c a b) (c a b) (c a b)))"#;
     assert_eq!(actual, expected);
 }
@@ -84,7 +84,7 @@ fn gde_overlay_end_default_properties() {
 (list (get-char-property 3 'probe) (get-char-property-and-overlay 3 'probe)))
 (save-restriction (narrow-to-region 1 2) (get-char-property (point-max) 'probe))))))"#,
     );
-    let actual = crate::emacs_core::format_eval_result_with_eval(&eval, &result);
+    let actual = neovm_eval::emacs_core::print::format_eval_result_with_eval(&eval, &result);
     let expected = r#"OK ((fallback fallback (fallback)) (fallback fallback (fallback) (fallback (fallback)) fallback))"#;
     assert_eq!(actual, expected);
 }
@@ -109,7 +109,7 @@ fn gde_overlay_sorted_category_and_window() {
 (list t w1 w2)))
 (setplist 'gde-sorted-category nil)))))"#,
     );
-    let actual = crate::emacs_core::format_eval_result_with_eval(&eval, &result);
+    let actual = neovm_eval::emacs_core::print::format_eval_result_with_eval(&eval, &result);
     assert_eq!(
         actual,
         r#"OK ((window2 category plain) (category plain) (window2 plain))"#
@@ -134,7 +134,7 @@ fn gde_overlay_default_local_map_at_end() {
             (not (null (memq property-map (current-active-maps))))
             (null (get-pos-property (point-max) 'local-map))))))"#,
     );
-    let actual = crate::emacs_core::format_eval_result_with_eval(&eval, &result);
+    let actual = neovm_eval::emacs_core::print::format_eval_result_with_eval(&eval, &result);
     // Generated from GNU 31.1; get_local_map tries the character property first.
     assert_eq!(actual, r#"OK (ignore t t)"#);
 }

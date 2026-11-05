@@ -1,4 +1,5 @@
 use super::*;
+use neovm_value::value::positions::{CharPos0, CharRange};
 use std::path::PathBuf;
 
 use neovm_value::error::LispCondition;

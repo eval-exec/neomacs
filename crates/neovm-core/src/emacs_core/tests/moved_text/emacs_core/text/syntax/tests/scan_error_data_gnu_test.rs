@@ -2,6 +2,7 @@
 //! run in process against the answers GNU 31.1 gave there
 //! (`NEOVM_ORACLE_MODE=refresh UPDATE_EXPECT=1`).
 
+use neovm_text::emacs_core::syntax::LispSyntaxObjectReuse;
 use neovm_value::emacs_char::EmacsChar;
 use neovm_value::error::LispCondition;
 use neovm_value::symbol::CanonicalAccess;

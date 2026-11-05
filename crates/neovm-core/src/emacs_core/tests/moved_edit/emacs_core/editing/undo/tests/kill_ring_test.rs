@@ -1,4 +1,5 @@
-use neovm_edit::emacs_core::{Context, format_eval_result};
+use crate::emacs_core::eval::Context;
+use neovm_eval::emacs_core::print::format_eval_result;
 
 use crate::test_utils::{runtime_startup_eval_all, runtime_startup_eval_one};
 

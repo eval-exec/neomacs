@@ -7,7 +7,7 @@
 use neovm_value::value::Value;
 
 use neovm_eval::emacs_core::eval::Context;
-use crate::emacs_core::format_eval_result;
+use neovm_eval::emacs_core::print::format_eval_result;
 
 #[test]
 fn flag_t_splits_c0_80_and_keeps_utf8() {

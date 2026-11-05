@@ -338,7 +338,7 @@ fn string_match_with_inhibit_modify_answers_without_touching_match_data() {
                      (match-data))"#,
     );
     assert_eq!(
-        crate::emacs_core::format_eval_result(&result),
+        neovm_eval::emacs_core::print::format_eval_result(&result),
         "OK (0 (0 3 1 3) 4 nil 0 (0 3 1 3))",
     );
 }

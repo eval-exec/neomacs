@@ -1017,7 +1017,7 @@ fn decode_coding_region_charset_coding_decodes_and_marks_charset() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
     assert_eq!(
-        crate::emacs_core::format_eval_result(&eval.eval_str(
+        neovm_eval::emacs_core::print::format_eval_result(&eval.eval_str(
             "(progn (set-buffer-multibyte nil) (insert #xd2 #xbb) (set-buffer-multibyte t)
                     (decode-coding-region (point-min) (point-max) 'cn-gb-2312-unix)
                     (buffer-string))",
@@ -2214,13 +2214,13 @@ fn charset_prop(charset: &str) -> Value {
 }
 
 fn fmt(eval: &mut crate::emacs_core::Context, src: &str) -> String {
-    crate::emacs_core::format_eval_result(&eval.eval_str(src))
+    neovm_eval::emacs_core::print::format_eval_result(&eval.eval_str(src))
 }
 
 /// `crate::test_utils::new_context()` is bare (no `with-temp-buffer`); seed the current buffer.
 fn fmt_buf(eval: &mut crate::emacs_core::Context, seed: &str, expr: &str) -> String {
     let src = format!("(progn (erase-buffer) (insert {seed}) {expr})");
-    crate::emacs_core::format_eval_result(&eval.eval_str(&src))
+    neovm_eval::emacs_core::print::format_eval_result(&eval.eval_str(&src))
 }
 
 #[cfg(test)]
