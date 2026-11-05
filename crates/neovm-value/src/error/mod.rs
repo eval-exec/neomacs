@@ -364,14 +364,19 @@ pub struct ThrowData {
     symbol_mode: crate::tagged::SymbolMode,
     /// See [`SignalData::pin`]. PRIVATE, so `Flow::throw` is the only way in.
     #[allow(dead_code)] // held for its Drop (the GC pin); read only via the sealed trait
+    #[cfg(feature = "test-support")]
+    pub pin: InFlightRoots,
+    #[cfg(not(feature = "test-support"))]
     pin: InFlightRoots,
 }
 
 impl ThrowData {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn new(tag: Value, value: Value) -> Self {
         Self::new_with_symbols(tag, value, crate::tagged::SymbolMode::Bare)
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn new_with_symbols(tag: Value, value: Value, symbol_mode: crate::tagged::SymbolMode) -> Self {
         let pin = InFlightRoots::pin([tag, value]);
         Self {
@@ -411,10 +416,14 @@ pub struct ThreadBlockedData {
     /// See [`SignalData::pin`]. PRIVATE, so `Flow::thread_blocked` is the only
     /// way in.
     #[allow(dead_code)] // held for its Drop (the GC pin); read only via the sealed trait
+    #[cfg(feature = "test-support")]
+    pub pin: InFlightRoots,
+    #[cfg(not(feature = "test-support"))]
     pin: InFlightRoots,
 }
 
 impl ThreadBlockedData {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn new(blocker: Value, remaining_forms: Value) -> Self {
         let pin = InFlightRoots::pin([blocker, remaining_forms]);
         Self {
@@ -504,7 +513,13 @@ pub struct SignalData {
     /// Original cdr payload when a signal uses non-list data.
     pub raw_data: Option<Value>,
     delivery: SignalDelivery,
+    #[cfg(feature = "test-support")]
+    pub selected_resume: Option<ResumeTarget>,
+    #[cfg(not(feature = "test-support"))]
     pub(crate) selected_resume: Option<ResumeTarget>,
+    #[cfg(feature = "test-support")]
+    pub search_complete: bool,
+    #[cfg(not(feature = "test-support"))]
     pub(crate) search_complete: bool,
     pub(crate) bytecode_error_backtrace: Option<BytecodeErrorBacktrace>,
     /// Keeps `data` and `raw_data` reachable for the collector while this
@@ -514,6 +529,9 @@ pub struct SignalData {
     /// construction site has to go through the constructors below, which pin.
     /// See [`InFlightRoots`] for why the pin is needed at all.
     #[allow(dead_code)] // held for its Drop (the GC pin); read only via the sealed trait
+    #[cfg(feature = "test-support")]
+    pub pin: InFlightRoots,
+    #[cfg(not(feature = "test-support"))]
     pin: InFlightRoots,
 }
 
@@ -647,7 +665,7 @@ impl PinnedWord {
 }
 
 #[cfg(any(test, feature = "test-support"))]
-pub(crate) mod registry_support;
+pub mod registry_support;
 
 static_assertions::assert_impl_all!(InFlightRegistryHandle: Send, Sync);
 
@@ -675,6 +693,14 @@ impl InFlightRegistryHandle {
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
     }
+
+    /// A1 exception to TEST-SUPPORT-VIS: the PC8 TOKEN row keeps `table`
+    /// private even under test-support (V1 authority exclusion), so the moved
+    /// flow-word oracle asks this predicate instead of naming the field.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn shares_table_with(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.table, &other.table)
+    }
 }
 
 #[doc(hidden)]
@@ -700,8 +726,17 @@ pub fn install_in_flight_registry_handle(registry: &InFlightRegistryHandle) {
     IN_FLIGHT_ROOTS.with(|active| *active.borrow_mut() = Some(registry.clone()));
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 struct InFlightRootPin {
+    // A proc-macro attribute cannot decorate a field; the cfg split is the
+    // field-level spelling of TEST-SUPPORT-VIS. Production keeps it private.
+    #[cfg(feature = "test-support")]
+    pub registry: InFlightRegistryHandle,
+    #[cfg(not(feature = "test-support"))]
     registry: InFlightRegistryHandle,
+    #[cfg(feature = "test-support")]
+    pub slot: usize,
+    #[cfg(not(feature = "test-support"))]
     slot: usize,
 }
 
@@ -711,6 +746,9 @@ struct InFlightRootPin {
 /// activation changes. The payload and this pin remain on their owner thread.
 pub struct InFlightRoots {
     /// `None` for a payload with no traceable values, avoiding registry traffic.
+    #[cfg(feature = "test-support")]
+    pub pin: Option<InFlightRootPin>,
+    #[cfg(not(feature = "test-support"))]
     pin: Option<InFlightRootPin>,
     /// Flow payloads and Context remain local to their evaluator call stack.
     /// Shared registry metadata does not make a payload transferable.
@@ -852,9 +890,10 @@ pub fn collect_in_flight_registry_gc_roots(
     }
 }
 
-/// The active-view root collector, retained for ownership proof tests.
-#[cfg(test)]
-pub(crate) fn collect_in_flight_flow_gc_roots(out: &mut Vec<Value>, heap_id: usize) {
+/// The active-view root collector, retained for ownership proof tests and
+/// the re-homed core ownership suites.
+#[cfg(any(test, feature = "test-support"))]
+pub fn collect_in_flight_flow_gc_roots(out: &mut Vec<Value>, heap_id: usize) {
     IN_FLIGHT_ROOTS.with(|active| {
         if let Some(registry) = &*active.borrow() {
             collect_in_flight_registry_gc_roots(out, registry, heap_id);
@@ -1310,14 +1349,6 @@ pub fn expect_fixnum_failed(val: &Value) -> Flow {
         vec![Value::symbol("fixnump"), *val],
     )
 }
-
-#[cfg(test)]
-#[path = "tests/gc_tls_ownership_test.rs"]
-mod gc_tls_ownership_tests;
-
-#[cfg(test)]
-#[path = "tests/flow_word_test.rs"]
-mod flow_word_tests;
 
 /// Carrier park: forget the owner's in-flight root registry handle. The
 /// handle points into a Context-owned root table, not into the heap, but the

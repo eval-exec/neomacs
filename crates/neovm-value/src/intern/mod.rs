@@ -2506,10 +2506,6 @@ mod tests;
 mod seed_prefix_tests;
 
 #[cfg(test)]
-#[path = "tests/gc_tls_ownership_test.rs"]
-mod gc_tls_ownership_tests;
-
-#[cfg(test)]
 #[path = "tests/declared_name_identity.rs"]
 mod declared_name_identity_tests;
 
@@ -2544,9 +2540,72 @@ pub fn carrier_tls_fingerprint(h: &mut u64) {
 }
 
 impl NameId {
+    /// Raw construction for re-homed ownership tests (A1 test-support row).
+    #[cfg(any(test, feature = "test-support"))]
+    pub const fn for_test(raw: u32) -> Self {
+        Self(raw)
+    }
+
     #[inline]
     #[doc(hidden)]
     pub fn to_raw(&self) -> u32 {
         self.0
+    }
+}
+
+/// A1 test-support facade for re-homed ownership tests: names the private
+/// name-atom storage without changing product visibility.
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support {
+    use super::NameAtomStorage as InnerNameAtomStorage;
+    use crate::heap_types::LispString;
+    use std::borrow::Borrow;
+    use std::hash::{Hash, Hasher};
+
+    /// Public handle over one frozen, process-lifetime name atom.
+    #[derive(Clone, Copy, Debug)]
+    pub struct NameAtomRef(&'static LispString);
+
+    // SAFETY: the same invariant as the private atom: the string is leaked,
+    // frozen, property-free and never mutated after publication.
+    unsafe impl Send for NameAtomRef {}
+    // SAFETY: concurrent reads of the frozen string are safe.
+    unsafe impl Sync for NameAtomRef {}
+
+    impl Borrow<LispString> for NameAtomRef {
+        fn borrow(&self) -> &LispString {
+            self.0
+        }
+    }
+
+    impl PartialEq for NameAtomRef {
+        fn eq(&self, other: &Self) -> bool {
+            self.0 == other.0
+        }
+    }
+    impl Eq for NameAtomRef {}
+    impl Hash for NameAtomRef {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            self.0.hash(state);
+        }
+    }
+
+    /// Public wrapper over the private process-lifetime name-atom storage.
+    pub struct NameAtomStorage(InnerNameAtomStorage);
+
+    impl NameAtomStorage {
+        pub fn new() -> Self {
+            Self(InnerNameAtomStorage::new())
+        }
+        /// Freeze NAME and return its process-lifetime atom handle.
+        pub fn push(&mut self, name: LispString) -> NameAtomRef {
+            NameAtomRef(self.0.push(name).0)
+        }
+    }
+
+    impl Default for NameAtomStorage {
+        fn default() -> Self {
+            Self::new()
+        }
     }
 }

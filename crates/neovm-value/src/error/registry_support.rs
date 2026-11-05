@@ -19,6 +19,7 @@ pub struct RegistryState {
 }
 
 // One canonical copy of the former flow_word_test registry_state oracle.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(super) fn registry_state(registry: &InFlightRegistryHandle) -> RegistryState {
     let table = registry.lock();
     let free: BTreeSet<usize> = table.free.iter().copied().collect();

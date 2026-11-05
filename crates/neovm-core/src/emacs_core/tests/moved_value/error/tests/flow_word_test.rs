@@ -1,16 +1,16 @@
 //! P0.12 §11 ownership and one-word carrier representation tests.
 //! Register this as a child of error/mod.rs so private registry fields are visible.
 
-use super::registry_support::{RegistryState, registry_state};
-use super::{
+use crate::emacs_core::eval::{ResumeTarget, ShutdownRequest};
+use crate::emacs_core::print::map_flow;
+use neovm_value::error::registry_support::{RegistryState, registry_state};
+use neovm_value::error::{
     EvalError, EvalResult, Flow, FlowKind, FlowRef, InFlightRegistryHandle, InFlightRootPin,
     LispCondition, SignalData, ThreadBlockedData, ThrowData, current_in_flight_registry_handle,
-    flow_from_eval_error, signal,
+    flow_from_eval_error, is_signal_result, signal, with_signal_result,
 };
-use crate::emacs_core::eval::{Context, ResumeTarget, ShutdownRequest};
-use crate::emacs_core::print::map_flow;
-use crate::intern::intern;
-use crate::value::Value;
+use neovm_value::intern::intern;
+use neovm_value::value::Value;
 use std::mem::size_of;
 
 // A unique inferred marker exists only if Flow does NOT implement the trait.
@@ -98,7 +98,7 @@ fn flow_is_one_word_and_eval_result_two() {
 #[test]
 fn every_kind_round_trips_through_the_word() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     for kind in heap_kinds() {
         let expected = format!("{kind:?}");
         let address = owned_payload_address(&kind);
@@ -128,7 +128,7 @@ fn every_kind_round_trips_through_the_word() {
 #[test]
 fn debug_text_matches_the_owned_enum() {
     crate::test_utils::init_test_tracing();
-    let _eval = Context::new();
+    let _eval = crate::test_utils::new_context();
     let mut flows: Vec<Flow> = heap_kinds().into_iter().map(Flow::from_kind).collect();
     for exit_code in [i32::MIN, -1, 0, 1, i32::MAX] {
         for restart in [false, true] {
@@ -146,7 +146,7 @@ fn debug_text_matches_the_owned_enum() {
 #[test]
 fn clone_takes_a_fresh_pin_and_drop_releases_it() {
     crate::test_utils::init_test_tracing();
-    let _eval = Context::new();
+    let _eval = crate::test_utils::new_context();
     let registry = current_in_flight_registry_handle();
     // Construct each kind separately: unrelated live payloads must not mask
     // a missing clone pin or a duplicate slot release.
@@ -176,7 +176,7 @@ fn clone_takes_a_fresh_pin_and_drop_releases_it() {
 #[test]
 fn into_kind_transfers_the_pin_until_the_owned_payload_drops() {
     crate::test_utils::init_test_tracing();
-    let _eval = Context::new();
+    let _eval = crate::test_utils::new_context();
     let registry = current_in_flight_registry_handle();
     let before = registry_state(&registry);
     let flow = signal(LispCondition::Error, vec![Value::string("owned view pin")]);
@@ -194,14 +194,14 @@ fn into_kind_transfers_the_pin_until_the_owned_payload_drops() {
 #[test]
 fn clone_keeps_the_original_context_registry_after_activation_changes() {
     crate::test_utils::init_test_tracing();
-    let _first = Context::new();
+    let _first = crate::test_utils::new_context();
     let first_registry = current_in_flight_registry_handle();
     let first_before = registry_state(&first_registry);
     let original = signal(
         LispCondition::Error,
         vec![Value::string("original context")],
     );
-    let _second = Context::new();
+    let _second = crate::test_utils::new_context();
     let second_registry = current_in_flight_registry_handle();
     let second_before = registry_state(&second_registry);
     assert!(!std::sync::Arc::ptr_eq(
@@ -234,7 +234,7 @@ fn clone_keeps_the_original_context_registry_after_activation_changes() {
 #[test]
 fn shutdown_has_no_registry_pin() {
     crate::test_utils::init_test_tracing();
-    let _eval = Context::new();
+    let _eval = crate::test_utils::new_context();
     let registry = current_in_flight_registry_handle();
     let before = registry_state(&registry);
     for exit_code in [i32::MIN, -1, 0, 1, i32::MAX] {
@@ -255,7 +255,7 @@ fn shutdown_has_no_registry_pin() {
 #[test]
 fn as_signal_mut_edits_in_place() {
     crate::test_utils::init_test_tracing();
-    let _eval = Context::new();
+    let _eval = crate::test_utils::new_context();
     let mut flow = signal(LispCondition::Error, vec![Value::string("mutable payload")]);
     let address = borrowed_payload_address(&flow);
     let target = ResumeTarget::InterpreterConditionCase {
@@ -276,7 +276,7 @@ fn as_signal_mut_edits_in_place() {
 #[test]
 fn eval_error_round_trip_per_kind() {
     crate::test_utils::init_test_tracing();
-    let _eval = Context::new();
+    let _eval = crate::test_utils::new_context();
     let mut errors = vec![
         EvalError::signal(
             intern("error"),
@@ -303,7 +303,7 @@ fn eval_error_round_trip_per_kind() {
 #[test]
 fn is_signal_result_evaluates_its_expression_once_and_releases_the_temporary() {
     crate::test_utils::init_test_tracing();
-    let _eval = Context::new();
+    let _eval = crate::test_utils::new_context();
     let registry = current_in_flight_registry_handle();
     let before = registry_state(&registry);
     let calls = std::cell::Cell::new(0);
@@ -333,7 +333,7 @@ fn is_signal_result_evaluates_its_expression_once_and_releases_the_temporary() {
 #[test]
 fn with_signal_result_transfers_the_original_box_and_pin_without_cloning() {
     crate::test_utils::init_test_tracing();
-    let _eval = Context::new();
+    let _eval = crate::test_utils::new_context();
     let registry = current_in_flight_registry_handle();
     let before = registry_state(&registry);
     let flow = signal(
@@ -350,7 +350,7 @@ fn with_signal_result_transfers_the_original_box_and_pin_without_cloning() {
     }, payload => {
         assert_eq!(std::ptr::from_ref(&*payload).cast::<()>() as usize, address);
         assert_eq!(payload.pin.pin.as_ref().unwrap().slot, slot);
-        assert!(std::sync::Arc::ptr_eq(&payload.pin.pin.as_ref().unwrap().registry.table, &registry.table));
+        assert!(payload.pin.pin.as_ref().unwrap().registry.shares_table_with(&registry));
         assert_eq!(registry_state(&registry).live, before.live + 1);
         Err(Flow::signal_boxed(payload))
     });
@@ -366,7 +366,7 @@ fn with_signal_result_transfers_the_original_box_and_pin_without_cloning() {
 #[test]
 fn with_signal_result_forwards_throw_thread_blocked_shutdown_and_ok_owners() {
     crate::test_utils::init_test_tracing();
-    let _eval = Context::new();
+    let _eval = crate::test_utils::new_context();
     let registry = current_in_flight_registry_handle();
     for case in 0..4 {
         let before = registry_state(&registry);

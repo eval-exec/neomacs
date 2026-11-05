@@ -497,6 +497,12 @@ mod heap_registry_cross_heap_test;
 #[path = "tests/plist_collection_capture_test.rs"]
 mod plist_collection_capture_test;
 
+// Booted-Context tests re-homed from neovm-value (TEST-SUPPORT-DESIGN 1a,
+// lead ruling 01:1xZ option A). Bodies/test names/assertions unchanged.
+#[cfg(test)]
+#[path = "tests/moved_value/mod.rs"]
+mod moved_value;
+
 // The string-position cache's regression children stayed in core with the
 // stage-3 C12 move: they drive the evaluator's heap and activation machinery
 // (Context, TaggedHeap, tls_scope), which the value layer cannot name.

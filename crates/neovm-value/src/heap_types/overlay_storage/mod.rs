@@ -4,6 +4,13 @@
 #[cfg(test)]
 #[path = "tests/instrumentation.rs"]
 pub(crate) mod instrumentation;
+
+// A proc-macro attribute cannot decorate a file module, so the test-support
+// spelling of VIS splits the module declaration instead (product builds do
+// not compile this module at all).
+#[cfg(all(feature = "test-support", not(test)))]
+#[path = "tests/instrumentation.rs"]
+pub mod instrumentation;
 #[doc(hidden)]
 pub mod ordered;
 
@@ -277,7 +284,7 @@ impl OrderedTreeQuery<IntervalRecord> for IntervalBPlusQuery {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn record_subtree_visit(self) {
         if matches!(self, Self::Point(_)) {
             instrumentation::record_overlays_at_node_visit();
@@ -288,6 +295,9 @@ impl OrderedTreeQuery<IntervalRecord> for IntervalBPlusQuery {
 #[derive(Clone, Debug)]
 #[doc(hidden)]
 pub struct IntervalBPlusTree {
+    #[cfg(feature = "test-support")]
+    pub records: OrderedShiftTree<IntervalRecord>,
+    #[cfg(not(feature = "test-support"))]
     pub(crate) records: OrderedShiftTree<IntervalRecord>,
     next_attachment_order: u64,
 }
@@ -474,7 +484,7 @@ impl IntervalBPlusTree {
     #[doc(hidden)]
     pub fn all_ascending(&self, out: &mut Vec<Value>) {
         out.extend(self.records.matches(IntervalBPlusQuery::All).map(|record| {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             instrumentation::record_overlay_full_enumeration_visit();
             record.overlay
         }));
@@ -490,17 +500,20 @@ impl IntervalBPlusTree {
         self.records.shift_at_or_after(position, inclusive, delta);
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn next_attachment_order_for_test(&self) -> u64 {
         self.next_attachment_order
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn height(&self) -> usize {
         self.records.height()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn assert_invariants(&self) {
         self.records.assert_invariants();
     }

@@ -94,7 +94,7 @@ impl CharRange {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub const fn from_usize(start: usize, end: usize) -> Self {
         Self {
             start: CharPos0::new(start),

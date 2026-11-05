@@ -12,7 +12,7 @@ use std::ops::{BitOr, Deref};
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use rustc_hash::FxHashSet;
 
 use super::super::byte_positions::{EmacsByteDelta, EmacsBytePos};
@@ -157,7 +157,7 @@ struct OrderedSummary<K> {
 
 impl<K: Copy> OrderedSummary<K> {
     fn shifted<R: OrderedShiftRecord<Key = K>>(self, delta: EmacsByteDelta) -> Self {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         super::instrumentation::record_endpoint_search_summary_shift();
         Self {
             first_key: R::shifted_key(self.first_key, delta),
@@ -240,17 +240,17 @@ pub struct OrderedShiftTree<R: OrderedShiftRecord> {
     /// Test-only per-index accounting; clones share the counter so resolutions
     /// through an existing position handle are counted too. Atomic increments
     /// are independent across mutator-owned indexes and publish no Lisp state.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     identity_position_resolutions: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     /// Test-only successful membership changes, independent of record updates.
     /// Clones share accounting; separate indexes own independent counters.
     /// Relaxed atomics count exclusive mutator operations and publish no Lisp
     /// state or synchronization contract to the production tree.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     membership_mutations: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     /// Test-only count of complete node summary rebuilds. Clones share it,
     /// like the counters above; relaxed increments publish no Lisp state.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     summary_refreshes: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
@@ -270,13 +270,13 @@ impl<R: OrderedShiftRecord> OrderedShiftTree<R> {
             next_slot: 0,
             free: Vec::new(),
             by_identity: FxHashMap::default(),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             identity_position_resolutions: std::sync::Arc::new(
                 std::sync::atomic::AtomicUsize::new(0),
             ),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             membership_mutations: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             summary_refreshes: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
     }
@@ -351,6 +351,7 @@ impl<R: OrderedShiftRecord> OrderedShiftTree<R> {
         tree
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn len(&self) -> usize {
         self.by_identity.len()
     }
@@ -368,7 +369,7 @@ impl<R: OrderedShiftRecord> OrderedShiftTree<R> {
         if self.by_identity.contains_key(&record.identity()) {
             return false;
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         self.membership_mutations
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let Some(root) = self.root else {
@@ -517,7 +518,7 @@ impl<R: OrderedShiftRecord> OrderedShiftTree<R> {
     #[doc(hidden)]
     pub fn remove(&mut self, identity: R::Identity) -> Option<R> {
         let leaf = *self.by_identity.get(&identity)?;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         self.membership_mutations
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.normalize_path(leaf);
@@ -628,7 +629,7 @@ impl<R: OrderedShiftRecord> OrderedShiftTree<R> {
 
     pub(crate) fn record(&self, identity: R::Identity) -> Option<R> {
         let leaf = *self.by_identity.get(&identity)?;
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         self.identity_position_resolutions
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let record = self
@@ -688,37 +689,43 @@ impl<R: OrderedShiftRecord> OrderedShiftTree<R> {
         None
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn reset_identity_position_resolution_count(&self) {
         self.identity_position_resolutions
             .store(0, std::sync::atomic::Ordering::Relaxed);
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn identity_position_resolution_count(&self) -> usize {
         self.identity_position_resolutions
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn reset_membership_mutation_count(&self) {
         self.membership_mutations
             .store(0, std::sync::atomic::Ordering::Relaxed);
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn membership_mutation_count(&self) -> usize {
         self.membership_mutations
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn reset_summary_refresh_count(&self) {
         self.summary_refreshes
             .store(0, std::sync::atomic::Ordering::Relaxed);
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn summary_refresh_count(&self) -> usize {
         self.summary_refreshes
             .load(std::sync::atomic::Ordering::Relaxed)
@@ -746,7 +753,7 @@ impl<R: OrderedShiftRecord> OrderedShiftTree<R> {
         inclusive: bool,
         delta: EmacsByteDelta,
     ) {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         super::instrumentation::record_overlay_shift_node_visit();
         let summary = self.summary(id);
         let wholly_affected =
@@ -833,7 +840,7 @@ impl<R: OrderedShiftRecord> OrderedShiftTree<R> {
     {
         let mut inherited = EmacsByteDelta::ZERO;
         loop {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             query.record_subtree_visit();
             let node = self.node(id);
             let record_delta = inherited.combine(node.pending_shift);
@@ -873,7 +880,7 @@ impl<R: OrderedShiftRecord> OrderedShiftTree<R> {
         Q: OrderedTreeQuery<R>,
         F: FnMut(R),
     {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         query.record_subtree_visit();
         let summary = self.summary(id);
         if !query.subtree_may_match(
@@ -937,7 +944,7 @@ impl<R: OrderedShiftRecord> OrderedShiftTree<R> {
         mut inherited: EmacsByteDelta,
     ) -> Option<EmacsBytePos> {
         loop {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             super::instrumentation::record_endpoint_search_node_visit();
             let node = self.node(id);
             let record_delta = inherited.combine(node.pending_shift);
@@ -986,7 +993,7 @@ impl<R: OrderedShiftRecord> OrderedShiftTree<R> {
         mut inherited: EmacsByteDelta,
     ) -> Option<EmacsBytePos> {
         loop {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             super::instrumentation::record_endpoint_search_node_visit();
             let node = self.node(id);
             let record_delta = inherited.combine(node.pending_shift);
@@ -1215,7 +1222,7 @@ impl<R: OrderedShiftRecord> OrderedShiftTree<R> {
 
     fn refresh(&mut self, id: OrderedNodeId) {
         debug_assert!(self.node(id).pending_shift.is_zero());
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         self.summary_refreshes
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let (summary, prefix_max_end, branch_min_positions) = match &self.node(id).kind {
@@ -1498,7 +1505,8 @@ impl<R: OrderedShiftRecord> OrderedShiftTree<R> {
             .expect("overlay B+ node handle points to a free slot")
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn height(&self) -> usize {
         let mut height = 0;
         let mut current = self.root;
@@ -1512,7 +1520,8 @@ impl<R: OrderedShiftRecord> OrderedShiftTree<R> {
         height
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn assert_invariants(&self) {
         let Some(root) = self.root else {
             assert!(self.by_identity.is_empty());
@@ -1579,7 +1588,7 @@ impl<R: OrderedShiftRecord> OrderedShiftTree<R> {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[allow(clippy::too_many_arguments)]
     fn assert_node_invariants(
         &self,
@@ -1857,7 +1866,7 @@ pub trait OrderedTreeQuery<R: OrderedShiftRecord>: Copy {
         false
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn record_subtree_visit(self) {}
 }
 
@@ -1973,9 +1982,9 @@ where
         inherited: EmacsByteDelta,
         depth: usize,
     ) -> Option<OrderedTraversalFrame> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         super::instrumentation::record_overlay_iterator_frame_push();
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         query.record_subtree_visit();
         let summary = tree.summary(id);
         if !query.subtree_may_match(

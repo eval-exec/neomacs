@@ -1,15 +1,23 @@
-use super::*;
 use crate::emacs_core::eval::Context;
+use neovm_value::heap_types::LispString;
+use neovm_value::intern::test_support::NameAtomStorage;
+use neovm_value::intern::*;
+use neovm_value::tagged::gc::TaggedHeap;
+use neovm_value::tagged::value::TaggedValue;
+use neovm_value::value::Value;
+use rustc_hash::FxBuildHasher;
+use std::borrow::Borrow;
+use std::collections::HashMap;
 
 #[test]
 fn gc_tls_ownership_symbol_names_are_rooted_only_in_their_heap() {
-    let mut first = Context::new();
+    let mut first = crate::emacs_core::eval_hook_installers::new_context();
     let symbol = first
         .eval_str(r#"(make-symbol (copy-sequence "gc-tls-name"))"#)
         .unwrap();
     let id = symbol.as_bare_symbol_id().unwrap();
     let name = materialize_symbol_name_value(id);
-    let mut second = Context::new();
+    let mut second = crate::emacs_core::eval_hook_installers::new_context();
     let mut roots = Vec::new();
     collect_symbol_name_gc_roots(&mut roots, second.tagged_heap.identity());
     assert!(roots.iter().all(|root| root.bits() != name.bits()));
@@ -24,7 +32,7 @@ fn gc_tls_ownership_symbol_names_are_rooted_only_in_their_heap() {
 
 #[test]
 fn gc_tls_ownership_visible_name_cache_revalidates_on_context_switch() {
-    let mut first = Context::new();
+    let mut first = crate::emacs_core::eval_hook_installers::new_context();
     let symbol = first
         .eval_str(r#"(make-symbol (copy-sequence "gc-tls-cache"))"#)
         .unwrap();
@@ -33,7 +41,7 @@ fn gc_tls_ownership_visible_name_cache_revalidates_on_context_switch() {
     assert!(
         matches!(resolve_lisp_visible_symbol_name(id), LispVisibleSymbolName::LispObject(value) if value.bits() == original.bits())
     );
-    let mut second = Context::new();
+    let mut second = crate::emacs_core::eval_hook_installers::new_context();
     let own = materialize_symbol_name_value(id);
     assert_ne!(original.bits(), own.bits());
     assert!(
@@ -51,7 +59,7 @@ fn gc_tls_ownership_visible_name_cache_revalidates_on_context_switch() {
 #[test]
 fn gc_tls_ownership_visible_name_cache_revalidates_after_heap_drop() {
     let id = {
-        let mut first = Context::new();
+        let mut first = crate::emacs_core::eval_hook_installers::new_context();
         let symbol = first
             .eval_str(r#"(make-symbol (copy-sequence "gc-tls-dropped-name"))"#)
             .unwrap();
@@ -62,7 +70,7 @@ fn gc_tls_ownership_visible_name_cache_revalidates_after_heap_drop() {
         ));
         id
     };
-    let mut next = Context::new();
+    let mut next = crate::emacs_core::eval_hook_installers::new_context();
     let own = materialize_symbol_name_value(id);
     assert!(next.tagged_heap.owns_heap_value_for_test(own));
     assert!(
@@ -74,7 +82,7 @@ fn gc_tls_ownership_visible_name_cache_revalidates_after_heap_drop() {
 
 #[test]
 fn gc_tls_ownership_interned_name_atoms_do_not_carry_heap_properties() {
-    let mut first = Context::new();
+    let mut first = crate::emacs_core::eval_hook_installers::new_context();
     let symbol = first
         .eval_str("(make-symbol (propertize \"gc-tls-name-props\" 'gc-tls-property (vector 45)))")
         .unwrap();
@@ -85,7 +93,7 @@ fn gc_tls_ownership_interned_name_atoms_do_not_carry_heap_properties() {
         !resolve_sym_lisp_string(id).has_intervals(),
         "the process-lifetime name atom cloned unrooted heap properties"
     );
-    let mut second = Context::new();
+    let mut second = crate::emacs_core::eval_hook_installers::new_context();
     let name = materialize_symbol_name_value(id);
     assert!(!name.as_lisp_string().unwrap().has_intervals());
     second.gc_collect_exact();
@@ -97,10 +105,9 @@ fn gc_tls_ownership_interned_name_atoms_do_not_carry_heap_properties() {
 #[test]
 fn name_atom_refs_strip_heap_properties_before_crossing_threads() {
     use crate::buffer::{CharLen, CharPos0, CharRange};
-    use crate::tagged::gc::TaggedHeap;
 
     let mut heap = TaggedHeap::new();
-    crate::tagged::gc::set_tagged_heap(&mut heap);
+    neovm_value::tagged::gc::set_tagged_heap(&mut heap);
     let payload = heap.alloc_string(LispString::from_utf8("name-atom-property-payload"));
     let property = TaggedValue::from_sym_id(intern_uninterned("name-atom-property"));
     let mut name = LispString::from_utf8("λ-name");
@@ -117,8 +124,11 @@ fn name_atom_refs_strip_heap_properties_before_crossing_threads() {
     let borrowed: &LispString = atom.borrow();
     assert!(!borrowed.has_intervals());
     let mut map = HashMap::with_hasher(FxBuildHasher);
-    map.insert(atom, NameId(0));
-    assert_eq!(map.get(&LispString::from_utf8("λ-name")), Some(&NameId(0)));
+    map.insert(atom, NameId::for_test(0));
+    assert_eq!(
+        map.get(&LispString::from_utf8("λ-name")),
+        Some(&NameId::for_test(0))
+    );
 
     // The frozen atom kept only bytes, so its former property cannot keep the
     // heap object alive. Reading the atom on a foreign thread needs no heap.

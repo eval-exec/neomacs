@@ -1,5 +1,6 @@
-use super::*;
 use crate::emacs_core::eval::Context;
+use neovm_value::error::*;
+use neovm_value::value::Value;
 
 fn roots_for(ctx: &Context) -> Vec<Value> {
     let mut roots = Vec::new();
@@ -10,14 +11,14 @@ fn roots_for(ctx: &Context) -> Vec<Value> {
 #[test]
 fn gc_tls_ownership_in_flight_excludes_a_dropped_heap() {
     let (flow, payload_bits) = {
-        let mut first = Context::new();
+        let mut first = crate::emacs_core::eval_hook_installers::new_context();
         let payload = first.eval_str("(vector 42)").unwrap();
         (
             Flow::throw(Value::symbol("gc-tls-throw"), payload),
             payload.bits(),
         )
     };
-    let mut next = Context::new();
+    let mut next = crate::emacs_core::eval_hook_installers::new_context();
     assert!(
         roots_for(&next)
             .iter()
@@ -30,10 +31,10 @@ fn gc_tls_ownership_in_flight_excludes_a_dropped_heap() {
 
 #[test]
 fn gc_tls_ownership_in_flight_filters_two_live_heaps() {
-    let mut first = Context::new();
+    let mut first = crate::emacs_core::eval_hook_installers::new_context();
     let a = first.eval_str("(vector 41)").unwrap();
     let flow_a = Flow::throw(Value::symbol("gc-tls-first"), a);
-    let mut second = Context::new();
+    let mut second = crate::emacs_core::eval_hook_installers::new_context();
     let b = second.eval_str("(vector 42)").unwrap();
     let flow_b = Flow::throw(Value::symbol("gc-tls-second"), b);
     let roots = roots_for(&second);
@@ -52,10 +53,10 @@ fn gc_tls_ownership_in_flight_filters_two_live_heaps() {
 
 #[test]
 fn gc_tls_ownership_in_flight_clone_keeps_the_original_heap() {
-    let mut first = Context::new();
+    let mut first = crate::emacs_core::eval_hook_installers::new_context();
     let payload = first.eval_str("(vector 43)").unwrap();
     let original = Flow::throw(Value::symbol("gc-tls-clone"), payload);
-    let mut second = Context::new();
+    let mut second = crate::emacs_core::eval_hook_installers::new_context();
     let cloned = original.clone();
     drop(original);
     assert!(
@@ -82,7 +83,7 @@ fn gc_tls_ownership_in_flight_clone_keeps_the_original_heap() {
 
 #[test]
 fn gc_tls_ownership_in_flight_signal_roots_survive_same_heap_gc() {
-    let mut ctx = Context::new();
+    let mut ctx = crate::emacs_core::eval_hook_installers::new_context();
     let payload = ctx.eval_str("(vector 44)").unwrap();
     let flow = signal(LispCondition::Error, vec![payload]);
     assert!(
@@ -100,7 +101,7 @@ fn gc_tls_ownership_in_flight_signal_roots_survive_same_heap_gc() {
     );
 }
 
-use super::registry_support::{
+use neovm_value::error::registry_support::{
     InFlightSlotId, claim_existing_registry_slot_for_test as claim_registry_slot,
     existing_pin_registry_slot_for_test as pinned_slot,
 };
@@ -109,7 +110,7 @@ static_assertions::assert_impl_all!(InFlightSlotId: Send, Sync, Copy);
 
 #[test]
 fn gc_tls_ownership_in_flight_shared_registry_pin_outlives_owner_local_error() {
-    let mut first = Context::new();
+    let mut first = crate::emacs_core::eval_hook_installers::new_context();
     let error = first
         .eval_str("(signal 'error (list (vector 46)))")
         .expect_err("retain a public error on its owner thread");
@@ -137,7 +138,7 @@ fn gc_tls_ownership_in_flight_shared_registry_pin_outlives_owner_local_error() {
             .any(|root| root.bits() == payload_bits)
     );
 
-    let mut second = Context::new();
+    let mut second = crate::emacs_core::eval_hook_installers::new_context();
     let other = second
         .eval_str("(signal 'error (list (vector 47)))")
         .expect_err("pin an error in the independent Context");
@@ -174,7 +175,7 @@ fn gc_tls_ownership_in_flight_registry_pins_change_during_owner_gc() {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Barrier};
 
-    let mut first = Context::new();
+    let mut first = crate::emacs_core::eval_hook_installers::new_context();
     let error = first
         .eval_str("(signal 'error (list (vector 48)))")
         .expect_err("retain a public error on its owner thread");
@@ -203,7 +204,7 @@ fn gc_tls_ownership_in_flight_registry_pins_change_during_owner_gc() {
         drop(pin);
         worker_finished.store(true, Ordering::Release);
     });
-    let mut second = Context::new();
+    let mut second = crate::emacs_core::eval_hook_installers::new_context();
     let other = second
         .eval_str("(signal 'error (list (vector 49)))")
         .expect_err("retain a separate pin in the active Context");
