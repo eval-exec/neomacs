@@ -23,6 +23,7 @@ use GnuSpecialness::NonSpecial as N;
 use GnuSpecialness::Special as S;
 
 #[rustfmt::skip]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) static GNU_OBJECT_VARIABLES: &[GnuObjectVariable] = &[
     GnuObjectVariable { name: r#"after-change-functions"#, kind: G, special: S }, // buffer.c:5687
     GnuObjectVariable { name: r#"after-delete-frame-functions"#, kind: G, special: S }, // frame.c:7520

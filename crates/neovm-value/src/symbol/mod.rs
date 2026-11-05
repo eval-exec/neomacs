@@ -2818,6 +2818,7 @@ impl Obarray {
             reason = "standalone manager resolver retained for its cold-owner and compile-fail contracts"
         )
     )]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn debug_on_next_call_bool_fwd(
         &mut self,
         id: SymId,
@@ -2863,6 +2864,7 @@ impl Obarray {
     /// `OnceLock` read was most of the per-call check).  `None` while the
     /// pointer names a stand-in.
     #[inline(always)]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn debug_on_next_call_bool_fwd_cached(
         &self,
     ) -> Option<&'static crate::forward::LispBoolFwd> {
@@ -2875,6 +2877,7 @@ impl Obarray {
     /// cell is unresolved (the stand-in reads armed), which only sends the
     /// caller to the reference path that resolves it; see the field.
     #[inline(always)]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn debug_on_next_call_armed_fast(&self) -> bool {
         self.debug_on_next_call_cell_ref().get()
     }

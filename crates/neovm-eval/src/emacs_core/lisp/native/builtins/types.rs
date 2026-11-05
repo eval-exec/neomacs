@@ -297,6 +297,7 @@ pub fn builtin_type_of_with_ctx_1(
 /// an EIEIO object's slot 0 is its `eieio--class` record). Reads only; the
 /// JIT's GC-free `type-of` intrinsic answers records with it directly.
 #[inline]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn record_type_of(value: Value) -> Option<Value> {
     let tag = value.as_record_data()?.first().copied();
     if let Some(tv) = tag.and_then(Value::as_record_data)

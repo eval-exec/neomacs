@@ -3855,6 +3855,7 @@ fn print_list_shorthand_bytes(value: &Value, options: PrintOptions) -> Option<Ve
     Some(out)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn quote_payload(value: &Value) -> Option<Value> {
     let items = list_to_vec(value)?;
     if items.len() != 2 {

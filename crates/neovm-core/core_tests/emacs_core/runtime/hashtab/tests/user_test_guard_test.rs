@@ -179,18 +179,18 @@ fn hash_user_guard_accounts_gc_maybe_countdown_and_threshold_changes() {
     let hi_threshold = (i64::MAX as usize) / 2;
     assert!(context.tagged_heap().gc_threshold() < hi_threshold);
     with_user_test_guard(&mut context, table, |context| {
-        let bytes = context.tagged_heap.bytes_since_gc_exact();
+        let bytes = context.tagged_heap().bytes_since_gc_exact();
         let initial = inhibited_user_test_since_gc(context, bytes).unwrap();
         assert!(
             initial < 0,
             "ordinary inhibited countdown reports no allocation"
         );
-        context.tagged_heap.set_gc_threshold(hi_threshold);
+        unsafe { context.tagged_heap_mut() }.set_gc_threshold(hi_threshold);
         assert_eq!(inhibited_user_test_since_gc(context, bytes), Some(initial));
         context
             .eval_str("(make-list 32 nil)")
             .expect("allocate during inhibition");
-        let current = context.tagged_heap.bytes_since_gc_exact();
+        let current = context.tagged_heap().bytes_since_gc_exact();
         let after = inhibited_user_test_since_gc(context, current).unwrap();
         assert!(after > initial);
         assert!(
@@ -200,12 +200,12 @@ fn hash_user_guard_accounts_gc_maybe_countdown_and_threshold_changes() {
     });
     assert!(context.user_test_gc_accounting_pointer().is_none());
     with_user_test_guard(&mut context, table, |context| {
-        let bytes = context.tagged_heap.bytes_since_gc_exact();
+        let bytes = context.tagged_heap().bytes_since_gc_exact();
         assert_eq!(inhibited_user_test_since_gc(context, bytes), Some(0));
         context
             .eval_str("(make-list 32 nil)")
             .expect("allocate at capped threshold");
-        let current = context.tagged_heap.bytes_since_gc_exact();
+        let current = context.tagged_heap().bytes_since_gc_exact();
         assert!(inhibited_user_test_since_gc(context, current).unwrap() > 0);
     });
 }
@@ -215,12 +215,10 @@ fn hash_user_guard_restores_outer_gc_maybe_accounting_after_other_table() {
     let (mut context, table) = fixture();
     let other = Value::hash_table(HashTableTest::Eq);
     with_user_test_guard(&mut context, table, |context| {
-        let bytes = context.tagged_heap.bytes_since_gc_exact();
+        let bytes = context.tagged_heap().bytes_since_gc_exact();
         let outer = inhibited_user_test_since_gc(context, bytes).unwrap();
         assert!(outer < 0);
-        context
-            .tagged_heap
-            .set_gc_threshold((i64::MAX as usize) / 2);
+        unsafe { context.tagged_heap_mut() }.set_gc_threshold((i64::MAX as usize) / 2);
         with_user_test_guard(context, other, |context| {
             assert_eq!(inhibited_user_test_since_gc(context, bytes), Some(0));
         });
@@ -238,7 +236,7 @@ fn hash_user_guard_preserves_live_settings_fallback_after_nested_exit() {
     let other = Value::hash_table(HashTableTest::Eq);
     let threshold = crate::emacs_core::intern::intern("gc-cons-threshold");
     let result = with_user_test_guard(&mut context, table, |context| {
-        let bytes = context.tagged_heap.bytes_since_gc_exact();
+        let bytes = context.tagged_heap().bytes_since_gc_exact();
         let outer = inhibited_user_test_since_gc(context, bytes).unwrap();
         context
             .eval_str("(make-local-variable 'gc-cons-percentage)")
@@ -247,13 +245,13 @@ fn hash_user_guard_preserves_live_settings_fallback_after_nested_exit() {
         // A redirected GC variable's base cell can change without its normal
         // canonical publisher. The sticky fallback must read it live.
         context
-            .obarray
+            .obarray_mut()
             .set_symbol_value_id(threshold, Value::fixnum(1_048_576));
         with_user_test_guard(context, other, |context| {
             assert_eq!(
                 context
                     .capture_user_test_gc_accounting()
-                    .entry_threshold_bytes,
+                    .entry_threshold_bytes(),
                 1_048_576
             );
             let before = context.eval_str("gcs-done").expect("read collection count");
@@ -277,7 +275,7 @@ fn hash_user_guard_preserves_live_settings_fallback_after_nested_exit() {
     assert_eq!(context.gc_inhibit_depth, 0);
     assert!(context.user_test_gc_accounting_pointer().is_none());
     context
-        .obarray()
+        .obarray_mut()
         .set_symbol_value_id(threshold, Value::fixnum(2_097_152));
     assert_eq!(
         context
@@ -303,11 +301,11 @@ fn hash_user_guard_keeps_gc_binding_projection_current() {
         "a dynamic GC setting must be published before a callback reads its cached entry operands"
     );
     with_user_test_guard(&mut context, table, |context| {
-        let entry_bytes = context.tagged_heap.bytes_since_gc_exact();
+        let entry_bytes = context.tagged_heap().bytes_since_gc_exact();
         context
             .eval_str("(setq gc-cons-threshold 1048576 gc-cons-percentage 0.0)")
             .expect("change settings before the first GC-maybe query");
-        let bytes = context.tagged_heap.bytes_since_gc_exact();
+        let bytes = context.tagged_heap().bytes_since_gc_exact();
         let hi_threshold = (i64::MAX as usize) / 2;
         assert_eq!(
             inhibited_user_test_since_gc(context, bytes),
@@ -346,7 +344,7 @@ fn hash_user_guard_refreshes_dynamic_let_gc_threshold() {
         )
         .expect("bind allocation percentage");
     with_user_test_guard(&mut context, table, |context| {
-        let bytes = context.tagged_heap.bytes_since_gc_exact();
+        let bytes = context.tagged_heap().bytes_since_gc_exact();
         let hi_threshold = (i64::MAX as usize) / 2;
         assert_eq!(
             inhibited_user_test_since_gc(context, bytes),
@@ -357,7 +355,7 @@ fn hash_user_guard_refreshes_dynamic_let_gc_threshold() {
         .unbind_to_with_result(scope, Ok(Value::NIL))
         .expect("restore dynamic bindings");
     with_user_test_guard(&mut context, table, |context| {
-        let bytes = context.tagged_heap.bytes_since_gc_exact();
+        let bytes = context.tagged_heap().bytes_since_gc_exact();
         let hi_threshold = (i64::MAX as usize) / 2;
         assert!(
             inhibited_user_test_since_gc(context, bytes).unwrap()

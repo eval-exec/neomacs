@@ -51,10 +51,10 @@ fn get_does_not_enter_the_plist_walker_when_a_symbol_has_no_entries() {
     crate::test_utils::init_test_tracing();
     let mut ctx = make_ctx();
 
-    crate::emacs_core::plist::reset_plist_get_walks();
+    neovm_value::symbol::plist_core::reset_plist_get_walks();
     assert_eq!(eval(&mut ctx, "(get 'plist-empty 'missing)"), Value::NIL);
     assert_eq!(
-        crate::emacs_core::plist::plist_get_walks(),
+        neovm_value::symbol::plist_core::plist_get_walks(),
         0,
         "an empty symbol plist should be classified before entering the general cyclic-list walker"
     );
@@ -66,12 +66,12 @@ fn get_skips_non_cons_symbol_plists_without_hiding_the_verbatim_value() {
     let mut ctx = make_ctx();
     eval(&mut ctx, "(setplist 'plist-malformed 42)");
 
-    crate::emacs_core::plist::reset_plist_get_walks();
+    neovm_value::symbol::plist_core::reset_plist_get_walks();
     assert_eq!(
         eval(&mut ctx, "(get 'plist-malformed 'missing)"),
         Value::NIL
     );
-    assert_eq!(crate::emacs_core::plist::plist_get_walks(), 0);
+    assert_eq!(neovm_value::symbol::plist_core::plist_get_walks(), 0);
     assert_eq!(
         eval(&mut ctx, "(symbol-plist 'plist-malformed)"),
         Value::fixnum(42),
@@ -89,24 +89,32 @@ fn ordinary_plist_get_does_not_enter_symbol_with_position_comparison_loop() {
         Value::fixnum(2),
     ]);
 
-    crate::emacs_core::plist::reset_symbol_with_pos_plist_comparisons();
+    neovm_value::symbol::plist_core::reset_symbol_with_pos_plist_comparisons();
     assert_eq!(
-        crate::emacs_core::plist::plist_get_swp(plist, &Value::symbol("target-property"), false,),
+        neovm_value::symbol::plist_core::plist_get_swp(
+            plist,
+            &Value::symbol("target-property"),
+            false,
+        ),
         Some(Value::fixnum(2))
     );
     assert_eq!(
-        crate::emacs_core::plist::symbol_with_pos_plist_comparisons(),
+        neovm_value::symbol::plist_core::symbol_with_pos_plist_comparisons(),
         0,
         "ordinary GNU EQ plist lookup must select its identity-only loop before walking entries"
     );
 
-    crate::emacs_core::plist::reset_symbol_with_pos_plist_comparisons();
+    neovm_value::symbol::plist_core::reset_symbol_with_pos_plist_comparisons();
     assert_eq!(
-        crate::emacs_core::plist::plist_get_swp(plist, &Value::symbol("target-property"), true,),
+        neovm_value::symbol::plist_core::plist_get_swp(
+            plist,
+            &Value::symbol("target-property"),
+            true,
+        ),
         Some(Value::fixnum(2))
     );
     assert_eq!(
-        crate::emacs_core::plist::symbol_with_pos_plist_comparisons(),
+        neovm_value::symbol::plist_core::symbol_with_pos_plist_comparisons(),
         2,
         "symbol-position transparency must select the compatibility comparison loop"
     );

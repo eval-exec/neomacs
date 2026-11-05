@@ -776,7 +776,8 @@ pub(crate) fn builtin_hash_table_keys(args: Vec<Value>) -> EvalResult {
 }
 
 /// (hash-table-values TABLE) -> list of values
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_hash_table_values(args: Vec<Value>) -> EvalResult {
     expect_args("hash-table-values", &args, 1)?;
     match args[0].kind() {

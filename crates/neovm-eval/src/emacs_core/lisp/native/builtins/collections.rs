@@ -806,6 +806,7 @@ fn define_hash_table_test_with_symbols(args: Vec<Value>, mode: SymbolMode) -> Ev
     Ok(Value::list(vec![args[1], args[2]]))
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_make_hash_table(args: Vec<Value>) -> EvalResult {
     builtin_make_hash_table_slice(&args)
 }

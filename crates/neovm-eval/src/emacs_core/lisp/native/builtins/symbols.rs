@@ -30,6 +30,7 @@ pub(crate) const GNU_INITIAL_OBARRAY_SIZE: usize = 1 << 15;
 #[doc(hidden)]
 pub use neovm_value::value::symbol_id;
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn symbol_id_checked(value: &Value, symbols_with_pos_enabled: bool) -> Option<SymId> {
     let mode = if symbols_with_pos_enabled {
         SymbolMode::Positioned

@@ -449,7 +449,10 @@ pub mod file_notify;
 pub(crate) use file_notify::{BACKEND_SUBRS, REMOVE_WATCH_SEMANTICS, RemoveWatchSemantics};
 pub(crate) mod fringe_bitmap;
 pub(crate) mod fringe_standard_bitmaps;
+#[cfg(not(feature = "test-support"))]
 pub(crate) mod hash_user_callback;
+#[cfg(feature = "test-support")]
+pub mod hash_user_callback;
 pub(crate) mod higher_order;
 #[doc(hidden)]
 pub mod hooks;

@@ -9,7 +9,8 @@
 //! value in every case below (verified with `emacs --batch`).
 
 use super::*;
-use crate::emacs_core::builtins::{builtin_gethash, builtin_make_hash_table, builtin_puthash};
+use crate::emacs_core::builtins::collections::builtin_make_hash_table;
+use crate::emacs_core::builtins::{builtin_gethash, builtin_puthash};
 use malachite::integer::Integer;
 
 /// `2^n` as a *freshly allocated* heap bignum, so two calls produce distinct

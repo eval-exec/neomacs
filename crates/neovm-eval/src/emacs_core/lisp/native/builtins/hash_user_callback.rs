@@ -99,6 +99,7 @@ impl Drop for NestedTestDepthHold {
 /// for its scope.
 #[cold]
 #[inline(never)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn with_user_test_guard<T>(
     eval: &mut Context,
     table: Value,

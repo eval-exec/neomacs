@@ -515,7 +515,7 @@ impl PrintShorthandSymbol {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn name(self) -> &'static str {
         self.into()

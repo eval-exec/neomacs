@@ -1,8 +1,8 @@
 use super::*;
+use crate::emacs_core::builtins::collections::builtin_make_hash_table;
 use crate::emacs_core::builtins::symbols::builtin_unintern;
 use crate::emacs_core::builtins::{
-    builtin_gethash, builtin_hash_table_count, builtin_make_hash_table, builtin_puthash,
-    builtin_remhash,
+    builtin_gethash, builtin_hash_table_count, builtin_puthash, builtin_remhash,
 };
 use crate::emacs_core::intern::{intern, intern_uninterned, lookup_interned};
 use crate::heap_types::LispString;

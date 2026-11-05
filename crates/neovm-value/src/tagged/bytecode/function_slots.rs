@@ -215,7 +215,7 @@ impl StackDepth {
         self.0
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn for_test(depth: usize) -> Self {
         // Test-only constructor (peer R5): delegate to the canonical checked
         // constructor; never rebuild the storage field across the crate

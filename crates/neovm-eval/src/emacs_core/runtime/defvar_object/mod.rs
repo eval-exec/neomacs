@@ -48,7 +48,10 @@
 //! That keeps the table refreshable from an updated GNU mirror and stops it
 //! from going stale as the port grows a variable.
 
+#[cfg(not(feature = "test-support"))]
 pub(crate) mod gnu_table;
+#[cfg(feature = "test-support")]
+pub mod gnu_table;
 
 use neovm_value::symbol::{Obarray, SymbolRedirect};
 use neovm_value::value::Value;

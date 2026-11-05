@@ -10,6 +10,7 @@ use neovm_value::intern::intern;
 
 use super::Context;
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) trait AllocationFailureContextExt {
     fn into_flow_in_context(self, context: &Context) -> Flow;
 }

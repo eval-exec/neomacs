@@ -20,41 +20,45 @@ use crate::value::{Value, eq_value, eq_value_swp};
 
 use super::{Obarray, SymbolPlistSnapshot, SymbolPropertyRevision, store_plist_head};
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     static SYMBOL_WITH_POS_PLIST_COMPARISONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static PLIST_GET_WALKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn note_symbol_with_pos_plist_comparison() {
     SYMBOL_WITH_POS_PLIST_COMPARISONS.with(|count| count.set(count.get() + 1));
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[doc(hidden)]
 pub(crate) fn reset_symbol_with_pos_plist_comparisons() {
     SYMBOL_WITH_POS_PLIST_COMPARISONS.with(|count| count.set(0));
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[doc(hidden)]
 pub(crate) fn symbol_with_pos_plist_comparisons() -> usize {
     SYMBOL_WITH_POS_PLIST_COMPARISONS.with(std::cell::Cell::get)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn note_plist_get_walk() {
     PLIST_GET_WALKS.with(|count| count.set(count.get() + 1));
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[doc(hidden)]
 pub(crate) fn reset_plist_get_walks() {
     PLIST_GET_WALKS.with(|count| count.set(0));
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[doc(hidden)]
 pub(crate) fn plist_get_walks() -> usize {
     PLIST_GET_WALKS.with(std::cell::Cell::get)
@@ -83,7 +87,7 @@ struct SymbolWithPositionTransparent;
 impl PlistKeyComparison for SymbolWithPositionTransparent {
     #[inline]
     fn matches<const OBSERVE: bool>(left: &Value, right: &Value) -> bool {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         note_symbol_with_pos_plist_comparison();
         compare_swp::<OBSERVE>(left, right, true)
     }
@@ -268,7 +272,7 @@ fn plist_get_with<Comparison: PlistKeyComparison, const OBSERVE: bool>(
     plist: Value,
     prop: &Value,
 ) -> Option<Value> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     note_plist_get_walk();
     let mut tail = plist;
     let mut safe_tail = SafeTailGuard::new(tail);

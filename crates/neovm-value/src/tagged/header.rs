@@ -772,6 +772,7 @@ impl GcHeader {
     }
 
     #[inline]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn is_remembered(&self) -> bool {
         self.remembered.load(Ordering::Relaxed) == RememberedState::Logged as u8
     }

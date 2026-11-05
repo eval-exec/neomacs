@@ -1965,7 +1965,8 @@ impl TaggedHeap {
     /// True when a registered mapped span (a loaded pdump) has activated the
     /// dump-partitioned collector. Diagnostics: lets the drain-kind profiling
     /// probe verify which collector configuration it is measuring.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn dump_partition_active(&self) -> bool {
         self.partition_dump
     }

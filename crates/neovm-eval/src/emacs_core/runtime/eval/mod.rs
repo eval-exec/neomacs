@@ -8739,7 +8739,10 @@ pub mod signal_entry;
 mod signal_room;
 
 mod allocation_flow;
+#[cfg(not(feature = "test-support"))]
 pub(crate) use allocation_flow::AllocationFailureContextExt;
+#[cfg(feature = "test-support")]
+pub use allocation_flow::AllocationFailureContextExt;
 mod construct;
 mod dispatch_class;
 mod form_head_cache;
