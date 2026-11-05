@@ -12,14 +12,6 @@ use sort::{SortStorage, VectorSortStorage, gnu_style_sort_items};
 type MapResultVec = SmallVec<[Value; 8]>;
 
 #[cfg(test)]
-#[path = "tests/gd_e_sort.rs"]
-mod gd_e_sort;
-
-#[cfg(test)]
-#[path = "tests/gd_e_sort_native_storage.rs"]
-mod gd_e_sort_native_storage;
-
-#[cfg(test)]
 #[path = "tests/higher_order_capture_test.rs"]
 mod higher_order_capture;
 

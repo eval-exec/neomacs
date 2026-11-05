@@ -154,3 +154,22 @@ mod emacs_core_runtime_eval_tier_i_tests_knob_fresh_context_test_rs;
 #[cfg(test)]
 #[path = "emacs_core/runtime/eval/tier_i/tests/soak_test.rs"]
 mod emacs_core_runtime_eval_tier_i_tests_soak_test_rs;
+#[cfg(test)]
+#[path = "emacs_core/lisp/native/builtins/tests/gd_e_sort.rs"]
+mod emacs_core_lisp_native_builtins_tests_gd_e_sort_rs;
+
+#[cfg(test)]
+#[path = "emacs_core/lisp/native/builtins/tests/gd_e_sort_stack_temporary.rs"]
+mod emacs_core_lisp_native_builtins_tests_gd_e_sort_stack_temporary_rs;
+
+#[cfg(test)]
+#[path = "emacs_core/lisp/native/builtins/tests/gdh_format_width_scan_test.rs"]
+mod emacs_core_lisp_native_builtins_tests_gdh_format_width_scan_test_rs;
+
+#[cfg(test)]
+#[path = "emacs_core/lisp/native/builtins/tests/gd_e_sort_native_storage.rs"]
+mod emacs_core_lisp_native_builtins_tests_gd_e_sort_native_storage_rs;
+
+#[cfg(test)]
+#[path = "emacs_core/lisp/native/builtins/tests/format_float_gnu_test.rs"]
+mod emacs_core_lisp_native_builtins_tests_format_float_gnu_test_rs;

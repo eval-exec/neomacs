@@ -1,6 +1,6 @@
 //! GNU sort.c:70-123 uses raw permutation moves; native predicates need no
 //! per-move collection journal entries. Callback boundaries still publish state.
-use super::*;
+use crate::emacs_core::builtins::*;
 use neovm_value::tagged::collection_reads::capture;
 use neovm_value::tagged::mutate::LispCollectionRevision;
 

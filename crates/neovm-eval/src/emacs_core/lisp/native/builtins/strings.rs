@@ -189,14 +189,6 @@ mod tests;
 #[path = "tests/width_policy.rs"]
 mod width_policy_tests;
 
-#[cfg(test)]
-#[path = "tests/gdh_format_width_scan_test.rs"]
-mod gdh_format_width_scan_tests;
-
-#[cfg(test)]
-#[path = "tests/format_float_gnu_test.rs"]
-mod format_float_gnu;
-
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_substring(args: Vec<Value>) -> EvalResult {
     builtin_substring_slice(&args)

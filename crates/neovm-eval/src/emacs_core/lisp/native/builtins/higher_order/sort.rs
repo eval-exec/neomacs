@@ -6,10 +6,6 @@ use super::{Flow, SortDirection, SortItem, SortPredicate, SortRuntime, Value};
 use std::ops::Range;
 
 #[cfg(test)]
-#[path = "../tests/gd_e_sort_stack_temporary.rs"]
-mod gd_e_sort_stack_temporary_tests;
-
-#[cfg(test)]
 #[path = "../tests/gd_e_sort_root_domains_test.rs"]
 mod gd_e_sort_root_domains_tests;
 
