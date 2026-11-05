@@ -69,8 +69,10 @@ pub mod keyboard;
 #[doc(hidden)]
 pub mod keyboard_input;
 pub(crate) mod world;
+#[doc(hidden)]
+pub use world::ObarrayView;
 pub use world::{ContextShutdownError, ObarrayWriteAccess, OutstandingWorldViews, WorldEra};
-pub(crate) use world::{ObarrayView, OwnedRootRegistryView, WorldSlot, WorldView};
+pub(crate) use world::{OwnedRootRegistryView, WorldSlot, WorldView};
 
 pub(crate) mod subr_abi;
 use subr_abi::{SubrFn, SubrObj, SubrValueExt};

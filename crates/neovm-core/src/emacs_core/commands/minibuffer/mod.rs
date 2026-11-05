@@ -15,7 +15,7 @@ use strum::IntoStaticStr;
 use crate::buffer::{BufferId, BufferManager, EmacsBytePos, EmacsByteRange, LispCharPos1};
 use crate::heap_types::LispString;
 
-mod read_entries;
+pub(crate) mod read_entries;
 mod redisplay;
 mod window_state;
 

@@ -924,6 +924,15 @@ pub fn builtin_get_load_suffixes(
 /// `vterm-module.so`), so without it `load` neither finds the file nor
 /// recognises it as a module (neomacs#193).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg(any(test, feature = "test-support"))]
+pub struct ModuleSuffixes {
+    /// GNU `MODULES_SUFFIX`, also the value of `module-file-suffix`.
+    pub primary: &'static str,
+    /// GNU `MODULES_SECONDARY_SUFFIX`, absent on every platform but darwin.
+    pub secondary: Option<&'static str>,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg(not(any(test, feature = "test-support")))]
 pub(crate) struct ModuleSuffixes {
     /// GNU `MODULES_SUFFIX`, also the value of `module-file-suffix`.
     pub(crate) primary: &'static str,
@@ -1302,6 +1311,44 @@ fn integer_access_predicate_matches(candidate: &LispString, mask: i64) -> bool {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
-#[cfg(test)]
-#[path = "tests/lread_test.rs"]
-mod tests;
+
+/// A1 test-surface rows (post-split option A): additive accessors for tests
+/// re-homed into core, all downwards-only under `test-support`. Public types
+/// only; no product visibility change except the feature-gated ModuleSuffixes
+/// definition above (the peer-signed type row).
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub mod test_support {
+    use super::*;
+
+    pub fn builtin_locate_file(
+        eval: &mut super::super::eval::Context,
+        args: Vec<neovm_value::value::Value>,
+    ) -> neovm_value::error::EvalResult {
+        super::builtin_locate_file(eval, args)
+    }
+
+    pub fn module_suffixes() -> ModuleSuffixes {
+        super::module_suffixes()
+    }
+
+    pub fn module_suffixes_for_os(os: &str) -> ModuleSuffixes {
+        super::module_suffixes_for_os(os)
+    }
+
+    pub fn module_file_suffix() -> &'static str {
+        super::module_file_suffix()
+    }
+
+    pub fn dynamic_library_suffixes_for_os(os: &str) -> Vec<&'static str> {
+        super::dynamic_library_suffixes_for_os(os)
+    }
+
+    pub fn load_suffixes_startup_values_for_os(os: &str) -> Vec<&'static str> {
+        super::load_suffixes_startup_values_for_os(os)
+    }
+
+    pub fn path_has_module_suffix_for_os(path: &str, os: &str) -> bool {
+        super::path_has_module_suffix_for_os(path, os)
+    }
+}

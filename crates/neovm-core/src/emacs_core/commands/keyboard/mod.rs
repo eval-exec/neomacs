@@ -16,7 +16,7 @@
 pub use neovm_value::keyboard_pure as pure;
 
 mod command_loop;
-mod input_entries;
+pub(crate) mod input_entries;
 
 pub(crate) use command_loop::CommandLoopHost;
 pub use command_loop::{initialize_termination_signals, recursive_edit};

@@ -411,6 +411,10 @@ mod symbol_plist_regression_test;
 #[path = "../../core_tests/emacs_core/runtime/symbol/tests/redirect_regression_test.rs"]
 mod symbol_redirect_regression_test;
 
+#[cfg(test)]
+#[path = "tests/moved_eval/mod.rs"]
+mod moved_eval_tests;
+
 // Moved down with the evaluator (stage-4 W5/E13); the historical
 // `crate::emacs_core::MenuBarPopupAnchor` path stays as a re-export.
 pub(crate) use neovm_eval::emacs_core::MenuBarPopupAnchor;

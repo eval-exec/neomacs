@@ -1,4 +1,45 @@
-use super::*;
+use crate::emacs_core::keyboard::input_entries::{builtin_read_char_exclusive, builtin_read_event};
+use crate::emacs_core::minibuffer::read_entries::{
+    builtin_read_coding_system, builtin_read_non_nil_coding_system,
+};
+use neovm_eval::emacs_core::lread::test_support::*;
+use neovm_eval::emacs_core::lread::*;
+use neovm_value::intern::SymId;
+use neovm_value::symbol::CanonicalAccess;
+use neovm_value::value::{Value, list_to_vec};
+
+// API-drift shim: the pre-split tests used the crate-local test-only Obarray
+// helpers. The same calls are provided here through the public canonical
+// accessors (storage reason), so the test bodies stay byte-identical.
+trait ObarrayTestAccess {
+    fn symbol_value_copied(&self, name: &str) -> Option<Value>;
+    fn set_symbol_value(&mut self, name: &str, value: Value);
+    fn set_symbol_value_id(&mut self, id: SymId, value: Value);
+    fn set_internal(&mut self, id: SymId, value: Value);
+    fn makunbound(&mut self, name: &str);
+    fn makunbound_id(&mut self, id: SymId);
+}
+
+impl ObarrayTestAccess for neovm_eval::emacs_core::eval::world::ObarrayView {
+    fn symbol_value_copied(&self, name: &str) -> Option<Value> {
+        self.canonical_value_by_name(CanonicalAccess::STORAGE, name)
+    }
+    fn set_symbol_value(&mut self, name: &str, value: Value) {
+        self.set_canonical_value_by_name(CanonicalAccess::STORAGE, name, value);
+    }
+    fn set_symbol_value_id(&mut self, id: SymId, value: Value) {
+        self.set_canonical_value(CanonicalAccess::STORAGE, id, value);
+    }
+    fn set_internal(&mut self, id: SymId, value: Value) {
+        self.set_canonical_value(CanonicalAccess::STORAGE, id, value);
+    }
+    fn makunbound(&mut self, name: &str) {
+        self.makunbound_canonical_by_name(CanonicalAccess::STORAGE, name);
+    }
+    fn makunbound_id(&mut self, id: SymId) {
+        self.makunbound_canonical(CanonicalAccess::STORAGE, id);
+    }
+}
 use crate::emacs_core::eval::Context;
 use crate::host_input::HostInputPublisher;
 use malachite::integer::Integer;
@@ -6,15 +47,19 @@ use neovm_value::error::{FlowKind, FlowRef, FlowResultExt as _};
 
 /// Test helper: create a fresh eval context for locate-file tests.
 fn test_eval_ctx() -> Context {
-    Context::new()
+    crate::test_utils::new_context()
 }
 
 #[test]
 fn eval_buffer_evaluates_current_buffer_forms() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     {
-        let buf = ev.buffers.current_buffer_mut().expect("current buffer");
+        let buf = ev
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
         buf.insert("(setq lread-eb-a 11)\n(setq lread-eb-b (+ lread-eb-a 1))");
     }
     let result = builtin_eval_buffer(&mut ev, vec![]).unwrap();
@@ -35,8 +80,9 @@ fn eval_buffer_evaluates_current_buffer_forms() {
 #[test]
 fn eval_buffer_applies_read_symbol_shorthands_from_the_current_binding() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    ev.buffers
+    let mut ev = crate::test_utils::new_context();
+    ev.edit
+        .buffers
         .current_buffer_mut()
         .expect("current buffer")
         .insert("(setq oi-unit-local 7)");
@@ -59,7 +105,8 @@ fn eval_buffer_applies_read_symbol_shorthands_from_the_current_binding() {
         "the short spelling must not be interned as a variable"
     );
 
-    ev.buffers
+    ev.edit
+        .buffers
         .current_buffer_mut()
         .expect("current buffer")
         .insert("(setq zz-unit-dynamic 9)");
@@ -79,8 +126,9 @@ fn eval_buffer_applies_read_symbol_shorthands_from_the_current_binding() {
 #[test]
 fn eval_buffer_refreshes_read_symbol_shorthands_between_forms() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    ev.buffers
+    let mut ev = crate::test_utils::new_context();
+    ev.edit
+        .buffers
         .current_buffer_mut()
         .expect("current buffer")
         .insert(
@@ -112,8 +160,9 @@ fn eval_buffer_refreshes_read_symbol_shorthands_between_forms() {
 #[test]
 fn eval_buffer_read_uses_the_current_read_symbol_shorthands() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    ev.buffers
+    let mut ev = crate::test_utils::new_context();
+    ev.edit
+        .buffers
         .current_buffer_mut()
         .expect("current buffer")
         .insert(
@@ -141,7 +190,8 @@ fn eval_buffer_with_custom_reader_eagerly_expands_compiler_macros_in_lexical_fun
     let mut eval = crate::test_utils::runtime_startup_context();
     eval.eval_str("(setq load-read-function (symbol-function 'read))")
         .expect("install a custom Lisp form reader");
-    eval.buffers
+    eval.edit
+        .buffers
         .current_buffer_mut()
         .expect("current buffer")
         .insert(
@@ -164,9 +214,15 @@ fn eval_buffer_with_custom_reader_eagerly_expands_compiler_macros_in_lexical_fun
 #[test]
 fn eval_buffer_incomplete_form_signals_source_buffer_like_gnu_emacs() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    let buffer_id = ev.buffers.current_buffer().expect("current buffer").id;
-    ev.buffers
+    let mut ev = crate::test_utils::new_context();
+    let buffer_id = ev
+        .edit
+        .buffers
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    ev.edit
+        .buffers
         .current_buffer_mut()
         .expect("current buffer")
         .insert("(defun incomplete (");
@@ -188,9 +244,13 @@ fn eval_buffer_incomplete_form_signals_source_buffer_like_gnu_emacs() {
 #[test]
 fn eval_buffer_preserves_unibyte_string_literals() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     {
-        let buf = ev.buffers.current_buffer_mut().expect("current buffer");
+        let buf = ev
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
         buf.set_multibyte_value(false);
         buf.insert_lisp_string(&neovm_value::heap_types::LispString::from_unibyte(vec![
             b'(', b's', b'e', b't', b'q', b' ', b'l', b'r', b'e', b'a', b'd', b'-', b'e', b'b',
@@ -214,9 +274,13 @@ fn eval_buffer_preserves_unibyte_string_literals() {
 #[test]
 fn eval_buffer_accepts_shebang_reader_prefix() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     {
-        let buf = ev.buffers.current_buffer_mut().expect("current buffer");
+        let buf = ev
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
         buf.insert("#!/usr/bin/env emacs --script\n(setq lread-eb-shebang 'ok)\n");
     }
     let result = builtin_eval_buffer(&mut ev, vec![]).unwrap();
@@ -230,9 +294,13 @@ fn eval_buffer_accepts_shebang_reader_prefix() {
 #[test]
 fn eval_buffer_single_line_shebang_signals_end_of_file() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     {
-        let buf = ev.buffers.current_buffer_mut().expect("current buffer");
+        let buf = ev
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
         buf.insert("#!/usr/bin/env emacs --script");
     }
     let result = builtin_eval_buffer(&mut ev, vec![]);
@@ -250,9 +318,13 @@ fn eval_buffer_single_line_shebang_signals_end_of_file() {
 #[test]
 fn eval_buffer_preserves_utf8_bom_reader_error_shape() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     {
-        let buf = ev.buffers.current_buffer_mut().expect("current buffer");
+        let buf = ev
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
         buf.insert("\u{feff}(setq lread-eb-bom 'ok)\n");
     }
     let result = builtin_eval_buffer(&mut ev, vec![]);
@@ -270,14 +342,14 @@ fn eval_buffer_preserves_utf8_bom_reader_error_shape() {
 #[test]
 fn eval_buffer_uses_source_text_without_switching_current() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    let target = ev.buffers.create_buffer("*lread-eval-buffer-target*");
+    let mut ev = crate::test_utils::new_context();
+    let target = ev.edit.buffers.create_buffer("*lread-eval-buffer-target*");
     {
-        let target_buf = ev.buffers.get_mut(target).expect("target buffer");
+        let target_buf = ev.edit.buffers.get_mut(target).expect("target buffer");
         target_buf.insert("(setq lread-eb-current-name (buffer-name))");
     }
-    let caller = ev.buffers.create_buffer("*lread-eval-buffer-caller*");
-    ev.buffers.set_current(caller);
+    let caller = ev.edit.buffers.create_buffer("*lread-eval-buffer-caller*");
+    ev.edit.buffers.set_current(caller);
 
     let result = builtin_eval_buffer(&mut ev, vec![Value::make_buffer(target)]).unwrap();
     assert!(result.is_nil());
@@ -290,29 +362,34 @@ fn eval_buffer_uses_source_text_without_switching_current() {
 #[test]
 fn eval_buffer_restores_current_buffer_after_source_switches_buffer() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let target = ev
+        .edit
         .buffers
         .create_buffer("*lread-eval-buffer-switch-source*");
     {
-        let target_buf = ev.buffers.get_mut(target).expect("target buffer");
+        let target_buf = ev.edit.buffers.get_mut(target).expect("target buffer");
         target_buf.insert("(set-buffer (get-buffer-create \"*lread-eval-buffer-switched*\"))");
     }
-    let caller = ev.buffers.create_buffer("*lread-eval-buffer-caller*");
-    ev.buffers.set_current(caller);
+    let caller = ev.edit.buffers.create_buffer("*lread-eval-buffer-caller*");
+    ev.edit.buffers.set_current(caller);
 
     let result = builtin_eval_buffer(&mut ev, vec![Value::make_buffer(target)]).unwrap();
 
     assert!(result.is_nil());
-    assert_eq!(ev.buffers.current_buffer_id(), Some(caller));
+    assert_eq!(ev.edit.buffers.current_buffer_id(), Some(caller));
 }
 
 #[test]
 fn eval_buffer_preserves_unibyte_filename_in_load_state() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     {
-        let buf = ev.buffers.current_buffer_mut().expect("current buffer");
+        let buf = ev
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
         buf.insert("(setq lread-eb-current-load-list current-load-list)");
     }
 
@@ -358,10 +435,14 @@ fn eval_buffer_preserves_unibyte_filename_in_load_state() {
 #[test]
 fn eval_buffer_load_in_progress_preserves_unibyte_current_load_list() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_variable("load-in-progress", Value::T);
     {
-        let buf = ev.buffers.current_buffer_mut().expect("current buffer");
+        let buf = ev
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
         buf.insert(
             "(setq lread-eb-load-file-name load-file-name \
                    lread-eb-load-true-file-name load-true-file-name \
@@ -407,7 +488,7 @@ fn eval_buffer_load_in_progress_preserves_unibyte_current_load_list() {
 #[test]
 fn eval_buffer_reports_designator_and_arity_errors() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
 
     let missing = builtin_eval_buffer(&mut ev, vec![Value::string("*no-such-buffer*")]);
     assert!(if matches!(
@@ -461,13 +542,17 @@ fn eval_buffer_reports_designator_and_arity_errors() {
 #[test]
 fn eval_region_evaluates_forms_in_range() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     {
-        let buf = ev.buffers.current_buffer_mut().expect("current buffer");
+        let buf = ev
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
         buf.insert("(setq lread-er-a 1)\n(setq lread-er-b (+ lread-er-a 2))");
     }
     let end = {
-        let buf = ev.buffers.current_buffer().expect("current buffer");
+        let buf = ev.edit.buffers.current_buffer().expect("current buffer");
         Value::fixnum(buf.z_lisp_char_pos().as_i64())
     };
 
@@ -486,7 +571,7 @@ fn eval_region_evaluates_forms_in_range() {
 #[test]
 fn eval_region_uses_read_function_result_instead_of_source_text() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str(
         r#"(fset 'lread-er-read-function
                  (lambda (stream)
@@ -496,12 +581,16 @@ fn eval_region_uses_read_function_result_instead_of_source_text() {
     )
     .expect("define eval-region read function");
     {
-        let buf = ev.buffers.current_buffer_mut().expect("current buffer");
+        let buf = ev
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
         buf.insert("(setq lread-er-read-function-result 'source)");
         buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(0));
     }
     let end = {
-        let buf = ev.buffers.current_buffer().expect("current buffer");
+        let buf = ev.edit.buffers.current_buffer().expect("current buffer");
         Value::fixnum(buf.z_lisp_char_pos().as_i64())
     };
 
@@ -528,7 +617,8 @@ fn eval_region_uses_read_function_result_instead_of_source_text() {
         Some(Value::T)
     );
     assert_eq!(
-        ev.buffers
+        ev.edit
+            .buffers
             .current_buffer()
             .expect("current buffer")
             .point_lisp_char_pos()
@@ -541,7 +631,7 @@ fn eval_region_uses_read_function_result_instead_of_source_text() {
 #[test]
 fn eval_region_advances_from_reader_point_before_evaluating_returned_form() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str(
         r#"(progn
              (setq lread-er-point-reader-count 0)
@@ -556,12 +646,16 @@ fn eval_region_advances_from_reader_point_before_evaluating_returned_form() {
     )
     .expect("define point-moving eval-region reader");
     {
-        let buf = ev.buffers.current_buffer_mut().expect("current buffer");
+        let buf = ev
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
         buf.insert("(setq lread-er-point-a 1)\n(setq lread-er-point-b 2)");
         buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(0));
     }
     let end = {
-        let buf = ev.buffers.current_buffer().expect("current buffer");
+        let buf = ev.edit.buffers.current_buffer().expect("current buffer");
         Value::fixnum(buf.z_lisp_char_pos().as_i64())
     };
 
@@ -601,7 +695,8 @@ fn eval_region_advances_from_reader_point_before_evaluating_returned_form() {
         Some(Value::fixnum(2))
     );
     assert_eq!(
-        ev.buffers
+        ev.edit
+            .buffers
             .current_buffer()
             .expect("current buffer")
             .point_lisp_char_pos()
@@ -614,9 +709,13 @@ fn eval_region_advances_from_reader_point_before_evaluating_returned_form() {
 #[test]
 fn eval_region_preserves_unibyte_string_literals() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     {
-        let buf = ev.buffers.current_buffer_mut().expect("current buffer");
+        let buf = ev
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
         buf.set_multibyte_value(false);
         buf.insert_lisp_string(&neovm_value::heap_types::LispString::from_unibyte(vec![
             b'(', b's', b'e', b't', b'q', b' ', b'l', b'r', b'e', b'a', b'd', b'-', b'e', b'r',
@@ -624,7 +723,7 @@ fn eval_region_preserves_unibyte_string_literals() {
         ]));
     }
     let end = {
-        let buf = ev.buffers.current_buffer().expect("current buffer");
+        let buf = ev.edit.buffers.current_buffer().expect("current buffer");
         Value::fixnum(buf.z_lisp_char_pos().as_i64())
     };
 
@@ -644,9 +743,13 @@ fn eval_region_preserves_unibyte_string_literals() {
 #[test]
 fn eval_region_nil_or_reversed_bounds_are_noop() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     {
-        let buf = ev.buffers.current_buffer_mut().expect("current buffer");
+        let buf = ev
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
         buf.insert("(setq lread-er-noop 9)");
     }
     ev.obarray
@@ -660,7 +763,7 @@ fn eval_region_nil_or_reversed_bounds_are_noop() {
     );
 
     let point_max = {
-        let buf = ev.buffers.current_buffer().expect("current buffer");
+        let buf = ev.edit.buffers.current_buffer().expect("current buffer");
         buf.z_lisp_char_pos().as_i64()
     };
     let reversed =
@@ -675,26 +778,31 @@ fn eval_region_nil_or_reversed_bounds_are_noop() {
 #[test]
 fn eval_region_accepts_marker_bounds_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     {
-        let buf = ev.buffers.current_buffer_mut().expect("current buffer");
+        let buf = ev
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
         buf.insert("(setq lread-er-marker 17)");
     }
-    let buffer_id = ev.buffers.current_buffer_id().expect("current buffer");
+    let buffer_id = ev.edit.buffers.current_buffer_id().expect("current buffer");
     let start = neovm_edit::emacs_core::marker::make_registered_buffer_marker(
-        &mut ev.buffers,
+        &mut ev.edit.buffers,
         buffer_id,
         neovm_edit::buffer::LispCharPos1::new(1),
         false,
     );
     let end = {
         let point_max = ev
+            .edit
             .buffers
             .current_buffer()
             .expect("current buffer")
             .z_lisp_char_pos();
         neovm_edit::emacs_core::marker::make_registered_buffer_marker(
-            &mut ev.buffers,
+            &mut ev.edit.buffers,
             buffer_id,
             point_max,
             false,
@@ -712,13 +820,17 @@ fn eval_region_accepts_marker_bounds_like_gnu() {
 #[test]
 fn eval_region_reports_type_range_and_arity_errors() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     {
-        let buf = ev.buffers.current_buffer_mut().expect("current buffer");
+        let buf = ev
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
         buf.insert("(+ 1 2)");
     }
     let point_max = {
-        let buf = ev.buffers.current_buffer().expect("current buffer");
+        let buf = ev.edit.buffers.current_buffer().expect("current buffer");
         buf.z_lisp_char_pos().as_i64()
     };
 
@@ -817,19 +929,24 @@ fn eval_region_reports_type_range_and_arity_errors() {
 #[test]
 fn eval_region_keeps_point_stable_without_side_effects() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     {
-        let buf = ev.buffers.current_buffer_mut().expect("current buffer");
+        let buf = ev
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
         buf.insert("(setq lread-er-point 1)");
         buf.goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(0));
     }
     let end = {
-        let buf = ev.buffers.current_buffer().expect("current buffer");
+        let buf = ev.edit.buffers.current_buffer().expect("current buffer");
         Value::fixnum(buf.z_lisp_char_pos().as_i64())
     };
     let result = builtin_eval_region(&mut ev, vec![Value::fixnum(1), end]).unwrap();
     assert!(result.is_nil());
     let point = ev
+        .edit
         .buffers
         .current_buffer()
         .expect("current buffer")
@@ -842,13 +959,17 @@ fn eval_region_keeps_point_stable_without_side_effects() {
 #[test]
 fn eval_region_accepts_shebang_reader_prefix() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     {
-        let buf = ev.buffers.current_buffer_mut().expect("current buffer");
+        let buf = ev
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
         buf.insert("#!/usr/bin/env emacs --script\n(setq lread-er-shebang 'ok)\n");
     }
     let end = {
-        let buf = ev.buffers.current_buffer().expect("current buffer");
+        let buf = ev.edit.buffers.current_buffer().expect("current buffer");
         Value::fixnum(buf.z_lisp_char_pos().as_i64())
     };
     let result = builtin_eval_region(&mut ev, vec![Value::fixnum(1), end]).unwrap();
@@ -862,13 +983,17 @@ fn eval_region_accepts_shebang_reader_prefix() {
 #[test]
 fn eval_region_single_line_shebang_signals_end_of_file() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     {
-        let buf = ev.buffers.current_buffer_mut().expect("current buffer");
+        let buf = ev
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
         buf.insert("#!/usr/bin/env emacs --script");
     }
     let end = {
-        let buf = ev.buffers.current_buffer().expect("current buffer");
+        let buf = ev.edit.buffers.current_buffer().expect("current buffer");
         Value::fixnum(buf.z_lisp_char_pos().as_i64())
     };
     let result = builtin_eval_region(&mut ev, vec![Value::fixnum(1), end]);
@@ -886,13 +1011,17 @@ fn eval_region_single_line_shebang_signals_end_of_file() {
 #[test]
 fn eval_region_preserves_utf8_bom_reader_error_shape() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     {
-        let buf = ev.buffers.current_buffer_mut().expect("current buffer");
+        let buf = ev
+            .edit
+            .buffers
+            .current_buffer_mut()
+            .expect("current buffer");
         buf.insert("\u{feff}(setq lread-er-bom 'ok)\n");
     }
     let end = {
-        let buf = ev.buffers.current_buffer().expect("current buffer");
+        let buf = ev.edit.buffers.current_buffer().expect("current buffer");
         Value::fixnum(buf.z_lisp_char_pos().as_i64())
     };
     let result = builtin_eval_region(&mut ev, vec![Value::fixnum(1), end]);
@@ -910,7 +1039,7 @@ fn eval_region_preserves_utf8_bom_reader_error_shape() {
 #[test]
 fn read_event_returns_nil() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let result = builtin_read_event(&mut ev, vec![]).unwrap();
     assert!(result.is_nil());
 }
@@ -918,7 +1047,7 @@ fn read_event_returns_nil() {
 #[test]
 fn read_event_without_inherited_input_method_preserves_raw_tty_bytes() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let tx = HostInputPublisher::install(&mut ev);
 
     tx.send(crate::keyboard::InputEvent::raw_tty_bytes(
@@ -936,7 +1065,7 @@ fn read_event_without_inherited_input_method_preserves_raw_tty_bytes() {
 #[test]
 fn read_event_with_inherited_input_method_decodes_tty_bytes() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     // A UTF-8 locale's keyboard coding (`set-locale-environment`); a bare
     // context has GNU `create_terminal`'s `no-conversion`.
     ev.eval_str("(set-keyboard-coding-system-internal 'utf-8-unix)")
@@ -958,7 +1087,7 @@ fn read_event_with_inherited_input_method_decodes_tty_bytes() {
 #[test]
 fn read_event_consumes_executing_keyboard_macro_event_without_input_receiver() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.begin_executing_kbd_macro_runtime(vec![Value::char('a')]);
 
     let result = builtin_read_event(&mut ev, vec![]).expect("read-event");
@@ -970,7 +1099,7 @@ fn read_event_consumes_executing_keyboard_macro_event_without_input_receiver() {
 #[test]
 fn read_event_rejects_non_string_prompt() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let result = builtin_read_event(&mut ev, vec![Value::fixnum(123)]);
     assert!(if matches!(
         result.kinded_ref(),
@@ -986,7 +1115,7 @@ fn read_event_rejects_non_string_prompt() {
 #[test]
 fn read_event_consumes_unread_command_event() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.obarray.set_symbol_value(
         "unread-command-events",
         Value::list(vec![Value::fixnum(97)]),
@@ -999,7 +1128,7 @@ fn read_event_consumes_unread_command_event() {
 #[test]
 fn read_event_sets_command_keys_when_empty() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.obarray.set_symbol_value(
         "unread-command-events",
         Value::list(vec![Value::fixnum(97)]),
@@ -1011,7 +1140,7 @@ fn read_event_sets_command_keys_when_empty() {
 #[test]
 fn read_event_preserves_existing_command_keys_context() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_read_command_keys(vec![Value::fixnum(97)]);
     ev.obarray.set_symbol_value(
         "unread-command-events",
@@ -1029,7 +1158,7 @@ fn read_event_echoes_invoking_keys_and_new_event_after_gnu_delay() {
     };
     crate::test_utils::init_test_tracing();
     let _policy = crate::emacs_core::eval::RedisplayHookPolicyGuard::legacy();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.assign("noninteractive", Value::NIL);
     ev.assign("echo-keystrokes", Value::make_float(0.005));
     ev.assign("echo-keystrokes-help", Value::T);
@@ -1078,7 +1207,7 @@ fn read_event_echoes_invoking_keys_and_new_event_after_gnu_delay() {
 #[test]
 fn read_event_with_seconds_does_not_set_command_keys_when_empty() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.obarray.set_symbol_value(
         "unread-command-events",
         Value::list(vec![Value::fixnum(97)]),
@@ -1090,7 +1219,7 @@ fn read_event_with_seconds_does_not_set_command_keys_when_empty() {
 #[test]
 fn read_event_with_positive_seconds_does_not_set_command_keys_when_empty() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.obarray.set_symbol_value(
         "unread-command-events",
         Value::list(vec![Value::fixnum(97)]),
@@ -1102,7 +1231,7 @@ fn read_event_with_positive_seconds_does_not_set_command_keys_when_empty() {
 #[test]
 fn read_event_with_float_seconds_does_not_set_command_keys_when_empty() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.obarray.set_symbol_value(
         "unread-command-events",
         Value::list(vec![Value::fixnum(97)]),
@@ -1118,7 +1247,7 @@ fn read_event_with_float_seconds_does_not_set_command_keys_when_empty() {
 #[test]
 fn read_event_with_interactive_timeout_returns_nil() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let tx = HostInputPublisher::install(&mut ev);
 
     let start = std::time::Instant::now();
@@ -1136,7 +1265,7 @@ fn read_event_with_interactive_timeout_returns_nil() {
 #[test]
 fn read_event_with_timeout_waits_without_input_source() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
 
     let start = std::time::Instant::now();
     let result = builtin_read_event(
@@ -1153,7 +1282,7 @@ fn read_event_with_timeout_waits_without_input_source() {
 #[test]
 fn read_event_with_non_nil_seconds_preserves_existing_command_keys_context() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_read_command_keys(vec![Value::fixnum(97)]);
     ev.obarray.set_symbol_value(
         "unread-command-events",
@@ -1170,7 +1299,7 @@ fn read_event_with_non_nil_seconds_preserves_existing_command_keys_context() {
 #[test]
 fn read_event_with_nil_seconds_sets_command_keys_when_empty() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.obarray.set_symbol_value(
         "unread-command-events",
         Value::list(vec![Value::fixnum(97)]),
@@ -1182,7 +1311,7 @@ fn read_event_with_nil_seconds_sets_command_keys_when_empty() {
 #[test]
 fn read_event_consumes_non_character_event_and_preserves_tail() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.obarray.set_symbol_value(
         "unread-command-events",
         Value::list(vec![Value::symbol("foo"), Value::fixnum(97)]),
@@ -1198,7 +1327,7 @@ fn read_event_consumes_non_character_event_and_preserves_tail() {
 #[test]
 fn read_event_consumes_character_event() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.obarray
         .set_symbol_value("unread-command-events", Value::list(vec![Value::char('a')]));
     let result = builtin_read_event(&mut ev, vec![]).unwrap();
@@ -1212,7 +1341,7 @@ fn read_event_consumes_character_event() {
 #[test]
 fn read_event_preserves_trailing_events_after_non_character() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.obarray.set_symbol_value(
         "unread-command-events",
         Value::list(vec![Value::symbol("foo"), Value::char('a')]),
@@ -1228,7 +1357,7 @@ fn read_event_preserves_trailing_events_after_non_character() {
 #[test]
 fn read_event_rejects_more_than_three_args() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let result = builtin_read_event(
         &mut ev,
         vec![
@@ -1252,7 +1381,7 @@ fn read_event_rejects_more_than_three_args() {
 #[test]
 fn read_char_exclusive_returns_nil() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let result = builtin_read_char_exclusive(&mut ev, vec![]).unwrap();
     assert!(result.is_nil());
 }
@@ -1260,7 +1389,7 @@ fn read_char_exclusive_returns_nil() {
 #[test]
 fn read_char_exclusive_consumes_executing_keyboard_macro_event_without_input_receiver() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.begin_executing_kbd_macro_runtime(vec![Value::char('a')]);
 
     let result = builtin_read_char_exclusive(&mut ev, vec![]).expect("read-char-exclusive");
@@ -1272,7 +1401,7 @@ fn read_char_exclusive_consumes_executing_keyboard_macro_event_without_input_rec
 #[test]
 fn read_char_exclusive_rejects_non_string_prompt() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let result = builtin_read_char_exclusive(&mut ev, vec![Value::fixnum(123)]);
     assert!(if matches!(
         result.kinded_ref(),
@@ -1288,7 +1417,7 @@ fn read_char_exclusive_rejects_non_string_prompt() {
 #[test]
 fn read_char_exclusive_consumes_unread_command_event() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.obarray.set_symbol_value(
         "unread-command-events",
         Value::list(vec![Value::fixnum(97)]),
@@ -1301,7 +1430,7 @@ fn read_char_exclusive_consumes_unread_command_event() {
 #[test]
 fn read_char_exclusive_with_seconds_does_not_set_command_keys_when_empty() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.obarray.set_symbol_value(
         "unread-command-events",
         Value::list(vec![Value::fixnum(97)]),
@@ -1316,7 +1445,7 @@ fn read_char_exclusive_with_seconds_does_not_set_command_keys_when_empty() {
 #[test]
 fn read_char_exclusive_with_timeout_waits_without_input_source() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
 
     let start = std::time::Instant::now();
     let result = builtin_read_char_exclusive(
@@ -1333,7 +1462,7 @@ fn read_char_exclusive_with_timeout_waits_without_input_source() {
 #[test]
 fn read_char_exclusive_with_nil_seconds_sets_command_keys_when_empty() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.obarray.set_symbol_value(
         "unread-command-events",
         Value::list(vec![Value::fixnum(97)]),
@@ -1347,7 +1476,7 @@ fn read_char_exclusive_with_nil_seconds_sets_command_keys_when_empty() {
 #[test]
 fn read_char_exclusive_preserves_existing_command_keys_context() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.set_read_command_keys(vec![Value::fixnum(97)]);
     ev.obarray.set_symbol_value(
         "unread-command-events",
@@ -1363,7 +1492,7 @@ fn read_char_exclusive_preserves_existing_command_keys_context() {
 #[test]
 fn read_char_exclusive_rejects_more_than_three_args() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let result = builtin_read_char_exclusive(
         &mut ev,
         vec![
@@ -1387,7 +1516,7 @@ fn read_char_exclusive_rejects_more_than_three_args() {
 #[test]
 fn read_char_exclusive_skips_non_character_events() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.obarray.set_symbol_value(
         "unread-command-events",
         Value::list(vec![Value::symbol("foo"), Value::fixnum(97)]),
@@ -1403,7 +1532,7 @@ fn read_char_exclusive_skips_non_character_events() {
 #[test]
 fn read_char_exclusive_skips_non_character_and_empty_tail() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.obarray.set_symbol_value(
         "unread-command-events",
         Value::list(vec![Value::symbol("foo"), Value::fixnum(97)]),
@@ -1421,7 +1550,7 @@ fn read_char_exclusive_skips_non_character_and_empty_tail() {
 #[test]
 fn read_char_exclusive_skips_non_character_and_leaves_tail() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.obarray.set_symbol_value(
         "unread-command-events",
         Value::list(vec![
@@ -1443,7 +1572,7 @@ fn read_char_exclusive_skips_non_character_and_leaves_tail() {
 #[test]
 fn get_load_suffixes_returns_list() {
     crate::test_utils::init_test_tracing();
-    let ev = Context::new();
+    let ev = crate::test_utils::new_context();
     // GNU syms_of_lread starts from (".elc" ".el"), conses MODULES_SUFFIX and
     // then MODULES_SECONDARY_SUFFIX (src/lread.c:5623-5629).  On darwin the
     // secondary `.so` is therefore the FIRST startup suffix, and the build's
@@ -1460,7 +1589,7 @@ fn get_load_suffixes_returns_list() {
 #[test]
 fn get_load_suffixes_cross_products_rep_suffixes() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.obarray.set_symbol_value(
         "load-file-rep-suffixes",
         Value::list(vec![Value::string(""), Value::string(".gz")]),
@@ -1501,7 +1630,7 @@ fn get_load_suffixes_cross_products_rep_suffixes() {
 #[test]
 fn get_load_suffixes_returns_nil_when_representation_suffixes_are_nil() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.obarray
         .set_symbol_value("load-file-rep-suffixes", Value::NIL);
 
@@ -1513,7 +1642,7 @@ fn get_load_suffixes_returns_nil_when_representation_suffixes_are_nil() {
 #[test]
 fn get_load_suffixes_ignores_irrelevant_non_string_jka_members() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.obarray
         .set_symbol_value("load-suffixes", Value::list(vec![Value::string(".el")]));
     ev.obarray.set_symbol_value(
@@ -1541,7 +1670,7 @@ fn get_load_suffixes_ignores_irrelevant_non_string_jka_members() {
 #[test]
 fn get_load_suffixes_rejects_over_arity() {
     crate::test_utils::init_test_tracing();
-    let ev = Context::new();
+    let ev = crate::test_utils::new_context();
     let result = builtin_get_load_suffixes(ev.variables(), vec![Value::NIL]);
     assert!(if matches!(
         result.kinded_ref(),
@@ -1952,7 +2081,7 @@ fn read_coding_system_signals_batch_eof() {
     // Mirrors GNU: `Fread_coding_system` -> `Fcompleting_read` ->
     // `read_minibuf_noninteractive`, which on empty stdin signals end-of-file
     // (the harness redirects stdin from /dev/null under test).
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = builtin_read_coding_system(&mut eval, vec![Value::string("")]);
     assert!(if matches!(
         result.kinded_ref(),
@@ -1970,7 +2099,7 @@ fn read_coding_system_signals_batch_eof() {
 #[test]
 fn read_coding_system_validates_prompt_type_and_arity() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let bad_prompt = builtin_read_coding_system(&mut eval, vec![Value::fixnum(1)]);
     assert!(if matches!(
         bad_prompt.kinded_ref(),
@@ -2002,7 +2131,7 @@ fn read_coding_system_validates_prompt_type_and_arity() {
 #[test]
 fn read_non_nil_coding_system_signals_batch_eof() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = builtin_read_non_nil_coding_system(&mut eval, vec![Value::string("")]);
     assert!(if matches!(
         result.kinded_ref(),
@@ -2020,7 +2149,7 @@ fn read_non_nil_coding_system_signals_batch_eof() {
 #[test]
 fn read_non_nil_coding_system_validates_prompt_type_and_arity() {
     crate::test_utils::init_test_tracing();
-    let mut eval = crate::emacs_core::eval::Context::new();
+    let mut eval = crate::test_utils::new_context();
     let bad_prompt = builtin_read_non_nil_coding_system(&mut eval, vec![Value::fixnum(1)]);
     assert!(if matches!(
         bad_prompt.kinded_ref(),
