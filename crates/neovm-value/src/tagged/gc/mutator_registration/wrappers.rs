@@ -19,9 +19,15 @@ pub struct ParallelHeapEra<'heap, K: EraKeeper> {
 }
 
 /// Restricted proof executors retain GEN0 coverage without production admission.
+///
+/// PEER 10:1xZ Option B': item-level `#[doc(hidden)] pub` inside the private
+/// `mutator_registration -> wrappers` chain. The `tagged::gc` re-exports stay
+/// `pub(crate)`, so `neovm_value::test_support::authority` is the sole public
+/// path; `neovm_core::tagged::gc::ProofEra` keeps its E0432 contract.
 #[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
 #[must_use = "finish explicitly; abandonment retains the World and poisons the era"]
-pub(crate) struct ProofEra<'heap, K: EraKeeper> {
+pub struct ProofEra<'heap, K: EraKeeper> {
     pub(super) core: EraCore<'heap, K>,
     witness: ProofConstruction,
 }
