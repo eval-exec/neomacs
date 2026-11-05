@@ -4,7 +4,9 @@ use crate::emacs_core::intern::{intern, intern_uninterned};
 use crate::emacs_core::symbol::ObarraySymbolCellSkipGuard;
 use crate::tagged::gc::mutator_registration::era_fixtures::EraFixtureExt;
 use crate::tagged::gc::{CollectionReport, RegistrationError};
-use neovm_eval::test_support::authority::WorldProofEra as ParallelHeapEra;
+use neovm_eval::test_support::authority::{
+    WorldProofEra as ParallelHeapEra, baton_collect_parallel_world_roots, baton_keeper_designator,
+};
 use neovm_value::test_support::authority::SymbolWordOccupancy;
 use std::cell::RefCell;
 
@@ -180,7 +182,7 @@ fn root_families(backing: PlainSymbolBacking) {
                 // The guard restores the original policy even on an assertion.
                 let skip = ObarraySymbolCellSkipGuard::new();
                 let keeper = era.keeper_for_test().unwrap();
-                let designator = keeper.keeper_designator().unwrap();
+                let designator = baton_keeper_designator(&keeper).unwrap();
                 let mut cells = Vec::new();
                 let mut projections = Vec::new();
                 {
@@ -193,9 +195,7 @@ fn root_families(backing: PlainSymbolBacking) {
                         .unwrap();
                 }
                 let mut all_world = Vec::new();
-                keeper
-                    .collect_parallel_world_roots(&mut stopped, &mut all_world)
-                    .unwrap();
+                baton_collect_parallel_world_roots(&keeper, &mut stopped, &mut all_world).unwrap();
                 let census: Vec<_> = expected
                     .iter()
                     .map(|root| {
@@ -219,7 +219,7 @@ fn root_families(backing: PlainSymbolBacking) {
                 let report = era
                     .collect_stopped(
                         &mut stopped,
-                        crate::emacs_core::eval::Baton::collect_parallel_world_roots,
+                        neovm_eval::test_support::authority::baton_collect_parallel_world_roots,
                     )
                     .unwrap();
                 let live = era
@@ -292,7 +292,7 @@ fn p3sym_c6_keeper_nonzero_word_refuses_before_copy_and_recovers() {
         {
             let symbols = stopped.symbols().unwrap();
             let keeper = era.keeper_for_test().unwrap();
-            let designator = keeper.keeper_designator().unwrap();
+            let designator = baton_keeper_designator(&keeper).unwrap();
             for occupancy in [SymbolWordOccupancy::Reader, SymbolWordOccupancy::Writer] {
                 // Same predicate as the authority word's quiescent(): no
                 // reader and no writer occupies the word.
@@ -335,8 +335,8 @@ fn p3sym_c6_keeper_foreign_world_and_backing_refuse_before_copy() {
             let inner_symbols = inner_stop.symbols().unwrap();
             let outer_keeper = outer.keeper_for_test().unwrap();
             let inner_keeper = inner.keeper_for_test().unwrap();
-            let outer_designator = outer_keeper.keeper_designator().unwrap();
-            let inner_designator = inner_keeper.keeper_designator().unwrap();
+            let outer_designator = baton_keeper_designator(&outer_keeper).unwrap();
+            let inner_designator = baton_keeper_designator(&inner_keeper).unwrap();
             let mut out = vec![TaggedValue::T];
             let cells = outer_symbols.append_current_symbol_roots(&inner_designator, &mut out);
             let projections =

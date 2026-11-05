@@ -453,7 +453,7 @@ fn finish_round(era: &ParallelHeapEra<'_>, stopped: AllStopped<'_>) {
     let report = retry_rv(|| {
         era.collect_stopped(
             &mut stopped,
-            crate::emacs_core::eval::Baton::collect_parallel_world_roots,
+            neovm_eval::test_support::authority::baton_collect_parallel_world_roots,
         )
     });
     assert!(report.major, "extent rounds collect a major cycle");
@@ -473,7 +473,7 @@ fn closing_round(era: &ParallelHeapEra<'_>, next_epoch: &mut u64) {
     let report = retry_rv(|| {
         era.collect_stopped(
             &mut stopped,
-            crate::emacs_core::eval::Baton::collect_parallel_world_roots,
+            neovm_eval::test_support::authority::baton_collect_parallel_world_roots,
         )
     });
     assert!(report.major, "the closing round collects a major cycle");

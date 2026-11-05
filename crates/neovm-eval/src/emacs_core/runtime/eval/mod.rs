@@ -8618,6 +8618,7 @@ mod global_state;
 mod green;
 
 pub(crate) use admission::ThreadingMode;
+pub(crate) use green::GreenStartError;
 #[doc(hidden)]
 pub use green::switch::MainNativeHandoff;
 #[doc(hidden)]

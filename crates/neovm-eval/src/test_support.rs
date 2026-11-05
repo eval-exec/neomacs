@@ -11,12 +11,17 @@
 /// TA2 authority fence. Exactly the signed AUTHORITY-ITEMS rows live here.
 pub mod authority {
     use crate::emacs_core::eval::Context;
+    use crate::emacs_core::eval::GreenStartError;
     use crate::emacs_core::eval::hooks_proof::EvalHooksInstalled;
     use crate::emacs_core::eval::world::Baton;
-    use crate::host_effect::wake::{ControlNudgePublisher, ControlWake};
+    use crate::emacs_core::eval::world::WorldView;
+    use crate::host_effect::wake::{ControlNudgePublisher, ControlWake, HostSessionControl};
     use neovm_value::intern::SymId;
     use neovm_value::symbol::Obarray;
-    use neovm_value::tagged::gc::{PlainSymbolBacking, RegistrationError};
+    use neovm_value::tagged::gc::{
+        AllStopped, FacadeEpochRetention, FacadeMarkExclusionError, FrozenLegacyRoots,
+        PlainSymbolBacking, RegistrationError, RendezvousError,
+    };
     use std::sync::Arc;
 
     /// S-2: the V1 minimal VM harness, reached only with the REAL boot proof.
@@ -157,5 +162,75 @@ pub mod authority {
         body: impl for<'heap> FnOnce(WorldProofEra<'heap>, Vec<SymId>) -> R,
     ) -> Result<R, RegistrationError> {
         Context::try_with_test_symbol_backings_init_era(kinds, init, body)
+    }
+
+    // K1-ORPHAN (b) follow-up (peer 09:5xZ): the nine authority-class test
+    // consumers delegate through these identical-signature fence functions.
+    // The original methods are pub(crate) at their defining paths; the
+    // re-homed core tests reach them only through this fence. WorldView and
+    // GreenStartError are crate-visible types, so the interface lint is
+    // allowed here rather than widening either type.
+
+    /// Delegate for `WorldView<TaggedHeap>::heap_root`.
+    #[allow(private_interfaces)]
+    pub fn world_view_heap_root(
+        view: &WorldView<neovm_value::tagged::gc::TaggedHeap>,
+    ) -> std::ptr::NonNull<neovm_value::tagged::gc::TaggedHeap> {
+        view.heap_root()
+    }
+
+    /// Delegate for `WorldView<TaggedHeap>::install_tagged_heap`.
+    #[allow(private_interfaces)]
+    pub fn world_view_install_tagged_heap(view: &WorldView<neovm_value::tagged::gc::TaggedHeap>) {
+        view.install_tagged_heap()
+    }
+
+    /// Delegate for `Context::issue_green_baton`.
+    #[allow(private_interfaces)]
+    pub fn context_issue_green_baton(context: &mut Context) -> Result<Baton, GreenStartError> {
+        context.issue_green_baton()
+    }
+
+    /// Delegate for `Baton::parallel_epoch_retention`.
+    pub fn baton_parallel_epoch_retention(
+        baton: &Baton,
+    ) -> Result<FacadeEpochRetention, FacadeMarkExclusionError> {
+        baton.parallel_epoch_retention()
+    }
+
+    /// Delegate for `Baton::parallel_symbol_backing`.
+    pub fn baton_parallel_symbol_backing(
+        baton: &Baton,
+    ) -> neovm_value::symbol::parallel::SymbolBacking {
+        baton.parallel_symbol_backing()
+    }
+
+    /// Delegate for `Context::capture_parallel_legacy_roots`.
+    pub fn context_capture_parallel_legacy_roots(
+        context: &Context,
+        keeper: &Baton,
+    ) -> Result<FrozenLegacyRoots, RendezvousError> {
+        context.capture_parallel_legacy_roots(keeper)
+    }
+
+    /// Delegate for `Baton::keeper_designator`.
+    pub fn baton_keeper_designator(
+        baton: &Baton,
+    ) -> Result<neovm_value::symbol::parallel::KeeperWorldDesignator<'_>, RegistrationError> {
+        baton.keeper_designator()
+    }
+
+    /// Delegate for `Baton::collect_parallel_world_roots`.
+    pub fn baton_collect_parallel_world_roots(
+        baton: &Baton,
+        stopped: &mut AllStopped<'_>,
+        out: &mut Vec<neovm_value::tagged::value::TaggedValue>,
+    ) -> Result<Vec<*mut *mut neovm_value::tagged::header::MarkerObj>, RendezvousError> {
+        baton.collect_parallel_world_roots(stopped, out)
+    }
+
+    /// Delegate for `ControlWake::attach_host_session`.
+    pub fn control_wake_attach_host_session(wake: &Arc<ControlWake>) -> HostSessionControl {
+        wake.attach_host_session()
     }
 }

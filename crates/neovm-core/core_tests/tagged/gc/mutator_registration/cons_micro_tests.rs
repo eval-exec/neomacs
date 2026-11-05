@@ -159,7 +159,7 @@ fn sim(shape: &str, n: usize) {
             let report = era
                 .collect_stopped(
                     &mut stopped,
-                    crate::emacs_core::eval::Baton::collect_parallel_world_roots,
+                    neovm_eval::test_support::authority::baton_collect_parallel_world_roots,
                 )
                 .unwrap();
             assert!(report.major);
@@ -254,7 +254,7 @@ fn local(shape: &str, n: usize) {
             era.return_cons_storage(&stopped).unwrap();
             era.collect_stopped(
                 &mut stopped,
-                crate::emacs_core::eval::Baton::collect_parallel_world_roots,
+                neovm_eval::test_support::authority::baton_collect_parallel_world_roots,
             )
             .unwrap();
             era.with_stopped_heap_for_test(&stopped, |heap| {

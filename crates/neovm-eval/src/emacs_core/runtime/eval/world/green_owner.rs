@@ -105,7 +105,6 @@ impl fmt::Debug for Baton {
 impl Baton {
     /// Cold proof-3 backing admission. Original allocation roots only; no
     /// Context view, heap reference or ordinary mutable manager borrow.
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn parallel_symbol_backing(&self) -> neovm_value::symbol::parallel::SymbolBacking {
         assert!(self.held_here(), "symbol backing keeper must be held here");
         // SAFETY: era admission has escrowed the serial Context and retains
@@ -144,7 +143,6 @@ impl Baton {
     /// Cold metadata retention for parallel root publications, with no heap loan.
     #[cold]
     #[inline(never)]
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn parallel_epoch_retention(
         &self,
     ) -> Result<
@@ -313,7 +311,6 @@ impl Context {
     /// the Green era, so no concurrent marker runs while Green owners exist.
     #[cold]
     #[inline(never)]
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn issue_green_baton(
         &mut self,
     ) -> Result<Baton, super::super::green::GreenStartError> {

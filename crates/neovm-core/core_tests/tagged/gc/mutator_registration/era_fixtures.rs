@@ -18,7 +18,9 @@ use crate::test_utils::new_context;
 use neovm_eval::emacs_core::eval::Baton;
 use neovm_eval::emacs_core::eval::Context;
 use neovm_eval::test_support::authority::{
-    WorldIdentity, WorldProofEra, baton_world_identity, same_world,
+    WorldIdentity, WorldProofEra, baton_parallel_epoch_retention, baton_parallel_symbol_backing,
+    baton_world_identity, context_capture_parallel_legacy_roots, context_issue_green_baton,
+    same_world, world_view_heap_root, world_view_install_tagged_heap,
 };
 use neovm_value::intern::SymId;
 use neovm_value::symbol::Obarray;
@@ -142,10 +144,8 @@ fn collection_fixture_context() -> Context {
 fn prepare_keeper_backing(
     keeper: &Baton,
 ) -> Result<(FacadeEpochRetention, SymbolBacking), RegistrationError> {
-    let epoch = keeper
-        .parallel_epoch_retention()
-        .map_err(|_| RegistrationError::Exhausted)?;
-    Ok((epoch, keeper.parallel_symbol_backing()))
+    let epoch = baton_parallel_epoch_retention(keeper).map_err(|_| RegistrationError::Exhausted)?;
+    Ok((epoch, baton_parallel_symbol_backing(keeper)))
 }
 
 impl EraFixtureExt for Context {
@@ -155,13 +155,10 @@ impl EraFixtureExt for Context {
     ) -> R {
         let mut context = collection_fixture_context();
         let input = setup(&mut context);
-        let keeper = context
-            .issue_green_baton()
-            .expect("collection fixture keeper");
-        let frozen = context
-            .capture_parallel_legacy_roots(&keeper)
+        let keeper = context_issue_green_baton(&mut context).expect("collection fixture keeper");
+        let frozen = context_capture_parallel_legacy_roots(&context, &keeper)
             .expect("collection fixture frozen legacy roots");
-        let heap: *mut TaggedHeap = context.tagged_heap().heap_root().as_ptr();
+        let heap: *mut TaggedHeap = world_view_heap_root(context.tagged_heap()).as_ptr();
         // SAFETY: the original Context is serial and suspended, has no live
         // manager loan/callback, and captured its private roots before this
         // exclusive heap loan. The retained keeper excludes concurrent mark.
@@ -173,9 +170,9 @@ impl EraFixtureExt for Context {
         .expect("collection fixture drain");
         // Compare only the root address while the exclusive collector loan
         // is retained. Synthetic participants cannot use the serial TLS view.
-        neovm_value::tagged::gc::clear_tagged_heap_root_if_installed(
-            context.tagged_heap().heap_root(),
-        );
+        neovm_value::tagged::gc::clear_tagged_heap_root_if_installed(world_view_heap_root(
+            context.tagged_heap(),
+        ));
         // SAFETY: the fixture built this World and holds its sole retention;
         // the prepare callback derives the original retained epoch/backing.
         let era = unsafe {
@@ -197,15 +194,12 @@ impl EraFixtureExt for Context {
     ) {
         let mut context = collection_fixture_context();
         let input = setup(&mut context);
-        let keeper = context
-            .issue_green_baton()
-            .expect("collection fixture keeper");
-        let frozen = context
-            .capture_parallel_legacy_roots(&keeper)
+        let keeper = context_issue_green_baton(&mut context).expect("collection fixture keeper");
+        let frozen = context_capture_parallel_legacy_roots(&context, &keeper)
             .expect("collection fixture frozen legacy roots");
         let expected_heap = keeper.parallel_heap_identity();
         let expected_world: WorldIdentity = baton_world_identity(&keeper);
-        let heap: *mut TaggedHeap = context.tagged_heap().heap_root().as_ptr();
+        let heap: *mut TaggedHeap = world_view_heap_root(context.tagged_heap()).as_ptr();
         // SAFETY: same sole-owner/capture-before-loan proof as the fixture above.
         let collector = unsafe {
             (*heap).drain_to_quiescent(|heap| {
@@ -215,9 +209,9 @@ impl EraFixtureExt for Context {
         .expect("collection fixture drain");
         // Compare only the root address while the exclusive collector loan
         // is retained. Synthetic participants cannot use the serial TLS view.
-        neovm_value::tagged::gc::clear_tagged_heap_root_if_installed(
-            context.tagged_heap().heap_root(),
-        );
+        neovm_value::tagged::gc::clear_tagged_heap_root_if_installed(world_view_heap_root(
+            context.tagged_heap(),
+        ));
         // SAFETY: same original keeper and frozen private census as above.
         let era = unsafe {
             neovm_value::test_support::authority::admit_rooted_for_test(
@@ -239,16 +233,15 @@ impl EraFixtureExt for Context {
         drop(collector);
         drop(keeper);
         // Both finish capabilities returned; their loans ended above.
-        context.tagged_heap().install_tagged_heap();
+        world_view_install_tagged_heap(context.tagged_heap());
         after(&mut context, output);
     }
 
     fn with_test_mutator_era<R>(f: impl for<'heap> FnOnce(WorldProofEra<'heap>) -> R) -> R {
         let mut context = new_context();
-        let keeper = context
-            .issue_green_baton()
-            .expect("fresh fixture World issues its keeper");
-        let heap: *mut TaggedHeap = context.tagged_heap().heap_root().as_ptr();
+        let keeper =
+            context_issue_green_baton(&mut context).expect("fresh fixture World issues its keeper");
+        let heap: *mut TaggedHeap = world_view_heap_root(context.tagged_heap()).as_ptr();
         // SAFETY: this fresh Context is the sole running owner and holds the
         // keeper. No manager loan, callback, safepoint or collection extent
         // survives keeper issuance. Reseeding only enumerates the complete
@@ -262,9 +255,9 @@ impl EraFixtureExt for Context {
         .expect("fresh fixture collector drains completely");
         // Compare only the root address while the exclusive collector loan
         // is retained. Synthetic participants cannot use the serial TLS view.
-        neovm_value::tagged::gc::clear_tagged_heap_root_if_installed(
-            context.tagged_heap().heap_root(),
-        );
+        neovm_value::tagged::gc::clear_tagged_heap_root_if_installed(world_view_heap_root(
+            context.tagged_heap(),
+        ));
         // SAFETY: the fresh sole-owner World above; same keeper preparation.
         let era = unsafe {
             neovm_value::test_support::authority::admit_for_test(
@@ -296,8 +289,8 @@ impl EraFixtureExt for Context {
                 neovm_value::tagged::transport::SharedRoot::new(context.tagged_heap(), value)
             });
         }
-        let keeper = context.issue_green_baton().expect("rooted fixture keeper");
-        let heap: *mut TaggedHeap = context.tagged_heap().heap_root().as_ptr();
+        let keeper = context_issue_green_baton(&mut context).expect("rooted fixture keeper");
+        let heap: *mut TaggedHeap = world_view_heap_root(context.tagged_heap()).as_ptr();
         // SAFETY: same complete frozen-World census as with_test_mutator_era.
         // SharedRoot table entries keep every synthetic input live as well.
         let collector = unsafe {
@@ -308,9 +301,9 @@ impl EraFixtureExt for Context {
         .expect("rooted fixture collector");
         // Compare only the root address while the exclusive collector loan
         // is retained. Synthetic participants cannot use the serial TLS view.
-        neovm_value::tagged::gc::clear_tagged_heap_root_if_installed(
-            context.tagged_heap().heap_root(),
-        );
+        neovm_value::tagged::gc::clear_tagged_heap_root_if_installed(world_view_heap_root(
+            context.tagged_heap(),
+        ));
         // SAFETY: same fresh keeper and frozen census as above.
         let era = unsafe {
             neovm_value::test_support::authority::admit_for_test(

@@ -210,7 +210,6 @@ impl WorldView<neovm_value::tagged::gc::TaggedHeap> {
     /// must start here, not at a `&mut *view` reborrow: a reference-derived
     /// pointer is a child tag that the next sibling reborrow freezes or pops
     /// (Tree/Stacked Borrows respectively).
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn heap_root(&self) -> NonNull<neovm_value::tagged::gc::TaggedHeap> {
         self.ptr
     }
@@ -220,7 +219,6 @@ impl WorldView<neovm_value::tagged::gc::TaggedHeap> {
     /// The slot is set from the view's provenance root, which is the same
     /// root every access through the view derives from, so later `&mut`
     /// reborrows through the view cannot invalidate the installed pointer.
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn install_tagged_heap(&self) {
         neovm_value::tagged::gc::set_tagged_heap_root(self.ptr);
     }

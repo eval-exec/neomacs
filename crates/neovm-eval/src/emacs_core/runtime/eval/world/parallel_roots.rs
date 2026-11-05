@@ -54,7 +54,6 @@ impl Context {
     // `admit_owned_parallel` in the child module. It calls this capture and
     // then `admit_rooted` with no Context execution between them. The fixture
     // sequences below remain the test-only NIL preclean.
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn capture_parallel_legacy_roots(
         &self,
         keeper: &Baton,
@@ -137,7 +136,6 @@ impl Baton {
     /// The returned proof cannot outlive this retained Baton or cross threads.
     #[cold]
     #[inline(never)]
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn keeper_designator(
         &self,
     ) -> Result<
@@ -165,7 +163,6 @@ impl Baton {
     /// Marker unlink slots are valid only for the caller's stopped phase.
     #[cold]
     #[inline(never)]
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn collect_parallel_world_roots(
         &self,
         stopped: &mut AllStopped<'_>,

@@ -87,7 +87,7 @@ fn endgame(era: &ParallelHeapEra<'_>, owner: &mut Mutator<'_>, roots: &[SharedRo
     retry(|| {
         era.collect_stopped(
             &mut stopped,
-            crate::emacs_core::eval::Baton::collect_parallel_world_roots,
+            neovm_eval::test_support::authority::baton_collect_parallel_world_roots,
         )
     });
     complete(stopped);
@@ -210,7 +210,7 @@ fn publish_at_stop_returns_unhanded_suffix_exactly() {
         retry(|| {
             era.collect_stopped(
                 &mut stopped,
-                crate::emacs_core::eval::Baton::collect_parallel_world_roots,
+                neovm_eval::test_support::authority::baton_collect_parallel_world_roots,
             )
         });
         // After resume the next carve works and stays disjoint from the
@@ -231,7 +231,7 @@ fn publish_at_stop_returns_unhanded_suffix_exactly() {
         retry(|| {
             era.collect_stopped(
                 &mut stopped,
-                crate::emacs_core::eval::Baton::collect_parallel_world_roots,
+                neovm_eval::test_support::authority::baton_collect_parallel_world_roots,
             )
         });
         complete(stopped);
@@ -311,7 +311,7 @@ fn two_owners_carve_disjoint_exclusive_tails() {
             retry(|| {
                 era.collect_stopped(
                     &mut stopped,
-                    crate::emacs_core::eval::Baton::collect_parallel_world_roots,
+                    neovm_eval::test_support::authority::baton_collect_parallel_world_roots,
                 )
             });
             complete(stopped);

@@ -416,7 +416,6 @@ impl ControlWake {
 
     /// Cold owner attachment. Installation always creates a fresh session;
     /// physical input publication is independent of Green admission.
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn attach_host_session(self: &Arc<Self>) -> HostSessionControl {
         let identity = Arc::new(HostSessionIdentity);
         self.lock().host_session = Some(Arc::clone(&identity));
