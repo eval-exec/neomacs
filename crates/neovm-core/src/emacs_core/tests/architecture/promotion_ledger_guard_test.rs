@@ -8,17 +8,15 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use syn::visit::{self, Visit};
 
+use super::architecture_production_source_roots::workspace_root;
+
 const LEDGER: &str = "crates/neovm-core/src/emacs_core/tests/architecture/PROMOTION-LEDGER.tsv";
 const CEILING: &str =
     "crates/neovm-core/src/emacs_core/tests/architecture/PROMOTION-LEDGER.ceiling";
 const BUMP_SUBJECT: &str = "PC11 PROMOTION-LEDGER ceiling bump:";
 
 fn root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .expect("core crate belongs to the workspace")
-        .to_path_buf()
+    workspace_root()
 }
 
 fn read(path: &Path) -> Result<String, String> {
@@ -553,7 +551,7 @@ impl Surface<'_> {
                     SourceKind::Function {
                         inherent: false,
                         constant: f.sig.constness.is_some(),
-                        unsafe_fn: f.sig.unsafety.is_some(),
+                        unsafe_fn: matches!(f.sig.safety, syn::Safety::Unsafe(_)),
                     },
                 )?,
                 syn::Item::Struct(s) => {
@@ -684,7 +682,7 @@ impl Surface<'_> {
                                     SourceKind::Function {
                                         inherent: true,
                                         constant: f.sig.constness.is_some(),
-                                        unsafe_fn: f.sig.unsafety.is_some(),
+                                        unsafe_fn: matches!(f.sig.safety, syn::Safety::Unsafe(_)),
                                     },
                                 )?;
                             }
@@ -1055,6 +1053,7 @@ fn monotonic(
     next: RowCount,
     subject: &str,
     changed: &[String],
+    ceiling_path: &str,
 ) -> Result<(), String> {
     if next <= previous {
         return Ok(());
@@ -1062,7 +1061,7 @@ fn monotonic(
     if subject.starts_with(BUMP_SUBJECT)
         && !subject[BUMP_SUBJECT.len()..].trim().is_empty()
         && changed.len() == 1
-        && changed[0] == CEILING
+        && changed[0] == ceiling_path
     {
         return Ok(());
     }
@@ -1088,8 +1087,8 @@ fn git(workspace: &Path, args: &[&str]) -> Result<String, String> {
     String::from_utf8(output.stdout).map_err(|e| format!("B3_RATCHET non-UTF8 history: {e}"))
 }
 
-fn ratchet(workspace: &Path, rows: RowCount) -> Result<(), String> {
-    let current = ceiling(&read(&workspace.join(CEILING))?)?;
+fn ratchet(workspace: &Path, rows: RowCount, ceiling_path: &str) -> Result<(), String> {
+    let current = ceiling(&read(&workspace.join(ceiling_path))?)?;
     at_most(rows, current)?;
     let log = git(
         workspace,
@@ -1100,7 +1099,7 @@ fn ratchet(workspace: &Path, rows: RowCount) -> Result<(), String> {
             "--format=%H",
             "HEAD",
             "--",
-            CEILING,
+            ceiling_path,
         ],
     )?;
     let revisions: Vec<_> = log.lines().filter(|line| !line.is_empty()).collect();
@@ -1111,7 +1110,7 @@ fn ratchet(workspace: &Path, rows: RowCount) -> Result<(), String> {
     for revision in revisions {
         let value = ceiling(&git(
             workspace,
-            &["show", &format!("{revision}:{CEILING}")],
+            &["show", &format!("{revision}:{ceiling_path}")],
         )?)?;
         if let Some(previous) = previous {
             let subject = git(workspace, &["show", "-s", "--format=%s", revision])?;
@@ -1120,7 +1119,7 @@ fn ratchet(workspace: &Path, rows: RowCount) -> Result<(), String> {
                 &["diff-tree", "--no-commit-id", "--name-only", "-r", revision],
             )?;
             let files: Vec<_> = files.lines().map(str::to_string).collect();
-            monotonic(previous, value, subject.trim(), &files)?;
+            monotonic(previous, value, subject.trim(), &files, ceiling_path)?;
         }
         previous = Some(value);
     }
@@ -1161,7 +1160,47 @@ fn architecture_pc11_bulk_ledger_ceiling_only_decreases() {
     let root = root();
     let rows = ledger(&read(&root.join(LEDGER)).unwrap_or_else(|e| panic!("{e}")))
         .unwrap_or_else(|e| panic!("{e}"));
-    ratchet(&root, RowCount(rows.len())).unwrap_or_else(|e| panic!("{e}"));
+    ratchet(&root, RowCount(rows.len()), CEILING).unwrap_or_else(|e| panic!("{e}"));
+}
+
+/// Every extracted domain keeps its own K1 ledger and ceiling ratchet. The
+/// value ledger above additionally keeps its full source bijection; the other
+/// domains are ratcheted here until their own bijection guards activate
+/// (peer 01:3xZ item 2).
+const DOMAIN_LEDGERS: &[(&str, &str)] = &[
+    (LEDGER, CEILING),
+    (
+        "crates/neovm-core/src/emacs_core/tests/architecture/PROMOTION-LEDGER-EDIT.tsv",
+        "crates/neovm-core/src/emacs_core/tests/architecture/PROMOTION-LEDGER-EDIT.ceiling",
+    ),
+    (
+        "crates/neovm-core/src/emacs_core/tests/architecture/PROMOTION-LEDGER-TEXT.tsv",
+        "crates/neovm-core/src/emacs_core/tests/architecture/PROMOTION-LEDGER-TEXT.ceiling",
+    ),
+    (
+        "crates/neovm-core/src/emacs_core/tests/architecture/PROMOTION-LEDGER-EVAL.tsv",
+        "crates/neovm-core/src/emacs_core/tests/architecture/PROMOTION-LEDGER-EVAL.ceiling",
+    ),
+    (
+        "crates/neovm-core/src/emacs_core/tests/architecture/PROMOTION-LEDGER-DISPLAY.tsv",
+        "crates/neovm-core/src/emacs_core/tests/architecture/PROMOTION-LEDGER-DISPLAY.ceiling",
+    ),
+    (
+        "crates/neovm-core/src/emacs_core/tests/architecture/PROMOTION-LEDGER-SYSTEM.tsv",
+        "crates/neovm-core/src/emacs_core/tests/architecture/PROMOTION-LEDGER-SYSTEM.ceiling",
+    ),
+];
+
+#[test]
+fn architecture_pc11_every_domain_ledger_ceiling_only_decreases() {
+    let root = root();
+    for (ledger_path, ceiling_path) in DOMAIN_LEDGERS {
+        let rows =
+            ledger(&read(&root.join(ledger_path)).unwrap_or_else(|e| panic!("{ledger_path}: {e}")))
+                .unwrap_or_else(|e| panic!("{ledger_path}: {e}"));
+        ratchet(&root, RowCount(rows.len()), ceiling_path)
+            .unwrap_or_else(|e| panic!("{ceiling_path}: {e}"));
+    }
 }
 
 #[test]
@@ -1227,12 +1266,22 @@ fn architecture_pc11_mutation_silent_ceiling_raise_is_rejected() {
             RowCount(1),
             RowCount(2),
             "unrelated change",
-            &[CEILING.into()]
+            &[CEILING.into()],
+            CEILING,
         )
         .unwrap_err()
         .contains("silent ceiling increase")
     );
-    assert!(monotonic(RowCount(1), RowCount(1), "restored", &[CEILING.into()]).is_ok());
+    assert!(
+        monotonic(
+            RowCount(1),
+            RowCount(1),
+            "restored",
+            &[CEILING.into()],
+            CEILING
+        )
+        .is_ok()
+    );
 }
 
 #[test]

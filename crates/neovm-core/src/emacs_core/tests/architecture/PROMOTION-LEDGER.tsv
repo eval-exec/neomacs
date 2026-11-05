@@ -343,7 +343,7 @@ install_eval_error_formatter	fn	pub(crate)	crates/neovm-value/src/error/format_h
 install_sqlite_obj_finalizer	fn	pub(crate)	crates/neovm-value/src/tagged/header/sqlite_finalizer.rs:25	tagged::header::sqlite_finalizer	pc2 per ruling: publish identity-cell (&'static SqliteObjFinalizer); module stays pub(crate); adapter system/sqlite/mod.rs installs &CANONICAL_SQLITE_FINALIZER
 install_static_subr_objects	fn	pub(crate)	crates/neovm-value/src/tagged/value.rs:357	tagged::value	pc1-d: DATA seal privacy ledger 17f6ac250b; caller eval/green/bootstrap.rs
 install_string_bytes_changed_hook	unsafe fn	pub(crate)	crates/neovm-value/src/heap_types.rs:52	heap_types	pc2 per ruling: REUSE value::hook_publication::publish identity-cell; N9 # Safety verbatim; StringBytesHookAlreadyInstalled deleted; seams construct.rs + pdump_reconstruct.rs pass &string_pos_cache::STRING_BYTES_STAMP (pub(crate) static, new)
-install_string_bytes_changed_hook::root_reexport	reexport	(new)	crates/neovm-value/src/lib.rs:35	crate root	pc2 root pub use line in the ONE lib.rs PC2 section
+install_string_bytes_changed_hook::root_reexport	reexport	(new)	crates/neovm-value/src/lib.rs:57	crate root	pc2 root pub use line in the ONE lib.rs PC2 section
 intern_call_names	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:2186	emacs_core::intern	bulk
 intern_calls	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:2181	emacs_core::intern	bulk
 is_active	fn	pub(crate)	crates/neovm-value/src/tagged/collection_reads.rs:92	tagged::collection_reads	bulk
@@ -421,8 +421,8 @@ signal_error_with_arg	fn	pub(crate)	crates/neovm-value/src/error/mod.rs:1047	ema
 signal_suppressed	fn	pub(crate)	crates/neovm-value/src/error/mod.rs:1009	emacs_core::error	bulk
 signal_with_data	fn	pub(crate)	crates/neovm-value/src/error/mod.rs:1037	emacs_core::error	bulk
 snapshot_static_subr_objects	fn	pub(crate)	crates/neovm-value/src/tagged/value.rs:335	tagged::value	bulk
-SqliteObjFinalizer	reexport	(new)	crates/neovm-value/src/lib.rs:40	crate root	pc2 root pub use line; SqliteObjFinalizer decl already pub+doc(hidden) (no promotion)
-install_sqlite_obj_finalizer	reexport	(new)	crates/neovm-value/src/lib.rs:40	crate root	pc2 root pub use line; SqliteObjFinalizer decl already pub+doc(hidden) (no promotion)
+SqliteObjFinalizer	reexport	(new)	crates/neovm-value/src/lib.rs:64	crate root	pc2 root pub use line; SqliteObjFinalizer decl already pub+doc(hidden) (no promotion)
+install_sqlite_obj_finalizer	reexport	(new)	crates/neovm-value/src/lib.rs:64	crate root	pc2 root pub use line; SqliteObjFinalizer decl already pub+doc(hidden) (no promotion)
 sqlite_obj_finalizer_installed	fn	pub(crate)	crates/neovm-value/src/tagged/header/sqlite_finalizer.rs:27	tagged::header::sqlite_finalizer	bulk
 string_bytes_changed_hook_installed	fn	pub(crate)	crates/neovm-value/src/heap_types.rs:66	heap_types	bulk
 swap_property_revision_world_state	use	pub(crate)	crates/neovm-value/src/symbol/mod.rs:43	emacs_core::symbol	n13 carried DATA: signed N13/PC10; sole upper crates/neovm-core/src/emacs_core/runtime/eval/green/carried.rs:73; unchanged paired TLS swap/placeholder body; guard=CARRIERS-derived carried.rs-only
