@@ -15,12 +15,15 @@
 //!    and adapters form exact signed chains, including SQLite handle creation.
 //!    Test-only callers remain typed; DATA installation has one exact caller.
 //!    Completeness follows writes of statics owned by the sealed lower crates.
-//! 4. **TA2 authority fence**: `test_support::authority` may be named only
-//!    from `crates/neovm-core/core_tests/**`, never from `src/**`, including
-//!    aliases and glob imports, across every workspace member and target.
-//!    Only the actual value-layer authority definition is exempt, plus the
-//!    B2 exception: a src file whose EVERY module route is test-support-gated
-//!    may name a LOWER crate's fence through a resolved value alias.
+//! 4. **TA2 authority fence**: each signed `test_support::authority` fence
+//!    (`neovm-value`, `neovm-eval`) may be named only from
+//!    `crates/neovm-core/core_tests/**`, a fence's own definition files, or
+//!    (B2) a src file whose EVERY module route is test-support-gated in a
+//!    HIGHER crate, through a resolved fence alias. Globs and renames are
+//!    resolved-module matched (lread::test_support is not the fence), macro
+//!    tokens treat a lone `authority` as a field, and unparseable sources are
+//!    scanned for the exact `test_support :: authority` sequence instead of
+//!    failing the whole guard.
 //!
 //! All scans are fail-closed: unparseable sources, missing tables, malformed
 //! rows and any occurrence not accounted for by an allowed site fail.
@@ -3425,10 +3428,18 @@ fn architecture_pc2_generic_local_helper_is_not_a_static_write() {
 // TA2: workspace-wide authority references, with defining-module resolution.
 // ---------------------------------------------------------------------------
 
-#[derive(Default)]
-struct Ta2Definitions {
-    authority_files: BTreeSet<PathBuf>,
-    // Only this declaration is exempt in its parent, never the parent file.
+/// The signed authority fences. Each is `test_support::authority` at the
+/// crate root; a crate joins this list only when its fence is signed.
+const TA2_FENCE_PACKAGES: &[&str] = &["neovm-value", "neovm-eval"];
+
+#[derive(Default, Clone)]
+struct Ta2Fence {
+    package: String,
+    /// Every file that belongs to the fence module itself: the `test_support`
+    /// module file plus the `authority` submodule files. A fence's own
+    /// definition files may name it; nothing else in `src/**` may.
+    definition_files: BTreeSet<PathBuf>,
+    /// The `mod authority` declaration inside the test_support file.
     declaration: Option<(PathBuf, usize)>,
 }
 
@@ -3553,7 +3564,7 @@ fn ta2_authority_submodules(
     items: &[Item],
     file: &Path,
     module_dir: &Path,
-    definitions: &mut Ta2Definitions,
+    files: &mut BTreeSet<PathBuf>,
     active: &mut BTreeSet<PathBuf>,
 ) -> Result<(), String> {
     for item in items {
@@ -3563,7 +3574,7 @@ fn ta2_authority_submodules(
                 items,
                 file,
                 &module_dir.join(module.ident.to_string()),
-                definitions,
+                files,
                 active,
             )?;
         } else {
@@ -3576,9 +3587,9 @@ fn ta2_authority_submodules(
                     "cyclic authority module graph",
                 ));
             }
-            definitions.authority_files.insert(child.clone());
+            files.insert(child.clone());
             let (_, parsed) = parse_file(&child)?;
-            ta2_authority_submodules(&parsed.items, &child, &child_dir, definitions, active)?;
+            ta2_authority_submodules(&parsed.items, &child, &child_dir, files, active)?;
             active.remove(&child);
         }
     }
@@ -3776,22 +3787,22 @@ fn ta2_walk_route_items(
     Ok(())
 }
 
-fn ta2_definitions(sources: &[GuardSource]) -> Result<Ta2Definitions, String> {
+fn ta2_fence(sources: &[GuardSource], package: &str) -> Result<Ta2Fence, String> {
     let roots: BTreeSet<_> = sources
         .iter()
-        .filter(|s| s.package == "neovm-value")
+        .filter(|s| s.package == package)
         .map(|s| s.member_root.clone())
         .collect();
     if roots.len() != 1 {
         return Err(format!(
-            "TA2_MODULE_UNRESOLVED: expected one neovm-value member, found {}",
+            "TA2_MODULE_UNRESOLVED: expected one {package} member, found {}",
             roots.len()
         ));
     }
     let root = roots
         .iter()
         .next()
-        .ok_or_else(|| "TA2_MODULE_UNRESOLVED: absent neovm-value".to_string())?;
+        .ok_or_else(|| format!("TA2_MODULE_UNRESOLVED: absent {package}"))?;
     let manifest = ta2_manifest(root)?;
     let lib = manifest
         .get("lib")
@@ -3801,7 +3812,7 @@ fn ta2_definitions(sources: &[GuardSource]) -> Result<Ta2Definitions, String> {
     let lib = root
         .join(lib)
         .canonicalize()
-        .map_err(|e| format!("TA2_MODULE_UNRESOLVED: value lib: {e}"))?;
+        .map_err(|e| format!("TA2_MODULE_UNRESOLVED: {package} lib: {e}"))?;
     let (_, parsed) = parse_file(&lib)?;
     let support: Vec<_> = parsed
         .items
@@ -3816,7 +3827,7 @@ fn ta2_definitions(sources: &[GuardSource]) -> Result<Ta2Definitions, String> {
             &lib,
             0,
             "TA2_MODULE_UNRESOLVED",
-            "expected exactly one test_support declaration",
+            &format!("{package}: expected exactly one test_support declaration"),
         ));
     }
     let support = support[0];
@@ -3830,6 +3841,16 @@ fn ta2_definitions(sources: &[GuardSource]) -> Result<Ta2Definitions, String> {
         let (_, parsed) = parse_file(&file)?;
         (file, dir, parsed.items)
     };
+    let mut fence = Ta2Fence {
+        package: package.to_string(),
+        ..Ta2Fence::default()
+    };
+    // The out-of-line test_support module file is the fence's own definition
+    // file. An inline `test_support` in lib.rs is NOT exempt wholesale: the
+    // crate root hosts every module, so only the authority declaration is.
+    if !(support.content.is_some() && file == lib) {
+        fence.definition_files.insert(file.clone());
+    }
     let authority: Vec<_> = items
         .iter()
         .filter_map(|i| match i {
@@ -3837,29 +3858,28 @@ fn ta2_definitions(sources: &[GuardSource]) -> Result<Ta2Definitions, String> {
             _ => None,
         })
         .collect();
-    let mut definitions = Ta2Definitions::default();
     match authority.as_slice() {
         [] => {} // Before the signed authority surface is installed there is no exemption.
         [authority] => {
-            definitions.declaration = Some((file.clone(), line_of(authority.ident.span())));
+            fence.declaration = Some((file.clone(), line_of(authority.ident.span())));
             if let Some((_, items)) = &authority.content {
                 ta2_authority_submodules(
                     items,
                     &file,
                     &module_dir.join("authority"),
-                    &mut definitions,
+                    &mut fence.definition_files,
                     &mut BTreeSet::new(),
                 )?;
             } else {
                 let (path, dir) = ta2_external_module(authority, &file, &module_dir)?;
-                definitions.authority_files.insert(path.clone());
+                fence.definition_files.insert(path.clone());
                 let (_, parsed) = parse_file(&path)?;
                 let mut active = BTreeSet::from([path.clone()]);
                 ta2_authority_submodules(
                     &parsed.items,
                     &path,
                     &dir,
-                    &mut definitions,
+                    &mut fence.definition_files,
                     &mut active,
                 )?;
             }
@@ -3873,21 +3893,36 @@ fn ta2_definitions(sources: &[GuardSource]) -> Result<Ta2Definitions, String> {
             ));
         }
     }
-    Ok(definitions)
+    Ok(fence)
 }
 
-fn ta2_value_aliases(workspace: &Path, member: &Path) -> Result<BTreeSet<String>, String> {
-    let manifest = ta2_manifest(member)?;
-    let workspace_manifest = ta2_manifest(workspace)?;
-    let inherited = workspace_manifest
+fn ta2_fences(sources: &[GuardSource]) -> Result<Vec<Ta2Fence>, String> {
+    TA2_FENCE_PACKAGES
+        .iter()
+        .map(|package| ta2_fence(sources, package))
+        .collect()
+}
+
+fn ta2_workspace_inherited(
+    workspace: &Path,
+) -> Result<Option<toml::map::Map<String, toml::Value>>, String> {
+    let manifest = ta2_manifest(workspace)?;
+    Ok(manifest
         .get("workspace")
         .and_then(|v| v.get("dependencies"))
-        .and_then(toml::Value::as_table);
-    let mut names = BTreeSet::from(["neovm_value".to_string()]);
+        .and_then(toml::Value::as_table)
+        .cloned())
+}
+
+fn ta2_manifest_dependencies(
+    manifest: &toml::Value,
+    inherited: Option<&toml::map::Map<String, toml::Value>>,
+) -> Result<Vec<(String, String)>, String> {
+    let mut pairs = Vec::new();
     fn table(
         table: &toml::map::Map<String, toml::Value>,
         inherited: Option<&toml::map::Map<String, toml::Value>>,
-        names: &mut BTreeSet<String>,
+        pairs: &mut Vec<(String, String)>,
     ) -> Result<(), String> {
         for (alias, dependency) in table {
             let dependency =
@@ -3904,42 +3939,134 @@ fn ta2_value_aliases(workspace: &Path, member: &Path) -> Result<BTreeSet<String>
                 .get("package")
                 .and_then(toml::Value::as_str)
                 .unwrap_or(alias);
-            if package == "neovm-value" {
-                names.insert(alias.replace('-', "_"));
-            }
+            pairs.push((alias.replace('-', "_"), package.to_string()));
         }
         Ok(())
     }
     for kind in ["dependencies", "dev-dependencies", "build-dependencies"] {
         if let Some(dependencies) = manifest.get(kind).and_then(toml::Value::as_table) {
-            table(dependencies, inherited, &mut names)?;
+            table(dependencies, inherited, &mut pairs)?;
         }
         if let Some(targets) = manifest.get("target").and_then(toml::Value::as_table) {
             for target in targets.values() {
                 if let Some(dependencies) = target.get(kind).and_then(toml::Value::as_table) {
-                    table(dependencies, inherited, &mut names)?;
+                    table(dependencies, inherited, &mut pairs)?;
                 }
             }
         }
     }
-    if manifest
-        .get("package")
-        .and_then(|v| v.get("name"))
-        .and_then(toml::Value::as_str)
-        == Some("neovm-value")
-    {
-        names.insert("crate".to_string());
+    Ok(pairs)
+}
+
+fn ta2_dependency_graph(
+    members: &BTreeMap<PathBuf, String>,
+    workspace: &Path,
+) -> Result<BTreeMap<String, BTreeSet<String>>, String> {
+    let inherited = ta2_workspace_inherited(workspace)?;
+    let mut graph: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for (root, package) in members {
+        let manifest = ta2_manifest(root)?;
+        let dependencies = ta2_manifest_dependencies(&manifest, inherited.as_ref())?;
+        graph
+            .entry(package.clone())
+            .or_default()
+            .extend(dependencies.into_iter().map(|(_, package)| package));
     }
-    Ok(names)
+    Ok(graph)
+}
+
+fn ta2_above(graph: &BTreeMap<String, BTreeSet<String>>, from: &str, target: &str) -> bool {
+    let mut seen = BTreeSet::from([from.to_string()]);
+    let mut queue = vec![from.to_string()];
+    while let Some(package) = queue.pop() {
+        for dependency in graph.get(&package).into_iter().flatten() {
+            if dependency == target {
+                return true;
+            }
+            if seen.insert(dependency.clone()) {
+                queue.push(dependency.clone());
+            }
+        }
+    }
+    false
+}
+
+struct Ta2MemberFacts {
+    /// Fence-crate aliases, including `crate` inside a fence crate.
+    alias_owners: BTreeMap<String, BTreeSet<usize>>,
+    /// Fences a FULLY test-gated file of this member may name: the member is a
+    /// higher crate (it transitively depends on the fence crate).
+    gated_fences: BTreeSet<usize>,
+}
+
+fn ta2_member_facts(
+    members: &BTreeMap<PathBuf, String>,
+    workspace: &Path,
+    fences: &[Ta2Fence],
+) -> Result<BTreeMap<PathBuf, Ta2MemberFacts>, String> {
+    let inherited = ta2_workspace_inherited(workspace)?;
+    let graph = ta2_dependency_graph(members, workspace)?;
+    let mut facts = BTreeMap::new();
+    for (root, package) in members {
+        let manifest = ta2_manifest(root)?;
+        let dependencies = ta2_manifest_dependencies(&manifest, inherited.as_ref())?;
+        let mut alias_owners: BTreeMap<String, BTreeSet<usize>> = BTreeMap::new();
+        let mut gated_fences = BTreeSet::new();
+        for (index, fence) in fences.iter().enumerate() {
+            let mut names = BTreeSet::from([fence.package.replace('-', "_")]);
+            if *package == fence.package {
+                names.insert("crate".to_string());
+            }
+            for (alias, target) in &dependencies {
+                if *target == fence.package {
+                    names.insert(alias.clone());
+                }
+            }
+            for name in names {
+                alias_owners.entry(name).or_default().insert(index);
+            }
+            if *package != fence.package && ta2_above(&graph, package, &fence.package) {
+                gated_fences.insert(index);
+            }
+        }
+        facts.insert(
+            root.clone(),
+            Ta2MemberFacts {
+                alias_owners,
+                gated_fences,
+            },
+        );
+    }
+    Ok(facts)
+}
+
+enum Ta2UseModule {
+    /// The module resolves to one or more fences; the second field is the
+    /// module path relative to the fence crate root.
+    Fence(Vec<usize>, Vec<String>),
+    /// The module resolves to a non-fence module (for example
+    /// `neovm_eval::emacs_core::lread::test_support`).
+    NotFence,
+    /// The module cannot be resolved (bare `test_support`, `self`/`super`
+    /// containing a test_support segment): fail closed.
+    Unresolved,
 }
 
 struct Ta2Visitor<'a> {
     file: &'a Path,
-    roots: BTreeSet<String>,
-    definition_line: Option<usize>,
+    package: &'a str,
+    fences: &'a [Ta2Fence],
+    /// Fence-crate aliases visible in this file, including `crate` inside a
+    /// fence crate; `use neovm_value as v;` adds `v` during the scan.
+    alias_owners: BTreeMap<String, BTreeSet<usize>>,
     /// B2: the file's every module route is test-support-gated, so it may name
-    /// a LOWER crate's fence through a resolved value alias.
-    gated_fence_ok: bool,
+    /// a LOWER crate's fence through a resolved fence alias. Only fences whose
+    /// crate this member transitively depends on are listed.
+    gated_fences: BTreeSet<usize>,
+    /// The fence whose definition file this is (same crate only): it may name
+    /// its own authority module.
+    own_definition: Option<usize>,
+    declaration_line: Option<usize>,
     violations: Vec<String>,
     value_scopes: Vec<BTreeSet<String>>,
 }
@@ -3996,25 +4123,113 @@ impl Ta2Visitor<'_> {
             .push(ta2_error(self.file, line_of(span), code, detail));
     }
 
+    fn fence_of_package(&self, package: &str) -> Option<usize> {
+        self.fences
+            .iter()
+            .position(|fence| fence.package == package)
+    }
+
+    /// FX-2 resolved-module matching: a module path imports a fence when it is
+    /// the `test_support` module itself, one of its ancestors (the crate
+    /// root), or lies inside `test_support::authority`. Any other module with
+    /// a `test_support` segment (lread, dbusbind, ...) is a different module.
+    fn fence_ancestor(path: &[String]) -> bool {
+        const FENCE: [&str; 2] = ["test_support", "authority"];
+        let path: Vec<&str> = path.iter().map(String::as_str).collect();
+        path.is_empty() || path == ["test_support"] || path.starts_with(&FENCE)
+    }
+
+    fn require_fence(&mut self, fence: usize, span: Span) {
+        if self.own_definition == Some(fence) || self.gated_fences.contains(&fence) {
+            return;
+        }
+        self.reject(
+            span,
+            "TA2_AUTHORITY_REFERENCE",
+            "authority references are restricted to core_tests, a fence's own definition files, and fully gated files of higher crates",
+        );
+    }
+
     fn check_path(&mut self, names: &[String], span: Span) {
         if let Some(index) = names.iter().position(|s| s == "test_support") {
             if names[index + 1..].iter().any(|s| s == "authority") {
-                // B2: a fully test-support-gated src file may name a LOWER
-                // crate's fence; the first segment must resolve through a
-                // value alias, never through this crate's own `crate`/`self`.
-                let lower_fence = self.gated_fence_ok
-                    && names.first().is_some_and(|name| self.roots.contains(name));
-                if !lower_fence {
-                    self.reject(span, "TA2_AUTHORITY_REFERENCE", "authority references are restricted to core_tests and the resolved defining module");
+                if index > 0 {
+                    if let Some(owners) = self.alias_owners.get(&names[0]).cloned() {
+                        for fence in owners {
+                            self.require_fence(fence, span);
+                        }
+                        return;
+                    }
+                    if names[0] == "crate" {
+                        if let Some(fence) = self.fence_of_package(self.package) {
+                            self.require_fence(fence, span);
+                        } else if self.own_definition.is_none() {
+                            self.reject(
+                                span,
+                                "TA2_AUTHORITY_REFERENCE",
+                                "crate::test_support::authority does not resolve to a signed fence module",
+                            );
+                        }
+                        return;
+                    }
+                }
+                // Bare `test_support::authority`, `self`/`super`, or an
+                // unknown root: no allowed alias resolves the fence. A fence
+                // definition file may still name its own submodule.
+                if self.own_definition.is_none() {
+                    self.reject(
+                        span,
+                        "TA2_AUTHORITY_REFERENCE",
+                        "authority path does not resolve through a fence crate alias",
+                    );
                 }
             }
         } else if names.iter().any(|s| s == "authority") {
+            if self.own_definition.is_some() {
+                return;
+            }
             self.reject(
                 span,
                 "TA2_UNRESOLVED_REFERENCE",
                 "authority path has no resolved test_support owner",
             );
         }
+    }
+
+    fn token_names(&mut self, names: &[String], span: Span) {
+        // FX-2: inside a macro token stream a lone `authority` ident is a
+        // field or local name, not a module path (`offset_of!(T, authority)`).
+        // Reaching the fence unqualified still requires an import that the
+        // use-tree rules reject, so this does not open a bypass.
+        if names.len() == 1 && names[0] == "authority" {
+            return;
+        }
+        self.check_path(names, span);
+    }
+
+    fn use_module(&self, prefix: &[String]) -> Ta2UseModule {
+        let Some(first) = prefix.first() else {
+            return Ta2UseModule::Unresolved;
+        };
+        if first == "crate" {
+            return match self.fence_of_package(self.package) {
+                Some(fence) => Ta2UseModule::Fence(vec![fence], prefix[1..].to_vec()),
+                None => Ta2UseModule::NotFence,
+            };
+        }
+        if let Some(owners) = self.alias_owners.get(first) {
+            return Ta2UseModule::Fence(owners.iter().copied().collect(), prefix[1..].to_vec());
+        }
+        if first == "self" || first == "super" {
+            if prefix.iter().any(|segment| segment == "test_support") {
+                return Ta2UseModule::Unresolved;
+            }
+            return Ta2UseModule::NotFence;
+        }
+        if first == "test_support" {
+            return Ta2UseModule::Unresolved;
+        }
+        Ta2UseModule::NotFence
     }
 
     fn use_tree(&mut self, tree: &UseTree, prefix: &mut Vec<String>) {
@@ -4038,12 +4253,33 @@ impl Ta2Visitor<'_> {
                     prefix.push(rename.ident.to_string());
                 }
                 self.check_path(prefix, rename.ident.span());
-                if prefix.last().is_some_and(|s| s == "test_support") {
-                    self.reject(rename.rename.span(), "TA2_TEST_SUPPORT_RENAME", "any test_support rename is fenced, including unused aliases and self aliases");
-                } else if prefix.len() == 1
-                    && prefix.first().is_some_and(|name| self.roots.contains(name))
-                {
-                    self.roots.insert(rename.rename.to_string());
+                match self.use_module(prefix) {
+                    Ta2UseModule::Fence(owners, module) if module.is_empty() => {
+                        // `use neovm_value as v;` imports the crate root, not
+                        // the fence: track the alias so a later
+                        // `v::test_support::authority` is still checked.
+                        for fence in owners {
+                            self.alias_owners
+                                .entry(rename.rename.to_string())
+                                .or_default()
+                                .insert(fence);
+                        }
+                    }
+                    Ta2UseModule::Fence(_, module) if Self::fence_ancestor(&module) => {
+                        self.reject(
+                            rename.rename.span(),
+                            "TA2_TEST_SUPPORT_RENAME",
+                            "rename resolves to a fence module or one of its ancestors",
+                        );
+                    }
+                    Ta2UseModule::Unresolved => {
+                        self.reject(
+                            rename.rename.span(),
+                            "TA2_TEST_SUPPORT_RENAME",
+                            "test_support rename does not resolve to a known non-fence module",
+                        );
+                    }
+                    _ => {}
                 }
                 if rename.ident != "self" {
                     prefix.pop();
@@ -4054,18 +4290,23 @@ impl Ta2Visitor<'_> {
                     self.use_tree(item, prefix);
                 }
             }
-            UseTree::Glob(glob) => {
-                if prefix.iter().any(|s| s == "test_support")
-                    || (prefix.len() == 1
-                        && prefix.first().is_some_and(|name| self.roots.contains(name)))
-                {
+            UseTree::Glob(glob) => match self.use_module(prefix) {
+                Ta2UseModule::Fence(_, module) if Self::fence_ancestor(&module) => {
                     self.reject(
                         glob.star_token.span,
                         "TA2_ANCESTOR_GLOB",
-                        "glob can import test_support or authority",
+                        "glob resolves to a fence module or one of its ancestors",
                     );
                 }
-            }
+                Ta2UseModule::Unresolved => {
+                    self.reject(
+                        glob.star_token.span,
+                        "TA2_ANCESTOR_GLOB",
+                        "glob module does not resolve to a known non-fence module",
+                    );
+                }
+                _ => {}
+            },
         }
     }
 
@@ -4136,7 +4377,7 @@ impl Ta2Visitor<'_> {
                     // Neither a proven lexical value nor a `.field` member is
                     // a module path. Qualified names still receive the fence.
                     if !bare_bound_value && !field_member {
-                        self.check_path(&names, first.span());
+                        self.token_names(&names, first.span());
                     }
                     index = next;
                     continue;
@@ -4249,16 +4490,23 @@ impl<'ast> Visit<'ast> for Ta2Visitor<'_> {
         visit::visit_path(self, path);
     }
     fn visit_item_mod(&mut self, module: &'ast syn::ItemMod) {
-        if module.ident == "authority" && self.definition_line == Some(line_of(module.ident.span()))
+        if module.ident == "authority"
+            && self.declaration_line == Some(line_of(module.ident.span()))
+            && module.content.is_none()
         {
-            return; // One actual declaration, including the inline defining body if present.
+            return; // The out-of-line declaration is not a reference site.
         }
         visit::visit_item_mod(self, module);
     }
     fn visit_item_extern_crate(&mut self, item: &'ast syn::ItemExternCrate) {
-        if self.roots.contains(&item.ident.to_string()) {
+        if let Some(owners) = self.alias_owners.get(&item.ident.to_string()).cloned() {
             if let Some((_, alias)) = &item.rename {
-                self.roots.insert(alias.to_string());
+                for fence in owners {
+                    self.alias_owners
+                        .entry(alias.to_string())
+                        .or_default()
+                        .insert(fence);
+                }
             }
         }
     }
@@ -4268,9 +4516,60 @@ impl<'ast> Visit<'ast> for Ta2Visitor<'_> {
     }
 }
 
+/// FX-2: a source that syn cannot parse (a truncated fixture or an incomplete
+/// macro body) no longer fails the whole scan. Such a file cannot participate
+/// in a resolved fence path, so only the exact token sequence
+/// `test_support :: authority` remains fail-closed.
+fn ta2_raw_fence_sequence(text: &str) -> Option<usize> {
+    let cleaned = cleaned_code(text);
+    let mut tokens: Vec<(String, usize)> = Vec::new();
+    let mut chars = cleaned.char_indices().peekable();
+    let mut line = 1usize;
+    while let Some((index, ch)) = chars.next() {
+        if ch == '\n' {
+            line += 1;
+            continue;
+        }
+        if ch.is_whitespace() {
+            continue;
+        }
+        if ch.is_ascii_alphabetic() || ch == '_' {
+            let start = index;
+            let mut end = index + ch.len_utf8();
+            while let Some(&(next, inner)) = chars.peek() {
+                if inner.is_ascii_alphanumeric() || inner == '_' {
+                    end = next + inner.len_utf8();
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            tokens.push((cleaned[start..end].to_string(), line));
+        } else {
+            tokens.push((ch.to_string(), line));
+        }
+    }
+    for window in tokens.windows(4) {
+        if window[0].0 == "test_support"
+            && window[1].0 == ":"
+            && window[2].0 == ":"
+            && window[3].0 == "authority"
+        {
+            return Some(window[0].1);
+        }
+    }
+    None
+}
+
 pub(crate) fn scan_authority_workspace(workspace: &Path) -> Result<(), Vec<String>> {
     let sources = discover_sources(workspace).map_err(|error| vec![error])?;
-    let definitions = ta2_definitions(&sources).map_err(|error| vec![error])?;
+    let fences = ta2_fences(&sources).map_err(|error| vec![error])?;
+    let mut members: BTreeMap<PathBuf, String> = BTreeMap::new();
+    for source in &sources {
+        members.insert(source.member_root.clone(), source.package.clone());
+    }
+    let member_facts =
+        ta2_member_facts(&members, workspace, &fences).map_err(|error| vec![error])?;
     let mut violations = Vec::new();
     // B2: a src file's every module route must be test-support-gated before it
     // may name a lower crate's fence. Compute the route map once per member.
@@ -4294,12 +4593,30 @@ pub(crate) fn scan_authority_workspace(workspace: &Path) -> Result<(), Vec<Strin
                 continue;
             }
         };
-        let (_, parsed) = match parse_file(&path) {
-            Ok(parsed) => parsed,
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
             Err(error) => {
-                violations.push(error);
+                violations.push(ta2_error(&path, 0, "TA2_SOURCE", &error.to_string()));
                 continue;
             }
+        };
+        let parsed = match syn::parse_file(&text) {
+            Ok(parsed) => Some(parsed),
+            Err(_) => {
+                // FX-2 token fallback instead of failing the whole scan.
+                if let Some(line) = ta2_raw_fence_sequence(&text) {
+                    violations.push(ta2_error(
+                        &path,
+                        line,
+                        "TA2_AUTHORITY_REFERENCE",
+                        "unparseable source names test_support::authority",
+                    ));
+                }
+                None
+            }
+        };
+        let Some(parsed) = parsed else {
+            continue;
         };
         let allowed_core = if source.package == "neovm-core" {
             let expected = source.member_root.join("core_tests");
@@ -4320,39 +4637,52 @@ pub(crate) fn scan_authority_workspace(workspace: &Path) -> Result<(), Vec<Strin
         } else {
             false
         };
-        if allowed_core
-            || (source.package == "neovm-value" && definitions.authority_files.contains(&path))
-        {
+        if allowed_core {
             continue;
         }
-        let roots = match ta2_value_aliases(workspace, &source.member_root) {
-            Ok(roots) => roots,
-            Err(error) => {
-                violations.push(error);
+        let facts = match member_facts.get(&source.member_root) {
+            Some(facts) => facts,
+            None => {
+                violations.push(ta2_error(&path, 0, "TA2_SOURCE", "member facts missing"));
                 continue;
             }
         };
-        let definition_line = definitions.declaration.as_ref().and_then(|(file, line)| {
-            (file == &path && source.package == "neovm-value").then_some(*line)
+        let own_definition = fences.iter().position(|fence| {
+            fence.package == source.package && fence.definition_files.contains(&path)
         });
+        let declaration_line = fences
+            .iter()
+            .filter(|fence| fence.package == source.package)
+            .find_map(|fence| {
+                fence
+                    .declaration
+                    .as_ref()
+                    .and_then(|(file, line)| (file == &path).then_some(*line))
+            });
         let fully_gated = gated_routes
             .get(&source.member_root)
             .and_then(|map| map.get(&path).copied())
             .unwrap_or(false);
-        let gated_fence_ok = fully_gated && source.package != "neovm-value";
         let mut visitor = Ta2Visitor {
             file: &path,
-            roots,
-            definition_line,
-            gated_fence_ok,
+            package: &source.package,
+            fences: &fences,
+            alias_owners: facts.alias_owners.clone(),
+            gated_fences: if fully_gated {
+                facts.gated_fences.clone()
+            } else {
+                BTreeSet::new()
+            },
+            own_definition,
+            declaration_line,
             violations: Vec::new(),
             value_scopes: Vec::new(),
         };
         // Resolve crate aliases before visiting references, regardless of declaration order.
         loop {
-            let before = visitor.roots.len();
+            let before = visitor.alias_owners.len();
             visitor.visit_file(&parsed);
-            if visitor.roots.len() == before {
+            if visitor.alias_owners.len() == before {
                 break;
             }
         }
@@ -4383,18 +4713,27 @@ fn architecture_test_support_authority_is_named_only_from_core_tests() {
 fn ta2_fixture(root: &Path) {
     std::fs::write(
         root.join("Cargo.toml"),
-        "[workspace]\nmembers = [\"core\", \"value\", \"other\"]\n",
+        "[workspace]\nmembers = [\"core\", \"value\", \"eval\", \"other\"]\n",
     )
     .unwrap();
-    for (dir, package) in [
-        ("core", "neovm-core"),
-        ("value", "neovm-value"),
-        ("other", "other"),
+    for (dir, package, dependencies) in [
+        (
+            "core",
+            "neovm-core",
+            "neovm-value = { path = \"../value\" }\nneovm-eval = { path = \"../eval\" }\n",
+        ),
+        ("value", "neovm-value", ""),
+        (
+            "eval",
+            "neovm-eval",
+            "neovm-value = { path = \"../value\" }\n",
+        ),
+        ("other", "other", ""),
     ] {
         std::fs::create_dir_all(root.join(dir).join("src")).unwrap();
         std::fs::write(
             root.join(dir).join("Cargo.toml"),
-            format!("[package]\nname = \"{package}\"\nversion = \"0.0.0\"\nedition = \"2024\"\n"),
+            format!("[package]\nname = \"{package}\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[dependencies]\n{dependencies}"),
         )
         .unwrap();
         std::fs::write(root.join(dir).join("src/lib.rs"), "").unwrap();
@@ -4413,6 +4752,16 @@ fn ta2_fixture(root: &Path) {
     std::fs::write(
         root.join("value/src/test_support/authority.rs"),
         "pub fn forged() {}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("eval/src/lib.rs"),
+        "#[cfg(any(test, feature = \"test-support\"))] pub mod test_support;\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("eval/src/test_support.rs"),
+        "pub mod authority { pub fn harness() {} }\n",
     )
     .unwrap();
     std::fs::create_dir_all(root.join("core/core_tests")).unwrap();
@@ -4541,5 +4890,161 @@ fn architecture_ta2_guard_self_test() {
     assert!(
         scan_authority_workspace(root).is_ok(),
         "TA2_RESTORED_GATED_FENCE"
+    );
+    // FX-2 (i): MULTI-FENCE. The eval fence follows the same rules as the
+    // value fence: core_tests or a fully gated higher-crate src file.
+    let eval_probe = root.join("core/src/eval_fence_probe.rs");
+    std::fs::write(
+        &eval_probe,
+        "use neovm_eval::test_support::authority::harness;\n",
+    )
+    .unwrap();
+    assert!(
+        scan_authority_workspace(root).is_err(),
+        "TA2_MUTATION_EVAL_FENCE_SRC"
+    );
+    std::fs::write(
+        &core_lib,
+        format!(
+            "{core_lib_original}\n#[cfg(any(test, feature = \"test-support\"))]\npub mod eval_fence_probe;\n"
+        ),
+    )
+    .unwrap();
+    assert!(
+        scan_authority_workspace(root).is_ok(),
+        "TA2_GATED_EVAL_FENCE"
+    );
+    std::fs::write(
+        root.join("core/core_tests/eval_fence_allowed.rs"),
+        "use neovm_eval::test_support::authority::harness;\n",
+    )
+    .unwrap();
+    assert!(
+        scan_authority_workspace(root).is_ok(),
+        "TA2_CORE_TESTS_EVAL_FENCE"
+    );
+    std::fs::remove_file(root.join("core/core_tests/eval_fence_allowed.rs")).unwrap();
+    std::fs::write(&core_lib, &core_lib_original).unwrap();
+    std::fs::remove_file(&eval_probe).unwrap();
+    assert!(
+        scan_authority_workspace(root).is_ok(),
+        "TA2_RESTORED_EVAL_FENCE"
+    );
+    // FX-2 (i): each crate's own fence definition file may name its own
+    // authority module; no other src file of that crate may.
+    let eval_support = root.join("eval/src/test_support.rs");
+    let eval_support_original = std::fs::read_to_string(&eval_support).unwrap();
+    std::fs::write(
+        &eval_support,
+        format!(
+            "{eval_support_original}\npub fn own_probe() {{ crate::test_support::authority::harness(); }}\n"
+        ),
+    )
+    .unwrap();
+    assert!(
+        scan_authority_workspace(root).is_ok(),
+        "TA2_OWN_FENCE_DEFINITION"
+    );
+    let eval_other = root.join("eval/src/own_probe.rs");
+    std::fs::write(
+        &eval_other,
+        "pub fn own_probe() { crate::test_support::authority::harness(); }\n",
+    )
+    .unwrap();
+    assert!(
+        scan_authority_workspace(root).is_err(),
+        "TA2_MUTATION_OWN_FENCE_SRC"
+    );
+    std::fs::remove_file(&eval_other).unwrap();
+    std::fs::write(&eval_support, eval_support_original).unwrap();
+    assert!(
+        scan_authority_workspace(root).is_ok(),
+        "TA2_RESTORED_OWN_FENCE_DEFINITION"
+    );
+    // FX-2 (ii): RESOLVED-MODULE matching. A glob or rename of a test_support
+    // module that resolves elsewhere is not the fence (lread, dbusbind).
+    let precision = root.join("core/src/precision_probe.rs");
+    std::fs::write(
+        &precision,
+        "use neovm_eval::emacs_core::lread::test_support::*;\nuse crate::emacs_core::dbusbind::test_support as event;\n",
+    )
+    .unwrap();
+    assert!(
+        scan_authority_workspace(root).is_ok(),
+        "TA2_RESOLVED_MODULE_PRECISION"
+    );
+    std::fs::write(&precision, "use neovm_eval::test_support::*;\n").unwrap();
+    assert!(
+        scan_authority_workspace(root).is_err(),
+        "TA2_MUTATION_FENCE_GLOB"
+    );
+    std::fs::write(&precision, "use crate::test_support as ts;\n").unwrap();
+    assert!(
+        scan_authority_workspace(root).is_ok(),
+        "TA2_RESOLVED_CRATE_MODULE"
+    );
+    std::fs::write(&precision, "use neovm_eval::test_support as ts;\n").unwrap();
+    assert!(
+        scan_authority_workspace(root).is_err(),
+        "TA2_MUTATION_FENCE_RENAME"
+    );
+    std::fs::write(
+        &precision,
+        "use neovm_value as v;\nfn probe() { v::test_support::authority::forged(); }\n",
+    )
+    .unwrap();
+    assert!(
+        scan_authority_workspace(root).is_err(),
+        "TA2_MUTATION_ALIASED_FENCE"
+    );
+    std::fs::write(&precision, "use neovm_value as v;\n").unwrap();
+    assert!(scan_authority_workspace(root).is_ok(), "TA2_ALIAS_ALONE");
+    // FX-2 (ii): a lone `authority` token inside a macro stream is a field,
+    // not a module path (`offset_of!`); qualified uses stay fenced.
+    std::fs::write(
+        &precision,
+        "fn probe() { let _ = offset_of!(HashTableObj, table.data.authority); let _ = offset_of!(HashTableStorage, authority); }\n",
+    )
+    .unwrap();
+    assert!(
+        scan_authority_workspace(root).is_ok(),
+        "TA2_FIELD_TOKEN_PRECISION"
+    );
+    std::fs::write(&precision, "fn probe() { probe!(authority::forge()); }\n").unwrap();
+    assert!(
+        scan_authority_workspace(root).is_err(),
+        "TA2_MUTATION_QUALIFIED_TOKEN"
+    );
+    std::fs::write(
+        &precision,
+        "macro_rules! m { () => { neovm_eval::test_support::authority::harness(); }; }\n",
+    )
+    .unwrap();
+    assert!(
+        scan_authority_workspace(root).is_err(),
+        "TA2_MUTATION_FENCE_TOKEN_SEQUENCE"
+    );
+    std::fs::remove_file(&precision).unwrap();
+    // FX-2 (ii): TOKEN FALLBACK for unparseable sources. Only the exact
+    // `test_support :: authority` sequence stays fail-closed.
+    let broken = root.join("other/src/broken_fixture.rs");
+    std::fs::write(&broken, "fn truncated() {\n    let x = 1;\n").unwrap();
+    assert!(
+        scan_authority_workspace(root).is_ok(),
+        "TA2_UNPARSEABLE_FALLBACK"
+    );
+    std::fs::write(
+        &broken,
+        "use neovm_value::test_support::authority;\nfn truncated() {\n",
+    )
+    .unwrap();
+    assert!(
+        scan_authority_workspace(root).is_err(),
+        "TA2_MUTATION_UNPARSEABLE_FENCE_SEQUENCE"
+    );
+    std::fs::remove_file(&broken).unwrap();
+    assert!(
+        scan_authority_workspace(root).is_ok(),
+        "TA2_RESTORED_UNPARSEABLE"
     );
 }
