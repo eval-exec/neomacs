@@ -5724,10 +5724,10 @@ pub fn builtin_line_pixel_height(
 fn selected_line_pixel_height(
     eval: &mut neovm_eval::emacs_core::eval::Context,
 ) -> Result<Option<i64>, Flow> {
-    let Some((fid, wid)) = resolve_live_window_identity(&eval.frames, None)? else {
+    let Some((fid, wid)) = resolve_live_window_identity(&eval.frame_manager(), None)? else {
         return Ok(None);
     };
-    let Some(frame) = eval.frames.get(fid) else {
+    let Some(frame) = eval.frame_manager().get(fid) else {
         return Ok(None);
     };
     if frame.effective_window_system().is_none() {
@@ -5749,14 +5749,13 @@ fn selected_line_pixel_height(
     // point marker, which the snapshot freshness token records.  Sync it, as
     // a layout query does, so rows laid out for an older point are rejected.
     if eval
-        .frames
+        .frame_manager()
         .selected_frame()
         .is_some_and(|frame| frame.id == fid)
     {
+        let (frames, buffers) = eval.frame_manager_and_buffers_mut();
         crate::emacs_core::window_cmds::remember_selected_window_point_in_state(
-            &mut eval.frames,
-            &mut eval.edit.buffers,
-            fid,
+            frames, buffers, fid,
         );
     }
     let row_height = |snapshot: &WindowDisplaySnapshot| {

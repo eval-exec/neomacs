@@ -495,14 +495,16 @@ impl WindowDisplayContextExt for neovm_eval::emacs_core::eval::Context {
             ) -> crate::window::WindowLayoutQueryOutcome
             + 'static,
     {
-        self.window_layout_query_adapter = WindowLayoutQueryAdapter::Ready(Box::new(query));
+        self.with_window_layout_query_adapter_mut(|slot| {
+            *slot = WindowLayoutQueryAdapter::Ready(Box::new(query));
+        });
     }
 
     /// Whether a layout query is running, so a nested one would be refused
     /// as `LayoutBusy`.
     fn window_layout_query_running(&self) -> bool {
         matches!(
-            self.window_layout_query_adapter,
+            self.window_layout_query_adapter(),
             WindowLayoutQueryAdapter::Running
         )
     }
@@ -556,13 +558,14 @@ impl WindowDisplayContextExt for neovm_eval::emacs_core::eval::Context {
                 frames, buffers, frame_id,
             );
         }
-        let adapter = std::mem::replace(
-            &mut self.window_layout_query_adapter,
-            WindowLayoutQueryAdapter::Running,
-        );
+        let adapter = self.with_window_layout_query_adapter_mut(|slot| {
+            std::mem::replace(slot, WindowLayoutQueryAdapter::Running)
+        });
         let mut query = match adapter {
             WindowLayoutQueryAdapter::Unavailable => {
-                self.window_layout_query_adapter = WindowLayoutQueryAdapter::Unavailable;
+                self.with_window_layout_query_adapter_mut(|slot| {
+                    *slot = WindowLayoutQueryAdapter::Unavailable;
+                });
                 return crate::window::WindowLayoutQueryOutcome::Unavailable;
             }
             WindowLayoutQueryAdapter::Running => {
@@ -595,7 +598,9 @@ impl WindowDisplayContextExt for neovm_eval::emacs_core::eval::Context {
                 .buffers
                 .restore_outermost_restrictions(saved_restrictions);
         }
-        self.window_layout_query_adapter = WindowLayoutQueryAdapter::Ready(query);
+        self.with_window_layout_query_adapter_mut(|slot| {
+            *slot = WindowLayoutQueryAdapter::Ready(query);
+        });
         record
     }
 

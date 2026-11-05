@@ -3147,8 +3147,7 @@ pub struct Context {
     /// graph, so the frontend installs this typed seam. Taking the callback
     /// while invoking it is tracked explicitly: recursive/exclusively-borrowed
     /// queries report `LayoutBusy` instead of silently returning stale state.
-    #[doc(hidden)]
-    pub window_layout_query_adapter: WindowLayoutQueryAdapter,
+    pub(crate) window_layout_query_adapter: WindowLayoutQueryAdapter,
     /// Native anchor for the next Lisp-driven menu-bar popup.
     #[doc(hidden)]
     pub pending_menu_bar_popup_anchor: Option<super::MenuBarPopupAnchor>,
@@ -5474,6 +5473,29 @@ impl Context {
     // outside this crate actually write, and its callers are recorded in the
     // signed R-b rows.  Every `_mut` borrows the Context exclusively, so the
     // World's one-owner-at-a-time rule is unchanged.
+
+    /// Read the layout-query adapter state (the LayoutBusy observation).
+    #[doc(hidden)]
+    #[inline]
+    pub fn window_layout_query_adapter(&self) -> &WindowLayoutQueryAdapter {
+        &self.window_layout_query_adapter
+    }
+
+    /// Scoped mutation for the frontend's single install/take boundary.
+    ///
+    /// The field is not writable through any returned reference: the only
+    /// transitions are install (Ready), take (replace with Running), and the
+    /// two restore arms that follow a take.  Keeping them inside this
+    /// callback preserves the LayoutBusy invariant without exposing a
+    /// writable field to downstream crates.
+    #[doc(hidden)]
+    #[inline]
+    pub fn with_window_layout_query_adapter_mut<R>(
+        &mut self,
+        f: impl FnOnce(&mut WindowLayoutQueryAdapter) -> R,
+    ) -> R {
+        f(&mut self.window_layout_query_adapter)
+    }
 
     #[doc(hidden)]
     #[inline]
@@ -8419,10 +8441,6 @@ mod admission;
 mod global_state;
 mod green;
 
-#[cfg(feature = "test-support")]
-#[doc(hidden)]
-pub use admission::ThreadingMode;
-#[cfg(not(feature = "test-support"))]
 pub(crate) use admission::ThreadingMode;
 #[doc(hidden)]
 pub use green::switch::MainNativeHandoff;

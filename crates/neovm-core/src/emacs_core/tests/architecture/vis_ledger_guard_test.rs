@@ -1984,6 +1984,13 @@ fn declaration_name(line: &str) -> Option<String> {
                 advanced = true;
             }
         }
+        // An ABI string follows `extern`: `extern "C" fn ...`.
+        if let Some(tail) = rest.strip_prefix('"')
+            && let Some(close) = tail.find('"')
+        {
+            rest = tail[close + 1..].trim_start();
+            advanced = true;
+        }
         if !advanced {
             break;
         }
@@ -1994,6 +2001,16 @@ fn declaration_name(line: &str) -> Option<String> {
         if let Some(close) = rest[1..].find('"') {
             rest = rest[close + 2..].trim_start();
         }
+    }
+    // A `visibility::make(pub)` on a re-export names the imported item.
+    if let Some(tail) = rest.strip_prefix("use ") {
+        let tree = tail.trim().trim_end_matches(';').trim();
+        let last = tree.rsplit("::").next().unwrap_or(tree).trim();
+        let last = last.trim_matches(|c| c == '{' || c == '}' || c == ' ');
+        if last.is_empty() || last == "*" {
+            return None;
+        }
+        return declaration_ident(last);
     }
     for keyword in [
         "fn ", "struct ", "enum ", "union ", "trait ", "type ", "static ", "mod ",
@@ -2328,6 +2345,21 @@ mod tests {
             declaration_name("extern \"C\" fn helper() {}"),
             Some("helper".to_owned())
         );
+        // An ABI string follows `extern`: `extern "C" fn ...`.
+        assert_eq!(
+            declaration_name("pub extern \"C\" fn aset_multibyte() {}"),
+            Some("aset_multibyte".to_owned())
+        );
+        // A widened `use` re-export names the imported item. The leaf is the
+        // leading identifier of the final path segment, so a braced list names
+        // its first item and a glob names nothing.
+        assert_eq!(
+            declaration_name(
+                "pub(crate) use child_status::{UnrecordedStatusRead, UpdateStatusSite};"
+            ),
+            Some("UnrecordedStatusRead".to_owned())
+        );
+        assert_eq!(declaration_name("pub(crate) use helpers::*;"), None);
     }
 
     #[test]

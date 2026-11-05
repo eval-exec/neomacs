@@ -52,24 +52,12 @@ use std::ptr::NonNull;
 
 /// How a World runs Lisp threads, fixed at its construction.
 ///
-/// TEST-SUPPORT-VIS note: this enum is V1-blocked for a VIS row because the
-/// trybuild goldens name `eval::admission::ThreadingMode`; the documented
-/// cfg-split spelling keeps the production visibility and exposes it only in
-/// the test-support build, pending the path-qualified exemption ruling (same
-/// class as oracleb's parse_loop::{Entry,Plain} request).
-#[cfg(not(feature = "test-support"))]
+/// TEST-SUPPORT-VIS: the enum stays crate-private. The compile-fail goldens
+/// name `eval::admission::ThreadingMode` (`Cell<...>: Sync` diagnostics), and
+/// V1 is fail-closed over goldens; re-homed Green tests use
+/// `Context::set_green_threading_mode_at_construction_for_test` instead.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ThreadingMode {
-    /// `make-thread` simulates threads in the one owner, swapping dynamic
-    /// bindings in place (`threads`); there is no admission.
-    Sim,
-    /// Lisp threads are owners with owner-local bindings, after admission.
-    Green,
-}
-/// How a World runs Lisp threads, fixed at its construction.
-#[cfg(feature = "test-support")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ThreadingMode {
     /// `make-thread` simulates threads in the one owner, swapping dynamic
     /// bindings in place (`threads`); there is no admission.
     Sim,
@@ -248,6 +236,16 @@ impl Context {
         let mut ctx = Self::new(_hooks);
         ctx.set_threading_mode_at_construction(mode);
         ctx
+    }
+
+    /// Test-support: fix a freshly constructed Context to Green threading.
+    ///
+    /// Re-homed provider tests need a Green World but must not name the
+    /// crate-private `ThreadingMode` enum (TEST-SUPPORT-VIS V1: the
+    /// compile-fail goldens name it). This is the named test-support seam.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn set_green_threading_mode_at_construction_for_test(&mut self) {
+        self.set_threading_mode_at_construction(ThreadingMode::Green);
     }
 
     /// Admit Lisp threads in this Green World: the one-time, sticky move to

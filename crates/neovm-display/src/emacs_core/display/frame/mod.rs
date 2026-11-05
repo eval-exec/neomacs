@@ -1175,7 +1175,7 @@ fn move_gui_frame_window(
     left: Option<FramePositionSpec>,
     top: Option<FramePositionSpec>,
 ) -> Result<(), Flow> {
-    let Some(frame) = eval.frames.get(fid) else {
+    let Some(frame) = eval.frame_manager().get(fid) else {
         return Ok(());
     };
     if frame.effective_window_system().is_none() || frame.parent_frame.as_frame_id().is_some() {

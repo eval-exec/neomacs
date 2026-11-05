@@ -67,7 +67,7 @@ fn green_timed_wait_context(sit_for: bool) -> Context {
     #[cfg(feature = "jit")]
     neovm_eval::emacs_core::jit::force_jit_off_for_test(true);
     let mut context = crate::emacs_core::eval_hook_installers::new_context();
-    context.set_threading_mode_at_construction(neovm_eval::emacs_core::eval::ThreadingMode::Green);
+    context.set_green_threading_mode_at_construction_for_test();
     if sit_for {
         let source =
             std::fs::read_to_string(crate::test_utils::workspace_root().join("lisp/subr.el"))
