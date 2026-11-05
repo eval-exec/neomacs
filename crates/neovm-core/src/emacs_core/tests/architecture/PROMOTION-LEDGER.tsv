@@ -25,7 +25,6 @@ BoolVectorView	use	pub(crate)	crates/neovm-value/src/boolvec/mod.rs:256	emacs_co
 BufferByteLen	use	pub(crate)	crates/neovm-value/src/alloc/mod.rs:82	emacs_core::alloc	bulk
 BytecodeExtras	struct	pub(crate)	crates/neovm-value/src/tagged/pdump_image.rs:22	tagged::pdump_image	bulk
 BytecodeInteractiveProbe	struct	pub(crate)	crates/neovm-value/src/value/mod.rs:343	emacs_core::value	bulk
-BytecodeSemantics	struct	pub(crate)	crates/neovm-value/src/value/mod.rs:2422	emacs_core::value	bulk
 CARD_CHUNK_SHIFT	const	pub(crate)	crates/neovm-value/src/tagged/gc/card_table.rs:43	tagged::gc	bulk
 CARD_DIRTY	const	pub(crate)	crates/neovm-value/src/tagged/gc/card_table.rs:50	tagged::gc	bulk
 CARD_INDEX_MASK	const	pub(crate)	crates/neovm-value/src/tagged/gc/card_table.rs:35	tagged::gc	bulk
@@ -80,7 +79,6 @@ FormalRole	enum	pub(crate)	crates/neovm-value/src/tagged/bytecode/function_slots
 FormalStep	enum	pub(crate)	crates/neovm-value/src/tagged/bytecode/function_slots.rs:61	tagged::bytecode::function_slots	bulk
 FrozenFunctionRoots	enum	pub(crate)	crates/neovm-value/src/tagged/gc/mutator_registration/keeper.rs:10	tagged::gc	seal-type: TOKEN privacy ledger 17f6ac250b; fields private, no new ctor; guard rows in SEAL-GUARD-ROWS-gapsurvey.tsv; caller world/parallel_roots.rs
 FrozenLegacyRoots	struct	pub(crate)	crates/neovm-value/src/tagged/gc/mutator_registration/keeper.rs:19	tagged::gc	seal-type: TOKEN privacy ledger 17f6ac250b; fields private, no new ctor; guard rows in SEAL-GUARD-ROWS-gapsurvey.tsv; caller world/parallel_roots.rs
-FunctionCellObserver	struct	pub(crate)	crates/neovm-value/src/symbol/function_cell_observer.rs:27	emacs_core::symbol	bulk
 FunctionCellSnapshot	enum	pub(crate)	crates/neovm-value/src/symbol/mod.rs:1026	emacs_core::symbol	bulk
 FunctionEpoch	struct	pub(crate)	crates/neovm-value/src/symbol/mod.rs:772	emacs_core::symbol	bulk
 FunctionSourceIdentity	enum	pub(crate)	crates/neovm-value/src/value/mod.rs:56	emacs_core::value	bulk
@@ -125,7 +123,6 @@ IterativeArgRange	struct	pub(crate)	crates/neovm-value/src/tagged/bytecode/chunk
 JitHeapState	struct	pub(crate)	crates/neovm-value/src/tagged/gc/jit_state.rs:36	tagged::gc	bulk
 JoinObservation	enum	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:227	heap_types::threading	bulk
 KeeperWorldDesignator	use	pub(crate)	crates/neovm-value/src/symbol/parallel.rs:5	emacs_core::symbol::parallel	seal retained-World TOKEN: private fields, retained borrow, owner-thread marker; unsafe exact mint only; upper crates/neovm-core/src/emacs_core/runtime/eval/world/parallel_roots.rs:139,154
-KeeperWorldDesignator::new	method	pub(crate)	crates/neovm-value/src/symbol/parallel/keeper.rs:27	emacs_core::symbol::parallel	seal MINT: unchanged retained keeper borrow/thread/identity Safety contract; exact sole upper crates/neovm-core/src/emacs_core/runtime/eval/world/parallel_roots.rs:154 Baton::keeper_designator
 KeyboardBindingOwner	struct	pub(crate)	crates/neovm-value/src/forward/mod.rs:974	emacs_core::forward	bulk
 LISP_BOOL_FWD_VALUE_OFFSET	const	pub(crate)	crates/neovm-value/src/forward/mod.rs:756	emacs_core::forward	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/runtime/jit/compile/lowering.rs:1529:37
 LISP_INT_FWD_VALUE_OFFSET	const	pub(crate)	crates/neovm-value/src/forward/mod.rs:698	emacs_core::forward	bulk
@@ -166,16 +163,16 @@ ObarraySymbolCellSkipGuard	struct	pub(crate)	crates/neovm-value/src/symbol/mod.r
 OrderedFilterMask	type	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs:56	heap_types::overlay_storage::ordered	pc1-d per peer ruling 15:49Z; tuple field private; callers buffer/overlay_index.rs:19
 OrderedFilterMask::ALL	const	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs:62	heap_types::overlay_storage::ordered	pc1-d per peer ruling 15:49Z member: exactly the consts/methods core uses
 OrderedFilterMask::EMPTY	const	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs:60	heap_types::overlay_storage::ordered	pc1-d per peer ruling 15:49Z member: exactly the consts/methods core uses
-OrderedFilterMask::contains	fn	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs:80	heap_types::overlay_storage::ordered	pc1-d per peer ruling 15:49Z member: exactly the consts/methods core uses
-OrderedFilterMask::intersects	fn	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs:71	heap_types::overlay_storage::ordered	pc1-d per peer ruling 15:49Z member: exactly the consts/methods core uses
-OrderedFilterMask::with_bit	fn	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs:65	heap_types::overlay_storage::ordered	pc1-d per peer ruling 15:49Z member: exactly the consts/methods core uses
+OrderedFilterMask::contains	method	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs:80	heap_types::overlay_storage::ordered	pc1-d per peer ruling 15:49Z member: exactly the consts/methods core uses
+OrderedFilterMask::intersects	method	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs:71	heap_types::overlay_storage::ordered	pc1-d per peer ruling 15:49Z member: exactly the consts/methods core uses
+OrderedFilterMask::with_bit	method	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs:65	heap_types::overlay_storage::ordered	pc1-d per peer ruling 15:49Z member: exactly the consts/methods core uses
 OrderedFilteredRecord	trait	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs:120	heap_types::overlay_storage::ordered	companion name imported at buffer/overlay_index.rs:19 / overlay_bplus.rs:2 glob; vis-only, members default
 OrderedRecordRelocation	enum	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs:127	heap_types::overlay_storage::ordered	companion name imported at buffer/overlay_index.rs:19 / overlay_bplus.rs:2 glob; vis-only, members default
 OrderedShiftRecord	trait	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs:97	heap_types::overlay_storage::ordered	companion name imported at buffer/overlay_index.rs:19 / overlay_bplus.rs:2 glob; vis-only, members default
 OrderedShiftTree	type	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs:233	heap_types::overlay_storage::ordered	companion name imported at buffer/overlay_index.rs:19 / overlay_bplus.rs:2 glob; vis-only, members default
-OrderedShiftTree::for_each_match	fn	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs:810	heap_types::overlay_storage::ordered	tree member core calls (matches_owned x3, from_records, for_each_match); cargo check confirms no further member needed
-OrderedShiftTree::from_records	fn	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs:285	heap_types::overlay_storage::ordered	tree member core calls (matches_owned x3, from_records, for_each_match); cargo check confirms no further member needed
-OrderedShiftTree::matches_owned	fn	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs:796	heap_types::overlay_storage::ordered	tree member core calls (matches_owned x3, from_records, for_each_match); cargo check confirms no further member needed
+OrderedShiftTree::for_each_match	method	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs:810	heap_types::overlay_storage::ordered	tree member core calls (matches_owned x3, from_records, for_each_match); cargo check confirms no further member needed
+OrderedShiftTree::from_records	method	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs:285	heap_types::overlay_storage::ordered	tree member core calls (matches_owned x3, from_records, for_each_match); cargo check confirms no further member needed
+OrderedShiftTree::matches_owned	method	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs:796	heap_types::overlay_storage::ordered	tree member core calls (matches_owned x3, from_records, for_each_match); cargo check confirms no further member needed
 OrderedTreeMatches	type	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs:1881	heap_types::overlay_storage::ordered	companion name imported at buffer/overlay_index.rs:19 / overlay_bplus.rs:2 glob; vis-only, members default
 OrderedTreeQuery	trait	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs:1819	heap_types::overlay_storage::ordered	companion name imported at buffer/overlay_index.rs:19 / overlay_bplus.rs:2 glob; vis-only, members default
 OverlayBatchOrder	enum	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/mod.rs:24	heap_types::overlay_storage	bulk
@@ -185,8 +182,8 @@ POLY	const	pub(crate)	crates/neovm-value/src/value/jit_runtime/feedback.rs:24	em
 PreparedHofBuiltin	struct	pub(crate)	crates/neovm-value/src/tagged/gc/mutator_registration/symbol_authority/functions/hof.rs:13	tagged::gc	seal-type: TOKEN privacy ledger 17f6ac250b; fields private, no new ctor; guard rows in SEAL-GUARD-ROWS-gapsurvey.tsv; caller jit/parallel.rs
 PreparedUnaryFunction	struct	pub(crate)	crates/neovm-value/src/tagged/gc/mutator_registration/symbol_authority/functions/unary.rs:10	tagged::gc	seal-type: TOKEN privacy ledger 17f6ac250b; fields private, no new ctor; guard rows in SEAL-GUARD-ROWS-gapsurvey.tsv; caller jit/parallel.rs
 ProducerSymbolName	struct	pub(crate)	crates/neovm-value/src/value/mod.rs:2637	emacs_core::value	pc1-d DATA: approved351 ProducerSymbolName; upper caller crates/neovm-core/src/face.rs:15,2374; existing checks/bodies/fields unchanged
-ProducerSymbolName::from_value	fn	pub(crate)	crates/neovm-value/src/value/mod.rs:2647	emacs_core::value	pc1-d DATA: approved351 ProducerSymbolName::from_value; upper caller crates/neovm-core/src/face.rs:2374,2446; existing checks/bodies/fields unchanged
-ProducerSymbolName::spelling	fn	pub(crate)	crates/neovm-value/src/value/mod.rs:2658	emacs_core::value	pc1-d DATA: approved351 ProducerSymbolName::spelling; upper caller crates/neovm-core/src/face.rs:2394; existing checks/bodies/fields unchanged
+ProducerSymbolName::from_value	method	pub(crate)	crates/neovm-value/src/value/mod.rs:2647	emacs_core::value	pc1-d DATA: approved351 ProducerSymbolName::from_value; upper caller crates/neovm-core/src/face.rs:2374,2446; existing checks/bodies/fields unchanged
+ProducerSymbolName::spelling	method	pub(crate)	crates/neovm-value/src/value/mod.rs:2658	emacs_core::value	pc1-d DATA: approved351 ProducerSymbolName::spelling; upper caller crates/neovm-core/src/face.rs:2394; existing checks/bodies/fields unchanged
 PropertyPlistApplication	enum	pub(crate)	crates/neovm-value/src/value/text_props.rs:2412	emacs_core::value::text_props	bulk
 PublicationView	type	pub(crate)	crates/neovm-value/src/tagged/gc/symbol_table/publication.rs:349	tagged::gc::symbol_table::publication	pc1-d: DATA privacy row; callers jit/parallel.rs:7,61; load() stays pub(crate)
 RecordLen	use	pub(crate)	crates/neovm-value/src/alloc/mod.rs:87	emacs_core::alloc	bulk
@@ -207,7 +204,6 @@ SXHASH_MAX_LEN	const	pub(crate)	crates/neovm-value/src/hashtab/mod.rs:58	emacs_c
 SYMBOL_FLAGS_REDIRECT_MASK	const	pub(crate)	crates/neovm-value/src/symbol/mod.rs:1144	emacs_core::symbol	bulk
 SYMCELL_INLINE_WRITE_MASK	const	pub(crate)	crates/neovm-value/src/symbol/mod.rs:1155	emacs_core::symbol	bulk
 SafeTailGuard	struct	pub(crate)	crates/neovm-value/src/symbol/plist_core.rs:178	emacs_core::symbol::plist_core	pc1-d DATA: signed plist addendum; private traversal fields, existing constructor/method bodies unchanged; upper crates/neovm-core/src/emacs_core/runtime/plist/mod.rs:15
-ScratchRootHooks	struct	pub(crate)	crates/neovm-value/src/value/scratch_bridge.rs:15	emacs_core::value::scratch_bridge	bulk
 SetInternalAlist	struct	pub(crate)	crates/neovm-value/src/symbol/mod.rs:584	emacs_core::symbol	bulk
 ShiftedTextPropertySource	struct	pub(crate)	crates/neovm-value/src/value/text_props.rs:2430	emacs_core::value::text_props	bulk
 SignalDelivery	enum	pub(crate)	crates/neovm-value/src/error/mod.rs:482	emacs_core::error	bulk
@@ -220,7 +216,6 @@ StoredThreadEvent	struct	pub(crate)	crates/neovm-value/src/heap_types/threading.
 StringByteLen	use	pub(crate)	crates/neovm-value/src/alloc/mod.rs:90	emacs_core::alloc	bulk
 StringCharacterCountKind	enum	pub(crate)	crates/neovm-value/src/heap_types.rs:156	heap_types	bulk
 SymbolBacking	struct	pub(crate)	crates/neovm-value/src/symbol/parallel.rs:42	emacs_core::symbol::parallel	seal retained backing: private manager pointers; world/generation remain value-private pub(crate), not exposed; upper crates/neovm-core/src/emacs_core/runtime/eval/world/green_owner.rs:110
-SymbolBacking::new	method	pub(crate)	crates/neovm-value/src/symbol/parallel.rs:111	emacs_core::symbol::parallel	seal MINT: unchanged retained-original-World Safety contract; exact sole upper crates/neovm-core/src/emacs_core/runtime/eval/world/green_owner.rs:115 Baton::parallel_symbol_backing
 SymbolNameQuery	struct	pub(crate)	crates/neovm-value/src/intern/mod.rs:421	emacs_core::intern	bulk
 SymbolPlistSnapshot	enum	pub(crate)	crates/neovm-value/src/symbol/mod.rs:1039	emacs_core::symbol	bulk
 SymbolSlotIndex	struct	pub(crate)	crates/neovm-value/src/tagged/gc/symbol_table.rs:24	tagged::gc::symbol_table	bulk
@@ -305,7 +300,6 @@ current_heap_generational_enabled	fn	pub(crate)	crates/neovm-value/src/tagged/gc
 current_tagged_heap_identity	fn	pub(crate)	crates/neovm-value/src/tagged/gc/gc_thread.rs:1898	tagged::gc	pc1-d: DATA seal privacy ledger 17f6ac250b; widened by pc11 generator glob-fix pass, re-cited to its DATA seal
 current_write_tracking_enabled	fn	pub(crate)	crates/neovm-value/src/tagged/gc.rs:242	tagged::gc	bulk
 debug_assert_no_heap_mut_closure	fn	pub(crate)	crates/neovm-value/src/tagged/mutate.rs:104	tagged::mutate	bulk
-decode_declared_multibyte_char	use	pub(crate)	crates/neovm-value/src/heap_types.rs:1537 + crates/neovm-value/src/emacs_char/mod.rs:1394	heap_types	pc1-d: DATA seal privacy ledger 17f6ac250b; callers lisp/print minibuffer builtins
 emacs_hash_char_array	fn	pub(crate)	crates/neovm-value/src/hashtab/mod.rs:155	emacs_core::hashtab	bulk
 emacs_sxhash_obj_with_fallback	fn	pub(crate)	crates/neovm-value/src/hashtab/mod.rs:200	emacs_core::hashtab	bulk
 endpoint_search_node_visit_count	fn	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/tests/instrumentation.rs:70	heap_types::overlay_storage::instrumentation	bulk
@@ -338,11 +332,8 @@ hash_key_to_visible_value	fn	pub(crate)	crates/neovm-value/src/hashtab/mod.rs:10
 hash_test_parity_enabled	fn	pub(crate)	crates/neovm-value/src/hashtab/mod.rs:50	emacs_core::hashtab	bulk
 heap_types::threading	mod	pub(crate)	crates/neovm-value/src/heap_types.rs:10	heap_types	module-gate per PEER-RULING-CORE-RESIDUAL B; pub-item receipt in notify-gapsurvey-core-batch2.md
 hoist_reads	fn	pub(crate)	crates/neovm-value/src/tagged/collection_reads.rs:74	tagged::collection_reads	bulk
-inhibited_user_test_since_gc	fn	pub(crate)	crates/neovm-value/src/hashtab/user_test_guard.rs:11	emacs_core::hashtab	pc3 signed unsafe raw consumer; sole production caller crates/neovm-core/src/emacs_core/lisp/native/builtins/stubs.rs::builtin_garbage_collect_maybe; active pinned exclusive Context accounting entry valid through synchronous callback; body unchanged
-install_eval_error_formatter	fn	pub(crate)	crates/neovm-value/src/error/format_hook.rs:45	emacs_core::error	pc2 unsafe root-only export; private descriptor fields and OnceLocks; canonical shared refusal; sole printer adapter at construction/restore seams
 install_sqlite_obj_finalizer	fn	pub(crate)	crates/neovm-value/src/tagged/header/sqlite_finalizer.rs:25	tagged::header::sqlite_finalizer	pc2 per ruling: publish identity-cell (&'static SqliteObjFinalizer); module stays pub(crate); adapter system/sqlite/mod.rs installs &CANONICAL_SQLITE_FINALIZER
 install_static_subr_objects	fn	pub(crate)	crates/neovm-value/src/tagged/value.rs:357	tagged::value	pc1-d: DATA seal privacy ledger 17f6ac250b; caller eval/green/bootstrap.rs
-install_string_bytes_changed_hook	unsafe fn	pub(crate)	crates/neovm-value/src/heap_types.rs:52	heap_types	pc2 per ruling: REUSE value::hook_publication::publish identity-cell; N9 # Safety verbatim; StringBytesHookAlreadyInstalled deleted; seams construct.rs + pdump_reconstruct.rs pass &string_pos_cache::STRING_BYTES_STAMP (pub(crate) static, new)
 install_string_bytes_changed_hook::root_reexport	reexport	(new)	crates/neovm-value/src/lib.rs:57	crate root	pc2 root pub use line in the ONE lib.rs PC2 section
 intern_call_names	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:2186	emacs_core::intern	bulk
 intern_calls	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:2181	emacs_core::intern	bulk
@@ -407,8 +398,6 @@ reset_overlay_iterator_frame_push_count	fn	pub(crate)	crates/neovm-value/src/hea
 reset_overlay_shift_node_visit_count	fn	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/tests/instrumentation.rs:46	heap_types::overlay_storage::instrumentation	bulk
 reset_overlays_at_node_visit_count	fn	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/tests/instrumentation.rs:8	heap_types::overlay_storage::instrumentation	bulk
 reset_plain_value_slot_visits	fn	pub(crate)	crates/neovm-value/src/symbol/mod.rs:168	emacs_core::symbol	bulk
-reset_plist_get_walks	fn	pub(crate)	crates/neovm-value/src/symbol/plist_core.rs:50	emacs_core::symbol::plist_core	bulk
-reset_symbol_with_pos_plist_comparisons	fn	pub(crate)	crates/neovm-value/src/symbol/plist_core.rs:35	emacs_core::symbol::plist_core	bulk
 resolve_lisp_visible_symbol_name	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:1920	emacs_core::intern	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/commands/minibuffer/mod.rs:1966:40
 resolve_name	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:1810	emacs_core::intern	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/runtime/jit/aot.rs:5104:64
 resolve_name_lisp_string	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:1818	emacs_core::intern	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/runtime/jit/stats.rs:1045:52
@@ -429,12 +418,10 @@ swap_property_revision_world_state	use	pub(crate)	crates/neovm-value/src/symbol/
 swap_world_state	fn	pub(crate)	crates/neovm-value/src/tagged/collection_reads.rs:1073	tagged::collection_reads	bulk
 swap_world_state	fn	pub(crate)	crates/neovm-value/src/symbol/property_revision.rs:57	emacs_core::symbol::property_revision	n13 carried DATA: signed N13/PC10; sole upper crates/neovm-core/src/emacs_core/runtime/eval/green/carried.rs:73; unchanged paired TLS swap/placeholder body; guard=CARRIERS-derived carried.rs-only
 sxhash_combine	fn	pub(crate)	crates/neovm-value/src/hashtab/mod.rs:108	emacs_core::hashtab	bulk
-symbol::parallel	mod	pub(crate)	crates/neovm-value/src/symbol/mod.rs:35	symbol	module-gate per PEER-RULING-CORE-RESIDUAL B; pub-item receipt in notify-gapsurvey-core-batch2.md
 symbol_id	fn	pub(crate)	crates/neovm-value/src/value/mod.rs:733	emacs_core::value	pc1-d DATA: approved351 symbol_id; upper caller crates/neovm-core/src/emacs_core/lisp/native/builtins/symbols.rs:41; existing checks/bodies/fields unchanged
 symbol_name_id	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:1798	emacs_core::intern	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/runtime/eval/mod.rs:35:50
 symbol_registry_epoch_value	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:1509	emacs_core::intern	bulk
 symbol_table	mod	pub(crate)	crates/neovm-value/src/tagged/gc.rs:55	tagged::gc	module-gate: privacy module row; only pub item SymbolSlotIndex (row 186)
-symbol_with_pos_plist_comparisons	fn	pub(crate)	crates/neovm-value/src/symbol/plist_core.rs:40	emacs_core::symbol::plist_core	bulk
 symcell_inline_write_value	fn	pub(crate)	crates/neovm-value/src/symbol/mod.rs:1167	emacs_core::symbol	bulk
 tagged::bytecode	mod	pub(crate)	crates/neovm-value/src/tagged/mod.rs:10	tagged	module-gate per PEER-RULING-CORE-RESIDUAL B; pub-item receipt in notify-gapsurvey-core-batch2.md
 tagged::bytecode::chunk	mod	pub(crate)	crates/neovm-value/src/tagged/bytecode/mod.rs:18	tagged::bytecode	module-gate per PEER-RULING-CORE-RESIDUAL B; pub-item receipt in notify-gapsurvey-core-batch2.md
@@ -546,8 +533,8 @@ TailCycleCheck::tortoise	method	pub(crate)	crates/neovm-value/src/symbol/plist_c
 TailCycleCheck::step	method	pub(crate)	crates/neovm-value/src/symbol/plist_core.rs:167	emacs_core::symbol::plist_core	pc1-d DATA: signed plist addendum; existing body/inline unchanged, private traversal state; upper crates/neovm-core/src/emacs_core/runtime/plist/mod.rs:15 and its command-layer traversal callers
 SafeTailGuard::new	method	pub(crate)	crates/neovm-value/src/symbol/plist_core.rs:195	emacs_core::symbol::plist_core	pc1-d DATA: signed plist addendum; existing body/inline unchanged, private traversal state; upper crates/neovm-core/src/emacs_core/runtime/plist/mod.rs:15 and its command-layer traversal callers
 SafeTailGuard::found_cycle_after_advance	method	pub(crate)	crates/neovm-value/src/symbol/plist_core.rs:206	emacs_core::symbol::plist_core	pc1-d DATA: signed plist addendum; existing body/inline unchanged, private traversal state; upper crates/neovm-core/src/emacs_core/runtime/plist/mod.rs:15 and its command-layer traversal callers
-IntervalDeletionQuery::new	fn	(new ctor)	crates/neovm-value/src/heap_types/overlay_storage/mod.rs:150	heap_types::overlay_storage	pc1-d ctor per coordinator ruling 15:56:33Z; tuple field stays pub(crate); exact core sites overlay_index.rs:1119/1275 use ::new
-IntervalIntersectionQuery::new	fn	(new ctor)	crates/neovm-value/src/heap_types/overlay_storage/mod.rs:186	heap_types::overlay_storage	pc1-d ctor per coordinator ruling 15:56:33Z; tuple field stays pub(crate); exact core sites overlay_index.rs:1119/1275 use ::new
+IntervalDeletionQuery::new	method	(new ctor)	crates/neovm-value/src/heap_types/overlay_storage/mod.rs:150	heap_types::overlay_storage	pc1-d ctor per coordinator ruling 15:56:33Z; tuple field stays pub(crate); exact core sites overlay_index.rs:1119/1275 use ::new
+IntervalIntersectionQuery::new	method	(new ctor)	crates/neovm-value/src/heap_types/overlay_storage/mod.rs:186	heap_types::overlay_storage	pc1-d ctor per coordinator ruling 15:56:33Z; tuple field stays pub(crate); exact core sites overlay_index.rs:1119/1275 use ::new
 Flow::with_bytecode_error_backtrace	method	pub(restricted)	crates/neovm-value/src/error/bytecode_backtrace.rs:99	error::bytecode_backtrace	BULK (PC11-M)
 EvalError::from_throw	method	pub(restricted)	crates/neovm-value/src/error/mod.rs:112	error	BULK (PC11-M)
 Flow::throw_with_symbols	method	pub(restricted)	crates/neovm-value/src/error/mod.rs:286	error	BULK (PC11-M)
@@ -1016,7 +1003,7 @@ LazyGnuCode::proof	field-accessor	pub(restricted)	crates/neovm-value/src/tagged/
 LazyGnuCode::iterative_admission	field-accessor	pub(restricted)	crates/neovm-value/src/tagged/bytecode/chunk.rs:98	tagged::bytecode	SEAL read (batch 2): Option<&Option<IterativeArgRange>>
 LazyGnuCode::decoded_or_init_with	field-accessor	pub(restricted)	crates/neovm-value/src/tagged/bytecode/chunk.rs:108	tagged::bytecode	SEAL (batch 2): decodes+proof publishes together; caller core chunk.rs decode_lazy_gnu_code
 LazyGnuCode::init_iterative_admission	field-accessor	pub(restricted)	crates/neovm-value/src/tagged/bytecode/chunk.rs:127	tagged::bytecode	SEAL (batch 2): set-once admission proof; caller core chunk.rs initialize_lazy_iterative_admission
-IterativeArgRange::new	fn	pub(restricted)	crates/neovm-value/src/tagged/bytecode/chunk.rs:301	tagged::bytecode	PC1-D (batch 2): inert admission range constructor
+IterativeArgRange::new	method	pub(restricted)	crates/neovm-value/src/tagged/bytecode/chunk.rs:301	tagged::bytecode	PC1-D (batch 2): inert admission range constructor
 ByteCodeFunction::set_stack_verified	field-accessor	pub(restricted)	crates/neovm-value/src/tagged/bytecode/chunk.rs:732	tagged::bytecode	SEAL (batch 2): unsafe bool setter; Safety verifier entry depth; core chunk.rs 363/379/409
 ByteCodeFunction::reset_to_deferred_gnu	field-accessor	pub(restricted)	crates/neovm-value/src/tagged/bytecode/chunk.rs:737	tagged::bytecode	SEAL (batch 2): safe reset of ops_sealed/stack_verified + fresh lazy cell; core chunk.rs reset sites
 ByteCodeFunction::clear_lazy_gnu_code	field-accessor	pub(restricted)	crates/neovm-value/src/tagged/bytecode/chunk.rs:744	tagged::bytecode	SEAL (batch 2): safe lazy-cell clear; core chunk.rs restore site
@@ -1046,18 +1033,18 @@ ObarrayRestoreError	type	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:13
 InvalidThreadName	type	pub(restricted)	crates/neovm-value/src/heap_types/threading.rs:197	heap_types::threading	B1 private type promotion (A9) for cross-crate naming; representation unchanged
 ForeignMutexAssociation	type	pub(restricted)	crates/neovm-value/src/heap_types/threading.rs:568	heap_types::threading	B1 private type promotion (A9) for cross-crate naming; representation unchanged
 MemorySignalBindingError	type	pub(crate)	crates/neovm-value/src/error/mod.rs:447	error	B1 private type promotion (A9): TryFrom::Error in the promoted MemorySignalBinding public interface
-PropertyInterval::from_parts	fn	(new fn)	crates/neovm-value/src/crates/neovm-value/src/value/text_props.rs:57	value::text_props	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private
-ByteCodeFunction::from_parts	fn	(new fn)	crates/neovm-value/src/crates/neovm-value/src/tagged/bytecode/chunk.rs:180	tagged::bytecode::chunk	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private
-DecodedGnuCode::new	fn	(new fn)	crates/neovm-value/src/crates/neovm-value/src/tagged/bytecode/chunk.rs:29	tagged::bytecode::chunk	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private
-StackProof::from_parts	fn	(new fn)	crates/neovm-value/src/crates/neovm-value/src/tagged/bytecode/decode_data.rs:24	tagged::bytecode::decode_data	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private
-StackParamShape::new	fn	(new fn)	crates/neovm-value/src/crates/neovm-value/src/tagged/bytecode/function_slots.rs:18	tagged::bytecode::function_slots	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private
-FormalMarkers::new	fn	(new fn)	crates/neovm-value/src/crates/neovm-value/src/tagged/bytecode/function_slots.rs:37	tagged::bytecode::function_slots	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private
-BytecodeInteractiveProbe::new	fn	(new fn)	crates/neovm-value/src/crates/neovm-value/src/value/mod.rs:355	value	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private
-HashTestGcInhibitAccounting::new	fn	(new fn)	crates/neovm-value/src/crates/neovm-value/src/hashtab/mod.rs:27	hashtab	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private
-OverlayData::new	fn	(new fn)	crates/neovm-value/src/crates/neovm-value/src/heap_types.rs:1709	heap_types	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private
-DumpedSymbolFlags::new	fn	(new fn)	crates/neovm-value/src/crates/neovm-value/src/symbol/cell.rs:581	symbol::cell	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private
-ThreadChildren::new	fn	(new fn)	crates/neovm-value/src/crates/neovm-value/src/heap_types/threading.rs:328	heap_types::threading	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private
-MutexPayload::new	fn	(new fn)	crates/neovm-value/src/crates/neovm-value/src/heap_types/threading.rs:488	heap_types::threading	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private
+PropertyInterval::from_parts	method	(new fn)	crates/neovm-value/src/value/text_props.rs:57	value::text_props	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private
+ByteCodeFunction::from_parts	method	(new fn)	crates/neovm-value/src/tagged/bytecode/chunk.rs:180	tagged::bytecode::chunk	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private
+DecodedGnuCode::new	method	(new fn)	crates/neovm-value/src/tagged/bytecode/chunk.rs:29	tagged::bytecode::chunk	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private
+StackProof::from_parts	method	(new fn)	crates/neovm-value/src/tagged/bytecode/decode_data.rs:24	tagged::bytecode::decode_data	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private
+StackParamShape::new	method	(new fn)	crates/neovm-value/src/tagged/bytecode/function_slots.rs:18	tagged::bytecode::function_slots	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private
+FormalMarkers::new	method	(new fn)	crates/neovm-value/src/tagged/bytecode/function_slots.rs:37	tagged::bytecode::function_slots	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private
+BytecodeInteractiveProbe::new	method	(new fn)	crates/neovm-value/src/value/mod.rs:355	value	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private
+HashTestGcInhibitAccounting::new	method	(new fn)	crates/neovm-value/src/hashtab/mod.rs:27	hashtab	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private
+OverlayData::new	method	(new fn)	crates/neovm-value/src/heap_types.rs:1709	heap_types	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private
+DumpedSymbolFlags::new	method	(new fn)	crates/neovm-value/src/symbol/cell.rs:581	symbol::cell	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private
+ThreadChildren::new	method	(new fn)	crates/neovm-value/src/heap_types/threading.rs:328	heap_types::threading	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private
+MutexPayload::new	method	(new fn)	crates/neovm-value/src/heap_types/threading.rs:488	heap_types::threading	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private
 emacs_get_random	fn	pub(crate)	crates/neovm-value/src/random.rs:57	random	stage-3 C12: buffer substrate (generate_new_buffer_name) calls the PRNG below the lisp layer; body unchanged, moved from builtins/arithmetic.rs
 emacs_get_random_fixnum	fn	private	crates/neovm-value/src/random.rs:64	random	stage-3 C12: moved with the lock owner (arithmetic's random subr keeps its caller)
 emacs_seed_random	fn	private	crates/neovm-value/src/random.rs:81	random	stage-3 C12: moved with the lock owner
@@ -1184,14 +1171,10 @@ time_cmp	fn	private	crates/neovm-value/src/time_core.rs:841	time_core	stage-3 C1
 time_convert_default_hz	fn	private	crates/neovm-value/src/time_core.rs:849	time_core	stage-3 C16: default-hz conversion; the staying subr keeps driving it
 current_time_value	fn	private	crates/neovm-value/src/time_core.rs:872	time_core	stage-3 C16: current-time core; the subr wrapper stays above
 make_lisp_time	fn	pub(crate)	crates/neovm-value/src/time_core.rs:878	time_core	stage-3 C16: output encoder; dired file-attribute timestamps call it
-convert_unibyte_to_multibyte_bytes	fn	private	crates/neovm-value/src/strings_core.rs:592	strings_core	stage-3 C12: byte-conversion alias moved with the string conversion subrs; misc re-exports the trio
-reinterpret_unibyte_as_multibyte_bytes	fn	private	crates/neovm-value/src/strings_core.rs:601	strings_core	stage-3 C12: str_as_multibyte alias moved with the conversion subrs (GNU character.c:586 semantics)
 builtin_string_to_multibyte	fn	pub(crate)	crates/neovm-value/src/strings_core.rs:607	strings_core	stage-3 C12: pure Value-in/Value-out conversion subr; buffer multibyte switching reaches it below the lisp layer
 builtin_string_as_unibyte	fn	pub(crate)	crates/neovm-value/src/strings_core.rs:626	strings_core	stage-3 C12: reinterpretation subr; edit buffer substrate and misc callers share the one body
 builtin_string_as_multibyte	fn	pub(crate)	crates/neovm-value/src/strings_core.rs:659	strings_core	stage-3 C12: reinterpretation subr; the GNU oracle string test drives it through the misc re-export
 TakeCount	enum	pub(crate)	crates/neovm-value/src/error/mod.rs:1242	error	stage-3 C12: validated take/ntake iteration scalar (fns.c:1675-1687) shared by builtins_extra and the edit layer
-TakeCount::try_from	method	pub(crate)	crates/neovm-value/src/error/mod.rs:1253	error	stage-3 C12: fixnum-path validation moved with the scalar; keeps heap inspection off the hot path
-TakeCount::try_from_non_fixnum	method	private	crates/neovm-value/src/error/mod.rs:1268	error	stage-3 C12: bignum/integerp arm moved with the scalar (cold, inline-never)
 lisp_string_char_at	fn	pub(crate)	crates/neovm-value/src/strings_core.rs:70	strings_core	stage-3 C12: string aref core (GNU Faref walk, fns.c:3108-3123) moved below the evaluator; the builtins facade re-exports for its historical callers
 plain_str_to_lisp_string	fn	pub(crate)	crates/neovm-value/src/strings_core.rs:95	strings_core	stage-3 C12: &str-to-LispString construction core moved below the evaluator; doc strings, filenames, pdump payloads and the printer share it below edit
 builtin_char_table_subtype	fn	pub(crate)	crates/neovm-value/src/chartab.rs:694	chartab	stage-3 C7a: char-table-subtype subr (GNU Fchar_table_subtype) moved with the pure container; the edit layer translate path reaches it below the text layer
@@ -1278,3 +1261,134 @@ SPIN_WAIT	use	(new)	crates/neovm-value/src/test_support/authority.rs:37	test_sup
 retry	use	(new)	crates/neovm-value/src/test_support/authority.rs:37	test_support::authority	fence-only re-export of retry test_only row
 retry_owned	use	(new)	crates/neovm-value/src/test_support/authority.rs:37	test_support::authority	fence-only re-export of retry_owned test_only row
 rendezvous	use	(new)	crates/neovm-value/src/test_support/authority.rs:37	test_support::authority	fence-only re-export of rendezvous test_only row
+AdmissionPlanCell	reexport	pub(crate)	crates/neovm-value/src/symbol/mod.rs:75	neovm_value::symbol	bulk (source bijection reconciliation)
+AliasableBox	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2804	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+ArenaLayoutStats	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2817	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+BarrierWindow	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2830	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+BlvPtr	reexport	pub(crate)	crates/neovm-value/src/symbol/mod.rs:65	neovm_value::symbol	bulk (source bijection reconciliation)
+BoxedKindLayoutStats	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2817	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+CARD_CHUNK_SHIFT	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2766	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+CARD_DIRTY	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2766	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+CARD_INDEX_MASK	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2766	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+CARD_SHIFT	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2766	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+CErrorMessage	reexport	pub(crate)	crates/neovm-value/src/errors/mod.rs:22	neovm_value::errors	bulk (source bijection reconciliation)
+CHUNK_SUMMARY_OFFSET	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2766	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+CONS_AGE_OFFSET	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2795	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+CONS_BLOCK_BYTES	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2795	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+CONS_BLOCK_CELLS	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2795	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+CONS_MARKS_OFFSET	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2795	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+CONS_MARK_WORDS	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2795	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+CacheRootScan	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:59	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+CellRead	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2890	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+CellRead	reexport	pub(crate)	crates/neovm-value/src/tagged/gc/mutator_registration.rs:33	neovm_value::tagged::gc::mutator_registration	bulk (source bijection reconciliation)
+CellRead	reexport	pub(crate)	crates/neovm-value/src/tagged/gc/mutator_registration/execution.rs:20	neovm_value::tagged::gc::mutator_registration::execution	bulk (source bijection reconciliation)
+CellRead	reexport	pub(crate)	crates/neovm-value/src/tagged/gc/mutator_registration/facade.rs:6	neovm_value::tagged::gc::mutator_registration::facade	bulk (source bijection reconciliation)
+CellReadError	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2890	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+CellReadError	reexport	pub(crate)	crates/neovm-value/src/tagged/gc/mutator_registration.rs:33	neovm_value::tagged::gc::mutator_registration	bulk (source bijection reconciliation)
+CellReadError	reexport	pub(crate)	crates/neovm-value/src/tagged/gc/mutator_registration/execution.rs:20	neovm_value::tagged::gc::mutator_registration::execution	bulk (source bijection reconciliation)
+CellReadError	reexport	pub(crate)	crates/neovm-value/src/tagged/gc/mutator_registration/facade.rs:6	neovm_value::tagged::gc::mutator_registration::facade	bulk (source bijection reconciliation)
+CompiledJournalMode	reexport	pub(crate)	crates/neovm-value/src/tagged/collection_reads.rs:842	neovm_value::tagged::collection_reads	bulk (source bijection reconciliation)
+CompiledObservationGate	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2830	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+ConcealOutcome	reexport	pub(crate)	crates/neovm-value/src/symbol/mod.rs:75	neovm_value::symbol	bulk (source bijection reconciliation)
+ConsAge	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2795	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+ConsLayoutStats	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2817	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+DrainKinds	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2817	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+DumpedCell	reexport	pub(crate)	crates/neovm-value/src/symbol/mod.rs:65	neovm_value::symbol	bulk (source bijection reconciliation)
+DumpedSymbolFlags	reexport	pub(crate)	crates/neovm-value/src/symbol/mod.rs:65	neovm_value::symbol	bulk (source bijection reconciliation)
+EraAdmissionFailure	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2890	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+EraAdmissionFailure	reexport	pub(crate)	crates/neovm-value/src/tagged/gc/mutator_registration/facade.rs:6	neovm_value::tagged::gc::mutator_registration::facade	bulk (source bijection reconciliation)
+EraKeeper	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2890	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+EraKeeper	reexport	pub(crate)	crates/neovm-value/src/tagged/gc/mutator_registration/facade.rs:6	neovm_value::tagged::gc::mutator_registration::facade	bulk (source bijection reconciliation)
+ExecutionActivation	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2890	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+ExecutionActivation	reexport	pub(crate)	crates/neovm-value/src/tagged/gc/mutator_registration.rs:33	neovm_value::tagged::gc::mutator_registration	bulk (source bijection reconciliation)
+ExecutionActivation	reexport	pub(crate)	crates/neovm-value/src/tagged/gc/mutator_registration/facade.rs:6	neovm_value::tagged::gc::mutator_registration::facade	bulk (source bijection reconciliation)
+FLOAT_SLOT_BYTES	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2910	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+FrozenFunctionRoots	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2890	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+FrozenFunctionRoots	reexport	pub(crate)	crates/neovm-value/src/tagged/gc/mutator_registration.rs:60	neovm_value::tagged::gc::mutator_registration	bulk (source bijection reconciliation)
+FrozenFunctionRoots	reexport	pub(crate)	crates/neovm-value/src/tagged/gc/mutator_registration/facade.rs:6	neovm_value::tagged::gc::mutator_registration::facade	bulk (source bijection reconciliation)
+FrozenLegacyRoots	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2890	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+FrozenLegacyRoots	reexport	pub(crate)	crates/neovm-value/src/tagged/gc/mutator_registration.rs:60	neovm_value::tagged::gc::mutator_registration	bulk (source bijection reconciliation)
+FrozenLegacyRoots	reexport	pub(crate)	crates/neovm-value/src/tagged/gc/mutator_registration/facade.rs:6	neovm_value::tagged::gc::mutator_registration::facade	bulk (source bijection reconciliation)
+HEAP_JIT_BARRIER_LEN	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2910	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+HEAP_JIT_BARRIER_LO	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2910	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+HEAP_JIT_CARD_TABLE	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2766	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+HEAP_JIT_CONS_CUR	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2910	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+HEAP_JIT_CONS_LIM	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2910	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+HEAP_JIT_EXCLUSION_LEN	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2830	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+HEAP_JIT_EXCLUSION_LO	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2830	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+HEAP_JIT_FLOAT_CUR	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2910	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+HEAP_JIT_FLOAT_LIM	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2910	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+HEAP_JIT_SINGLE_CONS	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2830	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+HEAP_JIT_SLOT_BARRIER_LEN	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2830	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+HEAP_JIT_SLOT_BARRIER_LO	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2830	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+HandshakeStats	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2817	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+HeapLayoutStats	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2817	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+HofError	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2890	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+HofError	reexport	pub(crate)	crates/neovm-value/src/tagged/gc/mutator_registration.rs:33	neovm_value::tagged::gc::mutator_registration	bulk (source bijection reconciliation)
+HofError	reexport	pub(crate)	crates/neovm-value/src/tagged/gc/mutator_registration/execution.rs:18	neovm_value::tagged::gc::mutator_registration::execution	bulk (source bijection reconciliation)
+HofError	reexport	pub(crate)	crates/neovm-value/src/tagged/gc/mutator_registration/facade.rs:6	neovm_value::tagged::gc::mutator_registration::facade	bulk (source bijection reconciliation)
+HofScratch	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2890	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+HofScratch	reexport	pub(crate)	crates/neovm-value/src/tagged/gc/mutator_registration.rs:33	neovm_value::tagged::gc::mutator_registration	bulk (source bijection reconciliation)
+HofScratch	reexport	pub(crate)	crates/neovm-value/src/tagged/gc/mutator_registration/execution.rs:18	neovm_value::tagged::gc::mutator_registration::execution	bulk (source bijection reconciliation)
+HofScratch	reexport	pub(crate)	crates/neovm-value/src/tagged/gc/mutator_registration/facade.rs:6	neovm_value::tagged::gc::mutator_registration::facade	bulk (source bijection reconciliation)
+HofSingleton	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2890	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+HofSingleton	reexport	pub(crate)	crates/neovm-value/src/tagged/gc/mutator_registration.rs:33	neovm_value::tagged::gc::mutator_registration	bulk (source bijection reconciliation)
+HofSingleton	reexport	pub(crate)	crates/neovm-value/src/tagged/gc/mutator_registration/execution.rs:18	neovm_value::tagged::gc::mutator_registration::execution	bulk (source bijection reconciliation)
+HofSingleton	reexport	pub(crate)	crates/neovm-value/src/tagged/gc/mutator_registration/facade.rs:6	neovm_value::tagged::gc::mutator_registration::facade	bulk (source bijection reconciliation)
+ImmediateResult	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2890	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+ImmediateResult	reexport	pub(crate)	crates/neovm-value/src/tagged/gc/mutator_registration.rs:33	neovm_value::tagged::gc::mutator_registration	bulk (source bijection reconciliation)
+ImmediateResult	reexport	pub(crate)	crates/neovm-value/src/tagged/gc/mutator_registration/facade.rs:6	neovm_value::tagged::gc::mutator_registration::facade	bulk (source bijection reconciliation)
+ImmediateResultError	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2890	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+ImmediateResultError	reexport	pub(crate)	crates/neovm-value/src/tagged/gc/mutator_registration.rs:33	neovm_value::tagged::gc::mutator_registration	bulk (source bijection reconciliation)
+ImmediateResultError	reexport	pub(crate)	crates/neovm-value/src/tagged/gc/mutator_registration/facade.rs:6	neovm_value::tagged::gc::mutator_registration::facade	bulk (source bijection reconciliation)
+InlineErrorOp	reexport	pub(crate)	crates/neovm-value/src/error/mod.rs:21	neovm_value::error	bulk (source bijection reconciliation)
+JitHeapState	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2910	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+KeeperWorldDesignator	struct	pub(crate)	crates/neovm-value/src/symbol/parallel/keeper.rs:12	neovm_value::symbol::parallel::keeper	bulk (source bijection reconciliation)
+LISP_SYMBOL_FLAGS_OFFSET	reexport	pub(crate)	crates/neovm-value/src/symbol/mod.rs:65	neovm_value::symbol	bulk (source bijection reconciliation)
+LISP_SYMBOL_INTERNED_GLOBAL_OFFSET	reexport	pub(crate)	crates/neovm-value/src/symbol/mod.rs:65	neovm_value::symbol	bulk (source bijection reconciliation)
+LISP_SYMBOL_SIZE	reexport	pub(crate)	crates/neovm-value/src/symbol/mod.rs:65	neovm_value::symbol	bulk (source bijection reconciliation)
+LISP_SYMBOL_VAL_OFFSET	reexport	pub(crate)	crates/neovm-value/src/symbol/mod.rs:65	neovm_value::symbol	bulk (source bijection reconciliation)
+MappedLayoutStats	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2817	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+MarkPhase	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2733	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+PreparedHofBuiltin	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2890	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+PreparedHofBuiltin	reexport	pub(crate)	crates/neovm-value/src/tagged/gc/mutator_registration/facade.rs:4	neovm_value::tagged::gc::mutator_registration::facade	bulk (source bijection reconciliation)
+PreparedHofBuiltin	reexport	pub(crate)	crates/neovm-value/src/tagged/gc/mutator_registration/symbol_authority.rs:37	neovm_value::tagged::gc::mutator_registration::symbol_authority	bulk (source bijection reconciliation)
+PreparedHofBuiltin	reexport	pub(crate)	crates/neovm-value/src/tagged/gc/mutator_registration/symbol_authority/functions.rs:10	neovm_value::tagged::gc::mutator_registration::symbol_authority::functions	bulk (source bijection reconciliation)
+PreparedUnaryFunction	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2890	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+PreparedUnaryFunction	reexport	pub(crate)	crates/neovm-value/src/tagged/gc/mutator_registration/facade.rs:4	neovm_value::tagged::gc::mutator_registration::facade	bulk (source bijection reconciliation)
+PreparedUnaryFunction	reexport	pub(crate)	crates/neovm-value/src/tagged/gc/mutator_registration/symbol_authority.rs:37	neovm_value::tagged::gc::mutator_registration::symbol_authority	bulk (source bijection reconciliation)
+PreparedUnaryFunction	reexport	pub(crate)	crates/neovm-value/src/tagged/gc/mutator_registration/symbol_authority/functions.rs:21	neovm_value::tagged::gc::mutator_registration::symbol_authority::functions	bulk (source bijection reconciliation)
+RootGroup	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2817	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+RootSeedBreakdown	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2817	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+RowsOwnedDomain	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2757	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+SweepStats	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2817	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+SymbolWriteToken	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2890	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+SymbolWriteToken	reexport	pub(crate)	crates/neovm-value/src/tagged/gc/mutator_registration.rs:91	neovm_value::tagged::gc::mutator_registration	bulk (source bijection reconciliation)
+SymbolWriteToken	reexport	pub(crate)	crates/neovm-value/src/tagged/gc/mutator_registration/facade.rs:6	neovm_value::tagged::gc::mutator_registration::facade	bulk (source bijection reconciliation)
+SymbolWriteToken	reexport	pub(crate)	crates/neovm-value/src/tagged/gc/mutator_registration/symbol_authority.rs:21	neovm_value::tagged::gc::mutator_registration::symbol_authority	bulk (source bijection reconciliation)
+ValueCell	reexport	pub(crate)	crates/neovm-value/src/symbol/mod.rs:65	neovm_value::symbol	bulk (source bijection reconciliation)
+carrier_tls_fingerprint	fn	pub(crate)	crates/neovm-value/src/error/mod.rs:1367	neovm_value::error	bulk (source bijection reconciliation)
+carrier_tls_fingerprint	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:2536	neovm_value::intern	bulk (source bijection reconciliation)
+carrier_tls_fingerprint	fn	pub(crate)	crates/neovm-value/src/symbol/mod.rs:5260	neovm_value::symbol	bulk (source bijection reconciliation)
+carrier_tls_fingerprint	fn	pub(crate)	crates/neovm-value/src/tagged/collection_reads.rs:1129	neovm_value::tagged::collection_reads	bulk (source bijection reconciliation)
+carrier_tls_fingerprint	fn	pub(crate)	crates/neovm-value/src/tagged/value.rs:1491	neovm_value::tagged::value	bulk (source bijection reconciliation)
+collect_shared_root_gc_roots	reexport	pub(crate)	crates/neovm-value/src/tagged/transport/mod.rs:33	neovm_value::tagged::transport	bulk (source bijection reconciliation)
+collection_observation_epoch	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2782	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+compiled_journal_mode	reexport	pub(crate)	crates/neovm-value/src/tagged/collection_reads.rs:842	neovm_value::tagged::collection_reads	bulk (source bijection reconciliation)
+concurrent_hash_snapshot	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2751	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+cons_collection_observed_word	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2782	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+decode_declared_multibyte_char	reexport	pub(crate)	crates/neovm-value/src/emacs_char/mod.rs:1394	neovm_value::emacs_char	bulk (source bijection reconciliation)
+decode_declared_multibyte_char	reexport	pub(crate)	crates/neovm-value/src/heap_types.rs:1573	neovm_value::heap_types	bulk (source bijection reconciliation)
+has_collection_observations	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2782	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+is_observed	reexport	pub(crate)	crates/neovm-value/src/tagged/collection_reads.rs:842	neovm_value::tagged::collection_reads	bulk (source bijection reconciliation)
+leave_projection_scope	reexport	pub(crate)	crates/neovm-value/src/symbol/mod.rs:75	neovm_value::symbol	bulk (source bijection reconciliation)
+neovm_jit_unobserved_collection_owner	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2828	neovm_value::tagged::gc	bulk (source bijection reconciliation)
+reserve_projection_scope	reexport	pub(crate)	crates/neovm-value/src/symbol/mod.rs:75	neovm_value::symbol	bulk (source bijection reconciliation)
+reset_carrier_tls	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:2527	neovm_value::intern	bulk (source bijection reconciliation)
+reset_carrier_tls	fn	pub(crate)	crates/neovm-value/src/symbol/mod.rs:5253	neovm_value::symbol	bulk (source bijection reconciliation)
+reset_carrier_tls	fn	pub(crate)	crates/neovm-value/src/tagged/collection_reads.rs:1118	neovm_value::tagged::collection_reads	bulk (source bijection reconciliation)
+reset_carrier_tls	fn	pub(crate)	crates/neovm-value/src/tagged/value.rs:1483	neovm_value::tagged::value	bulk (source bijection reconciliation)
+swap_world_state	fn	pub(crate)	crates/neovm-value/src/value/mod.rs:5916	neovm_value::value	bulk (source bijection reconciliation)
+with_static_subr_entry_read	reexport	pub(crate)	crates/neovm-value/src/tagged/value.rs:168	neovm_value::tagged::value	bulk (source bijection reconciliation)
+with_static_subr_entry_write	reexport	pub(crate)	crates/neovm-value/src/tagged/value.rs:171	neovm_value::tagged::value	bulk (source bijection reconciliation)
+world_state_placeholder	fn	pub(crate)	crates/neovm-value/src/value/mod.rs:5910	neovm_value::value	bulk (source bijection reconciliation)

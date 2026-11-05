@@ -6,6 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use syn::parse::Parser;
 use syn::visit::{self, Visit};
 
 use super::architecture_production_source_roots::workspace_root;
@@ -13,6 +14,8 @@ use super::architecture_production_source_roots::workspace_root;
 const LEDGER: &str = "crates/neovm-core/src/emacs_core/tests/architecture/PROMOTION-LEDGER.tsv";
 const CEILING: &str =
     "crates/neovm-core/src/emacs_core/tests/architecture/PROMOTION-LEDGER.ceiling";
+const EVAL_CEILING: &str =
+    "crates/neovm-core/src/emacs_core/tests/architecture/PROMOTION-LEDGER-EVAL.ceiling";
 const BUMP_SUBJECT: &str = "PC11 PROMOTION-LEDGER ceiling bump:";
 
 fn root() -> PathBuf {
@@ -24,9 +27,24 @@ fn read(path: &Path) -> Result<String, String> {
         .map_err(|e| format!("B3_MISSING_OR_UNREADABLE {}: {e}", path.display()))
 }
 
-/// Metadata resolves workspace inheritance, dependency renames and all target
-/// tables. Do not select the current target: target-specific edges count too.
-fn only_core_normal_dependency(metadata: &serde_json::Value) -> Result<(), String> {
+/// LEAD 11:0xZ ruling (a): the stale "only core normally depends on value"
+/// invariant is replaced by the signed LAYERING-DAG check. The seven moved
+/// crates form a total order; a normal dependency edge between them may only
+/// go DOWNWARD. Workspace crates outside the seven reach moved crates only
+/// through neovm-core. The exception table is empty. Metadata resolves
+/// workspace inheritance, dependency renames and all target tables; do not
+/// select the current target, since target-specific edges count too.
+const LAYERS: &[&str] = &[
+    "neovm-value",
+    "neovm-edit",
+    "neovm-text",
+    "neovm-eval",
+    "neovm-display",
+    "neovm-system",
+    "neovm-core",
+];
+
+fn layering_violation(metadata: &serde_json::Value) -> Result<(), String> {
     let packages = metadata
         .get("packages")
         .and_then(serde_json::Value::as_array)
@@ -43,9 +61,7 @@ fn only_core_normal_dependency(metadata: &serde_json::Value) -> Result<(), Strin
                 .ok_or("B3_METADATA member id")
         })
         .collect::<Result<_, _>>()?;
-    let mut has_core = false;
-    let mut has_value = false;
-    let mut core_edge = false;
+    let mut seen_layers = BTreeSet::new();
     let mut violations = Vec::new();
     for package in packages {
         let id = package
@@ -59,8 +75,10 @@ fn only_core_normal_dependency(metadata: &serde_json::Value) -> Result<(), Strin
             .get("name")
             .and_then(serde_json::Value::as_str)
             .ok_or("B3_METADATA package name")?;
-        has_core |= name == "neovm-core";
-        has_value |= name == "neovm-value";
+        let layer = LAYERS.iter().position(|layer| *layer == name);
+        if let Some(layer) = layer {
+            seen_layers.insert(layer);
+        }
         let deps = package
             .get("dependencies")
             .and_then(serde_json::Value::as_array)
@@ -76,28 +94,39 @@ fn only_core_normal_dependency(metadata: &serde_json::Value) -> Result<(), Strin
                 serde_json::Value::String(kind) if kind == "dev" || kind == "build" => false,
                 other => return Err(format!("B3_METADATA unknown dependency kind {other}")),
             };
-            if dep_name == "neovm-value" && normal {
-                if name == "neovm-core" {
-                    core_edge = true;
-                } else {
-                    violations.push(format!(
-                        "{name}: normal dependency on neovm-value (rename {:?}, target {:?})",
-                        dep.get("rename"),
-                        dep.get("target")
-                    ));
+            if !normal {
+                continue;
+            }
+            let Some(dep_layer) = LAYERS.iter().position(|layer| *layer == dep_name) else {
+                continue;
+            };
+            match layer {
+                Some(layer) => {
+                    if dep_layer >= layer {
+                        violations.push(format!(
+                            "{name} -> {dep_name}: moved-crate edge is not downward"
+                        ));
+                    }
+                }
+                None => {
+                    if dep_name != "neovm-core" {
+                        violations.push(format!(
+                            "{name} -> {dep_name}: outside crates reach moved crates only through neovm-core"
+                        ));
+                    }
                 }
             }
         }
     }
-    if !unseen.is_empty() || !has_core || !has_value || !core_edge {
+    if !unseen.is_empty() || seen_layers.len() != LAYERS.len() {
         return Err(format!(
-            "B3_METADATA incomplete workspace/core edge: unseen={unseen:?}, core={has_core}, value={has_value}, core_edge={core_edge}"
+            "B3_METADATA incomplete workspace/layers: unseen={unseen:?}, layers={seen_layers:?}"
         ));
     }
     if violations.is_empty() {
         Ok(())
     } else {
-        Err(format!("B3_SOLE_DEPENDENT\n{}", violations.join("\n")))
+        Err(format!("B3_LAYERING\n{}", violations.join("\n")))
     }
 }
 
@@ -364,6 +393,158 @@ impl Candidate {
     }
 }
 
+/// LEAD 11:0xZ ruling (b): public `#[doc(hidden)]` items that only exist as
+/// macro expansions are invisible to the syn item walk, so a template that
+/// generates them cannot be scanned as ordinary items. This is the closed,
+/// fail-closed list of item-level macros whose templates may generate such
+/// items. An entry binds the macro to the fingerprint of its reviewed template
+/// and to the exact doc(hidden) product identities it generates. Any template
+/// edit changes the fingerprint and fails closed until the entry is
+/// re-reviewed; an invocation whose arguments are not the recorded identifiers
+/// and an invocation outside the defining file fail closed as well. The
+/// declared products are materialized as source candidates per invocation so
+/// the ledger bijection sees generated items rather than silently missing
+/// them.
+struct MacroProduct {
+    file: &'static str,
+    macro_name: &'static str,
+    /// FNV-1a 64 over `TokenStream::to_string()` of the reviewed macro body.
+    template_fingerprint: u64,
+    params: &'static [&'static str],
+    /// `(identity template, kind)` for every public doc(hidden) product;
+    /// `{0}`, `{1}`, ... are the invocation identifiers in `params` order.
+    products: &'static [(&'static str, SourceKind)],
+}
+
+const MACRO_PRODUCTS: &[MacroProduct] = &[
+    MacroProduct {
+        file: "crates/neovm-value/src/heap_types/threading.rs",
+        macro_name: "native_id",
+        template_fingerprint: 0x7859_0052_9bd7_07a6,
+        params: &["name"],
+        products: &[
+            ("{0}", SourceKind::Struct),
+            (
+                "{0}::heap_identity",
+                SourceKind::Function {
+                    inherent: true,
+                    constant: true,
+                    unsafe_fn: false,
+                },
+            ),
+            (
+                "{0}::native_key",
+                SourceKind::Function {
+                    inherent: true,
+                    constant: true,
+                    unsafe_fn: false,
+                },
+            ),
+        ],
+    },
+    MacroProduct {
+        file: "crates/neovm-value/src/tagged/gc/mutator_registration/wrappers.rs",
+        macro_name: "era_operations",
+        template_fingerprint: 0xd88e_8a25_caf0_cce2,
+        params: &["era", "failure"],
+        products: &[
+            (
+                "{0}::collect_stopped_with",
+                SourceKind::Function {
+                    inherent: true,
+                    constant: false,
+                    unsafe_fn: true,
+                },
+            ),
+            (
+                "{0}::collect_stopped_minor_with",
+                SourceKind::Function {
+                    inherent: true,
+                    constant: false,
+                    unsafe_fn: true,
+                },
+            ),
+            (
+                "{0}::finish",
+                SourceKind::Function {
+                    inherent: true,
+                    constant: false,
+                    unsafe_fn: false,
+                },
+            ),
+        ],
+    },
+];
+
+fn fnv1a64(text: &str) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for byte in text.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100_0000_01b3);
+    }
+    hash
+}
+
+fn macro_products_for(file: &str, macro_name: &str) -> Option<(usize, &'static MacroProduct)> {
+    MACRO_PRODUCTS
+        .iter()
+        .enumerate()
+        .find(|(_, product)| product.file == file && product.macro_name == macro_name)
+}
+
+/// Returns the table index for a macro definition this table covers, or
+/// `None` when the definition is not a table macro. A covered macro whose
+/// reviewed template no longer matches fails closed.
+fn verify_macro_definition(
+    file: &str,
+    macro_name: &str,
+    tokens: &proc_macro2::TokenStream,
+) -> Result<Option<usize>, String> {
+    let Some((index, product)) = macro_products_for(file, macro_name) else {
+        return Ok(None);
+    };
+    let actual = fnv1a64(&tokens.to_string());
+    if actual != product.template_fingerprint {
+        return Err(format!(
+            "B3_MACRO_PRODUCTS {} `{macro_name}!` template changed (fingerprint {actual:#018x}, table {:#018x}); re-review its doc(hidden) products and update MACRO_PRODUCTS",
+            product.file, product.template_fingerprint
+        ));
+    }
+    Ok(Some(index))
+}
+
+/// Materializes a table macro's products for one invocation. The invocation
+/// must pass exactly the recorded number of identifier arguments.
+fn macro_product_identities(
+    product: &MacroProduct,
+    args: &[String],
+) -> Result<Vec<(String, SourceKind)>, String> {
+    if args.len() != product.params.len() {
+        return Err(format!(
+            "B3_MACRO_PRODUCTS {}! expects {} identifier argument(s) {:?}, got {}",
+            product.macro_name,
+            product.params.len(),
+            product.params,
+            args.len()
+        ));
+    }
+    let mut products = Vec::new();
+    for (identity, kind) in product.products {
+        let mut item = (*identity).to_string();
+        for (index, arg) in args.iter().enumerate() {
+            item = item.replace(&format!("{{{index}}}"), arg);
+        }
+        if item.contains('{') {
+            return Err(format!(
+                "B3_MACRO_PRODUCTS {}! product {identity:?} has an unbound placeholder",
+                product.macro_name
+            ));
+        }
+        products.push((item, kind.clone()));
+    }
+    Ok(products)
+}
+
 #[derive(Default)]
 struct HiddenAttrs {
     lines: BTreeSet<usize>,
@@ -391,6 +572,7 @@ struct Surface<'a> {
     uses: Vec<UseSite>,
     modules: BTreeSet<String>,
     accounted: BTreeSet<(PathBuf, usize)>,
+    verified_macro_products: BTreeSet<usize>,
 }
 
 #[derive(Clone)]
@@ -440,6 +622,13 @@ fn use_leaves(
 }
 
 impl Surface<'_> {
+    fn relative(&self, file: &Path) -> Result<String, String> {
+        Ok(file
+            .strip_prefix(self.workspace)
+            .map_err(|_| format!("B3_SOURCE outside workspace: {}", file.display()))?
+            .to_string_lossy()
+            .replace('\\', "/"))
+    }
     fn record(
         &mut self,
         file: &Path,
@@ -450,11 +639,7 @@ impl Surface<'_> {
         attrs: &[syn::Attribute],
         kind: SourceKind,
     ) -> Result<(), String> {
-        let file = file
-            .strip_prefix(self.workspace)
-            .map_err(|_| "B3_SOURCE outside workspace")?
-            .to_string_lossy()
-            .replace('\\', "/");
+        let file = self.relative(file)?;
         self.candidates.push(Candidate {
             item,
             module: module.into(),
@@ -509,6 +694,59 @@ impl Surface<'_> {
         }
         Ok(())
     }
+    /// Materializes the doc(hidden) products of a table macro invocation.
+    /// Invocations outside the macro's defining file, qualified paths to an
+    /// unexported `macro_rules!` name, and argument shapes other than the
+    /// recorded identifier list fail closed.
+    fn expand_macro_invocation(
+        &mut self,
+        relative: &str,
+        module: &str,
+        invocation: &syn::Macro,
+    ) -> Result<(), String> {
+        let Some(segment) = invocation.path.segments.last() else {
+            return Ok(());
+        };
+        let invoked = segment.ident.to_string();
+        let Some((_, product)) = macro_products_for(relative, &invoked) else {
+            if MACRO_PRODUCTS
+                .iter()
+                .any(|product| product.macro_name == invoked)
+            {
+                return Err(format!(
+                    "B3_MACRO_PRODUCTS {relative} invokes `{invoked}!` outside its defining file; invocation location requires review"
+                ));
+            }
+            return Ok(());
+        };
+        if invocation.path.segments.len() != 1 {
+            return Err(format!(
+                "B3_MACRO_PRODUCTS {relative} `{invoked}!` invocation must use its bare macro_rules! name"
+            ));
+        }
+        let parsed = syn::punctuated::Punctuated::<syn::Ident, syn::Token![,]>::parse_terminated
+            .parse2(invocation.tokens.clone())
+            .map_err(|e| {
+                format!(
+                    "B3_MACRO_PRODUCTS {relative} `{invoked}!` arguments must be identifiers: {e}"
+                )
+            })?;
+        let args: Vec<String> = parsed.iter().map(ToString::to_string).collect();
+        let products = macro_product_identities(product, &args)?;
+        let line = segment.ident.span().start().line;
+        for (item, kind) in products {
+            self.candidates.push(Candidate {
+                item,
+                module: module.into(),
+                file: relative.into(),
+                line,
+                kind,
+                public: true,
+                hidden: true,
+            });
+        }
+        Ok(())
+    }
     fn file(&mut self, file: &Path, module: &str) -> Result<(), String> {
         let file = file
             .canonicalize()
@@ -534,7 +772,8 @@ impl Surface<'_> {
         } else {
             file.with_extension("")
         };
-        self.items(&ast.items, &file, module, &dir, parent)?;
+        self.items(&ast.items, &file, module, &dir, parent)
+            .map_err(|e| format!("{}: {e}", file.display()))?;
         let mut hidden = HiddenAttrs::default();
         hidden.visit_file(&ast);
         if !hidden.errors.is_empty() {
@@ -814,6 +1053,7 @@ impl Surface<'_> {
                     });
                 }
                 syn::Item::Macro(m) => {
+                    let relative = self.relative(file)?;
                     if let Some(name) = &m.ident {
                         if m.mac.path.is_ident("macro_rules") {
                             self.record(
@@ -825,13 +1065,25 @@ impl Surface<'_> {
                                 &m.attrs,
                                 SourceKind::MacroRules,
                             )?;
+                            match verify_macro_definition(
+                                &relative,
+                                &name.to_string(),
+                                &m.mac.tokens,
+                            )? {
+                                Some(index) => {
+                                    self.verified_macro_products.insert(index);
+                                }
+                                None => self.macro_tokens(m.mac.tokens.clone())?,
+                            }
                         } else {
                             self.reject_hidden(&m.attrs, "unrecognized macro declaration")?;
+                            self.macro_tokens(m.mac.tokens.clone())?;
                         }
                     } else {
                         self.reject_hidden(&m.attrs, "macro invocation")?;
+                        self.expand_macro_invocation(&relative, module, &m.mac)?;
+                        self.macro_tokens(m.mac.tokens.clone())?;
                     }
-                    self.macro_tokens(m.mac.tokens.clone())?;
                 }
                 syn::Item::Static(s) => self.reject_hidden(&s.attrs, "static/TLS")?,
                 syn::Item::ExternCrate(e) => self.reject_hidden(&e.attrs, "extern crate")?,
@@ -908,6 +1160,13 @@ impl Surface<'_> {
         Ok(names)
     }
     fn finish_uses(&mut self) -> Result<(), String> {
+        // The ledger identity is (item, kind, file); a file may hide the same
+        // re-exported leaf through more than one use/glob site, and a second
+        // candidate with the same identity would make every row for it
+        // ambiguous. Collapse those sites into one candidate, promoting the
+        // visibility flags, so the identity stays single-valued exactly like
+        // the ledger's own duplicate-identity rejection.
+        let mut emitted: BTreeMap<(String, String), usize> = BTreeMap::new();
         for site in self.uses.clone() {
             for (path, alias) in site.leaves {
                 // Ordinary non-hidden globs are not bulk metadata. A listed
@@ -935,6 +1194,13 @@ impl Surface<'_> {
                         .map_err(|_| "B3_SOURCE exporting file outside workspace")?
                         .to_string_lossy()
                         .replace('\\', "/");
+                    let key = (name.clone(), file.clone());
+                    if let Some(&index) = emitted.get(&key) {
+                        let existing = &mut self.candidates[index];
+                        existing.public |= site.public;
+                        existing.hidden |= site.hidden;
+                        continue;
+                    }
                     self.candidates.push(Candidate {
                         item: name,
                         module: site.module.clone(),
@@ -944,6 +1210,7 @@ impl Surface<'_> {
                         public: site.public,
                         hidden: site.hidden,
                     });
+                    emitted.insert(key, self.candidates.len() - 1);
                 }
             }
         }
@@ -961,6 +1228,7 @@ fn source_rows(workspace: &Path) -> Result<Vec<Candidate>, String> {
         uses: Vec::new(),
         modules: BTreeSet::new(),
         accounted: BTreeSet::new(),
+        verified_macro_products: BTreeSet::new(),
     };
     surface.file(&value.join("lib.rs"), "neovm_value")?;
     fn all_rs(dir: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
@@ -1000,11 +1268,23 @@ fn source_rows(workspace: &Path) -> Result<Vec<Candidate>, String> {
             }
             let tokens: proc_macro2::TokenStream = text
                 .parse()
-                .map_err(|e| format!("B3_SOURCE token parse: {e}"))?;
-            surface.macro_tokens(tokens)?;
+                .map_err(|e| format!("B3_SOURCE {} token parse: {e}", path.display()))?;
+            surface
+                .macro_tokens(tokens)
+                .map_err(|e| format!("B3_SOURCE {}: {e}", path.display()))?;
         }
     }
     surface.finish_uses()?;
+    for (index, product) in MACRO_PRODUCTS.iter().enumerate() {
+        if workspace.join(product.file).is_file()
+            && !surface.verified_macro_products.contains(&index)
+        {
+            return Err(format!(
+                "B3_MACRO_PRODUCTS {} `{}!` definition was not scanned; the closed table entry requires source review",
+                product.file, product.macro_name
+            ));
+        }
+    }
     Ok(surface.candidates)
 }
 
@@ -1068,14 +1348,51 @@ fn at_most(rows: RowCount, limit: RowCount) -> Result<(), String> {
     }
 }
 
+/// LEAD 11:0xZ ruling (c): historical ceiling bumps that were not
+/// ceiling-file-only are grandfathered by exact (ceiling path, revision).
+/// No history rewrite: the value-ledger entry is the SHA the ruling named;
+/// the EVAL entries are the sixteen pre-convention stage-4 move commits
+/// (79 -> 80 at 4d21f3c022 through 137 -> 140 at c4a4981ab4) that carried
+/// source, ledger rows and the ceiling together before the ceiling-only
+/// convention existed. These are the complete violation set from the
+/// first-parent ceiling histories; every later revision still needs a named
+/// ceiling-only bump commit, and the path key keeps one ledger's exemption
+/// from excusing another.
+const GRANDFATHERED_CEILING_BUMPS: &[(&str, &str)] = &[
+    (CEILING, "b0d047a6e07f9a7e9bda0425d4c93dbce035a7b8"),
+    (EVAL_CEILING, "4d21f3c0220f838338b26f1398d875e6f9a5ded9"),
+    (EVAL_CEILING, "78e0fbb02f9e95c5785bd93e9b2fed18d81bd0fb"),
+    (EVAL_CEILING, "3db5ecf426aea5f9f19216ec589948c912418903"),
+    (EVAL_CEILING, "8fb8bf98ebbfc9c77fc95fd1342673607a64e062"),
+    (EVAL_CEILING, "6e7b74b4772bed9c200ba8e4a9a3cb319bd7e65e"),
+    (EVAL_CEILING, "f26d95860682ed11116c069399913fc5be39ac7e"),
+    (EVAL_CEILING, "97ee7690fa96a82da8ded3a435e4b615e44c7714"),
+    (EVAL_CEILING, "0ea760177090be002923aeefa3b047e99fdf143c"),
+    (EVAL_CEILING, "e251b8c83d72b70fe548e83e56bd7527090fa1c2"),
+    (EVAL_CEILING, "14fdb525882d6b92854abebc688780e6561f4032"),
+    (EVAL_CEILING, "deaca89331f1b9215fc341330d9d7497ce07974e"),
+    (EVAL_CEILING, "a86c4ed3592db844a0cdd15fc7679cb98af771e9"),
+    (EVAL_CEILING, "dc2dcc925f3b8e60fe07d69c5a4138a187fe9306"),
+    (EVAL_CEILING, "686374f8e7ae364aaa5f3dfcb99028e0e39b32c9"),
+    (EVAL_CEILING, "17e0cb96c4ae64977778ad2f7bb6a91c91127a2f"),
+    (EVAL_CEILING, "c4a4981ab4f604e32228a17be3c98579f5d14028"),
+];
+
 fn monotonic(
     previous: RowCount,
     next: RowCount,
     subject: &str,
     changed: &[String],
     ceiling_path: &str,
+    revision: &str,
 ) -> Result<(), String> {
     if next <= previous {
+        return Ok(());
+    }
+    if GRANDFATHERED_CEILING_BUMPS
+        .iter()
+        .any(|(path, sha)| *path == ceiling_path && *sha == revision)
+    {
         return Ok(());
     }
     if subject.starts_with(BUMP_SUBJECT)
@@ -1139,7 +1456,14 @@ fn ratchet(workspace: &Path, rows: RowCount, ceiling_path: &str) -> Result<(), S
                 &["diff-tree", "--no-commit-id", "--name-only", "-r", revision],
             )?;
             let files: Vec<_> = files.lines().map(str::to_string).collect();
-            monotonic(previous, value, subject.trim(), &files, ceiling_path)?;
+            monotonic(
+                previous,
+                value,
+                subject.trim(),
+                &files,
+                ceiling_path,
+                revision,
+            )?;
         }
         previous = Some(value);
     }
@@ -1151,7 +1475,7 @@ fn ratchet(workspace: &Path, rows: RowCount, ceiling_path: &str) -> Result<(), S
 }
 
 #[test]
-fn architecture_pc11_only_core_normally_depends_on_value() {
+fn architecture_pc11_layering_dag_is_downward() {
     let output = Command::new("cargo")
         .current_dir(root())
         .args(["metadata", "--no-deps", "--format-version", "1"])
@@ -1163,7 +1487,7 @@ fn architecture_pc11_only_core_normally_depends_on_value() {
         String::from_utf8_lossy(&output.stderr)
     );
     let metadata = serde_json::from_slice(&output.stdout).expect("B3_METADATA JSON");
-    only_core_normal_dependency(&metadata).unwrap_or_else(|e| panic!("{e}"));
+    layering_violation(&metadata).unwrap_or_else(|e| panic!("{e}"));
 }
 
 #[test]
@@ -1224,21 +1548,57 @@ fn architecture_pc11_every_domain_ledger_ceiling_only_decreases() {
 }
 
 #[test]
-fn architecture_pc11_mutation_normal_dependency_is_rejected() {
-    let mut metadata = serde_json::json!({"workspace_members":["core", "value", "other"], "packages":[
-        {"id":"core","name":"neovm-core","dependencies":[{"name":"neovm-value","kind":null,"rename":"lower","target":"cfg(unix)"}]},
-        {"id":"value","name":"neovm-value","dependencies":[]},
-        {"id":"other","name":"other","dependencies":[]}
+fn architecture_pc11_mutation_layering_dag_is_strict() {
+    fn deps(names: &[&str]) -> serde_json::Value {
+        serde_json::Value::Array(
+            names
+                .iter()
+                .map(|name| serde_json::json!({"name": name, "kind": null}))
+                .collect(),
+        )
+    }
+    fn package(name: &str, dependencies: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({"id": name, "name": name, "dependencies": dependencies})
+    }
+    let mut members: Vec<&str> = LAYERS.to_vec();
+    members.push("outside");
+    let mut metadata = serde_json::json!({"workspace_members": members, "packages": [
+        package("neovm-value", deps(&[])),
+        package("neovm-edit", deps(&["neovm-value"])),
+        package("neovm-text", deps(&["neovm-value", "neovm-edit"])),
+        package("neovm-eval", deps(&["neovm-value", "neovm-edit", "neovm-text"])),
+        package("neovm-display", deps(&["neovm-value", "neovm-edit", "neovm-text", "neovm-eval"])),
+        package("neovm-system", deps(&["neovm-value", "neovm-edit", "neovm-text", "neovm-eval", "neovm-display"])),
+        package("neovm-core", deps(&["neovm-value", "neovm-edit", "neovm-text", "neovm-eval", "neovm-display", "neovm-system"])),
+        package("outside", deps(&["neovm-core"])),
     ]});
-    assert!(only_core_normal_dependency(&metadata).is_ok());
-    metadata["packages"][2]["dependencies"] = serde_json::json!([{"name":"neovm-value","kind":null,"rename":"hidden_lower","target":"cfg(windows)"}]);
-    let red = only_core_normal_dependency(&metadata).unwrap_err();
+    assert!(layering_violation(&metadata).is_ok());
+    // Upward edge: eval -> display.
+    metadata["packages"][3]["dependencies"] =
+        deps(&["neovm-value", "neovm-edit", "neovm-text", "neovm-display"]);
+    let red = layering_violation(&metadata).unwrap_err();
     assert!(
-        red.contains("B3_SOLE_DEPENDENT") && red.contains("other"),
+        red.contains("B3_LAYERING") && red.contains("neovm-eval -> neovm-display"),
         "{red}"
     );
-    metadata["packages"][2]["dependencies"] = serde_json::json!([]);
-    assert!(only_core_normal_dependency(&metadata).is_ok());
+    metadata["packages"][3]["dependencies"] = deps(&["neovm-value", "neovm-edit", "neovm-text"]);
+    assert!(layering_violation(&metadata).is_ok());
+    // An outside crate may not skip core.
+    metadata["packages"][7]["dependencies"] = deps(&["neovm-eval"]);
+    let red = layering_violation(&metadata).unwrap_err();
+    assert!(red.contains("only through neovm-core"), "{red}");
+    metadata["packages"][7]["dependencies"] = deps(&["neovm-core"]);
+    assert!(layering_violation(&metadata).is_ok());
+    // A lateral (self) edge is rejected.
+    metadata["packages"][0]["dependencies"] = deps(&["neovm-value"]);
+    let red = layering_violation(&metadata).unwrap_err();
+    assert!(red.contains("not downward"), "{red}");
+    metadata["packages"][0]["dependencies"] = deps(&[]);
+    assert!(layering_violation(&metadata).is_ok());
+    // A dev edge in the "wrong" direction is not a layering edge.
+    metadata["packages"][0]["dependencies"] =
+        serde_json::json!([{"name": "neovm-core", "kind": "dev"}]);
+    assert!(layering_violation(&metadata).is_ok());
 }
 
 #[test]
@@ -1288,6 +1648,7 @@ fn architecture_pc11_mutation_silent_ceiling_raise_is_rejected() {
             "unrelated change",
             &[CEILING.into()],
             CEILING,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         )
         .unwrap_err()
         .contains("silent ceiling increase")
@@ -1298,10 +1659,137 @@ fn architecture_pc11_mutation_silent_ceiling_raise_is_rejected() {
             RowCount(1),
             "restored",
             &[CEILING.into()],
-            CEILING
+            CEILING,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         )
         .is_ok()
     );
+    // Ruling (c): the value-ledger historical bump is accepted at its exact
+    // (path, SHA) even though the commit touched more than the ceiling file...
+    assert!(
+        monotonic(
+            RowCount(1228),
+            RowCount(1231),
+            "PC11 PROMOTION-LEDGER ceiling bump: 1228 -> 1231 (stage-3b T5 frontend knob)",
+            &[CEILING.into(), "other.rs".into()],
+            CEILING,
+            GRANDFATHERED_CEILING_BUMPS[0].1,
+        )
+        .is_ok()
+    );
+    // ...and an EVAL-era entry is likewise accepted only for the EVAL ceiling...
+    assert!(
+        monotonic(
+            RowCount(137),
+            RowCount(140),
+            "stage4 boot: install eval hooks through one typed-proof entry (E3a)",
+            &[EVAL_CEILING.into(), "other.rs".into()],
+            EVAL_CEILING,
+            "c4a4981ab4f604e32228a17be3c98579f5d14028",
+        )
+        .is_ok()
+    );
+    // ...the same SHA at a different ledger is red (the key is the pair)...
+    assert!(
+        monotonic(
+            RowCount(1228),
+            RowCount(1231),
+            "PC11 PROMOTION-LEDGER ceiling bump: 1228 -> 1231 (stage-3b T5 frontend knob)",
+            &[EVAL_CEILING.into(), "other.rs".into()],
+            EVAL_CEILING,
+            GRANDFATHERED_CEILING_BUMPS[0].1,
+        )
+        .unwrap_err()
+        .contains("silent ceiling increase")
+    );
+    // ...and the same subject/files at any other revision is red.
+    assert!(
+        monotonic(
+            RowCount(1228),
+            RowCount(1231),
+            "PC11 PROMOTION-LEDGER ceiling bump: 1228 -> 1231 (stage-3b T5 frontend knob)",
+            &[CEILING.into(), "other.rs".into()],
+            CEILING,
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        )
+        .unwrap_err()
+        .contains("silent ceiling increase")
+    );
+}
+
+#[test]
+fn architecture_pc11_mutation_macro_products_are_fail_closed() {
+    // The table is source-verified: each real template must still fingerprint
+    // to its entry, and the entry must resolve by (file, macro).
+    let root = root();
+    for (expected, product) in MACRO_PRODUCTS.iter().enumerate() {
+        let text = read(&root.join(product.file)).unwrap();
+        let ast = syn::parse_file(&text).unwrap();
+        let tokens = ast
+            .items
+            .iter()
+            .find_map(|item| match item {
+                syn::Item::Macro(m)
+                    if m.mac.path.is_ident("macro_rules")
+                        && m.ident
+                            .as_ref()
+                            .is_some_and(|name| name == product.macro_name) =>
+                {
+                    Some(m.mac.tokens.clone())
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "B3_MACRO_PRODUCTS missing {} `{}!`",
+                    product.file, product.macro_name
+                )
+            });
+        assert_eq!(
+            verify_macro_definition(product.file, product.macro_name, &tokens).unwrap(),
+            Some(expected)
+        );
+        assert!(macro_products_for(product.file, product.macro_name).is_some());
+        // The entry is keyed by file as well as by name.
+        assert!(macro_products_for("crates/neovm-value/src/lib.rs", product.macro_name).is_none());
+    }
+    // A template edit, including a new doc(hidden) item, changes the
+    // fingerprint and fails closed until the table is re-reviewed.
+    let edited: proc_macro2::TokenStream =
+        "{ ($name:ident) => { #[doc(hidden)] pub struct $name; }; }"
+            .parse()
+            .unwrap();
+    let err = verify_macro_definition(
+        MACRO_PRODUCTS[0].file,
+        MACRO_PRODUCTS[0].macro_name,
+        &edited,
+    )
+    .unwrap_err();
+    assert!(err.contains("B3_MACRO_PRODUCTS"), "{err}");
+    assert!(err.contains("template changed"), "{err}");
+    assert!(
+        verify_macro_definition("crates/neovm-value/src/other.rs", "native_id", &edited)
+            .unwrap()
+            .is_none()
+    );
+    // Product identities bind the invocation identifiers positionally and
+    // reject an invocation shape the reviewed template cannot consume.
+    let products = macro_product_identities(&MACRO_PRODUCTS[0], &["ThreadId".to_string()]).unwrap();
+    for expected in [
+        "ThreadId",
+        "ThreadId::heap_identity",
+        "ThreadId::native_key",
+    ] {
+        assert!(
+            products.iter().any(|(item, _)| item == expected),
+            "missing {expected}: {products:?}"
+        );
+    }
+    let err = macro_product_identities(&MACRO_PRODUCTS[0], &[]).unwrap_err();
+    assert!(err.contains("identifier argument"), "{err}");
+    let err =
+        macro_product_identities(&MACRO_PRODUCTS[1], &["OnlyOneBinding".to_string()]).unwrap_err();
+    assert!(err.contains("identifier argument"), "{err}");
 }
 
 #[test]
