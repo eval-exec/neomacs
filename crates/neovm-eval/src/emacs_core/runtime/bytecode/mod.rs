@@ -28,6 +28,7 @@ pub(crate) use chunk::ByteCodeFunctionExt;
 
 /// Test-only A-prime route for the moved hand-assembled op fixture: delegates
 /// to the product's verifying normalizer without publishing the whole trait.
+#[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn seal_hand_assembled_ops_for_test(f: &mut ByteCodeFunction) {

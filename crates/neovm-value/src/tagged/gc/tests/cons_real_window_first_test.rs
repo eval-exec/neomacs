@@ -12,7 +12,9 @@ fn installed_heap(generational: bool, chunk_map: bool) -> Box<TaggedHeap> {
     set_chunk_map_for_test(Some(chunk_map));
     let mut heap = Box::new(TaggedHeap::new());
     set_chunk_map_for_test(None);
-    heap.set_generational_enabled(generational);
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { heap.set_generational_enabled(generational) };
     heap.partition_dump = false;
     heap.dump_blackened = false;
     heap.gc_threshold = usize::MAX / 4;

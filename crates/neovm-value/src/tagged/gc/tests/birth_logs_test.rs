@@ -31,7 +31,9 @@ impl Drop for Roots {
 
 fn heap(on: bool) -> TaggedHeap {
     let mut heap = TaggedHeap::new();
-    heap.set_generational_enabled(on);
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { heap.set_generational_enabled(on) };
     heap.publish_barrier_window();
     heap
 }

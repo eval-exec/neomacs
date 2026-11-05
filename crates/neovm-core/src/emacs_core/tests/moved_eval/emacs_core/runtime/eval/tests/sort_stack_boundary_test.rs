@@ -2,12 +2,11 @@
 //! GNU sort.c:198-214 compares key scalars through ordinary funcall;
 //! eval.c:3194-3216 retains that frame and depth until the body returns.
 #![deny(clippy::wildcard_enum_match_arm)]
-use super::{
-    Context, EVAL_STACK_RED_ZONE, STACK_GROWTH_PROBE_INTERVAL, STACK_GROWTH_PROBE_START_DEPTH,
+use crate::emacs_core::builtins::higher_order_test_support::{
+    CapturedSortPredicate, builtin_sort_slice, resolve_sort_predicate_for_test,
 };
-#[doc(hidden)]
-pub(crate) use crate::emacs_core::builtins::higher_order::{
-    SortPredicate, SortRuntime, builtin_sort_slice,
+use crate::emacs_core::eval::{
+    Context, EVAL_STACK_RED_ZONE, STACK_GROWTH_PROBE_INTERVAL, STACK_GROWTH_PROBE_START_DEPTH,
 };
 use neovm_value::tagged::collection_reads::capture;
 use neovm_value::tagged::mutate::LispCollectionRevision;
@@ -40,7 +39,7 @@ struct SpecpdlFrameCount(usize);
 impl SpecpdlFrameCount {
     #[doc(hidden)]
     pub fn capture(context: &Context) -> Self {
-        Self(context.specpdl.len())
+        Self(context.specpdl_len_for_test())
     }
 }
 
@@ -55,7 +54,7 @@ enum JitStackLimitSnapshot {
 impl JitStackLimitSnapshot {
     #[doc(hidden)]
     pub fn capture(context: &Context) -> Self {
-        match std::num::NonZeroUsize::new(context.jit_stack_limit) {
+        match std::num::NonZeroUsize::new(context.jit_stack_limit_for_test()) {
             Some(address) => Self::Tracked(address),
             None => Self::Untracked,
         }
@@ -225,47 +224,47 @@ fn native_sort_batches_at_sampled_depths_on_both_stack_placements() {
     // Bootstrap may leave an incremental mark active. This fixture isolates
     // batching across Rust stack probes, whose native admission cannot collect;
     // the publication/pressure fixture below exercises the GC fallback.
-    let mut gc_scope = super::super::GcInhibitGuard::enter(&mut context);
-    let eval = gc_scope.context();
-    for placement in NativeStackPlacement::iter() {
-        for sampled in SampledEntryDepth::iter() {
-            for predicate in NativePredicate::iter() {
-                // Allocate fixtures on the caller's segment, leaving the small
-                // segment for the sort and its verified native comparisons.
-                let vector = Value::vector(
-                    (0..50)
-                        .map(|index| predicate.element((index * 17 + 13) % 50))
-                        .collect(),
-                );
-                let original_depth = LispEvalDepth::capture(eval);
-                let revisions = {
-                    let mut caller_depth = SampledCallerDepth::enter(eval, sampled);
-                    let (revisions, _) = capture(|| {
-                        let _ = vector.as_vector_data().unwrap();
-                        placement.run(|| {
-                            let before = LispCollectionRevision::current();
-                            let returned = builtin_sort_slice(
-                                caller_depth.context(),
-                                &[vector, predicate.callable()],
-                            );
-                            assert_eq!(returned.unwrap(), vector);
-                            LispCollectionRevision::current().steps_since_for_test(before)
-                        })
-                    });
-                    caller_depth.assert_native_call_restored();
-                    revisions
-                };
-                assert_eq!(LispEvalDepth::capture(eval), original_depth);
-                assert!(
-                    revisions <= 2,
-                    "{predicate:?} at {sampled:?} on {placement:?} journalled {revisions} moves"
-                );
-                for (ordinal, value) in vector.as_vector_data().unwrap().iter().enumerate() {
-                    predicate.assert_element(*value, ordinal);
+    neovm_eval::test_support::authority::with_gc_inhibited_for_test(&mut context, |eval| {
+        for placement in NativeStackPlacement::iter() {
+            for sampled in SampledEntryDepth::iter() {
+                for predicate in NativePredicate::iter() {
+                    // Allocate fixtures on the caller's segment, leaving the small
+                    // segment for the sort and its verified native comparisons.
+                    let vector = Value::vector(
+                        (0..50)
+                            .map(|index| predicate.element((index * 17 + 13) % 50))
+                            .collect(),
+                    );
+                    let original_depth = LispEvalDepth::capture(eval);
+                    let revisions = {
+                        let mut caller_depth = SampledCallerDepth::enter(eval, sampled);
+                        let (revisions, _) = capture(|| {
+                            let _ = vector.as_vector_data().unwrap();
+                            placement.run(|| {
+                                let before = LispCollectionRevision::current();
+                                let returned = builtin_sort_slice(
+                                    caller_depth.context(),
+                                    &[vector, predicate.callable()],
+                                );
+                                assert_eq!(returned.unwrap(), vector);
+                                LispCollectionRevision::current().steps_since_for_test(before)
+                            })
+                        });
+                        caller_depth.assert_native_call_restored();
+                        revisions
+                    };
+                    assert_eq!(LispEvalDepth::capture(eval), original_depth);
+                    assert!(
+                        revisions <= 2,
+                        "{predicate:?} at {sampled:?} on {placement:?} journalled {revisions} moves"
+                    );
+                    for (ordinal, value) in vector.as_vector_data().unwrap().iter().enumerate() {
+                        predicate.assert_element(*value, ordinal);
+                    }
                 }
             }
         }
-    }
+    });
 }
 
 #[derive(Clone, Copy, Debug, EnumIter)]
@@ -299,7 +298,8 @@ fn published_native_sort_calls_restore_frames_on_success_and_signal() {
                 for pressure in CollectionPressure::iter() {
                     for outcome in NativeCallOutcome::iter() {
                         let mut eval = crate::test_utils::runtime_startup_context();
-                        let captured = eval.resolve_sort_predicate(predicate.callable());
+                        let captured =
+                            resolve_sort_predicate_for_test(&mut eval, predicate.callable());
                         let left = match outcome {
                             NativeCallOutcome::Success => predicate.element(0),
                             NativeCallOutcome::Signal => Value::list(vec![Value::symbol("bad")]),
@@ -310,11 +310,8 @@ fn published_native_sort_calls_restore_frames_on_success_and_signal() {
                         // sort, including a signal-hook collection at finish.
                         // This fresh Context owns them until it is dropped.
                         let subr = match captured {
-                            SortPredicate::NumericLessp { subr, .. }
-                            | SortPredicate::StringLessp { subr, .. } => subr,
-                            SortPredicate::ValueLt
-                            | SortPredicate::Generic(_)
-                            | SortPredicate::Subr { .. } => {
+                            CapturedSortPredicate::Native { subr } => subr,
+                            CapturedSortPredicate::Other => {
                                 panic!("fixture must capture a native body")
                             }
                         };

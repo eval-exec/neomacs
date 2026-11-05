@@ -6,7 +6,9 @@ use crate::value::positions::{CharPos0, CharRange};
 
 fn heap(on: bool) -> TaggedHeap {
     let mut heap = TaggedHeap::new();
-    heap.set_generational_enabled(on);
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { heap.set_generational_enabled(on) };
     heap.publish_barrier_window();
     heap
 }
@@ -185,7 +187,9 @@ fn memory_inventory_includes_detached_young_box_sweep_list() {
     let mut heap = heap(false);
     set_tagged_heap(&mut heap);
     let table = heap.alloc_hash_table(LispHashTable::new(HashTableTest::Eq));
-    heap.begin_collection();
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { heap.begin_collection() };
     heap.seed_root(table);
     heap.incremental_drain_all();
     heap.incremental_finish(0, std::time::Instant::now());

@@ -141,10 +141,13 @@ fn gc_threshold_cap_from_env() -> Option<usize> {
     })
 }
 
-const EVAL_STACK_RED_ZONE: usize = 128 * 1024;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) const EVAL_STACK_RED_ZONE: usize = 128 * 1024;
 const EVAL_STACK_SEGMENT: usize = 2 * 1024 * 1024;
-const STACK_GROWTH_PROBE_START_DEPTH: usize = 16;
-const STACK_GROWTH_PROBE_INTERVAL: usize = 16;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) const STACK_GROWTH_PROBE_START_DEPTH: usize = 16;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+pub(crate) const STACK_GROWTH_PROBE_INTERVAL: usize = 16;
 /// Capacity of the per-Context cache mapping symbol → resolved call
 /// target.  The cache is keyed by `function_epoch` and invalidated
 /// whenever the obarray's function cells change.  GNU Emacs has no such
@@ -4390,7 +4393,7 @@ fn bind_lexical_value_rooted_in_specpdl(
 /// [`neovm_value::symbol::ObarraySymbolCellSkipGuard`]. The guard holds
 /// the only live `&mut Context` for its scope; reach it via
 /// [`GcInhibitGuard::context`].
-struct GcInhibitGuard<'a>(&'a mut Context);
+pub(crate) struct GcInhibitGuard<'a>(&'a mut Context);
 
 impl<'a> GcInhibitGuard<'a> {
     #[doc(hidden)]
@@ -5843,6 +5846,43 @@ impl Context {
     #[inline]
     pub fn specpdl_len_for_test(&self) -> usize {
         self.specpdl.len()
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    #[inline]
+    pub fn jit_stack_limit_for_test(&self) -> usize {
+        self.jit_stack_limit
+    }
+
+    /// Typed GC-root push for a Rust-local fixture the collector cannot see.
+    /// Roots are owner-thread state, so this never yields the root table.
+    ///
+    /// # Safety
+    /// `value` must be a live heap value owned by this Context's World and must
+    /// not have been collected: the push publishes it as a GC root for the
+    /// rest of the Context's life.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    #[inline]
+    pub(crate) unsafe fn push_eval_temp_root_for_test(&mut self, value: neovm_value::value::Value) {
+        self.eval_temp_roots.push(value);
+    }
+
+    /// Install (or clear) the retained pdump mapping the rows-authority
+    /// fixture owns. The mapping is an owner lease, never a heap view; the
+    /// Context stores only the caller's `'static` reference.
+    ///
+    /// # Safety
+    /// `image` must be a genuinely mmapped, process-retained pdump image whose
+    /// rows authority the Context may adopt; the mapping must outlive the
+    /// Context and must not be mutated or unmapped while installed.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) unsafe fn install_pdump_image_for_test(
+        &mut self,
+        image: Option<&'static super::pdump::mmap_image::LoadedMmapImage>,
+    ) {
+        self.pdump_image = image;
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -9097,10 +9137,6 @@ mod gc_thread_per_heap_tests;
 
 // task3-jitcrash-diag: diagnostic repros for the pre-existing JIT
 // heap-corruption crash (no fix here).
-#[cfg(test)]
-#[path = "tests/jit_crash_repro_test.rs"]
-mod jit_crash_repro_tests;
-
 // JIT call seam slice C1: the interpreter's direct entry into armed leaves.
 #[cfg(test)]
 #[path = "tests/jit_leaf_slot_test.rs"]

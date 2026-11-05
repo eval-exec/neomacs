@@ -687,7 +687,9 @@ fn real_heap(generational: bool) -> Box<TaggedHeap> {
     knobs::set_concurrent_claims_for_test(Some(true));
     let mut heap = Box::new(TaggedHeap::new());
     knobs::set_concurrent_claims_for_test(None);
-    heap.set_generational_enabled(generational);
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { heap.set_generational_enabled(generational) };
     assert!(heap.concurrent_claims());
     set_tagged_heap(&mut heap);
     heap
@@ -1150,7 +1152,9 @@ fn tier_h_user_test_guards_inhibit_gc_without_cow_and_restore_after_all_exits() 
         knobs::set_concurrent_claims_for_test(Some(true));
         let mut context = Context::new();
         knobs::set_concurrent_claims_for_test(None);
-        context.tagged_heap.set_generational_enabled(generational);
+        // SAFETY: serial fixture heap; the caller holds the only heap view and no
+        // collector or compiled leaf runs.
+        unsafe { context.tagged_heap.set_generational_enabled(generational) };
         // Bootstrap through the actual Context driver before requesting an
         // automatic concurrent major. This fixture deliberately tests that
         // path even when the process-wide suite requests GC stress elsewhere.

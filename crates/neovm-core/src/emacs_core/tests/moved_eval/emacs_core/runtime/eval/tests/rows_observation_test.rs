@@ -1,14 +1,23 @@
 //! Partial metadata receipts only; no row admission or source lease here.
-use super::*;
+use crate::emacs_core::eval::*;
+use crate::window::DisplayFrameManagerExt;
+use neovm_value::display_vocab::FrameId;
 use neovm_value::tagged::collection_reads::{capture, capture_normalized};
 use neovm_value::value::Value;
 
 fn ready() -> (Context, FrameId) {
-    let mut context = Context::new();
+    let mut context = crate::test_utils::new_context();
     context.gc_stress = false;
     // These receipts require GEN1, independently of the test runner's policy.
-    context.tagged_heap.set_generational_enabled(true);
-    context.tagged_heap.set_gc_threshold(usize::MAX);
+    // SAFETY: serial fixture heap; no collector or compiled leaf runs across
+    // the GEN1 policy change.
+    unsafe {
+        neovm_value::test_support::authority::set_generational_enabled_for_test(
+            context.tagged_heap_mut(),
+            true,
+        )
+    };
+    unsafe { context.tagged_heap_mut() }.set_gc_threshold(usize::MAX);
     context.gc_collect_exact();
     let source = context.buffer_manager().current_buffer().unwrap().id();
     let frame = context
@@ -22,7 +31,7 @@ fn ready() -> (Context, FrameId) {
     context.sync_runtime_faces_for_frame(frame);
     context.setup_thread_locals();
     assert!(
-        context.tagged_heap.generational_enabled(),
+        context.tagged_heap().generational_enabled(),
         "GEN1 test policy required"
     );
     (context, frame)
@@ -94,9 +103,12 @@ fn rows_observation_driver_and_partial_collection_refuse_before_replay() {
         Err(RowsObservationRefusal::DriverActive)
     );
     context.gc_driver_active = false;
-    let count = context.tagged_heap.gc_collections();
-    context.tagged_heap.begin_collection();
-    assert_eq!(context.tagged_heap.gc_collections(), count);
+    let count = context.tagged_heap().gc_collections();
+    // SAFETY: serial fixture heap, quiescent; no concurrent marker runs.
+    unsafe {
+        neovm_value::test_support::authority::begin_collection_for_test(context.tagged_heap_mut())
+    };
+    assert_eq!(context.tagged_heap().gc_collections(), count);
     assert_eq!(
         context.static_rows_observation_current(&epoch),
         Err(RowsObservationRefusal::CollectorBusy)
@@ -190,7 +202,7 @@ fn rows_observation_graphical_warm_frame_is_required_at_both_ends() {
 #[test]
 fn rows_observation_cold_faces_and_test_only_gen0_switch_refuse() {
     let (mut context, frame) = ready();
-    context.face_change_count += 1;
+    *context.face_change_count_mut() += 1;
     assert!(matches!(
         context.begin_static_rows_observation(frame),
         Err(RowsObservationRefusal::ColdFaces)
@@ -198,12 +210,26 @@ fn rows_observation_cold_faces_and_test_only_gen0_switch_refuse() {
     context.sync_runtime_faces_for_frame(frame);
     // Production enabled is immutable after construction. This cfg(test)
     // setter tests the admission predicate, not a supported policy transition.
-    context.tagged_heap.set_generational_enabled(false);
+    // SAFETY: serial fixture heap; no collector or compiled leaf runs across
+    // the GEN1 policy change.
+    unsafe {
+        neovm_value::test_support::authority::set_generational_enabled_for_test(
+            context.tagged_heap_mut(),
+            false,
+        )
+    };
     assert!(matches!(
         context.begin_static_rows_observation(frame),
         Err(RowsObservationRefusal::GenerationalDisabled)
     ));
-    context.tagged_heap.set_generational_enabled(true);
+    // SAFETY: serial fixture heap; no collector or compiled leaf runs across
+    // the GEN1 policy change.
+    unsafe {
+        neovm_value::test_support::authority::set_generational_enabled_for_test(
+            context.tagged_heap_mut(),
+            true,
+        )
+    };
 }
 
 struct RefusingHost;
@@ -239,7 +265,8 @@ fn rows_observation_any_display_host_refuses_without_host_entry() {
 
 #[test]
 fn rows_observation_dump_authority_is_the_actual_retained_mapping_not_temporary_or_new_image() {
-    use crate::emacs_core::pdump::mmap_image::{self, DumpSectionKind, ImageSection};
+    use crate::emacs_core::pdump::mmap_image_test_support as mmap_image;
+    use crate::emacs_core::pdump::mmap_image_test_support::{DumpSectionKind, ImageSection};
     let directory = tempfile::tempdir().unwrap();
     let first_path = directory.path().join("rows-origin-first.pdump");
     let second_path = directory.path().join("rows-origin-second.pdump");
@@ -258,7 +285,7 @@ fn rows_observation_dump_authority_is_the_actual_retained_mapping_not_temporary_
     let temporary = mmap_image::load_image(&first_path).unwrap();
     let without_image = context.begin_static_rows_observation(frame).unwrap();
     assert!(
-        without_image.dump.is_none(),
+        without_image.dump_range_for_test().is_none(),
         "an unrelated live mapping grants no authority"
     );
     drop(temporary); // Really unmapped; no object/key is read from that payload.
@@ -269,9 +296,16 @@ fn rows_observation_dump_authority_is_the_actual_retained_mapping_not_temporary_
     );
     let retained: &'static mmap_image::LoadedMmapImage =
         Box::leak(Box::new(mmap_image::load_image(&first_path).unwrap()));
-    context.pdump_image = Some(retained);
+    // SAFETY: `retained` is a real process-retained mmap with a 'static lease
+    // that outlives this Context and is never remapped while installed.
+    unsafe {
+        neovm_eval::test_support::authority::install_pdump_image_for_test(
+            &mut context,
+            Some(retained),
+        )
+    };
     let epoch = context.begin_static_rows_observation(frame).unwrap();
-    let (_, range) = epoch.dump.as_ref().unwrap();
+    let range = epoch.dump_range_for_test().unwrap();
     let payload = retained
         .section(DumpSectionKind::HeapImage)
         .unwrap()
@@ -279,9 +313,16 @@ fn rows_observation_dump_authority_is_the_actual_retained_mapping_not_temporary_
     assert!(range.contains(&payload));
     assert!(!range.contains(&range.end));
     assert!(context.static_rows_observation_current(&epoch).is_ok());
-    context.pdump_image = Some(Box::leak(Box::new(
-        mmap_image::load_image(&second_path).unwrap(),
-    )));
+    // SAFETY: the replacement is a real process-retained mmap with a 'static
+    // lease that outlives this Context.
+    unsafe {
+        neovm_eval::test_support::authority::install_pdump_image_for_test(
+            &mut context,
+            Some(Box::leak(Box::new(
+                mmap_image::load_image(&second_path).unwrap(),
+            ))),
+        )
+    };
     assert_eq!(
         context.static_rows_observation_current(&epoch),
         Err(RowsObservationRefusal::RuntimeChanged)
@@ -293,7 +334,8 @@ fn rows_observation_dump_authority_is_the_actual_retained_mapping_not_temporary_
 
 #[test]
 fn rows_observation_real_retained_mapped_cons_dependency_matches_only_captured_image() {
-    use crate::emacs_core::pdump::mmap_image::{self, DumpSectionKind, ImageSection};
+    use crate::emacs_core::pdump::mmap_image_test_support as mmap_image;
+    use crate::emacs_core::pdump::mmap_image_test_support::{DumpSectionKind, ImageSection};
     use neovm_value::tagged::header::ConsCell;
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("rows-origin-cons.pdump");
@@ -326,7 +368,7 @@ fn rows_observation_real_retained_mapped_cons_dependency_matches_only_captured_i
     // No callback or collection separates registration and pointer creation.
     unsafe {
         context
-            .tagged_heap
+            .tagged_heap_mut()
             .register_mapped_cons_range(cell.cast_mut(), 1);
     }
     // SAFETY: the same aligned, initialized process-retained cell is live;
@@ -340,7 +382,14 @@ fn rows_observation_real_retained_mapped_cons_dependency_matches_only_captured_i
         context.finish_static_rows_observation(no_authority, reads.as_ref().unwrap()),
         Err(RowsObservationRefusal::UnknownOwner)
     ));
-    context.pdump_image = Some(retained);
+    // SAFETY: `retained` is a real process-retained mmap with a 'static lease
+    // that outlives this Context and is never remapped while installed.
+    unsafe {
+        neovm_eval::test_support::authority::install_pdump_image_for_test(
+            &mut context,
+            Some(retained),
+        )
+    };
     let epoch = context.begin_static_rows_observation(frame).unwrap();
     let (_, reads) = capture(|| assert_eq!(cons.cons_car(), Value::fixnum(17)));
     let metadata = context

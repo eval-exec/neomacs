@@ -5,10 +5,6 @@ use crate::emacs_core::builtins::higher_order::{NativeSortCall, SortPredicate};
 use crate::emacs_core::eval::subr_abi::{SubrFn2, SubrFnManySlice};
 use neovm_value::tagged::gc::MarkPhase;
 
-#[cfg(test)]
-#[path = "tests/sort_stack_boundary_test.rs"]
-mod sort_stack_boundary_tests;
-
 /// Captured native bodies have distinct arity and pointer proofs. Naming the
 /// body keeps validation and invocation exhaustive when a body kind is added.
 #[derive(Clone, Copy, Debug)]

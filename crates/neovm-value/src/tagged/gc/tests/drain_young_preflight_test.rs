@@ -179,10 +179,14 @@ enum DrainYoungPhase {
 
 fn drain_young_heap(generation: DrainYoungGeneration) -> TaggedHeap {
     let mut heap = TaggedHeap::new();
-    heap.set_generational_enabled(match generation {
-        DrainYoungGeneration::Gen0 => false,
-        DrainYoungGeneration::Gen1 => true,
-    });
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe {
+        heap.set_generational_enabled(match generation {
+            DrainYoungGeneration::Gen0 => false,
+            DrainYoungGeneration::Gen1 => true,
+        })
+    };
     heap.generational.verify = true;
     heap.partition_dump = false;
     heap.dump_blackened = false;

@@ -11,7 +11,9 @@ fn heap(generational: bool) -> TestHeap {
     knobs::set_concurrent_claims_for_test(Some(true));
     let mut heap = TestHeap::new();
     knobs::set_concurrent_claims_for_test(None);
-    heap.set_generational_enabled(generational);
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { heap.set_generational_enabled(generational) };
     heap.install();
     heap
 }
@@ -71,7 +73,9 @@ fn transitive_bare_symbol_cycle(claims: bool, generational: bool, ancestor: Symb
     knobs::set_concurrent_claims_for_test(Some(claims));
     let mut heap = TestHeap::new();
     knobs::set_concurrent_claims_for_test(None);
-    heap.set_generational_enabled(generational);
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { heap.set_generational_enabled(generational) };
     heap.install();
 
     let symbol = TaggedValue::from_sym_id(intern_uninterned("u35-transitive-worker-weak-key"));

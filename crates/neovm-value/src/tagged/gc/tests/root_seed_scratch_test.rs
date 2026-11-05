@@ -37,7 +37,9 @@ fn retained_seed_capacity_is_not_a_root_between_collections() {
     use crate::tagged::gc::TaggedHeap;
     let mut heap = TaggedHeap::new();
     let value = heap.alloc_vector(vec![TaggedValue::fixnum(73)]);
-    heap.begin_collection();
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { heap.begin_collection() };
     // SAFETY: this isolated heap has one stopped owner throughout seeding.
     let mut loan = unsafe { heap.root_seed_scratch() };
     loan.roots().push(value);

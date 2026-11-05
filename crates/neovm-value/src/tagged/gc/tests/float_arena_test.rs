@@ -72,7 +72,9 @@ fn reuse_within_one_cooperative_sweep_window_body(verify: bool) {
 
     // Mark to a fixpoint and ARM the deferred sweep (the incremental
     // termination path), then drain it slice by slice.
-    heap.begin_collection();
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { heap.begin_collection() };
     for &k in &keep {
         heap.seed_root(k);
     }
@@ -903,7 +905,9 @@ fn a_deferred_sweep_finishes_while_the_mutator_opens_pages() {
     for i in 0..(4 * FLOAT_PAGE_SLOTS) {
         let _ = heap.alloc_float(i as f64);
     }
-    heap.begin_collection();
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { heap.begin_collection() };
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
     heap.incremental_finish(bytes_before, std::time::Instant::now());

@@ -113,3 +113,15 @@ mod emacs_core_runtime_eval_keyboard_tests_extended_keysyms_test_rs;
 #[cfg(test)]
 #[path = "emacs_core/runtime/eval/keyboard/tests/frame_focus_input_test.rs"]
 mod emacs_core_runtime_eval_keyboard_tests_frame_focus_input_test_rs;
+
+#[cfg(test)]
+#[path = "emacs_core/runtime/eval/tests/jit_crash_repro_test.rs"]
+mod emacs_core_runtime_eval_tests_jit_crash_repro_test_rs;
+
+#[cfg(test)]
+#[path = "emacs_core/runtime/eval/tests/rows_observation_test.rs"]
+mod emacs_core_runtime_eval_tests_rows_observation_test_rs;
+
+#[cfg(test)]
+#[path = "emacs_core/runtime/eval/tests/sort_stack_boundary_test.rs"]
+mod emacs_core_runtime_eval_tests_sort_stack_boundary_test_rs;

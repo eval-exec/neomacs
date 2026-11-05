@@ -143,7 +143,9 @@ impl CollectionSnapshot {
 fn heap(enabled: bool) -> TaggedHeap {
     let mut heap = TaggedHeap::new();
     heap.generational = GenState::new(enabled);
-    heap.set_generational_enabled(enabled);
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { heap.set_generational_enabled(enabled) };
     heap
 }
 

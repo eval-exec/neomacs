@@ -175,7 +175,9 @@ fn heapborrow_r7_stress_fixtures_do_not_reintroduce_borrow_installers() {
 #[test]
 fn heapborrow_r8_collector_scans_do_not_observe_lisp_reads() {
     let mut heap = TestHeap::new();
-    heap.set_generational_enabled(false);
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { heap.set_generational_enabled(false) };
     heap.install();
     use crate::tagged::collection_reads::{CompiledJournalMode, force_compiled_journal_for_test};
     struct RestoreMode;
@@ -220,7 +222,9 @@ fn heapborrow_r8_vector_and_string_scans_do_not_observe_lisp_reads() {
         }
     }
     let mut heap = TestHeap::new();
-    heap.set_generational_enabled(false);
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { heap.set_generational_enabled(false) };
     heap.install();
     let _restore = RestoreMode;
     force_compiled_journal_for_test(Some(CompiledJournalMode::Observed));

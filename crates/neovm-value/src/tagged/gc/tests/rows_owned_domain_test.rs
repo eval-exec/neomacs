@@ -12,7 +12,9 @@ fn gen1_heap() -> Box<TaggedHeap> {
     let mut heap = Box::new(TaggedHeap::new());
     // Select the lifecycle proof's policy on an empty heap, before publishing
     // its TLS/card-table view or allocating any observed storage.
-    heap.set_generational_enabled(true);
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { heap.set_generational_enabled(true) };
     set_tagged_heap(&mut heap);
     heap
 }
@@ -143,7 +145,9 @@ fn rows_owned_domain_idle_refuses_major_partial_and_deferred_without_count_chang
     );
     let root = heap.alloc_cons(TaggedValue::NIL, TaggedValue::NIL);
     let before = heap.gc_collections();
-    heap.begin_collection();
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { heap.begin_collection() };
     assert_eq!(heap.gc_collections(), before);
     assert!(!heap.rows_observation_idle());
     heap.seed_root(root);

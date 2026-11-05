@@ -200,7 +200,9 @@ fn generational_worker_major_claims_promote_only_young_headers() {
     for kind in ClaimKind::ALL {
         for age in Age::ALL {
             let mut heap = TestHeap::new();
-            heap.set_generational_enabled(true);
+            // SAFETY: serial fixture heap; the caller holds the only heap view and no
+            // collector or compiled leaf runs.
+            unsafe { heap.set_generational_enabled(true) };
             heap.install();
             let roots = ScratchRoots::new();
             let value = roots.keep(kind.allocate(&mut heap));
@@ -249,7 +251,9 @@ fn generational_worker_legacy_claim_parity_and_tenured_rules_are_unchanged() {
     for kind in ClaimKind::ALL {
         for age in Age::ALL {
             let mut heap = TestHeap::new();
-            heap.set_generational_enabled(false);
+            // SAFETY: serial fixture heap; the caller holds the only heap view and no
+            // collector or compiled leaf runs.
+            unsafe { heap.set_generational_enabled(false) };
             heap.install();
             let roots = ScratchRoots::new();
             let value = roots.keep(kind.allocate(&mut heap));
@@ -627,7 +631,9 @@ fn concurrent_worker_channel_dispatch_preserves_legacy_and_enabled_symbol_polici
                 let mut heap = TestHeap::new();
                 knobs::set_concurrent_claims_for_test(None);
                 knobs::set_chunk_map_for_test(None);
-                heap.set_generational_enabled(major);
+                // SAFETY: serial fixture heap; the caller holds the only heap view and no
+                // collector or compiled leaf runs.
+                unsafe { heap.set_generational_enabled(major) };
                 let direct = symbol("u35-channel-direct");
                 let nested = symbol("nil");
                 let positioned = symbol("t");

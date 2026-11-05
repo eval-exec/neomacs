@@ -106,7 +106,9 @@ fn dirty_owner_tracking_is_cleared_at_begin_so_freed_slot_reuse_is_not_deduped()
     //     the owner tables HERE, before the sweep can free-and-reuse a slot.
     //     (mark_all drains the internal runtime roots seeded by
     //     begin_collection so only the unrooted O and Q are swept.) ---
-    heap.begin_collection();
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { heap.begin_collection() };
     heap.mark_all();
     assert_eq!(
         heap.dirty_owner_count(),
@@ -275,7 +277,9 @@ fn deferred_sweep_aggregates_slice_stats() {
 
     // Mark to a fixpoint, arm the deferred sweep (the incremental
     // termination path), then drain it in bounded slices.
-    heap.begin_collection();
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { heap.begin_collection() };
     heap.seed_root(rooted);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();
@@ -829,7 +833,9 @@ fn concurrent_string_claim_passes_partition_verifier() {
     heap.extend_dump_span(4096, 16);
 
     // First partitioned cycle promotes + blackens; verifiers arm after it.
-    heap.begin_collection();
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { heap.begin_collection() };
     heap.complete_collection();
     assert!(heap.dump_blackened);
 
@@ -2984,7 +2990,9 @@ fn finalizer_doomed_on_stw_collection_queues_and_keeps_function() {
 
     // Cycle 1: the finalizer is rooted — still registered, nothing queued,
     // and the traced function survives.
-    heap.begin_collection();
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { heap.begin_collection() };
     heap.seed_root(finalizer);
     heap.complete_collection();
     assert!(heap.doomed_finalizer_functions.is_empty());
@@ -2996,7 +3004,9 @@ fn finalizer_doomed_on_stw_collection_queues_and_keeps_function() {
 
     // Cycle 2: nothing roots the finalizer — doomed. The function (and
     // what it reaches) survives the sweep; the finalizer object does not.
-    heap.begin_collection();
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { heap.begin_collection() };
     heap.complete_collection();
     assert!(heap.finalizer_registry.is_empty());
     assert!(
@@ -3015,7 +3025,9 @@ fn finalizer_doomed_on_stw_collection_queues_and_keeps_function() {
 
     // Cycle 3, queue still undrained: the queued function is a runtime
     // root and must survive again.
-    heap.begin_collection();
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { heap.begin_collection() };
     heap.complete_collection();
     assert_eq!(
         unsafe { (*function.xcons_ptr()).load_car() }.0,
@@ -3093,7 +3105,9 @@ fn finalizer_doomed_on_concurrent_termination_queues_and_keeps_function() {
 
     // Next cycle: the born-black churn finalizer (still unreferenced) is
     // doomed now; the rooted one stays registered.
-    heap.begin_collection();
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { heap.begin_collection() };
     heap.seed_root(live_fin);
     heap.complete_collection();
     assert!(!heap.owns_non_cons_object(churn_ptr as *const u8));
@@ -3122,7 +3136,9 @@ fn finalizer_cycle_passes_partition_verifier() {
 
     // First partitioned cycle promotes survivors + blackens the (empty)
     // dump; verification gates arm on the cycles after it.
-    heap.begin_collection();
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { heap.begin_collection() };
     heap.complete_collection();
     assert!(heap.dump_blackened);
 
@@ -3134,7 +3150,9 @@ fn finalizer_cycle_passes_partition_verifier() {
 
     // Verified cycle: `complete_collection` panics if the finalizer arms
     // break the partition/tricolor invariants.
-    heap.begin_collection();
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { heap.begin_collection() };
     heap.seed_root(live_fin);
     heap.complete_collection();
 
@@ -3238,7 +3256,9 @@ fn write_barrier_caches_skip_only_writes_with_nothing_to_record() {
     // The next cycle logs the owner's pre-image again.
     // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
     drop(unsafe { heap.take_satb_shared_for_test() });
-    heap.begin_collection();
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { heap.begin_collection() };
     heap.seed_root(root);
     heap.seed_root(young);
     let bytes_before = heap.live_bytes();
@@ -3403,7 +3423,9 @@ fn concurrent_first_cycle_keeps_weak_entries_keyed_by_live_image_objects() {
             heap.finish_incremental_sweep_now();
             heap.finish_first_partition_cycle();
         } else {
-            heap.begin_collection();
+            // SAFETY: serial fixture heap; the caller holds the only heap view and no
+            // collector or compiled leaf runs.
+            unsafe { heap.begin_collection() };
             heap.seed_root(weak);
             heap.seed_root(key);
             heap.complete_collection();

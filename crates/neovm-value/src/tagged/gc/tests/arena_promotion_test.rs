@@ -399,7 +399,9 @@ fn sweep_live_bytes_track_variable_payload_sizes() {
     );
 
     // Incremental (sweep slices -> finish_incremental_sweep) site.
-    heap.begin_collection();
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { heap.begin_collection() };
     heap.seed_root(root);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();

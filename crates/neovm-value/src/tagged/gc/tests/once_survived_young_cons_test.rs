@@ -16,7 +16,9 @@ fn installed_heap(chunk_map: bool) -> Box<TaggedHeap> {
     set_chunk_map_for_test(Some(chunk_map));
     let mut heap = Box::new(TaggedHeap::new());
     set_chunk_map_for_test(None);
-    heap.set_generational_enabled(true);
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { heap.set_generational_enabled(true) };
     heap.gc_threshold = usize::MAX / 4;
     set_tagged_heap(&mut heap);
     assert_eq!(heap.chunk_map.is_some(), chunk_map);

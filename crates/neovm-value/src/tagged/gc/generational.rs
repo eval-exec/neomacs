@@ -631,8 +631,12 @@ impl TaggedHeap {
 
     /// Turn generations on or off. A GEN1 heap builds its card table here,
     /// before any leaf can compile a card mark against it.
+    ///
+    /// # Safety
+    /// The heap must be this mutator's exclusively borrowed owner and no
+    /// concurrent marker or compiled leaf may run across the barrier switch.
     #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn set_generational_enabled(&mut self, enabled: bool) {
+    pub(crate) unsafe fn set_generational_enabled(&mut self, enabled: bool) {
         self.generational.enabled = enabled;
         if enabled {
             self.install_card_table();

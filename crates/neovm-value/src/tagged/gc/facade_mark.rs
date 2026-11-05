@@ -766,7 +766,9 @@ mod tests {
         for generational in [false, true] {
             let mut heap = TaggedHeap::new();
             heap.generational = generational::GenState::new(generational);
-            heap.set_generational_enabled(generational);
+            // SAFETY: serial fixture heap; the caller holds the only heap view and no
+            // collector or compiled leaf runs.
+            unsafe { heap.set_generational_enabled(generational) };
             let child = heap.alloc_float(9.5);
             let root = heap.alloc_cons(child, TaggedValue::NIL);
             let garbage = heap.alloc_float(10.5);

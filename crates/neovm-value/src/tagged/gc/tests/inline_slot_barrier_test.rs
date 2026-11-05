@@ -10,7 +10,9 @@ use crate::tagged::value::TAG_MASK;
 
 fn installed_heap(generational: bool) -> Box<TaggedHeap> {
     let mut heap = Box::new(TaggedHeap::new());
-    heap.set_generational_enabled(generational);
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { heap.set_generational_enabled(generational) };
     set_tagged_heap(&mut heap);
     heap
 }

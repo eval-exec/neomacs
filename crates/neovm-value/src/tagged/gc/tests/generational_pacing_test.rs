@@ -22,7 +22,9 @@ fn counters(promoted: usize, minors: usize, stress_cycles: usize) -> GenerationP
 
 fn ready_heap(enabled: bool) -> TaggedHeap {
     let mut heap = TaggedHeap::new();
-    heap.set_generational_enabled(enabled);
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { heap.set_generational_enabled(enabled) };
     heap.generational.pacing_knobs = GenerationalPacingKnobs::default();
     heap.bootstrap_collected = true;
     heap.publish_barrier_window();

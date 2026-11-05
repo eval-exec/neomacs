@@ -9,7 +9,9 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 
 fn new_heap() -> Box<TaggedHeap> {
     let mut heap = Box::new(TaggedHeap::new());
-    heap.set_generational_enabled(true);
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { heap.set_generational_enabled(true) };
     heap.generational.verify = true;
     heap.partition_dump = false;
     heap.dump_blackened = false;
@@ -316,7 +318,9 @@ fn recording_cache_mixed_grants_remember_old_to_young_edge_across_minors() {
 #[test]
 fn recording_cache_black_grants_log_only_handed_prefixes_and_refund_marks() {
     let mut heap = new_heap();
-    heap.begin_collection();
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { heap.begin_collection() };
     heap.mark_in_progress = true;
     // SAFETY: serial test heap; no concurrent marker has been launched and none can run during the call.
     unsafe { heap.set_concurrent_active_for_test(true) };

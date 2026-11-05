@@ -490,6 +490,15 @@ mod treesit;
 
 pub use file_notify::*;
 pub use higher_order::*;
+/// Test-support facade for the re-homed sort fixtures: the product's own
+/// resolver and sort entry point, without publishing predicate/proof types.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub mod higher_order_test_support {
+    pub use super::higher_order::{
+        CapturedSortPredicate, builtin_sort_slice, resolve_sort_predicate_for_test,
+    };
+}
 #[doc(hidden)]
 pub use hooks::*;
 #[doc(hidden)]

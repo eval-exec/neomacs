@@ -10,7 +10,7 @@
 //! "list_from_slice SIGSEGV").
 //!
 //! CRITICAL METHODOLOGY NOTE (the confound the task warned about):
-//! `NEOVM_GC_STRESS=1` on a bare `Context::new()` collects at EVERY allocation
+//! `NEOVM_GC_STRESS=1` on a bare `crate::test_utils::new_context()` collects at EVERY allocation
 //! safe point. A bare Context is NOT a warmed pdump image, so any heap `Value`
 //! held only in a *Rust local* (e.g. a COLD `ByteCodeFunction` the test builds
 //! but never binds/roots, or a comparison `expected` bignum) is NOT a GC root
@@ -25,11 +25,9 @@
 #![cfg(feature = "jit")]
 
 use crate::emacs_core::bytecode::ByteCodeFunction;
-use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::opcode::Op;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::eval::Context;
-use crate::emacs_core::jit::RuntimeStateTieringExt;
 use neovm_value::intern::SymId;
 use neovm_value::value::{LambdaParams, Value, ValueKind};
 
@@ -47,7 +45,7 @@ fn bc(required: u32, ops: Vec<Op>, constants: Vec<Value>, hot: bool) -> ByteCode
     f.constants = constants.into();
     f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(64);
     if hot {
-        f.jit_runtime().set_hot_for_test();
+        neovm_eval::test_support::authority::jit_mark_hot_for_test(&f);
     }
     f
 }
@@ -59,7 +57,7 @@ fn bind_fn(ev: &mut Context, name: &str, bytecode: ByteCodeFunction) -> Value {
     let ValueKind::Symbol(id) = sym.kind() else {
         panic!("symbol")
     };
-    ev.obarray
+    ev.obarray_mut()
         .set_symbol_function_id(id, Value::make_bytecode(bytecode));
     sym
 }
@@ -80,8 +78,8 @@ fn assert_cons_1_2(r: Value) {
 #[test]
 fn repro_baseline_residual_cons_generic() {
     crate::test_utils::init_test_tracing();
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
+    let mut ev = crate::test_utils::new_context();
     ev.gc_stress = true;
     let caller = Value::make_bytecode(bc(
         1,
@@ -121,8 +119,8 @@ fn repro_baseline_residual_cons_generic() {
 #[test]
 fn repro_baseline_heap_arg_generic() {
     crate::test_utils::init_test_tracing();
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
+    let mut ev = crate::test_utils::new_context();
     ev.gc_stress = true;
     let caller = Value::make_bytecode(bc(
         1,
@@ -165,8 +163,8 @@ fn repro_baseline_heap_arg_generic() {
 #[test]
 fn repro_baseline_op_list_residual() {
     crate::test_utils::init_test_tracing();
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
+    let mut ev = crate::test_utils::new_context();
     ev.gc_stress = true;
     let caller = Value::make_bytecode(bc(
         1,
@@ -203,8 +201,8 @@ fn repro_baseline_op_list_residual() {
 #[test]
 fn repro_mir_inlined_plus_residual_generic() {
     crate::test_utils::init_test_tracing();
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
+    let mut ev = crate::test_utils::new_context();
     ev.gc_stress = true;
     // Pure, required-only, inlinable callee: (lambda (x) (1+ x)).
     bind_fn(
@@ -274,8 +272,8 @@ fn repro_mir_inlined_plus_residual_generic() {
 #[test]
 fn repro_mir_any_typed_heap_residual_generic() {
     crate::test_utils::init_test_tracing();
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
+    let mut ev = crate::test_utils::new_context();
     ev.gc_stress = true;
     // Pure, required-only, inlinable callee: (lambda (x) (1+ x)) — earns MIR tier.
     bind_fn(
@@ -380,8 +378,8 @@ fn repro_mir_any_typed_heap_residual_generic() {
 #[test]
 fn repro_baseline_heap_residual_survives_exact_gc() {
     crate::test_utils::init_test_tracing();
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
+    let mut ev = crate::test_utils::new_context();
     ev.gc_stress = true;
     bind_fn(
         &mut ev,
@@ -430,7 +428,7 @@ fn repro_baseline_heap_residual_survives_exact_gc() {
     {
         let leaf = crate::emacs_core::jit::compile::compile_bytecode_function_with(
             &cbc,
-            Some(&ev.obarray),
+            Some(ev.obarray()),
         )
         .expect("caller compiles");
         assert!(
@@ -460,8 +458,8 @@ fn repro_baseline_bignum_residual_generic() {
         push_scratch_gc_root, restore_scratch_gc_roots, save_scratch_gc_roots,
     };
     crate::test_utils::init_test_tracing();
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
+    let mut ev = crate::test_utils::new_context();
     ev.gc_stress = true;
     // Expected print string (a Rust String, not a heap Value — artifact-free).
     let expected_str = {
@@ -520,8 +518,8 @@ fn repro_baseline_bignum_residual_generic() {
 #[test]
 fn repro_jit_to_jit_residual_generic() {
     crate::test_utils::init_test_tracing();
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
+    let mut ev = crate::test_utils::new_context();
     ev.gc_stress = true;
     // Hot callee that allocates: (lambda (n) (make-list n 7)).
     bind_fn(
@@ -575,8 +573,8 @@ fn repro_jit_to_jit_residual_generic() {
 #[test]
 fn repro_loop_carried_cons_across_call() {
     crate::test_utils::init_test_tracing();
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
+    let mut ev = crate::test_utils::new_context();
     ev.gc_stress = true;
     let caller = Value::make_bytecode(bc(
         2,
@@ -626,8 +624,8 @@ fn repro_loop_carried_cons_across_call() {
 #[test]
 fn repro_deep_residual_three_conses() {
     crate::test_utils::init_test_tracing();
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
+    let mut ev = crate::test_utils::new_context();
     ev.gc_stress = true;
     let caller = Value::make_bytecode(bc(
         1,
@@ -678,8 +676,8 @@ fn repro_deep_residual_three_conses() {
 #[test]
 fn diag_repro_bodies_compile() {
     crate::test_utils::init_test_tracing();
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
+    let mut ev = crate::test_utils::new_context();
     bind_fn(
         &mut ev,
         "jitinc",
@@ -763,8 +761,10 @@ fn diag_repro_bodies_compile() {
         ),
     ];
     for (name, f) in cases {
-        match crate::emacs_core::jit::compile::compile_bytecode_function_with(&f, Some(&ev.obarray))
-        {
+        match crate::emacs_core::jit::compile::compile_bytecode_function_with(
+            &f,
+            Some(ev.obarray()),
+        ) {
             Ok(_) => eprintln!("COMPILE OK   [{name}]"),
             Err(e) => eprintln!("COMPILE ERR  [{name}]: {e:?}"),
         }
@@ -774,7 +774,7 @@ fn diag_repro_bodies_compile() {
 /// DEFINITIVE warm-context test of the REPORTED shape: `parse-partial-sexp` via
 /// the GENERIC JIT call path, with a heap-cons residual, under `gc_stress`, but
 /// in a WARM (`runtime_startup_context`) evaluator — the fuller bootstrap the
-/// bare `Context::new()` lacks. Run this both ways:
+/// bare `crate::test_utils::new_context()` lacks. Run this both ways:
 ///   * `NEOVM_JIT_THRESHOLD=1 NEOVM_GC_STRESS=1` (JIT on)  -> expect PASS
 ///   * `NEOVM_JIT=0 NEOVM_GC_STRESS=1`            (JIT off) -> expect PASS
 ///
@@ -784,7 +784,7 @@ fn diag_repro_bodies_compile() {
 #[test]
 fn repro_warmctx_parse_partial_sexp_generic() {
     crate::test_utils::init_test_tracing();
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
     let mut ev = crate::test_utils::runtime_startup_context();
     // gc_stress only AROUND the parse-partial-sexp funcall (the JIT call path
     // under test); the warm heap is huge so a full collection per allocation is
@@ -827,7 +827,7 @@ fn repro_warmctx_parse_partial_sexp_generic() {
     }
 }
 
-/// Former RED HERRING: `parse-partial-sexp` over a bare `Context::new()` under
+/// Former RED HERRING: `parse-partial-sexp` over a bare `crate::test_utils::new_context()` under
 /// `gc_stress` used to panic with an invalid symbol id *with the JIT DISABLED
 /// too* (`NEOVM_JIT=0`).  The confound was the probe itself: it held the
 /// bytecode caller and the callee symbol only in Rust locals while `gc_stress`
@@ -837,8 +837,8 @@ fn repro_warmctx_parse_partial_sexp_generic() {
 #[test]
 fn repro_redherring_parse_partial_sexp_bare_context() {
     crate::test_utils::init_test_tracing();
-    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let mut ev = Context::new();
+    neovm_eval::test_support::authority::force_profit_gate_for_test(false);
+    let mut ev = crate::test_utils::new_context();
     ev.gc_stress = true;
     ev.eval_str("(insert \"(foo (bar baz) (qux (a b c) d) e)\")")
         .unwrap();
@@ -869,8 +869,12 @@ fn repro_redherring_parse_partial_sexp_bare_context() {
     // to it, so root them or a collection mid-loop frees the bytecode object
     // and the symbol, and the next call reads a garbage symbol id (the panic
     // this probe originally documented).
-    ev.eval_temp_roots.push(caller);
-    ev.eval_temp_roots.push(ppss);
+    // SAFETY: both values are live allocations of this bare Context's heap and
+    // no collection runs between their creation and these roots.
+    unsafe {
+        neovm_eval::test_support::authority::push_eval_temp_root_for_test(&mut ev, caller);
+        neovm_eval::test_support::authority::push_eval_temp_root_for_test(&mut ev, ppss);
+    }
     for _ in 0..100 {
         ev.eval_str("(goto-char (point-min))").unwrap();
         let _ = ev.funcall_general_untraced(caller, vec![ppss]);

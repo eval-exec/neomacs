@@ -60,7 +60,9 @@ fn allocation_during_an_incremental_cycle_is_not_counted_live() {
         rooted = heap.alloc_cons(TaggedValue::fixnum(i), rooted);
     }
     // A completed cycle first, so the live count reflects just the list.
-    heap.begin_collection();
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { heap.begin_collection() };
     heap.seed_root(rooted);
     let before = heap.live_bytes();
     heap.incremental_drain_all();
@@ -68,7 +70,9 @@ fn allocation_during_an_incremental_cycle_is_not_counted_live() {
     while !heap.incremental_sweep_slice(8) {}
     let settled = heap.live_bytes();
 
-    heap.begin_collection();
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { heap.begin_collection() };
     heap.seed_root(rooted);
     heap.incremental_drain_all();
     // Born marked during the mark window...

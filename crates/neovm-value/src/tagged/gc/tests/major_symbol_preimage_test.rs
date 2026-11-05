@@ -27,7 +27,9 @@ impl Drop for ScratchRoots {
 
 fn heap(enabled: bool) -> TaggedHeap {
     let mut heap = TaggedHeap::new();
-    heap.set_generational_enabled(enabled);
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { heap.set_generational_enabled(enabled) };
     heap.publish_barrier_window();
     heap
 }

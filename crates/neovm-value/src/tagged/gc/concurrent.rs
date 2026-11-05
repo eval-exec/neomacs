@@ -228,7 +228,9 @@ impl TaggedHeap {
         // start slots filled below.
         self.last_remembered_seed_us = 0;
         self.last_remembered_seed_roots = 0;
-        self.begin_collection();
+        // SAFETY: this entry point is the stop-the-world start; the caller
+        // holds the stopped world and no concurrent marker runs.
+        unsafe { self.begin_collection() };
         // Route this handshake's `begin_collection` phase costs to the START
         // slots (this entry point is exclusively the concurrent start).
         self.handshake.start_count += 1;

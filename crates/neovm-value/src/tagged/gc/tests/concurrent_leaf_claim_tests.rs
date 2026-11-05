@@ -59,7 +59,9 @@ fn heap(enabled: bool, chunk_map: bool, generational: bool) -> TestHeap {
     let mut heap = TestHeap::new();
     knobs::set_concurrent_claims_for_test(None);
     knobs::set_chunk_map_for_test(None);
-    heap.set_generational_enabled(generational);
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { heap.set_generational_enabled(generational) };
     heap.install();
     heap
 }

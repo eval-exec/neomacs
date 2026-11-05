@@ -51,7 +51,10 @@ impl TaggedHeap {
         self.complete_collection();
     }
 
-    pub(crate) fn begin_collection(&mut self) {
+    /// # Safety
+    /// The heap must be exclusively borrowed and quiescent: the call asserts
+    /// that no concurrent marker is running and starts a major cycle.
+    pub(crate) unsafe fn begin_collection(&mut self) {
         self.generational.cycle = generational::GenerationCycle::Major;
         self.begin_collection_with(false);
     }

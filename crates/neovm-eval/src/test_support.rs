@@ -569,6 +569,46 @@ pub mod authority {
     ) -> crate::emacs_core::jit::bg::TestModeScope {
         crate::emacs_core::jit::bg::TestModeScope::enter(mode)
     }
+
+    /// FENCE delegate: publish a Rust-local fixture value as a GC root.
+    ///
+    /// # Safety
+    /// `value` must be a live heap value owned by `context`'s World and not
+    /// collected; the push publishes it for the rest of the Context's life.
+    pub unsafe fn push_eval_temp_root_for_test(
+        context: &mut crate::emacs_core::eval::Context,
+        value: neovm_value::value::Value,
+    ) {
+        // SAFETY: the caller upholds the live-heap-value contract above.
+        unsafe { context.push_eval_temp_root_for_test(value) }
+    }
+
+    /// FENCE delegate: install the retained pdump mapping the rows-authority
+    /// fixture owns.
+    ///
+    /// # Safety
+    /// `image` must be a genuinely mmapped, process-retained image whose rows
+    /// authority the Context may adopt; it must outlive the Context and not be
+    /// mutated or unmapped while installed.
+    #[allow(private_interfaces)]
+    pub unsafe fn install_pdump_image_for_test(
+        context: &mut crate::emacs_core::eval::Context,
+        image: Option<&'static crate::emacs_core::pdump::mmap_image::LoadedMmapImage>,
+    ) {
+        // SAFETY: the caller upholds the retained-mapping contract above.
+        unsafe { context.install_pdump_image_for_test(image) }
+    }
+
+    /// Closure-scoped, panic-safe GC inhibition for the re-homed stack-boundary
+    /// oracle. The guard holds the sole Context borrow and restores the depth
+    /// on drop, including when the body panics.
+    pub fn with_gc_inhibited_for_test<R>(
+        context: &mut crate::emacs_core::eval::Context,
+        body: impl FnOnce(&mut crate::emacs_core::eval::Context) -> R,
+    ) -> R {
+        let mut guard = crate::emacs_core::eval::GcInhibitGuard::enter(context);
+        body(guard.context())
+    }
 }
 
 /// Test-support `aset` over a caller-owned Bare argument slice (K1 fence-ask

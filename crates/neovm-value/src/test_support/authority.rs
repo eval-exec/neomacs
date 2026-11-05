@@ -410,3 +410,30 @@ pub fn reset_plain_value_slot_visits() {
 pub fn set_force_interpret_for_test(state: &crate::value::jit_runtime::RuntimeState, on: bool) {
     state.set_force_interpret_for_test(on);
 }
+/// Value-FENCE row (P1-CLASSES-ALL-CRATES C3): typed GEN1 policy write for the
+/// re-homed rows-authority fixture.
+///
+/// # Safety
+/// The heap view must be the owning mutator's exclusive view, obtained through
+/// the Context's sanctioned accessor, and no collector or compiled leaf may run
+/// across the barrier switch.
+#[cfg(any(test, feature = "test-support"))]
+pub unsafe fn set_generational_enabled_for_test(
+    heap: &mut crate::tagged::gc::TaggedHeap,
+    enabled: bool,
+) {
+    // SAFETY: the caller upholds the exclusive-quiescent-heap contract above.
+    unsafe { heap.set_generational_enabled(enabled) }
+}
+
+/// Value-FENCE row (P1-CLASSES-ALL-CRATES C3): start a real mark cycle so the
+/// re-homed rows oracle can observe the collector-busy refusal.
+///
+/// # Safety
+/// The heap must be exclusively borrowed and quiescent with no concurrent
+/// marker running; the call asserts that precondition and starts a major cycle.
+#[cfg(any(test, feature = "test-support"))]
+pub unsafe fn begin_collection_for_test(heap: &mut crate::tagged::gc::TaggedHeap) {
+    // SAFETY: the caller upholds the quiescent-heap contract above.
+    unsafe { heap.begin_collection() }
+}

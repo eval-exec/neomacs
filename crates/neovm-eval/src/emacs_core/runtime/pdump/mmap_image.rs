@@ -84,6 +84,7 @@ pub enum DumpSectionKind {
 }
 
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct ImageSection<'a> {
     pub kind: DumpSectionKind,
     pub flags: u32,
@@ -215,6 +216,7 @@ impl Drop for ImageMapping {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct LoadedMmapImage {
     mmap: ImageMapping,
     sections: Vec<DumpImageSection>,
@@ -441,6 +443,7 @@ fn bake_relocations_at_planned_base(
     Ok(())
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn write_image(path: &Path, sections: &[ImageSection<'_>]) -> Result<(), DumpError> {
     if sections.is_empty() {
         return Err(DumpError::ImageFormatError(
@@ -569,6 +572,7 @@ pub(crate) fn corrupt_section_on_disk_for_test(
     )))
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn load_image(path: &Path) -> Result<LoadedMmapImage, DumpError> {
     let file = File::open(path)?;
     let (mapping, fixed_at_planned_base) = map_image_file(&file)?;

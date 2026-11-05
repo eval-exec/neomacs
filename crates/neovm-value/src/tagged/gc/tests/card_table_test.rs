@@ -31,7 +31,9 @@ impl Drop for ScratchRoots {
 
 fn verified_heap() -> TaggedHeap {
     let mut heap = TaggedHeap::new();
-    heap.set_generational_enabled(true);
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { heap.set_generational_enabled(true) };
     heap.generational.verify = true;
     heap.partition_dump = false;
     heap.dump_blackened = false;
@@ -242,7 +244,9 @@ fn verify_mode_rejects_an_old_cons_edge_with_a_clean_card() {
 #[test]
 fn gen0_heap_never_marks_a_card() {
     let mut heap = TaggedHeap::new();
-    heap.set_generational_enabled(false);
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { heap.set_generational_enabled(false) };
     heap.publish_barrier_window();
     set_tagged_heap(&mut heap);
     let roots = ScratchRoots::new();

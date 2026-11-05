@@ -130,7 +130,9 @@ impl TaggedHeap {
     pub(crate) fn new_for_concurrent_hash_test(generational: bool) -> Self {
         let mut heap = knobs::with_concurrent_claims_for_test(true, Self::new);
         heap.generational = super::generational::GenState::new(generational);
-        heap.set_generational_enabled(generational);
+        // SAFETY: freshly constructed exclusive heap; no marker or
+        // compiled leaf can run across the constructor's switch.
+        unsafe { heap.set_generational_enabled(generational) };
         heap
     }
 

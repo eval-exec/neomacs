@@ -79,6 +79,17 @@ pub struct RowsObservationEpoch {
     _local: PhantomData<*const ()>,
 }
 
+impl RowsObservationEpoch {
+    /// Copied dump-authority range (owner index, mapped bounds) for the
+    /// re-homed rows fixture; the `usize` owner key is deliberately not
+    /// exported, and the range is plain data.
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn dump_range_for_test(&self) -> Option<std::ops::Range<usize>> {
+        self.dump.as_ref().map(|(_, range)| range.clone())
+    }
+}
+
 /// Conditional numeric membership and mutation metadata only.
 ///
 /// This public type does NOT bind the supplied read set to a capture interval,
@@ -378,10 +389,6 @@ impl RowsDependencyMetadata<'_> {
             && self.reads.unchanged_and_observe()
     }
 }
-
-#[cfg(test)]
-#[path = "tests/rows_observation_test.rs"]
-mod tests;
 
 #[cfg(test)]
 #[path = "tests/tty_rows_observation_test.rs"]

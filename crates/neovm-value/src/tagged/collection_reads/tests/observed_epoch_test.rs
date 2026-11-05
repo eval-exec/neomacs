@@ -322,7 +322,9 @@ fn incremental_sweep_without_observed_reclamation_keeps_epoch_and_recent_hits() 
     let reads = reads.expect("rooted owner dependencies");
     probe_recent(owners[0].bits());
     let before = super::super::gc::collection_observation_epoch();
-    heap.begin_collection();
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { heap.begin_collection() };
     for owner in owners {
         heap.seed_root(owner);
     }

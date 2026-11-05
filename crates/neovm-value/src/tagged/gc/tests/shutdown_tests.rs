@@ -251,7 +251,9 @@ fn abandoned_marker_retains_retired_vector_original() {
 fn failed_generational_marker_retains_promotion_storage() {
     let before = LIVE_FLOAT_PAGES.load(Ordering::Relaxed);
     let mut heap = TaggedHeap::new();
-    heap.set_generational_enabled(true);
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { heap.set_generational_enabled(true) };
     heap.generational.major_in_progress = true;
     let float = heap.alloc_float(12.5);
     let tx = stalled_mark(&mut heap);
@@ -379,7 +381,11 @@ enum YoungLoanRetentionGeneration {
 
 fn young_loan_retention_heap(generation: YoungLoanRetentionGeneration) -> TaggedHeap {
     let mut heap = TaggedHeap::new();
-    heap.set_generational_enabled(matches!(generation, YoungLoanRetentionGeneration::Gen1));
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe {
+        heap.set_generational_enabled(matches!(generation, YoungLoanRetentionGeneration::Gen1))
+    };
     heap
 }
 

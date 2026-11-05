@@ -398,7 +398,9 @@ fn symbol_with_pos_reuse_within_one_cooperative_sweep_window() {
         .collect();
     let page0_base = heap.symbol_with_pos_arena.pages[0].base_addr();
 
-    heap.begin_collection();
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { heap.begin_collection() };
     for &k in &keep {
         heap.seed_root(k);
     }
@@ -453,7 +455,9 @@ fn symbol_with_pos_sweep_live_bytes_fixed_size_both_sites() {
     heap.collect_exact(std::iter::once(root));
     assert_eq!(heap.live_bytes(), expected, "eager site");
 
-    heap.begin_collection();
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { heap.begin_collection() };
     heap.seed_root(root);
     let bytes_before = heap.live_bytes();
     heap.incremental_drain_all();

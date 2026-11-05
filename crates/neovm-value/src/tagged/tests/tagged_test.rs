@@ -395,7 +395,9 @@ fn collection_clears_dirty_owner_tracking_at_begin() {
     // into this cycle's sweep, where a freed owner's slot can be reused under the
     // same owner address bits (the ABA). So the reset is observable right after
     // `begin_collection`, before the sweep runs.
-    heap.begin_collection();
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { heap.begin_collection() };
     assert_eq!(
         heap.dirty_owner_count(),
         0,

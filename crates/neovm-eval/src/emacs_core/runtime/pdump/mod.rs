@@ -25,6 +25,18 @@ pub(crate) use convert::{
 pub(crate) mod face_image;
 pub(crate) mod mapped_heap;
 pub(crate) mod mmap_image;
+
+/// Test-support facade for the re-homed rows-authority fixture: the real
+/// mmap image writer/loader and its owned section types. The module stays
+/// crate-private in production builds.
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub mod mmap_image_test_support {
+    pub use super::mmap_image::{
+        DumpSectionKind, ImageSection, LoadedMmapImage, load_image, write_image,
+    };
+}
+
 pub(crate) mod obarray_image;
 pub(crate) mod object_extra;
 pub(crate) mod object_starts;

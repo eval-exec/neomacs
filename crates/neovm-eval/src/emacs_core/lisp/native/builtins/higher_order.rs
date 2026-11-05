@@ -1402,6 +1402,30 @@ pub(crate) fn stable_sort_values_with<R: SortRuntime>(
     Ok(items.into_iter().map(|item| item.value).collect())
 }
 
+/// Copied classification of a resolved sort predicate for cross-crate tests.
+/// Carries only the rooted subr `Value`; the private capture proof stays here.
+#[cfg(any(test, feature = "test-support"))]
+pub enum CapturedSortPredicate {
+    Native { subr: Value },
+    Other,
+}
+
+/// Test-support route for the re-homed published-sort fixtures: resolve the
+/// predicate through the product's own [`SortRuntime`] implementation, then
+/// collapse the private predicate type to copied data.
+#[cfg(any(test, feature = "test-support"))]
+pub fn resolve_sort_predicate_for_test(
+    eval: &mut super::eval::Context,
+    predicate: Value,
+) -> CapturedSortPredicate {
+    match <super::eval::Context as SortRuntime>::resolve_sort_predicate(eval, predicate) {
+        SortPredicate::NumericLessp { subr, .. } | SortPredicate::StringLessp { subr, .. } => {
+            CapturedSortPredicate::Native { subr }
+        }
+        _ => CapturedSortPredicate::Other,
+    }
+}
+
 #[cfg(test)]
 #[cfg(feature = "jit")]
 #[path = "tests/higher_order_callback_policy_test.rs"]

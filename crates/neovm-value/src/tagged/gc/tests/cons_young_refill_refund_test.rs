@@ -47,7 +47,9 @@ fn refill_refund_total_used(heap: &TaggedHeap) -> usize {
 
 fn check_refused_cons_grant_refunded(source: RefusedGrantSource, access: RefusedGrantAccess) {
     let mut heap = TaggedHeap::new();
-    heap.set_generational_enabled(true);
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { heap.set_generational_enabled(true) };
     heap.generational.verify = true;
     heap.partition_dump = false;
     heap.dump_blackened = false;

@@ -12,7 +12,9 @@ use super::*;
 // stores are exercised independently by generational_tests.
 fn legacy_gate_heap() -> TaggedHeap {
     let mut heap = TaggedHeap::new();
-    heap.set_generational_enabled(false);
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { heap.set_generational_enabled(false) };
     heap.publish_barrier_window();
     heap
 }

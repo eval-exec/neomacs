@@ -10,7 +10,9 @@ fn installed_heap(chunk_map: bool) -> Box<TaggedHeap> {
     set_chunk_map_for_test(Some(chunk_map));
     let mut heap = Box::new(TaggedHeap::new());
     set_chunk_map_for_test(None);
-    heap.set_generational_enabled(true);
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { heap.set_generational_enabled(true) };
     heap.gc_threshold = 1_000_000;
     set_tagged_heap(&mut heap);
     assert_eq!(heap.chunk_map.is_some(), chunk_map);
@@ -175,7 +177,9 @@ fn canonical_valid_certificate_does_not_skip_satb_preimages() {
 fn canonical_generation_zero_never_publishes_certificate() {
     for chunk_map in [false, true] {
         let mut heap = installed_heap(chunk_map);
-        heap.set_generational_enabled(false);
+        // SAFETY: serial fixture heap; the caller holds the only heap view and no
+        // collector or compiled leaf runs.
+        unsafe { heap.set_generational_enabled(false) };
         let owner = heap.alloc_cons(TaggedValue::T, TaggedValue::NIL);
         assert!(!heap.region_book.no_old_cons_block_contains(address(owner)));
         assert!(set_cons_car(owner, TaggedValue::fixnum(4)));
@@ -204,7 +208,9 @@ fn canonical_block_black_partial_close_keeps_color_and_unmarks_only_refunded_tai
         set_chunk_map_for_test(Some(chunk_map));
         let mut heap = Box::new(TaggedHeap::new());
         set_chunk_map_for_test(None);
-        heap.set_generational_enabled(true);
+        // SAFETY: serial fixture heap; the caller holds the only heap view and no
+        // collector or compiled leaf runs.
+        unsafe { heap.set_generational_enabled(true) };
         heap.gc_threshold = 1_000_000;
         set_tagged_heap(&mut heap);
         assert_eq!(heap.chunk_map.is_some(), chunk_map);

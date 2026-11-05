@@ -22,7 +22,9 @@ fn promote_cons_until_old(heap: &mut TaggedHeap, owner: TaggedValue) {
 #[test]
 fn symbol_cons_stores_do_not_install_a_heap() {
     let mut heap = TaggedHeap::new();
-    heap.set_generational_enabled(false);
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { heap.set_generational_enabled(false) };
     set_tagged_heap(&mut heap);
     let owner = heap.alloc_cons(TaggedValue::NIL, TaggedValue::NIL);
     clear_tagged_heap_if_installed(&heap);
@@ -60,7 +62,9 @@ fn assert_published_windows(heap: &TaggedHeap, ordinary: BarrierWindow) {
 fn generational_cons_protocol_window_preserves_disabled_window_transitions() {
     for enabled in [false, true] {
         let mut heap = Box::new(TaggedHeap::new());
-        heap.set_generational_enabled(enabled);
+        // SAFETY: serial fixture heap; the caller holds the only heap view and no
+        // collector or compiled leaf runs.
+        unsafe { heap.set_generational_enabled(enabled) };
         heap.publish_barrier_window();
         set_tagged_heap(&mut heap);
         assert_published_windows(&heap, BarrierWindow::NONE);
@@ -83,12 +87,16 @@ fn generational_cons_protocol_window_preserves_disabled_window_transitions() {
 #[test]
 fn generational_cons_protocol_window_rederives_on_heap_switch_and_uninstall() {
     let mut enabled = Box::new(TaggedHeap::new());
-    enabled.set_generational_enabled(true);
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { enabled.set_generational_enabled(true) };
     enabled.publish_barrier_window();
     set_tagged_heap(&mut enabled);
     assert_published_windows(&enabled, BarrierWindow::NONE);
     let mut disabled = Box::new(TaggedHeap::new());
-    disabled.set_generational_enabled(false);
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { disabled.set_generational_enabled(false) };
     disabled.extend_dump_span(4096, 4096);
     set_tagged_heap(&mut disabled);
     assert_published_windows(&disabled, BarrierWindow::span(4096, 8192));
@@ -124,7 +132,9 @@ fn generational_cons_protocol_window_fallback_install_derives_both_mirrors() {
 #[test]
 fn generational_cons_protocol_window_marks_symbols_and_keeps_preimages() {
     let mut heap = Box::new(TaggedHeap::new());
-    heap.set_generational_enabled(true);
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { heap.set_generational_enabled(true) };
     heap.publish_barrier_window();
     set_tagged_heap(&mut heap);
     let owner = heap.alloc_cons(TaggedValue::NIL, TaggedValue::NIL);
@@ -151,7 +161,9 @@ fn generational_cons_protocol_window_marks_symbols_and_keeps_preimages() {
 #[test]
 fn generational_cold_cons_reject_skips_full_hook_for_immediates_and_ineligible_owners() {
     let mut heap = Box::new(TaggedHeap::new());
-    heap.set_generational_enabled(true);
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { heap.set_generational_enabled(true) };
     heap.publish_barrier_window();
     set_tagged_heap(&mut heap);
     let old = heap.alloc_cons(TaggedValue::NIL, TaggedValue::NIL);
@@ -181,7 +193,9 @@ fn generational_cold_cons_reject_preserves_real_window_immediate_writes() {
     use super::fake_image::FakeImage;
 
     let mut heap = Box::new(TaggedHeap::new());
-    heap.set_generational_enabled(true);
+    // SAFETY: serial fixture heap; the caller holds the only heap view and no
+    // collector or compiled leaf runs.
+    unsafe { heap.set_generational_enabled(true) };
     heap.publish_barrier_window();
     set_tagged_heap(&mut heap);
     let young = heap.alloc_cons(TaggedValue::NIL, TaggedValue::NIL);
