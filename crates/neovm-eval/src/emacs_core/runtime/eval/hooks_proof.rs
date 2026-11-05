@@ -70,6 +70,7 @@ pub struct EvalHookSet {
 /// Wait/special-input service upcalls, called per command boundary from the
 /// evaluator's input loop (never per bytecode step).
 #[derive(Clone, Copy)]
+#[doc(hidden)]
 pub struct WaitServiceHooks {
     #[doc(hidden)]
     pub service_input_pending_with_timers: fn(&mut Context) -> Result<(), Flow>,
@@ -91,6 +92,7 @@ pub struct WaitServiceHooks {
 
 /// Timer-deadline upcalls, read once per input-wait decision.
 #[derive(Clone, Copy)]
+#[doc(hidden)]
 pub struct TimerServiceHooks {
     #[doc(hidden)]
     pub next_ordinary_gnu_timer_timeout_before: fn(&Context) -> Option<Duration>,
@@ -100,6 +102,7 @@ pub struct TimerServiceHooks {
 
 /// Frontend host-event upcalls, per frontend event.
 #[derive(Clone, Copy)]
+#[doc(hidden)]
 pub struct FrontendServiceHooks {
     #[doc(hidden)]
     pub apply_xwidget_frontend_event:
@@ -108,6 +111,7 @@ pub struct FrontendServiceHooks {
 
 /// Display scheduling queries, per redisplay / command boundary.
 #[derive(Clone, Copy)]
+#[doc(hidden)]
 pub struct DisplayServiceHooks {
     #[doc(hidden)]
     pub compositor_scrolling_enabled:
