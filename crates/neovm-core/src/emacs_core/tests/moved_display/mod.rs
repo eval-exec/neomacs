@@ -49,3 +49,7 @@ mod xwidget_runtime_test;
 #[cfg(test)]
 #[path = "core_hook_restore_test.rs"]
 mod core_hook_restore_test;
+
+#[cfg(test)]
+#[path = "window_cmds_runtime_eval_test.rs"]
+mod window_cmds_runtime_eval_test;
