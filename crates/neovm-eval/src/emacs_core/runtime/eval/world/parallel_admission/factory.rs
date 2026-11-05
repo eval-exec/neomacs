@@ -7,9 +7,9 @@ use super::OwnedProofProjection;
 use super::{OwnedParallelError, OwnedParallelProjection, map_registration};
 use crate::emacs_core::eval::world::ParallelHeapEraWorldExt;
 #[cfg(test)]
-use crate::emacs_core::eval::world::WorldProofEraExt;
+use crate::emacs_core::eval::world::WorldProofEra as ProofEra;
 #[cfg(test)]
-use neovm_value::tagged::gc::ProofEra;
+use crate::emacs_core::eval::world::WorldProofEraExt;
 use neovm_value::tagged::gc::{
     Gen1Admission, Gen1AdmissionError, ParallelHeapEra, QuiescentCollector,
 };

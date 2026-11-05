@@ -57,13 +57,13 @@ impl<'heap> OwnedParallelProjection<'heap> {
 #[cfg(test)]
 #[must_use]
 pub(crate) struct OwnedProofProjection<'heap> {
-    era: neovm_value::tagged::gc::ProofEra<'heap>,
+    era: crate::emacs_core::eval::world::WorldProofEra<'heap>,
 }
 
 #[cfg(test)]
 impl<'heap> OwnedProofProjection<'heap> {
     #[doc(hidden)]
-    pub fn era(&self) -> &neovm_value::tagged::gc::ProofEra<'heap> {
+    pub fn era(&self) -> &crate::emacs_core::eval::world::WorldProofEra<'heap> {
         &self.era
     }
 

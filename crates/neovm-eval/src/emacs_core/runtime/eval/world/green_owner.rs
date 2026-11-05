@@ -234,7 +234,7 @@ impl Context {
     /// The higher-ranked closure cannot return an era or collector heap loan.
     #[cfg(test)]
     pub(crate) fn with_test_mutator_era<R>(
-        f: impl for<'heap> FnOnce(neovm_value::tagged::gc::ProofEra<'heap>) -> R,
+        f: impl for<'heap> FnOnce(crate::emacs_core::eval::world::WorldProofEra<'heap>) -> R,
     ) -> R {
         let mut context = Self::new();
         let keeper = context
@@ -258,7 +258,7 @@ impl Context {
         neovm_value::tagged::gc::clear_tagged_heap_root_if_installed(
             context.tagged_heap.heap_root(),
         );
-        let era = neovm_value::tagged::gc::ProofEra::admit(collector, keeper)
+        let era = crate::emacs_core::eval::world::WorldProofEra::admit(collector, keeper)
             .unwrap_or_else(|_| panic!("fresh fixture World admits its mutator era"));
         f(era)
     }
@@ -268,7 +268,7 @@ impl Context {
     #[cfg(test)]
     pub(crate) fn with_test_rooted_mutator_era<R>(
         f: impl for<'heap> FnOnce(
-            neovm_value::tagged::gc::ProofEra<'heap>,
+            crate::emacs_core::eval::world::WorldProofEra<'heap>,
             Vec<neovm_value::tagged::transport::SharedRoot>,
         ) -> R,
     ) -> R {
@@ -301,7 +301,7 @@ impl Context {
         neovm_value::tagged::gc::clear_tagged_heap_root_if_installed(
             context.tagged_heap.heap_root(),
         );
-        let era = neovm_value::tagged::gc::ProofEra::admit(collector, keeper)
+        let era = crate::emacs_core::eval::world::WorldProofEra::admit(collector, keeper)
             .unwrap_or_else(|_| panic!("rooted fixture era"));
         f(era, roots)
     }

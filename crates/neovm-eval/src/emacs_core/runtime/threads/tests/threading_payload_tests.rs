@@ -2,11 +2,12 @@
 //! Children have no SharedRoot or private-owner root that could hide an edge.
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::eval::world::ParallelHeapEraWorldCollectExt;
+use crate::emacs_core::eval::world::WorldProofEra;
 use crate::emacs_core::threads::ThreadName;
 use neovm_edit::buffer::CharRange;
 use neovm_value::heap_types::LispString;
 use neovm_value::heap_types::threading::ThreadName as PayloadThreadName;
-use neovm_value::tagged::gc::{AllStopped, MinorCollectionError, ProofEra, with_tagged_heap};
+use neovm_value::tagged::gc::{AllStopped, MinorCollectionError, with_tagged_heap};
 use neovm_value::tagged::header::{VecLikeType, VectorObj};
 use neovm_value::tagged::value::TaggedValue as Value;
 
@@ -122,7 +123,7 @@ fn graph(context: &mut Context) -> Graph {
 }
 
 fn inspect(
-    era: &ProofEra<'_>,
+    era: &WorldProofEra<'_>,
     stopped: &AllStopped<'_>,
     graph: &Graph,
     unrelated: Unrelated,

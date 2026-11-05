@@ -3,11 +3,12 @@
 
 use super::*;
 use crate::emacs_core::eval::world::ParallelHeapEraWorldCollectExt;
+use crate::emacs_core::eval::world::WorldProofEra as ParallelHeapEra;
 use crate::emacs_core::eval::{
     ThreadingMode, push_scratch_gc_roots, restore_scratch_gc_roots, save_scratch_gc_roots,
 };
 use neovm_value::intern::intern;
-use neovm_value::tagged::gc::{ProofEra as ParallelHeapEra, RegistrationError};
+use neovm_value::tagged::gc::RegistrationError;
 use neovm_value::value::{HashTableTest, HashTableWeakness, LispHashTable};
 
 struct ScratchScope(usize);

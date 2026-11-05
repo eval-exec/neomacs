@@ -6,9 +6,10 @@ use neovm_value::tagged::value::TaggedValue;
 
 pub type WorldEra<'heap> = gc::ParallelHeapEra<'heap, Baton>;
 #[cfg(test)]
-pub(crate) type WorldProofEra<'heap> = gc::GenericProofEra<'heap, Baton>;
+pub(crate) type WorldProofEra<'heap> = neovm_value::test_support::authority::ProofEra<'heap, Baton>;
 #[cfg(test)]
-pub(crate) type WorldProofEraFinishFailure<'heap> = gc::GenericProofEraFinishFailure<'heap, Baton>;
+pub(crate) type WorldProofEraFinishFailure<'heap> =
+    neovm_value::test_support::authority::ProofEraFinishFailure<'heap, Baton>;
 
 /// Retain the original epoch and derive the original backing only at the
 /// lower admission's existing preparation boundary, after generation issuance.
@@ -90,7 +91,9 @@ pub(crate) trait WorldProofEraExt<'heap>: Sized {
 }
 
 #[cfg(test)]
-impl<'heap> WorldProofEraExt<'heap> for gc::GenericProofEra<'heap, Baton> {
+impl<'heap> WorldProofEraExt<'heap>
+    for neovm_value::test_support::authority::ProofEra<'heap, Baton>
+{
     #[cold]
     fn admit(
         collector: gc::QuiescentCollector<'heap>,

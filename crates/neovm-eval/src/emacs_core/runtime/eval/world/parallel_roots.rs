@@ -265,7 +265,7 @@ impl Context {
     #[cfg(test)]
     pub(crate) fn with_test_collection_era<S, R>(
         setup: impl FnOnce(&mut Context) -> S,
-        body: impl for<'heap> FnOnce(neovm_value::tagged::gc::ProofEra<'heap>, S) -> R,
+        body: impl for<'heap> FnOnce(crate::emacs_core::eval::world::WorldProofEra<'heap>, S) -> R,
     ) -> R {
         let mut context = collection_fixture_context();
         let input = setup(&mut context);
@@ -291,8 +291,11 @@ impl Context {
         neovm_value::tagged::gc::clear_tagged_heap_root_if_installed(
             context.tagged_heap.heap_root(),
         );
-        let era = neovm_value::tagged::gc::ProofEra::admit_rooted(collector, keeper, frozen)
-            .unwrap_or_else(|failure| panic!("collection fixture admission: {:?}", failure.reason));
+        let era =
+            crate::emacs_core::eval::world::WorldProofEra::admit_rooted(collector, keeper, frozen)
+                .unwrap_or_else(|failure| {
+                    panic!("collection fixture admission: {:?}", failure.reason)
+                });
         body(era, input)
     }
 
@@ -303,7 +306,7 @@ impl Context {
     pub(crate) fn with_test_collection_era_then<S, R>(
         setup: impl FnOnce(&mut Context) -> S,
         body: impl for<'heap> FnOnce(
-            neovm_value::tagged::gc::ProofEra<'heap>,
+            crate::emacs_core::eval::world::WorldProofEra<'heap>,
             S,
         )
             -> (neovm_value::tagged::gc::QuiescentCollector<'heap>, Baton, R),
@@ -333,8 +336,11 @@ impl Context {
         neovm_value::tagged::gc::clear_tagged_heap_root_if_installed(
             context.tagged_heap.heap_root(),
         );
-        let era = neovm_value::tagged::gc::ProofEra::admit_rooted(collector, keeper, frozen)
-            .unwrap_or_else(|failure| panic!("collection fixture admission: {:?}", failure.reason));
+        let era =
+            crate::emacs_core::eval::world::WorldProofEra::admit_rooted(collector, keeper, frozen)
+                .unwrap_or_else(|failure| {
+                    panic!("collection fixture admission: {:?}", failure.reason)
+                });
         let (collector, keeper, output) = body(era, input);
         assert_eq!(collector.heap_identity(), expected_heap);
         assert_eq!(keeper.parallel_heap_identity(), expected_heap);
