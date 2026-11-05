@@ -899,6 +899,65 @@ fn declared_struct_fields(
     Ok(structs.fields)
 }
 
+/// The field arm's struct identity: the row's crate, the defining file from the
+/// ledger row, and the struct name. The parent-path spelling is excluded on
+/// purpose: rows written by different lanes may spell the same struct
+/// differently (`Context` vs `emacs_core::eval::Context`), and rule (b) must
+/// see every widened field of the struct rather than one spelling's subset.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct FieldStructKey {
+    crate_dir: String,
+    file: String,
+    struct_name: String,
+}
+
+/// Collect the widened-field set per struct identity across every ledger.
+/// Mixing parent-path spellings for one identity is an error: silently
+/// splitting the set would make rule (b) fail open.
+fn widened_field_sets(
+    ledgers: &[Vec<VisRow>],
+) -> Result<BTreeMap<FieldStructKey, BTreeSet<String>>, String> {
+    let mut widened: BTreeMap<FieldStructKey, BTreeSet<String>> = BTreeMap::new();
+    let mut spellings: BTreeMap<FieldStructKey, BTreeSet<String>> = BTreeMap::new();
+    for rows in ledgers {
+        for row in rows {
+            if row.kind != "field" {
+                continue;
+            }
+            let Some((parent, field)) = row.item.rsplit_once("::") else {
+                return Err(format!(
+                    "{} field {}: item has no parent type",
+                    row.crate_dir, row.item
+                ));
+            };
+            let struct_name = parent.rsplit("::").next().unwrap_or(parent);
+            let key = FieldStructKey {
+                crate_dir: row.crate_dir.clone(),
+                file: row.file.clone(),
+                struct_name: struct_name.to_owned(),
+            };
+            spellings
+                .entry(key.clone())
+                .or_default()
+                .insert(parent.to_owned());
+            widened.entry(key).or_default().insert(field.to_owned());
+        }
+    }
+    for (key, spellings) in &spellings {
+        if spellings.len() > 1 {
+            return Err(format!(
+                "{} field rows for struct `{}` in {} mix parent spellings: {}; \
+                 use one canonical spelling",
+                key.crate_dir,
+                key.struct_name,
+                key.file,
+                spellings.iter().cloned().collect::<Vec<_>>().join(" / ")
+            ));
+        }
+    }
+    Ok(widened)
+}
+
 /// The field arm of V1 (peer ruling 04:2xZ). Field visibility cannot change a
 /// struct's trait impls, so merely naming the type is not a hit. A field row
 /// `S::f` is a hit iff a fixture
@@ -993,7 +1052,7 @@ fn field_row_fixture_hit(
     row: &VisRow,
     source: &str,
     fixtures: &[FixtureScope],
-    widened: &BTreeMap<String, BTreeSet<String>>,
+    widened: &BTreeMap<FieldStructKey, BTreeSet<String>>,
 ) -> Result<Option<String>, String> {
     let Some((parent_item, field)) = row.item.rsplit_once("::") else {
         return Err(format!(
@@ -1007,7 +1066,12 @@ fn field_row_fixture_hit(
         .copied()
         .ok_or_else(|| format!("{} field {}: empty parent type", row.crate_dir, row.item))?;
     let declared = declared_struct_fields(source, struct_name)?;
-    let widened = widened.get(parent_item).cloned().unwrap_or_default();
+    let key = FieldStructKey {
+        crate_dir: row.crate_dir.clone(),
+        file: row.file.clone(),
+        struct_name: struct_name.to_owned(),
+    };
+    let widened = widened.get(&key).cloned().unwrap_or_default();
     Ok(field_hit(fixtures, &parent, field, &declared, &widened))
 }
 
@@ -1228,7 +1292,7 @@ fn check_row(
     row: &VisRow,
     fixtures: &[FixtureScope],
     authority: &BTreeSet<String>,
-    widened: &BTreeMap<String, BTreeSet<String>>,
+    widened: &BTreeMap<FieldStructKey, BTreeSet<String>>,
 ) -> Result<(), String> {
     let what = format!("{} {} {}", row.crate_dir, row.kind, row.item);
     if !VIS_CRATES.contains(&row.crate_dir.as_str()) {
@@ -1461,22 +1525,11 @@ fn validate(workspace: &Path) -> Result<(), String> {
         }
         ledgers.push(rows);
     }
-    // The field arm needs the complete widened-field set across every ledger:
-    // construction/destructuring is only a hit when EVERY field of the struct
-    // is widened.
-    let mut widened: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    for rows in &ledgers {
-        for row in rows {
-            if row.kind == "field" {
-                if let Some((parent, field)) = row.item.rsplit_once("::") {
-                    widened
-                        .entry(parent.to_owned())
-                        .or_default()
-                        .insert(field.to_owned());
-                }
-            }
-        }
-    }
+    // The field arm needs the complete widened-field set per struct across
+    // every ledger: construction/destructuring is only a hit when EVERY field
+    // of the struct is widened. The map is keyed by (crate, defining file,
+    // struct), never by parent-path spelling; mixed spellings are an error.
+    let widened = widened_field_sets(&ledgers)?;
     let mut all_rows = Vec::new();
     for rows in ledgers {
         for row in &rows {
@@ -1743,5 +1796,65 @@ mod tests {
         assert!(names_authority_item("world::WorldSlot", &authority).is_some());
         assert!(names_authority_item("hooks::EvalHooksInstalled", &authority).is_some());
         assert!(names_authority_item("error::ThrowData::new", &authority).is_none());
+    }
+
+    fn field_row(crate_dir: &str, item: &str, file: &str) -> VisRow {
+        VisRow {
+            crate_dir: crate_dir.to_owned(),
+            item: item.to_owned(),
+            kind: "field".to_owned(),
+            file: file.to_owned(),
+            tests: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn field_arm_keys_widened_fields_by_crate_file_and_struct() {
+        let file = "crates/neovm-value/src/heap_types.rs";
+        let ledgers = vec![vec![
+            field_row("neovm-value", "heap_types::LispString::size", file),
+            field_row("neovm-value", "heap_types::LispString::data", file),
+        ]];
+        let widened = widened_field_sets(&ledgers).expect("one spelling");
+        let key = FieldStructKey {
+            crate_dir: "neovm-value".to_owned(),
+            file: file.to_owned(),
+            struct_name: "LispString".to_owned(),
+        };
+        assert_eq!(
+            widened.get(&key),
+            Some(&BTreeSet::from(["size".to_owned(), "data".to_owned()]))
+        );
+        // A same-named struct in another file is a different identity, so its
+        // fields never satisfy rule (b) for this one.
+        let other = "crates/neovm-value/src/other.rs";
+        let ledgers = vec![vec![
+            field_row("neovm-value", "heap_types::LispString::size", file),
+            field_row("neovm-value", "other::LispString::size", other),
+        ]];
+        assert_eq!(
+            widened_field_sets(&ledgers).expect("distinct files").len(),
+            2
+        );
+    }
+
+    #[test]
+    fn mixed_parent_spellings_for_one_struct_are_an_error() {
+        let file = "crates/neovm-value/src/heap_types.rs";
+        let ledgers = vec![
+            vec![field_row(
+                "neovm-value",
+                "heap_types::LispString::size",
+                file,
+            )],
+            vec![field_row("neovm-value", "LispString::data", file)],
+        ];
+        let error = widened_field_sets(&ledgers).expect_err("mixed spellings must fail closed");
+        assert!(error.contains("mix parent spellings"), "{error}");
+        assert!(
+            error.contains("LispString / heap_types::LispString"),
+            "{error}"
+        );
+        eprintln!("MUTATION RED: {error}");
     }
 }
