@@ -1586,6 +1586,16 @@ impl Pc2Target {
             Self::Name { name, .. } | Self::Method { name, .. } => name,
         }
     }
+    /// LEAD 11:1xZ: a method-call expression can only call an inherent method
+    /// that takes `self`; an associated function (`fn f(...) -> Self`) is
+    /// path-call-only, and matching `.f()` by name for it would only flag
+    /// unrelated types. The declaration is inspected per row.
+    fn method_form(&self) -> Option<&str> {
+        match self {
+            Self::Method { name, .. } => Some(name),
+            Self::Name { .. } => None,
+        }
+    }
     fn matches(&self, segments: &[String], file: &str, defining_file: &str) -> bool {
         match self {
             Self::Name { name, qualifier } => {
@@ -1728,6 +1738,55 @@ fn pc2_declaration(items: &[syn::Item], target: &Pc2Target) -> bool {
     })
 }
 
+/// Does the pc2 method declaration take `self`? Only then can method-call
+/// syntax call it (LEAD 11:1xZ); associated functions are path-call-only.
+fn pc2_method_takes_self(items: &[syn::Item], target: &Pc2Target) -> bool {
+    fn takes_self(inputs: &syn::punctuated::Punctuated<syn::FnArg, syn::Token![,]>) -> bool {
+        inputs
+            .first()
+            .is_some_and(|argument| matches!(argument, syn::FnArg::Receiver(_)))
+    }
+    fn find(items: &[syn::Item], target: &Pc2Target) -> Option<bool> {
+        for item in items {
+            match item {
+                syn::Item::Mod(module) => {
+                    if let Some((_, inner)) = &module.content {
+                        if let Some(found) = find(inner, target) {
+                            return Some(found);
+                        }
+                    }
+                }
+                syn::Item::Impl(block) => {
+                    let Pc2Target::Method { owner, name } = target else {
+                        continue;
+                    };
+                    let owner_matches = match &*block.self_ty {
+                        syn::Type::Path(path) => path
+                            .path
+                            .segments
+                            .last()
+                            .is_some_and(|segment| segment.ident == *owner),
+                        _ => false,
+                    };
+                    if !owner_matches {
+                        continue;
+                    }
+                    for item in &block.items {
+                        if let syn::ImplItem::Fn(item) = item {
+                            if item.sig.ident == *name {
+                                return Some(takes_self(&item.sig.inputs));
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+    find(items, target).unwrap_or(false)
+}
+
 fn pc2_gated(attrs: &[syn::Attribute]) -> bool {
     attrs.iter().any(|attr| {
         if attr.path().is_ident("test") {
@@ -1754,6 +1813,10 @@ struct Pc2Scan<'a> {
     file: &'a str,
     stack: Vec<String>,
     references: Vec<Option<String>>,
+    /// The pc2 method takes `self`, so method-call syntax is a candidate call
+    /// site. Name-only matching over-approximates, which is fail-closed and
+    /// acceptable (LEAD 11:1xZ); the enclosing caller still has to be named.
+    method_calls: bool,
 }
 
 impl<'ast> Visit<'ast> for Pc2Scan<'_> {
@@ -1794,6 +1857,50 @@ impl<'ast> Visit<'ast> for Pc2Scan<'_> {
         }
         visit::visit_expr_path(self, path);
     }
+    fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+        if self.method_calls
+            && self
+                .target
+                .method_form()
+                .is_some_and(|name| call.method == name)
+        {
+            self.references.push(self.stack.last().cloned());
+        }
+        visit::visit_expr_method_call(self, call);
+    }
+}
+
+/// Every workspace member's production `src/**`. Consumers outside the seven
+/// moved crates (notably `crates/neomacs`) can call a pc2 item too, so they
+/// are scanned as well; a planted method call there must go RED.
+fn pc2_workspace_members(workspace: &Path) -> Result<Vec<PathBuf>, String> {
+    let path = workspace.join("Cargo.toml");
+    let text = read(&path)?;
+    let root: toml::Value = text
+        .parse()
+        .map_err(|error| format!("B3_PC2_MANIFEST {}: {error}", path.display()))?;
+    let members = root
+        .get("workspace")
+        .and_then(|workspace| workspace.get("members"))
+        .and_then(toml::Value::as_array)
+        .ok_or("B3_PC2_MANIFEST: missing workspace members")?;
+    let mut out = Vec::new();
+    for member in members {
+        let member = member
+            .as_str()
+            .ok_or("B3_PC2_MANIFEST: non-string member")?;
+        let member_root = workspace.join(member);
+        let manifest_path = member_root.join("Cargo.toml");
+        let text = read(&manifest_path)?;
+        let manifest: toml::Value = text
+            .parse()
+            .map_err(|error| format!("B3_PC2_MANIFEST {}: {error}", manifest_path.display()))?;
+        if manifest.get("package").is_none() {
+            continue;
+        }
+        out.push(member_root);
+    }
+    Ok(out)
 }
 
 fn pc2_source_files(workspace: &Path) -> Result<Vec<PathBuf>, String> {
@@ -1824,16 +1931,8 @@ fn pc2_source_files(workspace: &Path) -> Result<Vec<PathBuf>, String> {
         Ok(())
     }
     let mut files = Vec::new();
-    for crate_dir in [
-        "neovm-value",
-        "neovm-edit",
-        "neovm-text",
-        "neovm-eval",
-        "neovm-display",
-        "neovm-system",
-        "neovm-core",
-    ] {
-        let src = workspace.join("crates").join(crate_dir).join("src");
+    for member in pc2_workspace_members(workspace)? {
+        let src = member.join("src");
         if src.is_dir() {
             walk(&src, &mut files)?;
         }
@@ -1895,6 +1994,7 @@ fn pc2_rows_violation(
                 index + 2
             ));
         }
+        let method_calls = pc2_method_takes_self(&ast.items, &target);
         let mut unnamed = BTreeSet::new();
         for file in &files {
             let Ok(relative) = file.strip_prefix(workspace) else {
@@ -1916,6 +2016,7 @@ fn pc2_rows_violation(
                 file: &relative,
                 stack: Vec::new(),
                 references: Vec::new(),
+                method_calls,
             };
             scan.visit_file(&ast);
             for function in scan.references {
@@ -2000,11 +2101,38 @@ fn architecture_pc11_pc2_rows_name_all_call_sites() {
     }
 }
 
+fn pc2_fixture_workspace() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("Cargo.toml"),
+        "[workspace]\nmembers = [\"crates/neovm-value\", \"crates/neovm-core\"]\n",
+    )
+    .unwrap();
+    for (member, dependency) in [
+        ("neovm-value", ""),
+        (
+            "neovm-core",
+            "\n[dependencies]\nneovm-value = { path = \"../neovm-value\" }\n",
+        ),
+    ] {
+        let root = dir.path().join("crates").join(member);
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            format!(
+                "[package]\nname = \"{member}\"\nversion = \"0.0.0\"\nedition = \"2024\"\n{dependency}"
+            ),
+        )
+        .unwrap();
+    }
+    dir
+}
+
+#[test]
 #[test]
 fn architecture_mutation_pc2_unnamed_call_site_is_rejected() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = pc2_fixture_workspace();
     let src = dir.path().join("crates/neovm-value/src");
-    std::fs::create_dir_all(&src).unwrap();
     std::fs::write(src.join("installer_mod.rs"), "pub fn installer() {}\n").unwrap();
     std::fs::write(
         src.join("probe.rs"),
@@ -2049,6 +2177,68 @@ fn architecture_mutation_pc2_unnamed_call_site_is_rejected() {
     let error = pc2_rows_violation(dir.path(), "PROMOTION-LEDGER-X.tsv", &missing, &[])
         .expect_err("missing declaration");
     assert!(error.contains("B3_PC2_MISSING_DECLARATION"), "{error}");
+}
+
+#[test]
+fn architecture_mutation_pc2_method_call_site_is_rejected() {
+    // LEAD 11:1xZ: method-call syntax must be a candidate call site when the
+    // pc2 method takes self; name-only matching over-approximates on purpose.
+    let dir = pc2_fixture_workspace();
+    let value_src = dir.path().join("crates/neovm-value/src");
+    let core_src = dir.path().join("crates/neovm-core/src");
+    std::fs::write(
+        value_src.join("owner_mod.rs"),
+        "pub struct Owner;\nimpl Owner {\n    pub fn attach(&mut self, _r: u8) {}\n}\n",
+    )
+    .unwrap();
+    std::fs::write(core_src.join("lib.rs"), "pub mod probe;\n").unwrap();
+    std::fs::write(
+        core_src.join("probe.rs"),
+        "use neovm_value::owner_mod::Owner;\nfn named_caller(owner: &mut Owner) { owner.attach(1); }\nfn secret_caller(owner: &mut Owner) { owner.attach(2); }\n",
+    )
+    .unwrap();
+    let header = "item\tkind\told_vis\tfile:line\tmodule\treason\n";
+    let row = |reason: &str| {
+        format!(
+            "{header}Owner::attach\tpc2\t-\tcrates/neovm-value/src/owner_mod.rs:1\tm\t{reason}\n"
+        )
+    };
+    let error = pc2_rows_violation(
+        dir.path(),
+        "PROMOTION-LEDGER-X.tsv",
+        &row("exact caller named_caller only"),
+        &[],
+    )
+    .expect_err("unnamed method call");
+    assert!(
+        error.contains("B3_PC2_UNNAMED_CALL_SITE") && error.contains("secret_caller"),
+        "{error}"
+    );
+    assert!(
+        pc2_rows_violation(
+            dir.path(),
+            "PROMOTION-LEDGER-X.tsv",
+            &row("exact callers named_caller and secret_caller"),
+            &[],
+        )
+        .is_ok()
+    );
+    // An associated function (no self) is path-call-only; a same-named method
+    // call on another type is not a call site for it.
+    std::fs::write(
+        value_src.join("owner_mod.rs"),
+        "pub struct Owner;\nimpl Owner {\n    pub fn attach(_r: u8) -> Self { Owner }\n}\n",
+    )
+    .unwrap();
+    assert!(
+        pc2_rows_violation(
+            dir.path(),
+            "PROMOTION-LEDGER-X.tsv",
+            &row("exact caller named_caller only"),
+            &[],
+        )
+        .is_ok()
+    );
 }
 
 #[test]
