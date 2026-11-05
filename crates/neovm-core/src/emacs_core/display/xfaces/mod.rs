@@ -4875,7 +4875,8 @@ pub(crate) fn builtin_x_load_color_file(args: Vec<Value>) -> EvalResult {
     };
 
     // Expand the filename (resolve ~, relative paths, etc.)
-    let expanded = super::fileio::expand_file_name(&filename, None);
+    let expanded =
+        neovm_eval::emacs_core::eval::data::file_name_expand::expand_file_name(&filename, None);
     let contents = match std::fs::read_to_string(&expanded) {
         Ok(s) => s,
         Err(_) => return Ok(Value::NIL),

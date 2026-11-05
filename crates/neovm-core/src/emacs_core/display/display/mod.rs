@@ -2373,15 +2373,28 @@ fn decode_popup_menu_position_window(
 /// list that starts with a keymap and continues with anything else signals
 /// `keymapp` on that element -- not `stringp` on the list.
 fn decode_popup_menu_keymap_argument(ctx: &mut Context, menu: Value) -> Result<bool, Flow> {
-    if super::keymap::get_keymap_in_runtime(ctx, &menu, false, false)?.is_truthy() {
+    if neovm_eval::emacs_core::eval::keymap_lookup::get_keymap_in_runtime(ctx, &menu, false, false)?
+        .is_truthy()
+    {
         return Ok(true);
     }
     if menu.is_cons()
-        && super::keymap::get_keymap_in_runtime(ctx, &menu.cons_car(), false, false)?.is_truthy()
+        && neovm_eval::emacs_core::eval::keymap_lookup::get_keymap_in_runtime(
+            ctx,
+            &menu.cons_car(),
+            false,
+            false,
+        )?
+        .is_truthy()
     {
         let mut rest = menu;
         while rest.is_cons() {
-            super::keymap::get_keymap_in_runtime(ctx, &rest.cons_car(), true, false)?;
+            neovm_eval::emacs_core::eval::keymap_lookup::get_keymap_in_runtime(
+                ctx,
+                &rest.cons_car(),
+                true,
+                false,
+            )?;
             rest = rest.cons_cdr();
         }
         return Ok(true);
@@ -2527,7 +2540,9 @@ pub(crate) fn builtin_x_popup_menu(ctx: &mut Context, args: Vec<Value>) -> EvalR
     let menu = args[1];
 
     if ctx.display_host.is_some() && ctx.input_rx.as_ref().is_some() && !position.is_nil() {
-        let map = super::keymap::get_keymap_in_runtime(ctx, &menu, false, true)?;
+        let map = neovm_eval::emacs_core::eval::keymap_lookup::get_keymap_in_runtime(
+            ctx, &menu, false, true,
+        )?;
         if !map.is_nil() {
             return x_popup_menu_interactive(ctx, position, map);
         }

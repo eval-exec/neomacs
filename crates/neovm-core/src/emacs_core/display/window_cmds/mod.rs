@@ -12,7 +12,6 @@ pub(crate) use split_request::SiblingResize;
 
 use super::error::{EvalResult, Flow, signal};
 use super::intern::{SymId, intern, resolve_sym};
-use super::minibuffer::MinibufferManager;
 use super::value::{Value, ValueKind, VecLikeType, list_to_vec};
 use crate::buffer::{BufferId, BufferManager, EmacsBytePos, LispCharPos1};
 use crate::emacs_core::display_metrics::{LineWrap, MotionEngine};
@@ -21,7 +20,6 @@ pub(crate) use crate::emacs_core::error::{
     expect_args, expect_args_range, expect_fixnum, expect_max_args, expect_min_args,
 };
 use crate::emacs_core::eval::VariableView;
-use crate::emacs_core::minibuffer::MinibufferManagerExt;
 use crate::window::DisplayFrameExt;
 use crate::window::DisplayFrameManagerExt;
 use crate::window::WindowChromeLine;
@@ -37,6 +35,8 @@ use crate::window::{
     window_parent_id, window_prev_sibling_id,
 };
 use neomacs_display_protocol::TransitionDirection;
+use neovm_eval::emacs_core::eval::data::minibuffer::MinibufferManager;
+use neovm_eval::emacs_core::eval::data::minibuffer_entry::MinibufferManagerExt;
 use std::collections::HashSet;
 use strum::{EnumString, IntoStaticStr};
 

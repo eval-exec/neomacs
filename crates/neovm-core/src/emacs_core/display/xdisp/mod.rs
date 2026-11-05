@@ -2108,7 +2108,7 @@ pub(crate) fn format_mode_line_from_state(
     dynamic: &[OrderedRuntimeBindingMap],
     frames: &crate::window::FrameManager,
     buffers: &mut crate::buffer::BufferManager,
-    processes: &crate::emacs_core::process::ProcessManager,
+    processes: &neovm_eval::emacs_core::eval::data::process_state::ProcessManager,
     args: Vec<Value>,
 ) -> Result<Option<Value>, Flow> {
     expect_args_range("format-mode-line", &args, 1, 4)?;
@@ -2568,7 +2568,7 @@ pub(crate) fn finish_format_mode_line_in_state_with_eval(
     dynamic: &[OrderedRuntimeBindingMap],
     frames: &crate::window::FrameManager,
     buffers: &mut crate::buffer::BufferManager,
-    processes: &crate::emacs_core::process::ProcessManager,
+    processes: &neovm_eval::emacs_core::eval::data::process_state::ProcessManager,
     args: &[Value],
     mut eval_form: impl FnMut(&Value, &crate::buffer::BufferManager) -> Result<Value, Flow>,
 ) -> EvalResult {
@@ -2782,7 +2782,7 @@ fn mode_line_human_readable_size(mut quotient: usize) -> String {
 
 fn mode_line_process_status_in_state(
     buffers: &crate::buffer::BufferManager,
-    processes: &crate::emacs_core::process::ProcessManager,
+    processes: &neovm_eval::emacs_core::eval::data::process_state::ProcessManager,
 ) -> &'static str {
     let Some(buffer_id) = buffers.current_buffer_id() else {
         return "no process";
@@ -4212,7 +4212,7 @@ fn append_mode_line_string_in_state<T: TargetPolicy>(
     vars: VariableView<'_>,
     dynamic: &[OrderedRuntimeBindingMap],
     buffers: &crate::buffer::BufferManager,
-    processes: &crate::emacs_core::process::ProcessManager,
+    processes: &neovm_eval::emacs_core::eval::data::process_state::ProcessManager,
     command_loop_depth: usize,
     pctx: &ModeLinePercentContext<T>,
     result: &mut ModeLineRendered,
@@ -4358,7 +4358,7 @@ fn append_mode_line_string_with_point_access<T: TargetPolicy>(
     coding: CodingAccess<'_>,
     dynamic: &[OrderedRuntimeBindingMap],
     buffers: &crate::buffer::BufferManager,
-    processes: &crate::emacs_core::process::ProcessManager,
+    processes: &neovm_eval::emacs_core::eval::data::process_state::ProcessManager,
     command_loop_depth: usize,
     pctx: &ModeLinePercentContext<T>,
     result: &mut ModeLineRendered,
@@ -4464,7 +4464,7 @@ fn format_mode_line_recursive_in_state(
     vars: VariableView<'_>,
     dynamic: &[OrderedRuntimeBindingMap],
     buffers: &crate::buffer::BufferManager,
-    processes: &crate::emacs_core::process::ProcessManager,
+    processes: &neovm_eval::emacs_core::eval::data::process_state::ProcessManager,
     pctx: &ModeLinePercentContext<StoredTarget<'_>>,
     format: &Value,
     result: &mut ModeLineRendered,
@@ -4640,7 +4640,7 @@ fn format_mode_line_recursive_in_state_with_eval_rooted(
     vars: VariableView<'_>,
     dynamic: &[OrderedRuntimeBindingMap],
     buffers: &crate::buffer::BufferManager,
-    processes: &crate::emacs_core::process::ProcessManager,
+    processes: &neovm_eval::emacs_core::eval::data::process_state::ProcessManager,
     pctx: &ModeLinePercentContext<StoredTarget<'_>>,
     format: &Value,
     result: &mut ModeLineRendered,
@@ -4917,7 +4917,7 @@ struct NativeSpecInputs<'state, 'frame, T: TargetPolicy> {
     coding: CodingAccess<'state>,
     dynamic: &'state [OrderedRuntimeBindingMap],
     buffers: &'state crate::buffer::BufferManager,
-    processes: &'state crate::emacs_core::process::ProcessManager,
+    processes: &'state neovm_eval::emacs_core::eval::data::process_state::ProcessManager,
     command_loop_depth: ModeLineCommandDepth,
     pctx: &'state ModeLinePercentContext<T>,
     point_access: &'state mut mode_line_point::Access<'frame>,
@@ -5424,7 +5424,7 @@ struct NativeAppendDriver<'input, 'dynamic, 'point, T: TargetPolicy, L> {
     coding: CodingAccess<'input>,
     dynamic: &'dynamic [OrderedRuntimeBindingMap],
     buffers: &'input crate::buffer::BufferManager,
-    processes: &'input crate::emacs_core::process::ProcessManager,
+    processes: &'input neovm_eval::emacs_core::eval::data::process_state::ProcessManager,
     command_loop_depth: ModeLineCommandDepth,
     pctx: &'input ModeLinePercentContext<T>,
     value: &'input Value,
@@ -5508,7 +5508,7 @@ fn expand_mode_line_percent_in_state<T: TargetPolicy>(
     coding: CodingAccess<'_>,
     dynamic: &[OrderedRuntimeBindingMap],
     buffers: &crate::buffer::BufferManager,
-    processes: &crate::emacs_core::process::ProcessManager,
+    processes: &neovm_eval::emacs_core::eval::data::process_state::ProcessManager,
     command_loop_depth: usize,
     pctx: &ModeLinePercentContext<T>,
     value: &Value,

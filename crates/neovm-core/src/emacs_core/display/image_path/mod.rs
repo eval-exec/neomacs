@@ -8,7 +8,7 @@
 //! the evaluator thread and the off-thread image submission worker share, so
 //! the two consumers can never drift out of sync.
 
-use crate::emacs_core::fileio::{
+use neovm_eval::emacs_core::eval::data::file_name_expand::{
     expand_file_name, expand_file_name_with_home, file_name_absolute_p,
 };
 use std::path::Path;

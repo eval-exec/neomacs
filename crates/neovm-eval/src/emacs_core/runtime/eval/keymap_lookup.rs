@@ -4305,3 +4305,31 @@ pub fn list_keymap_accessible(
         out.push(Value::cons(Value::vector(sequence.clone()), map.as_value()));
     }
 }
+
+/// Extension trait over the eval-owned [`MenuButtonKind`], kept next to the
+/// type so display and layout-engine callers can name it without going
+/// through the command keymap module (stage-5 display facade inversion).
+#[doc(hidden)]
+pub trait MenuButtonKindExt: Sized {
+    fn keyword(self) -> &'static str;
+
+    fn from_keyword(name: &str) -> Option<Self>;
+
+    fn from_value(value: Value, symbol_mode: SymbolMode) -> Option<Self>;
+}
+
+impl MenuButtonKindExt for MenuButtonKind {
+    fn keyword(self) -> &'static str {
+        self.into()
+    }
+
+    fn from_keyword(name: &str) -> Option<Self> {
+        name.strip_prefix(':')?.parse().ok()
+    }
+
+    fn from_value(value: Value, symbol_mode: SymbolMode) -> Option<Self> {
+        let id = value.as_symbol_id(symbol_mode)?;
+        let keyword = Self::from_keyword(resolve_sym(id))?;
+        (id == intern(keyword.keyword())).then_some(keyword)
+    }
+}

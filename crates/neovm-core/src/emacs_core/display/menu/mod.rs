@@ -1,10 +1,10 @@
 //! Evaluator-owned menu semantics. Presentation contains no Lisp values.
 
 use super::error::{Flow, LispCondition};
-use super::keymap;
 use super::value::Value;
 use super::{Context, PopupMenuEntry};
 use neovm_edit::emacs_core::edit_host::EditHost;
+use neovm_eval::emacs_core::eval::keymap_lookup as keymap;
 use resolve::parse;
 
 mod resolve;

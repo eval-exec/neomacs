@@ -3,13 +3,13 @@
 //! to speculate about an input. Unknown bindings retain ordinary delivery.
 
 use crate::emacs_core::intern::{SymId, WellKnown};
-use crate::emacs_core::keymap::{
-    command_remapping_lookup_in_keymaps, current_active_maps_for_position_read_only,
-    list_keymap_lookup_one_unresolved, lookup_key_in_obarray,
-};
 use crate::emacs_core::{Context, Value};
 use crate::window::DisplayFrameExt;
 use crate::window::DisplayFrameManagerExt;
+use neovm_eval::emacs_core::eval::keymap_lookup::{
+    command_remapping_lookup_in_keymaps, current_active_maps_for_position_read_only,
+    list_keymap_lookup_one_unresolved, lookup_key_in_obarray,
+};
 
 /// A fixed spelling consumed by the raw-input scroll predictor.
 ///

@@ -1,14 +1,14 @@
 //! GNU menu-item interpretation and dynamic property evaluation.
 use super::{MenuRoots, separators, shortcuts};
 use crate::emacs_core::error::{EvalResult, Flow};
-use crate::emacs_core::eval::keymap_lookup::MenuButtonKind;
-use crate::emacs_core::keymap::MenuButtonKindExt;
-use crate::emacs_core::keymap::{self, KeymapMarker, MenuItemProperty};
 use crate::emacs_core::{Context, PopupMenuEntry, Value};
 use neomacs_display_protocol::menu::{
     MenuAvailability, MenuCheckState, MenuIndicator, MenuItemKind,
 };
 use neovm_edit::emacs_core::edit_host::EditHost;
+use neovm_eval::emacs_core::eval::keymap_lookup::{
+    self as keymap, KeymapMarker, MenuButtonKind, MenuButtonKindExt, MenuItemProperty,
+};
 
 pub(super) fn parse(
     ctx: &mut Context,

@@ -69,31 +69,10 @@ pub use crate::emacs_core::eval::keymap_lookup::{
 
 pub use crate::emacs_core::eval::keymap_lookup::MenuButtonKind;
 
-/// Stage-4 W5/E13 upper extension trait over the eval-owned type.
-#[doc(hidden)]
-pub trait MenuButtonKindExt: Sized {
-    fn keyword(self) -> &'static str;
-
-    fn from_keyword(name: &str) -> Option<Self>;
-
-    fn from_value(value: Value, symbol_mode: SymbolMode) -> Option<Self>;
-}
-
-impl MenuButtonKindExt for MenuButtonKind {
-    fn keyword(self) -> &'static str {
-        self.into()
-    }
-
-    fn from_keyword(name: &str) -> Option<Self> {
-        name.strip_prefix(':')?.parse().ok()
-    }
-
-    fn from_value(value: Value, symbol_mode: SymbolMode) -> Option<Self> {
-        let id = value.as_symbol_id(symbol_mode)?;
-        let keyword = Self::from_keyword(resolve_sym(id))?;
-        (id == intern(keyword.keyword())).then_some(keyword)
-    }
-}
+/// Stage-5 display inversion: the extension trait lives with the eval-owned
+/// enum; this historical command path stays as a re-export for the
+/// layout-engine crate.
+pub use crate::emacs_core::eval::keymap_lookup::MenuButtonKindExt;
 
 // The default bodies above are the implementation; this binds them to the
 // upper-layer type that owns the state.
