@@ -10,7 +10,7 @@
 //! the nine `DEFVAR`s, `dbus-error`, `dbus-event`, and the wait-loop watches.
 
 use crate::emacs_core::error::Flow;
-use crate::emacs_core::eval::Context;
+use neovm_eval::emacs_core::eval::Context;
 
 mod fd;
 mod subrs;

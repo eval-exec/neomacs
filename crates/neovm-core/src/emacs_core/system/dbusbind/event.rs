@@ -12,7 +12,7 @@ use dbus::arg::ArgType;
 use dbus::message::MessageType;
 
 use crate::emacs_core::error::Flow;
-use crate::emacs_core::eval::Context;
+use neovm_eval::emacs_core::eval::Context;
 use crate::emacs_core::value::{Value, eq_value};
 
 use super::connection;
@@ -198,7 +198,7 @@ fn registered_entries(
 
     let mut entries = Vec::new();
     for key in keys {
-        let value = crate::emacs_core::builtins::builtin_gethash(vec![key, table, Value::NIL])?;
+        let value = neovm_eval::emacs_core::builtins::builtin_gethash(vec![key, table, Value::NIL])?;
         let mut rest = value;
         while rest.is_cons() {
             entries.push(rest.cons_car());
@@ -214,7 +214,7 @@ fn monitor_handler(ctx: &mut Context, bus: Value) -> Result<Option<Value>, Flow>
         return Ok(None);
     };
     let key = Value::list(vec![Value::keyword_by_name(":monitor"), bus]);
-    let value = crate::emacs_core::builtins::builtin_gethash(vec![key, table, Value::NIL])?;
+    let value = neovm_eval::emacs_core::builtins::builtin_gethash(vec![key, table, Value::NIL])?;
     if !value.is_cons() {
         return Ok(None);
     }
@@ -234,9 +234,9 @@ fn take_serial_handler(ctx: &mut Context, bus: Value, serial: u32) -> Result<Val
         bus,
         Value::fixnum(serial as i64),
     ]);
-    let handler = crate::emacs_core::builtins::builtin_gethash(vec![key, table, Value::NIL])?;
+    let handler = neovm_eval::emacs_core::builtins::builtin_gethash(vec![key, table, Value::NIL])?;
     if !handler.is_nil() {
-        let _ = crate::emacs_core::builtins::builtin_remhash(vec![key, table]);
+        let _ = neovm_eval::emacs_core::builtins::builtin_remhash(vec![key, table]);
     }
     Ok(if handler.is_cons() {
         handler.cons_car()

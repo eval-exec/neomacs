@@ -308,7 +308,7 @@ mod enabled {
     }
 
     fn collect_bind_values(
-        eval: &mut crate::emacs_core::eval::Context,
+        eval: &mut neovm_eval::emacs_core::eval::Context,
         values: &Value,
     ) -> Result<Vec<BindValue>, Flow> {
         let symbol_mode = eval.symbol_mode();
@@ -672,28 +672,28 @@ mod enabled {
 
     /// Report the compiled-in SQLite backend.
     pub(crate) fn available_p(args: Vec<Value>) -> EvalResult {
-        crate::emacs_core::builtins::expect_args("sqlite-available-p", &args, 0)?;
+        neovm_eval::emacs_core::builtins::expect_args("sqlite-available-p", &args, 0)?;
         Ok(Value::T)
     }
 
     /// (sqlite-version) → version string
     pub(crate) fn version(args: Vec<Value>) -> EvalResult {
-        crate::emacs_core::builtins::expect_args("sqlite-version", &args, 0)?;
+        neovm_eval::emacs_core::builtins::expect_args("sqlite-version", &args, 0)?;
         Ok(Value::string(rusqlite::version()))
     }
 
     /// (sqlitep OBJECT) → t or nil
     pub(crate) fn is_sqlite_object(args: Vec<Value>) -> EvalResult {
-        crate::emacs_core::builtins::expect_args("sqlitep", &args, 1)?;
+        neovm_eval::emacs_core::builtins::expect_args("sqlitep", &args, 1)?;
         Ok(Value::bool_val(args[0].is_sqlite()))
     }
 
     /// (sqlite-open &optional FILE READONLY DISABLE-URI) → db-handle or nil
     pub(crate) fn open(
-        eval: &mut crate::emacs_core::eval::Context,
+        eval: &mut neovm_eval::emacs_core::eval::Context,
         args: Vec<Value>,
     ) -> EvalResult {
-        crate::emacs_core::builtins::expect_args_range("sqlite-open", &args, 0, 3)?;
+        neovm_eval::emacs_core::builtins::expect_args_range("sqlite-open", &args, 0, 3)?;
         let file = args
             .first()
             .and_then(|value| (!value.is_nil()).then_some(*value));
@@ -746,7 +746,7 @@ mod enabled {
 
     /// (sqlite-close DB) → t
     pub(crate) fn close(args: Vec<Value>) -> EvalResult {
-        crate::emacs_core::builtins::expect_args("sqlite-close", &args, 1)?;
+        neovm_eval::emacs_core::builtins::expect_args("sqlite-close", &args, 1)?;
         let id = expect_db_object(&args[0])?;
         DB_HANDLES.with(|handles| {
             handles.borrow_mut().remove(&id);
@@ -756,10 +756,10 @@ mod enabled {
 
     /// (sqlite-execute DB QUERY &optional VALUES) → affected-rows or result rows
     pub(crate) fn execute(
-        eval: &mut crate::emacs_core::eval::Context,
+        eval: &mut neovm_eval::emacs_core::eval::Context,
         args: Vec<Value>,
     ) -> EvalResult {
-        crate::emacs_core::builtins::expect_args_range("sqlite-execute", &args, 2, 3)?;
+        neovm_eval::emacs_core::builtins::expect_args_range("sqlite-execute", &args, 2, 3)?;
         let id = expect_db(&args[0])?;
         let sql = sqlite_text_bytes(&args[1])?;
         let values = collect_bind_values(eval, &args.get(2).copied().unwrap_or(Value::NIL))?;
@@ -786,10 +786,10 @@ mod enabled {
 
     /// (sqlite-select DB QUERY &optional VALUES RETURN-TYPE) → results
     pub(crate) fn select(
-        eval: &mut crate::emacs_core::eval::Context,
+        eval: &mut neovm_eval::emacs_core::eval::Context,
         args: Vec<Value>,
     ) -> EvalResult {
-        crate::emacs_core::builtins::expect_args_range("sqlite-select", &args, 2, 4)?;
+        neovm_eval::emacs_core::builtins::expect_args_range("sqlite-select", &args, 2, 4)?;
         let id = expect_db(&args[0])?;
         let sql = sqlite_text_bytes(&args[1])?;
         let values = collect_bind_values(eval, &args.get(2).copied().unwrap_or(Value::NIL))?;
@@ -834,7 +834,7 @@ mod enabled {
 
     /// (sqlite-next SET) → row or nil
     pub(crate) fn next(args: Vec<Value>) -> EvalResult {
-        crate::emacs_core::builtins::expect_args("sqlite-next", &args, 1)?;
+        neovm_eval::emacs_core::builtins::expect_args("sqlite-next", &args, 1)?;
         let id = expect_stmt(&args[0])?;
         RESULT_SETS.with(|sets| {
             let mut sets = sets.borrow_mut();
@@ -860,7 +860,7 @@ mod enabled {
 
     /// (sqlite-more-p SET) → t or nil
     pub(crate) fn more_p(args: Vec<Value>) -> EvalResult {
-        crate::emacs_core::builtins::expect_args("sqlite-more-p", &args, 1)?;
+        neovm_eval::emacs_core::builtins::expect_args("sqlite-more-p", &args, 1)?;
         let id = expect_stmt(&args[0])?;
         let has_more = RESULT_SETS.with(|sets| {
             sets.borrow()
@@ -872,7 +872,7 @@ mod enabled {
 
     /// (sqlite-columns SET) → list of column name strings
     pub(crate) fn columns(args: Vec<Value>) -> EvalResult {
-        crate::emacs_core::builtins::expect_args("sqlite-columns", &args, 1)?;
+        neovm_eval::emacs_core::builtins::expect_args("sqlite-columns", &args, 1)?;
         let id = expect_stmt(&args[0])?;
         RESULT_SETS.with(|sets| {
             let sets = sets.borrow();
@@ -885,7 +885,7 @@ mod enabled {
 
     /// (sqlite-finalize SET) → t
     pub(crate) fn finalize(args: Vec<Value>) -> EvalResult {
-        crate::emacs_core::builtins::expect_args("sqlite-finalize", &args, 1)?;
+        neovm_eval::emacs_core::builtins::expect_args("sqlite-finalize", &args, 1)?;
         let id = expect_stmt(&args[0])?;
         RESULT_SETS.with(|sets| {
             sets.borrow_mut().remove(&id);
@@ -895,10 +895,10 @@ mod enabled {
 
     /// (sqlite-execute-batch DB STATEMENTS) → t or nil
     pub(crate) fn execute_batch(
-        _eval: &mut crate::emacs_core::eval::Context,
+        _eval: &mut neovm_eval::emacs_core::eval::Context,
         args: Vec<Value>,
     ) -> EvalResult {
-        crate::emacs_core::builtins::expect_args("sqlite-execute-batch", &args, 2)?;
+        neovm_eval::emacs_core::builtins::expect_args("sqlite-execute-batch", &args, 2)?;
         let id = expect_db(&args[0])?;
         let statements = sqlite_text_bytes(&args[1])?;
         let connection = connection_for_db(id)?;
@@ -907,28 +907,28 @@ mod enabled {
 
     /// (sqlite-transaction DB) → t or nil
     pub(crate) fn transaction(args: Vec<Value>) -> EvalResult {
-        crate::emacs_core::builtins::expect_args("sqlite-transaction", &args, 1)?;
+        neovm_eval::emacs_core::builtins::expect_args("sqlite-transaction", &args, 1)?;
         let connection = connection_for_db(expect_db(&args[0])?)?;
         Ok(Value::bool_val(sqlite_exec(&connection, b"begin")))
     }
 
     /// (sqlite-commit DB) → t or nil
     pub(crate) fn commit(args: Vec<Value>) -> EvalResult {
-        crate::emacs_core::builtins::expect_args("sqlite-commit", &args, 1)?;
+        neovm_eval::emacs_core::builtins::expect_args("sqlite-commit", &args, 1)?;
         let connection = connection_for_db(expect_db(&args[0])?)?;
         Ok(Value::bool_val(sqlite_exec(&connection, b"commit")))
     }
 
     /// (sqlite-rollback DB) → t or nil
     pub(crate) fn rollback(args: Vec<Value>) -> EvalResult {
-        crate::emacs_core::builtins::expect_args("sqlite-rollback", &args, 1)?;
+        neovm_eval::emacs_core::builtins::expect_args("sqlite-rollback", &args, 1)?;
         let connection = connection_for_db(expect_db(&args[0])?)?;
         Ok(Value::bool_val(sqlite_exec(&connection, b"rollback")))
     }
 
     /// (sqlite-pragma DB PRAGMA) → t or nil
     pub(crate) fn pragma(args: Vec<Value>) -> EvalResult {
-        crate::emacs_core::builtins::expect_args("sqlite-pragma", &args, 2)?;
+        neovm_eval::emacs_core::builtins::expect_args("sqlite-pragma", &args, 2)?;
         let connection = connection_for_db(expect_db(&args[0])?)?;
         let pragma = sqlite_text_bytes(&args[1])?;
         let mut statement = Vec::with_capacity(b"PRAGMA ".len() + pragma.len());
@@ -941,10 +941,10 @@ mod enabled {
     ///
     /// GNU semantics: load a SQLite extension, restricted to an allowlist.
     pub(crate) fn load_extension(
-        eval: &mut crate::emacs_core::eval::Context,
+        eval: &mut neovm_eval::emacs_core::eval::Context,
         args: Vec<Value>,
     ) -> EvalResult {
-        crate::emacs_core::builtins::expect_args("sqlite-load-extension", &args, 2)?;
+        neovm_eval::emacs_core::builtins::expect_args("sqlite-load-extension", &args, 2)?;
         let id = expect_db(&args[0])?;
         let module = crate::emacs_core::emacs_char::to_utf8_lossy(
             expect_strict_lisp_string(&args[1])?.as_bytes(),
@@ -1057,7 +1057,7 @@ pub(crate) fn swap_world_state(_slot: &mut dyn std::any::Any) {}
 pub(crate) fn is_sqlite_object(
     args: Vec<crate::emacs_core::value::Value>,
 ) -> crate::emacs_core::error::EvalResult {
-    crate::emacs_core::builtins::expect_args("sqlitep", &args, 1)?;
+    neovm_eval::emacs_core::builtins::expect_args("sqlitep", &args, 1)?;
     Ok(crate::emacs_core::value::Value::NIL)
 }
 
@@ -1065,7 +1065,7 @@ pub(crate) fn is_sqlite_object(
 pub(crate) fn available_p(
     args: Vec<crate::emacs_core::value::Value>,
 ) -> crate::emacs_core::error::EvalResult {
-    crate::emacs_core::builtins::expect_args("sqlite-available-p", &args, 0)?;
+    neovm_eval::emacs_core::builtins::expect_args("sqlite-available-p", &args, 0)?;
     Ok(crate::emacs_core::value::Value::NIL)
 }
 

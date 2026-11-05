@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use dbus::channel::{BusType, Channel};
 
 use crate::emacs_core::error::{Flow, LispCondition, expect_args, expect_args_range, signal};
-use crate::emacs_core::eval::Context;
+use neovm_eval::emacs_core::eval::Context;
 use crate::emacs_core::value::Value;
 
 use super::watch;

@@ -2,35 +2,35 @@
 
 std::cfg_select! {
     neomacs_have_dbus => {
-        use crate::emacs_core::subr::{NativeFn, SubrArity, SubrSpec};
+        use neovm_eval::emacs_core::subr::{NativeFn, SubrArity, SubrSpec};
 
-        crate::emacs_core::subr::define_subrs! {
-            crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        neovm_eval::emacs_core::subr::define_subrs! {
+            neovm_eval::emacs_core::subr::world_subr!(SubrSpec::new(
                 "dbus--init-bus",
                 NativeFn::ContextVec(super::connection::init_bus),
                 SubrArity::new(1, Some(2)),
             )),
-            crate::emacs_core::subr::world_subr!(SubrSpec::new(
+            neovm_eval::emacs_core::subr::world_subr!(SubrSpec::new(
                 "dbus-get-unique-name",
                 NativeFn::NoContextVec(super::connection::get_unique_name),
                 SubrArity::new(1, Some(1)),
             )),
-            crate::emacs_core::subr::world_subr!(SubrSpec::new(
+            neovm_eval::emacs_core::subr::world_subr!(SubrSpec::new(
                 "dbus-message-internal",
                 NativeFn::ContextVec(super::message::message_internal),
                 SubrArity::new(3, None),
             )),
-            crate::emacs_core::subr::world_subr!(SubrSpec::new(
+            neovm_eval::emacs_core::subr::world_subr!(SubrSpec::new(
                 "dbus--fd-open",
                 NativeFn::ContextVec(super::fd::fd_open),
                 SubrArity::new(1, Some(1)),
             )),
-            crate::emacs_core::subr::world_subr!(SubrSpec::new(
+            neovm_eval::emacs_core::subr::world_subr!(SubrSpec::new(
                 "dbus--fd-close",
                 NativeFn::NoContextVec(super::fd::fd_close),
                 SubrArity::new(1, Some(1)),
             )),
-            crate::emacs_core::subr::world_subr!(SubrSpec::new(
+            neovm_eval::emacs_core::subr::world_subr!(SubrSpec::new(
                 "dbus--registered-fds",
                 NativeFn::NoContextVec(super::fd::registered_fds),
                 SubrArity::new(0, Some(0)),
@@ -66,7 +66,7 @@ std::cfg_select! {
         }
     }
     _ => {
-        pub(super) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
+        pub(super) fn register_subrs(ctx: &mut neovm_eval::emacs_core::eval::Context) {
             let _ = ctx;
         }
     }

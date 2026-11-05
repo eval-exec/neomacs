@@ -4,8 +4,8 @@
 use std::cell::RefCell;
 
 use crate::emacs_core::error::{Flow, LispCondition, expect_args, signal};
-use crate::emacs_core::eval::Context;
 use crate::emacs_core::value::Value;
+use neovm_eval::emacs_core::eval::Context;
 
 thread_local! {
     static REGISTERED: RefCell<Vec<(i64, String)>> = const { RefCell::new(Vec::new()) };

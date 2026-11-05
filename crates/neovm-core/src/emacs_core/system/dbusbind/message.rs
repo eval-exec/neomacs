@@ -4,7 +4,7 @@ use dbus::Message;
 use dbus::arg::IterAppend;
 
 use crate::emacs_core::error::{Flow, LispCondition, expect_min_args, signal};
-use crate::emacs_core::eval::Context;
+use neovm_eval::emacs_core::eval::Context;
 use crate::emacs_core::value::Value;
 
 use super::connection::{self, BusKey, dbus_error};
@@ -147,7 +147,7 @@ pub(super) fn message_internal(ctx: &mut Context, args: Vec<Value>) -> Result<Va
         Value::fixnum(serial as i64),
     ]);
     if let Some(table) = ctx.variable_value_by_name("dbus-registered-objects-table") {
-        crate::emacs_core::builtins::builtin_puthash(vec![key_lisp, handler, table])?;
+        neovm_eval::emacs_core::builtins::builtin_puthash(vec![key_lisp, handler, table])?;
     }
     Ok(key_lisp)
 }

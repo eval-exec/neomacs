@@ -27,9 +27,10 @@ use super::value::Value;
 #[cfg(windows)]
 use super::{
     error::{EvalResult, Flow, LispCondition, signal},
-    eval::Context,
     value::ValueKind,
 };
+#[cfg(windows)]
+use neovm_eval::emacs_core::eval::Context;
 
 #[cfg(windows)]
 thread_local! {
@@ -74,7 +75,10 @@ fn w32_long_file_name(ctx: &mut Context, filename: Value) -> EvalResult {
                 }
             }
             Ok(Value::heap_string(
-                super::builtins::plain_str_to_lisp_string(&longname, !longname.is_ascii()),
+                neovm_value::strings_core::plain_str_to_lisp_string(
+                    &longname,
+                    !longname.is_ascii(),
+                ),
             ))
         }
         None => Ok(Value::NIL),
