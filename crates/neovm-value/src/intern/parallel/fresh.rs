@@ -378,7 +378,6 @@ pub(crate) fn fresh_registry_facts_for_test(
     }
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[cfg(test)]
 mod tests {
     use super::*;

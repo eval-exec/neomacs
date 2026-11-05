@@ -118,7 +118,6 @@ static_assertions::assert_impl_all!(YoungBlockLog: Send);
 static_assertions::assert_not_impl_any!(YoungBlockLog: Clone, Copy);
 
 impl YoungBlockLog {
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     #[inline]
     pub(super) fn id(&self) -> YoungRegistrationId {
         self.id

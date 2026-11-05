@@ -198,7 +198,6 @@ struct OrderedNode<R: OrderedShiftRecord> {
 }
 
 impl<R: OrderedShiftRecord> OrderedNode<R> {
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn leaf(records: SmallVec<[R; INLINE_ENTRIES]>, parent: Option<OrderedNodeId>) -> Self {
         Self {
             parent,
@@ -628,7 +627,6 @@ impl<R: OrderedShiftRecord> OrderedShiftTree<R> {
         OrderedRecordRelocation::Replaced { previous }
     }
 
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn record(&self, identity: R::Identity) -> Option<R> {
         let leaf = *self.by_identity.get(&identity)?;
         #[cfg(any(test, feature = "test-support"))]

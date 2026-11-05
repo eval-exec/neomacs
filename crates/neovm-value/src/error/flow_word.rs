@@ -47,7 +47,6 @@ pub struct Flow {
 }
 
 impl Flow {
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     #[inline(always)]
     fn tag(&self) -> FlowTag {
         match self.word.addr().get() & TAG_MASK {

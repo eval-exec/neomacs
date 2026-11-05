@@ -179,7 +179,6 @@ mod fallback_random {
         RANDOM_STATE.store(seed, Ordering::Relaxed);
     }
 
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn next() -> u64 {
         let next = RANDOM_STATE
             .load(Ordering::Relaxed)

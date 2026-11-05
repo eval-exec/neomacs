@@ -79,7 +79,6 @@ impl std::fmt::Debug for OwnerGcState {
     }
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[derive(Debug)]
 struct Facts {
     allocated_count: usize,

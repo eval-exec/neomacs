@@ -13,12 +13,8 @@ pub(super) enum GlobalOp {
     Makunbound { symbol: u16, dst: u16 },
 }
 
-#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(not(feature = "gc-memory-telemetry"))]
 mod tests;
-#[cfg(any(test, feature = "test-support"))]
-#[cfg(not(feature = "gc-memory-telemetry"))]
-pub mod tests;
 #[cfg(not(feature = "gc-memory-telemetry"))]
 mod transitions;
 

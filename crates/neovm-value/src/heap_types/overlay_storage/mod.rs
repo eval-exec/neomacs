@@ -89,10 +89,7 @@ impl OverlayPositionHandle {
 #[doc(hidden)]
 pub struct IntervalKey {
     pub(crate) start: EmacsBytePos,
-    #[cfg(not(any(test, feature = "test-support")))]
     pub(crate) attachment_order: u64,
-    #[cfg(any(test, feature = "test-support"))]
-    pub attachment_order: u64,
 }
 
 impl Ord for IntervalKey {
@@ -112,10 +109,7 @@ impl PartialOrd for IntervalKey {
 #[derive(Clone, Copy, Debug)]
 #[doc(hidden)]
 pub struct IntervalRecord {
-    #[cfg(not(any(test, feature = "test-support")))]
     pub(crate) key: IntervalKey,
-    #[cfg(any(test, feature = "test-support"))]
-    pub key: IntervalKey,
     pub(crate) identity: OverlayIdentity,
     pub(crate) range: EmacsByteRange,
     pub(crate) overlay: Value,

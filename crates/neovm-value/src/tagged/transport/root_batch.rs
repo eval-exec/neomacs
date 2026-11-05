@@ -181,7 +181,6 @@ static_assertions::assert_impl_all!(BatchControl: Send, Sync, fmt::Debug);
 static_assertions::assert_not_impl_any!(BatchControl: Clone);
 
 impl BatchControl {
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn state(&self) -> Result<SlotState, RootBatchError> {
         let state = self.state.load(Ordering::Acquire);
         SlotState::try_from(state).map_err(|_| RootBatchError::InvalidState { state })

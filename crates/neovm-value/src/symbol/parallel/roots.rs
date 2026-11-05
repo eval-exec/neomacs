@@ -78,7 +78,6 @@ impl SymbolBacking {
     }
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[cfg(test)]
 mod tests {
     use super::*;

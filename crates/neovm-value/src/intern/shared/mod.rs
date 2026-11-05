@@ -11,10 +11,7 @@ mod native;
 mod pages;
 mod slot;
 mod snapshot;
-#[cfg(not(any(test, feature = "test-support")))]
 mod sync;
-#[cfg(any(test, feature = "test-support"))]
-pub mod sync;
 
 pub(crate) use facets::{HeapVisibleNames, ReaderTemplates};
 pub(crate) use native::{

@@ -52,7 +52,6 @@ impl AllocationRegionDeltas {
         self.conses + self.floats
     }
 
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     #[inline]
     fn bytes(self) -> usize {
         self.conses * size_of::<ConsCell>() + self.floats * size_of::<FloatObj>()
@@ -643,7 +642,6 @@ impl TestMutatorGcId {
         )
     }
 
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn index(self) -> usize {
         self.0.get() - 1
     }

@@ -9,7 +9,6 @@ pub(super) use super::super::authority_word::{
 #[cfg(test)]
 use std::sync::atomic::{AtomicU64, Ordering};
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[cfg(test)]
 mod tests {
     use super::*;

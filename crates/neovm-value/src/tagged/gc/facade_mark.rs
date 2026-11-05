@@ -337,7 +337,7 @@ impl ConcurrentMarkCapture<'_> {
         Ok(())
     }
 
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(test)]
     /// # Safety
     /// The same serialized fixture owner admitted this heap's unlaunched
     /// start, and still excludes its obarray and TLS writers without callbacks.
@@ -586,7 +586,6 @@ impl TaggedHeap {
     }
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[cfg(test)]
 mod tests {
     use super::*;

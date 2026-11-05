@@ -2235,7 +2235,6 @@ pub struct ThreadObj {
 }
 
 impl ThreadObj {
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn new(payload: crate::heap_types::threading::ThreadPayload) -> Self {
         Self {
             header: VecLikeHeader::new(VecLikeType::Thread),
@@ -2628,14 +2627,9 @@ pub struct ModuleFunctionObj {
 #[cfg(all(test, feature = "sqlite"))]
 #[path = "header/tests/sqlite_finalizer_test.rs"]
 mod sqlite_finalizer_tests;
-#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "header/tests/header_test.rs"]
 mod tests;
-#[cfg(any(test, feature = "test-support"))]
-#[cfg(test)]
-#[path = "header/tests/header_test.rs"]
-pub mod tests;
 
 impl CondVarObj {
     #[inline]

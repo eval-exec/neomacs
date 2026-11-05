@@ -205,7 +205,6 @@ pub(crate) struct PublishedSymbolTable {
     chunks: OwnedChunkAddresses,
 }
 impl PublishedSymbolTable {
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn slots(&self) -> SymbolSlotCount {
         self.shape.slots
     }

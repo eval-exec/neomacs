@@ -61,7 +61,7 @@ fn note_knob(name: &str, value: &str) {
     tracing::info!(target: "neovm::gc::knobs", "{name}={value} is on in this process");
 }
 
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
 thread_local! {
     static CENSUS_OVERRIDE: std::cell::Cell<Option<CensusMode>> = const { std::cell::Cell::new(None) };
     static CHUNK_MAP_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
@@ -133,7 +133,7 @@ pub(crate) fn vec_scan_mode() -> VecScanMode {
 /// Frozen process policy for U3.5. Capture once in the heap and mark job,
 /// rather than reading the environment on an edge or a mutation.
 pub(crate) fn concurrent_claims_on() -> bool {
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(test)]
     if let Some(on) = CONCURRENT_CLAIMS_OVERRIDE.with(|c| c.get()) {
         return on;
     }
@@ -207,7 +207,7 @@ pub(crate) fn set_concurrent_claims_for_test(on: Option<bool>) {
 }
 
 /// Nestable test scope; restore the prior thread-local policy on unwind too.
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
 pub(crate) fn with_concurrent_claims_for_test<R>(on: bool, f: impl FnOnce() -> R) -> R {
     struct RestoreClaims(Option<bool>);
     impl Drop for RestoreClaims {

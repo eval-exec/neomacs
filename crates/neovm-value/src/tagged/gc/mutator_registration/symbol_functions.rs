@@ -17,19 +17,11 @@ pub(super) enum FunctionOp {
     CallStep { dst: u16, fuel: NonZeroU32 },
 }
 
-#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(not(feature = "gc-memory-telemetry"))]
 mod tests;
-#[cfg(any(test, feature = "test-support"))]
-#[cfg(not(feature = "gc-memory-telemetry"))]
-pub mod tests;
 
 #[cfg(not(feature = "gc-memory-telemetry"))]
 pub(crate) mod boundary;
 
-#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(not(feature = "gc-memory-telemetry"))]
 pub(super) mod names;
-#[cfg(any(test, feature = "test-support"))]
-#[cfg(not(feature = "gc-memory-telemetry"))]
-pub mod names;

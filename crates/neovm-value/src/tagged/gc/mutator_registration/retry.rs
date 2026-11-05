@@ -77,7 +77,6 @@ pub(crate) fn retry_owned<C, T, E>(
     }
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[cfg(test)]
 mod tests {
     use super::*;

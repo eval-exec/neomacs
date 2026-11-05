@@ -12,7 +12,6 @@ mod watched_prop_demand;
 #[path = "watched_prop_demand_knob_test.rs"]
 mod watched_prop_demand_knob;
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn char_pos(pos: usize) -> CharPos0 {
     CharPos0::new(pos)
 }

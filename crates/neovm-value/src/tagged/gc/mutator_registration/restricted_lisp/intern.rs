@@ -403,7 +403,4 @@ impl Session {
     }
 }
 
-#[cfg(not(any(test, feature = "test-support")))]
 mod tests;
-#[cfg(any(test, feature = "test-support"))]
-pub mod tests;

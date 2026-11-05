@@ -49,7 +49,6 @@ impl<'a> BirthPhase<'a> {
         Self(heap)
     }
 
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn stop(&mut self) {
         self.0.close_alloc_regions();
         self.0.concurrent_mark_running = false;

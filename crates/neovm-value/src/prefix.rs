@@ -13,7 +13,6 @@ impl RawPrefixSymbol {
         value.as_bare_symbol_name()?.parse().ok()
     }
 
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     #[cfg(test)]
     fn name(self) -> &'static str {
         self.into()

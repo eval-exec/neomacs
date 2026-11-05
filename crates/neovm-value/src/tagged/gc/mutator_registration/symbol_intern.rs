@@ -12,7 +12,6 @@ pub(super) enum InternOpKind {
     Soft,
 }
 impl InternOpKind {
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn method(self) -> &'static str {
         match self {
             Self::Intern => "initial_intern_into",
@@ -25,12 +24,8 @@ mod fixture;
 mod publication;
 #[path = "symbol_intern/tests/table_failures.rs"]
 mod table_failures;
-#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(not(feature = "gc-memory-telemetry"))]
 mod tests;
-#[cfg(any(test, feature = "test-support"))]
-#[cfg(not(feature = "gc-memory-telemetry"))]
-pub mod tests;
 
 pub(super) fn nmjit_n3_retired_publication_manifest() -> Result<(), String> {
     publication::manifest()

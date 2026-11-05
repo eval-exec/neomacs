@@ -125,8 +125,7 @@ impl ConcurrentClaimsState {
 }
 
 impl TaggedHeap {
-    #[cfg(any(test, feature = "test-support"))]
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    #[cfg(test)]
     pub(crate) fn new_for_concurrent_hash_test(generational: bool) -> Self {
         let mut heap = knobs::with_concurrent_claims_for_test(true, Self::new);
         heap.generational = super::generational::GenState::new(generational);
@@ -298,7 +297,6 @@ const _: () = {
     assert!(offset_of!(TaggedHeap, sweep_in_progress) == 4523);
 };
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[cfg(test)]
 mod tests {
     use super::*;

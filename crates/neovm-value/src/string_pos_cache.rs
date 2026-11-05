@@ -38,15 +38,11 @@ pub struct Entry {
 // Signed numeric metadata adds no new TLS or cross-mutator ownership.
 
 thread_local! {
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     static CACHE: Cell<Option<Entry>> = const { Cell::new(None) };
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     static EPOCH: Cell<u64> = const { Cell::new(0) };
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     static CACHE_HEAP: Cell<usize> = const { Cell::new(0) };
     // Last collection whose root enumeration included the entry, or the
     // completed count at which an empty cache was activated.
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     static CACHE_COLLECTION_EPOCH: Cell<Option<usize>> = const { Cell::new(None) };
 }
 

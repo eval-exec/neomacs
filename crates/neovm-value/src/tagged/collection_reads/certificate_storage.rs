@@ -19,7 +19,6 @@ pub(super) struct CertificatePool {
 }
 
 impl CertificatePool {
-    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn acquire(
         &mut self,
         reads: &CaptureReads,
@@ -95,7 +94,6 @@ impl CertificateLease {
     }
 }
 
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[cfg(test)]
 mod tests {
     use super::*;
