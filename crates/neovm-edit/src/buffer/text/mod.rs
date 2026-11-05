@@ -16,6 +16,8 @@ pub use edit::TextExtentDelta;
 pub use edit::{
     TextChange, TextEditRange, TextExtent, TextInsertion, TextReplacement, TextTransposition,
 };
+#[cfg(feature = "test-support")]
+pub use emacs_bytes::emacs_char_to_byte_in_slice;
 #[cfg(not(feature = "test-support"))]
 pub(in crate::buffer) use emacs_bytes::{
     emacs_byte_to_char_in_slice, emacs_char_to_byte_in_slice, is_emacs_char_boundary,
@@ -25,8 +27,6 @@ pub(in crate::buffer) use emacs_bytes::{
 pub(in crate::buffer) use emacs_bytes::{
     emacs_byte_to_char_in_slice, is_emacs_char_boundary, storage_string_to_emacs_buffer_bytes,
 };
-#[cfg(feature = "test-support")]
-pub use emacs_bytes::emacs_char_to_byte_in_slice;
 pub use kind::BufferTextBackendKind;
 #[doc(hidden)]
 pub use kind::ImplementedBufferTextBackendKind;

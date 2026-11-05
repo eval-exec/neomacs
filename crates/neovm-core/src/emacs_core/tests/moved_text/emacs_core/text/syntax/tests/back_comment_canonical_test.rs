@@ -13,12 +13,12 @@ use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::sync::{LazyLock, Mutex};
 
 use crate::emacs_core::print::print_value;
-use neovm_text::emacs_core::syntax::parse_cache::canon;
 use neovm_text::emacs_core::syntax::CommentEndEscapePolicy;
 use neovm_text::emacs_core::syntax::SyntaxProperties;
 use neovm_text::emacs_core::syntax::SyntaxTable;
 use neovm_text::emacs_core::syntax::builtin_modify_syntax_entry;
 use neovm_text::emacs_core::syntax::builtin_parse_partial_sexp_6;
+use neovm_text::emacs_core::syntax::parse_cache::canon;
 use neovm_value::value::Value;
 use neovm_value::value::positions::CharPos0;
 use std::cell::Cell;

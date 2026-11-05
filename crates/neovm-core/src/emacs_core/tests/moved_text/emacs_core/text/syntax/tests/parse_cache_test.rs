@@ -20,10 +20,10 @@ use std::sync::{LazyLock, Mutex};
 use crate::emacs_core::print::print_value;
 use neovm_edit::buffer::syntax_cache::Invalidation;
 use neovm_eval::emacs_core::eval::Context;
-use neovm_text::emacs_core::syntax::parse_cache::canon;
-use neovm_text::emacs_core::syntax::parse_cache::Record;
 use neovm_text::emacs_core::syntax::builtin_modify_syntax_entry;
 use neovm_text::emacs_core::syntax::builtin_parse_partial_sexp_6;
+use neovm_text::emacs_core::syntax::parse_cache::Record;
+use neovm_text::emacs_core::syntax::parse_cache::canon;
 use neovm_value::value::Value;
 use neovm_value::value::list_to_vec;
 
