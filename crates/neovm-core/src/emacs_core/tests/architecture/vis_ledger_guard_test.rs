@@ -1969,7 +1969,18 @@ fn visibility_make_sites(workspace: &Path) -> Result<Vec<(String, String)>, Stri
                 .replace('\\', "/");
             let lines: Vec<&str> = text.lines().collect();
             for (index, line) in lines.iter().enumerate() {
-                if !line.contains("visibility::make(pub)") {
+                // The scan is textual; a comment that MENTIONS the attribute
+                // is not a widening site (jitcall's fence comment carries the
+                // literal text and was misread as one).
+                let trimmed = line.trim_start();
+                if trimmed.starts_with("//")
+                    || trimmed.starts_with("/*")
+                    || trimmed.starts_with('*')
+                {
+                    continue;
+                }
+                let code = line.split("//").next().unwrap_or("");
+                if !code.contains("visibility::make(pub)") {
                     continue;
                 }
                 let name = declaration_after(&lines, index).ok_or_else(|| {
@@ -2096,6 +2107,16 @@ fn check_visibility_coverage(workspace: &Path, ledgers: &[VisRow]) -> Result<(),
     for row in ledgers {
         let leaf = row.item.rsplit("::").next().unwrap_or(&row.item);
         listed.insert((row.file.clone(), leaf.to_owned()));
+    }
+    // P1-HOOKS-2: a fence-routed A' item (one with its signed AUTHORITY row
+    // at the defining file) is test-support surface by the AUTHORITY ledger;
+    // VIS V1 forbids a second VIS row for the same item. The AUTHORITY row is
+    // therefore the coverage for its `visibility::make(pub)` site.
+    let authority_path = workspace.join(ARCHITECTURE_DIR).join("AUTHORITY-ITEMS.tsv");
+    if authority_path.is_file() {
+        for row in auth_rows(workspace) {
+            listed.insert((row.defining_file, auth_leaf(&row.item).to_owned()));
+        }
     }
     let mut sites = visibility_make_sites(workspace)?;
     sites.extend(cfg_split_widening_sites(workspace)?);
@@ -3485,6 +3506,48 @@ pub enum Mode {
         assert!(check_visibility_coverage(dir.path(), &[row]).is_ok());
     }
 
+    /// P1-HOOKS-2: a fence-routed A' item has its AUTHORITY row at the
+    /// defining file and MUST NOT get a second VIS row (V1). That AUTHORITY
+    /// row is the coverage for its `visibility::make(pub)` site; a row at a
+    /// different file does not cover it.
+    #[test]
+    fn authority_row_covers_a_fence_widening_site() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = dir.path().join("crates/neovm-value/src");
+        std::fs::create_dir_all(&src).expect("src");
+        std::fs::write(
+            src.join("fence_item.rs"),
+            r#"
+#[cfg_attr(any(test, feature = "test-support"), visibility::make(pub))]
+pub(crate) struct FenceOnly;
+"#,
+        )
+        .expect("fence item");
+        // Without the AUTHORITY row the widening site is unrowed.
+        let error = check_visibility_coverage(dir.path(), &[]).expect_err("unrowed fence item");
+        assert!(error.contains("FenceOnly"), "{error}");
+        eprintln!("MUTATION RED: {error}");
+        let arch = dir
+            .path()
+            .join("crates/neovm-core/src/emacs_core/tests/architecture");
+        std::fs::create_dir_all(&arch).expect("arch");
+        std::fs::write(
+            arch.join("AUTHORITY-ITEMS.tsv"),
+            "crate\titem\tkind\tdefining_file\tfence_path\ttests\treason\tsafety\n\
+             neovm-value\tFenceOnly\tstruct\tcrates/neovm-value/src/fence_item.rs\tneovm_value::test_support::authority::FenceOnly\tcrates/neovm-core/core_tests/moved.rs\tP1-HOOKS-2 fence-routed A' item; the fence is the only public path\tsafe\n",
+        )
+        .expect("authority ledger");
+        assert!(check_visibility_coverage(dir.path(), &[]).is_ok());
+        // A row at a different defining file is not coverage for this site.
+        std::fs::write(
+            arch.join("AUTHORITY-ITEMS.tsv"),
+            "crate\titem\tkind\tdefining_file\tfence_path\ttests\treason\tsafety\n\
+             neovm-value\tFenceOnly\tstruct\tcrates/neovm-value/src/other.rs\tneovm_value::test_support::authority::FenceOnly\tcrates/neovm-core/core_tests/moved.rs\tmisplaced row\tsafe\n",
+        )
+        .expect("authority ledger");
+        assert!(check_visibility_coverage(dir.path(), &[]).is_err());
+    }
+
     fn cs1_workspace(source: &str) -> tempfile::TempDir {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = dir.path().join("crates/neovm-value/src");
@@ -3769,6 +3832,38 @@ fn visibility_make_multiline_use_group_is_named_by_its_first_import() {
         "pub(crate) use module::{First, Second};",
     ];
     assert_eq!(declaration_after(&lines, 0), Some("First".to_owned()));
+}
+
+/// A comment that MENTIONS the attribute text is not a widening site; a real
+/// attribute on the next declaration still is.
+#[test]
+fn visibility_make_in_a_comment_is_not_a_widening_site() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let src = dir.path().join("crates/neovm-value/src");
+    std::fs::create_dir_all(&src).expect("src");
+    std::fs::write(
+        src.join("commented.rs"),
+        "// the chain applies visibility::make(pub) at the fence.\n\
+         /* a block comment mentioning visibility::make(pub) */\n\
+         /// doc: visibility::make(pub)\n\
+         pub(crate) struct NotWidened;\n",
+    )
+    .expect("commented");
+    assert!(visibility_make_sites(dir.path()).expect("sites").is_empty());
+    std::fs::write(
+        src.join("widened.rs"),
+        "#[cfg_attr(feature = \"test-support\", visibility::make(pub))]\n\
+         pub(crate) struct Widened;\n",
+    )
+    .expect("widened");
+    let sites = visibility_make_sites(dir.path()).expect("sites");
+    assert_eq!(
+        sites,
+        vec![(
+            "crates/neovm-value/src/widened.rs".to_owned(),
+            "Widened".to_owned()
+        )]
+    );
 }
 
 /// B3 AUTHORITY-ITEMS guard (peer ruling 07:3xZ): every row has the signed
