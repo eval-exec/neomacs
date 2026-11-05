@@ -363,8 +363,7 @@ pub struct ControlNudgePublisher {
 }
 
 impl ControlWake {
-    #[doc(hidden)]
-    pub fn paired() -> (Arc<Self>, ControlNudgePublisher) {
+    pub(crate) fn paired() -> (Arc<Self>, ControlNudgePublisher) {
         Self::pair(Self {
             metadata: Mutex::new(Metadata::default()),
             changed: Condvar::new(),
@@ -385,8 +384,7 @@ impl ControlWake {
     /// that closing the unique write side wakes a registered native reader after
     /// publication failure. Unix uses a socket pair; other platforms use a
     /// privately connected loopback TCP pair with exactly the same ownership.
-    #[doc(hidden)]
-    pub fn paired_native(
+    pub(crate) fn paired_native(
         poller: Arc<polling::Poller>,
     ) -> io::Result<(Arc<Self>, ControlNudgePublisher)> {
         let native = NativeEndpoint::new(poller)?;

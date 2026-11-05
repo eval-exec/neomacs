@@ -13,8 +13,7 @@ use std::rc::Rc;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct OwnerInvocationId(NonZeroU64);
 impl OwnerInvocationId {
-    #[doc(hidden)]
-    pub const fn from_owner_id(value: NonZeroU64) -> Self {
+    pub(crate) const fn from_owner_id(value: NonZeroU64) -> Self {
         Self(value)
     }
 }

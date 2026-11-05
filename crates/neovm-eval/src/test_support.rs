@@ -13,9 +13,11 @@ pub mod authority {
     use crate::emacs_core::eval::Context;
     use crate::emacs_core::eval::hooks_proof::EvalHooksInstalled;
     use crate::emacs_core::eval::world::Baton;
+    use crate::host_effect::wake::{ControlNudgePublisher, ControlWake};
     use neovm_value::intern::SymId;
     use neovm_value::symbol::Obarray;
     use neovm_value::tagged::gc::{PlainSymbolBacking, RegistrationError};
+    use std::sync::Arc;
 
     /// S-2: the V1 minimal VM harness, reached only with the REAL boot proof.
     ///
@@ -26,6 +28,16 @@ pub mod authority {
     /// path is private again (S-1).
     pub fn new_minimal_vm_harness(proof: EvalHooksInstalled) -> Context {
         Context::new_minimal_vm_harness(proof)
+    }
+
+    /// S-5: pair a fresh bare `ControlWake` with its publisher for the
+    /// re-homed host-input tests.
+    ///
+    /// `ControlWake::paired` is `pub(crate)` again at its defining path (the
+    /// pre-split S6-1 owner seal); a fully test-gated core file may reach it
+    /// only through this fence.
+    pub fn paired_control_wake() -> (Arc<ControlWake>, ControlNudgePublisher) {
+        ControlWake::paired()
     }
 
     /// Copied identity of the World retained by a Baton: the `Arc` pointer as

@@ -50,8 +50,7 @@ macro_rules! owner_identity_constructor {
     ($($name:ident),+ $(,)?) => {$(
         impl $name {
             /// Metadata issuance only; live record authority stays in its registry.
-            #[doc(hidden)]
-            pub const fn from_owner_id(id: NonZeroU64) -> Self { Self(id) }
+            pub(crate) const fn from_owner_id(id: NonZeroU64) -> Self { Self(id) }
         }
     )+};
 }
@@ -150,8 +149,7 @@ impl<K: RegisteredRecord> RegisteredRootRef<'_, K> {
     /// # Safety
     /// The owner must retain the matching record of kind K until restored-owner
     /// acknowledgement, and validate all metadata before materialization.
-    #[doc(hidden)]
-    pub unsafe fn from_registered(key: HostRequestKey, record: RootRecordId) -> Self {
+    pub(crate) unsafe fn from_registered(key: HostRequestKey, record: RootRecordId) -> Self {
         Self {
             binding: RequestIdentity {
                 session: key.session,
@@ -250,8 +248,7 @@ macro_rules! families {
             impl<'session> $plan<'session> {
                 pub fn native(&self) -> &OwnedNativeData { &self.native }
                 pub fn record(&self) -> &RegisteredRootRef<'session, $input> { &self.record }
-                #[doc(hidden)]
-                pub fn from_registered(native: OwnedNativeData, record: RegisteredRootRef<'session, $input>) -> Self { Self { native, record } }
+                pub(crate) fn from_registered(native: OwnedNativeData, record: RegisteredRootRef<'session, $input>) -> Self { Self { native, record } }
                 #[doc(hidden)]
                 pub fn submit(self) -> Submitted<'session, Self> {
                     let binding = self.record.binding;
@@ -273,8 +270,7 @@ macro_rules! families {
             impl<'session> $reply<'session> {
                 pub fn native(&self) -> &OwnedNativeData { &self.native }
                 pub fn record(&self) -> &RegisteredRootRef<'session, $output> { &self.record }
-                #[doc(hidden)]
-                pub fn from_registered(native: OwnedNativeData, record: RegisteredRootRef<'session, $output>) -> Self { Self { native, record } }
+                pub(crate) fn from_registered(native: OwnedNativeData, record: RegisteredRootRef<'session, $output>) -> Self { Self { native, record } }
             }
 
             impl sealed::Reply for $reply<'_> {
@@ -432,8 +428,7 @@ pub struct RootedCondition<'session>(RegisteredRootRef<'session, ConditionRecord
 pub struct RootedThreadSignal<'session>(RegisteredRootRef<'session, ThreadSignalRecord>);
 
 impl<'session> RootedCondition<'session> {
-    #[doc(hidden)]
-    pub fn from_registered(record: RegisteredRootRef<'session, ConditionRecord>) -> Self {
+    pub(crate) fn from_registered(record: RegisteredRootRef<'session, ConditionRecord>) -> Self {
         Self(record)
     }
     pub fn record(&self) -> &RegisteredRootRef<'session, ConditionRecord> {
@@ -442,8 +437,7 @@ impl<'session> RootedCondition<'session> {
 }
 
 impl<'session> RootedThreadSignal<'session> {
-    #[doc(hidden)]
-    pub fn from_registered(record: RegisteredRootRef<'session, ThreadSignalRecord>) -> Self {
+    pub(crate) fn from_registered(record: RegisteredRootRef<'session, ThreadSignalRecord>) -> Self {
         Self(record)
     }
     pub fn record(&self) -> &RegisteredRootRef<'session, ThreadSignalRecord> {

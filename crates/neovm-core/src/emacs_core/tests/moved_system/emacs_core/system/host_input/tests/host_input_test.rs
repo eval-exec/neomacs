@@ -560,8 +560,9 @@ fn no_poller_channel_fallback_delivers_without_a_separate_wake_backend() {
 
 #[test]
 fn control_nudge_is_value_free_and_uses_the_receiving_owner_session() {
-    use neovm_eval::host_effect::wake::{ControlWake, ControlWakeOutcome};
-    let (wake, _) = ControlWake::paired();
+    use neovm_eval::host_effect::wake::ControlWakeOutcome;
+    use neovm_eval::test_support::authority::paired_control_wake;
+    let (wake, _) = paired_control_wake();
     let (publisher, receiver) = HostInputPublisher::channel_with_session(
         channel_fallback_wake_for_test(),
         Some(wake.attach_host_session()),
@@ -669,8 +670,9 @@ fn explicit_host_session_revocation_preserves_backend_control_and_input_installa
 
 #[test]
 fn final_current_connection_drop_wakes_both_destinations_and_revokes_only_its_session() {
-    use neovm_eval::host_effect::wake::{ControlWake, ControlWakeOutcome};
-    let (wake, _) = ControlWake::paired();
+    use neovm_eval::host_effect::wake::ControlWakeOutcome;
+    use neovm_eval::test_support::authority::paired_control_wake;
+    let (wake, _) = paired_control_wake();
     let session = wake.attach_host_session();
     let retained_session = session.clone();
     let (publisher, receiver) =
