@@ -536,6 +536,7 @@ impl CaseTableOverride {
     /// override straight from a buffer's installed case table (subsidiary tables
     /// already exist once `set-case-table` ran). Used where only an immutable
     /// buffer is in scope (replace-match case analysis).
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn for_buffer_readonly_with_symbols(
         buf: &neovm_edit::buffer::Buffer,
         mode: SymbolMode,

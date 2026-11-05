@@ -16,6 +16,7 @@ impl StorageStringBufferBytes {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(in crate::buffer) fn storage_string_to_emacs_buffer_bytes(s: &str) -> StorageStringBufferBytes {
     let multibyte = !crate::buffer::storage_string::storage_string_contains_unibyte_bytes(s);
     let bytes = crate::buffer::storage_string::storage_string_to_buffer_bytes(s, multibyte);
@@ -37,6 +38,7 @@ pub(in crate::buffer) fn emacs_char_to_byte_in_slice(
 }
 
 #[inline]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(in crate::buffer) fn emacs_byte_to_char_in_slice(
     bytes: &[u8],
     byte_pos: usize,
@@ -54,6 +56,7 @@ pub(in crate::buffer) fn emacs_byte_to_char_in_slice(
 }
 
 #[inline]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(in crate::buffer) fn is_emacs_char_boundary(
     bytes: &[u8],
     byte_pos: usize,

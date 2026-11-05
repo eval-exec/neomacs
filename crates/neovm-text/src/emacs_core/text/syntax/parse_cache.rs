@@ -173,6 +173,7 @@ pub(crate) fn parse_parse_cache_knob(value: Option<&str>) -> ParseCacheMode {
 
 pub(crate) use neovm_edit::buffer::syntax_cache::Invalidation;
 
+#[cfg(not(any(test, feature = "test-support")))]
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Per-storage syntax parse cache. See the module documentation.
 #[derive(Debug, Default)]
@@ -181,6 +182,21 @@ pub(crate) struct SyntaxParseCache {
     /// The BEGV canonical run, under the same storage-owned exclusive cache
     /// access as L1 runs; it is never stored in a mutator thread-local cache.
     canonical: Option<canon::CanonicalRun>,
+    /// A conservative membership filter for numeric FROM positions. A clear
+    /// bit proves a miss; collisions still require an exact run search.
+    from_filter: u64,
+    /// LRU clock.
+    clock: u64,
+}
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
+/// Per-storage syntax parse cache. See the module documentation.
+#[derive(Debug, Default)]
+pub struct SyntaxParseCache {
+    pub runs: Vec<ParseRun>,
+    /// The BEGV canonical run, under the same storage-owned exclusive cache
+    /// access as L1 runs; it is never stored in a mutator thread-local cache.
+    pub canonical: Option<canon::CanonicalRun>,
     /// A conservative membership filter for numeric FROM positions. A clear
     /// bit proves a miss; collisions still require an exact run search.
     from_filter: u64,
@@ -874,6 +890,7 @@ impl SyntaxParseCache {
         index
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn store(&mut self, key: RunKey, record: Record, result: Option<ExactResult>) {
         let index = self.run_for(key);
         let run = &mut self.runs[index];

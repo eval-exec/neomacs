@@ -73,6 +73,7 @@ impl SavedPointBeforeCommand {
     /// GNU's paired assignment: `point_before_last_command_or_undo = PT;
     /// buffer_before_last_command_or_undo = current_buffer;`
     /// (src/keyboard.c:1536-1537, src/undo.c:278-279).
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(in crate::buffer) fn save(&self, buffer: BufferId, point: CharPos0) {
         self.cell.set(Some(PointBeforeCommand { buffer, point }));
     }

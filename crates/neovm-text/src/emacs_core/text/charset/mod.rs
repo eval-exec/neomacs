@@ -1638,6 +1638,7 @@ pub(crate) struct CharsetLeadingByte {
 
 impl CharsetLeadingByte {
     /// GNU's `AREF (valids, c)` naming this charset.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn accepts(self, byte: u8) -> bool {
         (self.first..=self.last).contains(&byte)
     }
@@ -1674,6 +1675,7 @@ impl CharsetCodeSpace {
         self.bytes.len()
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn accepts(&self, index: usize, byte: i32) -> bool {
         u8::try_from(byte)
             .ok()

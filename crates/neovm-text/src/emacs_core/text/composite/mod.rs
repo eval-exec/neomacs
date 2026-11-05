@@ -800,6 +800,7 @@ impl AutomaticCompositionQuery {
         }
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn accepts(self, range: CharRange) -> bool {
         let start = range.start().get();
         let end = range.end().get();

@@ -825,6 +825,7 @@ pub struct ClassKey {
 
 impl ClassKey {
     #[inline]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn accepts(&self, predicate: u16) -> bool {
         let predicate = predicate as usize;
         self.accepts[predicate / 64] & (1 << (predicate % 64)) != 0

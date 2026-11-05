@@ -21,7 +21,8 @@ use strum::IntoStaticStr;
 
 use super::plist_get_value as get;
 
-use neovm_edit::emacs_core::{Value, eval::Context};
+use neovm_value::value::Value;
+use crate::emacs_core::eval::Context;
 
 use neovm_value::tagged::collection_reads::capture;
 
