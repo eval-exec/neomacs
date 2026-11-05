@@ -1,3 +1,5 @@
+use super::*;
+
 use std::cell::{Cell, RefCell};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BinaryHeap};
@@ -11,7 +13,6 @@ use neovm_value::value::scratch_bridge::{
 };
         use std::hash::Hasher;
     use neovm_value::value::ValueKind;
-    use std::hash::Hasher;
 
 use neovm_value::value::Value;
 use neovm_value::heap_types::byte_positions::EmacsByteRange;

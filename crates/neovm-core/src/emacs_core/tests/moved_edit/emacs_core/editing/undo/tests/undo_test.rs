@@ -1,3 +1,5 @@
+use super::*;
+
 use neovm_edit::buffer::buffer::UndoBoundaryOutcome;
 use neovm_value::error::expect_args;
 use neovm_value::error::{EvalResult, Flow, signal};
@@ -29,7 +31,6 @@ use crate::emacs_core::eval::Context;
 #[test]
 fn primitive_undo_is_lisp_only_like_gnu() {
     crate::test_utils::init_test_tracing();
-    use crate::emacs_core::eval::Context;
 
     // Before any Lisp is loaded: `undo-boundary' answers (GNU has it in C),
     // `primitive-undo' does not (GNU has no C version).
@@ -223,7 +224,6 @@ fn test_undo_boundary_no_args() {
 #[test]
 fn test_undo_boundary_eval_inserts_boundary_marker() {
     crate::test_utils::init_test_tracing();
-    use crate::emacs_core::eval::Context;
 
     let mut eval = Context::new();
     {
@@ -420,7 +420,6 @@ fn undo_replays_the_recorded_entries_like_gnu() {
 #[test]
 fn first_change_marker_rearmed_after_set_modified_nil() {
     crate::test_utils::init_test_tracing();
-    use crate::emacs_core::eval::Context;
     let mut eval = Context::new();
     eval.eval_str("(insert \"0123456789\")").unwrap();
     eval.eval_str("(set-buffer-modified-p nil)").unwrap();
@@ -443,7 +442,6 @@ fn first_change_marker_rearmed_after_set_modified_nil() {
 #[test]
 fn first_change_marker_recorded_once_per_modified_run() {
     crate::test_utils::init_test_tracing();
-    use crate::emacs_core::eval::Context;
     let mut eval = Context::new();
     eval.eval_str("(insert \"0123456789\")").unwrap();
     eval.eval_str("(set-buffer-modified-p nil)").unwrap();
@@ -462,7 +460,6 @@ fn first_change_marker_recorded_once_per_modified_run() {
 #[test]
 fn first_change_marker_rearmed_on_each_clean_transition() {
     crate::test_utils::init_test_tracing();
-    use crate::emacs_core::eval::Context;
     let mut eval = Context::new();
     eval.eval_str("(insert \"0123456789\")").unwrap();
     eval.eval_str("(set-buffer-modified-p nil)").unwrap();
@@ -577,7 +574,6 @@ fn a_minibuffer_read_adds_no_undo_boundary_to_previously_changed_buffers() {
 #[test]
 fn first_change_marker_records_the_visited_file_modtime_like_gnu() {
     crate::test_utils::init_test_tracing();
-    use crate::emacs_core::eval::Context;
     let mut eval = Context::new();
     let unique = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -638,7 +634,6 @@ fn first_change_marker_records_the_visited_file_modtime_like_gnu() {
 #[test]
 fn first_change_in_an_indirect_buffer_records_its_base_buffers_modtime() {
     crate::test_utils::init_test_tracing();
-    use crate::emacs_core::eval::Context;
     let mut eval = Context::new();
 
     let form = r#"(let ((base (get-buffer-create "base-145")))
@@ -672,7 +667,6 @@ fn first_change_in_an_indirect_buffer_records_its_base_buffers_modtime() {
 #[test]
 fn a_visited_file_that_does_not_exist_records_minus_one() {
     crate::test_utils::init_test_tracing();
-    use crate::emacs_core::eval::Context;
     let mut eval = Context::new();
 
     let form = r#"(progn
@@ -715,7 +709,6 @@ fn a_visited_file_that_does_not_exist_records_minus_one() {
 #[test]
 fn record_point_runs_before_the_first_change_sentinel_like_gnu() {
     crate::test_utils::init_test_tracing();
-    use crate::emacs_core::eval::Context;
     let mut eval = Context::new();
     let unique = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

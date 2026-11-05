@@ -25,12 +25,10 @@ use neovm_edit::buffer::{
 };
 use neovm_value::heap_types::{GnuStringCharPos, LispString};
     use neovm_value::emacs_char::char_to_byte_pos;
-    use neovm_value::emacs_char::char_to_byte_pos;
     use neovm_text::emacs_core::casefiddle::{
         apply_replace_match_case_lisp, apply_replace_match_case_lisp_with,
     };
     use neovm_text::emacs_core::syntax::SyntaxClass;
-    use neovm_value::heap_types::LispString;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
 use neovm_text::emacs_core::regex_emacs::CompiledPattern;

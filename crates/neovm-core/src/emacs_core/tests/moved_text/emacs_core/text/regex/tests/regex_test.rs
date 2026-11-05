@@ -1,3 +1,9 @@
+use super::*;
+use std::time::Instant;
+use std::time::Duration;
+use std::sync::atomic::AtomicUsize;
+use std::mem;
+
 use neovm_value::tagged::SymbolMode;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -6,7 +12,6 @@ use neovm_text::emacs_core::regex_emacs::{
     self, BufferSyntaxLookup, CaseTranslation, CompiledPattern, DefaultSyntaxLookup,
     MatchRegisters, SyntaxCacheKey, SyntaxLookup,
 };
-    use neovm_value::emacs_char::char_to_byte_pos;
     use neovm_value::emacs_char::char_to_byte_pos;
     use neovm_text::emacs_core::casefiddle::{
         apply_replace_match_case_lisp, apply_replace_match_case_lisp_with,

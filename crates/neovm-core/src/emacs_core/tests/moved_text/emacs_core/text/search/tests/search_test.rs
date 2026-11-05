@@ -1,3 +1,5 @@
+use super::*;
+
 use neovm_edit::buffer::{CharLen, CharPos0, EmacsBytePos};
 use neovm_value::error::expect_args_range;
 use neovm_value::error::{expect_args, expect_fixnum};

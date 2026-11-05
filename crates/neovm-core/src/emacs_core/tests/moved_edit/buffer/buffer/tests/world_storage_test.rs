@@ -1,5 +1,7 @@
 //! Buffer storage ownership and the explicit detached-clone root contract.
 
+use super::*;
+
 use std::cell::{RefCell, UnsafeCell};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -14,7 +16,6 @@ use neovm_value::gc_trace::GcTrace;
 use neovm_value::intern::{SymId, WellKnown, intern};
 use neovm_value::symbol::SetInternalAlist;
 use rustc_hash::FxHashMap;
-    use std::sync::OnceLock;
 
 use neovm_value::value::Value;
 use crate::emacs_core::eval::Context;

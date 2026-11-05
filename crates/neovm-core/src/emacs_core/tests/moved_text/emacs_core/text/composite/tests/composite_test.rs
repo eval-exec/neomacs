@@ -1,3 +1,5 @@
+use super::*;
+
 use neovm_text::emacs_core::text_host::TextHost;
 use neomacs_display_protocol::glyph_matrix::{TerminalComposition, TerminalCompositionCell};
 use neovm_value::error::LispCondition;

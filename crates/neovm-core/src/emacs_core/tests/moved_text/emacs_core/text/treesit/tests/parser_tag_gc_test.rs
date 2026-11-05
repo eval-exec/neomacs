@@ -1,5 +1,7 @@
 //! The native parser registry owns its tag independently of the Lisp record.
 
+use std::mem;
+
 use std::collections::{BTreeMap, HashMap};
 use std::mem::MaybeUninit;
 use std::ops::Range;

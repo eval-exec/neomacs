@@ -1,3 +1,5 @@
+use super::*;
+
 use neovm_value::error::LispCondition;
 use neovm_value::error::{expect_args, expect_args_range};
 

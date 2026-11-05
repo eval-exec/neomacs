@@ -1,6 +1,8 @@
 //! Raw first-nil admission against independent per-character effective reads.
 //! No process policy/environment is changed and no hook runs inside the scan.
 
+use super::*;
+
 use neovm_edit::emacs_core::edit_host::{EditHost, EditVariableRead};
 use neovm_value::error::LispCondition;
 use neovm_value::error::{EvalResult, Flow, signal};
@@ -14,7 +16,6 @@ use neovm_value::intern::WellKnown;
 use neovm_value::tagged::value::SymbolMode;
 use std::collections::{HashMap, HashSet};
 use strum::IntoStaticStr;
-        use std::sync::OnceLock;
         use std::sync::OnceLock;
 
 use neovm_value::value::positions::LispCharPos1;

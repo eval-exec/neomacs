@@ -19,7 +19,6 @@ use neovm_value::tagged::value::SymbolMode;
 use std::collections::{HashMap, HashSet};
 use strum::IntoStaticStr;
         use std::sync::OnceLock;
-        use std::sync::OnceLock;
 
 #[test]
 fn text_property_any_interval_buffer_encodings_and_dense_boundaries() {

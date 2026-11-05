@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use std::cell::Cell;
 use neovm_value::value::Value;
 use neovm_value::heap_types::GnuStringCharPos;

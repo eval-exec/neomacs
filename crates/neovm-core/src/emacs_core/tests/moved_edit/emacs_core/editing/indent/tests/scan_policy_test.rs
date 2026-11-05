@@ -1,3 +1,5 @@
+use super::*;
+
 use neovm_edit::emacs_core::edit_host::{EditHost, EditVariableRead};
 use neovm_edit::emacs_core::word_wrap::{WordWrapDirection, WordWrapOpportunity, WordWrapPolicy};
 use neovm_value::error::LispCondition;

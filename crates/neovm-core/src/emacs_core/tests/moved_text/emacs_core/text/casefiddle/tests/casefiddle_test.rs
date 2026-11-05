@@ -1,3 +1,5 @@
+use super::*;
+
 use neovm_edit::emacs_core::case_encoding::CaseEncoding;
 use neovm_value::error::LispCondition;
 use neovm_value::error::expect_args;

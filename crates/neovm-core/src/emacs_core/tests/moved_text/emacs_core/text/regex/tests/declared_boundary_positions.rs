@@ -1,5 +1,8 @@
 //! Per-opcode callback order/cache identity: public GNU parity is tested separately.
 
+use super::*;
+use std::cell::Cell;
+
 use neovm_value::tagged::SymbolMode;
 use rustc_hash::FxHashMap;
 use std::collections::HashSet;

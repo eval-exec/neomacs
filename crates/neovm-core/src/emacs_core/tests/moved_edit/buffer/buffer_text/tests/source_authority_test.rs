@@ -1,3 +1,5 @@
+use super::*;
+
 use neovm_edit::buffer::Buffer;
 use std::cell::{Ref, RefCell};
 

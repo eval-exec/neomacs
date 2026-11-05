@@ -1,6 +1,8 @@
 //! `NEOVM_PPS_PROPERTIZE`: on by default (GNU's behaviour); `0` restores the
 //! scan that never propertizes, for attribution only.
 
+use super::*;
+
 use neovm_edit::buffer::BufferId;
 use std::sync::atomic::{AtomicU8, Ordering};
 

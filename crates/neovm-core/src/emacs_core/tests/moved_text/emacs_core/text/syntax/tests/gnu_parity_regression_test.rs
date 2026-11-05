@@ -12,6 +12,9 @@
 //! T2. These regression tests target stable public entry points
 //! (builtins + buffer-manager helpers) that survive the refactor.
 
+use std::collections::HashMap;
+use std::fmt;
+
 use crate::emacs_core::eval::Context;
 
 use neovm_edit::buffer::BufferId;

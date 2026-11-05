@@ -4,6 +4,8 @@
 //! would have skipped it.  These tests pin down the facts that make the fast
 //! scans exact, and compare them with the exhaustive scan.
 
+use super::*;
+
 use neovm_value::tagged::SymbolMode;
 use rustc_hash::FxHashMap;
 use std::collections::HashSet;

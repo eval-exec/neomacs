@@ -1,3 +1,6 @@
+use super::*;
+use std::marker::PhantomData;
+
 use neovm_edit::emacs_core::textprop::{
     DirectCharProperties, StickinessProperty, TextPropertyControlVariable,
     resolve_effective_char_property,

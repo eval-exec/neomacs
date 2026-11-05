@@ -1,3 +1,7 @@
+use super::*;
+use std::rc::Rc;
+use std::sync::atomic::Ordering;
+
 use std::cell::{RefCell, UnsafeCell};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -11,7 +15,6 @@ use neovm_value::cold_retained::ColdWorldLease;
 use neovm_value::gc_trace::GcTrace;
 use neovm_value::symbol::SetInternalAlist;
 use rustc_hash::FxHashMap;
-    use std::sync::OnceLock;
 
 use neovm_value::value::text_props::ObjectIntervalRun;
 use neovm_value::value::positions::CharPos0;
@@ -2015,7 +2018,6 @@ fn buffer_local_gated_skips_alist_scan_but_keeps_slot_and_undo() {
 
 #[test]
 fn repeated_buffer_local_lookup_indexes_the_lisp_alist_once() {
-    use neovm_value::intern::intern;
     crate::test_utils::init_test_tracing();
     let mut buf = Buffer::new(
         BufferId(1),
@@ -2048,7 +2050,6 @@ fn repeated_buffer_local_lookup_indexes_the_lisp_alist_once() {
 
 #[test]
 fn buffer_local_lookup_index_stays_coherent_across_value_and_structure_changes() {
-    use neovm_value::intern::intern;
     crate::test_utils::init_test_tracing();
     let mut buf = Buffer::new(
         BufferId(1),

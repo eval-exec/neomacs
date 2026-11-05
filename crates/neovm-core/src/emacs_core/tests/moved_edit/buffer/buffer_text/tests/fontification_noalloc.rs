@@ -1,3 +1,5 @@
+use super::*;
+
 use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -19,7 +21,6 @@ use neovm_edit::buffer::{BufferTextBackendKind, LispCharPos1};
 
 use neovm_edit::emacs_core::textprop;
 
-use crate::emacs_core::textprop_entries;
 
 #[test]
 fn fontification_no_alloc_conversions_match_all_backends_after_edits() {

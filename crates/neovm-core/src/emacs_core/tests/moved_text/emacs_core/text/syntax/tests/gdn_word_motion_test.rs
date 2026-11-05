@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use neovm_edit::buffer::buffer::{Buffer, BufferId};
 use neovm_edit::buffer::{CharPos0, LispCharPos1};
 use neovm_value::error::{FlowKind, FlowResultExt as _};

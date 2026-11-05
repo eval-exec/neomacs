@@ -17,7 +17,6 @@ use neovm_value::tagged::value::SymbolMode;
 use std::collections::{HashMap, HashSet};
 use strum::IntoStaticStr;
         use std::sync::OnceLock;
-        use std::sync::OnceLock;
 
 use super::{
     CharPropertyCarrier, TextPropertyControlVariable, Value, lookup_char_property_from_direct,

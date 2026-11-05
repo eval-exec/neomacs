@@ -2,6 +2,8 @@
 //! GNU undo.c:163-190 records point, marker adjustments, then deleted text;
 //! insdel.c:2023-2037 relocates markers even when undo is disabled.
 
+use super::*;
+
 use neovm_edit::buffer::text::TextExtentDelta;
 use neovm_edit::buffer::undo;
 use neovm_edit::buffer::{

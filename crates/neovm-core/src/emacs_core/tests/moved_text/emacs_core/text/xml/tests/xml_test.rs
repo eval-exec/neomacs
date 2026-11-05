@@ -1,3 +1,5 @@
+use super::*;
+
 use neovm_edit::buffer::{BufferId, BufferManager, EmacsByteRange};
 use neovm_edit::emacs_core::edit_host::EditHost;
 use neovm_edit::emacs_core::position::LispRegionArgs;

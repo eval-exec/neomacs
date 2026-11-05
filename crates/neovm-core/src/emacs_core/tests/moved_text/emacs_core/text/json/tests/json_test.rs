@@ -1,3 +1,5 @@
+use super::*;
+
 use neovm_text::emacs_core::text_host::TextHost;
 use neovm_edit::buffer::{EmacsByteLen, EmacsBytePos, EmacsByteRange, TextExtent};
 use neovm_edit::emacs_core::edit_host::EditHost;

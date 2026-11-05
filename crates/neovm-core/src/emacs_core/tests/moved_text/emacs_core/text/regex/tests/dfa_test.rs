@@ -1,5 +1,8 @@
 //! Tests of the existence DFA (P3.3): the NFA over the rewind view (C2).
 
+use super::*;
+use std::cell::Cell;
+
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use std::cell::{RefCell, RefMut};

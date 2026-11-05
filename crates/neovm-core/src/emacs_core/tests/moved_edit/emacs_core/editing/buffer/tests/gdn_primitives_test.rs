@@ -1,6 +1,8 @@
 //! GNU-backed buffer primitive regressions. Refresh cached expectations only
 //! from GNU with UPDATE_EXPECT=1; conditions are ordinary Lisp result lists.
 
+use std::path::PathBuf;
+
 use neovm_value::value::Value;
 
 use crate::test_utils::runtime_startup_eval_one;

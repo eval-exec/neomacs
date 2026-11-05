@@ -1,3 +1,6 @@
+use std::time::Instant;
+use std::time::Duration;
+
 use neovm_edit::buffer::syntax_class::{SyntaxClass, SyntaxTableView};
 use neovm_edit::buffer::{
     AccessibleEmacsByteRange, BufferLispPos, BufferManager, CharPos0, EmacsByteLen, EmacsBytePos,

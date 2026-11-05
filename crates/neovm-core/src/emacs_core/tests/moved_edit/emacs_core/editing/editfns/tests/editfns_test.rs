@@ -1,3 +1,5 @@
+use super::*;
+
 use neovm_edit::buffer::overlay::OverlayModificationHook;
 use neovm_edit::emacs_core::edit_host::EditVariableRead;
 use neovm_value::error::LispCondition;

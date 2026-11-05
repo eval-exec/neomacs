@@ -1,3 +1,6 @@
+use super::*;
+use std::fmt;
+
 use neovm_text::emacs_core::text_host::TextHost;
 use neovm_value::error::LispCondition;
 use neovm_value::error::{expect_args, expect_args_range, expect_min_args};
@@ -8,23 +11,14 @@ use neovm_value::emacs_char::{GNU_DEFAULT_WIDE_RANGES, ZERO_WIDTH_RANGES};
     use neovm_text::emacs_core::chartable::{builtin_set_char_table_range, make_char_table_value};
     use neovm_text::emacs_core::coding::EolType;
     use neovm_text::emacs_core::coding::ResolvedEol;
-    use neovm_text::emacs_core::coding::EolType;
     use std::borrow::Cow;
-    use neovm_text::emacs_core::coding::ResolvedEol;
-    use neovm_text::emacs_core::coding::ResolvedEol;
 use neovm_value::error::{EvalResult, signal};
     use neovm_text::emacs_core::coding::IsoFlag;
     use neovm_text::emacs_core::charset::charset_encode_char;
-    use neovm_text::emacs_core::coding::IsoFlag;
-    use neovm_text::emacs_core::coding::EolType;
-    use neovm_text::emacs_core::coding::EolType;
     use neovm_text::emacs_core::charset::{charset_encode_char, charset_iso2022_designation};
-    use neovm_text::emacs_core::coding::IsoFlag;
     use neovm_text::emacs_core::charset::{
         charset_by_iso_final, charset_decode_char, charset_iso2022_designation,
     };
-    use neovm_text::emacs_core::coding::IsoFlag;
-    use neovm_text::emacs_core::coding::EolType;
 
 use neovm_value::strings_core::lisp_string_char_codes;
 use neovm_eval::emacs_core::eval::Context;
@@ -2201,7 +2195,6 @@ fn decode_bytes(bytes: &[u8], coding_system: &str) -> String {
 /// OFFSET method) so `charset_decode_char` maps a 2-byte code to a non-ASCII
 /// char and `charset_iso2022_designation` recognizes the `$B` designation.
 fn register_test_jis() -> neovm_value::intern::SymId {
-    use neovm_value::value::Value;
     let mut args = vec![Value::NIL; 17];
     args[0] = Value::symbol("test-jis");
     args[1] = Value::fixnum(2);

@@ -1,3 +1,5 @@
+use super::*;
+
 use neovm_value::error::LispCondition;
 use neovm_value::error::expect_args;
 use neovm_value::error::{EvalResult, Flow, signal};
@@ -5,9 +7,6 @@ use neovm_value::intern::{SymId, intern};
 use neovm_value::tagged::SymbolMode;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-    use neovm_edit::buffer::buffer::BUFFER_SLOT_CASE_TABLE;
-    use neovm_edit::buffer::buffer::BUFFER_SLOT_CASE_TABLE;
-        use neovm_edit::buffer::buffer::BUFFER_SLOT_CASE_TABLE;
     use neovm_edit::buffer::buffer::BUFFER_SLOT_CASE_TABLE;
 
 use neovm_value::value::Value;

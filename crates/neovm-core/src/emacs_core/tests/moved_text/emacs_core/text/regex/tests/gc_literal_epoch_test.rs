@@ -1,3 +1,6 @@
+use super::*;
+use std::fmt;
+
 use neovm_value::tagged::SymbolMode;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -11,12 +14,10 @@ use neovm_edit::buffer::{
 };
 use neovm_value::heap_types::{GnuStringCharPos, LispString};
     use neovm_value::emacs_char::char_to_byte_pos;
-    use neovm_value::emacs_char::char_to_byte_pos;
     use neovm_text::emacs_core::casefiddle::{
         apply_replace_match_case_lisp, apply_replace_match_case_lisp_with,
     };
     use neovm_text::emacs_core::syntax::SyntaxClass;
-    use neovm_value::heap_types::LispString;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::emacs_core::casetab_entries::builtin_set_case_table;

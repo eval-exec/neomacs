@@ -1,3 +1,5 @@
+use super::*;
+
 use neovm_value::heap_types::LispString;
 use neovm_value::value::scratch_bridge::{
     push_scratch_gc_root, restore_scratch_gc_roots, save_scratch_gc_roots,

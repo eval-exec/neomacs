@@ -19,10 +19,8 @@ use neovm_value::heap_types::{GnuStringCharPos, LispString, StringCharacterCount
 use neovm_value::value::{Value, ValueKind, list_to_vec};
 use neovm_text::emacs_core::syntax::parse_loop::{Entry, Plain, SafePositionRecorder, ScanEnd, ScanFinish, run_parse_loop};
     use std::sync::OnceLock;
-        use std::sync::OnceLock;
         use neovm_edit::buffer::buffer::BUFFER_SLOT_SYNTAX_TABLE;
         use LispSyntaxObjectReuse::{CanonicalBare, Fresh};
-    use neovm_edit::buffer::buffer::BUFFER_SLOT_SYNTAX_TABLE;
         use neovm_text::emacs_core::regex_emacs::BoundarySyntaxMode;
     use neovm_text::emacs_core::regex_emacs::SyntaxAssertion;
 

@@ -1,9 +1,10 @@
+use super::*;
+
 use std::cell::{Cell, RefCell};
 use neovm_text::emacs_core::casefiddle::apply_replace_match_case;
 use neovm_edit::buffer::{
     Buffer, BufferId, CharPos0, CharRange, EmacsBytePos, EmacsByteRange, LispCharPos1,
 };
-    use neovm_value::emacs_char::char_to_byte_pos;
     use neovm_value::emacs_char::char_to_byte_pos;
     use neovm_text::emacs_core::casefiddle::{
         apply_replace_match_case_lisp, apply_replace_match_case_lisp_with,

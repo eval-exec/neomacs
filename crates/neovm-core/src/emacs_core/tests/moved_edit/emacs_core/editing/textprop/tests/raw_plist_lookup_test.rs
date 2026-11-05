@@ -18,7 +18,6 @@ use neovm_value::tagged::value::SymbolMode;
 use std::collections::{HashMap, HashSet};
 use strum::IntoStaticStr;
         use std::sync::OnceLock;
-        use std::sync::OnceLock;
 
 use neovm_value::value::Value;
 use super::plist_get_value as get;

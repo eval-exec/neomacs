@@ -1,3 +1,5 @@
+use super::*;
+
 use neovm_text::emacs_core::text_host::TextHost;
 use neovm_edit::buffer::{EmacsBytePos, LispCharPos1};
 use neovm_value::error::LispCondition;

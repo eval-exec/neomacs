@@ -1,3 +1,6 @@
+use super::*;
+use std::fmt;
+
 use neovm_edit::buffer::{BufferManager, EmacsByteRange, LispCharPos1};
 use neovm_edit::emacs_core::edit_host::EditVariableRead;
 use neovm_value::emacs_char::EmacsChar;

@@ -9,6 +9,9 @@
 //! and point, must equal the uncached scan's; the cache must actually serve
 //! (exact answers and resumes), and each invalidation path must be taken.
 
+use super::*;
+use std::collections::BTreeMap;
+
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};

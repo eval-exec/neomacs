@@ -1,3 +1,5 @@
+use super::*;
+
 use neovm_value::error::EvalResult;
 use neovm_value::error::LispCondition;
 use neovm_value::error::{Flow, signal};
@@ -28,7 +30,6 @@ use std::fs;
 
 #[test]
 fn rectangle_copied_properties_have_only_manager_roots() {
-    use crate::emacs_core::Context;
     use neovm_edit::buffer::{CharPos0, CharRange};
 
     struct Probe(usize);

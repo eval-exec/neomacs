@@ -5,6 +5,8 @@
 //! Every expected value below is GNU 31.1's `(string-match RE S)` followed by
 //! `(match-data t)` (probe: `tmp/probes/nasty.el` in the U0.5 worktree).
 
+use super::*;
+
 use neovm_value::tagged::SymbolMode;
 use rustc_hash::FxHashMap;
 use std::collections::HashSet;

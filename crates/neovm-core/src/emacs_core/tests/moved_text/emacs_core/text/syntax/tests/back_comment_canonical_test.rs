@@ -5,6 +5,8 @@
 //! cache layers off and the legacy safe-position index bypassed. These are
 //! differential cache tests; they do not assert independent GNU expectations.
 
+use super::*;
+
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};

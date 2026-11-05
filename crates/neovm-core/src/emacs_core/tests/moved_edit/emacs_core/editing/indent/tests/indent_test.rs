@@ -1,3 +1,5 @@
+use super::*;
+
 use neovm_edit::buffer::{
     Buffer, BufferManager, CharLen, CharPos0, DisplayColumn, EmacsByteLen, EmacsBytePos,
     EmacsByteRange, TextExtent,
