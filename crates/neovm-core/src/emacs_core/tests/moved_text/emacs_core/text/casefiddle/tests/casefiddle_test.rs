@@ -86,7 +86,7 @@ fn eval_upcase_region_noncontiguous_uses_region_extract_bounds() {
 #[test]
 fn eval_upcase_region_preserves_raw_unibyte_bytes() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let buffer_id = ev.edit.buffers.current_buffer_id().expect("current buffer");
     ev.edit
         .buffers
@@ -109,7 +109,7 @@ fn eval_upcase_region_preserves_raw_unibyte_bytes() {
 #[test]
 fn eval_capitalize_word_preserves_raw_unibyte_bytes() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let buffer_id = ev.edit.buffers.current_buffer_id().expect("current buffer");
     ev.edit
         .buffers
@@ -134,7 +134,7 @@ fn eval_capitalize_word_preserves_raw_unibyte_bytes() {
 #[test]
 fn eval_capitalize_word_updates_buffer_text() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let buffer_id = ev.edit.buffers.current_buffer_id().expect("current buffer");
     ev.edit.buffers.insert_into_buffer(buffer_id, "hELLO world");
     ev.edit

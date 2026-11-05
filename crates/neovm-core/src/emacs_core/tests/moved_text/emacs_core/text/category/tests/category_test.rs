@@ -305,5 +305,5 @@ fn define_category_valid_char_still_defines() {
 
 fn fresh_eval() -> crate::emacs_core::eval::Context {
     reset_category_thread_locals();
-    Context::new()
+    crate::test_utils::new_context()
 }

@@ -234,6 +234,7 @@ impl NativeIndexBuilder {
         };
         Ok(())
     }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn build(self) -> NativeIndex {
         self.index
     }

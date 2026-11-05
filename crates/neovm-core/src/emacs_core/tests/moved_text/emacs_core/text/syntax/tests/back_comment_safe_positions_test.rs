@@ -42,7 +42,7 @@ fn safe_position_restarts_answer_exactly_as_the_parse_from_begv() {
     let mut queries = 0usize;
     for kind in 0..5 {
         for escapable in [false, true] {
-            let mut eval = Context::new();
+            let mut eval = crate::test_utils::new_context();
             install_table(&mut eval, kind);
             let buffer_id = eval
                 .edit
@@ -331,7 +331,7 @@ fn answers_around_a_change(
     honor: bool,
     change: impl FnOnce(&mut crate::emacs_core::eval::Context),
 ) -> ((Value, i64), (Value, i64), (Value, i64)) {
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     install_table(&mut eval, 0);
     if honor {
         eval.obarray

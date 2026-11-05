@@ -22,7 +22,7 @@ use neovm_text::emacs_core::regex::*;
 
 #[test]
 fn positioned_compiled_regex_reuses_its_policy_and_keeps_distinct_match_results() {
-    let mut context = Context::new();
+    let mut context = crate::test_utils::new_context();
     let purpose = context.tagged_heap.alloc_symbol_with_pos(
         neovm_value::value::Value::symbol("char-code-property-table"),
         neovm_value::value::Value::fixnum(0),
@@ -91,7 +91,7 @@ fn positioned_compiled_regex_reuses_its_policy_and_keeps_distinct_match_results(
 
 #[test]
 fn literal_translation_cache_reuses_only_the_requested_symbol_policy() {
-    let mut context = Context::new();
+    let mut context = crate::test_utils::new_context();
     context
         .eval_str("(set-case-table (standard-case-table))")
         .unwrap();

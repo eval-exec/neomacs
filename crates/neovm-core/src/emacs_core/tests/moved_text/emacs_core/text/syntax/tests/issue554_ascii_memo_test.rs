@@ -26,7 +26,7 @@ use neovm_value::tagged::SymbolMode;
 
 #[test]
 fn issue554_ascii_memo_shares_entries_across_symbol_policies() {
-    let mut context = Context::new();
+    let mut context = crate::test_utils::new_context();
     context
         .eval_str("(progn (erase-buffer) (insert (make-string 128 ?a)))")
         .unwrap();
@@ -109,7 +109,7 @@ fn issue554_ascii_memo_shares_entries_across_symbol_policies() {
 
 #[test]
 fn issue554_ascii_syntax_properties_override_a_warm_table_memo() {
-    let mut context = Context::new();
+    let mut context = crate::test_utils::new_context();
     context
         .eval_str(
             "(progn (erase-buffer) (insert \"aa\")

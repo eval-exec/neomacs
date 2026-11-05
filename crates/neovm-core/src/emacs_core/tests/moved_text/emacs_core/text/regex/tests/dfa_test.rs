@@ -1482,7 +1482,7 @@ fn dfa_differential_regressions() {
 /// as with it off.
 #[test]
 fn lisp_searches_follow_syntax_table_changes_with_the_filter_on() {
-    // Primitives only: `Context::new()` loads no Lisp.
+    // Primitives only: `crate::test_utils::new_context()` loads no Lisp.
     let program = r#"
 (let ((out nil) (round 0) (st (copy-syntax-table)))
   (set-buffer (get-buffer-create "dfa-a"))
@@ -1511,7 +1511,7 @@ fn lisp_searches_follow_syntax_table_changes_with_the_filter_on() {
 "#;
     let run = |mode| {
         with_dfa_mode(mode, || {
-            let mut ev = Context::new();
+            let mut ev = crate::test_utils::new_context();
             let value = ev.eval_str(program).expect("program evaluates");
             crate::emacs_core::print::print_value(&value)
         })
@@ -1533,7 +1533,7 @@ fn lisp_searches_follow_syntax_table_changes_with_the_filter_on() {
 /// runs at their positions, and answers exactly as with it off.
 #[test]
 fn lisp_searches_over_syntax_table_properties_with_the_filter_on() {
-    // Primitives only: `Context::new()` loads no Lisp.
+    // Primitives only: `crate::test_utils::new_context()` loads no Lisp.
     let program = r#"
 (let ((out nil) (parse-sexp-lookup-properties t) (pos 1) (res nil))
   (set-buffer (get-buffer-create "dfa-props"))
@@ -1578,7 +1578,7 @@ fn lisp_searches_over_syntax_table_properties_with_the_filter_on() {
 "#;
     let run = |mode| {
         with_dfa_mode(mode, || {
-            let mut ev = Context::new();
+            let mut ev = crate::test_utils::new_context();
             let value = ev.eval_str(program).expect("program evaluates");
             crate::emacs_core::print::print_value(&value)
         })

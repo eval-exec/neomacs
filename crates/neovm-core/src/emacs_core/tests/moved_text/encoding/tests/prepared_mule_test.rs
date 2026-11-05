@@ -16,7 +16,7 @@ use neovm_value::intern::intern;
 #[test]
 fn prepared_mule_encode_observes_priority_reordering() {
     crate::test_utils::init_test_tracing();
-    let _context = Context::new();
+    let _context = crate::test_utils::new_context();
     let (first, second) = install_overlapping_charsets();
     let source = LispString::from_utf8("\u{1f300}\u{1f300}");
     let first_bytes = bytes_for_registered_char(first, 0x1f300).repeat(2);
@@ -33,7 +33,7 @@ fn prepared_mule_encode_observes_priority_reordering() {
 #[test]
 fn prepared_mule_encode_observes_redefinition_between_calls() {
     crate::test_utils::init_test_tracing();
-    let _context = Context::new();
+    let _context = crate::test_utils::new_context();
     let (first, _) = install_overlapping_charsets();
     let source = LispString::from_utf8("\u{1f300}");
     let before = bytes_for_registered_char(first, 0x1f300);
@@ -67,7 +67,7 @@ fn prepared_mule_encode_observes_redefinition_between_calls() {
 #[test]
 fn prepared_mule_encode_preserves_ascii_unibyte_and_raw_bytes() {
     crate::test_utils::init_test_tracing();
-    let _context = Context::new();
+    let _context = crate::test_utils::new_context();
     assert_eq!(
         encode_prepared(&LispString::from_utf8("ASCII\n")),
         b"ASCII\n"

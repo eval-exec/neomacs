@@ -29,7 +29,7 @@ use neovm_value::value::{ValueKind, VecLikeType};
 #[test]
 fn json_parse_buffer_advances_point_after_value() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
         let buf = eval
             .edit
@@ -60,7 +60,7 @@ fn json_parse_buffer_advances_point_after_value() {
 #[test]
 fn json_parse_buffer_invalid_utf8_does_not_advance_point() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
         let buf = eval
             .edit
@@ -102,7 +102,7 @@ fn json_parse_buffer_invalid_utf8_does_not_advance_point() {
 #[test]
 fn json_parse_buffer_end_of_file_uses_gnu_signal_shape() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
         let buf = eval
             .edit
@@ -141,7 +141,7 @@ fn json_parse_buffer_end_of_file_uses_gnu_signal_shape() {
 #[test]
 fn json_insert_writes_at_point_and_advances() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
         let buf = eval
             .edit

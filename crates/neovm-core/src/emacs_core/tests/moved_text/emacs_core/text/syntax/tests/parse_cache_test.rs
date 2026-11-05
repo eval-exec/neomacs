@@ -42,7 +42,7 @@ fn cached_answers_equal_plain_scans_under_every_change() {
             .enumerate()
         {
             GEOMETRY_OVERRIDE.with(|cell| cell.set(Some(geometry)));
-            let mut eval = Context::new();
+            let mut eval = crate::test_utils::new_context();
             install_table(&mut eval, kind);
             eval.eval_str("(make-local-variable 'comment-end-can-be-escaped)")
                 .expect("local");
@@ -129,7 +129,7 @@ fn cached_answers_equal_plain_scans_under_every_change() {
 fn short_queries_keep_long_run_resumes_and_exact_answers() {
     let _guard = ParseCacheTestGuard::isolated(GEOMETRY_OVERRIDE.with(|cell| cell.get()));
     GEOMETRY_OVERRIDE.with(|cell| cell.set(Some((16, 128))));
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     install_table(&mut eval, 1);
     eval.eval_str("(insert (apply #'concat (make-list 160 \"(é)\\n\")))")
         .expect("text");
@@ -167,7 +167,7 @@ fn short_queries_keep_long_run_resumes_and_exact_answers() {
 fn from_membership_survives_collisions_eviction_and_invalidation() {
     let _guard = ParseCacheTestGuard::isolated(GEOMETRY_OVERRIDE.with(|cell| cell.get()));
     GEOMETRY_OVERRIDE.with(|cell| cell.set(Some((16, 128))));
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     install_table(&mut eval, 1);
     eval.eval_str("(insert (apply #'concat (make-list 1600 \"(a)\\n\")))")
         .expect("text");
@@ -247,7 +247,7 @@ fn from_membership_survives_collisions_eviction_and_invalidation() {
 fn short_misses_preserve_pending_text_and_property_invalidation() {
     let _guard = ParseCacheTestGuard::isolated(GEOMETRY_OVERRIDE.with(|cell| cell.get()));
     GEOMETRY_OVERRIDE.with(|cell| cell.set(Some((16, 128))));
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     install_table(&mut eval, 1);
     eval.eval_str(
         "(setq parse-sexp-lookup-properties t)
@@ -305,7 +305,7 @@ fn short_misses_preserve_pending_text_and_property_invalidation() {
 fn short_query_gate_preserves_threshold_zero_span_and_oldstate_options() {
     let _guard = ParseCacheTestGuard::isolated(GEOMETRY_OVERRIDE.with(|cell| cell.get()));
     GEOMETRY_OVERRIDE.with(|cell| cell.set(Some((16, 128))));
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     install_table(&mut eval, 1);
     eval.eval_str("(insert (apply #'concat (make-list 160 \"(é) ; note\\n\")))")
         .expect("text");
@@ -355,7 +355,7 @@ fn category_and_alias_properties_bypass_the_cache() {
     let _guard = ParseCacheTestGuard::isolated(GEOMETRY_OVERRIDE.with(|cell| cell.get()));
     crate::test_utils::init_test_tracing();
     GEOMETRY_OVERRIDE.with(|cell| cell.set(Some((16, 0))));
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     install_table(&mut eval, 0);
     eval.eval_str(
         "(progn (setq parse-sexp-lookup-properties t)
@@ -386,7 +386,7 @@ fn category_and_alias_properties_bypass_the_cache() {
     check(&mut eval, query, "category plist changed");
     assert_eq!(parse_cache_stats().bypassed, 2);
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     install_table(&mut eval, 0);
     eval.eval_str(
         "(progn (setq parse-sexp-lookup-properties t)
@@ -408,7 +408,7 @@ fn verify_mode_recomputes_cached_answers() {
     let _guard = ParseCacheTestGuard::isolated(GEOMETRY_OVERRIDE.with(|cell| cell.get()));
     crate::test_utils::init_test_tracing();
     GEOMETRY_OVERRIDE.with(|cell| cell.set(Some((16, 0))));
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     install_table(&mut eval, 1);
     let mut rng = Rng(0x1234_5678_9abc_def1);
     let text = random_text(&mut rng, 200);
@@ -518,7 +518,7 @@ fn every_key_field_separates_runs() {
 
     // `parse-sexp-lookup-properties`: a property turns a quote into
     // punctuation.
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     install_table(&mut eval, 0);
     eval.eval_str(
         "(progn (insert \"a \\\"b c\\\" d e f g h i j\")
@@ -535,7 +535,7 @@ fn every_key_field_separates_runs() {
 
     // `comment-end-can-be-escaped`: an escaped newline does not end a Lisp
     // comment.
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     install_table(&mut eval, 1);
     eval.eval_str(
         "(progn (insert \"; a \\\\\\nb c d e f\\n g\")
@@ -552,7 +552,7 @@ fn every_key_field_separates_runs() {
 
     // BEGV: a comment resumed after an end-first `*` closes with the `/` at
     // FROM, unless FROM is BEGV.
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     install_table(&mut eval, 0);
     eval.eval_str("(insert \"/* a */ b c d e f g h\")")
         .expect("setup");
@@ -565,7 +565,7 @@ fn every_key_field_separates_runs() {
 
     // The syntax table's identity: two tables, switched without allocating
     // or writing either.
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     install_table(&mut eval, 0);
     eval.eval_str(
         "(progn (setq table-a (syntax-table))
@@ -602,7 +602,7 @@ fn canonical_answers_equal_plain_scans_under_every_change() {
             .enumerate()
         {
             GEOMETRY_OVERRIDE.with(|cell| cell.set(Some(geometry)));
-            let mut eval = Context::new();
+            let mut eval = crate::test_utils::new_context();
             install_table(&mut eval, kind);
             // modify-syntax-entry's class descriptor may be shared with ASCII
             // entries. Keep this fuzz's non-ASCII setcar mutation independent
@@ -723,7 +723,7 @@ fn canonical_answers_equal_plain_scans_under_every_change() {
 fn adopted_answers_correct_depth_and_levels_across_jumps() {
     crate::test_utils::init_test_tracing();
     let _guard = ParseCacheTestGuard::isolated(Some((16, 0)));
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     install_table(&mut eval, 1);
     // Rising and falling depth, unbalanced closes (negative depth), and
     // atoms and strings at every level.
@@ -759,7 +759,7 @@ fn canonical_exact_memo_rejects_property_syntax_tables() {
     crate::test_utils::init_test_tracing();
     let _guard = ParseCacheTestGuard::isolated(Some((16, 0)));
     for adopted in [false, true] {
-        let mut eval = Context::new();
+        let mut eval = crate::test_utils::new_context();
         install_table(&mut eval, 1);
         let prefix = if adopted {
             "(a) ".repeat(20)
@@ -828,7 +828,7 @@ fn canonical_exact_memo_rejects_descriptor_log_overflow() {
     crate::test_utils::init_test_tracing();
     let _guard = ParseCacheTestGuard::isolated(Some((16, 0)));
     for existing_capacity in [false, true] {
-        let mut eval = Context::new();
+        let mut eval = crate::test_utils::new_context();
         let count = DESCRIPTOR_LOG_CAP + 1;
         eval.eval_str(&format!(
             "(progn
@@ -882,7 +882,7 @@ fn canonical_exact_memo_rejects_descriptor_log_overflow() {
 fn canonical_adoption_matches_plain_above_one_hundred_levels() {
     crate::test_utils::init_test_tracing();
     let _guard = ParseCacheTestGuard::isolated(Some((16, 0)));
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     install_table(&mut eval, 1);
     let text = format!(
         "{}{}{}",
@@ -918,7 +918,7 @@ fn canonical_adoption_matches_plain_above_one_hundred_levels() {
 fn canonical_extension_ignores_negative_minima_before_from() {
     crate::test_utils::init_test_tracing();
     let _guard = ParseCacheTestGuard::isolated(Some((16, 0)));
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     install_table(&mut eval, 1);
     let prefix = format!("{}{}", ") ".repeat(20), "(".repeat(25));
     let from = prefix.chars().count() + 1;
@@ -962,7 +962,7 @@ fn canonical_extension_ignores_negative_minima_before_from() {
 fn canonical_run_leaves_optioned_queries_to_l1() {
     crate::test_utils::init_test_tracing();
     let _guard = ParseCacheTestGuard::isolated(Some((16, 0)));
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     install_table(&mut eval, 1);
     eval.eval_str("(insert \"(a (b c) \\\"d\\\" ; e\\n f) (g)\")")
         .expect("option text");
@@ -1013,7 +1013,7 @@ fn canonical_run_leaves_optioned_queries_to_l1() {
 fn canonical_verify_mode_recomputes_absolute_and_adopted_answers() {
     crate::test_utils::init_test_tracing();
     let _guard = ParseCacheTestGuard::isolated(Some((16, 0)));
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     install_table(&mut eval, 1);
     let text = "(a) ".repeat(180);
     eval.eval_str(&format!("(insert {text:?})"))
@@ -1073,7 +1073,7 @@ fn live_sync_waits_for_full_state_then_skips_with_verify() {
             LiveBoundary::ElementTen,
             LiveBoundary::ReportingLevels,
         ] {
-            let mut eval = Context::new();
+            let mut eval = crate::test_utils::new_context();
             install_table(
                 &mut eval,
                 if matches!(boundary, LiveBoundary::ElementTen) {
@@ -1144,7 +1144,7 @@ fn live_sync_grows_partial_frontier_for_oldstate_string_chains() {
     crate::test_utils::init_test_tracing();
     for chunk in [1, 3, 16, 64, 2048] {
         let _guard = ParseCacheTestGuard::isolated(Some((chunk, 0)));
-        let mut eval = Context::new();
+        let mut eval = crate::test_utils::new_context();
         install_table(&mut eval, 1);
         let prefix = live_negative_prefix();
         let prefix_len = prefix.chars().count();
@@ -1213,7 +1213,7 @@ fn live_sync_rejects_exact_memos_for_prefix_and_union_descriptor_overflow() {
     for chunk in [1, 3, 16, 64, 2048] {
         let _guard = ParseCacheTestGuard::isolated(Some((chunk, 0)));
         for (prefix_count, skipped_count) in [(DESCRIPTOR_LOG_CAP + 1, 0), (20, 13)] {
-            let mut eval = Context::new();
+            let mut eval = crate::test_utils::new_context();
             let (from, prefix_positions, skipped_positions) =
                 live_descriptor_fixture(&mut eval, prefix_count, skipped_count);
             let roots = eval.save_specpdl_roots();
@@ -1294,7 +1294,7 @@ fn live_sync_exact_memo_validates_actual_and_skipped_dependencies() {
     for chunk in [1, 3, 16, 64, 2048] {
         let _guard = ParseCacheTestGuard::isolated(Some((chunk, 0)));
         for mutate_prefix in [true, false] {
-            let mut eval = Context::new();
+            let mut eval = crate::test_utils::new_context();
             let (from, prefix_positions, skipped_positions) =
                 live_descriptor_fixture(&mut eval, 1, 1);
             let roots = eval.save_specpdl_roots();

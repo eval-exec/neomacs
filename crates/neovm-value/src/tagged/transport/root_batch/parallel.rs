@@ -31,6 +31,7 @@ impl ParallelRootIdentity {
         }
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn key(self) -> MutatorKey {
         self.key
     }

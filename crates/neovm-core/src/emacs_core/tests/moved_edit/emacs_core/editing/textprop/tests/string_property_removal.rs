@@ -3,7 +3,7 @@ use crate::emacs_core::eval::Context;
 #[test]
 fn absent_plist_removal_preserves_string_intervals() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = eval
         .eval_str(
             r#"(let ((s (copy-sequence "abcdef")))
@@ -20,7 +20,7 @@ fn absent_plist_removal_preserves_string_intervals() {
 #[test]
 fn absent_name_list_removal_preserves_string_intervals() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = eval
         .eval_str(
             r#"(let ((s (copy-sequence "aé🙂b")))
@@ -36,7 +36,7 @@ fn absent_name_list_removal_preserves_string_intervals() {
 #[test]
 fn removal_keeps_absent_endpoint_intervals_unsplit() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = eval
         .eval_str(
             r#"(let ((s (copy-sequence "abcdef")))
@@ -79,7 +79,7 @@ fn absent_removal_keeps_interval_mutation_ticks() {
 #[test]
 fn buffer_removal_keeps_absent_endpoint_intervals_unsplit() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = eval
         .eval_str(
             r#"(progn
@@ -99,7 +99,7 @@ fn buffer_removal_keeps_absent_endpoint_intervals_unsplit() {
 #[test]
 fn removal_checks_property_names_added_through_the_live_plist() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = eval
         .eval_str(
             r#"(let ((s (propertize "abcdef" 'keep t)))

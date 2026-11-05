@@ -96,7 +96,7 @@ fn make_char_table_initializes_gnu_standard_and_extra_slots() {
 #[test]
 fn builtin_make_char_table_checks_symbol_and_extra_slot_property_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     assert_signal_symbol_and_predicate(
         builtin_make_char_table(&mut eval, vec![Value::fixnum(1)]),
         "wrong-type-argument",
@@ -858,7 +858,7 @@ fn atomic_runs_in_range_preserve_child_shadowing_and_parent_fallback() {
 #[test]
 fn map_char_table_shared_range_survives_callback_gc() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let ct = make_char_table_value(Value::symbol("test"), Value::NIL);
     builtin_set_char_table_range(
         vec![
@@ -1290,7 +1290,7 @@ fn unicode_property_table_read_from_generated_uni_bidi_maps_decoded_symbols() {
 #[test]
 fn format_percent_s_prints_unicode_property_table_as_gnu_char_table() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let table =
         make_char_table_with_extra_slots(Value::symbol("char-code-property-table"), Value::NIL, 5);
     builtin_set_char_table_extra_slot(vec![
@@ -1765,7 +1765,7 @@ fn fillarray_preserves_ascii_cache_while_rewriting_contents_like_gnu() {
 #[test]
 fn unicode_property_table_internal_returns_alist_char_table() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let prop = Value::symbol("neo-test-property");
     let table =
         make_char_table_with_extra_slots(Value::symbol("char-code-property-table"), Value::NIL, 5);

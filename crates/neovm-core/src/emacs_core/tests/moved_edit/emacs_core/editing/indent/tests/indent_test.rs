@@ -219,7 +219,7 @@ fn vertical_motion_skips_ellipsis_bearing_invisible_runs() {
 #[test]
 fn current_column_and_indentation_handle_unibyte_raw_bytes() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let buffer_id = ev.edit.buffers.current_buffer_id().expect("current buffer");
     ev.edit
         .buffers
@@ -240,7 +240,7 @@ fn current_column_and_indentation_handle_unibyte_raw_bytes() {
 #[test]
 fn move_to_column_handles_unibyte_raw_byte_display_width() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let buffer_id = ev.edit.buffers.current_buffer_id().expect("current buffer");
     ev.edit
         .buffers
@@ -266,7 +266,7 @@ fn move_to_column_handles_unibyte_raw_byte_display_width() {
 #[test]
 fn eval_move_to_column_wholenump_validation() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let err = move_to_column(&mut ev, vec![Value::string("x")]).unwrap_err();
     match err.into_kind() {
         FlowKind::Signal(sig) => {
@@ -284,7 +284,7 @@ fn eval_move_to_column_wholenump_validation() {
 fn eval_move_to_column_force_subset() {
     crate::test_utils::init_test_tracing();
 
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let buffer_id = ev.edit.buffers.current_buffer_id().expect("current buffer");
     ev.edit
         .buffers
@@ -597,7 +597,7 @@ fn reindent_then_newline_and_indent_normalizes_split_whitespace() {
 #[test]
 fn wrong_arg_count_errors() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     // current-indentation takes no args
     assert!(current_indentation(&mut eval, vec![Value::fixnum(1)]).is_err());
     // indent-to requires at least 1 arg
@@ -617,7 +617,7 @@ fn wrong_arg_count_errors() {
 #[test]
 fn indent_to_rejects_non_integer() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     assert!(indent_to(&mut eval, vec![Value::string("foo")]).is_err());
 }
 
@@ -1035,7 +1035,7 @@ fn move_to_column_stops_at_overlay_display_run_end() {
 fn display_advance_interns_no_symbols_per_character() {
     crate::test_utils::init_test_tracing();
 
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let buffer_id = ev.edit.buffers.current_buffer_id().expect("current buffer");
     // 40 lines of 80 chars: the scan crosses DISPLAY_STOP_CHAR_CAP (100) many
     // times, so the stop branch -- and every property probe in it -- re-runs
@@ -1097,7 +1097,7 @@ fn gnu_simple_indent_eval() -> Context {
     let simple_path = project_root.join("lisp/simple.el");
     let simple_source = fs::read_to_string(&simple_path).expect("read GNU simple.el");
 
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     install_bare_elisp_shims(&mut ev);
     ev.set_lexical_binding(true);
     eval_first_form_after_marker(&mut ev, &simple_source, "(defun back-to-indentation ()");
@@ -1115,7 +1115,7 @@ fn gnu_indent_el_eval() -> Context {
     let syntax_path = project_root.join("lisp/emacs-lisp/syntax.el");
     let syntax_source = fs::read_to_string(&syntax_path).expect("read GNU syntax.el");
 
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     install_bare_elisp_shims(&mut ev);
     ev.set_lexical_binding(true);
     ev.eval_str(

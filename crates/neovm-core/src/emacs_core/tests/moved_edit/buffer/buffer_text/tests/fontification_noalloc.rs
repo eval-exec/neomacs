@@ -50,7 +50,7 @@ fn fontification_no_alloc_conversions_match_all_backends_after_edits() {
 #[test]
 fn fontification_no_alloc_point_and_resolved_boundary_match_public_queries() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     ctx.eval_str(
         "(progn (insert (make-string 2400 ?中))
           (put-text-property 2 800 'fontified t)
@@ -124,7 +124,7 @@ fn fontification_no_alloc_point_and_resolved_boundary_match_public_queries() {
 
 #[test]
 fn fontification_no_alloc_raw_and_resolved_boundaries_leave_anchors_unchanged() {
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     ctx.eval_str(
         "(progn (insert (make-string 2400 ?中))
            (put-text-property 1 1500 'fontified t)

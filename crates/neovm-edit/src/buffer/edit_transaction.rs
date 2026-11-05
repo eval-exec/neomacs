@@ -50,6 +50,7 @@ impl TextMeasurement {
         })
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     #[inline]
     pub(crate) fn buffer(self) -> BufferId {
         self.buffer

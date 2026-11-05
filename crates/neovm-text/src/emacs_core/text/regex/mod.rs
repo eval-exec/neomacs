@@ -1625,6 +1625,7 @@ impl MatchData {
         result
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// Return a group's endpoints as zero-based character offsets into its
     /// source text, regardless of the Lisp-visible coordinate convention.
     ///

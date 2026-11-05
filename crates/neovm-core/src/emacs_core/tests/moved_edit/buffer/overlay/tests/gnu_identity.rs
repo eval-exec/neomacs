@@ -4,7 +4,7 @@ use super::*;
 #[test]
 fn gde_overlay_restored_live_identity_preserves_the_creation_serial() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let original = eval
         .eval_str("(progn (insert \"abcd\") (setq gde-restored-overlay (make-overlay 2 4)))")
         .expect("live overlay");

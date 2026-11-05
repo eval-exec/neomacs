@@ -3218,6 +3218,7 @@ impl Buffer {
         self.text.backend_kind()
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     #[cfg(test)]
     pub(crate) fn shares_text_storage_with(&self, other: &Self) -> bool {
         self.text.shares_storage_with(&other.text)
@@ -4437,6 +4438,7 @@ impl Buffer {
         self.text.marker_chain_anchor_of(marker.as_ptr())
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     #[cfg(test)]
     pub(crate) fn marker_chain_len(&self) -> usize {
         self.text.chain_walk_collect().len()

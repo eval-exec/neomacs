@@ -42,7 +42,7 @@ fn builtin_string_to_syntax_at_returns_nil() {
 #[test]
 fn char_syntax_accepts_full_emacs_character_codes() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     // GNU Emacs `CHAR_VALID_P` accepts integer character codes through
     // MAX_CHAR (0x3FFFFF), including values that are not Unicode scalar
@@ -74,7 +74,7 @@ fn char_syntax_unibyte_buffer_maps_through_make_char_multibyte() {
     // their eight-bit (word) character; codes >= 0x100 map past MAX_CHAR to an
     // invalid character whose syntax is the default whitespace.
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     // Multibyte (default): a BMP CJK character is a word constituent.
     assert_eq!(
@@ -118,7 +118,7 @@ fn char_syntax_unibyte_buffer_maps_through_make_char_multibyte() {
 #[test]
 fn builtin_skip_syntax_forward_limit_uses_char_positions_for_multibyte_text() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
         let buf = eval
             .edit
@@ -153,7 +153,7 @@ fn builtin_skip_syntax_forward_limit_uses_char_positions_for_multibyte_text() {
 #[test]
 fn builtin_skip_syntax_forward_limit_stays_absolute_under_narrowing() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
         let buf = eval
             .edit
@@ -192,7 +192,7 @@ fn builtin_skip_syntax_forward_limit_stays_absolute_under_narrowing() {
 #[test]
 fn sexp_motion_respects_parse_sexp_ignore_comments_for_line_comments() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "(a ; comment with )\n b)");
     install_line_comment_syntax(&mut eval);
 
@@ -254,7 +254,7 @@ fn sexp_motion_respects_parse_sexp_ignore_comments_for_line_comments() {
 #[test]
 fn sexp_motion_ignores_unmatched_open_paren_inside_line_comment() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "(a ; unmatched (\n b)");
     install_line_comment_syntax(&mut eval);
 
@@ -279,7 +279,7 @@ fn sexp_motion_ignores_unmatched_open_paren_inside_line_comment() {
 #[test]
 fn sexp_scanners_treat_eof_comments_as_one_forward_sexp() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, ";foo");
     install_line_comment_syntax(&mut eval);
     eval.obarray
@@ -321,7 +321,7 @@ fn sexp_scanners_treat_eof_comments_as_one_forward_sexp() {
 #[test]
 fn backward_sexp_motion_respects_parse_sexp_ignore_comments() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "(a ; comment with )\n b)");
     install_line_comment_syntax(&mut eval);
 
@@ -409,7 +409,7 @@ fn backward_sexp_motion_respects_parse_sexp_ignore_comments() {
 #[test]
 fn backward_sexp_motion_skips_nested_block_comments() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let text = "(a /* outer ( /* inner */ after */ b)";
     let end = text.len() as i64 + 1;
     replace_current_buffer_text(&mut eval, text);
@@ -446,7 +446,7 @@ fn backward_sexp_motion_skips_nested_block_comments() {
 #[test]
 fn backward_comment_skip_requires_matching_comment_start() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "ab");
     builtin_modify_syntax_entry(
         &mut eval,
@@ -481,7 +481,7 @@ fn backward_comment_skip_requires_matching_comment_start() {
 #[test]
 fn sexp_motion_respects_parse_sexp_ignore_comments_for_block_comments() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "(a /* comment with ) */ b)");
     install_c_block_comment_syntax(&mut eval);
 
@@ -529,7 +529,7 @@ fn sexp_motion_respects_parse_sexp_ignore_comments_for_block_comments() {
 fn doom_cli_style_struct_comment_does_not_break_forward_sexp() {
     crate::test_utils::init_test_tracing();
     let text = "(cl-defstruct doom-cli-context\n  ;; A session-specific ID of the current context (defaults to number\n  (pid (if-let* ((pid (getenv \"__DOOMPID\")))\n           (string-to-number pid)\n         (emacs-pid))))\n(setq after t)";
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, text);
     install_line_comment_syntax(&mut eval);
     eval.obarray
@@ -543,7 +543,7 @@ fn doom_cli_style_struct_comment_does_not_break_forward_sexp() {
 #[test]
 fn standard_quote_and_escape_entries_are_not_canonical_bare_objects() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     for character in [34, 92] {
         let result = eval
@@ -562,7 +562,7 @@ fn standard_quote_and_escape_entries_are_not_canonical_bare_objects() {
 #[test]
 fn matching_paren_basics_and_errors() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     assert_eq!(
         builtin_matching_paren(&mut eval, vec![Value::fixnum('(' as i64)]).unwrap(),
         Value::char(')')
@@ -617,7 +617,7 @@ fn matching_paren_basics_and_errors() {
 #[test]
 fn syntax_table_eval_returns_char_table() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let table = builtin_syntax_table(&mut eval, vec![]).unwrap();
     let is_ct = neovm_text::emacs_core::chartable::builtin_char_table_p(vec![table]).unwrap();
     assert_eq!(is_ct, Value::T);
@@ -629,7 +629,7 @@ fn syntax_table_eval_returns_char_table() {
 #[test]
 fn set_syntax_table_validates_and_returns_table() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let table = builtin_make_syntax_table(vec![]).unwrap();
     let out = builtin_set_syntax_table(&mut eval, vec![table]).unwrap();
     assert_eq!(out, table);
@@ -646,7 +646,7 @@ fn set_syntax_table_validates_and_returns_table() {
 #[test]
 fn syntax_table_and_standard_default_to_same_object() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let current = builtin_syntax_table(&mut eval, vec![]).unwrap();
     let standard = builtin_standard_syntax_table(vec![]).unwrap();
     assert!(eq_value(&current, &standard));
@@ -655,7 +655,7 @@ fn syntax_table_and_standard_default_to_same_object() {
 #[test]
 fn set_syntax_table_updates_current_buffer_only() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let custom = builtin_make_syntax_table(vec![]).unwrap();
     builtin_modify_syntax_entry(
         &mut eval,
@@ -700,7 +700,7 @@ fn set_syntax_table_updates_current_buffer_only() {
 #[test]
 fn forward_comment_skips_whitespace_and_returns_nil() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
         let buf = eval
             .edit
@@ -733,7 +733,7 @@ fn forward_comment_skips_whitespace_and_returns_nil() {
 #[test]
 fn skip_syntax_forward_honors_complement_marker() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
         let buf = eval
             .edit
@@ -766,7 +766,7 @@ fn skip_syntax_forward_honors_complement_marker() {
 #[test]
 fn forward_comment_two_char_end_style_uses_first_ender_char() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
         let buf = eval
             .edit
@@ -803,7 +803,7 @@ fn forward_comment_two_char_end_style_uses_first_ender_char() {
 #[test]
 fn forward_comment_closes_haskell_nested_comment_when_ender_starts_with_comment_class() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "{-# pragma #-}module");
     install_haskell_nested_comment_syntax(&mut eval);
 
@@ -819,7 +819,7 @@ fn forward_comment_closes_haskell_nested_comment_when_ender_starts_with_comment_
 #[test]
 fn forward_comment_gives_dual_role_nested_marker_ender_precedence() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "|| body ||");
     install_dual_role_nested_comment_syntax(&mut eval);
 
@@ -836,7 +836,7 @@ fn forward_comment_gives_dual_role_nested_marker_ender_precedence() {
 #[test]
 fn forward_comment_preserves_single_opener_before_pair_ender_order() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "|| body ||");
     builtin_modify_syntax_entry(
         &mut eval,
@@ -855,7 +855,7 @@ fn forward_comment_preserves_single_opener_before_pair_ender_order() {
 #[test]
 fn forward_comment_classifies_two_char_opener_before_base_syntax() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "~^ body !?");
     for (ch, syntax) in [('~', "< 1"), ('^', ". 2n"), ('!', ". 3"), ('?', ". 4n")] {
         builtin_modify_syntax_entry(
@@ -876,7 +876,7 @@ fn forward_comment_fence_honors_comment_end_escape_policy() {
     crate::test_utils::init_test_tracing();
 
     for (policy, expected_point) in [(Value::NIL, 5), (Value::T, 7)] {
-        let mut eval = Context::new();
+        let mut eval = crate::test_utils::new_context();
         replace_current_buffer_text(&mut eval, "!a\\!b!");
         install_comment_fence_syntax(&mut eval);
         set_comment_end_can_be_escaped(&mut eval, policy);
@@ -891,7 +891,7 @@ fn forward_comment_fence_honors_comment_end_escape_policy() {
 #[test]
 fn backward_comment_fence_ignores_quoted_fence_candidate() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "!a\\!b!");
     install_comment_fence_syntax(&mut eval);
     {
@@ -912,7 +912,7 @@ fn backward_comment_fence_ignores_quoted_fence_candidate() {
 #[test]
 fn backward_comment_two_char_end_style_uses_first_ender_char() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "code /* block comment */ more");
     install_c_block_comment_syntax(&mut eval);
     {
@@ -938,7 +938,7 @@ fn backward_comment_two_char_end_style_uses_first_ender_char() {
 #[test]
 fn backward_comment_rejects_escaped_two_char_opener() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "\\/* x */");
     install_c_block_comment_syntax(&mut eval);
     {
@@ -962,7 +962,7 @@ fn backward_comment_rejects_escaped_two_char_opener() {
 #[test]
 fn backward_comment_escaped_pair_opener_overrides_raw_ender_class() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "\\~^ x !?");
     for (ch, syntax) in [('~', "> 1"), ('^', ". 2"), ('!', ". 3"), ('?', ". 4")] {
         builtin_modify_syntax_entry(
@@ -993,7 +993,7 @@ fn backward_comment_escaped_pair_opener_overrides_raw_ender_class() {
 #[test]
 fn backward_comment_classifies_two_char_opener_before_base_syntax() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "~^ x !?");
     builtin_modify_syntax_entry(
         &mut eval,
@@ -1033,7 +1033,7 @@ fn backward_comment_classifies_two_char_opener_before_base_syntax() {
 #[test]
 fn backward_comment_treats_first_ambiguous_two_char_delimiter_as_opener() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "AB\n-- C\nDE\n");
     {
         let buf = eval
@@ -1060,7 +1060,7 @@ fn backward_comment_treats_first_ambiguous_two_char_delimiter_as_opener() {
 #[test]
 fn backward_comment_reparses_base_opener_overlapping_left_ender() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "< x ab y >");
     for (ch, syntax) in [('<', "<"), ('>', ">"), ('a', ". 3"), ('b', "< 4")] {
         builtin_modify_syntax_entry(
@@ -1090,7 +1090,7 @@ fn backward_comment_reparses_base_opener_overlapping_left_ender() {
 #[test]
 fn backward_comment_honors_escaped_comment_ender_policy() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "# x \\\n");
     install_hash_line_comment_syntax(&mut eval);
     let buffer_id = eval
@@ -1126,7 +1126,7 @@ fn backward_comment_honors_escaped_comment_ender_policy() {
 #[test]
 fn backward_comment_applies_escape_policy_to_two_char_ender_second_character() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "~^ x !?");
     builtin_modify_syntax_entry(
         &mut eval,
@@ -1179,7 +1179,7 @@ fn backward_comment_applies_escape_policy_to_two_char_ender_second_character() {
 #[test]
 fn backward_comment_stops_at_quoted_whitespace() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "\\ ");
     {
         let buf = eval
@@ -1202,7 +1202,7 @@ fn backward_comment_stops_at_quoted_whitespace() {
 #[test]
 fn backward_comment_failed_two_char_newline_ender_resumes_before_pair() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "x\n");
     builtin_modify_syntax_entry(
         &mut eval,
@@ -1235,7 +1235,7 @@ fn backward_comment_failed_two_char_newline_ender_resumes_before_pair() {
 #[test]
 fn backward_sexp_comment_entry_ignores_forward_comment_escape_policy() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "a # (\\\n");
     install_hash_line_comment_syntax(&mut eval);
     eval.obarray
@@ -1259,7 +1259,7 @@ fn backward_sexp_comment_entry_ignores_forward_comment_escape_policy() {
 #[test]
 fn backward_sexp_recognizes_two_char_ender_with_quoted_first_character() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "a # (\\!?");
     install_hash_line_comment_syntax(&mut eval);
     for (ch, syntax) in [('!', ". 3"), ('?', ". 4")] {
@@ -1327,7 +1327,7 @@ fn backward_comment_requires_matching_nestability() {
 #[test]
 fn scan_lists_backward_ignores_comment_char_inside_string() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     //           1234 5 6  789012345 6 78 9
     //           x = { \n   a = "#"; \n }  \n
     replace_current_buffer_text(&mut eval, "x = {\n  a = \"#\";\n}\n");
@@ -1343,7 +1343,7 @@ fn scan_lists_backward_ignores_comment_char_inside_string() {
 #[test]
 fn scan_lists_backward_ignores_escaped_string_quote_before_comment_char() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "x = {\n  a = \"y\\\"#\\\"z\";\n}\n");
     install_hash_line_comment_syntax(&mut eval);
     eval.obarray
@@ -1357,7 +1357,7 @@ fn scan_lists_backward_ignores_escaped_string_quote_before_comment_char() {
 #[test]
 fn scan_lists_backward_still_crosses_a_genuine_comment() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "x = {\n  # hi\n  a = 1;\n}\n");
     install_hash_line_comment_syntax(&mut eval);
     eval.obarray
@@ -1373,7 +1373,7 @@ fn scan_lists_backward_still_crosses_a_genuine_comment() {
 #[test]
 fn scan_lists_backward_reparses_forward_when_the_comment_body_holds_a_string_quote() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "x = {\n  # a \" b\n}\n");
     install_hash_line_comment_syntax(&mut eval);
     eval.obarray
@@ -1389,7 +1389,7 @@ fn scan_lists_backward_reparses_forward_when_the_comment_body_holds_a_string_quo
 #[test]
 fn scan_lists_backward_accepts_a_comment_whose_body_holds_balanced_string_quotes() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "x = {\n  # a \" b \" c\n}\n");
     install_hash_line_comment_syntax(&mut eval);
     eval.obarray
@@ -1403,7 +1403,7 @@ fn scan_lists_backward_accepts_a_comment_whose_body_holds_balanced_string_quotes
 #[test]
 fn backward_comment_rejects_comment_start_inside_string() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "a = \"#\";\nb\n");
     install_hash_line_comment_syntax(&mut eval);
     {
@@ -1428,7 +1428,7 @@ fn backward_comment_rejects_comment_start_inside_string() {
 #[test]
 fn backward_comment_rejects_comment_start_inside_string_with_escaped_quotes() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "a = \"y\\\"#\\\"z\";\nb\n");
     install_hash_line_comment_syntax(&mut eval);
     {
@@ -1453,7 +1453,7 @@ fn backward_comment_rejects_comment_start_inside_string_with_escaped_quotes() {
 #[test]
 fn backward_comment_finds_comment_start_through_forward_reparse() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "a\n# x \" y\nb\n");
     install_hash_line_comment_syntax(&mut eval);
     {
@@ -1476,7 +1476,7 @@ fn backward_comment_finds_comment_start_through_forward_reparse() {
 #[test]
 fn forward_comment_validates_arity_and_type() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     match builtin_forward_comment(&mut eval, vec![]).kinded() {
         Err(neovm_value::error::FlowKind::Signal(sig)) => {
@@ -1514,7 +1514,7 @@ fn forward_comment_validates_arity_and_type() {
 #[test]
 fn forward_comment_backward_single_line_comments() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
         let buf = eval
             .edit
@@ -1595,7 +1595,7 @@ fn forward_comment_backward_single_line_comments() {
 #[test]
 fn forward_comment_keeps_style_c_distinct_from_style_a() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "@first\nsecond!code");
     install_single_character_style_c_comment_syntax(&mut eval);
 
@@ -1612,7 +1612,7 @@ fn forward_comment_keeps_style_c_distinct_from_style_a() {
 #[test]
 fn backward_comment_keeps_style_c_distinct_from_style_a() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "code@first\nsecond!");
     install_single_character_style_c_comment_syntax(&mut eval);
     {
@@ -1661,7 +1661,7 @@ fn backward_comment_keeps_style_c_distinct_from_style_a() {
 #[test]
 fn forward_comment_backward_stops_at_non_comment() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
         let buf = eval
             .edit
@@ -1720,7 +1720,7 @@ fn forward_comment_backward_stops_at_non_comment() {
 #[test]
 fn backward_prefix_chars_default_is_noop() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
         let buf = eval
             .edit
@@ -1753,7 +1753,7 @@ fn backward_prefix_chars_default_is_noop() {
 #[test]
 fn backward_prefix_chars_moves_over_prefix_flag_chars() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
         let buf = eval
             .edit
@@ -1790,7 +1790,7 @@ fn backward_prefix_chars_moves_over_prefix_flag_chars() {
 #[test]
 fn backward_prefix_chars_validates_arity() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     match builtin_backward_prefix_chars(&mut eval, &vec![Value::fixnum(1)]).kinded() {
         Err(neovm_value::error::FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
@@ -1806,7 +1806,7 @@ fn backward_prefix_chars_validates_arity() {
 #[test]
 fn modify_syntax_entry_at_descriptor_inherits_parent_or_default() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     builtin_modify_syntax_entry(
         &mut eval,
         vec![Value::fixnum('x' as i64), Value::string("@")],
@@ -1820,7 +1820,7 @@ fn modify_syntax_entry_at_descriptor_inherits_parent_or_default() {
 #[test]
 fn scan_lists_basic_and_backward_nil() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
         let buf = eval
             .edit
@@ -1859,7 +1859,7 @@ fn scan_lists_basic_and_backward_nil() {
 #[test]
 fn scan_lists_depth_exits_containing_list() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
         let buf = eval
             .edit
@@ -1884,7 +1884,7 @@ fn scan_lists_depth_exits_containing_list() {
 #[test]
 fn scan_lists_unbalanced_signal_carries_gnu_positions() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
         let buf = eval
             .edit
@@ -1922,7 +1922,7 @@ fn scan_lists_unbalanced_signal_carries_gnu_positions() {
 #[test]
 fn syntax_after_returns_descriptor_and_nil_out_of_range() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
         let buf = eval
             .edit
@@ -1955,7 +1955,7 @@ fn syntax_after_returns_descriptor_and_nil_out_of_range() {
 #[test]
 fn scan_sexps_basic_and_backward_nil() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
         let buf = eval
             .edit
@@ -1980,7 +1980,7 @@ fn scan_sexps_basic_and_backward_nil() {
 #[test]
 fn scan_sexps_returns_nil_when_count_not_exhausted_at_boundary() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
         let buf = eval
             .edit
@@ -2005,7 +2005,7 @@ fn scan_sexps_returns_nil_when_count_not_exhausted_at_boundary() {
 #[test]
 fn scan_sexps_unbalanced_signal_carries_gnu_positions() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
         let buf = eval
             .edit
@@ -2038,7 +2038,7 @@ fn scan_sexps_unbalanced_signal_carries_gnu_positions() {
 #[test]
 fn forward_sexp_unexpected_close_signal_carries_gnu_positions() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
         let buf = eval
             .edit
@@ -2074,7 +2074,7 @@ fn forward_sexp_unexpected_close_signal_carries_gnu_positions() {
 #[test]
 fn forward_sexp_stops_at_narrowing_boundary_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
         let buf = eval
             .edit
@@ -2108,7 +2108,7 @@ fn forward_sexp_stops_at_narrowing_boundary_like_gnu() {
 #[test]
 fn parse_partial_sexp_baseline_shapes() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
         let buf = eval
             .edit
@@ -2175,7 +2175,7 @@ fn parse_partial_sexp_baseline_shapes() {
 #[test]
 fn parse_partial_sexp_accepts_marker_positions_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
         let buf = eval
             .edit
@@ -2229,7 +2229,7 @@ fn parse_partial_sexp_accepts_marker_positions_like_gnu() {
 #[test]
 fn parse_partial_sexp_rejects_non_integer_positions_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let err = builtin_parse_partial_sexp(&mut eval, vec![Value::make_float(1.2), Value::fixnum(1)])
         .unwrap_err();
     match err.into_kind() {
@@ -2250,7 +2250,7 @@ fn parse_partial_sexp_rejects_non_integer_positions_like_gnu() {
 #[test]
 fn parse_partial_sexp_tracks_completed_sexp_per_nesting_level_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
         let buf = eval
             .edit
@@ -2287,7 +2287,7 @@ fn parse_partial_sexp_tracks_completed_sexp_per_nesting_level_like_gnu() {
 #[test]
 fn parse_partial_sexp_preserves_gnu_negative_depth_state() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
         let buf = eval
             .edit
@@ -2356,7 +2356,7 @@ fn parse_partial_sexp_preserves_gnu_negative_depth_state() {
 #[test]
 fn parse_partial_sexp_enters_single_char_line_comment_state() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
         let buf = eval
             .edit
@@ -2396,7 +2396,7 @@ fn parse_partial_sexp_enters_single_char_line_comment_state() {
 #[test]
 fn parse_partial_sexp_closes_haskell_nested_comment_before_following_code() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "{-# pragma #-}module");
     install_haskell_nested_comment_syntax(&mut eval);
 
@@ -2410,7 +2410,7 @@ fn parse_partial_sexp_closes_haskell_nested_comment_before_following_code() {
 #[test]
 fn parse_partial_sexp_gives_dual_role_nested_marker_ender_precedence() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "|| body ||");
     install_dual_role_nested_comment_syntax(&mut eval);
 
@@ -2423,7 +2423,7 @@ fn parse_partial_sexp_gives_dual_role_nested_marker_ender_precedence() {
 #[test]
 fn parse_partial_sexp_preserves_single_opener_before_pair_ender_order() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "|| body ||");
     builtin_modify_syntax_entry(
         &mut eval,
@@ -2442,7 +2442,7 @@ fn parse_partial_sexp_preserves_single_opener_before_pair_ender_order() {
 #[test]
 fn parse_partial_sexp_stopbefore_does_not_split_two_char_opener() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "~^ body !?");
     for (ch, syntax) in [('~', "( 1"), ('^', ". 2"), ('!', ". 3"), ('?', ". 4")] {
         builtin_modify_syntax_entry(
@@ -2468,7 +2468,7 @@ fn parse_partial_sexp_stopbefore_does_not_split_two_char_opener() {
 #[test]
 fn parse_partial_sexp_word_class_pair_does_not_finish_pending_atom() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "a~^x!?");
     for (ch, syntax) in [('~', "w 1"), ('^', ". 2"), ('!', ". 3"), ('?', ". 4")] {
         builtin_modify_syntax_entry(
@@ -2487,7 +2487,7 @@ fn parse_partial_sexp_word_class_pair_does_not_finish_pending_atom() {
 #[test]
 fn parse_partial_sexp_crosses_multibyte_gap_at_two_char_comment_closer() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let text = "(α /* β */ γ)";
     replace_current_buffer_text(&mut eval, text);
     install_c_block_comment_syntax(&mut eval);
@@ -2531,7 +2531,7 @@ fn parse_partial_sexp_crosses_multibyte_gap_at_two_char_comment_closer() {
 #[test]
 fn parse_partial_sexp_incomplete_comment_publishes_trailing_escape() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "/* x \\");
     install_c_block_comment_syntax(&mut eval);
 
@@ -2552,7 +2552,7 @@ fn parse_partial_sexp_incomplete_comment_publishes_trailing_escape() {
 #[test]
 fn parse_partial_sexp_flat_incomplete_comment_hides_trailing_start_first() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "/* x /");
     install_c_block_comment_syntax(&mut eval);
 
@@ -2566,7 +2566,7 @@ fn parse_partial_sexp_flat_incomplete_comment_hides_trailing_start_first() {
 #[test]
 fn parse_partial_sexp_nested_single_ender_retains_end_first_syntax() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "<<x>");
     builtin_modify_syntax_entry(
         &mut eval,
@@ -2597,7 +2597,7 @@ fn parse_partial_sexp_consumed_comment_escape_is_not_incomplete() {
     crate::test_utils::init_test_tracing();
 
     for generic_fence in [false, true] {
-        let mut eval = Context::new();
+        let mut eval = crate::test_utils::new_context();
         if generic_fence {
             replace_current_buffer_text(&mut eval, "!x\\a");
             install_comment_fence_syntax(&mut eval);
@@ -2639,7 +2639,7 @@ fn parse_partial_sexp_commentstop_preserves_entry_syntax() {
         ),
         (Value::NIL, Value::NIL),
     ] {
-        let mut eval = Context::new();
+        let mut eval = crate::test_utils::new_context();
         replace_current_buffer_text(&mut eval, "<x");
         builtin_modify_syntax_entry(
             &mut eval,
@@ -2667,7 +2667,7 @@ fn parse_partial_sexp_commentstop_preserves_entry_syntax() {
 #[test]
 fn parse_partial_sexp_comment_resume_does_not_apply_old_quoted_as_skip() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "/* \\*/");
     install_c_block_comment_syntax(&mut eval);
     set_comment_end_can_be_escaped(&mut eval, Value::T);
@@ -2696,7 +2696,7 @@ fn parse_partial_sexp_comment_resume_does_not_apply_old_quoted_as_skip() {
 #[test]
 fn parse_partial_sexp_comment_resume_closes_a_pair_split_at_oldstate() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "/* x */");
     install_c_block_comment_syntax(&mut eval);
 
@@ -2724,7 +2724,7 @@ fn parse_partial_sexp_comment_resume_closes_a_pair_split_at_oldstate() {
 #[test]
 fn parse_partial_sexp_comment_resume_opens_a_nested_pair_split_at_oldstate() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "/* /* */ */");
     install_nestable_c_block_comment_syntax(&mut eval);
 
@@ -2757,7 +2757,7 @@ fn parse_partial_sexp_comment_resume_does_not_pair_oldstate_at_accessible_begv()
     crate::test_utils::init_test_tracing();
 
     for narrowed in [false, true] {
-        let mut eval = Context::new();
+        let mut eval = crate::test_utils::new_context();
         replace_current_buffer_text(&mut eval, if narrowed { "x/" } else { "/" });
         install_c_block_comment_syntax(&mut eval);
         if narrowed {
@@ -2810,7 +2810,7 @@ fn parse_partial_sexp_comment_resume_does_not_pair_oldstate_at_accessible_begv()
 #[test]
 fn parse_partial_sexp_consumed_two_char_closer_has_no_prev_syntax() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "/* x */");
     install_c_block_comment_syntax(&mut eval);
 
@@ -2826,7 +2826,7 @@ fn parse_partial_sexp_comment_fence_honors_comment_end_escape_policy() {
     crate::test_utils::init_test_tracing();
 
     for (policy, expected_comment_state) in [(Value::NIL, Value::T), (Value::T, Value::NIL)] {
-        let mut eval = Context::new();
+        let mut eval = crate::test_utils::new_context();
         replace_current_buffer_text(&mut eval, "!a\\!b!");
         install_comment_fence_syntax(&mut eval);
         set_comment_end_can_be_escaped(&mut eval, policy);
@@ -2862,7 +2862,7 @@ fn parse_partial_sexp_requires_matching_comment_nestability() {
 #[test]
 fn parse_partial_sexp_commentstop_syntax_table_moves_point_across_comment() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
         let buf = eval
             .edit
@@ -2964,7 +2964,7 @@ fn parse_partial_sexp_commentstop_syntax_table_moves_point_across_comment() {
 #[test]
 fn parse_partial_sexp_preserves_generic_comment_fence_across_stops() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "!abc!");
     builtin_modify_syntax_entry(
         &mut eval,
@@ -3012,7 +3012,7 @@ fn parse_partial_sexp_preserves_generic_comment_fence_across_stops() {
 #[test]
 fn parse_partial_sexp_preserves_c_line_comment_style_across_stops() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "// header\n#define VALUE 1\n");
     install_c_line_and_block_comment_syntax(&mut eval);
 
@@ -3060,7 +3060,7 @@ fn parse_partial_sexp_preserves_c_line_comment_style_across_stops() {
 #[test]
 fn parse_partial_sexp_uses_the_main_character_style_for_c_block_comment_end() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "/* header */\n#define VALUE 1\n");
     install_c_line_and_block_comment_syntax(&mut eval);
 
@@ -3110,7 +3110,7 @@ fn syntax_class_at_char_matches_gnu_defaults() {
     crate::test_utils::init_test_tracing();
     // Pin the GNU-standard syntax-class for representative characters,
     // read from the live chartable the default buffer holds.
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let table = super::current_buffer_syntax_table_object_in_buffers(&mut eval.edit.buffers)
         .expect("buffer syntax-table");
 
@@ -3144,7 +3144,7 @@ fn syntax_class_at_char_matches_gnu_defaults() {
 #[test]
 fn parse_partial_sexp_prefix_quote_does_not_become_last_complete_sexp() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "'abc");
     install_elisp_prefix_syntax(&mut eval);
     // (with-temp-buffer (emacs-lisp-mode) (insert "'abc")
@@ -3157,7 +3157,7 @@ fn parse_partial_sexp_prefix_quote_does_not_become_last_complete_sexp() {
 #[test]
 fn parse_partial_sexp_bare_prefix_quote_has_no_last_complete_sexp() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "'");
     install_elisp_prefix_syntax(&mut eval);
     // (insert "'") (nth 2 (parse-partial-sexp (point-min) (point-max))) => nil
@@ -3173,7 +3173,7 @@ fn parse_partial_sexp_other_prefix_quotes_match_gnu() {
     // the following sexp's start as element 2, never the prefix's own position.
     // GNU: ,foo => 2, `bar => 2, #'foo => 3.
     for (text, to, expected) in [(",foo", 5, 2i64), ("`bar", 5, 2), ("#'foo", 6, 3)] {
-        let mut eval = Context::new();
+        let mut eval = crate::test_utils::new_context();
         replace_current_buffer_text(&mut eval, text);
         install_elisp_prefix_syntax(&mut eval);
         let state =
@@ -3190,7 +3190,7 @@ fn parse_partial_sexp_other_prefix_quotes_match_gnu() {
 #[test]
 fn parse_partial_sexp_double_prefix_quote_has_no_last_complete_sexp() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "''");
     install_elisp_prefix_syntax(&mut eval);
     // (insert "''") (nth 2 (parse-partial-sexp (point-min) (point-max))) => nil
@@ -3202,7 +3202,7 @@ fn parse_partial_sexp_double_prefix_quote_has_no_last_complete_sexp() {
 #[test]
 fn parse_partial_sexp_quote_continues_in_progress_symbol_run() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "abc'def");
     install_elisp_prefix_syntax(&mut eval);
     // A quote inside a symbol run is a constituent: `abc'def` is one symbol
@@ -3215,7 +3215,7 @@ fn parse_partial_sexp_quote_continues_in_progress_symbol_run() {
 #[test]
 fn parse_partial_sexp_prefix_quote_before_paren_full_state() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "'abc");
     install_elisp_prefix_syntax(&mut eval);
     // (insert "'abc") (parse-partial-sexp (point-min) (point-max))
@@ -3243,7 +3243,7 @@ fn parse_partial_sexp_prefix_quote_before_paren_full_state() {
 #[test]
 fn parse_partial_sexp_from_state_in_string_normalizes_unknown_start_to_minus_one() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "abc\" def");
     // (parse-partial-sexp (point-min) 4 nil nil
     //   (list 0 nil nil ?\" nil nil 0 nil nil nil nil)) => element 8 is -1
@@ -3279,7 +3279,7 @@ fn parse_partial_sexp_from_state_in_string_normalizes_unknown_start_to_minus_one
 #[test]
 fn parse_partial_sexp_from_state_in_comment_normalizes_unknown_start_to_minus_one() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "abc def");
     // Resume inside a comment (element 4 = t) with element 8 nil => -1.
     let oldstate = Value::list(vec![
@@ -3312,7 +3312,7 @@ fn parse_partial_sexp_from_state_in_comment_normalizes_unknown_start_to_minus_on
 #[test]
 fn parse_partial_sexp_from_state_not_in_string_or_comment_keeps_start_nil() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "abc def");
     // No string/comment in the from-state: element 8 must stay nil (no
     // spurious -1), matching GNU's gated output of `comstr_start`.
@@ -3352,7 +3352,7 @@ fn forward_word_with_boundary_table_reaches_buffer_end() {
     // leave point stalled before trailing non-word text, turning the
     // ubiquitous (while (< (point) (point-max)) (forward-word)) idiom into an
     // infinite loop.
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = eval
         .eval_str(
             r#"(progn
@@ -3381,7 +3381,7 @@ fn forward_word_with_boundary_table_reaches_buffer_end() {
 #[test]
 fn ascii_syntax_memo_decodes_each_char_at_most_once_per_scan() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     // ~1.6k chars drawn from a small alphabet: many characters stepped over,
     // few DISTINCT ones to decode.
@@ -3542,7 +3542,7 @@ fn a_resumed_parse_pairs_a_comment_opener_split_at_its_start_like_gnu() {
         ),
     ];
     for &(text, split, end, commentstop, nested, gnu) in cases {
-        let mut eval = Context::new();
+        let mut eval = crate::test_utils::new_context();
         replace_current_buffer_text(&mut eval, text);
         if nested {
             for (ch, desc) in [('(', "()1n"), (')', ")(4n"), ('*', ". 23n")] {
@@ -3781,7 +3781,7 @@ fn backward_single_char_comment_with_syntax(
     opener_syntax: &str,
     ender_syntax: &str,
 ) -> (Value, i64) {
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "< x >");
     builtin_modify_syntax_entry(
         &mut eval,
@@ -3818,7 +3818,7 @@ fn parse_partial_sexp_comment_state_for_delimiters(
     opener_syntax: &str,
     ender_syntax: &str,
 ) -> Value {
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     replace_current_buffer_text(&mut eval, "< x >");
     builtin_modify_syntax_entry(
         &mut eval,

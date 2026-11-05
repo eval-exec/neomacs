@@ -534,7 +534,10 @@ impl Clone for BufferTextStorage {
     }
 }
 
+#[cfg(not(any(test, feature = "test-support")))]
 mod source_authority;
+#[cfg(any(test, feature = "test-support"))]
+pub mod source_authority;
 pub use source_authority::{BufferSourceAuthority, BufferSourceReadLease};
 
 pub struct BufferText {
@@ -3420,6 +3423,7 @@ impl BufferText {
             .then(|| metrics.emacs_byte_end())
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// Convert a valid character position without growing the position-anchor
     /// vector. Backend lookups only read existing nodes or update the gap
     /// backend's fixed-size anchor ring; no heap storage is published.

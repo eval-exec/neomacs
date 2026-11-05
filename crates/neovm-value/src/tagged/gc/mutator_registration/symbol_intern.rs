@@ -12,6 +12,7 @@ pub(super) enum InternOpKind {
     Soft,
 }
 impl InternOpKind {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn method(self) -> &'static str {
         match self {
             Self::Intern => "initial_intern_into",

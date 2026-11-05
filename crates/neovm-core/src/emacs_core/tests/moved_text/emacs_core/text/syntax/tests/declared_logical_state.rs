@@ -32,7 +32,7 @@ use neovm_value::heap_types::GnuDeclaredCharacterCount;
 
 #[test]
 fn supplied_no_interval_state_reports_gnu_to_end_logic_after_initial_run() {
-    let context = Context::new();
+    let context = crate::test_utils::new_context();
     let source = supplied_ascii(0);
     neovm_value::string_pos_cache::reset_string_pos_cache();
     let run = StringSyntaxPropByteRun::for_source(
@@ -52,7 +52,7 @@ fn supplied_no_interval_state_reports_gnu_to_end_logic_after_initial_run() {
 
 #[test]
 fn supplied_first_negative_lookup_signals_its_actual_signed_coordinate() {
-    let context = Context::new();
+    let context = crate::test_utils::new_context();
     let source = supplied_ascii(0);
     let string = source.as_lisp_string().expect("test string");
     neovm_value::string_pos_cache::reset_string_pos_cache();
@@ -81,7 +81,7 @@ fn supplied_first_negative_lookup_signals_its_actual_signed_coordinate() {
 
 #[test]
 fn supplied_capability_query_never_skips_or_performs_gnu_syntax_reads() {
-    let context = Context::new();
+    let context = crate::test_utils::new_context();
     let source = supplied_ascii(0);
     let run = StringSyntaxPropByteRun::for_source(
         SyntaxProperties::for_scan(true, context.variables(), &context.edit.buffers),
@@ -103,7 +103,7 @@ fn supplied_capability_query_never_skips_or_performs_gnu_syntax_reads() {
 
 #[test]
 fn ignoring_supplied_counts_keeps_the_position_independent_gnu_path() {
-    let context = Context::new();
+    let context = crate::test_utils::new_context();
     let source = supplied_ascii(0);
     let ignoring = StringSyntaxPropByteRun::for_source(
         SyntaxProperties::Ignore,

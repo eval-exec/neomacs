@@ -37,6 +37,7 @@ use crate::buffer::text_index::{
     report_mismatch, text_line_index_config,
 };
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Which text a storage holds: a buffer's own, or a layout snapshot of it.
 /// Only live text builds an index.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

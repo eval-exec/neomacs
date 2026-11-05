@@ -55,6 +55,7 @@ impl LiveTableCount {
         Self(AtomicUsize::new(0))
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn register(&self) -> TableRegistration<'_> {
         // Publish the count before a table can enter the registry or hand out
         // a lease. The count cannot wrap: each registration owns a distinct

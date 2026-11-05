@@ -74,7 +74,7 @@ fn builtin_case_table_p_wrong_arg_count() {
 #[test]
 fn builtin_current_case_table_returns_case_table() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let result = builtin_current_case_table(&mut ctx, vec![]).unwrap();
     assert!(is_case_table(&result));
 }
@@ -82,14 +82,14 @@ fn builtin_current_case_table_returns_case_table() {
 #[test]
 fn builtin_current_case_table_wrong_args() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     assert!(builtin_current_case_table(&mut ctx, vec![Value::NIL]).is_err());
 }
 
 #[test]
 fn builtin_standard_case_table_returns_case_table() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let result = builtin_standard_case_table(&mut ctx, vec![]).unwrap();
     assert!(is_case_table(&result));
 }
@@ -97,14 +97,14 @@ fn builtin_standard_case_table_returns_case_table() {
 #[test]
 fn builtin_standard_case_table_wrong_args() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     assert!(builtin_standard_case_table(&mut ctx, vec![Value::NIL]).is_err());
 }
 
 #[test]
 fn builtin_set_case_table_returns_arg() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let table = make_empty_case_table();
     let result = builtin_set_case_table(&mut ctx, vec![table]).unwrap();
     assert_eq!(result, table);
@@ -113,14 +113,14 @@ fn builtin_set_case_table_returns_arg() {
 #[test]
 fn builtin_set_case_table_rejects_non_table() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     assert!(builtin_set_case_table(&mut ctx, vec![Value::fixnum(1)]).is_err());
 }
 
 #[test]
 fn builtin_set_case_table_wrong_args() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     assert!(builtin_set_case_table(&mut ctx, vec![]).is_err());
     assert!(builtin_set_case_table(&mut ctx, vec![Value::NIL, Value::NIL]).is_err());
 }
@@ -128,7 +128,7 @@ fn builtin_set_case_table_wrong_args() {
 #[test]
 fn builtin_set_standard_case_table_returns_arg() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let table = make_empty_case_table();
     let result = builtin_set_standard_case_table(&mut ctx, vec![table]).unwrap();
     assert_eq!(result, table);
@@ -137,21 +137,21 @@ fn builtin_set_standard_case_table_returns_arg() {
 #[test]
 fn builtin_set_standard_case_table_rejects_non_table() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     assert!(builtin_set_standard_case_table(&mut ctx, vec![Value::fixnum(1)]).is_err());
 }
 
 #[test]
 fn builtin_set_standard_case_table_wrong_args() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     assert!(builtin_set_standard_case_table(&mut ctx, vec![]).is_err());
 }
 
 #[test]
 fn evaluator_case_table_roundtrip_and_isolation() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let standard = builtin_standard_case_table(&mut eval, vec![]).unwrap();
     let current = builtin_current_case_table(&mut eval, vec![]).unwrap();
     assert_eq!(standard, current);
@@ -301,7 +301,7 @@ fn custom_case_table_makes_char_equal_case_fold() {
 fn standard_case_table_path_is_byte_identical() {
     crate::test_utils::init_test_tracing();
     // Without a custom table, the default Unicode path must be unchanged.
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let up = neovm_eval::emacs_core::builtins::builtin_upcase_in_state(&mut ev, vec![Value::char('z')])
         .unwrap();
     assert_eq!(up.as_int(), Some('Z' as i64));
@@ -367,7 +367,7 @@ fn the_standard_case_tables_and_replace_match_case_answer_like_gnu() {
 /// (set-case-syntax-pair UC LC (copy-case-table (standard-case-table))))`.
 #[cfg(test)]
 fn ctx_with_pair(uc: i64, lc: i64) -> crate::emacs_core::eval::Context {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let table = make_case_table_with_pair(uc, lc);
     builtin_set_case_table(&mut ev, vec![table]).expect("set-case-table");
     ev

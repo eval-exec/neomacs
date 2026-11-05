@@ -215,6 +215,7 @@ pub(crate) enum RegexOp {
 }
 
 impl RegexOp {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// Convert a byte to an opcode.  Returns None for invalid bytes.
     #[inline]
     fn from_byte(b: u8) -> Option<Self> {
@@ -421,6 +422,7 @@ impl CompiledPattern {
             .get_or_init(|| sparse_ascii_fastmap(&self.fastmap))
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// The multi-literal prefilter, built now if it was not yet.
     pub(crate) fn literal_prefilter(&self) -> Option<&LiteralPrefilter> {
         self.prefilter
@@ -428,6 +430,7 @@ impl CompiledPattern {
             .as_ref()
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// The case-folded candidate scan for the text representation this
     /// pattern searches, built by the first search long enough to use it (the
     /// literal prefilter's policy).  `None`: not built yet and this search is

@@ -32,7 +32,7 @@ use neovm_text::emacs_core::syntax::*;
 
 #[test]
 fn the_byte_run_cache_answers_like_a_fresh_lookup_in_any_order() {
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
     let mut checked = 0;
     for round in 0..300 {
@@ -70,7 +70,7 @@ fn the_byte_run_cache_answers_like_a_fresh_lookup_in_any_order() {
 /// character.
 #[test]
 fn a_backward_walk_refills_once_per_run() {
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval_ok(
         &mut eval,
         "(progn (erase-buffer) (insert (make-string 200 ?a))
@@ -92,7 +92,7 @@ fn a_backward_walk_refills_once_per_run() {
 
 #[test]
 fn the_ascii_char_before_is_the_general_answer() {
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let mut rng = Rng(0x2545_f491_4f6c_dd1d);
     let mut checked = 0;
     for round in 0..40 {
@@ -131,7 +131,7 @@ fn the_ascii_char_before_is_the_general_answer() {
 /// scan below ran through the punctuation at char 5 to the buffer end.
 #[test]
 fn an_overlapping_syntax_table_put_keeps_the_earlier_property_visible() {
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let answer = |eval: &mut crate::emacs_core::eval::Context, src: &str| {
         crate::emacs_core::print::print_value(&eval_ok(eval, src))
     };
@@ -179,7 +179,7 @@ fn an_overlapping_syntax_table_put_keeps_the_earlier_property_visible() {
 /// the punctuation at 10..15 as word syntax and ran to the buffer end.
 #[test]
 fn a_syntax_table_removal_inside_a_put_splits_the_run() {
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let answer = |eval: &mut crate::emacs_core::eval::Context, src: &str| {
         crate::emacs_core::print::print_value(&eval_ok(eval, src))
     };

@@ -21,7 +21,7 @@ use neovm_text::emacs_core::regex_emacs::*;
 
 #[test]
 fn nullable_nongreedy_loop_answers_nil_from_lisp() {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let caught = ev
         .eval_str(
             "(list (condition-case err (string-match \"\\\\(a\\\\|\\\\)+?x\" \"aaaay\") \
@@ -34,7 +34,7 @@ fn nullable_nongreedy_loop_answers_nil_from_lisp() {
 
 #[test]
 fn pike_fallback_overflow_signals_the_gnu_error_from_lisp() {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let caught = ev
         .eval_str(
             "(condition-case err \

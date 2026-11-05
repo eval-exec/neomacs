@@ -390,6 +390,7 @@ impl CellWord {
         unsafe { AtomicUsize::from_ptr(self.0.get()).store(bits, Ordering::Release) };
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     #[inline(always)]
     fn plain(value: Value) -> Self {
         Self::new(value.bits())

@@ -35,7 +35,7 @@ fn rectangle_copied_properties_have_only_manager_roots() {
     struct Probe(usize);
 
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.gc_stress = false;
     eval.gc_collect_exact();
     eval.tagged_heap.set_gc_threshold(usize::MAX);
@@ -643,7 +643,7 @@ fn delete_extract_rectangle_line_loaded_state_matches_gnu() {
 #[test]
 fn raw_context_does_not_prebind_replace_rectangle_alias() {
     crate::test_utils::init_test_tracing();
-    let eval = Context::new();
+    let eval = crate::test_utils::new_context();
     assert!(
         eval.obarray.symbol_function("replace-rectangle").is_none(),
         "replace-rectangle should come from GNU rect.el/loaddefs, not Context::new"

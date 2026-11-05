@@ -25,7 +25,7 @@ use neovm_value::value::Value;
 #[test]
 fn get_truename_buffer_finds_the_visiting_buffer_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let current = eval
         .edit
         .buffers
@@ -62,7 +62,7 @@ fn get_truename_buffer_finds_the_visiting_buffer_like_gnu() {
 #[test]
 fn insert_keeps_the_arguments_it_already_inserted_before_signalling_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     assert_eq!(
         format_eval_result(&eval.eval_str(
@@ -93,7 +93,7 @@ fn insert_keeps_the_arguments_it_already_inserted_before_signalling_like_gnu() {
 #[test]
 fn insert_variants_all_insert_their_valid_prefix_before_signalling_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     for name in [
         "insert",
@@ -119,7 +119,7 @@ fn insert_variants_all_insert_their_valid_prefix_before_signalling_like_gnu() {
 #[test]
 fn get_truename_buffer_does_not_expand_its_argument_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let current = eval
         .edit
         .buffers
@@ -158,7 +158,7 @@ fn get_truename_buffer_does_not_expand_its_argument_like_gnu() {
 #[test]
 fn buffer_enable_undo_keeps_an_existing_list_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     assert_eq!(
         format_eval_result(&eval.eval_str(
@@ -182,7 +182,7 @@ fn buffer_enable_undo_keeps_an_existing_list_like_gnu() {
 #[test]
 fn buffer_enable_undo_is_a_noop_when_undo_is_already_on_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     assert_eq!(
         format_eval_result(&eval.eval_str(
@@ -206,7 +206,7 @@ fn buffer_enable_undo_is_a_noop_when_undo_is_already_on_like_gnu() {
 #[test]
 fn buffer_enable_undo_still_clears_a_disabled_list_through_an_indirect_buffer() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     assert_eq!(
         format_eval_result(&eval.eval_str(
@@ -248,7 +248,7 @@ fn buffer_enable_undo_still_clears_a_disabled_list_through_an_indirect_buffer() 
 #[test]
 fn a_point_saved_in_one_buffer_is_not_recorded_in_another_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     assert_eq!(
         format_eval_result(&eval.eval_str(
@@ -291,7 +291,7 @@ fn a_point_saved_in_one_buffer_is_not_recorded_in_another_like_gnu() {
 #[test]
 fn insert_reads_the_string_after_before_change_functions_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     assert_eq!(
         format_eval_result(&eval.eval_str(
@@ -305,7 +305,7 @@ fn insert_reads_the_string_after_before_change_functions_like_gnu() {
         "GNU's copy_text runs after prepare_to_modify_buffer"
     );
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     assert_eq!(
         format_eval_result(&eval.eval_str(
             r#"(let ((s (copy-sequence "abcdefgh")))
@@ -318,7 +318,7 @@ fn insert_reads_the_string_after_before_change_functions_like_gnu() {
         "insert-before-markers shares insert_from_string_1"
     );
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     assert_eq!(
         format_eval_result(&eval.eval_str(
             r#"(let ((s (copy-sequence "abcdefgh")))
@@ -332,7 +332,7 @@ fn insert_reads_the_string_after_before_change_functions_like_gnu() {
         "GNU grafts string_intervals (string) read after the hook"
     );
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     assert_eq!(
         format_eval_result(&eval.eval_str(
             r#"(let ((s (copy-sequence "abcdefgh")))
@@ -359,7 +359,7 @@ fn insert_reads_the_string_after_before_change_functions_like_gnu() {
 fn every_insert_door_reads_the_string_after_the_change_hook_like_gnu() {
     crate::test_utils::init_test_tracing();
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     assert_eq!(
         format_eval_result(&eval.eval_str(
             r#"(let ((s (copy-sequence "abcdefgh")))
@@ -372,7 +372,7 @@ fn every_insert_door_reads_the_string_after_the_change_hook_like_gnu() {
         "insert-and-inherit"
     );
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     assert_eq!(
         format_eval_result(&eval.eval_str(
             r#"(let ((s (copy-sequence "abcdefgh")))
@@ -385,7 +385,7 @@ fn every_insert_door_reads_the_string_after_the_change_hook_like_gnu() {
         "insert-before-markers-and-inherit"
     );
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     assert_eq!(
         format_eval_result(&eval.eval_str(
             r#"(let ((s (propertize (copy-sequence "abcdefgh") 'face 'italic)))
@@ -402,7 +402,7 @@ fn every_insert_door_reads_the_string_after_the_change_hook_like_gnu() {
     // The loop shape: only the argument the hook mutates changes, and the
     // hook fires once per argument, so argument 1 is already in the buffer
     // when the mutation lands.  GNU: "aaaZbb".
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     assert_eq!(
         format_eval_result(&eval.eval_str(
             r#"(let ((s1 (copy-sequence "aaa")) (s2 (copy-sequence "bbb")))
@@ -417,7 +417,7 @@ fn every_insert_door_reads_the_string_after_the_change_hook_like_gnu() {
 
     // A character argument has nothing a hook can mutate, and GNU converts it
     // eagerly (`CHAR_STRING`, src/editfns.c:1327).  Control for the split.
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     assert_eq!(
         format_eval_result(&eval.eval_str(
             r#"(progn (setq before-change-functions (list (lambda (&rest _) nil)))
@@ -430,7 +430,7 @@ fn every_insert_door_reads_the_string_after_the_change_hook_like_gnu() {
 
     // An empty string returns before `prepare_to_modify_buffer`, so it runs
     // no hook at all (`insert_from_string`, src/insdel.c:986-987).  GNU: (1 "a").
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     assert_eq!(
         format_eval_result(&eval.eval_str(
             r#"(let ((n 0))
@@ -451,7 +451,7 @@ fn every_insert_door_reads_the_string_after_the_change_hook_like_gnu() {
 #[test]
 fn kill_buffer_refuses_the_buffer_shown_in_the_minibuffer_window() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let scratch = eval
         .edit
         .buffers
@@ -502,7 +502,7 @@ fn kill_buffer_refuses_the_buffer_shown_in_the_minibuffer_window() {
 #[test]
 fn kill_buffer_minibuffer_guard_runs_after_the_kill_buffer_hook() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let scratch = eval
         .edit
         .buffers

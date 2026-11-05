@@ -6,7 +6,7 @@ use super::*;
 #[test]
 fn prepared_mule_scalar_preserves_subset_and_superset_rules() {
     crate::test_utils::init_test_tracing();
-    let _context = Context::new();
+    let _context = crate::test_utils::new_context();
     CHARSET_REGISTRY.with(|slot| {
         let mut registry = slot.borrow_mut();
         let mut parent = CharsetRegistry::make_default(900, "neovm-mule-parent");
@@ -54,7 +54,7 @@ fn prepared_mule_scalar_preserves_subset_and_superset_rules() {
 #[test]
 fn prepared_mule_scalar_preserves_map_alias_and_unification() {
     crate::test_utils::init_test_tracing();
-    let _context = Context::new();
+    let _context = crate::test_utils::new_context();
     let mut mapped = CharsetRegistry::make_default(910, "neovm-mule-mapped");
     mapped.min_code = 33;
     mapped.max_code = 126;
@@ -108,7 +108,7 @@ fn prepared_mule_scalar_preserves_map_alias_and_unification() {
 #[test]
 fn prepared_mule_order_preserves_definition_chronology_through_restore() {
     crate::test_utils::init_test_tracing();
-    let _context = Context::new();
+    let _context = crate::test_utils::new_context();
     let older_name = intern("neovm-mule-older-supplementary");
     let newer_name = intern("neovm-mule-newer-ordinary");
     let ch = 0x1f300;

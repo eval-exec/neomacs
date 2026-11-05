@@ -28,6 +28,7 @@ fn with_run<'era, R>(
     run.close_cons_region().unwrap();
     result
 }
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn owner<'era>(era: &'era ParallelHeapEra<'_>, id: u64, budget: usize) -> Mutator<'era> {
     era.register(id, budget)
         .unwrap()

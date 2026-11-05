@@ -30,7 +30,7 @@ fn missing_installed_case_entries_are_identity() {
 #[test]
 fn target_policy_distinguishes_unibyte_strings_and_buffers() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let table = super::super::casetab::make_case_table_with_pair(304, 105);
     super::super::casetab::builtin_set_case_table(&mut ev, vec![table]).unwrap();
     let cases = CaseTableOverride::for_current_buffer(&mut ev).unwrap();

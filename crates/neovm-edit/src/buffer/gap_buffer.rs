@@ -379,6 +379,7 @@ impl GapBuffer {
     // Range extraction
     // -----------------------------------------------------------------------
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn text_emacs_byte_range(&self, range: EmacsByteRange) -> String {
         let start = range.start().get();
         let end = range.end().get();
@@ -540,6 +541,7 @@ impl GapBuffer {
         );
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn insert_measured_emacs_bytes(
         &mut self,
         pos: EmacsBytePos,

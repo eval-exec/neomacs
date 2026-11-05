@@ -10,8 +10,6 @@ use std::ffi::CStr;
 use strum::IntoStaticStr;
     use neovm_value::symbol::{SymbolRedirect, SymbolTrappedWrite};
     use neovm_value::emacs_char;
-    use neovm_value::emacs_char::string_char_advance;
-    use neovm_value::emacs_char::{MAX_CHAR, MAX_MULTIBYTE_LENGTH, char_string};
     use neovm_value::chartab::{builtin_char_table_subtype, ct_lookup_with_symbols, is_char_table};
     use neovm_value::emacs_char::{
         MAX_CHAR, MAX_MULTIBYTE_LENGTH, byte8_to_char, char_string, chars_in_multibyte,
@@ -36,7 +34,7 @@ use neovm_value::error::{expect_args, expect_max_args, expect_min_args};
 
 #[test]
 fn inhibited_buffer_changes_preserve_pending_mark_deactivation() {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str("(progn (set-buffer (get-buffer-create \"silent-selection\")) (insert \"abc\"))")
         .unwrap();
     // GNU insdel.c returns before setting deactivate-mark for every kind of
@@ -163,7 +161,7 @@ fn combine_after_change_still_updates_treesit_linecol_cache() {
     crate::test_utils::init_test_tracing();
     install_test_runtime();
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let current = eval
         .edit
         .buffers
@@ -200,7 +198,7 @@ fn combine_after_change_special_case_uses_gnu_symbol_identity() {
     crate::test_utils::init_test_tracing();
     install_test_runtime();
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let current = eval
         .edit
         .buffers
@@ -244,7 +242,7 @@ fn translate_region_accepts_real_char_table_translation_table() {
     crate::test_utils::init_test_tracing();
     install_test_runtime();
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let current = eval
         .edit
         .buffers
@@ -294,7 +292,7 @@ fn translate_region_keeps_point_char_position_when_char_grows() {
     // translation.  Point must keep its character position for every starting
     // point.
     for point_char in [1usize, 2, 3, 5] {
-        let mut eval = Context::new();
+        let mut eval = crate::test_utils::new_context();
         let current = eval
             .edit
             .buffers
@@ -353,7 +351,7 @@ fn translate_region_advances_point_by_char_delta_for_growing_vector() {
     install_test_runtime();
 
     for (point_char, expected_point) in [(1usize, 1i64), (2, 3), (3, 5), (5, 9)] {
-        let mut eval = Context::new();
+        let mut eval = crate::test_utils::new_context();
         let current = eval
             .edit
             .buffers
@@ -423,7 +421,7 @@ fn translate_region_clamps_point_inside_shrinking_multi_char_source() {
         (8, 3),
         (9, 3),
     ] {
-        let mut eval = Context::new();
+        let mut eval = crate::test_utils::new_context();
         let current = eval
             .edit
             .buffers
@@ -477,7 +475,7 @@ fn translate_region_clamps_point_inside_shrinking_multi_char_source() {
 #[test]
 fn buffer_substring_no_properties_reports_the_right_length_for_multibyte_text() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     // Mixed widths: ASCII, 2-byte, 3-byte and 4-byte characters.
     ev.eval_str(
         "(progn (set-buffer (get-buffer-create \"substr-probe\"))

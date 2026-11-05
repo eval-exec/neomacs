@@ -11,7 +11,7 @@ use neovm_value::tagged::gc::{CONS_BLOCK_CELLS, TaggedHeap, set_tagged_heap};
 
 #[test]
 fn gc_collection_epoch_string_pos_activation_discards_swept_source_entry() {
-    let mut context = Context::new();
+    let mut context = crate::test_utils::new_context();
     let heap_identity = context.tagged_heap.identity();
     let string = populate_cache(&mut context);
     let mut context = collect_with_uncovered_cache(context, string);
@@ -29,7 +29,7 @@ fn gc_collection_epoch_string_pos_activation_discards_swept_source_entry() {
 
 #[test]
 fn gc_collection_epoch_string_pos_root_scan_discards_swept_source_entry() {
-    let mut context = Context::new();
+    let mut context = crate::test_utils::new_context();
     let string = populate_cache(&mut context);
     let mut context = collect_with_uncovered_cache(context, string);
     assert!(neovm_value::tagged::gc::tagged_heap_is_current(
@@ -58,7 +58,7 @@ fn gc_collection_epoch_string_pos_root_scan_discards_swept_source_entry() {
 
 #[test]
 fn gc_collection_epoch_string_pos_thread_change_activation_invalidates_changed_layout() {
-    let mut context = Context::new();
+    let mut context = crate::test_utils::new_context();
     let string = populate_cache(&mut context);
     assert_eq!(
         string_char_to_byte(string, string.as_lisp_string().unwrap(), 1),
@@ -92,7 +92,7 @@ fn gc_collection_epoch_string_pos_thread_change_activation_invalidates_changed_l
 
 #[test]
 fn gc_collection_epoch_string_pos_same_thread_activation_keeps_warm_entry() {
-    let mut context = Context::new();
+    let mut context = crate::test_utils::new_context();
     let string = populate_cache(&mut context);
     let before = CACHE.with(Cell::get).unwrap();
     context.setup_thread_locals();
@@ -145,7 +145,7 @@ fn gc_collection_epoch_string_pos_partial_sweep_root_scan_discards_swept_entry()
 
 #[test]
 fn gc_collection_epoch_string_pos_exact_collections_keep_warm_entry() {
-    let mut context = Context::new();
+    let mut context = crate::test_utils::new_context();
     let string = populate_cache(&mut context);
     let before = CACHE.with(Cell::get).unwrap();
     for _ in 0..3 {
@@ -337,7 +337,7 @@ fn non_generational_context() -> Context {
     // SAFETY: nextest isolates this test process; configuration precedes
     // Context construction and every runtime worker or environment reader.
     unsafe { std::env::set_var("NEOVM_GC_GENERATIONAL", "0") };
-    let mut context = Context::new();
+    let mut context = crate::test_utils::new_context();
     context.gc_stress = false;
     assert!(!context.tagged_heap.generational_enabled());
     assert!(!context.gc_stress);

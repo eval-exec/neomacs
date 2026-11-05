@@ -74,6 +74,7 @@ impl Diff<'_> {
             Some(())
         }
     }
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn tick(&mut self) -> Option<()> {
         self.work = self.work.wrapping_add(1);
         if self.work % 1024 == 0 {

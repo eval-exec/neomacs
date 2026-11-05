@@ -199,6 +199,7 @@ pub trait EditHost {
     /// over the template only. M3c.
     fn signal_c_error(&self, message: neovm_value::errors::CErrorMessage<'_>) -> Flow;
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// The session's bookmark set (bookmark.el globals). The state is
     /// `WorldSlot`-owned on the host and does NOT move with the edit
     /// crate (STAGE3-ASSIGN WorldSlot rule, coordinated with jitcall

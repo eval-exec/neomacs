@@ -24,7 +24,7 @@ use neovm_edit::buffer::buffer::*;
 
 #[test]
 fn world_installation_reuses_the_existing_storage_allocation() {
-    let context = Context::new();
+    let context = crate::test_utils::new_context();
     assert!(matches!(
         context.edit.buffers.backing,
         BufferBacking::Leased { detached: None, .. }
@@ -44,7 +44,7 @@ fn world_installation_reuses_the_existing_storage_allocation() {
 
 #[test]
 fn installed_view_cannot_surrender_its_world_storage() {
-    let mut context = Context::new();
+    let mut context = crate::test_utils::new_context();
     let manager = std::mem::replace(&mut context.edit.buffers, BufferManager::new());
     let manager = manager
         .into_world_parts()
@@ -55,7 +55,7 @@ fn installed_view_cannot_surrender_its_world_storage() {
 
 #[test]
 fn escaped_runtime_manager_retains_its_world_after_context_drop() {
-    let mut context = Context::new();
+    let mut context = crate::test_utils::new_context();
     let manager = std::mem::replace(&mut context.edit.buffers, BufferManager::new());
     let expected_name = manager
         .current_buffer()
@@ -74,7 +74,7 @@ fn escaped_runtime_manager_retains_its_world_after_context_drop() {
 
 #[test]
 fn detached_clone_roots_keep_source_removed_values_alive() {
-    let mut context = Context::new();
+    let mut context = crate::test_utils::new_context();
     let payload = Value::vector(vec![Value::cons(Value::fixnum(73), Value::NIL)]);
     context
         .edit
@@ -115,7 +115,7 @@ fn detached_clone_roots_keep_source_removed_values_alive() {
 
 #[test]
 fn detached_clone_mutation_refreshes_its_explicit_root_publication() {
-    let mut context = Context::new();
+    let mut context = crate::test_utils::new_context();
     let mut clone = context.edit.buffers.clone();
     let old_payload = Value::cons(Value::fixnum(81), Value::NIL);
     clone
@@ -149,7 +149,7 @@ fn detached_clone_mutation_refreshes_its_explicit_root_publication() {
 
 #[test]
 fn owned_parts_adapter_rejects_both_runtime_and_detached_world_views() {
-    let mut context = Context::new();
+    let mut context = crate::test_utils::new_context();
     let detached = context.edit.buffers.clone();
     assert_eq!(
         OwnedBufferStorageParts::try_from(detached).unwrap_err(),
@@ -181,7 +181,7 @@ fn minimal_runtime_keeps_buffers_in_its_world_allocation() {
 
 #[test]
 fn cold_reset_retires_selection_and_preserves_the_storage_address() {
-    let mut context = Context::new();
+    let mut context = crate::test_utils::new_context();
     let pointer = context.edit.buffers.storage_ptr;
     let temporary = context.edit.buffers.create_buffer("*before-minimal-reset*");
     assert!(context.edit.buffers.switch_current(temporary));

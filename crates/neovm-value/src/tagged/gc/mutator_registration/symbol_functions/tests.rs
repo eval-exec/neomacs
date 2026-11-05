@@ -742,5 +742,8 @@ fn p3sym_c4_fmakunbound_unprepared_invalid_and_cleared_homes_refuse() {
     }
 }
 
+#[cfg(not(any(test, feature = "test-support")))]
 mod bytecode;
+#[cfg(any(test, feature = "test-support"))]
+pub mod bytecode;
 mod call;

@@ -29,7 +29,7 @@ use neovm_value::heap_types::{GnuDeclaredCharacterCount, GnuStringCharPos};
 
 #[test]
 fn signed_property_coordinate_is_retained_as_a_typed_diagnostic() {
-    let context = Context::new();
+    let context = crate::test_utils::new_context();
     let mut string = LispString::from_emacs_bytes_with_declared_chars(
         b"abcde".to_vec(),
         GnuDeclaredCharacterCount::try_from(1).expect("bounded metadata"),
@@ -60,7 +60,7 @@ fn signed_property_coordinate_is_retained_as_a_typed_diagnostic() {
 
 #[test]
 fn positive_property_coordinate_beyond_declared_bounds_is_also_rejected() {
-    let context = Context::new();
+    let context = crate::test_utils::new_context();
     let mut string = LispString::from_emacs_bytes_with_declared_chars(
         b"abcdefg".to_vec(),
         GnuDeclaredCharacterCount::try_from(1).expect("bounded metadata"),
@@ -84,7 +84,7 @@ fn positive_property_coordinate_beyond_declared_bounds_is_also_rejected() {
 
 #[test]
 fn ordinary_property_and_ignore_controls_have_no_coordinate_diagnostic() {
-    let context = Context::new();
+    let context = crate::test_utils::new_context();
     let mut string = LispString::from_utf8("abécd");
     with_intervals(&mut string, 5);
     let honoring = StringSyntaxPropByteRun::new(

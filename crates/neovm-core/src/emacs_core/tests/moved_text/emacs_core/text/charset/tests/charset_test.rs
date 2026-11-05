@@ -713,7 +713,7 @@ fn charset_registry_plist_values_survive_exact_gc_and_pdump_dump() {
     crate::test_utils::init_test_tracing();
     reset_charset_registry();
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let mut args = vec![Value::NIL; 17];
     args[0] = Value::symbol("charset-pdump-root-test");
@@ -737,7 +737,7 @@ fn charset_registry_plist_values_survive_exact_gc_and_pdump_dump() {
 #[test]
 fn find_charset_region_ascii_default() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
         let buf = eval
             .edit
@@ -756,7 +756,7 @@ fn find_charset_region_ascii_default() {
 #[test]
 fn find_charset_region_with_table() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
         let buf = eval
             .edit
@@ -777,7 +777,7 @@ fn find_charset_region_with_table() {
 #[test]
 fn find_charset_region_wrong_arg_count() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     assert!(builtin_find_charset_region(&mut eval, vec![Value::fixnum(1)]).is_err());
     assert!(
         builtin_find_charset_region(
@@ -791,7 +791,7 @@ fn find_charset_region_wrong_arg_count() {
 #[test]
 fn find_charset_region_eval_semantics() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
         let buf = eval
             .edit
@@ -823,7 +823,7 @@ fn find_charset_region_eval_semantics() {
 #[test]
 fn find_charset_region_eval_out_of_range_errors() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
         let buf = eval
             .edit
@@ -1264,7 +1264,7 @@ fn clear_charset_maps_wrong_arg_count() {
 #[test]
 fn charset_after_default_returns_unicode() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
         let buf = eval
             .edit
@@ -1283,7 +1283,7 @@ fn charset_after_default_returns_unicode() {
 #[test]
 fn charset_after_with_pos() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
         let buf = eval
             .edit
@@ -1299,14 +1299,14 @@ fn charset_after_with_pos() {
 #[test]
 fn charset_after_wrong_arg_count() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     assert!(builtin_charset_after(&mut eval, vec![Value::fixnum(1), Value::fixnum(2)]).is_err());
 }
 
 #[test]
 fn charset_after_eval_semantics() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
         let buf = eval
             .edit
@@ -1358,7 +1358,7 @@ fn charset_after_eval_semantics() {
 #[test]
 fn charset_after_respects_narrowed_end() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
         let buf = eval
             .edit

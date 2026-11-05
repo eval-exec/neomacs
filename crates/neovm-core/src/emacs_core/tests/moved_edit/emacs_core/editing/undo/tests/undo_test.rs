@@ -34,7 +34,7 @@ fn primitive_undo_is_lisp_only_like_gnu() {
 
     // Before any Lisp is loaded: `undo-boundary' answers (GNU has it in C),
     // `primitive-undo' does not (GNU has no C version).
-    let mut bare = Context::new();
+    let mut bare = crate::test_utils::new_context();
     assert_eq!(
         crate::emacs_core::print::print_value(&bare.eval_str("(fboundp 'undo-boundary)").unwrap()),
         "t"
@@ -215,7 +215,7 @@ fn primitive_undo_modtime_arm_compares_against_the_visited_file_like_gnu() {
 #[test]
 fn test_undo_boundary_no_args() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = builtin_undo_boundary(&mut eval, &vec![]);
     assert!(result.is_ok());
     assert!(result.unwrap().is_nil());
@@ -225,7 +225,7 @@ fn test_undo_boundary_no_args() {
 fn test_undo_boundary_eval_inserts_boundary_marker() {
     crate::test_utils::init_test_tracing();
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
         let buffer = eval
             .edit
@@ -244,7 +244,7 @@ fn test_undo_boundary_eval_inserts_boundary_marker() {
 #[test]
 fn test_undo_boundary_wrong_args() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = builtin_undo_boundary(&mut eval, &vec![Value::fixnum(1)]);
     assert!(result.is_err());
 }
@@ -420,7 +420,7 @@ fn undo_replays_the_recorded_entries_like_gnu() {
 #[test]
 fn first_change_marker_rearmed_after_set_modified_nil() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.eval_str("(insert \"0123456789\")").unwrap();
     eval.eval_str("(set-buffer-modified-p nil)").unwrap();
     eval.eval_str("(goto-char 3)").unwrap();
@@ -442,7 +442,7 @@ fn first_change_marker_rearmed_after_set_modified_nil() {
 #[test]
 fn first_change_marker_recorded_once_per_modified_run() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.eval_str("(insert \"0123456789\")").unwrap();
     eval.eval_str("(set-buffer-modified-p nil)").unwrap();
     eval.eval_str("(insert \"X\")").unwrap();
@@ -460,7 +460,7 @@ fn first_change_marker_recorded_once_per_modified_run() {
 #[test]
 fn first_change_marker_rearmed_on_each_clean_transition() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.eval_str("(insert \"0123456789\")").unwrap();
     eval.eval_str("(set-buffer-modified-p nil)").unwrap();
     eval.eval_str("(insert \"X\")").unwrap();
@@ -574,7 +574,7 @@ fn a_minibuffer_read_adds_no_undo_boundary_to_previously_changed_buffers() {
 #[test]
 fn first_change_marker_records_the_visited_file_modtime_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let unique = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("clock before epoch")
@@ -634,7 +634,7 @@ fn first_change_marker_records_the_visited_file_modtime_like_gnu() {
 #[test]
 fn first_change_in_an_indirect_buffer_records_its_base_buffers_modtime() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let form = r#"(let ((base (get-buffer-create "base-145")))
              (set-buffer base)
@@ -667,7 +667,7 @@ fn first_change_in_an_indirect_buffer_records_its_base_buffers_modtime() {
 #[test]
 fn a_visited_file_that_does_not_exist_records_minus_one() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let form = r#"(progn
              (condition-case nil
@@ -709,7 +709,7 @@ fn a_visited_file_that_does_not_exist_records_minus_one() {
 #[test]
 fn record_point_runs_before_the_first_change_sentinel_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let unique = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("clock before epoch")
@@ -836,7 +836,7 @@ fn auto_fill_typing_then_undo_takes_back_only_the_last_command_group() {
 #[test]
 fn undo_boundary_does_not_truncate_and_gc_does() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     undo_limit_fixture(&mut eval, "A", 1, 1, 10);
 
     // Ten `undo-boundary' calls with a 1-byte limit: GNU still has the whole
@@ -856,7 +856,7 @@ fn undo_boundary_does_not_truncate_and_gc_does() {
 #[test]
 fn gc_truncation_reads_each_buffers_own_undo_limit() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     undo_limit_fixture(&mut eval, "A", 1, 1, 10);
     eval.eval_str(
         r#"(progn
@@ -884,7 +884,7 @@ fn gc_truncation_reads_each_buffers_own_undo_limit() {
 #[test]
 fn gc_truncation_cuts_at_a_group_boundary() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     undo_limit_fixture(&mut eval, "B", 200, 1000, 10);
 
     eval.gc_collect_exact();
@@ -903,7 +903,7 @@ fn gc_truncation_cuts_at_a_group_boundary() {
 #[test]
 fn gc_truncation_always_keeps_the_most_recent_record() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.eval_str(
         r#"(progn
              (set-buffer (get-buffer-create "C"))
@@ -936,7 +936,7 @@ fn gc_truncation_always_keeps_the_most_recent_record() {
 #[test]
 fn gc_skips_a_buffer_unmodified_since_the_last_compaction() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     undo_limit_fixture(&mut eval, "D", 1, 1, 10);
     eval.gc_collect_exact();
     assert_eq!(undo_list_length(&mut eval, "D"), 2);
@@ -962,7 +962,7 @@ fn gc_skips_a_buffer_unmodified_since_the_last_compaction() {
 #[test]
 fn gc_consults_undo_outer_limit_function_with_the_buffer_current() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.eval_str(
         r#"(progn
              (set-buffer (get-buffer-create "E"))
@@ -1000,7 +1000,7 @@ fn gc_consults_undo_outer_limit_function_with_the_buffer_current() {
 #[test]
 fn nil_from_undo_outer_limit_function_falls_through_to_normal_truncation() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.eval_str(
         r#"(progn
              (set-buffer (get-buffer-create "D"))
@@ -1029,7 +1029,7 @@ fn nil_from_undo_outer_limit_function_falls_through_to_normal_truncation() {
 #[test]
 fn undo_outer_limit_without_a_function_does_nothing() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.eval_str(
         r#"(progn
              (set-buffer (get-buffer-create "E"))
@@ -1055,7 +1055,7 @@ fn undo_outer_limit_without_a_function_does_nothing() {
 #[test]
 fn gc_leaves_a_buffer_with_undo_disabled_alone() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.eval_str(
         r#"(progn
              (set-buffer (get-buffer-create "F"))
@@ -1077,7 +1077,7 @@ fn gc_leaves_a_buffer_with_undo_disabled_alone() {
 #[test]
 fn limits_lowered_by_undo_outer_limit_function_apply_to_the_same_pass() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.eval_str(
         r#"(progn
              (set-buffer (get-buffer-create "G"))
@@ -1117,7 +1117,7 @@ fn limits_lowered_by_undo_outer_limit_function_apply_to_the_same_pass() {
 #[test]
 fn limits_are_reread_from_whatever_buffer_the_outer_limit_function_left_current() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.eval_str(
         r#"(progn
              (set-buffer (get-buffer-create "H"))
@@ -1169,7 +1169,7 @@ fn undo_outer_limit_domain_matches_gnus_integer_guard() {
         ("float", "1.0", 0),
         ("small", "1", 1),
     ] {
-        let mut eval = Context::new();
+        let mut eval = crate::test_utils::new_context();
         eval.eval_str(&format!(
             r#"(progn
                  (set-buffer (get-buffer-create "{name}"))

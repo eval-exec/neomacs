@@ -14,7 +14,6 @@ use neovm_value::emacs_char::{GNU_DEFAULT_WIDE_RANGES, ZERO_WIDTH_RANGES};
     use std::borrow::Cow;
 use neovm_value::error::{EvalResult, signal};
     use neovm_text::emacs_core::coding::IsoFlag;
-    use neovm_text::emacs_core::charset::charset_encode_char;
     use neovm_text::emacs_core::charset::{charset_encode_char, charset_iso2022_designation};
     use neovm_text::emacs_core::charset::{
         charset_by_iso_final, charset_decode_char, charset_iso2022_designation,
@@ -72,7 +71,7 @@ fn coding_source_bytes_borrows_unibyte_payload_and_materializes_byte8() {
 #[test]
 fn builtin_string_bytes_counts_utf8_length() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let result = builtin_string_bytes_1(&mut ctx, Value::string("Aé中")).unwrap();
     assert_eq!(result, Value::fixnum(6));
 }
@@ -174,7 +173,7 @@ fn builtin_char_width_matches_oracle_control_and_bounds() {
 #[test]
 fn builtin_char_or_string_p_respects_character_bounds() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     assert_eq!(
         builtin_char_or_string_p_1(&mut ctx, Value::fixnum(0)).unwrap(),
         Value::T
@@ -452,7 +451,7 @@ fn decode_coding_string_extracts_multibyte_byte8_source_bytes_like_gnu() {
 #[test]
 fn encode_coding_string_buffer_destination_inserts_without_moving_point() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let dest = eval
         .edit
         .buffers
@@ -490,7 +489,7 @@ fn encode_coding_string_buffer_destination_inserts_without_moving_point() {
 #[test]
 fn decode_coding_string_buffer_destination_inserts_without_moving_point() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let dest = eval
         .edit
         .buffers
@@ -537,7 +536,7 @@ fn builtin_coding_string_helpers_accept_iso_8859_15_alias() {
 #[test]
 fn decode_iso_8859_15_attaches_its_source_charset_property() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let encoded = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![
         0xE9, 0xA4,
     ]));
@@ -632,7 +631,7 @@ fn encoding_utf16_gnu_compatible_signatures_and_endianness() {
 #[test]
 fn encode_coding_region_destination_t_returns_encoded_string() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let current = eval
         .edit
         .buffers
@@ -676,7 +675,7 @@ fn encode_coding_region_destination_t_returns_encoded_string() {
 #[test]
 fn decode_coding_region_replaces_current_region() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let current = eval
         .edit
         .buffers
@@ -721,7 +720,7 @@ fn decode_coding_region_into_unibyte_buffer_stores_internal_bytes() {
     // `tit-dic-convert` (LEIM generation) relies on this idiom:
     //   (set-buffer-multibyte nil) (decode-coding-region ...) (set-buffer-multibyte t)
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let current = eval
         .edit
         .buffers
@@ -797,7 +796,7 @@ fn multibyte_detection_treats_unibyte_storage_as_unibyte() {
 #[test]
 fn builtin_multibyte_string_p_matches_oracle_non_string_and_unibyte_storage() {
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     assert_eq!(
         builtin_multibyte_string_p_1(&mut ctx, Value::string("abc")).unwrap(),
         Value::NIL
@@ -850,7 +849,7 @@ fn builtin_unibyte_string_p_errors() {
 fn undecided_decode_uses_the_shared_iso_2022_detector() {
     crate::test_utils::init_test_tracing();
     register_test_jis();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     neovm_text::emacs_core::coding::builtin_define_coding_system_internal(
         &mut eval.coding_systems,
         vec![
@@ -902,7 +901,7 @@ fn ccl_coding_system_executes_registered_identity_program() {
     crate::test_utils::init_test_tracing();
     neovm_text::emacs_core::ccl::reset_ccl_registry();
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let program = Value::vector(
         [1, 5, 14, -249, -500, 22]
@@ -991,7 +990,7 @@ fn decode_sjis_attaches_charset_property() {
 #[test]
 fn encode_coding_region_charset_coding_matches_string_path() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     // GNU: 一 -> two eight-bit bytes 0xD2 0xBB, buffer-size 2 (was 0/dropped).
     assert_eq!(
         fmt_buf(
@@ -1016,7 +1015,7 @@ fn encode_coding_region_charset_coding_matches_string_path() {
 #[test]
 fn decode_coding_region_charset_coding_decodes_and_marks_charset() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     assert_eq!(
         crate::emacs_core::format_eval_result(&eval.eval_str(
             "(progn (set-buffer-multibyte nil) (insert #xd2 #xbb) (set-buffer-multibyte t)
@@ -1041,7 +1040,7 @@ fn decode_coding_region_charset_coding_decodes_and_marks_charset() {
 #[test]
 fn coding_region_restores_point_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     // Interior point (3) over the whole "abcd" region -> region START (1).
     assert_eq!(
         fmt_buf(
@@ -1083,7 +1082,7 @@ fn coding_region_restores_point_like_gnu() {
 #[test]
 fn coding_region_restores_point_for_partial_region() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     // Point before the [3,5) region -> unchanged (1).
     assert_eq!(
         fmt_buf(
@@ -1116,7 +1115,7 @@ fn coding_region_restores_point_for_partial_region() {
 #[test]
 fn last_coding_system_used_stores_passed_alias() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     // chinese-gbk's base is chinese-gbk itself in the bare manager; use an alias
     // that resolves to a different base to prove we keep the alias.  cp936 is an
     // alias of chinese-gbk; GNU stores `cp936`, not `chinese-gbk`.
@@ -2218,7 +2217,7 @@ fn fmt(eval: &mut crate::emacs_core::Context, src: &str) -> String {
     crate::emacs_core::format_eval_result(&eval.eval_str(src))
 }
 
-/// `Context::new()` is bare (no `with-temp-buffer`); seed the current buffer.
+/// `crate::test_utils::new_context()` is bare (no `with-temp-buffer`); seed the current buffer.
 fn fmt_buf(eval: &mut crate::emacs_core::Context, seed: &str, expr: &str) -> String {
     let src = format!("(progn (erase-buffer) (insert {seed}) {expr})");
     crate::emacs_core::format_eval_result(&eval.eval_str(&src))

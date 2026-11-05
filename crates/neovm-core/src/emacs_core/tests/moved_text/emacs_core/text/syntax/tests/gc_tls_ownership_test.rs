@@ -29,11 +29,11 @@ use neovm_text::emacs_core::syntax::*;
 #[test]
 fn gc_tls_ownership_syntax_new_heap_reset_drops_old_values() {
     {
-        let mut first = Context::new();
+        let mut first = crate::test_utils::new_context();
         let value = populate(&mut first);
         assert!(roots(&first).iter().any(|root| root.bits() == value.bits()));
     }
-    let mut next = Context::new();
+    let mut next = crate::test_utils::new_context();
     assert!(
         roots(&next)
             .iter()
@@ -46,8 +46,8 @@ fn gc_tls_ownership_syntax_new_heap_reset_drops_old_values() {
 
 #[test]
 fn gc_tls_ownership_syntax_excludes_another_live_heap() {
-    let mut first = Context::new();
-    let mut second = Context::new();
+    let mut first = crate::test_utils::new_context();
+    let mut second = crate::test_utils::new_context();
     let value = populate(&mut second);
     assert!(
         roots(&second)
@@ -70,7 +70,7 @@ fn gc_tls_ownership_syntax_excludes_another_live_heap() {
 #[test]
 fn gc_tls_ownership_syntax_weak_ascii_keys_invalidate_before_heap_reuse() {
     let old_tick = {
-        let mut first = Context::new();
+        let mut first = crate::test_utils::new_context();
         let chartable = first.eval_str("(progn (set-syntax-table (copy-syntax-table)) (modify-syntax-entry ?a \".\") (syntax-table))").unwrap();
         let table = SyntaxTable { chartable };
         assert_eq!(
@@ -84,7 +84,7 @@ fn gc_tls_ownership_syntax_weak_ascii_keys_invalidate_before_heap_reuse() {
         first.gc_collect_exact();
         neovm_text::emacs_core::chartable::char_table_write_tick()
     };
-    let mut next = Context::new();
+    let mut next = crate::test_utils::new_context();
     assert_ne!(
         neovm_text::emacs_core::chartable::char_table_write_tick(),
         old_tick,

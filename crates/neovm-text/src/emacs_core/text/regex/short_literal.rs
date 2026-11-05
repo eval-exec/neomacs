@@ -97,6 +97,7 @@ impl Literal {
         })
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// GNU search.c's trivial_regexp_p/simple_search character comparison,
     /// bounded to the spans for which the SIMD prefilter is deliberately
     /// cold. Unsupported representations and backward search use the old

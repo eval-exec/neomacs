@@ -1068,7 +1068,7 @@ fn backward_list_crosses_an_elisp_string_holding_a_comment_char() {
 }
 
 fn ctx_with_buffer(text: &str) -> (Context, BufferId) {
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let id = ctx.buffer_manager_mut().create_buffer("t");
     {
         let buf = ctx.buffer_manager_mut().get_mut(id).expect("buffer");

@@ -27,7 +27,7 @@ use neovm_text::emacs_core::regex::*;
 #[test]
 fn declared_regex_keeps_negative_return_and_end_registers() {
     crate::test_utils::init_test_tracing();
-    let _context = Context::new();
+    let _context = crate::test_utils::new_context();
     neovm_value::string_pos_cache::reset_string_pos_cache();
     let source = neovm_value::value::Value::heap_string(declared_source());
     let string = source.as_lisp_string().expect("source");
@@ -71,7 +71,7 @@ fn declared_regex_keeps_negative_return_and_end_registers() {
 #[test]
 fn declared_regex_negative_start_is_not_a_participating_group() {
     crate::test_utils::init_test_tracing();
-    let _context = Context::new();
+    let _context = crate::test_utils::new_context();
     neovm_value::string_pos_cache::reset_string_pos_cache();
     let source = neovm_value::value::Value::heap_string(declared_source());
     let string = source.as_lisp_string().expect("source");

@@ -22,7 +22,10 @@ use super::{
 mod combined;
 mod functions;
 mod globals;
+#[cfg(not(any(test, feature = "test-support")))]
 mod intern;
+#[cfg(any(test, feature = "test-support"))]
+pub mod intern;
 use crate::emacs_core::builtins::maybe_resize_hash_table_for_insert;
 use crate::emacs_core::eval::Context;
 use crate::tagged::transport::SharedRoot;

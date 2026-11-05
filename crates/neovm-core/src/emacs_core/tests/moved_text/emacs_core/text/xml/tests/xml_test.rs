@@ -242,7 +242,7 @@ fn xml_entity_references_join_the_surrounding_text_node_like_libxml2() {
 }
 
 fn make_ctx() -> crate::emacs_core::eval::Context {
-    Context::new()
+    crate::test_utils::new_context()
 }
 
 /// Build `(html nil CHILDREN...)`.

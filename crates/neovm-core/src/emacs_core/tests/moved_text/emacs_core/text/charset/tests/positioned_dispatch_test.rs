@@ -14,7 +14,7 @@ use neovm_text::emacs_core::charset::prepared_mule::CharsetEncoder;
 use neovm_value::heap_registry::{HeapRegistryHandle, HeapRegistrySlot};
     use neovm_value::emacs_char;
 
-use neovm_text::emacs_core::{eval::Context, print::print_value};
+use crate::emacs_core::{eval::Context, print::print_value};
 
 #[test]
 fn positioned_charset_dispatch_priority() {
@@ -90,7 +90,7 @@ fn positioned_charset_dispatch_alias() {
 }
 
 fn answer(source: &str) -> String {
-    let mut context = Context::new();
+    let mut context = crate::test_utils::new_context();
     print_value(
         &context
             .eval_str(source)

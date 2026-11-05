@@ -39,7 +39,7 @@ fn builtin_markerp_works() {
 #[test]
 fn builtin_marker_position_returns_position() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let buffer_id = eval
         .edit
         .buffers
@@ -66,7 +66,7 @@ fn builtin_marker_position_returns_nil_when_unset() {
 #[test]
 fn builtin_marker_buffer_returns_live_buffer() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let buffer_id = eval
         .edit
         .buffers
@@ -90,7 +90,7 @@ fn builtin_marker_insertion_type_roundtrip() {
 #[test]
 fn builtin_copy_marker_from_marker() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let buffer_id = eval
         .edit
         .buffers
@@ -125,7 +125,7 @@ fn builtin_copy_marker_from_integer() {
 #[test]
 fn builtin_copy_marker_from_integer_clips_like_set_marker() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.edit
         .buffers
         .current_buffer_mut()
@@ -163,7 +163,7 @@ fn wrong_type_signals_error() {
 #[test]
 fn marker_accessors_require_zero_arguments() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     assert!(builtin_point_marker_in_buffers(&mut eval.edit.buffers, vec![Value::NIL]).is_err());
     assert!(builtin_point_min_marker_in_buffers(&mut eval.edit.buffers, vec![Value::NIL]).is_err());
@@ -174,7 +174,7 @@ fn marker_accessors_require_zero_arguments() {
 #[test]
 fn numeric_comparisons_use_live_marker_positions() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = eval
         .eval_str(
             r#"(insert "abcdef\n123456\n")
@@ -196,7 +196,7 @@ fn numeric_comparisons_use_live_marker_positions() {
 #[test]
 fn point_min_and_max_markers_follow_narrowing() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let buf_id = eval
         .edit
         .buffers
@@ -226,7 +226,7 @@ fn point_min_and_max_markers_follow_narrowing() {
 #[test]
 fn mark_marker_follows_cached_mark_char_position() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let buf_id = eval
         .edit
         .buffers
@@ -254,7 +254,7 @@ fn mark_marker_with_no_mark_returns_detached() {
     // invariant by checking that both `(marker-buffer ...)` and
     // `(marker-position ...)` report nil.
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     // Don't set a mark; default buffer has no mark.
     let marker = builtin_mark_marker(&mut eval.edit.buffers, vec![]).expect("mark-marker");
     assert!(
@@ -270,7 +270,7 @@ fn mark_marker_with_no_mark_returns_detached() {
 #[test]
 fn copy_marker_from_integer_tracks_insertions_before_it() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = eval
         .eval_str(
             r#"(insert "abc")
@@ -290,7 +290,7 @@ fn copy_marker_from_integer_tracks_insertions_before_it() {
 #[test]
 fn set_marker_uses_live_source_marker_position_after_insertions() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = eval
         .eval_str(
             r#"(insert "abc")
@@ -326,7 +326,7 @@ fn set_marker_uses_live_source_marker_position_after_insertions() {
 fn set_marker_within_the_same_buffer_leaves_the_marker_chain_alone() {
     crate::test_utils::init_test_tracing();
     MARKER_TEST_CTX.with(|slot| {
-        let mut ctx = Box::new(Context::new());
+        let mut ctx = Box::new(crate::test_utils::new_context());
         let buffer_id = ctx.edit.buffers.create_buffer("marker-chain-order");
         assert!(ctx.edit.buffers.switch_current(buffer_id));
         ctx.edit
@@ -467,7 +467,7 @@ thread_local! {
 
 fn call_marker_position(args: Vec<Value>) -> EvalResult {
     MARKER_TEST_CTX.with(|slot| {
-        let mut ctx = Box::new(Context::new());
+        let mut ctx = Box::new(crate::test_utils::new_context());
         let result = builtin_marker_position_in_buffers(&ctx.edit.buffers, &args);
         *slot.borrow_mut() = Some(ctx);
         result
@@ -476,7 +476,7 @@ fn call_marker_position(args: Vec<Value>) -> EvalResult {
 
 fn call_marker_buffer(args: Vec<Value>) -> EvalResult {
     MARKER_TEST_CTX.with(|slot| {
-        let mut ctx = Box::new(Context::new());
+        let mut ctx = Box::new(crate::test_utils::new_context());
         let result = builtin_marker_buffer_in_buffers(&ctx.edit.buffers, &args);
         *slot.borrow_mut() = Some(ctx);
         result
@@ -485,7 +485,7 @@ fn call_marker_buffer(args: Vec<Value>) -> EvalResult {
 
 fn call_set_marker_insertion_type(args: Vec<Value>) -> EvalResult {
     MARKER_TEST_CTX.with(|slot| {
-        let mut ctx = Box::new(Context::new());
+        let mut ctx = Box::new(crate::test_utils::new_context());
         let result = builtin_set_marker_insertion_type_in_buffers(&mut ctx.edit.buffers, args);
         *slot.borrow_mut() = Some(ctx);
         result
@@ -494,7 +494,7 @@ fn call_set_marker_insertion_type(args: Vec<Value>) -> EvalResult {
 
 fn call_copy_marker(args: Vec<Value>) -> EvalResult {
     MARKER_TEST_CTX.with(|slot| {
-        let mut ctx = Box::new(Context::new());
+        let mut ctx = Box::new(crate::test_utils::new_context());
         let result = builtin_copy_marker_in_buffers(&mut ctx.edit.buffers, &args);
         *slot.borrow_mut() = Some(ctx);
         result

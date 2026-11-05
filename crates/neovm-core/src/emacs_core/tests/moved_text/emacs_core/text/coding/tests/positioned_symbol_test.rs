@@ -24,7 +24,7 @@ use neovm_value::error::FlowKind;
 
 #[test]
 fn positioned_coding_predicate_and_check_preserve_policy_and_operand() {
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let coding = positioned(&mut ctx, "utf-8-unix");
     for mode in [SymbolMode::Bare, SymbolMode::Positioned] {
         assert_eq!(
@@ -57,7 +57,7 @@ fn positioned_coding_predicate_and_check_preserve_policy_and_operand() {
 
 #[test]
 fn positioned_coding_metadata_cache_never_bypasses_disabled_symbol_checks() {
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let coding = positioned(&mut ctx, "utf-8-unix");
     let bare = Value::symbol("utf-8-unix");
     for operation in [
@@ -99,7 +99,7 @@ fn positioned_coding_metadata_cache_never_bypasses_disabled_symbol_checks() {
 
 #[test]
 fn positioned_coding_property_keys_and_hook_values_honor_mode() {
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let coding = positioned(&mut ctx, "utf-8-unix");
     let property = positioned(&mut ctx, ":post-read-conversion");
     let hook = positioned(&mut ctx, "issue-554-hook");
@@ -157,7 +157,7 @@ fn positioned_coding_property_keys_and_hook_values_honor_mode() {
 
 #[test]
 fn positioned_coding_definition_resolves_nested_symbol_inputs() {
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let name = positioned(&mut ctx, "issue-554-defined");
     let coding_type = positioned(&mut ctx, "utf-8");
     let charset = positioned(&mut ctx, "ascii");
@@ -219,7 +219,7 @@ fn positioned_coding_definition_resolves_nested_symbol_inputs() {
 
 #[test]
 fn positioned_coding_alias_priority_and_terminal_setters_honor_mode() {
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let alias = positioned(&mut ctx, "issue-554-alias");
     let coding = positioned(&mut ctx, "utf-8-unix");
     builtin_define_coding_system_alias(
@@ -282,7 +282,7 @@ fn positioned_coding_alias_priority_and_terminal_setters_honor_mode() {
 
 #[test]
 fn positioned_coding_region_list_and_eol_helper_honor_mode() {
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let coding = positioned(&mut ctx, "us-ascii");
     let source = Value::string("é");
     let args = vec![source, Value::NIL, Value::list(vec![coding])];
@@ -306,7 +306,7 @@ fn positioned_coding_region_list_and_eol_helper_honor_mode() {
 
 #[test]
 fn positioned_coding_iso_descriptors_and_quoting_style_honor_mode() {
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let charset = positioned(&mut ctx, "ascii");
     let mut info = CodingSystemInfo::new("issue-554-iso", "iso-2022", 'I', EolType::Unix);
     info.int_properties.insert(

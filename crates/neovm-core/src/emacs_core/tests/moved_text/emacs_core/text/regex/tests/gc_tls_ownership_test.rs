@@ -25,7 +25,7 @@ use neovm_value::value::Value;
 
 #[test]
 fn gc_tls_ownership_regex_compiled_translation_keeps_its_table_alive() {
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let payload = ctx.eval_str("(make-hash-table)").unwrap();
     let table = neovm_text::emacs_core::chartable::make_char_table_value(Value::NIL, payload);
     let pattern = LispString::from_utf8("gc-tls-translation-pattern");
@@ -55,7 +55,7 @@ fn gc_tls_ownership_regex_compiled_translation_keeps_its_table_alive() {
 #[test]
 fn gc_tls_ownership_regex_new_heap_discards_old_compiled_tables() {
     {
-        let _first = Context::new();
+        let _first = crate::test_utils::new_context();
         let table =
             neovm_text::emacs_core::chartable::make_char_table_value(Value::NIL, Value::NIL);
         compile_lisp_pattern_with_posix_translation(
@@ -69,7 +69,7 @@ fn gc_tls_ownership_regex_new_heap_discards_old_compiled_tables() {
         .unwrap();
         assert!(LISP_REGEX_PATTERN_CACHE.with(|cache| !cache.borrow().is_empty()));
     }
-    let mut next = Context::new();
+    let mut next = crate::test_utils::new_context();
     assert!(
         LISP_REGEX_PATTERN_CACHE.with(|cache| cache.borrow().is_empty()),
         "compiled regexp cache retained a translator from a dropped heap"
@@ -79,7 +79,7 @@ fn gc_tls_ownership_regex_new_heap_discards_old_compiled_tables() {
 
 #[test]
 fn gc_tls_ownership_regex_literal_translation_keeps_its_table_alive() {
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let custom = Value::make_char_table(Value::symbol("case-table"), Value::NIL, 3);
     neovm_text::emacs_core::chartable::builtin_set_char_table_range(
         vec![
@@ -127,7 +127,7 @@ enum SyntaxCacheOwner {
 }
 
 fn assert_cached_syntax_table_lives(owner: SyntaxCacheOwner) {
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let table = ctx
         .eval_str("(progn (set-syntax-table (copy-syntax-table)) (syntax-table))")
         .unwrap();

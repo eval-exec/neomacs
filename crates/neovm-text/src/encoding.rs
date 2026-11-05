@@ -927,6 +927,7 @@ enum SingleByteCharset {
 }
 
 impl SingleByteCharset {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn for_coding_system(coding_system: &str) -> Option<Self> {
         match coding_system_family(coding_system) {
             "latin-1" | "iso-8859-1" | "iso-latin-1" => Some(Self::Iso8859_1),
@@ -1572,6 +1573,7 @@ pub fn glyphless_char_display(c: char) -> String {
 
 use neovm_value::error::{EvalResult, signal};
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn known_coding_system(name: &str) -> bool {
     crate::emacs_core::coding::CodingSystemManager::new().is_known_or_derived(name)
 }

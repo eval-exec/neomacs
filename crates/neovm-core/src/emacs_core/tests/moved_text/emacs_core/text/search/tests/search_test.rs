@@ -32,7 +32,7 @@ use std::cell::RefCell;
 #[test]
 fn buffer_replace_match_backref_does_not_copy_source_properties() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let result = ev
         .eval_str(
             r#"(progn
@@ -67,7 +67,7 @@ fn buffer_replace_match_rejects_backslash_question_but_string_path_allows_it() {
     crate::test_utils::init_test_tracing();
 
     // Buffer path: `\?' must signal `error' "Invalid use of `\\' in replacement text".
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let err = ev
         .eval_str(
             r#"(progn
@@ -93,7 +93,7 @@ fn buffer_replace_match_rejects_backslash_question_but_string_path_allows_it() {
     );
 
     // Buffer path: other escapes still resolve normally.
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let ok = ev
         .eval_str(
             r#"(progn
@@ -119,7 +119,7 @@ fn buffer_replace_match_rejects_backslash_question_but_string_path_allows_it() {
 #[test]
 fn replace_match_buffer_replacement_leaves_point_at_replacement_end() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let result = ev
         .eval_str(
             r#"(progn
@@ -144,7 +144,7 @@ fn replace_match_buffer_replacement_leaves_point_at_replacement_end() {
 #[test]
 fn replace_match_preserves_raw_nil_boundaries_for_later_properties() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let result = ev
         .eval_str(
             r#"(progn
@@ -167,7 +167,7 @@ fn replace_match_preserves_raw_nil_boundaries_for_later_properties() {
 #[test]
 fn replace_match_after_change_end_uses_replacement_length() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let result = ev
         .eval_str(
             r#"(progn
@@ -197,7 +197,7 @@ SCHEDULED: <2026-05-27 Wed>
 #[test]
 fn replace_match_after_change_uses_restored_integer_match_positions() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let result = ev
         .eval_str(
             r#"(progn
@@ -227,7 +227,7 @@ fn replace_match_after_change_uses_restored_integer_match_positions() {
 #[test]
 fn set_match_data_without_buffer_restores_string_match_positions() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let result = ev
         .eval_str(
             r#"(progn
@@ -241,7 +241,7 @@ fn set_match_data_without_buffer_restores_string_match_positions() {
 #[test]
 fn save_match_data_preserves_string_match_positions_for_replace_match() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let result = ev
         .eval_str(
             r#"(progn
@@ -259,7 +259,7 @@ fn save_match_data_preserves_string_match_positions_for_replace_match() {
 #[test]
 fn replace_match_after_change_reports_multibyte_char_positions() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let result = ev
         .eval_str(
             r#"(progn
@@ -328,7 +328,7 @@ fn string_match_defaults_to_case_fold() {
 #[test]
 fn string_match_with_inhibit_modify_answers_without_touching_match_data() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let result = ev.eval_str(
         r#"(list (string-match "x\\([0-9]+\\)" "x42")
                      (match-data)
@@ -364,7 +364,7 @@ fn string_match_accepts_start_on_raw_unibyte_haystack() {
 #[test]
 fn match_string_preserves_raw_unibyte_bytes_with_explicit_string() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let pattern = Value::heap_string(LispString::from_unibyte(vec![0xFF]));
     let haystack = Value::heap_string(LispString::from_unibyte(vec![0x80, 0xFF, 0x81]));
     let matched = builtin_string_match(&mut eval, vec![pattern, haystack]).unwrap();
@@ -381,7 +381,7 @@ fn match_string_preserves_raw_unibyte_bytes_with_explicit_string() {
 #[test]
 fn explicit_string_match_uses_public_register_positions_after_buffer_search() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let buffer_id = eval
         .edit
         .buffers
@@ -421,7 +421,7 @@ fn explicit_string_match_uses_public_register_positions_after_buffer_search() {
 #[test]
 fn translated_buffer_match_data_expands_backrefs_in_explicit_string() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let buffer_id = eval
         .edit
         .buffers
@@ -510,7 +510,7 @@ fn regexp_quote_preserves_raw_unibyte_bytes() {
 #[test]
 fn match_data_nil_without_match_data() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     builtin_set_match_data(&mut eval, vec![Value::NIL]).unwrap();
     let result = builtin_match_data(&mut eval, vec![]);
     assert_nil(result.unwrap());
@@ -519,7 +519,7 @@ fn match_data_nil_without_match_data() {
 #[test]
 fn set_match_data_nil_clears_state() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     builtin_set_match_data(
         &mut eval,
         vec![Value::list(vec![Value::fixnum(1), Value::fixnum(2)])],
@@ -534,7 +534,7 @@ fn set_match_data_nil_clears_state() {
 #[test]
 fn set_match_data_round_trip() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     builtin_set_match_data(
         &mut eval,
         vec![Value::list(vec![
@@ -564,7 +564,7 @@ fn set_match_data_round_trip() {
 #[test]
 fn killed_buffer_match_data_uses_detached_markers_and_restores_zero() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let buffer_id = eval.edit.buffers.create_buffer("dead-core-match-data");
     eval.edit.buffers.set_current(buffer_id);
     eval.edit
@@ -607,7 +607,7 @@ fn killed_buffer_match_data_uses_detached_markers_and_restores_zero() {
 #[test]
 fn set_match_data_reseat_detaches_buffer_markers() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let buffer_id = eval.edit.buffers.create_buffer("match-data-reseat");
     eval.edit.buffers.set_current(buffer_id);
     eval.edit
@@ -639,7 +639,7 @@ fn set_match_data_reseat_detaches_buffer_markers() {
 #[test]
 fn match_data_destructively_fills_reuse_list_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let buffer_id = eval.edit.buffers.create_buffer("match-data-reuse");
     eval.edit.buffers.set_current(buffer_id);
     eval.edit
@@ -679,7 +679,7 @@ fn match_data_destructively_fills_reuse_list_like_gnu() {
 #[test]
 fn match_data_reseat_reuse_markers_before_refill_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let buffer_id = eval.edit.buffers.create_buffer("match-data-reseat-reuse");
     eval.edit.buffers.set_current(buffer_id);
     eval.edit
@@ -1137,7 +1137,7 @@ fn replace_match_expands_an_ampersand_as_the_subexp_like_gnu() {
 
 fn call_string_match(args: Vec<Value>) -> EvalResult {
     SEARCH_TEST_CTX.with(|slot| {
-        let mut new_ctx = Box::new(Context::new());
+        let mut new_ctx = Box::new(crate::test_utils::new_context());
         let result = builtin_string_match(&mut new_ctx, args);
         *slot.borrow_mut() = Some(new_ctx);
         result
@@ -1146,7 +1146,7 @@ fn call_string_match(args: Vec<Value>) -> EvalResult {
 
 fn call_replace_regexp_in_string(args: Vec<Value>) -> EvalResult {
     SEARCH_TEST_CTX.with(|slot| {
-        let mut new_ctx = Box::new(Context::new());
+        let mut new_ctx = Box::new(crate::test_utils::new_context());
         let result = builtin_replace_regexp_in_string(&mut new_ctx, args);
         *slot.borrow_mut() = Some(new_ctx);
         result
@@ -1155,7 +1155,7 @@ fn call_replace_regexp_in_string(args: Vec<Value>) -> EvalResult {
 
 fn call_looking_at_in_buffer(pattern: Value, buffer_text: &str) -> EvalResult {
     SEARCH_TEST_CTX.with(|slot| {
-        let mut new_ctx = Box::new(Context::new());
+        let mut new_ctx = Box::new(crate::test_utils::new_context());
         {
             let buf = new_ctx
                 .edit

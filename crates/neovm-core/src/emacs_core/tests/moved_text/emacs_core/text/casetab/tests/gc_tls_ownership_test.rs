@@ -20,11 +20,11 @@ use neovm_text::emacs_core::casetab::*;
 #[test]
 fn gc_tls_ownership_casetab_new_heap_reset_drops_old_values() {
     {
-        let mut first = Context::new();
+        let mut first = crate::test_utils::new_context();
         let value = populate(&mut first);
         assert!(roots(&first).iter().any(|root| root.bits() == value.bits()));
     }
-    let mut next = Context::new();
+    let mut next = crate::test_utils::new_context();
     assert!(
         roots(&next)
             .iter()
@@ -37,8 +37,8 @@ fn gc_tls_ownership_casetab_new_heap_reset_drops_old_values() {
 
 #[test]
 fn gc_tls_ownership_casetab_excludes_another_live_heap() {
-    let mut first = Context::new();
-    let mut second = Context::new();
+    let mut first = crate::test_utils::new_context();
+    let mut second = crate::test_utils::new_context();
     let value = populate(&mut second);
     assert!(
         roots(&second)
@@ -60,7 +60,7 @@ fn gc_tls_ownership_casetab_excludes_another_live_heap() {
 
 #[test]
 fn gc_tls_ownership_casetab_activation_preserves_explicit_cache_semantics() {
-    let mut first = Context::new();
+    let mut first = crate::test_utils::new_context();
     let standard = builtin_standard_case_table(&mut first, vec![]).unwrap();
     builtin_set_case_table(&mut first, vec![standard]).unwrap();
     let canon = buffer_case_canon_table(first.edit.buffers.current_buffer().unwrap()).unwrap();
@@ -74,7 +74,7 @@ fn gc_tls_ownership_casetab_activation_preserves_explicit_cache_semantics() {
     );
     builtin_set_standard_case_table(&mut first, vec![standard]).unwrap();
     assert!(buffer_case_canon_table(first.edit.buffers.current_buffer().unwrap()).is_none());
-    let _second = Context::new();
+    let _second = crate::test_utils::new_context();
     first.setup_thread_locals();
     assert!(
         buffer_case_canon_table(first.edit.buffers.current_buffer().unwrap()).is_none(),

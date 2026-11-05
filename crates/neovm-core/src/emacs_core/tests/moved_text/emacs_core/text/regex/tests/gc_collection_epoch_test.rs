@@ -91,7 +91,7 @@ fn gc_collection_epoch_regex_enumeration_discards_swept_literal_translation() {
 
 #[test]
 fn gc_collection_epoch_regex_same_thread_exact_keeps_warm_entries() {
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     ctx.gc_collect_exact();
     ctx.setup_thread_locals();
     let warm = WarmRegexCaches::new(&mut ctx);
@@ -178,7 +178,7 @@ fn non_generational_context() -> Context {
     // SAFETY: nextest isolates this test process; configuration precedes
     // Context construction and every runtime worker or environment reader.
     unsafe { std::env::set_var("NEOVM_GC_GENERATIONAL", "0") };
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     ctx.gc_stress = false;
     assert!(!ctx.tagged_heap.generational_enabled());
     assert!(!ctx.gc_stress);
@@ -188,7 +188,7 @@ fn non_generational_context() -> Context {
 fn assert_uncovered_cache_discards_swept_roots(owner: CacheOwner, synchronize_at: SynchronizeAt) {
     // Keep the owner-local cache outside TLS during collection, then restore
     // its stale coverage metadata without moving the Context across threads.
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     // Build the cache fixture without safe-point collections of Rust locals.
     ctx.gc_inhibit_depth += 1;
     let identity = ctx.tagged_heap.identity();

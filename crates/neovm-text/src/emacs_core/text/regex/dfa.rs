@@ -467,6 +467,7 @@ impl Nfa {
         }
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// The epsilon closure of `items` at the text position `at`: the
     /// consuming positions it reaches, appended to `out` (unsorted, no
     /// duplicates), and whether it reaches the end of the pattern (a match
@@ -635,6 +636,7 @@ impl Facts {
     /// No character: the position is the start of the text (only ever a
     /// PREVIOUS-character fact).
     pub(crate) const EDGE: Self = Self(1 << 0);
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// The character is a newline (`^` after it, `$` before it).
     pub(crate) const NEWLINE: Self = Self(1 << 1);
     /// Word syntax (`\b \B \< \>`).
@@ -724,6 +726,7 @@ impl std::ops::BitOr for Facts {
 }
 
 impl Nfa {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// The character facts this pattern's assertions read.
     pub(crate) fn fact_mask(&self) -> Facts {
         let mut mask = Facts::empty();
@@ -944,6 +947,7 @@ pub(crate) struct ClassContext {
 }
 
 impl ClassContext {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// The context of a search with `syntax`, or `None` when the lookup's
     /// tables have no identity to key a cache by.
     pub(crate) fn of_search(
@@ -1628,6 +1632,7 @@ impl ExistenceDfa {
         accept
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// Can a match of `pattern` start at `p` and end by `stop`?  The same
     /// question the backtracker answers at the candidate, without registers.
     /// Inlined into the out-of-line [`DfaLease::candidate`]: a rejection the

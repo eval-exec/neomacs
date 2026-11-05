@@ -315,6 +315,7 @@ impl BackwardCommentEntryPolicy {
 }
 
 impl CommentEndEscapePolicy {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn for_context<H: TextHost>(ctx: &H) -> Self {
         if SyntaxStateVariable::CommentEndCanBeEscaped.enabled(ctx) {
             Self::EscapeQuotesEnder
@@ -3381,6 +3382,7 @@ pub enum SyntaxProperties<'a> {
 }
 
 impl<'a> SyntaxProperties<'a> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// Snapshot the property source for one scan. `honor` is the value of
     /// `parse-sexp-lookup-properties`, read (and any `syntax-propertize` run)
     /// by the caller before this point, since Lisp must not run afterwards.
@@ -5814,6 +5816,7 @@ thread_local! {
     pub(crate) static BACK_COMMENT_SAFE_BYPASS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) static BACK_COMMENT_SAFE_CHUNK_OVERRIDE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) static BACK_COMMENT_SAFE_STARTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     pub(crate) static BACK_COMMENT_SAFE_REPARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }

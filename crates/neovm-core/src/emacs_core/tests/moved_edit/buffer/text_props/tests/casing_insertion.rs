@@ -17,7 +17,7 @@ use neovm_edit::buffer::text_props::*;
 
 #[test]
 fn category_front_stickiness_respects_positioned_symbol_equality() {
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let roots = CasingPropertyRoots::new();
     let positioned_t = ctx
         .tagged_heap

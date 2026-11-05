@@ -2808,7 +2808,7 @@ fn state_markers_survive_gc_without_lisp_references() {
     // unmarked marker would be spliced out by unchain_dead_markers and freed,
     // leaving the state_markers struct pointing at freed memory.
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     // Create a base buffer with some text, then make an indirect buffer.
     // `create_indirect_buffer` is the code path that calls
@@ -2933,7 +2933,7 @@ fn buffer_mark_marker_survives_gc_without_lisp_reference() {
     // with Buffer::mark_marker_ptr; the raw pointer must be traced even
     // when no Lisp variable currently holds `(mark-marker)`.
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let buffer_id = eval
         .edit
         .buffers
@@ -2995,7 +2995,7 @@ fn mark_marker_object_survives_gc_before_any_mark_is_set() {
     // must root it even while it points nowhere, and it must stay the same
     // object so `(mark-marker)` identity is stable across GC.
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let first = neovm_edit::emacs_core::marker::builtin_mark_marker(&mut eval.edit.buffers, vec![])
         .expect("mark-marker");
     assert!(first.is_marker());
@@ -3246,7 +3246,7 @@ fn the_jit_buffer_walk_finds_what_current_buffer_finds() {
 
 #[test]
 fn buffer_property_overlay_and_symbol_roots_survive_collection_after_edits() {
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.eval_str(
         r#"(progn
         (setq gc-cons-threshold 100000000)

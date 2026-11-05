@@ -94,7 +94,7 @@ fn generational_context() -> Context {
         std::env::set_var("NEOVM_GC_MAJOR_GROWTH_PERCENT", usize::MAX.to_string());
     }
     crate::test_utils::init_test_tracing();
-    let mut context = Context::new();
+    let mut context = crate::test_utils::new_context();
     context.gc_stress = false;
     assert!(context.tagged_heap.generational_enabled());
     assert!(!context.gc_stress);

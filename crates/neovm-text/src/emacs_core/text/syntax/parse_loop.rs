@@ -106,6 +106,7 @@ pub(super) struct LoopTop<'a> {
 }
 
 impl LoopTop<'_> {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// The state here, for a mode that keeps it.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(super) fn to_state(&self) -> LoopState {

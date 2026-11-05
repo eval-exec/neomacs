@@ -286,6 +286,7 @@ enum CanonicalEmptyString {
 }
 
 impl CanonicalEmptyString {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn value(self) -> Option<TaggedValue> {
         match self {
             Self::Missing => None,
@@ -325,6 +326,7 @@ struct CanonicalEmptyStrings {
 }
 
 impl CanonicalEmptyStrings {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn slot(&self, kind: LispStringStorageKind) -> CanonicalEmptyString {
         match kind {
             LispStringStorageKind::Unibyte => self.unibyte,

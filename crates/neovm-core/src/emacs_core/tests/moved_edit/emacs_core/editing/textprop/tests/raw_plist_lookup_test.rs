@@ -19,7 +19,6 @@ use std::collections::{HashMap, HashSet};
 use strum::IntoStaticStr;
         use std::sync::OnceLock;
 
-use neovm_value::value::Value;
 use super::plist_get_value as get;
 
 use neovm_edit::emacs_core::{Value, eval::Context};
@@ -190,7 +189,7 @@ impl TwoPairs {
 
 fn context() -> Context {
     crate::test_utils::init_test_tracing();
-    Context::new()
+    crate::test_utils::new_context()
 }
 
 #[derive(Clone, Copy)]

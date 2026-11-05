@@ -12,6 +12,7 @@ use crate::emacs_core::eval::{
 };
 use crate::heap_types::LispString;
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn counters(promoted: usize, minors: usize, stress_cycles: usize) -> GenerationPacingCounters {
     GenerationPacingCounters {
         promoted_since_major: promoted,

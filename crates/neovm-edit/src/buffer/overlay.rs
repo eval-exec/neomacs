@@ -259,6 +259,7 @@ impl OverlayList {
         self.snapshot.get_mut().take();
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn index_mut(&mut self) -> &mut OverlayIndex {
         self.invalidate_snapshot();
         &mut self.index
@@ -845,6 +846,7 @@ impl OverlayList {
         }
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     #[cfg(test)]
     pub(crate) fn interval_index_height(&self) -> usize {
         self.index.interval_height()
@@ -1237,6 +1239,7 @@ impl OverlayList {
         active
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// Create a bounded monotonic property sweep for redisplay.
     ///
     /// Unlike an exact at-point extent query, this initializes active overlays

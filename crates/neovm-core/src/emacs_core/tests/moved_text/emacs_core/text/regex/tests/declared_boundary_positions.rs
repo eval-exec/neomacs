@@ -81,7 +81,7 @@ fn ordinary_symbol_boundaries_follow_gnu_lookup_order_and_short_circuit() {
 
 #[test]
 fn supplied_boundary_converts_current_once_before_previous_logical_lookup() {
-    let context = Context::new();
+    let context = crate::test_utils::new_context();
     let source = supplied(b"abcde");
     let base = BufferSyntaxLookup {
         syntax_table: SyntaxTable::for_buffer(
@@ -120,7 +120,7 @@ fn supplied_boundary_converts_current_once_before_previous_logical_lookup() {
 
 #[test]
 fn supplied_symbol_beginning_skips_invalid_previous_after_nonword_current() {
-    let context = Context::new();
+    let context = crate::test_utils::new_context();
     let source = supplied(b"abc!e");
     let base = BufferSyntaxLookup {
         syntax_table: SyntaxTable::for_buffer(

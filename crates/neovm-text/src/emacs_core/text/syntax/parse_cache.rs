@@ -189,6 +189,7 @@ pub(crate) struct SyntaxParseCache {
 }
 
 impl SyntaxParseCache {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// A coarse lookup using only numeric FROM positions. A matching run may
     /// still be invalid or have different options; a real lookup must drain
     /// mutation notes and validate the complete key before using any state.
@@ -291,6 +292,7 @@ fn ensure_forget_hook() {
 /// only costs the next lookups their hits: the cache never answers from a
 /// state it did not validate after the substrate's invalidation.
 pub(crate) trait BufferSyntaxParseCache {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// Run `f` with the cache and what changed since its last use.
     fn with_syntax_parse_cache<R>(
         &self,
@@ -481,6 +483,7 @@ pub(crate) fn parse_cache_mismatches() -> u64 {
     MISMATCHES.load(Ordering::Relaxed)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[cfg(test)]
 pub(crate) fn reset_parse_cache_stats() {
     STATS.with(|cell| cell.set(ParseCacheStats::default()));

@@ -31,7 +31,7 @@ use super::gc_collection_epoch_tests::UncoveredRegexCaches;
 
 #[test]
 fn gc_collection_epoch_literal_translation_discards_memo_before_address_reuse() {
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     // Build the cache fixture without safe-point collections of Rust locals.
     ctx.gc_inhibit_depth += 1;
     let old_case = Value::make_char_table(Value::symbol("case-table"), Value::NIL, 3);

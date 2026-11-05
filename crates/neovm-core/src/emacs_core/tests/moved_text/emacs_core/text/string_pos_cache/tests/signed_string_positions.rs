@@ -8,7 +8,7 @@ use neovm_value::string_pos_cache::*;
 
 #[test]
 fn cold_signed_cache_matches_gnu_initialized_ascii_arithmetic() {
-    let _context = Context::new();
+    let _context = crate::test_utils::new_context();
     let value = ascii_value(0);
     let string = value.as_lisp_string().expect("test string");
     for (byte, expected) in [(0, 0), (1, 1), (2, 2), (3, -2), (4, -1), (5, 0)] {
@@ -20,7 +20,7 @@ fn cold_signed_cache_matches_gnu_initialized_ascii_arithmetic() {
 
 #[test]
 fn negative_cached_anchor_survives_backward_and_forward_conversions() {
-    let _context = Context::new();
+    let _context = crate::test_utils::new_context();
     let value = ascii_value(0);
     let string = value.as_lisp_string().expect("test string");
     reset_string_pos_cache();
@@ -41,7 +41,7 @@ fn negative_cached_anchor_survives_backward_and_forward_conversions() {
 
 #[test]
 fn positive_cached_anchor_preserves_gnu_history_without_recounting() {
-    let _context = Context::new();
+    let _context = crate::test_utils::new_context();
     let value = ascii_value(2);
     let string = value.as_lisp_string().expect("test string");
     reset_string_pos_cache();
@@ -54,7 +54,7 @@ fn positive_cached_anchor_preserves_gnu_history_without_recounting() {
 
 #[test]
 fn ordinary_signed_cache_controls_preserve_unicode_and_unibyte_domains() {
-    let _context = Context::new();
+    let _context = crate::test_utils::new_context();
     for source in [
         LispString::from_utf8("abécd"),
         LispString::from_unibyte(vec![97, 233, 98]),

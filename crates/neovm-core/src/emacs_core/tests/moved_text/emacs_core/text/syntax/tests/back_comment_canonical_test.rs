@@ -42,7 +42,7 @@ fn canonical_back_comments_match_plain_scans_across_dialects() {
     for &dialect in DIALECTS {
         for escapable in [false, true] {
             for chunk in [1, 2, 3, 64] {
-                let mut eval = Context::new();
+                let mut eval = crate::test_utils::new_context();
                 install_table(&mut eval, dialect);
                 eval.eval_str("(make-local-variable 'comment-end-can-be-escaped)")
                     .expect("local escape policy");
@@ -83,7 +83,7 @@ fn repeated_back_comments_reuse_canonical_states_in_both_verify_modes() {
         Configuration::VerifyL1,
         Configuration::VerifyL2,
     ] {
-        let mut eval = Context::new();
+        let mut eval = crate::test_utils::new_context();
         install_table(&mut eval, Dialect::C);
         set_text(&mut eval, &format!("{}/* it's */", "a é ü ".repeat(300)));
         seed_canonical(&mut eval, 16);
@@ -133,7 +133,7 @@ fn canonical_back_comment_extension_preserves_segment_minima_for_adoption() {
         Configuration::VerifyL2,
     ] {
         for chunk in [1, 3, 16, 64] {
-            let mut eval = Context::new();
+            let mut eval = crate::test_utils::new_context();
             install_table(&mut eval, Dialect::C);
             modify(&mut eval, '(', "()");
             modify(&mut eval, ')', ")(");
@@ -254,7 +254,7 @@ fn canonical_back_comment_extension_preserves_segment_minima_for_adoption() {
 #[test]
 fn canonical_back_comment_cold_and_disabled_paths_preserve_the_legacy_index() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     install_table(&mut eval, Dialect::C);
     set_text(&mut eval, &format!("{}/* it's */", "a é ".repeat(80)));
     let (_, zv) = bounds(&eval);
@@ -306,7 +306,7 @@ fn canonical_back_comments_see_edits_properties_descriptors_and_narrowing() {
     crate::test_utils::init_test_tracing();
     for &mutation in MUTATIONS {
         for chunk in [1, 3, 64] {
-            let mut eval = Context::new();
+            let mut eval = crate::test_utils::new_context();
             install_table(&mut eval, Dialect::C);
             eval.eval_str("(setq parse-sexp-lookup-properties t)")
                 .expect("honor properties");
@@ -374,7 +374,7 @@ fn canonical_back_comments_bypass_unstamped_lisp_property_resolvers() {
         LispResolver::Alias,
         LispResolver::Default,
     ] {
-        let mut eval = Context::new();
+        let mut eval = crate::test_utils::new_context();
         install_table(&mut eval, Dialect::C);
         eval.eval_str("(setq parse-sexp-lookup-properties t)")
             .expect("honor properties");

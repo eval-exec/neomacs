@@ -1292,6 +1292,7 @@ impl LispValueVec {
     pub fn jit_slice_offsets() -> Option<(usize, usize)> {
         static OFFSETS: std::sync::OnceLock<Option<(usize, usize)>> = std::sync::OnceLock::new();
         *OFFSETS.get_or_init(|| {
+            #[cfg_attr(feature = "test-support", visibility::make(pub))]
             const WORD: usize = std::mem::size_of::<usize>();
             let words = std::mem::size_of::<LispValueVec>() / WORD;
             let read = |v: &LispValueVec| -> Vec<usize> {
@@ -2235,6 +2236,7 @@ pub struct ThreadObj {
 }
 
 impl ThreadObj {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn new(payload: crate::heap_types::threading::ThreadPayload) -> Self {
         Self {
             header: VecLikeHeader::new(VecLikeType::Thread),

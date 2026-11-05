@@ -71,6 +71,7 @@ struct OptionalEmacsByteRangeSnapshot {
 }
 
 impl OptionalEmacsByteRangeSnapshot {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn from_usize(start: Option<usize>, end: Option<usize>) -> Self {
         Self {
             start: start.map(EmacsBytePos::new),

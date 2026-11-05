@@ -424,6 +424,7 @@ pub(crate) fn collector_start_failures() -> u64 {
 }
 
 impl CollectorHandle {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     #[cold]
     fn start(heap: HeapIdentity, attempt: StartAttempt) -> Self {
         match Collector::spawn(heap) {

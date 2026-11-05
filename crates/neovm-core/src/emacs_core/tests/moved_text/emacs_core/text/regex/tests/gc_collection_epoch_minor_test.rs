@@ -165,7 +165,7 @@ fn generational_context() -> Context {
         std::env::set_var("NEOVM_GC_STRESS_MAJOR_EVERY", usize::MAX.to_string());
     }
     crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     ctx.gc_stress = false;
     ctx.with_gc_inhibited(|ctx| {
         ctx.eval_str(

@@ -74,7 +74,7 @@ fn production_expanding_casing_property_install_refuses_after_tick_restore_and_a
 #[test]
 fn production_property_write_refuses_numeric_tick_collision_after_ack() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     evaluator
         .eval_str("(erase-buffer) (insert \"abc\\n\")")
         .unwrap();
@@ -113,7 +113,7 @@ fn production_property_write_refuses_numeric_tick_collision_after_ack() {
 #[test]
 fn production_multibyte_mode_toggles_refuse_after_tick_restore_and_ack() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     evaluator
         .eval_str("(erase-buffer) (insert \"abc\\n\") (set-buffer-multibyte t)")
         .unwrap();
@@ -165,7 +165,7 @@ fn production_multibyte_mode_toggles_refuse_after_tick_restore_and_ack() {
 #[test]
 fn production_same_byte_transposition_with_distinct_property_runs_refuses() {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     evaluator
         .eval_str(
             "(erase-buffer) (insert \"abab\\n\") \
@@ -232,7 +232,7 @@ fn production_same_byte_transposition_with_distinct_property_runs_refuses() {
 
 fn production_text_edit_refuses_after_tick_restore_and_ack(setup: &str, edit: &str) {
     crate::test_utils::init_test_tracing();
-    let mut evaluator = Context::new();
+    let mut evaluator = crate::test_utils::new_context();
     evaluator
         .eval_str(setup)
         .expect("set up actual production source");

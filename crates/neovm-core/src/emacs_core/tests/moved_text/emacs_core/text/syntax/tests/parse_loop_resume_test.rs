@@ -34,7 +34,7 @@ fn a_scan_resumed_at_any_loop_top_answers_as_the_uninterrupted_scan() {
     for kind in 0..8 {
         for escapable in [false, true] {
             for honor in [false, true] {
-                let mut eval = Context::new();
+                let mut eval = crate::test_utils::new_context();
                 install_table(&mut eval, kind, &mut rng);
                 let buffer_id = eval
                     .edit

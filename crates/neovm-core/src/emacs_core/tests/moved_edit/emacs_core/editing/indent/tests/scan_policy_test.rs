@@ -354,7 +354,7 @@ fn a_new_scan_reacquires_the_edited_buffer_and_accessible_end() {
 }
 
 fn text_context(text: &str) -> (Context, BufferId) {
-    let mut context = Context::new();
+    let mut context = crate::test_utils::new_context();
     let buffer = context
         .edit
         .buffers

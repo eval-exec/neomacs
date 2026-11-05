@@ -252,7 +252,10 @@ fn binop_driver(a: Value, b: Value, dest: Value, op: BinOp) -> EvalResult {
 }
 
 // Definitions are private here; the old core paths retain their visibility.
+#[cfg(not(any(test, feature = "test-support")))]
 mod data;
+#[cfg(any(test, feature = "test-support"))]
+pub mod data;
 #[doc(hidden)]
 pub use data::BoolVectorView;
 #[doc(hidden)]

@@ -680,7 +680,7 @@ fn re_search_backward_finds_nullable_match_at_point() {
 #[test]
 fn re_search_backward_word_begin_respects_search_origin_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.eval_str("(progn (erase-buffer) (insert \"one two three\") (goto-char 9))")
         .expect("prepare public Lisp search fixture");
 
@@ -1496,7 +1496,7 @@ fn regex_bench_compile_cost() {
 #[cfg(feature = "perf-probes")]
 fn regex_bench_fontlock_elisp() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let hay = regex_bench_haystack();
     let kib = hay.len() as f64 / 1024.0;
     ev.eval_str(&format!(
@@ -1565,7 +1565,7 @@ fn regex_bench_fontlock_elisp() {
 #[cfg(feature = "perf-probes")]
 fn regex_bench_string_match_elisp() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let hay = regex_bench_haystack();
     ev.eval_str(&format!(
         "(progn (defvar regex-bench-big \"{}\") (defvar regex-bench-small (substring regex-bench-big 0 512)) nil)",
@@ -1743,7 +1743,7 @@ fn regex_fastmap_syntax_pattern_gates() {
 /// analog is the syntax mutation epoch in the cache key.
 #[test]
 fn regex_syntax_table_mutation_invalidates_cached_fastmap() {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str("(progn (insert \"===abc===\") nil)")
         .expect("insert");
     let probe = "(progn (goto-char (point-min)) \
@@ -1770,7 +1770,7 @@ fn regex_syntax_table_mutation_invalidates_cached_fastmap() {
 /// switches.
 #[test]
 fn regex_syntax_table_identity_keys_cached_fastmap() {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     // Build the modified table BEFORE any compile so the mutation epoch
     // is constant across all three probes — this isolates the identity
     // axis of the cache key.
@@ -1809,7 +1809,7 @@ fn regex_syntax_table_identity_keys_cached_fastmap() {
 /// (`search.c:matcher_overflow`), even under `noerror`.
 #[test]
 fn regex_fail_stack_overflow_signals_elisp_error() {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     ev.eval_str("(progn (insert (make-string 400000 ?a)) (goto-char (point-min)) nil)")
         .expect("insert haystack");
     // `noerror = t` must not swallow the overflow: GNU's
@@ -1837,7 +1837,7 @@ fn regex_fail_stack_overflow_signals_elisp_error() {
 /// gap out of the accessible range instead of copying it per call).
 #[test]
 fn regex_search_across_mid_buffer_gap() {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     // Insert text, then park the gap in the middle of "defun" via an
     // insert+delete at position 7.
     ev.eval_str(

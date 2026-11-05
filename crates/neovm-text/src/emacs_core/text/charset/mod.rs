@@ -457,6 +457,7 @@ impl CharsetRegistry {
         current
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn make_default(id: i64, name: &str) -> CharsetInfo {
         CharsetInfo {
             id,

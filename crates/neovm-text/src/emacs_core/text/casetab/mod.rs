@@ -325,6 +325,7 @@ fn make_standard_case_table_value() -> Value {
     down
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Build a custom case table equal to the standard ASCII table but with one
 /// extra uppercase/lowercase pair installed, exactly as Lisp's
 /// `(set-case-syntax-pair UC LC (copy-case-table (standard-case-table)))`

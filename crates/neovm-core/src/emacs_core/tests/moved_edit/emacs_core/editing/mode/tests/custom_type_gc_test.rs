@@ -5,7 +5,6 @@ use std::collections::HashMap;
 use neovm_value::intern::SymId;
 use neovm_value::intern::intern;
 
-use neovm_value::gc_trace::GcTrace;
 use super::{CustomType, CustomVariable, GcTrace, LispString, ModeRegistry, Value};
 
 use neovm_value::tagged::gc::TaggedHeap;

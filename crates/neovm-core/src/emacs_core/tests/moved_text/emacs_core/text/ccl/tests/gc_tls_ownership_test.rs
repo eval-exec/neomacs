@@ -21,11 +21,11 @@ use neovm_text::emacs_core::ccl::*;
 #[test]
 fn gc_tls_ownership_ccl_new_heap_reset_drops_old_values() {
     {
-        let mut first = Context::new();
+        let mut first = crate::test_utils::new_context();
         let value = populate(&mut first);
         assert!(roots(&first).iter().any(|root| root.bits() == value.bits()));
     }
-    let mut next = Context::new();
+    let mut next = crate::test_utils::new_context();
     assert!(
         roots(&next)
             .iter()
@@ -38,8 +38,8 @@ fn gc_tls_ownership_ccl_new_heap_reset_drops_old_values() {
 
 #[test]
 fn gc_tls_ownership_ccl_excludes_another_live_heap() {
-    let mut first = Context::new();
-    let mut second = Context::new();
+    let mut first = crate::test_utils::new_context();
+    let mut second = crate::test_utils::new_context();
     let value = populate(&mut second);
     assert!(
         roots(&second)
@@ -61,7 +61,7 @@ fn gc_tls_ownership_ccl_excludes_another_live_heap() {
 
 #[test]
 fn gc_tls_ownership_ccl_obarray_is_retracted_on_unwind() {
-    let first = Context::new();
+    let first = crate::test_utils::new_context();
     let before = CCL_VARIABLES.with(Cell::get);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         with_ccl_obarray(first.variables(), || panic!("unwind CCL callback"));
@@ -76,9 +76,9 @@ fn gc_tls_ownership_ccl_obarray_is_retracted_on_unwind() {
 
 #[test]
 fn gc_tls_ownership_ccl_registration_follows_context_activation() {
-    let mut first = Context::new();
+    let mut first = crate::test_utils::new_context();
     let program = populate(&mut first);
-    let second = Context::new();
+    let second = crate::test_utils::new_context();
     assert!(!is_registered_ccl_program(neovm_value::intern::intern(
         "gc-tls-owned-ccl"
     )));
@@ -102,7 +102,7 @@ fn gc_tls_ownership_ccl_registries_collect_on_independent_owner_threads() {
     let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
     let worker_barrier = std::sync::Arc::clone(&barrier);
     let worker = std::thread::spawn(move || {
-        let mut first = Context::new();
+        let mut first = crate::test_utils::new_context();
         let value = populate(&mut first);
         worker_barrier.wait();
         first.setup_thread_locals();
@@ -116,7 +116,7 @@ fn gc_tls_ownership_ccl_registries_collect_on_independent_owner_threads() {
     barrier.wait();
     // Each Context is created on its owner. Registry collection on one thread
     // must remain independent of activation and collection on the other.
-    let mut second = Context::new();
+    let mut second = crate::test_utils::new_context();
     populate(&mut second);
     second.gc_collect_exact();
     worker.join().unwrap();

@@ -848,6 +848,7 @@ impl<'a> JsonParser<'a> {
         self.depth -= 1;
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// Current byte (or None if at end).
     fn peek(&self) -> Option<u8> {
         self.input.get(self.pos).copied()

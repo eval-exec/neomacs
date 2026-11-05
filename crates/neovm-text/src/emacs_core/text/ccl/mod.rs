@@ -1347,6 +1347,7 @@ pub(crate) fn execute_compiled_ccl_with_symbols(
 // Pure builtins
 // ---------------------------------------------------------------------------
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// (ccl-program-p OBJECT) -> nil
 /// This accepts program objects that match the minimum CCL header shape used by Emacs.
 #[cfg(test)]
@@ -1588,6 +1589,7 @@ pub fn builtin_register_ccl_program_impl_with_symbols(
     Ok(Value::fixnum(program_id))
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// (register-code-conversion-map SYMBOL MAP) -> nil
 /// Stub: accepts and discards the code conversion map.
 #[cfg(test)]

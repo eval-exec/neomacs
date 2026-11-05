@@ -1,4 +1,3 @@
-use neovm_value::value::Value;
 use neovm_edit::emacs_core::edit_host::{EditHost, EditVariableRead};
 use neovm_value::error::LispCondition;
 use neovm_value::error::{EvalResult, Flow, signal};
@@ -123,7 +122,7 @@ fn gde_char_property_carrier_category_and_alias_precede_defaults() {
 }
 
 fn context_with_default_property(property: Value, default: Value) -> Context {
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.obarray.set_symbol_value(
         TextPropertyControlVariable::DefaultTextProperties.name(),
         Value::list(vec![property, default]),

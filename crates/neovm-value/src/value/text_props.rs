@@ -594,6 +594,7 @@ impl IntervalRun {
         self.range.start()
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn end(&self) -> CharPos0 {
         self.range.end()
     }

@@ -172,7 +172,7 @@ fn previous_property_change_steps_back_over_multibyte_char() {
 #[test]
 fn get_text_property_uses_category_symbol_identity() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = eval
         .eval_str(
             r#"(let ((cat (make-symbol "text-category")))
@@ -188,7 +188,7 @@ fn get_text_property_uses_category_symbol_identity() {
 #[test]
 fn propertize_copies_interval_plist_spines_like_gnu_copy_sequence() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = eval
         .eval_str(
             r##"(let* ((source (propertize "x" 'face 'old))
@@ -273,7 +273,7 @@ fn indirect_buffers_share_text_property_updates() {
 #[test]
 fn buffer_string_preserves_raw_default_interval_after_plain_replacement() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     let key = Value::string("C-u");
     let mut props = neovm_edit::buffer::text_props::TextPropertyTable::new();
@@ -326,7 +326,7 @@ fn buffer_string_preserves_raw_default_interval_after_plain_replacement() {
 #[test]
 fn plain_insert_splits_inserted_nil_interval_like_gnu_graft() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     builtin_insert(&mut eval, vec![Value::string("AAAAABBBBB")]).expect("insert base text");
     builtin_put_text_property(
@@ -389,7 +389,7 @@ fn plain_insert_splits_inserted_nil_interval_like_gnu_graft() {
 #[test]
 fn inheriting_insert_uses_predeclared_text_property_stickiness_identities() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
         let buf = eval
             .edit
@@ -860,7 +860,7 @@ fn get_pos_property_respects_overlay_advance_and_text_stickiness() {
 #[test]
 fn get_pos_property_on_string_delegates_to_text_property() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let string = Value::string("abcd");
     builtin_put_text_property(
         &mut eval,
@@ -885,7 +885,7 @@ fn get_pos_property_on_string_delegates_to_text_property() {
 #[test]
 fn string_multibyte_text_property_intervals_are_char_indexed() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let string = Value::string("éx");
 
     builtin_put_text_property(
@@ -936,7 +936,7 @@ fn buffer_multibyte_text_property_intervals_are_char_indexed() {
 #[test]
 fn string_text_properties_handle_raw_unibyte_storage() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let string = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![
         0xFF, b'A', 0x80, b'Z',
     ]));
@@ -964,7 +964,7 @@ fn string_text_properties_handle_raw_unibyte_storage() {
 #[test]
 fn string_property_change_navigation_handles_raw_unibyte_storage() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let string = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![
         0xFF, b'A', 0x80, b'Z',
     ]));
@@ -999,7 +999,7 @@ fn string_property_change_navigation_handles_raw_unibyte_storage() {
 #[test]
 fn next_single_char_property_change_on_raw_unibyte_string_uses_lisp_length() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let string = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![
         0xFF, b'A', 0x80, b'Z',
     ]));
@@ -1327,7 +1327,7 @@ fn set_text_properties_preserves_replacement_plist_order() {
 #[test]
 fn set_text_properties_preserves_string_replacement_plist_order() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let string = Value::string("abc");
 
     let props = Value::list(vec![
@@ -1355,7 +1355,7 @@ fn set_text_properties_preserves_string_replacement_plist_order() {
 #[test]
 fn set_text_properties_replaces_covered_string_intervals_with_one_run() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let string = Value::string("abcd");
 
     builtin_set_text_properties(
@@ -1767,7 +1767,7 @@ fn previous_single_property_change_from_interval_end_boundary() {
 #[test]
 fn previous_single_property_change_does_not_escape_narrowing() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = eval
         .eval_str(
             r#"(progn
@@ -1831,7 +1831,7 @@ fn text_property_any_not_found() {
 #[test]
 fn text_property_any_uses_live_marker_end_after_insertions() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = eval
         .eval_str(
             r#"(insert "abc")
@@ -2039,7 +2039,7 @@ fn overlay_get_absent_property() {
 #[test]
 fn overlay_get_uses_category_symbol_identity() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = eval
         .eval_str(
             r#"(let ((cat (make-symbol "overlay-category")))
@@ -2070,7 +2070,7 @@ fn overlayp_true() {
 #[test]
 fn overlayp_false() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = builtin_overlayp(&mut eval, &vec![Value::fixnum(42)]).unwrap();
     assert!(result.is_nil());
 }
@@ -2133,7 +2133,7 @@ fn overlays_at_unsorted_matches_gnu_same_start_itree_order() {
 #[test]
 fn move_overlay_end_only_preserves_gnu_equal_start_order() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = eval
         .eval_str(
             r#"(progn
@@ -2158,7 +2158,7 @@ fn move_overlay_end_only_preserves_gnu_equal_start_order() {
 #[test]
 fn insert_reorders_equal_start_front_advancing_overlays_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = eval
         .eval_str(
             r#"(progn
@@ -3045,7 +3045,7 @@ fn overlay_rear_advance() {
 #[test]
 fn text_property_on_empty_buffer() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     // Scratch buffer is empty.
     let result =
         builtin_get_text_property(&mut eval, vec![Value::fixnum(1), Value::symbol("face")]);
@@ -3055,7 +3055,7 @@ fn text_property_on_empty_buffer() {
 #[test]
 fn overlays_at_empty_buffer() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = builtin_overlays_at(&mut eval, vec![Value::fixnum(1)]).unwrap();
     assert!(result.is_nil());
 }
@@ -3387,7 +3387,7 @@ fn graft_at_boundary_rehomes_predecessor_so_held_plists_survive_undo() {
 
 /// Helper: create an evaluator with a buffer containing the given text.
 fn eval_with_text(text: &str) -> Context {
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.edit.buffers.current_buffer_mut().unwrap().insert(text);
     // Reset point to beginning.
     eval.edit
@@ -3401,7 +3401,7 @@ fn eval_with_text(text: &str) -> Context {
 /// Build an evaluator with a frame+window over a `*scratch*` buffer so that
 /// `(selected-window)` yields a live window Value backed by the current buffer.
 fn eval_with_frame_window() -> Context {
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let buf = eval.edit.buffers.create_buffer("*scratch*");
     eval.edit.buffers.set_current(buf);
     eval.frames.create_frame("F1", 800, 600, buf);

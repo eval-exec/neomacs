@@ -26,7 +26,7 @@ use neovm_value::value::{equal_value, get_string_text_properties_table_for_value
 #[test]
 fn compose_region_internal_min_args() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
         let buffer = eval
             .edit
@@ -43,7 +43,7 @@ fn compose_region_internal_min_args() {
 #[test]
 fn compose_region_internal_max_args() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
         let buffer = eval
             .edit
@@ -63,7 +63,7 @@ fn compose_region_internal_max_args() {
 #[test]
 fn compose_region_internal_sets_composition_property() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
         let buffer = eval
             .edit
@@ -95,7 +95,7 @@ fn compose_region_internal_sets_composition_property() {
 #[test]
 fn compose_region_internal_too_few_args() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = compose_region_internal(&mut eval, vec![Value::fixnum(1)]);
     assert!(result.is_err());
 }
@@ -103,7 +103,7 @@ fn compose_region_internal_too_few_args() {
 #[test]
 fn compose_region_internal_too_many_args() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = compose_region_internal(
         &mut eval,
         vec![
@@ -120,7 +120,7 @@ fn compose_region_internal_too_many_args() {
 #[test]
 fn compose_region_internal_rejects_non_integer_positions() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = compose_region_internal(&mut eval, vec![Value::symbol("x"), Value::fixnum(10)]);
     assert!(result.is_err());
     let result = compose_region_internal(&mut eval, vec![Value::fixnum(1), Value::symbol("y")]);
@@ -130,7 +130,7 @@ fn compose_region_internal_rejects_non_integer_positions() {
 #[test]
 fn compose_region_internal_eval_range_checks() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
         let buffer = eval
             .edit
@@ -149,7 +149,7 @@ fn compose_region_internal_eval_range_checks() {
 #[test]
 fn find_composition_internal_returns_nil_when_no_composition() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
         let buffer = eval
             .edit
@@ -172,7 +172,7 @@ fn find_composition_internal_returns_nil_when_no_composition() {
 #[test]
 fn find_composition_internal_finds_automatic_combining_sequence_in_string() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let current_buffer = eval
         .edit
         .buffers
@@ -231,7 +231,7 @@ fn find_composition_internal_finds_automatic_combining_sequence_in_string() {
 #[test]
 fn automatic_composition_spans_honor_rule_lookback_and_match_extent() {
     crate::test_utils::init_test_tracing();
-    let eval = Context::new();
+    let eval = crate::test_utils::new_context();
     let table = eval.visible_variable_value_or_nil("composition-function-table");
     let rule = Value::vector(vec![
         Value::string(r##"[ꦏ-ꦲ]ꦶ"##),
@@ -257,7 +257,7 @@ fn automatic_composition_spans_honor_rule_lookback_and_match_extent() {
 #[test]
 fn automatic_composition_spans_match_default_base_mark_category_rule() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let table = eval.visible_variable_value_or_nil("composition-function-table");
     let base_and_marks = Value::vector(vec![
         Value::string(r##"\c.\c^+"##),
@@ -314,7 +314,7 @@ fn automatic_composition_spans_match_default_base_mark_category_rule() {
 #[test]
 fn automatic_composition_spans_keep_tai_tham_syllable_whole() {
     crate::test_utils::init_test_tracing();
-    let eval = Context::new();
+    let eval = crate::test_utils::new_context();
     let table = eval.visible_variable_value_or_nil("composition-function-table");
     let rule = Value::vector(vec![
         Value::string(r##"[ᩈᩅ]\(\(ᩢ\|᩠ᩅ\)\)*᩠?"##),
@@ -340,7 +340,7 @@ fn automatic_composition_spans_keep_tai_tham_syllable_whole() {
 #[test]
 fn automatic_composition_spans_match_gnu_tai_tham_hello_samples() {
     crate::test_utils::init_test_tracing();
-    let eval = Context::new();
+    let eval = crate::test_utils::new_context();
     let table = eval.visible_variable_value_or_nil("composition-function-table");
     let consonant = r##"[ᨠ-ᩔ᪀-᪉᪐-᪙᪠-᪭]"##;
     let mark = r##"[̤͏้๊๋ᩕ-ᩗᩙ-ᩞᩡ-᩿᩼‌‍]"##;
@@ -431,7 +431,7 @@ fn automatic_composition_spans_use_loadup_tai_tham_rule() {
 #[test]
 fn find_composition_internal_reports_composed_region() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
         let buffer = eval
             .edit
@@ -491,7 +491,7 @@ fn find_composition_internal_reports_composed_region() {
 #[test]
 fn find_composition_internal_wrong_arity() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = find_composition_internal(&mut eval, vec![Value::fixnum(1)]);
     assert!(result.is_err());
 }
@@ -499,7 +499,7 @@ fn find_composition_internal_wrong_arity() {
 #[test]
 fn find_composition_internal_type_checks() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let bad_pos = find_composition_internal(
         &mut eval,
         vec![
@@ -527,7 +527,7 @@ fn find_composition_internal_type_checks() {
 #[test]
 fn find_composition_internal_position_range_checks() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let zero = find_composition_internal(
         &mut eval,
         vec![Value::fixnum(0), Value::NIL, Value::NIL, Value::NIL],
@@ -544,7 +544,7 @@ fn find_composition_internal_position_range_checks() {
 #[test]
 fn composition_get_gstring_returns_vector_shape() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = composition_get_gstring(
         &mut eval,
         vec![
@@ -566,7 +566,7 @@ fn composition_get_gstring_returns_vector_shape() {
 #[test]
 fn composition_get_gstring_glyphs_carry_gnu_from_to_indices() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = composition_get_gstring(
         &mut eval,
         vec![
@@ -599,7 +599,7 @@ fn composition_get_gstring_glyphs_carry_gnu_from_to_indices() {
 #[test]
 fn composition_get_gstring_uses_gnu_subarray_bounds() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = composition_get_gstring(
         &mut eval,
         vec![
@@ -621,7 +621,7 @@ fn composition_get_gstring_uses_gnu_subarray_bounds() {
 #[test]
 fn composition_get_gstring_nil_bounds_default_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = composition_get_gstring(
         &mut eval,
         vec![
@@ -647,7 +647,7 @@ fn composition_get_gstring_nil_bounds_default_like_gnu() {
 #[test]
 fn composition_get_gstring_rejects_non_ascii_unibyte_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let raw = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![
         0xFF,
     ]));
@@ -670,7 +670,7 @@ fn composition_get_gstring_rejects_non_ascii_unibyte_like_gnu() {
 #[test]
 fn composition_get_gstring_wrong_arity() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = composition_get_gstring(&mut eval, vec![Value::fixnum(0)]);
     assert!(result.is_err());
 }
@@ -678,7 +678,7 @@ fn composition_get_gstring_wrong_arity() {
 #[test]
 fn composition_get_gstring_type_checks() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let bad_from = composition_get_gstring(
         &mut eval,
         vec![
@@ -716,7 +716,7 @@ fn composition_get_gstring_type_checks() {
 #[test]
 fn composition_get_gstring_range_errors() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let from_gt_to = composition_get_gstring(
         &mut eval,
         vec![
@@ -743,7 +743,7 @@ fn composition_get_gstring_range_errors() {
 #[test]
 fn composition_get_gstring_nil_string_uses_current_buffer_region() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.edit
         .buffers
         .current_buffer_mut()
@@ -771,7 +771,7 @@ fn composition_get_gstring_nil_string_uses_current_buffer_region() {
 #[test]
 fn composition_get_gstring_nil_string_accepts_reversed_buffer_region() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.edit
         .buffers
         .current_buffer_mut()
@@ -799,7 +799,7 @@ fn composition_get_gstring_nil_string_accepts_reversed_buffer_region() {
 #[test]
 fn composition_get_gstring_nil_string_rejects_unibyte_buffer() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
         let buffer = eval
             .edit
@@ -834,7 +834,7 @@ fn composition_get_gstring_nil_string_rejects_unibyte_buffer() {
 #[test]
 fn compose_region_internal_swaps_out_of_order_bounds() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
         let buffer = eval
             .edit
@@ -872,7 +872,7 @@ fn compose_region_internal_swaps_out_of_order_bounds() {
 #[test]
 fn find_composition_internal_rejects_even_length_components() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     {
         let buffer = eval
             .edit
@@ -914,7 +914,7 @@ fn find_composition_internal_rejects_even_length_components() {
 #[test]
 fn find_composition_internal_rule_based_width_is_geometry() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     // Components as produced by `encode-composition-components` on
     // [?A (tc . bc) ?B (tc . bc) ?C]: (tc . bc) -> 1*12 + 7 = 19.
     let components = Value::vector(vec![
@@ -982,7 +982,7 @@ fn find_composition_internal_rule_based_width_is_geometry() {
 #[test]
 fn bounded_scan_finds_the_same_spans_as_the_whole_text_scan() {
     crate::test_utils::init_test_tracing();
-    let eval = Context::new();
+    let eval = crate::test_utils::new_context();
     let table = eval.visible_variable_value_or_nil("composition-function-table");
     let rule = Value::vector(vec![
         Value::string(r##"[ꦏ-ꦲ]ꦶ"##),
@@ -1025,7 +1025,7 @@ fn bounded_scan_finds_the_same_spans_as_the_whole_text_scan() {
 #[test]
 fn visible_scan_fast_path_matches_the_full_scan() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let table = eval.visible_variable_value_or_nil("composition-function-table");
     let javanese = Value::vector(vec![
         Value::string(r##"[ꦏ-ꦲ]ꦶ"##),

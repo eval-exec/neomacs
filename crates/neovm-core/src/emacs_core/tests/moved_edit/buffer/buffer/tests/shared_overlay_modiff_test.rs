@@ -158,7 +158,7 @@ fn shared_overlay_modiff_leaves_char_property_ticks_and_dirty_spans_unchanged() 
 
 fn fixture() -> (Context, BufferId, BufferId) {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let base = eval.edit.buffers.create_buffer("shared-overlay-base");
     eval.edit.buffers.set_current(base);
     eval.eval_str("(insert \"abcdef\\n\")").expect("base text");

@@ -91,6 +91,7 @@ impl ChunkEntry {
         self.0 & Self::CLASS_MASK == u32::from(class as u8)
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// The granule's class.
     #[inline(always)]
     pub(crate) fn class(self) -> ChunkClass {

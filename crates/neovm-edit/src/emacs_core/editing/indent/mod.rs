@@ -2402,6 +2402,7 @@ enum ControlRendering {
 }
 
 impl ControlRendering {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn width(self) -> usize {
         match self {
             Self::Caret => 2,

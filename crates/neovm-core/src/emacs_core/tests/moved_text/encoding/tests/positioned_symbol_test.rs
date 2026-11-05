@@ -6,7 +6,7 @@ use neovm_value::value::{Value, get_string_text_properties_for_value};
 
 use super::*;
 
-use neovm_text::emacs_core::{eval::Context, print::print_value};
+use crate::emacs_core::{eval::Context, print::print_value};
 
 use neovm_value::error::FlowKind;
 
@@ -14,7 +14,7 @@ use neovm_value::tagged::SymbolMode;
 
 #[test]
 fn issue554_positioned_pure_coding_fallbacks_honor_explicit_policy() {
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let coding = ctx
         .tagged_heap
         .alloc_symbol_with_pos(Value::symbol("utf-8-unix"), Value::fixnum(4));
@@ -60,7 +60,7 @@ fn issue554_positioned_pure_coding_fallbacks_honor_explicit_policy() {
 
 #[test]
 fn issue554_positioned_coding_runtime_conversion_and_destination_policy() {
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let result = ctx
         .eval_str(
             r#"(let ((coding (position-symbol 'utf-8-unix 4))
@@ -90,7 +90,7 @@ fn issue554_positioned_coding_runtime_conversion_and_destination_policy() {
 
 #[test]
 fn issue554_positioned_coding_ascii_identity_records_original_symbol() {
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     let result = ctx
         .eval_str(
             r#"(let ((coding (position-symbol 'utf-8-unix 4))

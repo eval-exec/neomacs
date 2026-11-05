@@ -1,4 +1,3 @@
-use neovm_eval::emacs_core::eval::Context;
 use neovm_edit::emacs_core::{Context, format_eval_result};
 
 use crate::test_utils::{runtime_startup_eval_all, runtime_startup_eval_one};
@@ -1285,13 +1284,13 @@ fn transpose_chars_wrong_args() {
 }
 
 fn eval_one(src: &str) -> String {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let result = ev.eval_str(src);
     format_eval_result(&result)
 }
 
 fn eval_all(src: &str) -> Vec<String> {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let forms = crate::emacs_core::value_reader::read_all(
         src,
         crate::emacs_core::eval::VariableView::canonical(

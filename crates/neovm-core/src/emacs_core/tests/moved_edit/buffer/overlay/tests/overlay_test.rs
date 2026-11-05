@@ -166,7 +166,7 @@ fn lazy_edit_index_matches_simple_overlay_reference_model() {
 #[test]
 fn cached_overlay_snapshot_survives_exact_evaluator_gc() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.eval_str("(progn (insert \"abcd\") (overlay-put (make-overlay 1 4) 'before-string (copy-sequence \"frozen\")))").unwrap();
     let buffer = eval.edit.buffers.current_buffer().unwrap().id;
     // No Rust-held Value roots the copied overlay. The cache belongs to the

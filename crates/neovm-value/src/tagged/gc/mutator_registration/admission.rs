@@ -56,6 +56,7 @@ impl PhaseLine {
         word & 0x0F == TAG_IDLE && word & BLOCKED_BIT == 0
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// The rendezvous epoch carried by a phase word.
     #[inline(always)]
     pub(super) fn epoch(word: u64) -> u64 {

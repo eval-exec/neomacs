@@ -18,7 +18,7 @@ use neovm_text::emacs_core::syntax::parse_cache::*;
 #[test]
 fn buffer_changes_reach_the_cache() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.eval_str("(insert \"(a b) ;; c\\n\\\"d é\\\" (e)\")")
         .expect("insert");
     let _ = drain(&eval);

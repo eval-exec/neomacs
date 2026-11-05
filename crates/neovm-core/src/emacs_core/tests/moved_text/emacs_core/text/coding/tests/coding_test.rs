@@ -28,7 +28,7 @@ use neovm_value::intern::{intern, resolve_sym};
 #[test]
 fn coding_defvar_lisp_variables_are_special_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     assert_eq!(
         crate::emacs_core::format_eval_result(&eval.eval_str(
@@ -66,7 +66,7 @@ fn coding_system_plist_keyword_keys_work_with_builtin_plist_get() {
 #[test]
 fn find_coding_systems_region_internal_accepts_raw_unibyte_string() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let raw = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![
         0xFF,
     ]));
@@ -77,7 +77,7 @@ fn find_coding_systems_region_internal_accepts_raw_unibyte_string() {
 #[test]
 fn find_coding_systems_region_internal_ignores_bad_exclude_for_ascii() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = builtin_find_coding_systems_region_internal(
         &mut eval,
         vec![Value::string("abc"), Value::NIL, Value::symbol("utf-8")],
@@ -88,7 +88,7 @@ fn find_coding_systems_region_internal_ignores_bad_exclude_for_ascii() {
 #[test]
 fn find_coding_systems_region_internal_rejects_non_list_exclude_for_non_ascii_string() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let result = builtin_find_coding_systems_region_internal(
         &mut eval,
         vec![Value::string("汉"), Value::NIL, Value::symbol("utf-8")],
@@ -108,7 +108,7 @@ fn find_coding_systems_region_internal_rejects_non_list_exclude_for_non_ascii_st
 #[test]
 fn find_coding_systems_region_internal_rejects_non_list_exclude_for_non_ascii_buffer() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.eval_str("(insert \"汉\")").expect("insert text");
     let result = builtin_find_coding_systems_region_internal(
         &mut eval,
@@ -129,7 +129,7 @@ fn find_coding_systems_region_internal_rejects_non_list_exclude_for_non_ascii_bu
 #[test]
 fn detect_coding_region_highest() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.edit
         .buffers
         .current_buffer_mut()
@@ -148,7 +148,7 @@ fn detect_coding_region_highest() {
 #[test]
 fn detect_coding_region_list() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.edit
         .buffers
         .current_buffer_mut()
@@ -169,7 +169,7 @@ fn detect_coding_region_list() {
 #[test]
 fn detect_coding_region_rejects_too_many_args() {
     crate::test_utils::init_test_tracing();
-    let eval = Context::new();
+    let eval = crate::test_utils::new_context();
     let result = builtin_detect_coding_region(
         &eval.coding_systems,
         &eval.edit.buffers,
@@ -182,7 +182,7 @@ fn detect_coding_region_rejects_too_many_args() {
 #[test]
 fn detect_coding_region_rejects_non_integer_or_marker_bounds() {
     crate::test_utils::init_test_tracing();
-    let eval = Context::new();
+    let eval = crate::test_utils::new_context();
     assert!(
         builtin_detect_coding_region(
             &eval.coding_systems,
@@ -224,7 +224,7 @@ fn detect_coding_region_rejects_non_integer_or_marker_bounds() {
 #[test]
 fn detect_coding_region_validates_accessible_region_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.edit
         .buffers
         .current_buffer_mut()
@@ -254,7 +254,7 @@ fn detect_coding_region_validates_accessible_region_like_gnu() {
 #[test]
 fn check_coding_systems_region_semantics() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     assert!(
         builtin_check_coding_systems_region(
             &mut eval,
@@ -318,7 +318,7 @@ fn check_coding_systems_region_semantics() {
 #[test]
 fn check_coding_systems_region_matches_gnu_validation_order() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     eval.eval_str("(insert \"abc\")").expect("insert ascii");
 
     let range_err = builtin_check_coding_systems_region(
@@ -402,7 +402,7 @@ fn check_coding_systems_region_matches_gnu_validation_order() {
 #[test]
 fn text_quoting_and_conversion_style_basics() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     assert_eq!(
         builtin_text_quoting_style(&eval, vec![]).expect("text-quoting-style"),
         Value::symbol("curve")
@@ -444,7 +444,7 @@ fn text_quoting_style_nil_reads_flag_and_standard_display_table() {
     use neovm_text::emacs_core::chartable::{ct_set_single, make_char_table_with_extra_slots};
 
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let style =
         |eval: &Context| builtin_text_quoting_style(eval, vec![]).expect("text-quoting-style");
 
@@ -535,7 +535,7 @@ fn text_quoting_style_nil_reads_flag_and_standard_display_table() {
 #[test]
 fn text_quoting_style_variable_defaults_to_nil() {
     crate::test_utils::init_test_tracing();
-    let eval = Context::new();
+    let eval = crate::test_utils::new_context();
     assert_eq!(
         eval.obarray.symbol_value_copied("text-quoting-style"),
         Some(Value::NIL)
@@ -545,7 +545,7 @@ fn text_quoting_style_variable_defaults_to_nil() {
 #[test]
 fn find_operation_coding_system_validates_operation_target_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
 
     assert_eq!(
         eval.eval_str(r#"(find-operation-coding-system 'insert-file-contents "x")"#)
@@ -623,7 +623,7 @@ fn detect_iso7_designation_respects_priority_override() {
 #[test]
 fn check_coding_systems_region_reports_unencodable_positions() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     // (us-ascii 2): "é" at buffer position 2 is not us-ascii-encodable.
     assert_eq!(
         fmt_buf(
@@ -638,7 +638,7 @@ fn check_coding_systems_region_reports_unencodable_positions() {
 #[test]
 fn check_coding_systems_region_accepts_string_first_arg() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     // String START => 0-based char indices, END ignored: "é" is index 1.
     assert_eq!(
         fmt(
@@ -652,7 +652,7 @@ fn check_coding_systems_region_accepts_string_first_arg() {
 #[test]
 fn check_coding_systems_region_utf8_encodes_everything() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     // utf-8 (charset `unicode`) encodes every character, so it never appears.
     assert_eq!(
         fmt_buf(
@@ -667,7 +667,7 @@ fn check_coding_systems_region_utf8_encodes_everything() {
 #[test]
 fn check_coding_systems_region_preserves_input_order_and_charset_membership() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     // latin-1 encodes "é" but not "あ" (pos 2); us-ascii encodes neither (1 2).
     // Output keeps the input list order.
     assert_eq!(
@@ -694,7 +694,7 @@ fn check_coding_systems_region_preserves_input_order_and_charset_membership() {
 #[test]
 fn unencodable_char_position_returns_first_position() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     // No COUNT => the first unencodable position (1-based) as a bare integer.
     assert_eq!(
         fmt_buf(
@@ -709,7 +709,7 @@ fn unencodable_char_position_returns_first_position() {
 #[test]
 fn unencodable_char_position_with_count_returns_list() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     // COUNT non-nil => a list of up to COUNT positions in ascending order.
     assert_eq!(
         fmt_buf(
@@ -724,7 +724,7 @@ fn unencodable_char_position_with_count_returns_list() {
 #[test]
 fn unencodable_char_position_string_arg_uses_zero_based_indices() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     // STRING arg: START/END index the string; positions are 0-based char indices.
     assert_eq!(
         fmt(
@@ -745,7 +745,7 @@ fn unencodable_char_position_string_arg_uses_zero_based_indices() {
 #[test]
 fn unencodable_char_position_raw_text_and_encodable_return_nil() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     // raw-text encodes every byte => nil.
     assert_eq!(
         fmt_buf(
@@ -769,7 +769,7 @@ fn unencodable_char_position_raw_text_and_encodable_return_nil() {
 #[test]
 fn unencodable_char_position_swaps_reversed_region() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     // GNU validate_region swaps START/END; check-coding-systems-region does not.
     assert_eq!(
         fmt_buf(
@@ -789,7 +789,7 @@ fn context_eol_conversion_reads_the_defvar_bool_dynamically() {
     crate::test_utils::init_test_tracing();
     use neovm_text::emacs_core::coding::EolConversion;
 
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     assert_eq!(eval.eol_conversion(), EolConversion::Enabled);
     let _ = eval.eval_str("(setq inhibit-eol-conversion t)");
     assert_eq!(eval.eol_conversion(), EolConversion::Inhibited);
@@ -805,7 +805,7 @@ fn context_eol_conversion_reads_the_defvar_bool_dynamically() {
 /// memoized must change the next answer: the charset writers drop the memo.
 #[test]
 fn defining_a_charset_drops_the_coding_system_memo() {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let read = |ev: &mut crate::emacs_core::eval::Context| {
         ev.eval_str("(plist-get (coding-system-plist 'memo-test-cs) :ascii-compatible-p)")
             .map(|v| crate::emacs_core::print::print_value(&v))
@@ -949,7 +949,7 @@ fn fmt(eval: &mut crate::emacs_core::eval::Context, src: &str) -> String {
     crate::emacs_core::format_eval_result(&eval.eval_str(src))
 }
 
-/// `Context::new()` is bare (no `with-temp-buffer` macro), so seed the current
+/// `crate::test_utils::new_context()` is bare (no `with-temp-buffer` macro), so seed the current
 /// buffer directly: erase it, insert `seed`, then evaluate `expr`.
 fn fmt_buf(eval: &mut crate::emacs_core::eval::Context, seed: &str, expr: &str) -> String {
     let src = format!("(progn (erase-buffer) (insert {seed}) {expr})");

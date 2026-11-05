@@ -16,7 +16,7 @@ use neovm_text::emacs_core::chartable::*;
 
 #[test]
 fn positioned_char_table_purpose_classification_follows_mode_and_preserves_value() {
-    let mut context = Context::new();
+    let mut context = crate::test_utils::new_context();
     let purpose = positioned_purpose(&mut context);
     let table = make_char_table_with_extra_slots(purpose, Value::NIL, 5);
     for (mode, expected) in [(SymbolMode::Bare, false), (SymbolMode::Positioned, true)] {
@@ -34,7 +34,7 @@ fn positioned_char_table_purpose_classification_follows_mode_and_preserves_value
 
 #[test]
 fn positioned_char_table_purpose_controls_compressed_lookup() {
-    let mut context = Context::new();
+    let mut context = crate::test_utils::new_context();
     let table = make_char_table_with_extra_slots(positioned_purpose(&mut context), Value::NIL, 5);
     // GNU's run-length compressed leaf: index 2 for three characters, then 1.
     // Keep it outside the ASCII cache so lookup must classify the stored purpose.
@@ -98,7 +98,7 @@ fn positioned_char_table_purpose_controls_compressed_lookup() {
 
 #[test]
 fn positioned_unicode_property_alist_and_encoder_follow_eq_policy() {
-    let mut context = Context::new();
+    let mut context = crate::test_utils::new_context();
     let key = context
         .tagged_heap
         .alloc_symbol_with_pos(Value::symbol("general-category"), Value::fixnum(0));

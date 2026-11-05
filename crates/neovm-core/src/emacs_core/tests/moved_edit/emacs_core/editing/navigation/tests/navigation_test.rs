@@ -206,7 +206,7 @@ fn test_line_number_at_pos_default() {
 #[test]
 fn line_number_at_pos_clips_nonabsolute_positions_to_narrowing_like_gnu() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let actual = eval_str(
         &mut ev,
         r#"(progn
@@ -890,7 +890,7 @@ fn test_use_region_p_honors_buffer_local_mark_active_when_global_is_nil() {
 #[test]
 fn test_empty_buffer_predicates() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let val = eval_str(&mut ev, "(bobp)");
     assert!(val.is_truthy());
     let val = eval_str(&mut ev, "(eobp)");
@@ -1015,7 +1015,7 @@ fn test_forward_char_honors_narrowing_beginning() {
 
 /// Helper: create an evaluator, insert text, and position point.
 fn eval_with_text(text: &str) -> Context {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     {
         let buf = ev.edit.buffers.current_buffer_mut().unwrap();
         buf.insert(text);
@@ -1026,7 +1026,7 @@ fn eval_with_text(text: &str) -> Context {
 }
 
 fn eval_with_unibyte_bytes(bytes: &[u8]) -> Context {
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     let storage = neovm_edit::emacs_core::string_escape::bytes_to_unibyte_storage_string(bytes);
     {
         let buf = ev.edit.buffers.current_buffer_mut().unwrap();
@@ -1077,7 +1077,7 @@ fn gnu_simple_line_eval() -> Context {
             "(defun buffer-narrowed-p ()",
         );
 
-    let mut ev = Context::new();
+    let mut ev = crate::test_utils::new_context();
     install_bare_elisp_shims(&mut ev);
     ev.set_lexical_binding(true);
     eval_first_form_after_marker(&mut ev, &subr_source, "(defun zerop (number)");

@@ -17,11 +17,11 @@ use neovm_text::emacs_core::category::*;
 #[test]
 fn gc_tls_ownership_category_new_heap_reset_drops_old_values() {
     {
-        let mut first = Context::new();
+        let mut first = crate::test_utils::new_context();
         let value = populate(&mut first);
         assert!(roots(&first).iter().any(|root| root.bits() == value.bits()));
     }
-    let mut next = Context::new();
+    let mut next = crate::test_utils::new_context();
     assert!(
         roots(&next)
             .iter()
@@ -34,8 +34,8 @@ fn gc_tls_ownership_category_new_heap_reset_drops_old_values() {
 
 #[test]
 fn gc_tls_ownership_category_excludes_another_live_heap() {
-    let mut first = Context::new();
-    let mut second = Context::new();
+    let mut first = crate::test_utils::new_context();
+    let mut second = crate::test_utils::new_context();
     let value = populate(&mut second);
     assert!(
         roots(&second)

@@ -136,6 +136,7 @@ impl std::fmt::Debug for ObservationWorld {
 }
 
 impl ObservationWorld {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn current() -> Self {
         STATE.with(|slot| slot.owner.borrow().clone())
     }

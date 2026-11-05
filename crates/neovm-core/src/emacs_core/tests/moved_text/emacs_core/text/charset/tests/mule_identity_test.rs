@@ -4,7 +4,7 @@ use super::*;
 #[test]
 fn prepared_mule_preserves_existing_member_identity_when_name_becomes_alias() {
     crate::test_utils::init_test_tracing();
-    let _context = Context::new();
+    let _context = crate::test_utils::new_context();
     let original = intern("neovm-mule-collision-original");
     let target = intern("neovm-mule-collision-target");
     let ch = 0x1f300;
@@ -80,7 +80,7 @@ fn prepared_mule_preserves_existing_member_identity_when_name_becomes_alias() {
 #[test]
 fn prepared_mule_preserves_legacy_alias_redefinition_fallback() {
     crate::test_utils::init_test_tracing();
-    let _context = Context::new();
+    let _context = crate::test_utils::new_context();
     let base = intern("neovm-mule-redefinition-base");
     let alias = intern("neovm-mule-redefinition-alias");
     CHARSET_REGISTRY.with(|slot| {
@@ -118,7 +118,7 @@ fn prepared_mule_preserves_legacy_alias_redefinition_fallback() {
 #[test]
 fn prepared_mule_restores_legacy_materialized_alias_members_once() {
     crate::test_utils::init_test_tracing();
-    let _context = Context::new();
+    let _context = crate::test_utils::new_context();
     let base = intern("neovm-mule-legacy-base");
     let alias = intern("neovm-mule-legacy-alias");
     CHARSET_REGISTRY.with(|slot| {

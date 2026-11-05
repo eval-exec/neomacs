@@ -32,7 +32,7 @@ fn fontification_scan_dense_representations_and_all_nonnil_values() {
         ("t", "(string-to-multibyte (make-string 12 ?a))"),
         ("t", "\"aé中λbcdé中λ\""),
     ] {
-        let mut ctx = Context::new();
+        let mut ctx = crate::test_utils::new_context();
         ctx.eval_str(&format!(
             "(progn (set-buffer-multibyte {multibyte}) (insert {text}))"
         ))
@@ -69,7 +69,7 @@ fn fontification_scan_dense_representations_and_all_nonnil_values() {
 
 #[test]
 fn fontification_scan_holes_implicit_tail_half_open_limits_and_narrowing() {
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     ctx.eval_str(
         "(progn (insert \"aé中λbcdefg\")
            (put-text-property 2 4 'fontified t)
@@ -124,7 +124,7 @@ fn fontification_scan_refuses_every_resolver_fallback_and_overlay() {
         "(let ((o (make-overlay 2 5))) (overlay-put o 'face 'bold))",
         "(let ((o (make-overlay 2 5))) (overlay-put o 'fontified nil))",
     ] {
-        let mut ctx = Context::new();
+        let mut ctx = crate::test_utils::new_context();
         ctx.eval_str("(insert \"abcdefgh\")").unwrap();
         ctx.eval_str(setup).expect("refused source setup");
         assert_eq!(
@@ -137,7 +137,7 @@ fn fontification_scan_refuses_every_resolver_fallback_and_overlay() {
 
 #[test]
 fn fontification_scan_reacquires_live_state_after_source_changes() {
-    let mut ctx = Context::new();
+    let mut ctx = crate::test_utils::new_context();
     ctx.eval_str("(insert \"abcdefgh\")").unwrap();
     assert_eq!(
         scan(&ctx, 1, 9),

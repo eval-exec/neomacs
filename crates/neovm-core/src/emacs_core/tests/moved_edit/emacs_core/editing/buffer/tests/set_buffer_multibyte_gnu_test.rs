@@ -73,7 +73,7 @@ fn only_exact_t_keeps_valid_utf8() {
 #[test]
 fn non_nil_on_an_already_multibyte_buffer_is_a_noop() {
     crate::test_utils::init_test_tracing();
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     let rendered = format_eval_result(&eval.eval_str(
         r#"(progn
              (erase-buffer)
@@ -89,7 +89,7 @@ fn non_nil_on_an_already_multibyte_buffer_is_a_noop() {
 }
 
 fn convert(bytes: &str, flag: &str, point: i64) -> String {
-    let mut eval = Context::new();
+    let mut eval = crate::test_utils::new_context();
     format_eval_result(&eval.eval_str(&format!(
         r#"(progn
              (erase-buffer)
