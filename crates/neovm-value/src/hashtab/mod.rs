@@ -753,7 +753,8 @@ pub fn builtin_copy_hash_table(args: Vec<Value>) -> EvalResult {
 }
 
 /// (hash-table-keys TABLE) -> list of keys
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_hash_table_keys(args: Vec<Value>) -> EvalResult {
     expect_args("hash-table-keys", &args, 1)?;
     match args[0].kind() {
@@ -844,22 +845,26 @@ pub fn builtin_sxhash_equal_including_properties_with_mode(
 }
 
 // Bare adapters are available only to existing low-level unit tests.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_sxhash_eq(args: Vec<Value>) -> EvalResult {
     builtin_sxhash_eq_with_mode(args, SymbolMode::Bare)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_sxhash_eql(args: Vec<Value>) -> EvalResult {
     builtin_sxhash_eql_with_mode(args, SymbolMode::Bare)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_sxhash_equal(args: Vec<Value>) -> EvalResult {
     builtin_sxhash_equal_with_mode(args, SymbolMode::Bare)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn builtin_sxhash_equal_including_properties(args: Vec<Value>) -> EvalResult {
     builtin_sxhash_equal_including_properties_with_mode(args, SymbolMode::Bare)
 }

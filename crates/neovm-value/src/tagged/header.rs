@@ -568,6 +568,7 @@ impl GenBits {
 /// cannot obtain one for a runtime allocation, so the permanent generation
 /// stays reserved for the dump image.
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct ImageResident(());
 
 impl ImageResident {
@@ -578,7 +579,8 @@ impl ImageResident {
     }
 
     /// Test-only capability for fixtures that need an immortal object.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     #[inline]
     pub(crate) fn for_test() -> Self {
         Self(())
@@ -592,6 +594,7 @@ impl ImageResident {
 /// tenured objects are black. Generational majors use [`CollectionScope::Full`]
 /// to trace and reclaim ordinary old objects while permanents stay black.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum CollectionScope {
     /// Old and permanent objects are black: legacy cycles and minors.
     Young,
