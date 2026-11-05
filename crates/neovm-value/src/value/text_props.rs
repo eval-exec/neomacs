@@ -1693,7 +1693,7 @@ impl IntervalTree {
         self.balance_upwards(Some(anchor));
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn assert_invariants_for_test(&self) {
         fn walk(tree: &IntervalTree, id: IntervalId, parent: Option<IntervalId>) -> (usize, usize) {
             let node = &tree.nodes[id.0];
