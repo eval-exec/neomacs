@@ -13,6 +13,7 @@
 //! * a resume that supplies the syntax its first character was already read
 //!   with (the mid-step `syntax-propertize` pause) answers the same.
 
+use neovm_text::emacs_core::syntax::parse_loop::Entry;
 use super::*;
 
 use neovm_value::value::Value;

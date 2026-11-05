@@ -13,9 +13,18 @@
 //! - `ccl-execute` — validates shape and designators while the remaining
 //!   register-only instruction set is implemented incrementally.
 
+#[cfg(not(any(test, feature = "test-support")))]
 mod command;
+#[cfg(any(test, feature = "test-support"))]
+pub mod command;
+#[cfg(not(any(test, feature = "test-support")))]
 mod expr;
+#[cfg(any(test, feature = "test-support"))]
+pub mod expr;
+#[cfg(not(any(test, feature = "test-support")))]
 mod extension;
+#[cfg(any(test, feature = "test-support"))]
+pub mod extension;
 
 use self::command::CclCommand;
 use self::expr::{eval_expr_self, eval_set_expr};

@@ -866,7 +866,10 @@ fn check_symbol_hook_arg(value: &Value, mode: SymbolMode) -> Result<Option<SymId
 /// designation/flags data. `int_properties` is pdump-serialized but not
 /// surfaced by `coding-system-plist`, and these out-of-range keys cannot
 /// collide with any integer a `coding-system-put` would use.
+#[cfg(not(any(test, feature = "test-support")))]
 const ISO2022_KEY_INITIAL: i64 = i64::MIN;
+#[cfg(any(test, feature = "test-support"))]
+pub const ISO2022_KEY_INITIAL: i64 = i64::MIN;
 #[cfg(not(any(test, feature = "test-support")))]
 const ISO2022_KEY_REQUEST: i64 = i64::MIN + 1;
 #[cfg(any(test, feature = "test-support"))]

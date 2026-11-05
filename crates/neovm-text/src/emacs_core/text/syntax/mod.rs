@@ -5981,7 +5981,7 @@ thread_local! {
     pub(crate) static BACK_COMMENT_SAFE_CHUNK_OVERRIDE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) static BACK_COMMENT_SAFE_STARTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    pub(crate) static BACK_COMMENT_SAFE_REPARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub static BACK_COMMENT_SAFE_REPARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// GNU `back_comment`'s `lossage` fallback: re-parse *forward* and take the

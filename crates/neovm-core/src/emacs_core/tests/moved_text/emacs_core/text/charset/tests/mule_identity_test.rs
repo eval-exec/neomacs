@@ -1,5 +1,6 @@
 use neovm_value::value::Value;
 use super::*;
+use neovm_text::emacs_core::charset::prepared_mule::EmacsMuleEncoder;
 
 #[test]
 fn prepared_mule_preserves_existing_member_identity_when_name_becomes_alias() {

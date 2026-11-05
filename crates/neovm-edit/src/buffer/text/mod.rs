@@ -9,7 +9,10 @@ mod layout;
 mod metrics;
 mod snapshot;
 
+#[cfg(not(any(test, feature = "test-support")))]
 pub(in crate::buffer) use edit::TextExtentDelta;
+#[cfg(any(test, feature = "test-support"))]
+pub use edit::TextExtentDelta;
 pub use edit::{
     TextChange, TextEditRange, TextExtent, TextInsertion, TextReplacement, TextTransposition,
 };

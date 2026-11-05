@@ -872,7 +872,10 @@ enum CharTableWalk {
 /// standard canon table covers all of Unicode's case pairs), which the
 /// per-character scan of this many bytes, at about 18 instructions a byte,
 /// repays; it recurs only after a char-table write.
+#[cfg(not(any(test, feature = "test-support")))]
 const CHAR_TABLE_WALK_MIN_SPAN: usize = 16 * 1024;
+#[cfg(any(test, feature = "test-support"))]
+pub const CHAR_TABLE_WALK_MIN_SPAN: usize = 16 * 1024;
 
 thread_local! {
     /// The last char-table walked by [`char_table_folds_into_ascii`]:

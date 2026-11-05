@@ -334,7 +334,7 @@ fn builtin_coding_string_helpers_runtime_match_oracle_core_cases() {
         .as_lisp_string()
         .expect("decode-coding-string should return string");
     // 0xE9 is invalid UTF-8, so it becomes raw-byte char 0x3FFF00 + 0xE9
-    let codes: Vec<u32> = neovm_eval::emacs_core::builtins::lisp_string_char_codes(decoded_ls);
+    let codes: Vec<u32> = neovm_value::strings_core::lisp_string_char_codes(decoded_ls);
     assert_eq!(codes, vec![0x3FFF00 + 0xE9]);
 
     let unibyte_val2 = Value::heap_string(neovm_value::heap_types::LispString::from_unibyte(vec![
@@ -363,7 +363,7 @@ fn decode_coding_string_keeps_real_pua_glyphs_issue_131() {
     let decoded = builtin_decode_coding_string(vec![unibyte_val, Value::symbol("utf-8")])
         .expect("decode-coding-string should succeed");
     let ls = decoded.as_lisp_string().expect("string result");
-    let codes = neovm_eval::emacs_core::builtins::lisp_string_char_codes(ls);
+    let codes = neovm_value::strings_core::lisp_string_char_codes(ls);
     assert_eq!(
         codes,
         vec![0xE0A0, 0xE322, 0x3FFF00 + 0xFF],
@@ -383,7 +383,7 @@ fn decode_coding_string_rejects_six_byte_utf8_emacs_sequence_as_raw_bytes() {
     let decoded = builtin_decode_coding_string(vec![input, Value::symbol("utf-8")])
         .expect("decode-coding-string should keep malformed bytes raw");
     let ls = decoded.as_lisp_string().expect("string result");
-    let codes = neovm_eval::emacs_core::builtins::lisp_string_char_codes(ls);
+    let codes = neovm_value::strings_core::lisp_string_char_codes(ls);
     assert_eq!(
         codes,
         vec![
@@ -408,7 +408,7 @@ fn decode_coding_string_rejects_out_of_range_five_byte_utf8_emacs_sequence_as_ra
     let decoded = builtin_decode_coding_string(vec![input, Value::symbol("utf-8")])
         .expect("decode-coding-string should keep out-of-range forms raw");
     let ls = decoded.as_lisp_string().expect("string result");
-    let codes = neovm_eval::emacs_core::builtins::lisp_string_char_codes(ls);
+    let codes = neovm_value::strings_core::lisp_string_char_codes(ls);
     assert_eq!(
         codes,
         vec![
@@ -441,7 +441,7 @@ fn decode_coding_string_extracts_multibyte_byte8_source_bytes_like_gnu() {
         .as_lisp_string()
         .expect("decode-coding-string should return a string");
     assert_eq!(
-        neovm_eval::emacs_core::builtins::lisp_string_char_codes(ls),
+        neovm_value::strings_core::lisp_string_char_codes(ls),
         [0xE9]
     );
     assert_eq!(ls.schars(), 1);

@@ -38,6 +38,8 @@ use neovm_text::emacs_core::regex_emacs::{matcher_entry_count, re_search};
 use crate::fuzz_support::{
 use neovm_text::emacs_core::regex_emacs::fail_stack_overflow_free_span;
 use neovm_text::emacs_core::regex_emacs::re_text_char;
+use neovm_text::emacs_core::regex_emacs::MatchSyntax;
+use neovm_text::emacs_core::regex_emacs::RegexOp;
     RegexCase, RegexCheck, RegexDifferential, SearchTarget, check_regex_differential,
 };
 
