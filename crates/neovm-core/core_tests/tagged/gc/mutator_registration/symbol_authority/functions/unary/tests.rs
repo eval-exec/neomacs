@@ -3,16 +3,14 @@ use super::*;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::intern::intern;
 use crate::tagged::gc::mutator_registration::era_fixtures::EraFixtureExt;
-use crate::tagged::gc::mutator_registration::symbol_functions::retry::{
-    self as contention, Deadline, Retry, retry_owned,
-};
 use crate::tagged::gc::{
     FunctionActivation, FunctionError, FunctionSelection, FunctionStep, RegistrationError,
     RunAccess, SymbolHandle,
 };
+use neovm_value::test_support::authority::SymbolWordOccupancy;
+use neovm_value::test_support::authority::{Deadline, Retry, rendezvous, retry_owned};
 use std::num::{NonZeroU32, NonZeroU64};
 use std::ops::ControlFlow;
-use std::sync::atomic::AtomicU64;
 
 fn oracle() -> [&'static str; 8] {
     include_str!("oracle.expected")
@@ -88,7 +86,7 @@ fn fixture(
                     Deadline::contention(),
                     owner,
                     |owner| owner.retire_rooted(&[]),
-                    |failure| match contention::rendezvous(&failure.reason) {
+                    |failure| match rendezvous(&failure.reason) {
                         Retry::Busy => ControlFlow::Continue(failure.into_owner()),
                         Retry::Refuse => ControlFlow::Break(failure),
                     },
@@ -297,16 +295,9 @@ fn nmjit_n4_unary_busy_refusal_preserves_roots_and_activation() {
         run.sym_function_into(&symbols[0], &mut expected).unwrap();
         let argument = run.private_nil_root().unwrap();
         let mut activation = FunctionActivation::new(run).unwrap();
-        let registry = run.owner.registry;
-        let word = &registry.symbols.word;
-        assert!(word::writer_enter(word));
-        struct Writer<'a>(&'a AtomicU64);
-        impl Drop for Writer<'_> {
-            fn drop(&mut self) {
-                word::writer_exit(self.0);
-            }
-        }
-        let writer = Writer(word);
+        let writer = run
+            .occupy_symbol_word_for_test(SymbolWordOccupancy::Writer)
+            .unwrap();
         assert_eq!(
             run.sym_unary_call_begin(&callback, &expected, &argument, &mut activation),
             Err(FunctionError::Authority(RegistrationError::Busy))

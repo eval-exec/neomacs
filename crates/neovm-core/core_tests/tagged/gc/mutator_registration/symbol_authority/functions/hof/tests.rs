@@ -3,9 +3,6 @@ use super::*;
 use crate::emacs_core::eval::{Context, SubrEntry, register_global_subr_entry};
 use crate::emacs_core::intern::intern;
 use crate::tagged::gc::mutator_registration::era_fixtures::EraFixtureExt;
-use crate::tagged::gc::mutator_registration::symbol_functions::retry::{
-    self as contention, Deadline, Retry, retry_owned,
-};
 use crate::tagged::gc::mutator_registration::{RunAccessHofExt, RunAccessUnaryExt};
 use crate::tagged::gc::{
     FunctionActivation, FunctionError, FunctionSelection, FunctionStep, HofOperation,
@@ -14,6 +11,7 @@ use crate::tagged::gc::{
 };
 use crate::tagged::header::SubrDispatchKind;
 use crate::test_utils::SubrValueExt;
+use neovm_value::test_support::authority::{Deadline, Retry, rendezvous, retry_owned};
 use std::num::{NonZeroU32, NonZeroU64};
 use std::ops::ControlFlow;
 
@@ -142,7 +140,7 @@ fn fixture(
                     Deadline::contention(),
                     owner,
                     |owner| owner.retire_rooted(&[]),
-                    |failure| match contention::rendezvous(&failure.reason) {
+                    |failure| match rendezvous(&failure.reason) {
                         Retry::Busy => ControlFlow::Continue(failure.into_owner()),
                         Retry::Refuse => ControlFlow::Break(failure),
                     },

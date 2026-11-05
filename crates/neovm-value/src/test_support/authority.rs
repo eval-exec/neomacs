@@ -30,6 +30,23 @@ pub type ProofEra<'heap, K> = crate::tagged::gc::ProofEra<'heap, K>;
 /// `tagged::gc::GenericProofEraFinishFailure`.
 pub type ProofEraFinishFailure<'heap, K> = crate::tagged::gc::ProofEraFinishFailure<'heap, K>;
 
+/// Fence-only symbol-authority word occupancy (peer 09:2xZ): the word itself
+/// never leaves value. Callers get a copied u64 reading or an RAII guard whose
+/// Drop restores quiescence; the reader/writer sentinel stays private.
+#[doc(hidden)]
+pub use crate::tagged::gc::mutator_registration::symbol_authority::occupancy::{
+    OccupiedSymbolWord, SymbolWordOccupancy,
+};
+
+/// Fence-only registration-wait helpers (REGWAIT-GAP): test timing and retry
+/// classification only; they add no authority path.
+#[doc(hidden)]
+pub use crate::tagged::gc::mutator_registration::retry::{
+    Deadline, Retry, SPIN_WAIT, retry, retry_owned,
+};
+#[doc(hidden)]
+pub use crate::tagged::gc::mutator_registration::symbol_functions::retry::rendezvous;
+
 /// # Safety
 /// prepare must return the original retained keeper's epoch and backing,
 /// without executing Lisp, resuming owners, or leaking a manager reference.

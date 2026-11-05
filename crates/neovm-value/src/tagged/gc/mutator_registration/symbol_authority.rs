@@ -11,6 +11,8 @@ pub(super) fn check_owner_home_for_test(
 mod globals;
 pub(super) use globals::check_home as check_symbol_home;
 mod intern;
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) mod occupancy;
 #[cfg(not(feature = "test-support"))]
 mod roots;
 #[cfg(feature = "test-support")]
@@ -171,11 +173,6 @@ impl<K: EraKeeper> GenericProofEra<'_, K> {
 // the private Registry/SymbolSidecar types stay unnameable outside value.
 #[cfg(any(test, feature = "test-support"))]
 impl<K: EraKeeper> GenericProofEra<'_, K> {
-    #[doc(hidden)]
-    pub fn symbol_word_for_test(&self) -> &std::sync::atomic::AtomicU64 {
-        &self.core.registry().symbols.word
-    }
-
     #[doc(hidden)]
     pub fn check_symbol_backing_for_test(
         &self,

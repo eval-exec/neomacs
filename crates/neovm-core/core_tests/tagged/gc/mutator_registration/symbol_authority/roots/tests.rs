@@ -5,8 +5,8 @@ use crate::emacs_core::symbol::ObarraySymbolCellSkipGuard;
 use crate::tagged::gc::mutator_registration::era_fixtures::EraFixtureExt;
 use crate::tagged::gc::{CollectionReport, RegistrationError};
 use neovm_eval::test_support::authority::WorldProofEra as ParallelHeapEra;
+use neovm_value::test_support::authority::SymbolWordOccupancy;
 use std::cell::RefCell;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ObjectIdentity(usize);
@@ -284,37 +284,6 @@ fn p3sym_c6_keeper_projected_families_survive_two_full_stops_with_serial_skip() 
     root_families(PlainSymbolBacking::Projected);
 }
 
-#[derive(Clone, Copy)]
-enum AuthorityOccupancy {
-    Reader,
-    Writer,
-}
-#[must_use = "restore the synthetic negative-control authority before finishing"]
-struct OccupiedWord<'a>(&'a AtomicU64);
-impl<'a> OccupiedWord<'a> {
-    fn new(word: &'a AtomicU64, mode: AuthorityOccupancy) -> Self {
-        // Same predicate as the authority word's quiescent(): no reader and no
-        // writer occupies the word.
-        assert_eq!(
-            word.load(Ordering::Acquire),
-            0,
-            "authority word must be quiescent"
-        );
-        let occupied = match mode {
-            AuthorityOccupancy::Reader => 1,
-            // The protocol's writer sentinel (the high bit); the test stores
-            // exactly the value authority_word::WRITER uses.
-            AuthorityOccupancy::Writer => 1 << 63,
-        };
-        word.store(occupied, Ordering::Release);
-        Self(word)
-    }
-}
-impl Drop for OccupiedWord<'_> {
-    fn drop(&mut self) {
-        self.0.store(0, Ordering::Release);
-    }
-}
 #[test]
 fn p3sym_c6_keeper_nonzero_word_refuses_before_copy_and_recovers() {
     Context::with_test_symbol_era(|era, _| {
@@ -324,8 +293,15 @@ fn p3sym_c6_keeper_nonzero_word_refuses_before_copy_and_recovers() {
             let symbols = stopped.symbols().unwrap();
             let keeper = era.keeper_for_test().unwrap();
             let designator = keeper.keeper_designator().unwrap();
-            for occupancy in [AuthorityOccupancy::Reader, AuthorityOccupancy::Writer] {
-                let guard = OccupiedWord::new(era.symbol_word_for_test(), occupancy);
+            for occupancy in [SymbolWordOccupancy::Reader, SymbolWordOccupancy::Writer] {
+                // Same predicate as the authority word's quiescent(): no
+                // reader and no writer occupies the word.
+                assert_eq!(
+                    era.symbol_word_for_test(),
+                    0,
+                    "authority word must be quiescent"
+                );
+                let guard = era.occupy_symbol_word_for_test(occupancy).unwrap();
                 let mut out = vec![TaggedValue::T];
                 let cell_result = symbols.append_current_symbol_roots(&designator, &mut out);
                 let projection_result =

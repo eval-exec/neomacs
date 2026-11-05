@@ -7,7 +7,7 @@ use super::{
 };
 use std::num::NonZeroU32;
 
-pub mod retry;
+pub(crate) mod retry;
 
 /// Closed syntax only: handles and resident operand homes, no raw callee.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

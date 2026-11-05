@@ -1,5 +1,4 @@
 //! Protocol-specific error classification, sharing the production-capable deadline.
-#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(in super::super) use super::super::retry::{Deadline, Retry, SPIN_WAIT, retry, retry_owned};
 use super::super::{
     FunctionError, GlobalError, InitialInternError, RegistrationError, RendezvousError,
@@ -53,7 +52,8 @@ pub(in super::super) fn function(error: &FunctionError) -> Retry {
 }
 
 #[cfg_attr(feature = "test-support", visibility::make(pub))]
-pub(in super::super) fn rendezvous(error: &RendezvousError) -> Retry {
+#[doc(hidden)]
+pub fn rendezvous(error: &RendezvousError) -> Retry {
     match error {
         RendezvousError::Busy => Retry::Busy,
         RendezvousError::Poisoned
