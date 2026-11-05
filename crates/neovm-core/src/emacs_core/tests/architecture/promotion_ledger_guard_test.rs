@@ -337,6 +337,9 @@ impl Candidate {
                 Kind::Type,
                 SourceKind::Struct | SourceKind::Enum | SourceKind::Union | SourceKind::Alias,
             ) => true,
+            // A pc2 exact-caller row names an installer/adapter item; in
+            // the value bulk ledger that item is a public+doc(hidden) fn.
+            (Kind::Pc2, SourceKind::Function { .. }) => true,
             (Kind::Const, SourceKind::Const)
             | (Kind::Trait, SourceKind::Trait)
             | (Kind::Module, SourceKind::Module)
@@ -1807,6 +1810,14 @@ fn pc2_source_files(workspace: &Path) -> Result<Vec<PathBuf>, String> {
                 walk(&path, files)?;
             } else if kind.is_file() && path.extension().is_some_and(|extension| extension == "rs")
             {
+                // Test-gated source files are not production call sites.
+                let name = path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("");
+                if name == "tests.rs" || name.ends_with("_test.rs") || name.ends_with("_tests.rs") {
+                    continue;
+                }
                 files.push(path);
             }
         }
