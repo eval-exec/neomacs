@@ -5708,15 +5708,15 @@ impl Context {
         &mut self.minibuffers
     }
 
-    #[doc(hidden)]
     #[inline]
-    pub fn bookmarks(&self) -> &BookmarkManager {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn bookmarks(&self) -> &BookmarkManager {
         &self.bookmarks
     }
 
-    #[doc(hidden)]
     #[inline]
-    pub fn bookmarks_mut(&mut self) -> &mut BookmarkManager {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
+    pub(crate) fn bookmarks_mut(&mut self) -> &mut BookmarkManager {
         &mut self.bookmarks
     }
 
