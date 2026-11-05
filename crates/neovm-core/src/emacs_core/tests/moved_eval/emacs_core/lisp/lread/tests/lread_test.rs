@@ -65,11 +65,11 @@ fn eval_buffer_evaluates_current_buffer_forms() {
     let result = builtin_eval_buffer(&mut ev, vec![]).unwrap();
     assert!(result.is_nil());
     assert_eq!(
-        ev.obarray.symbol_value_copied("lread-eb-a"),
+        ev.obarray().symbol_value_copied("lread-eb-a"),
         Some(Value::fixnum(11))
     );
     assert_eq!(
-        ev.obarray.symbol_value_copied("lread-eb-b"),
+        ev.obarray().symbol_value_copied("lread-eb-b"),
         Some(Value::fixnum(12))
     );
 }
@@ -94,13 +94,13 @@ fn eval_buffer_applies_read_symbol_shorthands_from_the_current_binding() {
     .expect("install buffer-local shorthands");
     builtin_eval_buffer(&mut ev, vec![]).expect("eval-buffer");
     assert_eq!(
-        ev.obarray
+        ev.obarray()
             .symbol_value_copied("gptel-openrouter-unit-local"),
         Some(Value::fixnum(7)),
         "a buffer-local shorthand must rewrite the evaluated symbol"
     );
     assert_eq!(
-        ev.obarray.symbol_value_copied("oi-unit-local"),
+        ev.obarray().symbol_value_copied("oi-unit-local"),
         None,
         "the short spelling must not be interned as a variable"
     );
@@ -116,11 +116,11 @@ fn eval_buffer_applies_read_symbol_shorthands_from_the_current_binding() {
     )
     .expect("eval-buffer under a dynamic binding");
     assert_eq!(
-        ev.obarray.symbol_value_copied("longzz-unit-dynamic"),
+        ev.obarray().symbol_value_copied("longzz-unit-dynamic"),
         Some(Value::fixnum(9)),
         "a dynamically bound shorthand must rewrite the evaluated symbol"
     );
-    assert_eq!(ev.obarray.symbol_value_copied("zz-unit-dynamic"), None);
+    assert_eq!(ev.obarray().symbol_value_copied("zz-unit-dynamic"), None);
 }
 
 #[test]
@@ -144,17 +144,17 @@ fn eval_buffer_refreshes_read_symbol_shorthands_between_forms() {
     .expect("install buffer-local shorthands");
     builtin_eval_buffer(&mut ev, vec![]).expect("eval-buffer");
     assert_eq!(
-        ev.obarray.symbol_value_copied("longaa-unit-midbuffer"),
+        ev.obarray().symbol_value_copied("longaa-unit-midbuffer"),
         Some(Value::fixnum(1)),
         "the first form must use the binding in effect when it is read"
     );
     assert_eq!(
-        ev.obarray.symbol_value_copied("longbb-unit-midbuffer"),
+        ev.obarray().symbol_value_copied("longbb-unit-midbuffer"),
         Some(Value::fixnum(2)),
         "a form that changes the binding must affect the forms after it"
     );
-    assert_eq!(ev.obarray.symbol_value_copied("aa-unit-midbuffer"), None);
-    assert_eq!(ev.obarray.symbol_value_copied("bb-unit-midbuffer"), None);
+    assert_eq!(ev.obarray().symbol_value_copied("aa-unit-midbuffer"), None);
+    assert_eq!(ev.obarray().symbol_value_copied("bb-unit-midbuffer"), None);
 }
 
 #[test]
@@ -178,7 +178,7 @@ fn eval_buffer_read_uses_the_current_read_symbol_shorthands() {
     .expect("install buffer-local shorthands");
     builtin_eval_buffer(&mut ev, vec![]).expect("eval-buffer");
     assert_eq!(
-        ev.obarray.symbol_value_copied("gptel-unit-captured"),
+        ev.obarray().symbol_value_copied("gptel-unit-captured"),
         Some(Value::string("longrd-unit-live")),
         "(read) must consult the binding that is current when it runs"
     );
@@ -261,7 +261,7 @@ fn eval_buffer_preserves_unibyte_string_literals() {
     let result = builtin_eval_buffer(&mut ev, vec![]).unwrap();
     assert!(result.is_nil());
     let value = ev
-        .obarray
+        .obarray()
         .symbol_value_copied("lread-eb-raw")
         .expect("setq should bind lread-eb-raw");
     let text = value
@@ -286,7 +286,7 @@ fn eval_buffer_accepts_shebang_reader_prefix() {
     let result = builtin_eval_buffer(&mut ev, vec![]).unwrap();
     assert!(result.is_nil());
     assert_eq!(
-        ev.obarray.symbol_value_copied("lread-eb-shebang"),
+        ev.obarray().symbol_value_copied("lread-eb-shebang"),
         Some(Value::symbol("ok"))
     );
 }
@@ -354,7 +354,7 @@ fn eval_buffer_uses_source_text_without_switching_current() {
     let result = builtin_eval_buffer(&mut ev, vec![Value::make_buffer(target)]).unwrap();
     assert!(result.is_nil());
     assert_eq!(
-        ev.obarray.symbol_value_copied("lread-eb-current-name"),
+        ev.obarray().symbol_value_copied("lread-eb-current-name"),
         Some(Value::string("*lread-eval-buffer-caller*"))
     );
 }
@@ -403,7 +403,7 @@ fn eval_buffer_preserves_unibyte_filename_in_load_state() {
     assert!(result.is_nil());
 
     let current_load_list = ev
-        .obarray
+        .obarray()
         .symbol_value_copied("lread-eb-current-load-list")
         .expect("eval-buffer should capture current-load-list");
     let current_load_items =
@@ -416,7 +416,7 @@ fn eval_buffer_preserves_unibyte_filename_in_load_state() {
     assert!(!current_load_name.is_multibyte());
 
     let load_history = ev
-        .obarray
+        .obarray()
         .symbol_value_copied("load-history")
         .expect("eval-buffer should update load-history");
     let load_history_entries = list_to_vec(&load_history).expect("load-history should be a list");
@@ -462,7 +462,7 @@ fn eval_buffer_load_in_progress_preserves_unibyte_current_load_list() {
 
     for symbol_name in ["lread-eb-load-file-name", "lread-eb-load-true-file-name"] {
         let value = ev
-            .obarray
+            .obarray()
             .symbol_value_copied(symbol_name)
             .unwrap_or_else(|| panic!("eval-buffer should bind {symbol_name}"));
         assert!(
@@ -472,7 +472,7 @@ fn eval_buffer_load_in_progress_preserves_unibyte_current_load_list() {
     }
 
     let current_load_list = ev
-        .obarray
+        .obarray()
         .symbol_value_copied("lread-eb-current-load-list")
         .expect("eval-buffer should capture current-load-list");
     let current_load_items =
@@ -559,11 +559,11 @@ fn eval_region_evaluates_forms_in_range() {
     let result = builtin_eval_region(&mut ev, vec![Value::fixnum(1), end]).unwrap();
     assert!(result.is_nil());
     assert_eq!(
-        ev.obarray.symbol_value_copied("lread-er-a"),
+        ev.obarray().symbol_value_copied("lread-er-a"),
         Some(Value::fixnum(1))
     );
     assert_eq!(
-        ev.obarray.symbol_value_copied("lread-er-b"),
+        ev.obarray().symbol_value_copied("lread-er-b"),
         Some(Value::fixnum(3))
     );
 }
@@ -607,12 +607,12 @@ fn eval_region_uses_read_function_result_instead_of_source_text() {
 
     assert!(result.is_nil());
     assert_eq!(
-        ev.obarray
+        ev.obarray()
             .symbol_value_copied("lread-er-read-function-result"),
         Some(Value::symbol("transformed"))
     );
     assert_eq!(
-        ev.obarray
+        ev.obarray()
             .symbol_value_copied("lread-er-read-function-got-buffer"),
         Some(Value::T)
     );
@@ -682,15 +682,15 @@ fn eval_region_advances_from_reader_point_before_evaluating_returned_form() {
     }
 
     assert_eq!(
-        ev.obarray.symbol_value_copied("lread-er-point-a"),
+        ev.obarray().symbol_value_copied("lread-er-point-a"),
         Some(Value::fixnum(1))
     );
     assert_eq!(
-        ev.obarray.symbol_value_copied("lread-er-point-b"),
+        ev.obarray().symbol_value_copied("lread-er-point-b"),
         Some(Value::fixnum(2))
     );
     assert_eq!(
-        ev.obarray
+        ev.obarray()
             .symbol_value_copied("lread-er-point-reader-count"),
         Some(Value::fixnum(2))
     );
@@ -730,7 +730,7 @@ fn eval_region_preserves_unibyte_string_literals() {
     let result = builtin_eval_region(&mut ev, vec![Value::fixnum(1), end]).unwrap();
     assert!(result.is_nil());
     let value = ev
-        .obarray
+        .obarray()
         .symbol_value_copied("lread-er-raw")
         .expect("setq should bind lread-er-raw");
     let text = value
@@ -752,13 +752,13 @@ fn eval_region_nil_or_reversed_bounds_are_noop() {
             .expect("current buffer");
         buf.insert("(setq lread-er-noop 9)");
     }
-    ev.obarray
+    ev.obarray_view_mut()
         .set_symbol_value("lread-er-noop", Value::fixnum(0));
 
     let nil_bounds = builtin_eval_region(&mut ev, vec![Value::NIL, Value::NIL]).unwrap();
     assert!(nil_bounds.is_nil());
     assert_eq!(
-        ev.obarray.symbol_value_copied("lread-er-noop"),
+        ev.obarray().symbol_value_copied("lread-er-noop"),
         Some(Value::fixnum(0))
     );
 
@@ -770,7 +770,7 @@ fn eval_region_nil_or_reversed_bounds_are_noop() {
         builtin_eval_region(&mut ev, vec![Value::fixnum(point_max), Value::fixnum(1)]).unwrap();
     assert!(reversed.is_nil());
     assert_eq!(
-        ev.obarray.symbol_value_copied("lread-er-noop"),
+        ev.obarray().symbol_value_copied("lread-er-noop"),
         Some(Value::fixnum(0))
     );
 }
@@ -812,7 +812,7 @@ fn eval_region_accepts_marker_bounds_like_gnu() {
     let result = builtin_eval_region(&mut ev, vec![start, end]).unwrap();
     assert!(result.is_nil());
     assert_eq!(
-        ev.obarray.symbol_value_copied("lread-er-marker"),
+        ev.obarray().symbol_value_copied("lread-er-marker"),
         Some(Value::fixnum(17))
     );
 }
@@ -975,7 +975,7 @@ fn eval_region_accepts_shebang_reader_prefix() {
     let result = builtin_eval_region(&mut ev, vec![Value::fixnum(1), end]).unwrap();
     assert!(result.is_nil());
     assert_eq!(
-        ev.obarray.symbol_value_copied("lread-er-shebang"),
+        ev.obarray().symbol_value_copied("lread-er-shebang"),
         Some(Value::symbol("ok"))
     );
 }
@@ -1116,7 +1116,7 @@ fn read_event_rejects_non_string_prompt() {
 fn read_event_consumes_unread_command_event() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
-    ev.obarray.set_symbol_value(
+    ev.obarray_view_mut().set_symbol_value(
         "unread-command-events",
         Value::list(vec![Value::fixnum(97)]),
     );
@@ -1129,7 +1129,7 @@ fn read_event_consumes_unread_command_event() {
 fn read_event_sets_command_keys_when_empty() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
-    ev.obarray.set_symbol_value(
+    ev.obarray_view_mut().set_symbol_value(
         "unread-command-events",
         Value::list(vec![Value::fixnum(97)]),
     );
@@ -1142,7 +1142,7 @@ fn read_event_preserves_existing_command_keys_context() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
     ev.set_read_command_keys(vec![Value::fixnum(97)]);
-    ev.obarray.set_symbol_value(
+    ev.obarray_view_mut().set_symbol_value(
         "unread-command-events",
         Value::list(vec![Value::list(vec![Value::symbol("mouse-1")])]),
     );
@@ -1208,7 +1208,7 @@ fn read_event_echoes_invoking_keys_and_new_event_after_gnu_delay() {
 fn read_event_with_seconds_does_not_set_command_keys_when_empty() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
-    ev.obarray.set_symbol_value(
+    ev.obarray_view_mut().set_symbol_value(
         "unread-command-events",
         Value::list(vec![Value::fixnum(97)]),
     );
@@ -1220,7 +1220,7 @@ fn read_event_with_seconds_does_not_set_command_keys_when_empty() {
 fn read_event_with_positive_seconds_does_not_set_command_keys_when_empty() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
-    ev.obarray.set_symbol_value(
+    ev.obarray_view_mut().set_symbol_value(
         "unread-command-events",
         Value::list(vec![Value::fixnum(97)]),
     );
@@ -1232,7 +1232,7 @@ fn read_event_with_positive_seconds_does_not_set_command_keys_when_empty() {
 fn read_event_with_float_seconds_does_not_set_command_keys_when_empty() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
-    ev.obarray.set_symbol_value(
+    ev.obarray_view_mut().set_symbol_value(
         "unread-command-events",
         Value::list(vec![Value::fixnum(97)]),
     );
@@ -1284,7 +1284,7 @@ fn read_event_with_non_nil_seconds_preserves_existing_command_keys_context() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
     ev.set_read_command_keys(vec![Value::fixnum(97)]);
-    ev.obarray.set_symbol_value(
+    ev.obarray_view_mut().set_symbol_value(
         "unread-command-events",
         Value::list(vec![Value::fixnum(98)]),
     );
@@ -1300,7 +1300,7 @@ fn read_event_with_non_nil_seconds_preserves_existing_command_keys_context() {
 fn read_event_with_nil_seconds_sets_command_keys_when_empty() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
-    ev.obarray.set_symbol_value(
+    ev.obarray_view_mut().set_symbol_value(
         "unread-command-events",
         Value::list(vec![Value::fixnum(97)]),
     );
@@ -1312,14 +1312,14 @@ fn read_event_with_nil_seconds_sets_command_keys_when_empty() {
 fn read_event_consumes_non_character_event_and_preserves_tail() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
-    ev.obarray.set_symbol_value(
+    ev.obarray_view_mut().set_symbol_value(
         "unread-command-events",
         Value::list(vec![Value::symbol("foo"), Value::fixnum(97)]),
     );
     let result = builtin_read_event(&mut ev, vec![]).unwrap();
     assert_eq!(result, Value::symbol("foo"));
     assert_eq!(
-        ev.obarray.symbol_value_copied("unread-command-events"),
+        ev.obarray().symbol_value_copied("unread-command-events"),
         Some(Value::list(vec![Value::fixnum(97)]))
     );
 }
@@ -1328,12 +1328,12 @@ fn read_event_consumes_non_character_event_and_preserves_tail() {
 fn read_event_consumes_character_event() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
-    ev.obarray
+    ev.obarray_view_mut()
         .set_symbol_value("unread-command-events", Value::list(vec![Value::char('a')]));
     let result = builtin_read_event(&mut ev, vec![]).unwrap();
     assert_eq!(result.as_int(), Some(97));
     assert_eq!(
-        ev.obarray.symbol_value_copied("unread-command-events"),
+        ev.obarray().symbol_value_copied("unread-command-events"),
         Some(Value::NIL)
     );
 }
@@ -1342,14 +1342,14 @@ fn read_event_consumes_character_event() {
 fn read_event_preserves_trailing_events_after_non_character() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
-    ev.obarray.set_symbol_value(
+    ev.obarray_view_mut().set_symbol_value(
         "unread-command-events",
         Value::list(vec![Value::symbol("foo"), Value::char('a')]),
     );
     let result = builtin_read_event(&mut ev, vec![]).unwrap();
     assert_eq!(result, Value::symbol("foo"));
     assert_eq!(
-        ev.obarray.symbol_value_copied("unread-command-events"),
+        ev.obarray().symbol_value_copied("unread-command-events"),
         Some(Value::list(vec![Value::char('a')]))
     );
 }
@@ -1418,7 +1418,7 @@ fn read_char_exclusive_rejects_non_string_prompt() {
 fn read_char_exclusive_consumes_unread_command_event() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
-    ev.obarray.set_symbol_value(
+    ev.obarray_view_mut().set_symbol_value(
         "unread-command-events",
         Value::list(vec![Value::fixnum(97)]),
     );
@@ -1431,7 +1431,7 @@ fn read_char_exclusive_consumes_unread_command_event() {
 fn read_char_exclusive_with_seconds_does_not_set_command_keys_when_empty() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
-    ev.obarray.set_symbol_value(
+    ev.obarray_view_mut().set_symbol_value(
         "unread-command-events",
         Value::list(vec![Value::fixnum(97)]),
     );
@@ -1463,7 +1463,7 @@ fn read_char_exclusive_with_timeout_waits_without_input_source() {
 fn read_char_exclusive_with_nil_seconds_sets_command_keys_when_empty() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
-    ev.obarray.set_symbol_value(
+    ev.obarray_view_mut().set_symbol_value(
         "unread-command-events",
         Value::list(vec![Value::fixnum(97)]),
     );
@@ -1478,7 +1478,7 @@ fn read_char_exclusive_preserves_existing_command_keys_context() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
     ev.set_read_command_keys(vec![Value::fixnum(97)]);
-    ev.obarray.set_symbol_value(
+    ev.obarray_view_mut().set_symbol_value(
         "unread-command-events",
         Value::list(vec![Value::fixnum(98)]),
     );
@@ -1517,7 +1517,7 @@ fn read_char_exclusive_rejects_more_than_three_args() {
 fn read_char_exclusive_skips_non_character_events() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
-    ev.obarray.set_symbol_value(
+    ev.obarray_view_mut().set_symbol_value(
         "unread-command-events",
         Value::list(vec![Value::symbol("foo"), Value::fixnum(97)]),
     );
@@ -1533,7 +1533,7 @@ fn read_char_exclusive_skips_non_character_events() {
 fn read_char_exclusive_skips_non_character_and_empty_tail() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
-    ev.obarray.set_symbol_value(
+    ev.obarray_view_mut().set_symbol_value(
         "unread-command-events",
         Value::list(vec![Value::symbol("foo"), Value::fixnum(97)]),
     );
@@ -1542,7 +1542,7 @@ fn read_char_exclusive_skips_non_character_and_empty_tail() {
             .unwrap();
     assert_eq!(result.as_int(), Some(97));
     assert_eq!(
-        ev.obarray.symbol_value_copied("unread-command-events"),
+        ev.obarray().symbol_value_copied("unread-command-events"),
         Some(Value::NIL),
     );
 }
@@ -1551,7 +1551,7 @@ fn read_char_exclusive_skips_non_character_and_empty_tail() {
 fn read_char_exclusive_skips_non_character_and_leaves_tail() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
-    ev.obarray.set_symbol_value(
+    ev.obarray_view_mut().set_symbol_value(
         "unread-command-events",
         Value::list(vec![
             Value::symbol("foo"),
@@ -1564,7 +1564,7 @@ fn read_char_exclusive_skips_non_character_and_leaves_tail() {
             .unwrap();
     assert_eq!(result.as_int(), Some(97));
     assert_eq!(
-        ev.obarray.symbol_value_copied("unread-command-events"),
+        ev.obarray().symbol_value_copied("unread-command-events"),
         Some(Value::list(vec![Value::fixnum(98)])),
     );
 }
@@ -1590,11 +1590,11 @@ fn get_load_suffixes_returns_list() {
 fn get_load_suffixes_cross_products_rep_suffixes() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
-    ev.obarray.set_symbol_value(
+    ev.obarray_view_mut().set_symbol_value(
         "load-file-rep-suffixes",
         Value::list(vec![Value::string(""), Value::string(".gz")]),
     );
-    ev.obarray.set_symbol_value(
+    ev.obarray_view_mut().set_symbol_value(
         "jka-compr-load-suffixes",
         Value::list(vec![Value::string(".gz")]),
     );
@@ -1631,7 +1631,7 @@ fn get_load_suffixes_cross_products_rep_suffixes() {
 fn get_load_suffixes_returns_nil_when_representation_suffixes_are_nil() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
-    ev.obarray
+    ev.obarray_view_mut()
         .set_symbol_value("load-file-rep-suffixes", Value::NIL);
 
     let result = builtin_get_load_suffixes(ev.variables(), vec![]).unwrap();
@@ -1643,13 +1643,13 @@ fn get_load_suffixes_returns_nil_when_representation_suffixes_are_nil() {
 fn get_load_suffixes_ignores_irrelevant_non_string_jka_members() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
-    ev.obarray
+    ev.obarray_view_mut()
         .set_symbol_value("load-suffixes", Value::list(vec![Value::string(".el")]));
-    ev.obarray.set_symbol_value(
+    ev.obarray_view_mut().set_symbol_value(
         "load-file-rep-suffixes",
         Value::list(vec![Value::string("")]),
     );
-    ev.obarray.set_symbol_value(
+    ev.obarray_view_mut().set_symbol_value(
         "jka-compr-load-suffixes",
         Value::list(vec![Value::symbol("not-a-string")]),
     );

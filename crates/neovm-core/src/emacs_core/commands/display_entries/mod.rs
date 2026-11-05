@@ -27,9 +27,10 @@ pub(crate) fn builtin_frame_id(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args_range("frame-id", &args, 0, 1)?;
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     let fid = crate::emacs_core::window_cmds::resolve_frame_id_in_state(
-        &mut eval.frames,
-        &mut eval.edit.buffers,
+        frames,
+        buffers,
         args.first(),
         neovm_value::display_vocab::FrameDomain::Live,
     )?;
@@ -88,7 +89,7 @@ pub(crate) fn builtin_mouse_position_in_root_frame(
             break;
         }
         seen.push(id);
-        let Some(frame) = eval.frames.get(id) else {
+        let Some(frame) = eval.frame_manager().get(id) else {
             // `mouse-position-function` can return a frame that has since
             // been deleted; Neomacs keeps no geometry for it.  GNU would read
             // the dead frame's stale left_pos/top_pos, which cannot be
@@ -104,7 +105,7 @@ pub(crate) fn builtin_mouse_position_in_root_frame(
         else {
             break;
         };
-        if eval.frames.get(parent_id).is_none() {
+        if eval.frame_manager().get(parent_id).is_none() {
             // A surviving child can reference a parent that delete-frame
             // removed: Neomacs does not yet soft-delete children the way GNU
             // does (src/frame.c:2645-2664).  The root position cannot be
@@ -151,7 +152,7 @@ fn current_mouse_position_value(
     pixel_units: bool,
 ) -> EvalResult {
     let selected_frame = selected_frame_value(eval);
-    let (frame_value, x, y) = match eval.command_loop.keyboard.mouse_pixel_position() {
+    let (frame_value, x, y) = match eval.command_loop().keyboard.mouse_pixel_position() {
         Some(state) => {
             let frame_value = state
                 .frame_id
@@ -184,10 +185,8 @@ fn maybe_transform_mouse_position(
 }
 
 fn selected_frame_value(eval: &mut crate::emacs_core::eval::Context) -> Value {
-    let fid = crate::emacs_core::window_cmds::ensure_selected_frame_id_in_state(
-        &mut eval.frames,
-        &mut eval.edit.buffers,
-    );
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let fid = crate::emacs_core::window_cmds::ensure_selected_frame_id_in_state(frames, buffers);
     Value::make_frame(fid.0)
 }
 
@@ -200,7 +199,7 @@ fn pixel_to_char_mouse_position(
     let Some(frame_id) = frame_id else {
         return (Value::NIL, Value::NIL);
     };
-    let Some(frame) = eval.frames.get(frame_id) else {
+    let Some(frame) = eval.frame_manager().get(frame_id) else {
         return (Value::NIL, Value::NIL);
     };
     let char_width = frame.char_width.max(1.0);
@@ -246,14 +245,15 @@ pub(crate) fn builtin_reconsider_frame_fonts(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("reconsider-frame-fonts", &args, 1)?;
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     let frame_id = super::window_cmds::resolve_frame_id_in_state(
-        &mut eval.frames,
-        &mut eval.edit.buffers,
+        frames,
+        buffers,
         Some(&args[0]),
         neovm_value::display_vocab::FrameDomain::Live,
     )?;
     if eval
-        .frames
+        .frame_manager()
         .get(frame_id)
         .and_then(|frame| frame.effective_window_system())
         .is_none()
@@ -291,18 +291,17 @@ pub(crate) fn builtin_tool_bar_pixel_width(
     expect_args_range("tool-bar-pixel-width", &args, 0, 1)?;
     match args.first().filter(|frame| !frame.is_nil()) {
         Some(frame) => {
+            let (frames, buffers) = eval.frame_manager_and_buffers_mut();
             crate::emacs_core::window_cmds::resolve_frame_id_in_state(
-                &mut eval.frames,
-                &mut eval.edit.buffers,
+                frames,
+                buffers,
                 Some(frame),
                 neovm_value::display_vocab::FrameDomain::Any,
             )?;
         }
         None => {
-            crate::emacs_core::window_cmds::ensure_selected_frame_id_in_state(
-                &mut eval.frames,
-                &mut eval.edit.buffers,
-            );
+            let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+            crate::emacs_core::window_cmds::ensure_selected_frame_id_in_state(frames, buffers);
         }
     }
     Ok(Value::fixnum(0))
@@ -314,10 +313,13 @@ pub(crate) fn builtin_xw_display_color_p_ctx(
 ) -> EvalResult {
     expect_args_range("xw-display-color-p", &args, 0, 1)?;
     if let Some(display) = args.first() {
-        crate::emacs_core::display::expect_display_designator_in_state(&ctx.frames, display)?;
+        crate::emacs_core::display::expect_display_designator_in_state(
+            &ctx.frame_manager(),
+            display,
+        )?;
     }
     if crate::emacs_core::display::display_window_system_symbol_in_state(
-        &ctx.frames,
+        &ctx.frame_manager(),
         ctx.variables(),
         &[],
         args.first(),
@@ -346,7 +348,7 @@ fn tty_display_dimension(
         _ => crate::emacs_core::window_cmds::ensure_selected_frame_id(ctx),
     };
 
-    let Some(frame) = ctx.frames.get(frame_id) else {
+    let Some(frame) = ctx.frame_manager().get(frame_id) else {
         return Err(signal(
             LispCondition::WrongTypeArgument,
             vec![
@@ -393,14 +395,15 @@ pub(crate) fn builtin_frame_after_make_frame(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("frame-after-make-frame", &args, 2)?;
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     let frame_id = crate::emacs_core::window_cmds::resolve_frame_id_in_state(
-        &mut eval.frames,
-        &mut eval.edit.buffers,
+        frames,
+        buffers,
         args.first(),
         FrameDomain::Live,
     )?;
     if args[1].is_truthy() {
-        let request = eval.frames.get(frame_id).and_then(|frame| {
+        let request = eval.frame_manager().get(frame_id).and_then(|frame| {
             (frame.effective_window_system().is_some()
                 && frame.parent_frame.as_frame_id().is_none())
             .then(|| crate::emacs_core::eval::GuiFrameHostRequest::for_frame(frame))
@@ -430,9 +433,10 @@ fn expect_live_frame_or_nil(
     eval: &mut crate::emacs_core::eval::Context,
     value: &Value,
 ) -> Result<(), Flow> {
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     crate::emacs_core::window_cmds::resolve_frame_id_in_state(
-        &mut eval.frames,
-        &mut eval.edit.buffers,
+        frames,
+        buffers,
         Some(value),
         FrameDomain::Live,
     )
@@ -548,7 +552,7 @@ pub(crate) fn builtin_neomacs_display_monitor_attributes_list(
 ) -> EvalResult {
     expect_args_range("neomacs-display-monitor-attributes-list", &args, 0, 1)?;
     let frames = eval
-        .frames
+        .frame_manager()
         .frame_list()
         .into_iter()
         .map(|fid| Value::make_frame(fid.0))
@@ -631,15 +635,16 @@ pub(crate) fn builtin_set_mouse_pixel_position(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("set-mouse-pixel-position", &args, 3)?;
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     let fid = super::window_cmds::resolve_frame_id_in_state(
-        &mut eval.frames,
-        &mut eval.edit.buffers,
+        frames,
+        buffers,
         Some(&args[0]),
         neovm_value::display_vocab::FrameDomain::Live,
     )?;
     let x = expect_int(&args[1])?;
     let y = expect_int(&args[2])?;
-    eval.command_loop
+    eval.command_loop_mut()
         .keyboard
         .set_mouse_pixel_position(Some(fid), x, y);
     Ok(Value::NIL)
@@ -650,15 +655,16 @@ pub(crate) fn builtin_set_mouse_position(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("set-mouse-position", &args, 3)?;
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     let fid = super::window_cmds::resolve_frame_id_in_state(
-        &mut eval.frames,
-        &mut eval.edit.buffers,
+        frames,
+        buffers,
         Some(&args[0]),
         neovm_value::display_vocab::FrameDomain::Live,
     )?;
     let x = expect_int(&args[1])?;
     let y = expect_int(&args[2])?;
-    let Some(frame) = eval.frames.get(fid) else {
+    let Some(frame) = eval.frame_manager().get(fid) else {
         return Err(signal("error", vec![Value::string("Frame not found")]));
     };
     let char_width = frame.char_width.max(1.0).round() as i64;
@@ -667,7 +673,7 @@ pub(crate) fn builtin_set_mouse_position(
     let pixel_y = y
         .saturating_mul(char_height)
         .saturating_add(char_height / 2);
-    eval.command_loop
+    eval.command_loop_mut()
         .keyboard
         .set_mouse_pixel_position(Some(fid), pixel_x, pixel_y);
     Ok(Value::NIL)
@@ -678,9 +684,10 @@ pub(crate) fn builtin_display_update_for_mouse_movement(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("display--update-for-mouse-movement", &args, 3)?;
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     let fid = super::window_cmds::resolve_frame_id_in_state(
-        &mut eval.frames,
-        &mut eval.edit.buffers,
+        frames,
+        buffers,
         Some(&args[0]),
         neovm_value::display_vocab::FrameDomain::Live,
     )?;
@@ -695,16 +702,17 @@ pub(crate) fn builtin_frame_scroll_bar_height(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args_range("frame-scroll-bar-height", &args, 0, 1)?;
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     let fid = super::window_cmds::resolve_frame_id_in_state(
-        &mut eval.frames,
-        &mut eval.edit.buffers,
+        frames,
+        buffers,
         args.first(),
         FrameDomain::Any,
     )?;
     // GNU returns FRAME_SCROLL_BAR_AREA_HEIGHT (src/frame.c:4496-4501): the
     // configured height while the frame enables horizontal scroll bars, and
     // zero otherwise.
-    Ok(Value::fixnum(eval.frames.get(fid).map_or(
+    Ok(Value::fixnum(eval.frame_manager().get(fid).map_or(
         0,
         crate::window::Frame::horizontal_scroll_bar_area_height,
     )))
@@ -715,13 +723,14 @@ pub(crate) fn builtin_frame_scroll_bar_width(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args_range("frame-scroll-bar-width", &args, 0, 1)?;
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     let fid = super::window_cmds::resolve_frame_id_in_state(
-        &mut eval.frames,
-        &mut eval.edit.buffers,
+        frames,
+        buffers,
         args.first(),
         FrameDomain::Any,
     )?;
-    Ok(Value::fixnum(eval.frames.get(fid).map_or(
+    Ok(Value::fixnum(eval.frame_manager().get(fid).map_or(
         0,
         crate::window::Frame::vertical_scroll_bar_area_width,
     )))
@@ -732,13 +741,14 @@ pub(crate) fn builtin_frame_root_frame(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args_range("frame-root-frame", &args, 0, 1)?;
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     let fid = super::window_cmds::resolve_frame_id_in_state(
-        &mut eval.frames,
-        &mut eval.edit.buffers,
+        frames,
+        buffers,
         args.first(),
         neovm_value::display_vocab::FrameDomain::Live,
     )?;
-    let root = eval.frames.root_frame_id(fid).unwrap_or(fid);
+    let root = eval.frame_manager().root_frame_id(fid).unwrap_or(fid);
     Ok(Value::make_frame(root.0))
 }
 

@@ -133,18 +133,15 @@ pub(crate) fn builtin_forward_comment(
     // As above, snapshot all Lisp-visible scan controls only after the last
     // possible syntax-propertize callback.
     let policy = SexpScanPolicy::for_context(eval);
+    let symbol_mode = eval.symbol_mode();
+    let (obarray, owner, buffers) = eval.variable_view_and_buffers_mut();
     let props = SyntaxProperties::for_scan_with_symbols(
         honor,
-        VariableView::new(&eval.obarray, &eval.owner),
-        &eval.edit.buffers,
-        eval.symbol_mode(),
+        VariableView::new(obarray, owner),
+        buffers,
+        symbol_mode,
     );
-    forward_comment_in_buffers(
-        &mut eval.edit.buffers,
-        count,
-        props,
-        policy.comment_end_escape(),
-    )
+    forward_comment_in_buffers(buffers, count, props, policy.comment_end_escape())
 }
 
 /// `(backward-prefix-chars)` — move point backward over prefix-syntax chars.
@@ -153,13 +150,15 @@ pub(crate) fn builtin_backward_prefix_chars(
     args: &[Value],
 ) -> EvalResult {
     let honor = parse_sexp_lookup_properties_enabled(eval);
+    let symbol_mode = eval.symbol_mode();
+    let (obarray, owner, buffers) = eval.variable_view_and_buffers_mut();
     let props = SyntaxProperties::for_scan_with_symbols(
         honor,
-        VariableView::new(&eval.obarray, &eval.owner),
-        &eval.edit.buffers,
-        eval.symbol_mode(),
+        VariableView::new(obarray, owner),
+        buffers,
+        symbol_mode,
     );
-    builtin_backward_prefix_chars_in_buffers(&mut eval.edit.buffers, args, props)
+    builtin_backward_prefix_chars_in_buffers(buffers, args, props)
 }
 
 /// `(forward-word &optional COUNT)` — move point forward COUNT words.

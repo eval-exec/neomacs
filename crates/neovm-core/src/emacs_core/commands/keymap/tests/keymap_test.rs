@@ -6,10 +6,14 @@ fn displayed_string_keymap_precedes_buffer_position_maps() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
     let buffer_id = eval.buffers.current_buffer().expect("current buffer").id;
-    let frame_id = eval
-        .frames
-        .create_frame("displayed-string-keymap", 800, 600, buffer_id);
-    let window_id = eval.frames.get(frame_id).expect("frame").selected_window;
+    let frame_id =
+        eval.frame_manager()
+            .create_frame("displayed-string-keymap", 800, 600, buffer_id);
+    let window_id = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
 
     let displayed = Value::string(" tab-one  tab-two ");
     let string_keymap = make_sparse_list_keymap();
@@ -70,10 +74,14 @@ fn chrome_string_without_maps_preserves_tab_line_but_clears_mode_line_maps() {
     eval.buffers
         .set_current_local_map(buffer_local_map)
         .expect("set buffer local map");
-    let frame_id = eval
-        .frames
-        .create_frame("chrome-string-map-fallback", 800, 600, buffer_id);
-    let window_id = eval.frames.get(frame_id).expect("frame").selected_window;
+    let frame_id =
+        eval.frame_manager()
+            .create_frame("chrome-string-map-fallback", 800, 600, buffer_id);
+    let window_id = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
     let displayed = Value::string("caption");
 
     let position_for = |area: &str| {
@@ -1523,10 +1531,14 @@ fn event_position_past_point_max_falls_back_to_the_buffer_local_map() {
     eval.buffers
         .set_current_local_map(buffer_local_map)
         .expect("set buffer local map");
-    let frame_id = eval
-        .frames
-        .create_frame("event-position-past-point-max", 800, 600, buffer_id);
-    let window_id = eval.frames.get(frame_id).expect("frame").selected_window;
+    let frame_id =
+        eval.frame_manager()
+            .create_frame("event-position-past-point-max", 800, 600, buffer_id);
+    let window_id = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
 
     // The posn an echo-area message produces: text position 121 at column 120.
     let position = Value::list(vec![
@@ -1577,9 +1589,13 @@ fn event_position_outside_narrowing_clips_before_full_buffer_property_lookup() {
         .expect("narrow before the event position");
 
     let frame_id =
-        eval.frames
+        eval.frame_manager()
             .create_frame("event-position-outside-narrowing", 800, 600, buffer_id);
-    let window_id = eval.frames.get(frame_id).expect("frame").selected_window;
+    let window_id = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
     let position = Value::list(vec![
         Value::make_window(window_id.0),
         Value::fixnum(5),
@@ -1623,10 +1639,14 @@ fn event_position_before_narrowing_inherits_map_from_preceding_full_buffer_char(
     eval.eval_str("(narrow-to-region 3 5)")
         .expect("narrow after the property-bearing character");
 
-    let frame_id = eval
-        .frames
-        .create_frame("event-position-before-narrowing", 800, 600, buffer_id);
-    let window_id = eval.frames.get(frame_id).expect("frame").selected_window;
+    let frame_id =
+        eval.frame_manager()
+            .create_frame("event-position-before-narrowing", 800, 600, buffer_id);
+    let window_id = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
     let position = Value::list(vec![
         Value::make_window(window_id.0),
         Value::fixnum(1),

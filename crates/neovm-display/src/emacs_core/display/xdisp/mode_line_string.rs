@@ -614,8 +614,10 @@ impl PercentAppendDriver for StoredAppendDriver<'_, '_, '_, '_> {
         let action = {
             let command_loop_depth =
                 ModeLineCommandDepth::from(self.eval.recursive_command_loop_depth());
-            let vars = VariableView::new(&self.eval.obarray, &self.eval.owner);
-            let mut access = mode_line_point::Access::Live(&mut self.eval.frames);
+            let (obarray, owner, frames, buffers, processes, coding_systems) =
+                self.eval.mode_line_inputs_mut();
+            let vars = VariableView::new(obarray, owner);
+            let mut access = mode_line_point::Access::Live(frames);
             // Old stored native fragments created fresh name/column memos.
             // Retain that ownership; a %M callback cannot leave stale fields.
             let mut cache = NativeSpecCache::default();
@@ -624,10 +626,10 @@ impl PercentAppendDriver for StoredAppendDriver<'_, '_, '_, '_> {
             decode_one_native_spec::<StoredTarget<'_>, RecursiveGlobal>(
                 NativeSpecInputs {
                     vars,
-                    coding: CodingAccess::Registry(&self.eval.coding_systems),
+                    coding: CodingAccess::Registry(coding_systems),
                     dynamic: &[],
-                    buffers: &self.eval.edit.buffers,
-                    processes: &self.eval.processes,
+                    buffers,
+                    processes,
                     command_loop_depth,
                     pctx: self.pctx,
                     point_access: &mut access,

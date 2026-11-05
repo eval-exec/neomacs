@@ -131,7 +131,7 @@ fn global_window_system_symbol_in_state(
 fn selected_frame_window_system_symbol(
     eval: &neovm_eval::emacs_core::eval::Context,
 ) -> Option<Value> {
-    eval.frames
+    eval.frame_manager()
         .selected_frame()
         .and_then(|frame| frame.effective_window_system())
 }
@@ -161,7 +161,8 @@ pub(crate) fn frame_window_system_symbol(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     frame: Option<&Value>,
 ) -> Result<Option<Value>, Flow> {
-    frame_window_system_symbol_in_state(&mut eval.frames, &mut eval.edit.buffers, frame)
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    frame_window_system_symbol_in_state(frames, buffers, frame)
 }
 
 fn frame_window_system_symbol_in_state(
@@ -204,7 +205,7 @@ fn format_get_device_terminal_arg_eval(
     match value.as_window_id() {
         Some(window) => neovm_eval::emacs_core::print::format_window_handle_in_state(
             &eval.edit.buffers,
-            &eval.frames,
+            &eval.frame_manager(),
             WindowId(window),
         ),
         None => neovm_eval::emacs_core::print::print_value(value),
@@ -269,7 +270,7 @@ pub fn live_frame_designator_p(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     value: &Value,
 ) -> bool {
-    live_frame_designator_p_in_state(&eval.frames, value)
+    live_frame_designator_p_in_state(&eval.frame_manager(), value)
 }
 
 fn expect_display_designator_eval(
@@ -874,17 +875,13 @@ pub fn builtin_window_system(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("window-system", &args, 1)?;
-    if args.first().is_none_or(|v| v.is_nil()) {
-        if let Some(window_system) = selected_frame_window_system_symbol_in_state(&eval.frames) {
-            return Ok(window_system);
-        }
-    } else if let Some(window_system) =
-        frame_window_system_symbol_in_state(&mut eval.frames, &mut eval.edit.buffers, args.first())?
-    {
-        return Ok(window_system);
+    let window_system = if args.first().is_none_or(|v| v.is_nil()) {
+        selected_frame_window_system_symbol_in_state(&eval.frame_manager())
     } else {
-        return Ok(Value::NIL);
-    }
+        let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+        frame_window_system_symbol_in_state(frames, buffers, args.first())?
+    };
+    return Ok(window_system.unwrap_or(Value::NIL));
     Ok(
         dynamic_or_global_symbol_value_in_state_fixed(eval.variables(), WellKnown::WindowSystem)
             .unwrap_or(Value::NIL),
@@ -1251,11 +1248,15 @@ pub fn builtin_display_supports_face_attributes_p(
         .filter(|display| !display.is_nil())
         .and_then(|display| display.as_frame_id())
         .map(FrameId)
-        .or_else(|| eval.frames.selected_frame().map(|frame| frame.id))
+        .or_else(|| eval.frame_manager().selected_frame().map(|frame| frame.id))
     else {
         return Ok(Value::NIL);
     };
-    let Some(backend) = eval.frames.get(frame_id).map(FrameFaceBackend::for_frame) else {
+    let Some(backend) = eval
+        .frame_manager()
+        .get(frame_id)
+        .map(FrameFaceBackend::for_frame)
+    else {
         return Ok(Value::NIL);
     };
 
@@ -2376,7 +2377,10 @@ fn decode_popup_menu_position_window(
         return Ok(());
     }
     if let Some(id) = window.as_window_id() {
-        if ctx.frames.is_live_window_id(crate::window::WindowId(id)) {
+        if ctx
+            .frame_manager()
+            .is_live_window_id(crate::window::WindowId(id))
+        {
             return Ok(());
         }
         return Err(signal(
@@ -2625,14 +2629,15 @@ pub fn builtin_x_export_frames(args: Vec<Value>) -> EvalResult {
 #[doc(hidden)]
 pub fn builtin_x_focus_frame(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_args_range("x-focus-frame", &args, 1, 2)?;
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     let fid = super::window_cmds::resolve_frame_id_in_state(
-        &mut eval.frames,
-        &mut eval.edit.buffers,
+        frames,
+        buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
     if eval
-        .frames
+        .frame_manager()
         .get(fid)
         .and_then(|frame| frame.effective_window_system())
         .is_some_and(gui_window_system_active_value)
@@ -3335,7 +3340,7 @@ pub(crate) fn builtin_display_monitor_attributes_list(
 
     let _ = super::window_cmds::ensure_selected_frame_id(eval);
     let frames = eval
-        .frames
+        .frame_manager()
         .frame_list()
         .into_iter()
         .map(|fid| Value::make_frame(fid.0))
@@ -3355,7 +3360,7 @@ pub(crate) fn builtin_frame_monitor_attributes(
 
     let _ = super::window_cmds::ensure_selected_frame_id(eval);
     let frames = eval
-        .frames
+        .frame_manager()
         .frame_list()
         .into_iter()
         .map(|fid| Value::make_frame(fid.0))

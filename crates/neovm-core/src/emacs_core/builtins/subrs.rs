@@ -116,7 +116,7 @@ impl EvaluatorCompatibility<NeedsEventProperties> {
         // SAFETY: compatibility setup only initializes event symbol properties;
         // it does not call Lisp or mutate canonical function/debugger metadata.
         unsafe {
-            ctx.obarray
+            ctx.obarray_view_mut()
                 .with_legacy_value_write(symbols::init_event_symbol_properties);
         }
         EvaluatorCompatibility(std::marker::PhantomData)
@@ -4116,7 +4116,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "define-charset-internal",
         NativeFn::ContextVec(|ctx, args| {
-            ctx.coding_systems.invalidate_lookup_cache();
+            ctx.coding_systems().invalidate_lookup_cache();
             let name = args.first().copied();
             let defined =
                 crate::emacs_core::charset::builtin_define_charset_internal_in_state(ctx, args)?;
@@ -4134,7 +4134,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "define-charset-alias",
         NativeFn::ContextVec(|ctx, args| {
-            ctx.coding_systems.invalidate_lookup_cache();
+            ctx.coding_systems().invalidate_lookup_cache();
             let alias = args.first().copied();
             let defined =
                 crate::emacs_core::charset::builtin_define_charset_alias_in_state(ctx, args)?;

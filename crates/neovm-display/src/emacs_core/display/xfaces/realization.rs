@@ -127,20 +127,20 @@ pub(crate) fn record_face_change_for(
         Some(name) => frame.face_realization.mark_definition_dirty(name),
         None => frame.face_realization.mark_all_definitions_dirty(),
     };
-    if !other_frames_keep_realizations(&context.frames, scope) {
+    if !other_frames_keep_realizations(&context.frame_manager(), scope) {
         // No walk runs here, so the affected frames' caches stay stale; mark
         // their definitions dirty so a later refresh cannot reuse them.
         match scope {
             FaceChangeScope::AllFrames => {
-                for frame_id in context.frames.frame_list() {
-                    if let Some(frame) = context.frames.get_mut(frame_id) {
+                for frame_id in context.frame_manager().frame_list() {
+                    if let Some(frame) = context.frame_manager_mut().get_mut(frame_id) {
                         mark_dirty(frame);
                     }
                 }
             }
             FaceChangeScope::Frames(affected) | FaceChangeScope::DefinitionsOnly(affected) => {
                 for frame_id in affected {
-                    if let Some(frame) = context.frames.get_mut(*frame_id) {
+                    if let Some(frame) = context.frame_manager_mut().get_mut(*frame_id) {
                         mark_dirty(frame);
                     }
                 }
@@ -148,8 +148,8 @@ pub(crate) fn record_face_change_for(
         }
         return;
     }
-    for frame_id in context.frames.frame_list() {
-        let Some(frame) = context.frames.get_mut(frame_id) else {
+    for frame_id in context.frame_manager().frame_list() {
+        let Some(frame) = context.frame_manager_mut().get_mut(frame_id) else {
             continue;
         };
         match scope {
@@ -282,7 +282,7 @@ fn map_color(
         && eval
             .variable_value_by_name("tty-defined-color-alist")
             .is_some_and(|value| value.is_cons())
-        && eval.obarray.fboundp("tty-color-alist")
+        && eval.obarray().fboundp("tty-color-alist")
     {
         let alist = eval.funcall_general(
             Value::symbol("tty-color-alist"),
@@ -309,7 +309,7 @@ fn map_color(
             }));
         }
     }
-    if name.is_empty() || !eval.obarray.fboundp("tty-color-desc") {
+    if name.is_empty() || !eval.obarray().fboundp("tty-color-desc") {
         return Ok(None);
     }
     let descriptor = eval.funcall_general(
@@ -443,7 +443,7 @@ impl XfacesRealizationContextExt for neovm_eval::emacs_core::eval::Context {
     /// Frame face classification shared with pure layout adapters. GNU's
     /// initial terminal is not a termcap face target (xfaces.c:6201-6209).
     fn frame_is_tty_face_target(&self, frame: FrameId) -> bool {
-        self.frames
+        self.frame_manager()
             .get(frame)
             .is_some_and(crate::face::realization::frame_is_tty_target)
     }
@@ -455,7 +455,7 @@ impl XfacesRealizationContextExt for neovm_eval::emacs_core::eval::Context {
     /// global string colors to the frame parameters, and initial/batch frames
     /// do neither.
     fn frame_face_class(&self, frame: FrameId) -> Option<crate::face::realization::FrameFaceClass> {
-        self.frames
+        self.frame_manager()
             .get(frame)
             .and_then(crate::face::realization::frame_face_class)
     }
@@ -473,7 +473,7 @@ impl XfacesRealizationContextExt for neovm_eval::emacs_core::eval::Context {
         frame: FrameId,
         source: &crate::face::FaceTable,
     ) -> bool {
-        self.frames
+        self.frame_manager()
             .get(frame)
             .and_then(|owner| owner.face_realization.table(self.face_change_count))
             .is_some_and(|table| table.shares_definitions_with(source))
@@ -494,7 +494,7 @@ impl XfacesRealizationContextExt for neovm_eval::emacs_core::eval::Context {
         let current = self.display_face_source_table_is_current(frame, source);
         if current
             && let Some(lease) = self
-                .frames
+                .frame_manager()
                 .get(frame)
                 .and_then(|owner| owner.face_realization.root_lease())
         {
@@ -513,7 +513,7 @@ impl XfacesRealizationContextExt for neovm_eval::emacs_core::eval::Context {
             neovm_value::tagged::transport::SharedRoot::batch_from_current_heap(&values)
         }?;
         let lease: std::sync::Arc<[neovm_value::tagged::transport::SharedRoot]> = leases.into();
-        if current && let Some(owner) = self.frames.get_mut(frame) {
+        if current && let Some(owner) = self.frame_manager_mut().get_mut(frame) {
             owner
                 .face_realization
                 .set_root_lease(std::sync::Arc::clone(&lease));
@@ -523,7 +523,7 @@ impl XfacesRealizationContextExt for neovm_eval::emacs_core::eval::Context {
 
     /// Read a complete cached realization without evaluating Lisp.
     fn cached_display_face_for_frame(&self, frame: FrameId, attributes: &Face) -> Option<Face> {
-        let cache = &self.frames.get(frame)?.face_realization;
+        let cache = &self.frame_manager().get(frame)?.face_realization;
         cache
             .generation_matches(self.face_change_count)
             .then(|| cache.lookup(attributes))
@@ -540,7 +540,7 @@ impl XfacesRealizationContextExt for neovm_eval::emacs_core::eval::Context {
         attributes: &Face,
     ) -> crate::face::realization::CachedFaceSlot {
         use crate::face::realization::CachedFaceSlot;
-        let Some(frame) = self.frames.get(frame) else {
+        let Some(frame) = self.frame_manager().get(frame) else {
             return CachedFaceSlot::Unavailable;
         };
         let cache = &frame.face_realization;
@@ -559,7 +559,7 @@ impl XfacesRealizationContextExt for neovm_eval::emacs_core::eval::Context {
         name: &str,
     ) -> Option<(Face, Face)> {
         let role = name.parse::<BasicFace>().ok()?;
-        let cache = &self.frames.get(frame)?.face_realization;
+        let cache = &self.frame_manager().get(frame)?.face_realization;
         cache
             .generation_matches(self.face_change_count)
             .then(|| cache.basic(role))
@@ -594,7 +594,7 @@ impl XfacesRealizationContextExt for neovm_eval::emacs_core::eval::Context {
             return Ok(attributes.clone());
         }
         if matches!(lookup, RealizationLookup::Demand)
-            && let Some(realized) = self.frames.get(frame).and_then(|frame| {
+            && let Some(realized) = self.frame_manager().get(frame).and_then(|frame| {
                 frame
                     .face_realization
                     .generation_matches(self.face_change_count)
@@ -617,11 +617,11 @@ impl XfacesRealizationContextExt for neovm_eval::emacs_core::eval::Context {
         };
         let _default_source_root = RealizationRoots::from_values(default_lface);
         let realization_epoch = self
-            .frames
+            .frame_manager()
             .get(frame)
             .and_then(|owner| owner.face_realization.realization_epoch());
         let source_table = self
-            .frames
+            .frame_manager()
             .get(frame)
             .and_then(|owner| owner.face_realization.table(self.face_change_count))
             .cloned();
@@ -653,7 +653,7 @@ impl XfacesRealizationContextExt for neovm_eval::emacs_core::eval::Context {
         }
         let current = self.face_change_count;
         if let Some(epoch) = &realization_epoch
-            && let Some(owner) = self.frames.get_mut(frame)
+            && let Some(owner) = self.frame_manager_mut().get_mut(frame)
             && owner.face_realization.generation_matches(current)
             && owner.face_realization.retains_epoch(epoch)
         {
@@ -703,18 +703,18 @@ pub(crate) fn prepare_runtime_faces_result(
 ) -> Result<bool, Flow> {
     let generation = eval.face_change_count;
     if let Some(table) = eval
-        .frames
+        .frame_manager()
         .get(frame)
         .and_then(|frame| frame.face_realization.table(generation))
         .cloned()
     {
-        *eval.face_table = table;
+        *eval.face_table_mut() = table;
         return Ok(false);
     }
     // A no-purge mutation keeps the valid realization generation while
     // retiring just its raw source table. Refresh it without forcing basics.
     let definitions_only = eval
-        .frames
+        .frame_manager()
         .get(frame)
         .is_some_and(|owner| owner.face_realization.generation_matches(generation));
     realize_default_lisp_face_for_frame(eval, frame);
@@ -723,7 +723,7 @@ pub(crate) fn prepare_runtime_faces_result(
     // previous entry passes through shared storage unchanged. Only names in
     // the frame's dirty set -- and `default`, refreshed from live frame
     // parameters just above -- pay a Lisp derivation.
-    let table = match eval.frames.get(frame).and_then(|owner| {
+    let table = match eval.frame_manager().get(frame).and_then(|owner| {
         (!owner.face_realization.definitions_all_dirty())
             .then(|| owner.face_realization.reusable_definitions())
             .flatten()
@@ -733,7 +733,7 @@ pub(crate) fn prepare_runtime_faces_result(
         }
         None => runtime_face_table_from_frame_lisp_faces(eval, frame, false),
     };
-    if let Some(owner) = eval.frames.get_mut(frame) {
+    if let Some(owner) = eval.frame_manager_mut().get_mut(frame) {
         if definitions_only {
             owner.face_realization.replace_recorded_definitions(
                 table.clone(),
@@ -743,12 +743,12 @@ pub(crate) fn prepare_runtime_faces_result(
             owner.face_realization.prepare(generation, table.clone());
         }
     }
-    *eval.face_table = table;
+    *eval.face_table_mut() = table;
     if definitions_only || !eval.frame_is_tty_face_target(frame) {
         return Ok(true);
     }
     if let Err(flow) = realize_basic_faces(eval, frame) {
-        if let Some(owner) = eval.frames.get_mut(frame) {
+        if let Some(owner) = eval.frame_manager_mut().get_mut(frame) {
             owner.face_realization.invalidate();
         }
         return Err(flow);
@@ -763,7 +763,7 @@ pub(crate) fn realize_basic_faces(
     if !eval.frame_is_tty_face_target(frame) {
         return Ok(());
     }
-    let table = eval.face_table.clone();
+    let table = eval.face_table().clone();
     // Advice can invalidate or replace both runtime owners. Keep every source
     // in this local snapshot alive until all later basic faces have been read.
     let mut table_roots = Vec::new();
@@ -906,7 +906,7 @@ pub(crate) fn realize_default_after_global_merge(
     local: Value,
 ) -> Result<(), Flow> {
     let cached_source = eval
-        .frames
+        .frame_manager()
         .get(frame)
         .and_then(|owner| owner.face_realization.default_lface());
     let _roots = RealizationRoots::from_values(
@@ -938,17 +938,17 @@ pub(crate) fn realize_default_after_global_merge(
         // Rebuild raw definitions without realize_default_lisp_face_for_frame:
         // GNU uses the merged absolute lface here, not TTY default normalization.
         let table = runtime_face_table_from_frame_lisp_faces(scope.context(), frame, false);
-        if let Some(owner) = scope.context().frames.get_mut(frame) {
+        if let Some(owner) = scope.context().frame_manager_mut().get_mut(frame) {
             owner.face_realization.replace_recorded_definitions(
                 table.clone(),
                 RecordedDefinitionsRefresh { _private: () },
             );
         }
-        *scope.context().face_table = table.clone();
+        *scope.context().face_table_mut() = table.clone();
         let mut attributes = table.resolve("default");
         attributes.inherit = None;
         attributes.doc = None;
-        if let Some(owner) = scope.context().frames.get_mut(frame) {
+        if let Some(owner) = scope.context().frame_manager_mut().get_mut(frame) {
             owner.face_realization.retire_default();
         }
         scope.context().realize_display_face_with_lookup(
@@ -964,7 +964,7 @@ pub(crate) fn realize_default_after_global_merge(
     })();
     let result = scope.finish(result);
     if result.is_err()
-        && let Some(owner) = eval.frames.get_mut(frame)
+        && let Some(owner) = eval.frame_manager_mut().get_mut(frame)
     {
         // The old default was retired before Lisp. Retry realization on the
         // next display after a failed callback instead of using an empty slot.
@@ -1046,9 +1046,9 @@ static_assertions::assert_not_impl_any!(InitialTerminalFaces<'static>: Send, Syn
 
 impl<'a> InitialTerminalFaces<'a> {
     fn new(context: &'a mut neovm_eval::emacs_core::eval::Context, frame: FrameId) -> Option<Self> {
-        let definitions = context.frames.get(frame)?.face_hash_table;
-        let runtime = (*context.face_table).clone();
-        let owner = context.frames.get(frame)?;
+        let definitions = context.frame_manager().get(frame)?.face_hash_table;
+        let runtime = (*context.face_table()).clone();
+        let owner = context.frame_manager().get(frame)?;
         let foreground = owner.known_parameter(FrameParam::ForegroundColor);
         let background = owner.known_parameter(FrameParam::BackgroundColor);
         let mut roots = vec![definitions];
@@ -1056,7 +1056,7 @@ impl<'a> InitialTerminalFaces<'a> {
         runtime.trace_roots(&mut roots);
         let roots = RealizationRoots::from_values(roots);
         let empty = Value::hash_table(HashTableTest::Eq);
-        let owner = context.frames.get_mut(frame)?;
+        let owner = context.frame_manager_mut().get_mut(frame)?;
         owner.face_hash_table = empty;
         // GNU's first basic pass precedes Fmodify_frame_parameters. The plain
         // Rust constructor has stored these parameters already; hide them until
@@ -1080,7 +1080,7 @@ impl<'a> InitialTerminalFaces<'a> {
 
 impl Drop for InitialTerminalFaces<'_> {
     fn drop(&mut self) {
-        if let Some(frame) = self.context.frames.get_mut(self.frame) {
+        if let Some(frame) = self.context.frame_manager_mut().get_mut(self.frame) {
             frame.face_hash_table = self.definitions;
             for (parameter, value) in [
                 (FrameParam::ForegroundColor, self.foreground),
@@ -1097,7 +1097,7 @@ impl Drop for InitialTerminalFaces<'_> {
             }
             frame.face_realization.invalidate();
         }
-        *self.context.face_table = self.runtime.clone();
+        *self.context.face_table_mut() = self.runtime.clone();
     }
 }
 
@@ -1113,7 +1113,7 @@ fn defer_creation_color_parameters(
     frame: FrameId,
     colors: &[Value],
 ) {
-    let Some(owner) = context.frames.get_mut(frame) else {
+    let Some(owner) = context.frame_manager_mut().get_mut(frame) else {
         return;
     };
     for pair in colors {

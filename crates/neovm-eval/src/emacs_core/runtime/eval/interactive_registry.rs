@@ -281,10 +281,10 @@ pub struct InteractiveRegistry {
     ///
     /// Test-only instrumentation makes the performance contract observable
     /// without depending on wall-clock timing.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     where_is_reverse_index_build_count: usize,
     /// Number of command-remapping queries answered by the reverse index.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     where_is_reverse_index_remapping_lookup_count: usize,
 }
 
@@ -295,9 +295,9 @@ impl InteractiveRegistry {
             heap_specs: HashMap::new(),
             interactive_call_stack: Vec::new(),
             where_is_reverse_index: None,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             where_is_reverse_index_build_count: 0,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             where_is_reverse_index_remapping_lookup_count: 0,
         }
     }
@@ -360,26 +360,26 @@ impl InteractiveRegistry {
             heap_specs,
             interactive_call_stack: Vec::new(),
             where_is_reverse_index: None,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             where_is_reverse_index_build_count: 0,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             where_is_reverse_index_remapping_lookup_count: 0,
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn note_where_is_reverse_index_build(&mut self) {
         self.where_is_reverse_index_build_count += 1;
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn where_is_reverse_index_build_count(&self) -> usize {
         self.where_is_reverse_index_build_count
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn where_is_reverse_index_remapping_lookup_count(&self) -> usize {
         self.where_is_reverse_index_remapping_lookup_count
@@ -410,7 +410,7 @@ impl InteractiveRegistry {
         self.where_is_reverse_index = None;
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn note_where_is_reverse_index_remapping_lookup(&mut self) {
         self.where_is_reverse_index_remapping_lookup_count += 1;
     }

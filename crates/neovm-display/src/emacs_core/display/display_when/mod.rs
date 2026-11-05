@@ -163,14 +163,16 @@ impl DisplayWhenContextExt for Context {
             // Lisp has run, including when Lisp exits through a nonlocal flow.
             let window_point = window_id.and_then(|id| {
                 if ctx
-                    .frames
+                    .frame_manager()
                     .selected_frame()
                     .map(|frame| frame.selected_window)
                     == Some(id)
                 {
                     return None;
                 }
-                let frame = ctx.frames.get(ctx.frames.find_window_frame_id(id)?)?;
+                let frame = ctx
+                    .frame_manager()
+                    .get(ctx.frame_manager().find_window_frame_id(id)?)?;
                 match frame.find_window(id)? {
                     Window::Leaf {
                         buffer_id, point, ..

@@ -49,10 +49,8 @@ fn frame_parameter_entry(
 
 /// Seed the initial startup frame before display initialization.
 fn seed_batch_startup_frame(ctx: &mut crate::emacs_core::eval::Context) -> FrameId {
-    crate::emacs_core::window_cmds::seed_batch_startup_frame_in_state(
-        &mut ctx.frames,
-        &mut ctx.edit.buffers,
-    )
+    let (frames, buffers) = ctx.frame_manager_and_buffers_mut();
+    crate::emacs_core::window_cmds::seed_batch_startup_frame_in_state(frames, buffers)
 }
 
 /// Register the bootstrap variables of the core modules that stay above eval.

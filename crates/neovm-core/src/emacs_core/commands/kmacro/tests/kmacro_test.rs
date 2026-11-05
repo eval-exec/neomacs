@@ -139,7 +139,7 @@ fn keyboard_runtime_finalize_and_cancel_match_gnu_macro_boundary_shape() {
     let mut eval = crate::test_utils::new_context();
 
     builtin_start_kbd_macro(&mut eval, vec![]).expect("start");
-    assert!(eval.command_loop.keyboard.kboard.defining_kbd_macro);
+    assert!(eval.command_loop().keyboard.kboard.defining_kbd_macro);
     assert_eq!(
         eval.eval_symbol("defining-kbd-macro")
             .expect("defining-kbd-macro"),
@@ -154,7 +154,7 @@ fn keyboard_runtime_finalize_and_cancel_match_gnu_macro_boundary_shape() {
     builtin_end_kbd_macro(&mut eval, vec![]).expect("end");
 
     assert_eq!(
-        eval.command_loop.last_kbd_macro(),
+        eval.command_loop().last_kbd_macro(),
         Some([Value::char('a')].as_slice())
     );
     assert_eq!(
@@ -289,7 +289,7 @@ fn test_start_and_end_macro() {
     // Start recording
     let result = builtin_start_kbd_macro(&mut eval, vec![]);
     assert!(result.is_ok());
-    assert!(eval.command_loop.keyboard.kboard.defining_kbd_macro);
+    assert!(eval.command_loop().keyboard.kboard.defining_kbd_macro);
 
     // Double-start should error
     let result = builtin_start_kbd_macro(&mut eval, vec![]);
@@ -303,9 +303,9 @@ fn test_start_and_end_macro() {
     // End recording
     let result = builtin_end_kbd_macro(&mut eval, vec![]);
     assert!(result.is_ok());
-    assert!(!eval.command_loop.keyboard.kboard.defining_kbd_macro);
+    assert!(!eval.command_loop().keyboard.kboard.defining_kbd_macro);
     assert_eq!(
-        eval.command_loop.last_kbd_macro(),
+        eval.command_loop().last_kbd_macro(),
         Some([Value::char('h'), Value::char('i')].as_slice())
     );
 
@@ -347,7 +347,7 @@ fn test_start_kbd_macro_builtin_contract() {
         builtin_start_kbd_macro(&mut eval, vec![Value::NIL]).unwrap(),
         Value::NIL
     );
-    assert!(eval.command_loop.keyboard.kboard.defining_kbd_macro);
+    assert!(eval.command_loop().keyboard.kboard.defining_kbd_macro);
 
     // Re-entry while recording should signal `error`.
     let already = builtin_start_kbd_macro(&mut eval, vec![Value::NIL, Value::T]);
@@ -358,7 +358,7 @@ fn test_start_kbd_macro_builtin_contract() {
     eval.finalize_kbd_macro_runtime_chars();
     let _ = builtin_end_kbd_macro(&mut eval, vec![]);
     assert_eq!(
-        eval.command_loop.last_kbd_macro(),
+        eval.command_loop().last_kbd_macro(),
         Some([Value::char('a')].as_slice())
     );
     assert_eq!(
@@ -383,13 +383,16 @@ fn test_start_with_append() {
 
     // Append to it
     let _ = builtin_start_kbd_macro(&mut eval, vec![Value::T, Value::T]);
-    assert_eq!(eval.command_loop.keyboard.kboard.kbd_macro_events.len(), 1);
+    assert_eq!(
+        eval.command_loop().keyboard.kboard.kbd_macro_events.len(),
+        1
+    );
     let _ = builtin_store_kbd_macro_event(&mut eval, vec![Value::char('b')]);
     eval.finalize_kbd_macro_runtime_chars();
     let _ = builtin_end_kbd_macro(&mut eval, vec![]);
 
     assert_eq!(
-        eval.command_loop.last_kbd_macro(),
+        eval.command_loop().last_kbd_macro(),
         Some([Value::char('a'), Value::char('b')].as_slice())
     );
 }
@@ -436,7 +439,7 @@ fn test_start_with_append_reexecutes_last_macro_when_no_exec_is_nil() {
         Value::fixnum(1)
     );
     assert_eq!(
-        eval.command_loop.keyboard.kboard.kbd_macro_events,
+        eval.command_loop().keyboard.kboard.kbd_macro_events,
         vec![Value::symbol("ignore")]
     );
     assert_eq!(
@@ -446,7 +449,7 @@ fn test_start_with_append_reexecutes_last_macro_when_no_exec_is_nil() {
     );
     builtin_end_kbd_macro(&mut eval, vec![]).expect("end append");
     assert_eq!(
-        eval.command_loop.last_kbd_macro(),
+        eval.command_loop().last_kbd_macro(),
         Some([Value::symbol("ignore")].as_slice())
     );
 }
@@ -555,20 +558,20 @@ fn test_execute_kbd_macro_restores_outer_execution_state() {
     let mut eval = crate::test_utils::new_context();
     let outer = vec![Value::char('o'), Value::char('u')];
     eval.begin_executing_kbd_macro_runtime(outer.clone());
-    eval.command_loop.keyboard.kboard.kbd_macro_index = 1;
+    eval.command_loop_mut().keyboard.kboard.kbd_macro_index = 1;
 
     builtin_execute_kbd_macro(&mut eval, vec![Value::vector(vec![])])
         .expect("execute nested macro");
 
     assert_eq!(
-        eval.command_loop
+        eval.command_loop()
             .keyboard
             .kboard
             .executing_kbd_macro
             .as_deref(),
         Some(outer.as_slice())
     );
-    assert_eq!(eval.command_loop.keyboard.kboard.kbd_macro_index, 1);
+    assert_eq!(eval.command_loop().keyboard.kboard.kbd_macro_index, 1);
     assert_eq!(
         eval.eval_symbol("executing-kbd-macro-index")
             .expect("executing-kbd-macro-index"),
@@ -1027,7 +1030,7 @@ fn test_end_kbd_macro_repeat_executes_remaining_iterations() {
         Value::fixnum(2)
     );
     assert_eq!(
-        eval.command_loop.last_kbd_macro(),
+        eval.command_loop().last_kbd_macro(),
         Some([Value::char('a')].as_slice())
     );
 }
@@ -1150,7 +1153,7 @@ fn test_last_kbd_macro_builtin() {
         Value::NIL
     );
 
-    eval.command_loop.keyboard.kboard.last_kbd_macro =
+    eval.command_loop_mut().keyboard.kboard.last_kbd_macro =
         Some(vec![Value::char('x'), Value::char('y')]);
     let value = builtin_last_kbd_macro(&mut eval, vec![]).unwrap();
     match value.kind() {
@@ -1238,7 +1241,7 @@ fn test_name_last_kbd_macro() {
     assert!(result.is_ok());
 
     // Check that the symbol has a function binding
-    let func = eval.obarray.symbol_function("my-macro");
+    let func = eval.obarray().symbol_function("my-macro");
     assert!(func.is_some());
     match func.unwrap().kind() {
         ValueKind::Veclike(VecLikeType::Vector) => {
@@ -1265,7 +1268,7 @@ fn test_kbd_macro_query_startup_is_autoloaded() {
     crate::test_utils::init_test_tracing();
     let eval = eval_with_ldefs_boot_autoloads(&["kbd-macro-query"]);
     let function = eval
-        .obarray
+        .obarray()
         .symbol_function("kbd-macro-query")
         .expect("missing kbd-macro-query startup function cell");
     assert!(is_autoload_value(
@@ -1373,7 +1376,7 @@ fn test_insert_kbd_macro_startup_is_autoloaded() {
     crate::test_utils::init_test_tracing();
     let eval = eval_with_ldefs_boot_autoloads(&["insert-kbd-macro"]);
     let function = eval
-        .obarray
+        .obarray()
         .symbol_function("insert-kbd-macro")
         .expect("missing insert-kbd-macro startup function cell");
     assert!(is_autoload_value(

@@ -15,12 +15,12 @@ fn issue554_positioned_keymap_markers_follow_symbol_mode() {
     );
     assert_eq!(KeymapMarker::from_value(marker, SymbolMode::Bare), None);
     assert_eq!(
-        get_keymap_in_obarray(&ctx.obarray, &map, true, SymbolMode::Positioned)
+        get_keymap_in_obarray(&ctx.obarray(), &map, true, SymbolMode::Positioned)
             .unwrap()
             .bits(),
         map.bits()
     );
-    assert!(get_keymap_in_obarray(&ctx.obarray, &map, true, SymbolMode::Bare).is_err());
+    assert!(get_keymap_in_obarray(&ctx.obarray(), &map, true, SymbolMode::Bare).is_err());
 }
 
 #[test]
@@ -56,15 +56,15 @@ fn issue554_positioned_keymap_designators_resolve_function_cells() {
     let positioned = ctx
         .tagged_heap
         .alloc_symbol_with_pos(alias, Value::fixnum(0));
-    ctx.obarray
+    ctx.obarray_view_mut()
         .set_symbol_function("issue554-keymap-alias", map);
     assert_eq!(
-        get_keymap_in_obarray(&ctx.obarray, &positioned, true, SymbolMode::Positioned)
+        get_keymap_in_obarray(&ctx.obarray(), &positioned, true, SymbolMode::Positioned)
             .unwrap()
             .bits(),
         map.bits()
     );
-    assert!(get_keymap_in_obarray(&ctx.obarray, &positioned, true, SymbolMode::Bare).is_err());
+    assert!(get_keymap_in_obarray(&ctx.obarray(), &positioned, true, SymbolMode::Bare).is_err());
 }
 
 #[test]

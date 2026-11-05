@@ -61,7 +61,7 @@ pub fn builtin_frame_focus(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     expect_max_args("frame-focus", &args, 1)?;
     let fid = resolve_frame_id_in_state(
         frames,
@@ -87,7 +87,7 @@ pub fn builtin_frame_parent(
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
-    let Some(parent) = eval.frames.frame_parent_id(fid) else {
+    let Some(parent) = eval.frame_manager().frame_parent_id(fid) else {
         return Ok(Value::NIL);
     };
     Ok(Value::make_frame(parent.0))
@@ -111,7 +111,7 @@ pub fn builtin_frame_ancestor_p(
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
     Ok(Value::bool_val(
-        eval.frames.frame_ancestor_p(ancestor, descendant),
+        eval.frame_manager().frame_ancestor_p(ancestor, descendant),
     ))
 }
 
@@ -120,11 +120,11 @@ pub fn sync_gui_frame_focus_redirects(
     eval: &mut neovm_eval::emacs_core::eval::Context,
 ) -> EvalResult {
     let redirects = eval
-        .frames
+        .frame_manager()
         .frame_list()
         .into_iter()
         .filter_map(|id| {
-            let frame = eval.frames.get(id)?;
+            let frame = eval.frame_manager().get(id)?;
             frame
                 .effective_window_system()
                 .is_some()
@@ -143,7 +143,7 @@ pub(crate) fn sync_gui_frame_alpha(
     frame: FrameId,
 ) -> EvalResult {
     let alpha = eval
-        .frames
+        .frame_manager()
         .get(frame)
         .map(|frame| frame.frame_alpha)
         .unwrap_or([-1.0; 2]);
@@ -166,9 +166,10 @@ pub fn builtin_redirect_frame_focus(
 ) -> EvalResult {
     expect_min_args("redirect-frame-focus", &args, 1)?;
     expect_max_args("redirect-frame-focus", &args, 2)?;
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     let fid = resolve_frame_id_in_state(
-        &mut eval.frames,
-        &mut eval.edit.buffers,
+        frames,
+        buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Any,
     )?;
@@ -176,9 +177,10 @@ pub fn builtin_redirect_frame_focus(
         if value.is_nil() {
             Value::NIL
         } else {
+            let (frames, buffers) = eval.frame_manager_and_buffers_mut();
             let focus_fid = resolve_frame_id_in_state(
-                &mut eval.frames,
-                &mut eval.edit.buffers,
+                frames,
+                buffers,
                 Some(value),
                 crate::emacs_core::window_cmds::FrameDomain::Live,
             )?;
@@ -188,7 +190,7 @@ pub fn builtin_redirect_frame_focus(
         Value::NIL
     };
     let frame = eval
-        .frames
+        .frame_manager_mut()
         .get_mut(fid)
         .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
     frame.focus_frame = focus_frame;
@@ -201,7 +203,7 @@ pub fn builtin_iconify_frame(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     expect_max_args("iconify-frame", &args, 1)?;
     let fid = resolve_frame_id_in_state(
         frames,
@@ -221,7 +223,7 @@ fn iconify_frame_action(
     fid: FrameId,
 ) -> Result<IconifyFrameAction, Flow> {
     let frame = eval
-        .frames
+        .frame_manager()
         .get(fid)
         .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
     let is_window_frame = frame.effective_window_system().is_some();
@@ -234,7 +236,7 @@ fn iconify_frame_action(
             return Ok(IconifyFrameAction::Noop);
         }
         if is_window_frame && child_policy == Value::symbol("iconify-top-level") {
-            let root = eval.frames.root_frame_id(fid).unwrap_or(fid);
+            let root = eval.frame_manager().root_frame_id(fid).unwrap_or(fid);
             return Ok(IconifyFrameAction::Iconify(root));
         }
         if child_policy == Value::symbol("make-invisible") {
@@ -277,7 +279,7 @@ pub fn builtin_make_frame_invisible(
 ) -> EvalResult {
     expect_max_args("make-frame-invisible", &args, 2)?;
     let fid = {
-        let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
+        let (frames, buffers) = eval.frame_manager_and_buffers_mut();
         resolve_frame_id_in_state(
             frames,
             buffers,
@@ -296,7 +298,7 @@ pub fn builtin_make_frame_invisible(
     }
 
     let (is_tty_child, is_window_frame) = eval
-        .frames
+        .frame_manager()
         .get(fid)
         .map(|frame| {
             (
@@ -319,39 +321,37 @@ pub fn builtin_make_frame_invisible(
         set_frame_visibility(eval, fid, FrameVisibility::Invisible)?;
         if is_tty_child
             && eval
-                .frames
+                .frame_manager()
                 .selected_frame()
                 .is_some_and(|frame| frame.id == fid)
         {
-            let fallback = mru_rooted_frame_in_state(&eval.frames, fid);
+            let fallback = mru_rooted_frame_in_state(&eval.frame_manager(), fid);
             if fallback != fid {
-                if let Some(old_fid) = eval.frames.selected_frame().map(|frame| frame.id) {
-                    remember_selected_window_point_in_state(
-                        &mut eval.frames,
-                        &mut eval.edit.buffers,
-                        old_fid,
-                    );
+                if let Some(old_fid) = eval.frame_manager().selected_frame().map(|frame| frame.id) {
+                    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+                    remember_selected_window_point_in_state(frames, buffers, old_fid);
                 }
-                if let Some(new_window) =
-                    eval.frames.get(fallback).map(|frame| frame.selected_window)
+                if let Some(new_window) = eval
+                    .frame_manager()
+                    .get(fallback)
+                    .map(|frame| frame.selected_window)
                 {
                     let old_window = eval
-                        .frames
+                        .frame_manager()
                         .selected_frame()
                         .map(|frame| frame.selected_window);
                     eval.gnu_mark_selection(old_window, new_window, true);
                 }
-                if eval.frames.select_frame(fallback) {
-                    if let Some(selected_wid) =
-                        eval.frames.get(fallback).map(|frame| frame.selected_window)
+                if eval.frame_manager_mut().select_frame(fallback) {
+                    if let Some(selected_wid) = eval
+                        .frame_manager()
+                        .get(fallback)
+                        .map(|frame| frame.selected_window)
                     {
-                        let _ = eval.frames.note_window_selected(selected_wid);
+                        let _ = eval.frame_manager_mut().note_window_selected(selected_wid);
                     }
-                    sync_selected_window_buffer_in_state(
-                        &eval.frames,
-                        &mut eval.edit.buffers,
-                        fallback,
-                    );
+                    let (frames, buffers) = eval.frame_manager_read_and_buffers_mut();
+                    sync_selected_window_buffer_in_state(frames, buffers, fallback);
                     eval.sync_keyboard_terminal_owner();
                     sync_gui_frame_focus_redirects(eval)?;
                 }
@@ -371,7 +371,7 @@ pub fn builtin_make_frame_visible(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     expect_max_args("make-frame-visible", &args, 1)?;
     let fid = resolve_frame_id_in_state(
         frames,
@@ -380,12 +380,12 @@ pub fn builtin_make_frame_visible(
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
     // Ensure the frame exists.
-    if eval.frames.get(fid).is_none() {
+    if eval.frame_manager().get(fid).is_none() {
         return Err(signal("error", vec![Value::string("Frame not found")]));
     }
     set_frame_visibility(eval, fid, FrameVisibility::Visible)?;
     let frame = eval
-        .frames
+        .frame_manager()
         .get(fid)
         .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
     Ok(Value::make_frame(frame.id.0))
@@ -397,7 +397,8 @@ pub fn builtin_selected_frame(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    selected_frame_impl(&mut eval.frames, &mut eval.edit.buffers, args)
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    selected_frame_impl(frames, buffers, args)
 }
 
 /// `(frame-list)` -> list of frame objects.
@@ -406,7 +407,7 @@ pub fn builtin_frame_list(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     expect_args("frame-list", &args, 0)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let ids: Vec<Value> = frames
@@ -423,7 +424,7 @@ pub fn builtin_visible_frame_list(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     expect_args("visible-frame-list", &args, 0)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let mut frame_ids = frames.frame_list();
@@ -448,7 +449,7 @@ pub fn builtin_frame_char_height(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: &[Value],
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     expect_max_args("frame-char-height", &args, 1)?;
     let fid = resolve_frame_id_in_state(
         frames,
@@ -468,7 +469,7 @@ pub fn builtin_frame_char_width(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: &[Value],
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     expect_max_args("frame-char-width", &args, 1)?;
     let fid = resolve_frame_id_in_state(
         frames,
@@ -487,15 +488,16 @@ pub fn builtin_frame_native_height(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("frame-native-height", &args, 1)?;
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     let fid = resolve_frame_id_in_state(
-        &mut eval.frames,
-        &mut eval.edit.buffers,
+        frames,
+        buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Any,
     )?;
     sync_live_gui_resize_for_geometry_queries(eval, fid)?;
     let frame = eval
-        .frames
+        .frame_manager()
         .get(fid)
         .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
     Ok(Value::fixnum(if frame_uses_window_system_pixels(frame) {
@@ -512,15 +514,16 @@ pub fn builtin_frame_native_width(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("frame-native-width", &args, 1)?;
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     let fid = resolve_frame_id_in_state(
-        &mut eval.frames,
-        &mut eval.edit.buffers,
+        frames,
+        buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Any,
     )?;
     sync_live_gui_resize_for_geometry_queries(eval, fid)?;
     let frame = eval
-        .frames
+        .frame_manager()
         .get(fid)
         .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
     let uses_window_system_pixels = frame_uses_window_system_pixels(frame);
@@ -531,7 +534,9 @@ pub fn builtin_frame_native_width(
         tracing::debug!(
             "frame-native-width: fid={:?} selected={:?} size={}x{} uses_pixels={} effective_ws={:?} param_ws={:?}",
             fid,
-            eval.frames.selected_frame().map(|selected| selected.id),
+            eval.frame_manager()
+                .selected_frame()
+                .map(|selected| selected.id),
             frame.width,
             frame.height,
             uses_window_system_pixels,
@@ -553,15 +558,16 @@ pub fn builtin_frame_text_cols(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("frame-text-cols", &args, 1)?;
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     let fid = resolve_frame_id_in_state(
-        &mut eval.frames,
-        &mut eval.edit.buffers,
+        frames,
+        buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Any,
     )?;
     sync_live_gui_resize_for_geometry_queries(eval, fid)?;
     let frame = eval
-        .frames
+        .frame_manager()
         .get(fid)
         .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
     Ok(Value::fixnum(frame_total_cols(frame)))
@@ -574,15 +580,16 @@ pub fn builtin_frame_text_lines(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("frame-text-lines", &args, 1)?;
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     let fid = resolve_frame_id_in_state(
-        &mut eval.frames,
-        &mut eval.edit.buffers,
+        frames,
+        buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Any,
     )?;
     sync_live_gui_resize_for_geometry_queries(eval, fid)?;
     let frame = eval
-        .frames
+        .frame_manager()
         .get(fid)
         .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
     Ok(Value::fixnum(if frame_uses_window_system_pixels(frame) {
@@ -604,19 +611,20 @@ pub fn builtin_frame_text_width(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("frame-text-width", &args, 1)?;
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     let fid = resolve_frame_id_in_state(
-        &mut eval.frames,
-        &mut eval.edit.buffers,
+        frames,
+        buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Any,
     )?;
     sync_live_gui_resize_for_geometry_queries(eval, fid)?;
     let frame = eval
-        .frames
+        .frame_manager()
         .get(fid)
         .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
     Ok(Value::fixnum(if frame_uses_window_system_pixels(frame) {
-        frame_text_width_pixels_in_state(&eval.frames, fid) as i64
+        frame_text_width_pixels_in_state(&eval.frame_manager(), fid) as i64
     } else {
         frame_text_cols(frame)
     }))
@@ -631,15 +639,16 @@ pub fn builtin_frame_text_height(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("frame-text-height", &args, 1)?;
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     let fid = resolve_frame_id_in_state(
-        &mut eval.frames,
-        &mut eval.edit.buffers,
+        frames,
+        buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Any,
     )?;
     sync_live_gui_resize_for_geometry_queries(eval, fid)?;
     let frame = eval
-        .frames
+        .frame_manager()
         .get(fid)
         .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
     Ok(Value::fixnum(if frame_uses_window_system_pixels(frame) {
@@ -656,15 +665,16 @@ pub fn builtin_frame_total_cols(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("frame-total-cols", &args, 1)?;
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     let fid = resolve_frame_id_in_state(
-        &mut eval.frames,
-        &mut eval.edit.buffers,
+        frames,
+        buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Any,
     )?;
     sync_live_gui_resize_for_geometry_queries(eval, fid)?;
     let frame = eval
-        .frames
+        .frame_manager()
         .get(fid)
         .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
     Ok(Value::fixnum(frame_total_cols(frame)))
@@ -677,15 +687,16 @@ pub fn builtin_frame_total_lines(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("frame-total-lines", &args, 1)?;
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     let fid = resolve_frame_id_in_state(
-        &mut eval.frames,
-        &mut eval.edit.buffers,
+        frames,
+        buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Any,
     )?;
     sync_live_gui_resize_for_geometry_queries(eval, fid)?;
     let frame = eval
-        .frames
+        .frame_manager()
         .get(fid)
         .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
     Ok(Value::fixnum(frame_total_lines(frame)))
@@ -697,7 +708,7 @@ pub fn builtin_frame_position(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     expect_max_args("frame-position", &args, 1)?;
     let fid = resolve_frame_id_in_state(
         frames,
@@ -722,25 +733,26 @@ pub fn builtin_set_frame_height(
 ) -> EvalResult {
     expect_min_args("set-frame-height", &args, 2)?;
     expect_max_args("set-frame-height", &args, 4)?;
+    let (frames, buffers) = ctx.frame_manager_and_buffers_mut();
     let fid = resolve_frame_id_in_state(
-        &mut ctx.frames,
-        &mut ctx.edit.buffers,
+        frames,
+        buffers,
         Some(&args[0]),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
     let pretend = args.get(2).is_some_and(|v| v.is_truthy());
     let pixelwise = args.get(3).is_some_and(|v| v.is_truthy());
     let old_root_bounds = ctx
-        .frames
+        .frame_manager()
         .get(fid)
         .map(|frame| *frame.root_window().bounds());
     let (current_text_width_px, char_height, uses_window_system_pixels) = {
         let frame = &mut ctx
-            .frames
+            .frame_manager()
             .get(fid)
             .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
         (
-            frame_text_width_pixels_in_state(&ctx.frames, fid),
+            frame_text_width_pixels_in_state(&ctx.frame_manager(), fid),
             frame.char_height,
             frame_uses_window_system_pixels(frame),
         )
@@ -750,7 +762,7 @@ pub fn builtin_set_frame_height(
         if ctx.display_host.is_some() && !pretend {
             let desired_cols = {
                 let frame = ctx
-                    .frames
+                    .frame_manager()
                     .get(fid)
                     .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
                 frame_total_cols(frame)
@@ -758,10 +770,11 @@ pub fn builtin_set_frame_height(
             let desired_total_lines = ((text_height_px as f32) / char_height.max(1.0))
                 .floor()
                 .max(1.0) as i64;
+            let (frames, buffers, display_host) = ctx.frame_manager_buffers_and_display_host_mut();
             request_live_gui_frame_resize_and_keep_pending(
-                &mut ctx.frames,
-                &ctx.edit.buffers,
-                &mut ctx.display_host,
+                frames,
+                buffers,
+                display_host,
                 fid,
                 if pixelwise {
                     FrameResizeRequest::TextPixels {
@@ -776,10 +789,11 @@ pub fn builtin_set_frame_height(
                 },
             )?;
         } else {
+            let (frames, buffers, display_host) = ctx.frame_manager_buffers_and_display_host_mut();
             request_live_gui_frame_resize(
-                &mut ctx.frames,
-                &ctx.edit.buffers,
-                &mut ctx.display_host,
+                frames,
+                buffers,
+                display_host,
                 fid,
                 current_text_width_px,
                 text_height_px,
@@ -787,13 +801,13 @@ pub fn builtin_set_frame_height(
             )?;
         }
     } else if ctx
-        .frames
+        .frame_manager()
         .get(fid)
         .is_some_and(|frame| frame.parent_frame.as_frame_id().is_some())
     {
         let cols = {
             let frame = &mut ctx
-                .frames
+                .frame_manager()
                 .get(fid)
                 .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
             frame_total_cols(frame)
@@ -802,7 +816,7 @@ pub fn builtin_set_frame_height(
             .floor()
             .max(1.0) as i64;
         let frame = &mut ctx
-            .frames
+            .frame_manager_mut()
             .get_mut(fid)
             .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
         set_frame_text_size(frame, cols, text_lines);
@@ -810,7 +824,7 @@ pub fn builtin_set_frame_height(
         // GNU preserves native terminal size; only the window text layout
         // changes. The other axis follows the already applied root/mini tree.
         let frame = ctx
-            .frames
+            .frame_manager_mut()
             .get_mut(fid)
             .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
         let cols = (frame.root_window().bounds().width / frame.char_width.max(1.0))
@@ -822,7 +836,7 @@ pub fn builtin_set_frame_height(
         frame.set_window_layout_text_size(cols, text_lines);
     }
     if ctx
-        .frames
+        .frame_manager()
         .get(fid)
         .map(|frame| *frame.root_window().bounds())
         != old_root_bounds
@@ -848,21 +862,22 @@ pub fn builtin_set_frame_width(
 ) -> EvalResult {
     expect_min_args("set-frame-width", &args, 2)?;
     expect_max_args("set-frame-width", &args, 4)?;
+    let (frames, buffers) = ctx.frame_manager_and_buffers_mut();
     let fid = resolve_frame_id_in_state(
-        &mut ctx.frames,
-        &mut ctx.edit.buffers,
+        frames,
+        buffers,
         Some(&args[0]),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
     let pretend = args.get(2).is_some_and(|v| v.is_truthy());
     let pixelwise = args.get(3).is_some_and(|v| v.is_truthy());
     let old_root_bounds = ctx
-        .frames
+        .frame_manager()
         .get(fid)
         .map(|frame| *frame.root_window().bounds());
     let (current_text_height_px, char_width, uses_window_system_pixels) = {
         let frame = &mut ctx
-            .frames
+            .frame_manager()
             .get(fid)
             .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
         (
@@ -874,18 +889,20 @@ pub fn builtin_set_frame_width(
     let text_width_px = check_frame_pixels(&args[1], pixelwise, char_width)?;
     if uses_window_system_pixels {
         if ctx.display_host.is_some() && !pretend {
+            let (frames, buffers, display_host) = ctx.frame_manager_buffers_and_display_host_mut();
             request_live_gui_frame_resize_and_keep_pending(
-                &mut ctx.frames,
-                &ctx.edit.buffers,
-                &mut ctx.display_host,
+                frames,
+                buffers,
+                display_host,
                 fid,
                 FrameResizeRequest::TextWidth(text_width_px),
             )?;
         } else {
+            let (frames, buffers, display_host) = ctx.frame_manager_buffers_and_display_host_mut();
             request_live_gui_frame_resize(
-                &mut ctx.frames,
-                &ctx.edit.buffers,
-                &mut ctx.display_host,
+                frames,
+                buffers,
+                display_host,
                 fid,
                 text_width_px,
                 current_text_height_px,
@@ -893,13 +910,13 @@ pub fn builtin_set_frame_width(
             )?;
         }
     } else if ctx
-        .frames
+        .frame_manager()
         .get(fid)
         .is_some_and(|frame| frame.parent_frame.as_frame_id().is_some())
     {
         let text_lines = {
             let frame = &mut ctx
-                .frames
+                .frame_manager()
                 .get(fid)
                 .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
             frame_text_lines(frame)
@@ -908,7 +925,7 @@ pub fn builtin_set_frame_width(
             .floor()
             .max(1.0) as i64;
         let frame = &mut ctx
-            .frames
+            .frame_manager_mut()
             .get_mut(fid)
             .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
         set_frame_text_size(frame, cols, text_lines);
@@ -916,7 +933,7 @@ pub fn builtin_set_frame_width(
         // GNU preserves native terminal size; only the window text layout
         // changes. The other axis follows the already applied root/mini tree.
         let frame = ctx
-            .frames
+            .frame_manager_mut()
             .get_mut(fid)
             .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
         let cols = (text_width_px as f32 / frame.char_width.max(1.0))
@@ -933,7 +950,7 @@ pub fn builtin_set_frame_width(
         frame.set_window_layout_text_size(cols, text_lines);
     }
     if ctx
-        .frames
+        .frame_manager()
         .get(fid)
         .map(|frame| *frame.root_window().bounds())
         != old_root_bounds
@@ -959,20 +976,21 @@ pub fn builtin_set_frame_size(
 ) -> EvalResult {
     expect_min_args("set-frame-size", &args, 3)?;
     expect_max_args("set-frame-size", &args, 4)?;
+    let (frames, buffers) = ctx.frame_manager_and_buffers_mut();
     let fid = resolve_frame_id_in_state(
-        &mut ctx.frames,
-        &mut ctx.edit.buffers,
+        frames,
+        buffers,
         Some(&args[0]),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
     let pixelwise = args.get(3).is_some_and(|v| v.is_truthy());
     let old_root_bounds = ctx
-        .frames
+        .frame_manager()
         .get(fid)
         .map(|frame| *frame.root_window().bounds());
     let (char_width, char_height, uses_window_system_pixels) = {
         let frame = &mut ctx
-            .frames
+            .frame_manager()
             .get(fid)
             .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
         (
@@ -1001,10 +1019,11 @@ pub fn builtin_set_frame_size(
             .floor()
             .max(1.0) as i64;
         if ctx.display_host.is_some() {
+            let (frames, buffers, display_host) = ctx.frame_manager_buffers_and_display_host_mut();
             request_live_gui_frame_resize_and_keep_pending(
-                &mut ctx.frames,
-                &ctx.edit.buffers,
-                &mut ctx.display_host,
+                frames,
+                buffers,
+                display_host,
                 fid,
                 if pixelwise {
                     FrameResizeRequest::TextPixels {
@@ -1019,10 +1038,11 @@ pub fn builtin_set_frame_size(
                 },
             )?;
         } else {
+            let (frames, buffers, display_host) = ctx.frame_manager_buffers_and_display_host_mut();
             request_live_gui_frame_resize(
-                &mut ctx.frames,
-                &ctx.edit.buffers,
-                &mut ctx.display_host,
+                frames,
+                buffers,
+                display_host,
                 fid,
                 text_width_px,
                 text_height_px,
@@ -1030,7 +1050,7 @@ pub fn builtin_set_frame_size(
             )?;
         }
     } else if ctx
-        .frames
+        .frame_manager()
         .get(fid)
         .is_some_and(|frame| frame.parent_frame.as_frame_id().is_some())
     {
@@ -1041,7 +1061,7 @@ pub fn builtin_set_frame_size(
             .floor()
             .max(1.0) as i64;
         let frame = &mut ctx
-            .frames
+            .frame_manager_mut()
             .get_mut(fid)
             .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
         tracing::debug!(
@@ -1065,7 +1085,7 @@ pub fn builtin_set_frame_size(
             .floor()
             .max(1.0) as i64;
         let frame = ctx
-            .frames
+            .frame_manager_mut()
             .get_mut(fid)
             .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
         tracing::debug!(
@@ -1077,7 +1097,7 @@ pub fn builtin_set_frame_size(
         frame.set_window_layout_text_size(cols, text_lines);
     }
     if ctx
-        .frames
+        .frame_manager()
         .get(fid)
         .map(|frame| *frame.root_window().bounds())
         != old_root_bounds
@@ -1117,7 +1137,7 @@ pub fn builtin_set_frame_position(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     expect_args("set-frame-position", &args, 3)?;
     let fid = resolve_frame_id_in_state(
         frames,
@@ -1179,9 +1199,10 @@ pub fn builtin_set_frame_size_and_position_pixelwise(
 ) -> EvalResult {
     expect_min_args("set-frame-size-and-position-pixelwise", &args, 5)?;
     expect_max_args("set-frame-size-and-position-pixelwise", &args, 6)?;
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     let fid = resolve_frame_id_in_state(
-        &mut eval.frames,
-        &mut eval.edit.buffers,
+        frames,
+        buffers,
         Some(&args[0]),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
@@ -1204,23 +1225,23 @@ pub fn builtin_set_frame_size_and_position_pixelwise(
     }
 
     let uses_window_system_pixels = eval
-        .frames
+        .frame_manager()
         .get(fid)
         .is_some_and(frame_uses_window_system_pixels);
     let is_child_frame = eval
-        .frames
+        .frame_manager()
         .get(fid)
         .is_some_and(|frame| frame.parent_frame.as_frame_id().is_some());
 
     builtin_set_frame_size(eval, vec![args[0], args[1], args[2], Value::T])?;
     if uses_window_system_pixels || is_child_frame {
-        if apply_frame_position(&mut eval.frames, fid, Some(left), Some(top)) {
+        if apply_frame_position(eval.frame_manager_mut(), fid, Some(left), Some(top)) {
             mark_frame_geometry_changed(eval, fid);
         }
         move_gui_frame_window(eval, fid, Some(left), Some(top))?;
     } else {
         let frame = eval
-            .frames
+            .frame_manager_mut()
             .get_mut(fid)
             .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
         frame.set_parameter(Value::symbol("left"), args[3]);
@@ -1228,14 +1249,14 @@ pub fn builtin_set_frame_size_and_position_pixelwise(
     }
 
     if eval
-        .frames
+        .frame_manager()
         .get(fid)
         .is_some_and(frame_is_top_level_non_window)
     {
         let width = check_frame_pixels(&args[1], true, 1.0)?;
         let height = check_frame_pixels(&args[2], true, 1.0)?;
         let frame = eval
-            .frames
+            .frame_manager_mut()
             .get_mut(fid)
             .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
         set_top_level_non_window_pixelwise_totals(frame, width, height);
@@ -1267,21 +1288,15 @@ pub fn builtin_make_terminal_frame(
             return make_terminal_frame_on_existing_terminal(eval, args, terminal_id);
         }
         let terminal_id = super::terminal::pure::next_terminal_id();
-        let frame = make_frame_plain_on_terminal(
-            &mut eval.frames,
-            &mut eval.edit.buffers,
-            args,
-            terminal_id,
-            80,
-            25,
-        )?;
+        let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+        let frame = make_frame_plain_on_terminal(frames, buffers, args, terminal_id, 80, 25)?;
         let frame_id = FrameId(frame.as_frame_id().expect("make-frame returned a frame"));
         if eval
-            .frames
+            .frame_manager()
             .get(frame_id)
             .is_none_or(|frame| frame.terminal_id != terminal_id)
         {
-            let _ = eval.frames.delete_frame(frame_id);
+            let _ = eval.frame_manager_mut().delete_frame(frame_id);
             return Err(signal(
                 "error",
                 vec![Value::string(
@@ -1297,7 +1312,7 @@ pub fn builtin_make_terminal_frame(
         ) {
             Ok(request) => request,
             Err(message) => {
-                let _ = eval.frames.delete_frame(frame_id);
+                let _ = eval.frame_manager_mut().delete_frame(frame_id);
                 return Err(signal("error", vec![Value::string(message)]));
             }
         };
@@ -1308,7 +1323,7 @@ pub fn builtin_make_terminal_frame(
         let opened = match opened {
             Ok(opened) => opened,
             Err(message) => {
-                let _ = eval.frames.delete_frame(frame_id);
+                let _ = eval.frame_manager_mut().delete_frame(frame_id);
                 return Err(signal("error", vec![Value::string(message)]));
             }
         };
@@ -1323,7 +1338,7 @@ pub fn builtin_make_terminal_frame(
         );
         let size = super::terminal::pure::install_opened_tty(&request, opened);
         let displays_chrome = !eval.noninteractive();
-        let (frames, buffers) = (&mut eval.frames, &eval.edit.buffers);
+        let (frames, buffers) = eval.frame_manager_and_buffers_mut();
         if let Some(frame) = frames.get_mut(frame_id) {
             apply_terminal_viewport_to_tty_frame(frame, buffers, size, displays_chrome);
         }
@@ -1353,7 +1368,7 @@ pub fn builtin_make_terminal_frame(
         ));
     }
     let terminal_id = eval
-        .frames
+        .frame_manager()
         .selected_frame()
         .map(|frame| frame.terminal_id)
         .unwrap_or(0);
@@ -1367,36 +1382,30 @@ fn make_terminal_frame_on_existing_terminal(
 ) -> EvalResult {
     let parameters = args.first().copied().unwrap_or(Value::NIL);
     let (width, height) = eval
-        .frames
+        .frame_manager()
         .selected_frame()
         .filter(|frame| frame.terminal_id == terminal_id)
         .map(|frame| (frame.width, frame.height))
         .or_else(|| {
-            eval.frames
+            eval.frame_manager()
                 .frame_list()
                 .into_iter()
-                .filter_map(|frame_id| eval.frames.get(frame_id))
+                .filter_map(|frame_id| eval.frame_manager().get(frame_id))
                 .find(|frame| {
                     frame.terminal_id == terminal_id && frame.parent_frame.as_frame_id().is_none()
                 })
                 .map(|frame| (frame.width, frame.height))
         })
         .unwrap_or((80, 25));
-    let frame = make_frame_plain_on_terminal(
-        &mut eval.frames,
-        &mut eval.edit.buffers,
-        args,
-        terminal_id,
-        width,
-        height,
-    )?;
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let frame = make_frame_plain_on_terminal(frames, buffers, args, terminal_id, width, height)?;
     let frame_id = FrameId(frame.as_frame_id().expect("make-frame returned a frame"));
     if eval
-        .frames
+        .frame_manager()
         .get(frame_id)
         .is_none_or(|frame| frame.terminal_id != terminal_id)
     {
-        let _ = eval.frames.delete_frame(frame_id);
+        let _ = eval.frame_manager_mut().delete_frame(frame_id);
         return Err(signal(
             "error",
             vec![Value::string(
@@ -1405,7 +1414,7 @@ fn make_terminal_frame_on_existing_terminal(
         ));
     }
     let displays_chrome = !eval.noninteractive();
-    let (frames, buffers) = (&mut eval.frames, &eval.edit.buffers);
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     if let Some(frame) = frames.get_mut(frame_id) {
         let size = super::terminal::pure::TtyFrameSize::new(width, height)
             .expect("live terminal frames have nonzero dimensions");
@@ -1465,12 +1474,12 @@ pub fn builtin_delete_frame(
     if let Some(frame) = args.first()
         && matches!(frame.kind(), ValueKind::Veclike(VecLikeType::Frame))
         && let Some(raw_id) = frame.as_frame_id()
-        && eval.frames.get(FrameId(raw_id)).is_none()
+        && eval.frame_manager().get(FrameId(raw_id)).is_none()
     {
         return Ok(Value::NIL);
     }
     let fid = {
-        let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
+        let (frames, buffers) = eval.frame_manager_and_buffers_mut();
         resolve_frame_id_in_state(
             frames,
             buffers,
@@ -1494,7 +1503,7 @@ pub fn builtin_frame_window_state_change(
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
     Ok(Value::bool_val(
-        eval.frames
+        eval.frame_manager()
             .get(fid)
             .is_some_and(|frame| frame.window_state_change),
     ))
@@ -1512,7 +1521,7 @@ pub fn builtin_set_frame_window_state_change(
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
     let state = args.get(1).copied().unwrap_or(Value::NIL).is_truthy();
-    let frame = eval.frames.get_mut(fid).ok_or_else(|| {
+    let frame = eval.frame_manager_mut().get_mut(fid).ok_or_else(|| {
         signal(
             LispCondition::WrongTypeArgument,
             vec![
@@ -1541,7 +1550,7 @@ pub fn builtin_frame_parameter(
         return Ok(Value::NIL);
     };
     let frame = eval
-        .frames
+        .frame_manager()
         .get(fid)
         .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
 
@@ -1555,7 +1564,7 @@ pub fn builtin_frame_parameters(
     args: Vec<Value>,
 ) -> EvalResult {
     let symbol_mode = eval.symbol_mode();
-    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     expect_max_args("frame-parameters", &args, 1)?;
     let fid = resolve_frame_id_in_state(
         frames,
@@ -1675,14 +1684,15 @@ pub fn builtin_frame_bottom_divider_width(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("frame-bottom-divider-width", &args, 1)?;
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     let fid = resolve_frame_id_in_state(
-        &mut eval.frames,
-        &mut eval.edit.buffers,
+        frames,
+        buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Any,
     )?;
     let frame = eval
-        .frames
+        .frame_manager_mut()
         .get(fid)
         .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
     Ok(Value::fixnum(
@@ -1696,14 +1706,15 @@ pub fn builtin_frame_child_frame_border_width(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("frame-child-frame-border-width", &args, 1)?;
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     let fid = resolve_frame_id_in_state(
-        &mut eval.frames,
-        &mut eval.edit.buffers,
+        frames,
+        buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Any,
     )?;
     let frame = eval
-        .frames
+        .frame_manager_mut()
         .get(fid)
         .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
     Ok(Value::fixnum(frame.frame_child_frame_border_width()))
@@ -1715,14 +1726,15 @@ pub fn builtin_frame_internal_border_width(
     args: &[Value],
 ) -> EvalResult {
     expect_max_args("frame-internal-border-width", &args, 1)?;
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     let fid = resolve_frame_id_in_state(
-        &mut eval.frames,
-        &mut eval.edit.buffers,
+        frames,
+        buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Any,
     )?;
     let frame = eval
-        .frames
+        .frame_manager_mut()
         .get(fid)
         .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
     Ok(Value::fixnum(frame.internal_border_width()))
@@ -1734,14 +1746,15 @@ pub fn builtin_frame_right_divider_width(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("frame-right-divider-width", &args, 1)?;
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     let fid = resolve_frame_id_in_state(
-        &mut eval.frames,
-        &mut eval.edit.buffers,
+        frames,
+        buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Any,
     )?;
     let frame = eval
-        .frames
+        .frame_manager_mut()
         .get(fid)
         .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
     Ok(Value::fixnum(
@@ -1758,14 +1771,15 @@ pub fn builtin_frame_scale_factor(
     // GNU opens with `decode_live_frame' (`src/frame.c'), unguarded -- so this
     // is `frame-live-p', not `framep'.  It is the one subr in this file that
     // diverged in that direction; its neighbours really are `decode_any_frame'.
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     let fid = resolve_frame_id_in_state(
-        &mut eval.frames,
-        &mut eval.edit.buffers,
+        frames,
+        buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
     let frame = eval
-        .frames
+        .frame_manager_mut()
         .get(fid)
         .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
     let scale = if frame.device_scale_factor.is_finite() && frame.device_scale_factor > 0.0 {
@@ -1785,19 +1799,20 @@ pub fn builtin_modify_frame_parameters(
     let symbol_mode = eval.symbol_mode();
     expect_min_args("modify-frame-parameters", &args, 2)?;
     expect_max_args("modify-frame-parameters", &args, 2)?;
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     let fid = resolve_frame_id_in_state(
-        &mut eval.frames,
-        &mut eval.edit.buffers,
+        frames,
+        buffers,
         Some(&args[0]),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
     let old_root_bounds = eval
-        .frames
+        .frame_manager_mut()
         .get(fid)
         .map(|frame| *frame.root_window().bounds());
     let items = neovm_value::value::list_to_vec(&args[1]).unwrap_or_default();
 
-    if eval.frames.get(fid).is_none() {
+    if eval.frame_manager().get(fid).is_none() {
         return Err(signal("error", vec![Value::string("Frame not found")]));
     }
 
@@ -1821,12 +1836,12 @@ pub fn builtin_modify_frame_parameters(
                         }
                         if let Some(size) = parse_frame_size_param(pair_cdr) {
                             let cols = eval
-                                .frames
+                                .frame_manager()
                                 .get(fid)
                                 .map(|frame| frame_size_param_to_cells(size, frame.char_width))
                                 .unwrap_or(1)
                                 .max(1);
-                            if let Some(frame) = eval.frames.get_mut(fid) {
+                            if let Some(frame) = eval.frame_manager_mut().get_mut(fid) {
                                 frame.set_parameter(Value::symbol("width"), Value::fixnum(cols));
                             }
                         }
@@ -1839,12 +1854,12 @@ pub fn builtin_modify_frame_parameters(
                         }
                         if let Some(size) = parse_frame_size_param(pair_cdr) {
                             let lines = eval
-                                .frames
+                                .frame_manager()
                                 .get(fid)
                                 .map(|frame| frame_size_param_to_cells(size, frame.char_height))
                                 .unwrap_or(1)
                                 .max(1);
-                            if let Some(frame) = eval.frames.get_mut(fid) {
+                            if let Some(frame) = eval.frame_manager_mut().get_mut(fid) {
                                 frame.set_parameter(Value::symbol("height"), Value::fixnum(lines));
                             }
                         }
@@ -1857,7 +1872,7 @@ pub fn builtin_modify_frame_parameters(
                     }
                     "buffer-list" => {
                         let ids = live_frame_buffer_parameter_ids(&eval.edit.buffers, pair_cdr);
-                        if let Some(frame) = eval.frames.get_mut(fid) {
+                        if let Some(frame) = eval.frame_manager_mut().get_mut(fid) {
                             // GNU `store_frame_param` keeps these in
                             // `struct frame`, not in the generic parameter
                             // alist, and silently drops non-live entries.
@@ -1867,7 +1882,7 @@ pub fn builtin_modify_frame_parameters(
                     }
                     "buried-buffer-list" => {
                         let ids = live_frame_buffer_parameter_ids(&eval.edit.buffers, pair_cdr);
-                        if let Some(frame) = eval.frames.get_mut(fid) {
+                        if let Some(frame) = eval.frame_manager_mut().get_mut(fid) {
                             frame.buried_buffer_list = ids;
                             frame.remove_parameter(Value::symbol("buried-buffer-list"));
                         }
@@ -1877,10 +1892,10 @@ pub fn builtin_modify_frame_parameters(
                             param @ (FrameParam::Alpha | FrameParam::AlphaBackground),
                         ) => {
                             let gui = eval
-                                .frames
+                                .frame_manager()
                                 .get(fid)
                                 .is_some_and(|frame| frame.effective_window_system().is_some());
-                            if let Some(frame) = eval.frames.get_mut(fid) {
+                            if let Some(frame) = eval.frame_manager_mut().get_mut(fid) {
                                 frame.set_known_parameter(param, pair_cdr);
                             }
                             if gui {
@@ -1900,12 +1915,14 @@ pub fn builtin_modify_frame_parameters(
                         FrameParamKey::Known(FrameParam::Name) => {
                             if let Some(name) = frame_name_parameter_value(&pair_cdr) {
                                 let is_tty = eval
-                                    .frames
+                                    .frame_manager()
                                     .get(fid)
                                     .is_some_and(|frame| frame.effective_window_system().is_none());
                                 if is_tty {
-                                    let _ = eval.frames.set_tty_frame_name_parameter(fid, name);
-                                } else if let Some(frame) = eval.frames.get_mut(fid) {
+                                    let _ = eval
+                                        .frame_manager_mut()
+                                        .set_tty_frame_name_parameter(fid, name);
+                                } else if let Some(frame) = eval.frame_manager_mut().get_mut(fid) {
                                     if name.is_nil() {
                                         let current = frame.name_value();
                                         frame.set_generated_name_value(current);
@@ -1917,14 +1934,14 @@ pub fn builtin_modify_frame_parameters(
                         }
                         FrameParamKey::Known(FrameParam::Title) => {
                             if let Some(title) = frame_title_parameter_value(&pair_cdr)
-                                && let Some(frame) = eval.frames.get_mut(fid)
+                                && let Some(frame) = eval.frame_manager_mut().get_mut(fid)
                             {
                                 frame.title = title;
                             }
                         }
                         FrameParamKey::Known(FrameParam::IconName) => {
                             if let Some(icon_name) = frame_icon_name_parameter_value(&pair_cdr)
-                                && let Some(frame) = eval.frames.get_mut(fid)
+                                && let Some(frame) = eval.frame_manager_mut().get_mut(fid)
                             {
                                 frame.icon_name = icon_name;
                             }
@@ -1932,7 +1949,7 @@ pub fn builtin_modify_frame_parameters(
                         FrameParamKey::Known(FrameParam::ParentFrame) => {
                             let parent = if pair_cdr
                                 .as_frame_id()
-                                .map(|id| eval.frames.get(FrameId(id)).is_some())
+                                .map(|id| eval.frame_manager().get(FrameId(id)).is_some())
                                 .unwrap_or(false)
                             {
                                 pair_cdr
@@ -1940,8 +1957,9 @@ pub fn builtin_modify_frame_parameters(
                                 Value::NIL
                             };
                             let parent_id = parent.as_frame_id().map(FrameId);
-                            let z_order = parent_id.map(|id| 1 + eval.frames.max_child_z_order(id));
-                            if let Some(frame) = eval.frames.get_mut(fid) {
+                            let z_order =
+                                parent_id.map(|id| 1 + eval.frame_manager().max_child_z_order(id));
+                            if let Some(frame) = eval.frame_manager_mut().get_mut(fid) {
                                 frame.parent_frame = parent;
                                 if let Some(z_order) = z_order {
                                     frame.z_order = z_order;
@@ -1950,7 +1968,7 @@ pub fn builtin_modify_frame_parameters(
                             }
                         }
                         FrameParamKey::Known(FrameParam::Visibility) => {
-                            if eval.frames.get(fid).is_some_and(|frame| {
+                            if eval.frame_manager().get(fid).is_some_and(|frame| {
                                 frame.effective_window_system().is_some()
                                     || frame.parent_frame.as_frame_id().is_some()
                             }) {
@@ -1973,7 +1991,7 @@ pub fn builtin_modify_frame_parameters(
                                         eval.gnu_mark_windows_all();
                                     }
                                 }
-                            } else if let Some(frame) = eval.frames.get_mut(fid) {
+                            } else if let Some(frame) = eval.frame_manager_mut().get_mut(fid) {
                                 frame.set_known_parameter(FrameParam::Visibility, pair_cdr);
                             }
                         }
@@ -1986,14 +2004,15 @@ pub fn builtin_modify_frame_parameters(
                             // `undecorated' round-tripped through Lisp while the
                             // window manager never heard about it (neomacs#197).
                             let undecorated = pair_cdr.is_truthy();
-                            if let Some(frame) = eval.frames.get_mut(fid) {
+                            if let Some(frame) = eval.frame_manager_mut().get_mut(fid) {
                                 frame.undecorated = undecorated;
                                 frame.set_known_parameter(FrameParam::Undecorated, pair_cdr);
                             }
-                            let is_top_level_gui = eval.frames.get(fid).is_some_and(|frame| {
-                                frame.effective_window_system().is_some()
-                                    && frame.parent_frame.as_frame_id().is_none()
-                            });
+                            let is_top_level_gui =
+                                eval.frame_manager().get(fid).is_some_and(|frame| {
+                                    frame.effective_window_system().is_some()
+                                        && frame.parent_frame.as_frame_id().is_none()
+                                });
                             if is_top_level_gui && let Some(host) = eval.display_host.as_mut() {
                                 host.set_gui_frame_undecorated(fid, undecorated).map_err(
                                     |message| signal("error", vec![Value::string(message)]),
@@ -2001,13 +2020,13 @@ pub fn builtin_modify_frame_parameters(
                             }
                         }
                         FrameParamKey::Known(FrameParam::NoAcceptFocus) => {
-                            if let Some(frame) = eval.frames.get_mut(fid) {
+                            if let Some(frame) = eval.frame_manager_mut().get_mut(fid) {
                                 frame.no_accept_focus = pair_cdr.is_truthy();
                                 frame.set_known_parameter(FrameParam::NoAcceptFocus, pair_cdr);
                             }
                         }
                         FrameParamKey::Known(FrameParam::Unsplittable) => {
-                            if let Some(frame) = eval.frames.get_mut(fid) {
+                            if let Some(frame) = eval.frame_manager_mut().get_mut(fid) {
                                 if frame.effective_window_system().is_none()
                                     && frame.parent_frame.is_nil()
                                 {
@@ -2021,14 +2040,15 @@ pub fn builtin_modify_frame_parameters(
                         }
                         FrameParamKey::Known(FrameParam::Fullscreen) => {
                             let fullscreen = FrameFullscreen::from_symbol_value(&pair_cdr);
-                            if let Some(frame) = eval.frames.get_mut(fid) {
+                            if let Some(frame) = eval.frame_manager_mut().get_mut(fid) {
                                 frame.set_known_parameter(FrameParam::Fullscreen, pair_cdr);
                             }
                             if let Some(fullscreen) = fullscreen {
-                                let is_top_level_gui = eval.frames.get(fid).is_some_and(|frame| {
-                                    frame.effective_window_system().is_some()
-                                        && frame.parent_frame.as_frame_id().is_none()
-                                });
+                                let is_top_level_gui =
+                                    eval.frame_manager().get(fid).is_some_and(|frame| {
+                                        frame.effective_window_system().is_some()
+                                            && frame.parent_frame.as_frame_id().is_none()
+                                    });
                                 if is_top_level_gui && let Some(host) = eval.display_host.as_mut() {
                                     host.set_gui_frame_fullscreen(fid, fullscreen).map_err(
                                         |message| signal("error", vec![Value::string(message)]),
@@ -2039,7 +2059,7 @@ pub fn builtin_modify_frame_parameters(
                         FrameParamKey::Known(
                             param @ (FrameParam::ForegroundColor | FrameParam::BackgroundColor),
                         ) => {
-                            if let Some(frame) = eval.frames.get_mut(fid) {
+                            if let Some(frame) = eval.frame_manager_mut().get_mut(fid) {
                                 frame.set_known_parameter(param, pair_cdr);
                             }
                             super::font::update_face_from_frame_parameter(
@@ -2047,7 +2067,7 @@ pub fn builtin_modify_frame_parameters(
                             )?;
                         }
                         key => {
-                            if let Some(frame) = eval.frames.get_mut(fid) {
+                            if let Some(frame) = eval.frame_manager_mut().get_mut(fid) {
                                 frame.set_parameter_key(key, pair_cdr);
                             }
                         }
@@ -2056,19 +2076,21 @@ pub fn builtin_modify_frame_parameters(
             }
         }
     }
-    if let Some(frame) = eval.frames.get_mut(fid) {
+    if let Some(frame) = eval.frame_manager_mut().get_mut(fid) {
         frame.sync_tab_bar_height_from_parameters();
         frame.sync_bar_heights_from_parameters();
     }
 
-    let requested_width = resolve_frame_size_parameter(&eval.frames, fid, requested_width, true);
-    let requested_height = resolve_frame_size_parameter(&eval.frames, fid, requested_height, false);
+    let requested_width =
+        resolve_frame_size_parameter(&eval.frame_manager(), fid, requested_width, true);
+    let requested_height =
+        resolve_frame_size_parameter(&eval.frame_manager(), fid, requested_height, false);
 
     // Position changes do not supersede outstanding size intent. Position is
     // applied below independently of whether a new size was requested.
     if requested_width.is_some() || requested_height.is_some() {
         let uses_window_system_pixels = eval
-            .frames
+            .frame_manager()
             .get(fid)
             .is_some_and(frame_uses_window_system_pixels);
         if uses_window_system_pixels {
@@ -2082,13 +2104,13 @@ pub fn builtin_modify_frame_parameters(
                 should_defer_resize,
             ) = {
                 let frame = eval
-                    .frames
+                    .frame_manager()
                     .get(fid)
                     .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
                 (
                     frame_total_cols(frame),
                     frame_total_lines(frame),
-                    frame_text_width_pixels_in_state(&eval.frames, fid),
+                    frame_text_width_pixels_in_state(&eval.frame_manager(), fid),
                     frame_text_height_pixels(frame),
                     frame.char_width,
                     frame.char_height,
@@ -2107,19 +2129,21 @@ pub fn builtin_modify_frame_parameters(
             );
             if should_defer_resize {
                 let (desired_cols, desired_total_lines) =
-                    resize_request.logical_size(&eval.frames, fid)?;
+                    resize_request.logical_size(&eval.frame_manager(), fid)?;
                 let frame = eval
-                    .frames
+                    .frame_manager_mut()
                     .get_mut(fid)
                     .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
                 frame.queue_pending_gui_resize(desired_cols, desired_total_lines, None);
             } else {
                 let (text_width_px, text_height_px) =
-                    resize_request.text_pixels(&eval.frames, fid)?;
+                    resize_request.text_pixels(&eval.frame_manager(), fid)?;
+                let (frames, buffers, display_host) =
+                    eval.frame_manager_buffers_and_display_host_mut();
                 resize_live_gui_frame(
-                    &mut eval.frames,
-                    &eval.edit.buffers,
-                    &mut eval.display_host,
+                    frames,
+                    buffers,
+                    display_host,
                     fid,
                     text_width_px,
                     text_height_px,
@@ -2127,13 +2151,13 @@ pub fn builtin_modify_frame_parameters(
                 )?;
             }
         } else if eval
-            .frames
+            .frame_manager()
             .get(fid)
             .is_some_and(|frame| frame.parent_frame.as_frame_id().is_some())
         {
             let (cols, total_lines) = {
                 let frame = eval
-                    .frames
+                    .frame_manager()
                     .get(fid)
                     .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
                 (
@@ -2146,7 +2170,7 @@ pub fn builtin_modify_frame_parameters(
                 )
             };
             let frame = eval
-                .frames
+                .frame_manager_mut()
                 .get_mut(fid)
                 .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
             let text_lines = total_lines
@@ -2161,7 +2185,7 @@ pub fn builtin_modify_frame_parameters(
     }
 
     if eval
-        .frames
+        .frame_manager()
         .get(fid)
         .map(|frame| *frame.root_window().bounds())
         != old_root_bounds
@@ -2169,7 +2193,7 @@ pub fn builtin_modify_frame_parameters(
         eval.gnu_mark_frame_redisplay(fid);
         eval.gnu_mark_frame_window_change(fid);
     }
-    if apply_frame_position(&mut eval.frames, fid, requested_left, requested_top) {
+    if apply_frame_position(eval.frame_manager_mut(), fid, requested_left, requested_top) {
         mark_frame_geometry_changed(eval, fid);
     }
     move_gui_frame_window(eval, fid, requested_left, requested_top)?;
@@ -2214,7 +2238,7 @@ pub fn builtin_frame_visible_p(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let frames = &eval.frames;
+    let frames = &eval.frame_manager();
     expect_args("frame-visible-p", &args, 1)?;
     let val = args.first().unwrap(); // expect_args enforced
     let fid = match val.kind() {
@@ -2253,7 +2277,7 @@ pub fn builtin_framep(
         ValueKind::Veclike(VecLikeType::Frame) => args[0].as_frame_id().unwrap(),
         _ => return Ok(Value::NIL),
     };
-    let Some(frame) = eval.frames.get(FrameId(id)) else {
+    let Some(frame) = eval.frame_manager().get(FrameId(id)) else {
         return Ok(Value::NIL);
     };
     // GNU `Fframep` (frame.c) returns the frame's intrinsic output method
@@ -2274,7 +2298,7 @@ pub fn builtin_frame_live_p(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     args: &[Value],
 ) -> EvalResult {
-    let frames = &eval.frames;
+    let frames = &eval.frame_manager();
     expect_args("frame-live-p", &args, 1)?;
     let id = match args[0].kind() {
         // No `Fixnum` arm: GNU's `framep` is a pseudovector tag test, so no
@@ -2532,7 +2556,7 @@ pub(crate) fn set_frame_visibility(
     visibility: FrameVisibility,
 ) -> Result<(), Flow> {
     let (previous, is_gui_frame, is_gui_child_frame) = eval
-        .frames
+        .frame_manager()
         .get(fid)
         .map(|frame| {
             let is_gui_frame = frame.effective_window_system().is_some();
@@ -2570,11 +2594,12 @@ pub(crate) fn set_frame_visibility(
             .map_err(|message| signal("error", vec![Value::string(message)]))?;
     }
 
-    if let Some(frame) = eval.frames.get_mut(fid) {
+    if let Some(frame) = eval.frame_manager_mut().get_mut(fid) {
         frame.visibility = visibility;
     }
     if visibility.is_visible() && is_gui_child_frame {
-        eval.frames.raise_or_lower_child_frame(fid, true);
+        eval.frame_manager_mut()
+            .raise_or_lower_child_frame(fid, true);
     }
     eval.invalidate_redisplay();
     Ok(())

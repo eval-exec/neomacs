@@ -152,18 +152,17 @@ fn casify_replace_current_buffer_region(
             .get(buffer_id)
             .is_some_and(|buf| !buf.text_props_is_empty()))
     .then(|| crate::buffer::text_props::CasingPropertyControls::for_host(eval));
+    let (obarray, buffers) = eval.obarray_and_buffers_mut();
     let properties =
-        crate::buffer::text_props::CasingPropertyMode::from_controls(&eval.obarray, controls);
-    eval.edit
-        .buffers
-        .casify_replace_buffer_region_with_expansions(
-            buffer_id,
-            byte_range,
-            replacement.text(),
-            replacement.expansions(),
-            replacement.storage_shape(),
-            &properties,
-        )?;
+        crate::buffer::text_props::CasingPropertyMode::from_controls(obarray, controls);
+    buffers.casify_replace_buffer_region_with_expansions(
+        buffer_id,
+        byte_range,
+        replacement.text(),
+        replacement.expansions(),
+        replacement.storage_shape(),
+        &properties,
+    )?;
     if replacement.text().as_bytes() != text.as_bytes() {
         if let Some(span) = changed_char_span(&text, &replacement) {
             // GNU casefiddle.c:475-525 retains the first source position and

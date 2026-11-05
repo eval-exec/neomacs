@@ -100,7 +100,7 @@ fn directory_files_and_attributes_decodes_names_before_matching_and_returning_th
     fs::write(dir.join("Übung – Lösung.zip"), "").unwrap();
 
     let mut eval = crate::test_utils::new_context();
-    eval.obarray.set_symbol_value(
+    eval.obarray_view_mut().set_symbol_value(
         "default-file-name-coding-system",
         Value::symbol("utf-8-unix"),
     );
@@ -356,7 +356,7 @@ fn file_name_completion_decodes_the_common_prefix_before_returning_it() {
     create_file(&dir, "Übung – Lösung.tex", "");
 
     let mut eval = crate::test_utils::new_context();
-    eval.obarray.set_symbol_value(
+    eval.obarray_view_mut().set_symbol_value(
         "default-file-name-coding-system",
         Value::symbol("utf-8-unix"),
     );
@@ -380,7 +380,7 @@ fn file_name_all_completions_decodes_names_before_returning_them() {
     create_file(&dir, "Übung – Lösung.zip", "");
 
     let mut eval = crate::test_utils::new_context();
-    eval.obarray.set_symbol_value(
+    eval.obarray_view_mut().set_symbol_value(
         "default-file-name-coding-system",
         Value::symbol("utf-8-unix"),
     );
@@ -583,7 +583,7 @@ fn test_file_name_all_completions_honors_completion_regexp_list() {
     create_file(&dir, "packages.el", "");
 
     let mut eval = crate::test_utils::new_context();
-    eval.obarray.set_symbol_value(
+    eval.obarray_view_mut().set_symbol_value(
         "completion-regexp-list",
         Value::list(vec![Value::string("con")]),
     );
@@ -611,9 +611,9 @@ fn test_file_name_all_completions_regexps_fold_when_completion_ignore_case() {
     create_file(&dir, "custom.el", "");
 
     let mut eval = crate::test_utils::new_context();
-    eval.obarray
+    eval.obarray_view_mut()
         .set_symbol_value("completion-ignore-case", Value::T);
-    eval.obarray.set_symbol_value(
+    eval.obarray_view_mut().set_symbol_value(
         "completion-regexp-list",
         Value::list(vec![Value::string("con")]),
     );
@@ -639,7 +639,7 @@ fn test_file_name_all_completions_matches_directory_regex_before_slash() {
     fs::create_dir(dir.join("subdir")).unwrap();
 
     let mut eval = crate::test_utils::new_context();
-    eval.obarray.set_symbol_value(
+    eval.obarray_view_mut().set_symbol_value(
         "completion-regexp-list",
         Value::list(vec![Value::string("subdir$")]),
     );
@@ -653,7 +653,7 @@ fn test_file_name_all_completions_matches_directory_regex_before_slash() {
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].as_utf8_str(), Some("subdir/"));
 
-    eval.obarray.set_symbol_value(
+    eval.obarray_view_mut().set_symbol_value(
         "completion-regexp-list",
         Value::list(vec![Value::string("subdir/$")]),
     );
@@ -676,7 +676,7 @@ fn test_file_name_completion_honors_completion_regexp_list() {
     create_file(&dir, "init.el", "");
 
     let mut eval = crate::test_utils::new_context();
-    eval.obarray.set_symbol_value(
+    eval.obarray_view_mut().set_symbol_value(
         "completion-regexp-list",
         Value::list(vec![Value::string("con")]),
     );
@@ -700,9 +700,9 @@ fn test_file_name_completion_regexps_fold_when_completion_ignore_case() {
     create_file(&dir, "custom.el", "");
 
     let mut eval = crate::test_utils::new_context();
-    eval.obarray
+    eval.obarray_view_mut()
         .set_symbol_value("completion-ignore-case", Value::T);
-    eval.obarray.set_symbol_value(
+    eval.obarray_view_mut().set_symbol_value(
         "completion-regexp-list",
         Value::list(vec![Value::string("con")]),
     );
@@ -1286,7 +1286,7 @@ fn file_name_completion_reads_current_buffer_syntax_table() {
         .expect("set-syntax-table");
     eval.eval_str("(modify-syntax-entry ?z \" \")")
         .expect("modify-syntax-entry");
-    eval.obarray.set_symbol_value(
+    eval.obarray_view_mut().set_symbol_value(
         "completion-regexp-list",
         Value::list(vec![Value::string("\\`\\sw+\\'")]),
     );

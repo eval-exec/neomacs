@@ -90,13 +90,14 @@ fn same_input_owner(origin: &Frame, candidate: &Frame) -> bool {
 
 fn cycle(eval: &mut Context, args: Vec<Value>, direction: Direction) -> EvalResult {
     expect_max_args(direction.name(), &args, 2)?;
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     let origin = crate::emacs_core::window_cmds::resolve_frame_id_in_state(
-        &mut eval.frames,
-        &mut eval.edit.buffers,
+        frames,
+        buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
-    let frames = &eval.frames;
+    let frames = &eval.frame_manager();
     let source = frames.get(origin).expect("validated live frame");
     let filter = CandidateFilter::from_lisp(
         args.get(1).copied().unwrap_or(Value::NIL),

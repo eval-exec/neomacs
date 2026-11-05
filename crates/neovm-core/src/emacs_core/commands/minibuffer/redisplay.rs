@@ -16,15 +16,13 @@ pub(super) fn activate(
     minibuf_id: crate::buffer::BufferId,
     entry_level: neovm_value::minibuffer_state::MinibufferEntryLevel,
 ) -> Option<ActiveMinibufferWindowState> {
-    let caller = crate::emacs_core::window_cmds::ensure_selected_frame_id_in_state(
-        &mut eval.frames,
-        &mut eval.edit.buffers,
-    );
-    let frame = eval.frames.get(caller)?;
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    let caller = crate::emacs_core::window_cmds::ensure_selected_frame_id_in_state(frames, buffers);
+    let frame = eval.frame_manager().get(caller)?;
     let old = frame.selected_window;
     let window = frame.minibuffer_window?;
-    let owner = eval.frames.find_window_frame_id(window)?;
-    eval.frames.get(owner)?.find_window(window)?;
+    let owner = eval.frame_manager().find_window_frame_id(window)?;
+    eval.frame_manager().get(owner)?.find_window(window)?;
     // GNU set_window_buffer first; selecting an already selected window
     // records it but publishes no new selection target.
     eval.gnu_mark_window_mode_line(window);
@@ -32,16 +30,18 @@ pub(super) fn activate(
         eval.gnu_mark_selection(Some(old), window, true);
     }
     publish_tty_top_change(eval, owner);
+    let (frames, buffers, minibuffer_selected_window, active_minibuffer_window) =
+        eval.frame_manager_buffers_and_minibuffer_selection_mut();
     let saved = activate_minibuffer_window_in_state(
-        &mut eval.frames,
-        &mut eval.edit.buffers,
-        &mut eval.minibuffer_selected_window,
-        &mut eval.active_minibuffer_window,
+        frames,
+        buffers,
+        minibuffer_selected_window,
+        active_minibuffer_window,
         minibuf_id,
         entry_level,
     )?;
     if let Some(window) = eval
-        .frames
+        .frame_manager_mut()
         .get_mut(owner)
         .and_then(|frame| frame.find_window_mut(window))
     {
@@ -62,15 +62,19 @@ pub(crate) fn publish_frame_switch(
 ) {
     if !crate::emacs_core::eval::gnu_redisplay_hooks_enabled()
         || eval
-            .frames
+            .frame_manager()
             .selected_frame()
             .is_some_and(|selected| selected.id == frame)
     {
         return;
     }
-    if let Some(new) = eval.frames.get(frame).map(|frame| frame.selected_window) {
+    if let Some(new) = eval
+        .frame_manager()
+        .get(frame)
+        .map(|frame| frame.selected_window)
+    {
         let old = eval
-            .frames
+            .frame_manager()
             .selected_frame()
             .map(|frame| frame.selected_window);
         if old != Some(new) {
@@ -88,20 +92,20 @@ fn publish_tty_top_change(
     eval: &mut crate::emacs_core::eval::Context,
     frame: neovm_value::display_vocab::FrameId,
 ) {
-    let Some(target) = eval.frames.get(frame) else {
+    let Some(target) = eval.frame_manager().get(frame) else {
         return;
     };
     if target.effective_window_system().is_some() {
         return;
     }
     let terminal = target.terminal_id;
-    let Some(root) = eval.frames.root_frame_id(frame) else {
+    let Some(root) = eval.frame_manager().root_frame_id(frame) else {
         return;
     };
-    if eval.frames.top_frame_on_terminal(terminal) == Some(root) {
+    if eval.frame_manager().top_frame_on_terminal(terminal) == Some(root) {
         return;
     }
-    if let Some(root) = eval.frames.get_mut(root) {
+    if let Some(root) = eval.frame_manager_mut().get_mut(root) {
         root.visibility = neovm_value::display_vocab::FrameVisibility::Visible;
     }
     let mut current = Some(frame);
@@ -112,7 +116,7 @@ fn publish_tty_top_change(
         }
         eval.gnu_mark_frame_redisplay(frame);
         eval.gnu_request_frame_redraw(frame);
-        current = eval.frames.frame_parent_id(frame);
+        current = eval.frame_manager().frame_parent_id(frame);
     }
     eval.request_menu_bar_rebuild(crate::emacs_core::eval::MenuBarRebuildReason::FullFrameRedraw);
 }
@@ -153,13 +157,13 @@ fn restore_selection(
     // Nonselected frame-selected-window assignments are pure fset operations;
     // only assignments on the globally selected frame invoke Fselect_window.
     let selected = eval
-        .frames
+        .frame_manager()
         .selected_frame()
         .map(|frame| (frame.id, frame.selected_window));
     let mut old = selected.map(|(_, window)| window);
     if selected.is_some_and(|(frame, _)| frame == saved.minibuffer_frame.0)
         && eval
-            .frames
+            .frame_manager()
             .get(saved.minibuffer_frame.0)
             .and_then(|frame| frame.find_window(saved.previous_minibuffer_frame_selected_window))
             .is_some()
@@ -172,7 +176,7 @@ fn restore_selection(
     }
     if selected.is_some_and(|(frame, _)| frame == saved.calling_frame.0)
         && eval
-            .frames
+            .frame_manager()
             .get(saved.calling_frame.0)
             .and_then(|frame| frame.find_window(saved.calling_selected_window))
             .is_some()
@@ -181,15 +185,17 @@ fn restore_selection(
         eval.gnu_mark_selection(old, saved.calling_selected_window, true);
     }
     if selected.is_none_or(|(frame, _)| frame != saved.calling_frame.0)
-        && eval.frames.get(saved.calling_frame.0).is_some()
+        && eval.frame_manager().get(saved.calling_frame.0).is_some()
     {
         eval.gnu_mark_selection(old, saved.calling_selected_window, false);
         publish_tty_top_change(eval, saved.calling_frame.0);
     }
+    let (frames, minibuffer_selected_window, active_minibuffer_window) =
+        eval.frame_manager_and_minibuffer_selection_mut();
     restore_minibuffer_selection_in_state(
-        &mut eval.frames,
-        &mut eval.minibuffer_selected_window,
-        &mut eval.active_minibuffer_window,
+        frames,
+        minibuffer_selected_window,
+        active_minibuffer_window,
         saved,
     );
 }
@@ -204,31 +210,28 @@ pub(super) fn restore_buffer(
     saved: ActiveMinibufferWindowState,
 ) -> MinibufferWindowRestoreEffect {
     let mut effect = MinibufferWindowRestoreEffect::NoBufferRestored;
-    if let Some(window) = eval
-        .frames
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    if let Some(window) = frames
         .get_mut(saved.minibuffer_frame.0)
         .and_then(|frame| frame.find_window_mut(saved.minibuffer_window_id))
         && let Some(buffer) = saved.previous_minibuffer_buffer
     {
         window.set_buffer(buffer);
-        crate::window::window_markers::attach_window_position_markers(
-            &mut eval.edit.buffers,
-            window,
-        );
+        crate::window::window_markers::attach_window_position_markers(buffers, window);
         crate::window::window_markers::set_window_start_with_marker(
-            &mut eval.edit.buffers,
+            buffers,
             window,
             saved.previous_minibuffer_window_start,
         );
         crate::window::window_markers::set_window_point_with_marker(
-            &mut eval.edit.buffers,
+            buffers,
             window,
             saved.previous_minibuffer_point,
         );
         effect = MinibufferWindowRestoreEffect::BufferRestored(saved.minibuffer_window_id);
     }
-    *eval.minibuffer_selected_window = saved.previous_minibuffer_selected_window;
-    *eval.active_minibuffer_window = saved.previous_active_minibuffer_window;
+    *eval.minibuffer_selected_window_mut() = saved.previous_minibuffer_selected_window;
+    *eval.active_minibuffer_window_mut() = saved.previous_active_minibuffer_window;
     effect
 }
 
@@ -246,14 +249,16 @@ pub(super) fn teardown(
     // Exit hooks may have selected another frame. GNU locates the expired
     // minibuffer and switches back to its owner before resetting its buffer
     // (minibuf.c:1131-1140), with NORECORD=t publication.
-    if eval.frames.get(saved.minibuffer_frame.0).is_some()
+    if eval.frame_manager().get(saved.minibuffer_frame.0).is_some()
         && eval
-            .frames
+            .frame_manager()
             .selected_frame()
             .is_none_or(|frame| frame.id != saved.minibuffer_frame.0)
     {
         publish_frame_switch(eval, saved.minibuffer_frame.0);
-        let _ = eval.frames.select_frame(saved.minibuffer_frame.0);
+        let _ = eval
+            .frame_manager_mut()
+            .select_frame(saved.minibuffer_frame.0);
     }
     publish_expired_buffer(eval, buffer);
     erase_expired_minibuffer_buffer_in_state(&mut eval.edit.buffers, buffer);
@@ -264,8 +269,8 @@ pub(super) fn teardown(
     } else {
         // A transfer skips the remaining read-unwind selection statements.
         // The independent final buffer action and configurations still run.
-        *eval.minibuffer_selected_window = saved.previous_minibuffer_selected_window;
-        *eval.active_minibuffer_window = saved.previous_active_minibuffer_window;
+        *eval.minibuffer_selected_window_mut() = saved.previous_minibuffer_selected_window;
+        *eval.active_minibuffer_window_mut() = saved.previous_active_minibuffer_window;
     }
     let window_restore = MinibufferWindowRestoreEffect::NoBufferRestored;
     MinibufferTeardownOutcome {
@@ -284,11 +289,11 @@ fn resize_empty(
 ) -> EvalResult {
     let future_owner = saved
         .previous_active_minibuffer_window
-        .and_then(|window| eval.frames.find_window_frame_id(window))
+        .and_then(|window| eval.frame_manager().find_window_frame_id(window))
         .unwrap_or(saved.minibuffer_frame.0);
     if (depth_after_pop != 0
         && eval
-            .frames
+            .frame_manager()
             .selected_frame()
             .is_some_and(|frame| frame.id == future_owner))
         || eval
@@ -297,7 +302,7 @@ fn resize_empty(
     {
         return Ok(Value::NIL);
     }
-    let Some(frame) = eval.frames.get(saved.minibuffer_frame.0) else {
+    let Some(frame) = eval.frame_manager().get(saved.minibuffer_frame.0) else {
         return Ok(Value::NIL);
     };
     let mini_only = frame.minibuffer_window == Some(frame.root_window().id());

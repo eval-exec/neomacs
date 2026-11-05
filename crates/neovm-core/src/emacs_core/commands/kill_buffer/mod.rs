@@ -72,11 +72,11 @@ fn delete_quit_restore_popup_windows_showing_buffer(
 }
 
 fn sync_current_buffer_to_selected_window(eval: &mut crate::emacs_core::eval::Context) {
-    let Some(frame_id) = eval.frames.selected_frame().map(|frame| frame.id) else {
+    let Some(frame_id) = eval.frame_manager().selected_frame().map(|frame| frame.id) else {
         return;
     };
     let selected_buffer_id = eval
-        .frames
+        .frame_manager()
         .get(frame_id)
         .and_then(|frame| frame.find_window(frame.selected_window))
         .and_then(|window| window.buffer_id());
@@ -208,7 +208,7 @@ pub(crate) fn builtin_kill_buffer(
     // ordinary buffer there; GNU refuses after the hooks have run.
     if eval
         .minibuf_window_id()
-        .and_then(|window| eval.frames.window_buffer_id(window))
+        .and_then(|window| eval.frame_manager().window_buffer_id(window))
         == Some(id)
     {
         return Ok(Value::NIL);
@@ -218,7 +218,7 @@ pub(crate) fn builtin_kill_buffer(
         .visible_variable_value_or_nil("kill-buffer-quit-windows")
         .is_truthy()
     {
-        if delete_quit_restore_popup_windows_showing_buffer(&mut eval.frames, id) {
+        if delete_quit_restore_popup_windows_showing_buffer(eval.frame_manager_mut(), id) {
             sync_current_buffer_to_selected_window(eval);
         }
     } else {
@@ -268,9 +268,10 @@ pub(crate) fn builtin_kill_buffer(
         .collect::<std::collections::HashSet<_>>();
     let current_will_die = current_before.is_some_and(|current| killed_set.contains(&current));
     let replacement = if current_will_die {
+        let (frames, buffers) = eval.frame_manager_and_buffers_mut();
         let other = other_buffer_impl_in_state(
-            &mut eval.frames,
-            &mut eval.edit.buffers,
+            frames,
+            buffers,
             vec![Value::make_buffer(current_before.expect("current buffer"))],
         )?;
         match other.as_buffer_id() {
@@ -300,12 +301,12 @@ pub(crate) fn builtin_kill_buffer(
         .collect_killed_buffer_ids(id)
         .ok_or_else(|| signal("error", vec![Value::string("Buffer does not exist")]))?;
     {
-        let buffers = &mut eval.edit.buffers;
+        let (buffers, obarray_view) = eval.buffers_and_obarray_view_mut();
         // SAFETY: killed-buffer retirement only resets buffer/BLV value
         // caches and reads properties. All process/Lisp callbacks finished
         // above; no function or canonical descriptor writer runs in this phase.
         unsafe {
-            eval.obarray.with_legacy_value_write(|obarray| {
+            obarray_view.with_legacy_value_write(|obarray| {
                 for killed_id in &killed_ids_to_reset {
                     if let Some(buffer) = buffers.get_mut(*killed_id) {
                         buffer.kill_all_local_variables(obarray, true, &buffer_defaults);
@@ -331,7 +332,7 @@ pub(crate) fn builtin_kill_buffer(
     // must not create `*scratch*` (it would reappear in `list-buffers`).
     let mut dead_window_fallback = None;
     for killed_id in &killed_ids {
-        if eval.frames.window_count_showing_buffer(*killed_id) == 0 {
+        if eval.frame_manager().window_count_showing_buffer(*killed_id) == 0 {
             continue;
         }
         let fallback = match dead_window_fallback {
@@ -346,14 +347,15 @@ pub(crate) fn builtin_kill_buffer(
                 fallback
             }
         };
-        eval.frames.replace_buffer_in_windows(*killed_id, fallback);
+        eval.frame_manager_mut()
+            .replace_buffer_in_windows(*killed_id, fallback);
     }
 
     // Discard killed buffers from every frame's buffer list and buried
     // buffer list (GNU frame.c:3757-3769 discards from each frame).
     for killed_id in &killed_ids {
-        for fid in eval.frames.frame_list() {
-            if let Some(frame) = eval.frames.get_mut(fid) {
+        for fid in eval.frame_manager().frame_list() {
+            if let Some(frame) = eval.frame_manager_mut().get_mut(fid) {
                 frame.buffer_list.retain(|bid| *bid != *killed_id);
                 frame.buried_buffer_list.retain(|bid| *bid != *killed_id);
             }

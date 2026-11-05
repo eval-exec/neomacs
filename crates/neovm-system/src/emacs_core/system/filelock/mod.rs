@@ -184,7 +184,7 @@ fn make_lock_file_name(
     filename: &LispString,
 ) -> Result<Option<PathBuf>, Flow> {
     let filename = resolve_filename_lisp_for_eval(eval, filename);
-    if !eval.obarray.fboundp("make-lock-file-name") {
+    if !eval.obarray().fboundp("make-lock-file-name") {
         // GNU cannot reach lock_file before loadup defines this function —
         // filelock.c:589 bails out under will_dump_p — so it has no analogue
         // for this state.  Use files.el's own ".#NAME" rule rather than
@@ -637,7 +637,7 @@ pub fn unlock_file(
     match unlock_file_resolved(eval, filename).kinded() {
         Err(FlowKind::Signal(sig))
             if neovm_value::errors::signal_matches_condition_value_sym(
-                &eval.obarray,
+                &eval.obarray(),
                 sig.symbol,
                 &Value::symbol("file-error"),
                 eval.symbol_mode(),

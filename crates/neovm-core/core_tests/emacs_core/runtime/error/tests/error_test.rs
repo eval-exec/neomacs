@@ -294,15 +294,15 @@ fn batch_fatal_report_and_nested_shutdown_share_first_entry_hook_ownership() {
         );
         assert_eq!(eval.shutdown_request(), Some(request));
         assert_eq!(
-            eval.obarray.symbol_value_copied("shutdown-count"),
+            eval.obarray().symbol_value_copied("shutdown-count"),
             Some(Value::fixnum(1))
         );
         assert_eq!(
-            eval.obarray.symbol_value_copied("shutdown-continued"),
+            eval.obarray().symbol_value_copied("shutdown-continued"),
             Some(Value::T)
         );
         assert_eq!(
-            eval.obarray.symbol_value_copied("shutdown-later"),
+            eval.obarray().symbol_value_copied("shutdown-later"),
             Some(Value::T)
         );
         let repeated = eval.shutdown_with_hooks(crate::emacs_core::eval::ShutdownRequest {
@@ -314,7 +314,7 @@ fn batch_fatal_report_and_nested_shutdown_share_first_entry_hook_ownership() {
             Some(request)
         );
         assert_eq!(
-            eval.obarray.symbol_value_copied("shutdown-count"),
+            eval.obarray().symbol_value_copied("shutdown-count"),
             Some(Value::fixnum(1))
         );
     }
@@ -328,7 +328,7 @@ fn raw_condition_inheriting_minibuffer_quit_does_not_take_down_session() {
     let condition = crate::emacs_core::intern::intern_lisp_string(
         &crate::heap_types::LispString::from_unibyte(vec![0xff]),
     );
-    eval.obarray
+    eval.obarray_view_mut()
         .put_property_id(
             condition,
             crate::emacs_core::intern::intern("error-conditions"),

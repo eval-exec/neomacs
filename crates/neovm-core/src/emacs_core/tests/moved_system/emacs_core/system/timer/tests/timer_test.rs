@@ -360,7 +360,7 @@ fn sleep_for_window_close_uses_special_event_map_handler_when_loaded() {
     let mut ev = crate::emacs_core::eval_hook_installers::new_context();
     let scratch = ev.edit.buffers.create_buffer("*scratch*");
     ev.edit.buffers.set_current(scratch);
-    let frame = ev.frames.create_frame("F1", 80, 24, scratch);
+    let frame = ev.frame_manager_mut().create_frame("F1", 80, 24, scratch);
     install_minimal_special_event_command_runtime(&mut ev);
 
     let tx = crate::emacs_core::host_input::HostInputPublisher::install(&mut ev);
@@ -371,7 +371,7 @@ fn sleep_for_window_close_uses_special_event_map_handler_when_loaded() {
     )
     .expect("queue window close");
 
-    ev.command_loop.running = true;
+    ev.command_loop_mut().running = true;
 
     let result = builtin_sleep_for(&mut ev, vec![Value::make_float(0.01)])
         .expect("sleep-for should consume handled window close");
@@ -396,7 +396,7 @@ fn sleep_for_window_close_honors_throw_on_input_before_handler() {
     let mut ev = crate::emacs_core::eval_hook_installers::new_context();
     let scratch = ev.edit.buffers.create_buffer("*scratch*");
     ev.edit.buffers.set_current(scratch);
-    let frame = ev.frames.create_frame("F1", 80, 24, scratch);
+    let frame = ev.frame_manager_mut().create_frame("F1", 80, 24, scratch);
     install_minimal_special_event_command_runtime(&mut ev);
 
     let tx = crate::emacs_core::host_input::HostInputPublisher::install(&mut ev);
@@ -407,7 +407,7 @@ fn sleep_for_window_close_honors_throw_on_input_before_handler() {
     )
     .expect("queue window close");
 
-    ev.command_loop.running = true;
+    ev.command_loop_mut().running = true;
     ev.obarray_mut()
         .set_symbol_value("throw-on-input", Value::symbol("tag"));
 

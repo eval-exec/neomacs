@@ -8,8 +8,10 @@ fn fixture() -> (Context, crate::window::FrameId, crate::window::WindowId) {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
     let root = eval.buffers.current_buffer_id().expect("root buffer");
-    let frame_id = eval.frames.create_frame("config-mini", 80, 25, root);
-    let frame = eval.frames.get_mut(frame_id).expect("frame");
+    let frame_id = eval
+        .frame_manager()
+        .create_frame("config-mini", 80, 25, root);
+    let frame = eval.frame_manager().get_mut(frame_id).expect("frame");
     frame.char_width = 1.0;
     frame.char_height = 1.0;
     frame.shrink_mini_window();
@@ -24,7 +26,7 @@ fn fixture() -> (Context, crate::window::FrameId, crate::window::WindowId) {
         "inhibit-redisplay",
         "inhibit-quit",
     ] {
-        eval.obarray.set_symbol_value(name, Value::NIL);
+        eval.obarray().set_symbol_value(name, Value::NIL);
     }
     // A real callback requests window_change_record; dimensions alone do not.
     eval.eval_str("(setq window-state-change-functions (list (lambda (_frame) nil)))")
@@ -62,7 +64,7 @@ fn gnu_dont_set_miniwindow_restores_geometry_after_sizing_transfer() {
         .insert("abcde");
     {
         let window = eval
-            .frames
+            .frame_manager()
             .get_mut(frame_id)
             .expect("frame")
             .find_window_mut(mini_id)
@@ -80,7 +82,7 @@ fn gnu_dont_set_miniwindow_restores_geometry_after_sizing_transfer() {
             LispCharPos1::new(4),
         );
     }
-    let frame = eval.frames.get_mut(frame_id).expect("frame");
+    let frame = eval.frame_manager().get_mut(frame_id).expect("frame");
     let plan = frame.plan_mini_window_resize(3.0, 3.0).expect("grow plan");
     frame.apply_mini_window_resize(plan);
     // The sizing callback transfers before committing the requested shrink.
@@ -91,7 +93,7 @@ fn gnu_dont_set_miniwindow_restores_geometry_after_sizing_transfer() {
         )
         .expect("configuration cleanup during the sizing transfer");
     assert_eq!(transferred, Value::symbol("interrupted"));
-    let frame = eval.frames.get(frame_id).expect("frame");
+    let frame = eval.frame_manager().get(frame_id).expect("frame");
     let mini = frame.find_window(mini_id).expect("mini");
     assert_eq!(mini.bounds().height, 1.0);
     assert_eq!(mini.buffer_id(), Some(live));
@@ -110,13 +112,13 @@ fn legacy_dont_set_miniwindow_keeps_existing_geometry_policy() {
     let _policy = RedisplayHookPolicyGuard::legacy();
     let (mut eval, frame_id, mini_id) = fixture();
     capture(&mut eval);
-    let frame = eval.frames.get_mut(frame_id).expect("frame");
+    let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
     let plan = frame.plan_mini_window_resize(3.0, 3.0).expect("grow plan");
     frame.apply_mini_window_resize(plan);
     eval.eval_str("(set-window-configuration d5-config nil t)")
         .expect("legacy restoration");
     assert_eq!(
-        eval.frames
+        eval.frame_manager()
             .get(frame_id)
             .expect("frame")
             .find_window(mini_id)
@@ -131,9 +133,13 @@ fn legacy_dont_set_miniwindow_keeps_existing_geometry_policy() {
 fn gnu_configuration_across_record_keeps_unchanged_buffer_callbacks_silent() {
     let _policy = RedisplayHookPolicyGuard::gnu();
     let (mut eval, frame_id, _) = fixture();
-    let root = eval.frames.get(frame_id).expect("frame").selected_window;
+    let root = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
     let buffer = eval
-        .frames
+        .frame_manager()
         .get(frame_id)
         .expect("frame")
         .find_window(root)
@@ -145,16 +151,20 @@ fn gnu_configuration_across_record_keeps_unchanged_buffer_callbacks_silent() {
     eval.eval_str("(setq window-state-change-functions (list (lambda (_frame) nil)))")
         .expect("record hook");
     eval.gnu_mark_frame_window_change(frame_id);
-    eval.frames
+    eval.frame_manager_mut()
         .get_mut(frame_id)
         .expect("frame")
         .window_state_change = true;
     run_redisplay_window_change_hooks(&mut eval).expect("intervening real record");
-    let stamp = eval.frames.get(frame_id).expect("frame").change_stamp;
+    let stamp = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .change_stamp;
     eval.eval_str("(set-window-configuration d5-config)")
         .expect("restore same buffer");
     assert_eq!(
-        eval.frames
+        eval.frame_manager()
             .get(frame_id)
             .expect("frame")
             .find_window(root)
@@ -163,7 +173,7 @@ fn gnu_configuration_across_record_keeps_unchanged_buffer_callbacks_silent() {
     );
     run_redisplay_window_change_hooks(&mut eval).expect("restored real hook pass");
     assert_eq!(
-        eval.obarray.symbol_value_copied("d5-buffer-calls"),
+        eval.obarray().symbol_value_copied("d5-buffer-calls"),
         Some(Value::NIL)
     );
 }
@@ -172,9 +182,13 @@ fn gnu_configuration_across_record_keeps_unchanged_buffer_callbacks_silent() {
 fn gnu_configuration_across_record_notifies_actual_outgoing_and_restored_buffers() {
     let _policy = RedisplayHookPolicyGuard::gnu();
     let (mut eval, frame_id, _) = fixture();
-    let root = eval.frames.get(frame_id).expect("frame").selected_window;
+    let root = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
     let original = eval
-        .frames
+        .frame_manager()
         .get(frame_id)
         .expect("frame")
         .find_window(root)
@@ -184,17 +198,18 @@ fn gnu_configuration_across_record_notifies_actual_outgoing_and_restored_buffers
     capture(&mut eval);
     let outgoing = eval.buffers.create_buffer("outgoing");
     buffer_callbacks(&mut eval, outgoing);
-    eval.obarray
+    eval.obarray()
         .set_symbol_value("d5-outgoing", Value::make_buffer(outgoing));
     eval.eval_str("(set-window-buffer nil d5-outgoing)")
         .expect("switch window");
     run_redisplay_window_change_hooks(&mut eval).expect("record actual outgoing");
-    eval.obarray.set_symbol_value("d5-buffer-calls", Value::NIL);
+    eval.obarray()
+        .set_symbol_value("d5-buffer-calls", Value::NIL);
     eval.eval_str("(set-window-configuration d5-config)")
         .expect("restore original");
     run_redisplay_window_change_hooks(&mut eval).expect("restored hook pass");
     let calls = eval
-        .obarray
+        .obarray()
         .symbol_value_copied("d5-buffer-calls")
         .expect("calls");
     let names = crate::emacs_core::value::list_to_vec(&calls).expect("list");
@@ -213,9 +228,13 @@ fn gnu_configuration_across_record_notifies_actual_outgoing_and_restored_buffers
 fn gnu_configuration_temporary_same_epoch_buffer_excursion_is_silent() {
     let _policy = RedisplayHookPolicyGuard::gnu();
     let (mut eval, frame_id, _) = fixture();
-    let root = eval.frames.get(frame_id).expect("frame").selected_window;
+    let root = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
     let original = eval
-        .frames
+        .frame_manager()
         .get(frame_id)
         .expect("frame")
         .find_window(root)
@@ -229,7 +248,7 @@ fn gnu_configuration_temporary_same_epoch_buffer_excursion_is_silent() {
         .expect("restore in same epoch");
     run_redisplay_window_change_hooks(&mut eval).expect("same-epoch hook pass");
     assert_eq!(
-        eval.obarray.symbol_value_copied("d5-buffer-calls"),
+        eval.obarray().symbol_value_copied("d5-buffer-calls"),
         Some(Value::NIL)
     );
 }

@@ -45,9 +45,13 @@ fn window_dimensions(
     frame: FrameId,
     window: WindowId,
 ) -> Option<HookWindowDimensions> {
-    let bounds = eval.frames.get(frame)?.find_window(window)?.bounds();
+    let bounds = eval
+        .frame_manager()
+        .get(frame)?
+        .find_window(window)?
+        .bounds();
     let (body_width, body_height) = super::super::window_cmds::hook_window_body_dimensions(
-        &eval.frames,
+        &eval.frame_manager(),
         &eval.edit.buffers,
         frame,
         window,
@@ -62,7 +66,7 @@ fn window_dimensions(
 }
 
 fn record_frames(eval: &mut crate::emacs_core::eval::Context) {
-    let selected = eval.frames.selected_frame().map(|frame| frame.id);
+    let selected = eval.frame_manager().selected_frame().map(|frame| frame.id);
     let mut dimensions = std::collections::HashMap::new();
     for frame_id in eval.gnu_frame_order() {
         for window_id in eval.gnu_window_order(frame_id) {
@@ -70,7 +74,7 @@ fn record_frames(eval: &mut crate::emacs_core::eval::Context) {
                 dimensions.insert(window_id, record);
             }
         }
-        if let Some(frame) = eval.frames.get_mut(frame_id) {
+        if let Some(frame) = eval.frame_manager_mut().get_mut(frame_id) {
             frame.old_selected_window = Some(frame.selected_window);
             frame.window_hook_record =
                 super::frame_window_hook_record_from_live_state(frame, selected == Some(frame_id));
@@ -92,7 +96,7 @@ fn finish_record(eval: &mut crate::emacs_core::eval::Context, record: bool) {
 }
 
 fn live(eval: &crate::emacs_core::eval::Context, frame: FrameId, window: WindowId) -> bool {
-    eval.frames
+    eval.frame_manager()
         .get(frame)
         .and_then(|frame| frame.find_window(window))
         .and_then(|window| window.buffer_id())
@@ -172,7 +176,7 @@ fn selection_changed(
     frame_selected_change: bool,
     frame_selected_window_change: bool,
 ) -> bool {
-    let Some(frame) = eval.frames.get(frame_id) else {
+    let Some(frame) = eval.frame_manager().get(frame_id) else {
         return false;
     };
     (frame_selected_change
@@ -201,12 +205,16 @@ pub(super) fn run(eval: &mut crate::emacs_core::eval::Context) -> EvalResult {
 }
 
 fn run_inner(pass: &mut ChangePass<'_>) -> EvalResult {
-    let selected_frame_change = pass.eval.frames.selected_frame().map(|frame| frame.id)
+    let selected_frame_change = pass
+        .eval
+        .frame_manager()
+        .selected_frame()
+        .map(|frame| frame.id)
         != pass.eval.gnu_redisplay_hooks.old_selected_frame;
     let mut run_state_hook = false;
 
     for frame_id in pass.eval.gnu_frame_order() {
-        let Some(frame) = pass.eval.frames.get(frame_id) else {
+        let Some(frame) = pass.eval.frame_manager().get(frame_id) else {
             continue;
         };
         // All published Neo frames are complete, size-capable frames. Tooltip
@@ -234,7 +242,7 @@ fn run_inner(pass: &mut ChangePass<'_>) -> EvalResult {
             && (pass.eval.gnu_redisplay_hooks.old_selected_frame == Some(frame_id)
                 || pass
                     .eval
-                    .frames
+                    .frame_manager()
                     .selected_frame()
                     .is_some_and(|frame| frame.id == frame_id));
         let frame_selected_window_change = frame.old_selected_window != Some(frame.selected_window);
@@ -253,7 +261,7 @@ fn run_inner(pass: &mut ChangePass<'_>) -> EvalResult {
         let mut frame_size_change = false;
 
         for window_id in windows {
-            let Some(frame) = pass.eval.frames.get(frame_id) else {
+            let Some(frame) = pass.eval.frame_manager().get(frame_id) else {
                 continue;
             };
             let Some(window) = frame.find_window(window_id) else {
@@ -355,7 +363,7 @@ fn run_inner(pass: &mut ChangePass<'_>) -> EvalResult {
             result?;
         }
         let deleted = number_of_windows < old_window_count;
-        if (frame_buffer_change || deleted) && pass.eval.frames.get(frame_id).is_some() {
+        if (frame_buffer_change || deleted) && pass.eval.frame_manager().get(frame_id).is_some() {
             global(
                 pass.eval,
                 &mut pass.record,
@@ -363,7 +371,7 @@ fn run_inner(pass: &mut ChangePass<'_>) -> EvalResult {
                 "window-buffer-change-functions",
             )?;
         }
-        if frame_size_change && pass.eval.frames.get(frame_id).is_some() {
+        if frame_size_change && pass.eval.frame_manager().get(frame_id).is_some() {
             global(
                 pass.eval,
                 &mut pass.record,
@@ -372,7 +380,7 @@ fn run_inner(pass: &mut ChangePass<'_>) -> EvalResult {
             )?;
         }
         if (frame_selected_change || frame_selected_window_change)
-            && pass.eval.frames.get(frame_id).is_some()
+            && pass.eval.frame_manager().get(frame_id).is_some()
         {
             global(
                 pass.eval,
@@ -387,7 +395,7 @@ fn run_inner(pass: &mut ChangePass<'_>) -> EvalResult {
             || deleted
             || frame_size_change
             || forced_state)
-            && pass.eval.frames.get(frame_id).is_some()
+            && pass.eval.frame_manager().get(frame_id).is_some()
         {
             global(
                 pass.eval,
@@ -398,7 +406,7 @@ fn run_inner(pass: &mut ChangePass<'_>) -> EvalResult {
             run_state_hook = true;
             pass.record = true;
         }
-        if (frame_size_change || deleted) && pass.eval.frames.get(frame_id).is_some() {
+        if (frame_size_change || deleted) && pass.eval.frame_manager().get(frame_id).is_some() {
             run_configuration(pass.eval, frame_id)?;
         }
     }
@@ -424,7 +432,7 @@ impl ConfigurationContext<'_> {
         let result = if let Some(frame) = self
             .frame
             .take()
-            .filter(|frame| self.eval.frames.get(*frame).is_some())
+            .filter(|frame| self.eval.frame_manager().get(*frame).is_some())
         {
             crate::emacs_core::frame::builtin_select_frame(
                 self.eval,
@@ -458,11 +466,12 @@ struct SelectedWindowContext<'a> {
 }
 impl SelectedWindowContext<'_> {
     fn restore(&mut self) -> EvalResult {
-        if let Some(window) = self
-            .window
-            .take()
-            .filter(|window| self.eval.frames.find_window_frame_id(*window).is_some())
-        {
+        if let Some(window) = self.window.take().filter(|window| {
+            self.eval
+                .frame_manager()
+                .find_window_frame_id(*window)
+                .is_some()
+        }) {
             crate::emacs_core::window_cmds::builtin_select_window(
                 self.eval,
                 vec![Value::make_window(window.0), Value::T],
@@ -509,9 +518,9 @@ pub(super) fn run_configuration(
     let functions = default_hook_value(eval, symbol)?;
     let roots = eval.save_specpdl_roots();
     eval.push_specpdl_root(functions);
-    let selected_frame = eval.frames.selected_frame().map(|frame| frame.id);
+    let selected_frame = eval.frame_manager().selected_frame().map(|frame| frame.id);
     let selected_buffer = eval
-        .frames
+        .frame_manager()
         .selected_frame()
         .and_then(|frame| frame.selected_window())
         .and_then(|window| window.buffer_id());
@@ -540,7 +549,7 @@ pub(super) fn run_configuration(
         }
         // Fwindow_list starts at the frame's selected window, then cycles the
         // ordinary canonical leaves; minibuffer is explicitly excluded.
-        let Some(state) = scope.eval.frames.get(frame) else {
+        let Some(state) = scope.eval.frame_manager().get(frame) else {
             return Ok(Value::NIL);
         };
         let mut windows = state.window_list();

@@ -36,16 +36,15 @@ fn recorded_pipe_before_read(
         )
         .expect("unibyte buffer");
     }
-    let id = eval.processes.create_process(
+    let id = eval.processes_mut().create_process(
         "pipe-exit-drain".into(),
         buffer,
         "/bin/sh".into(),
         vec![],
         ProcessCodingSystems::gnu_make_process_initial(),
     );
-    eval.processes
-        .sync_process_mark(&mut eval.edit.buffers, id)
-        .expect("mark");
+    let (processes, buffers) = eval.processes_and_buffers_mut();
+    processes.sync_process_mark(buffers, id).expect("mark");
     let (reader, mut writer) = os_pipe::pipe().expect("owned pipe");
     writer
         .write_all(b"caf\xc3\xa9\r\n")
@@ -58,7 +57,7 @@ fn recorded_pipe_before_read(
         }
     };
     let calls = Arc::new(AtomicUsize::new(0));
-    let proc = eval.processes.get_mut(id).expect("record");
+    let proc = eval.processes_mut().get_mut(id).expect("record");
     proc.live_io.child = ChildOwnership::Reaped;
     proc.live_io.child_stdout = Some(ChildOutputReader::Injected(PipeReader::new(
         Box::new(reader),
@@ -111,7 +110,7 @@ fn accept_process_output_pipe_recorded_status_before_interrupted_read_drains_out
                 unibyte,
                 VecDeque::from([ReadStep::Interrupted, ReadStep::Interrupted]),
             );
-            eval.processes
+            eval.processes_mut()
                 .set_child_status_pending(id, process_status_exit_value(0));
             assert_pipe_finished(&mut eval, unibyte);
             assert!(
@@ -135,7 +134,7 @@ fn accept_process_output_pipe_interrupted_read_before_status_keeps_remaining_out
             // after a UTF-8 prefix for permanent failure and close the pipe.
             eval.poll_process_output_for_readiness(vec![id], Some(id), false)
                 .expect("readiness pass");
-            eval.processes
+            eval.processes_mut()
                 .set_child_status_pending(id, process_status_exit_value(0));
             assert_pipe_finished(&mut eval, unibyte);
         }
@@ -147,7 +146,7 @@ fn accept_process_output_pipe_recorded_status_drains_data_and_eof_before_sentine
     for flavor in [PipeFlavor::Shared, PipeFlavor::Stdout] {
         for unibyte in [false, true] {
             let (mut eval, id, calls) = recorded_pipe_before_read(flavor, unibyte, VecDeque::new());
-            eval.processes
+            eval.processes_mut()
                 .set_child_status_pending(id, process_status_exit_value(0));
             assert_pipe_finished(&mut eval, unibyte);
             assert!(calls.load(Ordering::Relaxed) >= 2, "data then decoder EOF");

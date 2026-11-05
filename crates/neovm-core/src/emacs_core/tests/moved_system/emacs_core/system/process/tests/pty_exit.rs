@@ -39,17 +39,18 @@ fn recorded_pty_status_before_read(interruptions: usize) -> (Context, ProcessId,
     let buffer = eval
         .eval_str(r#"(get-buffer-create " *pty-exit-drain*")"#)
         .expect("fixture buffer");
-    let id = eval.processes.create_process(
+    let id = eval.processes_mut().create_process(
         "pty-exit-drain".into(),
         buffer,
         "/bin/sh".into(),
         vec!["-c".into(), "printf 'process-output\\n'".into()],
         ProcessCodingSystems::gnu_make_process_initial(),
     );
-    eval.processes
-        .sync_process_mark(&mut eval.edit.buffers, id)
+    let (processes, buffers) = eval.processes_and_buffers_mut();
+    processes
+        .sync_process_mark(buffers, id)
         .expect("process mark");
-    let proc = eval.processes.get_mut(id).expect("fixture process");
+    let proc = eval.processes_mut().get_mut(id).expect("fixture process");
     // No actual pid is attached to this injected reap: teardown must never
     // signal or wait for an unrelated process on behalf of this fixture.
     proc.live_io.child = ChildOwnership::Reaped;
@@ -60,7 +61,7 @@ fn recorded_pty_status_before_read(interruptions: usize) -> (Context, ProcessId,
         calls: Arc::clone(&calls),
     })));
     // The same status-recording seam used after the owning WNOHANG reaper.
-    eval.processes
+    eval.processes_mut()
         .set_child_status_pending(id, process_status_exit_value(0));
     (eval, id, calls)
 }
@@ -148,9 +149,9 @@ fn accept_process_output_pty_eio_keeps_master_for_exit_drain() {
     // The injected reap has already happened; delay its notification record
     // until after a readable-event pass encounters PTY closure. This forces
     // both orders independently of whether the kernel delivers SIGCHLD first.
-    eval.processes.clear_status_notify_pending(id);
-    eval.processes.mark_status_change_notified(id);
-    let proc = eval.processes.get_mut(id).expect("live process");
+    eval.processes_mut().clear_status_notify_pending(id);
+    eval.processes_mut().mark_status_change_notified(id);
+    let proc = eval.processes_mut().get_mut(id).expect("live process");
     let reader = proc.live_io.pty_reader.take().expect("PTY reader");
     proc.live_io.pty_reader = Some(PtyOutputReader::new(Box::new(EioBeforeFinalPtyRead {
         inner: Box::new(reader),
@@ -162,7 +163,7 @@ fn accept_process_output_pty_eio_keeps_master_for_exit_drain() {
     // pass, before publishing the deliberately delayed child status.
     eval.poll_process_output_for_readiness(vec![id], Some(id), false)
         .expect("observe EIO before status notification");
-    eval.processes
+    eval.processes_mut()
         .set_child_status_pending(id, process_status_exit_value(0));
     assert_complete_output_before_finished(&mut eval, id);
 }
@@ -170,9 +171,9 @@ fn accept_process_output_pty_eio_keeps_master_for_exit_drain() {
 #[test]
 fn pty_eof_zero_timeout_polls_do_not_read_master() {
     let (mut eval, id, calls) = recorded_pty_status_before_read(0);
-    eval.processes.clear_status_notify_pending(id);
-    eval.processes.mark_status_change_notified(id);
-    let proc = eval.processes.get_mut(id).expect("live process");
+    eval.processes_mut().clear_status_notify_pending(id);
+    eval.processes_mut().mark_status_change_notified(id);
+    let proc = eval.processes_mut().get_mut(id).expect("live process");
     let reader = proc.live_io.pty_reader.take().expect("PTY reader");
     proc.live_io.pty_reader = Some(PtyOutputReader::new(Box::new(EioBeforeFinalPtyRead {
         inner: Box::new(reader),

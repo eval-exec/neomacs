@@ -56,7 +56,7 @@ pub use neovm_value::kmacro::KmacroManager;
 // ===========================================================================
 
 fn last_kbd_macro_or_array_error(eval: &super::eval::Context) -> Result<Vec<Value>, Flow> {
-    eval.command_loop
+    eval.command_loop()
         .last_kbd_macro()
         .map(|events| events.to_vec())
         .ok_or_else(|| {
@@ -124,7 +124,7 @@ fn start_kbd_macro_impl(
     append: bool,
     no_exec: bool,
 ) -> EvalResult {
-    if eval.command_loop.keyboard.kboard.defining_kbd_macro {
+    if eval.command_loop().keyboard.kboard.defining_kbd_macro {
         return Err(signal(
             "error",
             vec![Value::string("Already defining kbd macro")],
@@ -214,7 +214,7 @@ pub(crate) fn builtin_call_last_kbd_macro(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("call-last-kbd-macro", &args, 2)?;
-    if eval.command_loop.keyboard.kboard.defining_kbd_macro {
+    if eval.command_loop().keyboard.kboard.defining_kbd_macro {
         return Err(signal(
             "error",
             vec![Value::string(
@@ -286,7 +286,7 @@ fn name_last_kbd_macro_impl(
         }
     };
 
-    let macro_val = match eval.command_loop.last_kbd_macro() {
+    let macro_val = match eval.command_loop().last_kbd_macro() {
         Some(keys) => Value::vector(keys.to_vec()),
         None => {
             return Err(signal(
@@ -296,7 +296,8 @@ fn name_last_kbd_macro_impl(
         }
     };
 
-    eval.obarray.set_symbol_function(&name, macro_val);
+    eval.obarray_view_mut()
+        .set_symbol_function(&name, macro_val);
     Ok(Value::NIL)
 }
 
@@ -319,7 +320,7 @@ pub(crate) fn builtin_last_kbd_macro(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("last-kbd-macro", &args, 0)?;
-    match eval.command_loop.last_kbd_macro() {
+    match eval.command_loop().last_kbd_macro() {
         Some(keys) => Ok(Value::vector(keys.to_vec())),
         None => Ok(Value::NIL),
     }

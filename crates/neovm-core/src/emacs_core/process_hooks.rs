@@ -23,7 +23,7 @@ use std::time::Instant;
 fn unlink_owned_unix_listener_for_exit(ctx: &mut crate::emacs_core::eval::Context, id: ProcessId) {
     #[cfg(unix)]
     {
-        ctx.processes.unlink_owned_unix_listener_for_exit(id);
+        ctx.processes_mut().unlink_owned_unix_listener_for_exit(id);
     }
     #[cfg(not(unix))]
     {
@@ -32,14 +32,14 @@ fn unlink_owned_unix_listener_for_exit(ctx: &mut crate::emacs_core::eval::Contex
 }
 
 fn delete_process(ctx: &mut crate::emacs_core::eval::Context, id: ProcessId) -> bool {
-    ctx.processes.delete_process(id)
+    ctx.processes_mut().delete_process(id)
 }
 
 fn open_channel_for_module(
     ctx: &mut crate::emacs_core::eval::Context,
     process: crate::emacs_core::value::Value,
 ) -> Result<std::ffi::c_int, crate::emacs_core::error::Flow> {
-    ctx.processes.open_channel_for_module(process)
+    ctx.processes().open_channel_for_module(process)
 }
 
 fn print_process_handle(value: &crate::emacs_core::value::Value) -> Option<String> {
@@ -49,7 +49,7 @@ fn print_process_handle(value: &crate::emacs_core::value::Value) -> Option<Strin
 fn wait_notifier(
     ctx: &crate::emacs_core::eval::Context,
 ) -> Option<crate::emacs_core::eval::data::process_state::WaitNotifier> {
-    ctx.processes.wait_notifier()
+    ctx.processes().wait_notifier()
 }
 
 fn terminate_and_defer_reaping(
@@ -97,7 +97,7 @@ fn with_select<R>(token: SelectHandleToken, f: impl FnOnce(&GreenSelectHandle) -
 }
 
 fn eval_select_handle(ctx: &mut crate::emacs_core::eval::Context) -> Option<SelectHandleToken> {
-    register_select_handle(ctx.processes.green_select_handle()?)
+    register_select_handle(ctx.processes().green_select_handle()?)
 }
 
 /// Test seam: register a manager's select handle without a Context.
@@ -181,7 +181,7 @@ fn prepare_main_wait(
     ctx: &mut crate::emacs_core::eval::Context,
     deadline: Instant,
 ) -> MainWaitPreparation {
-    match ctx.processes.prepare_green_main_wait(deadline) {
+    match ctx.processes().prepare_green_main_wait(deadline) {
         crate::emacs_core::process::MainNativePreparation::Ready => MainWaitPreparation::Ready,
         crate::emacs_core::process::MainNativePreparation::Scheduler => {
             MainWaitPreparation::Scheduler

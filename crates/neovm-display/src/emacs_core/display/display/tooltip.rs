@@ -122,14 +122,15 @@ pub fn builtin_x_show_tip_eval(ctx: &mut Context, args: Vec<Value>) -> EvalResul
             )
         })?
         .to_owned();
+    let (frames, buffers) = ctx.frame_manager_and_buffers_mut();
     let frame = super::super::window_cmds::resolve_frame_id_in_state(
-        &mut ctx.frames,
-        &mut ctx.edit.buffers,
+        frames,
+        buffers,
         args.get(1),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
     if !ctx
-        .frames
+        .frame_manager()
         .get(frame)
         .and_then(|f| f.effective_window_system())
         .is_some_and(gui_window_system_active_value)

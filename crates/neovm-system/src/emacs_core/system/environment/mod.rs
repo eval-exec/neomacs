@@ -198,7 +198,9 @@ fn frame_x_display_value(frame: &Frame) -> Option<Value> {
 }
 
 fn selected_frame_display_value(eval: &Context) -> Option<Value> {
-    eval.frames.selected_frame().and_then(frame_x_display_value)
+    eval.frame_manager()
+        .selected_frame()
+        .and_then(frame_x_display_value)
 }
 
 fn corrected_pwd(current_dir: Option<&Path>) -> Option<OsString> {
@@ -336,11 +338,11 @@ pub(crate) fn lookup_environment_list(
 
 fn selected_frame_display(eval: &mut Context, frame: Value) -> EvalResult {
     let selected = if frame.is_nil() {
-        eval.frames.selected_frame()
+        eval.frame_manager().selected_frame()
     } else {
         frame
             .as_frame_id()
-            .and_then(|frame_id| eval.frames.get(FrameId(frame_id)))
+            .and_then(|frame_id| eval.frame_manager().get(FrameId(frame_id)))
     };
     if let Some(frame) = selected {
         // A native Wayland display is not an X DISPLAY. GNU's PGTK path

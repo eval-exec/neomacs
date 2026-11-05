@@ -370,9 +370,10 @@ fn redirect_debugging_output_captures_external_debugging_output() {
 fn prin1_external_debugging_output_preserves_nested_unibyte_bytes_with_print_circle_like_gnu() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
-    eval.obarray
+    eval.obarray_view_mut()
         .set_symbol_value("locale-coding-system", Value::symbol("utf-8-unix"));
-    eval.obarray.set_symbol_value("print-circle", Value::T);
+    eval.obarray_view_mut()
+        .set_symbol_value("print-circle", Value::T);
     let output = debugging_output_test_file();
     let path = output.path();
     let path_value = Value::string(path.to_string_lossy().as_ref());

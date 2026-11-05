@@ -3095,25 +3095,20 @@ pub struct Context {
     /// `current-global-map`, active key lookup, and legacy `global-set-key`.
     selected_global_map: WorldSlot<crate::emacs_core::eval::keymap_lookup::SelectedGlobalMap>,
     /// Current echo-area message text, mirroring GNU `current-message`.
-    #[doc(hidden)]
-    pub current_message: WorldSlot<Option<neovm_value::heap_types::LispString>>,
+    pub(crate) current_message: WorldSlot<Option<neovm_value::heap_types::LispString>>,
     /// GNU `echo_buffer[2]`, held by identity rather than by name.
     pub(crate) echo_area_buffers: WorldSlot<EchoAreaBuffers>,
     /// Window that was selected when the active minibuffer session began.
-    #[doc(hidden)]
-    pub minibuffer_selected_window:
+    pub(crate) minibuffer_selected_window:
         WorldSlot<Option<neovm_edit::emacs_core::display_metrics::WindowId>>,
     /// Currently active minibuffer window, if any.
-    #[doc(hidden)]
-    pub active_minibuffer_window:
+    pub(crate) active_minibuffer_window:
         WorldSlot<Option<neovm_edit::emacs_core::display_metrics::WindowId>>,
     /// Thread manager — cooperative threading primitives.
-    #[doc(hidden)]
-    pub threads: WorldSlot<ThreadManager>,
+    pub(crate) threads: WorldSlot<ThreadManager>,
     /// Command loop state — event queue, prefix args, kbd macros, quit flag.
     /// Used by the interactive command loop (recursive-edit → command_loop).
-    #[doc(hidden)]
-    pub command_loop: WorldSlot<crate::emacs_core::eval::data::command_loop::CommandLoop>,
+    pub(crate) command_loop: WorldSlot<crate::emacs_core::eval::data::command_loop::CommandLoop>,
     /// Consecutive graphical scroll commands retain a pixel goal, not a
     /// possibly clipped buffer column. Owned exclusively by this VM.
     #[doc(hidden)]
@@ -3208,11 +3203,9 @@ pub struct Context {
     /// Rectangle state — stores the last killed rectangle for yank-rectangle.
     pub(crate) rectangle: WorldSlot<RectangleState>,
     /// Interactive command registry — tracks interactive commands.
-    #[doc(hidden)]
-    pub interactive: WorldSlot<InteractiveRegistry>,
+    pub(crate) interactive: WorldSlot<InteractiveRegistry>,
     /// Minibuffer runtime state — active minibuffer stack, prompt metadata, and history.
-    #[doc(hidden)]
-    pub minibuffers: WorldSlot<MinibufferManager>,
+    pub(crate) minibuffers: WorldSlot<MinibufferManager>,
     /// Mode registry — major/minor modes.
     pub(crate) modes: WorldSlot<ModeRegistry>,
     /// Keyboard macro metadata — ring/counter state layered above the
@@ -3296,11 +3289,9 @@ pub struct Context {
     /// `dispatch_signal` and `command_loop_2`.
     #[doc(hidden)]
     pub last_uncaught_signal_backtrace: Option<String>,
-    #[doc(hidden)]
-    pub daemon: WorldSlot<Option<DaemonState>>,
+    pub(crate) daemon: WorldSlot<Option<DaemonState>>,
     /// Process manager — owns all tracked processes.
-    #[doc(hidden)]
-    pub processes: WorldSlot<ProcessManager>,
+    pub(crate) processes: WorldSlot<ProcessManager>,
     /// Abbreviation manager — text abbreviation expansion.
     pub(crate) abbrevs: WorldSlot<AbbrevManager>,
     /// GNU-compatible CPU and managed-allocation profiler state.
@@ -3322,16 +3313,14 @@ pub struct Context {
     #[doc(hidden)]
     pub tagged_heap: WorldView<neovm_value::tagged::gc::TaggedHeap>,
     /// The obarray — unified symbol table with value cells, function cells, plists.
-    #[doc(hidden)]
-    pub obarray: ObarrayView,
+    pub(crate) obarray: ObarrayView,
     /// `runtime_binding_has_projection`'s membership as a bitset over symbol
     /// ids (see `runtime_projection_mask_for`).
     runtime_projection_mask: Box<[u64]>,
     /// Features list (for require/provide).
     pub(crate) features: WorldView<Vec<SymId>>,
     /// GNU xwidget runtime state: internal model/view lists and id counter.
-    #[doc(hidden)]
-    pub xwidgets: WorldSlot<xwidget::XwidgetState>,
+    pub(crate) xwidgets: WorldSlot<xwidget::XwidgetState>,
     /// Network manager — owns network connections, filters, and sentinels.
     /// Variable watcher list — callbacks on variable changes.
     pub(crate) watchers: WorldView<VariableWatcherList>,
@@ -3342,16 +3331,14 @@ pub struct Context {
     /// notification while a watcher callback mutates the same symbol.
     pub(crate) active_variable_watchers: WorldView<HashSet<SymId>>,
     /// Register manager — quick storage and retrieval of text, positions, etc.
-    #[doc(hidden)]
-    pub registers: WorldSlot<RegisterManager>,
+    pub(crate) registers: WorldSlot<RegisterManager>,
     /// Autoload manager — deferred function loading.
     pub(crate) autoloads: WorldView<AutoloadManager>,
     /// Tree-sitter runtime manager — loaded grammars, parser state, node handles,
     /// and compiled queries backing `treesit-*` builtins.
     pub(crate) treesit: WorldView<neovm_text::emacs_core::treesit::TreeSitterManager>,
     /// Frame manager — owns all frames and windows.
-    #[doc(hidden)]
-    pub frames: WorldView<FrameManager>,
+    pub(crate) frames: WorldView<FrameManager>,
     /// Cross-thread quit signal. The input-bridge thread flips this to
     /// `true` when it observes a `quit-char` keystroke; the evaluator
     /// drains it from `maybe_quit` into `Vquit_flag` on its next poll.
@@ -3367,15 +3354,12 @@ pub struct Context {
     /// composition_gstring_put_cache/lookup_cache, src/composite.c): keyed
     /// by the gstring header's font family + pixel size + characters, valued
     /// by the shaped gstring with its ID slot assigned.
-    #[doc(hidden)]
-    pub gstring_shape_cache:
+    pub(crate) gstring_shape_cache:
         WorldSlot<HashMap<neovm_value::display_vocab::GstringShapeCacheKey, Value>>,
     /// Coding system manager — encoding/decoding registry.
-    #[doc(hidden)]
-    pub coding_systems: WorldView<CodingSystemManager>,
+    pub(crate) coding_systems: WorldView<CodingSystemManager>,
     /// Face table — global registry of named face definitions.
-    #[doc(hidden)]
-    pub face_table: WorldSlot<FaceTable>,
+    pub(crate) face_table: WorldSlot<FaceTable>,
     pub input_progress: neomacs_display_protocol::input_progress::InputProgress,
     body_redisplay_by_window: FxHashMap<WindowId, u64>,
     body_redisplay_by_buffer: FxHashMap<BufferId, u64>,
@@ -5279,6 +5263,21 @@ impl Context {
         &self.obarray
     }
 
+    /// Access the obarray's view capability (phase-scoped writes that must go
+    /// through `with_legacy_value_write`).
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn obarray_view(&self) -> &ObarrayView {
+        &self.obarray
+    }
+
+    /// Mutable view capability for phase-scoped writes.
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn obarray_view_mut(&mut self) -> &mut ObarrayView {
+        &mut self.obarray
+    }
+
     /// Resolve a fringe-bitmap symbol value to its registry index and data.
     /// Used by the display pipeline to turn a `(left-fringe SYMBOL FACE)` spec
     /// into a renderable bitmap. Returns `None` for a non-symbol or a symbol
@@ -5464,6 +5463,447 @@ impl Context {
     /// Public mutable access to the frame manager.
     pub fn frame_manager_mut(&mut self) -> &mut FrameManager {
         &mut self.frames
+    }
+
+    // --- PC11-F field accessors (R-b) --------------------------------------
+    //
+    // The eval move made these World slots/views plain production `pub`,
+    // which let any downstream crate read and write authority-bearing World
+    // state by field.  They are `pub(crate)` again; cross-crate callers use
+    // these generated getters.  `_mut` exists only for fields that callers
+    // outside this crate actually write, and its callers are recorded in the
+    // signed R-b rows.  Every `_mut` borrows the Context exclusively, so the
+    // World's one-owner-at-a-time rule is unchanged.
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn current_message(&self) -> &Option<neovm_value::heap_types::LispString> {
+        &self.current_message
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn threads(&self) -> &ThreadManager {
+        &self.threads
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn command_loop(&self) -> &crate::emacs_core::eval::data::command_loop::CommandLoop {
+        &self.command_loop
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn command_loop_mut(
+        &mut self,
+    ) -> &mut crate::emacs_core::eval::data::command_loop::CommandLoop {
+        &mut self.command_loop
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn interactive(&self) -> &InteractiveRegistry {
+        &self.interactive
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn interactive_mut(&mut self) -> &mut InteractiveRegistry {
+        &mut self.interactive
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn minibuffers(&self) -> &MinibufferManager {
+        &self.minibuffers
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn minibuffers_mut(&mut self) -> &mut MinibufferManager {
+        &mut self.minibuffers
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn daemon(&self) -> &Option<DaemonState> {
+        &self.daemon
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn processes(&self) -> &ProcessManager {
+        &self.processes
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn processes_mut(&mut self) -> &mut ProcessManager {
+        &mut self.processes
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn xwidgets(&self) -> &xwidget::XwidgetState {
+        &self.xwidgets
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn xwidgets_mut(&mut self) -> &mut xwidget::XwidgetState {
+        &mut self.xwidgets
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn registers(&self) -> &RegisterManager {
+        &self.registers
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn registers_mut(&mut self) -> &mut RegisterManager {
+        &mut self.registers
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn coding_systems(&self) -> &CodingSystemManager {
+        &self.coding_systems
+    }
+
+    /// Split borrow: the frame manager and the buffer manager, mutably.
+    ///
+    /// One method borrows the whole Context; callers that need both managers
+    /// at once (the display layer's window/frame edits) cannot split fields
+    /// through separate getters.  This returns the two disjoint borrows that
+    /// field syntax used to provide.
+    #[doc(hidden)]
+    #[inline]
+    pub fn frame_manager_and_buffers_mut(&mut self) -> (&mut FrameManager, &mut BufferManager) {
+        (&mut self.frames, &mut self.edit.buffers)
+    }
+
+    /// Split borrow: the frame manager by shared reference and the buffer
+    /// manager mutably (window-buffer sync reads frames, writes buffers).
+    #[doc(hidden)]
+    #[inline]
+    pub fn frame_manager_read_and_buffers_mut(&mut self) -> (&FrameManager, &mut BufferManager) {
+        (&self.frames, &mut self.edit.buffers)
+    }
+
+    /// Split borrow: the process manager and the buffer manager, mutably.
+    #[doc(hidden)]
+    #[inline]
+    pub fn processes_and_buffers_mut(&mut self) -> (&mut ProcessManager, &mut BufferManager) {
+        (&mut self.processes, &mut self.edit.buffers)
+    }
+
+    /// Split borrow: the process manager mutably and the thread manager by
+    /// shared reference (status publication reads the current thread).
+    #[doc(hidden)]
+    #[inline]
+    pub fn processes_and_threads(&mut self) -> (&mut ProcessManager, &ThreadManager) {
+        (&mut self.processes, &self.threads)
+    }
+
+    /// Split borrow: the frame manager and the display host, both mutably.
+    #[doc(hidden)]
+    #[inline]
+    pub fn frame_manager_and_display_host_mut(
+        &mut self,
+    ) -> (&mut FrameManager, &mut Option<Box<dyn DisplayHost>>) {
+        (&mut self.frames, &mut self.display_host)
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn minibuffer_selected_window(
+        &self,
+    ) -> &Option<neovm_edit::emacs_core::display_metrics::WindowId> {
+        &self.minibuffer_selected_window
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn minibuffer_selected_window_mut(
+        &mut self,
+    ) -> &mut Option<neovm_edit::emacs_core::display_metrics::WindowId> {
+        &mut self.minibuffer_selected_window
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn active_minibuffer_window(
+        &self,
+    ) -> &Option<neovm_edit::emacs_core::display_metrics::WindowId> {
+        &self.active_minibuffer_window
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn active_minibuffer_window_mut(
+        &mut self,
+    ) -> &mut Option<neovm_edit::emacs_core::display_metrics::WindowId> {
+        &mut self.active_minibuffer_window
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn gstring_shape_cache(
+        &self,
+    ) -> &std::collections::HashMap<neovm_value::display_vocab::GstringShapeCacheKey, Value> {
+        &self.gstring_shape_cache
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn gstring_shape_cache_mut(
+        &mut self,
+    ) -> &mut std::collections::HashMap<neovm_value::display_vocab::GstringShapeCacheKey, Value>
+    {
+        &mut self.gstring_shape_cache
+    }
+
+    /// Split borrow: the frame manager mutably and the two minibuffer
+    /// selection slots mutably.
+    #[doc(hidden)]
+    #[inline]
+    pub fn frame_manager_and_minibuffer_selection_mut(
+        &mut self,
+    ) -> (
+        &mut FrameManager,
+        &mut Option<neovm_edit::emacs_core::display_metrics::WindowId>,
+        &mut Option<neovm_edit::emacs_core::display_metrics::WindowId>,
+    ) {
+        (
+            &mut self.frames,
+            &mut self.minibuffer_selected_window,
+            &mut self.active_minibuffer_window,
+        )
+    }
+
+    /// Split borrow: the frame manager and buffer manager mutably, and the two
+    /// minibuffer selection slots mutably.
+    #[doc(hidden)]
+    #[inline]
+    pub fn frame_manager_buffers_and_minibuffer_selection_mut(
+        &mut self,
+    ) -> (
+        &mut FrameManager,
+        &mut BufferManager,
+        &mut Option<neovm_edit::emacs_core::display_metrics::WindowId>,
+        &mut Option<neovm_edit::emacs_core::display_metrics::WindowId>,
+    ) {
+        (
+            &mut self.frames,
+            &mut self.edit.buffers,
+            &mut self.minibuffer_selected_window,
+            &mut self.active_minibuffer_window,
+        )
+    }
+
+    /// Split borrow: the obarray by shared reference and the buffer manager
+    /// mutably (casing property modes borrow the obarray while editing text).
+    #[doc(hidden)]
+    #[inline]
+    pub fn obarray_and_buffers_mut(&mut self) -> (&Obarray, &mut BufferManager) {
+        (&self.obarray, &mut self.edit.buffers)
+    }
+
+    /// Split borrow for a specpdl-rooted runtime binding write: the buffer
+    /// manager mutably, the owner slab mutably (when bound), the specpdl by
+    /// shared reference, and the obarray view mutably.
+    ///
+    /// # Safety
+    ///
+    /// The caller must hold the one-owner phase for this Context and use the
+    /// parts only for the bounded `with_legacy_value_write` publication that
+    /// retires before it returns.  The owner slab and specpdl are authority
+    /// state: mutating them outside that publication can break the World/owner
+    /// and binding-stack invariants.
+    #[doc(hidden)]
+    #[inline]
+    pub unsafe fn runtime_binding_parts_mut(
+        &mut self,
+    ) -> (
+        &mut BufferManager,
+        Option<&mut owner_bindings::OwnerSlab>,
+        &[SpecBinding],
+        &mut ObarrayView,
+    ) {
+        (
+            &mut self.edit.buffers,
+            self.owner.slab_mut(),
+            self.specpdl.as_slice(),
+            &mut self.obarray,
+        )
+    }
+
+    /// Split borrow: the buffer manager mutably and the obarray view mutably.
+    #[doc(hidden)]
+    #[inline]
+    pub fn buffers_and_obarray_view_mut(&mut self) -> (&mut BufferManager, &mut ObarrayView) {
+        (&mut self.edit.buffers, &mut self.obarray)
+    }
+
+    /// Split borrow: the obarray and owner bindings by shared reference, and
+    /// the buffer manager mutably (syntax scans read variables, edit text).
+    #[doc(hidden)]
+    #[inline]
+    pub fn variable_view_and_buffers_mut(
+        &mut self,
+    ) -> (&Obarray, &owner_bindings::OwnerSlot, &mut BufferManager) {
+        (&self.obarray, &self.owner, &mut self.edit.buffers)
+    }
+
+    /// Split borrow: the frame manager by shared reference and the display
+    /// host mutably (font resolution reads frames, publishes through the host).
+    #[doc(hidden)]
+    #[inline]
+    pub fn frame_manager_read_and_display_host_mut(
+        &mut self,
+    ) -> (&FrameManager, &mut Option<Box<dyn DisplayHost>>) {
+        (&self.frames, &mut self.display_host)
+    }
+
+    /// Split borrow: the frame manager, buffer manager and display host, all
+    /// mutably.
+    #[doc(hidden)]
+    #[inline]
+    pub fn frame_manager_buffers_and_display_host_mut(
+        &mut self,
+    ) -> (
+        &mut FrameManager,
+        &mut BufferManager,
+        &mut Option<Box<dyn DisplayHost>>,
+    ) {
+        (
+            &mut self.frames,
+            &mut self.edit.buffers,
+            &mut self.display_host,
+        )
+    }
+
+    /// Split borrow: the process manager and the coding-system manager, both
+    /// mutably.
+    #[doc(hidden)]
+    #[inline]
+    pub fn processes_and_coding_systems_mut(
+        &mut self,
+    ) -> (&mut ProcessManager, &mut CodingSystemManager) {
+        (&mut self.processes, &mut self.coding_systems)
+    }
+
+    /// Split borrow for xwidget publication: the xwidget state by shared
+    /// reference, the owner bindings mutably, and the obarray view mutably.
+    ///
+    /// # Safety
+    ///
+    /// The caller must hold the one-owner phase for this Context (sole owner,
+    /// or the Green Baton holder) and must use the returned parts only for the
+    /// bounded `with_legacy_value_write` publication that retires before it
+    /// returns.  The owner bindings are authority state: writing them outside
+    /// that publication can break the World/owner invariant.
+    #[doc(hidden)]
+    #[inline]
+    pub unsafe fn xwidgets_owner_and_obarray_view_mut(
+        &mut self,
+    ) -> (
+        &xwidget::XwidgetState,
+        &mut owner_bindings::OwnerSlot,
+        &mut ObarrayView,
+    ) {
+        (&self.xwidgets, &mut self.owner, &mut self.obarray)
+    }
+
+    /// Split borrow for the mode line: the obarray and owner bindings by
+    /// shared reference, the frame manager mutably, and the read-only buffer,
+    /// process and coding-system managers.
+    #[doc(hidden)]
+    #[inline]
+    pub fn mode_line_inputs_mut(
+        &mut self,
+    ) -> (
+        &Obarray,
+        &owner_bindings::OwnerSlot,
+        &mut FrameManager,
+        &BufferManager,
+        &ProcessManager,
+        &CodingSystemManager,
+    ) {
+        (
+            &self.obarray,
+            &self.owner,
+            &mut self.frames,
+            &self.edit.buffers,
+            &self.processes,
+            &self.coding_systems,
+        )
+    }
+
+    /// Split borrow for variable reads that also scroll a window: the obarray
+    /// and owner bindings by shared reference, the frame and buffer managers
+    /// mutably.
+    #[doc(hidden)]
+    #[inline]
+    pub fn variable_view_and_frames_buffers_mut(
+        &mut self,
+    ) -> (
+        &Obarray,
+        &owner_bindings::OwnerSlot,
+        &mut FrameManager,
+        &mut BufferManager,
+    ) {
+        (
+            &self.obarray,
+            &self.owner,
+            &mut self.frames,
+            &mut self.edit.buffers,
+        )
+    }
+
+    /// Split borrow: the frame manager and buffer manager mutably, and the
+    /// minibuffer manager by shared reference.
+    #[doc(hidden)]
+    #[inline]
+    pub fn frame_manager_buffers_and_minibuffers_mut(
+        &mut self,
+    ) -> (&mut FrameManager, &mut BufferManager, &MinibufferManager) {
+        (&mut self.frames, &mut self.edit.buffers, &self.minibuffers)
+    }
+
+    /// Split borrow: the process manager (mutable), the thread manager
+    /// (shared), and the buffer manager (mutable).  Status publication reads
+    /// the current thread while mutating a process record and syncing its
+    /// mark in the buffer manager.
+    #[doc(hidden)]
+    #[inline]
+    pub fn processes_threads_and_buffers_mut(
+        &mut self,
+    ) -> (&mut ProcessManager, &ThreadManager, &mut BufferManager) {
+        (&mut self.processes, &self.threads, &mut self.edit.buffers)
+    }
+
+    /// Split borrow: processes and buffers mutably, threads and coding
+    /// systems by shared reference (process creation reads both).
+    #[doc(hidden)]
+    #[inline]
+    pub fn processes_threads_buffers_and_coding_systems_mut(
+        &mut self,
+    ) -> (
+        &mut ProcessManager,
+        &ThreadManager,
+        &mut BufferManager,
+        &mut CodingSystemManager,
+    ) {
+        (
+            &mut self.processes,
+            &self.threads,
+            &mut self.edit.buffers,
+            &mut self.coding_systems,
+        )
     }
 
     pub fn current_message_text(&self) -> Option<String> {

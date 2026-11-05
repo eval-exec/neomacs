@@ -33,7 +33,7 @@ fn snarfed_context() -> Context {
         // SAFETY: this DOC fixture scan only reads bound metadata and writes
         // documentation properties; it cannot call Lisp, collect, replace
         // storage, publish dispatch metadata or return an interior reference.
-        eval.obarray
+        eval.obarray()
             .with_legacy_value_write(neovm_eval::emacs_core::doc::snarf_variable_documentation)
     };
     eval
@@ -337,7 +337,7 @@ fn help_function_arglist_is_real_lisp_function_after_bootstrap() {
     crate::test_utils::init_test_tracing();
     let eval = runtime_startup_context();
     let function = eval
-        .obarray
+        .obarray()
         .symbol_function("help-function-arglist")
         .expect("missing help-function-arglist bootstrapped function cell");
     assert!(!crate::emacs_core::autoload::is_autoload_value(
@@ -403,7 +403,9 @@ fn documentation_lambda_with_docstring() {
         doc_form: None,
         interactive: None,
     });
-    evaluator.obarray.set_symbol_function("my-fn", lambda);
+    evaluator
+        .obarray_view_mut()
+        .set_symbol_function("my-fn", lambda);
 
     let result = builtin_documentation(&mut evaluator, vec![Value::symbol("my-fn")]);
     assert!(result.is_ok());
@@ -423,7 +425,9 @@ fn documentation_lambda_no_docstring() {
         doc_form: None,
         interactive: None,
     });
-    evaluator.obarray.set_symbol_function("no-doc", lambda);
+    evaluator
+        .obarray_view_mut()
+        .set_symbol_function("no-doc", lambda);
 
     let result = builtin_documentation(&mut evaluator, vec![Value::symbol("no-doc")]);
     assert!(result.is_ok());
@@ -451,7 +455,9 @@ fn documentation_substitutes_command_keys_unless_raw() {
         doc_form: None,
         interactive: None,
     });
-    evaluator.obarray.set_symbol_function("doc-raw-fn", lambda);
+    evaluator
+        .obarray_view_mut()
+        .set_symbol_function("doc-raw-fn", lambda);
 
     let display = builtin_documentation(&mut evaluator, vec![Value::symbol("doc-raw-fn")]).unwrap();
     let raw =
@@ -478,7 +484,9 @@ fn documentation_lambda_preserves_raw_unibyte_docstring() {
         doc_form: None,
         interactive: None,
     });
-    evaluator.obarray.set_symbol_function("raw-doc-fn", lambda);
+    evaluator
+        .obarray_view_mut()
+        .set_symbol_function("raw-doc-fn", lambda);
 
     let result = builtin_documentation(&mut evaluator, vec![Value::symbol("raw-doc-fn"), Value::T])
         .expect("documentation result");
@@ -499,7 +507,7 @@ fn documentation_subr() {
     crate::test_utils::init_test_tracing();
     let mut evaluator = crate::test_utils::new_context();
     evaluator
-        .obarray
+        .obarray_view_mut()
         .set_symbol_function("plus", Value::subr(intern("+")));
 
     let result = builtin_documentation(&mut evaluator, vec![Value::symbol("plus")]);
@@ -512,7 +520,7 @@ fn documentation_car_subr_uses_oracle_text_shape() {
     crate::test_utils::init_test_tracing();
     let mut evaluator = crate::test_utils::new_context();
     evaluator
-        .obarray
+        .obarray_view_mut()
         .set_symbol_function("car", Value::subr(intern("car")));
 
     let result = builtin_documentation(&mut evaluator, vec![Value::symbol("car")]).unwrap();
@@ -528,7 +536,7 @@ fn documentation_if_special_form_uses_oracle_text_shape() {
     crate::test_utils::init_test_tracing();
     let mut evaluator = crate::test_utils::new_context();
     evaluator
-        .obarray
+        .obarray_view_mut()
         .set_symbol_function("if", Value::subr(intern("if")));
 
     let result = builtin_documentation(&mut evaluator, vec![Value::symbol("if")]).unwrap();
@@ -588,7 +596,7 @@ fn documentation_core_subr_stubs_use_oracle_first_line_shapes() {
 
     for (name, expected_prefix) in probes {
         evaluator
-            .obarray
+            .obarray_view_mut()
             .set_symbol_function(name, Value::subr(intern(name)));
         let result = builtin_documentation(&mut evaluator, vec![Value::symbol(name)]).unwrap();
         let text = result
@@ -607,7 +615,7 @@ fn documentation_symbol_alias_to_builtin_returns_docstring() {
     crate::test_utils::init_test_tracing();
     let mut evaluator = crate::test_utils::new_context();
     evaluator
-        .obarray
+        .obarray_view_mut()
         .set_symbol_function("alias-builtin", Value::symbol("car"));
 
     let result =
@@ -624,10 +632,10 @@ fn documentation_prefers_function_documentation_property() {
     crate::test_utils::init_test_tracing();
     let mut evaluator = crate::test_utils::new_context();
     evaluator
-        .obarray
+        .obarray_view_mut()
         .set_symbol_function("doc-prop", Value::fixnum(7));
     evaluator
-        .obarray
+        .obarray_view_mut()
         .put_property(
             "doc-prop",
             "function-documentation",
@@ -661,10 +669,10 @@ fn documentation_integer_function_documentation_property_returns_nil() {
     crate::test_utils::init_test_tracing();
     let mut evaluator = crate::test_utils::new_context();
     evaluator
-        .obarray
+        .obarray_view_mut()
         .set_symbol_function("doc-prop", Value::fixnum(7));
     evaluator
-        .obarray
+        .obarray_view_mut()
         .put_property("doc-prop", "function-documentation", Value::fixnum(9))
         .unwrap();
 
@@ -677,10 +685,10 @@ fn documentation_list_function_documentation_property_is_evaluated() {
     crate::test_utils::init_test_tracing();
     let mut evaluator = crate::test_utils::new_context();
     evaluator
-        .obarray
+        .obarray_view_mut()
         .set_symbol_function("doc-prop", Value::fixnum(7));
     evaluator
-        .obarray
+        .obarray_view_mut()
         .put_property(
             "doc-prop",
             "function-documentation",
@@ -697,10 +705,10 @@ fn documentation_symbol_function_documentation_property_is_evaluated() {
     crate::test_utils::init_test_tracing();
     let mut evaluator = crate::test_utils::new_context();
     evaluator
-        .obarray
+        .obarray_view_mut()
         .set_symbol_function("doc-prop", Value::fixnum(7));
     evaluator
-        .obarray
+        .obarray_view_mut()
         .put_property("doc-prop", "function-documentation", Value::symbol("t"))
         .unwrap();
 
@@ -713,10 +721,10 @@ fn documentation_vector_function_documentation_property_is_evaluated() {
     crate::test_utils::init_test_tracing();
     let mut evaluator = crate::test_utils::new_context();
     evaluator
-        .obarray
+        .obarray_view_mut()
         .set_symbol_function("doc-prop", Value::fixnum(7));
     evaluator
-        .obarray
+        .obarray_view_mut()
         .put_property(
             "doc-prop",
             "function-documentation",
@@ -733,10 +741,10 @@ fn documentation_unbound_symbol_function_documentation_property_errors() {
     crate::test_utils::init_test_tracing();
     let mut evaluator = crate::test_utils::new_context();
     evaluator
-        .obarray
+        .obarray_view_mut()
         .set_symbol_function("doc-prop", Value::fixnum(7));
     evaluator
-        .obarray
+        .obarray_view_mut()
         .put_property(
             "doc-prop",
             "function-documentation",
@@ -756,10 +764,10 @@ fn documentation_invalid_form_function_documentation_property_errors() {
     crate::test_utils::init_test_tracing();
     let mut evaluator = crate::test_utils::new_context();
     evaluator
-        .obarray
+        .obarray_view_mut()
         .set_symbol_function("doc-prop", Value::fixnum(7));
     evaluator
-        .obarray
+        .obarray_view_mut()
         .put_property(
             "doc-prop",
             "function-documentation",
@@ -905,7 +913,7 @@ fn documentation_property_eval_returns_string_property() {
     crate::test_utils::init_test_tracing();
     let mut evaluator = crate::test_utils::new_context();
     evaluator
-        .obarray
+        .obarray_view_mut()
         .put_property("doc-sym", "variable-documentation", Value::string("doc"))
         .unwrap();
 
@@ -928,7 +936,7 @@ fn documentation_property_eval_substitutes_command_keys_unless_raw() {
     // help.el must be loaded before exercising the substitute path.
     crate::test_utils::load_minimal_gnu_help_runtime(&mut evaluator);
     evaluator
-        .obarray
+        .obarray_view_mut()
         .put_property(
             "doc-sym",
             "variable-documentation",
@@ -970,7 +978,7 @@ fn documentation_property_eval_integer_property_returns_nil() {
     crate::test_utils::init_test_tracing();
     let mut evaluator = crate::test_utils::new_context();
     evaluator
-        .obarray
+        .obarray_view_mut()
         .put_property("doc-sym", "variable-documentation", Value::fixnum(7))
         .unwrap();
 
@@ -1009,7 +1017,7 @@ fn documentation_property_eval_reads_compiled_doc_ref() {
 
     let mut evaluator = crate::test_utils::new_context();
     evaluator
-        .obarray
+        .obarray_view_mut()
         .put_property(
             "doc-sym",
             "variable-documentation",
@@ -1580,7 +1588,7 @@ fn documentation_property_eval_list_property_is_evaluated() {
     crate::test_utils::init_test_tracing();
     let mut evaluator = crate::test_utils::new_context();
     evaluator
-        .obarray
+        .obarray_view_mut()
         .put_property(
             "doc-sym",
             "variable-documentation",
@@ -1604,7 +1612,7 @@ fn documentation_property_eval_symbol_property_is_evaluated() {
     crate::test_utils::init_test_tracing();
     let mut evaluator = crate::test_utils::new_context();
     evaluator
-        .obarray
+        .obarray_view_mut()
         .put_property("doc-sym", "variable-documentation", Value::symbol("t"))
         .unwrap();
 
@@ -1624,7 +1632,7 @@ fn documentation_property_eval_vector_property_is_evaluated() {
     crate::test_utils::init_test_tracing();
     let mut evaluator = crate::test_utils::new_context();
     evaluator
-        .obarray
+        .obarray_view_mut()
         .put_property(
             "doc-sym",
             "variable-documentation",
@@ -1648,7 +1656,7 @@ fn documentation_property_eval_unbound_symbol_property_errors() {
     crate::test_utils::init_test_tracing();
     let mut evaluator = crate::test_utils::new_context();
     evaluator
-        .obarray
+        .obarray_view_mut()
         .put_property(
             "doc-sym",
             "variable-documentation",
@@ -1674,7 +1682,7 @@ fn documentation_property_eval_invalid_form_property_errors() {
     crate::test_utils::init_test_tracing();
     let mut evaluator = crate::test_utils::new_context();
     evaluator
-        .obarray
+        .obarray_view_mut()
         .put_property(
             "doc-sym",
             "variable-documentation",
@@ -1700,7 +1708,7 @@ fn documentation_property_eval_non_symbol_prop_returns_nil() {
     crate::test_utils::init_test_tracing();
     let mut evaluator = crate::test_utils::new_context();
     evaluator
-        .obarray
+        .obarray_view_mut()
         .put_property("doc-sym", "x", Value::string("v"))
         .unwrap();
 
@@ -1900,7 +1908,7 @@ fn snarfing_the_doc_image_interns_nothing() {
         // documentation properties; it cannot call Lisp, collect, replace
         // storage, publish dispatch metadata or return an interior reference.
         evaluator
-            .obarray
+            .obarray()
             .with_legacy_value_write(neovm_eval::emacs_core::doc::snarf_variable_documentation)
     };
     assert!(installed > 700, "installed {installed} records");
@@ -1922,7 +1930,7 @@ fn snarf_documentation_overwrites_a_docstring_already_on_the_plist() {
     crate::test_utils::init_test_tracing();
     let mut evaluator = crate::test_utils::new_context();
     evaluator
-        .obarray
+        .obarray()
         .put_property(
             "indent-tabs-mode",
             "variable-documentation",
@@ -1935,7 +1943,7 @@ fn snarf_documentation_overwrites_a_docstring_already_on_the_plist() {
         // documentation properties; it cannot call Lisp, collect, replace
         // storage, publish dispatch metadata or return an interior reference.
         evaluator
-            .obarray
+            .obarray()
             .with_legacy_value_write(neovm_eval::emacs_core::doc::snarf_variable_documentation)
     };
 
@@ -1978,7 +1986,7 @@ fn a_position_that_does_not_point_at_a_doc_record_answers_nil() {
 fn every_doc_image_record_round_trips_through_its_position() {
     crate::test_utils::init_test_tracing();
     let mut evaluator = crate::test_utils::new_context();
-    let obarray = &mut evaluator.obarray;
+    let obarray = &mut evaluator.obarray();
     let mut checked = 0_usize;
     for (name, doc) in neovm_eval::emacs_core::var_docs::gnu_table::GNU_VAR_DOCS {
         let Some(id) = neovm_value::intern::lookup_interned(name) else {

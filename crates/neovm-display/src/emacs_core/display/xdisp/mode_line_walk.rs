@@ -292,7 +292,7 @@ fn symbol_risk<P: WalkPolicy>(
             Risk::Trusted => {}
         },
     }
-    if symbol.is_risky(&eval.obarray) {
+    if symbol.is_risky(&eval.obarray()) {
         controls
     } else {
         P::untrusted(controls)

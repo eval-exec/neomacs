@@ -22,7 +22,7 @@ fn selected_keyboard_parked_heap_values_survive_gc_and_clone_independently() {
     let mut eval = crate::test_utils::new_context();
     let id = crate::emacs_core::intern::intern("window-system");
     let keyboard = eval
-        .obarray
+        .obarray()
         .forwarder(id)
         .unwrap()
         .as_kboard_obj_fwd()

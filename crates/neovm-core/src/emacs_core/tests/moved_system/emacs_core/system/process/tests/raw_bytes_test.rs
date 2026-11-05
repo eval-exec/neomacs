@@ -69,7 +69,7 @@ fn builtin_make_process_preserves_raw_unibyte_command_argument_storage() {
     .as_process_id()
     .expect("process object id");
 
-    let proc = eval.processes.get(pid).expect("process should exist");
+    let proc = eval.processes().get(pid).expect("process should exist");
     let command = list_to_vec(&proc.command).expect("process command list");
     let arg = command
         .get(1)

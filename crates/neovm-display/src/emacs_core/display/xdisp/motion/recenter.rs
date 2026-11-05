@@ -55,7 +55,7 @@ pub(crate) fn resolve(
     if matches!(placement, RecenterPlacement::FromTop(_))
         || eval.noninteractive()
         || eval
-            .frames
+            .frame_manager()
             .get(frame)
             .is_none_or(|frame| frame.initial || frame.effective_window_system().is_none())
     {
@@ -85,14 +85,14 @@ fn measure(
     // GNU's selected window uses the buffer's live point. Once a callback
     // deselects this captured target, its independent window point takes over.
     let selected = eval
-        .frames
+        .frame_manager()
         .selected_frame()
         .is_some_and(|selected| selected.id == frame && selected.selected_window == window);
     let origin = if selected {
         source.emacs_byte_pos_to_lisp_char_pos(source.point_emacs_byte_pos())
     } else {
         match eval
-            .frames
+            .frame_manager()
             .get(frame)
             .and_then(|frame| frame.find_window(window))
         {
@@ -110,7 +110,7 @@ fn measure(
     .as_fixnum()
     .unwrap_or(0);
     let line_height = eval
-        .frames
+        .frame_manager()
         .get(frame)
         .map_or(1, |frame| frame.char_height.round().max(1.0) as i64);
     let canonical_height = (body_height / line_height).max(1);

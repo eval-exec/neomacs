@@ -71,7 +71,7 @@ fn unintern_keeps_the_well_known_identity_while_lisp_reinterns() {
     let original = symbol.id();
     ctx.assign_by_id(original, Value::fixnum(42));
     assert_eq!(
-        ctx.obarray.symbol_value_id_copied(original),
+        ctx.obarray().symbol_value_id_copied(original),
         Some(Value::fixnum(42))
     );
 
@@ -81,7 +81,7 @@ fn unintern_keeps_the_well_known_identity_while_lisp_reinterns() {
     assert_eq!(resolve_sym(original), symbol.name());
     assert!(!is_canonical_id(original));
     assert_eq!(
-        ctx.obarray.symbol_value_id_copied(original),
+        ctx.obarray().symbol_value_id_copied(original),
         Some(Value::fixnum(42)),
         "the old symbol keeps its value cell after unintern"
     );
@@ -96,7 +96,7 @@ fn unintern_keeps_the_well_known_identity_while_lisp_reinterns() {
     assert_ne!(fresh, original);
     assert_eq!(lookup_interned(symbol.name()), Some(fresh));
     assert_eq!(resolve_sym(fresh), symbol.name());
-    assert_eq!(ctx.obarray.symbol_value_id_copied(fresh), None);
+    assert_eq!(ctx.obarray().symbol_value_id_copied(fresh), None);
 
     // A by-name read resolves to the fresh symbol, never re-resolving the
     // fixed identity (the retired EpochCachedSymbol behaviour).

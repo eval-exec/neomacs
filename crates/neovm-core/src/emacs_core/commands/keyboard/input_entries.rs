@@ -205,14 +205,12 @@ pub(crate) fn builtin_discard_input(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("discard-input", &args, 0)?;
-    let buffers = &mut ctx.edit.buffers;
-    let owner = ctx.owner.slab_mut();
-    let specpdl = ctx.specpdl.as_slice();
     // SAFETY: this storage helper only clears a runtime variable through the
     // value/forwarder path. It never calls watchers/Lisp or writes either
     // canonical dispatch word, and returns no manager/interior reference.
+    let (buffers, owner, specpdl, obarray_view) = unsafe { ctx.runtime_binding_parts_mut() };
     unsafe {
-        ctx.obarray.with_legacy_value_write(|obarray| {
+        obarray_view.with_legacy_value_write(|obarray| {
             crate::emacs_core::eval::set_runtime_binding(
                 obarray,
                 buffers,

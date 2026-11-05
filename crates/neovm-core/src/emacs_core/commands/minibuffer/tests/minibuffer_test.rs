@@ -57,11 +57,11 @@ fn minibuffer_copied_properties_have_only_manager_roots() {
     let history = intern("minibuffer-owned-history");
     let (probes, discarded_directory_property) = eval.with_gc_inhibited(|eval| {
         let mut probes = Vec::new();
-        eval.minibuffers
+        eval.minibuffers()
             .add_to_history_lisp(history, text(&mut probes, key), 8);
         let buffer = eval.buffers.current_buffer_id().expect("current buffer");
         let state = eval
-            .minibuffers
+            .minibuffers()
             .read_from_minibuffer_lisp(buffer, &text(&mut probes, key), None, None)
             .expect("outer minibuffer");
         // Distinct payloads prevent one copied field from hiding another's
@@ -74,7 +74,7 @@ fn minibuffer_copied_properties_have_only_manager_roots() {
         state.completion_table = Some(CompletionTable::List(vec![text(&mut probes, key)]));
 
         let state = eval
-            .minibuffers
+            .minibuffers()
             .read_from_minibuffer_lisp(buffer, &text(&mut probes, key), None, None)
             .expect("inner minibuffer");
         state.completion_table = Some(CompletionTable::Alist(vec![(
@@ -83,7 +83,7 @@ fn minibuffer_copied_properties_have_only_manager_roots() {
         )]));
 
         let state = eval
-            .minibuffers
+            .minibuffers()
             .read_from_minibuffer_lisp(buffer, &ls("Files: "), None, None)
             .expect("directory minibuffer");
         let discarded = Value::vector(vec![Value::fixnum(999)]);
@@ -123,7 +123,7 @@ fn minibuffer_copied_properties_have_only_manager_roots() {
             );
         }
         assert_eq!(
-            eval.minibuffers.history.get(history)[0]
+            eval.minibuffers().history.get(history)[0]
                 .intervals()
                 .get_property_at_char_pos(CharPos0::ZERO, key)
                 .expect("history property")
@@ -157,7 +157,7 @@ fn minibuffer_copied_properties_have_only_manager_roots() {
     assert_eq!(eval.gc_count, completed + 1);
     check_live(&eval);
 
-    *eval.minibuffers = MinibufferManager::new();
+    *eval.minibuffers() = MinibufferManager::new();
     eval.gc_collect_exact();
     for bits in probes {
         assert!(
@@ -298,7 +298,7 @@ fn read_buffer_completing_args_use_live_buffer_names_and_normalized_default() {
 fn read_buffer_completing_args_formats_default_prompt_like_gnu() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
-    eval.obarray
+    eval.obarray()
         .set_symbol_value("minibuffer-default-prompt-format", Value::string(" [%s]"));
 
     let with_default = read_buffer_completing_args(
@@ -615,7 +615,7 @@ fn recursive_depth_limit() {
 fn exit_recursive_edit_rejects_top_level_command_loop_like_gnu() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
-    eval.command_loop.recursive_depth = 1;
+    eval.command_loop_mut().recursive_depth = 1;
 
     let result = builtin_exit_recursive_edit(&mut eval, vec![]);
     assert!(if matches!(
@@ -634,7 +634,7 @@ fn exit_recursive_edit_rejects_top_level_command_loop_like_gnu() {
 fn abort_recursive_edit_rejects_top_level_command_loop_like_gnu() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
-    eval.command_loop.recursive_depth = 1;
+    eval.command_loop_mut().recursive_depth = 1;
 
     let result = builtin_abort_recursive_edit(&mut eval, vec![]);
     assert!(if matches!(
@@ -1098,7 +1098,7 @@ fn builtin_all_completions_preserves_raw_unibyte_candidates() {
 fn builtin_all_completions_honors_raw_unibyte_completion_regexps() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
-    eval.obarray.set_symbol_value(
+    eval.obarray_view_mut().set_symbol_value(
         "completion-regexp-list",
         Value::list(vec![Value::heap_string(LispString::from_unibyte(vec![
             0xFF,
@@ -1125,9 +1125,9 @@ fn builtin_all_completions_honors_raw_unibyte_completion_regexps() {
 fn builtin_all_completions_completion_regexps_fold_when_completion_ignore_case() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
-    eval.obarray
+    eval.obarray_view_mut()
         .set_symbol_value("completion-ignore-case", Value::T);
-    eval.obarray.set_symbol_value(
+    eval.obarray_view_mut().set_symbol_value(
         "completion-regexp-list",
         Value::list(vec![Value::string("con")]),
     );
@@ -1147,7 +1147,7 @@ fn builtin_all_completions_completion_regexps_fold_when_completion_ignore_case()
 fn builtin_all_completions_signals_invalid_completion_regexp() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
-    eval.obarray.set_symbol_value(
+    eval.obarray_view_mut().set_symbol_value(
         "completion-regexp-list",
         Value::list(vec![Value::string("[")]),
     );
@@ -1192,7 +1192,7 @@ fn eval_minibuffer_runtime_state_tracks_active_prompt_and_contents() {
         crate::emacs_core::minibuffer::default_minibuffer_prompt_properties(),
     );
     eval.buffers.set_current(minibuf_id);
-    eval.minibuffers
+    eval.minibuffers()
         .read_from_minibuffer(minibuf_id, "Prompt: ", Some("value"), None)
         .expect("enter minibuffer");
 
@@ -1248,7 +1248,7 @@ fn eval_minibuffer_runtime_state_preserves_raw_unibyte_prompt_and_contents() {
         crate::emacs_core::minibuffer::default_minibuffer_prompt_properties(),
     );
     eval.buffers.set_current(minibuf_id);
-    eval.minibuffers
+    eval.minibuffers()
         .read_from_minibuffer_lisp(
             minibuf_id,
             &raw_prompt,
@@ -1343,7 +1343,7 @@ fn builtin_minibuffer_prompt_end_falls_back_to_point_min_without_prompt_field() 
         );
     }
     eval.buffers.set_current(minibuf_id);
-    eval.minibuffers
+    eval.minibuffers()
         .read_from_minibuffer(minibuf_id, "Prompt: ", Some("vm-mini"), None)
         .expect("enter minibuffer");
 
@@ -1842,7 +1842,7 @@ fn symbol_completion_observes_the_lisp_visible_mutated_name() {
 fn atom_backed_completion_returns_the_symbols_materialized_name_object() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
-    eval.obarray
+    eval.obarray_view_mut()
         .intern("atom-backed-completion-name-identity-probe");
 
     let result = eval
@@ -1896,9 +1896,9 @@ fn completion_candidate_keeps_the_global_obarray_scan_compact() {
 fn completion_state_reads_use_predeclared_symbols() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
-    eval.obarray
+    eval.obarray()
         .set_symbol_value("completion-ignore-case", Value::T);
-    eval.obarray.set_symbol_value(
+    eval.obarray().set_symbol_value(
         "completion-regexp-list",
         Value::list(vec![Value::string("neo")]),
     );
@@ -1931,7 +1931,7 @@ fn repeated_mx_completion_does_not_intern_during_candidate_scan() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
     let obarray = eval
-        .obarray
+        .obarray()
         .symbol_value_copied("obarray")
         .expect("global obarray proxy");
     let args = vec![
@@ -2001,7 +2001,7 @@ fn completion_regexp_list_reads_current_buffer_syntax_table() {
         .expect("set-syntax-table");
     eval.eval_str("(modify-syntax-entry ?z \" \")")
         .expect("modify-syntax-entry");
-    eval.obarray.set_symbol_value(
+    eval.obarray_view_mut().set_symbol_value(
         "completion-regexp-list",
         Value::list(vec![Value::string("\\`\\sw+\\'")]),
     );

@@ -48,7 +48,7 @@ fn register_copied_properties_have_only_manager_roots() {
             RegisterContent::KbdMacro(vec![payload(&mut probes), payload(&mut probes)]),
         );
         manager.set('n', RegisterContent::Number(42));
-        *eval.registers = manager;
+        *eval.registers() = manager;
         probes
     });
     let check_live = |eval: &Context| {
@@ -67,7 +67,7 @@ fn register_copied_properties_have_only_manager_roots() {
                 &[Value::fixnum(index as i64)]
             );
         }
-        let Some(RegisterContent::Text(text)) = eval.registers.get('t') else {
+        let Some(RegisterContent::Text(text)) = eval.registers().get('t') else {
             panic!("retained text register");
         };
         assert_eq!(
@@ -104,7 +104,7 @@ fn register_copied_properties_have_only_manager_roots() {
     assert_eq!(eval.gc_count, completed + 1);
     check_live(&eval);
 
-    eval.registers.clear_all();
+    eval.registers().clear_all();
     eval.gc_collect_exact();
     for Probe(bits) in probes {
         assert!(
@@ -401,7 +401,7 @@ fn test_builtin_view_register() {
     assert!(desc.as_utf8_str().unwrap().contains("empty"));
 
     // Text register
-    eval.registers.set(
+    eval.registers_mut().set(
         'v',
         RegisterContent::Text(LispString::from_unibyte(b"some text".to_vec())),
     );
@@ -412,7 +412,7 @@ fn test_builtin_view_register() {
     assert!(desc.as_utf8_str().unwrap().contains("some text"));
 
     // Number register
-    eval.registers.set('v', RegisterContent::Number(99));
+    eval.registers_mut().set('v', RegisterContent::Number(99));
     let result = builtin_view_register(&mut eval, vec![Value::char('v')]);
     assert!(result.is_ok());
     let desc = result.unwrap();
@@ -490,14 +490,14 @@ fn rectangle_and_file_registers_preserve_raw_unibyte_strings() {
     use super::super::eval::Context;
 
     let mut eval = crate::test_utils::new_context();
-    eval.registers.set(
+    eval.registers_mut().set(
         'r',
         RegisterContent::Rectangle(vec![
             LispString::from_unibyte(vec![0xFF]),
             LispString::from_unibyte(b"ok".to_vec()),
         ]),
     );
-    eval.registers.set(
+    eval.registers_mut().set(
         'f',
         RegisterContent::File(LispString::from_unibyte(vec![0xFF])),
     );

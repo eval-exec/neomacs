@@ -1216,22 +1216,23 @@ pub(crate) fn finish_file_name_completion_with_eval_predicate(
     ignore_case: bool,
 ) -> EvalResult {
     if ignore_case && super::fns::compare_strings_parity_enabled() {
-        let completions =
-            if let Some(predicate) = predicate.copied().filter(|value| !value.is_nil()) {
-                let use_absolute = predicate_uses_absolute_file_argument(&eval.obarray, &predicate);
-                filter_completions_by_callable_predicate(
-                    use_absolute,
-                    &directory,
-                    completions,
-                    |arg| {
-                        with_default_directory_binding(eval, &directory, |eval| {
-                            eval.apply(predicate, vec![arg])
-                        })
-                    },
-                )?
-            } else {
-                completions
-            };
+        let completions = if let Some(predicate) =
+            predicate.copied().filter(|value| !value.is_nil())
+        {
+            let use_absolute = predicate_uses_absolute_file_argument(&eval.obarray(), &predicate);
+            filter_completions_by_callable_predicate(
+                use_absolute,
+                &directory,
+                completions,
+                |arg| {
+                    with_default_directory_binding(eval, &directory, |eval| {
+                        eval.apply(predicate, vec![arg])
+                    })
+                },
+            )?
+        } else {
+            completions
+        };
         return resolve_file_name_completion_with_parity(eval, &file, completions, true);
     }
     let Some(predicate) = predicate.copied() else {
@@ -1249,7 +1250,7 @@ pub(crate) fn finish_file_name_completion_with_eval_predicate(
         ));
     }
 
-    let use_absolute_path = predicate_uses_absolute_file_argument(&eval.obarray, &predicate);
+    let use_absolute_path = predicate_uses_absolute_file_argument(&eval.obarray(), &predicate);
     let bound_directory = directory.clone();
     finish_file_name_completion_with_callable_predicate(
         use_absolute_path,

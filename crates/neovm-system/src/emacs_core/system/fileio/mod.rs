@@ -5352,7 +5352,7 @@ fn run_after_insert_file_pipeline(
     let visit_value = if visit { Value::T } else { Value::NIL };
     let mut inserted = inserted_chars;
 
-    if eval.obarray.fboundp("after-insert-file-set-coding") {
+    if eval.obarray().fboundp("after-insert-file-set-coding") {
         let result = eval.funcall_general(
             Value::symbol("after-insert-file-set-coding"),
             vec![Value::fixnum(inserted), visit_value],
@@ -5362,7 +5362,7 @@ fn run_after_insert_file_pipeline(
         }
     }
 
-    if inserted <= 0 || !eval.obarray.fboundp("format-decode") {
+    if inserted <= 0 || !eval.obarray().fboundp("format-decode") {
         return Ok(inserted);
     }
 
@@ -6072,7 +6072,7 @@ fn auto_coding_system_name(
     else {
         return Ok(None);
     };
-    if eval.coding_systems.is_known_or_derived(&name) {
+    if eval.coding_systems().is_known_or_derived(&name) {
         Ok(Some(name))
     } else {
         Ok(None)
@@ -6782,7 +6782,7 @@ fn select_write_region_coding_system(
     let finish = |eval: &neovm_eval::emacs_core::eval::Context,
                   symbol: neovm_value::intern::SymId| {
         let resolved = neovm_text::emacs_core::coding::coding_inherit_eol_type_unix(
-            &eval.coding_systems,
+            &eval.coding_systems(),
             Value::from_sym_id(symbol),
             eval.symbol_mode(),
         );
@@ -6842,7 +6842,7 @@ fn select_write_region_coding_system(
             WriteCodingSource::Buffer {
                 chosen,
                 class: neovm_text::emacs_core::coding::classify_write_coding(
-                    &eval.coding_systems,
+                    &eval.coding_systems(),
                     resolve_sym(chosen),
                 ),
             }
@@ -6866,13 +6866,13 @@ fn select_write_region_coding_system(
     let (selected, selected_eol) = match choice {
         WriteCodingChoice::BoundDirect(coding) => return Ok(finish(eval, coding)),
         WriteCodingChoice::Selected { coding, eol } => {
-            let coding = inherit_buffer_default_eol(&eval.coding_systems, coding, eol);
+            let coding = inherit_buffer_default_eol(&eval.coding_systems(), coding, eol);
             return Ok(finish(eval, coding));
         }
         WriteCodingChoice::ForcedRawText { coding, eol, .. } => {
-            let coding = inherit_buffer_default_eol(&eval.coding_systems, coding, eol);
+            let coding = inherit_buffer_default_eol(&eval.coding_systems(), coding, eol);
             let raw = neovm_text::emacs_core::coding::raw_text_coding_system(
-                &eval.coding_systems,
+                &eval.coding_systems(),
                 coding,
             );
             return Ok(finish(eval, raw));
@@ -6906,10 +6906,10 @@ fn select_write_region_coding_system(
         .as_symbol_id(symbol_mode)
         .ok_or_else(|| signal(LispCondition::CodingSystemError, vec![selected]))?;
     let selected_name = resolve_sym(selected_id);
-    if !eval.coding_systems.is_known_or_derived(selected_name) {
+    if !eval.coding_systems().is_known_or_derived(selected_name) {
         return Err(signal(LispCondition::CodingSystemError, vec![selected]));
     }
-    let selected_id = inherit_buffer_default_eol(&eval.coding_systems, selected_id, selected_eol);
+    let selected_id = inherit_buffer_default_eol(&eval.coding_systems(), selected_id, selected_eol);
     Ok(finish(eval, selected_id))
 }
 
@@ -7076,7 +7076,7 @@ fn write_region_without_handler(
     if !coding_for_write.is_nil()
         && let Some(name) = coding_for_write.as_symbol_name(symbol_mode)
         && name != "nil"
-        && !eval.coding_systems.is_known_or_derived(name)
+        && !eval.coding_systems().is_known_or_derived(name)
     {
         return Err(signal(
             LispCondition::CodingSystemError,
@@ -7629,7 +7629,7 @@ pub fn builtin_do_auto_save(
     // any buffer needed writing. Keeping the record at the primitive boundary
     // also makes direct Lisp calls and idle-triggered calls obey the same
     // "new input is required before another automatic pass" invariant.
-    eval.command_loop.last_auto_save_input_events = eval.num_nonmacro_input_events();
+    eval.command_loop_mut().last_auto_save_input_events = eval.num_nonmacro_input_events();
 
     Ok(Value::NIL)
 }

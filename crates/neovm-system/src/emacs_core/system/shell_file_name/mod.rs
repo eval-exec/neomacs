@@ -103,7 +103,7 @@ pub fn install_dump_default(eval: &mut Context) {
 
 fn install_resolved(eval: &mut Context, shell: ResolvedShellFileName) {
     eval.set_variable("shell-file-name", Value::unibyte_string(shell.lisp_name()));
-    eval.obarray.make_special("shell-file-name");
+    eval.obarray_mut().make_special("shell-file-name");
 }
 
 #[cfg(test)]

@@ -126,7 +126,7 @@ fn termination_capture_runs_kill_emacs_at_safe_point_once() {
         );
         assert_eq!(eval.shutdown_request().unwrap().exit_code, sig);
         assert_eq!(
-            eval.obarray.symbol_value_copied("signal-hook-count"),
+            eval.obarray().symbol_value_copied("signal-hook-count"),
             Some(neovm_value::value::Value::fixnum(1))
         );
         // Synchronous handler invocation avoids a later cross-thread delivery
@@ -134,7 +134,7 @@ fn termination_capture_runs_kill_emacs_at_safe_point_once() {
         neovm_system::emacs_core::os_signal::test_support::deliver_user_signal(sig);
         assert_eq!(os_signal::take_termination_signal(), None);
         assert_eq!(
-            eval.obarray.symbol_value_copied("signal-hook-count"),
+            eval.obarray().symbol_value_copied("signal-hook-count"),
             Some(neovm_value::value::Value::fixnum(1))
         );
     }
@@ -196,7 +196,7 @@ fn sigint_is_captured_like_the_other_fatal_signals() {
     );
     assert_eq!(eval.shutdown_request().unwrap().exit_code, libc::SIGINT);
     assert_eq!(
-        eval.obarray.symbol_value_copied("sigint-hook-count"),
+        eval.obarray().symbol_value_copied("sigint-hook-count"),
         Some(neovm_value::value::Value::fixnum(1))
     );
     neovm_system::emacs_core::os_signal::test_support::deliver_user_signal(libc::SIGINT);

@@ -268,7 +268,7 @@ pub trait XwidgetContextExt {
 
 impl XwidgetContextExt for Context {
     fn apply_xwidget_frontend_event(&mut self, event: &FrontendWebViewEvent) -> Result<bool, Flow> {
-        let effect = self.xwidgets.apply_frontend_event(event);
+        let effect = self.xwidgets_mut().apply_frontend_event(event);
         let redisplay = effect.redisplay_needed();
         match effect {
             XwidgetFrontendEffect::InvokeScriptCallback { function, argument } => {
@@ -418,7 +418,7 @@ fn create(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     } else {
         builtin_get_buffer_create(eval, vec![buffer_arg, Value::NIL])?
     };
-    let (xwidget_id, webview_id) = eval.xwidgets.next_ids();
+    let (xwidget_id, webview_id) = eval.xwidgets_mut().next_ids();
     let xwidget = Value::make_xwidget(
         type_,
         title,
@@ -432,14 +432,14 @@ fn create(eval: &mut Context, args: Vec<Value>) -> EvalResult {
         host.create_webkit_xwidget(webview_id, width.max(1) as u32, height.max(1) as u32)
             .map_err(|err| signal("error", vec![Value::string(err)]))?;
     }
-    eval.xwidgets.ensure_webkit_state(webview_id);
-    eval.xwidgets.internal_xwidget_list = Value::cons(xwidget, eval.xwidgets.internal_xwidget_list);
-    let xwidgets = &eval.xwidgets;
-    let owner = &mut eval.owner;
+    eval.xwidgets_mut().ensure_webkit_state(webview_id);
+    eval.xwidgets_mut().internal_xwidget_list =
+        Value::cons(xwidget, eval.xwidgets_mut().internal_xwidget_list);
     // SAFETY: publish only stores xwidget-list value cells; host callbacks run
     // outside this noncalling phase, which cannot change canonical dispatch.
+    let (xwidgets, owner, obarray) = unsafe { eval.xwidgets_owner_and_obarray_view_mut() };
     unsafe {
-        eval.obarray.with_legacy_value_write(|obarray| {
+        obarray.with_legacy_value_write(|obarray| {
             let mut vars = VariableStore::new(obarray, Some(owner));
             xwidgets.publish(&mut vars)
         });
@@ -513,7 +513,7 @@ fn lookup_view(eval: &mut Context, args: Vec<Value>) -> EvalResult {
             ));
         }
     };
-    let items = collect_proper_list_items(eval.xwidgets.internal_xwidget_view_list)?;
+    let items = collect_proper_list_items(eval.xwidgets().internal_xwidget_view_list)?;
     for view_value in items {
         let Some(view) = view_value.as_xwidget_view() else {
             continue;
@@ -528,14 +528,13 @@ fn lookup_view(eval: &mut Context, args: Vec<Value>) -> EvalResult {
 fn delete_view(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_args_range("delete-xwidget-view", &args, 1, 1)?;
     let value = expect_xwidget_view(args[0])?;
-    eval.xwidgets.internal_xwidget_view_list =
-        delq_from_list(eval.xwidgets.internal_xwidget_view_list, value);
-    let xwidgets = &eval.xwidgets;
-    let owner = &mut eval.owner;
+    eval.xwidgets_mut().internal_xwidget_view_list =
+        delq_from_list(eval.xwidgets_mut().internal_xwidget_view_list, value);
     // SAFETY: publish only stores xwidget-list value cells; host callbacks run
     // outside this noncalling phase, which cannot change canonical dispatch.
+    let (xwidgets, owner, obarray) = unsafe { eval.xwidgets_owner_and_obarray_view_mut() };
     unsafe {
-        eval.obarray.with_legacy_value_write(|obarray| {
+        obarray.with_legacy_value_write(|obarray| {
             let mut vars = VariableStore::new(obarray, Some(owner));
             xwidgets.publish(&mut vars)
         });
@@ -603,7 +602,7 @@ fn buffer_xwidgets(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     if buffer.is_nil() {
         return Ok(Value::NIL);
     }
-    let items = collect_proper_list_items(eval.xwidgets.internal_xwidget_list)?;
+    let items = collect_proper_list_items(eval.xwidgets().internal_xwidget_list)?;
     let mut result = Value::NIL;
     for value in items {
         let Some(xwidget) = value.as_xwidget() else {
@@ -620,14 +619,13 @@ fn kill(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_args_range("kill-xwidget", &args, 1, 1)?;
     let value = expect_live_xwidget(args[0])?;
     let id = value.as_xwidget().unwrap().webview_id;
-    eval.xwidgets.internal_xwidget_list =
-        delq_from_list(eval.xwidgets.internal_xwidget_list, value);
-    let xwidgets = &eval.xwidgets;
-    let owner = &mut eval.owner;
+    eval.xwidgets_mut().internal_xwidget_list =
+        delq_from_list(eval.xwidgets_mut().internal_xwidget_list, value);
     // SAFETY: publish only stores xwidget-list value cells; host callbacks run
     // outside this noncalling phase, which cannot change canonical dispatch.
+    let (xwidgets, owner, obarray) = unsafe { eval.xwidgets_owner_and_obarray_view_mut() };
     unsafe {
-        eval.obarray.with_legacy_value_write(|obarray| {
+        obarray.with_legacy_value_write(|obarray| {
             let mut vars = VariableStore::new(obarray, Some(owner));
             xwidgets.publish(&mut vars)
         });
@@ -636,7 +634,7 @@ fn kill(eval: &mut Context, args: Vec<Value>) -> EvalResult {
         host.destroy_webkit_xwidget(id)
             .map_err(|err| signal("error", vec![Value::string(err)]))?;
     }
-    eval.xwidgets.remove_webkit_state(id);
+    eval.xwidgets_mut().remove_webkit_state(id);
     value.with_xwidget_mut(|xwidget| {
         xwidget.buffer = Value::NIL;
     });
@@ -664,14 +662,14 @@ fn webkit_uri(_eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_args_range("xwidget-webkit-uri", &args, 1, 1)?;
     let value = expect_live_webkit_xwidget(args[0])?;
     let id = value.as_xwidget().unwrap().webview_id;
-    Ok(Value::string(_eval.xwidgets.webkit_uri(id)))
+    Ok(Value::string(_eval.xwidgets().webkit_uri(id)))
 }
 
 fn webkit_title(_eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_args_range("xwidget-webkit-title", &args, 1, 1)?;
     let value = expect_live_webkit_xwidget(args[0])?;
     let id = value.as_xwidget().unwrap().webview_id;
-    Ok(Value::string(_eval.xwidgets.webkit_title(id)))
+    Ok(Value::string(_eval.xwidgets().webkit_title(id)))
 }
 
 fn navigate_webkit(eval: &mut Context, args: Vec<Value>) -> EvalResult {
@@ -683,13 +681,13 @@ fn navigate_webkit(eval: &mut Context, args: Vec<Value>) -> EvalResult {
         host.load_webkit_xwidget_uri(id, uri.clone())
             .map_err(|err| signal("error", vec![Value::string(err)]))?;
     }
-    eval.xwidgets
+    eval.xwidgets_mut()
         .set_webkit_uri(id, String::from_utf8_lossy(uri.as_bytes()).into_owned());
     // GNU reads WebKitGTK's `estimated-load-progress', which a new load
     // resets; the backend's generation-qualified measurements (KVO on
     // `estimatedProgress' for WKWebView) move it from here, and
     // "load-finished" pins 1.0.
-    eval.xwidgets.set_webkit_load_progress(id, 0.0);
+    eval.xwidgets_mut().set_webkit_load_progress(id, 0.0);
     Ok(Value::NIL)
 }
 
@@ -705,18 +703,18 @@ fn execute_script(eval: &mut Context, args: Vec<Value>) -> EvalResult {
             vec![callback.expect("the callback was checked")],
         ));
     }
-    let request = eval.xwidgets.next_script_request();
+    let request = eval.xwidgets_mut().next_script_request();
     if let Some(function) = callback {
-        eval.xwidgets
+        eval.xwidgets_mut()
             .register_script_callback(request, id, function);
     }
     if let Some(host) = eval.display_host.as_ref() {
         if let Err(error) = host.execute_webkit_xwidget_script(id, request, script) {
-            eval.xwidgets.remove_script_callback(request);
+            eval.xwidgets_mut().remove_script_callback(request);
             return Err(signal("error", vec![Value::string(error)]));
         }
     } else {
-        eval.xwidgets.remove_script_callback(request);
+        eval.xwidgets_mut().remove_script_callback(request);
     }
     Ok(Value::NIL)
 }
@@ -725,7 +723,7 @@ fn estimated_load_progress(_eval: &mut Context, args: Vec<Value>) -> EvalResult 
     expect_args_range("xwidget-webkit-estimated-load-progress", &args, 1, 1)?;
     let value = expect_live_webkit_xwidget(args[0])?;
     let id = value.as_xwidget().unwrap().webview_id;
-    Ok(Value::make_float(_eval.xwidgets.webkit_load_progress(id)))
+    Ok(Value::make_float(_eval.xwidgets().webkit_load_progress(id)))
 }
 
 fn size_request(_eval: &mut Context, args: Vec<Value>) -> EvalResult {

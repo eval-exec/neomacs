@@ -266,7 +266,7 @@ fn install_module_function(
             Value::NIL,
         )
     });
-    ev.obarray.set_symbol_function(name, value);
+    ev.obarray_view_mut().set_symbol_function(name, value);
 }
 
 /// `module_guard` must convert a panic into a pending `error` exit whose

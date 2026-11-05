@@ -134,13 +134,13 @@ impl CommandLoopHost for Context {
         // GNU's recursive/minibuffer entry points do not consult an external
         // "running" gate before dispatching the first key. Preserve the
         // previous flag so explicit shutdown still unwinds correctly.
-        let saved_running = self.command_loop.running;
+        let saved_running = self.command_loop().running;
         if !saved_running {
-            self.command_loop.running = true;
+            self.command_loop_mut().running = true;
         }
 
         if increment_depth {
-            self.command_loop.recursive_depth += 1;
+            self.command_loop_mut().recursive_depth += 1;
             // GNU Frecursive_edit raises update_mode_lines after entering.
             self.request_mode_line_update(ModeLineUpdateTarget::AllBuffers);
         }
@@ -167,7 +167,7 @@ impl CommandLoopHost for Context {
             // minibuf_level > 0`).  The outermost loop must leave `exit`
             // unmatched, so `(throw 'exit ...)` there signals `no-catch`.
             let catches_exit =
-                self.recursive_command_loop_depth() > 0 || self.minibuffers.depth() > 0;
+                self.recursive_command_loop_depth() > 0 || self.minibuffers().depth() > 0;
             if catches_exit {
                 self.push_condition_frame(ConditionFrame::Catch {
                     tag: Value::symbol(&EXIT_TAG),
@@ -213,12 +213,12 @@ impl CommandLoopHost for Context {
             }
         })();
         if increment_depth {
-            self.command_loop.recursive_depth -= 1;
+            self.command_loop_mut().recursive_depth -= 1;
             // The unwind boundary removes %[ / %] even after a non-local exit.
             self.request_mode_line_update(ModeLineUpdateTarget::AllBuffers);
         }
         if !saved_running {
-            self.command_loop.running = false;
+            self.command_loop_mut().running = false;
         }
 
         self.unbind_to_with_result(specpdl_count, result)
@@ -232,7 +232,7 @@ impl CommandLoopHost for Context {
     #[tracing::instrument(skip_all)]
     fn command_loop_inner(&mut self) -> EvalResult {
         let outermost_command_loop =
-            self.command_loop.recursive_depth == 1 && self.minibuffers.depth() == 0;
+            self.command_loop().recursive_depth == 1 && self.minibuffers().depth() == 0;
         loop {
             if outermost_command_loop {
                 // Catch 'top-level throws (from (top-level) function).
@@ -347,7 +347,7 @@ impl CommandLoopHost for Context {
                     });
                 }
                 if self
-                    .daemon
+                    .daemon()
                     .as_ref()
                     .is_some_and(|daemon| !daemon.initialized)
                 {
@@ -411,7 +411,7 @@ impl CommandLoopHost for Context {
             .current_buffer()
             .map(|buffer| buffer.name_runtime_string_owned())
             .unwrap_or_else(|| "<none>".to_string());
-        let selected_frame = self.frames.selected_frame().map(|frame| {
+        let selected_frame = self.frame_manager().selected_frame().map(|frame| {
             let selected_window_buffer = frame
                 .selected_window()
                 .and_then(|window| window.buffer_id())
@@ -428,7 +428,7 @@ impl CommandLoopHost for Context {
             )
         });
         let frames = self
-            .frames
+            .frame_manager()
             .frame_list()
             .into_iter()
             .map(|fid| format!("0x{:x}", fid.0))
@@ -480,7 +480,7 @@ impl CommandLoopHost for Context {
                 }
                 Err(flow @ FlowKind::Signal(_))
                     if self
-                        .command_loop
+                        .command_loop()
                         .keyboard
                         .kboard
                         .executing_kbd_macro
@@ -559,14 +559,14 @@ impl CommandLoopHost for Context {
     /// This is the core interactive loop: read → dispatch → redisplay.
     #[tracing::instrument(skip_all)]
     fn command_loop_1(&mut self) -> EvalResult {
-        if !self.command_loop.running {
+        if !self.command_loop().running {
             return Ok(Value::NIL);
         }
 
         self.command_loop_1_entry_prologue()?;
 
         loop {
-            if !self.command_loop.running {
+            if !self.command_loop().running {
                 return Ok(Value::NIL);
             }
 
@@ -775,11 +775,11 @@ impl CommandLoopHost for Context {
                     start,
                     UserCommandIdentity::new(
                         self.context_instance_id(),
-                        self.command_loop.recursive_depth,
+                        self.command_loop().recursive_depth,
                         Self::command_keys_for_log(&keys),
                         Self::command_value_for_log(binding.original()),
                         Self::command_value_for_log(remapped),
-                        self.frames.selected_frame().map(|frame| frame.id),
+                        self.frame_manager().selected_frame().map(|frame| frame.id),
                         self.edit.buffers.current_buffer_id(),
                     ),
                 )
@@ -808,7 +808,7 @@ impl CommandLoopHost for Context {
                 "command_loop_1: binding={} current_buffer={:?} active_minibuffer_window={:?}",
                 self.this_command_name_for_log(),
                 self.edit.buffers.current_buffer_id(),
-                self.active_minibuffer_window
+                self.active_minibuffer_window()
             );
 
             // GNU `command_loop_1` resets `Vdeactivate_mark = Qnil` at the top
@@ -837,7 +837,7 @@ impl CommandLoopHost for Context {
             // previous command's edits are grouped before the next command
             // mutates any buffer state.
             if self
-                .obarray
+                .obarray()
                 .fboundp_id(CommandLoopSymbol::UndoAutoAddBoundary.id())
             {
                 let _ = self.apply(
@@ -910,7 +910,7 @@ impl CommandLoopHost for Context {
             // layout pass consumes it. `minibuf_level == 0` maps to "no active
             // minibuffer window".
             self.echo_area_resize_exact_pending =
-                self.current_message.is_some() && self.active_minibuffer_window_id().is_none();
+                self.current_message().is_some() && self.active_minibuffer_window_id().is_none();
 
             // GNU runs the deactivate-mark / select-active-regions block
             // strictly AFTER post-command-hook: keyboard.c:1597-1648, with
@@ -929,7 +929,7 @@ impl CommandLoopHost for Context {
             {
                 let cur_buffer = self.edit.buffers.current_buffer_id();
                 let win_buffer = self
-                    .frames
+                    .frame_manager()
                     .selected_frame()
                     .and_then(|f| f.selected_window())
                     .and_then(|w| w.buffer_id());
@@ -986,7 +986,7 @@ impl CommandLoopHost for Context {
             // GNU's clear at the bottom of command_loop_1).
             self.assign_by_id(CommandLoopSymbol::ThisOriginalCommand.id(), Value::NIL);
 
-            if self.command_loop.keyboard.kboard.defining_kbd_macro
+            if self.command_loop().keyboard.kboard.defining_kbd_macro
                 && self
                     .eval_symbol_by_id(CommandLoopSymbol::PrefixArg.id())
                     .unwrap_or(Value::NIL)
@@ -1102,7 +1102,7 @@ impl CommandLoopHost for Context {
         };
         let threshold = interval.max(20);
         let current = self.num_nonmacro_input_events();
-        let last = self.command_loop.last_auto_save_input_events;
+        let last = self.command_loop().last_auto_save_input_events;
         if current.saturating_sub(last) <= threshold {
             return;
         }
@@ -1146,7 +1146,7 @@ impl CommandLoopHost for Context {
             // key gives the same feedback as GNU instead of silently doing
             // nothing. If `undefined` is not yet defined (minimal runtimes),
             // fall back to a bare ding so the key is still audible.
-            if self.obarray.fboundp_id(CommandLoopSymbol::Undefined.id()) {
+            if self.obarray().fboundp_id(CommandLoopSymbol::Undefined.id()) {
                 return self.apply(
                     Value::from_sym_id(CommandLoopSymbol::Undefined.id()),
                     vec![],
@@ -1162,14 +1162,14 @@ impl CommandLoopHost for Context {
     }
 
     fn execute_kbd_macro_iteration_via_command_loop(&mut self) -> EvalResult {
-        let saved_running = self.command_loop.running;
+        let saved_running = self.command_loop().running;
         if !saved_running {
-            self.command_loop.running = true;
+            self.command_loop_mut().running = true;
         }
         self.assign_by_id(CommandLoopSymbol::PrefixArg.id(), Value::NIL);
         let result = self.command_loop_2();
-        if !saved_running && self.command_loop.running {
-            self.command_loop.running = false;
+        if !saved_running && self.command_loop().running {
+            self.command_loop_mut().running = false;
         }
         result
     }
@@ -1301,12 +1301,12 @@ impl CommandLoopHost for Context {
             .join(" ")
     }
 
-    #[tracing::instrument(skip_all, fields(depth = self.command_loop.recursive_depth, has_input = self.input_rx.as_ref().is_some()))]
+    #[tracing::instrument(skip_all, fields(depth = self.command_loop().recursive_depth, has_input = self.input_rx.as_ref().is_some()))]
     fn recursive_edit_inner(&mut self) -> EvalResult {
         self.run_exit_wrapped_command_loop(true)
     }
 
-    #[tracing::instrument(skip_all, fields(depth = self.command_loop.recursive_depth, has_input = self.input_rx.as_ref().is_some()))]
+    #[tracing::instrument(skip_all, fields(depth = self.command_loop().recursive_depth, has_input = self.input_rx.as_ref().is_some()))]
     fn minibuffer_command_loop_inner(&mut self) -> EvalResult {
         self.run_exit_wrapped_command_loop(false)
     }
@@ -1326,7 +1326,7 @@ impl CommandLoopHost for Context {
             return Ok(false);
         }
 
-        self.command_loop
+        self.command_loop_mut()
             .keyboard
             .pending_input_events
             .push_front(event);
@@ -1365,18 +1365,13 @@ pub fn recursive_edit(ctx: &mut Context) -> Result<(), String> {
 /// (the GNU `command_loop_1` `set_buffer_internal` step).  The state is
 /// eval-owned; the behaviour stays in the core command layer (stage-4 N17).
 fn sync_current_buffer_to_selected_window(eval: &mut crate::emacs_core::eval::Context) {
-    let Some(frame_id) = eval.frames.selected_frame().map(|frame| frame.id) else {
+    let Some(frame_id) = eval.frame_manager().selected_frame().map(|frame| frame.id) else {
         return;
     };
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     crate::emacs_core::window_cmds::remember_selected_window_point_in_state(
-        &mut eval.frames,
-        &mut eval.edit.buffers,
-        frame_id,
+        frames, buffers, frame_id,
     );
-    crate::emacs_core::window_cmds::sync_selected_window_buffer_in_state(
-        &eval.frames,
-        &mut eval.edit.buffers,
-        frame_id,
-    );
+    crate::emacs_core::window_cmds::sync_selected_window_buffer_in_state(frames, buffers, frame_id);
     let _ = eval.sync_current_buffer_runtime_state();
 }

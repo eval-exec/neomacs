@@ -581,7 +581,7 @@ fn write_output_target_in_state(
             // (call-process "sh" nil t nil "-c" "printf 'caf\\303\\251\\r\\n'"))`
             // leaves `last-coding-system-used' at `utf-8-dos'.
             let resolved = decoding.detected(
-                &eval.coding_systems,
+                &eval.coding_systems(),
                 output,
                 // The whole of this route's output is in hand, which is
                 // GNU's state when it sets `CODING_MODE_LAST_BLOCK` at the
@@ -1059,7 +1059,7 @@ fn resolve_call_process_arg_coding(
     };
 
     if eval
-        .coding_systems
+        .coding_systems()
         .is_ascii_compatible(&resolved, eval.symbol_mode())
     {
         resolved
@@ -1117,7 +1117,7 @@ fn resolve_call_process_output_decoding(
     // coding system there (`Fcoding_system_p` accepts it), so this only
     // rejects a name that no coding system defines.
     neovm_text::emacs_core::coding::builtin_check_coding_system(
-        &eval.coding_systems,
+        &eval.coding_systems(),
         vec![resolved],
         eval.symbol_mode(),
     )?;

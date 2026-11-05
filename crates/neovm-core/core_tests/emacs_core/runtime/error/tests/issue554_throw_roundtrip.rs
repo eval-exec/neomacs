@@ -125,7 +125,7 @@ fn issue554_throw_policy_survives_bytecode_loader_frame() {
         shim.constants = vec![Value::symbol("issue554-loaded-form")].into();
         shim.max_stack = StackDepth::for_test(4);
         shim.seal_hand_assembled_ops_for_test();
-        ctx.obarray.set_symbol_function_id(
+        ctx.obarray().set_symbol_function_id(
             intern("issue554-compiled-loader"),
             Value::make_bytecode(shim),
         );

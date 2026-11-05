@@ -375,15 +375,15 @@ fn only_final_publisher_drop_wakes_after_sender_disconnect_and_buffered_tail() {
 #[test]
 fn installing_host_input_preserves_running_state_until_explicit_activation() {
     let mut context = crate::emacs_core::eval_hook_installers::new_context();
-    let running = context.command_loop.running;
+    let running = context.command_loop().running;
     assert!(context.input_rx.as_ref().is_none());
 
     let _publisher = HostInputPublisher::install(&mut context);
 
     assert!(context.input_rx.as_ref().is_some());
-    assert_eq!(context.command_loop.running, running);
+    assert_eq!(context.command_loop().running, running);
     context.init_input_system();
-    assert!(context.command_loop.running);
+    assert!(context.command_loop().running);
 }
 
 #[test]
@@ -405,7 +405,7 @@ fn context_replacement_preserves_staged_events_and_discards_old_raw_tail() {
     let mut context = crate::emacs_core::eval_hook_installers::new_context();
     let old = HostInputPublisher::install(&mut context);
     context
-        .command_loop
+        .command_loop_mut()
         .keyboard
         .pending_input_events
         .push_back(key('s'));
@@ -413,10 +413,13 @@ fn context_replacement_preserves_staged_events_and_discards_old_raw_tail() {
 
     let current = HostInputPublisher::install(&mut context);
 
-    assert_eq!(context.command_loop.keyboard.pending_input_events.len(), 1);
+    assert_eq!(
+        context.command_loop().keyboard.pending_input_events.len(),
+        1
+    );
     assert_key(
         context
-            .command_loop
+            .command_loop_mut()
             .keyboard
             .pending_input_events
             .pop_visible_front()
@@ -447,7 +450,7 @@ fn context_replacement_preserves_staged_events_and_discards_old_raw_tail() {
 #[test]
 fn publication_at_native_wait_entry_wakes_without_other_activity() {
     let mut context = crate::emacs_core::eval_hook_installers::new_context();
-    assert!(context.processes.has_wait_notification_backend());
+    assert!(context.processes().has_wait_notification_backend());
     let publisher = HostInputPublisher::install(&mut context);
     // Keep the connection alive through the wait: final publisher drop must
     // never rescue a mutant with the enqueue notification removed.
@@ -456,7 +459,7 @@ fn publication_at_native_wait_entry_wakes_without_other_activity() {
     let (published_tx, published_rx) = crossbeam_channel::bounded(1);
     let timeout = Duration::from_secs(1);
     context
-        .processes
+        .processes_mut()
         .before_next_backend_wait_for_test(move |entry| {
             assert_eq!(entry.requested_timeout(), timeout);
             entered_tx
@@ -476,7 +479,7 @@ fn publication_at_native_wait_entry_wakes_without_other_activity() {
     });
 
     let events = context
-        .processes
+        .processes()
         .wait_for_backend_events(timeout, ProcessWaitBackendInterest::NotificationsOnly);
     let publication = worker.join().expect("input publication worker joins");
 
@@ -503,13 +506,13 @@ fn publication_at_native_wait_entry_wakes_without_other_activity() {
 #[test]
 fn final_publisher_drop_at_native_wait_entry_wakes_disconnected_receiver() {
     let mut context = crate::emacs_core::eval_hook_installers::new_context();
-    assert!(context.processes.has_wait_notification_backend());
+    assert!(context.processes().has_wait_notification_backend());
     let publisher = HostInputPublisher::install(&mut context);
     let (entered_tx, entered_rx) = crossbeam_channel::bounded(1);
     let (closed_tx, closed_rx) = crossbeam_channel::bounded(1);
     let timeout = Duration::from_secs(1);
     context
-        .processes
+        .processes_mut()
         .before_next_backend_wait_for_test(move |entry| {
             assert_eq!(entry.requested_timeout(), timeout);
             entered_tx.send(()).expect("release final publisher owner");
@@ -526,7 +529,7 @@ fn final_publisher_drop_at_native_wait_entry_wakes_disconnected_receiver() {
     });
 
     let events = context
-        .processes
+        .processes()
         .wait_for_backend_events(timeout, ProcessWaitBackendInterest::NotificationsOnly);
     worker.join().expect("final input owner joins");
 
@@ -594,7 +597,7 @@ fn replacement_rejects_old_control_nudges_and_old_disconnect_without_waking_succ
     use neovm_eval::host_effect::wake::ControlWakeOutcome;
     let mut context = crate::emacs_core::eval_hook_installers::new_context();
     let old = HostInputPublisher::install(&mut context);
-    let latch = context.processes.host_control_latch();
+    let latch = context.processes().host_control_latch();
     let wake = Arc::clone(latch.control().expect("host session owns a control source"));
     let current = HostInputPublisher::install(&mut context);
     let main = wake.arm(ControlDestination::NativeMain).unwrap();
@@ -633,9 +636,9 @@ fn explicit_host_session_revocation_preserves_backend_control_and_input_installa
     use neovm_eval::host_effect::wake::ControlWakeOutcome;
     let mut context = crate::emacs_core::eval_hook_installers::new_context();
     let publisher = HostInputPublisher::install(&mut context);
-    let latch = context.processes.host_control_latch();
+    let latch = context.processes().host_control_latch();
     let wake = Arc::clone(latch.control().expect("host session owns a control source"));
-    context.processes.revoke_host_control_session();
+    context.processes().revoke_host_control_session();
     let registration = wake.arm(ControlDestination::NativeMain).unwrap();
     assert!(matches!(
         publisher.nudge_control(ControlNudge::Cancellation),
@@ -716,7 +719,7 @@ fn public_late_host_install_wakes_the_old_armed_select_before_the_first_key() {
 
     let mut context = crate::emacs_core::eval_hook_installers::new_context();
     let old_select = context
-        .processes
+        .processes()
         .green_select_handle()
         .expect("native Green readiness before host installation");
     let old_registration = old_select.arm().expect("old idle wait arm");
@@ -750,7 +753,7 @@ fn negative_drop_only_install_nudge_leaves_old_select_unready_until_a_key() {
 
     let mut context = crate::emacs_core::eval_hook_installers::new_context();
     let old_select = context
-        .processes
+        .processes()
         .green_select_handle()
         .expect("native Green readiness before host installation");
     let old_registration = old_select.arm().expect("old idle wait arm");

@@ -136,12 +136,15 @@ pub fn run_window_scroll_functions_for_window(
     if neovm_eval::emacs_core::eval::gnu_redisplay_hooks_enabled() {
         return run_eager_scroll(eval, window_id);
     }
-    let frame_id = eval.frames.find_window_frame_id(window_id).ok_or_else(|| {
-        signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("window-live-p"), window_arg],
-        )
-    })?;
+    let frame_id = eval
+        .frame_manager()
+        .find_window_frame_id(window_id)
+        .ok_or_else(|| {
+            signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("window-live-p"), window_arg],
+            )
+        })?;
     let window_start = super::window_cmds::builtin_window_start(eval, &[window_arg])?;
     let hook_sym = hook_runtime::hook_symbol_by_id(eval, WINDOW_SCROLL_FUNCTIONS.id());
     let saved_buffer_id = eval.edit.buffers.current_buffer_id();
@@ -173,12 +176,15 @@ fn run_eager_scroll(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     window: WindowId,
 ) -> EvalResult {
-    let frame = eval.frames.find_window_frame_id(window).ok_or_else(|| {
-        signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("window-live-p"), Value::make_window(window.0)],
-        )
-    })?;
+    let frame = eval
+        .frame_manager()
+        .find_window_frame_id(window)
+        .ok_or_else(|| {
+            signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("window-live-p"), Value::make_window(window.0)],
+            )
+        })?;
     let argument = Value::make_window(window.0);
     let start = super::window_cmds::builtin_window_start(eval, &[argument])?;
     let saved = eval.edit.buffers.current_buffer_id();
@@ -206,12 +212,15 @@ pub(crate) fn run_committed_scroll_functions(
 ) -> EvalResult {
     let guard = eval.gnu_guard_committed_scroll();
     let eval = &mut *guard.eval;
-    let frame = eval.frames.find_window_frame_id(window).ok_or_else(|| {
-        signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("window-live-p"), Value::make_window(window.0)],
-        )
-    })?;
+    let frame = eval
+        .frame_manager()
+        .find_window_frame_id(window)
+        .ok_or_else(|| {
+            signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("window-live-p"), Value::make_window(window.0)],
+            )
+        })?;
     let window_arg = Value::make_window(window.0);
     let start = super::window_cmds::builtin_window_start(eval, &[window_arg])?;
     let saved = eval.edit.buffers.current_buffer_id();
@@ -318,9 +327,9 @@ impl XdispContextExt for neovm_eval::emacs_core::eval::Context {
     /// fast path without changing the selected window or current buffer.
     fn window_scroll_functions_may_run(&self, window_id: WindowId) -> bool {
         let Some(buffer_id) = self
-            .frames
+            .frame_manager()
             .find_window_frame_id(window_id)
-            .and_then(|frame_id| self.frames.get(frame_id))
+            .and_then(|frame_id| self.frame_manager().get(frame_id))
             .and_then(|frame| frame.find_window(window_id))
             .and_then(Window::buffer_id)
         else {
@@ -762,7 +771,7 @@ fn fallback_space_element(
                 .map(|n| n as f64)
                 .or_else(|| operand.as_float());
             if let Some(pixels) = pixels.filter(|pixels| pixels.is_finite()) {
-                let frame = eval.frames.get(frame)?;
+                let frame = eval.frame_manager().get(frame)?;
                 let cell = TextCellPixels::new(
                     frame.char_width,
                     frame.char_height,
@@ -1577,7 +1586,7 @@ fn display_element_run(
         // covered characters are then displayed normally.
         neovm_eval::emacs_core::eval::data::display_spec::DisplaySpecKind::Image
             if eval
-                .frames
+                .frame_manager()
                 .get(frame)
                 .is_some_and(|frame| frame.effective_window_system().is_some()) =>
         {
@@ -1706,7 +1715,7 @@ fn image_element_extent(
     frame: FrameId,
     spec: Value,
 ) -> Option<ElementExtent> {
-    let live_frame = eval.frames.get(frame)?;
+    let live_frame = eval.frame_manager().get(frame)?;
     let cell = TextCellPixels::new(
         live_frame.char_width,
         live_frame.char_height,
@@ -2003,7 +2012,7 @@ fn string_display_element_run(
         }
         neovm_eval::emacs_core::eval::data::display_spec::DisplaySpecKind::Image
             if eval
-                .frames
+                .frame_manager()
                 .get(frame)
                 .is_some_and(|frame| frame.effective_window_system().is_some()) =>
         {
@@ -2338,16 +2347,14 @@ fn render_mode_line_target<T: mode_line_walk::WalkPolicy>(
     selection: Option<&mut mode_line_flow_policy::FormatSelection>,
 ) -> Result<ModeLineDisplayOutput, Flow> {
     let mut pctx = build_mode_line_percent_context(
-        &eval.frames,
+        &eval.frame_manager(),
         &eval.edit.buffers,
         request.window,
         request.target,
     );
-    pctx.point.enter_context(
-        &mut eval.frames,
-        &eval.edit.buffers,
-        request.point_selection,
-    );
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    pctx.point
+        .enter_context(frames, buffers, request.point_selection);
     let mut rendered = ModeLineRendered::default();
     let _accumulator_roots = mode_line_gc::ScratchRoots::new();
     mode_line_walk::with_root_scope(eval, |eval| {
@@ -2424,9 +2431,10 @@ fn try_format_mode_line_display(
     // `tab-line-tabs-function` `tab-line-tabs-window-buffers` — operate on this
     // window rather than the globally selected one.  Without it every window's
     // tab line shows the selected window's buffer.
-    let saved_window_selection = window
-        .as_window_id()
-        .map(|wid| eval.frames.select_window_for_mode_line(WindowId(wid)));
+    let saved_window_selection = window.as_window_id().map(|wid| {
+        eval.frame_manager_mut()
+            .select_window_for_mode_line(WindowId(wid))
+    });
 
     // GNU `display_mode_line` also runs with the buffer point set to the
     // window's `w->pointm`, so point-dependent specs (`%l`, `%c`, `(point)` in
@@ -2442,8 +2450,12 @@ fn try_format_mode_line_display(
         if prev_selected == Some(WindowId(wid)) {
             return None;
         }
-        let frame_id = eval.frames.find_window_frame_id(WindowId(wid))?;
-        let window_point = match eval.frames.get(frame_id)?.find_window(WindowId(wid))? {
+        let frame_id = eval.frame_manager().find_window_frame_id(WindowId(wid))?;
+        let window_point = match eval
+            .frame_manager()
+            .get(frame_id)?
+            .find_window(WindowId(wid))?
+        {
             crate::window::Window::Leaf { point, .. } => *point,
             _ => return None,
         };
@@ -2497,7 +2509,8 @@ fn try_format_mode_line_display(
         buffer.goto_emacs_byte_pos(saved);
     }
     if let Some(saved) = saved_window_selection {
-        eval.frames.restore_selected_window_for_mode_line(saved);
+        eval.frame_manager_mut()
+            .restore_selected_window_for_mode_line(saved);
     }
     if let Some(selection) = title_selection {
         selection.restore(eval);
@@ -4347,14 +4360,15 @@ fn append_mode_line_string_in_eval_with_field_limit<T: TargetPolicy>(
     limit: impl ModeLineNativeFieldLimit,
 ) {
     let command_loop_depth = eval.recursive_command_loop_depth();
-    let vars = VariableView::new(&eval.obarray, &eval.owner);
-    let mut access = mode_line_point::Access::Live(&mut eval.frames);
+    let (obarray, owner, frames, buffers, processes, coding_systems) = eval.mode_line_inputs_mut();
+    let vars = VariableView::new(obarray, owner);
+    let mut access = mode_line_point::Access::Live(frames);
     append_mode_line_string_with_point_access(
         vars,
-        CodingAccess::Registry(&eval.coding_systems),
+        CodingAccess::Registry(coding_systems),
         &[],
-        &eval.edit.buffers,
-        &eval.processes,
+        buffers,
+        processes,
         command_loop_depth,
         pctx,
         result,
@@ -5610,7 +5624,7 @@ fn char_property_at_position(
         eval.variables(),
         &eval.edit.buffers,
         neovm_eval::emacs_core::eval::data::window_state::char_property_window_lookup(Some(
-            &eval.frames,
+            &eval.frame_manager(),
         )),
         &args,
     )
@@ -6103,10 +6117,10 @@ pub fn builtin_window_text_pixel_size_ctx(
 ) -> EvalResult {
     let symbol_mode = eval.symbol_mode();
     expect_args_range("window-text-pixel-size", &args, 0, 7)?;
-    let (fid, wid) = resolve_live_window_for_text_pixel_size(&eval.frames, args.first())?;
+    let (fid, wid) = resolve_live_window_for_text_pixel_size(&eval.frame_manager(), args.first())?;
 
     let cell = eval
-        .frames
+        .frame_manager()
         .get(fid)
         .map(|frame| {
             TextCellPixels::new(
@@ -6117,7 +6131,7 @@ pub fn builtin_window_text_pixel_size_ctx(
         })
         .unwrap_or_else(|| TextCellPixels::new(1.0, 1.0, 1.0));
     let char_h = cell.height;
-    let Some((buf_id, is_terminal)) = eval.frames.get(fid).and_then(|frame| {
+    let Some((buf_id, is_terminal)) = eval.frame_manager().get(fid).and_then(|frame| {
         let window = frame.find_window(wid)?;
         let buf_id = window.buffer_id()?;
         Some((buf_id, frame.effective_window_system().is_none()))
@@ -6171,10 +6185,10 @@ pub fn builtin_window_text_pixel_size_ctx(
         XLimitArg::Unbounded => Some(RowEdge::new(i32::MAX as f32, line_wrap)),
         XLimitArg::Pixels(pixels) => Some(RowEdge::new(pixels, line_wrap)),
     };
-    let body_edge = eval.frames.get(fid).and_then(|frame| {
+    let body_edge = eval.frame_manager().get(fid).and_then(|frame| {
         let window = frame.find_window(wid)?;
         window_body_row_edge(
-            &eval.frames,
+            &eval.frame_manager(),
             fid,
             window,
             is_terminal,
@@ -6496,7 +6510,7 @@ pub fn builtin_pos_visible_in_window_p_ctx(
     let symbol_mode = eval.symbol_mode();
     expect_args_range("pos-visible-in-window-p", &args, 0, 3)?;
     validate_optional_window_designator_in_state(
-        &eval.frames,
+        &eval.frame_manager(),
         args.get(1),
         crate::emacs_core::window_cmds::WindowDomain::Live,
     )?;
@@ -6507,8 +6521,8 @@ pub fn builtin_pos_visible_in_window_p_ctx(
     // from the CURRENT window-start even before redisplay has run, which is
     // what keeps queued interactive scrolls monotonic.  `window_scroll_*`
     // gate their recenter-around-point on exactly this predicate.
-    let on_initial_frame = resolve_live_window_identity(&eval.frames, args.get(1))?
-        .and_then(|(fid, _)| eval.frames.get(fid))
+    let on_initial_frame = resolve_live_window_identity(&eval.frame_manager(), args.get(1))?
+        .and_then(|(fid, _)| eval.frame_manager().get(fid))
         .is_some_and(|frame| frame.initial);
     if on_initial_frame {
         if let Some(pos) = args.first()
@@ -6527,7 +6541,8 @@ pub fn builtin_pos_visible_in_window_p_ctx(
     if let Some(visibility) = live_position_visibility(eval, args.get(1), args.first())? {
         return Ok(visibility.into_lisp(args.get(2).is_some_and(|value| value.is_truthy())));
     }
-    pos_visible_in_window_p_impl(&mut eval.frames, &mut eval.edit.buffers, args)
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    pos_visible_in_window_p_impl(frames, buffers, args)
 }
 
 fn pos_visible_in_window_p_impl(
@@ -6598,11 +6613,12 @@ pub fn builtin_fringe_bitmaps_at_pos(
     // and is left alone -- what is fixed here is the PREDICATE, which is
     // observable for every non-window argument.
     validate_optional_window_designator_in_state(
-        &eval.frames,
+        &eval.frame_manager(),
         args.get(1),
         crate::emacs_core::window_cmds::WindowDomain::Any,
     )?;
-    let Some((frame_id, window_id)) = resolve_live_window_identity(&eval.frames, args.get(1))?
+    let Some((frame_id, window_id)) =
+        resolve_live_window_identity(&eval.frame_manager(), args.get(1))?
     else {
         return Ok(Value::NIL);
     };
@@ -6615,7 +6631,7 @@ pub fn builtin_fringe_bitmaps_at_pos(
     };
 
     let Some(buffer_id) = eval
-        .frames
+        .frame_manager()
         .get(frame_id)
         .and_then(|frame| frame.find_window(window_id))
         .and_then(|window| window.buffer_id())
@@ -6650,13 +6666,13 @@ pub fn builtin_fringe_bitmaps_at_pos(
         // window its own stored `w->pointm`.
         _ => {
             let is_selected = eval
-                .frames
+                .frame_manager()
                 .selected_frame()
                 .is_some_and(|frame| frame.selected_window == window_id);
             if is_selected {
                 buffer_point
             } else {
-                eval.frames
+                eval.frame_manager()
                     .get(frame_id)
                     .and_then(|frame| frame.find_window(window_id))
                     .and_then(|window| match window {
@@ -6669,7 +6685,7 @@ pub fn builtin_fringe_bitmaps_at_pos(
     };
 
     let Some(fringe) = eval
-        .frames
+        .frame_manager()
         .get(frame_id)
         .and_then(|frame| frame.redisplay_snapshot(window_id))
         .and_then(|snapshot| snapshot.fringe_bitmaps_for_buffer_pos(textpos))
@@ -6705,12 +6721,8 @@ pub fn builtin_window_line_height(
     args: &[Value],
 ) -> EvalResult {
     let noninteractive = eval.noninteractive();
-    window_line_height_impl(
-        &mut eval.frames,
-        &mut eval.edit.buffers,
-        noninteractive,
-        args,
-    )
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    window_line_height_impl(frames, buffers, noninteractive, args)
 }
 
 fn window_line_height_impl(
@@ -7142,7 +7154,7 @@ pub fn builtin_move_to_window_line(
 ) -> EvalResult {
     expect_args("move-to-window-line", &args, 1)?;
 
-    let Some(frame) = eval.frames.selected_frame() else {
+    let Some(frame) = eval.frame_manager().selected_frame() else {
         return Err(signal(
             "error",
             vec![Value::string(
@@ -7263,20 +7275,18 @@ pub fn builtin_tool_bar_height_ctx(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args_range("tool-bar-height", &args, 0, 2)?;
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     let fid = match args.first().filter(|frame| !frame.is_nil()) {
         Some(frame) => super::window_cmds::resolve_frame_id_in_state(
-            &mut eval.frames,
-            &mut eval.edit.buffers,
+            frames,
+            buffers,
             Some(frame),
             crate::emacs_core::window_cmds::FrameDomain::Any,
         )?,
-        None => super::window_cmds::ensure_selected_frame_id_in_state(
-            &mut eval.frames,
-            &mut eval.edit.buffers,
-        ),
+        None => super::window_cmds::ensure_selected_frame_id_in_state(frames, buffers),
     };
     let frame = eval
-        .frames
+        .frame_manager()
         .get(fid)
         .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
     let lines = frame
@@ -7309,20 +7319,18 @@ pub fn builtin_tab_bar_height_ctx(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args_range("tab-bar-height", &args, 0, 2)?;
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     let fid = match args.first().filter(|frame| !frame.is_nil()) {
         Some(frame) => super::window_cmds::resolve_frame_id_in_state(
-            &mut eval.frames,
-            &mut eval.edit.buffers,
+            frames,
+            buffers,
             Some(frame),
             crate::emacs_core::window_cmds::FrameDomain::Any,
         )?,
-        None => super::window_cmds::ensure_selected_frame_id_in_state(
-            &mut eval.frames,
-            &mut eval.edit.buffers,
-        ),
+        None => super::window_cmds::ensure_selected_frame_id_in_state(frames, buffers),
     };
     let frame = eval
-        .frames
+        .frame_manager()
         .get(fid)
         .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
     let lines = frame
@@ -7375,7 +7383,7 @@ fn validate_optional_window_designator(
     value: Option<&Value>,
     predicate: crate::emacs_core::window_cmds::WindowDomain,
 ) -> Result<(), Flow> {
-    validate_optional_window_designator_in_state(&eval.frames, value, predicate)
+    validate_optional_window_designator_in_state(&eval.frame_manager(), value, predicate)
 }
 
 /// Validate an optional WINDOW argument against the GNU decoder the caller
@@ -7462,8 +7470,8 @@ fn resolve_optional_window_buffer(
             .map(|id| WindowId(id as u64))
     }?;
 
-    for fid in eval.frames.frame_list() {
-        let Some(frame) = eval.frames.get(fid) else {
+    for fid in eval.frame_manager().frame_list() {
+        let Some(frame) = eval.frame_manager().get(fid) else {
             continue;
         };
         if let Some(window) = frame.find_window(wid) {
@@ -8239,10 +8247,10 @@ fn live_position_visibility(
     window: Option<&Value>,
     position: Option<&Value>,
 ) -> Result<Option<PositionVisibility>, Flow> {
-    let Some((fid, wid)) = resolve_live_window_identity(&eval.frames, window)? else {
+    let Some((fid, wid)) = resolve_live_window_identity(&eval.frame_manager(), window)? else {
         return Ok(Some(PositionVisibility::NotVisible));
     };
-    let frame = eval.frames.get(fid).expect("resolved live frame");
+    let frame = eval.frame_manager().get(fid).expect("resolved live frame");
     let Some(Window::Leaf {
         buffer_id,
         window_start,
@@ -8278,7 +8286,7 @@ fn live_position_visibility(
     } else {
         Some(
             if eval
-                .frames
+                .frame_manager()
                 .selected_frame()
                 .is_some_and(|selected| selected.selected_window == wid)
             {
@@ -8685,7 +8693,7 @@ fn resolve_exact_visible_metrics_with_layout(
     window: Option<&Value>,
     pos: Option<&Value>,
 ) -> Result<Option<(WindowId, ExactVisibleMetrics)>, Flow> {
-    let Some((fid, wid)) = resolve_live_window_identity(&eval.frames, window)? else {
+    let Some((fid, wid)) = resolve_live_window_identity(&eval.frame_manager(), window)? else {
         return Ok(None);
     };
     // Prefer retained rows only while they are still VALID for the live
@@ -8695,7 +8703,7 @@ fn resolve_exact_visible_metrics_with_layout(
     let retained_rows_valid = retained_rows_answer_for_live_window(eval, window)?;
     if retained_rows_valid
         && let Some(found) = resolve_exact_visible_metrics(
-            &eval.frames,
+            &eval.frame_manager(),
             &eval.edit.buffers,
             window,
             pos,
@@ -8705,7 +8713,7 @@ fn resolve_exact_visible_metrics_with_layout(
         return Ok(Some(found));
     }
     let Some(pos_lisp) =
-        resolve_live_target_position(&eval.frames, &eval.edit.buffers, fid, wid, pos)?
+        resolve_live_target_position(&eval.frame_manager(), &eval.edit.buffers, fid, wid, pos)?
     else {
         return Ok(None);
     };
@@ -8720,10 +8728,10 @@ fn resolve_exact_visible_metrics_with_layout(
                 wid,
                 with_tty_posn_extent(
                     exact_metrics_from_redisplay_point(&geometry, &point),
-                    eval.frames
+                    eval.frame_manager()
                         .get(fid)
                         .is_some_and(|frame| frame.effective_window_system().is_none()),
-                    eval.frames.get(fid),
+                    eval.frame_manager().get(fid),
                     wid,
                     &point,
                 ),
@@ -8739,7 +8747,7 @@ fn resolve_exact_visible_metrics_with_layout(
     // preference above, so the freshness gate can only replace a stale answer
     // with a recomputed one and never with silence.
     resolve_exact_visible_metrics(
-        &eval.frames,
+        &eval.frame_manager(),
         &eval.edit.buffers,
         window,
         pos,
@@ -8758,10 +8766,10 @@ fn retained_rows_answer_for_live_window(
     eval: &neovm_eval::emacs_core::eval::Context,
     window: Option<&Value>,
 ) -> Result<bool, Flow> {
-    let Some((fid, wid)) = resolve_live_window_identity(&eval.frames, window)? else {
+    let Some((fid, wid)) = resolve_live_window_identity(&eval.frame_manager(), window)? else {
         return Ok(true);
     };
-    let Some(frame) = eval.frames.get(fid) else {
+    let Some(frame) = eval.frame_manager().get(fid) else {
         return Ok(true);
     };
     let Some(buffer_id) = frame.find_window(wid).and_then(|window| window.buffer_id()) else {
@@ -8785,7 +8793,7 @@ fn retained_rows_answer_for_live_window(
         return Ok(false);
     };
     Ok(eval
-        .frames
+        .frame_manager()
         .get(fid)
         .and_then(|frame| frame.redisplay_snapshot(wid))
         .and_then(|snapshot| snapshot.layout_freshness.as_ref())
@@ -8879,8 +8887,10 @@ fn chrome_is_point_independent(
     window_id: WindowId,
     buffer_id: neovm_edit::buffer::BufferId,
 ) -> bool {
-    let (Some(frame), Some(buffer)) = (eval.frames.get(frame_id), eval.edit.buffers.get(buffer_id))
-    else {
+    let (Some(frame), Some(buffer)) = (
+        eval.frame_manager().get(frame_id),
+        eval.edit.buffers.get(buffer_id),
+    ) else {
         return false;
     };
     let Some(window) = frame.find_window(window_id) else {
@@ -8890,7 +8900,7 @@ fn chrome_is_point_independent(
         window,
         buffer,
         frame,
-        eval.frames.is_minibuffer_window_id(window_id),
+        eval.frame_manager().is_minibuffer_window_id(window_id),
     );
     ![
         WindowChromeLine::ModeLine,
@@ -9470,7 +9480,7 @@ pub fn builtin_posn_at_point(
 ) -> EvalResult {
     expect_args_range("posn-at-point", &args, 0, 2)?;
     validate_optional_window_designator_in_state(
-        &eval.frames,
+        &eval.frame_manager(),
         args.get(1),
         crate::emacs_core::window_cmds::WindowDomain::Live,
     )?;
@@ -9514,7 +9524,7 @@ pub fn builtin_posn_at_x_y(
     // a window redisplay has not drawn yet.
     // `posn-at-x-y` takes a FRAME-OR-WINDOW, so it resolves the target through
     // its own designator rule rather than the window-only one.
-    let (computed, source) = match resolve_posn_at_xy_window(&eval.frames, args.get(2))? {
+    let (computed, source) = match resolve_posn_at_xy_window(&eval.frame_manager(), args.get(2))? {
         Some((fid, wid, _)) => {
             let computed = compute_live_window_geometry(eval, fid, wid)?;
             let fresh =
@@ -9528,13 +9538,8 @@ pub fn builtin_posn_at_x_y(
         }
         None => (None, PositionGeometrySource::Presented),
     };
-    posn_at_x_y_impl(
-        &mut eval.frames,
-        &mut eval.edit.buffers,
-        computed.as_ref(),
-        source,
-        args,
-    )
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    posn_at_x_y_impl(frames, buffers, computed.as_ref(), source, args)
 }
 
 /// Run the canonical row producer when the live window has no current rows.
@@ -9560,7 +9565,7 @@ fn compute_live_window_geometry_scope(
     wid: WindowId,
     scope: crate::window::WindowLayoutQueryScope,
 ) -> Result<Option<WindowDisplaySnapshot>, Flow> {
-    let Some(frame) = eval.frames.get(fid) else {
+    let Some(frame) = eval.frame_manager().get(fid) else {
         return Ok(None);
     };
     // GNU's coordinate queries walk from the live window start even on a
@@ -10227,7 +10232,11 @@ fn snapshot_request_from_args(
                     vec![Value::symbol("framep"), *value],
                 ));
             };
-            if eval.frames.get(crate::window::FrameId(id)).is_none() {
+            if eval
+                .frame_manager()
+                .get(crate::window::FrameId(id))
+                .is_none()
+            {
                 return Err(signal(
                     "error",
                     vec![Value::string(format!("No such live frame: {id}"))],
@@ -10375,7 +10384,7 @@ pub fn builtin_buffer_text_pixel_size(
     // by `mode-line-format-right-align` mis-aligns on GUI frames — the Doom dashboard
     // "DOOM vX" right segment is pushed off-screen.
     let (cell, frame_id) = eval
-        .frames
+        .frame_manager()
         .selected_frame()
         .map(|f| {
             (
@@ -10433,10 +10442,10 @@ pub fn builtin_buffer_text_pixel_size(
     // window whose frame has gone keeps the selected frame's cell and an
     // unbounded row, which is the best a measurement can say.
     let (fid, is_terminal, char_width) = eval
-        .frames
+        .frame_manager()
         .find_window_frame_id(window_id)
         .and_then(|fid| {
-            eval.frames.get(fid).map(|frame| {
+            eval.frame_manager().get(fid).map(|frame| {
                 (
                     fid,
                     frame.effective_window_system().is_none(),
@@ -10461,10 +10470,10 @@ pub fn builtin_buffer_text_pixel_size(
     let edge = match x_limit {
         Some(pixels) => Some(RowEdge::new(pixels as f32, line_wrap)),
         None if args.get(2).is_some_and(|limit| limit.is_t()) => None,
-        None => eval.frames.get(fid).and_then(|frame| {
+        None => eval.frame_manager().get(fid).and_then(|frame| {
             let window = frame.find_window(window_id)?;
             window_body_row_edge(
-                &eval.frames,
+                &eval.frame_manager(),
                 fid,
                 window,
                 is_terminal,

@@ -122,7 +122,7 @@ pub(crate) fn builtin_call_interactively(eval: &mut Context, args: &[Value]) -> 
     let result = (|| {
         let interactive_form = eval.apply(InteractiveFormSymbol::value(), vec![func_val])?;
         let plan = plan_call_interactively_after_interactive_form_in_state(
-            &eval.obarray,
+            &eval.obarray(),
             eval.read_command_keys(),
             &args,
             interactive_form,
@@ -160,7 +160,7 @@ pub(crate) fn builtin_called_interactively_p(eval: &mut Context, args: Vec<Value
             ],
         ));
     }
-    if !eval.interactive.is_called_interactively() {
+    if !eval.interactive().is_called_interactively() {
         return Ok(Value::NIL);
     }
 
@@ -190,7 +190,7 @@ pub(crate) fn builtin_commandp_interactive(eval: &mut Context, args: &[Value]) -
     let for_call_interactively = args.get(1).is_some_and(|value| !value.is_nil());
 
     let classification = classify_command_designator_in_state(
-        &eval.obarray,
+        &eval.obarray(),
         &args[0],
         for_call_interactively,
         symbol_mode,
@@ -208,7 +208,7 @@ pub(crate) fn builtin_commandp_interactive(eval: &mut Context, args: &[Value]) -
     let mut fun = args[0];
     while let Some(symbol) = fun.as_symbol_id(symbol_mode) {
         if eval
-            .obarray
+            .obarray()
             .get_property_id(symbol, InteractiveFormSymbol::id())
             .is_some_and(|value| !value.is_nil())
         {
@@ -227,7 +227,7 @@ pub(crate) fn builtin_commandp_interactive(eval: &mut Context, args: &[Value]) -
             return Err(signal("error", vec![Value::string(message)]));
         }
         let Some(next) = crate::emacs_core::builtins::symbols::symbol_function_cell_in_obarray(
-            &eval.obarray,
+            &eval.obarray(),
             symbol,
         ) else {
             return Ok(Value::NIL);
@@ -412,7 +412,7 @@ pub(crate) fn builtin_command_modes_impl(
 
 pub(crate) fn builtin_command_modes(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     let symbol_mode = eval.symbol_mode();
-    builtin_command_modes_impl(&eval.obarray, &args, symbol_mode)
+    builtin_command_modes_impl(&eval.obarray(), &args, symbol_mode)
 }
 
 /// `(command-remapping COMMAND &optional POSITION KEYMAP)` -- return remapped
@@ -1726,11 +1726,15 @@ fn interactive_inactive_minibuffer_target_p(
     eval: &Context,
     window_id: crate::window::WindowId,
 ) -> bool {
-    eval.frames.frame_list().into_iter().any(|frame_id| {
-        eval.frames
-            .get(frame_id)
-            .is_some_and(|frame| frame.minibuffer_window == Some(window_id))
-    }) && (*eval.active_minibuffer_window) != Some(window_id)
+    eval.frame_manager()
+        .frame_list()
+        .into_iter()
+        .any(|frame_id| {
+            eval.frame_manager()
+                .get(frame_id)
+                .is_some_and(|frame| frame.minibuffer_window == Some(window_id))
+        })
+        && (*eval.active_minibuffer_window()) != Some(window_id)
 }
 
 fn interactive_select_window_from_prefix_context(
@@ -2117,7 +2121,7 @@ fn fix_recorded_command_args(eval: &mut Context, function: Value, args: &mut Vec
     let reps = function
         .as_symbol_id(symbol_mode)
         .and_then(|symbol| {
-            eval.obarray
+            eval.obarray()
                 .get_property_id(symbol, intern("interactive-args"))
         })
         .unwrap_or(Value::NIL);
@@ -2200,7 +2204,7 @@ fn record_call_interactively_command_history(
     command.append(&mut recorded);
     let command = Value::list(command);
 
-    if eval.obarray.fboundp("add-to-history") {
+    if eval.obarray().fboundp("add-to-history") {
         let _ = eval.apply(
             Value::symbol("add-to-history"),
             vec![
@@ -3448,7 +3452,7 @@ fn command_remapping_explicit_keymaps(ctx: &Context, value: &Value) -> Vec<Value
     if items.is_empty() {
         return Vec::new();
     }
-    if get_keymap_in_obarray(&ctx.obarray, &items[0], false, symbol_mode)
+    if get_keymap_in_obarray(&ctx.obarray(), &items[0], false, symbol_mode)
         .ok()
         .filter(|value| is_list_keymap(value, symbol_mode))
         .is_none()
@@ -3459,7 +3463,7 @@ fn command_remapping_explicit_keymaps(ctx: &Context, value: &Value) -> Vec<Value
     items
         .into_iter()
         .filter_map(|item| {
-            get_keymap_in_obarray(&ctx.obarray, &item, false, symbol_mode)
+            get_keymap_in_obarray(&ctx.obarray(), &item, false, symbol_mode)
                 .ok()
                 .filter(|value| is_list_keymap(value, symbol_mode))
         })
@@ -3790,14 +3794,14 @@ fn where_is_raw_sequences(
     if no_menu_bindings && !noindirect && eval.symbol_mode() == SymbolMode::Bare {
         ensure_where_is_reverse_index(eval, keymaps);
         return eval
-            .interactive
+            .interactive()
             .cached_where_is_sequences(keymaps, definition)
             .expect("where-is reverse index was just ensured");
     }
 
     // GNU clears the shared reverse cache when asked to use a lookup mode for
     // which the index is not semantically complete.
-    eval.interactive.clear_where_is_reverse_index();
+    eval.interactive_mut().clear_where_is_reverse_index();
     let mut sequences = Vec::new();
     for keymap in keymaps {
         collect_where_is_sequences_value(
@@ -3816,7 +3820,7 @@ fn where_is_raw_sequences(
 
 fn ensure_where_is_reverse_index(eval: &mut Context, keymaps: &[Value]) {
     if eval
-        .interactive
+        .interactive()
         .cached_where_is_reverse_index(keymaps)
         .is_some()
     {
@@ -3824,7 +3828,7 @@ fn ensure_where_is_reverse_index(eval: &mut Context, keymaps: &[Value]) {
     }
 
     let index = build_where_is_reverse_index(eval.obarray(), keymaps);
-    eval.interactive.install_where_is_reverse_index(index);
+    eval.interactive_mut().install_where_is_reverse_index(index);
 }
 
 fn where_is_indexed_command_remapping(
@@ -3834,14 +3838,14 @@ fn where_is_indexed_command_remapping(
 ) -> Option<Value> {
     let symbol_mode = eval.symbol_mode();
     if symbol_mode == SymbolMode::Positioned {
-        eval.interactive.clear_where_is_reverse_index();
+        eval.interactive_mut().clear_where_is_reverse_index();
         return command_remapping_lookup_in_keymaps(keymaps, command, symbol_mode);
     }
     ensure_where_is_reverse_index(eval, keymaps);
     #[cfg(test)]
-    eval.interactive
+    eval.interactive()
         .note_where_is_reverse_index_remapping_lookup();
-    eval.interactive
+    eval.interactive()
         .cached_where_is_reverse_index(keymaps)
         .expect("where-is reverse index was just ensured")
         .remapping_for(command)

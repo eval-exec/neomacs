@@ -20,9 +20,11 @@ pub(crate) use crate::host_input::{HostInputPublishError, HostInputPublisher};
 pub(crate) fn select_visible_fixture(context: &mut Context, name: &str) {
     let buffer = context.edit.buffers.create_buffer(name);
     context.edit.buffers.set_current(buffer);
-    let frame = context.frames.create_frame("wait-fixture", 80, 24, buffer);
+    let frame = context
+        .frame_manager_mut()
+        .create_frame("wait-fixture", 80, 24, buffer);
     assert!(
-        context.frames.select_frame(frame),
+        context.frame_manager_mut().select_frame(frame),
         "selected wait fixture frame"
     );
 }
@@ -214,7 +216,7 @@ impl InputGateOwner {
 impl InputGate {
     pub(crate) fn arm(self, context: &mut Context, witness: WaitWitness) {
         context
-            .processes
+            .processes_mut()
             .before_next_backend_wait_for_test(move |entry| {
                 self.observed
                     .send(ObservedAtWait { witness, entry })
@@ -328,7 +330,7 @@ mod tests {
             input_owner.gate(vec![InputEvent::key_press(KeyEvent::char('x'))]);
         gate.arm(&mut context, WaitWitness::InputWaitEntered);
         context
-            .processes
+            .processes()
             .wait_for_backend_events(
                 Duration::ZERO,
                 crate::emacs_core::process::ProcessWaitBackendInterest::NotificationsOnly,
@@ -348,7 +350,10 @@ mod tests {
             .expect("positive wait authorizes input");
         assert_eq!(observed.witness, WaitWitness::InputWaitEntered);
         assert!(observed.entry.requested_timeout() > Duration::ZERO);
-        assert_eq!(context.command_loop.keyboard.pending_input_events.len(), 1);
+        assert_eq!(
+            context.command_loop().keyboard.pending_input_events.len(),
+            1
+        );
         assert_eq!(
             completion.expect("command-input wait"),
             crate::emacs_core::wait::CommandInputWaitOutcome::InputPending
@@ -357,7 +362,10 @@ mod tests {
             context.read_char().expect("single queued key"),
             crate::emacs_core::value::Value::fixnum('x' as i64)
         );
-        assert_eq!(context.command_loop.keyboard.pending_input_events.len(), 0);
+        assert_eq!(
+            context.command_loop().keyboard.pending_input_events.len(),
+            0
+        );
     }
 
     #[test]

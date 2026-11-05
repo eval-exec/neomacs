@@ -522,12 +522,12 @@ impl MinibufferWindowRestoration {
 
         let caller =
             crate::emacs_core::builtins::SavedWindowConfiguration::capture(eval, Value::NIL)?;
-        let selected_frame = eval.frames.selected_frame().map(|frame| frame.id);
+        let selected_frame = eval.frame_manager().selected_frame().map(|frame| frame.id);
         let minibuffer_owner = eval
-            .frames
+            .frame_manager()
             .selected_frame()
             .and_then(|frame| frame.minibuffer_window)
-            .and_then(|window| eval.frames.find_window_frame_id(window))
+            .and_then(|window| eval.frame_manager().find_window_frame_id(window))
             .filter(|owner| Some(*owner) != selected_frame)
             .map(|owner| {
                 crate::emacs_core::builtins::SavedWindowConfiguration::capture(
@@ -586,7 +586,7 @@ impl MinibufferInvocationRestoration {
     fn capture(eval: &mut Context) -> Result<Self, Flow> {
         Ok(Self {
             calling_frame: eval
-                .frames
+                .frame_manager()
                 .selected_frame()
                 .map(|frame| CallingFrame(frame.id)),
             windows: MinibufferWindowRestoration::capture(eval)?,
@@ -603,10 +603,10 @@ impl MinibufferInvocationRestoration {
         // restore options intentionally keep the then-current selected frame,
         // so this final step is distinct from configuration restoration.
         if let Some(calling_frame) = self.calling_frame
-            && eval.frames.get(calling_frame.0).is_some()
+            && eval.frame_manager().get(calling_frame.0).is_some()
         {
             super::redisplay::publish_frame_switch(eval, calling_frame.0);
-            let _ = eval.frames.select_frame(calling_frame.0);
+            let _ = eval.frame_manager_mut().select_frame(calling_frame.0);
         }
         crate::emacs_core::frame::sync_gui_frame_focus_redirects(eval)
     }
@@ -918,9 +918,9 @@ fn finish_read_from_minibuffer_in_vm_runtime_interactive(
             } else {
                 RecursiveMinibufferPolicy::Reject
             };
-        let depth_before_entry = shared.minibuffers.depth();
+        let depth_before_entry = shared.minibuffers().depth();
         let entry_permit = shared
-            .minibuffers
+            .minibuffers()
             .prepare_entry(recursive_policy)
             .map_err(MinibufferEntryRejection::into_flow)?;
 
@@ -1031,15 +1031,15 @@ fn finish_read_from_minibuffer_in_vm_runtime_interactive(
         prompt_display,
         minibuf_id,
         shared.edit.buffers.current_buffer_id(),
-        shared.active_minibuffer_window,
+        shared.active_minibuffer_window(),
         shared
-            .frames
+            .frame_manager()
             .selected_frame()
             .map(|frame| frame.selected_window)
     );
 
     {
-        let state = shared.minibuffers.enter_with_permit(
+        let state = shared.minibuffers_mut().enter_with_permit(
             entry_permit,
             minibuf_id,
             &prompt,
@@ -1098,7 +1098,7 @@ fn finish_read_from_minibuffer_in_vm_runtime_interactive(
                 super::minibuffer_contents_lisp_string_in_state(
                     shared.variables(),
                     &shared.edit.buffers,
-                    &shared.minibuffers,
+                    &shared.minibuffers(),
                     preserve_text_properties,
                 )?,
             ))

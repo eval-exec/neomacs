@@ -59,13 +59,13 @@ fn motion_window(
     current_buffer: BufferId,
 ) -> Option<(FrameId, WindowId)> {
     let (frame_id, window_id) = if let Some(window_id) = window {
-        let frame_id = eval.frames.find_window_frame_id(window_id)?;
+        let frame_id = eval.frame_manager().find_window_frame_id(window_id)?;
         (frame_id, window_id)
     } else {
-        let frame = eval.frames.selected_frame()?;
+        let frame = eval.frame_manager().selected_frame()?;
         (frame.id, frame.selected_window)
     };
-    let leaf = eval.frames.get(frame_id)?.find_window(window_id)?;
+    let leaf = eval.frame_manager().get(frame_id)?.find_window(window_id)?;
     (leaf.buffer_id() == Some(current_buffer)).then_some((frame_id, window_id))
 }
 

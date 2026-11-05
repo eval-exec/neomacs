@@ -165,7 +165,7 @@ fn maybe_quit_promotes_pending_frontend_input_for_while_no_input() {
         "maybe_quit must promote queued ordinary input into throw-on-input"
     );
     assert_eq!(
-        ctx.command_loop.keyboard.pending_input_events.len(),
+        ctx.command_loop().keyboard.pending_input_events.len(),
         1,
         "throw-on-input must preserve the key for the next command read"
     );
@@ -259,8 +259,11 @@ fn single_keyboard_quit_does_not_leave_pending_quit_request() {
     let mut ev = runtime_startup_context();
     let scratch = ev.edit.buffers.create_buffer("*quit-finding3*");
     ev.edit.buffers.set_current(scratch);
-    let frame = ev.frames.create_frame("F1", 80, 24, scratch);
-    assert!(ev.frames.select_frame(frame), "need a selected frame");
+    let frame = ev.frame_manager_mut().create_frame("F1", 80, 24, scratch);
+    assert!(
+        ev.frame_manager().select_frame(frame),
+        "need a selected frame"
+    );
 
     // C-g is bound to keyboard-quit in the default global map.
     assert!(
@@ -272,7 +275,7 @@ fn single_keyboard_quit_does_not_leave_pending_quit_request() {
 
     // Exactly what the input bridge does for one C-g: queue the cooked
     // C-g event (fixnum 7) AND raise the cross-thread quit-request atomic.
-    ev.command_loop
+    ev.command_loop()
         .keyboard
         .kboard
         .unread_events
@@ -391,8 +394,8 @@ fn discard_specpdl_restores_buffer_default_and_runtime_cache() {
     ctx.discard_specpdl_to(count);
     assert_eq!(ctx.edit.buffers.current_buffer_id(), Some(original));
     assert_eq!(
-        ctx.threads
-            .thread_current_buffer(ctx.threads.current_thread_id()),
+        ctx.threads()
+            .thread_current_buffer(ctx.threads().current_thread_id()),
         Some(original)
     );
     assert_eq!(
@@ -495,7 +498,8 @@ fn discard_specpdl_noncurrent_local_restores_current_runtime_projection() {
     let symbol = intern("throw-on-input");
     let current_tag = Value::symbol("discard-current-tag");
     let other_tag = Value::symbol("discard-other-tag");
-    ctx.obarray.make_buffer_local("throw-on-input", false);
+    ctx.obarray_view_mut()
+        .make_buffer_local("throw-on-input", false);
     ctx.edit
         .buffers
         .set_buffer_local_property_by_sym_id(original, symbol, current_tag)
@@ -561,7 +565,8 @@ fn current_buffer_scope_same_target_panic_discards_bindings_without_restoring_st
         .replace_buffer_contents(other, "efgh")
         .unwrap();
     let symbol = intern("scope-same-target-child-binding");
-    ctx.obarray.set_symbol_value_id(symbol, Value::fixnum(7));
+    ctx.obarray_view_mut()
+        .set_symbol_value_id(symbol, Value::fixnum(7));
     let depth = ctx.specpdl.len();
     let recovered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut scope = CurrentBufferScope::for_buffer(&mut ctx, original).unwrap();
@@ -591,7 +596,7 @@ fn current_buffer_scope_same_target_panic_discards_bindings_without_restoring_st
     assert!(recovered.is_err());
     assert_eq!(ctx.specpdl.len(), depth);
     assert_eq!(
-        ctx.obarray.symbol_value_id_copied(symbol),
+        ctx.obarray().symbol_value_id_copied(symbol),
         Some(Value::fixnum(7))
     );
     assert_eq!(ctx.edit.buffers.current_buffer_id(), Some(other));
@@ -646,8 +651,11 @@ fn excursion_scope_panic_recovery_does_not_seed_standard_case_table() {
                 .set_current_buffer_unrecorded(other)
                 .unwrap();
             match saved_symbol {
-                Some(value) => scope.context().obarray.set_symbol_value_id(symbol, value),
-                None => scope.context().obarray.makunbound_id(symbol),
+                Some(value) => scope
+                    .context()
+                    .obarray_view_mut()
+                    .set_symbol_value_id(symbol, value),
+                None => scope.context().obarray_view_mut().makunbound_id(symbol),
             }
             // Capture after the scope's point marker and normal buffer switch
             // have allocated. Only fallback work is measured below.
@@ -658,8 +666,8 @@ fn excursion_scope_panic_recovery_does_not_seed_standard_case_table() {
         assert_eq!(ctx.specpdl.len(), count);
         assert_eq!(ctx.edit.buffers.current_buffer_id(), Some(original));
         assert_eq!(
-            ctx.threads
-                .thread_current_buffer(ctx.threads.current_thread_id()),
+            ctx.threads()
+                .thread_current_buffer(ctx.threads().current_thread_id()),
             Some(original)
         );
         assert_eq!(
@@ -671,7 +679,7 @@ fn excursion_scope_panic_recovery_does_not_seed_standard_case_table() {
             EmacsBytePos::new(1)
         );
         assert_eq!(
-            ctx.obarray.symbol_value_id_copied(symbol),
+            ctx.obarray().symbol_value_id_copied(symbol),
             saved_symbol,
             "Drop must preserve an absent or invalid standard-case symbol"
         );
@@ -698,10 +706,10 @@ fn excursion_scope_normal_finish_retains_standard_case_table_seeding() {
         .context()
         .set_current_buffer_unrecorded(other)
         .unwrap();
-    scope.context().obarray.makunbound_id(symbol);
+    scope.context().obarray_view_mut().makunbound_id(symbol);
     assert!(scope.finish(Ok(Value::NIL)).is_ok());
     assert_eq!(ctx.edit.buffers.current_buffer_id(), Some(original));
-    assert!(ctx.obarray.symbol_value_id_copied(symbol).is_some());
+    assert!(ctx.obarray().symbol_value_id_copied(symbol).is_some());
 }
 
 #[test]
@@ -714,7 +722,8 @@ fn excursion_scope_without_current_buffer_discards_child_binding_on_panic() {
     assert!(ctx.edit.buffers.kill_buffer(current));
     assert_eq!(ctx.edit.buffers.current_buffer_id(), None);
     let symbol = intern("empty-excursion-scope-value");
-    ctx.obarray.set_symbol_value_id(symbol, Value::fixnum(10));
+    ctx.obarray_view_mut()
+        .set_symbol_value_id(symbol, Value::fixnum(10));
     let count = ctx.specpdl.len();
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut scope = ExcursionScope::enter(&mut ctx);
@@ -727,7 +736,7 @@ fn excursion_scope_without_current_buffer_discards_child_binding_on_panic() {
     }));
     assert!(outcome.is_err());
     assert_eq!(
-        ctx.obarray.symbol_value_id_or_nil(symbol),
+        ctx.obarray().symbol_value_id_or_nil(symbol),
         Value::fixnum(10)
     );
     assert_eq!(ctx.specpdl.len(), count);
@@ -744,7 +753,8 @@ fn restriction_scope_without_current_buffer_discards_child_binding_on_panic() {
     assert!(ctx.edit.buffers.kill_buffer(current));
     assert_eq!(ctx.edit.buffers.current_buffer_id(), None);
     let symbol = intern("empty-restriction-scope-value");
-    ctx.obarray.set_symbol_value_id(symbol, Value::fixnum(10));
+    ctx.obarray_view_mut()
+        .set_symbol_value_id(symbol, Value::fixnum(10));
     let count = ctx.specpdl.len();
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut scope = RestrictionScope::enter(&mut ctx);
@@ -757,7 +767,7 @@ fn restriction_scope_without_current_buffer_discards_child_binding_on_panic() {
     }));
     assert!(outcome.is_err());
     assert_eq!(
-        ctx.obarray.symbol_value_id_or_nil(symbol),
+        ctx.obarray().symbol_value_id_or_nil(symbol),
         Value::fixnum(10)
     );
     assert_eq!(ctx.specpdl.len(), count);
@@ -791,7 +801,9 @@ fn discard_local_binding_does_not_allocate_ambient_buffer_wrapper() {
         .set_current_buffer_unrecorded(buffer)
         .expect("live buffer");
     let symbol = intern("local-drop-existing-cell");
-    owner.obarray.set_symbol_value_id(symbol, Value::fixnum(10));
+    owner
+        .obarray()
+        .set_symbol_value_id(symbol, Value::fixnum(10));
     crate::emacs_core::custom::builtin_make_local_variable(
         &mut owner,
         &vec![Value::from_sym_id(symbol)],
@@ -808,7 +820,7 @@ fn discard_local_binding_does_not_allocate_ambient_buffer_wrapper() {
         .and_then(|buffer| buffer.local_variable_binding_cell(symbol))
         .expect("existing canonical local cell");
     assert_eq!(
-        owner.obarray.blv(symbol).unwrap().valcell.get(),
+        owner.obarray().blv(symbol).unwrap().valcell.get(),
         binding_cell
     );
     let mut ambient = crate::test_utils::new_context();
@@ -840,7 +852,7 @@ fn discard_local_binding_does_not_allocate_ambient_buffer_wrapper() {
         "recovery keeps the existing binding cell"
     );
     assert_eq!(
-        owner.obarray.blv(symbol).unwrap().valcell.get(),
+        owner.obarray().blv(symbol).unwrap().valcell.get(),
         binding_cell
     );
     assert_eq!(
@@ -904,11 +916,11 @@ fn panic_recovery_unbound_forwarded_binding_keeps_builtin_storage() {
     ctx.setup_thread_locals();
     let boolean = intern("discard-void-bool-forwarder");
     let bool_fwd = alloc_boolfwd(false);
-    ctx.obarray.install_boolfwd(boolean, bool_fwd);
+    ctx.obarray_view_mut().install_boolfwd(boolean, bool_fwd);
     let object = intern("throw-on-input");
     let retained = Value::fixnum(17);
     let obj_fwd = alloc_objfwd(retained);
-    ctx.obarray.install_objfwd(object, obj_fwd);
+    ctx.obarray_view_mut().install_objfwd(object, obj_fwd);
     // Force publication to use actual storage after refusing the saved void.
     ctx.publish_runtime_binding_write_by_resolved_id(object, Value::NIL);
     let count = ctx.specpdl.len();
@@ -926,8 +938,8 @@ fn panic_recovery_unbound_forwarded_binding_keeps_builtin_storage() {
     assert!(outcome.is_err());
     assert!(!bool_fwd.get(), "UNBOUND must not become native true");
     assert_eq!(obj_fwd.get(), retained, "the Obj slot must remain bound");
-    assert_eq!(ctx.obarray.symbol_value_id_or_nil(boolean), Value::NIL);
-    assert_eq!(ctx.obarray.symbol_value_id_or_nil(object), retained);
+    assert_eq!(ctx.obarray().symbol_value_id_or_nil(boolean), Value::NIL);
+    assert_eq!(ctx.obarray().symbol_value_id_or_nil(object), retained);
     assert_eq!(ctx.cached_throw_on_input_for_test(), retained);
     assert_eq!(ctx.specpdl.len(), count);
     assert_eq!(ctx.tagged_heap.bytes_since_gc_exact(), allocated);
@@ -948,17 +960,22 @@ fn panic_recovery_unbound_localized_builtin_keeps_cells_and_projection() {
     ctx.setup_thread_locals();
     let boolean = intern("discard-void-localized-bool-forwarder");
     let bool_fwd = alloc_boolfwd(false);
-    ctx.obarray.install_boolfwd(boolean, bool_fwd);
-    ctx.obarray.make_symbol_localized(boolean, Value::NIL);
-    assert!(ctx.obarray.blv(boolean).is_some(), "localized Bool builtin");
+    ctx.obarray_view_mut().install_boolfwd(boolean, bool_fwd);
+    ctx.obarray_view_mut()
+        .make_symbol_localized(boolean, Value::NIL);
+    assert!(
+        ctx.obarray().blv(boolean).is_some(),
+        "localized Bool builtin"
+    );
     let object = intern("throw-on-input");
     let retained = Value::fixnum(23);
     let obj_fwd = alloc_objfwd(retained);
-    ctx.obarray.install_objfwd(object, obj_fwd);
-    ctx.obarray.make_symbol_localized(object, retained);
-    assert!(ctx.obarray.blv(object).is_some(), "localized Obj builtin");
+    ctx.obarray_view_mut().install_objfwd(object, obj_fwd);
+    ctx.obarray_view_mut()
+        .make_symbol_localized(object, retained);
+    assert!(ctx.obarray().blv(object).is_some(), "localized Obj builtin");
     let cells = [boolean, object].map(|symbol| {
-        let blv = ctx.obarray.blv(symbol).expect("BLV");
+        let blv = ctx.obarray().blv(symbol).expect("BLV");
         assert!(blv.fwd.is_some());
         (blv.defcell.get(), blv.valcell.get())
     });
@@ -978,7 +995,7 @@ fn panic_recovery_unbound_localized_builtin_keeps_cells_and_projection() {
     }));
     assert!(outcome.is_err());
     for (symbol, cells) in [boolean, object].into_iter().zip(cells) {
-        let blv = ctx.obarray.blv(symbol).expect("retained BLV");
+        let blv = ctx.obarray().blv(symbol).expect("retained BLV");
         assert_eq!((blv.defcell.get(), blv.valcell.get()), cells);
         let retained = if symbol == boolean {
             Value::NIL

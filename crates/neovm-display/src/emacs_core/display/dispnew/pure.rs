@@ -64,7 +64,9 @@ fn window_id_from_window_designator(value: &Value) -> Option<WindowId> {
 
 fn selected_window_id(eval: &mut neovm_eval::emacs_core::eval::Context) -> Option<WindowId> {
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(eval);
-    eval.frames.get(frame_id).map(|frame| frame.selected_window)
+    eval.frame_manager()
+        .get(frame_id)
+        .map(|frame| frame.selected_window)
 }
 
 fn resolve_internal_show_cursor_window_id(
@@ -134,11 +136,11 @@ pub fn builtin_redraw_display_in_context(
 ) -> EvalResult {
     let result = builtin_redraw_display(eval, args)?;
     crate::emacs_core::window_cmds::ensure_selected_frame_id(eval);
-    let mut frames = eval.frames.frame_list();
+    let mut frames = eval.frame_manager().frame_list();
     // GNU frame creation conses onto Vframe_list. IDs increase at creation.
     frames.sort_unstable_by_key(|frame| std::cmp::Reverse(frame.0));
     for frame in frames {
-        if gnu_frame_redisplay_p(&eval.frames, frame) {
+        if gnu_frame_redisplay_p(&eval.frame_manager(), frame) {
             publish_gnu_frame_redraw(eval, frame);
         }
     }
@@ -191,7 +193,7 @@ pub(crate) fn publish_gnu_frame_redraw(
     eval: &mut neovm_eval::emacs_core::eval::Context,
     frame: crate::window::FrameId,
 ) {
-    let Some((windows, is_tty)) = eval.frames.get(frame).map(|target| {
+    let Some((windows, is_tty)) = eval.frame_manager().get(frame).map(|target| {
         let windows = target
             .window_list()
             .into_iter()
@@ -296,7 +298,8 @@ pub fn builtin_internal_show_cursor(
     expect_window_designator_eval(eval, &args[0])?;
     let visible = !args[1].is_nil();
     if let Some(window_id) = resolve_internal_show_cursor_window_id(eval, &args[0]) {
-        eval.frames.set_window_cursor_visible(window_id, visible);
+        eval.frame_manager_mut()
+            .set_window_cursor_visible(window_id, visible);
     }
     Ok(Value::NIL)
 }
@@ -316,7 +319,7 @@ pub fn builtin_internal_show_cursor_p(
     let query_window = args.first().unwrap_or(&Value::NIL);
     if let Some(window_id) = resolve_internal_show_cursor_window_id(eval, query_window) {
         return Ok(Value::bool_val(
-            eval.frames.window_cursor_visible(window_id),
+            eval.frame_manager().window_cursor_visible(window_id),
         ));
     }
     Ok(Value::T)

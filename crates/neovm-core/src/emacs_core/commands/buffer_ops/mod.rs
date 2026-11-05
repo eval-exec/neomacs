@@ -653,7 +653,7 @@ pub(crate) fn builtin_set_buffer_multibyte(
     // windows_or_buffers_changed ALL after remapping text and overlays.
     if crate::emacs_core::redisplay_policy::gnu_redisplay_hooks_enabled()
         && eval
-            .frames
+            .frame_manager()
             .buffer_window_count(&eval.edit.buffers, current_id)
             > 0
     {
@@ -688,7 +688,7 @@ pub(crate) fn builtin_buffer_list(
         .and_then(|value| match value.kind() {
             ValueKind::Veclike(VecLikeType::Frame) => {
                 let fid = crate::window::FrameId(value.as_frame_id().unwrap());
-                let frame = eval.frames.get(fid)?;
+                let frame = eval.frame_manager().get(fid)?;
 
                 // Global buffer list (Vbuffer_alist equivalent).
                 let mut general = eval.edit.buffers.buffer_list();
@@ -725,7 +725,8 @@ pub(crate) fn builtin_other_buffer(
     eval: &mut crate::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    other_buffer_impl_in_state(&mut eval.frames, &mut eval.edit.buffers, args)
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+    other_buffer_impl_in_state(frames, buffers, args)
 }
 
 fn buffer_visible_in_visible_frame(
@@ -823,8 +824,8 @@ fn other_buffer_for_killed_buffer(
     _killed: crate::buffer::BufferId,
     killed_value: Value,
 ) -> Result<Option<crate::buffer::BufferId>, crate::emacs_core::error::Flow> {
-    let other =
-        other_buffer_impl_in_state(&mut ctx.frames, &mut ctx.edit.buffers, vec![killed_value])?;
+    let (frames, buffers) = ctx.frame_manager_and_buffers_mut();
+    let other = other_buffer_impl_in_state(frames, buffers, vec![killed_value])?;
     Ok(other.as_buffer_id())
 }
 

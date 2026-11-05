@@ -225,7 +225,7 @@ impl TimerContextExt for neovm_eval::emacs_core::eval::Context {
         if let Some(idle) = self.next_idle_gnu_timer_timeout() {
             timeout = Some(timeout.map_or(idle, |current| current.min(idle)));
         }
-        if !self.processes.live_process_ids().is_empty() {
+        if !self.processes().live_process_ids().is_empty() {
             let process_poll = Duration::from_millis(100);
             timeout = Some(timeout.map_or(process_poll, |current| current.min(process_poll)));
         }
@@ -379,7 +379,7 @@ pub fn builtin_sleep_for(
 
     let total_secs = secs + millis / 1000.0;
     if total_secs > 0.0 {
-        if eval.threads.current_thread_id() != 0 && !eval.green_threads_running() {
+        if eval.threads().current_thread_id() != 0 && !eval.green_threads_running() {
             return Err(Flow::thread_blocked(
                 neovm_eval::emacs_core::threads::make_sleep_blocker(total_secs),
                 Value::NIL,

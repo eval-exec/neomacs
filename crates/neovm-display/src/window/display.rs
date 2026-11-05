@@ -41,15 +41,15 @@ impl WindowScrollUpdate {
                 vec![Value::string("Scroll window changed during measurement")],
             )
         };
-        let window = eval
-            .frames
+        let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+        let window = frames
             .get_mut(self.frame)
             .and_then(|frame| frame.find_window_mut(self.window))
             .ok_or_else(invalid)?;
         if window.buffer_id() != Some(self.buffer) {
             return Err(invalid());
         }
-        let buffer = eval.edit.buffers.get(self.buffer).ok_or_else(invalid)?;
+        let buffer = buffers.get(self.buffer).ok_or_else(invalid)?;
         let region = buffer.accessible_char_region();
         if self.start < region.start_lisp()
             || self.start > region.end_lisp()
@@ -61,25 +61,11 @@ impl WindowScrollUpdate {
         let position = buffer.lisp_pos_to_emacs_byte_pos(self.point);
         let adjust_old_point =
             matches!(window, Window::Leaf { point, old_point, .. } if point == old_point);
-        eval.edit
-            .buffers
-            .goto_buffer_emacs_byte_pos(self.buffer, position);
-        super::window_markers::set_window_point_with_marker(
-            &mut eval.edit.buffers,
-            window,
-            self.point,
-        );
-        super::window_markers::set_window_start_with_marker(
-            &mut eval.edit.buffers,
-            window,
-            self.start,
-        );
+        buffers.goto_buffer_emacs_byte_pos(self.buffer, position);
+        super::window_markers::set_window_point_with_marker(buffers, window, self.point);
+        super::window_markers::set_window_start_with_marker(buffers, window, self.start);
         if adjust_old_point {
-            super::window_markers::set_window_old_point_with_marker(
-                &mut eval.edit.buffers,
-                window,
-                self.point,
-            );
+            super::window_markers::set_window_old_point_with_marker(buffers, window, self.point);
         }
         window.invalidate_window_end();
         if let Window::Leaf {
@@ -333,9 +319,8 @@ impl WindowDisplayContextExt for neovm_eval::emacs_core::eval::Context {
         window_id: WindowId,
         point_lisp: LispCharPos1,
     ) {
-        let buffers = &mut self.edit.buffers;
-        if let Some(window) = self
-            .frames
+        let (frames, buffers) = self.frame_manager_and_buffers_mut();
+        if let Some(window) = frames
             .get_mut(frame_id)
             .and_then(|frame| frame.find_window_mut(window_id))
         {
@@ -344,26 +329,23 @@ impl WindowDisplayContextExt for neovm_eval::emacs_core::eval::Context {
     }
 
     fn create_window_markers_for_root(&mut self, frame_id: FrameId, buffer_id: BufferId) {
-        let root = &mut self.frames.get_mut(frame_id).unwrap().root_window_mut();
+        let (frames, buffers) = self.frame_manager_and_buffers_mut();
+        let root = frames.get_mut(frame_id).unwrap().root_window_mut();
         debug_assert_eq!(root.buffer_id(), Some(buffer_id));
-        super::window_markers::attach_window_position_markers(&mut self.edit.buffers, root);
+        super::window_markers::attach_window_position_markers(buffers, root);
     }
 
     fn create_window_markers_for_minibuffer(&mut self, frame_id: FrameId, buffer_id: BufferId) {
-        let mini = self
-            .frames
-            .get_mut(frame_id)
-            .unwrap()
-            .minibuffer_leaf
-            .as_mut();
+        let (frames, buffers) = self.frame_manager_and_buffers_mut();
+        let mini = frames.get_mut(frame_id).unwrap().minibuffer_leaf.as_mut();
         if let Some(mini) = mini {
             debug_assert_eq!(mini.buffer_id(), Some(buffer_id));
-            super::window_markers::attach_window_position_markers(&mut self.edit.buffers, mini);
+            super::window_markers::attach_window_position_markers(buffers, mini);
         }
     }
 
     fn sync_window_positions(&mut self, buffer_id: BufferId) {
-        for frame in self.frames.frames_mut() {
+        for frame in self.frame_manager_mut().frames_mut() {
             super::window_markers::sync_window_positions_from_markers(frame, buffer_id);
         }
     }
@@ -394,7 +376,7 @@ impl WindowDisplayContextExt for neovm_eval::emacs_core::eval::Context {
     ) -> Option<crate::window::WindowLayoutAttemptFreshness> {
         use strum::VariantArray;
 
-        let frame = self.frames.get(frame_id)?;
+        let frame = self.frame_manager().get(frame_id)?;
         let live_buffer_id = frame.find_window(window_id)?.buffer_id()?;
         let source_buffer = self.edit.buffers.get(source_buffer_id)?;
         let mut source_layout_variables = crate::window::WindowLayoutVariableState {
@@ -410,7 +392,7 @@ impl WindowDisplayContextExt for neovm_eval::emacs_core::eval::Context {
         // native payloads, never mutable Lisp source data.
         let fontset_generation = crate::emacs_core::fontset::fontset_generation();
         let context_instance_id = self.context_instance_id();
-        let window_topology_generation = self.frames.window_topology_generation();
+        let window_topology_generation = self.frame_manager().window_topology_generation();
         let frame_inputs = frame.layout_inputs();
         let window_inputs = frame.window_layout_inputs(window_id)?;
         let namespace_before = (live_buffer_id == source_buffer_id)
@@ -445,15 +427,15 @@ impl WindowDisplayContextExt for neovm_eval::emacs_core::eval::Context {
             source_buffer,
             source_layout_variables,
             selection: crate::window::WindowLayoutSelectionState {
-                selected_frame: self.frames.selected_frame().map(|frame| frame.id),
+                selected_frame: self.frame_manager().selected_frame().map(|frame| frame.id),
                 frame_selected_window: frame.selected_window,
-                minibuffer_selected_window: (*self.minibuffer_selected_window),
-                active_minibuffer_window: (*self.active_minibuffer_window),
+                minibuffer_selected_window: (*self.minibuffer_selected_window()),
+                active_minibuffer_window: (*self.active_minibuffer_window()),
             },
             face_change_count: self.face_change_count,
             media_generation: self.media_generation(),
             body_redisplay: self.body_redisplay_revision(window_id, live_buffer_id),
-            function_epoch: self.obarray.function_epoch(),
+            function_epoch: self.obarray().function_epoch(),
         })
     }
 
@@ -493,7 +475,7 @@ impl WindowDisplayContextExt for neovm_eval::emacs_core::eval::Context {
             && *context_instance_id == self.context_instance_id()
             && *fontset_generation == crate::emacs_core::fontset::fontset_generation()
             && window.char_table_mutation_epoch == current_char_table_layout_revision()
-            && *function_epoch == self.obarray.function_epoch()
+            && *function_epoch == self.obarray().function_epoch()
         {
             Some(Cow::Borrowed(before))
         } else {
@@ -552,24 +534,26 @@ impl WindowDisplayContextExt for neovm_eval::emacs_core::eval::Context {
     ) -> crate::window::WindowLayoutQueryOutcome {
         self.sync_pending_resize_events();
         if let Some(buffer_id) = self
-            .frames
+            .frame_manager()
             .get(frame_id)
             .and_then(|frame| frame.find_window(window_id))
             .and_then(Window::buffer_id)
         {
-            crate::window::window_markers::sync_all_frames_for_buffer(&mut self.frames, buffer_id);
+            crate::window::window_markers::sync_all_frames_for_buffer(
+                self.frame_manager_mut(),
+                buffer_id,
+            );
         }
         // A queried frame need not be globally selected. Its locally selected
         // window still owns an independent point marker in that case.
         if self
-            .frames
+            .frame_manager()
             .selected_frame()
             .is_some_and(|frame| frame.id == frame_id)
         {
+            let (frames, buffers) = self.frame_manager_and_buffers_mut();
             crate::emacs_core::window_cmds::remember_selected_window_point_in_state(
-                &mut self.frames,
-                &mut self.edit.buffers,
-                frame_id,
+                frames, buffers, frame_id,
             );
         }
         let adapter = std::mem::replace(
@@ -622,8 +606,7 @@ impl WindowDisplayContextExt for neovm_eval::emacs_core::eval::Context {
         window_id: WindowId,
         window_start_lisp: LispCharPos1,
     ) -> crate::window::WindowStartCommit {
-        let frames = &mut self.frames;
-        let buffers = &mut self.edit.buffers;
+        let (frames, buffers) = self.frame_manager_and_buffers_mut();
         let Some(frame) = frames.get_mut(frame_id) else {
             return crate::window::WindowStartCommit::Inherited;
         };
@@ -680,7 +663,7 @@ impl WindowDisplayContextExt for neovm_eval::emacs_core::eval::Context {
         window_end: crate::window::WindowEndRecord,
     ) {
         let Some(window) = self
-            .frames
+            .frame_manager_mut()
             .get_mut(frame_id)
             .and_then(|frame| frame.find_window_mut(window_id))
         else {
@@ -696,7 +679,7 @@ impl WindowDisplayContextExt for neovm_eval::emacs_core::eval::Context {
         window_id: WindowId,
         buffer_id: BufferId,
     ) -> Option<crate::window::WindowEndAttempt> {
-        let window = self.frames.get(frame_id)?.find_window(window_id)?;
+        let window = self.frame_manager().get(frame_id)?.find_window(window_id)?;
         if window.buffer_id()? != buffer_id {
             return None;
         }
@@ -712,7 +695,7 @@ impl WindowDisplayContextExt for neovm_eval::emacs_core::eval::Context {
     /// performed by Lisp during chrome evaluation.
     fn reject_redisplay_window_end_attempt(&mut self, attempt: crate::window::WindowEndAttempt) {
         let Some(window) = self
-            .frames
+            .frame_manager_mut()
             .get_mut(attempt.frame_id)
             .and_then(|frame| frame.find_window_mut(attempt.window_id))
         else {
@@ -854,7 +837,7 @@ impl WindowDisplayContextExt for neovm_eval::emacs_core::eval::Context {
         window_id: WindowId,
         buffer_id: BufferId,
     ) -> Option<WindowDisplaySnapshotFreshness> {
-        let frame = self.frames.get(frame_id)?;
+        let frame = self.frame_manager().get(frame_id)?;
         let window = frame.window_layout_inputs(window_id)?;
         if window.buffer_id != buffer_id {
             return None;
@@ -862,7 +845,7 @@ impl WindowDisplayContextExt for neovm_eval::emacs_core::eval::Context {
         Some(WindowDisplaySnapshotFreshness {
             fontset_generation: crate::emacs_core::fontset::fontset_generation(),
             context_instance_id: self.context_instance_id(),
-            window_topology_generation: self.frames.window_topology_generation(),
+            window_topology_generation: self.frame_manager().window_topology_generation(),
             frame: frame.layout_inputs(),
             window,
             buffer: self.buffer_layout_inputs(buffer_id)?,
@@ -893,7 +876,11 @@ impl WindowDisplayContextExt for neovm_eval::emacs_core::eval::Context {
         buffer_id: BufferId,
     ) -> Option<&WindowDisplaySnapshot> {
         let current = self.window_display_snapshot_freshness(frame_id, window_id, buffer_id)?;
-        let Some(snapshot) = self.frames.get(frame_id)?.redisplay_snapshot(window_id) else {
+        let Some(snapshot) = self
+            .frame_manager()
+            .get(frame_id)?
+            .redisplay_snapshot(window_id)
+        else {
             tracing::trace!(target: "neovm_core::motion_geometry", ?frame_id, ?window_id,
                 "retained rows unavailable");
             return None;

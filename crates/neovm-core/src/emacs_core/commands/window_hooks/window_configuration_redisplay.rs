@@ -14,12 +14,15 @@ pub(super) fn prepare(
     if !crate::emacs_core::eval::gnu_redisplay_hooks_enabled() {
         return;
     }
-    let Some(frame) = eval.frames.get(snapshot.frame_id) else {
+    let Some(frame) = eval.frame_manager().get(snapshot.frame_id) else {
         return;
     };
     let same_epoch = snapshot.change_stamp == frame.change_stamp;
     let restore_epoch = |window: &mut crate::window::Window| {
-        let Some(record) = eval.frames.window_restore_change_record(window.id()) else {
+        let Some(record) = eval
+            .frame_manager()
+            .window_restore_change_record(window.id())
+        else {
             return;
         };
         if let crate::window::Window::Leaf {

@@ -520,12 +520,8 @@ pub(crate) fn resolve_live_frame_font_request(
     frame_id: FrameId,
     requested: &Value,
 ) -> LiveFrameFontResolution {
-    resolve_live_frame_font_request_in_state(
-        &eval.frames,
-        &mut eval.display_host,
-        frame_id,
-        requested,
-    )
+    let (frames, display_host) = eval.frame_manager_read_and_display_host_mut();
+    resolve_live_frame_font_request_in_state(frames, display_host, frame_id, requested)
 }
 
 fn resolve_live_frame_font_request_in_state(
@@ -625,7 +621,7 @@ fn frame_minimum_inner_pixels(
     frame_id: FrameId,
     axis: FontResizeAxis,
 ) -> Result<u32, Flow> {
-    let Some(frame) = eval.frames.get(frame_id) else {
+    let Some(frame) = eval.frame_manager().get(frame_id) else {
         return Ok(1);
     };
     let (parameter, unit) = match axis {
@@ -662,7 +658,7 @@ pub(crate) fn sync_live_frame_font_state(
     frame_id: FrameId,
     resolution: &LiveFrameFontResolution,
 ) -> Result<(), Flow> {
-    let Some(frame) = eval.frames.get(frame_id) else {
+    let Some(frame) = eval.frame_manager().get(frame_id) else {
         return Ok(());
     };
     let inhibit = eval
@@ -680,8 +676,10 @@ pub(crate) fn sync_live_frame_font_state(
     let (cols, lines) = frame.pending_gui_resize.as_ref().map_or_else(
         || {
             (
-                (super::window_cmds::frame_text_width_pixels_in_state(&eval.frames, frame_id)
-                    as f32
+                (super::window_cmds::frame_text_width_pixels_in_state(
+                    &eval.frame_manager(),
+                    frame_id,
+                ) as f32
                     / frame.char_width.max(1.0))
                 .floor()
                 .max(1.0) as u32,
@@ -698,15 +696,10 @@ pub(crate) fn sync_live_frame_font_state(
             )
         },
     );
-    sync_live_frame_font_state_in_state(
-        &mut eval.frames,
-        &mut eval.display_host,
-        frame_id,
-        resolution,
-        vertical,
-    );
+    let (frames, display_host) = eval.frame_manager_and_display_host_mut();
+    sync_live_frame_font_state_in_state(frames, display_host, frame_id, resolution, vertical);
 
-    let Some(frame) = eval.frames.get(frame_id) else {
+    let Some(frame) = eval.frame_manager().get(frame_id) else {
         return Ok(());
     };
     if old_metrics == (frame.char_width, frame.char_height, frame.font_pixel_size)
@@ -717,7 +710,7 @@ pub(crate) fn sync_live_frame_font_state(
     }
     let min_inner_width = frame_minimum_inner_pixels(eval, frame_id, FontResizeAxis::Horizontal)?;
     let min_inner_height = frame_minimum_inner_pixels(eval, frame_id, FontResizeAxis::Vertical)?;
-    let Some(frame) = eval.frames.get(frame_id) else {
+    let Some(frame) = eval.frame_manager().get(frame_id) else {
         return Ok(());
     };
     let border = (frame.internal_border_width().max(0) as u32).saturating_mul(2);
@@ -736,8 +729,9 @@ pub(crate) fn sync_live_frame_font_state(
         // resizes the window tree when an implied native resize is inhibited
         // (frame.c:909-930,1076-1082). No native acknowledgement will arrive to
         // do that work for us when the allocated pixels have not changed.
-        if let Some(frame) = eval.frames.get_mut(frame_id) {
-            frame.refresh_geometry_for_changed_font(&eval.edit.buffers);
+        let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+        if let Some(frame) = frames.get_mut(frame_id) {
+            frame.refresh_geometry_for_changed_font(buffers);
         }
         return Ok(());
     }
@@ -749,7 +743,7 @@ pub(crate) fn sync_live_frame_font_state(
             .saturating_mul(frame.char_width.max(1.0).round() as u32)
             .max(min_inner_width.saturating_sub(frame.horizontal_non_text_width().max(0) as u32)),
         FontChangeGeometryPolicy::PreserveAllocatedPixels => {
-            super::window_cmds::frame_text_width_pixels_in_state(&eval.frames, frame_id)
+            super::window_cmds::frame_text_width_pixels_in_state(&eval.frame_manager(), frame_id)
         }
     };
     let height = match vertical {
@@ -760,10 +754,11 @@ pub(crate) fn sync_live_frame_font_state(
             super::window_cmds::frame_text_height_pixels(frame)
         }
     };
+    let (frames, buffers, display_host) = eval.frame_manager_buffers_and_display_host_mut();
     if let Err(err) = super::frame::request_live_gui_frame_resize_and_keep_pending(
-        &mut eval.frames,
-        &eval.edit.buffers,
-        &mut eval.display_host,
+        frames,
+        buffers,
+        display_host,
         frame_id,
         super::window_cmds::FrameResizeRequest::TextPixels { width, height },
     ) {
@@ -921,7 +916,7 @@ pub(crate) fn sync_live_default_face_font_state(
     frame_id: FrameId,
 ) -> Result<(), Flow> {
     if eval
-        .frames
+        .frame_manager()
         .get(frame_id)
         .is_none_or(|frame| frame.effective_window_system().is_none())
     {
@@ -1029,7 +1024,7 @@ pub(crate) fn update_face_from_frame_parameter(
                 super::xfaces::realization::FaceChangeScope::Frames(&affected),
             );
             if scope.invalidates(frame_id)
-                && let Some(frame) = eval.frames.get_mut(frame_id)
+                && let Some(frame) = eval.frame_manager_mut().get_mut(frame_id)
             {
                 frame.face_realization.invalidate();
             }
@@ -1093,7 +1088,7 @@ pub fn seed_live_frame_default_face_from_font_parameter(
     frame_id: FrameId,
 ) {
     let Some(font_value) = eval
-        .frames
+        .frame_manager()
         .get(frame_id)
         .and_then(|frame| frame.fixed_parameter(crate::window::FrameQueryParam::FontParameter))
         .filter(is_font_object)
@@ -2402,7 +2397,7 @@ pub(crate) fn list_fonts(
             vec![Value::symbol("font-spec"), args[0]],
         ));
     }
-    expect_optional_frame_designator_in_state(&eval.frames, args.get(1))?;
+    expect_optional_frame_designator_in_state(&eval.frame_manager(), args.get(1))?;
     Ok(Value::NIL)
 }
 
@@ -2427,7 +2422,7 @@ fn find_font_frame_id(
     match frame {
         None => Ok(super::window_cmds::ensure_selected_frame_id(eval)),
         Some(v) if v.is_nil() => Ok(super::window_cmds::ensure_selected_frame_id(eval)),
-        Some(value) if live_frame_designator_in_state(&eval.frames, value) => {
+        Some(value) if live_frame_designator_in_state(&eval.frame_manager(), value) => {
             frame_id_from_designator(value).ok_or_else(|| {
                 signal(
                     LispCondition::WrongTypeArgument,
@@ -2665,7 +2660,7 @@ fn resolve_live_window_for_font_at(
         None => {
             let frame_id = super::window_cmds::ensure_selected_frame_id(eval);
             let frame = eval
-                .frames
+                .frame_manager()
                 .get(frame_id)
                 .ok_or_else(|| signal("error", vec![Value::string("No selected frame")]))?;
             Ok((frame_id, frame.selected_window))
@@ -2673,7 +2668,7 @@ fn resolve_live_window_for_font_at(
         Some(v) if v.is_nil() => {
             let frame_id = super::window_cmds::ensure_selected_frame_id(eval);
             let frame = eval
-                .frames
+                .frame_manager()
                 .get(frame_id)
                 .ok_or_else(|| signal("error", vec![Value::string("No selected frame")]))?;
             Ok((frame_id, frame.selected_window))
@@ -2685,7 +2680,7 @@ fn resolve_live_window_for_font_at(
                     vec![Value::symbol("window-live-p"), *other],
                 ));
             };
-            let Some(frame_id) = eval.frames.find_window_frame_id(window_id) else {
+            let Some(frame_id) = eval.frame_manager().find_window_frame_id(window_id) else {
                 return Err(signal(
                     LispCondition::WrongTypeArgument,
                     vec![Value::symbol("window-live-p"), *other],
@@ -3252,7 +3247,7 @@ pub(crate) fn live_frame_font_attribute_fallback(
     frame_id: FrameId,
     attr: LFaceAttr,
 ) -> Option<Value> {
-    let frame = eval.frames.get(frame_id)?;
+    let frame = eval.frame_manager().get(frame_id)?;
     match FrameFontRealization::for_frame(frame) {
         FrameFontRealization::Terminal => return None,
         FrameFontRealization::WindowSystem => {}
@@ -3551,7 +3546,7 @@ pub(crate) fn font_at(
     let (frame_id, window_id) = resolve_live_window_for_font_at(eval, args.get(1))?;
     let (window_buffer_id, has_window_system) = {
         let frame = eval
-            .frames
+            .frame_manager()
             .get(frame_id)
             .ok_or_else(|| signal("error", vec![Value::string("No selected frame")]))?;
         let window = frame
@@ -3703,7 +3698,7 @@ pub(crate) fn internal_char_font(
         };
         let frame_id = super::window_cmds::ensure_selected_frame_id(eval);
         let has_window_system = eval
-            .frames
+            .frame_manager()
             .get(frame_id)
             .is_some_and(|frame| frame.effective_window_system().is_some());
         if !has_window_system {
@@ -3760,11 +3755,11 @@ pub(crate) fn internal_char_font(
         let Some(window_id) = window.as_window_id().map(crate::window::WindowId) else {
             return Ok(Value::NIL);
         };
-        let Some(frame_id) = eval.frames.find_window_frame_id(window_id) else {
+        let Some(frame_id) = eval.frame_manager().find_window_frame_id(window_id) else {
             return Ok(Value::NIL);
         };
         let has_window_system = eval
-            .frames
+            .frame_manager()
             .get(frame_id)
             .is_some_and(|frame| frame.effective_window_system().is_some());
         if !has_window_system {
@@ -3887,7 +3882,7 @@ pub(crate) fn font_info(
     let frame_id = match args.get(1) {
         None => super::window_cmds::ensure_selected_frame_id(eval),
         Some(v) if v.is_nil() => super::window_cmds::ensure_selected_frame_id(eval),
-        Some(frame) if live_frame_designator_in_state(&eval.frames, frame) => {
+        Some(frame) if live_frame_designator_in_state(&eval.frame_manager(), frame) => {
             frame_id_from_designator(frame)
                 .expect("live frame designator should decode to frame id")
         }
@@ -3899,7 +3894,7 @@ pub(crate) fn font_info(
         }
     };
     let has_window_system = eval
-        .frames
+        .frame_manager()
         .get(frame_id)
         .ok_or_else(|| signal("error", vec![Value::string("No selected frame")]))?
         .window_system
@@ -3934,8 +3929,10 @@ pub(crate) fn font_info(
             let text = font_string_text(&name).expect("validated font name");
             let spec = font_spec_from_name(&text)
                 .ok_or_else(|| signal("error", vec![Value::string("Invalid font name"), name]))?;
-            let size =
-                named_font_opening_size(spec, eval.frames.get(frame_id).expect("validated frame"));
+            let size = named_font_opening_size(
+                spec,
+                eval.frame_manager().get(frame_id).expect("validated frame"),
+            );
             // GNU font_open_by_spec keeps explicit styles as constraints,
             // ranks listed entities using normal-style preferences, and
             // falls back to driver matching only when listing finds none.
@@ -4243,12 +4240,13 @@ fn shape_gstring_with_driver(
     // the header and stamp its ID slot; a later call with the same header
     // returns the cached gstring instead of re-shaping.
     let cache_key = gstring_shape_cache_key(&gstring);
-    if let Some(cached) = eval.gstring_shape_cache.get(&cache_key) {
+    let cache = eval.gstring_shape_cache_mut();
+    if let Some(cached) = cache.get(&cache_key) {
         return Ok(cached.clone());
     }
-    let id = eval.gstring_shape_cache.len() as i64;
+    let id = cache.len() as i64;
     gstring.set_vector_slot(1, Value::fixnum(id));
-    eval.gstring_shape_cache.insert(cache_key, gstring.clone());
+    cache.insert(cache_key, gstring.clone());
     Ok(gstring)
 }
 

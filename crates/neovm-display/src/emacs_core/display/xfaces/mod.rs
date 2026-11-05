@@ -69,7 +69,7 @@ pub fn ensure_startup_compat_variables(eval: &mut neovm_eval::emacs_core::eval::
     // SAFETY: stamping registry IDs writes only symbol properties; the helper
     // neither calls Lisp nor changes canonical function/debugger metadata.
     unsafe {
-        eval.obarray
+        eval.obarray_view_mut()
             .with_legacy_value_write(stamp_face_id_properties);
     }
 
@@ -100,15 +100,16 @@ pub fn builtin_frame_face_hash_table(
     args: Vec<Value>,
 ) -> EvalResult {
     crate::emacs_core::display::expect_args_range("frame--face-hash-table", &args, 0, 1)?;
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     let frame_id = crate::emacs_core::window_cmds::resolve_frame_id_in_state(
-        &mut eval.frames,
-        &mut eval.edit.buffers,
+        frames,
+        buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
 
     Ok(eval
-        .frames
+        .frame_manager()
         .get(frame_id)
         .map(|frame| frame.face_hash_table())
         .unwrap_or(Value::hash_table(HashTableTest::Eq)))
@@ -1658,7 +1659,7 @@ fn frame_lisp_face_table_entries(
     frame_id: FrameId,
 ) -> Vec<(String, Option<crate::face::LispFaceId>, Value)> {
     let Some(table) = eval
-        .frames
+        .frame_manager()
         .get(frame_id)
         .map(|frame| frame.face_hash_table())
     else {
@@ -1696,7 +1697,7 @@ fn frame_parameter_color_or_tty_default(
     param: FrameParam,
     tty_default: &str,
 ) -> Value {
-    eval.frames
+    eval.frame_manager()
         .get(frame_id)
         .and_then(|frame| frame.known_parameter(param))
         .filter(|value| value.is_string())
@@ -1717,7 +1718,7 @@ pub(crate) fn realize_default_lisp_face_for_frame(
     else {
         return;
     };
-    let Some(frame) = eval.frames.get(frame_id) else {
+    let Some(frame) = eval.frame_manager().get(frame_id) else {
         return;
     };
     let window_system = frame.effective_window_system();
@@ -1869,7 +1870,7 @@ fn tty_color_desc_rgb(
     name: &str,
     color_cells: i64,
 ) -> Option<crate::face::Color> {
-    if !eval.obarray.fboundp("tty-color-desc") {
+    if !eval.obarray().fboundp("tty-color-desc") {
         return None;
     }
     let desc = eval
@@ -1981,7 +1982,7 @@ fn snapshot_tty_color_alist(
     eval: &mut neovm_eval::emacs_core::eval::Context,
 ) -> neomacs_display_protocol::TtyPalette {
     use neomacs_display_protocol::{TtyPalette, TtyPaletteEntry};
-    if !eval.obarray.fboundp("tty-color-alist") {
+    if !eval.obarray().fboundp("tty-color-alist") {
         return TtyPalette::default();
     }
     let Ok(alist) = eval.funcall_general(Value::symbol("tty-color-alist"), Vec::new()) else {
@@ -2081,7 +2082,7 @@ pub(crate) fn runtime_face_table_from_frame_lisp_faces_resolved(
     // realization; replacing the baseline with the frame's concrete default
     // height here would prematurely collapse that semantic distinction.
     let mut table = if preserve_default_baseline {
-        eval.face_table.clone()
+        eval.face_table().clone()
     } else {
         crate::face::FaceTable::new()
     };
@@ -2155,7 +2156,7 @@ pub fn sync_runtime_face_table_from_frame_lisp_faces(
     // so the renderer paints the registered palette (xterm "white" is
     // 229,229,229, not X11 255,255,255), not rgb.txt.
     let tty = eval
-        .frames
+        .frame_manager()
         .get(frame_id)
         .is_some_and(|f| f.window_system.is_none());
     let tty_palette = tty.then(|| build_tty_color_map(eval, frame_id));
@@ -2163,14 +2164,14 @@ pub fn sync_runtime_face_table_from_frame_lisp_faces(
         Some(palette) => FaceColorResolver::TtyPalette(palette),
         None => FaceColorResolver::Standard,
     };
-    *eval.face_table =
+    *eval.face_table_mut() =
         runtime_face_table_from_frame_lisp_faces_resolved(eval, frame_id, false, resolver);
     // The palette travels with the table: everything downstream that realizes
     // one more face -- an anonymous attribute plist from a text property, an
     // overlay, or `face-remapping-alist` -- must use the same one.
     if tty {
         let palette = snapshot_tty_color_alist(eval);
-        eval.face_table.set_tty_palette(palette);
+        eval.face_table_mut().set_tty_palette(palette);
     }
 }
 
@@ -2192,7 +2193,7 @@ pub(crate) fn lookup_frame_lisp_face_vector(
     frame_id: FrameId,
     face_name: &str,
 ) -> Option<Value> {
-    let table = eval.frames.get(frame_id)?.face_hash_table();
+    let table = eval.frame_manager().get(frame_id)?.face_hash_table();
     crate::emacs_core::xfaces::lookup_frame_face_hash_entry(table, Value::symbol(face_name))
 }
 
@@ -2204,7 +2205,7 @@ fn lookup_frame_lisp_face_vector_by_symbol(
     frame_id: FrameId,
     key: Value,
 ) -> Option<Value> {
-    let table = eval.frames.get(frame_id)?.face_hash_table();
+    let table = eval.frame_manager().get(frame_id)?.face_hash_table();
     crate::emacs_core::xfaces::lookup_frame_face_hash_entry(table, key)
 }
 
@@ -2327,7 +2328,7 @@ fn ensure_frame_lisp_face_vector_by_symbol(
         FrameFaceInitial::Empty => make_lisp_face_vector(),
         FrameFaceInitial::SelectedBase => make_lisp_face_vector_for_domain(face_name, false),
     };
-    let frame = eval.frames.get_mut(frame_id)?;
+    let frame = eval.frame_manager_mut().get_mut(frame_id)?;
     crate::emacs_core::xfaces::upsert_frame_face_hash_entry(
         frame.face_hash_table(),
         face_sym,
@@ -2365,7 +2366,7 @@ fn font_face_realization_targets(
 ) -> Vec<FontFaceRealizationTarget> {
     let selected = super::window_cmds::ensure_selected_frame_id(eval);
     let supports_fonts = |frame_id| {
-        eval.frames.get(frame_id).is_some_and(|frame| {
+        eval.frame_manager().get(frame_id).is_some_and(|frame| {
             FrameFontRealization::for_frame(frame).stores_face_font_attributes()
         })
     };
@@ -2377,7 +2378,7 @@ fn font_face_realization_targets(
             .into_iter()
             .collect(),
         Some(frame) if frame.as_fixnum() == Some(0) => {
-            let mut live_frames = eval.frames.frame_list();
+            let mut live_frames = eval.frame_manager().frame_list();
             if let Some(index) = live_frames
                 .iter()
                 .position(|frame_id| *frame_id == selected)
@@ -2398,7 +2399,7 @@ fn font_face_realization_targets(
             );
             targets
         }
-        Some(frame) if live_frame_designator_in_state(&eval.frames, frame) => {
+        Some(frame) if live_frame_designator_in_state(&eval.frame_manager(), frame) => {
             let frame_id =
                 frame_id_from_designator(frame).expect("live frame designator should decode");
             supports_fonts(frame_id)
@@ -3037,7 +3038,7 @@ pub fn builtin_internal_lisp_face_p(
     if let Some(frame) = args.get(1)
         && !frame.is_nil()
     {
-        if !live_frame_designator_in_state(&eval.frames, frame) {
+        if !live_frame_designator_in_state(&eval.frame_manager(), frame) {
             return Err(signal(
                 LispCondition::WrongTypeArgument,
                 vec![Value::symbol("frame-live-p"), *frame],
@@ -3088,7 +3089,7 @@ pub fn builtin_internal_make_lisp_face(
         .to_owned();
     if let Some(frame) = args.get(1)
         && !frame.is_nil()
-        && !live_frame_designator_in_state(&eval.frames, frame)
+        && !live_frame_designator_in_state(&eval.frame_manager(), frame)
     {
         return Err(signal(
             LispCondition::WrongTypeArgument,
@@ -3114,7 +3115,7 @@ pub fn builtin_internal_make_lisp_face(
         clear_face_overrides(&face_name, true);
         vector
     };
-    eval.face_table.ensure_face(&face_name);
+    eval.face_table_mut().ensure_face(&face_name);
     let local_frame = args
         .get(1)
         .filter(|frame| !frame.is_nil())
@@ -3147,7 +3148,7 @@ pub fn builtin_internal_copy_lisp_face(
         .name()
         .to_owned();
     let copy_defaults_domain = args[2].is_t();
-    if !copy_defaults_domain && !live_frame_designator_in_state(&eval.frames, &args[2]) {
+    if !copy_defaults_domain && !live_frame_designator_in_state(&eval.frame_manager(), &args[2]) {
         return Err(signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("frame-live-p"), args[2]],
@@ -3155,7 +3156,7 @@ pub fn builtin_internal_copy_lisp_face(
     }
     if !copy_defaults_domain
         && !args[3].is_nil()
-        && !live_frame_designator_in_state(&eval.frames, &args[3])
+        && !live_frame_designator_in_state(&eval.frame_manager(), &args[3])
     {
         return Err(signal(
             LispCondition::WrongTypeArgument,
@@ -3251,7 +3252,7 @@ pub fn builtin_internal_set_lisp_face_attribute(
         && !frame.is_nil()
         && !frame.is_t()
         && frame.as_fixnum() != Some(0)
-        && !live_frame_designator_in_state(&eval.frames, frame)
+        && !live_frame_designator_in_state(&eval.frame_manager(), frame)
     {
         return Err(signal(
             LispCondition::WrongTypeArgument,
@@ -3299,8 +3300,8 @@ pub fn builtin_internal_set_lisp_face_attribute(
                 None
             } else {
                 Some(match args.get(3) {
-                    Some(v) if v.as_fixnum() == Some(0) => eval.frames.frame_list(),
-                    Some(frame) if live_frame_designator_in_state(&eval.frames, frame) => {
+                    Some(v) if v.as_fixnum() == Some(0) => eval.frame_manager().frame_list(),
+                    Some(frame) if live_frame_designator_in_state(&eval.frame_manager(), frame) => {
                         frame_id_from_designator(frame)
                             .map(|frame_id| vec![frame_id])
                             .unwrap_or_default()
@@ -3312,7 +3313,7 @@ pub fn builtin_internal_set_lisp_face_attribute(
                 && let Some(frame_ids) = live_frame_ids.as_mut()
             {
                 frame_ids.retain(|frame_id| {
-                    eval.frames.get(*frame_id).is_some_and(|frame| {
+                    eval.frame_manager().get(*frame_id).is_some_and(|frame| {
                         FrameFontRealization::for_frame(frame).stores_face_font_attributes()
                     })
                 });
@@ -3743,7 +3744,7 @@ pub fn builtin_internal_get_lisp_face_attribute(
             false
         } else if frame.is_t() {
             true
-        } else if live_frame_designator_in_state(&eval.frames, frame) {
+        } else if live_frame_designator_in_state(&eval.frame_manager(), frame) {
             false
         } else {
             return Err(signal(
@@ -3772,7 +3773,7 @@ pub fn builtin_internal_get_lisp_face_attribute(
     let frame_id = match args.get(2) {
         None => Some(super::window_cmds::ensure_selected_frame_id(eval)),
         Some(v) if v.is_nil() => Some(super::window_cmds::ensure_selected_frame_id(eval)),
-        Some(frame) if live_frame_designator_in_state(&eval.frames, frame) => {
+        Some(frame) if live_frame_designator_in_state(&eval.frame_manager(), frame) => {
             frame_id_from_designator(frame)
         }
         _ => None,
@@ -4180,9 +4181,9 @@ fn graphic_color_target_frame_id(
     ctx: &neovm_eval::emacs_core::eval::Context,
     frame: Option<&Value>,
 ) -> Result<Option<FrameId>, Flow> {
-    let frame_id = selected_or_designated_live_frame_id(&ctx.frames, frame)?;
+    let frame_id = selected_or_designated_live_frame_id(&ctx.frame_manager(), frame)?;
     Ok(ctx
-        .frames
+        .frame_manager()
         .get(frame_id)
         .and_then(|frame| frame.effective_window_system())
         .filter(|window_system| super::display::gui_window_system_active_value(*window_system))
@@ -4416,7 +4417,7 @@ fn resolve_color_distance_rgb(
     // never an error; mirror that so a bare environment (e.g. unit tests
     // without term/tty-colors.el loaded, where the call may signal) falls back
     // to a coarse quantization instead of propagating the signal.
-    if ctx.obarray.fboundp("tty-color-desc")
+    if ctx.obarray().fboundp("tty-color-desc")
         && let Ok(desc) = ctx.funcall_general(Value::symbol("tty-color-desc"), vec![*value])
         && let Some(items) = list_to_vec(&desc)
         && items.len() >= 5
@@ -4686,7 +4687,7 @@ pub fn builtin_face_font(
     let frame_id = match args.get(1) {
         None => super::window_cmds::ensure_selected_frame_id(eval),
         Some(v) if v.is_nil() => super::window_cmds::ensure_selected_frame_id(eval),
-        Some(frame) if live_frame_designator_in_state(&eval.frames, frame) => {
+        Some(frame) if live_frame_designator_in_state(&eval.frame_manager(), frame) => {
             frame_id_from_designator(frame)
                 .expect("live frame designator should decode to frame id")
         }
@@ -4698,7 +4699,7 @@ pub fn builtin_face_font(
         }
     };
     let frame = eval
-        .frames
+        .frame_manager()
         .get(frame_id)
         .ok_or_else(|| signal("error", vec![Value::string("No selected frame")]))?;
     if frame.window_system.is_none() {

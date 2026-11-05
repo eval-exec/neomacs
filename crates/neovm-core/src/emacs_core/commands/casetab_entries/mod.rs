@@ -90,7 +90,7 @@ fn ensure_standard_case_table_for_context(
     // SAFETY: lazy standard-table creation only reads/stores a variable value;
     // it cannot call Lisp or publish canonical dispatch metadata or raw storage.
     unsafe {
-        ctx.obarray.with_legacy_value_write(|obarray| {
+        ctx.obarray_view_mut().with_legacy_value_write(|obarray| {
             ensure_standard_case_table_object_in_state_with_symbols(obarray, mode)
         })
     }
@@ -101,11 +101,11 @@ fn current_case_table_for_context(
     ctx: &mut crate::emacs_core::eval::Context,
     mode: SymbolMode,
 ) -> Result<Value, Flow> {
-    let buffers = &mut ctx.edit.buffers;
+    let (buffers, obarray_view) = ctx.buffers_and_obarray_view_mut();
     // SAFETY: this noncalling phase selects/seeds case-table Values and buffer
     // slots, without changing function/debugger metadata or escaping a loan.
     unsafe {
-        ctx.obarray.with_legacy_value_write(|obarray| {
+        obarray_view.with_legacy_value_write(|obarray| {
             current_case_table_for_buffer_in_state_with_symbols(obarray, buffers, mode)
         })
     }

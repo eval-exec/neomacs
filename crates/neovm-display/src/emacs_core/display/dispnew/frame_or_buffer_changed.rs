@@ -86,11 +86,11 @@ struct FrameBufferState {
 
 impl FrameBufferState {
     fn capture(eval: &Context) -> Self {
-        let frames = eval.frames.frame_list();
+        let frames = eval.frame_manager().frame_list();
         let buffers = eval.edit.buffers.buffer_list();
         let mut entries = Vec::with_capacity(frames.len() * 2 + buffers.len() * 3);
         for frame_id in &frames {
-            if let Some(frame) = eval.frames.get(*frame_id) {
+            if let Some(frame) = eval.frame_manager().get(*frame_id) {
                 entries.push(StateEntry::Frame {
                     id: *frame_id,
                     name: frame.name_value(),

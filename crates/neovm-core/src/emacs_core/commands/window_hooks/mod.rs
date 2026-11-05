@@ -41,7 +41,7 @@ fn expect_optional_live_frame_designator(
     value: &Value,
     eval: &crate::emacs_core::eval::Context,
 ) -> Result<(), Flow> {
-    expect_optional_live_frame_designator_in_state(value, &eval.frames)
+    expect_optional_live_frame_designator_in_state(value, &eval.frame_manager())
 }
 
 pub(crate) fn expect_optional_live_frame_designator_in_state(
@@ -66,9 +66,12 @@ pub(crate) fn expect_optional_live_frame_designator_in_state(
 }
 
 fn save_hook_caller_context(eval: &crate::emacs_core::eval::Context) -> HookCallerContextState {
-    let selected_frame_id = eval.frames.selected_frame().map(|frame| frame.id);
-    let selected_window_id = selected_frame_id
-        .and_then(|frame_id| eval.frames.get(frame_id).map(|frame| frame.selected_window));
+    let selected_frame_id = eval.frame_manager().selected_frame().map(|frame| frame.id);
+    let selected_window_id = selected_frame_id.and_then(|frame_id| {
+        eval.frame_manager()
+            .get(frame_id)
+            .map(|frame| frame.selected_window)
+    });
     HookCallerContextState {
         selected_frame_id,
         selected_window_id,
@@ -81,9 +84,9 @@ fn select_frame_window_for_hook_context(
     frame_id: neovm_value::display_vocab::FrameId,
     window_id: neovm_edit::emacs_core::display_metrics::WindowId,
 ) -> EvalResult {
-    let _ = eval.frames.select_frame(frame_id);
+    let _ = eval.frame_manager_mut().select_frame(frame_id);
     eval.sync_keyboard_terminal_owner();
-    if let Some(frame) = eval.frames.get_mut(frame_id) {
+    if let Some(frame) = eval.frame_manager_mut().get_mut(frame_id) {
         let _ = frame.select_window(window_id);
     }
     if let Some(buffer_id) = window_buffer_id_in_state(eval, frame_id, window_id) {
@@ -98,12 +101,12 @@ fn restore_hook_caller_context(
 ) -> EvalResult {
     if let Some(frame_id) = saved
         .selected_frame_id
-        .filter(|frame_id| eval.frames.get(*frame_id).is_some())
+        .filter(|frame_id| eval.frame_manager().get(*frame_id).is_some())
     {
-        let _ = eval.frames.select_frame(frame_id);
+        let _ = eval.frame_manager_mut().select_frame(frame_id);
         eval.sync_keyboard_terminal_owner();
         if let Some(window_id) = saved.selected_window_id
-            && let Some(frame) = eval.frames.get_mut(frame_id)
+            && let Some(frame) = eval.frame_manager_mut().get_mut(frame_id)
         {
             let _ = frame.select_window(window_id);
         }
@@ -243,11 +246,14 @@ fn run_window_default_hook_value(
 
     let saved = save_hook_caller_context(eval);
     let result = (|| -> EvalResult {
-        let selected_window = eval.frames.get(frame_id).map(|frame| frame.selected_window);
+        let selected_window = eval
+            .frame_manager()
+            .get(frame_id)
+            .map(|frame| frame.selected_window);
         if let Some(selected_window) = selected_window {
             select_frame_window_for_hook_context(eval, frame_id, selected_window)?;
         } else {
-            let _ = eval.frames.select_frame(frame_id);
+            let _ = eval.frame_manager_mut().select_frame(frame_id);
             eval.sync_keyboard_terminal_owner();
             crate::emacs_core::frame::sync_gui_frame_focus_redirects(eval)?;
         }
@@ -287,12 +293,12 @@ pub(crate) fn run_redisplay_window_change_hooks(
 fn run_redisplay_window_change_hooks_inner(
     eval: &mut crate::emacs_core::eval::Context,
 ) -> EvalResult {
-    let frame_ids = eval.frames.frame_list();
-    let selected_frame_id = eval.frames.selected_frame().map(|frame| frame.id);
+    let frame_ids = eval.frame_manager().frame_list();
+    let selected_frame_id = eval.frame_manager().selected_frame().map(|frame| frame.id);
     let mut plans = Vec::new();
 
     for frame_id in &frame_ids {
-        let Some(frame) = eval.frames.get(*frame_id) else {
+        let Some(frame) = eval.frame_manager().get(*frame_id) else {
             continue;
         };
         let previous_record = frame.window_hook_record.clone();
@@ -373,7 +379,7 @@ fn run_redisplay_window_change_hooks_inner(
 
     let mut run_window_state_change_hook = false;
     for plan in &plans {
-        if eval.frames.get(plan.frame_id).is_none() {
+        if eval.frame_manager().get(plan.frame_id).is_none() {
             continue;
         }
         run_window_local_hook_values(
@@ -440,7 +446,7 @@ fn run_redisplay_window_change_hooks_inner(
         // is the redisplay-driven home of the hook -- so in batch (no
         // redisplay) it never fires from bare `split-window'/`delete-window',
         // matching GNU.
-        if plan.frame_configuration_change && eval.frames.get(plan.frame_id).is_some() {
+        if plan.frame_configuration_change && eval.frame_manager().get(plan.frame_id).is_some() {
             let _ = builtin_run_window_configuration_change_hook(
                 eval,
                 vec![Value::make_frame(plan.frame_id.0)],
@@ -452,10 +458,10 @@ fn run_redisplay_window_change_hooks_inner(
         let _ = hook_runtime::safe_run_named_hook(eval, window_state_change_hook, &[])?;
     }
 
-    let selected_frame_id = eval.frames.selected_frame().map(|frame| frame.id);
+    let selected_frame_id = eval.frame_manager().selected_frame().map(|frame| frame.id);
     for frame_id in frame_ids {
         let was_selected_frame = selected_frame_id == Some(frame_id);
-        if let Some(frame) = eval.frames.get_mut(frame_id) {
+        if let Some(frame) = eval.frame_manager_mut().get_mut(frame_id) {
             // GNU `window_change_record` (`src/window.c:3954-3990`)
             // records the current selected_window into
             // `frame->old_selected_window` exactly here, after
@@ -498,7 +504,7 @@ pub(crate) fn expect_optional_live_window_designator(
     if value.is_window()
         && let Some(wid) = value.as_window_id()
         && eval
-            .frames
+            .frame_manager()
             .is_live_window_id(neovm_edit::emacs_core::display_metrics::WindowId(wid))
     {
         return Ok(());
@@ -526,12 +532,11 @@ pub(crate) fn builtin_run_window_configuration_change_hook(
     if let Some(frame) = args.first() {
         expect_optional_live_frame_designator(frame, eval)?;
     }
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     let frame = match args.first().copied().unwrap_or(Value::NIL).kind() {
-        ValueKind::Nil => crate::emacs_core::window_cmds::selected_frame_impl(
-            &mut eval.frames,
-            &mut eval.edit.buffers,
-            vec![],
-        )?,
+        ValueKind::Nil => {
+            crate::emacs_core::window_cmds::selected_frame_impl(frames, buffers, vec![])?
+        }
         _value => args.first().copied().unwrap_or(Value::NIL),
     };
     let Some(fid) = frame.as_frame_id() else {
@@ -541,7 +546,7 @@ pub(crate) fn builtin_run_window_configuration_change_hook(
     if crate::emacs_core::eval::gnu_redisplay_hooks_enabled() {
         return redisplay_gnu::run_configuration(eval, frame_id);
     }
-    let Some(frame_state) = eval.frames.get(frame_id) else {
+    let Some(frame_state) = eval.frame_manager().get(frame_id) else {
         return Ok(Value::NIL);
     };
 
@@ -748,7 +753,7 @@ impl LiveCurrentBufferPoint {
         let saved_current_buffer = snapshot.current_buffer?;
         eval.edit.buffers.get(saved_current_buffer)?;
 
-        let frame = eval.frames.get(snapshot.frame_id)?;
+        let frame = eval.frame_manager().get(snapshot.frame_id)?;
         // A dead saved-selected window has nil contents in GNU, so it can never
         // match `new_current_buffer`; `None` here takes the same branches.
         let saved_selected = frame
@@ -769,12 +774,12 @@ impl LiveCurrentBufferPoint {
             saved_selected.is_some_and(|(buffer_id, _)| buffer_id == saved_current_buffer);
 
         let live_selected_window = eval
-            .frames
+            .frame_manager()
             .selected_frame()
             .map(|frame| frame.selected_window);
         let live_selected_is_saved_selected =
             live_selected_window == Some(snapshot.selected_window);
-        let live_selected_buffer = eval.frames.selected_frame().and_then(|frame| {
+        let live_selected_buffer = eval.frame_manager().selected_frame().and_then(|frame| {
             frame
                 .find_window(frame.selected_window)
                 .or(frame.minibuffer_leaf.as_ref())
@@ -818,8 +823,8 @@ impl LiveCurrentBufferPoint {
         eval: &mut crate::emacs_core::eval::Context,
         frame_id: neovm_value::display_vocab::FrameId,
     ) {
-        let buffers = &mut eval.edit.buffers;
-        let Some(frame) = eval.frames.get_mut(frame_id) else {
+        let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+        let Some(frame) = frames.get_mut(frame_id) else {
             return;
         };
         let window = match frame.find_window_mut(self.window) {
@@ -927,11 +932,11 @@ fn prepare_saved_window_buffer_restoration(
     snapshot: &mut WindowConfigurationSnapshot,
 ) {
     let globally_selected_window = eval
-        .frames
+        .frame_manager()
         .selected_frame()
         .map(|frame| frame.selected_window);
     let current_buffers = eval
-        .frames
+        .frame_manager()
         .get(snapshot.frame_id)
         .map(|frame| {
             frame
@@ -1013,11 +1018,11 @@ fn prepare_reused_window_histories(
     collect_leaf_buffer_ids(&snapshot.tree, &mut saved_buffers);
 
     let globally_selected_window = eval
-        .frames
+        .frame_manager()
         .selected_frame()
         .map(|frame| frame.selected_window);
     let transitions = eval
-        .frames
+        .frame_manager()
         .get(snapshot.frame_id)
         .map(|frame| {
             frame
@@ -1077,7 +1082,7 @@ fn prepare_reused_window_histories(
             } => {
                 let run_buffer_list_hook = {
                     let (frames, buffers, minibuffers) =
-                        (&mut eval.frames, &eval.edit.buffers, &eval.minibuffers);
+                        eval.frame_manager_buffers_and_minibuffers_mut();
                     crate::emacs_core::window_cmds::record_window_buffer_change_history_in_state(
                         frames,
                         minibuffers,
@@ -1100,7 +1105,7 @@ fn prepare_reused_window_histories(
     }
 
     let live_histories = eval
-        .frames
+        .frame_manager()
         .get(snapshot.frame_id)
         .map(|frame| {
             frame
@@ -1136,7 +1141,7 @@ fn disconnected_window_point(
     outgoing: OutgoingWindowBuffer,
 ) -> DisconnectedWindowPoint {
     let selected_buffer_id = eval
-        .frames
+        .frame_manager()
         .selected_frame()
         .and_then(|frame| frame.find_window(frame.selected_window))
         .and_then(crate::window::Window::buffer_id);
@@ -1151,7 +1156,7 @@ fn disconnected_window_point(
         .and_then(|buffer| buffer.last_selected_window());
     if let Some(window_id) = last_selected_window
         && window_id != outgoing.window_id
-        && live_window_displays_buffer(&eval.frames, window_id, outgoing.buffer_id)
+        && live_window_displays_buffer(&eval.frame_manager(), window_id, outgoing.buffer_id)
     {
         return DisconnectedWindowPoint::PreserveLastSelectedWindow(window_id);
     }
@@ -1168,16 +1173,17 @@ fn unshow_frame_root_buffers(
 ) {
     // GNU first swaps the globally selected window's live buffer point into
     // its window marker.  The frame being restored need not be selected.
-    if let Some(selected_frame_id) = eval.frames.selected_frame().map(|frame| frame.id) {
+    if let Some(selected_frame_id) = eval.frame_manager().selected_frame().map(|frame| frame.id) {
+        let (frames, buffers) = eval.frame_manager_and_buffers_mut();
         crate::emacs_core::window_cmds::remember_selected_window_point_in_state(
-            &mut eval.frames,
-            &mut eval.edit.buffers,
+            frames,
+            buffers,
             selected_frame_id,
         );
     }
 
     let outgoing_windows = eval
-        .frames
+        .frame_manager()
         .get(frame_id)
         .map(|frame| {
             frame
@@ -1211,7 +1217,7 @@ fn unshow_frame_root_buffers(
             DisconnectedWindowPoint::PreserveSelectedBuffer => {}
             DisconnectedWindowPoint::PreserveLastSelectedWindow(window_id) => {
                 debug_assert!(live_window_displays_buffer(
-                    &eval.frames,
+                    &eval.frame_manager(),
                     window_id,
                     outgoing.buffer_id
                 ));
@@ -1585,23 +1591,17 @@ pub(crate) fn builtin_current_window_configuration(
     let frame = if let Some(frame) = args.first() {
         crate::emacs_core::window_hooks::expect_optional_live_frame_designator_in_state(
             frame,
-            &eval.frames,
+            &eval.frame_manager(),
         )?;
         if frame.is_nil() {
-            crate::emacs_core::window_cmds::selected_frame_impl(
-                &mut eval.frames,
-                &mut eval.edit.buffers,
-                vec![],
-            )?
+            let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+            crate::emacs_core::window_cmds::selected_frame_impl(frames, buffers, vec![])?
         } else {
             *frame
         }
     } else {
-        crate::emacs_core::window_cmds::selected_frame_impl(
-            &mut eval.frames,
-            &mut eval.edit.buffers,
-            vec![],
-        )?
+        let (frames, buffers) = eval.frame_manager_and_buffers_mut();
+        crate::emacs_core::window_cmds::selected_frame_impl(frames, buffers, vec![])?
     };
 
     if !frame.is_frame() {
@@ -1619,30 +1619,35 @@ pub(crate) fn builtin_current_window_configuration(
         ));
     };
     let frame_id = neovm_value::display_vocab::FrameId(fid);
-    if let Some(frame_state) = eval.frames.get(frame_id) {
+    // Read the Lisp-visible persistent-parameter list before borrowing the
+    // managers; the clone step below only allocates markers and runs no Lisp,
+    // so the value is the same one GNU reads at snapshot time.
+    let persistent_parameters = eval
+        .variable_value_by_name("window-persistent-parameters")
+        .unwrap_or(Value::NIL);
+    let (frames, buffers) = eval.frame_manager_read_and_buffers_mut();
+    if let Some(frame_state) = frames.get(frame_id) {
         let mut snapshot = WindowConfigurationSnapshot {
             frame_id,
             change_stamp: frame_state.change_stamp,
             tree:
                 crate::window::window_markers::clone_window_tree_with_independent_position_markers(
-                    &mut eval.edit.buffers,
+                    buffers,
                     frame_state.tree(),
                 ),
             selected_window: frame_state.selected_window,
-            current_buffer: eval.edit.buffers.current_buffer_id(),
+            current_buffer: buffers.current_buffer_id(),
             minibuffer_window: frame_state.minibuffer_window,
             minibuffer_leaf: frame_state.minibuffer_leaf.as_ref().map(|window| {
                 crate::window::window_markers::clone_window_leaf_with_independent_position_markers(
-                    &mut eval.edit.buffers,
-                    window,
+                    buffers, window,
                 )
             }),
         };
-        normalize_selected_window_point_in_snapshot(&mut snapshot, &mut eval.edit.buffers);
+        normalize_selected_window_point_in_snapshot(&mut snapshot, buffers);
         save_snapshot_persistent_window_parameters(
             &mut snapshot,
-            eval.variable_value_by_name("window-persistent-parameters")
-                .unwrap_or(Value::NIL),
+            persistent_parameters,
             symbol_mode,
         );
         let roots = window_configuration_snapshot_roots(&snapshot);
@@ -1687,9 +1692,10 @@ pub(crate) fn set_window_configuration_with_options(
     );
 
     if let Some(snapshot) = snapshot {
-        let selected_frame_before_restore = eval.frames.selected_frame().map(|frame| frame.id);
+        let selected_frame_before_restore =
+            eval.frame_manager().selected_frame().map(|frame| frame.id);
         let live_parameters = eval
-            .frames
+            .frame_manager()
             .get(snapshot.frame_id)
             .map(collect_frame_window_parameters)
             .unwrap_or_default();
@@ -1705,7 +1711,7 @@ pub(crate) fn set_window_configuration_with_options(
         // GNU fset_redisplay precedes restoring the window tree.
         eval.gnu_mark_frame_redisplay(snapshot.frame_id);
         unshow_frame_root_buffers(eval, snapshot.frame_id);
-        if let Some(frame) = eval.frames.get_mut(snapshot.frame_id) {
+        if let Some(frame) = eval.frame_manager_mut().get_mut(snapshot.frame_id) {
             // GNU set-window-configuration disconnects/reconnects root-tree
             // leaves through wset_buffer; adjust_window_count invalidates their
             // base_line_pos. A saved tree must never replay an earlier counter.
@@ -1742,13 +1748,13 @@ pub(crate) fn set_window_configuration_with_options(
                 frame.minibuffer_leaf = snapshot.minibuffer_leaf;
             }
         }
-        eval.frames.mark_window_topology_changed();
+        eval.frame_manager_mut().mark_window_topology_changed();
         // GNU `Fset_window_configuration` (window.c) substitutes a live buffer via
         // `other_buffer_safely` for any restored window whose saved buffer was
         // killed, instead of leaving a dead buffer in the window (which would
         // signal "Selecting deleted buffer" on the next redisplay).
         let dead_leaf_windows: Vec<neovm_edit::emacs_core::display_metrics::WindowId> = eval
-            .frames
+            .frame_manager()
             .get(snapshot.frame_id)
             .map(|frame| {
                 frame
@@ -1774,9 +1780,10 @@ pub(crate) fn set_window_configuration_with_options(
                 .current_buffer_id()
                 .map(Value::make_buffer)
                 .unwrap_or(Value::NIL);
+            let (frames, buffers) = eval.frame_manager_and_buffers_mut();
             let substitute = crate::emacs_core::buffer_ops::other_buffer_impl_in_state(
-                &mut eval.frames,
-                &mut eval.edit.buffers,
+                frames,
+                buffers,
                 vec![avoid, Value::NIL, Value::NIL],
             )
             .ok()
@@ -1792,7 +1799,7 @@ pub(crate) fn set_window_configuration_with_options(
                         )
                     })
                     .unwrap_or(LispCharPos1::ONE);
-                let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
+                let (frames, buffers) = eval.frame_manager_and_buffers_mut();
                 if let Some(frame) = frames.get_mut(snapshot.frame_id) {
                     for wid in dead_leaf_windows {
                         if let Some(window) = frame.find_window_mut(wid) {
@@ -1826,16 +1833,19 @@ pub(crate) fn set_window_configuration_with_options(
         // the saved window -- so the buffer point derived from that window
         // below sees the live position too.
         live_current_buffer_point.apply(eval, snapshot.frame_id);
-        let selected_window_state = eval.frames.get(snapshot.frame_id).and_then(|frame| {
-            frame
-                .find_window(frame.selected_window)
-                .and_then(|window| match window {
-                    crate::window::Window::Leaf {
-                        buffer_id, point, ..
-                    } => Some((*buffer_id, *point)),
-                    crate::window::Window::Internal { .. } => None,
-                })
-        });
+        let selected_window_state = eval
+            .frame_manager()
+            .get(snapshot.frame_id)
+            .and_then(|frame| {
+                frame
+                    .find_window(frame.selected_window)
+                    .and_then(|window| match window {
+                        crate::window::Window::Leaf {
+                            buffer_id, point, ..
+                        } => Some((*buffer_id, *point)),
+                        crate::window::Window::Internal { .. } => None,
+                    })
+            });
         if let Some((buffer_id, point)) = selected_window_state
             && let Some(buffer) = eval.edit.buffers.get(buffer_id)
         {
@@ -1868,7 +1878,7 @@ pub(crate) fn set_window_configuration_with_options(
             SelectedFrameRestoration::KeepSelected => selected_frame_before_restore,
         };
         if let Some(frame_id) = frame_to_select {
-            let _ = eval.frames.select_frame(frame_id);
+            let _ = eval.frame_manager_mut().select_frame(frame_id);
         }
         // The restored configuration is accepted; a host that cannot apply
         // its focus redirects must not cancel the redisplay request below.

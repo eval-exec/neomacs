@@ -5,11 +5,19 @@ fn void_default_signals_after_callback_and_records_on_unwind() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::new_context();
     let frame = crate::emacs_core::window_cmds::ensure_selected_frame_id_in_state(
-        &mut eval.frames,
+        &mut eval.frame_manager(),
         &mut eval.buffers,
     );
-    let selected_window = eval.frames.get(frame).expect("live frame").selected_window;
-    let stamp = eval.frames.get(frame).expect("live frame").change_stamp;
+    let selected_window = eval
+        .frame_manager()
+        .get(frame)
+        .expect("live frame")
+        .selected_window;
+    let stamp = eval
+        .frame_manager()
+        .get(frame)
+        .expect("live frame")
+        .change_stamp;
     for name in [
         "window-buffer-change-functions",
         "window-size-change-functions",
@@ -19,14 +27,14 @@ fn void_default_signals_after_callback_and_records_on_unwind() {
         "window-state-change-hook",
         "inhibit-redisplay",
     ] {
-        eval.obarray.set_symbol_value(name, Value::NIL);
+        eval.obarray().set_symbol_value(name, Value::NIL);
     }
-    eval.obarray
+    eval.obarray()
         .set_symbol_value("d5-default-hook-calls", Value::fixnum(0));
     let callback = eval
         .eval_str("(lambda (_frame) (setq d5-default-hook-calls (1+ d5-default-hook-calls)))")
         .expect("callback lambda");
-    eval.obarray.set_symbol_value(
+    eval.obarray().set_symbol_value(
         "window-buffer-change-functions",
         Value::cons(callback, Value::NIL),
     );
@@ -34,7 +42,7 @@ fn void_default_signals_after_callback_and_records_on_unwind() {
     // 1799-1808). Use an ordinary Lisp variable to exercise the same generic
     // default reader without manufacturing an invalid built-in value cell.
     let void_hook = "d5-void-default-hook";
-    eval.obarray.makunbound(void_hook);
+    eval.obarray().makunbound(void_hook);
     assert!(
         crate::emacs_core::data::default_value_by_id(
             &eval,
@@ -83,15 +91,18 @@ fn void_default_signals_after_callback_and_records_on_unwind() {
     );
     assert_eq!(signal.data, vec![Value::symbol(void_hook)]);
     assert_eq!(
-        eval.obarray.symbol_value_copied("d5-default-hook-calls"),
+        eval.obarray().symbol_value_copied("d5-default-hook-calls"),
         Some(Value::fixnum(1))
     );
     assert_eq!(
-        eval.frames.get(frame).expect("live frame").change_stamp,
+        eval.frame_manager()
+            .get(frame)
+            .expect("live frame")
+            .change_stamp,
         stamp.next()
     );
     assert_eq!(
-        eval.frames
+        eval.frame_manager()
             .get(frame)
             .expect("live frame")
             .old_selected_window,
@@ -115,7 +126,7 @@ fn void_default_signals_after_callback_and_records_on_unwind() {
     );
     assert_eq!(eval.specpdl.len(), bindings);
     assert_eq!(
-        eval.obarray.symbol_value_copied("inhibit-redisplay"),
+        eval.obarray().symbol_value_copied("inhibit-redisplay"),
         Some(Value::NIL)
     );
 }

@@ -59,7 +59,7 @@ fn plan_call_interactively_for_test(
     let interactive_form =
         crate::emacs_core::builtins::symbols::builtin_interactive_form(eval, vec![args[0]])?;
     plan_call_interactively_after_interactive_form_in_state(
-        &eval.obarray,
+        &eval.obarray(),
         eval.read_command_keys(),
         args,
         interactive_form,
@@ -499,7 +499,7 @@ fn call_interactively_evaluates_registry_form_specs() {
         .expect("install registry-form-command");
 
     let sym = crate::emacs_core::intern::intern("registry-form-command");
-    ev.interactive.register_interactive(
+    ev.interactive_mut().register_interactive(
         sym,
         InteractiveSpec::from_value(Value::list(vec![Value::symbol("list"), Value::fixnum(7)])),
     );
@@ -607,7 +607,7 @@ fn defalias_replaces_stale_noarg_registry_spec_with_live_interactive_form() {
     crate::test_utils::init_test_tracing();
     let mut ev = eval_with_interactive_shims();
     let sym = crate::emacs_core::intern::intern("vm-stale-interactive-form");
-    ev.interactive
+    ev.interactive_mut()
         .register_interactive(sym, InteractiveSpec::no_args());
 
     ev.eval_str(
@@ -727,10 +727,10 @@ fn commandp_reads_each_function_cell_once() {
     let mut ev = crate::test_utils::new_context();
     let command = intern("forward-char");
 
-    ev.obarray.reset_symbol_slot_read_count();
+    ev.obarray().reset_symbol_slot_read_count();
     assert_eq!(
         classify_command_designator_in_state(
-            &ev.obarray,
+            &ev.obarray(),
             &Value::from_sym_id(command),
             false,
             crate::tagged::SymbolMode::Bare
@@ -738,18 +738,18 @@ fn commandp_reads_each_function_cell_once() {
         CommandpClassification::Interactive
     );
     assert_eq!(
-        ev.obarray.symbol_slot_read_count(),
+        ev.obarray().symbol_slot_read_count(),
         1,
         "one symbol alias hop must take one typed function-cell snapshot"
     );
 
     let alias = intern("neo-commandp-function-cell-snapshot-alias");
-    ev.obarray
+    ev.obarray_view_mut()
         .set_symbol_function_id(alias, Value::from_sym_id(command));
-    ev.obarray.reset_symbol_slot_read_count();
+    ev.obarray().reset_symbol_slot_read_count();
     assert_eq!(
         classify_command_designator_in_state(
-            &ev.obarray,
+            &ev.obarray(),
             &Value::from_sym_id(alias),
             false,
             crate::tagged::SymbolMode::Bare
@@ -757,7 +757,7 @@ fn commandp_reads_each_function_cell_once() {
         CommandpClassification::Interactive
     );
     assert_eq!(
-        ev.obarray.symbol_slot_read_count(),
+        ev.obarray().symbol_slot_read_count(),
         2,
         "a two-symbol alias chain must take exactly two typed snapshots"
     );
@@ -772,7 +772,7 @@ fn commandp_reads_interactivity_from_the_subr_object() {
     crate::test_utils::init_test_tracing();
     let ev = crate::test_utils::new_context();
     let function = ev
-        .obarray
+        .obarray()
         .symbol_function_id(intern("forward-char"))
         .expect("forward-char should have a primitive function cell");
     assert_eq!(function.veclike_type(), Some(VecLikeType::Subr));
@@ -1067,7 +1067,7 @@ fn commandp_true_for_registered_rust_editing_commands() {
         "recenter",
     ] {
         assert!(
-            ev.obarray
+            ev.obarray()
                 .symbol_function(name)
                 .is_some_and(|function| function.is_subr()),
             "{name} must be a registered Rust subr"
@@ -1110,7 +1110,7 @@ fn bookmark_commands_startup_are_autoloaded() {
     let ev = eval_with_ldefs_boot_autoloads(&names);
     for name in names {
         let function = ev
-            .obarray
+            .obarray()
             .symbol_function(name)
             .unwrap_or_else(|| panic!("missing {name} startup function cell"));
         assert!(
@@ -1137,7 +1137,7 @@ fn rectangle_commands_startup_are_autoloaded() {
     let ev = eval_with_ldefs_boot_autoloads(&names);
     for name in names {
         let function = ev
-            .obarray
+            .obarray()
             .symbol_function(name)
             .unwrap_or_else(|| panic!("missing {name} startup function cell"));
         assert!(
@@ -1299,7 +1299,7 @@ fn upcase_char_startup_is_autoloaded() {
     crate::test_utils::init_test_tracing();
     let ev = eval_with_ldefs_boot_autoloads(&["upcase-char"]);
     let function = ev
-        .obarray
+        .obarray()
         .symbol_function("upcase-char")
         .expect("missing upcase-char startup function cell");
     assert!(crate::emacs_core::autoload::is_autoload_value(
@@ -1358,7 +1358,7 @@ fn kmacro_name_last_macro_startup_is_autoloaded() {
     // during bootstrap -- not via the autoload-only loader.
     let mut ev = eval_with_ldefs_boot_autoloads(&["kmacro-name-last-macro"]);
     let function = ev
-        .obarray
+        .obarray()
         .symbol_function("kmacro-name-last-macro")
         .expect("missing kmacro-name-last-macro startup function cell");
     assert!(
@@ -1379,7 +1379,7 @@ fn raw_context_does_not_prebind_kmacro_name_aliases() {
     let ev = crate::test_utils::new_context();
     for name in ["kmacro-name-last-macro", "name-last-kbd-macro"] {
         assert!(
-            ev.obarray.symbol_function_id(intern(name)).is_none(),
+            ev.obarray().symbol_function_id(intern(name)).is_none(),
             "{name} should come from GNU ldefs-boot/kmacro Lisp, not Context::new"
         );
     }
@@ -1404,7 +1404,7 @@ fn ldefs_boot_aliases_name_last_kbd_macro_to_kmacro_name_last_macro() {
     );
 
     let kmacro = ev
-        .obarray
+        .obarray()
         .symbol_function("kmacro-name-last-macro")
         .expect("kmacro-name-last-macro autoload");
     assert!(
@@ -1412,7 +1412,7 @@ fn ldefs_boot_aliases_name_last_kbd_macro_to_kmacro_name_last_macro() {
         "GNU ldefs-boot should install kmacro-name-last-macro as an autoload"
     );
     assert_eq!(
-        ev.obarray.symbol_function("name-last-kbd-macro"),
+        ev.obarray().symbol_function("name-last-kbd-macro"),
         Some(Value::symbol("kmacro-name-last-macro"))
     );
 }
@@ -1467,7 +1467,7 @@ fn commandp_true_for_additional_registered_rust_commands() {
         "x-menu-bar-open-internal",
     ] {
         assert!(
-            ev.obarray
+            ev.obarray()
                 .symbol_function(name)
                 .is_some_and(|function| function.is_subr()),
             "{name} must be a registered Rust subr"
@@ -1579,12 +1579,13 @@ fn commandp_rejects_overflow_arity() {
 fn commandp_resolves_aliases_and_symbol_designators() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
-    ev.obarray
+    ev.obarray_view_mut()
         .set_symbol_function("t", Value::symbol("forward-char"));
-    ev.obarray
+    ev.obarray_view_mut()
         .set_symbol_function(":vm-command-alias-keyword", Value::symbol("forward-char"));
-    ev.obarray.set_symbol_function("vm-command-alias", Value::T);
-    ev.obarray.set_symbol_function(
+    ev.obarray_view_mut()
+        .set_symbol_function("vm-command-alias", Value::T);
+    ev.obarray_view_mut().set_symbol_function(
         "vm-command-alias-keyword",
         Value::keyword(":vm-command-alias-keyword"),
     );
@@ -1610,7 +1611,7 @@ fn commandp_ignores_registry_metadata_for_an_unbound_symbol() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
     let symbol = crate::emacs_core::intern::intern("neovm--stale-command-metadata");
-    ev.interactive
+    ev.interactive_mut()
         .register_interactive(symbol, InteractiveSpec::no_args());
 
     let result = builtin_commandp_interactive(&mut ev, &[Value::from_sym_id(symbol)])
@@ -1650,7 +1651,7 @@ fn commandp_true_for_quoted_lambda_with_interactive_form() {
 fn call_interactively_state_resolution_defers_motion_but_handles_noarg_cases() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
-    ev.obarray
+    ev.obarray()
         .set_symbol_value("current-prefix-arg", Value::list(vec![Value::fixnum(4)]));
 
     let mut builtin_plan =
@@ -1664,7 +1665,7 @@ fn call_interactively_state_resolution_defers_motion_but_handles_noarg_cases() {
         // no-argument cases; Lisp/prompting cases are deferred. Its writes are
         // buffer/runtime Values, not function or canonical descriptor metadata.
         // No collection, replacement or manager/interior borrow can escape.
-        ev.obarray.with_legacy_value_write(|obarray| {
+        ev.obarray_view_mut().with_legacy_value_write(|obarray| {
             resolve_call_interactively_target_and_args_in_state(
                 VariableView::canonical(CanonicalAccess::TEST, obarray),
                 &mut Vec::new(),
@@ -1694,7 +1695,7 @@ fn call_interactively_state_resolution_defers_motion_but_handles_noarg_cases() {
         // no-argument cases; Lisp/prompting cases are deferred. Its writes are
         // buffer/runtime Values, not function or canonical descriptor metadata.
         // No collection, replacement or manager/interior borrow can escape.
-        ev.obarray.with_legacy_value_write(|obarray| {
+        ev.obarray_view_mut().with_legacy_value_write(|obarray| {
             resolve_call_interactively_target_and_args_in_state(
                 VariableView::canonical(CanonicalAccess::TEST, obarray),
                 &mut Vec::new(),
@@ -1727,7 +1728,7 @@ fn call_interactively_state_resolution_defers_prompting_specs_to_eval() {
         // no-argument cases; Lisp/prompting cases are deferred. Its writes are
         // buffer/runtime Values, not function or canonical descriptor metadata.
         // No collection, replacement or manager/interior borrow can escape.
-        ev.obarray.with_legacy_value_write(|obarray| {
+        ev.obarray_view_mut().with_legacy_value_write(|obarray| {
             resolve_call_interactively_target_and_args_in_state(
                 VariableView::canonical(CanonicalAccess::TEST, obarray),
                 &mut Vec::new(),
@@ -1746,7 +1747,7 @@ fn call_interactively_state_resolution_defers_prompting_specs_to_eval() {
 fn call_interactively_state_resolution_handles_simple_string_codes_without_eval() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
-    ev.obarray
+    ev.obarray()
         .set_symbol_value("current-prefix-arg", Value::list(vec![Value::fixnum(4)]));
     let current = ev.buffers.current_buffer_id().expect("current buffer");
     let _ = ev.buffers.replace_buffer_contents(current, "abcd");
@@ -1780,7 +1781,7 @@ fn call_interactively_state_resolution_handles_simple_string_codes_without_eval(
         // no-argument cases; Lisp/prompting cases are deferred. Its writes are
         // buffer/runtime Values, not function or canonical descriptor metadata.
         // No collection, replacement or manager/interior borrow can escape.
-        ev.obarray.with_legacy_value_write(|obarray| {
+        ev.obarray_view_mut().with_legacy_value_write(|obarray| {
             resolve_call_interactively_target_and_args_in_state(
                 VariableView::canonical(CanonicalAccess::TEST, obarray),
                 &mut Vec::new(),
@@ -1818,9 +1819,9 @@ fn call_interactively_state_resolution_defers_shift_selection_without_effects() 
     let _ = ev
         .buffers
         .goto_buffer_emacs_byte_pos(current, crate::buffer::EmacsBytePos::new(2));
-    ev.obarray
+    ev.obarray()
         .set_symbol_value("this-command-keys-shift-translated", Value::T);
-    ev.obarray.set_symbol_value("shift-select-mode", Value::T);
+    ev.obarray().set_symbol_value("shift-select-mode", Value::T);
 
     let lambda = ev
         .eval_str("(lambda (pt) (interactive \"^d\") pt)")
@@ -1835,7 +1836,7 @@ fn call_interactively_state_resolution_defers_shift_selection_without_effects() 
         // no-argument cases; Lisp/prompting cases are deferred. Its writes are
         // buffer/runtime Values, not function or canonical descriptor metadata.
         // No collection, replacement or manager/interior borrow can escape.
-        ev.obarray.with_legacy_value_write(|obarray| {
+        ev.obarray_view_mut().with_legacy_value_write(|obarray| {
             resolve_call_interactively_target_and_args_in_state(
                 VariableView::canonical(CanonicalAccess::TEST, obarray),
                 &mut Vec::new(),
@@ -1871,7 +1872,7 @@ fn call_interactively_state_resolution_handles_optional_coding_without_prefix() 
         // no-argument cases; Lisp/prompting cases are deferred. Its writes are
         // buffer/runtime Values, not function or canonical descriptor metadata.
         // No collection, replacement or manager/interior borrow can escape.
-        ev.obarray.with_legacy_value_write(|obarray| {
+        ev.obarray_view_mut().with_legacy_value_write(|obarray| {
             resolve_call_interactively_target_and_args_in_state(
                 VariableView::canonical(CanonicalAccess::TEST, obarray),
                 &mut Vec::new(),
@@ -1941,9 +1942,9 @@ fn interactive_p_false_by_default() {
 fn interactive_p_nil_when_interactive() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
-    ev.interactive.push_interactive_call(true);
+    ev.interactive_mut().push_interactive_call(true);
     let result = builtin_interactive_p(&mut ev, vec![]);
-    ev.interactive.pop_interactive_call();
+    ev.interactive_mut().pop_interactive_call();
     assert!(result.unwrap().is_nil());
 }
 
@@ -1967,9 +1968,9 @@ fn called_interactively_p_with_kind() {
 fn called_interactively_p_kind_interactive_is_nil_when_interactive() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
-    ev.interactive.push_interactive_call(true);
+    ev.interactive_mut().push_interactive_call(true);
     let result = builtin_called_interactively_p(&mut ev, vec![Value::symbol("interactive")]);
-    ev.interactive.pop_interactive_call();
+    ev.interactive_mut().pop_interactive_call();
     assert!(result.unwrap().is_nil());
 }
 
@@ -1977,9 +1978,9 @@ fn called_interactively_p_kind_interactive_is_nil_when_interactive() {
 fn called_interactively_p_kind_any_is_t_when_interactive() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
-    ev.interactive.push_interactive_call(true);
+    ev.interactive_mut().push_interactive_call(true);
     let result = builtin_called_interactively_p(&mut ev, vec![Value::symbol("any")]);
-    ev.interactive.pop_interactive_call();
+    ev.interactive_mut().pop_interactive_call();
     assert!(result.unwrap().is_truthy());
 }
 
@@ -1987,9 +1988,9 @@ fn called_interactively_p_kind_any_is_t_when_interactive() {
 fn called_interactively_p_unknown_kind_is_t_when_interactive() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::new_context();
-    ev.interactive.push_interactive_call(true);
+    ev.interactive_mut().push_interactive_call(true);
     let result = builtin_called_interactively_p(&mut ev, vec![Value::symbol("foo")]);
-    ev.interactive.pop_interactive_call();
+    ev.interactive_mut().pop_interactive_call();
     assert!(result.unwrap().is_truthy());
 }
 
@@ -2636,9 +2637,9 @@ fn menu_bar_menu_at_x_y_prefers_pending_native_click_key() {
     crate::test_utils::init_test_tracing();
     let mut ev = eval_with_interactive_shims();
     let frame_id = ev
-        .frames
+        .frame_manager_mut()
         .create_frame("F1", 960, 640, crate::buffer::BufferId(1));
-    ev.frames.select_frame(frame_id);
+    ev.frame_manager_mut().select_frame(frame_id);
     ev.pending_menu_bar_popup_anchor = Some(crate::emacs_core::MenuBarPopupAnchor {
         request_id: None,
         frame_id,
@@ -3133,7 +3134,7 @@ fn thingatpt_startup_functions_are_autoloaded() {
         "symbol-at-point",
     ] {
         let function = ev
-            .obarray
+            .obarray()
             .symbol_function(name)
             .unwrap_or_else(|| panic!("missing startup function cell for {name}"));
         assert!(
@@ -3145,7 +3146,7 @@ fn thingatpt_startup_functions_are_autoloaded() {
         );
     }
 
-    assert!(!ev.obarray.fboundp("word-at-point"));
+    assert!(!ev.obarray().fboundp("word-at-point"));
 }
 
 #[test]
@@ -3738,7 +3739,7 @@ fn registered_builtin_interactive_spec_is_the_command_identity_source() {
     );
     let command = crate::emacs_core::intern::intern("neovm--typed-interactive-registration-test");
     assert!(
-        ev.interactive.get_spec(command).is_none(),
+        ev.interactive().get_spec(command).is_none(),
         "immutable Rust subr metadata must not leak into the mutable Lisp registry"
     );
 
@@ -3777,7 +3778,7 @@ fn registered_builtin_alias_resolves_command_identity_without_registry_copy() {
     );
     let alias = crate::emacs_core::intern::intern("neovm--typed-interactive-alias");
     assert!(
-        ev.interactive.get_spec(alias).is_none(),
+        ev.interactive().get_spec(alias).is_none(),
         "subr aliases must resolve immutable metadata through the function object"
     );
     assert_eq!(results[0], "OK (t (interactive \"P\"))");
@@ -4188,7 +4189,7 @@ fn command_execute_calls_function() {
         r#"(defvar exec-ran nil)
            (defun test-cmd () (setq exec-ran t))"#,
     );
-    ev.interactive.register_interactive(
+    ev.interactive_mut().register_interactive(
         crate::emacs_core::intern::intern("test-cmd"),
         InteractiveSpec::no_args(),
     );
@@ -4201,7 +4202,7 @@ fn command_execute_calls_function() {
         .unwrap();
     assert!(result.is_truthy());
 
-    let ran = ev.obarray.symbol_value_copied("exec-ran").unwrap();
+    let ran = ev.obarray().symbol_value_copied("exec-ran").unwrap();
     assert!(ran.is_truthy());
 }
 
@@ -5755,7 +5756,7 @@ fn where_is_internal_reuses_one_reverse_index_for_many_definitions() {
     );
 
     assert_eq!(results, ["OK ([97] [98])"]);
-    assert_eq!(eval.interactive.where_is_reverse_index_build_count(), 1);
+    assert_eq!(eval.interactive().where_is_reverse_index_build_count(), 1);
 }
 
 /// GNU's `Fwhere_is_internal` reads C globals such as
@@ -5822,9 +5823,9 @@ fn where_is_internal_answers_many_command_remappings_from_reverse_index() {
     );
 
     assert_eq!(results, ["OK ([97] [98])"]);
-    assert_eq!(eval.interactive.where_is_reverse_index_build_count(), 1);
+    assert_eq!(eval.interactive().where_is_reverse_index_build_count(), 1);
     assert_eq!(
-        eval.interactive
+        eval.interactive()
             .where_is_reverse_index_remapping_lookup_count(),
         2
     );
@@ -5845,7 +5846,7 @@ fn where_is_internal_rebuilds_reverse_index_after_keymap_mutation() {
     );
 
     assert_eq!(results, ["OK ([97] [98])"]);
-    assert_eq!(eval.interactive.where_is_reverse_index_build_count(), 2);
+    assert_eq!(eval.interactive().where_is_reverse_index_build_count(), 2);
 }
 
 #[test]
@@ -5864,7 +5865,7 @@ fn where_is_internal_rebuilds_indexed_remapping_after_keymap_mutation() {
     );
 
     assert_eq!(results, ["OK [98]"]);
-    assert_eq!(eval.interactive.where_is_reverse_index_build_count(), 2);
+    assert_eq!(eval.interactive().where_is_reverse_index_build_count(), 2);
 }
 
 #[test]
@@ -5882,7 +5883,7 @@ fn where_is_internal_does_not_reuse_reverse_index_for_different_keymaps() {
     );
 
     assert_eq!(results, ["OK ([97] [98])"]);
-    assert_eq!(eval.interactive.where_is_reverse_index_build_count(), 2);
+    assert_eq!(eval.interactive().where_is_reverse_index_build_count(), 2);
 }
 
 #[test]
@@ -5899,7 +5900,7 @@ fn where_is_internal_uncached_mode_clears_reverse_index_like_gnu() {
     );
 
     assert_eq!(results, ["OK [97]"]);
-    assert_eq!(eval.interactive.where_is_reverse_index_build_count(), 2);
+    assert_eq!(eval.interactive().where_is_reverse_index_build_count(), 2);
 }
 
 #[test]

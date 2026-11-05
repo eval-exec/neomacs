@@ -19,7 +19,7 @@ pub fn builtin_select_frame(eval: &mut Context, args: Vec<Value>) -> EvalResult 
     let id = frame
         .as_frame_id()
         .map(FrameId)
-        .filter(|id| eval.frames.get(*id).is_some())
+        .filter(|id| eval.frame_manager().get(*id).is_some())
         .ok_or_else(|| {
             signal(
                 LispCondition::WrongTypeArgument,
@@ -69,10 +69,10 @@ fn switch_frame(
     norecord: Value,
     focus_tracking: FrameFocusTracking,
 ) -> EvalResult {
-    let Some(frame) = eval.frames.get(id) else {
+    let Some(frame) = eval.frame_manager().get(id) else {
         return Ok(Value::NIL);
     };
-    let previous = eval.frames.selected_frame().map(|frame| frame.id);
+    let previous = eval.frame_manager().selected_frame().map(|frame| frame.id);
     if previous == Some(id) {
         return Ok(Value::make_frame(id.0));
     }

@@ -33,13 +33,18 @@ pub(crate) fn builtin_make_temp_file_internal(eval: &mut Context, args: Vec<Valu
 pub(crate) fn builtin_open_dribble_file(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_args("open-dribble-file", &args, 1)?;
     if args[0].is_nil() {
-        eval.command_loop.keyboard.kboard.close_dribble_file();
+        eval.command_loop_mut().keyboard.kboard.close_dribble_file();
         return Ok(Value::NIL);
     }
     let path = neovm_edit::emacs_core::file_name::lisp_file_name_to_path_buf(
         eval.expect_lisp_string(args[0])?,
     );
-    if let Err(err) = eval.command_loop.keyboard.kboard.open_dribble_file(&path) {
+    if let Err(err) = eval
+        .command_loop_mut()
+        .keyboard
+        .kboard
+        .open_dribble_file(&path)
+    {
         return Err(signal(
             LispCondition::FileError,
             vec![
@@ -104,7 +109,7 @@ pub(crate) fn builtin_dump_emacs_portable(
             )],
         ));
     }
-    if ctx.threads.current_thread_id() != 0 {
+    if ctx.threads().current_thread_id() != 0 {
         return Err(signal(
             "error",
             vec![Value::string(
@@ -112,7 +117,7 @@ pub(crate) fn builtin_dump_emacs_portable(
             )],
         ));
     }
-    if ctx.threads.all_thread_ids().into_iter().any(|id| id != 0) {
+    if ctx.threads().all_thread_ids().into_iter().any(|id| id != 0) {
         return Err(signal(
             "error",
             vec![Value::string(

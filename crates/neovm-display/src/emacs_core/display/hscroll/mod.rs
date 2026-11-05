@@ -379,7 +379,7 @@ pub(crate) fn update_auto_hscroll_before_redisplay(ctx: &mut Context) {
     // Phase 1: gather snapshots under an immutable frame borrow.
     let mut snapshots: Vec<LeafHscrollSnapshot> = Vec::new();
 
-    let frame_ids: Vec<FrameId> = ctx.frames.frame_list();
+    let frame_ids: Vec<FrameId> = ctx.frame_manager().frame_list();
     let selected_buffer_pt = ctx
         .edit
         .buffers
@@ -387,7 +387,7 @@ pub(crate) fn update_auto_hscroll_before_redisplay(ctx: &mut Context) {
         .map(|b| (b.id(), b.point_emacs_byte_pos()));
 
     for frame_id in &frame_ids {
-        let Some(frame) = ctx.frames.get(*frame_id) else {
+        let Some(frame) = ctx.frame_manager().get(*frame_id) else {
             continue;
         };
         if !frame.visibility.is_visible() {
@@ -425,7 +425,7 @@ pub(crate) fn update_auto_hscroll_before_redisplay(ctx: &mut Context) {
             let char_width = frame.char_width.max(1.0);
             let char_height = frame.char_height;
             let body_px = crate::emacs_core::window_cmds::window_body_width_pixels(
-                &ctx.frames,
+                &ctx.frame_manager(),
                 *frame_id,
                 window,
             );
@@ -450,7 +450,7 @@ pub(crate) fn update_auto_hscroll_before_redisplay(ctx: &mut Context) {
 
             // Point byte position: buffer PT for the selected window of the
             // selected frame, else the window's own pointm.
-            let selected_frame_id = ctx.frames.selected_frame().map(|f| f.id);
+            let selected_frame_id = ctx.frame_manager().selected_frame().map(|f| f.id);
             let is_selected_window =
                 selected_frame_id == Some(*frame_id) && selected_window_id == win_id;
             let (point_byte, point_lisp) =
@@ -518,9 +518,10 @@ pub(crate) fn update_auto_hscroll_before_redisplay(ctx: &mut Context) {
         // moved since the last pass, un-suspend. Record the new old point
         // unconditionally (GNU's `Fset_marker (w->old_pointm, ...)`).
         let effective_suspend = snap.suspend_auto_hscroll && snap.point_lisp == snap.old_point_lisp;
+        let (frames, buffers) = ctx.frame_manager_and_buffers_mut();
         if (snap.suspend_auto_hscroll != effective_suspend
             || snap.old_point_lisp != snap.point_lisp)
-            && let Some(frame) = ctx.frames.get_mut(snap.frame_id)
+            && let Some(frame) = frames.get_mut(snap.frame_id)
         {
             // `Frame::find_window_mut` IS this: the root subtree, then the
             // minibuffer leaf filtered by id.  Reaching through `root_window`
@@ -541,7 +542,7 @@ pub(crate) fn update_auto_hscroll_before_redisplay(ctx: &mut Context) {
                 // between the two and the redisplay signature never matched --
                 // no idle `(redisplay)` could ever skip.
                 crate::window::window_markers::set_window_old_point_with_marker(
-                    &mut ctx.edit.buffers,
+                    buffers,
                     window,
                     snap.point_lisp,
                 );
@@ -578,7 +579,7 @@ pub(crate) fn update_auto_hscroll_before_redisplay(ctx: &mut Context) {
             continue;
         };
 
-        if let Some(frame) = ctx.frames.get_mut(snap.frame_id) {
+        if let Some(frame) = ctx.frame_manager_mut().get_mut(snap.frame_id) {
             // `Frame::find_window_mut` IS this: the root subtree, then the
             // minibuffer leaf filtered by id.  Reaching through `root_window`
             // and re-deriving the minibuffer arm duplicated it, and duplicating

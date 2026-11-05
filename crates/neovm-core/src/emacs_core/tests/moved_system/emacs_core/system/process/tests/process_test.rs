@@ -1545,11 +1545,11 @@ fn make_network_process_server_stores_log_as_lisp_value() {
     );
     let id = process.as_process_id().expect("expected process object id");
 
-    let stored = eval.processes.get(id).expect("server process");
+    let stored = eval.processes().get(id).expect("server process");
     assert_eq!(stored.log, Value::symbol("ignore"));
 
     let contact =
-        builtin_process_contact_impl(&eval.processes, vec![Value::make_process(id), Value::T])
+        builtin_process_contact_impl(&eval.processes(), vec![Value::make_process(id), Value::T])
             .expect("process-contact t");
     assert_eq!(
         builtins::builtin_plist_get(vec![contact, Value::keyword(":log")]).expect("plist-get :log"),
@@ -1655,15 +1655,16 @@ fn internal_default_process_filter_moves_stored_process_mark() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::emacs_core::eval_hook_installers::new_context();
     let buffer_id = ev.edit.buffers.create_buffer("*proc-filter-mark*");
-    let pid = ev.processes.create_process(
+    let pid = ev.processes_mut().create_process(
         "proc-filter-mark".into(),
         Value::make_buffer(buffer_id),
         "prog".into(),
         vec![],
         crate::emacs_core::process::ProcessCodingSystems::gnu_make_process_initial(),
     );
-    ev.processes
-        .sync_process_mark(&mut ev.edit.buffers, pid)
+    let (processes, buffers) = ev.processes_and_buffers_mut();
+    processes
+        .sync_process_mark(buffers, pid)
         .expect("sync process mark");
     assert_eq!(
         eval_one_in_context(
@@ -1682,7 +1683,7 @@ fn internal_default_process_filter_moves_stored_process_mark() {
     )
     .expect("first insert");
     let mark = builtin_process_mark_impl(
-        &ev.processes,
+        &ev.processes(),
         &ev.edit.buffers,
         vec![Value::make_process(pid)],
     )
@@ -1718,7 +1719,7 @@ fn internal_default_process_filter_moves_stored_process_mark() {
     )
     .expect("second insert");
     let mark = builtin_process_mark_impl(
-        &ev.processes,
+        &ev.processes(),
         &ev.edit.buffers,
         vec![Value::make_process(pid)],
     )
@@ -1757,18 +1758,19 @@ fn internal_default_process_sentinel_inserts_status_at_process_mark() {
         .expect("process buffer")
         .goto_emacs_byte_pos(neovm_edit::buffer::EmacsBytePos::new(6));
 
-    let pid = ev.processes.create_process(
+    let pid = ev.processes_mut().create_process(
         "sentinel-proc".into(),
         Value::make_buffer(buffer_id),
         "prog".into(),
         vec![],
         crate::emacs_core::process::ProcessCodingSystems::gnu_make_process_initial(),
     );
-    ev.processes
-        .sync_process_mark(&mut ev.edit.buffers, pid)
+    let (processes, buffers) = ev.processes_and_buffers_mut();
+    processes
+        .sync_process_mark(buffers, pid)
         .expect("sync process mark");
     let mark = builtin_process_mark_impl(
-        &ev.processes,
+        &ev.processes(),
         &ev.edit.buffers,
         vec![Value::make_process(pid)],
     )
@@ -1778,7 +1780,7 @@ fn internal_default_process_sentinel_inserts_status_at_process_mark() {
         &[mark, Value::fixnum(7), Value::make_buffer(buffer_id)],
     )
     .expect("move process mark");
-    ev.processes.get_mut(pid).expect("process").status = process_status_exit_value(0);
+    ev.processes_mut().get_mut(pid).expect("process").status = process_status_exit_value(0);
 
     builtin_internal_default_process_sentinel(
         &mut ev,
@@ -1796,7 +1798,7 @@ fn internal_default_process_sentinel_inserts_status_at_process_mark() {
         "before\nProcess sentinel-proc finished\n-after"
     );
     let mark = builtin_process_mark_impl(
-        &ev.processes,
+        &ev.processes(),
         &ev.edit.buffers,
         vec![Value::make_process(pid)],
     )
@@ -1820,17 +1822,18 @@ fn process_status_notification_runs_default_sentinel_and_reaps() {
         .buffers
         .insert_into_buffer(buffer_id, "payload")
         .expect("insert process buffer text");
-    let pid = ev.processes.create_process(
+    let pid = ev.processes_mut().create_process(
         "neo-default-sentinel".into(),
         Value::make_buffer(buffer_id),
         "prog".into(),
         vec![],
         crate::emacs_core::process::ProcessCodingSystems::gnu_make_process_initial(),
     );
-    ev.processes
-        .sync_process_mark(&mut ev.edit.buffers, pid)
+    let (processes, buffers) = ev.processes_and_buffers_mut();
+    processes
+        .sync_process_mark(buffers, pid)
         .expect("sync process mark");
-    ev.processes
+    ev.processes_mut()
         .set_child_status_pending(pid, process_status_exit_value(0));
 
     ev.run_process_status_notification(pid, None)
@@ -1844,8 +1847,8 @@ fn process_status_notification_runs_default_sentinel_and_reaps() {
             .buffer_string(),
         "payload\nProcess neo-default-sentinel finished\n"
     );
-    assert!(ev.processes.get(pid).is_none());
-    assert!(ev.processes.get_any(pid).is_some());
+    assert!(ev.processes().get(pid).is_none());
+    assert!(ev.processes().get_any(pid).is_some());
 }
 
 #[test]
@@ -2378,7 +2381,7 @@ fn stderr_pipe_sentinel_runs_before_live_owner_exits() {
 fn stderr_pipe_wait_notifies_a_pending_owner_stop_first() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval_hook_installers::new_context();
-    let stderr_id = eval.processes.create_process_with_kind(
+    let stderr_id = eval.processes_mut().create_process_with_kind(
         "pending-stop-stderr".into(),
         Value::NIL,
         String::new(),
@@ -2386,7 +2389,7 @@ fn stderr_pipe_wait_notifies_a_pending_owner_stop_first() {
         ProcessKindWithoutDevice::Pipe,
         ProcessCodingSystems::gnu_make_process_initial(),
     );
-    let owner_id = eval.processes.create_process(
+    let owner_id = eval.processes_mut().create_process(
         "pending-stop-owner".into(),
         Value::NIL,
         "owner".into(),
@@ -2394,14 +2397,17 @@ fn stderr_pipe_wait_notifies_a_pending_owner_stop_first() {
         ProcessCodingSystems::gnu_make_process_initial(),
     );
     {
-        let owner = eval.processes.get_mut(owner_id).expect("owner process");
+        let owner = eval
+            .processes_mut()
+            .get_mut(owner_id)
+            .expect("owner process");
         owner.stderrproc = Value::make_process(stderr_id);
         owner.status = process_status_run_value();
         owner.pending_status = process_status_stop_value(19);
         owner.status_notify_pending = true;
         owner.sentinel = Value::NIL;
     }
-    eval.processes
+    eval.processes_mut()
         .get_mut(stderr_id)
         .expect("stderr pipe")
         .live_io
@@ -2430,7 +2436,7 @@ fn stderr_pipe_wait_notifies_a_pending_owner_stop_first() {
         pipe_may_notify,
         "the pipe notifies in the same pass, after the owner"
     );
-    let owner = eval.processes.get(owner_id).expect("owner remains live");
+    let owner = eval.processes().get(owner_id).expect("owner remains live");
     assert_eq!(owner.status, process_status_stop_value(19));
     assert!(
         !owner.status_notify_pending,
@@ -4381,7 +4387,7 @@ fn getenv_display_prefers_selected_frame_then_initial_snapshot() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval_hook_installers::new_context();
     let frame_id = neovm_display::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
-    eval.frames
+    eval.frame_manager_mut()
         .get_mut(frame_id)
         .expect("selected frame")
         .set_parameter(Value::symbol("display"), Value::string(":frame"));
@@ -4398,7 +4404,7 @@ fn getenv_display_prefers_selected_frame_then_initial_snapshot() {
         .expect("frame DISPLAY lookup");
     assert_eq!(frame_display.as_utf8_str(), Some(":frame"));
 
-    eval.frames
+    eval.frame_manager_mut()
         .get_mut(frame_id)
         .expect("selected frame")
         .remove_parameter(Value::symbol("display"));
@@ -4412,7 +4418,7 @@ fn getenv_display_on_wayland_uses_initial_x_display_not_native_display() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval_hook_installers::new_context();
     let frame_id = neovm_display::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
-    eval.frames
+    eval.frame_manager_mut()
         .get_mut(frame_id)
         .expect("selected frame")
         .set_display_identity(neovm_display::window::FrameDisplayIdentity::wayland(
@@ -4431,7 +4437,7 @@ fn getenv_display_on_wayland_uses_initial_x_display_not_native_display() {
         builtin_getenv_internal(&mut eval, vec![Value::string("DISPLAY")]).expect("DISPLAY lookup");
     assert_eq!(display.as_utf8_str(), Some(":initial"));
     let native_display = eval
-        .frames
+        .frame_manager()
         .get(frame_id)
         .and_then(|frame| frame.parameter("display"))
         .expect("native frame display");
@@ -4443,7 +4449,7 @@ fn child_environment_on_wayland_uses_initial_x_display_not_native_display() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::runtime_startup_context();
     let frame_id = neovm_display::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
-    eval.frames
+    eval.frame_manager_mut()
         .get_mut(frame_id)
         .expect("selected frame")
         .set_display_identity(neovm_display::window::FrameDisplayIdentity::wayland(
@@ -4474,7 +4480,7 @@ fn getenv_explicit_negative_display_suppresses_adaptive_fallback() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval_hook_installers::new_context();
     let frame_id = neovm_display::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
-    eval.frames
+    eval.frame_manager_mut()
         .get_mut(frame_id)
         .expect("selected frame")
         .set_parameter(Value::symbol("display"), Value::string(":frame"));
@@ -4498,7 +4504,7 @@ fn call_process_materializes_adaptive_display_and_honors_explicit_policy() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::runtime_startup_context();
     let frame_id = neovm_display::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
-    eval.frames
+    eval.frame_manager_mut()
         .get_mut(frame_id)
         .expect("selected frame")
         .set_parameter(Value::symbol("display"), Value::string(":frame"));
@@ -4543,7 +4549,7 @@ fn async_child_display_probe(
 ) -> String {
     let mut eval = crate::test_utils::runtime_startup_context();
     let frame_id = neovm_display::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
-    eval.frames
+    eval.frame_manager_mut()
         .get_mut(frame_id)
         .expect("selected frame")
         .set_parameter(Value::symbol("display"), Value::string(":frame"));
@@ -5878,7 +5884,7 @@ fn accept_process_output_yields_to_pending_command_input() {
         .expect("accept-process-output should yield to command input");
 
     assert_eq!(result, Value::NIL);
-    assert_eq!(ev.command_loop.keyboard.pending_input_events.len(), 2);
+    assert_eq!(ev.command_loop().keyboard.pending_input_events.len(), 2);
 }
 
 #[test]
@@ -5912,14 +5918,14 @@ fn accept_process_output_drains_ready_output_before_yielding_to_command_input() 
     .expect("install drain filter");
 
     // Spawn a real child that writes "READY" immediately.
-    let pid = ev.processes.create_process(
+    let pid = ev.processes_mut().create_process(
         "neo-apo-drain-probe".into(),
         Value::NIL,
         printf,
         vec!["READY".into()],
         crate::emacs_core::process::ProcessCodingSystems::gnu_make_process_initial(),
     );
-    ev.processes
+    ev.processes_mut()
         .spawn_child(pid, false)
         .expect("spawn probe child");
     builtin_set_process_filter(
@@ -5933,7 +5939,7 @@ fn accept_process_output_drains_ready_output_before_yielding_to_command_input() 
 
     // Observe actual buffered pipe output without running the wait loop,
     // draining bytes or dispatching a filter; only then publish command input.
-    ev.processes
+    ev.processes()
         .wait_for_child_stdout_readable_for_test(pid, Duration::from_secs(5))
         .expect("actual undrained READY output before command input");
 
@@ -6468,7 +6474,7 @@ fn wait_scheduler_can_block_until_command_input_arrives() {
     );
     let completion: CommandInputWaitOutcome = completion.expect("wait for command input");
     assert_eq!(completion, CommandInputWaitOutcome::InputPending);
-    assert_eq!(ev.command_loop.keyboard.pending_input_events.len(), 1);
+    assert_eq!(ev.command_loop().keyboard.pending_input_events.len(), 1);
 }
 
 #[test]
@@ -6746,14 +6752,14 @@ fn accept_process_output_integer_just_this_one_suppresses_timers() {
     )
     .expect("install timer callback");
 
-    let pid = ev.processes.create_process(
+    let pid = ev.processes_mut().create_process(
         "apio-wait-target".into(),
         Value::NIL,
         cat,
         Vec::new(),
         crate::emacs_core::process::ProcessCodingSystems::gnu_make_process_initial(),
     );
-    ev.processes
+    ev.processes_mut()
         .spawn_child(pid, false)
         .expect("spawn target child");
     ev.set_variable(
@@ -6873,14 +6879,14 @@ fn check_timer_before_filter_and_sentinel(child_head_start: Duration) {
         )]),
     );
 
-    let pid = ev.processes.create_process(
+    let pid = ev.processes_mut().create_process(
         "apio-order".into(),
         Value::NIL,
         echo,
         vec!["out".into()],
         crate::emacs_core::process::ProcessCodingSystems::gnu_make_process_initial(),
     );
-    ev.processes
+    ev.processes_mut()
         .spawn_child(pid, false)
         .expect("spawn ordering process");
     builtin_set_process_filter(
@@ -6976,14 +6982,14 @@ fn accept_process_output_runs_gnu_timer_then_internal_timer_before_process_callb
         ]),
     );
 
-    let pid = ev.processes.create_process(
+    let pid = ev.processes_mut().create_process(
         "apio-full-order".into(),
         Value::NIL,
         echo,
         vec!["out".into()],
         crate::emacs_core::process::ProcessCodingSystems::gnu_make_process_initial(),
     );
-    ev.processes
+    ev.processes_mut()
         .spawn_child(pid, false)
         .expect("spawn mixed ordering process");
     builtin_set_process_filter(
@@ -7043,19 +7049,20 @@ fn accept_process_output_runs_default_process_filter() {
     let echo = find_bin("echo");
     let mut ev = crate::emacs_core::eval_hook_installers::new_context();
     let _ = ev.edit.buffers.create_buffer("*apio-default-filter*");
-    let pid = ev.processes.create_process(
+    let process_buffer = Value::make_buffer(
+        ev.edit
+            .buffers
+            .find_buffer_by_name("*apio-default-filter*")
+            .expect("process buffer should exist"),
+    );
+    let pid = ev.processes_mut().create_process(
         "apio-default-filter".into(),
-        Value::make_buffer(
-            ev.edit
-                .buffers
-                .find_buffer_by_name("*apio-default-filter*")
-                .expect("process buffer should exist"),
-        ),
+        process_buffer,
         echo,
         vec!["out".into()],
         crate::emacs_core::process::ProcessCodingSystems::gnu_make_process_initial(),
     );
-    ev.processes
+    ev.processes_mut()
         .spawn_child(pid, false)
         .expect("spawn output process");
 
@@ -7100,7 +7107,7 @@ fn accept_process_output_discards_output_when_filter_is_t() {
     let echo = find_bin("echo");
     let mut ev = crate::emacs_core::eval_hook_installers::new_context();
     let buffer_id = ev.edit.buffers.create_buffer("*apio-discard-filter*");
-    let pid = ev.processes.create_process(
+    let pid = ev.processes_mut().create_process(
         "apio-discard-filter".into(),
         Value::make_buffer(buffer_id),
         echo,
@@ -7109,12 +7116,12 @@ fn accept_process_output_discards_output_when_filter_is_t() {
     );
     builtin_set_process_filter(&mut ev, vec![Value::make_process(pid), Value::T])
         .expect("set t process filter");
-    ev.processes
+    ev.processes_mut()
         .spawn_child(pid, false)
         .expect("spawn output process");
 
     while ev
-        .processes
+        .processes()
         .get(pid)
         .is_some_and(|process| process.status.is_bare_symbol_named("run"))
     {
@@ -7146,7 +7153,7 @@ fn process_filter_t_suspends_output_until_filter_is_resumed() {
     let shell = find_bin("sh");
     let mut ev = crate::emacs_core::eval_hook_installers::new_context();
     let buffer_id = ev.edit.buffers.create_buffer("*filter-resume*");
-    let pid = ev.processes.create_process(
+    let pid = ev.processes_mut().create_process(
         "filter-resume".into(),
         Value::make_buffer(buffer_id),
         shell,
@@ -7155,7 +7162,7 @@ fn process_filter_t_suspends_output_until_filter_is_resumed() {
     );
     builtin_set_process_filter(&mut ev, vec![Value::make_process(pid), Value::T])
         .expect("suspend process output");
-    ev.processes
+    ev.processes_mut()
         .spawn_child(pid, false)
         .expect("spawn suspended output process");
 
@@ -7169,7 +7176,7 @@ fn process_filter_t_suspends_output_until_filter_is_resumed() {
         .expect("resume the default process filter");
 
     while ev
-        .processes
+        .processes()
         .get(pid)
         .is_some_and(|process| process.status.is_bare_symbol_named("run"))
     {
@@ -7634,14 +7641,14 @@ fn accept_process_output_restores_current_buffer_and_match_data() {
         .expect("capture match-data before callback");
     let before_buffer = ev.edit.buffers.current_buffer_id();
 
-    let pid = ev.processes.create_process(
+    let pid = ev.processes_mut().create_process(
         "apio-restore".into(),
         Value::NIL,
         echo,
         vec!["out".into()],
         crate::emacs_core::process::ProcessCodingSystems::gnu_make_process_initial(),
     );
-    ev.processes
+    ev.processes_mut()
         .spawn_child(pid, false)
         .expect("spawn restore process");
     builtin_set_process_filter(
@@ -7833,14 +7840,14 @@ fn sleep_for_uses_shared_wait_request_for_process_output_and_timers() {
     )
     .expect("install sleep-for callback setup");
 
-    let pid = ev.processes.create_process(
+    let pid = ev.processes_mut().create_process(
         "sleep-shared".into(),
         Value::NIL,
         echo,
         vec!["out".into()],
         crate::emacs_core::process::ProcessCodingSystems::gnu_make_process_initial(),
     );
-    ev.processes
+    ev.processes_mut()
         .spawn_child(pid, false)
         .expect("spawn sleep-for process");
     builtin_set_process_filter(
@@ -7859,7 +7866,7 @@ fn sleep_for_uses_shared_wait_request_for_process_output_and_timers() {
     #[cfg(unix)]
     {
         let os_pid = ev
-            .processes
+            .processes()
             .get(pid)
             .and_then(|process| process.os_pid)
             .expect("a spawned child has an OS pid");
@@ -7900,9 +7907,9 @@ fn accept_process_output_services_pending_resize_from_shared_wait_request() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::emacs_core::eval_hook_installers::new_context();
     let fid = ev
-        .frames
+        .frame_manager_mut()
         .create_frame("F1", 960, 640, neovm_edit::buffer::BufferId(1));
-    ev.frames
+    ev.frame_manager_mut()
         .get_mut(fid)
         .expect("frame should exist")
         .set_parameter(Value::symbol("window-system"), Value::symbol("x"));
@@ -7942,9 +7949,9 @@ fn accept_process_output_services_resize_arriving_during_wait() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::emacs_core::eval_hook_installers::new_context();
     let fid = ev
-        .frames
+        .frame_manager_mut()
         .create_frame("F1", 960, 640, neovm_edit::buffer::BufferId(1));
-    ev.frames
+    ev.frame_manager_mut()
         .get_mut(fid)
         .expect("frame should exist")
         .set_parameter(Value::symbol("window-system"), Value::symbol("x"));
@@ -7986,7 +7993,7 @@ fn accept_process_output_window_close_uses_special_event_map_handler_when_loaded
     let mut ev = crate::emacs_core::eval_hook_installers::new_context();
     let scratch = ev.buffer_manager_mut().create_buffer("*scratch*");
     ev.buffer_manager_mut().set_current(scratch);
-    let frame = ev.frames.create_frame("F1", 80, 24, scratch);
+    let frame = ev.frame_manager_mut().create_frame("F1", 80, 24, scratch);
     install_minimal_special_event_command_runtime(&mut ev);
 
     let tx = crate::emacs_core::host_input::HostInputPublisher::install(&mut ev);
@@ -7997,7 +8004,7 @@ fn accept_process_output_window_close_uses_special_event_map_handler_when_loaded
     )
     .expect("queue window close");
 
-    ev.command_loop.running = true;
+    ev.command_loop_mut().running = true;
 
     let result = builtin_accept_process_output(&mut ev, vec![Value::NIL, Value::make_float(0.0)])
         .expect("accept-process-output should consume handled window close");
@@ -9040,7 +9047,7 @@ fn make_network_process_nowait_retains_tls_parameters_until_connect_completes() 
     let id = process.as_process_id().expect("network process id");
 
     assert_eq!(
-        eval.processes
+        eval.processes()
             .get(id)
             .expect("network process")
             .gnutls_boot_parameters,
@@ -9053,7 +9060,7 @@ fn make_network_process_nowait_retains_tls_parameters_until_connect_completes() 
 fn make_network_process_nowait_hostname_dns_failure_is_async_like_gnu() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval_hook_installers::new_context();
-    let id = eval.processes.create_process_with_kind_lisp(
+    let id = eval.processes_mut().create_process_with_kind_lisp(
         LispString::from_utf8("nowait-dns-fail"),
         Value::NIL,
         LispString::from_utf8("network"),
@@ -9065,7 +9072,7 @@ fn make_network_process_nowait_hostname_dns_failure_is_async_like_gnu() {
     sender
         .send(Err("Name or service not known".to_string()))
         .expect("seed dns failure");
-    let proc = eval.processes.get_mut(id).expect("network process");
+    let proc = eval.processes_mut().get_mut(id).expect("network process");
     proc.status = process_status_connect_value();
     proc.childp = Value::list(vec![
         ProcessKeyword::Host.value(),
@@ -9092,17 +9099,14 @@ fn make_network_process_nowait_hostname_dns_failure_is_async_like_gnu() {
         .expect("wait for dns failure");
 
     assert_eq!(outcome, ProcessOutputWaitOutcome::NoProcessActivity);
+    let (processes, buffers) = eval.processes_and_buffers_mut();
     assert_eq!(
-        builtin_process_status_impl(
-            &mut eval.processes,
-            &eval.edit.buffers,
-            vec![Value::make_process(id)]
-        )
-        .expect("status"),
+        builtin_process_status_impl(processes, buffers, vec![Value::make_process(id)])
+            .expect("status"),
         Value::symbol("failed")
     );
     assert_eq!(
-        builtin_process_live_p_impl(&mut eval.processes, vec![Value::make_process(id)])
+        builtin_process_live_p_impl(eval.processes_mut(), vec![Value::make_process(id)])
             .expect("live-p"),
         Value::NIL
     );
@@ -9282,7 +9286,7 @@ fn kill_buffer_reruns_the_sentinel_of_a_failed_connection_like_gnu() {
 fn process_contact_no_block_returns_nil_for_pending_nowait_network_like_gnu() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval_hook_installers::new_context();
-    let id = eval.processes.create_process_with_kind_lisp(
+    let id = eval.processes_mut().create_process_with_kind_lisp(
         LispString::from_utf8("pending-contact"),
         Value::NIL,
         LispString::from_utf8("network"),
@@ -9290,7 +9294,7 @@ fn process_contact_no_block_returns_nil_for_pending_nowait_network_like_gnu() {
         ProcessKindWithoutDevice::Network,
         crate::emacs_core::process::ProcessCodingSystems::gnu_make_process_initial(),
     );
-    let proc = eval.processes.get_mut(id).expect("network process");
+    let proc = eval.processes_mut().get_mut(id).expect("network process");
     proc.status = process_status_connect_value();
     proc.childp = Value::list(vec![
         ProcessKeyword::Host.value(),
@@ -10794,15 +10798,16 @@ fn internal_default_process_filter_inserts_while_another_buffer_is_read_only() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::emacs_core::eval_hook_installers::new_context();
     let process_buffer = ev.edit.buffers.create_buffer("*proc-filter-ro*");
-    let pid = ev.processes.create_process(
+    let pid = ev.processes_mut().create_process(
         "proc-filter-ro".into(),
         Value::make_buffer(process_buffer),
         "prog".into(),
         vec![],
         crate::emacs_core::process::ProcessCodingSystems::gnu_make_process_initial(),
     );
-    ev.processes
-        .sync_process_mark(&mut ev.edit.buffers, pid)
+    let (processes, buffers) = ev.processes_and_buffers_mut();
+    processes
+        .sync_process_mark(buffers, pid)
         .expect("sync process mark");
 
     // A different, read-only buffer is current -- the blamed source file.
@@ -11070,7 +11075,7 @@ fn wait_for_stderr_fixture_exit(eval: &mut Context, owner: Value) {
     // Hold the child at read(0) until every sentinel/global is installed. A
     // quick child can otherwise be reaped by a readiness wait during setup.
     // Write through the owned stdin without entering any Lisp readiness wait.
-    eval.processes
+    eval.processes_mut()
         .get_mut(id)
         .expect("fixture process exists")
         .live_io
@@ -11080,7 +11085,7 @@ fn wait_for_stderr_fixture_exit(eval: &mut Context, owner: Value) {
         .write_all(b"ready\n")
         .expect("release fixture child");
     let child = &eval
-        .processes
+        .processes()
         .get(id)
         .expect("fixture process exists")
         .live_io
@@ -11124,7 +11129,7 @@ fn with_stderr_fixture_child<T>(
 ) -> T {
     let id = owner.as_process_id().expect("fixture owner is a process");
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(eval)));
-    if let Some(process) = eval.processes.get_mut(id) {
+    if let Some(process) = eval.processes_mut().get_mut(id) {
         let child = &mut process.live_io.child;
         child.poll_status();
         if child.pid_if_unreaped().is_some() {
@@ -11170,7 +11175,7 @@ fn stderr_fixture_assertion_failure_kills_and_reaps_its_owned_child() {
     assert!(failure.is_err());
     assert!(started.elapsed() < Duration::from_secs(3));
     assert!(
-        eval.processes
+        eval.processes()
             .get(id)
             .expect("fixture process exists")
             .live_io
@@ -16001,18 +16006,18 @@ fn the_child_status_record_is_the_waits_work_and_maybe_quit_never_does_it() {
 
     let sh = find_bin("sh");
     let mut eval = crate::emacs_core::eval_hook_installers::new_context();
-    let child = eval.processes.create_process_lisp(
+    let child = eval.processes_mut().create_process_lisp(
         LispString::from_utf8("pw193-trigger"),
         Value::NIL,
         LispString::from_utf8(&sh),
         vec![LispString::from_utf8("-c"), LispString::from_utf8("exit 7")],
         crate::emacs_core::process::ProcessCodingSystems::gnu_make_process_initial(),
     );
-    eval.processes
+    eval.processes_mut()
         .spawn_child(child, false)
         .expect("spawn child");
     let os_pid = eval
-        .processes
+        .processes()
         .get(child)
         .and_then(|proc| proc.os_pid)
         .expect("a spawned child has an OS pid");
@@ -16046,7 +16051,7 @@ fn the_child_status_record_is_the_waits_work_and_maybe_quit_never_does_it() {
     );
 
     let after_spin =
-        process_effective_status(eval.processes.get(child).expect("child is still listed"));
+        process_effective_status(eval.processes().get(child).expect("child is still listed"));
     assert_eq!(
         ProcessStatusSymbol::from_status_value(after_spin),
         Some(ProcessStatusSymbol::Run),
@@ -16076,12 +16081,15 @@ fn the_child_status_record_is_the_waits_work_and_maybe_quit_never_does_it() {
     // has run.  That the read has to move is itself the evidence that the
     // sentinel ran and not merely that the status was recorded.
     assert!(
-        eval.processes.get(child).is_none(),
+        eval.processes().get(child).is_none(),
         "with `delete-exited-processes' at its default, `status_notify' \
          removes the process (src/process.c:7926-7927)"
     );
-    let after_wait =
-        process_effective_status(eval.processes.get_any(child).expect("child is still known"));
+    let after_wait = process_effective_status(
+        eval.processes()
+            .get_any(child)
+            .expect("child is still known"),
+    );
     assert_eq!(
         ProcessStatusSymbol::from_status_value(after_wait),
         Some(ProcessStatusSymbol::Exit),
@@ -16423,7 +16431,7 @@ fn a_childs_own_descriptor_returns_the_block_which_is_what_gnu_uses_sigchld_for(
     // PHASE 1, the assertion: a real child, whose `pidfd` IS registered with
     // this poller, exits only after the backend commits to a 3s wait.
     let mut eval = crate::emacs_core::eval_hook_installers::new_context();
-    let child = eval.processes.create_process_lisp(
+    let child = eval.processes_mut().create_process_lisp(
         LispString::from_utf8("pw200-control"),
         Value::NIL,
         LispString::from_utf8(&sh),
@@ -16433,11 +16441,11 @@ fn a_childs_own_descriptor_returns_the_block_which_is_what_gnu_uses_sigchld_for(
         ],
         crate::emacs_core::process::ProcessCodingSystems::gnu_make_process_initial(),
     );
-    eval.processes
+    eval.processes_mut()
         .spawn_child(child, false)
         .expect("spawn child");
     let mut child_input = eval
-        .processes
+        .processes()
         .get(child)
         .expect("owned child")
         .live_io
@@ -16447,7 +16455,7 @@ fn a_childs_own_descriptor_returns_the_block_which_is_what_gnu_uses_sigchld_for(
         .try_clone()
         .expect("clone only the gate-input descriptor");
     let (child_ready, child_wait) = std::sync::mpsc::channel();
-    eval.processes
+    eval.processes_mut()
         .before_next_backend_wait_for_test(move |entry| {
             let _ = child_ready.send(entry);
         });
@@ -16458,7 +16466,7 @@ fn a_childs_own_descriptor_returns_the_block_which_is_what_gnu_uses_sigchld_for(
     });
     let started = Instant::now();
     let events = eval
-        .processes
+        .processes()
         .wait_for_backend_events(block, ProcessWaitBackendInterest::ProcessesOnly);
     let control_elapsed = started.elapsed();
     child_releaser
@@ -16489,7 +16497,7 @@ fn a_childs_own_descriptor_returns_the_block_which_is_what_gnu_uses_sigchld_for(
     let mut eval = crate::emacs_core::eval_hook_installers::new_context();
     assert_no_sigchld_handler_is_installed();
     let (signal_ready, signal_wait) = std::sync::mpsc::channel();
-    eval.processes
+    eval.processes_mut()
         .before_next_backend_wait_for_test(move |entry| {
             let _ = signal_ready.send(entry);
         });
@@ -16503,7 +16511,7 @@ fn a_childs_own_descriptor_returns_the_block_which_is_what_gnu_uses_sigchld_for(
     });
     let started = Instant::now();
     let _events = eval
-        .processes
+        .processes()
         .wait_for_backend_events(block, ProcessWaitBackendInterest::ProcessesOnly);
     let signal_elapsed = started.elapsed();
     waker
@@ -16552,7 +16560,7 @@ fn captured_os_signal_wakes_idle_process_poller() {
     crate::emacs_core::os_signal::take_pending();
     crate::emacs_core::os_signal::drain_wake_pipe(report.self_pipe_read_fd().unwrap());
     let (ready, start) = std::sync::mpsc::channel();
-    eval.processes
+    eval.processes_mut()
         .before_next_backend_wait_for_test(move |entry| {
             let _ = ready.send(entry);
         });
@@ -16565,7 +16573,7 @@ fn captured_os_signal_wakes_idle_process_poller() {
         Ok(entry)
     });
     let started = Instant::now();
-    let events = eval.processes.wait_for_backend_events(
+    let events = eval.processes().wait_for_backend_events(
         Duration::from_secs(5),
         ProcessWaitBackendInterest::ProcessesOnly,
     );

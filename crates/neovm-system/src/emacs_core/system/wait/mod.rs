@@ -1462,12 +1462,12 @@ impl WaitContextExt for neovm_eval::emacs_core::eval::Context {
         if let ProcessWaitPolicy::TlsHandshake(pid) = request.processes {
             // Deinitialization retires TLS ownership without changing the
             // process status. Wake its owner so negotiation can fail cleanly.
-            if !self.processes.has_pending_tls_handshake(pid) {
+            if !self.processes().has_pending_tls_handshake(pid) {
                 return true;
             }
         }
         request.target_pid().is_some_and(|pid| {
-            self.processes
+            self.processes()
                 .get(pid)
                 .is_none_or(super::process::process_status_ends_target_wait)
         })
@@ -1477,9 +1477,9 @@ impl WaitContextExt for neovm_eval::emacs_core::eval::Context {
         &mut self,
         request: &WaitRequest,
     ) -> Result<WaitServiceOutcome, Flow> {
-        let activity = if self.processes.has_wait_notification_backend() {
+        let activity = if self.processes().has_wait_notification_backend() {
             let events = self
-                .processes
+                .processes()
                 .wait_for_backend_events(Duration::ZERO, ProcessWaitBackendInterest::ProcessesOnly)
                 .unwrap_or_default();
             WaitBlockActivity::from_source_events(events)
@@ -1596,7 +1596,7 @@ impl WaitContextExt for neovm_eval::emacs_core::eval::Context {
         // invariant -- deleting it from both of GNU's wait sites leaves GNU
         // correct, because `status_notify`'s body is guarded per process at
         // :7892.
-        let _stamped = self.processes.record_child_status_changes(site);
+        let _stamped = self.processes_mut().record_child_status_changes(site);
         // GNU `status_notify (NULL, wait_proc)` (:5554, :5854), over the
         // processes whose own tick moved -- from ANY of GNU's eight sites, not
         // just the walk above.
@@ -1620,17 +1620,17 @@ impl WaitContextExt for neovm_eval::emacs_core::eval::Context {
     ) -> Result<WaitCompletion, Flow> {
         // A reentrant wait must not repeatedly wake on its suspended caller's
         // TLS descriptor. Restore only still-live streams on every Flow exit.
-        let candidates = self.processes.tls_handshake_process_ids();
+        let candidates = self.processes().tls_handshake_process_ids();
         let suspended: Vec<_> = candidates
             .into_iter()
             .filter(|&id| {
                 request.processes != ProcessWaitPolicy::TlsHandshake(id)
-                    && self.processes.suspend_tls_handshake_polling(id)
+                    && self.processes_mut().suspend_tls_handshake_polling(id)
             })
             .collect();
         let result = self.wait_reading_process_output_inner(request);
         for id in suspended {
-            self.processes.resume_tls_handshake_polling(id);
+            self.processes_mut().resume_tls_handshake_polling(id);
         }
         result
     }
@@ -1797,7 +1797,7 @@ impl WaitContextExt for neovm_eval::emacs_core::eval::Context {
                 // poller path must set it explicitly around the block.
                 let restore = self.begin_waiting_for_user_input_if_requested(request);
                 let events = self
-                    .processes
+                    .processes()
                     .wait_for_backend_events(wait_time, interest)
                     .unwrap_or_default();
                 self.end_waiting_for_user_input(restore);
@@ -1811,7 +1811,7 @@ impl WaitContextExt for neovm_eval::emacs_core::eval::Context {
                 Ok(WaitBlockActivity::poll())
             }
             WaitBlock::ProcessOutputSleep => {
-                let events = self.processes.wait_for_process_events(wait_time);
+                let events = self.processes().wait_for_process_events(wait_time);
                 Ok(WaitBlockActivity::from_source_events(events))
             }
             WaitBlock::Sleep => {
@@ -1828,7 +1828,7 @@ impl WaitContextExt for neovm_eval::emacs_core::eval::Context {
     #[cold]
     #[inline(never)]
     fn green_resumed_select_activity(&self) -> WaitBlockActivity {
-        self.processes
+        self.processes()
             .wait_for_backend_events(
                 Duration::ZERO,
                 ProcessWaitBackendInterest::NotificationsAndProcesses,
@@ -1884,13 +1884,13 @@ impl WaitContextExt for neovm_eval::emacs_core::eval::Context {
                 shortened_by_timer = true;
             }
 
-            if !self.processes.live_process_ids().is_empty() {
+            if !self.processes().live_process_ids().is_empty() {
                 timeout = timeout.min(Duration::from_millis(100));
             }
         }
         if request.services_process_output()
             && request.target_process().is_none()
-            && let Some(next) = self.processes.adaptive_read_timeout()
+            && let Some(next) = self.processes().adaptive_read_timeout()
         {
             timeout = timeout.min(next);
         }
@@ -1918,14 +1918,14 @@ impl WaitContextExt for neovm_eval::emacs_core::eval::Context {
         let wants_input = request.waits_for_host_input();
         let wants_processes = request.services_process_output();
 
-        if self.processes.has_wait_notification_backend() {
+        if self.processes().has_wait_notification_backend() {
             use ProcessWaitBackendInterest::{
                 NotificationsAndProcesses, NotificationsOnly, ProcessesOnly,
             };
             return match (wants_input, wants_processes) {
                 (true, true) => WaitBlock::Poller(NotificationsAndProcesses),
                 (true, false) => {
-                    if self.processes.live_process_ids().is_empty() {
+                    if self.processes().live_process_ids().is_empty() {
                         WaitBlock::Poller(NotificationsOnly)
                     } else if self.input_rx.as_ref().is_some() {
                         // Live process fds we won't service → channel, no spin.

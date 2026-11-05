@@ -139,7 +139,7 @@ pub(crate) fn builtin_copy_to_register(
     expect_max_args("copy-to-register", &args, 5)?;
     let reg = expect_register(&args[0])?;
     let text = expect_string(&args[1])?;
-    eval.registers.set(reg, RegisterContent::Text(text));
+    eval.registers_mut().set(reg, RegisterContent::Text(text));
     Ok(Value::NIL)
 }
 
@@ -156,7 +156,7 @@ pub(crate) fn builtin_insert_register(
     expect_min_args("insert-register", &args, 1)?;
     expect_max_args("insert-register", &args, 2)?;
     let reg = expect_register(&args[0])?;
-    match eval.registers.get(reg) {
+    match eval.registers().get(reg) {
         Some(RegisterContent::Text(s)) => Ok(Value::heap_string(s.clone())),
         Some(RegisterContent::Number(n)) => Ok(Value::string(n.to_string())),
         Some(RegisterContent::Rectangle(lines)) => {
@@ -204,7 +204,8 @@ pub(crate) fn builtin_point_to_register(
         ),
         None => super::marker::make_marker_value(None, None, false),
     };
-    eval.registers.set(reg, RegisterContent::Marker(marker));
+    eval.registers_mut()
+        .set(reg, RegisterContent::Marker(marker));
     Ok(Value::NIL)
 }
 
@@ -217,7 +218,7 @@ pub(crate) fn builtin_number_to_register(
     expect_args("number-to-register", &args, 2)?;
     let num = expect_int(&args[0])?;
     let reg = expect_register(&args[1])?;
-    eval.registers.set(reg, RegisterContent::Number(num));
+    eval.registers_mut().set(reg, RegisterContent::Number(num));
     Ok(Value::NIL)
 }
 
@@ -234,14 +235,15 @@ pub(crate) fn builtin_increment_register(
     expect_args("increment-register", &args, 2)?;
     let inc = expect_int(&args[0])?;
     let reg = expect_register(&args[1])?;
-    match eval.registers.get(reg).cloned() {
+    match eval.registers().get(reg).cloned() {
         Some(RegisterContent::Number(n)) => {
-            eval.registers.set(reg, RegisterContent::Number(n + inc));
+            eval.registers_mut()
+                .set(reg, RegisterContent::Number(n + inc));
             Ok(Value::NIL)
         }
         Some(RegisterContent::Text(s)) => {
             let digits = LispString::from_unibyte(inc.to_string().into_bytes());
-            eval.registers
+            eval.registers_mut()
                 .set(reg, RegisterContent::Text(s.concat(&digits)));
             Ok(Value::NIL)
         }
@@ -254,7 +256,7 @@ pub(crate) fn builtin_increment_register(
         )),
         None => {
             // Empty register: treat as number starting from 0
-            eval.registers.set(reg, RegisterContent::Number(inc));
+            eval.registers_mut().set(reg, RegisterContent::Number(inc));
             Ok(Value::NIL)
         }
     }
@@ -270,7 +272,7 @@ pub(crate) fn builtin_view_register(
 ) -> EvalResult {
     expect_args("view-register", &args, 1)?;
     let reg = expect_register(&args[0])?;
-    match eval.registers.get(reg) {
+    match eval.registers().get(reg) {
         Some(RegisterContent::Text(s)) => {
             let rendered = super::emacs_char::to_utf8_lossy(s.as_bytes());
             // Truncate by characters, not bytes: register text is arbitrary and can
@@ -339,7 +341,7 @@ pub(crate) fn builtin_get_register(
 ) -> EvalResult {
     expect_args("get-register", &args, 1)?;
     let reg = expect_register(&args[0])?;
-    match eval.registers.get(reg) {
+    match eval.registers().get(reg) {
         Some(RegisterContent::Text(s)) => Ok(Value::heap_string(s.clone())),
         Some(RegisterContent::Number(n)) => Ok(Value::fixnum(*n)),
         Some(RegisterContent::Marker(marker)) => Ok(*marker),
@@ -364,7 +366,7 @@ pub(crate) fn builtin_register_to_string(
 ) -> EvalResult {
     expect_args("register-to-string", &args, 1)?;
     let reg = expect_register(&args[0])?;
-    match eval.registers.get(reg) {
+    match eval.registers().get(reg) {
         Some(RegisterContent::Text(s)) => Ok(Value::heap_string(s.clone())),
         Some(RegisterContent::Rectangle(lines)) => join_rectangle_lines_faithfully(lines),
         _ => Ok(Value::NIL),
@@ -389,12 +391,12 @@ pub(crate) fn builtin_set_register(
         ValueKind::Veclike(VecLikeType::Marker) => RegisterContent::Marker(args[1]),
         ValueKind::Fixnum(n) => RegisterContent::Number(n),
         ValueKind::Nil => {
-            eval.registers.clear(reg);
+            eval.registers_mut().clear(reg);
             return Ok(Value::NIL);
         }
         _other => RegisterContent::FrameConfig(args[1]),
     };
-    eval.registers.set(reg, content);
+    eval.registers_mut().set(reg, content);
     Ok(Value::NIL)
 }
 

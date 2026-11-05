@@ -125,11 +125,12 @@ pub(crate) fn record_active_minibuffer_selection(
     minibuf_id: crate::buffer::BufferId,
 ) -> EvalResult {
     let _ = eval
-        .frames
+        .frame_manager_mut()
         .note_window_selected(active.minibuffer_window_id);
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     crate::emacs_core::window_cmds::record_buffer_in_state(
-        &mut eval.frames,
-        &mut eval.edit.buffers,
+        frames,
+        buffers,
         minibuf_id,
         active.minibuffer_frame.0,
     )?;
@@ -144,7 +145,7 @@ fn record_restored_calling_window_selection(
     active: ActiveMinibufferWindowState,
 ) -> EvalResult {
     let Some(buffer_id) = eval
-        .frames
+        .frame_manager()
         .get(active.calling_frame.0)
         .and_then(|frame| frame.find_window(active.calling_selected_window))
         .and_then(crate::window::Window::buffer_id)
@@ -152,11 +153,12 @@ fn record_restored_calling_window_selection(
         return Ok(Value::NIL);
     };
     let _ = eval
-        .frames
+        .frame_manager_mut()
         .note_window_selected(active.calling_selected_window);
+    let (frames, buffers) = eval.frame_manager_and_buffers_mut();
     crate::emacs_core::window_cmds::record_buffer_in_state(
-        &mut eval.frames,
-        &mut eval.edit.buffers,
+        frames,
+        buffers,
         buffer_id,
         active.calling_frame.0,
     )?;
@@ -174,11 +176,13 @@ pub(crate) fn activate_minibuffer_window(
     if crate::emacs_core::eval::gnu_redisplay_hooks_enabled() {
         return super::redisplay::activate(eval, minibuf_id, entry_level);
     }
+    let (frames, buffers, minibuffer_selected_window, active_minibuffer_window) =
+        eval.frame_manager_buffers_and_minibuffer_selection_mut();
     activate_minibuffer_window_in_state(
-        &mut eval.frames,
-        &mut eval.edit.buffers,
-        &mut eval.minibuffer_selected_window,
-        &mut eval.active_minibuffer_window,
+        frames,
+        buffers,
+        minibuffer_selected_window,
+        active_minibuffer_window,
         minibuf_id,
         entry_level,
     )
@@ -323,21 +327,21 @@ pub(crate) fn unwind_minibuffer_session(
         Err(flow) => Err(Flow::from_kind(flow)),
     };
 
-    if shared.minibuffers.depth() > state.depth_before_entry {
+    if shared.minibuffers().depth() > state.depth_before_entry {
         match state.disposition {
             MinibufferExitDisposition::Accepted => {
-                let _ = shared.minibuffers.exit_minibuffer();
+                let _ = shared.minibuffers_mut().exit_minibuffer();
             }
             MinibufferExitDisposition::Pending | MinibufferExitDisposition::Aborted => {
-                shared.minibuffers.abort_minibuffer();
+                shared.minibuffers_mut().abort_minibuffer();
             }
         }
     }
     // Defensive recovery for a future nested setup path: specpdl actions
     // unwind LIFO, so normally the loop executes zero times after the pop
     // above.  The invariant on return is the captured entry depth.
-    while shared.minibuffers.depth() > state.depth_before_entry {
-        shared.minibuffers.abort_minibuffer();
+    while shared.minibuffers().depth() > state.depth_before_entry {
+        shared.minibuffers_mut().abort_minibuffer();
     }
 
     let teardown_outcome = if let Some(saved) = state.active_window_state {
@@ -346,17 +350,20 @@ pub(crate) fn unwind_minibuffer_session(
             .buffers
             .switch_current_unrecorded(state.minibuf_id);
         if crate::emacs_core::eval::gnu_redisplay_hooks_enabled() {
-            let depth_after_pop = shared.minibuffers.depth();
+            let depth_after_pop = shared.minibuffers().depth();
             super::redisplay::teardown(shared, state.minibuf_id, depth_after_pop, saved)
         } else {
+            let depth_after_pop = shared.minibuffers().depth();
             let shared_ptr = std::ptr::NonNull::from(&mut *shared);
+            let (frames, buffers, minibuffer_selected_window, active_minibuffer_window) =
+                shared.frame_manager_buffers_and_minibuffer_selection_mut();
             teardown_minibuffer_level_in_state(
-                &mut shared.frames,
-                &mut shared.edit.buffers,
-                &mut shared.minibuffer_selected_window,
-                &mut shared.active_minibuffer_window,
+                frames,
+                buffers,
+                minibuffer_selected_window,
+                active_minibuffer_window,
                 state.minibuf_id,
-                shared.minibuffers.depth(),
+                depth_after_pop,
                 saved,
                 move || unsafe {
                     run_minibuffer_mode_if_bound(
@@ -397,7 +404,7 @@ pub(crate) fn unwind_minibuffer_session(
     };
     shared.store_variable_by_name(
         "minibuffer-depth",
-        Value::fixnum(shared.minibuffers.depth() as i64),
+        Value::fixnum(shared.minibuffers().depth() as i64),
     );
     shared.store_variable_by_name("current-prefix-arg", state.saved_current_prefix_arg);
     shared.store_variable_by_name(
@@ -413,10 +420,10 @@ pub(crate) fn unwind_minibuffer_session(
     tracing::debug!(
         "read-from-minibuffer: unwound current_buffer={:?} depth={} active_window={:?} selected_window={:?}",
         shared.edit.buffers.current_buffer_id(),
-        shared.minibuffers.depth(),
-        shared.active_minibuffer_window,
+        shared.minibuffers().depth(),
+        shared.active_minibuffer_window(),
         shared
-            .frames
+            .frame_manager()
             .selected_frame()
             .map(|frame| frame.selected_window)
     );
@@ -499,11 +506,13 @@ pub(crate) fn restore_minibuffer_window(
         super::redisplay::restore(eval, saved).apply(eval);
         return;
     }
+    let (frames, buffers, minibuffer_selected_window, active_minibuffer_window) =
+        eval.frame_manager_buffers_and_minibuffer_selection_mut();
     let effect = restore_minibuffer_window_in_state(
-        &mut eval.frames,
-        &mut eval.edit.buffers,
-        &mut eval.minibuffer_selected_window,
-        &mut eval.active_minibuffer_window,
+        frames,
+        buffers,
+        minibuffer_selected_window,
+        active_minibuffer_window,
         saved,
     );
     effect.apply(eval);

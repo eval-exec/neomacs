@@ -2359,8 +2359,8 @@ pub(super) fn create_network_process_record(
     coding: ProcessCodingSystems,
 ) -> Result<ProcessId, Flow> {
     let symbol_mode = eval.symbol_mode();
-    validate_resolved_process_coding_systems(Some(&eval.coding_systems), coding, symbol_mode)?;
-    let id = eval.processes.create_process_with_kind_lisp(
+    validate_resolved_process_coding_systems(Some(&eval.coding_systems()), coding, symbol_mode)?;
+    let id = eval.processes_mut().create_process_with_kind_lisp(
         name,
         buffer,
         LispString::from_utf8("network"),
@@ -7559,7 +7559,7 @@ pub trait ProcessContextExt {
 
 impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
     fn wait_while_network_process_connecting(&mut self, id: ProcessId) -> Result<(), Flow> {
-        while self.processes.get(id).is_some_and(|proc| {
+        while self.processes().get(id).is_some_and(|proc| {
             proc.kind == ProcessKind::Network && process_status_is_connect(&proc.status)
         }) {
             let _ = self.wait_for_process_output(ProcessOutputWaitRequest::new(
@@ -7577,14 +7577,14 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
         id: ProcessId,
         input: &LispString,
     ) -> Result<(), Flow> {
-        if !self.processes.queue_input(id, input)? {
+        if !self.processes_mut().queue_input(id, input)? {
             return Err(signal("error", vec![Value::string("Process not found")]));
         }
 
         // A reentrant timer/filter cannot drive the suspended TLS handshake.
         // Retain application data until verification succeeds, then flush it.
         if self
-            .processes
+            .processes()
             .get(id)
             .is_some_and(|process| process.gnutls_initstage == GnutlsInitStage::HandshakeTried)
         {
@@ -7592,18 +7592,18 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
         }
 
         loop {
-            match self.processes.flush_process_write_queue(id)? {
+            match self.processes_mut().flush_process_write_queue(id)? {
                 ProcessWriteFlush::Drained => return Ok(()),
                 ProcessWriteFlush::NoSource => {
                     if self
-                        .processes
+                        .processes()
                         .get_any(id)
                         .is_some_and(process_is_harness_record_without_write_source)
                     {
                         return Ok(());
                     }
                     let name = self
-                        .processes
+                        .processes()
                         .get_any(id)
                         .map(|proc| process_name_runtime(proc.name))
                         .unwrap_or_else(|| id.to_string());
@@ -7627,7 +7627,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
     }
     fn setup_process_output_descriptor(&mut self, id: ProcessId) -> Result<(), Flow> {
         let coding = self
-            .processes
+            .processes()
             .get_any(id)
             .ok_or_else(|| signal("error", vec![Value::string("Process not found")]))?
             .coding_encode
@@ -7636,10 +7636,10 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
             .unwrap_or_else(|| neovm_value::intern::intern("undecided"));
         let state = ProcessEncodingState::initialized(
             neovm_text::encoding::RuntimeCodingSystem::from_symbol(coding),
-            &self.coding_systems,
+            &self.coding_systems(),
             self.eol_conversion(),
         )?;
-        self.processes
+        self.processes_mut()
             .get_any_mut(id)
             .expect("setup does not invoke Lisp")
             .encoding_state = state;
@@ -7669,7 +7669,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
 
     fn sync_process_read_config_from_visible_variables(&mut self) {
         let config = self.visible_process_read_config();
-        self.processes.set_default_read_config(config);
+        self.processes_mut().set_default_read_config(config);
     }
 
     /// GNU `status_notify`'s branch on `delete_exited_processes`
@@ -7685,21 +7685,21 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
     }
 
     fn kill_buffer_processes(&mut self, buffer_id: BufferId) -> Result<(), Flow> {
-        for id in self.processes.process_ids_for_buffer(buffer_id) {
-            let Some(kind) = self.processes.get(id).map(|proc| proc.kind) else {
+        for id in self.processes().process_ids_for_buffer(buffer_id) {
+            let Some(kind) = self.processes().get(id).map(|proc| proc.kind) else {
                 continue;
             };
             if kind == ProcessKind::Real {
-                self.processes.hangup_real_process_for_buffer_kill(id);
+                self.processes_mut().hangup_real_process_for_buffer_kill(id);
                 continue;
             }
 
             let was_terminal = self
-                .processes
+                .processes()
                 .get(id)
                 .is_some_and(|proc| process_status_is_terminal_for_notify(&proc.status));
             let was_pending_notification = self
-                .processes
+                .processes()
                 .get(id)
                 .is_some_and(|proc| proc.status_notify_pending);
             // GNU `kill_buffer_processes` calls `Fdelete_process` for a
@@ -7864,25 +7864,25 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
         target_process: Option<ProcessId>,
         outcome: &mut ProcessOutputServiceOutcome,
     ) -> Result<bool, Flow> {
-        let Some(owner_id) = self.processes.stderr_pipe_owner(pid) else {
+        let Some(owner_id) = self.processes().stderr_pipe_owner(pid) else {
             return Ok(true);
         };
-        let owner_already_notified = self.processes.get(owner_id).is_some_and(|owner| {
+        let owner_already_notified = self.processes().get(owner_id).is_some_and(|owner| {
             process_status_is_terminal_for_notify(&owner.status) && !owner.status_notify_pending
         });
         if owner_already_notified {
             return Ok(true);
         }
         let mut owner_pending = self
-            .processes
+            .processes()
             .get(owner_id)
             .is_some_and(|owner| owner.status_notify_pending);
         #[cfg(not(windows))]
         {
             owner_pending = owner_pending
-                || (self.processes.check_child_status_change(owner_id)
+                || (self.processes_mut().check_child_status_change(owner_id)
                     && self
-                        .processes
+                        .processes()
                         .get(owner_id)
                         .is_some_and(|owner| owner.status_notify_pending));
         }
@@ -7969,7 +7969,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
     /// evaluated per read rather than cached on the process.
     fn process_output_sink(&self, id: ProcessId) -> ProcessOutputDestination {
         let fast_read = self.fast_read_process_output_enabled();
-        let Some(proc) = self.processes.get(id) else {
+        let Some(proc) = self.processes().get(id) else {
             return ProcessOutputDestination::to_filter();
         };
         ProcessOutputDestination::of(proc, &self.edit.buffers, fast_read)
@@ -8025,10 +8025,11 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
         // `inhibit-eol-conversion': the trailing-CR lookahead that made it
         // matter is `eol_dos`, and `eol_dos` is the DECODER's, as it is in GNU
         // (src/coding.c:1250-1251).
-        let (run, bytes_read, last_block) = match self.processes.read_process_output_result(
+        let (processes, coding_systems) = self.processes_and_coding_systems_mut();
+        let (run, bytes_read, last_block) = match processes.read_process_output_result(
             id,
             destination,
-            &self.coding_systems,
+            coding_systems,
             symbol_mode,
         ) {
             ProcessBytesRead::Data { run, bytes_read } => (run, bytes_read, false),
@@ -8058,7 +8059,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
         // Stage three: GNU's `read_process_output_set_last_coding_system`
         // (src/process.c:6417-6459), which runs after EVERY decoded run.
         self.record_process_run_coding(id, decoded.run.coding);
-        self.processes
+        self.processes_mut()
             .finish_process_run(id, decoded.run.carryover, decoded.decoder);
         if last_block {
             // GNU's zero-byte last block is delivered from INSIDE the read --
@@ -8073,7 +8074,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
             // (src/coding.c:8194) and hands to the filter like any other run.
             if !decoded.run.text.is_empty() {
                 let filter = self
-                    .processes
+                    .processes()
                     .get(id)
                     .map(|p| p.filter)
                     .unwrap_or(Value::NIL);
@@ -8152,7 +8153,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
         self.set_variable("last-coding-system-used", used_symbol);
 
         // `if (!EQ (p->decode_coding_system, Vlast_coding_system_used))`, :6423.
-        let Some(proc) = self.processes.get_mut(id) else {
+        let Some(proc) = self.processes_mut().get_mut(id) else {
             return;
         };
         if neovm_value::value::eq_value(&proc.coding_decode, &used_symbol) {
@@ -8165,15 +8166,18 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
         // "If a coding system for encoding is not yet decided, we set it as the
         // same as coding-system for decoding" (:6431-6433).
         let inherited =
-            neovm_text::encoding::coding_inherit_unix_eol_type(&self.coding_systems, used);
+            neovm_text::encoding::coding_inherit_unix_eol_type(&self.coding_systems(), used);
         let coding = neovm_text::encoding::RuntimeCodingSystem::from_symbol(
             neovm_value::intern::intern(&inherited),
         );
         // Inheritance was derived from a registered decoder coding above.
-        let state =
-            ProcessEncodingState::initialized(coding, &self.coding_systems, self.eol_conversion())
-                .expect("inherited coding is registered");
-        if let Some(proc) = self.processes.get_mut(id) {
+        let state = ProcessEncodingState::initialized(
+            coding,
+            &self.coding_systems(),
+            self.eol_conversion(),
+        )
+        .expect("inherited coding is registered");
+        if let Some(proc) = self.processes_mut().get_mut(id) {
             proc.coding_encode = Value::symbol(&inherited);
             proc.encoding_state = state;
         }
@@ -8197,7 +8201,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                     }
                     if !data.is_empty() {
                         let filter = self
-                            .processes
+                            .processes()
                             .get(stderr_id)
                             .map(|p| p.filter)
                             .unwrap_or(Value::NIL);
@@ -8208,11 +8212,13 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                     }
                 }
                 ProcessOutputRead::Eof | ProcessOutputRead::NoSource => {
-                    self.processes.retire_pipe_process_at_read_eof(stderr_id);
+                    self.processes_mut()
+                        .retire_pipe_process_at_read_eof(stderr_id);
                     return Ok(outcome);
                 }
                 ProcessOutputRead::Failed => {
-                    self.processes.retire_process_at_read_failure(stderr_id);
+                    self.processes_mut()
+                        .retire_process_at_read_failure(stderr_id);
                     return Ok(outcome);
                 }
                 ProcessOutputRead::WouldBlock => return Ok(outcome),
@@ -8237,7 +8243,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                 }
                 if !data.is_empty() {
                     let filter = self
-                        .processes
+                        .processes()
                         .get(pid)
                         .map(|p| p.filter)
                         .unwrap_or(Value::NIL);
@@ -8254,7 +8260,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                 ProcessOutputDrainDisposition::Terminal
             }
             ProcessOutputRead::Failed => {
-                self.processes.retire_process_at_read_failure(pid);
+                self.processes_mut().retire_process_at_read_failure(pid);
                 ProcessOutputDrainDisposition::Terminal
             }
         };
@@ -8320,7 +8326,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
     /// notification retires nothing.
     fn notify_process_status_sentinel(&mut self, pid: ProcessId) -> Result<(), Flow> {
         let Some(notification) =
-            ProcessStatusNotification::for_retired_process(&self.processes, pid)
+            ProcessStatusNotification::for_retired_process(&self.processes(), pid)
         else {
             return Ok(());
         };
@@ -8329,7 +8335,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
         // SIGCONT tick it moved at :7178; without the mark, that tick would
         // still be standing and the wait's own walk would run the sentinel a
         // second time.
-        self.processes.mark_status_change_notified(pid);
+        self.processes_mut().mark_status_change_notified(pid);
         self.run_status_notification_sentinel(notification)
     }
 
@@ -8361,15 +8367,15 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
         id: ProcessId,
         run_sentinel: bool,
     ) -> Result<(), Flow> {
-        if !self.processes.stamp_process_for_delete(id) {
+        if !self.processes_mut().stamp_process_for_delete(id) {
             // Already gone: `delete-process` is idempotent and runs no sentinel.
-            self.processes.delete_process(id);
+            self.processes_mut().delete_process(id);
             return Ok(());
         }
         let result = if run_sentinel {
             let disposition = self.exited_process_disposition();
             match ProcessStatusNotification::settle_status_and_retire(
-                &mut self.processes,
+                self.processes_mut(),
                 id,
                 ProcessIoTeardown::Terminal,
                 disposition,
@@ -8385,7 +8391,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
         // error in its own `internal_condition_case_1` (:7845-7848), so the
         // removal is never skipped.  Reap before propagating, for the same
         // reason.
-        self.processes.reap_exited_process(id);
+        self.processes_mut().reap_exited_process(id);
         result
     }
 
@@ -8416,7 +8422,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
         request: &ProcessOutputServiceRequest,
     ) -> Result<ProcessOutputServiceOutcome, Flow> {
         let target_process = request.target_process();
-        let proc_ids = request.live_processes(self.processes.live_process_ids());
+        let proc_ids = request.live_processes(self.processes().live_process_ids());
         self.service_process_output_for_ids(
             proc_ids,
             target_process,
@@ -8451,7 +8457,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
         &mut self,
         target_process: Option<ProcessId>,
     ) -> Result<ProcessOutputServiceOutcome, Flow> {
-        let visit = self.processes.processes_with_unnotified_status_change();
+        let visit = self.processes().processes_with_unnotified_status_change();
         if visit.is_empty() {
             return Ok(ProcessOutputServiceOutcome::default());
         }
@@ -8459,7 +8465,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
         // GNU src/process.c:7894, `p->update_tick = p->tick;`, inside the
         // membership test and before anything else the visit does.
         for id in &visit {
-            self.processes.mark_status_change_notified(*id);
+            self.processes_mut().mark_status_change_notified(*id);
         }
         // `publish_status_before_readable_output` is GNU's order in
         // `status_notify` itself: it drains the process's remaining output
@@ -8475,7 +8481,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
     ) -> Result<(), Flow> {
         let result = (|| {
             loop {
-                let proc = self.processes.get_mut(id).ok_or_else(|| {
+                let proc = self.processes_mut().get_mut(id).ok_or_else(|| {
                     signal(
                         "error",
                         vec![Value::string("Process closed during TLS negotiation")],
@@ -8491,12 +8497,12 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                     TlsHandshakeProgress::Ready => {
                         proc.gnutls_initstage = GnutlsInitStage::Ready;
                         proc.gnutls_boot_parameters = Value::NIL;
-                        self.processes.register_socket_fd(id).ok();
-                        self.processes.flush_process_write_queue(id)?;
+                        self.processes().register_socket_fd(id).ok();
+                        self.processes_mut().flush_process_write_queue(id)?;
                         return Ok(());
                     }
                     TlsHandshakeProgress::Pending(interest) => {
-                        self.processes
+                        self.processes()
                             .set_tls_handshake_interest(id, Some(interest));
                         self.wait_for_tls_handshake(id)?;
                     }
@@ -8504,7 +8510,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
             }
         })();
         if result.is_err() {
-            self.processes.delete_process(id);
+            self.processes_mut().delete_process(id);
         }
         result
     }
@@ -8517,7 +8523,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
         let roots = self.save_specpdl_roots();
         self.push_specpdl_root(sentinel);
         let result = if self
-            .processes
+            .processes()
             .get(id)
             .is_some_and(|proc| proc.gnutls_initstage == GnutlsInitStage::HandshakeTried)
         {
@@ -8541,7 +8547,8 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
         for pid in writable_processes {
             match {
                 let mode = self.symbol_mode();
-                self.processes.complete_pending_network_connect(pid, mode)?
+                self.processes_mut()
+                    .complete_pending_network_connect(pid, mode)?
             } {
                 PendingNetworkConnectCompletion::None => {}
                 PendingNetworkConnectCompletion::Retrying => {
@@ -8560,7 +8567,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                     // GNU's :6141 bump is consumed by the `status_notify` of
                     // the wait it happened inside; this port runs the sentinel
                     // in the same pass, so the tick is spent here.
-                    self.processes.mark_status_change_notified(pid);
+                    self.processes_mut().mark_status_change_notified(pid);
                     self.run_process_sentinel_callback(
                         pid,
                         sentinel,
@@ -8571,7 +8578,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                     outcome.record_serviced();
                 }
             }
-            match self.processes.flush_process_write_queue(pid)? {
+            match self.processes_mut().flush_process_write_queue(pid)? {
                 ProcessWriteFlush::Drained | ProcessWriteFlush::Blocked => {
                     outcome.record_serviced();
                 }
@@ -8643,10 +8650,11 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
             // hoisting a continuously ready target would starve its peers.
             // JUST-THIS-ONE already restricts the request's process set.
             proc_ids.sort_unstable();
-            let start = proc_ids.partition_point(|id| *id <= self.processes.ids.last_read_process);
+            let start =
+                proc_ids.partition_point(|id| *id <= self.processes().ids.last_read_process);
             proc_ids.rotate_left(start);
         }
-        order_pending_status_notifications_newest_first(&self.processes, &mut proc_ids);
+        order_pending_status_notifications_newest_first(&self.processes(), &mut proc_ids);
         if pass == ProcessOutputServicePass::StatusNotification
             && let Some(target) = target_process
             && let Some(index) = proc_ids.iter().position(|pid| *pid == target)
@@ -8673,17 +8681,18 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                 // read; advancing for every scanned id is an approximation,
                 // but the cursor wraps once it passes the largest live id, so
                 // no source can be skipped forever.
-                self.processes.ids.last_read_process = pid;
+                self.processes_mut().ids.last_read_process = pid;
             }
             let is_target = target_process.is_none_or(|target| target == pid);
             if self
-                .processes
+                .processes()
                 .get(pid)
                 .is_some_and(process_has_ready_async_dns)
             {
                 match {
                     let mode = self.symbol_mode();
-                    self.processes.complete_pending_network_connect(pid, mode)?
+                    self.processes_mut()
+                        .complete_pending_network_connect(pid, mode)?
                 } {
                     PendingNetworkConnectCompletion::None => {}
                     PendingNetworkConnectCompletion::Retrying => {
@@ -8699,7 +8708,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                         outcome.record_serviced();
                         // Same as above: the sentinel runs in this pass, so
                         // GNU's :6141 tick is consumed here.
-                        self.processes.mark_status_change_notified(pid);
+                        self.processes_mut().mark_status_change_notified(pid);
                         self.run_process_sentinel_callback(
                             pid,
                             sentinel,
@@ -8713,7 +8722,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                 continue;
             }
             if self
-                .processes
+                .processes()
                 .get(pid)
                 .is_some_and(|process| process.status_notify_pending)
             {
@@ -8727,10 +8736,10 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                 // is removed from the alist by its own notification, so the
                 // owner's sentinel then found `get-buffer-process' nil where
                 // GNU still has the pipe attached and `closed` (ledger 54).
-                let is_implicit_stderr = self.processes.get(pid).is_some_and(|process| {
+                let is_implicit_stderr = self.processes().get(pid).is_some_and(|process| {
                     process.kind == ProcessKind::Pipe
                         && !process.live_io.child.has_child()
-                        && self.processes.stderr_pipe_owner(pid).is_some()
+                        && self.processes().stderr_pipe_owner(pid).is_some()
                 });
                 let allow_pipe_notification =
                     self.notify_stderr_pipe_owner_first(pid, target_process, &mut outcome)?;
@@ -8739,7 +8748,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                 }
 
                 if self
-                    .processes
+                    .processes()
                     .get(pid)
                     .is_some_and(process_defers_pty_status_after_explicit_coding)
                 {
@@ -8764,19 +8773,19 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
             // before reading output, matching GNU's already-delivered
             // `raw_status_new`; readiness-wake passes let output win first.
             let has_readable_process_io = self
-                .processes
+                .processes()
                 .get(pid)
                 .is_some_and(process_has_readable_process_io);
             let defer_status_poll_for_readable_pty = self
-                .processes
+                .processes()
                 .get(pid)
                 .is_some_and(process_defers_status_poll_while_readable_pty);
             if !defer_status_poll_for_readable_pty
                 && (publish_status_before_readable_output || !has_readable_process_io)
-                && self.processes.check_child_status_change(pid)
+                && self.processes_mut().check_child_status_change(pid)
             {
                 if self
-                    .processes
+                    .processes()
                     .get(pid)
                     .is_some_and(process_defers_pty_status_after_explicit_coding)
                 {
@@ -8797,26 +8806,27 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                 continue;
             }
             if self
-                .processes
+                .processes()
                 .get(pid)
                 .is_some_and(|process| !process_has_readable_process_io(process))
             {
                 continue;
             }
-            if self.processes.get(pid).is_some_and(|process| {
+            if self.processes().get(pid).is_some_and(|process| {
                 ProcessStatusSymbol::from_status_value(process.status)
                     == Some(ProcessStatusSymbol::Connect)
             }) {
                 continue;
             }
-            if target_process.is_none() && self.processes.clear_adaptive_read_skip_if_needed(pid) {
+            if target_process.is_none()
+                && self.processes_mut().clear_adaptive_read_skip_if_needed(pid)
+            {
                 continue;
             }
 
             self.sync_process_read_config_from_visible_variables();
-            let accepted = self
-                .processes
-                .accept_network_server_connections(&mut self.edit.buffers, pid)?;
+            let (processes, buffers) = self.processes_and_buffers_mut();
+            let accepted = processes.accept_network_server_connections(buffers, pid)?;
             for event in &accepted {
                 self.setup_process_output_descriptor(event.client_id)?;
             }
@@ -8845,7 +8855,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                         &event.log_message,
                     )?;
                     let sentinel = self
-                        .processes
+                        .processes()
                         .get(event.client_id)
                         .map(|process| process.sentinel)
                         .unwrap_or(event.sentinel);
@@ -8861,7 +8871,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
             accepted_result?;
 
             let is_network = self
-                .processes
+                .processes()
                 .get(pid)
                 .map(|p| p.kind == ProcessKind::Network)
                 .unwrap_or(false);
@@ -8871,7 +8881,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
             // `accept-process-output` would block forever waiting on it.  This
             // must NOT match the main (Real) process, which owns the child.
             let is_stderr_pipe = self
-                .processes
+                .processes()
                 .get(pid)
                 .is_some_and(is_standalone_pipe_process);
 
@@ -8896,7 +8906,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                     }
                     if !data.is_empty() {
                         let filter = self
-                            .processes
+                            .processes()
                             .get(pid)
                             .map(|p| p.filter)
                             .unwrap_or(Value::NIL);
@@ -8904,7 +8914,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                     }
                 }
                 ProcessOutputRead::Eof if is_stderr_pipe => {
-                    if let Some(owner_id) = self.processes.stderr_pipe_owner(pid)
+                    if let Some(owner_id) = self.processes().stderr_pipe_owner(pid)
                         && target_process == Some(owner_id)
                     {
                         if !split_stderr_owners_with_output.contains(&owner_id) {
@@ -8940,7 +8950,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                     // from `get-buffer-process' -- ahead of the OWNER's
                     // sentinel, where GNU's newest-first alist walk always
                     // puts the owner first (ledger entry 54).
-                    self.processes.retire_pipe_process_at_read_eof(pid);
+                    self.processes_mut().retire_pipe_process_at_read_eof(pid);
                     handled_terminal_eof = true;
                 }
                 ProcessOutputRead::Eof | ProcessOutputRead::Failed if is_network => {
@@ -8955,7 +8965,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                     // remote peer\n" (`status_message`). Derive the
                     // sentinel text from the status so the two can never
                     // disagree.
-                    if let Some(proc) = self.processes.get_mut(pid)
+                    if let Some(proc) = self.processes_mut().get_mut(pid)
                         && (process_status_is_run(&proc.status)
                             || ProcessStatusSymbol::from_status_value(proc.status)
                                 == Some(ProcessStatusSymbol::Open))
@@ -8968,7 +8978,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                     // makes that the only expressible order.
                     let disposition = self.exited_process_disposition();
                     let notification = ProcessStatusNotification::settle_status_and_retire(
-                        &mut self.processes,
+                        self.processes_mut(),
                         pid,
                         ProcessIoTeardown::Network,
                         disposition,
@@ -8980,7 +8990,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                 }
                 ProcessOutputRead::Failed => {
                     outcome.record_serviced();
-                    self.processes.retire_process_at_read_failure(pid);
+                    self.processes_mut().retire_process_at_read_failure(pid);
                     handled_terminal_eof = true;
                 }
                 ProcessOutputRead::Eof => {
@@ -8994,20 +9004,20 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
             }
 
             if saw_pty_eof
-                && self.processes.get(pid).is_some_and(|process| {
+                && self.processes().get(pid).is_some_and(|process| {
                     process_output_source(process) == Some(ProcessOutputSource::Pty)
                 })
             {
-                self.processes.stop_pty_process_read_monitoring(pid);
+                self.processes_mut().stop_pty_process_read_monitoring(pid);
             }
 
             if saw_output {
                 let associated_stderr_id = self
-                    .processes
+                    .processes()
                     .get(pid)
                     .and_then(|proc| process_value_to_id(&proc.stderrproc));
                 if let Some(stderr_id) =
-                    associated_stderr_id.filter(|id| self.processes.get(*id).is_some())
+                    associated_stderr_id.filter(|id| self.processes().get(*id).is_some())
                 {
                     if !split_stderr_owners_with_output.contains(&pid) {
                         split_stderr_owners_with_output.push(pid);
@@ -9048,21 +9058,21 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
                 // lost 0/60 in GNU and was lost 4/60 here until this follow-up
                 // covered the initial poll too.
                 let publish_same_pass_after_output = self
-                    .processes
+                    .processes()
                     .get(pid)
                     .is_some_and(process_publishes_status_after_ready_output);
-                let mut status_changed =
-                    publish_same_pass_after_output && self.processes.check_child_status_change(pid);
+                let mut status_changed = publish_same_pass_after_output
+                    && self.processes_mut().check_child_status_change(pid);
                 if !status_changed && publish_same_pass_after_output {
-                    let _ = self.processes.wait_for_backend_events(
+                    let _ = self.processes().wait_for_backend_events(
                         Duration::ZERO,
                         ProcessWaitBackendInterest::ProcessesOnly,
                     );
-                    status_changed = self.processes.check_child_status_change(pid);
+                    status_changed = self.processes_mut().check_child_status_change(pid);
                 }
                 if status_changed {
                     let defer_status_after_output = self
-                        .processes
+                        .processes()
                         .get(pid)
                         .is_some_and(process_defers_pty_status_after_explicit_coding);
                     if defer_status_after_output {
@@ -9081,10 +9091,10 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
             // ordering only when bytes are actually pending, not for no-output
             // exits such as `sh -c "exit 7"`.
             if (!publish_status_before_readable_output || has_readable_process_io)
-                && self.processes.check_child_status_change(pid)
+                && self.processes_mut().check_child_status_change(pid)
             {
                 if self
-                    .processes
+                    .processes()
                     .get(pid)
                     .is_some_and(process_defers_pty_status_after_explicit_coding)
                 {
@@ -9139,14 +9149,14 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
             }
             if !data.is_empty() {
                 let filter = self
-                    .processes
+                    .processes()
                     .get(pid)
                     .map(|p| p.filter)
                     .unwrap_or(Value::NIL);
                 self.run_process_filter_callback(pid, filter, &data)?;
             }
         }
-        if let Some(proc) = self.processes.get_mut(pid)
+        if let Some(proc) = self.processes_mut().get_mut(pid)
             && process_should_defer_explicit_coding_status_after_output(proc, saw_owner_output)
         {
             proc.explicit_coding_status_deferred_once = true;
@@ -9161,10 +9171,10 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
         // the sentinel.  Keep wait accounting attached to the stderr process,
         // as GNU does when WAIT_PROC names only the owner.
         let stderr_id = self
-            .processes
+            .processes()
             .get(pid)
             .and_then(|proc| process_value_to_id(&proc.stderrproc));
-        if let Some(stderr_id) = stderr_id.filter(|id| self.processes.get(*id).is_some()) {
+        if let Some(stderr_id) = stderr_id.filter(|id| self.processes().get(*id).is_some()) {
             outcome.absorb(self.drain_associated_stderr_output_without_notifying(
                 stderr_id,
                 target_process,
@@ -9184,7 +9194,7 @@ impl ProcessContextExt for neovm_eval::emacs_core::eval::Context {
         // longer supply.
         let disposition = self.exited_process_disposition();
         let notification = ProcessStatusNotification::settle_status_and_retire(
-            &mut self.processes,
+            self.processes_mut(),
             pid,
             ProcessIoTeardown::Terminal,
             disposition,

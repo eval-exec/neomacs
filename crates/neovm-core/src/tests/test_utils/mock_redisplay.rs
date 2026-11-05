@@ -10,9 +10,9 @@ use crate::window::{PresentedWindowRegions, WindowDisplaySnapshot};
 use neomacs_display_protocol::types::Rect;
 
 pub fn accept_all_frames(eval: &mut Context) {
-    for frame_id in eval.frames.frame_list() {
+    for frame_id in eval.frame_manager().frame_list() {
         let (windows, snapshots, buffers) = {
-            let frame = eval.frames.get(frame_id).expect("live mock frame");
+            let frame = eval.frame_manager().get(frame_id).expect("live mock frame");
             let windows = frame.all_leaf_ids();
             let mut snapshots = Vec::with_capacity(windows.len());
             let mut buffers = Vec::with_capacity(windows.len());
@@ -38,7 +38,10 @@ pub fn accept_all_frames(eval: &mut Context) {
         };
         let presentation =
             crate::window::geometry::PresentationId::new(eval.begin_interaction_presentation());
-        let frame = eval.frames.get_mut(frame_id).expect("live mock frame");
+        let frame = eval
+            .frame_manager()
+            .get_mut(frame_id)
+            .expect("live mock frame");
         frame
             .prepare_live_window_presentation(presentation, snapshots)
             .expect("validated mock display preparation");

@@ -81,16 +81,16 @@ pub(super) fn reconcile(
     eval: &mut crate::emacs_core::eval::Context,
     frame_id: FrameId,
 ) -> EvalResult {
-    let Some(frame) = eval.frames.get(frame_id) else {
+    let Some(frame) = eval.frame_manager().get(frame_id) else {
         return Ok(Value::NIL);
     };
     // Before window.el is installed, bootstrap fixtures only have native
     // geometry. A leaf root likewise has no children whose allocation needs
     // Lisp policy (GNU window.c:5066-5085). Never fall back after a Lisp error.
     if frame.root_window().children().is_empty()
-        || !eval.obarray.fboundp("window--resize-root-window")
+        || !eval.obarray().fboundp("window--resize-root-window")
     {
-        if let Some(frame) = eval.frames.get_mut(frame_id) {
+        if let Some(frame) = eval.frame_manager_mut().get_mut(frame_id) {
             frame.reconcile_restored_window_configuration_geometry();
         }
         return Ok(Value::NIL);
@@ -99,7 +99,7 @@ pub(super) fn reconcile(
     let target = frame.restored_window_configuration_root_bounds();
     let root = frame.root_window().id();
     for dimension in [ResizeDimension::Width, ResizeDimension::Height] {
-        let Some(frame) = eval.frames.get_mut(frame_id) else {
+        let Some(frame) = eval.frame_manager_mut().get_mut(frame_id) else {
             return Ok(Value::NIL);
         };
         if frame.root_window().id() != root {
@@ -132,7 +132,7 @@ pub(super) fn reconcile(
                     Value::T,
                 ],
             )?;
-            let Some(frame) = eval.frames.get_mut(frame_id) else {
+            let Some(frame) = eval.frame_manager_mut().get_mut(frame_id) else {
                 return Ok(Value::NIL);
             };
             if frame.root_window().id() != root {
@@ -162,7 +162,7 @@ pub(super) fn reconcile(
             }
         }
     }
-    if let Some(frame) = eval.frames.get_mut(frame_id)
+    if let Some(frame) = eval.frame_manager_mut().get_mut(frame_id)
         && frame.root_window().id() == root
     {
         frame.recalculate_minibuffer_bounds();

@@ -273,7 +273,7 @@ fn hash_user_guard_preserves_live_settings_fallback_after_nested_exit() {
     assert_eq!(context.gc_inhibit_depth, 0);
     assert!(context.user_test_gc_accounting_pointer().is_none());
     context
-        .obarray
+        .obarray()
         .set_symbol_value_id(threshold, Value::fixnum(2_097_152));
     assert_eq!(
         context

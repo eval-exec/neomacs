@@ -1008,12 +1008,12 @@ fn image_frame_window_system(
             _ => unreachable!("expect_frame_designator checked frame argument"),
         };
         Ok(eval
-            .frames
+            .frame_manager()
             .get(frame_id)
             .and_then(|frame| frame.effective_window_system()))
     } else {
         Ok(eval
-            .frames
+            .frame_manager()
             .selected_frame()
             .and_then(|frame| frame.effective_window_system()))
     }

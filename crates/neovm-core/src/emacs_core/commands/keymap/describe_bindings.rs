@@ -252,7 +252,7 @@ pub(crate) fn builtin_help_describe_vector(eval: &mut Context, args: Vec<Value>)
             && definition.is_symbol(symbol_mode)
             && let Some(name) = definition.as_symbol_name(symbol_mode)
             && eval
-                .obarray
+                .obarray()
                 .get_property(name, "suppress-keymap")
                 .is_some_and(|value| value.is_truthy())
         {

@@ -68,7 +68,7 @@ fn unregistered_signal_stores_no_event() {
     .expect("dispatch should not fail");
 
     assert!(
-        eval.command_loop.keyboard.kboard.unread_events.is_empty(),
+        eval.command_loop().keyboard.kboard.unread_events.is_empty(),
         "a signal with no registration must not queue a dbus-event"
     );
     crate::emacs_core::dbusbind::reset_thread_locals();
@@ -103,7 +103,7 @@ fn registered_signal_fills_the_handler_slot() {
         .eval_str("'neomacs-signal-test-handler")
         .expect("handler symbol");
     let queued = eval
-        .command_loop
+        .command_loop_mut()
         .keyboard
         .kboard
         .unread_events
@@ -115,7 +115,7 @@ fn registered_signal_fills_the_handler_slot() {
         "handler slot should hold the registered handler, got {slot:?}"
     );
     assert!(
-        eval.command_loop.keyboard.kboard.unread_events.is_empty(),
+        eval.command_loop().keyboard.kboard.unread_events.is_empty(),
         "one message queues one event per handler"
     );
 
@@ -127,7 +127,7 @@ fn registered_signal_fills_the_handler_slot() {
     )
     .expect("dispatch should not fail");
     assert!(
-        eval.command_loop.keyboard.kboard.unread_events.is_empty(),
+        eval.command_loop().keyboard.kboard.unread_events.is_empty(),
         "a path the registration does not name must not match"
     );
     crate::emacs_core::dbusbind::reset_thread_locals();
@@ -258,7 +258,7 @@ fn error_reply_fills_the_error_name_slot() {
     event::queue_events(&mut eval, session(), error).expect("dispatch should not fail");
 
     let queued = eval
-        .command_loop
+        .command_loop_mut()
         .keyboard
         .kboard
         .unread_events
@@ -287,7 +287,7 @@ fn error_reply_fills_the_error_name_slot() {
         "handler slot should hold the registered handler"
     );
     assert!(
-        eval.command_loop.keyboard.kboard.unread_events.is_empty(),
+        eval.command_loop().keyboard.kboard.unread_events.is_empty(),
         "one error reply queues one event"
     );
     crate::emacs_core::dbusbind::reset_thread_locals();

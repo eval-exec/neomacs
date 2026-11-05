@@ -18,7 +18,7 @@ pub(crate) fn builtin_menu_bar_menu_at_x_y(eval: &mut Context, args: Vec<Value>)
     let frame_id = args
         .get(2)
         .and_then(|frame| frame.as_frame_id().map(neovm_value::display_vocab::FrameId))
-        .or_else(|| eval.frames.selected_frame().map(|frame| frame.id));
+        .or_else(|| eval.frame_manager().selected_frame().map(|frame| frame.id));
     if let Some(anchor) = &eval.pending_menu_bar_popup_anchor
         && frame_id.is_none_or(|id| id == anchor.frame_id)
         && let Some(menu_key) = &anchor.menu_key
@@ -36,7 +36,10 @@ pub(crate) fn builtin_menu_bar_menu_at_x_y(eval: &mut Context, args: Vec<Value>)
 }
 
 pub fn menu_bar_top_level_items(eval: &Context) -> Vec<(Value, String)> {
-    menu_bar_top_level_items_for_frame(eval, eval.frames.selected_frame().map(|frame| frame.id))
+    menu_bar_top_level_items_for_frame(
+        eval,
+        eval.frame_manager().selected_frame().map(|frame| frame.id),
+    )
 }
 
 pub(crate) fn menu_bar_top_level_items_for_frame(

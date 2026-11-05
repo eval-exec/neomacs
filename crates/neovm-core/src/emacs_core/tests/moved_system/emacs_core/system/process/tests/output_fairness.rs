@@ -61,18 +61,17 @@ fn ready_process(eval: &mut Context, name: &str, chunks: usize) -> (ProcessId, A
     let buffer = eval
         .eval_str(&format!("(get-buffer-create \"{name}\")"))
         .unwrap();
-    let id = eval.processes.create_process(
+    let id = eval.processes_mut().create_process(
         name.into(),
         buffer,
         "/bin/sh".into(),
         vec!["-c".into(), "producer".into()],
         ProcessCodingSystems::gnu_make_process_initial(),
     );
-    eval.processes
-        .sync_process_mark(&mut eval.edit.buffers, id)
-        .unwrap();
+    let (processes, buffers) = eval.processes_and_buffers_mut();
+    processes.sync_process_mark(buffers, id).unwrap();
     let reads = Arc::new(AtomicUsize::new(0));
-    eval.processes.get_mut(id).unwrap().live_io.pty_reader =
+    eval.processes_mut().get_mut(id).unwrap().live_io.pty_reader =
         Some(PtyOutputReader::new(Box::new(ReadyChunks {
             remaining: chunks,
             reads: Arc::clone(&reads),
@@ -154,7 +153,7 @@ fn accept_process_output_drains_a_ready_burst_in_one_call() {
             let (reader, mut writer) = os_pipe::pipe().unwrap();
             sys::set_fd_nonblocking(reader.as_raw_fd()).unwrap();
             writer.write_all(&vec![b'x'; bytes]).unwrap();
-            let process = eval.processes.get_mut(id).unwrap();
+            let process = eval.processes_mut().get_mut(id).unwrap();
             process.kind = ProcessKind::Pipe;
             process.childp = Value::NIL;
             process.live_io.pty_reader = None;
@@ -231,7 +230,7 @@ fn completed_accept_yields_after_a_bounded_minimum_drain() {
         "pipe holds {written} bytes, too little to observe the follow-up bound"
     );
     {
-        let process = eval.processes.get_mut(hot).unwrap();
+        let process = eval.processes_mut().get_mut(hot).unwrap();
         process.kind = ProcessKind::Pipe;
         process.childp = Value::NIL;
         process.live_io.pty_reader = None;
@@ -303,7 +302,7 @@ fn split_stderr_yields_while_live_and_drains_before_the_exit_sentinel() {
     let mut eval = crate::emacs_core::eval_hook_installers::new_context();
     let (owner, _) = ready_process(&mut eval, "owner-output", 1);
     let (stderr, reads) = ready_process(&mut eval, "stderr-output", 128);
-    eval.processes.get_mut(owner).unwrap().stderrproc = Value::make_process(stderr);
+    eval.processes_mut().get_mut(owner).unwrap().stderrproc = Value::make_process(stderr);
     eval.set_variable("fairness-owner", Value::make_process(owner));
     eval.eval_str(
         r#"(set-process-sentinel fairness-owner
@@ -321,7 +320,7 @@ fn split_stderr_yields_while_live_and_drains_before_the_exit_sentinel() {
         "a busy stderr must yield too; read {live_reads} chunks"
     );
 
-    eval.processes
+    eval.processes_mut()
         .set_child_status_pending(owner, process_status_exit_value(0));
     eval.run_process_status_notification(owner, Some(owner))
         .unwrap();

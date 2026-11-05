@@ -341,7 +341,7 @@ impl HostInputPublisher {
 
     #[cfg_attr(feature = "test-support", visibility::make(pub))]
     fn connect(context: &mut Context) -> Self {
-        let session = context.processes.attach_host_control_session();
+        let session = context.processes().attach_host_control_session();
         let wake = match context.wait_notifier() {
             Some(notifier) => InputWake::Native(notifier),
             None => InputWake::ChannelFallback,

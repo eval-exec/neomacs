@@ -274,7 +274,7 @@ impl MeasurementTarget {
     fn resolve(self, eval: &Context) -> Result<Option<ViewportIdentity>, Flow> {
         match self {
             Self::Selected => {
-                let Some(frame) = eval.frames.selected_frame() else {
+                let Some(frame) = eval.frame_manager().selected_frame() else {
                     return Ok(None);
                 };
                 let Some(buffer) = frame
@@ -295,7 +295,7 @@ impl MeasurementTarget {
                 buffer,
             } => {
                 if eval
-                    .frames
+                    .frame_manager()
                     .get(frame)
                     .and_then(|frame| frame.find_window(window))
                     .and_then(Window::buffer_id)
@@ -322,11 +322,10 @@ impl MeasurementTarget {
 }
 
 fn synchronize_selected_point(eval: &mut Context) {
-    if let Some(frame) = eval.frames.selected_frame().map(|frame| frame.id) {
+    if let Some(frame) = eval.frame_manager().selected_frame().map(|frame| frame.id) {
+        let (frames, buffers) = eval.frame_manager_and_buffers_mut();
         crate::emacs_core::window_cmds::remember_selected_window_point_in_state(
-            &mut eval.frames,
-            &mut eval.edit.buffers,
-            frame,
+            frames, buffers, frame,
         );
     }
 }
@@ -367,7 +366,7 @@ pub(super) fn measure_stable_plan<Plan>(
             window,
             buffer,
         } = identity;
-        crate::window::window_markers::sync_all_frames_for_buffer(&mut eval.frames, buffer);
+        crate::window::window_markers::sync_all_frames_for_buffer(eval.frame_manager_mut(), buffer);
         synchronize_selected_point(eval);
         let before = eval.window_layout_attempt_freshness(frame, window, buffer);
         let policy = target.policy(eval, identity);
@@ -395,7 +394,7 @@ fn plan_scroll(
     if !engine_for_context(eval).uses_display_rows() {
         return Ok(None);
     }
-    let Some(frame) = eval.frames.selected_frame() else {
+    let Some(frame) = eval.frame_manager().selected_frame() else {
         return Ok(None);
     };
     if frame.window_system.is_none() {

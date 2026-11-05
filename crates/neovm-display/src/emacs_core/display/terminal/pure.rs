@@ -670,7 +670,7 @@ fn live_terminal_id_by_handle(value: &Value) -> Option<u64> {
 }
 
 fn selected_terminal_id(eval: &neovm_eval::emacs_core::eval::Context) -> Option<u64> {
-    eval.frames
+    eval.frame_manager()
         .selected_frame()
         .map(|frame| frame.terminal_id)
         .or_else(|| {
@@ -695,7 +695,7 @@ pub(crate) fn decode_terminal_id_eval(
     }
     match value.kind() {
         ValueKind::Veclike(VecLikeType::Frame) => eval
-            .frames
+            .frame_manager()
             .get(crate::window::FrameId(value.as_frame_id().unwrap()))
             .and_then(|frame| {
                 with_terminal_manager(|slot| {
@@ -751,16 +751,14 @@ pub(crate) fn decode_frame_or_terminal(
     arg: Option<&Value>,
 ) -> FrameOrTerminal {
     let Some(value) = arg.filter(|value| !value.is_nil()) else {
+        let (frames, buffers) = eval.frame_manager_and_buffers_mut();
         return FrameOrTerminal::Frame(
-            crate::emacs_core::window_cmds::ensure_selected_frame_id_in_state(
-                &mut eval.frames,
-                &mut eval.edit.buffers,
-            ),
+            crate::emacs_core::window_cmds::ensure_selected_frame_id_in_state(frames, buffers),
         );
     };
     if let ValueKind::Veclike(VecLikeType::Frame) = value.kind() {
         let frame_id = crate::window::FrameId(value.as_frame_id().expect("frame value"));
-        return if eval.frames.get(frame_id).is_some() {
+        return if eval.frame_manager().get(frame_id).is_some() {
             FrameOrTerminal::Frame(frame_id)
         } else {
             // GNU reaches `FRAME_LIVE_P (f)` here and answers nil.
@@ -1104,9 +1102,10 @@ pub fn builtin_frame_initial_p(
     let initial = match decode_frame_or_terminal(eval, args.first()) {
         // GNU: `FRAME_LIVE_P (f) && FRAME_INITIAL_P (f)`; the resolution above
         // has already established the frame is live.
-        FrameOrTerminal::Frame(frame_id) => {
-            eval.frames.get(frame_id).is_some_and(|frame| frame.initial)
-        }
+        FrameOrTerminal::Frame(frame_id) => eval
+            .frame_manager()
+            .get(frame_id)
+            .is_some_and(|frame| frame.initial),
         // GNU: `t->type == output_initial`.
         FrameOrTerminal::Terminal(terminal_id) => {
             terminal_output_method_for_id(terminal_id).is_some_and(TerminalOutputMethod::is_initial)
@@ -1151,7 +1150,7 @@ pub fn builtin_frame_terminal(
         } else {
             match frame.kind() {
                 ValueKind::Veclike(VecLikeType::Frame) => eval
-                    .frames
+                    .frame_manager()
                     .get(crate::window::FrameId(frame.as_frame_id().unwrap()))
                     .map(|frame| frame.terminal_id),
                 _ => None,
@@ -1189,10 +1188,10 @@ pub fn builtin_terminal_live_p(
     });
     let mut terminal_has_frame = false;
     let window_system = eval
-        .frames
+        .frame_manager()
         .frame_list()
         .into_iter()
-        .filter_map(|frame_id| eval.frames.get(frame_id))
+        .filter_map(|frame_id| eval.frame_manager().get(frame_id))
         .filter(|frame| frame.terminal_id == terminal_id)
         .find_map(|frame| {
             terminal_has_frame = true;
@@ -1320,7 +1319,7 @@ pub fn builtin_tty_top_frame(
         return Ok(Value::NIL);
     }
     let top = eval
-        .frames
+        .frame_manager()
         .top_frame_on_terminal(terminal_id)
         .map(|frame_id| Value::make_frame(frame_id.0))
         .unwrap_or(Value::NIL);
@@ -1547,11 +1546,11 @@ pub(crate) fn delete_terminal_owned(
     }
 
     let frames_to_delete = eval
-        .frames
+        .frame_manager()
         .frame_list()
         .into_iter()
         .filter(|frame_id| {
-            eval.frames
+            eval.frame_manager()
                 .get(*frame_id)
                 .is_some_and(|frame| frame.terminal_id == terminal_id)
         })
@@ -1565,13 +1564,13 @@ pub(crate) fn delete_terminal_owned(
     }
     delete_terminal_record(terminal_id);
     eval.forget_window_system_keyboard(terminal_id);
-    eval.command_loop
+    eval.command_loop_mut()
         .keyboard
         .delete_terminal_kboard(terminal_id);
-    if eval.frames.selected_frame().is_none()
-        && let Some(next_selected) = eval.frames.frame_list().into_iter().next()
+    if eval.frame_manager().selected_frame().is_none()
+        && let Some(next_selected) = eval.frame_manager().frame_list().into_iter().next()
     {
-        let _ = eval.frames.select_frame(next_selected);
+        let _ = eval.frame_manager_mut().select_frame(next_selected);
     }
     eval.sync_keyboard_terminal_owner();
     Ok(Value::NIL)

@@ -355,7 +355,7 @@ pub fn menu_bar_active_keymaps_for_frame_read_only(
     frame_id: crate::window::FrameId,
 ) -> Vec<Value> {
     let selected_window = ctx
-        .frames
+        .frame_manager()
         .get(frame_id)
         .and_then(|frame| frame.selected_window())
         .map(|window| Value::make_window(window.id().0));
@@ -376,7 +376,7 @@ pub fn menu_bar_active_keymaps_for_frame_read_only(
 }
 
 pub fn menu_bar_active_keymaps_read_only(ctx: &Context) -> Vec<Value> {
-    let Some(frame_id) = ctx.frames.selected_frame().map(|frame| frame.id) else {
+    let Some(frame_id) = ctx.frame_manager().selected_frame().map(|frame| frame.id) else {
         return Vec::new();
     };
     menu_bar_active_keymaps_for_frame_read_only(ctx, frame_id)

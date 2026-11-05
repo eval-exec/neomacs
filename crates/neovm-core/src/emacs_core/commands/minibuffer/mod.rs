@@ -610,7 +610,7 @@ pub(crate) fn builtin_minibuffer_prompt_ctx(
 ) -> EvalResult {
     expect_args("minibuffer-prompt", &args, 0)?;
     Ok(eval
-        .minibuffers
+        .minibuffers()
         .current()
         .map(|state| Value::heap_string(state.prompt.clone()))
         .unwrap_or(Value::NIL))
@@ -623,7 +623,7 @@ pub(crate) fn builtin_minibuffer_prompt_end_ctx(
     expect_args("minibuffer-prompt-end", &args, 0)?;
 
     Ok(Value::fixnum(
-        minibuffer_prompt_end_in_state(eval.variables(), &eval.edit.buffers, &eval.minibuffers)?
+        minibuffer_prompt_end_in_state(eval.variables(), &eval.edit.buffers, &eval.minibuffers())?
             .as_i64(),
     ))
 }
@@ -718,7 +718,7 @@ pub(crate) fn builtin_minibuffer_depth_ctx(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("minibuffer-depth", &args, 0)?;
-    Ok(Value::fixnum(eval.minibuffers.depth() as i64))
+    Ok(Value::fixnum(eval.minibuffers().depth() as i64))
 }
 
 /// `(minibufferp &optional BUFFER)` — returns t if BUFFER is a minibuffer.
@@ -740,7 +740,7 @@ pub(crate) fn builtin_minibufferp_ctx(
     let Some(buffer_id) = resolve_minibuffer_buffer_arg(&eval.edit.buffers, args.first())? else {
         return Ok(Value::NIL);
     };
-    let is_live = eval.minibuffers.has_buffer(buffer_id);
+    let is_live = eval.minibuffers().has_buffer(buffer_id);
     let is_minibuffer =
         is_live
             || eval.edit.buffers.get(buffer_id).is_some_and(|buffer| {
@@ -763,7 +763,7 @@ pub(crate) fn builtin_minibuffer_innermost_command_loop_p_ctx(
     };
     let recursive_depth = eval.recursive_command_loop_depth();
     let command_loop_depth = eval
-        .minibuffers
+        .minibuffers()
         .state_stack
         .iter()
         .find(|state| state.buffer_id == buffer_id)
@@ -782,7 +782,7 @@ pub(crate) fn builtin_innermost_minibuffer_p_ctx(
         return Ok(Value::NIL);
     };
     Ok(Value::bool_val(
-        eval.minibuffers
+        eval.minibuffers()
             .current()
             .is_some_and(|state| state.buffer_id == buffer_id),
     ))
@@ -891,7 +891,7 @@ pub(crate) fn builtin_exit_recursive_edit(
 ) -> EvalResult {
     expect_args("exit-recursive-edit", &args, 0)?;
     // GNU Emacs checks: command_loop_level > 0 || minibuf_level > 0
-    if eval.recursive_command_loop_depth() == 0 && eval.minibuffers.depth() == 0 {
+    if eval.recursive_command_loop_depth() == 0 && eval.minibuffers().depth() == 0 {
         return Err(signal(
             LispCondition::UserError,
             vec![Value::string("No recursive edit is in progress")],
@@ -937,7 +937,7 @@ fn this_minibuffer_depth(eval: &super::eval::Context) -> usize {
     let Some(buffer_id) = eval.edit.buffers.current_buffer_id() else {
         return 0;
     };
-    eval.minibuffers
+    eval.minibuffers()
         .state_stack
         .iter()
         .position(|state| state.buffer_id == buffer_id)
@@ -966,7 +966,7 @@ pub(crate) fn builtin_abort_minibuffers_ctx(
         ));
     }
 
-    let minibuf_level = eval.minibuffers.depth();
+    let minibuf_level = eval.minibuffers().depth();
     let quit_recursive_edit = Value::symbol("minibuffer-quit-recursive-edit");
     if minibuf_depth < minibuf_level {
         // Aborting this minibuffer also aborts every one nested inside it, so
@@ -1017,7 +1017,7 @@ fn minibuffer_contents_lisp_string(
     minibuffer_contents_lisp_string_in_state(
         eval.variables(),
         &eval.edit.buffers,
-        &eval.minibuffers,
+        &eval.minibuffers(),
         preserve_properties,
     )
 }
@@ -1056,7 +1056,7 @@ pub(crate) fn builtin_abort_recursive_edit(
 ) -> EvalResult {
     expect_args("abort-recursive-edit", &args, 0)?;
     // GNU Emacs checks: command_loop_level > 0 || minibuf_level > 0
-    if eval.recursive_command_loop_depth() == 0 && eval.minibuffers.depth() == 0 {
+    if eval.recursive_command_loop_depth() == 0 && eval.minibuffers().depth() == 0 {
         return Err(signal(
             LispCondition::UserError,
             vec![Value::string("No recursive edit is in progress")],
@@ -1477,7 +1477,7 @@ pub(crate) fn completion_candidates_from_collection_in_state(
     ctx: &crate::emacs_core::eval::Context,
     collection: &Value,
 ) -> Result<Option<Vec<CompletionCandidate>>, Flow> {
-    let obarray = &ctx.obarray;
+    let obarray = &ctx.obarray();
     let vars = ctx.variables();
     Ok(match collection.kind() {
         ValueKind::Nil | ValueKind::Cons => Some(completion_candidates_from_list_value(collection)),

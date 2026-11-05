@@ -123,7 +123,7 @@ pub(super) fn handle_display_error(eval: &mut neovm_eval::emacs_core::eval::Cont
     let propagate = enabled()
         && flow.as_signal().is_none_or(|data| {
             !neovm_value::errors::signal_matches_condition_value_sym(
-                &eval.obarray,
+                &eval.obarray(),
                 data.symbol,
                 &Value::symbol("error"),
                 eval.symbol_mode(),
@@ -157,17 +157,17 @@ impl FormatSelection {
         window: Option<&Value>,
     ) -> Result<Self, Flow> {
         let original_window = eval
-            .frames
+            .frame_manager()
             .selected_frame()
             .map(|frame| frame.selected_window);
         let target = window
             .and_then(|value| value.as_window_id())
             .map(WindowId)
             .or(original_window);
-        let original_frame = eval.frames.selected_frame().map(|frame| frame.id);
+        let original_frame = eval.frame_manager().selected_frame().map(|frame| frame.id);
         let target_frame = target
-            .and_then(|wid| eval.frames.find_window_frame_id(wid))
-            .and_then(|fid| eval.frames.get(fid));
+            .and_then(|wid| eval.frame_manager().find_window_frame_id(wid))
+            .and_then(|fid| eval.frame_manager().get(fid));
         let target_selection = (
             original_frame,
             target_frame.map(|frame| (frame.id, frame.selected_window)),
@@ -234,21 +234,21 @@ impl FormatSelection {
             eval.restore_specpdl_roots(self.root_scope);
             return;
         }
-        let frame_before = eval.frames.selected_frame().map(|frame| frame.id);
-        eval.frames
+        let frame_before = eval.frame_manager().selected_frame().map(|frame| frame.id);
+        eval.frame_manager_mut()
             .restore_selected_window_for_mode_line(self.target_selection);
         if let Some(wid) = self
             .original_window
-            .filter(|wid| eval.frames.is_live_window_id(*wid))
+            .filter(|wid| eval.frame_manager().is_live_window_id(*wid))
         {
             let selected = eval
-                .frames
+                .frame_manager()
                 .selected_frame()
                 .map(|frame| frame.selected_window);
             let window_buffer = eval
-                .frames
+                .frame_manager()
                 .find_window_frame_id(wid)
-                .and_then(|fid| eval.frames.get(fid))
+                .and_then(|fid| eval.frame_manager().get(fid))
                 .and_then(|frame| frame.find_window(wid))
                 .and_then(Window::buffer_id);
             if selected != Some(wid) || eval.edit.buffers.current_buffer_id() != window_buffer {
@@ -260,7 +260,7 @@ impl FormatSelection {
                 );
             }
         }
-        if frame_before != eval.frames.selected_frame().map(|frame| frame.id) {
+        if frame_before != eval.frame_manager().selected_frame().map(|frame| frame.id) {
             eval.sync_keyboard_terminal_owner();
         }
         if let Some((bid, saved_point)) = self.target_point {

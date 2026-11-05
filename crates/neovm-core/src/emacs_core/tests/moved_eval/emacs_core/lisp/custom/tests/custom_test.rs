@@ -319,7 +319,7 @@ fn defgroup_registers_group() {
     let mut ev = bootstrap_context();
     let _result = ev.eval_str(r#"(defgroup my-group nil "Docs.")"#);
     let doc = ev
-        .obarray
+        .obarray()
         .get_property("my-group", "group-documentation")
         .expect("group-documentation");
     assert_eq!(doc.as_utf8_str(), Some("Docs."));
@@ -1202,7 +1202,7 @@ fn make_variable_buffer_local_leaves_per_buffer_slots_alone() {
     ev.eval_str("(progn (make-variable-buffer-local 'fill-column) (setq fill-column 33))")
         .expect("evaluates");
     assert_eq!(
-        ev.obarray
+        ev.obarray()
             .get_by_id(intern("fill-column"))
             .expect("symbol")
             .redirect(),
