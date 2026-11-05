@@ -28,6 +28,7 @@ impl PreparedHofBuiltin {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) trait EraCoreHofExt {
     fn prepare_hof_builtin(
         &self,
@@ -82,6 +83,7 @@ impl<K: EraKeeper> EraCoreHofExt for EraCore<'_, K> {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) trait RunAccessHofExt<'era> {
     /// This is a guarded callback selection, not generic HOF execution. Both
     /// handles and homes validate before the single reader is acquired. A

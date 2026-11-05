@@ -7,9 +7,14 @@ use crate::tagged::gc::mutator_registration::symbol_functions::retry::{
     self as contention, Deadline, Retry, retry_owned,
 };
 use crate::tagged::gc::mutator_registration::{RunAccessHofExt, RunAccessUnaryExt};
+use crate::tagged::gc::{
+    FunctionActivation, FunctionError, FunctionSelection, FunctionStep, HofOperation,
+    OwnerRootSlot, PreparedHofBuiltin, PreparedUnaryFunction, RegistrationError, RunAccess,
+    SymbolHandle,
+};
 use crate::tagged::header::SubrDispatchKind;
 use crate::test_utils::SubrValueExt;
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroU64};
 use std::ops::ControlFlow;
 
 fn oracle_selection(row: usize) -> FunctionSelection {

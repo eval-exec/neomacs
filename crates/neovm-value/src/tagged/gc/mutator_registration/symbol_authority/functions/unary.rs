@@ -45,6 +45,7 @@ pub(super) fn check_argument(
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) trait EraCoreUnaryExt {
     fn prepare_unary_function_symbol(
         &self,
@@ -85,6 +86,7 @@ impl<K: EraKeeper> EraCoreUnaryExt for EraCore<'_, K> {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) trait RunAccessUnaryExt<'era> {
     /// Fresh definition, identity and private activation root agree under the
     /// same reader. A source mismatch never starts a callback.

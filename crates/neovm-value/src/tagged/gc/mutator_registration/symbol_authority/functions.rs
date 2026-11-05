@@ -8,6 +8,7 @@ pub mod hof;
 mod name;
 #[doc(hidden)]
 pub use hof::PreparedHofBuiltin;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) use hof::{EraCoreHofExt, RunAccessHofExt};
 #[cfg(not(feature = "test-support"))]
 mod unary;
@@ -18,6 +19,7 @@ pub(super) use constant::{CallShape, ReturnSubset};
 pub(in crate::tagged::gc::mutator_registration) use name::PreparedNameFunction;
 #[doc(hidden)]
 pub use unary::PreparedUnaryFunction;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) use unary::{EraCoreUnaryExt, RunAccessUnaryExt};
 pub(super) mod write;
 use super::intern::OwnerRootIndex;

@@ -28,6 +28,7 @@ pub mod functions;
 pub use functions::FunctionOpKind;
 #[cfg(test)]
 pub(super) use functions::PreparedNameFunction;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) use functions::{EraCoreHofExt, EraCoreUnaryExt, RunAccessHofExt, RunAccessUnaryExt};
 pub use functions::{
     FunctionActivation, FunctionCallCache, FunctionError, FunctionSelection, FunctionStep,

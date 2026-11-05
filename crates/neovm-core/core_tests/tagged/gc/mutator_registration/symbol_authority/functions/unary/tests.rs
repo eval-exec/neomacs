@@ -6,8 +6,13 @@ use crate::tagged::gc::mutator_registration::era_fixtures::EraFixtureExt;
 use crate::tagged::gc::mutator_registration::symbol_functions::retry::{
     self as contention, Deadline, Retry, retry_owned,
 };
-use std::num::NonZeroU32;
+use crate::tagged::gc::{
+    FunctionActivation, FunctionError, FunctionSelection, FunctionStep, RegistrationError,
+    RunAccess, SymbolHandle,
+};
+use std::num::{NonZeroU32, NonZeroU64};
 use std::ops::ControlFlow;
+use std::sync::atomic::AtomicU64;
 
 fn oracle() -> [&'static str; 8] {
     include_str!("oracle.expected")

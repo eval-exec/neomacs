@@ -143,6 +143,7 @@ impl<'owner, 'era> RunAccess<'owner, 'era> {
     /// keep their returned handles private; C6's closed test executor also
     /// uses this leaf to initialize operand homes. NIL needs no heap import
     /// seal, and the pre-reserved bank never grows here.
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(super) fn private_nil_root(&mut self) -> Result<OwnerRootSlot<'era>, RegistrationError> {
         self.owner.check_thread()?;
         if self.symbol_loan {

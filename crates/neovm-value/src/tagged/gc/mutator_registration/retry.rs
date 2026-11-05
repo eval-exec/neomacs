@@ -2,13 +2,16 @@
 use std::ops::ControlFlow;
 use std::time::{Duration, Instant};
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) const SPIN_WAIT: Duration = Duration::from_secs(60);
 
 /// An absolute contention deadline, never an attempt allowance. Construct it
 /// once at the fixture boundary and retain it through capability recovery.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) struct Deadline(Instant);
 
 impl Deadline {
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn contention() -> Self {
         Self(Instant::now() + SPIN_WAIT)
     }
@@ -32,11 +35,13 @@ impl Deadline {
 }
 
 /// Classify the typed error at the operation boundary.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) enum Retry {
     Busy,
     Refuse,
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn retry<T, E>(
     deadline: Deadline,
     mut operation: impl FnMut() -> Result<T, E>,
@@ -55,6 +60,7 @@ pub(crate) fn retry<T, E>(
 
 /// A failed consuming operation returns its capability in `E`. Recover it
 /// only for a retry; refusal or expiry returns that intact failure instead.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) fn retry_owned<C, T, E>(
     deadline: Deadline,
     mut capability: C,

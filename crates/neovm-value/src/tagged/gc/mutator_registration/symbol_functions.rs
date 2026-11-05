@@ -1,11 +1,13 @@
 //! Closed C4 instruction syntax and native twins of the production rooted API.
+#[cfg(test)]
+use super::FunctionOpKind;
 use super::{
-    FunctionActivation, FunctionCallCache, FunctionError, FunctionOpKind, FunctionStep,
-    OwnerRootSlot, RunAccess, SymbolHandle,
+    FunctionActivation, FunctionCallCache, FunctionError, FunctionStep, OwnerRootSlot, RunAccess,
+    SymbolHandle,
 };
 use std::num::NonZeroU32;
 
-pub(super) mod retry;
+pub mod retry;
 
 /// Closed syntax only: handles and resident operand homes, no raw callee.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -17,11 +19,11 @@ pub(super) enum FunctionOp {
     CallStep { dst: u16, fuel: NonZeroU32 },
 }
 
-#[cfg(not(feature = "gc-memory-telemetry"))]
+#[cfg(all(test, not(feature = "gc-memory-telemetry")))]
 mod tests;
 
-#[cfg(not(feature = "gc-memory-telemetry"))]
+#[cfg(all(test, not(feature = "gc-memory-telemetry")))]
 pub(crate) mod boundary;
 
-#[cfg(not(feature = "gc-memory-telemetry"))]
+#[cfg(all(test, not(feature = "gc-memory-telemetry")))]
 pub(super) mod names;

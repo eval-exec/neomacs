@@ -23,6 +23,7 @@ mod execution;
 #[cfg(feature = "test-support")]
 pub mod execution;
 pub(crate) use execution::EraCoreExecutionExt;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 pub(crate) use symbol_authority::{
     EraCoreHofExt, EraCoreUnaryExt, RunAccessHofExt, RunAccessUnaryExt,
 };
@@ -77,8 +78,8 @@ mod symbol_authority;
 pub mod symbol_authority;
 #[cfg(all(test, not(feature = "gc-memory-telemetry")))]
 mod symbol_diagnostics;
-#[cfg(test)]
-pub(crate) mod symbol_functions;
+#[cfg(any(test, feature = "test-support"))]
+pub mod symbol_functions;
 #[cfg(test)]
 mod symbol_globals;
 #[cfg(test)]
