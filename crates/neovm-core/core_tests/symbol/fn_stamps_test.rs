@@ -27,12 +27,11 @@ impl Drop for StampsOn {
 
 /// A fresh interned symbol whose slot lies in a chunk `ob` does not have
 /// yet (ids are process-wide, so intern until one lands past the store).
-/// `get_by_id` answers `None` exactly when the id lies past the store, the
-/// same condition as value's cfg(test) slot bound without exposing it.
 fn symbol_past_the_store(ob: &Obarray, tag: &str) -> SymId {
+    let end = ob.symbol_count_upper_bound_for_test();
     (0..)
         .map(|i| intern(&format!("neovm--fs-{tag}-{i}")))
-        .find(|id| ob.get_by_id(*id).is_none())
+        .find(|id| id.to_raw() as usize >= end)
         .expect("ids grow without bound")
 }
 

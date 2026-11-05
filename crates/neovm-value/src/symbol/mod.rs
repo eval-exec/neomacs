@@ -2136,7 +2136,8 @@ impl Obarray {
     }
 
     /// Test hook: the slot count the compiled-code bounds check reads.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     pub(crate) fn symbol_count_upper_bound_for_test(&self) -> usize {
         self.symbols.len()
     }
