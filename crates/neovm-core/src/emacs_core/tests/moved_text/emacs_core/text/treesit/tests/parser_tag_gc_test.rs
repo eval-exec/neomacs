@@ -1,5 +1,7 @@
 //! The native parser registry owns its tag independently of the Lisp record.
 
+use neovm_value::value::buffer_vocab::BufferId;
+use neovm_value::value::Value;
 use super::*;
 
 use neovm_value::intern::intern_uninterned;

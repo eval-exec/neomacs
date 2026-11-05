@@ -1034,6 +1034,7 @@ pub fn builtin_backward_char<H: EditHost>(host: &mut H, args: Vec<Value>) -> Eva
     )
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, strum::EnumString, IntoPrimitive, TryFromPrimitive)]
 #[repr(u8)]
 #[strum(serialize_all = "lowercase")]

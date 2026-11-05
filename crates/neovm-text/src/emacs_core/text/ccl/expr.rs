@@ -82,6 +82,7 @@ fn sjis_to_jis(code: i32) -> i32 {
     (j1 << 8) | j2
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `JIS_TO_SJIS` from `src/coding.h`.
 fn jis_to_sjis(code: i32) -> i32 {
     let j1 = code >> 8;

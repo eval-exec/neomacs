@@ -16,6 +16,7 @@
 //! pattern compiles under `with_anchor_alt`, the target is multibyte, and
 //! the backward search is `re_search` from `start` with range `-start`.
 
+use neovm_text::emacs_core::regex_emacs::CompiledPattern;
 use super::*;
 
 use neovm_text::emacs_core::regex_emacs::{

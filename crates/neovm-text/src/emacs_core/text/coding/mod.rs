@@ -3908,6 +3908,7 @@ fn coding_system_base_name(mgr: &CodingSystemManager, name: &str) -> String {
 // bits, exactly as GNU does.  See coding.c:8690 `detect_coding_system`.
 // ===========================================================================
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// The 21 detection categories, in `enum coding_category` order (coding.c:476).
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum CodingCat {
@@ -3934,6 +3935,7 @@ enum CodingCat {
     Undecided,
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 const CODING_CAT_MAX: usize = 21;
 const CODING_CAT_RAW_TEXT: usize = CodingCat::RawText as usize;
 
@@ -4626,6 +4628,7 @@ enum CharsetContinuation {
     Incomplete,
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 struct CharsetDetectionPlan {
     code_spaces: Vec<super::charset::CharsetCodeSpace>,
     leads: [CharsetLead; 256],
@@ -4943,6 +4946,7 @@ fn detect_iso_2022(bytes: &[u8], head_ascii: usize, multibytep: bool, di: &mut D
     false
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// GNU's two detection globals, `coding_priorities` and `coding_categories`
 /// (src/coding.c:586, :590), coupled to the bound charset coding's byte grammar.
 /// Reporting and decoding build the same runtime bindings before scanning.
@@ -5454,6 +5458,7 @@ fn coding_bom_auto_pair(
     ))
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// The pure detection core for `detect-coding-string` / `detect-coding-region`:
 /// GNU `detect_coding_system`'s result rule (src/coding.c:8836-8886) over the
 /// shared scan.  Split out from `detect_coding_systems` so it can be
@@ -6332,6 +6337,11 @@ pub fn register_bootstrap_vars<S: TextVariableStore>(vars: &mut S) {
 // Tests
 // ===========================================================================
 
+#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "tests/coding_test.rs"]
 mod tests;
+#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
+#[path = "tests/coding_test.rs"]
+pub mod tests;

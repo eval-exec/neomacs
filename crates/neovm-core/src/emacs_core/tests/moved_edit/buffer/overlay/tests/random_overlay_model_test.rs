@@ -1,6 +1,8 @@
 //! Deterministic overlay mutation model and fixed GNU ordering checks.
 //! The vector model checks semantics, not B+ shape, allocation sizes or time.
 
+use neovm_value::value::Value;
+use neovm_value::heap_types::byte_positions::EmacsBytePos;
 use super::*;
 
 #[test]

@@ -493,6 +493,7 @@ fn restricted_lisp_does_not_name_the_serial_choke_points() {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[cfg(test)]
 mod tests {
     use super::*;

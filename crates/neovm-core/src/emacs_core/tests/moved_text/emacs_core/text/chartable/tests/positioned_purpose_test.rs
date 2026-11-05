@@ -1,3 +1,9 @@
+use neovm_value::value::Value;
+use neovm_value::tagged::value::SymbolMode;
+use neovm_value::error::EvalResult;
+use neovm_value::chartab::set_char_table_contents;
+use neovm_value::chartab::assq_cell_eq;
+use neovm_eval::emacs_core::eval::Context;
 use neovm_text::emacs_core::chartable::*;
 
 #[test]

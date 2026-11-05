@@ -3,6 +3,12 @@
 //! lookup in any query order — forward, backward, random — and the ASCII
 //! fast path of `buffer_syntax_char_before` exactly as the general path.
 
+use neovm_value::value::positions::CharPos0;
+use neovm_value::value::Value;
+use neovm_value::heap_types::byte_positions::EmacsBytePos;
+use neovm_value::heap_types::byte_positions::EmacsByteLen;
+use neovm_eval::emacs_core::eval::Context;
+use neovm_edit::buffer::buffer::Buffer;
 use neovm_text::emacs_core::syntax::*;
 
 #[test]

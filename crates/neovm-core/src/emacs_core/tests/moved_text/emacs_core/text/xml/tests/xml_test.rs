@@ -1,3 +1,5 @@
+use neovm_value::value::Value;
+use neovm_eval::emacs_core::eval::Context;
 use neovm_text::emacs_core::xml::*;
 
 use neovm_value::error::FlowKind;

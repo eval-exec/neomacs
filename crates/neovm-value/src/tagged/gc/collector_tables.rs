@@ -170,6 +170,7 @@ impl TaggedHeap {
 
 static_assertions::assert_not_impl_any!(CollectorTableScope<'static, 'static>: Send, Sync, Clone, Copy);
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[cfg(test)]
 mod tests {
     /// The raw adapter is deliberately narrow: the admitted collector modules

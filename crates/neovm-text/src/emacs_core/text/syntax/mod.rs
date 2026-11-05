@@ -8015,6 +8015,11 @@ impl SexpScanPolicy {
 #[path = "tests/skip_syntax_classes_test.rs"]
 mod skip_syntax_classes_tests;
 
+#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "tests/syntax_test.rs"]
 mod tests;
+#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
+#[path = "tests/syntax_test.rs"]
+pub mod tests;

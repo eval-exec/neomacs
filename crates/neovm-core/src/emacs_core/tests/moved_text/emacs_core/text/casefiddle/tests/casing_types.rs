@@ -1,3 +1,9 @@
+use neovm_value::value::Value;
+use neovm_value::heap_types::LispString;
+use neovm_text::emacs_core::casetab::CaseTableOverride;
+use neovm_text::emacs_core::casetab::CaseMap;
+use neovm_eval::emacs_core::eval::Context;
+use crate::emacs_core::casetab_entries::builtin_set_case_table;
 use neovm_text::emacs_core::casefiddle::*;
 
 #[test]

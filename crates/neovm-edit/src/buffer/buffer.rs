@@ -78,11 +78,13 @@ fn note_local_var_alist_entry_probe() {
 #[inline(always)]
 fn note_local_var_alist_entry_probe() {}
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[cfg(test)]
 pub(crate) fn reset_local_var_alist_entry_probes() {
     LOCAL_VAR_ALIST_ENTRY_PROBES.set(0);
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[cfg(test)]
 pub(crate) fn local_var_alist_entry_probes() -> u64 {
     LOCAL_VAR_ALIST_ENTRY_PROBES.get()
@@ -5668,6 +5670,7 @@ pub mod jit_layout {
             .collect()
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// Byte offsets of the slot vector's data pointer and length, within the
     /// `Vec` itself. `None` if they cannot be identified unambiguously.
     #[cfg(test)]
@@ -5692,6 +5695,7 @@ pub mod jit_layout {
         })
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     /// `(tag offset, payload offset, the tag value that means `None`)` for
     /// `Option<BufferId>`. `BufferId` wraps a `u64` and so has no niche: the
     /// option is two words whose order std does not fix.
@@ -8822,9 +8826,14 @@ impl ModeLineNumberAnchor {
     }
 }
 
+#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "buffer/tests/buffer_test.rs"]
 mod tests;
+#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
+#[path = "buffer/tests/buffer_test.rs"]
+pub mod tests;
 
 #[cfg(test)]
 #[path = "buffer/tests/world_storage_test.rs"]

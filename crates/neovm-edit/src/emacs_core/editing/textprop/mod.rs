@@ -30,6 +30,7 @@ use strum::IntoStaticStr;
 
 mod raw_plist_lookup;
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Lisp variables that control native text-property resolution.
 ///
 /// GNU keeps these in predeclared `V...`/`Q...` globals.  A closed Rust enum

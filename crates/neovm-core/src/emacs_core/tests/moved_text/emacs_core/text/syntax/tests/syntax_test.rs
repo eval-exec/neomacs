@@ -1,3 +1,8 @@
+use neovm_value::value::list_to_vec;
+use neovm_value::value::Value;
+use neovm_eval::emacs_core::eval::Context;
+use crate::emacs_core::syntax_entries::builtin_forward_comment;
+use crate::emacs_core::syntax_entries::builtin_backward_prefix_chars;
 use neovm_edit::buffer::buffer::{Buffer, BufferId};
 
 use neovm_edit::buffer::{CharPos0, LispCharPos1};

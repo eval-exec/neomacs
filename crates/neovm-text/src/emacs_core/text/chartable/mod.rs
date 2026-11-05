@@ -478,6 +478,7 @@ pub fn builtin_map_char_table<H: TextHost>(eval: &mut H, args: Vec<Value>) -> Ev
     )?;
     Ok(Value::NIL)
 }
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[cfg(test)]
 pub(crate) fn optimize_char_table(table: &Value, test: OptimizeCharTableTest) -> Result<(), Flow> {
     optimize_char_table_with_symbols(table, test, SymbolMode::Bare)
@@ -652,6 +653,7 @@ fn encode_uniprop_value_numeric(
     set_char_table_extra_slot(&table, 4, Value::vector(value_table));
     Ok(Value::fixnum(index as i64))
 }
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(put-unicode-property-internal CHAR-TABLE CH VALUE)`.
 ///
 /// Mirrors GNU's `Fput_unicode_property_internal` (chartab.c): validate and
@@ -715,6 +717,11 @@ pub use neovm_value::boolvec::{
 #[path = "tests/collection_lookup_capture_test.rs"]
 mod collection_lookup_capture;
 
+#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "tests/chartable_test.rs"]
 mod tests;
+#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
+#[path = "tests/chartable_test.rs"]
+pub mod tests;

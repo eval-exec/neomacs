@@ -1,3 +1,6 @@
+use std::sync::Arc;
+use neovm_value::value::Value;
+use neovm_value::intern::SymId;
 use super::*;
 
 #[test]

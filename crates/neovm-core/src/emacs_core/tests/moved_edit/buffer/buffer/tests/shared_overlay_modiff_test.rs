@@ -1,6 +1,9 @@
 //! GNU overlay modiff invalidates every live member of a shared text group,
 //! while overlay lists and character/property modification state stay private.
 
+use neovm_value::value::Value;
+use neovm_value::heap_types::byte_positions::EmacsByteRange;
+use neovm_value::heap_types::byte_positions::EmacsBytePos;
 use super::*;
 
 use crate::emacs_core::Context;

@@ -5,6 +5,15 @@
 //! cache layers off and the legacy safe-position index bypassed. These are
 //! differential cache tests; they do not assert independent GNU expectations.
 
+use std::cell::Cell;
+use neovm_value::value::positions::CharPos0;
+use neovm_value::value::Value;
+use neovm_text::emacs_core::syntax::builtin_parse_partial_sexp_6;
+use neovm_text::emacs_core::syntax::builtin_modify_syntax_entry;
+use neovm_text::emacs_core::syntax::SyntaxTable;
+use neovm_text::emacs_core::syntax::SyntaxProperties;
+use neovm_text::emacs_core::syntax::CommentEndEscapePolicy;
+use neovm_eval::emacs_core::eval::case_tables::canon;
 use crate::emacs_core::print::print_value;
 
 use neovm_text::emacs_core::syntax::parse_cache::*;

@@ -851,9 +851,14 @@ fn match_key<const SWP: bool>(prog: &[KeyNode], strings: &[StringKey], mut v: Va
     }
 }
 
+#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "switch_plan/tests/switch_plan_test.rs"]
 mod tests;
+#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
+#[path = "switch_plan/tests/switch_plan_test.rs"]
+pub mod tests;
 
 impl InlineSwitchPlan {
     #[inline]

@@ -48,6 +48,7 @@ use super::text::backend::TextBackend;
 // Knobs
 // ---------------------------------------------------------------------------
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// What `NEOVM_TEXT_LINE_INDEX` selects.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TextLineIndexMode {
@@ -73,6 +74,7 @@ impl TextLineIndexMode {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Every setting of the index, read once per process.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct TextLineIndexConfig {
@@ -960,6 +962,11 @@ fn cut_chunks(
     chunks
 }
 
+#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "text_index/tests/text_index_test.rs"]
 pub(crate) mod tests;
+#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
+#[path = "text_index/tests/text_index_test.rs"]
+pub mod tests;

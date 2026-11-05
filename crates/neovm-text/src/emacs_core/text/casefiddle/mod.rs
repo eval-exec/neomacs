@@ -1000,6 +1000,7 @@ pub fn capitalize_with_word_pred(
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Pure form (used by tests); word boundaries follow the standard syntax table.
 #[cfg(test)]
 pub(crate) fn builtin_capitalize(args: Vec<Value>) -> EvalResult {
@@ -1054,6 +1055,7 @@ pub fn upcase_initials_with_word_pred(
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Pure form (used by tests); word boundaries follow the standard syntax table.
 #[cfg(test)]
 pub(crate) fn builtin_upcase_initials(args: Vec<Value>) -> EvalResult {
@@ -1429,9 +1431,14 @@ impl CasingChangedSpan {
     }
 }
 
+#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "tests/casefiddle_test.rs"]
 mod tests;
+#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
+#[path = "tests/casefiddle_test.rs"]
+pub mod tests;
 
 #[cfg(test)]
 #[path = "tests/casing_types.rs"]

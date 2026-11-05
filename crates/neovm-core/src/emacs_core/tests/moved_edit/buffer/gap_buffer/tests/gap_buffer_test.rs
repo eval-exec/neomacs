@@ -1,3 +1,4 @@
+use neovm_edit::buffer::gap_buffer::GapBuffer;
 use super::*;
 
 use neovm_edit::buffer::{CharLen, CharPos0, EmacsBytePos, EmacsByteRange};

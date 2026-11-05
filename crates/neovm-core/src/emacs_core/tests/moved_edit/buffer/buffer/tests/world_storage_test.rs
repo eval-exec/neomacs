@@ -1,5 +1,6 @@
 //! Buffer storage ownership and the explicit detached-clone root contract.
 
+use neovm_value::value::Value;
 use crate::emacs_core::eval::Context;
 
 use neovm_edit::buffer::buffer::*;

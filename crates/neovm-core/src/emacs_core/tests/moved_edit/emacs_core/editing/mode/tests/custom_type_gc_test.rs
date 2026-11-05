@@ -1,6 +1,7 @@
 //! Recursive custom-type descriptors are runtime roots, independently of the
 //! variable's default value. These tests use explicit roots and no Lisp code.
 
+use neovm_value::gc_trace::GcTrace;
 use super::{CustomType, CustomVariable, GcTrace, LispString, ModeRegistry, Value};
 
 use neovm_value::tagged::gc::TaggedHeap;

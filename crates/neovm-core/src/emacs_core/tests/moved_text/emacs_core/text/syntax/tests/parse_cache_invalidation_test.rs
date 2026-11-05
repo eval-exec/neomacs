@@ -3,6 +3,8 @@
 //! their first character, wholesale changes as "everything", and a change
 //! that bypassed the notes as "everything" too.
 
+use neovm_eval::emacs_core::eval::Context;
+use neovm_edit::buffer::syntax_cache::Invalidation;
 use neovm_edit::buffer::syntax_cache::SyntaxMutationNotes;
 
 use neovm_text::emacs_core::syntax::parse_cache::*;

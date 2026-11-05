@@ -1,3 +1,6 @@
+use neovm_value::value::Value;
+use neovm_value::error::EvalResult;
+use neovm_eval::emacs_core::eval::Context;
 use neovm_edit::buffer::{EmacsByteRange, LispCharPos1};
 
 use neovm_edit::emacs_core::marker::*;

@@ -172,8 +172,12 @@ static_assertions::assert_not_impl_any!(ParallelExecutionAdmission<'static>: Clo
 static_assertions::assert_not_impl_any!(ExecutionActivation<'static, 'static, 'static>: Send, Sync, Clone, Copy);
 static_assertions::assert_impl_all!(ImmediateResult: Send, Sync, Copy);
 
+#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 mod tests;
+#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
+pub mod tests;
 
 #[cfg(test)]
 pub(crate) use tests::{

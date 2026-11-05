@@ -5,7 +5,10 @@ use std::num::NonZeroU32;
 
 mod execution_tests;
 mod executor;
+#[cfg(not(any(test, feature = "test-support")))]
 mod tests;
+#[cfg(any(test, feature = "test-support"))]
+pub mod tests;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct RootRegister(u16);

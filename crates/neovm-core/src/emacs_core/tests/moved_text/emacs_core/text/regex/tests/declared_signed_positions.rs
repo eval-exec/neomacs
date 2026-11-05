@@ -1,5 +1,6 @@
 //! Signed GNU positions from entirely initialized declared-count names.
 
+use neovm_eval::emacs_core::eval::Context;
 use neovm_text::emacs_core::regex::*;
 
 #[test]

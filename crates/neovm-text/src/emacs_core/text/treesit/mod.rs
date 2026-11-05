@@ -1103,9 +1103,14 @@ impl TreeSitterManager {
     }
 }
 
+#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "tests/treesit_test.rs"]
 mod tests;
+#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
+#[path = "tests/treesit_test.rs"]
+pub mod tests;
 
 
 fn parser_point_at(

@@ -38,6 +38,11 @@ pub(crate) fn publish<T: Copy + Sync + 'static>(
     }
 }
 
+#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "hook_publication/tests.rs"]
 mod tests;
+#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
+#[path = "hook_publication/tests.rs"]
+pub mod tests;

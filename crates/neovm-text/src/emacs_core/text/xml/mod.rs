@@ -1235,6 +1235,11 @@ pub fn builtin_libxml_parse_xml_region<H: EditHost>(host: &mut H, args: Vec<Valu
     }
 }
 
+#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "tests/xml_test.rs"]
 mod tests;
+#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
+#[path = "tests/xml_test.rs"]
+pub mod tests;

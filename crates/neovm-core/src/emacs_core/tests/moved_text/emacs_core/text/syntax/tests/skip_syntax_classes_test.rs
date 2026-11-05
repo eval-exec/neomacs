@@ -3,7 +3,8 @@
 //! must name the same classes, and the builtins must answer alike either
 //! way.
 
-use crate::emacs_core::eval::set_builtin_frontend_for_test;
+use neovm_value::builtin_frontend::set_builtin_frontend_for_test;
+use neovm_value::builtin_frontend::set_builtin_frontend_for_test;
 
 use neovm_text::emacs_core::syntax::*;
 

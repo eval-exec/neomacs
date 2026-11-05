@@ -349,6 +349,11 @@ fn validate_membership(membership: Membership<'_>) -> Result<(), RendezvousError
     Ok(())
 }
 
+#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "control_tests.rs"]
 mod tests;
+#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
+#[path = "control_tests.rs"]
+pub mod tests;

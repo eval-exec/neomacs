@@ -1,3 +1,7 @@
+use neovm_value::value::Value;
+use neovm_eval::emacs_core::eval::Context;
+use crate::emacs_core::casefiddle_entries::builtin_upcase_region;
+use crate::emacs_core::casefiddle_entries::builtin_capitalize_word;
 use neovm_text::emacs_core::casefiddle::*;
 
 #[test]

@@ -777,6 +777,11 @@ where
     }
 }
 
+#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "overlay_order/tests/overlay_order_test.rs"]
 mod tests;
+#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
+#[path = "overlay_order/tests/overlay_order_test.rs"]
+pub mod tests;

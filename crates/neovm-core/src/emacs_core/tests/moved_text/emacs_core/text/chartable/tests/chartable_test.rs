@@ -1,3 +1,6 @@
+use neovm_value::value::Value;
+use neovm_value::error::EvalResult;
+use neovm_value::chartab::ct_resolved_entries;
 use crate::emacs_core::chartable_entries::builtin_unicode_property_table_internal;
 
 use crate::emacs_core::eval::Context;
@@ -302,7 +305,7 @@ fn optimize_char_table_custom_test_is_noop_until_callbacks_are_supported() {
     builtin_set_char_table_range(vec![ct, Value::fixnum('A' as i64), first], None).unwrap();
     builtin_set_char_table_range(vec![ct, Value::fixnum('B' as i64), second], None).unwrap();
 
-    crate::emacs_core::builtins::symbols::builtin_optimize_char_table(
+    neovm_eval::emacs_core::builtins::symbols::builtin_optimize_char_table(
         vec![ct, Value::symbol("custom-test")],
         neovm_value::tagged::SymbolMode::Bare,
     )
@@ -1300,7 +1303,7 @@ fn format_percent_s_prints_unicode_property_table_as_gnu_char_table() {
     .unwrap();
 
     let formatted =
-        crate::emacs_core::builtins::builtin_format(&mut eval, vec![Value::string("%S"), table])
+        neovm_eval::emacs_core::builtins::builtin_format(&mut eval, vec![Value::string("%S"), table])
             .unwrap();
     let rendered = formatted.as_runtime_string_owned().unwrap();
     assert!(rendered.starts_with("#^[nil nil char-code-property-table"));
@@ -1731,7 +1734,7 @@ fn char_table_range_rejects_non_character_fixnum_atoms_like_gnu() {
 fn fillarray_preserves_ascii_cache_while_rewriting_contents_like_gnu() {
     crate::test_utils::init_test_tracing();
     let ct = make_char_table_value(Value::symbol("case-table"), Value::symbol("base"));
-    crate::emacs_core::builtins::builtin_fillarray(vec![ct, Value::symbol("x")]).unwrap();
+    neovm_eval::emacs_core::builtins::builtin_fillarray(vec![ct, Value::symbol("x")]).unwrap();
 
     assert_eq!(
         builtin_char_table_range(vec![ct, Value::fixnum('a' as i64)], None).unwrap(),

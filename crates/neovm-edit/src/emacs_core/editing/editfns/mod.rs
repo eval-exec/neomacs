@@ -2740,6 +2740,11 @@ pub fn builtin_translate_region_internal<H: crate::emacs_core::edit_host::EditHo
     Ok(Value::fixnum(characters_changed))
 }
 
+#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "tests/editfns_test.rs"]
 mod tests;
+#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
+#[path = "tests/editfns_test.rs"]
+pub mod tests;

@@ -1,3 +1,4 @@
+use neovm_eval::emacs_core::eval::Context;
 use crate::emacs_core::format_eval_result;
 
 use neovm_value::value::Value;

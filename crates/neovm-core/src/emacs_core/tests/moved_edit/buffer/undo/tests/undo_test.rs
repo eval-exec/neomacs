@@ -1,3 +1,6 @@
+use neovm_value::value::positions::CharPos0;
+use neovm_value::value::positions::CharLen;
+use neovm_value::value::Value;
 use neovm_edit::buffer::undo::*;
 
 /// The limits can only come from the variables: a `undo-limit' holding

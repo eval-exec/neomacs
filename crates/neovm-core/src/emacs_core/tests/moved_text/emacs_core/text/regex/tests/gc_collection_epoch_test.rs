@@ -1,3 +1,12 @@
+use std::rc::Rc;
+use std::cell::RefCell;
+use std::cell::Cell;
+use neovm_value::heap_types::LispString;
+use neovm_text::emacs_core::regex_emacs::CompiledPattern;
+use neovm_text::emacs_core::regex_emacs::CaseTranslation;
+use neovm_text::emacs_core::regex_emacs::BufferSyntaxLookup;
+use neovm_text::emacs_core::regex_emacs;
+use crate::emacs_core::casetab_entries::builtin_set_case_table;
 use crate::emacs_core::eval::Context;
 
 use neovm_text::emacs_core::regex::*;

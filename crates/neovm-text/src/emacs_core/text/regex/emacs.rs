@@ -44,6 +44,7 @@ type RegisterScratch = Vec<Option<usize>>;
 // Phase 1: Opcodes and Data Structures
 // ---------------------------------------------------------------------------
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Bytecode opcodes for the compiled regex pattern.
 ///
 /// Translated from `re_opcode_t` enum in regex-emacs.c (lines 202-337).
@@ -563,6 +564,7 @@ impl WideTranslationMemo {
 /// report an empty memo as valid.
 const CASE_TRANSLATION_UNFILLED: u32 = u32::MAX;
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Which characters a case translation can map INTO the ASCII range.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AsciiPreimage {
@@ -679,6 +681,7 @@ enum CharTableWalk {
     OnlyIfWalked,
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Bytes a search must span before it walks a case-canon char-table to learn
 /// its [`AsciiPreimage`].  The walk visits every slot of the table (the
 /// standard canon table covers all of Unicode's case pairs), which the
@@ -1198,6 +1201,7 @@ thread_local! {
 thread_local! {
     pub(crate) static PIKE_FALLBACK_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[cfg(test)]
 pub(crate) fn pike_fallback_count() -> u64 {
     PIKE_FALLBACK_COUNT.with(|c| c.get())
@@ -1260,6 +1264,7 @@ fn take_pike_fallback() -> bool {
     PIKE_FALLBACK.with(|f| f.replace(false))
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[cfg(any(test, feature = "fuzzing"))]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum RegexEngineOverride {
@@ -1299,6 +1304,7 @@ fn force_pike() -> bool {
     false
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Run `f` with one regex routing policy, restoring the previous policy even
 /// when `f` unwinds.
 #[cfg(any(test, feature = "fuzzing"))]
@@ -4406,6 +4412,7 @@ pub(crate) enum BoundarySyntaxMode {
     Supplied,
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Bind the lookup to its coordinate plan for one synchronous invocation.
 /// This borrowed pair never enters a persistent compiled-pattern cache.
 /// Threading: a mutator-local borrow of the original, thread-confined lookup.
@@ -5075,6 +5082,7 @@ fn multibyte_translated_leading_code(
     )
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Decode the Emacs character at `pos` (mirrors the `text_char` closure).
 #[inline]
 fn re_text_char(
@@ -5510,6 +5518,7 @@ fn re_physical_boundary_syntax(
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Supplied coordinates retain the initialized request and one current-offset
 /// conversion. Physical inputs call their opcode helper directly.
 #[inline(always)]
@@ -8776,6 +8785,7 @@ fn apply_fusion(bytecode: &mut [u8], p: usize, run: &FusibleRun) {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Recompute the fastmap of an already-compiled pattern against a
 /// (possibly buffer-local) syntax table.
 ///
@@ -9294,6 +9304,7 @@ const FOLDED_VARIANT_CAPS: [usize; 4] = [16, 8, 4, 2];
 /// most 128.
 const FOLDED_VARIANTS_MAX: usize = 64;
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Replace each required prefix literal of a case-folded pattern by every
 /// byte string a match can start with.
 ///
@@ -9519,6 +9530,7 @@ fn fastmap_force_disabled() -> bool {
     false
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Build every scanner a search derives lazily from `pattern`, as the first
 /// search long enough to use them would.  The differential checker calls this
 /// so a short generated text still exercises the optimized scans.
@@ -9530,6 +9542,7 @@ pub(crate) fn build_search_optimizations(pattern: &CompiledPattern) {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// A compact, allocation-free candidate set for the memchr skip loop.
 #[derive(Clone, Copy, Debug)]
 enum SparseAsciiFastmap {
@@ -9538,6 +9551,7 @@ enum SparseAsciiFastmap {
     Three(u8, u8, u8),
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Representation of the searched text (`CompiledPattern::target_multibyte`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TextRepr {
@@ -9556,6 +9570,7 @@ impl TextRepr {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// How a case-folded search finds its next fastmap candidate.
 #[derive(Clone, Debug)]
 enum FoldedScan {
@@ -9699,6 +9714,7 @@ thread_local! {
     static ANCHOR_ALT_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Run `f` with `NEOVM_REGEX_ANCHOR_ALT` forced to `on` on this thread.  It is
 /// read when a pattern compiles, so compile inside `f`.
 #[cfg(any(test, feature = "fuzzing"))]
@@ -9726,6 +9742,7 @@ pub(crate) fn anchor_alt_enabled() -> bool {
     })
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// The zero-width anchor that every match of a pattern begins with.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum StartAnchor {
@@ -10477,6 +10494,7 @@ pub(crate) fn re_search(
 // Convenience: compile + search in one call
 // ---------------------------------------------------------------------------
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Compile a pattern and search for it in text.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) fn search_pattern(
@@ -10498,6 +10516,7 @@ pub(crate) fn search_pattern(
     ))
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Compile a pattern and match at a specific position.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) fn match_pattern(
@@ -10597,9 +10616,14 @@ pub fn carrier_tls_fingerprint(h: &mut u64) {
 
 
 
+#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "tests/emacs_test.rs"]
 mod tests;
+#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
+#[path = "tests/emacs_test.rs"]
+pub mod tests;
 
 #[cfg(test)]
 #[path = "tests/fail_stack_parity_test.rs"]

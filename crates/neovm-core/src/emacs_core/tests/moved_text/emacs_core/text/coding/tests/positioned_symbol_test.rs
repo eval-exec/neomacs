@@ -1,3 +1,9 @@
+use neovm_value::value::list_to_vec;
+use neovm_value::value::Value;
+use neovm_value::tagged::value::SymbolMode;
+use neovm_value::error::EvalResult;
+use neovm_eval::emacs_core::eval::Context;
+use crate::emacs_core::intern;
 use neovm_text::emacs_core::coding::*;
 
 use neovm_value::error::FlowKind;

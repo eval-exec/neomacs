@@ -1,3 +1,6 @@
+use neovm_value::value::Value;
+use neovm_value::heap_types::LispString;
+use neovm_eval::emacs_core::eval::Context;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 
 use crate::emacs_core::bytecode::opcode::Op;

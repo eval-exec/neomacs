@@ -1,3 +1,4 @@
+use crate::emacs_core::casetab_entries::builtin_set_case_table;
 use crate::emacs_core::eval::Context;
 
 use neovm_text::emacs_core::regex::*;

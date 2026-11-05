@@ -63,6 +63,7 @@ pub(super) struct Replacement {
     discarded: WordIdentity,
     kept: WordIdentity,
 }
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Facts {
     Owner(OwnerCons),

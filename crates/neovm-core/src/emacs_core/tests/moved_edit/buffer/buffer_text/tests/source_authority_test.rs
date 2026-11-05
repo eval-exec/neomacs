@@ -1,3 +1,5 @@
+use std::rc::Rc;
+use neovm_eval::emacs_core::eval::Context;
 use neovm_edit::buffer::buffer_text::*;
 
 use neovm_edit::buffer::{

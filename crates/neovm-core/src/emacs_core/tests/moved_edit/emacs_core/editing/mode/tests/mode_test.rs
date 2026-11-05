@@ -1,3 +1,5 @@
+use neovm_value::value::Value;
+use neovm_value::heap_types::LispString;
 use neovm_edit::emacs_core::mode::*;
 
 use neovm_value::intern::{intern, resolve_sym};

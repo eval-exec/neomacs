@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use neovm_value::value::Value;
 use neovm_edit::buffer::LispCharPos1;
 
 use neovm_edit::emacs_core::bookmark::*;

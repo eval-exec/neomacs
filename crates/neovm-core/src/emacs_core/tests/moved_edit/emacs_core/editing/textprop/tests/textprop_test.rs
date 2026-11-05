@@ -1,6 +1,9 @@
+use neovm_value::value::list_to_vec;
+use neovm_value::value::Value;
+use neovm_value::heap_types::byte_positions::EmacsByteRange;
 use crate::emacs_core::eval::Context;
 
-use crate::emacs_core::builtins::{
+use neovm_eval::emacs_core::builtins::{
     builtin_current_buffer, builtin_get_pos_property, builtin_goto_char, builtin_insert,
     builtin_make_indirect_buffer, builtin_next_char_property_change,
     builtin_previous_char_property_change, builtin_previous_property_change,
@@ -19,7 +22,7 @@ use neovm_edit::emacs_core::buffer::{
 
 use neovm_edit::emacs_core::textprop::*;
 
-use neovm_edit::emacs_core::textprop_entries::{
+use crate::emacs_core::textprop_entries::{
     builtin_get_char_property, builtin_get_char_property_and_overlay,
 };
 
@@ -984,7 +987,7 @@ fn next_single_char_property_change_on_raw_unibyte_string_uses_lisp_length() {
         0xFF, b'A', 0x80, b'Z',
     ]));
 
-    let result = crate::emacs_core::builtins::builtin_next_single_char_property_change(
+    let result = neovm_eval::emacs_core::builtins::builtin_next_single_char_property_change(
         &mut eval,
         vec![Value::fixnum(1), Value::symbol("face"), string],
     )

@@ -14,6 +14,7 @@ use std::rc::Rc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct WordIdentity(usize);
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[derive(Clone, Copy)]
 struct Facts {
     definition: WordIdentity,

@@ -1,3 +1,7 @@
+use neovm_value::value::Value;
+use neovm_value::heap_types::LispString;
+use neovm_value::heap_types::GnuStringCharPos;
+use neovm_eval::emacs_core::eval::Context;
 use neovm_value::heap_types::GnuDeclaredCharacterCount;
 
 use neovm_value::string_pos_cache::*;

@@ -2029,6 +2029,7 @@ fn parse_superset_spec(value: &Value, mode: SymbolMode) -> Option<Vec<(SymId, i6
 // Pure builtins (Vec<Value> -> EvalResult)
 // ---------------------------------------------------------------------------
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(charsetp OBJECT)` -- return t if OBJECT names a known charset.
 #[cfg(test)]
 pub(crate) fn builtin_charsetp(args: Vec<Value>) -> EvalResult {
@@ -2049,6 +2050,7 @@ fn builtin_charsetp_with_symbols(args: Vec<Value>, mode: SymbolMode) -> EvalResu
     Ok(Value::bool_val(found))
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(charset-list)` -- return charset symbols in priority order.
 #[cfg(test)]
 pub(crate) fn builtin_charset_list(args: Vec<Value>) -> EvalResult {
@@ -2063,6 +2065,7 @@ pub(crate) fn builtin_charset_list(args: Vec<Value>) -> EvalResult {
     Ok(Value::list(names))
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(unibyte-charset)` -- return the charset used for unibyte strings.
 #[cfg(test)]
 pub(crate) fn builtin_unibyte_charset(args: Vec<Value>) -> EvalResult {
@@ -2158,6 +2161,7 @@ pub fn char_charset_name(ch: i64) -> &'static str {
     resolve_sym(sym)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(char-charset CH &optional RESTRICTION)` -- return charset for character.
 ///
 /// Mirrors GNU `Fchar_charset` (src/charset.c:2032).  Without RESTRICTION the
@@ -2248,6 +2252,7 @@ pub fn builtin_split_char(args: Vec<Value>) -> EvalResult {
     Ok(Value::list(elems))
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(charset-plist CHARSET)` -- return property list for CHARSET.
 #[cfg(test)]
 pub(crate) fn builtin_charset_plist(args: Vec<Value>) -> EvalResult {
@@ -2280,6 +2285,7 @@ fn builtin_charset_plist_with_symbols(args: Vec<Value>, mode: SymbolMode) -> Eva
     })
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(charset-id-internal &optional CHARSET)` -- return internal charset id.
 #[cfg(test)]
 pub(crate) fn builtin_charset_id_internal(args: Vec<Value>) -> EvalResult {
@@ -2505,6 +2511,7 @@ fn expect_make_char_code_byte(value: &Value) -> Result<i64, Flow> {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(make-char CHARSET &optional CODE1 CODE2 CODE3 CODE4)` -- return a
 /// character at the charset position codes.
 #[cfg(test)]
@@ -2823,6 +2830,7 @@ pub fn builtin_get_unused_iso_final_char(args: Vec<Value>) -> EvalResult {
     Ok(Value::fixnum(final_char))
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(declare-equiv-charset DIMENSION CHARS CH CHARSET)` -- declare an
 /// equivalent charset mapping tuple.
 #[cfg(test)]
@@ -2863,6 +2871,7 @@ fn builtin_declare_equiv_charset_with_symbols(args: Vec<Value>, mode: SymbolMode
     Ok(Value::NIL)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(define-charset-alias ALIAS CHARSET)` -- add ALIAS for CHARSET.
 #[cfg(test)]
 pub(crate) fn builtin_define_charset_alias(args: Vec<Value>) -> EvalResult {
@@ -2915,6 +2924,7 @@ pub fn builtin_find_charset_string(args: Vec<Value>) -> EvalResult {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(decode-char CHARSET CODE-POINT)` -- decode code-point in CHARSET space.
 ///
 /// Uses the charset's registered method (Offset, Map, etc.) to convert
@@ -2939,6 +2949,7 @@ fn builtin_decode_char_with_symbols(args: Vec<Value>, mode: SymbolMode) -> EvalR
     Ok(decoded.map_or(Value::NIL, Value::fixnum))
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(encode-char CH CHARSET)` -- encode CH in CHARSET space.
 ///
 /// Uses the charset's registered method to convert an Emacs internal
@@ -2963,6 +2974,7 @@ fn builtin_encode_char_with_symbols(args: Vec<Value>, mode: SymbolMode) -> EvalR
     Ok(encoded.map_or(Value::NIL, Value::fixnum))
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(unify-charset CHARSET &optional UNIFY-MAP DEUNIFY)` -- toggle Unicode
 /// unification for an offset charset.
 #[cfg(test)]

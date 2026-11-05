@@ -1287,6 +1287,7 @@ fn encode_lisp_string_eol_spent(
 // Encoding conversion
 // ---------------------------------------------------------------------------
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Encode a string to bytes using the specified coding system.
 /// Currently only UTF-8 is supported.
 pub(crate) fn encode_string(
@@ -1434,6 +1435,7 @@ fn is_byte_preserving_coding_system(coding_system: &str) -> bool {
     )
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// The byte sequence a coding operation consumes from a Lisp string.
 ///
 /// A unibyte string already stores exactly the bytes GNU's `SDATA` exposes, so
@@ -2485,6 +2487,7 @@ impl DecodeSink {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// GNU's `eol_dos`, which every decoder computes for itself at the top rather
 /// than leaving to `decode_eol`:
 ///
@@ -3126,6 +3129,7 @@ fn decode_via_euc(
     })
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// JIS code point (jisx0208 row/cell) -> the two Shift-JIS bytes. Mirrors
 /// `JIS_TO_SJIS` (coding.h).
 fn jis_to_sjis(code: u32) -> (u8, u8) {
@@ -3199,6 +3203,7 @@ fn encode_via_sjis(s: &neovm_value::heap_types::LispString, charsets: &[SymId]) 
     out
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Decode Shift-JIS bytes: ASCII, half-width katakana (0xA1-0xDF), and the
 /// two-byte JISX0208 sequences (`SJIS_TO_JIS`); other bytes become eight-bit raw.
 /// GNU `decode_coding_sjis` (src/coding.c:4560-4625).
@@ -5929,6 +5934,7 @@ pub fn builtin_decode_coding_region<H: TextHost>(ctx: &mut H, args: Vec<Value>) 
     builtin_coding_region(ctx, args, CodingDirection::Decode)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(char-width CHAR)` -> integer without a current display table.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) fn builtin_char_width(args: Vec<Value>) -> EvalResult {
@@ -6003,6 +6009,7 @@ pub fn builtin_multibyte_string_p_1<H: crate::emacs_core::text_host::TextHost>(
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(unibyte-string-p STRING)` -> t or nil
 #[cfg(test)]
 pub(crate) fn builtin_unibyte_string_p(args: Vec<Value>) -> EvalResult {
@@ -6201,6 +6208,7 @@ pub fn builtin_char_or_string_p_1<H: crate::emacs_core::text_host::TextHost>(
     Ok(Value::bool_val(is_char_or_string))
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `(char-displayable-p CHAR)` -> t, nil, or `unicode`
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) fn builtin_char_displayable_p(args: Vec<Value>) -> EvalResult {
@@ -6304,6 +6312,11 @@ impl<'a> RuntimeCodingMetadata<'a> {
     }
 }
 
+#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "encoding/tests/encoding_test.rs"]
 mod tests;
+#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
+#[path = "encoding/tests/encoding_test.rs"]
+pub mod tests;

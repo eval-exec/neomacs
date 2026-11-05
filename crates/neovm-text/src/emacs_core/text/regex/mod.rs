@@ -57,6 +57,7 @@ use neovm_value::heap_types::{GnuStringCharPos, LispString};
 
 #[doc(hidden)]
 pub const REPLACE_MATCH_SUBEXP_MISSING: &str = "replace-match subexpression does not exist";
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 const GNU_SEARCH_REGS_BASE_CAPACITY: usize = 7;
 // Compiled-pattern LRU caches. GNU's `regexp_cache` (search.c) holds 20 entries
 // and that suffices there because GNU compiles a pattern into a cheap 256-byte
@@ -74,6 +75,7 @@ const LISP_REGEX_PATTERN_CACHE_SIZE: usize = 128;
 // during `string-match` (`regex-emacs.c:5201`). A standalone string has no
 // matching buffer byte address, so pass an unreachable point to the translated
 // matcher instead of treating the START argument as point.
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 const STRING_MATCH_AT_DOT_UNREACHABLE: usize = usize::MAX;
 
 /// Failure while applying a Lisp-visible regexp as a boolean predicate.
@@ -874,6 +876,7 @@ enum LispRegisterSource {
     RetainedString,
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Private, zero-based Emacs-byte ranges returned by the regexp engine.
 ///
 /// Keeping this outside `MatchDataKind` makes it impossible to publish raw
@@ -893,6 +896,7 @@ struct EngineMatchData {
 #[doc(hidden)]
 pub struct SearchRegisters(SearchRegistersKind);
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 enum SearchRegistersKind {
     /// Registers as buffer byte ranges: a literal search, the zero-count
     /// match, and every regexp search with the U2.8 knob off.
@@ -1319,6 +1323,7 @@ fn searched_byte_to_gnu_char(searched: &SearchedString, byte: usize) -> GnuStrin
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct LispCharMatchRange {
     start: LispMatchPosition,
@@ -2431,6 +2436,7 @@ fn pattern_for_compile(pattern: &LispString) -> LispString {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[cfg(test)]
 fn compile_search_pattern(
     pattern: &LispString,
@@ -3353,6 +3359,7 @@ fn literal_rfind_emacs_bytes(
     )
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[cfg(test)]
 fn next_search_char_boundary(text: &[u8], pos: usize) -> Option<usize> {
     if pos >= text.len() {
@@ -3605,6 +3612,7 @@ pub fn treesit_predicate_match_lisp(
     Ok(found.is_some())
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Search forward from point for a literal string PATTERN.
 ///
 /// If found, returns the end of match as the point position the caller should
@@ -3628,6 +3636,7 @@ pub(crate) fn search_forward(
     Ok(point.map(|point| BufferSearchSuccess::new(buf, point, regs.into_engine_match_data())))
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[cfg(test)]
 pub(crate) fn search_forward_into(
     buf: &mut Buffer,
@@ -3708,6 +3717,7 @@ pub fn search_forward_into_with_symbols(
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Search backward from point for a literal string PATTERN.
 ///
 /// If found, returns the beginning of match as the point position the caller
@@ -3727,6 +3737,7 @@ pub(crate) fn search_backward(
     Ok(point.map(|point| BufferSearchSuccess::new(buf, point, regs.into_engine_match_data())))
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[cfg(test)]
 pub(crate) fn search_backward_into(
     buf: &mut Buffer,
@@ -3842,6 +3853,7 @@ fn coerce_pattern_to_buffer_bytes(
     })
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Search forward from point for a regex PATTERN.
 ///
 /// If found, returns the end of match as the point position the caller should
@@ -3931,6 +3943,7 @@ pub(crate) fn re_search_forward_with_posix(
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Search backward from point for a regex PATTERN.
 ///
 /// If found, returns the beginning of match as the point position the caller
@@ -4347,6 +4360,7 @@ pub fn re_search_backward_compiled_into(
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Test if text after point matches PATTERN (without moving point).
 ///
 /// Returns `true` if the regex matches starting exactly at point, and
@@ -5375,6 +5389,7 @@ fn build_replacement(template: &str, md: &MatchData, source: &[u8]) -> Result<Ve
     Ok(out)
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 fn apply_match_case(replacement: &str, matched: &str) -> String {
     apply_replace_match_case(replacement, matched)
@@ -5556,6 +5571,11 @@ impl<'a> PropertizeFrontier<'a> {
     }
 }
 
+#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "tests/regex_test.rs"]
 mod tests;
+#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
+#[path = "tests/regex_test.rs"]
+pub mod tests;

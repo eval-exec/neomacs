@@ -1,3 +1,4 @@
+use neovm_eval::emacs_core::eval::Context;
 use super::*;
 
 #[test]

@@ -4,6 +4,8 @@
 //! would have skipped it.  These tests pin down the facts that make the fast
 //! scans exact, and compare them with the exhaustive scan.
 
+use neovm_value::value::Value;
+use neovm_value::emacs_char;
 use crate::fuzz_support::{
     RegexCase, RegexCheck, RegexDifferential, SearchTarget, check_regex_differential,
 };

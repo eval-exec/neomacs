@@ -1,5 +1,6 @@
 //! Focused raw-plist semantic and observation regressions.
 
+use neovm_value::value::Value;
 use super::plist_get_value as get;
 
 use neovm_edit::emacs_core::{Value, eval::Context};

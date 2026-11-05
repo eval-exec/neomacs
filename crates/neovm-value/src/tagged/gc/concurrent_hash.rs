@@ -440,6 +440,11 @@ impl HashTableMutationGuard<'_> {
     }
 }
 
+#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "tests/concurrent_hash_tests.rs"]
 mod tests;
+#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
+#[path = "tests/concurrent_hash_tests.rs"]
+pub mod tests;

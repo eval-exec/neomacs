@@ -1,5 +1,7 @@
 //! String-position root coverage through real generational minor collections.
 
+use std::cell::Cell;
+use neovm_value::value::Value;
 use crate::emacs_core::eval::Context;
 
 use neovm_value::string_pos_cache::*;

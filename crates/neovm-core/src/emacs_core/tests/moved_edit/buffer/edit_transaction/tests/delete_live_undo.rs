@@ -2,6 +2,7 @@
 //! GNU undo.c:163-190 records point, marker adjustments, then deleted text;
 //! insdel.c:2023-2037 relocates markers even when undo is disabled.
 
+use neovm_value::value::Value;
 use crate::emacs_core::print::print_value;
 
 use neovm_edit::buffer::*;

@@ -298,6 +298,7 @@ const _: () = {
     assert!(offset_of!(TaggedHeap, sweep_in_progress) == 4523);
 };
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[cfg(test)]
 mod tests {
     use super::*;

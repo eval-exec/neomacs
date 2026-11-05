@@ -9,6 +9,10 @@
 //! so a stale index would answer differently. (Every cached re-parse is also
 //! cross-checked against the parse from BEGV by a debug assertion.)
 
+use neovm_value::value::positions::CharPos0;
+use neovm_value::value::Value;
+use neovm_eval::emacs_core::eval::Context;
+use crate::emacs_core::syntax_entries::builtin_forward_comment;
 use neovm_text::emacs_core::syntax::*;
 
 #[test]

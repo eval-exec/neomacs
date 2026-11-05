@@ -1,3 +1,5 @@
+use neovm_value::value::Value;
+use neovm_value::tagged::value::ValueKind;
 use neovm_edit::emacs_core::undo::*;
 
 use crate::emacs_core::eval::Context;

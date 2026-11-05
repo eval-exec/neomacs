@@ -1,3 +1,5 @@
+use neovm_value::value::Value;
+use neovm_value::heap_types::byte_positions::EmacsByteRange;
 use super::*;
 
 #[test]

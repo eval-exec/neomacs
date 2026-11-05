@@ -1,5 +1,9 @@
 //! Focused state tests: actual GNU oracle covers the public60-case behavior.
 
+use neovm_value::value::Value;
+use neovm_value::heap_types::LispString;
+use neovm_value::heap_types::GnuStringCharPos;
+use neovm_eval::emacs_core::eval::Context;
 use neovm_text::emacs_core::syntax::*;
 
 use neovm_value::heap_types::GnuDeclaredCharacterCount;

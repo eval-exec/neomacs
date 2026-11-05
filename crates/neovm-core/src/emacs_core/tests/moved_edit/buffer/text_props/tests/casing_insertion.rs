@@ -1,3 +1,8 @@
+use neovm_value::value::positions::CharRange;
+use neovm_value::value::positions::CharPos0;
+use neovm_value::value::positions::CharLen;
+use neovm_value::value::Value;
+use neovm_eval::emacs_core::eval::Context;
 use neovm_edit::buffer::text_props::*;
 
 #[test]

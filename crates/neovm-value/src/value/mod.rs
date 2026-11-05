@@ -5659,6 +5659,7 @@ pub mod display_hook {
         }
     }
 
+    #[cfg_attr(feature = "test-support", visibility::make(pub))]
     #[cfg(test)]
     mod tests {
         use super::super::Value;

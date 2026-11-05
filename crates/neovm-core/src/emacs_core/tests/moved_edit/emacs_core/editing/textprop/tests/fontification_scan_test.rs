@@ -1,6 +1,8 @@
 //! Raw first-nil admission against independent per-character effective reads.
 //! No process policy/environment is changed and no hook runs inside the scan.
 
+use neovm_value::value::positions::LispCharPos1;
+use neovm_value::value::Value;
 use crate::emacs_core::eval::Context;
 
 use neovm_edit::emacs_core::textprop::*;

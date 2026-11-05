@@ -711,9 +711,14 @@ pub fn register_bootstrap_vars(obarray: &mut crate::symbol::Obarray) {
     obarray.seed_value("emulation-mode-map-alists", Value::NIL);
     obarray.make_special("emulation-mode-map-alists");
 }
+#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "keyboard_pure/tests/pure_test.rs"]
 mod tests;
+#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
+#[path = "keyboard_pure/tests/pure_test.rs"]
+pub mod tests;
 
 /// One mouse button as GNU event code maps it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

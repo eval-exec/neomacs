@@ -1718,6 +1718,11 @@ pub fn swap_world_state(slot: &mut dyn std::any::Any) {
     COMPOSITION_REGISTRY.with(|registry| std::mem::swap(&mut *registry.borrow_mut(), slot));
 }
 
+#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "tests/composite_test.rs"]
 mod tests;
+#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
+#[path = "tests/composite_test.rs"]
+pub mod tests;

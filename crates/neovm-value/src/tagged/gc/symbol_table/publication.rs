@@ -447,5 +447,9 @@ static_assertions::assert_impl_all!(PublishedSymbolTables: Send, Sync);
 static_assertions::assert_not_impl_any!(TableView<'static>: Send, Sync, Clone, Copy);
 static_assertions::assert_not_impl_any!(PreparedTablePublication<'static>: Send, Sync, Clone, Copy);
 
+#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 mod tests;
+#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
+pub mod tests;

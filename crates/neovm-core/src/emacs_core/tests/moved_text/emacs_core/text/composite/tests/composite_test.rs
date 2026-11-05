@@ -1,3 +1,6 @@
+use neovm_value::value::list_to_vec;
+use neovm_value::value::Value;
+use neovm_eval::emacs_core::eval::Context;
 use neovm_edit::buffer::CharPos0;
 
 use neovm_text::emacs_core::composite::*;

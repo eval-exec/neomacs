@@ -1422,9 +1422,14 @@ fn sort_and_dedup_overlay_identities(overlays: &mut Vec<Value>) {
 /// that tie-break explicitly prevents rotations from changing Lisp-visible
 /// traversal order.
 
+#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "overlay_index/tests/overlay_index_test.rs"]
 mod tests;
+#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
+#[path = "overlay_index/tests/overlay_index_test.rs"]
+pub mod tests;
 
 #[cfg(test)]
 #[path = "overlay_index/tests/nonalloc_boundary.rs"]

@@ -1,3 +1,9 @@
+use neovm_value::value::positions::CharPos0;
+use neovm_value::value::Value;
+use neovm_value::heap_types::byte_positions::EmacsByteRange;
+use neovm_value::heap_types::byte_positions::EmacsBytePos;
+use neovm_edit::buffer::text::edit::TextExtent;
+use crate::emacs_core::textprop_entries;
 use crate::emacs_core::eval::Context;
 
 use neovm_edit::buffer::buffer_text::*;
@@ -6,7 +12,7 @@ use neovm_edit::buffer::{BufferTextBackendKind, LispCharPos1};
 
 use neovm_edit::emacs_core::textprop;
 
-use neovm_edit::emacs_core::textprop_entries;
+use crate::emacs_core::textprop_entries;
 
 #[test]
 fn fontification_no_alloc_conversions_match_all_backends_after_edits() {

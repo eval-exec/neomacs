@@ -328,6 +328,11 @@ const _: () = {
     assert!(std::mem::offset_of!(NativeEntry, hash) == 12);
 };
 
+#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "tests/native.rs"]
 mod tests;
+#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
+#[path = "tests/native.rs"]
+pub mod tests;

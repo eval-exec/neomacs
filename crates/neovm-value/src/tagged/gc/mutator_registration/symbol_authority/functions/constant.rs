@@ -123,6 +123,11 @@ fn parse_syntax(
     }
 }
 
+#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "constant/tests.rs"]
 mod tests;
+#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
+#[path = "constant/tests.rs"]
+pub mod tests;

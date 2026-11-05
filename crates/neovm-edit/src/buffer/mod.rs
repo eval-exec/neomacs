@@ -18,7 +18,10 @@ pub mod syntax_cache;
 pub mod syntax_class;
 #[doc(hidden)]
 pub use edit_transaction::{CasifyExpansion, CasifyStorageShape};
+#[cfg(not(any(test, feature = "test-support")))]
 pub(crate) mod gap_buffer;
+#[cfg(any(test, feature = "test-support"))]
+pub mod gap_buffer;
 mod marker_data;
 pub mod overlay;
 mod overlay_bplus;

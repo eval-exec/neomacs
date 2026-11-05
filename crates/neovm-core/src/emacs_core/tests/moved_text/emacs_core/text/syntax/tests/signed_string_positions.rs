@@ -1,3 +1,8 @@
+use neovm_value::value::positions::CharPos0;
+use neovm_value::value::positions::CharLen;
+use neovm_value::value::Value;
+use neovm_value::heap_types::LispString;
+use neovm_eval::emacs_core::eval::Context;
 use neovm_edit::buffer::CharRange;
 
 use neovm_text::emacs_core::syntax::*;

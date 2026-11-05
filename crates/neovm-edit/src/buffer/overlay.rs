@@ -1766,6 +1766,7 @@ impl OverlayList {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn overlay_live_buffer(overlay: Value) -> Option<crate::buffer::BufferId> {
     overlay.as_overlay_data().and_then(|d| d.buffer)
 }
@@ -2262,6 +2263,11 @@ impl OverlayModificationHook {
     }
 }
 
+#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "overlay/tests/overlay_test.rs"]
 mod tests;
+#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
+#[path = "overlay/tests/overlay_test.rs"]
+pub mod tests;

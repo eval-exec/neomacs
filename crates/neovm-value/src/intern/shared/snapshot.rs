@@ -364,6 +364,11 @@ const _: () = {
 };
 static_assertions::assert_impl_all!(SymbolRow: Send, Sync, Copy);
 
+#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "tests/snapshot.rs"]
 mod tests;
+#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
+#[path = "tests/snapshot.rs"]
+pub mod tests;

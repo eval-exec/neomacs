@@ -2293,6 +2293,7 @@ pub fn builtin_point_max_0(edit_buffers: &mut crate::buffer::BufferManager) -> E
     Ok(Value::from_fixnum(buf.point_max_position().into()))
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) fn builtin_goto_char<H: EditHost>(host: &mut H, args: Vec<Value>) -> EvalResult {
     expect_args("goto-char", &args, 1)?;
@@ -5115,6 +5116,11 @@ impl InsertPiece {
     }
 }
 
+#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "tests/buffer_test.rs"]
 mod tests;
+#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
+#[path = "tests/buffer_test.rs"]
+pub mod tests;

@@ -1,3 +1,6 @@
+use neovm_value::value::Value;
+use neovm_value::heap_types::byte_positions::EmacsBytePos;
+use neovm_eval::emacs_core::eval::Context;
 use neovm_text::emacs_core::syntax::*;
 
 use neovm_value::tagged::SymbolMode;

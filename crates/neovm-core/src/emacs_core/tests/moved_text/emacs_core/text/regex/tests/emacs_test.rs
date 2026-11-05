@@ -1,3 +1,5 @@
+use neovm_value::value::Value;
+use neovm_edit::buffer::syntax_class::SyntaxClass;
 use crate::fuzz_support::{
     RegexCase, RegexCheck, RegexDifferential, SearchTarget, check_regex_differential,
 };

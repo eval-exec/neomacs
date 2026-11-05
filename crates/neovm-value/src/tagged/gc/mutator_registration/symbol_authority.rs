@@ -330,5 +330,9 @@ static_assertions::assert_not_impl_any!(SymbolRef<'static, 'static, 'static>: Se
 static_assertions::assert_not_impl_any!(SymbolMut<'static, 'static, 'static>: Send, Sync, Clone, Copy);
 static_assertions::assert_not_impl_any!(KeeperSymbols<'static>: Send, Sync, Clone, Copy);
 
+#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 mod tests;
+#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
+pub mod tests;

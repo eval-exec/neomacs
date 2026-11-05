@@ -1,3 +1,8 @@
+use neovm_value::value::Value;
+use neovm_value::heap_types::byte_positions::EmacsByteRange;
+use neovm_value::heap_types::byte_positions::EmacsBytePos;
+use neovm_value::heap_types::byte_positions::EmacsByteLen;
+use neovm_eval::emacs_core::eval::Context;
 use neovm_edit::buffer::BufferId;
 
 use neovm_edit::buffer::overlay::*;

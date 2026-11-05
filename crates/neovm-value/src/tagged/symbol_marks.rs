@@ -69,6 +69,11 @@ impl SymbolMarkBits {
     }
 }
 
+#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "symbol_marks/tests/symbol_marks_test.rs"]
 mod tests;
+#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
+#[path = "symbol_marks/tests/symbol_marks_test.rs"]
+pub mod tests;

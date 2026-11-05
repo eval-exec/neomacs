@@ -91,6 +91,7 @@ const MAX_POSITIONS: usize = 4096;
 /// `lit_off > 0` is the `exactn` literal at `pc`, part way through.
 pub(crate) type KernelItem = u32;
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 #[inline]
 pub(crate) const fn kernel_item(pc: usize, lit_off: usize) -> KernelItem {
     ((pc as u32) << 8) | lit_off as u32
@@ -106,6 +107,7 @@ const fn item_lit_off(item: KernelItem) -> usize {
     (item & 0xFF) as usize
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// The per-character test a consuming position runs: one of the matcher's
 /// shared `match_*_at` helpers with its operands.  Positions with identical
 /// operands share one predicate.
@@ -536,6 +538,7 @@ enum Epsilon {
     Consume,
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// A text position the closure evaluates assertions at: the matcher's view
 /// (`text`, `d`, `stop`, point, representation, syntax).
 pub(crate) struct Place<'a> {
@@ -571,6 +574,7 @@ impl Place<'_> {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Reusable closure state: a generation-stamped `seen` set over opcode
 /// positions and consuming positions, and the DFS stack.
 #[derive(Default, Debug)]
@@ -619,6 +623,7 @@ impl ClosureScratch {
 // Character classes (C3)
 // ---------------------------------------------------------------------------
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Facts about one character that the zero-width assertions read, besides
 /// the predicates.  Only the facts a pattern's assertions read are kept
 /// ([`Nfa::fact_mask`]), so they split no class needlessly.
@@ -754,6 +759,7 @@ impl ClassKey {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// A syntax lookup that answers every position from the base table.  The
 /// memoized classes are computed through it, so they are functions of the
 /// character alone; they serve only positions where no `syntax-table`
@@ -901,6 +907,7 @@ impl Nfa {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `byte_class` value of a byte whose class is not known yet (or, for the
 /// bytes of a non-ASCII character of multibyte text, is never kept there).
 pub(crate) const UNKNOWN_CLASS: u8 = 0xFF;
@@ -917,10 +924,12 @@ const POSITIONAL_EMPTY: (u32, PositionalSyntaxFacts, u8) = (
     },
     0,
 );
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// `byte_facts` value of a byte whose facts are not known yet (facts use
 /// the low six bits).
 const NO_FACTS: u8 = 0xFF;
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// What the character-to-class maps of one pattern are valid for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ClassContext {
@@ -1020,6 +1029,7 @@ struct PositionalSyntaxFacts {
 // The extra current-character distinction must not enlarge the property memo.
 static_assertions::assert_eq_size!((u32, PositionalSyntaxFacts, u8), (u32, u8, u8));
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// The classes of one pattern and the character-to-class maps.
 ///
 /// Class ids name [`ClassKey`]s, which do not depend on the search context,
@@ -1239,6 +1249,7 @@ impl CharClasses {
 // The lazy DFA (C4)
 // ---------------------------------------------------------------------------
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// The DFA's verdict on one candidate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Exists {
@@ -1255,12 +1266,15 @@ pub(crate) enum Exists {
 /// row offsets, `(state index + 1) * stride`.
 const UNKNOWN: u32 = 0;
 const DEAD: u32 = 1;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 const MATCH: u32 = 2;
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// The transition depends on the character pair (two word constituents, one
 /// above U+00FF): computed at every use, never cached.
 const SLOW: u32 = 3;
 const MIN_STRIDE_SHIFT: u32 = 3;
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// The cache is cleared at the next candidate once it holds this many bytes.
 const MEMORY_CAP: usize = 64 * 1024;
 /// Within one candidate the cache may grow to this before the candidate is
@@ -1319,6 +1333,7 @@ impl SearchSyntax {
     };
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Why a DFA gave up on its pattern for good.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DfaGaveUp {
@@ -1327,6 +1342,7 @@ pub(crate) enum DfaGaveUp {
     StateExplosion,
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// The anchored existence DFA of one pattern (see the module docs).
 pub(crate) struct ExistenceDfa {
     nfa: Nfa,
@@ -2453,6 +2469,7 @@ impl LiveDfa {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// The state of a pattern's existence DFA.
 pub(crate) enum DfaSlot {
     /// Not built yet: admitted failed matcher entries seen so far.
@@ -2549,6 +2566,7 @@ impl ColdSearchHeat {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// One search's hold on its pattern's DFA slot.
 pub(crate) struct DfaLease<'p> {
     slot: RefMut<'p, DfaSlot>,
@@ -2960,6 +2978,7 @@ impl<'p> DfaLease<'p> {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 /// Build `pattern`'s DFA now, skipping the cold phase, so a short
 /// differential case exercises the filter.
 #[cfg(any(test, feature = "fuzzing"))]
@@ -3009,6 +3028,11 @@ pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
     neovm_value::tls_fingerprint::mix_debug(h, STATS.with(|slot| format!("{:?}", slot.borrow())));
 }
 
+#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "tests/dfa_test.rs"]
 mod tests;
+#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
+#[path = "tests/dfa_test.rs"]
+pub mod tests;

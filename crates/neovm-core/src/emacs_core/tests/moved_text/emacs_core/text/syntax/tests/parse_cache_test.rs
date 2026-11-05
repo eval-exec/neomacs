@@ -9,6 +9,14 @@
 //! and point, must equal the uncached scan's; the cache must actually serve
 //! (exact answers and resumes), and each invalidation path must be taken.
 
+use neovm_value::value::list_to_vec;
+use neovm_value::value::Value;
+use neovm_text::emacs_core::syntax::builtin_parse_partial_sexp_6;
+use neovm_text::emacs_core::syntax::builtin_modify_syntax_entry;
+use neovm_eval::host_effect::contracts::Record;
+use neovm_eval::emacs_core::eval::case_tables::canon;
+use neovm_eval::emacs_core::eval::Context;
+use neovm_edit::buffer::syntax_cache::Invalidation;
 use crate::emacs_core::print::print_value;
 
 use neovm_text::emacs_core::syntax::parse_cache::*;

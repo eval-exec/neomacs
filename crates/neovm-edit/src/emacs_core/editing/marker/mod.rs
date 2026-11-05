@@ -327,6 +327,7 @@ fn marker_buffer_value(v: &Value) -> Value {
     }
 }
 
+#[cfg_attr(feature = "test-support", visibility::make(pub))]
 fn marker_insertion_type_value(v: &Value) -> Value {
     if !v.is_marker() {
         return Value::NIL;
@@ -743,6 +744,11 @@ pub fn builtin_mark_marker(buffers: &mut BufferManager, args: Vec<Value>) -> Eva
 // Tests
 // ---------------------------------------------------------------------------
 
+#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "tests/marker_test.rs"]
 mod tests;
+#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
+#[path = "tests/marker_test.rs"]
+pub mod tests;

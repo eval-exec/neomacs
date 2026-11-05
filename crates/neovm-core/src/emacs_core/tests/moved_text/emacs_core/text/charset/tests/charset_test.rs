@@ -1,3 +1,6 @@
+use neovm_value::value::list_to_vec;
+use neovm_value::value::list_length;
+use neovm_value::value::Value;
 use crate::emacs_core::eval::Context;
 
 use crate::emacs_core::pdump::dump_to_file;

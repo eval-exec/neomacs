@@ -957,6 +957,11 @@ impl RootBatchFinishFailure {
     }
 }
 
+#[cfg(not(any(test, feature = "test-support")))]
 #[cfg(test)]
 #[path = "root_batch_tests.rs"]
 mod tests;
+#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
+#[path = "root_batch_tests.rs"]
+pub mod tests;
